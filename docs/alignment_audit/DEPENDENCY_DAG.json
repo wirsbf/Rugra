@@ -1,0 +1,4175 @@
+{
+  "ghidra_files": [
+    "action.cc",
+    "action.hh",
+    "address.cc",
+    "address.hh",
+    "analyzesigs.cc",
+    "analyzesigs.hh",
+    "architecture.cc",
+    "architecture.hh",
+    "bfd_arch.cc",
+    "bfd_arch.hh",
+    "block.cc",
+    "block.hh",
+    "blockaction.cc",
+    "blockaction.hh",
+    "callgraph.cc",
+    "callgraph.hh",
+    "capability.cc",
+    "capability.hh",
+    "cast.cc",
+    "cast.hh",
+    "codedata.cc",
+    "codedata.hh",
+    "comment.cc",
+    "comment.hh",
+    "comment_ghidra.cc",
+    "comment_ghidra.hh",
+    "compression.cc",
+    "compression.hh",
+    "condexe.cc",
+    "condexe.hh",
+    "consolemain.cc",
+    "constseq.cc",
+    "constseq.hh",
+    "context.cc",
+    "context.hh",
+    "coreaction.cc",
+    "coreaction.hh",
+    "cover.cc",
+    "cover.hh",
+    "cpool.cc",
+    "cpool.hh",
+    "cpool_ghidra.cc",
+    "cpool_ghidra.hh",
+    "crc32.cc",
+    "crc32.hh",
+    "database.cc",
+    "database.hh",
+    "database_ghidra.cc",
+    "database_ghidra.hh",
+    "doccore.hh",
+    "docmain.hh",
+    "double.cc",
+    "double.hh",
+    "dynamic.cc",
+    "dynamic.hh",
+    "emulate.cc",
+    "emulate.hh",
+    "emulateutil.cc",
+    "emulateutil.hh",
+    "error.hh",
+    "expression.cc",
+    "expression.hh",
+    "filemanage.cc",
+    "filemanage.hh",
+    "float.cc",
+    "float.hh",
+    "flow.cc",
+    "flow.hh",
+    "fspec.cc",
+    "fspec.hh",
+    "funcdata.cc",
+    "funcdata.hh",
+    "funcdata_block.cc",
+    "funcdata_op.cc",
+    "funcdata_varnode.cc",
+    "ghidra_arch.cc",
+    "ghidra_arch.hh",
+    "ghidra_context.cc",
+    "ghidra_context.hh",
+    "ghidra_process.cc",
+    "ghidra_process.hh",
+    "ghidra_translate.cc",
+    "ghidra_translate.hh",
+    "globalcontext.cc",
+    "globalcontext.hh",
+    "grammar.cc",
+    "grammar.hh",
+    "graph.cc",
+    "graph.hh",
+    "heritage.cc",
+    "heritage.hh",
+    "ifacedecomp.cc",
+    "ifacedecomp.hh",
+    "ifaceterm.cc",
+    "ifaceterm.hh",
+    "inject_ghidra.cc",
+    "inject_ghidra.hh",
+    "inject_sleigh.cc",
+    "inject_sleigh.hh",
+    "interface.cc",
+    "interface.hh",
+    "jumptable.cc",
+    "jumptable.hh",
+    "libdecomp.cc",
+    "libdecomp.hh",
+    "loadimage.cc",
+    "loadimage.hh",
+    "loadimage_bfd.cc",
+    "loadimage_bfd.hh",
+    "loadimage_ghidra.cc",
+    "loadimage_ghidra.hh",
+    "loadimage_xml.cc",
+    "loadimage_xml.hh",
+    "marshal.cc",
+    "marshal.hh",
+    "memstate.cc",
+    "memstate.hh",
+    "merge.cc",
+    "merge.hh",
+    "modelrules.cc",
+    "modelrules.hh",
+    "multiprecision.cc",
+    "multiprecision.hh",
+    "op.cc",
+    "op.hh",
+    "opbehavior.cc",
+    "opbehavior.hh",
+    "opcodes.cc",
+    "opcodes.hh",
+    "options.cc",
+    "options.hh",
+    "override.cc",
+    "override.hh",
+    "paramid.cc",
+    "paramid.hh",
+    "partmap.hh",
+    "pcodecompile.cc",
+    "pcodecompile.hh",
+    "pcodeinject.cc",
+    "pcodeinject.hh",
+    "pcodeparse.cc",
+    "pcodeparse.hh",
+    "pcoderaw.cc",
+    "pcoderaw.hh",
+    "prefersplit.cc",
+    "prefersplit.hh",
+    "prettyprint.cc",
+    "prettyprint.hh",
+    "printc.cc",
+    "printc.hh",
+    "printjava.cc",
+    "printjava.hh",
+    "printlanguage.cc",
+    "printlanguage.hh",
+    "rangemap.hh",
+    "rangeutil.cc",
+    "rangeutil.hh",
+    "raw_arch.cc",
+    "raw_arch.hh",
+    "ruleaction.cc",
+    "ruleaction.hh",
+    "rulecompile.cc",
+    "rulecompile.hh",
+    "semantics.cc",
+    "semantics.hh",
+    "signature.cc",
+    "signature.hh",
+    "signature_ghidra.cc",
+    "signature_ghidra.hh",
+    "slaformat.cc",
+    "slaformat.hh",
+    "sleigh.cc",
+    "sleigh.hh",
+    "sleigh_arch.cc",
+    "sleigh_arch.hh",
+    "sleighbase.cc",
+    "sleighbase.hh",
+    "sleighexample.cc",
+    "slgh_compile.cc",
+    "slgh_compile.hh",
+    "slghparse.cc",
+    "slghparse.hh",
+    "slghpatexpress.cc",
+    "slghpatexpress.hh",
+    "slghpattern.cc",
+    "slghpattern.hh",
+    "slghscan.cc",
+    "slghsymbol.cc",
+    "slghsymbol.hh",
+    "space.cc",
+    "space.hh",
+    "string_ghidra.cc",
+    "string_ghidra.hh",
+    "stringmanage.cc",
+    "stringmanage.hh",
+    "subflow.cc",
+    "subflow.hh",
+    "test.cc",
+    "test.hh",
+    "testfunction.cc",
+    "testfunction.hh",
+    "transform.cc",
+    "transform.hh",
+    "translate.cc",
+    "translate.hh",
+    "type.cc",
+    "type.hh",
+    "typegrp_ghidra.cc",
+    "typegrp_ghidra.hh",
+    "typeop.cc",
+    "typeop.hh",
+    "unify.cc",
+    "unify.hh",
+    "unionresolve.cc",
+    "unionresolve.hh",
+    "userop.cc",
+    "userop.hh",
+    "variable.cc",
+    "variable.hh",
+    "varmap.cc",
+    "varmap.hh",
+    "varnode.cc",
+    "varnode.hh",
+    "xml.cc",
+    "xml.hh",
+    "xml_arch.cc",
+    "xml_arch.hh"
+  ],
+  "ghidra_include_edges": [
+    {
+      "from": "action.cc",
+      "to": "action.hh"
+    },
+    {
+      "from": "action.cc",
+      "to": "coreaction.hh"
+    },
+    {
+      "from": "action.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "action.hh",
+      "to": "block.hh"
+    },
+    {
+      "from": "address.cc",
+      "to": "address.hh"
+    },
+    {
+      "from": "address.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "address.hh",
+      "to": "space.hh"
+    },
+    {
+      "from": "analyzesigs.cc",
+      "to": "analyzesigs.hh"
+    },
+    {
+      "from": "analyzesigs.cc",
+      "to": "loadimage_bfd.hh"
+    },
+    {
+      "from": "analyzesigs.hh",
+      "to": "codedata.hh"
+    },
+    {
+      "from": "analyzesigs.hh",
+      "to": "signature.hh"
+    },
+    {
+      "from": "architecture.cc",
+      "to": "coreaction.hh"
+    },
+    {
+      "from": "architecture.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "architecture.cc",
+      "to": "rulecompile.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "action.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "capability.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "comment.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "database.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "fspec.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "globalcontext.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "options.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "pcodeinject.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "prefersplit.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "stringmanage.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "transform.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "translate.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "userop.hh"
+    },
+    {
+      "from": "architecture.hh",
+      "to": "varmap.hh"
+    },
+    {
+      "from": "bfd_arch.cc",
+      "to": "bfd_arch.hh"
+    },
+    {
+      "from": "bfd_arch.hh",
+      "to": "loadimage_bfd.hh"
+    },
+    {
+      "from": "bfd_arch.hh",
+      "to": "sleigh_arch.hh"
+    },
+    {
+      "from": "block.cc",
+      "to": "block.hh"
+    },
+    {
+      "from": "block.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "block.hh",
+      "to": "jumptable.hh"
+    },
+    {
+      "from": "blockaction.cc",
+      "to": "blockaction.hh"
+    },
+    {
+      "from": "blockaction.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "blockaction.hh",
+      "to": "action.hh"
+    },
+    {
+      "from": "callgraph.cc",
+      "to": "callgraph.hh"
+    },
+    {
+      "from": "callgraph.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "callgraph.hh",
+      "to": "address.hh"
+    },
+    {
+      "from": "capability.cc",
+      "to": "capability.hh"
+    },
+    {
+      "from": "cast.cc",
+      "to": "cast.hh"
+    },
+    {
+      "from": "cast.cc",
+      "to": "op.hh"
+    },
+    {
+      "from": "cast.hh",
+      "to": "type.hh"
+    },
+    {
+      "from": "codedata.cc",
+      "to": "codedata.hh"
+    },
+    {
+      "from": "codedata.cc",
+      "to": "loadimage_bfd.hh"
+    },
+    {
+      "from": "codedata.hh",
+      "to": "ifacedecomp.hh"
+    },
+    {
+      "from": "comment.cc",
+      "to": "comment.hh"
+    },
+    {
+      "from": "comment.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "comment.hh",
+      "to": "address.hh"
+    },
+    {
+      "from": "comment_ghidra.cc",
+      "to": "comment_ghidra.hh"
+    },
+    {
+      "from": "comment_ghidra.hh",
+      "to": "comment.hh"
+    },
+    {
+      "from": "comment_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "compression.cc",
+      "to": "compression.hh"
+    },
+    {
+      "from": "compression.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "condexe.cc",
+      "to": "condexe.hh"
+    },
+    {
+      "from": "condexe.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "consolemain.cc",
+      "to": "libdecomp.hh"
+    },
+    {
+      "from": "constseq.cc",
+      "to": "constseq.hh"
+    },
+    {
+      "from": "constseq.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "constseq.hh",
+      "to": "ruleaction.hh"
+    },
+    {
+      "from": "context.cc",
+      "to": "context.hh"
+    },
+    {
+      "from": "context.cc",
+      "to": "slghsymbol.hh"
+    },
+    {
+      "from": "context.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "context.hh",
+      "to": "globalcontext.hh"
+    },
+    {
+      "from": "context.hh",
+      "to": "opcodes.hh"
+    },
+    {
+      "from": "coreaction.cc",
+      "to": "condexe.hh"
+    },
+    {
+      "from": "coreaction.cc",
+      "to": "constseq.hh"
+    },
+    {
+      "from": "coreaction.cc",
+      "to": "coreaction.hh"
+    },
+    {
+      "from": "coreaction.cc",
+      "to": "double.hh"
+    },
+    {
+      "from": "coreaction.cc",
+      "to": "subflow.hh"
+    },
+    {
+      "from": "coreaction.hh",
+      "to": "blockaction.hh"
+    },
+    {
+      "from": "coreaction.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "coreaction.hh",
+      "to": "ruleaction.hh"
+    },
+    {
+      "from": "cover.cc",
+      "to": "block.hh"
+    },
+    {
+      "from": "cover.cc",
+      "to": "cover.hh"
+    },
+    {
+      "from": "cover.hh",
+      "to": "type.hh"
+    },
+    {
+      "from": "cpool.cc",
+      "to": "cpool.hh"
+    },
+    {
+      "from": "cpool.hh",
+      "to": "type.hh"
+    },
+    {
+      "from": "cpool_ghidra.cc",
+      "to": "cpool_ghidra.hh"
+    },
+    {
+      "from": "cpool_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "crc32.cc",
+      "to": "crc32.hh"
+    },
+    {
+      "from": "database.cc",
+      "to": "crc32.hh"
+    },
+    {
+      "from": "database.cc",
+      "to": "database.hh"
+    },
+    {
+      "from": "database.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "database.hh",
+      "to": "partmap.hh"
+    },
+    {
+      "from": "database.hh",
+      "to": "rangemap.hh"
+    },
+    {
+      "from": "database.hh",
+      "to": "variable.hh"
+    },
+    {
+      "from": "database_ghidra.cc",
+      "to": "database_ghidra.hh"
+    },
+    {
+      "from": "database_ghidra.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "database_ghidra.hh",
+      "to": "database.hh"
+    },
+    {
+      "from": "database_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "double.cc",
+      "to": "double.hh"
+    },
+    {
+      "from": "double.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "double.hh",
+      "to": "ruleaction.hh"
+    },
+    {
+      "from": "dynamic.cc",
+      "to": "crc32.hh"
+    },
+    {
+      "from": "dynamic.cc",
+      "to": "dynamic.hh"
+    },
+    {
+      "from": "dynamic.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "dynamic.hh",
+      "to": "varnode.hh"
+    },
+    {
+      "from": "emulate.cc",
+      "to": "emulate.hh"
+    },
+    {
+      "from": "emulate.hh",
+      "to": "memstate.hh"
+    },
+    {
+      "from": "emulate.hh",
+      "to": "translate.hh"
+    },
+    {
+      "from": "emulateutil.cc",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "emulateutil.cc",
+      "to": "emulateutil.hh"
+    },
+    {
+      "from": "emulateutil.hh",
+      "to": "emulate.hh"
+    },
+    {
+      "from": "emulateutil.hh",
+      "to": "op.hh"
+    },
+    {
+      "from": "expression.cc",
+      "to": "expression.hh"
+    },
+    {
+      "from": "expression.hh",
+      "to": "op.hh"
+    },
+    {
+      "from": "filemanage.cc",
+      "to": "filemanage.hh"
+    },
+    {
+      "from": "float.cc",
+      "to": "address.hh"
+    },
+    {
+      "from": "float.cc",
+      "to": "float.hh"
+    },
+    {
+      "from": "float.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "flow.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "flow.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "fspec.cc",
+      "to": "fspec.hh"
+    },
+    {
+      "from": "fspec.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "fspec.hh",
+      "to": "modelrules.hh"
+    },
+    {
+      "from": "fspec.hh",
+      "to": "rangemap.hh"
+    },
+    {
+      "from": "funcdata.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "funcdata.hh",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "funcdata.hh",
+      "to": "dynamic.hh"
+    },
+    {
+      "from": "funcdata.hh",
+      "to": "heritage.hh"
+    },
+    {
+      "from": "funcdata.hh",
+      "to": "merge.hh"
+    },
+    {
+      "from": "funcdata.hh",
+      "to": "override.hh"
+    },
+    {
+      "from": "funcdata.hh",
+      "to": "unionresolve.hh"
+    },
+    {
+      "from": "funcdata_block.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "funcdata_block.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "funcdata_op.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "funcdata_op.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "funcdata_varnode.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "comment_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "cpool_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "database_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "ghidra_context.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "ghidra_translate.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "inject_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "loadimage_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "string_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.cc",
+      "to": "typegrp_ghidra.hh"
+    },
+    {
+      "from": "ghidra_arch.hh",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "ghidra_context.cc",
+      "to": "ghidra_context.hh"
+    },
+    {
+      "from": "ghidra_context.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "ghidra_context.hh",
+      "to": "globalcontext.hh"
+    },
+    {
+      "from": "ghidra_process.cc",
+      "to": "blockaction.hh"
+    },
+    {
+      "from": "ghidra_process.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "ghidra_process.cc",
+      "to": "ghidra_process.hh"
+    },
+    {
+      "from": "ghidra_process.cc",
+      "to": "ifacedecomp.hh"
+    },
+    {
+      "from": "ghidra_process.hh",
+      "to": "capability.hh"
+    },
+    {
+      "from": "ghidra_process.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "ghidra_process.hh",
+      "to": "grammar.hh"
+    },
+    {
+      "from": "ghidra_process.hh",
+      "to": "paramid.hh"
+    },
+    {
+      "from": "ghidra_process.hh",
+      "to": "typegrp_ghidra.hh"
+    },
+    {
+      "from": "ghidra_translate.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "ghidra_translate.cc",
+      "to": "ghidra_translate.hh"
+    },
+    {
+      "from": "ghidra_translate.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "ghidra_translate.hh",
+      "to": "translate.hh"
+    },
+    {
+      "from": "globalcontext.cc",
+      "to": "globalcontext.hh"
+    },
+    {
+      "from": "globalcontext.hh",
+      "to": "partmap.hh"
+    },
+    {
+      "from": "globalcontext.hh",
+      "to": "pcoderaw.hh"
+    },
+    {
+      "from": "grammar.cc",
+      "to": "grammar.hh"
+    },
+    {
+      "from": "grammar.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "graph.cc",
+      "to": "graph.hh"
+    },
+    {
+      "from": "graph.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "heritage.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "heritage.cc",
+      "to": "heritage.hh"
+    },
+    {
+      "from": "heritage.cc",
+      "to": "prefersplit.hh"
+    },
+    {
+      "from": "heritage.hh",
+      "to": "block.hh"
+    },
+    {
+      "from": "ifacedecomp.cc",
+      "to": "blockaction.hh"
+    },
+    {
+      "from": "ifacedecomp.cc",
+      "to": "ifacedecomp.hh"
+    },
+    {
+      "from": "ifacedecomp.cc",
+      "to": "pcodeparse.hh"
+    },
+    {
+      "from": "ifacedecomp.hh",
+      "to": "callgraph.hh"
+    },
+    {
+      "from": "ifacedecomp.hh",
+      "to": "grammar.hh"
+    },
+    {
+      "from": "ifacedecomp.hh",
+      "to": "graph.hh"
+    },
+    {
+      "from": "ifacedecomp.hh",
+      "to": "paramid.hh"
+    },
+    {
+      "from": "ifacedecomp.hh",
+      "to": "rulecompile.hh"
+    },
+    {
+      "from": "ifacedecomp.hh",
+      "to": "testfunction.hh"
+    },
+    {
+      "from": "ifaceterm.cc",
+      "to": "ifaceterm.hh"
+    },
+    {
+      "from": "ifaceterm.hh",
+      "to": "interface.hh"
+    },
+    {
+      "from": "inject_ghidra.cc",
+      "to": "inject_ghidra.hh"
+    },
+    {
+      "from": "inject_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "inject_ghidra.hh",
+      "to": "pcodeinject.hh"
+    },
+    {
+      "from": "inject_sleigh.cc",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "inject_sleigh.cc",
+      "to": "inject_sleigh.hh"
+    },
+    {
+      "from": "inject_sleigh.cc",
+      "to": "pcodeparse.hh"
+    },
+    {
+      "from": "inject_sleigh.hh",
+      "to": "pcodeinject.hh"
+    },
+    {
+      "from": "inject_sleigh.hh",
+      "to": "sleigh.hh"
+    },
+    {
+      "from": "interface.cc",
+      "to": "interface.hh"
+    },
+    {
+      "from": "interface.hh",
+      "to": "capability.hh"
+    },
+    {
+      "from": "jumptable.cc",
+      "to": "emulate.hh"
+    },
+    {
+      "from": "jumptable.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "jumptable.cc",
+      "to": "jumptable.hh"
+    },
+    {
+      "from": "jumptable.hh",
+      "to": "emulateutil.hh"
+    },
+    {
+      "from": "jumptable.hh",
+      "to": "expression.hh"
+    },
+    {
+      "from": "jumptable.hh",
+      "to": "rangeutil.hh"
+    },
+    {
+      "from": "libdecomp.cc",
+      "to": "libdecomp.hh"
+    },
+    {
+      "from": "libdecomp.hh",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "libdecomp.hh",
+      "to": "ifacedecomp.hh"
+    },
+    {
+      "from": "libdecomp.hh",
+      "to": "sleigh_arch.hh"
+    },
+    {
+      "from": "loadimage.cc",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "loadimage.hh",
+      "to": "address.hh"
+    },
+    {
+      "from": "loadimage_bfd.cc",
+      "to": "loadimage_bfd.hh"
+    },
+    {
+      "from": "loadimage_bfd.hh",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "loadimage_ghidra.cc",
+      "to": "loadimage_ghidra.hh"
+    },
+    {
+      "from": "loadimage_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "loadimage_ghidra.hh",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "loadimage_xml.cc",
+      "to": "loadimage_xml.hh"
+    },
+    {
+      "from": "loadimage_xml.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "loadimage_xml.hh",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "marshal.cc",
+      "to": "marshal.hh"
+    },
+    {
+      "from": "marshal.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "marshal.hh",
+      "to": "opcodes.hh"
+    },
+    {
+      "from": "marshal.hh",
+      "to": "xml.hh"
+    },
+    {
+      "from": "memstate.cc",
+      "to": "memstate.hh"
+    },
+    {
+      "from": "memstate.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "memstate.hh",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "memstate.hh",
+      "to": "pcoderaw.hh"
+    },
+    {
+      "from": "merge.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "merge.cc",
+      "to": "merge.hh"
+    },
+    {
+      "from": "merge.hh",
+      "to": "expression.hh"
+    },
+    {
+      "from": "merge.hh",
+      "to": "op.hh"
+    },
+    {
+      "from": "modelrules.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "modelrules.cc",
+      "to": "modelrules.hh"
+    },
+    {
+      "from": "modelrules.hh",
+      "to": "op.hh"
+    },
+    {
+      "from": "multiprecision.cc",
+      "to": "multiprecision.hh"
+    },
+    {
+      "from": "multiprecision.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "op.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "op.cc",
+      "to": "op.hh"
+    },
+    {
+      "from": "op.hh",
+      "to": "typeop.hh"
+    },
+    {
+      "from": "opbehavior.cc",
+      "to": "opbehavior.hh"
+    },
+    {
+      "from": "opbehavior.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "opbehavior.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "opbehavior.hh",
+      "to": "opcodes.hh"
+    },
+    {
+      "from": "opcodes.cc",
+      "to": "opcodes.hh"
+    },
+    {
+      "from": "options.cc",
+      "to": "flow.hh"
+    },
+    {
+      "from": "options.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "options.cc",
+      "to": "options.hh"
+    },
+    {
+      "from": "options.cc",
+      "to": "printc.hh"
+    },
+    {
+      "from": "options.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "options.hh",
+      "to": "marshal.hh"
+    },
+    {
+      "from": "override.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "override.cc",
+      "to": "override.hh"
+    },
+    {
+      "from": "override.hh",
+      "to": "database.hh"
+    },
+    {
+      "from": "paramid.cc",
+      "to": "paramid.hh"
+    },
+    {
+      "from": "paramid.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "pcodecompile.cc",
+      "to": "pcodecompile.hh"
+    },
+    {
+      "from": "pcodecompile.hh",
+      "to": "slghsymbol.hh"
+    },
+    {
+      "from": "pcodeinject.cc",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "pcodeinject.cc",
+      "to": "pcodeinject.hh"
+    },
+    {
+      "from": "pcodeinject.hh",
+      "to": "emulateutil.hh"
+    },
+    {
+      "from": "pcodeparse.cc",
+      "to": "pcodeparse.hh"
+    },
+    {
+      "from": "pcodeparse.hh",
+      "to": "pcodecompile.hh"
+    },
+    {
+      "from": "pcodeparse.hh",
+      "to": "sleighbase.hh"
+    },
+    {
+      "from": "pcoderaw.cc",
+      "to": "pcoderaw.hh"
+    },
+    {
+      "from": "pcoderaw.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "pcoderaw.hh",
+      "to": "address.hh"
+    },
+    {
+      "from": "pcoderaw.hh",
+      "to": "opbehavior.hh"
+    },
+    {
+      "from": "prefersplit.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "prefersplit.cc",
+      "to": "prefersplit.hh"
+    },
+    {
+      "from": "prefersplit.hh",
+      "to": "varnode.hh"
+    },
+    {
+      "from": "prettyprint.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "prettyprint.cc",
+      "to": "prettyprint.hh"
+    },
+    {
+      "from": "prettyprint.hh",
+      "to": "type.hh"
+    },
+    {
+      "from": "printc.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "printc.cc",
+      "to": "printc.hh"
+    },
+    {
+      "from": "printc.hh",
+      "to": "comment.hh"
+    },
+    {
+      "from": "printc.hh",
+      "to": "printlanguage.hh"
+    },
+    {
+      "from": "printjava.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "printjava.cc",
+      "to": "printjava.hh"
+    },
+    {
+      "from": "printjava.hh",
+      "to": "printc.hh"
+    },
+    {
+      "from": "printlanguage.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "printlanguage.cc",
+      "to": "printlanguage.hh"
+    },
+    {
+      "from": "printlanguage.hh",
+      "to": "capability.hh"
+    },
+    {
+      "from": "printlanguage.hh",
+      "to": "cast.hh"
+    },
+    {
+      "from": "printlanguage.hh",
+      "to": "prettyprint.hh"
+    },
+    {
+      "from": "rangeutil.cc",
+      "to": "block.hh"
+    },
+    {
+      "from": "rangeutil.cc",
+      "to": "rangeutil.hh"
+    },
+    {
+      "from": "rangeutil.hh",
+      "to": "op.hh"
+    },
+    {
+      "from": "raw_arch.cc",
+      "to": "raw_arch.hh"
+    },
+    {
+      "from": "raw_arch.hh",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "raw_arch.hh",
+      "to": "sleigh_arch.hh"
+    },
+    {
+      "from": "ruleaction.cc",
+      "to": "coreaction.hh"
+    },
+    {
+      "from": "ruleaction.cc",
+      "to": "multiprecision.hh"
+    },
+    {
+      "from": "ruleaction.cc",
+      "to": "rangeutil.hh"
+    },
+    {
+      "from": "ruleaction.cc",
+      "to": "ruleaction.hh"
+    },
+    {
+      "from": "ruleaction.hh",
+      "to": "action.hh"
+    },
+    {
+      "from": "rulecompile.cc",
+      "to": "rulecompile.hh"
+    },
+    {
+      "from": "rulecompile.hh",
+      "to": "unify.hh"
+    },
+    {
+      "from": "semantics.cc",
+      "to": "semantics.hh"
+    },
+    {
+      "from": "semantics.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "semantics.hh",
+      "to": "context.hh"
+    },
+    {
+      "from": "semantics.hh",
+      "to": "slaformat.hh"
+    },
+    {
+      "from": "signature.cc",
+      "to": "crc32.hh"
+    },
+    {
+      "from": "signature.cc",
+      "to": "signature.hh"
+    },
+    {
+      "from": "signature.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "signature_ghidra.cc",
+      "to": "signature.hh"
+    },
+    {
+      "from": "signature_ghidra.cc",
+      "to": "signature_ghidra.hh"
+    },
+    {
+      "from": "signature_ghidra.hh",
+      "to": "ghidra_process.hh"
+    },
+    {
+      "from": "slaformat.cc",
+      "to": "slaformat.hh"
+    },
+    {
+      "from": "slaformat.hh",
+      "to": "compression.hh"
+    },
+    {
+      "from": "slaformat.hh",
+      "to": "marshal.hh"
+    },
+    {
+      "from": "sleigh.cc",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "sleigh.cc",
+      "to": "sleigh.hh"
+    },
+    {
+      "from": "sleigh.hh",
+      "to": "sleighbase.hh"
+    },
+    {
+      "from": "sleigh_arch.cc",
+      "to": "inject_sleigh.hh"
+    },
+    {
+      "from": "sleigh_arch.cc",
+      "to": "sleigh_arch.hh"
+    },
+    {
+      "from": "sleigh_arch.hh",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "sleigh_arch.hh",
+      "to": "filemanage.hh"
+    },
+    {
+      "from": "sleigh_arch.hh",
+      "to": "sleigh.hh"
+    },
+    {
+      "from": "sleighbase.cc",
+      "to": "sleighbase.hh"
+    },
+    {
+      "from": "sleighbase.hh",
+      "to": "slaformat.hh"
+    },
+    {
+      "from": "sleighbase.hh",
+      "to": "slghsymbol.hh"
+    },
+    {
+      "from": "sleighbase.hh",
+      "to": "translate.hh"
+    },
+    {
+      "from": "sleighexample.cc",
+      "to": "emulate.hh"
+    },
+    {
+      "from": "sleighexample.cc",
+      "to": "loadimage.hh"
+    },
+    {
+      "from": "sleighexample.cc",
+      "to": "sleigh.hh"
+    },
+    {
+      "from": "slgh_compile.cc",
+      "to": "filemanage.hh"
+    },
+    {
+      "from": "slgh_compile.cc",
+      "to": "slgh_compile.hh"
+    },
+    {
+      "from": "slgh_compile.hh",
+      "to": "filemanage.hh"
+    },
+    {
+      "from": "slgh_compile.hh",
+      "to": "pcodecompile.hh"
+    },
+    {
+      "from": "slgh_compile.hh",
+      "to": "sleighbase.hh"
+    },
+    {
+      "from": "slghparse.cc",
+      "to": "slgh_compile.hh"
+    },
+    {
+      "from": "slghpatexpress.cc",
+      "to": "sleighbase.hh"
+    },
+    {
+      "from": "slghpatexpress.cc",
+      "to": "slghpatexpress.hh"
+    },
+    {
+      "from": "slghpatexpress.hh",
+      "to": "slghpattern.hh"
+    },
+    {
+      "from": "slghpattern.cc",
+      "to": "slaformat.hh"
+    },
+    {
+      "from": "slghpattern.cc",
+      "to": "slghpattern.hh"
+    },
+    {
+      "from": "slghpattern.hh",
+      "to": "context.hh"
+    },
+    {
+      "from": "slghscan.cc",
+      "to": "slgh_compile.hh"
+    },
+    {
+      "from": "slghscan.cc",
+      "to": "slghparse.hh"
+    },
+    {
+      "from": "slghsymbol.cc",
+      "to": "sleighbase.hh"
+    },
+    {
+      "from": "slghsymbol.cc",
+      "to": "slghsymbol.hh"
+    },
+    {
+      "from": "slghsymbol.hh",
+      "to": "semantics.hh"
+    },
+    {
+      "from": "slghsymbol.hh",
+      "to": "slghpatexpress.hh"
+    },
+    {
+      "from": "space.cc",
+      "to": "space.hh"
+    },
+    {
+      "from": "space.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "space.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "space.hh",
+      "to": "marshal.hh"
+    },
+    {
+      "from": "string_ghidra.cc",
+      "to": "string_ghidra.hh"
+    },
+    {
+      "from": "string_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "stringmanage.cc",
+      "to": "architecture.hh"
+    },
+    {
+      "from": "stringmanage.cc",
+      "to": "crc32.hh"
+    },
+    {
+      "from": "stringmanage.cc",
+      "to": "stringmanage.hh"
+    },
+    {
+      "from": "stringmanage.hh",
+      "to": "type.hh"
+    },
+    {
+      "from": "subflow.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "subflow.cc",
+      "to": "subflow.hh"
+    },
+    {
+      "from": "subflow.hh",
+      "to": "ruleaction.hh"
+    },
+    {
+      "from": "subflow.hh",
+      "to": "transform.hh"
+    },
+    {
+      "from": "test.cc",
+      "to": "libdecomp.hh"
+    },
+    {
+      "from": "test.cc",
+      "to": "test.hh"
+    },
+    {
+      "from": "testfunction.cc",
+      "to": "ifacedecomp.hh"
+    },
+    {
+      "from": "testfunction.hh",
+      "to": "error.hh"
+    },
+    {
+      "from": "testfunction.hh",
+      "to": "ifaceterm.hh"
+    },
+    {
+      "from": "testfunction.hh",
+      "to": "xml.hh"
+    },
+    {
+      "from": "transform.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "transform.cc",
+      "to": "transform.hh"
+    },
+    {
+      "from": "transform.hh",
+      "to": "varnode.hh"
+    },
+    {
+      "from": "translate.cc",
+      "to": "translate.hh"
+    },
+    {
+      "from": "translate.hh",
+      "to": "float.hh"
+    },
+    {
+      "from": "translate.hh",
+      "to": "pcoderaw.hh"
+    },
+    {
+      "from": "type.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "type.cc",
+      "to": "type.hh"
+    },
+    {
+      "from": "type.hh",
+      "to": "address.hh"
+    },
+    {
+      "from": "typegrp_ghidra.cc",
+      "to": "typegrp_ghidra.hh"
+    },
+    {
+      "from": "typegrp_ghidra.hh",
+      "to": "ghidra_arch.hh"
+    },
+    {
+      "from": "typegrp_ghidra.hh",
+      "to": "type.hh"
+    },
+    {
+      "from": "typeop.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "typeop.cc",
+      "to": "typeop.hh"
+    },
+    {
+      "from": "typeop.hh",
+      "to": "cpool.hh"
+    },
+    {
+      "from": "typeop.hh",
+      "to": "opbehavior.hh"
+    },
+    {
+      "from": "typeop.hh",
+      "to": "printlanguage.hh"
+    },
+    {
+      "from": "typeop.hh",
+      "to": "variable.hh"
+    },
+    {
+      "from": "unify.cc",
+      "to": "unify.hh"
+    },
+    {
+      "from": "unify.hh",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "unionresolve.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "unionresolve.cc",
+      "to": "unionresolve.hh"
+    },
+    {
+      "from": "unionresolve.hh",
+      "to": "op.hh"
+    },
+    {
+      "from": "userop.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "userop.cc",
+      "to": "userop.hh"
+    },
+    {
+      "from": "userop.hh",
+      "to": "typeop.hh"
+    },
+    {
+      "from": "variable.cc",
+      "to": "database.hh"
+    },
+    {
+      "from": "variable.cc",
+      "to": "expression.hh"
+    },
+    {
+      "from": "variable.cc",
+      "to": "op.hh"
+    },
+    {
+      "from": "variable.cc",
+      "to": "variable.hh"
+    },
+    {
+      "from": "variable.hh",
+      "to": "varnode.hh"
+    },
+    {
+      "from": "varmap.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "varmap.cc",
+      "to": "varmap.hh"
+    },
+    {
+      "from": "varmap.hh",
+      "to": "database.hh"
+    },
+    {
+      "from": "varnode.cc",
+      "to": "funcdata.hh"
+    },
+    {
+      "from": "varnode.cc",
+      "to": "varnode.hh"
+    },
+    {
+      "from": "varnode.hh",
+      "to": "cover.hh"
+    },
+    {
+      "from": "varnode.hh",
+      "to": "pcoderaw.hh"
+    },
+    {
+      "from": "xml.cc",
+      "to": "xml.hh"
+    },
+    {
+      "from": "xml_arch.cc",
+      "to": "xml_arch.hh"
+    },
+    {
+      "from": "xml_arch.hh",
+      "to": "loadimage_xml.hh"
+    },
+    {
+      "from": "xml_arch.hh",
+      "to": "sleigh_arch.hh"
+    }
+  ],
+  "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "rust_edges": [
+    {
+      "from": "action",
+      "to": "analysis::type_infer"
+    },
+    {
+      "from": "action",
+      "to": "blockaction"
+    },
+    {
+      "from": "action",
+      "to": "condexe"
+    },
+    {
+      "from": "action",
+      "to": "constseq"
+    },
+    {
+      "from": "action",
+      "to": "coreaction"
+    },
+    {
+      "from": "action",
+      "to": "double_precis"
+    },
+    {
+      "from": "action",
+      "to": "error"
+    },
+    {
+      "from": "action",
+      "to": "funcdata"
+    },
+    {
+      "from": "action",
+      "to": "op"
+    },
+    {
+      "from": "action",
+      "to": "opcodes"
+    },
+    {
+      "from": "action",
+      "to": "ruleaction"
+    },
+    {
+      "from": "action",
+      "to": "subflow"
+    },
+    {
+      "from": "address",
+      "to": "varnode"
+    },
+    {
+      "from": "align::action",
+      "to": "action"
+    },
+    {
+      "from": "align::action",
+      "to": "coreaction"
+    },
+    {
+      "from": "align::action",
+      "to": "ruleaction"
+    },
+    {
+      "from": "align::block",
+      "to": "address"
+    },
+    {
+      "from": "align::block",
+      "to": "block"
+    },
+    {
+      "from": "align::datatype",
+      "to": "types"
+    },
+    {
+      "from": "align::function_snapshot",
+      "to": "address"
+    },
+    {
+      "from": "align::function_snapshot",
+      "to": "block"
+    },
+    {
+      "from": "align::function_snapshot",
+      "to": "opcodes"
+    },
+    {
+      "from": "align::function_snapshot",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "align::function_snapshot",
+      "to": "space"
+    },
+    {
+      "from": "align::function_snapshot",
+      "to": "varnode"
+    },
+    {
+      "from": "align::heritage",
+      "to": "address"
+    },
+    {
+      "from": "align::heritage",
+      "to": "heritage"
+    },
+    {
+      "from": "align::heritage",
+      "to": "space"
+    },
+    {
+      "from": "align::pcodeop",
+      "to": "align::address"
+    },
+    {
+      "from": "align::pcodeop",
+      "to": "align::varnode"
+    },
+    {
+      "from": "align::pcodeop",
+      "to": "ffi"
+    },
+    {
+      "from": "align::pcodeop",
+      "to": "op"
+    },
+    {
+      "from": "align::pcodeop",
+      "to": "opcodes"
+    },
+    {
+      "from": "align::pcodeop",
+      "to": "varnode"
+    },
+    {
+      "from": "align::runtime_verify",
+      "to": "align::pcodeop"
+    },
+    {
+      "from": "align::runtime_verify",
+      "to": "ffi"
+    },
+    {
+      "from": "align::runtime_verify",
+      "to": "op"
+    },
+    {
+      "from": "align::runtime_verify",
+      "to": "opcodes"
+    },
+    {
+      "from": "align::runtime_verify",
+      "to": "varnode"
+    },
+    {
+      "from": "align::varnode",
+      "to": "ffi"
+    },
+    {
+      "from": "align::varnode",
+      "to": "varnode"
+    },
+    {
+      "from": "analysis::type_infer",
+      "to": "funcdata"
+    },
+    {
+      "from": "analysis::type_infer",
+      "to": "op"
+    },
+    {
+      "from": "analysis::type_infer",
+      "to": "opcodes"
+    },
+    {
+      "from": "analysis::type_infer",
+      "to": "space"
+    },
+    {
+      "from": "analysis::type_infer",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "analysis::type_infer",
+      "to": "varnode"
+    },
+    {
+      "from": "arch",
+      "to": "address"
+    },
+    {
+      "from": "arch",
+      "to": "comment"
+    },
+    {
+      "from": "arch",
+      "to": "context"
+    },
+    {
+      "from": "arch",
+      "to": "cpool"
+    },
+    {
+      "from": "arch",
+      "to": "database"
+    },
+    {
+      "from": "arch",
+      "to": "loadimage"
+    },
+    {
+      "from": "arch",
+      "to": "marshal"
+    },
+    {
+      "from": "arch",
+      "to": "options"
+    },
+    {
+      "from": "arch",
+      "to": "override_rs"
+    },
+    {
+      "from": "arch",
+      "to": "prefersplit"
+    },
+    {
+      "from": "arch",
+      "to": "space"
+    },
+    {
+      "from": "arch",
+      "to": "stringmanage"
+    },
+    {
+      "from": "arch",
+      "to": "transform"
+    },
+    {
+      "from": "arch",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "arch",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "arch",
+      "to": "userop"
+    },
+    {
+      "from": "binary",
+      "to": "disasm"
+    },
+    {
+      "from": "block",
+      "to": "address"
+    },
+    {
+      "from": "block",
+      "to": "marshal"
+    },
+    {
+      "from": "block",
+      "to": "op"
+    },
+    {
+      "from": "block",
+      "to": "opcodes"
+    },
+    {
+      "from": "block",
+      "to": "varnode"
+    },
+    {
+      "from": "blockaction",
+      "to": "action"
+    },
+    {
+      "from": "blockaction",
+      "to": "address"
+    },
+    {
+      "from": "blockaction",
+      "to": "block"
+    },
+    {
+      "from": "blockaction",
+      "to": "coreaction"
+    },
+    {
+      "from": "blockaction",
+      "to": "error"
+    },
+    {
+      "from": "blockaction",
+      "to": "funcdata"
+    },
+    {
+      "from": "blockaction",
+      "to": "op"
+    },
+    {
+      "from": "blockaction",
+      "to": "opcodes"
+    },
+    {
+      "from": "blockaction",
+      "to": "space"
+    },
+    {
+      "from": "blockaction",
+      "to": "tracedag"
+    },
+    {
+      "from": "blockaction",
+      "to": "varnode"
+    },
+    {
+      "from": "callgraph",
+      "to": "database"
+    },
+    {
+      "from": "callgraph",
+      "to": "funcdata"
+    },
+    {
+      "from": "callgraph",
+      "to": "marshal"
+    },
+    {
+      "from": "comment",
+      "to": "address"
+    },
+    {
+      "from": "comment",
+      "to": "block"
+    },
+    {
+      "from": "comment",
+      "to": "funcdata"
+    },
+    {
+      "from": "comment",
+      "to": "marshal"
+    },
+    {
+      "from": "compression",
+      "to": "error"
+    },
+    {
+      "from": "condexe",
+      "to": "action"
+    },
+    {
+      "from": "condexe",
+      "to": "address"
+    },
+    {
+      "from": "condexe",
+      "to": "block"
+    },
+    {
+      "from": "condexe",
+      "to": "error"
+    },
+    {
+      "from": "condexe",
+      "to": "funcdata"
+    },
+    {
+      "from": "condexe",
+      "to": "op"
+    },
+    {
+      "from": "condexe",
+      "to": "opcodes"
+    },
+    {
+      "from": "condexe",
+      "to": "space"
+    },
+    {
+      "from": "condexe",
+      "to": "varnode"
+    },
+    {
+      "from": "constseq",
+      "to": "action"
+    },
+    {
+      "from": "constseq",
+      "to": "address"
+    },
+    {
+      "from": "constseq",
+      "to": "error"
+    },
+    {
+      "from": "constseq",
+      "to": "funcdata"
+    },
+    {
+      "from": "constseq",
+      "to": "op"
+    },
+    {
+      "from": "constseq",
+      "to": "opcodes"
+    },
+    {
+      "from": "constseq",
+      "to": "space"
+    },
+    {
+      "from": "constseq",
+      "to": "type_system"
+    },
+    {
+      "from": "constseq",
+      "to": "userop"
+    },
+    {
+      "from": "constseq",
+      "to": "varnode"
+    },
+    {
+      "from": "context",
+      "to": "address"
+    },
+    {
+      "from": "context",
+      "to": "marshal"
+    },
+    {
+      "from": "coreaction",
+      "to": "action"
+    },
+    {
+      "from": "coreaction",
+      "to": "address"
+    },
+    {
+      "from": "coreaction",
+      "to": "arch"
+    },
+    {
+      "from": "coreaction",
+      "to": "block"
+    },
+    {
+      "from": "coreaction",
+      "to": "error"
+    },
+    {
+      "from": "coreaction",
+      "to": "expression"
+    },
+    {
+      "from": "coreaction",
+      "to": "fspec"
+    },
+    {
+      "from": "coreaction",
+      "to": "funcdata"
+    },
+    {
+      "from": "coreaction",
+      "to": "heritage"
+    },
+    {
+      "from": "coreaction",
+      "to": "jumptable"
+    },
+    {
+      "from": "coreaction",
+      "to": "merge"
+    },
+    {
+      "from": "coreaction",
+      "to": "op"
+    },
+    {
+      "from": "coreaction",
+      "to": "opcodes"
+    },
+    {
+      "from": "coreaction",
+      "to": "space"
+    },
+    {
+      "from": "coreaction",
+      "to": "type_system"
+    },
+    {
+      "from": "coreaction",
+      "to": "type_system::cast"
+    },
+    {
+      "from": "coreaction",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "coreaction",
+      "to": "type_system::protomodel"
+    },
+    {
+      "from": "coreaction",
+      "to": "variable"
+    },
+    {
+      "from": "coreaction",
+      "to": "varmap"
+    },
+    {
+      "from": "coreaction",
+      "to": "varnode"
+    },
+    {
+      "from": "cover",
+      "to": "block"
+    },
+    {
+      "from": "cover",
+      "to": "op"
+    },
+    {
+      "from": "cover",
+      "to": "opcodes"
+    },
+    {
+      "from": "cover",
+      "to": "varnode"
+    },
+    {
+      "from": "cpool",
+      "to": "marshal"
+    },
+    {
+      "from": "database",
+      "to": "address"
+    },
+    {
+      "from": "database",
+      "to": "marshal"
+    },
+    {
+      "from": "database",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "database",
+      "to": "varnode"
+    },
+    {
+      "from": "disasm::sleigh_lift",
+      "to": "address"
+    },
+    {
+      "from": "disasm::sleigh_lift",
+      "to": "opcodes"
+    },
+    {
+      "from": "disasm::sleigh_lift",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "disasm::sleigh_lift",
+      "to": "sleigh_ffi"
+    },
+    {
+      "from": "disasm::sleigh_lift",
+      "to": "space"
+    },
+    {
+      "from": "disasm::x86_lift",
+      "to": "address"
+    },
+    {
+      "from": "disasm::x86_lift",
+      "to": "disasm"
+    },
+    {
+      "from": "disasm::x86_lift",
+      "to": "opcodes"
+    },
+    {
+      "from": "disasm::x86_lift",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "disasm::x86_lift",
+      "to": "space"
+    },
+    {
+      "from": "double_precis",
+      "to": "action"
+    },
+    {
+      "from": "double_precis",
+      "to": "address"
+    },
+    {
+      "from": "double_precis",
+      "to": "block"
+    },
+    {
+      "from": "double_precis",
+      "to": "error"
+    },
+    {
+      "from": "double_precis",
+      "to": "funcdata"
+    },
+    {
+      "from": "double_precis",
+      "to": "op"
+    },
+    {
+      "from": "double_precis",
+      "to": "opcodes"
+    },
+    {
+      "from": "double_precis",
+      "to": "space"
+    },
+    {
+      "from": "double_precis",
+      "to": "varnode"
+    },
+    {
+      "from": "dynamic",
+      "to": "address"
+    },
+    {
+      "from": "dynamic",
+      "to": "crc32"
+    },
+    {
+      "from": "dynamic",
+      "to": "funcdata"
+    },
+    {
+      "from": "dynamic",
+      "to": "op"
+    },
+    {
+      "from": "dynamic",
+      "to": "opcodes"
+    },
+    {
+      "from": "dynamic",
+      "to": "varnode"
+    },
+    {
+      "from": "emulate",
+      "to": "address"
+    },
+    {
+      "from": "emulate",
+      "to": "memstate"
+    },
+    {
+      "from": "emulate",
+      "to": "op"
+    },
+    {
+      "from": "emulate",
+      "to": "opbehavior"
+    },
+    {
+      "from": "emulate",
+      "to": "opcodes"
+    },
+    {
+      "from": "emulate",
+      "to": "space"
+    },
+    {
+      "from": "emulate",
+      "to": "varnode"
+    },
+    {
+      "from": "expression",
+      "to": "address"
+    },
+    {
+      "from": "expression",
+      "to": "op"
+    },
+    {
+      "from": "expression",
+      "to": "opcodes"
+    },
+    {
+      "from": "expression",
+      "to": "space"
+    },
+    {
+      "from": "expression",
+      "to": "varnode"
+    },
+    {
+      "from": "ffi",
+      "to": "varnode"
+    },
+    {
+      "from": "flow",
+      "to": "address"
+    },
+    {
+      "from": "flow",
+      "to": "disasm"
+    },
+    {
+      "from": "flow",
+      "to": "disasm::sleigh_lift"
+    },
+    {
+      "from": "flow",
+      "to": "disasm::x86_lift"
+    },
+    {
+      "from": "flow",
+      "to": "fspec"
+    },
+    {
+      "from": "flow",
+      "to": "funcdata"
+    },
+    {
+      "from": "flow",
+      "to": "jumptable"
+    },
+    {
+      "from": "flow",
+      "to": "loadimage"
+    },
+    {
+      "from": "flow",
+      "to": "op"
+    },
+    {
+      "from": "flow",
+      "to": "opcodes"
+    },
+    {
+      "from": "flow",
+      "to": "pcodeinject"
+    },
+    {
+      "from": "flow",
+      "to": "space"
+    },
+    {
+      "from": "fspec",
+      "to": "address"
+    },
+    {
+      "from": "fspec",
+      "to": "funcdata"
+    },
+    {
+      "from": "fspec",
+      "to": "grammar"
+    },
+    {
+      "from": "fspec",
+      "to": "marshal"
+    },
+    {
+      "from": "fspec",
+      "to": "op"
+    },
+    {
+      "from": "fspec",
+      "to": "opcodes"
+    },
+    {
+      "from": "fspec",
+      "to": "space"
+    },
+    {
+      "from": "fspec",
+      "to": "type_system"
+    },
+    {
+      "from": "fspec",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "fspec",
+      "to": "type_system::protomodel"
+    },
+    {
+      "from": "fspec",
+      "to": "varmap"
+    },
+    {
+      "from": "fspec",
+      "to": "varnode"
+    },
+    {
+      "from": "funcdata",
+      "to": "action"
+    },
+    {
+      "from": "funcdata",
+      "to": "address"
+    },
+    {
+      "from": "funcdata",
+      "to": "align::runtime_verify"
+    },
+    {
+      "from": "funcdata",
+      "to": "arch"
+    },
+    {
+      "from": "funcdata",
+      "to": "block"
+    },
+    {
+      "from": "funcdata",
+      "to": "blockaction"
+    },
+    {
+      "from": "funcdata",
+      "to": "comment"
+    },
+    {
+      "from": "funcdata",
+      "to": "coreaction"
+    },
+    {
+      "from": "funcdata",
+      "to": "disasm"
+    },
+    {
+      "from": "funcdata",
+      "to": "dynamic"
+    },
+    {
+      "from": "funcdata",
+      "to": "expression"
+    },
+    {
+      "from": "funcdata",
+      "to": "ffi"
+    },
+    {
+      "from": "funcdata",
+      "to": "fspec"
+    },
+    {
+      "from": "funcdata",
+      "to": "heritage"
+    },
+    {
+      "from": "funcdata",
+      "to": "jumptable"
+    },
+    {
+      "from": "funcdata",
+      "to": "op"
+    },
+    {
+      "from": "funcdata",
+      "to": "opcodes"
+    },
+    {
+      "from": "funcdata",
+      "to": "override_rs"
+    },
+    {
+      "from": "funcdata",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "funcdata",
+      "to": "prettyprint"
+    },
+    {
+      "from": "funcdata",
+      "to": "printc"
+    },
+    {
+      "from": "funcdata",
+      "to": "printlanguage"
+    },
+    {
+      "from": "funcdata",
+      "to": "space"
+    },
+    {
+      "from": "funcdata",
+      "to": "stringmanage"
+    },
+    {
+      "from": "funcdata",
+      "to": "type_system"
+    },
+    {
+      "from": "funcdata",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "funcdata",
+      "to": "unionresolve"
+    },
+    {
+      "from": "funcdata",
+      "to": "userop"
+    },
+    {
+      "from": "funcdata",
+      "to": "variable"
+    },
+    {
+      "from": "funcdata",
+      "to": "varmap"
+    },
+    {
+      "from": "funcdata",
+      "to": "varnode"
+    },
+    {
+      "from": "grammar",
+      "to": "address"
+    },
+    {
+      "from": "grammar",
+      "to": "arch"
+    },
+    {
+      "from": "grammar",
+      "to": "fspec"
+    },
+    {
+      "from": "grammar",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "grammar",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "graph",
+      "to": "address"
+    },
+    {
+      "from": "graph",
+      "to": "block"
+    },
+    {
+      "from": "graph",
+      "to": "funcdata"
+    },
+    {
+      "from": "graph",
+      "to": "op"
+    },
+    {
+      "from": "graph",
+      "to": "opcodes"
+    },
+    {
+      "from": "graph",
+      "to": "space"
+    },
+    {
+      "from": "graph",
+      "to": "varnode"
+    },
+    {
+      "from": "heritage",
+      "to": "address"
+    },
+    {
+      "from": "heritage",
+      "to": "block"
+    },
+    {
+      "from": "heritage",
+      "to": "funcdata"
+    },
+    {
+      "from": "heritage",
+      "to": "op"
+    },
+    {
+      "from": "heritage",
+      "to": "opcodes"
+    },
+    {
+      "from": "heritage",
+      "to": "prefersplit"
+    },
+    {
+      "from": "heritage",
+      "to": "space"
+    },
+    {
+      "from": "heritage",
+      "to": "varnode"
+    },
+    {
+      "from": "jumptable",
+      "to": "address"
+    },
+    {
+      "from": "jumptable",
+      "to": "block"
+    },
+    {
+      "from": "jumptable",
+      "to": "emulate"
+    },
+    {
+      "from": "jumptable",
+      "to": "funcdata"
+    },
+    {
+      "from": "jumptable",
+      "to": "op"
+    },
+    {
+      "from": "jumptable",
+      "to": "opbehavior"
+    },
+    {
+      "from": "jumptable",
+      "to": "opcodes"
+    },
+    {
+      "from": "jumptable",
+      "to": "override_rs"
+    },
+    {
+      "from": "jumptable",
+      "to": "rangeutil"
+    },
+    {
+      "from": "jumptable",
+      "to": "varnode"
+    },
+    {
+      "from": "loadimage",
+      "to": "address"
+    },
+    {
+      "from": "memstate",
+      "to": "address"
+    },
+    {
+      "from": "memstate",
+      "to": "loadimage"
+    },
+    {
+      "from": "memstate",
+      "to": "space"
+    },
+    {
+      "from": "merge",
+      "to": "address"
+    },
+    {
+      "from": "merge",
+      "to": "block"
+    },
+    {
+      "from": "merge",
+      "to": "cover"
+    },
+    {
+      "from": "merge",
+      "to": "database"
+    },
+    {
+      "from": "merge",
+      "to": "funcdata"
+    },
+    {
+      "from": "merge",
+      "to": "op"
+    },
+    {
+      "from": "merge",
+      "to": "opcodes"
+    },
+    {
+      "from": "merge",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "merge",
+      "to": "space"
+    },
+    {
+      "from": "merge",
+      "to": "type_system"
+    },
+    {
+      "from": "merge",
+      "to": "variable"
+    },
+    {
+      "from": "merge",
+      "to": "varnode"
+    },
+    {
+      "from": "modelrules",
+      "to": "address"
+    },
+    {
+      "from": "modelrules",
+      "to": "fspec"
+    },
+    {
+      "from": "modelrules",
+      "to": "marshal"
+    },
+    {
+      "from": "modelrules",
+      "to": "space"
+    },
+    {
+      "from": "modelrules",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "modelrules",
+      "to": "type_system::protomodel"
+    },
+    {
+      "from": "op",
+      "to": "address"
+    },
+    {
+      "from": "op",
+      "to": "block"
+    },
+    {
+      "from": "op",
+      "to": "opbehavior"
+    },
+    {
+      "from": "op",
+      "to": "opcodes"
+    },
+    {
+      "from": "op",
+      "to": "rangeutil"
+    },
+    {
+      "from": "op",
+      "to": "varnode"
+    },
+    {
+      "from": "opbehavior",
+      "to": "address"
+    },
+    {
+      "from": "opbehavior",
+      "to": "float_emulate"
+    },
+    {
+      "from": "opbehavior",
+      "to": "opcodes"
+    },
+    {
+      "from": "opbehavior",
+      "to": "rangeutil"
+    },
+    {
+      "from": "opbehavior",
+      "to": "utils"
+    },
+    {
+      "from": "options",
+      "to": "arch"
+    },
+    {
+      "from": "options",
+      "to": "flow"
+    },
+    {
+      "from": "options",
+      "to": "marshal"
+    },
+    {
+      "from": "override_rs",
+      "to": "address"
+    },
+    {
+      "from": "override_rs",
+      "to": "funcdata"
+    },
+    {
+      "from": "override_rs",
+      "to": "marshal"
+    },
+    {
+      "from": "paramid",
+      "to": "address"
+    },
+    {
+      "from": "paramid",
+      "to": "funcdata"
+    },
+    {
+      "from": "paramid",
+      "to": "op"
+    },
+    {
+      "from": "paramid",
+      "to": "opcodes"
+    },
+    {
+      "from": "paramid",
+      "to": "space"
+    },
+    {
+      "from": "paramid",
+      "to": "varnode"
+    },
+    {
+      "from": "pcodeinject",
+      "to": "opcodes"
+    },
+    {
+      "from": "pcodeparse",
+      "to": "marshal"
+    },
+    {
+      "from": "pcodeparse",
+      "to": "opcodes"
+    },
+    {
+      "from": "pcodeparse",
+      "to": "space"
+    },
+    {
+      "from": "pcodeparse",
+      "to": "varnode"
+    },
+    {
+      "from": "pcoderaw",
+      "to": "address"
+    },
+    {
+      "from": "pcoderaw",
+      "to": "space"
+    },
+    {
+      "from": "pcoderaw",
+      "to": "varnode"
+    },
+    {
+      "from": "prefersplit",
+      "to": "address"
+    },
+    {
+      "from": "prefersplit",
+      "to": "funcdata"
+    },
+    {
+      "from": "prefersplit",
+      "to": "op"
+    },
+    {
+      "from": "prefersplit",
+      "to": "opcodes"
+    },
+    {
+      "from": "prefersplit",
+      "to": "space"
+    },
+    {
+      "from": "prefersplit",
+      "to": "varnode"
+    },
+    {
+      "from": "printc",
+      "to": "address"
+    },
+    {
+      "from": "printc",
+      "to": "block"
+    },
+    {
+      "from": "printc",
+      "to": "comment"
+    },
+    {
+      "from": "printc",
+      "to": "cpool"
+    },
+    {
+      "from": "printc",
+      "to": "database"
+    },
+    {
+      "from": "printc",
+      "to": "fspec"
+    },
+    {
+      "from": "printc",
+      "to": "funcdata"
+    },
+    {
+      "from": "printc",
+      "to": "op"
+    },
+    {
+      "from": "printc",
+      "to": "opcodes"
+    },
+    {
+      "from": "printc",
+      "to": "prettyprint"
+    },
+    {
+      "from": "printc",
+      "to": "printlanguage"
+    },
+    {
+      "from": "printc",
+      "to": "space"
+    },
+    {
+      "from": "printc",
+      "to": "type_system"
+    },
+    {
+      "from": "printc",
+      "to": "type_system::cast"
+    },
+    {
+      "from": "printc",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "printc",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "printc",
+      "to": "userop"
+    },
+    {
+      "from": "printc",
+      "to": "variable"
+    },
+    {
+      "from": "printc",
+      "to": "varmap"
+    },
+    {
+      "from": "printc",
+      "to": "varnode"
+    },
+    {
+      "from": "printlanguage",
+      "to": "fspec"
+    },
+    {
+      "from": "printlanguage",
+      "to": "funcdata"
+    },
+    {
+      "from": "printlanguage",
+      "to": "op"
+    },
+    {
+      "from": "printlanguage",
+      "to": "prettyprint"
+    },
+    {
+      "from": "printlanguage",
+      "to": "printc"
+    },
+    {
+      "from": "printlanguage",
+      "to": "type_system"
+    },
+    {
+      "from": "printlanguage",
+      "to": "varnode"
+    },
+    {
+      "from": "rangeutil",
+      "to": "address"
+    },
+    {
+      "from": "rangeutil",
+      "to": "op"
+    },
+    {
+      "from": "rangeutil",
+      "to": "opcodes"
+    },
+    {
+      "from": "rangeutil",
+      "to": "varnode"
+    },
+    {
+      "from": "ruleaction",
+      "to": "action"
+    },
+    {
+      "from": "ruleaction",
+      "to": "address"
+    },
+    {
+      "from": "ruleaction",
+      "to": "arch"
+    },
+    {
+      "from": "ruleaction",
+      "to": "block"
+    },
+    {
+      "from": "ruleaction",
+      "to": "cpool"
+    },
+    {
+      "from": "ruleaction",
+      "to": "error"
+    },
+    {
+      "from": "ruleaction",
+      "to": "expression"
+    },
+    {
+      "from": "ruleaction",
+      "to": "funcdata"
+    },
+    {
+      "from": "ruleaction",
+      "to": "jumptable"
+    },
+    {
+      "from": "ruleaction",
+      "to": "op"
+    },
+    {
+      "from": "ruleaction",
+      "to": "opcodes"
+    },
+    {
+      "from": "ruleaction",
+      "to": "rangeutil"
+    },
+    {
+      "from": "ruleaction",
+      "to": "space"
+    },
+    {
+      "from": "ruleaction",
+      "to": "stringmanage"
+    },
+    {
+      "from": "ruleaction",
+      "to": "type_system"
+    },
+    {
+      "from": "ruleaction",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "ruleaction",
+      "to": "typeop"
+    },
+    {
+      "from": "ruleaction",
+      "to": "userop"
+    },
+    {
+      "from": "ruleaction",
+      "to": "utils"
+    },
+    {
+      "from": "ruleaction",
+      "to": "varnode"
+    },
+    {
+      "from": "signature",
+      "to": "address"
+    },
+    {
+      "from": "signature",
+      "to": "crc32"
+    },
+    {
+      "from": "signature",
+      "to": "funcdata"
+    },
+    {
+      "from": "signature",
+      "to": "marshal"
+    },
+    {
+      "from": "signature",
+      "to": "op"
+    },
+    {
+      "from": "signature",
+      "to": "opcodes"
+    },
+    {
+      "from": "signature",
+      "to": "varnode"
+    },
+    {
+      "from": "stringmanage",
+      "to": "address"
+    },
+    {
+      "from": "stringmanage",
+      "to": "loadimage"
+    },
+    {
+      "from": "stringmanage",
+      "to": "marshal"
+    },
+    {
+      "from": "subflow",
+      "to": "action"
+    },
+    {
+      "from": "subflow",
+      "to": "address"
+    },
+    {
+      "from": "subflow",
+      "to": "arch"
+    },
+    {
+      "from": "subflow",
+      "to": "error"
+    },
+    {
+      "from": "subflow",
+      "to": "float_emulate"
+    },
+    {
+      "from": "subflow",
+      "to": "funcdata"
+    },
+    {
+      "from": "subflow",
+      "to": "op"
+    },
+    {
+      "from": "subflow",
+      "to": "opcodes"
+    },
+    {
+      "from": "subflow",
+      "to": "rangeutil"
+    },
+    {
+      "from": "subflow",
+      "to": "space"
+    },
+    {
+      "from": "subflow",
+      "to": "transform"
+    },
+    {
+      "from": "subflow",
+      "to": "type_system"
+    },
+    {
+      "from": "subflow",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "subflow",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "subflow",
+      "to": "typeop"
+    },
+    {
+      "from": "subflow",
+      "to": "varnode"
+    },
+    {
+      "from": "tracedag",
+      "to": "block"
+    },
+    {
+      "from": "transform",
+      "to": "address"
+    },
+    {
+      "from": "transform",
+      "to": "funcdata"
+    },
+    {
+      "from": "transform",
+      "to": "op"
+    },
+    {
+      "from": "transform",
+      "to": "opcodes"
+    },
+    {
+      "from": "transform",
+      "to": "space"
+    },
+    {
+      "from": "transform",
+      "to": "varnode"
+    },
+    {
+      "from": "translate",
+      "to": "address"
+    },
+    {
+      "from": "translate",
+      "to": "float_emulate"
+    },
+    {
+      "from": "translate",
+      "to": "marshal"
+    },
+    {
+      "from": "translate",
+      "to": "opcodes"
+    },
+    {
+      "from": "translate",
+      "to": "space"
+    },
+    {
+      "from": "type_system::cast",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "address"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "database"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "fspec"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "marshal"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "op"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "opcodes"
+    },
+    {
+      "from": "type_system::protomodel",
+      "to": "address"
+    },
+    {
+      "from": "type_system::protomodel",
+      "to": "fspec"
+    },
+    {
+      "from": "type_system::protomodel",
+      "to": "space"
+    },
+    {
+      "from": "type_system::typefactory",
+      "to": "address"
+    },
+    {
+      "from": "type_system::typefactory",
+      "to": "fspec"
+    },
+    {
+      "from": "type_system::typefactory",
+      "to": "marshal"
+    },
+    {
+      "from": "type_system::typefactory",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "typeop",
+      "to": "address"
+    },
+    {
+      "from": "typeop",
+      "to": "op"
+    },
+    {
+      "from": "typeop",
+      "to": "opcodes"
+    },
+    {
+      "from": "typeop",
+      "to": "printc"
+    },
+    {
+      "from": "typeop",
+      "to": "printlanguage"
+    },
+    {
+      "from": "typeop",
+      "to": "type_system"
+    },
+    {
+      "from": "typeop",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "typeop",
+      "to": "varnode"
+    },
+    {
+      "from": "unify",
+      "to": "address"
+    },
+    {
+      "from": "unify",
+      "to": "funcdata"
+    },
+    {
+      "from": "unify",
+      "to": "op"
+    },
+    {
+      "from": "unify",
+      "to": "opbehavior"
+    },
+    {
+      "from": "unify",
+      "to": "opcodes"
+    },
+    {
+      "from": "unify",
+      "to": "varnode"
+    },
+    {
+      "from": "unionresolve",
+      "to": "float_emulate"
+    },
+    {
+      "from": "unionresolve",
+      "to": "funcdata"
+    },
+    {
+      "from": "unionresolve",
+      "to": "op"
+    },
+    {
+      "from": "unionresolve",
+      "to": "opcodes"
+    },
+    {
+      "from": "unionresolve",
+      "to": "type_system"
+    },
+    {
+      "from": "unionresolve",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "unionresolve",
+      "to": "varnode"
+    },
+    {
+      "from": "userop",
+      "to": "op"
+    },
+    {
+      "from": "userop",
+      "to": "type_system"
+    },
+    {
+      "from": "userop",
+      "to": "varnode"
+    },
+    {
+      "from": "variable",
+      "to": "address"
+    },
+    {
+      "from": "variable",
+      "to": "cover"
+    },
+    {
+      "from": "variable",
+      "to": "database"
+    },
+    {
+      "from": "variable",
+      "to": "op"
+    },
+    {
+      "from": "variable",
+      "to": "opcodes"
+    },
+    {
+      "from": "variable",
+      "to": "type_system"
+    },
+    {
+      "from": "variable",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "variable",
+      "to": "varnode"
+    },
+    {
+      "from": "varmap",
+      "to": "address"
+    },
+    {
+      "from": "varmap",
+      "to": "funcdata"
+    },
+    {
+      "from": "varmap",
+      "to": "op"
+    },
+    {
+      "from": "varmap",
+      "to": "opcodes"
+    },
+    {
+      "from": "varmap",
+      "to": "space"
+    },
+    {
+      "from": "varmap",
+      "to": "type_system"
+    },
+    {
+      "from": "varmap",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "varmap",
+      "to": "varnode"
+    },
+    {
+      "from": "varnode",
+      "to": "address"
+    },
+    {
+      "from": "varnode",
+      "to": "cover"
+    },
+    {
+      "from": "varnode",
+      "to": "database"
+    },
+    {
+      "from": "varnode",
+      "to": "funcdata"
+    },
+    {
+      "from": "varnode",
+      "to": "op"
+    },
+    {
+      "from": "varnode",
+      "to": "opcodes"
+    },
+    {
+      "from": "varnode",
+      "to": "space"
+    },
+    {
+      "from": "varnode",
+      "to": "type_system"
+    },
+    {
+      "from": "varnode",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "varnode",
+      "to": "variable"
+    }
+  ],
+  "rust_modules": [
+    "action",
+    "address",
+    "align",
+    "align::action",
+    "align::address",
+    "align::block",
+    "align::datatype",
+    "align::function_snapshot",
+    "align::heritage",
+    "align::pcodeop",
+    "align::range",
+    "align::runtime_verify",
+    "align::varnode",
+    "analysis",
+    "analysis::type_infer",
+    "arch",
+    "bin::rugra",
+    "binary",
+    "block",
+    "blockaction",
+    "callgraph",
+    "capability",
+    "comment",
+    "compression",
+    "condexe",
+    "constseq",
+    "context",
+    "coreaction",
+    "cover",
+    "cpool",
+    "crc32",
+    "database",
+    "disasm",
+    "disasm::sleigh_lift",
+    "disasm::x86_64",
+    "disasm::x86_lift",
+    "double_precis",
+    "dynamic",
+    "emulate",
+    "error",
+    "expression",
+    "ffi",
+    "float_emulate",
+    "flow",
+    "fspec",
+    "funcdata",
+    "grammar",
+    "graph",
+    "heritage",
+    "jumptable",
+    "lib",
+    "loadimage",
+    "marshal",
+    "memstate",
+    "merge",
+    "modelrules",
+    "op",
+    "opbehavior",
+    "opcodes",
+    "options",
+    "override_rs",
+    "paramid",
+    "pcodeinject",
+    "pcodeparse",
+    "pcoderaw",
+    "prefersplit",
+    "prettyprint",
+    "printc",
+    "printlanguage",
+    "rangemap",
+    "rangeutil",
+    "ruleaction",
+    "signature",
+    "sleigh_ffi",
+    "space",
+    "stringmanage",
+    "subflow",
+    "tracedag",
+    "transform",
+    "translate",
+    "type_system",
+    "type_system::cast",
+    "type_system::datatype",
+    "type_system::protomodel",
+    "type_system::typefactory",
+    "typeop",
+    "types",
+    "unify",
+    "unionresolve",
+    "userop",
+    "utils",
+    "variable",
+    "varmap",
+    "varnode"
+  ],
+  "schema": 1,
+  "todo_dependency_edges": [
+    {
+      "from": "ADDRESS-0001",
+      "to": "SPACE-0001"
+    },
+    {
+      "from": "ARCH-0001",
+      "to": "SLEIGH-0001"
+    },
+    {
+      "from": "ARCH-0001",
+      "to": "SPACE-0001"
+    },
+    {
+      "from": "ARCH-0001",
+      "to": "TYPE-0001"
+    },
+    {
+      "from": "BLOCK-0001",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "BLOCK-0001",
+      "to": "SEQNUM-0001"
+    },
+    {
+      "from": "CONDEXE-0001",
+      "to": "BLOCK-0001"
+    },
+    {
+      "from": "CONDEXE-0001",
+      "to": "HERITAGE-0001"
+    },
+    {
+      "from": "CONDEXE-0001",
+      "to": "OPBANK-0001"
+    },
+    {
+      "from": "CONSTSEQ-0001",
+      "to": "OPBANK-0001"
+    },
+    {
+      "from": "CONSTSEQ-0001",
+      "to": "SPACE-0001"
+    },
+    {
+      "from": "CONSTSEQ-0001",
+      "to": "USEROP-0001"
+    },
+    {
+      "from": "COVER-0001",
+      "to": "BLOCK-0001"
+    },
+    {
+      "from": "COVER-0001",
+      "to": "VARIABLE-0001"
+    },
+    {
+      "from": "DATABASE-0001",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "DATABASE-0001",
+      "to": "DBSYM-FLAGS"
+    },
+    {
+      "from": "DATABASE-0001",
+      "to": "TYPE-0001"
+    },
+    {
+      "from": "DIFF-BISECT-0001",
+      "to": "ORACLE-CACHE-0001"
+    },
+    {
+      "from": "DISPLAYFMT-0002",
+      "to": "MARSHAL-ID-0001"
+    },
+    {
+      "from": "FFI-0001",
+      "to": "PCODE-0002"
+    },
+    {
+      "from": "FSPEC-0002",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "FSPEC-0002",
+      "to": "FSPEC-0001"
+    },
+    {
+      "from": "IMPACT-0001",
+      "to": "LEDGER-0001"
+    },
+    {
+      "from": "INJECT-0001",
+      "to": "ARCH-0001"
+    },
+    {
+      "from": "INJECT-0001",
+      "to": "OPBANK-0001"
+    },
+    {
+      "from": "INJECT-0001",
+      "to": "USEROP-0001"
+    },
+    {
+      "from": "JUMPTABLE-0001",
+      "to": "INJECT-0001"
+    },
+    {
+      "from": "JUMPTABLE-0001",
+      "to": "PATHMELD-0001"
+    },
+    {
+      "from": "JUMPTABLE-0001",
+      "to": "RANGE-0001"
+    },
+    {
+      "from": "MARSHAL-PACKED-0001",
+      "to": "MARSHAL-ID-0001"
+    },
+    {
+      "from": "MARSHAL-PACKED-0001",
+      "to": "SPACE-0001"
+    },
+    {
+      "from": "MEMSTATE-0001",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "MEMSTATE-0001",
+      "to": "ARCH-0001"
+    },
+    {
+      "from": "MEMSTATE-0001",
+      "to": "SPACE-0001"
+    },
+    {
+      "from": "OPBANK-0001",
+      "to": "VARNODE-0001"
+    },
+    {
+      "from": "OPTIONS-0001",
+      "to": "ARCH-0001"
+    },
+    {
+      "from": "OPTIONS-0001",
+      "to": "MARSHAL-ID-0001"
+    },
+    {
+      "from": "ORACLE-0002",
+      "to": "SLEIGH-0001"
+    },
+    {
+      "from": "PATHMELD-0001",
+      "to": "BLOCK-0001"
+    },
+    {
+      "from": "PATHMELD-0001",
+      "to": "OPBANK-0001"
+    },
+    {
+      "from": "PERF-GATE-0001",
+      "to": "PERF-BUILD-0001"
+    },
+    {
+      "from": "PIPE-0001",
+      "to": "PIPE-0000"
+    },
+    {
+      "from": "PRETTY-0001",
+      "to": "PRINT-RPN-0001"
+    },
+    {
+      "from": "RANGE-0001",
+      "to": "PCODE-0001"
+    },
+    {
+      "from": "RANGEADDR-0001",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "SEQNUM-0001",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "MATCH"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "PARTIAL_MATCH"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "SLEIGH-0002B-COVERAGE"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "SLEIGH-0002C"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "SLEIGH-0002D"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "SLEIGH-0003"
+    },
+    {
+      "from": "SLEIGH-0002B",
+      "to": "UNTESTED"
+    },
+    {
+      "from": "SLEIGH-0002B-COVERAGE",
+      "to": "SLEIGH-0002B"
+    },
+    {
+      "from": "SLEIGH-0002B-COVERAGE",
+      "to": "SLEIGH-0002D"
+    },
+    {
+      "from": "SLEIGH-0002C",
+      "to": "SLEIGH-0002B"
+    },
+    {
+      "from": "SLEIGH-0002C",
+      "to": "SLEIGH-0003"
+    },
+    {
+      "from": "SLEIGH-0002D",
+      "to": "SLEIGH-0002C"
+    },
+    {
+      "from": "SLEIGH-0003",
+      "to": "SLEIGH-0002B"
+    },
+    {
+      "from": "SLEIGH-0003",
+      "to": "SLEIGH-0002C"
+    },
+    {
+      "from": "SLEIGH-FLOW-0001",
+      "to": "ARCH-0001"
+    },
+    {
+      "from": "SLEIGH-FLOW-0001",
+      "to": "SLEIGH-0002D"
+    },
+    {
+      "from": "SSA-0001",
+      "to": "RANGE-0001"
+    },
+    {
+      "from": "TYPE-0001",
+      "to": "SPACE-0001"
+    },
+    {
+      "from": "USEROP-0001",
+      "to": "ARCH-0001"
+    },
+    {
+      "from": "VARIABLE-0001",
+      "to": "OPBANK-0001"
+    },
+    {
+      "from": "VARNODE-0001",
+      "to": "ADDRESS-0001"
+    },
+    {
+      "from": "VARNODE-0001",
+      "to": "SEQNUM-0001"
+    }
+  ],
+  "todo_nodes": [
+    "ADDRESS-0001",
+    "ANN-0001",
+    "ANN-A",
+    "ANN-B",
+    "ANN-C",
+    "ANN-D",
+    "ANN-E",
+    "ANN-F",
+    "ANN-G",
+    "ANN-H",
+    "ANN-I",
+    "ANN-J",
+    "ANN-K",
+    "ANN-L",
+    "ANN-M",
+    "ANN-N",
+    "ANN-O",
+    "ANN-P",
+    "ARCH-0001",
+    "BLOCK-0001",
+    "CALLSPEC-0001",
+    "COMP-0001",
+    "CONDEXE-0001",
+    "CONSTSEQ-0001",
+    "COVER-0001",
+    "DATABASE-0001",
+    "DBSYM-FLAGS",
+    "DIFF-BISECT-0001",
+    "DISPLAYFMT-0002",
+    "FFI-0001",
+    "FSPEC-0001",
+    "FSPEC-0002",
+    "GATE-0001",
+    "GATE-REF-OPBEHAVIOR",
+    "GATE-REF-PRINTC",
+    "GATE-REF-RULEACTION",
+    "GATE-SCANNER-0001",
+    "HERITAGE-0001",
+    "IMPACT-0001",
+    "INJECT-0001",
+    "JUMPTABLE-0001",
+    "LEDGER-0001",
+    "MARSHAL-ID-0001",
+    "MARSHAL-PACKED-0001",
+    "MATCH",
+    "MEMSTATE-0001",
+    "MULTI-0001",
+    "OPBANK-0001",
+    "OPCODE-0001",
+    "OPTIONS-0001",
+    "ORACLE-0001",
+    "ORACLE-0002",
+    "ORACLE-CACHE-0001",
+    "PARSER-0001",
+    "PARSER-0002",
+    "PARTIAL_MATCH",
+    "PATHMELD-0001",
+    "PCODE-0001",
+    "PCODE-0002",
+    "PERF-BUILD-0001",
+    "PERF-GATE-0001",
+    "PIPE-0000",
+    "PIPE-0001",
+    "PRETTY-0001",
+    "PRINT-RPN-0001",
+    "PRINTC-0001",
+    "RANGE-0001",
+    "RANGEADDR-0001",
+    "REDUCE-0001",
+    "SEQNUM-0001",
+    "SLEIGH-0001",
+    "SLEIGH-0002",
+    "SLEIGH-0002A",
+    "SLEIGH-0002B",
+    "SLEIGH-0002B-COVERAGE",
+    "SLEIGH-0002C",
+    "SLEIGH-0002D",
+    "SLEIGH-0003",
+    "SLEIGH-FLOW-0001",
+    "SPACE-0001",
+    "SSA-0001",
+    "TYPE-0001",
+    "UNTESTED",
+    "USEROP-0001",
+    "VARIABLE-0001",
+    "VARNODE-0001"
+  ]
+}

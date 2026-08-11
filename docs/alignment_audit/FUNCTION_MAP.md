@@ -1,34 +1,42 @@
-# Ghidra ↔ Rugra 函数级对齐清单 — 索引
+# Ghidra 12.0.4 ↔ Rugra 函数账本入口
 
-**用途**:每个 Ghidra `.cc` 文件的每个函数,对照 Rugra 实现,逐个核对四类决定性语义后打勾。
+本目录的权威机器账本由 `tools/generate_function_ledger.py` 从锁定 oracle 与当前
+Rust 源码生成：
 
-**图例**:✅ 已对齐 | ❌ 未对齐(标 Ghidra 行 + Rugra 行 + 缺口) | ⚠️ 部分对齐 | 🔍 待核对 | ➖ 不移植/替代实现
+- `FUNCTION_LEDGER.json`：每个 C++ definition/declaration 与 Rust function 的稳定 ID、
+  完整 Ctags 签名、源码 span、annotation 映射种类和行为状态。
+- `FUNCTION_MAP.generated.md`：按 oracle 文件汇总 definition 映射覆盖率。
+- `PROTOCOL_TABLE.json`：C++/Rust 协议敏感常量的原始观察与跨语言候选组；同名不代表等价。
+- `DEPENDENCY_DAG.json`：Rust module、Ghidra include 和 TODO 依赖边。
 
-**核对流程(铁律 1.2)**:
-1. 本 session 内 Read 该 Ghidra 函数全貌(不止签名行)
-2. 逐条核对四类决定性语义(引用参数 / 遍历顺序 / 计数器 / 比较键)
-3. Read Rugra 对应函数
-4. 比对,在表格更新状态
-5. ❌ 的函数:重写 Rugra 对齐 Ghidra,改状态为 ✅
+```bash
+python3 tools/generate_function_ledger.py
+python3 tools/generate_function_ledger.py --check
+```
 
-## 已完成清单文件
+## 当前唯一分母
 
-| 优先级 | 文件 | 文档 | 函数数 |
-|---|---|---|---|
-| P0 地基 | address.cc / space.cc | `FUNC_address_space.md` | ~85 |
-| P0 地基 | varnode.cc / op.cc | `FUNC_varnode_op.md` | ~135 |
-| P0 地基 | funcdata_op.cc / funcdata.cc / funcdata_varnode.cc / funcdata_block.cc | `FUNC_funcdata.md` | ~185 |
-| P0 地基 | block.cc | `FUNC_block.md` | ~120 |
-| P1 算法 | heritage.cc / merge.cc / varmap.cc | `FUNC_heritage_merge_varmap.md` | ~170 |
-| P1 算法 | blockaction.cc / jumptable.cc / condexe.cc | `FUNC_blockaction_jumptable_condexe.md` | ~190 |
-| P2 管线 | action.cc / coreaction.cc / ruleaction.cc | `FUNC_actions_rules.md` | ~465 |
-| P3 输出 | type.cc / typeop.cc / cast.cc / printc.cc / prettyprint.cc / printlanguage.cc | `FUNC_type_print.md` | ~620 |
-| P1 算法 | cover.cc / rangeutil.cc | `FUNC_cover_rangeutil.md` | ~85 |
+锁定 `Ghidra_12.0.4_build` / `e40ed13014025f82488b1f8f7bca566894ac376b`
+的 Universal Ctags 6.2.0 口径是：
 
-## 总计
-~2055 个 Ghidra 函数需逐个核对。
+| 类别 | 数量 | 完成度用途 |
+|---|---:|---|
+| `.cc` definitions | 5691 | 行为分母 |
+| `.hh` inline definitions | 3803 | 行为分母 |
+| **behavior definitions 合计** | **9494** | 唯一函数级完成分母 |
+| `.cc` prototypes | 101 | declaration 参考 |
+| `.hh` prototypes | 6216 | declaration 参考 |
+| raw function records | 15811 | definitions + declarations |
 
-## 当前最紧急
-**funcdata_op.cc::opSetInput** — 已重写对齐 Ghidra cc:104-125(early-out / const dedup / opUnsetInput / addDescend+setInput),但 `&mut self` 签名导致 608 调用者编译错误。下一步:逐个修调用者,让 fd 在调用点可变借用,不绕过 const dedup。
+旧手工文档的 `~2055` 只覆盖少量文件，保留为历史审计笔记，不再作为完成度分母。
 
-详细清单见各 FUNC_*.md 文件。
+## 状态解释
+
+- `exact_definition_start` 只证明 Rust 注释指向定义起始行。
+- `inside_function_body` 表示引用漂移或多函数合并，必须人工审计。
+- `UNTESTED` 是所有 definition 的默认行为状态。
+- 只有记录 oracle commit、架构、compiler spec、analysis options、输入指纹，并对完整
+  可观察状态做同输入 direct diff 的 fixture，才能把对应 definition 改成 `MATCH`。
+- annotation、代码形似、Rust 单测或旧 11.3.2 golden 都不能提升行为状态。
+
+`FUNC_*.md` 文件仍可用于阅读上下文，但不能覆盖生成账本中的稳定 ID、状态或分母。
