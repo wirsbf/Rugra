@@ -177,6 +177,11 @@ maps to `PcodeLexer::findIdentifier` at locked `pcodeparse.cc:2776`; the four
 decode entry points map to `pcoderaw.cc:23,33,96` and `translate.cc:996`.
 Element/attribute constructors and recursive-descent token helpers are marked
 as Rust glue because Ghidra uses file-scope IDs and generated Bison machinery.
+ANN-O likewise marks `PcodeTokenKind::as_token_id`,
+`PcodeTokenKind::from_token_id`, and `unary_prec` as Rust glue: Ghidra exposes
+raw generated token constants and Bison parse tables, while Rugra needs typed
+const conversions and a numeric Pratt-parser precedence floor. These
+annotations do not change parser behavior or alignment status.
 Known wire-ID, decoder/space-registry, and parser-lifecycle differences remain
 owned by `MARSHAL-ID-0001`, `MARSHAL-PACKED-0001`, `SPACE-0001`, and
 `PARSER-0001` respectively.

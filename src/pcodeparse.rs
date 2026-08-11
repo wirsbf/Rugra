@@ -168,7 +168,8 @@ pub enum PcodeTokenKind {
 }
 
 impl PcodeTokenKind {
-    /// Map this token to its Bison numeric id. Faithful to the assignment
+    // RUGRA-GLUE: Const adapter from Rust's typed token enum to the external Bison ids declared at pcodeparse.cc:152; Ghidra's lexer returns raw integer tokens directly.
+    /// Map this token to its Bison numeric id. The values follow the assignment
     /// Bison emits at pcodeparse.cc:154-210 plus the C `return curchar` fall
     /// through at pcodeparse.y:605. `const fn` so the `idents[]` table can be
     /// a `static`.
@@ -236,6 +237,7 @@ impl PcodeTokenKind {
         }
     }
 
+    // RUGRA-GLUE: Inverse typed-token adapter for Rust lexer dispatch; Ghidra keeps raw token ids and translates them through YYTRANSLATE at pcodeparse.cc:568.
     /// Inverse of `as_token_id`. Used by callers that receive a raw Bison
     /// token id (e.g. when consuming Bison-compatible output). `const fn` so
     /// the table lookups can be compile-time.
@@ -4137,6 +4139,7 @@ impl PcodeSnippet {
 
 /// Precedence floor for unary operators. Bison assigns these via
 /// `%right '!' '~'` (pcodeparse.y:64), the tightest non-primary binding.
+// RUGRA-GLUE: Numeric Pratt-parser precedence floor for Ghidra's `%right '!' '~'` declaration at pcodeparse.y:64; generated Bison has no callable helper.
 const fn unary_prec() -> u8 {
     12
 }
