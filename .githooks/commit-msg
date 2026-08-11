@@ -1,0 +1,5 @@
+#!/bin/sh
+# Commit-message backstop for AGENTS.md Alignment Evidence.
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec python3 "$REPO_ROOT/tools/check_alignment_evidence.py" "$1"

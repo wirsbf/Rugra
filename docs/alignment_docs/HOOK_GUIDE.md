@@ -1,12 +1,12 @@
-# Edit-Before-Read Alignment Hook (铁律 5.5/6 强制机制)
+# Edit-Before-Read Alignment Hook（铁律 1.2 / 机制 E）
 
-> **目的**: 强制执行 AGENTS.md 铁律 5.5/6 —— "修改一个函数的代码前, 必须重新先看
+> **目的**: 强制执行 AGENTS.md 铁律 1.2 / 机制 E —— "修改一个函数的代码前, 必须重新先看
 > 对应的 Ghidra 函数代码"。防止 agent "声称对齐但实际没读对应行" 的自欺
 > (2026-07-02 `181538f` 事故的根因模式)。
 
 ## 机制概览
 
-三层强制, 互为冗余:
+四层强制, 互为冗余:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -14,16 +14,19 @@
 │   .zcode/align_gate.py                                          │
 │   编辑 src/*.rs 前拦截: 该 fn 的 // Ghidra: file:line 引用必须   │
 │   有"本 session 读过"的回执, 否则 deny (exit 2).                │
+│   函数范围由 tools/rust_fn_scanner.py 与 commit checker 共用。   │
 ├─────────────────────────────────────────────────────────────────┤
 │ Layer 2 (自动回执): PostToolUse hook on Read                    │
 │   .zcode/record_receipt.py                                      │
 │   agent 每读一个 Ghidra cpp 源文件, 自动写入回执到               │
 │   .alignment_receipts.json (key=ghidra相对文件名, val=ts+ranges) │
 ├─────────────────────────────────────────────────────────────────┤
-│ Layer 3 (commit 兜底): pre-commit hook                          │
-│   rugra/.githooks/pre-commit → tools/check_ghidra_refs.py       │
-│   commit 时校验所有 // Ghidra: 引用的 file:line 真实存在          │
-│   (抓"行号漂移/伪造引用"; advisory 模式, --strict 升级硬门禁)    │
+│ Layer 3 (commit 兜底): versioned Git hooks                     │
+│   .githooks/pre-commit → health/doc/annotations/strict refs    │
+│   .githooks/commit-msg → Alignment Evidence 4/4                │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 4 (最终信任边界): CI                                     │
+│   sparse checkout 锁定 e40ed130 oracle 后重复全部静态门禁        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -43,7 +46,8 @@ ZCode CLI 的项目级 hook 配置在 **`<project>/.zcode/config.json`** (不是
           "hooks": [                    //   PostToolUse, PostToolUseFailure,
             {                           //   Stop
               "type": "process",        // ← 注意: "process", 非 "command"
-              "command": "python <abs path>"
+              "command": "python3",
+              "args": ["${ZCODE_PROJECT_DIR}/.zcode/align_gate.py"]
             }
           ]
         }
@@ -57,6 +61,10 @@ ZCode CLI 的项目级 hook 配置在 **`<project>/.zcode/config.json`** (不是
 - 文件名是 `config.json` (zcode source) 或 `settings.json` (legacy/claude source)
 - ZCode 格式 hook 条目用 `type: "process"`, Claude 格式用 `type: "command"`
 - 事件放在 `hooks.events.<EventName>` (zcode) 或 `hooks.<EventName>` (legacy)
+- `command` 只能是 executable，脚本和参数必须分别放入 `args[]`
+- `${ZCODE_PROJECT_DIR}` 由 ZCode 展开，禁止硬编码 Windows 或个人目录
+- 当前 ZCode 二进制只用 `startup` 与 `resume` 作为 SessionStart source；项目配置的
+  matcher 必须是 `startup|resume`，不能填写并不存在的 `clear`/`compact` source
 
 ## Hook 输入/输出契约 (逆向 zcode.cjs 确认)
 
@@ -87,10 +95,9 @@ ZCode CLI 的项目级 hook 配置在 **`<project>/.zcode/config.json`** (不是
 
 ## 回执新鲜度语义
 
-- **session 级**: 一次 read 覆盖该 fn 在**同一 session** 内的所有后续编辑。
-  这是对 "每次修改前必须重新看" 的实用化 —— 强制每个新 session 重读
-  (防止跨 session 的 Ghidra 记忆陈旧), 同时不折磨 agent 在一次 read 后做
-  多次相关编辑。
+- **edit-cycle 级**: receipt 必须晚于 session start，也必须不早于该函数上次
+  gate 成功的时间戳；再次编辑同一函数前要重新读对应 oracle。这样既阻止
+  跨 session 复用旧记忆，也阻止一次 read 被无限复用。
 - `.alignment_session_start` 文件由 SessionStart hook (`align_gate.py --session-start`)
   打时间戳。回执 ts 必须 >= 该时间戳才算 fresh。
 - 若 PostToolUse hook 未生效 (旧 session), agent 可手动
@@ -106,16 +113,34 @@ ZCode CLI 的项目级 hook 配置在 **`<project>/.zcode/config.json`** (不是
 无任何 Ghidra 引用的 fn → 不 gate (由 `check_ghidra_annotations.py`
 在 commit 时强制要求加注释)。`// RUGRA-GLUE:` 标注的 fn → 豁免。
 
+## 安装与验证
+
+```bash
+git config core.hooksPath .githooks
+python3 tools/check_gate_health.py
+python3 tools/rust_fn_scanner.py
+python3 tools/check_ghidra_annotations.py --self-test
+python3 .zcode/align_gate.py --self-test
+python3 tools/check_ghidra_annotations.py --all
+python3 tools/check_ghidra_refs.py --all --strict
+python3 tools/check_alignment_evidence.py --self-test
+```
+
+所有命令必须 exit 0 才能宣称门禁健康。CI 会从 NSA 仓库 sparse checkout
+精确 commit `e40ed13014025f82488b1f8f7bca566894ac376b`，再重复这些检查；本地
+hook 不是最终信任边界。
+
 ## 紧急逃生
 
-`ZCODE_ALIGN_GATE=0` 环境变量禁用 gate (临时, 应记录理由)。
-git commit 仍可用 `--no-verify` 跳过 (但会失去所有对齐门禁保护)。
+`ZCODE_ALIGN_GATE=0` 环境变量仅用于已登记的门禁自身修复，必须在 TODO 和
+提交证据中记录理由。禁止把 `git commit --no-verify` 当作正常工作流。
 
 ## ⚠ 重要: 配置仅在新 session 加载
 
 ZCode 在 **session 创建时** 加载 `.zcode/config.json` (一次)。若在 session
-中途添加/修改 hook 配置, **当前 session 不会生效**, 必须重启 session
-(或 clear/compact 触发 SessionStart) 后才生效。
+中途添加/修改 hook 配置, **当前 session 不会生效**, 必须重启 session。
+现行二进制会以 `startup` 或 `resume` source 触发 SessionStart，并重新写入
+session 起始时间戳；它没有 `clear`/`compact` source。
 
 验证 hook 已加载: 重启后做一次 src/*.rs 编辑, 若被 deny (且你没读对应
 Ghidra), 即生效; 也可查 `.zcode/align_gate.log` 是否有新条目。
@@ -127,7 +152,12 @@ Ghidra), 即生效; 也可查 `.zcode/align_gate.log` 是否有新条目。
 | `.zcode/config.json` | hook 配置 (PreToolUse + PostToolUse + SessionStart) |
 | `.zcode/align_gate.py` | PreToolUse gate + SessionStart 打戳 |
 | `.zcode/record_receipt.py` | PostToolUse 自动回执 + 手动补回执 |
+| `tools/rust_fn_scanner.py` | checker 与 edit hook 共用的 Rust 函数范围扫描器 |
 | `.alignment_receipts.json` | 回执存储 (gitignore, 不入库) |
 | `.alignment_session_start` | session 起始时间戳 |
-| `tools/check_ghidra_refs.py` | commit 时引用有效性校验 |
-| `rugra/.githooks/pre-commit` | pre-commit hook (接入 check_ghidra_refs) |
+| `tools/check_gate_health.py` | 锁定 oracle、hook mode/path、ZCode schema 自检 |
+| `tools/check_ghidra_refs.py` | commit/CI 时全库 strict 引用校验 |
+| `tools/check_alignment_evidence.py` | commit-msg Evidence 4/4 严格校验 |
+| `.githooks/pre-commit` | health/doc/annotation/strict-ref 门禁 |
+| `.githooks/commit-msg` | Alignment Evidence 门禁 |
+| `.github/workflows/alignment-gates.yml` | 版本化 CI 最终信任边界 |

@@ -1,0 +1,47 @@
+name: alignment-gates
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  locked-oracle-gates:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out Rugra
+        uses: actions/checkout@v4
+
+      - name: Check out locked Ghidra oracle
+        uses: actions/checkout@v4
+        with:
+          repository: NationalSecurityAgency/ghidra
+          ref: e40ed13014025f82488b1f8f7bca566894ac376b
+          path: ghidra
+          sparse-checkout: |
+            Ghidra/Features/Decompiler/src/decompile/cpp
+          sparse-checkout-cone-mode: false
+
+      - name: Install versioned hooks for health audit
+        run: git config core.hooksPath .githooks
+
+      - name: Verify locked oracle and hook installation
+        run: python3 tools/check_gate_health.py
+
+      - name: Verify API documentation coverage
+        run: python3 tools/check_doc_sync.py --all
+
+      - name: Verify every non-test Rust function is mapped
+        run: |
+          python3 tools/rust_fn_scanner.py
+          python3 tools/check_ghidra_annotations.py --self-test
+          python3 .zcode/align_gate.py --self-test
+          python3 tools/check_ghidra_annotations.py --all
+
+      - name: Verify all Ghidra references against 12.0.4
+        run: python3 tools/check_ghidra_refs.py --all --strict
+
+      - name: Verify strict four-category evidence parsing
+        run: python3 tools/check_alignment_evidence.py --self-test

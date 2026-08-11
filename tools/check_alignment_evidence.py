@@ -1,33 +1,25 @@
 #!/usr/bin/env python3
 """
-check_alignment_evidence.py — 铁律 10 的 commit-msg 门禁脚本。
+check_alignment_evidence.py — AGENTS.md 机制 A 的 commit-msg 门禁脚本。
 
 扫描 commit message，若命中 align/port/对齐/faithful 关键词，
 强制要求 message 体包含一个 `## Alignment Evidence` 块，
-否则拒绝提交（铁律 10：对齐证据块）。
+否则拒绝提交（机制 A：对齐证据块）。
 
 判定逻辑:
   1. message 首行或正文含触发词 (align/port/对齐/faithful, 大小写不敏感)
      且改动声称是对齐 Ghidra → 触发检查
   2. 触发后, 必须找到 `## Alignment Evidence` 标题
-  3. 该块必须包含四类决定性语义的核对标记 (引用/遍历/计数器/排序键)
-     — 用 [x] 或 OK/MATCH 标记, 至少出现 3 类才算"读了决定性语义"
+  3. 该块必须逐项填写四类决定性语义，并包含四项全部勾选的固定核对行。
+     模糊关键词、3/4 项、TODO/N/A/"未核对"均拒绝。
 
 退出码:
   0 — 通过 (或未触发检查)
   1 — 拒绝 (命中触发词但缺证据块)
 
-本地安装 (.githooks/ 被 .gitignore 忽略, 故 hook 不入库, 需手动启用):
-
-  1. 创建 .githooks/commit-msg, 内容:
-       #!/bin/sh
-       REPO_ROOT="$(git rev-parse --show-toplevel)"
-       python "$REPO_ROOT/rugra/tools/check_alignment_evidence.py" "$1"
-       exit $?
-  2. chmod +x .githooks/commit-msg
-  3. git config core.hooksPath rugra/.githooks  (若 pre-commit 已配则已生效)
-
-  (本仓库已附 .githooks/commit-msg 模板, 即使被 gitignore, clone 后本地可见)
+本地安装：`.githooks/commit-msg` 已版本化；运行
+`git config core.hooksPath .githooks` 启用。hook 使用仓库根目录和
+`python3`，不依赖个人路径。
 
 用法 (独立调用, 不需安装为 hook):
   python tools/check_alignment_evidence.py <commit_msg_file>
@@ -44,17 +36,20 @@ TRIGGER_RE = re.compile(
 )
 TRIGGER_CN = re.compile(r'(对齐|移植)')
 
-# 四类决定性语义标记 (任一形式都算核对过)
-SEMANTIC_CATEGORIES = [
-    ('引用参数',  re.compile(r'(引用|输出参数|&base|&.*base|out param|by-?ref|引用传递|跨.*共享)', re.I)),
-    ('遍历顺序',  re.compile(r'(遍历|nametree|字典序|begin\(\)|end\(\)|排序键|iteration order|sort key)', re.I)),
-    ('计数器',    re.compile(r'(计数器|counter|base\s*=\s*1|初值|增量|单调|累加器|per-prefix|单一.*共享|shared)', re.I)),
-    ('排序键',    re.compile(r'(排序键|比较键|compare|nameDedup|tie-?break|operator\(\)|字典序)', re.I)),
+REQUIRED_SECTIONS = [
+    ('引用/输出参数', re.compile(r'^\s*-\s*引用/输出参数\s*:\s*(\S.*)$', re.MULTILINE)),
+    ('循环边界/遍历顺序', re.compile(r'^\s*-\s*循环边界/遍历顺序\s*:\s*(\S.*)$', re.MULTILINE)),
+    ('计数器/累加器', re.compile(r'^\s*-\s*计数器/累加器\s*:\s*(\S.*)$', re.MULTILINE)),
+    ('排序/比较键', re.compile(r'^\s*-\s*排序/比较键\s*:\s*(\S.*)$', re.MULTILINE)),
 ]
+INVALID_EVIDENCE = re.compile(r'(^|\W)(TODO|TBD|N/?A|UNKNOWN)($|\W)|未核对|待核对|占位', re.I)
+GHIDRA_LINE = re.compile(r'^Ghidra:\s+\S+\.(?:cc|hh):\d+\s+\S.*$', re.MULTILINE)
+RUGRA_LINE = re.compile(r'^Rugra:\s+src/\S+\.rs:\d+\s+\S.*$', re.MULTILINE)
+CHECKLIST_ITEMS = ('引用参数', '遍历顺序', '计数器', '排序键')
 
 
 def message_triggers_alignment(msg: str) -> bool:
-    """message 是否声称对齐 Ghidra (触发铁律 10)。"""
+    """message 是否声称对齐 Ghidra (触发机制 A)。"""
     return bool(TRIGGER_RE.search(msg) or TRIGGER_CN.search(msg))
 
 
@@ -68,15 +63,34 @@ def extract_evidence_block(msg: str) -> str:
     return m.group(1) if m else ''
 
 
-def count_semantic_categories(block: str) -> int:
-    """证据块里核对了多少类决定性语义 (0-4)。"""
-    if not block:
-        return 0
-    n = 0
-    for _label, pat in SEMANTIC_CATEGORIES:
-        if pat.search(block):
-            n += 1
-    return n
+def validate_evidence_block(block: str) -> tuple[bool, str]:
+    """严格验证 Evidence 块的结构和四项显式核对。"""
+    if not GHIDRA_LINE.search(block):
+        return False, '缺少 `Ghidra: <file>:<line> <完整签名>` 行。'
+    if not RUGRA_LINE.search(block):
+        return False, '缺少 `Rugra: src/<file>.rs:<line> <对应函数>` 行。'
+
+    for label, pattern in REQUIRED_SECTIONS:
+        match = pattern.search(block)
+        if not match:
+            return False, f'缺少 `- {label}: ...` 决定性语义。'
+        detail = match.group(1).strip()
+        if len(detail) < 4 or INVALID_EVIDENCE.search(detail):
+            return False, f'`{label}` 内容为空、占位或明确未核对。'
+
+    checklist = next(
+        (line for line in block.splitlines() if line.strip().startswith('四类决定性语义核对:')),
+        '',
+    )
+    if not checklist:
+        return False, '缺少 `四类决定性语义核对:` 固定核对行。'
+    missing = [
+        label for label in CHECKLIST_ITEMS
+        if re.search(rf'\[x\]\s*{re.escape(label)}\b', checklist, re.I) is None
+    ]
+    if missing:
+        return False, f'四类核对未全部勾选: {", ".join(missing)}。'
+    return True, '四类决定性语义 4/4 显式填写并勾选。'
 
 
 def check_message(msg: str) -> tuple[bool, str]:
@@ -91,7 +105,7 @@ def check_message(msg: str) -> tuple[bool, str]:
     if not block:
         return (
             False,
-            '铁律 10 违反: commit message 声称对齐 Ghidra (含 '
+            '机制 A 违反: commit message 声称对齐 Ghidra (含 '
             'align/port/对齐/faithful), 但缺少 `## Alignment Evidence` 块。\n'
             '请在 message 体补上证据块, 逐字摘录 Ghidra 关键行签名, '
             '并核对四类决定性语义:\n'
@@ -99,25 +113,41 @@ def check_message(msg: str) -> tuple[bool, str]:
             '  2. 循环边界与遍历顺序 (容器, 排序键, 边界)\n'
             '  3. 计数器/累加器 (初值, 增量时机, per-X 还是全局)\n'
             '  4. 排序/比较键 (compare 字段, tie-break)\n'
-            '格式见 AGENTS.md 铁律 10。',
+            '格式见 AGENTS.md 机制 A。',
         )
 
-    n = count_semantic_categories(block)
-    if n < 3:
-        return (
-            False,
-            f'铁律 10 违反: `## Alignment Evidence` 块存在, 但只核对了 {n}/4 类'
-            '决定性语义 (需至少 3 类)。\n'
-            '证据块必须体现"读懂了决定性语义", 不是只贴行号。'
-            '请在块内逐条核对四类语义 (引用参数/遍历顺序/计数器/排序键), '
-            '用 [x] 或文字注明 Ghidra 侧该语义是什么、Rugra 侧如何对齐。\n'
-            '参考事故: commit 181538f 引用了正确行号但漏读 &base 引用语义。',
-        )
+    valid, detail = validate_evidence_block(block)
+    if not valid:
+        return False, f'机制 A 违反: `## Alignment Evidence` 不完整。\n{detail}'
+    return True, f'(机制 A 通过: {detail})'
 
-    return True, f'(铁律 10 通过: 核对 {n}/4 类决定性语义)'
+
+def self_test() -> int:
+    valid = '''align: port Foo\n\n## Alignment Evidence\nGhidra: foo.cc:10 void Foo::bar(int4 &out)\n  关键决定性语义（四类，逐条核对）:\n  - 引用/输出参数: out 由引用写回并跨调用共享。\n  - 循环边界/遍历顺序: 顺序遍历 vector 的 begin() 到 end()。\n  - 计数器/累加器: count 初值 0，在成功写出后递增。\n  - 排序/比较键: 不排序，保留 vector 插入顺序。\nRugra: src/foo.rs:20 fn bar\n  - 使用 &mut 输出并保持相同更新时机。\n四类决定性语义核对: [x]引用参数 [x]遍历顺序 [x]计数器 [x]排序键\n'''
+    three_of_four = valid.replace(' [x]排序键', '')
+    negative = valid.replace('out 由引用写回并跨调用共享。', '未核对')
+    cases = [
+        ('ordinary commit', True),
+        ('align: port Foo', False),
+        (valid, True),
+        (three_of_four, False),
+        (negative, False),
+    ]
+    failed = []
+    for index, (message, expected) in enumerate(cases, 1):
+        actual, reason = check_message(message)
+        if actual != expected:
+            failed.append(f'case {index}: expected {expected}, got {actual}: {reason}')
+    if failed:
+        print('\n'.join(failed), file=sys.stderr)
+        return 1
+    print('check_alignment_evidence: self-test OK (5 cases, strict 4/4)')
+    return 0
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) >= 2 and argv[1] == '--self-test':
+        return self_test()
     if len(argv) >= 2 and argv[1] == '--inline':
         if len(argv) < 3:
             print('用法: --inline "<commit message>"', file=sys.stderr)
@@ -134,10 +164,10 @@ def main(argv: list[str]) -> int:
     ok, reason = check_message(msg)
     if ok:
         # 静默通过 (或给提示到 stderr, 不污染 commit)
-        print(f'[铁律10] {reason}', file=sys.stderr)
+        print(f'[机制A] {reason}', file=sys.stderr)
         return 0
     else:
-        print(f'[铁律10 拒绝提交]\n{reason}', file=sys.stderr)
+        print(f'[机制A 拒绝提交]\n{reason}', file=sys.stderr)
         return 1
 
 
