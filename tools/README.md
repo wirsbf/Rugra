@@ -50,3 +50,28 @@ python3 tools/select_fixtures.py --staged --strict --pretty
 python3 tools/select_fixtures.py --function RG-F-9f9b178c52fe97265fbe --pretty
 python3 tools/select_fixtures.py --path src/sleigh_ffi.rs --pretty
 ```
+
+## 四级门禁
+
+`rugra_gate.py` 把相同事实源组合成四个延迟层级，并为每条命令记录输入 hash、
+工具输出 hash、耗时、timeout 和 exit 状态：
+
+| 层级 | 目标 | 主要内容 |
+|---|---|---|
+| `edit` | 秒级反馈 | 门禁健康、changed annotation/ref、fast library check |
+| `commit` | 原子提交 | 全静态门禁、生成账本、fast all-targets、受影响 fixture |
+| `wave` | 集成 wave | commit + 全测试 + 全 fixture + curl/httpd/语法/诊断 golden |
+| `nightly` | 冷闭包 | wave + fresh-target canonical release 全目标构建 |
+
+```bash
+python3 tools/rugra_gate.py edit --report /tmp/rugra-edit-gate.json
+python3 tools/rugra_gate.py commit --staged --report /tmp/rugra-commit-gate.json
+python3 tools/rugra_gate.py wave --report /tmp/rugra-wave-gate.json
+python3 tools/rugra_gate.py nightly --report /tmp/rugra-nightly-gate.json
+
+# 只查看命令和 fixture 选择，不执行
+python3 tools/rugra_gate.py commit --staged --dry-run
+```
+
+`commit` 以上层级遇到 fixture coverage gap 会在运行前返回 2。`wave`/`nightly`
+固定运行 registry 中的全部 fixture；旧 11.3.2 golden 只保留 diagnostic 身份。

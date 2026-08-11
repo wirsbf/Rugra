@@ -25,6 +25,24 @@ Rugra 的验证体系仍处于
 > `docs/alignment_audit/FUNCTION_LEDGER.json` 为准。未登记 fixture 的源码改动不是
 > “无需测试”，而是 coverage gap。
 
+### 机器化四级入口（2026-08-12）
+
+日常验证统一通过以下入口，避免每次人工拼接一整套命令：
+
+```bash
+python3 tools/rugra_gate.py edit
+python3 tools/rugra_gate.py commit --staged
+python3 tools/rugra_gate.py wave
+python3 tools/rugra_gate.py nightly
+```
+
+`edit` 只做秒级反馈；`commit` 增加全静态检查、生成账本检查和受影响的真实 oracle
+fixture；`wave` 运行全部 fixture、全目标测试和 curl/httpd 回归；`nightly` 再加入
+fresh-target canonical release 构建。每一级都可用 `--report` 保存结构化 JSON。
+
+门禁不会因 selector 未找到 fixture 而静默跳过：`commit` 以上层级对 coverage gap
+返回 2。`--dry-run` 可审计将执行的命令，但不能作为通过证据。
+
 ---
 
 ## 1

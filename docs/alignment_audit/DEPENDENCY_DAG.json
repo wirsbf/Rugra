@@ -3972,10 +3972,6 @@
       "to": "OPBANK-0001"
     },
     {
-      "from": "PERF-GATE-0001",
-      "to": "PERF-BUILD-0001"
-    },
-    {
       "from": "PIPE-0001",
       "to": "PIPE-0000"
     },
