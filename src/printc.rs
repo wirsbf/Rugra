@@ -156,29 +156,30 @@ pub mod print_mods {
     pub const NEGATETOKEN: u32 = 0x2000;
 }
 
-// Ghidra: database.hh:2027 symbol_display_format
-/// Display-format enum mirroring Ghidra's `symbol_display_format`
-/// (database.hh:2027-2033): the explicit formats a Symbol/Datatype can force
+// Ghidra: database.hh:199 Symbol display flag enum
+/// Display-format constants mirroring Ghidra's anonymous `Symbol` flag enum
+/// (database.hh:199-204): the explicit formats a Symbol/Datatype can force
 /// a constant to be rendered in. `DEFAULT` (0) means "decide automatically via
 /// mostNaturalBase / mods". Used by push_integer / push_char_constant_fmt /
 /// push_enum_constant_named to honour the formatting decisions recorded on
 /// the symbol/type — the core of the P0 constant-formatting gap (audit P0-2).
-/// Rugra does not yet persist a per-symbol display-format field, so callers
-/// pass `display_format::DEFAULT` (auto); the dispatch machinery is in place
-/// so that once the field is wired, formatting honours it.
+/// Rugra's `database::Symbol` and `Datatype` already persist this field, but
+/// the `PrintC::push_integer` helper signature and production call sites do
+/// not yet carry their alias/state into this formatter; current production
+/// callers therefore still pass `display_format::DEFAULT` (auto).
 pub mod display_format {
-    /// Automatic: decide via mostNaturalBase / mods (database.hh:2028).
+    /// Automatic: decide via mostNaturalBase / mods (implicit zero value).
     pub const DEFAULT: u32 = 0;
-    /// Force hexadecimal rendering, e.g. `0x1f` (database.hh:2029).
+    /// Force hexadecimal rendering, e.g. `0x1f` (database.hh:200).
     pub const HEX: u32 = 1;
-    /// Force decimal rendering, e.g. `31` (database.hh:2030).
+    /// Force decimal rendering, e.g. `31` (database.hh:201).
     pub const DEC: u32 = 2;
-    /// Force character rendering, e.g. `'A'` (database.hh:2031).
-    pub const CHAR: u32 = 3;
-    /// Force octal rendering, e.g. `037` (database.hh:2032).
-    pub const OCT: u32 = 4;
-    /// Force binary rendering, e.g. `0b11111` (database.hh:2033).
-    pub const BIN: u32 = 5;
+    /// Force octal rendering, e.g. `037` (database.hh:202).
+    pub const OCT: u32 = 3;
+    /// Force binary rendering, e.g. `0b11111` (database.hh:203).
+    pub const BIN: u32 = 4;
+    /// Force character rendering, e.g. `'A'` (database.hh:204).
+    pub const CHAR: u32 = 5;
 }
 
 // RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
@@ -1144,7 +1145,8 @@ impl PrintC {
                 }
                 self.emit.print(")");
             }
-            // printc.cc:5137 opReturn: return <expr>;.
+            // printc.cc:754 PrintC::opReturn default plain-return arm;
+            // PRINT-RPN-0001 tracks the halt/noreturn/baddata/missing variants.
             OpCode::CPUI_RETURN => {
                 self.emit.tag_op("return");
                 if let Some(in1) = op.get_in(1) {
@@ -9386,15 +9388,22 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1288 PrintC::push_integer
-    /// Render an integer constant as text, honouring the hex/decimal/char/
-    /// octal/binary format decision and the optional sign. Faithful port of
-    /// `PrintC::push_integer` (printc.cc:1288-1368) — the load-bearing
-    /// constant-formatting method (audit P0-2).
+    /// Render an integer constant as text, honouring the hex/decimal/octal/
+    /// binary/character format decision and the optional sign. This covers
+    /// the resolved-format scalar slice of `PrintC::push_integer`
+    /// (printc.cc:1288-1368), including its locked wire values. The oracle
+    /// fixture resolves through Datatype/Varnode/HighVariable, whereas this
+    /// simplified API receives the resulting `u32`; that object/alias path is
+    /// not a same-input `MATCH`.
     ///
     /// Rugra adaptation: drops the `(vn, op)` reads for per-symbol
-    /// display-format / isUnsignedPrint / isLongPrint (Rugra has none); the
-    /// caller passes `display_format` explicitly (`DEFAULT` triggers automatic
-    /// selection exactly as printc.cc:1326-1337).
+    /// display-format / isUnsignedPrint / isLongPrint. Symbol and Datatype
+    /// already store display format, but this PrintC API and its production
+    /// call chain do not carry that state into the helper; the caller passes
+    /// `display_format` explicitly (`DEFAULT` triggers automatic selection
+    /// exactly as printc.cc:1326-1337). `PRINT-RPN-0001` tracks the
+    /// remaining tag/vn/op, equate, suffix, markup, and pipeline observations;
+    /// the complete mapped function is not yet `MATCH`.
     ///
     /// Alignment evidence:
     /// - Sort key: forced format > `mods & force_hex` > `val<=10 ||
@@ -9451,21 +9460,23 @@ impl PrintC {
                 t.push_str(&format_binary(v));
             }
         }
-        // force_unsigned_token / force_sized_token suffixes dropped (no
-        // isUnsignedPrint/isLongPrint flags in Rugra).
+        // This scalar helper has no `(vn, op)`, so it cannot observe
+        // isUnsignedPrint/isLongPrint or emit their unsigned/sized suffixes.
         self.emit.print(&t);
     }
 
     // Ghidra: printc.cc:1606 PrintC::pushCharConstant
     /// Render a single character constant, normally as a quoted char literal
-    /// (`'A'`). Faithful port of `PrintC::pushCharConstant`
-    /// (printc.cc:1606-1655). Handles the byte-character >=0x80 fall-through
-    /// to integer/hex rendering and the wide-char (`L`) prefix.
+    /// (`'A'`). This is the resolved-format scalar slice of
+    /// `PrintC::pushCharConstant` (printc.cc:1606-1655), including the
+    /// byte-character >=0x80 fall-through and wide-char (`L`) prefix.
     ///
-    /// Rugra adaptation: drops `(vn, op)` (no per-symbol display-format /
-    /// caresAboutCharRepresentation) and accepts the resolved `display_format`
-    /// directly. The byte>=0x80 branch (printc.cc:1630-1640) and the final
-    /// `'...'` rendering (printc.cc:1641-1654) are preserved verbatim.
+    /// Rugra adaptation: this simplified API does not receive `(vn, op)`, so
+    /// it cannot resolve the Symbol/Datatype format and does not carry the
+    /// castStrategy `caresAboutCharRepresentation` observation; it accepts the
+    /// resolved `display_format` u32 directly. The byte>=0x80 branch
+    /// (printc.cc:1630-1640) and final `'...'` rendering
+    /// (printc.cc:1641-1654) are the covered scalar observations.
     pub fn push_char_constant_fmt(&mut self, val: u64, sz: usize, sign: bool,
                                   display_format: u32) {
         let mut fmt = display_format;

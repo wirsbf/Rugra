@@ -5,6 +5,25 @@
 ## 文档状态
 
 - **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——默认 RPN 把 invisible root group 发成未闭合 `(`；多数 op 绕过 RPN，terminal mask 被忽略，`doc_function` 又重发顶层循环。当前 11.3.2 最终 C golden 只作回归诊断，不能证明 12.0.4 token/markup parity。详见 `CONTROL_OUTPUT_PIPELINES_2026-08-11.md`。
+- **2026-08-12 `PRINTC-0001` display-format wire 修复**: `display_format` 现与锁定
+  Ghidra `database.hh:199-204` / `type.cc:728-762` 一致：`DEFAULT=0`、
+  `HEX=1`、`DEC=2`、`OCT=3`、`BIN=4`、`CHAR=5`。此前 Rugra 把
+  `CHAR/OCT/BIN` 编成 `3/4/5`，会把持久化或跨层传入的 3、4、5 分别误解释为
+  char、octal、binary。`tools/run_printc_display_oracle.sh` 从锁定 commit
+  `e40ed13014025f82488b1f8f7bca566894ac376b` 编译真实 C++ `PrintC::push_integer`
+  并与 Rust 同 schema stdout 直接 diff；覆盖 wire 常量与字符串 codec 的合法域映射
+  （不覆盖 `Encoder/Decoder` marshal round-trip），以及 `65/u8`
+  的 `0101`、`0b01000001`、`'A'` 和 `0xff/i8` 的 `-01`、
+  `-0b00000001`、`'\\xff'`，结果为零差异。metadata 记录 oracle、架构、
+  compiler spec、analysis options、输入 SHA-256、双端 fixture SHA-256 与输出
+  SHA-256。此 `MATCH` 仅证明 display wire、codec 合法域观测和“已解析 format u32”
+  的 scalar dispatch；C++ 端通过 `Datatype → Varnode → HighVariable` 解析格式，
+  Rust 简化 helper 则直接接收 u32，两端对象图、alias 与状态并非同输入。
+  因此完整 `push_integer` 及 Datatype/Varnode alias 路径仍为
+  **MISMATCH/UNTESTED**；codec 的未知名称/数值错误类型、消息与状态同样未测。
+  Rugra API 尚未观察 Ghidra 的 `tag/vn/op`、
+  Symbol-vs-Datatype 优先级、equate 早退、unsigned/long suffix、markup 及主管线
+  接入，`PRINT-RPN-0001` 未关闭，模块保持 L2。
 - **2026-07-22 修复（cross-review printc.cc:2583 calling-convention）**: `emit_function_declaration` 的调用约定分支此前被注释掉且文档错误声称 `option_convention` 默认 false（实际默认 true，printc.cc:1584）。现已：新增 `PrintC.option_convention` 字段（默认 true）+ 取消注释分支 + 在 FuncProto 新增 `is_model_unknown()`/`print_model_in_decl()`（fspec.hh:1394-1395）。对 unknown 模型（curl 场景）`print_model_in_decl` 返回 false，不发射约定 token，与 Ghidra golden 一致（0 个约定 token）。
 - **2026-07-22 修复（cross-review mostNaturalBase）**: `emit_integer_value` 的进制选择此前用 `val > 0x1000` 粗糙阈值，现改为调用 `printlanguage::most_natural_base()`（printlanguage.cc:731-788 的 digit-frequency 启发式）。影响枚举值/常量的 hex/dec 显示。
 - **2026-07-16 修复（P4 register-var 编号顺序）**: 新增 `preallocate_register_compact_names`：在 doc_variable_decls 前扫描所有 op，收集 Register 空间 auto-local 输出 varnode 的 raw 名 + def-op 地址，按 def-op 地址排序（Ghidra nameDedup 创建顺序的近似），预填 compact_rename。使寄存器变量编号按 def-op 地址序确定，而非 op 遍历首次触及序。栈变量路径已对齐（doc_variable_decls 按 scope.symbols 顺序）。numbering=485 不变（defects=0，编号是外观差异）。
