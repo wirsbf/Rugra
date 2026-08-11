@@ -18,6 +18,15 @@ transformations that target specific opcodes to simplify the IR.
 `typeop.cc` 的 oracle fixture 验证。此次只确认共享宽度语义；两个 Rule 的完整
 CFG/IR 变换仍按各自既有状态管理，不能由本项单独升级为 L3。
 
+## 2026-08-11：Ghidra 12.0.4 引用 bootstrap
+
+`GATE-REF-RULEACTION` 使用锁定 oracle commit
+`e40ed13014025f82488b1f8f7bca566894ac376b` 重新核对
+`RuleTransformCpool::applyOp`，并将 `ruleaction.rs` 唯一越界的源码引用修正为
+实际对应的 `RuleExpandLoad::applyOp` 定义起始行 `ruleaction.cc:10919`。本次只修复
+12.0.4 源码引用元数据，不改变 Rust 行为，不产生函数 oracle `MATCH`，也不升级
+模块状态。
+
 ## 导出的公共 API (Public API)
 
 ### `pub struct RuleCollapseConstants`

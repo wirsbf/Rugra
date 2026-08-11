@@ -11155,7 +11155,7 @@ impl Rule for RuleExpandLoad {
         }
         if add_form {
             // Ghidra rewrites elType to a TYPE_UINT base when meta is not
-            // INT/UINT (ruleaction.cc:11001-11002):
+            // INT/UINT (ruleaction.cc:10919 RuleExpandLoad::applyOp):
             //   if (meta != TYPE_INT && meta != TYPE_UINT)
             //     elType = data.getArch()->types->getBase(elType->getSize(), TYPE_UINT);
             // Rugra resolves the base type via Architecture::get_base_type;
