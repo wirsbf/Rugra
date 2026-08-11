@@ -52,6 +52,10 @@ fresh-target canonical release 构建。每一级都可用 `--report` 保存结�
 再用 `compare` 定位第一个差异。原始 stage hash 是诊断索引，不是行为证明；只有该阶段完整
 观察结果及其所有状态突变同输入零差异时，映射函数才可记 `MATCH`。
 
+首差异定位后，可用 `tools/reduce_fixture.py` 缩减输入。predicate 必须运行真实两侧 fixture
+并仅以约定 exit code 表示差异是否仍存在；不得把手写 expected 当 oracle。reducer trace 是
+诊断证据，最终最小 case 仍须补齐 commit/arch/cspec/options/input 指纹并进入 B2 runner。
+
 ---
 
 ## 1

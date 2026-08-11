@@ -122,3 +122,22 @@ python3 tools/stage_diff.py compare /tmp/ghidra-stages.json /tmp/rugra-stages.js
 
 `compare` 返回 0 表示所有阶段原始 hash 相同，1 表示找到差异，2 表示 manifest/provenance
 无效。stage manifest 也可作为 `oracle_cache.py store` 的只读 artifact 保存。
+
+## 失败输入最小化
+
+`reduce_fixture.py` 对仍能复现 oracle mismatch 的输入做 deterministic `ddmin`，支持
+顶层 JSON list、JSON Pointer 指向的对象字段 list，以及 hex byte stream。predicate 用 argv
+直接启动，必须含独立的 `{input}` 占位符；不经过 shell。默认 exit 1=interesting、exit
+0=boring，其他 exit/timeout/重复运行不一致均 fail-closed。
+
+```bash
+python3 tools/reduce_fixture.py \
+  --input /tmp/failing.json --output /tmp/min.json --trace /tmp/min.trace.json \
+  --format json-field --field /functions/0/ops \
+  -- python3 tools/my_mismatch_predicate.py '{input}'
+```
+
+候选按内容 hash 在单次 reduction 内 memoize；最终会重新验证 predicate，并逐个尝试删除
+剩余 unit 证明 1-minimal。输出 trace 保留原始/最小输入指纹、完整 argv/可执行文件 hash、
+受控构建环境、所有 predicate 结果、超时与重试参数；额外必需环境变量用 `--env NAME`
+显式加入。这样最小 case 可连同完整证据升格为正式 oracle fixture。
