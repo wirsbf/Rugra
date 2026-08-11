@@ -584,6 +584,7 @@ pub static PCODE_IDENTS: [IdentRec; IDENTREC_SIZE] = [
     }, // OP_ZEXT
 ];
 
+// Ghidra: pcodeparse.cc:2776 PcodeLexer::findIdentifier
 /// Binary-search the sorted `idents[]` table for `s`, faithful to
 /// `PcodeLexer::findIdentifier` (pcodeparse.y:278-295). Returns the table
 /// index, or `None` when not found (Ghidra returns -1).
@@ -1266,8 +1267,8 @@ impl PcodeData {
 // RUGRA-GLUE: element_id helpers
 // Ghidra declares these as file-scope `ElementId`/`AttributeId` globals
 // (translate.cc:20-28, address.cc:25-30). Rugra's `ElementId::new` /
-// `AttributeId::new` are non-const, so we construct fresh values here; the
-// numeric ids match Ghidra exactly.
+// `AttributeId::new` are non-const, so we construct fresh values here. Exact
+// wire-ID parity is tracked by MARSHAL-ID-0001.
 
 /// `ELEM_OP = ElementId("op",27)` (translate.cc:25).
 pub fn elem_op() -> ElementId {
@@ -1275,51 +1276,61 @@ pub fn elem_op() -> ElementId {
 }
 
 /// `ELEM_ADDR = ElementId("addr",11)` (address.cc:25).
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ELEM_ADDR (address.cc:25); Ghidra has no function counterpart.
 pub fn elem_addr() -> ElementId {
     ElementId::new("addr", 11)
 }
 
 /// `ELEM_REGISTER = ElementId("register",14)` (address.cc:28).
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ELEM_REGISTER (address.cc:28); Ghidra has no function counterpart.
 pub fn elem_register() -> ElementId {
     ElementId::new("register", 14)
 }
 
 /// `ELEM_VARNODE = ElementId("varnode",16)` (address.cc:30).
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ELEM_VARNODE (address.cc:30); Ghidra has no function counterpart.
 pub fn elem_varnode() -> ElementId {
     ElementId::new("varnode", 16)
 }
 
-/// `ELEM_VOID = ElementId("void",18)` (pcoderaw.hh). Used by `PcodeOpRaw::decode`.
+/// Rugra currently constructs `ELEM_VOID` with id 18; locked Ghidra uses id 10.
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ELEM_VOID (marshal.cc:1269); wire-ID parity remains tracked by MARSHAL-ID-0001.
 pub fn elem_void() -> ElementId {
     ElementId::new("void", 18)
 }
 
 /// `ELEM_SPACEID = ElementId("spaceid",30)` (translate.cc:28).
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ELEM_SPACEID (translate.cc:28); Ghidra has no function counterpart.
 pub fn elem_spaceid() -> ElementId {
     ElementId::new("spaceid", 30)
 }
 
 /// `ATTRIB_CODE = AttributeId("code",43)` (translate.cc:20).
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ATTRIB_CODE (translate.cc:20); Ghidra has no function counterpart.
 pub fn attrib_code() -> AttributeId {
     AttributeId::new("code", 43)
 }
 
-/// `ATTRIB_SIZE = AttributeId("size",7)` (translate.cc:43 uses it).
+/// Rugra currently constructs `ATTRIB_SIZE` with id 7; locked Ghidra uses 19.
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ATTRIB_SIZE (marshal.cc:1246); wire-ID parity remains tracked by MARSHAL-ID-0001.
 pub fn attrib_size() -> AttributeId {
     AttributeId::new("size", 7)
 }
 
-/// `ATTRIB_SPACE = AttributeId("space",9)`.
+/// Rugra currently constructs `ATTRIB_SPACE` with id 9; locked Ghidra uses 20.
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ATTRIB_SPACE (marshal.cc:1247); wire-ID parity remains tracked by MARSHAL-ID-0001.
 pub fn attrib_space() -> AttributeId {
     AttributeId::new("space", 9)
 }
 
-/// `ATTRIB_NAME = AttributeId("name",2)`.
+/// Rugra currently constructs `ATTRIB_NAME` with id 2; locked Ghidra uses 14.
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ATTRIB_NAME (marshal.cc:1241); wire-ID parity remains tracked by MARSHAL-ID-0001.
 pub fn attrib_name() -> AttributeId {
     AttributeId::new("name", 2)
 }
 
-/// `ATTRIB_OFFSET = AttributeId("offset",4)`.
+/// Rugra currently constructs `ATTRIB_OFFSET` with id 4; locked Ghidra uses 16.
+// RUGRA-GLUE: Rust function wrapper for Ghidra's file-scope ATTRIB_OFFSET (marshal.cc:1243); wire-ID parity remains tracked by MARSHAL-ID-0001.
 pub fn attrib_offset() -> AttributeId {
     AttributeId::new("offset", 4)
 }
@@ -1328,11 +1339,10 @@ pub fn attrib_offset() -> AttributeId {
 // Space-name resolution (mirrors decoder.readSpace on a <space> attribute)
 // ---------------------------------------------------------------------------
 
-/// Resolve a space spelling to an `AddressSpace`, mirroring Ghidra's
-/// `decoder.readSpace(ATTRIB_SPACE)` which returns the named `AddrSpace *`.
-/// The accepted spellings are the lowercased names of Rugra's `AddressSpace`
-/// variants. RUGRA-GLUE: Ghidra looks the name up in the SLEIGH space table;
-/// Rugra has no SLEIGH, so we pattern-match on the well-known names.
+/// Resolve a space spelling to an `AddressSpace`. Ghidra's manager-backed
+/// `Decoder::readSpace` lookup throws for an unknown name; this fallback uses
+/// Rugra's fixed variants until the canonical registry and decoder land.
+// RUGRA-GLUE: Fixed-name fallback for XmlDecode::readSpace (marshal.cc:400); exact registry/error semantics are tracked by SPACE-0001 and MARSHAL-PACKED-0001.
 pub fn parse_space_name(name: &str) -> AddressSpace {
     match name {
         "ram" | "RAM" => AddressSpace::Ram,
@@ -1350,11 +1360,13 @@ pub fn parse_space_name(name: &str) -> AddressSpace {
 // XML decode (pcoderaw.cc:23-122, translate.cc:996-1014)
 // ---------------------------------------------------------------------------
 
-/// Faithful to `VarnodeData::decodeFromAttributes` (pcoderaw.cc:33-55).
+// Ghidra: pcoderaw.cc:33 VarnodeData::decodeFromAttributes
+/// Maps to `VarnodeData::decodeFromAttributes` (pcoderaw.cc:33-55).
 /// Walks the current element's attributes; on `space=` reads the offset/size
 /// from the space's own attribute set, on `name=` looks up a register. Rugra
 /// has no register resolver yet, so `name=` falls back to a register-space
-/// varnode with offset 0 (L3 gap noted in the module docs).
+/// varnode with offset 0; manager-backed identity is tracked by `SPACE-0001`
+/// and production ownership by `ARCH-0001`.
 pub fn decode_varnode_from_attributes(decoder: &mut dyn Decoder) -> VarnodeData {
     let mut space: Option<AddressSpace> = None;
     let mut offset: u64 = 0;
@@ -1421,7 +1433,8 @@ pub fn decode_varnode_from_attributes(decoder: &mut dyn Decoder) -> VarnodeData 
     }
 }
 
-/// Faithful to `VarnodeData::decode` (pcoderaw.cc:23-29): opens the
+// Ghidra: pcoderaw.cc:23 VarnodeData::decode
+/// Maps to `VarnodeData::decode` (pcoderaw.cc:23-29): opens the
 /// `<addr>` / `<register>` / `<varnode>` element, delegates to
 /// `decode_varnode_from_attributes`, closes the element.
 pub fn decode_varnode(decoder: &mut dyn Decoder) -> VarnodeData {
@@ -1431,11 +1444,13 @@ pub fn decode_varnode(decoder: &mut dyn Decoder) -> VarnodeData {
     vn
 }
 
-/// Faithful to `PcodeOpRaw::decode` (pcoderaw.cc:96-122). Assumes the `<op>`
+// Ghidra: pcoderaw.cc:96 PcodeOpRaw::decode
+/// Maps to `PcodeOpRaw::decode` (pcoderaw.cc:96-122). Assumes the `<op>`
 /// element is already open. Reads `code=` as the opcode, handles `<void>`
 /// output (no output) vs. an output varnode, then decodes `isize` inputs with
 /// special `<spaceid>` handling (constant-space varnode whose offset is the
-/// space pointer — Rugra approximates this with a Const varnode).
+/// space pointer — Rugra approximates this with a Const varnode pending
+/// `SPACE-0001`).
 pub fn decode_pcode_op_raw(decoder: &mut dyn Decoder, isize_: i32) -> Option<PcodeData> {
     let code_raw = decoder.read_signed_integer_attr(&attrib_code()) as i32;
     let opc = OpCode::from_i32(code_raw)?;
@@ -1475,7 +1490,8 @@ pub fn decode_pcode_op_raw(decoder: &mut dyn Decoder, isize_: i32) -> Option<Pco
     Some(data)
 }
 
-/// Faithful to `PcodeEmit::decodeOp` (translate.cc:996-1014): opens the
+// Ghidra: translate.cc:996 PcodeEmit::decodeOp
+/// Maps to `PcodeEmit::decodeOp` (translate.cc:996-1014): opens the
 /// `<op>` element, reads `size=` as the input count, delegates to
 /// `decode_pcode_op_raw`, then closes the element. Returns the decoded op
 /// (Rugra returns it directly; Ghidra hands it to `PcodeEmit::dump`).
@@ -4037,10 +4053,12 @@ impl PcodeSnippet {
 
     // --- low-level token helpers ---
 
+    // RUGRA-GLUE: Single-token lookahead advance for the hand-written parser; Ghidra uses generated yyparse, with lifecycle parity tracked by PARSER-0001.
     fn advance(&mut self) {
         self.current = Some(self.lex_full());
     }
 
+    // RUGRA-GLUE: Punctuation predicate for the hand-written parser; Ghidra compares Bison lookahead tokens, with parser parity tracked by PARSER-0001.
     fn peek_punct(&self, c: char) -> bool {
         matches!(
             self.current.as_ref().map(|t| t.kind),
@@ -4048,6 +4066,7 @@ impl PcodeSnippet {
         )
     }
 
+    // RUGRA-GLUE: Result-based punctuation adapter absent from Ghidra's Bison parser; mandatory-token propagation is tracked by PARSER-0001.
     fn expect_punct(&mut self, c: char) -> Result<(), String> {
         if self.peek_punct(c) {
             self.advance();
@@ -4061,6 +4080,7 @@ impl PcodeSnippet {
         }
     }
 
+    // RUGRA-GLUE: STRING semantic-value extractor for the hand-written parser; Ghidra uses Bison's value stack, with parity tracked by PARSER-0001.
     fn expect_string(&mut self) -> Option<String> {
         let cur = self.current.clone()?;
         if matches!(cur.kind, PcodeTokenKind::String) {
@@ -4071,6 +4091,7 @@ impl PcodeSnippet {
         }
     }
 
+    // RUGRA-GLUE: INTEGER semantic-value extractor for the hand-written parser; its missing-token fallback is tracked by PARSER-0001.
     fn expect_integer(&mut self) -> u64 {
         let cur = self.current.clone();
         if let Some(c) = cur {
@@ -4082,6 +4103,7 @@ impl PcodeSnippet {
         0
     }
 
+    // RUGRA-GLUE: Statement-boundary recovery helper absent from Ghidra's grammar; the recovery divergence is tracked by PARSER-0001.
     fn skip_to_statement_boundary(&mut self) {
         while !matches!(
             self.current.as_ref().map(|t| t.kind),

@@ -1350,6 +1350,7 @@ impl CParse {
         Self::new_impl(_max_buf, Some(glb))
     }
 
+    // Ghidra: grammar.cc:2585 CParse::CParse
     fn new_impl(_max_buf: i32, glb: Option<Arc<Architecture>>) -> Self {
         let mut keywords = std::collections::HashMap::new();
         keywords.insert("typedef".to_string(), cparse_flags::F_TYPEDEF);

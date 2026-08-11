@@ -169,3 +169,14 @@ Binary search of `PCODE_IDENTS` (pcodeparse.y:278).
   beyond the local scope.
 - Register name resolution in `decode_varnode_from_attributes` (needs a
   `Translate`).
+
+## Annotation provenance
+
+ANN-G records source provenance without changing behavior. `find_identifier`
+maps to `PcodeLexer::findIdentifier` at locked `pcodeparse.cc:2776`; the four
+decode entry points map to `pcoderaw.cc:23,33,96` and `translate.cc:996`.
+Element/attribute constructors and recursive-descent token helpers are marked
+as Rust glue because Ghidra uses file-scope IDs and generated Bison machinery.
+Known wire-ID, decoder/space-registry, and parser-lifecycle differences remain
+owned by `MARSHAL-ID-0001`, `MARSHAL-PACKED-0001`, `SPACE-0001`, and
+`PARSER-0001` respectively.

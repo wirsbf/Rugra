@@ -126,4 +126,10 @@ Document type requested from the parser (grammar.hh:217): `Declaration`,
 - `TypeFactory` integration for struct/union/enum construction (`newStruct` /
   `newUnion` / `newEnum` from grammar.cc:2779/2818/2881) — these need a live
   `Architecture` reference and are deferred.
+
+## Annotation provenance
+
+ANN-G maps the shared Rust constructor body `CParse::new_impl` to the locked
+`CParse::CParse` definition at `grammar.cc:2585`. This is annotation-only and
+does not change parser behavior or alignment status.
 <!-- annotation-pass: 2026-07-22 -->
