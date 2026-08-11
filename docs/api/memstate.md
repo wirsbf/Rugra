@@ -2,11 +2,14 @@
 
 **源代码路径**: `src/memstate.rs`
 **Ghidra 对应**: `memstate.hh` / `memstate.cc` (738 行)
-**状态**: ✅ **L3（2026-07-22 完整对齐）**——全部 Ghidra `MemoryBank` 抽象基类、`MemoryImage`、`MemoryPageOverlay`、`MemoryHashOverlay`、`MemoryState` 的纯虚/虚方法/公开方法 1:1 移植。20 单元测试全绿。
+**状态**: 🔧 **L2 / NO_ORACLE**——主要容器和方法表面已实现，20 个
+Rust 单元测试全绿；但地址空间身份/端序来自简化的 `AddressSpace`，
+`MemoryState` 未持有 Ghidra `Translate*`，命名寄存器被哈希为伪偏移，且没有
+锁定 12.0.4 的同输入行为 fixture（`MEMSTATE-0001`）。
 
 ## 模块说明
 
-内存存储/状态：为 LOAD/STORE 模拟提供字节级读写，对应 Ghidra 的 `memstate.hh` / `memstate.cc`。
+内存存储/状态：为 LOAD/STORE 模拟提供字节级读写，对应 Ghidra 的 `memstate.hh` / `memstate.cc`。函数来源注释不表示当前实现已经行为等价。
 
 Ghidra 把 `MemoryBank` 建模为带两个纯虚方法（`insert`/`find`）与四个带默认实现的虚方法（`getPage`/`setPage`/静态 `constructValue`/`deconstructValue`）的抽象基类，派生类有 `MemoryImage` / `MemoryPageOverlay` / `MemoryHashOverlay`。Rugra 用具体结构体 + `Option<Box<MemoryBank>>` 作为各 Overlay 的 `underlie` 指针，忠实映射 C++ 继承语义。
 
@@ -68,7 +71,9 @@ RUGRA-GLUE 工厂：为某空间构造默认 `MemoryBank`。Ghidra 在 `Architec
 
 ## 端序与字大小
 
-所有 `set_value`/`get_value`/`get_page`/`set_page` 严格复刻 Ghidra 的 `HOST_ENDIAN` 与 `space->isBigEndian()` 比较，必要时调用 `byte_swap`。`HOST_ENDIAN` 在 rugra 固定为 0（小端主机）。
+这些方法保留了 Ghidra 的 `HOST_ENDIAN`/space-endian 分支形状，但 Rugra
+当前 `AddressSpace::is_big_endian()` 对所有空间返回 false，且固定空间枚举
+无法表达架构拥有的动态 space 属性；因此大端和跨空间行为尚未对齐。
 
 ## 测试
 
@@ -82,6 +87,10 @@ RUGRA-GLUE 工厂：为某空间构造默认 `MemoryBank`。Ghidra 在 `Architec
 
 ## Alignment Evidence
 
+- 2026-08-11 ANN-D provenance-only pass: added function-local annotations for
+  14 inherited container/accessor mappings and Rust-only helpers; no behavior
+  changed. Oracle `e40ed13014025f82488b1f8f7bca566894ac376b`
+  `memstate.cc` / `memstate.hh` were reread in full.
 - `cargo check --lib`：**0 错误**（在 `src/memstate.rs` 上；其他模块的预存编译错误与本任务无关）
 - `cargo test --lib memstate`：**20 passed; 0 failed**
 - 每个移植方法上方有 `// Ghidra: memstate.cc:<行号> <函数名>` 注释；Rust 胶水标 `// RUGRA-GLUE: <理由>`

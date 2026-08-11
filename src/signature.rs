@@ -77,6 +77,7 @@ pub struct LazyAttrib {
 }
 impl LazyAttrib {
     pub const fn new(name: &'static str, id: u32) -> Self { Self { name, id } }
+    // RUGRA-GLUE: Materializes an AttributeId on demand because Rust statics cannot run its allocating constructor.
     pub fn get(&self) -> AttributeId { AttributeId::new(self.name, self.id) }
 }
 
@@ -88,6 +89,7 @@ pub struct LazyElem {
 }
 impl LazyElem {
     pub const fn new(name: &'static str, id: u32) -> Self { Self { name, id } }
+    // RUGRA-GLUE: Materializes an ElementId on demand because Rust statics cannot run its allocating constructor.
     pub fn get(&self) -> ElementId { ElementId::new(self.name, self.id) }
 }
 
@@ -417,7 +419,9 @@ pub mod entry_flags {
 pub struct VnIdx(pub usize);
 
 impl VnIdx {
+    // RUGRA-GLUE: Constructs the typed Rust arena index that replaces a raw Ghidra SignatureEntry pointer.
     pub fn from_raw(i: usize) -> Self { VnIdx(i) }
+    // RUGRA-GLUE: Exposes the vector slot behind the typed arena index; Ghidra dereferences SignatureEntry pointers directly.
     pub fn raw(self) -> usize { self.0 }
 }
 
@@ -476,12 +480,15 @@ impl SignatureGraph {
     }
 
     /// Number of entries.
+    // RUGRA-GLUE: Reports the Rust arena length; Ghidra queries the sigmap container directly.
     pub fn len(&self) -> usize { self.entries.len() }
 
     /// Iterate over entries immutably.
+    // RUGRA-GLUE: Exposes slice iteration over the Rust-owned arena in place of direct Ghidra sigmap traversal.
     pub fn iter(&self) -> std::slice::Iter<'_, SignatureEntry> { self.entries.iter() }
 
     /// Iterate over entries mutably.
+    // RUGRA-GLUE: Exposes mutable slice iteration required by Rust ownership; Ghidra mutates pointer-valued sigmap entries directly.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, SignatureEntry> {
         self.entries.iter_mut()
     }
@@ -507,9 +514,11 @@ impl SignatureGraph {
     }
 
     /// Immutable access to an entry by index.
+    // RUGRA-GLUE: Resolves a Rust arena index to a shared reference; Ghidra uses a SignatureEntry pointer directly.
     pub fn entry(&self, idx: VnIdx) -> &SignatureEntry { &self.entries[idx.0] }
 
     /// Mutable access to an entry by index.
+    // RUGRA-GLUE: Resolves a Rust arena index to an exclusive reference; Ghidra mutates through a SignatureEntry pointer.
     pub fn entry_mut(&mut self, idx: VnIdx) -> &mut SignatureEntry { &mut self.entries[idx.0] }
 
     /// Add a root entry for a Varnode, registering it in the lookup map.
@@ -534,6 +543,7 @@ impl SignatureGraph {
 }
 
 impl Default for SignatureGraph {
+    // RUGRA-GLUE: Rust Default delegates to SignatureGraph::new; C++ has no Default-trait entry point.
     fn default() -> Self { Self::new() }
 }
 
@@ -1517,6 +1527,7 @@ impl SigManager {
 }
 
 impl Default for SigManager {
+    // RUGRA-GLUE: Rust Default delegates to SigManager::new; C++ has no Default-trait entry point.
     fn default() -> Self { Self::new() }
 }
 
@@ -2025,6 +2036,7 @@ impl GraphSigManager {
 }
 
 impl Default for GraphSigManager {
+    // RUGRA-GLUE: Rust Default delegates to GraphSigManager::new; C++ has no Default-trait entry point.
     fn default() -> Self { Self::new() }
 }
 

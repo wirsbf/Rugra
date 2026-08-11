@@ -798,12 +798,14 @@ impl MemoryPageOverlay {
     }
 
     /// Get the number of overlayed pages.
+    // RUGRA-GLUE: Exposes the Rust overlay-cache cardinality; Ghidra MemoryPageOverlay has no public page-count method.
     pub fn num_pages(&self) -> usize {
         self.page.len()
     }
 
     /// Read `size` bytes starting at `offset`. Faithful dispatch through
     /// `getChunk`-style page slicing, going via `get_page`.
+    // Ghidra: memstate.cc:335 MemoryBank::getChunk
     pub fn read(&self, offset: u64, size: usize) -> Vec<u8> {
         let pagemask = (self.pagesize - 1) as u64;
         let mut res = Vec::with_capacity(size);
@@ -830,6 +832,7 @@ impl MemoryPageOverlay {
 
     /// Write `data` starting at `offset`. Faithful dispatch through
     /// `setChunk`-style page slicing, going via `set_page`.
+    // Ghidra: memstate.cc:302 MemoryBank::setChunk
     pub fn write(&mut self, offset: u64, data: &[u8]) {
         let size = data.len();
         let pagemask = (self.pagesize - 1) as u64;
@@ -856,6 +859,7 @@ impl MemoryPageOverlay {
 
     /// Read a value of `size` bytes at `offset`. Faithful to the inherited
     /// `MemoryBank::getValue`, dispatching through `find`.
+    // Ghidra: memstate.cc:252 MemoryBank::getValue
     pub fn get_value(&self, offset: u64, size: usize) -> u64 {
         let alignmask = (self.wordsize - 1) as u64;
         let ind = offset & !alignmask;
@@ -907,6 +911,7 @@ impl MemoryPageOverlay {
 
     /// Set a value of `size` bytes at `offset`. Faithful to the inherited
     /// `MemoryBank::setValue`, dispatching through `insert`.
+    // Ghidra: memstate.cc:182 MemoryBank::setValue
     pub fn set_value(&mut self, offset: u64, size: usize, val: u64) {
         let alignmask = (self.wordsize - 1) as u64;
         let ind = offset & !alignmask;
@@ -966,16 +971,19 @@ impl MemoryPageOverlay {
     }
 
     /// Get the number of bytes in a word for this memory bank.
+    // Ghidra: memstate.hh:67 MemoryBank::getWordSize
     pub fn get_word_size(&self) -> usize {
         self.wordsize
     }
 
     /// Get the number of bytes in a page for this memory bank.
+    // Ghidra: memstate.hh:76 MemoryBank::getPageSize
     pub fn get_page_size(&self) -> usize {
         self.pagesize
     }
 
     /// Get the address space associated with this memory bank.
+    // Ghidra: memstate.hh:84 MemoryBank::getSpace
     pub fn get_space(&self) -> AddressSpace {
         self.space
     }
@@ -1121,17 +1129,20 @@ impl MemoryHashOverlay {
     }
 
     /// Get the number of bytes in a page for this memory bank.
+    // Ghidra: memstate.hh:76 MemoryBank::getPageSize
     pub fn get_page_size(&self) -> usize {
         self.pagesize
     }
 
     /// Get the address space associated with this memory bank.
+    // Ghidra: memstate.hh:84 MemoryBank::getSpace
     pub fn get_space(&self) -> AddressSpace {
         self.space
     }
 
     /// Retrieve the value encoded in a (small) range of bytes. Faithful to
     /// the inherited `MemoryBank::getValue`, dispatching through `find`.
+    // Ghidra: memstate.cc:252 MemoryBank::getValue
     pub fn get_value(&self, offset: u64, size: usize) -> u64 {
         let alignmask = (self.wordsize - 1) as u64;
         let ind = offset & !alignmask;
@@ -1183,6 +1194,7 @@ impl MemoryHashOverlay {
 
     /// Set the value of a (small) range of bytes. Faithful to the inherited
     /// `MemoryBank::setValue`, dispatching through `insert`.
+    // Ghidra: memstate.cc:182 MemoryBank::setValue
     pub fn set_value(&mut self, offset: u64, size: usize, val: u64) {
         let alignmask = (self.wordsize - 1) as u64;
         let ind = offset & !alignmask;
@@ -1363,6 +1375,7 @@ impl MemState {
 
     /// Retrieve a value from a named register. Faithful in spirit to
     /// `MemoryState::getValue(const string &nm)` (memstate.cc:697-702).
+    // Ghidra: memstate.cc:697 MemoryState::getValue
     pub fn get_register_value(&self, reg_name: &str) -> Option<u64> {
         let offset = hash_register_name(reg_name);
         self.banks.get("register").map(|bank| bank.get_value(offset, 8))
@@ -1391,6 +1404,7 @@ impl MemState {
 }
 
 impl Default for MemState {
+    // RUGRA-GLUE: Rust Default delegates to MemState::new; C++ MemoryState has no Default-trait entry point.
     fn default() -> Self {
         Self::new()
     }

@@ -136,6 +136,10 @@ inheritance).
 
 ## History
 
+- 2026-08-11: ANN-D provenance-only pass added function-local annotations for
+  12 Rust arena/static-materialization accessors and `Default` implementations;
+  no behavior changed. Oracle `e40ed13014025f82488b1f8f7bca566894ac376b`
+  `signature.cc` / `signature.hh` were reread in full.
 - 2026-07-22: full faithful port of `signature.cc`. Replaced the 289-line
   skeleton (which had an incorrect `[u32; 2]` hashword and a non-existent
   `SignatureDB` class) with a 2302-line port covering every Ghidra type and
