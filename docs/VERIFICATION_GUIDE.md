@@ -48,6 +48,10 @@ fresh-target canonical release 构建。每一级都可用 `--report` 保存结�
 两侧 comparand 的真实 hash；cache hit 仍重新验证 provenance 和 artifact hash。缓存只减少
 重复编译/执行，不改变 `MATCH/MISMATCH/NO_ORACLE/UNTESTED` 的判定，也不能补齐未覆盖分支。
 
+端到端输出不同时，先用 `tools/stage_diff.py snapshot` 保存两侧同一输入的有序阶段 artifact，
+再用 `compare` 定位第一个差异。原始 stage hash 是诊断索引，不是行为证明；只有该阶段完整
+观察结果及其所有状态突变同输入零差异时，映射函数才可记 `MATCH`。
+
 ---
 
 ## 1

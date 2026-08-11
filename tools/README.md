@@ -104,3 +104,21 @@ python3 tools/oracle_cache.py capture \
 
 默认缓存位于 `.rugra-cache/oracle/`，不进入 Git。`store`/`verify`/`restore` 可用于
 阶段快照；restore 目标必须不存在，恢复文件为只读，避免把缓存对象当工作副本修改。
+
+## Pipeline stage 首差异
+
+`stage_diff.py` 将提升、SSA、结构化、打印等阶段的**原始** artifact 依序写入 manifest，
+随后定位两侧第一个 provenance、stage ID、顺序、schema、state、内容 hash 或缺失差异。
+工具不重排 JSON、不消除别名、不规范化 CFG，因此不会为了让 diff 变小而丢掉决定性语义。
+
+```bash
+python3 tools/stage_diff.py snapshot \
+  --metadata tests/oracle/sleigh_decode_1204.metadata.json \
+  --producer rugra --stage lift=/tmp/rugra-lift.json --stage ssa=/tmp/rugra-ssa.json \
+  --output /tmp/rugra-stages.json
+
+python3 tools/stage_diff.py compare /tmp/ghidra-stages.json /tmp/rugra-stages.json --pretty
+```
+
+`compare` 返回 0 表示所有阶段原始 hash 相同，1 表示找到差异，2 表示 manifest/provenance
+无效。stage manifest 也可作为 `oracle_cache.py store` 的只读 artifact 保存。
