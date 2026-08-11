@@ -3,8 +3,8 @@
 **/*.rs.bk
 *.pdb
 
-# Cargo
-Cargo.lock
+# Cargo.lock is versioned because Rugra ships binaries and locked oracle
+# runners; reproducible offline validation requires an exact dependency graph.
 
 # IDE
 .vscode/

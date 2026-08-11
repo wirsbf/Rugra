@@ -50,10 +50,9 @@ lazy_static = "1.4"
 bitvec = "1.0"
 num-traits = "0.2"
 num-derive = "0.4"
-cc = "1.0"
 
 [build-dependencies]
-cc = "1.0"
+cc = { version = "1.0", features = ["parallel"] }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -82,6 +81,16 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Fast feedback for semantic work.  The canonical release profile above stays
+# unchanged for final artifacts; this profile trades final link optimization
+# for parallel code generation, thin LTO, and incremental reuse.
+[profile.fast-release]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+strip = false
+incremental = true
 
 [profile.dev]
 opt-level = 1
