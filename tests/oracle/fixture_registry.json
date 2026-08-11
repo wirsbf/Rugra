@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "global_paths": [
+    ".cargo/**",
+    "Cargo.lock",
+    "Cargo.toml",
+    "build.rs",
+    "ghidra/**",
+    "tests/oracle/fixture_registry.json"
+  ],
+  "fixtures": [
+    {
+      "id": "decompress_1204",
+      "description": "Decompress streaming, replacement, alias, and error observations",
+      "runner": ["tools/run_decompress_oracle.sh"],
+      "timeout_seconds": 300,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "PARTIAL_MATCH",
+      "impact": {
+        "paths": [
+          "src/compression.rs",
+          "tests/oracle/decompress_1204.*",
+          "tools/run_decompress_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    },
+    {
+      "id": "preferred_zext_1204",
+      "description": "TypeOpFloatInt2Float preferred extension-size boundary oracle",
+      "runner": ["tools/run_preferred_zext_oracle.sh"],
+      "timeout_seconds": 300,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MATCH",
+      "impact": {
+        "paths": [
+          "tests/oracle/preferred_zext_size.cc",
+          "tools/run_preferred_zext_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-9f9b178c52fe97265fbe",
+          "RG-F-a1d798d881d5a8287293",
+          "RG-F-e690dfa72c7c6304da2b",
+          "RG-F-d7882506019c95af00ef",
+          "RG-F-8a675ddc34f10e0cc5a2"
+        ]
+      }
+    },
+    {
+      "id": "printc_display_1204",
+      "description": "Integer display-format wire and resolved scalar output matrix",
+      "runner": ["tools/run_printc_display_oracle.sh"],
+      "timeout_seconds": 900,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "PARTIAL_MATCH",
+      "impact": {
+        "paths": [
+          "src/printc.rs",
+          "tests/oracle/printc_display_1204.*",
+          "tools/run_printc_display_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    },
+    {
+      "id": "userop_index_1204",
+      "description": "Global userop selector, parameter order, and output ownership",
+      "runner": ["tools/run_userop_index_oracle.sh"],
+      "timeout_seconds": 900,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MATCH",
+      "impact": {
+        "paths": [
+          "tests/oracle/userop_index_1204.*",
+          "tools/run_userop_index_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-64e0264879ea41785f5a",
+          "RG-F-50df33da064efb4f6c95",
+          "RG-F-4522413cbda27ee0ad60"
+        ]
+      }
+    },
+    {
+      "id": "sleigh_decode_1204",
+      "description": "Lossless dynamic oneInstruction ABI with typed results",
+      "runner": ["tools/run_sleigh_decode_oracle.sh"],
+      "timeout_seconds": 1800,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "PARTIAL_MATCH",
+      "impact": {
+        "paths": [
+          "examples/sleigh_test.rs",
+          "sleigh_shim/**",
+          "sleigh_specs/**",
+          "src/sleigh_ffi.rs",
+          "tests/oracle/sleigh_decode_1204.*",
+          "tools/run_sleigh_decode_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    }
+  ]
+}

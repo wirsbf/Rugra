@@ -20,6 +20,11 @@ Rugra 的验证体系仍处于
  5. 阅读和更新本文件时应避免哪些失真表述
  6. 如何为验证类结论补充证据来源
 
+> 机器门禁入口与本文件较早的历史说明并存时，以
+> `tests/oracle/fixture_registry.json`、`tools/select_fixtures.py` 和生成式
+> `docs/alignment_audit/FUNCTION_LEDGER.json` 为准。未登记 fixture 的源码改动不是
+> “无需测试”，而是 coverage gap。
+
 ---
 
 ## 1

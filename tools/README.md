@@ -31,3 +31,22 @@ python3 tools/rugra_build.py check --dry-run
 
 `fast-release` 只用于反馈速度；它不替代最终 `release` 门禁，也不改变锁定 oracle
 或行为证据的判定标准。
+
+## Changed-function fixture 选择
+
+`select_fixtures.py` 使用生成式 `FUNCTION_LEDGER.json` 的 Rust 函数 span 和稳定 ID，
+把 git diff 映射到 `tests/oracle/fixture_registry.json`。删除、顶层改动或没有已登记
+fixture 的 `src/*.rs` 改动会 fail-closed：选择全部 fixture，并在 `--strict` 下返回 2，
+不会用“没选中测试”冒充无影响。
+
+```bash
+# 当前工作树，机器可读结果
+python3 tools/select_fixtures.py --pretty
+
+# 提交前只看暂存区；未覆盖源码改动直接失败
+python3 tools/select_fixtures.py --staged --strict --pretty
+
+# 显式函数或路径诊断
+python3 tools/select_fixtures.py --function RG-F-9f9b178c52fe97265fbe --pretty
+python3 tools/select_fixtures.py --path src/sleigh_ffi.rs --pretty
+```
