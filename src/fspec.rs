@@ -994,6 +994,7 @@ impl FuncProto {
     // ---- internal store helpers for the flat FuncProto (stand in for
     // ProtoStore::setInput / setOutput). ----
 
+    // Ghidra: fspec.cc:3329 ProtoStoreInternal::setInput
     /// Faithful to `ProtoStore::setInput(i, nm, pieces)`: replace (or append
     /// up to) the i-th input parameter with the given pieces.
     fn set_input_parameter(&mut self, i: usize, nm: &str, pieces: ParameterPieces) {
@@ -1012,6 +1013,7 @@ impl FuncProto {
         param.flags = 0;
     }
 
+    // Ghidra: fspec.cc:3380 ProtoStoreInternal::setOutput
     /// Faithful to `ProtoStore::setOutput(piece)`: set the return type from
     /// the piece. The output address is not stored separately in Rugra's flat
     /// FuncProto (it lives on the ProtoModel), so only the type is applied.
@@ -3199,6 +3201,9 @@ impl VarnodeData {
 }
 
 impl Default for VarnodeData {
+    // RUGRA-GLUE: Rust Default supplies initialized fields for the local
+    // VarnodeData representation; Ghidra's VarnodeData is a C++ aggregate
+    // with no corresponding default() member.
     fn default() -> Self {
         Self { space: AddressSpace::Ram, offset: 0, size: 0 }
     }
@@ -3267,6 +3272,7 @@ pub struct ParamEntry {
 }
 
 impl ParamEntry {
+    // Ghidra: fspec.hh:123 ParamEntry::isLeftJustified
     /// Is the logical value left-justified within its container. Faithful
     /// to the inline `isLeftJustified` (fspec.hh:123).
     fn is_left_justified(&self) -> bool {
@@ -3731,7 +3737,11 @@ impl ParamEntry {
     // these during `ParamEntry::decode`; Rugra's decoder is unported so the
     // loader populates them via these accessors).
     pub fn set_space(&mut self, spc: AddressSpace) { self.space = spc; }
+    // RUGRA-GLUE: loader field setter; Ghidra assigns addressbase directly
+    // inside ParamEntry::decode and exposes no setBase member.
     pub fn set_base(&mut self, base: u64) { self.address_base = base; }
+    // RUGRA-GLUE: loader field setter; Ghidra assigns size/minsize and derives
+    // numslots atomically inside ParamEntry::decode, with no setSizes member.
     pub fn set_sizes(&mut self, size: i32, min_size: i32) {
         self.size = size;
         self.min_size = min_size;
@@ -3741,6 +3751,8 @@ impl ParamEntry {
     }
     /// Set the alignment. If `alignment == size`, normalized to 0 (exclusion
     /// entry) per `ParamEntry::decode` (fspec.cc:547-548).
+    // RUGRA-GLUE: staged-loader setter; Ghidra reads and normalizes alignment
+    // inside ParamEntry::decode and exposes no setAlignment member.
     pub fn set_alignment(&mut self, alignment: i32) {
         self.alignment = alignment;
         if self.alignment == self.size { self.alignment = 0; }
@@ -3750,6 +3762,8 @@ impl ParamEntry {
             self.num_slots = 1;
         }
     }
+    // RUGRA-GLUE: loader field setter; Ghidra assigns the private type field
+    // from ParamEntry::decode and exposes no setTypeClass member.
     pub fn set_type_class(&mut self, ty: TypeClass) { self.type_storage = ty; }
 
     // RUGRA-GLUE: flags_mut (private field accessor so parse_pentry can
@@ -3808,6 +3822,8 @@ pub const HIDDEN_RET_PARM: u32 = 2;
 pub const INDIRECT_STORAGE_PIECE: u32 = 1;
 
 impl Default for ParameterPieces {
+    // RUGRA-GLUE: Rust Default initializes the local Option-based aggregate;
+    // Ghidra's ParameterPieces aggregate has no default() member.
     fn default() -> Self { Self { addr: Address::new(0), ty: None, flags: 0 } }
 }
 
@@ -3865,6 +3881,8 @@ pub struct ParamListStandard {
 }
 
 impl Default for ParamListStandard {
+    // RUGRA-GLUE: Rust Default trait bridge delegates to new(); Ghidra has the
+    // ParamListStandard constructor but no language-level default() member.
     fn default() -> Self { Self::new() }
 }
 
@@ -4616,16 +4634,24 @@ impl ParamListStandard {
     // RUGRA-GLUE: setters for the model loader (Ghidra fills these during
     // `ParamListStandard::decode`; Rugra's decoder is unported).
     pub fn set_this_before_ret(&mut self, v: bool) { self.this_before_ret = v; }
+    // RUGRA-GLUE: loader/subclass field setter; Ghidra writes the protected
+    // autoKilledByCall field directly in decode() and initialize().
     pub fn set_auto_killed_by_call(&mut self, v: bool) { self.auto_killed_by_call = v; }
+    // RUGRA-GLUE: inheritance bridge; Ghidra subclasses read protected
+    // ParamListStandard::numgroup directly and expose no getNumGroup member.
     pub fn get_num_group(&self) -> i32 { self.num_group }
 
     /// Set the number of resource groups (used by the output-list decoders
     /// and `assign_map` to size the per-group status vector).
+    // RUGRA-GLUE: loader field setter; Ghidra updates protected numgroup
+    // directly while parsing entries and exposes no setNumGroup member.
     pub fn set_num_group(&mut self, v: i32) { self.num_group = v; }
 
     /// Mutable access to the entry list. Used by `ParamListStandardOut` to
     /// run the fallback fillin algorithm, which mirrors Ghidra's
     /// `list<ParamEntry>` iteration over `entry`.
+    // RUGRA-GLUE: inheritance bridge; Ghidra subclasses access the protected
+    // entry list directly and provide only a const getEntry() accessor.
     pub fn entry_mut(&mut self) -> &mut Vec<ParamEntry> { &mut self.entry }
 }
 
@@ -4656,6 +4682,8 @@ pub struct ParamListStandardOut {
 }
 
 impl Default for ParamListStandardOut {
+    // RUGRA-GLUE: Rust Default trait bridge delegates to new(); Ghidra has the
+    // ParamListStandardOut constructor but no default() member.
     fn default() -> Self { Self::new() }
 }
 
@@ -5000,6 +5028,8 @@ pub struct ParamListRegisterOut {
 }
 
 impl Default for ParamListRegisterOut {
+    // RUGRA-GLUE: Rust Default trait bridge delegates to new(); Ghidra has the
+    // ParamListRegisterOut constructor but no default() member.
     fn default() -> Self { Self::new() }
 }
 
@@ -5291,6 +5321,9 @@ impl ProtoModelFull {
     /// Helper: true if `self` is an alias copy of `parent` (same name-pattern
     /// and field set, modulo `hasThis`). Stands in for Ghidra's pointer
     /// identity check `compatModel == op2`.
+    // RUGRA-GLUE: Rust-side alias predicate because ProtoModelFull does not
+    // retain Ghidra's ProtoModel* identity; Ghidra performs these pointer
+    // comparisons inline in ProtoModel::isCompatible (fspec.cc:2406).
     fn is_alias_of(&self, parent: &ProtoModelFull) -> bool {
         // Same name OR (parent has the same input/output entries and extrapop).
         self.name == parent.name
@@ -5938,6 +5971,9 @@ fn effect_from_u32(raw: u32) -> EffectType {
     }
 }
 
+// RUGRA-GLUE: textual integer adapter for Rugra's string-valued Decoder;
+// Ghidra's VarnodeData/Range decode paths call typed Decoder integer readers
+// directly and have no parse_u64 helper.
 fn parse_u64(s: &str) -> u64 {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u64::from_str_radix(hex, 16).unwrap_or(0)
