@@ -1,0 +1,19 @@
+{
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": "direct opInsertBefore/opInsertAfter/opInsertBegin/opInsertEnd/opUninsert behavior after fixture opcode/input initialization; newOp nullable-slot/opcode state excluded as declared MISMATCH; no Actions",
+  "input": {
+    "binary": "examples/curl",
+    "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+    "function": "GetStr@0x36d0+74",
+    "synthetic_block": "ten named ops exercising MULTIEQUAL, INDIRECT/iop, BRANCHIND, before/after/begin/end, uninsert/reinsert, and one COPY def-use pair"
+  },
+  "cpp_fixture_sha256": "dc901ac51d55aa1c8f9a5d3814b4d845948f065c486bf4e164f4820a2df10830",
+  "rust_fixture_sha256": "1835fae0a24413c182ef9304bfebd0f4365b21ef6d3f4ff5c5f6090024d4fd7f",
+  "expected_stdout_sha256": "adff0e77d4e2b62678d75d04f0b7a7b3db7c5f64735415b4ca52e25625132e6e",
+  "status": "MATCH"
+}

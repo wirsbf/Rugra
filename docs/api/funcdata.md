@@ -609,7 +609,9 @@ PcodeOpRaw
 中需创建或改写 P-code 的 Rule/Action（此前 Rugra 仅原地改 op 字段，无法
 创建新 op）。忠实对应 funcdata.hh：
 
-- `new_op(inputs, pc)` — `Funcdata::newOp` (444)
+- `new_op(inputs, pc)` — 分配适配层：新 op 初始位于 dead list，直到某个
+  `op_insert_*` 将其接入基本块；但底层还不能表达 Ghidra 的 NULL opcode
+  与固定数量 nullable input slots，因此完整函数行为仍是 **MISMATCH**。
 - `new_unique_out(s, op)` — `Funcdata::newUniqueOut` (281)
 - `new_constant(s, val)` — `Funcdata::newConstant` (283)
 - `new_unique(s)` — `Funcdata::newUnique` (288)
@@ -617,9 +619,12 @@ PcodeOpRaw
 - `op_set_input(op, vn, slot)` — `Funcdata::opSetInput` (467)，扩展 inrefs、维护 descend
 - `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput` (479)
 - `op_remove_input(op, slot)` — `Funcdata::opRemoveInput` (478)
-- `op_insert_before(op, follow)` — `Funcdata::opInsertBefore` (454)，alivelist 顺序
-- `op_insert_after(op, follow)` — `Funcdata::opInsertAfter` (456)，将 `op` 插入
-  `follow` 之后。用于 prefersplit.cc 的 split 变换（在原 op 旁插入新 COPY/LOAD/STORE）
+- `op_insert_before(op, follow)` — `Funcdata::opInsertBefore`
+  (funcdata_op.cc:345)，按 `follow` 的 `BlockBasic.ops` 定位，并把紧邻
+  `follow` 的 INDIRECT 组留在原位。
+- `op_insert_after(op, follow)` — `Funcdata::opInsertAfter`
+  (funcdata_op.cc:373)，按块内顺序插入；非 MULTIEQUAL 会越过块首的
+  MULTIEQUAL 组，INDIRECT 的 alive iop 目标会成为实际插入锚点。
 - `set_input_varnode(vn)` — `Funcdata::setInputVarnode` (funcdata_varnode.cc:340)：将
   varnode 提升为函数输入（overlap 去重 + `vbank.set_input`）。**2026-07-05 新增**，
   用于 heritage rename 的 empty-stack promotion（heritage.cc:2502/2512）。委托给
@@ -627,8 +632,24 @@ PcodeOpRaw
 - `delete_varnode(vn)` — `Funcdata::deleteVarnode`：委托给 `VarnodeBank::destroy_varnode`。
   **2026-07-05 新增**，用于 heritage rename 替换后的死 varnode 清理（heritage.cc:2521/2550）。
 
-**已知限制**：新建 op 仅进 alivelist，未挂到 BlockBasic.get_ops()（块编辑
-infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅保证数据流正确。
+`op_insert` 的两层状态与 Ghidra 一致：`PcodeOpBank::alivelist` 记录接入
+生命周期/接入顺序，`BlockBasic.ops` 记录执行顺序。低层插入同时维护
+`PcodeOp.parent`、块内 SeqNum order；插入 BRANCHIND 时设置块的
+`SWITCH_OUT`。这两个容器不能互相替代。
+
+兼容边界：部分既有 Rule 单测仍直接构造 parentless flat op bank，违反
+Ghidra `opInsertBefore/After/Uninsert` 的基本块前置条件。Rugra 暂时保留
+该无块域的旧 alivelist 插入/摘除分支，状态为 **MISMATCH / UNTESTED**；
+有真实 `BlockBasic` parent 的有效域走上述原子插入实现，并由锁定 12.0.4
+fixture `tests/oracle/op_insert_1204.*` 验证。
+
+相邻但未纳入该 MATCH 的结构缺口：Ghidra `opUnlink/opDestroy` 会把每个
+输入槽清成 NULL 而保留槽数，并由 `destroyVarnode` 真正销毁输出；Rugra
+当前 `Vec<Arc<Varnode>>` 不能表达 nullable slot，`op_destroy` 也只清 def。
+因此这两项仍是 **MISMATCH**，不能由本插入 fixture 推导为已对齐。
+同一 OPBANK 缺口也意味着 `new_op(inputs, pc)` 当前 `num_input()==0`，并
+预置 COPY opcode/派生 flags；fixture 在插入前立即设置 opcode 和所需输入，
+所以本次 `MATCH` 仅证明插入族和 dead/alive 生命周期，不证明完整 newOp。
 
 ### 2026-06-26（续）：op_swap_input
 
@@ -701,8 +722,12 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 ### 2026-06-27（续 4）：op_uninsert / op_insert_begin / op_get_slot
 
-- `op_uninsert(op)` — `Funcdata::opUninsert`（funcdata.hh）：从 alivelist 移除 op 但不销毁（用于重新插入）。
-- `op_insert_begin(op, bb)` — `Funcdata::opInsertBegin`（funcdata.hh:457）：在块开头插入 op。
+- `op_uninsert(op)` — `Funcdata::opUninsert`（funcdata_op.cc:164）：从
+  `BlockBasic.ops` 移除、清 parent，并由 alive list 移到 dead list；输入
+  descend 与输出 def 保持不变，因而可以随后重新插入。
+- `op_insert_begin(op, bb)` — `Funcdata::opInsertBegin`
+  （funcdata_op.cc:413）：MULTIEQUAL 插在绝对块首，其他 op 插在块首
+  MULTIEQUAL 组之后。
 - `op_get_slot(op, vn) -> i32` — `PcodeOp::getSlot`：返回 vn 在 op 中的输入槽位（-1 未找到）。
 
 ### 2026-06-29：spacebase() + split_uses()（底层阻塞解除）
@@ -847,7 +872,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - Alignment Evidence 见 commit message。
 
 ### 2026-07-04（续）：op_insert_end + op_mark_non_printing
-- `op_insert_end(op, bb)`（对齐 funcdata.hh:461）：插到块末尾（op_insert_after(last_op)）。
+- `op_insert_end(op, bb)`（funcdata_op.cc:435）：插到块末尾；若末尾是
+  flow-break（BRANCH/RETURN），则插在该终结 op 之前。
 - `op_mark_non_printing(op)`（对齐 funcdata.hh:519）：设置 NONPRINTING flag。
 
 ### 2026-07-04：移植高优先级缺失 Funcdata op-editing API

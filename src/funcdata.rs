@@ -714,12 +714,21 @@ impl Funcdata {
     // These mirror Ghidra's Funcdata methods used by the rule/action transforms
     // to construct and edit P-code during analysis.
 
-    // Ghidra: funcdata.cc:34 Funcdata::newOp
-    /// Allocate a new PcodeOp with `num_inputs` slots at the function's base
-    /// address. Faithful to `Funcdata::newOp` (funcdata.hh:444).
+    // RUGRA-GLUE: Funcdata allocation adapter; PcodeOpBank::create currently
+    // cannot represent Ghidra's nullable input slots or null opcode, so only
+    // the dead/alive lifecycle is enforced here (OP-INSERT-0001 MISMATCH).
+    /// Allocate a new PcodeOp associated with `pc` and place it on the dead
+    /// list. The requested nullable input-slot shape remains an OPBANK gap.
     pub fn new_op(&mut self, num_inputs: usize, pc: crate::address::Address) -> crate::op::PcodeOpRef {
-        // Ghidra defaults the opcode to CPUI_COPY until opSetOpcode is called.
-        self.obank.create(crate::opcodes::OpCode::CPUI_COPY, num_inputs, pc)
+        // PcodeOpBank::create puts a newly allocated op on Ghidra's dead list
+        // (op.cc:941-948).  PcodeOpBank::create is also used by Rugra's raw
+        // injection bridge, whose legacy lifecycle is different, so enforce
+        // the mapped Funcdata::newOp contract at this API boundary.
+        let op = self
+            .obank
+            .create(crate::opcodes::OpCode::CPUI_COPY, num_inputs, pc);
+        self.obank.mark_dead(op.clone());
+        op
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::newUniqueOut
@@ -839,30 +848,24 @@ impl Funcdata {
         // explicit → ActionMarkImplied marked them implied → printc skipped
         // the CALL statement entirely (130 vanished calls in curl).
         use crate::op::pcodeop_flags as F;
-        use crate::opcodes::OpCode;
-        const OPC_FLAGS_MASK: u32 = F::BRANCH | F::CALL | F::CODEREF
-            | F::RETURNS | F::MARKER | F::HAS_CALLSPEC | F::RETURN_COPY;
+        const OPC_FLAGS_MASK: u32 = F::BRANCH
+            | F::CALL
+            | F::CODEREF
+            | F::COMMUTATIVE
+            | F::RETURNS
+            | F::NOCOLLAPSE
+            | F::MARKER
+            | F::BOOLOUTPUT
+            | F::UNARY
+            | F::BINARY
+            | F::TERNARY
+            | F::SPECIAL
+            | F::HAS_CALLSPEC
+            | F::RETURN_COPY;
         let mut o = op.0.write().unwrap();
         o.flags &= !OPC_FLAGS_MASK;
-        let extra = match opc {
-            OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND =>
-                F::SPECIAL | F::BRANCH | F::CODEREF | F::NOCOLLAPSE,
-            OpCode::CPUI_CBRANCH =>
-                F::SPECIAL | F::BRANCH | F::NOCOLLAPSE,
-            OpCode::CPUI_CALL =>
-                F::SPECIAL | F::CALL | F::HAS_CALLSPEC | F::CODEREF | F::NOCOLLAPSE,
-            OpCode::CPUI_CALLIND =>
-                F::SPECIAL | F::CALL | F::HAS_CALLSPEC | F::NOCOLLAPSE,
-            OpCode::CPUI_CALLOTHER | OpCode::CPUI_NEW =>
-                F::SPECIAL | F::CALL | F::NOCOLLAPSE,
-            OpCode::CPUI_RETURN =>
-                F::SPECIAL | F::RETURNS | F::NOCOLLAPSE | F::RETURN_COPY,
-            OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT =>
-                F::SPECIAL | F::MARKER | F::NOCOLLAPSE,
-            _ => 0,
-        };
-        o.flags |= extra;
         o.opcode = opc;
+        o.flags |= crate::op::opcode_flags(opc);
     }
 
     // Ghidra: funcdata_op.cc:104 Funcdata::opSetInput
@@ -979,7 +982,7 @@ impl Funcdata {
         o.output = Some(vn);
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opDestroy
+    // Ghidra: funcdata_op.cc:203 Funcdata::opDestroy
     /// Destroy an unused PcodeOp. Faithful to `Funcdata::opDestroy`
     /// (funcdata_op.cc:203-222). Clears the output's def, unsets all inputs,
     /// and marks the op dead in the obank. Only call when the output has no
@@ -2137,32 +2140,63 @@ impl Funcdata {
         true
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opInsertBefore
-    /// Insert `op` before `follow` in the alive list. Faithful to
-    /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
-    /// strictly ordered per-block, but we insert before `follow` to preserve
-    /// relative ordering where it matters for emit.
+    // Ghidra: funcdata_op.cc:345 Funcdata::opInsertBefore
+    /// Insert `op` before `follow` in its basic block, preserving the
+    /// contiguous INDIRECT group immediately preceding `follow`.
     pub fn op_insert_before(&mut self, op: &crate::op::PcodeOpRef, follow: &crate::op::PcodeOpRef) {
-        let pos = self.obank.alivelist.iter().position(|r| std::sync::Arc::ptr_eq(&r.0, &follow.0));
-        let insert_idx = match pos {
-            Some(mut idx) => {
-                // Ghidra cc:351-362: if op is not INDIRECT, skip preceding
-                // INDIRECTs (they stay grouped before their associated op).
-                let op_is_indirect = op.0.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
-                if !op_is_indirect {
-                    while idx > 0 {
-                        let prev = &self.obank.alivelist[idx - 1];
-                        if prev.0.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
-                            break;
-                        }
-                        idx -= 1;
-                    }
+        let parent = follow
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        let Some(parent) = parent else {
+            // RUGRA-GLUE: Legacy Rule unit fixtures construct an alive, parentless
+            // flat op bank, which is outside Ghidra's opInsertBefore precondition.
+            // Preserve their former flat-list behavior until those fixtures acquire
+            // real BlockBasic membership; this branch is not oracle-equivalent.
+            self.obank.mark_alive(op.clone());
+            self.obank
+                .alivelist
+                .retain(|candidate| !std::sync::Arc::ptr_eq(&candidate.0, &op.0));
+            let mut insert_index = self
+                .obank
+                .alivelist
+                .iter()
+                .position(|candidate| std::sync::Arc::ptr_eq(&candidate.0, &follow.0))
+                .unwrap_or(self.obank.alivelist.len());
+            if op.0.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+                while insert_index != 0
+                    && self.obank.alivelist[insert_index - 1]
+                        .0
+                        .read()
+                        .unwrap()
+                        .opcode
+                        == OpCode::CPUI_INDIRECT
+                {
+                    insert_index -= 1;
                 }
-                idx
             }
-            None => self.obank.alivelist.len(),
+            self.obank.alivelist.insert(insert_index, op.clone());
+            return;
         };
-        self.obank.alivelist.insert(insert_idx, op.clone());
+        let block_ops = parent.read().unwrap().get_ops();
+        let mut insert_index = block_ops
+            .iter()
+            .position(|candidate| std::sync::Arc::ptr_eq(&candidate.0, &follow.0))
+            .expect("opInsertBefore follow op is absent from its parent block");
+
+        if op.0.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+            while insert_index != 0 {
+                let previous = &block_ops[insert_index - 1];
+                if previous.0.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+                    break;
+                }
+                insert_index -= 1;
+            }
+        }
+        self.op_insert(op, &parent, Some(insert_index));
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::newIndirectOp
@@ -2388,57 +2422,134 @@ impl Funcdata {
     }
 
 
-    // Ghidra: funcdata.cc:34 Funcdata::opInsertAfter
-    /// Insert `op` immediately after `follow` in the alive list. Faithful to
-    /// `Funcdata::opInsertAfter` (funcdata.hh:456). Used by split transforms
-    /// (prefersplit.cc) that create new ops adjacent to the original.
-    pub fn op_insert_after(&mut self, op: &crate::op::PcodeOpRef, follow: &crate::op::PcodeOpRef) {
-        let pos = self.obank.alivelist.iter().position(|r| std::sync::Arc::ptr_eq(&r.0, &follow.0));
-        match pos {
-            Some(idx) => self.obank.alivelist.insert(idx + 1, op.clone()),
-            None => self.obank.alivelist.push(op.clone()),
+    // Ghidra: funcdata_op.cc:373 Funcdata::opInsertAfter
+    /// Insert `op` after `previous` in its basic block.  A non-MULTIEQUAL is
+    /// placed after any leading MULTIEQUAL group, and an alive INDIRECT's iop
+    /// target is treated as the effective previous op.
+    pub fn op_insert_after(&mut self, op: &crate::op::PcodeOpRef, previous: &crate::op::PcodeOpRef) {
+        if previous
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_none()
+        {
+            // RUGRA-GLUE: Legacy Rule unit fixtures construct an alive, parentless
+            // flat op bank, which is outside Ghidra's opInsertAfter precondition.
+            // Preserve their former flat-list behavior until those fixtures acquire
+            // real BlockBasic membership; this branch is not oracle-equivalent.
+            self.obank.mark_alive(op.clone());
+            self.obank
+                .alivelist
+                .retain(|candidate| !std::sync::Arc::ptr_eq(&candidate.0, &op.0));
+            let insert_index = self
+                .obank
+                .alivelist
+                .iter()
+                .position(|candidate| std::sync::Arc::ptr_eq(&candidate.0, &previous.0))
+                .map_or(self.obank.alivelist.len(), |index| index + 1);
+            self.obank.alivelist.insert(insert_index, op.clone());
+            return;
         }
-    }
-
-    // Ghidra: funcdata.cc:34 Funcdata::opUninsert
-    /// Remove `op` from the alive list without destroying it. Faithful to
-    /// `Funcdata::opUninsert` (funcdata.hh). The op is still alive (not dead)
-    /// but temporarily detached from the ordered list, so it can be re-inserted
-    /// elsewhere.
-    pub fn op_uninsert(&mut self, op: &crate::op::PcodeOpRef) {
-        self.obank
-            .alivelist
-            .retain(|r| !std::sync::Arc::ptr_eq(&r.0, &op.0));
-    }
-
-    // Ghidra: funcdata.cc:34 Funcdata::opInsertBegin
-    /// Insert `op` at the beginning of a basic block's op list. Faithful to
-    /// `Funcdata::opInsertBegin` (funcdata.hh:457). Rugra inserts at the start
-    /// of the alive list (best-effort for block-begin placement).
-    pub fn op_insert_begin(&mut self, op: &crate::op::PcodeOpRef, _bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
-        self.obank.alivelist.insert(0, op.clone());
-    }
-
-    // Ghidra: funcdata.hh:461 Funcdata::opInsertEnd
-    /// Insert `op` at the end of a basic block's op list. Faithful to
-    /// `Funcdata::opInsertEnd(op, bl)` (funcdata.hh:461). Equivalent to
-    /// inserting after the block's last op. Used by `buildDominantCopy`.
-    pub fn op_insert_end(&mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
-        let last = {
-            let rg = bb.read().unwrap();
-            if let Some(bb2) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                bb2.last_op()
-            } else {
-                None
-            }
+        let effective_previous = {
+            let indirect_iop = {
+                let previous_guard = previous.0.read().unwrap();
+                if previous_guard.is_marker()
+                    && previous_guard.opcode == OpCode::CPUI_INDIRECT
+                {
+                    previous_guard.inrefs.get(1).cloned()
+                } else {
+                    None
+                }
+            };
+            indirect_iop
+                .filter(|vn| {
+                    vn.read().unwrap().get_space() == crate::space::AddressSpace::Iop
+                })
+                .and_then(|vn| self.get_op_from_const(&vn))
+                .filter(|target| !target.0.read().unwrap().is_dead())
+                .unwrap_or_else(|| previous.clone())
         };
-        match last {
-            Some(last_op) => self.op_insert_after(op, &last_op),
-            None => {
-                // Empty block: append to alive list.
-                self.obank.alivelist.push(op.clone());
+        let parent = effective_previous
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .expect("opInsertAfter effective previous op has no basic block");
+        let block_ops = parent.read().unwrap().get_ops();
+        let previous_index = block_ops
+            .iter()
+            .position(|candidate| {
+                std::sync::Arc::ptr_eq(&candidate.0, &effective_previous.0)
+            })
+            .expect("opInsertAfter previous op is absent from its parent block");
+        let mut insert_index = previous_index + 1;
+        if op.0.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+            while insert_index < block_ops.len()
+                && block_ops[insert_index].0.read().unwrap().opcode
+                    == OpCode::CPUI_MULTIEQUAL
+            {
+                insert_index += 1;
             }
         }
+        self.op_insert(op, &parent, Some(insert_index));
+    }
+
+    // Ghidra: funcdata_op.cc:164 Funcdata::opUninsert
+    /// Remove `op` from its basic block and move it from the alive list to the
+    /// dead list.  Its Varnode input/output links remain intact.
+    pub fn op_uninsert(&mut self, op: &crate::op::PcodeOpRef) {
+        let parent = op
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        let Some(parent) = parent else {
+            // RUGRA-GLUE: Preserve the former flat-bank detach behavior for
+            // parentless legacy fixtures. Valid Ghidra-domain ops take the block
+            // path below and transition to the dead list atomically.
+            self.obank
+                .alivelist
+                .retain(|candidate| !std::sync::Arc::ptr_eq(&candidate.0, &op.0));
+            return;
+        };
+        self.obank.mark_dead(op.clone());
+        Self::block_remove_op(op, &parent);
+    }
+
+    // Ghidra: funcdata_op.cc:413 Funcdata::opInsertBegin
+    /// Insert `op` at the beginning of a basic block, after its leading
+    /// MULTIEQUAL group unless the inserted op is itself a MULTIEQUAL.
+    pub fn op_insert_begin(&mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
+        let block_ops = bb.read().unwrap().get_ops();
+        let mut insert_index = 0;
+        if op.0.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+            while insert_index < block_ops.len()
+                && block_ops[insert_index].0.read().unwrap().opcode
+                    == OpCode::CPUI_MULTIEQUAL
+            {
+                insert_index += 1;
+            }
+        }
+        self.op_insert(op, bb, Some(insert_index));
+    }
+
+    // Ghidra: funcdata_op.cc:435 Funcdata::opInsertEnd
+    /// Insert `op` at the end of a basic block, immediately before its final
+    /// flow-break op when one is present.
+    pub fn op_insert_end(&mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
+        let block_ops = bb.read().unwrap().get_ops();
+        let insert_index = match block_ops.last() {
+            Some(last) if last.0.read().unwrap().is_flow_break() => block_ops.len() - 1,
+            _ => block_ops.len(),
+        };
+        self.op_insert(op, bb, Some(insert_index));
     }
 
     // Ghidra: funcdata.hh:519 Funcdata::opMarkNonPrinting
@@ -2504,30 +2615,93 @@ impl Funcdata {
 
     // Ghidra: funcdata_op.cc:150 Funcdata::opInsert
     /// Insert the given PcodeOp at a specific point in a basic block. Faithful
-    /// to `Funcdata::opInsert` (funcdata_op.cc:150-159). This is the common
-    /// low-level primitive underlying every `opInsertBefore/After/Begin/End`:
-    ///   obank.markAlive(op);
-    ///   bl->insert(iter, op);
-    /// Rugra's alive list is flat (not strictly per-block, see `op_insert_before`),
-    /// so this marks the op alive and places it at `iter_index` in the alive
-    /// list (None ⇒ append). The `bb` parameter mirrors Ghidra's signature.
+    /// to `Funcdata::opInsert` (funcdata_op.cc:150-159).  The alive list tracks
+    /// lifecycle/integration order; the basic block owns execution order.
     pub fn op_insert(
         &mut self,
         op: &crate::op::PcodeOpRef,
-        _bb: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        bb: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         iter_index: Option<usize>,
     ) {
-        // cc:157: obank.markAlive(op).
         self.obank.mark_alive(op.clone());
-        // cc:158: bl->insert(iter, op). Rugra: place at iter_index, else append.
-        match iter_index {
-            Some(idx) if idx < self.obank.alivelist.len() => {
-                self.obank.alivelist.insert(idx, op.clone());
-            }
-            _ => {
-                self.obank.alivelist.push(op.clone());
-            }
+        let block_size = bb.read().unwrap().get_ops().len();
+        let index = iter_index.unwrap_or(block_size);
+        assert!(index <= block_size, "opInsert iterator is outside the basic block");
+        Self::block_insert_op(op, bb, index);
+    }
+
+    // Ghidra: block.cc:2258 BlockBasic::insert
+    /// Insert an op into a BlockBasic and maintain its parent, per-block
+    /// sequence order, and switch-dispatch flag.
+    fn block_insert_op(
+        op: &crate::op::PcodeOpRef,
+        bb: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        index: usize,
+    ) {
+        assert!(
+            op.0.read().unwrap().parent.is_none(),
+            "BlockBasic::insert requires an unattached op"
+        );
+        let parent = std::sync::Arc::downgrade(bb);
+        let mut block_guard = bb.write().unwrap();
+        let block = block_guard
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("Funcdata op insertion requires BlockBasic");
+        assert!(index <= block.ops.len(), "BlockBasic insert index is out of bounds");
+
+        let order_before = if index == 0 {
+            2
+        } else {
+            block.ops[index - 1].0.read().unwrap().start.get_order()
+        };
+        let order_after = if index == block.ops.len() {
+            let candidate = order_before.wrapping_add(0x0100_0000);
+            if candidate <= order_before { u32::MAX } else { candidate }
+        } else {
+            block.ops[index].0.read().unwrap().start.get_order()
+        };
+
+        op.0.write().unwrap().parent = Some(parent);
+        block.ops.insert(index, op.clone());
+        if order_after.wrapping_sub(order_before) <= 1 {
+            block.set_order();
+        } else {
+            op.0
+                .write()
+                .unwrap()
+                .start
+                .set_order(order_after / 2 + order_before / 2);
         }
+
+        let is_branch_indirect = {
+            let op_guard = op.0.read().unwrap();
+            op_guard.is_branch() && op_guard.opcode == OpCode::CPUI_BRANCHIND
+        };
+        if is_branch_indirect {
+            block.flags |= crate::block::block_flags::SWITCH_OUT;
+        }
+    }
+
+    // Ghidra: block.cc:2292 BlockBasic::removeOp
+    /// Detach an op from its parent BlockBasic without changing its Varnode
+    /// links or recalculating the remaining per-block order fields.
+    fn block_remove_op(
+        op: &crate::op::PcodeOpRef,
+        bb: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        op.0.write().unwrap().parent = None;
+        let mut block_guard = bb.write().unwrap();
+        let block = block_guard
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("Funcdata op removal requires BlockBasic");
+        let index = block
+            .ops
+            .iter()
+            .position(|candidate| std::sync::Arc::ptr_eq(&candidate.0, &op.0))
+            .expect("BlockBasic::removeOp requires an op in the block");
+        block.ops.remove(index);
     }
 
     // Ghidra: funcdata_op.cc:179 Funcdata::opUnlink
@@ -10845,6 +11019,7 @@ mod tests {
         // (inject_raw_ops creates separate varnode instances for inputs, which
         // breaks identity; so we wire the descend chain manually here).
         let mut fd = Funcdata::new("test_split", Address::new(0x1000), 0x100);
+        let block = fd.create_new_block();
 
         // INT_ADD(RSP, 0x10) -> tmp_out
         let add_op = fd.new_op(2, Address::new(0x1000));
@@ -10854,18 +11029,18 @@ mod tests {
         let off = fd.vbank.create_constant(8, 0x10);
         fd.op_set_input(&add_op, rsp, 0);
         fd.op_set_input(&add_op, off, 1);
-        fd.obank.alivelist.push(add_op.clone());
+        fd.op_insert_end(&add_op, &block);
 
         // Two readers of tmp_out.
         let r1 = fd.new_op(2, Address::new(0x1001));
         fd.op_set_opcode(&r1, OpCode::CPUI_LOAD);
         fd.op_set_input(&r1, tmp_out.clone(), 1);  // reads tmp_out -> adds descend
-        fd.obank.alivelist.push(r1);
+        fd.op_insert_end(&r1, &block);
 
         let r2 = fd.new_op(3, Address::new(0x1002));
         fd.op_set_opcode(&r2, OpCode::CPUI_STORE);
         fd.op_set_input(&r2, tmp_out.clone(), 1);  // reads tmp_out -> adds descend
-        fd.obank.alivelist.push(r2);
+        fd.op_insert_end(&r2, &block);
 
         // Before split: tmp_out has 2 descendants.
         assert_eq!(tmp_out.read().unwrap().count_descends(), 2);
