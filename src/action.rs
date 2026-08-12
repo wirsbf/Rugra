@@ -68,8 +68,10 @@ pub trait Action {
     fn get_name(&self) -> &str;
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Reset the action state for a new function. Faithful to
-    /// `Action::reset` (action.cc:100-105). Default: clear status/count.
+    /// Reset derived action state for a new function. The Rust container or
+    /// root entry resets the companion `ActionState` to `STATUS_START` and
+    /// clears only the warning-issued flag; Ghidra does not clear count/stats
+    /// in `Action::reset`.
     fn reset(&mut self, _fd: &mut Funcdata) {}
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -77,50 +79,63 @@ pub trait Action {
     /// (single-pass). Containers override to return their group's flags.
     fn get_flags(&self) -> u32 { 0 }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// The perform state machine. Faithful to `Action::perform`
-    /// (action.cc:298-362). Drives repeatapply / onceperfunc semantics by
-    /// looping apply() until no change (or once for onceperfunc).
+    // RUGRA-GLUE: exposes changes accumulated in a Rust container while preserving Ghidra's apply return convention
+    /// Return and clear changes accumulated independently of `apply()`'s
+    /// control-flow return code. Ghidra stores these in `Action::count`.
+    fn take_count_delta(&mut self) -> i32 { 0 }
+
+    // RUGRA-GLUE: passes the external Rust ActionState status to derived actions whose Ghidra base-class status is directly visible
+    /// Prepare one `apply()` attempt for the current executor status.
+    fn prepare_apply(&mut self, _status: u32) {}
+
+    // Ghidra: action.cc:298 Action::perform
+    /// Run this action to completion using Ghidra's status/count state machine.
+    /// Positive Rust `apply()` results adapt Ghidra actions that increment their
+    /// protected `count` field and return zero.
     fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
-        // Faithful to Action::perform (action.cc:298-362). `count` is cleared
-        // ONCE at the start (status_start case), and count_tests is incremented
-        // ONCE per perform() call — NOT once per loop iteration. The original
-        // Rugra code reset count=0 inside the loop, discarding the accumulated
-        // count from prior iterations and breaking repeatapply convergence.
-        state.count = 0;
-        state.count_tests += 1;
-        // Faithful to Action::perform (action.cc:298-362): an UNBOUNDED
-        // do-while that repeats only while this iteration made a change
-        // (lcount < count) AND repeatapply is set. The previous Rugra code
-        // hard-capped this to 1 iteration (`if iterations > 1 { break; }`),
-        // which silently disabled repeatapply convergence — so multi-round
-        // simplifications (e.g. fold `V^V→0` then propagate the `0` into a
-        // RETURN) never converged, leaking `return iVar1 ^ iVar1` into output.
-        // Per AGENTS.md §5, prior Rule-pool *cycles* were fixed by phase
-        // separation (actcleanup), NOT by this iteration cap; the cap was
-        // masking the real fix. Removed to match Ghidra (audit R73).
         loop {
-            // Snapshot count before apply (action.cc:314 lcount = count).
-            state.lcount = state.count;
-            let res = self.apply(fd)?;
-            if res < 0 {
-                // Partial completion / breakpoint (action.cc:323-326).
-                state.status = status_flags::STATUS_MID;
-                return Ok(res);
+            let apply_now = match state.status {
+                status_flags::STATUS_START => {
+                    state.count = 0;
+                    state.count_tests += 1;
+                    state.lcount = state.count;
+                    true
+                }
+                status_flags::STATUS_BREAKSTARTHIT | status_flags::STATUS_REPEAT => {
+                    state.lcount = state.count;
+                    true
+                }
+                status_flags::STATUS_MID => true,
+                status_flags::STATUS_END => return Ok(0),
+                status_flags::STATUS_ACTIONBREAK => false,
+                _ => {
+                    state.status = status_flags::STATUS_START;
+                    continue;
+                }
+            };
+
+            if apply_now {
+                self.prepare_apply(state.status);
+                let res = self.apply(fd)?;
+                let accumulated = self.take_count_delta();
+                state.count += accumulated;
+                if res < 0 {
+                    state.status = status_flags::STATUS_MID;
+                    return Ok(res);
+                }
+                state.count += res;
+                if state.lcount < state.count {
+                    state.count_apply += 1;
+                }
             }
-            // accumulate changes (Ghidra increments member count inside apply)
-            state.count += res;
-            if res > 0 {
-                state.count_apply += 1;
-            }
-            // Loop condition (action.cc:350): repeat only if THIS iteration
-            // made a change (lcount < count) AND repeatapply is set.
+
+            state.status = status_flags::STATUS_REPEAT;
             let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
             if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
                 break;
             }
         }
-        // onceperfunc / oneactperfunc handling (action.cc:352-359).
+
         let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
         if (flags & (action_flags::RULE_ONCEPERFUNC | action_flags::RULE_ONEACTPERFUNC)) != 0 {
             if state.count > 0 || (flags & action_flags::RULE_ONCEPERFUNC) != 0 {
@@ -203,6 +218,8 @@ pub struct ActionGroup {
     state: usize,
     /// This group's rule flags (repeatapply etc).
     flags: u32,
+    /// Changes made by completed children since the parent last observed us.
+    pending_count: i32,
 }
 
 impl ActionGroup {
@@ -220,6 +237,7 @@ impl ActionGroup {
             child_states: Vec::new(),
             state: 0,
             flags,
+            pending_count: 0,
         }
     }
 
@@ -234,38 +252,35 @@ impl ActionGroup {
     pub fn get_name_str(&self) -> &str { &self.name }
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn num_actions(&self) -> usize { self.actions.len() }
+    // RUGRA-GLUE: read-only fixture/debug view of Ghidra ActionGroup's protected iterator
+    pub fn current_index(&self) -> usize { self.state }
+    // RUGRA-GLUE: read-only fixture/debug view of a child Action's externalized executor state
+    pub fn child_state(&self, index: usize) -> Option<&ActionState> {
+        self.child_states.get(index)
+    }
 }
 
 impl Action for ActionGroup {
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Run all child Actions' `apply()` in sequence. Faithful to
-    /// `ActionGroup::apply` (action.cc:506-528). NOTE: we call `apply()`
-    /// directly, NOT `perform()`. The repeatapply loop is driven by THIS
-    /// group's own `perform()` (the default trait impl), which re-runs this
-    /// `apply()` until no child reports changes. This avoids recursive
-    /// `perform → apply → child.perform → child.apply → ...` stack overflow.
-    /// Child Actions with their own repeatapply (e.g. ActionPool) still get
-    /// repeated via their own perform when called from a parent that delegates
-    /// via `apply_all` or calls `get_action_mut().perform()`.
+    // Ghidra: action.cc:506 ActionGroup::apply
+    /// Run every child through its `perform()` state machine in list order.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let mut total = 0;
-        for i in 0..self.actions.len() {
-            let child_flags = self.child_states[i].flags;
-            // If the child has its own repeatapply flag, call its perform()
-            // (which loops internally). Otherwise call apply() directly.
-            // This avoids deep perform→perform recursion: only leaf-level
-            // repeatapply Actions (ActionPool) use perform; intermediate
-            // ActionGroups use apply + the parent's perform loop.
-            let res = if child_flags & action_flags::RULE_REPEATAPPLY != 0 {
-                self.actions[i].perform(fd, &mut self.child_states[i])?
-            } else {
-                self.actions[i].apply(fd)?
-            };
+        while self.state < self.actions.len() {
+            let res = self.actions[self.state].perform(fd, &mut self.child_states[self.state])?;
             if res > 0 {
-                total += res;
+                self.pending_count += res;
+            } else if res < 0 {
+                return Ok(-1);
             }
+            self.state += 1;
         }
-        Ok(total)
+        Ok(0)
+    }
+
+    // RUGRA-GLUE: mirrors ActionGroup::apply reading its inherited Action::status before initializing the protected iterator
+    fn prepare_apply(&mut self, status: u32) {
+        if status != status_flags::STATUS_MID {
+            self.state = 0;
+        }
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -273,62 +288,30 @@ impl Action for ActionGroup {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Override perform for ActionGroup to be **iterative** (not recursive).
-    /// The default perform would call self.apply() in a loop, which calls
-    /// child.perform() for repeatapply children — creating deep recursion.
-    /// Instead, we inline the repeatapply loop here: call self.apply() (which
-    /// calls child.apply/perform), and repeat if the group has repeatapply.
-    /// This keeps the stack depth O(1) per repeatapply iteration.
-    ///
-    /// Faithful to Ghidra ActionGroup (which inherits the base `perform`
-    /// do-while at action.cc:298-362): UNBOUNDED, terminating only when a
-    /// pass makes no change (lcount >= count) or repeatapply is unset. The
-    /// previous `iterations > 2` cap disabled group-level convergence
-    /// (audit R73) and is removed; the `lcount >= count` guard prevents
-    /// infinite loops for correctly-reporting Rules.
-    fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
-        state.count = 0;
-        state.count_tests += 1;
-        loop {
-            state.lcount = state.count;
-            let res = self.apply(fd)?;
-            state.count += res;
-            let flags = if state.flags != 0 { state.flags } else { self.flags };
-            if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
-                break;
-            }
-        }
-        let flags = if state.flags != 0 { state.flags } else { self.flags };
-        if (flags & (action_flags::RULE_ONCEPERFUNC | action_flags::RULE_ONEACTPERFUNC)) != 0 {
-            state.status = if state.count > 0 || (flags & action_flags::RULE_ONCEPERFUNC) != 0 {
-                status_flags::STATUS_END
-            } else {
-                status_flags::STATUS_START
-            };
-        } else {
-            state.status = status_flags::STATUS_START;
-        }
-        Ok(state.count)
+    // RUGRA-GLUE: externalizes Ghidra ActionGroup's inherited `count` member
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.pending_count)
     }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    // Ghidra: action.cc:408 ActionGroup::reset
     fn reset(&mut self, fd: &mut Funcdata) {
-        self.state = 0;
+        self.pending_count = 0;
         for i in 0..self.actions.len() {
             self.child_states[i].status = status_flags::STATUS_START;
+            self.child_states[i].flags &= !action_flags::RULE_WARNINGS_GIVEN;
             self.actions[i].reset(fd);
         }
     }
 }
 
-/// A restartable action group — the top-level container for the universal
-/// pipeline. Faithful to `ActionRestartGroup` (action.hh:173, action.cc:554-583).
+/// A partial restartable action group — the top-level container for the
+/// universal pipeline.
 ///
 /// Wraps an `ActionGroup`. After the group converges (apply returns 0), if
-/// `Funcdata::has_restart_pending()` is true, it clears analysis state and
-/// re-runs the entire subtree. Used by jumptable recovery and late structural
-/// adjustments that need a clean restart.
+/// `Funcdata::has_restart_pending()` is true, the current implementation
+/// resets and re-runs the child subtree. Ghidra additionally calls
+/// `Architecture::clearAnalysis`; that missing mutation is tracked by
+/// `PIPE-RESTART-0001`, so this type is not a complete port yet.
 pub struct ActionRestartGroup {
     name: String,
     group: ActionGroup,
@@ -336,6 +319,8 @@ pub struct ActionRestartGroup {
     curstart: i32,
     /// State for this Action (used by parent perform — though this is root).
     flags: u32,
+    /// Changes accumulated by the embedded ActionGroup across restarts.
+    pending_count: i32,
 }
 
 impl ActionRestartGroup {
@@ -348,6 +333,7 @@ impl ActionRestartGroup {
             maxrestarts,
             curstart: 0,
             flags,
+            pending_count: 0,
         }
     }
 
@@ -358,30 +344,17 @@ impl ActionRestartGroup {
 }
 
 impl Action for ActionRestartGroup {
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Faithful to `ActionRestartGroup::apply` (action.cc:554-583).
-    ///
-    /// NOTE: Ghidra's ActionGroup::apply returns 0 on success (changes
-    /// accumulate in member `count` fields). Rugra's ActionGroup::apply returns
-    /// the positive `total` change count instead (ActionState is external, so
-    /// there's no member field to stash it in). To preserve Ghidra semantics —
-    /// where a converged group always falls through to the restart check — we
-    /// ignore a positive return and only bail out on res < 0 (partial
-    /// completion / breakpoint). Without this, the restart logic is dead code
-    /// (res != 0 always returned early), so jumptable/late-restructure restarts
-    /// never fire.
+    // Ghidra: action.cc:553 ActionRestartGroup::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         if self.curstart == -1 {
             return Ok(0); // Already completed
         }
         loop {
             let res = self.group.apply(fd)?;
+            self.pending_count += self.group.take_count_delta();
             if res < 0 {
-                return Ok(res); // Bubble up partial completion / breakpoint
+                return Ok(res);
             }
-            // Group converged (Ghidra semantics: res==0). Whether or not Rugra's
-            // total is positive, the group has run to completion this pass, so
-            // always check for a pending restart.
             if !fd.has_restart_pending() {
                 self.curstart = -1;
                 return Ok(0);
@@ -399,6 +372,11 @@ impl Action for ActionRestartGroup {
             // clearAnalysis — Rugra does not yet model analysis-clearable state.
             // Reset the entire subtree (all children) for a fresh run.
             self.group.reset(fd);
+            // Ghidra sets the inherited Action status to status_start after
+            // resetting children.  Rugra externalizes that status, so prepare
+            // the embedded group's protected iterator explicitly before this
+            // internal restart attempt.
+            self.group.prepare_apply(status_flags::STATUS_START);
             // Loop back to re-run the group.
         }
     }
@@ -411,10 +389,19 @@ impl Action for ActionRestartGroup {
     fn get_flags(&self) -> u32 {
         self.flags
     }
+    // RUGRA-GLUE: shares the external restart-group executor status with its embedded Rust ActionGroup
+    fn prepare_apply(&mut self, status: u32) {
+        self.group.prepare_apply(status);
+    }
+    // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.pending_count)
+    }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    // Ghidra: action.cc:546 ActionRestartGroup::reset
     fn reset(&mut self, fd: &mut Funcdata) {
         self.curstart = 0;
+        self.pending_count = 0;
         self.group.reset(fd);
     }
 }
@@ -794,6 +781,27 @@ impl ActionDatabase {
             .map(|a| a.as_ref())
     }
 
+    // RUGRA-GLUE: Rust ownership adapter for Ghidra's Architecture current Action pointer followed by Action::reset and Action::perform
+    /// Reset and perform one registered root action.
+    pub fn perform_action(
+        &mut self,
+        name: &str,
+        fd: &mut crate::funcdata::Funcdata,
+    ) -> crate::error::Result<Option<i32>> {
+        let Some(index) = self
+            .all_actions
+            .iter()
+            .position(|action| action.get_name() == name)
+        else {
+            return Ok(None);
+        };
+        self.all_actions[index].reset(fd);
+        let mut state = ActionState::new(self.all_actions[index].get_flags());
+        self.all_actions[index]
+            .perform(fd, &mut state)
+            .map(Some)
+    }
+
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Run all registered actions on the given function data
     /// Run all registered actions on the given function data via perform().
@@ -1039,4 +1047,112 @@ pub mod action_status {
     pub const NO_CHANGE: i32 = 0;
     pub const CHANGE: i32 = 1;
     pub const RESTART: i32 = 2;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::address::Address;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct ScriptAction {
+        script: Vec<i32>,
+        cursor: usize,
+        flags: u32,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ScriptAction {
+        fn new(script: Vec<i32>, flags: u32, calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                script,
+                cursor: 0,
+                flags,
+                calls,
+            }
+        }
+    }
+
+    impl Action for ScriptAction {
+        fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let result = self.script.get(self.cursor).copied().unwrap_or(0);
+            self.cursor += 1;
+            Ok(result)
+        }
+
+        fn get_name(&self) -> &str {
+            "script"
+        }
+
+        fn get_flags(&self) -> u32 {
+            self.flags
+        }
+    }
+
+    fn fixture_funcdata() -> Funcdata {
+        Funcdata::new("action_fixture", Address::new(0x1000), 1)
+    }
+
+    #[test]
+    fn perform_repeats_until_no_change() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut action = ScriptAction::new(
+            vec![1, 1, 0],
+            action_flags::RULE_REPEATAPPLY,
+            calls.clone(),
+        );
+        let mut state = ActionState::new(action_flags::RULE_REPEATAPPLY);
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(state.count, 2);
+        assert_eq!(state.lcount, 2);
+        assert_eq!(state.count_tests, 1);
+        assert_eq!(state.count_apply, 2);
+        assert_eq!(state.status, status_flags::STATUS_START);
+    }
+
+    #[test]
+    fn perform_resumes_partial_without_restarting_counters() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut action = ScriptAction::new(vec![-1, 1], 0, calls.clone());
+        let mut state = ActionState::new(0);
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), -1);
+        assert_eq!(state.status, status_flags::STATUS_MID);
+        assert_eq!(state.count_tests, 1);
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(state.count_tests, 1);
+        assert_eq!(state.count_apply, 1);
+        assert_eq!(state.status, status_flags::STATUS_START);
+    }
+
+    #[test]
+    fn once_per_function_stops_until_reset() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut action = ScriptAction::new(
+            vec![0, 0],
+            action_flags::RULE_ONCEPERFUNC,
+            calls.clone(),
+        );
+        let mut state = ActionState::new(action_flags::RULE_ONCEPERFUNC);
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
+        assert_eq!(state.status, status_flags::STATUS_END);
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        state.status = status_flags::STATUS_START;
+        action.reset(&mut fd);
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
 }

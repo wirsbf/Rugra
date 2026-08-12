@@ -249,10 +249,6 @@ fn main() {
             Address::new(vaddr),
             u64::MAX,
         );
-        fd.run_heritage_direct();
-        let mut infer = rugra::coreaction::ActionInferParams::new();
-        let _ = infer.apply(&mut fd);
-
         let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
         fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
 
@@ -260,9 +256,9 @@ fn main() {
 
             let mut db = ActionDatabase::new();
             db.set_default_actions();
-            if let Some(action) = db.get_action_mut("decompile") {
+            {
                 let mut fd_write = fd_arc.write().unwrap();
-                let _ = action.apply(&mut *fd_write);
+                let _ = db.perform_action("decompile", &mut fd_write);
             }
 
             let fd_read = fd_arc.read().unwrap();

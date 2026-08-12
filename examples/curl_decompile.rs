@@ -485,9 +485,9 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut db = ActionDatabase::new();
             db.set_default_actions();
-            if let Some(action) = db.get_action_mut("decompile") {
+            {
                 let mut fd_write = fd_arc.write().unwrap();
-                let _ = action.apply(&mut *fd_write);
+                let _ = db.perform_action("decompile", &mut fd_write);
             }
             eprintln!("[STEP] {} action done {:?}", func_name, t0.elapsed());
 

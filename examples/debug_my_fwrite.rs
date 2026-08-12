@@ -225,9 +225,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut db = ActionDatabase::new();
     db.set_default_actions();
-    if let Some(action) = db.get_action_mut("decompile") {
+    {
         let mut fdw = fd_arc.write().unwrap();
-        let _ = action.apply(&mut *fdw);
+        let _ = db.perform_action("decompile", &mut fdw);
     }
 
     eprintln!("\n=== After full pipeline: loc_tree varnodes ({}) ===", {

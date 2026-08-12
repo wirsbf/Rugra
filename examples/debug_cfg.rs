@@ -92,13 +92,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut db = ActionDatabase::new();
     db.set_default_actions();
     
-    if let Some(decompile_action) = db.get_action_mut("decompile") {
+    {
         let mut fd_write = fd_arc.write().unwrap();
         
         println!("=== BEFORE ACTION DATABASE ===");
         dump_blocks("Basic", &fd_write.bblocks);
         
-        let _ = decompile_action.apply(&mut *fd_write);
+        let _ = db.perform_action("decompile", &mut fd_write);
         
         println!("=== AFTER ACTION DATABASE ===");
         dump_blocks("Basic", &fd_write.bblocks);

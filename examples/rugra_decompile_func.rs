@@ -235,8 +235,6 @@ fn run_main(binary_path: &str, target_spec: &str) -> Result<(), String> {
         fd.add_string(addr, s.clone());
     }
     fd.inject_raw_ops(&raw_ops);
-    fd.run_heritage_direct();
-
     let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
     fd_arc
         .write()
@@ -245,9 +243,9 @@ fn run_main(binary_path: &str, target_spec: &str) -> Result<(), String> {
 
     let mut db = ActionDatabase::new();
     db.set_default_actions();
-    if let Some(action) = db.get_action_mut("decompile") {
+    {
         let mut fdw = fd_arc.write().unwrap();
-        let _ = action.apply(&mut *fdw);
+        let _ = db.perform_action("decompile", &mut fdw);
     }
 
     // Print with the golden header format. Rugra uses relative addresses;

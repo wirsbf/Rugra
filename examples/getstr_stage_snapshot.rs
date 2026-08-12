@@ -528,9 +528,13 @@ fn run(binary: &Path, output_directory: &Path) -> Result<(), Box<dyn Error>> {
         .set_self_ref(Arc::downgrade(&action_fd));
     let mut actions = ActionDatabase::new();
     actions.set_default_actions();
-    if let Some(action) = actions.get_action_mut("decompile") {
-        action.apply(&mut action_fd.write().expect("Funcdata action write lock"))?;
-    } else {
+    if actions
+        .perform_action(
+            "decompile",
+            &mut action_fd.write().expect("Funcdata action write lock"),
+        )?
+        .is_none()
+    {
         return Err("Rugra did not configure the decompile action".into());
     }
     let action_read = action_fd.read().expect("Funcdata snapshot read lock");

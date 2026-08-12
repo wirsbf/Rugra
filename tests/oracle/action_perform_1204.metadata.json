@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "fixture_id": "PIPE-0000",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "usage": "Selected and consumed by locked BfdArchitecture initialization for the valid GetStr Funcdata."
+  },
+  "analysis_options": {
+    "apis": [
+      "Action::reset",
+      "Action::perform",
+      "ActionGroup::apply"
+    ],
+    "funcdata": "BfdArchitecture over the pinned 34a3febf:examples/curl Git blob (never the working-tree file and independent of runtime HEAD); BFD symbols loaded with namespace delimiter ::; query global GetStr; the resulting Funcdata size field is 0 although the ELF symbol extent is 74; no followFlow and no decompiler action pass",
+    "scripted_leaf": "Derived Action::apply reads no Funcdata state; each scripted step increments the protected Action::count by changes and returns result; exhausted scripts increment apply_calls, append a zero change, and return 0",
+    "initialization": "Probe constructors initialize otherwise-unobserved count/lcount to zero. C++ invokes the real virtual Action::reset path; Rust uses the effective externalized reset adapter (set companion ActionState.status to start, then invoke virtual Action::reset). The observed scope proves leaf status reset and count/lcount/statistics preservation. It also observes ActionGroup at completion, immediately after reset (the iterator must remain at end), and after the next perform (which must prepare from begin). rule_warnings_given clearing is not exercised.",
+    "action_database": "ActionDatabase::perform_action and fresh root ActionState behavior across functions are not exercised; no claim is made about cross-function statistics through that adapter.",
+    "warnings": "rule_warnings_on is absent in every case",
+    "debug_macros": "__TERMINAL__ only through the locked Makefile libdecomp closure; OPACTION_DEBUG and CPUI_DEBUG are absent",
+    "normalization": "None; one fixed-order compact UTF-8 JSON object and final newline are compared byte-for-byte"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by its verified object ID; never read the working-tree file and never require runtime HEAD equality",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "include_tree_sha256": "4eb42123f7696cd09656ed0e0950de8c450b1ab0606a08a188411f8d0463159c",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "d03913b659295591951516a7470f568e28457bc6da41f9ab7b22a89f5152e737",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0,
+      "elf_symbol_extent": 74,
+      "symbol_source": "ELF/BFD"
+    },
+    "cases": [
+      {
+        "id": "repeatapply",
+        "flags": 4,
+        "script": [
+          {"changes": 2, "result": 0},
+          {"changes": 1, "result": 0},
+          {"changes": 0, "result": 0}
+        ],
+        "calls": ["reset", "perform", "perform"]
+      },
+      {
+        "id": "once_per_func",
+        "flags": 8,
+        "script": [
+          {"changes": 0, "result": 0},
+          {"changes": 5, "result": 0}
+        ],
+        "calls": ["reset", "perform", "perform", "reset", "perform"]
+      },
+      {
+        "id": "one_act_per_func",
+        "flags": 16,
+        "script": [
+          {"changes": 0, "result": 0},
+          {"changes": 4, "result": 0},
+          {"changes": 9, "result": 0}
+        ],
+        "calls": ["reset", "perform", "perform", "perform", "reset", "perform"]
+      },
+      {
+        "id": "partial_leaf_resume",
+        "flags": 0,
+        "script": [
+          {"changes": 0, "result": -7},
+          {"changes": 2, "result": 0}
+        ],
+        "calls": ["reset", "perform", "perform"]
+      },
+      {
+        "id": "group_partial_resume",
+        "flags": 0,
+        "children": [
+          {"name": "group_first", "flags": 0, "script": [{"changes": 1, "result": 0}]},
+          {"name": "group_partial", "flags": 0, "script": [{"changes": 0, "result": -7}, {"changes": 2, "result": 0}]},
+          {"name": "group_last", "flags": 0, "script": [{"changes": 4, "result": 0}]}
+        ],
+        "calls": ["reset", "perform", "perform", "reset_and_observe", "perform"]
+      }
+    ]
+  },
+  "observation_schema": {
+    "format": "One compact UTF-8 JSON object with fixed key order and a final newline",
+    "case_order": [
+      "repeatapply",
+      "once_per_func",
+      "one_act_per_func",
+      "partial_leaf_resume",
+      "group_partial_resume"
+    ],
+    "event": "label, signed perform return (or null for reset), exact apply change sequence, and immediate post-call state",
+    "executor_state": "numeric status, signed count/lcount, unsigned count_tests/count_apply",
+    "leaf_state": "executor state plus cumulative apply_calls/reset_calls and consumed scripted-step cursor",
+    "group_state": "parent executor state, current list iterator index, child insertion order, per-call child trace, per-child change sequence, and complete child states",
+    "preserved": "All call, child, change, and trace order; no status or counter field is normalized"
+  },
+  "build": {
+    "oracle_archive": "git archive of the exact oracle commit, then the locked Makefile libdecomp.a target (CORE + DECCORE + SLEIGH), never a working-tree or Cargo-produced Ghidra archive",
+    "supplemental_source_units": [
+      "libdecomp.cc",
+      "sleigh_arch.cc",
+      "inject_sleigh.cc",
+      "bfd_arch.cc",
+      "loadimage_bfd.cc"
+    ],
+    "cxx_flags": [
+      "-std=c++11",
+      "-O2",
+      "-Wall",
+      "-Wno-sign-compare",
+      "-m64"
+    ],
+    "oracle_link_flags": [
+      "locked libdecomp.a",
+      "hashed libbfd-2.38-system.so",
+      "-lz"
+    ],
+    "rust_build": "Hashed complete library build-input snapshot (Cargo manifest/lock, build.rs, README, src, sleigh_shim, and the three manifest-required bench/example path files); cargo build --lib --locked --offline in an isolated target; rustc compiles the separately hashed standalone fixture against the public rugra API",
+    "registry_packages": 164,
+    "environment_policy": "Immutable runner descriptor; env -i for validation/build/execute; pinned direct tool paths; exact locked Ghidra archive; hashed workspace inputs; Cargo --locked --offline"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "e036e2c7d6a56967de1d4e14bc0d03706f0d0d6bc32e0b24e55cc125ae632fa8",
+    "rust_fixture_sha256": "e5be09c0272154697e764f0bd92384a1329940ee4c97bcee61d53a50f7db352f",
+    "runner_sha256": "9e2353bf9a7041835dc3311d2d507e1cf70560ea7a2d02a8bd3807b27e209408",
+    "action_rs_sha256": "e1b191fe10daae003931405850beeb11c0d807945985f0a7ea2aa845715f9bfb",
+    "funcdata_rs_sha256": "3394112d5e4d969c45e0e6e64ed935a73624b3e504fc5e886de7a18ee9fb23b2",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-action-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+    "rust_crate_tree_sha256": "14b0bb2afc8fea21ebfbde6ea2fb988eea2870fd0887171bed53132c56efb6c4",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_cxx_target": "x86_64-linux-gnu",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+    "host_make_path": "/usr/bin/make",
+    "host_python_path": "/usr/bin/python3.10",
+    "host_git_path": "/usr/bin/git",
+    "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+    "host_platform": "Linux 6.8.0-124-generic x86_64"
+  },
+  "expected_stdout_sha256": "78052f85d372b60575f5a3c26442a24f7201d163aa0a46168f44f9698c1472aa",
+  "expected_exit_code": 0,
+  "coverage": {
+    "repeatapply": "MATCH",
+    "onceperfunc": "MATCH",
+    "oneactperfunc": "MATCH",
+    "reset_status_and_counter_preservation": "MATCH",
+    "reset_warning_flag_clear": "UNTESTED",
+    "group_reset_intermediate_iterator_and_restart": "MATCH",
+    "partial_leaf_resume": "MATCH",
+    "action_group_apply_and_resume": "MATCH",
+    "breakpoints_and_warning_emission": "UNTESTED",
+    "opaction_debug_paths": "UNTESTED",
+    "action_restart_group_and_action_pool": "UNTESTED"
+  },
+  "overall_status": "PARTIAL_MATCH: all targeted Action executor cases match; explicitly listed branches remain UNTESTED"
+}

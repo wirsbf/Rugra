@@ -817,3 +817,25 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 <!-- mainloop-repeatapply: 1783144837.4436781 -->
 <!-- delete-simplify: 1783145834.634057 -->
 <!-- delete-4-self-invented: 1783146996.239581 -->
+
+## 2026-08-13：PIPE-0000 根执行入口与子 Action 状态机
+
+- 生产 CLI、curl/httpd、GetStr snapshot 及诊断 examples 不再直接调用根
+  `Action::apply`，统一经 `ActionDatabase::perform_action` 执行
+  `reset → perform`。
+- `ActionGroup::apply` 按 Ghidra `action.cc:506-528` 的列表顺序，对每个子
+  Action 无条件调用 `perform`；`onceperfunc`、`oneactperfunc` 和不带
+  `repeatapply` 的子 Action 不再绕过自己的 status/count 状态。
+- `Action::perform` 显式处理 `status_start/repeat/mid/end`，只在
+  `status_start` 清 count/增加 tests，并在负返回时保留 `status_mid` 供下一次
+  调用续传。
+- `ActionGroup::reset` 与 `action.cc:408-415` 一样只重置基类/子 Action
+  状态，不移动受保护的 child iterator；下一次 `perform` 通过
+  `STATUS_START` 初始化 iterator。restart 组内部重跑也显式传递这一状态，
+  避免把 reset 本身错误地变成游标突变。
+- `ActionRestartGroup` 仍用 Rust 返回值承载外置 count，但不再丢掉已完成子树的
+  change count。锁定 12.0.4 scripted fixture 的 repeat/once/partial/group
+  executor 状态已逐字 MATCH；reset 的 warning flag、跨函数统计、breakpoint、
+  `clearAnalysis`、Rule pool 及默认有序树仍分别归 `PIPE-BREAK-0001`、
+  `PIPE-RESTART-0001`、`PIPE-POOL-0001`、`PIPE-TREE-0001`。该 fixture 是
+  `PARTIAL_MATCH`，模块保持 L2。

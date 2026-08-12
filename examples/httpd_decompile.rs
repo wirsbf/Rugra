@@ -266,10 +266,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut db = ActionDatabase::new();
             db.set_default_actions();
-            if let Some(action) = db.get_action_mut("decompile") {
+            {
                 let mut fd_write = fd_arc.write().unwrap();
                 eprintln!("[THREAD] {} actions start", func_name);
-                let result = action.apply(&mut *fd_write);
+                let result = db.perform_action("decompile", &mut fd_write);
                 eprintln!("[THREAD] {} actions done ({})", func_name, if result.is_ok() { "ok" } else { "err" });
             }
 

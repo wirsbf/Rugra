@@ -83,10 +83,11 @@ fn decompile_addition_function() {
     let mut db = ActionDatabase::new();
     db.set_default_actions();
 
-    if let Some(decompile_action) = db.get_action_mut("decompile") {
+    {
         let mut fd_write = fd_arc.write().unwrap();
-        match decompile_action.apply(&mut *fd_write) {
-            Ok(changes) => println!("ActionDatabase pipeline completed. Changes: {}", changes),
+        match db.perform_action("decompile", &mut fd_write) {
+            Ok(Some(changes)) => println!("ActionDatabase pipeline completed. Changes: {}", changes),
+            Ok(None) => println!("Pipeline error: missing decompile action"),
             Err(e) => println!("Pipeline error: {}", e),
         }
     }
@@ -165,10 +166,11 @@ fn decompile_conditional_function() {
     let mut db = ActionDatabase::new();
     db.set_default_actions();
 
-    if let Some(decompile_action) = db.get_action_mut("decompile") {
+    {
         let mut fd_write = fd_arc.write().unwrap();
-        match decompile_action.apply(&mut *fd_write) {
-            Ok(changes) => println!("ActionDatabase pipeline completed. Changes: {}", changes),
+        match db.perform_action("decompile", &mut fd_write) {
+            Ok(Some(changes)) => println!("ActionDatabase pipeline completed. Changes: {}", changes),
+            Ok(None) => println!("Pipeline error: missing decompile action"),
             Err(e) => println!("Pipeline error: {}", e),
         }
     }

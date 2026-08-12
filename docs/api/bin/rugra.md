@@ -2,6 +2,18 @@
 
 Source: `src/bin/rugra.rs`.
 
+## 2026-08-13 Action 根入口
+
+CLI 的默认 decompile 根动作现在通过 `ActionDatabase::perform_action` 运行，先
+reset 整棵 action tree，再进入 Ghidra `Action::perform` 状态机。旧路径直接调用
+`apply`，会跳过 once/repeat/status/count 语义。该修复只闭合执行入口；默认树、
+Heritage、原型恢复与打印仍为 L2/MISMATCH。
+
+实际反编译函数也不再在根动作前手工执行 `run_heritage_direct` 和
+`ActionInferParams`；Heritage/参数恢复只由 action tree 的对应阶段负责。用于构建
+兼容 prototype-count 数据库的旧预扫描仍存在，继续归 `PARAM-BIND-0001`，不能视为
+Ghidra 参数恢复等价实现。
+
 ## Actual entry point
 
 The binary accepts an ELF path and an optional maximum function count. It discovers ELF
