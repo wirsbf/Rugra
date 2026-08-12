@@ -36,7 +36,7 @@
   "cpp_fixture_sha256": "f204aefa18888fe1908f8d4bb4a3338dc944fa24d44503dcaa1856aa15323ccb",
   "rust_fixture_sha256": "4244c2d999dc99d242f7fb467e1fd9650c0b9ae87d18b3f46a03b5f448295140",
   "comparand_sha256": {
-    "rugra_printc": "0e5369735c5cb699f793c132167667610af9d995ac68fc125268c0620b2d5e59",
+    "rugra_printc": "1ca3262cecf85bde30f4b7d5a5cae7f1ab84969ffba59512b2a8aac6a11ec53b",
     "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
     "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
     "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",

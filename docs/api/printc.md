@@ -808,3 +808,23 @@ model is not present in Rugra's print layer):
   表达式文本、comment/markup、implied output 与 CFG 单次发射仍为
   `MISMATCH/UNTESTED`，由 `PRINT-RPN-0001`/`PRETTY-0001` 跟踪，模块保持 L2。
 - 验收：`tools/run_printc_terminal_oracle.sh`。
+
+### PRINT-RPN-0001C：结构化 BlockGraph 单次发射（2026-08-12）
+
+- 锁定 12.0.4 的 `PrintC::docFunction`（`printc.cc:2641`）只调用一次
+  `emitBlockGraph`；后者（`printc.cc:2746`）按 `BlockGraph::getList()` 顺序，
+  对每个顶层 `FlowBlock` 恰好调用一次虚 `emit`。Rugra 现在把最终结构化输出
+  统一收敛到 `emit_block_graph`，使用一个跨递归共享的对象身份集合，不再用
+  fresh set 重放全部 `WhileDo`/`DoWhile`。
+- `printc_blockgraph_1204` 锁定 fixture 的访问顺序和次数直接对拍为
+  `17,3,29` / `3`，其中 do-while 顶层项访问一次；Rugra 完整
+  `doc_function` 对单一 do-while 也观测为一次。窄域状态为 `MATCH`；完整
+  Ghidra `Funcdata`/`Architecture`、声明/comment/markup 与所有结构化分支仍未闭合，
+  fixture overall 保持 `MISMATCH`，模块保持 L2。
+- curl 可见回归：顶层 `do {` 数量从 16 降到 8，
+  `__libc_csu_init` 中 `return;` 后被重复打印的同一循环消失；孤立
+  `(bVarN);` 从 27 降到 26。11.3.2 golden 仅作诊断，skeleton diff
+  从 2747 降到 2729–2730，`defects=0`、`numbering=0`。
+- 同一 release 二进制连续三次仍产生不同 SHA，GCC 审计为 10/24、9/24、
+  10/24；这不是本项引入，继续由 `PRINT-DETERMINISM-0001` 跟踪。
+- 验收：`tools/run_printc_blockgraph_oracle.sh`。

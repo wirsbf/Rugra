@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "fixture_id": "PRINT-RPN-0001C",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "language-independent PrintC structured BlockGraph",
+  "compiler_spec": "none",
+  "analysis_options": {
+    "language": "PrintC",
+    "emitter": "EmitNoMarkup",
+    "markup": false,
+    "flat": false
+  },
+  "input": "{\"graph\":[{\"marker\":17,\"type\":\"basic\"},{\"marker\":3,\"type\":\"dowhile\"},{\"marker\":29,\"type\":\"basic\"}],\"ordering\":\"BlockGraph insertion order\",\"rugra_doc_function\":{\"structured_graph\":[\"dowhile\"],\"condition\":\"constant true\",\"expected_visible_visits\":1},\"observation\":\"top-level virtual dispatch marker order/count\"}",
+  "input_fingerprint": "sha256:9f78a8822e3859221de01b4d48a3e0849cb9413405eb4f40727fb2fede6577b1",
+  "observation": {
+    "schema": "visit_order=<comma-separated markers>; visit_count=<count>; dowhile_visits=<count>",
+    "normalization": "Ghidra records actual FlowBlock::emit virtual dispatch markers; Rugra derives the same markers from actual PrintC call text and counts the actual doc_function do-while token",
+    "ordering": "BlockGraph insertion/list order; no sorting",
+    "aliasing": "each top-level entry has distinct object identity; Rugra's do-while owns one shared condition Arc",
+    "covered_status": "MATCH",
+    "overall_status": "MISMATCH",
+    "covered": [
+      "emitBlockGraph visits top-level entries once in BlockGraph list order",
+      "a top-level do-while entry is dispatched exactly once",
+      "Rugra doc_function emits its sole structured do-while exactly once"
+    ],
+    "mismatch": [
+      "the full Ghidra Funcdata/Architecture/docFunction object graph is not constructed by this fixture",
+      "structured child ownership, comments, markup, declaration emission, and all loop text branches remain UNTESTED",
+      "Rugra's recursive Arc identity suppression is adaptation glue and is not proven for every malformed or duplicate graph"
+    ]
+  },
+  "cpp_fixture_sha256": "e6f7458d8aaa15d701060b8b5262225c58ae67ff0746caa777bf8c0d26b29366",
+  "rust_fixture_sha256": "55399ab77ebdc6a7c32583b91a6ed42f5db8f4955c176c6b8aa19b53add4c92b",
+  "comparand_sha256": {
+    "rugra_printc": "1ca3262cecf85bde30f4b7d5a5cae7f1ab84969ffba59512b2a8aac6a11ec53b",
+    "rugra_block": "fa4f481aec4f49b730bf0acf65ef9406a040349d60c664ff8fdc3e21e66f05d9",
+    "rugra_funcdata": "0eadc0a17c3da2b784b117a103f9bdccaff0dae589564941bded9de92be3c096",
+    "rugra_prettyprint": "b7714ca1a7736991a9ac93a2616a31d3e8c8bda7a4a65e292a5cf35bd8663470",
+    "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
+    "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
+    "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+    "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+    "ghidra_printlanguage_hh": "93572c8293f7d2a3ef03e2f1b9cf179a7f3ebd61755f45c0ad37de05f675bafe"
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "expected_stdout_sha256": "9fd87dad49604de562f4fd2fb36253dd8a879db62eaea30efba6f4d9356cf956"
+}

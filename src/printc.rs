@@ -4940,6 +4940,24 @@ impl PrintC {
         let cond_vn = resolved.read().unwrap();
         self.push_varnode(&cond_vn, None);
     }
+    // Ghidra: printc.cc:2746 PrintC::emitBlockGraph
+    /// Emit the top-level structured block list once, in `BlockGraph` order.
+    ///
+    /// Ghidra dispatches every entry in `BlockGraph::getList()` exactly once.
+    /// Rugra's structured nodes hold child `Arc`s and recursively emit them, so
+    /// a shared identity set additionally prevents a child that is also present
+    /// in the flat Rust graph from being emitted a second time.
+    pub fn emit_block_graph(&mut self, graph: &crate::block::BlockGraph) {
+        let mut emitted = std::collections::HashSet::new();
+        for i in 0..graph.get_size() {
+            if let Some(block_arc) = graph.get_block(i) {
+                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
+                if !emitted.contains(&block_idx) {
+                    self.emit_block_structured(&block_arc, graph, &mut emitted);
+                }
+            }
+        }
+    }
 }
 
 impl PrintLanguage for PrintC {
@@ -5945,45 +5963,10 @@ impl PrintLanguage for PrintC {
             }
         }
 
-        let mut emitted: HashSet<usize> = HashSet::new();
-        // 2b. Emit body starting from root/entry blocks
-        for i in 0..graph.get_size() {
-            if let Some(block_arc) = graph.get_block(i) {
-                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
-                let size_in = block_arc.read().unwrap().size_in();
-                if size_in == 0 && !emitted.contains(&block_idx) {
-                    self.emit_block_structured(&block_arc, graph, &mut emitted);
-                }
-            }
-        }
-
-        // 2c. Emit any disconnected or unreachable subgraphs
-        for i in 0..graph.get_size() {
-            if let Some(block_arc) = graph.get_block(i) {
-                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
-                if !emitted.contains(&block_idx) {
-                    self.emit_block_structured(&block_arc, graph, &mut emitted);
-                }
-            }
-        }
-
-        // 2d. Force-emit WhileDo/DoWhile blocks that were marked emitted but
-        // never actually rendered. Use a FRESH emitted set so the loop isn't
-        // skipped by the stale emitted entry from if-empty paths.
-        {
-            let mut fresh_emitted: HashSet<usize> = HashSet::new();
-            for i in 0..graph.get_size() {
-                if let Some(block_arc) = graph.get_block(i) {
-                    let bt = block_arc.read().unwrap().get_type();
-                    if bt == crate::block::BlockType::WhileDo || bt == crate::block::BlockType::DoWhile {
-                        let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
-                        if !fresh_emitted.contains(&block_idx) {
-                            self.emit_block_structured(&block_arc, graph, &mut fresh_emitted);
-                        }
-                    }
-                }
-            }
-        }
+        // Ghidra docFunction calls emitBlockGraph exactly once.  The graph
+        // owns the list order; structured recursion may consume another entry,
+        // so the shared emitted set prevents that entry from being replayed.
+        self.emit_block_graph(graph);
 
         self.emit.end_block();
 
@@ -5996,7 +5979,6 @@ impl PrintLanguage for PrintC {
 
         self.emit.end_function();
     }
-
 
     // Ghidra: printc.cc:123 PrintC::docAllProto
     fn doc_all_proto(&mut self, proto: &FuncProto) {
