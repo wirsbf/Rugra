@@ -1,5 +1,18 @@
 # `fspec.rs` API Reference
 
+`FuncProto` now represents Ghidra's `voidinputlock` explicitly. An empty
+parameter vector is therefore unlocked until `set_input_lock(true)` is called;
+a known `f(void)` remains locked through analysis, while an empty stripped
+prototype is still eligible for active recovery. `clearInput` clears the void
+lock, `clearUnlockedInput` preserves an authoritative prototype as a whole,
+and `copy` preserves the flag. This closes the lock-state slice of
+`FSPEC-0001`; model identity and the remaining parameter-model state are still
+tracked by that TODO, so the module remains L2.
+
+As in `FuncProto::setInputLock` / `setOutputLock` (`fspec.cc:3921-3948`),
+setting either lock also locks the prototype model. Clearing an individual
+input/output lock does not implicitly unlock the model.
+
 **状态**: 🔧 **L2（2026-08-11 锁定审计）**——空参列表 lock 语义、void/model lock 联动、ParamActive slot/counter、trial overlap/used-prefix/comparator 及 ParamEntry 分配与 12.0.4 不等价。
 **源代码路径**: `src/fspec.rs`
 

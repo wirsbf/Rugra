@@ -227,6 +227,11 @@ pub struct FuncProto {
     pub return_type: Arc<Datatype>,
     /// List of formal parameters
     pub parameters: Vec<ProtoParameter>,
+    /// The explicit lock for an empty/void input list. Faithful to Ghidra's
+    /// `voidinputlock` flag: with non-empty inputs the first parameter's
+    /// type-lock is authoritative; with zero inputs this bit distinguishes a
+    /// known `void` prototype from an unrecovered prototype.
+    pub void_input_locked: bool,
     /// Calling convention name (e.g., "__stdcall", "__cdecl")
     pub calling_convention: String,
     /// True if the function accepts variable arguments (...)
@@ -284,6 +289,7 @@ impl FuncProto {
             name,
             return_type,
             parameters: Vec::new(),
+            void_input_locked: false,
             calling_convention: "unknown".to_string(),
             is_dotdotdot: false,
             effects: Vec::new(),
@@ -331,10 +337,18 @@ impl FuncProto {
     }
 
     // Ghidra: fspec.cc:3906 FuncProto::isInputLocked
-    /// Check if input parameters are locked (type-locked).
-    /// Faithful to FuncProto::isInputLocked (fspec.cc:3906).
+    /// Check whether the input prototype is locked. Zero parameters are not
+    /// implicitly locked: only `void_input_locked` makes an empty prototype
+    /// authoritative. For non-empty prototypes Ghidra consults the first
+    /// parameter's type-lock.
     pub fn is_input_locked(&self) -> bool {
-        self.parameters.iter().all(|p| p.is_type_locked())
+        if self.void_input_locked {
+            return true;
+        }
+        self.parameters
+            .first()
+            .map(|parameter| parameter.is_type_locked())
+            .unwrap_or(false)
     }
 
     // Ghidra: fspec.cc:3921 FuncProto::setInputLock
@@ -342,6 +356,13 @@ impl FuncProto {
     /// overridden by active recovery.
     /// Faithful to FuncProto::setInputLock (fspec.cc:3921).
     pub fn set_input_lock(&mut self, val: bool) {
+        if val {
+            self.model_locked = true;
+        }
+        if self.parameters.is_empty() {
+            self.void_input_locked = val;
+            return;
+        }
         for p in &mut self.parameters {
             if val { p.flags |= protoparam_flags::TYPE_LOCKED; }
             else { p.flags &= !protoparam_flags::TYPE_LOCKED; }
@@ -353,6 +374,9 @@ impl FuncProto {
     /// data-type will not be overridden by active recovery.
     /// Faithful to FuncProto::setOutputLock (fspec.cc:3942-3948).
     pub fn set_output_lock(&mut self, val: bool) {
+        if val {
+            self.model_locked = true;
+        }
         self.output_type_locked = val;
     }
 
@@ -504,6 +528,7 @@ impl FuncProto {
         self.name = other.name.clone();
         self.return_type = other.return_type.clone();
         self.parameters = other.parameters.clone();
+        self.void_input_locked = other.void_input_locked;
         self.calling_convention = other.calling_convention.clone();
         self.is_dotdotdot = other.is_dotdotdot;
         self.output_type_locked = other.output_type_locked;
@@ -520,13 +545,17 @@ impl FuncProto {
     /// Clear unlocked input parameters.
     /// Faithful to FuncProto::clearUnlockedInput (fspec.cc:3994).
     pub fn clear_unlocked_input(&mut self) {
-        self.parameters.retain(|p| p.is_type_locked());
+        if self.is_input_locked() {
+            return;
+        }
+        self.parameters.clear();
     }
 
     // Ghidra: fspec.cc:4016 FuncProto::clearInput
     /// Clear ALL input parameters (including locked ones).
     pub fn clear_input(&mut self) {
         self.parameters.clear();
+        self.void_input_locked = false;
     }
 
     // Ghidra: fspec.cc:3806 FuncProto::copyFlowEffects
@@ -6122,6 +6151,38 @@ mod tests {
 
         proto.clear_unlocked_input();
         assert_eq!(proto.num_params(), 1); // locked params retained
+    }
+
+    #[test]
+    fn test_func_proto_locked_void_input_and_output_model_lock() {
+        let void_type = Arc::new(Datatype::Void(
+            crate::type_system::datatype::TypeBase::new(
+                "void".into(),
+                0,
+                crate::type_system::TypeMetatype::Void,
+            ),
+        ));
+        let mut proto = FuncProto::new("known_void".into(), void_type.clone());
+        assert!(!proto.is_input_locked());
+        assert!(!proto.is_model_locked());
+
+        proto.set_input_lock(true);
+        assert!(proto.is_input_locked());
+        assert!(proto.is_model_locked());
+        proto.clear_unlocked_input();
+        assert!(proto.is_input_locked());
+        assert_eq!(proto.num_params(), 0);
+
+        let mut copied = FuncProto::new("copy".into(), void_type);
+        copied.copy_from(&proto);
+        assert!(copied.is_input_locked());
+        copied.clear_input();
+        assert!(!copied.is_input_locked());
+
+        let mut output = FuncProto::new("output".into(), copied.return_type.clone());
+        output.set_output_lock(true);
+        assert!(output.is_output_locked());
+        assert!(output.is_model_locked());
     }
 
     #[test]

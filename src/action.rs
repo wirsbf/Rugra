@@ -834,7 +834,10 @@ impl ActionDatabase {
         // --- Top-level Actions (coreaction.cc:5477-5485) ---
         universal.add_action(Box::new(ActionStart::new()));
         universal.add_action(Box::new(crate::coreaction::ActionConstbase::new())); // :5478
-        universal.add_action(Box::new(crate::coreaction::ActionNormalizeSetup::new())); // :5479
+        // Ghidra: coreaction.cc:5421-5441,5479. ActionNormalizeSetup belongs
+        // only to the `normalanalysis` group. That group is present in the
+        // `normalize` root and absent from the default `decompile` root, so a
+        // normal decompilation must preserve imported prototype locks.
         universal.add_action(Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
         // Wire in additional implemented Actions from coreaction (Ghidra

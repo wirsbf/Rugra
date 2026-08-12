@@ -1,5 +1,16 @@
 # `printc.rs` API Reference
 
+`PrintC::doc_function` now follows locked Ghidra 12.0.4
+`PrintC::docFunction` at `printc.cc:2641-2676`: it delegates the declaration
+exactly once to `emitFunctionDeclaration`. The former production-only `main`
+special case, arbitrary RAX-write return heuristic, and empty-prototype SysV
+register rescan have been removed. Return type, ordered fixed parameters,
+varargs and names now come solely from the finalized `FuncProto`.
+
+This closes the text-selection slice of `PRINT-SIGNATURE-0001`. Scope-backed
+parameter `Symbol` markup and the stripped-binary recovery that produces the
+prototype remain separate residuals; the module remains L2.
+
 **源代码路径**: `src/printc.rs`
 
 ## 文档状态

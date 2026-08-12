@@ -1576,7 +1576,10 @@ impl Action for ActionInferParams {
             params.truncate(known_n);
         }
 
-        if !params.is_empty() && fd.funcp.parameters.is_empty() {
+        // Ghidra: coreaction.cc:4711-4761 ActionInputPrototype mutates the
+        // input map only when FuncProto::isInputLocked() is false. This
+        // Rugra-only compatibility action must honor the same boundary.
+        if !fd.funcp.is_input_locked() && !params.is_empty() && fd.funcp.parameters.is_empty() {
             fd.funcp.parameters = params;
             changed = true;
         }
@@ -1599,7 +1602,13 @@ impl Action for ActionInferParams {
                             })
                         });
                         // Only update if currently void
-                        if matches!(fd.funcp.return_type.as_ref(), Datatype::Void(_)) {
+                        // Ghidra: coreaction.cc:4765-4782
+                        // ActionOutputPrototype never replaces a type-locked
+                        // output. Preserve that invariant in this Rugra-only
+                        // compatibility action as well.
+                        if !fd.funcp.is_output_locked()
+                            && matches!(fd.funcp.return_type.as_ref(), Datatype::Void(_))
+                        {
                             fd.funcp.return_type = ret_type;
                             changed = true;
                         }
@@ -9494,7 +9503,9 @@ impl Action for ActionNodeJoin {
 pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
     vec![
         // --- base group (coreaction.cc:5477-5485) ---
-        Box::new(ActionNormalizeSetup::new()),   // :5479
+        // ActionNormalizeSetup(:5479) is group `normalanalysis`, which is not
+        // a member of Ghidra's default `decompile` group (coreaction.cc:
+        // 5421-5441). It must not be flattened into this decompile helper.
         Box::new(ActionDefaultParams::new()),    // :5480
         Box::new(ActionPrototypeTypes::new()),   // :5483
         Box::new(ActionFuncLinkOutOnly::new()),  // :5485
@@ -9553,6 +9564,47 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_infer_params_preserves_locked_void_prototype() {
+        let mut fd = Funcdata::new(
+            "locked_void",
+            crate::address::Address::new(0x1000),
+            0x10,
+        );
+        let mut copy = crate::pcoderaw::PcodeOpRaw::new(
+            crate::opcodes::OpCode::CPUI_COPY as i32,
+        );
+        copy.set_output(crate::pcoderaw::VarnodeRaw::new(
+            crate::space::AddressSpace::Unique,
+            0x100,
+            8,
+        ));
+        copy.add_input(crate::pcoderaw::VarnodeRaw::new(
+            crate::space::AddressSpace::Register,
+            0x38,
+            8,
+        ));
+        fd.inject_raw_ops(&[copy]);
+        fd.run_heritage_direct();
+        assert!(fd.vbank.loc_tree.iter().any(|varnode| {
+            let varnode = varnode.0.read().unwrap();
+            varnode.is_input()
+                && varnode.get_space() == crate::space::AddressSpace::Register
+                && varnode.get_offset() == 0x38
+        }));
+
+        fd.funcp.set_input_lock(true);
+        fd.funcp.set_output_lock(true);
+        let mut action = ActionInferParams::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+        assert!(fd.funcp.is_input_locked());
+        assert!(fd.funcp.parameters.is_empty());
+        assert!(matches!(
+            fd.funcp.return_type.as_ref(),
+            crate::type_system::datatype::Datatype::Void(_)
+        ));
+    }
 
     #[test]
     fn test_action_restructure_varnode_builds_scope() {

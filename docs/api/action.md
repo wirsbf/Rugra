@@ -2,6 +2,16 @@
 
 **源代码路径**: `src/action.rs`
 
+## 2026-08-12：默认 decompile 组保留已知原型锁
+
+锁定 Ghidra `ActionDatabase::buildDefaultGroups`（`coreaction.cc:5421-5441`）
+只把 `normalanalysis` 放入 `normalize` 根组；默认 `decompile` 根组不包含它。
+`ActionNormalizeSetup` 虽存在于 universal tree（`:5479`），但其 group 是
+`normalanalysis`，标准反编译时不会执行。Rugra 此前把 universal tree 全部平铺，
+导致正常反编译也清除已导入原型的 output/model lock。本轮从默认 decompile
+构造中排除该 Action；完整六组选择与其余平铺差异仍由 `PIPE-0001` 跟踪，模块
+不因此升级。
+
 ## 文档状态
 
 - **状态**: 已核对（当前有效，2026-07-02）——mainloop repeatapply 仍未启用（overflow 根因见 action.rs:806 注释，CFT 树遍历迁移后重新评估）

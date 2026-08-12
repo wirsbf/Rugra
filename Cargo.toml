@@ -15,6 +15,7 @@ once_cell = "1.19"
 # Binary parsing
 goblin = "0.8"
 object = "0.36"
+gimli = { version = "0.28.1", default-features = false, features = ["read", "std", "endian-reader"] }
 
 # Disassembly engines
 capstone = "0.12"
@@ -75,6 +76,10 @@ required-features = ["cli"]
 [[example]]
 name = "decompress_1204_oracle"
 path = "tests/oracle/decompress_1204.rs"
+
+[[example]]
+name = "funcproto_lock_1204_oracle"
+path = "tests/oracle/funcproto_lock_1204.rs"
 
 [profile.release]
 opt-level = 3

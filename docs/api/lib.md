@@ -1,5 +1,10 @@
 # `lib.rs` API Reference
 
+The crate root exports `debugproto`, the native Program-import boundary that
+supplies DWARF-declared, locked `FuncProto` values before the Action pipeline.
+This mirrors Ghidra's separation between its front-end DWARF analyzer and the
+C++ decompiler; it does not move DWARF parsing into `ActionInputPrototype`.
+
 **源代码路径**: `src/lib.rs`
 
 ## 文档状态

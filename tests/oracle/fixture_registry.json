@@ -89,6 +89,33 @@
       }
     },
     {
+      "id": "funcproto_lock_1204",
+      "description": "FuncProto zero-input/input/output/model lock, copy, and clear state",
+      "runner": ["tools/run_funcproto_lock_oracle.sh"],
+      "timeout_seconds": 300,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcproto_lock_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/funcproto_lock_1204.cc",
+          "rust_fixture": "tests/oracle/funcproto_lock_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_funcproto_lock_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/fspec.rs",
+          "src/coreaction.rs",
+          "tests/oracle/funcproto_lock_1204.*",
+          "tools/run_funcproto_lock_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    },
+    {
       "id": "printc_display_1204",
       "description": "Integer display-format wire and resolved scalar output matrix",
       "runner": ["tools/run_printc_display_oracle.sh"],

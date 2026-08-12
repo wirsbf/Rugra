@@ -13,6 +13,7 @@ use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
 use rugra::printlanguage::PrintLanguage;
 use rugra::address::Address;
+use rugra::debugproto::{DebugPrototypeDatabase, X86_64GccStorage};
 use rugra::type_system::typefactory::TypeFactory;
 use rugra::type_system::datatype::{Datatype, TypeField};
 
@@ -174,6 +175,18 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
 
     let obj = Object::parse(&buffer)?;
 
+    // Ghidra imports DWARF into its Program database before constructing
+    // Funcdata. Build the same known-prototype database once, then apply each
+    // matching prototype before any Rugra Action runs.
+    let debug_prototypes = DebugPrototypeDatabase::parse_elf(&buffer)?;
+    let register_context = rugra::sleigh_ffi::SleighCtx::new()
+        .ok_or("unable to initialize SLEIGH register catalog")?;
+    let prototype_storage = X86_64GccStorage::from_sleigh(&register_context)?;
+    eprintln!(
+        "[PREPASS] Imported {} DWARF function prototypes",
+        debug_prototypes.len()
+    );
+
     // Collect all functions and ELF metadata
     let mut functions: Vec<FuncInfo> = Vec::new();
     let mut symbol_table: HashMap<u64, String> = HashMap::new();
@@ -323,9 +336,13 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     // Pre-pass: collect function prototypes for cross-function arg tracking.
     // Each function's detected param count is used by callers to trim CALL
     // args accurately. Mirrors Ghidra's ActionActiveParam multi-pass.
-    let mut prototype_db: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let mut prototype_db: std::collections::HashMap<u64, usize> = debug_prototypes
+        .iter()
+        .map(|(&address, prototype)| (address, prototype.parameters.len()))
+        .collect();
     for func in &functions {
         if func.size < 5 || func.name == "_start" { continue; }
+        if prototype_db.contains_key(&func.vaddr) { continue; }
         let max_size = std::cmp::min(func.size, 4096);
         let end_offset = std::cmp::min(func.file_offset as usize + max_size, buffer.len());
         if func.file_offset as usize >= buffer.len() { continue; }
@@ -429,12 +446,27 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         let func_size = func.size;
         let proto_db = prototype_db.clone();
         let gsp = global_struct_ptrs.clone();
+        let debug_db = debug_prototypes.clone();
+        let debug_storage = prototype_storage.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let t0 = std::time::Instant::now();
             eprintln!("[STEP] {} START raw_ops={}", func_name, raw_ops.len());
 
             let mut fd = Funcdata::new(&func_name, Address::new(func_vaddr), func_size as i32);
+            match debug_db.apply(&mut fd, &debug_storage) {
+                Ok(true) => eprintln!(
+                    "[PREPASS] {} applied locked DWARF prototype: {} params{}",
+                    func_name,
+                    fd.funcp.num_params(),
+                    if fd.funcp.is_varargs() { " + varargs" } else { "" }
+                ),
+                Ok(false) => {}
+                Err(error) => eprintln!(
+                    "[PREPASS] {} DWARF prototype rejected: {}",
+                    func_name, error
+                ),
+            }
             fd.external_prototypes = proto_db;
             fd.global_struct_ptrs = gsp;
             for (&addr, name) in &sym_table {

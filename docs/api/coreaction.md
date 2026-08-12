@@ -1,5 +1,18 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-12：Rugra 兼容参数 pass 尊重 FuncProto lock
+
+`ActionInferParams` 是 Rugra 现有的兼容 pass，并非 Ghidra 的独立 Action。
+它现在遵守锁定 Ghidra `ActionInputPrototype::apply`
+（`coreaction.cc:4707-4763`）与 `ActionOutputPrototype::apply`
+（`:4765-4782`）的突变边界：input locked 时不写参数列表，output locked 时
+不替换返回类型。它仍是 `PARAM-RECOVERY-0001` 下待删除的启发式兼容层，
+不能作为参数恢复对齐或 L3 证据。
+
+`build_full_pipeline_actions` 同样不再把 group=`normalanalysis` 的
+`ActionNormalizeSetup` 平铺进默认 decompile 路径；完整 Action group 机制仍归
+`PIPE-0001`。
+
 **状态**: 已核对（当前有效，2026-07-27 ActionSetCasts 指针适配接入 apply() — PTRSUB/PTRADD slot0 CAST 插入 + castOutput 接入 + CHANGE 返回修正）
 **源代码路径**: `src/coreaction.rs`
 **2026-07-16**: 测试构造的 BlockWhileDo 加 `overflow_syntax: false` 字段（配合 printc P7-overflow_syntax，对齐 Ghidra hasOverflowSyntax block.hh:692）。
