@@ -52,6 +52,26 @@ fresh-target canonical release 构建。每一级都可用 `--report` 保存结�
 再用 `compare` 定位第一个差异。原始 stage hash 是诊断索引，不是行为证明；只有该阶段完整
 观察结果及其所有状态突变同输入零差异时，映射函数才可记 `MATCH`。
 
+`GetStr` 已有一条可直接运行的六层实例：
+
+```bash
+tools/run_getstr_pipeline_oracle.sh
+```
+
+结果写入 `result/pipeline_snapshots/getstr/`：`ghidra/`、`rugra/` 和
+`rugra-repeat/` 分别保存 raw P-code、CFG、Heritage/SSA、完整 Action IR、结构树和 C 文本；
+`comparison.json` 保存每层首个 JSON 路径差异，`README.md` 给出紧凑摘要，`ghidra.c`、
+`rugra.c` 与 `rugra-repeat.c` 可直接阅读。当前锁定结果是 `MISMATCH`，不是 golden：第一个
+差异在 `00_raw_pcode $.ops.length`（Ghidra 103、Rugra 105），共同前缀后的第一个实质差异
+是 Ghidra 跳到可达目标 `0x3708`，而 Rugra 继续线性提升 `0x3702` 的不可达对齐 NOP。
+另外，两次 Rugra 运行在 00-02 层逐字一致，却从 03 Action IR 开始产生不同 op/Varnode
+序列；runner 原样保留第二份后半流水线，并逐次报告差异是否继续传播到结构树/C 文本，
+不允许靠排序或临时 ID 规范化掩盖。
+
+Ghidra 的 Heritage 快照来自真实 `decompile` Action 在 `paramdouble` 前的 breakpoint；Rugra
+目前只能直接重放 `ActionHeritage`，所以该层明确是 `NO_ORACLE` 诊断边界。只有补齐同一
+Action-tree 观察点并在完整状态上零差异，才能将该层改记 `MATCH`。
+
 首差异定位后，可用 `tools/reduce_fixture.py` 缩减输入。predicate 必须运行真实两侧 fixture
 并仅以约定 exit code 表示差异是否仍存在；不得把手写 expected 当 oracle。reducer trace 是
 诊断证据，最终最小 case 仍须补齐 commit/arch/cspec/options/input 指纹并进入 B2 runner。

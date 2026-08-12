@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "fixture_id": "PIPE-SNAPSHOT-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": {
+    "action": "decompile",
+    "ghidra_loader": "BfdArchitecture",
+    "ghidra_symbols": "ELF/BFD symbols only; no Java DWARF analyzer",
+    "rugra_symbols": "ELF symbols only; no DWARF importer",
+    "function": "GetStr",
+    "stages": [
+      "00_raw_pcode",
+      "01_cfg",
+      "02_heritage_ssa",
+      "03_action_ir",
+      "04_structure",
+      "05_c"
+    ]
+  },
+  "input": {
+    "architecture": "x86:LE:64:default",
+    "binary": "examples/curl",
+    "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+    "compiler_spec": "gcc",
+    "function": {
+      "entry": 14032,
+      "name": "GetStr",
+      "size": 74
+    },
+    "raw_code_policy": {
+      "ghidra": "Funcdata::followFlow reachable instructions",
+      "rugra": "current production SleighLifter::lift_function over iced-x86 linear symbol disassembly"
+    },
+    "symbol_source": "ELF/BFD symbols only; no DWARF"
+  },
+  "input_fingerprint": "sha256:2107683147ebdb215592e5272b1c687555b3e6622b38823fc96f35846cd8ed41",
+  "observation": {
+    "schema": "ordered JSON object graph with stable per-run PcodeOp/Varnode IDs",
+    "normalization": "JSON object keys/whitespace plus LOAD/STORE input0 AddrSpace pointer to registered space index; array order, object identity, aliasing, edge slots, flags, state and text are preserved",
+    "overall_status": "MISMATCH",
+    "stage_boundary_status": {
+      "00_raw_pcode": "MISMATCH",
+      "01_cfg": "MISMATCH",
+      "02_heritage_ssa": "NO_ORACLE",
+      "03_action_ir": "MISMATCH",
+      "04_structure": "MISMATCH",
+      "05_c": "MISMATCH"
+    },
+    "heritage_boundary_note": "Ghidra stops the real decompile Action at paramdouble immediately after heritage; Rugra replays ActionHeritage directly because its Action tree has no stage observer, so this layer is diagnostic and cannot be promoted to MATCH.",
+    "rugra_determinism_status": "MISMATCH",
+    "rugra_determinism_note": "Independent processes produce identical stages 00-02 but different Action IR from stage 03; the runner retains a second Rugra snapshot and reports whether that difference propagates into structure or C instead of normalizing it.",
+    "first_difference": {
+      "stage": "00_raw_pcode",
+      "path": "$.ops.length",
+      "ghidra": 103,
+      "rugra": 105
+    },
+    "first_substantive_op_difference": {
+      "index": 77,
+      "ghidra": {
+        "address": 14088,
+        "input_count": 1,
+        "opcode": 1
+      },
+      "rugra": {
+        "address": 14082,
+        "input_count": 2,
+        "opcode": 32
+      },
+      "diagnosis": "Ghidra followFlow skips the unreachable alignment NOP at 0x3702 after RETURN; Rugra linearly lifts it before resuming at the reachable target 0x3708."
+    },
+    "covered": [
+      "PcodeOp order, opcode, address, input order, output identity and selected flags",
+      "Varnode identity, location, flags, definition and descendant order",
+      "basic-block order, edge slot/reverse index/flags and op membership",
+      "recursive structured-block kind/order",
+      "final unmarked C text"
+    ],
+    "untested": [
+      "Ghidra token/markup metadata",
+      "all private PcodeOp and edge flags not exposed by both implementations",
+      "same-boundary Rugra Action-tree pause immediately after Heritage",
+      "Java Program DB/DWARF-derived symbols and prototypes"
+    ]
+  },
+  "assets": {
+    "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "ghidra_x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+    "bfd_package_version": "2.38-4ubuntu2.12",
+    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  },
+  "comparand_sha256": {
+    "cpp_fixture": "721e5452e45cc8f7b548a9b2f965e90128d6b4981b7bb07d16adfdf0d9b54c7e",
+    "rust_example": "c34c1b369aa50c64444a8832ace63bbdfb0433330b46da1c8307d93cf367b6ad",
+    "stage_diff": "658aab9684166e3250799984bac453a25cf4edcdaec4d3ba62b0aaa5f66acdca"
+  },
+  "expected": {
+    "ghidra": {
+      "00_raw_pcode": {"sha256": "b590eb862e4f4bac9325849fc008f00c8d18b0d37492de94199436bd27b64a39", "ops": 103, "varnodes": 272},
+      "01_cfg": {"sha256": "445ec8886322181c7d229ec36e2147cd76118a0481e8852695a1b75cd443ff2a", "blocks": 6},
+      "02_heritage_ssa": {"sha256": "daae82593322cde94712ab36e07b567a2b8cf6037141cde7959c05714494abe3", "ops": 156, "varnodes": 273, "blocks": 6},
+      "03_action_ir": {"sha256": "103538d96bd8c85b9542734cf5620626acff9261361e06ae33263333609f5f66", "ops": 14, "varnodes": 23, "blocks": 6},
+      "04_structure": {"sha256": "89f1348c63a94c276af6ed89570eee5f5204fa488b0d39918769636799d74cc3", "root_children": 1},
+      "05_c": {"sha256": "8d289a843a24673e8e0e6a25a44574a418f36e8fd567193d2a5f01ad14242855", "text_bytes": 272}
+    },
+    "rugra": {
+      "00_raw_pcode": {"sha256": "784a2e0187285fce7b5fcdc4366b9a16e9641b783c5c1c8aca11995e0fbbc43b", "ops": 105, "varnodes": 197},
+      "01_cfg": {"sha256": "15039a8b23fe4bddb07e75d139636f5781539123ce1b1a0941b88546a22cd27f", "blocks": 7},
+      "02_heritage_ssa": {"sha256": "e13505c753b574c1a418a4955af3fe0908afd04d23c9fffde0e7ea528cb464fa", "ops": 109, "varnodes": 218, "blocks": 7},
+      "03_action_ir": {"nondeterministic": true, "min_ops": 1, "min_varnodes": 1, "blocks": 6},
+      "04_structure": {"sha256": "aa45737f016eef5b8924b4753bf0366bed5088348a2cc2c980a44564081b782f", "root_children": 3},
+      "05_c": {"nondeterministic": true, "min_text_bytes": 1}
+    }
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)"
+}

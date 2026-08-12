@@ -281,6 +281,45 @@
         ],
         "rust_function_ids": []
       }
+    },
+    {
+      "id": "getstr_pipeline_1204",
+      "description": "GetStr six-layer P-code/CFG/SSA/Action/structure/C snapshot and first-divergence report",
+      "runner": ["tools/run_getstr_pipeline_oracle.sh"],
+      "timeout_seconds": 1800,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/getstr_pipeline_1204.metadata.json",
+        "inputs": {
+          "binary": "examples/curl",
+          "cpp_fixture": "tests/oracle/getstr_pipeline_1204.cc",
+          "rust_example": "examples/getstr_stage_snapshot.rs",
+          "sleigh_specs": "sleigh_specs"
+        },
+        "tools": {
+          "runner": "tools/run_getstr_pipeline_oracle.sh",
+          "stage_diff": "tools/stage_diff.py"
+        }
+      },
+      "impact": {
+        "paths": [
+          "examples/getstr_stage_snapshot.rs",
+          "src/action.rs",
+          "src/block.rs",
+          "src/blockaction.rs",
+          "src/coreaction.rs",
+          "src/flow.rs",
+          "src/funcdata.rs",
+          "src/heritage.rs",
+          "src/printc.rs",
+          "src/printlanguage.rs",
+          "src/prettyprint.rs",
+          "tests/oracle/getstr_pipeline_1204.*",
+          "tools/run_getstr_pipeline_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
     }
   ]
 }
