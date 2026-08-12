@@ -12,10 +12,9 @@ use rugra::block::{
     BlockInfLoop, BlockList, BlockSwitch, BlockWhileDo, FlowBlock,
 };
 use rugra::coreaction::ActionHeritage;
-use rugra::disasm::{Disassembler, X86_64Disassembler};
+use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::op::PcodeOpRef;
-use rugra::pcoderaw::PcodeOpRaw;
 use rugra::prettyprint::EmitNoMarkup;
 use rugra::printc::PrintC;
 use rugra::printlanguage::PrintLanguage;
@@ -35,7 +34,8 @@ struct FunctionInput {
     name: String,
     address: u64,
     size: usize,
-    raw_ops: Vec<PcodeOpRaw>,
+    image_base: u64,
+    image: Vec<u8>,
     symbols: HashMap<u64, String>,
 }
 
@@ -151,7 +151,7 @@ fn op_values(ids: &SnapshotIds) -> Vec<Value> {
         .collect()
 }
 
-fn varnode_values(ids: &SnapshotIds) -> Vec<Value> {
+fn varnode_values(fd: &Funcdata, ids: &SnapshotIds) -> Vec<Value> {
     ids.varnodes
         .iter()
         .enumerate()
@@ -184,18 +184,35 @@ fn varnode_values(ids: &SnapshotIds) -> Vec<Value> {
                             .is_some_and(|input| Arc::ptr_eq(input, varnode_ref))
                     });
             let space_reference = is_space_reference.then_some(varnode.loc.as_u64());
-            let iop_reference =
-                (varnode.address_space == rugra::space::AddressSpace::Iop).then(|| {
+            let fspec_reference = (varnode.address_space == rugra::space::AddressSpace::Iop)
+                .then(|| {
+                    varnode.descend.iter().filter_map(std::sync::Weak::upgrade).find_map(|op| {
+                        let op = op.read().expect("PcodeOp call-spec read lock");
+                        let is_call_target = op.opcode == rugra::opcodes::OpCode::CPUI_CALL
+                            && op.inrefs.first().is_some_and(|input| Arc::ptr_eq(input, varnode_ref));
+                        is_call_target.then_some(varnode.loc.as_u64() as usize)
+                    })
+                })
+                .flatten()
+                .and_then(|index| fd.callspecs.get(index))
+                .and_then(|call_spec| call_spec.entry_addr)
+                .map(|address| address.as_u64());
+            let iop_reference = (varnode.address_space == rugra::space::AddressSpace::Iop
+                && fspec_reference.is_none())
+                .then(|| {
                     ids.op_ids
                         .get(&(varnode.loc.as_u64() as usize))
                         .copied()
                         .expect("Iop varnode does not reference a live PcodeOp")
                 });
             let normalized_offset = space_reference
+                .or(fspec_reference)
                 .or(iop_reference)
                 .unwrap_or_else(|| varnode.loc.as_u64());
             let pointer_ref_kind = if space_reference.is_some() {
                 Some("space")
+            } else if fspec_reference.is_some() {
+                Some("fspec")
             } else if iop_reference.is_some() {
                 Some("iop")
             } else {
@@ -371,7 +388,7 @@ fn snapshot(
             "size": fd.size,
         },
         "ops": if include_ops { op_values(&ids) } else { Vec::new() },
-        "varnodes": if include_varnodes { varnode_values(&ids) } else { Vec::new() },
+        "varnodes": if include_varnodes { varnode_values(fd, &ids) } else { Vec::new() },
         "blocks": if include_blocks { block_values(fd, &ids) } else { Vec::new() },
         "structure": if include_structure { structure_graph(&fd.sblocks) } else { Value::Null },
         "text": text,
@@ -394,7 +411,16 @@ fn build_funcdata(input: &FunctionInput) -> Funcdata {
     for (&address, name) in &input.symbols {
         fd.add_symbol(address, name.clone());
     }
-    fd.inject_raw_ops(&input.raw_ops);
+    let mut lifter = SleighLifter::new();
+    lifter
+        .configure_x86_64(&input.image, input.image_base)
+        .expect("configure GetStr SLEIGH translator");
+    rugra::flow::follow_flow(
+        &mut fd,
+        &mut lifter,
+        Address::new(input.address),
+        u64::MAX,
+    );
     fd
 }
 
@@ -442,41 +468,22 @@ fn load_input(binary: &Path) -> Result<FunctionInput, Box<dyn Error>> {
                 && symbol.st_value < section.sh_addr.saturating_add(section.sh_size)
         })
         .ok_or("GetStr does not belong to a file-backed ELF section")?;
-    let file_offset = section.sh_offset + (symbol.st_value - section.sh_addr);
-    let end = file_offset
-        .checked_add(symbol.st_size)
-        .ok_or("GetStr file range overflow")? as usize;
-    let start = file_offset as usize;
-    let code = bytes
-        .get(start..end)
-        .ok_or("GetStr file range lies outside the ELF bytes")?;
-
-    let mut disassembler = X86_64Disassembler::new();
-    let instructions = disassembler.disassemble(code, Address::new(symbol.st_value))?;
-    let instruction_offsets = instructions
-        .iter()
-        .map(|instruction| {
-            (
-                instruction.address.as_u64() - symbol.st_value,
-                instruction.length,
-            )
-        })
-        .collect::<Vec<_>>();
-    let lifted = rugra::disasm::sleigh_lift::SleighLifter::lift_function(
-        code,
-        symbol.st_value,
-        &instruction_offsets,
-    );
-    let raw_ops = lifted
-        .into_iter()
-        .flat_map(|(_, ops)| ops)
-        .collect::<Vec<_>>();
+    let image_start = section.sh_offset as usize;
+    let image_end = section
+        .sh_offset
+        .checked_add(section.sh_size)
+        .ok_or("GetStr section file range overflow")? as usize;
+    let image = bytes
+        .get(image_start..image_end)
+        .ok_or("GetStr section file range lies outside the ELF bytes")?
+        .to_vec();
 
     Ok(FunctionInput {
         name: FUNCTION_NAME.to_string(),
         address: symbol.st_value,
         size: symbol.st_size as usize,
-        raw_ops,
+        image_base: section.sh_addr,
+        image,
         symbols,
     })
 }
@@ -570,7 +577,7 @@ fn run(binary: &Path, output_directory: &Path) -> Result<(), Box<dyn Error>> {
     )?;
     eprintln!(
         "getstr_stage_snapshot: raw_ops={} action_ops={} output={}",
-        input.raw_ops.len(),
+        raw_fd.obank.optree.len(),
         action_read.obank.optree.len(),
         output_directory.display()
     );

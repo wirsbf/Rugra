@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use rugra::action::ActionDatabase;
 use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
+use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
@@ -174,6 +175,13 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let obj = Object::parse(&buffer)?;
+    let elf = match &obj {
+        Object::Elf(elf) => elf,
+        _ => {
+            eprintln!("Unsupported binary format. Expected ELF.");
+            return Ok(());
+        }
+    };
 
     // Ghidra imports DWARF into its Program database before constructing
     // Funcdata. Build the same known-prototype database once, then apply each
@@ -193,7 +201,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut string_table: HashMap<u64, String> = HashMap::new();
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
 
-    if let Object::Elf(elf) = &obj {
+    {
         // Collect all function symbols
         for sym in elf.syms.iter() {
             if sym.st_value != 0 {
@@ -321,9 +329,6 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-    } else {
-        eprintln!("Unsupported binary format. Expected ELF.");
-        return Ok(());
     }
 
     // Sort functions by address
@@ -400,42 +405,27 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let max_size = std::cmp::min(func.size, 4096);
-        let end_offset = std::cmp::min(func.file_offset as usize + max_size, buffer.len());
-        if func.file_offset as usize >= buffer.len() {
+        let Some(section) = elf.section_headers.iter().find(|section| {
+            func.vaddr >= section.sh_addr
+                && func.vaddr < section.sh_addr.saturating_add(section.sh_size)
+        }) else {
+            total_fail += 1;
             continue;
-        }
-        let code_bytes = &buffer[func.file_offset as usize..end_offset];
-
-        // 1. Disassemble
-        let mut disasm = X86_64Disassembler::new();
-        let instructions = match disasm.disassemble(code_bytes, Address::new(func.vaddr)) {
-            Ok(insts) => insts,
-            Err(_) => {
-                total_fail += 1;
-                continue;
-            }
         };
-
-        // 2. Lift to P-code via Rugra native SLEIGH FFI (one context per function)
-        let inst_offsets: Vec<(u64, usize)> = instructions.iter()
-            .map(|i| (i.address.as_u64() - func.vaddr, i.length))
-            .collect();
-        for inst in &instructions {
-            if inst.mnemonic == "call" {
-                if let Some(ref bt) = inst.metadata.branch_target {
-                    eprintln!("[ICED-CALL] addr=0x{:x} target=0x{:x}", inst.address.as_u64(), bt.as_u64());
-                }
-            }
-        }
-        let all_ops = rugra::disasm::sleigh_lift::SleighLifter::lift_function(
-            code_bytes, func.vaddr, &inst_offsets,
-        );
-        let mut raw_ops = Vec::new();
-        for (_addr, ops) in &all_ops {
-            for op in ops {
-                raw_ops.push(op.clone());
-            }
+        let section_start = section.sh_offset as usize;
+        let section_end = section
+            .sh_offset
+            .saturating_add(section.sh_size)
+            .min(buffer.len() as u64) as usize;
+        let Some(section_image) = buffer.get(section_start..section_end) else {
+            total_fail += 1;
+            continue;
+        };
+        let mut sleigh = SleighLifter::new();
+        if let Err(error) = sleigh.configure_x86_64(section_image, section.sh_addr) {
+            eprintln!("[FLOW] {}: failed to configure SLEIGH: {}", func.name, error);
+            total_fail += 1;
+            continue;
         }
 
         // Run analysis + decompilation in a thread with timeout
@@ -451,7 +441,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let t0 = std::time::Instant::now();
-            eprintln!("[STEP] {} START raw_ops={}", func_name, raw_ops.len());
+            eprintln!("[STEP] {} START", func_name);
 
             let mut fd = Funcdata::new(&func_name, Address::new(func_vaddr), func_size as i32);
             match debug_db.apply(&mut fd, &debug_storage) {
@@ -476,8 +466,19 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                 fd.add_string(addr, s.clone());
             }
 
-            fd.inject_raw_ops(&raw_ops);
-            eprintln!("[STEP] {} inject done {:?} bblocks={}", func_name, t0.elapsed(), fd.bblocks.get_size());
+            rugra::flow::follow_flow(
+                &mut fd,
+                &mut sleigh,
+                Address::new(func_vaddr),
+                u64::MAX,
+            );
+            eprintln!(
+                "[STEP] {} flow done {:?} raw_ops={} bblocks={}",
+                func_name,
+                t0.elapsed(),
+                fd.obank.optree.len(),
+                fd.bblocks.get_size()
+            );
 
             let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
             fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));

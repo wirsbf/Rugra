@@ -1,16 +1,17 @@
 //! Reachability-based control flow tracking.
 //!
-//! Faithful to Ghidra's `FlowInfo` (flow.cc/flow.hh). Replaces Rugra's
+//! Partial port of Ghidra's `FlowInfo` (flow.cc/flow.hh). Replaces Rugra's
 //! linear-scan approach (disassemble → lift → inject_raw_ops) with
-//! address-list-driven flow tracking that only decodes reachable code.
+//! address-list-driven flow tracking that only decodes reachable code. The
+//! remaining error, injection, override, jump-table, and block-generation
+//! differences are tracked by `SLEIGH-FLOW-0001`.
 
 use crate::address::Address;
-use crate::disasm::{Disassembler, Instruction};
-use crate::disasm::x86_lift::X86Lifter;
+use crate::disasm::sleigh_lift::SleighLifter;
 use crate::funcdata::Funcdata;
-use crate::loadimage::LoadImage;
 use crate::opcodes::OpCode;
 use crate::op::pcodeop_flags;
+use crate::sleigh_ffi::SleighErrorKind;
 use std::sync::Arc;
 
 /// Flow-following option/property flag bits. Faithful to the anonymous enum
@@ -147,7 +148,8 @@ struct VisitStat {
     size: usize,
 }
 
-/// Reachability-based flow tracker. Faithful to `FlowInfo` (flow.hh:58-169).
+/// Reachability-based flow tracker corresponding to `FlowInfo`
+/// (flow.hh:58-169). This type is still `MISMATCH`, not a complete port.
 ///
 /// Phase 1 (`generate_ops`): Decode instructions following control flow
 /// from the entry point, building a work-list of reachable addresses.
@@ -157,9 +159,7 @@ struct VisitStat {
 /// truncatedFlow/partial clone, inlineFlow/subfunction inlining, P-code injection.
 pub struct FlowInfo<'a> {
     fd: &'a mut Funcdata,
-    load_image: &'a dyn LoadImage,
-    disassembler: &'a mut dyn Disassembler,
-    lifter: &'a mut X86Lifter,
+    lifter: &'a mut SleighLifter,
     /// Work-list of addresses to process (LIFO stack). flow.hh:82 addrlist.
     addrlist: Vec<Address>,
     /// Addresses which are permanently unprocessed (flow.hh:87 unprocessed).
@@ -208,16 +208,12 @@ impl<'a> FlowInfo<'a> {
     // Ghidra: flow.hh:106 FlowInfo::FlowInfo
     pub fn new(
         fd: &'a mut Funcdata,
-        load_image: &'a dyn LoadImage,
-        disassembler: &'a mut dyn Disassembler,
-        lifter: &'a mut X86Lifter,
+        lifter: &'a mut SleighLifter,
         baddr: u64,
         eaddr: u64,
     ) -> Self {
         Self {
             fd,
-            load_image,
-            disassembler,
             lifter,
             addrlist: Vec::new(),
             unprocessed: Vec::new(),
@@ -1052,7 +1048,7 @@ impl<'a> FlowInfo<'a> {
         // entry address on the spec (already present) and rely on
         // ActionFuncLink to fill in the callee later.
         let _ = entry;
-        // TODO: depends on Funcdata::query_function + FuncCallSpecs::set_funcdata
+        // TODO(CALLSPEC-0001): depends on Funcdata::query_function + FuncCallSpecs::set_funcdata
         // + FuncCallSpecs::copy_flow_effects integration. See flow_audit.md
         // item 4. Until then, callers must resolve callees via ActionFuncLink.
     }
@@ -1065,28 +1061,38 @@ impl<'a> FlowInfo<'a> {
     /// call-specs varnode, appends to qlst, applies any prototype override,
     /// runs `queryCall`, performs an injection cycle-check against `fc`, and
     /// finally runs `checkForFlowModification`. Rugra constructs the spec
-    /// directly, appends to `self.fd.callspecs`, and runs the cycle check
-    /// and flow-modification check. The input(0) rewrite and override
-    /// application are RUGRA-GLUE gaps (no newVarnodeCallSpecs / getOverride).
+    /// directly, rewrites input(0) to Rugra's synthetic call-spec Varnode,
+    /// appends to `self.fd.callspecs`, and runs the cycle check and
+    /// flow-modification check. Prototype override application remains a
+    /// `CALLSPEC-0001` gap.
     // Ghidra: flow.cc:680 FlowInfo::setupCallSpecs
     fn setup_call_specs(
         &mut self,
         op: &crate::op::PcodeOpRef,
         inject_fc: Option<usize>,
     ) -> bool {
-        // flow.cc:683-684: new FuncCallSpecs(op); Rugra builds from op_addr.
-        let op_addr = op.0.read().unwrap().get_addr();
+        // flow.cc:683-684: new FuncCallSpecs(op) captures the direct target
+        // before input(0) is replaced with the call-spec annotation.
+        let (op_addr, entry_addr) = {
+            let op_read = op.0.read().unwrap();
+            let entry_addr = op_read
+                .inrefs
+                .first()
+                .map(|input| Address::new(input.read().unwrap().get_offset()));
+            (op_read.get_addr(), entry_addr)
+        };
         // Rugra's FuncCallSpecs::new requires a FuncProto; use the Funcdata's
         // own prototype as the starting point (Ghidra's ctor clones a default).
         let proto = self.fd.funcp.clone();
         let mut fc = crate::fspec::FuncCallSpecs::new(op_addr, proto);
-        // flow.cc:685: data.opSetInput(op, data.newVarnodeCallSpecs(res), 0).
-        // TODO: depends on Funcdata::new_varnode_call_specs — the call-specs
-        // varnode plumbing is not yet ported. We leave input(0) unchanged.
+        fc.entry_addr = entry_addr;
         let new_idx = self.fd.callspecs.len();
         self.fd.callspecs.push(fc);
+        // flow.cc:685: data.opSetInput(op, data.newVarnodeCallSpecs(res), 0).
+        let call_spec_vn = self.fd.new_varnode_call_specs(new_idx);
+        self.fd.op_set_input(op, call_spec_vn, 0);
         // flow.cc:688: data.getOverride().applyPrototype(data, *res).
-        // TODO: depends on Override::applyPrototype integration.
+        // TODO(CALLSPEC-0001): depends on Override::applyPrototype integration.
         self.query_call(new_idx);
         // flow.cc:690-693: injection cycle check.
         if let Some(fc_inject_idx) = inject_fc {
@@ -1876,7 +1882,7 @@ impl<'a> FlowInfo<'a> {
     /// Mirrors Ghidra's behavior: out-of-bounds addresses are reported via
     /// `handleOutOfBounds` and pushed to `unprocessed`; already-seen targets
     /// are skipped (Ghidra additionally marks the target op as a basic-block
-    /// start, which Rugra handles post-hoc in `build_blocks_from_alive`).
+    /// start. Rugra records that flag on the first op found for the visit.
     fn new_address(&mut self, addr: Address) {
         let a = addr.as_u64();
         // flow.cc:222-226: range check + handleOutOfBounds.
@@ -1885,17 +1891,19 @@ impl<'a> FlowInfo<'a> {
             self.unprocessed.push(addr);
             return;
         }
-        // flow.cc:228-233: if already seen, Ghidra marks the target op as a
-        // basic block start. Rugra re-derives basic blocks from control-flow
-        // ops at the end (build_blocks_from_alive), so this is a no-op.
-        if self.seen_instruction(addr) {
+        // flow.cc:228-233: if already seen, mark the target op as a basic
+        // block start.
+        if let Some(stat) = self.visited.get(&a) {
+            if let Some(op) = self.fd.obank.alivelist.get(stat.order as usize) {
+                op.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+            }
             return;
         }
         self.addrlist.push(addr);
     }
 
     /// Process sequential instructions from addrlist until a terminator
-    /// or already-visited address is hit. Faithful to `FlowInfo::fallthru`
+    /// or already-visited address is hit. Corresponds to `FlowInfo::fallthru`
     /// (flow.cc:545-580).
     // Ghidra: flow.cc:545 FlowInfo::fallthru
     fn fallthru(&mut self) {
@@ -1905,9 +1913,10 @@ impl<'a> FlowInfo<'a> {
         }
 
         let mut is_fallthru = true;
+        let mut start_basic = true;
         while is_fallthru && !self.addrlist.is_empty() {
             let curaddr = self.addrlist.pop().unwrap();
-            is_fallthru = self.process_instruction(curaddr);
+            is_fallthru = self.process_instruction(curaddr, &mut start_basic);
 
             if !is_fallthru {
                 break;
@@ -1937,7 +1946,7 @@ impl<'a> FlowInfo<'a> {
 
     /// Check if the next address in addrlist is processable.
     /// Returns false if already visited or out of bounds.
-    /// Faithful to `setFallthruBound` (flow.cc:489-513).
+    /// Partial port of `setFallthruBound` (flow.cc:489-513).
     // Ghidra: flow.cc:489 FlowInfo::setFallthruBound
     fn set_fallthru_bound(&mut self) -> bool {
         if self.addrlist.is_empty() {
@@ -1996,9 +2005,9 @@ impl<'a> FlowInfo<'a> {
 
     /// Decode a single instruction, generate P-code, and analyze control flow.
     /// Returns true if execution falls through to the next instruction.
-    /// Faithful to `processInstruction` (flow.cc:383-482).
+    /// Partial port of `processInstruction` (flow.cc:383-482).
     // Ghidra: flow.cc:383 FlowInfo::processInstruction
-    fn process_instruction(&mut self, addr: Address) -> bool {
+    fn process_instruction(&mut self, addr: Address, start_basic: &mut bool) -> bool {
         // Instruction count limit (flow.cc:387).
         if self.insn_count >= self.insn_max {
             eprintln!("[FLOW] Too many instructions (limit {})", self.insn_max);
@@ -2006,26 +2015,44 @@ impl<'a> FlowInfo<'a> {
         }
         self.insn_count += 1;
 
-        // Load instruction bytes (up to 15 for x86-64).
-        let code = match self.load_image.load_fill(15, addr) {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                eprintln!("[FLOW] Cannot load bytes at {:#x}", addr.as_u64());
-                return false;
-            }
-        };
-
-        // Decode single instruction (oneInstruction equivalent).
-        let (inst, step) = match self.disassembler.disassemble_one(&code, addr) {
+        let num_ops_before = self.fd.obank.alivelist.len();
+        let (step, raw_ops) = match self.lifter.lift_instruction(addr.as_u64()) {
             Ok(result) => result,
-            Err(e) => {
-                eprintln!("[FLOW] Decode error at {:#x}: {}", addr.as_u64(), e);
-                return false;
+            Err(error) => {
+                let ignored_unimplemented = error.kind == SleighErrorKind::Unimplemented
+                    && (self.flags & flow_flags::IGNORE_UNIMPLEMENTED) != 0;
+                if ignored_unimplemented {
+                    let step = error
+                        .instruction_length
+                        .and_then(|length| usize::try_from(length).ok())
+                        .filter(|length| *length != 0)
+                        .unwrap_or(1);
+                    if !self.has_unimplemented() {
+                        self.flags |= flow_flags::UNIMPLEMENTED_PRESENT;
+                        self.fd
+                            .warning_header("Control flow ignored unimplemented instructions");
+                    }
+                    (step, Vec::new())
+                } else {
+                    let halt_flag = if error.kind == SleighErrorKind::Unimplemented {
+                        self.flags |= flow_flags::UNIMPLEMENTED_PRESENT;
+                        pcodeop_flags::UNIMPLEMENTED
+                    } else {
+                        self.flags |= flow_flags::BADDATA_PRESENT;
+                        pcodeop_flags::BADINSTRUCTION
+                    };
+                    self.artificial_halt(addr, halt_flag);
+                    self.fd.warning(
+                        &format!("{} - Truncating control flow here", error),
+                        addr,
+                    );
+                    (1, Vec::new())
+                }
             }
         };
 
         // Record visited (flow.cc:468-469).
-        let order = self.fd.obank.alivelist.len() as u32;
+        let order = num_ops_before as u32;
         self.visited.insert(addr.as_u64(), VisitStat {
             order,
             size: step,
@@ -2034,38 +2061,51 @@ impl<'a> FlowInfo<'a> {
         // Update min/max addr (flow.cc:470-471).
         let a = addr.as_u64();
         if a < self.minaddr { self.minaddr = a; }
-        if a > self.maxaddr { self.maxaddr = a; }
-
-        // Lift to P-code ops via SLEIGH (flow.cc:454 translate->oneInstruction).
-        let raw_ops = crate::disasm::sleigh_lift::SleighLifter::lift_from_func(
-            &code[..step], addr.as_u64(), addr.as_u64(),
-        );
-        let num_ops_before = self.fd.obank.alivelist.len();
+        if a.saturating_add(step as u64) > self.maxaddr {
+            self.maxaddr = a.saturating_add(step as u64);
+        }
 
         // Inject into Funcdata (reuse inject_raw_ops_single logic).
-        self.fd.inject_raw_ops_single(&raw_ops, addr);
+        if !raw_ops.is_empty() {
+            self.fd.inject_raw_ops_single(&raw_ops, addr);
+            if let Some(first_op) = self.fd.obank.alivelist.get(num_ops_before) {
+                first_op.0.write().unwrap().flags |= pcodeop_flags::STARTMARK;
+            }
+        }
 
         // Analyze control flow of the new ops (xrefControlFlow).
-        let is_fallthru = self.xref_control_flow(addr, step, num_ops_before);
+        let is_fallthru =
+            self.xref_control_flow(addr, step, num_ops_before, start_basic);
 
         is_fallthru
     }
 
     /// Analyze the control-flow ops generated by the last instruction.
     /// Returns true if execution falls through.
-    /// Faithful to `xrefControlFlow` (flow.cc:264-372).
+    /// Partial port of `xrefControlFlow` (flow.cc:264-372).
     // Ghidra: flow.cc:264 FlowInfo::xrefControlFlow
-    fn xref_control_flow(&mut self, addr: Address, step: usize, ops_start: usize) -> bool {
+    fn xref_control_flow(
+        &mut self,
+        addr: Address,
+        step: usize,
+        ops_start: usize,
+        start_basic: &mut bool,
+    ) -> bool {
         let ops_end = self.fd.obank.alivelist.len();
         let mut is_fallthru = true;
 
         for i in ops_start..ops_end {
-            let op_ref = &self.fd.obank.alivelist[i];
-            let op = op_ref.0.read().unwrap();
-            match op.opcode {
+            let op_ref = self.fd.obank.alivelist[i].clone();
+            if *start_basic {
+                op_ref.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+                *start_basic = false;
+            }
+            let opcode = op_ref.0.read().unwrap().opcode;
+            match opcode {
                 OpCode::CPUI_BRANCH => {
                     // Direct branch. Target from in(0) constant varnode.
-                    if let Some(in0) = op.inrefs.get(0) {
+                    let input = op_ref.0.read().unwrap().inrefs.first().cloned();
+                    if let Some(in0) = input {
                         let target = in0.read().unwrap().get_offset();
                         if target == addr.as_u64() + step as u64 {
                             // Branch to next instruction = fallthrough.
@@ -2078,11 +2118,13 @@ impl<'a> FlowInfo<'a> {
                     } else {
                         is_fallthru = false;
                     }
+                    *start_basic = true;
                 }
                 OpCode::CPUI_CBRANCH => {
                     // Conditional branch: both targets are reachable.
                     // Push the branch target (flow.cc:312).
-                    if let Some(in0) = op.inrefs.get(0) {
+                    let input = op_ref.0.read().unwrap().inrefs.first().cloned();
+                    if let Some(in0) = input {
                         let target = in0.read().unwrap().get_offset();
                         if target != addr.as_u64() + step as u64 {
                             self.addrlist.push(Address::new(target));
@@ -2090,21 +2132,25 @@ impl<'a> FlowInfo<'a> {
                     }
                     // Fallthrough target is pushed by the caller (process_instruction
                     // pushes addr+step via the return value).
+                    *start_basic = true;
                 }
                 OpCode::CPUI_BRANCHIND => {
-                    // Indirect branch (switch/jump table). Not yet supported
-                    // in flow tracking — would need recoverJumpTables.
+                    // TODO(SLEIGH-FLOW-0001): recover and enqueue the complete
+                    // jump-table target set before finishing this flow wave.
                     // For now, mark as non-fallthru (flow stops here).
                     eprintln!("[FLOW] BRANCHIND at {:#x} — jump-table recovery not yet in flow", addr.as_u64());
                     is_fallthru = false;
+                    *start_basic = true;
                 }
                 OpCode::CPUI_RETURN => {
                     is_fallthru = false;
+                    *start_basic = true;
                 }
-                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
-                    // Call: setup callspecs would go here (flow.cc:330-348).
-                    // Rugra's ActionFuncLink does this post-hoc.
-                    // Calls are fallthru (return address continues flow).
+                OpCode::CPUI_CALL => {
+                    self.setup_call_specs(&op_ref, None);
+                }
+                OpCode::CPUI_CALLIND => {
+                    self.setup_callind_specs(&op_ref, None);
                 }
                 _ => {}
             }
@@ -2120,21 +2166,20 @@ impl<'a> FlowInfo<'a> {
 }
 
 /// Entry point: follow flow from entry address, generating P-code ops and CFG.
-/// Faithful to `Funcdata::followFlow` (funcdata_op.cc:756-783).
+/// Partial production entry corresponding to `Funcdata::followFlow`
+/// (funcdata_op.cc:756-783).
 ///
 /// Replaces the three-stage linear scan (disassemble → lift → inject_raw_ops)
 /// with reachability-driven flow tracking.
 // Ghidra: funcdata_op.cc:756 Funcdata::followFlow
 pub fn follow_flow(
     fd: &mut Funcdata,
-    load_image: &dyn LoadImage,
-    disassembler: &mut dyn Disassembler,
-    lifter: &mut X86Lifter,
+    lifter: &mut SleighLifter,
     entry: Address,
     eaddr: u64,
 ) {
     let baddr = entry.as_u64();
-    let mut flow = FlowInfo::new(fd, load_image, disassembler, lifter, baddr, eaddr);
+    let mut flow = FlowInfo::new(fd, lifter, baddr, eaddr);
     flow.generate_ops(entry);
     // generateBlocks: build basic blocks from all alive ops.
     flow.fd.build_blocks_from_alive();

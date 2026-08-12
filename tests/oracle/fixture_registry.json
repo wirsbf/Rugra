@@ -293,8 +293,13 @@
         "metadata": "tests/oracle/getstr_pipeline_1204.metadata.json",
         "inputs": {
           "binary": "examples/curl",
+          "build_script": "build.rs",
+          "cargo_lock": "Cargo.lock",
+          "cargo_manifest": "Cargo.toml",
           "cpp_fixture": "tests/oracle/getstr_pipeline_1204.cc",
+          "rugra_src": "src",
           "rust_example": "examples/getstr_stage_snapshot.rs",
+          "sleigh_shim": "sleigh_shim",
           "sleigh_specs": "sleigh_specs"
         },
         "tools": {
@@ -306,9 +311,11 @@
         "paths": [
           "examples/getstr_stage_snapshot.rs",
           "src/action.rs",
+          "src/bin/rugra.rs",
           "src/block.rs",
           "src/blockaction.rs",
           "src/coreaction.rs",
+          "src/disasm/sleigh_lift.rs",
           "src/flow.rs",
           "src/funcdata.rs",
           "src/heritage.rs",

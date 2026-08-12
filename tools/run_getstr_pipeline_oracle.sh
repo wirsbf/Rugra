@@ -47,7 +47,9 @@ fi
 cpp_tree=$(git -C "$ghidra_root" rev-parse HEAD:Ghidra/Features/Decompiler/src/decompile/cpp)
 x86_tree=$(git -C "$ghidra_root" rev-parse HEAD:Ghidra/Processors/x86/data/languages)
 python3 -I -S - "$metadata" "$cpp_fixture" "$rust_example" "$binary" \
-  "$stage_diff" "$spec_root" "$bfd_include/bfd.h" "$bfd_library" \
+  "$stage_diff" "$repo_root/src" "$repo_root/Cargo.toml" "$repo_root/Cargo.lock" \
+  "$repo_root/build.rs" "$repo_root/sleigh_shim" "$spec_root" \
+  "$bfd_include/bfd.h" "$bfd_library" \
   "$oracle_commit" "$oracle_tag" "$cpp_tree" "$x86_tree" <<'PY'
 import hashlib
 import json
@@ -61,6 +63,11 @@ import sys
     rust_example_name,
     binary_name,
     stage_diff_name,
+    rust_src_name,
+    cargo_manifest_name,
+    cargo_lock_name,
+    build_script_name,
+    sleigh_shim_name,
     spec_root_name,
     bfd_header_name,
     bfd_library_name,
@@ -83,6 +90,18 @@ if metadata.get("observation", {}).get("overall_status") != "MISMATCH":
 def digest(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
+def tree_digest(root_name, pattern="*"):
+    root = pathlib.Path(root_name)
+    result = hashlib.sha256()
+    for path in sorted(path for path in root.rglob(pattern) if path.is_file()):
+        relative = path.relative_to(root).as_posix().encode()
+        data = path.read_bytes()
+        result.update(len(relative).to_bytes(8, "big"))
+        result.update(relative)
+        result.update(len(data).to_bytes(8, "big"))
+        result.update(data)
+    return result.hexdigest()
+
 input_bytes = json.dumps(
     metadata["input"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode()
@@ -94,12 +113,24 @@ comparands = {
     "cpp_fixture": cpp_fixture_name,
     "rust_example": rust_example_name,
     "stage_diff": stage_diff_name,
+    "cargo_manifest": cargo_manifest_name,
+    "cargo_lock": cargo_lock_name,
+    "build_script": build_script_name,
 }
 for key, path in comparands.items():
     actual = digest(path)
     expected = metadata["comparand_sha256"].get(key)
     if actual != expected:
         raise SystemExit(f"comparand hash mismatch for {key}: {actual} != {expected}")
+tree_comparands = {
+    "rugra_src_tree": (rust_src_name, "*.rs"),
+    "sleigh_shim_tree": (sleigh_shim_name, "*"),
+}
+for key, (path, pattern) in tree_comparands.items():
+    actual = tree_digest(path, pattern)
+    expected = metadata["comparand_sha256"].get(key)
+    if actual != expected:
+        raise SystemExit(f"comparand tree hash mismatch for {key}: {actual} != {expected}")
 
 assets = metadata["assets"]
 asset_paths = {
@@ -174,9 +205,9 @@ g++ -std=c++11 -O2 -I"$bfd_include" -I"$cpp_root" \
   -o "$oracle_tmp/getstr_pipeline_1204"
 
 CARGO_TARGET_DIR="$oracle_tmp/cargo-target" \
-  cargo build --offline --locked --quiet --manifest-path "$repo_root/Cargo.toml" \
+  cargo build --release --offline --locked --quiet --manifest-path "$repo_root/Cargo.toml" \
   --example getstr_stage_snapshot
-rugra_fixture="$oracle_tmp/cargo-target/debug/examples/getstr_stage_snapshot"
+rugra_fixture="$oracle_tmp/cargo-target/release/examples/getstr_stage_snapshot"
 if [[ ! -x "$rugra_fixture" ]]; then
   echo "cargo did not produce the GetStr snapshot example" >&2
   exit 1
@@ -304,16 +335,7 @@ def counts(document):
 
 def validate_expected(actual, expected, producer, stage):
     for key, value in expected.items():
-        if key == "nondeterministic":
-            if value is not True:
-                raise SystemExit(f"invalid nondeterministic expectation for {producer} {stage}")
-        elif key.startswith("min_"):
-            field = key[4:]
-            if actual.get(field, -1) < value:
-                raise SystemExit(
-                    f"{producer} {stage} {field}={actual.get(field)} is below minimum {value}"
-                )
-        elif actual.get(key) != value:
+        if actual.get(key) != value:
             raise SystemExit(
                 f"unexpected {producer} {stage} {key}: "
                 f"actual={actual.get(key)} expected={value}"
@@ -389,10 +411,70 @@ for index, (left, right) in enumerate(zip(ghidra_ops, rugra_ops)):
         }
         break
 expected_substantive = metadata["observation"]["first_substantive_op_difference"]
+if expected_substantive is not None or substantive is not None:
+    raise SystemExit(f"numeric op signature sequence changed: {substantive}")
+
+def varnode_location(document, varnode_id):
+    if varnode_id is None:
+        return None
+    varnode = document["varnodes"][varnode_id]
+    return {
+        "space": varnode["space"],
+        "offset": varnode["offset"],
+        "size": varnode["size"],
+        "pointer_ref_kind": varnode["pointer_ref_kind"],
+    }
+
+storage_difference = None
+for index, (left, right) in enumerate(zip(ghidra_ops, rugra_ops)):
+    left_storage = {
+        "output": varnode_location(documents["ghidra"]["00_raw_pcode"], left["output"]),
+        "inputs": [
+            varnode_location(documents["ghidra"]["00_raw_pcode"], item)
+            for item in left["inputs"]
+        ],
+    }
+    right_storage = {
+        "output": varnode_location(documents["rugra"]["00_raw_pcode"], right["output"]),
+        "inputs": [
+            varnode_location(documents["rugra"]["00_raw_pcode"], item)
+            for item in right["inputs"]
+        ],
+    }
+    if left_storage != right_storage:
+        storage_difference = {
+            "index": index,
+            "ghidra": left_storage,
+            "rugra": right_storage,
+        }
+        break
+expected_storage = metadata["observation"]["first_op_storage_difference"]
 for key in ("index", "ghidra", "rugra"):
-    if substantive.get(key) != expected_substantive[key]:
-        raise SystemExit(f"substantive op difference changed: {substantive}")
-substantive["diagnosis"] = expected_substantive["diagnosis"]
+    if storage_difference[key] != expected_storage[key]:
+        raise SystemExit(f"op storage difference changed: {storage_difference}")
+storage_difference["diagnosis"] = expected_storage["diagnosis"]
+
+varnode_state_difference = None
+for index, (left, right) in enumerate(
+    zip(
+        documents["ghidra"]["00_raw_pcode"]["varnodes"],
+        documents["rugra"]["00_raw_pcode"]["varnodes"],
+    )
+):
+    left_state = {"flags": left["flags"], "type": left["type"]}
+    right_state = {"flags": right["flags"], "type": right["type"]}
+    if left_state != right_state:
+        varnode_state_difference = {
+            "index": index,
+            "ghidra": left_state,
+            "rugra": right_state,
+        }
+        break
+expected_varnode_state = metadata["observation"]["first_varnode_state_difference"]
+for key in ("index", "ghidra", "rugra"):
+    if varnode_state_difference[key] != expected_varnode_state[key]:
+        raise SystemExit(f"varnode state difference changed: {varnode_state_difference}")
+varnode_state_difference["diagnosis"] = expected_varnode_state["diagnosis"]
 
 repeat_documents = {}
 repeat_report = []
@@ -411,16 +493,11 @@ for stage in stage_names:
             "repeat": counts(repeat),
         }
     )
-for item in repeat_report[:3]:
-    if item["first_difference"] is not None:
-        raise SystemExit(f"Rugra pre-Action stage is unexpectedly nondeterministic: {item}")
 first_repeat_difference = next(
     (item for item in repeat_report if item["first_difference"] is not None), None
 )
-if first_repeat_difference is None or first_repeat_difference["stage"] != "03_action_ir":
-    raise SystemExit(
-        f"expected first Rugra repeatability difference at 03_action_ir: {first_repeat_difference}"
-    )
+if first_repeat_difference is not None:
+    raise SystemExit(f"Rugra layered snapshot is unexpectedly nondeterministic: {first_repeat_difference}")
 
 manifest_diff = json.loads((root / "stage-manifest-diff.json").read_text(encoding="utf-8"))
 comparison = {
@@ -432,10 +509,16 @@ comparison = {
     "compiler_spec": metadata["compiler_spec"],
     "input_fingerprint": metadata["input_fingerprint"],
     "first_stage_difference": {"stage": stage_names[0], **first},
-    "first_substantive_op_difference": substantive,
+    "numeric_op_signature_sequence": {
+        "state": "MATCH",
+        "ops": len(ghidra_ops),
+        "fields": ["address.offset", "opcode", "input_count", "has_output"],
+    },
+    "first_op_storage_difference": storage_difference,
+    "first_varnode_state_difference": varnode_state_difference,
     "stages": stage_report,
     "rugra_determinism": {
-        "state": "MISMATCH" if first_repeat_difference is not None else "NOT_OBSERVED",
+        "state": "STABLE_TWO_RUNS",
         "first_difference": first_repeat_difference,
         "runs": repeat_report,
         "note": metadata["observation"]["rugra_determinism_note"],
@@ -460,8 +543,10 @@ summary = [
     "- Input: `examples/curl`, `GetStr` at `0x36d0`, 74 bytes",
     "- Overall: `MISMATCH`",
     f"- First difference: `{stage_names[0]}` `{first['path']}` = {first['ghidra']} vs {first['rugra']}",
-    f"- First substantive op: index {substantive['index']}, Ghidra `0x{substantive['ghidra']['address']:x}` vs Rugra `0x{substantive['rugra']['address']:x}`",
-    f"- Diagnosis: {substantive['diagnosis']}",
+    f"- Numeric op signature sequence: `MATCH` ({len(ghidra_ops)} ops)",
+    f"- First op-storage difference: index {storage_difference['index']}",
+    f"- Storage diagnosis: {storage_difference['diagnosis']}",
+    f"- First Varnode-state difference: index {varnode_state_difference['index']}",
     f"- Rugra repeatability: {comparison['rugra_determinism']['state']}",
     "",
     "| Stage | Ghidra | Rugra | First structural difference |",
@@ -474,4 +559,4 @@ for item in stage_report:
 (root / "README.md").write_text("\n".join(summary) + "\n", encoding="utf-8")
 PY
 
-printf 'getstr_pipeline_1204: MISMATCH expected; first=00_raw_pcode $.ops.length 103!=105; Rugra post-Action nondeterminism retained; artifacts=%s\n' "$output_root"
+printf 'getstr_pipeline_1204: MISMATCH expected; reachable raw signature MATCH 103 ops; first storage diff=CALL fspec; Rugra two-run snapshot stable; artifacts=%s\n' "$output_root"

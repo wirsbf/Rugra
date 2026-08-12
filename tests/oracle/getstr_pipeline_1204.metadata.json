@@ -12,6 +12,7 @@
     "ghidra_loader": "BfdArchitecture",
     "ghidra_symbols": "ELF/BFD symbols only; no Java DWARF analyzer",
     "rugra_symbols": "ELF symbols only; no DWARF importer",
+    "rugra_build_profile": "release; debug currently exposes VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 overflow defects",
     "function": "GetStr",
     "stages": [
       "00_raw_pcode",
@@ -34,11 +35,11 @@
     },
     "raw_code_policy": {
       "ghidra": "Funcdata::followFlow reachable instructions",
-      "rugra": "current production SleighLifter::lift_function over iced-x86 linear symbol disassembly"
+      "rugra": "FlowInfo reachable instructions from the function entry, using one configured SleighCtx and the atomic Sleigh::oneInstruction step plus emitted ops"
     },
     "symbol_source": "ELF/BFD symbols only; no DWARF"
   },
-  "input_fingerprint": "sha256:2107683147ebdb215592e5272b1c687555b3e6622b38823fc96f35846cd8ed41",
+  "input_fingerprint": "sha256:e4fe0d6fe28d4347f12cdf1062f2954b6a64ba499cd3d9fb225c5888dc65b162",
   "observation": {
     "schema": "ordered JSON object graph with stable per-run PcodeOp/Varnode IDs",
     "normalization": "JSON object keys/whitespace plus LOAD/STORE input0 AddrSpace pointer to registered space index; array order, object identity, aliasing, edge slots, flags, state and text are preserved",
@@ -52,27 +53,44 @@
       "05_c": "MISMATCH"
     },
     "heritage_boundary_note": "Ghidra stops the real decompile Action at paramdouble immediately after heritage; Rugra replays ActionHeritage directly because its Action tree has no stage observer, so this layer is diagnostic and cannot be promoted to MATCH.",
-    "rugra_determinism_status": "MISMATCH",
-    "rugra_determinism_note": "Independent processes produce identical stages 00-02 but different Action IR from stage 03; the runner retains a second Rugra snapshot and reports whether that difference propagates into structure or C instead of normalizing it.",
+    "rugra_determinism_status": "STABLE_TWO_RUNS",
+    "rugra_determinism_note": "Two independent release-profile Rugra executions produce byte-identical ordered JSON at all six layers; the runner still retains the second run and rejects any future difference.",
     "first_difference": {
       "stage": "00_raw_pcode",
-      "path": "$.ops.length",
-      "ghidra": 103,
-      "rugra": 105
+      "path": "$.ops[0].opcode_name",
+      "ghidra": "copy",
+      "rugra": "COPY"
     },
-    "first_substantive_op_difference": {
-      "index": 77,
+    "first_substantive_op_difference": null,
+    "numeric_op_signature_sequence": {
+      "status": "MATCH",
+      "ops": 103,
+      "fields": ["address.offset", "opcode", "input_count", "has_output"]
+    },
+    "first_op_storage_difference": {
+      "index": 31,
       "ghidra": {
-        "address": 14088,
-        "input_count": 1,
-        "opcode": 1
+        "output": null,
+        "inputs": [
+          {"space": 5, "offset": 8944, "size": 8, "pointer_ref_kind": "fspec"}
+        ]
       },
       "rugra": {
-        "address": 14082,
-        "input_count": 2,
-        "opcode": 32
+        "output": null,
+        "inputs": [
+          {"space": 7, "offset": 8944, "size": 8, "pointer_ref_kind": "fspec"}
+        ]
       },
-      "diagnosis": "Ghidra followFlow skips the unreachable alignment NOP at 0x3702 after RETURN; Rugra linearly lifts it before resuming at the reachable target 0x3708."
+      "diagnosis": "Both sides resolve the first direct CALL to 0x22f0, but locked Ghidra encodes FuncCallSpecs in dynamic fspace index 5 while Rugra's fixed AddressSpace enum has no Fspec variant and uses synthetic Iop index 7 (ADDR-0001/CALLSPEC-0001)."
+    },
+    "first_varnode_state_difference": {
+      "index": 0,
+      "ghidra": {
+        "flags": 16777264,
+        "type": {"metatype": "unknown", "name": "xunknown8", "size": 8}
+      },
+      "rugra": {"flags": 48, "type": null},
+      "diagnosis": "Storage identity already agrees, but Rugra does not attach Ghidra's initial unknown Datatype or COVERDIRTY state to emitted Varnodes; this is a VarnodeBank/type/cover lifecycle residual, not a lifting-order difference."
     },
     "covered": [
       "PcodeOp order, opcode, address, input order, output identity and selected flags",
@@ -85,7 +103,9 @@
       "Ghidra token/markup metadata",
       "all private PcodeOp and edge flags not exposed by both implementations",
       "same-boundary Rugra Action-tree pause immediately after Heritage",
-      "Java Program DB/DWARF-derived symbols and prototypes"
+      "Java Program DB/DWARF-derived symbols and prototypes",
+      "debug-profile Action execution until VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 receive independent core review",
+      "full FlowInfo error/injection/override/jump-table and generateBlocks state covered by SLEIGH-FLOW-0001"
     ]
   },
   "assets": {
@@ -101,8 +121,13 @@
   },
   "comparand_sha256": {
     "cpp_fixture": "721e5452e45cc8f7b548a9b2f965e90128d6b4981b7bb07d16adfdf0d9b54c7e",
-    "rust_example": "c34c1b369aa50c64444a8832ace63bbdfb0433330b46da1c8307d93cf367b6ad",
-    "stage_diff": "658aab9684166e3250799984bac453a25cf4edcdaec4d3ba62b0aaa5f66acdca"
+    "rust_example": "bfcadc80f722f40f153229fe2c98bf53b11a25ae7e9adcef2d6e598dfe1b771d",
+    "stage_diff": "658aab9684166e3250799984bac453a25cf4edcdaec4d3ba62b0aaa5f66acdca",
+    "cargo_manifest": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_script": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rugra_src_tree": "14e5a11c9fc65c62f7fbe6c426d318878764d909c1938464709296c4ed21e55b",
+    "sleigh_shim_tree": "d09a9aa127082e64e5a1fdee29eaf9987ce6fb10cb223acce56815139675351b"
   },
   "expected": {
     "ghidra": {
@@ -114,12 +139,12 @@
       "05_c": {"sha256": "8d289a843a24673e8e0e6a25a44574a418f36e8fd567193d2a5f01ad14242855", "text_bytes": 272}
     },
     "rugra": {
-      "00_raw_pcode": {"sha256": "784a2e0187285fce7b5fcdc4366b9a16e9641b783c5c1c8aca11995e0fbbc43b", "ops": 105, "varnodes": 197},
-      "01_cfg": {"sha256": "15039a8b23fe4bddb07e75d139636f5781539123ce1b1a0941b88546a22cd27f", "blocks": 7},
-      "02_heritage_ssa": {"sha256": "e13505c753b574c1a418a4955af3fe0908afd04d23c9fffde0e7ea528cb464fa", "ops": 109, "varnodes": 218, "blocks": 7},
-      "03_action_ir": {"nondeterministic": true, "min_ops": 1, "min_varnodes": 1, "blocks": 6},
+      "00_raw_pcode": {"sha256": "a6f79573dbc3add5758dfad6ff1aa97437c5d62ceaaf92bb2adb919fec789477", "ops": 103, "varnodes": 272},
+      "01_cfg": {"sha256": "ead96e25b0fd6abb5fde35bdb21e9ce7afdbe81c138fbbdb8a90f903ebb73682", "blocks": 6},
+      "02_heritage_ssa": {"sha256": "70fbaa0f0d7b61fc16b74ef52d03d580ae588878bdbf8a2344e96ab845a7922c", "ops": 105, "varnodes": 287, "blocks": 6},
+      "03_action_ir": {"sha256": "d15bff2db5fe097a10c73363dabe4c60ac22b5e0487b43fe7833483005174541", "ops": 131, "varnodes": 439, "blocks": 6},
       "04_structure": {"sha256": "aa45737f016eef5b8924b4753bf0366bed5088348a2cc2c980a44564081b782f", "root_children": 3},
-      "05_c": {"nondeterministic": true, "min_text_bytes": 1}
+      "05_c": {"sha256": "74ce15e6111adf6e108c775edb7adaf308475a4753a2cbdf490f6ac42e69922f", "text_bytes": 721}
     }
   },
   "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",

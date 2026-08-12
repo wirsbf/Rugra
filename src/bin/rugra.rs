@@ -5,6 +5,7 @@ use std::path::Path;
 
 use rugra::action::{Action, ActionDatabase};
 use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
+use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::funcdata::Funcdata;
 use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
@@ -143,41 +144,6 @@ fn main() {
         None
     };
 
-    // LoadImage wrapper for flow tracking (translates vaddr → file offset → bytes).
-    struct BufferLoadImage<'b> {
-        buffer: &'b [u8],
-        sections: &'b [goblin::elf::SectionHeader],
-    }
-    // RUGRA-GLUE: BufferLoadImage 实现 LoadImage trait，将 ELF vaddr 翻译为
-    // file offset 读取字节。Ghidra 用 LoadImage 抽象（loadimage.hh）。
-    impl<'b> rugra::loadimage::LoadImage for BufferLoadImage<'b> {
-        // RUGRA-GLUE: trait impl
-        fn get_filename(&self) -> &str { "binary" }
-        // RUGRA-GLUE: trait impl
-        fn get_arch_type(&self) -> String { "x86_64".to_string() }
-        // RUGRA-GLUE: trait impl
-        fn adjust_vma(&mut self, _adjust: i64) {}
-        // RUGRA-GLUE: trait impl
-        fn load_fill(&self, size: usize, addr: rugra::address::Address) -> Result<Vec<u8>, rugra::loadimage::DataUnavailError> {
-            let vaddr = addr.as_u64();
-            for header in self.sections {
-                if vaddr >= header.sh_addr && vaddr < header.sh_addr + header.sh_size {
-                    let off = (header.sh_offset + (vaddr - header.sh_addr)) as usize;
-                    let avail = self.buffer.len().saturating_sub(off);
-                    let take = std::cmp::min(size, avail);
-                    if take == 0 {
-                        return Err(rugra::loadimage::DataUnavailError(format!("no bytes at {:#x}", vaddr)));
-                    }
-                    let mut result = self.buffer[off..off + take].to_vec();
-                    result.resize(size, 0); // pad with zeros
-                    return Ok(result);
-                }
-            }
-            Err(rugra::loadimage::DataUnavailError(format!("addr {:#x} not in any section", vaddr)))
-        }
-    }
-    let load_img = BufferLoadImage { buffer: &buffer, sections: &elf.section_headers };
-
     for &(vaddr, size, file_offset, ref name) in functions.iter().take(take_count) {
         if size < 5 { continue; }
         let max_size = std::cmp::min(size, 4096);
@@ -249,24 +215,39 @@ fn main() {
         if size < 5 || name == "_start" || name == "register_tm_clones" || name == "deregister_tm_clones"
             || name == "frame_dummy" { continue; }
 
-        let max_size = std::cmp::min(size, 8192);
-        let eaddr = vaddr + max_size as u64;
         if file_offset as usize >= buffer.len() { continue; }
 
-        // Use FlowInfo (reachability-based flow tracking) instead of linear scan.
-        let mut disasm = X86_64Disassembler::new();
-        let mut lifter = X86Lifter::new();
+        // Use one long-lived SLEIGH translator and follow only reachable code.
+        let Some(section) = elf.section_headers.iter().find(|section| {
+            vaddr >= section.sh_addr && vaddr < section.sh_addr.saturating_add(section.sh_size)
+        }) else {
+            failed += 1;
+            continue;
+        };
+        let section_start = section.sh_offset as usize;
+        let section_end = section
+            .sh_offset
+            .saturating_add(section.sh_size)
+            .min(buffer.len() as u64) as usize;
+        let Some(section_image) = buffer.get(section_start..section_end) else {
+            failed += 1;
+            continue;
+        };
+        let mut lifter = SleighLifter::new();
+        if let Err(error) = lifter.configure_x86_64(section_image, section.sh_addr) {
+            eprintln!("[FLOW] {}: failed to configure SLEIGH: {}", name, error);
+            failed += 1;
+            continue;
+        }
         let mut fd = Funcdata::new(name, Address::new(vaddr), size as i32);
         fd.external_prototypes = prototype_db.clone();
         for (&addr, n) in &symbol_table { fd.add_symbol(addr, n.clone()); }
         for (&addr, s) in &string_table { fd.add_string(addr, s.clone()); }
         rugra::flow::follow_flow(
             &mut fd,
-            &load_img as &dyn rugra::loadimage::LoadImage,
-            &mut disasm as &mut dyn rugra::disasm::Disassembler,
             &mut lifter,
             Address::new(vaddr),
-            eaddr,
+            u64::MAX,
         );
         fd.run_heritage_direct();
         let mut infer = rugra::coreaction::ActionInferParams::new();

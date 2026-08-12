@@ -62,11 +62,20 @@ tools/run_getstr_pipeline_oracle.sh
 `rugra-repeat/` 分别保存 raw P-code、CFG、Heritage/SSA、完整 Action IR、结构树和 C 文本；
 `comparison.json` 保存每层首个 JSON 路径差异，`README.md` 给出紧凑摘要，`ghidra.c`、
 `rugra.c` 与 `rugra-repeat.c` 可直接阅读。当前锁定结果是 `MISMATCH`，不是 golden：第一个
-差异在 `00_raw_pcode $.ops.length`（Ghidra 103、Rugra 105），共同前缀后的第一个实质差异
-是 Ghidra 跳到可达目标 `0x3708`，而 Rugra 继续线性提升 `0x3702` 的不可达对齐 NOP。
-另外，两次 Rugra 运行在 00-02 层逐字一致，却从 03 Action IR 开始产生不同 op/Varnode
-序列；runner 原样保留第二份后半流水线，并逐次报告差异是否继续传播到结构树/C 文本，
-不允许靠排序或临时 ID 规范化掩盖。
+JSON 路径差异现在是 raw op 名称大小写（`copy` ↔ `COPY`）。更重要的数值结构结果是：
+两侧均有 103 ops / 272 Varnodes / 6 CFG blocks，且 103 条 op 的
+`(address, opcode, input_count, has_output)` 顺序完全一致。旧 Rugra 在线性扫描中错误提升的
+`0x3702` 不可达对齐 NOP 已被 `PIPE-REACH-0001` 消除。
+
+raw 层仍不是 `MATCH`：第一个 op-storage 差异位于 direct CALL，Ghidra 用动态 Fspec
+space index 5，Rugra 因固定 `AddressSpace` 模型只能用 synthetic Iop index 7；第一个
+Varnode-state 差异是 Ghidra 已附 unknown datatype/COVERDIRTY，而 Rugra 尚未附这些状态。
+两次 Rugra release 运行的全部六层 artifact 现已逐字一致；runner 保留第二份并将任何未来
+不稳定直接判为失败，不允许用排序或临时 ID 规范化掩盖。
+
+fixture 明确使用 release profile。debug Action 路径目前会暴露
+`VARMAP-GATHEROFFSET-0001` 与 `RULE-COLLECTTERMS-0001` 两个核心无符号边界缺陷；因为它们
+尚未完成独立核心复核，本 snapshot 不把 release 成功冒充对应分支 `MATCH`。
 
 Ghidra 的 Heritage 快照来自真实 `decompile` Action 在 `paramdouble` 前的 breakpoint；Rugra
 目前只能直接重放 `ActionHeritage`，所以该层明确是 `NO_ORACLE` 诊断边界。只有补齐同一

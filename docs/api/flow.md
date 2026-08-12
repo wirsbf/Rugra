@@ -127,3 +127,34 @@ not yet wired into main.rs; existing linear scan still active).
 - 目标文件：`src/flow.rs`（778 → 1181 行，+403 行）。
 - 每个移植方法上方有 `// Ghidra: flow.cc:<行号> FlowInfo::<名>` 注释。
 - `cargo check --lib` 通过（flow.rs 零错误）。
+
+## 2026-08-13：`PIPE-REACH-0001` 可达指令闭环
+
+锁定 oracle 为 Ghidra 12.0.4 commit
+`e40ed13014025f82488b1f8f7bca566894ac376b`。本轮重新完整读取
+`FlowInfo::processInstruction`、`xrefControlFlow`、`setFallthruBound`、`fallthru`、
+`generateOps` 和 `Funcdata::followFlow` 后，将 canonical CLI/curl 路径改为：
+
+1. 为所属 ELF section 创建一个 owned `SleighLifter`；
+2. 从函数入口用 LIFO 地址工作表追踪；
+3. 每条指令一次性取得 `Sleigh::oneInstruction` 的 step 与全部 P-code；
+4. 根据 BRANCH/CBRANCH/RETURN 推进可达地址，再从 alive ops 构造 CFG；
+5. CALL/CALLIND 在 flow 阶段创建 `FuncCallSpecs`，直接 CALL 的 input(0) 改成
+   synthetic call-spec annotation。
+
+真实 `GetStr` 六层 fixture 的直接结果：旧 Rugra 在 RETURN 后仍线性提升的
+`0x3702` 对齐 NOP 已消失；两侧 raw P-code 均为 103 ops / 272 Varnodes、CFG 均为
+6 blocks，并且全部 103 条 op 的 `(address, opcode, input_count, has_output)` 顺序一致。
+两次 Rugra release 运行的六层 JSON 逐字节相同。
+
+这只是 `PIPE-REACH-0001` 的窄闭环，`flow.rs` 仍是 **L2 / MISMATCH**：
+
+- raw Varnode 的初始 unknown type、COVERDIRTY/其他状态尚未与 Ghidra 一致；
+- CALL annotation 的动态 Fspec space 被固定枚举中的 Iop space 代替；
+- `xrefControlFlow` 的 relative internal branch、`maxtime`、删除尾部 ops、CALLOTHER
+  injection、override、noreturn 与完整 jump-table 流程未闭合；
+- `generateBlocks` 仍委托 `build_blocks_from_alive`，入口块 flag/边属性存在差异；
+- DataUnavail、BadData、Unimpl 和 instruction-limit 的异常/状态路径尚未逐分支 MATCH。
+
+这些残差继续由 `SLEIGH-FLOW-0001`、`CALLSPEC-0001`、`ADDR-0001`、
+`SLEIGH-0002C`/`D` 跟踪，不能沿用本文件早期“Phase 完成”文字推断 L3。

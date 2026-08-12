@@ -924,6 +924,20 @@ commit `e40ed13014025f82488b1f8f7bca566894ac376b`。
 其中 `funcp_extrapop` 恒返 unknown、`userop_type` 的缺表 fallback、以及
 `block_index_for_op_addr` 用地址代替 PcodeOp 身份/顺序，都是既有差异；本轮
 仅如实分类，未将其伪装为 Ghidra 映射。
+
+## 2026-08-13：`PcodeEmitFd::dump` 输入对象创建语义
+
+`PIPE-REACH-0001` 重新读取锁定 `funcdata.cc:878-910 PcodeEmitFd::dump` 后，修正
+`inject_raw_ops_single` 的输入构造：每个 emitted operand 都创建独立 Varnode；常量走
+`VarnodeBank::create_constant` 以保留 CONSTANT 状态；BRANCH/CBRANCH/CALL 的第一个
+operand 走一字节 code-reference；其他 operand 以 SLEIGH 指定空间创建。每次输入创建后
+立即建立 descendant 反向引用。
+
+真实 `GetStr` raw fixture 中，Rugra 因而从旧的 197 个 Varnodes 变为与 Ghidra 相同的
+272 个；全部 103 个 op 的地址、数值 opcode、输入数量和输出存在性顺序一致。完整
+Varnode 状态仍为 `MISMATCH`：Ghidra 初始 unknown datatype/COVERDIRTY 等状态没有被
+Rugra 的当前 VarnodeBank 生命周期复现，CALL 的 Fspec 地址空间也依赖 `ADDR-0001`。
+本项不构成 `Funcdata` 模块 L3 证明。
  
  
  

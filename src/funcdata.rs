@@ -3956,13 +3956,28 @@ impl Funcdata {
                 self.vbank.set_def(out_vn.clone(), std::sync::Arc::downgrade(&op_ref.0));
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
-            // Input varnodes
-            for input_raw in raw.inputs() {
-                let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
-                    self.vbank.create_constant(input_raw.size, input_raw.offset)
+            // Input varnodes. PcodeEmitFd::dump creates a fresh Varnode for
+            // every input, except that the first input of an op carrying the
+            // CODEREF flag is materialized as a one-byte code reference.
+            for (input_index, input_raw) in raw.inputs().iter().enumerate() {
+                let is_code_reference = input_index == 0
+                    && matches!(
+                        opcode,
+                        OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_CALL
+                    );
+                let in_vn = if is_code_reference {
+                    self.new_code_ref(crate::address::Address::new(input_raw.offset))
+                } else if input_raw.space == crate::space::AddressSpace::Const {
+                    self.vbank
+                        .create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank.find_or_create_input_space(input_raw.size, input_raw.space, input_raw.offset)
+                    self.vbank.create_with_space(
+                        input_raw.size,
+                        input_raw.space,
+                        input_raw.offset,
+                    )
                 };
+                in_vn.write().unwrap().add_descend(&op_ref.0);
                 op_ref.0.write().unwrap().inrefs.push(in_vn);
             }
             self.obank.mark_alive(op_ref);
