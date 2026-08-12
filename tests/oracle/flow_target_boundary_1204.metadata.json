@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "fixture_id": "FLOW-TARGET-BOUND-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": {
+    "action": "none",
+    "flow_options": "BfdArchitecture defaults",
+    "max_instructions": "BfdArchitecture default",
+    "phase": "Funcdata::followFlow through FlowInfo::generateBlocks"
+  },
+  "input": {
+    "build": {
+      "compiler": "g++ 11.4.0",
+      "flags": [
+        "-std=c++11",
+        "-O0",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none"
+      ]
+    },
+    "cases": [
+      {
+        "machine_body": "endbr64; test edi,edi; je join; call flow_target_boundary_callee; join: ret",
+        "name": "flow_target_boundary_probe",
+        "purpose": "queued CBRANCH target is decoded as CALL fallthrough before its duplicate work-list entry is popped"
+      },
+      {
+        "binary": "examples/curl",
+        "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+        "repository_commit": "86ffa7bcaba0100cdd32b55a619bb07e31af84ad",
+        "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+        "git_object_type": "blob",
+        "git_object_size": 162544,
+        "name": "GetStr",
+        "symbol_address": 14032,
+        "symbol_size": 74,
+        "purpose": "production six-block CFG and exact edge/reverse-slot ordering"
+      }
+    ]
+  },
+  "input_fingerprint": "sha256:f79f163f313633310869238856de372aa2b97f2b8f6cce5786033f2c0aad6edf",
+  "machine_input_sha256": {
+    "fixture_text": "2cf4e180b247f7f7d9efce948033126d26a376e5e8ab239c08006828400fafae",
+    "curl_text": "287c95bed17616bd6e71c393fa61b28ae14e5671f1a7fac8a93137eda9e159d4"
+  },
+  "observation": {
+    "schema": "ordered blocks; official entry identity/count/flag; per-block op count/address range; ordered in/out peer and reverse slots",
+    "normalization": "block addresses are signed offsets from each function symbol; object identity is preserved as insertion ordinal; raw Ghidra BlockBasic index is intentionally omitted because it remains zero until later indexing",
+    "ordering": "BlockGraph list order and edge insertion/slot order are observed without sorting",
+    "aliasing": "entry_ordinal identifies the exact getStartBlock object; peer ordinals and reverse slots preserve both ends of each edge",
+    "overall_status": "MATCH",
+    "covered": [
+      "newAddress queues an unseen direct branch target",
+      "setFallthruBound marks an exact already-visited target STARTBASIC before dropping its duplicate work-list entry",
+      "fallthru retains one fixed upper bound for the sequential region and marks an exact bound hit when startbasic is true",
+      "collectEdges emits the CALL block's fallthrough into the visited join",
+      "CBRANCH fallthrough precedes branch target and every reverse slot is preserved",
+      "curl::GetStr has six ordered blocks with exact flags, op counts, address ranges, and complete edge graph"
+    ],
+    "untested": [
+      "reinterpreted/off-cut error mode",
+      "out-of-bounds warning and artificial branch stubs",
+      "BRANCHIND jump-table targets",
+      "relative intra-instruction branch targets"
+    ]
+  },
+  "comparand_sha256": {
+    "cpp_fixture": "7076f9e054f9a4523067649dfa868aa85997295d020db6a5f635492c7f7728c3",
+    "rust_fixture": "505d93e407a6f0608318fcd9e4dbc0307f23732ef1232c71e4c0edaa32abc4d3",
+    "curl_binary": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+    "rugra_flow": "28f28bc2ee00f8e09b258a43e14aa47354097338aef15fb1f4db246bbc6bcdd5",
+    "ghidra_flow_cc": "e31e194bc25b5ed2647e2bd1fac18702b6ff7508cf1f75b54fbdfe3318c487f6",
+    "ghidra_flow_hh": "4a5f3f9f4470ecd52bf42c615a08f1f3b100e5b153559266f7275b7bc9b1a3ab",
+    "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+    "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+    "ghidra_funcdata_op_cc": "e3eb7ccacf4adf80296b99e25b72dd3440eaabdabefe34c9d52f8239d8d2d366"
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "expected_stdout_sha256": "b7e9bbf1c3846bfc76588b1ab4a73d08d87d8de901421afd87c987fb52dab4bc"
+}

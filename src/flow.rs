@@ -7,12 +7,13 @@
 //! differences are tracked by `SLEIGH-FLOW-0001`.
 
 use crate::address::Address;
+use crate::block::{block_flags, BlockBasic, BlockGraph, FlowBlock};
 use crate::disasm::sleigh_lift::SleighLifter;
 use crate::funcdata::Funcdata;
-use crate::opcodes::OpCode;
 use crate::op::pcodeop_flags;
+use crate::opcodes::OpCode;
 use crate::sleigh_ffi::SleighErrorKind;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Flow-following option/property flag bits. Faithful to the anonymous enum
 /// in flow.hh:60-74.
@@ -164,6 +165,11 @@ pub struct FlowInfo<'a> {
     addrlist: Vec<Address>,
     /// Addresses which are permanently unprocessed (flow.hh:87 unprocessed).
     unprocessed: Vec<Address>,
+    /// Source/target P-code pairs collected before the dead-list operations
+    /// are assigned to basic blocks (flow.hh:91-92 block_edge1/block_edge2).
+    /// Rugra keeps each parallel-list entry together so alias identity and
+    /// insertion order cannot drift between the two sides of an edge.
+    block_edges: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)>,
     /// Visited instruction map (flow.hh:84 visited).
     /// Keyed by instruction address; value carries the first-op order and
     /// the instruction byte size (RUGRA-GLUE: Ghidra's VisitStat.seqnum is
@@ -206,17 +212,13 @@ pub struct FlowInfo<'a> {
 
 impl<'a> FlowInfo<'a> {
     // Ghidra: flow.hh:106 FlowInfo::FlowInfo
-    pub fn new(
-        fd: &'a mut Funcdata,
-        lifter: &'a mut SleighLifter,
-        baddr: u64,
-        eaddr: u64,
-    ) -> Self {
+    pub fn new(fd: &'a mut Funcdata, lifter: &'a mut SleighLifter, baddr: u64, eaddr: u64) -> Self {
         Self {
             fd,
             lifter,
             addrlist: Vec::new(),
             unprocessed: Vec::new(),
+            block_edges: Vec::new(),
             visited: std::collections::BTreeMap::new(),
             injectlist: Vec::new(),
             insn_max: 100000, // Ghidra default max_instructions
@@ -446,10 +448,7 @@ impl<'a> FlowInfo<'a> {
     /// `isInArray` (flow.cc:776-783). This is a static helper in Ghidra used
     /// by `recoverJumpTables` to dedup BRANCHIND ops that need to be retried.
     // Ghidra: flow.cc:776 FlowInfo::isInArray
-    fn is_in_array(
-        array: &[crate::op::PcodeOpRef],
-        op: &crate::op::PcodeOpRef,
-    ) -> bool {
+    fn is_in_array(array: &[crate::op::PcodeOpRef], op: &crate::op::PcodeOpRef) -> bool {
         array.iter().any(|x| std::sync::Arc::ptr_eq(&x.0, &op.0))
     }
 
@@ -462,8 +461,7 @@ impl<'a> FlowInfo<'a> {
     fn delete_remaining_ops_from(&mut self, start_idx: usize) {
         // Snapshot the tail of the alive list so we can drain without
         // upsetting the borrow checker (op_destroy mutates the list).
-        let to_remove: Vec<crate::op::PcodeOpRef> =
-            self.fd.obank.alivelist[start_idx..].to_vec();
+        let to_remove: Vec<crate::op::PcodeOpRef> = self.fd.obank.alivelist[start_idx..].to_vec();
         for op in &to_remove {
             self.fd.op_destroy(op);
         }
@@ -526,13 +524,9 @@ impl<'a> FlowInfo<'a> {
             addr.as_u64()
         );
         let (return_type, _no_params, warn_msg) = match fail_mode {
-            0 => (0u32, false, None), // fail_thunk
-            1 => (
-                pcodeop_flags::NORETURN,
-                true,
-                Some("Does not return"),
-            ), // fail_callother
-            _ => (0u32, false, Some("Treating indirect jump as call")), // default
+            0 => (0u32, false, None),                                      // fail_thunk
+            1 => (pcodeop_flags::NORETURN, true, Some("Does not return")), // fail_callother
+            _ => (0u32, false, Some("Treating indirect jump as call")),    // default
         };
         if let Some(msg) = warn_msg {
             eprintln!("[FLOW] {}: {} at {:#x}", self.fd.name, msg, addr.as_u64());
@@ -669,7 +663,10 @@ impl<'a> FlowInfo<'a> {
     /// the logic with a local `find_jump_table` lookup and push onto the
     /// returned work-list when no table is linked.
     // Ghidra: flow.cc:1053 FlowInfo::xrefInlinedBranch
-    pub fn xref_inlined_branch(&mut self, op: &crate::op::PcodeOpRef) -> Vec<crate::op::PcodeOpRef> {
+    pub fn xref_inlined_branch(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+    ) -> Vec<crate::op::PcodeOpRef> {
         let mut new_tablelist: Vec<crate::op::PcodeOpRef> = Vec::new();
         let code = op.0.read().unwrap().opcode;
         match code {
@@ -706,8 +703,9 @@ impl<'a> FlowInfo<'a> {
         for addr in addrs {
             if self.seen_instruction(addr) {
                 // Ghidra: PcodeOp *op = target(*iter); data.opMarkStartBasic(op);
-                // RUGRA-GLUE: opMarkStartBasic is applied during block
-                // splitting (build_blocks_from_alive), so this is a no-op.
+                if let Some(op) = self.target(addr) {
+                    op.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+                }
             } else {
                 self.unprocessed.push(addr);
             }
@@ -764,9 +762,7 @@ impl<'a> FlowInfo<'a> {
     /// PcodeOpRef)>`. Branch targets are resolved by address lookup against
     /// the alive op list (the `target(addr)` analogue).
     // Ghidra: flow.cc:906 FlowInfo::collectEdges
-    pub fn collect_edges(
-        &self,
-    ) -> Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> {
+    pub fn collect_edges(&mut self) -> Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> {
         let mut edges: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = Vec::new();
         let alive: &[crate::op::PcodeOpRef] = &self.fd.obank.alivelist;
 
@@ -783,9 +779,11 @@ impl<'a> FlowInfo<'a> {
                     // table we are doing partial flow analysis, assume no
                     // out-edges (flow.cc:935-937).
                     let op_addr = op_ref.0.read().unwrap().get_addr();
-                    if let Some(jt_arc) = self.fd.jump_tables.iter().find(|jt| {
-                        jt.read().unwrap().get_op_address().as_u64() == op_addr.as_u64()
-                    }) {
+                    if let Some(jt_arc) =
+                        self.fd.jump_tables.iter().find(|jt| {
+                            jt.read().unwrap().get_op_address().as_u64() == op_addr.as_u64()
+                        })
+                    {
                         let jt = jt_arc.read().unwrap();
                         let num = jt.num_entries();
                         // De-dup targets within this BRANCHIND via setMark
@@ -838,6 +836,7 @@ impl<'a> FlowInfo<'a> {
         for (_, targ) in &edges {
             targ.0.write().unwrap().clear_mark();
         }
+        self.block_edges = edges.clone();
         edges
     }
 
@@ -954,7 +953,11 @@ impl<'a> FlowInfo<'a> {
     /// visit time) rather than a SeqNum, so we update the stored order to
     /// the new op's alive-list index.
     // Ghidra: flow.cc:204 FlowInfo::updateTarget
-    pub fn update_target(&mut self, old_op: &crate::op::PcodeOpRef, new_op: &crate::op::PcodeOpRef) {
+    pub fn update_target(
+        &mut self,
+        old_op: &crate::op::PcodeOpRef,
+        new_op: &crate::op::PcodeOpRef,
+    ) {
         let old_addr = old_op.0.read().unwrap().get_addr();
         // flow.cc:207-211: if the old op is the recorded first-op for its
         // address, replace the seqnum with the new op's seqnum.
@@ -988,10 +991,7 @@ impl<'a> FlowInfo<'a> {
     /// returns, an artificial halt is inserted right after the call
     /// (flow.cc:642-644) and the method returns true.
     // Ghidra: flow.cc:636 FlowInfo::checkForFlowModification
-    fn check_for_flow_modification(
-        &mut self,
-        fc_idx: usize,
-    ) -> bool {
+    fn check_for_flow_modification(&mut self, fc_idx: usize) -> bool {
         let (is_inline, is_no_return, op_ref) = {
             let fc = match self.fd.callspecs.get(fc_idx) {
                 Some(f) => f,
@@ -1034,11 +1034,7 @@ impl<'a> FlowInfo<'a> {
     // Ghidra: flow.cc:656 FlowInfo::queryCall
     fn query_call(&mut self, fc_idx: usize) {
         // flow.cc:659: `if (!fspecs.getEntryAddress().isInvalid())`.
-        let entry = self
-            .fd
-            .callspecs
-            .get(fc_idx)
-            .and_then(|fc| fc.entry_addr);
+        let entry = self.fd.callspecs.get(fc_idx).and_then(|fc| fc.entry_addr);
         let entry = match entry {
             Some(a) => a,
             None => return, // Not a direct call (flow.cc:659 guard fails).
@@ -1066,11 +1062,7 @@ impl<'a> FlowInfo<'a> {
     /// flow-modification check. Prototype override application remains a
     /// `CALLSPEC-0001` gap.
     // Ghidra: flow.cc:680 FlowInfo::setupCallSpecs
-    fn setup_call_specs(
-        &mut self,
-        op: &crate::op::PcodeOpRef,
-        inject_fc: Option<usize>,
-    ) -> bool {
+    fn setup_call_specs(&mut self, op: &crate::op::PcodeOpRef, inject_fc: Option<usize>) -> bool {
         // flow.cc:683-684: new FuncCallSpecs(op) captures the direct target
         // before input(0) is replaced with the call-spec annotation.
         let (op_addr, entry_addr) = {
@@ -1096,11 +1088,7 @@ impl<'a> FlowInfo<'a> {
         self.query_call(new_idx);
         // flow.cc:690-693: injection cycle check.
         if let Some(fc_inject_idx) = inject_fc {
-            let same = self
-                .fd
-                .callspecs
-                .get(fc_inject_idx)
-                .map(|f| f.entry_addr)
+            let same = self.fd.callspecs.get(fc_inject_idx).map(|f| f.entry_addr)
                 == self.fd.callspecs.get(new_idx).map(|f| f.entry_addr);
             if same {
                 // flow.cc:692: don't allow recursion.
@@ -1137,11 +1125,7 @@ impl<'a> FlowInfo<'a> {
         // flow.cc:712-713: cancel an indirect override if it matches the
         // injecting fc's entry address.
         if let Some(fc_inject_idx) = inject_fc {
-            let same = self
-                .fd
-                .callspecs
-                .get(fc_inject_idx)
-                .map(|f| f.entry_addr)
+            let same = self.fd.callspecs.get(fc_inject_idx).map(|f| f.entry_addr)
                 == self.fd.callspecs.get(new_idx).map(|f| f.entry_addr);
             if same {
                 // flow.cc:713: setAddress(Address()); clears the entry.
@@ -1250,7 +1234,8 @@ impl<'a> FlowInfo<'a> {
         }
         let _ = new_tablelist;
         // flow.cc:1093-1097: merge flow tables from the inline flow.
-        self.unprocessed.extend(inlineflow.unprocessed.iter().cloned());
+        self.unprocessed
+            .extend(inlineflow.unprocessed.iter().cloned());
         self.addrlist.extend(inlineflow.addrlist.iter().cloned());
         // Visited merge: Ghidra does visited.insert(...) over the map.
         for (&k, v) in &inlineflow.visited {
@@ -1473,12 +1458,20 @@ impl<'a> FlowInfo<'a> {
                 .skip(1)
                 .map(|vn| {
                     let v = vn.read().unwrap();
-                    (address_space_as_u32(v.get_space()), v.get_offset(), v.size as u32)
+                    (
+                        address_space_as_u32(v.get_space()),
+                        v.get_offset(),
+                        v.size as u32,
+                    )
                 })
                 .collect();
             let out = o.output.as_ref().map(|vn| {
                 let v = vn.read().unwrap();
-                (address_space_as_u32(v.get_space()), v.get_offset(), v.size as u32)
+                (
+                    address_space_as_u32(v.get_space()),
+                    v.get_offset(),
+                    v.size as u32,
+                )
             });
             (ins, out)
         };
@@ -1530,10 +1523,8 @@ impl<'a> FlowInfo<'a> {
         self.inline_recursion.insert(self.fd.baseaddr.as_u64());
         // flow.cc:1254-1258: refuse to re-inline a function already in the set.
         if self.inline_recursion.contains(&entry_addr.as_u64()) {
-            self.fd.warning(
-                "Could not inline here",
-                op_ref.0.read().unwrap().get_addr(),
-            );
+            self.fd
+                .warning("Could not inline here", op_ref.0.read().unwrap().get_addr());
             return false;
         }
         // flow.cc:1260: data.inlineFlow(fd, *this, fc->getOp()).
@@ -1691,18 +1682,12 @@ impl<'a> FlowInfo<'a> {
 
     // ===================== Private target helpers (unchanged) =====================
 
-    // RUGRA-GLUE: Resolve the BRANCH/CBRANCH input(0) address to the first
-    // alive op at that address. Ghidra's branchTarget (flow.cc:187-199) also
-    // handles relative (constant) branches via findRelTarget; Rugra's lifter
-    // emits absolute addresses, so we only need the direct-address path.
+    // RUGRA-GLUE: Internal alias used by collect_edges for Ghidra's public
+    // branchTarget. Calling the full routine is required when a destination
+    // instruction (for example ENDBR64) emits no P-code: target() advances
+    // through the visited instruction map to the first emitted operation.
     fn target_op_for_branch(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
-        let in0 = {
-            let o = op.0.read().unwrap();
-            o.inrefs.get(0).cloned()
-        };
-        let in0 = in0?;
-        let target_addr = in0.read().unwrap().get_offset();
-        self.target_op_by_addr(Address::new(target_addr))
+        self.branch_target(op)
     }
 
     // RUGRA-GLUE: Find the first alive op whose address matches. Mirrors the
@@ -1755,24 +1740,91 @@ impl<'a> FlowInfo<'a> {
             .unwrap_or(true);
         if !first_ok {
             // Ghidra throws LowlevelError("First op not marked as entry point").
-            eprintln!("[FLOW] {}: warning: first op not marked as entry point", self.fd.name);
+            eprintln!(
+                "[FLOW] {}: warning: first op not marked as entry point",
+                self.fd.name
+            );
         }
         // Delegate to the existing block builder, which honors STARTBASIC.
         self.fd.build_blocks_from_alive();
+        if let Some(start) = self.fd.bblocks.get_block(0) {
+            // flow.cc:997: the first BlockBasic becomes both list[0] and the
+            // one official f_entry_point block before later blocks are built.
+            Self::set_start_block(&mut self.fd.bblocks, start);
+        }
     }
 
     /// Generate edges between the basic blocks. Faithful to
     /// `FlowInfo::connectBasic` (flow.cc:1021-1037). Walks the collected
-    /// (source, target) op pairs and asks the block graph to add an edge
-    /// between the parent blocks of each op. Rugra's block graph is rebuilt
-    /// wholesale by `build_blocks_from_alive`, so edge collection here is
-    /// informational; the graph already derives edges from branch ops.
+    /// (source, target) op pairs in their original insertion order and asks
+    /// the block graph to add an edge between the parent blocks of each op.
     // Ghidra: flow.cc:1021 FlowInfo::connectBasic
-    pub fn connect_basic(&self) {
-        // RUGRA-GLUE: Rugra's build_blocks_from_alive derives edges directly
-        // from branch ops during construction, so there is no separate edge
-        // list to replay. We collect edges only for diagnostics/testing.
-        let _edges = self.collect_edges();
+    pub fn connect_basic(&mut self) {
+        // build_blocks_from_alive currently derives provisional edges while
+        // assigning parents. Ghidra does not: connectBasic is the sole edge
+        // writer. Clear those provisional edges before replaying the exact
+        // block_edge1/block_edge2 sequence collected before splitting.
+        let blocks = self.fd.bblocks.blocks.clone();
+        for block in &blocks {
+            let mut block = block.write().unwrap();
+            if let Some(basic) = block.as_any_mut().downcast_mut::<BlockBasic>() {
+                basic.clear_edges();
+            }
+        }
+
+        for (source_op, target_op) in self.block_edges.clone() {
+            let source = source_op
+                .0
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade);
+            let target = target_op
+                .0
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade);
+            if let (Some(source), Some(target)) = (source, target) {
+                self.fd.bblocks.add_edge(source, target);
+            }
+        }
+    }
+
+    /// Reorder a graph so `block` is first and transfer the official entry
+    /// flag from the previous first block. This is the exact list/flag
+    /// mutation performed by Ghidra's `BlockGraph::setStartBlock`.
+    // Ghidra: block.cc:1627 BlockGraph::setStartBlock
+    fn set_start_block(graph: &mut BlockGraph, block: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        if graph.blocks.is_empty() {
+            return;
+        }
+
+        let old_first = graph.blocks[0].clone();
+        if (old_first.read().unwrap().get_flags() & block_flags::ENTRY_POINT) != 0 {
+            if Arc::ptr_eq(&old_first, &block) {
+                return;
+            }
+            let mut old_first = old_first.write().unwrap();
+            if let Some(basic) = old_first.as_any_mut().downcast_mut::<BlockBasic>() {
+                basic.flags &= !block_flags::ENTRY_POINT;
+            }
+        }
+
+        let Some(position) = graph
+            .blocks
+            .iter()
+            .position(|candidate| Arc::ptr_eq(candidate, &block))
+        else {
+            return;
+        };
+        if position != 0 {
+            let start = graph.blocks.remove(position);
+            graph.blocks.insert(0, start);
+        }
+        block.write().unwrap().set_flags(block_flags::ENTRY_POINT);
     }
 
     /// Generate basic blocks from the raw control-flow. Faithful to
@@ -1783,18 +1835,26 @@ impl<'a> FlowInfo<'a> {
     // Ghidra: flow.cc:824 FlowInfo::generateBlocks
     pub fn generate_blocks(&mut self) {
         self.fillin_branch_stubs();
-        // collectEdges is folded into split_basic's delegation in Rugra.
+        self.collect_edges();
         self.split_basic();
         self.connect_basic();
-        // Ghidra: if entry block has incoming edges, prepend a new entry
-        // (flow.cc:831-840). Rugra's build_blocks_from_alive always makes the
-        // entry block the first block with no in-edges, so this is a no-op.
+        // flow.cc:831-840: a loop back into the official entry would make it
+        // a multi-entry node for dominance. Prepend an empty block, connect
+        // it to the old entry, then transfer f_entry_point to the new block.
+        if let Some(start) = self.fd.bblocks.get_block(0) {
+            if start.read().unwrap().size_in() != 0 {
+                let new_front: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                    Arc::new(RwLock::new(BlockBasic::new(0, self.fd.baseaddr)));
+                self.fd.bblocks.add_block(new_front.clone());
+                self.fd.bblocks.add_edge(new_front.clone(), start);
+                Self::set_start_block(&mut self.fd.bblocks, new_front);
+            }
+        }
         if self.has_possible_unreachable() {
             // data.removeUnreachableBlocks(false,true) (flow.cc:844).
             self.fd.remove_unreachable_blocks();
         }
     }
-
 
     /// Generate P-code ops by following control flow from the entry point.
     /// Faithful to `FlowInfo::generateOps` (flow.cc:785-822).
@@ -1824,14 +1884,19 @@ impl<'a> FlowInfo<'a> {
             for bi_ref in &branchinds {
                 // Check if already has a jump table.
                 let bi_addr = bi_ref.0.read().unwrap().get_addr().as_u64();
-                let already = self.fd.jump_tables.iter().any(|jt| {
-                    jt.read().unwrap().get_op_address().as_u64() == bi_addr
-                });
+                let already = self
+                    .fd
+                    .jump_tables
+                    .iter()
+                    .any(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr);
                 if already {
                     // Use existing table entries.
-                    if let Some(jt_arc) = self.fd.jump_tables.iter().find(|jt| {
-                        jt.read().unwrap().get_op_address().as_u64() == bi_addr
-                    }) {
+                    if let Some(jt_arc) = self
+                        .fd
+                        .jump_tables
+                        .iter()
+                        .find(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr)
+                    {
                         let jt = jt_arc.read().unwrap();
                         for i in 0..jt.num_entries() {
                             new_addresses.push(jt.get_address_by_index(i));
@@ -1871,14 +1936,17 @@ impl<'a> FlowInfo<'a> {
     // RUGRA-GLUE: 收集 alive BRANCHIND ops（Ghidra 内联在 generateOps 的 tablelist 循环中）。
     /// Collect all alive BRANCHIND ops (for tablelist processing).
     fn collect_branchinds(&self) -> Vec<crate::op::PcodeOpRef> {
-        self.fd.obank.alivelist.iter()
+        self.fd
+            .obank
+            .alivelist
+            .iter()
             .filter(|r| r.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_BRANCHIND)
             .map(|r| crate::op::PcodeOpRef(r.0.clone()))
             .collect()
     }
 
-    // Ghidra: flow.cc:198 FlowInfo::newAddress
-    /// Add a new address to the work-list (flow.cc newAddress, ~:198-215).
+    // Ghidra: flow.cc:219 FlowInfo::newAddress
+    /// Add a new address to the work-list (flow.cc:219-235).
     /// Mirrors Ghidra's behavior: out-of-bounds addresses are reported via
     /// `handleOutOfBounds` and pushed to `unprocessed`; already-seen targets
     /// are skipped (Ghidra additionally marks the target op as a basic-block
@@ -1893,8 +1961,8 @@ impl<'a> FlowInfo<'a> {
         }
         // flow.cc:228-233: if already seen, mark the target op as a basic
         // block start.
-        if let Some(stat) = self.visited.get(&a) {
-            if let Some(op) = self.fd.obank.alivelist.get(stat.order as usize) {
+        if self.seen_instruction(addr) {
+            if let Some(op) = self.target(addr) {
                 op.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
             }
             return;
@@ -1907,100 +1975,88 @@ impl<'a> FlowInfo<'a> {
     /// (flow.cc:545-580).
     // Ghidra: flow.cc:545 FlowInfo::fallthru
     fn fallthru(&mut self) {
-        // Check if next address is worth processing (setFallthruBound).
-        if !self.set_fallthru_bound() {
+        // Ghidra holds this boundary fixed while following a sequential
+        // region. Recomputing it from the changing work-list can skip an
+        // exact hit on a previously decoded branch target.
+        let Some(mut bound) = self.set_fallthru_bound() else {
             return;
-        }
+        };
 
-        let mut is_fallthru = true;
         let mut start_basic = true;
-        while is_fallthru && !self.addrlist.is_empty() {
-            let curaddr = self.addrlist.pop().unwrap();
-            is_fallthru = self.process_instruction(curaddr, &mut start_basic);
-
-            if !is_fallthru {
+        loop {
+            let Some(curaddr) = self.addrlist.pop() else {
+                break;
+            };
+            if !self.process_instruction(curaddr, &mut start_basic) {
                 break;
             }
-
             if self.addrlist.is_empty() {
                 break;
             }
 
-            // Check boundary (flow.cc:560-574).
             let next = self.addrlist.last().unwrap().as_u64();
-            let bound = self.current_bound();
-            if bound > 0 && next >= bound {
+            if bound <= next {
                 if bound == self.eaddr {
-                    // Out of bounds — stop.
+                    // flow.cc:563-567: the sequential successor is outside
+                    // the permitted range. Preserve it as an unprocessed
+                    // address for fillinBranchStubs().
+                    self.handle_out_of_bounds(Address::new(self.eaddr), Address::new(next));
+                    self.unprocessed.push(Address::new(next));
                     self.addrlist.pop();
                     return;
                 }
-                // Hit an already-visited address boundary.
-                // set_fallthru_bound will handle dedup on next iteration.
-                if !self.set_fallthru_bound() {
-                    return;
+
+                if bound == next {
+                    // flow.cc:569-574: a control-flow op at the end of the
+                    // just-decoded instruction can force the already-visited
+                    // successor to begin a basic block.
+                    if start_basic {
+                        if let Some(op) = self.target(Address::new(next)) {
+                            op.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+                        }
+                    }
+                    self.addrlist.pop();
+                    break;
                 }
+
+                let Some(next_bound) = self.set_fallthru_bound() else {
+                    return;
+                };
+                bound = next_bound;
             }
         }
     }
 
     /// Check if the next address in addrlist is processable.
-    /// Returns false if already visited or out of bounds.
-    /// Partial port of `setFallthruBound` (flow.cc:489-513).
+    /// Returns `None` if the pending address was already visited. Otherwise,
+    /// returns the first visited instruction strictly above it, or `eaddr`.
     // Ghidra: flow.cc:489 FlowInfo::setFallthruBound
-    fn set_fallthru_bound(&mut self) -> bool {
-        if self.addrlist.is_empty() {
-            return false;
-        }
-        let addr = self.addrlist.last().unwrap().as_u64();
+    fn set_fallthru_bound(&mut self) -> Option<u64> {
+        let addr = self.addrlist.last()?.as_u64();
 
-        // Check visited map (flow.cc:505-510).
-        if let Some(stat) = self.visited.get(&addr) {
-            // Already visited — pop and return false.
-            self.addrlist.pop();
-            return false;
-        }
-
-        // Check upper bound for reinterpreted addresses (flow.cc:507-509).
-        // If addr falls within a previously visited instruction's range,
-        // it's an off-cut (reinterpreted) — skip it.
-        if let Some((_, stat)) = self.visited.range(..addr).next_back() {
-            // This entry's address + size must be <= addr (otherwise overlap).
-            // Since BTreeMap keys are the addresses, the predecessor's
-            // [key, key+size) must not contain addr.
-            // We need the predecessor's key + size.
-            // range(..addr) gives entries with key < addr.
-            let _ = stat; // We handle this below with full check.
-        }
-        // Full overlap check: any visited instruction [k, k+size) containing addr?
-        for (&k, stat) in self.visited.range(..=addr).rev() {
-            if k + stat.size as u64 > addr && k <= addr {
-                // addr is inside a previously decoded instruction → reinterpreted
-                // (flow.cc:504-505 calls reinterpreted(addr) here).
-                self.reinterpreted(Address::new(addr));
+        // `visited.upper_bound(addr)` followed by one predecessor step is
+        // Ghidra's exact lookup. An exact hit is a queued non-fallthrough
+        // target that was decoded by another path in the meantime: mark the
+        // target op before discarding the duplicate work-list address.
+        if let Some((&instruction, stat)) = self.visited.range(..=addr).next_back() {
+            if addr == instruction {
+                if let Some(op) = self.target(Address::new(addr)) {
+                    op.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+                }
                 self.addrlist.pop();
-                return false;
+                return None;
             }
-            if k + stat.size as u64 <= addr {
-                break; // No overlap possible with earlier entries.
+            if addr < instruction.saturating_add(stat.size as u64) {
+                self.reinterpreted(Address::new(addr));
             }
         }
 
-        true
-    }
-
-    /// Get the current boundary address (next visited instruction after addrlist top).
-    // RUGRA-GLUE: 辅助方法，Ghidra 内联在 setFallthruBound/fallthru 中。
-    fn current_bound(&self) -> u64 {
-        if self.addrlist.is_empty() {
-            return self.eaddr;
-        }
-        let addr = self.addrlist.last().unwrap().as_u64();
-        // Find the next visited instruction after addr.
-        match self.visited.range(addr + 1..).next() {
-            Some((&k, _)) => k,
-            None => self.eaddr,
-        }
+        let bound = self
+            .visited
+            .range((std::ops::Bound::Excluded(addr), std::ops::Bound::Unbounded))
+            .next()
+            .map_or(self.eaddr, |(&instruction, _)| instruction);
+        Some(bound)
     }
 
     /// Decode a single instruction, generate P-code, and analyze control flow.
@@ -2042,10 +2098,8 @@ impl<'a> FlowInfo<'a> {
                         pcodeop_flags::BADINSTRUCTION
                     };
                     self.artificial_halt(addr, halt_flag);
-                    self.fd.warning(
-                        &format!("{} - Truncating control flow here", error),
-                        addr,
-                    );
+                    self.fd
+                        .warning(&format!("{} - Truncating control flow here", error), addr);
                     (1, Vec::new())
                 }
             }
@@ -2053,14 +2107,14 @@ impl<'a> FlowInfo<'a> {
 
         // Record visited (flow.cc:468-469).
         let order = num_ops_before as u32;
-        self.visited.insert(addr.as_u64(), VisitStat {
-            order,
-            size: step,
-        });
+        self.visited
+            .insert(addr.as_u64(), VisitStat { order, size: step });
 
         // Update min/max addr (flow.cc:470-471).
         let a = addr.as_u64();
-        if a < self.minaddr { self.minaddr = a; }
+        if a < self.minaddr {
+            self.minaddr = a;
+        }
         if a.saturating_add(step as u64) > self.maxaddr {
             self.maxaddr = a.saturating_add(step as u64);
         }
@@ -2074,8 +2128,7 @@ impl<'a> FlowInfo<'a> {
         }
 
         // Analyze control flow of the new ops (xrefControlFlow).
-        let is_fallthru =
-            self.xref_control_flow(addr, step, num_ops_before, start_basic);
+        let is_fallthru = self.xref_control_flow(addr, step, num_ops_before, start_basic);
 
         is_fallthru
     }
@@ -2111,8 +2164,7 @@ impl<'a> FlowInfo<'a> {
                             // Branch to next instruction = fallthrough.
                             // is_fallthru stays true.
                         } else {
-                            // Push target to addrlist (flow.cc:312).
-                            self.addrlist.push(Address::new(target));
+                            self.new_address(Address::new(target));
                             is_fallthru = false;
                         }
                     } else {
@@ -2127,7 +2179,7 @@ impl<'a> FlowInfo<'a> {
                     if let Some(in0) = input {
                         let target = in0.read().unwrap().get_offset();
                         if target != addr.as_u64() + step as u64 {
-                            self.addrlist.push(Address::new(target));
+                            self.new_address(Address::new(target));
                         }
                     }
                     // Fallthrough target is pushed by the caller (process_instruction
@@ -2138,7 +2190,10 @@ impl<'a> FlowInfo<'a> {
                     // TODO(SLEIGH-FLOW-0001): recover and enqueue the complete
                     // jump-table target set before finishing this flow wave.
                     // For now, mark as non-fallthru (flow stops here).
-                    eprintln!("[FLOW] BRANCHIND at {:#x} — jump-table recovery not yet in flow", addr.as_u64());
+                    eprintln!(
+                        "[FLOW] BRANCHIND at {:#x} — jump-table recovery not yet in flow",
+                        addr.as_u64()
+                    );
                     is_fallthru = false;
                     *start_basic = true;
                 }
@@ -2158,7 +2213,8 @@ impl<'a> FlowInfo<'a> {
 
         // If fallthru, push next instruction address (flow.cc:458).
         if is_fallthru {
-            self.addrlist.push(Address::new(addr.as_u64() + step as u64));
+            self.addrlist
+                .push(Address::new(addr.as_u64() + step as u64));
         }
 
         is_fallthru
@@ -2172,17 +2228,13 @@ impl<'a> FlowInfo<'a> {
 /// Replaces the three-stage linear scan (disassemble → lift → inject_raw_ops)
 /// with reachability-driven flow tracking.
 // Ghidra: funcdata_op.cc:756 Funcdata::followFlow
-pub fn follow_flow(
-    fd: &mut Funcdata,
-    lifter: &mut SleighLifter,
-    entry: Address,
-    eaddr: u64,
-) {
+pub fn follow_flow(fd: &mut Funcdata, lifter: &mut SleighLifter, entry: Address, eaddr: u64) {
     let baddr = entry.as_u64();
     let mut flow = FlowInfo::new(fd, lifter, baddr, eaddr);
     flow.generate_ops(entry);
-    // generateBlocks: build basic blocks from all alive ops.
-    flow.fd.build_blocks_from_alive();
+    // funcdata_op.cc:776: generateBlocks is responsible for the official
+    // entry identity/flag, ordered edge replay, and synthetic entry creation.
+    flow.generate_blocks();
 }
 
 // ===================== Injection helpers (RUGRA-GLUE) =====================
@@ -2249,10 +2301,7 @@ fn resolve_callother_payload_name(
 /// constant-via-pointer scheme, so we match by the call op's address
 /// against each spec's `op_addr` (faithful to `FuncCallSpecs::find_call_op`).
 // RUGRA-GLUE: ANN-B; CALLSPEC-0001 linear-scan fallback because Rugra does not encode FuncCallSpecs pointer identity in CALL input(0).
-fn find_callspec_for_op(
-    fd: &Funcdata,
-    op: &crate::op::PcodeOpRef,
-) -> Option<usize> {
+fn find_callspec_for_op(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Option<usize> {
     let op_addr = op.0.read().unwrap().get_addr();
     for (i, fc) in fd.callspecs.iter().enumerate() {
         if fc.op_addr == op_addr {

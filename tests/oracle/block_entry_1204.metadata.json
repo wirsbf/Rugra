@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "fixture_id": "BLOCK-ENTRY-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": {
+    "action": "none",
+    "flow_options": "BfdArchitecture defaults",
+    "max_instructions": "BfdArchitecture default",
+    "phase": "Funcdata::followFlow through FlowInfo::generateBlocks"
+  },
+  "input": {
+    "build": {
+      "compiler": "g++ 11.4.0",
+      "flags": [
+        "-std=c++11",
+        "-O0",
+        "-fno-pie",
+        "-no-pie",
+        "-Wl,--build-id=none"
+      ]
+    },
+    "cases": [
+      {
+        "machine_body": "endbr64; ret",
+        "name": "block_entry_ret_probe",
+        "symbol_size": 8
+      },
+      {
+        "machine_body": "endbr64; jmp block_entry_loop_probe",
+        "name": "block_entry_loop_probe",
+        "symbol_size": 9
+      }
+    ],
+    "machine_text_sha256": "a934da51071ba39dfe1e6400c22b5bf6b0121f58b3773dc72580d7f65da71bdd"
+  },
+  "input_fingerprint": "sha256:2b12d5d9a5f72dea9c72ba1f3aab6eaadef64d09c5e3e7098b87ee04a48beafc",
+  "machine_input_sha256": "a934da51071ba39dfe1e6400c22b5bf6b0121f58b3773dc72580d7f65da71bdd",
+  "observation": {
+    "schema": "ordered blocks; official entry identity/count/flag; per-block index/op count/address range; ordered in/out peer and reverse slots",
+    "normalization": "block addresses are signed offsets from the function symbol; object identity is preserved as insertion ordinal",
+    "ordering": "BlockGraph list order and edge insertion/slot order are observed without sorting",
+    "aliasing": "entry_ordinal identifies the exact object returned by getStartBlock; peer ordinals preserve self-edge and synthetic-entry identity",
+    "overall_status": "MATCH",
+    "covered": [
+      "ordinary one-block function registers list[0] as the sole f_entry_point block",
+      "a back-edge into the initial block creates an empty synthetic front block",
+      "setStartBlock moves the new front block to list[0] and transfers f_entry_point",
+      "the synthetic edge is appended after the original self-edge, preserving reverse slots",
+      "block operation counts and normalized start/stop ranges"
+    ],
+    "untested": [
+      "multiple disconnected roots and possible_unreachable pruning",
+      "BRANCHIND jump-table target edge order",
+      "post-Action block index assignment"
+    ]
+  },
+  "comparand_sha256": {
+    "cpp_fixture": "caf10f8e5c525193e126dcc261a714780f18c435fbe04fbabed66fbdb9486cd5",
+    "rust_fixture": "e8d188ef2903a1bf69c8d5e901f3f97e3886ce70672366960a977a10736581d2",
+    "rugra_flow": "28f28bc2ee00f8e09b258a43e14aa47354097338aef15fb1f4db246bbc6bcdd5",
+    "ghidra_flow_cc": "e31e194bc25b5ed2647e2bd1fac18702b6ff7508cf1f75b54fbdfe3318c487f6",
+    "ghidra_flow_hh": "4a5f3f9f4470ecd52bf42c615a08f1f3b100e5b153559266f7275b7bc9b1a3ab",
+    "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+    "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+    "ghidra_funcdata_op_cc": "e3eb7ccacf4adf80296b99e25b72dd3440eaabdabefe34c9d52f8239d8d2d366"
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "expected_stdout_sha256": "830855a6f25e615aae99562b3ef1f991e77f56900ee7fbc978a5db1c02a8960d"
+}
