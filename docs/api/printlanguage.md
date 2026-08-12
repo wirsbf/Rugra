@@ -2,7 +2,11 @@
 
 ## 文档状态
 
-- **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——token 表、递归与 group identity 不完整，自由 `rpn_recurse` 可丢 pending node；真实 op/vn/type/highlight/field/case payload、namespace 策略及多个虚方法缺失。25 个本地单测不是锁定 oracle 证据，正式门禁 `NO_ORACLE`。
+- **状态**: 🔧 **L2（2026-08-12）**——`PRINT-RPN-0001A` 已用锁定
+  12.0.4 `PrintLanguage::pushOp/pushAtom` 运行时 fixture 证明 root unary/binary、
+  无括号嵌套和必须括号嵌套的**可见纯文本**为 `MATCH`。token 表、完整递归、
+  exact group ID/queue、真实 op/vn/type/highlight/field/case payload、namespace
+  策略及多个虚方法仍为 `UNTESTED/MISMATCH`，模块保持 L2。
 
 **源代码路径**: `src/printlanguage.rs`
 
@@ -79,6 +83,28 @@ Rugra 的 `PrintC` 目前为了输出质量直接通过 `Emit` 发射；本模�
 - `pub fn rpn_recurse(...)` — RPN 递归发射（cc:514）
 - `pub fn rpn_op_binary(...)` — 二元运算符推送（cc:546）
 - `pub fn rpn_op_unary(...)` — 一元运算符推送（cc:566）
+
+`rpn_push_op` 现在严格区分可见括号与不可见打印组：root 表达式及不需要
+括号的子表达式调用 `Emit::open_group/close_group`，不会再把 Ghidra 的
+`openGroup()` 错发成字符 `(`。需要保持求值顺序的子表达式仍调用
+`open_paren/close_paren`。
+
+### 12.0.4 oracle：`PRINT-RPN-0001A`
+
+运行 `tools/run_printlanguage_group_oracle.sh` 会分别执行锁定 Ghidra 与 Rugra，
+并对 stdout 做无规范化 direct diff。四个已覆盖结果为：
+
+```text
+root_unary=!x
+root_binary=a + b
+nested_invisible=a + b * c
+nested_parenthesized=a * (b + c)
+```
+
+这些 case 的 visible-text 状态为 `MATCH`；fixture overall 仍是 `UNTESTED`，
+因为 `EmitPrettyPrint` 的 TokenSplit 队列、exact group ID、换行和 markup payload
+尚未观察。完整 provenance 位于
+`tests/oracle/printlanguage_group_1204.metadata.json`。
 
 ### 格式化工具
 

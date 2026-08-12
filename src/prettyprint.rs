@@ -25,6 +25,17 @@ pub trait Emit {
     /// Emit a close parenthesis ')'
     fn close_paren(&mut self);
 
+    // Ghidra: prettyprint.hh:340 Emit::openGroup
+    /// Start an invisible printing group and return its matching identifier.
+    /// Plain-text emitters keep the group invisible and may use identifier 0.
+    fn open_group(&mut self) -> i32 {
+        0
+    }
+
+    // Ghidra: prettyprint.hh:346 Emit::closeGroup
+    /// End the invisible printing group identified by `id`.
+    fn close_group(&mut self, _id: i32) {}
+
     // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     /// Start a function definition
     fn begin_function(&mut self);
@@ -3162,4 +3173,3 @@ impl Emit for CaseDetectEmit {
         self
     }
 }
-

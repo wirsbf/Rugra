@@ -115,6 +115,33 @@
       }
     },
     {
+      "id": "printlanguage_group_1204",
+      "description": "PrintLanguage invisible-group versus visible-parenthesis text semantics",
+      "runner": ["tools/run_printlanguage_group_oracle.sh"],
+      "timeout_seconds": 900,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "PARTIAL_MATCH",
+      "cache": {
+        "metadata": "tests/oracle/printlanguage_group_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/printlanguage_group_1204.cc",
+          "rust_fixture": "tests/oracle/printlanguage_group_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_printlanguage_group_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/prettyprint.rs",
+          "src/printlanguage.rs",
+          "tests/oracle/printlanguage_group_1204.*",
+          "tools/run_printlanguage_group_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    },
+    {
       "id": "userop_index_1204",
       "description": "Global userop selector, parameter order, and output ownership",
       "runner": ["tools/run_userop_index_oracle.sh"],

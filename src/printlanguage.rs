@@ -1044,7 +1044,7 @@ pub fn rpn_push_atom(
                     emit.close_paren();
                     let _ = id; // Ghidra passes id to closeParen
                 } else {
-                    let _ = id; // Ghidra calls closeGroup(id)
+                    emit.close_group(id);
                 }
                 revpol.pop();
             } else {
@@ -1085,9 +1085,7 @@ pub fn rpn_push_op(
     if revpol.is_empty() {
         // printlanguage.cc:138-140
         paren = false;
-        emit.open_paren(); // Ghidra: emit->openGroup(); Rugra Emit has no
-                           // openGroup returning id, so we approximate.
-        id = 0;
+        id = emit.open_group();
     } else {
         // printlanguage.cc:142-148
         rpn_emit_op(emit, token_table, revpol, revpol.len() - 1);
@@ -1099,8 +1097,7 @@ pub fn rpn_push_op(
             emit.open_paren();
             id = 0; // Ghidra: emit->openParen(OPEN_PAREN)
         } else {
-            emit.open_paren(); // openGroup
-            id = 0;
+            id = emit.open_group();
         }
     }
     // printlanguage.cc:150-155

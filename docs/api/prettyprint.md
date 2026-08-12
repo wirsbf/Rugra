@@ -2,7 +2,11 @@
 
 ## 文档状态
 
-- **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——Emit 表面方法不能替代 `TokenSplit`/Oppen scan queue；当前 API 丢失 semantic object identity、group/paren ID、spaces+bump 和 line-width break/indent 状态，且 legacy 文本后处理仍在生产路径。正式门禁 `NO_ORACLE`。
+- **状态**: 🔧 **L2（2026-08-12）**——`Emit::open_group/close_group` 已补齐，
+  `PRINT-RPN-0001A` 对已覆盖 RPN case 的纯文本为 `MATCH`；但默认实现只保留
+  plain-text 的不可见语义，尚未实现/观察 `TokenSplit`/Oppen scan queue、exact
+  group ID、semantic object identity、spaces+bump 和 line-width break/indent，
+  模块整体仍为 `UNTESTED/MISMATCH`。
 - **对应源码**: 当前 `rugra/src/prettyprint.rs`
 
 **源代码路径**: `src/prettyprint.rs`
@@ -21,6 +25,13 @@ Trait for emitting decompilation tokens
 
 This provides a generic interface for "printing" decompiled code,
 allowing for different output formats (plain text, XML, HTML with markup, etc.)
+
+- `open_group() -> i32` / `close_group(id)` 对应 Ghidra
+  `Emit::openGroup/closeGroup`。纯文本 emitter 的 group 不产生字符，默认 ID 为 0；
+  它与会实际输出 `(`/`)` 的 `open_paren/close_paren` 是两套不同操作。
+- 锁定 12.0.4 visible-text fixture：
+  `tools/run_printlanguage_group_oracle.sh`。已覆盖 case 为 `MATCH`，exact
+  PrettyPrint group queue/ID 仍归 `PRETTY-0001`，不得据此升级 L3。
 
 ### `pub struct EmitNoMarkup`
 
