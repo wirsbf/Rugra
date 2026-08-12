@@ -595,7 +595,9 @@ impl ActionStart {
 
 impl Action for ActionStart {
     // Ghidra: coreaction.hh:41 ActionStart::apply
-    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // coreaction.hh:42: data.startProcessing(); return 0;
+        fd.start_processing();
         Ok(action_status::NO_CHANGE)
     }
 
@@ -5027,8 +5029,13 @@ impl Action for ActionOutputPrototype {
     fn get_name(&self) -> &str { "outputprototype" }
 }
 
-/// Prototype types locking. Faithful to `ActionPrototypeTypes`
-/// (coreaction.cc:4609-4651).
+/// Prototype type setup (partial port of `ActionPrototypeTypes`).
+///
+/// RUGRA-GAP(PIPE-LIFECYCLE-0001): locked input materialization at
+/// coreaction.cc:4680-4699 cannot be ported at this layer yet. Rugra's
+/// `ProtoParameter` drops the storage address space and `FuncProto` does not
+/// retain the resolved `ProtoModel`/input `ParamList`, so `extendInput` cannot
+/// query `assumedInputExtension` without guessing the compiler specification.
 pub struct ActionPrototypeTypes;
 impl ActionPrototypeTypes {
     // Ghidra: coreaction.hh:643 ActionPrototypeTypes (constructor mirror)
@@ -5037,7 +5044,7 @@ impl ActionPrototypeTypes {
 impl Action for ActionPrototypeTypes {
     // Ghidra: coreaction.cc:4609 ActionPrototypeTypes::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionPrototypeTypes::apply (coreaction.cc:4609-4651).
+        // Partial ActionPrototypeTypes::apply (coreaction.cc:4609-4699).
         // 1. Set evaluation prototype if not locked
         // 2. Strip indirect register from RETURN ops (replace input(0) with constant 0)
         // 3. If output locked: insert return varnodes for each RETURN
@@ -8249,12 +8256,11 @@ impl Action for ActionStartTypes {
     }
 }
 
-/// Marker: decompilation pipeline has completed.
+/// Finish processing after the decompilation pipeline has completed.
 ///
-/// Faithful to `ActionStop` (coreaction.hh:46). Ghidra's `apply` only calls
-/// `data.stopProcessing()`, which sets the `processing_complete` flag.
-/// Rugra's Funcdata does not yet track that flag, so this is a faithful
-/// no-op marker.
+/// `ActionStop::apply` delegates to [`Funcdata::stop_processing`], which
+/// marks processing complete, destroys the dead-op list, and invokes the
+/// datatype-warning hook outside jump-table recovery.
 pub struct ActionStop;
 
 impl ActionStop {
@@ -8266,8 +8272,9 @@ impl ActionStop {
 
 impl Action for ActionStop {
     // Ghidra: coreaction.hh:53 ActionStop::apply
-    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra: data.stopProcessing();
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // coreaction.hh:54: data.stopProcessing(); return 0;
+        fd.stop_processing();
         Ok(action_status::NO_CHANGE)
     }
 
@@ -10161,6 +10168,33 @@ mod tests {
     }
 
     #[test]
+    fn test_action_start_and_stop_delegate_funcdata_lifecycle() {
+        use crate::address::Address;
+
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x10);
+        assert!(!fd.is_proc_started());
+        assert!(!fd.is_proc_complete());
+        assert!(fd.heritage.infolist.is_empty());
+
+        let start_status = ActionStart::new().apply(&mut fd).unwrap();
+        assert_eq!(start_status, action_status::NO_CHANGE);
+        assert!(fd.is_proc_started());
+        assert!(!fd.is_proc_complete());
+        assert!(!fd.heritage.infolist.is_empty());
+
+        let dead = fd.new_op(0, Address::new(0x1000));
+        fd.obank.mark_dead(dead.clone());
+        assert_eq!(fd.obank.deadlist.len(), 1);
+        assert!(fd.obank.optree.contains(&dead));
+
+        let stop_status = ActionStop::new().apply(&mut fd).unwrap();
+        assert_eq!(stop_status, action_status::NO_CHANGE);
+        assert!(fd.is_proc_complete());
+        assert!(fd.obank.deadlist.is_empty());
+        assert!(!fd.obank.optree.contains(&dead));
+    }
+
+    #[test]
     fn test_action_assignhigh_creates_highvariables() {
         // ActionAssignHigh must give every varnode a HighVariable.
         use crate::address::Address;
@@ -10188,9 +10222,9 @@ mod tests {
     }
 
     #[test]
-    fn test_action_marker_stubs_return_nochange() {
-        // The pure marker Actions (no effect in Rugra) must return NO_CHANGE
-        // and not panic on an empty Funcdata.
+    fn test_remaining_action_markers_return_nochange() {
+        // Marker Actions return NO_CHANGE and do not panic on an empty
+        // Funcdata. ActionStop additionally performs its lifecycle mutation.
         use crate::address::Address;
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x10);
         assert_eq!(
@@ -10201,6 +10235,7 @@ mod tests {
             ActionStop::new().apply(&mut fd).unwrap(),
             action_status::NO_CHANGE
         );
+        assert!(fd.is_proc_complete());
         assert_eq!(
             ActionMarkIndirectOnly::new().apply(&mut fd).unwrap(),
             action_status::NO_CHANGE

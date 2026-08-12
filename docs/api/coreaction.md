@@ -1,5 +1,51 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-13：ActionStart/ActionStop 恢复主管线生命周期调用
+
+- `ActionStart::apply` 现在严格执行 Ghidra 12.0.4
+  `coreaction.hh:41-42` 的单一突变：调用共享 `Funcdata` 上的
+  `start_processing()`，并返回 `NO_CHANGE`（Ghidra 的 `0`）。
+- `ActionStop::apply` 现在严格执行 `coreaction.hh:53-54`：调用
+  `stop_processing()`，因此设置 processing-complete、清空 dead-op bank，并在非
+  jump-table recovery 模式下进入 datatype-warning 路径；Action 自身仍返回
+  `NO_CHANGE`。
+- 两个 Action 层均无容器遍历、计数器或排序键；对应遍历与排序全部属于被调用的
+  `Funcdata::startProcessing/stopProcessing`。引用语义为就地修改同一个 `Funcdata&`，
+  没有复制或输出参数。
+
+当前模块仍为 **L2**。`Funcdata::start_processing` 尚缺 Ghidra
+`funcdata.cc:150-168` 中的 `followFlow`、inline header warning、精确
+`ScopeLocal::clearUnlocked` 和 `localoverride.applyDeadCodeDelay`；Action wrapper
+对齐不代表完整 lifecycle 已 MATCH。
+
+锁定 fixture `tests/oracle/pipeline_lifecycle_1204.{cc,rs,metadata.json}` 在同一
+`examples/curl` 指纹、`x86:LE:64:default`、`gcc` compiler spec 与 `GetStr`
+入口上运行两个 Action。包装层可观察字段为 `MATCH`：返回值、started/complete
+flags、heritage info 初始化、prototype lock 状态，以及插入一个 dead
+`CPUI_COPY` 后由 `ActionStop` 清理。完整突变仍为 `MISMATCH`：Ghidra 的
+`followFlow` 产生 103 个 alive/all ops、272 个 Varnode、6 个 basic blocks、2
+个 calls，Rugra 均为 0。`tools/run_pipeline_lifecycle_oracle.sh` 同时锁定两端
+stdout 与稳定 diff 哈希，并把该已登记差异作为预期门禁结果。
+
+### `ActionPrototypeTypes` 阻塞审计（PIPE-LIFECYCLE-0001）
+
+锁定 oracle 的 `coreaction.cc:4609-4699` 在 input-locked 分支按参数索引
+`0..numParams` 顺序执行：以参数的**完整 storage Address（含 AddrSpace）**创建
+Varnode，调用 `setInputVarnode`（精确重叠时复用、部分重叠时报错），设置
+`locked_input`，在入口块调用 `extendInput`，并仅在 truncated code space 下按
+pointer type 设置 `ptrflow`。`extendInput` 又必须通过当前 `FuncProto`/`ProtoModel`
+的 `assumedInputExtension`，转调 input `ParamList::assumedExtension`，决定
+COPY/PIECE/INT_SEXT/INT_ZEXT 以及完整容器。
+
+Rugra 当前 `ProtoParameter.address` 是不含地址空间的标量 `Address(u64)`，
+`FuncProto` 仅保存 calling-convention 名称而不持有解析后的 `ProtoModel/ParamList`，
+也没有 `assumed_input_extension` 调用面；`Funcdata::new_varnode` 还会默认创建 Ram
+Varnode。因此无法区分 register/stack 同 offset，也无法为小参数决定扩展类型。
+本轮没有加入 SysV 硬编码或“从现有 Varnode 猜空间”的局部实现；依赖 DAG 必须先补
+Address-space-bearing parameter storage → resolved model ownership →
+`assumedInputExtension` → property-aware `newVarnode/setInputVarnode`，之后才能完成
+`ActionPrototypeTypes` 的真实 oracle fixture。
+
 ## 2026-08-12：Rugra 兼容参数 pass 尊重 FuncProto lock
 
 `ActionInferParams` 是 Rugra 现有的兼容 pass，并非 Ghidra 的独立 Action。
