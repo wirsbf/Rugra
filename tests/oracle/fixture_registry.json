@@ -142,6 +142,32 @@
       }
     },
     {
+      "id": "printc_terminal_1204",
+      "description": "PrintC terminal/no-branch statement-selection semantics",
+      "runner": ["tools/run_printc_terminal_oracle.sh"],
+      "timeout_seconds": 900,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/printc_terminal_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/printc_terminal_1204.cc",
+          "rust_fixture": "tests/oracle/printc_terminal_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_printc_terminal_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/printc.rs",
+          "tests/oracle/printc_terminal_1204.*",
+          "tools/run_printc_terminal_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    },
+    {
       "id": "userop_index_1204",
       "description": "Global userop selector, parameter order, and output ownership",
       "runner": ["tools/run_userop_index_oracle.sh"],

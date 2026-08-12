@@ -793,3 +793,18 @@ model is not present in Rugra's print layer):
 
 - 为 6 个此前缺少函数级来源标记的 helper 补齐 4 个锁定-oracle 函数映射和 2 个具体 Rust glue 说明。
 - 仅补注释，不改变行为；既有越界引用留待后续串行处理。未生成函数级 oracle fixture，因此不声明 `MATCH` 或提升模块等级。
+
+### PRINT-RPN-0001B：结构化块的 terminal/no-branch 选择（2026-08-12）
+
+- `emit_block_basic_rpn` 现在显式接收 `suppress_branch`，作为 Ghidra
+  `PrintLanguage::no_branch` modifier 在 Rugra 结构化分发层中的传输值。
+- 锁定 12.0.4 的真实 `PrintC::emitBlockBasic`（`printc.cc:2678`）与 Rugra
+  在六个同序 P-code block 上直接对拍：可见/抑制 CBRANCH、无条件 BRANCH、
+  抑制模式下的 RETURN，以及 RETURN+CBRANCH 混合块。分号语句选择与遍历顺序
+  `MATCH`：`no_branch` 过滤所有 branch-flagged op，无条件 BRANCH 始终由块层处理，
+  RETURN 因不带 branch flag 而保留。
+- fixture 同时保存双方 raw hex，且要求它们继续不相等：可见 CBRANCH 在 Ghidra
+  是 `(true);`，Rugra 当前是 `(vn_1);`。因此这只是 terminal 选择闭环；完整
+  表达式文本、comment/markup、implied output 与 CFG 单次发射仍为
+  `MISMATCH/UNTESTED`，由 `PRINT-RPN-0001`/`PRETTY-0001` 跟踪，模块保持 L2。
+- 验收：`tools/run_printc_terminal_oracle.sh`。

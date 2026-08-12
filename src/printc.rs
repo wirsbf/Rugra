@@ -1404,10 +1404,11 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:2678 PrintC::emitBlockBasic
-    /// Walk a basic block's ops and emit each non-implied, non-branch op as
-    /// an RPN statement. Faithful to PrintC::emitBlockBasic (printc.cc:2678-
-    /// 2722): skip dead ops, skip straight BRANCHes (rendered by the
-    /// structurer), skip ops whose output is implied (inlined into consumers).
+    /// Walk a basic block's ops and emit each printable op as an RPN statement.
+    /// `suppress_branch` is the Rust transport for Ghidra's `no_branch` print
+    /// modifier: when active every PcodeOp carrying the branch flag is skipped.
+    /// A straight BRANCH is skipped in either mode because the block hierarchy
+    /// always renders it. Outputs marked implied are inlined into consumers.
     ///
     /// The read guard on op_arc and the &mut self borrow are disjoint objects,
     /// so they coexist safely; we keep the guard for the whole statement emit
@@ -1417,6 +1418,7 @@ impl PrintC {
     pub fn emit_block_basic_rpn(
         &mut self,
         ops: &[crate::op::PcodeOpRef],
+        suppress_branch: bool,
     ) {
         for op_ref in ops {
             let op_guard = op_ref.0.read().unwrap();
@@ -1424,10 +1426,11 @@ impl PrintC {
             if op_guard.is_dead() {
                 continue;
             }
-            // printc.cc:2697-2702: branches. A straight BRANCH is rendered by
-            // the structurer; CBRANCH/RETURN/CALL still need statement output.
+            // printc.cc:2697-2702: `no_branch` suppresses every branch-flagged
+            // operation. A straight BRANCH is always rendered by the block
+            // hierarchy, even when `no_branch` is clear.
             if op_guard.is_branch() {
-                if matches!(op_guard.opcode, OpCode::CPUI_BRANCH) {
+                if suppress_branch || matches!(op_guard.opcode, OpCode::CPUI_BRANCH) {
                     continue;
                 }
             }
@@ -1502,7 +1505,7 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:123 PrintC::emitBlockOps
+    // RUGRA-GLUE: transports Ghidra's PrintLanguage::no_branch modifier as an explicit boolean through Rugra's structured-block dispatcher
     /// Emit a single block's operations, with dead code elimination.
     ///
     /// Skips: COPY ops (folded via copy_map), terminal branches (when skip_terminal),
@@ -1511,7 +1514,7 @@ impl PrintC {
         // Route to RPN path if enabled
         if self.rpn_enabled {
             let ops = block_arc.read().unwrap().get_ops();
-            self.emit_block_basic_rpn(&ops);
+            self.emit_block_basic_rpn(&ops, skip_terminal);
             return;
         }
         use crate::opcodes::OpCode;
