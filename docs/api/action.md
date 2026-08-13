@@ -2,6 +2,26 @@
 
 **源代码路径**: `src/action.rs`
 
+## 2026-08-14：ActionPool opcode 变化后立即重派发
+
+锁定 Ghidra `ActionPool::processOp`（`action.cc:822-875`）在每次 Rule
+返回后立即重新观察目标 PcodeOp。正返回值路径先累计 change，再检查 dead/opcode；
+非正返回值若仍修改了 opcode，则通过 Architecture 输出精确错误消息。两条
+opcode-change 路径都会丢弃旧 opcode 尚未执行的 Rule，并从新 opcode 的规则表
+索引 0 重新派发。`ActionPool::apply`（`action.cc:877-887`）负责遍历 op bank。
+
+Rugra 现在恢复了上述 enabled/live、单 op、无断点投影，修复
+SUBPIECE 被 RuleSubExtComm 改写为 INT_ZEXT 后仍继续调用旧 SUBPIECE Rule、最终
+越界读取输入 1 的崩溃。真实锁定 oracle 门禁为
+`tools/run_action_opcode_redispatch_oracle.sh`；它覆盖返回 1 的正常改写与“改写但
+返回 0”的诊断路径，并比较调用事件、规则尝试/命中观察以及完整目标 op 状态。
+
+完整 ActionPool 仍是 `MISMATCH`：Rust 尚未在 Rule trait/池内承载 disabled、
+per-rule `count_tests`/`count_apply`、warning、breakpoint 与断点续跑的
+`op_state`/`rule_index`；`apply` 的返回值/change 载体、live-op Vec 快照，以及
+初始 dead op 的 `opDeadAndGone` 也与 Ghidra 不同。fixture 因此只将即时重派发
+投影记为 `MATCH`，完整函数状态保持 `MISMATCH`，不得据此升级模块状态。
+
 ## 2026-08-12：默认 decompile 组保留已知原型锁
 
 锁定 Ghidra `ActionDatabase::buildDefaultGroups`（`coreaction.cc:5421-5441`）

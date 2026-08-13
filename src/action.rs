@@ -451,9 +451,9 @@ impl ActionPool {
 }
 
 impl Action for ActionPool {
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    // Ghidra: action.cc:877 ActionPool::apply
     /// Single-pass Rule application. Faithful to `ActionPool::apply`
-    /// (action.cc:878-889) + `processOp` (action.cc:823-876). The parent
+    /// (action.cc:877-887) with `processOp` (action.cc:822-875) inlined. The parent
     /// `perform()` repeats this until no change (via rule_repeatapply).
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let want_stats = std::env::var("RUGRA_RULE_STATS")
@@ -469,34 +469,50 @@ impl Action for ActionPool {
             };
             if is_dead { continue; }
             // processOp: iterate rules for this opcode, with opcode-change
-            // detection (action.cc:862-867): if a Rule changes the op's
-            // opcode, re-dispatch to the new opcode's rule list.
-            loop {
+            // detection after every Rule (action.cc:859-869).  A changed
+            // opcode invalidates the remainder of the old rule list and
+            // restarts dispatch at index zero for the new opcode.
+            'dispatch: loop {
                 let rule_idxs: Vec<usize> = self.per_op.get(&opc)
                     .cloned()
                     .unwrap_or_default();
                 if rule_idxs.is_empty() { break; }
-                let mut applied_any = false;
                 for ridx in rule_idxs {
-                    // Re-check dead after each rule.
-                    if op_ref.0.read().unwrap().is_dead() { break; }
                     let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
                     if res > 0 {
                         pass_changes += res;
-                        applied_any = true;
                         if want_stats {
                             *self.rule_hits.entry(ridx).or_insert(0) += res;
                         }
+                        let (is_dead, new_opc) = {
+                            let op = op_ref.0.read().unwrap();
+                            (op.is_dead(), op.opcode)
+                        };
+                        if is_dead {
+                            break 'dispatch;
+                        }
+                        if new_opc != opc {
+                            opc = new_opc;
+                            continue 'dispatch;
+                        }
+                    } else {
+                        let new_opc = op_ref.0.read().unwrap().opcode;
+                        if new_opc == opc {
+                            continue;
+                        }
+                        let message = format!(
+                            "ERROR: Rule {} changed op without returning result of 1!",
+                            self.rules[ridx].get_name(),
+                        );
+                        if let Some(arch) = fd.get_arch() {
+                            arch.print_message(&message);
+                        } else {
+                            eprintln!("{message}");
+                        }
+                        opc = new_opc;
+                        continue 'dispatch;
                     }
                 }
-                // Opcode-change detection (action.cc:862-867): if the op's
-                // opcode changed during rule application, re-dispatch.
-                let new_opc = op_ref.0.read().unwrap().opcode;
-                if !op_ref.0.read().unwrap().is_dead() && new_opc != opc {
-                    opc = new_opc;
-                    continue; // Re-scan with new opcode's rules
-                }
-                let _ = applied_any;
                 break;
             }
         }

@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ACTION-OPCODE-REDISPATCH-0001",
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/action.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/action.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/sleigh_arch.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.cc"
+    ]
+  },
+  "rugra_source": {
+    "commit": "52b1ccbb9f1c50518e6535721a48f955a4c4831c",
+    "tree": "85987c6ed633fd63fa3f138326d85758dcf385ce",
+    "src_tree": "559b450cdc9dd0248e322d40251be4648bf11ad9",
+    "sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
+    "base_coreaction_blob": "7c4c07d7f6c5e2efa837e2ca145a053d7b9ba51c",
+    "base_coreaction_sha256": "6b7da863e0d87c363ae9794b7969b7cb67dc37b701c0871013861c2339fc6d84",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "archive_policy": "Extract only the explicit dependency closure from the pinned commit; never read live crate files and never require runtime HEAD equality",
+    "base_closure_hash_scheme": "sha256 of rugra-action-opcode-redispatch-base-closure-v1 plus sorted length-prefixed relative paths and pinned archive contents",
+    "base_closure_sha256": "330799f5b6756e5d6dd4391d8f3aa61ac3f2a0b00fa7e8bc7e6c055449ee91c7",
+    "overlays": [
+      {
+        "path": "src/action.rs",
+        "sha256": "57d7bce3f4a479f9c4af8d882bbb267cfddfb198e9608fadef55e17facb49545",
+        "policy": "Hash this owned live source before replacing the same path in the pinned Rugra archive"
+      },
+      {
+        "path": "src/arch.rs",
+        "sha256": "06b44a01b391d38df6c87bbb970a066ae98cca59a2a2e438884127acf5588586",
+        "policy": "Hash this owned live source before replacing the same path in the pinned Rugra archive"
+      }
+    ]
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "usage": "Locked BfdArchitecture initializes the oracle Funcdata; the Rust projection retains the same architecture/compiler identity and an equivalent raw stderr message sink."
+  },
+  "analysis_options": {
+    "apis": [
+      "ActionPool::apply",
+      "ActionPool::processOp",
+      "Funcdata::opRemoveInput",
+      "Funcdata::opSetOpcode",
+      "SleighArchitecture::printMessage"
+    ],
+    "action_entry": "Direct ActionPool::apply on one enabled live PcodeOp; warnings and breakpoints disabled; OPACTION_DEBUG absent.",
+    "op_iteration": "One pre-existing live op only; no op insertion, deletion, or dynamic-tree boundary is exercised.",
+    "rules": "Four scripted rules in insertion order: change and old_tail register for SUBPIECE; new_head and new_tail register for INT_ZEXT. change removes slot 1, changes opcode to INT_ZEXT, and returns the case value.",
+    "architecture_state": "Locked oracle owns a fully initialized BfdArchitecture/ScopeLocal for pinned GetStr. Rust owns Architecture::new with identical archid and raw stderr print contract but lacks the remaining BFD/type/symbol state. ActionPool does not read those absent fields in the covered projection; the complete same-input claim remains unavailable and overall status is MISMATCH.",
+    "diagnostics": "The oracle BfdArchitecture uses an isolated ostringstream. Initialization/loader diagnostics are discarded before each target case; each case's ActionPool-produced bytes are forwarded unmodified to process stderr. Rust forwards Architecture::print_message unmodified. No runner filtering or prefix normalization is performed.",
+    "initialization": "Both sides construct a block at ram:0x1000 and one alive SUBPIECE with unique:4 output, register:0x20:2 input 0, constant:0:4 input 1, identical creation time/order, and no other ops. The C++ direct-apply probe initializes inherited count/lcount to zero because Action::perform is intentionally bypassed.",
+    "counters": "Locked Rule::count_tests/count_apply are observed directly. Rust Rule has no framework counters, so fixture-local counters record identical attempted/successful scripted calls; this is an explicit residual, not a complete Rule-state match.",
+    "normalization": "None; stdout fields, raw stderr bytes, rule/event order, and target op state are preserved."
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree file and never require runtime HEAD equality",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "include_tree_sha256": "4eb42123f7696cd09656ed0e0950de8c450b1ab0606a08a188411f8d0463159c",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0,
+      "elf_symbol_extent": 74,
+      "symbol_source": "ELF/BFD"
+    },
+    "cases": [
+      {
+        "id": "positive_change",
+        "change_return": 1,
+        "initial_opcode": 63,
+        "replacement_opcode": 17,
+        "expected_trace": [
+          "change",
+          "new_head",
+          "new_tail"
+        ]
+      },
+      {
+        "id": "zero_change",
+        "change_return": 0,
+        "initial_opcode": 63,
+        "replacement_opcode": 17,
+        "expected_trace": [
+          "change",
+          "new_head",
+          "new_tail"
+        ],
+        "expected_raw_diagnostic": "ERROR: Rule change changed op without returning result of 1!\n"
+      }
+    ],
+    "sha256": "846b7614d7f2dd226eca5b088a610d1e19f174f38623eb1091775b67d44a628f"
+  },
+  "observation": {
+    "positive_redispatch_status": "MATCH",
+    "zero_result_redispatch_status": "MATCH",
+    "zero_result_raw_diagnostic_status": "MATCH",
+    "target_op_state_status": "MATCH",
+    "overall_status": "MISMATCH",
+    "matched_projection": [
+      "After change, old_tail is abandoned and the INT_ZEXT rule list restarts at new_head/index 0 in both return-value cases.",
+      "The zero-result opcode change emits the locked diagnostic byte-for-byte through the Architecture sink.",
+      "Final opcode/eval flags/input/output shape and storage, lifecycle, parent/address/time/order, bank membership, and removed-input descendant state match.",
+      "Enabled scripted rule attempt/success observations match in fixed insertion order."
+    ],
+    "known_differences": [
+      "Ghidra ActionPool::apply returns 0 and stores positive change in inherited Action::count; Rugra apply returns the positive change and its private total is not exposed.",
+      "Rugra Rule lacks disabled state and framework count_tests/count_apply; fixture-local counters only prove enabled rule invocation in this projection.",
+      "Rugra Rule/ActionPool lacks issueWarning, rule action breakpoints, and resumable op_state/rule_index.",
+      "Ghidra dynamically traverses PcodeOpTree and calls opDeadAndGone for an initially dead op; Rugra snapshots alivelist into Vec and skips dead entries without destruction.",
+      "Rust fixture Architecture is not the complete BfdArchitecture/type/symbol state; only the identity and consumed print-message contract are equivalent."
+    ],
+    "untested": [
+      "disabled rules",
+      "warning-issued state",
+      "breakpoint return and resume",
+      "initial-dead cleanup",
+      "newly inserted op iteration",
+      "multiple ops",
+      "a rule that kills its op",
+      "opcode change combined with breakpoint"
+    ]
+  },
+  "build": {
+    "oracle_archive": "git archive of exact locked Ghidra commit followed by locked Makefile libdecomp.a; never use the Ghidra worktree for compilation",
+    "rugra_archive": "Explicit Cargo/build dependency closure from immutable Rugra commit 52b1ccbb; only hash-pinned src/action.rs and src/arch.rs overlays replace archive paths",
+    "supplemental_source_units": [
+      "libdecomp.cc",
+      "sleigh_arch.cc",
+      "inject_sleigh.cc",
+      "bfd_arch.cc",
+      "loadimage_bfd.cc"
+    ],
+    "cxx_flags": [
+      "-std=c++11",
+      "-O2",
+      "-Wall",
+      "-Wno-sign-compare",
+      "-m64"
+    ],
+    "registry_packages": 164,
+    "rust_build": "Cargo.lock-checksummed crates are securely expanded into an isolated vendor tree; Cargo --locked --offline uses isolated CARGO_HOME/target; rustc compiles the separately hashed fixture against that snapshot.",
+    "environment_policy": "Immutable runner descriptor; env -i validation/build/execute; pinned tool paths/toolchain; copied and hashed BFD include/library closure; signal-safe bounded temporary cleanup; post-readback hashes."
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "ad6daa0363c77d0b452f0c58f83f211ce50678e3d84b2d31e647d60b4e472696",
+    "rust_fixture_sha256": "0f8adbeee9e4d392488f0e2f5337cba746298e0b2f173c1305b3a10eaf25dd1a",
+    "runner_sha256": "d564f64f4068cd93c2055fbb743d086378744e7af0ece715b1a8c052d8a60659",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_cxx_target": "x86_64-linux-gnu",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+    "host_make_path": "/usr/bin/make",
+    "host_python_path": "/usr/bin/python3.10",
+    "host_git_path": "/usr/bin/git",
+    "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+    "host_platform": "Linux 6.8.0-124-generic x86_64",
+    "action_doc_sha256": "6b24c8facd0acf9ce2b5f882959a1d7059b6573e4129a62e536729df237a8d70",
+    "arch_doc_sha256": "4c483db2bd07f79157801da7ad3a6944dc45029955aa75db8176b945aae6c0f2"
+  },
+  "expected_observation_sha256": {
+    "ghidra_stdout": "d4e6ec281df4f8541f8099274f123d70b1fe9b7236b6ab03e368fd6217e4018c",
+    "rugra_stdout": "0bc3c35948a9bb1fab16704e56c6fc5d3d32d170dccda751bdd537f02c863f0f",
+    "ghidra_stderr": "511ce7f17e16129085580f20e515ded5041740c415a4ab8c9ca53f855c4fc7aa",
+    "rugra_stderr": "511ce7f17e16129085580f20e515ded5041740c415a4ab8c9ca53f855c4fc7aa",
+    "full_stdout_diff": "3cc7dc17615cb6a293dc6c693f6586f1148feb9af775eb1c6507373087e3252f"
+  },
+  "expected_exit_code": 0
+}

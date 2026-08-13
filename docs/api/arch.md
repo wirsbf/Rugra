@@ -128,3 +128,9 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 - `construct_join_address(hi,sz,lo,sz)`（translate.cc:817）— 桩：contiguous 早返回，否则 0。
 <!-- annotation-pass: 2026-07-04 -->
  
+# 2026-08-14：Architecture 消息保持 oracle 原文
+
+`Architecture::print_message` 现在按锁定 Ghidra
+`SleighArchitecture::printMessage`（`sleigh_arch.hh:138`）把消息原文加换行写到
+stderr，不再添加 Rust 自创的 `[ARCH] ` 前缀。这使 Action/Rule 的错误与警告
+消息可逐字对拍；调用方负责提供完整的 `ERROR:` / `WARNING:` 文本。

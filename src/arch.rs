@@ -521,11 +521,11 @@ impl Architecture {
         &self.archid
     }
 
-    // RUGRA-GLUE: print_message (no Ghidra counterpart found)
+    // Ghidra: sleigh_arch.hh:138 SleighArchitecture::printMessage
     /// Print an error message to console. Faithful to `printMessage`
     /// (architecture.hh:250). Default implementation prints to stderr.
     pub fn print_message(&self, message: &str) {
-        eprintln!("[ARCH] {message}");
+        eprintln!("{message}");
     }
 
     // RUGRA-GLUE: init (no Ghidra counterpart found)
