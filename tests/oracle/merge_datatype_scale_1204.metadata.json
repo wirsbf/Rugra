@@ -1,0 +1,100 @@
+{
+  "schema": 2,
+  "fixture_id": "MERGE-DATATYPE-SCALE-0001",
+  "overall_status": "MISMATCH",
+  "status_note": "The locked direct full-loc Merge::mergeByDatatype function projection byte-matches for the enumerated state, but the ActionMergeType caller closure, public arbitrary-range interface and listed semantic branches are not closed.",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "rugra_base_commit": "87c6e06fb7f6dce503b0bfe560ef81faf63f4ef8",
+  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
+  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
+  "analysis_options": {
+    "entrypoint": "direct function projection after high creation: Ghidra fd.getMerge().mergeByDatatype(fd.beginLoc(),fd.endLoc()); Rugra Merge::new().merge_by_datatype(&mut fd); this is not a proof of Rust ActionMergeType::apply",
+    "range": "entire location-sorted Varnode bank",
+    "datatype_identity": "one shared uint4 object, two structurally equal but pointer-distinct uint4 objects, and one shared same-address tie type",
+    "covers": "same semantic point Covers on block 0 at each defining operation; Ghidra lazily derives them from the zero-input COPY graph, while the Rust fixture installs the corresponding point Cover before set_high_level",
+    "normalization": "none; stdout is byte-diffed and both stderr streams must be empty",
+    "scale_axis": "free Varnode count only: 1, 2, 32, 1024; eligible High count is fixed and deliberately not claimed as an eligible/cache scale proof"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
+    "cases": [
+      "production call fd.setHighLevel(); fd.getMerge().mergeByDatatype(fd.beginLoc(),fd.endLoc())",
+      "free register varnodes counts 1,2,32,1024 at offsets 0x1000+8*i, common TypeFactory uint4",
+      "eligible common-type written values unique:0x30@ram:0x8000, ram:0x20@ram:0x8001, register:0x10@ram:0x8002, disjoint point covers",
+      "Basic filters: implied register:0x40, proto-partial register:0x50, spacebase register:0x60",
+      "exact datatype identity: two structurally equal caller-owned uint4 TypeBase pointers at register:0x70 and register:0x80",
+      "stable same-address merge: common caller-owned type at register:0x90 defined at ram:0x8008 then ram:0x8009",
+      "observe survivor identity, all High assignments, instance order and count, merge groups, filter singleton state, mark clear state, and free High cardinality"
+    ],
+    "sha256": "43b5d87a190401b15e09f359bf75a106a13b6d04e18ac01f7f60d9649fb2cb82"
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "MATCH for the fixture projection: survivor identity, every observed Varnode-to-High reference, instance count/order, merge groups, singleton filters and marks are compared; arbitrary range/output mutation remains MISMATCH",
+    "loop_bounds_and_order": "MATCH for full beginLoc/endLoc with stable High dedup, exact pointer-type grouping, free counts 1/2/32/1024, reversed storage offsets across space ids, and same-address defining-op order",
+    "counters_and_accumulators": "MATCH for speculative merge-group increments 0/1/2, free High cardinality and per-run reset; cache population/reuse counters are not observable and remain UNTESTED",
+    "sort_and_comparison_keys": "MATCH for full storage-space ordering, reversed offsets, defining-op address tie-break and retained-side stability at identical storage; Cover first-block and null-def layers remain UNTESTED"
+  },
+  "coverage": {
+    "full_loc_target_projection": "MATCH",
+    "direct_function_entrypoint_and_complete_observed_mutation": "MATCH for the enumerated point-Cover fixture state",
+    "action_merge_type_caller_closure": "MISMATCH: Rust ActionMergeType creates a fresh Merge and calls merge_all; locked Ghidra reuses Funcdata::getMerge and calls only mergeByDatatype, so prior phases and cache lifetime differ",
+    "free_filter_scale_1_2_32_1024": "MATCH",
+    "merge_test_basic_implied_proto_partial_spacebase": "MATCH",
+    "exact_datatype_pointer_identity_and_stable_grouping": "MATCH",
+    "storage_space_id_order_with_reversed_offsets": "MATCH",
+    "same_storage_def_address_and_retained_side_stability": "MATCH",
+    "merge_groups_survivor_instances_high_backrefs_marks": "MATCH",
+    "arbitrary_start_end_iterator_range": "MISMATCH: Rust exposes only the whole-bank call and cannot reproduce public Ghidra [startiter,enditer) selection/mutation",
+    "block_intersection_interior_and_boundary": "UNTESTED: every legal Cover pair is disjoint at the coarse intersectList threshold",
+    "copy_shadow_and_partial_copy_shadow": "UNTESTED",
+    "variable_piece_exactly_one_piece_and_group_intersections": "UNTESTED",
+    "intersection_cache_move_and_later_lookup_reuse": "UNTESTED: the three-High sequence does not prepopulate a high2-to-later candidate edge before high2 is merged",
+    "intersection_cache_clear_and_cross_call_lifecycle": "UNTESTED: the direct fixture constructs one fresh Merge per scale and does not observe clear or reuse across calls",
+    "merge_linear_in_place_vector_mutation": "UNTESTED: mergeLinear is private in Rust and the caller-owned vector ordering is not exposed by the fixture",
+    "speculative_required_adjacent_guards": "UNTESTED: typelock, addrtied, input, persist, extraout, namelock, illegal-input, isolated-symbol and two-piece rejection branches are outside this fixture",
+    "merge_test_required_shared_callers": "UNTESTED: mergeOpcode/marker/adjacent callers and their rejecting mutation states are not exercised; only permissive MergeType values reach this helper",
+    "merge_test_basic_constant_annotation_insert_truth_table": "UNTESTED: caller-level free filtering and legal/implied/proto-partial/spacebase cases are covered, but constant, annotation and INSERT/hasCover combinations are not directly invoked",
+    "mark_dedup_preexisting_multi_instance_high": "UNTESTED: all initial eligible HighVariables are single-instance",
+    "compare_cover_first_block": "UNTESTED",
+    "compare_null_def_before_written": "UNTESTED",
+    "dirty_varnode_cover_lazy_rebuild": "UNTESTED on Rust: the fixture installs clean point Covers; production dirty-cover rebuild is outside the byte proof",
+    "dirty_flag_type_symbol_lazy_short_circuit_side_effects": "UNTESTED: dirty-to-clean transitions and updateType/updateFlags/updateSymbol short-circuit state are not fully observed",
+    "eliminated_high_retirement_and_external_handle_lifetime": "MISMATCH/UNTESTED: Ghidra deletes the eliminated HighVariable; Rust Arc handles can retain it, and the fixture observes only live Varnode back-references",
+    "exact_cover_flags_num_merge_classes_and_source_high_state": "UNTESTED: projected instances/merge groups/back-references match, but all raw cover endpoints, High flags, numMergeClasses and drained source-High fields are not serialized",
+    "compare_high_all_keys_equal": "UNTESTED: identical Cover/storage/null-def-or-def-address equivalence and sort stability at a completely equal comparator key are not separately constructed",
+    "defining_op_address_space_identity": "MISMATCH/UNREPRESENTABLE: locked compareHighByBlock compares the defining PcodeOp's full Address including code-space index, while Rugra PcodeOp::get_addr returns an offset-only Address; all fixture definitions use ram so this difference is not exercised",
+    "stripped_datatype_identity": "UNTESTED: only base uint types are used; updateType getStripped identity behavior for pointer/array/partial/enum types is outside the fixture",
+    "eligible_high_and_cache_scale": "UNTESTED: scale increases only filtered free Varnodes; eligible High count is fixed",
+    "address_space_duplicate_numeric_id_total_order": "UNTESTED and invalid in the synthetic Architecture"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "fca416b223e898b0509d278d3e98c8dfe2bdc842ecb8d3f1ca7136c343de6285",
+    "rust_fixture_sha256": "0822ee44754837aa254e39a05fcde4f9a47e075d095f9cd2363e84211df1a7b4",
+    "merge_rs_sha256": "4c1a9f6f71a0f78919b0efe92c4fb9aa80a0ae05ff6ce3149bd8ed1ee28fe7ff",
+    "merge_doc_sha256": "951340b30bc6e2934f3d764e9fe3472ba60eb957801c567895e98fc21059a89c",
+    "runner_sha256": "2262cae17b3d44a8c37da1922b69f77f758eaf7c5a8ac7ba1d91be8c3513c50f",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_make_path": "/usr/bin/make",
+    "host_git_path": "/usr/bin/git",
+    "host_python_path": "/usr/bin/python3.10"
+  },
+  "build": {
+    "cpp_oracle": "git archive of the exact locked Ghidra commit, rebuilt libdecomp.a plus the libdecomp/sleigh_arch/inject_sleigh driver closure",
+    "rust_comparand": "Rugra base commit archive with only frozen merge.rs overlaid; Cargo.lock registry closure checksum-verified and vendored into an isolated CARGO_HOME; offline isolated target",
+    "registry_packages": 164
+  },
+  "expected_stdout_sha256": "06e924472195bca910c83a692b3a03980694f40c31100e774005e667954f737c"
+}

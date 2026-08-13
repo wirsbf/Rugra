@@ -7,9 +7,386 @@ use crate::cover::{Cover, CoverBlock};
 use crate::funcdata::Funcdata;
 use crate::space::AddressSpace;
 use crate::type_system::{Datatype, TypeBase, TypeMetatype};
-use crate::variable::HighVariable;
+use crate::variable::{high_flags, HighVariable};
 use crate::varnode::{Varnode, varnode_flags};
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+
+/// Cached pairwise Cover-intersection results used by MergeType.
+///
+/// The cache is symmetric, exactly like `HighIntersectTest::highedgemap`.
+/// MergeType's speculative guards reject address-tied variables before this
+/// cache is queried, so the `StackAffectingOps` call-crossing branch of the
+/// general Ghidra cache is unreachable in this call closure.
+#[derive(Default)]
+struct MergeTypeIntersectCache {
+    tests: BTreeMap<(usize, usize), bool>,
+}
+
+impl MergeTypeIntersectCache {
+    // Ghidra: variable.cc:1045 HighIntersectTest::purgeHigh
+    fn purge_high(&mut self, high: &Arc<RwLock<HighVariable>>) {
+        let key = Arc::as_ptr(high) as usize;
+        self.tests.retain(|(a, b), _| *a != key && *b != key);
+    }
+
+    // Ghidra: variable.cc:1148 HighIntersectTest::updateHigh
+    fn update_high(&mut self, high: &Arc<RwLock<HighVariable>>) -> bool {
+        let dirty = high.read().unwrap().is_cover_dirty();
+        if !dirty {
+            return true;
+        }
+        update_high_cover(high);
+        self.purge_high(high);
+        false
+    }
+
+    // Ghidra: variable.cc:947 HighIntersectTest::gatherBlockVarnodes
+    fn gather_block_varnodes(
+        high: &Arc<RwLock<HighVariable>>,
+        block: i32,
+        cover: &Cover,
+    ) -> Vec<Arc<RwLock<Varnode>>> {
+        let instances = high.read().unwrap().instances.clone();
+        instances
+            .into_iter()
+            .filter(|vn| {
+                vn.read()
+                    .unwrap()
+                    .cover
+                    .as_ref()
+                    .map(|vn_cover| vn_cover.intersect_by_block(block, cover) > 1)
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    // Ghidra: variable.cc:968 HighIntersectTest::testBlockIntersection
+    fn test_block_intersection(
+        high: &Arc<RwLock<HighVariable>>,
+        block: i32,
+        cover: &Cover,
+        relative_offset: i32,
+        block_list: &[Arc<RwLock<Varnode>>],
+    ) -> bool {
+        let instances = high.read().unwrap().instances.clone();
+        for vn in instances {
+            let intersects_cover = vn
+                .read()
+                .unwrap()
+                .cover
+                .as_ref()
+                .map(|vn_cover| vn_cover.intersect_by_block(block, cover) >= 2)
+                .unwrap_or(false);
+            if !intersects_cover {
+                continue;
+            }
+            for other in block_list {
+                let pair_intersects = {
+                    let vn_cover = vn.read().unwrap().cover.clone();
+                    let other_cover = other.read().unwrap().cover.clone();
+                    match (vn_cover, other_cover) {
+                        (Some(a), Some(b)) => b.intersect_by_block(block, &a) > 1,
+                        _ => false,
+                    }
+                };
+                if !pair_intersects {
+                    continue;
+                }
+                if Arc::ptr_eq(&vn, other) {
+                    continue;
+                }
+                let shadows = {
+                    let vn_guard = vn.read().unwrap();
+                    let other_guard = other.read().unwrap();
+                    if vn_guard.size == other_guard.size {
+                        vn_guard.copy_shadow(&other_guard)
+                    } else {
+                        vn_guard.partial_copy_shadow(&other_guard, relative_offset)
+                    }
+                };
+                if !shadows {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    // Ghidra: variable.cc:998 HighIntersectTest::blockIntersection
+    fn block_intersection(
+        a: &Arc<RwLock<HighVariable>>,
+        b: &Arc<RwLock<HighVariable>>,
+        block: i32,
+    ) -> bool {
+        let a_cover = high_cover(a);
+        let b_cover = high_cover(b);
+        let mut block_list = Self::gather_block_varnodes(b, block, &a_cover);
+        if Self::test_block_intersection(a, block, &b_cover, 0, &block_list) {
+            return true;
+        }
+
+        let a_piece = a.read().unwrap().piece.clone();
+        if let Some(piece) = a_piece {
+            let (base_offset, intersections) = {
+                let piece = piece.read().unwrap();
+                (piece.group_offset, piece.intersection.clone())
+            };
+            for intersection in intersections {
+                let (offset, intersect_high) = {
+                    let piece = intersection.read().unwrap();
+                    (
+                        piece.group_offset - base_offset,
+                        piece.high.as_ref().and_then(|high| high.upgrade()),
+                    )
+                };
+                if let Some(intersect_high) = intersect_high {
+                    if Self::test_block_intersection(
+                        &intersect_high,
+                        block,
+                        &b_cover,
+                        offset,
+                        &block_list,
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        let b_piece = b.read().unwrap().piece.clone();
+        if let Some(piece) = b_piece {
+            let (b_base_offset, b_intersections) = {
+                let piece = piece.read().unwrap();
+                (piece.group_offset, piece.intersection.clone())
+            };
+            for b_intersection in b_intersections {
+                let (b_offset, b_size, b_high) = {
+                    let piece = b_intersection.read().unwrap();
+                    (
+                        piece.group_offset - b_base_offset,
+                        piece.size,
+                        piece.high.as_ref().and_then(|high| high.upgrade()),
+                    )
+                };
+                let Some(b_high) = b_high else { continue };
+                block_list = Self::gather_block_varnodes(&b_high, block, &a_cover);
+                if Self::test_block_intersection(a, block, &b_cover, -b_offset, &block_list) {
+                    return true;
+                }
+                let a_piece = a.read().unwrap().piece.clone();
+                if let Some(a_piece) = a_piece {
+                    let (a_base_offset, a_intersections) = {
+                        let piece = a_piece.read().unwrap();
+                        (piece.group_offset, piece.intersection.clone())
+                    };
+                    for a_intersection in a_intersections {
+                        let (offset, a_size, a_high) = {
+                            let piece = a_intersection.read().unwrap();
+                            (
+                                (piece.group_offset - a_base_offset) - b_offset,
+                                piece.size,
+                                piece.high.as_ref().and_then(|high| high.upgrade()),
+                            )
+                        };
+                        if offset > 0 && offset >= b_size {
+                            continue;
+                        }
+                        if offset < 0 && -offset >= a_size {
+                            continue;
+                        }
+                        if let Some(a_high) = a_high {
+                            if Self::test_block_intersection(
+                                &a_high,
+                                block,
+                                &b_cover,
+                                offset,
+                                &block_list,
+                            ) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // Ghidra: variable.cc:1091 HighIntersectTest::moveIntersectTests
+    fn move_intersect_tests(
+        &mut self,
+        high1: &Arc<RwLock<HighVariable>>,
+        high2: &Arc<RwLock<HighVariable>>,
+    ) {
+        let high1_key = Arc::as_ptr(high1) as usize;
+        let high2_key = Arc::as_ptr(high2) as usize;
+        let mut yes_intersect = Vec::new();
+        let mut no_intersect = std::collections::HashSet::new();
+        for ((a, b), intersects) in &self.tests {
+            if *a != high2_key || *b == high1_key {
+                continue;
+            }
+            if *intersects {
+                yes_intersect.push(*b);
+            } else {
+                no_intersect.insert(*b);
+            }
+        }
+        self.tests
+            .retain(|(a, b), _| *a != high2_key && *b != high2_key);
+
+        let stale_false: Vec<usize> = self
+            .tests
+            .iter()
+            .filter_map(|((a, b), intersects)| {
+                (*a == high1_key && !*intersects && !no_intersect.contains(b)).then_some(*b)
+            })
+            .collect();
+        for other in stale_false {
+            self.tests.remove(&(high1_key, other));
+            self.tests.remove(&(other, high1_key));
+        }
+        for other in yes_intersect {
+            self.tests.insert((high1_key, other), true);
+            self.tests.insert((other, high1_key), true);
+        }
+    }
+
+    // Ghidra: variable.cc:1166 HighIntersectTest::intersection
+    fn intersection(
+        &mut self,
+        a: &Arc<RwLock<HighVariable>>,
+        b: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        if Arc::ptr_eq(a, b) {
+            return false;
+        }
+        let a_clean = self.update_high(a);
+        let b_clean = self.update_high(b);
+        let a_key = Arc::as_ptr(a) as usize;
+        let b_key = Arc::as_ptr(b) as usize;
+        if a_clean && b_clean {
+            if let Some(result) = self.tests.get(&(a_key, b_key)) {
+                return *result;
+            }
+        }
+
+        let a_cover = high_cover(a);
+        let b_cover = high_cover(b);
+        let mut result = false;
+        for block in a_cover.intersect_list(&b_cover, 2) {
+            if Self::block_intersection(a, b, block) {
+                result = true;
+                break;
+            }
+        }
+        self.tests.insert((a_key, b_key), result);
+        self.tests.insert((b_key, a_key), result);
+        result
+    }
+
+    // Ghidra: variable.hh:270 HighIntersectTest::clear
+    fn clear(&mut self) {
+        self.tests.clear();
+    }
+}
+
+// Ghidra: variable.hh:294 HighVariable::getCover
+fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
+    let piece = high.read().unwrap().piece.clone();
+    if let Some(piece) = piece {
+        return piece.read().unwrap().cover.clone();
+    }
+    high.read().unwrap().cover.clone()
+}
+
+// Ghidra: variable.cc:338 HighVariable::updateCover
+fn update_high_cover(high: &Arc<RwLock<HighVariable>>) {
+    let instances = high.read().unwrap().instances.clone();
+    for instance in instances {
+        instance.write().unwrap().update_cover();
+    }
+    let piece = high.read().unwrap().piece.clone();
+    let Some(piece) = piece else {
+        high.write().unwrap().update_internal_cover();
+        return;
+    };
+
+    crate::variable::VariablePiece::update_intersections(&piece);
+    let intersecting_highs: Vec<Arc<RwLock<HighVariable>>> = piece
+        .read()
+        .unwrap()
+        .intersection
+        .iter()
+        .filter_map(|intersection| {
+            intersection
+                .read()
+                .unwrap()
+                .high
+                .as_ref()
+                .and_then(|high| high.upgrade())
+        })
+        .collect();
+    for intersecting_high in intersecting_highs {
+        let instances = intersecting_high.read().unwrap().instances.clone();
+        for instance in instances {
+            instance.write().unwrap().update_cover();
+        }
+    }
+    let mut owner = high.write().unwrap();
+    crate::variable::VariablePiece::update_cover_read(&piece, &mut owner);
+}
+
+// Ghidra: merge.hh:152 Merge::compareHighByBlock
+fn compare_high_by_block(
+    a: &Arc<RwLock<HighVariable>>,
+    b: &Arc<RwLock<HighVariable>>,
+) -> Ordering {
+    match high_cover(a).compare_to(&high_cover(b)) {
+        result if result < 0 => return Ordering::Less,
+        result if result > 0 => return Ordering::Greater,
+        _ => {}
+    }
+    let instances = (
+        a.read().unwrap().instances.first().cloned(),
+        b.read().unwrap().instances.first().cloned(),
+    );
+    let (a_instance, b_instance) = match instances {
+        (Some(a_instance), Some(b_instance)) => (a_instance, b_instance),
+        (Some(_), None) => return Ordering::Less,
+        (None, Some(_)) => return Ordering::Greater,
+        (None, None) => return Ordering::Equal,
+    };
+    let (a_address, a_def) = {
+        let instance = a_instance.read().unwrap();
+        (
+            (instance.address_space.space_id(), instance.loc),
+            instance.get_def(),
+        )
+    };
+    let (b_address, b_def) = {
+        let instance = b_instance.read().unwrap();
+        (
+            (instance.address_space.space_id(), instance.loc),
+            instance.get_def(),
+        )
+    };
+    if a_address != b_address {
+        return a_address.cmp(&b_address);
+    }
+    match (a_def, b_def) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(a_def), Some(b_def)) => {
+            let a_address = a_def.read().unwrap().get_addr();
+            let b_address = b_def.read().unwrap().get_addr();
+            a_address.cmp(&b_address)
+        }
+    }
+}
 
 /// Manages the process of merging Varnodes into HighVariables
 ///
@@ -28,6 +405,8 @@ pub struct Merge {
     /// `snip_reads` (via `unify_address`→`eliminate_intersect`) during the
     /// forced-merge path. Consumed by `process_copy_trims`.
     copy_trims: Vec<crate::op::PcodeOpRef>,
+    /// Pairwise Cover cache used by the same-type speculative merge pass.
+    type_test_cache: MergeTypeIntersectCache,
 }
 
 impl Merge {
@@ -38,6 +417,7 @@ impl Merge {
             var_counter: 0,
             live_set: std::collections::HashSet::new(),
             copy_trims: Vec::new(),
+            type_test_cache: MergeTypeIntersectCache::default(),
         }
     }
 
@@ -49,6 +429,7 @@ impl Merge {
         }
         self.var_counter = 0;
         self.copy_trims.clear();
+        self.type_test_cache.clear();
     }
 
     // Ghidra: merge.hh:83 Merge::liveVarnodeSet
@@ -360,13 +741,7 @@ impl Merge {
     ///   - is not a proto-partial (CONCAT piece), and
     ///   - is not a spacebase (stack/register pointer).
     fn merge_test_basic(vn: &Varnode) -> bool {
-        if vn.is_constant() {
-            return false;
-        }
-        if vn.flags & varnode_flags::ANNOTATION != 0 {
-            return false;
-        }
-        if vn.is_free() {
+        if !vn.has_cover() {
             return false;
         }
         if vn.is_implied() {
@@ -462,20 +837,24 @@ impl Merge {
     /// It checks: typelock conflict, addrtied-different-address, input/persist
     /// conflicts, extrout, protopartial conflicts.
     ///
-    /// VariablesPiece-group and Symbol-mapping checks (merge.cc:147-164) are
-    /// omitted: Rugra has no VariablePiece/Symbol infrastructure yet. This is
-    /// a conservative subset — it may allow merges Ghidra forbids (rare), but
-    /// never forbids merges Ghidra allows based on the implemented checks.
+    /// VariablePiece-group and Symbol-mapping identity/offset checks from
+    /// merge.cc:147-164 are included after the flag/type refresh above.
     pub fn merge_test_required(
         &self,
         high_out: &Arc<RwLock<HighVariable>>,
         high_in: &Arc<RwLock<HighVariable>>,
     ) -> bool {
-        let ho = high_out.read().unwrap();
-        let hi = high_in.read().unwrap();
         if Arc::ptr_eq(high_out, high_in) {
             return true; // Already merged
         }
+        for high in [high_out, high_in] {
+            let mut high = high.write().unwrap();
+            high.update_flags();
+            high.update_type();
+            high.update_symbol();
+        }
+        let ho = high_out.read().unwrap();
+        let hi = high_in.read().unwrap();
         // typelock: if both locked, types must match (merge.cc:107-109)
         if hi.is_type_locked() && ho.is_type_locked() {
             if !Arc::ptr_eq(&hi.v_type, &ho.v_type) {
@@ -484,9 +863,14 @@ impl Merge {
         }
         // addrtied: both addrtied but different address -> forbid (merge.cc:111-116)
         if ho.is_addr_tied() && hi.is_addr_tied() {
-            // getTiedVarnode compare: representative instance loc (offset)
-            let addr_out = ho.instances.first().map(|v| v.read().unwrap().loc);
-            let addr_in = hi.instances.first().map(|v| v.read().unwrap().loc);
+            let addr_out = ho.get_tied_varnode().map(|v| {
+                let v = v.read().unwrap();
+                (v.address_space, v.loc)
+            });
+            let addr_in = hi.get_tied_varnode().map(|v| {
+                let v = v.read().unwrap();
+                (v.address_space, v.loc)
+            });
             if let (Some(a_out), Some(a_in)) = (addr_out, addr_in) {
                 if a_out != a_in {
                     return false;
@@ -540,8 +924,159 @@ impl Merge {
                 return false;
             }
         }
-        // VariablePiece-group check (merge.cc:147-155) — omitted: no VariablePiece.
-        // Symbol-mapping check (merge.cc:157-164) — omitted: no Symbol on HighVariable.
+        if let (Some(in_piece), Some(out_piece)) = (&hi.piece, &ho.piece) {
+            let (in_group, in_size) = {
+                let piece = in_piece.read().unwrap();
+                (piece.group.clone(), piece.size)
+            };
+            let (out_group, out_size) = {
+                let piece = out_piece.read().unwrap();
+                (piece.group.clone(), piece.size)
+            };
+            let (Some(in_group), Some(out_group)) = (in_group, out_group) else {
+                return false;
+            };
+            if Arc::ptr_eq(&in_group, &out_group) {
+                return false;
+            }
+            let in_group_size = in_group.read().unwrap().size;
+            let out_group_size = out_group.read().unwrap().size;
+            if in_size != in_group_size && out_size != out_group_size {
+                return false;
+            }
+        }
+        if let (Some(in_symbol), Some(out_symbol)) = (&hi.symbol, &ho.symbol) {
+            if !Arc::ptr_eq(in_symbol, out_symbol) {
+                return false;
+            }
+            if hi.symbol_offset != ho.symbol_offset {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Ghidra: merge.cc:175 Merge::mergeTestAdjacent
+    fn merge_test_adjacent(
+        &self,
+        high_out: &Arc<RwLock<HighVariable>>,
+        high_in: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        if !self.merge_test_required(high_out, high_in) {
+            return false;
+        }
+        let (both_name_locked, same_type, out_input, in_input, out_symbol, in_symbol, both_piece) = {
+            let out = high_out.read().unwrap();
+            let input = high_in.read().unwrap();
+            (
+                out.flags & high_flags::NAMELOCK != 0
+                    && input.flags & high_flags::NAMELOCK != 0,
+                Arc::ptr_eq(&out.v_type, &input.v_type),
+                out.get_input_varnode(),
+                input.get_input_varnode(),
+                out.symbol.clone(),
+                input.symbol.clone(),
+                out.piece.is_some() && input.piece.is_some(),
+            )
+        };
+        if both_name_locked || !same_type {
+            return false;
+        }
+        for input in [out_input, in_input].into_iter().flatten() {
+            let input = input.read().unwrap();
+            if input.is_illegal_input() && input.flags & varnode_flags::INDIRECTONLY == 0 {
+                return false;
+            }
+        }
+        for symbol in [out_symbol, in_symbol].into_iter().flatten() {
+            if symbol.read().unwrap().is_isolated() {
+                return false;
+            }
+        }
+        !both_piece
+    }
+
+    // Ghidra: merge.cc:220 Merge::mergeTestSpeculative
+    fn merge_test_speculative(
+        &self,
+        high_out: &Arc<RwLock<HighVariable>>,
+        high_in: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        if !self.merge_test_adjacent(high_out, high_in) {
+            return false;
+        }
+        let out = high_out.read().unwrap();
+        let input = high_in.read().unwrap();
+        !out.is_persist()
+            && !input.is_persist()
+            && !out.is_input()
+            && !input.is_input()
+            && !out.is_addr_tied()
+            && !input.is_addr_tied()
+    }
+
+    // Ghidra: merge.cc:1565 Merge::merge
+    fn merge_type_pair(
+        &mut self,
+        high1: &Arc<RwLock<HighVariable>>,
+        high2: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        if Arc::ptr_eq(high1, high2) {
+            return true;
+        }
+        if self.type_test_cache.intersection(high1, high2) {
+            return false;
+        }
+        self.type_test_cache.move_intersect_tests(high1, high2);
+        let moved_instances = high2.read().unwrap().instances.clone();
+        let first_piece = high1.read().unwrap().piece.clone();
+        let second_piece = high2.read().unwrap().piece.clone();
+        match (first_piece, second_piece) {
+            (None, None) => {
+                let mut first = high1.write().unwrap();
+                let mut second = high2.write().unwrap();
+                first.merge_internal(&mut second, true);
+            }
+            (Some(piece), None) => {
+                crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece);
+                let mut first = high1.write().unwrap();
+                let mut second = high2.write().unwrap();
+                first.merge_internal(&mut second, true);
+            }
+            (None, Some(_)) => {
+                {
+                    let mut first = high1.write().unwrap();
+                    let mut second = high2.write().unwrap();
+                    first.transfer_piece(&mut second);
+                }
+                let piece = high1.read().unwrap().piece.clone().unwrap();
+                piece.write().unwrap().high = Some(Arc::downgrade(high1));
+                crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece);
+                let mut first = high1.write().unwrap();
+                let mut second = high2.write().unwrap();
+                first.merge_internal(&mut second, true);
+            }
+            (Some(_), Some(_)) => return false,
+        }
+        let moved_keys: std::collections::HashSet<usize> = moved_instances
+            .iter()
+            .map(|instance| Arc::as_ptr(instance) as usize)
+            .collect();
+        high1.write().unwrap().instances.sort_by(|a, b| {
+            let a_moved = moved_keys.contains(&(Arc::as_ptr(a) as usize));
+            let b_moved = moved_keys.contains(&(Arc::as_ptr(b) as usize));
+            let a = a.read().unwrap();
+            let b = b.read().unwrap();
+            (a.address_space.space_id(), a.loc, a_moved).cmp(&(
+                b.address_space.space_id(),
+                b.loc,
+                b_moved,
+            ))
+        });
+        for instance in moved_instances {
+            instance.write().unwrap().high = Some(high1.clone());
+        }
+        update_high_cover(high1);
         true
     }
 
@@ -1992,40 +2527,49 @@ impl Merge {
     /// `mergeLinear`-style pass: each HighVariable is merged into the first
     /// HighVariable it has a disjoint cover with.
     pub fn merge_by_datatype(&mut self, fd: &mut Funcdata) {
-        use std::collections::HashMap;
-
-        // Gather distinct HighVariables (dedup by Arc pointer).
-        let mut high_ptrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut highs: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        let mut high_list: std::collections::VecDeque<Arc<RwLock<HighVariable>>> =
+            std::collections::VecDeque::new();
         for vn_ref in &fd.vbank.loc_tree {
-            let high_arc = {
+            let high = {
                 let vn = vn_ref.0.read().unwrap();
+                if vn.is_free() || !Self::merge_test_basic(&vn) {
+                    continue;
+                }
                 vn.high.clone()
             };
-            if let Some(ha) = high_arc {
-                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
-                if high_ptrs.insert(ptr) {
-                    highs.push(ha);
-                }
-            }
-        }
-
-        // Group by data-type identity (Arc::ptr_eq on the v_type Arc).
-        let mut groups: HashMap<usize, Vec<Arc<RwLock<HighVariable>>>> = HashMap::new();
-        for h in highs {
-            let type_ptr = {
-                let hg = h.read().unwrap();
-                std::sync::Arc::as_ptr(&hg.v_type) as usize
-            };
-            groups.entry(type_ptr).or_default().push(h);
-        }
-
-        // For each same-type group, attempt cover-guarded linear merges.
-        for (_, group) in groups {
-            if group.len() < 2 {
+            let Some(high) = high else { continue };
+            let mut high_guard = high.write().unwrap();
+            if high_guard.is_mark() {
                 continue;
             }
-            self.merge_linear(&group);
+            high_guard.set_mark();
+            drop(high_guard);
+            high_list.push_back(high);
+        }
+        for high in &high_list {
+            high.write().unwrap().clear_mark();
+        }
+
+        while !high_list.is_empty() {
+            let first = high_list.pop_front().unwrap();
+            first.write().unwrap().update_type();
+            let datatype = first.read().unwrap().v_type.clone();
+            let mut group = vec![first];
+            let remaining = high_list.len();
+            for _ in 0..remaining {
+                let high = high_list.pop_front().unwrap();
+                high.write().unwrap().update_type();
+                let same_type = {
+                    let high = high.read().unwrap();
+                    Arc::ptr_eq(&datatype, &high.v_type)
+                };
+                if same_type {
+                    group.push(high);
+                } else {
+                    high_list.push_back(high);
+                }
+            }
+            self.merge_linear(&mut group);
         }
     }
 
@@ -2037,35 +2581,28 @@ impl Merge {
     /// whose cover it does not intersect; if none is compatible it starts a
     /// new stack group. After a successful merge, the stacked head's cover
     /// snapshot is refreshed so subsequent tests reflect the union.
-    fn merge_linear(&mut self, highvec: &[Arc<RwLock<HighVariable>>]) {
+    fn merge_linear(&mut self, highvec: &mut Vec<Arc<RwLock<HighVariable>>>) {
         if highvec.len() <= 1 {
             return;
         }
-        // Snapshot of each HighVariable's aggregate cover. `highstack` holds
-        // indices into `highvec` that currently head a merge group; the entry
-        // in `covers` for a head is kept fresh as merges grow its cover.
-        let mut covers: Vec<Cover> = highvec
-            .iter()
-            .map(|h| aggregate_high_cover(h))
-            .collect();
+        for high in highvec.iter() {
+            self.type_test_cache.update_high(high);
+        }
+        highvec.sort_by(compare_high_by_block);
 
-        let mut highstack: Vec<usize> = Vec::new();
-        for i in 0..highvec.len() {
-            let mut merged_into: Option<usize> = None;
-            for &j in &highstack {
-                if covers[i].intersects(&covers[j]) {
-                    continue;
-                }
-                if self.merge_speculative(&highvec[j], &highvec[i]) {
-                    // Merge succeeded: refresh the head's cover snapshot so
-                    // later HighVariables are tested against the union.
-                    covers[j] = aggregate_high_cover(&highvec[j]);
-                    merged_into = Some(j);
+        let mut high_stack: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        for high in highvec.iter() {
+            let mut merged = false;
+            for output in &high_stack {
+                if self.merge_test_speculative(output, high)
+                    && self.merge_type_pair(output, high)
+                {
+                    merged = true;
                     break;
                 }
             }
-            if merged_into.is_none() {
-                highstack.push(i);
+            if !merged {
+                high_stack.push(high.clone());
             }
         }
     }
@@ -3104,4 +3641,3 @@ mod tests {
     }
 
 }
-

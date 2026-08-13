@@ -283,6 +283,33 @@
       }
     },
     {
+      "id": "merge_datatype_scale_1204",
+      "description": "MergeByDatatype direct full-loc free-scale, stable grouping/order, and complete narrow-state mutation oracle",
+      "runner": ["tools/run_merge_datatype_scale_oracle.sh"],
+      "timeout_seconds": 1800,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/merge_datatype_scale_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/merge_datatype_scale_1204.cc",
+          "rust_fixture": "tests/oracle/merge_datatype_scale_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_merge_datatype_scale_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/merge.rs",
+          "docs/api/merge.md",
+          "tests/oracle/merge_datatype_scale_1204.*",
+          "tools/run_merge_datatype_scale_oracle.sh"
+        ],
+        "rust_function_ids": []
+      }
+    },
+    {
       "id": "getstr_pipeline_1204",
       "description": "GetStr six-layer P-code/CFG/SSA/Action/structure/C snapshot and first-divergence report",
       "runner": ["tools/run_getstr_pipeline_oracle.sh"],

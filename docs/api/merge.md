@@ -147,9 +147,38 @@ Merge multi-entry varnodes (placeholder for future enhancement)
 
 Merge marker varnodes (placeholder for future enhancement)
 
-### `pub fn merge_by_datatype(&mut self, _fd: &mut Funcdata)`
+### `pub fn merge_by_datatype(&mut self, fd: &mut Funcdata)`
 
-Merge by datatype compatibility (placeholder for future enhancement)
+对齐 locked Ghidra 12.0.4 `Merge::mergeByDatatype`（`merge.cc:359-401`）。
+它按 `loc_tree` 顺序扫描完整生产范围，先排除 free 和
+`mergeTestBasic` 不合格 Varnode，再用 HighVariable 的 mark 位稳定去重；mark
+在分组前按收集顺序清除。分组只接受同一个 `Datatype *`（Rust 中为
+`Arc::ptr_eq`），不会把结构相等但身份不同的类型合并。
+
+每组由 `merge_linear` 执行 locked `merge.cc:272-292` 顺序：先更新所有
+High Cover，按首个 Cover block、首实例完整存储地址、无定义优先、定义
+p-code 地址四级排序；随后按 high-stack 插入顺序尝试第一个通过
+`mergeTestSpeculative` 且 Cover 不相交的候选。
+
+Cover 相交采用 `HighIntersectTest` 的双向缓存、block refinement、
+copy-shadow/partial-copy-shadow 判定和成功合并后的缓存迁移。成功时第二个
+HighVariable 的实例有序 drain 到第一个，merge-group、piece ownership、
+Varnode→High 反向引用和最终 Cover 同步更新。该路径没有迭代次数上限、
+提前退出或按规模近似。
+
+函数接口目前固定为整个 `fd.vbank.loc_tree`，而 Ghidra 公共函数接受任意
+`[startiter,enditer)` 子范围；因此完整接口行为仍记为 `MISMATCH`，本次
+direct full-loc 函数投影单独做 oracle 门禁。当前 Rust `ActionMergeType::apply`
+还会新建 `Merge` 并重跑 `merge_all`，而 locked Ghidra 持久使用
+`data.getMerge()` 且只调用 `mergeByDatatype(beginLoc,endLoc)`；因此 Action
+调用闭包及 cache 生命周期明确仍为 `MISMATCH`，不属于该 direct fixture 的
+`MATCH` 声明。
+`MERGE-DATATYPE-SCALE-0001` 的 locked same-input fixture 只把该 projection
+中的 free 过滤规模、Basic 过滤、类型指针身份、跨空间/同存储稳定顺序、
+merge-group、survivor/反向 High 引用与 mark 清理判为 `MATCH`。相交
+block/copy-shadow/partial-shadow/piece、缓存迁移复用、speculative 各拒绝守卫、
+Cover-block/null-def comparator 层级和大量 eligible High 的规模路径仍为
+`UNTESTED`；它们不会因窄 projection 的零差分而升级。
 
 ### `pub struct BlockVarnode`
 
