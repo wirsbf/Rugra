@@ -3,12 +3,11 @@
 Architecture manager corresponding to Ghidra's `architecture.hh` /
 `architecture.cc`.
 
-**Status:** L2 (locked 12.0.4 audit, 2026-08-11). The configuration container
-exists, but production `Funcdata.arch` remains unset and the default
-Architecture owns no loader/types/userops/cpool or pcode-injection library.
-Factory/decode/init and consumer wiring are required before this can be a
-pipeline component rather than a detached container. Formal behavior status is
-`NO_ORACLE`.
+**Status:** L2 (locked 12.0.4 audit, 2026-08-14). The structured-DOM
+prototype/default-model slice has a locked oracle fixture, but production
+compiler-spec text ingestion, `resolveprototype`, model rules, factory/init,
+and consumer wiring remain incomplete. The fixture's declared observations
+match; the module-level status remains `MISMATCH` / `UNTESTED`, not L3.
 
 This is the Ghidra `Architecture` class — distinct from `types::Architecture`
 (which is the target CPU enum). It holds all configuration parameters and owns
@@ -56,9 +55,12 @@ Registry of `ArchitectureCapability` extensions. Faithful to the static
   `find_capability_for_xml(doc)`, `get_capability(name)`,
   `sort_capabilities()`, `major_version()`, `minor_version()`.
 
-### `ProtoModelEntry`
-Lightweight prototype-model entry.
-- Fields: `name`, `is_default`, `print_in_decl`.
+### `ProtoModelMap`
+
+`BTreeMap<String, Arc<ProtoModelFull>>`. Each map value is a stable shared
+model object. The selected `defaultfp` is the same `Arc` as its map entry,
+mirroring Ghidra's pointer identity rather than copying a lightweight name
+record.
 
 ### `Architecture`
 Manager for all the major decompiler subsystems. Faithful to `Architecture`
@@ -85,6 +87,7 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 | `split_datatype_config` | `u32` | Datatype split config bits. |
 | `proto_models` | `ProtoModelMap` | Prototype models. |
 | `defaultfp_name` | `Option<String>` | Default model name. |
+| `defaultfp` | `Option<Arc<ProtoModelFull>>` | Shared default model, pointer-identical to its map entry. |
 | `evalfp_current_name` / `evalfp_called_name` | `Option<String>` | Eval models. |
 | `nohighptr` | `RangeList` | No-high-pointer ranges. |
 | `overrides` | `Override` | Override commands. |
@@ -92,16 +95,20 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 
 **Methods:** `new()`, `reset_defaults_internal()` (architecture.cc:1416),
 `reset_defaults()` (architecture.cc:1438), `get_model(name)`, `has_model(name)`,
-`set_default_model(name)` (architecture.cc:323), `high_ptr_possible(addr, size)`
-(architecture.hh:408), `add_no_high_ptr(range)` (architecture.cc:576),
-`globalify()` (architecture.cc:437), `create_model_alias(alias, parent)`,
+`set_default_model(name)` (architecture.cc:323), `get_default_model()`,
+`decode_proto(decoder, addr_size, register_resolver)` (architecture.cc:741),
+`decode_default_proto(decoder, addr_size, register_resolver)`
+(architecture.cc:795), `high_ptr_possible(addr, size)` (architecture.hh:408),
+`add_no_high_ptr(range)` (architecture.cc:576), `globalify()`
+(architecture.cc:437), `create_model_alias(alias, parent)`,
 `decode_flow_override()`, `get_description()`, `print_message(msg)`.
 
 ## L3 gaps
 - Virtual factory hooks (`buildTranslator`, `buildLoader`, `buildTypegrp`, …)
   require Translate/LoadImage/TypeFactory integration.
-- XML decode of processor/compiler spec (`parseProcessorConfig`,
-  `parseCompilerConfig`, …).
+- Production XML text ingestion and full processor/compiler-spec dispatch
+  (`parseProcessorConfig`, `parseCompilerConfig`, …). The current decode
+  methods intentionally begin at an existing structured `TreeDecoder`.
 - `AddrSpaceManager` integration (`getSpaceBySpacebase`, `getSegmentOp`).
 - `DocumentStorage` for `init`/`restoreXml`.
 
@@ -134,3 +141,25 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 `SleighArchitecture::printMessage`（`sleigh_arch.hh:138`）把消息原文加换行写到
 stderr，不再添加 Rust 自创的 `[ARCH] ` 前缀。这使 Action/Rule 的错误与警告
 消息可逐字对拍；调用方负责提供完整的 `ERROR:` / `WARNING:` 文本。
+
+# 2026-08-14：共享 ProtoModel map 与 default Arc
+
+`Architecture::proto_models` 现在保存 `Arc<ProtoModelFull>`；
+`set_default_model` 恢复旧默认模型的 print flag、清除其 default 指针，再把新
+模型的 print flag 设为 false，并将同一个 `Arc` 同时保存在 map 与
+`defaultfp`。print flag 在共享模型对象上原位更新，不使用 `Arc::make_mut`，
+因此已交给 `FuncProto` 或 `decode_proto` 调用方的外部 handle 保持同一身份，
+并能观察默认模型切换。`decode_proto` 和 `decode_default_proto` 从既有 `TreeDecoder`
+注册/选择真实模型，duplicate/default-wrapper 错误在替换共享状态前返回。
+
+锁定 fixture `tools/run_cspec_param_model_oracle.sh` 对完整
+`x86-64-gcc.cspec` 中默认 `__stdcall` 的名称、extrapop、参数范围、map/default
+身份和 print flag 做 Ghidra 12.0.4 对拍。已声明观测相同，但生产文本 ingestion、
+`resolveprototype` 和 `<modelrule>` 仍未完成，所以整体诚实保持 `MISMATCH`，
+不得据此声称 compiler-spec 或主管线已完全接通。
+
+本切片不把 `create_model_alias` / `is_compatible` 计为匹配：Rust 的既有 bool
+adapter 尚不能表达 Ghidra 对 merged parent、alias-of-alias、duplicate 和缺失
+parent 的异常域，alias-parent 身份也未对拍。`set_default_model(&str)` 对未知名称
+静默返回，而 Ghidra 的 pointer API 不存在相同错误输入；这个 name-adapter 错误域
+同样保持 `MISMATCH`。

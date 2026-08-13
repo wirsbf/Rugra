@@ -3,6 +3,7 @@
 //! Corresponds to Ghidra's `fspec.hh`. This module manages how functions
 //! are defined (prototypes) and how call sites are handled (call specs).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crate::address::Address;
 use crate::space::AddressSpace;
@@ -3420,6 +3421,125 @@ impl ParamEntry {
         }
     }
 
+    // Ghidra: fspec.cc:501 ParamEntry::decode
+    /// Decode one `<pentry>` and its address child.
+    ///
+    /// The register resolver is the Rust equivalent of the `Translate`
+    /// lookup reached by `VarnodeData::decodeFromAttributes` for a
+    /// `<register name="..."/>` child.  Keeping it as a caller-supplied
+    /// resolver lets the same algorithm consume any compiler specification;
+    /// no ABI register table is embedded here.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        normal_stack: bool,
+        grouped: bool,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<(), String> {
+        self.flags = 0;
+        self.type_storage = TypeClass::General;
+        self.size = -1;
+        self.min_size = -1;
+        self.alignment = 0;
+        self.num_slots = 1;
+        self.join = None;
+
+        let elem_id = decoder.open_element();
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+            match name.as_str() {
+                "minsize" => self.min_size = decoder.read_signed_integer() as i32,
+                "size" | "align" => self.alignment = decoder.read_signed_integer() as i32,
+                "maxsize" => self.size = decoder.read_signed_integer() as i32,
+                "storage" | "metatype" => {
+                    self.type_storage = string_to_type_class(&decoder.read_string());
+                }
+                "extension" => {
+                    self.flags &= !(param_entry_flags::SMALLSIZE_ZEXT
+                        | param_entry_flags::SMALLSIZE_SEXT
+                        | param_entry_flags::SMALLSIZE_INTTYPE);
+                    match decoder.read_string().as_str() {
+                        "sign" => self.flags |= param_entry_flags::SMALLSIZE_SEXT,
+                        "zero" => self.flags |= param_entry_flags::SMALLSIZE_ZEXT,
+                        "inttype" => self.flags |= param_entry_flags::SMALLSIZE_INTTYPE,
+                        "float" => self.flags |= param_entry_flags::SMALLSIZE_FLOATEXT,
+                        "none" => {}
+                        _ => return Err("Bad extension attribute".to_string()),
+                    }
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                    return Err("Unknown <pentry> attribute".to_string());
+                }
+            }
+        }
+        if self.size == -1 || self.min_size == -1 {
+            return Err("ParamEntry not fully specified".to_string());
+        }
+        if self.alignment == self.size {
+            self.alignment = 0;
+        }
+
+        let address_id = decoder.open_element();
+        if address_id == 0 {
+            return Err("No address specified for <pentry>".to_string());
+        }
+        let address_name = decoder.element_name(address_id).unwrap_or_default();
+        let mut decoded_space = None;
+        let mut decoded_offset = 0u64;
+        let mut register_name = None;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+            match name.as_str() {
+                "space" => decoded_space = Some(parse_space_name(&decoder.read_string())),
+                "offset" => decoded_offset = parse_u64(&decoder.read_string()),
+                "name" => register_name = Some(decoder.read_string()),
+                "size" => {
+                    let _ = decoder.read_signed_integer();
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if address_name == "register" || register_name.is_some() {
+            let name = register_name.ok_or_else(|| "Missing register name".to_string())?;
+            let storage =
+                register_resolver(&name).ok_or_else(|| format!("Unknown register name: {name}"))?;
+            self.space = storage.space;
+            self.address_base = storage.offset;
+        } else {
+            self.space = decoded_space.ok_or_else(|| "No address space indicated".to_string())?;
+            self.address_base = decoded_offset;
+        }
+        decoder.close_element(address_id);
+        decoder.close_element(elem_id);
+
+        if self.alignment != 0 {
+            self.num_slots = self.size / self.alignment;
+        }
+        if !normal_stack {
+            self.flags |= param_entry_flags::REVERSE_STACK;
+            if self.alignment != 0 && self.size % self.alignment != 0 {
+                return Err(
+                    "For positive stack growth, <pentry> size must match alignment".to_string(),
+                );
+            }
+        }
+        if grouped {
+            self.flags |= param_entry_flags::IS_GROUPED;
+        }
+        Ok(())
+    }
+
     // Ghidra: fspec.hh:126 ParamEntry::getGroup
     pub fn get_group(&self) -> i32 { self.group_set[0] }
     // Ghidra: fspec.hh:127 ParamEntry::getAllGroups
@@ -3539,11 +3659,14 @@ impl ParamEntry {
     /// Search for overlaps of this with any previous entry. If an overlap
     /// is discovered, reassign this group. Faithful to `resolveOverlap`
     /// (fspec.cc:122-153).
-    fn resolve_overlap(&mut self, cur_list: &[ParamEntry]) {
-        if self.join.is_some() { return; }
+    fn resolve_overlap(&mut self, cur_list: &[ParamEntry]) -> Result<(), String> {
+        if self.join.is_some() { return Ok(()); }
         let mut overlap_set: Vec<i32> = Vec::new();
         let addr = Address::new(self.address_base);
         for entry in cur_list.iter() {
+            // Rugra's compact Address currently carries only the offset, so
+            // preserve Ghidra's `spaceid != addr.getSpace()` guard here.
+            if entry.space != self.space { continue; }
             if !entry.intersects(addr, self.size) { continue; }
             if self.contains(entry) {
                 if entry.is_overlap() { continue; }
@@ -3561,13 +3684,16 @@ impl ParamEntry {
                         param_entry_flags::EXTRACHECK_LOW
                     };
                 }
+            } else {
+                return Err("Illegal overlap of <pentry> in compiler spec".to_string());
             }
         }
-        if overlap_set.is_empty() { return; }
+        if overlap_set.is_empty() { return Ok(()); }
         overlap_set.sort_unstable();
         overlap_set.dedup();
         self.group_set = overlap_set;
         self.flags |= param_entry_flags::OVERLAPPING;
+        Ok(())
     }
 
     // Ghidra: fspec.cc:157 ParamEntry::groupOverlap
@@ -3715,11 +3841,13 @@ impl ParamEntry {
     pub fn contains(&self, op2: &ParamEntry) -> bool {
         if op2.join.is_some() { return false; }
         if self.join.is_none() {
+            if self.space != op2.space { return false; }
             let addr = Address::new(self.address_base);
             return op2.contained_by(addr, self.size);
         }
         let j = self.join.as_ref().unwrap();
         for vdata in &j.pieces {
+            if vdata.space != op2.space { continue; }
             if op2.contained_by(vdata.get_addr(), vdata.size) { return true; }
         }
         false
@@ -4022,6 +4150,130 @@ impl ParamListStandard {
             space_base: None,
             stack_entry_index: None,
         }
+    }
+
+    // Ghidra: fspec.cc:1451 ParamListStandard::decode
+    /// Restore an input or output resource list from its XML element.
+    ///
+    /// `<pentry>` and `<group>` children are decoded in document order.  Once
+    /// the first `<rule>` is seen, subsequent resource entries are rejected,
+    /// matching Ghidra's two-phase child walk.  ModelRule decoding is outside
+    /// this slice; rule elements are consumed without changing the decoded
+    /// ParamEntry list.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        effect_list: &mut Vec<EffectRecord>,
+        normal_stack: bool,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<(), String> {
+        self.num_group = 0;
+        self.max_delay = 0;
+        self.this_before_ret = false;
+        self.auto_killed_by_call = false;
+        self.resource_start.clear();
+        self.entry.clear();
+        self.space_base = None;
+        self.stack_entry_index = None;
+        let mut pointer_max = 0i32;
+        let mut split_float = true;
+
+        let elem_id = decoder.open_element();
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+            match name.as_str() {
+                "pointermax" => pointer_max = decoder.read_signed_integer() as i32,
+                "thisbeforeretpointer" => self.this_before_ret = decoder.read_bool(),
+                "killedbycall" => self.auto_killed_by_call = decoder.read_bool(),
+                "separatefloat" => split_float = decoder.read_bool(),
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+
+        let mut saw_rule = false;
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            match sub_name.as_str() {
+                "pentry" if !saw_rule => {
+                    let group_id = self.num_group;
+                    let mut entry = ParamEntry::new(group_id);
+                    entry.decode(decoder, normal_stack, false, register_resolver)?;
+                    self.parse_pentry(
+                        group_id,
+                        normal_stack,
+                        split_float,
+                        false,
+                        effect_list,
+                        entry,
+                    )?;
+                }
+                "group" if !saw_rule => {
+                    let base_group = self.num_group;
+                    let group_id = decoder.open_element();
+                    let mut previous1 = None;
+                    let mut previous2 = None;
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.peek_element();
+                        if decoder.element_name(child_id).as_deref() != Some("pentry") {
+                            return Err("Only <pentry> is allowed in <group>".to_string());
+                        }
+                        let mut entry = ParamEntry::new(base_group);
+                        entry.decode(decoder, normal_stack, true, register_resolver)?;
+                        if entry.get_space() == AddressSpace::Join {
+                            return Err(
+                                "<pentry> in the join space not allowed in <group> tag".to_string()
+                            );
+                        }
+                        self.parse_pentry(
+                            base_group,
+                            normal_stack,
+                            split_float,
+                            true,
+                            effect_list,
+                            entry,
+                        )?;
+                        let current = self.entry.len() - 1;
+                        if let Some(p1) = previous1 {
+                            ParamEntry::order_within_group(&self.entry[p1], &self.entry[current])?;
+                            if let Some(p2) = previous2 {
+                                ParamEntry::order_within_group(
+                                    &self.entry[p2],
+                                    &self.entry[current],
+                                )?;
+                            }
+                        }
+                        previous2 = previous1;
+                        previous1 = Some(current);
+                    }
+                    decoder.close_element(group_id);
+                }
+                "rule" => {
+                    saw_rule = true;
+                    let rule_id = decoder.open_element();
+                    decoder.close_element_skipping(rule_id);
+                }
+                "pentry" | "group" => {
+                    return Err(
+                        "<pentry> and <group> elements must come before any <modelrule>"
+                            .to_string(),
+                    );
+                }
+                _ => return Err(format!("Unknown element in parameter list: {sub_name}")),
+            }
+        }
+        decoder.close_element(elem_id);
+        self.finalize_after_decode(pointer_max);
+        Ok(())
     }
     // Ghidra: fspec.hh:628 ParamListStandard::getType
     pub fn get_type(&self) -> ParamListKind { ParamListKind::Standard }
@@ -4668,7 +4920,7 @@ impl ParamListStandard {
         let mut new_entry = decoded;
         new_entry.resolve_first(&self.entry);
         new_entry.resolve_join(&self.entry);
-        new_entry.resolve_overlap(&self.entry);
+        new_entry.resolve_overlap(&self.entry)?;
         if !normal_stack {
             *new_entry.flags_mut() |= param_entry_flags::REVERSE_STACK;
         }
@@ -5252,7 +5504,7 @@ const EXTRAPOP_MISSING_SENTINEL: i32 = -300;
 /// Holds the input/output `ParamListStandard`, effect records, likely-trash,
 /// internal-storage registers, local/param stack ranges, and ABI properties
 /// (extrapop, stack growth direction, hasThis, isConstructor, isPrinted).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProtoModelFull {
     /// Name of the model (e.g. "__stdcall", "default"). Faithful to `name`.
     pub name: String,
@@ -5291,10 +5543,36 @@ pub struct ProtoModelFull {
     pub is_construct: bool,
     /// True if this model name should be printed in declarations. Faithful to
     /// `isPrinted`.
-    pub is_printed: bool,
+    pub is_printed: AtomicBool,
     /// The model this is a copy of (alias parent), or `None`. Faithful to
     /// `compatModel`. Used by `isCompatible`.
     pub compat_model: Option<usize>,
+}
+
+impl Clone for ProtoModelFull {
+    // Ghidra: fspec.cc:2359 ProtoModel::ProtoModel(const string &,const ProtoModel &)
+    /// Copy a prototype model into a distinct alias object.  The mutable
+    /// print flag is copied by value, never shared with the parent model.
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            extrapop: self.extrapop,
+            input: self.input.clone(),
+            output: self.output.clone(),
+            effectlist: self.effectlist.clone(),
+            likelytrash: self.likelytrash.clone(),
+            internalstorage: self.internalstorage.clone(),
+            inject_upon_entry: self.inject_upon_entry,
+            inject_upon_return: self.inject_upon_return,
+            localrange: self.localrange.clone(),
+            paramrange: self.paramrange.clone(),
+            stackgrowsnegative: self.stackgrowsnegative,
+            has_this: self.has_this,
+            is_construct: self.is_construct,
+            is_printed: AtomicBool::new(true),
+            compat_model: self.compat_model,
+        }
+    }
 }
 
 impl ProtoModelFull {
@@ -5317,7 +5595,7 @@ impl ProtoModelFull {
             stackgrowsnegative: true,
             has_this: false,
             is_construct: false,
-            is_printed: true,
+            is_printed: AtomicBool::new(true),
             compat_model: None,
         };
         model.default_local_range(stack_space, addr_size);
@@ -5703,6 +5981,30 @@ impl ProtoModelFull {
     }
 
     // Ghidra: fspec.cc:2549 ProtoModel::decode
+    /// Decode a model when no named-register catalog is available.  This is
+    /// equivalent to calling `decode_with_register_resolver` with a resolver
+    /// that rejects named register children.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        stack_space: Option<AddressSpace>,
+        addr_size: usize,
+        void_type: Option<Arc<Datatype>>,
+        inject_id_resolver: Option<&dyn Fn(&str, &str) -> Option<i32>>,
+    ) -> Result<String, String> {
+        let no_register = |_name: &str| None;
+        self.decode_with_register_resolver(
+            decoder,
+            stack_space,
+            addr_size,
+            true,
+            void_type,
+            inject_id_resolver,
+            &no_register,
+        )
+    }
+
+    // Ghidra: fspec.cc:2549 ProtoModel::decode
     /// Restore this model from a `<prototype>` element. Faithful port of
     /// `decode` (fspec.cc:2549-2700). Parses the element/attribute stream
     /// (name, extrapop, strategy, hasthis, constructor), builds the input/
@@ -5715,29 +6017,29 @@ impl ProtoModelFull {
     /// `inject_upon_entry`/`inject_upon_return` (mapped to a non-negative id
     /// when an `inject_id_resolver` is supplied). Returns the model name on
     /// success so the caller can register it.
-    pub fn decode(
+    pub fn decode_with_register_resolver(
         &mut self,
         decoder: &mut dyn crate::marshal::Decoder,
         stack_space: Option<AddressSpace>,
         addr_size: usize,
+        stack_grows_negative: bool,
         void_type: Option<Arc<Datatype>>,
         inject_id_resolver: Option<&dyn Fn(&str, &str) -> Option<i32>>,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
     ) -> Result<String, String> {
         use crate::marshal::Decoder;
         let mut saw_localrange = false;
         let mut saw_paramrange = false;
         let mut saw_retaddr = false;
         // Ghidra: fspec.cc:2555 — default growth direction, then consult stack space.
-        self.stackgrowsnegative = true;
-        // Rugra's AddressSpace enum has no stackGrowsNegative; the stack is
-        // conventionally negative-growing. A real AddrSpace would override.
+        self.stackgrowsnegative = stack_grows_negative;
         let mut strategy_string = String::new();
         self.localrange = crate::address::RangeList::new();
         self.paramrange = crate::address::RangeList::new();
         self.extrapop = EXTRAPOP_MISSING_SENTINEL;
         self.has_this = false;
         self.is_construct = false;
-        self.is_printed = true;
+        self.is_printed.store(true, Ordering::Relaxed);
         self.effectlist.clear();
         self.inject_upon_entry = -1;
         self.inject_upon_return = -1;
@@ -5793,29 +6095,34 @@ impl ProtoModelFull {
             let sub_name = decoder.element_name(sub_id).unwrap_or_default();
             match sub_name.as_str() {
                 "input" => {
-                    let normalstack = self.stackgrowsnegative;
-                    // Rugra's ParamListStandard exposes finalize_after_decode;
-                    // full per-element <pentry>/<group> parsing is provided by
-                    // parse_pentry/parse_group once entries are decoded. Here
-                    // we open the element and hand off to the list's decoder.
-                    let _opened = decoder.open_element();
-                    // TODO(ALIGNMENT_ROADMAP): wire ParamListStandard::decode
-                    // once <pentry>/<group> Decoder integration lands. Until
-                    // then we close the element without consuming children is
-                    // unsafe; instead consume remaining attributes then close.
-                    let _ = normalstack;
-                    decoder.close_element(sub_id);
+                    self.input.decode(
+                        decoder,
+                        &mut self.effectlist,
+                        self.stackgrowsnegative,
+                        register_resolver,
+                    )?;
+                    if let Some(stack) = stack_space {
+                        self.input.get_range_list(stack, &mut self.paramrange);
+                        if !self.paramrange.empty() {
+                            saw_paramrange = true;
+                        }
+                    }
                 }
                 "output" => {
-                    let _opened = decoder.open_element();
-                    decoder.close_element(sub_id);
+                    self.output.decode(
+                        decoder,
+                        &mut self.effectlist,
+                        self.stackgrowsnegative,
+                        register_resolver,
+                    )?;
                 }
                 "unaffected" => {
                     decoder.open_element();
                     while decoder.peek_element() != 0 {
                         // Ghidra: effectlist.back().decode(unaffected, decoder)
                         let child_id = decoder.open_element();
-                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        let (space, offset, size) =
+                            read_varnode_data_attrs_resolved(decoder, register_resolver)?;
                         decoder.close_element(child_id);
                         self.effectlist.push(EffectRecord::new(space, offset, size, EffectType::Unaffected));
                     }
@@ -5825,7 +6132,8 @@ impl ProtoModelFull {
                     decoder.open_element();
                     while decoder.peek_element() != 0 {
                         let child_id = decoder.open_element();
-                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        let (space, offset, size) =
+                            read_varnode_data_attrs_resolved(decoder, register_resolver)?;
                         decoder.close_element(child_id);
                         self.effectlist.push(EffectRecord::new(space, offset, size, EffectType::KilledByCall));
                     }
@@ -5835,7 +6143,8 @@ impl ProtoModelFull {
                     decoder.open_element();
                     while decoder.peek_element() != 0 {
                         let child_id = decoder.open_element();
-                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        let (space, offset, size) =
+                            read_varnode_data_attrs_resolved(decoder, register_resolver)?;
                         decoder.close_element(child_id);
                         self.effectlist.push(EffectRecord::new(space, offset, size, EffectType::ReturnAddress));
                     }
@@ -5873,7 +6182,8 @@ impl ProtoModelFull {
                     decoder.open_element();
                     while decoder.peek_element() != 0 {
                         let child_id = decoder.open_element();
-                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        let (space, offset, size) =
+                            read_varnode_data_attrs_resolved(decoder, register_resolver)?;
                         decoder.close_element(child_id);
                         self.likelytrash.push(VarnodeData { space, offset, size });
                     }
@@ -5883,7 +6193,8 @@ impl ProtoModelFull {
                     decoder.open_element();
                     while decoder.peek_element() != 0 {
                         let child_id = decoder.open_element();
-                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        let (space, offset, size) =
+                            read_varnode_data_attrs_resolved(decoder, register_resolver)?;
                         decoder.close_element(child_id);
                         self.internalstorage.push(VarnodeData { space, offset, size });
                     }
@@ -5954,6 +6265,13 @@ impl ProtoModelFull {
     /// Get the name of the prototype model. Faithful inline accessor.
     pub fn get_name(&self) -> &str { &self.name }
 
+    // Ghidra: fspec.hh:839 ProtoModel::getParamRange
+    /// Get the possible stack-parameter ranges accumulated from the input
+    /// ParamEntry list or an explicit `<paramrange>` element.
+    pub fn get_param_range(&self) -> &crate::address::RangeList {
+        &self.paramrange
+    }
+
     // Ghidra: fspec.hh:781 ProtoModel::getExtraPop
     /// Get the stack-pointer extrapop for this model. Faithful inline accessor.
     pub fn get_extrapop(&self) -> i32 { self.extrapop }
@@ -5972,11 +6290,11 @@ impl ProtoModelFull {
 
     // Ghidra: fspec.hh:981 ProtoModel::printInDecl
     /// Should the model name be printed in function declarations?
-    pub fn print_in_decl(&self) -> bool { self.is_printed }
+    pub fn print_in_decl(&self) -> bool { self.is_printed.load(Ordering::Relaxed) }
 
     // Ghidra: fspec.hh:982 ProtoModel::setPrintInDecl
     /// Set whether this name should be printed in declarations.
-    pub fn set_print_in_decl(&mut self, val: bool) { self.is_printed = val; }
+    pub fn set_print_in_decl(&self, val: bool) { self.is_printed.store(val, Ordering::Relaxed); }
 }
 
 /// `ParameterPieces::isthis = 1` (fspec.hh:362). Used by
@@ -5986,11 +6304,15 @@ pub const THIS_POINTER_PIECE: u32 = 1;
 // RUGRA-GLUE: read_varnode_data_attrs (free helper — parses the space/offset/
 // size attributes that Ghidra reads via VarnodeData::decode for the
 // <unaffected>/<killedbycall>/<returnaddress>/<likelytrash> children).
-fn read_varnode_data_attrs(decoder: &mut dyn crate::marshal::Decoder) -> (AddressSpace, u64, i32) {
+fn read_varnode_data_attrs_resolved(
+    decoder: &mut dyn crate::marshal::Decoder,
+    register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+) -> Result<(AddressSpace, u64, i32), String> {
     use crate::marshal::Decoder;
     let mut space = AddressSpace::Register;
     let mut offset = 0u64;
     let mut size = 0i32;
+    let mut register_name = None;
     loop {
         let aid = decoder.next_attribute_id();
         if aid == 0 { break; }
@@ -6007,10 +6329,27 @@ fn read_varnode_data_attrs(decoder: &mut dyn crate::marshal::Decoder) -> (Addres
                 let s = decoder.read_string();
                 size = s.parse::<i32>().unwrap_or(0);
             }
+            Some("name") => register_name = Some(decoder.read_string()),
             _ => { let _ = decoder.read_string(); }
         }
     }
-    (space, offset, size)
+    if let Some(name) = register_name {
+        let storage =
+            register_resolver(&name).ok_or_else(|| format!("Unknown register name: {name}"))?;
+        return Ok((storage.space, storage.offset, storage.size));
+    }
+    Ok((space, offset, size))
+}
+
+// RUGRA-GLUE: compatibility adapter for legacy decode callers that only use
+// explicit space/offset/size address elements and have no Translate catalog.
+fn read_varnode_data_attrs(decoder: &mut dyn crate::marshal::Decoder) -> (AddressSpace, u64, i32) {
+    let no_register = |_name: &str| None;
+    read_varnode_data_attrs_resolved(decoder, &no_register).unwrap_or((
+        AddressSpace::Register,
+        0,
+        0,
+    ))
 }
 
 // RUGRA-GLUE: read_range_child (free helper — parses a <range> child of

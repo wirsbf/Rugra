@@ -39,7 +39,10 @@ As in `FuncProto::setInputLock` / `setOutputLock` (`fspec.cc:3921-3948`),
 setting either lock also locks the prototype model. Clearing an individual
 input/output lock does not implicitly unlock the model.
 
-**状态**: 🔧 **L2（2026-08-11 锁定审计）**——空参列表 lock 语义、void/model lock 联动、ParamActive slot/counter、trial overlap/used-prefix/comparator 及 ParamEntry 分配与 12.0.4 不等价。
+**状态**: 🔧 **L2（2026-08-14 锁定审计）**——结构化 DOM 中的
+`ParamEntry` / `ParamListStandard` / `ProtoModelFull` 解码切片已有锁定
+12.0.4 行为对拍，但生产 `.cspec` 文本 ingestion、`ModelRule` 构造与若干
+未覆盖分支仍为 `MISMATCH` / `UNTESTED`，因此不升 L3。
 **源代码路径**: `src/fspec.rs`
 
 ## 模块说明 (Module Doc)
@@ -259,7 +262,7 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
  
 **2026-07-22**: +10 FuncProto methods (clearInput/copyFlowEffects/paramShift/resolveExtraPop/setInjectId/cancelInjectId/clearUnlockedOutput/setInternal/updateThisPointer)
 
-### 2026-07-22：ParamEntry + ParamListStandard 完整移植
+### 2026-07-22：ParamEntry + ParamListStandard 算法主体
 
 完整移植 Ghidra `ParamEntry`（fspec.hh:84-155 / fspec.cc:60-595）+ `ParamListStandard`（fspec.hh:589-646 / fspec.cc:597-1517）——参数存储资源建模 + 资源分配算法。
 
@@ -294,9 +297,32 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 **ALIGNMENT_ROADMAP 记录的未移植依赖**（每个 TODO 均有记录）：
 - `ParamEntryResolver` rangemap（fspec.hh:597）—— `find_entry` 用线性扫描替代
 - `AddrSpaceManager::findJoin`（space.cc）—— `resolve_join`/`set_join_pieces` 由调用方提供 pieces
-- `Decoder` XML 编解码 —— `parse_pentry`/`parse_group`/`finalize_after_decode` 接受预解码对象
+- 生产 `.cspec` 文本到 `Element` DOM 的解析器尚缺；本模块现可通过既有
+  `TreeDecoder` 消费结构化 DOM，真实文本 ingestion 仍在本模块之外
 - `ModelRule`（modelrules.hh）—— `assign_address` 直接走 fallback
 - `Datatype::getAlignSize`/`getAlignment` —— 用 size/alignment=1 近似
+
+### 2026-08-14：compiler-spec 参数模型结构化 DOM 解码
+
+- `ParamEntry::decode` 从 `<pentry>` 读取 `minsize`、`maxsize`、对齐、存储类、
+  extension 与地址子元素；命名寄存器通过调用方提供的 Translate 等价解析器
+  查询，不嵌入 SysV/Windows ABI 寄存器表。
+- `ParamListStandard::decode` 按文档顺序处理 `<pentry>` / `<group>`，保留共享
+  group counter、split-float resource 起点、重叠检查、正向/反向栈边界，并由
+  `get_range_list` 从实际 stack pentry 推导区间。
+- `ProtoModelFull::decode_with_register_resolver` 解码 input/output、effects、trash、
+  internal storage，并优先从实际 input stack entries 派生 parameter range；
+  `decode` 保留为无命名寄存器目录时的兼容入口。
+- `ProtoModelFull` 的 declaration-print flag 使用对象内部的原子可变状态：所有
+  指向同一模型的 `Arc` 观察同一次 `setPrintInDecl` 原位突变；复制 alias 时则
+  新建独立 flag，匹配 Ghidra 新 `ProtoModel` 对象而非共享 flag。
+- 锁定 fixture `tools/run_cspec_param_model_oracle.sh` 用完整
+  `x86-64-gcc.cspec`：Ghidra 端走生产 `DocumentStorage`，Rust 端把同一锁定文本
+  转为结构化 `Element` 后调用现有 `TreeDecoder` 和上述生产函数。默认模型、
+  MSABI 分组、栈区间、正向栈与错误路径的已声明观测逐字节一致。
+- 整体状态仍是 `MISMATCH`：Rust 生产路径尚不能直接 ingest `.cspec` 文本；
+  `<rule>` 当前仅被消费，尚未构造 `ModelRule`。`resolveprototype`、join-space
+  pentry 与 default-return 注入仍为 `UNTESTED`。fixture 不把这些残差归为匹配。
 
 **验证**：cargo check --lib 0 错误；cargo test --lib fspec:: 12/12 通过（6 原有 + 6 新增：ParamEntry exclusion/aligned/justified_contain + ParamListStandard new/possible_param）。repo 中 6 个预存失败（pcodeparse/unionresolve）与本移植无关。
 

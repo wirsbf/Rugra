@@ -15,8 +15,10 @@
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/architecture.{hh,cc}.
 
 use crate::address::{Range, RangeList};
+use crate::fspec::{ProtoModelFull, VarnodeData};
 use crate::override_rs::Override;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// FlowInfo option bit: error on too many instructions. Faithful to
 /// `FlowInfo::error_toomanyinstructions` (used in resetDefaultsInternal).
@@ -199,21 +201,10 @@ impl CapabilityRegistry {
     }
 }
 
-/// A prototype model name → model placeholder. The full ProtoModel is in
-/// `fspec.rs`; until integrated, we store names.
-pub type ProtoModelMap = BTreeMap<String, ProtoModelEntry>;
-
-/// A lightweight prototype-model entry. Faithful to the fields of
-/// `ProtoModel` used by Architecture (name + whether it's the default).
-#[derive(Debug, Clone, Default)]
-pub struct ProtoModelEntry {
-    /// Name of the prototype model.
-    pub name: String,
-    /// Whether this is the default model.
-    pub is_default: bool,
-    /// Whether to print in declaration form.
-    pub print_in_decl: bool,
-}
+/// Prototype models owned by the Architecture.  Each entry is the same shared
+/// model object handed to `FuncProto`, mirroring Ghidra's map of stable
+/// `ProtoModel *` values.
+pub type ProtoModelMap = BTreeMap<String, Arc<ProtoModelFull>>;
 
 /// Manager for all the major decompiler subsystems. Faithful to
 /// `Architecture` (architecture.hh:165).
@@ -267,6 +258,9 @@ pub struct Architecture {
     pub proto_models: ProtoModelMap,
     /// Name of the default prototype model.
     pub defaultfp_name: Option<String>,
+    /// Shared default prototype model.  This is pointer-identical to the entry
+    /// in `proto_models`, matching `Architecture::defaultfp`.
+    pub defaultfp: Option<Arc<ProtoModelFull>>,
     /// Name of the model to use when evaluating the current function.
     pub evalfp_current_name: Option<String>,
     /// Name of the model to use when evaluating called functions.
@@ -367,6 +361,7 @@ impl Architecture {
             split_datatype_config: 0,
             proto_models: ProtoModelMap::new(),
             defaultfp_name: None,
+            defaultfp: None,
             evalfp_current_name: None,
             evalfp_called_name: None,
             nohighptr: RangeList::new(),
@@ -426,35 +421,100 @@ impl Architecture {
         // subsystems are integrated.
     }
 
-    // RUGRA-GLUE: get_model (no Ghidra counterpart found)
+    // Ghidra: architecture.cc:234 Architecture::getModel
     /// Get a specific PrototypeModel by name. Faithful to `getModel`
     /// (architecture.cc:234). Returns the entry, or None.
-    pub fn get_model(&self, nm: &str) -> Option<&ProtoModelEntry> {
+    pub fn get_model(&self, nm: &str) -> Option<&Arc<ProtoModelFull>> {
         self.proto_models.get(nm)
     }
 
-    // RUGRA-GLUE: has_model (no Ghidra counterpart found)
+    // Ghidra: architecture.cc:247 Architecture::hasModel
     /// Does this Architecture have a specific PrototypeModel? Faithful to
     /// `hasModel` (architecture.cc:247).
     pub fn has_model(&self, nm: &str) -> bool {
         self.proto_models.contains_key(nm)
     }
 
-    // RUGRA-GLUE: set_default_model (no Ghidra counterpart found)
+    // Ghidra: architecture.cc:323 Architecture::setDefaultModel
     /// Set the default PrototypeModel. Faithful to `setDefaultModel`
     /// (architecture.cc:323). The previous default (if any) is reset to
     /// print-in-decl.
     pub fn set_default_model(&mut self, model_name: &str) {
-        if let Some(prev_name) = &self.defaultfp_name {
-            if let Some(prev) = self.proto_models.get_mut(prev_name) {
-                prev.print_in_decl = true;
-            }
+        if !self.proto_models.contains_key(model_name) {
+            return;
         }
-        if let Some(model) = self.proto_models.get_mut(model_name) {
-            model.print_in_decl = false;
-            model.is_default = true;
+        self.defaultfp_name = None;
+        if let Some(previous) = self.defaultfp.take() {
+            previous.set_print_in_decl(true);
         }
+        let model = self
+            .proto_models
+            .get(model_name)
+            .expect("model existence checked before default selection")
+            .clone();
+        model.set_print_in_decl(false);
         self.defaultfp_name = Some(model_name.to_string());
+        self.defaultfp = Some(model);
+    }
+
+    // Ghidra: architecture.cc:741 Architecture::decodeProto
+    /// Decode and register one `<prototype>` child.  Duplicate names fail
+    /// before replacing any existing shared model.
+    pub fn decode_proto(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        addr_size: usize,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<Arc<ProtoModelFull>, String> {
+        let sub_id = decoder.peek_element();
+        let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+        if sub_name != "prototype" {
+            return Err("Expecting <prototype> or <resolveprototype> tag".to_string());
+        }
+        let mut model = ProtoModelFull::new(Some(self.stack_space), addr_size);
+        let name = model.decode_with_register_resolver(
+            decoder,
+            Some(self.stack_space),
+            addr_size,
+            self.stack_grows_negative,
+            None,
+            None,
+            register_resolver,
+        )?;
+        if self.proto_models.contains_key(&name) {
+            return Err(format!("Duplicate ProtoModel name: {name}"));
+        }
+        let model = Arc::new(model);
+        self.proto_models.insert(name, model.clone());
+        Ok(model)
+    }
+
+    // Ghidra: architecture.cc:795 Architecture::decodeDefaultProto
+    /// Decode the `<default_proto>` wrapper and select its single model as the
+    /// Architecture default.
+    pub fn decode_default_proto(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        addr_size: usize,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<(), String> {
+        let elem_id = decoder.open_element();
+        while decoder.peek_element() != 0 {
+            if self.defaultfp.is_some() {
+                return Err("More than one default prototype model".to_string());
+            }
+            let model = self.decode_proto(decoder, addr_size, register_resolver)?;
+            let name = model.get_name().to_string();
+            self.set_default_model(&name);
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: architecture.hh:193 Architecture::defaultfp
+    /// Retrieve the selected shared default model.
+    pub fn get_default_model(&self) -> Option<&Arc<ProtoModelFull>> {
+        self.defaultfp.as_ref()
     }
 
     // RUGRA-GLUE: high_ptr_possible (no Ghidra counterpart found)
@@ -491,15 +551,21 @@ impl Architecture {
         // L3 gap: requires AddrSpaceManager integration.
     }
 
-    // RUGRA-GLUE: create_model_alias (no Ghidra counterpart found)
-    /// Create a name alias for a ProtoModel. Faithful to `createModelAlias`
-    /// (architecture.hh:354). The alias inherits the parent's entry.
+    // Ghidra: architecture.cc:1138 Architecture::createModelAlias
+    /// Create a value-copy alias for a ProtoModel.  Payload and independent
+    /// print state follow the Ghidra alias copy constructor; the existing
+    /// boolean API cannot represent Ghidra's merged/alias-parent exception
+    /// domain, which remains outside the verified default-model slice.
     pub fn create_model_alias(&mut self, alias_name: &str, parent_name: &str) -> bool {
         if let Some(parent) = self.proto_models.get(parent_name) {
-            let mut entry = parent.clone();
-            entry.name = alias_name.to_string();
-            entry.is_default = false;
-            self.proto_models.insert(alias_name.to_string(), entry);
+            if self.proto_models.contains_key(alias_name) {
+                return false;
+            }
+            let mut model = parent.as_ref().clone();
+            model.name = alias_name.to_string();
+            model.set_print_in_decl(true);
+            self.proto_models
+                .insert(alias_name.to_string(), Arc::new(model));
             true
         } else {
             false
@@ -717,37 +783,47 @@ mod tests {
     #[test]
     fn test_proto_models() {
         let mut arch = Architecture::new();
-        arch.proto_models.insert(
-            "__stdcall".to_string(),
-            ProtoModelEntry {
-                name: "__stdcall".to_string(),
-                is_default: false,
-                print_in_decl: true,
-            },
-        );
+        let mut model = ProtoModelFull::new(Some(crate::space::AddressSpace::Stack), 8);
+        model.name = "__stdcall".to_string();
+        let external = Arc::new(model);
+        arch.proto_models
+            .insert("__stdcall".to_string(), external.clone());
         assert!(arch.has_model("__stdcall"));
         assert!(!arch.has_model("__cdecl"));
         assert!(arch.get_model("__stdcall").is_some());
         arch.set_default_model("__stdcall");
         assert_eq!(arch.defaultfp_name.as_deref(), Some("__stdcall"));
-        assert!(!arch.get_model("__stdcall").unwrap().print_in_decl);
+        assert!(!arch.get_model("__stdcall").unwrap().print_in_decl());
+        assert!(Arc::ptr_eq(
+            arch.get_model("__stdcall").unwrap(),
+            arch.get_default_model().unwrap(),
+        ));
+        assert!(Arc::ptr_eq(&external, arch.get_default_model().unwrap()));
+        assert!(!external.print_in_decl());
+
+        let mut replacement = ProtoModelFull::new(Some(crate::space::AddressSpace::Stack), 8);
+        replacement.name = "replacement".to_string();
+        let replacement = Arc::new(replacement);
+        arch.proto_models
+            .insert("replacement".to_string(), replacement.clone());
+        arch.set_default_model("replacement");
+        assert!(external.print_in_decl());
+        assert!(!replacement.print_in_decl());
+        assert!(Arc::ptr_eq(&replacement, arch.get_default_model().unwrap()));
     }
 
     #[test]
     fn test_model_alias() {
         let mut arch = Architecture::new();
-        arch.proto_models.insert(
-            "parent".to_string(),
-            ProtoModelEntry {
-                name: "parent".to_string(),
-                is_default: true,
-                print_in_decl: false,
-            },
-        );
+        let mut model = ProtoModelFull::new(Some(crate::space::AddressSpace::Stack), 8);
+        model.name = "parent".to_string();
+        model.set_print_in_decl(false);
+        arch.proto_models
+            .insert("parent".to_string(), Arc::new(model));
         assert!(arch.create_model_alias("alias", "parent"));
         assert!(arch.has_model("alias"));
-        // Alias inherits the entry but is reset to non-default.
-        assert!(!arch.get_model("alias").unwrap().is_default);
+        assert_eq!(arch.get_model("alias").unwrap().get_name(), "alias");
+        assert!(arch.get_model("alias").unwrap().print_in_decl());
         assert!(!arch.create_model_alias("alias2", "nonexistent"));
     }
 
