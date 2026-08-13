@@ -5093,6 +5093,8 @@ impl Action for ActionPrototypeTypes {
 
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:646
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "prototypetypes" mirrors ctor at coreaction.hh:643
     fn get_name(&self) -> &str { "prototypetypes" }
 }
@@ -5292,6 +5294,8 @@ impl Action for ActionDefaultParams {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:661
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "defaultparams" mirrors ctor at coreaction.hh:659
     fn get_name(&self) -> &str { "defaultparams" }
 }
@@ -5890,6 +5894,8 @@ impl Action for ActionFuncLink {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:697
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "funclink" mirrors ctor at coreaction.hh:697
     fn get_name(&self) -> &str { "funclink" }
 }
@@ -5929,6 +5935,8 @@ impl Action for ActionFuncLinkOutOnly {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:715
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "funclinkoutonly" mirrors ctor at coreaction.hh:715
     fn get_name(&self) -> &str { "funclinkoutonly" }
 }
@@ -6790,6 +6798,8 @@ impl Action for ActionInternalStorage {
         let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1060
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "internalstorage" mirrors ctor at coreaction.hh:1058
     fn get_name(&self) -> &str { "internalstorage" }
 }
@@ -6813,6 +6823,8 @@ impl Action for ActionExtraPopSetup {
         // The infrastructure is ready for when extraPop tracking is added.
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:679
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "extrapopsetup" mirrors ctor at coreaction.hh:676
     fn get_name(&self) -> &str { "extrapopsetup" }
 }
@@ -8248,6 +8260,11 @@ impl Action for ActionStartTypes {
             self.count += 1;
         }
         Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra ActionStartTypes' inherited protected count into ActionState
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "starttypes" mirrors ctor at coreaction.hh:76

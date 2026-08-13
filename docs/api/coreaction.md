@@ -874,6 +874,19 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 <!-- activeparam-port: 1783158350.9445786 -->
 <!-- activeparam-integration: 1783160103.0862665 -->
 
+### 2026-08-13：Action leaf executor flags/count（PIPE-ACTION-COUNT-0001A）
+
+- `ActionStartTypes` 仍按 Ghidra 在 `apply` 内累计继承的 `Action::count`，并通过
+  `take_count_delta` 将该增量恰好一次交给 Rust 的外置 `ActionState`。这使包含它的
+  `rule_repeatapply` 组能看到首次 `startTypeRecovery()` 的一次变化并执行第二轮。
+- `ActionPrototypeTypes`、`ActionDefaultParams`、`ActionExtraPopSetup`、
+  `ActionFuncLink`、`ActionFuncLinkOutOnly`、`ActionInternalStorage` 暴露构造器中的
+  `rule_onceperfunc` flag。第一次零变化执行后进入 `status_end`，同一函数内跳过后续
+  `perform`；`reset` 后可以再次执行，同时保留累计统计。
+- 锁定 12.0.4 的 `action_leaf_count_1204` oracle 只批准 StartTypes 的完整首次/重复状态
+  转换，以及上述六个 leaf 的零 calls/ops/blocks 边界生命周期。它不批准这些 leaf 的
+  非空数据遍历，也不覆盖 `ActionDoNothing` 或 `ActionSetCasts`。
+
 ### 2026-08-11：ANN-F provenance 分类（无行为变更）
 
 以下三个函数在 Ghidra 12.0.4 中没有独立函数体，不能标成逐函数映射：
