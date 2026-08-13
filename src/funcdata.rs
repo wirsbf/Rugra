@@ -1074,19 +1074,32 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opSetOutput
-    /// Set the output varnode for an op (replacing any existing output).
-    /// Faithful to `Funcdata::opSetOutput`. Marks the varnode WRITTEN and sets
-    /// its def link to this op; clears the old output's def if present.
-    pub fn op_set_output(&self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
-        let mut o = op.0.write().unwrap();
-        if let Some(old) = o.output.take() {
-            // Clear the old output's def (best-effort).
-            old.write().unwrap().def = None;
+    // Ghidra: funcdata_op.cc:70 Funcdata::opSetOutput
+    /// Install a bank-owned Varnode as an op output, consuming the canonical
+    /// Varnode selected by `VarnodeBank::set_def`.
+    pub fn op_set_output(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        let same_output = op.0.read().unwrap().output.as_ref()
+            .is_some_and(|output| std::sync::Arc::ptr_eq(output, &vn));
+        if same_output {
+            return;
         }
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&op.0));
-        o.output = Some(vn);
+        if op.0.read().unwrap().output.is_some() {
+            self.op_unset_output(op);
+        }
+        let previous_def = vn.read().unwrap().get_def().map(crate::op::PcodeOpRef);
+        if let Some(previous_def) = previous_def {
+            self.op_unset_output(&previous_def);
+        }
+        let canonical = match self.vbank.set_def(vn, std::sync::Arc::downgrade(&op.0)) {
+            Ok(canonical) => canonical,
+            Err(error) => panic!("Funcdata::opSetOutput precondition failed: {error}"),
+        };
+        self.set_varnode_properties(&canonical);
+        op.0.write().unwrap().output = Some(canonical);
     }
 
     // Ghidra: funcdata_op.cc:203 Funcdata::opDestroy
@@ -1231,27 +1244,33 @@ impl Funcdata {
         // on inrefs[slot]).
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opUnsetOutput
-    /// Unset the output of an op. Faithful to `Funcdata::opUnsetOutput`
-    /// (funcdata_op.cc). Clears the output's def link and removes the output
-    /// from the op, making the old output a free varnode.
-    pub fn op_unset_output(&self, op: &crate::op::PcodeOpRef) {
+    // Ghidra: funcdata_op.cc:52 Funcdata::opUnsetOutput
+    /// Remove an op's output, return the old Varnode to the bank's free class,
+    /// and discard its Cover.
+    pub fn op_unset_output(&mut self, op: &crate::op::PcodeOpRef) {
         let old = op.0.write().unwrap().output.take();
-        if let Some(o) = old {
-            o.write().unwrap().def = None;
-        }
+        let Some(old) = old else { return };
+        self.vbank.make_free_prevalidated(&old);
+        old.write().unwrap().clear_cover();
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newVarnodeOut
-    /// Create a new output varnode for an op at a given address+size.
-    /// Faithful to `Funcdata::newVarnodeOut` (funcdata.hh). Creates a varnode
-    /// in the register space at the given address and wires it as the op's
-    /// output.
-    pub fn new_varnode_out(&mut self, size: usize, addr: crate::address::Address, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        let vn = self.vbank.create_with_space(size, crate::space::AddressSpace::Register, addr.as_u64());
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&op.0));
+    // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
+    /// Create an already-written Varnode under its final BTree keys and install
+    /// it as the output of `op`.
+    pub fn new_varnode_out(
+        &mut self,
+        size: usize,
+        addr: crate::address::Address,
+        op: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vn = self.vbank.create_def_with_space(
+            size,
+            crate::space::AddressSpace::Register,
+            addr.as_u64(),
+            &op.0,
+        );
         op.0.write().unwrap().output = Some(vn.clone());
+        self.set_varnode_properties(&vn);
         vn
     }
 

@@ -112,21 +112,17 @@ impl Action for ActionHeritage {
 /// whose consumed mask is zero (no bits consumed by any live operation)
 /// are dead and their defining op is destroyed.
 ///
-/// The current Rugra implementation uses a simplified version: it checks
-/// if the output varnode has no descendants. The full Ghidra algorithm
-/// uses consumed-bit propagation via push_consumed/propagate_consumed.
+/// `VAC_CONSUME` records a data-flow path to a formal use, while
+/// `LIS_CONSUME` records membership in the LIFO propagation work-list.
 pub struct ActionDeadCode;
 
 impl ActionDeadCode {
-    // Ghidra: coreaction.hh:552 ActionDeadCode (constructor mirror)
+    // Ghidra: coreaction.hh:560 ActionDeadCode::ActionDeadCode
     pub fn new() -> Self {
         Self
     }
 
-    /// Push a consumed value into a Varnode. Faithful to `pushConsumed`
-    /// (coreaction.cc). This is the full Ghidra algorithm, ready for
-    /// integration when VarnodeLocSet iteration is available.
-    #[allow(dead_code)]
+    /// Merge a consume mask and enqueue a written Varnode at most once.
     // Ghidra: coreaction.cc:3556 ActionDeadCode::pushConsumed
     fn push_consumed(
         val: u64,
@@ -135,75 +131,342 @@ impl ActionDeadCode {
     ) {
         use crate::address::calc_mask;
         let mut vn_rg = vn.write().unwrap();
-        let mask = calc_mask(vn_rg.get_size());
-        let newval = (val | vn_rg.get_consume()) & mask;
-        if newval == vn_rg.get_consume() {
-            return; // No change.
+        let newval = (val | vn_rg.get_consume()) & calc_mask(vn_rg.get_size());
+        if newval == vn_rg.get_consume() && vn_rg.is_consume_vacuous() {
+            return;
+        }
+        vn_rg.set_consume_vacuous();
+        if !vn_rg.is_consume_list() {
+            vn_rg.set_consume_list();
+            if vn_rg.is_written() {
+                worklist.push(vn.clone());
+            }
         }
         vn_rg.set_consume(newval);
-        if vn_rg.is_written() {
-            worklist.push(vn.clone());
-        }
     }
 
-    /// Propagate consumed value backward through a defining op. Faithful to
-    /// `propagateConsumed` (coreaction.cc). Handles INT_MULT, INT_ADD,
-    /// INT_SUB, SUBPIECE, and defaults to full mask for other ops.
-    #[allow(dead_code)]
+    /// Propagate the top Varnode's consume mask through its defining op.
     // Ghidra: coreaction.cc:3576 ActionDeadCode::propagateConsumed
     fn propagate_consumed(
+        fd: &Funcdata,
         worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     ) {
         use crate::address::{calc_mask, coveringmask, leastsigbit_set};
         use crate::opcodes::OpCode;
         let Some(vn) = worklist.pop() else { return };
-        let outc = vn.read().unwrap().get_consume();
-        let Some(def) = vn.read().unwrap().get_def() else { return };
-        let opc = def.read().unwrap().opcode;
+        let (outc, out_size, def) = {
+            let mut vn_rg = vn.write().unwrap();
+            let values = (vn_rg.get_consume(), vn_rg.get_size(), vn_rg.get_def());
+            vn_rg.clear_consume_list();
+            values
+        };
+        let Some(def) = def else { return };
+        let (opc, inputs, output) = {
+            let op_rg = def.read().unwrap();
+            (op_rg.opcode, op_rg.inrefs.clone(), op_rg.output.clone())
+        };
+        let push = |slot: usize,
+                    val: u64,
+                    worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>| {
+            if let Some(input) = inputs.get(slot) {
+                Self::push_consumed(val, input, worklist);
+            }
+        };
         match opc {
             OpCode::CPUI_INT_MULT => {
                 let b = coveringmask(outc);
-                let in1_const = def.read().unwrap().get_in(1)
-                    .map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
-                let in1_off = def.read().unwrap().get_in(1)
-                    .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
-                let a = if in1_const {
-                    let ls = leastsigbit_set(in1_off);
+                let in1 = inputs.get(1).map(|input| {
+                    let input_rg = input.read().unwrap();
+                    (input_rg.is_constant(), input_rg.get_offset())
+                });
+                let a = if let Some((true, offset)) = in1 {
+                    let ls = leastsigbit_set(offset);
                     if ls >= 0 {
-                        calc_mask(vn.read().unwrap().get_size()) >> ls as u32
+                        (calc_mask(out_size) >> ls as u32) & b
                     } else { 0 }
                 } else { b };
-                for slot in 0..2 {
-                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
-                        Self::push_consumed(if slot == 0 { a } else { b }, &in_vn, worklist);
-                    }
-                }
+                push(0, a, worklist);
+                push(1, b, worklist);
             }
             OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                 let a = coveringmask(outc);
-                for slot in 0..2 {
-                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
-                        Self::push_consumed(a, &in_vn, worklist);
-                    }
-                }
+                push(0, a, worklist);
+                push(1, a, worklist);
             }
             OpCode::CPUI_SUBPIECE => {
-                let sz = def.read().unwrap().get_in(1)
-                    .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
-                let a = if sz >= 8 { 0 } else { outc << (sz * 8) };
-                if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
-                    Self::push_consumed(a, &in0, worklist);
+                let byte_offset = inputs.get(1)
+                    .map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let mut a = if byte_offset >= 8 { 0 } else { outc << (byte_offset * 8) };
+                if a == 0 && outc != 0 && inputs.get(0)
+                    .is_some_and(|input| input.read().unwrap().get_size() > 8)
+                {
+                    a = u64::MAX ^ (u64::MAX >> 1);
+                }
+                push(0, a, worklist);
+                push(1, if outc == 0 { 0 } else { u64::MAX }, worklist);
+            }
+            OpCode::CPUI_PIECE => {
+                let low_size = inputs.get(1)
+                    .map(|input| input.read().unwrap().get_size()).unwrap_or(0);
+                let (a, b) = if out_size > 8 {
+                    if low_size >= 8 {
+                        (u64::MAX, outc)
+                    } else {
+                        let shift = low_size * 8;
+                        let high_fill = if shift == 0 { 0 } else { u64::MAX << (64 - shift) };
+                        let high = (outc >> shift) ^ high_fill;
+                        (high, outc ^ (high << shift))
+                    }
+                } else {
+                    let shift = low_size * 8;
+                    let high = if shift >= 64 { 0 } else { outc >> shift };
+                    let low = if shift >= 64 { outc } else { outc ^ (high << shift) };
+                    (high, low)
+                };
+                push(0, a, worklist);
+                push(1, b, worklist);
+            }
+            OpCode::CPUI_INDIRECT => {
+                push(0, outc, worklist);
+                if let (Some(iop), Some(indirect_out)) = (inputs.get(1), output.as_ref()) {
+                    if let Some(indop) = fd.get_op_from_const(iop) {
+                        let (is_dead, ind_opcode, ind_out) = {
+                            let ind_rg = indop.0.read().unwrap();
+                            (ind_rg.is_dead(), ind_rg.opcode, ind_rg.output.clone())
+                        };
+                        if !is_dead {
+                            if ind_opcode == OpCode::CPUI_COPY {
+                                let overlaps = ind_out.as_ref().is_some_and(|copy_out| {
+                                    let copy_rg = copy_out.read().unwrap();
+                                    let indirect_rg = indirect_out.read().unwrap();
+                                    copy_rg.characterize_overlap(&indirect_rg) > 0
+                                });
+                                if overlaps {
+                                    if let Some(copy_out) = ind_out {
+                                        Self::push_consumed(u64::MAX, &copy_out, worklist);
+                                    }
+                                    indop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_SOURCE;
+                                }
+                            } else {
+                                indop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_SOURCE;
+                            }
+                        }
+                    }
                 }
             }
-            _ => {
-                let n_in = def.read().unwrap().num_input();
-                for slot in 0..n_in {
-                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
-                        Self::push_consumed(outc, &in_vn, worklist);
+            OpCode::CPUI_COPY | OpCode::CPUI_INT_NEGATE => push(0, outc, worklist),
+            OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                push(0, outc, worklist);
+                push(1, outc, worklist);
+            }
+            OpCode::CPUI_INT_AND => {
+                let constant = inputs.get(1).and_then(|input| {
+                    let input_rg = input.read().unwrap();
+                    input_rg.is_constant().then_some(input_rg.get_offset())
+                });
+                push(0, constant.map_or(outc, |val| outc & val), worklist);
+                push(1, outc, worklist);
+            }
+            OpCode::CPUI_MULTIEQUAL => {
+                for input in &inputs {
+                    Self::push_consumed(outc, input, worklist);
+                }
+            }
+            OpCode::CPUI_INT_ZEXT => push(0, outc, worklist),
+            OpCode::CPUI_INT_SEXT => {
+                let b = inputs.get(0)
+                    .map(|input| calc_mask(input.read().unwrap().get_size())).unwrap_or(0);
+                let mut a = outc & b;
+                if outc > b {
+                    a |= b ^ (b >> 1);
+                }
+                push(0, a, worklist);
+            }
+            OpCode::CPUI_INT_LEFT => {
+                let constant_shift = inputs.get(1).and_then(|input| {
+                    let input_rg = input.read().unwrap();
+                    input_rg.is_constant().then_some(input_rg.get_offset() as usize)
+                });
+                if let Some(shift) = constant_shift {
+                    let mut a = if out_size > 8 {
+                        if shift >= 64 {
+                            u64::MAX
+                        } else if shift == 0 {
+                            outc
+                        } else {
+                            (outc >> shift) ^ (u64::MAX << (64 - shift))
+                        }
+                    } else if shift >= 64 {
+                        0
+                    } else {
+                        outc >> shift
+                    };
+                    if out_size > 8 {
+                        let retained = out_size.saturating_mul(8).saturating_sub(shift);
+                        if retained < 64 {
+                            a &= if retained == 0 { 0 } else { (1u64 << retained) - 1 };
+                        }
                     }
+                    push(0, a, worklist);
+                    push(1, if outc == 0 { 0 } else { u64::MAX }, worklist);
+                } else {
+                    let a = if outc == 0 { 0 } else { u64::MAX };
+                    push(0, a, worklist);
+                    push(1, a, worklist);
+                }
+            }
+            OpCode::CPUI_INT_RIGHT => {
+                let constant_shift = inputs.get(1).and_then(|input| {
+                    let input_rg = input.read().unwrap();
+                    input_rg.is_constant().then_some(input_rg.get_offset() as usize)
+                });
+                if let Some(shift) = constant_shift {
+                    push(0, if shift >= 64 { 0 } else { outc << shift }, worklist);
+                    push(1, if outc == 0 { 0 } else { u64::MAX }, worklist);
+                } else {
+                    let a = if outc == 0 { 0 } else { u64::MAX };
+                    push(0, a, worklist);
+                    push(1, a, worklist);
+                }
+            }
+            OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL |
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                let a = if outc == 0 { 0 } else {
+                    inputs.get(0).map(|input| input.read().unwrap().get_nz_mask()).unwrap_or(0)
+                        | inputs.get(1).map(|input| input.read().unwrap().get_nz_mask()).unwrap_or(0)
+                };
+                push(0, a, worklist);
+                push(1, a, worklist);
+            }
+            OpCode::CPUI_INSERT => {
+                let width = inputs.get(3).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let position = inputs.get(2).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let insert_mask = if width >= 64 { u64::MAX } else if width == 0 { 0 } else { (1u64 << width) - 1 };
+                push(1, insert_mask, worklist);
+                let shifted_mask = if position >= 64 { 0 } else { insert_mask << position };
+                push(0, outc & !shifted_mask, worklist);
+                let b = if outc == 0 { 0 } else { u64::MAX };
+                push(2, b, worklist);
+                push(3, b, worklist);
+            }
+            OpCode::CPUI_EXTRACT => {
+                let width = inputs.get(2).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let position = inputs.get(1).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let extract_mask = if width >= 64 { u64::MAX } else if width == 0 { 0 } else { (1u64 << width) - 1 };
+                let consumed = extract_mask & outc;
+                push(0, if position >= 64 { 0 } else { consumed << position }, worklist);
+                let b = if outc == 0 { 0 } else { u64::MAX };
+                push(1, b, worklist);
+                push(2, b, worklist);
+            }
+            OpCode::CPUI_POPCOUNT | OpCode::CPUI_LZCOUNT => {
+                let possible = inputs.get(0)
+                    .map(|input| 16u64.saturating_mul(input.read().unwrap().get_size() as u64).saturating_sub(1))
+                    .unwrap_or(0) & outc;
+                push(0, if possible == 0 { 0 } else { u64::MAX }, worklist);
+            }
+            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {}
+            OpCode::CPUI_FLOAT_INT2FLOAT => {
+                let a = if outc == 0 { 0 } else {
+                    coveringmask(inputs.get(0)
+                        .map(|input| input.read().unwrap().get_nz_mask()).unwrap_or(0))
+                };
+                push(0, a, worklist);
+            }
+            _ => {
+                let a = if outc == 0 { 0 } else { u64::MAX };
+                for input in &inputs {
+                    Self::push_consumed(a, input, worklist);
                 }
             }
         }
+    }
+
+    // Ghidra: coreaction.cc:3809 ActionDeadCode::neverConsumed
+    fn never_consumed(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &mut Funcdata,
+    ) -> bool {
+        let (size, descendants, def) = {
+            let vn_rg = vn.read().unwrap();
+            if vn_rg.get_size() > 8 {
+                return false;
+            }
+            (vn_rg.get_size(), vn_rg.descend.iter().filter_map(|weak| weak.upgrade()).collect::<Vec<_>>(), vn_rg.get_def())
+        };
+        for descendant in descendants {
+            let op = crate::op::PcodeOpRef(descendant);
+            let slot = { op.0.read().unwrap().slot_of_input(vn) };
+            if let Some(slot) = slot {
+                let zero = fd.new_constant(size, 0);
+                fd.op_set_input(&op, zero, slot);
+            }
+        }
+        if let Some(def) = def {
+            let op = crate::op::PcodeOpRef(def);
+            if op.0.read().unwrap().is_call() {
+                fd.op_unset_output(&op);
+            } else {
+                fd.op_destroy(&op);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: coreaction.cc:3840 ActionDeadCode::markConsumedParameters
+    fn mark_consumed_parameters(
+        fd: &Funcdata,
+        fc: &crate::fspec::FuncCallSpecs,
+        worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    ) {
+        let Some(call_op) = fc.find_call_op(fd) else { return };
+        let inputs = call_op.0.read().unwrap().inrefs.clone();
+        if let Some(target) = inputs.first() {
+            Self::push_consumed(u64::MAX, target, worklist);
+        }
+        if fc.is_input_locked() || fc.is_input_active() {
+            for input in inputs.iter().skip(1) {
+                Self::push_consumed(u64::MAX, input, worklist);
+            }
+            return;
+        }
+        for (slot, input) in inputs.iter().enumerate().skip(1) {
+            let mut consume = {
+                let input_rg = input.read().unwrap();
+                if input_rg.is_auto_live() { u64::MAX }
+                else { crate::address::minimalmask(input_rg.get_nz_mask()) }
+            };
+            let bytes = fc.get_input_bytes_consumed(slot);
+            if bytes != 0 {
+                consume &= crate::address::calc_mask(bytes as usize);
+            }
+            Self::push_consumed(consume, input, worklist);
+        }
+    }
+
+    // Ghidra: coreaction.cc:3871 ActionDeadCode::gatherConsumedReturn
+    fn gather_consumed_return(fd: &Funcdata) -> u64 {
+        if fd.get_func_proto().is_output_locked() || fd.active_output.is_some() {
+            return u64::MAX;
+        }
+        let mut consume = 0;
+        for return_op in &fd.obank.returnlist {
+            let input = {
+                let op_rg = return_op.0.read().unwrap();
+                if op_rg.is_dead() || op_rg.num_input() <= 1 { None }
+                else { op_rg.get_in(1).cloned() }
+            };
+            if let Some(input) = input {
+                consume |= crate::address::minimalmask(input.read().unwrap().get_nz_mask());
+            }
+        }
+        let bytes = fd.get_func_proto().get_return_bytes_consumed();
+        if bytes != 0 {
+            consume &= crate::address::calc_mask(bytes as usize);
+        }
+        consume
     }
 
     // Ghidra: coreaction.cc:3902 ActionDeadCode::lastChanceLoad
@@ -218,27 +481,26 @@ impl ActionDeadCode {
         // cc:3905: if (data.getHeritagePass() > 1) return false;
         if fd.heritage.pass > 1 { return false; }
         // cc:3906: if (data.isJumptableRecoveryOn()) return false;
-        // (Rugra: jumptable recovery flag — skip if we had one; for now always
-        // allow, matching the common case.)
+        if fd.is_jumptable_recovery_on() { return false; }
         let mut res = false;
         // cc:3907-3921: iterate LOAD ops.
         let load_ops: Vec<crate::op::PcodeOpRef> = fd.obank.loadlist.clone();
         for op_ref in &load_ops {
             // Capture the output Arc + in(1) eventual-const check while holding
             // the read lock, then release before mutating.
-            let (out_arc, should_mark) = {
+            let out_arc = {
                 let op = op_ref.0.read().unwrap();
-                if op.is_dead() { (None, false) }
+                if op.is_dead() { None }
                 else if let Some(out) = &op.output {
-                    if out.read().unwrap().is_consume_vacuous() { (None, false) }
+                    if out.read().unwrap().is_consume_vacuous() { None }
                     else {
                         let in1_is_eventual = op.get_in(1).map(|v| {
                             v.read().unwrap().is_eventual_constant(3, 1)
                         }).unwrap_or(false);
-                        if in1_is_eventual { (Some(out.clone()), true) }
-                        else { (None, false) }
+                        if in1_is_eventual { Some(out.clone()) }
+                        else { None }
                     }
-                } else { (None, false) }
+                } else { None }
             };
             if let Some(out) = out_arc {
                 Self::push_consumed(u64::MAX, &out, worklist);
@@ -253,134 +515,154 @@ impl ActionDeadCode {
 impl Action for ActionDeadCode {
     // Ghidra: coreaction.cc:3925 ActionDeadCode::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Full Ghidra consumed-bit propagation algorithm, driven by
-        // iterating Funcdata's varnode bank + op bank.
-        let mut changed = 0;
+        use crate::space::{AddressSpace, SPACEID_OTHER};
+        let all_varnodes = fd.vbank.loc_tree.iter().map(|entry| entry.0.clone()).collect::<Vec<_>>();
+        let mut spaces = all_varnodes.iter().map(|vn| vn.read().unwrap().get_space()).collect::<Vec<_>>();
+        spaces.sort_by_key(|space| (space.space_id(), *space));
+        spaces.dedup();
+        let does_deadcode = |space: AddressSpace| {
+            !matches!(space, AddressSpace::Const | AddressSpace::Iop | AddressSpace::Other(SPACEID_OTHER))
+        };
 
-        // Determine which spaces are NOT yet heritaged (deadcode not allowed).
-        // Faithful to Ghidra coreaction.cc:3949-3958 + heritage.cc:2843-2848:
-        // deadRemovalAllowed(spc) = (pass > deadcodedelay). For spaces where
-        // dead removal is NOT allowed, all varnodes are marked fully consumed
-        // (so they survive dead-code). This protects Stack-space INDIRECT
-        // varnodes during Register/Unique heritage (Stack delay=1, so in
-        // pass 0 they're protected).
-        let heritage_pass = fd.heritage.pass;
-        let stack_deadcode_allowed = heritage_pass > 1; // Stack delay=1
-
-        // Step 1: Clear consume flags on all Varnodes.
-        for vn_ref in fd.vbank.loc_tree.iter() {
-            let mut vn = vn_ref.0.write().unwrap();
-            vn.set_consume(0);
-        }
-
-        // Step 1.5: For spaces where dead removal is not allowed (Stack space
-        // before its heritage pass), mark all varnodes fully consumed.
-        // Faithful to Ghidra coreaction.cc:3949-3958.
-        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
-            Vec::new();
-        if !stack_deadcode_allowed {
-            for vn_arc in fd.vbank.iter_space(crate::space::AddressSpace::Stack) {
-                Self::push_consumed(u64::MAX, &vn_arc, &mut worklist);
+        for vn in &all_varnodes {
+            let mut vn_rg = vn.write().unwrap();
+            vn_rg.clear_consume_list();
+            vn_rg.clear_consume_vacuous();
+            vn_rg.set_consume(0);
+            if vn_rg.is_addr_force() && !vn_rg.is_direct_write() {
+                vn_rg.clear_addr_force();
             }
         }
 
-        // Step 2: Build initial worklist from terminal uses (ops with no
-        // output, or whose output doesn't matter: RETURN, BRANCH, CBRANCH,
-        // STORE, and ops whose output has no descendants).
-        // (worklist already initialized in Step 1.5)
+        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
+        for &space in &spaces {
+            if !does_deadcode(space) || fd.heritage.dead_removal_allowed(space) {
+                continue;
+            }
+            for vn in fd.vbank.iter_space(space) {
+                Self::push_consumed(u64::MAX, &vn, &mut worklist);
+            }
+        }
 
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            let opc = op_rg.opcode;
-            let n_in = op_rg.num_input();
-
-            // Non-assignment ops: all inputs are consumed with full mask.
-            if op_rg.output.is_none() {
-                for i in 0..n_in {
-                    if let Some(in_vn) = op_rg.get_in(i) {
-                        Self::push_consumed(u64::MAX, in_vn, &mut worklist);
+        let return_consume = Self::gather_consumed_return(fd);
+        let alive_ops = fd.obank.alivelist.clone();
+        for op_ref in &alive_ops {
+            op_ref.0.write().unwrap().flags &= !crate::op::pcodeop_flags::INDIRECT_SOURCE;
+            let (is_call, is_call_without_spec, is_assignment, hold_output, opcode, inputs, output) = {
+                let op_rg = op_ref.0.read().unwrap();
+                (
+                    op_rg.is_call(),
+                    (op_rg.flags & (crate::op::pcodeop_flags::CALL | crate::op::pcodeop_flags::HAS_CALLSPEC))
+                        == crate::op::pcodeop_flags::CALL,
+                    op_rg.is_assignment(),
+                    (op_rg.addlflags & crate::op::op_addl_flags::HOLD_OUTPUT) != 0,
+                    op_rg.opcode,
+                    op_rg.inrefs.clone(),
+                    op_rg.output.clone(),
+                )
+            };
+            if is_call {
+                if is_call_without_spec {
+                    for input in &inputs {
+                        Self::push_consumed(u64::MAX, input, &mut worklist);
+                    }
+                }
+                if !is_assignment { continue; }
+                if hold_output {
+                    if let Some(output) = &output {
+                        Self::push_consumed(u64::MAX, output, &mut worklist);
+                    }
+                }
+            } else if !is_assignment {
+                if opcode == OpCode::CPUI_RETURN {
+                    if let Some(input) = inputs.first() {
+                        Self::push_consumed(u64::MAX, input, &mut worklist);
+                    }
+                    for input in inputs.iter().skip(1) {
+                        Self::push_consumed(return_consume, input, &mut worklist);
+                    }
+                } else if opcode == OpCode::CPUI_BRANCHIND {
+                    let mask = fd.find_jump_table(op_ref)
+                        .map(|table| table.read().unwrap().get_switch_var_consume())
+                        .unwrap_or(u64::MAX);
+                    if let Some(input) = inputs.first() {
+                        Self::push_consumed(mask, input, &mut worklist);
+                    }
+                } else {
+                    for input in &inputs {
+                        Self::push_consumed(u64::MAX, input, &mut worklist);
                     }
                 }
                 continue;
-            }
-
-            // Assignment ops: check if output has no descendants.
-            if let Some(out) = &op_rg.output {
-                let out_rg = out.read().unwrap();
-                if out_rg.descend.is_empty() && !out_rg.is_input() {
-                    // Output is dead — this op can potentially be removed.
-                    // Don't push its inputs to worklist.
-                } else {
-                    // Output is live — push inputs to worklist.
-                    for i in 0..n_in {
-                        if let Some(in_vn) = op_rg.get_in(i) {
-                            Self::push_consumed(u64::MAX, in_vn, &mut worklist);
-                        }
+            } else {
+                for input in &inputs {
+                    if input.read().unwrap().is_auto_live() {
+                        Self::push_consumed(u64::MAX, input, &mut worklist);
                     }
                 }
             }
-            let _ = opc;
+            if let Some(output) = output {
+                if output.read().unwrap().is_auto_live() {
+                    Self::push_consumed(u64::MAX, &output, &mut worklist);
+                }
+            }
         }
 
-        // Step 3: Propagate consumed bits backward through the data-flow.
+        let call_specs = fd.callspecs.clone();
+        for call_spec in &call_specs {
+            Self::mark_consumed_parameters(fd, call_spec, &mut worklist);
+        }
+
         while !worklist.is_empty() {
-            Self::propagate_consumed(&mut worklist);
+            Self::propagate_consumed(fd, &mut worklist);
         }
 
-        // Step 3.5 (Ghidra coreaction.cc:3985-3990): lastChanceLoad — mark
-        // LOAD ops with eventual-constant addresses as auto-live so they
-        // survive dead-code. If any were found, re-run propagation.
         if Self::last_chance_load(fd, &mut worklist) {
             while !worklist.is_empty() {
-                Self::propagate_consumed(&mut worklist);
+                Self::propagate_consumed(fd, &mut worklist);
             }
-            changed += 1;
         }
 
-        // Step 4: Remove dead ops (output consume == 0 and not input).
-        // Ghidra: coreaction.cc:4038-4044 — when an op's output is never
-        // consumed (!vacflag), Ghidra distinguishes calls from other ops:
-        //   if (op->isCall()) data.opUnsetOutput(op);  // keep the CALL (side effects!), drop only the unused return value
-        //   else               data.opDestroy(op);      // completely remove the op
-        // A CALL has side effects (it writes memory / does I/O), so it must
-        // NEVER be removed just because its return value is unused. Previously
-        // Rugra mark_dead'd calls with dead outputs, which killed fwrite/fopen/
-        // malloc/etc. wholesale and collapsed every if/else body containing a
-        // call — the §3.2 body-collapse root cause.
-        let mut to_remove = Vec::new();
-        let mut calls_to_unset = Vec::new();
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if let Some(out) = &op_rg.output {
-                let out_rg = out.read().unwrap();
-                if out_rg.get_consume() == 0 && !out_rg.is_input() {
-                    if matches!(op_rg.opcode, crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND) {
-                        // Faithful to Ghidra: keep the call, drop only its dead output.
-                        calls_to_unset.push(op_ref.clone());
-                    } else {
-                        to_remove.push(op_ref.clone());
+        for &space in &spaces {
+            if !does_deadcode(space) || !fd.heritage.dead_removal_allowed(space) {
+                continue;
+            }
+            let varnodes = fd.vbank.iter_space(space).collect::<Vec<_>>();
+            let mut change_count = 0;
+            for vn in varnodes {
+                let (written, vacuous, consume, def) = {
+                    let mut vn_rg = vn.write().unwrap();
+                    let values = (vn_rg.is_written(), vn_rg.is_consume_vacuous(), vn_rg.get_consume(), vn_rg.get_def());
+                    if values.0 {
+                        vn_rg.clear_consume_list();
+                        vn_rg.clear_consume_vacuous();
                     }
+                    values
+                };
+                if !written { continue; }
+                if !vacuous {
+                    if let Some(def) = def {
+                        let op = crate::op::PcodeOpRef(def);
+                        change_count += 1;
+                        if op.0.read().unwrap().is_call() {
+                            fd.op_unset_output(&op);
+                        } else {
+                            fd.op_destroy(&op);
+                        }
+                    }
+                } else if consume == 0 && Self::never_consumed(&vn, fd) {
+                    change_count += 1;
                 }
             }
+            if change_count != 0 {
+                fd.heritage.seen_dead_code(space);
+            }
         }
 
-        for op_ref in to_remove {
-            fd.obank.mark_dead(op_ref);
-            changed += 1;
-        }
-        // Calls: unset output (clears the unused return-value varnode) but the
-        // op stays alive so its side effects still emit. opUnsetOutput also
-        // detaches the varnode's def back-edge (funcdata.cc opUnsetOutput).
-        for op_ref in calls_to_unset {
-            fd.op_unset_output(&op_ref);
-            changed += 1;
-        }
-
-        if changed > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        fd.clear_dead_varnodes();
+        fd.obank.destroy_dead();
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "deadcode" mirrors ctor at coreaction.hh:552

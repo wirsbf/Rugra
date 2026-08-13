@@ -676,8 +676,11 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-06-26（续）：op_set_output
 
-- `op_set_output(op, vn)` — `Funcdata::opSetOutput`：设置/替换 op 输出 varnode。
-  标记 WRITTEN、设 def 链、清旧输出 def。解锁 RuleSubZext 等。
+- `op_set_output(op, vn)` — `Funcdata::opSetOutput` (`funcdata_op.cc:70`) ：
+  same-Arc output 直接返回；按顺序先将 op 的旧 output 转为 free，再将 `vn`
+  从它原来的 defining op 取下，然后调用 `VarnodeBank::set_def` 并消费它
+  返回的 canonical Arc。最后应用 Varnode properties 并安装 canonical output，
+  避免在 `BTreeSet` 内原位改动 written/def 排序键。
 
 ### 2026-06-26（续）：op_destroy / op_unset_input
 
@@ -692,8 +695,16 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-06-26（续）：op_unset_output / new_varnode_out
 
-- `op_unset_output(op)` — `Funcdata::opUnsetOutput`：断开 op 输出 def 链。
-- `new_varnode_out(size, addr, op)` — `Funcdata::newVarnodeOut`：创建新输出 varnode 并关联 op。
+- `op_unset_output(op)` — `Funcdata::opUnsetOutput` (`funcdata_op.cc:52`) ：先从
+  op 取下 output，再通过 `VarnodeBank::makeFree` 将旧 output 从 written/insert
+  类转为 bank-owned free Varnode，最后清除 Cover。此顺序保证 bank 的 Loc/Def
+  排序键在 flags/def 变化前先移除。当 op 无 output 时不产生任何突变。
+- `new_varnode_out(size, addr, op)` — `Funcdata::newVarnodeOut`
+  (`funcdata_varnode.cc:104`) ：直接通过 `VarnodeBank::createDef` 以最终
+  written/def 键插入 Loc/Def 树，再安装 op output 并应用已有 property
+  查询。Rugra 尚未完整表达 Ghidra 的动态 AddressSpace、TypeFactory、
+  `assignHigh`、laned-register 和 ScopeLocal property 边效应，这些调用闭包仍为
+  **MISMATCH/UNTESTED**。
 解锁 RuleLeftRight。
 
 ### 2026-06-26（续）：replace_lessequal

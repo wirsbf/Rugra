@@ -702,6 +702,21 @@ impl Varnode {
     pub fn clear_consume_vacuous(&mut self) {
         self.addlflags &= !addl_flags::VAC_CONSUME;
     }
+    // Ghidra: varnode.hh:207 Varnode::isConsumeList
+    /// Is this varnode currently present in ActionDeadCode's consume work-list?
+    pub fn is_consume_list(&self) -> bool {
+        (self.addlflags & addl_flags::LIS_CONSUME) != 0
+    }
+    // Ghidra: varnode.hh:209 Varnode::setConsumeList
+    /// Mark this varnode as present in ActionDeadCode's consume work-list.
+    pub fn set_consume_list(&mut self) {
+        self.addlflags |= addl_flags::LIS_CONSUME;
+    }
+    // Ghidra: varnode.hh:211 Varnode::clearConsumeList
+    /// Clear the ActionDeadCode consume work-list marker.
+    pub fn clear_consume_list(&mut self) {
+        self.addlflags &= !addl_flags::LIS_CONSUME;
+    }
     // Ghidra: varnode.cc:578 Varnode::setExplicit
     /// Mark this as an explicit variable in the final C source. (varnode.hh:311)
     pub fn set_explicit(&mut self) {

@@ -60,6 +60,12 @@
 
 **初始状态与 bank 分配**（2026-08-13，`VARNODE-INIT-0001`）：`Varnode::new_with_space` 现在按锁定 Ghidra 12.0.4 `Varnode::Varnode` 初始化主 flags、`nzm` 与 `consumed`：普通存储为 `COVERDIRTY`，常量为 `CONSTANT` 且 `nzm=offset`，IOP annotation 为 `ANNOTATION|COVERDIRTY`，`consumed=~0`。`VarnodeBank::set_def` / `set_input` 对合法 bank-owned free 输入分别形成 `WRITTEN|INSERT|COVERDIRTY` 与 `INPUT|INSERT|COVERDIRTY`，并返回 xref 选出的 canonical `Arc`；重复键会按 descendant 列表顺序重接全部输入槽。`create_def_with_space` 直接走 Ghidra `createDef` 的 allocate→setDef→xref 路径。`make_free` 先移除两个树键、突变，再重插，并以 Arc identity 拒绝 foreign/stale equal-key handle。analysis-owned unique 地址从 `0x10000000` 起，并在 `clear()` 后重置到该值。显式 space 在插入两个 `BTreeSet` 索引前即固定。
 
+**DeadCode 工作队列标记**（2026-08-14，`DEADCODE-SELFLOOP-0001`）：新增
+`is_consume_list` / `set_consume_list` / `clear_consume_list`，逐项映射锁定
+`varnode.hh:207/209/211` 的 `lisconsume` 访问器。该位表示 Varnode 已在
+`ActionDeadCode` 的 LIFO 工作队列中；push 时用于按对象身份去重，pop 后立即清除，
+与 `vacconsume`（存在通往正式读取的赋值路径）语义相互独立。
+
 `VarnodeBank::destroy_varnode` 现在返回 `Result<()>`：与 `varnode.cc:1276-1285` 一样，存在 defining op 或任一 descendant 时先返回 `Deleting integrated varnode`，不会改动两个索引；Rust 还以 Arc identity 拒绝 foreign/stale equal-key handle。Ghidra 通过保存在 Varnode 内的 `lociter/defiter` 删除，因此 `Funcdata::destroyVarnode` 先清 def 也不影响定位；Rust 的 `destroy_varnode_prevalidated` 对应改为扫描两个树的 Arc identity 后精确 retain 删除，避免按已突变 key 查找失败。定向测试覆盖 written VN 经过 `setOrder`、清 def 后仍只删除目标且同位置邻居保留。
 
 `Varnode::term_order` 已按 `varnode.cc:1153-1172` 收窄为表达式项排序：两个常量互等且排在非常量之后；written `INT_MULT(base, constant)` 各自剥一层到 `base`；最后只比较完整 Address 的 numeric space id 与 offset，不比较 size。该算法由 `RULE-COLLECTTERMS-0001` 的独立逐函数 oracle 负责最终行为门禁，不包含在初始化 fixture 的 MATCH 分母中。

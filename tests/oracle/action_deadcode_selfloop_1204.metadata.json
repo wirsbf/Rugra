@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "fixture_id": "DEADCODE-SELFLOOP-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "instrumentation_policy": "Only the temporary archived oracle source is patched: ActionDeadCode private helpers become public for direct observation; Varnode/PcodeOp/Heritage/Funcdata receive read-only raw-state accessors. The locked Ghidra worktree and production APIs are unchanged."
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "entry": "Direct ActionDeadCode::apply plus direct pushConsumed/propagateConsumed trace",
+    "heritage_passes": [1, 2],
+    "jumptable_recovery": false,
+    "return_bytes_consumed": {
+      "default": 0,
+      "selfloop_and_two_phi": 1
+    },
+    "worklist": "vector stack, push_back/pop_back LIFO; record every explicit push/propagate boundary",
+    "normalization": "Stable fixture names replace process-local object addresses. The named LOAD slot-0 `space` annotation is rendered as semantic AddrSpace index 3 because locked Ghidra stores a process-local AddrSpace pointer while Rust stores the RAM enum ID. The single Rust stale-descendant diagnostic's `op=0x...` address is canonicalized only for its expected stderr hash with an exact-one gate; raw diagnostic text is still printed on failure. No flags, masks, aliases, order, control flow, or other state is normalized. Ghidra FSPEC has no Rust AddressSpace representation and is not constructed."
+  },
+  "assets": {
+    "source_policy": "Materialize all specifications and the curl input from verified Git blob IDs at the pinned Rugra provenance commit; never consume working-tree copies.",
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "rugra_source": {
+    "base_commit": "5f6f34ffcb13378189f9fe962d08e4d999184fc5",
+    "base_tree": "d180210e9f8691d817ed95428f53228c5d3f42c8",
+    "base_src_tree": "559b450cdc9dd0248e322d40251be4648bf11ad9",
+    "base_sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
+    "base_varnode_blob": "a041d0b2130eaf0d47b8974e6686e6bbd2879100",
+    "base_funcdata_blob": "43195dd9ac36e391986b6bf08f26c392df478129",
+    "base_coreaction_blob": "7c4c07d7f6c5e2efa837e2ca145a053d7b9ba51c",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "archive_policy": "Extract only the explicit dependency closure from the pinned commit, overlay the three declared live source files, then make helper visibility public in the temporary copy only.",
+    "base_closure_hash_scheme": "sha256 of rugra-action-deadcode-base-v1 plus sorted length-prefixed relative paths and pinned archive contents",
+    "base_closure_sha256": "ab982078819a530b0f72e2f4664e5f9f77b3ef3181365038e6a3dd9170d1fcd6",
+    "overlays": {
+      "src/varnode.rs": {
+        "sha256": "78c333a8b12ba428151be63e09c2c5dc454e0cfcb8b861486839dddbdef87865"
+      },
+      "src/funcdata.rs": {
+        "sha256": "3c12665b3dbaa456de17856de171fb24a71eb47f25702ef14360cbf567d791f7"
+      },
+      "src/coreaction.rs": {
+        "sha256": "9e3ab3986212197de9f28c766c8026ec2074d31108b0303191b8bbd0e0079f65"
+      }
+    },
+    "temporary_visibility_transform": "Replace only the exact private helper definitions `fn push_consumed(` and `fn propagate_consumed(` with `pub fn` in the isolated snapshot after validating each occurs exactly once."
+  },
+  "host_tools": {
+    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "platform": "Linux 6.8.0-124-generic x86_64"
+  },
+  "input_manifest": {
+    "binary": {
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a"
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0
+    },
+    "cases": [
+      "ordinary_chain_no_seed",
+      "selfloop_repeated_live",
+      "two_phi_cycle_live",
+      "autolive_input_output",
+      "callother_without_spec_hold_output",
+      "callother_dead_output_unset_only",
+      "direct_op_unset_output",
+      "direct_op_set_output",
+      "direct_new_varnode_out",
+      "last_chance_load_pass1",
+      "last_chance_load_pass2_gate",
+      "helper_unwritten_input",
+      "helper_direct_selfloop",
+      "helper_two_phi_growth"
+    ],
+    "sha256": "30c5543de223a6688a6fb4bb69665b97a4640c1c43c2605a079ac99087e1cb9f"
+  },
+  "coverage": {
+    "push_unwritten_sets_vac_lis_without_enqueue": "MATCH",
+    "push_newval_equal_without_vac": "MATCH",
+    "push_lis_dedup": "MATCH",
+    "pop_clears_lis_and_cycle_requeues": "MATCH",
+    "multiequal_selfloop_repeated_alias": "MATCH",
+    "two_phi_cycle": "MATCH",
+    "ordinary_assignment_no_descendant_seed": "MATCH",
+    "autolive_input_and_output": "MATCH",
+    "call_without_spec_and_hold_output": "MATCH",
+    "dead_call_output_unset_only": "MATCH",
+    "direct_op_unset_output_lifecycle": "MATCH",
+    "direct_op_set_output_lifecycle": "MATCH",
+    "direct_new_varnode_out_lifecycle": "MATCH",
+    "return_slot_consumption": "MATCH",
+    "last_chance_load_pass_gate": "MATCH"
+  },
+  "target_projection": {
+    "status": "MATCH",
+    "record_count": 36,
+    "scheme": "Strict byte equality of the ordered 22 case-stage and 14 helper records from both runtimes. The fixture renders the named LOAD space annotation as semantic space index 3 on both sides. The projection retains complete raw flags/addlflags, record and work-list order, aliases, blocks, opcodes, SeqNums, ordered inputs/outputs/descendants, consume/VAC/LIS, result/count, liveness, auto-live, free/cover object, Loc/Def bank membership, and def identity.",
+    "excluded_fields": {}
+  },
+  "known_residuals": {
+    "never_consumed": "UNTESTED: this target slice does not construct the written consume=0, VAC=true replacement/deletion path through ActionDeadCode::neverConsumed.",
+    "full_opcode_matrix": "UNTESTED: helper trace is focused on MULTIEQUAL; every propagation opcode branch still requires separate oracle coverage.",
+    "consume_mask_models": "MISMATCH/UNTESTED: Rugra crate::address::minimalmask currently behaves as coveringmask and Varnode::get_nz_mask ignores stored non-constant nzm. The RETURN cases prove slot-1 and one-byte cropping only, not arbitrary gatherConsumedReturn masks.",
+    "callspec_parameter_models": "MISMATCH/UNTESTED: valid CPUI_CALL/CPUI_CALLIND FuncCallSpecs input lock/active/recovery combinations are not constructed; Rust is_input_locked treats all parameters as locked and find_call_op is address-only, unlike the locked FuncProto/FuncCallSpecs model.",
+    "jumptable_and_return_models": "UNTESTED: BRANCHIND JumpTable masks, multiple returns, active output, locked output, and error paths are outside this fixture.",
+    "last_chance_load_depth": "UNTESTED: LOAD eventual-constant rejection and jumptable-recovery gate are not covered.",
+    "space_iteration": "UNTESTED: all Architecture spaces, non-deadcode spaces, addrforce clearing, and delayed stack removal require broader coverage.",
+    "heritage_driver": "UNTESTED: synthetic graphs pin pass/dead-code state but do not establish equivalence of the full Heritage caller lifecycle.",
+    "bank_lifecycle": "PARTIAL_MATCH/MISMATCH: direct_op_unset_output observes the locked output unset, makeFree, cover-object clearing, and exact Loc/Def bank identity projection before clearDeadVarnodes. Rugra still cannot preserve nullable dead-op input slots, may retain dead objects under external Arc ownership, and PcodeOpBank::destroy_dead does not clear opcode lists.",
+    "output_creation_closure": "PARTIAL_MATCH/UNTESTED: direct bank-owned op_set_output and new_varnode_out installation/unset lifecycle is covered. Same-Arc, replacing an existing op output, stealing an existing definition, canonical duplicate replacement, property-model variants, foreign outputs, and error contracts remain outside this fixture.",
+    "foreign_unmanaged_output": "UNTESTED: op_unset_output on a foreign or unmanaged output is outside this fixture and the prevalidated bank-owned production contract.",
+    "runtime_stderr": "MISMATCH: locked BFD loading emits stable overlap warnings; Rust emits a stale-descendant warning while deleting the ordinary dead chain. Ghidra stderr is raw-hash pinned; Rust stderr is hash-pinned after exact-one process-pointer canonicalization and printed raw on failure."
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "28f96646cb6b83a94da7de3a5421d919ec6438d5be41433c81d4248d2399848a",
+    "rust_fixture_sha256": "18fbd6294536f4acc02e11c87520d5c7fb9b9347095790cdf1a3c6673acf3b1c",
+    "runner_sha256": "214b41aeb9fbd3e4d75953187ad45400b75f03db2f9759e080af29a18897fbcf",
+    "ghidra_instrumentation_sha256": "192d740133e5caf0f029b57ce0ea29dc4d843245a08bc256c95f39b082823ad0",
+    "rust_visibility_transform_sha256": "7d5fbb0e7d3b5e3b9dc989a0c2558ed22ffd35d5baf6f59b050b3d8964adea13"
+  },
+  "expected_results": {
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "rugra_timed_out": false,
+    "ghidra_stdout_sha256": "107a8df4bb057cc1df69dcc8afab79ae22cbaaab8f18e345e2c04f22e53f2160",
+    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+    "rugra_stdout_sha256": "107a8df4bb057cc1df69dcc8afab79ae22cbaaab8f18e345e2c04f22e53f2160",
+    "rugra_stderr_normalized_sha256": "480b5660010f323ff09a86fbf6e17d4301b2f286b2b8702ddb7e0cda912f73d0",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "overall_status": "MISMATCH"
+}

@@ -1,5 +1,26 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-14：ActionDeadCode consume 闭包与自环 MULTIEQUAL
+
+- `push_consumed` 现在逐句实现锁定 Ghidra 12.0.4
+  `coreaction.cc:3556-3568`：合并并按 Varnode 大小截断 consume mask；即便 mask 没变化，
+  首次传播仍设置 `VAC_CONSUME`；以 `LIS_CONSUME` 按对象身份去重，只把 written Varnode
+  压入 LIFO worklist。`propagate_consumed` pop 后先清 LIS，再覆盖
+  `coreaction.cc:3576-3800` 的完整 opcode 分支。
+- `apply` 的 seed 边界恢复为 `coreaction.cc:3972-4010`：call-without-spec、无输出 op、
+  RETURN、BRANCHIND 分别处理；普通 assignment 只 seed auto-live 输入，随后只在 output
+  本身 auto-live 时 seed output。它不再把“output 有 descendants”等同于“所有 input
+  全量消费”。callspec 参数、返回值 mask、last-chance LOAD、VAC/consume 两类删除路径及
+  per-space `seen_dead_code` 也接入真实闭包。
+- 所有会写 Varnode 的调用都发生在 `PcodeOp`/input/output 快照读锁释放之后。循环头
+  `MULTIEQUAL` 可以合法地让 output 同时出现在 back-edge input 中；该 self edge 仍按原
+  input slot 顺序传播，由 VAC/LIS 状态机自然收敛，绝不跳过。
+- 锁定 fixture `action_deadcode_selfloop_1204` 覆盖普通 assignment、重复 self input、
+  两个 PHI 互环、auto-live 输入/输出、call/LOAD 及 worklist 状态。当前模块仍为 **L2**：
+  Rugra `Funcdata` 尚未持有 Ghidra 的完整 `AddrSpaceManager`，因此 apply 从 Varnode bank
+  中已有空间按数字 space-id 排序，并用 enum 映射 `doesDeadcode`；未出现的自定义空间及
+  Rust 无法表达的 nullable op input 仍不在本 fixture 的 MATCH 分母内。
+
 ## 2026-08-13：ActionStart/ActionStop 恢复主管线生命周期调用
 
 - `ActionStart::apply` 现在严格执行 Ghidra 12.0.4
@@ -387,7 +408,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 ## 2026-06-27（续 10）：ActionDeadCode 完整 consumed-bit 传播算法
 
-- **ActionDeadCode**：实现 `push_consumed`（consumed 位掩码 OR + worklist 管理）和 `propagate_consumed`（向后传播 consumed 位到定义 op 的输入，处理 INT_MULT/INT_ADD/INT_SUB/SUBPIECE/default 情况）。apply() 保留简化版（检查无后继输出），完整版待 VarnodeLocSet 迭代。
+- **历史状态（已由 2026-08-14 `DEADCODE-SELFLOOP-0001` 取代）**：当时仅实现
+  `push_consumed` / `propagate_consumed` 的局部分支，`apply()` 仍是检查无后继输出的简化版；
+  当前实现与剩余边界以本文顶部的 2026-08-14 条目和 oracle metadata 为准。
 - 13 个 coreaction Actions 现在有真实算法逻辑（4 完整 + 9 框架级，3 个有实际辅助函数）。
 
 ## 2026-07-03：ActionDeadCode CALL 保护（对齐 coreaction.cc:4038-4044）
