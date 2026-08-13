@@ -853,14 +853,13 @@ impl Funcdata {
         op
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newUniqueOut
+    // Ghidra: funcdata_varnode.cc:129 Funcdata::newUniqueOut
     /// Create a new temporary output Varnode of size `s` for `op`.
     /// Faithful to `Funcdata::newUniqueOut` (funcdata.hh:281).
     pub fn new_unique_out(&mut self, s: usize, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        let vn = self.vbank.create_unique(s);
-        // Set the op's output and the varnode's def link.
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&op.0));
+        // cc:134-135 creates the written form directly. Mutating a free
+        // Varnode after insertion would change both BTreeSet keys in-place.
+        let vn = self.vbank.create_def_unique(s, &op.0);
         op.0.write().unwrap().output = Some(vn.clone());
         vn
     }
@@ -957,37 +956,14 @@ impl Funcdata {
         op.0.write().unwrap().flags |= masked;
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opSetOpcode
+    // Ghidra: funcdata_op.cc:21 Funcdata::opSetOpcode
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
-    pub fn op_set_opcode(&self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
-        // Faithful to PcodeOp::setOpcode (op.cc:276): clear the opcode-derived
-        // flag bits, then set them from the new opcode's TypeOp flags. Ghidra
-        // gets these from TypeOp::getFlags() (registered per-opcode in
-        // typeop.cc); Rugra encodes the same mapping here. Without this, a
-        // CPUI_CALL op never had the CALL flag, so ActionMarkExplicit's
-        // baseExplicit `def->isCall()` guard failed to force CALL outputs
-        // explicit → ActionMarkImplied marked them implied → printc skipped
-        // the CALL statement entirely (130 vanished calls in curl).
-        use crate::op::pcodeop_flags as F;
-        const OPC_FLAGS_MASK: u32 = F::BRANCH
-            | F::CALL
-            | F::CODEREF
-            | F::COMMUTATIVE
-            | F::RETURNS
-            | F::NOCOLLAPSE
-            | F::MARKER
-            | F::BOOLOUTPUT
-            | F::UNARY
-            | F::BINARY
-            | F::TERNARY
-            | F::SPECIAL
-            | F::HAS_CALLSPEC
-            | F::RETURN_COPY;
-        let mut o = op.0.write().unwrap();
-        o.flags &= !OPC_FLAGS_MASK;
-        o.opcode = opc;
-        o.flags |= crate::op::opcode_flags(opc);
+    pub fn op_set_opcode(&mut self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
+        // cc:29 delegates to PcodeOpBank::changeOpcode. Besides resetting
+        // opcode-derived flags, this removes the op from its old LOAD/STORE/
+        // RETURN/CALLOTHER list and inserts it into the new one.
+        self.obank.change_opcode(op.clone(), opc);
     }
 
     // Ghidra: funcdata_op.cc:104 Funcdata::opSetInput
@@ -1010,16 +986,16 @@ impl Funcdata {
     /// 不变量 (cc:108)。
     pub fn op_set_input(&mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
         let mut o = op.0.write().unwrap();
-        // Extend inrefs if needed (Rugra Vec model; Ghidra's BehaviorList
-        // pre-allocates slots at op creation). Placeholder slots get a fresh
-        // sentinel varnode (NOT vn — using vn would trigger the early-out
-        // below and skip the addDescend, losing the descend link).
-        while o.inrefs.len() <= slot {
+        // Ghidra has nullable preallocated slots. For Rugra's Vec model, a
+        // sequential slot exactly at len is the representable NULL boundary
+        // and is appended below without allocating a sentinel. Preserve gap
+        // sentinels only for the still-unresolved slot>len representation.
+        while o.inrefs.len() < slot {
             let sentinel = self.vbank.create(1, crate::address::Address::new(u64::MAX));
             o.inrefs.push(sentinel);
         }
         // (1) Ghidra cc:107: if (vn == op->getIn(slot)) return;
-        if std::sync::Arc::ptr_eq(&vn, &o.inrefs[slot]) {
+        if slot < o.inrefs.len() && std::sync::Arc::ptr_eq(&vn, &o.inrefs[slot]) {
             return;
         }
         // (2) Ghidra cc:108-115: const dedup. If vn is constant AND has
@@ -1049,13 +1025,17 @@ impl Funcdata {
         // opUnsetInput does vn->eraseDescend(op) + op->clearInput(slot).
         // Rugra's clearInput half is implicit (inrefs[slot] overwritten below);
         // the load-bearing half is erase_descend on the old vn.
-        {
+        if slot < o.inrefs.len() {
             let old_vn = o.inrefs[slot].clone();
             old_vn.write().unwrap().erase_descend(&op.0);
         }
         // (4) Ghidra cc:123-124: vn->addDescend(op) + op->setInput(vn, slot).
         vn_final.write().unwrap().add_descend(&op.0);
-        o.inrefs[slot] = vn_final;
+        if slot == o.inrefs.len() {
+            o.inrefs.push(vn_final);
+        } else {
+            o.inrefs[slot] = vn_final;
+        }
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opInsertInput
@@ -1111,25 +1091,30 @@ impl Funcdata {
 
     // Ghidra: funcdata_op.cc:203 Funcdata::opDestroy
     /// Destroy an unused PcodeOp. Faithful to `Funcdata::opDestroy`
-    /// (funcdata_op.cc:203-222). Clears the output's def, unsets all inputs,
-    /// and marks the op dead in the obank. Only call when the output has no
-    /// descendants (dead code).
+    /// (funcdata_op.cc:203-222). Destroys the output Varnode, unsets all
+    /// inputs, and removes an integrated op from its exact basic block.
     pub fn op_destroy(&mut self, op: &crate::op::PcodeOpRef) {
-        // Clear output def link.
-        let out = op.0.read().unwrap().output.clone();
-        if let Some(o) = out {
-            o.write().unwrap().def = None;
+        // cc:211-212: snapshot before destroyVarnode, so the op read guard
+        // cannot overlap destroyVarnode's write to the same output slot.
+        let output = { op.0.read().unwrap().output.clone() };
+        if let Some(output) = output {
+            self.destroy_varnode(&output);
         }
-        // Clear all inrefs (break descend links on inputs).
-        let inrefs = op.0.read().unwrap().inrefs.clone();
-        for in_vn in &inrefs {
-            in_vn.write().unwrap().descend.retain(|w| {
-                w.upgrade().map(|a| !std::sync::Arc::ptr_eq(&a, &op.0)).unwrap_or(true)
-            });
+        // cc:213-217: clear every non-null input in slot order. Rugra cannot
+        // retain Ghidra's NULL slots, so the detached dead op has an empty Vec.
+        let input_count = op.0.read().unwrap().inrefs.len();
+        for slot in 0..input_count {
+            self.op_unset_input(op, slot);
         }
         op.0.write().unwrap().inrefs.clear();
-        // Mark the op dead.
-        self.obank.mark_dead(op.clone());
+        // cc:218-221: parentless ops are already dead. Integrated ops move to
+        // the dead bank and leave their owning block.
+        let parent = op.0.read().unwrap().parent.as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        if let Some(parent) = parent {
+            self.obank.mark_dead(op.clone());
+            Self::block_remove_op(op, &parent);
+        }
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opDestroyRecursive
@@ -2739,13 +2724,13 @@ impl Funcdata {
         for i in 0..num {
             self.op_unset_input(op, i);
         }
-        // Resize input list (funcdata_op.cc:280).
-        op.0.write().unwrap().inrefs.resize(vvec.len(), std::sync::Arc::new(std::sync::RwLock::new(
-            crate::varnode::Varnode::new_constant(0, 0)
-        )));
-        // Set new inputs (funcdata_op.cc:282-283).
-        for (i, vn) in vvec.iter().enumerate() {
-            self.op_set_input(op, vn.clone(), i);
+        // cc:280 replaces every slot with NULL. Clear the Vec so identical
+        // old/new pointers cannot trigger op_set_input's early return before
+        // rebuilding the descendant edge.
+        op.0.write().unwrap().inrefs.clear();
+        // cc:282-283: restore exact input order via the normal const-dedup path.
+        for (i, vn) in vvec.iter().cloned().enumerate() {
+            self.op_set_input(op, vn, i);
         }
     }
 
@@ -7953,15 +7938,10 @@ impl Funcdata {
     // Ghidra: funcdata_op.cc:332 Funcdata::newOp(int4, const SeqNum &)
     /// Create a new PcodeOp with an explicit sequence number. Faithful to
     /// `Funcdata::newOp(int4 inputs, const SeqNum &sq)` (funcdata_op.cc:332).
-    /// Rugra's PcodeOpBank::create currently derives the SeqNum from the
-    /// given Address, so this is a thin wrapper around `new_op` that uses
-    /// the SeqNum's address; the order field is preserved via set_seq_order.
+    /// The immutable creation `time` and mutable block `order` are both
+    /// copied, and the bank advances its uniqid past an imported time.
     pub fn new_op_with_seq(&mut self, num_inputs: usize, sq: &crate::address::SeqNum) -> crate::op::PcodeOpRef {
-        let addr = sq.addr;
-        let order = sq.get_order();
-        let op = self.new_op(num_inputs, addr);
-        op.0.write().unwrap().start.order = order;
-        op
+        self.obank.create_seq(num_inputs, *sq)
     }
 
     // Ghidra: funcdata_op.cc:616 Funcdata::cloneOp

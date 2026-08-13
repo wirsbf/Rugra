@@ -424,6 +424,15 @@ Ghidra: `op.cc:276 PcodeOp::setOpcode`。清空 14 位 opcode-衍生标志（含
 #### 用途
 比 `get_addr()` 更完整，因为 `SeqNum` 通常还包含：
 
+- `get_time()`：不可变创建身份，供 `PcodeOpBank::optree`、序列化引用和
+  varnode 定义点使用；
+- `get_order()`：块内可变执行次序，只用于控制流位置比较。
+
+### `pub fn get_time(&self) -> u32`
+
+返回不可变创建身份，对应锁定 oracle `PcodeOp::getTime`。对 op 做
+`setOrder` 或 block 重编号不会改变该值。
+
 - 地址
 - 顺序
 - 时间/局部序

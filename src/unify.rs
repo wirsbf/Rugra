@@ -2091,7 +2091,7 @@ impl UnifyConstraint for ConstraintNewOp {
                 let addr = o.read().unwrap().get_addr();
                 let oldref = PcodeOpRef(o.clone());
                 let newref = fd.write().unwrap().new_op(self.numparams, addr);
-                fd.read().unwrap().op_set_opcode(&newref, self.opc);
+                fd.write().unwrap().op_set_opcode(&newref, self.opc);
                 if self.insertafter { fd.write().unwrap().op_insert_after(&newref, &oldref); }
                 else { fd.write().unwrap().op_insert_before(&newref, &oldref); }
                 state.data_mut(self.newopindex).set_op(newref.0);
@@ -2393,7 +2393,7 @@ impl UnifyConstraint for ConstraintSetOpcode {
         match (fd, op) {
             (Some(fd), Some(o)) => {
                 let opref = PcodeOpRef(o.clone());
-                fd.read().unwrap().op_set_opcode(&opref, self.opc); true
+                fd.write().unwrap().op_set_opcode(&opref, self.opc); true
             }
             _ => false,
         }
@@ -3059,5 +3059,4 @@ mod tests {
         assert_eq!(ConstantOffset::new(1).get_constant(&state), 0x10);
     }
 }
-
 

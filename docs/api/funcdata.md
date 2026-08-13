@@ -618,6 +618,12 @@ PcodeOpRaw
 - `new_op(inputs, pc)` — 分配适配层：新 op 初始位于 dead list，直到某个
   `op_insert_*` 将其接入基本块；但底层还不能表达 Ghidra 的 NULL opcode
   与固定数量 nullable input slots，因此完整函数行为仍是 **MISMATCH**。
+- `new_op_with_seq(seq)` — 通过 `PcodeOpBank::create_seq` 导入显式 SeqNum；
+  `(Address, time)` 保持为不可变 op 身份，并以 `time` 推进 bank 的 uniqid，
+  而可变 `order` 只表示接入基本块后的块内位置。该闭包不消除复制语义差异：
+  Ghidra `SeqNum` copy constructor 不复制 `order`，Rust 当前 `SeqNum: Copy`
+  会复制它，因此直接观察 copied order 仍是 **MISMATCH**，不能由本次
+  SeqNum 部分 fixture 推导为完整 copy-constructor `MATCH`。
 - `new_unique_out(s, op)` — `Funcdata::newUniqueOut` (281)
 - `new_constant(s, val)` — `Funcdata::newConstant` (283)
 - `new_unique(s)` — `Funcdata::newUnique` (288)
@@ -653,9 +659,12 @@ Ghidra `opInsertBefore/After/Uninsert` 的基本块前置条件。Rugra 暂时�
 fixture `tests/oracle/op_insert_1204.*` 验证。
 
 相邻但未纳入该 MATCH 的结构缺口：Ghidra `opUnlink/opDestroy` 会把每个
-输入槽清成 NULL 而保留槽数，并由 `destroyVarnode` 真正销毁输出；Rugra
-当前 `Vec<Arc<Varnode>>` 不能表达 nullable slot，`op_destroy` 也只清 def。
-因此这两项仍是 **MISMATCH**，不能由本插入 fixture 推导为已对齐。
+输入槽清成 NULL 而保留槽数。`RULE-MULTICOLLAPSE-0001` 已让 Rugra
+`op_destroy` 通过 `destroy_varnode` 真正删除输出 Varnode，并在有 parent 时
+执行 markDead + 从 `BlockBasic` 移除；但 `Vec<Arc<Varnode>>` 仍不能表达
+nullable slot，只能在按序擦除 descendant 后清空整个 Vec。因此 dead op 的
+input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推导为完整
+`opDestroy` B2 `MATCH`。
 同一 OPBANK 缺口也意味着 `new_op(inputs, pc)` 当前 `num_input()==0`，并
 预置 COPY opcode/派生 flags；fixture 在插入前立即设置 opcode 和所需输入，
 所以本次 `MATCH` 仅证明插入族和 dead/alive 生命周期，不证明完整 newOp。
@@ -672,7 +681,7 @@ fixture `tests/oracle/op_insert_1204.*` 验证。
 
 ### 2026-06-26（续）：op_destroy / op_unset_input
 
-- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：销毁未用 op（清输出 def、断所有输入 descend 链、markDead）。
+- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：调用 `destroy_varnode` 删除输出及其 bank identity，按 slot 顺序断开所有输入；有 parent 时 markDead 并从原 `BlockBasic` 删除。dead op 的 NULL-slot 保留仍受上述 nullable 表示缺口约束。
 - `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链。
 解锁 RuleEarlyRemoval。
 

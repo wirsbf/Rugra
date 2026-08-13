@@ -7373,7 +7373,7 @@ impl Rule for RuleThreeWayCompare {
 }
 
 /// Collapse MULTIEQUAL whose inputs all trace to the same value. Faithful
-/// to Ghidra's `RuleMultiCollapse` (ruleaction.cc:3246-3363).
+/// to Ghidra's `RuleMultiCollapse` (ruleaction.cc:3234-3343).
 ///
 /// If all inputs to a MULTIEQUAL hold the same value (absolute or functional
 /// equality), the MULTIEQUAL is eliminated. Handles nested MULTIEQUALs by
@@ -7381,21 +7381,21 @@ impl Rule for RuleThreeWayCompare {
 pub struct RuleMultiCollapse;
 
 impl RuleMultiCollapse {
-    // Ghidra: ruleaction.cc:3246 RuleMultiCollapse
+    // Ghidra: ruleaction.hh:614 RuleMultiCollapse::RuleMultiCollapse
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleMultiCollapse {
-    // Ghidra: ruleaction.cc:3254 RuleMultiCollapse::applyOp
+    // Ghidra: ruleaction.cc:3234 RuleMultiCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleMultiCollapse::applyOp (ruleaction.cc:3254-3363).
+        // Faithful to RuleMultiCollapse::applyOp (ruleaction.cc:3234-3343).
         use crate::expression::functional_equality_level;
 
         let num_input = op_arc.read().unwrap().inrefs.len();
-        // All inputs must be heritaged (non-free).
+        // cc:3243-3244: all direct inputs must have completed Heritage.
         for i in 0..num_input {
             let vn = match op_arc.read().unwrap().inrefs.get(i) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            if vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            if !vn.read().unwrap().is_heritage_known() { return Ok(action_status::NO_CHANGE); }
         }
 
         let mut matchlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
@@ -7483,40 +7483,77 @@ impl Rule for RuleMultiCollapse {
         }
 
         if success {
-            // Clear marks and collapse.
-            for vn in &skiplist {
-                vn.write().unwrap().clear_mark();
-            }
-            if func_eq {
-                // Functional equality only: for each MULTIEQUAL in skiplist,
-                // try to collapse. Rugra lacks cseFindInBlock/earliestUse, so
-                // we use total_replace when possible.
-                for vn in &skiplist {
-                    if std::sync::Arc::ptr_eq(vn, &out_vn) { continue; }
-                    let def_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
-                    let def_ref = crate::op::PcodeOpRef(def_op);
-                    if !def_ref.0.read().unwrap().is_dead() {
-                        let dc = defcopyr.as_ref().unwrap();
-                        fd.total_replace(vn, dc.clone());
+            let defining_branch = defcopyr.as_ref().ok_or_else(|| {
+                crate::error::Error::Lowlevel(
+                    "RuleMultiCollapse succeeded without a defining branch".to_string(),
+                )
+            })?.clone();
+            for copyr in &skiplist {
+                // cc:3300-3303: process every skip-list entry in discovery
+                // order, including the root output at index zero.
+                copyr.write().unwrap().clear_mark();
+                let def_op = copyr.read().unwrap().get_def().ok_or_else(|| {
+                    crate::error::Error::Lowlevel(
+                        "RuleMultiCollapse skip-list output has no definition".to_string(),
+                    )
+                })?;
+                let def_ref = crate::op::PcodeOpRef(def_op);
+
+                if func_eq {
+                    // cc:3304-3331: find the earliest same-block use, then
+                    // search CSE through only the template's first
+                    // non-constant input.
+                    let parent = def_ref.0.read().unwrap().parent.as_ref()
+                        .and_then(std::sync::Weak::upgrade)
+                        .ok_or_else(|| crate::error::Error::Lowlevel(
+                            "RuleMultiCollapse operation has no parent block".to_string(),
+                        ))?;
+                    let descendants: Vec<_> = copyr.read().unwrap().descend_iter().collect();
+                    let earliest = descendants.into_iter()
+                        .filter(|candidate| candidate.read().unwrap().parent.as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                            .map(|block| std::sync::Arc::ptr_eq(&block, &parent))
+                            .unwrap_or(false))
+                        .map(crate::op::PcodeOpRef)
+                        .min_by_key(|candidate| candidate.0.read().unwrap().get_seq_num().order);
+                    let source_op = defining_branch.read().unwrap().get_def().ok_or_else(|| {
+                        crate::error::Error::Lowlevel(
+                            "RuleMultiCollapse functional branch has no definition".to_string(),
+                        )
+                    })?;
+                    let source_ref = crate::op::PcodeOpRef(source_op);
+                    let (source_opcode, source_inputs) = {
+                        let source = source_ref.0.read().unwrap();
+                        (source.opcode, source.inrefs.clone())
+                    };
+                    let substitute = source_inputs.iter()
+                        .find(|input| !input.read().unwrap().is_constant())
+                        .and_then(|input| fd.cse_find_in_block(
+                            &source_ref, input, &parent, earliest.as_ref(),
+                        ));
+                    if let Some(substitute) = substitute {
+                        let substitute_out = substitute.0.read().unwrap().output.clone()
+                            .ok_or_else(|| crate::error::Error::Lowlevel(
+                                "RuleMultiCollapse CSE substitute has no output".to_string(),
+                            ))?;
+                        fd.total_replace(copyr, substitute_out);
                         fd.op_destroy(&def_ref);
+                    } else {
+                        let needs_reinsert = def_ref.0.read().unwrap().opcode
+                            == OpCode::CPUI_MULTIEQUAL;
+                        fd.op_set_all_input(&def_ref, &source_inputs);
+                        fd.op_set_opcode(&def_ref, source_opcode);
+                        if needs_reinsert {
+                            fd.op_uninsert(&def_ref);
+                            fd.op_insert_begin(&def_ref, &parent);
+                        }
                     }
+                } else {
+                    // cc:3333-3336: absolute equality replaces and destroys
+                    // root and nested MULTIEQUAL operations alike.
+                    fd.total_replace(copyr, defining_branch.clone());
+                    fd.op_destroy(&def_ref);
                 }
-            } else {
-                // Absolute equality: replace all MULTIEQUAL outputs with defcopyr.
-                for vn in &skiplist {
-                    if std::sync::Arc::ptr_eq(vn, &out_vn) { continue; }
-                    let def_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
-                    let def_ref = crate::op::PcodeOpRef(def_op);
-                    if !def_ref.0.read().unwrap().is_dead() {
-                        let dc = defcopyr.as_ref().unwrap();
-                        fd.total_replace(vn, dc.clone());
-                        fd.op_destroy(&def_ref);
-                    }
-                }
-            }
-            // Clear remaining marks.
-            for vn in &skiplist {
-                vn.write().unwrap().clear_mark();
             }
             return Ok(action_status::CHANGE);
         }
@@ -7527,9 +7564,9 @@ impl Rule for RuleMultiCollapse {
         Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:3246 RuleMultiCollapse
-    fn get_name(&self) -> &str { "multi_collapse" }
-    // Ghidra: ruleaction.cc:3248 RuleMultiCollapse::getOpList
+    // RUGRA-GLUE: Rule trait exposes the inline constructor name separately.
+    fn get_name(&self) -> &str { "multicollapse" }
+    // Ghidra: ruleaction.cc:3228 RuleMultiCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 

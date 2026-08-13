@@ -30,7 +30,9 @@ A data-flow edge for resolved types (unionresolve.hh:60).
 - `new(parent: &Datatype, op: &PcodeOp, slot)` — typed ctor (cc:64).
   Pointer encoding `+0x1000` (cc:71).
 - `from_components(type_id, op_time, slot, is_pointer)` — RUGRA-GLUE.
-- Derives `Ord` for set keying by `(type_id, encoding, op_time)`.
+- Implements `Ord` exactly as `ResolveEdge::operator<`, keying by
+  `(type_id, encoding, immutable op_time)`; block-order renumbering cannot
+  invalidate an edge key.
 
 ### `DirType`
 - `FitDown`, `FitUp` (unionresolve.hh:87).

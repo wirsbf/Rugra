@@ -2090,19 +2090,21 @@ impl VarnodeBank {
         vn
     }
 
-    // RUGRA-GLUE: Arc-identity ownership check required because BTreeSet::get
-    // only proves semantic-key equality; a stale or foreign Arc can share it.
+    // RUGRA-GLUE: Arc-identity ownership check corresponding to Ghidra's
+    // stored lociter. Scan by identity because Funcdata::destroyVarnode clears
+    // `def` before VarnodeBank::destroy, so the live Rust comparison key may
+    // no longer match the node's original BTreeSet position.
     fn owns_loc_ref(&self, vn: &Arc<RwLock<Varnode>>) -> bool {
         self.loc_tree
-            .get(&VarnodeLocRef(vn.clone()))
-            .is_some_and(|entry| Arc::ptr_eq(&entry.0, vn))
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.0, vn))
     }
 
-    // RUGRA-GLUE: definition-tree half of the bank Arc-identity check.
+    // RUGRA-GLUE: definition-tree equivalent of Ghidra's stored defiter.
     fn owns_def_ref(&self, vn: &Arc<RwLock<Varnode>>) -> bool {
         self.def_tree
-            .get(&VarnodeDefRef(vn.clone()))
-            .is_some_and(|entry| Arc::ptr_eq(&entry.0, vn))
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.0, vn))
     }
 
     // RUGRA-GLUE: shared checked/unchecked transition for Ghidra
@@ -2324,8 +2326,12 @@ impl VarnodeBank {
             self.owns_loc_ref(vn) && self.owns_def_ref(vn),
             "destroy requires a bank-owned Varnode"
         );
-        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        let loc_before = self.loc_tree.len();
+        let def_before = self.def_tree.len();
+        self.loc_tree.retain(|entry| !Arc::ptr_eq(&entry.0, vn));
+        self.def_tree.retain(|entry| !Arc::ptr_eq(&entry.0, vn));
+        let loc_removed = self.loc_tree.len() + 1 == loc_before;
+        let def_removed = self.def_tree.len() + 1 == def_before;
         debug_assert!(
             loc_removed && def_removed,
             "destroy ownership preflight disagrees with removal"
@@ -2562,7 +2568,7 @@ impl VarnodeBank {
             if let Some(def_weak) = vn.def.as_ref().and_then(|w| w.upgrade()) {
                 let def_op = def_weak.read().unwrap();
                 if def_op.get_addr() == pc {
-                    if uniq == u32::MAX || def_op.start.order == uniq {
+                    if uniq == u32::MAX || def_op.start.get_time() == uniq {
                         drop(vn);
                         return Some(loc_ref.0.clone());
                     }
@@ -3319,6 +3325,41 @@ mod tests {
                 .to_string(),
             "Deleting unmanaged varnode"
         );
+    }
+
+    #[test]
+    fn test_destroy_written_varnode_after_def_key_mutation_uses_identity() {
+        let mut bank = VarnodeBank::new();
+        let operation = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1030), 9),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+        let neighbor_operation = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1030), 10),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+        let target = bank.create_def_with_space(
+            8,
+            AddressSpace::Register,
+            0x88,
+            &operation,
+        );
+        let neighbor = bank.create_def_with_space(
+            8,
+            AddressSpace::Register,
+            0x88,
+            &neighbor_operation,
+        );
+        operation.write().unwrap().start.set_order(0xf000_0000);
+        target.write().unwrap().def = None;
+
+        bank.destroy_varnode_prevalidated(&target);
+
+        assert!(!bank.owns_loc_ref(&target));
+        assert!(!bank.owns_def_ref(&target));
+        assert!(bank.owns_loc_ref(&neighbor));
+        assert!(bank.owns_def_ref(&neighbor));
+        assert_eq!(bank.num_varnodes(), 1);
     }
 
     #[test]

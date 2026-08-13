@@ -305,6 +305,12 @@ impl PcodeOp {
         &self.start
     }
 
+    // Ghidra: op.hh:161 PcodeOp::getTime
+    /// Get the immutable creation identity for this operation.
+    pub fn get_time(&self) -> u32 {
+        self.start.get_time()
+    }
+
     // Ghidra: op.hh:153 PcodeOp::numInput
     pub fn num_input(&self) -> usize {
         self.inrefs.len()
@@ -722,7 +728,7 @@ impl PcodeOp {
         }
         // cc:190-200: output cannot be read before point in same block
         if let Some(out_vn) = &self.output {
-            let point_order = point.start.order;
+            let point_order = point.start.get_order();
             for desc_weak in &out_vn.read().unwrap().descend {
                 if let Some(read_op) = desc_weak.upgrade() {
                     let read_r = read_op.read().unwrap();
@@ -732,7 +738,7 @@ impl PcodeOp {
                         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                         _ => false,
                     };
-                    if same_parent && read_r.start.order <= point_order {
+                    if same_parent && read_r.start.get_order() <= point_order {
                         return false;
                     }
                 }
@@ -1579,12 +1585,12 @@ impl PcodeOpBank {
         self.uniqid = val;
     }
 
-    // Ghidra: op.cc:941 PcodeOpBank::create(SeqNum)
+    // Ghidra: op.cc:957 PcodeOpBank::create(int4,const SeqNum&)
     /// Create a PcodeOp with a specific SeqNum (for cloning).
     /// Faithful to `create(int4, const SeqNum&)` (op.cc:957-969).
     pub fn create_seq(&mut self, num_inputs: usize, sq: crate::address::SeqNum) -> PcodeOpRef {
-        if sq.order >= self.uniqid {
-            self.uniqid = sq.order + 1;
+        if sq.get_time() >= self.uniqid {
+            self.uniqid = sq.get_time() + 1;
         }
         let mut op = PcodeOp::new(sq, OpCode::CPUI_COPY);
         op.inrefs.reserve(num_inputs);

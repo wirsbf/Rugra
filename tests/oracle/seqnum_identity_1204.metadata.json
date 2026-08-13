@@ -1,0 +1,143 @@
+{
+  "schema": 2,
+  "fixture_id": "SEQNUM-FOUNDATION-0001",
+  "overall_status": "PARTIAL_MATCH: targeted SeqNum identity/order consumer paths byte-match; listed MISMATCH/UNTESTED branches remain",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": {
+    "entrypoint": "BfdArchitecture over the immutable 34a3febf:examples/curl Git blob; query global GetStr, then directly construct a synthetic 73-op COPY graph without followFlow or Actions",
+    "identity": "Capture immutable SeqNum time before block insertion; perform 70 insert-before operations and one uninsert/reinsert to force mutable order renumbering",
+    "observers": [
+      "PcodeOpBank::findOp",
+      "VarnodeLocSet defining SeqNum key",
+      "dump_dataflow_graph",
+      "ResolveEdge ordering",
+      "HighVariable::compareName",
+      "Funcdata::opDestroy"
+    ],
+    "normalization": "None; eleven fixed-order UTF-8 lines and final newline are compared byte-for-byte",
+    "diagnostics": "Ghidra BfdArchitecture diagnostics are separately SHA-256 pinned; Rugra runtime stderr must be empty"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "include_tree_sha256": "4eb42123f7696cd09656ed0e0950de8c450b1ab0606a08a188411f8d0463159c",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "RFC 8785-compatible JSON subset: UTF-8, sorted keys, compact separators, no floats",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "elf_symbol_extent": 74,
+      "symbol_source": "ELF/BFD"
+    },
+    "cases": [
+      "create three COPY ops plus 70 padding COPY ops at ram:0x1000 in one synthetic BlockBasic",
+      "capture first/middle SeqNum identities and same-time different-address SeqNum before insertion",
+      "force repeated order renumbering and move first after middle while immutable first time remains lower",
+      "lookup both PcodeOps and same-storage defining Varnodes by immutable SeqNum identity",
+      "observe graph op/edge ids, ResolveEdge ordering, HighVariable compareName time tie-break, and opDestroy identity isolation"
+    ],
+    "sha256": "45f449f122f7554b91aa633b9788021d5c3e07d04bcc96439f4f650b618a35bf"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "d2f00e8ae7cec9159168478e3ff053ab5ba63154d7fd3362d7e5a2232d9ec97e",
+    "rust_fixture_sha256": "e3b8158fdc4641302a6ad729b6262f4d8e99a48b2ec7741a039cc2498b7a7a73",
+    "runner_sha256": "6898d7923f1b6bf957bbba772880ef13de3828f0e0da785208104d4a3921f3d8",
+    "address_rs_sha256": "a6cc672b2a60208ab7392c50df77c5d578706c2978c38dcabd4fda0085a9f45c",
+    "op_rs_sha256": "166fa2e5abe49a125cae90be25b621017a0c8ffdb350752cb5efc60c8bd89447",
+    "varnode_rs_sha256": "555aa02ca1370202cac9f6d27e00c0e10d139d7b34304f3975e301963145976c",
+    "graph_rs_sha256": "242441379941be8faaa0f4b80fc9e90b2e52658819eb27f9b10ddb6f4feae5ea",
+    "unionresolve_rs_sha256": "e9ff71823eae6a02cfb4aa8523b2e53f1d9aa7750630b4bf445f497131a5e56b",
+    "variable_rs_sha256": "43e63743089cb0d835130d9fdde798bcfb4e4b91949a14de25ddea821f2b1fff",
+    "funcdata_rs_sha256": "1ce3f92712e0d3fc3034dcad245dfcd6fae7e1bfe80538af8c3f853f38214658",
+    "address_doc_sha256": "7291d296e62bbd139a6e5683ed410162a53a3f653aea2f3e7a0e25dbcb1355f4",
+    "op_doc_sha256": "6c6368e2929557aa90e7935e8485f4a0b7b6dd8658ce27951abfdc9cd0b60506",
+    "varnode_doc_sha256": "ff9d6d260407d18beda454ca50795bf2ac905ab4032ff238baf4bc0dabc3874e",
+    "graph_doc_sha256": "07a74a75e8e743c49f3fa9d45a8e581579bb102c6648a6a53426d48a30ec25d8",
+    "unionresolve_doc_sha256": "badf71d5217dc9e4620f4f5233c9395ff19a901d989ea58c011494e1595e468e",
+    "variable_doc_sha256": "46948bf3472dc52f307444efa7f02d35f583aa09b3cf0a932869ff5bc65bf3d7",
+    "funcdata_doc_sha256": "fee416136b5ba3c7786787fd4d2da4383624f333ed1d7de239098c56c9c85890",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-seqnum-identity-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+    "rust_crate_tree_sha256": "a1243618159d380002d6698599e28bf65ffe8199d6054b0baab69063a9453fcb",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_cxx_target": "x86_64-linux-gnu",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+    "host_make_path": "/usr/bin/make",
+    "host_python_path": "/usr/bin/python3.10",
+    "host_git_path": "/usr/bin/git",
+    "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+    "host_platform": "Linux 6.8.0-124-generic x86_64"
+  },
+  "build": {
+    "cpp_oracle": "full locked decompiler libdecomp.a rebuilt from git archive and linked with BFD closure",
+    "rust_comparand": "full byte snapshot of declared Rugra library closure; Cargo.lock-checksummed offline vendor; isolated CARGO_HOME and target",
+    "registry_packages": 164,
+    "environment_policy": "immutable runner fd; clean env; fixed host tools; all build/execute paths rebound to snapshots; post-readback hashes"
+  },
+  "expected_stdout_sha256": "1b05e4d1e37c230cb25f22958b9b5b4508fea0d174332777809096eef286e610",
+  "expected_ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+  "status": "PARTIAL_MATCH",
+  "covered_projection_status": "MATCH",
+  "uncovered_boundaries": [
+    "SeqNum identity at duplicate time values is invalid because PcodeOpBank globally allocates unique uintm times",
+    "uintm/u32 overflow is not exercised",
+    "Address still lacks Ghidra AddrSpace identity",
+    "Rust Eq is (Address,time) to satisfy Eq/Ord/Hash while Ghidra operator== is time-only; same_identity exposes the exact Ghidra predicate and the fixture covers different-address equal-time input",
+    "Ghidra SeqNum copy construction does not copy order, while Rust Copy copies all fields; direct copied-order observation remains MISMATCH",
+    "PcodeOpBank direct create/create_seq/destroy lifecycle remains MISMATCH/UNTESTED: Ghidra create starts DEAD in deadlist and destroy enforces dead state then deadandgone retirement, while this fixture only covers create_seq identity allocation and Funcdata::opDestroy-to-VarnodeBank identity erase",
+    "Flow VisitStat/target/updateTarget still lacks the full immutable SeqNum identity closure and is not covered by this fixture",
+    "alignment verifier and FFI identity wire still conflate time with execution order or lack a foreign-oracle time observation and are not covered by this fixture"
+  ]
+}

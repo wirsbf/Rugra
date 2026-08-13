@@ -4,7 +4,9 @@
 **源代码路径**: `src/address.rs`
 
 > 2026-08-11 锁定审计：当前仅保存数值 offset，无法表达
-> AddrSpace 身份、架构宽度/字宽环绕，SeqNum 也混合不可变身份与可变 order。
+> AddrSpace 身份、架构宽度/字宽环绕仍未表达。SeqNum 的不可变
+> `(Address,time)` 身份与可变 block `order` 已于 2026-08-13 分离，并由
+> 锁定 12.0.4 fixture 验证 block 重排不会破坏集合身份。
 > 详见 `docs/alignment_audit/CORE_FOUNDATIONS_2026-08-11.md`。
 >
 > 2026-08-12 ANN-N 仅补 provenance：标量 `new` 是缺少 AddrSpace 参数的
@@ -21,7 +23,8 @@ types used throughout the decompiler.
 # Core Types
 
 - [`Address`] - A memory address in a specific address space
-- [`SeqNum`] - Sequence number (address + order for P-code ops)
+- [`SeqNum`] - P-code operation key with immutable `(Address, time)` identity and
+  a separately mutable basic-block execution order
 - [`Range`] - An address range (first, last)
 - [`RangeList`] - A collection of non-overlapping address ranges
 
@@ -73,9 +76,10 @@ they are numbered sequentially using SeqNum.
 
 Corresponds to Ghidra's `SeqNum` class in `address.hh`
 
-### `pub fn new(addr: Address, order: u32) -> Self`
+### `pub fn new(addr: Address, time: u32) -> Self`
 
-Create a new sequence number
+Create a sequence number with immutable creation time. `order` is
+deterministically initialized to `time` until block insertion assigns it.
 
 ### `pub fn next(&self) -> Self`
 
@@ -85,21 +89,37 @@ Get the next sequence number at the same address
 
 Get the address
 
+### `pub fn get_time(&self) -> u32`
+
+Get the immutable operation creation identity used by Eq/Ord/Hash and bank lookup.
+
+### `pub fn same_identity(&self, other: &Self) -> bool`
+
+Exact Ghidra `SeqNum::operator==` semantic: compare only globally unique
+`time`, even when addresses differ. Rust `Eq` instead follows `(Address,time)`
+so it remains consistent with `Ord`/`Hash`; ordered bank keys match Ghidra's
+`operator<`.
+
 ### `pub fn get_order(&self) -> u32`
 
-Get the order/time
+Get the mutable execution order inside a basic block.
 
 ### `pub fn set_order(&mut self, order: u32)`
 
-Set the order/time
+Set block execution order without changing identity.
 
 ### `pub fn decode(s: &str) -> Option<Self>`
 
-Decode from string format "addr:order"
+Decode identity from string format "addr:time".
 
 ### `pub fn encode(&self) -> String`
 
-Encode to string format "addr:order"
+Encode identity as "addr:time"; mutable block order is omitted.
+
+Ghidra's copy constructor copies only Address/time and leaves `order`
+uninitialized; Rust `Copy` necessarily copies all fields. The mapped
+`PcodeOpBank::create_seq` path constructs a fresh op from the copied SeqNum,
+so copied-order observability remains explicitly `MISMATCH` outside that path.
 
 ### `pub struct Range`
 

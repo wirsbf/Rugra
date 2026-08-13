@@ -97,7 +97,7 @@ RUGRA-GLUE：Ghidra 通过 `ostream` 接收结果；此函数只新建 `String` 
 | `ostream &s`                    | `&mut dyn std::fmt::Write`               |
 | `vn->isMark()` / `setMark()`    | `Varnode::is_mark()` / `set_mark()`      |
 | `spc->getType()` vs `IPTR_*`    | `AddressSpace` enum + `is_iop()`/etc.    |
-| `op->getTime()`                 | `PcodeOp::get_seq_num().get_order()`     |
+| `op->getTime()`                 | `PcodeOp::get_time()`                    |
 | `op->getAddr().getOffset()`     | `PcodeOp::get_addr().as_u64()`           |
 | `vn->getCreateIndex()`          | `Varnode::get_create_index()`            |
 | `vn->printRawNoMarkup(s)`       | `Varnode::print_raw_no_markup()`         |

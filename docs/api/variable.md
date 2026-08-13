@@ -80,6 +80,10 @@ Ghidra: variable.cc:220 `HighVariable::HighVariable`. Seeds dirty bits
 
 ## Symbol 管理
 
+`HighVariable::compare_name` 的最后一个 tie-break 使用 defining op 的
+不可变 `PcodeOp::get_time()`，对应 `variable.cc:485-486`。基本块对
+`SeqNum.order` 的重编号不会改变名称代表元。
+
 ### `pub fn get_symbol(&self) -> Option<Arc<RwLock<Symbol>>>`
 Ghidra: variable.hh:176 `getSymbol`.
 

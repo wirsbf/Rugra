@@ -71,4 +71,13 @@ RHS 常量构造（Named/Absolute/NZMask/Consumed/Offset/IsConstant）。
   展开，不改变行为、不提升模块状态。
 
 <!-- annotation-pass: 2026-08-12 ANN-P; provenance-only -->
+
+### 2026-08-13：opcode bank mutation 调用闭包
+
+- `ConstraintNewOp` 与 `ConstraintSetOpcode` 现在以 `Funcdata` 写锁调用
+  `op_set_opcode`。这是 `Funcdata::opSetOpcode` 委托
+  `PcodeOpBank::changeOpcode` 后所需的 Rust 借用边界，使 opcode 派生 flags
+  以及 LOAD/STORE/RETURN/CALLOTHER 专用列表在同一次原位突变中更新。
+- 此项仅作为 `RULE-MULTICOLLAPSE-0001` 的调用闭包；Unify 的完整匹配、
+  状态回溯与错误路径仍未获得锁定 12.0.4 全函数 oracle，模块状态不变。
  

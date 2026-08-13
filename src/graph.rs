@@ -26,7 +26,7 @@
 //! | `ostream &s`                   | `&mut dyn std::fmt::Write`               |
 //! | `vn->isMark()` / `setMark()`   | `Varnode::is_mark()` / `set_mark()`      |
 //! | `spc->getType()` vs `IPTR_*`   | `AddressSpace` enum + `is_iop()`/etc.    |
-//! | `op->getTime()`                | `PcodeOp::get_seq_num().get_order()`     |
+//! | `op->getTime()`                | `PcodeOp::get_time()`                    |
 //! | `op->getAddr().getOffset()`    | `PcodeOp::get_addr().as_u64()`           |
 //! | `vn->getCreateIndex()`         | `Varnode::get_create_index()`            |
 //! | `vn->printRawNoMarkup(s)`      | `Varnode::print_raw_no_markup()`         |
@@ -134,11 +134,11 @@ fn print_varnode_vertex(vn: Option<&Arc<RwLock<Varnode>>>, s: &mut dyn Write) {
 /// Emit a single PcodeOp as a Renoir "AddVertices" record.
 ///
 /// Faithful port of `print_op_vertex` (graph.cc:47-66). Prints the op's
-/// time (SeqNum order), a subclass string classifying it (`branch` / `call`
+/// immutable time, a subclass string classifying it (`branch` / `call`
 /// / `marker` / `basic`), the literal `op`, its mnemonic, and its address.
 fn print_op_vertex(op: &PcodeOp, s: &mut dyn Write) {
     // cc:50  s << dec << 'o' << op->getTime() << ' ';
-    let time = op.get_seq_num().get_order();
+    let time = op.get_time();
     let _ = write!(s, "o{} ", time);
 
     // cc:51-58  classify as branch / call / marker / basic
@@ -280,7 +280,7 @@ fn dump_op_vertex(data: &Funcdata, s: &mut dyn Write) {
 /// in the op-code-specific window it emits a `v<createIndex> o<time> input`
 /// edge, skipping FSPEC/IOP-space varnodes.
 fn print_edges(op: &PcodeOp, s: &mut dyn Write) {
-    let time = op.get_seq_num().get_order();
+    let time = op.get_time();
 
     // cc:147-149  output edge
     if let Some(vn) = op.get_out() {

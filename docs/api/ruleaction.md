@@ -744,13 +744,21 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 
 ## 2026-06-27（续 20）：MultiCollapse 规则
 
-- **RuleMultiCollapse**：完整移植 ruleaction.cc:3246-3363。折叠所有输入追溯到相同值的 MULTIEQUAL：
+- **RuleMultiCollapse**：对应锁定 12.0.4 `ruleaction.cc:3234-3343`。折叠所有输入追溯到相同值的 MULTIEQUAL：
+  - 入口要求每个输入均 `isHeritageKnown()`，不能用“非 free”近似
   - 使用 functional_equality_level 检查输入是否绝对等价或功能等价
   - 处理嵌套 MULTIEQUAL：将非匹配的 MULTIEQUAL 输入展开到匹配列表
   - 循环构造检测：is_mark 表示值在循环中递归（跳过处理）
-  - 绝对等价：total_replace + op_destroy 所有 MULTIEQUAL
-  - 功能等价：同样 total_replace（Rugra 缺 cseFindInBlock/earliestUse，用保守替换）
-  - 已知限制：cseFindInBlock/earliestUse/opSetAllInput 用保守 total_replace 替代
+  - `skiplist` 的第一项就是根输出；成功时必须处理根，不能在零突变时返回 CHANGE
+  - 绝对等价：对根及嵌套项逐个 `total_replace + op_destroy`
+  - 功能等价：按同块最早读取边界调用 `cse_find_in_block`；命中时替换并销毁，未命中时把原 MULTIEQUAL 原位改成模板表达式，并重新插到前导 MULTIEQUAL 之后
+  - `func_eq` 对整个 skiplist 保持 sticky，所有项复用同一 defining-branch 模板；每项处理前清 mark
+
+`RULE-MULTICOLLAPSE-0001` 的直接 fixture 同时观察返回值、root/nested
+identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDestroy`
+调用闭包。Rust 的非 nullable `Vec<Arc<Varnode>>` 仍不能保留 Ghidra dead op
+中的 NULL input slots；该 dead-object 表示差异保持 `MISMATCH`，不能由主管线
+收敛结果推导为完整 B2 `MATCH`。
 
 ## 2026-06-27（续 21）：除法优化规则
 

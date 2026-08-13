@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "fixture_id": "RULE-MULTICOLLAPSE-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "api": "Direct RuleMultiCollapse::applyOp/apply_op invocation; no ActionGroup or other Rule runs",
+    "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies Ghidra Funcdata, address spaces, TypeFactory, and opcode lists. Each Ghidra case clears prior state. Rugra creates an isolated synthetic Funcdata per case.",
+    "ir": "All observed ops are alive and block-integrated before invocation. Register leaves are SSA inputs; outputs are inserted unique-space written Varnodes. Functional cases have ordered left->merge and right->merge CFG edges, with PHI slots matching predecessor order. The LOAD case uses real address-space operands: two Ghidra newVarnodeSpace(defaultDataSpace) values and two Rugra new_varnode_space(Ram) values.",
+    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed: both raw stdout streams and their raw unified diff are pinned. The sole cross-runtime representation projection is a legal LOAD/STORE space operand's implementation-specific C++ AddrSpace pointer versus Rugra SpaceId; each is serialized as the referenced semantic space name `spaceid:ram`. All other Varnode offsets, identities, flags, SeqNum time/order, slots, bank/list/block/CFG order, definitions, descendants, marks, and alive/dead state are preserved.",
+    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+    "random_seed": "none; RuleMultiCollapse and fixture construction are deterministic",
+    "error_injection": "none"
+  },
+  "assets": {
+    "source_policy": "Materialize the four SLEIGH/spec files and curl binary from verified Git blob IDs at the pinned Rugra provenance commit; never consume their working-tree copies",
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544,
+      "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree binary"
+    },
+    "bfd": {
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "host_tools": {
+    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "90111edd9531109aa6fb31892779b9981ac003ebed41b4010203a381e8d7ff0b",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0,
+      "symbol_source": "ELF/BFD"
+    },
+    "cases": [
+      {"id": "absolute_root_skiplist_1", "shape": "root=phi(x,x); use(root)", "expected_skiplist_order": ["root_out"]},
+      {"id": "loop_self_reference_mark_clear", "shape": "root=phi(x,root,x); use(root)", "expected_skiplist_order": ["root_out"]},
+      {"id": "nested_skiplist", "shape": "nested=phi(x,x); root=phi(nested,x); use both outputs", "expected_skiplist_order": ["root_out", "nested_out"]},
+      {"id": "functional_existing_cse", "shape": "two predecessor INT_ADD expressions plus equivalent merge-block CSE before root use", "expected": "destroy root and replace with cse_out"},
+      {"id": "functional_load_no_cse_rewrite_reinsert", "shape": "two predecessor LOADs from semantic ram space and shared pointer; merge root PHI, anchor PHI, use", "expected": "rewrite root in place to LOAD, append to LOAD/alive lists, reinsert after anchor before use"}
+    ]
+  },
+  "observation_schema": {
+    "format": "Ten fixed-order UTF-8 records (before/after for five cases) with a final newline",
+    "identity": "Pointer/Arc addresses are map keys only. Initial blocks, ops, and Varnodes use semantic names; transformation-created values use deterministic discovery names. Removed Varnodes are tombstones and are never dereferenced.",
+    "cfg_and_op_state": "Every synthetic block's exact index, predecessor order, successor order, and op order; whole op-tree, alive/dead lists, and LOAD/STORE/RETURN/CALLOTHER opcode-specific lists; every tracked op including dead ops with opcode, dead/mark/marker/commutative/modified flags, parent, address, immutable SeqNum time, mutable SeqNum order, ordered nullable inputs, and output identity.",
+    "varnode_state": "Exact VarnodeBank location/definition order and every tracked/discovered Varnode's membership, space, size, semantic/raw offset, create index, complete raw flags, mark/class/heritage state, defining op, and occurrence-aware ordered descendant op.slot edges.",
+    "raw_difference_policy": "The runner pins both complete output hashes and the complete unified-diff hash. It expects a nonzero diff and does not rewrite either stream. The only four differing records are successful destroy paths where Ghidra retains null input slot cardinality and Rugra's Vec cannot represent null slots."
+  },
+  "known_dependencies": {
+    "OPBANK-0001": {
+      "status": "MISMATCH",
+      "detail": "Ghidra opDestroy preserves input slot cardinality and clears each slot to NULL. Rugra's Vec<Arc<Varnode>> cannot encode NULL and clears the Vec, producing inputs=[-,-]/[-,-,-] versus inputs=[] on four after records (absolute, loop, both nested dead PHIs in one record, and functional CSE). The raw difference is retained and pins overall status to MISMATCH."
+    },
+    "ARCH-0001": {
+      "status": "MISMATCH",
+      "detail": "Ghidra uses a fully initialized BfdArchitecture while Rugra uses a synthetic Funcdata without an equivalent complete Architecture/services graph. The five covered RuleMultiCollapse paths do not otherwise read this graph; the legitimate LOAD space operand is compared by its semantic ram-space identity."
+    },
+    "TYPE-UNKNOWN-0001": {
+      "status": "UNTESTED",
+      "detail": "The full Architecture TypeFactory-backed datatype/high-variable identity and flags attached to all created Varnodes are outside this observation schema."
+    }
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "5db89eecacdcbeae886b4e40cea9f189123d95a4750525f226772ac4e995f51f",
+    "rust_fixture_sha256": "ffcfe86a94db594c25c94a24f325d994a21ab8c239c9735ba9f6b47a6c45e5fa",
+    "runner_sha256": "cc3339f095d686d78323282c53ca5231a2f773da044c7fd15067e84dbfb6e908",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-multi-collapse-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+    "rust_crate_tree_sha256": "597f56b119632968713ae54d0fc7bea84a9f437a3b84dcbaf171743a26dfca97"
+  },
+  "expected_results": {
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 1,
+    "ghidra_stdout_sha256": "af72cd025d5b5559339103c5aacbfdb094a9020d58f886842b88f8f401ce6e72",
+    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+    "rugra_stdout_sha256": "963c4ddb0759718645a960dd046c0277c351c393472a9beb80482b796825b382",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "171975e56dba1b21f14df5546ffab0ec41bbd7caa21974ceaf20a8f1f8ea545d"
+  },
+  "coverage": {
+    "absolute_root_skiplist_1": "TARGET_BEHAVIOR_MATCH",
+    "loop_self_reference_mark_clear": "TARGET_BEHAVIOR_MATCH",
+    "nested_skiplist": "TARGET_BEHAVIOR_MATCH",
+    "functional_existing_cse": "TARGET_BEHAVIOR_MATCH",
+    "functional_load_no_cse_rewrite_reinsert": "TARGET_BEHAVIOR_MATCH",
+    "dead_nullable_input_slots": "MISMATCH",
+    "direct_heritage_unknown_guard": "UNTESTED",
+    "failure_mark_cleanup_after_nested_expansion": "UNTESTED",
+    "all_top_phi_nofunc_sticky_path": "UNTESTED",
+    "functional_nested_global_func_eq": "UNTESTED",
+    "multiple_cse_descendant_order": "UNTESTED",
+    "cse_after_earliest_use_rejection": "UNTESTED",
+    "load_different_instruction_address": "UNTESTED",
+    "malformed_or_parentless_ir": "OUT_OF_DOMAIN"
+  },
+  "visible_output_regression": {
+    "status": "NOT_RUN_BY_FIXTURE_ONLY_WAVE",
+    "detail": "This four-file fixture-only task does not mutate or run the broader curl decompiler output pipeline. End-to-end ruleaction regression evidence remains the integration owner's responsibility and does not change this function fixture's MISMATCH status."
+  },
+  "overall_status": "MISMATCH"
+}

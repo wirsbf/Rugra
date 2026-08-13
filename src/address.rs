@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Memory address type
 ///
@@ -120,44 +121,64 @@ impl From<Address> for u64 {
 /// they are numbered sequentially using SeqNum.
 ///
 /// Corresponds to Ghidra's `SeqNum` class in `address.hh`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SeqNum {
     /// Address of the original machine instruction
     pub addr: Address,
-    /// Sequence number within that instruction (order/time)
+    /// Immutable creation identity (`uniq` / `time` in Ghidra).
+    pub time: u32,
+    /// Mutable execution order within the containing basic block.
     pub order: u32,
 }
 
 impl SeqNum {
-    // Ghidra: address.cc:54 SeqNum::new
-    /// Create a new sequence number
-    pub fn new(addr: Address, order: u32) -> Self {
-        SeqNum { addr, order }
-    }
-
-    // Ghidra: address.cc:54 SeqNum::next
-    /// Get the next sequence number at the same address
-    pub fn next(&self) -> Self {
+    // Ghidra: address.hh:130 SeqNum::SeqNum(const Address&,uintm)
+    /// Create a sequence number with immutable `time` identity.
+    ///
+    /// Ghidra leaves `order` unset until block insertion. Rust initializes it
+    /// to `time`, preserving deterministic pre-insertion behavior without
+    /// conflating the fields after `set_order` is called.
+    pub fn new(addr: Address, time: u32) -> Self {
         SeqNum {
-            addr: self.addr,
-            order: self.order + 1,
+            addr,
+            time,
+            order: time,
         }
     }
 
-    // Ghidra: address.cc:54 SeqNum::getAddr
+    // RUGRA-GLUE: convenience constructor for the next immutable creation id;
+    // Ghidra increments PcodeOpBank::uniqid inline in op.cc:944.
+    /// Get the next creation identity at the same address.
+    pub fn next(&self) -> Self {
+        SeqNum::new(self.addr, self.time + 1)
+    }
+
+    // Ghidra: address.hh:136 SeqNum::getAddr
     /// Get the address
     pub fn get_addr(&self) -> Address {
         self.addr
     }
 
-    // Ghidra: address.cc:54 SeqNum::getOrder
-    /// Get the order/time
+    // Ghidra: address.hh:148 SeqNum::operator==
+    /// Test Ghidra's time-only sequence identity.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.time == other.time
+    }
+
+    // Ghidra: address.hh:139 SeqNum::getTime
+    /// Get the immutable creation identity.
+    pub fn get_time(&self) -> u32 {
+        self.time
+    }
+
+    // Ghidra: address.hh:142 SeqNum::getOrder
+    /// Get the mutable execution order within a basic block.
     pub fn get_order(&self) -> u32 {
         self.order
     }
 
-    // Ghidra: address.cc:54 SeqNum::setOrder
-    /// Set the order/time
+    // Ghidra: address.hh:145 SeqNum::setOrder
+    /// Set the execution order without changing this sequence's identity.
     pub fn set_order(&mut self, order: u32) {
         self.order = order;
     }
@@ -170,21 +191,57 @@ impl SeqNum {
             return None;
         }
         let addr = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).ok()?;
-        let order = parts[1].parse().ok()?;
-        Some(SeqNum::new(Address::new(addr), order))
+        let time = parts[1].parse().ok()?;
+        Some(SeqNum::new(Address::new(addr), time))
     }
 
     // Ghidra: address.cc:60 SeqNum::encode
     /// Encode to string format "addr:order"
     pub fn encode(&self) -> String {
-        format!("{}:{}", self.addr, self.order)
+        format!("{}:{}", self.addr, self.time)
+    }
+}
+
+impl PartialEq for SeqNum {
+    // RUGRA-GLUE: Rust Eq must agree with Ord for BTree/Hash keys. Ghidra's
+    // operator== is time-only; callers needing that semantic use
+    // `same_identity`, while ordered keys use `(Address,time)` as operator<.
+    fn eq(&self, other: &Self) -> bool {
+        self.addr == other.addr && self.time == other.time
+    }
+}
+
+impl Eq for SeqNum {}
+
+impl PartialOrd for SeqNum {
+    // Ghidra: address.hh:154 SeqNum::operator<
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SeqNum {
+    // Ghidra: address.hh:154 SeqNum::operator<
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.addr
+            .cmp(&other.addr)
+            .then_with(|| self.time.cmp(&other.time))
+    }
+}
+
+impl Hash for SeqNum {
+    // RUGRA-GLUE: Rust Hash must use the same immutable identity as Eq/Ord;
+    // Ghidra's SeqNum keys are ordered by address.hh:154 operator<.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.addr.hash(state);
+        self.time.hash(state);
     }
 }
 
 impl fmt::Display for SeqNum {
-    // Ghidra: address.cc:54 SeqNum::fmt
+    // Ghidra: address.cc:32 operator<<(ostream&,const SeqNum&)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.addr, self.order)
+        write!(f, "{}:{}", self.addr, self.time)
     }
 }
 
@@ -685,7 +742,21 @@ mod tests {
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let next = seq.next();
         assert_eq!(next.addr, Address::new(0x1000));
+        assert_eq!(next.time, 1);
         assert_eq!(next.order, 1);
+    }
+
+    #[test]
+    fn test_seqnum_identity_ignores_mutable_order() {
+        use std::collections::{BTreeSet, HashSet};
+
+        let original = SeqNum::new(Address::new(0x1000), 7);
+        let mut reordered = original;
+        reordered.set_order(0xf000_0000);
+        assert_eq!(original, reordered);
+        assert_eq!(original.cmp(&reordered), std::cmp::Ordering::Equal);
+        assert_eq!(BTreeSet::from([original]).get(&reordered), Some(&original));
+        assert!(HashSet::from([original]).contains(&reordered));
     }
 
     #[test]

@@ -122,11 +122,11 @@ impl ResolvedUnion {
 
 /// A data-flow edge to which a resolved data-type can be assigned. Faithful
 /// to `ResolveEdge` (unionresolve.hh:60).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolveEdge {
     /// Id of base data-type being resolved (cc:61).
     pub type_id: u64,
-    /// Id of the PcodeOp edge — `SeqNum::order` (cc:62).
+    /// Immutable id of the PcodeOp edge — `SeqNum::time` (cc:62).
     pub op_time: u32,
     /// Encoding of the slot and pointer-ness (cc:63).
     pub encoding: i32,
@@ -138,7 +138,7 @@ impl ResolveEdge {
     /// `ResolveEdge::ResolveEdge(const Datatype *parent,const PcodeOp *op,
     /// int4 slot)` (unionresolve.hh:65).
     pub fn new(parent: &Datatype, op: &PcodeOp, slot: i32) -> Self {
-        let op_time = op.get_seq_num().order;
+        let op_time = op.get_time();
         let mut encoding = slot;
         let type_id = match parent.get_metatype() {
             TypeMetatype::Pointer => {
@@ -156,6 +156,23 @@ impl ResolveEdge {
     pub fn from_components(type_id: u64, op_time: u32, slot: i32, is_pointer: bool) -> Self {
         let encoding = if is_pointer { slot + 0x1000 } else { slot };
         Self { type_id, op_time, encoding }
+    }
+}
+
+impl PartialOrd for ResolveEdge {
+    // Ghidra: unionresolve.hh:172 ResolveEdge::operator<
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ResolveEdge {
+    // Ghidra: unionresolve.hh:172 ResolveEdge::operator<
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.type_id
+            .cmp(&other.type_id)
+            .then_with(|| self.encoding.cmp(&other.encoding))
+            .then_with(|| self.op_time.cmp(&other.op_time))
     }
 }
 

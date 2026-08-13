@@ -512,13 +512,13 @@ impl HighVariable {
             .def
             .as_ref()
             .and_then(|w| w.upgrade())
-            .map(|op| op.read().unwrap().get_seq_num().get_order())
+            .map(|op| op.read().unwrap().get_time())
             .unwrap_or(0);
         let t2 = vn2
             .def
             .as_ref()
             .and_then(|w| w.upgrade())
-            .map(|op| op.read().unwrap().get_seq_num().get_order())
+            .map(|op| op.read().unwrap().get_time())
             .unwrap_or(0);
         if t1 != t2 {
             return t2 < t1;
