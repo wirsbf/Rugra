@@ -66,6 +66,13 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 
 ### 2026-07-01（续 3）：Layer-6 剩余 TODO 填补（14 处，仅剩 1）
 isEntryPoint/getStartBlock/opInsertBegin/constructJoinAddress/newVarnode/combine_input_varnodes/set_double_precis_recovery/isPrimitiveWhole/typelock/getTrueOut/getFalseOut/ReturnCopy/ordered getBasicIter 全部用真实基础设施填掉。删过期 TODO：isBigEndian/ordered iteration/newVarnodeSpace（实现已忠实）。仅剩 hasUnreachableBlocks 1 处（Funcdata 无只读查询，需加方法）。
+
+### 2026-08-13：RuleDoubleOut 传播 combine 错误
+
+`RuleDoubleOut::apply_op` 对 `Funcdata::combine_input_varnodes` 使用 `?` 传播
+`LowlevelError` 映射后的 `Result`，不再忽略 non-input/non-contiguous 或 bank 删除失败。
+该单点只闭合返回值传播；combine 的 synthetic fixture 证据与未覆盖 Architecture/ProtoModel
+边界记录在 `docs/api/funcdata.md` 和 `VARNODE-INIT-0001` metadata。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.313316 -->
  

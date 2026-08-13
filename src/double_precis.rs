@@ -6546,7 +6546,7 @@ impl Rule for RuleDoubleOut {
         match SplitVarnode::is_addr_tied_contiguous_result(&vnlo, &vnhi) {
             Some(_addr) => {
                 // double.cc:3353: data.combineInputVarnodes(vnhi, vnlo)
-                data.combine_input_varnodes(&vnhi, &vnlo);
+                data.combine_input_varnodes(&vnhi, &vnlo)?;
                 Ok(CHANGE)
             }
             None => Ok(NO_CHANGE),

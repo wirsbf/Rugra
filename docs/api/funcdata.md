@@ -133,6 +133,12 @@ binary / disasm
 
 ## 公开 API 说明
 
+`clear_dead_varnodes` 的 `makeFree` 调用点（2026-08-13，`VARNODE-INIT-0001`）从当前 bank 的 loc-tree snapshot 获取 Arc，因而使用带 debug ownership 断言的 prevalidated remove→mutate→reinsert；随后清 cover，并在同一个 `hasNoDescend` 守卫内删除 free 值。`combine_input_varnodes` 按锁定 `funcdata_varnode.cc:381-454` 在 synthetic LE、register storage、无符号/ProtoModel effect、high-level-off 的合法图上执行：PIECE reader 改成 COPY；其他 reader 在入口块首逆序插入 SUBPIECE，输出保留原 source Address space/offset；`totalReplace` 支持同一 op 的重复输入槽；旧输入 detach 后经 checked `delete_varnode` 删除；最终建立并传播 setInput 返回的 canonical Arc。真实 12.0.4 fixture 观察完整 slots、descendants、bank membership/cardinality、op 顺序与 storage，并覆盖 non-input/non-contiguous 两条异常。big-endian、nullable/missing-entry 图，以及 `newVarnodeOut` 的 local-map/`assignHigh`/lane/ProtoModel property 副作用仍未由该 fixture 证明。
+
+`Funcdata::destroy_varnode` 只把 read edges 从 descendant 索引 detach、清定义输出，再走 prevalidated bank 删除；因为 Rust `Vec<Arc<Varnode>>` 不能表示 Ghidra 的 NULL input slot，`op_unset_input` 后槽中仍保留 stale Arc，直到调用方移除或替换该槽。本函数对 foreign/stale handle 的行为未闭合，不能当成 public checked `destroyVarnode`。相对地，inline `delete_varnode` 返回 `Result<()>` 并直接走 public checked `VarnodeBank::destroy_varnode`；bank API 的 integrated/foreign/stale 错误由 `Result` 表达。Ghidra delete 与外部 Rust Arc 生命周期差异继续归 `VARNODE-0001`。
+
+`set_input`/`set_def` 的 canonical 返回值已贯穿当前生产调用点：`combine_input_varnodes`、INDIRECT 构造、raw P-code 两种注入路径及 Heritage MULTIEQUAL 输出都把 canonical Arc 接到后续 op/output。`inject_raw_ops` Phase 3 在转换前先 snapshot `(opcode, inputs, output)` 并释放 op read guard，避免 xref replacement 回写同 op 时自锁；每个变换后的 slot 在 debug build 验证确实指向返回的 canonical Arc。这里仅证明这些 fresh/bank-owned 内部路径和锁生命周期，不把 raw 注入桥接整体宣称为 Ghidra `PcodeEmitFd::dump` MATCH。
+
 以下说明围绕当前可见公开接口展开，重点说明“它们在主链路中扮演什么角色”。
 
 ---
@@ -618,7 +624,8 @@ PcodeOpRaw
 - `op_set_opcode(op, opc)` — `Funcdata::opSetOpcode` (463)。**2026-07-02**：对齐 `PcodeOp::setOpcode` (op.cc:276) — 清除 opcode 派生 flag 位（CALL/BRANCH/RETURNS/MARKER/CODEREF/...）后按新 OpCode 重设。修复前 CPUI_CALL 的 output 永远不带 CALL flag → ActionMarkExplicit 的 `def->isCall()` 失败 → output 未被 force-explicit → ActionMarkImplied 标 implied → printc 跳过 CALL 语句（curl 丢失约 130 处调用）。
 - `op_set_input(op, vn, slot)` — `Funcdata::opSetInput` (467)，扩展 inrefs、维护 descend
 - `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput` (479)
-- `op_remove_input(op, slot)` — `Funcdata::opRemoveInput` (478)
+- `op_remove_input(op, slot)` — `Funcdata::opRemoveInput`（funcdata_op.cc:291）：先按
+  `opUnsetInput` 擦除旧 Varnode 的一个 descendant edge，再从 Rust `Vec` 删除该槽。
 - `op_insert_before(op, follow)` — `Funcdata::opInsertBefore`
   (funcdata_op.cc:345)，按 `follow` 的 `BlockBasic.ops` 定位，并把紧邻
   `follow` 的 INDIRECT 组留在原位。
@@ -629,8 +636,10 @@ PcodeOpRaw
   varnode 提升为函数输入（overlap 去重 + `vbank.set_input`）。**2026-07-05 新增**，
   用于 heritage rename 的 empty-stack promotion（heritage.cc:2502/2512）。委托给
   `VarnodeBank::set_input_varnode`；保守子集（省略 ProtoModel 效果属性设置）。
-- `delete_varnode(vn)` — `Funcdata::deleteVarnode`：委托给 `VarnodeBank::destroy_varnode`。
-  **2026-07-05 新增**，用于 heritage rename 替换后的死 varnode 清理（heritage.cc:2521/2550）。
+- `delete_varnode(vn) -> Result<()>` — inline `Funcdata::deleteVarnode`
+  （funcdata.hh:294）：委托给 checked `VarnodeBank::destroy_varnode` 并传播
+  `Deleting integrated varnode`/ownership 错误。用于 heritage rename 替换后的死
+  varnode 清理（heritage.cc:2521/2550）。
 
 `op_insert` 的两层状态与 Ghidra 一致：`PcodeOpBank::alivelist` 记录接入
 生命周期/接入顺序，`BlockBasic.ops` 记录执行顺序。低层插入同时维护
@@ -813,7 +822,12 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `get_store_guard(op)/get_load_guard(op)`（funcdata.hh:269-270）— 转发到 Heritage。
 
 ### 2026-07-01（续 3）：combine_input_varnodes + DOUBLE_PRECIS_ON + new_varnode + warning_header
-- `combine_input_varnodes(vn_hi, vn_lo)`（funcdata_varnode.cc:381-454）— 合并连续 input varnode，PIECE→COPY，非 PIECE reader 造 SUBPIECE。
+- `combine_input_varnodes(vn_hi, vn_lo) -> Result<()>`（funcdata_varnode.cc:381-454）—
+  校验 input/同空间连续性（按 endian 选择合并地址），PIECE→COPY，非 PIECE reader
+  在入口块首造 SUBPIECE，并让新输出保留各 source 的 Address space/offset。锁定
+  12.0.4 的 synthetic LE/no-effect fixture 覆盖 register PIECE、重复槽、非 PIECE
+  readers、canonical combined input 与两条 LowlevelError；BE Architecture 配置、nullable
+  slot、local-map/ProtoModel/high-level/lane 副作用和 raw SeqNum time/order 分离仍是残差。
 - `DOUBLE_PRECIS_ON` flag（funcdata.hh:85=0x2000）+ `set_double_precis_recovery`/`is_double_precis_on`。
 - `new_varnode(size, addr)`（funcdata.hh:282）— 包装 vbank.create。
 - `warning_header(txt)`（funcdata.cc:135-145）— 通过 commentdb 加 WARNINGHEADER 注释。

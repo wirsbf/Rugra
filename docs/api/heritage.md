@@ -547,15 +547,17 @@ Heritage 过程往往并不是简单线性扫描，而是要考虑：
 
 ### 2026-07-05 对齐修正（visit_rename_direct 三个 load-bearing 语义）
 
-`visit_rename_direct` 此前声称对齐 Ghidra `renameRecurse`（heritage.cc:2480-2563），但漏掉了 3 个决定性语义：
+`visit_rename_direct` 此前声称对齐 Ghidra `renameRecurse`（heritage.cc:2479-2562），但漏掉了 3 个决定性语义：
 
-1. **empty-stack input promotion**（cc:2500-2503 / cc:2541-2544）—— 当 varstack 为空时，Ghidra 创建新 varnode 并 `setInputVarnode` 提升为函数输入。Rugra 此前静默跳过 → 自由读未被替换 → SSA 不完整。现移植：通过 `VarnodeBank::set_input_varnode`（对齐 `Funcdata::setInputVarnode` cc:340-373）。
+1. **empty-stack input promotion**（cc:2499-2502 / cc:2540-2543）—— 当 varstack 为空时，Ghidra 创建新 varnode 并 `setInputVarnode` 提升为函数输入。Rugra 此前静默跳过 → 自由读未被替换 → SSA 不完整。现移植：通过 `VarnodeBank::set_input_varnode`（对齐 `Funcdata::setInputVarnode` cc:340-373）。
 
-2. **INDIRECT same-time stack-deepening**（cc:2507-2518）—— 当栈顶 vnnew 是 INDIRECT 写且其 iop-const input(1) 指向当前 op 时，Ghidra 认为 "INDIRECT 和它的 op 同时发生"，深入栈一层（`stack[size-2]`）。Rugra 此前完全缺失 → 栈指针 INDIRECT 配对的 op 拿到错误的 SSA 名。现已按 cc:2509 比对 iop 偏移与当前 op 指针。
+2. **INDIRECT same-time stack-deepening**（cc:2507-2516）—— 当栈顶 vnnew 是 INDIRECT 写且其 iop-const input(1) 指向当前 op 时，Ghidra 认为 "INDIRECT 和它的 op 同时发生"，深入栈一层（`stack[size-2]`）。Rugra 此前完全缺失 → 栈指针 INDIRECT 配对的 op 拿到错误的 SSA 名。现已按 cc:2508 比对 iop 偏移与当前 op 指针。
 
-3. **deleteVarnode of consumed frees**（cc:2520-2521 / cc:2549-2550）—— 替换后若 `vnin->hasNoDescend()` 则 `fd->deleteVarnode(vnin)`。Rugra 此前从不删除 → 死 varnode 留在 loc_tree 污染后续 pass。现通过 `VarnodeBank::destroy_varnode` 移植。
+3. **deleteVarnode of consumed frees**（cc:2519-2520 / cc:2548-2549）—— 替换后若 `vnin->hasNoDescend()` 则 `fd->deleteVarnode(vnin)`。Rugra 此前从不删除 → 死 varnode 留在 loc_tree 污染后续 pass。现由该 exact guard 调 `VarnodeBank::destroy_varnode_prevalidated`；debug build 重新断言 no-def/no-descendant 与 bank ownership，public integrated 错误没有被吞掉。
 
-同时修正 `rename_direct` 开头的 marker：原来只对 `!is_heritage_known()` 的 varnode 设 `activeHeritage`（即只标 free，跳过 written），但 Ghidra `guard()`（cc:1175/1182）对 **read+write** 两个 list 都设。written varnode 漏标导致 rename 的 `if (!vnout->isActiveHeritage()) continue;`（cc:2527）跳过 push → stack 空 → empty-stack promotion 触发 → set_input_varnode 把多分支 input 去重成同一个 → diamond merge 丢失分支独立性。现按 Ghidra 语义对非常量/非 annotation 的所有 varnode（含 written）设 activeHeritage。
+2026-08-13 `VARNODE-INIT-0001` caller closure：生产 direct 路径的 `insert_multiequal_direct` 为 fresh bank-owned 输出调用 `set_def_prevalidated`，并把 xref 返回的 canonical Arc 写入 MULTIEQUAL output；每个 fresh placeholder 也像 locked `heritage.cc:2638-2639` 的 `opSetInput` 一样建立一条 descendant。`renameRecurse` 的普通 op 与 successor MULTIEQUAL 两条替换路径都先从旧 Varnode 精确擦除一个 descendant，再向 canonical 新值添加一条，并保留 same-Arc early return；删除仅发生在 locked `heritage.cc:2519/2548 hasNoDescend()` 守卫内。Rust graph tests 覆盖普通 free replacement 后旧值退 bank、两 predecessor 的 phi placeholder 逐槽退 bank，以及 same-Arc 不增边/不删除；这些是 Rust-only 生命周期回归，不是同输入 Ghidra 差分，故 `visit_rename_direct` caller graph 仍为 `UNTESTED`，Heritage 整体仍无逐函数 oracle。低层 erase/add/slot 迁移另由 Varnode/combine oracle 覆盖。legacy `place_multiequals` 尚未统一到这条 setDef 路径，仍归 `HERITAGE-OWNERSHIP-0001`/后续 driver 闭包。该原子只修所触及 direct 路径的引用/输出身份和 destroy 先验，不提升 Heritage 模块整体级别。
+
+同时修正 `rename_direct` 开头的 marker：原来只对 `!is_heritage_known()` 的 varnode 设 `activeHeritage`（即只标 free，跳过 written），但 Ghidra `guard()`（cc:1174/1181）对 **read+write** 两个 list 都设。written varnode 漏标导致 rename 的 `if (!vnout->isActiveHeritage()) continue;`（cc:2526）跳过 push → stack 空 → empty-stack promotion 触发 → set_input_varnode 把多分支 input 去重成同一个 → diamond merge 丢失分支独立性。现按 Ghidra 语义对非常量/非 annotation 的所有 varnode（含 written）设 activeHeritage。
 
 ---
 
@@ -692,11 +694,11 @@ pass 计数只代表处理轮次，不等于质量保证。
 
 ### 2026-06-29（续）：rename isHeritageKnown 检查 + 两 pass heritage
 
-- **rename 跳过 heritage-known varnode**（对齐 heritage.cc:2496 `isHeritageKnown`）：input 重写只替换 free varnode（非 input/written/constant），跳过已 SSA 解析的。此前 Rugra rename 无条件替换所有 input，会错误 re-rename。这是 written varnode dedup 的前提。
+- **rename 跳过 heritage-known varnode**（对齐 heritage.cc:2495 `isHeritageKnown`）：input 重写只替换 free varnode（非 input/written/constant），跳过已 SSA 解析的。此前 Rugra rename 无条件替换所有 input，会错误 re-rename。这是 written varnode dedup 的前提。
 - **两 pass heritage**：ActionHeritage::apply 跑两遍 place+rename。Pass 1 连接 op 图（rename 重写 STORE input 引用 INT_ADD output），Pass 2 的 discover 在连接后的图上发现 stack STOREs。对齐 Ghidra 多 pass heritage。
 - **varnode 去重仍限 free/input**：written varnode 去重需要 loc_tree 排序按 input/written/free 分类（VarnodeCompareLocDef），是更深的重构。
 - **VarnodeCompareLocDef 排序已对齐**（2026-06-29 续）：loc_tree 排序键改为 `(address_space, loc, size, input/written/free, def SeqNum or createIndex)`，对齐 Ghidra VarnodeCompareLocDef（varnode.cc:34-52）。input 同位置返回 Equal；written 按 def SeqNum 区分；free 按 createIndex 区分。
-- **INSERT/activeHeritage flag 对齐**（2026-06-29 续 2）：rename 使用 `is_heritage_known()`（检查 INSERT flag，对齐 varnode.hh:298）+ `is_active_heritage()`（addl_flags，对齐 varnode.hh:115）。rename_direct 对所有 free varnode 设 activeHeritage（对齐 guard heritage.cc:1175/1182）。create 不设 INSERT（对齐 varnode.cc:1250）；set_def/set_input 设 INSERT（对齐 createDef/makeInput→xref）。
+- **INSERT/activeHeritage flag 对齐**（2026-06-29 续 2）：rename 使用 `is_heritage_known()`（检查 INSERT flag，对齐 varnode.hh:298）+ `is_active_heritage()`（addl_flags，对齐 varnode.hh:115）。rename_direct 对所有 free varnode 设 activeHeritage（对齐 guard heritage.cc:1174/1181）。create 不设 INSERT（对齐 varnode.cc:1250）；set_def/set_input 设 INSERT（对齐 createDef/makeInput→xref）。
 ### 2026-07-01：LoadGuard methods + Heritage get_store/load_guard
 - `LoadGuard::is_guarded(space, offset)`（heritage.cc:819-826）— 范围检查 space+minimum/maximum。
 - `LoadGuard::get_minimum/get_maximum/get_op`（heritage.hh:164-165/161）。

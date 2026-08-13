@@ -4,8 +4,9 @@
 
 use crate::address::Address;
 use crate::space::AddressSpace;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Weak, RwLock};
 
@@ -21,7 +22,31 @@ use crate::variable::HighVariable;
 use crate::cover::Cover;
 use crate::op::PcodeOp;
 use crate::type_system::Datatype;
+use crate::type_system::TypeBase;
 use crate::type_system::TypeMetatype;
+
+/// First offset in Ghidra's analysis-owned unique-space region.
+/// `Translate::getUniqueStart(Translate::ANALYSIS)` returns this tag directly.
+const ANALYSIS_UNIQUE_START: u64 = 0x1000_0000;
+
+// RUGRA-GLUE: Rugra represents address spaces as an enum rather than unique
+// AddrSpace objects.  Compare the Ghidra-compatible numeric index first, then
+// use the enum order only to keep Eq/Ord total for invalid duplicate-id values.
+fn compare_address_spaces(a: AddressSpace, b: AddressSpace) -> std::cmp::Ordering {
+    a.space_id().cmp(&b.space_id()).then_with(|| a.cmp(&b))
+}
+
+// RUGRA-GLUE: Bank-local default-type adapter for APIs that do not yet receive
+// Ghidra's caller-supplied `Datatype *ct`. This deliberately models only the
+// fixture's unnamed id=0/non-core xunknown scalar; Architecture TypeFactory
+// identity and core flags remain TYPE-UNKNOWN-0001.
+fn unknown_datatype(size: usize) -> Arc<Datatype> {
+    Arc::new(Datatype::Base(TypeBase::new(
+        format!("xunknown{size}"),
+        size,
+        TypeMetatype::Unknown,
+    )))
+}
 
 /// Flags for Varnode properties (varnode_flags in Ghidra)
 pub mod varnode_flags {
@@ -113,34 +138,46 @@ pub struct Varnode {
 }
 
 impl Varnode {
-    // Ghidra: varnode.cc:578 Varnode::new
-    /// Create a new varnode (defaults to Ram space for backward compatibility)
+    // Ghidra: varnode.cc:578 Varnode::Varnode
+    /// Create a new RAM-space varnode.
+    ///
+    /// Ghidra receives the address space and a non-null `Datatype *` from the
+    /// Funcdata/VarnodeBank caller.  Rugra's historical two-argument API uses
+    /// RAM as the implicit space and attaches the corresponding unknown type.
     pub fn new(size: usize, loc: Address) -> Self {
+        Self::new_with_space(size, AddressSpace::Ram, loc.as_u64())
+    }
+
+    // Ghidra: varnode.cc:578 Varnode::Varnode
+    /// Create a varnode with its final address space already known.
+    pub fn new_with_space(size: usize, space: AddressSpace, offset: u64) -> Self {
+        let (flags, nzm) = match space {
+            AddressSpace::Const => (varnode_flags::CONSTANT, offset),
+            // Rugra uses Iop for both Ghidra's IPTR_IOP and its currently
+            // unmodelled IPTR_FSPEC values.  Both are annotations.
+            AddressSpace::Iop => (
+                varnode_flags::ANNOTATION | varnode_flags::COVERDIRTY,
+                u64::MAX,
+            ),
+            _ => (varnode_flags::COVERDIRTY, u64::MAX),
+        };
         Self {
-            flags: 0,
+            flags,
             size,
             create_index: 0,
             mergegroup: 0,
             addlflags: 0,
-            address_space: AddressSpace::Ram,
-            loc,
+            address_space: space,
+            loc: Address::new(offset),
             def: None,
             high: None,
             mapentry: None,
-            v_type: None,
+            v_type: Some(unknown_datatype(size)),
             descend: Vec::new(),
             cover: None,
-            consumed: 0,
-            nzm: !0, // All bits possible initially
+            consumed: u64::MAX,
+            nzm,
         }
-    }
-
-    // Ghidra: varnode.cc:578 Varnode::newWithSpace
-    /// Create a new varnode with explicit address space
-    pub fn new_with_space(size: usize, space: AddressSpace, offset: u64) -> Self {
-        let mut vn = Self::new(size, Address::new(offset));
-        vn.address_space = space;
-        vn
     }
 
     // Ghidra: varnode.cc:578 Varnode::getAddr
@@ -209,11 +246,9 @@ impl Varnode {
         self // Mock
     }
 
-    // Ghidra: varnode.cc:578 Varnode::newConstant
+    // Ghidra: varnode.cc:578 Varnode::Varnode
     pub fn new_constant(val: u64, size: usize) -> Self {
-        let mut v = Self::new_with_space(size, AddressSpace::Const, val);
-        v.set_flags(varnode_flags::CONSTANT);
-        v
+        Self::new_with_space(size, AddressSpace::Const, val)
     }
 
     // Ghidra: varnode.cc:578 Varnode::newRegister
@@ -406,12 +441,20 @@ impl Varnode {
 
     // Ghidra: varnode.cc:533 Varnode::operator<
     /// Ghidra's Varnode comparison for sorting (loc→size→flag→def SeqNum).
-    /// Faithful to `operator<` (varnode.cc:533-547). Used by VarnodeCompareLocDef.
-    /// Note: Rugra's Ord impl uses create_index (for BTreeSet identity);
-    /// this method implements Ghidra's operator< semantics.
+    /// Faithful on valid unique-space-id inputs to `operator<`
+    /// (varnode.cc:533-547); Rugra adds a deterministic enum tie-break only
+    /// for invalid duplicate numeric space identifiers.
     pub fn ghidra_less(&self, other: &Varnode) -> bool {
-        if self.loc != other.loc { return self.loc < other.loc; }
-        if self.size != other.size { return self.size < other.size; }
+        let space_order = compare_address_spaces(self.address_space, other.address_space);
+        if space_order != std::cmp::Ordering::Equal {
+            return space_order == std::cmp::Ordering::Less;
+        }
+        if self.loc != other.loc {
+            return self.loc < other.loc;
+        }
+        if self.size != other.size {
+            return self.size < other.size;
+        }
         let f1 = self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
         let f2 = other.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
         if f1 != f2 {
@@ -419,9 +462,15 @@ impl Varnode {
             return (f1.wrapping_sub(1)) < (f2.wrapping_sub(1));
         }
         if f1 == varnode_flags::WRITTEN {
-            let self_seq = self.def.as_ref().and_then(|w| w.upgrade())
+            let self_seq = self
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|op| op.read().unwrap().start.clone());
-            let other_seq = other.def.as_ref().and_then(|w| w.upgrade())
+            let other_seq = other
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|op| op.read().unwrap().start.clone());
             if self_seq != other_seq {
                 return self_seq < other_seq;
@@ -434,17 +483,36 @@ impl Varnode {
     /// Ghidra's Varnode equality (loc+size+flag+def SeqNum).
     /// Faithful to `operator==` (varnode.cc:556-570).
     pub fn ghidra_eq(&self, other: &Varnode) -> bool {
-        if self.loc != other.loc { return false; }
-        if self.size != other.size { return false; }
+        if compare_address_spaces(self.address_space, other.address_space)
+            != std::cmp::Ordering::Equal
+        {
+            return false;
+        }
+        if self.loc != other.loc {
+            return false;
+        }
+        if self.size != other.size {
+            return false;
+        }
         let f1 = self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
         let f2 = other.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
-        if f1 != f2 { return false; }
+        if f1 != f2 {
+            return false;
+        }
         if f1 == varnode_flags::WRITTEN {
-            let self_seq = self.def.as_ref().and_then(|w| w.upgrade())
+            let self_seq = self
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|op| op.read().unwrap().start.clone());
-            let other_seq = other.def.as_ref().and_then(|w| w.upgrade())
+            let other_seq = other
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|op| op.read().unwrap().start.clone());
-            if self_seq != other_seq { return false; }
+            if self_seq != other_seq {
+                return false;
+            }
         }
         true
     }
@@ -541,12 +609,23 @@ impl Varnode {
     /// Rebuild cover if dirty. Faithful to `updateCover` (varnode.cc:233-241).
     pub fn update_cover(&mut self) {
         if (self.flags & varnode_flags::COVERDIRTY) != 0 {
-            if self.has_cover() && self.cover.is_some() {
-                // Rugra's Cover::rebuild is simplified (merge.rs compute_varnode_covers).
-                // TODO: port full Cover::rebuild (cover.cc:477).
+            if self.has_cover() {
+                // Temporarily detach the Cover so `rebuild` can inspect this
+                // Varnode while the Cover itself is mutably borrowed.
+                if let Some(mut cover) = self.cover.take() {
+                    cover.rebuild(self);
+                    self.cover = Some(cover);
+                }
             }
             self.flags &= !varnode_flags::COVERDIRTY;
         }
+    }
+
+    // Ghidra: varnode.hh:202 Varnode::getCover
+    /// Lazily rebuild and return this Varnode's Cover.
+    pub fn get_cover(&mut self) -> Option<&Cover> {
+        self.update_cover();
+        self.cover.as_deref()
     }
 
     // Ghidra: varnode.cc:244 Varnode::clearCover
@@ -999,19 +1078,43 @@ impl Varnode {
     /// Faithful to `termOrder` (varnode.cc:1153-1180). Used by
     /// AddExpression to order commutative operands.
     pub fn term_order(&self, op: &Varnode) -> i32 {
-        // cc:1156-1160: constants sort last
+        // cc:1156-1160: constants sort last, and all constants compare equal.
         if self.is_constant() {
-            if !op.is_constant() { return 1; }
-        } else {
-            if op.is_constant() { return -1; }
+            return if op.is_constant() { 0 } else { 1 };
         }
-        // cc:1162-1168: unwrap INT_MULT by constant (find the non-const factor)
-        // cc:1170-1175: compare by size (smaller first)
-        if self.size != op.size {
-            return self.size as i32 - op.size as i32;
+        if op.is_constant() {
+            return -1;
         }
-        // cc:1176: compare by offset
-        self.loc.as_u64().cmp(&op.loc.as_u64()) as i32
+
+        // cc:1162-1172: strip a single INT_MULT(_, constant) wrapper, then
+        // compare the complete Address. Size is deliberately not a key.
+        let term_address = |vn: &Varnode| {
+            let base = vn.get_def().and_then(|def| {
+                let operation = def.read().unwrap();
+                if operation.get_opcode() != crate::opcodes::OpCode::CPUI_INT_MULT {
+                    return None;
+                }
+                let coefficient = operation.get_in(1)?;
+                if !coefficient.read().unwrap().is_constant() {
+                    return None;
+                }
+                operation.get_in(0).cloned()
+            });
+            if let Some(base) = base {
+                let base = base.read().unwrap();
+                (base.address_space, base.loc.as_u64())
+            } else {
+                (vn.address_space, vn.loc.as_u64())
+            }
+        };
+
+        let lhs = term_address(self);
+        let rhs = term_address(op);
+        match compare_address_spaces(lhs.0, rhs.0).then_with(|| lhs.1.cmp(&rhs.1)) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
     }
 
     // Ghidra: varnode.hh:257 Varnode::isReturnAddress
@@ -1595,16 +1698,19 @@ impl Varnode {
     /// Erase a descendant op from this varnode's descend list. Faithful to
     /// `Varnode::eraseDescend` (varnode.hh:175). Per Ghidra cc:321-324, finds
     /// the op in the descend list and removes it; throws if not found.
-    /// Rugra uses retain (drops ALL matching weak refs to op, in case of
-    /// accidental duplicates) and logs if nothing was removed.
+    /// Each list entry represents one input slot, so erase exactly one
+    /// matching occurrence. This is load-bearing when one op reads the same
+    /// Varnode in multiple slots: Ghidra removes one list node per
+    /// `opUnsetInput` call.
     /// Also sets coverdirty (Ghidra cc:325); omitted (see add_descend note).
     pub fn erase_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
-        let target_ptr = std::sync::Arc::as_ptr(op) as *const ();
-        let before = self.descend.len();
-        self.descend.retain(|w| {
-            w.upgrade().map(|a| std::sync::Arc::as_ptr(&a) as *const () != target_ptr).unwrap_or(true)
+        let position = self.descend.iter().position(|weak| {
+            weak.upgrade()
+                .is_some_and(|candidate| Arc::ptr_eq(&candidate, op))
         });
-        if self.descend.len() == before {
+        if let Some(position) = position {
+            self.descend.remove(position);
+        } else {
             eprintln!("[VN] WARN: erase_descend op={:p} not in descend list (space={:?} off={:#x})",
                 std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64());
         }
@@ -1629,35 +1735,30 @@ impl Varnode {
 }
 
 impl PartialEq for Varnode {
-    // Ghidra: varnode.cc:578 Varnode::eq
+    // Ghidra: varnode.cc:556 Varnode::operator==
     fn eq(&self, other: &Self) -> bool {
-        self.loc == other.loc && self.size == other.size && self.create_index == other.create_index
+        self.ghidra_eq(other)
     }
 }
 
 impl Eq for Varnode {}
 
 impl PartialOrd for Varnode {
-    // Ghidra: varnode.cc:578 Varnode::partialCmp
+    // Ghidra: varnode.cc:533 Varnode::operator<
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl std::cmp::Ord for Varnode {
-    // Ghidra: varnode.cc:578 Varnode::cmp
+    // Ghidra: varnode.cc:533 Varnode::operator<
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Mimic VarnodeCompareLocDef logic from Ghidra
-        match self.loc.cmp(&other.loc) {
-            std::cmp::Ordering::Equal => {
-                match self.size.cmp(&other.size) {
-                    std::cmp::Ordering::Equal => {
-                        self.create_index.cmp(&other.create_index)
-                    }
-                    ord => ord,
-                }
-            }
-            ord => ord,
+        if self.ghidra_less(other) {
+            std::cmp::Ordering::Less
+        } else if other.ghidra_less(self) {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
         }
     }
 }
@@ -1669,8 +1770,7 @@ pub struct VarnodeLocRef(pub Arc<RwLock<Varnode>>);
 impl PartialEq for VarnodeLocRef {
     // RUGRA-GLUE: eq (no Ghidra counterpart found)
     fn eq(&self, other: &Self) -> bool {
-        if Arc::ptr_eq(&self.0, &other.0) { return true; }
-        self.0.read().unwrap().eq(&other.0.read().unwrap())
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
 
@@ -1686,10 +1786,12 @@ impl PartialOrd for VarnodeLocRef {
 impl Ord for VarnodeLocRef {
     // RUGRA-GLUE: cmp (no Ghidra counterpart found)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
+        if Arc::ptr_eq(&self.0, &other.0) {
+            return std::cmp::Ordering::Equal;
+        }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
-        // Faithful to Ghidra's VarnodeCompareLocDef (varnode.cc:34-52):
+        // Faithful to Ghidra's VarnodeCompareLocDef (varnode.cc:34-53):
         // (address_space, loc, size, input/written/free, def-SeqNum-or-createIndex)
         //
         // Key difference from the old (space, loc, size, create_index): the
@@ -1699,7 +1801,7 @@ impl Ord for VarnodeLocRef {
         //   - free varnodes distinguished by createIndex (multiple allowed)
         // This is what Ghidra's xref relies on: a newVarnode lookup finds the
         // existing input varnode at a location (not a different free/written one).
-        match a.address_space.cmp(&b.address_space) {
+        match compare_address_spaces(a.address_space, b.address_space) {
             ne @ std::cmp::Ordering::Less | ne @ std::cmp::Ordering::Greater => return ne,
             std::cmp::Ordering::Equal => {}
         }
@@ -1715,7 +1817,7 @@ impl Ord for VarnodeLocRef {
         // Ghidra ordering: (f-1) comparison puts free LAST, input before written.
         let f1 = a.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
         let f2 = b.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
-        match f1.cmp(&f2) {
+        match f1.wrapping_sub(1).cmp(&f2.wrapping_sub(1)) {
             ne @ std::cmp::Ordering::Less | ne @ std::cmp::Ordering::Greater => return ne,
             std::cmp::Ordering::Equal => {}
         }
@@ -1743,8 +1845,7 @@ pub struct VarnodeDefRef(pub Arc<RwLock<Varnode>>);
 impl PartialEq for VarnodeDefRef {
     // RUGRA-GLUE: eq (no Ghidra counterpart found)
     fn eq(&self, other: &Self) -> bool {
-        if Arc::ptr_eq(&self.0, &other.0) { return true; }
-        self.0.read().unwrap().eq(&other.0.read().unwrap())
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
 
@@ -1761,9 +1862,11 @@ impl Ord for VarnodeDefRef {
     // Ghidra: varnode.cc:60 VarnodeCompareDefLoc::operator()
     /// Compare by definition then by location. Faithful to
     /// `VarnodeCompareDefLoc` (varnode.cc:60-79).
-    /// Uses (f-1) trick: written=0, input=1, free=2 (free last).
+    /// Uses the unsigned `(f-1)` trick: input, then written, then free.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
+        if Arc::ptr_eq(&self.0, &other.0) {
+            return std::cmp::Ordering::Equal;
+        }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
 
@@ -1775,16 +1878,26 @@ impl Ord for VarnodeDefRef {
         }
         // cc:69-71: if written, compare def SeqNum
         if f1 == varnode_flags::WRITTEN {
-            let a_seq = a.def.as_ref().and_then(|w| w.upgrade())
+            let a_seq = a
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|op| op.read().unwrap().start.clone());
-            let b_seq = b.def.as_ref().and_then(|w| w.upgrade())
+            let b_seq = b
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|op| op.read().unwrap().start.clone());
             match a_seq.cmp(&b_seq) {
                 std::cmp::Ordering::Equal => {}
                 ord => return ord,
             }
         }
-        // cc:73-74: compare addr, then size
+        // cc:73-74: compare the full Address (space index, then offset), then size
+        match compare_address_spaces(a.address_space, b.address_space) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
         match a.loc.cmp(&b.loc) {
             std::cmp::Ordering::Equal => {}
             ord => return ord,
@@ -1847,18 +1960,185 @@ pub struct VarnodeBank {
     /// Unique space manager
     uniq_space: AddressSpace,
     uniqid: u64,
+
+    /// Bank-local cache for the default-type adapter above. It preserves
+    /// same-size identity within this bank, but is not the owning
+    /// Architecture TypeFactory and has no cross-bank identity guarantee.
+    unknown_types: BTreeMap<usize, Arc<Datatype>>,
 }
 
 impl VarnodeBank {
-    // Ghidra: varnode.cc:1218 VarnodeBank::new
+    // Ghidra: varnode.cc:1218 VarnodeBank::VarnodeBank
     pub fn new() -> Self {
         Self {
             loc_tree: BTreeSet::new(),
             def_tree: BTreeSet::new(),
             create_index: 0,
             uniq_space: AddressSpace::Unique,
-            uniqid: 0,
+            uniqid: ANALYSIS_UNIQUE_START,
+            unknown_types: BTreeMap::new(),
         }
+    }
+
+    // RUGRA-GLUE: shared Rust allocation half of VarnodeBank::create and
+    // createDef; Ghidra performs these field assignments inline.
+    fn allocate(&mut self, mut vn: Varnode) -> Arc<RwLock<Varnode>> {
+        let canonical_type = self
+            .unknown_types
+            .entry(vn.size)
+            .or_insert_with(|| unknown_datatype(vn.size))
+            .clone();
+        vn.v_type = Some(canonical_type);
+        vn.create_index = self.create_index;
+        self.create_index += 1;
+
+        Arc::new(RwLock::new(vn))
+    }
+
+    // RUGRA-GLUE: insertion half shared by Rugra's implicit-RAM and explicit
+    // address-space forms of Ghidra VarnodeBank::create.
+    fn insert_free(&mut self, vn: Varnode) -> Arc<RwLock<Varnode>> {
+        let rc = self.allocate(vn);
+        self.loc_tree.insert(VarnodeLocRef(rc.clone()));
+        self.def_tree.insert(VarnodeDefRef(rc.clone()));
+        rc
+    }
+
+    // Ghidra: varnode.cc:1332 VarnodeBank::replace
+    /// Redirect every descendant of `old_vn` to `new_vn` in list order.
+    pub fn replace(&mut self, old_vn: &Arc<RwLock<Varnode>>, new_vn: &Arc<RwLock<Varnode>>) {
+        let descendants: Vec<_> = old_vn.read().unwrap().descend_iter().collect();
+        let mut replacements = Vec::new();
+        let mut occurrences: BTreeMap<usize, usize> = BTreeMap::new();
+        for op in descendants {
+            let output_is_new = op
+                .read()
+                .unwrap()
+                .output
+                .as_ref()
+                .is_some_and(|out| Arc::ptr_eq(out, new_vn));
+            if output_is_new {
+                continue;
+            }
+
+            let op_identity = Arc::as_ptr(&op) as usize;
+            let occurrence = occurrences.entry(op_identity).or_insert(0);
+            let slot = op
+                .read()
+                .unwrap()
+                .inrefs
+                .iter()
+                .enumerate()
+                .filter(|(_, input)| Arc::ptr_eq(input, old_vn))
+                .nth(*occurrence)
+                .map(|(slot, _)| slot);
+            // A descendant entry without an input slot is corrupt IR. Ghidra
+            // assumes this invariant and would index past getSlot(); keep the
+            // valid-input path non-fallible and make debug builds diagnose it.
+            if let Some(slot) = slot {
+                replacements.push((op, slot));
+                *occurrence += 1;
+            } else {
+                debug_assert!(
+                    false,
+                    "VarnodeBank::replace descendant has no matching input slot"
+                );
+            }
+        }
+
+        for (op, slot) in replacements {
+            // Ghidra advances the list iterator before erasing exactly one
+            // occurrence, so repeated use by one op is rewired slot-by-slot.
+            {
+                let mut old = old_vn.write().unwrap();
+                if let Some(pos) = old.descend.iter().position(|weak| {
+                    weak.upgrade()
+                        .is_some_and(|candidate| Arc::ptr_eq(&candidate, &op))
+                }) {
+                    old.descend.remove(pos);
+                }
+            }
+            new_vn.write().unwrap().add_descend(&op);
+            op.write().unwrap().inrefs[slot] = new_vn.clone();
+        }
+        {
+            let mut old = old_vn.write().unwrap();
+            // Ghidra deletes `oldvn` immediately after replace. An external
+            // Arc may keep Rugra's allocation alive, but it must not retain
+            // observable stale def-use links.
+            old.descend.clear();
+            old.set_flags(varnode_flags::COVERDIRTY);
+        }
+        new_vn.write().unwrap().set_flags(varnode_flags::COVERDIRTY);
+    }
+
+    // Ghidra: varnode.cc:1291 VarnodeBank::xref
+    /// Insert an input/written Varnode, returning the pre-existing canonical
+    /// object if its location/definition key is already present.
+    fn xref(&mut self, vn: Arc<RwLock<Varnode>>) -> Arc<RwLock<Varnode>> {
+        let key = VarnodeLocRef(vn.clone());
+        if let Some(existing) = self.loc_tree.get(&key).map(|entry| entry.0.clone()) {
+            self.replace(&vn, &existing);
+            return existing;
+        }
+
+        let inserted = self.loc_tree.insert(key);
+        debug_assert!(inserted, "xref preflight and insertion disagree");
+        vn.write().unwrap().set_flags(varnode_flags::INSERT);
+        let inserted = self.def_tree.insert(VarnodeDefRef(vn.clone()));
+        debug_assert!(inserted, "new xref location duplicated in definition tree");
+        vn
+    }
+
+    // RUGRA-GLUE: Arc-identity ownership check required because BTreeSet::get
+    // only proves semantic-key equality; a stale or foreign Arc can share it.
+    fn owns_loc_ref(&self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        self.loc_tree
+            .get(&VarnodeLocRef(vn.clone()))
+            .is_some_and(|entry| Arc::ptr_eq(&entry.0, vn))
+    }
+
+    // RUGRA-GLUE: definition-tree half of the bank Arc-identity check.
+    fn owns_def_ref(&self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        self.def_tree
+            .get(&VarnodeDefRef(vn.clone()))
+            .is_some_and(|entry| Arc::ptr_eq(&entry.0, vn))
+    }
+
+    // RUGRA-GLUE: shared checked/unchecked transition for Ghidra
+    // VarnodeBank::setInput after its precondition checks.
+    fn transition_input(&mut self, vn: Arc<RwLock<Varnode>>) -> Arc<RwLock<Varnode>> {
+        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
+        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        debug_assert!(
+            loc_removed && def_removed,
+            "setInput requires a bank-owned free Varnode"
+        );
+        vn.write()
+            .unwrap()
+            .set_flags(varnode_flags::INPUT | varnode_flags::COVERDIRTY);
+        self.xref(vn)
+    }
+
+    // RUGRA-GLUE: shared checked/unchecked transition for Ghidra
+    // VarnodeBank::setDef after its precondition checks.
+    fn transition_def(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+        op: Weak<RwLock<PcodeOp>>,
+    ) -> Arc<RwLock<Varnode>> {
+        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
+        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        debug_assert!(
+            loc_removed && def_removed,
+            "setDef requires a bank-owned free Varnode"
+        );
+        {
+            let mut value = vn.write().unwrap();
+            value.def = Some(op);
+            value.set_flags(varnode_flags::WRITTEN | varnode_flags::COVERDIRTY);
+        }
+        self.xref(vn)
     }
 
     // Ghidra: varnode.cc:1250 VarnodeBank::create
@@ -1868,45 +2148,32 @@ impl VarnodeBank {
         // set INSERT flag. Only createDef/xref sets INSERT (for written
         // varnodes). Free varnodes (created via newVarnode→create) have no
         // INSERT — isHeritageKnown returns false — rename processes them.
-        let mut vn = Varnode::new(size, loc);
-        vn.create_index = self.create_index;
-        self.create_index += 1;
-
-        let rc = Arc::new(RwLock::new(vn));
-        self.loc_tree.insert(VarnodeLocRef(rc.clone()));
-        self.def_tree.insert(VarnodeDefRef(rc.clone()));
-        rc
+        self.insert_free(Varnode::new(size, loc))
     }
 
-    // Ghidra: varnode.cc:1218 VarnodeBank::createWithSpace
-    /// Create a new varnode with explicit address space
-    pub fn create_with_space(&mut self, size: usize, space: AddressSpace, offset: u64) -> Arc<RwLock<Varnode>> {
-        let vn_arc = self.create(size, Address::new(offset));
-        vn_arc.write().unwrap().address_space = space;
-        vn_arc
+    // Ghidra: varnode.cc:1250 VarnodeBank::create
+    /// Explicit-space Rust adapter for Ghidra's Address-valued `create`.
+    pub fn create_with_space(
+        &mut self,
+        size: usize,
+        space: AddressSpace,
+        offset: u64,
+    ) -> Arc<RwLock<Varnode>> {
+        self.insert_free(Varnode::new_with_space(size, space, offset))
     }
 
     // Ghidra: varnode.cc:1265 VarnodeBank::createUnique
     /// Create a new unique varnode
     pub fn create_unique(&mut self, size: usize) -> Arc<RwLock<Varnode>> {
-        let addr = Address::new(self.uniqid);
+        let offset = self.uniqid;
         self.uniqid += size as u64;
-        let vn_arc = self.create(size, addr);
-        vn_arc.write().unwrap().address_space = AddressSpace::Unique;
-        vn_arc
+        self.create_with_space(size, self.uniq_space, offset)
     }
 
-    // Ghidra: varnode.cc:1218 VarnodeBank::createConstant
-    /// Create a new constant varnode
+    // Ghidra: varnode.cc:1250 VarnodeBank::create
+    /// Constant-address Rust adapter for Ghidra's Address-valued `create`.
     pub fn create_constant(&mut self, size: usize, val: u64) -> Arc<RwLock<Varnode>> {
-        let addr = Address::new(val);
-        let vn = self.create(size, addr);
-        {
-            let mut vn_w = vn.write().unwrap();
-            vn_w.set_flags(varnode_flags::CONSTANT);
-            vn_w.address_space = AddressSpace::Const;
-        }
-        vn
+        self.create_with_space(size, AddressSpace::Const, val)
     }
 
     // Ghidra: varnode.cc:1411 VarnodeBank::createDef
@@ -1918,13 +2185,25 @@ impl VarnodeBank {
         loc: Address,
         op: &Arc<RwLock<PcodeOp>>,
     ) -> Arc<RwLock<Varnode>> {
-        let vn = self.create(size, loc);
-        vn.write().unwrap().def = Some(Arc::downgrade(op));
-        // Re-insert into def_tree with the def set (xref equivalent).
-        // create() already inserted into loc_tree + def_tree as free.
-        // set_def re-inserts with the def op assigned.
-        self.set_def(vn.clone(), Arc::downgrade(op));
-        vn
+        self.create_def_with_space(size, AddressSpace::Ram, loc.as_u64(), op)
+    }
+
+    // Ghidra: varnode.cc:1411 VarnodeBank::createDef
+    /// Explicit-address-space form required by Rugra's split Address model.
+    pub fn create_def_with_space(
+        &mut self,
+        size: usize,
+        space: AddressSpace,
+        offset: u64,
+        op: &Arc<RwLock<PcodeOp>>,
+    ) -> Arc<RwLock<Varnode>> {
+        let vn = self.allocate(Varnode::new_with_space(size, space, offset));
+        {
+            let mut value = vn.write().unwrap();
+            value.def = Some(Arc::downgrade(op));
+            value.set_flags(varnode_flags::WRITTEN | varnode_flags::COVERDIRTY);
+        }
+        self.xref(vn)
     }
 
     // Ghidra: varnode.cc:1426 VarnodeBank::createDefUnique
@@ -1935,25 +2214,38 @@ impl VarnodeBank {
         size: usize,
         op: &Arc<RwLock<PcodeOp>>,
     ) -> Arc<RwLock<Varnode>> {
-        let addr = Address::new(self.uniqid);
+        let offset = self.uniqid;
         self.uniqid += size as u64;
-        let vn = self.create_def(size, addr, op);
-        vn.write().unwrap().address_space = AddressSpace::Unique;
-        vn
+        self.create_def_with_space(size, self.uniq_space, offset, op)
     }
 
     // Ghidra: varnode.cc:1358 VarnodeBank::setInput
-    /// Mark a varnode as an input
-    /// Mark a varnode as a function input. Faithful to Ghidra's
-    /// VarnodeBank::makeInput which re-inserts via xref (sets INSERT).
-    pub fn set_input(&mut self, vn: Arc<RwLock<Varnode>>) {
-        self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+    /// Mark a bank-owned free varnode as a function input. Ghidra's
+    /// `setInput` can return a different canonical pointer after xref; the
+    /// Rust result returns that canonical Arc and reports invalid transitions.
+    pub fn set_input(&mut self, vn: Arc<RwLock<Varnode>>) -> Result<Arc<RwLock<Varnode>>> {
+        let value = vn.read().unwrap();
+        if !value.is_free() {
+            return Err(anyhow!("Making input out of varnode which is not free"));
+        }
+        if value.is_constant() {
+            return Err(anyhow!("Making input out of constant varnode"));
+        }
+        drop(value);
+        if !self.owns_loc_ref(&vn) || !self.owns_def_ref(&vn) {
+            return Err(anyhow!("Making input out of unmanaged varnode"));
+        }
+        Ok(self.transition_input(vn))
+    }
 
-        vn.write().unwrap().set_flags(varnode_flags::INPUT | varnode_flags::INSERT);
-
-        self.loc_tree.insert(VarnodeLocRef(vn.clone()));
-        self.def_tree.insert(VarnodeDefRef(vn.clone()));
+    // RUGRA-GLUE: internal non-fallible entry for callers that have just
+    // allocated a bank-owned, non-constant free Varnode.
+    pub(crate) fn set_input_prevalidated(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+    ) -> Arc<RwLock<Varnode>> {
+        debug_assert!(vn.read().unwrap().is_free() && !vn.read().unwrap().is_constant());
+        self.transition_input(vn)
     }
 
     // Ghidra: varnode.cc:1380 VarnodeBank::setDef
@@ -1961,26 +2253,83 @@ impl VarnodeBank {
     /// Set the defining op of a varnode. Faithful to Ghidra's model where
     /// createDef (varnode.cc:1411) calls xref which sets INSERT.
     /// A varnode with a def is "inserted" — isHeritageKnown returns true.
-    pub fn set_def(&mut self, vn: Arc<RwLock<Varnode>>, op: Weak<RwLock<PcodeOp>>) {
-        self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        self.def_tree.remove(&VarnodeDefRef(vn.clone()));
-
-        let mut v = vn.write().unwrap();
-        v.set_flags(varnode_flags::WRITTEN | varnode_flags::INSERT);
-        v.def = Some(op);
-
-        drop(v);
-        self.loc_tree.insert(VarnodeLocRef(vn.clone()));
-        self.def_tree.insert(VarnodeDefRef(vn.clone()));
+    pub fn set_def(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+        op: Weak<RwLock<PcodeOp>>,
+    ) -> Result<Arc<RwLock<Varnode>>> {
+        let value = vn.read().unwrap();
+        if !value.is_free() {
+            let address = op
+                .upgrade()
+                .map(|operation| operation.read().unwrap().get_addr().as_u64())
+                .unwrap_or(0);
+            return Err(anyhow!(
+                "Defining varnode which is not free at r0x{address:08x}"
+            ));
+        }
+        if value.is_constant() {
+            let address = op
+                .upgrade()
+                .map(|operation| operation.read().unwrap().get_addr().as_u64())
+                .unwrap_or(0);
+            return Err(anyhow!("Assignment to constant at r0x{address:08x}"));
+        }
+        drop(value);
+        if !self.owns_loc_ref(&vn) || !self.owns_def_ref(&vn) {
+            return Err(anyhow!("Defining unmanaged varnode"));
+        }
+        Ok(self.transition_def(vn, op))
     }
 
-    // Ghidra: varnode.cc:1218 VarnodeBank::destroyVarnode
-    /// Remove a varnode from both trees. Faithful to `VarnodeBank::destroy`.
-    /// The varnode is detached from the bank; if no other Arc holds it, it
-    /// is dropped.
-    pub fn destroy_varnode(&mut self, vn: &Arc<RwLock<Varnode>>) {
-        self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+    // RUGRA-GLUE: internal non-fallible entry for callers that have just
+    // allocated a bank-owned, non-constant free Varnode.
+    pub(crate) fn set_def_prevalidated(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+        op: Weak<RwLock<PcodeOp>>,
+    ) -> Arc<RwLock<Varnode>> {
+        debug_assert!(vn.read().unwrap().is_free() && !vn.read().unwrap().is_constant());
+        self.transition_def(vn, op)
+    }
+
+    // Ghidra: varnode.cc:1276 VarnodeBank::destroy
+    /// Remove a detached varnode from both trees. Ghidra rejects an integrated
+    /// value (a defining op or any descendants) before erasing either index.
+    /// Rugra additionally rejects a foreign/stale Arc that only shares the key.
+    pub fn destroy_varnode(&mut self, vn: &Arc<RwLock<Varnode>>) -> Result<()> {
+        let value = vn.read().unwrap();
+        if value.get_def().is_some() || !value.has_no_descend() {
+            return Err(anyhow!("Deleting integrated varnode"));
+        }
+        drop(value);
+        if !self.owns_loc_ref(vn) || !self.owns_def_ref(vn) {
+            return Err(anyhow!("Deleting unmanaged varnode"));
+        }
+        self.destroy_varnode_prevalidated(vn);
+        Ok(())
+    }
+
+    // RUGRA-GLUE: internal non-fallible entry for callers that have already
+    // detached the defining op and every descendant under a Ghidra-equivalent
+    // guard. Debug builds revalidate both integration and Arc ownership.
+    pub(crate) fn destroy_varnode_prevalidated(&mut self, vn: &Arc<RwLock<Varnode>>) {
+        let value = vn.read().unwrap();
+        debug_assert!(
+            value.get_def().is_none() && value.has_no_descend(),
+            "destroy requires a detached Varnode"
+        );
+        drop(value);
+        debug_assert!(
+            self.owns_loc_ref(vn) && self.owns_def_ref(vn),
+            "destroy requires a bank-owned Varnode"
+        );
+        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
+        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        debug_assert!(
+            loc_removed && def_removed,
+            "destroy ownership preflight disagrees with removal"
+        );
     }
 
     // Ghidra: funcdata_varnode.cc:340 Funcdata::setInputVarnode (vbank-level core)
@@ -1997,10 +2346,7 @@ impl VarnodeBank {
     /// not yet wired; conservative subset — these properties affect later
     /// type/recovery passes but not SSA correctness, so heritage rename
     /// (heritage.cc:2502/2512) is unaffected.
-    pub fn set_input_varnode(
-        &mut self,
-        vn: Arc<RwLock<Varnode>>,
-    ) -> Arc<RwLock<Varnode>> {
+    pub fn set_input_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> Arc<RwLock<Varnode>> {
         // (1) Early-out if already an input.
         if vn.read().unwrap().is_input() {
             return vn;
@@ -2008,9 +2354,9 @@ impl VarnodeBank {
         // (2) Overlap dedup against existing inputs. Ghidra uses
         // vbank.beginDef(Varnode::input, addr+size) then walks back; Rugra
         // scans loc_tree for input varnodes overlapping [vn_addr, vn_end).
-        let (vn_addr, vn_size) = {
+        let (vn_space, vn_addr, vn_size) = {
             let r = vn.read().unwrap();
-            (r.loc, r.size)
+            (r.address_space, r.loc, r.size)
         };
         let vn_end = vn_addr.as_u64().saturating_add(vn_size as u64);
         let existing = {
@@ -2018,7 +2364,9 @@ impl VarnodeBank {
             for loc_ref in self.loc_tree.iter() {
                 let cand = loc_ref.0.clone();
                 let cr = cand.read().unwrap();
-                if !cr.is_input() { continue; }
+                if !cr.is_input() || cr.address_space != vn_space {
+                    continue;
+                }
                 let c_start = cr.loc.as_u64();
                 let c_end = c_start.saturating_add(cr.size as u64);
                 let overlaps = vn_addr.as_u64() < c_end && c_start < vn_end;
@@ -2041,7 +2389,7 @@ impl VarnodeBank {
             return existing;
         }
         // (3) Mark as input via set_input (sets INPUT | INSERT, re-inserts).
-        self.set_input(vn.clone());
+        let vn = self.set_input_prevalidated(vn);
         // (4) ProtoModel effect-property setting omitted (conservative subset).
         vn
     }
@@ -2051,21 +2399,51 @@ impl VarnodeBank {
         self.loc_tree.clear();
         self.def_tree.clear();
         self.create_index = 0;
-        self.uniqid = 0;
+        self.uniqid = ANALYSIS_UNIQUE_START;
     }
 
-    
     // Ghidra: varnode.cc:1316 VarnodeBank::makeFree
-    pub fn make_free(&mut self, vn: &mut Varnode) {
-        vn.flags &= !varnode_flags::INPUT;
-        vn.flags &= !varnode_flags::WRITTEN;
-        vn.def = None;
+    /// Convert a bank-owned input/written Varnode to a free Varnode while
+    /// preserving both BTree key invariants. Arc identity rejects stale or
+    /// foreign handles that merely compare equal to a bank member.
+    pub fn make_free(&mut self, vn: &Arc<RwLock<Varnode>>) -> Result<()> {
+        if !self.owns_loc_ref(vn) || !self.owns_def_ref(vn) {
+            return Err(anyhow!("Making unmanaged varnode free"));
+        }
+        self.make_free_prevalidated(vn);
+        Ok(())
     }
 
-    // Ghidra: varnode.cc:1332 VarnodeBank::replace
-    pub fn replace(&mut self, vn1: &mut Varnode, vn2: &mut Varnode) {
-        vn2.size = vn1.size;
-        vn2.loc = vn1.loc;
+    // RUGRA-GLUE: internal entry for a bank iterator's current Varnode. The
+    // iterator establishes Arc ownership; debug builds preserve that proof.
+    pub(crate) fn make_free_prevalidated(&mut self, vn: &Arc<RwLock<Varnode>>) {
+        debug_assert!(
+            self.owns_loc_ref(vn) && self.owns_def_ref(vn),
+            "makeFree requires a bank-owned Varnode"
+        );
+        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
+        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        debug_assert!(
+            loc_removed && def_removed,
+            "makeFree ownership preflight disagrees with removal"
+        );
+        {
+            let mut value = vn.write().unwrap();
+            value.def = None;
+            value.set_flags(varnode_flags::COVERDIRTY);
+            value.clear_flags(
+                varnode_flags::INSERT
+                    | varnode_flags::INPUT
+                    | varnode_flags::WRITTEN
+                    | varnode_flags::INDIRECT_CREATION,
+            );
+        }
+        let loc_inserted = self.loc_tree.insert(VarnodeLocRef(vn.clone()));
+        let def_inserted = self.def_tree.insert(VarnodeDefRef(vn.clone()));
+        debug_assert!(
+            loc_inserted && def_inserted,
+            "makeFree must reinsert a unique free key"
+        );
     }
 
     // Ghidra: varnode.cc:1831 VarnodeBank::beginDef(uint4 fl)
@@ -2141,12 +2519,12 @@ impl VarnodeBank {
         false // Placeholder for structure alignment
     }
 
-    // Ghidra: varnode.cc:1218 VarnodeBank::numVarnodes
+    // Ghidra: varnode.hh:389 VarnodeBank::numVarnodes
     pub fn num_varnodes(&self) -> usize {
         self.loc_tree.len()
     }
 
-    // Ghidra: varnode.cc:1218 VarnodeBank::getCreateIndex
+    // Ghidra: varnode.hh:394 VarnodeBank::getCreateIndex
     pub fn get_create_index(&self) -> u32 {
         self.create_index
     }
@@ -2706,7 +3084,310 @@ mod tests {
         let vn = bank.create(4, loc);
 
         assert_eq!(bank.num_varnodes(), 1);
-        assert_eq!(vn.read().unwrap().get_size(), 4);
+        let vn = vn.read().unwrap();
+        assert_eq!(vn.get_size(), 4);
+        assert_eq!(vn.flags, varnode_flags::COVERDIRTY);
+        assert_eq!(vn.get_consume(), u64::MAX);
+        assert_eq!(vn.get_nzm(), u64::MAX);
+        let dt = vn.get_type().expect("bank creations carry an unknown type");
+        assert_eq!(dt.get_name(), "xunknown4");
+        assert_eq!(dt.get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(dt.get_size(), 4);
+    }
+
+    #[test]
+    fn test_varnode_bank_initial_state_matches_oracle() {
+        let mut bank = VarnodeBank::new();
+        let op = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1000), 0),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+
+        let defined = bank.create_with_space(8, AddressSpace::Register, 0x20);
+        let defined = bank
+            .set_def(defined, Arc::downgrade(&op))
+            .expect("fresh defined Varnode");
+        let free = bank.create_with_space(8, AddressSpace::Register, 0x38);
+        let constant = bank.create_constant(4, 0x1234);
+        let input = bank.create_with_space(8, AddressSpace::Register, 0x30);
+        let input = bank.set_input(input).expect("fresh input Varnode");
+        let annotation = bank.create_with_space(8, AddressSpace::Iop, 0x99);
+        let unique0 = bank.create_unique(8);
+        let unique1 = bank.create_unique(4);
+
+        let defined_rg = defined.read().unwrap();
+        assert_eq!(defined_rg.flags, 0x0100_0030);
+        assert_eq!(defined_rg.get_create_index(), 0);
+        assert!(defined_rg.is_written());
+        assert!(defined_rg.has_cover());
+        assert_eq!(defined_rg.count_descends(), 0);
+        assert!(defined_rg.cover.is_none());
+        assert!(defined_rg.get_def().is_some());
+
+        let free_rg = free.read().unwrap();
+        assert_eq!(free_rg.flags, 0x0100_0000);
+        assert_eq!(free_rg.get_create_index(), 1);
+        assert!(free_rg.is_free());
+        assert!(!free_rg.has_cover());
+
+        let constant_rg = constant.read().unwrap();
+        assert_eq!(constant_rg.flags, varnode_flags::CONSTANT);
+        assert_eq!(constant_rg.get_nzm(), 0x1234);
+        assert_eq!(constant_rg.get_create_index(), 2);
+
+        let input_rg = input.read().unwrap();
+        assert_eq!(input_rg.flags, 0x0100_0028);
+        assert_eq!(input_rg.get_create_index(), 3);
+        assert!(input_rg.is_input());
+
+        let annotation_rg = annotation.read().unwrap();
+        assert_eq!(annotation_rg.flags, 0x0100_0004);
+        assert_eq!(annotation_rg.get_create_index(), 4);
+        assert!(annotation_rg.is_annotation());
+
+        assert_eq!(unique0.read().unwrap().get_offset(), ANALYSIS_UNIQUE_START);
+        assert_eq!(
+            unique1.read().unwrap().get_offset(),
+            ANALYSIS_UNIQUE_START + 8
+        );
+        assert!(Arc::ptr_eq(
+            &defined_rg.get_type().unwrap(),
+            &free_rg.get_type().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn test_varnode_bank_space_key_is_final_before_insertion() {
+        let mut bank = VarnodeBank::new();
+        let register = bank.create_with_space(8, AddressSpace::Register, 0x20);
+        let unique = bank.create_unique(8);
+        let constant = bank.create_constant(8, 7);
+
+        assert_eq!(bank.iter_space(AddressSpace::Register).count(), 1);
+        assert_eq!(bank.iter_space(AddressSpace::Unique).count(), 1);
+        assert_eq!(bank.iter_space(AddressSpace::Const).count(), 1);
+        assert!(bank.loc_tree.contains(&VarnodeLocRef(register)));
+        assert!(bank.loc_tree.contains(&VarnodeLocRef(unique)));
+        assert!(bank.loc_tree.contains(&VarnodeLocRef(constant)));
+    }
+
+    #[test]
+    fn test_varnode_bank_comparator_class_space_and_eq_contract() {
+        let mut bank = VarnodeBank::new();
+        let op = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1000), 0),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+        let input = bank.create_with_space(8, AddressSpace::Register, 0x20);
+        let input = bank.set_input(input).expect("fresh input");
+        let written = bank.create_def_with_space(8, AddressSpace::Register, 0x20, &op);
+        let free = bank.create_with_space(8, AddressSpace::Register, 0x20);
+
+        let classes: Vec<_> = bank
+            .loc_tree
+            .iter()
+            .filter_map(|entry| {
+                let value = entry.0.read().unwrap();
+                (value.address_space == AddressSpace::Register && value.loc.as_u64() == 0x20)
+                    .then_some(if value.is_input() {
+                        "input"
+                    } else if value.is_written() {
+                        "written"
+                    } else {
+                        "free"
+                    })
+            })
+            .collect();
+        assert_eq!(classes, ["input", "written", "free"]);
+        assert!(bank.loc_tree.contains(&VarnodeLocRef(input)));
+        assert!(bank.loc_tree.contains(&VarnodeLocRef(written)));
+        assert!(bank.loc_tree.contains(&VarnodeLocRef(free)));
+
+        let overlay = Arc::new(RwLock::new(Varnode::new_with_space(
+            8,
+            AddressSpace::Overlay,
+            0x40,
+        )));
+        let other = Arc::new(RwLock::new(Varnode::new_with_space(
+            8,
+            AddressSpace::Other(1),
+            0x40,
+        )));
+        let overlay_key = VarnodeLocRef(overlay);
+        let other_key = VarnodeLocRef(other);
+        assert_ne!(overlay_key.cmp(&other_key), std::cmp::Ordering::Equal);
+        assert_eq!(
+            overlay_key == other_key,
+            overlay_key.cmp(&other_key).is_eq()
+        );
+        assert_eq!(
+            other_key == overlay_key,
+            other_key.cmp(&overlay_key).is_eq()
+        );
+    }
+
+    #[test]
+    fn test_varnode_bank_xref_returns_canonical_and_rewires_repeated_slots() {
+        let mut bank = VarnodeBank::new();
+        let canonical = bank.create_with_space(8, AddressSpace::Register, 0x50);
+        let canonical = bank.set_input(canonical).expect("fresh canonical input");
+        let duplicate = bank.create_with_space(8, AddressSpace::Register, 0x50);
+        duplicate
+            .write()
+            .unwrap()
+            .set_flags(varnode_flags::SPACEBASE);
+        let reader = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1010), 1),
+            crate::opcodes::OpCode::CPUI_INT_ADD,
+        )));
+        reader.write().unwrap().inrefs = vec![duplicate.clone(), duplicate.clone()];
+        duplicate.write().unwrap().add_descend(&reader);
+        duplicate.write().unwrap().add_descend(&reader);
+
+        let returned = bank
+            .set_input(duplicate.clone())
+            .expect("duplicate input is canonicalized");
+        assert!(Arc::ptr_eq(&returned, &canonical));
+        assert_eq!(duplicate.read().unwrap().count_descends(), 0);
+        assert_eq!(canonical.read().unwrap().count_descends(), 2);
+        assert!(reader
+            .read()
+            .unwrap()
+            .inrefs
+            .iter()
+            .all(|input| Arc::ptr_eq(input, &canonical)));
+    }
+
+    #[test]
+    fn test_varnode_bank_rejects_foreign_and_stale_equal_keys() {
+        let mut bank = VarnodeBank::new();
+        let mut foreign_bank = VarnodeBank::new();
+        let canonical = bank.create_with_space(8, AddressSpace::Register, 0x60);
+        let foreign = foreign_bank.create_with_space(8, AddressSpace::Register, 0x60);
+        assert!(bank.set_input(foreign.clone()).is_err());
+        assert!(bank.make_free(&foreign).is_err());
+        assert!(bank.owns_loc_ref(&canonical));
+        assert!(bank.owns_def_ref(&canonical));
+
+        let stale = canonical.clone();
+        bank.clear();
+        let replacement = bank.create_with_space(8, AddressSpace::Register, 0x60);
+        assert!(bank.set_input(stale.clone()).is_err());
+        assert!(bank.make_free(&stale).is_err());
+        assert!(bank.owns_loc_ref(&replacement));
+        assert!(bank.owns_def_ref(&replacement));
+    }
+
+    #[test]
+    fn test_varnode_bank_destroy_guards_and_prevalidated_delete() {
+        let mut bank = VarnodeBank::new();
+        let operation = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1020), 2),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+
+        let free = bank.create_with_space(8, AddressSpace::Register, 0x68);
+        let before = bank.num_varnodes();
+        bank.destroy_varnode_prevalidated(&free);
+        assert_eq!(bank.num_varnodes(), before - 1);
+
+        let defined = bank.create_def_with_space(8, AddressSpace::Register, 0x70, &operation);
+        assert_eq!(
+            bank.destroy_varnode(&defined)
+                .expect_err("defined Varnode is integrated")
+                .to_string(),
+            "Deleting integrated varnode"
+        );
+        assert!(bank.owns_loc_ref(&defined));
+
+        let descendant = bank.create_with_space(8, AddressSpace::Register, 0x78);
+        operation.write().unwrap().inrefs.push(descendant.clone());
+        descendant.write().unwrap().add_descend(&operation);
+        assert_eq!(
+            bank.destroy_varnode(&descendant)
+                .expect_err("read Varnode is integrated")
+                .to_string(),
+            "Deleting integrated varnode"
+        );
+        assert!(bank.owns_loc_ref(&descendant));
+
+        let mut foreign_bank = VarnodeBank::new();
+        let foreign = foreign_bank.create_with_space(8, AddressSpace::Register, 0x80);
+        assert_eq!(
+            bank.destroy_varnode(&foreign)
+                .expect_err("foreign Arc is unmanaged")
+                .to_string(),
+            "Deleting unmanaged varnode"
+        );
+    }
+
+    #[test]
+    fn test_term_order_strips_constant_multiply_and_uses_address_only() {
+        let mut bank = VarnodeBank::new();
+        let constant_a = bank.create_constant(8, 1);
+        let constant_b = bank.create_constant(4, 0xffff);
+        let register = bank.create_with_space(8, AddressSpace::Register, 0x20);
+        let same_address_other_size = bank.create_with_space(4, AddressSpace::Register, 0x20);
+        let ram = bank.create_with_space(8, AddressSpace::Ram, 0x20);
+        assert_eq!(
+            constant_a
+                .read()
+                .unwrap()
+                .term_order(&constant_b.read().unwrap()),
+            0
+        );
+        assert_eq!(
+            constant_a
+                .read()
+                .unwrap()
+                .term_order(&register.read().unwrap()),
+            1
+        );
+        assert_eq!(
+            register
+                .read()
+                .unwrap()
+                .term_order(&constant_a.read().unwrap()),
+            -1
+        );
+        assert_eq!(
+            register
+                .read()
+                .unwrap()
+                .term_order(&same_address_other_size.read().unwrap()),
+            0
+        );
+        assert_eq!(
+            ram.read().unwrap().term_order(&register.read().unwrap()),
+            -1
+        );
+
+        let multiply = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1030), 3),
+            crate::opcodes::OpCode::CPUI_INT_MULT,
+        )));
+        let coefficient = bank.create_constant(8, 7);
+        multiply.write().unwrap().inrefs = vec![register.clone(), coefficient];
+        let multiplied = bank.create_def_with_space(8, AddressSpace::Unique, 0x200, &multiply);
+        assert_eq!(
+            multiplied
+                .read()
+                .unwrap()
+                .term_order(&register.read().unwrap()),
+            0
+        );
+    }
+
+    #[test]
+    fn test_get_cover_lazily_rebuilds_non_null_input_cover() {
+        let mut bank = VarnodeBank::new();
+        let input = bank.create_with_space(8, AddressSpace::Register, 0x70);
+        let input = bank.set_input(input).expect("fresh input");
+        let mut value = input.write().unwrap();
+        value.calc_cover();
+        assert_ne!(value.flags & varnode_flags::COVERDIRTY, 0);
+        assert!(value.get_cover().is_some());
+        assert_eq!(value.flags & varnode_flags::COVERDIRTY, 0);
     }
 
     // --- Ghidra-faithful flag accessors (varnode.hh:235-330) ---

@@ -279,36 +279,110 @@ impl Funcdata {
         self.vbank.set_input_varnode(vn)
     }
 
-    // Ghidra: funcdata_varnode.cc Funcdata::deleteVarnode
-    /// Remove a varnode from both loc/def trees. Faithful to
-    /// `Funcdata::deleteVarnode` (which delegates to VarnodeBank::destroy).
-    pub fn delete_varnode(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
-        self.vbank.destroy_varnode(vn);
+    // RUGRA-GLUE: fallible Rust adapter around the checked portion of
+    // Ghidra Funcdata::setInputVarnode (funcdata_varnode.cc:340-373).
+    fn set_input_varnode_checked(
+        &mut self,
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> crate::error::Result<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        if vn.read().unwrap().is_input() {
+            return Ok(vn);
+        }
+        let (space, offset, size) = {
+            let value = vn.read().unwrap();
+            (value.get_space(), value.get_offset(), value.get_size())
+        };
+        let end = offset.wrapping_add(size as u64);
+        for entry in &self.vbank.loc_tree {
+            let candidate = entry.0.clone();
+            let value = candidate.read().unwrap();
+            if !value.is_input() || value.get_space() != space {
+                continue;
+            }
+            let candidate_offset = value.get_offset();
+            let candidate_end = candidate_offset.wrapping_add(value.get_size() as u64);
+            if offset < candidate_end && candidate_offset < end {
+                if candidate_offset == offset && value.get_size() == size {
+                    drop(value);
+                    return Ok(candidate);
+                }
+                return Err(crate::error::Error::Lowlevel(
+                    "Overlapping input varnodes".to_string(),
+                ));
+            }
+        }
+        self.vbank
+            .set_input(vn)
+            .map_err(|error| crate::error::Error::Lowlevel(error.to_string()))
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::combineInputVarnodes
-    /// Combine two contiguous input varnodes into one. Faithful to
-    /// `Funcdata::combineInputVarnodes` (funcdata_varnode.cc:381-454).
-    /// Replaces PIECE(hi,lo) ops with COPY of the combined varnode; creates
-    /// SUBPIECE replacements for any non-PIECE readers of hi/lo.
+    // Ghidra: funcdata.hh:294 Funcdata::deleteVarnode
+    /// Remove a varnode from both loc/def trees. Faithful to
+    /// `Funcdata::deleteVarnode` (which delegates to VarnodeBank::destroy).
+    pub fn delete_varnode(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> crate::error::Result<()> {
+        self.vbank
+            .destroy_varnode(vn)
+            .map_err(|error| crate::error::Error::Lowlevel(error.to_string()))
+    }
+
+    // Ghidra: funcdata_varnode.cc:381 Funcdata::combineInputVarnodes
+    /// Combine two contiguous input varnodes into one, following
+    /// `Funcdata::combineInputVarnodes` (funcdata_varnode.cc:381-454) for the
+    /// covered LE/no-symbol/no-effect graph. Replaces PIECE(hi,lo) ops with
+    /// COPY of the combined varnode and creates SUBPIECE replacements for
+    /// non-PIECE readers. Architecture property/high-level side effects and
+    /// nullable-slot representation remain outside this adapter's proof.
     pub fn combine_input_varnodes(
         &mut self,
         vn_hi: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         vn_lo: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    ) {
+    ) -> crate::error::Result<()> {
         use crate::opcodes::OpCode;
-        // Determine contiguity (little-endian: lo is at lower address).
-        let lo_off = vn_lo.read().unwrap().get_offset();
-        let lo_size = vn_lo.read().unwrap().get_size();
-        let hi_off = vn_hi.read().unwrap().get_offset();
-        let hi_size = vn_hi.read().unwrap().get_size();
-        let combined_addr = if lo_off + lo_size as u64 == hi_off {
-            lo_off
-        } else if hi_off + hi_size as u64 == lo_off {
-            hi_off
+        let (hi_space, hi_offset, hi_size, hi_is_input) = {
+            let value = vn_hi.read().unwrap();
+            (
+                value.get_space(),
+                value.get_offset(),
+                value.get_size(),
+                value.is_input(),
+            )
+        };
+        let (lo_space, lo_offset, lo_size, lo_is_input) = {
+            let value = vn_lo.read().unwrap();
+            (
+                value.get_space(),
+                value.get_offset(),
+                value.get_size(),
+                value.is_input(),
+            )
+        };
+        if !hi_is_input || !lo_is_input {
+            return Err(crate::error::Error::Lowlevel(
+                "Varnodes being combined are not inputs".to_string(),
+            ));
+        }
+        let (combined_space, combined_offset, contiguous) = if lo_space.is_big_endian() {
+            (
+                hi_space,
+                hi_offset,
+                hi_space == lo_space
+                    && hi_offset.wrapping_add(hi_size as u64) == lo_offset,
+            )
         } else {
-            // Not contiguous — cannot combine.
-            return;
+            (
+                lo_space,
+                lo_offset,
+                hi_space == lo_space
+                    && lo_offset.wrapping_add(lo_size as u64) == hi_offset,
+            )
+        };
+        if !contiguous {
+            return Err(crate::error::Error::Lowlevel(
+                "Input varnodes being combined are not contiguous".to_string(),
+            ));
         };
         // Collect PIECE(hi,lo) ops and detect other readers.
         let mut piece_list = Vec::new();
@@ -346,54 +420,102 @@ impl Funcdata {
                 }
             }
         }
+        let entry_block = if other_ops_hi || other_ops_lo {
+            match self.bblocks.get_block(0) {
+                Some(block) => Some(block),
+                None => {
+                    return Err(crate::error::Error::Lowlevel(
+                        "Missing entry block for input combination".to_string(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         // For each PIECE: remove input[1], unset input[0] (will be replaced).
         for p in &piece_list {
             self.op_remove_input(p, 1);
-            self.op_unset_input(p, 0);
+            // Rugra's Vec cannot hold Ghidra's cleared/null slot. Remove slot
+            // zero as well, then insert the combined input below. This avoids
+            // retaining a deleted high-input Arc and a second eraseDescend.
+            self.op_remove_input(p, 0);
         }
-        // Create SUBPIECE replacements for non-PIECE readers.
-        let entry_block = self.bblocks.get_block(0);
+        // Ghidra creates and total-replaces the non-PIECE readers before
+        // destroying the old inputs. Keep the SUBPIECE ops for slot 0, which
+        // is connected only after the combined canonical input exists.
+        let sub_hi = if other_ops_hi {
+            let Some(bb) = entry_block.as_ref() else {
+                return Err(crate::error::Error::Lowlevel(
+                    "Missing entry block for input combination".to_string(),
+                ));
+            };
+            let block_start = bb.read().unwrap().get_start_addr();
+            let sub = self.new_op(2, block_start);
+            self.op_set_opcode(&sub, OpCode::CPUI_SUBPIECE);
+            let lo_size_const = self.new_constant(4, lo_size as u64);
+            let new_hi = self.vbank.create_def_with_space(
+                hi_size,
+                hi_space,
+                hi_offset,
+                &sub.0,
+            );
+            sub.0.write().unwrap().output = Some(new_hi.clone());
+            self.op_insert_begin(&sub, bb);
+            self.total_replace(vn_hi, new_hi);
+            Some((sub, lo_size_const))
+        } else {
+            None
+        };
+        let sub_lo = if other_ops_lo {
+            let Some(bb) = entry_block.as_ref() else {
+                return Err(crate::error::Error::Lowlevel(
+                    "Missing entry block for input combination".to_string(),
+                ));
+            };
+            let block_start = bb.read().unwrap().get_start_addr();
+            let sub = self.new_op(2, block_start);
+            self.op_set_opcode(&sub, OpCode::CPUI_SUBPIECE);
+            let zero_const = self.new_constant(4, 0);
+            let new_lo = self.vbank.create_def_with_space(
+                lo_size,
+                lo_space,
+                lo_offset,
+                &sub.0,
+            );
+            sub.0.write().unwrap().output = Some(new_lo.clone());
+            self.op_insert_begin(&sub, bb);
+            self.total_replace(vn_lo, new_lo);
+            Some((sub, zero_const))
+        } else {
+            None
+        };
+
+        self.delete_varnode(vn_hi)?;
+        self.delete_varnode(vn_lo)?;
         let out_size = hi_size + lo_size;
-        // Destroy the original input varnodes and create the combined input.
-        self.vbank.destroy_varnode(vn_hi);
-        self.vbank.destroy_varnode(vn_lo);
-        let in_vn = self.new_varnode(out_size, crate::address::Address::new(combined_addr));
-        self.vbank.set_input(in_vn.clone());
-        // Rewrite PIECE ops to COPY.
+        let in_vn = self.vbank.create_with_space(
+            out_size,
+            combined_space,
+            combined_offset,
+        );
+        let in_vn = self.set_input_varnode_checked(in_vn)?;
         for p in &piece_list {
-            self.op_set_input(p, in_vn.clone(), 0);
+            self.op_insert_input(p, in_vn.clone(), 0);
             self.op_set_opcode(p, OpCode::CPUI_COPY);
         }
-        // SUBPIECE replacements for other readers.
-        if other_ops_hi {
-            if let Some(bb) = &entry_block {
-                let sub_hi = self.new_op(2, crate::address::Address::new(0));
-                self.op_set_opcode(&sub_hi, OpCode::CPUI_SUBPIECE);
-                let lo_size_const = self.new_constant(4, lo_size as u64);
-                self.op_set_input(&sub_hi, lo_size_const, 1);
-                let new_hi = self.new_unique_out(hi_size, &sub_hi);
-                new_hi.write().unwrap().update_type(vn_hi.read().unwrap().get_type().unwrap_or_else(|| {
-                    std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new("unknown".into(), hi_size, crate::type_system::datatype::TypeMetatype::Unknown)
-                    ))
-                }));
-                self.op_insert_begin(&sub_hi, bb);
-                self.total_replace(vn_hi, new_hi.clone());
-                self.op_set_input(&sub_hi, in_vn.clone(), 0);
-            }
+        if let Some((sub, offset)) = sub_hi {
+            // `newOp(2)` reserves but cannot represent Ghidra's null slots.
+            // Populate the fresh Vec in final slot order without allocating
+            // observable sentinel Varnodes.
+            self.op_insert_input(&sub, in_vn.clone(), 0);
+            self.op_insert_input(&sub, offset, 1);
         }
-        if other_ops_lo {
-            if let Some(bb) = &entry_block {
-                let sub_lo = self.new_op(2, crate::address::Address::new(0));
-                self.op_set_opcode(&sub_lo, OpCode::CPUI_SUBPIECE);
-                let zero_const = self.new_constant(4, 0);
-                self.op_set_input(&sub_lo, zero_const, 1);
-                let new_lo = self.new_unique_out(lo_size, &sub_lo);
-                self.op_insert_begin(&sub_lo, bb);
-                self.total_replace(vn_lo, new_lo.clone());
-                self.op_set_input(&sub_lo, in_vn.clone(), 0);
-            }
+        if let Some((sub, offset)) = sub_lo {
+            self.op_insert_input(&sub, in_vn, 0);
+            self.op_insert_input(&sub, offset, 1);
         }
+        Ok(())
     }
 
     // Ghidra: funcdata.cc:135 Funcdata::warningHeader
@@ -946,10 +1068,15 @@ impl Funcdata {
         vn.write().unwrap().descend.push(std::sync::Arc::downgrade(&op.0));
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opRemoveInput
-    /// Remove a specific input slot. Faithful to `Funcdata::opRemoveInput`
-    /// (funcdata.hh:478).
+    // Ghidra: funcdata_op.cc:291 Funcdata::opRemoveInput
+    /// Remove a specific input slot. Ghidra first calls `opUnsetInput` so the
+    /// input Varnode loses this op from its descendant list, then removes the
+    /// now-unlinked slot and shifts later slots down by one.
     pub fn op_remove_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
+        if slot >= op.0.read().unwrap().inrefs.len() {
+            return;
+        }
+        self.op_unset_input(op, slot);
         let mut o = op.0.write().unwrap();
         if slot < o.inrefs.len() {
             o.inrefs.remove(slot);
@@ -1063,27 +1190,32 @@ impl Funcdata {
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         newvn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
-        // Snapshot descendant ops and their slots referencing vn.
-        let replacements: Vec<(crate::op::PcodeOpRef, usize)> = {
-            let vn_rg = vn.read().unwrap();
-            vn_rg
+        loop {
+            let descendant = vn
+                .read()
+                .unwrap()
                 .descend
                 .iter()
-                .filter_map(|w| w.upgrade())
-                .filter_map(|op_arc| {
-                    let op_rg = op_arc.read().unwrap();
-                    // Find the slot referencing vn.
-                    let slot = op_rg
-                        .inrefs
-                        .iter()
-                        .position(|v| std::sync::Arc::ptr_eq(v, vn))?;
-                    drop(op_rg);
-                    Some((crate::op::PcodeOpRef(op_arc), slot))
-                })
-                .collect()
-        };
-        for (op, slot) in replacements {
-            self.op_set_input(&op, newvn.clone(), slot);
+                .find_map(std::sync::Weak::upgrade);
+            let Some(descendant) = descendant else {
+                break;
+            };
+            let slot = descendant
+                .read()
+                .unwrap()
+                .inrefs
+                .iter()
+                .position(|input| std::sync::Arc::ptr_eq(input, vn));
+            let Some(slot) = slot else {
+                debug_assert!(false, "totalReplace descendant has no matching input slot");
+                vn.write().unwrap().erase_descend(&descendant);
+                continue;
+            };
+            self.op_set_input(
+                &crate::op::PcodeOpRef(descendant),
+                newvn.clone(),
+                slot,
+            );
         }
     }
 
@@ -2199,7 +2331,7 @@ impl Funcdata {
         self.op_insert(op, &parent, Some(insert_index));
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newIndirectOp
+    // Ghidra: funcdata_op.cc:683 Funcdata::newIndirectOp
     /// Build a CPUI_INDIRECT op that models an indirect effect on a Stack-space
     /// Varnode, caused by a STORE (or CALL) to memory via a spacebase pointer.
     /// Faithful to `Funcdata::newIndirectOp` (funcdata_op.cc:683-698).
@@ -2225,7 +2357,9 @@ impl Funcdata {
         // output: Stack-space varnode at stack_offset, defined by newop.
         // set_def sets WRITTEN + INSERT (faithful to createDef→xref).
         let newout = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
-        self.vbank.set_def(newout.clone(), std::sync::Arc::downgrade(&newop.0));
+        let newout = self
+            .vbank
+            .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
         // Set opcode to INDIRECT
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
@@ -2359,7 +2493,7 @@ impl Funcdata {
         self.heritage.get_load_guard(&op.0)
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newIndirectCreation
+    // Ghidra: funcdata_op.cc:710 Funcdata::newIndirectCreation
     /// Create an INDIRECT op with indirect_creation semantics. Faithful to
     /// `Funcdata::newIndirectCreation` (funcdata_op.cc:710-728). Unlike
     /// `new_indirect_op`, the input is a constant zero, and both the op and
@@ -2381,7 +2515,9 @@ impl Funcdata {
         newop.0.write().unwrap().flags |= pcodeop_flags::INDIRECT_CREATION;
         // output: varnode at addr, defined by newop.
         let newout = self.vbank.create_with_space(sz, crate::space::AddressSpace::Unique, addr);
-        self.vbank.set_def(newout.clone(), std::sync::Arc::downgrade(&newop.0));
+        let newout = self
+            .vbank
+            .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
         // indirect_creation flags on input (if !possibleout) and output.
         if !possibleout {
@@ -2749,12 +2885,12 @@ impl Funcdata {
         // cc:256-257: destroy each input varnode.
         let inputs = op.0.read().unwrap().inrefs.clone();
         for vn in &inputs {
-            self.delete_varnode(vn);
+            self.destroy_varnode(vn);
         }
         // cc:258-259: destroy the output varnode if present.
         let out = op.0.read().unwrap().output.clone();
         if let Some(out_vn) = out {
-            self.delete_varnode(&out_vn);
+            self.destroy_varnode(&out_vn);
         }
         // cc:260: obank.destroy(op).
         self.obank.destroy(op.clone());
@@ -4127,7 +4263,9 @@ impl Funcdata {
             // Output varnode
             if let Some(out_raw) = raw.output() {
                 let out_vn = self.vbank.create_with_space(out_raw.size, out_raw.space, out_raw.offset);
-                self.vbank.set_def(out_vn.clone(), std::sync::Arc::downgrade(&op_ref.0));
+                let out_vn = self
+                    .vbank
+                    .set_def_prevalidated(out_vn, std::sync::Arc::downgrade(&op_ref.0));
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
             // Input varnodes. PcodeEmitFd::dump creates a fresh Varnode for
@@ -4168,7 +4306,7 @@ impl Funcdata {
         eprintln!("[INJECT] {} build_blocks_from_alive done bblocks={}", self.name, self.bblocks.get_size());
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::injectRawOps
+    // RUGRA-GLUE: Batch raw-P-code adapter around Ghidra's PcodeEmitFd::dump conversion and Funcdata bank insertion APIs.
     pub fn inject_raw_ops(&mut self, raw_ops: &[PcodeOpRaw]) {
         if raw_ops.is_empty() {
             return;
@@ -4207,8 +4345,9 @@ impl Funcdata {
                     self.vbank
                         .create_with_space(out_raw.size, out_raw.space, out_raw.offset);
                 // Mark as written and set def
-                self.vbank
-                    .set_def(out_vn.clone(), Arc::downgrade(&op_ref.0));
+                let out_vn = self
+                    .vbank
+                    .set_def_prevalidated(out_vn, Arc::downgrade(&op_ref.0));
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
 
@@ -4269,13 +4408,19 @@ impl Funcdata {
         // Track which offsets we've already marked as INPUT to avoid duplicates
         let mut marked_input = std::collections::HashSet::new();
         for op_ref in &op_refs {
-            let op = op_ref.0.read().unwrap();
+            // Snapshot first. setInput can canonicalize through xref and
+            // rewrite this op's slots, so no read guard on the op may survive
+            // across the bank transition.
+            let (opcode, inputs, output) = {
+                let op = op_ref.0.read().unwrap();
+                (op.opcode, op.inrefs.clone(), op.output.clone())
+            };
 
             // Skip CALL: its register inputs are callee args, not this function's reads.
-            if op.opcode == OpCode::CPUI_CALL {
+            if opcode == OpCode::CPUI_CALL {
                 // Still record any output (call return value in RAX) as defined,
                 // so a later read of RAX is not mistaken for a parameter.
-                if let Some(ref out_arc) = op.output {
+                if let Some(ref out_arc) = output {
                     let out_vn = out_arc.read().unwrap();
                     if out_vn.get_space() == AddressSpace::Register {
                         defined_reg_offsets.insert(out_vn.get_offset());
@@ -4285,20 +4430,28 @@ impl Funcdata {
             }
 
             // First: process reads (inputs) against the *current* defined set.
-            for in_arc in &op.inrefs {
+            for (slot, in_arc) in inputs.into_iter().enumerate() {
                 let vn = in_arc.read().unwrap();
                 if vn.get_space() == AddressSpace::Register
+                    && vn.is_free()
                     && !vn.is_input()
                     && !defined_reg_offsets.contains(&vn.get_offset())
                     && marked_input.insert(vn.get_offset())
                 {
                     drop(vn); // Release read lock before write
-                    self.vbank.set_input(in_arc.clone());
+                    let canonical = self.vbank.set_input_prevalidated(in_arc);
+                    debug_assert!(op_ref
+                        .0
+                        .read()
+                        .unwrap()
+                        .inrefs
+                        .get(slot)
+                        .is_some_and(|current| Arc::ptr_eq(current, &canonical)));
                 }
             }
 
             // Then: record this op's output as defined for subsequent ops.
-            if let Some(ref out_arc) = op.output {
+            if let Some(ref out_arc) = output {
                 let out_vn = out_arc.read().unwrap();
                 if out_vn.get_space() == AddressSpace::Register {
                     defined_reg_offsets.insert(out_vn.get_offset());
@@ -6899,7 +7052,11 @@ impl Funcdata {
     ///   for each vn in inlist: opSetInput(vn->getDef(), invn, 0);
     /// RUGRA-GAP: `justifiedContain` is approximated by a direct byte offset;
     /// Rugra scans loc_tree for inputs completely contained in the range.
-    pub fn adjust_input_varnodes(&mut self, addr: crate::address::Address, sz: usize) {
+    pub fn adjust_input_varnodes(
+        &mut self,
+        addr: crate::address::Address,
+        sz: usize,
+    ) -> crate::error::Result<()> {
         let end = addr.as_u64().saturating_add(sz.saturating_sub(1) as u64);
         // cc:500-508: gather inputs completely contained in [addr, end].
         let inlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
@@ -6936,10 +7093,10 @@ impl Funcdata {
                 self.op_insert_begin(&subop, &bb0);
             }
             self.total_replace(&vn, newvn.clone());
-            self.delete_varnode(&vn);
+            self.delete_varnode(&vn)?;
             replaced.push(newvn);
         }
-        if replaced.is_empty() { return; }
+        if replaced.is_empty() { return Ok(()); }
         // cc:526-531: create the combined input and mark it writemask.
         let invn = self.new_varnode(sz, addr);
         let invn = self.set_input_varnode(invn);
@@ -6951,6 +7108,7 @@ impl Funcdata {
                 self.op_set_input(&crate::op::PcodeOpRef(def), invn.clone(), 0);
             }
         }
+        Ok(())
     }
 
     // Ghidra: funcdata_varnode.cc:543 Funcdata::descend2Undef
@@ -7069,14 +7227,15 @@ impl Funcdata {
             };
             if is_input && !is_locked_input {
                 // cc:843-845: makeFree + clearCover.
-                {
-                    let mut w = vn.write().unwrap();
-                    self.vbank.make_free(&mut w);
-                    w.clear_cover();
-                }
+                // `vn` came from this bank's loc_tree snapshot, proving the
+                // Arc-identity precondition of the internal transition.
+                self.vbank.make_free_prevalidated(&vn);
+                vn.write().unwrap().clear_cover();
             }
             if vn.read().unwrap().is_free() {
-                self.vbank.destroy_varnode(&vn);
+                // cc:841 guards hasNoDescend; makeFree (if needed) cleared
+                // the definition, so the integrated-destroy guard is proven.
+                self.vbank.destroy_varnode_prevalidated(&vn);
             }
         }
     }
@@ -8082,8 +8241,9 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:272 Funcdata::destroyVarnode
-    /// Fully detach and destroy a Varnode. Faithful to
-    /// `Funcdata::destroyVarnode` (funcdata_varnode.cc:272-292):
+    /// Detach a Varnode from Rugra's descendant/definition indexes and remove
+    /// it from the bank, adapting `Funcdata::destroyVarnode`
+    /// (funcdata_varnode.cc:272-292):
     ///   for(iter=vn->beginDescend(); iter!=vn->endDescend(); ++iter) {
     ///     PcodeOp *op = *iter;
     ///     op->clearInput(op->getSlot(vn));
@@ -8094,12 +8254,12 @@ impl Funcdata {
     ///   }
     ///   vn->destroyDescend();
     ///   vbank.destroy(vn);
-    /// This is distinct from `delete_varnode` (a thin wrapper around
-    /// `vbank.destroy_varnode` that only removes the varnode from the loc/def
-    /// trees): `destroy_varnode` first nullifies every read reference and the
-    /// defining op's output, so the varnode is cleanly detached from the SSA
-    /// web before removal. Callers that just want to retire a varnode that is
-    /// already known to be unreferenced should prefer `delete_varnode`.
+    /// Rust input slots cannot be NULL: `op_unset_input` erases the descendant
+    /// edge but leaves a stale Arc in `inrefs` until the caller removes or
+    /// replaces that slot. Thus this function does not prove Ghidra's complete
+    /// clearInput mutation and only guarantees index/bank detachment for its
+    /// prevalidated callers. `delete_varnode` instead forwards to the checked
+    /// public bank destroy and should be used for an already detached value.
     pub fn destroy_varnode(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
         // cc:277-284: clear each descending op's input slot.
         // Snapshot the (op, slot) pairs first because the slot lookup
@@ -8129,7 +8289,8 @@ impl Funcdata {
         // cc:290: vn->destroyDescend().
         vn.write().unwrap().destroy_descend();
         // cc:291: vbank.destroy(vn).
-        self.vbank.destroy_varnode(vn);
+        // The loop and def block above detached every integrated edge.
+        self.vbank.destroy_varnode_prevalidated(vn);
     }
 
     // Ghidra: funcdata_varnode.cc:1048 Funcdata::syncVarnodesWithSymbol (single-range)
@@ -10777,10 +10938,10 @@ mod tests {
         // Create INPUT varnodes in SysV ABI parameter registers
         // param1 = RDI (offset 0x38, size 8)
         let rdi_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x38);
-        fd.vbank.set_input(rdi_vn.clone());
+        let rdi_vn = fd.vbank.set_input(rdi_vn).expect("fresh RDI input");
         // param2 = RSI (offset 0x30, size 8)
         let rsi_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
-        fd.vbank.set_input(rsi_vn.clone());
+        let rsi_vn = fd.vbank.set_input(rsi_vn).expect("fresh RSI input");
 
         // Create an op that reads both params: ADD rdi, rsi -> result (RAX)
         let result_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x00);
@@ -11096,6 +11257,149 @@ mod tests {
                     v1.get_space(), v1.get_offset(), v1.get_size(), v1.is_written());
             }
         }
+    }
+
+    #[test]
+    fn test_combine_input_varnodes_preserves_storage_and_rewires_readers() {
+        use crate::block::{BlockBasic, FlowBlock};
+        use crate::space::AddressSpace;
+
+        let mut fd = Funcdata::new("combine", Address::new(0x5000), 0x20);
+        let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+            BlockBasic::new(0, Address::new(0x5000)),
+        ));
+        fd.bblocks.add_block(block.clone());
+
+        let hi = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x24);
+        let hi = fd.vbank.set_input(hi).expect("fresh high input");
+        let lo = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x20);
+        let lo = fd.vbank.set_input(lo).expect("fresh low input");
+
+        let piece = fd.new_op(2, Address::new(0x5000));
+        fd.op_set_opcode(&piece, OpCode::CPUI_PIECE);
+        fd.op_insert_input(&piece, hi.clone(), 0);
+        fd.op_insert_input(&piece, lo.clone(), 1);
+        let piece_out = fd.vbank.create_def_unique(8, &piece.0);
+        piece.0.write().unwrap().output = Some(piece_out);
+        fd.op_insert_end(&piece, &block);
+
+        // The same non-PIECE op reads hi twice. This exercises Ghidra's
+        // one-descendant-entry-per-slot totalReplace iteration.
+        let hi_reader = fd.new_op(2, Address::new(0x5001));
+        fd.op_set_opcode(&hi_reader, OpCode::CPUI_INT_ADD);
+        fd.op_insert_input(&hi_reader, hi.clone(), 0);
+        fd.op_insert_input(&hi_reader, hi.clone(), 1);
+        let hi_reader_out = fd.vbank.create_def_unique(4, &hi_reader.0);
+        hi_reader.0.write().unwrap().output = Some(hi_reader_out);
+        fd.op_insert_end(&hi_reader, &block);
+
+        let lo_reader = fd.new_op(1, Address::new(0x5002));
+        fd.op_set_opcode(&lo_reader, OpCode::CPUI_COPY);
+        fd.op_insert_input(&lo_reader, lo.clone(), 0);
+        let lo_reader_out = fd.vbank.create_def_unique(4, &lo_reader.0);
+        lo_reader.0.write().unwrap().output = Some(lo_reader_out);
+        fd.op_insert_end(&lo_reader, &block);
+
+        assert_eq!(fd.vbank.num_varnodes(), 5);
+        assert_eq!(fd.obank.optree.len(), 3);
+        fd.combine_input_varnodes(&hi, &lo)
+            .expect("valid contiguous register inputs");
+
+        let combined = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|entry| entry.0.clone())
+            .find(|candidate| {
+                let value = candidate.read().unwrap();
+                value.is_input()
+                    && value.get_space() == AddressSpace::Register
+                    && value.get_offset() == 0x20
+                    && value.get_size() == 8
+            })
+            .expect("combined canonical input");
+        assert_eq!(combined.read().unwrap().count_descends(), 3);
+        assert_eq!(piece.0.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(piece.0.read().unwrap().inrefs.len(), 1);
+        assert!(Arc::ptr_eq(
+            &piece.0.read().unwrap().inrefs[0],
+            &combined,
+        ));
+
+        let new_hi = hi_reader.0.read().unwrap().inrefs[0].clone();
+        assert!(Arc::ptr_eq(
+            &new_hi,
+            &hi_reader.0.read().unwrap().inrefs[1],
+        ));
+        let new_lo = lo_reader.0.read().unwrap().inrefs[0].clone();
+        for (replacement, offset, expected_storage) in [
+            (new_hi, 4_u64, 0x24_u64),
+            (new_lo, 0_u64, 0x20_u64),
+        ] {
+            let value = replacement.read().unwrap();
+            assert_eq!(value.get_space(), AddressSpace::Register);
+            assert_eq!(value.get_offset(), expected_storage);
+            assert_eq!(value.get_size(), 4);
+            let definition = value.get_def().expect("replacement definition");
+            drop(value);
+            let definition = crate::op::PcodeOpRef(definition);
+            let operation = definition.0.read().unwrap();
+            assert_eq!(operation.opcode, OpCode::CPUI_SUBPIECE);
+            assert_eq!(operation.get_addr(), Address::new(0x5000));
+            assert_eq!(operation.inrefs.len(), 2);
+            assert!(Arc::ptr_eq(&operation.inrefs[0], &combined));
+            assert!(operation.inrefs[1].read().unwrap().is_constant());
+            assert_eq!(operation.inrefs[1].read().unwrap().get_offset(), offset);
+        }
+
+        assert!(hi.read().unwrap().has_no_descend());
+        assert!(lo.read().unwrap().has_no_descend());
+        assert!(!fd
+            .vbank
+            .loc_tree
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.0, &hi) || Arc::ptr_eq(&entry.0, &lo)));
+        assert_eq!(fd.vbank.num_varnodes(), 8);
+        assert_eq!(fd.obank.optree.len(), 5);
+    }
+
+    #[test]
+    fn test_combine_input_varnodes_reports_ghidra_errors() {
+        use crate::space::AddressSpace;
+
+        let mut non_input = Funcdata::new("combine_non_input", Address::new(0), 1);
+        let hi = non_input
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x24);
+        let lo = non_input
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x20);
+        let lo = non_input.vbank.set_input(lo).expect("fresh low input");
+        let error = non_input
+            .combine_input_varnodes(&hi, &lo)
+            .expect_err("free high value is not an input");
+        assert_eq!(error.to_string(), "Varnodes being combined are not inputs");
+
+        let mut disjoint = Funcdata::new("combine_disjoint", Address::new(0), 1);
+        let hi = disjoint
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x30);
+        let hi = disjoint.vbank.set_input(hi).expect("fresh high input");
+        let lo = disjoint
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x20);
+        let lo = disjoint.vbank.set_input(lo).expect("fresh low input");
+        let error = disjoint
+            .combine_input_varnodes(&hi, &lo)
+            .expect_err("disjoint inputs are not contiguous");
+        assert_eq!(
+            error.to_string(),
+            "Input varnodes being combined are not contiguous"
+        );
     }
 
 }

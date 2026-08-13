@@ -5,7 +5,7 @@
 ## 文档状态
 
 - **状态**: 已核对（当前有效）
-- **Ghidra 12.0.4 对齐级别**: L2；bank 比较键/canonical xref/op 槽与生命周期/IOP 稳定身份尚未闭合
+- **Ghidra 12.0.4 对齐级别**: L2；`VARNODE-INIT-0001` 仅对初始化与若干 bank 有效路径给出 PARTIAL_MATCH，不代表完整 `VARNODE-0001`
 - **可信度**: 高
 - **文档定位**: 当前源码的接口解释层
 - **可信边界**: 以 `src/varnode.rs` 实际代码为准
@@ -56,7 +56,19 @@
 - 内部临时值（如 `unique` 空间）
 - 常量值（通过特定空间或构造方式表达）
 
-**loc_tree 排序键**（2026-06-29）：`VarnodeLocRef::Ord` 按 `(address_space, loc, size, input/written/free 分类, def SeqNum or create_index)` 排序——对齐 Ghidra `VarnodeCompareLocDef`（varnode.cc:34-52）。关键：input varnode 同位置返回 Equal（同一个对象）；written 按 def SeqNum 区分；free 按 createIndex 区分。这让 Stack 空间 varnode 不与其他空间混淆，且 xref 去重能正确工作。新增 `VarnodeBank::iter_space(space)` 方法按空间遍历 varnode。
+**bank 排序键**（2026-08-13，`VARNODE-INIT-0001`）：`VarnodeLocRef::Ord` 在当前 fixture 的合法、唯一数字 space-id 域内按完整 Address（numeric space id、offset）、size、`input < written < free` 分类排序；written 以定义 op 的 `SeqNum` 破同值，free 以 `create_index` 破同值。`VarnodeDefRef::Ord` 先按同一分类/定义点，再按完整 Address、size、free create-index 排序。两个 wrapper 的 `Eq` 都定义为 `cmp == Equal`。Rugra enum 可以构造两个不同 variant 却使用同一个数字 id；这种 Ghidra manager 不允许的输入使用稳定 enum tie-break 保持 Rust `Eq/Ord` 合约，但不作为 oracle MATCH。fixture 只用全局唯一值覆盖 Ghidra 的 immutable uniq/time；Rugra `SeqNum` 当前既缺 defining-op AddressSpace，也没有 Ghidra 单独可变的 execution-order 字段，因此跨空间定义点和 time/order 分离仍归 `ADDRESS/SEQNUM` 残差。本文撤销旧版对 `VarnodeLocRef::Ord`/xref 已整体对齐的宣称。
+
+**初始状态与 bank 分配**（2026-08-13，`VARNODE-INIT-0001`）：`Varnode::new_with_space` 现在按锁定 Ghidra 12.0.4 `Varnode::Varnode` 初始化主 flags、`nzm` 与 `consumed`：普通存储为 `COVERDIRTY`，常量为 `CONSTANT` 且 `nzm=offset`，IOP annotation 为 `ANNOTATION|COVERDIRTY`，`consumed=~0`。`VarnodeBank::set_def` / `set_input` 对合法 bank-owned free 输入分别形成 `WRITTEN|INSERT|COVERDIRTY` 与 `INPUT|INSERT|COVERDIRTY`，并返回 xref 选出的 canonical `Arc`；重复键会按 descendant 列表顺序重接全部输入槽。`create_def_with_space` 直接走 Ghidra `createDef` 的 allocate→setDef→xref 路径。`make_free` 先移除两个树键、突变，再重插，并以 Arc identity 拒绝 foreign/stale equal-key handle。analysis-owned unique 地址从 `0x10000000` 起，并在 `clear()` 后重置到该值。显式 space 在插入两个 `BTreeSet` 索引前即固定。
+
+`VarnodeBank::destroy_varnode` 现在返回 `Result<()>`：与 `varnode.cc:1276-1285` 一样，存在 defining op 或任一 descendant 时先返回 `Deleting integrated varnode`，不会改动两个索引；Rust 还以 Arc identity 拒绝 foreign/stale equal-key handle。仅供 locked Ghidra 上层函数已经完成 detach/`hasNoDescend` 检查的内部 `destroy_varnode_prevalidated` 会跳过运行时错误分支，但在 debug build 重新断言 integrated 与 ownership 两个先验。真实 12.0.4 fixture 覆盖合法 free 删除及 def/descendant 两种拒绝；foreign/stale 拒绝为 Rust 安全单测，不声称 Ghidra MATCH。
+
+`Varnode::term_order` 已按 `varnode.cc:1153-1172` 收窄为表达式项排序：两个常量互等且排在非常量之后；written `INT_MULT(base, constant)` 各自剥一层到 `base`；最后只比较完整 Address 的 numeric space id 与 offset，不比较 size。该算法由 `RULE-COLLECTTERMS-0001` 的独立逐函数 oracle 负责最终行为门禁，不包含在初始化 fixture 的 MATCH 分母中。
+
+默认类型只是一个明确收窄的 adapter：同一个 bank 内按 size 复用 name=`xunknown<size>`、id=0、non-core 的 `Datatype`，与该 synthetic fixture 的 caller-supplied `TypeBase` 相同。真实 Ghidra `Funcdata::newVarnode*` 从 Architecture `TypeFactory` 获取带 hash id/core flag、同 Architecture 共享的类型；该闭包属于 `TYPE-UNKNOWN-0001`，此处仍为 MISMATCH。
+
+`Varnode::get_cover` 现在按 `getCover()` 先在 dirty+non-null 分支调用 `Cover::rebuild`，再清 `COVERDIRTY`。fixture 同时证明 raw input sentinel、lazy invocation 和 dirty 清除；但 Rugra 的 order-only `CoverBlock` 把 input sentinel 保存为数值 2，而 Ghidra 比较语义通过 `getUIndex(2)` 得到 0，因此完整 Cover 内容仍是已观察 MISMATCH，不得从本项推出 Cover 已对齐。
+
+该窄域不代表完整 `VARNODE-0001` 已完成。除上述 TypeFactory/Cover/SeqNum 残差外，Ghidra unmanaged constructor 可接收 null Address space/Datatype，而 Rugra enum Address 与默认类型 adapter 无法表达该状态；FSPEC 与 IOP 仍合并为一个 Rust enum variant；`Varnode` 的 key 字段仍可被外部 public 直接突变；direct `Varnode::operator<`/`operator==`、public `setDef` duplicate canonical return 与 `replace` 的 defining-op self-edge guard尚未单独对拍；`Funcdata::setInputVarnode` 的 partial-overlap 异常和 ProtoModel 属性传播未由本 bank fixture 证明；外部 `Arc` 在 Ghidra 会 delete 的 xref/clear 后仍可存活；create/unique 计数器溢出、corrupt descendant、HighVariable dirty propagation、32-bit `uintb` 与 big-endian 分支均未闭合。
 
 **varnode 去重（find_or_create_input_space）**（2026-06-29）：新增 `VarnodeBank::find_or_create_input_space(size, space, offset)`——查找已有的同 (space, offset, size) 的 free/input varnode（不含 written），复用它；没有则创建。对齐 Ghidra `Funcdata::newVarnode`（funcdata_varnode.cc:148）——建 free varnode，由 rename 连接到 written。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。
 
@@ -747,7 +759,9 @@
  
 
 ### 2026-07-05: erase_descend 新增 + add_descend 补检查
-- `Varnode::erase_descend`(varnode.cc:316): 新增,retain 移除匹配 weak ref + free 多 descend 日志。
+- `Varnode::erase_descend`（varnode.cc:316）：删除恰好一个匹配 weak ref，使同一 op
+  在多个输入槽读取同一 Varnode 时，每次 `opUnsetInput` 只消费对应的一条 descendant
+  记录；`VARNODE-INIT-0001` 的 combine/duplicate fixture 覆盖同 op 重复槽。
 - `Varnode::add_descend`(cc:330): 补 free 非 spacebase 多 descend 检查。
  
  

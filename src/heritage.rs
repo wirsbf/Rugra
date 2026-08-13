@@ -3246,7 +3246,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:219 Heritage::insertMultiequal
+    // RUGRA-GLUE: Borrow-safe adapter for the heritage.cc:2631-2642 MULTIEQUAL insertion slice; separates Funcdata banks before delegating below.
     /// Helper to insert a MULTIEQUAL (Phi) op into a block
     fn insert_multiequal(&mut self, fd: &mut Funcdata, space: AddressSpace, addr: Address, block_idx: i32) {
         let mut vbank = std::mem::take(&mut fd.vbank);
@@ -3256,7 +3256,7 @@ impl Heritage {
         fd.obank = obank;
     }
 
-    // Ghidra: heritage.cc:219 Heritage::insertMultiequalDirect
+    // RUGRA-GLUE: Borrow-safe extraction of one merge-block insertion from Heritage::placeMultiequals (heritage.cc:2631-2642).
     fn insert_multiequal_direct(
         &mut self,
         vbank: &mut VarnodeBank,
@@ -3284,8 +3284,9 @@ impl Heritage {
 
         let op_ref = obank.create(crate::opcodes::OpCode::CPUI_MULTIEQUAL, num_in, start_addr);
         block_arc.write().unwrap().insert_op(0, op_ref.clone());
-        // Ghidra heritage.cc:233: op->setParent(block)
-        // Set parent back-pointer so rename can traverse this phi.
+        // heritage.cc:2641 calls Funcdata::opInsertBegin
+        // (funcdata_op.cc:413), which installs the parent/list membership.
+        // This direct-bank adapter sets the equivalent parent back-pointer.
         op_ref.0.write().unwrap().parent = Some(std::sync::Arc::downgrade(&block_arc) as std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
 
         // Query globaldisjoint LocationMap for precise size (note: LocationMap also uses Address only, which is a broader bug, but we fallback to vbank)
@@ -3308,7 +3309,7 @@ impl Heritage {
             }) as usize;
 
         let out_vn = vbank.create_with_space(size, space, addr.as_u64());
-        vbank.set_def(out_vn.clone(), Arc::downgrade(&op_ref.0));
+        let out_vn = vbank.set_def_prevalidated(out_vn, Arc::downgrade(&op_ref.0));
 
         {
             let mut op = op_ref.0.write().unwrap();
@@ -3316,12 +3317,16 @@ impl Heritage {
             // Initialize inrefs with placeholders so they can be filled by index
             for _ in 0..num_in {
                 let placeholder = vbank.create_with_space(size, space, addr.as_u64());
+                // heritage.cc:2638-2639 routes every placeholder through
+                // Funcdata::opSetInput, so each slot contributes one
+                // descendant entry before renameRecurse replaces it.
+                placeholder.write().unwrap().add_descend(&op_ref.0);
                 op.inrefs.push(placeholder);
             }
         }
     }
 
-    // Ghidra: heritage.cc:2588 Heritage::rename
+    // Ghidra: heritage.cc:2587 Heritage::rename
     /// Perform SSA renaming
     pub fn rename(&mut self) {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
@@ -3332,30 +3337,30 @@ impl Heritage {
         fd.vbank = vbank;
     }
 
-    // Ghidra: heritage.cc:219 Heritage::renameDirect
+    // RUGRA-GLUE: Direct-bank SSA driver around locked Heritage::rename/renameRecurse; it separates Rust-owned banks and its broader driver differences are documented.
     /// Perform SSA renaming directly using bank references.
-    /// `vbank` is taken by &mut because heritage.cc:2502/2512 calls
-    /// `fd->setInputVarnode` and cc:2521/2550 calls `fd->deleteVarnode`,
+    /// `vbank` is taken by &mut because heritage.cc:2501/2511 calls
+    /// `fd->setInputVarnode` and cc:2520/2549 calls `fd->deleteVarnode`,
     /// both of which mutate the bank. Rugra ports these as
     /// `VarnodeBank::set_input_varnode` / `VarnodeBank::destroy_varnode`.
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
         // Mark all read+write varnodes as active heritage, faithful to
-        // Ghidra's guard() (heritage.cc:1175/1182) which calls
+        // Ghidra's guard() (heritage.cc:1174/1181) which calls
         // setActiveHeritage on every varnode in the read AND write lists
         // of the disjoint ranges being heritaged this pass.
         //
         // Ghidra's read/write lists (from collect()) include both free
         // varnodes AND written varnodes at heritaged addresses — a written
-        // varnode is a def that rename must push onto the stack (cc:2527
+        // varnode is a def that rename must push onto the stack (cc:2528
         // pushes vnout if isActiveHeritage). Without activeHeritage on
         // writes, rename skips pushing them → stack stays empty → empty-stack
-        // input promotion (cc:2500-2503) creates a single shared input →
+        // input promotion (cc:2499-2502) creates a single shared input →
         // diamond merges lose per-branch distinctness.
         //
         // Rugra approximates Ghidra's per-range guard by marking every
         // non-constant, non-annotation varnode in the bank (free + written
         // + input). Inputs are harmless to mark because rename's
-        // isHeritageKnown check (cc:2496/2539) skips them before checking
+        // isHeritageKnown check (cc:2495/2538) skips them before checking
         // isActiveHeritage.
         for vn_ref in &vbank.loc_tree {
             let mut vn = vn_ref.0.write().unwrap();
@@ -3388,7 +3393,7 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:219 Heritage::visitRename
+    // RUGRA-GLUE: Borrow-safe adapter that temporarily separates Funcdata::vbank before the iterative renameRecurse adapter below.
     fn visit_rename(
         &mut self,
         fd: &mut Funcdata,
@@ -3400,20 +3405,22 @@ impl Heritage {
         fd.vbank = vbank;
     }
 
-    // Ghidra: heritage.cc:2480 Heritage::renameRecurse
-    /// Faithful port of `Heritage::renameRecurse(BlockBasic *bl, VariableStack &varstack)`
-    /// (heritage.cc:2480-2563), structured as an iterative dominator-tree walk.
+    // Ghidra: heritage.cc:2479 Heritage::renameRecurse
+    /// Iterative mapping of `Heritage::renameRecurse(BlockBasic *bl,
+    /// VariableStack &varstack)` (heritage.cc:2479-2562). Broader direct-driver,
+    /// global-active marking, type-copy, and graph-model differences remain
+    /// documented and are not claimed equivalent here.
     ///
     /// **2026-07-05 修正**：补齐 3 个 load-bearing 语义（audit P0-4）：
-    ///   (1) **empty-stack input promotion** (cc:2500-2503 / cc:2541-2544) —
+    ///   (1) **empty-stack input promotion** (cc:2499-2502 / cc:2540-2543) —
     ///       当 stack 为空时，Ghidra 创建新 varnode 并 `setInputVarnode` 提升为
     ///       函数输入，push 到 stack。Rugra 此前静默跳过 → 自由读未被替换 →
     ///       SSA 不完整。
-    ///   (2) **INDIRECT same-time stack-deepening** (cc:2507-2518) — 当 stack
+    ///   (2) **INDIRECT same-time stack-deepening** (cc:2507-2516) — 当 stack
     ///       顶的 vnnew 是 INDIRECT 写且其 target op 是当前 op 时，Ghidra 认为
     ///       "INDIRECT 和它的 op 同时发生"，深入 stack 一层（stack[size-2]）。
     ///       Rugra 此前完全缺失 → 栈指针 INDIRECT 配对的 op 得到错误的 SSA 名。
-    ///   (3) **deleteVarnode of consumed frees** (cc:2520-2521 / cc:2549-2550) —
+    ///   (3) **deleteVarnode of consumed frees** (cc:2519-2520 / cc:2548-2549) —
     ///       替换后若 `vnin->hasNoDescend()` 则 `fd->deleteVarnode(vnin)`。
     ///       Rugra 此前从不删除 → 死 varnode 留在 loc_tree，污染后续 pass。
     fn visit_rename_direct(
@@ -3476,7 +3483,7 @@ impl Heritage {
                     }
 
                     // 2. Process regular Ops: replace reads, then push writes.
-                    // Ghidra cc:2490-2531.
+                    // Ghidra cc:2489-2530.
                     for op_ref in &ops {
                         let mut op = op_ref.0.write().unwrap();
                         if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
@@ -3491,16 +3498,16 @@ impl Heritage {
                             if should_skip {
                                 continue;
                             }
-                            // Ghidra cc:2498: vnin->clearActiveHeritage();
+                            // Ghidra cc:2497: vnin->clearActiveHeritage();
                             let vnin_arc = op.inrefs[i].clone();
                             vnin_arc.write().unwrap().clear_active_heritage();
-                            // Ghidra cc:2499: vector<Varnode *> &stack(varstack[vnin->getAddr()]);
+                            // Ghidra cc:2498: vector<Varnode *> &stack(varstack[vnin->getAddr()]);
                             let key = {
                                 let vn_read = vnin_arc.read().unwrap();
                                 (vn_read.address_space, vn_read.loc)
                             };
                             let stack = stacks.entry(key).or_default();
-                            // Ghidra cc:2500-2506: empty-stack → promote to input.
+                            // Ghidra cc:2499-2505: empty-stack → promote to input.
                             // (SEMANTIC #1)
                             let mut vnnew: Arc<RwLock<Varnode>>;
                             if stack.is_empty() {
@@ -3515,7 +3522,7 @@ impl Heritage {
                             } else {
                                 vnnew = stack.last().unwrap().clone();
                             }
-                            // Ghidra cc:2507-2518: INDIRECT same-time deepening.
+                            // Ghidra cc:2507-2516: INDIRECT same-time deepening.
                             // (SEMANTIC #2) — vnnew is written by an INDIRECT
                             // whose iop-const input(1) points at the current op.
                             let indirect_target_is_cur = {
@@ -3542,7 +3549,7 @@ impl Heritage {
                             };
                             if indirect_target_is_cur {
                                 if stack.len() == 1 {
-                                    // cc:2510-2513: stack has only the INDIRECT entry;
+                                    // cc:2509-2512: stack has only the INDIRECT entry;
                                     // create new input and insert at bottom.
                                     let (vnin_size, vnin_space, vnin_off) = {
                                         let r = vnin_arc.read().unwrap();
@@ -3557,7 +3564,7 @@ impl Heritage {
                                     vnnew = stack[stack.len() - 2].clone();
                                 }
                             }
-                            // Ghidra cc:2519: fd->opSetInput(op, vnnew, slot);
+                            // Ghidra cc:2518: fd->opSetInput(op, vnnew, slot);
                             // Preserve v_type from old varnode to new varnode
                             // so struct pointer types survive Heritage rename.
                             {
@@ -3566,16 +3573,20 @@ impl Heritage {
                                     vnnew.write().unwrap().v_type = old_vt;
                                 }
                             }
-                            op.inrefs[i] = vnnew.clone();
-                            vnnew
-                                .write()
-                                .unwrap()
-                                .descend
-                                .push(Arc::downgrade(&op_ref.0));
-                            // Ghidra cc:2520-2521: if (vnin->hasNoDescend()) fd->deleteVarnode(vnin);
+                            if !Arc::ptr_eq(&vnin_arc, &vnnew) {
+                                // funcdata_op.cc:120-124: opSetInput first
+                                // consumes exactly this slot's old descendant,
+                                // then adds the new edge before updating inrefs.
+                                vnin_arc.write().unwrap().erase_descend(&op_ref.0);
+                                vnnew.write().unwrap().add_descend(&op_ref.0);
+                                op.inrefs[i] = vnnew.clone();
+                            }
+                            // Ghidra cc:2519-2520: if (vnin->hasNoDescend()) fd->deleteVarnode(vnin);
                             // (SEMANTIC #3)
                             if vnin_arc.read().unwrap().has_no_descend() {
-                                vbank.destroy_varnode(&vnin_arc);
+                                // cc:2519 proves the value is detached; it was
+                                // fetched from this bank's current SSA web.
+                                vbank.destroy_varnode_prevalidated(&vnin_arc);
                             }
                         }
 
@@ -3597,7 +3608,7 @@ impl Heritage {
                     }
 
                     // 3. Fill Phi inputs in successors.
-                    // Ghidra cc:2532-2553: for each out-edge, walk successor's
+                    // Ghidra cc:2531-2552: for each out-edge, walk successor's
                     // leading MULTIEQUALs and replace the matching input slot.
                     let size_out = block_arc.read().unwrap().size_out();
                     for i in 0..size_out {
@@ -3609,7 +3620,7 @@ impl Heritage {
                             for op_ref in succ_ops {
                                 let mut op = op_ref.0.write().unwrap();
                                 if op.opcode != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-                                    break; // Ghidra cc:2537: stop at first non-MULTIEQUAL
+                                    break; // Ghidra cc:2536: stop at first non-MULTIEQUAL
                                 }
                                 if my_in_idx >= op.inrefs.len() {
                                     continue;
@@ -3622,7 +3633,7 @@ impl Heritage {
                                 if should_skip {
                                     continue;
                                 }
-                                // Ghidra cc:2540-2547: empty-stack → input promotion.
+                                // Ghidra cc:2539-2546: empty-stack → input promotion.
                                 // (SEMANTIC #1, phi-input variant)
                                 let key = {
                                     let vn_read = vnin_arc.read().unwrap();
@@ -3642,17 +3653,18 @@ impl Heritage {
                                 } else {
                                     vnnew = stack.last().unwrap().clone();
                                 }
-                                // Ghidra cc:2548: opSetInput(multiop, vnnew, slot)
-                                op.inrefs[my_in_idx] = vnnew.clone();
-                                vnnew
-                                    .write()
-                                    .unwrap()
-                                    .descend
-                                    .push(Arc::downgrade(&op_ref.0));
-                                // Ghidra cc:2549-2550: deleteVarnode if no descend.
+                                // Ghidra cc:2547: opSetInput(multiop, vnnew, slot)
+                                if !Arc::ptr_eq(&vnin_arc, &vnnew) {
+                                    vnin_arc.write().unwrap().erase_descend(&op_ref.0);
+                                    vnnew.write().unwrap().add_descend(&op_ref.0);
+                                    op.inrefs[my_in_idx] = vnnew.clone();
+                                }
+                                // Ghidra cc:2548-2549: deleteVarnode if no descend.
                                 // (SEMANTIC #3, phi-input variant)
                                 if vnin_arc.read().unwrap().has_no_descend() {
-                                    vbank.destroy_varnode(&vnin_arc);
+                                    // cc:2548 proves the value is detached;
+                                    // the phi input is bank-owned by construction.
+                                    vbank.destroy_varnode_prevalidated(&vnin_arc);
                                 }
                             }
                         }
@@ -3668,7 +3680,7 @@ impl Heritage {
                     }
                 }
                 WorkItem::Leave(defined_here) => {
-                    // 5. Pop stacks (Ghidra cc:2558-2562).
+                    // 5. Pop stacks (Ghidra cc:2558-2561).
                     for key in defined_here {
                         if let Some(stack) = stacks.get_mut(&key) {
                             stack.pop();
@@ -3907,6 +3919,149 @@ fn trace_const_stack_offset(ptr: &std::sync::Arc<std::sync::RwLock<Varnode>>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_rename_replaces_regular_input_and_retires_old_varnode() {
+        use crate::address::SeqNum;
+
+        let mut bank = VarnodeBank::new();
+        let old = bank.create_with_space(4, AddressSpace::Register, 0x40);
+        old.write().unwrap().set_active_heritage();
+        let canonical = bank.create_with_space(4, AddressSpace::Register, 0x40);
+        let canonical = bank.set_input(canonical).expect("fresh input");
+
+        let operation = PcodeOpRef(Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        ))));
+        operation.0.write().unwrap().inrefs.push(old.clone());
+        old.write().unwrap().add_descend(&operation.0);
+        let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+            BlockBasic::new(0, Address::new(0x1000)),
+        ));
+        block.write().unwrap().insert_op(0, operation.clone());
+
+        let mut stacks = BTreeMap::new();
+        stacks.insert(
+            (AddressSpace::Register, Address::new(0x40)),
+            vec![canonical.clone()],
+        );
+        Heritage::new().visit_rename_direct(&mut bank, block, &mut stacks);
+
+        assert!(Arc::ptr_eq(
+            &operation.0.read().unwrap().inrefs[0],
+            &canonical,
+        ));
+        assert_eq!(canonical.read().unwrap().count_descends(), 1);
+        assert!(old.read().unwrap().has_no_descend());
+        assert!(!bank
+            .loc_tree
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.0, &old)));
+    }
+
+    #[test]
+    fn test_rename_same_arc_input_is_an_exact_noop() {
+        use crate::address::SeqNum;
+
+        let mut bank = VarnodeBank::new();
+        let value = bank.create_with_space(4, AddressSpace::Register, 0x44);
+        value.write().unwrap().set_active_heritage();
+        let operation = PcodeOpRef(Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1010), 2),
+            OpCode::CPUI_COPY,
+        ))));
+        operation.0.write().unwrap().inrefs.push(value.clone());
+        value.write().unwrap().add_descend(&operation.0);
+        let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+            BlockBasic::new(0, Address::new(0x1010)),
+        ));
+        block.write().unwrap().insert_op(0, operation.clone());
+        let mut stacks = BTreeMap::new();
+        stacks.insert(
+            (AddressSpace::Register, Address::new(0x44)),
+            vec![value.clone()],
+        );
+
+        Heritage::new().visit_rename_direct(&mut bank, block, &mut stacks);
+
+        assert!(Arc::ptr_eq(&operation.0.read().unwrap().inrefs[0], &value));
+        assert_eq!(value.read().unwrap().count_descends(), 1);
+        assert!(bank
+            .loc_tree
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.0, &value)));
+    }
+
+    #[test]
+    fn test_inserted_phi_placeholders_have_edges_and_are_retired_per_slot() {
+        let mut bank = VarnodeBank::new();
+        let canonical = bank.create_with_space(4, AddressSpace::Register, 0x48);
+        let canonical = bank.set_input(canonical).expect("fresh input");
+        let mut op_bank = PcodeOpBank::new();
+        let mut graph = BlockGraph::new();
+        let pred0: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+            BlockBasic::new(0, Address::new(0x2000)),
+        ));
+        let pred1: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+            BlockBasic::new(1, Address::new(0x2010)),
+        ));
+        let join: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+            BlockBasic::new(2, Address::new(0x2020)),
+        ));
+        graph.add_block(pred0.clone());
+        graph.add_block(pred1.clone());
+        graph.add_block(join.clone());
+        graph.add_edge(pred0.clone(), join.clone());
+        graph.add_edge(pred1.clone(), join.clone());
+
+        let mut heritage = Heritage::new();
+        heritage.insert_multiequal_direct(
+            &mut bank,
+            &mut op_bank,
+            &graph,
+            AddressSpace::Register,
+            Address::new(0x48),
+            2,
+        );
+        let phi = join.read().unwrap().get_ops()[0].clone();
+        let placeholders = phi.0.read().unwrap().inrefs.clone();
+        assert_eq!(placeholders.len(), 2);
+        assert!(placeholders
+            .iter()
+            .all(|value| value.read().unwrap().count_descends() == 1));
+
+        let mut stacks = BTreeMap::new();
+        stacks.insert(
+            (AddressSpace::Register, Address::new(0x48)),
+            vec![canonical.clone()],
+        );
+        heritage.visit_rename_direct(&mut bank, pred0, &mut stacks);
+        assert!(Arc::ptr_eq(&phi.0.read().unwrap().inrefs[0], &canonical));
+        assert!(Arc::ptr_eq(
+            &phi.0.read().unwrap().inrefs[1],
+            &placeholders[1],
+        ));
+        assert!(placeholders[0].read().unwrap().has_no_descend());
+        assert_eq!(placeholders[1].read().unwrap().count_descends(), 1);
+
+        heritage.visit_rename_direct(&mut bank, pred1, &mut stacks);
+        assert!(phi
+            .0
+            .read()
+            .unwrap()
+            .inrefs
+            .iter()
+            .all(|value| Arc::ptr_eq(value, &canonical)));
+        assert_eq!(canonical.read().unwrap().count_descends(), 2);
+        for placeholder in placeholders {
+            assert!(placeholder.read().unwrap().has_no_descend());
+            assert!(!bank
+                .loc_tree
+                .iter()
+                .any(|entry| Arc::ptr_eq(&entry.0, &placeholder)));
+        }
+    }
 
     #[test]
     fn test_location_map() {
