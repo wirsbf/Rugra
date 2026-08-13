@@ -354,6 +354,38 @@
         ],
         "rust_function_ids": []
       }
+    },
+    {
+      "id": "functional_equality_level_1204",
+      "description": "functionalEqualityLevel raw two-slot outputs, wrapper/AddExpression closure, and parseconfig-shaped RulePushMulti projection",
+      "runner": ["tools/run_functional_equality_level_oracle.sh"],
+      "timeout_seconds": 1800,
+      "always_tiers": ["wave", "nightly"],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/functional_equality_level_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/functional_equality_level_1204.cc",
+          "rust_fixture": "tests/oracle/functional_equality_level_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_functional_equality_level_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/expression.rs",
+          "docs/api/expression.md",
+          "tests/oracle/functional_equality_level_1204.*",
+          "tools/run_functional_equality_level_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-204cb9a4deb2aeceaeac",
+          "RG-F-a2da4712f6feb7c810ce",
+          "RG-F-4407868d079e72022382",
+          "RG-F-bf05bd1e2f9b7f2d9b5c"
+        ]
+      }
     }
   ]
 }

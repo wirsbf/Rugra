@@ -47,25 +47,60 @@ tie 重排仍为 `UNTESTED`；整个 expression 模块及 RuleCollectTerms 均�
 
 测试：expression::tests 2 个（常量折叠、等价匹配）。
 
+## 2026-08-14：functional_equality_level raw 输出 buffer 契约
+
+`functional_equality_level` 现在保留锁定 Ghidra 12.0.4
+`functionalEqualityLevel` 的完整输出参数写入时机。Ghidra 在通过 opcode、arity、marker、
+call、LOAD 地址和 PTRADD 元素大小等结构守卫后，先按输入槽顺序写入
+`res1[i]`/`res2[i]`，再决定最终返回 `-1`、`0`、`1` 或 `2`。因此即使返回值非正，
+调用者提供的 buffer 也可能已被写入。
+
+Rust 的 `FunctionalEqualityResult::pairs` 表示这些已写入的 raw
+`(res1[i], res2[i])` 槽，而不是只在返回值为正时才存在的精简列表：
+
+- `code > 0` 时，前 `code` 项是决定相等性的 varnode pair；
+- `code <= 0` 时，`pairs` 仍可能非空，精确保留 Ghidra 在返回前完成的写入；
+- 在结构守卫之前返回时 `pairs` 为空，对应调用者 buffer 保持原 sentinel；
+- 锁定输入顺序后，第二 pair 会复制到 slot 0；交换律路径只覆盖指定的
+  `res1[0]` 或 `res2[0]`，最终翻转路径只交换两个 `res2` 槽。
+
+该契约修复了 unary contingent、binary slot-1 exact、non-commutative code-2，
+以及 commutative cross-impossible/original-valid code-2 四条曾返回正 code 却遗漏 pair
+的路径。`RulePushMulti::applyOp` 是当前唯一消费正返回 buffer 的调用者；它读取
+`pairs[0]` 与 Ghidra 读取 `buf1[0]`/`buf2[0]` 相同，不需要也不允许在消费处兜底。
+其余调用者仅检查返回 code。
+
+### `pub fn functional_equality(vn1, vn2) -> bool`
+
+对应 `expression.cc:520-525` 的薄封装，调用同一个完整
+`functional_equality_level` 并仅在 `code == 0` 时返回 `true`。旧代码误从
+`address.rs` 引入仅实现 level-0 的同名 helper，导致结构上完全相同的已写表达式也无法
+被证明相等；现在 `AddExpression` 与公开 wrapper 都经过完整的一层定义比较。wrapper
+自身不暴露 raw buffers，也不修改 IR。
+
 ## 2026-06-27（续）：functional_equality_level — expression.cc:404-512
 
-完整移植 Ghidra 的 `functionalEqualityLevel`（值相等性分析）。
+移植 Ghidra 的 `functionalEqualityLevel`（值相等性分析）；模块完整闭包状态仍以本页
+顶部 L2 声明和逐函数 oracle 账本为准。
 
 ### `pub fn functional_equality_level(vn1, vn2) -> FunctionalEqualityResult`
-尝试判断两个 Varnode 是否持有相同值。忠实移植 expression.cc:432-512。
+尝试判断两个 Varnode 是否持有相同值，对应 expression.cc:432-512。
 - 返回 `code == -1`：不相等 / 无法立即验证
 - 返回 `code == 0`：确定相等
-- 返回 `code > 0`： contingent（取决于 `pairs` 中的 varnode 对是否相等）
+- 返回 `code > 0`：contingent（取决于 `pairs` 前 `code` 个 varnode 对是否相等）
 
 ### `pub struct FunctionalEqualityResult`
 - `code: i32` — 相等性代码
-- `pairs: Vec<(vn1, vn2)>` — 需要匹配的 varnode 对
+- `pairs: Vec<(vn1, vn2)>` — Ghidra 已写入的 raw 输出 buffer 槽；正返回时前
+  `code` 项是需要匹配的 varnode 对
 
 ### 算法细节
 - **Level 0**（`functional_equality_level0`）：相同指针→0；不同大小→-1；都是常量→比较 offset；free→-1；其他→1。
 - **深层比较**：两者都必须 written，定义 op 必须相同 opcode、相同输入数、非 marker、非 call。LOAD 需要相同指令地址。PTRADD 检查 slot 2（元素大小）。
 - **交换律**：对可交换运算符（INT_ADD/INT_MULT/INT_XOR/INT_AND/INT_OR），尝试翻转输入对匹配。
-- 用于 `ActionMultiCse::findMatch`（coreaction.cc:807）和 `ActionBlockStructure` 的 CSE 检测（blockaction.cc:1936）。
+- 用于 `RulePushMulti`、`RuleMultiCollapse`、`ActionMultiCse` 和 `Funcdata` CSE
+  检测；锁定 Ghidra 的 `ConditionalJoin::findDups` 也调用该函数，当前 Rugra 尚无等价
+  调用闭包，因此模块不能据此升级 L3。
 
 测试：expression::tests 新增 5 个（same_pointer/constants_equal/constants_unequal/different_sizes/free_varnodes）。
 

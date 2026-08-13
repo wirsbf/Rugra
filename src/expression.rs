@@ -10,7 +10,6 @@ use crate::varnode::Varnode;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::address::calc_mask;
-use crate::address::functional_equality;
 
 /// A term in an additive expression. Corresponds to Ghidra's `AdditiveEdge`.
 #[derive(Clone)]
@@ -154,7 +153,7 @@ struct ExprTerm {
 }
 
 impl ExprTerm {
-    // RUGRA-GLUE: is_equivalent (no Ghidra counterpart found)
+    // Ghidra: expression.cc:299 AddExpression::Term::isEquivalent
     fn is_equivalent(&self, op2: &ExprTerm) -> bool {
         if self.coeff != op2.coeff { return false; }
         functional_equality(&self.vn, &op2.vn)
@@ -547,7 +546,7 @@ pub fn boolean_match_evaluate(
 // functionalEqualityLevel — expression.cc:404-512
 // ===========================================================================
 
-// Ghidra: expression.hh:141 AddExpression::functionalEqualityLevel0
+// Ghidra: expression.cc:404 functionalEqualityLevel0
 /// Level-0 functional equality test. Faithful to `functionalEqualityLevel0`
 /// (expression.cc:404-417). Returns:
 /// - 0 if vn1 and vn2 definitely hold the same value
@@ -577,24 +576,30 @@ fn functional_equality_level0(
     1
 }
 
-/// Result of `functional_equality_level`: the equality code plus up to two
-/// Varnode pairs that must match for equality to hold.
+/// Result of `functional_equality_level`: the equality code plus the raw
+/// contents written to Ghidra's two output-pair buffers.
 #[derive(Debug, Clone)]
 pub struct FunctionalEqualityResult {
-    /// -1 = not equal, 0 = equal, >0 = contingent on `pairs`.
+    /// -1 = not equal, 0 = equal, >0 = contingent on the first `code` pairs.
     pub code: i32,
-    /// Pairs (vn1, vn2) that must hold the same value for equality.
+    /// Raw `(res1[i], res2[i])` slots written by Ghidra. If `code > 0`, the
+    /// first `code` slots must hold the same value for equality. Slots can
+    /// also be present for non-positive results because Ghidra writes its
+    /// output arrays before all comparisons are complete.
     pub pairs: Vec<(Arc<RwLock<Varnode>>, Arc<RwLock<Varnode>>)>,
 }
 
-// RUGRA-GLUE: functional_equality_level (no Ghidra counterpart found)
+// Ghidra: expression.cc:432 functionalEqualityLevel
 /// Try to determine if vn1 and vn2 contain the same value. Faithful to
 /// `functionalEqualityLevel` (expression.cc:432-512).
 ///
 /// Returns a `FunctionalEqualityResult` with:
 /// - `code == -1`: not equal / cannot verify
 /// - `code == 0`: definitely equal
-/// - `code > 0`: contingent on `pairs` (code = number of pairs)
+/// - `code > 0`: contingent on the first `code` entries of `pairs`
+///
+/// `pairs` preserves every raw output-buffer slot written by Ghidra, including
+/// writes made before a later `code == 0` or `code == -1` return.
 pub fn functional_equality_level(
     vn1: &Arc<RwLock<Varnode>>,
     vn2: &Arc<RwLock<Varnode>>,
@@ -649,98 +654,124 @@ pub fn functional_equality_level(
         }
         num = 2;
     }
-    // Gather the input pairs.
-    let mut res1: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
-    let mut res2: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
+    // Ghidra writes both output buffers in input-slot order before comparing
+    // the inputs. Preserve those raw writes even if a later comparison returns
+    // zero or negative.
+    let mut pairs = Vec::with_capacity(num);
     for i in 0..num {
-        res1.push(op1.inrefs[i].clone());
-        res2.push(op2.inrefs[i].clone());
+        pairs.push((op1.inrefs[i].clone(), op2.inrefs[i].clone()));
     }
     // Drop the op read guards before further reads.
     drop(op1);
     drop(op2);
 
-    let testval = functional_equality_level0(&res1[0], &res2[0]);
+    let testval = functional_equality_level0(&pairs[0].0, &pairs[0].1);
     if testval == 0 {
         if num == 1 {
-            return FunctionalEqualityResult { code: 0, pairs: Vec::new() };
+            return FunctionalEqualityResult { code: 0, pairs };
         }
-        let testval2 = functional_equality_level0(&res1[1], &res2[1]);
+        let testval2 = functional_equality_level0(&pairs[1].0, &pairs[1].1);
         if testval2 == 0 {
-            return FunctionalEqualityResult { code: 0, pairs: Vec::new() };
+            return FunctionalEqualityResult { code: 0, pairs };
         }
         if testval2 < 0 {
-            return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+            return FunctionalEqualityResult { code: -1, pairs };
         }
         // Match is contingent on the second pair.
-        return FunctionalEqualityResult {
-            code: 1,
-            pairs: vec![(res1[1].clone(), res2[1].clone())],
-        };
+        pairs[0] = pairs[1].clone();
+        return FunctionalEqualityResult { code: 1, pairs };
     }
     if num == 1 {
-        return FunctionalEqualityResult { code: testval, pairs: Vec::new() };
+        return FunctionalEqualityResult { code: testval, pairs };
     }
-    let testval2 = functional_equality_level0(&res1[1], &res2[1]);
+    let testval2 = functional_equality_level0(&pairs[1].0, &pairs[1].1);
     if testval2 == 0 {
-        return FunctionalEqualityResult { code: testval, pairs: Vec::new() };
+        return FunctionalEqualityResult { code: testval, pairs };
     }
     let unmatchsize = if testval == 1 && testval2 == 1 { 2 } else { -1 };
 
     // Check commutativity.
     let is_commutative = opc.is_commutative();
     if !is_commutative {
-        return FunctionalEqualityResult { code: unmatchsize, pairs: Vec::new() };
+        return FunctionalEqualityResult { code: unmatchsize, pairs };
     }
     // Try flipping for commutative operators.
-    let comm1 = functional_equality_level0(&res1[0], &res2[1]);
-    let comm2 = functional_equality_level0(&res1[1], &res2[0]);
+    let comm1 = functional_equality_level0(&pairs[0].0, &pairs[1].1);
+    let comm2 = functional_equality_level0(&pairs[1].0, &pairs[0].1);
     if comm1 == 0 && comm2 == 0 {
-        return FunctionalEqualityResult { code: 0, pairs: Vec::new() };
+        return FunctionalEqualityResult { code: 0, pairs };
     }
     if comm1 < 0 || comm2 < 0 {
-        return FunctionalEqualityResult { code: unmatchsize, pairs: Vec::new() };
+        return FunctionalEqualityResult { code: unmatchsize, pairs };
     }
     if comm1 == 0 {
         // Left-over unmatch is res1[1] and res2[0].
-        return FunctionalEqualityResult {
-            code: 1,
-            pairs: vec![(res1[1].clone(), res2[0].clone())],
-        };
+        pairs[0].0 = pairs[1].0.clone();
+        return FunctionalEqualityResult { code: 1, pairs };
     }
     if comm2 == 0 {
         // Left-over unmatch is res1[0] and res2[1].
-        return FunctionalEqualityResult {
-            code: 1,
-            pairs: vec![(res1[0].clone(), res2[1].clone())],
-        };
+        pairs[0].1 = pairs[1].1.clone();
+        return FunctionalEqualityResult { code: 1, pairs };
     }
     // comm1==1 AND comm2==1.
     if unmatchsize == 2 {
         // Prefer the original ordering.
-        return FunctionalEqualityResult {
-            code: 2,
-            pairs: vec![
-                (res1[0].clone(), res2[0].clone()),
-                (res1[1].clone(), res2[1].clone()),
-            ],
-        };
+        return FunctionalEqualityResult { code: 2, pairs };
     }
-    // Swap the ordering.
-    FunctionalEqualityResult {
-        code: 2,
-        pairs: vec![
-            (res1[0].clone(), res2[1].clone()),
-            (res1[1].clone(), res2[0].clone()),
-        ],
-    }
+    // Ghidra swaps only the res2 output buffer.
+    let res2_slot0 = pairs[0].1.clone();
+    pairs[0].1 = pairs[1].1.clone();
+    pairs[1].1 = res2_slot0;
+    FunctionalEqualityResult { code: 2, pairs }
+}
+
+// Ghidra: expression.cc:520 functionalEquality
+/// Determine whether two Varnodes are immediately provable as equivalent.
+/// The output buffers are intentionally local, matching Ghidra's wrapper.
+pub fn functional_equality(
+    vn1: &Arc<RwLock<Varnode>>,
+    vn2: &Arc<RwLock<Varnode>>,
+) -> bool {
+    functional_equality_level(vn1, vn2).code == 0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::address::{Address, SeqNum};
-    use crate::space::AddressSpace;
+    use crate::varnode::varnode_flags;
+
+    fn equality_input(offset: u64, size: usize) -> Arc<RwLock<Varnode>> {
+        let vn = Arc::new(RwLock::new(Varnode::new_register(offset, size)));
+        vn.write().unwrap().set_flags(varnode_flags::INPUT);
+        vn
+    }
+
+    fn equality_output(
+        opcode: OpCode,
+        inputs: Vec<Arc<RwLock<Varnode>>>,
+        offset: u64,
+        time: u32,
+    ) -> (Arc<RwLock<Varnode>>, Arc<RwLock<PcodeOp>>) {
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), time),
+            opcode,
+        )));
+        {
+            let mut guard = op.write().unwrap();
+            guard.set_opcode_flags(opcode);
+            guard.inrefs = inputs;
+        }
+        let output = Arc::new(RwLock::new(Varnode::new_unique(offset, 8)));
+        {
+            let mut guard = output.write().unwrap();
+            guard.set_flags(varnode_flags::WRITTEN);
+            guard.def = Some(Arc::downgrade(&op));
+        }
+        op.write().unwrap().output = Some(output.clone());
+        (output, op)
+    }
 
     #[test]
     fn test_add_expression_constants() {
@@ -844,5 +875,129 @@ mod tests {
         let v2 = Arc::new(RwLock::new(Varnode::new_register(0x20, 4)));
         let r = functional_equality_level(&v1, &v2);
         assert_eq!(r.code, -1); // Not written → -1.
+    }
+
+    #[test]
+    fn test_functional_equality_level_unary_contingent_preserves_raw_pair() {
+        let left = equality_input(0x10, 4);
+        let right = equality_input(0x20, 4);
+        let (out1, _op1) = equality_output(OpCode::CPUI_INT_ZEXT, vec![left.clone()], 0x100, 1);
+        let (out2, _op2) = equality_output(OpCode::CPUI_INT_ZEXT, vec![right.clone()], 0x200, 2);
+        let result = functional_equality_level(&out1, &out2);
+
+        assert_eq!(result.code, 1);
+        assert_eq!(result.pairs.len(), 1);
+        assert!(Arc::ptr_eq(&result.pairs[0].0, &left));
+        assert!(Arc::ptr_eq(&result.pairs[0].1, &right));
+    }
+
+    #[test]
+    fn test_functional_equality_level_binary_slot1_exact_keeps_raw_slots() {
+        let left = equality_input(0x10, 8);
+        let right = equality_input(0x20, 8);
+        let shared = equality_input(0x30, 8);
+        let (out1, _op1) = equality_output(
+            OpCode::CPUI_INT_SUB,
+            vec![left.clone(), shared.clone()],
+            0x100,
+            1,
+        );
+        let (out2, _op2) = equality_output(
+            OpCode::CPUI_INT_SUB,
+            vec![right.clone(), shared.clone()],
+            0x200,
+            2,
+        );
+        let result = functional_equality_level(&out1, &out2);
+
+        assert_eq!(result.code, 1);
+        assert_eq!(result.pairs.len(), 2);
+        assert!(Arc::ptr_eq(&result.pairs[0].0, &left));
+        assert!(Arc::ptr_eq(&result.pairs[0].1, &right));
+        assert!(Arc::ptr_eq(&result.pairs[1].0, &shared));
+        assert!(Arc::ptr_eq(&result.pairs[1].1, &shared));
+    }
+
+    #[test]
+    fn test_functional_equality_level_noncommutative_code2_keeps_original_order() {
+        let left0 = equality_input(0x10, 8);
+        let left1 = equality_input(0x18, 8);
+        let right0 = equality_input(0x20, 8);
+        let right1 = equality_input(0x28, 8);
+        let (out1, _op1) = equality_output(
+            OpCode::CPUI_INT_SUB,
+            vec![left0.clone(), left1.clone()],
+            0x100,
+            1,
+        );
+        let (out2, _op2) = equality_output(
+            OpCode::CPUI_INT_SUB,
+            vec![right0.clone(), right1.clone()],
+            0x200,
+            2,
+        );
+        let result = functional_equality_level(&out1, &out2);
+
+        assert_eq!(result.code, 2);
+        assert_eq!(result.pairs.len(), 2);
+        assert!(Arc::ptr_eq(&result.pairs[0].0, &left0));
+        assert!(Arc::ptr_eq(&result.pairs[0].1, &right0));
+        assert!(Arc::ptr_eq(&result.pairs[1].0, &left1));
+        assert!(Arc::ptr_eq(&result.pairs[1].1, &right1));
+    }
+
+    #[test]
+    fn test_functional_equality_level_cross_impossible_keeps_original_order() {
+        let left0 = equality_input(0x10, 4);
+        let left1 = equality_input(0x18, 8);
+        let right0 = equality_input(0x20, 4);
+        let right1 = equality_input(0x28, 8);
+        let (out1, _op1) = equality_output(
+            OpCode::CPUI_INT_ADD,
+            vec![left0.clone(), left1.clone()],
+            0x100,
+            1,
+        );
+        let (out2, _op2) = equality_output(
+            OpCode::CPUI_INT_ADD,
+            vec![right0.clone(), right1.clone()],
+            0x200,
+            2,
+        );
+        let result = functional_equality_level(&out1, &out2);
+
+        assert_eq!(result.code, 2);
+        assert_eq!(result.pairs.len(), 2);
+        assert!(Arc::ptr_eq(&result.pairs[0].0, &left0));
+        assert!(Arc::ptr_eq(&result.pairs[0].1, &right0));
+        assert!(Arc::ptr_eq(&result.pairs[1].0, &left1));
+        assert!(Arc::ptr_eq(&result.pairs[1].1, &right1));
+    }
+
+    #[test]
+    fn test_functional_equality_level_negative_retains_prior_raw_writes() {
+        let shared = equality_input(0x10, 8);
+        let left_constant = Arc::new(RwLock::new(Varnode::new_constant(1, 8)));
+        let right_constant = Arc::new(RwLock::new(Varnode::new_constant(2, 8)));
+        let (out1, _op1) = equality_output(
+            OpCode::CPUI_INT_SUB,
+            vec![shared.clone(), left_constant.clone()],
+            0x100,
+            1,
+        );
+        let (out2, _op2) = equality_output(
+            OpCode::CPUI_INT_SUB,
+            vec![shared.clone(), right_constant.clone()],
+            0x200,
+            2,
+        );
+        let result = functional_equality_level(&out1, &out2);
+
+        assert_eq!(result.code, -1);
+        assert_eq!(result.pairs.len(), 2);
+        assert!(Arc::ptr_eq(&result.pairs[0].0, &shared));
+        assert!(Arc::ptr_eq(&result.pairs[0].1, &shared));
+        assert!(Arc::ptr_eq(&result.pairs[1].0, &left_constant));
+        assert!(Arc::ptr_eq(&result.pairs[1].1, &right_constant));
     }
 }
