@@ -135,13 +135,13 @@ impl EffectRecord {
         self.size = size;
     }
 
-    // Ghidra: fspec.hh:413 EffectRecord::compareByAddress
+    // Ghidra: fspec.hh:1761 EffectRecord::compareByAddress
     /// Order two EffectRecords by their storage address. Faithful to
-    /// `compareByAddress` (fspec.hh:413): returns true if `a` strictly
+    /// `compareByAddress` (fspec.hh:1761): returns true if `a` strictly
     /// precedes `b` in (space, offset) order. Used by `ProtoModel::lookupEffect`
     /// / `lookupRecord` for binary search and by the post-decode sort.
     pub fn compare_by_address(a: &EffectRecord, b: &EffectRecord) -> bool {
-        match a.space.cmp(&b.space) {
+        match a.space.space_id().cmp(&b.space.space_id()) {
             std::cmp::Ordering::Equal => a.offset < b.offset,
             ord => ord == std::cmp::Ordering::Less,
         }
@@ -240,6 +240,14 @@ pub struct FuncProto {
     /// Faithful to `FuncProto::effectlist` (fspec.hh). Used by ActionRestrictLocal
     /// to identify saved registers (unaffected) that are copied to stack.
     pub effects: Vec<EffectRecord>,
+    /// Resolved prototype model. Ghidra stores a non-owning `ProtoModel *`;
+    /// `Arc` preserves the same shared model identity across prototype copies.
+    model: Option<Arc<ProtoModelFull>>,
+    /// Extra stack bytes popped by the callee. This is prototype-local state,
+    /// initialized from the resolved model by `set_model`.
+    extra_pop: i32,
+    /// Sticky copy of the model output-list's auto-killed-by-call property.
+    auto_killed_by_call: bool,
     /// Is the return-value (output) data-type locked? Faithful to
     /// `FuncProto::isOutputLocked` (fspec.cc:3906-3914): a locked output means
     /// the presence and data-type of the return value is fixed and analysis
@@ -293,6 +301,9 @@ impl FuncProto {
             calling_convention: "unknown".to_string(),
             is_dotdotdot: false,
             effects: Vec::new(),
+            model: None,
+            extra_pop: EXTRAPOP_UNKNOWN_FULL,
+            auto_killed_by_call: false,
             output_type_locked: false,
             model_locked: false,
             is_inline: false,
@@ -322,11 +333,92 @@ impl FuncProto {
         self.parameters.get(index)
     }
 
-    // Ghidra: fspec.cc:3778 FuncProto::effectIter
+    // Ghidra: fspec.cc:4243 FuncProto::effectBegin
     /// Iterate effect records. Faithful to `FuncProto::effectBegin/effectEnd`
-    /// (fspec.hh). Returns a slice of all EffectRecords for this prototype.
+    /// (fspec.cc:4243-4259). A non-empty local list is a complete override;
+    /// otherwise iteration falls back to the shared model list.
     pub fn effect_iter(&self) -> &[EffectRecord] {
-        &self.effects
+        if !self.effects.is_empty() {
+            return &self.effects;
+        }
+        self.model
+            .as_ref()
+            .expect("FuncProto::effect_iter requires a prototype model")
+            .effect_iter()
+    }
+
+    // Ghidra: fspec.cc:4234 FuncProto::hasEffect
+    /// Determine the call effect on a range. A non-empty prototype-local
+    /// effect list completely overrides the model list; an empty list
+    /// delegates to the shared model.
+    pub fn has_effect(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> EffectType {
+        if !self.effects.is_empty() {
+            return ProtoModelFull::lookup_effect(
+                &self.effects,
+                addr_space,
+                addr_offset,
+                size,
+            );
+        }
+        self.model
+            .as_ref()
+            .expect("FuncProto::has_effect requires a prototype model")
+            .has_effect(addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.cc:3818 FuncProto::setModel
+    /// Install or clear the shared prototype model and update the model-derived
+    /// prototype state. Model flags are sticky, and an unknown extra-pop value
+    /// does not replace a value already learned from an earlier model.
+    pub fn set_model(&mut self, model: Option<Arc<ProtoModelFull>>) {
+        let Some(model) = model else {
+            self.model = None;
+            self.calling_convention = "unknown".to_string();
+            self.extra_pop = EXTRAPOP_UNKNOWN_FULL;
+            return;
+        };
+
+        if self.model.is_none() || model.extrapop != EXTRAPOP_UNKNOWN_FULL {
+            self.extra_pop = model.extrapop;
+        }
+        if model.has_this {
+            self.has_thisptr = true;
+        }
+        if model.is_construct {
+            self.is_constructor_flag = true;
+        }
+        if model.output.is_auto_killed_by_call() {
+            self.auto_killed_by_call = true;
+        }
+        self.calling_convention = model.name.clone();
+        self.model = Some(model);
+    }
+
+    // Ghidra: fspec.hh:1476 FuncProto::getExtraPop
+    /// Get the prototype-local extra stack-pop value.
+    pub fn get_extra_pop(&self) -> i32 {
+        self.extra_pop
+    }
+
+    // Ghidra: fspec.cc:4609 FuncProto::isAutoKilledByCall
+    /// Return whether call outputs are automatically killed. Output locking
+    /// independently forces this property, exactly as in Ghidra.
+    pub fn is_auto_killed_by_call(&self) -> bool {
+        self.auto_killed_by_call || self.output_type_locked
+    }
+
+    // RUGRA-GLUE: exposes Ghidra's shared `ProtoModel *` identity for the
+    // locked differential fixture without leaking the stored Arc.
+    pub fn shares_model_with(&self, other: &FuncProto) -> bool {
+        match (&self.model, &other.model) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
     }
 
     // Ghidra: fspec.cc:3778 FuncProto::addEffect
@@ -521,7 +613,7 @@ impl FuncProto {
         false
     }
 
-    // Ghidra: fspec.cc:3778 FuncProto::copyFrom
+    // Ghidra: fspec.cc:3789 FuncProto::copy
     /// Copy from another FuncProto.
     /// Faithful to FuncProto::copy (fspec.cc:3789).
     pub fn copy_from(&mut self, other: &FuncProto) {
@@ -531,6 +623,10 @@ impl FuncProto {
         self.void_input_locked = other.void_input_locked;
         self.calling_convention = other.calling_convention.clone();
         self.is_dotdotdot = other.is_dotdotdot;
+        self.effects = other.effects.clone();
+        self.model = other.model.clone();
+        self.extra_pop = other.extra_pop;
+        self.auto_killed_by_call = other.auto_killed_by_call;
         self.output_type_locked = other.output_type_locked;
         self.model_locked = other.model_locked;
         self.is_inline = other.is_inline;
@@ -538,7 +634,6 @@ impl FuncProto {
         self.is_constructor_flag = other.is_constructor_flag;
         self.is_destructor = other.is_destructor;
         self.has_thisptr = other.has_thisptr;
-        self.return_bytes_consumed = other.return_bytes_consumed;
     }
 
     // Ghidra: fspec.cc:3994 FuncProto::clearUnlockedInput
@@ -1053,11 +1148,9 @@ impl FuncProto {
     // Ghidra: fspec.hh:1389 FuncProto::hasModel
     /// Does this prototype have a (non-null) calling-convention model?
     /// Faithful inline accessor `hasModel` (fspec.hh:1389):
-    /// `(model != (ProtoModel *)0)`. Rugra models the calling-convention as a
-    /// name string; we report true when the name is non-empty and not the
-    /// "unknown" sentinel.
+    /// `(model != (ProtoModel *)0)`.
     pub fn has_model(&self) -> bool {
-        !self.calling_convention.is_empty()
+        self.model.is_some()
     }
 
     // Ghidra: fspec.hh:1618 FuncProto::getComparableFlags
@@ -1156,7 +1249,7 @@ impl FuncProto {
     /// and the `extrapop=` suffix.
     pub fn print_raw(&self, funcname: &str, out: &mut String) {
         // Ghidra: if (model != null) s << model->getName() << ' '; else s << "(no model) ";
-        if !self.calling_convention.is_empty() {
+        if self.model.is_some() {
             out.push_str(&self.calling_convention);
             out.push(' ');
         } else {
@@ -5434,9 +5527,9 @@ impl ProtoModelFull {
         }
         // upper_bound by address: find first record whose address > target,
         // then step back one. EffectRecord is sorted by (space, offset).
-        let target = (addr_space, addr_offset);
+        let target = (addr_space.space_id(), addr_offset);
         let mut idx = efflist.partition_point(|e| {
-            (e.space, e.offset) <= target
+            (e.space.space_id(), e.offset) <= target
         });
         // partition_point returns first index where predicate is false, i.e.
         // first record with (space,offset) > target — matching upper_bound.
@@ -5452,17 +5545,16 @@ impl ProtoModelFull {
             // A size of zero indicates the whole space is unaffected.
             return EffectType::Unaffected;
         }
-        // overlap(0, hit, sz): does [addr, addr+size) overlap [hit, hit+sz)?
-        let hit_end = hit_off.wrapping_add(sz as u64);
-        let addr_end = addr_offset.wrapping_add(size as u64);
-        let overlaps = hit_space == addr_space
-            && addr_offset < hit_end
-            && hit_off < addr_end;
-        if overlaps {
-            // Containment: addr must be fully within [hit, hit+sz).
-            if hit_off <= addr_offset && addr_end <= hit_end {
-                return efflist[idx].effect_type;
-            }
+        let where_in_record = overlaps_range(
+            hit_space,
+            hit_off,
+            sz,
+            addr_space,
+            addr_offset,
+            size,
+        );
+        if where_in_record >= 0 && where_in_record + i64::from(size) <= i64::from(sz) {
+            return efflist[idx].effect_type;
         }
         EffectType::UnknownEffect
     }
@@ -5492,10 +5584,10 @@ impl ProtoModelFull {
         if list_size == 0 {
             return Ok(None);
         }
-        let target = (addr_space, addr_offset);
+        let target = (addr_space.space_id(), addr_offset);
         // upper_bound by address within [0, list_size).
         let mut idx = efflist[..list_size]
-            .partition_point(|e| (e.space, e.offset) <= target);
+            .partition_point(|e| (e.space.space_id(), e.offset) <= target);
         if idx == 0 {
             // First element's address is strictly greater than target; check
             // whether the target overlaps it (Ghidra: -2) or sits before it
@@ -5503,8 +5595,8 @@ impl ProtoModelFull {
             let close_space = efflist[0].space;
             let close_off = efflist[0].offset;
             return if overlaps_range(
-                close_space, close_off, efflist[0].size,
                 addr_space, addr_offset, size,
+                close_space, close_off, efflist[0].size,
             ) < 0
             {
                 Ok(None)
@@ -5838,7 +5930,7 @@ impl ProtoModelFull {
         // Sort effectlist by (space, offset) — faithful to
         // sort(effectlist, compareByAddress).
         self.effectlist.sort_by(|a, b| {
-            (a.space, a.offset).cmp(&(b.space, b.offset))
+            (a.space.space_id(), a.offset).cmp(&(b.space.space_id(), b.offset))
         });
         // Sort likelytrash / internalstorage (VarnodeData default order).
         self.likelytrash.sort_by(|a, b| {
@@ -6030,33 +6122,32 @@ fn is_contiguous(hi_addr: Address, hi_size: i32, lo_addr: Address, _lo_size: i32
     hi_addr.as_u64() + hi_size as u64 == lo_addr.as_u64()
 }
 
-// RUGRA-GLUE: overlaps_range — mirrors `Address::overlap(szbek, addr, sz)`
-// (address.cc). Returns the byte offset of (space2, off2, sz2) within
-// (space1, off1, sz1), or -1 if the ranges do not overlap. Used by
-// `ProtoModelFull::lookup_record` to classify a probe against a candidate.
+// RUGRA-GLUE: overlaps_range — mirrors the observable
+// `Address::overlap(0, record, size)` result for the ordered call sites in
+// `ProtoModelFull::lookup_effect` and `lookup_record`. Their upper-bound
+// predecessor choice guarantees the candidate start is not after the probe
+// (the begin case reverses the arguments), so u64 subtraction cannot take a
+// narrower AddrSpace wrap-around path.
 fn overlaps_range(
     space1: AddressSpace, off1: u64, sz1: i32,
-    space2: AddressSpace, off2: u64, sz2: i32,
+    space2: AddressSpace, off2: u64, _sz2: i32,
 ) -> i64 {
     if space1 != space2 {
         return -1;
     }
-    let a = off1 as i128;
-    let b = off2 as i128;
-    let len1 = sz1 as i128;
-    let len2 = sz2 as i128;
-    // Ghidra: if addr+size <= hit  -> -1 (no overlap, target precedes record)
-    //         if hit+sz  <= addr  -> -1 (no overlap, record precedes target)
-    if b + len2 <= a {
+    // Ghidra Address::overlap returns no overlap for constant-space
+    // addresses, even when their numeric ranges are identical.
+    if space1 == AddressSpace::Const {
         return -1;
     }
-    if a + len1 <= b {
+    if sz1 <= 0 {
         return -1;
     }
-    // overlap(szbek, addr, sz) returns the byte offset of addr within
-    // [hit, hit+sz). For symmetric overlap classification (the only use in
-    // lookup_record), we return the offset of (off2) within (off1, sz1).
-    (b - a) as i64
+    let distance = off2.wrapping_sub(off1);
+    if distance >= sz1 as u64 {
+        return -1;
+    }
+    distance as i64
 }
 
 #[cfg(test)]

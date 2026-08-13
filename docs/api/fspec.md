@@ -1,13 +1,39 @@
 # `fspec.rs` API Reference
 
-`FuncProto` now represents Ghidra's `voidinputlock` explicitly. An empty
+`FuncProto` now represents Ghidra's resolved `ProtoModel *` with a shared
+`Arc<ProtoModelFull>`. `copy_from` preserves exact model identity while
+value-copying the local effect vector. `set_model` applies Ghidra's guarded
+extra-pop update and sticky `hasThis` / constructor / auto-killed flags; a
+null model resets extra-pop to `0x8000` without clearing those flags.
+The legacy `calling_convention == "unknown"` string remains a compatibility
+sentinel for existing pipeline consumers; pointer-presence observables such
+as `has_model` and `print_raw` consult the resolved `Arc`, not that sentinel.
+
+Call-effect lookup also follows the locked oracle: a non-empty local effect
+list is a complete override, while an empty list delegates to the shared
+model. Records are ordered by address-space index and offset (not Rust enum
+declaration order), unique-space storage is always unaffected, size-zero
+records cover their whole space, only fully contained ranges inherit an
+effect, and constant-space addresses do not overlap ordinary records.
+
+The locked differential fixture
+`tools/run_funcproto_effect_model_oracle.sh` compares these observations
+against Ghidra 12.0.4 commit
+`e40ed13014025f82488b1f8f7bca566894ac376b`. Its Rust side is built from a
+recorded Rugra HEAD archive with only `src/fspec.rs` overlaid, so concurrent
+workspace source changes cannot enter the comparand. The covered slice is
+`MATCH`; the module remains L2 because compiler-spec/loader attachment,
+`ProtoStore` parity, likely-trash/injection copy state, and downstream
+Funcdata parameter recovery are outside this atom. In particular this model
+primitive alone does not claim to resolve the `GetStr` parameter-name/output
+differences.
+
+`FuncProto` also represents Ghidra's `voidinputlock` explicitly. An empty
 parameter vector is therefore unlocked until `set_input_lock(true)` is called;
 a known `f(void)` remains locked through analysis, while an empty stripped
 prototype is still eligible for active recovery. `clearInput` clears the void
 lock, `clearUnlockedInput` preserves an authoritative prototype as a whole,
-and `copy` preserves the flag. This closes the lock-state slice of
-`FSPEC-0001`; model identity and the remaining parameter-model state are still
-tracked by that TODO, so the module remains L2.
+and `copy` preserves the flag.
 
 As in `FuncProto::setInputLock` / `setOutputLock` (`fspec.cc:3921-3948`),
 setting either lock also locks the prototype model. Clearing an individual
@@ -85,6 +111,32 @@ Get the number of parameters
 ### `pub fn get_param(&self, index: usize) -> Option<&ProtoParameter>`
 
 Get a parameter by index
+
+### `pub fn set_model(&mut self, model: Option<Arc<ProtoModelFull>>)`
+
+Install or clear the shared prototype model and update model-derived state.
+
+### `pub fn has_model(&self) -> bool`
+
+Test the stored model pointer/`Arc`, independently of its printable name.
+
+### `pub fn has_effect(&self, space: AddressSpace, offset: u64, size: i32) -> EffectType`
+
+Look up a full address-space/range call effect through the local override or
+the shared model fallback.
+
+### `pub fn effect_iter(&self) -> &[EffectRecord]`
+
+Iterate the effective local-override or shared-model effect list.
+
+### `pub fn get_extra_pop(&self) -> i32`
+
+Return the prototype-local extra stack-pop value.
+
+### `pub fn is_auto_killed_by_call(&self) -> bool`
+
+Return the sticky model property, with output locking as an independent true
+condition.
 
 ### `pub struct FuncCallSpecs`
 
