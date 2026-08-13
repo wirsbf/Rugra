@@ -16,7 +16,7 @@
 use crate::address::{Address, Range, RangeList};
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 /// Base of internal Symbol IDs. Faithful to `Symbol::ID_BASE`
 /// (database.cc:45). IDs with the high bit pattern (>> 56 == 0x40) are
@@ -66,6 +66,52 @@ pub enum SymbolCategory {
     UnionFacet = 2,
     /// Temporary placeholder for an input symbol prior to formalizing parameters.
     FakeInput = 3,
+}
+
+/// Non-owning category slots corresponding to Ghidra's
+/// `vector<Symbol *>`. `None` preserves an interior `NULL` entry.
+#[derive(Debug, Clone, Default)]
+pub struct CategoryList(Vec<Option<Weak<RwLock<Symbol>>>>);
+
+impl CategoryList {
+    // RUGRA-GLUE: Rust wrapper preserving vector<Symbol *> null-slot/index semantics.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    // RUGRA-GLUE: Rust Option models a nullable Symbol * category slot.
+    pub fn get(&self, index: usize) -> Option<Arc<RwLock<Symbol>>> {
+        self.0
+            .get(index)
+            .and_then(Option::as_ref)
+            .and_then(Weak::upgrade)
+    }
+
+    // RUGRA-GLUE: Upgrade non-owning category slots while the name tree owns each Symbol.
+    fn iter(&self) -> impl Iterator<Item = Arc<RwLock<Symbol>>> + '_ {
+        self.0
+            .iter()
+            .filter_map(|slot| slot.as_ref().and_then(Weak::upgrade))
+    }
+
+    // RUGRA-GLUE: Mutable access to the exact nullable slot named by Symbol::catindex.
+    fn get_mut(&mut self, index: usize) -> Option<&mut Option<Weak<RwLock<Symbol>>>> {
+        self.0.get_mut(index)
+    }
+
+    // RUGRA-GLUE: Extend vector<Symbol *> with NULL slots through an inclusive index.
+    fn resize_for_index(&mut self, index: usize) {
+        if self.0.len() <= index {
+            self.0.resize_with(index + 1, || None);
+        }
+    }
+
+    // RUGRA-GLUE: Remove only trailing NULL slots, preserving interior category holes.
+    fn trim_trailing_nulls(&mut self) {
+        while self.0.last().is_some_and(Option::is_none) {
+            self.0.pop();
+        }
+    }
 }
 
 /// A storage location for a particular Symbol. Faithful to `SymbolEntry`
@@ -1287,7 +1333,7 @@ pub struct Scope {
     /// Dynamic storage entries.
     pub dynamic_entries: Vec<SymbolEntry>,
     /// References to Symbol objects organized by category.
-    pub categories: BTreeMap<i32, Vec<Arc<RwLock<Symbol>>>>,
+    pub categories: BTreeMap<i32, CategoryList>,
     /// Next available symbol id.
     pub next_unique_id: u64,
     /// Child scope ids.
@@ -1408,19 +1454,28 @@ impl Scope {
         id
     }
 
-    // Ghidra: database.hh:34 Scope::removeSymbol
+    // Ghidra: database.cc:2138 ScopeInternal::removeSymbol
     /// Remove the given Symbol from this Scope. Faithful to `removeSymbol`.
     pub fn remove_symbol(&mut self, symbol_id: u64) {
-        self.symbols.remove(&symbol_id);
+        if let Some((category, index)) = self.symbols.get(&symbol_id).and_then(|symbol| {
+            let symbol = symbol.read().unwrap();
+            let category = symbol.category as i32;
+            (category >= 0).then_some((category, symbol.catindex as usize))
+        }) {
+            if let Some(list) = self.categories.get_mut(&category) {
+                if let Some(slot) = list.get_mut(index) {
+                    *slot = None;
+                }
+                list.trim_trailing_nulls();
+            }
+        }
         self.entries.retain(|e| {
             e.symbol.read().unwrap().symbol_id != symbol_id
         });
         self.dynamic_entries.retain(|e| {
             e.symbol.read().unwrap().symbol_id != symbol_id
         });
-        for (_, vec) in self.categories.iter_mut() {
-            vec.retain(|s| s.read().unwrap().symbol_id != symbol_id);
-        }
+        self.symbols.remove(&symbol_id);
     }
 
     // Ghidra: database.hh:34 Scope::renameSymbol
@@ -2000,25 +2055,41 @@ impl Scope {
         Scope::query_function_addr(scope_stack, refaddr)
     }
 
-    // Ghidra: database.hh:34 Scope::getCategorySize
+    // Ghidra: database.cc:2806 ScopeInternal::getCategorySize
     /// Get the number of Symbols in the given category. Faithful to
     /// `getCategorySize` (database.hh:726).
     pub fn get_category_size(&self, cat: i32) -> usize {
         self.categories.get(&cat).map_or(0, |v| v.len())
     }
 
-    // Ghidra: database.hh:34 Scope::setCategory
+    // Ghidra: database.cc:2824 ScopeInternal::setCategory
     /// Set the category and index for the given Symbol. Faithful to
     /// `setCategory` (database.hh:740).
-    pub fn set_category(&mut self, symbol_id: u64, cat: i32, ind: u16) {
-        // Remove from any existing category.
-        for (_, vec) in self.categories.iter_mut() {
-            vec.retain(|s| s.read().unwrap().symbol_id != symbol_id);
-        }
+    pub fn set_category(&mut self, symbol_id: u64, cat: i32, ind: i32) {
         let sym = match self.symbols.get(&symbol_id).cloned() {
             Some(s) => s,
             None => return,
         };
+
+        // database.cc:2827-2831 — clear only the old indexed slot, then remove
+        // trailing NULLs without compacting any interior holes.
+        let old_slot = {
+            let symbol = sym.read().unwrap();
+            let category = symbol.category as i32;
+            (category >= 0).then_some((category, symbol.catindex as usize))
+        };
+        if let Some((old_category, old_index)) = old_slot {
+            if let Some(list) = self.categories.get_mut(&old_category) {
+                if let Some(slot) = list.get_mut(old_index) {
+                    *slot = None;
+                }
+                list.trim_trailing_nulls();
+            }
+        }
+
+        // database.cc:2834-2836 — int4 is assigned to uint2 before the
+        // negative-category guard.
+        let category_index = ind as u16;
         {
             let mut s = sym.write().unwrap();
             s.category = match cat {
@@ -2028,9 +2099,30 @@ impl Scope {
                 3 => SymbolCategory::FakeInput,
                 _ => SymbolCategory::NoCategory,
             };
-            s.catindex = ind;
+            s.catindex = category_index;
         }
-        self.categories.entry(cat).or_default().push(sym);
+        if cat < 0 {
+            return;
+        }
+
+        // database.cc:2837-2844 — category 0 honors the requested uint2
+        // index, padding with NULL; all later categories ignore ind and append.
+        // Ghidra's outer vector grows through every intermediate category.
+        for category in 0..=cat {
+            self.categories.entry(category).or_default();
+        }
+        let list = self.categories.get_mut(&cat).unwrap();
+        let index = if cat > 0 {
+            list.len()
+        } else {
+            category_index as usize
+        };
+        {
+            let mut symbol = sym.write().unwrap();
+            symbol.catindex = index as u16;
+        }
+        list.resize_for_index(index);
+        list.0[index] = Some(Arc::downgrade(&sym));
     }
 
     // Ghidra: database.hh:34 Scope::clear
@@ -2841,7 +2933,11 @@ impl Scope {
             let to_remove: Vec<u64> = self
                 .categories
                 .get(&cat)
-                .map(|v| v.iter().map(|s| s.read().unwrap().symbol_id).collect())
+                .map(|v| {
+                    v.iter()
+                        .map(|s| s.read().unwrap().symbol_id)
+                        .collect()
+                })
                 .unwrap_or_default();
             for id in to_remove {
                 self.remove_symbol(id);
@@ -2878,7 +2974,11 @@ impl Scope {
             // database.cc:2074-2076 — category[cat].
             self.categories
                 .get(&cat)
-                .map(|v| v.iter().map(|s| s.read().unwrap().symbol_id).collect())
+                .map(|v| {
+                    v.iter()
+                        .map(|s| s.read().unwrap().symbol_id)
+                        .collect()
+                })
                 .unwrap_or_default()
         } else {
             // database.cc:2092-2097 — nametree filtered to category < 0.
@@ -3041,16 +3141,14 @@ impl Scope {
     /// when `cat` is out of range or `ind` is out of range for that category.
     /// The C++ form indexes `category[cat][ind]`; Rugra stores categories in a
     /// `BTreeMap<i32, Vec<...>>`, so we look up the vector and index it.
-    pub fn get_category_symbol(&self, cat: i32, ind: usize) -> Option<Arc<RwLock<Symbol>>> {
+    pub fn get_category_symbol(&self, cat: i32, ind: i32) -> Option<Arc<RwLock<Symbol>>> {
         // database.cc:2817-2818 — bounds on cat.
-        self.categories.get(&cat).and_then(|v| {
-            // database.cc:2819 — bounds on ind.
-            if ind < v.len() {
-                Some(v[ind].clone())
-            } else {
-                None
-            }
-        })
+        if cat < 0 || ind < 0 {
+            return None;
+        }
+        self.categories
+            .get(&cat)
+            .and_then(|list| list.get(ind as usize))
     }
 
     // Ghidra: database.cc:2200 ScopeInternal::setAttribute

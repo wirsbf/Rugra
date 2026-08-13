@@ -79,7 +79,8 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
 - `set_attribute(id, attr)`, `clear_attribute(id, attr)`.
 - `find_addr(addr)`, `find_container(addr, size)`, `find_overlap(addr, size)`,
   `find_by_name(name)`, `is_name_used(name)`.
-- `get_category_size(cat)`, `set_category(id, cat, ind)`.
+- `get_category_size(cat)`, `get_category_symbol(cat, ind)`,
+  `set_category(id, cat, ind)`.
 - `clear()`, `clear_unlocked()`.
 - `attach_child(id)`, `detach_child(id)`, `num_symbols()`.
 - XML encode/decode (database.cc:2616/2744):
@@ -138,6 +139,41 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
   (currently linear search).
 - Full `Datatype` integration (type_name is currently a String placeholder).
 - `Funcdata` ownership in `FunctionSymbol`.
+
+## 2026-08-13: locked category table semantics (`SCOPE-CAT0-0001`)
+
+`Scope` now represents Ghidra's `vector<vector<Symbol *>> category` with a
+`CategoryList` that keeps indexed `NULL` holes and non-owning `Weak` symbol
+references. The owning `symbols` name tree remains the only category-related
+owner of each `Symbol`, matching `ScopeInternal`'s destructor and
+`removeSymbol` behavior.
+
+- `get_category_size(cat)` (`database.cc:2806`) returns zero for negative or
+  absent categories and otherwise returns the physical vector length,
+  including interior null holes.
+- `get_category_symbol(cat, ind)` (`database.cc:2814`) returns no symbol for a
+  negative/out-of-range category or index and for an interior null slot; a
+  populated slot returns the same `Arc` allocation, preserving pointer
+  identity.
+- `set_category(id, cat, ind)` (`database.cc:2824`) clears only the symbol's
+  former indexed slot and removes trailing nulls without compacting interior
+  holes. Category 0 converts `ind: i32` to Ghidra's `uint2` index and places the
+  symbol at that exact slot, padding with nulls. Categories greater than zero
+  ignore `ind` and append. Negative categories update the symbol fields but do
+  not create a category table.
+- The outer table grows through all intermediate categories and never shrinks
+  merely because an inner list becomes empty. Removing a symbol clears and
+  trims its exact category list before releasing entries and the name-tree
+  owner.
+
+The locked direct oracle fixture is
+`tests/oracle/scope_category_1204.{cc,rs,metadata.json}`, run by
+`tools/run_scope_category_oracle.sh`. It records oracle tag/commit,
+architecture/compiler/options, canonical input fingerprint, slot-by-slot
+state, symbol `(category,index)`, exact identity, ownership, destruction count,
+and pinned comparand hashes. Its proof is deliberately limited to these three
+category functions plus the directly observed removal/ownership closure; it
+does not promote the overall database module beyond L2.
 
 ## 2026-06-27：XML encode/decode（使用 marshal.rs 基础设施）
 
