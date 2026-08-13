@@ -4,8 +4,9 @@
 //! for the lifecycle of all `Datatype` objects, ensuring that identical types are
 //! deduplicated and providing a central point for type lookup.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use crate::address::Address;
 use crate::AddressSpace;
 use crate::marshal::{Encoder, Decoder};
@@ -18,6 +19,15 @@ pub struct TypeFactory {
 
     /// Cache for core types (void, int, etc.) for quick access
     core_types: BTreeMap<String, Arc<Datatype>>,
+
+    /// Structural registry for atomic types. Ghidra's `DatatypeSet tree`
+    /// orders `TypeBase` by sub-metatype, descending size, then id.  Keeping
+    /// this separate from the name cross-reference lets unnamed id-zero types
+    /// participate in factory enumeration and `clearNoncore`.
+    base_type_tree: RwLock<BTreeMap<(u8, Reverse<usize>, u64), Arc<Datatype>>>,
+
+    /// Fast preferred-core lookup corresponding to Ghidra's `typecache`.
+    base_cache: RwLock<BTreeMap<(usize, TypeMetatype), Arc<Datatype>>>,
 
     /// The default size of a pointer for this architecture
     ptr_size: usize,
@@ -34,7 +44,8 @@ pub struct TypeFactory {
 }
 
 impl TypeFactory {
-    // Ghidra: type.cc:3106 TypeFactory::new
+    // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3106) with the
+    // standalone SLEIGH fallback bootstrap (sleigh_arch.cc:204).
     /// Create a new TypeFactory and initialize core types
     ///
     /// # Arguments
@@ -43,6 +54,8 @@ impl TypeFactory {
         let mut factory = Self {
             types: BTreeMap::new(),
             core_types: BTreeMap::new(),
+            base_type_tree: RwLock::new(BTreeMap::new()),
+            base_cache: RwLock::new(BTreeMap::new()),
             ptr_size,
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
@@ -51,7 +64,7 @@ impl TypeFactory {
         factory
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::initCoreTypes
+    // Ghidra: sleigh_arch.cc:204 SleighArchitecture::buildCoreTypes
     /// Initialize the fundamental core types
     fn init_core_types(&mut self) {
         // Void type
@@ -81,9 +94,21 @@ impl TypeFactory {
         self.add_core_type(f_type4);
         let f_type8 = Arc::new(Datatype::Base(TypeBase::new("double".to_string(), 8, TypeMetatype::Float)));
         self.add_core_type(f_type8);
+
+        // Ghidra: sleigh_arch.cc:229 SleighArchitecture::buildCoreTypes
+        // The standalone SLEIGH architecture installs these four named core
+        // unknowns before TypeFactory::cacheCoreTypes. Other sizes are created
+        // as unnamed, non-core TypeBase objects by TypeFactory::getBase.
+        for &size in &[1, 2, 4, 8] {
+            let name = format!("xunknown{size}");
+            let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Unknown);
+            base.id = Datatype::hash_name(&name);
+            self.add_core_type(Arc::new(Datatype::Base(base)));
+        }
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::addCoreType
+    // RUGRA-GLUE: Combines TypeFactory::setCoreType (type.cc:3178), insert
+    // (type.cc:3390), and cacheCoreTypes (type.cc:3200) for Rust-owned Arcs.
     /// Internal helper to register a core type
     fn add_core_type(&mut self, mut dt: Arc<Datatype>) {
         if let Some(dt_mut) = Arc::get_mut(&mut dt) {
@@ -94,7 +119,47 @@ impl TypeFactory {
         }
         let name = dt.get_name().to_string();
         self.core_types.insert(name.clone(), dt.clone());
-        self.types.insert(name, dt);
+        self.types.insert(name, dt.clone());
+        let tree_key = (
+            Self::base_submeta(dt.get_metatype()),
+            Reverse(dt.get_size()),
+            dt.get_id(),
+        );
+        let tree = self
+            .base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tree.entry(tree_key).or_insert_with(|| dt.clone());
+        let cache_key = (dt.get_size(), dt.get_metatype());
+        let cache = self
+            .base_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.entry(cache_key).or_insert(dt);
+    }
+
+    // Ghidra: type.cc:23 Datatype::base2sub
+    /// Return the locked-oracle propagation sub-metatype used by the factory's
+    /// structural ordering. Atomic types use these exact `base2sub` values.
+    fn base_submeta(metatype: TypeMetatype) -> u8 {
+        match metatype {
+            TypeMetatype::PartialUnion => 0,
+            TypeMetatype::Union => 1,
+            TypeMetatype::Struct => 2,
+            TypeMetatype::Array => 3,
+            TypeMetatype::Pointer => 6,
+            TypeMetatype::Float => 8,
+            TypeMetatype::Code => 9,
+            TypeMetatype::Bool => 10,
+            TypeMetatype::Enum => 13,
+            TypeMetatype::PartialEnum => 14,
+            TypeMetatype::Uint => 16,
+            TypeMetatype::Int => 17,
+            TypeMetatype::PartialStruct => 20,
+            TypeMetatype::Unknown => 21,
+            TypeMetatype::Spacebase => 22,
+            TypeMetatype::Void => 23,
+        }
     }
 
     // Ghidra: type.cc:3366 TypeFactory::findByName
@@ -104,13 +169,52 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:3631 TypeFactory::getBase
-    /// Get a base scalar type of `size` bytes with metatype `m`. Faithful to
-    /// `TypeFactory::getBase` (type.cc:3631-3660). For int/uint/float/bool,
-    /// looks up the pre-generated core type by name; if not found, creates
-    /// a new base type on the fly.
+    /// Get a base scalar type of `size` bytes with metatype `m`.
+    ///
+    /// For `Unknown`, this follows Ghidra's `TypeFactory::getBase`
+    /// (`type.cc:3631-3660`) exactly for sizes within the architecture's base
+    /// type limit: cached core types win; otherwise one unnamed `TypeBase` is
+    /// inserted into the factory and every later request returns the same
+    /// object. The other metatypes retain Rugra's existing named-core lookup.
     pub fn get_base(&self, size: usize, m: TypeMetatype) -> Option<Arc<Datatype>> {
         use TypeMetatype::*;
         match m {
+            Unknown => {
+                let cache_key = (size, Unknown);
+                let cache = self
+                    .base_cache
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(existing) = cache.get(&cache_key) {
+                    return Some(existing.clone());
+                }
+                drop(cache);
+                let tree_key = (Self::base_submeta(Unknown), Reverse(size), 0);
+                let tree = self
+                    .base_type_tree
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(existing) = tree.get(&tree_key) {
+                    return Some(existing.clone());
+                }
+                drop(tree);
+                let mut tree = self
+                    .base_type_tree
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                Some(
+                    tree
+                        .entry(tree_key)
+                        .or_insert_with(|| {
+                            Arc::new(Datatype::Base(TypeBase::new(
+                                String::new(),
+                                size,
+                                Unknown,
+                            )))
+                        })
+                        .clone(),
+                )
+            }
             Int => {
                 let name = if size == 4 { "int".to_string() } else { format!("int{}", size) };
                 self.find_by_name(&name).or_else(|| {
@@ -133,6 +237,43 @@ impl TypeFactory {
             Void => self.find_by_name("void"),
             _ => None,
         }
+    }
+
+    // Ghidra: type.cc:3667 TypeFactory::getBase
+    /// Get or create a named atomic type, rejecting a second definition that
+    /// reuses the name/id with a different size or metatype.
+    pub fn get_base_named(
+        &mut self,
+        size: usize,
+        m: TypeMetatype,
+        name: &str,
+    ) -> Result<Arc<Datatype>, String> {
+        if let Some(existing) = self.find_by_name(name) {
+            if existing.get_size() != size || existing.get_metatype() != m {
+                return Err(format!("Trying to alter definition of type: {name}"));
+            }
+            return Ok(existing);
+        }
+
+        let mut base = TypeBase::new(name.to_string(), size, m);
+        base.id = Datatype::hash_name(name);
+        let datatype = Arc::new(Datatype::Base(base));
+        let tree_key = (
+            Self::base_submeta(datatype.get_metatype()),
+            Reverse(datatype.get_size()),
+            datatype.get_id(),
+        );
+        let mut tree = self
+            .base_type_tree
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if tree.contains_key(&tree_key) {
+            return Err(format!("Shared type id: {:x}", datatype.get_id()));
+        }
+        tree.insert(tree_key, datatype.clone());
+        drop(tree);
+        self.types.insert(name.to_string(), datatype.clone());
+        Ok(datatype)
     }
 
     // Ghidra: type.cc:3106 TypeFactory::getPtr
@@ -204,37 +345,54 @@ impl TypeFactory {
         None
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::numTypes
+    // RUGRA-GLUE: Ghidra exposes no numTypes method; this counts the union of
+    // its structural `tree` (type.hh:772) and Rust's named cross-reference.
     /// Get the number of types currently managed
     pub fn num_types(&self) -> usize {
-        self.types.len()
+        let anonymous_base_count = self
+            .base_type_tree
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .filter(|datatype| datatype.get_name().is_empty())
+            .count();
+        self.types.len() + anonymous_base_count
     }
 
     // Ghidra: type.cc:3563 TypeFactory::dependentOrder
-    /// Place data-types in an order such that if the definition of data-type
-    /// "a" depends on the definition of data-type "b", then "b" occurs earlier
-    /// in the order. Faithful to `TypeFactory::dependentOrder`
-    /// (type.cc:3563-3571): iterates the type tree (BTreeMap = sorted by name,
-    /// matching Ghidra's `tree` ordered set) and recursively orders each via
-    /// `order_recurse`. The output `deporder` excludes nothing — callers (e.g.
-    /// `PrintC::docTypeDefinitions`, printc.cc:2401) filter out core types.
+    /// Place data-types in dependency order. The atomic registry, including
+    /// unnamed `getBase` results, follows Ghidra's `DatatypeCompare` key for
+    /// atomic types: sub-metatype, descending size, then id. The remaining
+    /// pointer/aggregate registry is still name-keyed, so full non-atomic
+    /// `dependentOrder` equivalence remains `TYPE-0001`/L2.
     ///
     /// Alignment Evidence (four decisive-semantics checklist):
     /// - References/output params: `deporder` is an out-param appended to
     ///   (Ghidra passes `vector<Datatype*> &deporder`); Rust passes `&mut Vec`.
-    /// - Loop bounds/order: Ghidra iterates `tree.begin()..tree.end()` —
-    ///   ordered by Datatype::compare (name, then size). Rust's `self.types`
-    ///   is a `BTreeMap<String, Arc<Datatype>>` ordered by name, matching.
+    /// - Loop bounds/order: Ghidra iterates every `tree` entry from begin to
+    ///   end. Rust first walks every atomic structural entry in the same key
+    ///   order, then the remaining named roots; the latter is a known gap.
     /// - Counter/accumulator: `mark` (DatatypeSet) is per-call, reset on each
     ///   `dependentOrder` invocation; cycle-break via insert-second-check.
-    /// - Sort/compare key: Datatype pointer identity in Ghidra's DatatypeSet;
-    ///   Rust uses `Arc::as_ptr` identity for the visited set.
+    /// - Sort/compare key: Ghidra's roots and mark use `compareDependency`
+    ///   then id. Rust's atomic roots match this; the visited set uses canonical
+    ///   `Arc` identity, equivalent for the factory-owned atomic slice only.
     pub fn dependent_order(&self, deporder: &mut Vec<Arc<Datatype>>) {
         // Ghidra: type.cc:3545 TypeFactory::orderRecurse
         // `mark` prevents cycles: insert returns whether the ptr was new.
         let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        // Ghidra iterates tree.begin()..tree.end() — sorted by name. BTreeMap
-        // values() preserves insertion-sorted-by-key order, matching Ghidra.
+        // Atomic roots are held in the same (submeta, descending size, id)
+        // order as Ghidra's DatatypeSet. This includes unnamed getBase results.
+        let tree = self
+            .base_type_tree
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for ct in tree.values() {
+            Self::order_recurse(deporder, &mut visited, ct);
+        }
+        drop(tree);
+        // Add non-atomic named roots. Pointer/aggregate global structural
+        // ordering remains part of the module-level TypeFactory L2 gap.
         for ct in self.types.values() {
             Self::order_recurse(deporder, &mut visited, ct);
         }
@@ -315,10 +473,18 @@ impl TypeFactory {
         }
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::clearNonCore
+    // Ghidra: type.cc:3266 TypeFactory::clearNoncore
     /// Clear all non-core types
     pub fn clear_non_core(&mut self) {
         self.types = self.core_types.clone();
+        self.base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|_, datatype| datatype.is_coretype());
+        self.base_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|_, datatype| datatype.is_coretype());
         self.rel_pointers.clear();
         self.typedefs.clear();
     }
@@ -2308,5 +2474,52 @@ mod tests {
         let proto = crate::fspec::FuncProto::new("f".to_string(), void_t);
         let res = factory.set_prototype("code", Some(&proto), 0);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_unknown_base_is_canonical_by_size() {
+        let mut factory = TypeFactory::new(8);
+        let core = factory.get_base(8, TypeMetatype::Unknown).unwrap();
+        let core_again = factory.get_base(8, TypeMetatype::Unknown).unwrap();
+        assert!(Arc::ptr_eq(&core, &core_again));
+        assert_eq!(core.get_name(), "xunknown8");
+        assert!(core.is_coretype());
+
+        let anonymous = factory.get_base(3, TypeMetatype::Unknown).unwrap();
+        let anonymous_again = factory.get_base(3, TypeMetatype::Unknown).unwrap();
+        assert!(Arc::ptr_eq(&anonymous, &anonymous_again));
+        assert!(!Arc::ptr_eq(&core, &anonymous));
+        assert_eq!(anonymous.get_name(), "");
+        assert_eq!(anonymous.get_id(), 0);
+        assert!(!anonymous.is_coretype());
+
+        let mut ordered = Vec::new();
+        factory.dependent_order(&mut ordered);
+        assert!(ordered.iter().any(|datatype| Arc::ptr_eq(datatype, &anonymous)));
+
+        factory.clear_non_core();
+        let recreated = factory.get_base(3, TypeMetatype::Unknown).unwrap();
+        let recreated_again = factory.get_base(3, TypeMetatype::Unknown).unwrap();
+        assert!(!Arc::ptr_eq(&anonymous, &recreated));
+        assert!(Arc::ptr_eq(&recreated, &recreated_again));
+    }
+
+    #[test]
+    fn test_named_unknown_rejects_conflicting_definition() {
+        let mut factory = TypeFactory::new(8);
+        let first = factory
+            .get_base_named(3, TypeMetatype::Unknown, "fixture_unknown3")
+            .unwrap();
+        let repeated = factory
+            .get_base_named(3, TypeMetatype::Unknown, "fixture_unknown3")
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert_eq!(first.get_id(), Datatype::hash_name("fixture_unknown3"));
+        assert_eq!(
+            factory
+                .get_base_named(4, TypeMetatype::Unknown, "fixture_unknown3")
+                .unwrap_err(),
+            "Trying to alter definition of type: fixture_unknown3"
+        );
     }
 }

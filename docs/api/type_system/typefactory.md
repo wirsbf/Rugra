@@ -100,3 +100,42 @@ get_type_void/char/unicode、get_type_union+set_union_fields、get_type_enum+set
 behavior changed, no runtime oracle was added, and the method/module remains
 L2 with formal status `NO_ORACLE`; the annotation must not be interpreted as
 `MATCH`.
+
+## 2026-08-13 TYPE-UNKNOWN-0001
+
+`TypeFactory::get_base(size, TypeMetatype::Unknown)` now preserves the
+targeted canonical object semantics of locked Ghidra 12.0.4
+`TypeFactory::getBase(int4,type_metatype)` (`type.cc:3631`):
+
+- sizes 1, 2, 4, and 8 resolve to the SLEIGH core types `xunknown1`,
+  `xunknown2`, `xunknown4`, and `xunknown8`, with the exact Ghidra name hash,
+  core flag, size, and metatype;
+- other in-range sizes resolve to one unnamed, id-zero, non-core `TypeBase`
+  per `(size, metatype)`, enter the factory's atomic structural registry, and
+  repeated requests return the same `Arc`;
+- `get_base_named` mirrors the named overload at `type.cc:3667`: it hashes the
+  name, canonicalizes repeated equivalent requests, and rejects a conflicting
+  same-name definition with Ghidra's error text.
+
+The direct runtime fixture is `tests/oracle/type_unknown_1204.{cc,rs}` and the
+gate is `tools/run_type_unknown_oracle.sh`. It compares fixed-order JSON
+byte-for-byte for type properties, repeated pointer identity, cross-size
+non-identity, named identity, the collision error, anonymous structural order,
+and `clearNoncore` removal plus post-clear repeated-recreation identity. The
+fixture intentionally does not compare a Ghidra pointer retained across
+`clearNoncore`: Ghidra deletes that object, whereas a cloned Rust `Arc` would
+keep it alive, so external-old-handle lifetime/identity remains `UNTESTED`.
+The Rust closure is a verified
+archive of commit `6e373f08f42fd5d3b0a02d282d4245c046387558` with only the owned
+`src/type_system/typefactory.rs` snapshot overlaid, so unrelated live source
+churn cannot change the comparand. The runner also materializes curl and every
+SLEIGH/spec input from verified blobs at provenance commit
+`34a3febff160031c265cfbd841a94022c68c2c19`; it never reads the live
+`examples/curl` or spec worktree and does not require runtime HEAD equality.
+
+This closes only the observed unknown atomic-base slice. The module remains
+L2: sizes above `Architecture::max_basetype_size` (array-of-unknown-byte
+conversion), decode/cache rebuilding, Address/Varnode consumers, and the
+general pointer/array/aggregate structural registry remain unproved. The
+latter is the existing `TYPE-0001` mismatch; atomic ordering evidence must not
+be read as proof that the whole TypeFactory tree is aligned.

@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TYPE-UNKNOWN-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "apis": [
+      "TypeFactory::getBase(int4,type_metatype)",
+      "TypeFactory::getBase(int4,type_metatype,const string &)",
+      "TypeFactory::dependentOrder(vector<Datatype *> &)",
+      "TypeFactory::clearNoncore(void)"
+    ],
+    "core_type_source": "SleighArchitecture::buildCoreTypes fallback at sleigh_arch.cc:204-238",
+    "max_basetype_size": "Architecture value loaded by BfdArchitecture::init; every requested size is <= 8",
+    "factory_state": "Fresh BfdArchitecture TypeFactory after architecture.init; requests are made in the declared order, followed by dependentOrder, clearNoncore, and one anonymous size-3 recreation",
+    "normalization": "None; one fixed-order compact UTF-8 JSON object plus final newline is compared byte-for-byte",
+    "random_seed": "none; TypeFactory operations and fixture traversal are deterministic",
+    "error_injection": "Named same-id conflicting definition only; no allocation or lock failure injection"
+  },
+  "assets": {
+    "source_policy": "Materialize every SLEIGH/spec file and curl binary from verified Git blobs at the pinned Rugra provenance commit; never consume their working-tree copies and never require runtime HEAD equality",
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by its verified object ID; never read the working-tree file and never require runtime HEAD equality",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "include_tree_sha256": "4eb42123f7696cd09656ed0e0950de8c450b1ab0606a08a188411f8d0463159c",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "29ff1b69085bdfdb33516df066d113ec0252aaf9eec31a9736875ee7b5877d1e",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "cases": {
+      "anonymous_sizes": [
+        8,
+        1,
+        4,
+        2,
+        3,
+        5,
+        6,
+        7
+      ],
+      "metatype": "TYPE_UNKNOWN",
+      "named": {
+        "name": "fixture_unknown3",
+        "size": 3
+      },
+      "collision_size": 4,
+      "anonymous_structural_order_before_clear": [
+        7,
+        6,
+        5,
+        3
+      ],
+      "anonymous_structural_order_after_clear": [],
+      "anonymous_structural_order_after_recreate": [
+        3
+      ]
+    }
+  },
+  "observation_schema": {
+    "format": "One compact UTF-8 JSON object with fixed key order and a final newline",
+    "type": "Requested size, returned size, metatype string, exact name, unsigned id, and inheritable/core flag",
+    "identity": "Repeated same-factory pointer identity for each size, cross-size non-identity, and named repeated identity",
+    "factory_mutation": "dependentOrder projection of every unnamed TYPE_UNKNOWN before clear, after clear, and after recreation",
+    "clear_identity": "Repeated post-clear retrieval returns the recreated pointer; no pre-clear pointer is dereferenced or compared after Ghidra deletes it",
+    "exception": "Exact conflicting named-definition LowlevelError text",
+    "order": "Request/result arrays preserve declared input order; anonymous structural order preserves TypeFactory tree traversal order"
+  },
+  "comparand": {
+    "rust_base_commit": "6e373f08f42fd5d3b0a02d282d4245c046387558",
+    "rust_base_tree": "2e28f7ce3fec43bb6af562ab6530c1cd333b7ceb",
+    "typefactory_base_blob": "d34f5038b19eaf5165bcf6fef0304ba0cd86aa25",
+    "runner_sha256": "8087af3a65239e5975d15e00e65f70ff6b163947ad025a84eacb648306198034",
+    "cpp_fixture_sha256": "64cbd48442865785c4a4532aa99183034b4dff654aed297ffa1ae88f79940ac4",
+    "rust_fixture_sha256": "8473be768386b3fe7ffb918b087004c13d3d20739778b68fe6b9d12b053d3000",
+    "typefactory_rs_sha256": "c8a2f8e997a80807c5253a2f44710595674d6dc98ad75d7a6e57f865e70172a1",
+    "datatype_rs_sha256": "0dfe46eeed99b7e48ff617c12f639903d5d2daa605b0f0ff03a6a9d584273ac2",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-type-unknown-lib-snapshot-v2 plus sorted length-prefixed paths and contents from pinned base commit with the owned TypeFactory overlay",
+    "rust_crate_tree_sha256": "e2833ddafb868bff6bf78305b2686485b8eb07d98008608cf79c1f1f0708a010",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_cxx_target": "x86_64-linux-gnu",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+    "host_make_path": "/usr/bin/make",
+    "host_python_path": "/usr/bin/python3.10",
+    "host_git_path": "/usr/bin/git",
+    "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+    "host_platform": "Linux 6.8.0-124-generic x86_64"
+  },
+  "build": {
+    "registry_packages": 164,
+    "cargo_mode": "Pinned Rugra commit archive plus the owned src/type_system/typefactory.rs overlay, with Cargo.lock-verified local registry archives vendored into a temporary CARGO_HOME; --locked --offline; no other live Rust source is read",
+    "ghidra_mode": "git archive of the locked Ghidra commit plus rebuilt libdecomp.a",
+    "input_mode": "All four SLEIGH/spec assets and curl are materialized from verified Git blobs at the pinned Rugra provenance commit",
+    "runner_mode": "Re-exec from an immutable file descriptor, reject path substitution, validate its snapshot hash, then build the fixed commit-plus-owned-overlay closure without requiring runtime HEAD equality"
+  },
+  "expected_stdout_sha256": "868c397c271e3bbb013441db52c1bf3ecab9cfb4b99fc1940928d9322bf478ba",
+  "expected_exit_code": 0,
+  "coverage": {
+    "core_unknown_sizes_1_2_4_8": "MATCH",
+    "unnamed_unknown_sizes_3_5_6_7": "MATCH",
+    "same_factory_pointer_identity": "MATCH",
+    "different_size_non_identity": "MATCH",
+    "named_unknown_identity": "MATCH",
+    "named_conflicting_definition": "MATCH",
+    "anonymous_structural_order": "MATCH",
+    "clear_noncore_removes_anonymous": "MATCH",
+    "clear_noncore_recreated_repeat_identity": "MATCH",
+    "external_old_handle_lifetime_identity": "UNTESTED: Ghidra deletes non-core objects during clearNoncore; Rust Arc retention is a different lifetime condition and is not compared",
+    "size_above_architecture_max_basetype_size": "UNTESTED",
+    "decode_core_type_cache_rebuild": "UNTESTED",
+    "cross_factory_identity": "UNTESTED",
+    "general_pointer_array_aggregate_structural_registry": "MISMATCH: TYPE-0001",
+    "address_varnode_consumer_closure": "UNTESTED"
+  },
+  "overall_status": "PARTIAL_MATCH: targeted unknown atomic-base, structural-order, and clearNoncore observations match; large-base array conversion and general TypeFactory registry remain UNTESTED/MISMATCH"
+}
