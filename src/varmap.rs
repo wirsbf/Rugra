@@ -900,7 +900,7 @@ fn make_int_type(size: usize) -> Arc<Datatype> {
 ///
 /// Treats `vn` as the result of a series of ADD operations and sums all the
 /// constant terms by traversing the syntax tree backwards through additive ops.
-fn gather_offset(vn: &Arc<RwLock<Varnode>>) -> u64 {
+pub fn gather_offset(vn: &Arc<RwLock<Varnode>>) -> u64 {
     let v = vn.read().unwrap();
     if v.is_constant() {
         return v.get_offset();
@@ -964,7 +964,7 @@ fn gather_offset(vn: &Arc<RwLock<Varnode>>) -> u64 {
     }
     // Ghidra masks to the varnode size: retval & calc_mask(vn->getSize()).
     let size = vn.read().unwrap().get_size();
-    let mask = if size >= 64 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
+    let mask = if size >= 8 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
     retval & mask
 }
 
