@@ -9,6 +9,36 @@ Rule-based transformations for P-code operations
 Corresponds to Ghidra's `ruleaction.hh`. Rules are small, local
 transformations that target specific opcodes to simplify the IR.
 
+## 2026-08-13：RuleCollectTerms 定宽系数与常量归并
+
+`RuleCollectTerms::apply_op` 现在按锁定 Ghidra 12.0.4
+`ruleaction.cc:107-176` 执行两种定宽加法：相同项系数使用 64 位无符号
+`wrapping_add` 后再以项的 storage size mask 截断；常量项也先按 `uintb`
+回绕、再按常量 Varnode 的 size 截断。因此 1-byte 的 `0xff + 2` 与 8-byte
+的 `UINT64_MAX + 2` 都得到 `1`，不会在 Rust overflow-check 构建中 panic。
+
+常量归并严格从排好序的尾部倒序扫描。`lastconst` 最终指向排序后第一个
+非零常量边；该边接收总和，所有后续、未被外层乘法包裹的常量边按原顺序
+替换为零。这修复了原正序扫描留下多个非零常量、且选择错误输入槽的问题。
+
+锁定 oracle fixture `tests/oracle/rule_collect_terms_1204.{cc,rs}` 对七组同输入
+IR 逐字节比较，包括非溢出、storage-mask 回绕、`uintb` 固定 64 位回绕和结果
+为零的相同项系数，以及三组常量归并。目标相关的结构观察保留
+block/alive/dead 顺序、parent/SeqNum order、每个输入槽与输出、所有 fixture
+追踪和变换新建 Varnode 的 SSA 分类、def 和有序 descendants；仅规范化
+allocation-only unique-space offset。这个窄 fixture 不声称观察 PcodeOp/Varnode
+的所有非目标 flags、type/symbol/high 状态，也不能消除 `OPBANK-0001`
+中 nullable input slot 被 Rugra 临时 sentinel Varnode 代替的 whole-bank 差异。root guard、
+`distributeIntMultAdd` 两分支和无可归并项的 NO_CHANGE 路径仍单列为
+`UNTESTED`。其他未覆盖路径还包括 helper 的三种系数回退、all-constant 根、
+初始零和多于两个常量、multiplier constant-edge skip 与共享 ADD 边界；
+多个 `termOrder == 0` 的等价项还需对拍 Ghidra `std::sort` 的 tie 重排顺序；
+不能据此把整个 Rule 升为 L3。
+因此 runner 的合格结论仅为七个目标结构投影 `PARTIAL_MATCH`，不是逐函数
+B2 `MATCH`；整个 Funcdata/VarnodeBank 仍受 `OPBANK-0001` 阻断。
+另外，完整架构服务图仍受 `ARCH-0001` 阻断，新建 Varnode 的 TypeFactory 类型身份
+仍属 `TYPE-UNKNOWN-0001` 未验证依赖。
+
 ## 2026-08-11：FLOAT_INT2FLOAT 零扩展宽度
 
 `RuleUnsigned2Float::apply_op` 和 `RuleInt2FloatCollapse::apply_op` 不再维护局部
@@ -507,13 +537,14 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 在加法表达式中折叠常量与合并同类项：
 - `(V + 3) + 5 => V + 8`（常量折叠）
 - `V*2 + V*3 => V*5`（合并同类项，非乘法系数场景）
-使用 `expression.rs` 的 `TermOrder` 收集/排序所有项。`distributeIntMultAdd` 子情形（INT_MULT 系数加法展开）待补。
+使用 `expression.rs` 的 `TermOrder` 收集/排序所有项。
 
 测试：ruleaction::tests +1（常量折叠 3+5→8）。
 
 ### 2026-06-26（续）：RuleCollectTerms 完整形式
 
-更新 RuleCollectTerms 使用 `distribute_int_mult_add` 处理 INT_MULT 系数场景（ruleaction.cc:130-133），完成完整移植。
+更新 RuleCollectTerms 使用 `distribute_int_mult_add` 处理 INT_MULT 系数场景（ruleaction.cc:130-133）。
+该路径尚未经锁定 oracle fixture 覆盖，不作完整对齐声明。
 
 ### 2026-06-26（续）：RuleBitUndistribute
 
@@ -538,7 +569,7 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 
 ### 2026-06-26（续）：测试修复
 
-修复 test_collect_terms_constant_folding 断言（接受未折叠原值作为合法结果，因 TermOrder 收集顺序可能不同）。
+旧测试曾宽松接受未折叠值；2026-08-13 对齐工作已将此改为精确槽位和常量值断言。
 
 ## 2026-06-27（续）：RuleRangeMeld 完整移植
 
@@ -927,6 +958,7 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 
 ### 2026-07-01（续 8）：PieceStructure piece 重组引擎 + Segment 常量折叠
 - PieceStructure：PieceNode struct + is_leaf_node + gather_pieces（op.cc:801-876）+ convert_zext_to_piece（cc:7543）+ find_replace_zext + separate_symbol + get_exact_piece + apply_op 真正变换（cc:7625-7718）。4 新测试。
+- `RulePieceStructure::apply_op` 在替换非叶 Varnode 后显式传播 `VarnodeBank::destroy_varnode` 的失败；这对应 Ghidra `data.deleteVarnode(vn)` 对仍集成 Varnode 抛出的 `LowlevelError`，不会吞掉结构不变量错误。该错误路径未纳入本次 RuleCollectTerms fixture，状态仍为 `UNTESTED`，不属于下述七个目标结构投影的批准范围。
 - Segment：SegmentOp::execute（userop.cc:218）+ supports_far_pointer/has_far_pointer_support。RuleSegment::apply_op 常量折叠分支（cc:9024）+ far-pointer 分支（cc:9034）+ contiguous_test/find_contiguous_whole helper。4 新测试。
 
 ### 2026-07-01（续 9）：PiecePathology + IgnoreNan 深度路径

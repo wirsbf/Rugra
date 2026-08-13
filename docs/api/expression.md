@@ -2,7 +2,20 @@
 
 **源代码路径**: `src/expression.rs`
 **Ghidra 对应**: `expression.hh` / `expression.cc`
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——TermOrder/AdditiveEdge/AddExpression/boolean_match_evaluate/functional_equality_level 全部实现。10 单元测试。
+**状态**: 🔧 **L2**——部分函数已有实现和测试，但模块级逐函数 oracle 闭包尚未完成；不得沿用旧 L3 声明。
+
+## 2026-08-13：TermOrder 收集边界与比较器修正
+
+`TermOrder::collect` 在 `INT_MULT(INT_ADD(...), constant)` 路径上现在检查底层
+`INT_ADD` 输出是否 lone-descend，对应锁定 Ghidra 12.0.4
+`expression.cc:267-273`。旧实现重复检查外层 `INT_MULT` 输出，会错误穿透具有多个
+使用者的共享 ADD 子树。
+
+`TermOrder::sort_terms` 不再以 Rust `Arc` 分配地址排序，也不再把常量反向排在最前；
+比较器改为调用 `Varnode::term_order`，由后者实现常量置后、剥离常量系数乘法并按完整
+storage address 比较。该闭包由 `RULE-COLLECTTERMS-0001` 的七组目标结构投影 fixture
+验证。多个 `termOrder == 0` 等价项下，Ghidra `std::sort` 与 Rust stable sort 的具体
+tie 重排仍为 `UNTESTED`；整个 expression 模块及 RuleCollectTerms 均不能据此升级 L3。
 
 ## 模块说明
 

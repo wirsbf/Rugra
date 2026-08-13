@@ -92,7 +92,13 @@ impl TermOrder {
                             let addop = in0_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
                             if let Some(ao) = addop {
                                 if ao.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
-                                    let out_lone = subop.read().unwrap().output.as_ref().map_or(false, |o| o.read().unwrap().lone_descend().is_some());
+                                    // Ghidra checks the underlying ADD output,
+                                    // not the outer MULT output. The latter was
+                                    // already proven lone-use through curvn.
+                                    let add_output = ao.read().unwrap().output.clone();
+                                    let out_lone = add_output.as_ref().map_or(false, |output| {
+                                        output.read().unwrap().lone_descend().is_some()
+                                    });
                                     if out_lone {
                                         opstack.push((ao, Some(subop.clone())));
                                         continue;
@@ -110,22 +116,22 @@ impl TermOrder {
     }
 
     // Ghidra: expression.cc:285 TermOrder::sortTerms
-    /// Sort the terms using a comparison based on Varnode identity.
+    /// Sort terms with `Varnode::term_order` (constant class, coefficient-
+    /// stripped storage address), matching Ghidra's `additiveCompare` key.
     /// Faithful to `TermOrder::sortTerms` (expression.cc:285-293).
     pub fn sort_terms(&mut self) {
         self.sorter = (0..self.terms.len()).collect();
-        // Sort by whether the term is constant (constants last), then by
-        // Arc identity (functional equality proxy).
         self.sorter.sort_by(|&a, &b| {
             let va = &self.terms[a].vn;
             let vb = &self.terms[b].vn;
-            let a_const = va.read().unwrap().is_constant();
-            let b_const = vb.read().unwrap().is_constant();
-            if a_const != b_const {
-                return b_const.cmp(&a_const); // constants last
+            if Arc::ptr_eq(va, vb) {
+                return std::cmp::Ordering::Equal;
             }
-            // Use pointer identity for ordering (same as Ghidra's termOrder).
-            (Arc::as_ptr(va) as usize).cmp(&(Arc::as_ptr(vb) as usize))
+            match va.read().unwrap().term_order(&vb.read().unwrap()) {
+                value if value < 0 => std::cmp::Ordering::Less,
+                value if value > 0 => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
         });
     }
 

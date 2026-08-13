@@ -4133,14 +4133,13 @@ impl Rule for RuleIntLessEqual {
 ///   `(V + c) + d  =>  V + (c+d)` (constant folding)
 ///   `V*2 + V*3  =>  V*5` (factoring)
 ///
-/// Faithful to Ghidra's `RuleCollectTerms` (ruleaction.cc:94-176). Uses
+/// Faithful to Ghidra's `RuleCollectTerms` helper and apply logic
+/// (ruleaction.cc:82-176). Uses
 /// TermOrder from expression.rs to collect, sort, and simplify additive terms.
-/// The distributeIntMultAdd sub-case (for INT_MULT coefficients on ADD) is
-/// deferred (requires that Funcdata method).
 pub struct RuleCollectTerms;
 
 impl RuleCollectTerms {
-    // Ghidra: ruleaction.cc:99 RuleCollectTerms
+    // Ghidra: ruleaction.hh:105 RuleCollectTerms::RuleCollectTerms
     pub fn new() -> Self { Self }
 
     /// Extract the multiplicative coefficient from a term vn.
@@ -4214,7 +4213,10 @@ impl Rule for RuleCollectTerms {
                     }
                     let size = base1.read().unwrap().get_size();
                     let mask = crate::address::calc_mask(size);
-                    let new_coef = (coef1 + coef2) & mask;
+                    // Ghidra's uintb is the unsigned fixed-width uint8 typedef.
+                    // Addition therefore wraps at 64 bits before calc_mask()
+                    // narrows the value to the Varnode's storage width.
+                    let new_coef = coef1.wrapping_add(coef2) & mask;
                     let newcoeff = fd.new_constant(size, new_coef);
                     let zerocoeff = fd.new_constant(size, 0);
                     let edge1 = termorder.get_term(order[i-1]).unwrap();
@@ -4224,8 +4226,8 @@ impl Rule for RuleCollectTerms {
                         fd.op_set_input(&crate::op::PcodeOpRef(edge2.op.clone()), newcoeff, edge2.slot);
                     } else {
                         let nextop = fd.new_op(2, edge2.op.read().unwrap().start.get_addr());
-                        fd.op_set_opcode(&nextop, OpCode::CPUI_INT_MULT);
                         let newout = fd.new_unique_out(size, &nextop);
+                        fd.op_set_opcode(&nextop, OpCode::CPUI_INT_MULT);
                         fd.op_set_input(&nextop, base1, 0);
                         fd.op_set_input(&nextop, newcoeff, 1);
                         fd.op_insert_before(&nextop, &crate::op::PcodeOpRef(edge2.op.clone()));
@@ -4240,17 +4242,18 @@ impl Rule for RuleCollectTerms {
         let mut coef_sum = 0u64;
         let mut nonzerocount = 0;
         let mut lastconst = 0;
-        for j in i..order.len() {
+        // Ghidra scans the sorted constant suffix from the end toward i.  This
+        // makes lastconst the first non-zero constant in sorted order, then
+        // every later unmultiplied constant is replaced with zero below.
+        for j in (i..order.len()).rev() {
             let edge = termorder.get_term(order[j]).unwrap();
             if edge.get_multiplier().is_some() { continue; }
             let vn = edge.get_varnode().clone();
-            if vn.read().unwrap().is_constant() {
-                let val = vn.read().unwrap().get_offset();
-                if val != 0 {
-                    nonzerocount += 1;
-                    coef_sum = coef_sum.wrapping_add(val);
-                    lastconst = j;
-                }
+            let val = vn.read().unwrap().get_offset();
+            if val != 0 {
+                nonzerocount += 1;
+                coef_sum = coef_sum.wrapping_add(val);
+                lastconst = j;
             }
         }
         if nonzerocount <= 1 { return Ok(action_status::NO_CHANGE); }
@@ -4263,11 +4266,8 @@ impl Rule for RuleCollectTerms {
         for j in (lastconst + 1)..order.len() {
             let edge = termorder.get_term(order[j]).unwrap();
             if edge.get_multiplier().is_some() { continue; }
-            let vn = edge.get_varnode().clone();
-            if vn.read().unwrap().is_constant() {
-                let zero = fd.new_constant(size, 0);
-                fd.op_set_input(&crate::op::PcodeOpRef(edge.op.clone()), zero, edge.slot);
-            }
+            let zero = fd.new_constant(size, 0);
+            fd.op_set_input(&crate::op::PcodeOpRef(edge.op.clone()), zero, edge.slot);
         }
         // Set last constant to the sum.
         let sum_const = fd.new_constant(size, coef_sum);
@@ -4276,7 +4276,7 @@ impl Rule for RuleCollectTerms {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:99 RuleCollectTerms
+    // RUGRA-GLUE: Rust Rule trait exposes the name separately; Ghidra passes it to the inline constructor at ruleaction.hh:105.
     fn get_name(&self) -> &str { "collect_terms" }
     // Ghidra: ruleaction.cc:101 RuleCollectTerms::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
@@ -11710,7 +11710,9 @@ impl Rule for RulePieceStructure {
                 }
                 fd.op_set_output(&def_op, new_vn.clone());
                 fd.op_set_input(&lone_op, new_vn.clone(), lslot);
-                fd.vbank.destroy_varnode(&vn);
+                fd.vbank
+                    .destroy_varnode(&vn)
+                    .map_err(|err| crate::error::Error::Lowlevel(err.to_string()))?;
                 let mut nv = new_vn.write().unwrap();
                 if !nv.is_addr_tied() {
                     nv.set_proto_partial();
@@ -19133,45 +19135,30 @@ mod tests {
     fn test_collect_terms_constant_folding() {
         // ((V + 3) + 5) => V + 8  (collapse constants 3+5)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let block = fd.create_new_block();
         let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let c3 = fd.vbank.create_constant(4, 3);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
-        let inner = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_ADD,
-        )));
-        {
-            let mut i = inner.write().unwrap();
-            i.inrefs = vec![v.clone(), c3];
-            i.output = Some(inner_out.clone());
-        }
-        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
-        inner_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        // inner_out must be lone-descend of outer.
-        let c5 = fd.vbank.create_constant(4, 5);
-        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
-        let outer = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 1),
-            OpCode::CPUI_INT_ADD,
-        )));
-        {
-            let mut o = outer.write().unwrap();
-            o.inrefs = vec![inner_out.clone(), c5];
-            o.output = Some(outer_out);
-        }
-        // inner_out lone_descend → outer
-        inner_out.write().unwrap().descend.push(Arc::downgrade(&outer));
+        let v = fd.set_input_varnode(v);
+        let c5 = fd.new_constant(4, 5);
+        let c3 = fd.new_constant(4, 3);
+        let inner = fd.new_op(2, Address::new(0x1000));
+        let inner_out = fd.new_unique_out(4, &inner);
+        fd.op_set_opcode(&inner, OpCode::CPUI_INT_ADD);
+        fd.op_set_input(&inner, v, 0);
+        fd.op_set_input(&inner, c3, 1);
+        fd.op_insert_end(&inner, &block);
+        let outer = fd.new_op(2, Address::new(0x1000));
+        fd.new_unique_out(4, &outer);
+        fd.op_set_opcode(&outer, OpCode::CPUI_INT_ADD);
+        fd.op_set_input(&outer, inner_out, 0);
+        fd.op_set_input(&outer, c5, 1);
+        fd.op_insert_end(&outer, &block);
         let rule = RuleCollectTerms::new();
-        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        let result = rule.apply_op(&outer.0, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
-        // The rule should have triggered constant folding.
-        let outer_r = outer.read().unwrap();
-        let v0 = outer_r.inrefs[1].read().unwrap().get_offset();
-        let _v1 = outer_r.inrefs[0].read().unwrap().get_offset();
-        // After constant folding, at least one slot was modified.
-        // The exact result depends on which constant slot was "last".
-        assert!(v0 == 0 || v0 == 5 || v0 == 8, "v0 was {}", v0);
+        // Ghidra scans the constant suffix backwards: the first sorted
+        // constant receives the sum and every later constant becomes zero.
+        assert_eq!(outer.0.read().unwrap().inrefs[1].read().unwrap().get_offset(), 8);
+        assert_eq!(inner.0.read().unwrap().inrefs[1].read().unwrap().get_offset(), 0);
     }
 
     // --- RuleBitUndistribute (ruleaction.cc:2620) ---
