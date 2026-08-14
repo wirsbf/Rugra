@@ -111,3 +111,27 @@ Intersect another cover with this one
 
 这些标注不提升模块对齐级别；文件头列出的 endpoint 身份、回绕 cover、CFG
 递归和 PcodeOpSet 交集缺口仍然存在。
+
+### 2026-08-15：`COVER-REBUILD-SELFLOCK-0001` root-identity 重建
+
+生产路径曾出现永久自锁：`Merge::update_high_cover` 持 root Varnode 写锁时，
+`Cover::rebuild` 再对同一 Arc 取读锁。现按锁定 `cover.cc:477-496` /
+`varnode.cc:233-241` 改为显式共享 root identity：
+
+- `Cover::rebuild(root: &Arc<RwLock<Varnode>>)` 签名改为共享句柄；worklist
+  语义不变（root + implied outputs，`addRefPoint` 恒以 root 为身份）。
+- `add_ref_point_full(op_arc, root)` 在持有 op 读锁的窗口内用
+  `Arc::ptr_eq` 快照全部 MULTIEQUAL 匹配槽（Ghidra `ref->getIn(j)==vn` 的
+  指针恒等），随后释放块读锁再递归，不再自创 dedup。
+- `add_def_point_full(def, is_input)` 接收定义 op 与 input 标志快照。
+- 空块分支显式 `set_begin(0)` 物化 Ghidra nullptr start 的可比值（Ghidra
+  `setEnd(ref)` 不触碰 start；投影一致，见 cover.hh:75-91）。
+- `rebuild_from_root_snapshot` 是锁释放适配（RUGRA-GLUE）：updateCover 持
+  root 写锁时先快照 def/is_input/descend/is_implied，rebuild 全程不再锁
+  root；op 输出恰为 root 时用快照的 `root_is_implied` 判定，避免写锁重入。
+
+已知残差：order-only `CoverBlock` 无法恢复 addRefPoint "旧 stop" 的
+MULTIEQUAL-tip 判别（保守放行 MULTIEQUAL 递归）；INDIRECT 的
+`getOpFromConst` 目标 order 仍回退自身 order。`COVER-REBUILD-SELFLOCK-0001`
+fixture（8 case 合成图，含 slot2 self-reference、双槽读、implied 链、
+setAll 前驱填充、no-cover-object dirty 清除）负责该投影的行为门禁。

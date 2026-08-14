@@ -129,6 +129,8 @@ pub struct Varnode {
     pub v_type: Option<Arc<Datatype>>,
     /// Ops that read this varnode
     pub descend: Vec<Weak<RwLock<PcodeOp>>>,
+    /// Owning Rust allocation, when this Varnode was allocated by VarnodeBank.
+    self_ref: Weak<RwLock<Varnode>>,
     /// Range of P-code ops where this varnode is "alive"
     pub cover: Option<Box<Cover>>,
 
@@ -174,6 +176,7 @@ impl Varnode {
             mapentry: None,
             v_type: Some(unknown_datatype(size)),
             descend: Vec::new(),
+            self_ref: Weak::new(),
             cover: None,
             consumed: u64::MAX,
             nzm,
@@ -606,25 +609,62 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:233 Varnode::updateCover
-    /// Rebuild cover if dirty. Faithful to `updateCover` (varnode.cc:233-241).
-    pub fn update_cover(&mut self) {
-        if (self.flags & varnode_flags::COVERDIRTY) != 0 {
-            if self.has_cover() {
-                // Temporarily detach the Cover so `rebuild` can inspect this
-                // Varnode while the Cover itself is mutably borrowed.
-                if let Some(mut cover) = self.cover.take() {
-                    cover.rebuild(self);
-                    self.cover = Some(cover);
-                }
-            }
-            self.flags &= !varnode_flags::COVERDIRTY;
+    /// Rebuild a shared Varnode's cover if dirty. The Cover is detached and
+    /// rebuilt while the root write guard remains held, then the same Box is
+    /// reattached and the dirty flag is cleared. Rebuild uses the Arc only as
+    /// a stable identity token and never attempts to lock the root again.
+    pub fn update_cover_locked(root: &Arc<RwLock<Varnode>>) {
+        let mut value = root.write().unwrap();
+        if (value.flags & varnode_flags::COVERDIRTY) == 0 {
+            return;
         }
+        if value.has_cover() {
+            if let Some(mut cover) = value.cover.take() {
+                let definition = value.get_def();
+                let is_input = value.is_input();
+                let descendants = value.descend_iter().collect::<Vec<_>>();
+                let root_is_implied = value.is_implied();
+                cover.rebuild_from_root_snapshot(
+                    root,
+                    definition,
+                    is_input,
+                    descendants,
+                    root_is_implied,
+                );
+                value.cover = Some(cover);
+            }
+        }
+        value.flags &= !varnode_flags::COVERDIRTY;
     }
 
     // Ghidra: varnode.hh:202 Varnode::getCover
     /// Lazily rebuild and return this Varnode's Cover.
     pub fn get_cover(&mut self) -> Option<&Cover> {
-        self.update_cover();
+        if (self.flags & varnode_flags::COVERDIRTY) != 0 {
+            if self.has_cover() {
+                if self.cover.is_some() && self.self_ref.upgrade().is_none() {
+                    // An unmanaged Arc cannot occur on the VarnodeBank-backed
+                    // production path. Preserve dirty rather than bless a
+                    // stale Cover when exact root identity is unavailable.
+                    return self.cover.as_deref();
+                }
+                if let (Some(root), Some(mut cover)) = (self.self_ref.upgrade(), self.cover.take()) {
+                    let definition = self.get_def();
+                    let is_input = self.is_input();
+                    let descendants = self.descend_iter().collect::<Vec<_>>();
+                    let root_is_implied = self.is_implied();
+                    cover.rebuild_from_root_snapshot(
+                        &root,
+                        definition,
+                        is_input,
+                        descendants,
+                        root_is_implied,
+                    );
+                    self.cover = Some(cover);
+                }
+            }
+            self.flags &= !varnode_flags::COVERDIRTY;
+        }
         self.cover.as_deref()
     }
 
@@ -2007,7 +2047,9 @@ impl VarnodeBank {
         vn.create_index = self.create_index;
         self.create_index += 1;
 
-        Arc::new(RwLock::new(vn))
+        let result = Arc::new(RwLock::new(vn));
+        result.write().unwrap().self_ref = Arc::downgrade(&result);
+        result
     }
 
     // RUGRA-GLUE: insertion half shared by Rugra's implicit-RAM and explicit

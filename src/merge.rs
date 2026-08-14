@@ -306,7 +306,7 @@ fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
 fn update_high_cover(high: &Arc<RwLock<HighVariable>>) {
     let instances = high.read().unwrap().instances.clone();
     for instance in instances {
-        instance.write().unwrap().update_cover();
+        Varnode::update_cover_locked(&instance);
     }
     let piece = high.read().unwrap().piece.clone();
     let Some(piece) = piece else {
@@ -332,7 +332,7 @@ fn update_high_cover(high: &Arc<RwLock<HighVariable>>) {
     for intersecting_high in intersecting_highs {
         let instances = intersecting_high.read().unwrap().instances.clone();
         for instance in instances {
-            instance.write().unwrap().update_cover();
+            Varnode::update_cover_locked(&instance);
         }
     }
     let mut owner = high.write().unwrap();

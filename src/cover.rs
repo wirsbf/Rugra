@@ -283,8 +283,12 @@ impl Cover {
     ///   - 3 = contained, on the tail boundary (boundary==1)
     pub fn contain_varnode_def_at(&self, is_input: bool, block_idx: i32, order: u32) -> i32 {
         // Ghidra: if (op==0) { op=(PcodeOp*)2; blk=0; } else blk = op->getParent()->getIndex();
+        // The (PcodeOp*)2 sentinel flows into contain/boundary, which compare
+        // via getUIndex — mapping it to 0 (cover.cc:29-49). Match that
+        // semantic value here so it agrees with add_def_point_full's stored
+        // input endpoints.
         let (blk, point) = if is_input {
-            (0i32, 2u32) // sentinel: input varnode, treated as order 2 in block 0
+            (0i32, 0u32) // input marker: block 0, uindex-domain order 0
         } else {
             (block_idx, order)
         };
@@ -502,30 +506,35 @@ impl Cover {
     // Ghidra: cover.cc:501 Cover::addDefPoint (op-based variant)
     /// Reset this Cover to the single point where `vn` is defined. Faithful
     /// to `Cover::addDefPoint` (cover.cc:501-519). Clears the cover first.
-    /// `def_blk` is the pre-resolved block index of `vn`'s defining op (or
-    /// None to fall back to the input-varnode convention: block 0, order 2).
-    fn add_def_point_full(&mut self, vn: &crate::varnode::Varnode, def_blk: Option<i32>) {
+    /// `def` is the original Varnode's defining op. If it is absent and
+    /// `is_input` is true, the input-varnode convention is block 0/order 2.
+    fn add_def_point_full(
+        &mut self,
+        def: Option<&std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>>,
+        is_input: bool,
+    ) {
         // Ghidra: cover.clear();
         self.clear();
-        if let Some(def) = vn.get_def() {
+        if let Some(def) = def {
             let def_rg = def.read().unwrap();
             // Ghidra: def->getParent()->getIndex()
-            let blk = def_blk.unwrap_or_else(|| Self::block_index_of_op(&def_rg).unwrap_or(0));
+            let blk = Self::block_index_of_op(&def_rg).unwrap_or(0);
             // Ghidra: CoverBlock &block(cover[blk]); block.setBegin(def); block.setEnd(def);
             let order = Self::order_of_op(&def_rg);
             let cb = self.blocks.entry(blk).or_insert_with(CoverBlock::new);
             cb.set_begin(order);
             cb.set_end(order);
-        } else if vn.is_input() {
+        } else if is_input {
             // Ghidra: CoverBlock &block(cover[0]);
             //         block.setBegin((const PcodeOp*)2); block.setEnd((const PcodeOp*)2);
-            // Sentinel 2 (input) maps to order 0 via getUIndex, but the
-            // existing Rugra convention in `contain_varnode_def_at` treats
-            // inputs as order 2 in block 0; we keep that convention so the
-            // two entry points agree.
+            // The pointer sentinel 2 is the input marker; every comparison
+            // goes through CoverBlock::getUIndex, which maps it to 0
+            // (cover.cc:29-49). Rugra's order-only model stores the
+            // uindex-domain value directly, so both endpoints are 0 here —
+            // identical to Ghidra's (2,2) state under getUIndex projection.
             let cb = self.blocks.entry(0).or_insert_with(CoverBlock::new);
-            cb.set_begin(2);
-            cb.set_end(2);
+            cb.set_begin(0);
+            cb.set_end(0);
         }
     }
 
@@ -535,17 +544,35 @@ impl Cover {
     /// existing cover is reached. Faithful to `Cover::addRefPoint`
     /// (cover.cc:565-612).
     ///
-    /// `op_blk` is the pre-resolved block index of `op`. `vn` is the Varnode
-    /// being read (needed to select the correct MULTIEQUAL input slot whose
-    /// predecessor branch should be recursed into).
+    /// `root` is the original Varnode passed to `rebuild`, even when `op` is a
+    /// descendant of an implied output. It selects every exact-identity
+    /// MULTIEQUAL input slot whose predecessor branch must be traversed.
     fn add_ref_point_full(
         &mut self,
-        op: &crate::op::PcodeOp,
-        op_blk: i32,
-        vn: &crate::varnode::Varnode,
+        op_arc: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
+        root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
-        let order = Self::order_of_op(op);
-        let op_parent = op.parent.as_ref().and_then(|w| w.upgrade());
+        let (order, opcode, op_parent, matching_slots) = {
+            let op = op_arc.read().unwrap();
+            let opcode = op.get_opcode();
+            let matching_slots = if opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                op.inrefs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, input)| std::sync::Arc::ptr_eq(input, root).then_some(slot))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            (
+                Self::order_of_op(&op),
+                opcode,
+                op.parent.as_ref().and_then(|parent| parent.upgrade()),
+                matching_slots,
+            )
+        };
+        let Some(bl_arc) = op_parent else { return };
+        let op_blk = bl_arc.read().unwrap().get_index();
 
         // Ghidra: FlowBlock *bl = ref->getParent();
         //         CoverBlock &block(cover[bl->getIndex()]);
@@ -557,11 +584,15 @@ impl Cover {
 
         if block_was_empty {
             // Ghidra: block.setEnd(ref);
+            // In Ghidra the untouched start pointer remains the block-begin
+            // sentinel.  Materialize its comparable value in the order-only
+            // representation before storing the reference endpoint.
+            cb.set_begin(0);
             cb.set_end(order);
         } else {
             // Ghidra: if (block.contain(ref)) { if (ref->code()!=MULTIEQUAL) return; }
             if cb.contain(order) {
-                if op.get_opcode() != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                if opcode != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
                     return;
                 }
                 // Even if contained, a MULTIEQUAL may add new cover via a
@@ -582,7 +613,7 @@ impl Cover {
                     // cannot perfectly distinguish this branch. Conservatively
                     // fall through to the recurse step only for MULTIEQUAL refs
                     // (handled uniformly below); otherwise return.
-                    if op.get_opcode() != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                    if opcode != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
                         return;
                     }
                 } else {
@@ -595,18 +626,19 @@ impl Cover {
         //           for(j=0;j<ref->numInput();++j)
         //             if (ref->getIn(j)==vn) addRefRecurse(bl->getIn(j));
         //         } else for(j=0;j<bl->sizeIn();++j) addRefRecurse(bl->getIn(j));
-        let Some(bl_arc) = op_parent else { return };
-        if op.get_opcode() == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-            // Recurse only through the predecessor feeding the slot that
-            // holds `vn`.
-            for slot in 0..op.num_input() {
-                let Some(in_vn) = op.get_in(slot) else { continue };
-                // Compare by create_index (Varnode identity in Rugra).
-                if in_vn.read().unwrap().create_index == vn.create_index {
-                    if let Some(edge) = bl_arc.read().unwrap().get_in(slot) {
-                        self.add_ref_recurse(&edge.point);
-                    }
-                }
+        if opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+            // Snapshot every exact-identity slot in ascending order while the
+            // op is locked, then snapshot the corresponding predecessor Arcs
+            // without carrying the block guard into recursive calls.
+            let predecessors = {
+                let block = bl_arc.read().unwrap();
+                matching_slots
+                    .into_iter()
+                    .filter_map(|slot| block.get_in(slot).map(|edge| edge.point))
+                    .collect::<Vec<_>>()
+            };
+            for predecessor in predecessors {
+                self.add_ref_recurse(&predecessor);
             }
         } else {
             for edge in Self::predecessors_of(&bl_arc) {
@@ -655,70 +687,74 @@ impl Cover {
     /// Because Rugra's internal cover stores `(block_idx, u32 order)` pairs,
     /// this entry point resolves each PcodeOp's block index and SeqNum order
     /// and delegates to the order-based `add_def_point`/`add_ref_point_full`.
-    pub fn rebuild(&mut self, vn: &crate::varnode::Varnode) {
+    pub fn rebuild(
+        &mut self,
+        root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        let (definition, is_input, descendants, root_is_implied) = {
+            let root_value = root.read().unwrap();
+            (
+                root_value.get_def(),
+                root_value.is_input(),
+                root_value.descend_iter().collect::<Vec<_>>(),
+                root_value.is_implied(),
+            )
+        };
+        self.rebuild_from_root_snapshot(
+            root,
+            definition,
+            is_input,
+            descendants,
+            root_is_implied,
+        );
+    }
+
+    // RUGRA-GLUE: lock-release adapter for Cover::rebuild; Ghidra's raw
+    // Varnode pointer needs no snapshot when updateCover is called through a
+    // mutable Rust RwLock guard.
+    pub(crate) fn rebuild_from_root_snapshot(
+        &mut self,
+        root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        definition: Option<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>>,
+        is_input: bool,
+        root_descendants: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>>,
+        root_is_implied: bool,
+    ) {
         // Ghidra: vector<const Varnode *> path(1,vn); int4 pos = 0;
-        // We hold Arc clones of the root and any implied outputs discovered.
-        use std::sync::Arc;
-        let path: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
-        // We cannot cheaply obtain an Arc<Varnode> from a &Varnode; instead we
-        // drive the walk off the descendant Arc<RwLock<PcodeOp>>s which ARE
-        // strongly owned by the Varnode's descend list. The root's def/ref
-        // points are planted first.
-        let root_def_blk = vn.get_def().map(|d| {
-            let d_rg = d.read().unwrap();
-            Self::block_index_of_op(&d_rg).unwrap_or(0)
-        });
         // Ghidra: addDefPoint(vn);
-        self.add_def_point_full(vn, root_def_blk);
+        self.add_def_point_full(definition.as_ref(), is_input);
 
-        // Worklist of Varnode *values* (via their descendant ops) still to
-        // process. We seed it by collecting the root's live descendants.
-        // To preserve Ghidra's order-independent semantics we process the
-        // root's readers first, then any implied outputs we discover.
-        let mut worklist: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
-        // Track which Varnodes we have already expanded by create_index to
-        // avoid re-processing (defensive; Ghidra relies on the DAG shape).
-        let mut expanded: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        expanded.insert(vn.create_index);
-
-        // Seed: root's descendant ops. We can't push `vn` itself (no Arc), so
-        // we expand it inline here, mirroring the first loop iteration.
-        let mut frontier: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
-            vn.descend_iter().filter_map(|op_arc| {
-                let op_rg = op_arc.read().unwrap();
-                let blk = Self::block_index_of_op(&op_rg).unwrap_or(0);
-                self.add_ref_point_full(&op_rg, blk, vn);
-                // Ghidra: const Varnode *outVn = op->getOut();
-                //         if (outVn != 0 && outVn->isImplied()) path.push_back(outVn);
-                op_rg.get_out().filter(|o| o.read().unwrap().is_implied()).cloned()
-            }).collect();
-        worklist.append(&mut frontier);
-
-        // Ghidra: do { ... } while(pos < path.size());
-        while let Some(cur_vn_arc) = worklist.pop() {
-            let cur_vn_rg = cur_vn_arc.read().unwrap();
-            if !expanded.insert(cur_vn_rg.create_index) {
-                continue;
-            }
-            // Expand this Varnode's readers. (No addDefPoint for non-root
-            // members; Ghidra's rebuild only calls addDefPoint once, on the
-            // root. Implied outputs only contribute their ref points.)
-            for op_arc in cur_vn_rg.descend_iter() {
-                let op_rg = op_arc.read().unwrap();
-                let blk = Self::block_index_of_op(&op_rg).unwrap_or(0);
-                // Ghidra: addRefPoint(op, vn);  -- vn here is the ORIGINAL
-                // varnode (the one being rebuilt), so that all cover lands on
-                // the root's map. We pass &cur_vn_rg only for input-slot
-                // resolution inside MULTIEQUAL; the order planted is the op's.
-                self.add_ref_point_full(&op_rg, blk, &cur_vn_rg);
-                if let Some(out) = op_rg.get_out() {
-                    if out.read().unwrap().is_implied() {
-                        worklist.push(out.clone());
+        let mut path = Vec::new();
+        let mut pos = 0usize;
+        let mut descendants = root_descendants.clone();
+        loop {
+            for op_arc in descendants {
+                // The original root, not `current`, is the addRefPoint identity.
+                self.add_ref_point_full(&op_arc, root);
+                let output = op_arc.read().unwrap().get_out().cloned();
+                if let Some(output) = output {
+                    let is_implied = if std::sync::Arc::ptr_eq(&output, root) {
+                        root_is_implied
+                    } else {
+                        output.read().unwrap().is_implied()
+                    };
+                    if is_implied {
+                        path.push(output);
                     }
                 }
             }
+            if pos >= path.len() {
+                break;
+            }
+            let current = path[pos].clone();
+            pos += 1;
+            descendants = if std::sync::Arc::ptr_eq(&current, root) {
+                root_descendants.clone()
+            } else {
+                let current_value = current.read().unwrap();
+                current_value.descend_iter().collect::<Vec<_>>()
+            };
         }
-        let _ = path; // (path kept as a placeholder for parity with Ghidra's naming)
     }
 
     // Ghidra: cover.cc:524 Cover::addRefRecurse

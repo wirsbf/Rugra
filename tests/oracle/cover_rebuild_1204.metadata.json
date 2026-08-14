@@ -1,0 +1,111 @@
+{
+  "schema": 2,
+  "fixture_id": "COVER-REBUILD-SELFLOCK-0001",
+  "stable_function_id": "GH12-F-2e258b0ed8a7710ba567",
+  "stable_function_closure": [
+    "GH12-F-2e258b0ed8a7710ba567 ghidra::Varnode::updateCover varnode.cc:233",
+    "GH12-F-2ed31098356eb80bbc64 ghidra::Cover::rebuild cover.cc:477",
+    "GH12-F-83d2d62e37319d768749 ghidra::Cover::addDefPoint cover.cc:501",
+    "GH12-F-26747b942e30f2943fdf ghidra::Cover::addRefRecurse cover.cc:524",
+    "GH12-F-c3e2b5c2bab05824fe04 ghidra::Cover::addRefPoint cover.cc:565"
+  ],
+  "overall_status": "PARTIAL_MATCH: the eight-case rebuilt-Cover projection (endpoint pairs, flags, dirty lifecycle, descendant/slot identity, op orders) byte-matches the locked oracle, and the production self-lock topology (MULTIEQUAL slot 2 holding the rebuilt root) is covered; order-only CoverBlock residuals (addRefPoint old-stop MULTIEQUAL-tip discrimination, INDIRECT getOpFromConst target order), production FlowBlock index assignment, and the full ActionMergeType caller closure remain outside this atomic change",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{cover.cc:477-612,varnode.cc:233-241}",
+    "signature": "void Varnode::updateCover(void) const; void Cover::rebuild(const Varnode *vn); void Cover::addRefPoint(const PcodeOp *ref,const Varnode *vn)"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of locked Varnode::updateCover -> Cover::rebuild on synthetic def-use/CFG graphs built through production Funcdata APIs (newOp/opSetInput/newUniqueOut/opInsertEnd/newBlockBasic/addEdge/setInputVarnode/calcCover); no Actions, SSA, or C emission",
+    "prestate": "Per-case fresh Funcdata; blocks receive deterministic creation-order FlowBlock indices as a precondition because production index assignment (BlockGraph::findSpanningTree reverse post-order) is a separate BLOCK-module dependency; ops receive BlockBasic::insert midpoint SeqNum orders via opInsertEnd",
+    "observation": "Per case: coverdirty before/after with updateCover invoked twice for idempotence, hasCover, Cover-object presence, input/written/implied flags, defining op SeqNum order, descendant list order including repeat-slot double entries, exact-identity slot list for every descendant, every named op's order, and the complete Cover as ascending per-block index:start-end endpoint pairs in the uindex domain; endpoints print b (begin/input sentinel), e (end sentinel), or the decimal order",
+    "normalization": "No order, flag, list, membership, or endpoint normalization; both sides print the same uindex-domain projection of the same observation fields"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "input_root: input Varnode read by one op in the successor block; def-point sentinel, backward fill into block 0, and b-e endpoints",
+      "phi_predecessor_fill: input Varnode at MULTIEQUAL slot 1 recurses into the second predecessor, exercising the addRefRecurse empty-branch setAll fill",
+      "defined_linear: written Varnode with same-block reader plus branch-block reader; midpoint op orders, contain check, and setEnd(1) tail extension",
+      "slot2_selfref_double: 3-input MULTIEQUAL whose slots 1 and 2 are the rebuilt root itself (production self-lock topology) plus a two-slot INT_XOR reader; every exact-identity slot recurses its predecessor",
+      "slot2_single: 3-input MULTIEQUAL with the root only at slot 2, isolating single-slot self-reference recursion from the double-slot read",
+      "implied_chain: reader whose output is implied pushes that output onto the rebuild worklist so ITS readers extend the cover",
+      "dirty_flag_cycle: calcCover sets coverdirty, updateCover clears it, and a second updateCover is an idempotent no-op",
+      "no_cover_object: hasCover varnode with the dirty bit set but no Cover object; updateCover clears the bit without allocating a Cover"
+    ],
+    "sha256": "0e5dd75fcf2537b5f8b9596ff413f517d00f26c35aeb93018576a22801fa6542"
+  },
+  "observation_schema": {
+    "format": "Nine fixed-order UTF-8 lines with final newline: one envelope plus eight case records",
+    "state": "coverdirty before/after, hasCover, cover-object presence, input/written/implied, def order",
+    "graph": "descendant list order with repeat-slot entries, exact-identity slot list, per-op SeqNum orders",
+    "cover": "ascending block-index start-end endpoint pairs in the uindex domain (b/e sentinels or decimal order)"
+  },
+  "comparand": {
+    "rugra_base_commit": "235b91bb552261fb3f94b7974926ef6db9b21515",
+    "rugra_base_tree": "6f49b977e46af96c0934114836d457f680caa057",
+    "cpp_fixture_sha256": "a4fc0fbcc743f7d26c0b7920b9bd909b9ed2f5164a375a02ae5e5b66cd4004b6",
+    "rust_fixture_sha256": "0a94b8d6856c5e8bb4fe0b3ddbfcf6aefabd45c32e2390419ed670efccdcc95c",
+    "cover_rs_sha256": "799b8d4e5707e9b103fe34689096c59c545c68d0cd843bc441f5ab4768499614",
+    "varnode_rs_sha256": "c0bf253d84cfc86809f184e3dee7bb7ad7d9ebd2f76546da2f126d5ae79fa99c",
+    "merge_rs_sha256": "17cc8680de6a1dcd3b27d288b3a2869f8e49e43f89b6c6330fb5c708257d1152",
+    "cover_doc_sha256": "6f69256196e45a2a47eb59a0a02ccf3808883634e317a81896a3ad437e0486a4",
+    "varnode_doc_sha256": "90f960a025d0543d77294aa0891be647ef42bd9ba8fec62142242c6d9ff24723",
+    "merge_doc_sha256": "89f2f2f57f47509d646764f7f7bddd4492f2f560c3494e67361a1aad9a2e5659",
+    "runner_sha256": "577798172e4c51f5d35a9c6399b64c80076aee67a17904e0c526678ef8be8acb",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-cover-rebuild-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rust_crate_tree_sha256": "265ec546590afa385741fa6f0cb8fea30c47e03feffab71d34cbf5c5fe507660",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+    "private_state_observer": "Read-only ABI observation of Varnode::cover and the Cover block map through #define private public in the fixture translation unit only; no oracle source is modified",
+    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/cover.rs, src/varnode.rs, and src/merge.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "2c21c6afe3e9788228776acc3eb0296b6ec0c9e63c7ede26efad3c7273b828bc"
+  },
+  "expected_stdout_sha256": "00dba3d1fa0fae9a802c5138253fea331eb0d46b519b5696437c8290fc2cb58e",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "input_varnode_def_point": "MATCH: addDefPoint input branch stores the uindex-domain value of the (PcodeOp*)2 sentinel (begin/begin), and addRefRecurse extends block 0's tail to the end sentinel",
+    "phi_predecessor_setall_fill": "MATCH: MULTIEQUAL slot recursion reaches an uncovered predecessor whose addRefRecurse empty branch fills it with setAll and recurses its own predecessors",
+    "defined_linear_readers": "MATCH: same-block reader hits the contain/extend path, branch reader seeds a fresh block, and the backward recursion extends the defining block's tail",
+    "multiequal_slot2_self_reference_double_slot": "MATCH: the rebuilt root appears as MULTIEQUAL inputs 1 and 2 and as both INT_XOR inputs; every exact-identity slot recurses its matching predecessor while unrelated slots do not",
+    "multiequal_slot2_single": "MATCH: single slot-2 self-reference recursion differs observably from the double-slot case in the second predecessor's endpoint",
+    "implied_output_worklist_extension": "MATCH: an implied op output is pushed onto the rebuild worklist and its reader extends the cover exactly like a direct reader",
+    "coverdirty_lifecycle_and_idempotence": "MATCH: calcCover sets coverdirty, updateCover clears it after rebuilding, and a second updateCover neither rebuilds nor changes state",
+    "no_cover_object_dirty_clear": "MATCH: hasCover varnode with the dirty bit but no Cover object clears the bit without allocating a Cover",
+    "seqnum_midpoint_order_model": "MATCH for the exercised BlockBasic::insert paths (first-op midpoint from order 2 and append midpoint); the dense setOrder renumber path is covered by OP-INSERT-0001",
+    "block_index_assignment": "UNTESTED: production BlockGraph::findSpanningTree reverse-post-order index assignment is not exercised; the fixture assigns deterministic creation-order indices as a precondition (registered as BLOCK-INDEX-ASSIGN-0001)",
+    "multiequal_tip_old_stop": "MISMATCH: the order-only CoverBlock cannot recover addRefPoint's old-stop MULTIEQUAL-tip discrimination; Rugra conservatively falls through to recursion for MULTIEQUAL refs",
+    "indirect_target_order": "MISMATCH: CoverBlock::get_u_index falls back to the INDIRECT op's own SeqNum order instead of resolving the getOpFromConst target order",
+    "merge_update_high_cover_caller": "PARTIAL: update_high_cover now calls Varnode::update_cover_locked per instance so the root write lock is never re-entered; the full ActionMergeType caller closure and post-cleanup action order remain PIPE-MERGETYPE-ORDER-0001",
+    "start_stop_pointer_identity": "MISMATCH: Rugra stores uindex-domain orders rather than PcodeOp* pointer values; endpoint classification (begin/end/order) is compared instead of raw pointers",
+    "multiequal_reader_of_implied_intermediate": "UNTESTED: no fixture case drives a MULTIEQUAL reader of an implied intermediate output, so the root-vs-current identity discrimination of that sub-branch is source-verified (cover.cc:490/606) but not fixture-observed; registered for a follow-up fixture case"
+  }
+}

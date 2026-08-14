@@ -80,6 +80,18 @@ from loc_tree varnodes (deduped by Arc pointer). Must run after
 merge_by_cover finalizes instance sets so high.cover reflects all members.
 ActionMarkImplied (later in pipeline) consults high.cover.
 
+### `fn update_high_cover(high)` 调用点修复（2026-08-15，`COVER-REBUILD-SELFLOCK-0001`）
+
+`update_high_cover` 对 high 自身 instances、piece Varnode 及相交
+HighVariable 的 instances 逐个改调 `Varnode::update_cover_locked(&instance)`
+（原来是 `instance.write().update_cover()`）。旧路径在持 root Varnode 写锁
+的 `&mut self` 里再进入 `Cover::rebuild` 读取同一 Arc，遇到 MULTIEQUAL
+slot 与 root 同一 Arc 的图（parseconfig 真实输入）即永久自锁；新入口由
+`update_cover_locked` 在持锁窗口内快照 def/descend/implied 并以 Arc 身份
+重建，不再重入。完整自锁拓扑（slot2 self-reference + 双槽读）由
+`tests/oracle/cover_rebuild_1204.*` 行为门禁覆盖；`ActionMergeType`
+caller 闭包与 cleanup 后动作顺序仍归 `PIPE-MERGETYPE-ORDER-0001`。
+
 ### `pub fn mark_implied(vn: &Arc<RwLock<Varnode>>)` (2026-06-29)
 
 Faithful to Merge::markImplied (merge.cc:1595). Sets the IMPLIED flag on a
