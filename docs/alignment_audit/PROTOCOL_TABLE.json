@@ -86,7 +86,7 @@
       ],
       "name": "ATTRIB_UNKNOWN",
       "rust_values": [
-        "0"
+        "159"
       ],
       "status": "CANDIDATE_ONLY"
     },
@@ -289,6 +289,16 @@
       "name": "ELEM_PARAM3",
       "rust_values": [
         "179"
+      ],
+      "status": "CANDIDATE_ONLY"
+    },
+    {
+      "cpp_values": [
+        "ElementId("
+      ],
+      "name": "ELEM_UNKNOWN",
+      "rust_values": [
+        "289"
       ],
       "status": "CANDIDATE_ONLY"
     },
@@ -941,10 +951,10 @@
       "value": "0xc0"
     },
     {
-      "id": "PROTO-81319d3cef7ee316fc24",
+      "id": "PROTO-5c1e87256cdea2f47069",
       "kind": "const",
       "language": "rust",
-      "line": 820,
+      "line": 1290,
       "name": "ATTRIBUTE",
       "path": "src/marshal.rs",
       "value": "0xc0"
@@ -1238,10 +1248,10 @@
       "value": "AttributeId("
     },
     {
-      "id": "PROTO-f68ab7afaae3543e8c0b",
+      "id": "PROTO-f1822c4d5fd657a14008",
       "kind": "const",
       "language": "rust",
-      "line": 25,
+      "line": 27,
       "name": "ATTRIB_CONTENT",
       "path": "src/marshal.rs",
       "value": "1"
@@ -2669,13 +2679,13 @@
       "value": "AttributeId("
     },
     {
-      "id": "PROTO-c529e34e7cce60b41180",
+      "id": "PROTO-e77a6c12c02810c3813b",
       "kind": "const",
       "language": "rust",
-      "line": 21,
+      "line": 20,
       "name": "ATTRIB_UNKNOWN",
       "path": "src/marshal.rs",
-      "value": "0"
+      "value": "159"
     },
     {
       "id": "PROTO-4cf63384f78737f6ff4f",
@@ -4820,10 +4830,10 @@
       "value": "0x1f"
     },
     {
-      "id": "PROTO-ee29b29fa88217ca313c",
+      "id": "PROTO-71309f54f3a211cf1ab0",
       "kind": "const",
       "language": "rust",
-      "line": 822,
+      "line": 1292,
       "name": "ELEMENTID_MASK",
       "path": "src/marshal.rs",
       "value": "0x1f"
@@ -4838,10 +4848,10 @@
       "value": "0x80"
     },
     {
-      "id": "PROTO-175e504a5dd0a4c148b8",
+      "id": "PROTO-bf3842630fb6a37379ea",
       "kind": "const",
       "language": "rust",
-      "line": 819,
+      "line": 1289,
       "name": "ELEMENT_END",
       "path": "src/marshal.rs",
       "value": "0x80"
@@ -4856,10 +4866,10 @@
       "value": "0x40"
     },
     {
-      "id": "PROTO-785da6826045571f21e4",
+      "id": "PROTO-4c6be6c3845bd28d4765",
       "kind": "const",
       "language": "rust",
-      "line": 818,
+      "line": 1288,
       "name": "ELEMENT_START",
       "path": "src/marshal.rs",
       "value": "0x40"
@@ -7943,6 +7953,15 @@
       "value": "ElementId("
     },
     {
+      "id": "PROTO-50aa3f693ff7a5f3cc43",
+      "kind": "const",
+      "language": "rust",
+      "line": 23,
+      "name": "ELEM_UNKNOWN",
+      "path": "src/marshal.rs",
+      "value": "289"
+    },
+    {
       "id": "PROTO-d01c96efce8b771b11d3",
       "kind": "constant_assignment",
       "language": "cpp",
@@ -9185,10 +9204,10 @@
       "value": "0x20"
     },
     {
-      "id": "PROTO-e52778422126d3378583",
+      "id": "PROTO-2bd1db4fb9d4cdb69a73",
       "kind": "const",
       "language": "rust",
-      "line": 821,
+      "line": 1291,
       "name": "HEADEREXTEND_MASK",
       "path": "src/marshal.rs",
       "value": "0x20"
@@ -9212,10 +9231,10 @@
       "value": "0xc0"
     },
     {
-      "id": "PROTO-723bc2e27351b3f59acc",
+      "id": "PROTO-658c54ff0f18edebebfe",
       "kind": "const",
       "language": "rust",
-      "line": 817,
+      "line": 1287,
       "name": "HEADER_MASK",
       "path": "src/marshal.rs",
       "value": "0xc0"
@@ -10175,10 +10194,10 @@
       "value": "0xf"
     },
     {
-      "id": "PROTO-33a1de06f0fcc0caa8c0",
+      "id": "PROTO-270ea115445348efb770",
       "kind": "const",
       "language": "rust",
-      "line": 827,
+      "line": 1297,
       "name": "LENGTHCODE_MASK",
       "path": "src/marshal.rs",
       "value": "0xf"
@@ -12812,10 +12831,10 @@
       "value": "7"
     },
     {
-      "id": "PROTO-f226d7280f972d5768ee",
+      "id": "PROTO-b8f9744134a3cdfa8af5",
       "kind": "const",
       "language": "rust",
-      "line": 824,
+      "line": 1294,
       "name": "RAWDATA_BITSPERBYTE",
       "path": "src/marshal.rs",
       "value": "7"
@@ -12830,10 +12849,10 @@
       "value": "0x80"
     },
     {
-      "id": "PROTO-db8c4f34d12ccd2f9dcb",
+      "id": "PROTO-da94de91102404cb6c0d",
       "kind": "const",
       "language": "rust",
-      "line": 825,
+      "line": 1295,
       "name": "RAWDATA_MARKER",
       "path": "src/marshal.rs",
       "value": "0x80"
@@ -12848,10 +12867,10 @@
       "value": "0x7f"
     },
     {
-      "id": "PROTO-0276b33fd4c3356973df",
+      "id": "PROTO-b8567f0fd27750b876ee",
       "kind": "const",
       "language": "rust",
-      "line": 823,
+      "line": 1293,
       "name": "RAWDATA_MASK",
       "path": "src/marshal.rs",
       "value": "0x7f"
@@ -14513,10 +14532,10 @@
       "value": "5"
     },
     {
-      "id": "PROTO-c7bb1c10f849be675b9d",
+      "id": "PROTO-1bd181b68778486653de",
       "kind": "const",
       "language": "rust",
-      "line": 832,
+      "line": 1302,
       "name": "TYPECODE_ADDRESSSPACE",
       "path": "src/marshal.rs",
       "value": "5"
@@ -14531,10 +14550,10 @@
       "value": "1"
     },
     {
-      "id": "PROTO-5c242947919fee6548c4",
+      "id": "PROTO-8ba97c3ecf0055071bbc",
       "kind": "const",
       "language": "rust",
-      "line": 828,
+      "line": 1298,
       "name": "TYPECODE_BOOLEAN",
       "path": "src/marshal.rs",
       "value": "1"
@@ -14549,10 +14568,10 @@
       "value": "4"
     },
     {
-      "id": "PROTO-d80ef593a37a05a91f7f",
+      "id": "PROTO-b9e7dec7a553ec485ed0",
       "kind": "const",
       "language": "rust",
-      "line": 826,
+      "line": 1296,
       "name": "TYPECODE_SHIFT",
       "path": "src/marshal.rs",
       "value": "4"
@@ -14567,10 +14586,10 @@
       "value": "3"
     },
     {
-      "id": "PROTO-fdabf67db15689d6b7c1",
+      "id": "PROTO-c35460bc076366fa0a40",
       "kind": "const",
       "language": "rust",
-      "line": 830,
+      "line": 1300,
       "name": "TYPECODE_SIGNEDINT_NEGATIVE",
       "path": "src/marshal.rs",
       "value": "3"
@@ -14585,10 +14604,10 @@
       "value": "2"
     },
     {
-      "id": "PROTO-961d2f4f1f4355b6fb80",
+      "id": "PROTO-7bfb0b8b0c7c0367241e",
       "kind": "const",
       "language": "rust",
-      "line": 829,
+      "line": 1299,
       "name": "TYPECODE_SIGNEDINT_POSITIVE",
       "path": "src/marshal.rs",
       "value": "2"
@@ -14603,10 +14622,10 @@
       "value": "6"
     },
     {
-      "id": "PROTO-c9285a9c30da5e0159a3",
+      "id": "PROTO-a9ebc8b8ddf7b35fb9b0",
       "kind": "const",
       "language": "rust",
-      "line": 833,
+      "line": 1303,
       "name": "TYPECODE_SPECIALSPACE",
       "path": "src/marshal.rs",
       "value": "6"
@@ -14621,10 +14640,10 @@
       "value": "7"
     },
     {
-      "id": "PROTO-7e3a92c69dcecf8e763e",
+      "id": "PROTO-cb4c53eca37cf9366f83",
       "kind": "const",
       "language": "rust",
-      "line": 834,
+      "line": 1304,
       "name": "TYPECODE_STRING",
       "path": "src/marshal.rs",
       "value": "7"
@@ -14639,10 +14658,10 @@
       "value": "4"
     },
     {
-      "id": "PROTO-9885656db82c5137e467",
+      "id": "PROTO-b0296df2871735d2a837",
       "kind": "const",
       "language": "rust",
-      "line": 831,
+      "line": 1301,
       "name": "TYPECODE_UNSIGNEDINT",
       "path": "src/marshal.rs",
       "value": "4"

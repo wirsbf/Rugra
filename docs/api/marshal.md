@@ -3,14 +3,12 @@
 Serialization layer corresponding to Ghidra's `marshal.hh` / `marshal.cc` and
 `xml.hh` / `xml.cc`.
 
-**Status:** L1 → L2. The registry, DOM tree, and Encoder/Decoder traits are
-present with a working in-memory `TreeEncoder`/`TreeDecoder` round-trip. The
-registry is not protocol-compatible: locked 12.0.4 uses explicit process-wide
-IDs and zero as an iteration sentinel, while Rugra allocates per-instance IDs
-and treats zero as unknown. PackedDecode's single `pos+pending` model also
-differs from the locked start/cur/end/attributeRead state machine: unread
-attributes, nested close/skip, typed errors, EOF, and raw strings have concrete
-counterexamples. The Decoder trait has no error channel. See
+**Status:** L2. `AttributeId`/`ElementId` use immutable process-wide tables with
+the locked Ghidra 12.0.4 scope-0 name/ID assignments. Zero is reserved for
+element/attribute traversal exhaustion; unknown names map to 159/289. This does
+not lift the full module above L2: PackedDecode's single `pos+pending` model
+still differs from the locked start/cur/end/attributeRead state machine, and
+the Decoder trait still lacks Ghidra's error channel. See
 `docs/alignment_audit/MARSHAL_PACKED_2026-08-11.md`.
 
 2026-08-12 ANN-N 仅补 provenance：`AttributeId::new_static` 是 Rust const
@@ -23,8 +21,11 @@ Ghidra reference:
 
 | Name | Value | Description |
 |---|---|---|
-| `ATTRIB_UNKNOWN` | 0 | "No attribute" sentinel. |
+| `ATTRIB_UNKNOWN` | 159 | Unrecognized scope-0 attribute name. |
+| `ELEM_UNKNOWN` | 289 | Unrecognized scope-0 element name. |
 | `ATTRIB_CONTENT` | 1 | Element text content attribute. |
+| `ATTRIBUTE_ID_TABLE` | 146 pairs | Complete 12.0.4 source-manifest scope-0 attribute table. |
+| `ELEMENT_ID_TABLE` | 274 pairs | Complete 12.0.4 source-manifest scope-0 element table. |
 
 ## Structs
 
@@ -39,13 +40,31 @@ An annotation for a collection of hierarchical data (marshal.hh:65).
 - Equality by id.
 
 ### `IdRegistry`
-Global registry of attribute/element ids, mirroring Ghidra's static
-hashtables (marshal.hh:42, 67).
-- `new()` — empty with reserved ids 0/1.
-- `register_attribute(name) -> u32`, `register_attribute_with_id(name, id)`.
-- `find_attribute(name) -> u32`, `attribute_name(id) -> Option<&str>`.
-- `register_element(name) -> u32`, `register_element_with_id(name, id)`.
-- `find_element(name) -> u32`, `element_name(id) -> Option<&str>`.
+Immutable process-wide registry mirroring Ghidra's static scope-0 hashtables
+(marshal.hh:42, 67). `new()` and repeated `initialize()` calls address the same
+table and cannot allocate or renumber IDs.
+
+- `find_attribute(name)` / `find_element(name)` return 159/289 for unknown names.
+- `find_attribute_in_scope(name, scope)` / `find_element_in_scope(name, scope)`
+  only reverse-map scope 0, as in locked Ghidra.
+- `attribute_name(id)` / `element_name(id)` provide Rust reverse lookup over the
+  exact table; ID 0 and numeric gaps return `None`.
+- Legacy `register_attribute` / `register_element` are lookup-only compatibility
+  methods. `register_*_with_id` validates a fixed pair and returns `bool`; none
+  of these methods mutates the table.
+
+The tables are a synthetic union of all 114 locked `.cc` source definitions:
+146 attributes plus 274 elements. The standard `libdecomp.a` runtime closure
+contains 136 plus 243 (379 total); 41 entries belong to alternate Ghidra/SLEIGH
+front ends. The locked fixture records this projection explicitly and does not
+claim that one standard runtime links every source-manifest object. Its C++
+side uses the real standard 379-object registration and generates the remaining
+41 same-name/same-ID objects from eight hash-locked source manifests. Fixture
+ID-to-name output is an object-table scan of that source projection; locked
+Ghidra exposes name-to-ID `find`, not a corresponding reverse-lookup API.
+This linkage-dependent registration set remains a production `MISMATCH`:
+those 41 names resolve to UNKNOWN in the standard locked runtime, while the
+single Rust process table recognizes the full union.
 
 ### `Element`
 An XML element — a DOM tree node (xml.hh:159).
@@ -92,6 +111,9 @@ In-memory Decoder that reads from an Element tree (equivalent of Ghidra's
 XmlDecode).
 - `new(root, registry)`, `from_document(doc, registry)`.
 - Implements `Decoder`.
+- `peek_element()`, `open_element()`, and `next_attribute_id()` use `0` only for
+  traversal exhaustion; unrecognized DOM names return 289/159 without ending
+  traversal. Attribute and child order remain source order.
 
 ## L3 gaps
 - `PackedEncode`/`PackedDecode` — the binary marshaling format
@@ -101,6 +123,15 @@ XmlDecode).
 - `readSpace`/`writeSpace`/`readOpcode`/`writeOpcode` (require AddressSpace/
   OpCode integration).
 - `readSignedIntegerExpectString`.
+
+## MARSHAL-ID-0001 oracle status
+
+The locked same-input fixture covers all 420 source-manifest pairs in both
+directions, unknown names, nonzero scope fallback, repeated initialization,
+`size=19`, `space=20`, and TreeDecoder end/unknown/order behavior. Its aggregate
+status remains `MISMATCH`: the source-manifest ID observations match, while the
+standard-runtime 379-versus-420 registration set and strict TreeDecoder
+close/open error behavior remain registered residuals.
 
 ## 2026-06-27（续）：Decoder trait 新增 attribute_name/element_name
 

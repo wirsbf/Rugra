@@ -8,9 +8,9 @@
   (5691 `.cc` + 3803 inline `.hh` definitions)
 - Declaration references: 6317
 - Raw Ctags function records: 15811
-- Rugra functions: 8551
-  (7164 production + 1387 test)
-- Exact definition-start mappings: 3116
+- Rugra functions: 8559
+  (7171 production + 1388 test)
+- Exact definition-start mappings: 3120
 - Body-line references requiring audit: 377
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
@@ -127,8 +127,8 @@ records complete same-input/same-output evidence.
 | `loadimage_ghidra.cc` | 6 | 0 | 0 | 6 |
 | `loadimage_xml.cc` | 10 | 0 | 0 | 10 |
 | `loadimage_xml.hh` | 2 | 0 | 0 | 2 |
-| `marshal.cc` | 80 | 20 | 0 | 60 |
-| `marshal.hh` | 33 | 1 | 0 | 32 |
+| `marshal.cc` | 80 | 22 | 0 | 58 |
+| `marshal.hh` | 33 | 3 | 0 | 30 |
 | `memstate.cc` | 29 | 27 | 0 | 2 |
 | `memstate.hh` | 10 | 4 | 0 | 6 |
 | `merge.cc` | 48 | 39 | 0 | 9 |

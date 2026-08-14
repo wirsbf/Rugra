@@ -14,15 +14,447 @@
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{marshal,xml}.{hh,cc}.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-/// A special attribute id indicating "no attribute". Faithful to the implicit
-/// 0 id returned by `peekElement`/`getNextAttributeId` when there is nothing.
-pub const ATTRIB_UNKNOWN: u32 = 0;
+/// The locked Ghidra 12.0.4 id for an unrecognized attribute name.
+pub const ATTRIB_UNKNOWN: u32 = 159;
+
+/// The locked Ghidra 12.0.4 id for an unrecognized element name.
+pub const ELEM_UNKNOWN: u32 = 289;
 
 /// A special attribute id for an element's text content. Faithful to
 /// `ATTRIB_CONTENT`.
 pub const ATTRIB_CONTENT: u32 = 1;
+
+/// Locked Ghidra 12.0.4 scope-0 attribute name/id table. Missing numeric ids
+/// are intentional protocol gaps and must never be compacted or renumbered.
+pub const ATTRIBUTE_ID_TABLE: &[(&str, u32)] = &[
+    ("XMLcontent", 1),
+    ("align", 2),
+    ("bigendian", 3),
+    ("constructor", 4),
+    ("destructor", 5),
+    ("extrapop", 6),
+    ("format", 7),
+    ("hiddenretparm", 8),
+    ("id", 9),
+    ("index", 10),
+    ("indirectstorage", 11),
+    ("metatype", 12),
+    ("model", 13),
+    ("name", 14),
+    ("namelock", 15),
+    ("offset", 16),
+    ("readonly", 17),
+    ("ref", 18),
+    ("size", 19),
+    ("space", 20),
+    ("thisptr", 21),
+    ("type", 22),
+    ("typelock", 23),
+    ("val", 24),
+    ("value", 25),
+    ("wordsize", 26),
+    ("first", 27),
+    ("last", 28),
+    ("uniq", 29),
+    ("addrtied", 30),
+    ("grp", 31),
+    ("input", 32),
+    ("persists", 33),
+    ("unaff", 34),
+    ("blockref", 35),
+    ("close", 36),
+    ("color", 37),
+    ("indent", 38),
+    ("off", 39),
+    ("open", 40),
+    ("opref", 41),
+    ("varref", 42),
+    ("code", 43),
+    ("contain", 44),
+    ("defaultspace", 45),
+    ("uniqbase", 46),
+    ("alignment", 47),
+    ("arraysize", 48),
+    ("char", 49),
+    ("core", 50),
+    ("incomplete", 52),
+    ("opaquestring", 56),
+    ("signed", 57),
+    ("structalign", 58),
+    ("utf", 59),
+    ("varlength", 60),
+    ("cat", 61),
+    ("field", 62),
+    ("merge", 63),
+    ("scopeidbyname", 64),
+    ("volatile", 65),
+    ("class", 66),
+    ("repref", 67),
+    ("symref", 68),
+    ("trunc", 69),
+    ("dynamic", 70),
+    ("incidentalcopy", 71),
+    ("inject", 72),
+    ("paramshift", 73),
+    ("targetop", 74),
+    ("altindex", 75),
+    ("depth", 76),
+    ("end", 77),
+    ("opcode", 78),
+    ("rev", 79),
+    ("a", 80),
+    ("b", 81),
+    ("length", 82),
+    ("tag", 83),
+    ("nocode", 84),
+    ("farpointer", 85),
+    ("inputop", 86),
+    ("outputop", 87),
+    ("userop", 88),
+    ("base", 89),
+    ("deadcodedelay", 90),
+    ("delay", 91),
+    ("logicalsize", 92),
+    ("physical", 93),
+    ("piece", 94),
+    ("adjustvma", 103),
+    ("enable", 104),
+    ("group", 105),
+    ("growth", 106),
+    ("key", 107),
+    ("loadersymbols", 108),
+    ("parent", 109),
+    ("register", 110),
+    ("reversejustify", 111),
+    ("signext", 112),
+    ("style", 113),
+    ("custom", 114),
+    ("dotdotdot", 115),
+    ("extension", 116),
+    ("hasthis", 117),
+    ("inline", 118),
+    ("killedbycall", 119),
+    ("maxsize", 120),
+    ("minsize", 121),
+    ("modellock", 122),
+    ("noreturn", 123),
+    ("pointermax", 124),
+    ("separatefloat", 125),
+    ("stackshift", 126),
+    ("strategy", 127),
+    ("thisbeforeretpointer", 128),
+    ("voidlock", 129),
+    ("vector_lane_sizes", 130),
+    ("label", 131),
+    ("num", 132),
+    ("lock", 133),
+    ("main", 134),
+    ("arch", 135),
+    ("deprecated", 136),
+    ("endian", 137),
+    ("processor", 138),
+    ("processorspec", 139),
+    ("slafile", 140),
+    ("spec", 141),
+    ("target", 142),
+    ("variant", 143),
+    ("version", 144),
+    ("baddata", 145),
+    ("hash", 146),
+    ("unimpl", 147),
+    ("address", 148),
+    ("storage", 149),
+    ("stackspill", 150),
+    ("sizes", 151),
+    ("maxprimitives", 153),
+    ("reversesignif", 154),
+    ("matchsize", 155),
+    ("afterbytes", 156),
+    ("afterstorage", 157),
+    ("fillalternate", 158),
+    ("XMLunknown", 159),
+];
+
+/// Locked Ghidra 12.0.4 scope-0 element name/id table. Missing numeric ids
+/// are intentional protocol gaps and must never be compacted or renumbered.
+pub const ELEMENT_ID_TABLE: &[(&str, u32)] = &[
+    ("data", 1),
+    ("input", 2),
+    ("off", 3),
+    ("output", 4),
+    ("returnaddress", 5),
+    ("symbol", 6),
+    ("target", 7),
+    ("val", 8),
+    ("value", 9),
+    ("void", 10),
+    ("addr", 11),
+    ("range", 12),
+    ("rangelist", 13),
+    ("register", 14),
+    ("seqnum", 15),
+    ("varnode", 16),
+    ("break", 17),
+    ("clang_document", 18),
+    ("funcname", 19),
+    ("funcproto", 20),
+    ("label", 21),
+    ("return_type", 22),
+    ("statement", 23),
+    ("syntax", 24),
+    ("vardecl", 25),
+    ("variable", 26),
+    ("op", 27),
+    ("sleigh", 28),
+    ("space", 29),
+    ("spaceid", 30),
+    ("spaces", 31),
+    ("space_base", 32),
+    ("space_other", 33),
+    ("space_overlay", 34),
+    ("space_unique", 35),
+    ("truncate_space", 36),
+    ("char_size", 39),
+    ("coretypes", 41),
+    ("data_organization", 42),
+    ("def", 43),
+    ("entry", 47),
+    ("enum", 48),
+    ("field", 49),
+    ("integer_size", 51),
+    ("long_size", 54),
+    ("pointer_size", 57),
+    ("size_alignment_map", 59),
+    ("type", 60),
+    ("typegrp", 62),
+    ("typeref", 63),
+    ("wchar_size", 65),
+    ("collision", 67),
+    ("db", 68),
+    ("equatesymbol", 69),
+    ("externrefsymbol", 70),
+    ("facetsymbol", 71),
+    ("functionshell", 72),
+    ("hash", 73),
+    ("hole", 74),
+    ("labelsym", 75),
+    ("mapsym", 76),
+    ("parent", 77),
+    ("property_changepoint", 78),
+    ("rangeequalssymbols", 79),
+    ("scope", 80),
+    ("symbollist", 81),
+    ("high", 82),
+    ("bytes", 83),
+    ("string", 84),
+    ("stringmanage", 85),
+    ("comment", 86),
+    ("commentdb", 87),
+    ("text", 88),
+    ("addr_pcode", 89),
+    ("body", 90),
+    ("callfixup", 91),
+    ("callotherfixup", 92),
+    ("case_pcode", 93),
+    ("context", 94),
+    ("default_pcode", 95),
+    ("inject", 96),
+    ("injectdebug", 97),
+    ("inst", 98),
+    ("payload", 99),
+    ("pcode", 100),
+    ("size_pcode", 101),
+    ("bhead", 102),
+    ("block", 103),
+    ("blockedge", 104),
+    ("edge", 105),
+    ("parammeasures", 106),
+    ("proto", 107),
+    ("rank", 108),
+    ("constantpool", 109),
+    ("cpoolrec", 110),
+    ("ref", 111),
+    ("token", 112),
+    ("iop", 113),
+    ("unimpl", 114),
+    ("ast", 115),
+    ("function", 116),
+    ("highlist", 117),
+    ("jumptablelist", 118),
+    ("varnodes", 119),
+    ("context_data", 120),
+    ("context_points", 121),
+    ("context_pointset", 122),
+    ("context_set", 123),
+    ("set", 124),
+    ("tracked_pointset", 125),
+    ("tracked_set", 126),
+    ("constresolve", 127),
+    ("jumpassist", 128),
+    ("segmentop", 129),
+    ("address_shift_amount", 130),
+    ("aggressivetrim", 131),
+    ("compiler_spec", 132),
+    ("data_space", 133),
+    ("default_memory_blocks", 134),
+    ("default_proto", 135),
+    ("default_symbols", 136),
+    ("eval_called_prototype", 137),
+    ("eval_current_prototype", 138),
+    ("experimental_rules", 139),
+    ("flowoverridelist", 140),
+    ("funcptr", 141),
+    ("global", 142),
+    ("incidentalcopy", 143),
+    ("inferptrbounds", 144),
+    ("modelalias", 145),
+    ("nohighptr", 146),
+    ("processor_spec", 147),
+    ("programcounter", 148),
+    ("properties", 149),
+    ("property", 150),
+    ("readonly", 151),
+    ("register_data", 152),
+    ("rule", 153),
+    ("save_state", 154),
+    ("segmented_address", 155),
+    ("spacebase", 156),
+    ("specextensions", 157),
+    ("stackpointer", 158),
+    ("volatile", 159),
+    ("group", 160),
+    ("internallist", 161),
+    ("killedbycall", 162),
+    ("likelytrash", 163),
+    ("localrange", 164),
+    ("model", 165),
+    ("param", 166),
+    ("paramrange", 167),
+    ("pentry", 168),
+    ("prototype", 169),
+    ("resolveprototype", 170),
+    ("retparam", 171),
+    ("returnsym", 172),
+    ("unaffected", 173),
+    ("aliasblock", 174),
+    ("allowcontextset", 175),
+    ("analyzeforloops", 176),
+    ("commentheader", 177),
+    ("commentindent", 178),
+    ("commentinstruction", 179),
+    ("commentstyle", 180),
+    ("conventionprinting", 181),
+    ("currentaction", 182),
+    ("defaultprototype", 183),
+    ("errorreinterpreted", 184),
+    ("errortoomanyinstructions", 185),
+    ("errorunimplemented", 186),
+    ("extrapop", 187),
+    ("ignoreunimplemented", 188),
+    ("indentincrement", 189),
+    ("inferconstptr", 190),
+    ("inline", 191),
+    ("inplaceops", 192),
+    ("integerformat", 193),
+    ("jumpload", 194),
+    ("maxinstruction", 195),
+    ("maxlinewidth", 196),
+    ("namespacestrategy", 197),
+    ("nocastprinting", 198),
+    ("noreturn", 199),
+    ("nullprinting", 200),
+    ("optionslist", 201),
+    ("param1", 202),
+    ("param2", 203),
+    ("param3", 204),
+    ("protoeval", 205),
+    ("setaction", 206),
+    ("setlanguage", 207),
+    ("structalign", 208),
+    ("togglerule", 209),
+    ("warning", 210),
+    ("basicoverride", 211),
+    ("dest", 212),
+    ("jumptable", 213),
+    ("loadtable", 214),
+    ("normaddr", 215),
+    ("normhash", 216),
+    ("startval", 217),
+    ("deadcodedelay", 218),
+    ("flow", 219),
+    ("forcegoto", 220),
+    ("indirectoverride", 221),
+    ("multistagejump", 222),
+    ("override", 223),
+    ("protooverride", 224),
+    ("prefersplit", 225),
+    ("callgraph", 226),
+    ("node", 227),
+    ("localdb", 228),
+    ("doc", 229),
+    ("binaryimage", 230),
+    ("bytechunk", 231),
+    ("compiler", 232),
+    ("description", 233),
+    ("language", 234),
+    ("language_definitions", 235),
+    ("xml_savefile", 236),
+    ("raw_savefile", 237),
+    ("bfd_savefile", 238),
+    ("command_isnameused", 239),
+    ("command_getbytes", 240),
+    ("command_getcallfixup", 241),
+    ("command_getcallmech", 242),
+    ("command_getcallotherfixup", 243),
+    ("command_getcodelabel", 244),
+    ("command_getcomments", 245),
+    ("command_getcpoolref", 246),
+    ("command_getdatatype", 247),
+    ("command_getexternalref", 248),
+    ("command_getmappedsymbols", 249),
+    ("command_getnamespacepath", 250),
+    ("command_getpcode", 251),
+    ("command_getpcodeexecutable", 252),
+    ("command_getregister", 253),
+    ("command_getregistername", 254),
+    ("command_getstringdata", 255),
+    ("command_gettrackedregisters", 256),
+    ("command_getuseropname", 257),
+    ("blocksig", 258),
+    ("call", 259),
+    ("gensig", 260),
+    ("major", 261),
+    ("minor", 262),
+    ("copysig", 263),
+    ("settings", 264),
+    ("sig", 265),
+    ("signaturedesc", 266),
+    ("signatures", 267),
+    ("sigsettings", 268),
+    ("varsig", 269),
+    ("splitdatatype", 270),
+    ("jumptablemax", 271),
+    ("nanignore", 272),
+    ("datatype", 273),
+    ("consume", 274),
+    ("consume_extra", 275),
+    ("convert_to_ptr", 276),
+    ("goto_stack", 277),
+    ("join", 278),
+    ("datatype_at", 279),
+    ("position", 280),
+    ("varargs", 281),
+    ("hidden_return", 282),
+    ("join_per_primitive", 283),
+    ("braceformat", 284),
+    ("join_dual_class", 285),
+    ("internal_storage", 286),
+    ("extra_stack", 287),
+    ("consume_remaining", 288),
+    ("XMLunknown", 289),
+];
 
 /// An annotation for a data element being transferred to/from a stream.
 /// Faithful to `AttributeId` (marshal.hh:41).
@@ -114,108 +546,146 @@ impl PartialEq for ElementId {
     }
 }
 
-/// A global registry of attribute and element ids, mirroring Ghidra's static
-/// `lookupAttributeId`/`lookupElementId` hashtables (marshal.hh:42, 67).
-/// Attribute/Element ids are assigned at registration time.
 #[derive(Debug, Default)]
-pub struct IdRegistry {
-    attr_by_name: HashMap<String, u32>,
-    attr_by_id: HashMap<u32, String>,
-    elem_by_name: HashMap<String, u32>,
-    elem_by_id: HashMap<u32, String>,
-    next_attr_id: u32,
-    next_elem_id: u32,
+struct IdTables {
+    attr_by_name: HashMap<&'static str, u32>,
+    attr_by_id: HashMap<u32, &'static str>,
+    elem_by_name: HashMap<&'static str, u32>,
+    elem_by_id: HashMap<u32, &'static str>,
 }
+
+static ID_TABLES: OnceLock<IdTables> = OnceLock::new();
+
+// Ghidra: marshal.cc:54 AttributeId::initialize
+fn initialize_attribute_ids(tables: &mut IdTables) {
+    for &(name, id) in ATTRIBUTE_ID_TABLE {
+        tables.attr_by_name.insert(name, id);
+        tables.attr_by_id.insert(id, name);
+    }
+}
+
+// Ghidra: marshal.cc:96 ElementId::initialize
+fn initialize_element_ids(tables: &mut IdTables) {
+    for &(name, id) in ELEMENT_ID_TABLE {
+        tables.elem_by_name.insert(name, id);
+        tables.elem_by_id.insert(id, name);
+    }
+}
+
+// RUGRA-GLUE: Combines the two Ghidra global lookup tables behind Rust's OnceLock.
+fn build_id_tables() -> IdTables {
+    let mut tables = IdTables::default();
+    initialize_attribute_ids(&mut tables);
+    initialize_element_ids(&mut tables);
+    tables
+}
+
+// RUGRA-GLUE: Rust process-wide access to Ghidra's two static lookup tables.
+fn id_tables() -> &'static IdTables {
+    ID_TABLES.get_or_init(build_id_tables)
+}
+
+/// Process-wide fixed registry of locked Ghidra 12.0.4 scope-0 ids.
+///
+/// The value has no per-instance allocation or numbering state. All instances
+/// address the same immutable tables initialized from `ATTRIBUTE_ID_TABLE` and
+/// `ELEMENT_ID_TABLE`.
+#[derive(Debug, Default)]
+pub struct IdRegistry;
 
 impl IdRegistry {
     // RUGRA-GLUE: new (no Ghidra counterpart found)
-    /// Create an empty registry with reserved ids 0 (UNKNOWN) and 1 (CONTENT).
+    /// Access the fixed process-wide registry.
     pub fn new() -> Self {
-        let mut r = Self {
-            attr_by_name: HashMap::new(),
-            attr_by_id: HashMap::new(),
-            elem_by_name: HashMap::new(),
-            elem_by_id: HashMap::new(),
-            next_attr_id: 2,
-            next_elem_id: 2,
-        };
-        r.attr_by_name.insert("(unknown)".to_string(), ATTRIB_UNKNOWN);
-        r.attr_by_id.insert(ATTRIB_UNKNOWN, "(unknown)".to_string());
-        r.attr_by_name.insert("content".to_string(), ATTRIB_CONTENT);
-        r.attr_by_id.insert(ATTRIB_CONTENT, "content".to_string());
-        r
+        Self::initialize();
+        Self
+    }
+
+    // RUGRA-GLUE: One Rust entry point invokes both Ghidra initialize methods.
+    /// Initialize the process-wide tables. Repeated calls preserve the exact
+    /// same table and have no observable mutation.
+    pub fn initialize() {
+        let _ = id_tables();
     }
 
     // RUGRA-GLUE: register_attribute (no Ghidra counterpart found)
-    /// Register an attribute name, returning its id. If already registered,
-    /// returns the existing id. Faithful to `AttributeId::find`.
+    /// Compatibility lookup for callers that formerly registered names.
+    /// Unknown input returns `ATTRIB_UNKNOWN`; no id is allocated.
     pub fn register_attribute(&mut self, nm: &str) -> u32 {
-        if let Some(&id) = self.attr_by_name.get(nm) {
-            return id;
-        }
-        let id = self.next_attr_id;
-        self.next_attr_id += 1;
-        self.attr_by_name.insert(nm.to_string(), id);
-        self.attr_by_id.insert(id, nm.to_string());
-        id
+        self.find_attribute(nm)
     }
 
     // RUGRA-GLUE: register_attribute_with_id (no Ghidra counterpart found)
-    /// Register an attribute with an explicit id (for known marshaling ids).
-    pub fn register_attribute_with_id(&mut self, nm: &str, id: u32) {
-        self.attr_by_name.insert(nm.to_string(), id);
-        self.attr_by_id.insert(id, nm.to_string());
-        if id >= self.next_attr_id {
-            self.next_attr_id = id + 1;
-        }
+    /// Compatibility validation hook. Returns whether the pair is part of the
+    /// locked table; runtime input can never mutate the process table.
+    pub fn register_attribute_with_id(&mut self, nm: &str, id: u32) -> bool {
+        self.find_attribute(nm) == id && self.attribute_name(id) == Some(nm)
     }
 
-    // RUGRA-GLUE: find_attribute (no Ghidra counterpart found)
+    // Ghidra: marshal.hh:686 AttributeId::find
     /// Look up an attribute id by name. Returns ATTRIB_UNKNOWN if not found.
     pub fn find_attribute(&self, nm: &str) -> u32 {
-        self.attr_by_name.get(nm).copied().unwrap_or(ATTRIB_UNKNOWN)
+        self.find_attribute_in_scope(nm, 0)
+    }
+
+    // Ghidra: marshal.hh:686 AttributeId::find
+    /// Look up an attribute in a Ghidra marshal scope. Locked 12.0.4 only
+    /// supports reverse lookup for scope zero.
+    pub fn find_attribute_in_scope(&self, nm: &str, scope: i32) -> u32 {
+        if scope != 0 {
+            return ATTRIB_UNKNOWN;
+        }
+        id_tables()
+            .attr_by_name
+            .get(nm)
+            .copied()
+            .unwrap_or(ATTRIB_UNKNOWN)
     }
 
     // RUGRA-GLUE: attribute_name (no Ghidra counterpart found)
     /// Look up an attribute name by id.
     pub fn attribute_name(&self, id: u32) -> Option<&str> {
-        self.attr_by_id.get(&id).map(|s| s.as_str())
+        id_tables().attr_by_id.get(&id).copied()
     }
 
     // RUGRA-GLUE: register_element (no Ghidra counterpart found)
-    /// Register an element name, returning its id. Faithful to
-    /// `ElementId::find`.
+    /// Compatibility lookup for callers that formerly registered names.
+    /// Unknown input returns `ELEM_UNKNOWN`; no id is allocated.
     pub fn register_element(&mut self, nm: &str) -> u32 {
-        if let Some(&id) = self.elem_by_name.get(nm) {
-            return id;
-        }
-        let id = self.next_elem_id;
-        self.next_elem_id += 1;
-        self.elem_by_name.insert(nm.to_string(), id);
-        self.elem_by_id.insert(id, nm.to_string());
-        id
+        self.find_element(nm)
     }
 
     // RUGRA-GLUE: register_element_with_id (no Ghidra counterpart found)
-    /// Register an element with an explicit id.
-    pub fn register_element_with_id(&mut self, nm: &str, id: u32) {
-        self.elem_by_name.insert(nm.to_string(), id);
-        self.elem_by_id.insert(id, nm.to_string());
-        if id >= self.next_elem_id {
-            self.next_elem_id = id + 1;
-        }
+    /// Compatibility validation hook. Returns whether the pair is part of the
+    /// locked table; runtime input can never mutate the process table.
+    pub fn register_element_with_id(&mut self, nm: &str, id: u32) -> bool {
+        self.find_element(nm) == id && self.element_name(id) == Some(nm)
     }
 
-    // RUGRA-GLUE: find_element (no Ghidra counterpart found)
-    /// Look up an element id by name.
+    // Ghidra: marshal.hh:702 ElementId::find
+    /// Look up an element id by name. Returns `ELEM_UNKNOWN` if not found.
     pub fn find_element(&self, nm: &str) -> u32 {
-        self.elem_by_name.get(nm).copied().unwrap_or(ATTRIB_UNKNOWN)
+        self.find_element_in_scope(nm, 0)
+    }
+
+    // Ghidra: marshal.hh:702 ElementId::find
+    /// Look up an element in a Ghidra marshal scope. Locked 12.0.4 only
+    /// supports reverse lookup for scope zero.
+    pub fn find_element_in_scope(&self, nm: &str, scope: i32) -> u32 {
+        if scope != 0 {
+            return ELEM_UNKNOWN;
+        }
+        id_tables()
+            .elem_by_name
+            .get(nm)
+            .copied()
+            .unwrap_or(ELEM_UNKNOWN)
     }
 
     // RUGRA-GLUE: element_name (no Ghidra counterpart found)
     /// Look up an element name by id.
     pub fn element_name(&self, id: u32) -> Option<&str> {
-        self.elem_by_id.get(&id).map(|s| s.as_str())
+        id_tables().elem_by_id.get(&id).copied()
     }
 }
 
@@ -1404,12 +1874,45 @@ mod tests {
         let mut reg = IdRegistry::new();
         let id1 = reg.register_attribute("label");
         let id2 = reg.register_attribute("label"); // same name → same id
+        assert_eq!(id1, 131);
         assert_eq!(id1, id2);
         assert_eq!(reg.find_attribute("label"), id1);
         assert_eq!(reg.find_attribute("nonexistent"), ATTRIB_UNKNOWN);
         let eid = reg.register_element("db");
+        assert_eq!(eid, 68);
         assert_eq!(reg.find_element("db"), eid);
         assert!(reg.attribute_name(id1).is_some());
+        assert_eq!(reg.register_attribute("runtime_order_a"), ATTRIB_UNKNOWN);
+        assert_eq!(reg.register_attribute("runtime_order_b"), ATTRIB_UNKNOWN);
+        assert_eq!(reg.register_element("runtime_order_a"), ELEM_UNKNOWN);
+        assert_eq!(reg.register_element("runtime_order_b"), ELEM_UNKNOWN);
+        assert!(reg.register_attribute_with_id("size", 19));
+        assert!(!reg.register_attribute_with_id("size", 20));
+        assert!(reg.register_element_with_id("data", 1));
+        assert!(!reg.register_element_with_id("data", 2));
+        assert_eq!(reg.find_attribute_in_scope("size", 1), ATTRIB_UNKNOWN);
+        assert_eq!(reg.find_element_in_scope("data", 1), ELEM_UNKNOWN);
+    }
+
+    #[test]
+    fn test_locked_id_tables_are_complete_and_bidirectional() {
+        IdRegistry::initialize();
+        IdRegistry::initialize();
+        let reg = IdRegistry::new();
+        assert_eq!(ATTRIBUTE_ID_TABLE.len(), 146);
+        assert_eq!(ELEMENT_ID_TABLE.len(), 274);
+        for &(name, id) in ATTRIBUTE_ID_TABLE {
+            assert_eq!(reg.find_attribute(name), id);
+            assert_eq!(reg.attribute_name(id), Some(name));
+        }
+        for &(name, id) in ELEMENT_ID_TABLE {
+            assert_eq!(reg.find_element(name), id);
+            assert_eq!(reg.element_name(id), Some(name));
+        }
+        assert_eq!(reg.attribute_name(0), None);
+        assert_eq!(reg.element_name(0), None);
+        assert_eq!(reg.find_attribute("size"), 19);
+        assert_eq!(reg.find_attribute("space"), 20);
     }
 
     #[test]
@@ -1452,11 +1955,9 @@ mod tests {
     #[test]
     fn test_tree_encoder_roundtrip() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_element_with_id("head", 100);
-        registry.write().unwrap().register_attribute_with_id("num", 200);
         let mut enc = TreeEncoder::new(registry.clone());
-        let head_id = ElementId::new("head", 100);
-        let num_id = AttributeId::new("num", 200);
+        let head_id = ElementId::new("data", 1);
+        let num_id = AttributeId::new("num", 132);
         enc.open_element(&head_id);
         enc.write_unsigned_integer(&num_id, 42);
         enc.write_string(&AttributeId::new("name", registry.read().unwrap().find_attribute("name")), "foo");
@@ -1464,7 +1965,7 @@ mod tests {
         let doc = enc.into_document();
         let root = doc.get_root().unwrap();
         let rg = root.read().unwrap();
-        assert_eq!(rg.get_name(), "head");
+        assert_eq!(rg.get_name(), "data");
         assert_eq!(rg.get_attribute_value("num"), Some("42"));
         assert_eq!(rg.get_attribute_value("name"), Some("foo"));
     }
@@ -1472,18 +1973,16 @@ mod tests {
     #[test]
     fn test_tree_decoder() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_element_with_id("head", 100);
-        registry.write().unwrap().register_attribute_with_id("num", 200);
         // Build a tree manually.
         let mut root = Element::new();
-        root.set_name("head");
+        root.set_name("data");
         root.add_attribute("num", "42");
         let mut dec = TreeDecoder::new(Arc::new(RwLock::new(root)), registry.clone());
         let id = dec.open_element();
-        assert_eq!(id, 100);
+        assert_eq!(id, 1);
         // Read the num attribute.
         let aid = dec.next_attribute_id();
-        assert_eq!(aid, 200);
+        assert_eq!(aid, 132);
         let val = dec.read_unsigned_integer();
         assert_eq!(val, 42);
         dec.close_element(id);
@@ -1491,7 +1990,8 @@ mod tests {
 
     #[test]
     fn test_reserved_ids() {
-        assert_eq!(ATTRIB_UNKNOWN, 0);
+        assert_eq!(ATTRIB_UNKNOWN, 159);
+        assert_eq!(ELEM_UNKNOWN, 289);
         assert_eq!(ATTRIB_CONTENT, 1);
     }
 
@@ -1500,16 +2000,14 @@ mod tests {
     #[test]
     fn test_packed_encode_element_roundtrip() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_element_with_id("root", 10);
-        registry.write().unwrap().register_attribute_with_id("num", 20);
 
         // Encode.
         let mut enc = PackedEncode::new();
-        let root = ElementId::new("root", 10);
-        let num = AttributeId::new("num", 20);
+        let root = ElementId::new("data", 1);
+        let num = AttributeId::new("num", 132);
         enc.open_element(&root);
         enc.write_unsigned_integer(&num, 42);
-        enc.write_bool(&AttributeId::new("flag", registry.write().unwrap().register_attribute("flag")), true);
+        enc.write_bool(&AttributeId::new("readonly", 17), true);
         enc.write_string(&AttributeId::new("name", registry.write().unwrap().register_attribute("name")), "hello");
         enc.close_element(&root);
         let bytes = enc.into_bytes();
@@ -1518,12 +2016,12 @@ mod tests {
         // Decode.
         let mut dec = PackedDecode::new(bytes, registry.clone());
         let eid = dec.open_element();
-        assert_eq!(eid, 10);
+        assert_eq!(eid, 1);
 
-        // Read attributes in order: num, flag, name.
+        // Read attributes in order: num, readonly, name.
         let aid1 = dec.next_attribute_id();
         let val1 = dec.read_unsigned_integer();
-        assert_eq!(aid1, 20);
+        assert_eq!(aid1, 132);
         assert_eq!(val1, 42);
 
         let aid2 = dec.next_attribute_id();
@@ -1542,10 +2040,9 @@ mod tests {
     #[test]
     fn test_packed_encode_signed_integer() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_attribute_with_id("val", 5);
 
         let mut enc = PackedEncode::new();
-        let attr = AttributeId::new("val", 5);
+        let attr = AttributeId::new("val", 24);
         enc.write_signed_integer(&attr, -100);
         let bytes = enc.into_bytes();
 
@@ -1558,10 +2055,9 @@ mod tests {
     #[test]
     fn test_packed_encode_large_unsigned() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_attribute_with_id("big", 7);
 
         let mut enc = PackedEncode::new();
-        let attr = AttributeId::new("big", 7);
+        let attr = AttributeId::new("value", 25);
         enc.write_unsigned_integer(&attr, 0x123456789A);
         let bytes = enc.into_bytes();
 
@@ -1574,10 +2070,9 @@ mod tests {
     #[test]
     fn test_packed_encode_zero() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_attribute_with_id("z", 3);
 
         let mut enc = PackedEncode::new();
-        let attr = AttributeId::new("z", 3);
+        let attr = AttributeId::new("offset", 16);
         enc.write_unsigned_integer(&attr, 0);
         let bytes = enc.into_bytes();
 
@@ -1590,17 +2085,16 @@ mod tests {
     #[test]
     fn test_packed_encode_extended_id() {
         let registry = Arc::new(RwLock::new(IdRegistry::new()));
-        registry.write().unwrap().register_element_with_id("big", 100); // > 0x1f → extended.
 
         let mut enc = PackedEncode::new();
-        let elem = ElementId::new("big", 100);
+        let elem = ElementId::new("compiler_spec", 132); // > 0x1f → extended.
         enc.open_element(&elem);
         enc.close_element(&elem);
         let bytes = enc.into_bytes();
 
         let mut dec = PackedDecode::new(bytes, registry);
         let eid = dec.open_element();
-        assert_eq!(eid, 100);
+        assert_eq!(eid, 132);
         dec.close_element(eid);
     }
 }
