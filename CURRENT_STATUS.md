@@ -1,8 +1,30 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-06-28（核实更新）
+**日期**: 2026-08-15（核实更新）
 **版本**: 0.1.0
-**状态**: 🟡 **核心库持续开发中；大规模算法移植 + 接入生效**
+**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线已建立，地基修复 wave 持续落地**
+
+## 关键指标（2026-08-15 重新核实）
+
+| 指标 | 当前 | 核实方式 |
+|---|---|---|
+| 单元测试 (`cargo test --lib`) | **1320 通过 / 11 失败 / 3 ignored** | 2026-08-15 实跑（ee29a32 工作树）；11 个失败 A/B 验证与 Cover 修复无关，5 个 panic 于 makeFree preflight（`VARNODE-BANK-KEY-LIVE-0001` 修复中），其余 6 个分散于 comment/dynamic/funcdata/merge/ruleaction 并已登记 |
+| 锁定 oracle 函数 fixture | **registry 14 个**（磁盘 32 组 `.cc`+`.rs`） | `tests/oracle/fixture_registry.json`；本日新增 `cover_rebuild_1204`（8/8 MATCH） |
+| curl E2E（隔离 worker 模式） | **21/25 函数成功** | 2026-08-15 超时隔离 runner exit0；`parseconfig` 从 TIMEOUT 恢复数秒完成；`glob_word`/`glob_set`/`next_url`/`my_get_line` 相对 08-14 基线改善 |
+| curl 剩余失败 | 4：`my_get_token` panic（`SUBFLOW-OUTVN-UNWRAP-0001` 修复中）、`glob_range` 挂起（`FUNC-GLOBRANGE-HANG-0001`）、`match_url`/`__libc_csu_init` 类型传播不收敛（`FUNC-TYPEPROP-SETTLE-0001`） | timeout isolation 日志 |
+| 11.3.2 诊断 golden 差分 | 仍是回归信号，非最终对齐证据 | `ORACLE-0002` BLOCKED（待 12.0.4 headless golden 重生） |
+
+### 2026-08-15 Cover 自锁修复（ee29a32 + c51fad2）
+
+生产路径 `ActionMergeType` 的永久自锁（`update_high_cover` 持 root Varnode 写锁、MULTIEQUAL slot2 同 Arc 再入）以 root-identity 快照重建修复：`Varnode::update_cover_locked` + `Cover::rebuild_from_root_snapshot` + `Arc::ptr_eq` 槽匹配；input sentinel 同步修正为 uindex 域 0。权威 oracle runner（锁定 Ghidra 重建 + pinned-base Rust overlay）`MATCH covered_projection=8/8 overall=PARTIAL_MATCH`；独立 Cross-Review APPROVE；E2E 独立验证越过后 `ActionSetCasts` 的 makeFree panic 在真实管线亦不再触发。后继缺口已登记：`COVER-TWOPIECE-RESIDUAL-0001`、`COVER-REBUILD-COVERAGE-0002`、`BLOCK-INDEX-ASSIGN-0001`。
+
+### 2026-08 工具链与验证地基（摘要）
+
+锁定 oracle 差分流水线已工业化：逐函数账本（9494 Ghidra behavior definitions / FUNCTION_LEDGER）、内容寻址 oracle cache、edit/commit/wave/nightly 四级门禁、changed-function→fixture 选择器、stage 快照首差异定位、deterministic reducer、不可变 fd runner（空环境重建锁定 Ghidra + 校验和隔离 vendor 的 Rust snapshot）。详见 `docs/TODO_BOARD.md` DONE 行（LEDGER-0001/PERF-BUILD-0001/PERF-GATE-0001/IMPACT-0001/ORACLE-CACHE-0001/DIFF-BISECT-0001/REDUCE-0001/GATE-0001）。
+
+---
+
+## 以下为历史记录（2026-06/07 口径，部分数值已被上方 2026-08-15 数据覆盖）
 
 ## 关键指标（2026-07-02 重新核实）
 
