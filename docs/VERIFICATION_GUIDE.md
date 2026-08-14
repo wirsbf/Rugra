@@ -25,6 +25,34 @@ Rugra 的验证体系仍处于
 > `docs/alignment_audit/FUNCTION_LEDGER.json` 为准。未登记 fixture 的源码改动不是
 > “无需测试”，而是 coverage gap。
 
+### 差分诊断工具链后续计划（2026-08-14）
+
+详细实施方案见
+[`docs/alignment_audit/DIFFERENTIAL_ALIGNMENT_TOOLING_PLAN_2026-08-14.md`](alignment_audit/DIFFERENTIAL_ALIGNMENT_TOOLING_PLAN_2026-08-14.md)。
+计划已拆入 `docs/TODO_BOARD.md` 的稳定 ID。下图表示硬依赖；互不相连的分支可以并行，
+不是一条强制串行链：
+
+```text
+稳定函数 ID → registry/schema → metadata 四态迁移 → strict gate/CI → 函数 evidence
+cache hardening ───────────────┐
+registry/schema ───────────────┴→ 标准 oracle result
+标准 oracle result + strict gate/CI → runner 全量迁移
+标准 oracle result → IR invariant → Action/Rule trace → hang triage
+函数 evidence + oracle result → P-code/CFG DSL → fuzz → reducer → corpus promotion
+reducer hardening ────────────────────────────────────────┘
+
+既有 `PIPE-TREE-0001` 是 Action trace 的已满足前置，`RUNTIME-TIMEOUT-0001` 是 hang triage
+的已满足前置；精确 DAG 以计划文档和 TODO 行为准。
+```
+
+审计基线显示工作树可见 32 套 metadata/runner，但正式 registry 只登记 12 套；现有
+`stage_diff.py` 主要定位到阶段 hash，现有 `reduce_fixture.py` 也只做删除式 JSON/hex ddmin。
+因此近期优先目标是统一事实源并自动定位首个错误 mutation，而不是直接扩大完整二进制 fuzz。
+顶层 fixture 状态继续严格采用 B2 的 `MATCH/MISMATCH/NO_ORACLE/UNTESTED`；局部已匹配部分
+只能记为 observation 级证据，不能以 `PARTIAL_MATCH` 冒充新的顶层状态。迁移旧
+`PARTIAL_MATCH` 时必须逐 fixture 判定：已有双侧差异记 `MISMATCH`，双侧已测部分相等但
+覆盖不完整记 `UNTESTED`，缺少合法同输入双侧 oracle 记 `NO_ORACLE`；不得一刀切。
+
 ### 机器化四级入口（2026-08-12）
 
 日常验证统一通过以下入口，避免每次人工拼接一整套命令：
@@ -52,28 +80,30 @@ fresh-target canonical release 构建。每一级都可用 `--report` 保存结�
 再用 `compare` 定位第一个差异。原始 stage hash 是诊断索引，不是行为证明；只有该阶段完整
 观察结果及其所有状态突变同输入零差异时，映射函数才可记 `MATCH`。
 
-`GetStr` 已有一条可直接运行的六层实例：
+`GetStr` 已有历史六层 fixture，但截至 2026-08-14 **不能作为当前源码可直接运行的证据**。
+metadata 固定的 Rust comparand SHA 为 `bfcadc80…`，当前文件为 `8e74e438…`，因此以下命令会在
+provenance 预检阶段 fail-closed，而不是产出当前诊断：
 
 ```bash
 tools/run_getstr_pipeline_oracle.sh
 ```
 
-结果写入 `result/pipeline_snapshots/getstr/`：`ghidra/`、`rugra/` 和
+历史结果写入 `result/pipeline_snapshots/getstr/`：`ghidra/`、`rugra/` 和
 `rugra-repeat/` 分别保存 raw P-code、CFG、Heritage/SSA、完整 Action IR、结构树和 C 文本；
 `comparison.json` 保存每层首个 JSON 路径差异，`README.md` 给出紧凑摘要，`ghidra.c`、
-`rugra.c` 与 `rugra-repeat.c` 可直接阅读。当前锁定结果是 `MISMATCH`，不是 golden：第一个
-JSON 路径差异现在是 raw op 名称大小写（`copy` ↔ `COPY`）。更重要的数值结构结果是：
-两侧均有 103 ops / 272 Varnodes / 6 CFG blocks，且 103 条 op 的
-`(address, opcode, input_count, has_output)` 顺序完全一致。旧 Rugra 在线性扫描中错误提升的
-`0x3702` 不可达对齐 NOP 已被 `PIPE-REACH-0001` 消除。
+`rugra.c` 与 `rugra-repeat.c` 可阅读。历史报告为 `MISMATCH`，不是 golden；它曾记录两侧
+103 ops / 272 Varnodes / 6 CFG blocks，但审计确认旧 runner 实际没有比较其声明中的
+`has_output`，并且 `zip` 未检查尾部长度，因此这些字段不能继续作为完整同输出证明。
 
-raw 层仍不是 `MATCH`：第一个 op-storage 差异位于 direct CALL，Ghidra 用动态 Fspec
+历史 raw 层也不是 `MATCH`：第一个 op-storage 差异位于 direct CALL，Ghidra 用动态 Fspec
 space index 5，Rugra 因固定 `AddressSpace` 模型只能用 synthetic Iop index 7；第一个
 Varnode-state 差异是 Ghidra 已附 unknown datatype/COVERDIRTY，而 Rugra 尚未附这些状态。
-两次 Rugra release 运行的全部六层 artifact 现已逐字一致；runner 保留第二份并将任何未来
-不稳定直接判为失败，不允许用排序或临时 ID 规范化掩盖。
+此外 Ghidra 侧实际载入完整 gcc cspec，而当前 Rust companion 没有消费同一 cspec；新的
+`00_effective_configuration` preflight 在这一差异关闭前必须报告 `NO_ORACLE`，不得继续解释
+后续 IR 差异。`ORACLE-RESULT-0001` 将拆分 `--verify-recorded`、`--diagnose-current` 和审核后的
+`--accept`，在该任务完成前不要把旧 runner 的失败描述成“最新反编译结果”。
 
-fixture 明确使用 release profile。debug Action 路径目前会暴露
+历史 fixture 使用 release profile。debug Action 路径会暴露
 `VARMAP-GATHEROFFSET-0001` 与 `RULE-COLLECTTERMS-0001` 两个核心无符号边界缺陷；因为它们
 尚未完成独立核心复核，本 snapshot 不把 release 成功冒充对应分支 `MATCH`。
 
@@ -81,9 +111,10 @@ Ghidra 的 Heritage 快照来自真实 `decompile` Action 在 `paramdouble` 前�
 目前只能直接重放 `ActionHeritage`，所以该层明确是 `NO_ORACLE` 诊断边界。只有补齐同一
 Action-tree 观察点并在完整状态上零差异，才能将该层改记 `MATCH`。
 
-首差异定位后，可用 `tools/reduce_fixture.py` 缩减输入。predicate 必须运行真实两侧 fixture
-并仅以约定 exit code 表示差异是否仍存在；不得把手写 expected 当 oracle。reducer trace 是
-诊断证据，最终最小 case 仍须补齐 commit/arch/cspec/options/input 指纹并进入 B2 runner。
+首差异定位后，可用 `tools/reduce_fixture.py` 缩减输入。predicate 必须运行真实两侧 fixture，
+并以结构化 `predicate_signature` 区分同一故障、不同故障、非法 candidate 与 harness error；
+不能只看 exit code，也不得把手写 expected 当 oracle。reducer trace 是诊断证据，最终最小 case
+仍须补齐 commit/arch/cspec/options/input 指纹并进入 B2 runner。
 
 ---
 
