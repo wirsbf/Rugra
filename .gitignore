@@ -2,6 +2,8 @@
 /target/
 **/*.rs.bk
 *.pdb
+# Direct `rustc` metadata emitted in the repository root.
+/*.rmeta
 
 # Cargo.lock is versioned because Rugra ships binaries and locked oracle
 # runners; reproducible offline validation requires an exact dependency graph.
