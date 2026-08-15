@@ -752,7 +752,14 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         let mut fd_write = fd_arc
             .write()
             .map_err(|_| "Funcdata write lock poisoned during analysis".to_string())?;
-        let _ = db.perform_action("decompile", &mut fd_write);
+        // Ghidra's Action::perform aborts the whole pipeline on a negative
+        // return; swallowing the error here made mid-pipeline aborts (e.g.
+        // the RuleMultiCollapse def-loss) completely invisible in the
+        // driver output (TYPED-DECL-GAP-0001 finding). Keep the
+        // decompile-going-on semantics but surface the abort loudly.
+        if let Err(err) = db.perform_action("decompile", &mut fd_write) {
+            eprintln!("[DRIVER] {} pipeline ABORTED: {:?}", target.name, err);
+        }
     }
     eprintln!("[STEP] {} action done {:?}", target.name, t0.elapsed());
 
