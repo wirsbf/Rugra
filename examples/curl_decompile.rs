@@ -14,135 +14,163 @@ use std::time::Duration;
 
 use rugra::action::ActionDatabase;
 use rugra::address::Address;
-use rugra::debugproto::{DebugPrototypeDatabase, X86_64GccStorage};
+use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase, X86_64GccStorage};
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::Funcdata;
 use rugra::prettyprint::EmitNoMarkup;
 use rugra::printc::PrintC;
 use rugra::printlanguage::PrintLanguage;
-use rugra::type_system::datatype::{Datatype, TypeField};
-use rugra::type_system::typefactory::TypeFactory;
 
-/// Build the DWARF-derived struct types for the curl binary and return a map
-/// from global-variable address → struct-pointer Datatype. The driver seeds
-/// each per-function Funcdata's `global_struct_ptrs` with this map so that
-/// `type_infer::propagate_types` stamps the struct-pointer types onto the
-/// constant varnodes that reference these globals.
+/// The locked 12.0.4 golden corpus for the curl fixture: every function the
+/// canonical Ghidra analyzeHeadless run decompiled
+/// (`tests/golden/ghidra_curl_1204.provenance.json` ledger, 124 entries,
+/// oracle commit e40ed13014025f82488b1f8f7bca566894ac376b). Offsets are the
+/// ledger's Ghidra addresses rebased by the analyzeHeadless image base
+/// 0x100000 to match this PIE's ELF-relative virtual addresses, which is the
+/// same normalization `tools/compare_ghidra.py` applies when matching.
 ///
-/// The struct layouts are extracted from the curl ELF's DWARF debug_info via
-/// `tools/extract_dwarf_structs.py`. This stands in for the Architecture/
-/// TypeFactory layer that Ghidra populates from .cspec/.specfile; Rugra's
-/// driver has no Architecture layer, so we register the types here.
-fn build_dwarf_struct_pointers() -> HashMap<u64, Arc<Datatype>> {
-    let mut tf = TypeFactory::new(8);
+/// Ghidra discovered these via its loader/PLT/external analyzers; Rugra has
+/// no function-discovery layer yet, so the driver takes the corpus list from
+/// the locked ledger (FULL-CORPUS-0001). ELF symbols still win for naming and
+/// sizing wherever they exist at the same address.
+const GOLDEN_CORPUS_LEDGER: [(u64, &str, u32); 124] = [
+    (0x2000, "_init", 27u32),
+    (0x2020, "FUN_00102020", 13u32),
+    (0x22e0, "__cxa_finalize", 11u32),
+    (0x22f0, "free", 11u32),
+    (0x2300, "__vfprintf_chk", 11u32),
+    (0x2310, "strcpy", 11u32),
+    (0x2320, "puts", 11u32),
+    (0x2330, "isatty", 11u32),
+    (0x2340, "curl_easy_perform", 11u32),
+    (0x2350, "curl_slist_append", 11u32),
+    (0x2360, "fclose", 11u32),
+    (0x2370, "strlen", 11u32),
+    (0x2380, "__stack_chk_fail", 11u32),
+    (0x2390, "strchr", 11u32),
+    (0x23a0, "strrchr", 11u32),
+    (0x23b0, "maprintf", 11u32),
+    (0x23c0, "fputc", 11u32),
+    (0x23d0, "fgets", 11u32),
+    (0x23e0, "strtol", 11u32),
+    (0x23f0, "memcpy", 11u32),
+    (0x2400, "time", 11u32),
+    (0x2410, "fileno", 11u32),
+    (0x2420, "__xstat", 11u32),
+    (0x2430, "malloc", 11u32),
+    (0x2440, "__isoc99_sscanf", 11u32),
+    (0x2450, "curl_easy_init", 11u32),
+    (0x2460, "curl_getenv", 11u32),
+    (0x2470, "realloc", 11u32),
+    (0x2480, "__printf_chk", 11u32),
+    (0x2490, "curl_version", 11u32),
+    (0x24a0, "curl_slist_free_all", 11u32),
+    (0x24b0, "fopen", 11u32),
+    (0x24c0, "strcat", 11u32),
+    (0x24d0, "curl_easy_setopt", 11u32),
+    (0x24e0, "curl_getdate", 11u32),
+    (0x24f0, "exit", 11u32),
+    (0x2500, "fwrite", 11u32),
+    (0x2510, "__fprintf_chk", 11u32),
+    (0x2520, "curl_easy_cleanup", 11u32),
+    (0x2530, "strdup", 11u32),
+    (0x2540, "strequal", 11u32),
+    (0x2550, "curl_formparse", 11u32),
+    (0x2560, "strstr", 11u32),
+    (0x2570, "strnequal", 11u32),
+    (0x2580, "__ctype_b_loc", 11u32),
+    (0x2590, "__sprintf_chk", 11u32),
+    (0x25a0, "main", 3510u32),
+    (0x3370, "_start", 47u32),
+    (0x33a0, "deregister_tm_clones", 34u32),
+    (0x33d0, "register_tm_clones", 51u32),
+    (0x3410, "__do_global_dtors_aux", 54u32),
+    (0x3450, "frame_dummy", 9u32),
+    (0x3460, "my_fwrite", 92u32),
+    (0x34d0, "myprogress", 477u32),
+    (0x36d0, "GetStr", 68u32),
+    (0x3720, "my_get_token", 241u32),
+    (0x3840, "my_get_line", 308u32),
+    (0x3980, "helpf", 267u32),
+    (0x3a90, "file2string", 403u32),
+    (0x3c50, "SetHTTPrequest", 43u32),
+    (0x3c80, "parseconfig", 633u32),
+    (0x3f00, "getparameter", 2609u32),
+    (0x4960, "main_init", 7u32),
+    (0x4970, "main_free", 5u32),
+    (0x4980, "SetHTTPrequest", 24u32),
+    (0x49a0, "progressbarinit", 90u32),
+    (0x4a00, "hugehelp", 84u32),
+    (0x4a60, "glob_word", 323u32),
+    (0x4bc0, "glob_set", 400u32),
+    (0x4d60, "glob_range", 503u32),
+    (0x4f70, "glob_url", 116u32),
+    (0x4ff0, "next_url", 502u32),
+    (0x5220, "match_url", 443u32),
+    (0x5400, "__libc_csu_init", 101u32),
+    (0x5470, "__libc_csu_fini", 5u32),
+    (0x5478, "_fini", 13u32),
+    (0x19000, "free", 1u32),
+    (0x19008, "__vfprintf_chk", 1u32),
+    (0x19010, "_ITM_deregisterTMCloneTable", 1u32),
+    (0x19018, "strcpy", 1u32),
+    (0x19020, "puts", 1u32),
+    (0x19028, "isatty", 1u32),
+    (0x19030, "curl_easy_perform", 1u32),
+    (0x19038, "curl_slist_append", 1u32),
+    (0x19040, "fclose", 1u32),
+    (0x19048, "strlen", 1u32),
+    (0x19050, "__stack_chk_fail", 1u32),
+    (0x19058, "strchr", 1u32),
+    (0x19060, "strrchr", 1u32),
+    (0x19068, "maprintf", 1u32),
+    (0x19070, "fputc", 1u32),
+    (0x19078, "__libc_start_main", 1u32),
+    (0x19080, "fgets", 1u32),
+    (0x19088, "__gmon_start__", 1u32),
+    (0x19090, "strtol", 1u32),
+    (0x19098, "memcpy", 1u32),
+    (0x190a0, "time", 1u32),
+    (0x190a8, "fileno", 1u32),
+    (0x190b0, "__xstat", 1u32),
+    (0x190b8, "malloc", 1u32),
+    (0x190c0, "__isoc99_sscanf", 1u32),
+    (0x190c8, "curl_easy_init", 1u32),
+    (0x190d0, "curl_getenv", 1u32),
+    (0x190d8, "realloc", 1u32),
+    (0x190e0, "__printf_chk", 1u32),
+    (0x190e8, "curl_version", 1u32),
+    (0x190f0, "curl_slist_free_all", 1u32),
+    (0x190f8, "fopen", 1u32),
+    (0x19100, "strcat", 1u32),
+    (0x19108, "curl_easy_setopt", 1u32),
+    (0x19110, "curl_getdate", 1u32),
+    (0x19118, "exit", 1u32),
+    (0x19120, "fwrite", 1u32),
+    (0x19128, "__fprintf_chk", 1u32),
+    (0x19130, "_ITM_registerTMCloneTable", 1u32),
+    (0x19138, "curl_easy_cleanup", 1u32),
+    (0x19140, "strdup", 1u32),
+    (0x19148, "strequal", 1u32),
+    (0x19150, "curl_formparse", 1u32),
+    (0x19158, "strstr", 1u32),
+    (0x19160, "strnequal", 1u32),
+    (0x19168, "__ctype_b_loc", 1u32),
+    (0x19170, "__sprintf_chk", 1u32),
+    (0x19178, "__cxa_finalize", 1u32),
+];
 
-    // Helper field type: a pointer-sized long (the DWARF extraction reports
-    // every member as `long`, which is the pointer-sized slot). Using `long`
-    // for char*/long/int members keeps field offsets accurate for PTRSUB
-    // generation without needing the full DWARF type tree.
-    let long8 = tf.get_base(8, rugra::type_system::datatype::TypeMetatype::Int)
-        .expect("long base type");
-    let field = |name: &str, off: usize| -> TypeField {
-        TypeField { name: name.to_string(), offset: off, type_ptr: long8.clone() }
-    };
-
-    // struct Configurable { ... 304 bytes ... }  (DWARF DW_AT_byte_size: 304)
-    // Global `::config` lives at 0x17520.
-    tf.create_struct("Configurable");
-    tf.set_fields("Configurable", vec![
-        field("useragent", 0),
-        field("cookie", 8),
-        field("use_resume", 16),
-        field("resume_from", 20),
-        field("postfields", 24),
-        field("referer", 32),
-        field("timeout", 40),
-        field("outfile", 48),
-        field("headerfile", 56),
-        field("remotefile", 64),
-        field("ftpport", 72),
-        field("porttouse", 80),
-        field("range", 88),
-        field("low_speed_limit", 96),
-        field("low_speed_time", 100),
-        field("showerror", 104),
-        field("infile", 112),
-        field("userpwd", 120),
-        field("proxyuserpwd", 128),
-        field("proxy", 136),
-        field("configread", 144),
-        field("conf", 152),
-        field("cert", 168),
-        field("cert_passwd", 176),
-        field("crlf", 184),
-        field("cookiefile", 192),
-        field("customrequest", 200),
-        field("progressmode", 208),
-        field("nobuffer", 209),
-        field("writeout", 216),
-        field("errors", 224),
-        field("quote", 232),
-        field("postquote", 240),
-        field("ssl_version", 248),
-        field("timecond", 256),
-        field("condtime", 264),
-        field("headers", 272),
-        field("httppost", 280),
-        field("last_post", 288),
-        field("httpreq", 296),
-    ]);
-
-    // struct OutStruct { char *filename; FILE *stream; }  (16 bytes)
-    // Used as a local `OutStruct outs;` on the stack — no single global, but
-    // we register the type so propagated pointers can resolve to it.
-    tf.create_struct("OutStruct");
-    tf.set_fields("OutStruct", vec![
-        field("filename", 0),
-        field("stream", 8),
-    ]);
-
-    // struct ProgressData { long total; long prev; long point; long width; }
-    tf.create_struct("ProgressData");
-    tf.set_fields("ProgressData", vec![
-        field("total", 0),
-        field("prev", 8),
-        field("point", 16),
-        field("width", 24),
-    ]);
-
-    // struct HttpPost { ... } — chain node used by multipart post handling.
-    tf.create_struct("HttpPost");
-    tf.set_fields("HttpPost", vec![
-        field("next", 0),
-        field("name", 8),
-        field("contents", 16),
-        field("contenttype", 24),
-        field("more", 32),
-        field("flags", 40),
-    ]);
-
-    // Build the struct and pointer types and the address→type map.
-    let configurable = tf.find_by_name("Configurable").expect("Configurable struct");
-    let configurable_ptr = tf.get_ptr(configurable.clone());
-    let _outstruct = tf.find_by_name("OutStruct").expect("OutStruct struct");
-    let _progressdata = tf.find_by_name("ProgressData").expect("ProgressData struct");
-    let _httppost = tf.find_by_name("HttpPost").expect("HttpPost struct");
-
-    let mut map: HashMap<u64, Arc<Datatype>> = HashMap::new();
-    // ::config @ 0x17520 (from DWARF DW_AT_location DW_OP_addr: 0x17520).
-    // The global is accessed via RIP-relative lea which puts the ADDRESS
-    // (a Configurable*) into a register. So stamp the POINTER type on the
-    // address constant, not the struct itself. This lets ActionInferTypes
-    // propagate Configurable* through COPY/INT_ADD chains to reach the
-    // STORE address base varnode, triggering ->field rendering.
-    map.insert(0x17520, configurable_ptr.clone());
-    // Also expose the struct-pointer type for code that takes `&::config`
-    // (the IR surfaces this via RIP-relative lea into a register). The
-    // pointer type is registered in the TypeFactory under "Configurable *"
-    // so propagation consumers can find it; we don't map an address to it.
-    let _ = configurable_ptr;
-    map
+/// Where a driver function entry came from. `ElfSymbol` entries carry a
+/// full ELF symbol (address+size+name) and the worker re-validates it;
+/// `LedgerEntry` entries (PLT stubs, `_init`/`_fini`, zero-sized symtab
+/// functions, EXTERNAL-space entries) come from the locked golden ledger
+/// and have no validating ELF symbol, so the worker validates them through
+/// the section/file-offset checks instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FunctionOrigin {
+    ElfSymbol,
+    LedgerEntry,
 }
 
 /// Information about one function in the ELF
@@ -151,15 +179,17 @@ struct FuncInfo {
     size: usize,
     file_offset: u64,
     name: String,
+    origin: FunctionOrigin,
 }
 
-// RUGRA-GLUE: copies immutable ELF symbol coordinates into the worker protocol.
+// RUGRA-GLUE: copies immutable function coordinates into the worker protocol.
 fn worker_target(func: &FuncInfo) -> WorkerTarget {
     WorkerTarget {
         vaddr: func.vaddr,
         size: func.size,
         file_offset: func.file_offset,
         name: func.name.clone(),
+        symbol_backed: func.origin == FunctionOrigin::ElfSymbol,
     }
 }
 
@@ -187,6 +217,11 @@ struct WorkerTarget {
     size: usize,
     file_offset: u64,
     name: String,
+    /// Whether an ELF symbol (address+size+name) backs this target and the
+    /// worker must re-validate against it. Ledger-only targets (PLT stubs,
+    /// `_init`/`_fini`, EXTERNAL-space entries) are validated through the
+    /// ELF section/file-offset checks instead.
+    symbol_backed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -273,6 +308,38 @@ struct WorkerRun {
 enum WorkerFailure {
     InvalidRequest(String),
     Job(String),
+}
+
+// RUGRA-GLUE: tallies per-function outcomes across the golden-corpus run for the Summary line.
+#[derive(Default)]
+struct CorpusStats {
+    decompiled: usize,
+    empty_output: usize,
+    timeouts: usize,
+    panic: usize,
+    external_stubs: usize,
+    worker_failures: usize,
+    protocol_failures: usize,
+}
+
+impl CorpusStats {
+    // RUGRA-GLUE: every attempted function lands in exactly one bucket.
+    fn attempted(&self) -> usize {
+        self.decompiled
+            + self.empty_output
+            + self.timeouts
+            + self.panic
+            + self.external_stubs
+            + self.worker_failures
+            + self.protocol_failures
+    }
+}
+
+// RUGRA-GLUE: classifies a worker failure as an EXTERNAL-space ledger entry (no ELF section backs its address) using the worker's own replayed diagnostic.
+fn is_external_stub_failure(stderr: &[u8]) -> bool {
+    std::str::from_utf8(stderr)
+        .map(|text| text.contains("no ELF section contains"))
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Debug)]
@@ -582,6 +649,15 @@ fn run_worker_job(job: &WorkerJob) -> Result<WorkerPayload, WorkerFailure> {
     }
 }
 
+// RUGRA-GLUE: re-validates a controller-supplied target against the ELF symbol table before the worker trusts its coordinates.
+fn elf_symbol_matches(elf: &goblin::elf::Elf, target: &WorkerTarget) -> bool {
+    elf.syms.iter().any(|symbol| {
+        symbol.st_value == target.vaddr
+            && symbol.st_size as usize == target.size
+            && elf.strtab.get_at(symbol.st_name) == Some(target.name.as_str())
+    })
+}
+
 // RUGRA-GLUE: reconstructs the original per-function prototype pre-pass inside the cancellable worker.
 fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> {
     let obj = Object::parse(&request.binary_image)
@@ -591,12 +667,7 @@ fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> 
         _ => return Err("prototype worker input is not an ELF image".to_string()),
     };
     let target = &request.target;
-    let symbol_matches = elf.syms.iter().any(|symbol| {
-        symbol.st_value == target.vaddr
-            && symbol.st_size as usize == target.size
-            && elf.strtab.get_at(symbol.st_name) == Some(target.name.as_str())
-    });
-    if !symbol_matches {
+    if target.symbol_backed && !elf_symbol_matches(elf, target) {
         return Err(format!(
             "prototype target no longer matches ELF symbol: {} @ 0x{:x} size {}",
             target.name, target.vaddr, target.size
@@ -647,12 +718,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         _ => return Err("worker input is not an ELF image".to_string()),
     };
     let target = &request.target;
-    let symbol_matches = elf.syms.iter().any(|symbol| {
-        symbol.st_value == target.vaddr
-            && symbol.st_size as usize == target.size
-            && elf.strtab.get_at(symbol.st_name) == Some(target.name.as_str())
-    });
-    if !symbol_matches {
+    if target.symbol_backed && !elf_symbol_matches(elf, target) {
         return Err(format!(
             "worker target no longer matches ELF symbol: {} @ 0x{:x} size {}",
             target.name, target.vaddr, target.size
@@ -686,6 +752,8 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
 
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
+    let debug_globals = DebugGlobalDatabase::parse_elf(&request.binary_image)
+        .map_err(|error| format!("unable to import DWARF globals: {error}"))?;
     let register_context = rugra::sleigh_ffi::SleighCtx::new()
         .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
     let debug_storage = X86_64GccStorage::from_sleigh(&register_context)
@@ -723,7 +791,25 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         ),
     }
     fd.external_prototypes = proto_db;
-    fd.global_struct_ptrs = build_dwarf_struct_pointers();
+    // Seed the DWARF global types: each address constant referencing a
+    // global carries the C "&global" type (e.g. 0x17520 →
+    // `Configurable *` from the DWARF `config` variable's struct with real
+    // member types/offsets), which ActionInferTypes propagates onto
+    // COPY/LOAD chains for `->field` rendering (DWARF-TYPE-IMPORT-0001).
+    // Only `config` is wired today: A/B on the full corpus showed that
+    // typing the other DWARF globals (glob_expand `URLGlob **` /
+    // glob_buffer `char *` / save / beenhere) diverts printc's
+    // symbol-name rendering into untyped locals (`extern long xVar69`
+    // replaces `extern long glob_expand`) with no `URLGlob *`/`->size`
+    // gain, because the LOAD-output → PTRSUB field-rendering chain and
+    // Symbol-driven declarations are not in place (see
+    // PRINTC-SYMBOL-DECL-0001 / FUNCDATA-LINKSYMBOL-TYPED-0001). The full
+    // per-global map stays available via `address_pointer_map()`.
+    fd.global_struct_ptrs = debug_globals
+        .address_pointer_map()
+        .into_iter()
+        .filter(|(address, _)| *address == 0x17520)
+        .collect();
     for (address, name) in &request.symbol_entries {
         fd.add_symbol(*address, name.clone());
     }
@@ -1480,6 +1566,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
 
     // Collect all functions and ELF metadata
     let mut functions: Vec<FuncInfo> = Vec::new();
+    let mut elf_function_symbols: HashMap<u64, (String, usize)> = HashMap::new();
     let mut symbol_table: HashMap<u64, String> = HashMap::new();
     let mut string_table: HashMap<u64, String> = HashMap::new();
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
@@ -1491,25 +1578,14 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(name) = elf.strtab.get_at(sym.st_name) {
                     if !name.is_empty() {
                         symbol_table.insert(sym.st_value, name.to_string());
-                    }
-                    if sym.is_function() && sym.st_size > 0 {
-                        // Find file offset
-                        let mut file_off = 0u64;
-                        for header in elf.section_headers.iter() {
-                            if sym.st_value >= header.sh_addr
-                                && sym.st_value < header.sh_addr + header.sh_size
-                            {
-                                file_off = header.sh_offset + (sym.st_value - header.sh_addr);
-                                break;
-                            }
-                        }
-                        if file_off > 0 {
-                            functions.push(FuncInfo {
-                                vaddr: sym.st_value,
-                                size: sym.st_size as usize,
-                                file_offset: file_off,
-                                name: name.to_string(),
-                            });
+                        if sym.is_function() {
+                            // Size-0 symbols (deregister_tm_clones etc.) are
+                            // kept too: the golden corpus merge below prefers
+                            // the ELF name and falls back to the ledger size.
+                            elf_function_symbols.insert(
+                                sym.st_value,
+                                (name.to_string(), sym.st_size as usize),
+                            );
                         }
                     }
                 }
@@ -1629,12 +1705,52 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Sort functions by address
+    // Build the decompilation corpus from the locked golden ledger (124
+    // functions: ELF-named code, PLT stubs, `_init`/`_fini`, zero-sized
+    // symtab functions, and the 48 EXTERNAL-space entries at 0x19000+ that
+    // Ghidra synthesized for undefined imports). ELF symbols win for name
+    // and size wherever they exist at the same address, so the previously
+    // ELF-only subset keeps its exact former inputs (FULL-CORPUS-0001).
+    let elf_function_file_offset = |vaddr: u64| -> u64 {
+        let mut file_off = 0u64;
+        for header in elf.section_headers.iter() {
+            if vaddr >= header.sh_addr && vaddr < header.sh_addr + header.sh_size {
+                file_off = header.sh_offset + (vaddr - header.sh_addr);
+                break;
+            }
+        }
+        file_off
+    };
+    for &(ledger_vaddr, ledger_name, ledger_size) in GOLDEN_CORPUS_LEDGER.iter() {
+        let ledger_size = ledger_size as usize;
+        let (name, size, origin) = match elf_function_symbols.get(&ledger_vaddr) {
+            Some((elf_name, elf_size)) if *elf_size > 0 => {
+                (elf_name.clone(), *elf_size, FunctionOrigin::ElfSymbol)
+            }
+            Some((elf_name, _)) => {
+                // ELF symbol with st_size == 0: keep the ELF name (GCC
+                // suffixes intact), size from the ledger.
+                (elf_name.clone(), ledger_size, FunctionOrigin::LedgerEntry)
+            }
+            None => (ledger_name.to_string(), ledger_size, FunctionOrigin::LedgerEntry),
+        };
+        functions.push(FuncInfo {
+            vaddr: ledger_vaddr,
+            size,
+            file_offset: elf_function_file_offset(ledger_vaddr),
+            name,
+            origin,
+        });
+    }
     functions.sort_by_key(|f| f.vaddr);
 
     println!(
-        "Found {} functions, {} symbols, {} strings\n",
+        "Found {} golden-corpus functions ({} ELF-symbol backed), {} symbols, {} strings\n",
         functions.len(),
+        functions
+            .iter()
+            .filter(|f| f.origin == FunctionOrigin::ElfSymbol)
+            .count(),
         symbol_table.len(),
         string_table.len()
     );
@@ -1642,12 +1758,20 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // Pre-pass: collect function prototypes for cross-function arg tracking.
     // Each function's detected param count is used by callers to trim CALL
     // args accurately. Mirrors Ghidra's ActionActiveParam multi-pass.
+    // Only ELF-symbol-backed functions participate: PLT stubs and
+    // EXTERNAL-space entries have no body to infer from (Ghidra gets import
+    // prototypes from a signature database Rugra does not have), and
+    // inferring on them would inject bogus CALL arg counts into callers.
     let mut prototype_db: std::collections::HashMap<u64, usize> = debug_prototypes
         .iter()
         .map(|(&address, prototype)| (address, prototype.parameters.len()))
         .collect();
     for func in &functions {
-        if func.size < 5 || func.name == "_start" || prototype_db.contains_key(&func.vaddr) {
+        if func.origin != FunctionOrigin::ElfSymbol
+            || func.size < 5
+            || func.name == "_start"
+            || prototype_db.contains_key(&func.vaddr)
+        {
             continue;
         }
         let job = WorkerJob::InferPrototype {
@@ -1706,9 +1830,12 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[PREPASS]   {} @ 0x{:x}: {} params", name, addr, count);
     }
 
-    // Decompile each function
-    let mut total_success = 0;
-    let mut total_fail = 0;
+    // Decompile each function. Every golden-corpus entry is attempted
+    // (including `_start`, tiny stubs and the EXTERNAL-space entries at
+    // 0x19000+, which fail fast with no backing ELF section) so the
+    // per-function timeout isolation and abort visibility cover the whole
+    // 124-function corpus (FULL-CORPUS-0001).
+    let mut stats = CorpusStats::default();
     let mut typedefs_emitted = false;
     let mut direct_typedefs_emitted = false;
     let selected_functions = match &mode {
@@ -1736,10 +1863,6 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             selected_functions_seen.push(func.name.clone());
-        }
-        // Skip very tiny functions (< 5 bytes) and _start
-        if func.size < 5 || func.name == "_start" {
-            continue;
         }
 
         eprintln!(
@@ -1802,7 +1925,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                             "/* ---- 0x{:x}: {} WORKER PROTOCOL ERROR: {} ---- */",
                             func.vaddr, func.name, error
                         );
-                        total_fail += 1;
+                        stats.protocol_failures += 1;
                         continue;
                     }
                 };
@@ -1843,9 +1966,9 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                             func.vaddr, func.name, func.size
                         );
                         println!("{}", c_code);
-                        total_success += 1;
+                        stats.decompiled += 1;
                     }
-                    None => total_fail += 1,
+                    None => stats.empty_output += 1,
                 }
             }
             WorkerOutcome::Success(WorkerPayload::Prototype(_))
@@ -1854,77 +1977,89 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     "/* ---- 0x{:x}: {} WORKER PROTOCOL ERROR: unexpected probe payload ---- */",
                     func.vaddr, func.name
                 );
-                total_fail += 1;
+                stats.protocol_failures += 1;
             }
             WorkerOutcome::Timeout => {
                 println!(
                     "/* ---- 0x{:x}: {} TIMEOUT (>10s) ---- */",
                     func.vaddr, func.name
                 );
-                total_fail += 1;
+                stats.timeouts += 1;
             }
             WorkerOutcome::Panic => {
                 println!(
                     "/* ---- 0x{:x}: {} PANICKED: isolated worker panic ---- */",
                     func.vaddr, func.name
                 );
-                total_fail += 1;
+                stats.panic += 1;
             }
             WorkerOutcome::NonZero(status) => {
-                println!(
-                    "/* ---- 0x{:x}: {} WORKER NONZERO: {} ---- */",
-                    func.vaddr, func.name, status
-                );
-                total_fail += 1;
+                // EXTERNAL-space ledger entries (0x19000+) have no backing
+                // ELF section, so the worker fails fast with the section
+                // diagnostic; Ghidra synthesizes halt_baddata() stubs there
+                // (residual: no EXTERNAL-space support in Rugra yet).
+                if is_external_stub_failure(&worker_run.stderr) {
+                    println!(
+                        "/* ---- 0x{:x}: {} EXTERNAL-STUB: no backing ELF section (Ghidra halt_baddata stub) ---- */",
+                        func.vaddr, func.name
+                    );
+                    stats.external_stubs += 1;
+                } else {
+                    println!(
+                        "/* ---- 0x{:x}: {} WORKER NONZERO: {} ---- */",
+                        func.vaddr, func.name, status
+                    );
+                    stats.worker_failures += 1;
+                }
             }
             WorkerOutcome::InputDisconnected(error) => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER INPUT DISCONNECTED: {} ---- */",
                     func.vaddr, func.name, error
                 );
-                total_fail += 1;
+                stats.worker_failures += 1;
             }
             WorkerOutcome::OutputDisconnected(error) => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER OUTPUT DISCONNECTED: {} ---- */",
                     func.vaddr, func.name, error
                 );
-                total_fail += 1;
+                stats.worker_failures += 1;
             }
             WorkerOutcome::MonitorDisconnected => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER MONITOR DISCONNECTED ---- */",
                     func.vaddr, func.name
                 );
-                total_fail += 1;
+                stats.worker_failures += 1;
             }
             WorkerOutcome::WaitFailed(error) => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER WAIT FAILED: {} ---- */",
                     func.vaddr, func.name, error
                 );
-                total_fail += 1;
+                stats.worker_failures += 1;
             }
             WorkerOutcome::CleanupFailed(error) => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER CLEANUP FAILED: {} ---- */",
                     func.vaddr, func.name, error
                 );
-                total_fail += 1;
+                stats.worker_failures += 1;
             }
             WorkerOutcome::SpawnFailed(error) => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER SPAWN FAILED: {} ---- */",
                     func.vaddr, func.name, error
                 );
-                total_fail += 1;
+                stats.worker_failures += 1;
             }
             WorkerOutcome::InvalidRequest(error) => {
                 println!(
                     "/* ---- 0x{:x}: {} WORKER INVALID REQUEST: {} ---- */",
                     func.vaddr, func.name, error
                 );
-                total_fail += 1;
+                stats.protocol_failures += 1;
             }
         }
     }
@@ -1943,8 +2078,16 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!(
-        "\n=== Summary: {} functions decompiled, {} skipped/failed ===",
-        total_success, total_fail
+        "\n=== Summary: {}/{} golden-corpus functions processed: {} decompiled, {} empty-output, {} timeout, {} panic, {} external-stub(no ELF code), {} worker-failure, {} protocol-failure ===",
+        stats.attempted(),
+        GOLDEN_CORPUS_LEDGER.len(),
+        stats.decompiled,
+        stats.empty_output,
+        stats.timeouts,
+        stats.panic,
+        stats.external_stubs,
+        stats.worker_failures,
+        stats.protocol_failures
     );
 
     Ok(())
