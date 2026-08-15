@@ -765,7 +765,7 @@
   },
   {
    "id": "action_merge_order_1204",
-   "description": "Post-cleanup universal action sequence (coreaction.cc:5712-5738): 25-leaf order, per-action status/counts, full pre/post IR with single mergetype merge attribution",
+   "description": "Post-cleanup universal action sequence (coreaction.cc:5712-5738): 25-leaf order, per-action status/counts, full pre/post IR with single mergetype merge attribution (29/29 MATCH)",
    "runner": [
     "tools/run_action_merge_order_oracle.sh"
    ],
@@ -774,7 +774,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MISMATCH",
+   "evidence_status": "MATCH",
    "cache": {
     "metadata": "tests/oracle/action_merge_order_1204.metadata.json",
     "inputs": {

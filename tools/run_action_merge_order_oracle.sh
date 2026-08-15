@@ -41,8 +41,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=91b4774f7c349c30071aa3e6b83dfdf2e1393350
-rugra_base_tree=948e67c73f12d65bf0f858d595c1133f22610d8f
+rugra_base_commit=9fbb1945ec92a9378f077f77209b2fd251bf1146
+rugra_base_tree=3124866e9b14e5151e0ac2aad2ed5e6fd517c6cf
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/action_merge_order_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/action_merge_order_1204.cc"
@@ -259,6 +259,7 @@ def live_file(relative):
 overlay_files = {
     pathlib.Path("src/action.rs"),
     pathlib.Path("src/coreaction.rs"),
+    pathlib.Path("src/blockaction.rs"),
 }
 crate_files = [
     pathlib.Path("Cargo.toml"),
@@ -292,6 +293,7 @@ special_paths = [
     pathlib.Path("tests/oracle/action_merge_order_1204.metadata.json"),
     pathlib.Path("docs/api/action.md"),
     pathlib.Path("docs/api/coreaction.md"),
+    pathlib.Path("docs/api/blockaction.md"),
     pathlib.Path("tools/run_action_merge_order_oracle.sh"),
 ]
 special = {}
@@ -316,7 +318,7 @@ require(
     metadata["stable_function_id"],
     "GH12-F-universalaction-coreaction-5462",
 )
-require("overall status", metadata["overall_status"].split(":", 1)[0], "MISMATCH")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),
@@ -334,6 +336,8 @@ observed_hashes = {
     "rust_fixture_sha256": sha(special[special_paths[1].as_posix()]),
     "action_rs_sha256": sha(crate_bytes["src/action.rs"]),
     "coreaction_rs_sha256": sha(crate_bytes["src/coreaction.rs"]),
+    "blockaction_rs_sha256": sha(crate_bytes["src/blockaction.rs"]),
+    "blockaction_doc_sha256": sha(special[special_paths[5].as_posix()]),
     "action_doc_sha256": sha(special[special_paths[3].as_posix()]),
     "coreaction_doc_sha256": sha(special[special_paths[4].as_posix()]),
     "runner_sha256": runner_snapshot_sha,
@@ -379,7 +383,7 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("input manifest sha256", sha(canonical), metadata["input_manifest"]["sha256"])
 require("expected exit code", metadata["expected_exit_code"], 0)
-require("covered projection status", metadata["covered_projection_status"], "MISMATCH")
+require("covered projection status", metadata["covered_projection_status"], "MATCH")
 
 coverage = metadata["coverage"]
 for required_key, required_prefix in (
@@ -388,7 +392,7 @@ for required_key, required_prefix in (
     ("typed_temp_merge_fires_once", "MATCH"),
     ("executor_status_onceperfunc", "MATCH"),
     ("markexplicit_count_bridge", "MATCH"),
-    ("finalstructure_count_bridge", "MISMATCH"),
+    ("finalstructure_count_bridge", "MATCH"),
     ("standalone_merge_cover_precondition", "MISMATCH"),
     ("group_filtered_derived_roots", "UNTESTED"),
 ):
@@ -579,7 +583,7 @@ fi
 
 if $ghidra_only; then
   /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-  echo "action_merge_order_1204: GHIDRA_LOCKED_OUTPUT_OK overall=MISMATCH stdout_sha256=$actual_stdout_sha"
+  echo "action_merge_order_1204: GHIDRA_LOCKED_OUTPUT_OK overall=MATCH stdout_sha256=$actual_stdout_sha"
   exit 0
 fi
 
@@ -705,7 +709,7 @@ if act_names != expected_seq.split(","):
     raise SystemExit(f"act line order mismatch: {act_names}")
 PY
 if [[ "$diff_status" -ne 0 ]]; then
-  echo "action_merge_order_1204: MISMATCH (documented residual; see metadata coverage)" >&2
+  echo "action_merge_order_1204: MISMATCH (unexpected; coverage says MATCH)" >&2
   /usr/bin/cat "$oracle_tmp/raw.diff" >&2
   exit 1
 fi
@@ -753,12 +757,14 @@ for label, relative, key in (
     ("Rust fixture", "tests/oracle/action_merge_order_1204.rs", "rust_fixture_sha256"),
     ("action implementation", "src/action.rs", "action_rs_sha256"),
     ("coreaction implementation", "src/coreaction.rs", "coreaction_rs_sha256"),
+    ("blockaction implementation", "src/blockaction.rs", "blockaction_rs_sha256"),
+    ("blockaction API document", "docs/api/blockaction.md", "blockaction_doc_sha256"),
     ("action API document", "docs/api/action.md", "action_doc_sha256"),
     ("coreaction API document", "docs/api/coreaction.md", "coreaction_doc_sha256"),
 ):
     require(label, sha((repo / relative).read_bytes()), comparand[key])
 
-overlay_files = {"src/action.rs", "src/coreaction.rs"}
+overlay_files = {"src/action.rs", "src/coreaction.rs", "src/blockaction.rs"}
 relative_files = [pathlib.Path(path) for path in (
     "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
     "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
@@ -798,4 +804,4 @@ for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
 require("full Rust crate", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 PY
 
-echo "action_merge_order_1204: MATCH covered_projection=29/29 overall=MISMATCH stdout_sha256=$actual_stdout_sha"
+echo "action_merge_order_1204: MATCH covered_projection=29/29 overall=MATCH stdout_sha256=$actual_stdout_sha"
