@@ -8,10 +8,11 @@
   (5691 `.cc` + 3803 inline `.hh` definitions)
 - Declaration references: 6317
 - Raw Ctags function records: 15811
-- Rugra functions: 8559
-  (7171 production + 1388 test)
-- Exact definition-start mappings: 3120
-- Body-line references requiring audit: 377
+- Ghidra IDs carrying a guard disambiguator: 12
+- Rugra functions: 8644
+  (7232 production + 1412 test)
+- Exact definition-start mappings: 3142
+- Body-line references requiring audit: 379
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -24,15 +25,15 @@ records complete same-input/same-output evidence.
 | `action.cc` | 72 | 6 | 0 | 66 |
 | `action.hh` | 30 | 0 | 0 | 30 |
 | `address.cc` | 43 | 23 | 0 | 20 |
-| `address.hh` | 56 | 9 | 0 | 47 |
+| `address.hh` | 56 | 10 | 0 | 46 |
 | `analyzesigs.cc` | 8 | 0 | 0 | 8 |
 | `analyzesigs.hh` | 2 | 0 | 0 | 2 |
 | `architecture.cc` | 68 | 6 | 0 | 62 |
 | `architecture.hh` | 9 | 0 | 0 | 9 |
 | `bfd_arch.cc` | 11 | 0 | 0 | 11 |
 | `bfd_arch.hh` | 1 | 0 | 0 | 1 |
-| `block.cc` | 204 | 95 | 2 | 107 |
-| `block.hh` | 171 | 61 | 0 | 110 |
+| `block.cc` | 204 | 96 | 2 | 106 |
+| `block.hh` | 171 | 62 | 0 | 109 |
 | `blockaction.cc` | 83 | 30 | 1 | 52 |
 | `blockaction.hh` | 29 | 1 | 0 | 28 |
 | `callgraph.cc` | 26 | 22 | 0 | 4 |
@@ -65,7 +66,7 @@ records complete same-input/same-output evidence.
 | `cpool_ghidra.cc` | 5 | 0 | 0 | 5 |
 | `cpool_ghidra.hh` | 2 | 0 | 0 | 2 |
 | `crc32.hh` | 1 | 1 | 0 | 0 |
-| `database.cc` | 170 | 96 | 2 | 72 |
+| `database.cc` | 170 | 105 | 0 | 65 |
 | `database.hh` | 97 | 2 | 0 | 95 |
 | `database_ghidra.cc` | 18 | 0 | 0 | 18 |
 | `database_ghidra.hh` | 37 | 0 | 0 | 37 |
@@ -88,11 +89,11 @@ records complete same-input/same-output evidence.
 | `flow.hh` | 16 | 15 | 0 | 1 |
 | `fspec.cc` | 243 | 143 | 0 | 100 |
 | `fspec.hh` | 271 | 57 | 0 | 214 |
-| `funcdata.cc` | 43 | 24 | 0 | 19 |
-| `funcdata.hh` | 136 | 18 | 0 | 118 |
+| `funcdata.cc` | 43 | 25 | 0 | 18 |
+| `funcdata.hh` | 136 | 20 | 0 | 116 |
 | `funcdata_block.cc` | 34 | 0 | 23 | 11 |
 | `funcdata_op.cc` | 49 | 27 | 6 | 16 |
-| `funcdata_varnode.cc` | 60 | 50 | 0 | 10 |
+| `funcdata_varnode.cc` | 60 | 51 | 0 | 9 |
 | `ghidra_arch.cc` | 43 | 0 | 0 | 43 |
 | `ghidra_arch.hh` | 10 | 0 | 0 | 10 |
 | `ghidra_context.cc` | 3 | 0 | 0 | 3 |
@@ -106,7 +107,7 @@ records complete same-input/same-output evidence.
 | `grammar.cc` | 80 | 59 | 0 | 21 |
 | `grammar.hh` | 31 | 12 | 0 | 19 |
 | `graph.cc` | 17 | 17 | 0 | 0 |
-| `heritage.cc` | 75 | 4 | 58 | 13 |
+| `heritage.cc` | 75 | 10 | 52 | 13 |
 | `heritage.hh` | 30 | 8 | 0 | 22 |
 | `ifacedecomp.cc` | 138 | 0 | 0 | 138 |
 | `ifacedecomp.hh` | 6 | 0 | 0 | 6 |
