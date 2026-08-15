@@ -303,3 +303,50 @@ Encode to string format (comma-separated ranges)
 - `count_leading_zeros(val) -> i32` — `count_leading_zeros`（address.cc:773）：64 位前导零计数，val==0 返回 64。用 Rust `leading_zeros` 精确等价。被 RuleDivOpt::findForm 用于计算 numerand 的有效位数（xsize = 64 - clz(nz_mask)）。
 <!-- annotation-pass: 2026-07-04 -->
  
+
+### 2026-08-15：ADDRESS-0001 space-aware Address/Range/RangeList（Ghidra address.hh/address.cc）
+
+旧标量 `Address(u64)`/`Range`/`RangeList` 保留为 offset-only adapter（varnode.rs/funcdata.rs 等
+39 个消费方按 VARNODE-0001/FUNCDATA wave 顺序后继切换），新增携带 `Option<AddrSpace>` 句柄的
+1:1 移植（`SpaceBase` 三态枚举 = Ghidra 裸 `AddrSpace *base`：null/真实空间/`~0` m_maximal 哨兵）：
+
+- `SpaceAddress`（address.hh:59）：
+  - 构造族：`invalid()`（address.hh:263，base=null、offset 规范化为 0）、`minimal()`（address.cc:91
+    m_minimal，与 invalid 同位）、`maximal()`（address.cc:99 `~0` 哨兵 + offset `~0`）、
+    `new(spc, off)`（address.hh:270）、`from_offset`（legacy 桥；无空间即 invalid —— **`ram:0`
+    不再等同 null**）。
+  - 判定：`is_invalid`（address.hh:285，仅 null 为 invalid，maximal 不算）、`is_constant`/
+    `is_join`（address.hh:455/461）、`is_big_endian`（address.hh:298）、`get_addr_size`
+    （address.hh:292）、`get_space`（address.hh:323，maximal 返回 None —— Ghidra 返回不可解引用
+    的 `~0` 伪指针）、`get_offset`（address.hh:329）、`get_shortcut`（address.hh:336）。
+  - 比较：`PartialEq`/`Ord` 按 address.hh:356/375-393 逐分支移植（base 指针相等才比 offset；
+    不同空间按 space index；null 最小、`~0` 哨兵最大；同 index 不同对象的 Rc 身份 tiebreak 保持
+    Ord/Eq 契约）。`Hash` 与 `==` 一致。
+  - 算术：`add`/`sub`（address.hh:423/433，offset 经真实空间 `wrap_offset`（space.hh:383）按
+    addrsize/wordsize 环绕；invalid/maximal 上 Ghidra 解引用非空间为 UB，Rust 防御性 plain-wrap）。
+  - 包含/重叠：`contained_by`（address.cc:110）、`justified_contain`（address.cc:131，BE 从最高
+    字节起算 `off1-off2`，`forceleft` 强制 LE；uintb 差经 int4 截断）、`overlap`（address.cc:153，
+    同空间 + 非 const + `wrapOffset` 环绕距离）、`overlap_join`（address.hh:445 → space.cc:126
+    `AddrSpace::overlapJoin`，ConstantSpace 恒 -1）、`is_contiguous`（address.cc:173，BE/LE 方向）。
+  - 打印：`print_raw`（address.hh:305，invalid → "invalid_addr"，否则 space `print_raw`
+    space.cc:206）、`Display` = operator<<。
+- `SpaceRange`（address.hh:173）：`new`（address.hh:185，无校验）、`from_properties`
+  （address.cc:236 非寄存器路径：`Undefined space: X` / `Illegal range tag` 逐字；寄存器名解析依赖
+  Translate register 表 = SPACE-0001 残差，显式报错不绕过）、`get_first_addr`/`get_last_addr`/
+  `get_last_addr_open`（address.cc:265，**忠实保留 Ghidra quirk**：末空间之后
+  `getNextSpaceInOrder` 返回 `~0` 哨兵而该函数只查 null，故结果 = maximal-base + offset 0，
+  非 `m_maximal`）、`contains`（address.hh:490，空间指针不等即 false）、`print_bounds`
+  （address.cc:283，`ram: 7f-9c`）、`Ord`（address.hh:202，index→first）。
+- `SpaceRangeList`（address.hh:232，`Vec` 保持 `set<Range>` 序）：`insert_range`（address.cc:383，
+  **仅合并严格重叠**，相邻不合并，绝不跨空间误并）、`remove_range`（address.cc:417，头/尾分裂
+  重插）、`merge`（address.cc:451）、`in_range`（address.cc:468，invalid 恒 true）、`get_range`
+  （address.cc:491）、`longest_fit`（address.cc:512，同空间链式累计）、`get_first_range`/
+  `get_last_range`/`get_last_signed_range`（address.cc:540/548/562，最高位置符号中点二分）、
+  `print_bounds`（address.cc:588，空表输出 "all"）。
+
+Oracle 证据：`tests/oracle/address_space_handle_1204.{cc,rs}` + 
+`tools/run_address_space_handle_oracle.sh`（锁定 12.0.4 oracle，7 case 逐字节 MATCH，含
+getLastAddrOpen 末空间 quirk 与 wrap/justified/跨空间排序/RangeProperties 错误路径）。
+未移植残留：`Address::read`/`encode`/`decode`（绑 MARSHAL-XML-TEXT-0001）、`renormalize` 与
+join-record/`resolveConstant` 统一（JoinDB 未入 SpaceRegistry，留给 resolver/join 后继原子）、
+SeqNum 空间化（随 varnode 消费方迁移）。

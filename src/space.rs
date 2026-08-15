@@ -1242,6 +1242,16 @@ impl AddrSpace {
         self.0.borrow().refcount
     }
 
+    // RUGRA-GLUE: identity_ptr (Ghidra compares raw AddrSpace pointers in
+    // ordered containers; the handle exposes the shared-record address so
+    // other types can build deterministic identity tiebreaks without
+    // reaching into the private Rc.)
+    /// Stable per-object identity (the shared record's address). Equal for
+    /// two handles to the same space, mirroring pointer equality.
+    pub fn identity_ptr(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
     // RUGRA-GLUE: increment_refcount (Ghidra does `spc->refcount += 1` inside
     // AddrSpaceManager::insertSpace on the success path only.)
     /// Register one more manager reference to this space.
@@ -1480,6 +1490,77 @@ impl AddrSpace {
     /// Compare two spaces by their index.
     pub fn compare_by_index(a: &AddrSpace, b: &AddrSpace) -> bool {
         a.get_index() < b.get_index()
+    }
+
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// Write an address in this space to a string, taking the wordsize into
+    /// account (a `+n` suffix when the offset is off-cut). Faithful to
+    /// `AddrSpace::printRaw` (space.cc:206-222): the print width shrinks for
+    /// small offsets in >4-byte spaces, the offset is scaled to addressable
+    /// units via `byteToAddress`, and the off-cut is the byte remainder.
+    /// `ConstantSpace::printRaw` (space.cc:372) and `OtherSpace::printRaw`
+    /// (space.cc:410) override with unpadded hex; the dispatch below keys on
+    /// the constant type and the `is_otherspace` flag, which only production
+    /// OtherSpaces set.
+    pub fn print_raw(&self, offset: u64) -> String {
+        if self.get_type() == SpaceType::Constant || self.is_other_space() {
+            return format!("0x{:x}", offset);
+        }
+        let (address_size, word_size) = {
+            let inner = self.0.borrow();
+            (inner.address_size, inner.word_size)
+        };
+        let mut sz = address_size as i32;
+        if sz > 4 {
+            if (offset >> 32) == 0 {
+                sz = 4; // Don't print a bunch of zeroes at front of address
+            } else if (offset >> 48) == 0 {
+                sz = 6;
+            }
+        }
+        let mut out = format!(
+            "0x{:0width$x}",
+            Self::byte_to_address(offset, word_size),
+            width = (2 * sz) as usize
+        );
+        if word_size > 1 {
+            let cut = offset % word_size as u64;
+            if cut != 0 {
+                out.push_str(&format!("+{}", cut));
+            }
+        }
+        out
+    }
+
+    // Ghidra: space.cc:126 AddrSpace::overlapJoin
+    /// Determine how a point address falls in a range of this space.
+    /// Faithful to `AddrSpace::overlapJoin` (space.cc:126-136): a different
+    /// space never overlaps, and the distance wraps through `wrapOffset`.
+    /// `ConstantSpace::overlapJoin` (space.cc:364) always returns -1; the
+    /// join-space override needs the join-record database (residual).
+    pub fn overlap_join(
+        &self,
+        offset: u64,
+        size: i32,
+        point_space: &AddrSpace,
+        point_off: u64,
+        point_skip: i64,
+    ) -> i32 {
+        if self.get_type() == SpaceType::Constant {
+            return -1;
+        }
+        if self != point_space {
+            return -1;
+        }
+        let dist = self.wrap_offset(
+            point_off
+                .wrapping_add(point_skip as u64)
+                .wrapping_sub(offset),
+        );
+        if dist >= size as u64 {
+            return -1; // but must fall before op+size
+        }
+        dist as u32 as i32
     }
 }
 

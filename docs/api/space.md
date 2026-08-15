@@ -302,3 +302,23 @@ Oracle 证据：`tests/oracle/space_registry_1204.{cc,rs}` + `tools/run_space_re
 （锁定 12.0.4 oracle，8 case 逐字节 MATCH）。未移植残留：per-space `read/printRaw/encode/decode`
 属性编解码（MARSHAL/TRANSLATE 原子）、`resolveConstant` 与 join-record 半部（留在旧 enum manager，
 待 ADDRESS-0001 统一切换）。
+
+### 2026-08-15：ADDRESS-0001 配合新增（Ghidra space.cc printRaw/overlapJoin）
+
+`AddrSpace` 句柄新增两方法（供 `SpaceAddress::print_raw`/`overlap_join` 派发）：
+
+- `print_raw(offset)`（space.cc:206 `AddrSpace::printRaw`）：>4 字节空间对小 offset 收缩打印
+  宽度（>>32==0 → 4 字节、>>48==0 → 6 字节），offset 经 `byteToAddress` 缩放到可编址单位后
+  以 `setw(2*sz)` 补零 hex 打印，wordsize>1 且 off-cut 时追加 `+cut`（十进制）。
+  `ConstantSpace::printRaw`（space.cc:372）与 `OtherSpace::printRaw`（space.cc:410）覆盖为
+  无填充 hex —— 派发按 type==Constant / is_other_space 标志（仅生产 OTHER 置位）。
+- `overlap_join(offset, size, point_space, point_off, point_skip)`（space.cc:126）：空间指针不等
+  恒 -1；距离经 `wrapOffset` 环绕；`>= size` → -1。`ConstantSpace::overlapJoin`（space.cc:364）
+  恒 -1；JoinSpace 覆盖需要 join-record 数据库（残差）。
+- `identity_ptr()`（RUGRA-GLUE）：共享记录地址，供 Address/Range 的 Ord 身份 tiebreak，
+  对应 Ghidra 裸指针比较。
+
+Oracle 证据：`tests/oracle/address_space_handle_1204.{cc,rs}`（锁定 12.0.4，7 case 逐字节 MATCH，
+printRaw 覆盖 const/ram/register 路径与 wordsize 换算）。SPACE-0001 残差中
+`resolveConstant`/join-record 统一**未**在本 wave 完成（JoinDB 仍在 translate.rs 旧 manager），
+登记为 ADDRESS 后继原子。
