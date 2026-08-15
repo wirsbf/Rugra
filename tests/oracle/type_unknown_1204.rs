@@ -58,7 +58,10 @@ fn write_anonymous_unknown_order(out: &mut String, factory: &TypeFactory) {
 }
 
 fn main() {
-    let mut factory = TypeFactory::new(8);
+    // The locked oracle drives SleighArchitecture's standalone
+    // buildCoreTypes (sleigh_arch.cc:229-232), so the Rust comparand
+    // constructs the factory with the same registration flavor.
+    let mut factory = TypeFactory::new_flavor(8, rugra::type_system::typefactory::CoreTypeFlavor::Standalone);
     let sizes = [8_usize, 1, 4, 2, 3, 5, 6, 7];
     let first: Vec<Arc<Datatype>> = sizes
         .iter()

@@ -43,6 +43,17 @@ pub struct TypeFactory {
     typedefs: BTreeMap<String, Arc<Datatype>>,
 }
 
+/// Which core-unknown registration path the architecture uses. Ghidra
+/// has two: the data-organization path installs `undefined1/2/4/8`
+/// (ghidra_arch.cc:349-355, what the canonical headless oracle emits),
+/// while the SLEIGH standalone fallback installs `xunknown1/2/4/8`
+/// (sleigh_arch.cc:229-232, what a standalone-driven oracle observes).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CoreTypeFlavor {
+    DataOrg,
+    Standalone,
+}
+
 impl TypeFactory {
     // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3106) with the
     // standalone SLEIGH fallback bootstrap (sleigh_arch.cc:204).
@@ -51,6 +62,16 @@ impl TypeFactory {
     /// # Arguments
     /// * `ptr_size` - Default pointer size for the target architecture (e.g., 4 or 8)
     pub fn new(ptr_size: usize) -> Self {
+        Self::new_flavor(ptr_size, CoreTypeFlavor::DataOrg)
+    }
+
+    /// Construct with an explicit core-unknown registration flavor; the
+    /// standalone flavor mirrors SleighArchitecture::buildCoreTypes
+    /// (sleigh_arch.cc:229-232) for oracle-driven fixtures.
+    // RUGRA-GLUE: Rust construction split of the two Ghidra registration
+    // sites (ghidra_arch.cc:349 dataorg / sleigh_arch.cc:204 standalone);
+    // Ghidra picks the site by architecture subclass instead of a param.
+    pub fn new_flavor(ptr_size: usize, flavor: CoreTypeFlavor) -> Self {
         let mut factory = Self {
             types: BTreeMap::new(),
             core_types: BTreeMap::new(),
@@ -60,13 +81,19 @@ impl TypeFactory {
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
         };
-        factory.init_core_types();
+        factory.init_core_types_flavor(flavor);
         factory
     }
 
     // Ghidra: sleigh_arch.cc:204 SleighArchitecture::buildCoreTypes
     /// Initialize the fundamental core types
     fn init_core_types(&mut self) {
+        self.init_core_types_flavor(CoreTypeFlavor::DataOrg);
+    }
+
+    // Ghidra: sleigh_arch.cc:204 SleighArchitecture::buildCoreTypes
+    /// Core-unknown loop parameterized by registration flavor.
+    fn init_core_types_flavor(&mut self, flavor: CoreTypeFlavor) {
         // Void type
         let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
         self.add_core_type(void_type);
@@ -95,12 +122,23 @@ impl TypeFactory {
         let f_type8 = Arc::new(Datatype::Base(TypeBase::new("double".to_string(), 8, TypeMetatype::Float)));
         self.add_core_type(f_type8);
 
-        // Ghidra: sleigh_arch.cc:229 SleighArchitecture::buildCoreTypes
-        // The standalone SLEIGH architecture installs these four named core
-        // unknowns before TypeFactory::cacheCoreTypes. Other sizes are created
-        // as unnamed, non-core TypeBase objects by TypeFactory::getBase.
+        // Ghidra: ghidra_arch.cc:349 ArchitectureGhidra::buildCoreTypes
+        // The Ghidra data organization installs these four named core
+        // unknowns before TypeFactory::cacheCoreTypes (`setCoreType
+        // ("undefined",1,TYPE_UNKNOWN,false)` etc. via getBase -> id =
+        // hashName(name)). The canonical headless oracle output names the
+        // 1-byte form `undefined1` (production compiler-spec <coretypes>
+        // data organization, cf. tests/golden/ghidra_curl.c
+        // `undefined1 auVar21 [24];`), so the uniform size-suffixed spelling
+        // is used; the SLEIGH standalone else-branch spellings are
+        // `xunknown1/2/4/8` (sleigh_arch.cc:229) and are NOT what the E2E
+        // diff gate targets. Other sizes are created as unnamed, non-core
+        // TypeBase objects by TypeFactory::getBase.
         for &size in &[1, 2, 4, 8] {
-            let name = format!("xunknown{size}");
+            let name = match flavor {
+                CoreTypeFlavor::DataOrg => format!("undefined{size}"),
+                CoreTypeFlavor::Standalone => format!("xunknown{size}"),
+            };
             let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Unknown);
             base.id = Datatype::hash_name(&name);
             self.add_core_type(Arc::new(Datatype::Base(base)));
@@ -1061,7 +1099,7 @@ impl TypeFactory {
     ///
     /// The biggest contained data-type that starts at the exact offset is
     /// returned. If the offset is negative or there is no data-type starting
-    /// exactly there, a 1-byte `xunknown1` data-type is returned.
+    /// exactly there, a 1-byte `undefined1` data-type is returned.
     pub fn get_ptr_to_from_parent(
         &mut self,
         base: &Arc<Datatype>,
@@ -1085,7 +1123,7 @@ impl TypeFactory {
                         return self.get_base(1, TypeMetatype::Unknown)
                             .unwrap_or_else(|| {
                                 Arc::new(Datatype::Base(TypeBase::new(
-                                    "xunknown1".to_string(),
+                                    "undefined1".to_string(),
                                     1,
                                     TypeMetatype::Unknown,
                                 )))
@@ -1098,7 +1136,7 @@ impl TypeFactory {
             // off <= 0: unknown.
             self.get_base(1, TypeMetatype::Unknown).unwrap_or_else(|| {
                 Arc::new(Datatype::Base(TypeBase::new(
-                    "xunknown1".to_string(),
+                    "undefined1".to_string(),
                     1,
                     TypeMetatype::Unknown,
                 )))
@@ -2482,7 +2520,7 @@ mod tests {
         let core = factory.get_base(8, TypeMetatype::Unknown).unwrap();
         let core_again = factory.get_base(8, TypeMetatype::Unknown).unwrap();
         assert!(Arc::ptr_eq(&core, &core_again));
-        assert_eq!(core.get_name(), "xunknown8");
+        assert_eq!(core.get_name(), "undefined8");
         assert!(core.is_coretype());
 
         let anonymous = factory.get_base(3, TypeMetatype::Unknown).unwrap();

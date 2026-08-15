@@ -139,3 +139,43 @@ conversion), decode/cache rebuilding, Address/Varnode consumers, and the
 general pointer/array/aggregate structural registry remain unproved. The
 latter is the existing `TYPE-0001` mismatch; atomic ordering evidence must not
 be read as proof that the whole TypeFactory tree is aligned.
+
+## 2026-08-15 TYPEFACTORY-UNDEFNAME-0001
+
+`TypeFactory::init_core_types` now names the four core TYPE_UNKNOWN base types
+`undefined1/undefined2/undefined4/undefined8` (was `xunknown1/2/4/8`),
+following the Ghidra data-organization registration
+`ArchitectureGhidra::buildCoreTypes` (`ghidra_arch.cc:349-352`:
+`setCoreType("undefined",1,TYPE_UNKNOWN,false)` … `"undefined8"`). The id
+remains `Datatype::hash_name(name)` per the named `getBase` overload
+(`type.cc:3667-3673`), so ids change with the name exactly as in Ghidra. The
+canonical headless oracle output uses this family (`undefined8`, `undefined2`
+casts, and via `Datatype::printNameBase` (`type.hh:273`, first character of
+the name) the `uVar`/`auVar`/`puVar` prefixes; cf.
+`tests/golden/ghidra_curl.c` `undefined1 auVar21 [24];`).
+
+Ghidra itself has two legitimate registration flavors and this rename chooses
+the headless/data-organization one deliberately:
+
+- `ArchitectureGhidra::buildCoreTypes` (ghidra_arch.cc:349-352) —
+  `undefined*`, the flavor the E2E diff gate targets;
+- `SleighArchitecture::buildCoreTypes` standalone else-branch
+  (sleigh_arch.cc:229-232) — `xunknown*`, the flavor the standalone console /
+  direct-runner goldens (`tests/golden/ghidra_{curl,httpd}_1204.direct-runner.c`)
+  and the `type_unknown_1204` oracle harness (BfdArchitecture) observe.
+
+Consequences, registered under `TYPEFACTORY-UNDEFNAME-0001`:
+
+- the 2026-08-13 `type_unknown_1204` recorded MATCH is superseded: its Ghidra
+  side runs the SLEIGH standalone fallback, so re-running the gate against the
+  renamed factory now yields a name/id MISMATCH on the four core unknowns
+  (structural identity, anonymous ordering, and clear/recreate behavior are
+  unaffected). This is a registered inter-flavor divergence — Rugra has one
+  factory default rather than per-architecture core-type registration — not a
+  port defect of `getBase` itself;
+- the `xVar` prefix family disappears for every name sourced from the factory;
+  `VarnodeBank`'s bank-local default adapter (`src/varnode.rs`
+  `unknown_datatype`, `TYPE-UNKNOWN-0001`) still produces `xunknown{size}`
+  names and is out of this change's write-set.
+
+

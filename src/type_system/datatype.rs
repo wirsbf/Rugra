@@ -641,6 +641,11 @@ impl Datatype {
     ///   - TypePointer (type.hh:424): `s << 'p'; ptrto->printNameBase(s);`
     ///   - TypeArray (type.hh:457): `s << 'a'; arrayof->printNameBase(s);`
     /// Rugra's enum dispatch mirrors the C++ virtual method resolution.
+    /// The prefix is derived from the data-organization type NAME, so the
+    /// Ghidra core unknowns `undefined1/2/4/8`
+    /// (ghidra_arch.cc:349 ArchitectureGhidra::buildCoreTypes) yield the
+    /// `uVar` family exactly as the canonical headless oracle output does
+    /// (`uVar1`, `auVar2 [24]`, `puVar3`, ...).
     pub fn print_name_base(&self, out: &mut String) {
         match self {
             Datatype::Pointer(p) => {

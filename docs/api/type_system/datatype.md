@@ -35,6 +35,19 @@ behavior:
 These annotations provide provenance only. They do not raise the module above
 L2 or change its formal `NO_ORACLE` status.
 
+## 2026-08-15 TYPEFACTORY-UNDEFNAME-0001（命名下游影响）
+
+`Datatype::print_name_base`（`type.hh:273` 基类 `printNameBase`、`:424`
+TypePointer、`:457` TypeArray 的枚举派发移植）本身与具体类型名无关——它取
+名字首字符，因此**无行为改动**。本 TODO 改的是其输入：TypeFactory 核心未知
+类型由 `xunknown1/2/4/8` 更名为数据组织命名 `undefined1/2/4/8`
+（ghidra_arch.cc:349-352），于是 `print_name_base` 对未知类型输出 `'u'`，
+`Scope::build_variable_name`（database.cc:2434）产出的本地变量前缀家族从
+`xVar`/`axVar`/`pxVar` 变为 golden 的 `uVar`/`auVar`/`puVar`。Ghidra 侧同理：
+standalone SLEIGH 架构（sleigh_arch.cc:229 的 `xunknown*`）产出 `xVar` 家族，
+headless/数据组织路径产出 `uVar` 家族；Rugra 选择对齐后者（E2E 差分门禁目标）。
+见 `typefactory.md` 2026-08-15 节。
+
 ## 2026-06-26 新增原语（解锁 varmap.cc 移植）
 
 以下方法对应 Ghidra `type.cc` 中的算法，是 `varmap.cc` 的
