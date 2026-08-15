@@ -370,29 +370,73 @@ impl fmt::Display for Range {
 /// Corresponds to Ghidra's `RangeProperties` in address.hh
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RangeProperties {
-    /// Property flags or attributes
-    pub flags: u32,
+    /// Name of the address space containing the range. For a register form,
+    /// this temporarily holds the register name until an `AddrSpaceManager`
+    /// is available.
+    pub space_name: String,
+    /// Offset of the first byte in the range.
+    pub first: u64,
+    /// Offset of the last byte in the range.
+    pub last: u64,
+    /// Whether a `name` attribute specified a register.
+    pub is_register: bool,
+    /// Whether the end of the range was explicitly specified.
+    pub seen_last: bool,
 }
 
 impl RangeProperties {
-    // Ghidra: address.hh:170 RangeProperties::new
-    /// Create new range properties
-    pub fn new(flags: u32) -> Self {
-        RangeProperties { flags }
+    // Ghidra: address.hh:223 RangeProperties::RangeProperties(void)
+    /// Construct empty, partially parsed range properties.
+    pub fn new() -> Self {
+        RangeProperties {
+            space_name: String::new(),
+            first: 0,
+            last: 0,
+            is_register: false,
+            seen_last: false,
+        }
     }
 
     // Ghidra: address.cc:354 RangeProperties::decode
-    /// Decode from string
-    pub fn decode(s: &str) -> Option<Self> {
-        let flags = s.parse().ok()?;
-        Some(RangeProperties::new(flags))
+    /// Decode a `<range>` or `<register>` element into this partial state.
+    ///
+    /// Fields are deliberately not reset before decoding. Recognized
+    /// attributes mutate the object in source order, and an error does not
+    /// roll back earlier mutations, matching Ghidra's in-place decode.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> anyhow::Result<()> {
+        let elem_id = decoder.open_element();
+        if elem_id != 12 && elem_id != 14 {
+            anyhow::bail!("Expecting <range> or <register> element");
+        }
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            if attrib_id == 20 {
+                self.space_name = decoder.read_string();
+            } else if attrib_id == 27 {
+                self.first = decoder.read_unsigned_integer();
+            } else if attrib_id == 28 {
+                self.last = decoder.read_unsigned_integer();
+                self.seen_last = true;
+            } else if attrib_id == 14 {
+                self.space_name = decoder.read_string();
+                self.is_register = true;
+            }
+        }
+        decoder.close_element(elem_id);
+        Ok(())
     }
 }
 
 impl Default for RangeProperties {
-    // Ghidra: address.hh:170 RangeProperties::default
+    // Ghidra: address.hh:223 RangeProperties::RangeProperties(void)
     fn default() -> Self {
-        RangeProperties::new(0)
+        RangeProperties::new()
     }
 }
 
@@ -831,11 +875,69 @@ mod tests {
 
     #[test]
     fn test_range_properties() {
-        let props = RangeProperties::new(42);
-        assert_eq!(props.flags, 42);
+        use crate::marshal::{Element, IdRegistry, TreeDecoder};
+        use std::sync::{Arc, RwLock};
 
-        let decoded = RangeProperties::decode("42").unwrap();
-        assert_eq!(decoded.flags, 42);
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        {
+            let mut ids = registry.write().unwrap();
+            ids.register_element_with_id("range", 12);
+            ids.register_attribute_with_id("name", 14);
+            ids.register_attribute_with_id("space", 20);
+            ids.register_attribute_with_id("first", 27);
+            ids.register_attribute_with_id("last", 28);
+            ids.register_attribute_with_id("unknown", 159);
+        }
+        let mut element = Element::new();
+        element.set_name("range");
+        element.add_attribute("name", "RAX");
+        element.add_attribute("unknown", "ignored");
+        element.add_attribute("space", "ram");
+        element.add_attribute("first", "16");
+        element.add_attribute("last", "32");
+        let root = Arc::new(RwLock::new(element));
+        let mut decoder = TreeDecoder::new(root, registry);
+        let mut props = RangeProperties::new();
+
+        props.decode(&mut decoder).unwrap();
+
+        assert_eq!(props.space_name, "ram");
+        assert_eq!(props.first, 16);
+        assert_eq!(props.last, 32);
+        assert!(props.is_register);
+        assert!(props.seen_last);
+    }
+
+    #[test]
+    fn test_range_properties_invalid_element_preserves_state() {
+        use crate::marshal::{Element, IdRegistry, TreeDecoder};
+        use std::sync::{Arc, RwLock};
+
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        registry
+            .write()
+            .unwrap()
+            .register_element_with_id("bogus", 77);
+        let mut element = Element::new();
+        element.set_name("bogus");
+        let root = Arc::new(RwLock::new(element));
+        let mut decoder = TreeDecoder::new(root, registry);
+        let mut props = RangeProperties {
+            space_name: "stack".to_string(),
+            first: 4,
+            last: 9,
+            is_register: true,
+            seen_last: true,
+        };
+
+        let error = props.decode(&mut decoder).unwrap_err();
+
+        assert_eq!(error.to_string(), "Expecting <range> or <register> element");
+        assert_eq!(props.space_name, "stack");
+        assert_eq!(props.first, 4);
+        assert_eq!(props.last, 9);
+        assert!(props.is_register);
+        assert!(props.seen_last);
     }
 
     #[test]

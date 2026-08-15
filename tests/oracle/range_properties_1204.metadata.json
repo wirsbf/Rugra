@@ -1,0 +1,106 @@
+{
+  "schema": 2,
+  "fixture_id": "CSPEC-RANGEPROPS-0001",
+  "stable_function_id": "GH12-F-87faea0d5fa6006d5091",
+  "overall_status": "MISMATCH: the abstract-Decoder projection and the real TreeDecoder/XmlDecode unregistered-attribute projection byte-match at the re-pinned Rugra base, but dynamic AddrSpace/register application and decoder-originated error transport remain outside this atomic change and production XML text ingestion still depends on MARSHAL-XML-TEXT-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/address.cc:354-377",
+    "signature": "void RangeProperties::decode(Decoder &decoder)"
+  },
+  "architecture": "architecture-independent abstract Decoder input; locked uintb/u64 host ABI is x86_64-linux-gnu",
+  "compiler_spec": "none; no compiler-spec model or AddrSpaceManager participates in RangeProperties::decode",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of locked RangeProperties::decode against a deterministic Decoder virtual object; no Architecture, Actions, SSA, or C emission",
+    "decoder": "Ordered attributes are supplied directly by an abstract Decoder with locked global ids range=12, register=14, name=14, space=20, first=27, last=28, and raw unknown=159; the tree_decoder_unregistered case additionally drives the real XmlDecode/TreeDecoder over an in-memory Element whose unregistered attribute name xmlunknown-attr is resolved through the production name-to-id lookup. Ordinary close records but does not traverse two synthetic children",
+    "prestate": "Fresh constructor state plus one persistent object decoded three times to expose non-reset and exception residue",
+    "observation": "Return/error domain, exact error text, all five fields, complete virtual-call order, decoder-open state, children present at close, child-open count, and peek count",
+    "normalization": "No field, integer, ordering, trace event, child count, or error text normalization. The Rust anyhow carrier is serialized under the corresponding DecoderError semantic label; carrier-type equivalence is explicitly not claimed."
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "defaults: empty <range> preserves constructor state and performs open,next-0,close",
+      "ordered_unknown: an abstract Decoder directly supplies raw id 159 between space and first; source order is retained and this supplied nonzero unknown id does not terminate traversal",
+      "name_then_space: <register> name sets isRegister, later space overwrites spaceName without clearing the flag",
+      "range_name: <range> name still sets register state and last accepts uintb maximum",
+      "duplicates: repeated last/name plus intervening space use last-write-wins while flags remain sticky",
+      "persistent_first: register name and last establish persistent state",
+      "persistent_second: a later range containing only first does not reset any other field",
+      "invalid_after_success: unexpected element throws before attribute traversal/close and preserves prior object state while decoder stays open",
+      "child_unvisited: two children are present at ordinary close, with zero peek and zero child-open calls",
+      "u64_boundary: explicit first zero and last 18446744073709551615",
+      "tree_decoder_unregistered: the real XmlDecode/TreeDecoder over an in-memory <range> element resolves the unregistered attribute name xmlunknown-attr to id 159 and traversal continues through first and last"
+    ],
+    "sha256": "f0527dbeb92d1833b67bc11126b07921b2a9620293b5ef2f93d565bf9d25d09a"
+  },
+  "observation_schema": {
+    "format": "Twelve fixed-order UTF-8 lines with final newline: one envelope plus eleven case records",
+    "state": "spaceName, first, last, isRegister, seenLast after each return or exception",
+    "decoder": "Exact open/next/read/close trace plus open residue, children-at-close, child opens, and peeks",
+    "error": "Ghidra DecoderError/Rust result adapter category and exact message"
+  },
+  "comparand": {
+    "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+    "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
+    "cpp_fixture_sha256": "e03bd7eb609d1ad27d9758441a71920c321e06cf7840280aa9854966abddb0f8",
+    "rust_fixture_sha256": "7f6f81524b482e8087250210d48ed52d90b2f11c9e658154d64570c33015291a",
+    "address_rs_sha256": "cf2c4a2af91585517f2c23a5ec5925de2894bca67ecd2dd3bca2f7fb85db3625",
+    "address_doc_sha256": "b583ac68f0c2f37b974aefce129b7ca8869cc058f7a319f1c28de3ba53ab4bd0",
+    "runner_sha256": "3db34ad582c299cec2f39800a6630c515166675a0f6300f6b2414d34a77f4968",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-range-properties-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rust_crate_tree_sha256": "af2d42dd6ca49d6949d1f2e5208e3ff60f85a3f9246caf3cfe7bbff4eb461412",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+    "private_state_observer": "Read-only ABI view with sizeof static assertion and -fno-strict-aliasing; no oracle source is modified",
+    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/address.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "3b35cba59232a4ea042cd76d77fe4ab1efc4db4c83bc5216efe1fadfc92efefd"
+  },
+  "expected_stdout_sha256": "a62206f96c9744eeb4f0d5fbf83d1b8c7110c3324d034fceab58aa756651f465",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "constructor_fields": "MATCH",
+    "range_and_register_element_acceptance": "MATCH",
+    "attribute_source_order_and_unknown_continue": "MATCH",
+    "abstract_decoder_supplied_unknown_id_159": "MATCH: the fixture's abstract Decoder returns raw locked unknown attribute id 159, and decode continues to later attributes",
+    "tree_decoder_unregistered_unknown_attribute": "MATCH: the real TreeDecoder/XmlDecode path maps the unregistered attribute name xmlunknown-attr to the locked unknown attribute id 159 and traversal continues to later attributes, observed directly by this fixture",
+    "space_first_last_name_mutation_timing": "MATCH",
+    "seenLast_and_isRegister_sticky_flags": "MATCH",
+    "duplicate_attribute_last_write_wins": "MATCH on abstract Decoder input",
+    "cross_decode_non_reset_state": "MATCH",
+    "unexpected_element_error_text_and_partial_state": "MATCH for serialized semantic domain, message, object state, and decoder residue",
+    "child_non_traversal_and_ordinary_close": "MATCH on supplied release-style Decoder",
+    "uintb_boundaries": "MATCH",
+    "dynamic_addrspace_application": "MISMATCH: Range construction and Architecture::addToGlobalScope still require SPACE-0001/ADDRESS-0001/CSPEC-GLOBAL-APPLY-0001",
+    "register_name_resolution": "UNTESTED: Translate::getRegister and resulting space/offset/size are not part of this string-only projection",
+    "production_xml_text_ingestion": "MISMATCH: MARSHAL-XML-TEXT-0001 remains unresolved for production XML byte ingestion; this fixture builds the in-memory Element tree directly and does not claim text parsing",
+    "decoder_originated_failures": "MISMATCH: the current Rust Decoder trait has no fallible virtual read/close channel, so readUnsignedInteger/readString/closeElement exception residue is not representable",
+    "cpui_debug_strict_child_close": "UNTESTED: the supplied Decoder models ordinary close; CPUI_DEBUG XmlDecode rejection of unread children is outside this projection"
+  }
+}

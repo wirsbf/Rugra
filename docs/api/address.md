@@ -187,17 +187,30 @@ Encode to string format "first-last"
 
 ### `pub struct RangeProperties`
 
-Properties associated with a range
+Partially parsed `<range>` / `<register>` state used before dynamic address
+spaces and register storage are available. The public projection contains
+`space_name`, `first`, `last`, `is_register`, and `seen_last`.
 
-Corresponds to Ghidra's `RangeProperties` in address.hh
+Corresponds to Ghidra's `RangeProperties` in `address.hh:215-225`.
 
-### `pub fn new(flags: u32) -> Self`
+### `pub fn new() -> Self`
 
-Create new range properties
+Create empty properties with an empty space name, zero endpoints, and both
+booleans clear.
 
-### `pub fn decode(s: &str) -> Option<Self>`
+### `pub fn decode(&mut self, decoder: &mut dyn Decoder) -> anyhow::Result<()>`
 
-Decode from string
+Open the next element, require locked element ID 12 (`range`) or 14
+(`register`), then traverse attributes in source order. Locked attribute IDs
+20/27/28/14 update `space_name`/`first`/`last`/register name respectively;
+unknown attributes are ignored without stopping traversal. `seen_last` is set
+only after `last` is read and `is_register` only after `name` is read.
+
+The method intentionally preserves pre-existing fields, applies mutations in
+place, does not roll them back on error, and closes the element without
+traversing its children. This mirrors `RangeProperties::decode` rather than
+performing dynamic `AddrSpace` or register resolution; that application step
+remains dependent on the address-space foundation.
 
 ### `pub struct RangeList`
 
