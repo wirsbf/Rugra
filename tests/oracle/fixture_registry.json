@@ -861,6 +861,39 @@
      "GH12-F-0de8bbaa1979f78d01a9"
     ]
    }
+  },
+  {
+   "id": "printc_format_1204",
+   "description": "PrintC/prettyprint oracle formatting: function brace skip_line layout, pointer-adjacent parameter spacing, comma spacing, decl-block separators, two-layout signature detection",
+   "runner": [
+    "tools/run_printc_format_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/printc_format_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/printc_format_1204.cc",
+     "rust_fixture": "tests/oracle/printc_format_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_printc_format_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/printc.rs",
+     "src/prettyprint.rs",
+     "docs/api/printc.md",
+     "docs/api/prettyprint.md",
+     "tests/oracle/printc_format_1204.*",
+     "tools/run_printc_format_oracle.sh"
+    ]
+   }
   }
  ]
 }

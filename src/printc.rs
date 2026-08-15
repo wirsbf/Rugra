@@ -448,6 +448,13 @@ pub struct PrintC {
     /// `PrintC::option_unplaced` (printc.hh:154), defaulting to false
     /// (printc.cc:1589 `resetDefaultsPrintC`).
     option_unplaced: bool,
+    /// Brace formatting style for a function body opening brace. Faithful to
+    /// `PrintC::option_brace_func` (printc.hh:146), defaulting to
+    /// `skip_line` (printc.cc:1590 `resetDefaultsPrintC`): the `{` goes two
+    /// lines below the declaration. Read by `doc_function` at the
+    /// `emit->openBraceIndent(OPEN_CURLY, option_brace_func)` call
+    /// (printc.cc:2655).
+    option_brace_func: crate::prettyprint::BraceStyle,
     /// Mask of instruction-relative comment types to print (printlanguage.hh:271
     /// `instr_comment_type`). Gated read in `emitCommentGroup` (printc.cc:3238).
     /// Defaults to `Comment::header | Comment::warningheader` (printlanguage.cc:582).
@@ -570,6 +577,7 @@ impl PrintC {
             option_hide_exts: true,    // printc.cc:1585 resetDefaultsPrintC
             option_inplace_ops: false, // printc.cc:1586 resetDefaultsPrintC
             option_unplaced: false,    // printc.cc:1589 resetDefaultsPrintC
+            option_brace_func: crate::prettyprint::BraceStyle::SkipLine, // printc.cc:1590
             // printlanguage.cc:582 resetDefaultsInternalState comment-type masks:
             //   instr_comment_type = Comment::header | Comment::warningheader
             //   head_comment_type  = Comment::user2 | Comment::warning
@@ -3064,7 +3072,13 @@ impl PrintC {
         if !declared.is_empty() {
             for (name, type_name) in &declared {
                 self.emit.tag_line(0);
-                self.emit.print(&format!("{} {};", type_name, name));
+                // Join spacing per the type OpTokens (printc.cc:73-77): a
+                // trailing-`*` type name carries ptr_expr's spacing=0, so
+                // `char *uVar2;` has no space after the `*` run. The name's
+                // star run is normalized to `base **` form first.
+                let prefix = Self::normalize_pointer_run(type_name);
+                let join = if prefix.ends_with('*') { "" } else { " " };
+                self.emit.print(&format!("{}{}{};", prefix, join, name));
             }
             self.emit.tag_line(0);
             self.emit.print("");
@@ -5771,7 +5785,14 @@ impl PrintLanguage for PrintC {
         self.emit_function_declaration(fd);
 
         // 2. Emit body with structured control flow
-        self.emit.begin_block();
+        // Ghidra: printc.cc:2655
+        //   int4 id = emit->openBraceIndent(OPEN_CURLY, option_brace_func);
+        // option_brace_func defaults to skip_line (printc.cc:1590), so the
+        // function-body `{` lands two lines below the declaration, at the
+        // function's outer indent level. This replaces begin_block()'s
+        // same-line ` {` which is only correct for if/loop bodies.
+        let brace_style = self.option_brace_func;
+        self.emit.open_brace_indent("{", brace_style);
 
         // 2a. Emit variable declarations (now pruned by used_varnode_names)
         // P4: Pre-allocate compact names for register-derived auto-locals in
@@ -5811,7 +5832,11 @@ impl PrintLanguage for PrintC {
         // so the shared emitted set prevents that entry from being replayed.
         self.emit_block_graph(graph);
 
-        self.emit.end_block();
+        // Ghidra: printc.cc:2662
+        //   emit->closeBraceIndent(CLOSE_CURLY, id);
+        // stopIndent + newline at the outer indent + `}`. The trailing
+        // tagLine (printc.cc:2663) is carried by end_function's newline.
+        self.emit.close_brace_indent("}");
 
         // Post-process: eliminate redundant gotos and orphan labels (P3)
         if let Some(eno) = self.emit.as_any_mut()
@@ -8763,8 +8788,10 @@ impl PrintC {
                     // default-off means we do NOT skip. Fall through.
                 }
                 // if (printComma) emit->print(COMMA);
+                // COMMA prints bare (printc.cc:2233); the comma OpToken has
+                // spacing=0 (printc.cc:57), so no space follows it.
                 if print_comma {
-                    self.emit.print(", ");
+                    self.emit.print(",");
                 }
                 // Symbol *sym = param->getSymbol();
                 // printComma = true;
@@ -8783,17 +8810,23 @@ impl PrintC {
                 // Emit the parameter name after the type, mirroring what
                 // emitVarDecl(sym) would have produced. Ghidra gets the name
                 // from the backing Symbol; Rugra's ProtoParameter carries it
-                // directly. This keeps output faithful (type + name) without
-                // requiring the full Symbol/Scope machinery.
+                // directly. The join spacing follows the type OpTokens
+                // (printc.cc:73-77): type_expr_space puts ONE space between
+                // the base type and the next token, ptr_expr has spacing=0,
+                // so a trailing-`*` type renders `char *pattern` while a
+                // base type renders `int argc`.
                 let pname = sanitize_c_ident(&param.name);
-                self.emit.print(" ");
+                if !Self::type_name_ends_with_star(&param.data_type) {
+                    self.emit.print(" ");
+                }
                 self.emit.tag_variable(&pname, 0);
             }
         }
         // if (proto->isDotdotdot()) { if (sz != 0) emit->print(COMMA); emit->print(DOTDOTDOT); }
+        // Bare COMMA again (spacing=0, printc.cc:2252).
         if proto.is_dotdotdot {
             if sz != 0 {
-                self.emit.print(", ");
+                self.emit.print(",");
             }
             self.emit.print("...");
         }
@@ -9056,9 +9089,48 @@ impl PrintC {
         // Emit any prefix pointer modifiers (outermost first), then the base
         // name. For `int *` we emit `int *` then the ident slot.
         self.emit_type_prefix(dt);
-        if !noident {
+        // Trailing-separator spacing per the type OpTokens (printc.cc:73-77):
+        // type_expr_space (spacing=1) separates the base type from the next
+        // token; ptr_expr (spacing=0) glues the identifier to a trailing `*`,
+        // so `char *pattern` gets no space while `int argc` keeps one.
+        if !noident && !Self::datatype_name_ends_with_star(dt) {
             self.emit.print(" ");
         }
+    }
+
+    // RUGRA-GLUE: type_name_ends_with_star / datatype_name_ends_with_star
+    //   (join-spacing helper for the type-OpToken rule at printc.cc:73-77)
+    /// Whether a data-type's rendered name ends with `*` (a pointer type).
+    /// Used to decide identifier join spacing: a trailing `*` carries
+    /// ptr_expr's spacing=0 (no space before the identifier).
+    fn type_name_ends_with_star(dt: &Datatype) -> bool {
+        Self::datatype_name_ends_with_star(dt)
+    }
+
+    /// Free-function variant of `type_name_ends_with_star`.
+    // RUGRA-GLUE: datatype_name_ends_with_star (join-spacing helper for the
+    //   type-OpToken rule at printc.cc:73-77; Rust text emitters decide the
+    //   identifier join from the rendered type name, which Ghidra derives
+    //   structurally from the typestack instead)
+    fn datatype_name_ends_with_star(dt: &Datatype) -> bool {
+        dt.get_name().ends_with('*')
+    }
+
+    // RUGRA-GLUE: normalize_pointer_run (format helper for the typestack
+    //   render at printc.cc:290-302: base type + type_expr_space + ptr_expr*)
+    /// Canonicalize a rendered type name's trailing `*` run so the base type
+    /// and the star run are separated by exactly one space (`char**` ->
+    /// `char **`), mirroring Ghidra's typestack emission: the base-type atom
+    /// is followed by type_expr_space (spacing=1), then each ptr_expr token
+    /// (spacing=0). Non-pointer names pass through unchanged.
+    fn normalize_pointer_run(name: &str) -> String {
+        let trimmed = name.trim_end();
+        let base_len = trimmed.trim_end_matches('*').len();
+        let star_run = &trimmed[base_len..];
+        if star_run.is_empty() {
+            return trimmed.to_string();
+        }
+        format!("{} {}", trimmed[..base_len].trim_end(), star_run)
     }
 
     // Ghidra: printc.cc:313 PrintC::pushTypeEnd
@@ -9111,7 +9183,8 @@ impl PrintC {
     /// already includes `* ` (e.g. "int *"), so emitting `get_name()` is the
     /// text-faithful render for the cases these emit methods hit.
     fn emit_type_prefix(&mut self, dt: &Datatype) {
-        self.emit.tag_type(dt.get_name(), dt.get_id());
+        self.emit
+            .tag_type(&Self::normalize_pointer_run(dt.get_name()), dt.get_id());
     }
 
     // Ghidra: printc.cc:1288 PrintC::push_integer
@@ -9950,8 +10023,12 @@ impl PrintC {
         self.option_null = false;
         // printc.cc:1589
         self.option_unplaced = false;
-        // printc.cc:1590-1593: option_brace_* (brace formatting) - no Rugra
-        //   counterpart; structured-block emitter uses a fixed style.
+        // printc.cc:1590-1593: option_brace_* (brace formatting). Rugra ports
+        //   option_brace_func (the function-body brace, read at printc.cc:2655);
+        //   the ifelse/loop/switch styles are hard-coded SameLine by the
+        //   structured-block emitter (` {`), matching the oracle defaults
+        //   (printc.cc:1591-1593), so no separate fields are needed yet.
+        self.option_brace_func = crate::prettyprint::BraceStyle::SkipLine;
         // printc.cc:1594: setCStyleComments() - Rugra emits C-style comments
         //   unconditionally; no style flag to reset.
     }

@@ -19,6 +19,12 @@ Corresponds to Ghidra's `prettyprint.hh`
 
 ## 导出的公共 API (Public API)
 
+### `pub enum BraceStyle` （2026-08-15 新增，PRINTC-FORMAT-0001）
+
+对应 Ghidra `Emit::brace_style`（prettyprint.hh:124-129）：`SameLine = 0`
+（`if/do/while/for/switch` 的 `{` 同行）、`NextLine = 1`（下一行）、
+`SkipLine = 2`（空一行后，函数体默认样式）。
+
 ### `pub trait Emit`
 
 Trait for emitting decompilation tokens
@@ -29,9 +35,22 @@ allowing for different output formats (plain text, XML, HTML with markup, etc.)
 - `open_group() -> i32` / `close_group(id)` 对应 Ghidra
   `Emit::openGroup/closeGroup`。纯文本 emitter 的 group 不产生字符，默认 ID 为 0；
   它与会实际输出 `(`/`)` 的 `open_paren/close_paren` 是两套不同操作。
+- `open_brace_indent(brace, style)` / `close_brace_indent(brace)` 对应
+  `Emit::openBraceIndent`（prettyprint.cc:61-76）与
+  `Emit::closeBraceIndent`（prettyprint.hh:481-483）。`EmitNoMarkup` 的
+  覆写按 oracle 的无条件 `tagLine`（`\n` + indent，prettyprint.hh:557）
+  语义发射：`SkipLine` 产生恰好两个换行（`)\n\n{`），`SameLine` 产生
+  ` {`；close 为 stopIndent + 换行 + `}`。Rugra 的 `tag_line` 会吞掉重复
+  换行，因此两个换行在覆写里直接写入以保证 oracle 字节格式。
+  `bump_indent`/`drop_indent` 是 startIndent/stopIndent 的 indent 半边
+  （indentincrement=2 空格/层）。
 - 锁定 12.0.4 visible-text fixture：
   `tools/run_printlanguage_group_oracle.sh`。已覆盖 case 为 `MATCH`，exact
   PrettyPrint group queue/ID 仍归 `PRETTY-0001`，不得据此升级 L3。
+- 锁定 12.0.4 纯格式 fixture（PRINTC-FORMAT-0001）：
+  `tools/run_printc_format_oracle.sh`，六 case（函数头花括号 skip_line 布局、
+  参数 `char *pattern`/`char **argv`/`int argc`/`...` join 间距、逗号无空格、
+  2 空格缩进策略）双侧逐字节 `MATCH`。
 
 ### `pub struct EmitNoMarkup`
 
@@ -248,3 +267,24 @@ Emitter that discards all output (used for discovery pass)
 - 这两个 pass 互为反作用，净效果为零。emit 层现在直接产出 `*(long*)(ptr+N)`（不产生 `->field_N`），所以两个 pass 都是无用的文本变换。
 - 移除后 post_process 从 27 趟降到 25 趟。gcc 24/24 不变。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-08-15：PRINTC-FORMAT-0001 — 纯格式层对齐 oracle（skip_line 花括号 / 指针 join / 逗号间距）
+
+- 新增 `BraceStyle` 枚举与 `Emit::open_brace_indent`/`close_brace_indent`
+  （prettyprint.cc:61-76、prettyprint.hh:481-483 的 1:1 移植）；
+  `EmitNoMarkup` 覆写按 oracle 的无条件 tagLine 语义发射。
+- post_process 第八趟格式修正：不再凭空在声明块后插入空行——保留发射器
+  已产出的**缩进保留分隔行**（emitLocalVarDecls 尾 tagLine 的忠实渲染，
+  printc.cc:2277-2278），无声明则无分隔行；旧版把每个无声明函数体 `{` 后
+  插一个空行是纯格式 bug。
+- post_process 各函数签名检测（pass 11/17/18/19、remove_orphan_breaks、
+  backfill_missing_locals）统一经 `signature_opens_function_body` 识别
+  oracle 的两行式函数头（`sig` + 独立 `{` 行，printc.cc:1590/2655），
+  skip_line 布局下 `{` 行不重复计入 brace depth；backfill 的声明收集跳过
+  独立 `{` 行（否则 declared 集为空导致全部变量重复声明——numbering
+  126→6 的根因）。
+- `fix_unary_deref_declarations`/`recover_struct_fields_anon`/backfill 的
+  指针声明模板从 `char * name` 改为 oracle join `char *name`
+  （printc.cc:73-77 ptr_expr spacing=0）。
+- 锁定 fixture `tests/oracle/printc_format_1204`（cover_rebuild 模式，
+  pinned base=a51e0c5）：六 case 双侧逐字节 MATCH。

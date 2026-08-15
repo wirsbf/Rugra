@@ -1,0 +1,79 @@
+{
+ "schema": 2,
+ "fixture_id": "PRINTC-FORMAT-0001",
+ "description": "PrintC::docFunction pure-format oracle: function-body brace layout (option_brace_func=skip_line), parameter join spacing (type_expr_space/ptr_expr OpTokens), bare comma spacing, and 2-space indent policy, captured as the full EmitNoMarkup byte stream over synthetic single-RETURN functions",
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "boundary": "PrintC::docFunction over synthetic Funcdata built through production APIs (Funcdata ctor via Scope::addFunction, FuncProto::setOutput/setParam, newOp/opSetOpcode/opInsertEnd, startProcessing flag); flat print mod",
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases"
+ },
+ "overall_status": "PARTIAL_MATCH:covered-format-projection-MATCH",
+ "covered_projection_status": "MATCH",
+ "expected_stdout_sha256": "de0fd94ec411a0d2a6e709dc74af862f0cafeef36e80ba9681280bad29a4a831",
+ "expected_exit_code": 0,
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "a51e0c5c14a5dec130d4e7a050e2512c9c518280",
+  "rugra_base_tree": "acd0a8264e665bf11d8b6296ac93ca8026f7cae2",
+  "cpp_fixture_sha256": "4ffe22bce791c5bf047fafd25baae6d630c88c989d2ec42ec4f566642481947e",
+  "rust_fixture_sha256": "86486aeef1650a30bc20bf94704b86b2631dfbd619ccf1060165529e2655e95d",
+  "printc_rs_sha256": "eea6513610a2de82c0e8c1c92bd5c5501c605c97cc3ad7154e3a792545c1dfc4",
+  "prettyprint_rs_sha256": "22f2a33963ad5d79150453871f3f238114f7c335bbab2d791456c62b6fd94c29",
+  "printc_doc_sha256": "ca03330feddfc8cc286d1b827f1355a82673b6f594b6b39389410b5d7a07c123",
+  "prettyprint_doc_sha256": "ac9371a186d80e9f20223a7c371dffc46557da9236bdf21e3544966de06a06a1",
+  "runner_sha256": "fb2ea2cb8a0817ea4e4d00630f5a6f0001d6721ea85cb7088dfb739fb5696b8b",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "0b0be6bd053eb4bd92103911a4fe4528e8e63e036e0424f09ceae444bd78179c",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-format-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
+  }
+ },
+ "build": {
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "236e824b26af5bb46f8b74def35b4b6b546e82fecb615f222c1f5b6ceed7eb1a"
+ },
+ "input_manifest": {
+  "cases": [
+   "void_empty",
+   "void_return_body",
+   "ptr_int_params",
+   "int_char2_params",
+   "dotdotdot_param",
+   "base_join_param"
+  ],
+  "sha256": "8c7c1eea073e26b56912cb8c95593973fd6bf24172941c2ac084e4c478035cdf"
+ },
+ "coverage": {
+  "void_empty_header_brace": "MATCH: leading tagLine + skip_line double break + empty body close, byte-identical",
+  "void_return_body_indent": "MATCH: `{` col 0, `return;` indent 2, `}` col 0, trailing tagLine",
+  "ptr_int_param_join": "MATCH: char *pattern ptr_expr join (no space after star), int pos base-type join (one space)",
+  "int_char2_param_join": "MATCH: int argc base join + char **argv double-star join",
+  "dotdotdot_comma_join": "MATCH: bare comma before ... (PrintC::comma spacing=0)",
+  "base_type_param_join": "MATCH: long x single-space join",
+  "local_var_decl_separator": "UNTESTED: emitLocalVarDecls trailing indent-only separator line not exercised (no scope symbols in fixture); post_process pass 8 preserves it verbatim",
+  "full_docfunction_object_graph": "UNTESTED: comment headers, symbol scopes, multi-statement bodies, structured blocks outside this atomic",
+  "markup_emitter_projection": "UNTESTED: EmitMarkup/EmitPrettyPrint token projections outside this atomic"
+ }
+}

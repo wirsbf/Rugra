@@ -780,6 +780,9 @@ the ports follow the real current signatures:
 - `emit_function_declaration(Funcdata)` — printc.cc:2577 `emitFunctionDeclaration(const Funcdata*)`
 - `emit_prototype_output(Funcdata, FuncProto)` — printc.cc:2194 `emitPrototypeOutput`
 - `emit_prototype_inputs(FuncProto)` — printc.cc:2222 `emitPrototypeInputs`
+  （PRINTC-FORMAT-0001：参数逗号按 `PrintC::comma` spacing=0（printc.cc:57）
+  裸打印；参数名 join 按 type OpTokens（printc.cc:73-77）——尾部 `*` 类型
+  `char *pattern`、基类型 `int argc`）
 - `doc_type_definitions(TypeFactory)` — printc.cc:2401 `docTypeDefinitions(const TypeFactory*)`
 - `emit_type_definition(Datatype)` — printc.cc:2369 `emitTypeDefinition`
 - `emit_struct_definition(TypeStruct)` — printc.cc:2120 `emitStructDefinition`
@@ -865,3 +868,25 @@ model is not present in Rugra's print layer):
   skeleton 4524→4531；输出新增 `uStackX_0`/`auStackX_30` 类 Ghidra 风格栈名
   （printNameBase + StackX，对照 golden 的 `abStack_150`），无 `$$undef` 泄漏。
 - 验收：`tools/run_varmap_naming_oracle.sh`（VARMAP-NAMING-0001 六 case 投影 MATCH）。
+
+### PRINTC-FORMAT-0001：纯格式层对齐（2026-08-15）
+
+- 新增 `option_brace_func: BraceStyle` 字段（printc.hh:146，默认
+  `skip_line`，printc.cc:1590），`doc_function` 的函数体花括号从
+  `begin_block()` 的 ` {`（same_line）改为
+  `emit->openBraceIndent(OPEN_CURLY, option_brace_func)`（printc.cc:2655）
+  与 `closeBraceIndent`（printc.cc:2662）——oracle 输出为
+  `)\n\n{\n  ...\n}`。if/loop/switch 的 ` {`（same_line 默认，
+  printc.cc:1591-1593）不变。
+- 参数与局部声明的类型-标识符 join 统一按 type OpTokens 间距
+  （printc.cc:73-77）：`type_expr_space`(spacing=1) 在基类型与下一个 token
+  之间放一个空格，`ptr_expr`(spacing=0) 把标识符直接贴住尾部 `*`——
+  `char *pattern`、`char **argv`、`int argc`、`long x`。
+  `normalize_pointer_run` 把 `char**` 规范化为 `char **`（Ghidra
+  typestack 渲染：base + space + star run）。
+- `emit_prototype_inputs` 的逗号（含 `...` 前的逗号）按 `PrintC::comma`
+  spacing=0（printc.cc:57/2233/2252）裸打印：`f(char *fmt,...)`。
+- 锁定 fixture：`tests/oracle/printc_format_1204`（cover_rebuild，
+  pinned base=a51e0c5）+ `tools/run_printc_format_oracle.sh`：六 case
+  双侧逐字节 MATCH；端到端 curl 差分 skeleton 4530→3996、numbering
+  126→6（差分基线换用真 12.0.4 golden `ghidra_curl_1204.c`）。

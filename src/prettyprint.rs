@@ -2,6 +2,19 @@
 //!
 //! Corresponds to Ghidra's `prettyprint.hh`
 
+/// Ghidra: prettyprint.hh:124 Emit::brace_style
+/// Different brace formatting styles. Values mirror the locked oracle enum
+/// (`same_line = 0`, `next_line = 1`, `skip_line = 2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BraceStyle {
+    /// Opening brace on the same line as if/do/while/for/switch
+    SameLine,
+    /// Opening brace is on next line
+    NextLine,
+    /// Opening brace is two lines down
+    SkipLine,
+}
+
 /// Trait for emitting decompilation tokens
 ///
 /// This provides a generic interface for "printing" decompiled code,
@@ -71,6 +84,49 @@ pub trait Emit {
     // RUGRA-GLUE: tag_line (no Ghidra counterpart found)
     /// Tag a statement line
     fn tag_line(&mut self, _indent: i32) {}
+
+    // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
+    /// Emit an opening brace and start a new indent level. Faithful to
+    /// `Emit::openBraceIndent(const string&, brace_style)`
+    /// (prettyprint.cc:61-76): `same_line` emits one space before the brace,
+    /// `skip_line` forces two line breaks, `next_line` one line break; the
+    /// indent level is bumped (startIndent) and then the brace is printed.
+    /// Plain-text default composes the primitive `print`/`tag_line` calls;
+    /// `EmitNoMarkup` overrides it with the oracle's unconditional
+    /// `tagLine` newline semantics (prettyprint.hh:557).
+    fn open_brace_indent(&mut self, brace: &str, style: BraceStyle) {
+        match style {
+            BraceStyle::SameLine => self.print(" "),
+            BraceStyle::SkipLine => {
+                self.tag_line(0);
+                self.tag_line(0);
+            }
+            BraceStyle::NextLine => {
+                self.tag_line(0);
+            }
+        }
+        self.bump_indent();
+        self.print(brace);
+    }
+
+    // Ghidra: prettyprint.hh:481 Emit::closeBraceIndent
+    /// Emit a closing brace and remove an indent level. Faithful to
+    /// `Emit::closeBraceIndent(const string&, int4)`
+    /// (prettyprint.hh:481-483): `stopIndent(id); tagLine(); print(brace);`
+    /// — the brace lands on the next line at the (now decremented) indent.
+    fn close_brace_indent(&mut self, brace: &str) {
+        self.drop_indent();
+        self.tag_line(0);
+        self.print(brace);
+    }
+
+    // RUGRA-GLUE: bump_indent (startIndent indent-bump half, prettyprint.hh:371)
+    /// Start an indent level (indentincrement = 2 spaces per level).
+    fn bump_indent(&mut self) {}
+
+    // RUGRA-GLUE: drop_indent (stopIndent indent-drop half, prettyprint.hh:377)
+    /// End an indent level.
+    fn drop_indent(&mut self) {}
 
     // RUGRA-GLUE: begin_document (no Ghidra counterpart found)
     // --- Begin/end pairs (Ghidra Emit virtuals, prettyprint.hh:136-231) ---
@@ -816,14 +872,21 @@ impl EmitNoMarkup {
         // (between type declarations at function start)
         let mut final_cleaned: Vec<String> = Vec::with_capacity(cleaned.len());
         let mut in_decl_block = false;
-        for (i, line) in cleaned.iter().enumerate() {
+        let mut decl_count = 0usize;
+        let mut separator_kept = false;
+        for (_i, line) in cleaned.iter().enumerate() {
             let t = line.trim();
-            // Detect start of function
+            // Detect start of function. The function-body `{` either trails
+            // the signature (legacy layout) or sits alone on the next line
+            // (the oracle's option_brace_func=skip_line layout, printc.cc:
+            // 1590/2655); both forms open a declaration block here.
             if t.ends_with('{') && !t.starts_with("if") && !t.starts_with("else")
                 && !t.starts_with("while") && !t.starts_with("do")
                 && !t.starts_with("for") && !t.starts_with("switch")
                 && !t.starts_with("case") {
                 in_decl_block = true;
+                decl_count = 0;
+                separator_kept = false;
                 final_cleaned.push(line.clone());
                 continue;
             }
@@ -833,20 +896,25 @@ impl EmitNoMarkup {
                     || t.starts_with("byte ") || t.starts_with("bool ")
                     || t.starts_with("short ") || t.starts_with("char ");
                 if t.is_empty() {
-                    // Skip blank lines in declaration block
-                    continue;
+                    // The emitter already places exactly one indent-only
+                    // separator line after the declaration block (the
+                    // faithful render of emitLocalVarDecls' trailing
+                    // tagLine, printc.cc:2277-2278). Keep the FIRST such
+                    // line verbatim (preserving its indent bytes) and drop
+                    // only extra consecutive blanks; do NOT synthesize a
+                    // new empty line — a function with no declarations has
+                    // no separator in the oracle output either.
+                    if decl_count == 0 || separator_kept {
+                        continue;
+                    }
+                    separator_kept = true;
+                    final_cleaned.push(line.clone());
                 } else if is_decl {
+                    decl_count += 1;
                     final_cleaned.push(line.clone());
                 } else {
                     // End of declaration block
                     in_decl_block = false;
-                    // Add one blank line separator after declarations
-                    if i > 0 {
-                        let prev = final_cleaned.last().map(|s| s.trim().to_string()).unwrap_or_default();
-                        if !prev.is_empty() {
-                            final_cleaned.push(String::new());
-                        }
-                    }
                     final_cleaned.push(line.clone());
                 }
             } else {
@@ -1011,14 +1079,17 @@ impl EmitNoMarkup {
         let mut func_start: Option<usize> = None;
         let mut func_lines: Vec<String> = Vec::new();
 
-        for line in &alive {
+        for index in 0..alive.len() {
+            let line = &alive[index];
             let t = line.trim();
-            // Detect function start
-            if !t.starts_with("//") && !t.starts_with("/*") && !t.is_empty()
-                && (t.starts_with("int ") || t.starts_with("void ") || t.starts_with("long ")
-                    || t.starts_with("byte ") || t.starts_with("bool ") || t.starts_with("short "))
-                && t.contains('(') && t.ends_with('{')
-            {
+            // Detect function start (same-line `sig {` or skip_line `sig` + `{`)
+            if Self::signature_opens_function_body(
+                t,
+                &[
+                    "int ", "void ", "long ", "byte ", "bool ", "short ",
+                ],
+                &alive[index + 1..],
+            ) {
                 // Flush previous function
                 if func_start.is_some() {
                     Self::flush_func_remove_unused(&func_lines, &mut cleaned);
@@ -1324,15 +1395,28 @@ impl EmitNoMarkup {
                 let t = line.trim();
                 let indent = line.len() - line.trim_start().len();
 
-                // Detect function start: signature ending with `{`
-                if !t.starts_with("//") && t.ends_with('{')
-                    && (t.starts_with("int ") || t.starts_with("void ")
-                        || t.starts_with("long ") || t.starts_with("byte ")
-                        || t.starts_with("bool ") || t.starts_with("short "))
-                    && t.contains('(')
-                {
+                // Detect function start: signature ending with `{`, or the
+                // oracle skip_line layout where the lone `{` follows the
+                // signature line (printc.cc:1590/2655).
+                if Self::signature_opens_function_body(
+                    t,
+                    &["int ", "void ", "long ", "byte ", "bool ", "short "],
+                    &lines[i17 + 1..],
+                ) {
                     pass17.push(line.clone());
                     i17 += 1;
+                    if !t.ends_with('{') {
+                        // Consume the skip_line separator and the lone `{`
+                        // line so the body walk below starts inside the braces.
+                        while i17 < n && lines[i17].trim().is_empty() {
+                            pass17.push(lines[i17].clone());
+                            i17 += 1;
+                        }
+                        if i17 < n && lines[i17].trim() == "{" {
+                            pass17.push(lines[i17].clone());
+                            i17 += 1;
+                        }
+                    }
 
                     let func_indent = indent;
                     let mut past_decls = false;
@@ -1426,16 +1510,26 @@ impl EmitNoMarkup {
                 let t = line.trim();
                 let indent = line.len() - line.trim_start().len();
 
-                // Detect function opening
-                if !t.starts_with("//") && t.ends_with('{')
-                    && (t.starts_with("int ") || t.starts_with("void ")
-                        || t.starts_with("long ") || t.starts_with("byte ")
-                        || t.starts_with("bool ") || t.starts_with("short "))
-                    && t.contains('(')
-                {
+                // Detect function opening (same-line `sig {` or skip_line
+                // `sig` + lone `{`, printc.cc:1590/2655)
+                if Self::signature_opens_function_body(
+                    t,
+                    &["int ", "void ", "long ", "byte ", "bool ", "short "],
+                    &lines[i18 + 1..],
+                ) {
                     let func_indent = indent;
                     pass18.push(line.clone());
                     i18 += 1;
+                    if !t.ends_with('{') {
+                        while i18 < lines.len() && lines[i18].trim().is_empty() {
+                            pass18.push(lines[i18].clone());
+                            i18 += 1;
+                        }
+                        if i18 < lines.len() && lines[i18].trim() == "{" {
+                            pass18.push(lines[i18].clone());
+                            i18 += 1;
+                        }
+                    }
 
                     // Consume declarations
                     while i18 < lines.len() {
@@ -1500,18 +1594,28 @@ impl EmitNoMarkup {
                 let t = line.trim();
                 let indent = line.len() - line.trim_start().len();
 
-                // Detect function start
-                if !t.starts_with("//") && t.ends_with('{')
-                    && (t.starts_with("int ") || t.starts_with("void ")
-                        || t.starts_with("long ") || t.starts_with("byte ")
-                        || t.starts_with("bool ") || t.starts_with("short "))
-                    && t.contains('(')
-                {
+                // Detect function start (same-line `sig {` or skip_line
+                // `sig` + lone `{`, printc.cc:1590/2655)
+                if Self::signature_opens_function_body(
+                    t,
+                    &["int ", "void ", "long ", "byte ", "bool ", "short "],
+                    &pass18[i19 + 1..],
+                ) {
                     // Collect the entire function body
                     let func_start = i19;
                     let func_indent = indent;
                     let mut depth = 1i32; // we've seen the opening `{`
                     let mut func_end = i19 + 1;
+                    if !t.ends_with('{') {
+                        // skip_line layout: the lone `{` is on a following
+                        // line and is already accounted for by depth=1.
+                        while func_end < pass18.len() && pass18[func_end].trim().is_empty() {
+                            func_end += 1;
+                        }
+                        if func_end < pass18.len() && pass18[func_end].trim() == "{" {
+                            func_end += 1;
+                        }
+                    }
                     while func_end < pass18.len() {
                         let ft = pass18[func_end].trim();
                         let fi = pass18[func_end].len() - pass18[func_end].trim_start().len();
@@ -1857,15 +1961,23 @@ impl EmitNoMarkup {
             let mut new_line = line.to_string();
             // Rewrite variable declarations
             for (var, struct_id) in &var_struct_types {
+                // Patterns cover both the legacy `* name;` spelling and the
+                // oracle ptr_expr join `*name;` (printc.cc:73-77); the
+                // replacement uses the oracle join (no space after `*`).
                 let patterns = [
                     format!("long {};", var),
                     format!("long * {};", var),
+                    format!("long *{};", var),
                     format!("void * {};", var),
+                    format!("void *{};", var),
                     format!("char * {};", var),
+                    format!("char *{};", var),
                     format!("int * {};", var),
+                    format!("int *{};", var),
                     format!("_struct * {};", var),
+                    format!("_struct *{};", var),
                 ];
-                let replacement = format!("{} * {};", struct_id, var);
+                let replacement = format!("{} *{};", struct_id, var);
                 for pat in &patterns {
                     new_line = new_line.replace(pat, &replacement);
                 }
@@ -2198,18 +2310,31 @@ impl EmitNoMarkup {
         let mut brace_depth: i32 = 0;
         // Stack of brace depths at which a loop/switch body opened.
         let mut loop_depths: Vec<i32> = Vec::new();
+        // In the skip_line layout, the index of the lone `{` line that the
+        // signature reset already accounted for (must not bump depth again).
+        let mut consumed_function_brace_line: Option<usize> = None;
         for (i, line) in lines.iter().enumerate() {
             let t = line.trim();
             // Reset brace tracking at each function signature (line ends with '{'
             // and looks like a return-type declaration with parens). This prevents
             // brace-depth drift across functions from breaking switch detection.
-            if t.ends_with('{') && t.contains('(') && t.contains(')')
-                && (t.starts_with("int ") || t.starts_with("long ")
-                    || t.starts_with("void ") || t.starts_with("char ")
-                    || t.starts_with("short ") || t.starts_with("bool "))
-            {
+            // With the oracle skip_line layout (printc.cc:1590/2655) the
+            // signature ends with ')' and the lone `{` follows; that `{` line
+            // must not bump the depth again, so it is consumed here.
+            if Self::signature_opens_function_body(
+                t,
+                &["int ", "long ", "void ", "char ", "short ", "bool "],
+                &lines[i + 1..],
+            ) {
                 brace_depth = 1;
                 loop_depths.clear();
+                in_loop_switch[i] = false;
+                if !t.ends_with('{') {
+                    consumed_function_brace_line = Some(i + 1);
+                }
+                continue;
+            }
+            if consumed_function_brace_line == Some(i) {
                 in_loop_switch[i] = false;
                 continue;
             }
@@ -2333,13 +2458,22 @@ impl EmitNoMarkup {
             let line = lines[i];
             out.push(line.to_string());
             let trimmed = line.trim();
-            // Detect function signature opener: line ends with '{' and looks like a signature.
-            let is_sig = trimmed.ends_with('{')
-                && trimmed.contains('(')
+            // Detect function signature opener: a signature line ends with '{'
+            // (legacy layout) or, in the oracle skip_line layout
+            // (printc.cc:1590/2655), ends with ')' and the lone '{` follows.
+            let sig_shape = trimmed.contains('(')
                 && (trimmed.starts_with("int ") || trimmed.starts_with("long ")
                     || trimmed.starts_with("void ") || trimmed.starts_with("char ")
                     || trimmed.starts_with("short ") || trimmed.starts_with("bool ")
                     || trimmed.contains(" *"));
+            let next_is_lone_brace = lines[i + 1..]
+                .iter()
+                .map(|l| l.trim())
+                .find(|l| !l.is_empty())
+                .map_or(false, |l| l == "{");
+            let is_sig = sig_shape
+                && (trimmed.ends_with('{')
+                    || (trimmed.ends_with(')') && next_is_lone_brace));
             if !is_sig { i += 1; continue; }
 
             // Walk the declaration block: consecutive lines ending with ';' that
@@ -2351,6 +2485,12 @@ impl EmitNoMarkup {
             while j < lines.len() {
                 let t = lines[j].trim();
                 if t.is_empty() { j += 1; continue; }
+                // skip_line layout: the lone `{` line sits between the
+                // signature and the declaration block (printc.cc:1590/2655).
+                // Skip it so the walk reaches the declarations instead of
+                // breaking with an empty `declared` set (which would make
+                // every used variable look missing and re-declare it).
+                if t == "{" { j += 1; continue; }
                 if t.ends_with(';') && !t.contains('(') && !t.contains("return") {
                     // Only treat as declaration if it has no '=' (assignment) —
                     // pure decls are "type name;" or "type *name;"
@@ -2454,7 +2594,10 @@ impl EmitNoMarkup {
                         } else if m.starts_with("fVar") { "float" }
                           else if m.starts_with("dVar") { "double" }
                           else { "long" };
-                        out.push(format!("{}{} {};", indent_str, ty, m));
+                        // Pointer-join spacing (printc.cc:73-77 ptr_expr
+                        // spacing=0): a trailing-`*` type glues to the name.
+                        let join = if ty.ends_with('*') { "" } else { " " };
+                        out.push(format!("{}{}{}{};", indent_str, ty, join, m));
                     }
                     i = j;
                     continue;
@@ -2524,7 +2667,7 @@ impl EmitNoMarkup {
                         // Declare as `char *`: `*(char *)X` yields a char, which can be
                         // assigned scalar values (0-255), indexed, and compared — covering
                         // the common STORE/LOAD patterns without knowing the real type.
-                        rewritten = Some(format!("{}char * {};", indent_str, name));
+                        rewritten = Some(format!("{}char *{};", indent_str, name));
                         break;
                     }
                 }
@@ -2538,7 +2681,7 @@ impl EmitNoMarkup {
                 for name in &derefed {
                     for ty in &scalar_types {
                         let pat = format!("{} {}", ty, name);
-                        let repl = format!("char * {}", name);
+                        let repl = format!("char *{}", name);
                         // Only replace if not already pointer (avoid `long * param` -> `_struct * * param`)
                         let pat_idx = new_line.find(&pat);
                         if let Some(idx) = pat_idx {
@@ -2774,6 +2917,44 @@ impl EmitNoMarkup {
     }
     // Ghidra: prettyprint.hh:547 EmitNoMarkup::hasEnclosingLoopCtx
     /// Scans backward through already-emitted lines.
+    // RUGRA-GLUE: signature_opens_function_body (format-layer helper for the
+    //   oracle's two-line function-header layout: printc.cc:1590 sets
+    //   option_brace_func=skip_line and printc.cc:2655 emits the body `{`
+    //   two lines below the declaration, so `sig {` and `sig` + `{` are both
+    //   valid function openings in Rugra text).
+    /// Whether a trimmed line is a C function signature that opens a body
+    /// brace, either trailing on the same line (legacy `sig {`) or alone on
+    /// the next non-blank line (oracle skip_line `sig` / `{`).
+    /// `type_prefixes` preserves each call site's original return-type set.
+    fn signature_opens_function_body<L: AsRef<str>>(
+        t: &str,
+        type_prefixes: &[&str],
+        lookahead: &[L],
+    ) -> bool {
+        if t.is_empty() || t.starts_with("//") || t.starts_with("/*") {
+            return false;
+        }
+        if !type_prefixes.iter().any(|p| t.starts_with(p)) || !t.contains('(') {
+            return false;
+        }
+        if t.ends_with('{') {
+            return true;
+        }
+        if !t.ends_with(')') {
+            return false;
+        }
+        // skip_line layout: the next non-blank line must be the lone `{`
+        lookahead
+            .iter()
+            .map(|l| l.as_ref().trim())
+            .find(|l| !l.is_empty())
+            .map_or(false, |l| l == "{")
+    }
+
+    // RUGRA-GLUE: has_enclosing_loop_ctx (post-process goto→break/return
+    //   rewrite helper; Ghidra emits break/continue structurally from
+    //   FlowBlock::markUnstructured flags at emitGotoStatement, it never
+    //   scans emitted text)
     fn has_enclosing_loop_ctx(emitted: &[String], target_indent: usize) -> bool {
         // Walk backward, tracking brace depth
         let mut _depth = 0i32;
@@ -3043,6 +3224,54 @@ impl Emit for EmitNoMarkup {
             self.output.push('\n');
         }
         self.do_indent();
+    }
+
+    // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
+    /// Faithful text render of the oracle's `openBraceIndent`. The oracle's
+    /// `EmitNoMarkup::tagLine` (prettyprint.hh:557) writes `endl` + indent
+    /// UNCONDITIONALLY, so `skip_line` produces exactly two line breaks
+    /// (a blank line) even when the output already sits at line start.
+    /// Rugra's `tag_line` suppresses a repeated newline, so the two breaks
+    /// are emitted directly here to preserve the oracle byte format.
+    fn open_brace_indent(&mut self, brace: &str, style: BraceStyle) {
+        match style {
+            BraceStyle::SameLine => self.output.push(' '),
+            BraceStyle::SkipLine => {
+                // tagLine(); tagLine(); — each is '\n' + indent at the OLD level
+                self.output.push('\n');
+                self.do_indent();
+                self.output.push('\n');
+                self.do_indent();
+            }
+            BraceStyle::NextLine => {
+                self.output.push('\n');
+                self.do_indent();
+            }
+        }
+        // int4 id = startIndent(); — indentincrement = 2 spaces per level
+        self.indent += 1;
+        self.output.push_str(brace);
+    }
+
+    // Ghidra: prettyprint.hh:481 Emit::closeBraceIndent
+    /// Faithful text render of `closeBraceIndent`: stopIndent, then the
+    /// oracle's unconditional `tagLine` ('\n' + indent at the NEW level),
+    /// then the brace.
+    fn close_brace_indent(&mut self, brace: &str) {
+        self.indent -= 1;
+        self.output.push('\n');
+        self.do_indent();
+        self.output.push_str(brace);
+    }
+
+    // RUGRA-GLUE: bump_indent (startIndent indent-bump half, prettyprint.hh:371)
+    fn bump_indent(&mut self) {
+        self.indent += 1;
+    }
+
+    // RUGRA-GLUE: drop_indent (stopIndent indent-drop half, prettyprint.hh:377)
+    fn drop_indent(&mut self) {
+        self.indent -= 1;
     }
 
     // Ghidra: prettyprint.hh:547 EmitNoMarkup::intoAny
