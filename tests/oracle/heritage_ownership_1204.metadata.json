@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "fixture_id": "HERITAGE-OWNERSHIP-0001",
-  "stable_function_id": "GH12-F-heritage-ownership-0001",
+  "stable_function_id": "GH12-F-04e4a7fe8cd549e26cb7",
   "stable_function_closure": [
     "ghidra::Funcdata::opHeritage funcdata.hh:462",
     "ghidra::Heritage::heritage heritage.cc:2663",
