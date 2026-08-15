@@ -336,3 +336,34 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 - 分阶段 loader 胶水（6 个）：`set_base`、`set_sizes`、`set_alignment`、`set_type_class`、`set_auto_killed_by_call`、`set_num_group`；Ghidra 在 `ParamEntry::decode`、`ParamListStandard::decode` 或派生类中直接写字段，没有这些独立 setter。
 
 这些注释只声明函数来源或 Rust 结构适配原因；尤其不证明扁平 `FuncProto` 存储、默认值、alias identity 或分阶段 loader 与 Ghidra 行为等价。
+
+### 2026-08-15：FuncCallSpecs effect/characterize 委托 FuncProto（HERITAGE-CALLGUARD-0001）
+
+- `FuncCallSpecs::has_effect(space, offset, size) -> EffectType`：对齐
+  `FuncCallSpecs : public FuncProto`（fspec.hh:1645）的继承解析——非空本地
+  effect 列表完整覆盖，空列表委托 `FuncProto::has_effect`（fspec.cc:4234，
+  即 PROTO-EFFECT-MODEL-0001 的 ProtoModelFull 查询）。modelless 的
+  FuncProto 在 Ghidra 是无效状态（解引用即错）；Rugra 生产侧在
+  FUNCPROTO-MODEL-BIND-0001 落地前保守返回 `unknown_effect`（guardCalls
+  因此建 INDIRECT，不会欠保护）。
+- `characterize_as_output`/`characterize_as_input_param` 改为委托
+  `FuncProto::characterize_as_{output,input_param}`（fspec.cc:4336/4289 新增
+  端口）——修复 HERITAGE-DRIVER 审计指出的 output 塌缩到 input
+  characterization 的问题。locked-param/output 分支因 Rugra
+  `ProtoParameter.address` 无空间身份降级到 model 分支（ADDRESS-0001 移除）。
+- `is_auto_killed_by_call` 委托 `FuncProto::is_auto_killed_by_call`
+  （fspec.cc:4609：model output 的 autoKilledByCall 粘滞位或 locked output），
+  替代写死的 `true`。
+- `ParamListStandard::characterize_as_param(space, offset, size)`：修复原
+  `space != Ram` 过滤（x86-64 的参数 entry 在 Register 空间，被全部滤掉），
+  按 per-entry space 匹配（Ghidra 的 per-space resolverMap 语义）。
+- `ParamListStandard::get_biggest_contained_param(space, offset, size)`：
+  忠实端口（cc:1375-1409：环绕检查、intersect 窗口、containedBy、取最大、
+  `isExclusion` 要求），替代被删除的 Ram-only 旧版。
+- `FuncProto::get_biggest_contained_input_param/output`（cc:4459/4492）、
+  `justified_contain_range` 转公开（heritage 的 call-guard helper 复用同一
+  `Address::justifiedContain` 数学）、`ParamEntry::from_storage`（fixture
+  构造 glue）、`FuncCallSpecs::has_effect_translate` 签名更新。
+- 证据：`tests/oracle/heritage_callguard_1204.*`（model_state/effect 探针 +
+  trials case 双侧逐字节 MATCH）。
+

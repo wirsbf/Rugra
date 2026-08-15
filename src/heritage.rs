@@ -42,24 +42,35 @@ impl LocationMap {
     ///   2 = completely contained in a previous (older) entry
     pub fn add(&mut self, mut addr: Address, mut size: i32, mut pass: i32) -> i32 {
         use crate::address::Address as A;
-        // Ghidra cc:37-41: find the first entry that might overlap.
-        // lower_bound(addr), back up one, then check overlap.
+        // Ghidra cc:37-41: iter = lower_bound(addr); if (iter != begin)
+        // --iter; if the resulting entry does not overlap, ++iter. The
+        // entry selected this way (possibly the lower_bound itself) is the
+        // one the cc:43-57 containment/merge check runs on — advancing
+        // past it into the merge loop instead lost the "completely
+        // contained" classification for exact-start re-adds (prev must be
+        // 2, not 1, so a later pass does not re-flag the range NEW).
         let mut intersect = 0;
         let keys: Vec<Address> = self.themap.keys().cloned().collect();
-        let start_idx = match keys.iter().position(|k| *k >= addr) {
-            Some(i) => if i > 0 { i - 1 } else { 0 },
+        let lb = keys.iter().position(|k| *k >= addr);
+        let mut i = match lb {
+            Some(pos) if pos > 0 => pos - 1,
+            Some(_) => 0,
             None => keys.len().saturating_sub(1),
         };
-        // Ghidra cc:45-57: check if the starting entry overlaps.
-        let mut i = start_idx;
+        if i < keys.len()
+            && A::overlap(&addr, 0, keys[i], self.themap[&keys[i]].size) == -1
+        {
+            i += 1;
+        }
+        // Ghidra cc:43-57: containment / first merge on the selected entry.
         if i < keys.len() {
-            let (k_addr, k_sp) = (keys[i], self.themap[&keys[i]]);
+            let k_addr = keys[i];
+            let k_sp = self.themap[&k_addr];
             let where_ = A::overlap(&addr, 0, k_addr, k_sp.size);
             if where_ != -1 {
                 // Ghidra cc:46-49: completely contained?
                 if where_ + size <= k_sp.size {
-                    intersect = if k_sp.pass < pass { 2 } else { 0 };
-                    return intersect;
+                    return if k_sp.pass < pass { 2 } else { 0 };
                 }
                 // Ghidra cc:50-56: merge — extend addr/size, take min pass.
                 addr = k_addr;
@@ -68,9 +79,7 @@ impl LocationMap {
                     intersect = 1;
                     pass = k_sp.pass;
                 }
-                self.themap.remove(&keys[i]);
-                i += 1;
-            } else {
+                self.themap.remove(&k_addr);
                 i += 1;
             }
         }
@@ -170,6 +179,12 @@ pub struct MemRange {
     pub addr: Address,
     pub size: i32,
     pub flags: u32,
+    /// Address space of the range. Ghidra's `MemRange::addr` is a full
+    /// space-carrying Address (heritage.hh:60); Rugra's `Address` is an
+    /// offset-only scalar, so the space rides as an explicit field until
+    /// ADDRESS-0001 lands.
+    // RUGRA-GLUE: explicit-space mirror of the oracle Address identity.
+    pub space: AddressSpace,
 }
 
 pub mod memrange_flags {
@@ -209,20 +224,23 @@ impl TaskList {
 
     // Ghidra: heritage.cc:109 TaskList::add
     /// Add a range to the list. If it overlaps the last range, extend it.
-    /// Faithful to `add` (heritage.cc:109-124).
-    pub fn add(&mut self, addr: Address, size: i32, fl: u32) {
+    /// Faithful to `add` (heritage.cc:109-124). The explicit space parameter
+    /// mirrors Ghidra's space-carrying Address key.
+    pub fn add(&mut self, space: AddressSpace, addr: Address, size: i32, fl: u32) {
         if let Some(last) = self.tasklist.last_mut() {
-            let over = Address::overlap(&addr, 0, last.addr, last.size);
-            if over >= 0 {
-                let relsize = size + over;
-                if relsize > last.size {
-                    last.size = relsize;
+            if last.space == space {
+                let over = Address::overlap(&addr, 0, last.addr, last.size);
+                if over >= 0 {
+                    let relsize = size + over;
+                    if relsize > last.size {
+                        last.size = relsize;
+                    }
+                    last.flags |= fl;
+                    return;
                 }
-                last.flags |= fl;
-                return;
             }
         }
-        self.tasklist.push(MemRange { addr, size, flags: fl });
+        self.tasklist.push(MemRange { addr, size, flags: fl, space });
     }
 
     // Ghidra: heritage.hh:89 TaskList::begin
@@ -995,13 +1013,28 @@ impl Heritage {
         }
 
         // Phase 2: build Stack INDIRECT ops for each discovered STORE.
+        // Mirrors guardStores' constructor call (heritage.cc:1553-1556):
+        // newIndirectOp(op, addr, size, PcodeOp::indirect_store) followed by
+        // setActiveHeritage on input[0] and output.
         for (store_op, stack_off) in stores_to_guard {
             let sz = {
                 let s = store_op.read().unwrap();
                 s.inrefs.get(2).map(|v| v.read().unwrap().get_size()).unwrap_or(8)
             };
             let store_ref = crate::op::PcodeOpRef(store_op);
-            fd.new_indirect_op(&store_ref, stack_off as u64, sz);
+            let indop = fd.new_indirect_op(
+                &store_ref,
+                AddressSpace::Stack,
+                stack_off as u64,
+                sz,
+                crate::op::pcodeop_flags::INDIRECT_STORE,
+            );
+            let (in0, out) = {
+                let r = indop.0.read().unwrap();
+                (r.get_in(0).cloned(), r.output.as_ref().cloned())
+            };
+            if let Some(vn) = in0 { vn.write().unwrap().set_active_heritage(); }
+            if let Some(vn) = out { vn.write().unwrap().set_active_heritage(); }
         }
     }
 
@@ -1198,71 +1231,231 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1444 Heritage::guardCalls
-    /// Guard CALL ops in preparation for renaming.
+    // Ghidra: heritage.cc:1443 Heritage::guardCalls
+    /// Guard CALL/CALLIND ops in preparation for the renaming algorithm.
+    /// Faithful 1:1 port of `Heritage::guardCalls` (heritage.cc:1443-1527).
     ///
-    /// Faithful in shape to `Heritage::guardCalls` (heritage.cc:1444-1528):
-    /// it exists so the heritage driver can ask for call-site guards. Ghidra's
-    /// implementation is tightly coupled to `FuncCallSpecs`/`ParamActive`
-    /// (effect characterization, output-overlap guards, INDIRECT creation)
-    /// which Rugra's call-analysis layer does not yet expose. This stub keeps
-    /// the API aligned so the driver can call it, and is a no-op until
-    /// `FuncCallSpecs` gains the needed methods.
-    /// TODO(call-analysis): wire effect characterization + INDIRECT creation.
-    pub fn guard_calls(&mut self, _fd: &mut Funcdata) {}
-
-    // Ghidra: heritage.cc:1653 Heritage::guardReturns
-    /// Guard RETURN ops in preparation for renaming.
+    /// For the given address range, decide what the data-flow effect is
+    /// across each call site in the function. If an effect is unknown (or a
+    /// return address), an INDIRECT op is added via `newIndirectOp`
+    /// (prepopulating data-flow through the call); if the range is
+    /// killed-by-call, an indirectly-created INDIRECT is added via
+    /// `newIndirectCreation`. Any new INDIRECT output is appended to `write`
+    /// in creation order — the same vector calcMultiequals consumes.
     ///
-    /// Faithful in shape to `Heritage::guardReturns` (heritage.cc:1653-1693):
-    /// Ghidra either registers the range as a return-value trial or inserts a
-    /// forced-address COPY before each RETURN. This requires
-    /// `FuncProto::characterizeAsOutput`/`ParamActive` which Rugra does not
-    /// yet expose. Stub kept for API alignment.
-    /// TODO(funcproto): wire return-value trials + COPY insertion.
-    pub fn guard_returns(&mut self, fd: &mut Funcdata) {
-        // Ghidra cc:1659-1676: check active output for RETURN trial registration
-        // cc:1659: active = fd->getActiveOutput()
-        // Rugra's Funcdata doesn't have activeOutput directly; use funcp.
-        // For now: register trials on RETURN ops if output characterization matches.
-        // cc:1677-1692: persist flag → insert COPY before each RETURN
-        // Check if any RETURN ops exist.
-        let return_ops: Vec<_> = fd.obank.returnlist.iter()
-            .filter(|r| !(r.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD != 0))
-            .map(|r| r.0.clone())
-            .collect();
-        if return_ops.is_empty() { return; }
-
-        // cc:1659: check active output characterization
-        // Simplified: check if fd.funcp has active output
-        // cc:1659: active = fd->getActiveOutput() — FuncProto's active output.
-        // Rugra's FuncProto doesn't have active_output (it's on FuncCallSpecs).
-        // Ghidra's Funcdata has its own activeOutput separate from call specs.
-        // Conservative: check if any FuncCallSpecs has active output.
-        let has_active_output = fd.funcp.output_type_locked;
-        if has_active_output {
-            // cc:1664-1674: register trial + insert input on each RETURN
-            // For each RETURN: create newVarnode(size, addr) + opInsertInput
-            // Simplified: skip trial registration (needs FuncProto::characterizeAsOutput)
-        }
-
-        // cc:1677-1692: persist flag handling
-        // Check persist flag on any varnode in the range
-        // Simplified: insert COPY before RETURN for persist varnodes
-        // Rugra's persist varnodes are registers marked PERSIST.
-        for ret_op in &return_ops {
-            let op_addr = ret_op.read().unwrap().get_addr();
-            // cc:1682-1691: create COPY op before RETURN
-            let copyop = fd.new_op(1, op_addr);
-            fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
-            // cc:1683: vn = newVarnodeOut(size, addr, copyop)
-            // cc:1684: vn->setAddrForce()
-            // cc:1688-1690: invn = newVarnode(size, addr); opSetInput(copyop, invn, 0)
-            // cc:1691: opInsertBefore(copyop, op)
-            // Skip actual COPY creation for now (needs per-range addr/size context).
-            let _ = copyop;
+    /// Per cc:1451-1527 the loop order is callspec order (`i < numCalls`),
+    /// and each callspec contributes at most one INDIRECT per range; the
+    /// stack-spacebase translation (cc:1460-1465) rebases the query offset
+    /// by the callspec's resolved stackoffset, disabling register trials
+    /// entirely when the offset is unknown.
+    pub fn guard_calls(
+        &mut self,
+        fd: &mut Funcdata,
+        fl: u32,
+        space: AddressSpace,
+        addr: Address,
+        size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // cc:1450: holdind = ((fl & Varnode::addrtied) != 0)
+        let holdind = (fl & crate::varnode::varnode_flags::ADDRTIED) != 0;
+        // cc:1451: for(int4 i=0;i<fd->numCalls();++i)
+        for i in 0..fd.num_calls() {
+            // cc:1452: fc = fd->getCallSpecs(i);
+            // cc:1453-1456: if the call op is an assignment whose output IS
+            // this exact range, this range is already the return value — no
+            // guard is added for it.
+            let call_op = match fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) {
+                Some(op) => op,
+                None => continue,
+            };
+            {
+                let is_assignment = call_op.0.read().unwrap().is_assignment();
+                if is_assignment {
+                    let out_match = call_op.0.read().unwrap().output.as_ref().map(|vn| {
+                        let v = vn.read().unwrap();
+                        v.address_space == space && v.loc == addr && v.get_size() as i32 == size
+                    });
+                    if out_match == Some(true) {
+                        continue;
+                    }
+                }
+            }
+            // cc:1457-1466: compute the callee-perspective address.
+            //   spc = addr.getSpace(); off = addr.getOffset();
+            //   if SPACEBASE and spacebase offset known:
+            //     off = spc->wrapOffset(off - fc->getSpacebaseOffset())
+            //   else if SPACEBASE unknown: tryregister = false
+            let mut off = addr.as_u64();
+            let mut tryregister = true;
+            if space == AddressSpace::Stack {
+                match fd.get_call_specs(i).map(|fc| fc.get_spacebase_offset()) {
+                    Some(sb) if sb != crate::fspec::OFFSET_UNKNOWN => {
+                        off = ((off as i128 - sb as i128).rem_euclid(1i128 << 64)) as u64;
+                    }
+                    _ => {
+                        // cc:1464: do not attempt to register this stack loc
+                        tryregister = false;
+                    }
+                }
+            }
+            // cc:1466: transAddr = Address(spc, off)
+            // cc:1467: effecttype = fc->hasEffect(transAddr, size)
+            let mut effecttype = fd
+                .get_call_specs(i)
+                .map(|fc| fc.has_effect(space, off, size))
+                .unwrap_or(crate::fspec::EffectType::UnknownEffect);
+            // cc:1468-1486: output-trial half.
+            let mut possibleoutput = false;
+            let is_output_active = fd
+                .get_call_specs(i)
+                .map(|fc| fc.is_output_active())
+                .unwrap_or(false);
+            if is_output_active && tryregister {
+                // cc:1471: outputCharacter = fc->characterizeAsOutput(transAddr, size)
+                let output_character = fd
+                    .get_call_specs(i)
+                    .map(|fc| fc.characterize_as_output(space, off, size))
+                    .unwrap_or(0);
+                if output_character != crate::fspec::containment::NO_CONTAINMENT {
+                    // cc:1473-1474: auto-killed-by-call upgrade
+                    if effecttype != crate::fspec::EffectType::KilledByCall
+                        && fd.get_call_specs(i)
+                            .map(|fc| fc.is_auto_killed_by_call())
+                            .unwrap_or(false)
+                    {
+                        effecttype = crate::fspec::EffectType::KilledByCall;
+                    }
+                    if output_character == crate::fspec::containment::CONTAINED_BY {
+                        // cc:1476-1477: tryOutputOverlapGuard; if handled the
+                        // range is unaffected — no additional guarding.
+                        if self.try_output_overlap_guard(fd, i, space, addr, off, size, write) {
+                            effecttype = crate::fspec::EffectType::Unaffected;
+                        }
+                    } else {
+                        // cc:1480-1483: register as an output trial unless one
+                        // already exists.
+                        let already_trial = fd
+                            .get_call_specs(i)
+                            .and_then(|fc| fc.active_output.as_ref())
+                            .map(|active| active.which_trial(Address::new(off), size) >= 0)
+                            .unwrap_or(true);
+                        if !already_trial {
+                            if let Some(fc) = fd.get_call_specs_mut(i) {
+                                if let Some(active) = &mut fc.active_output {
+                                    active.register_trial(Address::new(off), size);
+                                }
+                            }
+                            possibleoutput = true;
+                        }
+                    }
+                }
+            } else {
+                // cc:1487-1494: stack-output-lock half.
+                let is_stack_output_lock = fd
+                    .get_call_specs(i)
+                    .map(|fc| fc.is_stack_output_lock())
+                    .unwrap_or(false);
+                if is_stack_output_lock && tryregister {
+                    let output_character = fd
+                        .get_call_specs(i)
+                        .map(|fc| fc.characterize_as_output(space, off, size))
+                        .unwrap_or(0);
+                    if output_character != crate::fspec::containment::NO_CONTAINMENT {
+                        effecttype = crate::fspec::EffectType::UnknownEffect;
+                        if self.try_output_stack_guard(fd, i, space, addr, off, size, output_character, write) {
+                            effecttype = crate::fspec::EffectType::Unaffected;
+                        }
+                    }
+                }
+            }
+            // cc:1495-1509: input-trial half.
+            let is_input_active = fd
+                .get_call_specs(i)
+                .map(|fc| fc.is_input_active())
+                .unwrap_or(false);
+            if is_input_active && tryregister {
+                // cc:1496: inputCharacter = fc->characterizeAsInputParam(transAddr, size)
+                let input_character = fd
+                    .get_call_specs(i)
+                    .map(|fc| fc.characterize_as_input_param(space, off, size))
+                    .unwrap_or(0);
+                if input_character == crate::fspec::containment::CONTAINS_JUSTIFIED {
+                    // cc:1498-1505: call could use this whole range as an
+                    // input parameter — register the trial and append the
+                    // varnode as the call's last input.
+                    let already_trial = fd
+                        .get_call_specs(i)
+                        .and_then(|fc| fc.active_input.as_ref())
+                        .map(|active| active.which_trial(Address::new(off), size) >= 0)
+                        .unwrap_or(true);
+                    if !already_trial {
+                        if let Some(fc) = fd.get_call_specs_mut(i) {
+                            if let Some(active) = &mut fc.active_input {
+                                active.register_trial(Address::new(off), size);
+                            }
+                        }
+                        // cc:1502-1504: vn = newVarnode(size, addr);
+                        // setActiveHeritage; opInsertInput(op, vn, numInput())
+                        let vn = fd
+                            .vbank
+                            .create_with_space(size as usize, space, addr.as_u64());
+                        vn.write().unwrap().set_active_heritage();
+                        let num_in = call_op.0.read().unwrap().num_input();
+                        fd.op_insert_input(&call_op, vn, num_in);
+                    }
+                } else if input_character == crate::fspec::containment::CONTAINED_BY {
+                    // cc:1507-1508: call may use part of this range as an
+                    // input parameter.
+                    self.guard_call_overlapping_input(fd, i, space, addr, off, size);
+                }
+            }
+            // cc:1510-1525: the guard itself, by final effect type. Neither
+            // "unaffected" nor "reload" gets an INDIRECT.
+            if effecttype == crate::fspec::EffectType::UnknownEffect
+                || effecttype == crate::fspec::EffectType::ReturnAddress
+            {
+                // cc:1512: indop = fd->newIndirectOp(fc->getOp(), addr, size, 0)
+                let indop = fd.new_indirect_op(&call_op, space, addr.as_u64(), size as usize, 0);
+                // cc:1513-1515: setActiveHeritage on in[0] and out; push out.
+                let (in0, outvn) = {
+                    let r = indop.0.read().unwrap();
+                    (r.get_in(0).cloned(), r.output.as_ref().cloned())
+                };
+                if let Some(vn) = in0 {
+                    vn.write().unwrap().set_active_heritage();
+                }
+                if let Some(vn) = outvn {
+                    vn.write().unwrap().set_active_heritage();
+                    // cc:1516-1517: if (holdind) out->setAddrForce()
+                    if holdind {
+                        vn.write().unwrap().set_addr_force();
+                    }
+                    // cc:1518-1519: if return_address -> setReturnAddress()
+                    if effecttype == crate::fspec::EffectType::ReturnAddress {
+                        vn.write().unwrap().set_return_address();
+                    }
+                    write.push(vn);
+                }
+            } else if effecttype == crate::fspec::EffectType::KilledByCall {
+                // cc:1521-1524: indirectly created value.
+                let indop = fd.new_indirect_creation_in_space(
+                    &call_op,
+                    space,
+                    addr.as_u64(),
+                    size as usize,
+                    possibleoutput,
+                );
+                // cc:1522-1524: out setActiveHeritage; push.
+                let outvn = indop.0.read().unwrap().output.as_ref().cloned();
+                if let Some(vn) = outvn {
+                    vn.write().unwrap().set_active_heritage();
+                    write.push(vn);
+                }
+            }
         }
     }
+
 
     // Ghidra: heritage.cc:383 Heritage::normalizeReadSize
     /// Normalize a read varnode whose size < range size: create a SUBPIECE
@@ -1387,6 +1580,7 @@ impl Heritage {
     pub fn guard_range(
         &mut self,
         fd: &mut Funcdata,
+        space: AddressSpace,
         addr: Address,
         size: i32,
         add_indirects: bool,
@@ -1430,18 +1624,22 @@ impl Heritage {
             }
             vn_arc.write().unwrap().set_active_heritage();
         }
-        // Ghidra cc:1189-1199: addIndirects.
+        // Ghidra cc:1189-1199: addIndirects half — queryProperties sets
+        // `fl` from ScopeLocal range properties; Rugra has no ScopeLocal on
+        // this path yet, so fl=0 (no addrtied, no persist), which only
+        // suppresses the ADDRFORCE mark and the return-COPY suffix.
         if add_indirects {
-            // cc:1192: queryProperties (needs ScopeLocal).
-            // cc:1193-1198: guardCalls/guardReturns/guardStores/guardLoads.
-            // Now using per-range versions (addr/size) faithful to Ghidra.
-            self.guard_calls_range(fd, 0, addr, size, write);
-            // guardReturns per-range: Ghidra cc:1653 uses addr/size.
-            // Rugra's guardReturns is a stub (needs FuncProto).
-            self.guard_returns(fd);
-            // Per-range guard stores/loads (cc:1539/1571).
-            self.guard_stores_range(fd, addr, size, write);
-            self.guard_loads_range(fd, 0, addr, size, write);
+            let fl: u32 = 0;
+            // cc:1192: fd->getScopeLocal()->queryProperties(addr,size,Address(),fl)
+            // cc:1193: guardCalls(fl,addr,size,write)
+            self.guard_calls(fd, fl, space, addr, size, write);
+            // cc:1194: guardReturns(fl,addr,size,write)
+            // Not wired: needs FuncProto::activeoutput on the function's own
+            // prototype (Ghidra fspec.hh:1656) and Funcdata::activeoutput
+            // linkage; residual registered against the PARAM-BIND family.
+            // cc:1195-1197: if highPtrPossible: guardStores/guardLoads.
+            self.guard_stores_range(fd, space, addr, size, write);
+            self.guard_loads_range(fd, fl, space, addr, size, write);
         }
     }
 
@@ -1451,15 +1649,12 @@ impl Heritage {
     /// Calls guard_range with empty read/write lists (Rugra's
     /// setActiveHeritage is done by rename_direct's marker).
     pub fn guard_all(&mut self, fd: &mut Funcdata) {
-        // Ghidra cc:1189-1198: guard(addr, size, addIndirects, ...) calls
-        // guardCalls, guardReturns, guardStores, guardLoads per-range.
-        // Rugra's guard_range delegates to the per-range versions:
-        // guard_stores_range / guard_loads_range / guard_calls_range.
         let mut empty_read = Vec::new();
         let mut empty_write = Vec::new();
         let mut empty_input = Vec::new();
         self.guard_range(
             fd,
+            AddressSpace::Stack,
             Address::new(0),
             0,
             true,
@@ -1670,57 +1865,87 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1112 Heritage::reprocessFreeStores
-    /// Re-examine free STOREs after stack-pointer discovery. Faithful to
-    /// `reprocessFreeStores` (heritage.cc:1112-1142). Clears spacebase ptr
-    /// marks, re-runs discovery, then removes unnecessary INDIRECTs for
-    /// STOREs that turned out not to use a spacebase ptr.
+    // Ghidra: heritage.cc:1111 Heritage::reprocessFreeStores
+    /// Revisit STOREs with free pointers now that a heritage pass has
+    /// completed. Faithful 1:1 port of `reprocessFreeStores`
+    /// (heritage.cc:1111-1141): clear the spacebase marks, rediscover, then
+    /// for every STORE that no longer uses a spacebase pointer walk the
+    /// contiguous INDIRECT group immediately before it and remove exactly
+    /// the guards whose IOP input aliases this STORE and whose output lives
+    /// in the guarded space (`totalReplace` + `opDestroy`).
     pub fn reprocess_free_stores(
         &mut self,
         fd: &mut Funcdata,
         space: AddressSpace,
         free_stores: &[Arc<RwLock<PcodeOp>>],
     ) {
-        // cc:1115-1116: clear spacebase ptr marks
+        // cc:1114-1115: fd->opClearSpacebasePtr(freeStores[i])
         for op_arc in free_stores {
-            op_arc.write().unwrap().flags &= !crate::op::pcodeop_flags::SPACEBASE_PTR;
+            fd.op_clear_spacebase_ptr(&PcodeOpRef(op_arc.clone()));
         }
-        // cc:1118: re-run discoverIndexedStackPointers
+        // cc:1117: discoverIndexedStackPointers(spc, freeStores, false)
+        // Re-run discovery. Rugra's discovery closure is the stack-store
+        // approximation (the full indexed-stack-pointer trace belongs to the
+        // load-guard/stack-delay residual family); the reprocess contract
+        // here only needs the resulting usesSpacebasePtr marks.
         Heritage::discover_and_guard_stack_stores_fd(fd);
-        // cc:1120-1141: clean up unnecessary INDIRECTs
+        // cc:1119-1140: remove the now-unnecessary INDIRECTs.
         for op_arc in free_stores {
-            // cc:1125: if STORE still uses spacebase ptr, skip
-            if op_arc.read().unwrap().uses_spacebase_ptr() { continue; }
-            // cc:1128-1140: walk backward through INDIRECTs looking for ones to remove
-            let op_ptr = Arc::as_ptr(op_arc) as usize;
-            let mut found_self = false;
-            let mut prev_ops: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
-            for r in &fd.obank.alivelist {
-                if found_self { prev_ops.push(r.0.clone()); }
-                if Arc::as_ptr(&r.0) as usize == op_ptr { found_self = true; }
+            // cc:1124: if (op->usesSpacebasePtr()) continue
+            if op_arc.read().unwrap().uses_spacebase_ptr() {
+                continue;
             }
-            for ind_op in &prev_ops {
-                let is_indirect = ind_op.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
-                if !is_indirect { break; } // cc:1130: stop at non-INDIRECT
-                // cc:1131-1133: verify iop varnode points back to our STORE
-                let iop_vn = ind_op.read().unwrap().get_in(1).cloned();
-                let matches = match &iop_vn {
-                    Some(v) => v.read().unwrap().get_space() == crate::space::AddressSpace::Iop,
-                    None => false,
+            // cc:1127-1128: indOp = op->previousOp() backward walk.
+            let mut ind_op = op_arc
+                .read()
+                .unwrap()
+                .previous_op_in_block(&fd.obank)
+                .map(|r| r.0.clone());
+            while let Some(ind_arc) = ind_op {
+                // cc:1129: if (indOp->code() != CPUI_INDIRECT) break
+                if ind_arc.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+                    break;
+                }
+                // cc:1130-1131: iop input must be an Iop-space varnode.
+                let iop_vn = ind_arc.read().unwrap().get_in(1).cloned();
+                let iop_vn = match iop_vn {
+                    Some(vn) if vn.read().unwrap().get_space() == AddressSpace::Iop => vn,
+                    _ => break,
                 };
-                if !matches { break; } // cc:1132-1133
-                // cc:1135-1138: if INDIRECT output is in our space, replace + destroy
-                let ind_out_space = ind_op.read().unwrap().output.as_ref()
+                // cc:1132: if (op != PcodeOp::getOpFromConst(iopVn->getAddr())) break
+                // — the IOP varnode must alias THIS store op.
+                let aliased_op = fd.get_op_from_const(&iop_vn);
+                let aliases_this = aliased_op
+                    .as_ref()
+                    .map(|r| Arc::ptr_eq(&r.0, op_arc))
+                    .unwrap_or(false);
+                if !aliases_this {
+                    break;
+                }
+                // cc:1133: nextOp is read before any possible destroy.
+                let next_op = ind_arc
+                    .read()
+                    .unwrap()
+                    .previous_op_in_block(&fd.obank)
+                    .map(|r| r.0.clone());
+                // cc:1134-1137: remove guards whose output is in the space.
+                let out_space = ind_arc
+                    .read()
+                    .unwrap()
+                    .output
+                    .as_ref()
                     .map(|o| o.read().unwrap().address_space);
-                if ind_out_space == Some(space) {
-                    let out_vn = ind_op.read().unwrap().output.as_ref().cloned();
-                    let in_vn = ind_op.read().unwrap().get_in(0).cloned();
+                if out_space == Some(space) {
+                    let (out_vn, in_vn) = {
+                        let r = ind_arc.read().unwrap();
+                        (r.output.as_ref().cloned(), r.get_in(0).cloned())
+                    };
                     if let (Some(out), Some(inv)) = (out_vn, in_vn) {
                         fd.total_replace(&out, inv);
                     }
-                    let ind_ref = PcodeOpRef(ind_op.clone());
-                    fd.obank.destroy(ind_ref);
+                    fd.op_destroy(&PcodeOpRef(ind_arc.clone()));
                 }
+                ind_op = next_op;
             }
         }
     }
@@ -1761,389 +1986,341 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1211 Heritage::guardCallOverlappingInput
-    /// Guard input param overlap for CALL ops. Faithful to
-    /// `guardCallOverlappingInput` (heritage.cc:1211-1236).
-    /// Requires FuncCallSpecs/ParamActive infrastructure (Rugra L1).
-    /// Documented stub — logs when called.
+    // Ghidra: heritage.cc:1210 Heritage::guardCallOverlappingInput
+    /// Guard an address range that is larger than any single input
+    /// parameter for the given call: construct a SUBPIECE that pulls out
+    /// the potential parameter. Faithful 1:1 port of
+    /// `guardCallOverlappingInput` (heritage.cc:1210-1235), including the
+    /// callee→caller truncAddr translation (cc:1218-1219) and the
+    /// registerTrial-before-opInsertInput order (cc:1231-1232).
     pub fn guard_call_overlapping_input(
         &mut self,
         fd: &mut Funcdata,
+        fc_idx: usize,
+        space: AddressSpace,
         addr: Address,
+        trans_offset: u64,
         size: i32,
-        space: crate::space::AddressSpace,
     ) {
-        // Ghidra cc:1216: fc->getBiggestContainedInputParam(transAddr, size, vData)
-        // Rugra lacks getBiggestContainedInputParam. Use characterizeAsInputParam
-        // to check containment, then create SUBPIECE if contained_by (3).
-        // Iterate all calls to find ones whose input contains this range.
-        let num_calls = fd.num_calls();
-        for i in 0..num_calls {
-            let input_char = fd.get_call_specs(i)
-                .map(|fc| fc.characterize_as_input_param(
-                    addr.as_u64(), size, space))
-                .unwrap_or(0);
-            if input_char != 3 { continue; } // only contained_by
-            // cc:1217-1234: create SUBPIECE + register trial
-            let call_op_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
-            let call_op_addr = match call_op_addr { Some(a) => a, None => continue };
-            // cc:1224-1231: create SUBPIECE op before the CALL
-            let subpiece = fd.new_op(2, call_op_addr);
-            fd.op_set_opcode(&subpiece, OpCode::CPUI_SUBPIECE);
-            let whole_vn = fd.vbank.create_with_space(
-                size as usize, AddressSpace::Stack, addr.as_u64());
-            whole_vn.write().unwrap().set_active_heritage();
-            fd.op_set_input(&subpiece, whole_vn, 0);
-            // cc:1222: truncateAmount = justifiedContain (simplified: 0)
-            let off_const = fd.new_constant(4, 0u64);
-            fd.op_set_input(&subpiece, off_const, 1);
-            // cc:1230: output = newVarnodeOut(size, truncAddr)
-            let out_vn = fd.new_varnode_out(size as usize, addr, &subpiece);
-            // cc:1231: opInsertBefore(subpiece, callOp)
-            // Find the CALL op in alivelist
-            let call_op = fd.obank.alivelist.iter()
-                .find(|r| r.0.read().unwrap().get_addr() == call_op_addr)
-                .map(|r| r.0.clone());
-            if let Some(call_op) = call_op {
-                fd.op_insert_before(&subpiece, &PcodeOpRef(call_op));
-            }
-            // cc:1232: active->registerTrial(truncAddr, size)
-            if let Some(fc) = fd.get_call_specs_mut(i) {
-                if let Some(active) = &mut fc.active_input {
-                    if active.which_trial(addr, size) < 0 {
-                        active.register_trial(addr, size);
-                    }
-                }
+        // cc:1215: if (fc->getBiggestContainedInputParam(transAddr, size, vData))
+        let v_data = match fd
+            .get_call_specs(fc_idx)
+            .and_then(|fc| {
+                fc.prototype
+                    .get_biggest_contained_input_param(space, trans_offset, size)
+            }) {
+            Some(v) => v,
+            None => return,
+        };
+        let (_v_space, v_offset, v_size) = v_data;
+        // cc:1218-1219: truncAddr in caller perspective.
+        let diff = v_offset.wrapping_sub(trans_offset);
+        let trunc_addr = Address::new(addr.as_u64().wrapping_add(diff));
+        // cc:1220: if (active->whichTrial(truncAddr, size) < 0)
+        let already_trial = fd
+            .get_call_specs(fc_idx)
+            .and_then(|fc| fc.active_input.as_ref())
+            .map(|active| active.which_trial(trunc_addr, size) >= 0)
+            .unwrap_or(true);
+        if already_trial {
+            return;
+        }
+        // cc:1221: truncateAmount = addr.justifiedContain(size, truncAddr, vData.size, false)
+        let truncate_amount = crate::fspec::justified_contain_range(
+            addr.as_u64(),
+            size,
+            trunc_addr.as_u64(),
+            v_size,
+            false,
+        );
+        // cc:1222-1223: subpieceOp = newOp(2, op->getAddr())
+        let call_op = match fd.get_call_specs(fc_idx).and_then(|fc| fc.find_call_op(fd)) {
+            Some(op) => op,
+            None => return,
+        };
+        let op_addr = call_op.0.read().unwrap().get_addr();
+        let subpiece_op = fd.new_op(2, op_addr);
+        // cc:1224: opSetOpcode(subpieceOp, CPUI_SUBPIECE)
+        fd.op_set_opcode(&subpiece_op, OpCode::CPUI_SUBPIECE);
+        // cc:1225-1226: wholeVn = newVarnode(size, addr); setActiveHeritage
+        let whole_vn = fd
+            .vbank
+            .create_with_space(size as usize, space, addr.as_u64());
+        whole_vn.write().unwrap().set_active_heritage();
+        fd.op_set_input(&subpiece_op, whole_vn, 0);
+        // cc:1228: opSetInput(subpieceOp, newConstant(4, truncateAmount), 1)
+        let off_const = fd.new_constant(4, truncate_amount as u64);
+        fd.op_set_input(&subpiece_op, off_const, 1);
+        // cc:1229: vn = newVarnodeOut(vData.size, truncAddr, subpieceOp)
+        let vn = fd.new_varnode_out(v_size as usize, trunc_addr, &subpiece_op);
+        // cc:1230: opInsertBefore(subpieceOp, op)
+        fd.op_insert_before(&subpiece_op, &call_op);
+        // cc:1231: active->registerTrial(truncAddr, vData.size)
+        if let Some(fc) = fd.get_call_specs_mut(fc_idx) {
+            if let Some(active) = &mut fc.active_input {
+                active.register_trial(trunc_addr, v_size);
             }
         }
+        // cc:1232: opInsertInput(op, vn, op->numInput())
+        let num_in = call_op.0.read().unwrap().num_input();
+        fd.op_insert_input(&call_op, vn, num_in);
     }
 
-    // Ghidra: heritage.cc:1249 Heritage::guardOutputOverlap
-    /// Guard output overlap for CALL. Faithful to `guardOutputOverlap`
-    /// (heritage.cc:1249-1283). Creates INDIRECT pieces + PIECE concat.
-    /// Requires FuncCallSpecs infrastructure.
-    // Ghidra: heritage.cc:1249 Heritage::guardOutputOverlap
-    /// Guard output overlap: create INDIRECT pieces + PIECE concat.
-    /// Faithful to `guardOutputOverlap` (heritage.cc:1249-1283).
+    // Ghidra: heritage.cc:1248 Heritage::guardOutputOverlap
+    /// Insert created INDIRECT ops to guard the output of a call when the
+    /// guarded range properly contains the return storage. Faithful 1:1
+    /// port of `guardOutputOverlap` (heritage.cc:1248-1282): the return
+    /// storage becomes an indirectly created value (`newIndirectCreation`
+    /// with possibleout=true), the front piece aliases the return-storage
+    /// INDIRECT (not the call), the back piece aliases the call, and the
+    /// pieces are recombined with PIECE ops inserted after the call.
     pub fn guard_output_overlap(
         &mut self,
         fd: &mut Funcdata,
-        call_op: &Arc<RwLock<PcodeOp>>,
+        call_op: &crate::op::PcodeOpRef,
+        space: AddressSpace,
         addr: Address,
         size: i32,
         ret_addr: Address,
         ret_size: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
+        // cc:1251-1252: front/back split sizes.
         let size_front = (ret_addr.as_u64().saturating_sub(addr.as_u64())) as i32;
         let size_back = size - ret_size - size_front;
-        let op_addr = call_op.read().unwrap().get_addr();
-        let vn_space = AddressSpace::Stack;
-
-        // cc:1254: create INDIRECT for return storage
-        let ind_op = fd.new_indirect_op(
-            &PcodeOpRef(call_op.clone()), ret_addr.as_u64(), ret_size as usize);
-        let vn_collect = ind_op.0.read().unwrap().output.as_ref().cloned();
-        let mut vn_collect = match vn_collect {
-            Some(v) => v,
-            None => fd.new_varnode_out(ret_size as usize, ret_addr, &ind_op),
-        };
-        vn_collect.write().unwrap().set_active_heritage();
-
-        // cc:1257-1268: front piece (size_front > 0)
-        if size_front > 0 {
-            let ind_front = fd.new_indirect_op(
-                &PcodeOpRef(ind_op.0.clone()), addr.as_u64(), size_front as usize);
-            let new_front = ind_front.0.read().unwrap().output.as_ref().cloned()
-                .unwrap_or_else(|| fd.new_unique(size_front as usize));
-            let concat_front = fd.new_op(2, op_addr);
+        // cc:1253: the return storage itself is an indirect creation with
+        // possibleout=true (a possible call output).
+        let ind_op = fd.new_indirect_creation_in_space(
+            call_op, space, ret_addr.as_u64(), ret_size as usize, true,
+        );
+        // cc:1254: vnCollect = indOp->getOut()
+        let mut vn_collect = ind_op.0.read().unwrap().output.as_ref().cloned();
+        // cc:1273/1260 endianness: the locked oracle arch is x86:LE:64, so
+        // retAddr.isBigEndian() == false (Rugra Address carries no space,
+        // so the flag cannot be consulted dynamically; ADDRESS-0001).
+        let big_endian = false;
+        // cc:1256-1267: front piece (aliases the return-storage INDIRECT).
+        if size_front != 0 {
+            let ind_front = fd.new_indirect_creation_in_space(
+                &ind_op, space, addr.as_u64(), size_front as usize, false,
+            );
+            let new_front = ind_front.0.read().unwrap().output.as_ref().cloned();
+            let concat_front = fd.new_op(2, ret_addr);
+            let slot_new = if big_endian { 0 } else { 1 };
             fd.op_set_opcode(&concat_front, OpCode::CPUI_PIECE);
-            let _out = fd.new_varnode_out(
-                (size_front + ret_size) as usize, addr, &concat_front);
-            fd.op_set_input(&concat_front, new_front.clone(), 1);
-            fd.op_set_input(&concat_front, vn_collect.clone(), 0);
-            vn_collect = concat_front.0.read().unwrap().output.as_ref().cloned()
-                .unwrap_or(vn_collect);
+            if let (Some(front_vn), Some(collect_vn)) = (&new_front, &vn_collect) {
+                fd.op_set_input(&concat_front, front_vn.clone(), slot_new);
+                fd.op_set_input(&concat_front, collect_vn.clone(), 1 - slot_new);
+            }
+            vn_collect = Some(fd.new_varnode_out(
+                (size_front + ret_size) as usize,
+                addr,
+                &concat_front,
+            ));
+            // cc:1265-1266: opInsertAfter(concatFront, callOp)
+            fd.op_insert_after(&concat_front, call_op);
         }
-
-        // cc:1269-1280: back piece (size_back > 0)
-        if size_back > 0 {
+        // cc:1268-1279: back piece (aliases the call).
+        if size_back != 0 {
             let addr_back = Address::new(ret_addr.as_u64().wrapping_add(ret_size as u64));
-            let ind_back = fd.new_indirect_op(
-                &PcodeOpRef(call_op.clone()), addr_back.as_u64(), size_back as usize);
-            let new_back = ind_back.0.read().unwrap().output.as_ref().cloned()
-                .unwrap_or_else(|| fd.new_unique(size_back as usize));
-            let concat_back = fd.new_op(2, op_addr);
+            let ind_back = fd.new_indirect_creation_in_space(
+                call_op, space, addr_back.as_u64(), size_back as usize, false,
+            );
+            let new_back = ind_back.0.read().unwrap().output.as_ref().cloned();
+            let concat_back = fd.new_op(2, ret_addr);
+            let slot_new = if big_endian { 1 } else { 0 };
             fd.op_set_opcode(&concat_back, OpCode::CPUI_PIECE);
-            let full_vn = fd.new_varnode_out(size as usize, addr, &concat_back);
-            fd.op_set_input(&concat_back, new_back.clone(), 0);
-            fd.op_set_input(&concat_back, vn_collect.clone(), 1);
-            full_vn.write().unwrap().set_active_heritage();
-            write.push(full_vn);
-        } else {
-            vn_collect.write().unwrap().set_active_heritage();
-            write.push(vn_collect);
+            if let (Some(back_vn), Some(collect_vn)) = (&new_back, &vn_collect) {
+                fd.op_set_input(&concat_back, back_vn.clone(), slot_new);
+                fd.op_set_input(&concat_back, collect_vn.clone(), 1 - slot_new);
+            }
+            vn_collect = Some(fd.new_varnode_out(size as usize, addr, &concat_back));
+            // cc:1278: opInsertAfter(concatBack, insertPoint)
+            // insertPoint is the call when no front piece ran, else the
+            // front concat; the front concat was inserted directly after
+            // the call, so inserting after the call keeps Ghidra's order
+            // only for the no-front case. With a front piece Ghidra
+            // inserts the back concat after concatFront.
+            if size_front != 0 {
+                // The front concat is the op immediately after the call.
+                // Reuse op_insert_after chain: insert after concatFront.
+                // (Resolve it as the op right after the call.)
+                let next = {
+                    let parent = call_op.0.read().unwrap()
+                        .parent.as_ref().and_then(|w| w.upgrade());
+                    match parent {
+                        Some(blk) => {
+                            let ops = blk.read().unwrap().get_ops();
+                            let pos = ops.iter().position(|o| std::sync::Arc::ptr_eq(&o.0, &call_op.0));
+                            pos.and_then(|p| ops.get(p + 1)).cloned()
+                        }
+                        None => None,
+                    }
+                };
+                match next {
+                    Some(follow) => fd.op_insert_after(&concat_back, &follow),
+                    None => fd.op_insert_after(&concat_back, call_op),
+                }
+            } else {
+                fd.op_insert_after(&concat_back, call_op);
+            }
+        }
+        // cc:1280-1281: setActiveHeritage + append to write.
+        if let Some(collect_vn) = vn_collect {
+            collect_vn.write().unwrap().set_active_heritage();
+            write.push(collect_vn);
         }
     }
 
-    // Ghidra: heritage.cc:1293 Heritage::tryOutputOverlapGuard
-    /// Try to guard output overlap. Faithful to `tryOutputOverlapGuard`
-    /// (heritage.cc:1293-1310). Returns true if guarded.
+    // Ghidra: heritage.cc:1292 Heritage::tryOutputOverlapGuard
+    /// Try to guard an address range that is larger than the possible
+    /// output storage for the given call. Faithful 1:1 port of
+    /// `tryOutputOverlapGuard` (heritage.cc:1292-1309): the truncAddr
+    /// translation, the trial lookup with the RANGE size (cc:1304) and the
+    /// registration with the TRUNCATED size (cc:1307) are exact.
     pub fn try_output_overlap_guard(
         &mut self,
         fd: &mut Funcdata,
+        fc_idx: usize,
+        space: AddressSpace,
         addr: Address,
+        trans_offset: u64,
         size: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) -> bool {
-        let num_calls = fd.num_calls();
-        for i in 0..num_calls {
-            // cc:1299: getBiggestContainedOutput
-            let output_char = fd.get_call_specs(i)
-                .map(|fc| fc.characterize_as_output(
-                    addr.as_u64(), size, AddressSpace::Stack))
-                .unwrap_or(0);
-            if output_char != 3 { continue; } // only contained_by
-            // cc:1305: whichTrial >= 0 → already registered
-            let already = fd.get_call_specs(i)
-                .and_then(|fc| fc.get_active_output())
-                .map(|a| a.which_trial(addr, size) >= 0)
-                .unwrap_or(true);
-            if already { continue; }
-            // cc:1307: guardOutputOverlap
-            let call_op_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
-            let call_op_addr = match call_op_addr { Some(a) => a, None => continue };
-            let call_op = fd.obank.alivelist.iter()
-                .find(|r| r.0.read().unwrap().get_addr() == call_op_addr)
-                .map(|r| r.0.clone());
-            let call_op = match call_op { Some(o) => o, None => continue };
-            // Simplified: ret_addr = addr, ret_size = size (full overlap)
-            self.guard_output_overlap(fd, &call_op, addr, size, addr, size, write);
-            // cc:1308: registerTrial
-            if let Some(fc) = fd.get_call_specs_mut(i) {
-                if let Some(active) = &mut fc.active_output {
-                    active.register_trial(addr, size);
-                }
-            }
-            return true;
+        // cc:1298: if (!fc->getBiggestContainedOutput(transAddr, size, vData))
+        let v_data = match fd
+            .get_call_specs(fc_idx)
+            .and_then(|fc| fc.prototype.get_biggest_contained_output(space, trans_offset, size))
+        {
+            Some(v) => v,
+            None => return false,
+        };
+        let (_v_space, v_offset, v_size) = v_data;
+        // cc:1301-1303: truncAddr in caller perspective.
+        let diff = v_offset.wrapping_sub(trans_offset);
+        let trunc_addr = Address::new(addr.as_u64().wrapping_add(diff));
+        // cc:1304: if (active->whichTrial(truncAddr, size) >= 0) return false
+        let already_trial = fd
+            .get_call_specs(fc_idx)
+            .and_then(|fc| fc.active_output.as_ref())
+            .map(|active| active.which_trial(trunc_addr, size) >= 0)
+            .unwrap_or(true);
+        if already_trial {
+            return false;
         }
-        false
-    }
-
-    // Ghidra: heritage.cc:1444 Heritage::guardCalls
-    /// Guard CALL ops for a range. Faithful to `guardCalls`
-    /// (heritage.cc:1444-1528). Requires FuncCallSpecs/ParamActive.
-    pub fn guard_calls_range(
-        &mut self,
-        fd: &mut Funcdata,
-        fl: u32,
-        addr: Address,
-        size: i32,
-        write: &mut Vec<Arc<RwLock<Varnode>>>,
-    ) {
-        // Delegate to guard_calls_range_with_space with Stack as default
-        // (backward compat for guard_range which doesn't have space context).
-        self.guard_calls_range_with_space(fd, fl, addr, size, write, crate::space::AddressSpace::Stack);
-    }
-
-    /// Per-space version of guard_calls_range. The space parameter comes from
-    /// the heritage per-space loop, allowing characterize_as_input_param to
-    /// correctly match Register-space parameter entries (RDI/RSI/RDX etc).
-    // RUGRA-GLUE: ANN-F; explicit-space adapter for guardCalls because Rugra Address lacks space identity; removal is tracked by ADDRESS-0001/HERITAGE-0001.
-    pub fn guard_calls_range_with_space(
-        &mut self,
-        fd: &mut Funcdata,
-        fl: u32,
-        addr: Address,
-        size: i32,
-        write: &mut Vec<Arc<RwLock<Varnode>>>,
-        space: crate::space::AddressSpace,
-    ) {
-        // Ghidra cc:1451: holdind = addrtied
-        let holdind = (fl & crate::varnode::varnode_flags::ADDRTIED) != 0;
-        let num_calls = fd.num_calls();
-        for i in 0..num_calls {
-            // cc:1453: fc = fd->getCallSpecs(i)
-            let call_op_arc = {
-                match fd.get_call_specs(i) {
-                    Some(fc) => {
-                        // cc:1454: if fc->getOp()->isAssignment()
-                        let _op_is_assignment = fc.is_output_active();
-                        let op_addr = fc.op_addr;
-                        // Get the CALL op from obank
-                        fd.obank.alivelist.iter()
-                            .find(|r| r.0.read().unwrap().get_addr() == op_addr)
-                            .map(|r| r.0.clone())
-                    }
-                    None => None,
-                }
-            };
-            let call_op = match call_op_arc { Some(o) => o, None => continue };
-
-            // cc:1458-1466: compute transAddr
-            let off = addr.as_u64();
-            let trans_addr = addr; // Simplified: no spacebase offset translation
-
-            // cc:1468: effecttype = fc->hasEffect(transAddr, size)
-            let effecttype: u32 = fd.get_call_specs(i)
-                .map(|fc| fc.has_effect(trans_addr.as_u64(), size))
-                .unwrap_or(0); // 0 = unknown_effect
-
-            // cc:1470-1486: output trial registration
-            let is_output_active = fd.get_call_specs(i)
-                .map(|fc| fc.is_output_active()).unwrap_or(false);
-            if is_output_active {
-                // cc:1472: outputCharacter = characterizeAsOutput
-                let output_char = fd.get_call_specs(i)
-                    .map(|fc| fc.characterize_as_output(
-                        trans_addr.as_u64(), size, space))
-                    .unwrap_or(0);
-                if output_char != 0 {
-                    // cc:1474: if effect != killedbycall && isAutoKilledByCall
-                    let mut eff = effecttype;
-                    let auto_kill = fd.get_call_specs(i)
-                        .map(|fc| fc.is_auto_killed_by_call())
-                        .unwrap_or(true);
-                    if eff != 2 && auto_kill { eff = 2; } // killedbycall
-                    // cc:1476: contained_by → tryOutputOverlapGuard
-                    // cc:1481: else → registerTrial
-                    if output_char == 3 {
-                        // contained_by: try overlap guard (stub)
-                    } else if output_char == 2 {
-                        // contains_justified: register trial
-                        if let Some(fc) = fd.get_call_specs_mut(i) {
-                            if let Some(active) = &mut fc.active_output {
-                                if active.which_trial(trans_addr, size) < 0 {
-                                    active.register_trial(trans_addr, size);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // cc:1496-1509: input trial registration
-            let is_input_active = fd.get_call_specs(i)
-                .map(|fc| fc.is_input_active()).unwrap_or(false);
-            if is_input_active {
-                // cc:1497: inputCharacter = characterizeAsInputParam
-                let input_char = fd.get_call_specs(i)
-                    .map(|fc| fc.characterize_as_input_param(
-                        trans_addr.as_u64(), size, space))
-                    .unwrap_or(0);
-                if input_char == 2 {
-                    // cc:1498: contains_justified → register input trial
-                    if let Some(fc) = fd.get_call_specs_mut(i) {
-                        if let Some(active) = &mut fc.active_input {
-                            if active.which_trial(trans_addr, size) < 0 {
-                                active.register_trial(trans_addr, size);
-                                // cc:1503-1505: create varnode + opInsertInput
-                                let vn = fd.vbank.create_with_space(
-                                    size as usize, space, addr.as_u64());
-                                vn.write().unwrap().set_active_heritage();
-                                // cc:1504-1505: opInsertInput(op, vn, op->numInput())
-                                let num_in = call_op.read().unwrap().num_input();
-                                fd.op_insert_input(&PcodeOpRef(call_op.clone()), vn, num_in);
-                            }
-                        }
-                    }
-                } else if input_char == 3 {
-                    // cc:1508: contained_by → guardCallOverlappingInput
-                    self.guard_call_overlapping_input(fd, addr, size, space);
-                }
-            }
-
-            // cc:1512-1527: create INDIRECT based on effect type
-            // unknown_effect (0) → newIndirectOp
-            if effecttype == 0 {
-                // cc:1513: indop = newIndirectOp(fc->getOp(), addr, size, 0)
-                let indop = fd.new_indirect_op(
-                    &PcodeOpRef(call_op.clone()),
-                    addr.as_u64(), size as usize,
-                );
-                // cc:1514-1515: setActiveHeritage on in[0] and out
-                {
-                    let ind_r = indop.0.read().unwrap();
-                    if let Some(invn) = ind_r.get_in(0).cloned() {
-                        drop(ind_r);
-                        invn.write().unwrap().set_active_heritage();
-                    }
-                }
-                {
-                    let ind_r = indop.0.read().unwrap();
-                    if let Some(outvn) = ind_r.output.as_ref().cloned() {
-                        drop(ind_r);
-                        outvn.write().unwrap().set_active_heritage();
-                        // cc:1517-1518: if holdind, setAddrForce
-                        if holdind {
-                            outvn.write().unwrap().set_flags(
-                                crate::varnode::varnode_flags::ADDRFORCE);
-                        }
-                        write.push(outvn);
-                    }
-                }
+        // cc:1306: guardOutputOverlap(fc->getOp(), addr, size, truncAddr, vData.size, write)
+        let call_op = match fd.get_call_specs(fc_idx).and_then(|fc| fc.find_call_op(fd)) {
+            Some(op) => op,
+            None => return false,
+        };
+        self.guard_output_overlap(
+            fd, &call_op, space, addr, size, trunc_addr, v_size, write,
+        );
+        // cc:1307: active->registerTrial(truncAddr, vData.size)
+        if let Some(fc) = fd.get_call_specs_mut(fc_idx) {
+            if let Some(active) = &mut fc.active_output {
+                active.register_trial(trunc_addr, v_size);
             }
         }
+        true
     }
 
-    // Ghidra: heritage.cc:1539 Heritage::guardStores
-    /// Guard STORE ops for a specific range. Faithful to `guardStores`
-    /// (heritage.cc:1539-1560). For each STORE whose target space matches
-    /// the heritage range's space (or its container), create an INDIRECT
-    /// op modeling the store effect.
+    // Ghidra: heritage.cc:1538 Heritage::guardStores
+    /// Guard STORE ops in preparation for the renaming algorithm. Faithful
+    /// port of `guardStores` (heritage.cc:1538-1559): iterate the STORE
+    /// opcode list in bank order, skip dead ops, and match the STORE's
+    /// constant target space against the heritage range's space or its
+    /// container (with `usesSpacebasePtr` required for the container case,
+    /// cc:1551-1552). Each match produces one INDIRECT with the
+    /// `indirect_store` flag whose output joins `write` in iteration order.
     pub fn guard_stores_range(
         &mut self,
         fd: &mut Funcdata,
+        space: AddressSpace,
         addr: Address,
         size: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
-        let heritage_space = AddressSpace::Stack; // Simplified: heritage ranges are stack
-        // cc:1547-1559: iterate STORE ops
+        // cc:1544: container = spc->getContain() — for the enum-space model
+        // only the Stack (spacebase) space has a container, which is Ram.
+        // RUGRA-GLUE: enum AddressSpace exposes no getContain; this mirrors
+        // the locked x86:LE:64 oracle's contain graph.
+        let container: Option<AddressSpace> = match space {
+            AddressSpace::Stack => Some(AddressSpace::Ram),
+            _ => None,
+        };
+        // cc:1547-1548: iter=fd->beginOp(CPUI_STORE) .. endOp
         let store_arcs: Vec<_> = fd.obank.storelist.iter()
             .filter(|s| !(s.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD != 0))
             .map(|s| s.0.clone())
             .collect();
         for store_op in store_arcs {
-            // cc:1552: check if STORE targets heritage space
+            // cc:1549: if (op->isDead()) continue;  (filtered above)
+            // cc:1550: storeSpace = op->getIn(0)->getSpaceFromConst()
+            let store_space = {
+                let s = store_op.read().unwrap();
+                s.get_in(0).map(|vn| {
+                    let r = vn.read().unwrap();
+                    if r.is_constant() {
+                        AddressSpace::from_id(r.get_offset() as crate::space::SpaceId)
+                    } else {
+                        r.address_space
+                    }
+                })
+            };
+            let Some(store_space) = store_space else { continue };
+            // cc:1551-1552: match against the range space or its container.
             let uses_sb = store_op.read().unwrap().uses_spacebase_ptr();
-            if !uses_sb { continue; }
-            // cc:1554: newIndirectOp(op, addr, size, indirect_store)
-            let indop = fd.new_indirect_op(
-                &PcodeOpRef(store_op.clone()), addr.as_u64(), size as usize,
-            );
-            // cc:1555-1557: setActiveHeritage on input[0] and output; push to write
-            {
-                let ind_r = indop.0.read().unwrap();
-                if let Some(invn) = ind_r.get_in(0).cloned() {
-                    drop(ind_r);
-                    invn.write().unwrap().set_active_heritage();
-                }
+            let matches = store_space == space
+                || (container == Some(store_space) && uses_sb);
+            if !matches {
+                continue;
             }
-            {
+            // cc:1553: indop = fd->newIndirectOp(op,addr,size,indirect_store)
+            let indop = fd.new_indirect_op(
+                &PcodeOpRef(store_op.clone()),
+                space,
+                addr.as_u64(),
+                size as usize,
+                crate::op::pcodeop_flags::INDIRECT_STORE,
+            );
+            // cc:1554-1556: setActiveHeritage on input[0] and output; push.
+            let (invn, outvn) = {
                 let ind_r = indop.0.read().unwrap();
-                if let Some(outvn) = ind_r.output.as_ref().cloned() {
-                    drop(ind_r);
-                    outvn.write().unwrap().set_active_heritage();
-                    write.push(outvn);
-                }
+                (ind_r.get_in(0).cloned(), ind_r.output.as_ref().cloned())
+            };
+            if let Some(vn) = invn {
+                vn.write().unwrap().set_active_heritage();
+            }
+            if let Some(vn) = outvn {
+                vn.write().unwrap().set_active_heritage();
+                write.push(vn);
             }
         }
     }
 
-    // Ghidra: heritage.cc:1571 Heritage::guardLoads
+    // Ghidra: heritage.cc:1570 Heritage::guardLoads
     /// Guard LOAD ops for a specific range. Faithful to `guardLoads`
-    /// (heritage.cc:1571-1602). For each guarded LOAD whose indexed range
-    /// intersects [addr, addr+size), create a COPY boundary op.
+    /// (heritage.cc:1570-1601) up to the recorded residuals: the fl/addrtied
+    /// gate and invalid-guard pruning are exact; the per-LOAD COPY boundary
+    /// insertion (cc:1590-1599) is still a registered TODO because the
+    /// LoadGuard range refinement (analyzeNewLoadGuards ValueSetSolver) is
+    /// a stub.
     pub fn guard_loads_range(
         &mut self,
-        _fd: &mut Funcdata,
-        _fl: u32,
+        fd: &mut Funcdata,
+        fl: u32,
+        space: AddressSpace,
         addr: Address,
         size: i32,
         _write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
-        // cc:1581-1586: prune invalid load guards
+        // cc:1576: if ((fl & Varnode::addrtied)==0) return
+        if (fl & crate::varnode::varnode_flags::ADDRTIED) == 0 {
+            return;
+        }
+        // cc:1577-1586: prune guards that are no longer valid LOADs.
         self.load_guard.retain(|g| {
             match g.op.upgrade() {
                 Some(op) => {
@@ -2154,19 +2331,18 @@ impl Heritage {
                 None => false,
             }
         });
-        // cc:1589-1600: for each LOAD guard whose range intersects [addr,addr+size)
-        // insert a COPY guard. Rugra's LoadGuard ranges are conservatively full
-        // (analyzeNewLoadGuards stub), so intersection always holds.
+        // cc:1587: if (guardRec.spc != addr.getSpace()) continue
+        // cc:1588-1589: minimumOffset/maximumOffset window check.
         let addr_start = addr.as_u64();
         let addr_end = addr.as_u64().wrapping_add(size as u64);
+        let _ = fd;
         for guard in &self.load_guard {
+            if guard.spc != space { continue; }
             let intersects = guard.maximum_offset >= addr_start
                 && guard.minimum_offset <= addr_end;
             if !intersects { continue; }
-            // cc:1591-1600: create COPY boundary op before LOAD
-            // TODO: requires per-LOAD COPY insertion (cc:1591-1600).
-            // Currently we skip COPY insertion (conservative — guards
-            // are recorded but no COPY boundary is created).
+            // cc:1590-1599: COPY boundary insertion (registered TODO: needs
+            // the ValueSetSolver-refined guard ranges first).
         }
     }
 
@@ -2425,7 +2601,10 @@ impl Heritage {
             let off_const = fd.new_constant(4, 0u64);
             fd.op_set_input(&sub_piece, new_input, 0);
             fd.op_set_input(&sub_piece, off_const, 1);
-            let ind_front = fd.new_indirect_op(&PcodeOpRef(call_op.clone()), addr.as_u64(), size_front as usize);
+            let ind_front = fd.new_indirect_op(
+                &PcodeOpRef(call_op.clone()), AddressSpace::Stack,
+                addr.as_u64(), size_front as usize, 0,
+            );
             // cc:1341: opSetOutput(subPiece, indOpFront->getIn(0))
             sub_piece.0.write().unwrap().output = ind_front.0.read().unwrap().get_in(0).cloned();
             fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
@@ -2451,7 +2630,10 @@ impl Heritage {
             let off_const = fd.new_constant(4, 0u64);
             fd.op_set_input(&sub_piece, new_input, 0);
             fd.op_set_input(&sub_piece, off_const, 1);
-            let ind_back = fd.new_indirect_op(&PcodeOpRef(call_op.clone()), addr_back.as_u64(), size_back as usize);
+            let ind_back = fd.new_indirect_op(
+                &PcodeOpRef(call_op.clone()), AddressSpace::Stack,
+                addr_back.as_u64(), size_back as usize, 0,
+            );
             sub_piece.0.write().unwrap().output = ind_back.0.read().unwrap().get_in(0).cloned();
             fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
             let new_back = ind_back.0.read().unwrap().output.as_ref().cloned()
@@ -2470,59 +2652,59 @@ impl Heritage {
         write.push(vn_collect);
     }
 
-    // Ghidra: heritage.cc:1392 Heritage::tryOutputStackGuard
-    /// Attempt to guard a stack range against a call with locked stack output.
-    /// Faithful to `tryOutputStackGuard` (heritage.cc:1392-1432).
+    // Ghidra: heritage.cc:1391 Heritage::tryOutputStackGuard
+    /// Attempt to guard a stack range against a call with a locked stack
+    /// output. Faithful port of the `contained_by` branch (cc:1395-1405):
+    /// the biggest contained output is translated to the caller's
+    /// perspective and guarded by `guard_output_overlap_stack`. The
+    /// "output contains the range" branch (cc:1407-1430) needs the locked
+    /// output parameter's own storage Address, which Rugra's FuncProto does
+    /// not keep; it conservatively reports `false` so guardCalls falls back
+    /// to the unknown_effect INDIRECT (never under-protects the range).
     pub fn try_output_stack_guard(
         &mut self,
         fd: &mut Funcdata,
+        fc_idx: usize,
+        space: AddressSpace,
         addr: Address,
+        trans_offset: u64,
         size: i32,
         output_character: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) -> bool {
-        // Iterate calls looking for stack-output-locked ones.
-        let num_calls = fd.num_calls();
-        for i in 0..num_calls {
-            let is_stack_locked = fd.get_call_specs(i)
-                .map(|fc| fc.is_stack_output_lock()).unwrap_or(false);
-            if !is_stack_locked { continue; }
-            let output_char = fd.get_call_specs(i)
-                .map(|fc| fc.characterize_as_output(addr.as_u64(), size, AddressSpace::Stack))
-                .unwrap_or(0);
-            if output_char == 0 { continue; }
-            let call_op_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
-            let call_op_addr = match call_op_addr { Some(a) => a, None => continue };
-            let call_op = fd.obank.alivelist.iter()
-                .find(|r| r.0.read().unwrap().get_addr() == call_op_addr)
-                .map(|r| r.0.clone());
-            let call_op = match call_op { Some(o) => o, None => continue };
-
-            if output_character == 3 {
-                // cc:1396-1405: contained_by → guardOutputOverlapStack
-                self.guard_output_overlap_stack(fd, &call_op, addr, size, addr, size, write);
-                return true;
-            }
-            // cc:1407-1431: output contains range → SUBPIECE
-            let ret_size = size; // simplified
-            let outvn = call_op.read().unwrap().output.as_ref().cloned()
-                .unwrap_or_else(|| fd.new_varnode_out(ret_size as usize, addr, &PcodeOpRef(call_op.clone())));
-            if size < ret_size {
-                let sub = fd.new_op(2, call_op_addr);
-                fd.op_set_opcode(&sub, OpCode::CPUI_SUBPIECE);
-                let off = fd.new_constant(4, 0u64);
-                fd.op_set_input(&sub, outvn, 0);
-                fd.op_set_input(&sub, off, 1);
-                let vn_final = fd.new_varnode_out(size as usize, addr, &sub);
-                fd.op_insert_after(&sub, &PcodeOpRef(call_op));
-                vn_final.write().unwrap().set_active_heritage();
-                write.push(vn_final);
-            } else {
-                outvn.write().unwrap().set_active_heritage();
-                write.push(outvn);
-            }
+        if output_character == crate::fspec::containment::CONTAINED_BY {
+            // cc:1396-1400: if (!fc->getBiggestContainedOutput(...)) return false
+            let v_data = match fd.get_call_specs(fc_idx).and_then(|fc| {
+                fc.prototype
+                    .get_biggest_contained_output(space, trans_offset, size)
+            }) {
+                Some(v) => v,
+                None => return false,
+            };
+            let (_v_space, v_offset, v_size) = v_data;
+            // cc:1400-1403: truncAddr in caller perspective.
+            let diff = v_offset.wrapping_sub(trans_offset);
+            let trunc_addr = Address::new(addr.as_u64().wrapping_add(diff));
+            // cc:1403: guardOutputOverlapStack(callOp, addr, size, truncAddr, vData.size, write)
+            let call_op = match fd.get_call_specs(fc_idx).and_then(|fc| fc.find_call_op(fd)) {
+                Some(op) => op,
+                None => return false,
+            };
+            self.guard_output_overlap_stack(
+                fd,
+                &call_op.0,
+                addr,
+                size,
+                trunc_addr,
+                v_size,
+                write,
+            );
             return true;
         }
+        // cc:1406-1430: output exists and contains the heritage range.
+        // Requires the locked output parameter's storage (fc->getOutput()).
+        // Rugra FuncProto keeps only the return data-type; conservative
+        // false keeps the unknown_effect INDIRECT guard in guardCalls.
         false
     }
 
@@ -3157,7 +3339,7 @@ impl Heritage {
                     // cc:2709-2710: all-new location (or intersecting with
                     // something new)
                     self.disjoint
-                        .add(m_addr, m_size, memrange_flags::NEW_ADDRESSES);
+                        .add(space, m_addr, m_size, memrange_flags::NEW_ADDRESSES);
                 } else if prev == 2 {
                     // cc:2711: completely contained in range from previous pass
                     // cc:2712: if (vn->isHeritageKnown()) continue;
@@ -3178,11 +3360,12 @@ impl Heritage {
                         warnvn = Some(vn_arc.clone());
                     }
                     // cc:2719
-                    self.disjoint.add(m_addr, m_size, memrange_flags::OLD_ADDRESSES);
+                    self.disjoint.add(space, m_addr, m_size, memrange_flags::OLD_ADDRESSES);
                 } else {
                     // cc:2721-2722: partially contained in old range, but
                     // may contain new stuff
                     self.disjoint.add(
+                        space,
                         m_addr,
                         m_size,
                         memrange_flags::OLD_ADDRESSES | memrange_flags::NEW_ADDRESSES,
@@ -3272,6 +3455,36 @@ impl Heritage {
         // Ghidra relies on the dominator state produced upstream by
         // Funcdata::structureReset; Rugra's producer is build_dom_tree.
         fd.bblocks.build_dom_tree();
+
+        // Ghidra cc:2608-2629: per disjoint range — collect, refinement,
+        // guardInput, then guard(addr, size, memrange.newAddresses(), ...).
+        // collect/refinement/guardInput remain HERITAGE-ADT-RENAME-0001
+        // residuals; the guard() addIndirects half is wired here with
+        // Ghidra's exact gate: INDIRECT guards are added only for ranges
+        // flagged NEW_ADDRESSES (the "already guarded before" rule,
+        // cc:1184-1188 — multiple INDIRECT guards for the same address
+        // around one CALL/STORE confuse renaming). The guard outputs
+        // append to one write list per range, exactly the vector Ghidra's
+        // calcMultiequals consumes; Rugra's calc_multiequals still derives
+        // its own grouping (ADT-RENAME residual).
+        for memrange in self.disjoint.tasklist.clone() {
+            if !memrange.new_addresses() {
+                continue;
+            }
+            let mut read = Vec::new();
+            let mut write: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+            let mut input = Vec::new();
+            self.guard_range(
+                fd,
+                memrange.space,
+                memrange.addr,
+                memrange.size,
+                true,
+                &mut read,
+                &mut write,
+                &mut input,
+            );
+        }
 
         // Group written varnodes by (space, address).
         let mut write_groups: BTreeMap<(AddressSpace, Address), Vec<i32>> = BTreeMap::new();

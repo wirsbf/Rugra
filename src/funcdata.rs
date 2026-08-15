@@ -2439,50 +2439,48 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_op.cc:683 Funcdata::newIndirectOp
-    /// Build a CPUI_INDIRECT op that models an indirect effect on a Stack-space
-    /// Varnode, caused by a STORE (or CALL) to memory via a spacebase pointer.
-    /// Faithful to `Funcdata::newIndirectOp` (funcdata_op.cc:683-698).
-    ///
-    /// Creates `STACK:addr = INDIRECT(STACK:addr, iop=indeffect)`:
-    ///   - input[0]  = Stack-space Varnode at (addr, sz) — the value before
-    ///   - output    = Stack-space Varnode at (addr, sz) — the value after
-    ///   - input[1]  = iop constant referencing the causing op
-    /// The op is inserted before `indeffect` and flagged INDIRECT_STORE.
+    /// Create a new CPUI_INDIRECT around a PcodeOp with an indirect effect,
+    /// guarding the (space, offset, sz) storage range. Faithful 1:1 port of
+    /// `newIndirectOp` (funcdata_op.cc:683-698):
+    ///   - input[0]  = free Varnode at (space, offset, sz) — the value before
+    ///   - output    = written Varnode at (space, offset, sz)
+    ///   - input[1]  = Iop-space Varnode aliasing the causing op
+    ///     (`newVarnodeIop`, round-trips through `get_op_from_const`)
+    ///   - op flags |= extra_flags (0 for CALL guards, `indirect_store`
+    ///     for STORE guards — the caller decides, exactly as in Ghidra)
+    ///   - inserted before the causing op via `opInsertBefore`
+    /// The constructor performs no setActiveHeritage — Ghidra's callers
+    /// (guardCalls/guardStores, heritage.cc:1512-1516/1553-1556) do that
+    /// after construction, so Rugra callers must too.
     pub fn new_indirect_op(
         &mut self,
         indeffect: &crate::op::PcodeOpRef,
-        stack_offset: u64,
+        space: crate::space::AddressSpace,
+        offset: u64,
         sz: usize,
+        extra_flags: u32,
     ) -> crate::op::PcodeOpRef {
-        use crate::space::AddressSpace;
-        // input[0]: Stack-space varnode at stack_offset (free, no INSERT)
-        let newin = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
-        // The op
+        // cc:689: newin = newVarnode(sz, addr);
+        let newin = self.vbank.create_with_space(sz, space, offset);
+        // cc:690: newop = newOp(2, indeffect->getAddr());
         let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
         let newop = self.new_op(2, indeffect_addr);
-        newop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_STORE;
-        // output: Stack-space varnode at stack_offset, defined by newop.
-        // set_def sets WRITTEN + INSERT (faithful to createDef→xref).
-        let newout = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
+        // cc:691: newop->flags |= extraFlags;
+        newop.0.write().unwrap().flags |= extra_flags;
+        // cc:692: newVarnodeOut(sz, addr, newop);  (createDef -> WRITTEN+INSERT xref)
+        let newout = self.vbank.create_with_space(sz, space, offset);
         let newout = self
             .vbank
             .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
-        // Set opcode to INDIRECT
+        // cc:693: opSetOpcode(newop, CPUI_INDIRECT);
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
-        // input[0] = the Stack varnode
-        self.op_set_input(&newop, newin.clone(), 0);
-        // input[1] = iop constant referencing the causing op
-        let iop_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
-        let iop_vn = self.new_constant(8, iop_addr.as_u64());
-        iop_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        // cc:694: opSetInput(newop, newin, 0);
+        self.op_set_input(&newop, newin, 0);
+        // cc:695: opSetInput(newop, newVarnodeIop(indeffect), 1);
+        let iop_vn = self.new_varnode_iop(indeffect);
         self.op_set_input(&newop, iop_vn, 1);
-        // Faithful to guardStores (heritage.cc:1554-1556):
-        // setActiveHeritage on INDIRECT input + output so rename processes
-        // them (builds SSA def-use chain, preventing dead-code removal).
-        newin.write().unwrap().set_active_heritage();
-        newout.write().unwrap().set_active_heritage();
-        // Insert before the causing op
+        // cc:696: opInsertBefore(newop, indeffect);
         self.op_insert_before(&newop, indeffect);
         newop
     }
@@ -2602,9 +2600,11 @@ impl Funcdata {
 
     // Ghidra: funcdata_op.cc:710 Funcdata::newIndirectCreation
     /// Create an INDIRECT op with indirect_creation semantics. Faithful to
-    /// `Funcdata::newIndirectCreation` (funcdata_op.cc:710-728). Unlike
-    /// `new_indirect_op`, the input is a constant zero, and both the op and
-    /// output carry the indirect_creation flag.
+    /// `Funcdata::newIndirectCreation` (funcdata_op.cc:710-728): input[0] is
+    /// a constant zero, the op and output carry `indirect_creation`, and
+    /// input[1] aliases the causing op through the Iop space. This legacy
+    /// entry keeps the Unique output space used by its historical callers;
+    /// space-faithful call guards use `new_indirect_creation_in_space`.
     pub fn new_indirect_creation(
         &mut self,
         indeffect: &crate::op::PcodeOpRef,
@@ -2612,35 +2612,60 @@ impl Funcdata {
         sz: usize,
         possibleout: bool,
     ) -> crate::op::PcodeOpRef {
+        self.new_indirect_creation_in_space(
+            indeffect,
+            crate::space::AddressSpace::Unique,
+            addr,
+            sz,
+            possibleout,
+        )
+    }
+
+    /// Space-faithful form of `Funcdata::newIndirectCreation`
+    /// (funcdata_op.cc:710-728): the output Varnode is allocated at the
+    /// caller's (space, offset) — e.g. the Register-space RAX range for a
+    /// killed-by-call guard — instead of Unique. All flag and IOP semantics
+    /// are identical to the oracle constructor; no setActiveHeritage is done
+    /// here (guardCalls cc:1523 does it after construction).
+    // RUGRA-GLUE: split entry because Rugra Address lacks space identity; the
+    // legacy Unique-space entry keeps out-of-write-set callers compiling.
+    pub fn new_indirect_creation_in_space(
+        &mut self,
+        indeffect: &crate::op::PcodeOpRef,
+        space: crate::space::AddressSpace,
+        addr: u64,
+        sz: usize,
+        possibleout: bool,
+    ) -> crate::op::PcodeOpRef {
         use crate::op::pcodeop_flags;
         use crate::varnode::varnode_flags;
-        // input[0]: constant zero.
+        // cc:716: newin = newConstant(sz, 0);
         let newin = self.new_constant(sz, 0);
-        // The op.
+        // cc:717: newop = newOp(2, indeffect->getAddr());
         let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
         let newop = self.new_op(2, indeffect_addr);
+        // cc:718: newop->flags |= PcodeOp::indirect_creation;
         newop.0.write().unwrap().flags |= pcodeop_flags::INDIRECT_CREATION;
-        // output: varnode at addr, defined by newop.
-        let newout = self.vbank.create_with_space(sz, crate::space::AddressSpace::Unique, addr);
+        // cc:719: newout = newVarnodeOut(sz, addr, newop);
+        let newout = self.vbank.create_with_space(sz, space, addr);
         let newout = self
             .vbank
             .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
-        // indirect_creation flags on input (if !possibleout) and output.
+        // cc:720-722: if (!possibleout) newin |= indirect_creation;
+        //             newout |= indirect_creation;
         if !possibleout {
             newin.write().unwrap().set_flags(varnode_flags::INDIRECT_CREATION);
         }
         newout.write().unwrap().set_flags(varnode_flags::INDIRECT_CREATION);
-        // Set opcode to INDIRECT.
+        // cc:723: opSetOpcode(newop, CPUI_INDIRECT);
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
-        // input[0] = constant zero.
+        // cc:724: opSetInput(newop, newin, 0);
         self.op_set_input(&newop, newin, 0);
-        // input[1] = iop varnode referencing the causing op.
+        // cc:725: opSetInput(newop, newVarnodeIop(indeffect), 1);
         let iop_vn = self.new_varnode_iop(indeffect);
         self.op_set_input(&newop, iop_vn, 1);
-        // active_heritage so rename processes the new varnodes.
-        newout.write().unwrap().set_active_heritage();
-        // Insert before the causing op.
+        // cc:726: opInsertBefore(newop, indeffect);
         self.op_insert_before(&newop, indeffect);
         newop
     }

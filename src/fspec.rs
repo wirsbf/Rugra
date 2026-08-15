@@ -372,6 +372,100 @@ impl FuncProto {
             .has_effect(addr_space, addr_offset, size)
     }
 
+    // Ghidra: fspec.cc:4289 FuncProto::characterizeAsInputParam
+    /// Decide whether a given storage location could be, or could hold, an
+    /// input parameter. Faithful port of `characterizeAsInputParam`
+    /// (fspec.cc:4289-4324): the varargs check and the `voidinputlock`
+    /// early return are exact; the locked-parameter containment scan is
+    /// degraded to the model branch because Rugra's `ProtoParameter.address`
+    /// carries no address-space identity (Ghidra's `Address` does), so a
+    /// cross-space offset comparison would produce false containments.
+    /// Removal of this degradation is gated on ADDRESS-0001.
+    pub fn characterize_as_input_param(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> i32 {
+        // Ghidra: if (!isDotdotdot()) { if ((flags&voidinputlock)!=0) return 0; ... }
+        if !self.is_dotdotdot && self.void_input_locked {
+            return containment::NO_CONTAINMENT;
+        }
+        let Some(model) = self.model.as_ref() else {
+            // A modelless FuncProto is an invalid state in Ghidra (the
+            // model dereference would fault). Rugra production hits it
+            // until FUNCPROTO-MODEL-BIND-0001; no_containment is the
+            // conservative projection (no trial, no input insertion).
+            return containment::NO_CONTAINMENT;
+        };
+        // Ghidra: return model->characterizeAsInputParam(addr, size);
+        model.input.characterize_as_param(addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.cc:4336 FuncProto::characterizeAsOutput
+    /// Decide whether a given storage location could be, or could hold, the
+    /// return value. Faithful port of `characterizeAsOutput`
+    /// (fspec.cc:4336-4358): the output-locked branch needs the locked
+    /// output parameter's own Address (space + offset); Rugra's FuncProto
+    /// keeps only the return data-type, so it degrades to the model branch
+    /// (gated on ADDRESS-0001 for removal).
+    pub fn characterize_as_output(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> i32 {
+        let Some(model) = self.model.as_ref() else {
+            // Modelless FuncProto is invalid in Ghidra; conservative
+            // no_containment projection (see characterize_as_input_param).
+            return containment::NO_CONTAINMENT;
+        };
+        // Ghidra: return model->characterizeAsOutput(addr, size);
+        model.output.characterize_as_param(addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.cc:4459 FuncProto::getBiggestContainedInputParam
+    /// Find the biggest input-parameter storage entirely contained in the
+    /// given range. The varargs and `voidinputlock` early-returns are exact;
+    /// the locked-parameter scan degrades to the model branch because
+    /// Rugra's `ProtoParameter.address` carries no space identity (see
+    /// `characterize_as_input_param`); removal is gated on ADDRESS-0001.
+    pub fn get_biggest_contained_input_param(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> Option<(AddressSpace, u64, i32)> {
+        if !self.is_dotdotdot && self.void_input_locked {
+            // Ghidra: if ((flags&voidinputlock)!=0) return false;
+            return None;
+        }
+        let Some(model) = self.model.as_ref() else {
+            return None;
+        };
+        model
+            .input
+            .get_biggest_contained_param(addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.cc:4492 FuncProto::getBiggestContainedOutput
+    /// Find the biggest output storage entirely contained in the given
+    /// range. The output-locked branch degrades to the model branch for the
+    /// same space-identity reason as `characterize_as_output`.
+    pub fn get_biggest_contained_output(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> Option<(AddressSpace, u64, i32)> {
+        let Some(model) = self.model.as_ref() else {
+            return None;
+        };
+        model
+            .output
+            .get_biggest_contained_param(addr_space, addr_offset, size)
+    }
+
     // Ghidra: fspec.cc:3818 FuncProto::setModel
     /// Install or clear the shared prototype model and update the model-derived
     /// prototype state. Model flags are sticky, and an unknown extra-pop value
@@ -1646,28 +1740,46 @@ impl FuncCallSpecs {
         self.stackoffset != OFFSET_UNKNOWN
     }
 
-    // Ghidra: fspec.hh:1553 FuncCallSpecs::characterizeAsOutput
-    /// Characterize whether the given range overlaps output storage.
-    /// Faithful to `characterizeAsOutput` (fspec.hh:1554). Delegates to
-    /// ProtoModel::characterizeAsParam on the output parameter list.
-    /// Returns: 0=no_containment, 1=contains_unjustified,
-    /// 2=contains_justified, 3=contained_by.
-    pub fn characterize_as_output(&self, addr: u64, size: i32, space: crate::space::AddressSpace) -> i32 {
-        if let Some(ref model) = self.proto_model {
-            model.characterize_as_input_param(addr, size, space)
-        } else {
-            0 // no_containment
+    // Ghidra: fspec.hh:1546 FuncCallSpecs::hasEffect (inherits FuncProto::hasEffect)
+    /// Determine the effect of this call on the given address range.
+    /// Faithful to `FuncCallSpecs::hasEffect` (fspec.hh:1546), which —
+    /// because `FuncCallSpecs : public FuncProto` (fspec.hh:1645) — resolves
+    /// to `FuncProto::hasEffect` (fspec.cc:4234-4241): a non-empty local
+    /// effect list overrides the model, an empty one delegates to the
+    /// shared model's `lookupEffect`.
+    pub fn has_effect(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> EffectType {
+        if !self.prototype.effects.is_empty() {
+            // cc:4238-4240: local override list is authoritative.
+            return ProtoModelFull::lookup_effect(
+                &self.prototype.effects,
+                addr_space,
+                addr_offset,
+                size,
+            );
         }
+        if self.prototype.has_model() {
+            // cc:4237: return model->hasEffect(addr, size);
+            return self.prototype.has_effect(addr_space, addr_offset, size);
+        }
+        // Ghidra never observes a modelless FuncProto (the dereference would
+        // fault); Rugra production does until FUNCPROTO-MODEL-BIND-0001.
+        // unknown_effect is the conservative effect: guardCalls then builds
+        // an INDIRECT, which never under-protects the range.
+        EffectType::UnknownEffect
     }
 
-    // Ghidra: fspec.hh:1553 FuncCallSpecs::characterizeAsInputParam
-    /// Characterize whether the given range overlaps input parameter storage.
-    pub fn characterize_as_input_param(&self, addr: u64, size: i32, space: crate::space::AddressSpace) -> i32 {
-        if let Some(ref model) = self.proto_model {
-            model.characterize_as_input_param(addr, size, space)
-        } else {
-            0
-        }
+    // Ghidra: fspec.hh:1630 FuncCallSpecs::isAutoKilledByCall (inherits FuncProto)
+    /// Should unaffected storage be treated as killed-by-call? Faithful to
+    /// `FuncProto::isAutoKilledByCall` (fspec.cc:4609-4615): the model's
+    /// auto_killedbycall flag, sticky-copied by `set_model`, or a locked
+    /// output.
+    pub fn is_auto_killed_by_call(&self) -> bool {
+        self.prototype.is_auto_killed_by_call()
     }
 
     // Ghidra: fspec.hh:883 FuncProto::possibleInputParam
@@ -1680,24 +1792,34 @@ impl FuncCallSpecs {
         }
     }
 
-    // Ghidra: fspec.cc:4234 FuncProto::hasEffect
-    /// Determine the effect of this function on the given address range.
-    /// Faithful to `FuncProto::hasEffect` (fspec.cc:4234-4241).
-    /// Returns effect type:
-    ///   0 = unknown_effect, 1 = unaffected, 2 = killedbycall,
-    ///   3 = return_address, 4 = reload
-    pub fn has_effect(&self, _addr: u64, _size: i32) -> u32 {
-        // cc:4237-4240: if effectlist empty, delegate to model->hasEffect
-        // Rugra's ProtoModel doesn't have hasEffect yet.
-        // Conservative: return unknown_effect (0) for all ranges.
-        0
+    // Ghidra: fspec.hh:1554 FuncCallSpecs::characterizeAsInputParam (inherits FuncProto)
+    /// Characterize whether the given range could be/hold an input
+    /// parameter. Faithful delegation to `FuncProto::characterizeAsInputParam`
+    /// (fspec.cc:4289-4324) through the C++ base class.
+    pub fn characterize_as_input_param(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> i32 {
+        self.prototype
+            .characterize_as_input_param(addr_space, addr_offset, size)
     }
 
-    // Ghidra: fspec.hh:1630 FuncCallSpecs::isAutoKilledByCall
-    /// Should unaffected storage be treated as killed-by-call?
-    pub fn is_auto_killed_by_call(&self) -> bool {
-        // Ghidra: model->isAutoKilledByCall() — true for default x86 ABI.
-        true
+    // Ghidra: fspec.hh:1555 FuncCallSpecs::characterizeAsOutput (inherits FuncProto)
+    /// Characterize whether the given range could be/hold the return-value
+    /// storage. Faithful delegation to `FuncProto::characterizeAsOutput`
+    /// (fspec.cc:4336-4358) through the C++ base class — Rugra previously
+    /// collapsed this onto the input characterization, which the
+    /// HERITAGE-DRIVER audit flagged as a guardCalls divergence.
+    pub fn characterize_as_output(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> i32 {
+        self.prototype
+            .characterize_as_output(addr_space, addr_offset, size)
     }
 
     // Ghidra: fspec.hh:1543 FuncCallSpecs::isStackOutputLock
@@ -2627,19 +2749,16 @@ impl FuncCallSpecs {
         // Ghidra: AddrSpace *spc = addr.getSpace();
         //         if (spc->getType() != IPTR_SPACEBASE) return hasEffect(addr, size);
         if addr_space != crate::space::AddressSpace::Stack {
-            // has_effect returns the raw uint4 effect value; cast to the enum.
-            let raw = self.has_effect(addr_offset, size);
-            return effect_from_u32(raw);
+            return self.has_effect(addr_space, addr_offset, size);
         }
         // Ghidra: if (stackoffset == offset_unknown) return unknown_effect;
         if self.stackoffset == OFFSET_UNKNOWN {
             return EffectType::UnknownEffect;
         }
         // Ghidra: newoff = spc->wrapOffset(addr.getOffset() - stackoffset);
-        let newoff = (addr_offset as i128 - self.stackoffset as i128) as u64;
+        let newoff = ((addr_offset as i128 - self.stackoffset as i128).rem_euclid(1i128 << 64)) as u64;
         // Ghidra: return hasEffect(Address(spc, newoff), size);
-        let raw = self.has_effect(newoff, size);
-        effect_from_u32(raw)
+        self.has_effect(addr_space, newoff, size)
     }
 
     // Ghidra: fspec.cc:5950 FuncCallSpecs::countMatchingCalls (static)
@@ -3421,6 +3540,28 @@ impl ParamEntry {
         }
     }
 
+    // RUGRA-GLUE: fixture construction for a single non-join exclusion
+    // register/stack entry, mirroring the field state a decoded
+    // `<pentry><addr space=... offset=... size=.../></pentry>` produces
+    // (alignment == size collapses to 0 = exclusion in fspec.cc decode).
+    // Locked differential fixtures use this instead of carrying a private
+    // XML parser; it performs no validation, so production paths keep
+    // using `decode`.
+    pub fn from_storage(space: AddressSpace, base: u64, size: i32, minsize: i32, grp: i32) -> Self {
+        Self {
+            flags: 0,
+            type_storage: TypeClass::General,
+            group_set: vec![grp],
+            space,
+            address_base: base,
+            size,
+            min_size: minsize,
+            alignment: 0,
+            num_slots: 1,
+            join: None,
+        }
+    }
+
     // Ghidra: fspec.cc:501 ParamEntry::decode
     /// Decode one `<pentry>` and its address child.
     ///
@@ -4024,8 +4165,10 @@ impl ParamEntry {
 
 // RUGRA-GLUE: justified_contain_range (free helper — mirrors Ghidra's
 // inline `Address::justifiedContain` used by `ParamEntry::justifiedContain`
-// and its join-piece walk).
-fn justified_contain_range(base: u64, sz2: i32, addr: u64, sz: i32, force_left: bool) -> i32 {
+// and its join-piece walk). Public because heritage's call-guard helpers
+// (guardCallOverlappingInput, guardOutputOverlapStack) call the same
+// `Address::justifiedContain` math on caller-perspective addresses.
+pub fn justified_contain_range(base: u64, sz2: i32, addr: u64, sz: i32, force_left: bool) -> i32 {
     let end_addr = addr.wrapping_add(sz as u64).wrapping_sub(1);
     let this_end = base.wrapping_add(sz2 as u64).wrapping_sub(1);
     if addr < base && end_addr < this_end { return -1; }
@@ -4336,11 +4479,27 @@ impl ParamListStandard {
     /// Characterize whether the given range overlaps parameter storage.
     /// Returns one of the `containment::*` codes. Faithful to
     /// `characterizeAsParam` (fspec.cc:682-719).
-    pub fn characterize_as_param(&self, loc: Address, size: i32) -> i32 {
+    // Ghidra: fspec.cc:682 ParamListStandard::characterizeAsParam
+    /// Characterize the containment between a storage range and this
+    /// resource list. Faithful port of `characterizeAsParam`
+    /// (fspec.cc:682-713): Ghidra walks the space's resolver-map entries in
+    /// offset order, first the entries containing the query offset, then the
+    /// exclusion entries starting inside the range; Rugra's single ordered
+    /// entry scan with the same per-entry `justifiedContain`/`containedBy`
+    /// predicates observes the same classification set. The space filter
+    /// mirrors Ghidra's per-space resolver map (entries of other spaces are
+    /// never visited).
+    pub fn characterize_as_param(
+        &self,
+        space: AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> i32 {
+        let loc = Address::new(offset);
         let mut res_contains = false;
         let mut res_contained_by = false;
         for e in &self.entry {
-            if e.get_space() != AddressSpace::Ram { continue; }
+            if e.get_space() != space { continue; }
             let off = e.justified_contain(loc, size);
             if off == 0 { return containment::CONTAINS_JUSTIFIED; }
             else if off > 0 { res_contains = true; }
@@ -4349,6 +4508,50 @@ impl ParamListStandard {
         if res_contains { return containment::CONTAINS_UNJUSTIFIED; }
         if res_contained_by { return containment::CONTAINED_BY; }
         containment::NO_CONTAINMENT
+    }
+
+    // Ghidra: fspec.cc:1375 ParamListStandard::getBiggestContainedParam
+    /// Find the largest parameter entry entirely contained in the range
+    /// `[offset, offset+size-1]` of the given space. Faithful port: the
+    /// wrapping check (`endLoc < loc`), the containment predicate and the
+    /// strictly-greater size comparison are exact; Rugra scans the ordered
+    /// entry list instead of Ghidra's per-space resolver map, which visits
+    /// the same entry set for these queries.
+    pub fn get_biggest_contained_param(
+        &self,
+        space: AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> Option<(AddressSpace, u64, i32)> {
+        // Ghidra: Address endLoc = loc + (size-1);
+        //         if (endLoc.getOffset() < loc.getOffset()) return false;
+        let end_loc = match offset.checked_add(size.max(0) as u64) {
+            Some(end) if end == 0 || end > offset => end - 1,
+            _ => return None, // wrapping range: assume no parameter
+        };
+        let loc = Address::new(offset);
+        let mut max_entry: Option<&ParamEntry> = None;
+        for e in &self.entry {
+            if e.get_space() != space { continue; }
+            // Resolver-map window: entry start must intersect [loc, endLoc].
+            let entry_start = e.get_base();
+            let entry_end = entry_start + e.get_size().max(0) as u64 - 1;
+            if entry_start > end_loc || entry_end < offset { continue; }
+            // Ghidra: if (testEntry->containedBy(loc, size)) keep the biggest.
+            if e.contained_by(loc, size) {
+                match max_entry {
+                    None => max_entry = Some(e),
+                    Some(cur) if e.get_size() > cur.get_size() => max_entry = Some(e),
+                    _ => {}
+                }
+            }
+        }
+        // Ghidra: if (maxEntry && !maxEntry->isExclusion()) return false;
+        //         res = (space, base, size); return true;
+        match max_entry {
+            Some(e) if e.is_exclusion() => Some((e.get_space(), e.get_base(), e.get_size())),
+            _ => None,
+        }
     }
 
     // Ghidra: fspec.cc:735 ParamListStandard::assignAddressFallback
@@ -4792,33 +4995,6 @@ impl ParamListStandard {
             *slot_size = ((size - 1) / entry.get_align()) + 1;
         }
         true
-    }
-
-    // Ghidra: fspec.cc:1375 ParamListStandard::getBiggestContainedParam
-    /// Pass-back the biggest parameter contained within the given range.
-    /// Faithful to `getBiggestContainedParam` (fspec.cc:1375-1409).
-    pub fn get_biggest_contained_param(&self, loc: Address, size: i32, res: &mut VarnodeData) -> bool {
-        let end_loc = Address::new(loc.as_u64().wrapping_add(size as u64 - 1));
-        if end_loc.as_u64() < loc.as_u64() { return false; }
-        let mut max_entry: Option<usize> = None;
-        for (i, e) in self.entry.iter().enumerate() {
-            if e.get_space() != AddressSpace::Ram { continue; }
-            if e.contained_by(loc, size) {
-                match max_entry {
-                    None => max_entry = Some(i),
-                    Some(m) => { if e.get_size() > self.entry[m].get_size() { max_entry = Some(i); } }
-                }
-            }
-        }
-        if let Some(m) = max_entry {
-            let max_e = &self.entry[m];
-            if !max_e.is_exclusion() { return false; }
-            res.space = max_e.get_space();
-            res.offset = max_e.get_base();
-            res.size = max_e.get_size();
-            return true;
-        }
-        false
     }
 
     // Ghidra: fspec.cc:1411 ParamListStandard::unjustifiedContainer

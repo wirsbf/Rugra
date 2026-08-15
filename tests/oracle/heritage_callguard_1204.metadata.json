@@ -1,0 +1,84 @@
+{
+  "schema": 2,
+  "fixture_id": "HERITAGE-CALLGUARD-0001",
+  "description": "Heritage::guardCalls / Funcdata::newIndirectOp / newIndirectCreation per-object call-guard projection through the canonical opHeritage boundary, with the GetStr ABI shape (2 calls x 10 ranges = 20 INDIRECTs), pass gating, trials, and spacebase translation",
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+  "compiler_spec": "synthetic prototype fixtures: callguard (inputs RSI 0x30/RDI 0x38, output RAX 0x0, killedbycall RAX+stack 0x8:8, return_address 0x288:8) and callguard_unaffected (size-0 register unaffected record)",
+  "analysis_options": {
+    "boundary": "Funcdata::opHeritage -> Heritage::heritage single canonical pass per call",
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases"
+  },
+  "overall_status": "PARTIAL_MATCH:covered-callguard-projection-MATCH",
+  "covered_projection_status": "MATCH",
+  "expected_stdout_sha256": "652cc168e343b6453a05b4dc062767621a716f84215e9f5cffd0f27e6f6f6412",
+  "expected_exit_code": 0,
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "comparand": {
+    "rugra_base_commit": "86c3108daa35151c874e89dcb937242d3331bf04",
+    "rugra_base_tree": "5e1365c1619f5515043bd6e70249918d880c84c7",
+    "cpp_fixture_sha256": "6afbd5f94f463a44aaea2fa232276916bf600d10db34aea62b320599526b43c8",
+    "rust_fixture_sha256": "51fa4091ed87807a14ae7e356adf6a2279f54b2b2c8df7632d1dffd0088e046d",
+    "heritage_rs_sha256": "cb241a31248da51996d099d38600add0004b0a2338f75c79b9df4e1aa33c3f9c",
+    "funcdata_rs_sha256": "56e48200ef523c25030a067276648e8ea5833f07956368a07f6df08f565c0466",
+    "fspec_rs_sha256": "75dcd55eb2081f55767ba5921411360e77500d620cb8f71f9565dfeb25fd844c",
+    "heritage_doc_sha256": "1ed0f6905111f00875dd1b941b1bd0036f826dcc8eec4eb756010b0e406f7f2f",
+    "funcdata_doc_sha256": "bca08a189c51716f1324ac9bc4a52956b91ca524ea4096b4dca15eb8678f8ad0",
+    "fspec_doc_sha256": "271a4a020a18520fe83a0062110c888ca8585d1ea6f7087ac45594773a1d56a1",
+    "runner_sha256": "0db60ec81c56b012710a0ca5924366e2004241e6e23c406ccff1d46c8e93a154",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_sha256": "f529378b3a60389aed11b4b83899640a597bbf102d10f09a9640499467cd85fd",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-callguard-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "b7b73841068d3b97a704ce39e2524f269e57f6947861c6f3677da338c459ada9"
+  },
+  "input_manifest": {
+    "cases": [
+      "model_state",
+      "single_call_ten_ranges",
+      "two_calls_ten_ranges",
+      "unaffected_all",
+      "output_input_trials",
+      "stack_translation",
+      "driver_pass_gating"
+    ],
+    "sha256": "95b68ac591c51752521b52959c9c32d6c0f1bf3e19f5bef0fd4c15e1d2001a1a"
+  },
+  "coverage": {
+    "model_effect_state": "MATCH",
+    "single_call_ten_ranges_full_projection": "MATCH",
+    "two_calls_ten_ranges_getstr_form": "MATCH",
+    "unaffected_zero_guards": "MATCH",
+    "output_input_trials": "MATCH",
+    "stack_translation_spacebase": "MATCH",
+    "driver_pass_gating_second_pass_inert": "MATCH",
+    "locationmap_contained_classification": "MATCH",
+    "reprocess_free_stores_trigger": "UNTESTED: reprocessFreeStores is default-private and only reachable through a successful discoverIndexedStackPointers (stack-pointer data-flow of the load-guard fixture family); the faithful port plus backward-walk semantics landed in src/heritage.rs but has no oracle observation",
+    "scope_fl_properties": "UNTESTED: guard() derives fl from ScopeLocal::queryProperties (addrtied -> ADDRFORCE on stack-local guard outputs); Rugra's canonical path has no ScopeLocal (varmap family), so the af flag is omitted from both comparands' projections",
+    "production_action_switch": "UNTESTED: ActionHeritage still runs the direct double-pass; switching the production path is HERITAGE-DRIVER-SWITCH-0001 and depends on HERITAGE-ADT-RENAME-0001"
+  }
+}

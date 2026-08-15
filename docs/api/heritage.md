@@ -791,32 +791,46 @@ provenance，不改变 guard 行为或对齐状态。
 - `dead_removal_allowed`(cc:2843): `pass > deadcodedelay` (was const true)。
 - `seen_dead_code`(cc:2805): 设 deadremoved=1 (was no-op)。
 - `set/get_dead_code_delay`(cc:2829/2817): 读写 infolist (was no-op/const 2)。
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
+
+### 2026-08-15: HERITAGE-CALLGUARD-0001 — 规范 guardCalls + 驱动器接线
+
+- `Heritage::guard_calls(fd, fl, space, addr, size, write)`（heritage.cc:1443-1527）
+  1:1 移植：callspec 顺序循环、assignment 跳过（cc:1453-1456）、Stack spacebase
+  偏移翻译（cc:1457-1466，`OFFSET_UNKNOWN` → `tryregister=false`）、
+  `has_effect` 查询、output-active/stack-output-lock 双分支（cc:1469-1494，
+  autoKilledByCall 升级 + `try_output_overlap_guard`/`try_output_stack_guard`）、
+  input-active 双分支（cc:1495-1509，contains_justified 注册 trial 并
+  `op_insert_input`、contained_by → `guard_call_overlapping_input`）、三态
+  INDIRECT 创建（unknown/return_address → `new_indirect_op` + holdind/return
+  标志；killedbycall → `new_indirect_creation_in_space`）。旧的
+  `guard_calls_range`/`guard_calls_range_with_space` stub（按指令地址找 call、
+  丢输出效果、只处理 unknown_effect）已删除。
+- `guard_range` 接入 per-space `AddressSpace` 参数（Ghidra 的 `Address` 自带
+  space 身份；`ADDRESS-0001` 移除该参数后删除）。`place_multiequals` 按
+  `MemRange::new_addresses()` 门控执行 guard fan-out（cc:2608-2629 的
+  addIndirects 半边；collect/refinement/guardInput 仍归
+  HERITAGE-ADT-RENAME-0001）。`guard_returns` 死 stub 删除（需
+  FuncProto::activeoutput，归 PARAM-BIND 家族）。
+- `MemRange`/`TaskList::add` 增加 `space` 字段/参数（Ghidra MemRange 的
+  space-carrying Address 的显式镜像）。
+- `guard_call_overlapping_input`/`try_output_overlap_guard`/`guard_output_overlap`/
+  `try_output_stack_guard` 改为 per-callspec 签名（fc + caller/callee 双地址），
+  `guard_output_overlap` 用 `new_indirect_creation_in_space`（cc:1253 真正用
+  creation 而非 indirect op）。
+- `guard_stores_range`/`guard_loads_range` 忠实化：STORE 空间匹配（range space
+  或其 container + usesSpacebasePtr，cc:1551-1552）、`indirect_store` flag 由
+  调用方传入、fl/addrtied 早退（cc:1576）。
+- `reprocess_free_stores`（cc:1111-1141）：改为 `previous_op_in_block` 反向
+  遍历 + `get_op_from_const` IOP 别名校验 + `op_clear_spacebase_ptr` +
+  `op_destroy`（原实现按 bank 顺序收集 prev 列表，非连续组语义）。
+- **Bug 修复（本 fixture 发现）**：`LocationMap::add`（heritage.cc:34-71）在
+  查询地址与既有 key 精确相等且前一 key 不重叠时，把该 entry 走了 merge
+  循环（返回 1=partial）而非 contained 检查（应返回 2）。这使第二趟
+  heritage 把已覆盖 range 重新标 NEW，guard 重复创建。修复后
+  driver_pass_gating 第二趟 0 新 INDIRECT 与 oracle 一致。
+- 锁定 oracle fixture `tests/oracle/heritage_callguard_1204`（7 case 双侧逐
+  字节 MATCH，GetStr 形态 2 calls × 10 ranges = 20 INDIRECT 全对象投影）。
+- 残差：ScopeLocal queryProperties 的 fl（addrtied → ADDRFORCE）未建模
+  （fixture 投影中 `af` 双侧省略）；reprocessFreeStores 的
+  discoverIndexedStackPointers 触发链与生产 Action 切换归后续任务。
+

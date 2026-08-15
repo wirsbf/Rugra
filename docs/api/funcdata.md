@@ -1155,3 +1155,11 @@ Varnode 生命周期其余差异（Fspec 空间、HighVariable 分配等）仍�
   merge Action（mergerequired/mergecopy/mergeadjacent）在 null-cover 空前提
   下运行。
 <!-- annotation-pass: 2026-08-15 -->
+
+### 2026-08-16：`new_indirect_op` 规范构造（`HERITAGE-CALLGUARD-0001`）
+
+`Funcdata::new_indirect_op`（funcdata_op.cc:683-728 对应物）：free-varnode
+输入、def 承载输出、Iop alias 往返、调用方旗标、`op_insert_before` 的
+INDIRECT 群回跳；构造器不再内置 `set_active_heritage`/硬编码
+`INDIRECT_STORE`（对齐 oracle 的调用方语义）。供 canonical guardCalls
+接线消费；生产 `ActionHeritage` 双 pass 路径不变。
