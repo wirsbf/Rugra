@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rugra.local/schemas/oracle/fixture-v1.schema.json",
+  "title": "Rugra oracle fixture registry (fixture-v1)",
+  "description": "Target contract for tests/oracle/fixture_registry.json after ORACLE-METADATA-MIGRATE-0001. The registry is the single index of tracked oracle fixtures: every on-disk metadata file and runner must be referenced by exactly one fixture entry, every referenced path must exist, every fixture must carry full provenance (locked oracle commit plus metadata-side arch/cspec/options/input hash) and a B2 four-state evidence_status, and every referenced function ID must be a current FUNCTION_LEDGER.json ID (RG-F-*/GH12-F-*). This file is normative for tools/oracle_registry.py (schema + doctor + plan); violations are fail-closed. Provenance fields that live inside each *.metadata.json are checked semantically by the doctor; the per-observation oracle-result schema is owned by ORACLE-RESULT-0001 (oracle-result-v1) and is intentionally out of scope here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "oracle_commit", "global_paths", "cache_defaults", "fixtures"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "fixture-v1"
+    },
+    "oracle_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Locked Ghidra oracle commit. Currently e40ed13014025f82488b1f8f7bca566894ac376b (Ghidra_12.0.4_build)."
+    },
+    "global_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "cache_defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tools", "comparands", "environment"],
+      "properties": {
+        "tools": {
+          "$ref": "#/definitions/nonEmptyPathMap"
+        },
+        "comparands": {
+          "$ref": "#/definitions/nonEmptyPathMap"
+        },
+        "environment": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]*$"
+          }
+        }
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/fixtureEntry"
+      }
+    }
+  },
+  "definitions": {
+    "nonEmptyPathMap": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.\\-]*(/[A-Za-z0-9_.\\-]+)*$",
+        "description": "Repo-relative path: no leading slash, no parent traversal, no absolute or hidden path."
+      }
+    },
+    "b2Status": {
+      "type": "string",
+      "enum": ["MATCH", "MISMATCH", "NO_ORACLE", "UNTESTED"],
+      "description": "B2 four-state evidence status. PARTIAL_MATCH is a pre-migration status and must be resolved into MISMATCH (both sides differ), UNTESTED (both sides equal but coverage incomplete), or MATCH (complete observation, zero difference) by ORACLE-METADATA-MIGRATE-0001."
+    },
+    "fixtureEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "runner", "timeout_seconds", "always_tiers", "evidence_status", "cache", "impact"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_]*$",
+          "description": "Stable fixture id; must be unique across the registry."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^tools/run_[a-z0-9_]+_oracle\\.sh$"
+          }
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "always_tiers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["wave", "nightly"]
+          }
+        },
+        "evidence_status": {
+          "$ref": "#/definitions/b2Status"
+        },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metadata", "inputs", "tools"],
+          "properties": {
+            "metadata": {
+              "type": "string",
+              "pattern": "^tests/oracle/[a-z0-9_]+\\.metadata\\.json$"
+            },
+            "inputs": {
+              "$ref": "#/definitions/nonEmptyPathMap"
+            },
+            "tools": {
+              "$ref": "#/definitions/nonEmptyPathMap"
+            },
+            "comparands": {
+              "$ref": "#/definitions/nonEmptyPathMap"
+            }
+          }
+        },
+        "impact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["paths", "rust_function_ids", "ghidra_function_ids"],
+          "properties": {
+            "paths": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "rust_function_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^RG-F-[0-9a-f]{20}$",
+                "description": "Current scheme-2 Rust function id from FUNCTION_LEDGER.json."
+              }
+            },
+            "ghidra_function_ids": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^GH12-F-[0-9a-f]{20}$",
+                "description": "Current scheme-2 Ghidra function id from FUNCTION_LEDGER.json. Ordinal-suffixed (GH12-F-...-01) and placeholder ids (GH12-F-<word>-...) are pre-migration forms and are rejected."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
