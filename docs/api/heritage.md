@@ -436,28 +436,81 @@ Heritage 过程往往并不是简单线性扫描，而是要考虑：
 
 ---
 
-## `pub fn heritage(&mut self)`
+## `pub fn heritage(&mut self, fd: &mut Funcdata)`
 
 ### 作用
-启动 heritage 主流程。
+执行一个规范 heritage 单 pass（对齐 `Heritage::heritage`，
+heritage.cc:2663-2758）。
 
-### 语义
-这是当前 `Heritage` 控制器的核心入口之一，负责推动 SSA / heritage 相关处理整体执行。
+### 语义（HERITAGE-OWNERSHIP-0001 重写）
+签名从无参（内部 `Weak<RwLock<Funcdata>>` 升级取锁）改为显式
+`&mut Funcdata`。单 pass 序列 1:1 对应锁定 oracle：
 
-### 当前应如何理解
-这个方法更接近：
+1. `maxdepth == -1` 时重建增广支配树（cc:2676-2677；Rugra 先
+   `build_dom_tree` 再 `build_adt`，对齐上游 structureReset）；
+2. `process_joins`（cc:2679）；
+3. pass 0：同一个局部 `PreferSplitManager` init+split（cc:2680-2683）；
+4. per-space 循环（cc:2684-2748）：delay 门控、
+   `clear_stack_placeholders`、有序 Varnode 扫描喂持久
+   `globaldisjoint` + 本 pass `disjoint`（prev 0/1/2 分类、
+   warning 分支）；`discoverIndexedStackPointers` 为已登记缺口
+   （HERITAGE-CALLGUARD-0001），故 `reprocessFreeStores` 不触发；
+5. `place_multiequals(fd)`（cc:2749）；
+6. `rename(fd)`（cc:2750，末尾 `disjoint.clear()` 对齐 cc:2592）；
+7. `analyze_new_load_guards` + `handle_new_load_copies(fd)`
+   （cc:2753-2754）；
+8. pass 0：同一个 manager 上 `split_additional`（cc:2755-2756）；
+9. `pass += 1` 恰好一次（cc:2757）。
 
-- “进入 SSA / heritage 主过程”
-- “协调 block、varnode、位置映射与中间状态”
-- “为后续分析整理更稳定的数据流骨架”
+与 oracle 一致：**不** 内部构建 infolist（`buildInfoList` 属于
+`startProcessing`，funcdata.cc:166），也**不**运行 DeadCode /
+不设 `pass >= 2` 早退 —— 重复调度属于 Action 执行器。
 
-而不是：
+### 持久状态
+`Heritage` 对象跨 pass 持久：`pass`、`maxdepth`、`globaldisjoint`、
+per-space `HeritageInfo`（delay/deadcodedelay/loadGuardSearch/
+hasCallPlaceholders）、load/store guards。`Funcdata::op_heritage`
+用 `mem::take` 暂移整个对象、跑完一个 pass、原样回写，持久状态因此
+跨调用保留且无锁路径。
 
-- “调用一次就自动完成全部高层恢复”
+### 构造与清零
+`Heritage::new` / `Heritage::clear` 均置 `maxdepth = -1`
+（heritage.cc:218-224 / 2882），这是首次 pass 重建 ADT 的哨兵。
 
 ---
 
-## `pub fn place_multiequals(&mut self)`
+## `pub fn build_adt(&mut self, fd: &Funcdata)`
+
+### 作用
+构建增广支配树（对齐 `Heritage::buildADT`，heritage.cc:2316-2385）。
+
+### 语义（HERITAGE-OWNERSHIP-0001 重写）
+显式 `&Funcdata`（只读），不再升级 `Weak`。步骤逐行对齐：
+domchild 由 `immed_dom` 按列表序组装（无 idom 的块进 `size` 死桶，
+block.cc:2036-2051）；`buildDomDepth` 根深度 1、子 = 父+1、尾部哨兵
+`depth[size]=0`（block.cc:2056-2075）；up-edge 判定 `u != immed_dom(v)`
+（指针同一性 → 块索引）；bottom-up a[]/z[] 与 boundary 标记、
+`z[0] = -1`、top-down 传播、`k = z[k]` 的 augment 构造。
+
+---
+
+## `pub fn place_multiequals(&mut self, fd: &mut Funcdata)`
+
+### 作用
+插入 `MULTIEQUAL` 节点。
+
+### 语义
+这是 Phi / 合流节点放置的核心接口之一。
+
+### 为什么重要
+在控制流汇合点，如果多个定义路径在同一位置合流，就需要引入类似 Phi 的机制。  
+Rugra 当前实现中，这类节点以 `MULTIEQUAL` 形式体现。
+
+### 已登记分歧（HERITAGE-ADT-RENAME-0001）
+oracle 按 `disjoint` 顺序 collect/refinement/guard；Rugra 仍按
+(space, address) 精确分组写位置（不消费 `disjoint`），插入尺寸取
+分组 varnode 的最大尺寸，块首插入以 bank 创建近似。所有权契约不变：
+单一显式 `&mut Funcdata`，无 Weak 升级 / 嵌套锁。
 
 ### 作用
 插入 `MULTIEQUAL` 节点。

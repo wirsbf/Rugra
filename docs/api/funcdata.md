@@ -1110,3 +1110,16 @@ Varnode 生命周期其余差异（Fspec 空间、HighVariable 分配等）仍�
   `erase_descend` WARN 1454→0；残余 340 条 `free varnode multiple
   descendants` 为揭出的真实 live 不变量违规（UPSTREAM-OUTVN-DEADWIRE-0001
   残余范围）。
+
+### 2026-08-15：`op_heritage` 桥 + `set_self_ref` 收窄（`HERITAGE-OWNERSHIP-0001`）
+
+- 新增 `Funcdata::op_heritage`（funcdata.hh:462 的 1:1 桥）：`mem::take`
+  暂移 persistent Heritage → `heritage.heritage(self)` 单 pass（显式
+  `&mut Funcdata`，零 Weak 升级、零嵌套锁）→ 原对象回写。连续调用
+  pass=0→1→2→3。
+- `set_self_ref` 不再回填 `heritage.fd`（该字段已删除）：Heritage 管理器
+  不再持有 Funcdata 句柄，消除 HERITAGE-DRIVER-0001 审计认定的写锁
+  重入死锁源。
+- 证据：`tests/oracle/heritage_ownership_1204.*`（3/3 MATCH，含 phi
+  自引用环三连 pass 无死锁）；生产 `ActionHeritage` 未切换（归
+  HERITAGE-DRIVER-SWITCH）。

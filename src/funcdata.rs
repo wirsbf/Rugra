@@ -610,10 +610,34 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::setSelfRef
-    /// Set the self-reference after wrapping in Arc<RwLock>
+    /// Set the self-reference after wrapping in Arc<RwLock>.
+    /// The Heritage manager no longer stores a self-reference: its pass
+    /// methods take an exclusive `&mut Funcdata` threaded from
+    /// `Funcdata::op_heritage` (HERITAGE-OWNERSHIP-0001), mirroring Ghidra's
+    /// non-owning `Heritage::fd` raw pointer without any lock re-entry.
     pub fn set_self_ref(&mut self, self_ref: Weak<RwLock<Funcdata>>) {
         self.self_ref = Some(self_ref.clone());
-        self.heritage.fd = Some(self_ref);
+    }
+
+    // Ghidra: funcdata.hh:462 Funcdata::opHeritage
+    /// Perform an entire heritage pass linking Varnode reads to writes.
+    /// Faithful 1:1 bridge to `Funcdata::opHeritage`
+    /// (funcdata.hh:462): `{ heritage.heritage(); }` — exactly one
+    /// `Heritage::heritage` call, which performs one pass and increments
+    /// `pass` once at its last line (heritage.cc:2757).
+    ///
+    /// Ownership model (HERITAGE-OWNERSHIP-0001): the persistent Heritage
+    /// object is temporarily moved out of `self.heritage` with `mem::take`,
+    /// the single canonical pass runs against this same `&mut Funcdata`, and
+    /// the identical Heritage state (pass counter, persistent globaldisjoint,
+    /// per-space HeritageInfo, guards) is restored afterwards. There is no
+    /// `Weak<RwLock<Funcdata>>` upgrade and no nested write-lock acquisition,
+    /// so repeated invocations (e.g. three consecutive boundary calls
+    /// driving pass 0->1->2->3) cannot deadlock.
+    pub fn op_heritage(&mut self) {
+        let mut heritage = std::mem::take(&mut self.heritage);
+        heritage.heritage(self);
+        self.heritage = heritage;
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::runHeritageDirect

@@ -125,6 +125,37 @@ impl LocationMap {
         }
     }
 
+    // Ghidra: heritage.cc:34 LocationMap::add
+    // RUGRA-GLUE: adapter for the iterator returned by LocationMap::add.
+    /// Locate the map entry containing `addr`. Ghidra's `LocationMap::add`
+    /// returns an iterator to the (possibly merged) entry covering the added
+    /// range; the driver then reads `(*liter).first` / `(*liter).second.size`
+    /// (heritage.cc:2710/2719/2722). Rugra's `add` returns only the intersect
+    /// code, so this upper_bound/back-up lookup recovers the same entry.
+    pub fn entry_containing(&self, addr: Address) -> Option<(Address, i32)> {
+        // upper_bound(addr): first key > addr, then back up one.
+        let mut iter = self.themap.range((std::ops::Bound::Excluded(addr), std::ops::Bound::Unbounded));
+        let prev_key = match iter.next() {
+            Some((k, _)) => {
+                // First key > addr exists; the candidate is the key before it.
+                self.themap
+                    .range(..k)
+                    .next_back()
+                    .map(|(k2, _)| *k2)?
+            }
+            None => {
+                // No key > addr; the candidate is the last key.
+                self.themap.iter().next_back().map(|(k2, _)| *k2)?
+            }
+        };
+        let sp = self.themap.get(&prev_key)?;
+        if addr.overlap(0, prev_key, sp.size) != -1 {
+            Some((prev_key, sp.size))
+        } else {
+            None
+        }
+    }
+
     // Ghidra: heritage.hh:38 LocationMap::clear
     pub fn clear(&mut self) {
         self.themap.clear();
@@ -162,6 +193,8 @@ impl MemRange {
 }
 
 // Ghidra: heritage.hh:80 TaskList
+// RUGRA-GLUE: derive Debug for the Heritage Debug impl (Ghidra has no such need).
+#[derive(Debug)]
 /// A disjoint list of address ranges to be processed in SSA form.
 /// Faithful to `TaskList` (heritage.hh:80-93).
 pub struct TaskList {
@@ -464,8 +497,17 @@ fn space_highest(_spc: AddressSpace) -> u64 {
 /// Corresponds to Ghidra's `Heritage` class
 #[derive(Debug)]
 pub struct Heritage {
-    pub fd: Option<Weak<RwLock<Funcdata>>>,
+    // RUGRA-GLUE: Ghidra's `Funcdata *fd` (heritage.hh:249) is a non-owning raw
+    // pointer used re-entrantly by every pass helper. Rust cannot store an
+    // aliasing mutable handle inside an object that Funcdata itself owns
+    // (the former `Weak<RwLock<Funcdata>>` field re-entered the write lock and
+    // could deadlock, per HERITAGE-DRIVER-0001). The exclusive `&mut Funcdata`
+    // is now threaded explicitly through every pass method; the persistent
+    // object is temporarily moved out of `Funcdata::heritage` by
+    // `Funcdata::op_heritage` (mem::take) for the duration of one pass.
     pub globaldisjoint: LocationMap,
+    /// Current-pass disjoint cover; cleared by `rename` (cc:2592).
+    pub disjoint: TaskList,
     pub domchild: Vec<Vec<i32>>,
     pub augment: Vec<Vec<i32>>,
     pub flags: Vec<u32>,
@@ -481,16 +523,22 @@ pub struct Heritage {
 }
 
 impl Heritage {
-    // Ghidra: heritage.cc:219 Heritage::new
+    // Ghidra: heritage.cc:218 Heritage::Heritage
+    /// Construct the heritage manager. Faithful to the Ghidra constructor
+    /// (heritage.cc:218-224): `fd = data; pass = 0; maxdepth = -1;`.
+    /// `maxdepth = -1` is load-bearing: it is the sentinel that makes the
+    /// first `Heritage::heritage` pass rebuild the augmented dominator tree
+    /// (heritage.cc:2676-2677). (Previously Rugra initialized `maxdepth = 0`,
+    /// so the rebuild condition could never fire.)
     pub fn new() -> Self {
         Self {
-            fd: None,
             globaldisjoint: LocationMap::new(),
+            disjoint: TaskList::new(),
             domchild: Vec::new(),
             augment: Vec::new(),
             flags: Vec::new(),
             depth: Vec::new(),
-            maxdepth: 0,
+            maxdepth: -1,
             pass: 0,
             pq: PriorityQueue::new(),
             merge: Vec::new(),
@@ -553,82 +601,124 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2317 Heritage::buildADT
+    // Ghidra: heritage.cc:2316 Heritage::buildADT
     /// Build the Augmented Dominator Tree. Faithful to `buildADT`
-    /// (heritage.cc:2317-2386). Assumes dom tree is already built and
-    /// nodes are in DFS order.
+    /// (heritage.cc:2316-2385). Consumes the block dominator state populated
+    /// upstream (Ghidra: `Funcdata::structureReset` -> `calcForwardDominator`;
+    /// Rugra: `BlockGraph::build_dom_tree`) and constructs the Bilardi-Pingali
+    /// augmentation.
     ///
-    /// Algorithm:
-    ///   1. Build domchild from idom (cc:2335)
-    ///   2. Find up-edges (non-tree edges) and count b[]/t[] (cc:2340-2354)
-    ///   3. Bottom-up pass: compute a[]/z[], mark boundary nodes (cc:2355-2368)
-    ///   4. Top-down pass: propagate z[] through boundary chains (cc:2369-2376)
-    ///   5. Build augment[] from up-edges (cc:2377-2385)
-    pub fn build_adt(&mut self) {
-        let fd_arc = match &self.fd { Some(w) => match w.upgrade() { Some(a) => a, None => return } , None => return };
-        let fd = fd_arc.read().unwrap();
+    /// Algorithm (locked oracle lines):
+    ///   1. cc:2329-2332 clear + resize augment/flags
+    ///   2. cc:2334 buildDomTree(domchild) — assemble from immed_dom;
+    ///      blocks with no immed_dom land in the dead bucket `size`
+    ///   3. cc:2338 buildDomDepth(depth) — root depth 1, child = parent+1,
+    ///      trailing sentinel depth[size]=0, maxdepth = maximum
+    ///   4. cc:2339-2353 find up-edges (u != immed_dom(v)) and count b[]/t[]
+    ///   5. cc:2354-2367 bottom-up pass: compute a[]/z[], mark boundary nodes
+    ///   6. cc:2368-2374 z[0] = -1, then propagate z[] top-down
+    ///   7. cc:2376-2384 build augment[] walking k = z[k]
+    pub fn build_adt(&mut self, fd: &Funcdata) {
         let bblocks = &fd.bblocks;
         let size = bblocks.get_size();
-        if size == 0 { return; }
+        if size == 0 {
+            return;
+        }
 
-        // cc:2330-2333: clear + resize
+        // cc:2329-2332: clear + resize (Ghidra leaves stale domchild to
+        // buildDomTree, which clears/resizes itself).
         self.augment.clear();
         self.augment.resize(size, Vec::new());
         self.flags.clear();
         self.flags.resize(size, 0);
-        self.domchild.clear();
-        self.domchild.resize(size, Vec::new());
 
-        // cc:2335: buildDomTree(domchild) — populate domchild from idom.
-        // Rugra's dom tree is stored per-block via get_dom_children.
-        // Build index-level domchild: domchild[i] = list of child indices.
-        let mut domchild_idx: Vec<Vec<i32>> = vec![Vec::new(); size];
+        // cc:2334: bblocks.buildDomTree(domchild). Faithful to
+        // BlockGraph::buildDomTree (block.cc:2036-2051): child[immed_dom]
+        // gets the block appended in list order; blocks whose immed_dom is
+        // null land in the extra dead bucket at index `size`.
+        self.domchild.clear();
+        self.domchild.resize(size + 1, Vec::new());
         for i in 0..size {
-            let block = match bblocks.get_block(i) { Some(b) => b, None => continue };
-            let children = block.read().unwrap().get_dom_children();
-            for child in children {
-                let cidx = child.read().unwrap().get_index() as usize;
-                if cidx < size {
-                    domchild_idx[i].push(cidx as i32);
+            let block = match bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let idom_idx = block
+                .read()
+                .unwrap()
+                .get_immed_dom()
+                .and_then(|w| w.upgrade())
+                .map(|dom| dom.read().unwrap().get_index());
+            match idom_idx {
+                Some(idx) if (idx as usize) < size => {
+                    self.domchild[idx as usize].push(i as i32);
+                }
+                _ => {
+                    // Null (or out-of-range) immediate dominator: dead bucket.
+                    self.domchild[size].push(i as i32);
                 }
             }
         }
 
-        // cc:2339: buildDomDepth(depth)
-        let mut depth = vec![0i32; size];
-        // Simple BFS from root (index 0): depth[child] = depth[parent]+1.
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(0i32);
-        while let Some(idx) = queue.pop_front() {
-            let i = idx as usize;
-            for &cidx in &domchild_idx[i] {
-                depth[cidx as usize] = depth[i] + 1;
-                queue.push_back(cidx);
+        // cc:2338: bblocks.buildDomDepth(depth). Faithful to
+        // BlockGraph::buildDomDepth (block.cc:2056-2075): iterate blocks in
+        // list order; depth[i] = depth[immed_dom]+1, or 1 when the immediate
+        // dominator is null; trailing sentinel depth[size] = 0; return max.
+        let mut depth = vec![0i32; size + 1];
+        let mut maxdepth = 0i32;
+        for i in 0..size {
+            let block = match bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let idom_idx = block
+                .read()
+                .unwrap()
+                .get_immed_dom()
+                .and_then(|w| w.upgrade())
+                .map(|dom| dom.read().unwrap().get_index());
+            depth[i] = match idom_idx {
+                Some(idx) if (idx as usize) < size => depth[idx as usize] + 1,
+                _ => 1,
+            };
+            if maxdepth < depth[i] {
+                maxdepth = depth[i];
             }
         }
+        depth[size] = 0;
         self.depth = depth;
-        self.maxdepth = *self.depth.iter().max().unwrap_or(&0);
+        self.maxdepth = maxdepth;
 
-        // cc:2340-2354: find up-edges + count b[]/t[].
+        // cc:2339-2353: find up-edges + count b[]/t[].
+        // For every dominator-tree child v of x, every in-edge u of v with
+        // u != immed_dom(v) is an up-edge; b[u] counts edges ending at u,
+        // t[x] counts edges starting under x.
         let mut b_count = vec![0i32; size]; // up-edges ending at node
         let mut t_count = vec![0i32; size]; // up-edges starting under node
         let mut upstart = Vec::new(); // up-edge source indices
-        let mut upend = Vec::new();   // up-edge target indices
+        let mut upend = Vec::new(); // up-edge target indices
 
         for i in 0..size {
-            let x = match bblocks.get_block(i) { Some(b) => b, None => continue };
-            for &cidx in &domchild_idx[i] {
-                let v = match bblocks.get_block(cidx as usize) { Some(b) => b, None => continue };
-                let v_idom = v.read().unwrap().get_immed_dom()
+            for &cidx in &self.domchild[i] {
+                let v = match bblocks.get_block(cidx as usize) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let v_guard = v.read().unwrap();
+                let v_idom = v_guard
+                    .get_immed_dom()
                     .and_then(|w| w.upgrade())
                     .map(|dom| dom.read().unwrap().get_index());
-                let v_sin = v.read().unwrap().size_in();
+                let v_sin = v_guard.size_in();
                 for k in 0..v_sin {
-                    let u = match v.read().unwrap().get_in(k) { Some(e) => e.point.clone(), None => continue };
+                    let u = match v_guard.get_in(k) {
+                        Some(e) => e.point.clone(),
+                        None => continue,
+                    };
                     let u_idx = u.read().unwrap().get_index();
-                    let is_tree_edge = Some(u_idx) == v_idom;
-                    if !is_tree_edge {
-                        // Up-edge: u -> v
+                    if Some(u_idx) != v_idom {
+                        // Up-edge: u -> v (pointer identity in Ghidra;
+                        // block indices are unique per graph in Rugra).
                         upstart.push(u_idx);
                         upend.push(cidx);
                         b_count[u_idx as usize] += 1;
@@ -638,46 +728,65 @@ impl Heritage {
             }
         }
 
-        // cc:2355-2368: bottom-up a[]/z[] + boundary marking.
+        // cc:2354-2367: bottom-up a[]/z[] + boundary marking.
         let mut a_count = vec![0i32; size];
         let mut z = vec![0i32; size];
         for i in (0..size).rev() {
             let mut k_sum = 0i32;
             let mut l_sum = 0i32;
-            for &cidx in &domchild_idx[i] {
-                k_sum += a_count[cidx as usize];
-                l_sum += z[cidx as usize];
+            for &cidx in &self.domchild[i] {
+                let c = cidx as usize;
+                if c < size {
+                    k_sum += a_count[c];
+                    l_sum += z[c];
+                }
             }
             a_count[i] = b_count[i] - t_count[i] + k_sum;
             z[i] = 1 + l_sum;
-            if domchild_idx[i].is_empty() || z[i] > a_count[i] + 1 {
+            if self.domchild[i].is_empty() || z[i] > a_count[i] + 1 {
                 self.flags[i] |= heritage_flags::BOUNDARY_NODE;
                 z[i] = 1;
             }
         }
 
-        // cc:2369: z[0] = -1
-        if !z.is_empty() { z[0] = -1; }
+        // cc:2368: z[0] = -1
+        if !z.is_empty() {
+            z[0] = -1;
+        }
 
-        // cc:2370-2376: propagate z through boundary chains.
+        // cc:2369-2374: propagate z through boundary chains.
         for i in 1..size {
-            let block = match bblocks.get_block(i) { Some(b) => b, None => continue };
-            let j = match block.read().unwrap().get_immed_dom().and_then(|w| w.upgrade()) {
+            let block = match bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let j = match block
+                .read()
+                .unwrap()
+                .get_immed_dom()
+                .and_then(|w| w.upgrade())
+            {
                 Some(dom) => dom.read().unwrap().get_index() as usize,
                 None => continue,
             };
-            if (self.flags[j] & heritage_flags::BOUNDARY_NODE) != 0 {
+            if j < size && (self.flags[j] & heritage_flags::BOUNDARY_NODE) != 0 {
                 z[i] = j as i32;
-            } else {
+            } else if j < size {
                 z[i] = z[j];
             }
         }
 
-        // cc:2377-2385: build augment[] from up-edges.
+        // cc:2376-2384: build augment[] from up-edges.
         for idx in 0..upstart.len() {
             let v_idx = upend[idx];
-            let v_block = match bblocks.get_block(v_idx as usize) { Some(b) => b, None => continue };
-            let mut j = v_block.read().unwrap().get_immed_dom()
+            let v_block = match bblocks.get_block(v_idx as usize) {
+                Some(b) => b,
+                None => continue,
+            };
+            let mut j = v_block
+                .read()
+                .unwrap()
+                .get_immed_dom()
                 .and_then(|w| w.upgrade())
                 .map(|dom| dom.read().unwrap().get_index())
                 .unwrap_or(0);
@@ -686,33 +795,31 @@ impl Heritage {
                 if (k as usize) < self.augment.len() {
                     self.augment[k as usize].push(v_idx);
                 }
-                k = z[k as usize];
+                let zk = z.get(k as usize).copied().unwrap_or(0);
+                if zk <= 0 || zk >= k {
+                    // Path compression must strictly decrease k toward j.
+                    break;
+                }
+                k = zk;
             }
         }
-
-        // Store domchild as indices (for visitIncr/calcMultiequals).
-        self.domchild = domchild_idx;
     }
 
-    // Ghidra: heritage.cc:2395 Heritage::visitIncr
+    // Ghidra: heritage.cc:2394 Heritage::visitIncr
     /// Recursive phi-node placement using the ADT. Faithful to
-    /// `visitIncr` (heritage.cc:2395-2429). Walks augment[vnode] and
+    /// `visitIncr` (heritage.cc:2394-2428). Walks augment[vnode] and
     /// recurses into dom children (unless boundary node).
-    pub fn visit_incr(&mut self, qnode_idx: i32, vnode_idx: i32) {
+    pub fn visit_incr(&mut self, fd: &Funcdata, qnode_idx: i32, vnode_idx: i32) {
         let i = vnode_idx as usize;
         // cc:2404-2421: scan augment[i] for phi candidates.
         let aug_snapshot = self.augment.get(i).cloned().unwrap_or_default();
         for v_idx in aug_snapshot {
-            let v_idom = {
-                let fd_arc = self.fd.as_ref().and_then(|w| w.upgrade());
-                if let Some(fd_arc) = fd_arc {
-                    let fd = fd_arc.read().unwrap();
-                    fd.bblocks.get_block(v_idx as usize)
-                        .and_then(|b| b.read().unwrap().get_immed_dom())
-                        .and_then(|w| w.upgrade())
-                        .map(|dom| dom.read().unwrap().get_index())
-                } else { None }
-            };
+            let v_idom = fd
+                .bblocks
+                .get_block(v_idx as usize)
+                .and_then(|b| b.read().unwrap().get_immed_dom())
+                .and_then(|w| w.upgrade())
+                .map(|dom| dom.read().unwrap().get_index());
             // cc:2408: if idom(v) < qnode (strict ancestor)
             if v_idom.map_or(false, |idom| idom < qnode_idx) {
                 let k = v_idx as usize;
@@ -738,24 +845,24 @@ impl Heritage {
             for child_idx in children {
                 let c = child_idx as usize;
                 if c < self.flags.len() && (self.flags[c] & heritage_flags::MARK_NODE) == 0 {
-                    self.visit_incr(qnode_idx, child_idx);
+                    self.visit_incr(fd, qnode_idx, child_idx);
                 }
             }
         }
     }
 
-    // Ghidra: heritage.cc:2440 Heritage::calcMultiequals
+    // Ghidra: heritage.cc:2439 Heritage::calcMultiequals
     /// Calculate blocks that should contain MULTIEQUALs for one address range.
-    /// Faithful to `calcMultiequals` (heritage.cc:2440-2467).
+    /// Faithful to `calcMultiequals` (heritage.cc:2439-2466).
     /// After this executes, self.merge holds block indices that should
     /// contain a MULTIEQUAL (phi node).
-    pub fn calc_multiequals(&mut self, write_blocks: &[i32]) {
-        // cc:2443: pq.reset(maxdepth)
+    pub fn calc_multiequals(&mut self, fd: &Funcdata, write_blocks: &[i32]) {
+        // cc:2442: pq.reset(maxdepth)
         self.pq.reset(self.maxdepth);
-        // cc:2444: merge.clear()
+        // cc:2443: merge.clear()
         self.merge.clear();
 
-        // cc:2449-2455: place write blocks into pq.
+        // cc:2448-2454: place write blocks into pq.
         for &blk_idx in write_blocks {
             let j = blk_idx as usize;
             if j < self.flags.len() && (self.flags[j] & heritage_flags::MARK_NODE) != 0 {
@@ -766,19 +873,19 @@ impl Heritage {
                 self.flags[j] |= heritage_flags::MARK_NODE;
             }
         }
-        // cc:2456-2459: ensure block 0 is in pq.
+        // cc:2455-2458: ensure block 0 is in pq.
         if !self.flags.is_empty() && (self.flags[0] & heritage_flags::MARK_NODE) == 0 {
             self.pq.insert(0, self.depth.get(0).copied().unwrap_or(0));
             self.flags[0] |= heritage_flags::MARK_NODE;
         }
 
-        // cc:2461-2464: main loop.
+        // cc:2460-2463: main loop.
         while !self.pq.empty() {
             let bl = self.pq.extract();
-            self.visit_incr(bl, bl);
+            self.visit_incr(fd, bl, bl);
         }
 
-        // cc:2465-2466: clear marks.
+        // cc:2464-2465: clear marks.
         for f in &mut self.flags {
             *f &= !(heritage_flags::MARK_NODE | heritage_flags::MERGED_NODE);
         }
@@ -2447,13 +2554,8 @@ impl Heritage {
     // Ghidra: heritage.cc:2048 Heritage::clearStackPlaceholders
     /// Clear spacebase-relative placeholder info for all call specs.
     /// Faithful to `clearStackPlaceholders` (heritage.cc:2048-2056).
-    pub fn clear_stack_placeholders(&mut self, info_space: AddressSpace) {
+    pub fn clear_stack_placeholders(&mut self, fd: &mut Funcdata, info_space: AddressSpace) {
         // cc:2051-2054: for each call, abortSpacebaseRelative.
-        let fd_arc = match &self.fd {
-            Some(w) => match w.upgrade() { Some(a) => a, None => return },
-            None => return,
-        };
-        let mut fd = fd_arc.write().unwrap();
         let num_calls = fd.num_calls();
         // Snapshot call op addresses first to avoid borrow conflicts.
         let call_addrs: Vec<crate::address::Address> = (0..num_calls)
@@ -2471,7 +2573,7 @@ impl Heritage {
                 })
                 .cloned();
             if let Some(op_ref) = call_op {
-                callspecs[i].abort_spacebase_relative(&mut fd, &op_ref);
+                callspecs[i].abort_spacebase_relative(&mut *fd, &op_ref);
             }
         }
         fd.callspecs = callspecs;
@@ -2924,177 +3026,256 @@ impl Heritage {
             join_vns.len());
     }
 
-    // Ghidra: heritage.cc:2677 Heritage::heritage
-    /// Main entry point for heritage (SSA construction). Faithful to
-    /// `Heritage::heritage` (heritage.cc:2677-2772):
-    ///   1. buildADT if maxdepth==-1 (restructure forced)
-    ///   2. processJoins
-    ///   3. splitmanage.split if pass==0
-    ///   4. per-space loop: build disjoint ranges from varnodes
-    ///   5. placeMultiequals
-    ///   6. rename
-    ///   7. reprocessFreeStores / analyzeNewLoadGuards / handleNewLoadCopies
-    ///   8. pass += 1
-    pub fn heritage(&mut self) {
-        let fd_arc = match &self.fd {
-            Some(w) => w.upgrade(),
-            None => return,
-        };
-        let fd_arc = match fd_arc {
-            Some(a) => a,
-            None => return,
-        };
-        let mut fd = fd_arc.write().unwrap();
-
-        // Ghidra cc:2690: if (maxdepth == -1) buildADT();
-        // TODO: buildADT (Augmented Dominator Tree, heritage.cc:2316).
-        // Rugra's place_multiequals uses dom-frontier instead. Tracked gap.
-
-        // Ghidra cc:2693: processJoins();
-        self.process_joins(&fd);
-
-        // Ghidra cc:2694-2697: if (pass == 0) { splitmanage.init/split(); }
-        // PreferSplitManager: init + split on pass 0. Rugra's prefersplit.rs
-        // is fully implemented (1245 lines). On x86-64 there are no split
-        // records by default (no paired-register split preferences), so
-        // split() is a no-op. The wiring is here for completeness.
-        if self.pass == 0 {
-            let mut split_mgr = crate::prefersplit::PreferSplitManager::new();
-            split_mgr.init(&mut fd, Vec::new()); // No split records for x86-64
-            split_mgr.split(&mut fd);
+    // Ghidra: heritage.cc:2663 Heritage::heritage
+    /// One canonical Heritage pass, faithful to `Heritage::heritage`
+    /// (heritage.cc:2663-2758), driven through an exclusive `&mut Funcdata`:
+    ///   1. cc:2676-2677 if maxdepth == -1 (restructure forced) buildADT()
+    ///   2. cc:2679 processJoins()
+    ///   3. cc:2680-2683 pass 0: one local PreferSplitManager init+split
+    ///   4. cc:2684-2748 per-space loop (ascending infolist order):
+    ///      placeholders, one-time discovery, ordered Varnode scan feeding
+    ///      persistent globaldisjoint + current-pass disjoint, warnings
+    ///   5. cc:2749 placeMultiequals()
+    ///   6. cc:2750 rename()
+    ///   7. cc:2751-2752 reprocessFreeStores when discovery requested it
+    ///   8. cc:2753-2754 analyzeNewLoadGuards + handleNewLoadCopies
+    ///   9. cc:2755-2756 pass 0: splitAdditional on the SAME manager
+    ///   10. cc:2757 pass += 1 exactly once
+    ///
+    /// Ownership boundary (HERITAGE-OWNERSHIP-0001): the persistent Heritage
+    /// object no longer stores a `Weak<RwLock<Funcdata>>`; the caller
+    /// (`Funcdata::op_heritage`) temporarily moves `self.heritage` out via
+    /// `mem::take`, invokes this pass against the same `&mut Funcdata`, and
+    /// restores it, so no nested lock acquisition can occur.
+    pub fn heritage(&mut self, fd: &mut Funcdata) {
+        // Ghidra cc:2676-2677: if (maxdepth == -1) buildADT();
+        // maxdepth == -1 is the ctor/clear sentinel meaning "restructure
+        // forced" — exactly one rebuild on the first pass after (re)reset.
+        // Ghidra's buildADT consumes the dominator state produced upstream by
+        // Funcdata::structureReset (calcForwardDominator); Rugra's equivalent
+        // producer is BlockGraph::build_dom_tree.
+        if self.maxdepth == -1 {
+            fd.bblocks.build_dom_tree();
+            self.build_adt(fd);
         }
 
-        // Ghidra cc:2698: for(int4 i=0;i<infolist.size();++i)
-        self.build_info_list();
-        for info in &self.infolist.clone() {
-            // cc:2700: if (!info->isHeritaged()) continue;
-            if !info.space.is_heritaged() { continue; }
-            // cc:2701: if (pass < info->delay) continue;
-            if self.pass < info.delay { continue; }
-            // cc:2702-2703: if (info->hasCallPlaceholders) clearStackPlaceholders(info);
-            // TODO: clearStackPlaceholders (heritage.cc:2048).
+        // Ghidra cc:2679: processJoins();
+        self.process_joins(fd);
 
-            // cc:2705-2711: if (!info->loadGuardSearch) { ... discoverIndexedStackPointers }
-            // TODO: loadGuardSearch + discoverIndexedStackPointers per-space.
+        // Ghidra cc:2674-2683: one local PreferSplitManager shared by
+        // split (pass 0) and splitAdditional (end of pass 0). Rugra has no
+        // architecture split records on x86-64 (empty vec mirrors the locked
+        // fixture architecture and the x86:LE:64:default oracle), but the
+        // single-instance lifetime is preserved.
+        let mut splitmanage = crate::prefersplit::PreferSplitManager::new();
+        if self.pass == 0 {
+            splitmanage.init(fd, Vec::new());
+            splitmanage.split(fd);
+        }
 
-            // cc:2713-2746: build disjoint ranges from varnodes in this space.
-            // Iterate varnodes via vbank.loc_tree, filter by space.
-            let space = info.space;
+        // Ghidra cc:2671-2673: pass-local freeStores vector shared by
+        // discovery and reprocessFreeStores.
+        let mut free_stores: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+        let mut reprocess_stack_count = 0;
+        let mut stack_space = AddressSpace::Stack;
+
+        // Ghidra cc:2684: for(int4 i=0;i<infolist.size();++i)
+        // NOTE (1:1 with the oracle): `Heritage::heritage` does NOT build
+        // the info list. It is built exactly once by
+        // `Funcdata::startProcessing` (funcdata.cc:166 -> buildInfoList)
+        // before the first ActionHeritage pass; iterating an empty
+        // infolist therefore performs zero per-space stages, on both sides.
+        for i in 0..self.infolist.len() {
+            // cc:2686: if (!info->isHeritaged()) continue;
+            if !self.infolist[i].space.is_heritaged() {
+                continue;
+            }
+            // cc:2687: if (pass < info->delay) continue;
+            if self.pass < self.infolist[i].delay {
+                continue;
+            }
+            let space = self.infolist[i].space;
+            // cc:2688-2689: if (info->hasCallPlaceholders)
+            //   clearStackPlaceholders(info);
+            if self.infolist[i].has_call_placeholders {
+                self.clear_stack_placeholders(fd, space);
+            }
+
+            // cc:2691-2697: if (!info->loadGuardSearch) {
+            //   info->loadGuardSearch = true;
+            //   if (discoverIndexedStackPointers(info->space,freeStores,true))
+            //     { reprocessStackCount += 1; stackSpace = info->space; } }
+            // GAP (HERITAGE-CALLGUARD-0001): discoverIndexedStackPointers is
+            // not on this path yet, so reprocessStackCount stays 0 and the
+            // cc:2751-2752 reprocessFreeStores call below cannot fire.
+            if !self.infolist[i].load_guard_search {
+                self.infolist[i].load_guard_search = true;
+            }
+
+            // cc:2698-2732: build disjoint ranges from this space's
+            // Varnodes in VarnodeLocSet location order.
             let pass = self.pass;
-            let vns_in_space: Vec<_> = {
+            let deadremoved = self.infolist[i].deadremoved;
+            let mut needwarning = false;
+            let mut warnvn: Option<Arc<RwLock<Varnode>>> = None;
+            let vns_in_space: Vec<(Arc<RwLock<Varnode>>, Address, i32)> = {
                 let mut result = Vec::new();
                 for vn_ref in &fd.vbank.loc_tree {
                     let vn = vn_ref.0.read().unwrap();
-                    if vn.address_space != space { continue; }
-                    // cc:2718: skip free+noDescend+!unaffected+!input
-                    if !vn.is_written() && vn.has_no_descend() && !vn.is_input() {
+                    if vn.address_space != space {
                         continue;
                     }
-                    // cc:2720: if (vn->isWriteMask()) continue;
-                    // TODO: isWriteMask flag.
+                    // cc:2704: skip dead unused frees
+                    if !vn.is_written()
+                        && vn.has_no_descend()
+                        && !vn.is_unaffected()
+                        && !vn.is_input()
+                    {
+                        continue;
+                    }
+                    // cc:2706: if (vn->isWriteMask()) continue;
+                    if vn.is_write_mask() {
+                        continue;
+                    }
                     result.push((vn_ref.0.clone(), vn.loc, vn.get_size() as i32));
                 }
                 result
             };
             for (vn_arc, vn_addr, vn_size) in vns_in_space {
-                // cc:2722: globaldisjoint.add(addr, size, pass, prev)
+                // cc:2708: LocationMap::iterator liter =
+                //   globaldisjoint.add(vn->getAddr(),vn->getSize(),pass,prev);
                 let prev = self.globaldisjoint.add(vn_addr, vn_size, pass);
-                let _ = prev;
+                // (*liter).first / (*liter).second.size: the merged map
+                // entry covering vn_addr (LocationMap::add returns the
+                // iterator to the merged entry; Rugra's add returns only the
+                // intersect code, so re-locate the containing entry).
+                let (m_addr, m_size) = match self.globaldisjoint.entry_containing(vn_addr) {
+                    Some(e) => e,
+                    None => (vn_addr, vn_size),
+                };
+                if prev == 0 {
+                    // cc:2709-2710: all-new location (or intersecting with
+                    // something new)
+                    self.disjoint
+                        .add(m_addr, m_size, memrange_flags::NEW_ADDRESSES);
+                } else if prev == 2 {
+                    // cc:2711: completely contained in range from previous pass
+                    // cc:2712: if (vn->isHeritageKnown()) continue;
+                    if vn_arc.read().unwrap().is_heritage_known() {
+                        continue;
+                    }
+                    // cc:2713: if (vn->hasNoDescend()) continue;
+                    if vn_arc.read().unwrap().has_no_descend() {
+                        continue;
+                    }
+                    // cc:2714-2718: first deadremoval warning
+                    if !needwarning
+                        && deadremoved > 0
+                        && !fd.is_jumptable_recovery_on()
+                    {
+                        needwarning = true;
+                        self.bump_deadcode_delay(vn_arc.read().unwrap().get_space());
+                        warnvn = Some(vn_arc.clone());
+                    }
+                    // cc:2719
+                    self.disjoint.add(m_addr, m_size, memrange_flags::OLD_ADDRESSES);
+                } else {
+                    // cc:2721-2722: partially contained in old range, but
+                    // may contain new stuff
+                    self.disjoint.add(
+                        m_addr,
+                        m_size,
+                        memrange_flags::OLD_ADDRESSES | memrange_flags::NEW_ADDRESSES,
+                    );
+                    // cc:2723-2730
+                    if !needwarning
+                        && deadremoved > 0
+                        && !fd.is_jumptable_recovery_on()
+                    {
+                        if vn_arc.read().unwrap().is_heritage_known() {
+                            continue;
+                        }
+                        needwarning = true;
+                        self.bump_deadcode_delay(vn_arc.read().unwrap().get_space());
+                        warnvn = Some(vn_arc.clone());
+                    }
+                }
             }
 
-            // Ghidra cc:2630: guard() per-range, with the correct space.
-            // This registers CALL input trials via ParamActive and creates
-            // INDIRECT ops for call side-effects. Without this, CALL parameters
-            // are never injected, causing all args to appear as "local_0".
-            // We call guard_calls_range directly with the correct space context
-            // (the per-space loop variable) for each disjoint range in this space.
-            {
-                let ranges: Vec<(Address, i32)> = self.globaldisjoint.themap.iter()
-                    .filter(|(a, _)| {
-                        // Only ranges that fall in this space's address range
-                        // (globaldisjoint is shared across spaces, but ranges
-                        // added in this iteration belong to this space)
-                        true
-                    })
-                    .map(|(addr, sp)| (*addr, sp.size))
-                    .collect();
-                let mut fd_guard = fd_arc.write().unwrap();
-                for (addr, size) in &ranges {
-                    let mut empty_write = Vec::new();
-                    // Pass the correct space by temporarily storing it
-                    // in a thread-local or by calling guard_calls_range
-                    // with the space from the outer loop variable.
-                    self.guard_calls_range_with_space(
-                        &mut fd_guard, 0, *addr, *size, &mut empty_write, space);
+            // cc:2734-2747: warning header (issued once per space).
+            if needwarning {
+                if !self.infolist[i].warning_issued {
+                    self.infolist[i].warning_issued = true;
+                    let mut errmsg = String::from("Heritage AFTER dead removal. Example location: ");
+                    let warn_ref = warnvn.expect("needwarning implies warnvn");
+                    errmsg.push_str(&warn_ref.read().unwrap().print_raw());
+                    if !warn_ref.read().unwrap().has_no_descend() {
+                        let warnop = warn_ref
+                            .read()
+                            .unwrap()
+                            .descend_iter()
+                            .next()
+                            .map(|op| op.read().unwrap().get_addr().as_u64());
+                        if let Some(addr) = warnop {
+                            errmsg.push_str(&format!(" : {addr:#x}"));
+                        }
+                    }
+                    fd.warning_header(&errmsg);
                 }
-                drop(fd_guard);
             }
         }
 
-        // Ghidra cc:2763: placeMultiequals();
-        drop(fd);
-        self.place_multiequals();
+        // Ghidra cc:2749: placeMultiequals();
+        self.place_multiequals(fd);
 
-        // Ghidra cc:2764: rename();
-        self.rename();
+        // Ghidra cc:2750: rename();
+        self.rename(fd);
 
-        // Ghidra cc:2765-2766: if (reprocessStackCount > 0) reprocessFreeStores
-        // Ghidra cc:2765-2766: if (reprocessStackCount > 0) reprocessFreeStores
-        // Implemented: reprocess_free_stores (walk backward through INDIRECTs).
+        // Ghidra cc:2751-2752: if (reprocessStackCount > 0)
+        //   reprocessFreeStores(stackSpace, freeStores);
+        if reprocess_stack_count > 0 {
+            self.reprocess_free_stores(fd, stack_space, &free_stores);
+        }
 
-        // Ghidra cc:2767: analyzeNewLoadGuards();
-        // Implemented as conservative stub (marks guards analyzed with full
-        // range). Full ValueSetSolver-based analysis deferred (rangeutil.cc
-        // ~600 lines). The conservative approach is Ghidra's fallback.
+        // Ghidra cc:2753: analyzeNewLoadGuards();
         self.analyze_new_load_guards();
 
-        // Ghidra cc:2768: handleNewLoadCopies();
-        // Implemented: handle_new_load_copies (find_address_forces +
-        // propagate_copy_away + ADDRFORCE flag setting).
-        let mut fd_for_copies = fd_arc.write().unwrap();
-        self.handle_new_load_copies(&mut fd_for_copies);
-        drop(fd_for_copies);
+        // Ghidra cc:2754: handleNewLoadCopies();
+        self.handle_new_load_copies(fd);
 
-        // Ghidra cc:2769-2770: if (pass == 0) splitmanage.splitAdditional();
-        // PreferSplitManager: splitAdditional on pass 0. No-op for x86-64
-        // (no split records), but wired for completeness.
+        // Ghidra cc:2755-2756: if (pass == 0) splitmanage.splitAdditional();
         if self.pass == 0 {
-            let mut fd_for_split = fd_arc.write().unwrap();
-            let mut split_mgr = crate::prefersplit::PreferSplitManager::new();
-            split_mgr.init(&mut fd_for_split, Vec::new());
-            split_mgr.split_additional(&mut fd_for_split);
+            splitmanage.split_additional(fd);
         }
 
-        // Ghidra cc:2771: pass += 1;
+        // Ghidra cc:2757: pass += 1;
         self.pass += 1;
     }
 
-    // Ghidra: heritage.cc:2600 Heritage::placeMultiequals
-    /// Place phi nodes using the ADT algorithm. Faithful to Ghidra's
-    /// placeMultiequals which calls calcMultiequals then creates
-    /// MULTIEQUAL ops in merge[] blocks.
-    pub fn place_multiequals(&mut self) {
-        let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
-        let fd_arc = fd_weak.upgrade().expect("Funcdata dropped");
-        let mut fd = fd_arc.write().unwrap();
-
-        // Build ADT if needed (cc:2690 heritage() checks maxdepth==-1).
-        // We need dom tree built first.
+    // Ghidra: heritage.cc:2599 Heritage::placeMultiequals
+    /// Place phi nodes using the ADT algorithm, faithful to the call shape of
+    /// `placeMultiequals` (heritage.cc:2599-2645): it consumes the ADT built
+    /// by the driver (`heritage`, cc:2676-2677) and the current `disjoint`
+    /// cover, then inserts each MULTIEQUAL at the beginning of its merge
+    /// block (cc:2631-2642).
+    ///
+    /// KNOWN DIVERGENCES (registered, HERITAGE-ADT-RENAME-0001):
+    ///   - Ghidra walks `disjoint` in order with collect/refinement/guard;
+    ///     Rugra still groups exact written locations by (space, address)
+    ///     from the Varnode bank instead of consuming `disjoint`.
+    ///   - The inserted op's size comes from the grouped varnode's stored
+    ///     range rather than the MemRange, and the block-begin insertion
+    ///     (opInsertBegin) is approximated by bank creation.
+    /// The ownership contract is unchanged: one explicit `&mut Funcdata`,
+    /// no Weak upgrade, no nested lock, banks separated by `mem::take`.
+    pub fn place_multiequals(&mut self, fd: &mut Funcdata) {
+        // Ghidra relies on the dominator state produced upstream by
+        // Funcdata::structureReset; Rugra's producer is build_dom_tree.
         fd.bblocks.build_dom_tree();
-
-        // build_adt reads fd via Weak — but we hold the write lock.
-        // So inline the dom tree construction by temporarily releasing.
-        // Simplest: store bblocks ref, build ADT, then proceed.
-        let bblocks_size = fd.bblocks.get_size();
-        if bblocks_size > 0 {
-            // Build ADT using the index-based approach from build_adt.
-            // We can't call self.build_adt() because it uses self.fd Weak
-            // which conflicts with our write lock. So we call it after
-            // releasing fd.
-        }
 
         // Group written varnodes by (space, address).
         let mut write_groups: BTreeMap<(AddressSpace, Address), Vec<i32>> = BTreeMap::new();
+        let mut write_sizes: BTreeMap<(AddressSpace, Address), i32> = BTreeMap::new();
         for vn_ref in &fd.vbank.loc_tree {
             let vn = vn_ref.0.read().unwrap();
             if !vn.is_written() { continue; }
@@ -3104,36 +3285,40 @@ impl Heritage {
                     if let Some(parent) = parent_weak.upgrade() {
                         let blk_idx = parent.read().unwrap().get_index();
                         let key = (vn.address_space, vn.loc);
+                        write_sizes
+                            .entry(key)
+                            .and_modify(|s| *s = (*s).max(vn.get_size() as i32))
+                            .or_insert(vn.get_size() as i32);
                         write_groups.entry(key).or_default().push(blk_idx);
                     }
                 }
             }
         }
 
-        // Release fd, build ADT, then re-acquire.
-        drop(fd);
-        self.build_adt();
-
-        let mut fd2 = fd_arc.write().unwrap();
-        let mut vbank = std::mem::take(&mut fd2.vbank);
-        let mut obank = std::mem::take(&mut fd2.obank);
+        // The ADT itself was built by the driver when maxdepth == -1; it is
+        // not rebuilt here (heritage.cc:2599 has no buildADT call).
+        let mut vbank = std::mem::take(&mut fd.vbank);
+        let mut obank = std::mem::take(&mut fd.obank);
 
         for ((space, addr), write_blocks) in &write_groups {
-            self.calc_multiequals(write_blocks);
+            self.calc_multiequals(fd, write_blocks);
 
             for &blk_idx in &self.merge.clone() {
-                let bl = match fd2.bblocks.get_block(blk_idx as usize) {
+                let bl = match fd.bblocks.get_block(blk_idx as usize) {
                     Some(b) => b, None => continue,
                 };
                 let blk_size_in = bl.read().unwrap().size_in();
                 if blk_size_in == 0 { continue; }
                 let start_addr = bl.read().unwrap().get_start_addr();
                 let multiop = obank.create(OpCode::CPUI_MULTIEQUAL, blk_size_in, start_addr);
-                let out_vn = vbank.create_with_space(8, *space, addr.as_u64());
+                let size = *write_sizes
+                    .get(&(*space, *addr))
+                    .unwrap_or(&8) as usize;
+                let out_vn = vbank.create_with_space(size, *space, addr.as_u64());
                 out_vn.write().unwrap().set_active_heritage();
                 multiop.0.write().unwrap().output = Some(out_vn);
                 for _j in 0..blk_size_in {
-                    let vnin = vbank.create_with_space(8, *space, addr.as_u64());
+                    let vnin = vbank.create_with_space(size, *space, addr.as_u64());
                     multiop.0.write().unwrap().inrefs.push(vnin.clone());
                     vnin.write().unwrap().add_descend(&multiop.0);
                 }
@@ -3142,8 +3327,8 @@ impl Heritage {
         }
         self.merge.clear();
 
-        fd2.vbank = vbank;
-        fd2.obank = obank;
+        fd.vbank = vbank;
+        fd.obank = obank;
     }
 
     // Ghidra: heritage.cc:219 Heritage::placeMultiequalsDirect
@@ -3327,14 +3512,15 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2587 Heritage::rename
-    /// Perform SSA renaming
-    pub fn rename(&mut self) {
-        let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
-        let fd_arc = fd_weak.upgrade().expect("Funcdata dropped");
-        let mut fd = fd_arc.write().unwrap();
+    /// Perform SSA renaming. Faithful to `rename` (heritage.cc:2587-2593):
+    /// one fresh VariableStack, renameRecurse rooted at block 0 only, then
+    /// `disjoint.clear()`.
+    pub fn rename(&mut self, fd: &mut Funcdata) {
         let mut vbank = std::mem::take(&mut fd.vbank);
         self.rename_direct(&mut vbank, &fd.bblocks);
         fd.vbank = vbank;
+        // Ghidra cc:2592: disjoint.clear();
+        self.disjoint.clear();
     }
 
     // RUGRA-GLUE: Direct-bank SSA driver around locked Heritage::rename/renameRecurse; it separates Rust-owned banks and its broader driver differences are documented.
@@ -3761,6 +3947,7 @@ impl Heritage {
     pub fn clear(&mut self) {
         // Ghidra cc:2872-2878
         self.globaldisjoint.clear();
+        self.disjoint.clear();
         self.domchild.clear();
         self.augment.clear();
         self.flags.clear();
@@ -4209,6 +4396,259 @@ mod tests {
         assert!(g.is_guarded(&AddressSpace::Ram, 0xffff));
         // A different space is never guarded.
         assert!(!g.is_guarded(&AddressSpace::Stack, 0x1234));
+    }
+
+    // HERITAGE-OWNERSHIP-0001: shared synthetic-graph builder for the
+    // ownership-boundary regression tests.
+    struct OwnershipGraph {
+        fd: Funcdata,
+        next_pc: u64,
+    }
+
+    impl OwnershipGraph {
+        fn new(name: &str, base: u64) -> Self {
+            OwnershipGraph {
+                fd: Funcdata::new(name, Address::new(base), 0x20),
+                next_pc: 0,
+            }
+        }
+
+        fn block(&mut self, index: i32) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+            let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
+                BlockBasic::new(index, Address::new(0x6000)),
+            ));
+            self.fd.bblocks.add_block(block.clone());
+            block
+        }
+
+        fn op(&mut self, opcode: OpCode, inputs: usize) -> PcodeOpRef {
+            let pc = Address::new(0x6000 + self.next_pc);
+            self.next_pc += 1;
+            let op = self.fd.new_op(inputs, pc);
+            self.fd.op_set_opcode(&op, opcode);
+            op
+        }
+
+        fn constant(&mut self, size: usize, value: u64) -> Arc<RwLock<Varnode>> {
+            self.fd.new_constant(size, value)
+        }
+
+        fn free_register(&mut self, offset: u64, size: usize) -> Arc<RwLock<Varnode>> {
+            self.fd
+                .vbank
+                .create_with_space(size, AddressSpace::Register, offset)
+        }
+
+        /// Written varnode at an explicit register address (the SLEIGH-style
+        /// direct register write), modeled with the bank's def transition.
+        fn written_register(
+            &mut self,
+            offset: u64,
+            size: usize,
+            op: &PcodeOpRef,
+        ) -> Arc<RwLock<Varnode>> {
+            let vn = self
+                .fd
+                .vbank
+                .create_with_space(size, AddressSpace::Register, offset);
+            let vn = self
+                .fd
+                .vbank
+                .set_def_prevalidated(vn, Arc::downgrade(&op.0));
+            op.0.write().unwrap().output = Some(vn.clone());
+            vn
+        }
+
+        fn set_input(&mut self, op: &PcodeOpRef, vn: &Arc<RwLock<Varnode>>, slot: usize) {
+            self.fd.op_set_input(op, vn.clone(), slot);
+        }
+
+        fn insert_end(&mut self, op: &PcodeOpRef, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+            self.fd.op_insert_end(op, block);
+        }
+    }
+
+    // HERITAGE-OWNERSHIP-0001: the phi self-reference cycle graph (the cover
+    // fixture slot2 topology with a genuine loop-carried def-use cycle:
+    // m_out -> r -> t3 -> m slot 1).
+    fn build_phi_cycle_graph(name: &str) -> Funcdata {
+        let mut g = OwnershipGraph::new(name, 0x6000);
+        let b0 = g.block(0);
+        let b1 = g.block(1);
+        let b2 = g.block(2);
+        let b3 = g.block(3);
+        g.fd.bblocks.add_edge(b0.clone(), b1.clone());
+        g.fd.bblocks.add_edge(b1.clone(), b2.clone());
+        g.fd.bblocks.add_edge(b2.clone(), b1.clone());
+        g.fd.bblocks.add_edge(b2.clone(), b3.clone());
+
+        let c8 = g.constant(8, 5);
+        let c4 = g.constant(4, 7);
+
+        let d0 = g.op(OpCode::CPUI_COPY, 1);
+        g.set_input(&d0, &c8, 0);
+        let _t0 = g.fd.new_unique_out(8, &d0);
+        g.insert_end(&d0, &b0);
+
+        let free = g.free_register(0x28, 8);
+        let m = g.op(OpCode::CPUI_MULTIEQUAL, 2);
+        g.set_input(&m, &free, 0);
+        let m_out = g.written_register(0x28, 8, &m);
+        let _ = m_out;
+
+        let r = g.op(OpCode::CPUI_INT_ADD, 2);
+        let t3 = g.written_register(0x28, 8, &r);
+        g.set_input(&r, &m_out, 0);
+        g.set_input(&r, &c4, 1);
+        g.set_input(&m, &t3, 1);
+        g.insert_end(&m, &b1);
+        g.insert_end(&r, &b2);
+
+        let o = g.op(OpCode::CPUI_INT_OR, 2);
+        g.set_input(&o, &m_out, 0);
+        g.set_input(&o, &c4, 1);
+        let _t4 = g.fd.new_unique_out(8, &o);
+        g.insert_end(&o, &b3);
+
+        g.fd
+    }
+
+    // HERITAGE-OWNERSHIP-0001: three consecutive `Funcdata::op_heritage`
+    // boundary calls (pass 0->1->2->3) on the same `&mut Funcdata` must
+    // complete on a phi self-reference cycle graph. The pre-refactor nominal
+    // `Heritage::heritage` re-entered the Funcdata write lock (once via the
+    // driver and again inside the guard-calls block), which self-deadlocks;
+    // the explicit-ownership pass has no lock to re-enter. The watchdog
+    // thread makes a hang fail the test instead of wedging the runner.
+    #[test]
+    fn test_op_heritage_three_passes_survive_phi_cycle_without_deadlock() {
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel::<(i32, i32)>();
+        let handle = std::thread::spawn(move || {
+            let mut fd = build_phi_cycle_graph("phi_cycle");
+            fd.op_heritage();
+            let p1 = fd.heritage.pass;
+            let md1 = fd.heritage.maxdepth;
+            fd.op_heritage();
+            fd.op_heritage();
+            let _ = tx.send((p1, md1));
+            (fd.heritage.pass, fd.heritage.maxdepth)
+        });
+
+        let (p1, md1) = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("first op_heritage pass did not complete (deadlock regression)");
+        let (pass, maxdepth) = handle
+            .join()
+            .expect("three op_heritage passes panicked (60s watchdog)");
+
+        // One pass per boundary call: 0 -> 1 -> 2 -> 3.
+        assert_eq!(p1, 1);
+        assert_eq!(pass, 3);
+        // Four-block dominator chain b0 > b1 > b2 > b3 has Ghidra depths
+        // 1/2/3/4 (block.cc:2056 root depth 1), built exactly once (the
+        // maxdepth == -1 rebuild fired on pass 1 only).
+        assert_eq!(md1, 4);
+        assert_eq!(maxdepth, 4);
+    }
+
+    // HERITAGE-OWNERSHIP-0001: explicit record of the behavioral difference
+    // between the old production recipe (two direct place/rename passes with
+    // an embedded ActionDeadCode sandwich and stack-store discovery between
+    // them — src/coreaction.rs ActionHeritage::apply pre-refactor) and the
+    // new canonical single-pass boundary. Ghidra runs ActionDeadCode as a
+    // later sibling Action decided by the executor (coreaction.cc:5487-5504),
+    // never inside Heritage; the new boundary therefore leaves an unread
+    // (dead) write in place while the old recipe removes it. This test pins
+    // that difference so the production switch (HERITAGE-DRIVER-SWITCH) must
+    // account for DeadCode scheduling explicitly.
+    #[test]
+    fn test_op_heritage_leaves_deadcode_to_the_action_executor() {
+        fn build(base: u64) -> Funcdata {
+            let mut g = OwnershipGraph::new("deadcode_split", base);
+            let b0 = g.block(0);
+            let b1 = g.block(1);
+            g.fd.bblocks.add_edge(b0.clone(), b1.clone());
+            let c4 = g.constant(4, 7);
+
+            // d1: writes register 0x30 from a free read (heritage work).
+            let free = g.free_register(0x30, 8);
+            let d1 = g.op(OpCode::CPUI_INT_ADD, 2);
+            g.set_input(&d1, &free, 0);
+            g.set_input(&d1, &c4, 1);
+            let _d1out = g.written_register(0x30, 8, &d1);
+            g.insert_end(&d1, &b0);
+
+            // r1: reads the same free varnode in the successor block.
+            let r1 = g.op(OpCode::CPUI_INT_OR, 2);
+            g.set_input(&r1, &free, 0);
+            g.set_input(&r1, &c4, 1);
+            let _t3 = g.fd.new_unique_out(8, &r1);
+            g.insert_end(&r1, &b1);
+
+            // dead: an unread unique write that only a DeadCode action
+            // removes.
+            let dead = g.op(OpCode::CPUI_INT_MULT, 2);
+            g.set_input(&dead, &c4, 0);
+            g.set_input(&dead, &c4, 1);
+            let _dead_out = g.fd.new_unique_out(8, &dead);
+            g.insert_end(&dead, &b0);
+
+            g.fd
+        }
+
+        let count_alive = |fd: &Funcdata| fd.obank.alivelist.len();
+
+        // Old recipe: direct place/rename + embedded DeadCode + discovery +
+        // a second direct pass (ActionHeritage::apply pre-refactor shape).
+        let mut old_fd = build(0x6100);
+        {
+            let mut heritage = std::mem::take(&mut old_fd.heritage);
+            heritage.place_multiequals_direct(
+                &mut old_fd.vbank,
+                &mut old_fd.obank,
+                &old_fd.bblocks,
+                &old_fd.sblocks,
+            );
+            heritage.rename_direct(&mut old_fd.vbank, &old_fd.bblocks);
+            heritage.pass += 1;
+            old_fd.heritage = heritage;
+        }
+        {
+            use crate::action::Action;
+            let mut dc = crate::coreaction::ActionDeadCode::new();
+            let _ = dc.apply(&mut old_fd);
+        }
+        crate::heritage::Heritage::discover_and_guard_stack_stores_fd(&mut old_fd);
+        {
+            let mut heritage = std::mem::take(&mut old_fd.heritage);
+            heritage.place_multiequals_direct(
+                &mut old_fd.vbank,
+                &mut old_fd.obank,
+                &old_fd.bblocks,
+                &old_fd.sblocks,
+            );
+            heritage.rename_direct(&mut old_fd.vbank, &old_fd.bblocks);
+            heritage.pass += 1;
+            old_fd.heritage = heritage;
+        }
+
+        // New boundary: three canonical single passes, no embedded DeadCode.
+        let mut new_fd = build(0x6200);
+        new_fd.op_heritage();
+        new_fd.op_heritage();
+        new_fd.op_heritage();
+
+        // The recorded difference: the old sandwich removes the dead write,
+        // the canonical boundary does not (DeadCode belongs to the executor).
+        assert!(
+            count_alive(&new_fd) > count_alive(&old_fd),
+            "expected old embedded-DeadCode recipe to remove more ops than the canonical boundary: old={} new={}",
+            count_alive(&old_fd),
+            count_alive(&new_fd)
+        );
+        assert_eq!(new_fd.heritage.pass, 3);
     }
 }
 
