@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "fixture_id": "CSPEC-RANGEPROPS-0001",
-  "stable_function_id": "GH12-F-87faea0d5fa6006d5091",
+  "stable_function_id": "GH12-F-25134c39e3f7107d750a",
   "overall_status": "MISMATCH: the abstract-Decoder projection and the real TreeDecoder/XmlDecode unregistered-attribute projection byte-match at the re-pinned Rugra base, but dynamic AddrSpace/register application and decoder-originated error transport remain outside this atomic change and production XML text ingestion still depends on MARSHAL-XML-TEXT-0001",
   "oracle": {
     "tag": "Ghidra_12.0.4_build",
@@ -50,7 +50,7 @@
     "rust_fixture_sha256": "7f6f81524b482e8087250210d48ed52d90b2f11c9e658154d64570c33015291a",
     "address_rs_sha256": "cf2c4a2af91585517f2c23a5ec5925de2894bca67ecd2dd3bca2f7fb85db3625",
     "address_doc_sha256": "b583ac68f0c2f37b974aefce129b7ca8869cc058f7a319f1c28de3ba53ab4bd0",
-    "runner_sha256": "3db34ad582c299cec2f39800a6630c515166675a0f6300f6b2414d34a77f4968",
+    "runner_sha256": "2d791102c1071a14c6ba748027ccc28e47e9f75d38c0a4ddfcaed3b4ed962624",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

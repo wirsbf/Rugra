@@ -1,9 +1,9 @@
 {
   "schema": 2,
   "fixture_id": "PIPE-MERGETYPE-ORDER-0001",
-  "stable_function_id": "GH12-F-universalaction-coreaction-5462",
+  "stable_function_id": "GH12-F-bf835e5e2b2bd0ac91bd",
   "stable_function_closure": [
-    "GH12-F-universalaction-coreaction-5462 ghidra::ActionDatabase::universalAction coreaction.cc:5462",
+    "GH12-F-bf835e5e2b2bd0ac91bd ghidra::ActionDatabase::universalAction coreaction.cc:5462",
     "ghidra::ActionGroup::apply action.cc:506",
     "ghidra::Action::perform action.cc:298",
     "ghidra::ActionAssignHigh::apply coreaction.hh:346",
@@ -53,7 +53,7 @@
     "coreaction_rs_sha256": "a4455002706bc7ce716acbd86e087e84fa569686fb82ad0c268d9f6e51036a55",
     "action_doc_sha256": "567ec6ba4bc41f621ab879b96170593de83735b57420e23b7830c13f6a895130",
     "coreaction_doc_sha256": "f0a16d51461f92731a6b3b3798a19c1e1ee5fb91ef31d509bde1c6b78511b04a",
-    "runner_sha256": "bd040c51eee9651744f970f980a3e739b1ba1f23bccc21e63a0a4d5933110d8b",
+    "runner_sha256": "f8298db368b7967ff6c7f4c79a907b38f3f6a850a1de77a56ddf173ab622b192",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

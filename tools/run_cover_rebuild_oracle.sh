@@ -322,7 +322,7 @@ require("fixture id", metadata["fixture_id"], "COVER-REBUILD-SELFLOCK-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-2e258b0ed8a7710ba567",
+    "GH12-F-b2fd8bf326b47e4fb5dc",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
 oracle = metadata["oracle"]

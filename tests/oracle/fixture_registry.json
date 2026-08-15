@@ -90,11 +90,11 @@
      "tools/run_preferred_zext_oracle.sh"
     ],
     "rust_function_ids": [
-     "RG-F-9f9b178c52fe97265fbe",
-     "RG-F-a1d798d881d5a8287293",
-     "RG-F-e690dfa72c7c6304da2b",
-     "RG-F-d7882506019c95af00ef",
-     "RG-F-8a675ddc34f10e0cc5a2"
+     "RG-F-a0b214591dc2d5fb5577",
+     "RG-F-0c5e855db7a4ca8a6a9d",
+     "RG-F-577f6c6ed64c33e8b41c",
+     "RG-F-5c6e179e4c791a950842",
+     "RG-F-ad9083c45ed7997566cd"
     ]
    }
   },
@@ -282,9 +282,9 @@
      "tools/run_userop_index_oracle.sh"
     ],
     "rust_function_ids": [
-     "RG-F-64e0264879ea41785f5a",
-     "RG-F-50df33da064efb4f6c95",
-     "RG-F-4522413cbda27ee0ad60"
+     "RG-F-e16e2ce896a536acc67b",
+     "RG-F-6d5cf98a3e403fa8035f",
+     "RG-F-ef8b8ee3989865759747"
     ]
    }
   },
@@ -440,10 +440,10 @@
      "tools/run_functional_equality_level_oracle.sh"
     ],
     "rust_function_ids": [
-     "RG-F-204cb9a4deb2aeceaeac",
-     "RG-F-a2da4712f6feb7c810ce",
-     "RG-F-4407868d079e72022382",
-     "RG-F-bf05bd1e2f9b7f2d9b5c"
+     "RG-F-a689e6f11db7a8af0e58",
+     "RG-F-3e9fa45e742e28befd6e",
+     "RG-F-2c1e0c1f107739ec425b",
+     "RG-F-97f1fc4e52d7d319b5c3"
     ]
    }
   },
@@ -477,31 +477,31 @@
      "tools/run_marshal_id_oracle.sh"
     ],
     "rust_function_ids": [
-     "RG-F-d497c5df052f1bdb9ae9",
-     "RG-F-7aea0e80e3b7bea6a115",
-     "RG-F-afcd1311ccc10e0a332a",
-     "RG-F-3eec990576b4e9ed730e",
-     "RG-F-95f4a115506d9344a386",
-     "RG-F-a8c7faa35327bcf2487a",
-     "RG-F-3dd0605552982c5bffc6",
-     "RG-F-98813b2634c72ae9e06c",
-     "RG-F-2ec0f9056806f04ccd89",
-     "RG-F-abbd9160084ecbed19bc",
-     "RG-F-e7ba261089057218dc62",
-     "RG-F-d13f340da5bf774f80ec",
-     "RG-F-b7878f6ab2e7df46f50e",
-     "RG-F-b0901c56035c988ae485",
-     "RG-F-e5204ccdbf9e1428a772",
-     "RG-F-27d78fdeee98a0b02c04",
-     "RG-F-13c0037690dd4e9558a0",
-     "RG-F-3163076e665aa28c3a23",
-     "RG-F-314662e43ceb65a21b3a",
-     "RG-F-27d148fb822f66ba42fc",
-     "RG-F-b4114fcf4baf6e2398fb",
-     "RG-F-699a268fcec713df305c",
-     "RG-F-fa11d08f00b327c18f26",
-     "RG-F-3aa1880acdef62125dcd",
-     "RG-F-52ac38b54684ad32da55"
+     "RG-F-f001218fde8cdb737669",
+     "RG-F-3887c3dd0c6cd9521bc2",
+     "RG-F-741c82ad92cab68fdf36",
+     "RG-F-e20b8dd71c4c29e8c921",
+     "RG-F-0bee36e73bf474b653cd",
+     "RG-F-01afc713c719ba8173a8",
+     "RG-F-9289b6e0b2593026e83d",
+     "RG-F-9878082ab711466e0105",
+     "RG-F-b77884ddc07e7bd97e8f",
+     "RG-F-c71a60ca0f59b952d257",
+     "RG-F-cd9900ea49eef9434ea4",
+     "RG-F-5c1637c38e57e6fc55d1",
+     "RG-F-f89bb19158bfaad0a11e",
+     "RG-F-b259ed398d20c6dc8584",
+     "RG-F-394c3e8d734fc2bb0a97",
+     "RG-F-9c2fd99d69222182a5d1",
+     "RG-F-f7365e4be72ffd6bb321",
+     "RG-F-4a84a55117387931bfa6",
+     "RG-F-e27c60f7c518a2499e53",
+     "RG-F-a8cbb0039a7fc71c0e1d",
+     "RG-F-4162a9badb716c6e451d",
+     "RG-F-f85ad4be0f1852b7896c",
+     "RG-F-6e0cb5159c8e9ebb506b",
+     "RG-F-98136953fadc5ce1a51e",
+     "RG-F-940786f2665cf6210ab5"
     ]
    }
   },
@@ -539,21 +539,21 @@
      "tools/run_cover_rebuild_oracle.sh"
     ],
     "rust_function_ids": [
-     "RG-F-d9ac586fec3578f3c0ac",
-     "RG-F-1aec1e8de44026630696",
-     "RG-F-83ff7535174bdcbf0393",
-     "RG-F-2dcf7d9d3fce067706e9",
-     "RG-F-2ca29f99f72849e549f2",
-     "RG-F-35504b1a2b9b20a187c5",
-     "RG-F-13c4c62a72ea9309e18b",
-     "RG-F-d72b092123e19cb6a816"
+     "RG-F-8385045dd7e17ba2b355",
+     "RG-F-8342ccdff7b67e4fe1dd",
+     "RG-F-555e05bafa5eeb2fb029",
+     "RG-F-b8cf6c22f0ece3dbed77",
+     "RG-F-715b19a11e1150816249",
+     "RG-F-b6515f1a243a23d1bcc0",
+     "RG-F-9884ccd46fc93520f388",
+     "RG-F-71f4f538ece6f06a81ff"
     ],
     "ghidra_function_ids": [
-     "GH12-F-2e258b0ed8a7710ba567",
-     "GH12-F-2ed31098356eb80bbc64",
-     "GH12-F-83d2d62e37319d768749",
-     "GH12-F-26747b942e30f2943fdf",
-     "GH12-F-c3e2b5c2bab05824fe04"
+     "GH12-F-b2fd8bf326b47e4fb5dc",
+     "GH12-F-9b81a59531050a2a040d",
+     "GH12-F-a57a4ee8f38c85b91c50",
+     "GH12-F-1c7e2d100750ac446e34",
+     "GH12-F-7bbe28b1702f29bcfe3d"
     ]
    }
   },
@@ -588,7 +588,7 @@
     ],
     "rust_function_ids": [],
     "ghidra_function_ids": [
-     "GH12-F-87faea0d5fa6006d5091"
+     "GH12-F-25134c39e3f7107d750a"
     ]
    }
   },
@@ -654,7 +654,7 @@
      "tools/run_block_index_assign_oracle.sh"
     ],
     "ghidra_function_ids": [
-     "GH12-F-763b9cea2c290093427f"
+     "GH12-F-53bf522d4708a537d1f7"
     ]
    }
   },
@@ -688,12 +688,12 @@
      "tools/run_varmap_naming_oracle.sh"
     ],
     "ghidra_function_ids": [
-     "GH12-F-7c3a91d4e2b85a60c4f1",
-     "GH12-F-a1e4f60b3c79d25e8442",
-     "GH12-F-b2d5e71f40a8c36e9553",
-     "GH12-F-c3f6a82b51d94e70f664",
-     "GH12-F-d4a7b93c62e5f180a775",
-     "GH12-F-e5b8ca4d73f60291b886"
+     "GH12-F-dcd573e991c714936f10",
+     "GH12-F-fb0a49c54683c9652e96",
+     "GH12-F-da1f5c1cb324abd14245",
+     "GH12-F-78ec062f72c8b07e99dc",
+     "GH12-F-b2a1d8f9d11d6a13442b",
+     "GH12-F-29143592e9dbebe02a60"
     ]
    }
   },
@@ -727,7 +727,7 @@
      "tools/run_subflow_outvn_oracle.sh"
     ],
     "ghidra_function_ids": [
-     "GH12-F-356f8c93317518f12b2e"
+     "GH12-F-444049fe7206a4153d13"
     ]
    }
   },

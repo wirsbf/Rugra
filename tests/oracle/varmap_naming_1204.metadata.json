@@ -1,14 +1,14 @@
 {
   "schema": 2,
   "fixture_id": "VARMAP-NAMING-0001",
-  "stable_function_id": "GH12-F-7c3a91d4e2b85a60c4f1",
+  "stable_function_id": "GH12-F-dcd573e991c714936f10",
   "stable_function_closure": [
-    "GH12-F-7c3a91d4e2b85a60c4f1 ghidra::Scope::buildDefaultName database.cc:1756",
-    "GH12-F-a1e4f60b3c79d25e8442 ghidra::ScopeInternal::assignDefaultNames database.cc:2850",
-    "GH12-F-b2d5e71f40a8c36e9553 ghidra::ScopeInternal::buildVariableName database.cc:2434",
-    "GH12-F-c3f6a82b51d94e70f664 ghidra::ScopeInternal::makeNameUnique database.cc:2553",
-    "GH12-F-d4a7b93c62e5f180a775 ghidra::ScopeInternal::insertNameTree database.cc:2712",
-    "GH12-F-e5b8ca4d73f60291b886 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
+    "GH12-F-dcd573e991c714936f10 ghidra::Scope::buildDefaultName database.cc:1756",
+    "GH12-F-fb0a49c54683c9652e96 ghidra::ScopeInternal::assignDefaultNames database.cc:2850",
+    "GH12-F-da1f5c1cb324abd14245 ghidra::ScopeInternal::buildVariableName database.cc:2434",
+    "GH12-F-78ec062f72c8b07e99dc ghidra::ScopeInternal::makeNameUnique database.cc:2553",
+    "GH12-F-b2a1d8f9d11d6a13442b ghidra::ScopeInternal::insertNameTree database.cc:2712",
+    "GH12-F-29143592e9dbebe02a60 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
   ],
   "overall_status": "PARTIAL_MATCH: the six-case naming projection (SymbolNameTree walk order, name/displayName mutation, category and catindex effects, nameDedup sequencing, shared int4 base counter across prefixes, idempotence, and the twelve buildVariableName flag branches) byte-matches the locked oracle; the buildDefaultName representative-Varnode path with a live Funcdata/HighVariable, the real Translate register-table plumbing, multiEntrySet maintenance, and symbolId allocation remain outside this atomic change",
   "oracle": {
@@ -53,7 +53,7 @@
     "printc_rs_sha256": "f13f2e58e47c4bbb9cc650856a3c55781a2e9eccca57c2c60e697b3c0c6d712e",
     "varmap_doc_sha256": "2e7b1057481e3e1c7c84101a3a7d7d99b753f91886541892fc51f29ba561cbf8",
     "printc_doc_sha256": "09327ae14f6f91a47e67778f1262898960f92d474f2e3b3d045fe75d0977869d",
-    "runner_sha256": "bd1e85b545d15f3e2c11a013037e9a39e651a9aa5fbacbdc0a12a6665f70a79b",
+    "runner_sha256": "f803ce33949b2b06122c8cae7ecd2cb4de694a79190e7cc134ffbfaee371ca02",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

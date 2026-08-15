@@ -1,13 +1,13 @@
 {
   "schema": 2,
   "fixture_id": "COVER-REBUILD-SELFLOCK-0001",
-  "stable_function_id": "GH12-F-2e258b0ed8a7710ba567",
+  "stable_function_id": "GH12-F-b2fd8bf326b47e4fb5dc",
   "stable_function_closure": [
-    "GH12-F-2e258b0ed8a7710ba567 ghidra::Varnode::updateCover varnode.cc:233",
-    "GH12-F-2ed31098356eb80bbc64 ghidra::Cover::rebuild cover.cc:477",
-    "GH12-F-83d2d62e37319d768749 ghidra::Cover::addDefPoint cover.cc:501",
-    "GH12-F-26747b942e30f2943fdf ghidra::Cover::addRefRecurse cover.cc:524",
-    "GH12-F-c3e2b5c2bab05824fe04 ghidra::Cover::addRefPoint cover.cc:565"
+    "GH12-F-b2fd8bf326b47e4fb5dc ghidra::Varnode::updateCover varnode.cc:233",
+    "GH12-F-9b81a59531050a2a040d ghidra::Cover::rebuild cover.cc:477",
+    "GH12-F-a57a4ee8f38c85b91c50 ghidra::Cover::addDefPoint cover.cc:501",
+    "GH12-F-1c7e2d100750ac446e34 ghidra::Cover::addRefRecurse cover.cc:524",
+    "GH12-F-7bbe28b1702f29bcfe3d ghidra::Cover::addRefPoint cover.cc:565"
   ],
   "overall_status": "PARTIAL_MATCH: the eight-case rebuilt-Cover projection (endpoint pairs, flags, dirty lifecycle, descendant/slot identity, op orders) byte-matches the locked oracle, and the production self-lock topology (MULTIEQUAL slot 2 holding the rebuilt root) is covered; order-only CoverBlock residuals (addRefPoint old-stop MULTIEQUAL-tip discrimination, INDIRECT getOpFromConst target order), production FlowBlock index assignment, and the full ActionMergeType caller closure remain outside this atomic change",
   "oracle": {
@@ -57,7 +57,7 @@
     "cover_doc_sha256": "6f69256196e45a2a47eb59a0a02ccf3808883634e317a81896a3ad437e0486a4",
     "varnode_doc_sha256": "90f960a025d0543d77294aa0891be647ef42bd9ba8fec62142242c6d9ff24723",
     "merge_doc_sha256": "89f2f2f57f47509d646764f7f7bddd4492f2f560c3494e67361a1aad9a2e5659",
-    "runner_sha256": "577798172e4c51f5d35a9c6399b64c80076aee67a17904e0c526678ef8be8acb",
+    "runner_sha256": "697a6efca0ad0d616143618c5a2774591d756e3cacaed57e140e2d150b23d898",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

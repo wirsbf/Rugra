@@ -305,7 +305,7 @@ require("fixture id", metadata["fixture_id"], "SUBFLOW-OUTVN-UNWRAP-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-356f8c93317518f12b2e",
+    "GH12-F-444049fe7206a4153d13",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
 oracle = metadata["oracle"]

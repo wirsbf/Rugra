@@ -1,14 +1,14 @@
 {
   "schema": 2,
   "fixture_id": "BLOCK-INDEX-ASSIGN-0001",
-  "stable_function_id": "GH12-F-763b9cea2c290093427f",
+  "stable_function_id": "GH12-F-53bf522d4708a537d1f7",
   "stable_function_closure": [
-    "GH12-F-763b9cea2c290093427f ghidra::BlockGraph::findSpanningTree block.cc:1009",
-    "GH12-F-f9a0f9fe13bab48c7727 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
-    "GH12-F-061b32b7475a2a05fb32 ghidra::BlockGraph::clearEdgeFlags block.cc:966",
-    "GH12-F-eb00a9a61ed26f836395 ghidra::FlowBlock::isIrreducibleOut block.hh:332",
-    "GH12-F-7388d16d9268c37a4c7f ghidra::FlowBlock::getCopyMap block.hh:163",
-    "GH12-F-51e6f2c6d424dec5d6cc ghidra::FlowBlock::FlowBlock block.cc:61"
+    "GH12-F-53bf522d4708a537d1f7 ghidra::BlockGraph::findSpanningTree block.cc:1009",
+    "GH12-F-49056a46f355bb8dc2e8 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
+    "GH12-F-8f4549050d423d0a738b ghidra::BlockGraph::clearEdgeFlags block.cc:966",
+    "GH12-F-87a41fef4304d7480649 ghidra::FlowBlock::isIrreducibleOut block.hh:332",
+    "GH12-F-e15329b458470f919b73 ghidra::FlowBlock::getCopyMap block.hh:163",
+    "GH12-F-87c9a5900b5ff9dbb9d1 ghidra::FlowBlock::FlowBlock block.cc:61"
   ],
   "overall_status": "MATCH: the eight-case post-call projection (preorder, final rootlist, reordered component list, per-block index/visitcount/numdesc/copymap, out-edge and mirrored in-edge label classification, distinct-in-range index invariant) byte-matches the locked oracle; findIrreducible's copymap reuse, the structureLoops caller closure, and wiring the production pipeline onto the public port remain separate tasks",
   "oracle": {
@@ -53,7 +53,7 @@
     "rust_fixture_sha256": "cb3c342571287f657b4b15e0cb036f343c129ce1e9418e86b3d731f5e4f3e193",
     "block_rs_sha256": "19f14f8f8287e4cebe3b3ef6487d8fa27286c990644dc317080861d04e693b51",
     "block_doc_sha256": "d7e3795243aacd68a5edc021e285b93592a3f2fbc61e98fc0ba22836c81c5d9e",
-    "runner_sha256": "2d59fe2067e530e41ca87b08b2b506c440179199d40b5d77e0d34a4a14fcadfd",
+    "runner_sha256": "1b42433778bffa6ebf8971c6cf980887cca0c7a6f75155503a44d0d43eca4f15",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

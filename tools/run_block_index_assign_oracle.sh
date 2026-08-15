@@ -304,7 +304,7 @@ require("fixture id", metadata["fixture_id"], "BLOCK-INDEX-ASSIGN-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-763b9cea2c290093427f",
+    "GH12-F-53bf522d4708a537d1f7",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]

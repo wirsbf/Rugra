@@ -313,7 +313,7 @@ require("fixture id", metadata["fixture_id"], "VARMAP-NAMING-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-7c3a91d4e2b85a60c4f1",
+    "GH12-F-dcd573e991c714936f10",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
 oracle = metadata["oracle"]

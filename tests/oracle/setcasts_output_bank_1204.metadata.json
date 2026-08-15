@@ -1,14 +1,14 @@
 {
   "schema": 2,
   "fixture_id": "VARNODE-BANK-KEY-LIVE-0001",
-  "stable_function_id": "GH12-F-2d940e56022a932b3550",
+  "stable_function_id": "GH12-F-aef1621803418b7c0c13",
   "stable_function_closure": [
-    "GH12-F-2d940e56022a932b3550 ghidra::VarnodeBank::makeFree varnode.cc:1316",
-    "GH12-F-2d344b1d13ea6e907ad1 ghidra::VarnodeBank::setInput varnode.cc:1358",
-    "GH12-F-2d7ab6ee81cc375ea212 ghidra::VarnodeBank::setDef varnode.cc:1380",
-    "GH12-F-2d2c8e65e6804971ba34 ghidra::VarnodeBank::xref varnode.cc:1291",
-    "GH12-F-2dcdf14f56b06c633804 ghidra::Funcdata::opSetOutput funcdata_op.cc:115",
-    "GH12-F-2df05d6666c23d998504 ghidra::Funcdata::opUnsetOutput funcdata_op.cc:52"
+    "GH12-F-aef1621803418b7c0c13 ghidra::VarnodeBank::makeFree varnode.cc:1316",
+    "GH12-F-9e163a6e0cf5b4889689 ghidra::VarnodeBank::setInput varnode.cc:1358",
+    "GH12-F-bcf70b575f220c4502a9 ghidra::VarnodeBank::setDef varnode.cc:1380",
+    "GH12-F-49c83b6f17e13c094f92 ghidra::VarnodeBank::xref varnode.cc:1291",
+    "GH12-F-e6bab00ee2d8dc936323 ghidra::Funcdata::opSetOutput funcdata_op.cc:115",
+    "GH12-F-24417978637b4406b22d ghidra::Funcdata::opUnsetOutput funcdata_op.cc:52"
   ],
   "overall_status": "MATCH: the four-case VarnodeBank key-lifecycle projection (both tree iteration orders with class/createIndex/SeqNum-order projections, per-Varnode membership counts, insert/input/written/free flags, defining SeqNum order after each rebinding) byte-matches the locked oracle through the production Funcdata::opSetOutput/opUnsetOutput closure, including the hand-built in-place key-drift topology that previously panicked Rugra's key-recomputed makeFree erase; residuals are limited to the unobservable ownership guard for foreign handles (Ghidra counterpart is construction-only), the union-resolution arm of ActionSetCasts::castOutput itself, and makeFree on an input-class Varnode, none of which the castOutput closure reaches",
   "oracle": {
@@ -51,7 +51,7 @@
     "coreaction_rs_sha256": "9e3ab3986212197de9f28c766c8026ec2074d31108b0303191b8bbd0e0079f65",
     "varnode_doc_sha256": "e8309221f793bd2b7f88889cd1602e8c86bbd15d5142734ea6815ab157f3f8ce",
     "coreaction_doc_sha256": "4c2e9997fe938269fd03d6d4fa96b44f884810f30df358cb25bed8b176d3bf83",
-    "runner_sha256": "f37bfa69d1b402caf035085f986c3517366acad960f5afe2981ee64052b52b14",
+    "runner_sha256": "f1c17e9ed81a1f91cf282d95f99eaeef8ed7d3c7eef0344078c7211f6888d501",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

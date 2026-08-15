@@ -313,7 +313,7 @@ require("fixture id", metadata["fixture_id"], "VARNODE-BANK-KEY-LIVE-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-2d940e56022a932b3550",
+    "GH12-F-aef1621803418b7c0c13",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]

@@ -297,7 +297,7 @@ metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
 require("fixture id", metadata["fixture_id"], "CSPEC-RANGEPROPS-0001")
-require("stable function id", metadata["stable_function_id"], "GH12-F-87faea0d5fa6006d5091")
+require("stable function id", metadata["stable_function_id"], "GH12-F-25134c39e3f7107d750a")
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MISMATCH")
 oracle = metadata["oracle"]
 for label, actual, expected in (
