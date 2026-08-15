@@ -13,7 +13,7 @@
 | 锁定 oracle 函数 fixture | **registry 22 个**（本 wave 新增 9 个，8 个全投影 MATCH、1 个 28/29） | `tests/oracle/fixture_registry.json` |
 | erase_descend WARN 风暴 | **1454/函数 → 0** | timeout isolation 日志前后对比 |
 | 函数账本 | scheme 2 位置无关 ID（9494 Ghidra defs / 8644 Rust），`--check` verified | `2dfc91b` |
-| **12.0.4 canonical golden 差分（端到端北極星）** | **skeleton 4530 / defects 0 / numbering 126**（21 函数；起点基线 2026-08-15，目标全零） | `python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c`（golden=真 headless 双跑字节一致，`0c912e9`） |
+| **12.0.4 canonical golden 差分（端到端北極星）** | **skeleton 3996 / defects 0 / numbering 6**（24 函数；起点 4530/0/126 → 双修复后 -12%/-95%；**首个逐字节一致函数 `__libc_csu_fini`**；目标全零） | `python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c`；本轮改善=RuleMultiCollapse 中止修复（main/glob_word/glob_set 三函数恢复完整结构）+ PRINTC 六类格式对齐（c960937） |
 | 11.3.2 诊断 golden | 退役为回归信号 | `ghidra_curl.c` 保留 |
 
 ### 2026-08-15 wave 落地摘要（20 提交，全部带真实 oracle 门禁或独立复核）
