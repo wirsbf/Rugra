@@ -97,6 +97,16 @@ pub struct Funcdata {
     /// SSA construction manager
     pub heritage: Heritage,
 
+    /// Persistent cross-Action merge state (testCache / copyTrims / live
+    /// premise). Faithful to `Funcdata::covermerge` (funcdata.hh:96): the
+    /// by-value `Merge` member constructed with \b this (funcdata.cc:39),
+    /// shared by every merge-family Action via `getMerge()`
+    /// (funcdata.hh:440), and cleared only by `Funcdata::clear()`
+    /// (funcdata.cc:108). Rugra's merge Actions construct local `Merge`
+    /// instances, so only the persistent channels are mounted here; see
+    /// `merge::MergePersistentState`.
+    pub merge_state: crate::merge::MergePersistentState,
+
     /// Self-reference for use by child components
     pub self_ref: Option<Weak<RwLock<Funcdata>>>,
 
@@ -200,6 +210,7 @@ impl Funcdata {
             bblocks: BlockGraph::new(),
             sblocks: BlockGraph::new(),
             heritage: Heritage::new(),
+            merge_state: crate::merge::MergePersistentState::default(),
             self_ref: None,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
@@ -692,6 +703,14 @@ impl Funcdata {
                     )))
                 })
             };
+            // Ghidra funcdata_varnode.cc:52-53 (setHighLevel → assignHigh):
+            // if (vn->hasCover()) vn->calcCover(); — allocate the Cover and
+            // mark it dirty so the merge-family Actions' lazy updateCover
+            // (HighIntersectTest::updateHigh) can rebuild it. Without this
+            // the standalone merge Actions run on a null-cover premise.
+            if vn_arc.read().unwrap().has_cover() {
+                vn_arc.write().unwrap().calc_cover();
+            }
             let high = Arc::new(RwLock::new(HighVariable::new(dt)));
             high.write().unwrap().add_instance(vn_arc.clone());
             vn_arc.write().unwrap().high = Some(high);
@@ -4784,6 +4803,8 @@ impl Funcdata {
         self.bblocks.clear();
         self.sblocks.clear();
         self.heritage.clear();
+        // Ghidra funcdata.cc:108: covermerge.clear()
+        self.merge_state.clear();
         self.union_map.clear();
         self.laned_map.clear();
         // Ghidra's clear() does not reset localoverride (commands survive

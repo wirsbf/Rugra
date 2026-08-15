@@ -1,0 +1,82 @@
+{
+  "schema": 2,
+  "fixture_id": "MERGE-PERSISTENT-STATE-0001",
+  "overall_status": "MATCH",
+  "status_note": "All 17 projected stage lines across four cases byte-match the locked oracle (both sides sha256 fcc87bb736023d1068c97357046f7697f083d1f546996ecce131ba94eed013b8). Round-3 review fixes pinned by case_type_gate: INT_LEFT shift amount of size!=1 passes the merge.cc:1001 gate (getBaseNoChar == getBase outside the registered 1-byte int, type.cc:3619-3626) and merges with the output side surviving (groups SH:1/TSH:0); FLOAT_TRUNC same-size float input is rejected (typeop.cc:1913 (TYPE_INT,TYPE_FLOAT)).",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "rugra_base_commit": "e87ebfc54444d5f043a321ea1a46e3c8004eff23",
+  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
+  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
+  "analysis_options": {
+    "entrypoint": "production Action entry points on one Funcdata per case: Ghidra fd.getMerge().{mergeAddrTied,groupPartials,mergeMarker,mergeOpcode(CPUI_COPY),mergeAdjacent} on the persistent Funcdata member; Rust coreaction.rs-style fresh Merge::new() per Action calling merge_addr_tied/group_partials/merge_marker, merge_opcode, merge_adjacent, with the cross-Action channels round-tripping through Funcdata::merge_state",
+    "premise": "covers are allocated at setHighLevel exactly as Funcdata::assignHigh does (funcdata_varnode.cc:52-53) and rebuilt lazily by HighIntersectTest::updateHigh during the Actions; the fixture never pre-installs covers",
+    "normalization": "none; stdout is byte-diffed and both stderr streams must be empty"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
+    "cases": [
+      "case copy_shadow_ladder: blocks b0->b1; b0: op1 reg:0x10 vnP = COPY const 0x11",
+      "b1: op2 reg:0x20 vnQ1 = COPY vnP; op3 reg:0x30 vnQ2 = COPY vnP; op4 reg:0x40 tA = INT_ADD vnP,1; op5 reg:0x50 tB = INT_ADD vnQ2,2; op6 reg:0x60 tC = INT_ADD vnQ1,3",
+      "case disjoint_copy: single block b0; op1 reg:0x10 vnX = COPY const 0x21; op2 reg:0x20 vnY = COPY vnX",
+      "case pipeline_tail: same ladder graph at base 0x7200; the four staged Actions plus ActionMergeType — Ghidra mergeByDatatype(beginLoc,endLoc) (coreaction.hh:414-415), Rust Merge::merge_all (the production coreaction.rs ActionMergeType entry) — closing the nested-attach blind spot",
+      "Action sequence per case: setHighLevel (coreaction.hh:346); mergerequired = mergeAddrTied + groupPartials + mergeMarker (coreaction.hh:369-370, coreaction.cc:5718); mergecopy = mergeOpcode(CPUI_COPY) (:5722); mergeadjacent = mergeAdjacent (:5726)",
+      "Ghidra side drives all stages through the one persistent fd.getMerge() object; Rust side constructs Merge::new() per Action exactly like coreaction.rs applies, so persistence must round-trip through Funcdata::merge_state",
+      "per-stage observation: HighVariable instance counts of the six named varnodes, all fifteen pairwise shared-High identity booleans, and each named Varnode's rebuilt Cover as [block:uindex-uindex,...] with b/e endpoint encoding",
+      "case type_gate: single block; input reg:0x08(8B); op1 reg:0x10 SH=COPY const; op2 reg:0x18 F=COPY const; op3 reg:0x30 TSH=INT_LEFT(big, SH) 4B; op4 reg:0x38 TF=FLOAT_TRUNC(F) 4B — pins shift slot1 nochar equality (size 4) and FLOAT_TRUNC (INT,FLOAT) meta rejection"
+    ],
+    "sha256": "ae88bda1a8a77059ab683e0f1e44e94b8c5455e7b80965e26a29b6cab118f6fa"
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "MATCH: HighVariable back-references, all pairwise High identity booleans, instance counts AND per-Varnode mergeGroup values compared after every Action; the mergeGroup projection pins the survivor side (output-side survivor at mergeAdjacent: P/Q1/Q2=1, tC=0 after the speculative absorption) and the non-speculative class preservation at mergeOpcode (all 0)",
+    "loop_bounds_and_order": "MATCH: mergeOpcode walks blocks in index order and ops in insertion order (merge.cc:335-337); mergeAdjacent walks the alive list (merge.cc:993); mergeByDatatype groups in first-seen order (merge.cc:383-400); block indices are creation-order 0,1 both sides",
+    "counters_and_accumulators": "MATCH for observed grouping counts and merge-group counters (variable.cc:640-646 speculative +=numMergeClasses vs :648-654 non-speculative preservation); testCache entry counts are default-private in Ghidra and not projected",
+    "sort_and_comparison_keys": "MATCH: identical uindex domains (0x800002-style packed orders) and identical [blk:start-stop] maps for all six Varnodes at every stage; def-no-read covers are points and live-out defs extend to MAX on both sides"
+  },
+  "coverage": {
+    "copy_shadow_ladder_full_sequence": "MATCH",
+    "disjoint_copy_full_sequence": "MATCH",
+    "pipeline_tail_full_sequence_with_merge_all_entry": "MATCH",
+    "nested_attach_depth_guard": "MATCH",
+    "mergeadjacent_gate_chain": "MATCH: mergeTestAdjacent (merge.cc:175-218) wired plus the outputTypeLocal==inputTypeLocal gate (:1001) via the per-opcode (metaout,metain) ctor table (typeop.cc) with per-slot overrides (shift slot1 BaseNoChar, INSERT/EXTRACT slot0 UNKNOWN, INDIRECT slot1 TypeCode, PTRADD/PTRSUB INT, CPOOLREF INT-in/UNKNOWN-out, CALLOTHER UNKNOWN fallback); op4/op5 rejected, op6 accepted exactly as the oracle",
+    "high_cover_union_rebuild": "MATCH",
+    "def_no_read_cover_convention": "MATCH",
+    "testcache_entry_counts": "UNTESTED: Ghidra Merge::testCache is default-private; only the behavioral effect of the cache is observed",
+    "copytrims_channel_population": "UNTESTED: no fixture graph reaches a forced-merge trim; the address-tied population path additionally depends on the addrtied flag from unported symbol sync",
+    "protopartial_channel": "UNTESTED: Rugra group_partials is a documented no-op",
+    "merge_marker_multiequal_indirect_path": "UNTESTED: Rust merge_test_with_list is coarser than the testCache-based mergeTest (merge.cc:1664) and would diverge through the trim loop",
+    "funcdata_clear_reset": "UNTESTED at oracle level: no fixture stage clears the function",
+    "local_type_gate_ported_subset": "The gate now uses the full ctor-table key model (LocalTypeKey: Base/BaseNoChar/TypeCode with kind+metatype+size identity); remaining UNTESTED: Java-mode selectJavaOperators variants (typeop.cc:118-140) and cpool/userop record-backed types (no fixture path reaches them)",
+    "line_counts_note": "copy_shadow_ladder 4 + disjoint_copy 4 + pipeline_tail 5 + type_gate 4 = 17/17 total",
+    "type_gate_shift_nochar_pass_and_float_trunc_reject": "MATCH (4/4 lines)"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "1c5760a4faf256c00fec43a68a457bc0da56adb15ef770ce9bedc68ab76cd890",
+    "rust_fixture_sha256": "8728fd0e9c0747f3d50e313b50f03dfcfb4b87899dca968ae934698a915bb817",
+    "merge_rs_sha256": "01b03dabcbe8b03d92e930ccf556f8f4504cfa194fca07065b51f5c40c2542c2",
+    "funcdata_overlay_sha256": "d4bca9b1ae0a1931f266b62deeb0aab1c72e1109c1ef2dc4fde59478fd4a45a4",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "expected_ghidra_stdout_sha256": "fcc87bb736023d1068c97357046f7697f083d1f546996ecce131ba94eed013b8",
+    "expected_rugra_stdout_sha256": "fcc87bb736023d1068c97357046f7697f083d1f546996ecce131ba94eed013b8",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_make_path": "/usr/bin/make",
+    "host_git_path": "/usr/bin/git",
+    "host_python_path": "/usr/bin/python3.10",
+    "runner_sha256": "04425ecc5a6d0d48b2e1f19236a6f7bbe43ec4bfa25c7703762b59f7a22979c3"
+  },
+  "build": {
+    "registry_packages": 164,
+    "overlay_note": "src/merge.rs is overlaid verbatim from the leased working tree; src/funcdata.rs is reconstructed deterministically inside the runner as rugra_base_commit:src/funcdata.rs plus the four MERGE-PERSISTENT-STATE-0001 hunks (merge_state field, constructor init, clear hook, set_high_level calcCover premise), fail-closed on any anchor mismatch; base e87ebfc carries the committed VARNODE-COPYSHADOW-ARC-0001 fix in varnode.rs (funcdata.rs is byte-identical between ec03e2f and e87ebfc, so the overlay hash is unchanged)"
+  }
+}

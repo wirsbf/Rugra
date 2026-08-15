@@ -265,7 +265,96 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - `mark_redundant_copies`（merge.cc:1249）：从后往前对每个 subOp 找 domOp，checkCopyPair 通过则标记 nonprinting。
 - `process_high_redundant_copy`（merge.cc:1345）：findAllIntoCopies(filterTemps=false) + 按同源分组 + markRedundantCopies。
 - `mark_internal_copies` 重写为忠实 markInternalCopies（含 shadowedVarnode 无后代检查 + multi-copy 累积 + processHighRedundantCopy）。
-<!-- annotation-pass: 2026-07-04 -->
+<!-- annotation-pass: 2026-08-15 -->
  
  
  
+
+### 2026-08-15：MERGE-PERSISTENT-STATE-0001 — Funcdata 持久 Merge 挂载
+对齐 Ghidra 的 Merge 生命周期：`Merge covermerge` 是 Funcdata 的按值成员
+（funcdata.hh:96），构造于 Funcdata 构造器（funcdata.cc:39 `covermerge(*this)`），
+被所有 merge-family Action 经 `data.getMerge()`（funcdata.hh:440）共享，
+仅在 `Funcdata::clear()`（funcdata.cc:108）时 `Merge::clear()`（merge.cc:1580-1587）。
+
+- `MergePersistentState`（pub struct）：跨 Action 持久通道挂载——
+  `test_cache`（merge.hh:86 HighIntersectTest）、`copy_trims`（merge.hh:87）、
+  `live_set`（RUGRA-GLUE 存活前提，对应 Ghidra "vbank 只含存活 varnode"）。
+  `clear()` 对齐 merge.cc:1580-1587；`channel_sizes()` 供 fixture 观测。
+- `Merge::attach(&mut self, fd)` / `detach(&mut self, fd)`：Action 级入口在
+  进入时从 `Funcdata::merge_state` 取回通道、退出时写回（coreaction.rs 每个
+  apply 各建 `Merge::new()`，等价于 Ghidra 单一持久对象）。`attached` 守卫防止
+  嵌套入口（merge_all → merge_addr_tied 等）中途二次往返。首次 attach 且
+  live_set 为空时按当前 fd 重建存活前提。
+- 接线入口（全部 attach/detach 包裹）：`merge_all`、`merge_addr_tied`、
+  `merge_required`、`merge_marker`、`merge_multi_entry`、`merge_opcode`、
+  `merge_adjacent`、`merge_by_datatype`、`hide_shadows_of`、`hide_shadows`、
+  `process_copy_trims`、`mark_internal_copies`、`assign_names`。
+- `merge_speculative` 重写为忠实 `Merge::merge`（merge.cc:1565-1575）：
+  `testCache.intersection` 检查（惰性建 cover，variable.cc:1148-1156）→
+  `move_intersect_tests`（variable.cc:681，HighVariable::merge 内）→ 吸收
+  instances → `update_high_cover`（merge.cc:1572 `high1->updateCover()`）。
+  原实现的 aggregate-cover 空前提（cover 未建时恒接受）被替换。
+- `Merge::clear(fd)` 补 `live_set.clear()` + `fd.merge_state.clear()`。
+- fixture：`tests/oracle/merge_persistent_1204.{cc,rs,metadata.json}` +
+  `tools/run_merge_persistent_oracle.sh`（pinned base ec03e2f79136 +
+  merge.rs overlay + funcdata.rs 四 hunk 确定性重建；8 行投影 6 行逐字节
+  一致，2 行 MISMATCH 绑定 VARNODE-COPYSHADOW-ARC-0001）。
+
+### 2026-08-16（复核 REWORK）：深度计数、门链、并集重建、点覆盖约定
+复核 REJECT 修正（M1/M2）+ 吸收 `MERGE-HIGHCOVER-UNION-0001`：
+- `attach_depth: u32` 替换 `attached: bool`——仅 0→1 时从 `Funcdata::merge_state`
+  取回通道、仅 1→0 时回写；嵌套入口（merge_all → merge_marker 等）纯 no-op，
+  精确镜像 Ghidra 单一持久对象（通道永在对象内，内层不可能"移出"）。修复
+  merge_all 中途 detach 导致 compute_varnode_covers 读空 live_set 的回归。
+- `merge_adjacent` 补全门链（merge.cc:996-1007）：`mergeTestAdjacent`
+  （merge.cc:175-218，已有忠实 port 现接入循环）+ `outputTypeLocal ==
+  inputTypeLocal` 类型门（:1001，经 `adjacent_local_types_match` 以比较族
+  BOOL-out/INT-in 元类型规则实现，typeop.cc:925-1068 ctor 表；metain==metaout
+  族与尺寸检查重合）。
+- `merge_force` 三分支在吸收实例后置 HighVariable `COVERDIRTY`
+  （variable.cc:660-663 mergeInternal 副作用）——后续 updateCover 重建并集
+  cover；此前 survivor 保留单实例 cover 致相交判定用陈旧前提（tB 误并）。
+- `compute_varnode_covers` def-no-read 约定修正：零读者=点 `[def,def]`，
+  有更晚块读者=live-out `[def,MAX]`（对齐 oracle Cover::rebuild 编码；
+  原无条件 MAX 与惰性重建路径不一致）。
+- 测试前提修正（src/merge.rs tests）：single_entry 测试补 Ghidra 生产前提
+  ——LOAD 指针输入为 spacebase（mergeTestBasic 拒绝，merge.cc:255-264）+
+  entry 挂接先建 high 并置 SYMBOLDIRTY（variable.cc:421-432 才能看见）。
+- fixture 新增 case_pipeline_tail（含 merge_all 生产入口）消除嵌套盲区；
+  **13/13 行逐字节一致，overall=MATCH**（pinned base=e87ebfc5+overlay）。
+
+### 2026-08-16（复核二轮 REWORK）：深度平衡、ctor 表类型门、吸收方向/类语义
+复核二轮 REJECT 三项修正：
+- **M1**：`hide_shadows_of` 的 singlelist≤1 早退前补 `self.detach(fd)`（与
+  process_copy_trims 同型），堵住 merge_all→hide_shadows 每 high 泄漏 +1 导致
+  通道永不回写的缺陷；`Merge::clear` 的 depth 重置改为 `debug_assert!` 平衡性
+  断言（release 兜底保留）。fixture pipeline_tail 增加 Rust canary 断言
+  （merge_all 后 `merge_state.channel_sizes()` live/cache 非空，无 stdout 影响）。
+- **M2**：废弃 10-比较族黑名单，改为 `LocalTypeKey`（Base/BaseNoChar/TypeCode
+  按 kind+metatype+size 规范等值）+ `local_meta_pair` 全 ctor 表（typeop.cc
+  925-2566：含 CARRY/SCARRY/SBORROW/FLOAT_NAN/INT2FLOAT/TRUNC/POPCOUNT/
+  LZCOUNT/INSERT/EXTRACT 等）+ 逐 slot override（shift slot1 getBaseNoChar、
+  INSERT/EXTRACT slot0 UNKNOWN、INDIRECT slot1 TypeCode、PTRADD/PTRSUB 全 slot
+  INT、CPOOLREF INT-in、CALLOTHER UNKNOWN 回退）。Java-mode 变体
+  （selectJavaOperators typeop.cc:118-140）与 cpool/userop 记录类型登记 UNTESTED。
+- **M3**：`merge_speculative` 增加 `isspeculative` 参数并按 merge.cc:1565-1575
+  委托新共享吸收 `merge_highs`（variable.cc:675-712 全语义：piece 分派 +
+  `merge_internal` + moved 实例重排 + vn.high 重指 + updateCover）；全部调用点
+  按.oracle 方向/旗标校正——mergeOpcode(:346 out 存活/false)、mergeAdjacent
+  (:1010 **out 存活**/true，修复原 in/out 倒置)、mergeMultiEntry(:943 anchor/
+  false)、mergeOp(:766 out/false)、buildDominantCopy(true)。fixture 新增
+  `groups=` 投影（varnode.hh:186 getMergeGroup）双侧逐字节观察存活方与
+  speculative 类语义（mergeadjacent 后 P/Q1/Q2=1、tC=0 证明输出侧存活）。
+
+### 2026-08-16（复核三轮窄面）：FLOAT_TRUNC 臂 + getBaseNoChar 等值语义
+- `local_meta_pair`：FLOAT_TRUNC 移出 (Int,Int) 分组，单列 `(Int, Float)` 臂
+  （typeop.cc:1913 `TypeOpFunc(t,CPUI_FLOAT_TRUNC,"TRUNC",TYPE_INT,TYPE_FLOAT)`，
+  无 override → :1001 门拒绝同尺寸 float 输入）。
+- `LocalTypeKey` 弃 derive(PartialEq)，手写等值：`getBaseNoChar(s,m)` 仅在
+  `(s==1, TYPE_INT, type_nochar 已注册)` 时返回独立条目（type.cc:3619-3626），
+  否则与 `getBase(s,m)` 同 canonical 指针——`BaseNoChar(Int,s)==Base(Int,s)
+  for s!=1`；fixture 架构未注册 1 字节 INT（type.cc:3131/3220-3222）故 size-1
+  也塌缩为同 base，生产 cspec 注册故保留 (Int,1) 区隔。两处注释同步更正。
+- fixture 新增 `case_type_gate`（4 行）：INT_LEFT 移位量 size==输出≠1 通过门
+  并在 mergeadjacent 合并（groups SH:1/TSH:0 输出侧存活）；FLOAT_TRUNC 同尺寸
+  float 输入被拒。runner **17/17 overall=MATCH**。

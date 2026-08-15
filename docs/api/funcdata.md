@@ -996,7 +996,7 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - checkCallDoubleUse 保守端口（返回 false = 非合法双重使用 → 安全方向）
 
 **新增 PcodeOp mark 访问器**：is_mark/set_mark/clear_mark（op.hh:190/234/235，flags MARK=1<<13）
-<!-- annotation-pass: 2026-07-04 -->
+<!-- annotation-pass: 2026-08-15 -->
 <!-- activeparam-port: 1783158350.9624996 -->
  
 
@@ -1123,3 +1123,35 @@ Varnode 生命周期其余差异（Fspec 空间、HighVariable 分配等）仍�
 - 证据：`tests/oracle/heritage_ownership_1204.*`（3/3 MATCH，含 phi
   自引用环三连 pass 无死锁）；生产 `ActionHeritage` 未切换（归
   HERITAGE-DRIVER-SWITCH）。
+
+### 2026-08-15：`new_indirect_op` 忠实化 + `new_indirect_creation_in_space`（HERITAGE-CALLGUARD-0001）
+
+- `new_indirect_op(indeffect, space, offset, sz, extra_flags)`（funcdata_op.cc:683-698）
+  签名对齐 oracle：输出/输入 varnode 在调用方传入的 `(space, offset)` 而非
+  写死 Stack；`extra_flags` 由调用方决定（CALL guard 传 0，STORE guard 传
+  `indirect_store`）；input[1] 改用 `new_varnode_iop`（Iop 空间，经
+  `get_op_from_const` 可回溯 causing op 别名）替代写死的 Const/annotation
+  常量；构造器不再 `set_active_heritage`（Ghidra 的调用方
+  guardCalls/guardStores 在构造后设置）。
+- `new_indirect_creation_in_space(indeffect, space, offset, sz, possibleout)`
+  （funcdata_op.cc:710-728）：输出 varnode 在调用方空间（如 killed-by-call
+  的 RAX Register 空间）而非写死 Unique；旧 `new_indirect_creation` 保留为
+  Unique 空间委托（ruleaction 的历史调用点行为不变），同样移除构造器内的
+  `set_active_heritage`。
+- 证据：`tests/oracle/heritage_callguard_1204.*`（锁定 12.0.4 双侧 7 case
+  逐字节 MATCH：IOP 别名、parent/位置、in0 形态、out 空间/flags）。
+
+
+### 2026-08-15：MERGE-PERSISTENT-STATE-0001 — 持久 merge_state 挂载点
+- `Funcdata::merge_state: MergePersistentState`（新字段，funcdata.hh:96
+  `Merge covermerge` 对应物）：构造器初始化为 default（对应 funcdata.cc:39
+  `covermerge(*this)`），merge-family Action 经 merge.rs 的 attach/detach
+  往返共享 testCache/copyTrims/存活前提。
+- `Funcdata::clear()`：在 heritage.clear() 后追加
+  `self.merge_state.clear()`（funcdata.cc:108 `covermerge.clear()` 对齐）。
+- `set_high_level()`：每个待分配 High 的 varnode 先
+  `if has_cover() { calc_cover() }`（funcdata_varnode.cc:52-53
+  setHighLevel→assignHigh 的 calcCover 副作用）。此前缺失该步导致独立
+  merge Action（mergerequired/mergecopy/mergeadjacent）在 null-cover 空前提
+  下运行。
+<!-- annotation-pass: 2026-08-15 -->
