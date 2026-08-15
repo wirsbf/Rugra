@@ -64,13 +64,20 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
   - **2026-06-29 续**：Stack INDIRECT varnode 现在产生了（heritage discover+guard），但 gather_varnodes 对 same-addr INDIRECT 跳过（对齐 varmap.cc:1145-1151），不产生 RangeHint。Stack symbol 仍由 gather_spacebase 提供。这是正确的——Ghidra 的 Stack symbol 也来自 gatherOpen + rename 后的 def-use 链，而非 gather_varnodes 直接。
 
 ### `pub struct LocalSymbol`
-重构后的局部变量符号。
-- `name: String` — 变量名
+重构后的局部变量符号（Ghidra Symbol database.hh:168 + 首个整映射 SymbolEntry）。
+- `name: String` — 变量名（Symbol::name）
 - `start: u64` — 栈偏移
 - `size: i32` — 大小
 - `dtype: Option<Arc<Datatype>>` — 类型
 - `unaliased: bool` — 是否无别名（可安全合并）
 - `is_param: bool` — 是否为函数参数
+- `display_name: String` — Symbol::displayName（database.hh:179），输出用名
+- `name_dedup: u32` — Symbol::nameDedup（database.hh:181），nametree 同名去重 id
+- `category: i32` — Symbol::category（-1/0/1/2/3 = 无/参数/equate/union_facet/fake_input，见 `symbol_category`）
+- `cat_index: u32` — Symbol::catindex，category 内位置
+- `typelock`/`namelock: bool` — Symbol::flags 的 typelock/namelock 位
+- `usepoint: Option<u64>` — 首个 SymbolEntry 的 first use address（None = invalid Address；`buildDefaultName` 据此决定 addrtied flag，database.cc:1776）
+- `is_name_undefined()` — `Symbol::isNameUndefined`（database.cc:246）：15 字符 `$$undef` 前缀
 
 ### `pub struct ScopeLocal`
 局部变量作用域。对应 Ghidra ScopeLocal。`#[derive(Debug, Clone)]`（2026-06-26：
@@ -79,22 +86,43 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `restructure_varnode(fd)` — 主入口：`ScopeLocal::restructureVarnode` (varmap.cc:1256)，编排 gather_varnodes→gather_internal→gather_open→restructure→mark_unaliased→fake_input_symbols
 - `restructure(state)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with，不相交→attempt_join/adjust_fit/create_entry
 - `adjust_fit(a)` — `ScopeLocal::adjustFit` (varmap.cc:587)，typelock/size0 拒绝 + 符号重叠收缩
-- `create_entry(hint)` — `ScopeLocal::createEntry` (varmap.cc:617)
-- `build_variable_name(offset)` — `ScopeLocal::buildVariableName` (varmap.cc:548)，Stack[X|Y]_hex 命名
+- `create_entry(hint)` — `ScopeLocal::createEntry` (varmap.cc:617)：空名 addSymbol（$$undef 占位）+ 数组类型包装；命名推迟到 assign_default_names
+- `build_variable_name(space, offset, usepoint, ct, index, flags)` — **权威命名覆盖** `ScopeLocal::buildVariableName` (varmap.cc:548)：addrtied 且在 local_range 内走 `<printNameBase>Stack[X|Y]_hex`，否则落到 `build_variable_name_internal`
+- `build_variable_name_internal(...)` — `ScopeInternal::buildVariableName` (database.cc:2434)：unaffected/persist/irregular input/param_N/addrtied/extraout/default local 七分支 + 10 次碰撞 bump + makeNameUnique
+- `make_name_unique(nm)` — `ScopeInternal::makeNameUnique` (database.cc:2553)：`_NN`(2位)/`_xNNNNN`(5位) 后缀递增
+- `find_first_by_name(nm)` / `insert_name_tree(idx)` — `findFirstByName`/`insertNameTree` (database.cc:2733/2712)：SymbolNameTree (name, nameDedup) BTreeMap 模拟
+- `rename_symbol(idx, newname)` — `ScopeInternal::renameSymbol` (database.cc:2152)：erase→改名+display→reinsert
+- `build_undefined_name()` — `ScopeInternal::buildUndefinedName` (database.cc:2520)：`$$undefXXXXXXXX` 递增序列
+- `add_symbol(nm, ct, start, usepoint)` — `Scope::addSymbol`+`addSymbolInternal`+`addMapPoint` (database.cc:1530/1810/1548)
+- `build_default_name(idx, base, vn, fd)` — `Scope::buildDefaultName` (database.cc:1756)：entry 路径由 usepoint 推导 flags、function_parameter 用 catindex+1；vn 分支保留（待 ActionNameVars 接入）
+- `assign_default_names(base)` — **`ScopeInternal::assignDefaultNames`** (database.cc:2850)：nametree 顺序、共享 `int4 base` 计数器、二次运行幂等
+- `set_category(idx, cat, ind)` / `get_category_symbol(cat, ind)` — `ScopeInternal::setCategory`/`getCategorySymbol` (database.cc:2824/2814)
+- `symbols_in_nametree_order()` — RUGRA-GLUE：锁定 fixture 的 nametree 顺序只读观察口
 - `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332)，含 0xffff 距离启发式（alias_block_level 待接入）
-- `fake_input_symbols(fd)` — `ScopeLocal::fakeInputSymbols` (varmap.cc:1392)，扫描栈空间输入 varnode 并合并相邻
+- `fake_input_symbols(fd)` — `ScopeLocal::fakeInputSymbols` (varmap.cc:1392)：addSymbol 空名 + setCategory(fake_input, -1)（varmap.cc:1440-1441）
 - `find_symbol(offset)` — 按偏移查找重构后的符号
+
+**命名状态字段**（database.hh:809/805, varmap.cc:345-348）：`nametree: BTreeMap<(String,u32),usize>`、
+`category_lists`、`local_range: Vec<(first,last)>`（FuncProto localRange 缓存）、`min_param_offset`/
+`max_param_offset`（markNotMapped parameter=true 更新，varmap.cc:519-524）、`stack_grows_negative`、
+`register_names`（Translate::getRegisterName 表，translate.hh:380 的调用方装填桥）。
 
 ## 当前限制
 
 varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 Ghidra。
 尚未完成：
-- **集成到 printc.rs**：变量命名仍用启发式 get_stack_variable_name，未走 ScopeLocal 符号查找
+- ~~**集成到 printc.rs**：变量命名仍用启发式 get_stack_variable_name，未走 ScopeLocal 符号查找~~ → 2026-08-15 已完成：printc 消费 `assign_default_names` 建立的权威名（见 printc.md），命名源切换
 - alias_block_level 配置（影响 markUnaliased 的 struct/array 阻断）
 - LoadGuard/StoreGuard 在 gatherOpen 中的 addGuard 路径（待 LoadGuard 接入 Funcdata 栈空间）
 - TYPE_PARTIALSTRUCT/PARTIALUNION 在 addFixedType 的处理（Rugra 无此元类型）
+- buildDefaultName 的代表 Varnode 分支（database.cc:1759-1771）已移植但无 fixture 驱动（需活 Funcdata/HighVariable；绑定 ActionNameVars caller 闭包）
+- 真实 Translate 寄存器表接入 ScopeLocal::register_names（生产管线 Architecture 桥接待做）
+- Symbol::symbolId 分配（database.cc:1813-1816）与 multiEntrySet 维护：Rugra LocalSymbol 单整映射模型暂无对应物
 
-测试：varmap::tests 17 个（compare/contain/reconcile/preferred/merge/absorb/const_absorbable/build_name/mark_unaliased/restructure）。
+测试：varmap::tests 26 个（compare/contain/reconcile/preferred/merge/absorb/const_absorbable/
+build_variable_name×2/assign_default_names 共享计数器/make_name_unique 后缀/param category/
+typelock 存留/name_dedup/$$undef 序列/mark_unaliased/restructure/spacebase）。
+锁定 oracle：`tools/run_varmap_naming_oracle.sh`（VARMAP-NAMING-0001，六 case 投影 MATCH）。
 
 ### 2026-06-27（会话3 续）：MapState::hint_count（诊断）
 

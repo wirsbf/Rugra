@@ -894,6 +894,85 @@ fn make_int_type(size: usize) -> Arc<Datatype> {
     )))
 }
 
+// Ghidra: database.cc:2571 ScopeInternal::makeNameUnique (suffix parsing)
+/// Parse the `_NN` (2-digit) or `_xNNNNN` (5-digit) uniquifier suffix that
+/// `makeNameUnique` (database.cc:2571-2593) accepts on an existing name:
+/// `bname` must be at least `nm.len()+3` chars, hold '_' at `nm.len()`, and
+/// then either exactly 2 digits or 'x' plus exactly 5 digits. Returns the
+/// parsed id, or None when the name is "not in our format"
+/// (uniqid == 0xffffffff upstream).
+fn parse_name_unique_suffix(bname: &str, nm: &str) -> Option<u32> {
+    let nb = bname.as_bytes();
+    let nlen = nm.len();
+    if bname.len() < nlen + 3 || nb[nlen] != b'_' {
+        return None;
+    }
+    let mut i = nlen + 1;
+    let mut is_x_form = false;
+    if nb[i] == b'x' {
+        i += 1; // 5 digit form
+        is_x_form = true;
+    }
+    let mut uniqid: u32 = 0;
+    let mut dig_count = 0;
+    while i < bname.len() {
+        let dig = nb[i];
+        if !dig.is_ascii_digit() {
+            // Everything after '_' must be a digit, or not in our format.
+            return None;
+        }
+        uniqid = uniqid.wrapping_mul(10).wrapping_add((dig - b'0') as u32);
+        dig_count += 1;
+        i += 1;
+    }
+    if is_x_form && dig_count != 5 {
+        return None; // x form, but not right number of digits
+    }
+    if !is_x_form && dig_count != 2 {
+        return None;
+    }
+    Some(uniqid)
+}
+
+// RUGRA-GLUE: space_name (AddrSpace::getName for Rugra's space enum)
+/// Ghidra reads `addr.getSpace()->getName()` (database.cc:2463/2474/2486);
+/// Rugra's `AddressSpace` is an enum with the canonical Ghidra space names.
+pub fn space_name(space: crate::space::AddressSpace) -> &'static str {
+    match space {
+        crate::space::AddressSpace::Ram => "ram",
+        crate::space::AddressSpace::Register => "register",
+        crate::space::AddressSpace::Unique => "unique",
+        crate::space::AddressSpace::Const => "const",
+        crate::space::AddressSpace::Stack => "stack",
+        crate::space::AddressSpace::Join => "join",
+        crate::space::AddressSpace::Iop => "iop",
+        crate::space::AddressSpace::Overlay => "overlay",
+        crate::space::AddressSpace::Other(_) => "other",
+    }
+}
+
+// RUGRA-GLUE: addr_space_size (AddrSpace::getAddrSize for Rugra's space enum)
+/// Ghidra reads `addr.getSpace()->getAddrSize()` to width the hex offset
+/// (database.cc:2466/2489: `setw(2*addrSize)`); every Rugra space models an
+/// 8-byte address.
+fn addr_space_size(_space: crate::space::AddressSpace) -> usize {
+    8
+}
+
+// RUGRA-GLUE: capitalized_space_name (spacename[0] = toupper(spacename[0]))
+/// Capitalize the space name the way database.cc:2464/2487 does
+/// (`spacename[0] = toupper(spacename[0])`).
+fn capitalized_space_name(space: crate::space::AddressSpace) -> String {
+    let name = space_name(space);
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars();
+    if let Some(c) = chars.next() {
+        out.extend(c.to_uppercase());
+        out.push_str(chars.as_str());
+    }
+    out
+}
+
 // Ghidra: varmap.cc:817 AliasChecker::gatherOffset
 /// If the given Varnode is a sum result, return the constant portion of the sum.
 /// Faithful to `AliasChecker::gatherOffset` (varmap.cc:817).
@@ -1346,8 +1425,21 @@ impl MapState {
     }
 }
 
+// Ghidra: database.hh:214 Symbol::category constants
+/// Symbol category constants. Faithful to the `Symbol` category enum
+/// (database.hh:214-218): `no_category = -1`, `function_parameter = 0`,
+/// `equate = 1`, `union_facet = 2`, `fake_input = 3`.
+pub mod symbol_category {
+    pub const NO_CATEGORY: i32 = -1;
+    pub const FUNCTION_PARAMETER: i32 = 0;
+    pub const EQUATE: i32 = 1;
+    pub const UNION_FACET: i32 = 2;
+    pub const FAKE_INPUT: i32 = 3;
+}
+
 /// A restructured local variable symbol.
-/// Corresponds to Ghidra's SymbolEntry for local scope.
+/// Corresponds to Ghidra's Symbol (database.hh:168) plus its first whole
+/// SymbolEntry mapping (database.hh:130 SymbolEntry).
 #[derive(Clone, Debug)]
 pub struct LocalSymbol {
     /// Name (auto-generated: Stack_offset or local_XX)
@@ -1362,10 +1454,65 @@ pub struct LocalSymbol {
     pub unaliased: bool,
     /// Whether this is a function parameter
     pub is_param: bool,
+    /// Ghidra Symbol::displayName (database.hh:179): the name to display in
+    /// output. `addSymbolInternal`/`renameSymbol` keep it equal to `name`.
+    pub display_name: String,
+    /// Ghidra Symbol::nameDedup (database.hh:181): distinguishes symbols with
+    /// the same name in the SymbolNameTree (database.hh:358 SymbolCompareName).
+    pub name_dedup: u32,
+    /// Ghidra Symbol::category (database.hh:186): -1 = no_category,
+    /// 0 = function_parameter, 3 = fake_input (see symbol_category).
+    pub category: i32,
+    /// Ghidra Symbol::catindex (database.hh:187): position within category.
+    pub cat_index: u32,
+    /// Ghidra Symbol::flags & Varnode::typelock (database.hh:183).
+    pub typelock: bool,
+    /// Ghidra Symbol::flags & Varnode::namelock (database.hh:183).
+    pub namelock: bool,
+    /// First use-point address of the symbol's first SymbolEntry
+    /// (database.cc:122 SymbolEntry::getFirstUseAddress); `None` models an
+    /// invalid `Address()` (no uselimit range), which `Scope::buildDefaultName`
+    /// (database.cc:1776) translates into the `Varnode::addrtied` flag.
+    pub usepoint: Option<u64>,
+}
+
+impl LocalSymbol {
+    // Ghidra: database.hh:965 Symbol::Symbol
+    /// Construct a symbol the way Ghidra's `Symbol(Scope*, name, Datatype*)`
+    /// constructor does: `nameDedup = 0` (database.hh:983), category unset,
+    /// `displayName` mirrors `name` once integrated by `addSymbolInternal`
+    /// (database.cc:1818-1821).
+    pub fn new(nm: &str, start: u64, size: i32, dtype: Option<Arc<Datatype>>,
+               category: i32) -> Self {
+        Self {
+            name: nm.to_string(),
+            start,
+            size,
+            dtype,
+            unaliased: false,
+            is_param: category == symbol_category::FUNCTION_PARAMETER,
+            display_name: nm.to_string(),
+            name_dedup: 0,
+            category,
+            cat_index: 0,
+            typelock: false,
+            namelock: false,
+            usepoint: None,
+        }
+    }
+
+    // Ghidra: database.cc:246 Symbol::isNameUndefined
+    /// Does this Symbol have an undefined name? Faithful to
+    /// `Symbol::isNameUndefined` (database.cc:246-250): the name is exactly 15
+    /// characters and starts with "$$undef".
+    pub fn is_name_undefined(&self) -> bool {
+        self.name.len() == 15 && self.name.starts_with("$$undef")
+    }
 }
 
 /// ScopeLocal: the local variable scope for a function.
-/// Corresponds to Ghidra's ScopeLocal (varmap.hh:212).
+/// Corresponds to Ghidra's ScopeLocal (varmap.hh:212) extending
+/// ScopeInternal (database.hh:795).
 #[derive(Debug, Clone)]
 pub struct ScopeLocal {
     /// The restructured local symbols
@@ -1377,6 +1524,38 @@ pub struct ScopeLocal {
     /// (typical x86-64), `-1` = positive growth. **This field's sign matches
     /// Ghidra's `AliasChecker::direction` exactly — do not flip it.**
     pub stack_direction: i32,
+    /// Ghidra ScopeInternal::nametree (database.hh:809): the set of Symbol
+    /// indices ordered by `(name, nameDedup)` — SymbolCompareName
+    /// (database.hh:358-372): `name.compare()` first, then `nameDedup`.
+    /// Maps the SymbolNameTree key to the index into `symbols`.
+    nametree: std::collections::BTreeMap<(String, u32), usize>,
+    /// Ghidra ScopeInternal::category lists (database.hh:805): per-category
+    /// ordered slots mirroring `vector<vector<Symbol *>> category`.
+    /// `None` slots are the null entries popped by `setCategory`
+    /// (database.cc:2828-2832).
+    category_lists: Vec<Vec<Option<usize>>>,
+    /// Ghidra ScopeLocal::space (varmap.hh:213): address space of the local
+    /// stack. Rugra models the space as the `AddressSpace::Stack` enum.
+    pub space: crate::space::AddressSpace,
+    /// Ghidra ScopeLocal local window (varmap.cc:438-465, resetLocalWindow):
+    /// inclusive `(first, last)` ranges obtained from
+    /// `FuncProto::getLocalRange()` consulted by `buildVariableName`
+    /// (varmap.cc:555).
+    pub local_range: Vec<(u64, u64)>,
+    /// Ghidra ScopeLocal::minParamOffset (varmap.cc:345): init `~0`.
+    pub min_param_offset: u64,
+    /// Ghidra ScopeLocal::maxParamOffset (varmap.cc:346): init 0.
+    pub max_param_offset: u64,
+    /// Ghidra ScopeLocal::stackGrowsNegative (varmap.cc:348): init true.
+    /// Kept in lockstep with `stack_direction` (1 == grows negative).
+    pub stack_grows_negative: bool,
+    /// Register-name lookup table standing in for
+    /// `glb->translate->getRegisterName(space, off, size)`
+    /// (translate.hh:380). Rugra's ScopeLocal is a plain struct without an
+    /// Architecture handle, so the caller installs the register table; the
+    /// empty default returns "" exactly like a Translate with no matching
+    /// register.
+    pub register_names: std::collections::BTreeMap<(u64, i32), String>,
 }
 
 impl ScopeLocal {
@@ -1391,17 +1570,36 @@ impl ScopeLocal {
             symbols: Vec::new(),
             overlap_problems: false,
             stack_direction: 1,
+            nametree: std::collections::BTreeMap::new(),
+            category_lists: Vec::new(),
+            space: crate::space::AddressSpace::Stack,
+            local_range: Vec::new(),
+            min_param_offset: u64::MAX,
+            max_param_offset: 0,
+            stack_grows_negative: true,
+            register_names: std::collections::BTreeMap::new(),
         }
     }
 
     // Ghidra: varmap.cc:510 ScopeLocal::markNotMapped
     /// Mark a specific stack address range as not mapped. Faithful to
-    /// `ScopeLocal::markNotMapped` (varmap.cc:510-546). Removes any symbols
-    /// overlapping the given range. Used by ActionRestrictLocal to prevent
-    /// specific stack locations (e.g. saved registers, call params) from
-    /// being treated as local variables.
-    pub fn mark_not_mapped(&mut self, offset: u64, size: i32, _parameter: bool) {
+    /// `ScopeLocal::markNotMapped` (varmap.cc:510-546): when `parameter` is
+    /// true the range extends the min/max parameter-offset window consumed by
+    /// `buildVariableName`'s Y-region test (varmap.cc:519-524), then any
+    /// symbols overlapping the range are removed. (The typelock/fake-input
+    /// early returns and the symboltab range removal at varmap.cc:545 have no
+    /// Rugra counterpart yet: LocalSymbol carries no symboltab linkage.)
+    pub fn mark_not_mapped(&mut self, offset: u64, size: i32, parameter: bool) {
         let last = offset + size as u64 - 1;
+        if parameter {
+            // Everything above parameter
+            if offset < self.min_param_offset {
+                self.min_param_offset = offset;
+            }
+            if last > self.max_param_offset {
+                self.max_param_offset = last;
+            }
+        }
         // Remove any symbols whose range overlaps [offset, last].
         self.symbols.retain(|sym| {
             let sym_start = sym.start;
@@ -1444,12 +1642,19 @@ impl ScopeLocal {
     pub fn restructure_varnode(&mut self, fd: &crate::funcdata::Funcdata) {
         // Clear existing symbols.
         self.symbols.clear();
+        self.nametree.clear();
+        self.category_lists.clear();
         self.overlap_problems = false;
 
         // Determine local range. Ghidra derives this from the prototype's
-        // getRangeTree/getParamRange; Rugra uses the full stack extent.
+        // getRangeTree/getParamRange (varmap.cc:438-465, resetLocalWindow);
+        // Rugra uses the full stack extent.
         let local_start = 0u64;
         let local_end = 0x100000u64;
+        // Install the local window consulted by buildVariableName
+        // (varmap.cc:555) the way resetLocalWindow copies the prototype's
+        // localRange into the scope.
+        self.local_range = vec![(local_start, local_end - 1)];
 
         // Build the MapState with a default unknown base type (1 byte),
         // matching Ghidra's glb->types->getBase(1, TYPE_UNKNOWN).
@@ -1555,52 +1760,592 @@ impl ScopeLocal {
     }
 
     // Ghidra: varmap.cc:617 ScopeLocal::createEntry
-    /// Create a symbol entry from a RangeHint.
-    /// Corresponds to ScopeLocal::createEntry (varmap.cc:617).
+    /// Create a symbol entry from a RangeHint. Faithful to
+    /// `ScopeLocal::createEntry` (varmap.cc:617-631): the symbol is added with
+    /// an EMPTY name (addSymbolInternal then assigns a `$$undef` placeholder,
+    /// database.cc:1818-1821) and an invalid usepoint. Naming happens later
+    /// in `assignDefaultNames` (database.cc:2850). The data-type is concretized
+    /// and wrapped into an array when more than one aligned element fits
+    /// (varmap.cc:622-625).
     fn create_entry(&mut self, hint: &RangeHint) {
         if hint.size <= 0 { return; }
 
-        // Build variable name
-        let name = self.build_variable_name(hint.start);
+        // Datatype *ct = glb->types->concretize(a.type);
+        let ct = hint.dtype.clone().unwrap_or_else(|| make_int_type(1));
+        // int4 num = a.size/ct->getAlignSize(); if (num>1) ct = getTypeArray(num,ct);
+        let align = ct.get_align_size().max(1) as i32;
+        let num = hint.size / align;
+        let final_dt: Arc<Datatype> = if num > 1 {
+            Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
+                base: crate::type_system::datatype::TypeBase::new(
+                    format!("{}[{}]", ct.get_name(), num),
+                    hint.size as usize,
+                    TypeMetatype::Array,
+                ),
+                array_of: ct.clone(),
+                num_elements: num as usize,
+            }))
+        } else {
+            ct
+        };
 
-        self.symbols.push(LocalSymbol {
-            name,
-            start: hint.start,
-            size: hint.size,
-            dtype: hint.dtype.clone(),
-            unaliased: false,
-            is_param: false,
-        });
+        // addSymbol("",ct,addr,usepoint) — usepoint is the default invalid Address.
+        let start = hint.start;
+        let size = hint.size;
+        let idx = self.add_symbol("", Some(final_dt), start, None);
+        // SymbolEntry extent: [start, start+size); kept on LocalSymbol for
+        // Rugra's query_by_addr/find_symbol consumers.
+        self.symbols[idx].size = size;
     }
 
     // Ghidra: varmap.cc:548 ScopeLocal::buildVariableName
-    /// Build a variable name from stack offset. Faithful to
-    /// `ScopeLocal::buildVariableName` (varmap.cc:548).
+    /// Build a variable name. Faithful override of
+    /// `ScopeLocal::buildVariableName` (varmap.cc:548-581): for an
+    /// address-tied (non-persist) symbol in this scope's stack space whose
+    /// address lies within the local range, the name is
+    /// `<printNameBase>Stack[X|Y]_<hex>` uniquified via `makeNameUnique`;
+    /// otherwise the `ScopeInternal::buildVariableName` implementation runs.
     ///
-    /// Ghidra produces names of the form `<SpaceName>[X|Y]_<hex>` where:
-    ///   - the space name is capitalised ("Stack")
-    ///   - 'X' marks local stack space allocated by the caller (start <= 0
-    ///     after sign-extension and negation for negative-growing stacks)
-    ///   - otherwise a plain hex offset follows '_'
-    fn build_variable_name(&self, offset: u64) -> String {
-        // Sign-extend the offset to the address size, then for a negative-growing
-        // stack negate it (varmap.cc:558).
-        let mut start = offset as i64;
-        // Treat as signed within 64 bits; for negative growth, locals live at
-        // high (unsigned) offsets which become small negatives.
-        // Per varmap.cc:700, `direction==1` is the negative-growth case.
-        if self.stack_direction == 1 {
-            // stackGrowsNegative → start = -start
-            start = -start;
+    /// `offset` is the entry address offset, `usepoint` the pc (None =
+    /// invalid Address), `index` the caller's counter — the function-parameter
+    /// branch prints it, the local branch post-increments it
+    /// (database.cc:2504) so the shared `int4 base` advances.
+    pub fn build_variable_name(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        usepoint: Option<u64>,
+        ct: Option<&Arc<Datatype>>,
+        index: &mut i32,
+        flags: u32,
+    ) -> Option<String> {
+        use crate::varnode::varnode_flags;
+        if flags & (varnode_flags::ADDRTIED | varnode_flags::PERSIST)
+            == varnode_flags::ADDRTIED
+            && space == self.space
+            && self.local_range_in_range(offset)
+        {
+            // intb start = byteToAddress(offset, wordSize); wordSize == 1 for
+            // the stack space, so the offset is already in bytes; the 64-bit
+            // sign-extension of varmap.cc:557 is the identity for i64.
+            let mut start = offset as i64;
+            if self.stack_grows_negative {
+                start = start.wrapping_neg();
+            }
+            let mut s = String::new();
+            if let Some(t) = ct {
+                t.print_name_base(&mut s);
+            }
+            s.push_str("Stack");
+            if start <= 0 {
+                s.push('X'); // Local stack space allocated by caller
+                start = start.wrapping_neg();
+            } else if self.min_param_offset < self.max_param_offset
+                && (if self.stack_grows_negative {
+                    offset < self.min_param_offset
+                } else {
+                    offset > self.max_param_offset
+                })
+            {
+                s.push('Y'); // Unusual region of stack
+            }
+            s.push('_');
+            s.push_str(&format!("{:x}", start as u64));
+            return self.make_name_unique(&s);
         }
-        let mut name = String::from("Stack");
-        if start <= 0 {
-            name.push('X'); // Local stack space allocated by caller.
-            start = -start;
+        self.build_variable_name_internal(space, offset, usepoint, ct, index, flags)
+    }
+
+    // Ghidra: database.cc:2434 ScopeInternal::buildVariableName
+    /// Base implementation of `buildVariableName`. Faithful to
+    /// `ScopeInternal::buildVariableName` (database.cc:2434-2518), branch for
+    /// branch: unaffected / persist / irregular input / regular parameter /
+    /// addrtied / indirect_creation / default local, each uniquified with
+    /// `makeNameUnique` at database.cc:2517.
+    fn build_variable_name_internal(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        _usepoint: Option<u64>,
+        ct: Option<&Arc<Datatype>>,
+        index: &mut i32,
+        flags: u32,
+    ) -> Option<String> {
+        use crate::varnode::varnode_flags;
+        let sz = ct.map(|t| t.get_size() as i32).unwrap_or(1);
+        let mut s = String::new();
+
+        if flags & varnode_flags::UNAFFECTED != 0 {
+            if flags & varnode_flags::RETURN_ADDRESS != 0 {
+                s.push_str("unaff_retaddr");
+            } else {
+                let unaffname = self.get_register_name(space, offset, sz);
+                if unaffname.is_empty() {
+                    s.push_str("unaff_");
+                    s.push_str(&format!("{:08x}", offset));
+                } else {
+                    s.push_str("unaff_");
+                    s.push_str(&unaffname);
+                }
+            }
+        } else if flags & varnode_flags::PERSIST != 0 {
+            let spacename = self.get_register_name(space, offset, sz);
+            if !spacename.is_empty() {
+                s.push_str(&spacename);
+            } else {
+                if let Some(t) = ct {
+                    t.print_name_base(&mut s);
+                }
+                s.push_str(&capitalized_space_name(space));
+                s.push_str(&format!("{:0w$x}", offset, w = 2 * addr_space_size(space)));
+            }
+        } else if flags & varnode_flags::INPUT != 0 && *index < 0 {
+            // Irregular input
+            let regname = self.get_register_name(space, offset, sz);
+            if regname.is_empty() {
+                s.push_str(&format!("in_{}_{:08x}", space_name(space), offset));
+            } else {
+                s.push_str(&format!("in_{}", regname));
+            }
+        } else if flags & varnode_flags::INPUT != 0 {
+            // Regular parameter
+            s.push_str(&format!("param_{}", *index));
+        } else if flags & varnode_flags::ADDRTIED != 0 {
+            if let Some(t) = ct {
+                t.print_name_base(&mut s);
+            }
+            s.push_str(&capitalized_space_name(space));
+            s.push_str(&format!("{:0w$x}", offset, w = 2 * addr_space_size(space)));
+        } else if flags & varnode_flags::INDIRECT_CREATION != 0 {
+            s.push_str("extraout_");
+            let regname = self.get_register_name(space, offset, sz);
+            if !regname.is_empty() {
+                s.push_str(&regname);
+            } else {
+                s.push_str("var");
+            }
+        } else {
+            // Some sort of local variable
+            if let Some(t) = ct {
+                t.print_name_base(&mut s);
+            }
+            // s << "Var" << dec << index++;
+            let n = *index;
+            *index += 1;
+            s.push_str("Var");
+            s.push_str(&n.to_string());
+            if self.find_first_by_name(&s).is_some() {
+                // If the name already exists, try bumping up the index a few
+                // times before calling makeNameUnique (database.cc:2506-2515).
+                for _ in 0..10 {
+                    let mut s2 = String::new();
+                    if let Some(t) = ct {
+                        t.print_name_base(&mut s2);
+                    }
+                    let n = *index;
+                    *index += 1;
+                    s2.push_str("Var");
+                    s2.push_str(&n.to_string());
+                    if self.find_first_by_name(&s2).is_none() {
+                        return Some(s2);
+                    }
+                }
+            }
         }
-        name.push('_');
-        name.push_str(&format!("{:x}", start as u64));
-        name
+        self.make_name_unique(&s)
+    }
+
+    // Ghidra: database.cc:2553 ScopeInternal::makeNameUnique
+    /// Make the given name unique in this scope. Faithful to
+    /// `ScopeInternal::makeNameUnique` (database.cc:2553-2614): if the name is
+    /// unused it is returned unchanged; otherwise the last symbol whose name
+    /// starts with `nm` is scanned for a `_NN` (2-digit) or `_xNNNNN`
+    /// (5-digit) suffix, the id is incremented, and the result re-formatted.
+    /// Returns `None` for Ghidra's `LowlevelError` ("Unable to uniquify name")
+    /// at database.cc:2611-2612.
+    pub fn make_name_unique(&self, nm: &str) -> Option<String> {
+        let first_key = match self.find_first_by_name(nm) {
+            Some(idx) => (self.symbols[idx].name.clone(), self.symbols[idx].name_dedup),
+            None => return Some(nm.to_string()), // nm is already unique
+        };
+
+        // Symbol boundsym((Scope*)0, nm+"_x99999", ...); nameDedup = 0xffffffff;
+        // iter2 = nametree.lower_bound(&boundsym);
+        let bound = (format!("{}_x99999", nm), u32::MAX);
+        // All keys strictly below the bound, in SymbolNameTree order.
+        let ordered: Vec<(&String, &u32)> =
+            self.nametree.range(..bound).map(|(k, _)| (&k.0, &k.1)).collect();
+        let first_pos = ordered
+            .iter()
+            .position(|(n, d)| (n.as_str(), **d) == (first_key.0.as_str(), first_key.1))?;
+
+        // do { uniqid = 0xffffffff; --iter2; if (iter == iter2) break; ... }
+        // while (uniqid == 0xffffffff)
+        let mut pos = ordered.len();
+        let mut uniqid: Option<u32> = None;
+        loop {
+            if pos == 0 {
+                break;
+            }
+            pos -= 1; // --iter2
+            if pos == first_pos {
+                break; // iter == iter2
+            }
+            let (bname, _) = ordered[pos];
+            if let Some(u) = parse_name_unique_suffix(bname, nm) {
+                uniqid = Some(u);
+                break;
+            }
+        }
+
+        let res_string = match uniqid {
+            None => format!("{}_00", nm), // no other names matching our convention
+            Some(u) => {
+                let uniqid = u + 1;
+                if uniqid < 100 {
+                    format!("{}_{:02}", nm, uniqid)
+                } else {
+                    format!("{}_x{:05}", nm, uniqid)
+                }
+            }
+        };
+        if self.find_first_by_name(&res_string).is_some() {
+            return None; // throw LowlevelError("Unable to uniquify name: "+resString)
+        }
+        Some(res_string)
+    }
+
+    // Ghidra: database.cc:2733 ScopeInternal::findFirstByName
+    /// Find the index of the first symbol in the SymbolNameTree ordering with
+    /// the given name. Faithful to `ScopeInternal::findFirstByName`
+    /// (database.cc:2733-2742): a `lower_bound` lookup on `(nm, 0)` that
+    /// returns `None` (nametree.end()) unless the found symbol's name equals
+    /// `nm` exactly. Indices invalidated by an external
+    /// `symbols.clear()` (funcdata.rs startProcessing clears only the vec,
+    /// modeling Ghidra's `localmap->clearUnlocked()` whose Rugra counterpart
+    /// cannot touch the private nametree) are treated as absent.
+    pub fn find_first_by_name(&self, nm: &str) -> Option<usize> {
+        self.nametree
+            .range((nm.to_string(), 0u32)..)
+            .next()
+            .and_then(|(k, &idx)| {
+                if k.0 == nm && idx < self.symbols.len() {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+    }
+
+    // Ghidra: database.cc:2712 ScopeInternal::insertNameTree
+    /// Insert the symbol into the nametree. Faithful to
+    /// `ScopeInternal::insertNameTree` (database.cc:2712-2727): the dedup id
+    /// starts at 0; if the `(name, 0)` slot is taken, the id becomes the last
+    /// same-named symbol's id + 1.
+    fn insert_name_tree(&mut self, idx: usize) {
+        let name = self.symbols[idx].name.clone();
+        self.symbols[idx].name_dedup = 0;
+        if self.nametree.contains_key(&(name.clone(), 0)) {
+            // iter = nametree.upper_bound(sym); --iter  (last symbol with this name)
+            let mut next_name = name.clone();
+            next_name.push('\0');
+            let last_dedup = self
+                .nametree
+                .range((name.clone(), 0u32)..(next_name, 0u32))
+                .next_back()
+                .map(|(k, _)| k.1)
+                .unwrap_or(u32::MAX);
+            self.symbols[idx].name_dedup = last_dedup.wrapping_add(1);
+        }
+        let key = (self.symbols[idx].name.clone(), self.symbols[idx].name_dedup);
+        // A duplicate key here mirrors Ghidra's
+        // "Could not deduplicate symbol" LowlevelError; overwrite is
+        // unreachable because the dedup bump above reserved a fresh slot.
+        self.nametree.insert(key, idx);
+    }
+
+    // Ghidra: database.cc:2152 ScopeInternal::renameSymbol
+    /// Rename a symbol. Faithful to `ScopeInternal::renameSymbol`
+    /// (database.cc:2152-2164): erase from the nametree under the old name,
+    /// set both `name` and `displayName`, and reinsert via
+    /// `insertNameTree`. (Ghidra additionally removes/reinserts
+    /// `multiEntrySet` when `wholeCount > 1`; Rugra's LocalSymbol models
+    /// exactly one whole mapping, so that branch cannot trigger.)
+    pub fn rename_symbol(&mut self, idx: usize, newname: &str) {
+        let old_key = (self.symbols[idx].name.clone(), self.symbols[idx].name_dedup);
+        self.nametree.remove(&old_key);
+        self.symbols[idx].name = newname.to_string();
+        self.symbols[idx].display_name = newname.to_string();
+        self.insert_name_tree(idx);
+    }
+
+    // Ghidra: database.cc:2520 ScopeInternal::buildUndefinedName
+    /// Generate an official undefined placeholder name `$$undefXXXXXXXX`.
+    /// Faithful to `ScopeInternal::buildUndefinedName` (database.cc:2520-2551):
+    /// look at the nametree position just before "$$undefz"; if that symbol
+    /// carries an undefined name, parse its 8 hex digits, increment, and
+    /// re-emit; otherwise start at 00000000. Returns `None` for Ghidra's
+    /// LowlevelError("Error creating undefined name").
+    pub fn build_undefined_name(&self) -> Option<String> {
+        // Symbol testsym((Scope*)0, "$$undefz", ...); iter = lower_bound(&testsym);
+        let keys: Vec<&(String, u32)> = self.nametree.keys().collect();
+        let lower_pos = keys
+            .binary_search_by(|k| k.0.as_str().cmp("$$undefz").then(k.1.cmp(&0)))
+            .unwrap_or_else(|p| p);
+        // if (iter != nametree.begin()) --iter;
+        let probe = if lower_pos > 0 { lower_pos - 1 } else { 0 };
+        if probe < keys.len() {
+            let symname = &keys[probe].0;
+            if symname.len() == 15 && symname.starts_with("$$undef") {
+                let hexpart = &symname[7..15];
+                let uniq = u32::from_str_radix(hexpart, 16).ok();
+                if let Some(uniq) = uniq.filter(|u| *u != u32::MAX) {
+                    return Some(format!("$$undef{:08x}", uniq.wrapping_add(1)));
+                }
+                // istringstream failure or ~0 → LowlevelError.
+                return None;
+            }
+        }
+        Some("$$undef00000000".to_string())
+    }
+
+    // Ghidra: translate.hh:380 Translate::getRegisterName
+    /// Register-name lookup standing in for
+    /// `glb->translate->getRegisterName(space, off, size)`. The fixture
+    /// installs an exact `(offset, size) → name` table; an absent entry
+    /// returns the empty string exactly like a Translate without a matching
+    /// register.
+    pub fn get_register_name(
+        &self,
+        _space: crate::space::AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> String {
+        self.register_names
+            .get(&(offset, size))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    // RUGRA-GLUE: local_range_in_range (RangeList::inRange for the local window)
+    /// `RangeList::inRange(addr, 1)` over `self.local_range`: does any range
+    /// contain the single byte at `offset`? Ghidra consults
+    /// `fd->getFuncProto().getLocalRange()` directly (varmap.cc:555); Rugra
+    /// caches the inclusive `(first, last)` ranges on the scope.
+    pub fn local_range_in_range(&self, offset: u64) -> bool {
+        self.local_range
+            .iter()
+            .any(|&(first, last)| first <= offset && offset <= last)
+    }
+
+    // Ghidra: database.cc:2824 ScopeInternal::setCategory
+    /// Set the symbol's category. Faithful to `ScopeInternal::setCategory`
+    /// (database.cc:2824-2845): clear the old category slot (pop trailing
+    /// nulls), then append to the new category list — the passed index is
+    /// honored for category 0 and recomputed to `list.size()` for category > 0.
+    pub fn set_category(&mut self, idx: usize, cat: i32, ind: i32) {
+        if self.symbols[idx].category >= 0 {
+            let old_cat = self.symbols[idx].category as usize;
+            if old_cat < self.category_lists.len() {
+                let list = &mut self.category_lists[old_cat];
+                let ci = self.symbols[idx].cat_index as usize;
+                if ci < list.len() {
+                    list[ci] = None;
+                    while let Some(None) = list.last() {
+                        list.pop();
+                    }
+                }
+            }
+        }
+        self.symbols[idx].category = cat;
+        self.symbols[idx].cat_index = ind.max(0) as u32;
+        if cat < 0 {
+            return;
+        }
+        while self.category_lists.len() <= cat as usize {
+            self.category_lists.push(Vec::new());
+        }
+        let list = &mut self.category_lists[cat as usize];
+        if cat > 0 {
+            self.symbols[idx].cat_index = list.len() as u32;
+        }
+        while list.len() <= self.symbols[idx].cat_index as usize {
+            list.push(None);
+        }
+        list[self.symbols[idx].cat_index as usize] = Some(idx);
+    }
+
+    // Ghidra: database.cc:2814 ScopeInternal::getCategorySymbol
+    /// Get the symbol in category `cat` at index `ind`. Faithful to
+    /// `ScopeInternal::getCategorySymbol` (database.cc:2814-2822).
+    pub fn get_category_symbol(&self, cat: i32, ind: i32) -> Option<usize> {
+        if cat < 0 || cat as usize >= self.category_lists.len() {
+            return None;
+        }
+        if ind < 0 || ind as usize >= self.category_lists[cat as usize].len() {
+            return None;
+        }
+        self.category_lists[cat as usize][ind as usize]
+    }
+
+    // Ghidra: database.cc:1530 Scope::addSymbol
+    /// Add a symbol with storage. Faithful to `Scope::addSymbol`
+    /// (database.cc:1530-1541) + `addSymbolInternal` (database.cc:1810-1840) +
+    /// `addMapPoint` (database.cc:1548-1561): an empty name is replaced by a
+    /// `$$undef` placeholder with `displayName` mirroring it
+    /// (database.cc:1818-1821), the symbol joins the nametree
+    /// (insertNameTree), and the whole mapping at `start` records `usepoint`
+    /// as its first use address. Returns the new symbol's index.
+    ///
+    /// (Ghidra's symbolId allocation (database.cc:1813-1816) and the
+    /// null/zero-size type LowlevelError checks (database.cc:1822-1825) have
+    /// no Rugra counterpart: LocalSymbol has no id field and models its
+    /// Datatype as optional throughout.)
+    pub fn add_symbol(
+        &mut self,
+        nm: &str,
+        ct: Option<Arc<Datatype>>,
+        start: u64,
+        usepoint: Option<u64>,
+    ) -> usize {
+        let idx = self.symbols.len();
+        let mut sym = LocalSymbol::new(nm, start, 1, ct, symbol_category::NO_CATEGORY);
+        if sym.name.is_empty() {
+            sym.name = self.build_undefined_name().unwrap_or_else(|| "$$undef00000000".into());
+            sym.display_name = sym.name.clone();
+        }
+        sym.usepoint = usepoint;
+        let size = sym
+            .dtype
+            .as_ref()
+            .map(|d| d.get_size() as i32)
+            .unwrap_or(1);
+        sym.size = size;
+        self.symbols.push(sym);
+        self.insert_name_tree(idx);
+        idx
+    }
+
+    // Ghidra: database.cc:1756 Scope::buildDefaultName
+    /// Create the default name for a symbol. Faithful to
+    /// `Scope::buildDefaultName` (database.cc:1756-1786). With a
+    /// representative Varnode (ActionNameVars' namerec path, coreaction.cc:2992)
+    /// the flags/index come from the varnode and its HighVariable; otherwise
+    /// (the `assignDefaultNames` path, database.cc:2862) the first mapping's
+    /// address and use-point provide them — an invalid use-point yields the
+    /// `addrtied` flag (database.cc:1776), and a function-parameter category
+    /// forces the `input` flag with `catindex+1` as the parameter index
+    /// (database.cc:1777-1781). Returns `None` for a LowlevelError from
+    /// `buildVariableName`/`makeNameUnique`.
+    pub fn build_default_name(
+        &mut self,
+        idx: usize,
+        base: &mut i32,
+        vn: Option<&Varnode>,
+        fd: Option<&crate::funcdata::Funcdata>,
+    ) -> Option<String> {
+        use crate::varnode::varnode_flags;
+        if let Some(vn) = vn {
+            if !vn.is_constant() {
+                // Address usepoint; if (!vn->isAddrTied() && fd != 0) usepoint = vn->getUsePoint(*fd);
+                let usepoint: Option<u64> = if !vn.is_addr_tied() {
+                    fd.map(|f| vn.get_use_point(f).as_u64())
+                } else {
+                    None
+                };
+                let high_input = vn
+                    .high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().is_input())
+                    .unwrap_or(false);
+                let dtype = self.symbols[idx].dtype.clone();
+                if self.symbols[idx].category == symbol_category::FUNCTION_PARAMETER
+                    || high_input
+                {
+                    let mut index: i32 = -1;
+                    if self.symbols[idx].category == symbol_category::FUNCTION_PARAMETER {
+                        index = self.symbols[idx].cat_index as i32 + 1;
+                    }
+                    return self.build_variable_name(
+                        vn.get_space(), vn.get_offset(), usepoint,
+                        dtype.as_ref(), &mut index,
+                        vn.flags | varnode_flags::INPUT,
+                    );
+                }
+                return self.build_variable_name(
+                    vn.get_space(), vn.get_offset(), usepoint,
+                    dtype.as_ref(), base, vn.flags,
+                );
+            }
+        }
+        // if (sym->numEntries() != 0) — Rugra LocalSymbol always models one entry.
+        let sym = &self.symbols[idx];
+        let space = self.space;
+        let addr = sym.start;
+        let usepoint = sym.usepoint;
+        let dtype = sym.dtype.clone();
+        let mut flags: u32 = if usepoint.is_none() {
+            varnode_flags::ADDRTIED
+        } else {
+            0
+        };
+        if sym.category == symbol_category::FUNCTION_PARAMETER {
+            flags |= varnode_flags::INPUT;
+            let mut index = sym.cat_index as i32 + 1;
+            return self.build_variable_name(
+                space, addr, usepoint, dtype.as_ref(), &mut index, flags,
+            );
+        }
+        self.build_variable_name(space, addr, usepoint, dtype.as_ref(), base, flags)
+    }
+
+    // RUGRA-GLUE: symbols_in_nametree_order (locked naming-fixture observation accessor)
+    /// Read-only view of the symbol indices in SymbolNameTree order
+    /// (database.hh:373, sorted by name then nameDedup). Production C++
+    /// iterates the `nametree` set directly; the locked naming fixture needs
+    /// the same walk order through the public API to observe the
+    /// `assignDefaultNames` traversal byte-comparably.
+    pub fn symbols_in_nametree_order(&self) -> Vec<usize> {
+        self.nametree
+            .values()
+            .copied()
+            .filter(|&idx| idx < self.symbols.len())
+            .collect()
+    }
+
+    // Ghidra: database.cc:2850 ScopeInternal::assignDefaultNames
+    /// Assign a default name to any symbol whose name is undefined. Faithful
+    /// to `ScopeInternal::assignDefaultNames` (database.cc:2850-2865): walk
+    /// the nametree from `upper_bound("$$undef")`, and while symbols keep the
+    /// `$$undef` placeholder, build a default name via `buildDefaultName`
+    /// with the shared `base` counter and rename the symbol. The iterator is
+    /// advanced BEFORE renaming (database.cc:2861) so the mutation cannot
+    /// disturb the walk. Returns `None` on a LowlevelError.
+    pub fn assign_default_names(&mut self, base: &mut i32) -> Option<()> {
+        // iter = nametree.upper_bound(&testsym) — first key > ("$$undef", 0).
+        let walk: Vec<(String, u32)> = self
+            .nametree
+            .range((
+                std::ops::Bound::Excluded(("$$undef".to_string(), 0u32)),
+                std::ops::Bound::Unbounded,
+            ))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in walk {
+            let idx = match self.nametree.get(&key) {
+                Some(&i) if i < self.symbols.len() => i,
+                // Slot vacated by an external symbols.clear() or by an
+                // earlier rename in this walk; Ghidra's iterator cannot see
+                // either, so treat as exhausted.
+                _ => break,
+            };
+            if !self.symbols[idx].is_name_undefined() {
+                break;
+            }
+            let nm = self.build_default_name(idx, base, None, None)?;
+            self.rename_symbol(idx, &nm);
+        }
+        Some(())
     }
 
     // Ghidra: varmap.cc:1332 ScopeLocal::markUnaliased
@@ -1644,12 +2389,16 @@ impl ScopeLocal {
     // Ghidra: varmap.cc:1392 ScopeLocal::fakeInputSymbols
     /// Create fake input symbols for stack-space input Varnodes that are not
     /// part of the formal prototype. Faithful to
-    /// `ScopeLocal::fakeInputSymbols` (varmap.cc:1392).
+    /// `ScopeLocal::fakeInputSymbols` (varmap.cc:1392-1448).
     ///
     /// Ghidra scans `fd->beginDef(input)` for stack-space inputs, coalesces
-    /// adjacent ones, and creates a fake-input symbol of unknown type. Rugra
-    /// approximates this by scanning stack-space input varnodes (no defining
-    /// op) in the vbank.
+    /// adjacent ones, and creates a fake-input symbol of unknown type —
+    /// `addSymbol("", ct, addr, usepoint)` with an INVALID usepoint
+    /// (varmap.cc:1440, the getUsePoint call is commented out upstream) then
+    /// `setCategory(sym, Symbol::fake_input, -1)` (varmap.cc:1441), so the
+    /// symbol keeps a `$$undef` placeholder until `assignDefaultNames`.
+    /// Rugra approximates the input scan by walking stack-space input
+    /// varnodes (no defining op) in the vbank.
     fn fake_input_symbols(&mut self, fd: &crate::funcdata::Funcdata) {
         // Collect (offset, size) of stack-space input varnodes, sorted by offset.
         let mut inputs: Vec<(u64, i32)> = Vec::new();
@@ -1686,18 +2435,15 @@ impl ScopeLocal {
                 j += 1;
             }
             let size = (endpoint - addr + 1) as i32;
-            self.symbols.push(LocalSymbol {
-                name: format!("in_stack_{:x}", addr),
-                start: addr,
-                size,
-                dtype: Some(Arc::new(Datatype::Base(
-                    crate::type_system::datatype::TypeBase::new(
-                        "unknown".into(), size as usize, TypeMetatype::Unknown,
-                    ),
-                ))),
-                unaliased: true,
-                is_param: true,
-            });
+            // Datatype *ct = getBase(size, TYPE_UNKNOWN);
+            let ct = Arc::new(Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "unknown".into(), size as usize, TypeMetatype::Unknown,
+                ),
+            ));
+            // addSymbol("",ct,addr,usepoint-invalid); setCategory(sym, fake_input, -1);
+            let idx = self.add_symbol("", Some(ct), addr, None);
+            self.set_category(idx, symbol_category::FAKE_INPUT, -1);
             i = j;
         }
     }
@@ -1722,6 +2468,12 @@ mod tests {
 
     fn int_dt(size: usize, mt: TypeMetatype) -> Arc<Datatype> {
         Arc::new(Datatype::Base(TypeBase::new("x".into(), size, mt)))
+    }
+
+    /// Named base type: printNameBase (type.hh:273) writes name[0], so a
+    /// "int"/"char" type yields the i/c prefixes of Ghidra's variable names.
+    fn named_dt(nm: &str, size: usize, mt: TypeMetatype) -> Arc<Datatype> {
+        Arc::new(Datatype::Base(TypeBase::new(nm.into(), size, mt)))
     }
 
     // --- compare (varmap.cc:321): signed offset, then size small-first ---
@@ -1864,24 +2616,142 @@ mod tests {
 
     #[test]
     fn test_build_variable_name_negative_stack() {
-        let scope = ScopeLocal::new(); // stack_direction == 1 (negative growth, x86)
+        use crate::varnode::varnode_flags;
+        let mut scope = ScopeLocal::new(); // stack_grows_negative (x86)
+        scope.local_range = vec![(0, u64::MAX)];
         // For a negative-growing stack, a high unsigned offset (a local) maps
         // to a negative signed value, which is negated to positive magnitude.
-        // offset = 0xfffffffffffffff0 → sign-extended -16 → negated +16 → "Stack_10".
-        let name = scope.build_variable_name(0xfffffffffffffff0);
-        assert_eq!(name, "Stack_10");
+        // offset = 0xfffffffffffffff0 → signed -16 → negated +16 → "Stack_10".
+        let mut index = 1;
+        let name = scope.build_variable_name(
+            crate::space::AddressSpace::Stack, 0xfffffffffffffff0, None,
+            Some(&named_dt("int", 4, TypeMetatype::Int)), &mut index,
+            varnode_flags::ADDRTIED,
+        ).unwrap();
+        // printNameBase("int") = 'i', so the name is "iStack_10" — Ghidra's
+        // auStack_/abStack_ style (varmap.cc:561-565).
+        assert_eq!(name, "iStack_10");
         // A small positive offset (parameter region) → negated to negative → 'X'.
-        let name2 = scope.build_variable_name(0x10);
-        assert!(name2.starts_with("StackX_"), "got {}", name2);
+        let mut index = 1;
+        let name2 = scope.build_variable_name(
+            crate::space::AddressSpace::Stack, 0x10, None,
+            Some(&named_dt("int", 4, TypeMetatype::Int)), &mut index,
+            varnode_flags::ADDRTIED,
+        ).unwrap();
+        assert!(name2.starts_with("iStackX_"), "got {}", name2);
     }
 
     #[test]
     fn test_build_variable_name_positive() {
+        use crate::varnode::varnode_flags;
         let mut scope = ScopeLocal::new();
         scope.stack_direction = -1; // positive growth → no negation
+        scope.stack_grows_negative = false;
+        scope.local_range = vec![(0, u64::MAX)];
         // offset 0x10 → start = 0x10 > 0 → plain "Stack_10".
-        let name = scope.build_variable_name(0x10);
-        assert_eq!(name, "Stack_10");
+        let mut index = 1;
+        let name = scope.build_variable_name(
+            crate::space::AddressSpace::Stack, 0x10, None,
+            Some(&named_dt("int", 4, TypeMetatype::Int)), &mut index,
+            varnode_flags::ADDRTIED,
+        ).unwrap();
+        assert_eq!(name, "iStack_10");
+    }
+
+    // --- assignDefaultNames shared base counter (database.cc:2850) ---
+
+    #[test]
+    fn test_assign_default_names_shared_base_counter() {
+        // Three unnamed locals with DIFFERENT type prefixes must draw from the
+        // ONE shared base counter (per-prefix counters would restart at 1).
+        let mut scope = ScopeLocal::new();
+        scope.add_symbol("", Some(named_dt("int", 4, TypeMetatype::Int)), 0xfffffff0, Some(0x1000));
+        scope.add_symbol("", Some(named_dt("char", 1, TypeMetatype::Int)), 0xfffffff4, Some(0x1000));
+        scope.add_symbol("", Some(Arc::new(Datatype::Pointer(
+            crate::type_system::datatype::TypePointer {
+                base: TypeBase::new("char *".into(), 8, TypeMetatype::Pointer),
+                ptr_to: named_dt("int", 4, TypeMetatype::Int),
+                wordsize: 1,
+            }))), 0xfffffff8, Some(0x1000));
+        let mut base: i32 = 1;
+        scope.assign_default_names(&mut base).unwrap();
+        assert_eq!(base, 4); // 3 names consumed the shared counter
+        let names: Vec<&str> = scope.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["iVar1", "cVar2", "piVar3"]);
+        // Idempotence: a second run finds no $$undef symbols.
+        scope.assign_default_names(&mut base).unwrap();
+        assert_eq!(base, 4);
+    }
+
+    #[test]
+    fn test_make_name_unique_suffix_forms() {
+        let mut scope = ScopeLocal::new();
+        scope.add_symbol("iVar1", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        // "iVar1" is taken → new sequence "_00".
+        assert_eq!(scope.make_name_unique("iVar1").unwrap(), "iVar1_00");
+        scope.add_symbol("iVar1_00", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        // Last existing id 0 → next is 01 (2-digit form).
+        assert_eq!(scope.make_name_unique("iVar1").unwrap(), "iVar1_01");
+        scope.add_symbol("iVar1_01", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol("iVar1_02", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        // Last existing id 2 → next is 03.
+        assert_eq!(scope.make_name_unique("iVar1").unwrap(), "iVar1_03");
+        // A free name returns unchanged.
+        assert_eq!(scope.make_name_unique("freeVar").unwrap(), "freeVar");
+    }
+
+    #[test]
+    fn test_param_category_uses_catindex_not_base() {
+        // function_parameter category: name comes from catindex+1, and the
+        // shared base counter is NOT consumed (database.cc:1777-1781).
+        let mut scope = ScopeLocal::new();
+        let p1 = scope.add_symbol("", Some(int_dt(8, TypeMetatype::Int)), 0x20, Some(0x100));
+        let p2 = scope.add_symbol("", Some(int_dt(8, TypeMetatype::Int)), 0x30, Some(0x100));
+        scope.set_category(p1, symbol_category::FUNCTION_PARAMETER, 0);
+        scope.set_category(p2, symbol_category::FUNCTION_PARAMETER, 1);
+        let mut base: i32 = 1;
+        scope.assign_default_names(&mut base).unwrap();
+        assert_eq!(base, 1); // untouched by the param branch
+        let names: Vec<&str> = scope.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["param_1", "param_2"]);
+    }
+
+    #[test]
+    fn test_typelocked_name_survives_assign() {
+        // A named (locked) symbol is never renamed by assignDefaultNames.
+        let mut scope = ScopeLocal::new();
+        let locked = scope.add_symbol("cust_lock", Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        scope.symbols[locked].typelock = true;
+        scope.symbols[locked].namelock = true;
+        scope.add_symbol("", Some(int_dt(4, TypeMetatype::Int)), 0x44, Some(0x100));
+        let mut base: i32 = 1;
+        scope.assign_default_names(&mut base).unwrap();
+        assert_eq!(scope.symbols[locked].name, "cust_lock");
+        assert_eq!(scope.symbols[locked].display_name, "cust_lock");
+    }
+
+    #[test]
+    fn test_name_dedup_on_duplicate_names() {
+        // Two symbols with the same name get nameDedup 0 and 1
+        // (database.cc:2712-2727 insertNameTree).
+        let mut scope = ScopeLocal::new();
+        scope.add_symbol("dup", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol("dup", Some(int_dt(4, TypeMetatype::Int)), 8, None);
+        assert_eq!(scope.symbols[0].name_dedup, 0);
+        assert_eq!(scope.symbols[1].name_dedup, 1);
+        assert_eq!(scope.find_first_by_name("dup"), Some(0));
+    }
+
+    #[test]
+    fn test_build_undefined_name_sequence() {
+        let mut scope = ScopeLocal::new();
+        assert_eq!(scope.build_undefined_name().unwrap(), "$$undef00000000");
+        scope.add_symbol("", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        assert_eq!(scope.symbols[0].name, "$$undef00000000");
+        assert_eq!(scope.build_undefined_name().unwrap(), "$$undef00000001");
+        scope.add_symbol("", Some(int_dt(4, TypeMetatype::Int)), 4, None);
+        assert_eq!(scope.symbols[1].name, "$$undef00000001");
+        assert!(scope.symbols[0].is_name_undefined());
     }
 
     // --- ScopeLocal.mark_unaliased (varmap.cc:1332) distance heuristic ---
@@ -1889,10 +2759,7 @@ mod tests {
     #[test]
     fn test_mark_unaliased_no_aliases() {
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(LocalSymbol {
-            name: "a".into(), start: 0, size: 4,
-            dtype: None, unaliased: false, is_param: false,
-        });
+        scope.symbols.push(LocalSymbol::new("a", 0, 4, None, symbol_category::NO_CATEGORY));
         scope.mark_unaliased(&[]);
         assert!(scope.symbols[0].unaliased);
     }
@@ -1902,10 +2769,7 @@ mod tests {
         let mut scope = ScopeLocal::new();
         // Symbol [0,8), alias at offset 4 → curoff=7, alias<=7 → aliased,
         // and distance (7-4)=3 <= 0xffff → stays aliased.
-        scope.symbols.push(LocalSymbol {
-            name: "a".into(), start: 0, size: 8,
-            dtype: None, unaliased: false, is_param: false,
-        });
+        scope.symbols.push(LocalSymbol::new("a", 0, 8, None, symbol_category::NO_CATEGORY));
         scope.mark_unaliased(&[4]);
         assert!(!scope.symbols[0].unaliased);
     }
@@ -1915,10 +2779,7 @@ mod tests {
         let mut scope = ScopeLocal::new();
         // Symbol [0x20000, 4), alias at offset 4 → curoff=0x20003,
         // distance = 0x20003-4 > 0xffff → unaliased (distance heuristic).
-        scope.symbols.push(LocalSymbol {
-            name: "a".into(), start: 0x20000, size: 4,
-            dtype: None, unaliased: false, is_param: false,
-        });
+        scope.symbols.push(LocalSymbol::new("a", 0x20000, 4, None, symbol_category::NO_CATEGORY));
         scope.mark_unaliased(&[4]);
         assert!(scope.symbols[0].unaliased);
     }

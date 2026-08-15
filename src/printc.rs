@@ -351,6 +351,14 @@ pub struct PrintC {
     /// which was the 181538f bug (per-prefix independent numbering produced
     /// `bVar1,bVar2` instead of Ghidra's shared `...iVar4,lVar5...`).
     compact_base: u32,
+    /// Value of the shared `int4 base` counter AFTER the Action-phase naming
+    /// pass (`ScopeLocal::assign_default_names`, database.cc:2850) ran on the
+    /// scope snapshot. Ghidra flows this one counter from
+    /// `ActionNameVars::apply` (coreaction.cc:2988) through both the per-vn
+    /// namerec loop and assignDefaultNames; Rugra runs the scope pass first
+    /// and lets the remaining lazy register-high renumbering continue from
+    /// this value so the counter stays shared across both sources.
+    scope_naming_base: u32,
     /// If true, we are in the discovery pass (only collecting names, not printing)
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
@@ -535,6 +543,7 @@ impl PrintC {
             used_scope_symbols: std::cell::RefCell::new(std::collections::HashSet::new()),
             compact_rename: HashMap::new(),
             compact_base: 1, // faithful to Ghidra int4 base=1 (coreaction.cc:2988)
+            scope_naming_base: 1,
             discovery_pass: false,
             call_targets: HashSet::new(),
         pointer_varnodes: HashSet::new(),
@@ -2844,37 +2853,6 @@ impl PrintC {
         Some(compact)
     }
 
-    // RUGRA-GLUE: rename_scope_symbol (no Ghidra counterpart found)
-    /// Rename a varmap-generated `StackX_<hex>` / `Stack_<hex>` symbol name into
-    /// a Ghidra-style typed local name (`<printNameBase>Var<base>`), sharing the
-    /// SAME `compact_base` counter as `compact_name_for`. Faithful to Ghidra
-    /// `ActionNameVars::apply` (coreaction.cc:2988) which, after the per-Varnode
-    /// `namerec` loop, calls `scope->assignDefaultNames(base)` (database.cc:2850)
-    /// — renaming ALL remaining unnamed symbols (including the stack-local
-    /// `StackX_` fallback names produced by `ScopeLocal::buildVariableName`,
-    /// varmap.cc:548) under the single shared `int4 base`. The type prefix is
-    /// derived from the symbol's dtype via `var_prefix` (Rugra's printNameBase
-    /// equivalent), matching `ct->printNameBase(s)` at database.cc:2502.
-    fn rename_scope_symbol(&mut self, sym: &crate::varmap::LocalSymbol) -> String {
-        // Only rename the auto-generated Stack/StackX fallback names. Names that
-        // are already typed (iVar/lVar/etc.) or came from real symbols stay.
-        let raw = &sym.name;
-        let is_stack_fallback = raw.starts_with("StackX_") || raw.starts_with("Stack_");
-        if !is_stack_fallback {
-            return raw.clone();
-        }
-        // Cached: same raw name → same compact name (decl & use must agree).
-        if let Some(compact) = self.compact_rename.get(raw) {
-            return compact.clone();
-        }
-        let prefix = Self::var_prefix(&sym.dtype, sym.size.max(1) as usize);
-        let n = self.compact_base;
-        self.compact_base += 1;
-        let compact = format!("{}{}", prefix, n);
-        self.compact_rename.insert(raw.to_string(), compact.clone());
-        compact
-    }
-
     // Ghidra: database.cc:2850 ScopeInternal::assignDefaultNames (nametree order)
     /// P4 fix: pre-allocate compact names for register-derived auto-locals in
     /// def-op address order, matching Ghidra's nametree/nameDedup (symbol
@@ -3049,39 +3027,20 @@ impl PrintC {
         // set of this function's stack locals; any that the body references must
         // be declared.
         //
-        // Route StackX_ fallback names through rename_scope_symbol (shared base,
-        // faithful to Ghidra assignDefaultNames) so decl & use agree. We rename
-        // ALL scope symbols up front into `renamed_map` to apply the shared base
-        // in a deterministic order, then declare by the renamed name.
-        let mut renamed_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        if let Some(scope) = &self.scope {
-            // Snapshot raw names + size first (avoid holding scope borrow across
-            // the &mut self rename_scope_symbol calls).
-            let raw_syms: Vec<(String, i32)> = scope.symbols.iter()
-                .map(|s| (s.name.clone(), s.size))
-                .collect();
-            for (raw_name, size) in raw_syms {
-                if raw_name.starts_with("StackX_") || raw_name.starts_with("Stack_") {
-                    let renamed = self.rename_scope_symbol(&crate::varmap::LocalSymbol {
-                        name: raw_name.clone(),
-                        start: 0,
-                        size,
-                        dtype: None,
-                        unaliased: false,
-                        is_param: false,
-                    });
-                    renamed_map.insert(raw_name, renamed);
-                }
-            }
-        }
+        // Scope symbols carry their final names from the Action-phase
+        // `assignDefaultNames` run (database.cc:2850) at snapshot time —
+        // Stack/StackX locals, param_N entries, and lVar-style locals alike.
+        // PrintC declares them under those names (Ghidra's printer reads
+        // Symbol::getDisplayName) with no print-time renumbering.
         if let Some(scope) = &self.scope {
             for sym in &scope.symbols {
-                // Use the renamed name if one was allocated (StackX_ → iVar/lVar),
-                // else the raw name. Conservatively declare every scope symbol:
-                // they are this function's stack locals by definition, and
-                // printc's discovery pass has known gaps where a referenced name
-                // is emitted without being recorded in used_varnode_names.
-                let name = renamed_map.get(&sym.name).cloned().unwrap_or_else(|| sym.name.clone());
+                let name = sym.name.clone();
+                // Skip $$undef placeholders: they model symbols Ghidra would
+                // never leave unnamed before printing; declaring them would
+                // leak illegal identifiers into the C output.
+                if name.starts_with("$$undef") {
+                    continue;
+                }
                 if !declared.contains_key(&name)
                     && is_declarable(&name, AddressSpace::Stack, 0, &self.call_targets)
                 {
@@ -3517,23 +3476,16 @@ impl PrintC {
             // one covers this raw stack offset. Falls through to the heuristic
             // when the scope has no symbol here (common, since Rugra's lift does
             // not yet produce Stack-space varnodes for RSP-relative accesses).
-            // Clone the symbol data out of the scope borrow before calling the
-            // &mut self renamer (avoids self borrow conflict), and route StackX_
-            // fallback names through rename_scope_symbol (Ghidra assignDefaultNames).
+            // The symbol's name was already assigned by the authoritative
+            // `assignDefaultNames` pass (database.cc:2850) at scope-snapshot
+            // time — PrintC consumes it verbatim (Ghidra's printer reads
+            // Symbol::getDisplayName; it never renumbers scope symbols).
             let sym_opt = self.scope.as_ref().and_then(|s| s.find_symbol(offset)).map(|sym| {
-                (sym.name.clone(), sym.dtype.clone(), sym.size)
+                sym.name.clone()
             });
-            if let Some((raw_name, dtype, size)) = sym_opt {
-                let renamed = self.rename_scope_symbol(&crate::varmap::LocalSymbol {
-                    name: raw_name.clone(),
-                    start: offset,
-                    size,
-                    dtype,
-                    unaliased: false,
-                    is_param: false,
-                });
-                self.used_scope_symbols.borrow_mut().insert(renamed.clone());
-                return Some(renamed);
+            if let Some(assigned_name) = sym_opt {
+                self.used_scope_symbols.borrow_mut().insert(assigned_name.clone());
+                return Some(assigned_name);
             }
             
             // Ghidra convention: local_XX where XX = frame_size - offset
@@ -5005,11 +4957,34 @@ impl PrintLanguage for PrintC {
         // rather than producing Stack-space varnodes, so gather_varnodes finds
         // few symbols today. gather_spacebase compensates for RSP-derived
         // LOAD/STORE. Full coverage needs type propagation.
+        //
+        // Action-phase naming: Ghidra's ActionNameVars::apply ends with
+        // `data.getScopeLocal()->assignDefaultNames(base)` (coreaction.cc:2998)
+        // BEFORE printing, so PrintC only ever consumes finished symbol names.
+        // Rugra's Action pipeline (coreaction.rs) does not run that pass yet,
+        // so the naming runs here, once per function, at the point the scope
+        // snapshot is taken; the print paths below consume the assigned
+        // `name`/`display_name` and never renumber scope symbols. The shared
+        // `int4 base` counter is captured in scope_naming_base so the lazy
+        // register-high renumbering (compact_name_for) continues it.
         self.scope = match &fd.scope {
-            Some(s) => Some(s.clone()),
+            Some(s) => {
+                let mut scope = s.clone();
+                let mut base: i32 = 1;
+                if scope.assign_default_names(&mut base).is_none() {
+                    eprintln!("[VARMAP] assign_default_names: makeNameUnique failure");
+                }
+                self.scope_naming_base = base.max(1) as u32;
+                Some(scope)
+            }
             None => {
                 let mut scope = crate::varmap::ScopeLocal::new();
                 scope.restructure_varnode(fd);
+                let mut base: i32 = 1;
+                if scope.assign_default_names(&mut base).is_none() {
+                    eprintln!("[VARMAP] assign_default_names: makeNameUnique failure");
+                }
+                self.scope_naming_base = base.max(1) as u32;
                 Some(scope)
             }
         };
@@ -5649,9 +5624,13 @@ impl PrintLanguage for PrintC {
         self.used_varnode_types.clear();
         self.declaration_order.clear();
         self.used_scope_symbols.borrow_mut().clear();
-        // Reset compact variable renumbering for this function.
+        // Reset compact variable renumbering for this function. The counter
+        // CONTINUES from the Action-phase assignDefaultNames run
+        // (scope_naming_base) instead of restarting at 1: Ghidra's single
+        // `int4 base` (coreaction.cc:2988) is shared between the per-vn
+        // namerec loop and assignDefaultNames, never reset in between.
         self.compact_rename.clear();
-        self.compact_base = 1; // reset shared base per function (coreaction.cc:2988)
+        self.compact_base = self.scope_naming_base;
 
         // Pass 1: Discovery (only collect used names silently)
         self.discovery_pass = true;

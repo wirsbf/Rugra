@@ -657,6 +657,45 @@
      "GH12-F-763b9cea2c290093427f"
     ]
    }
+  },
+  {
+   "id": "varmap_naming_1204",
+   "description": "Authoritative default-naming state mutation: SymbolNameTree walk, shared int4 base, category/catindex, nameDedup, makeNameUnique sequencing, buildVariableName flag branches",
+   "runner": [
+    "tools/run_varmap_naming_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/varmap_naming_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/varmap_naming_1204.cc",
+     "rust_fixture": "tests/oracle/varmap_naming_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_varmap_naming_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varmap.rs",
+     "src/printc.rs",
+     "tests/oracle/varmap_naming_1204.*",
+     "tools/run_varmap_naming_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-7c3a91d4e2b85a60c4f1",
+     "GH12-F-a1e4f60b3c79d25e8442",
+     "GH12-F-b2d5e71f40a8c36e9553",
+     "GH12-F-c3f6a82b51d94e70f664",
+     "GH12-F-d4a7b93c62e5f180a775",
+     "GH12-F-e5b8ca4d73f60291b886"
+    ]
+   }
   }
  ]
 }

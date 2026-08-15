@@ -839,3 +839,29 @@ model is not present in Rugra's print layer):
 - 同一 release 二进制连续三次仍产生不同 SHA，GCC 审计为 10/24、9/24、
   10/24；这不是本项引入，继续由 `PRINT-DETERMINISM-0001` 跟踪。
 - 验收：`tools/run_printc_blockgraph_oracle.sh`。
+
+### 2026-08-15：命名源切换 — PrintC 消费 Action 阶段权威命名（VARMAP-NAMING-0001）
+
+- **变更**：PrintC 不再对 scope 符号做任何打印期重命名。`doc_function` 取 scope 快照
+  （`fd.scope` 克隆或本地重建）后立即运行 `ScopeLocal::assign_default_names(&mut base)`
+  （varmap.rs 权威移植，Ghidra `ActionNameVars::apply` 末尾的
+  `scope->assignDefaultNames(base)`，coreaction.cc:2998 / database.cc:2850），
+  base 初值 1（coreaction.cc:2988）。符号自此持有最终名：
+  - 栈局部（addrtied + localRange 内）→ `<printNameBase>Stack[X|Y]_hex`（varmap.cc:548）
+  - 参数 category → `param_<catindex+1>`（database.cc:1777-1781）
+  - usepoint 有效的局部 → `<printNameBase>Var<N>`（database.cc:2501-2504，共享 base）
+- **`rename_scope_symbol` 删除**：其 `StackX_ → prefix+base` 打印期重编号被上式取代。
+  `get_stack_variable_name` 与 `doc_variable_decls_from_funcdata` 现在直接消费符号的
+  assigned name（Ghidra printer 读 `Symbol::getDisplayName`，从不二次编号）。
+  `$$undef` 占位名（assign 失败残留）被声明循环跳过，防非法标识符泄漏。
+- **共享计数器连续性**：`compact_base` 不再在每函数重置为 1，而是从
+  `scope_naming_base`（assignDefaultNames 运行后的 base 终值）继续 — Ghidra 的单一
+  `int4 base` 在 namerec 循环与 assignDefaultNames 之间从不重置（coreaction.cc:2988-2998）。
+  剩余的 lazy 寄存器-high 重编号（`compact_name_for`，处理无 scope 符号支撑的
+  RAX/lVar_a8 类名）继续消费同一计数器，属 RUGRA-GLUE（Rugra 的 Action 管线尚未接入
+  ActionNameVars 的 linkSymbols/namerec 闭包；Ghidra 中该路径先于 assignDefaultNames 消耗
+  base，Rugra 在 emit 期近似，两者共享同一计数器语义）。
+- **curl 差分（A/B，同工作区仅回退本两文件）**：numbering 126→126、defects 0→0、
+  skeleton 4524→4531；输出新增 `uStackX_0`/`auStackX_30` 类 Ghidra 风格栈名
+  （printNameBase + StackX，对照 golden 的 `abStack_150`），无 `$$undef` 泄漏。
+- 验收：`tools/run_varmap_naming_oracle.sh`（VARMAP-NAMING-0001 六 case 投影 MATCH）。
