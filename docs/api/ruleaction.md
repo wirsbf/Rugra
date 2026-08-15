@@ -993,3 +993,27 @@ Ghidra 的 `hasTruncations` 检查 `glb->getDefaultDataSpace()->isTruncated()`�
 ### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
 - 调用点 `v1.contains_storage(&v2)` → `v1.contains(&v2)`（配合 varnode.rs 的 `contains_storage`→`contains` 重命名，对齐 `Varnode::contains`）。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-08-15：RuleMultiCollapse 常量值等价走 absolute 路径（RULE-MULTICOLLAPSE-ABORT-0001）
+
+`RuleMultiCollapse::apply_op` 的 while 匹配循环在 `functional_equality_level`
+之前新增常量值同一性检查：defining branch 与待匹配分支均为常量且
+(size, offset) 相等时，视作 absolute 匹配 `continue`，不置 `func_eq`。
+
+依据（锁定 12.0.4 e40ed130）：
+- `ruleaction.cc:3279` `else if (defcopyr == copyr) continue;`——指针同一性
+  走 absolute 路径；对常量而言值同一性即指针同一性的语义等价
+  （`expression.cc:407` 指针相等、`expression.cc:409-412` 同值常量对均返回
+  level-0 码 0）。
+- `ruleaction.cc:3306` `newop = defcopyr->getDef()` 是无条件解引用；当
+  defcopyr 是未 written 常量时为 null。实证：锁定 oracle 对
+  `MULTIEQUAL(c0a, c0b)`（两个同值不同对象的常量分支）在 applyOp 内
+  SIGSEGV（fixture `rule_multi_collapse_abort_1204` 以 fork 子进程复现并
+  记录）。因此 Ghidra 自身在该形状下 func_eq 分支不可存活，其意图语义由
+  `ruleaction.cc:3334` 的 absolute totalReplace 给出。
+- 修复后不变量：`func_eq == true` ⇒ defcopyr 已 written 且 def 存活——
+  与 cc:3306 假设一致；7519 处的 Lowlevel 错误保留为真不变量守卫。
+
+该形状曾使 curl 的 main/glob_word/glob_set 三函数管线中止于
+`RuleMultiCollapse functional branch has no definition`（scope=None、
+HighVariable=0、sblocks=0）；修复后三函数完整产出结构。

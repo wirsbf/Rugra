@@ -894,6 +894,37 @@
      "tools/run_printc_format_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "rule_multi_collapse_abort_1204",
+   "description": "RuleMultiCollapse constant defcopyr identity: const-pair absolute collapse (oracle SIGSEGV recorded), func_eq skiplist def preservation, const/non-const mix no-change",
+   "runner": [
+    "tools/run_rule_multi_collapse_abort_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/rule_multi_collapse_abort_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/rule_multi_collapse_abort_1204.cc",
+     "rust_fixture": "tests/oracle/rule_multi_collapse_abort_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_rule_multi_collapse_abort_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/ruleaction.rs",
+     "docs/api/ruleaction.md",
+     "tests/oracle/rule_multi_collapse_abort_1204.*",
+     "tools/run_rule_multi_collapse_abort_oracle.sh"
+    ]
+   }
   }
  ]
 }

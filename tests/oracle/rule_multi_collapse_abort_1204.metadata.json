@@ -1,0 +1,148 @@
+{
+ "schema_version": 1,
+ "fixture_id": "RULE-MULTICOLLAPSE-ABORT-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "a51e0c5c14a5dec130d4e7a050e2512c9c518280",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "api": "Direct RuleMultiCollapse::applyOp/apply_op invocation; no ActionGroup or other Rule runs",
+  "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies Ghidra Funcdata, address spaces, TypeFactory, and opcode lists. Each Ghidra case clears prior state. Rugra creates an isolated synthetic Funcdata per case.",
+  "ir": "All observed ops are alive and block-integrated before invocation. Register leaves are SSA inputs; outputs are inserted unique-space written Varnodes; constants are fresh const-space Varnodes per site (the opSetInput clone rule makes any two same-valued constant objects distinct, which is exactly how the abort shape forms). The functional case has ordered left->merge and right->merge CFG edges with PHI slots matching predecessor order.",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. The crash-case after-record intentionally differs: Ghidra prints its observed SIGSEGV termination of the forked child while Rugra prints the full completed absolute-constant-collapse state. The func_eq after-record is compared after masking only the two dead MULTIEQUAL op-state entries (OPBANK-0001 NULL input-slot cardinality). All other Varnode offsets, identities, flags, SeqNum time/order, slots, bank/list/block/CFG order, definitions, descendants, marks, and alive/dead state are preserved byte-for-byte.",
+  "crash_reproduction": "The locked e40ed130 oracle dereferences defcopyr->getDef()==null at ruleaction.cc:3306 when defcopyr is an unwritten constant selected by ruleaction.cc:3254-3257 and functionalEquality returns true for two same-valued constant objects (expression.cc:409-412). The C++ fixture reproduces this in a forked child (parent stdout flushed before fork) and records result=SIGSEGV; Rugra's post-fix absolute-constant path completes with result=1.",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "random_seed": "none; RuleMultiCollapse and fixture construction are deterministic",
+  "error_injection": "none"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86-64.sla",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86-64.pspec",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86-64-gcc.cspec",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:sleigh_specs/x86.ldefs",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
+  },
+  "binary": {
+   "path": "examples/curl",
+   "source_ref": "a51e0c5c14a5dec130d4e7a050e2512c9c518280:examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728,
+   "source_policy": "Materialize the pinned base commit's examples/curl Git blob by verified object ID; never read the working-tree binary"
+  },
+  "bfd": {
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+  "sha256": "607cffcb7092063441aba6b754b44d2d7ecac98f17b01e215a469315d1106cc1",
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "a51e0c5c14a5dec130d4e7a050e2512c9c518280",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
+  },
+  "function": {
+   "name": "GetStr",
+   "entry": 14032,
+   "size": 0,
+   "symbol_source": "ELF/BFD"
+  },
+  "cases": [
+   {
+    "id": "const_nonconst_mix_no_change",
+    "shape": "root=phi(c0a,x); use(root)",
+    "expected": "no change on both sides (constant cannot functionally match an unwritten input and an unwritten input is not expandable)"
+   },
+   {
+    "id": "func_eq_skiplist_def_preserved",
+    "shape": "left_add/third_add INT_ADD(x,5) in predecessors, right_add INT_ADD(x,5) as defining branch, nested=phi(left_add,third_add), root=phi(nested,right_add), merge-block CSE INT_ADD(x,5) before the uses",
+    "expected": "func_eq collapse destroys root then nested through the shared CSE substitute while the defining branch's defining op (right_add) stays alive and is re-read for every skiplist entry"
+   },
+   {
+    "id": "const_pair_distinct_objects",
+    "shape": "root=phi(c0a,c0b) two distinct const 0:1 objects; use(root)",
+    "expected": "locked oracle: SIGSEGV at ruleaction.cc:3306 (null defcopyr->getDef()); Rugra: absolute-constant collapse, result=1, root destroyed, use reads a fresh constant clone"
+   }
+  ]
+ },
+ "observation_schema": {
+  "format": "Six fixed-order UTF-8 records (before/after for three cases) with a final newline; the Ghidra stream's crash-case after-record is the parent's waitpid observation of the forked child",
+  "identity": "Pointer/Arc addresses are map keys only. Initial blocks, ops, and Varnodes use semantic names; transformation-created values use deterministic discovery names. Removed Varnodes are tombstones and are never dereferenced.",
+  "cfg_and_op_state": "Every synthetic block's exact index, predecessor order, successor order, and op order; whole op-tree, alive/dead lists, and LOAD/STORE/RETURN/CALLOTHER opcode-specific lists; every tracked op including dead ops with opcode, dead/mark/marker/commutative/modified flags, parent, address, immutable SeqNum time, mutable SeqNum order, ordered nullable inputs, and output identity.",
+  "varnode_state": "Exact VarnodeBank location/definition order and every tracked/discovered Varnode's membership, space, size, semantic/raw offset, create index, complete raw flags, mark/class/heritage state, defining op, and occurrence-aware ordered descendant op.slot edges.",
+  "raw_difference_policy": "The runner pins both complete output streams via the comparand block. Exactly two record classes may differ: (1) func_eq_skiplist_def_preserved/after differs only inside the two dead MULTIEQUAL op-state entries where Ghidra prints inputs=[-,-] NULL slot cardinality and Rugra prints inputs=[] (OPBANK-0001); (2) const_pair_distinct_objects/after is the oracle's SIGSEGV observation versus Rugra's completed absolute-constant collapse state, which is the documented RULE-MULTICOLLAPSE-ABORT-0001 divergence (the oracle's own crash proves its func_eq path cannot express this shape)."
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "acfb87381a83b40bb1b61d26fcc572b92a4b8ee36e83a3627521181530594c40",
+  "rust_fixture_sha256": "f6ab61499cd05141cb23ec61b5fb025e134921bbbda567fce65aca6b9dbc562c",
+  "runner_sha256": "63cdad84bd63c5bc062e8cac34518d149c0b6449f2e7ff6382945ac43e864b06",
+  "doc_sha256": "de154014a33c6251e359c3ede33d34c6ba368c30ce335d2a81e896aa4bc12e64",
+  "rust_crate_tree_sha256": "0aad5094e1b9413b4f2fec5cd429e8515b55051baff9ed27fff42e5402791811",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-multi-collapse-abort-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit a51e0c5c14a5dec130d4e7a050e2512c9c518280 Git blob except the src/ruleaction.rs overlay, which is taken from the live working tree"
+ },
+ "known_dependencies": {
+  "OPBANK-0001": {
+   "status": "MISMATCH",
+   "detail": "Ghidra dead PcodeOps retain NULL input-slot cardinality; Rugra's Vec-based inrefs are cleared by op_destroy. The func_eq after-record is compared with only the dead MULTIEQUAL op-state entries masked; every other field must stay byte-identical."
+  },
+  "RULE-MULTICOLLAPSE-0001": {
+   "status": "MISMATCH",
+   "detail": "Parent fixture: root/self-loop/nested/functional-CSE/functional-LOAD target projections matched; this fixture reuses its Fixture dump format."
+  }
+ },
+ "record_verdicts": {
+  "const_nonconst_mix_no_change/before": "MATCH",
+  "const_nonconst_mix_no_change/after": "MATCH",
+  "func_eq_skiplist_def_preserved/before": "MATCH",
+  "func_eq_skiplist_def_preserved/after": "MATCH_MASKED_OPBANK_0001",
+  "const_pair_distinct_objects/before": "MATCH",
+  "const_pair_distinct_objects/after": "ORACLE_CRASH_VS_RUGRA_COLLAPSE"
+ },
+ "overall_status": "PARTIAL_MATCH",
+ "overall_status_rationale": "Five of six records match byte-for-byte (one masked by the pre-registered OPBANK-0001 dead-slot representation limit). The crash-case record documents that the locked oracle itself cannot survive the abort shape; Rugra's completed absolute-constant collapse is the cc:3279/cc:3334-intended behavior. The case-level non-MATCH record keeps this fixture below full MATCH."
+}

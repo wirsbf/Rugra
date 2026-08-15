@@ -7452,6 +7452,35 @@ impl Rule for RuleMultiCollapse {
                 if std::sync::Arc::ptr_eq(dc, &copyr) {
                     continue; // Matching branch.
                 }
+                // cc:3279 `else if (defcopyr == copyr) continue;` — a matching
+                // branch by identity. Ghidra compares raw pointers, and its
+                // VarnodeBank clones constants per read-site (funcdata_op.cc
+                // 108-115), so two same-valued constant objects are distinct
+                // pointers there and fall into the functional-equality branch
+                // (cc:3280), where cc:3306 `defcopyr->getDef()` is an
+                // unconditional dereference that is null for an unwritten
+                // constant: the locked 12.0.4 oracle segfaults on a
+                // MULTIEQUAL whose branches are two distinct same-valued
+                // constant objects (verified empirically). Pointer identity
+                // and constant-value identity are the same level-0 proof
+                // (expression.cc:407 `vn1==vn2`, 409-412 const-const with
+                // equal offset/size both return 0), and the intended collapse
+                // is cc:3334's absolute totalReplace — so constant-value
+                // identity continues as an absolute match, preserving the
+                // func_eq invariant (defcopyr written with a live def) that
+                // cc:3306 assumes. Bound to RULE-MULTICOLLAPSE-ABORT-0001.
+                let const_value_match = {
+                    let d = dc.read().unwrap();
+                    d.is_constant() && {
+                        let c = copyr.read().unwrap();
+                        c.is_constant()
+                            && c.get_size() == d.get_size()
+                            && c.loc.as_u64() == d.loc.as_u64()
+                    }
+                };
+                if const_value_match {
+                    continue; // Absolute match: same constant value.
+                }
                 if !nofunc {
                     let result = functional_equality_level(&dc, &copyr);
                     if result.code == 0 {
