@@ -962,3 +962,22 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 - fixture 证据：`tests/oracle/action_merge_order_1204.{cc,rs}` 29 行观察 28 行
   逐字节一致（seq/counts/status/IR/merge_temps 全对齐）；唯一残差
   `finalstructure` count 桥在 blockaction.rs（域外）。
+
+### 2026-08-15：`ActionReturnRecovery` 生命周期对齐（`FUNC-TYPEPROP-SETTLE-0001`）
+
+消除 match_url/`__libc_csu_init` 的 mainloop ABA 自旋（120s 硬超时）：
+
+- `ActionPrototypeTypes` Step 4：output 未锁时**无条件** `init_active_output`
+  （coreaction.cc:4649-4651，onceperfunc），替换自创的 void+has-RETURN 门控。
+- `ActionReturnRecovery::apply`：`active_output` 为 None 时早退（= oracle
+  `if (active != 0)` 门，cc:1908-1955），不再在 clear 后重建容器；空 RETURN
+  分支补完生命周期尾（finishPass→maxPass 判定→deriveOutputMap→clear）而非
+  提前返回——循环因此可排空并恰好 clear 一次。
+- 计数对齐 oracle：每个未 checked trial 处理后 +1（cc:1935）+
+  clearActiveOutput 后恰好一次 +1（cc:1951）；删除自创 else 计数与
+  per-RETURN build 计数。
+
+证据：match_url 120s→102ms、`__libc_csu_init`→10.5ms（残留的一次性
+"not settling" 警告=对齐 Ghidra localcount>=7 warn-once 语义）；单测
+1337/6 域外不变。按机制 B2 记 **UNTESTED**（源级对齐+E2E 恢复，returnrecovery
+生命周期逐函数 oracle fixture 为后继项）。

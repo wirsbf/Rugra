@@ -5435,18 +5435,15 @@ impl Action for ActionPrototypeTypes {
             }
         }
 
-        // Step 4: Init active output if not locked
-        // (Ghidra calls initActiveOutput when output is not locked)
-        let is_output_void = matches!(fd.funcp.return_type.as_ref(),
-            crate::type_system::datatype::Datatype::Void(_));
-        if is_output_void && fd.active_output.is_none() {
-            // Check if any RETURN has a return value
-            let has_ret = return_ops.iter().any(|r| {
-                r.0.read().unwrap().num_input() > 1
-            });
-            if has_ret {
-                fd.active_output = Some(crate::fspec::ParamActive::new(false));
-            }
+        // Step 4: Init active output if not locked.
+        // Ghidra coreaction.cc:4649-4651: the else-branch of isOutputLocked
+        // calls data.initActiveOutput() UNCONDITIONALLY (regardless of
+        // return-type voidness or whether any RETURN already has a value).
+        // This action is onceperfunc, so the container is created exactly
+        // once; ActionReturnRecovery clears it once fully checked and must
+        // never re-create it (see cc:1908-1955 lifecycle).
+        if !fd.funcp.output_type_locked {
+            fd.init_active_output();
         }
 
         Ok(action_status::NO_CHANGE)
@@ -8311,13 +8308,14 @@ impl Action for ActionReturnRecovery {
             return Ok(action_status::NO_CHANGE);
         }
 
-        // Ghidra cc:1911: active = data.getActiveOutput(). If absent,
-        // ActionPrototypeTypes did not initialise it — but in Ghidra that
-        // action always calls initActiveOutput() when output is unlocked.
-        // Rugra's prototypetypes only initialises when a RETURN already has a
-        // value, so we ensure the container exists here to match Ghidra.
+        // Ghidra cc:1911: the whole body is guarded by
+        // `if (active != (ParamActive*)0)`; apply returns 0 when the
+        // container is absent. The ONLY creation point is
+        // ActionPrototypeTypes (cc:4651, onceperfunc); after
+        // clearActiveOutput sets it to NULL it is never re-created, which is
+        // what lets the mainloop converge.
         if fd.active_output.is_none() {
-            fd.init_active_output();
+            return Ok(action_status::NO_CHANGE);
         }
 
         // Seed trials from the calling-convention model when the container is
@@ -8338,14 +8336,40 @@ impl Action for ActionReturnRecovery {
             .cloned()
             .collect();
         if return_ops.is_empty() {
-            // Nothing to do. Leave active_output in place; Ghidra's driver
-            // re-enters this action across passes until fully checked, then
-            // clears it.
-            return Ok(action_status::NO_CHANGE);
+            // Ghidra's walk loop is a natural no-op with zero RETURNs, but the
+            // lifecycle tail still runs: finishPass, the maxPass check, and —
+            // once fully checked — deriveOutputMap + clearActiveOutput with
+            // the single finalize count (cc:1937-1951). Completing the
+            // lifecycle here (instead of early-returning) is what lets the
+            // mainloop converge and clears the container exactly once.
+            let fully_checked = {
+                let active = fd.active_output.as_mut().unwrap();
+                active.finish_pass();
+                if active.get_num_passes() > active.get_max_pass() {
+                    active.mark_fully_checked();
+                }
+                active.is_fully_checked()
+            };
+            let mut count = 0;
+            if fully_checked {
+                derive_func_output_map(fd);
+                fd.active_output = None; // Ghidra cc:1950: clearActiveOutput.
+                count += 1;
+            }
+            self.count += count;
+            return if count > 0 {
+                Ok(action_status::CHANGE)
+            } else {
+                Ok(action_status::NO_CHANGE)
+            };
         }
 
         // Ghidra cc:1919-1935: per-RETURN, per-trial liveness analysis.
         let trial_count = fd.active_output.as_ref().map(|a| a.get_num_trials()).unwrap_or(0);
+        // Ghidra cc:1935: count += 1 for every unchecked trial processed,
+        // accumulated across the whole walk and carried into the finalize
+        // count below.
+        let mut count = 0;
         if trial_count > 0 {
             let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
             for retop in &return_ops {
@@ -8377,6 +8401,9 @@ impl Action for ActionReturnRecovery {
                         let active = fd.active_output.as_mut().unwrap();
                         ancestor_real.execute(retop, slot, active.get_trial_mut(i), false)
                     };
+                    // Ghidra cc:1935: count += 1 — every unchecked trial
+                    // processed increments the count exactly once.
+                    count += 1;
                     if success_real {
                         // Ghidra cc:1931-1932: ancestorOpUse(op, vn) -> markActive.
                         let vn_opt = retop.0.read().unwrap().get_in(slot as usize).cloned();
@@ -8403,7 +8430,7 @@ impl Action for ActionReturnRecovery {
             active.is_fully_checked()
         };
 
-        let mut count = 0;
+        let mut count = count; // carry the per-trial count from cc:1935
         if fully_checked {
             // Ghidra cc:1942: deriveOutputMap resolves USED trials.
             derive_func_output_map(fd);
@@ -8418,12 +8445,9 @@ impl Action for ActionReturnRecovery {
             let active = fd.active_output.take().unwrap();
             for retop in &return_ops_again {
                 Self::build_return_output(fd, &active, retop);
-                count += 1;
             }
-            // Ghidra cc:1950: clearActiveOutput (taken == cleared).
-            count += 1;
-        } else {
-            // Not done yet: signal the driver that another pass is needed.
+            // Ghidra cc:1950-1951: clearActiveOutput (taken == cleared); the
+            // single count += 1 fires once here, NOT per RETURN op.
             count += 1;
         }
 
