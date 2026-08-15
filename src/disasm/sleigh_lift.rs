@@ -104,7 +104,22 @@ impl SleighLifter {
         result
     }
 
-    // RUGRA-GLUE: convert
+    // Ghidra: funcdata.cc:878 PcodeEmitFd::dump (callback adapter)
+    /// Convert one FFI op record into a `PcodeOpRaw`.
+    ///
+    /// Faithful to `PcodeEmitFd::dump` (funcdata.cc:878-908): every input
+    /// varnode's SLEIGH-reported `(space, offset, size)` tuple is passed
+    /// through unchanged. In particular the input(0) of a CODEREF op
+    /// (BRANCH/CBRANCH/CALL) is handed to `Funcdata::newCodeRef` as
+    /// `Address(vars[0].space, vars[0].offset)`: a Const-space relative label
+    /// offset stays in the constant space (`resolveRelatives`, sleigh.cc:120
+    /// leaves `(labels[id] - calling_index) & calc_mask(size)` in the Const
+    /// space), while x86 machine `jmp/call rel` export a `*[ram]` operand
+    /// (ia.sinc:1149-1151 `export *[ram]:$(SIZE) reloc`) so their input(0)
+    /// arrives in the ram space with the absolute target. The const/ram
+    /// distinction is exactly what `FlowInfo::branchTarget`
+    /// (flow.cc:190 `addr.isConstant()`) dispatches on, so this adapter must
+    /// never rewrite one into the other.
     pub fn convert(opc: &PcodeOpC, seq: SeqNum) -> PcodeOpRaw {
         let opcode = OpCode::from_i32(opc.opcode).unwrap_or(OpCode::CPUI_COPY);
         let mut raw = PcodeOpRaw::new(opcode as i32);
@@ -114,14 +129,7 @@ impl SleighLifter {
             raw.set_output(map_vn(&opc.output));
         }
         for vn in &opc.inputs {
-            let space = if vn.space == 0 && matches!(opcode,
-                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND |
-                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH) {
-                AddressSpace::Ram
-            } else {
-                map_space(vn.space)
-            };
-            raw.add_input(VarnodeRaw::new(space, vn.offset, vn.size as usize));
+            raw.add_input(map_vn(vn));
         }
         raw
     }

@@ -210,3 +210,84 @@ multiple roots、unreachable pruning、BRANCHIND 和 Action 后 index 仍未覆�
 结果为 `MATCH`。原 `tools/run_block_entry_oracle.sh` 的 RETURN 与 synthetic-front
 self-loop 也继续 `MATCH`。此闭环不扩展到 off-cut/reinterpreted 错误模式、
 out-of-bounds stub、BRANCHIND 或 intra-instruction relative branch 残差。
+
+## 2026-08-13：`SLEIGH-FLOW-REL-0001` 只读设计与 locked fixture
+
+本节是源码租约释放前的设计草案，当前状态仍为 **UNTESTED**。锁定 oracle：Ghidra
+12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`。本轮完整重读
+`FlowInfo::{findRelTarget,xrefControlFlow,processInstruction}`、`PcodeEmitFd::dump` 和
+SLEIGH relative label resolution 全链。
+
+必须落地的边界如下：
+
+- `findRelTarget` 以 source op 的 immutable `SeqNum::time` 加 Const offset，先精确找
+  同 address/time 的 op；缺失时只检查 `time - 1` 的 next-instruction boundary，并通过
+  out address 返回 machine fallthrough。不得用 Varnode offset 做 machine-address lookup。
+- `xrefControlFlow` 对 Const BRANCH/CBRANCH 只标记 internal target 为 basic start 并更新
+  `maxtime`；不得把它加入 machine-address work list。非 Const target 才调用
+  `newAddress`。
+- 无条件 BRANCH 仅在其 time 不小于当前最深 forward relative target 时删除同一条
+  instruction 的剩余 ops；CBRANCH 同时保留 internal branch edge 与 p-code fallthrough。
+- `processInstruction` 在 xref 前记录 instruction size 和首 op 的 immutable SeqNum，
+  并且 machine fallthrough 只入队一次。
+- 初始 basic-block 插入必须保留两个 SeqNum 维度：immutable time 用于 relative lookup；
+  mutable order 按 locked `BlockBasic::insert` 的执行顺序赋值。Rust 当前单字段模型由
+  flow-local post-emission snapshot 保存 time，不把 SLEIGH ABI identity 当作对象 identity。
+
+对应 oracle 使用真实 `0f a2 c3`（CPUID; RET），完整观察 81 ops、186 Varnodes、
+33 relative resolutions、49 raw/final edges、34 blocks 和 visited
+`ram:0 size=2 first_time=0`、`ram:2 size=1 first_time=78`。计划中的
+`FlowInfoSnapshot` 只克隆 post-emission op/edge 引用与值状态，供独立 Rust fixture
+序列化；它不缓存 callback `VarnodeData*`，也不改变生产 CFG。runner 已按 immutable
+fd、锁定 git archive、isolated Cargo.lock vendor 和 byte diff 起草，但 metadata 的
+`PENDING_*` 会 fail closed，直到三份共享源码完成并重算闭包。
+
+## 2026-08-15：`SLEIGH-FLOW-REL-0001` 落地 — relative 分支 → FlowInfo 内部 p-code 边
+
+锁定 oracle：Ghidra 12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`。本轮
+完整重读 `flow.cc:88-107/115-138/149-179/187-199/204-212/219-248/264-372/383-482/
+545-580/785-845/906-1037`、`op.cc:355-372/941-1150`、`block.cc:2258-2289/2625-2631`
+与 `flow.hh:58-169` 后，完成如下对齐（替换此前 `UNTESTED` 设计稿）：
+
+- **`VisitStat` 恢复 SeqNum 模型**：`{ first_seq: Option<SeqNum>, size }` 等价
+  Ghidra `{ SeqNum seqnum; int4 size; }`（flow.hh:77-80）。`processInstruction`
+  在发射后记录首 op 的完整 SeqNum（地址+immutable time，flow.cc:472），
+  `target()` 经 `PcodeOpBank::findOp(SeqNum)` 精确解析并按 no-op 指令回退，
+  `updateTarget` 用 time-only 等价（address.hh:148 operator==）比较。
+- **`findRelTarget` 忠实移植**（flow.cc:149-179）：目标时间 = 源 op 的
+  immutable `SeqNum::time` + Const 偏移（uintm wrapping）；先精确查找同地址同
+  time 的 op；缺失时只查 `time-1`（branch-to-next-instruction），经
+  `visited` 上界回退得到机器 fallthrough 地址并检查 `op_addr < res`；否则报
+  "Bad relative branch"。不再用 Varnode offset 做机器地址查找。
+- **`xrefControlFlow` 忠实移植**（flow.cc:264-372）：per-instruction `maxtime`
+  追踪最深 forward relative 目标；Const 空间 BRANCH/CBRANCH 只把内部目标
+  `opMarkStartBasic` 并更新 `maxtime`（不进机器 worklist），relative-to-end 置
+  `isfallthru`；非 Const 目标才 `newAddress`。BRANCH/BRANCHIND/RETURN 在
+  `getTime() >= maxtime` 时 `deleteRemainingOps`（`opDestroyRaw` 语义，连同
+  Varnode 一并销毁）。每个分支后 `startbasic = true`。CALL/CALLIND 的
+  noreturn halt 插入后按 Ghidra 的 `--oiter` 重新 xref（插入位置即下一迭代
+  索引）。`isfallthru` 终判按最后一个 op 的 opcode。
+- **`processInstruction` 忠实移植**（flow.cc:383-482）：发射（`inject_raw_ops_
+  single` = `PcodeEmitFd::dump`）→ 记录 VisitStat/首 op SeqNum/STARTMARK →
+  xref（可能删尾）→ 仅当 fallthru 时把机器后继入队一次。
+- **`fallthruOp` 忠实移植**（flow.cc:88-107）：同指令下一 op（无 STARTMARK）
+  优先，否则定位所属指令并 `target(下一条指令)`。
+- **`splitBasic` 忠实移植**（flow.cc:983-1017）：按 STARTBASIC 切块、首块注册
+  官方入口；每个 op 按 `BlockBasic::insert`（block.cc:2258-2289）的 midpoint
+  公式赋 mutable `SeqNum::order`（首 op `2 → 2+0x1000000` 中点 `0x800002`，
+  之后每步 +0x800000）；块地址范围按 `setBasicBlockRange`（funcdata.hh:556 →
+  block.cc:2625 `setInitialRange`）语义记录（Rugra 无 cover，stop 由最后 op
+  地址导出，与本 fixture 单调地址等价）。
+- **`collectEdges` 修正**：CBRANCH 先 fallthru 后 branch 边（flow.cc:961-966）；
+  BRANCHIND 的 setMark 去重后按 flow.cc:947-956 只清除本次设置的 mark。
+- **`generateOps`** 头部补 `clearProperties()`（flow.cc:790）。
+- **新增 `FlowInfoSnapshot`**（`snapshot()`）：为 oracle fixture 克隆 post-
+  emission 的 op/time、VisitStat 值、relative 解析与 raw edge Arc；不缓存
+  SLEIGH callback `VarnodeData*` 身份，不改变生产 CFG。
+
+真实 `0f a2 c3`（CPUID; RET）门禁结果：`tools/run_sleigh_flow_relative_oracle.sh`
+差分 Rust 与锁定 Ghidra capture（sha256 `7490edf5…`）**逐字节一致**（81 ops /
+186 Varnodes / 33 relative 全 internal / 34 blocks / 49 边 / visited 2）。
+该门禁只证明本 fixture 的观察闭包；错误路径（BadData/Unimpl/越界/指令上限）、
+跳转表恢复、inline/injection 与 SeqNum 残差仍属 `SLEIGH-FLOW-0001`/`INJECT-0001`
+等 TODO，flow.rs 整体保持 L2/MISMATCH。

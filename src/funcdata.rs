@@ -11,6 +11,21 @@ use crate::opcodes::OpCode;
 use crate::pcoderaw::PcodeOpRaw;
 use crate::space::AddressSpace;
 
+// Ghidra: sleigh_arch.cc:233 SleighArchitecture::buildTypeLibrary (setCoreType "code")
+/// The core anonymous "code" `Datatype` that `Funcdata::newCodeRef`
+/// (funcdata_varnode.cc:222-233) attaches to every one-byte code-reference
+/// annotation Varnode. Ghidra reads it from the architecture's TypeFactory
+/// cache (`TypeFactory::getTypeCode`, type.cc:3692-3701); Rugra does not
+/// thread a factory through the raw emit path, so the equivalent value
+/// object — name "code", metatype TYPE_CODE, size 1 — is built directly.
+fn code_ref_datatype() -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+    use crate::type_system::datatype::{Datatype, TypeBase, TypeCode, TypeMetatype};
+    std::sync::Arc::new(Datatype::Code(TypeCode {
+        base: TypeBase::new("code".to_string(), 1, TypeMetatype::Code),
+        proto: None,
+    }))
+}
+
 /// Funcdata flags (funcdata.hh:highlevel_flags).
 pub mod funcdata_flags {
     /// Data-type analysis is being performed.
@@ -4253,39 +4268,83 @@ impl Funcdata {
     /// * `raw_ops` - Vector of raw P-code operations in sequential order
     /// Inject a single instruction's P-code ops (for FlowInfo process_instruction).
     /// Does NOT call build_blocks_from_ops (that's done once after all flow is tracked).
-    // RUGRA-GLUE: 单指令注入（FlowInfo process_instruction 用）。Ghidra 内联在 oneInstruction/emitter 中。
+    // Ghidra: funcdata.cc:878 PcodeEmitFd::dump
+    /// Faithful port of `PcodeEmitFd::dump` (funcdata.cc:878-908), the emit
+    /// callback `Sleigh::oneInstruction` feeds one complete instruction into:
+    ///
+    /// - the output (when present) is materialized FIRST via
+    ///   `Funcdata::newVarnodeOut` → `VarnodeBank::createDef`
+    ///   (ctor flags + `written|coverdirty` from `setDef` + `insert` from
+    ///   `xref`, varnode.cc:1411-1418);
+    /// - `op->isCodeRef()` ops (BRANCH/CBRANCH/CALL — the CODEREF flag in
+    ///   TypeOp's opflags, typeop.cc:586/605/663) take input(0) through
+    ///   `Funcdata::newCodeRef(Address(vars[0].space, vars[0].offset))`
+    ///   (funcdata_varnode.cc:222-233): a one-byte `annotation` Varnode in
+    ///   the SLEIGH-reported space carrying the core "code" type
+    ///   (sleigh_arch.cc:233 `setCoreType("code",1,TYPE_CODE,false)`). A
+    ///   Const-space input(0) is therefore a *relative* label offset that
+    ///   stays in the constant space; a ram-space input(0) is the absolute
+    ///   machine target (ia.sinc:1149-1151);
+    /// - every other input goes through `Funcdata::newVarnode` → a fresh
+    ///   `VarnodeBank::create` Varnode (constants included — no dedup;
+    ///   varnode.cc:1250-1258), with `opSetInput` appending the op to the
+    ///   Varnode's descendant list in slot order.
+    ///
+    /// Varnode creation order per op is: output, then inputs in slot order —
+    /// this fixes `Varnode::create_index` to the emission order Ghidra uses.
     pub fn inject_raw_ops_single(&mut self, raw_ops: &[PcodeOpRaw], base_addr: crate::address::Address) {
-        for (raw_idx, raw) in raw_ops.iter().enumerate() {
+        for raw in raw_ops {
             let opcode = match OpCode::from_i32(raw.get_opcode()) {
                 Some(opc) => opc,
                 None => continue,
             };
             let addr = raw.seq_num()
                 .map(|s| s.get_addr())
-                .unwrap_or(crate::address::Address::new(base_addr.as_u64() + raw_idx as u64 * 0x10));
+                .unwrap_or(base_addr);
             let op_ref = self.obank.create(opcode, raw.num_input(), addr);
-            // Output varnode
+            // PcodeEmitFd::dump: the output varnode is created between
+            // newOp and opSetOpcode, before any input (funcdata.cc:884-890).
             if let Some(out_raw) = raw.output() {
-                let out_vn = self.vbank.create_with_space(out_raw.size, out_raw.space, out_raw.offset);
-                let out_vn = self
-                    .vbank
-                    .set_def_prevalidated(out_vn, std::sync::Arc::downgrade(&op_ref.0));
+                // newVarnodeOut → VarnodeBank::createDef (ctor flags +
+                // written|coverdirty from setDef + insert from xref).
+                let out_vn = self.vbank.create_def_with_space(
+                    out_raw.size,
+                    out_raw.space,
+                    out_raw.offset,
+                    &op_ref.0,
+                );
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
-            // Input varnodes. PcodeEmitFd::dump creates a fresh Varnode for
-            // every input, except that the first input of an op carrying the
-            // CODEREF flag is materialized as a one-byte code reference.
-            for (input_index, input_raw) in raw.inputs().iter().enumerate() {
-                let is_code_reference = input_index == 0
-                    && matches!(
-                        opcode,
-                        OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_CALL
-                    );
-                let in_vn = if is_code_reference {
-                    self.new_code_ref(crate::address::Address::new(input_raw.offset))
-                } else if input_raw.space == crate::space::AddressSpace::Const {
-                    self.vbank
-                        .create_constant(input_raw.size, input_raw.offset)
+            // PcodeEmitFd::dump: `if (op->isCodeRef())` — the CODEREF flag is
+            // only set on BRANCH/CBRANCH/CALL opcodes (typeop.cc:586/605/663;
+            // BRANCHIND/CALLIND deliberately lack it).
+            let mut slot = 0;
+            if matches!(
+                opcode,
+                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_CALL
+            ) {
+                if let Some(in0) = raw.inputs().first() {
+                    // newCodeRef(Address(vars[0].space, vars[0].offset)):
+                    // 1-byte annotation Varnode in the raw SLEIGH space.
+                    let in_vn = self.vbank.create_with_space(1, in0.space, in0.offset);
+                    {
+                        let mut value = in_vn.write().unwrap();
+                        value.set_flags(crate::varnode::varnode_flags::ANNOTATION);
+                        // Core "code" type (sleigh_arch.cc:233); Ghidra reads
+                        // it from the architecture TypeFactory, which Rugra
+                        // does not thread through this emit path.
+                        value.v_type = Some(code_ref_datatype());
+                        value.add_descend(&op_ref.0);
+                    }
+                    op_ref.0.write().unwrap().inrefs.push(in_vn);
+                    slot = 1;
+                }
+            }
+            // Remaining inputs: newVarnode (fresh Varnode per reference — no
+            // location dedup for either constants or storage reads).
+            for input_raw in &raw.inputs()[slot..] {
+                let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
+                    self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
                     self.vbank.create_with_space(
                         input_raw.size,

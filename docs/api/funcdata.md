@@ -1002,3 +1002,40 @@ Rugra 的当前 VarnodeBank 生命周期复现，CALL 的 Fspec 地址空间也�
  
  
  
+
+## 2026-08-15：`SLEIGH-FLOW-REL-0001` — `inject_raw_ops_single` 忠实 `PcodeEmitFd::dump`
+
+锁定 oracle：Ghidra 12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`。本轮
+完整重读 `funcdata.cc:878-908 PcodeEmitFd::dump`、`funcdata_varnode.cc:43-233`
+（`assignHigh/newConstant/newUniqueOut/newVarnodeOut/newVarnode/newCodeRef`）、
+`varnode.cc:1250-1352/1411-1432`（`VarnodeBank::create/xref/createDef/replace`）、
+`op.cc:941-1000`（`PcodeOpBank::create/destroy`）后重写
+`Funcdata::inject_raw_ops_single`：
+
+1. **输出先行**：有输出的 op 先经 `VarnodeBank::create_def_with_space`
+   （=`createDef`：构造 flags + `setDef` 的 `written|coverdirty` + `xref` 的
+   `insert`）创建输出 Varnode，再创建输入——与 dump 的
+   `newOp → newVarnodeOut → opSetOpcode → inputs` 顺序一致，固定了
+   `Varnode::create_index` 与 Ghidra 相同的发射序。
+2. **CODEREF 语义**：仅 BRANCH/CBRANCH/CALL（typeop.cc:586/605/663 的 coderef
+   opflags；BRANCHIND/CALLIND 无此 flag）的 input(0) 走 `newCodeRef`：
+   一字节 annotation Varnode 落在 **SLEIGH 上报的原空间**（`Address(vars[0].space,
+   vars[0].offset)`），类型为核心 "code" 类型（`sleigh_arch.cc:233
+   setCoreType("code",1,TYPE_CODE,false)`）。因此 CPUID 决策树这类
+   `goto <label>` 内部相对分支（slghparse.y:462，const space + j_relative +
+   `resolveRelatives` 写回的 masked 偏移）保持 Const 空间；x86 机器
+   `jmp/call rel`（ia.sinc:1149-1151 `export *[ram]:$(SIZE) reloc`）保持 Ram
+   空间绝对地址。二者不再被互相改写。
+3. **其余输入**：逐引用新建 Varnode（常量含内，无位置去重），`addDescend` 按
+   slot 顺序追加并置 `coverdirty`，与 `newVarnode→vbank.create` +
+   `opSetInput→addDescend` 等价。
+4. 新增 `code_ref_datatype()`：构造与 `TypeFactory::getTypeCode`
+   （type.cc:3692-3701）观察等价的 `{name:"code", metatype:TYPE_CODE, size:1}`
+   值对象（Rugra 未把 TypeFactory 穿入该发射路径）。
+
+真实 `0f a2 c3`（CPUID; RET）门禁结果：Rugra 与锁定 Ghidra capture 逐字节一致
+（81 ops / 186 Varnodes / 33 个 Const 空间 relative 分支全部 internal 解析 /
+34 blocks / 49 raw+graph edges / visited 2）。这是
+`tools/run_sleigh_flow_relative_oracle.sh` 差分门禁的 `funcdata.rs` 侧证据；
+Varnode 生命周期其余差异（Fspec 空间、HighVariable 分配等）仍由
+`ADDR-0001`/`CALLSPEC-0001` 跟踪，本模块保持 L2/MISMATCH。

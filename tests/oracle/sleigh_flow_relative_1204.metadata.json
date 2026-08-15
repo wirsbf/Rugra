@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "fixture_id": "SLEIGH-FLOW-REL-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_blobs": {
+      "block.cc": "bf7103d9169097b2d879d04513a2690c6d9b1a62",
+      "block.hh": "8319d83b9afa2b5ecdd9008bbc48ba3df72b93e2",
+      "database.cc": "c6529baea5667369341b52113283ae9ae9eea8c0",
+      "database.hh": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
+      "flow.cc": "bbe3028bf271dff738ce708d008fca9b659a7b65",
+      "flow.hh": "8f7bd48c755defc3177cdddd03f22049abc32b06",
+      "funcdata.cc": "491bd3815e4dc3d70b8a77eaafb2a1ddfea46c0d",
+      "funcdata.hh": "083056d7f3b4afadb173ea7cf10a7f506c6b26c1",
+      "funcdata_op.cc": "14ee7313ed5386ebd6496c5395fcbe61891ad237",
+      "funcdata_varnode.cc": "fdaf94603a85356afc57d4f74e545c76c968fd6c",
+      "raw_arch.cc": "9e4169cc185ecb307c2c51dacd183b1c371bf1c8",
+      "raw_arch.hh": "8952c5817169b596c84e05bf2076862e5fd18730",
+      "semantics.cc": "18e2ff8ba18fe2aab20efa2b34daa3c4d4f91340",
+      "semantics.hh": "b53b18797d8e78b8c13949d6de1e45c47080a5b5",
+      "sleigh.cc": "4a6b0090a64b1f645d63c7440498e3b262dce48f",
+      "sleigh.hh": "32ef8565efcb1c190c089690e3e01e29fc114c8b"
+    }
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "Ghidra/Processors/x86/data/languages/x86-64-gcc.cspec",
+    "blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "architecture_driver": "RawBinaryArchitecture(raw_image, x86:LE:64:default:gcc)",
+    "spec_initialization": "Full x86-64 pspec and gcc cspec through Architecture::init; no hand-written context defaults",
+    "function_entry": "ram:0x0",
+    "funcdata_initialization": "Scope::addFunction(...)->FunctionSymbol::getFunction() constructs Funcdata at ram:0x0 with the default body size 0; Rust uses the same size even though the raw image has 3 bytes",
+    "flow_range": "FlowInfo::setRange(ram:0x0, ram:0x3); eaddr is the stopping bound so RET at offset 2 is processed",
+    "flow_flags": 32,
+    "maximum_instructions": 100000,
+    "call_order": [
+      "FlowInfo::generateOps",
+      "FlowInfo::generateBlocks"
+    ],
+    "decompiler_passes": "None beyond raw flow generation and initial basic-block construction",
+    "load_image": "RawLoadImage over an exact three-byte regular file; no trailing bytes; RawLoadImage zero-fills an in-range read past EOF",
+    "test_access": "The fixture observes private FlowInfo/PcodeOp/Varnode fields without modifying locked oracle sources; one friend-injection accessor exposes only Funcdata::obank so the public FlowInfo constructor receives the actual bank"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659,
+      "provenance": "Generated x86-64 SLA recorded by sleigh_specs/x86-64.spec-metadata.json for the locked language tree"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+    "sha256": "dd8931d44a44d66f7cd68150f81e290a1433966789e14a94a18b79f21297759b",
+    "cases": [
+      {
+        "id": "cpuid_ret_relative_flow",
+        "image_hex": "0fa2c3",
+        "image_sha256": "fb4cb7c9460ac01bfda205963442edccc78b12c6212c101937937ff250a68c72",
+        "image_size": 3,
+        "base": "0x0000000000000000",
+        "entry": "0x0000000000000000",
+        "expected_locked_summary": {
+          "alive_ops": 81,
+          "blocks": 34,
+          "dead_ops": 0,
+          "graph_edges": 49,
+          "ops": 81,
+          "raw_edges": 49,
+          "relative_fallthru": 0,
+          "relative_internal": 33,
+          "relative_total": 33,
+          "start_block": 0,
+          "varnodes": 186,
+          "visited": 2
+        }
+      }
+    ]
+  },
+  "function_scope": {
+    "FunctionSymbol::getFunction/Funcdata::Funcdata": "database.cc:557-563, funcdata.cc:34-67, and funcdata.hh:138-143; the symbol path uses Funcdata's default body size 0",
+    "PcodeCacher::resolveRelatives": "sleigh.cc:120-134; labels[id] - calling_index with unsigned wrapping and calc_mask(ptr->size)",
+    "SleighBuilder::dump": "sleigh.cc:221-283; only relative input zero is label-base adjusted and registered before the PcodeData is allocated",
+    "PcodeBuilder::build": "semantics.cc:925-960; recursive labelbase/labelcount ordering and LABELBUILD dispatch",
+    "Sleigh::oneInstruction": "sleigh.cc:741-793; build, resolveRelatives, then emit in issued order",
+    "PcodeEmitFd::dump": "funcdata.cc:878-908; a CODEREF first input preserves the VarnodeData Address space through newCodeRef",
+    "FlowInfo::findRelTarget": "flow.cc:149-179; op time plus Const offset resolves by SeqNum, with the id-1 next-instruction boundary case",
+    "FlowInfo::xrefControlFlow": "flow.cc:264-372; internal targets mark block starts and update maxtime without entering the machine-address work list",
+    "FlowInfo::processInstruction": "flow.cc:383-482; records VisitStat size/first SeqNum and queues only true machine fall-through",
+    "BlockBasic::insert/setOrder": "block.cc:2250-2286 and 2638-2657; initial CFG insertion assigns mutable execution order independently of immutable PcodeOpBank time"
+  },
+  "observation_schema": {
+    "format": "UTF-8 NDJSON, fixed key order, one record per line, final newline required",
+    "record_order": [
+      "header",
+      "flow_state",
+      "visited sorted by Address",
+      "op sorted by SeqNum natural order",
+      "varnode in first post-emission op encounter order, then any remaining VarnodeBank location order",
+      "relative in op order",
+      "raw_edge in FlowInfo block_edge list order",
+      "block in BlockGraph list order",
+      "summary"
+    ],
+    "op": "Complete opcode, raw flags/additional flags, SeqNum address/time/order, post-emission Varnode identities, and parent block",
+    "varnode": "Complete post-PcodeEmitFd storage, raw flags/additional flags, create index, merge group, def, ordered descendants, consume/NZ masks, type, High/Symbol/Cover presence, and identity",
+    "visited": "Exact FlowInfo map key, instruction size, and first-op SeqNum address/time; VisitStat does not semantically carry mutable execution order",
+    "relative": "Every Const-space BRANCH/CBRANCH with raw masked offset, wrapped computed time, and exact resolved target op or next-instruction address",
+    "cfg": "Every raw PcodeOp edge pair plus every block's ordered ops, full incoming/outgoing lists, per-edge label/flags, reverse indices, block flags, ranges, entry status, and graph start block",
+    "post_emit_identity": "Varnode IDs are assigned from actual Funcdata Varnode pointers after PcodeEmitFd::dump. Equal locations with distinct Varnodes remain distinct; repeated references to one Varnode reuse the ID.",
+    "abi_identity_exclusion": "SLEIGH callback VarnodeData pointer identity is deliberately not observed or propagated. PcodeEmitFd allocates/canonicalizes Funcdata Varnodes; a Rust FFI pointer ID must never be mapped directly to Arc aliasing.",
+    "rust_snapshot": "The Rust comparand consumes FlowInfoSnapshot after generateBlocks. The snapshot retains generation-time immutable op times, exact VisitStat values, relative-resolution results, and raw-edge Arc references; all Varnode IDs are assigned later from actual Funcdata bank Arcs.",
+    "space_id_normalization": "LOAD/STORE input zero encodes an AddrSpace pointer in a Const Varnode. Normalize only that process pointer to target-space index/name/type/size and emit null offset/NZ mask; preserve its post-emission Varnode identity.",
+    "other_normalization": "None; the image base is zero, so code and unique offsets are directly comparable."
+  },
+  "locked_ghidra_capture": {
+    "stdout_sha256": "7490edf559b04929714d4d2c3f92166ea08c522acd1a0e2f7832c95cd3428be8",
+    "records": 388,
+    "bytes": 130402,
+    "repeat_runs_byte_identical": true,
+    "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_platform": "Linux 6.8.0-124-generic x86_64",
+    "capture_note": "The same bytes were reproduced with the runner's -O2 driver-unit closure (libdecomp.cc, sleigh_arch.cc, inject_sleigh.cc, raw_arch.cc, libdecomp.a). The runner still rejects this draft until every Rust/source/doc/tool pin is non-PENDING, then rebuilds the decompiler from the locked git archive."
+  },
+  "overall_status": "MATCH",
+  "known_residuals": {
+    "rust_comparand": "MATCH for this fixture: the complete NDJSON serializer consumes FlowInfo::snapshot() and reproduces the locked capture byte-for-byte",
+    "fail_closed_runner": "ACTIVE: immutable-fd, pinned-base crate snapshot with leased overlay, isolated Cargo.lock vendor, locked git-archive C++ build, exact .rugra_input extraction, and byte diff all execute; metadata pins are non-PENDING",
+    "error_paths": "UNTESTED: missing label, malformed relative target, unimplemented instruction, bad data, bounds, and instruction-limit branches are outside this single valid-input fixture",
+    "delay_slots_and_nested_builds": "UNTESTED",
+    "relative_branch_to_next_instruction": "UNTESTED in this CPUID case; all 33 relative branches resolve to internal PcodeOps",
+    "non_x86_and_non_64_bit": "UNTESTED",
+    "seqnum_model": "FIXED FOR THIS OBSERVATION: Rugra's SeqNum carries immutable time and mutable order separately; the fixture emits both and they match Ghidra byte-for-byte here",
+    "match_statement": "Rust comparand reproduces the locked Ghidra 12.0.4 capture byte-for-byte (sha256 7490edf559b04929714d4d2c3f92166ea08c522acd1a0e2f7832c95cd3428be8) for the cpuid_ret_relative_flow case; crate comparand is pinned base 07efbff plus the leased SLEIGH-FLOW-REL-0001 overlay (src/disasm/sleigh_lift.rs, src/flow.rs, src/funcdata.rs)"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "d2b8f7f79d293e72347d9d91ae99e87f203875d347848aef8ebdf7f745e8bfb2",
+    "rust_fixture_sha256": "b44ed4c023c1487538c71fff58a0267beb7adba1b11e27bd6720fcc882f4de02",
+    "runner_sha256": "82aabdba4dff849007934ed1d6988bba4b22c3bb4d520c8d8e74a9f2789b84fd",
+    "sleigh_lift_rs_sha256": "9aaa6f2f43047f7e2e83e4acd7c6c5ef9c2d58c572f06029f20161a273c2c5c3",
+    "flow_rs_sha256": "93646dd6630f64e4580219b710c783c6056a1885ef99f4c7f4dd027cd01f48b3",
+    "funcdata_rs_sha256": "0938c03f67587ea08e1d53250afc908690f114c04ae6783699517c159bb1ab78",
+    "sleigh_lift_doc_sha256": "b30eda1293721b8d7cf06cc2722f242389fd59781a732f0748fac08087ff97d5",
+    "flow_doc_sha256": "8b736d05583ce5522ea00c7c088297fc92ff01555719899964bba601059c8741",
+    "funcdata_doc_sha256": "f1657aa2698d4866f7de0d45643006d27cde61e7ebb662cf92b8a4a10df40e9b",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-sleigh-flow-relative-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents from the pinned base commit with the leased SLEIGH-FLOW-REL-0001 overlay files taken from the working tree",
+    "rust_crate_tree_sha256": "1070c042f883f933bd0a893540d434931bee523e414ef921c67478a0a5ae8991",
+    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "host_cxx_target": "x86_64-linux-gnu",
+    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+    "host_make_path": "/usr/bin/make",
+    "host_python_path": "/usr/bin/python3.10",
+    "host_git_path": "/usr/bin/git",
+    "host_objcopy_path": "/usr/bin/x86_64-linux-gnu-objcopy",
+    "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+    "host_platform": "Linux 6.8.0-124-generic x86_64",
+    "pinned_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+    "pinned_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265"
+  },
+  "build": {
+    "cpp_oracle": "Full locked decompiler libdecomp.a rebuilt from git archive; the fixture is compiled separately with locked libdecomp.cc, sleigh_arch.cc, inject_sleigh.cc, and raw_arch.cc",
+    "rust_comparand": "Length-prefixed full Rust library snapshot, Cargo.lock-checksummed offline vendor, isolated CARGO_HOME/target, and pinned direct nightly toolchain",
+    "environment_policy": "Immutable runner fd; env -i; no ambient Cargo config; all declared fixtures/assets/docs copied into the temporary snapshot; exact compiler/tool paths pinned",
+    "registry_packages": 164
+  }
+}
