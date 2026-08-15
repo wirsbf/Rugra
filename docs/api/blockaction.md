@@ -60,6 +60,21 @@ Create a new ActionFinalStructure instance
 - 之前 Rugra 跳过了 `scopeBreak` 调用，导致所有 BlockGoto 保留默认
   `GOTO_GOTO`，emit 阶段打印 `goto code_r0x...;` 而非 `break;`。
 
+### 2026-08-15：apply 计数语义对齐 oracle（blockaction.cc:2186-2197，TODO BLKACT-FINALSTRUCT-COUNT-0001）
+
+- Ghidra `ActionFinalStructure::apply` 全程不触碰 protected `count` 成员，
+  无条件 `return 0`（blockaction.cc:2196）；五个图调用（orderBlocks/
+  finalizePrinting/scopeBreak/markUnstructured/markLabelBumpUp）均不计数。
+- 之前 Rugra 版本在 `mark_unstructured()` 后硬编码 `changed += 1`，且
+  GOTO 打标与死 op 删除各自 `changed += 1`、结尾按 `changed>0` 返回
+  `Ok(1)`——导致 fixture 观察行 `act=finalstructure|...|count=1|apply=1|res=1`
+  与 oracle 的全 0 残差（`action_merge_order_1204` 29 行观察中的唯一残差行）。
+- 修正后：apply 一律返回 `action_status::NO_CHANGE`（0），不打任何计数增量；
+  GOTO 打标与死 op 删除这两段打印/IR 胶水逻辑本身保留（行为不变），仅去掉
+  oracle 中不存在的计数。live 库复跑 fixture 观察：
+  `act=finalstructure|status=1|count=0|lcount=0|tests=1|apply=0|res=0`，
+  与 oracle 行为一致。
+
 ### `pub struct ActionNormalizeBranches`
 
 Action for normalizing branches (e.g., converting goto to break/continue)

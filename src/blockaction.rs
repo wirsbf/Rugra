@@ -5495,7 +5495,11 @@ impl Action for ActionFinalStructure {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::op::branch_type;
 
-        let mut changed = 0;
+        // Ghidra blockaction.cc:2186-2197: this action runs five graph calls
+        // (orderBlocks/finalizePrinting/scopeBreak/markUnstructured/
+        // markLabelBumpUp) and unconditionally returns 0. It never touches the
+        // protected `count` member, so the fixture-observed count/apply/res
+        // triple must stay 0 even when graph/IR mutations occur below.
 
         // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);
         // Walk the structure tree (sblocks) reclassifying any unstructured
@@ -5515,10 +5519,10 @@ impl Action for ActionFinalStructure {
         // BRANCH/CBRANCH target (printc.rs goto_targets) and emitted dozens of
         // spurious unreferenced labels.
         fd.sblocks.mark_unstructured();
-        changed += 1;
 
         // Tag untagged BRANCH/CBRANCH as GOTO (break/continue already tagged
-        // by ActionNormalizeBranches)
+        // by ActionNormalizeBranches). No `count +=` here: Ghidra's goto
+        // tagging lives in structure/markUnstructured, which never counts.
         for op_ref in &fd.obank.alivelist {
             let mut op = op_ref.0.write().unwrap();
             if op.branch_type != branch_type::NONE {
@@ -5527,7 +5531,6 @@ impl Action for ActionFinalStructure {
             match op.opcode {
                 OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH => {
                     op.branch_type = branch_type::GOTO;
-                    changed += 1;
                 }
                 _ => {}
             }
@@ -5563,19 +5566,18 @@ impl Action for ActionFinalStructure {
             }
         }
 
-        // Reverse removal preserves indices
+        // Reverse removal preserves indices. Like the tagging above, dead-op
+        // cleanup is printing/IR glue with no `count +=` counterpart in the
+        // oracle action.
         for &idx in dead_indices.iter().rev() {
             if idx < fd.obank.alivelist.len() {
                 fd.obank.alivelist.remove(idx);
-                changed += 1;
             }
         }
 
-        if changed > 0 {
-            Ok(1)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra blockaction.cc:2196: unconditional `return 0` — never
+        // reports a change through the count state machine.
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: blockaction.hh:324 ActionFinalStructure::getName
