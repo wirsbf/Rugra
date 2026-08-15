@@ -802,3 +802,24 @@
   死条目永远匹配不上——这正是旧版 `total_replace` 「扫描直到清空」循环
   无法终止的根源之一；`total_replace` 侧已改为 Ghidra 迭代器快照语义
   （见 docs/api/funcdata.md 2026-08-15 节）。
+
+### 2026-08-15: copy_shadow 身份比较修复（VARNODE-COPYSHADOW-ARC-0001）
+
+- `Varnode::copy_shadow`（varnode.cc:977-995）从「两侧收集 Arc 集合求交」重写为
+  忠实两循环结构：`copy_chain_hits(self, op2)` 实现 cc:982 的 `this==op2` 与
+  cc:984-988（沿 this 的 COPY 链回溯，逐节点与 op2 比较）；随后用
+  `copy_chain_source_def(self)` 解析链源（cc:989-993 的 vn），再
+  `copy_chain_hits(op2, &链源)` 完成第二循环。链源解析依赖 def↔output 不变量
+  （funcdata_op.cc:78-82 `vn = vbank.setDef(vn,op); op->setOutput(vn);`）：
+  `written=true` 时链源 = 终端 def 的 output；`written=false` 时链源 = 终端 COPY
+  的 inrefs[0]；this 无 def（cc:984 循环不前进，vn 即 this）。
+- 根因：被删除的文件级 helper `collect_copy_sources` 首迭代用
+  `Arc::as_ptr(&out_arc)`（RwLock 分配基址）对比 guard 借用 `&Varnode`
+  （payload 地址）——`RwLock<T>` payload 不在偏移 0，两地址永不相等 →
+  恒走 "Mismatch; bail" → sources 恒空 → `copy_shadow` 恒 false。此外该实现
+  对无 def 的起始节点同样返回空集，丢失 Ghidra「op2 的链与 this 本身比较」
+  语义（cc:989-993 第二循环的 vn=this 分支）。重写后两类缺陷一并消除。
+- 身份比较统一为 payload↔payload `std::ptr::eq`（`copy_chain_hits` 既有范式，
+  varnode.cc:982/987/992 的裸指针 `==` 对应物）；全文件审计确认无其它
+  「基址 vs payload」混用点（2090 行 `Arc::as_ptr(&op) as usize` 仅作 BTreeMap
+  key，形式一致自洽；1779 行 `as_ptr` 仅用于诊断打印）。

@@ -1515,19 +1515,49 @@ impl Varnode {
     /// Check if this Varnode and `op2` are copies of the same source.
     /// Faithful to `Varnode::copyShadow` (varnode.cc:977-995): trace both
     /// varnodes back along COPY chains; if they meet, they shadow each other.
+    /// All comparisons are Varnode object identity (Ghidra raw-pointer `==`),
+    /// performed payload-address to payload-address via `copy_chain_hits`.
     pub fn copy_shadow(&self, op2: &Varnode) -> bool {
-        // Trace self back along COPY chain, collecting source Arcs.
-        let self_sources = collect_copy_sources(self);
-        let other_sources = collect_copy_sources(op2);
-        // If self's chain hits op2 directly, or the two chains share a source.
-        for s in &self_sources {
-            for o in &other_sources {
-                if std::sync::Arc::ptr_eq(s, o) {
-                    return true;
+        // Ghidra cc:982 (this==op2) plus cc:984-988: trace -this- to the
+        // source of its copy chain, comparing every reached node (and this
+        // itself) against op2.
+        if copy_chain_hits(self, op2) {
+            return true;
+        }
+        // Ghidra cc:989-993: trace op2 to the source of its copy chain,
+        // comparing every reached node against vn — the terminal node of
+        // this's chain.
+        match copy_chain_source_def(self) {
+            // this is not written: the cc:984 loop never advances, so vn
+            // stays this and op2's chain is compared against it.
+            None => copy_chain_hits(op2, self),
+            Some((def_arc, written)) => {
+                // Resolve the chain-source Varnode Arc. If this's chain ends
+                // at a written non-COPY node, that node is the terminal def's
+                // output (def<->output invariant, funcdata_op.cc:78-82
+                // `vn = vbank.setDef(vn,op); op->setOutput(vn);`). If the
+                // chain ends at an unwritten input, the source is the
+                // terminal COPY op's input 0 (copy_chain_source_def's
+                // written=false contract).
+                let head_arc = {
+                    let def = def_arc.read().unwrap();
+                    if written {
+                        def.output.clone()
+                    } else {
+                        def.inrefs.get(0).cloned()
+                    }
+                };
+                match head_arc {
+                    Some(head_arc) => {
+                        let head = head_arc.read().unwrap();
+                        copy_chain_hits(op2, &head)
+                    }
+                    // A def without output breaks the def<->output invariant;
+                    // there is no chain source to compare against.
+                    None => false,
                 }
             }
         }
-        false
     }
 
     // Ghidra: varnode.cc:1102 Varnode::partialCopyShadow
@@ -2840,74 +2870,6 @@ impl Default for VarnodeBank {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// RUGRA-GLUE: walk COPY chain collecting source Arcs. Ghidra's copyShadow
-// (varnode.cc:977) inlines this with raw pointers; Rust needs Arc
-// collection for the bidirectional source comparison (borrow safety).
-/// Walk the COPY chain starting from `vn`, collecting the Arc of each Varnode
-/// encountered (including `vn` itself). Used by `Varnode::copy_shadow` to
-/// implement Ghidra's bidirectional COPY-source comparison (varnode.cc:977).
-///
-/// Stops at the first non-COPY-defined Varnode (the chain source).
-fn collect_copy_sources(vn: &Varnode) -> Vec<std::sync::Arc<std::sync::RwLock<Varnode>>> {
-    use crate::opcodes::OpCode;
-    let mut sources = Vec::new();
-    let mut current = None::<std::sync::Arc<std::sync::RwLock<Varnode>>>;
-    // We start by looking at vn itself; since we only have &Varnode, we use
-    // its def chain to find the owning Arc via the def op's input.
-    // Walk forward: at each step, if current vn is defined by COPY, record it
-    // and move to the COPY's input.
-    loop {
-        // Determine the Arc for the current Varnode in this iteration.
-        let cur_arc: std::sync::Arc<std::sync::RwLock<Varnode>> = match current.take() {
-            Some(a) => a,
-            None => {
-                // First iteration: we have &vn but no Arc. Resolve via def.
-                // vn's def op (if COPY) holds an Arc to vn in its output, but
-                // that's circular. Instead, the COPY *input* gives the next
-                // source. We record vn by pointer for comparison via the def
-                // op's output Arc (which == the vn that is the COPY output).
-                // Simpler: record the def op's output Arc.
-                let def_arc = match vn.def.as_ref().and_then(|w| w.upgrade()) {
-                    Some(a) => a,
-                    None => return sources, // vn has no def; nothing to walk
-                };
-                let def = def_arc.read().unwrap();
-                let out_arc = match def.output.clone() {
-                    Some(o) => o,
-                    None => return sources,
-                };
-                // Verify the output is actually vn (it should be, as vn.def
-                // points to this op). Record it.
-                if std::sync::Arc::as_ptr(&out_arc) as *const () as usize
-                    != vn as *const Varnode as *const () as usize
-                {
-                    // Mismatch (shouldn't happen); bail.
-                    return sources;
-                }
-                drop(def);
-                out_arc
-            }
-        };
-        sources.push(cur_arc.clone());
-        // Try to advance: is cur defined by a COPY?
-        let cur_vn = cur_arc.read().unwrap();
-        let next = cur_vn.def.as_ref().and_then(|w| w.upgrade()).and_then(|op_arc| {
-            let op = op_arc.read().unwrap();
-            if op.opcode == OpCode::CPUI_COPY {
-                op.inrefs.get(0).cloned()
-            } else {
-                None
-            }
-        });
-        drop(cur_vn);
-        match next {
-            Some(n) => current = Some(n),
-            None => break,
-        }
-    }
-    sources
 }
 
 /// Walk forward along COPY defs from `vn`, returning true if `target` (by
