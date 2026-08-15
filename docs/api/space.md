@@ -267,3 +267,38 @@ Decode from string format "id:base_space_id:name"
 - `is_heritaged`: Const/Iop/Join 不 heritaged。
  
  
+
+
+### 2026-08-15：SPACE-0001 architecture-owned AddrSpace registry（Ghidra space.cc/translate.cc AddrSpaceManager）
+
+固定枚举 `AddressSpace` 保留为过渡 adapter（消费方未迁移），新增 1:1 移植的架构动态注册表：
+
+- `SpaceType`（space.hh:30 `spacetype`）：Constant/Processor/SpaceBase/Internal/Fspec/Iop/Join。
+- `space_flags`（space.hh:85-98）：big_endian/heritaged/does_deadcode/…/has_nearpointers 共 12 位。
+- `AddrSpace`（space.hh:82）：`Rc<RefCell<AddrSpaceInner>>` 共享句柄（Ghidra 裸指针 + refcount 语义），
+  携带 type/name/index/addressSize/wordsize/flags/highest/pointerBounds/shortcut/delay/deadcodedelay/refcount
+  与 SpacebaseState（contain/hasbaseregister/isNegativeStack/baseloc/baseOrig，translate.hh:173-178）。
+  `None`（`Option<AddrSpace>`）对应 Ghidra null `AddrSpace*`（Address::Address() 的 invalid 态）。
+- 派生空间构造器：`new_space`（space.cc:58 全参 ctor）、`new_constant_space`（space.cc:356）、
+  `new_other_space`（space.cc:396，硬编码 index 1）、`new_unique_space`（space.cc:427）、
+  `new_join_space`（space.cc:446）、`new_iop_space`（op.cc:33）、`new_fspec_space`（fspec.cc:2116）、
+  `new_spacebase_space`（translate.cc:57）、`new_overlay_space`（space.cc:654/661 decode 体语义）。
+- 访问器/算法：`calc_scale_mask`（space.cc:34）、`wrap_offset`（space.hh:383）、`truncate_space`（space.cc:105）、
+  `set_flags`/`clear_flags`（space.hh:264/270）、谓词族（is_heritaged/does_deadcode/has_physical/…）、
+  静态换算 `address_to_byte` 族（space.hh:514-543）、`compare_by_index`（space.hh:549）、
+  `calc_mask`（address.hh:499/address.cc:633 表）。
+- `SpaceRegistry`（translate.hh:220 AddrSpaceManager，resolver/join 半部仍留在 translate.rs 旧 manager）：
+  `insert_space`（translate.cc:352，含逐类型校验/重复拒绝/baselist 部分增长/refcount）、
+  `assign_shortcut`（translate.cc:517，碰撞推进 + >26 后 'z' 复用不更新表）、
+  `get_space_by_name`/`get_space_by_shortcut`/`get_space`/`num_spaces`/`get_next_space_in_order`
+  （空槽跳过 + 端哨兵）、`set_default_code_space`/`set_default_data_space`、`add_spacebase_pointer`
+  （translate.cc:460 → setBaseRegister translate.cc:86，BE 截断偏移上移）、`copy_spaces`（translate.cc:443，
+  共享句柄 refcount+1）、`set_deadcode_delay`/`truncate_space`/`mark_near_pointers`/`set_reverse_justified`/
+  `set_infer_ptr_bounds`、缓存槽访问器族（get_constant_space 等，translate.hh:448-530）。
+- 错误通道：`Result<_, String>` 携带 Ghidra LowlevelError 逐字消息（如
+  "const space must be assigned index 0"、"Space X was assigned as id duplicating: Y"）。
+
+Oracle 证据：`tests/oracle/space_registry_1204.{cc,rs}` + `tools/run_space_registry_oracle.sh`
+（锁定 12.0.4 oracle，8 case 逐字节 MATCH）。未移植残留：per-space `read/printRaw/encode/decode`
+属性编解码（MARSHAL/TRANSLATE 原子）、`resolveConstant` 与 join-record 半部（留在旧 enum manager，
+待 ADDRESS-0001 统一切换）。

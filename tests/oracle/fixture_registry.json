@@ -825,6 +825,42 @@
      "tools/run_heritage_ownership_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "space_registry_1204",
+   "description": "Architecture-owned AddrSpace registry: insertSpace failure partial-growth with verbatim LowlevelError, shortcut collision cap 26, copySpaces refcount, setBaseRegister BE truncation, deadcode delay, traversal orders",
+   "runner": [
+    "tools/run_space_registry_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/space_registry_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/space_registry_1204.cc",
+     "rust_fixture": "tests/oracle/space_registry_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_space_registry_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/space.rs",
+     "src/translate.rs",
+     "docs/api/space.md",
+     "docs/api/translate.md",
+     "tests/oracle/space_registry_1204.*",
+     "tools/run_space_registry_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-0de8bbaa1979f78d01a9"
+    ]
+   }
   }
  ]
 }

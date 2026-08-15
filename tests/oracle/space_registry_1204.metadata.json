@@ -1,0 +1,110 @@
+{
+  "schema": 2,
+  "fixture_id": "SPACE-REGISTRY-1204",
+  "stable_function_id": "GH12-F-0de8bbaa1979f78d01a9",
+  "stable_function_closure": [
+    "GH12-F-0de8bbaa1979f78d01a9 ghidra::AddrSpaceManager::insertSpace translate.cc:352",
+    "GH12-F-b083d28776986ff11afe ghidra::AddrSpaceManager::assignShortcut translate.cc:517",
+    "GH12-F-e41fc8417856e28597fb ghidra::AddrSpaceManager::getSpaceByName translate.cc:590",
+    "GH12-F-f4c8e54ac2013b630cc4 ghidra::AddrSpaceManager::getNextSpaceInOrder translate.cc:647",
+    "GH12-F-5d5a108055dff261902a ghidra::AddrSpaceManager::addSpacebasePointer translate.cc:460",
+    "GH12-F-45be56c7641650cca1ea ghidra::SpacebaseSpace::setBaseRegister translate.cc:86",
+    "GH12-F-e788c428294209c46e99 ghidra::AddrSpaceManager::setDeadcodeDelay translate.cc:768",
+    "GH12-F-6f2a1c2914d0fdbd7e54 ghidra::SpacebaseSpace::SpacebaseSpace translate.cc:57",
+    "GH12-F-d48c7db469ca72003de1 ghidra::AddrSpace::AddrSpace space.cc:58",
+    "GH12-F-e00c9988e5b26882cdc7 ghidra::ConstantSpace::ConstantSpace space.cc:356"
+  ],
+  "overall_status": "PARTIAL_MATCH: the eight-case registry projection (insert/index allocation, rejection messages with partial baselist growth, dead-hole skipping and late fill, shortcut assignment incl. 'z' reuse, wordsize/addrsize/endian/flag/truncation/overlay projection, spacebase pointer bridge, copySpaces refcounting) byte-matches the locked oracle; per-space decode/read/printRaw attribute codecs, resolveConstant, and the join-record/resolver halves of AddrSpaceManager remain with the legacy enum manager and are owned by MARSHAL/TRANSLATE/ADDRESS follow-up atoms",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{space.cc,space.hh,translate.cc,translate.hh,op.cc:33,fspec.cc:2116}",
+    "signature": "void AddrSpaceManager::insertSpace(AddrSpace *spc); void AddrSpaceManager::assignShortcut(AddrSpace *spc); AddrSpace *AddrSpaceManager::getNextSpaceInOrder(AddrSpace *spc) const; void AddrSpaceManager::addSpacebasePointer(SpacebaseSpace *basespace,const VarnodeData &ptrdata,int4 truncSize,bool stackGrowth)"
+  },
+  "architecture": "locked synthetic LE 64-bit AddrSpaceManager/Translate: const=0, OTHER=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 (fspec=8 in shortcut cases); HOST_ENDIAN=0",
+  "compiler_spec": "none: registry-only fixture, no Architecture/ProtoModel/symbols involved",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of the locked AddrSpaceManager surface through a minimal Translate subclass (C++) / AddrSpaceManager translate bridge (Rust): insertSpace, assignShortcut, getSpaceByName/getSpaceByShortcut/getSpace/getNextSpaceInOrder, setDefaultCodeSpace, addSpacebasePointer, copySpaces, setDeadcodeDelay, markNearPointers, setReverseJustified, setInferPtrBounds, truncateSpace",
+    "prestate": "Per-case fresh manager; spaces constructed with the production derived constructors (ConstantSpace/OtherSpace/UniqueSpace/JoinSpace/IopSpace/FspecSpace/SpacebaseSpace/AddrSpace-full) at explicit indices, leaving deterministic baselist holes",
+    "observation": "Per case: full per-space projection (index/name/type/addrsize/wordsize/endian/shortcut/delay/deadcodedelay/highest/pointerLowerBound/pointerUpperBound/minimumPointerSize/refcount + 11 flag predicates), numSpaces, cached-slot contents, ordered getNextSpaceInOrder walks, exact LowlevelError messages on every rejection path, spacebase baseloc/baseOrig after truncation with endian-dependent offset adjustment, and copySpaces shared-handle refcount",
+    "normalization": "No normalization: identical observation strings printed by both sides; refcount read via test-only private access on the C++ side and a read-only accessor on the Rust side"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "canonical_insert_order: production insert order with dynamic index allocation; full projection of all eight canonical spaces incl. calcScaleMask bounds, flag predicates, shortcut chars, and cached slot wiring",
+      "rejection_paths: duplicate id, duplicate name (with partial baselist growth to index+1 before rejection), type-name mismatch, mis-indexed const and OTHER spaces, duplicate ConstantSpace; numSpaces/lookups/walk after failures",
+      "hole_fill_iteration: dead baselist holes are skipped by getNextSpaceInOrder and numSpaces, then a hole is filled by a late insert and re-walked; end sentinel terminates the walk",
+      "shortcut_collision: type-based default chars (#/ %/s/u/j/i/f/r/o), first-name-char defaults, uppercase folding, collision advance, and shortcut-table lookups",
+      "shortcut_z_reuse: 26 occupied letters force the >26 collision path; the space reuses 'z' while getSpaceByShortcut('z') still returns the older space",
+      "projection_wordsize_endian_flags: wordsize-scaled highest and pointer bounds, little/big endian, addressToByte/byteToAddress conversions, wrapOffset including modulo wrap, near-pointer marking, reverse justification, infer-pointer bounds, deadcode delay, truncateSpace recompute, overlay construction marking the base overlaybase, and manager truncateSpace name resolution errors",
+      "spacebase_pointer_bridge: addSpacebasePointer idempotence and conflict rejection, baseloc/baseOrig with endian-dependent truncation offset adjustment (big-endian shifts up, little-endian keeps), growth direction, contain link, and missing-register errors",
+      "copy_spaces_refcount: copySpaces shares handles (refcount 2 on both managers), reproduces cached slots, default code/data spaces and the ordered walk, and the copied name table rejects duplicates"
+    ],
+    "sha256": "86a8b8f3a85aef59650c8b2c554e54c3758f33a7f5422f9abfd2ec471e7dda49"
+  },
+  "observation_schema": {
+    "format": "Eighty-nine fixed-order UTF-8 lines with final newline: one envelope plus eight case records",
+    "state": "per-space projection with index/type/sizes/endian/shortcut/delays/bounds/refcount and 11 flag bits, numSpaces, cached slots",
+    "errors": "exact LowlevelError messages for every rejection path (insertSpace, setBaseRegister, getSpacebase, truncateSpace)",
+    "order": "getNextSpaceInOrder walks; shortcut table point lookups"
+  },
+  "comparand": {
+    "rugra_base_commit": "c6f5c48a8bbeef672bf9e9110389e822b3300db5",
+    "rugra_base_tree": "1eefc862588182cf503ea45a4fa060141688ce1f",
+    "cpp_fixture_sha256": "cf3a6871ae2ea8e8d01fb6ecafda034190915715679d712fbc7a2cd75c87350e",
+    "rust_fixture_sha256": "86b5778f15a23d5e00ef57df65b44a3521bf4caeee45e8ff2de3e20e90c15354",
+    "space_rs_sha256": "a371cd5d386619cc40324f8f367a23844ceba0db7fb88cc0cc201726fa1941a8",
+    "translate_rs_sha256": "0e1f8e4e013ff57dea232d173ee3e513c244905705eb0d418e80d918c6f224ad",
+    "space_doc_sha256": "2aee984f24dc3a7bc094bf927ec9ddc0e242ed4f86dbf2dac8ad2468b517fb51",
+    "translate_doc_sha256": "f7db2f37239603ad9101c9f74806ba715b7bc56c1776b48c2824430a892453a5",
+    "runner_sha256": "435964bbb25630ad176b0a9d2bc908c2db63ca90007f8b4bc07d2143a9451685",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-space-registry-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rust_crate_tree_sha256": "e2f7670fdda6cc4c03ed3de919ea66cd33b44341525476143aff80838e216c1f",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+    "private_state_observer": "Read-only ABI observation of AddrSpace::refcount and the TruncationTag/OverlaySpace label-less private members through #define private public / #define class struct in the fixture translation unit only; no oracle source is modified",
+    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/space.rs and src/translate.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "cb7dc38fd33d9497a0a2be48d1db427ba46bf06c1e6cd914662e78c5a15a70d2"
+  },
+  "expected_stdout_sha256": "03d310ab4b7aa2b261b8a6910324b9ff9ca4c928c67cf19548ab834238a66627",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "canonical_insert_order": "MATCH: full per-space projection of the canonical eight-space architecture byte-matches (calcScaleMask bounds, 11 flag predicates, shortcuts, iop delay=1/dead=1, join heritaged=0 deadcode=1, OTHER is_otherspace=1, stack formal=1 delay=1)",
+    "rejection_paths": "MATCH: all six rejection messages byte-match, including the duplicate-name path that grows baselist to index+1 before throwing (numSpaces=10 observed after failure) and the duplicate-id message naming the occupying space",
+    "hole_fill_iteration": "MATCH: dead baselist holes are returned as null by getSpace, skipped by getNextSpaceInOrder, excluded from walk output, then filled by a late insert without changing numSpaces",
+    "shortcut_collision": "MATCH: default characters per type, register '%', first-name-char defaults with uppercase folding, collision advance (sram->t, trampoline->v), and shortcut-table lookups byte-match",
+    "shortcut_z_reuse": "MATCH: after 26 collisions the space's shortcut reads 'z' while getSpaceByShortcut('z') still returns the earlier 'zz' space (map not updated), byte-matching translate.cc:561-566",
+    "projection_wordsize_endian_flags": "MATCH: wordsize-scaled highest/pointer bounds for (4,2) and (2,3) spaces, endian flag, static conversions, wrapOffset wrap points, near-pointer/reverse-justify/infer-bounds/deadcodedelay mutations, truncateSpace recompute, overlay base marking (overlaybase on ram, contain link, hasphysical propagation), and manager truncateSpace name-resolution error",
+    "spacebase_pointer_bridge": "MATCH: numSpacebase transitions, idempotent re-add, conflicting re-add rejection message, i!=0 and missing-register error messages, baseloc/baseOrig identity, big-endian truncation shifting the offset up (0x100->0x104) vs little-endian keeping it, and growth direction",
+    "copy_spaces_refcount": "MATCH: shared handle identity (sameHandle=1), refcount 2 observed through both managers, copied cached slots/default spaces/ordered walk, and the copied name table rejecting duplicates",
+    "space_decode_read_printraw": "UNTESTED: per-space decode/decodeBasicAttributes/read/printRaw/encodeAttributes attribute codecs are not ported in this atom; owned by MARSHAL-XML-TEXT-0001 / TRANSLATE-DOCSTORE-UNIFY-0001",
+    "resolver_and_join_halves": "UNTESTED: insertResolver/resolveConstant and findAddJoin/splitset/splitlist remain with the legacy enum-based AddrSpaceManager in translate.rs; owned by ADDRESS-0001 unification",
+    "consumer_migration": "UNTESTED: Address/Varnode/Range still key on the fixed enum; switching them to the registry handles is ADDRESS-0001"
+  }
+}

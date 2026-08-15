@@ -972,6 +972,16 @@ pub struct AddrSpaceManager {
     // Ghidra: translate.hh:235 splitlist
     /// JoinRecords indexed by join address (sorted by unified.offset).
     pub split_list: Vec<JoinRecord>,
+    // Ghidra: translate.hh:220 AddrSpaceManager (SPACE-0001 companion)
+    /// Architecture-owned address-space registry: stable
+    /// index/type/name/addrsize/wordsize/endian/flags handles for dynamic
+    /// spaces. RUGRA-GLUE: Ghidra has exactly one AddrSpaceManager (the base
+    /// of Translate); this legacy enum-based manager keeps its own flat
+    /// tables for un-migrated consumers, and this field is the
+    /// architecture-owned twin those consumers switch to in ADDRESS-0001.
+    /// The resolver and join-record halves (resolvelist/splitset/splitlist)
+    /// still live here, not in the registry.
+    pub space_registry: crate::space::SpaceRegistry,
 }
 
 // RUGRA-GLUE: Debug impl (Ghidra has no Debug formatting; Rugra needs it for
@@ -1675,6 +1685,34 @@ impl AddrSpaceManager {
         let addr_mask = addr_mask_for(spc);
         let val_wrapped = val_bytes & addr_mask;
         Address::new(val_wrapped)
+    }
+
+    // Ghidra: translate.hh:244 AddrSpaceManager::insertSpace
+    /// Add a new architecture-owned address space to the registry. This is
+    /// the SPACE-0001 bridge that production code paths (cspec ingestion,
+    /// sleigh translate setup) use once they migrate off the flat enum:
+    /// faithful to `Translate::insertSpace` usage (translate.cc:352-437) via
+    /// the composed [`crate::space::SpaceRegistry`].
+    pub fn insert_dyn_space(
+        &mut self,
+        spc: crate::space::AddrSpace,
+    ) -> Result<(), String> {
+        self.space_registry.insert_space(spc)
+    }
+
+    // Ghidra: translate.hh:246 AddrSpaceManager::addSpacebasePointer
+    /// Set the base register of an architecture-owned spacebase space,
+    /// faithful to `addSpacebasePointer` (translate.cc:460-464) via the
+    /// composed registry.
+    pub fn add_dyn_spacebase_pointer(
+        &mut self,
+        basespace: &crate::space::AddrSpace,
+        ptrdata: &crate::space::SpaceVarnodeData,
+        trunc_size: i32,
+        stack_growth: bool,
+    ) -> Result<(), String> {
+        self.space_registry
+            .add_spacebase_pointer(basespace, ptrdata, trunc_size, stack_growth)
     }
 }
 

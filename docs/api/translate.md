@@ -333,3 +333,17 @@ the formal behavior status is `NO_ORACLE`.
 - `crate::opcodes::OpCode`
 - `crate::space::{AddressSpace, VarnodeData}`
 - `std::collections::HashMap`
+
+
+### 2026-08-15：SPACE-0001 translate 桥（架构动态 space 注册表接入）
+
+- `AddrSpaceManager` 新增 `space_registry: crate::space::SpaceRegistry` 字段（Ghidra 单一
+  AddrSpaceManager = Translate 基类；Rugra 过渡期为旧 enum 表 + 架构owned 双表，消费方在
+  ADDRESS-0001 切换后收敛）。resolver/join 半部（resolvelist/splitset/splitlist）仍在旧 manager。
+- 新增桥方法：
+  - `insert_dyn_space(&mut self, spc: AddrSpace) -> Result<(), String>`（translate.hh:244
+    insertSpace / translate.cc:352 经由注册表）；
+  - `add_dyn_spacebase_pointer(&mut self, basespace, ptrdata, trunc_size, stack_growth)`
+    （translate.hh:246 addSpacebasePointer / translate.cc:460）。
+- 语义与错误消息与 Ghidra LowlevelError 逐字一致；oracle 证据见
+  `tests/oracle/space_registry_1204.*` 与 `tools/run_space_registry_oracle.sh`。
