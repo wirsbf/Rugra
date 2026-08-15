@@ -298,6 +298,55 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         }
     }
 
+    /// Is the i-th outgoing edge an irreducible edge? Faithful to Ghidra's
+    /// `FlowBlock::isIrreducibleOut` (block.hh:332): the spanning-tree DFS
+    /// pretends irreducible edges don't exist (block.cc:1089).
+    // Ghidra: block.hh:332 FlowBlock::isIrreducibleOut
+    fn is_irreducible_out(&self, i: usize) -> bool {
+        self.get_out(i)
+            .map(|e| (e.flags & edge_flags::F_IRREDUCIBLE_EDGE) != 0)
+            .unwrap_or(false)
+    }
+
+    /// OR-set edge flags on the `slot`-th incoming edge. This is the mirrored
+    /// half of Ghidra's `FlowBlock::setOutEdgeFlag` (block.cc:245 writes
+    /// `bbout->intothis[reverse_index].label |= lab` in addition to the out
+    /// edge), exposed so the mirrored write can be applied from the target
+    /// side without holding both write locks at once.
+    // Ghidra: block.cc:245 FlowBlock::setOutEdgeFlag (mirrored in-edge half)
+    fn set_in_edge_flag(&mut self, slot: usize, flag: u32) {
+        let any = self.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            if slot < bb.incoming.len() { bb.incoming[slot].flags |= flag; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            if slot < bg.incoming.len() { bg.incoming[slot].flags |= flag; }
+        }
+    }
+
+    /// Get the copy-map reference (Ghidra `copymap`: back reference to a
+    /// BlockCopy of this block; reset to \b this and used as the FIND function
+    /// by findSpanningTree/findIrreducible). Returns the stored Weak handle.
+    // Ghidra: block.hh:163 FlowBlock::getCopyMap
+    fn get_copy_map(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
+        None
+    }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::copymap is private at
+    // block.hh:123; findSpanningTree assigns it via direct field access)
+    fn set_copy_map(&mut self, _m: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {}
+    /// Number of descendants of this block in the spanning tree (+1). Ghidra
+    /// `numdesc` (block.hh:126) is a private field with no accessor; it is
+    /// written directly by findSpanningTree (block.cc:1073/1084). Unset blocks
+    /// return -1 (Ghidra leaves the field uninitialized until discovery).
+    // RUGRA-GLUE: Rust accessor for Ghidra FlowBlock::numdesc (block.hh:126,
+    // private field, no Ghidra accessor; default marks "unset" instead of the
+    /// uninitialized C++ value)
+    fn get_num_desc(&self) -> i32 {
+        -1
+    }
+    // RUGRA-GLUE: Rust mutator for Ghidra FlowBlock::numdesc (block.hh:126,
+    // private field written directly by findSpanningTree block.cc:1073/1098)
+    fn set_num_desc(&mut self, _n: i32) {}
+
     // Ghidra: block.cc:318 FlowBlock::setDefaultSwitch
     /// Mark an outgoing edge as the switch default edge.
     /// Faithful to `FlowBlock::setDefaultSwitch` (block.cc:318-326).
@@ -865,6 +914,41 @@ pub fn find_condition(
     Some((cond, slot1))
 }
 
+/// OR-set edge flags on the `i`-th outgoing edge of `cur` AND on the mirrored
+/// incoming edge of the target block. Faithful to the complete Ghidra
+/// `FlowBlock::setOutEdgeFlag` (block.cc:240-246): the label is applied to
+/// `outofthis[i]` and to `outofthis[i].point->intothis[reverse_index]`.
+/// Ghidra follows raw pointers; in Rugra the two halves live behind separate
+/// `RwLock`s, so a self-edge (loop to the same block) must set both halves
+/// under ONE guard — taking the second lock would deadlock on the caller's
+/// held guard.
+// Ghidra: block.cc:240 FlowBlock::setOutEdgeFlag
+pub fn set_out_edge_flag_mirrored(
+    cur: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    i: usize,
+    lab: u32,
+) {
+    let (target, rev) = match cur.read().unwrap().get_out(i) {
+        Some(e) => (e.point.clone(), e.reverse_index),
+        None => return,
+    };
+    if Arc::ptr_eq(&target, cur) {
+        // Self-edge: both halves live on this block; one exclusive guard.
+        let mut g = cur.write().unwrap();
+        let any = g.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            if i < bb.outgoing.len() { bb.outgoing[i].flags |= lab; }
+            if (rev as usize) < bb.incoming.len() { bb.incoming[rev as usize].flags |= lab; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            if i < bg.outgoing.len() { bg.outgoing[i].flags |= lab; }
+            if (rev as usize) < bg.incoming.len() { bg.incoming[rev as usize].flags |= lab; }
+        }
+    } else {
+        cur.write().unwrap().set_out_edge_flag(i, lab);
+        target.write().unwrap().set_in_edge_flag(rev as usize, lab);
+    }
+}
+
 /// Represents a basic block of P-code operations
 ///
 /// Corresponds to Ghidra's `BlockBasic` class
@@ -896,6 +980,15 @@ pub struct BlockBasic {
     /// Scratch visit-count for LoopBody::extend (Ghidra getVisitCount/
     /// setVisitCount). Reset to 0 after each use.
     pub visit_count: i32,
+    /// Back reference to a BlockCopy of this block (Ghidra `copymap`,
+    /// block.hh:123). Reset to \b this by BlockGraph::find_spanning_tree
+    /// (block.cc:1027/1122) and repurposed as the FIND function by
+    /// findIrreducible (block.cc:1161/1194).
+    pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// Number of descendants of this block in the spanning tree (+1) (Ghidra
+    /// `numdesc`, block.hh:126). -1 marks unset (Ghidra leaves the field
+    /// uninitialized until findSpanningTree discovers the block).
+    pub num_desc: i32,
 }
 
 impl BlockBasic {
@@ -914,6 +1007,8 @@ impl BlockBasic {
             dom_children: Vec::new(),
             dom_frontier: std::collections::HashSet::new(),
             visit_count: 0,
+            copy_map: None,
+            num_desc: -1,
         }
     }
 
@@ -1193,6 +1288,23 @@ impl FlowBlock for BlockBasic {
     fn set_visit_count(&mut self, c: i32) {
         self.visit_count = c;
     }
+    // Ghidra: block.hh:163 FlowBlock::getCopyMap
+    fn get_copy_map(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.copy_map.clone()
+    }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::copymap is private at
+    // block.hh:123; findSpanningTree assigns it via direct field access)
+    fn set_copy_map(&mut self, m: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {
+        self.copy_map = m;
+    }
+    // RUGRA-GLUE: Rust accessor for Ghidra FlowBlock::numdesc (block.hh:126)
+    fn get_num_desc(&self) -> i32 {
+        self.num_desc
+    }
+    // RUGRA-GLUE: Rust mutator for Ghidra FlowBlock::numdesc (block.hh:126)
+    fn set_num_desc(&mut self, n: i32) {
+        self.num_desc = n;
+    }
 
     // Ghidra: block.cc:218 FlowBlock::swapEdges
     fn swap_edges(&mut self) {
@@ -1444,6 +1556,12 @@ pub struct BlockGraph {
     pub outgoing: Vec<BlockEdge>,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
     pub flags: u32,
+    /// Back reference to a BlockCopy of this graph (Ghidra `copymap`,
+    /// block.hh:123), reset to \b this by find_spanning_tree.
+    pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// Number of descendants in the spanning tree (+1) (Ghidra `numdesc`,
+    /// block.hh:126); -1 marks unset.
+    pub num_desc: i32,
 }
 
 impl BlockGraph {
@@ -1456,6 +1574,8 @@ impl BlockGraph {
             outgoing: Vec::new(),
             parent: None,
             flags: 0,
+            copy_map: None,
+            num_desc: -1,
         }
     }
 
@@ -1472,6 +1592,267 @@ impl BlockGraph {
     // RUGRA-GLUE: Rust accessor (Ghidra uses list[i] inline)
     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.get(i).cloned()
+    }
+
+    /// Clear EVERY in-edge and out-edge label of every component block.
+    /// This is `BlockGraph::clearEdgeFlags(~((uint4)0))` as invoked at the
+    /// start of each findSpanningTree pass (block.cc:1045): the parameter is
+    /// complemented inside Ghidra's clearEdgeFlags (block.cc:969 `fl = ~fl`),
+    /// so passing all-ones clears all label bits on both edge halves.
+    // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags (all-ones invocation at block.cc:1045)
+    fn clear_edge_flags_all(&mut self) {
+        for bl in &self.blocks {
+            let mut g = bl.write().unwrap();
+            let any = g.as_any_mut();
+            if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+                for e in bb.incoming.iter_mut() { e.flags = 0; }
+                for e in bb.outgoing.iter_mut() { e.flags = 0; }
+            } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+                for e in bg.incoming.iter_mut() { e.flags = 0; }
+                for e in bg.outgoing.iter_mut() { e.flags = 0; }
+            }
+        }
+    }
+
+    /// \brief Find a spanning tree (skipping irreducible edges).
+    ///
+    /// Faithful port of `BlockGraph::findSpanningTree` (block.cc:1009-1136):
+    ///   - Label pre and reverse-post orderings, tree, forward, cross, and
+    ///     back edges (block.cc:1093-1105).
+    ///   - Calculate number of descendants (numdesc, block.cc:1073/1084/1098).
+    ///   - Put the blocks of the graph in reverse post order — every block's
+    ///     `index` becomes its reverse-post-order number (block.cc:1081) and
+    ///     the component list itself is reordered to that order
+    ///     (block.cc:1135 `list = rpostorder`).
+    ///   - Return an array of all nodes in pre-order via `preorder`.
+    ///   - `rootlist` is an in/out parameter: on entry it may be empty (the
+    ///     graph's entry points are collected here); on exit it holds the
+    ///     roots with the original head moved to the front (block.cc:1129).
+    ///
+    /// Each pass first clears ALL edge flags (in and out halves) of every
+    /// component (block.cc:1045), so externally pre-set labels — including
+    /// f_irreducible — do not survive into the traversal; the
+    /// isIrreducibleOut skip (block.cc:1089) therefore only observes labels
+    /// set on blocks outside `list`, matching the locked oracle exactly.
+    ///
+    /// Algorithm originally due to Tarjan. The first block is the entry
+    /// block and remains first in the reverse post order: the rootlist
+    /// head/tail swap at block.cc:1031-1035 makes the original head the last
+    /// root visited (so it finishes last and takes RPO index 0).
+    ///
+    /// Errors: if after two passes extra roots are still being discovered,
+    /// Ghidra throws LowlevelError("Could not generate spanning tree")
+    /// (block.cc:1110-1111); Rugra returns the equivalent `anyhow` error.
+    // Ghidra: block.cc:1009 BlockGraph::findSpanningTree
+    pub fn find_spanning_tree(
+        &mut self,
+        preorder: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        rootlist: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    ) -> anyhow::Result<()> {
+        let n = self.blocks.len();
+        if n == 0 {
+            // cc:1012: if (list.size()==0) return;
+            return Ok(());
+        }
+        let mut rpostorder: Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> =
+            vec![None; n]; // cc:1020 rpostorder.resize(list.size())
+        let mut state: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+            Vec::with_capacity(n); // cc:1021
+        let mut istate: Vec<usize> = Vec::with_capacity(n); // cc:1022
+        for i in 0..n {
+            // cc:1023-1030: index = -1 (reverse post-order starts at 0),
+            // visitcount = -1, copymap = this; collect sizeIn()==0 roots in
+            // list order.
+            let tmpbl = self.blocks[i].clone();
+            {
+                let mut g = tmpbl.write().unwrap();
+                g.set_index(-1);
+                g.set_visit_count(-1);
+                g.set_copy_map(Some(std::sync::Arc::downgrade(&tmpbl)));
+            }
+            if tmpbl.read().unwrap().size_in() == 0 {
+                rootlist.push(tmpbl);
+            }
+        }
+        if rootlist.len() > 1 {
+            // cc:1031-1035: make sure orighead is visited last (so it is
+            // first in the reverse post order).
+            let last = rootlist.len() - 1;
+            rootlist.swap(0, last);
+        } else if rootlist.is_empty() {
+            // cc:1036-1038: no obvious starting block; assume first block.
+            rootlist.push(self.blocks[0].clone());
+        }
+        let origrootpos = rootlist.len() - 1; // cc:1039
+
+        for repeat in 0..2 {
+            // cc:1041-1045
+            let mut extraroots = false;
+            let mut rpostcount = n as i32;
+            let mut rootindex = 0usize;
+            self.clear_edge_flags_all();
+            while preorder.len() < n {
+                // cc:1046
+                // cc:1048-1058: go through blocks with no in edges; a stale
+                // root from the previous pass (visitcount != -1) is removed
+                // from rootlist by shifting the tail left.
+                let mut startbl: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+                while rootindex < rootlist.len() {
+                    let cand = rootlist[rootindex].clone();
+                    rootindex += 1;
+                    if cand.read().unwrap().get_visit_count() == -1 {
+                        startbl = Some(cand);
+                        break;
+                    }
+                    rootlist.remove(rootindex - 1);
+                    rootindex -= 1;
+                }
+                let startbl: Arc<RwLock<dyn FlowBlock + Send + Sync>> = match startbl {
+                    Some(b) => b,
+                    None => {
+                        // cc:1059-1067: no unvisited root — take the next
+                        // unvisited block in list order and treat it as
+                        // another root. (While preorder.size() < list.size()
+                        // an unvisited block always exists, so the scan
+                        // always breaks; like Ghidra, the loop variable ends
+                        // on the last block if it somehow did not.)
+                        extraroots = true;
+                        let mut found = self.blocks[n - 1].clone();
+                        for i in 0..n {
+                            found = self.blocks[i].clone();
+                            if found.read().unwrap().get_visit_count() == -1 {
+                                break;
+                            }
+                        }
+                        rootlist.push(found.clone());
+                        rootindex += 1;
+                        found
+                    }
+                };
+                // cc:1069-1073: discover the start block.
+                state.push(startbl.clone());
+                istate.push(0);
+                startbl.write().unwrap().set_visit_count(preorder.len() as i32);
+                preorder.push(startbl.clone());
+                startbl.write().unwrap().set_num_desc(1);
+
+                // cc:1075-1107: iterative DFS.
+                while !state.is_empty() {
+                    let curbl = state.last().unwrap().clone();
+                    let finished = {
+                        let cur_size_out = curbl.read().unwrap().size_out();
+                        cur_size_out <= *istate.last().unwrap()
+                    };
+                    if finished {
+                        // cc:1077-1084: all children visited — finish node,
+                        // assign reverse post-order index, accumulate
+                        // numdesc into the DFS parent.
+                        state.pop();
+                        istate.pop();
+                        rpostcount -= 1;
+                        curbl.write().unwrap().set_index(rpostcount);
+                        rpostorder[rpostcount as usize] = Some(curbl.clone());
+                        if let Some(parent_arc) = state.last() {
+                            let add = curbl.read().unwrap().get_num_desc();
+                            let parent_arc = parent_arc.clone();
+                            let mut pg = parent_arc.write().unwrap();
+                            let total = pg.get_num_desc() + add;
+                            pg.set_num_desc(total);
+                        }
+                    } else {
+                        // cc:1086-1105: try the next child edge.
+                        let edgenum = *istate.last().unwrap();
+                        *istate.last_mut().unwrap() += 1;
+                        if curbl.read().unwrap().is_irreducible_out(edgenum) {
+                            // cc:1089: pretend irreducible edges don't exist.
+                            continue;
+                        }
+                        let childbl = match curbl.read().unwrap().get_out(edgenum) {
+                            Some(e) => e.point,
+                            None => continue,
+                        };
+                        let child_visit = childbl.read().unwrap().get_visit_count();
+                        if child_visit == -1 {
+                            // cc:1092-1099: unvisited — tree edge, descend.
+                            set_out_edge_flag_mirrored(&curbl, edgenum, edge_flags::F_TREE_EDGE);
+                            state.push(childbl.clone());
+                            istate.push(0);
+                            childbl.write().unwrap().set_visit_count(preorder.len() as i32);
+                            preorder.push(childbl.clone());
+                            childbl.write().unwrap().set_num_desc(1);
+                        } else {
+                            let child_index = childbl.read().unwrap().get_index();
+                            if child_index == -1 {
+                                // cc:1100-1101: childbl already on stack —
+                                // back (loop) edge.
+                                set_out_edge_flag_mirrored(
+                                    &curbl,
+                                    edgenum,
+                                    edge_flags::F_BACK_EDGE | edge_flags::F_LOOP_EDGE,
+                                );
+                            } else {
+                                let cur_visit = curbl.read().unwrap().get_visit_count();
+                                if cur_visit < child_visit {
+                                    // cc:1102-1103: childbl processing done,
+                                    // discovered after curbl — forward edge.
+                                    set_out_edge_flag_mirrored(
+                                        &curbl,
+                                        edgenum,
+                                        edge_flags::F_FORWARD_EDGE,
+                                    );
+                                } else {
+                                    // cc:1104-1105: cross edge.
+                                    set_out_edge_flag_mirrored(
+                                        &curbl,
+                                        edgenum,
+                                        edge_flags::F_CROSS_EDGE,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !extraroots {
+                // cc:1109
+                break;
+            }
+            if repeat == 1 {
+                // cc:1110-1111: throw LowlevelError("Could not generate
+                // spanning tree")
+                anyhow::bail!("Could not generate spanning tree");
+            }
+            // cc:1114-1116: we had extra roots, so regenerate the post order
+            // with the entry block moved to the last rootlist position.
+            let last = rootlist.len() - 1;
+            rootlist.swap(last, origrootpos);
+            for i in 0..n {
+                // cc:1118-1123: reset for the second pass.
+                let tmpbl = self.blocks[i].clone();
+                let mut g = tmpbl.write().unwrap();
+                g.set_index(-1);
+                g.set_visit_count(-1);
+                g.set_copy_map(Some(std::sync::Arc::downgrade(&tmpbl)));
+            }
+            preorder.clear();
+            state.clear();
+            istate.clear();
+        }
+
+        if rootlist.len() > 1 {
+            // cc:1129-1133: make sure orighead is at the front of rootlist.
+            let last = rootlist.len() - 1;
+            rootlist.swap(0, last);
+        }
+
+        // cc:1135: list = rpostorder — reorder components into reverse post
+        // order. Every entry is filled because each of the n blocks receives
+        // exactly one distinct finish slot 0..n-1.
+        self.blocks = rpostorder
+            .into_iter()
+            .map(|slot| slot.expect("rpostorder fully assigned by DFS"))
+            .collect();
+        Ok(())
     }
 
     /// Get the entry (start) block of this graph. Faithful to

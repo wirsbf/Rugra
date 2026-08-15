@@ -2365,6 +2365,17 @@ impl<'a> CollapseStructure<'a> {
     /// `index` for rpostorder because its `getBlock(i)` is list-position
     /// indexed while `get_index()` is rpostorder — Rugra conflates these, so
     /// we keep them separate to avoid corrupting the dominator computation.
+    ///
+    /// BLOCK-INDEX-ASSIGN-0001: the faithful 1:1 port of Ghidra
+    /// `BlockGraph::findSpanningTree` (block.cc:1009-1136) now exists as the
+    /// PUBLIC `BlockGraph::find_spanning_tree` in src/block.rs (writes
+    /// FlowBlock index/visitcount/numdesc/copymap, mirrors edge labels on
+    /// both edge halves, wipes all edge flags per pass, and reorders the
+    /// component list into reverse post order). This private position-index
+    /// variant is deliberately NOT rewired to it: switching would rewrite
+    /// `FlowBlock.index` and reorder `blocks`, changing this structurer
+    /// pass's observable behavior. Unifying the index domain and migrating
+    /// this caller onto the public port requires its own oracle-gated change.
     fn find_spanning_tree(&mut self) -> Vec<i32> {
         use crate::block::edge_flags as ef;
         let size = self.graph.get_size();

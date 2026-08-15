@@ -623,6 +623,40 @@
      "tools/run_setcasts_output_bank_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "block_index_assign_1204",
+   "description": "BlockGraph::findSpanningTree reverse-post-order index assignment: rootlist swap, extraroots two-pass, wipe-first edge labels, visitcount/copymap/numdesc projection",
+   "runner": [
+    "tools/run_block_index_assign_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/block_index_assign_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/block_index_assign_1204.cc",
+     "rust_fixture": "tests/oracle/block_index_assign_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_block_index_assign_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/block.rs",
+     "docs/api/block.md",
+     "tests/oracle/block_index_assign_1204.*",
+     "tools/run_block_index_assign_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-763b9cea2c290093427f"
+    ]
+   }
   }
  ]
 }

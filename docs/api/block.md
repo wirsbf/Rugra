@@ -1034,3 +1034,45 @@ getExitLeaf / lastOp / encodeHeader 等）。Rugra 因 struct-with-specific-fiel
  
  
  
+
+### 2026-08-15：公共 BlockGraph::find_spanning_tree（BLOCK-INDEX-ASSIGN-0001）
+
+Ghidra `FlowBlock::index` 生产唯一赋值点的 1:1 移植：`BlockGraph::findSpanningTree`
+（block.cc:1009-1136，Tarjan 生成树 + 反向后序）。此前 Rugra 侧只有
+blockaction.rs 的私有 `find_spanning_tree`（位置索引域、HashMap 局部状态、
+不写 `FlowBlock.index`）——本次新增**公共**方法，全副作用对齐：
+
+- `BlockGraph::find_spanning_tree(&mut self, preorder, rootlist) -> anyhow::Result<()>`
+  （block.cc:1009）。副作用：
+  - 每个成员块 `index = -1`、`visitcount = -1`、`copymap = self`（cc:1023-1030/1118-1123）；
+  - 每遍开始 `clear_edge_flags_all()` = `clearEdgeFlags(~((uint4)0))`（cc:1045），
+    清空所有成员块入/出边两侧的全部 label 位；
+  - DFS 出边分类 tree / back|loop / forward / cross（cc:1093-1105），出边与
+    镜像入边两侧同时 OR-set（Ghidra setOutEdgeFlag block.cc:240-246）；
+  - `numdesc` 在发现时置 1、子树弹栈时向上累加（cc:1073/1084/1098）；
+  - `rpostcount` 自 n 递减后赋 `index`（cc:1080-1082）；
+  - 结束 `list = rpostorder`：成员列表本身重排为反向后序（cc:1135）；
+  - `preorder` 输出前序、`rootlist` 为 in/out 参数（尾交换使 orighead 最后访问
+    →RPO 最前，cc:1031-1035/1129-1133；两遍 repeat + extraroots 提升与
+    rootlist 换位 cc:1041-1127；repeat==1 仍发现 extraroots 时返回
+    LowlevelError 等价的 anyhow 错误，cc:1110-1111）。
+
+**支撑原语（均为 trait 默认实现或自由函数）：**
+- `set_in_edge_flag(slot, flag)` — setOutEdgeFlag 的镜像入边半边（block.cc:245）。
+- `set_out_edge_flag_mirrored(cur, i, lab)`（自由函数，pub）— 完整 Ghidra
+  setOutEdgeFlag（block.cc:240-246）：出边 + 目标块镜像入边；自环边（目标即
+  本块）在单一把锁内同时写两侧，避免对调用方已持有的写锁重入死锁。
+- `is_irreducible_out(i)`（block.hh:332）— DFS 跳过不可归约出边判定
+  （cc:1089；注意 cc:1045 的全清使外部预置 label 不存活，跳过分支对外部
+  预置不可达——与锁定 oracle 行为一致）。
+- `get_copy_map`/`set_copy_map`（block.hh:163 + 私有 copymap 字段 block.hh:123）。
+- `get_num_desc`/`set_num_desc`（私有 numdesc 字段 block.hh:126；未发现时 -1
+  对应 C++ 未初始化值）。
+- `BlockBasic`/`BlockGraph` 新字段 `copy_map: Option<Weak<...>>`、`num_desc: i32`。
+
+**对齐证据：** `tools/run_block_index_assign_oracle.sh` 权威差分（锁定 oracle
+e40ed130 重建 + pinned base + overlay src/block.rs），8 case 逐字节一致
+（空图早退/单块/单入口 DAG + 状态污染复位/多入口 rootlist 交换/无根假定
+首块 + 回环/不可达分量两遍 extraroots/stale-root 机制 + 自环/irreducible 与
+goto 预置 label 全清）。blockaction.rs 私有变体保留未接线（接线需统一
+index 域并重过差分门禁，注释已注明）。

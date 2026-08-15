@@ -774,3 +774,11 @@ ANN-M 不提升本模块的对齐状态，也不替代锁定 oracle 的函数级
  
  
  
+
+### 2026-08-15：私有 `find_spanning_tree` 保留不接线（`BLOCK-INDEX-WIRE-0001`）
+
+`BLOCK-INDEX-ASSIGN-0001` 已在 `src/block.rs:1647` 落地公共
+`BlockGraph::find_spanning_tree`（全副作用对齐 block.cc:1009-1135，8/8 oracle
+MATCH）。本模块的私有 TraceDAG 变体（`src/blockaction.rs:2369` 起）**保留未接线**，
+源码注释已注明公共 port 的位置与接线前提；迁移属 `BLOCK-INDEX-WIRE-0001`，须
+保证 TraceDAG 行为零变化并通过主管线差分门禁。本轮对本模块零行为改动。
