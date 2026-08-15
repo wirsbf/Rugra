@@ -183,3 +183,14 @@ sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 
   collateral_pins 列出 runner 编辑后须同 commit 重钉的 `comparand.runner_sha256`。
 
 当前基线：doctor 报 163 issue / 13 类码（迁移执行见 `ORACLE-METADATA-MIGRATE-0001`）。
+
+## 12.0.4 golden 重生（2026-08-15，`ORACLE-0002`）
+
+- `build_ghidra_1204_headless.sh` — 从锁定 oracle commit e40ed130 源码构建可运行
+  Ghidra 12.0.4 headless distribution。自动获取便携 JDK21/Gradle 到 /tmp（无需
+  root），处理 flatRepo 依赖与代理；障碍规避：unset LD_PRELOAD（proxychains 劫持
+  loopback 会杀死 Gradle daemon）、需非沙箱执行。约 40 分钟可重建。
+- `regen_ghidra_golden.py` — golden 重生与自检。`--regen` 用真 headless 产
+  canonical golden（tests/golden/ghidra_{curl,httpd}_1204.c + provenance）并跑
+  direct-runner 交叉验证；`--direct-runner` 单独重生补充 golden；`--check` 校验
+  输入 SHA/oracle/arch/cspec/逐函数行数与 hash。

@@ -1,0 +1,1902 @@
+{
+  "analysis_options": {
+    "per_function_decompile_timeout_seconds": 30,
+    "postScript": "tools/ghidra_decompile_all.py (verbatim copy with a Jython 'coding: utf-8' declaration inserted; Jython 2.7 rejects the tracked file's non-ASCII comment otherwise)",
+    "profile": "analyzeHeadless defaults (no -processor/-analysis option overrides)",
+    "project_deleted_after_run": true
+  },
+  "architecture": "x86:LE:64:default",
+  "assets": {
+    "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "ghidra_x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984"
+  },
+  "compiler_spec": "gcc",
+  "determinism": {
+    "byte_identical": true,
+    "first_run_seconds": 22.2,
+    "method": "full independent headless re-import",
+    "repeat_run_seconds": 21.9,
+    "repeat_summary": "GHIDRA_DECOMP_DONE ok=124 fail=0 out=/tmp/rugra-golden-headless-curl-qv3pmfkw/headless-out-2.c"
+  },
+  "direct_runner_cross_check": {
+    "determinism": {
+      "byte_identical_repeats": 12,
+      "sample_indices": [
+        0,
+        6,
+        12,
+        18,
+        24,
+        30,
+        37,
+        43,
+        49,
+        55,
+        61,
+        67
+      ],
+      "sample_size": 12,
+      "unstable": []
+    },
+    "equivalence_risks": [
+      "direct-runner golden: functions come from BFD static+dynamic symbol tables plus raw .rela.plt JUMP_SLOT parsing only; a real headless import discovers additional functions (analyzer-discovered symbol-less code) that are absent here",
+      "no Java analyzer runs: no demangler, no function-id signatures, no reference/string analyzers, no DWARF prototype import, no headless analyzer options; the decompiler library performs its own parameter recovery instead",
+      "image addresses are BFD VMAs (PIE base 0, e.g. 0x25a0) instead of the headless image base 0x100000 (e.g. 0x1025a0)",
+      "raw ELF symbol names are preserved (GCC suffixes like .constprop.0 survive) whereas the headless analyzer strips them",
+      "fixture loader ingestion re-implements Architecture::readLoaderSymbols (architecture.cc) but skips undefined import symbols, which console mode would register at offset 0 with no code",
+      "canonical mode decompiles each function in a fresh process/architecture; cross-function analysis state (callee prototype discovery order) can differ from a single-session sequential decompilation — the recorded determinism check proves the hermetic mode is at least self-stable"
+    ],
+    "function_count": 74,
+    "functions": [
+      {
+        "line_count": 10,
+        "name": "_init",
+        "offset": 8192,
+        "sha256": "f07dc69cf35d4d8447f4e9fb114ede9573491204a47481012036872c473d50b5",
+        "size": 27,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "free",
+        "offset": 8944,
+        "sha256": "71a05a246e2c4147323276d43bd48b064e215d974e7722fdaaa697e428b6f33b",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__vfprintf_chk",
+        "offset": 8960,
+        "sha256": "6b519b95915539f48c3222a092a020ebd60dabacd142219976b2610b76d5a541",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strcpy",
+        "offset": 8976,
+        "sha256": "aa858edd0b49b411929544bd03921eabb676306c54fe207b1363ae1b78af69ce",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "puts",
+        "offset": 8992,
+        "sha256": "722175718aa424818031fede0a983c2a607541e14cf479cd661853eba9527246",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "isatty",
+        "offset": 9008,
+        "sha256": "e94c38e078f7aed72c2e3eec8d5277a2913bef393649dd528a235a4c7a808969",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_easy_perform",
+        "offset": 9024,
+        "sha256": "c4d109b896f1a264f52bfc77c52c676db89ec43b5581306b767523bb0a0ff91d",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_slist_append",
+        "offset": 9040,
+        "sha256": "ccda9445590640c5f81a97adb563d01dd470bb74ac3105dda58efbf2e0f61c0c",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "fclose",
+        "offset": 9056,
+        "sha256": "2b0bedbddda037ab21c73272f17512b81b629896c758320f909deff5e61d82ff",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strlen",
+        "offset": 9072,
+        "sha256": "b8f41b643a97c87ea67bee02adafaeee08df05367dc11b68a32a11edae5a8611",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__stack_chk_fail",
+        "offset": 9088,
+        "sha256": "1a3eb9636dd78ebf28af389b92a6f7d0391992b9b0f2dbdac05415b4524a7d54",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strchr",
+        "offset": 9104,
+        "sha256": "b4fb755af612b5fec0914ca927cd1ac18f83bd1e3083116e52c2c02a193400e5",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strrchr",
+        "offset": 9120,
+        "sha256": "95ff445ee42bb42a824d72337277ff90feaf28fcc146ef8255af77b347e079fb",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "maprintf",
+        "offset": 9136,
+        "sha256": "2d0e49fb00d047fa7156d6a849e683e69a457233cb2e1b7081b80c5b932071fe",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "fputc",
+        "offset": 9152,
+        "sha256": "b63e4757a9614df527ba4b83e66b62db6d41e4155f2fb183b2baf55d3696e032",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "fgets",
+        "offset": 9168,
+        "sha256": "5e4af122c26be06232fd3f519426aa8839b49be33fd5f0e4f977711e93f004cb",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strtol",
+        "offset": 9184,
+        "sha256": "b7f6cc36f12fa0de7b7b01aa41e72a8e96de2717f20260c32f340a37c96b22a8",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "memcpy",
+        "offset": 9200,
+        "sha256": "54881cde0f9366d4e1d2ae67328b426cd955264bdd36b3da31d548dae64c4d43",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "time",
+        "offset": 9216,
+        "sha256": "7ff3b7286d40e67b3ce68cfb20f5a2b3f2ff867b2a145bfe6341cb3a3809f3f9",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "fileno",
+        "offset": 9232,
+        "sha256": "90d4da1764281b96498b93936366c10d0373e2b6cbabb96157052afea74856de",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__xstat",
+        "offset": 9248,
+        "sha256": "d9b7bf418741fd45a1f2c14fc5d4d474bd4d84fd5335745e74094a206d7793ad",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "malloc",
+        "offset": 9264,
+        "sha256": "ea18e5504df6760a39aa34cac1dfa777aeb39473ec6aac9864bca436548a559d",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__isoc99_sscanf",
+        "offset": 9280,
+        "sha256": "2e4115524dcc3314ea50c6b04666e90554fb50e06a8bc18ee0c144e18d7c457c",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_easy_init",
+        "offset": 9296,
+        "sha256": "345e6bcf929dd415ada9f3ba2529625c55b9163f264f3704a11fa3f95353a6e6",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_getenv",
+        "offset": 9312,
+        "sha256": "bec176d29f62e1394dcf2c483d84669060a86e1e3ca0f7cb1593dadf59a00873",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "realloc",
+        "offset": 9328,
+        "sha256": "628926cf086f939d4c62d96eb1ecab7e58371b0fa4f62bfb0dbfe1992bd57e33",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__printf_chk",
+        "offset": 9344,
+        "sha256": "4e51b31f7ab93492c2c42398d530a6be32521a49f3319b69b2f1051b0ad2761c",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_version",
+        "offset": 9360,
+        "sha256": "c268442588a86998fd4ad3ea21ef02fc932eef8cb3ec41c175b27a4bcb2a5ce3",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_slist_free_all",
+        "offset": 9376,
+        "sha256": "8e38dc56498b7014637b239c9a09afb259ffa32560d7c62f6d71655ee7380ddd",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "fopen",
+        "offset": 9392,
+        "sha256": "1692754f64f278111857d8e7e3d47e431b380e0b799c9cc815920d986c5adeff",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strcat",
+        "offset": 9408,
+        "sha256": "ad8cf52fe01ebce848cd100ccb20cc3e1c6cdf11edd27b3a47038a6f0feb3764",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_easy_setopt",
+        "offset": 9424,
+        "sha256": "d6fe3100cb0ca46ffc7be3ed6fb9b16da9a046a6ecee9790b63330c41507f23f",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_getdate",
+        "offset": 9440,
+        "sha256": "f9fbcc9f47be3bc840ae60e54b7d15be8dd1dfb703a9256d7403ea749719adff",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "exit",
+        "offset": 9456,
+        "sha256": "237a651c8b1e105b300522d81f8cc023dc8594f8f63f0804ff4333c125401022",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "fwrite",
+        "offset": 9472,
+        "sha256": "89cd5615905a55465fcfa6981dc17dbdbc9d0f3f0904ee5e57de62bbe98bdde2",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__fprintf_chk",
+        "offset": 9488,
+        "sha256": "fb96a51af0fbca485a117335ccad6c3d0b57576f5700c67768aee23c424cea3b",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_easy_cleanup",
+        "offset": 9504,
+        "sha256": "88c8b0eaf464d09cda77f91b3cb4e42cffa5cecb0117e6b0035f9bbd9b05a839",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strdup",
+        "offset": 9520,
+        "sha256": "aa04457258eaac57eeedffd82318affae3fa6e91a4af5a29c7dfeb5acbd7849a",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strequal",
+        "offset": 9536,
+        "sha256": "939e4604d5663f9b187faa8d83b74addee2571bbb8676b84074508c9ed61935a",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "curl_formparse",
+        "offset": 9552,
+        "sha256": "e4fefb6a5f82a23d2cf3f2f82e1473e0a4d38d5d6ea4d6a662eea6ac40876ced",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strstr",
+        "offset": 9568,
+        "sha256": "a7f18ef654843bd362c3c20467523a0f5ab8d5648e9e904853c464a019f5fd39",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "strnequal",
+        "offset": 9584,
+        "sha256": "c2fbb001d3d3c2fbffbb7af7729a5366315e174f95efe66a58170e0573b49f69",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__ctype_b_loc",
+        "offset": 9600,
+        "sha256": "a613bbc90ff8047937c31d8da6d3b2e8c0b64858853063c85e0b38827874282b",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "__sprintf_chk",
+        "offset": 9616,
+        "sha256": "82bed0ec96d2df906e94e020a38a1858f58a41c4a1ca2b0d3ded7e30d00bd275",
+        "size": 11,
+        "status": "OK"
+      },
+      {
+        "line_count": 544,
+        "name": "main",
+        "offset": 9632,
+        "sha256": "babc33bb0425faedf8103faf135976532ed1f2c2703ec916fcccb101289f6ff0",
+        "size": 3583,
+        "status": "OK"
+      },
+      {
+        "line_count": 14,
+        "name": "_start",
+        "offset": 13168,
+        "sha256": "e3f00619ed93a4f407f396b61adf26df5746f6d2f5fb9537bbea4d2aeba184bc",
+        "size": 47,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "deregister_tm_clones",
+        "offset": 13216,
+        "sha256": "825616483a6169c13a9f56f4002e496caef1ea19c2aca934ade532b38247d64c",
+        "size": 41,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "register_tm_clones",
+        "offset": 13264,
+        "sha256": "d0e73ef82a98b600da1d16a72dc48320f51cb2eb3eb567c5024ae90aed38859a",
+        "size": 57,
+        "status": "OK"
+      },
+      {
+        "line_count": 15,
+        "name": "__do_global_dtors_aux",
+        "offset": 13328,
+        "sha256": "46c1cd8aabf39ba5096bcabd9fce3a5fd5b702288cb6edfb535773bbe1f9e99b",
+        "size": 57,
+        "status": "OK"
+      },
+      {
+        "line_count": 10,
+        "name": "frame_dummy",
+        "offset": 13392,
+        "sha256": "0adddb516a0ef037f11409f0256d467134fa156657f677ea2859f685c262c640",
+        "size": 137,
+        "status": "OK"
+      },
+      {
+        "line_count": 19,
+        "name": "my_fwrite",
+        "offset": 13408,
+        "sha256": "66f12219ee54ebec84f9be177c8cc29ab1718cc2b02737014dc50c45f038f49d",
+        "size": 98,
+        "status": "OK"
+      },
+      {
+        "line_count": 78,
+        "name": "myprogress",
+        "offset": 13520,
+        "sha256": "238aafd3c52bcaeb97d7c0cf7e6ac38ed2fb1bef5ea74d6eb783b60d5f0ebab7",
+        "size": 586,
+        "status": "OK"
+      },
+      {
+        "line_count": 18,
+        "name": "GetStr",
+        "offset": 14032,
+        "sha256": "9bb42685ce821c38d45f32dc0859a322870587de1bb6d3ef8c985d575957b800",
+        "size": 74,
+        "status": "OK"
+      },
+      {
+        "line_count": 62,
+        "name": "my_get_token",
+        "offset": 14112,
+        "sha256": "8960cf7b4b35c7f0530a557dc7528f043ab60b06b1fb3e1186efbeda16c106dd",
+        "size": 273,
+        "status": "OK"
+      },
+      {
+        "line_count": 238,
+        "name": "my_get_line",
+        "offset": 14400,
+        "sha256": "9a938fc1f9ccbf2e6c9dcb8ee3c2f0b791340c8c71a5c18bd09eca12027daff1",
+        "size": 1083,
+        "status": "OK"
+      },
+      {
+        "line_count": 160,
+        "name": "helpf",
+        "offset": 14720,
+        "sha256": "d2e12396e7272e0ae4a847671098efb71b6a2fd7508ef0b6fd2d3025c4465cf6",
+        "size": 763,
+        "status": "OK"
+      },
+      {
+        "line_count": 107,
+        "name": "file2string.part.0",
+        "offset": 14992,
+        "sha256": "a0077325a632df81829fb3202ce2ff009348a0c9793eadcc747e7c23e2a70d1e",
+        "size": 491,
+        "status": "OK"
+      },
+      {
+        "line_count": 8,
+        "name": "SetHTTPrequest.part.0",
+        "offset": 15440,
+        "sha256": "557e726950dbd30ae23520016aa9e80b31d0d2c7b5a1a614463f546723e13185",
+        "size": 43,
+        "status": "OK"
+      },
+      {
+        "line_count": 102,
+        "name": "parseconfig.constprop.0",
+        "offset": 15488,
+        "sha256": "043dd537edab8be4a8b9110f42cb4351b2caf7c169aaec0a6f92a40d7c86cda0",
+        "size": 633,
+        "status": "OK"
+      },
+      {
+        "line_count": 401,
+        "name": "getparameter.constprop.0",
+        "offset": 16128,
+        "sha256": "65a49592f98e34f2acd38e35309285cf85b4277c74954f1e1850496898995499",
+        "size": 2663,
+        "status": "OK"
+      },
+      {
+        "line_count": 7,
+        "name": "main_init",
+        "offset": 18784,
+        "sha256": "1bd15ec4e28ec1b301907d19a42cb44bb0817b540fb5bc5fa5ed5d5138ef9f79",
+        "size": 7,
+        "status": "OK"
+      },
+      {
+        "line_count": 7,
+        "name": "main_free",
+        "offset": 18800,
+        "sha256": "a39a6409a532c9908f8b613f2963555fbd741411656777b1bdcc626a449d3075",
+        "size": 5,
+        "status": "OK"
+      },
+      {
+        "line_count": 12,
+        "name": "SetHTTPrequest",
+        "offset": 18816,
+        "sha256": "827d1540595e65eb6f6d2525e27501e28135031ce93c0c3a0ea4a149bb50e121",
+        "size": 3405,
+        "status": "OK"
+      },
+      {
+        "line_count": 22,
+        "name": "progressbarinit",
+        "offset": 18848,
+        "sha256": "a51b8e6fc8a8ba9b3a0d5e0e0d877d949303d59ba01133943fd1d5c1bdd216fe",
+        "size": 9998,
+        "status": "OK"
+      },
+      {
+        "line_count": 15,
+        "name": "hugehelp",
+        "offset": 18944,
+        "sha256": "2d6fafae5674cbc33d4468784bba55ebd45d90dc99da9c429fadfa887f2c6c89",
+        "size": 10036,
+        "status": "OK"
+      },
+      {
+        "line_count": 280,
+        "name": "glob_word",
+        "offset": 19040,
+        "sha256": "f7e7a484a595c6fc55a9cf2330e9f0564d97bdda11ad5851d6c15a7fd8a63406",
+        "size": 1285,
+        "status": "OK"
+      },
+      {
+        "line_count": 157,
+        "name": "glob_set",
+        "offset": 19392,
+        "sha256": "43da450a2f9440062029418cca6fb5eb3915e609f79ac77ec448602f3dffde05",
+        "size": 933,
+        "status": "OK"
+      },
+      {
+        "line_count": 81,
+        "name": "glob_range",
+        "offset": 19808,
+        "sha256": "901ad598d996af9364d2215d57da893db74576467d826608f157c1e7d27826c9",
+        "size": 517,
+        "status": "OK"
+      },
+      {
+        "line_count": 20,
+        "name": "glob_url",
+        "offset": 20336,
+        "sha256": "aa9f227de0a8e760ad75900c161169bf75fca88fdbc41b7dbeed9002abd188ed",
+        "size": 118,
+        "status": "OK"
+      },
+      {
+        "line_count": 105,
+        "name": "next_url",
+        "offset": 20464,
+        "sha256": "d60f605e5bfbf99e6a900bb6c27aa0c54402c9b61379199f93f98fb7a34977cd",
+        "size": 11491,
+        "status": "OK"
+      },
+      {
+        "line_count": 90,
+        "name": "match_url",
+        "offset": 21024,
+        "sha256": "226a43940677f365f918de40f92025184c9434e3f51b764d019b84b85fc1136c",
+        "size": 581,
+        "status": "OK"
+      },
+      {
+        "line_count": 15,
+        "name": "__libc_csu_init",
+        "offset": 21504,
+        "sha256": "259e3ae3a0fe13fdb3d3004fe011eb54bd36277031fc409f67e8193d73791f4f",
+        "size": 101,
+        "status": "OK"
+      },
+      {
+        "line_count": 7,
+        "name": "__libc_csu_fini",
+        "offset": 21616,
+        "sha256": "52a26e0916321c6d153a0279216917b8927e798ac95f2f31b134a6ec2b7cd1a1",
+        "size": 5,
+        "status": "OK"
+      },
+      {
+        "line_count": 7,
+        "name": "_fini",
+        "offset": 21624,
+        "sha256": "edbf098e1e03da3ecfbf906264ac9fafaea29930c538a29fdbdc9c3e037f27a8",
+        "size": 13,
+        "status": "OK"
+      }
+    ],
+    "golden_path": "tests/golden/ghidra_curl_1204.direct-runner.c",
+    "golden_sha256": "56d0d317cb3f7318d9e7eb57f2eee61b4fdebcd1882454f4689a1974f7c11bf3",
+    "headless_comparison": {
+      "changed_text": 72,
+      "first_mismatches": [
+        {
+          "direct_sha256": "f07dc69cf35d4d8447f4e9fb114ede9573491204a47481012036872c473d50b5",
+          "name": "_init",
+          "offset": 8192
+        },
+        {
+          "direct_sha256": "71a05a246e2c4147323276d43bd48b064e215d974e7722fdaaa697e428b6f33b",
+          "name": "free",
+          "offset": 8944
+        },
+        {
+          "direct_sha256": "6b519b95915539f48c3222a092a020ebd60dabacd142219976b2610b76d5a541",
+          "name": "__vfprintf_chk",
+          "offset": 8960
+        },
+        {
+          "direct_sha256": "aa858edd0b49b411929544bd03921eabb676306c54fe207b1363ae1b78af69ce",
+          "name": "strcpy",
+          "offset": 8976
+        },
+        {
+          "direct_sha256": "722175718aa424818031fede0a983c2a607541e14cf479cd661853eba9527246",
+          "name": "puts",
+          "offset": 8992
+        },
+        {
+          "direct_sha256": "e94c38e078f7aed72c2e3eec8d5277a2913bef393649dd528a235a4c7a808969",
+          "name": "isatty",
+          "offset": 9008
+        },
+        {
+          "direct_sha256": "c4d109b896f1a264f52bfc77c52c676db89ec43b5581306b767523bb0a0ff91d",
+          "name": "curl_easy_perform",
+          "offset": 9024
+        },
+        {
+          "direct_sha256": "ccda9445590640c5f81a97adb563d01dd470bb74ac3105dda58efbf2e0f61c0c",
+          "name": "curl_slist_append",
+          "offset": 9040
+        },
+        {
+          "direct_sha256": "2b0bedbddda037ab21c73272f17512b81b629896c758320f909deff5e61d82ff",
+          "name": "fclose",
+          "offset": 9056
+        },
+        {
+          "direct_sha256": "b8f41b643a97c87ea67bee02adafaeee08df05367dc11b68a32a11edae5a8611",
+          "name": "strlen",
+          "offset": 9072
+        }
+      ],
+      "identical_text": 2,
+      "matched_by_offset_and_name": 74,
+      "note": "direct-runner vs canonical headless equivalence gap; differences expected from analyzer-provided signatures/references (see direct-runner risks)"
+    },
+    "ok_count": 74,
+    "runner": {
+      "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+      "build_command": "g++ -std=c++11 -O2 -I<bfd-include> -I<locked-cpp> golden_dump_1204.cc libdecomp.cc sleigh_arch.cc inject_sleigh.cc bfd_arch.cc loadimage_bfd.cc libdecomp.a <libbfd> -lz",
+      "fixture_sha256": "c82028e4d7375b2ca0055aa5deb0fa17536cceaf437ccb45e5d25622823be93d",
+      "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "mode": "one (per-function hermetic process)",
+      "parallel_workers": 12,
+      "per_function_timeout_seconds": 600
+    }
+  },
+  "equivalence_notes": [
+    "canonical golden produced by a real analyzeHeadless distribution built from the locked oracle commit with tools/build_ghidra_1204_headless.sh",
+    "postScript decompilation timeout is 30s per function (tools/ghidra_decompile_all.py); functions exceeding it are recorded as FAILED blocks, not omitted",
+    "addresses use the headless image base 0x100000 for PIE binaries"
+  ],
+  "fixture_id": "ghidra_1204_headless_golden",
+  "functions": [
+    {
+      "line_count": 14,
+      "name": "_init",
+      "offset": 1056768,
+      "sha256": "fc42a4abe53370f7344e62093445f8cda5cf77ed9132c33f02829dad41f92003",
+      "size": 27,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "FUN_00102020",
+      "offset": 1056800,
+      "sha256": "bd1ede01ff3132416db3d01e68ef9d423096aa87cae4917be6978111d65ddbf4",
+      "size": 13,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__cxa_finalize",
+      "offset": 1057504,
+      "sha256": "592e6b07a0050a6a69d0597692dce38811c18d2644ee382a94988a431f7e2e68",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "free",
+      "offset": 1057520,
+      "sha256": "cf8c8cdfdf17137d076bda5a03354ca8590ed8ab645237f08f7a1498c0028419",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__vfprintf_chk",
+      "offset": 1057536,
+      "sha256": "ee970c29477fc0506e1888f1a6562958c86a489df7110784b5f2dc4c17e77922",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strcpy",
+      "offset": 1057552,
+      "sha256": "2e0385f62fde5137e9c11e3c08a35563114ae6a317409724d68a07dd1ee4fe8f",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "puts",
+      "offset": 1057568,
+      "sha256": "b7c6354f80e3748366640a4e9b262804d2127d6de84ed6c11bbbd900aaf93195",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "isatty",
+      "offset": 1057584,
+      "sha256": "b787c2260af6284892e23b979748339e4eaacdad6c61eb3a9213ea133671caf0",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_easy_perform",
+      "offset": 1057600,
+      "sha256": "6e4331a824b1331043e1fd27d3881ec50986efc177f0f34d28d64f7d068f9f36",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_slist_append",
+      "offset": 1057616,
+      "sha256": "aa227709caa32074c1bc43fcd436cb0cb38cc86f8910d6037be8b8f79a938f30",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fclose",
+      "offset": 1057632,
+      "sha256": "ffafb8bdb985a9f050e9a6f674b776b83f84549aae85aeebaf1e2ecef0c145c2",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strlen",
+      "offset": 1057648,
+      "sha256": "104154190c088f80484a8573feccb59bfc311e01603c0c7a2939f54004a127cc",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__stack_chk_fail",
+      "offset": 1057664,
+      "sha256": "ca6c30652fd5c3ae370d28704dfd5b3a1d83c7d43f3c224606ed2fac68882f7c",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strchr",
+      "offset": 1057680,
+      "sha256": "ed51932fe0368ce0e13557f793639b4550d5f7f5d6a229d7bfb640d758577d67",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strrchr",
+      "offset": 1057696,
+      "sha256": "13da26fe2fd836c0edd1e7ecb5aa45783a530394bf456ce7be74fcd1cbc0cf9d",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "maprintf",
+      "offset": 1057712,
+      "sha256": "c5a9f10712e2ceb10798316416fcd81fca8fc1958f5c378ad4eef49b0a763f21",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fputc",
+      "offset": 1057728,
+      "sha256": "68a7362edc1ea246431d9b2829638f1dda03c662f7be0ccf2d9cba099b01f3be",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fgets",
+      "offset": 1057744,
+      "sha256": "eae0cfa65feaa69201f30c24a21ddc6876883f63aec86c28aabc7d6fd2f46fb9",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strtol",
+      "offset": 1057760,
+      "sha256": "f709d2fd9c970e54f4e7ccdd61b47385cc5d55942511d0dff0e16619eb008db3",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "memcpy",
+      "offset": 1057776,
+      "sha256": "fb1dc8d04ab59cdda1742d8f2b7924dcf72034263311e3a119b798de85e1810b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "time",
+      "offset": 1057792,
+      "sha256": "76b429e3e2ca6fdbfb18def12cd58971591375da871239f18a63af9d511a608f",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fileno",
+      "offset": 1057808,
+      "sha256": "981a502fd4b066a1f8df1ebd2cd01e799c7ebd6e028f04ec6fffa97cbb43e8fa",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "__xstat",
+      "offset": 1057824,
+      "sha256": "9474ae8671bae74def03bc106f2d9b2a9e4de0a3bb42d2f5b5d2dca2c91d071b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "malloc",
+      "offset": 1057840,
+      "sha256": "e87fc39fdc4253b4668100f007c2225fdb1d61cc4463ae2646cd70b79566c291",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__isoc99_sscanf",
+      "offset": 1057856,
+      "sha256": "c42c6b85eeb93ca2415e97efcf815072551ca91056b53082a3d59bab9bf15972",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_easy_init",
+      "offset": 1057872,
+      "sha256": "ce0d0bd0f01ea16398bde32f3af269981788d5ff95d6883bc3f853ace7e5083b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_getenv",
+      "offset": 1057888,
+      "sha256": "20cbbea50941d13428fcc3b832388ea906aa2e351da4876fb3877dd9f6510118",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "realloc",
+      "offset": 1057904,
+      "sha256": "6ccbde11ad629571dbfa2a42904d010b485c853299fa3c74ad41879ef55c389b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__printf_chk",
+      "offset": 1057920,
+      "sha256": "07c4d05b59af6ca262d66c0f00202d618eedead6d6f63a37b4d78eaf5afd177a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_version",
+      "offset": 1057936,
+      "sha256": "3ee3fcc9c4a762e7c20ae4ffe343f7cbb439cd417be1646ece871a432437bffb",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_slist_free_all",
+      "offset": 1057952,
+      "sha256": "8e5ef0cf815256b3c0b914e6c2ef42e3bc7b98a19442d13972d30bbc87a241ce",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fopen",
+      "offset": 1057968,
+      "sha256": "00a3778963af4746dd945289a513abf50c507680f7185165dbfdddc3570d231d",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strcat",
+      "offset": 1057984,
+      "sha256": "1fd582b42b934e8d9293f29964f462b32339b94453e41bbaa095db4bb200b17b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_easy_setopt",
+      "offset": 1058000,
+      "sha256": "9ed51b43411758ea1f15b7bbc6588e4650230c83e2e0d3f1118b5ced3409ee3a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_getdate",
+      "offset": 1058016,
+      "sha256": "98b8b718dae4d7088748be71fc16b7a55216883149a0518c7c5c738ce0a7ec37",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "exit",
+      "offset": 1058032,
+      "sha256": "fecae787156d910a8651a30812671835306320efefa1b7bc7b1f0272eda9cbe5",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fwrite",
+      "offset": 1058048,
+      "sha256": "16582c498a5696c708196a01f357de513e4342fced5eaa2bb6d242602d39ea22",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__fprintf_chk",
+      "offset": 1058064,
+      "sha256": "9fc596273d1fdbf3eda42cef69b060806bba8f29f9862702f322daac1feb0af3",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_easy_cleanup",
+      "offset": 1058080,
+      "sha256": "b019b7e465b151648068837b4b9b2936c83f5a7d5c6651abdd9de8b9de92bd6a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strdup",
+      "offset": 1058096,
+      "sha256": "9218682de4667f4c5b6ceb7e4f6b1df77fdfde624ac09d63ef65f1940512313e",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "strequal",
+      "offset": 1058112,
+      "sha256": "2ebcbb79d874a562cf6f3b5cb1404b62813e1821a40c275d77d12b6369f5d9d8",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "curl_formparse",
+      "offset": 1058128,
+      "sha256": "3b44ee9672703429d96060d5abe1c337963412af226e7cb52856f71685b413e1",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strstr",
+      "offset": 1058144,
+      "sha256": "52f59c1d283f95ea5e600493f47b2e7bdf9bf4918abe6aa3856086b3da73340b",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "strnequal",
+      "offset": 1058160,
+      "sha256": "e04a35aed8e5a696305c8f9831bde860dd3e659e81fe64d71733727d96abca6a",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "__ctype_b_loc",
+      "offset": 1058176,
+      "sha256": "02d75adea25502ac5432358cfc99c8c18ba0eef2442153b643c27a08fb2f3765",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "__sprintf_chk",
+      "offset": 1058192,
+      "sha256": "dbfc688bc8a0546ebd54817adb2aa44037642ddf3734749ba2117f65d38daad3",
+      "size": 11,
+      "status": "OK"
+    },
+    {
+      "line_count": 479,
+      "name": "main",
+      "offset": 1058208,
+      "sha256": "186432f6e0c27f618a092a507a872409a03b2122291aa4ed1595f0caa3641cb4",
+      "size": 3510,
+      "status": "OK"
+    },
+    {
+      "line_count": 14,
+      "name": "_start",
+      "offset": 1061744,
+      "sha256": "5c7112877db7ea24b3362db99a0779ed7897e6e949518d6eef3af2fa670beb5b",
+      "size": 47,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "deregister_tm_clones",
+      "offset": 1061792,
+      "sha256": "8f2a06e2e1831d73237f01a45b313beea90c796203880c82d6c36ba64b83648f",
+      "size": 34,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "register_tm_clones",
+      "offset": 1061840,
+      "sha256": "86fd11ec68c1ae58e625086cc14825ea4a454ff8745e9095b135e19a84874e9b",
+      "size": 51,
+      "status": "OK"
+    },
+    {
+      "line_count": 16,
+      "name": "__do_global_dtors_aux",
+      "offset": 1061904,
+      "sha256": "140ed776f6ff07328e0957b239088c8f374462ff9c244c73b505be81f6ecef18",
+      "size": 54,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "frame_dummy",
+      "offset": 1061968,
+      "sha256": "7f4b7ef87344fcf02edc73d7d901235cf7550f675b765622c26d8b0ed3b61763",
+      "size": 9,
+      "status": "OK"
+    },
+    {
+      "line_count": 20,
+      "name": "my_fwrite",
+      "offset": 1061984,
+      "sha256": "12e023158681b2a8ffded0280b10b2145a8d32970eadaeaf5eb74accd5cd7176",
+      "size": 92,
+      "status": "OK"
+    },
+    {
+      "line_count": 65,
+      "name": "myprogress",
+      "offset": 1062096,
+      "sha256": "9a5a192c8aee83d0006068964eab14980cdf7d1678710657447a9aba0eb5c1d0",
+      "size": 477,
+      "status": "OK"
+    },
+    {
+      "line_count": 19,
+      "name": "GetStr",
+      "offset": 1062608,
+      "sha256": "832d96a954bb763e7c352d08e1c8c5a29262cbd84b9254ac584f9530479d12c8",
+      "size": 68,
+      "status": "OK"
+    },
+    {
+      "line_count": 65,
+      "name": "my_get_token",
+      "offset": 1062688,
+      "sha256": "589f75318e56632b98c2e232cee2a940cb784e2f80f64c5fd3127a68df4d966d",
+      "size": 241,
+      "status": "OK"
+    },
+    {
+      "line_count": 70,
+      "name": "my_get_line",
+      "offset": 1062976,
+      "sha256": "f36bba92500fb8c3ba6b20e2703ff1446e64e6b8a23294a2189cfeee8a91147c",
+      "size": 308,
+      "status": "OK"
+    },
+    {
+      "line_count": 69,
+      "name": "helpf",
+      "offset": 1063296,
+      "sha256": "7170c42552156a247a55a32b0f3a7fa3a25e68683433544b91f38d0d401e4983",
+      "size": 267,
+      "status": "OK"
+    },
+    {
+      "line_count": 113,
+      "name": "file2string",
+      "offset": 1063568,
+      "sha256": "24054321268d5572637351970905c9440de50ac289023e4e05d6a2c6e66ffde0",
+      "size": 403,
+      "status": "OK"
+    },
+    {
+      "line_count": 9,
+      "name": "SetHTTPrequest",
+      "offset": 1064016,
+      "sha256": "bbc62144afda9457cc89fb3a98eba62c34ec4d2d52d56efeeb36bfc762cdddb1",
+      "size": 43,
+      "status": "OK"
+    },
+    {
+      "line_count": 106,
+      "name": "parseconfig",
+      "offset": 1064064,
+      "sha256": "566ebdc3bc1e5ccc1919aa8f7466d0e77b6541aac8797bafb03aaf0ea2b7e398",
+      "size": 633,
+      "status": "OK"
+    },
+    {
+      "line_count": 476,
+      "name": "getparameter",
+      "offset": 1064704,
+      "sha256": "5a27b35a9f8601a951675475dd453a19d4826626a5f37586b0a972ff74ba9132",
+      "size": 2609,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "main_init",
+      "offset": 1067360,
+      "sha256": "8fa3f78833b4db5fa3ede5e0c8bfaccca1d12000b8c3d9863479e2db17bdd785",
+      "size": 7,
+      "status": "OK"
+    },
+    {
+      "line_count": 10,
+      "name": "main_free",
+      "offset": 1067376,
+      "sha256": "a838b9a26d139f080a1742316dbe84679bafb625ed0beca215ed2cd0cb687425",
+      "size": 5,
+      "status": "OK"
+    },
+    {
+      "line_count": 15,
+      "name": "SetHTTPrequest",
+      "offset": 1067392,
+      "sha256": "dd16c7d444c5d76b8509b1ee1aaa9b1b92b330163b6c08bcdd2c4833cfd68908",
+      "size": 24,
+      "status": "OK"
+    },
+    {
+      "line_count": 24,
+      "name": "progressbarinit",
+      "offset": 1067424,
+      "sha256": "167c99b4b5be99c6047303e4273a4b962a4a97e5b7c724d88c04d4e8d8076f9a",
+      "size": 90,
+      "status": "OK"
+    },
+    {
+      "line_count": 22,
+      "name": "hugehelp",
+      "offset": 1067520,
+      "sha256": "b1234a758c1d785f393c1f7b27441b0f392f8393e8f519e60a233941d292888b",
+      "size": 84,
+      "status": "OK"
+    },
+    {
+      "line_count": 67,
+      "name": "glob_word",
+      "offset": 1067616,
+      "sha256": "c4e5f32242475d9f038c2c8ea5997b6d2db8c8e481411d2b6cc3f8b81e04ffe8",
+      "size": 323,
+      "status": "OK"
+    },
+    {
+      "line_count": 85,
+      "name": "glob_set",
+      "offset": 1067968,
+      "sha256": "578c3c1303b304ad08fd18ce0109f2d18733651d1cbd6b883160e8b0b54b9e08",
+      "size": 400,
+      "status": "OK"
+    },
+    {
+      "line_count": 76,
+      "name": "glob_range",
+      "offset": 1068384,
+      "sha256": "2c5d1a1dd565ccffcdeb5f390721c2e231b036e945b1e30163c635d46e1bd11a",
+      "size": 503,
+      "status": "OK"
+    },
+    {
+      "line_count": 21,
+      "name": "glob_url",
+      "offset": 1068912,
+      "sha256": "2ef6e5c5ea9281152c53479cbc3aeed0fb425392773e513aaa9392d85ad97ace",
+      "size": 116,
+      "status": "OK"
+    },
+    {
+      "line_count": 101,
+      "name": "next_url",
+      "offset": 1069040,
+      "sha256": "7cfdad059c82e75cd0d5fbaba42b4d1c7473cba9545fd89319ed90dc5ffb042d",
+      "size": 502,
+      "status": "OK"
+    },
+    {
+      "line_count": 83,
+      "name": "match_url",
+      "offset": 1069600,
+      "sha256": "769d6bea44f9a2440bc9acaa0aafe61c971660ee1ec5da4e0211074562cbc898",
+      "size": 443,
+      "status": "OK"
+    },
+    {
+      "line_count": 17,
+      "name": "__libc_csu_init",
+      "offset": 1070080,
+      "sha256": "446e985d498c4d24cf572d934942d552df2bf2ed96ac8f8c0ea739176616bb65",
+      "size": 101,
+      "status": "OK"
+    },
+    {
+      "line_count": 8,
+      "name": "__libc_csu_fini",
+      "offset": 1070192,
+      "sha256": "28f2bebc98f6c200d7a9866ca160df52f412d2cf6c0395d9269d8b02a1964311",
+      "size": 5,
+      "status": "OK"
+    },
+    {
+      "line_count": 8,
+      "name": "_fini",
+      "offset": 1070200,
+      "sha256": "177259035e15520972da4796983fec4c425c32898cf557d64232e9bf18fb7e3a",
+      "size": 13,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "free",
+      "offset": 1150976,
+      "sha256": "9c05d845fc8386c3c64818efe2112e9019c15d2dd5ff74d4dc4758ec58869807",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__vfprintf_chk",
+      "offset": 1150984,
+      "sha256": "6e55534a6413098053551a4b9020b07df857827c25bc1c84bf1b61ae972bbcca",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "_ITM_deregisterTMCloneTable",
+      "offset": 1150992,
+      "sha256": "f0947cab12b28b7dd2153786d40130f76a12591e036fe8224b6c6aa3e2b99844",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strcpy",
+      "offset": 1151000,
+      "sha256": "f07ab4c2cf23ac3cfe68ef586422b9f42feb4ff03adce71093b65b9a86a2dfa6",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "puts",
+      "offset": 1151008,
+      "sha256": "3c586781986b18a5b04719db9c516b6eacd2408744c3653872b6702ab764b8db",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "isatty",
+      "offset": 1151016,
+      "sha256": "92ed7f635c771963963af7118eae2f4ec2d22ff857217879c17b9d774552440c",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_easy_perform",
+      "offset": 1151024,
+      "sha256": "d01b45f1a34aa1a9ec7bb348341e58ab951d7c2a98d7320185d2f1e64349abe1",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_slist_append",
+      "offset": 1151032,
+      "sha256": "d8083acd3fa470e7fc3f04041203edaffcbb482f4852ff4ed66e301882090464",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fclose",
+      "offset": 1151040,
+      "sha256": "09be36b3a4617fac636286519276cccb7c5f8d877e60d11a58f35dea50cdcf32",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strlen",
+      "offset": 1151048,
+      "sha256": "54de0247ff738c5e1414a3a680690a4c8351fb07b326b02fddb16ee068351e8b",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__stack_chk_fail",
+      "offset": 1151056,
+      "sha256": "752606d2df96f9b4cbb7b152a55162586c8020875c5df60c303f735e6466a918",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strchr",
+      "offset": 1151064,
+      "sha256": "cb4d18656e70fb122559b6faa74cea11086ee2fc2f8b277b999cc027a091b1c6",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strrchr",
+      "offset": 1151072,
+      "sha256": "92016f1d57750c7d99a466e773d2167628d4784f82105996faeeffc66893edc9",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "maprintf",
+      "offset": 1151080,
+      "sha256": "75da5c148e6146d765cdec118f78020e30d344134f57783e81cd516f0558d3f3",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fputc",
+      "offset": 1151088,
+      "sha256": "4eb0cfda146ca3a6a4c262824a67ddd05471493627b4e9d0f7675f30143fbeac",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__libc_start_main",
+      "offset": 1151096,
+      "sha256": "af74e77b8739a2610e75328549a3eae3bd77b54621d87cdb40c4986472496bd6",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fgets",
+      "offset": 1151104,
+      "sha256": "43e8ce10e5f8f2abc64abead29ee881387f2419247517d64ed08087ca60998ca",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "__gmon_start__",
+      "offset": 1151112,
+      "sha256": "24617c560d3ef0634fbf743b9e5588d6e7c14a9acf5a70c027175f7b75e6f086",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strtol",
+      "offset": 1151120,
+      "sha256": "78813ae97ba87a8d354eb755e36726d81fb7965a2ef14421bcfe8be786d674aa",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "memcpy",
+      "offset": 1151128,
+      "sha256": "2a4a373591fa63b84e6e23b6591f3163dc68b142375143ea0d639d8cf41fde0f",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "time",
+      "offset": 1151136,
+      "sha256": "d66f648d4729edcef67e921ef0bbdad3581be1012e2a122a01b5b17c1e3fec55",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fileno",
+      "offset": 1151144,
+      "sha256": "4ba6feb9cf438bd91acf7c2b8b1c5643bfc7a286745b8a52a08a99016e40df74",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "__xstat",
+      "offset": 1151152,
+      "sha256": "a992f5532f495b0e9f685335fc7ec14aeb3686bd9e16b9da3cdd254467fbf88f",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "malloc",
+      "offset": 1151160,
+      "sha256": "b69bc2c48e1d802edf44f6ea9fde6a86a3b753420d7c220ee566b87b93cc0059",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__isoc99_sscanf",
+      "offset": 1151168,
+      "sha256": "e8d66f4dd739944db9c8683f7f4427e52e68fb177b5db07c9b3e08fda1557ece",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_easy_init",
+      "offset": 1151176,
+      "sha256": "1f39ce69a584ddb0ddb3e1d928cd8232936a620b76c6698b79af6d7642b0d593",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_getenv",
+      "offset": 1151184,
+      "sha256": "ef8fd461c29824f8154efe5341327aaa4daa27855fb563cb661cc14e409fe954",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "realloc",
+      "offset": 1151192,
+      "sha256": "e443b29055c4e2b25a6dff01fce8ee35218c7d65ffed0e82da776aeef3e4f089",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__printf_chk",
+      "offset": 1151200,
+      "sha256": "2150c92e9dc6973c717ffba7b893c141c303e6fefa9de83d30215c00e0e77d2d",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_version",
+      "offset": 1151208,
+      "sha256": "48ca80001e4847aa6c11086366045d03c34329baa8212a05896e7db6a574fd56",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_slist_free_all",
+      "offset": 1151216,
+      "sha256": "132853b00fc107173d8eaac16eec5358f8abb7732a684520dcb15a284c77bb47",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fopen",
+      "offset": 1151224,
+      "sha256": "1dd2259b18d5d4f2a52814712a3c561e33048aa5f0cb599aaffcc901714fd707",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strcat",
+      "offset": 1151232,
+      "sha256": "43b4957b29471706c0fb70ee6f1d3ce866cbe448c95335b3fea17549e96f1076",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_easy_setopt",
+      "offset": 1151240,
+      "sha256": "07c55edfa3ba2fcae81064d3dd68d5c7368466c8a839eb6b7d28c5458514efb2",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_getdate",
+      "offset": 1151248,
+      "sha256": "233d44790685c22f6a62e9d8787546750a0fefe7f7b27eff8ddbeffb7847b493",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "exit",
+      "offset": 1151256,
+      "sha256": "e09589ce15e5798cd1a5afc5c4b6873b83c88be7471e6f6fbf4a3a401ce5bdac",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "fwrite",
+      "offset": 1151264,
+      "sha256": "ebac8684ba84881fd01ce48538e6c1d117d83b829de4bbff5a292d691b5a003c",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__fprintf_chk",
+      "offset": 1151272,
+      "sha256": "dfb4a6585ebe41afecc5912053813c25baa724ab11fced21ea3ecbccff61b4f0",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "_ITM_registerTMCloneTable",
+      "offset": 1151280,
+      "sha256": "9adc4ab32421392d76c566db17f8fc78b547bfc8224faf3e84fdc17e1ea71618",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_easy_cleanup",
+      "offset": 1151288,
+      "sha256": "e1300733d56193ca613b08c900ab8d033f426b9865f88d60585371d6da7e1d41",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strdup",
+      "offset": 1151296,
+      "sha256": "ab64304dc5be39ddf23d7ef6ba605d669878fee51ec32c3bbd211871b8f297d8",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "strequal",
+      "offset": 1151304,
+      "sha256": "27ff3a096a1a80df6a35276a612e29f1ca09ff4e59a8fcdb60862907fe510180",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "curl_formparse",
+      "offset": 1151312,
+      "sha256": "9b9ddd6f9df507e397d04f23dc509248299edd4511fe091a52103800572aab72",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "strstr",
+      "offset": 1151320,
+      "sha256": "8297928ba557f17572db1ba97a1b34cbaa9bdc71537123e77de95ec01119c5a6",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "strnequal",
+      "offset": 1151328,
+      "sha256": "37bfaca0caf43f8d8e2f5559d88abdeb921dc556f1cc104cba3d2bbaed50972b",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 13,
+      "name": "__ctype_b_loc",
+      "offset": 1151336,
+      "sha256": "41f1dbe190ba56ed615e5260b8c8809f425cd5f737d3499b7252c442bf3fce45",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 12,
+      "name": "__sprintf_chk",
+      "offset": 1151344,
+      "sha256": "d244d4946accfabe5043aa0038cad90ce86bb80eb2998ecfe6f74fa0d500c978",
+      "size": 1,
+      "status": "OK"
+    },
+    {
+      "line_count": 11,
+      "name": "__cxa_finalize",
+      "offset": 1151352,
+      "sha256": "ba074b8770899d358474a9291c2053a05ccee823070ece7fe5e1282dd0376d2a",
+      "size": 1,
+      "status": "OK"
+    }
+  ],
+  "generated_utc": "2026-08-15T10:16:12Z",
+  "generator": "tools/regen_ghidra_golden.py",
+  "golden": {
+    "address_note": "headless image base 0x100000 for PIE inputs",
+    "path": "tests/golden/ghidra_curl_1204.c",
+    "sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+    "total_lines": 3318
+  },
+  "input": {
+    "function_count": 124,
+    "function_discovery": "full headless analysis (loader, PLT, references, demangler, DWARF, ...)",
+    "lineage_note": "examples/curl was replaced on 2026-08-13 (DWARF added, GetStr 74 bytes); sha256 differs from the 4ee4002b... recorded in the 2026-08-12 DWARF-PROTO-0001 era and from the older binary behind the 11.3.2 golden (68-byte GetStr)",
+    "path": "examples/curl",
+    "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+  },
+  "legacy_diff": {
+    "changed_examples": [
+      {
+        "diff_lines": 9,
+        "legacy_name": "_init",
+        "new_name": "_init",
+        "offset": 8192
+      },
+      {
+        "diff_lines": 10,
+        "legacy_name": "main",
+        "new_name": "main",
+        "offset": 9632
+      },
+      {
+        "diff_lines": 3,
+        "legacy_name": "__do_global_dtors_aux",
+        "new_name": "__do_global_dtors_aux",
+        "offset": 13328
+      },
+      {
+        "diff_lines": 3,
+        "legacy_name": "myprogress",
+        "new_name": "myprogress",
+        "offset": 13520
+      },
+      {
+        "diff_lines": 13,
+        "legacy_name": "my_get_token",
+        "new_name": "my_get_token",
+        "offset": 14112
+      },
+      {
+        "diff_lines": 36,
+        "legacy_name": "my_get_line",
+        "new_name": "my_get_line",
+        "offset": 14400
+      },
+      {
+        "diff_lines": 91,
+        "legacy_name": "file2string",
+        "new_name": "file2string",
+        "offset": 14992
+      },
+      {
+        "diff_lines": 10,
+        "legacy_name": "parseconfig",
+        "new_name": "parseconfig",
+        "offset": 15488
+      },
+      {
+        "diff_lines": 21,
+        "legacy_name": "getparameter",
+        "new_name": "getparameter",
+        "offset": 16128
+      },
+      {
+        "diff_lines": 3,
+        "legacy_name": "main_init",
+        "new_name": "main_init",
+        "offset": 18784
+      },
+      {
+        "diff_lines": 7,
+        "legacy_name": "glob_set",
+        "new_name": "glob_set",
+        "offset": 19392
+      },
+      {
+        "diff_lines": 3,
+        "legacy_name": "glob_url",
+        "new_name": "glob_url",
+        "offset": 20336
+      },
+      {
+        "diff_lines": 4,
+        "legacy_name": "match_url",
+        "new_name": "match_url",
+        "offset": 21024
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "_fini",
+        "new_name": "_fini",
+        "offset": 21624
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "free",
+        "new_name": "free",
+        "offset": 102400
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "__vfprintf_chk",
+        "new_name": "__vfprintf_chk",
+        "offset": 102408
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "_ITM_deregisterTMCloneTable",
+        "new_name": "_ITM_deregisterTMCloneTable",
+        "offset": 102416
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "strcpy",
+        "new_name": "strcpy",
+        "offset": 102424
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "puts",
+        "new_name": "puts",
+        "offset": 102432
+      },
+      {
+        "diff_lines": 1,
+        "legacy_name": "isatty",
+        "new_name": "isatty",
+        "offset": 102440
+      }
+    ],
+    "changed_line_delta_total": 261,
+    "changed_text": 61,
+    "identical_text": 62,
+    "input_drift_note": "the 11.3.2 golden was generated from an older, different curl binary (68-byte GetStr); part of the changed_text count is input drift, not Ghidra version drift",
+    "legacy_function_count": 124,
+    "legacy_ghidra_version": "11.3.2",
+    "legacy_golden": "tests/golden/ghidra_curl.c",
+    "matched": 123,
+    "new_function_count": 124,
+    "note": "matched by (relative offset, gcc-suffix-stripped name); addresses rebased to the PIE-relative base",
+    "only_in_1204": [
+      {
+        "name": "__cxa_finalize",
+        "offset": 8928
+      }
+    ],
+    "only_in_legacy": [
+      {
+        "name": "FUN_001022e0",
+        "offset": 8928,
+        "plt_stub_estimate": false
+      }
+    ],
+    "only_in_legacy_plt_stub_estimate": 0
+  },
+  "oracle": {
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "product": "ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "version": "12.0.4"
+  },
+  "path": {
+    "analyzeHeadless": "/tmp/rugra-ghidra-1204-headless/dist/ghidra_12.0.4_DEV/support/analyzeHeadless",
+    "build_environment": {
+      "analyzeHeadless": "/tmp/rugra-ghidra-1204-headless/dist/ghidra_12.0.4_DEV/support/analyzeHeadless",
+      "distribution_root": "/tmp/rugra-ghidra-1204-headless/dist/ghidra_12.0.4_DEV",
+      "distribution_zip": "/tmp/rugra-ghidra-1204-headless/src/build/dist/ghidra_12.0.4_DEV_20260815_linux_x86_64.zip",
+      "gradle_version": "8.14.3",
+      "jdk_home": "/tmp/rugra-ghidra-1204-headless/jdk21",
+      "jdk_release_sha256": "95831ab52b5291e8df70cb96cd3693171d462f2740949f05f5c03a51eb3a92fa",
+      "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+      "oracle_tag": "Ghidra_12.0.4_build"
+    },
+    "built_by": "tools/build_ghidra_1204_headless.sh",
+    "distribution_root": "/tmp/rugra-ghidra-1204-headless/dist/ghidra_12.0.4_DEV",
+    "selected": "path1_headless_distribution"
+  },
+  "schema": 1
+}
