@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Content-addressed, fail-closed cache for Rugra oracle artifacts."""
+"""Content-addressed, fail-closed cache for Rugra oracle artifacts.
+
+Captured commands execute under exactly the environment recorded in the
+provenance (``Popen(env=...)`` is the declared snapshot; undeclared ambient
+variables are invisible, PATH-like content changes rotate the key). Ambient
+environment or provenance drift observed after execution refuses to store,
+and every restore cross-checks the full artifact bundle closure (hash, size,
+structure, missing/extra) before a single byte is published.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -37,6 +46,22 @@ DEFAULT_ENV_KEYS = (
     "RUSTFLAGS",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
+)
+# Ambient variables that execution itself depends on even when the caller did
+# not declare them (cargo/rustc default to $HOME, mktemp honors TMPDIR,
+# dynamic loaders honor LD_LIBRARY_PATH, GCC locale catalogs honor LANG/LC_*).
+# They are always declared for capture so the executed environment and the
+# provenance environment stay byte-identical.
+EXEC_ENV_KEYS = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LD_LIBRARY_PATH",
+    "TMPDIR",
 )
 
 
@@ -187,6 +212,69 @@ def parse_context(values: list[str]) -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
+def capture_env_names(extra: list[str]) -> list[str]:
+    """Every environment variable declared for a capture execution.
+
+    The child environment handed to ``Popen(env=...)`` is derived from exactly
+    this snapshot: a name with a ``None`` value is absent for the child, and
+    nothing outside this set is ever visible to the captured command.
+    """
+    return sorted(set(DEFAULT_ENV_KEYS).union(EXEC_ENV_KEYS).union(extra))
+
+
+def environment_snapshot(names: list[str]) -> dict[str, str | None]:
+    """Materialize the declared environment once; ``None`` marks absence."""
+    return {name: os.environ.get(name) for name in names}
+
+
+def child_environment(snapshot: dict[str, str | None]) -> dict[str, str]:
+    """The exact ``Popen(env=...)`` mapping for a provenance snapshot.
+
+    Inverse property: the child observes a variable if and only if it is
+    declared with a non-``None`` value in the provenance environment.
+    """
+    return {
+        name: value
+        for name, value in snapshot.items()
+        if isinstance(value, str)
+    }
+
+
+def environment_drift(snapshot: dict[str, str | None]) -> list[str]:
+    """Declared variables whose ambient value moved away from the snapshot."""
+    return sorted(
+        name for name, value in snapshot.items() if os.environ.get(name) != value
+    )
+
+
+def resolve_executable(
+    program: str, exec_env: dict[str, str], root: Path
+) -> Path | None:
+    """Resolve argv0 exactly the way ``os.execvpe`` will for the child.
+
+    PATH lookup uses the child environment's PATH (falling back to
+    ``os.defpath`` like execvpe), never the parent's, so the fingerprinted
+    executable is the one the child actually executes. Relative entries and
+    relative slash-paths resolve against the child working directory ``root``.
+    """
+    candidate = Path(program)
+    if os.sep in program or (os.altsep and os.altsep in program):
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        # os.path.isfile stays False on unsearchable PATH directories
+        # instead of raising like Path.is_file().
+        return candidate if os.path.isfile(candidate) else None
+    search_path = exec_env.get("PATH", os.defpath)
+    for directory in search_path.split(os.pathsep):
+        base = Path(directory) if directory else Path(".")
+        if not base.is_absolute():
+            base = root / base
+        candidate = base / program
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def build_provenance(args: argparse.Namespace, root: Path, command: list[str] | None = None) -> dict[str, Any]:
     metadata_path = user_path(root, args.metadata)
     if metadata_path.is_symlink():
@@ -219,20 +307,14 @@ def build_provenance(args: argparse.Namespace, root: Path, command: list[str] | 
         if not command:
             raise CacheError("capture requires a command after --")
         provenance["command"] = command
-        executable = shutil.which(command[0])
-        if executable is None:
-            candidate = user_path(root, command[0])
-            if candidate.is_file():
-                executable = str(candidate)
+        environment = environment_snapshot(capture_env_names(args.env))
+        provenance["environment"] = environment
+        executable = resolve_executable(command[0], child_environment(environment), root)
         if executable is None:
             raise CacheError(f"capture command executable not found: {command[0]}")
         provenance["command_executable"] = fingerprint_path(
-            "argv0", Path(executable).resolve(), root
+            "argv0", executable.resolve(), root
         )
-        provenance["environment"] = {
-            name: os.environ.get(name)
-            for name in sorted(set(DEFAULT_ENV_KEYS).union(args.env))
-        }
     return provenance
 
 
@@ -430,6 +512,7 @@ def restore_entry(entry: Path, manifest: dict[str, Any], output: Path) -> None:
     temporary = output.parent / f".{output.name}.{os.getpid()}.{time.time_ns()}.tmp"
     try:
         temporary.mkdir()
+        restored: dict[str, tuple[int, str]] = {}
         for record in artifact_records(entry, manifest):
             name = str(record["name"])
             source = entry / "artifacts" / name
@@ -437,6 +520,29 @@ def restore_entry(entry: Path, manifest: dict[str, Any], output: Path) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
             destination.chmod(0o555 if record.get("executable") else 0o444)
+            # Cross-check every restored artifact against the manifest: hash,
+            # size, and (via stable_file_record's before/after stat identity)
+            # mid-copy mutation of the bytes just written.
+            size, digest = stable_file_record(destination)
+            if size != record.get("size"):
+                raise CacheError(f"restored artifact size mismatch: {name}")
+            if digest != record.get("sha256"):
+                raise CacheError(f"restored artifact hash mismatch: {name}")
+            restored[name] = (size, digest)
+        actual: set[str] = set()
+        for candidate in temporary.rglob("*"):
+            if candidate.is_symlink():
+                raise CacheError(f"restored bundle contains a symlink: {candidate}")
+            if candidate.is_file():
+                actual.add(candidate.relative_to(temporary).as_posix())
+        if actual != set(restored):
+            raise CacheError(
+                "restored bundle closure mismatch: "
+                f"expected={sorted(restored)} actual={sorted(actual)}"
+            )
+        # TOCTOU closure: the cache entry must still validate identically
+        # after the copy, proving no source artifact was swapped mid-restore.
+        artifact_records(entry, manifest)
         os.rename(temporary, output)
     except Exception:
         remove_tree(temporary)
@@ -456,6 +562,12 @@ def result_document(key: str, entry: Path, manifest: dict[str, Any], hit: bool) 
 def capture(args: argparse.Namespace, root: Path, command: list[str]) -> int:
     provenance = build_provenance(args, root, command)
     key = provenance_key(provenance)
+    # The executed environment is derived verbatim from the provenance
+    # snapshot: every variable visible to the child is declared with a
+    # non-None value in provenance["environment"], and nothing else leaks in
+    # through process inheritance.
+    environment = dict(provenance["environment"])
+    exec_env = child_environment(environment)
     cache_dir = user_path(root, args.cache_dir)
     if args.timeout <= 0:
         raise CacheError("--timeout must be positive")
@@ -474,6 +586,21 @@ def capture(args: argparse.Namespace, root: Path, command: list[str]) -> int:
             required = {"stdout.bin", "stderr.bin", "result.json"}
             if set(records) != required:
                 raise CacheError(f"captured cache entry has unexpected artifacts: {sorted(records)}")
+            stdout_blob = (entry / "artifacts" / "stdout.bin").read_bytes()
+            stderr_blob = (entry / "artifacts" / "stderr.bin").read_bytes()
+            # Replay cross-check: the bytes about to be echoed are hashed
+            # against the verified manifest, so a swap between verify_entry
+            # and the read cannot be replayed verbatim.
+            if (
+                len(stdout_blob) != records["stdout.bin"]["size"]
+                or sha256_bytes(stdout_blob) != records["stdout.bin"]["sha256"]
+            ):
+                raise CacheError("captured stdout was swapped after verification")
+            if (
+                len(stderr_blob) != records["stderr.bin"]["size"]
+                or sha256_bytes(stderr_blob) != records["stderr.bin"]["sha256"]
+            ):
+                raise CacheError("captured stderr was swapped after verification")
             result = load_json(entry / "artifacts" / "result.json")
             if not isinstance(result, dict) or result.get("schema") != SCHEMA:
                 raise CacheError("captured result has an invalid schema")
@@ -483,9 +610,9 @@ def capture(args: argparse.Namespace, root: Path, command: list[str]) -> int:
                 raise CacheError("captured stdout/result hash mismatch")
             if result.get("stderr_sha256") != records["stderr.bin"]["sha256"]:
                 raise CacheError("captured stderr/result hash mismatch")
-            sys.stdout.buffer.write((entry / "artifacts" / "stdout.bin").read_bytes())
+            sys.stdout.buffer.write(stdout_blob)
             sys.stdout.buffer.flush()
-            sys.stderr.buffer.write((entry / "artifacts" / "stderr.bin").read_bytes())
+            sys.stderr.buffer.write(stderr_blob)
             sys.stderr.write(f"[oracle-cache] HIT {key}\n")
             sys.stderr.flush()
             return 0
@@ -494,6 +621,7 @@ def capture(args: argparse.Namespace, root: Path, command: list[str]) -> int:
     process = subprocess.Popen(
         command,
         cwd=root,
+        env=exec_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -516,6 +644,21 @@ def capture(args: argparse.Namespace, root: Path, command: list[str]) -> int:
     sys.stderr.buffer.flush()
     if process.returncode != 0:
         return process.returncode
+    # Post-readback drift gate (fail closed; the command output above was
+    # already relayed, but nothing enters the cache). The ambient environment
+    # must not have moved while the command executed, and re-deriving the full
+    # provenance must reproduce the same key, which also catches inputs,
+    # tools, or the resolved executable being swapped mid-run.
+    drift = environment_drift(environment)
+    if drift:
+        raise CacheError(
+            "environment drifted while the command executed, refusing to store: "
+            + ", ".join(drift)
+        )
+    if provenance_key(build_provenance(args, root, command)) != key:
+        raise CacheError(
+            "provenance drifted while the command executed, refusing to store"
+        )
     with tempfile.TemporaryDirectory(prefix="rugra-oracle-capture-") as raw_temp:
         temp = Path(raw_temp)
         stdout_path = temp / "stdout.bin"
@@ -582,6 +725,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def self_test() -> int:
     root = Path(__file__).resolve().parent.parent
+    python = sys.executable
     with tempfile.TemporaryDirectory(prefix="rugra-oracle-cache-test-") as raw_temp:
         temp = Path(raw_temp)
         metadata = temp / "metadata.json"
@@ -610,7 +754,10 @@ def self_test() -> int:
             tool=[f"runner={tool_path}"],
             comparand=[f"rust={comparand_path}"],
             context=["mode=test"],
+            env=[],
         )
+
+        # --- store / verify / restore / tamper --------------------------------
         provenance = build_provenance(args, root)
         key = provenance_key(provenance)
         cache_dir = temp / "cache"
@@ -628,8 +775,9 @@ def self_test() -> int:
         input_path.write_bytes(b"changed")
         changed = build_provenance(args, root)
         assert provenance_key(changed) != key
+        input_path.write_bytes(b"input")
         cached = entry / "artifacts/stages/one.json"
-        cached.chmod(0o644)
+        make_writable(entry)
         cached.write_text("tampered\n", encoding="utf-8")
         try:
             verify_entry(cache_dir, provenance)
@@ -637,6 +785,332 @@ def self_test() -> int:
             assert "mismatch" in str(error)
         else:
             raise AssertionError("tampered artifact passed verification")
+
+        # --- environment snapshot matrix -------------------------------------
+        declared = "RUGRA_CACHE_TEST_DECLARED"
+        undeclared = "RUGRA_CACHE_TEST_UNDECLARED"
+        absent = "RUGRA_CACHE_TEST_ABSENT_1204"
+        original_path = os.environ.get("PATH")
+        assert original_path, "self-test requires an ambient PATH"
+        try:
+            os.environ[undeclared] = "ambient-payload"
+            os.environ[declared] = "v1"
+            names = capture_env_names([declared])
+            assert declared in names and undeclared not in names and absent not in names
+            snapshot = environment_snapshot(names)
+            assert snapshot[declared] == "v1" and snapshot.get(absent) is None
+            exec_env = child_environment(snapshot)
+            assert exec_env.get(declared) == "v1"
+            assert all(isinstance(value, str) for value in exec_env.values())
+            assert undeclared not in exec_env and absent not in exec_env
+            assert environment_drift(snapshot) == []
+            env_args = argparse.Namespace(**{**vars(args), "env": [declared]})
+            env_probe = [python, "-c", "pass"]
+            key_v1 = provenance_key(build_provenance(env_args, root, env_probe))
+            # declared value drift is detected and changes the key
+            os.environ[declared] = "v2"
+            assert environment_drift(snapshot) == [declared]
+            assert provenance_key(build_provenance(env_args, root, env_probe)) != key_v1
+            os.environ[declared] = "v1"
+            # PATH content change changes the key
+            os.environ["PATH"] = f"{temp / 'no-such-dir'}{os.pathsep}{original_path}"
+            assert provenance_key(build_provenance(env_args, root, env_probe)) != key_v1
+        finally:
+            os.environ["PATH"] = original_path
+            os.environ.pop(undeclared, None)
+            os.environ.pop(declared, None)
+
+        # --- executable resolution matrix ------------------------------------
+        assert (
+            resolve_executable("tools/oracle_cache.py", {"PATH": ""}, root)
+            == root / "tools/oracle_cache.py"
+        )
+        assert resolve_executable("no-such-binary-1204", {"PATH": "/usr/bin"}, root) is None
+        bin_dir = temp / "probebin"
+        bin_dir.mkdir()
+        probe = bin_dir / "rugra-cache-probe"
+        probe.write_text("#!/bin/sh\necho v1\n", encoding="utf-8")
+        probe.chmod(0o755)
+        try:
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{original_path}"
+            probe_args = argparse.Namespace(**{**vars(args), "env": []})
+            probe_key_v1 = provenance_key(
+                build_provenance(probe_args, root, ["rugra-cache-probe"])
+            )
+            # same PATH directory, different executable content -> new key
+            probe.write_text("#!/bin/sh\necho v2\n", encoding="utf-8")
+            probe.chmod(0o755)
+            assert (
+                provenance_key(build_provenance(probe_args, root, ["rugra-cache-probe"]))
+                != probe_key_v1
+            )
+            # outside the declared PATH the probe must be invisible
+            os.environ["PATH"] = original_path
+            try:
+                build_provenance(probe_args, root, ["rugra-cache-probe"])
+            except CacheError as error:
+                assert "executable not found" in str(error)
+            else:
+                raise AssertionError("probe resolved outside the child PATH")
+        finally:
+            os.environ["PATH"] = original_path
+
+        # --- capture end-to-end through the CLI ------------------------------
+        def run_cli(cli_env: dict[str, str], cache: Path, command: list[str]):
+            return subprocess.run(
+                [
+                    python,
+                    "tools/oracle_cache.py",
+                    "capture",
+                    "--metadata",
+                    str(metadata),
+                    "--input",
+                    f"sample={input_path}",
+                    "--tool",
+                    f"runner={tool_path}",
+                    "--comparand",
+                    f"rust={comparand_path}",
+                    "--context",
+                    "mode=test",
+                    "--env",
+                    "RUGRA_CACHE_TEST_CLI",
+                    "--cache-dir",
+                    str(cache),
+                    "--timeout",
+                    "30",
+                    "--",
+                    *command,
+                ],
+                cwd=root,
+                env=cli_env,
+                capture_output=True,
+            )
+
+        env_dump = temp / "env_dump.py"
+        env_dump.write_text(
+            "import json, os\nprint(json.dumps(dict(os.environ), sort_keys=True))\n",
+            encoding="utf-8",
+        )
+        cli_cache = temp / "cli-cache"
+        cli_env = dict(os.environ)
+        cli_env["RUGRA_ATTACK_UNDECLARED"] = "ambient-payload"
+        cli_env["RUGRA_CACHE_TEST_CLI"] = "ok"
+        first = run_cli(cli_env, cli_cache, [python, str(env_dump)])
+        assert first.returncode == 0, first.stderr.decode()
+        assert b"STORE" in first.stderr
+        observed_env = json.loads(first.stdout.decode("utf-8"))
+        expected_env = child_environment(
+            {
+                name: cli_env.get(name)
+                for name in capture_env_names(["RUGRA_CACHE_TEST_CLI"])
+            }
+        )
+        # Popen(env=...) is exactly the provenance environment: undeclared
+        # ambient variables are invisible to the captured command.
+        assert observed_env == expected_env
+        assert "RUGRA_ATTACK_UNDECLARED" not in observed_env
+        assert observed_env["RUGRA_CACHE_TEST_CLI"] == "ok"
+        # undeclared ambient change neither busts the cache nor leaks in
+        cli_env["RUGRA_ATTACK_UNDECLARED"] = "different-payload"
+        replay = run_cli(cli_env, cli_cache, [python, str(env_dump)])
+        assert replay.returncode == 0, replay.stderr.decode()
+        assert b"HIT" in replay.stderr
+        assert replay.stdout == first.stdout
+        # declared value change must produce a different key (miss)
+        cli_env["RUGRA_CACHE_TEST_CLI"] = "tampered"
+        rotated = run_cli(cli_env, cli_cache, [python, str(env_dump)])
+        assert rotated.returncode == 0, rotated.stderr.decode()
+        assert b"STORE" in rotated.stderr
+        assert json.loads(rotated.stdout.decode("utf-8"))["RUGRA_CACHE_TEST_CLI"] == "tampered"
+        # PATH value change must produce a different key (miss)
+        cli_env["RUGRA_CACHE_TEST_CLI"] = "ok"
+        cli_env["PATH"] = f"{temp / 'path-shadow'}{os.pathsep}{cli_env.get('PATH', original_path)}"
+        repathed = run_cli(cli_env, cli_cache, [python, str(env_dump)])
+        assert repathed.returncode == 0, repathed.stderr.decode()
+        assert b"STORE" in repathed.stderr
+        # failing and timed-out commands are never cached
+        fail_cache = temp / "fail-cache"
+        failing = run_cli(cli_env, fail_cache, [python, "-c", "import sys; sys.exit(3)"])
+        assert failing.returncode == 3
+        assert not fail_cache.exists() or not list(fail_cache.rglob("manifest.json"))
+        timing_out = subprocess.run(
+            [
+                python,
+                "tools/oracle_cache.py",
+                "capture",
+                "--metadata",
+                str(metadata),
+                "--input",
+                f"sample={input_path}",
+                "--tool",
+                f"runner={tool_path}",
+                "--comparand",
+                f"rust={comparand_path}",
+                "--context",
+                "mode=timeout",
+                "--cache-dir",
+                str(fail_cache),
+                "--timeout",
+                "1",
+                "--",
+                python,
+                "-c",
+                "import time; time.sleep(30)",
+            ],
+            cwd=root,
+            env=cli_env,
+            capture_output=True,
+            timeout=30,
+        )
+        assert timing_out.returncode == 124, timing_out.stderr.decode()
+        assert not list(fail_cache.rglob("manifest.json"))
+
+        # --- mid-execution environment drift refuses to store -----------------
+        drift_cache = temp / "drift-cache"
+        drift_var = "RUGRA_CACHE_TEST_DRIFT"
+        os.environ[drift_var] = "before"
+
+        def mutate_during_execution() -> None:
+            time.sleep(0.3)
+            os.environ[drift_var] = "during"
+
+        mutator = threading.Thread(target=mutate_during_execution)
+        mutator.start()
+        try:
+            drift_args = argparse.Namespace(
+                **{
+                    **vars(args),
+                    "env": [drift_var],
+                    "cache_dir": drift_cache,
+                    "force_run": False,
+                    "verify_only": False,
+                    "timeout": 30.0,
+                }
+            )
+            try:
+                capture(drift_args, root, [python, "-c", "import time; time.sleep(0.8)"])
+            except CacheError as error:
+                assert drift_var in str(error)
+                assert "refusing to store" in str(error)
+            else:
+                raise AssertionError("mid-execution environment drift was stored")
+        finally:
+            mutator.join()
+            os.environ.pop(drift_var, None)
+        assert not drift_cache.exists() or not list(drift_cache.rglob("manifest.json"))
+
+        # --- TOCTOU / artifact bundle closure matrix --------------------------
+        bundle_sources = {
+            "stage/00-lift.json": temp / "bundle-stage.json",
+            "comparison/report.json": temp / "bundle-comparison.json",
+            "min-case/input.bin": temp / "bundle-min-case.bin",
+        }
+        bundle_sources["stage/00-lift.json"].write_text(
+            json.dumps({"stage": "lift", "ops": 103}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        bundle_sources["comparison/report.json"].write_text(
+            json.dumps({"first_diff": 77}, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        bundle_sources["min-case/input.bin"].write_bytes(b"\x00\x01\x02mincase")
+        bundle_sources["min-case/input.bin"].chmod(0o755)
+        toctou_cache = temp / "toctou-cache"
+        toctou_entry, toctou_manifest, toctou_hit = store_entry(
+            toctou_cache,
+            provenance,
+            [(name, path) for name, path in bundle_sources.items()],
+        )
+        assert not toctou_hit
+        restored_bundle = temp / "restored-bundle"
+        restore_entry(toctou_entry, toctou_manifest, restored_bundle)
+        for name, source in bundle_sources.items():
+            destination = restored_bundle / Path(*PurePosixPath(name).parts)
+            assert destination.read_bytes() == source.read_bytes()
+            record = next(r for r in toctou_manifest["artifacts"] if r["name"] == name)
+            assert destination.stat().st_size == record["size"]
+            assert sha256_file(destination) == record["sha256"]
+            expected_mode = bool(record.get("executable"))
+            assert bool(destination.stat().st_mode & stat.S_IXUSR) == expected_mode
+        restored_names = {
+            item.relative_to(restored_bundle).as_posix()
+            for item in restored_bundle.rglob("*")
+            if item.is_file()
+        }
+        assert restored_names == set(bundle_sources)
+        # restoring over an existing output is refused
+        try:
+            restore_entry(toctou_entry, toctou_manifest, restored_bundle)
+        except CacheError as error:
+            assert "already exists" in str(error)
+        else:
+            raise AssertionError("restore over existing output was allowed")
+        # extra artifact inside the cache entry breaks the closure
+        make_writable(toctou_entry)
+        (toctou_entry / "artifacts" / "extra.txt").write_text("extra\n", encoding="utf-8")
+        try:
+            verify_entry(toctou_cache, provenance)
+        except CacheError as error:
+            assert "manifest mismatch" in str(error)
+        else:
+            raise AssertionError("extra cached artifact passed verification")
+        (toctou_entry / "artifacts" / "extra.txt").unlink()
+        # a missing artifact breaks the closure
+        victim = toctou_entry / "artifacts" / "min-case/input.bin"
+        victim.unlink()
+        try:
+            verify_entry(toctou_cache, provenance)
+        except CacheError as error:
+            assert "missing or not regular" in str(error)
+        else:
+            raise AssertionError("missing cached artifact passed verification")
+        try:
+            restore_entry(toctou_entry, toctou_manifest, temp / "restore-missing")
+        except CacheError as error:
+            assert "missing or not regular" in str(error)
+        else:
+            raise AssertionError("restore with a missing artifact was allowed")
+        assert not (temp / "restore-missing").exists()
+        # tampered source is rejected before any byte is restored
+        shutil.copyfile(bundle_sources["min-case/input.bin"], victim)
+        victim_source = toctou_entry / "artifacts" / "stage/00-lift.json"
+        victim_source.chmod(0o644)
+        victim_source.write_text("tampered\n", encoding="utf-8")
+        try:
+            restore_entry(toctou_entry, toctou_manifest, temp / "restore-tampered")
+        except CacheError as error:
+            assert "mismatch" in str(error)
+        else:
+            raise AssertionError("tampered cache entry was restored")
+        assert not (temp / "restore-tampered").exists()
+        assert not list(temp.glob(".restore-tampered.*.tmp"))
+        # mid-restore source swap (TOCTOU) is detected by post-copy revalidation
+        victim_source.write_text(
+            json.dumps({"stage": "lift", "ops": 103}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        real_copyfile = shutil.copyfile
+        sabotage_done: list[bool] = []
+
+        def sabotaging_copyfile(source, destination, **kwargs):
+            real_copyfile(source, destination, **kwargs)
+            if not sabotage_done:
+                sabotage_done.append(True)
+                swapped = toctou_entry / "artifacts" / "comparison/report.json"
+                make_writable(swapped)
+                swapped.write_text("swapped-mid-restore\n", encoding="utf-8")
+
+        shutil.copyfile = sabotaging_copyfile
+        try:
+            try:
+                restore_entry(toctou_entry, toctou_manifest, temp / "restore-swap")
+            except CacheError as error:
+                assert "mismatch" in str(error)
+            else:
+                raise AssertionError("mid-restore artifact swap was not detected")
+        finally:
+            shutil.copyfile = real_copyfile
+        assert not (temp / "restore-swap").exists()
+        assert not list(temp.glob(".restore-swap.*.tmp"))
     print("oracle_cache: self-test OK")
     return 0
 

@@ -85,6 +85,13 @@ python3 tools/rugra_gate.py commit --staged --dry-run
 options、输入、工具、comparand、命令和显式环境的规范化 provenance hash。每次命中仍会
 重算这些输入并逐文件校验缓存内容；损坏或 provenance 漂移会 fail-closed。
 
+capture 的子进程环境与 provenance 环境完全一致（2026-08-15，
+`ORACLE-CACHE-HARDEN-0002`）：`Popen(env=...)` 只包含已声明变量
+（`DEFAULT_ENV_KEYS` + 执行必需的 `EXEC_ENV_KEYS` + `--env`），未声明环境变量对命令
+不可见；argv0 按子进程 PATH 解析，PATH 值或 PATH 目录内容变化会更换 key。命令执行后
+重读环境与 provenance，漂移即拒绝入库；restore 恢复后逐 artifact 交叉校验
+hash/size/结构并重新校验缓存源，任何缺失、多余或篡改均 fail-closed。
+
 ```bash
 # 查看键
 python3 tools/oracle_cache.py key \
