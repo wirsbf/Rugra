@@ -1,30 +1,47 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-08-15（核实更新）
+**日期**: 2026-08-15（wave 收尾核实更新）
 **版本**: 0.1.0
-**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线已建立，地基修复 wave 持续落地**
+**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，2026-08-15 多 agent wave 落地 20 个原子提交**
 
-## 关键指标（2026-08-15 重新核实）
+## 关键指标（2026-08-15 wave 收尾）
 
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
-| 单元测试 (`cargo test --lib`) | **1320 通过 / 11 失败 / 3 ignored** | 2026-08-15 实跑（ee29a32 工作树）；11 个失败 A/B 验证与 Cover 修复无关，5 个 panic 于 makeFree preflight（`VARNODE-BANK-KEY-LIVE-0001` 修复中），其余 6 个分散于 comment/dynamic/funcdata/merge/ruleaction 并已登记 |
-| 锁定 oracle 函数 fixture | **registry 14 个**（磁盘 32 组 `.cc`+`.rs`） | `tests/oracle/fixture_registry.json`；本日新增 `cover_rebuild_1204`（8/8 MATCH） |
-| curl E2E（隔离 worker 模式） | **21/25 函数成功** | 2026-08-15 超时隔离 runner exit0；`parseconfig` 从 TIMEOUT 恢复数秒完成；`glob_word`/`glob_set`/`next_url`/`my_get_line` 相对 08-14 基线改善 |
-| curl 剩余失败 | 4：`my_get_token` panic（`SUBFLOW-OUTVN-UNWRAP-0001` 修复中）、`glob_range` 挂起（`FUNC-GLOBRANGE-HANG-0001`）、`match_url`/`__libc_csu_init` 类型传播不收敛（`FUNC-TYPEPROP-SETTLE-0001`） | timeout isolation 日志 |
+| 单元测试 (`cargo test --lib`) | **1337 通过 / 6 失败 / 3 ignored** | 全提交序列实跑；6 个失败全部归因域外（comment/dynamic/funcdata×2/merge/ruleaction，均登记） |
+| curl E2E（隔离 worker 模式） | **24/24 函数反编译成功，0 skipped/failed** | 全提交序列权威复跑（session 起点 21/25） |
+| 锁定 oracle 函数 fixture | **registry 22 个**（本 wave 新增 9 个，8 个全投影 MATCH、1 个 28/29） | `tests/oracle/fixture_registry.json` |
+| erase_descend WARN 风暴 | **1454/函数 → 0** | timeout isolation 日志前后对比 |
+| 函数账本 | scheme 2 位置无关 ID（9494 Ghidra defs / 8644 Rust），`--check` verified | `2dfc91b` |
 | 11.3.2 诊断 golden 差分 | 仍是回归信号，非最终对齐证据 | `ORACLE-0002` BLOCKED（待 12.0.4 headless golden 重生） |
 
-### 2026-08-15 Cover 自锁修复（ee29a32 + c51fad2）
+### 2026-08-15 wave 落地摘要（20 提交，全部带真实 oracle 门禁或独立复核）
 
-生产路径 `ActionMergeType` 的永久自锁（`update_high_cover` 持 root Varnode 写锁、MULTIEQUAL slot2 同 Arc 再入）以 root-identity 快照重建修复：`Varnode::update_cover_locked` + `Cover::rebuild_from_root_snapshot` + `Arc::ptr_eq` 槽匹配；input sentinel 同步修正为 uindex 域 0。权威 oracle runner（锁定 Ghidra 重建 + pinned-base Rust overlay）`MATCH covered_projection=8/8 overall=PARTIAL_MATCH`；独立 Cross-Review APPROVE；E2E 独立验证越过后 `ActionSetCasts` 的 makeFree panic 在真实管线亦不再触发。后继缺口已登记：`COVER-TWOPIECE-RESIDUAL-0001`、`COVER-REBUILD-COVERAGE-0002`、`BLOCK-INDEX-ASSIGN-0001`。
+- **ee29a32** Cover 自锁根因修复（root-identity 快照重建，8/8 MATCH + Cross-Review APPROVE）；E2E parseconfig TIMEOUT→数秒
+- **91b4774** makeFree 身份删除（Ghidra 存储迭代器语义，4/4 MATCH；单测 11→6 失败）
+- **18f3ab4** `BlockGraph::findSpanningTree` RPO index 完整移植（8/8 MATCH）
+- **d124392** RangeProperties marshal 重 pin（11/11 MATCH，真实 TreeDecoder 未注册名→159）
+- **192e894** varmap 权威命名（共享 base 计数器 + SymbolNameTree，6/6 MATCH + Cross-Review APPROVE）
+- **121c429** Subflow outvn 收敛 + 死锁 + 2 语义偏差（15/15 MATCH；my_get_token panic 消除）
+- **e034f80** SLEIGH const 空间相对分支→内部 p-code 边（81 ops/33 relatives/34 blocks/49 edges MATCH）
+- **763d564** totalReplace 单程 + opUnsetInput 幂等（glob_range 120s→1.1s，WARN 1454→0，E2E 24/24）
+- **138dd24** post-cleanup 动作顺序对齐 coreaction.cc:5714-5738（28/29 一致 + Cross-Review APPROVE）
+- **0d38e6e** ActionReturnRecovery 生命周期（mainloop ABA 消除，match_url 120s→102ms；B2 记 UNTESTED）
+- **0618b1c** Heritage 显式所有权边界（3/3 MATCH + Cross-Review APPROVE；未切生产 Action）
+- **2dfc91b** 函数 ID scheme 2 + 账本重生产物
+- 工具链：07efbff reducer schema-2、d099737 oracle cache 三重加固
+
+### 后继队列（均已登记 TODO_BOARD）
+
+高扇出地基：`BLOCK-INDEX-WIRE-0001`（接线公共 RPO）/ `BLKACT-FINALSTRUCT-COUNT-0001`（删一行即 28/29→MATCH）/ `MERGE-PERSISTENT-STATE-0001` / `HERITAGE-CALLGUARD+ADT-RENAME+DRIVER-SWITCH`（生产切换链）/ `ORACLE-REGISTRY-0001`（registry 45 RG-F + 7 GH12-F 迁移，依赖已满足）/ `UPSTREAM-OUTVN-DEADWIRE-0001`（340 free-varnode WARN 归因）/ `COVER-TWOPIECE-RESIDUAL-0001` / `BASE-EXPLICIT-GAPS-0001` 等，详见看板。
 
 ### 2026-08 工具链与验证地基（摘要）
 
-锁定 oracle 差分流水线已工业化：逐函数账本（9494 Ghidra behavior definitions / FUNCTION_LEDGER）、内容寻址 oracle cache、edit/commit/wave/nightly 四级门禁、changed-function→fixture 选择器、stage 快照首差异定位、deterministic reducer、不可变 fd runner（空环境重建锁定 Ghidra + 校验和隔离 vendor 的 Rust snapshot）。详见 `docs/TODO_BOARD.md` DONE 行（LEDGER-0001/PERF-BUILD-0001/PERF-GATE-0001/IMPACT-0001/ORACLE-CACHE-0001/DIFF-BISECT-0001/REDUCE-0001/GATE-0001）。
+锁定 oracle 差分流水线已工业化：逐函数账本（scheme 2 稳定 ID）、内容寻址 oracle cache（环境/TOCTOU/闭包三重加固）、edit/commit/wave/nightly 四级门禁、changed-function→fixture 选择器、stage 快照首差异定位、deterministic reducer（schema-2 签名合同）、不可变 fd runner（空环境重建锁定 Ghidra + 校验和隔离 vendor 的 Rust snapshot）。详见 `docs/TODO_BOARD.md` DONE 行。
 
 ---
 
-## 以下为历史记录（2026-06/07 口径，部分数值已被上方 2026-08-15 数据覆盖）
+## 以下为历史记录（2026-06/07 口径与 2026-08-15 早间数据，部分数值已被上方覆盖）
 
 ## 关键指标（2026-07-02 重新核实）
 
