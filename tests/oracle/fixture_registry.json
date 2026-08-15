@@ -988,6 +988,38 @@
      "tools/run_address_space_handle_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "heritage_callguard_1204",
+   "description": "Canonical guardCalls wiring: per-object INDIRECT records for calls x ABI-affected ranges (GetStr shape 2x10=20), effect lookup rules, stack spacebase translation, LocationMap contained classification, pass gating",
+   "runner": [
+    "tools/run_heritage_callguard_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/heritage_callguard_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/heritage_callguard_1204.cc",
+     "rust_fixture": "tests/oracle/heritage_callguard_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_heritage_callguard_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/heritage.rs",
+     "src/fspec.rs",
+     "src/funcdata.rs",
+     "tests/oracle/heritage_callguard_1204.*",
+     "tools/run_heritage_callguard_oracle.sh"
+    ]
+   }
   }
  ]
 }
