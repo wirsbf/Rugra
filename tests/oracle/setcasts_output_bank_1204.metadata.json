@@ -1,0 +1,99 @@
+{
+  "schema": 2,
+  "fixture_id": "VARNODE-BANK-KEY-LIVE-0001",
+  "stable_function_id": "GH12-F-2d940e56022a932b3550",
+  "stable_function_closure": [
+    "GH12-F-2d940e56022a932b3550 ghidra::VarnodeBank::makeFree varnode.cc:1316",
+    "GH12-F-2d344b1d13ea6e907ad1 ghidra::VarnodeBank::setInput varnode.cc:1358",
+    "GH12-F-2d7ab6ee81cc375ea212 ghidra::VarnodeBank::setDef varnode.cc:1380",
+    "GH12-F-2d2c8e65e6804971ba34 ghidra::VarnodeBank::xref varnode.cc:1291",
+    "GH12-F-2dcdf14f56b06c633804 ghidra::Funcdata::opSetOutput funcdata_op.cc:115",
+    "GH12-F-2df05d6666c23d998504 ghidra::Funcdata::opUnsetOutput funcdata_op.cc:52"
+  ],
+  "overall_status": "MATCH: the four-case VarnodeBank key-lifecycle projection (both tree iteration orders with class/createIndex/SeqNum-order projections, per-Varnode membership counts, insert/input/written/free flags, defining SeqNum order after each rebinding) byte-matches the locked oracle through the production Funcdata::opSetOutput/opUnsetOutput closure, including the hand-built in-place key-drift topology that previously panicked Rugra's key-recomputed makeFree erase; residuals are limited to the unobservable ownership guard for foreign handles (Ghidra counterpart is construction-only), the union-resolution arm of ActionSetCasts::castOutput itself, and makeFree on an input-class Varnode, none of which the castOutput closure reaches",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{varnode.cc:1291-1330,varnode.cc:1358-1410,funcdata_op.cc:52-131}",
+    "signature": "void VarnodeBank::makeFree(Varnode *vn); Varnode *VarnodeBank::setInput(Varnode *vn); Varnode *VarnodeBank::setDef(Varnode *vn,PcodeOp *op); void Funcdata::opSetOutput(PcodeOp *op,Varnode *newvn); void Funcdata::opUnsetOutput(PcodeOp *op)"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of the production Funcdata::opSetOutput / opUnsetOutput / opDestroy chain on synthetic def-use graphs (newOp/opSetInput/opSetOutput/opInsertEnd/newBlockBasic/newConstant/newVarnode/setInputVarnode) plus one hand-built in-place def wiring (PcodeOp::setOutput + Varnode::setDirect) that bypasses VarnodeBank::setDef's erase-reinsert; no Actions, SSA, or C emission",
+    "prestate": "Per-case fresh Funcdata with one basic block; ops receive BlockBasic::insert midpoint SeqNum orders via opInsertEnd; constants are single-use so the opSetInput constant dedup never fires; all named Varnodes live in the register space at distinct offsets (0x80-0x180) with const-space constants sorting first",
+    "observation": "Per stage: the complete location-tree iteration order (name.space.hexoffset.size.class.createIndex) and definition-tree iteration order (name.class.seqorder-or-dash.space.hexoffset.size.createIndex), per-Varnode membership counts in both trees, free/insert/input/written flags, and the defining SeqNum order; case makefree_inplace_key_drift observes the tree before the drift, while the live key is drifted (physical node positions unchanged), and after makeFree restored",
+    "normalization": "No order, flag, list, membership, or position normalization; both sides print the same projection of the same observation fields; SeqNum orders print the raw getOrder() value"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "opsetoutput_swap: castOutput-semantics output rebinding; opSetOutput(B,out1) with out1 written by A follows opUnsetOutput(A)->makeFree->setDef(out1,B), then the symmetric swap back to A; two full free/written key-class crossings with stable iteration orders and single membership in both trees at every stage",
+      "makefree_inplace_key_drift: hand-built wiring mutates def/written IN PLACE on the tree-resident free Varnode (bypassing setDef's erase-reinsert) so the live comparison key no longer matches the stored position (observable as the written entry still iterating inside the free section behind the pad Varnode in the definition tree); opUnsetOutput->makeFree must erase this exact object and restore the pre-drift order",
+      "destroy_after_transitions: write->opUnsetOutput(free window: insert cleared)->opSetOutput rebind->opDestroy->destroyVarnode->VarnodeBank::destroy removes the Varnode from both trees entirely",
+      "rebind_same_output_noop: opSetOutput with the Varnode that is already the op's output is the early return; no makeFree, no setDef, identical trees"
+    ],
+    "sha256": "00abd03df8acf8ec64c3c78d1768f3b573556a4503a36df33073175aefa0b699"
+  },
+  "observation_schema": {
+    "format": "Five fixed-order UTF-8 lines with final newline: one envelope plus four case records",
+    "state": "free/insert/input/written flags, defining SeqNum order, per-Varnode membership counts in each tree per stage",
+    "graph": "complete location-tree and definition-tree iteration orders with name, space, hex offset, size, class letter, and createIndex (definition tree adds the SeqNum order or dash)"
+  },
+  "comparand": {
+    "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+    "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
+    "cpp_fixture_sha256": "ee903b5c7885c1be2b7aad086e578eb29eb510ad33ce624c3a1e59808952d6a4",
+    "rust_fixture_sha256": "a2815557f2e2c7229efeeef7997e61bdcbd582e585c3009ae4de1c5b2a0f017e",
+    "varnode_rs_sha256": "7664862be14852f1bdc07b4a7c85c5ed1123112ab5d76cd9a6cb18ed470414b3",
+    "coreaction_rs_sha256": "9e3ab3986212197de9f28c766c8026ec2074d31108b0303191b8bbd0e0079f65",
+    "varnode_doc_sha256": "e8309221f793bd2b7f88889cd1602e8c86bbd15d5142734ea6815ab157f3f8ce",
+    "coreaction_doc_sha256": "4c2e9997fe938269fd03d6d4fa96b44f884810f30df358cb25bed8b176d3bf83",
+    "runner_sha256": "f37bfa69d1b402caf035085f986c3517366acad960f5afe2981ee64052b52b14",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-setcasts-output-bank-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rust_crate_tree_sha256": "fd1590945b694cd44c9774c3ad7715c6c71e177794706c96c5920234d4a6ad85",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+    "private_state_observer": "Read-only ABI observation of Funcdata's public beginLoc/endLoc/beginDef/endDef projections plus #define private public access to PcodeOp::setOutput and Varnode::setDef for the hand-built in-place wiring in the fixture translation unit only; no oracle source is modified",
+    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varnode.rs and src/coreaction.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "a335ad86a8bed9a1472bda2bb47a90e92fff4a1cc6d65b7426e4f3f692311aa8"
+  },
+  "expected_stdout_sha256": "4a584dc5f97acba5f54ffc63c9a6bff2818ee77f918084154d0ed366b40b602f",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "opsetoutput_swap_key_lifecycle": "MATCH: two full opSetOutput rebinding cycles cross the free/written key class twice; both tree iteration orders, membership counts (exactly one entry per tree per stage), insert flag, and the defining SeqNum order (back to the original op after the round trip) byte-match",
+    "makefree_under_inplace_key_drift": "MATCH: after the in-place def/written mutation the definition tree iterates the written entry inside the free section (stored position), and opUnsetOutput->makeFree erases this exact object and restores the pre-drift orders; Rugra's identity erase (live-key take with Arc verification, identity-scan fallback) reproduces the stored-iterator semantics; A/B with the previous key-recomputed remove panics at this case",
+    "stale_def_tree_position_observation": "MATCH: neither implementation re-sorts on in-place mutation; the pad Varnode keeps the drifted entry observable behind it in the free section",
+    "destroy_after_transition_cycle": "MATCH: the free window clears insert, the rebind rewrites written, and opDestroy->destroyVarnode->VarnodeBank::destroy removes the Varnode from both trees (membership 0,0; final lists contain only the constant)",
+    "rebind_same_output_noop": "MATCH: opSetOutput early-returns when the requested output is already bound; trees, membership, and def order are unchanged",
+    "setinput_transition_fresh_input": "MATCH: the input-class member (create_index 2) is produced through VarnodeBank::setInput's erase-reinsert and iterates in the input class ahead of written and free in the definition tree",
+    "foreign_handle_ownership_guard": "NO_ORACLE: Rugra's make_free/set_input/set_def return an Err for a foreign Arc that is not physically in the trees; Ghidra has no counterpart check (erase of a garbage iterator is undefined), so no oracle observation exists; the guard is RUGRA-GLUE",
+    "cast_output_union_resolution_closure": "UNTESTED: ActionSetCasts::castOutput's union resolution (needsResolution/resolveInFlow/findResolve/setUnionField) remains a documented deferred subset (coreaction.rs cast_output Simplified note); this fixture proves the opSetOutput/opUnsetOutput/makeFree bank-key closure that the E2E panic lived in, not the full castOutput decision logic",
+    "makefree_on_input_class_varnode": "UNTESTED: no case drives makeFree on an input-class Varnode (the castOutput closure never rebinds function inputs); makeFree's input-flag clearing is source-verified (varnode.cc:1323) and mirrored but not fixture-observed"
+  }
+}

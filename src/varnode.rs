@@ -2164,11 +2164,53 @@ impl VarnodeBank {
             .any(|entry| Arc::ptr_eq(&entry.0, vn))
     }
 
+    // RUGRA-GLUE: Rust analogue of Ghidra's `loc_tree.erase(vn->lociter)`
+    // (varnode.cc:1319). Ghidra stores the tree iterator inside the Varnode,
+    // so erasure removes THE OBJECT at its stored position and never
+    // recomputes the comparison key. Rust's BTreeSet has no stored handles,
+    // so we emulate: the fast path removes by the live key — valid whenever
+    // no caller mutated key-relevant fields (flags/def) in place while the
+    // Varnode was tree-resident; if the live key routes to a different
+    // object (or misses), fall back to an Arc-identity scan that removes
+    // this exact object wherever it sits — the same object Ghidra's stored
+    // iterator would have erased. This is a data-structure lookup strategy,
+    // not a semantic two-phase: the observable result is always "this exact
+    // Varnode is no longer in the tree".
+    fn erase_loc_identity(&mut self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        if let Some(removed) = self.loc_tree.take(&VarnodeLocRef(vn.clone())) {
+            if Arc::ptr_eq(&removed.0, vn) {
+                return true;
+            }
+            // The live key routed to a different tree member: restore it
+            // before the identity scan so only `vn` is removed.
+            self.loc_tree.insert(removed);
+        }
+        let before = self.loc_tree.len();
+        self.loc_tree.retain(|entry| !Arc::ptr_eq(&entry.0, vn));
+        before != self.loc_tree.len()
+    }
+
+    // RUGRA-GLUE: def_tree twin of `erase_loc_identity`, emulating Ghidra's
+    // `def_tree.erase(vn->defiter)` (varnode.cc:1320).
+    fn erase_def_identity(&mut self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        if let Some(removed) = self.def_tree.take(&VarnodeDefRef(vn.clone())) {
+            if Arc::ptr_eq(&removed.0, vn) {
+                return true;
+            }
+            self.def_tree.insert(removed);
+        }
+        let before = self.def_tree.len();
+        self.def_tree.retain(|entry| !Arc::ptr_eq(&entry.0, vn));
+        before != self.def_tree.len()
+    }
+
     // RUGRA-GLUE: shared checked/unchecked transition for Ghidra
     // VarnodeBank::setInput after its precondition checks.
     fn transition_input(&mut self, vn: Arc<RwLock<Varnode>>) -> Arc<RwLock<Varnode>> {
-        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        // Ghidra setInput erases via the stored lociter/defiter
+        // (varnode.cc:1366-1367), never by a recomputed comparison key.
+        let loc_removed = self.erase_loc_identity(&vn);
+        let def_removed = self.erase_def_identity(&vn);
         debug_assert!(
             loc_removed && def_removed,
             "setInput requires a bank-owned free Varnode"
@@ -2186,8 +2228,10 @@ impl VarnodeBank {
         vn: Arc<RwLock<Varnode>>,
         op: Weak<RwLock<PcodeOp>>,
     ) -> Arc<RwLock<Varnode>> {
-        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        // Ghidra setDef erases via the stored lociter/defiter
+        // (varnode.cc:1396-1397), never by a recomputed comparison key.
+        let loc_removed = self.erase_loc_identity(&vn);
+        let def_removed = self.erase_def_identity(&vn);
         debug_assert!(
             loc_removed && def_removed,
             "setDef requires a bank-owned free Varnode"
@@ -2484,14 +2528,24 @@ impl VarnodeBank {
             self.owns_loc_ref(vn) && self.owns_def_ref(vn),
             "makeFree requires a bank-owned Varnode"
         );
-        let loc_removed = self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
-        let def_removed = self.def_tree.remove(&VarnodeDefRef(vn.clone()));
+        // Ghidra makeFree (varnode.cc:1316-1327) erases via the lociter/
+        // defiter stored inside the Varnode — it does NOT recompute the
+        // comparison key for removal, so an in-place drift of key-relevant
+        // fields (flags/def set directly by hand-built fixtures, or by the
+        // Funcdata::destroyVarnode pre-clear) cannot break the erase. The
+        // identity erase reproduces exactly that: remove this exact object
+        // from wherever it sits in each tree.
+        let loc_removed = self.erase_loc_identity(vn);
+        let def_removed = self.erase_def_identity(vn);
         debug_assert!(
             loc_removed && def_removed,
-            "makeFree ownership preflight disagrees with removal"
+            "makeFree erase did not find this bank-owned Varnode"
         );
         {
             let mut value = vn.write().unwrap();
+            // Ghidra: vn->setDef(0) sets coverdirty and clears written
+            // (varnode.cc:394-401); clearFlags(insert|input|indirect_creation)
+            // (varnode.cc:1323).
             value.def = None;
             value.set_flags(varnode_flags::COVERDIRTY);
             value.clear_flags(

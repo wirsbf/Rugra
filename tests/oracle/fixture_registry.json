@@ -591,6 +591,38 @@
      "GH12-F-87faea0d5fa6006d5091"
     ]
    }
+  },
+  {
+   "id": "setcasts_output_bank_1204",
+   "description": "VarnodeBank makeFree/setInput/setDef stored-iterator erase identity: castOutput rebinding, in-place key drift, destroy lifecycle, same-output early return",
+   "runner": [
+    "tools/run_setcasts_output_bank_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/setcasts_output_bank_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/setcasts_output_bank_1204.cc",
+     "rust_fixture": "tests/oracle/setcasts_output_bank_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_setcasts_output_bank_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varnode.rs",
+     "src/coreaction.rs",
+     "docs/api/varnode.md",
+     "tests/oracle/setcasts_output_bank_1204.*",
+     "tools/run_setcasts_output_bank_oracle.sh"
+    ]
+   }
   }
  ]
 }
