@@ -925,6 +925,38 @@
      "tools/run_rule_multi_collapse_abort_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "merge_persistent_1204",
+   "description": "Persistent merge channels on Funcdata: attach-depth nesting, standalone-Action cover premise, mergeTestAdjacent + canonical typeLocal gate table, survivor direction via groups projections, pipeline-tail canary",
+   "runner": [
+    "tools/run_merge_persistent_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/merge_persistent_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/merge_persistent_1204.cc",
+     "rust_fixture": "tests/oracle/merge_persistent_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_merge_persistent_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/merge.rs",
+     "src/funcdata.rs",
+     "docs/api/merge.md",
+     "tests/oracle/merge_persistent_1204.*",
+     "tools/run_merge_persistent_oracle.sh"
+    ]
+   }
   }
  ]
 }
