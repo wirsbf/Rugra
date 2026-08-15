@@ -209,6 +209,13 @@ binary / disasm
 #### 语义
 该方法用于在 `Funcdata` 被包装进共享引用模型后，把“指向自己”的弱引用回填进去。
 
+#### HERITAGE-OWNERSHIP-0001 变更
+`Heritage` 不再保存任何 `Funcdata` 自引用（原 `heritage.fd = Some(self_ref)`
+行已删除）。Heritage 的 pass 方法现在显式接收 `&mut Funcdata`，由
+`Funcdata::op_heritage` 用 `mem::take` 暂移 Heritage 后单 pass 驱动（对齐
+Ghidra 非拥有的 `Heritage::fd` 裸指针语义，且无任何锁重入路径）。
+`set_self_ref` 现在只回填 `Funcdata::self_ref` 本身。
+
 #### 为什么会有这个接口
 当前工程中大量对象采用共享读写容器组织，某些场景下：
 
@@ -229,6 +236,39 @@ binary / disasm
 #### 注意事项
 这是架构层初始化接口，不是面向最终用户的简化 API。  
 如果你在更高层封装函数分析入口，通常应由封装层负责调用它，而不是把它暴露成最终用户手工步骤。
+
+---
+
+### `pub fn op_heritage(&mut self)`
+
+执行一整个 heritage pass（对齐 `Funcdata::opHeritage`，funcdata.hh:462）。
+
+#### 语义
+Ghidra 侧该函数体即 `{ heritage.heritage(); }` —— 恰好一次
+`Heritage::heritage` 调用，单 pass，pass 计数在其最后一行 +1
+（heritage.cc:2757）。Rugra 1:1 移植：
+
+1. `std::mem::take(&mut self.heritage)` 暂移持久 Heritage 对象；
+2. `heritage.heritage(self)` 在同一个 `&mut Funcdata` 上执行一个
+   规范单 pass；
+3. 回写同一个 Heritage 状态（pass 计数、持久 `globaldisjoint`、
+   per-space HeritageInfo、guards）。
+
+#### 所有权模型（HERITAGE-OWNERSHIP-0001）
+旧实现里 `Heritage` 持有 `Weak<RwLock<Funcdata>>`，nominal `heritage()`
+先升级并取写锁，嵌套 helper 再取同一写锁 —— 单线程自死锁
+（HERITAGE-DRIVER-0001 审计结论）。现在整个 pass 无任何
+`Weak` 升级 / 嵌套锁获取；连续多次调用（例如边界测试连续 3 次调用驱动
+pass 0→1→2→3）不可能死锁。
+
+#### 注意事项
+- 生产管线（`ActionHeritage::apply`）**尚未切换**到此桥（见
+  HERITAGE-DRIVER-SWITCH）；当前生产路径仍走
+  `run_heritage_direct` / `place_multiequals_direct`。
+- 与 Ghidra 一致：`Heritage::heritage` 不构建 infolist ——
+  `buildInfoList` 属于 `Funcdata::startProcessing`（funcdata.cc:166）。
+  未运行 startProcessing 就调用本方法，per-space 阶段对空 infolist
+  迭代（零空间），与 oracle 行为一致。
 
 ---
 
@@ -1039,3 +1079,34 @@ Rugra 的当前 VarnodeBank 生命周期复现，CALL 的 Fspec 地址空间也�
 `tools/run_sleigh_flow_relative_oracle.sh` 差分门禁的 `funcdata.rs` 侧证据；
 Varnode 生命周期其余差异（Fspec 空间、HighVariable 分配等）仍由
 `ADDR-0001`/`CALLSPEC-0001` 跟踪，本模块保持 L2/MISMATCH。
+
+### 2026-08-15: totalReplace 快照迭代 + opUnsetInput NULL-slot 语义（FUNC-GLOBRANGE-HANG-0001）
+
+- `total_replace(vn, newvn)`（funcdata_varnode.cc:1474-1487）：从「循环重扫
+  descend 直到无 live 条目」改为 Ghidra 的迭代器语义——一次性快照 live
+  descendant，逐站点在**应用时**计算首个匹配 slot（getSlot，op.hh:166，
+  先前的站点改写后求值），再 `op_set_input`。Ghidra 用 `op = *iter++` 在
+  opSetInput 断链前推进迭代器，因此每个原始条目恰好访问一次、到达
+  endDescend() 即终止——即使 `newvn == vn` 时 opSetInput 早退（cc:107）留下
+  条目也只跑一趟。旧 Rust 重扫循环在 precisely 该情形下永续自旋
+  （glob_range(0x4d60) 死锁，A/B 证明：旧实现跑
+  `test_total_replace_same_varnode_terminates` 30s 超时被 SIGTERM；新实现
+  通过）。死 Weak 条目（Ghidra raw 指针模型不可达）无法访问即跳过；slot
+  缺失（Ghidra getSlot→numInput→opSetInput throw）按漂移清理掉 stale 条目。
+- `op_unset_input(op, slot)`（funcdata_op.cc:92-99）与 `op_set_input` 第 (3)
+  步（cc:120-121）：Ghidra `clearInput`（op.hh:136）原地置 NULL，
+  `opDestroy`（funcdata_op.cc:213-215）逐槽 `if (vn != NULL)` 守卫；Rust
+  `Vec<Arc>` 不能存 NULL，stale Arc 保留在槽内，改用「op 是否仍在该 vn 的
+  descend 列表」作为链路存活性判据——不在则跳过 erase，等价于 Ghidra 的
+  NULL-slot no-op。重复 unset（op_unlink → op_destroy 序列，Ghidra 靠 NULL
+  槽天然幂等）不再产生 `erase_descend not in descend list` WARN 风暴。
+- `destroy_varnode`（funcdata_varnode.cc:277-284）：`op_get_slot` 返回 -1 时
+  不再 `as usize`（usize::MAX 静默 no-op，遗留无法匹配的死条目），改为跳过
+  ——Ghidra 该点越界写 UB（前置条件违规），Rugra 以保守跳过表达。
+- 回归测试：`test_total_replace_same_varnode_terminates`、
+  `test_total_replace_skips_dead_weak_entries`、
+  `test_unlink_then_destroy_does_not_disturb_other_readers`。
+- E2E：curl 全量 24/24 函数完成（glob_range 1.1s、match_url 亦完成），
+  `erase_descend` WARN 1454→0；残余 340 条 `free varnode multiple
+  descendants` 为揭出的真实 live 不变量违规（UPSTREAM-OUTVN-DEADWIRE-0001
+  残余范围）。

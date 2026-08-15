@@ -788,3 +788,17 @@
  
  
  
+
+### 2026-08-15: add_descend free 检查只计 live 条目（FUNC-GLOBRANGE-HANG-0001）
+
+- `Varnode::add_descend`（varnode.cc:330-341）：free 非 spacebase 多 descend
+  检查从 `!descend.is_empty()` 改为「存在 `strong_count() > 0` 的条目」。
+  Ghidra 的 descend list 不可能持有已销毁 op（opDestroy 先逐槽 eraseDescend
+  再释放 op），`empty()` 等价于「无 live reader」；Rust 的死 Weak 条目
+  （op Arc 已释放但未走 unset）是 Ghidra 不可达的漂移态，把它计入会伪造
+  "multiple descendants" 信号。`has_no_descend`/`count_descends`/`descend_iter`
+  本来就过滤死条目，本改动使 add_descend 与之一致。
+- 关联：`erase_descend`（varnode.cc:316-325）按 upgrade 后 Arc identity 匹配，
+  死条目永远匹配不上——这正是旧版 `total_replace` 「扫描直到清空」循环
+  无法终止的根源之一；`total_replace` 侧已改为 Ghidra 迭代器快照语义
+  （见 docs/api/funcdata.md 2026-08-15 节）。

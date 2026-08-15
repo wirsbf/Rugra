@@ -1038,11 +1038,23 @@ impl Funcdata {
         };
         // (3) Ghidra cc:120-121: if (op->getIn(slot) != null) opUnsetInput(op, slot).
         // opUnsetInput does vn->eraseDescend(op) + op->clearInput(slot).
-        // Rugra's clearInput half is implicit (inrefs[slot] overwritten below);
-        // the load-bearing half is erase_descend on the old vn.
+        // Ghidra's NULL check is the "link still live" test; with no
+        // representable NULL, descend membership plays that role (see
+        // op_unset_input). A stale slot whose link was already severed is
+        // skipped, mirroring the NULL-slot path, instead of re-erasing a
+        // descend entry that is no longer there.
         if slot < o.inrefs.len() {
             let old_vn = o.inrefs[slot].clone();
-            old_vn.write().unwrap().erase_descend(&op.0);
+            let linked = {
+                let old_r = old_vn.read().unwrap();
+                old_r.descend.iter().any(|weak| {
+                    weak.upgrade()
+                        .is_some_and(|candidate| std::sync::Arc::ptr_eq(&candidate, &op.0))
+                })
+            };
+            if linked {
+                old_vn.write().unwrap().erase_descend(&op.0);
+            }
         }
         // (4) Ghidra cc:123-124: vn->addDescend(op) + op->setInput(vn, slot).
         vn_final.write().unwrap().add_descend(&op.0);
@@ -1194,25 +1206,40 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::totalReplace
+    // Ghidra: funcdata_varnode.cc:1474 Funcdata::totalReplace
     /// Replace every read reference of `vn` with `newvn`. Faithful to
-    /// `Funcdata::totalReplace` (funcdata_varnode.cc:1474-1487). Walks all
-    /// descendant ops of `vn` and sets their input slot to `newvn`.
+    /// `Funcdata::totalReplace` (funcdata_varnode.cc:1474-1487):
+    ///   iter = vn->beginDescend();
+    ///   while(iter != vn->endDescend()) {
+    ///     op = *iter++;	   // Increment before removing descendant
+    ///     i = op->getSlot(vn);
+    ///     opSetInput(op,newvn,i);
+    ///   }
+    /// Ghidra walks the ORIGINAL std::list with an iterator advanced before
+    /// `opSetInput` severs the entry: every original entry is visited exactly
+    /// once and the loop terminates at `endDescend()` regardless of what
+    /// remains in the live list (e.g. when `newvn == vn`, opSetInput's
+    /// early-out leaves entries in place and Ghidra still exits after one
+    /// pass). Rugra must NOT re-scan the list until it drains: entries the
+    /// per-site opSetInput cannot remove would spin forever (this was the
+    /// FUNC-GLOBRANGE-HANG-0001 deadlock). Snapshot the live descendants
+    /// once (dead Weak entries — op Arc freed without unset, unreachable in
+    /// Ghidra's raw-pointer model — cannot be visited and are skipped), then
+    /// compute each site's first matching slot AT APPLY TIME, matching
+    /// `getSlot`'s first-match semantics (op.hh:166) so an op reading `vn`
+    /// in multiple slots has each visit retarget the next remaining slot.
     pub fn total_replace(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         newvn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
-        loop {
-            let descendant = vn
-                .read()
-                .unwrap()
-                .descend
-                .iter()
-                .find_map(std::sync::Weak::upgrade);
-            let Some(descendant) = descendant else {
-                break;
-            };
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> = {
+            let vn_r = vn.read().unwrap();
+            vn_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        for descendant in descendants {
+            // Ghidra cc:1483: i = op->getSlot(vn) — first matching slot,
+            // evaluated after earlier sites were rewritten.
             let slot = descendant
                 .read()
                 .unwrap()
@@ -1220,7 +1247,10 @@ impl Funcdata {
                 .iter()
                 .position(|input| std::sync::Arc::ptr_eq(input, vn));
             let Some(slot) = slot else {
-                debug_assert!(false, "totalReplace descendant has no matching input slot");
+                // Ghidra getSlot miss returns numInput and opSetInput throws
+                // LowlevelError "Bad input slot" (funcdata_op.cc:106-107).
+                // The site is drift (op no longer reads vn); remove the
+                // stale descend entry so the list reflects actual reads.
                 vn.write().unwrap().erase_descend(&descendant);
                 continue;
             };
@@ -1242,17 +1272,32 @@ impl Funcdata {
     ///   vn = op->getIn(slot);
     ///   vn->eraseDescend(op);
     ///   op->clearInput(slot);
-    /// Rugra's inrefs Vec cannot hold null, so the slot is left holding the
-    /// old Arc (clearInput is implicit — the slot will be overwritten by the
-    /// next op_set_input). The load-bearing half is erase_descend on the old
-    /// vn, which removes `op` from its descend list.
+    /// Ghidra's `clearInput` (op.hh:136) NULLs the slot in place, so every
+    /// later reader sees `getIn(slot) == NULL` and skips it — most
+    /// importantly `opDestroy` (funcdata_op.cc:213-215), which guards each
+    /// slot with `if (vn != NULL) opUnsetInput(op,i)`. Rugra's inrefs Vec
+    /// cannot hold null, so the stale Arc survives; descend membership is
+    /// the durable record of whether the (op,slot)→vn link is still live.
+    /// If `op` is not in `vn`'s descend list the link was already severed,
+    /// and skipping the erase reproduces Ghidra's NULL-slot no-op. This
+    /// makes repeated unsets on the same slot idempotent instead of
+    /// re-erasing a descend entry that is no longer there.
     pub fn op_unset_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
         let in_vn = {
             let o = op.0.read().unwrap();
             o.inrefs.get(slot).cloned()
         };
         if let Some(vn) = in_vn {
-            vn.write().unwrap().erase_descend(&op.0);
+            let linked = {
+                let vn_r = vn.read().unwrap();
+                vn_r.descend.iter().any(|weak| {
+                    weak.upgrade()
+                        .is_some_and(|candidate| std::sync::Arc::ptr_eq(&candidate, &op.0))
+                })
+            };
+            if linked {
+                vn.write().unwrap().erase_descend(&op.0);
+            }
         }
         // Ghidra cc:98: op->clearInput(slot) — implicit in Rugra (Vec slot
         // overwritten on next set; callers must set or remove before relying
@@ -8321,23 +8366,33 @@ impl Funcdata {
     pub fn destroy_varnode(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
         // cc:277-284: clear each descending op's input slot.
         // Snapshot the (op, slot) pairs first because the slot lookup
-        // (`op_get_slot`) and the unset both read the op.
-        let descend_pairs: Vec<(crate::op::PcodeOpRef, usize)> = {
+        // (`op_get_slot`) and the unset both read the op. `op_get_slot`
+        // returns -1 on miss; casting that to usize would produce
+        // usize::MAX and a silent no-op inside op_unset_input, leaving the
+        // op in vn's descend list as drift (and, once its Arc is released,
+        // a dead Weak entry no erase_descend can ever match). Ghidra's
+        // `clearInput(op->getSlot(vn))` on a miss indexes out of bounds —
+        // the precondition is that every descendant really reads vn; on
+        // drift, drop the stale entry instead so the list converges to the
+        // actual reads (the whole list is destroyed below anyway).
+        let descend_pairs: Vec<(crate::op::PcodeOpRef, i32)> = {
             let r = vn.read().unwrap();
             r.descend.iter()
                 .filter_map(|w| w.upgrade())
                 .map(|op_arc| {
                     let op_ref = crate::op::PcodeOpRef(op_arc.clone());
-                    let slot = self.op_get_slot(&op_ref, vn) as usize;
+                    let slot = self.op_get_slot(&op_ref, vn);
                     (op_ref, slot)
                 })
                 .collect()
         };
         for (op_ref, slot) in descend_pairs {
             // cc:283: op->clearInput(op->getSlot(vn)).
-            // Rugra has no clearInput; op_unset_input erases the descend link
+            // Rust has no clearInput; op_unset_input erases the descend link
             // and leaves the slot stale (to be overwritten or removed).
-            self.op_unset_input(&op_ref, slot);
+            if slot >= 0 {
+                self.op_unset_input(&op_ref, slot as usize);
+            }
         }
         // cc:285-288: if vn has a def, detach the def's output.
         let def_op = vn.read().unwrap().get_def();
@@ -11458,6 +11513,137 @@ mod tests {
             error.to_string(),
             "Input varnodes being combined are not contiguous"
         );
+    }
+
+    // Regression for FUNC-GLOBRANGE-HANG-0001.
+    //
+    // Ghidra totalReplace (funcdata_varnode.cc:1478-1486) advances its
+    // std::list iterator BEFORE opSetInput severs the entry, so the loop
+    // visits each original entry exactly once and terminates at
+    // endDescend() even when opSetInput early-outs because newvn == the
+    // current input (funcdata_op.cc:107). The pre-fix Rust re-scan loop
+    // re-found the same descendant forever in exactly that case — the
+    // glob_range(0x4d60) deadlock.
+    #[test]
+    fn test_total_replace_same_varnode_terminates() {
+        use crate::space::AddressSpace;
+
+        let mut fd = Funcdata::new("total_replace_self", Address::new(0x1000), 0x10);
+        let vn = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x100);
+        let reader = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_input(&reader, vn.clone(), 0);
+
+        // totalReplace(vn, vn): opSetInput early-outs (getIn(0) == vn ==
+        // newvn) leaving the descend entry in place — Ghidra still exits
+        // after one pass. Pre-fix Rugra spun forever here.
+        fd.total_replace(&vn, vn.clone());
+
+        // Ghidra end state: opSetInput early-out mutates nothing.
+        assert_eq!(
+            vn.read().unwrap().descend.len(),
+            1,
+            "early-out opSetInput must leave the descend entry (Ghidra cc:107)"
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &reader.0.read().unwrap().inrefs[0],
+            &vn
+        ));
+
+        // A real replacement must drain vn's list exactly once per entry and
+        // rewire the reader (Ghidra: eraseDescend + addDescend on newvn).
+        let newvn = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x200);
+        fd.total_replace(&vn, newvn.clone());
+        assert!(
+            vn.read().unwrap().descend.is_empty(),
+            "totalReplace must erase every live descend entry of the replaced vn"
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &reader.0.read().unwrap().inrefs[0],
+            &newvn
+        ));
+        assert_eq!(newvn.read().unwrap().descend.len(), 1);
+    }
+
+    // A dead Weak entry (op Arc freed without unset — impossible in Ghidra's
+    // raw-pointer model) must be skipped, never matched: erase_descend
+    // matches by upgraded identity, so a dead entry can only make a
+    // "scan until drained" loop non-terminating. The snapshot walk visits it
+    // zero times and terminates.
+    #[test]
+    fn test_total_replace_skips_dead_weak_entries() {
+        use crate::space::AddressSpace;
+
+        let mut fd = Funcdata::new("total_replace_deadweak", Address::new(0x1000), 0x10);
+        let vn = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x100);
+        let newvn = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x200);
+        let reader = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_input(&reader, vn.clone(), 0);
+
+        // Fabricate a dead entry: downgrade a temporary op Arc, then drop it.
+        {
+            let temp = std::sync::Arc::new(std::sync::RwLock::new(crate::op::PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x1000), 1),
+                OpCode::CPUI_COPY,
+            )));
+            vn.write().unwrap().descend.push(std::sync::Arc::downgrade(&temp));
+        }
+        assert_eq!(vn.read().unwrap().descend.len(), 2);
+
+        // Must terminate and leave only the dead entry behind (live site
+        // rewired to newvn exactly as in Ghidra).
+        fd.total_replace(&vn, newvn.clone());
+        assert_eq!(
+            vn.read().unwrap().descend.len(),
+            1,
+            "only the (unmatchable) dead entry may remain"
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &reader.0.read().unwrap().inrefs[0],
+            &newvn
+        ));
+    }
+
+    // Regression for the erase_descend WARN storm (UPSTREAM-OUTVN-DEADWIRE
+    // family). Ghidra opUnlink (funcdata_op.cc:186-193) NULLs every input
+    // slot via opUnsetInput/clearInput, and opDestroy (funcdata_op.cc:211-216)
+    // then skips those NULL slots. Rugra cannot NULL a Vec slot, so the
+    // second unset must detect the already-severed link through descend
+    // membership and be a no-op instead of re-erasing.
+    #[test]
+    fn test_unlink_then_destroy_does_not_disturb_other_readers() {
+        use crate::space::AddressSpace;
+
+        let mut fd = Funcdata::new("unlink_destroy", Address::new(0x1000), 0x10);
+        let vn = fd
+            .vbank
+            .create_with_space(4, AddressSpace::Register, 0x100);
+        let reader = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_input(&reader, vn.clone(), 0);
+        let other = fd.new_op(1, Address::new(0x1002));
+        fd.op_set_input(&other, vn.clone(), 0);
+        assert_eq!(vn.read().unwrap().descend.len(), 2);
+
+        // op_unlink severs reader's link (stale Arc remains in its inrefs),
+        // then op_destroy re-unsets every slot — the double unset must not
+        // touch `other`'s descend entry.
+        fd.op_unlink(&reader);
+        fd.op_destroy(&reader);
+
+        let live: Vec<_> = vn.read().unwrap().descend_iter().collect();
+        assert_eq!(live.len(), 1, "other reader's descend entry must survive");
+        assert!(std::sync::Arc::ptr_eq(&live[0], &other.0));
+        assert!(std::sync::Arc::ptr_eq(
+            &other.0.read().unwrap().inrefs[0],
+            &vn
+        ));
     }
 
 }

@@ -1739,7 +1739,16 @@ impl Varnode {
     /// flag — TODO tracked in ALIGNMENT_ROADMAP (cover.cc full port).
     pub fn add_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         if self.is_free() && !self.is_spacebase() {
-            if !self.descend.is_empty() {
+            // Ghidra cc:333-336 throws when descend (checked via
+            // `descend.empty()`, varnode.cc:334) is non-empty. Ghidra's list
+            // can never hold a destroyed op (opDestroy erases every descend
+            // link before the op is freed), so empty()==no live reader. A
+            // Rust Weak whose target was already freed is pure drift; count
+            // only live entries so drift cannot fabricate the
+            // "multiple descendants" signal (has_no_descend/count_descends
+            // already filter dead entries the same way).
+            let has_live_descend = self.descend.iter().any(|w| w.strong_count() > 0);
+            if has_live_descend {
                 eprintln!("[VN] WARN: free varnode space={:?} off={:#x} gets multiple descendants",
                     self.address_space, self.loc.as_u64());
             }
