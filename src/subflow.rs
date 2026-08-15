@@ -962,7 +962,24 @@ impl SubvariableFlow {
             match code {
                 OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_XOR => {
                     let rop = self.create_op_down(code, op_arc.read().unwrap().num_input(), op_arc.clone(), rvn, slot as i32);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra passes the raw outvn pointer into createLink
+                    // (subflow.cc:402), which dereferences it in
+                    // setReplacement (subflow.cc:70). A null output is
+                    // unreachable for these opcodes in Ghidra's IR: opDestroy
+                    // (funcdata_op.cc:213-217) unsets every input and so
+                    // erases the op from all descend lists, and the opcodes
+                    // that are legitimately output-less (STORE/RETURN/
+                    // BRANCH*/CBRANCH and output-less CALLs) take other
+                    // switch cases that never read op->getOut(). When Rugra's
+                    // upstream presents such an op anyway, converge on the
+                    // failure path every untraceable case takes (return
+                    // false) instead of crashing. See TODO
+                    // SUBFLOW-OUTVN-UNWRAP-0001.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -972,21 +989,35 @@ impl SubvariableFlow {
                         // Subvar set to 1s, truncate flow.
                     } else {
                         let rop = self.create_op_down(OpCode::CPUI_INT_OR, 2, op_arc.clone(), rvn, slot as i32);
-                        if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                        // Ghidra derefs outvn via createLink->setReplacement
+                        // (subflow.cc:408 -> 70); see the COPY case note above.
+                        let outvn_vn = match outvn {
+                            Some(v) => v,
+                            None => return false,
+                        };
+                        if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                             return false;
                         }
                         hcount += 1;
                     }
                 }
                 OpCode::CPUI_INT_AND => {
+                    // Ghidra derefs outvn->getSize()/getConsume() before any
+                    // createLink (subflow.cc:413/419/427); null is unreachable
+                    // there (see the COPY case note). Abort rather than
+                    // fabricate size/consume 0 for a missing output.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
                     let (in1_const, in1_off, out_size, out_consume) = {
                         let o = op_arc.read().unwrap();
                         let in1 = o.get_in(1);
                         (
                             in1.map(|v| v.read().unwrap().is_constant()).unwrap_or(false),
                             in1.map(|v| v.read().unwrap().get_offset()).unwrap_or(0),
-                            o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0),
-                            o.get_out().map(|v| v.read().unwrap().get_consume()).unwrap_or(0),
+                            outvn_vn.read().unwrap().get_size(),
+                            outvn_vn.read().unwrap().get_consume(),
                         )
                     };
                     if in1_const && in1_off == rvn_mask {
@@ -1002,7 +1033,7 @@ impl SubvariableFlow {
                                 // Subvar set to zero, truncate flow.
                             } else {
                                 let rop = self.create_op_down(OpCode::CPUI_INT_AND, 2, op_arc.clone(), rvn, slot as i32);
-                                if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                                if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn.clone()) {
                                     return false;
                                 }
                                 hcount += 1;
@@ -1013,7 +1044,7 @@ impl SubvariableFlow {
                             // Subvar set to zero, truncate flow.
                         } else {
                             let rop = self.create_op_down(OpCode::CPUI_INT_AND, 2, op_arc.clone(), rvn, slot as i32);
-                            if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                            if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn.clone()) {
                                 return false;
                             }
                             hcount += 1;
@@ -1022,7 +1053,13 @@ impl SubvariableFlow {
                 }
                 OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
                     let rop = self.create_op_down(OpCode::CPUI_COPY, 1, op_arc.clone(), rvn, 0);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:433 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1041,7 +1078,13 @@ impl SubvariableFlow {
                     }
                     let rop = self.create_op_down(OpCode::CPUI_INT_MULT, 2, op_arc.clone(), rvn, slot as i32);
                     let newmask = (rvn_mask as i128) << sa;
-                    if !self.create_link(Some(rop), newmask as u64, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:443 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), newmask as u64, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1065,7 +1108,13 @@ impl SubvariableFlow {
                         return false;
                     }
                     let rop = self.create_op_down(code, 2, op_arc.clone(), rvn, slot as i32);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:453 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1075,7 +1124,13 @@ impl SubvariableFlow {
                         return false; // Cannot account for carry
                     }
                     let rop = self.create_op_down(OpCode::CPUI_INT_ADD, 2, op_arc.clone(), rvn, slot as i32);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:460 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1100,8 +1155,19 @@ impl SubvariableFlow {
                         if sa >= 64 {
                             return false; // Beyond precision of mask
                         }
-                        let out_size = o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
-                        let out_consume = o.get_out().map(|v| v.read().unwrap().get_consume()).unwrap_or(0);
+                        // Ghidra derefs outvn->getSize()/getConsume() here
+                        // (subflow.cc:477/481-482); null is unreachable (see
+                        // the COPY case note). Abort rather than fabricate
+                        // size/consume 0.
+                        let outvn_vn = match outvn {
+                            Some(v) => v,
+                            None => {
+                                drop(o);
+                                return false;
+                            }
+                        };
+                        let out_size = outvn_vn.read().unwrap().get_size();
+                        let out_consume = outvn_vn.read().unwrap().get_consume();
                         drop(o);
                         let newmask = (rvn_mask << sa) & calc_mask(out_size);
                         if newmask == 0 {
@@ -1116,7 +1182,7 @@ impl SubvariableFlow {
                             hcount += 1;
                         } else {
                             let rop = self.create_op_down(OpCode::CPUI_COPY, 1, op_arc.clone(), rvn, 0);
-                            if !self.create_link(Some(rop), newmask, -1, outvn.unwrap()) {
+                            if !self.create_link(Some(rop), newmask, -1, outvn_vn) {
                                 return false;
                             }
                             hcount += 1;
@@ -1140,8 +1206,19 @@ impl SubvariableFlow {
                         }
                         let sa = o.get_in(1).unwrap().read().unwrap().get_offset() as i32;
                         let newmask = if sa >= 64 { 0 } else { rvn_mask >> sa };
-                        let out_size = o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
-                        let out_consume = o.get_out().map(|v| v.read().unwrap().get_consume()).unwrap_or(0);
+                        // Ghidra derefs outvn->getSize()/getConsume() here
+                        // (subflow.cc:511/518-519/525); null is unreachable
+                        // (see the COPY case note). Abort rather than
+                        // fabricate size/consume 0.
+                        let outvn_vn = match outvn {
+                            Some(v) => v,
+                            None => {
+                                drop(o);
+                                return false;
+                            }
+                        };
+                        let out_size = outvn_vn.read().unwrap().get_size();
+                        let out_consume = outvn_vn.read().unwrap().get_consume();
                         let in0_nzmask = o.get_in(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
                         drop(o);
                         if newmask == 0 {
@@ -1166,7 +1243,7 @@ impl SubvariableFlow {
                             hcount += 1;
                         } else {
                             let rop = self.create_op_down(OpCode::CPUI_COPY, 1, op_arc.clone(), rvn, 0);
-                            if !self.create_link(Some(rop), newmask, -1, outvn.unwrap()) {
+                            if !self.create_link(Some(rop), newmask, -1, outvn_vn) {
                                 return false;
                             }
                             hcount += 1;
@@ -1186,7 +1263,18 @@ impl SubvariableFlow {
                             return false;
                         }
                     };
-                    let out_size = o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                    // Ghidra derefs outvn->getSize() repeatedly here
+                    // (subflow.cc:531/534/542/548); null is unreachable (see
+                    // the COPY case note). Abort rather than fabricate
+                    // size 0.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => {
+                            drop(o);
+                            return false;
+                        }
+                    };
+                    let out_size = outvn_vn.read().unwrap().get_size();
                     drop(o);
                     if sa >= 64 {
                         // break; (truncate flow)
@@ -1208,7 +1296,7 @@ impl SubvariableFlow {
                             hcount += 1;
                         } else {
                             let rop = self.create_op_down(OpCode::CPUI_COPY, 1, op_arc.clone(), rvn, 0);
-                            if !self.create_link(Some(rop), newmask, -1, outvn.unwrap()) {
+                            if !self.create_link(Some(rop), newmask, -1, outvn_vn) {
                                 return false;
                             }
                             hcount += 1;
@@ -1222,7 +1310,13 @@ impl SubvariableFlow {
                     drop(o);
                     let newmask = if is_in0 { rvn_mask << (8 * in1_size) } else { rvn_mask };
                     let rop = self.create_op_down(OpCode::CPUI_COPY, 1, op_arc.clone(), rvn, 0);
-                    if !self.create_link(Some(rop), newmask, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:557 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), newmask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1734,7 +1828,24 @@ impl SubvariableFlow {
                 OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INT_NEGATE
                 | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_AND => {
                     let rop = self.create_op_down(code, op_arc.read().unwrap().num_input(), op_arc.clone(), rvn, slot as i32);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra passes the raw outvn pointer into createLink
+                    // (subflow.cc:895), which dereferences it in
+                    // setReplacement (subflow.cc:70). A null output is
+                    // unreachable for these opcodes in Ghidra's IR: opDestroy
+                    // (funcdata_op.cc:213-217) unsets every input and so
+                    // erases the op from all descend lists, and the opcodes
+                    // that are legitimately output-less (STORE/RETURN/
+                    // BRANCH*/CBRANCH and output-less CALLs) take other
+                    // switch cases that never read op->getOut(). When Rugra's
+                    // upstream presents such an op anyway, converge on the
+                    // failure path every untraceable case takes (return
+                    // false) instead of crashing. See TODO
+                    // SUBFLOW-OUTVN-UNWRAP-0001.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1742,7 +1853,13 @@ impl SubvariableFlow {
                 OpCode::CPUI_INT_SEXT => {
                     // Extended logical variable into even larger container.
                     let rop = self.create_op_down(OpCode::CPUI_COPY, 1, op_arc.clone(), rvn, 0);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:900 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     hcount += 1;
@@ -1756,7 +1873,13 @@ impl SubvariableFlow {
                     let in1 = o.get_in(1).cloned().unwrap();
                     drop(o);
                     let rop = self.create_op_down(OpCode::CPUI_INT_SRIGHT, 2, op_arc.clone(), rvn, 0);
-                    if !self.create_link(Some(rop), rvn_mask, -1, outvn.unwrap()) {
+                    // Ghidra derefs outvn via createLink->setReplacement
+                    // (subflow.cc:906 -> 70); see the COPY case note above.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !self.create_link(Some(rop), rvn_mask, -1, outvn_vn) {
                         return false;
                     }
                     // Preserve the shift amount.
@@ -1768,7 +1891,17 @@ impl SubvariableFlow {
                     if o.get_in(1).unwrap().read().unwrap().get_offset() != 0 {
                         return false; // Only allow proper truncation
                     }
-                    let out_size = o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                    // Ghidra derefs outvn->getSize() twice (subflow.cc:912-913);
+                    // null is unreachable there (see the COPY case note). Do not
+                    // fabricate size 0 for a missing output: abort instead.
+                    let outvn_vn = match outvn {
+                        Some(v) => v,
+                        None => {
+                            drop(o);
+                            return false;
+                        }
+                    };
+                    let out_size = outvn_vn.read().unwrap().get_size();
                     drop(o);
                     if (out_size as i32) > self.flowsize {
                         return false;
@@ -2240,7 +2373,9 @@ impl SubvariableFlow {
     /// Build the logical Varnode which will replace its original containing
     /// Varnode. Faithful to `SubvariableFlow::getReplaceVarnode`
     /// (subflow.cc:1316-1345).
-    fn get_replace_varnode(fd: &mut Funcdata, newvarlist: &mut [ReplaceVarnode], flowsize: i32, rvn: usize) -> Arc<RwLock<Varnode>> {
+    fn get_replace_varnode(&mut self, fd: &mut Funcdata, rvn: usize) -> Arc<RwLock<Varnode>> {
+        let flowsize = self.flowsize;
+        let newvarlist = &mut self.newvarlist;
         if let Some(r) = newvarlist[rvn].replacement.clone() {
             return r;
         }
@@ -2265,9 +2400,11 @@ impl SubvariableFlow {
             return new_vn;
         }
         let is_input = vn.read().unwrap().is_input();
-        // Build a temporary `self`-like view just to call use_same_address /
-        // get_replacement_address consistently. We re-derive the two decisions
-        // inline (they only read newvarlist[rvn] + flow flags available here).
+        // useSameAddress (subflow.cc:1274-1291) reads the member bitsize and
+        // aggressive fields, so this must be a method (the former assoc-fn
+        // re-derivation substituted `flowsize*8 >= 8`, which is always true
+        // for flowsize >= 1 and diverged from `bitsize >= 8`, and dropped the
+        // `aggressive` early-true check).
         let use_same = {
             let vr = vn.read().unwrap();
             let rvn_mask = newvarlist[rvn].mask;
@@ -2277,12 +2414,14 @@ impl SubvariableFlow {
                 false
             } else if (rvn_mask & 1) == 0 {
                 false
-            } else if flowsize * 8 >= 8 {
+            } else if self.bitsize >= 8 {
+                true
+            } else if self.aggressive {
                 true
             } else {
-                // aggressive==false path is the only one we reach here without
-                // `self`; mirror useSameAddress's conservative final return.
-                let bitmask: u64 = ((1u64) << (flowsize * 8)) - 1;
+                // Try to decide if this is the ONLY subvariable passing
+                // through this container.
+                let bitmask: u64 = ((1u64) << self.bitsize) - 1;
                 let mut mask = vr.get_consume();
                 mask |= bitmask;
                 mask == rvn_mask
@@ -2290,6 +2429,10 @@ impl SubvariableFlow {
         };
         let new_vn = if use_same {
             let v = vn.read().unwrap();
+            // getReplacementAddress (subflow.cc:1297-1308): the new Varnode
+            // lives at the ORIGINAL varnode's address (+sa), so it inherits
+            // the original's space — NOT always the register space.
+            let space = v.get_space();
             let addr = v.get_addr().clone();
             let sa = (leastsigbit_set(newvarlist[rvn].mask) / 8) as i64;
             let addr = addr.offset(sa);
@@ -2297,10 +2440,10 @@ impl SubvariableFlow {
             if is_input {
                 Self::replace_input(fd, rvn, newvarlist);
             }
-            // fd->newVarnode(flowsize, addr) — Rugra has new_varnode_out for
-            // op outputs, but here the varnode is standalone (input or
-            // addrtied). Create a register-space varnode at the address.
-            let nv = fd.vbank.create_with_space(flowsize as usize, AddressSpace::Register, addr.as_u64());
+            // fd->newVarnode(flowsize, addr) — Rugra's Address is a scalar
+            // without a space, so the space is taken from the original
+            // varnode, matching Ghidra's Address-attached space.
+            let nv = fd.vbank.create_with_space(flowsize as usize, space, addr.as_u64());
             nv
         } else {
             fd.new_unique(flowsize as usize)
@@ -2389,7 +2532,7 @@ impl SubvariableFlow {
             }
             let patch = self.patchlist[p].clone();
             let push_op_ref = PcodeOpRef(patch.patch_op.clone());
-            let new_vn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
+            let new_vn = self.get_replace_varnode(fd, patch.in1);
             let old_vn = patch.patch_op.read().unwrap().get_out().cloned().unwrap();
             fd.op_set_output(&push_op_ref, new_vn.clone());
             // Create placeholder defining op for old Varnode until dead-code.
@@ -2416,7 +2559,7 @@ impl SubvariableFlow {
             let newop = fd.new_op(numparams, addr);
             fd.op_set_opcode(&newop, opc);
             let rout_vn = out_idx.expect("oplist op with no output");
-            let out = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, rout_vn);
+            let out = self.get_replace_varnode(fd, rout_vn);
             fd.op_set_output(&newop, out);
             let follow = PcodeOpRef(orig_op);
             fd.op_insert_after(&newop, &follow);
@@ -2432,7 +2575,7 @@ impl SubvariableFlow {
             let input_len = self.oplist[i].input.len();
             for j in 0..input_len {
                 if let Some(in_idx) = self.oplist[i].input[j] {
-                    let invn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, in_idx);
+                    let invn = self.get_replace_varnode(fd, in_idx);
                     fd.op_set_input(&newop, invn, j);
                 }
             }
@@ -2444,26 +2587,35 @@ impl SubvariableFlow {
             let pullop_ref = PcodeOpRef(patch.patch_op.clone());
             match patch.patch_type {
                 PatchType::CopyPatch => {
-                    while pullop_ref.0.read().unwrap().num_input() > 1 {
-                        fd.op_remove_input(&pullop_ref, pullop_ref.0.read().unwrap().num_input() - 1);
+                    // Ghidra cc:1486-1487: `while(pullop->numInput() > 1)
+                    //   data.opRemoveInput(pullop,pullop->numInput()-1);`
+                    // The slot must be computed BEFORE op_remove_input: a
+                    // read guard held in the call arguments would deadlock
+                    // against op_remove_input's write lock on the same op.
+                    loop {
+                        let num = pullop_ref.0.read().unwrap().num_input();
+                        if num <= 1 {
+                            break;
+                        }
+                        fd.op_remove_input(&pullop_ref, num - 1);
                     }
-                    let invn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
+                    let invn = self.get_replace_varnode(fd, patch.in1);
                     fd.op_set_input(&pullop_ref, invn, 0);
                     fd.op_set_opcode(&pullop_ref, OpCode::CPUI_COPY);
                 }
                 PatchType::ComparePatch => {
-                    let in1 = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
-                    let in2 = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in2.unwrap());
+                    let in1 = self.get_replace_varnode(fd, patch.in1);
+                    let in2 = self.get_replace_varnode(fd, patch.in2.unwrap());
                     fd.op_set_input(&pullop_ref, in1, 0);
                     fd.op_set_input(&pullop_ref, in2, 1);
                 }
                 PatchType::ParameterPatch => {
-                    let invn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
+                    let invn = self.get_replace_varnode(fd, patch.in1);
                     fd.op_set_input(&pullop_ref, invn, patch.slot as usize);
                 }
                 PatchType::ExtensionPatch => {
                     let sa = patch.slot;
-                    let in_vn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
+                    let in_vn = self.get_replace_varnode(fd, patch.in1);
                     let out_size = pullop_ref.0.read().unwrap().get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
                     let addr = pullop_ref.0.read().unwrap().get_addr();
                     if sa == 0 {
@@ -2475,9 +2627,14 @@ impl SubvariableFlow {
                         };
                         fd.op_set_opcode(&pullop_ref, opc);
                         // opSetAllInput(pullop, invec) — emulated: remove all but
-                        // slot 0, then set slot 0.
-                        while pullop_ref.0.read().unwrap().num_input() > 1 {
-                            fd.op_remove_input(&pullop_ref, pullop_ref.0.read().unwrap().num_input() - 1);
+                        // slot 0, then set slot 0. Guards are hoisted out of the
+                        // call arguments (see the CopyPatch note).
+                        loop {
+                            let num = pullop_ref.0.read().unwrap().num_input();
+                            if num <= 1 {
+                                break;
+                            }
+                            fd.op_remove_input(&pullop_ref, num - 1);
                         }
                         fd.op_set_input(&pullop_ref, in_vn, 0);
                     } else {
@@ -2493,8 +2650,14 @@ impl SubvariableFlow {
                         };
                         let sa_const = fd.new_constant(4, sa as u64);
                         // opSetAllInput(pullop, {invec_vn, sa_const}).
-                        while pullop_ref.0.read().unwrap().num_input() > 2 {
-                            fd.op_remove_input(&pullop_ref, pullop_ref.0.read().unwrap().num_input() - 1);
+                        // Guards hoisted out of the call arguments (see the
+                        // CopyPatch note).
+                        loop {
+                            let num = pullop_ref.0.read().unwrap().num_input();
+                            if num <= 2 {
+                                break;
+                            }
+                            fd.op_remove_input(&pullop_ref, num - 1);
                         }
                         fd.op_set_input(&pullop_ref, invec_vn, 0);
                         fd.op_set_input(&pullop_ref, sa_const, 1);
@@ -2508,7 +2671,7 @@ impl SubvariableFlow {
                     let addr = pullop_ref.0.read().unwrap().get_addr();
                     let zext_op = fd.new_op(1, addr);
                     fd.op_set_opcode(&zext_op, OpCode::CPUI_INT_ZEXT);
-                    let invn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
+                    let invn = self.get_replace_varnode(fd, patch.in1);
                     fd.op_set_input(&zext_op, invn.clone(), 0);
                     let sizeout = crate::typeop::TypeOpFloatInt2Float::preferred_zext_size(
                         invn.read().unwrap().get_size() as i32,

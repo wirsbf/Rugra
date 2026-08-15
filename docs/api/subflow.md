@@ -88,4 +88,36 @@ FLOAT_FLOAT2FLOAT 常量输入→op_float2_float fold→COPY(constant)（subflow
 4 字节时返回 4、在 8 字节时返回 8；Ghidra 的严格 `<4`/`<8` 边界分别返回
 8 和 9。直接编译锁定 Ghidra 12.0.4 `typeop.cc` 的 fixture 与 Rust 边界测试均
 覆盖这些转折点。
+
+### 2026-08-15：SUBFLOW-OUTVN-UNWRAP-0001 — outvn None 收敛 + 三处移植缺陷修复
+
+E2E `my_get_token`(0x3720) 曾 panic 于 `trace_forward_sext` COPY/MULTIEQUAL/
+INT_{NEGATE,XOR,OR,AND} 分支的 `outvn.unwrap()`。对照锁定 oracle 确认：
+Ghidra 在 `traceForwardSext`(subflow.cc:883) 仅对 mark-skip 检查带
+`(outvn!=0)` 守卫，随后把裸 `outvn` 指针直接传入 `createLink`(895)，
+`setReplacement`(70) 无 null 检查——即该状态在 Ghidra 一致 IR 下不可达
+（`opDestroy` funcdata_op.cc:213-217 会先擦除 descend 链接；天然无输出的
+STORE/RETURN/BRANCH*/CBRANCH/无输出 CALL 走其它 case）。Rugra 上游仍可能
+出现 alive 无输出 op（见 TODO SUBFLOW-OUTVN-UNWRAP-0001 的上游登记），故
+所有消费 `op->getOut()` 的 case 现按"不可追踪即 abort"收敛：`None` →
+`return false`（与每个 case 的失败路径一致，带 `[ACTION]` stderr 标记），
+覆盖 `trace_forward`/`trace_forward_sext` 全部分支（COPY/MULTIEQUAL/
+INT_NEGATE/XOR/OR/AND/ZEXT/SEXT/MULT/DIV/REM/ADD/LEFT/RIGHT/SRIGHT/
+SUBPIECE/PIECE）。
+
+同轮修复（fixture 对拍暴露）：
+1. `do_replacement` CopyPatch/ExtensionPatch 的 `opRemoveInput` 循环——
+   参数表达式中的读锁与 `op_remove_input` 的写锁同 op 死锁；guard 提升
+   （Ghidra subflow.cc:1486-1487 无锁语义等价）。
+2. `get_replace_varnode` 硬编码 `AddressSpace::Register`——Ghidra
+   `fd->newVarnode(flowsize, addr)`(1338) 继承原 varnode 的地址空间
+   （unique 输入现在正确产生 unique 替换）。
+3. `get_replace_varnode` 内联 use_same 用 `flowsize*8 >= 8`（恒真）替代
+   Ghidra `bitsize >= 8`(1281) 且漏掉 `aggressive`(1282)——改为方法化读取
+   `self.bitsize`/`self.aggressive`，consume 位宽也改用 `1<<bitsize`。
+
+oracle fixture `tests/oracle/subflow_outvn_1204.*`（runner
+`tools/run_subflow_outvn_oracle.sh`，pinned base 07efbff + overlay）：15 case
+= 6 sext Some + 6 sext None 状态投影（Ghidra 无法运行 doTrace——null 解引用，
+NO_ORACLE 如实登记；Rust 侧断言 trace abort + IR 不变）+ 3 plain Some。
 <!-- annotation-pass: 2026-07-04 -->
