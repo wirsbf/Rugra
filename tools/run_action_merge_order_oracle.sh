@@ -316,7 +316,7 @@ require("fixture id", metadata["fixture_id"], "PIPE-MERGETYPE-ORDER-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-universalaction-coreaction-5462",
+    "GH12-F-bf835e5e2b2bd0ac91bd",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]
