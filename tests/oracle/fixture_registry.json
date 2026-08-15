@@ -556,6 +556,41 @@
      "GH12-F-c3e2b5c2bab05824fe04"
     ]
    }
+  },
+  {
+   "id": "range_properties_1204",
+   "description": "RangeProperties::decode ordered attribute traversal, sticky flags, error/partial state, and real TreeDecoder unregistered-name (id 159) projection",
+   "runner": [
+    "tools/run_range_properties_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/range_properties_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/range_properties_1204.cc",
+     "rust_fixture": "tests/oracle/range_properties_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_range_properties_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/address.rs",
+     "docs/api/address.md",
+     "tests/oracle/range_properties_1204.*",
+     "tools/run_range_properties_oracle.sh"
+    ],
+    "rust_function_ids": [],
+    "ghidra_function_ids": [
+     "GH12-F-87faea0d5fa6006d5091"
+    ]
+   }
   }
  ]
 }
