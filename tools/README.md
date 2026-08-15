@@ -141,3 +141,18 @@ python3 tools/reduce_fixture.py \
 剩余 unit 证明 1-minimal。输出 trace 保留原始/最小输入指纹、完整 argv/可执行文件 hash、
 受控构建环境、所有 predicate 结果、超时与重试参数；额外必需环境变量用 `--env NAME`
 显式加入。这样最小 case 可连同完整证据升格为正式 oracle fixture。
+
+### Schema 2 合同（2026-08-15，`DIFF-REDUCE-HARDEN-0002`）
+
+seed 先对**原始文件 bytes** fresh 执行（绕过 memo），并检测 render normalization drift
+（原始与 re-rendered seed 双指纹入 trace；若 drift 改变 `predicate_signature` 则
+fail-closed，渲染层不得掩盖真实差异）。predicate 每次执行四分型：
+`INTERESTING(predicate_signature)` / `BORING` / `INVALID`（`--invalid-exit`，默认 3，
+只跳过当前 candidate；interesting 但签名≠seed 也记 `INVALID(signature_mismatch)`，
+bug A 不会缩到 bug B）/ `HARNESS_ERROR`（fail-closed）。签名取自 stdout JSON（整体或
+末行）的 `predicate_signature` 键，规范为 sorted-compact JSON 字符串，跨进程可比。
+谓词不输出签名时为兼容模式（`signature_enforced=false`），bug 漂移防护依赖谓词履约
+输出稳定签名。最终验证绕过 memo 按 `--retries` 次对最小 case fresh 重跑并要求
+签名==seed，防缓存假阳性。执行记录 fsync 追加到 `<trace>.eval.jsonl`（成功后删除），
+中断后 `--resume <log|trace.json>` 在谓词身份（argv/exit/timeout/retries/可执行文件
+sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 旧 trace fail-closed 拒绝。
