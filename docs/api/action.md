@@ -859,3 +859,65 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
   `clearAnalysis`、Rule pool 及默认有序树仍分别归 `PIPE-BREAK-0001`、
   `PIPE-RESTART-0001`、`PIPE-POOL-0001`、`PIPE-TREE-0001`。该 fixture 是
   `PARTIAL_MATCH`，模块保持 L2。
+
+---
+
+## 2026-08-15：PIPE-MERGETYPE-ORDER-0001 — cleanup 后动作序列对齐 coreaction.cc:5714-5738
+
+### `pub fn build_default_pipeline() -> ActionRestartGroup`（新增，RUGRA-GLUE）
+
+`set_default_actions` 的完整树构造抽为自由函数 `build_default_pipeline`，
+`set_default_actions` 仅注册其结果。行为不变；这是单一构造来源（ordered-action
+fixture `tests/oracle/action_merge_order_1204.rs` 枚举同一构造）。
+
+### cleanup 后子序列重排（锁定 oracle coreaction.cc:5714-5738）
+
+原顺序（历史层积，见 78186a2/2f3116f/c45b2fa）为 `cleanup → MergeType(过早)
+→ NormalizeBranches → PreferComplement → StructureTransform → MergeRequired…
+→ MergeType(第二份)`。现与 raw universal 逐字对齐：
+
+```
+prefercomplement(:5714) → structuretransform(:5715) → normalizebranches(:5716)
+→ assignhigh(:5717) → mergerequired(:5718) → markexplicit(:5719)
+→ markimplied(:5720) → mergemultientry(:5721) → mergecopy(:5722)
+→ dominantcopy(:5723) → dynamicsymbols(:5724 首份) → markindirectonly(:5725)
+→ mergeadjacent(:5726) → mergetype(:5727 单份) → hideshadow(:5728)
+→ copymarker(:5729) → outputprototype(:5730) → inputprototype(:5731)
+→ mapglobals(:5732) → dynamicsymbols(:5733 第二份) → namevars(:5734)
+→ setcasts(:5735) → finalstructure(:5736) → prototypewarnings(:5737)
+→ stop(:5738)
+```
+
+- 删除过早的 cleanup 后首个 `ActionMergeType`；`MergeType` 全树仅一份（:5727）。
+- `ActionAssignHigh`/`ActionDominantCopy`/`ActionCopyMarker` 从
+  `build_full_pipeline_actions`（fullloop 前平铺）移入 :5717/:5723/:5729 精确
+  位置——Ghidra 的 HideShadow/MarkExplicit/mergeByDatatype 无条件解引用
+  `getHigh()`（coreaction.cc:4831/3237、merge.cc:370），AssignHigh 必须先行。
+- `finalstructure(:5736)` 与 `prototypewarnings(:5737)` 恢复 oracle 先后。
+- fixture：`tests/oracle/action_merge_order_1204.{cc,rs}` + 
+  `tools/run_action_merge_order_oracle.sh`（pinned base 91b4774 + 
+  src/{action,coreaction}.rs overlay）。锁定 oracle 侧通过
+  `universalAction + setGroup("all") + setCurrent("all")` 公有 API 得到
+  无过滤 universal 克隆，枚举 seq 并逐 child `perform`；Rust 侧枚举同一
+  `build_default_pipeline` 构造。29 行观察中 28 行逐字节一致；唯一残差为
+  `finalstructure` count 桥（blockaction.rs 硬编码 `changed += 1`，oracle
+  apply 不增 count；域外租约，登记跟进 TODO）。
+- E2E：curl 22/24 → **24/24**（0 PANICKED/TIMEOUT），输出与基线逐字节相同。
+
+### 新增只读/编排 API（RUGRA-GLUE）
+
+- `ActionGroup::{child_names, perform_child}`、
+  `ActionRestartGroup::{child_names, perform_child, child_state}`：
+  fixture 可观测视图；`perform_child` 复用 `ActionGroup::apply` 对 child 的
+  逐字 perform 驱动（对应 Ghidra action.cc:511-527 的 child 驱动方式）。
+
+### 残差（不因本改动升级状态）
+
+- `build_full_pipeline_actions` 平铺层仍有 HideShadow/OutputPrototype/
+  InputPrototype/SetCasts/PrototypeWarnings 的过早重复注册（PIPE-TREE-0001
+  T6 域）；本轮只移除已迁移到精确位置的三个。
+- 主管线独立 merge Action（mergerequired/mergecopy/mergeadjacent）在无
+  cover 前提下运行：Ghidra 的 `data.getMerge()` 是 Funcdata 持久对象且
+  testCache 惰性建 cover，Rugra 每 Action 新建 `Merge::new()`（live_set/
+  covers 未建立）——`merge_adjacent` 对同尺寸 (in,out) 对会凭空合并。merge.rs
+  域外租约，登记跟进 TODO；fixture 图以常量输入规避该路径。

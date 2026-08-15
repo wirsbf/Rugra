@@ -258,6 +258,18 @@ impl ActionGroup {
     pub fn child_state(&self, index: usize) -> Option<&ActionState> {
         self.child_states.get(index)
     }
+    // RUGRA-GLUE: read-only ordered fixture view of Ghidra ActionGroup::list (action.hh:145); Ghidra prints the same sequence via Action::print (action.cc:417-440)
+    pub fn child_names(&self) -> Vec<&str> {
+        self.actions.iter().map(|a| a.get_name()).collect()
+    }
+    // RUGRA-GLUE: fixture executor view — drives child `index` through the exact perform() call ActionGroup::apply makes (src/action.rs ActionGroup::apply line above); Ghidra's ActionGroup::apply drives Action::perform the same way (action.cc:511-527)
+    pub fn perform_child(
+        &mut self,
+        index: usize,
+        fd: &mut Funcdata,
+    ) -> crate::error::Result<i32> {
+        self.actions[index].perform(fd, &mut self.child_states[index])
+    }
 }
 
 impl Action for ActionGroup {
@@ -340,6 +352,25 @@ impl ActionRestartGroup {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn add_action(&mut self, action: Box<dyn Action>) {
         self.group.add_action(action);
+    }
+
+    // RUGRA-GLUE: read-only ordered fixture view through to the embedded ActionGroup's children (Ghidra ActionRestartGroup inherits ActionGroup::list)
+    pub fn child_names(&self) -> Vec<&str> {
+        self.group.child_names()
+    }
+
+    // RUGRA-GLUE: fixture executor view — drives child `index` of the embedded group exactly as ActionRestartGroup::apply would
+    pub fn perform_child(
+        &mut self,
+        index: usize,
+        fd: &mut Funcdata,
+    ) -> crate::error::Result<i32> {
+        self.group.perform_child(index, fd)
+    }
+
+    // RUGRA-GLUE: read-only fixture/debug view of a child Action's externalized executor state
+    pub fn child_state(&self, index: usize) -> Option<&ActionState> {
+        self.group.child_state(index)
     }
 }
 
@@ -834,20 +865,31 @@ impl ActionDatabase {
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Set up default decompiler actions. Faithful to Ghidra's
-    /// `universalAction` (coreaction.cc:5462-5738) — builds a nested tree:
-    ///   ActionRestartGroup(universal)
-    ///   ├─ Start / FuncLink ...
-    ///   ├─ fullloop (repeatapply)
-    ///   │  ├─ mainloop (repeatapply)
-    ///   │  │  ├─ Heritage / Spacebase / StackPtrFlow ...
-    ///   │  │  ├─ stackstall (repeatapply): oppool1 + LaneDivide/MultiCse/...
-    ///   │  │  ├─ oppool2 / ConditionalExe ...
-    ///   │  └─ DeadCode / DoNothing / SwitchNorm ...
-    ///   ├─ cleanup pool
-    ///   ├─ MergeType / MarkExplicit / MarkImplied ...
-    ///   └─ SetCasts / FinalStructure / Stop
+    /// Set up default decompiler actions by registering the one authoritative
+    /// pipeline tree built by [`build_default_pipeline`] (single source of
+    /// truth: the ordered-action fixture enumerates the same construction).
     pub fn set_default_actions(&mut self) {
+        self.register_action(Box::new(build_default_pipeline()));
+    }
+}
+
+// RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+/// Build the default decompile pipeline root. Faithful to Ghidra's
+/// `universalAction` (coreaction.cc:5462-5738) — builds a nested tree:
+///   ActionRestartGroup(universal)
+///   ├─ Start / FuncLink ...
+///   ├─ fullloop (repeatapply)
+///   │  ├─ mainloop (repeatapply)
+///   │  │  ├─ Heritage / Spacebase / StackPtrFlow ...
+///   │  │  ├─ stackstall (repeatapply): oppool1 + LaneDivide/MultiCse/...
+///   │  │  ├─ oppool2 / ConditionalExe ...
+///   │  └─ DeadCode / DoNothing / SwitchNorm ...
+///   ├─ cleanup pool
+///   ├─ PreferComplement → StructureTransform → NormalizeBranches (:5714-5716)
+///   ├─ AssignHigh → MergeRequired → … → MergeAdjacent → MergeType (:5717-5727)
+///   └─ HideShadow → … → SetCasts → FinalStructure → PrototypeWarnings → Stop
+pub fn build_default_pipeline() -> ActionRestartGroup {
+    {
         // Root: ActionRestartGroup (Ghidra coreaction.cc:5474, onceperfunc, maxrestarts=1)
         let mut universal = ActionRestartGroup::new(
             "decompile",
@@ -996,45 +1038,54 @@ impl ActionDatabase {
         universal.add_action(Box::new(crate::coreaction::ActionStartCleanUp::new())); // :5692 — stub, safe
         // Cleanup pool (coreaction.cc:5694, repeatapply)
         universal.add_action(Box::new(build_cleanup_pool()));
-        // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
-        // Merge::merge_all (see ActionMergeType). ActionAssignHigh (:5717) is
-        // already registered in build_full_pipeline_actions (line ~7084), runs
-        // before the merge actions, assigning HighVariables to all Varnodes.
-        universal.add_action(Box::new(ActionMergeType::new()));
-        universal.add_action(Box::new(ActionNormalizeBranches::new()));
-        // Post-normalize structure Actions (coreaction.cc:5714-5715)
+        // Post-cleanup sequence mirrors coreaction.cc:5714-5738 verbatim.
+        // PIPE-MERGETYPE-ORDER-0001: the three structural transforms come
+        // FIRST after the cleanup pool (:5714-5716), ActionMergeType runs
+        // exactly ONCE late (:5727, after MergeAdjacent, before HideShadow),
+        // and ActionAssignHigh (:5717) attaches HighVariables between the
+        // structural transforms and the merge family (HideShadow/MarkExplicit/
+        // mergeByDatatype dereference getHigh() unconditionally — Ghidra
+        // coreaction.cc:4831/3237, merge.cc:370). The former premature
+        // MergeType right after cleanup and the NormalizeBranches-first
+        // ordering were historical accretion (78186a2/2f3116f/c45b2fa), not
+        // oracle order; see docs/alignment_audit/PIPELINE_TREE_2026-08-13.md.
         universal.add_action(Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714
         universal.add_action(Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715
-        // Merge stage (coreaction.cc:5717-5729) — faithful order:
+        universal.add_action(Box::new(ActionNormalizeBranches::new())); // :5716 (blockaction.cc:2117)
+        universal.add_action(Box::new(crate::coreaction::ActionAssignHigh::new())); // :5717 — moved here from build_full_pipeline_actions
+        // Merge stage (coreaction.cc:5718-5726) — faithful order:
         universal.add_action(Box::new(crate::coreaction::ActionMergeRequired::new())); // :5718
         universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new())); // :5719
         universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new())); // :5720
         universal.add_action(Box::new(crate::coreaction::ActionMergeMultiEntry::new())); // :5721
         universal.add_action(Box::new(crate::coreaction::ActionMergeCopy::new())); // :5722
+        universal.add_action(Box::new(crate::coreaction::ActionDominantCopy::new())); // :5723 — moved here from build_full_pipeline_actions
+        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5724 — first of oracle's two deliberate instances (stub, safe)
         universal.add_action(Box::new(crate::coreaction::ActionMarkIndirectOnly::new())); // :5725
         universal.add_action(Box::new(crate::coreaction::ActionMergeAdjacent::new())); // :5726
-        universal.add_action(Box::new(ActionMergeType::new())); // :5727
+        universal.add_action(Box::new(crate::coreaction::ActionMergeType::new())); // :5727 — the single instance (Merge::merge_all still folds the :5718-5729 steps internally; see ActionMergeType)
         universal.add_action(Box::new(crate::coreaction::ActionHideShadow::new())); // :5728
+        universal.add_action(Box::new(crate::coreaction::ActionCopyMarker::new())); // :5729 — moved here from build_full_pipeline_actions
         // ActionOutputPrototype + ActionInputPrototype (coreaction.cc:5730-5731)
         // — finalize the function prototype from RETURN ops (return type) and
         // input varnodes (param count/types). Run after merge + MarkExplicit/
         // Implied, before SetCasts (5735) and FinalStructure (5736).
-        universal.add_action(Box::new(crate::coreaction::ActionOutputPrototype::new()));
-        universal.add_action(Box::new(crate::coreaction::ActionInputPrototype::new()));
+        universal.add_action(Box::new(crate::coreaction::ActionOutputPrototype::new())); // :5730
+        universal.add_action(Box::new(crate::coreaction::ActionInputPrototype::new())); // :5731
         universal.add_action(Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732
-        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733
+        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733 — second of oracle's two instances
         universal.add_action(Box::new(crate::coreaction::ActionNameVars::new())); // :5734
         // ActionSetCasts (coreaction.cc:5735) — inserts CPUI_CAST ops so the
         // printer emits explicit C type casts. Runs after ActionInferTypes
         // (mainloop) and ActionMarkExplicit/Implied so input/output types are
         // settled. Faithful to Ghidra's order: ...MarkImplied → ...NameVars →
-        // SetCasts → FinalStructure.
-        universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
+        // SetCasts → FinalStructure → PrototypeWarnings.
+        universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new())); // :5735
+        universal.add_action(Box::new(ActionFinalStructure::new())); // :5736 (blockaction.cc:2186) — before PrototypeWarnings per oracle
         universal.add_action(Box::new(crate::coreaction::ActionPrototypeWarnings::new())); // :5737
-        universal.add_action(Box::new(ActionFinalStructure::new()));
         universal.add_action(Box::new(crate::coreaction::ActionStop::new())); // :5738 — stub, safe
 
-        self.register_action(Box::new(universal));
+        universal
     }
 }
 
@@ -1073,6 +1124,58 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    // PIPE-MERGETYPE-ORDER-0001: the post-cleanup child sequence of the
+    // default pipeline must mirror coreaction.cc:5714-5738 verbatim — three
+    // structural transforms first (:5714-5716), a single ActionMergeType late
+    // (:5727, after mergeadjacent, before hideshadow), and ActionAssignHigh
+    // (:5717) between the transforms and the merge family.
+    #[test]
+    fn test_post_cleanup_sequence_matches_ghidra_5714_5738() {
+        let root = build_default_pipeline();
+        let names = root.child_names();
+        let start = names
+            .iter()
+            .position(|n| *n == "prefercomplement")
+            .expect("prefercomplement must be registered");
+        let tail: Vec<&str> = names[start..].to_vec();
+        assert_eq!(
+            tail,
+            vec![
+                "prefercomplement",     // :5714
+                "structuretransform",   // :5715
+                "normalizebranches",    // :5716
+                "assignhigh",           // :5717
+                "mergerequired",        // :5718
+                "markexplicit",         // :5719
+                "markimplied",          // :5720
+                "mergemultientry",      // :5721
+                "mergecopy",            // :5722
+                "dominantcopy",         // :5723
+                "dynamicsymbols",       // :5724 (first instance)
+                "markindirectonly",     // :5725
+                "mergeadjacent",        // :5726
+                "mergetype",            // :5727 — the single instance
+                "hideshadow",           // :5728
+                "copymarker",           // :5729
+                "outputprototype",      // :5730
+                "inputprototype",       // :5731
+                "mapglobals",           // :5732
+                "dynamicsymbols",       // :5733 (second instance)
+                "namevars",             // :5734
+                "setcasts",             // :5735
+                "finalstructure",       // :5736
+                "prototypewarnings",    // :5737
+                "stop",                 // :5738
+            ]
+        );
+        // Exactly one mergetype in the whole tree (the premature post-cleanup
+        // instance and the build_full_pipeline_actions duplicates are gone).
+        assert_eq!(names.iter().filter(|n| **n == "mergetype").count(), 1);
+        assert_eq!(names.iter().filter(|n| **n == "assignhigh").count(), 1);
+        assert_eq!(names.iter().filter(|n| **n == "dominantcopy").count(), 1);
+        assert_eq!(names.iter().filter(|n| **n == "copymarker").count(), 1);
+    }
 
     struct ScriptAction {
         script: Vec<i32>,

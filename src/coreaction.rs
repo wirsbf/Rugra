@@ -902,6 +902,11 @@ impl ActionMergeRequired {
 }
 
 impl Action for ActionMergeRequired {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:364
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.hh:369 ActionMergeRequired::apply
     /// Faithful: data.getMerge().mergeAddrTied(); groupPartials(); mergeMarker();
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
@@ -915,7 +920,7 @@ impl Action for ActionMergeRequired {
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergerequired" mirrors ctor at coreaction.hh:364
     fn get_name(&self) -> &str {
-        "merge_required"
+        "mergerequired"
     }
 }
 
@@ -932,6 +937,11 @@ impl ActionMergeAdjacent {
 }
 
 impl Action for ActionMergeAdjacent {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:376
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.hh:381 ActionMergeAdjacent::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
@@ -941,7 +951,7 @@ impl Action for ActionMergeAdjacent {
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergeadjacent" mirrors ctor at coreaction.hh:376
     fn get_name(&self) -> &str {
-        "merge_adjacent"
+        "mergeadjacent"
     }
 }
 
@@ -961,6 +971,11 @@ impl ActionMergeCopy {
 }
 
 impl Action for ActionMergeCopy {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:387
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.hh:392 ActionMergeCopy::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to coreaction.hh:392: data.getMerge().mergeOpcode(CPUI_COPY);
@@ -988,6 +1003,11 @@ impl ActionMergeMultiEntry {
 }
 
 impl Action for ActionMergeMultiEntry {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:398
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.hh:403 ActionMergeMultiEntry::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
@@ -997,7 +1017,7 @@ impl Action for ActionMergeMultiEntry {
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergemultientry" mirrors ctor at coreaction.hh:398
     fn get_name(&self) -> &str {
-        "merge_multientry"
+        "mergemultientry"
     }
 }
 
@@ -1014,6 +1034,11 @@ impl ActionMergeType {
 }
 
 impl Action for ActionMergeType {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:409
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.hh:414 ActionMergeType::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
@@ -1023,7 +1048,7 @@ impl Action for ActionMergeType {
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergetype" mirrors ctor at coreaction.hh:409
     fn get_name(&self) -> &str {
-        "merge_type"
+        "mergetype"
     }
 }
 
@@ -2499,6 +2524,11 @@ impl ActionHideShadow {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionHideShadow {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:992
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:4831 ActionHideShadow::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to coreaction.cc:4831-4845: iterate each distinct
@@ -2632,6 +2662,11 @@ impl ActionPrototypeWarnings {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionPrototypeWarnings {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1047
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:4886 ActionPrototypeWarnings::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionPrototypeWarnings::apply (coreaction.cc:4886-4920).
@@ -2717,6 +2752,13 @@ impl ActionMarkExplicit {
         }
         drop(def_rg);
 
+        // Ghidra coreaction.cc:3064: `if (vn->hasNoDescend()) return -1;`
+        // — a written varnode with no descendants must be explicit (a
+        // dangling output can never be implied into a reader).
+        if vn.descend_iter().count() == 0 {
+            return -1;
+        }
+
         // Count descendants.
         let desc_count = vn.descend_iter().count() as i32;
         if desc_count > max_ref {
@@ -2730,6 +2772,11 @@ impl ActionMarkExplicit {
     }
 }
 impl Action for ActionMarkExplicit {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:440
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:3237 ActionMarkExplicit::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let max_ref = 2; // arch.max_implied_ref default
@@ -2763,7 +2810,11 @@ impl Action for ActionMarkExplicit {
         }
 
         if change_count > 0 {
-            Ok(action_status::NO_CHANGE)
+            // Ghidra coreaction.cc:3247-3251: every setExplicit call increments
+            // the inherited Action::count; the base perform then observes
+            // lcount<count and reports it. Returning the bump count here is
+            // the sanctioned Rust count-bridge (see Action::perform doc).
+            Ok(change_count)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -2942,6 +2993,11 @@ impl ActionMarkImplied {
     }
 }
 impl Action for ActionMarkImplied {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:461
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:3416 ActionMarkImplied::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416).
@@ -3315,6 +3371,11 @@ impl ActionSetCasts {
     }
 }
 impl Action for ActionSetCasts {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:330
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:2722 ActionSetCasts::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionSetCasts::apply (coreaction.cc:2722-2774). Iterate
@@ -4401,6 +4462,11 @@ impl ActionNameVars {
     }
 }
 impl Action for ActionNameVars {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:482
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:2978 ActionNameVars::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra cc:2983: linkSymbols — link formal Symbols to HighVariables.
@@ -5178,6 +5244,11 @@ impl ActionInputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInputPrototype {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:894
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:4707 ActionInputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInputPrototype::apply (coreaction.cc:4707-4763).
@@ -5255,6 +5326,11 @@ impl ActionOutputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionOutputPrototype {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:905
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:4765 ActionOutputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionOutputPrototype::apply (coreaction.cc:4765-4782).
@@ -8023,6 +8099,11 @@ impl ActionDynamicSymbols {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDynamicSymbols {
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1036
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
     // Ghidra: coreaction.cc:4869 ActionDynamicSymbols::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
@@ -9852,12 +9933,14 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         // --- merge/fixate/casts (coreaction.cc:5714-5738) ---
         // NOTE: ActionPreferComplement (:5714) / ActionStructureTransform (:5715)
         // excluded — they mutate the structured block tree and conflict with the
-        // staged structurer. ActionMarkIndirectOnly (:5725) and ActionMapGlobals
-        // (:5732) are excluded as stubs (Rugra lacks the symbol/flag APIs).
-        Box::new(ActionAssignHigh::new()),       // :5717 — create HighVariables (merge prerequisite)
+        // staged structurer. ActionAssignHigh (:5717), ActionDominantCopy
+        // (:5723), and ActionCopyMarker (:5729) were moved OUT of this helper
+        // into their exact oracle positions in set_default_actions
+        // (PIPE-MERGETYPE-ORDER-0001) — they are registered, not unregistered,
+        // so they must not appear here as well. ActionMarkIndirectOnly (:5725)
+        // and ActionMapGlobals (:5732) are excluded as stubs (Rugra lacks the
+        // symbol/flag APIs).
         Box::new(ActionHideShadow::new()),       // :5728
-        Box::new(ActionDominantCopy::new()),     // :5723 — merge-phase dominant COPY (processCopyTrims)
-        Box::new(ActionCopyMarker::new()),       // :5729 — mark internal COPY ops non-printing
         Box::new(ActionOutputPrototype::new()),  // :5730
         Box::new(ActionInputPrototype::new()),   // :5731
         Box::new(ActionSetCasts::new()),         // :5735 (requires ActionInferTypes, now ready)
@@ -10411,10 +10494,19 @@ mod tests {
         // The merge/merge-prerequisite + real-work actions must be present.
         let actions = build_full_pipeline_actions();
         let names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
-        assert!(names.contains(&"assignhigh"), "ActionAssignHigh missing");
         assert!(names.contains(&"starttypes"), "ActionStartTypes missing");
-        assert!(names.contains(&"copymarker"), "ActionCopyMarker missing");
-        assert!(names.contains(&"dominantcopy"), "ActionDominantCopy missing");
+        // PIPE-MERGETYPE-ORDER-0001: AssignHigh/DominantCopy/CopyMarker moved
+        // to their exact oracle positions (coreaction.cc:5717/5723/5729) in
+        // set_default_actions — they must no longer run prematurely here.
+        assert!(!names.contains(&"assignhigh"), "ActionAssignHigh must not run pre-fullloop");
+        assert!(!names.contains(&"dominantcopy"), "ActionDominantCopy must not run pre-fullloop");
+        assert!(!names.contains(&"copymarker"), "ActionCopyMarker must not run pre-fullloop");
+        // The authoritative placement is the default pipeline root.
+        let root = crate::action::build_default_pipeline();
+        let root_names = root.child_names();
+        assert_eq!(root_names.iter().filter(|n| **n == "assignhigh").count(), 1);
+        assert_eq!(root_names.iter().filter(|n| **n == "dominantcopy").count(), 1);
+        assert_eq!(root_names.iter().filter(|n| **n == "copymarker").count(), 1);
     }
 
     #[test]
@@ -10441,6 +10533,12 @@ mod tests {
         assert_eq!(ActionAssignHigh::new().get_name(), "assignhigh");
         assert_eq!(ActionDominantCopy::new().get_name(), "dominantcopy");
         assert_eq!(ActionCopyMarker::new().get_name(), "copymarker");
+        // Merge family names must match Ghidra's ctor names exactly
+        // (coreaction.hh:364/376/398/409 — no underscores).
+        assert_eq!(ActionMergeRequired::new().get_name(), "mergerequired");
+        assert_eq!(ActionMergeAdjacent::new().get_name(), "mergeadjacent");
+        assert_eq!(ActionMergeMultiEntry::new().get_name(), "mergemultientry");
+        assert_eq!(ActionMergeType::new().get_name(), "mergetype");
         assert_eq!(ActionMarkIndirectOnly::new().get_name(), "markindirectonly");
         assert_eq!(ActionMapGlobals::new().get_name(), "mapglobals");
         assert_eq!(ActionPreferComplement::new().get_name(), "prefercomplement");

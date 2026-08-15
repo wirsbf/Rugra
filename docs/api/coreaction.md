@@ -934,3 +934,31 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
  
  
  
+
+---
+
+## 2026-08-15：PIPE-MERGETYPE-ORDER-0001 — merge 族名称/flags/计数桥修正
+
+- `get_name` 逐字对齐 oracle 构造器名（无下划线）：
+  `merge_required→mergerequired`（coreaction.hh:364）、
+  `merge_adjacent→mergeadjacent`（:376）、
+  `merge_multientry→mergemultientry`（:398）、
+  `merge_type→mergetype`（:409）。
+- 补 14 个 `get_flags → RULE_ONCEPERFUNC` 覆盖（mirrors 构造器位）：
+  MergeRequired(:364)、MergeAdjacent(:376)、MergeCopy(:387)、
+  MergeMultiEntry(:398)、MergeType(:409)、MarkExplicit(:440)、MarkImplied(:461)、
+  NameVars(:482)、SetCasts(:330)、InputPrototype(:894)、OutputPrototype(:905)、
+  HideShadow(:992)、DynamicSymbols(:1036)、PrototypeWarnings(:1047)。
+  此前 executor 观察到 status=1（可重入）而 oracle 为 status_end=16。
+- `ActionMarkExplicit::apply` 返回 `change_count`（Ghidra coreaction.cc:3247-3251
+  每次 setExplicit 增继承 count； sanctioned Rust count-bridge，见
+  `Action::perform` 文档）。
+- `ActionMarkExplicit::base_explicit` 补 oracle 缺失守卫
+  `if (vn->hasNoDescend()) return -1;`（coreaction.cc:3064）——悬空输出必须
+  explicit，否则被 MarkImplied 置 implied 并被 mergeTestBasic 排除，
+  MergeType 合并无法发生。
+- `build_full_pipeline_actions` 移除 AssignHigh/DominantCopy/CopyMarker
+  （已迁移至 set_default_actions 的 :5717/:5723/:5729 精确位置）。
+- fixture 证据：`tests/oracle/action_merge_order_1204.{cc,rs}` 29 行观察 28 行
+  逐字节一致（seq/counts/status/IR/merge_temps 全对齐）；唯一残差
+  `finalstructure` count 桥在 blockaction.rs（域外）。
