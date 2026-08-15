@@ -1,0 +1,114 @@
+{
+ "schema": 2,
+ "fixture_id": "EXTERNAL-STUB-1204",
+ "stable_function_id": "GH12-F-de1535e978a573cef2cd",
+ "stable_function_closure": [
+  "GH12-F-de1535e978a573cef2cd ghidra::AddrSpaceManager::decodeSpaces(Decoder & decoder,const Translate * trans) translate.cc:285",
+  "GH12-F-764f55afd2b25ec8382f ghidra::AddrSpaceManager::decodeSpace(Decoder & decoder,const Translate * trans) translate.cc:257",
+  "GH12-F-0a373bab7fae6ccdafd0 ghidra::AddrSpace::decodeBasicAttributes(Decoder & decoder) space.cc:304",
+  "GH12-F-9e98a61c02b1740d38e0 ghidra::AddrSpace::decode(Decoder & decoder) space.cc:339",
+  "GH12-F-ab639795c573b2c61f6a ghidra::OverlaySpace::decode(Decoder & decoder) space.cc:661",
+  "GH12-F-80e3431b76b6ad64e891 ghidra::SpacebaseSpace::decode(Decoder & decoder) translate.cc:126",
+  "GH12-F-a96e33ca5cee35fde80a ghidra::AddrSpace::AddrSpace(AddrSpaceManager * m,const Translate * t,spacetype tp) space.cc:88",
+  "GH12-F-e00c9988e5b26882cdc7 ghidra::ConstantSpace::ConstantSpace(AddrSpaceManager * m,const Translate * t) space.cc:356",
+  "GH12-F-7aef95ea156cc5b6198d ghidra::OtherSpace::OtherSpace(AddrSpaceManager * m,const Translate * t) space.cc:403",
+  "GH12-F-843c6d4c50380741e09d ghidra::UniqueSpace::UniqueSpace(AddrSpaceManager * m,const Translate * t) space.cc:433",
+  "GH12-F-d3d1c87e78269a378d4a ghidra::OverlaySpace::OverlaySpace(AddrSpaceManager * m,const Translate * t) space.cc:654",
+  "GH12-F-e6226d09dfa418d8fa67 ghidra::SpacebaseSpace::SpacebaseSpace(AddrSpaceManager * m,const Translate * t) translate.cc:73",
+  "GH12-F-7b741f231265fec35ae9 ghidra::AddrSpace::calcScaleMask(void) space.cc:34",
+  "GH12-F-0de8bbaa1979f78d01a9 ghidra::AddrSpaceManager::insertSpace(AddrSpace * spc) translate.cc:352",
+  "GH12-F-b083d28776986ff11afe ghidra::AddrSpaceManager::assignShortcut(AddrSpace * spc) translate.cc:517",
+  "GH12-F-458454d372ed391d05f6 ghidra::AddrSpaceManager::setDefaultCodeSpace(int4 index) translate.cc:309",
+  "GH12-F-e41fc8417856e28597fb ghidra::AddrSpaceManager::getSpaceByName(const string & nm) const translate.cc:590"
+ ],
+ "overall_status": "PARTIAL_MATCH: the seven-case construction-period decode registration projection (decodeSpaces DEFAULT registration, decodeSpace element dispatch with partial constructors, decodeBasicAttributes incl. deadcodedelay defaulting, overlay base marking + contain resolution, readSpace/bad-defaultspace error texts, EXTERNAL-named processor-space registration with duplicate rejection) byte-matches the locked oracle; residuals: PrintC::opReturn halt_baddata arm (printc.cc:770-772, PRINT-RPN-0001) and the driver-side 48-entry EXTERNAL-block stub projection are validated by the 124-corpus end-to-end differential, not this fixture; packed-protocol decode (PackedDecode::readSpace) and the Java-side EXTERNAL block materialization are outside the decompiler oracle",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{space.cc,space.hh,translate.cc,translate.hh,marshal.cc:400}",
+  "signature": "void ghidra::AddrSpaceManager::decodeSpaces(Decoder & decoder,const Translate * trans); AddrSpace * ghidra::AddrSpaceManager::decodeSpace(Decoder & decoder,const Translate * trans); void ghidra::AddrSpace::decodeBasicAttributes(Decoder & decoder); void ghidra::OverlaySpace::decode(Decoder & decoder)"
+ },
+ "architecture": "locked synthetic LE 64-bit AddrSpaceManager/Translate: const=0, unique=2, ram=3, register=4 (children of <spaces>), overlay/spacebase at 5, EXTERNAL at 9; HOST_ENDIAN=0",
+ "compiler_spec": "none: registry-only fixture, no Architecture/ProtoModel/symbols involved",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the locked decode registration path through a minimal Translate subclass (C++) / SpaceRegistry (Rust): decodeSpaces + decodeSpace over hand-built Element trees, insertSpace, cached-slot and name lookups",
+  "prestate": "Per-case fresh manager and Element tree; AttributeId/ElementId tables initialized exactly like production entry points (libdecomp.cc:23-24)",
+  "observation": "Per case: ok/err envelope with exact LowlevelError/DecoderError text, numSpaces, full per-space projection (index/name/type/addrsize/wordsize/endian/shortcut/delay/deadcodedelay/highest/pointer bounds/refcount + 10 flag predicates), cached stack slot, contain/overlay links, duplicate-name rejection, ordered getNextSpaceInOrder walks",
+  "normalization": "No normalization: identical observation strings printed by both sides; refcount read via test-only private access on the C++ side and a read-only accessor on the Rust side"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "decode_spaces_default_registration: decodeSpaces (translate.cc:285) over a hand-built <spaces defaultspace=ram> document with <space_unique>/<space> children: implicit leading ConstantSpace insert, document-order child decode+insert, name-keyed DEFAULT registration (setDefaultCodeSpace), numSpaces=5 with the index-1 hole, full per-space projection and getNextSpaceInOrder walk",
+   "decode_space_overlay_marks_base: <space_overlay name=ov index=5 base=ram> inside <spaces>: decodeSpace (translate.cc:257) dispatch to the OverlaySpace partial ctor + OverlaySpace::decode (space.cc:661) field inheritance from the base (addrsize/wordsize/delay/deadcodedelay, big_endian/hasphysical propagation), insertSpace marking ram overlaybase, contain link",
+   "decode_space_base_stack_contain: <space_base name=stack index=5 size=8 delay=1 contain=ram>: SpacebaseSpace::decode (translate.cc:126) resolveBasicAttributes + contain=readSpace through the manager, insertSpace stack-slot caching, type/contain/numSpacebase/stackGrowsNegative/isFormalStackSpace projection",
+   "decode_space_unknown_base: <space_overlay base=nope>: Decoder::readSpace name resolution failure (marshal.cc:400-409) surfaces as err 'Unknown address space name: nope' and the space is not registered",
+   "decode_spaces_bad_default: defaultspace=missing with a valid ram child: decodeSpaces name lookup failure 'Bad \\'defaultspace\\' attribute: missing' (translate.cc:301-303), default slot stays null",
+   "external_named_space_registration: EXTERNAL-named IPTR_PROCESSOR space (the Ghidra-platform external space, Java AddressSpace.java:80 32-bit flat definition; the 12.0.4 decompiler has no ExternalSpace): insertSpace assigns shortcut 'e', marks no overlaybase on ram, name lookup succeeds, duplicate registration rejected with 'Space EXTERNAL was initialized more than once'",
+   "deadcodedelay_default_from_delay: <space size=4 wordsize=2 delay=3> without deadcodedelay defaults deadcodedelay=delay (space.cc:336-337) incl. calcScaleMask highest=0x1ffffffff; explicit deadcodedelay=5 overrides delay=2"
+  ],
+  "sha256": "23b947d088424eaaa25931339aed32d50e4c67c2b0ed7e18cb17914fdc104218"
+ },
+ "observation_schema": {
+  "format": "Thirty-six fixed-order UTF-8 lines with final newline: one envelope plus seven case records",
+  "state": "per-space projection with index/type/sizes/endian/shortcut/delays/bounds/refcount and 10 flag bits, numSpaces, cached stack slot, contain/overlay links",
+  "errors": "exact LowlevelError/DecoderError messages for the readSpace and defaultspace rejection paths and the duplicate EXTERNAL registration",
+  "order": "getNextSpaceInOrder walks"
+ },
+ "comparand": {
+  "rugra_base_commit": "194901d0de8bd45069829c948c9c0f991e097d84",
+  "rugra_base_tree": "1fe1b70437cc90d373a697770e45b2a686c5d8a4",
+  "cpp_fixture_sha256": "291f8eb91feea0d374731a218bcb9395902ff0a0012b63641afc2abeae8a5223",
+  "rust_fixture_sha256": "e87a6f0b0aec9e2b13ec9713f07235ded64c934e80dd660c6401667aa1c1e08d",
+  "space_rs_sha256": "255a068b6bc2fe2af992179cc636d768a9260b20eddc9b43df23b8ab6de4be9e",
+  "translate_rs_sha256": "7b59c1e1dcf635f58f8910012cb074e45e6bf26b3d3aa4ee985b5bf6c8cf9e12",
+  "space_doc_sha256": "41a001807a594dd9b12c557769cfdb1526d7f6f71c6b460c552c5d5103ef34e3",
+  "translate_doc_sha256": "b0ec2f6332e5182ac318d156669f87812b0c9379fbd620aad0dbb54f4b632896",
+  "runner_sha256": "cff869e9a80175a93f7e165f0779a5388312699ca117190dd70115b4aa92023d",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-external-stub-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "b3b14b422f914887cd113f13554ad3ef52889951fe4b00b6c14597ce6641645e",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
+  }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of AddrSpace::refcount through #define private public / #define class struct in the fixture translation unit only; no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/space.rs and src/translate.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "32f95af2b1941e6fd49260930e30b11d1f095f8d07ab1c8a19b2c4a4f07fe13c"
+ },
+ "expected_stdout_sha256": "73130b4bddf2dfaaca1a97a53dd52554090410f5bc081e9549df565a0b28b94e",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "decode_spaces_default_registration": "MATCH",
+  "decode_space_overlay_marks_base": "MATCH",
+  "decode_space_base_stack_contain": "MATCH",
+  "decode_space_unknown_base": "MATCH",
+  "decode_spaces_bad_default": "MATCH",
+  "external_named_space_registration": "MATCH",
+  "deadcodedelay_default_from_delay": "MATCH",
+  "printc_halt_baddata_arm": "UNTESTED: PrintC::opReturn badinstruction arm (printc.cc:770-772) is not exercised by this fixture; printc.rs is outside this wave's write-set (PRINT-RPN-0001)",
+  "driver_stub_projection": "UNTESTED: the 48-entry EXTERNAL-block stub declaration projection in examples/curl_decompile.rs is validated by the 124-corpus end-to-end differential against tests/golden/ghidra_curl_1204.c, not by this registry fixture"
+ }
+}

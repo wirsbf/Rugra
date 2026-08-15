@@ -322,3 +322,49 @@ Oracle 证据：`tests/oracle/address_space_handle_1204.{cc,rs}`（锁定 12.0.4
 printRaw 覆盖 const/ram/register 路径与 wordsize 换算）。SPACE-0001 残差中
 `resolveConstant`/join-record 统一**未**在本 wave 完成（JoinDB 仍在 translate.rs 旧 manager），
 登记为 ADDRESS 后继原子。
+
+### 2026-08-15：EXTERNAL-STUB-SUPPORT-0001 构造期 decode 注册（Ghidra translate.cc:254/281 + space.cc:87/304/339）
+
+`AddrSpace` 句柄新增 decode 期构造与属性解码面，`SpaceRegistry` 新增（impl 于
+`src/translate.rs`，因 marshal 常量在那侧）构造期注册入口：
+
+- `new_for_decode(space_type)`（space.cc:87 部分构造器）：type + `heritaged|does_deadcode`
+  起始 flags、wordsize 1、shortcut `' '`；name/size/index/delay 留空待
+  `decode_basic_attributes` 填（C++ 未初始化成员的 Rust 零值对应）。
+- `new_other_space_for_decode`（space.cc:403）/`new_unique_space_for_decode`（space.cc:433）/
+  `new_spacebase_space_for_decode`（translate.cc:73，置 `programspecific`，contain 悬空至
+  `set_contain`）/`new_overlay_space_for_decode`（space.cc:654，置 `overlay`）。
+- `decode_basic_attributes(decoder)`（space.cc:304-337）：先重置 deadcodedelay=-1，遍历
+  name/index/size/wordsize/bigendian/delay/deadcodedelay/physical 属性，缺省
+  deadcodedelay=delay，末尾 `calcScaleMask`。
+- `decode(decoder)`（space.cc:339 基类）：open → decodeBasicAttributes → close，服务于
+  `<space>`/`<space_unique>`/`<space_other>`（三者无 decode 覆盖）。
+- `set_contain(base)`（RUGRA-GLUE setter）：对应 C++ decode 体直接写
+  `SpacebaseSpace::contain`/`OverlaySpace::baseSpace` 私有成员。
+- `EXTERNAL_SPACE_NAME`（"EXTERNAL"）与 `new_external_space(ind, endian)`（RUGRA-GLUE）：
+  12.0.4 decompiler `spacetype` **无** IPTR_EXTERNAL（space.hh:30-38 止于 IPTR_JOIN）、
+  packed 协议拒编组 Java TYPE_EXTERNAL（PackedEncode.java:186）。EXTERNAL 工件在 Ghidra
+  平台侧：Java `GenericAddressSpace("EXTERNAL", 32, TYPE_EXTERNAL, 0)`（AddressSpace.java:80）
+  + ELF importer 在默认空间造人工 EXTERNAL 内存块（ElfProgramBuilder.java:1532-1556，
+  0x1000 对齐 linkage 块、每 UND import 8 字节）。Rugra 按该 Java 定义构造（Processor 型、
+  addrsize 4），供 registry 命名注册。
+
+`src/translate.rs` 侧：
+
+- `SpaceRegistry::decode_space(decoder)`（translate.cc:254-275）：element id 分派 → 部分构造器
+  → decode；`<space_base>`/`<space_overlay>` 的 contain/base 引用按 `Decoder::readSpace`
+  （marshal.cc:400-409）语义经 manager 名字解析，未知名 `Err("Unknown address space name: X")`。
+- `SpaceRegistry::decode_spaces(decoder)`（translate.cc:281-303）：先插 ConstantSpace；读
+  `<spaces defaultspace=...>`；逐子元素 decode+insert；按**名字**查默认空间（缺失
+  `Err("Bad 'defaultspace' attribute: X")`）并 `set_default_code_space`。
+- 新增 ATTRIB_NAME(14)/ATTRIB_INDEX(10)/ATTRIB_BASE(89) 常量（marshal.cc:1241/1237、
+  space.cc:21）；decode 路径用运行时具名 `AttributeId`（const 版无法保留 name，见
+  `named_attrib_id` RUGRA-GLUE）。
+
+Oracle 证据：`tests/oracle/external_stub_1204.{cc,rs}` + `tools/run_external_stub_oracle.sh`
+（锁定 12.0.4，7 case 逐字节 MATCH：canonical decodeSpaces 注册+defaultspace、overlay 标记
+overlaybase、spacebase contain 解析、readSpace 未知名错误、bad defaultspace 错误、EXTERNAL
+命名空间注册+重名拒绝、deadcodedelay 缺省=delay）。driver 侧 stub 投影（48 个
+EXTERNAL-block import 的 `void free(void *__ptr)` halt_baddata 声明段）在
+`examples/curl_decompile.rs`，由 124 语料端到端差分验证（EXTERNAL-stub 计数变化），不属本
+fixture 范围。

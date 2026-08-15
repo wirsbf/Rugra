@@ -685,6 +685,19 @@ pub const OTHER_SPACE_INDEX: i32 = 1;
 pub const UNIQUE_SPACE_NAME: &str = "unique";
 // Ghidra: space.cc:418 UniqueSpace::SIZE
 pub const UNIQUE_SPACE_SIZE: u32 = 4;
+// RUGRA-GLUE: reserved EXTERNAL space-name constant (Ghidra declares it on
+// the platform side — Java `AddressSpace.EXTERNAL_SPACE` =
+// `new GenericAddressSpace("EXTERNAL", 32, TYPE_EXTERNAL, 0)`,
+// AddressSpace.java:76-81 — while the locked 12.0.4 decompiler oracle has
+// no ExternalSpace counterpart: `spacetype` (space.hh:30-38) ends at
+// IPTR_JOIN and no decompiler code registers a space of this name. The
+// import-stub addresses themselves live in an artificial EXTERNAL *memory
+// block* in the default space (ElfProgramBuilder.java:1532-1556), which is
+// what the EXTERNAL-STUB-SUPPORT-0001 stub projection keys on. Rust needs
+// the free const for the same reason as the other reserved names.)
+/// Reserved name for the Ghidra-platform external space ("EXTERNAL",
+/// AddressSpace.java:80).
+pub const EXTERNAL_SPACE_NAME: &str = "EXTERNAL";
 
 // RUGRA-GLUE: calc_mask (Ghidra's helper lives in address.hh/address.cc,
 // outside space.cc; ported here because calcScaleMask depends on it.)
@@ -1107,6 +1120,235 @@ impl AddrSpace {
         let handle = AddrSpace(Rc::new(RefCell::new(inner)));
         handle.calc_scale_mask();
         handle
+    }
+
+    // Ghidra: space.cc:87 AddrSpace::AddrSpace(m,t,tp)
+    /// Partial constructor for initializing a space via decode. Faithful to
+    /// the XML partial constructor (space.cc:87-98): `refcount` 0, the given
+    /// type, `flags = heritaged|does_deadcode` (always on unless a derived
+    /// partial constructor turns them off), `wordsize` 1,
+    /// `minimumPointerSize` 0, `shortcut` the unassigned placeholder `' '`,
+    /// and endianness left for the decode attributes. Ghidra leaves
+    /// `name`/`addressSize`/`index`/`delay`/`deadcodedelay` unwritten until
+    /// `decodeBasicAttributes` (space.cc:304) fills them; Rust zero/empty
+    /// initializes those because the record has no uninitialized state.
+    pub fn new_for_decode(space_type: SpaceType) -> Self {
+        let inner = AddrSpaceInner {
+            space_type,
+            flags: space_flags::HERITAGED | space_flags::DOES_DEADCODE,
+            highest: 0,
+            pointer_lower_bound: 0,
+            pointer_upper_bound: 0,
+            shortcut: ' ',
+            name: String::new(),
+            address_size: 0,
+            word_size: 1,
+            minimum_pointer_size: 0,
+            index: 0,
+            delay: 0,
+            deadcode_delay: 0,
+            refcount: 0,
+            spacebase: None,
+        };
+        AddrSpace(Rc::new(RefCell::new(inner)))
+    }
+
+    // Ghidra: space.cc:403 OtherSpace::OtherSpace(m,t)
+    /// Partial \b other constructor for decode. Faithful to the decode
+    /// partial constructor (space.cc:403-408): base partial space of type
+    /// `IPTR_PROCESSOR`, then `heritaged|does_deadcode` cleared and
+    /// `is_otherspace` set.
+    pub fn new_other_space_for_decode() -> Self {
+        let spc = Self::new_for_decode(SpaceType::Processor);
+        spc.clear_flags(space_flags::HERITAGED | space_flags::DOES_DEADCODE);
+        spc.set_flags(space_flags::IS_OTHERSPACE);
+        spc
+    }
+
+    // Ghidra: space.cc:433 UniqueSpace::UniqueSpace(m,t)
+    /// Partial \b unique constructor for decode. Faithful to the decode
+    /// partial constructor (space.cc:433-437): base partial space of type
+    /// `IPTR_INTERNAL`, then `hasphysical` set.
+    pub fn new_unique_space_for_decode() -> Self {
+        let spc = Self::new_for_decode(SpaceType::Internal);
+        spc.set_flags(space_flags::HASPHYSICAL);
+        spc
+    }
+
+    // Ghidra: space.cc:654 OverlaySpace::OverlaySpace(m,t)
+    /// Partial overlay constructor for decode. Faithful to the decode
+    /// partial constructor (space.cc:654-659): base partial space of type
+    /// `IPTR_PROCESSOR`, `baseSpace` null, then the `overlay` flag set. The
+    /// `baseSpace` link is attached by `OverlaySpace::decode`
+    /// (space.cc:661-680) — see [`SpaceRegistry::decode_space`].
+    pub fn new_overlay_space_for_decode() -> Self {
+        let spc = Self::new_for_decode(SpaceType::Processor);
+        spc.set_flags(space_flags::OVERLAY);
+        spc
+    }
+
+    // Ghidra: translate.cc:73 SpacebaseSpace::SpacebaseSpace(m,t)
+    /// Partial spacebase constructor for decode. Faithful to the decode
+    /// partial constructor (translate.cc:73-79): base partial space of type
+    /// `IPTR_SPACEBASE`, `hasbaseregister` false, `isNegativeStack` true,
+    /// `contain` null, and the `programspecific` flag set
+    /// (full-constructor spaces never set it — only the decode path does).
+    /// The Rust record keeps `spacebase: None` until `set_contain` attaches
+    /// the containing space: `numSpacebase`/`getSpacebase` (which throw
+    /// without a base register), `stackGrowsNegative` (base-impl true =
+    /// the partial ctor's `isNegativeStack` default), and `getContain`
+    /// (null) all observe the same state as the C++ partial constructor.
+    pub fn new_spacebase_space_for_decode() -> Self {
+        let spc = Self::new_for_decode(SpaceType::SpaceBase);
+        spc.set_flags(space_flags::PROGRAMSPECIFIC);
+        spc
+    }
+
+    // Ghidra: space.cc:304 AddrSpace::decodeBasicAttributes
+    /// Walk the attributes of the current element and recover all the
+    /// properties defining this space. Faithful to
+    /// `decodeBasicAttributes` (space.cc:304-337): `deadcodedelay` is reset
+    /// to -1 first; the attribute walk reads name/index/size/wordsize/
+    /// bigendian/delay/deadcodedelay/physical; a missing `deadcodedelay`
+    /// falls back to the final `delay`; and `calcScaleMask` runs at the
+    /// end. Dispatch is by attribute name through the decoder's id→name
+    /// table (the in-tree decode pattern established by
+    /// `SpacebaseSpace::decode_basic_attributes`, translate.rs).
+    pub fn decode_basic_attributes(&self, decoder: &mut dyn crate::marshal::Decoder) {
+        {
+            let mut inner = self.0.borrow_mut();
+            inner.deadcode_delay = -1;
+        }
+        loop {
+            let id = decoder.next_attribute_id();
+            if id == 0 {
+                break;
+            }
+            let name = decoder.attribute_name(id).unwrap_or_default();
+            match name.as_str() {
+                "name" => {
+                    let value = decoder.read_string();
+                    self.0.borrow_mut().name = value;
+                }
+                "index" => {
+                    let value = decoder.read_signed_integer() as i32;
+                    self.0.borrow_mut().index = value;
+                }
+                "size" => {
+                    let value = decoder.read_signed_integer() as u32;
+                    self.0.borrow_mut().address_size = value;
+                }
+                "wordsize" => {
+                    let value = decoder.read_unsigned_integer() as u32;
+                    self.0.borrow_mut().word_size = value;
+                }
+                "bigendian" => {
+                    if decoder.read_bool() {
+                        self.set_flags(space_flags::BIG_ENDIAN);
+                    }
+                }
+                "delay" => {
+                    let value = decoder.read_signed_integer() as i32;
+                    self.0.borrow_mut().delay = value;
+                }
+                "deadcodedelay" => {
+                    let value = decoder.read_signed_integer() as i32;
+                    self.0.borrow_mut().deadcode_delay = value;
+                }
+                "physical" => {
+                    if decoder.read_bool() {
+                        self.set_flags(space_flags::HASPHYSICAL);
+                    }
+                }
+                _ => {
+                    // Skip the unknown attribute's value.
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        let delay = self.0.borrow().delay;
+        let mut inner = self.0.borrow_mut();
+        if inner.deadcode_delay == -1 {
+            inner.deadcode_delay = delay; // If deadcodedelay attribute not present, set it to delay
+        }
+        drop(inner);
+        self.calc_scale_mask();
+    }
+
+    // Ghidra: space.cc:339 AddrSpace::decode
+    /// Restore the space from an open element. Faithful to the base
+    /// `decode` (space.cc:339-345), which serves the `<space>`,
+    /// `<space_other>`, and `<space_unique>` tags (their classes have no
+    /// decode override): open the element, run `decodeBasicAttributes`, and
+    /// close it. The `<space_base>` and `<space_overlay>` variants are
+    /// handled by [`SpaceRegistry::decode_space`]
+    /// (translate.cc:126/661) because they read extra space-reference
+    /// attributes through the manager.
+    pub fn decode(&self, decoder: &mut dyn crate::marshal::Decoder) {
+        let elem_id = decoder.open_element();
+        self.decode_basic_attributes(decoder);
+        decoder.close_element(elem_id);
+    }
+
+    // RUGRA-GLUE: set_contain (Ghidra's derived decode bodies write the
+    // private `SpacebaseSpace::contain` / `OverlaySpace::baseSpace` member
+    // directly; Rust needs a setter on the shared record.)
+    /// Attach the containing space (`translate.cc:131 contain` /
+    /// `space.cc:668 baseSpace`) after a decode-time space reference
+    /// resolves. Manager use only.
+    pub fn set_contain(&self, base: &AddrSpace) {
+        let mut inner = self.0.borrow_mut();
+        let state = inner.spacebase.get_or_insert_with(|| SpacebaseState {
+            contain: None,
+            has_base_register: false,
+            is_negative_stack: true,
+            base_loc: SpaceVarnodeData {
+                space: base.clone(),
+                offset: 0,
+                size: 0,
+            },
+            base_orig: SpaceVarnodeData {
+                space: base.clone(),
+                offset: 0,
+                size: 0,
+            },
+        });
+        state.contain = Some(base.clone());
+    }
+
+    // RUGRA-GLUE: new_external_space (the locked 12.0.4 decompiler oracle has
+    // no ExternalSpace: `spacetype` (space.hh:30-38) stops at IPTR_JOIN, the
+    // C++ side never registers a space named EXTERNAL, and the packed
+    // protocol refuses to marshal it — PackedEncode.writeSpace throws
+    // "Cannot marshal address space" for Java TYPE_EXTERNAL=10
+    // (PackedEncode.java:186-199). The EXTERNAL artifact lives on the Ghidra
+    // platform side: AddressSpace.java:80 defines
+    // `new GenericAddressSpace("EXTERNAL", 32, TYPE_EXTERNAL, 0)` — a flat
+    // 32-bit space, not an overlay — and the ELF importer materializes the
+    // import stub addresses as an artificial EXTERNAL *memory block* in the
+    // default space (ElfProgramBuilder.java:1532-1556 createExternalBlock,
+    // 0x1000-aligned linkage block, 8 bytes per UND import). This
+    // constructor mirrors that Java definition so a Rugra SpaceRegistry can
+    // name and register the EXTERNAL space alongside the decode-registered
+    // spaces; the decompiler-side spacetype is Processor because the oracle
+    // enum has no external member.)
+    /// Construct the Ghidra-platform EXTERNAL space: name "EXTERNAL",
+    /// 32-bit offsets (address size 4), word size 1, supplied index,
+    /// little/big endian per the platform, and the base partial-constructor
+    /// flags (`heritaged|does_deadcode`, space.cc:87-98).
+    pub fn new_external_space(ind: i32, target_big_endian: bool) -> Self {
+        let spc = Self::new_space(
+            SpaceType::Processor,
+            EXTERNAL_SPACE_NAME,
+            target_big_endian,
+            4, // 32-bit space: GenericAddressSpace("EXTERNAL", 32, ...)
+            1,
+            ind,
+            0,
+            0,
+            0,
+        );
+        spc
     }
 
     // Ghidra: space.cc:34 AddrSpace::calcScaleMask

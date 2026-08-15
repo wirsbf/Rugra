@@ -118,6 +118,15 @@ pub const ELEM_TRUNCATE_SPACE: ElementId = ElementId {
 pub const ATTRIB_SPACE: AttributeId = AttributeId::new_static("space", 47);
 /// Marshaling attribute "size" (used by `<truncate_space>` decode).
 pub const ATTRIB_SIZE: AttributeId = AttributeId::new_static("size", 48);
+// Ghidra: marshal.cc:1241 ATTRIB_NAME
+/// Marshaling attribute "name" (space decode, space.cc:311).
+pub const ATTRIB_NAME: AttributeId = AttributeId::new_static("name", 14);
+// Ghidra: marshal.cc:1237 ATTRIB_INDEX
+/// Marshaling attribute "index" (space decode, space.cc:315).
+pub const ATTRIB_INDEX: AttributeId = AttributeId::new_static("index", 10);
+// Ghidra: space.cc:21 ATTRIB_BASE
+/// Marshaling attribute "base" (overlay space decode, space.cc:668).
+pub const ATTRIB_BASE: AttributeId = AttributeId::new_static("base", 89);
 
 // ============================================================================
 // translate.hh:53 / 68 — Translation-specific errors
@@ -1912,6 +1921,137 @@ pub trait DocumentStorage {
     // DocumentStorage exposes parse/open/registerTag/getTag, not nextDocument.
     /// Get the next configuration document, or `None` when exhausted.
     fn next_document(&mut self) -> Option<String>;
+}
+
+// ============================================================================
+// translate.cc:254/281 — construction-period space registration
+// ----------------------------------------------------------------------------
+// The decodeSpace/decodeSpaces pair is how production architectures
+// (SleighArchitecture::restoreXml, sleigh_arch.cc) fill the AddrSpaceManager
+// from a spec's `<spaces>` element, including the DEFAULT-space registration
+// via the element's `defaultspace` attribute. It is the registration path
+// EXTERNAL-STUB-SUPPORT-0001 uses to build the driver-side registry. The
+// methods live on crate::space::SpaceRegistry (the 1:1 AddrSpaceManager
+// twin) but in this module because the marshaling element/attribute ids
+// (ELEM_SPACES, ATTRIB_DEFAULTSPACE, ...) are declared here and space.rs
+// cannot import this module without a cycle.
+// ============================================================================
+impl crate::space::SpaceRegistry {
+    // RUGRA-GLUE: named_attrib_id (Ghidra's ATTRIB_* globals carry both the
+    // name and the id; Rust's const AttributeIds cannot retain the name, and
+    // the TreeDecoder's targeted read_*_attr methods resolve by name. The
+    // decode paths rebuild the runtime-named twin of the static id.)
+    fn named_attrib_id(id: u32, name: &str) -> AttributeId {
+        AttributeId {
+            name: name.to_string(),
+            id,
+        }
+    }
+
+    // Ghidra: translate.cc:254 AddrSpaceManager::decodeSpace
+    /// Initialize a single address space from a decoder element. Faithful
+    /// to `decodeSpace` (translate.cc:254-275): the element id selects the
+    /// partial constructor — `<space_base>` → SpacebaseSpace
+    /// (translate.cc:73), `<space_unique>` → UniqueSpace (space.cc:433),
+    /// `<space_other>` → OtherSpace (space.cc:403), `<space_overlay>` →
+    /// OverlaySpace (space.cc:654), anything else → plain
+    /// `AddrSpace(m,t,IPTR_PROCESSOR)` (space.cc:87) — and the element is
+    /// then decoded. The `<space_base>` and `<space_overlay>` decodes read
+    /// their space-reference attribute (`contain`/`base`) through this
+    /// manager exactly like `Decoder::readSpace` (marshal.cc:400-409):
+    /// name lookup, `Err("Unknown address space name: X")` on a miss.
+    /// ConstantSpace/JoinSpace never arrive here (their decode throws,
+    /// space.cc:381/646).
+    pub fn decode_space(
+        &mut self,
+        decoder: &mut dyn Decoder,
+    ) -> Result<crate::space::AddrSpace, String> {
+        let elem_id = decoder.peek_element();
+        if elem_id == ELEM_SPACE_BASE.id {
+            // translate.cc:126-133 SpacebaseSpace::decode: open the element,
+            // decodeBasicAttributes, contain = readSpace(ATTRIB_CONTAIN),
+            // close.
+            let spc = crate::space::AddrSpace::new_spacebase_space_for_decode();
+            let opened = decoder.open_element_matching(&ELEM_SPACE_BASE);
+            spc.decode_basic_attributes(decoder);
+            let contain_attrib =
+                Self::named_attrib_id(ATTRIB_CONTAIN.id, "contain");
+            let contain_name = decoder.read_string_attr(&contain_attrib);
+            decoder.close_element(opened);
+            let contain = self
+                .get_space_by_name(&contain_name)
+                .ok_or_else(|| format!("Unknown address space name: {}", contain_name))?;
+            spc.set_contain(&contain);
+            Ok(spc)
+        } else if elem_id == ELEM_SPACE_UNIQUE.id {
+            // UniqueSpace has no decode override: base AddrSpace::decode
+            // (space.cc:339-345) over the partial ctor's fields.
+            let spc = crate::space::AddrSpace::new_unique_space_for_decode();
+            spc.decode(decoder);
+            Ok(spc)
+        } else if elem_id == ELEM_SPACE_OTHER.id {
+            // OtherSpace has no decode override either.
+            let spc = crate::space::AddrSpace::new_other_space_for_decode();
+            spc.decode(decoder);
+            Ok(spc)
+        } else if elem_id == ELEM_SPACE_OVERLAY.id {
+            // space.cc:661-680 OverlaySpace::decode: open the element, read
+            // name/index, base = readSpace(ATTRIB_BASE), close, then inherit
+            // addressSize/wordsize/delay/deadcodedelay from the base and
+            // propagate big_endian/hasphysical flags (the field flow of
+            // crate::space::AddrSpace::new_overlay_space, which already
+            // carries the space.cc:654-659 partial-constructor flags).
+            let opened = decoder.open_element_matching(&ELEM_SPACE_OVERLAY);
+            let name_attrib = Self::named_attrib_id(ATTRIB_NAME.id, "name");
+            let index_attrib = Self::named_attrib_id(ATTRIB_INDEX.id, "index");
+            let base_attrib = Self::named_attrib_id(ATTRIB_BASE.id, "base");
+            let name = decoder.read_string_attr(&name_attrib);
+            let index = decoder.read_signed_integer_attr(&index_attrib) as i32;
+            let base_name = decoder.read_string_attr(&base_attrib);
+            decoder.close_element(opened);
+            let base = self
+                .get_space_by_name(&base_name)
+                .ok_or_else(|| format!("Unknown address space name: {}", base_name))?;
+            Ok(crate::space::AddrSpace::new_overlay_space(&name, index, &base))
+        } else {
+            // space.cc:87 partial AddrSpace(m,t,IPTR_PROCESSOR) + base
+            // decode.
+            let spc = crate::space::AddrSpace::new_for_decode(crate::space::SpaceType::Processor);
+            spc.decode(decoder);
+            Ok(spc)
+        }
+    }
+
+    // Ghidra: translate.cc:281 AddrSpaceManager::decodeSpaces
+    /// Initialize (almost) all address spaces for a processor from a
+    /// `<spaces>` element. Faithful to `decodeSpaces`
+    /// (translate.cc:281-303): the constant space is inserted first, the
+    /// `defaultspace` attribute is read from the element, every child
+    /// element is decoded via [`Self::decode_space`] and inserted, the
+    /// element is closed, and the default space is looked up **by name** —
+    /// an unknown name is `Err("Bad 'defaultspace' attribute: X")` — and
+    /// registered as the default code space via its index.
+    /// `insert_space`/`set_default_code_space` errors propagate unchanged
+    /// (Ghidra lets the LowlevelError escape to the architecture loader).
+    pub fn decode_spaces(&mut self, decoder: &mut dyn Decoder) -> Result<(), String> {
+        // The first space should always be the constant space.
+        self.insert_space(crate::space::AddrSpace::new_constant_space(false))?;
+
+        let elem_id = decoder.open_element_matching(&ELEM_SPACES);
+        let defaultspace_attrib =
+            Self::named_attrib_id(ATTRIB_DEFAULTSPACE.id, "defaultspace");
+        let defname = decoder.read_string_attr(&defaultspace_attrib);
+        while decoder.peek_element() != 0 {
+            let spc = self.decode_space(decoder)?;
+            self.insert_space(spc)?;
+        }
+        decoder.close_element(elem_id);
+        let spc = self
+            .get_space_by_name(&defname)
+            .ok_or_else(|| format!("Bad 'defaultspace' attribute: {}", defname))?;
+        self.set_default_code_space(spc.get_index() as usize)?;
+        Ok(())
+    }
 }
 
 // ============================================================================
