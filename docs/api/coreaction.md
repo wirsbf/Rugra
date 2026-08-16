@@ -677,6 +677,12 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_varnodes_with_symbols(false, false)`，关闭路线图中"缺 syncVarnodesWithSymbols"的缺口。
 
+### 2026-08-15（FUNCDATA-SCOPE-SYNC-0001）：sync 接线 + count 累计
+
+- `ActionRestructureVarnode::apply`（coreaction.cc:2274-2295）现按 cc:2281-2282 调用 `fd.sync_varnodes_with_symbols(false, aliasyes)` 并在返回 true 时 `count += 1`（经 `take_count_delta` 外化给 ActionState；此前 aliasyes 未传透且结果被丢弃）。
+- `ActionMappedLocalSync::apply`（coreaction.cc:2297-2309）由 no-op stub 改为真实现：cc:2302-2303 `fd.sync_varnodes_with_symbols(true, true)` + count 累计；cc:2305-2306 overlap_problems → warningHeader（stderr）。结构体新增 `count: i32` 字段（`new()` 构造不变，action.rs 注册点无需改动）。
+- oracle fixture：`tests/oracle/scope_sync_1204`（4 case × before/after 双侧逐字节 MATCH：类型投影/unmapped 别名/mask 不对称/typelock+mapentry）。
+
 ### 2026-06-27（会话3 G5续）：ActionActiveParam apply() + 参数恢复支撑方法
 
 完整移植 ActionActiveParam::apply（coreaction.cc:1725-1771）的结构：

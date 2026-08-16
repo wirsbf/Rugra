@@ -768,12 +768,15 @@ impl Action for ActionCse {
 pub struct ActionRestructureVarnode {
     /// Pass counter; alias calculations are skipped on the first pass in Ghidra.
     numpass: i32,
+    /// Ghidra Action::count: incremented when syncVarnodesWithSymbols
+    /// reports an update (coreaction.cc:2281-2282).
+    count: i32,
 }
 
 impl ActionRestructureVarnode {
     // Ghidra: coreaction.hh:854 ActionRestructureVarnode (constructor mirror)
     pub fn new() -> Self {
-        Self { numpass: 0 }
+        Self { numpass: 0, count: 0 }
     }
 }
 
@@ -813,12 +816,20 @@ impl Action for ActionRestructureVarnode {
         // always-on in Rugra). TODO: thread aliasyes through.
         scope.restructure_varnode(fd);
         fd.scope = Some(scope);
-        // Ghidra cc:2281: data.syncVarnodesWithSymbols(l1, false, aliasyes).
-        let _ = fd.sync_varnodes_with_symbols(false, aliasyes);
+        // Ghidra cc:2281-2282: if (data.syncVarnodesWithSymbols(l1,false,aliasyes)) count += 1;
+        if fd.sync_varnodes_with_symbols(false, aliasyes) {
+            self.count += 1;
+        }
         // Ghidra cc:2284-2285: if (data.isJumptableRecoveryOn()) protectSwitchPaths(data).
         // TODO: protectSwitchPaths needs jumptable recovery state tracking.
         self.numpass += 1;
         Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:2282) into the Rust ActionState accumulator.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "restructure_varnode" mirrors ctor at coreaction.hh:855
@@ -8284,34 +8295,38 @@ impl Action for ActionDynamicSymbols {
 }
 
 /// Mapped local sync. Faithful to `ActionMappedLocalSync`
-/// (coreaction.cc).
-pub struct ActionMappedLocalSync;
+/// (coreaction.cc:2297-2309): re-syncs every Varnode with the final Symbol
+/// set, this time updating data-types as well, and reports unreconciled
+/// variable overlaps.
+pub struct ActionMappedLocalSync {
+    /// Ghidra Action::count: incremented when syncVarnodesWithSymbols
+    /// reports an update (coreaction.cc:2302-2303).
+    count: i32,
+}
 impl ActionMappedLocalSync {
     // Ghidra: coreaction.hh:867 ActionMappedLocalSync (constructor mirror)
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionMappedLocalSync {
     // Ghidra: coreaction.cc:2297 ActionMappedLocalSync::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // cc:2300-2303: syncVarnodesWithSymbols(localmap, true, true)
-        // Rugra: sync varnodes with the restructured scope symbols. The
-        // scope is built by ActionRestructureVarnode and stored on fd.scope.
-        if let Some(ref scope) = fd.scope {
-            // syncVarnodesWithSymbols maps each SymbolEntry to its
-            // corresponding Varnode. Rugra's scope.symbols already
-            // represents the restructured local symbols. No additional
-            // sync needed — the symbols are already in sync after
-            // restructure_varnode + assignDefaultNames.
-            let _ = scope;
+        // cc:2300-2303: if (data.syncVarnodesWithSymbols(l1,true,true)) count += 1;
+        if fd.sync_varnodes_with_symbols(true, true) {
+            self.count += 1;
         }
-        // cc:2305-2306: check overlapProblems — Rugra tracks via
-        // overlap_problems field on ScopeLocal.
+        // cc:2305-2306: if (l1->hasOverlapProbems())
+        // data.warningHeader("Could not reconcile some variable overlaps");
         if let Some(ref scope) = fd.scope {
             if scope.overlap_problems {
                 eprintln!("[WARN] {} Could not reconcile some variable overlaps", fd.name);
             }
         }
         Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:2303) into the Rust ActionState accumulator.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "mappedlocalsync" mirrors ctor at coreaction.hh:867
     fn get_name(&self) -> &str { "mappedlocalsync" }

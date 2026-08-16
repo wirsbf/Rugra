@@ -109,6 +109,168 @@ fn piece_node_find_root(
     Some(cur)
 }
 
+// Ghidra: varnode.cc:696 Varnode::getUsePoint
+/// The first-use Address offset of a Varnode: the defining op's address for
+/// written Varnodes, else the function entry - 1 (inputs come into scope at
+/// the start of the function). Faithful to `Varnode::getUsePoint`
+/// (varnode.cc:696-703); used by `Funcdata::syncVarnodesWithSymbols`
+/// (funcdata_varnode.cc:972) for the Scope::inScope probe.
+fn varnode_use_point_offset(
+    fd: &Funcdata,
+    vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> Option<u64> {
+    let vn_r = vn.read().unwrap();
+    if vn_r.is_written() {
+        vn_r.get_def().map(|d| d.read().unwrap().get_addr().as_u64())
+    } else {
+        Some(fd.baseaddr.as_u64().wrapping_sub(1))
+    }
+}
+
+// Ghidra: database.cc:2392 ScopeInternal::findOverlap
+/// First Symbol (in per-space range-map order, i.e. ascending start offset)
+/// whose storage overlaps `[offset, offset+size)` in the given space.
+/// Faithful to `ScopeInternal::findOverlap` (database.cc:2392-2404): Ghidra
+/// queries the space's EntryMap, so symbols mapped in other spaces (the
+/// linkSymbol register/unique/ram entries) never answer. Same-start ties keep
+/// Vec (creation) order; Ghidra's rangemap cannot hold two entries with an
+/// identical (first,last) pair from the fixture-visible paths.
+fn scope_local_find_overlap(
+    scope: &crate::varmap::ScopeLocal,
+    space: AddressSpace,
+    offset: u64,
+    size: i32,
+) -> Option<&crate::varmap::LocalSymbol> {
+    let last = offset + size as u64 - 1;
+    scope
+        .symbols
+        .iter()
+        .filter(|sym| sym.space == space)
+        .filter(|sym| {
+            let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
+            sym.start <= last && offset <= sym_end
+        })
+        .min_by_key(|sym| sym.start)
+}
+
+// Ghidra: database.hh:597 Scope::inScope
+/// Is the entire `[offset, offset+size)` range owned by the scope's range
+/// tree. Faithful to `Scope::inScope` (database.hh:597) ->
+/// `RangeList::inRange`; the `usepoint` argument of the C++ form is ignored
+/// by the base implementation and is therefore omitted here.
+fn scope_local_in_scope(
+    scope: &crate::varmap::ScopeLocal,
+    _space: AddressSpace,
+    offset: u64,
+    size: i32,
+) -> bool {
+    let last = offset + size as u64 - 1;
+    scope
+        .local_range
+        .iter()
+        .any(|&(first, range_last)| first <= offset && last <= range_last)
+}
+
+// Ghidra: varmap.cc:494 ScopeLocal::isUnmappedUnaliased
+/// Should an unmapped Varnode be treated as unaliased? Faithful to
+/// `ScopeLocal::isUnmappedUnaliased` (varmap.cc:494-502): false outside the
+/// scope's stack space; with no known stack-parameter window
+/// (`max_param_offset < min_param_offset`) every unmapped Varnode is
+/// unaliased; otherwise only offsets outside `[min_param_offset,
+/// max_param_offset]` are.
+fn scope_local_is_unmapped_unaliased(
+    scope: &crate::varmap::ScopeLocal,
+    vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> bool {
+    let vn_r = vn.read().unwrap();
+    if vn_r.get_space() != scope.space {
+        return false; // Must be in mapped local (stack) space
+    }
+    if scope.max_param_offset < scope.min_param_offset {
+        return true; // No min/max, so we have no known stack parameters
+    }
+    let offset = vn_r.get_offset();
+    offset < scope.min_param_offset || offset > scope.max_param_offset
+}
+
+// Ghidra: type.cc:4090 TypeFactory::getExactPiece
+/// One descent level for the getExactPiece walk keeping `Arc` identity: a
+/// struct yields the field containing `off` (type.cc:1640), an array the
+/// element with the offset reduced modulo the element align size
+/// (type.cc:1234); every other metatype has no sub-type. Mirrors the
+/// borrowed `Datatype::get_sub_type` variants already ported for
+/// database.rs `SymbolEntry::get_sized_type`.
+fn exact_piece_arc_sub_type(
+    ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+    off: i64,
+) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
+    use crate::type_system::datatype::Datatype;
+    match &**ct {
+        Datatype::Struct(s) => {
+            let field = s.fields.iter().find(|f| {
+                (f.offset as i64) <= off && off < f.offset as i64 + f.type_ptr.get_size() as i64
+            })?;
+            Some((field.type_ptr.clone(), off - field.offset as i64))
+        }
+        Datatype::Array(a) => {
+            let sz = a.base.size as i64;
+            if off >= sz {
+                return None;
+            }
+            let elem_align = a.array_of.get_align_size().max(1) as i64;
+            Some((a.array_of.clone(), off % elem_align))
+        }
+        _ => None,
+    }
+}
+
+// Ghidra: database.cc:151 SymbolEntry::getSizedType
+/// Data-type matching the given size and address within a LocalSymbol's
+/// whole mapping. Faithful to `SymbolEntry::getSizedType`
+/// (database.cc:151-162): the entry offset is 0 for whole maps, so
+/// `off = (vn.offset - sym.start)`, then `TypeFactory::getExactPiece`
+/// (type.cc:4090-4117) runs: a perfect whole-size match returns the type
+/// itself; descent stops at the last containing type; partial
+/// struct/array/enum/union construction (`getTypePartialStruct` and kin) is
+/// not ported yet, so those branches yield `None` (same residual as
+/// database.rs `SymbolEntry::get_sized_type`).
+fn local_symbol_sized_type(
+    sym: &crate::varmap::LocalSymbol,
+    inaddr: u64,
+    sz: i32,
+) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+    let dt = sym.dtype.clone()?;
+    let off = (inaddr as i64).wrapping_sub(sym.start as i64);
+    let mut ct = dt;
+    let mut cur_off = off;
+    loop {
+        let ct_size = ct.get_size() as i64;
+        // cc:4097-4099: range is beyond the end of the current data-type.
+        if ct_size < sz as i64 + cur_off {
+            break;
+        }
+        // cc:4100-4101: perfect size match (only reachable with cur_off == 0
+        // given the bounds check above).
+        if ct_size == sz as i64 {
+            return Some(ct);
+        }
+        if ct.get_metatype() == crate::type_system::datatype::TypeMetatype::Union {
+            // cc:4102-4104: getTypePartialUnion — not ported (residual).
+            return None;
+        }
+        // cc:4105-4107: ct = ct->getSubType(curOff,&curOff).
+        match exact_piece_arc_sub_type(&ct, cur_off) {
+            Some((next, new_off)) => {
+                ct = next;
+                cur_off = new_off;
+            }
+            None => break,
+        }
+    }
+    // cc:4109-4115: partial struct/array/enum construction — not ported.
+    None
+}
+
 /// Funcdata flags (funcdata.hh:highlevel_flags).
 pub mod funcdata_flags {
     /// Data-type analysis is being performed.
@@ -2017,58 +2179,226 @@ impl Funcdata {
         self.structure_reset();
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::syncVarnodesWithSymbols
-    /// Synchronize varnodes with the local-variable scope symbols. Faithful to
-    /// `Funcdata::syncVarnodesWithSymbols` (funcdata_varnode.cc:938-989).
+    // Ghidra: funcdata_varnode.cc:938 Funcdata::syncVarnodesWithSymbols
+    /// Update Varnode properties based on (new) Symbol information. Faithful
+    /// to `Funcdata::syncVarnodesWithSymbols`
+    /// (funcdata_varnode.cc:938-989): boolean properties `mapped`, `addrtied`,
+    /// `addrforce`, and `nolocalalias` are updated from the ScopeLocal Symbol
+    /// each Varnode overlaps; when `update_datatypes` is set the Symbol's
+    /// sized data-type is projected onto the Varnode via `updateType`.
     ///
-    /// For each Stack-space varnode that overlaps a ScopeLocal symbol, mark it
-    /// as mapped. For varnodes not overlapping any symbol, if the scope reports
-    /// them as unaliased, set the no-local-alias flag. Returns true if any
-    /// varnode was modified (indicating a change for the caller to count).
-    ///
-    /// This is the sync step ActionRestructureVarnode performs after
-    /// restructureVarnode. Rugra's ScopeLocal uses a simplified LocalSymbol
-    /// model; this adaptation iterates Stack-space varnodes and matches them
-    /// against scope symbols by offset/size.
-    pub fn sync_varnodes_with_symbols(&mut self, _update_datatypes: bool, _unmapped_alias_check: bool) -> bool {
+    /// Iterates the Varnode bank in 'loc' order restricted to the scope's
+    /// space; each same-(address,size) set is dispatched to
+    /// [`Self::sync_varnodes_with_symbol_set`], which advances the iteration
+    /// past the set (the `VarnodeLocSet::const_iterator &iter` advance of
+    /// funcdata_varnode.cc:985). Returns true if any Varnode was updated.
+    pub fn sync_varnodes_with_symbols(
+        &mut self,
+        update_datatypes: bool,
+        unmapped_alias_check: bool,
+    ) -> bool {
+        use crate::type_system::datatype::TypeMetatype;
+        use crate::varnode::varnode_flags;
+
         let scope = match &self.scope {
             Some(s) => s.clone(),
             None => return false,
         };
-        let mut updated = false;
-        // Collect Stack-space varnodes and their (offset, size) for matching.
-        // Rugra stores Stack-space varnodes sparsely; we scan vbank.loc_tree.
-        let to_update: Vec<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, bool)> = {
-            let mut matches = Vec::new();
-            for entry in self.vbank.loc_tree.iter() {
-                let vn = entry.0.read().unwrap();
-                if vn.get_space() == crate::space::AddressSpace::Stack {
-                    let off = vn.get_offset();
-                    let sz = vn.get_size() as u64;
-                    // Does any scope symbol overlap (off, sz)?
-                    // (linkSymbol-created register/unique/ram symbols share
-                    // the Vec but never overlap a Stack-space varnode.)
-                    let has_symbol = scope.symbols.iter().any(|sym| {
-                        if sym.space != crate::space::AddressSpace::Stack {
-                            return false;
+        // cc:947-948: iter = vbank.beginLoc(lm->getSpaceId());
+        // enditer = vbank.endLoc(lm->getSpaceId()). The loc-tree ordering
+        // (space, offset, size, input/written/free, seq) keeps every
+        // same-(offset,size) set contiguous within the space, so a filtered
+        // snapshot plus an index reproduces the iterator pair. Nothing below
+        // inserts/removes Varnodes or touches INPUT/WRITTEN/def, so the
+        // ordering is stable across the flag/type writes.
+        let space = scope.space;
+        let ordered: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
+            .vbank
+            .loc_tree
+            .iter()
+            .filter(|entry| entry.0.read().unwrap().get_space() == space)
+            .map(|entry| entry.0.clone())
+            .collect();
+
+        let mut updateoccurred = false;
+        let mut index = 0usize;
+        while index < ordered.len() {
+            let vnexemplar = ordered[index].clone();
+            let (addr, size) = {
+                let vn = vnexemplar.read().unwrap();
+                (vn.get_offset(), vn.get_size() as i64)
+            };
+            // cc:951: entry = lm->findOverlap(vnexemplar->getAddr(), vnexemplar->getSize());
+            let entry = scope_local_find_overlap(&scope, space, addr, size as i32);
+            let mut ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> = None;
+            let fl: u32;
+            if let Some(sym) = entry {
+                // cc:954: fl = entry->getAllFlags() — the extraflags
+                // (Varnode::mapped from addMapInternal, database.cc:1155)
+                // plus the Symbol flags. Symbol addrtied is set by
+                // Scope::addMap exactly when the mapping carries no usepoint
+                // (database.cc:1149-1150), which LocalSymbol.usepoint == None
+                // mirrors.
+                let mut f = varnode_flags::MAPPED;
+                if sym.usepoint.is_none() {
+                    f |= varnode_flags::ADDRTIED;
+                }
+                if sym.typelock {
+                    f |= varnode_flags::TYPELOCK;
+                }
+                if sym.namelock {
+                    f |= varnode_flags::NAMELOCK;
+                }
+                if sym.unaliased {
+                    f |= varnode_flags::NOLOCALALIAS;
+                }
+                if sym.size as i64 >= size {
+                    if update_datatypes {
+                        // cc:956-960: ct = entry->getSizedType(addr, size);
+                        // TYPE_UNKNOWN results are dropped.
+                        if let Some(dt) = local_symbol_sized_type(sym, addr, size as i32) {
+                            if dt.get_metatype() != TypeMetatype::Unknown {
+                                ct = Some(dt);
+                            }
                         }
-                        let sym_end = sym.start + sym.size as u64;
-                        sym.start < off + sz && off < sym_end
-                    });
-                    if has_symbol {
-                        matches.push((entry.0.clone(), true));
+                    }
+                } else {
+                    // cc:962-969: overlapping but not containing — small
+                    // locked symbol in a bigger register: don't try to figure
+                    // out the type, don't keep typelock and namelock (we do
+                    // particularly want to keep the nolocalalias, which the
+                    // clear below leaves alone).
+                    f &= !(varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
+                }
+                fl = f;
+            } else {
+                // cc:971-983: could not find any symbol.
+                // cc:972: usepoint = vnexemplar->getUsePoint(*this) — the
+                // base Scope::inScope (database.hh:597) consults only the
+                // range tree, so the value itself never changes the outcome.
+                let usepoint = varnode_use_point_offset(self, &vnexemplar);
+                if scope_local_in_scope(&scope, space, addr, size as i32) {
+                    // cc:976: technically an error — there should be some kind
+                    // of symbol if we are in scope.
+                    fl = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
+                } else if unmapped_alias_check {
+                    // cc:980: if the varnode is not in scope, check if we
+                    // should treat it as unaliased.
+                    fl = if scope_local_is_unmapped_unaliased(&scope, &vnexemplar) {
+                        varnode_flags::NOLOCALALIAS
+                    } else {
+                        0
+                    };
+                } else {
+                    fl = 0;
+                }
+            }
+            // cc:985: if (syncVarnodesWithSymbol(iter,fl,ct)) updateoccurred = true;
+            if self.sync_varnodes_with_symbol_set(&ordered, &mut index, fl, ct) {
+                updateoccurred = true;
+            }
+        }
+        updateoccurred
+    }
+
+    // Ghidra: funcdata_varnode.cc:1048 Funcdata::syncVarnodesWithSymbol
+    /// Update properties (and the data-type) for a set of Varnodes associated
+    /// with one Symbol. Faithful to the private overload
+    /// `Funcdata::syncVarnodesWithSymbol(VarnodeLocSet::const_iterator&,uint4,Datatype*)`
+    /// (funcdata_varnode.cc:1048-1095): all Varnodes sharing the exemplar's
+    /// (address,size) get the masked flag update — `mapped` always;
+    /// `addrtied`/`addrforce` clearable but not settable; `nolocalalias` +
+    /// `addrforce` settable but `nolocalalias` not clearable — then the
+    /// data-type via `Varnode::updateType` when `ct` is non-null. Varnodes
+    /// with an attached SymbolEntry keep their `mapped` bit unchanged
+    /// (cc:1075-1082). `index` is advanced past the whole set.
+    fn sync_varnodes_with_symbol_set(
+        &mut self,
+        ordered: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        index: &mut usize,
+        mut fl: u32,
+        ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    ) -> bool {
+        use crate::varnode::varnode_flags;
+
+        let mut updateoccurred = false;
+        // cc:1056: mask = Varnode::mapped — the flags we are going to try to
+        // update. We take special care with the addrtied flag as we cannot
+        // SET it here if it is clear: we can CLEAR but not SET addrtied, and
+        // if addrtied is cleared, so should addrforce (cc:1057-1062).
+        let mut mask = varnode_flags::MAPPED;
+        if (fl & varnode_flags::ADDRTIED) == 0 {
+            mask |= varnode_flags::ADDRTIED | varnode_flags::ADDRFORCE;
+        }
+        // cc:1063-1066: we can set the nolocalalias flag, but not clear it;
+        // if nolocalalias is set, then addrforce should be cleared.
+        if (fl & varnode_flags::NOLOCALALIAS) != 0 {
+            mask |= varnode_flags::NOLOCALALIAS | varnode_flags::ADDRFORCE;
+        }
+        fl &= mask;
+
+        // cc:1069-1070: enditer = vbank.endLoc(vn->getSize(), vn->getAddr())
+        // — the set is every remaining Varnode with the exemplar's
+        // (space, offset, size); the outer loc order keeps it contiguous.
+        let (set_space, set_addr, set_size) = {
+            let vn = ordered[*index].read().unwrap();
+            (vn.get_space(), vn.get_offset(), vn.get_size())
+        };
+        // cc:1071-1093: do { ... } while (iter != enditer);
+        while *index < ordered.len() {
+            let vn = ordered[*index].clone();
+            let matches_set = {
+                let vn_r = vn.read().unwrap();
+                vn_r.get_space() == set_space
+                    && vn_r.get_offset() == set_addr
+                    && vn_r.get_size() == set_size
+            };
+            if !matches_set {
+                break;
+            }
+            *index += 1;
+            let mut vn_w = vn.write().unwrap();
+            // cc:1073: if (vn->isFree()) continue;
+            if vn_w.is_free() {
+                continue;
+            }
+            let vnflags = vn_w.flags;
+            let high = vn_w.high.clone();
+            if vn_w.mapentry.is_some() {
+                // cc:1075-1082: already an attached SymbolEntry (dynamic):
+                // make sure the 'mapped' bit is unchanged.
+                let local_mask = mask & !varnode_flags::MAPPED;
+                let local_flags = fl & local_mask;
+                if (vnflags & local_mask) != local_flags {
+                    updateoccurred = true;
+                    vn_w.set_flags(local_flags);
+                    vn_w.clear_flags((!local_flags) & local_mask);
+                    if let Some(high) = &high {
+                        // varnode.cc:352-374 setFlags/clearFlags -> flagsDirty
+                        high.write().unwrap().flags_dirty();
+                    }
+                }
+            } else if (vnflags & mask) != fl {
+                // cc:1084-1088: we have a change.
+                updateoccurred = true;
+                vn_w.set_flags(fl);
+                vn_w.clear_flags((!fl) & mask);
+                if let Some(high) = &high {
+                    high.write().unwrap().flags_dirty();
+                }
+            }
+            if let Some(ct) = &ct {
+                // cc:1089-1092: if (vn->updateType(ct)) updateoccurred = true;
+                if vn_w.update_type(ct.clone()) {
+                    updateoccurred = true;
+                    if let Some(high) = &high {
+                        // varnode.cc:456-464 updateType -> typeDirty
+                        high.write().unwrap().type_dirty();
                     }
                 }
             }
-            matches
-        };
-        // Mark matched varnodes as mapped (set DIRECT_WRITE flag as a proxy
-        // for "mapped" since Rugra lacks a dedicated MAPPED flag).
-        for (vn_arc, _has_sym) in to_update {
-            vn_arc.write().unwrap().set_direct_write();
-            updated = true;
         }
-        updated
+        updateoccurred
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::removeFromFlowSplit

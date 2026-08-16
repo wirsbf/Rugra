@@ -848,6 +848,21 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `sync_varnodes_with_symbols(update_datatypes, unmapped_alias_check) -> bool` — `Funcdata::syncVarnodesWithSymbols`（funcdata_varnode.cc:938-989）的忠实适配：遍历 Stack-space varnodes，匹配 ScopeLocal 符号，标记为 mapped（set_direct_write）。ActionRestructureVarnode 现调用它（coreaction.cc:2281）。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 
+### 2026-08-15（FUNCDATA-SCOPE-SYNC-0001）：sync_varnodes_with_symbols 忠实移植
+
+旧适配体（两参数全 `_` 忽略、DIRECT_WRITE 代理、从不 updateType、从不设 nolocalalias）被完整移植替换，oracle fixture `tests/oracle/scope_sync_1204`（锁定 12.0.4 oracle，双侧 8 记录逐字节 MATCH）：
+
+- `sync_varnodes_with_symbols(update_datatypes, unmapped_alias_check) -> bool` — `Funcdata::syncVarnodesWithSymbols`（funcdata_varnode.cc:938-989）1:1。按 loc 序遍历 scope 空间 varnode；`findOverlap` 命中符号时 `fl = getAllFlags()`（extraflags=mapped ∪ Symbol flags；`LocalSymbol.usepoint == None` ↔ Ghidra `Scope::addMap` 在 uselimit 为空时设的 addrtied，database.cc:1149-1150；typelock/namelock/nolocalalias=unaliased）；entry.size ≥ vn.size 且 updateDatatypes 时 `getSizedType`（TYPE_UNKNOWN 丢弃，cc:956-960）；entry 更小时仅清 typelock/namelock 位（cc:962-969，nolocalalias 保留）；无符号时 in-scope → `mapped|addrtied`（cc:976）、否则 unmappedAliasCheck 走 `isUnmappedUnaliased`（cc:980）、否则 0。
+- `sync_varnodes_with_symbol_set(ordered, index, fl, ct) -> bool`（私有）— per-set 重载 `Funcdata::syncVarnodesWithSymbol(VarnodeLocSet::const_iterator&,uint4,Datatype*)`（funcdata_varnode.cc:1048-1095）1:1：mask 从 `mapped` 起，fl 无 addrtied 时并入 `addrtied|addrforce`（可清不可设），fl 有 nolocalalias 时并入 `nolocalalias|addrforce`（可设不可清），`fl &= mask` 后对同 (space,offset,size) 集内每个非 free varnode 应用；已挂 mapentry 的 varnode 用 `mask & ~mapped` 局部掩码（mapped 位保持不变，cc:1075-1082）；ct 非空时 `updateType`（typelock varnode 不被覆盖），成功时 `high->typeDirty()`；flag 写后 `high->flagsDirty()`（varnode.cc:352-374 副作用，Rugra 的 `Varnode::set_flags` 不含此传播，故在此显式调用）。
+- 模块级辅助（funcdata.rs，均带 `// Ghidra:` 注释）：
+  - `varnode_use_point_offset` — `Varnode::getUsePoint`（varnode.cc:696-703）。
+  - `scope_local_find_overlap` — `ScopeInternal::findOverlap`（database.cc:2392-2404）：同空间、区间重叠、最小 start 胜出。
+  - `scope_local_in_scope` — `Scope::inScope`（database.hh:597）→ rangetree 完整覆盖语义（usepoint 被基类忽略，不参与）。
+  - `scope_local_is_unmapped_unaliased` — `ScopeLocal::isUnmappedUnaliased`（varmap.cc:494-502）。
+  - `local_symbol_sized_type` + `exact_piece_arc_sub_type` — `SymbolEntry::getSizedType`（database.cc:151-162）+ `TypeFactory::getExactPiece`（type.cc:4090-4117）的 Arc 恒等版本；partial struct/array/enum/union 构造（getTypePartialStruct 族）未移植，返回 None（与 database.rs `SymbolEntry::get_sized_type` 同一残差）。
+- 调用闭包：`ActionRestructureVarnode`（coreaction.cc:2281-2282，false/aliasyes，count 累计）与 `ActionMappedLocalSync`（coreaction.cc:2302-2303，true/true，count 累计）。
+- 已知残差：① `getExactPiece` 的 partial-struct/array/enum/union 构造缺失（getSizedPiece 返回 None → 不做类型投影）；② Rugra `Varnode::set_flags/clear_flags` 本体不带 flagsDirty 传播（varnode.rs 端预置缺口，本移植在调用点补偿）；③ 未知类型工厂命名 `undefined{size}` vs Ghidra `xunknown{size}`（fixture 层规范化，属 TypeFactory 命名域而非本函数契约）。
+
 ### 2026-06-29（续 2）：new_extended_constant（funcdata_varnode.cc:462）
 - `new_extended_constant(s, lo, hi, before_op)` — 创建可能 >8 字节的常量 Varnode。s≤8 时直接 newConstant；s>8 且 hi==0 时 INT_ZEXT(const)；s>8 且 hi!=0 时 PIECE(hi,lo)。忠实移植 Ghidra `Funcdata::newExtendedConstant`（funcdata_varnode.cc:462-484）。解锁 RuleDivTermAdd。
 
