@@ -87,7 +87,12 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `restructure(state, types)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with(工厂句柄)，不相交→attempt_join/adjust_fit/create_entry
 - `adjust_fit(a)` — `ScopeLocal::adjustFit` (varmap.cc:587)，typelock/size0 拒绝 + 符号重叠收缩
 - `create_entry(hint, types)` — `ScopeLocal::createEntry` (varmap.cc:617)：空名 addSymbol（$$undef 占位）+ `concretize`（工厂，varmap.cc:622）+ 数组类型包装（varmap.cc:625——Rust 无 `TypeFactory::getTypeArray`，数组壳仍本地构造，元素类型为工厂对象；登记 TYPE-WIRING-0001 残差）；命名推迟到 assign_default_names
-- `fake_input_symbols(fd, types)` — `ScopeLocal::fakeInputSymbols` (varmap.cc:1392)：addSymbol 空名 + setCategory(fake_input, -1)（varmap.cc:1440-1441），类型 = 工厂 `getBase(size,TYPE_UNKNOWN)`（varmap.cc:1438）
+- `fake_input_symbols(fd, types)` — **完整 1:1** `ScopeLocal::fakeInputSymbols` (varmap.cc:1392-1448)：按 `fd->beginDef(Varnode::input)`（VarnodeCompareDefLoc：space/offset/size）遍历 input Varnode；仅以**首地址 1 字节**做 `getParamRange().inRange(addr,1)` 过滤（varmap.cc:1407，负增长 flipped 局部被滤除）；内层按重叠（`off2 <= endpoint`，**相邻不合并**，varmap.cc:1412）吸收同 space 组员；组员 typelock 则整组跳过（varmap.cc:1416-1420）；`lockedinputs != 0` 时以**内层最后检视的（breaker）Varnode** 做 `queryProperties` 探测，命中 `function_parameter` 符号则 continue（varmap.cc:1428-1435）；endpoint/size 为 uintb 模 2^64 回绕（varmap.cc:1408/1413/1437）；`addSymbol("",getBase(size,TYPE_UNKNOWN),addr,invalid)` + `setCategory(fake_input,-1)`，LowlevelError（无类型 / 映射越过地址空间末端，database.cc:1822-1823/1855-1861）被捕获并路由 `fd->warningHeader` 后继续扫描（varmap.cc:1439-1445）。fixture：`tools/run_scope_fake_input_symbols_oracle.sh`（VARMAP-FAKEINPUT-0001，八 case 全观察点 MATCH）
+- `get_category_size(cat)` — `ScopeInternal::getCategorySize` (database.cc:2806)：负数/未分配类别返回 0；fake_input_symbols 的 `lockedinputs` 探测源
+- `find_container_invalid_usepoint(space, addr, size)` — `ScopeInternal::findContainer`（invalid usepoint 形态，database.cc:2250-2282）+ `SymbolEntry::inUse`（database.cc:114-120，仅 addrtied 项匹配 invalid usepoint）：降序 (first,last) 遍历、严格更小替换、精确尺寸短路，平局取升序末位；dynamic 项不参与；父作用域链（Scope::queryProperties 的 stackContainer 上溯）在 varmap ScopeLocal 无父链——database-scope 统一前为登记残差
+- `add_fake_input_symbol(types, addr, size)` — `Scope::addSymbol` 的 LowlevelError 面（database.cc:1810 addSymbolInternal 的 no-type 检查 + database.cc:1843 addMapInternal 的地址空间末端回绕检查），错误文本携带 `buildUndefinedName` 占位名
+- `func_proto_param_range(fd)`（自由函数）— `FuncProto::getParamRange` (fspec.hh:1540)：Rugra FuncProto 不持有模型 Arc，按 `FuncProto::setScope` 的回退序（fspec.cc:3879-3885）经 Architecture 注册表解析——约定名 → defaultfp → 无 Architecture 时以 `ProtoModelFull::new`（= `defaultParamRange`，fspec.cc:2292，8 字节负增长栈 [0,511]）作 FUNCPROTO-MODEL-BIND-0001 期占位
+- `param_range_in_range(paramrange, offset)`（自由函数）— `RangeList::inRange(addr,1)` (address.cc:468-487)：空表 false，否则最后一个 `first <= offset` 的 range 须 `last >= offset`（Rugra fspec RangeList 无 space 字段——参数 range 全为 stack 且调用方已过滤 scope space，Ghidra 的 space 测试被覆盖）
 - `make_int_type(types, size)` — 辅助：工厂 `getBase(size,TYPE_UNKNOWN)`（varmap.cc:942/1031 同型调用），供 gather_spacebase 与 fallback
 - `build_variable_name(space, offset, usepoint, ct, index, flags)` — **权威命名覆盖** `ScopeLocal::buildVariableName` (varmap.cc:548)：addrtied 且在 local_range 内走 `<printNameBase>Stack[X|Y]_hex`，否则落到 `build_variable_name_internal`
 - `build_variable_name_internal(...)` — `ScopeInternal::buildVariableName` (database.cc:2434)：unaffected/persist/irregular input/param_N/addrtied/extraout/default local 七分支 + 10 次碰撞 bump + makeNameUnique
@@ -98,7 +103,7 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `add_symbol(nm, ct, start, usepoint)` — `Scope::addSymbol`+`addSymbolInternal`+`addMapPoint` (database.cc:1530/1810/1548)
 - `build_default_name(idx, base, vn, fd)` — `Scope::buildDefaultName` (database.cc:1756)：entry 路径由 usepoint 推导 flags、function_parameter 用 catindex+1；vn 分支保留（待 ActionNameVars 接入）
 - `assign_default_names(base)` — **`ScopeInternal::assignDefaultNames`** (database.cc:2850)：nametree 顺序、共享 `int4 base` 计数器、二次运行幂等
-- `set_category(idx, cat, ind)` / `get_category_symbol(cat, ind)` — `ScopeInternal::setCategory`/`getCategorySymbol` (database.cc:2824/2814)
+- `set_category(idx, cat, ind)` / `get_category_symbol(cat, ind)` / `get_category_size(cat)` — `ScopeInternal::setCategory`/`getCategorySymbol`/`getCategorySize` (database.cc:2824/2814/2806)
 - `symbols_in_nametree_order()` — RUGRA-GLUE：锁定 fixture 的 nametree 顺序只读观察口
 - `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332)，含 0xffff 距离启发式（alias_block_level 待接入）
 - `find_symbol(offset)` — 按偏移查找重构后的符号
@@ -123,7 +128,10 @@ varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 G
 测试：varmap::tests 26 个（compare/contain/reconcile/preferred/merge/absorb/const_absorbable/
 build_variable_name×2/assign_default_names 共享计数器/make_name_unique 后缀/param category/
 typelock 存留/name_dedup/$$undef 序列/mark_unaliased/restructure/spacebase）。
-锁定 oracle：`tools/run_varmap_naming_oracle.sh`（VARMAP-NAMING-0001，六 case 投影 MATCH）。
+锁定 oracle：`tools/run_varmap_naming_oracle.sh`（VARMAP-NAMING-0001，六 case 投影 MATCH）、
+`tools/run_scope_fake_input_symbols_oracle.sh`（VARMAP-FAKEINPUT-0001，八 case 全观察点 MATCH：
+paramrange 首字节过滤/重叠吸收+standalone 对照/相邻不合并/跨 space 断裂/typelock 整组跳过/
+lockedinputs breaker 与 leader-only 双向/翻转栈 max 边界回绕异常经 warningHeader 继续）。
 
 ### 2026-06-27（会话3 续）：MapState::hint_count（诊断）
 

@@ -903,6 +903,65 @@ fn make_int_type(
         .expect("factory always produces an unknown base type")
 }
 
+// Ghidra: fspec.hh:1540 FuncProto::getParamRange
+/// Resolve the stack-parameter range of a Funcdata's prototype the way
+/// `fd->getFuncProto().getParamRange()` (fspec.hh:1540) does: it reads the
+/// ProtoModel attached to the prototype, and `FuncProto::setScope`
+/// (fspec.cc:3879-3885) guarantees a model is attached by falling back to
+/// `s->getArch()->defaultfp`. Rugra's `FuncProto` stores only the convention
+/// name (`model` is not exposed), so resolve through the Architecture's
+/// registry in the same precedence: the prototype's convention name, else
+/// the Architecture default model. With no Architecture attached
+/// (FUNCPROTO-MODEL-BIND-0001 chain), stand in with the model Ghidra's
+/// default constructor would have built — `ProtoModel::defaultParamRange`
+/// (fspec.cc:2292) for the process-canonical 8-byte negative-growth stack.
+fn func_proto_param_range(
+    fd: &crate::funcdata::Funcdata,
+) -> crate::address::RangeList {
+    if let Some(arch) = &fd.arch {
+        let name = fd.get_func_proto().get_model_name();
+        if let Some(model) = arch.proto_models.get(name) {
+            return model.paramrange.clone();
+        }
+        if let Some(model) = &arch.defaultfp {
+            return model.paramrange.clone();
+        }
+    }
+    crate::fspec::ProtoModelFull::new(Some(crate::space::AddressSpace::Stack), 8).paramrange
+}
+
+// Ghidra: address.cc:468 RangeList::inRange
+/// Is the single address `offset` contained in the parameter range?
+/// Faithful to `RangeList::inRange(addr, 1)` (address.cc:468-487) as invoked
+/// at varmap.cc:1407: an invalid address returns true ("we don't really
+/// care" — unreachable here, every queried Varnode has a real address), an
+/// empty container returns false, otherwise the last range with
+/// `first <= offset` must reach `offset + size - 1` (= `offset` for size 1)
+/// in the same space. (Rugra's fspec `RangeList` ranges carry no space —
+/// they are all stack ranges built from stack pentries / `<range
+/// space="stack">`, and every caller of this helper has already filtered
+/// `addr.getSpace() == scope space`, so Ghidra's space test is subsumed.)
+fn param_range_in_range(paramrange: &crate::address::RangeList, offset: u64) -> bool {
+    let ranges = paramrange.ranges();
+    if ranges.is_empty() {
+        return false;
+    }
+    // iter = tree.upper_bound(Range(spc,offset,offset)); if (iter ==
+    // tree.begin()) return false; --iter; — the last range with first <= offset.
+    let mut candidate: Option<&crate::address::Range> = None;
+    for range in ranges {
+        if range.get_first().as_u64() <= offset {
+            candidate = Some(range);
+        } else {
+            break; // sorted by first
+        }
+    }
+    match candidate {
+        Some(range) => range.get_last().as_u64() >= offset,
+        None => false,
+    }
+}
+
 // Ghidra: database.cc:2571 ScopeInternal::makeNameUnique (suffix parsing)
 /// Parse the `_NN` (2-digit) or `_xNNNNN` (5-digit) uniquifier suffix that
 /// `makeNameUnique` (database.cc:2571-2593) accepts on an existing name:
@@ -2546,68 +2605,248 @@ impl ScopeLocal {
     }
 
     // Ghidra: varmap.cc:1392 ScopeLocal::fakeInputSymbols
-    /// Create fake input symbols for stack-space input Varnodes that are not
-    /// part of the formal prototype. Faithful to
-    /// `ScopeLocal::fakeInputSymbols` (varmap.cc:1392-1448).
+    /// Assign a Symbol to any input Varnode stored in the scope's address
+    /// space which could be a parameter but isn't in the formal prototype of
+    /// the function (those are already in the scope marked category '0').
+    /// Faithful 1:1 port of `ScopeLocal::fakeInputSymbols`
+    /// (varmap.cc:1392-1448):
     ///
-    /// Ghidra scans `fd->beginDef(input)` for stack-space inputs, coalesces
-    /// adjacent ones, and creates a fake-input symbol of unknown type —
-    /// `addSymbol("", ct, addr, usepoint)` with an INVALID usepoint
-    /// (varmap.cc:1440, the getUsePoint call is commented out upstream) then
-    /// `setCategory(sym, Symbol::fake_input, -1)` (varmap.cc:1441), so the
-    /// symbol keeps a `$$undef` placeholder until `assignDefaultNames`.
-    /// Rugra approximates the input scan by walking stack-space input
-    /// varnodes (no defining op) in the vbank.
-    fn fake_input_symbols(
+    /// 1. Only offsets whose FIRST address alone (size 1) passes
+    ///    `fd->getFuncProto().getParamRange().inRange(addr,1)` (varmap.cc:1407)
+    ///    become fake inputs — negative-growth locals at flipped (huge) stack
+    ///    offsets are filtered out.
+    /// 2. Each surviving varnode opens a group; subsequent varnodes in
+    ///    `fd->beginDef(Varnode::input)` order (VarnodeCompareDefLoc:
+    ///    space, offset, size) extend the group while they stay in the
+    ///    scope's space AND overlap (`off2 <= endpoint` — adjacent-but-
+    ///    non-overlapping varnodes do NOT merge, varmap.cc:1409-1419).
+    /// 3. A group is skipped entirely when any member Varnode is typelocked
+    ///    (varmap.cc:1416-1417, 1420).
+    /// 4. With locked inputs present, the group is also skipped when the
+    ///    last examined varnode of the inner loop (the breaking varnode, or
+    ///    the outer one when the loop never entered) resolves through
+    ///    `queryProperties` to an existing `function_parameter` Symbol
+    ///    (varmap.cc:1428-1435).
+    /// 5. `endpoint`/`size` arithmetic is uintb modulo 2^64 (wrapping)
+    ///    (varmap.cc:1408/1413/1437).
+    /// 6. `addSymbol("",getBase(size,TYPE_UNKNOWN),addr,invalid-usepoint)` +
+    ///    `setCategory(sym, Symbol::fake_input, -1)`; a LowlevelError from
+    ///    the addSymbol chain (no/zero-size type, or a mapping that wraps
+    ///    past the end of the address space, database.cc:1822-1825/1855-1861)
+    ///    is caught and routed to `fd->warningHeader` (varmap.cc:1439-1445)
+    ///    without aborting the scan.
+    pub fn fake_input_symbols(
         &mut self,
         fd: &crate::funcdata::Funcdata,
         types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     ) {
-        // Collect (offset, size) of stack-space input varnodes, sorted by offset.
-        let mut inputs: Vec<(u64, i32)> = Vec::new();
-        for vn_arc in &fd.vbank.loc_tree {
-            let vn = vn_arc.0.read().unwrap();
-            if vn.is_free() {
-                continue;
-            }
-            if vn.get_space() != crate::space::AddressSpace::Stack {
-                continue;
-            }
-            if vn.def.is_some() {
-                continue; // Only inputs (no defining op).
-            }
-            inputs.push((vn.get_offset(), vn.get_size() as i32));
-        }
-        inputs.sort();
+        // int4 lockedinputs = getCategorySize(Symbol::function_parameter);
+        // (varmap.cc:1395)
+        let lockedinputs = self.get_category_size(symbol_category::FUNCTION_PARAMETER) as i32;
 
-        // Coalesce adjacent/overlapping inputs (varmap.cc:1408-1419).
-        let mut i = 0;
-        while i < inputs.len() {
-            let (addr, sz) = inputs[i];
-            let mut endpoint = addr + sz as u64 - 1;
-            let mut j = i + 1;
-            while j < inputs.len() {
-                let (off2, sz2) = inputs[j];
-                if endpoint < off2 {
-                    break;
-                }
-                let new_endpoint = off2 + sz2 as u64 - 1;
-                if endpoint < new_endpoint {
-                    endpoint = new_endpoint;
-                }
-                j += 1;
+        // iter = fd->beginDef(Varnode::input); enditer = fd->endDef(...)
+        // (varmap.cc:1398-1399). Inputs form a prefix of the def_tree
+        // (VarnodeCompareDefLoc varnode.cc:60-79: input, then written, then
+        // free), ordered by (space index, offset, size). Snapshot in that
+        // order so index arithmetic reproduces the iterator walk.
+        let mut inputs: Vec<(crate::space::AddressSpace, u64, i32, bool)> = Vec::new();
+        for entry in &fd.vbank.def_tree {
+            let vn = entry.0.read().unwrap();
+            if !vn.is_input() {
+                break; // reached endDef(Varnode::input)
             }
-            let size = (endpoint - addr + 1) as i32;
-            // Datatype *ct = fd->getArch()->types->getBase(size,TYPE_UNKNOWN);
-            // (varmap.cc:1438)
-            let ct = make_int_type(types, size as usize);
-            // addSymbol("",ct,addr,usepoint-invalid); setCategory(sym, fake_input, -1);
-            let idx = self.add_symbol(
-                crate::space::AddressSpace::Stack, "", Some(ct), addr, None,
-            );
-            self.set_category(idx, symbol_category::FAKE_INPUT, -1);
-            i = j;
+            inputs.push((vn.get_space(), vn.get_offset(), vn.get_size() as i32, vn.is_type_lock()));
         }
+
+        // fd->getFuncProto().getParamRange() (varmap.cc:1407 via fspec.hh:1540).
+        let paramrange = func_proto_param_range(fd);
+
+        let mut iter = 0usize;
+        while iter < inputs.len() {
+            let (spc, addr_off, sz, mut locked) = inputs[iter];
+            let group_start = iter;
+            iter += 1; // Varnode *vn = *iter++;
+            if spc != self.space {
+                continue; // varmap.cc:1405
+            }
+            // Only allow offsets which can be parameters — the FIRST address
+            // alone (size 1), not the whole varnode extent (varmap.cc:1407).
+            if !param_range_in_range(&paramrange, addr_off) {
+                continue;
+            }
+            // uintb endpoint = addr.getOffset() + vn->getSize() - 1;
+            // (varmap.cc:1408) — uintb wraps modulo 2^64.
+            let mut endpoint = addr_off.wrapping_add(sz as u64).wrapping_sub(1);
+            // `vn` for the queryProperties probe below (varmap.cc:1430):
+            // the inner loop assigns the breaker varnode to `vn` before
+            // testing it, and leaves the outer varnode in place when the
+            // loop body never runs.
+            let mut last = inputs[group_start];
+            while iter < inputs.len() {
+                let cand = inputs[iter];
+                last = cand; // vn = *iter; (varmap.cc:1410)
+                if cand.0 != self.space {
+                    break; // varmap.cc:1411
+                }
+                if endpoint < cand.1 {
+                    break; // varmap.cc:1412 — gap: adjacent inputs do NOT merge
+                }
+                let newendpoint = cand.1.wrapping_add(cand.2 as u64).wrapping_sub(1); // cc:1413
+                if endpoint < newendpoint {
+                    endpoint = newendpoint; // cc:1414-1415
+                }
+                if cand.3 {
+                    locked = true; // cc:1416-1417
+                }
+                iter += 1; // cc:1418
+            }
+            if !locked {
+                // varmap.cc:1428-1435: with a locked input prototype, double
+                // check that vn doesn't already have a representative
+                // parameter Symbol (the input prototype may be locked with
+                // TYPE_UNKNOWN members that never got typelocked).
+                if lockedinputs != 0 {
+                    if let Some(symidx) =
+                        self.find_container_invalid_usepoint(last.0, last.1, last.2)
+                    {
+                        if self.symbols[symidx].category == symbol_category::FUNCTION_PARAMETER {
+                            continue; // Found a matching symbol (varmap.cc:1433)
+                        }
+                    }
+                }
+
+                // int4 size = (endpoint - addr.getOffset()) + 1; (varmap.cc:1437)
+                let size = endpoint.wrapping_sub(addr_off).wrapping_add(1) as i32;
+                // try { addSymbol("",ct,addr,usepoint); setCategory(...) }
+                // catch(LowlevelError) { fd->warningHeader(...) } (cc:1438-1445)
+                if let Err(explain) = self.add_fake_input_symbol(types, addr_off, size) {
+                    fd.warning_header(&explain);
+                }
+            }
+        }
+    }
+
+    // Ghidra: database.cc:2806 ScopeInternal::getCategorySize
+    /// Number of slots in a category list (null slots popped by setCategory
+    /// still count while they are not trailing). Faithful to
+    /// `ScopeInternal::getCategorySize` (database.cc:2806-2812): a negative
+    /// or unallocated category reports 0.
+    pub fn get_category_size(&self, cat: i32) -> usize {
+        if cat < 0 {
+            return 0;
+        }
+        self.category_lists
+            .get(cat as usize)
+            .map(|list| list.len())
+            .unwrap_or(0)
+    }
+
+    // Ghidra: database.cc:2250 ScopeInternal::findContainer (invalid usepoint) +
+    // database.cc:1263 Scope::queryProperties
+    /// Find the smallest whole Symbol mapping that fully contains
+    /// `[addr, addr+size-1]` and is valid at an INVALID use point — the
+    /// container probe behind the `queryProperties` call at varmap.cc:1430.
+    /// Faithful to `ScopeInternal::findContainer` (database.cc:2250-2282)
+    /// combined with `SymbolEntry::inUse` (database.cc:114-120): only
+    /// address-tied entries (no use limit) match an invalid use point, and
+    /// dynamic entries are not in the address range map. The candidate walk
+    /// runs in descending (first,last) order replacing on strictly smaller
+    /// size and breaking on an exact-size hit, which reproduces the backward
+    /// rangemap iteration and its tie-break (last in ascending order wins).
+    ///
+    /// (Ghidra's `Scope::queryProperties` walks up through parent scopes
+    /// after this scope; Rugra's varmap ScopeLocal has no parent linkage —
+    /// the database-scope unification gap recorded for the scope stack — so
+    /// only this scope's symbols can answer.)
+    fn find_container_invalid_usepoint(
+        &self,
+        space: crate::space::AddressSpace,
+        addr: u64,
+        size: i32,
+    ) -> Option<usize> {
+        // rangemap = maptable[addr.getSpace()->getIndex()] — only static
+        // whole mappings of the queried space participate.
+        let end = addr.wrapping_add(size as u64).wrapping_sub(1);
+        let mut candidates: Vec<(u64, u64, usize)> = self
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, sym)| {
+                !sym.is_dynamic
+                    && sym.space == space
+                    && sym.usepoint.is_none() // inUse(invalid) == isAddrTied()
+            })
+            .map(|(idx, sym)| (sym.start, sym.start.wrapping_add(sym.size as u64).wrapping_sub(1), idx))
+            .filter(|(first, last, _)| *first <= addr && *last >= end)
+            .collect();
+        candidates.sort(); // ascending rangemap (first,last) order
+        let mut best: Option<(i32, usize)> = None; // (size, symbol index)
+        let mut oldsize: i32 = -1;
+        for (_, _, idx) in candidates.iter().rev() {
+            let sym = &self.symbols[*idx];
+            let entry_size = sym.size;
+            // entry->getLast() >= end (containment) was pre-filtered above.
+            if entry_size < oldsize || oldsize == -1 {
+                best = Some((entry_size, *idx));
+                if entry_size == size {
+                    break; // cc:2274 — exact match short-circuits the walk
+                }
+                oldsize = entry_size;
+            }
+        }
+        best.map(|(_, idx)| idx)
+    }
+
+    // Ghidra: database.cc:1810 ScopeInternal::addSymbolInternal +
+    // database.cc:1843 ScopeInternal::addMapInternal (via varmap.cc:1440 addSymbol)
+    /// Create the fake-input Symbol the way `Scope::addSymbol` does, with the
+    /// LowlevelError surfaces that `fakeInputSymbols` catches
+    /// (varmap.cc:1439-1445): the no-type/zero-size-type checks of
+    /// `addSymbolInternal` (database.cc:1822-1825) and the end-of-address-
+    /// space wrap check of `addMapInternal` (database.cc:1855-1861).
+    /// `addr`/`size` model the mapping `[addr, addr+size-1]` in the scope's
+    /// 8-byte stack space, where Ghidra's `Address::operator+` wrapOffset is
+    /// the uintb identity, so the wrap test is uintb modulo 2^64.
+    fn add_fake_input_symbol(
+        &mut self,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        addr: u64,
+        size: i32,
+    ) -> Result<(), String> {
+        // sym->name = buildUndefinedName() runs before the type checks
+        // (database.cc:1818-1821), so the exception texts carry the
+        // placeholder name the symbol would have taken.
+        let placeholder = self
+            .build_undefined_name()
+            .unwrap_or_else(|| "$$undef00000000".to_string());
+        if size < 1 {
+            // getBase never yields a null type (type.cc:3631-3660: the
+            // TYPE_UNKNOWN arm skips the cache and falls through to
+            // TypeBase(s,m)+findAdd), so a size<1 request walks the
+            // "zero size type" arm at database.cc:1824-1825, not the
+            // null-type arm at 1822-1823. Unreachable from
+            // fakeInputSymbols (endpoint >= addr forces size >= 1); text
+            // kept for arm fidelity. Ghidra s<0 with a float metatype is a
+            // typecache[9][8] OOB UB (type.hh:774) — no oracle exists.
+            return Err(format!("{} symbol created with zero size type", placeholder));
+        }
+        // Address lastaddress = addr + (sz-1); (database.cc:1855) — the
+        // mapping must not wrap past the end of the address space.
+        let lastaddress = addr.wrapping_add(size as u64).wrapping_sub(1);
+        if lastaddress < addr {
+            return Err(format!(
+                "Symbol {} extends beyond the end of the address space",
+                placeholder
+            ));
+        }
+        // Datatype *ct = fd->getArch()->types->getBase(size,TYPE_UNKNOWN);
+        // (varmap.cc:1438)
+        let ct = make_int_type(types, size as usize);
+        // Symbol *sym = addSymbol("",ct,addr,usepoint)->getSymbol(); (cc:1440)
+        let idx = self.add_symbol(self.space, "", Some(ct), addr, None);
+        // setCategory(sym, Symbol::fake_input, -1); (cc:1441)
+        self.set_category(idx, symbol_category::FAKE_INPUT, -1);
+        Ok(())
     }
 
     // Ghidra: varmap.cc:341 ScopeLocal::findSymbol
@@ -2897,6 +3136,73 @@ mod tests {
         assert_eq!(base, 1); // untouched by the param branch
         let names: Vec<&str> = scope.symbols.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["param_1", "param_2"]);
+    }
+
+    // --- fakeInputSymbols helpers (VARMAP-FAKEINPUT-0001) ---
+
+    #[test]
+    fn test_get_category_size_database_cc_2806() {
+        // Negative and unallocated categories report 0; allocated slots
+        // count, including non-trailing nulls.
+        let mut scope = ScopeLocal::new();
+        assert_eq!(scope.get_category_size(symbol_category::FUNCTION_PARAMETER), 0);
+        assert_eq!(scope.get_category_size(-1), 0);
+        let p1 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(int_dt(8, TypeMetatype::Int)), 0x20, None);
+        scope.set_category(p1, symbol_category::FUNCTION_PARAMETER, 0);
+        assert_eq!(scope.get_category_size(symbol_category::FUNCTION_PARAMETER), 1);
+    }
+
+    #[test]
+    fn test_param_range_in_range_address_cc_468() {
+        // upper_bound containment: last range with first <= offset must
+        // reach the offset; empty list false; below-first false.
+        let build = |pairs: &[(u64, u64)]| {
+            let mut rl = crate::address::RangeList::new();
+            for &(f, l) in pairs {
+                if let Some(r) = crate::address::Range::new(
+                    crate::address::Address::new(f),
+                    crate::address::Address::new(l),
+                ) {
+                    rl.insert_range(r);
+                }
+            }
+            rl
+        };
+        let rl = build(&[(8, 515)]);
+        assert!(param_range_in_range(&rl, 8));
+        assert!(param_range_in_range(&rl, 512)); // first byte only
+        assert!(param_range_in_range(&rl, 515));
+        assert!(!param_range_in_range(&rl, 7)); // below the range
+        assert!(!param_range_in_range(&rl, 516)); // past the range
+        assert!(!param_range_in_range(&rl, 0xfffffffffffffff0)); // flipped local
+        assert!(!param_range_in_range(&build(&[]), 8)); // empty
+    }
+
+    #[test]
+    fn test_find_container_invalid_usepoint() {
+        // Smallest containing address-tied whole map wins (database.cc:2250);
+        // usepoint-limited and dynamic entries never match an invalid
+        // usepoint (database.cc:114-120); an exact-size hit short-circuits.
+        let mut scope = ScopeLocal::new();
+        let big = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "big", Some(int_dt(8, TypeMetatype::Int)), 0x10, None);
+        let small = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "small", Some(int_dt(4, TypeMetatype::Int)), 0x14, None);
+        let used = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "used", Some(int_dt(8, TypeMetatype::Int)), 0x40, Some(0x1000));
+        let _ = (big, small, used);
+        // Query [0x14,0x17]: big [0x10,0x17] contains it, small [0x14,0x17]
+        // is the exact-size smallest → small wins.
+        assert_eq!(scope.find_container_invalid_usepoint(crate::space::AddressSpace::Stack, 0x14, 4), Some(small));
+        // Query [0x10,0x17] (8 bytes): only big contains it.
+        assert_eq!(scope.find_container_invalid_usepoint(crate::space::AddressSpace::Stack, 0x10, 8), Some(big));
+        // Query [0x40,0x47]: the only candidate has a use limit → no match.
+        assert_eq!(scope.find_container_invalid_usepoint(crate::space::AddressSpace::Stack, 0x40, 8), None);
+        // Dynamic entries are not in the address range map.
+        let dyn_idx = scope.add_dynamic_symbol("dyn", Some(int_dt(8, TypeMetatype::Int)), 0x1234, None);
+        assert_eq!(scope.find_container_invalid_usepoint(crate::space::AddressSpace::Stack, 0x60, 8), None);
+        let _ = dyn_idx;
     }
 
     #[test]

@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "fixture_id": "VARMAP-FAKEINPUT-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "rugra_base_commit": "9ea2a78e3db7e5599af842ae8e5d337fa30dbdce",
+  "rugra_build_input_files": 103,
+  "architecture": "synthetic little-endian uintb64 P-code IR via fixture Translate; spaces const=0/other=1/unique=2/ram=3/register=4/stack=5/join=6/iop=7; stack is an 8-byte SpacebaseSpace with negative growth",
+  "compiler_spec": "per-case ProtoModel decoded from production <prototype> XML with an explicit <paramrange><range space=stack .../></paramrange> element, installed via FuncProto::setModel (Rugra: Architecture proto_models registry + FuncProto convention name, mirroring FuncProto::setScope's defaultfp fallback)",
+  "analysis_options": {
+    "entrypoint": "direct ScopeLocal::fakeInputSymbols call on the Funcdata-attached local scope",
+    "actions": false,
+    "normalization": "none; stdout is byte-compared; the rangemap overlap partition (one AddrRange piece per split boundary, rangemap::insert unzip) is normalized to one record per Symbol via getFirstWholeMap, matching Rugra's one-whole-map-per-Symbol model",
+    "external_input_assets": "none; the complete input vector (input Varnodes, typelock flags, prototype models, pre-existing parameter symbols) is embedded in and fingerprinted with both fixture sources"
+  },
+  "input": {
+    "cases": [
+      "range_filter: paramrange [8,515]; stack inputs neg 0xfffffffffffffff0+8 (filtered), 4+8 (filtered), 512+8 (first byte in range, extent leaves the range)",
+      "overlap_absorb: paramrange [8,515]; stack inputs 507+2 and 508+4 (overlapping, bank-level setInput bypasses the Funcdata overlap check the way production heritage can produce overlaps)",
+      "overlap_standalone: paramrange [8,515]; stack input 508+4 alone",
+      "adjacent: paramrange [8,515]; stack inputs 100+8 and 108+8 (adjacent, non-overlapping)",
+      "cross_space: paramrange [8,515]; inputs register 0x0+8 (outer continue), stack 0x10+8, join 0x0+8 (inner-loop space break), stack 0x20+8",
+      "typelock: paramrange [8,515]; stack inputs 0x10+8, 0x14+4 typelocked (group skipped), 0x30+8 (later group still runs)",
+      "locked_breaker: paramrange [8,515]; pre-added function_parameter symbol [0x38,0x3f] size 8; stack inputs 0x30+4 and 0x38+8",
+      "locked_leader: paramrange [8,515]; pre-added function_parameter symbol [0x30,0x37] size 8; stack inputs 0x30+4 and 0x40+8",
+      "flipped_wrap: paramrange [0xffffffffffffff00,0xffffffffffffffff]; stack inputs 0xffffffffffffff9c+8 and 0xfffffffffffffffd+8 (extent wraps the 2^64 boundary)"
+    ],
+    "state": "each case builds a fresh Funcdata whose constructor attaches a fresh ScopeLocal (FuncProto gets the architecture default model via setScope's fallback, then the per-case model via setModel); input Varnodes are created through Funcdata::newVarnode + VarnodeBank::setInput (Rugra: VarnodeBank create + set_input) with the production unknown base type and no defining op; parameter symbols are added through Scope::addSymbol(\"\", int-N, stack-addr, invalid-usepoint) + setCategory(function_parameter, 0); typelock is set directly on the Varnode flags; observation covers every whole symbol mapping in (space,first,last) order with name/displayName/category/catindex/size/typelock, the function_parameter category size, and the warning-header texts",
+    "fingerprint": "sha256:2f0c644fdaa5b133847d67cccd73ef1880f489699daa983044290e46a25ea869"
+  },
+  "observation": {
+    "status": "MATCH",
+    "covered": [
+      "first-address-only (size 1) paramrange filter: flipped negative-growth local and below-range offsets produce no symbol while a varnode whose extent leaves the range still passes (varmap.cc:1407)",
+      "upper-bound containment logic of RangeList::inRange (last range with first <= offset, address.cc:477-485)",
+      "overlap absorption: 507+2 absorbs the overlapping 508+4 into a single size-5 fake-input symbol and the 508 never forms its own group (varmap.cc:1409-1419)",
+      "standalone control: the same 508+4 input alone forms its own size-4 symbol",
+      "adjacent-but-not-overlapping inputs do not merge (varmap.cc:1412 gap break)",
+      "cross-space iteration: earlier-space input takes the outer continue, later-space input breaks the inner merge loop without ending the scan (varmap.cc:1405/1411)",
+      "a typelocked member Varnode skips the whole group; subsequent groups still create symbols (varmap.cc:1416-1420)",
+      "lockedinputs != 0: the queryProperties probe uses the last examined (breaker) Varnode, so a parameter symbol covering the breaker skips the group and the following group (varmap.cc:1428-1435)",
+      "lockedinputs != 0: a parameter symbol covering only the group leader does NOT skip (breaker probe misses) and the fake-input symbol is created overlapping the parameter",
+      "smallest-containing-entry findContainer semantics with invalid usepoint (address-tied entries only, strict-smaller replacement, exact-size short-circuit, database.cc:2250-2282)",
+      "getCategorySize(function_parameter) drives the lockedinputs gate (database.cc:2806, varmap.cc:1395)",
+      "uintb modulo-2^64 wraparound for endpoint and size arithmetic (varmap.cc:1408/1413/1437)",
+      "flipped paramrange at the top of the space: a group leader whose extent wraps the 2^64 boundary throws the addMapInternal LowlevelError 'Symbol $$undefNNNNNNNN extends beyond the end of the address space' (database.cc:1855-1861), the catch routes it to warningHeader (varmap.cc:1443-1445), and the earlier group's symbol proves the scan continued",
+      "fake-input symbols get category 3 with setCategory(cat>0) recomputed catindex 0,1,... and $$undef placeholder names sequencing across groups (database.cc:1831-1835, varmap.cc:1440-1441)"
+    ],
+    "untested": [
+      "parent-scope consultation of Scope::queryProperties (stackContainer walk above the local scope): the varmap ScopeLocal has no parent linkage until the database-scope unification lands",
+      "usepoint-limited symbol entries (uselimit non-empty never match the invalid-usepoint probe; no fixture drives them)",
+      "dynamic symbol entries answering the probe (excluded from the address range map by construction)",
+      "addSymbolInternal's zero-size-type arm (database.cc:1824-1825, unreachable through getBase)",
+      "negative int4 group sizes from astronomically large wrapped merges (would be UB in Ghidra's typecache indexing)",
+      "E2E stack-parameter fake inputs: the current curl corpus has no stack-space input Varnodes at restructure time, so the production pipeline output is invariant under this function",
+      "Ghidra-side residue of the wrap exception: addMapInternal throws after insertNameTree with no rollback (database.cc:1826->1539-1541 chain), leaving the failed symbol in the nametree where a later assignDefaultNames would consume a name counter; Rugra checks before inserting and leaves no residue. Invisible to this fixture's maptable+getFirstWholeMap observation face; flagged by cross-review.",
+      "lockedinputs!=0 with the queryProperties probe hitting a category!=function_parameter entry (Ghidra keeps creating the fake symbol; group skip only for parameter-category coverage) — no fixture drives a non-parameter overlap.",
+      "findContainer piece-size selection when pre-existing overlapping SymbolEntries have already unzipped the address range map into multiple AddrRange pieces (Ghidra rangemap split vs Rugra single-whole-map model); this fixture dedups observations to getFirstWholeMap, so piece-level ties are unobserved.",
+      "no-Architecture paramrange fallback: fixture always installs a real Architecture proto model; the ProtoModelFull::new [0,511] placeholder path (FuncProto::setScope defaultfp fallback, fspec.cc:3879-3885) is only exercised when param_range is read without a model — owned by the FUNCPROTO-MODEL-BIND-0001 chain."
+    ]
+  },
+  "comparand_sha256": {
+    "cpp_fixture": "5ae93bff11dc5d1b7e7c83bf1fd0d4de0872089e9460629f2e4109ae1af6b8f0",
+    "rust_fixture": "260ec3c3b3b06addbb84dc48c20abeefcc703197b7f3b936492ade2e5bbe9afd",
+    "rugra_varmap_source": "e9642192d96c411802fe7ec14b535b2afcbc64bf4dad2016f0f835c8ce80085a",
+    "api_document": "572e1ee365b5c0cf8a6f73f4e7a9eb87e06a79209cecdd5846ced894ea7f9fd7",
+    "runner": "8cb71316b964986615f86c7628db1764dbfc951aa8388f1e80fd86e89f0179f4",
+    "rugra_build_inputs": "bd96a7bbf490780cbc67e5446e30e36e2dc9485c67ec6e45e05770748d6e3d8f",
+    "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
+  },
+  "expected_stdout_sha256": "9c6aed68e7372a8d5a857451941a3a20c7c7a809400dca66fc43090fe3c664c9",
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)"
+}
