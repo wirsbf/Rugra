@@ -686,6 +686,17 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - INT_AND + 掩码：`sub(V & mask, 0) => V`（当 mask == calc_mask(outsize)）
   - INT_ZEXT/INT_SEXT：`sub(zext(V), 0)` → COPY（完全消除）或 SUBPIECE（部分）
   - INT_ZEXT + 高偏移：`sub(zext(V), c)` 当 c >= insize → COPY(#0)
+- **RuleSubCancel 锁形重构（RULE-SUBCANCEL-RWLOCK-0001，2026-08-16）**：`apply_op` 重构为
+  两阶段——阶段一在 `op_arc.read()` 读锁作用域内只收集 owned 值
+  （`ext_code/extop/offset/out_size/in_size/far_in_size`），阶段二在锁全部释放后才调
+  `fd.op_set_input`（INT_AND 掩码消除分支）或 `fd.op_set_opcode/op_set_input/op_remove_input`
+  （ZEXT/SEXT 路径）。原因：`op_set_input`（funcdata.rs opSetInput）对同一 PcodeOp 取写锁，
+  RwLock 非重入 → 旧实现 INT_AND 分支在块作用域读锁存活期直接 mutate 造成永久 futex
+  自死锁（Ghidra ruleaction.cc:5119-5181 无锁概念，cc:5141/5175-5179 直接 opSetInput）。
+  可观测行为不变：检查顺序与判定完全同 Ghidra。同文件 137 个 `apply_op` 已机械审计
+  （named read guard 存活期 × fd.op_* 同 op 写接口），唯一真实命中即本处，其余 0 命中；
+  4 处 `fd.total_replace`（RulePushMulti/RuleMultiCollapse×2/RuleIndirectCollapse）为隐藏
+  写目标（写锁 vn 的全部后代 op），已加注释守卫标注。
 - **RuleHumptyOr**：完整移植 ruleaction.cc:5339-5420。简化掩码 OR 重组：
   - `(V & ff00) | (V & 00ff) => V`（所有位覆盖 → COPY）
   - `(V & W) | (V & X) => V & (W|X)`（部分覆盖 → AND）

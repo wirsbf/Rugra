@@ -5056,6 +5056,9 @@ impl Rule for RulePushMulti {
             };
             let sub_out = substitute.read().unwrap().output.clone();
             if let Some(sub_out) = sub_out {
+                // RULE-SUBCANCEL-RWLOCK-0001 audit: total_replace write-locks every
+                // descendant op of out_vn (funcdata.rs totalReplace) — do not hold any
+                // named read guard on an op reading out_vn across this call.
                 fd.total_replace(&out_vn, sub_out);
             }
             fd.op_destroy(&op_ref);
@@ -5840,8 +5843,15 @@ impl RuleSubCancel {
 impl Rule for RuleSubCancel {
     // Ghidra: ruleaction.cc:5137 RuleSubCancel::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleSubCancel::applyOp (ruleaction.cc:5137-5199).
-        let (ext_code, thru_vn, offset, out_size, in_size, far_in_size) = {
+        // Phase 1 — read-only inspection under the op read guard. No fd.op_* mutation may
+        // run while this guard (or any other op read guard) is alive: op_set_input /
+        // op_set_opcode (funcdata.rs opSetInput/opSetOpcode) take a WRITE lock on this same
+        // PcodeOp and RwLock is non-reentrant, so mutating under a live read guard is a
+        // permanent futex wait (RULE-SUBCANCEL-RWLOCK-0001; the pre-fix INT_AND branch did
+        // exactly that at old :5866-5867). Ghidra ruleaction.cc:5119-5181 is lock-free and
+        // calls data.opSetInput directly after its checks; Rugra mirrors the same
+        // check-then-mutate order but must first drop the guards, then mutate.
+        let (ext_code, extop, offset, out_size, in_size, far_in_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_SUBPIECE {
                 return Ok(action_status::NO_CHANGE);
@@ -5857,22 +5867,33 @@ impl Rule for RuleSubCancel {
             let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
             let in_size = base.read().unwrap().get_size() as i64;
             let far_in_size = extop.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
-            // For INT_AND, check if it's a mask that SUBPIECE cancels.
-            if ext_code == OpCode::CPUI_INT_AND {
-                let cvn = match extop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-                if offset == 0 && cvn.read().unwrap().is_constant() && cvn.read().unwrap().get_offset() == calc_mask(out_size as usize) {
-                    let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-                    if !thru_vn.read().unwrap().is_free() {
-                        let follow = crate::op::PcodeOpRef(op_arc.clone());
-                        fd.op_set_input(&follow, thru_vn, 0);
-                        return Ok(action_status::CHANGE);
-                    }
-                }
-                return Ok(action_status::NO_CHANGE);
-            }
-            let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            (ext_code, thru_vn, offset, out_size, in_size, far_in_size)
+            (ext_code, extop, offset, out_size, in_size, far_in_size)
         };
+        // INT_AND mask-cancel (Ghidra ruleaction.cc:5136-5146): SUBPIECE cancels an
+        // INT_AND with a full-size constant mask. The decision is computed under a read
+        // guard on extop only; data.opSetInput(op,thruvn,0) (cc:5141) runs after every
+        // guard is dropped — zero lock inversion, same observable effect.
+        if ext_code == OpCode::CPUI_INT_AND {
+            let and_cancel = {
+                let extop_r = extop.read().unwrap();
+                let cvn = match extop_r.get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                if offset == 0 && cvn.read().unwrap().is_constant() && cvn.read().unwrap().get_offset() == calc_mask(out_size as usize) {
+                    match extop_r.get_in(0).cloned() {
+                        Some(thru_vn) if !thru_vn.read().unwrap().is_free() => Some(thru_vn),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(thru_vn) = and_cancel {
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_set_input(&follow, thru_vn, 0);
+                return Ok(action_status::CHANGE);
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+        let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
         // Determine the new opcode.
         let new_opc = if offset == 0 {
             let thru_free = thru_vn.read().unwrap().is_free();
@@ -7563,6 +7584,9 @@ impl Rule for RuleMultiCollapse {
                             .ok_or_else(|| crate::error::Error::Lowlevel(
                                 "RuleMultiCollapse CSE substitute has no output".to_string(),
                             ))?;
+                        // RULE-SUBCANCEL-RWLOCK-0001 audit: total_replace write-locks
+                        // every descendant op of copyr; the source_ref guard above is
+                        // block-scoped (ends before this) — keep it that way.
                         fd.total_replace(copyr, substitute_out);
                         fd.op_destroy(&def_ref);
                     } else {
@@ -7578,6 +7602,8 @@ impl Rule for RuleMultiCollapse {
                 } else {
                     // cc:3333-3336: absolute equality replaces and destroys
                     // root and nested MULTIEQUAL operations alike.
+                    // RULE-SUBCANCEL-RWLOCK-0001 audit: total_replace write-locks every
+                    // descendant op of copyr — no named op read guard may be live here.
                     fd.total_replace(copyr, defining_branch.clone());
                     fd.op_destroy(&def_ref);
                 }
@@ -12100,6 +12126,10 @@ impl Rule for RuleIndirectCollapse {
             }
         }
         // The indirect effect is gone (indop dead): totalReplace out by in0 + destroy.
+        // RULE-SUBCANCEL-RWLOCK-0001 audit: total_replace write-locks every descendant
+        // op of outvn (op_arc is outvn's writer, not a descendant, so the guard-free
+        // call is safe); op_destroy below write-locks op_arc — the named op/outvn
+        // guards above are all block-scoped and released before this point.
         fd.total_replace(&outvn, in0);
         fd.op_destroy(&op_ref);
         Ok(action_status::CHANGE)
