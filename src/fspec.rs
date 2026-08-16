@@ -2185,30 +2185,20 @@ impl FuncCallSpecs {
     }
 
     // Ghidra: fspec.cc:4949 FuncCallSpecs::setFuncdata
-    /// Set the Funcdata object associated with the called function. Faithful
-    /// 1:1 port of `setFuncdata` (fspec.cc:4949-4960). Throws if the callee
-    /// has already been bound (Ghidra's "Setting call spec function multiple
-    /// times"). When the Funcdata is non-null, the entry address is taken
-    /// from it and the display name is copied (if non-empty).
-    pub fn set_funcdata(
-        &mut self,
-        fd: Option<&crate::funcdata::Funcdata>,
-    ) -> Result<(), String> {
-        // Ghidra: if (fd != null) throw LowlevelError("Setting ... multiple times");
-        // Rugra encodes the bound state via entry_addr being Some (set below).
-        // We allow re-binding to the same Funcdata but reject binding a second
-        // distinct target.
-        if self.entry_addr.is_some() {
-            return Err("Setting call spec function multiple times".to_string());
+    /// Set the callee associated with the called function. Faithful
+    /// observable port of `setFuncdata` (fspec.cc:4949-4960): when the callee
+    /// is known, the entry address is taken from it and the display name is
+    /// copied (if non-empty). Ghidra additionally keeps the callee
+    /// `Funcdata*` (and throws `LowlevelError` on a double set); Rugra has no
+    /// per-callee Funcdata objects — the front-end boundary
+    /// (`FlowInfo::queryCall`, flow.cc:660-669, driven by the Rugra driver's
+    /// symbol/signature tables) hands the observable (name, entry) pair
+    /// directly, and re-association overwrites instead of throwing.
+    pub fn set_funcdata(&mut self, display_name: &str, entry: Address) {
+        self.entry_addr = Some(entry);
+        if !display_name.is_empty() {
+            self.prototype.name = display_name.to_string();
         }
-        if let Some(f) = fd {
-            self.entry_addr = Some(*f.get_address());
-            let display = f.get_name();
-            if !display.is_empty() {
-                self.prototype.name = display.to_string();
-            }
-        }
-        Ok(())
     }
 
     // Ghidra: fspec.cc:5150 FuncCallSpecs::commitNewInputs
@@ -6680,6 +6670,25 @@ mod tests {
 
         assert_eq!(proto.num_params(), 1);
         assert_eq!(proto.get_param(0).unwrap().name, "a");
+    }
+
+    // Ghidra: fspec.cc:4949 FuncCallSpecs::setFuncdata
+    #[test]
+    fn test_call_specs_set_funcdata_binds_name_and_entry() {
+        let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
+        let mut fc = FuncCallSpecs::new(Address::new(0x1000), FuncProto::new(String::new(), void_type));
+        assert_eq!(fc.prototype.name, "");
+        assert!(fc.entry_addr.is_none());
+        // A non-empty display name replaces the prototype name; the entry
+        // address is taken from the callee (fspec.cc:4956-4958).
+        fc.set_funcdata("free", Address::new(0x22f0));
+        assert_eq!(fc.prototype.name, "free");
+        assert_eq!(fc.entry_addr.map(|a| a.as_u64()), Some(0x22f0));
+        // An empty display name leaves the previous name untouched
+        // (fspec.cc:4957 guard).
+        fc.set_funcdata("", Address::new(0x2530));
+        assert_eq!(fc.prototype.name, "free");
+        assert_eq!(fc.entry_addr.map(|a| a.as_u64()), Some(0x2530));
     }
 
     // ---- ParamTrial / ParamActive tests ----

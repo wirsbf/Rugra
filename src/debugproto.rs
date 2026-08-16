@@ -369,6 +369,219 @@ impl X86_64GccStorage {
     }
 }
 
+/// One locked public-libc ABI declaration for an imported symbol, kept in the
+/// exact C-declaration spelling Ghidra's shipped generic_clib signature data
+/// carries (glibc reserved `__`-prefixed parameter names included).
+///
+/// Ghidra's decompile/cpp never parses this table: the platform side loads the
+/// signature data into the Program database and the locked `FuncProto` reaches
+/// the decompiler already materialized (queried by `FlowInfo::queryCall`
+/// flow.cc:660 and copied to call sites by `ActionDefaultParams`
+/// coreaction.cc:2327). This table is Rugra's native front-end adapter for
+/// that same boundary.
+#[derive(Debug, Clone)]
+pub struct LibcSignature {
+    pub return_type: &'static str,
+    pub parameters: &'static str,
+}
+
+/// Locked libc ABI signatures keyed by imported symbol name. Rugra's minimal
+/// equivalent of Ghidra's generic_clib signature data: the same public glibc
+/// ABI declarations verbatim. Anything not in the table keeps the unlocked
+/// `void F(void)` form (matching the external-stub rendering).
+#[derive(Debug, Clone)]
+pub struct LibcSignatureTable {
+    entries: HashMap<&'static str, LibcSignature>,
+}
+
+impl Default for LibcSignatureTable {
+    // RUGRA-GLUE: Ghidra draws these from its shipped generic_clib signature
+    // data on the platform side; Rugra encodes the same public glibc ABI
+    // declarations verbatim (the 24 imports the locked curl input references)
+    fn default() -> Self {
+        let entries: Vec<(&'static str, &'static str, &'static str)> = vec![
+            ("free", "void", "void *__ptr"),
+            ("malloc", "void *", "size_t __size"),
+            ("realloc", "void *", "void *__ptr,size_t __size"),
+            ("memcpy", "void *", "void *__dest,void *__src,size_t __n"),
+            ("strlen", "size_t", "char *__s"),
+            ("strcpy", "char *", "char *__dest,char *__src"),
+            ("strcat", "char *", "char *__dest,char *__src"),
+            ("strdup", "char *", "char *__s"),
+            ("strchr", "char *", "char *__s,int __c"),
+            ("strrchr", "char *", "char *__s,int __c"),
+            ("strstr", "char *", "char *__haystack,char *__needle"),
+            ("strtol", "long", "char *__nptr,char **__endptr,int __base"),
+            ("puts", "int", "char *__s"),
+            ("isatty", "int", "int __fd"),
+            ("fileno", "int", "FILE *__stream"),
+            ("fclose", "int", "FILE *__stream"),
+            ("fopen", "FILE *", "char *__filename,char *__modes"),
+            ("fgets", "char *", "char *__s,int __n,FILE *__stream"),
+            ("fputc", "int", "int __c,FILE *__stream"),
+            ("fwrite", "size_t", "void *__ptr,size_t __size,size_t __n,FILE *__s"),
+            ("exit", "void", "int __status"),
+            ("time", "time_t", "time_t *__timer"),
+            ("__xstat", "int", "int __ver,char *__filename,stat *__stat_buf"),
+            ("__ctype_b_loc", "ushort **", ""),
+        ];
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(name, return_type, parameters)| {
+                    (
+                        name,
+                        LibcSignature {
+                            return_type,
+                            parameters,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl LibcSignatureTable {
+    // RUGRA-GLUE: address of the Program-database signature lookup the decompiler performs via queryFunction
+    pub fn lookup(&self, name: &str) -> Option<&LibcSignature> {
+        self.entries.get(name)
+    }
+
+    /// Materialize the locked call-site `FuncProto` for an imported symbol,
+    /// mirroring what the platform side hands the decompiler: parameter
+    /// storage assigned from the locked `x86-64-gcc.cspec` resource order and
+    /// both input and output locked (`FuncProto::setPieces`, fspec.cc:3830),
+    /// then copied onto the call site (`ActionDefaultParams`,
+    /// coreaction.cc:2327). The model itself stays unlocked — the golden's
+    /// "Unknown calling convention -- yet parameter storage is locked"
+    /// warning is exactly this lock combination.
+    ///
+    /// Returns `Ok(None)` when the symbol has no locked signature (unknown
+    /// import: stays unlocked, active recovery decides) and `Err` when a
+    /// listed signature cannot be represented (stack/aggregate spill).
+    // Ghidra: fspec.cc:3830 FuncProto::setPieces
+    pub fn locked_proto(
+        &self,
+        name: &str,
+        storage: &X86_64GccStorage,
+    ) -> Result<Option<FuncProto>> {
+        let Some(signature) = self.lookup(name) else {
+            return Ok(None);
+        };
+        let address_size = 8usize;
+        let return_type = parse_c_type(signature.return_type, address_size)?;
+        let mut parameters = Vec::new();
+        for declaration in split_parameter_list(signature.parameters) {
+            let (type_text, parameter_name) = split_declaration(declaration)?;
+            parameters.push(DebugParameter {
+                name: parameter_name.to_string(),
+                data_type: parse_c_type(type_text, address_size)?,
+            });
+        }
+        let addresses = storage.assign(&parameters)?;
+        let mut proto = FuncProto::new(name.to_string(), return_type);
+        for (parameter, address) in parameters.iter().zip(addresses.into_iter()) {
+            proto.add_parameter(ProtoParameter::new(
+                parameter.name.clone(),
+                parameter.data_type.clone(),
+                address,
+            ));
+        }
+        proto.set_input_lock(true);
+        proto.set_output_lock(true);
+        Ok(Some(proto))
+    }
+}
+
+// RUGRA-GLUE: splits the comma-separated parameter declaration list the signature data carries; an empty list is a void parameter list
+fn split_parameter_list(parameters: &str) -> impl Iterator<Item = &str> {
+    parameters
+        .split(',')
+        .map(str::trim)
+        .filter(|declaration| !declaration.is_empty())
+}
+
+// RUGRA-GLUE: splits one "TYPE NAME" parameter declaration; the trailing
+// identifier run is the name, everything before it (spaces and pointer stars
+// included, e.g. "void *__ptr") is the type text
+fn split_declaration(declaration: &str) -> Result<(&str, &str)> {
+    let trimmed = declaration.trim();
+    let name_start = trimmed
+        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map(|pos| pos + 1)
+        .unwrap_or(0);
+    let (type_text, name) = trimmed.split_at(name_start);
+    if name.is_empty() {
+        bail!("signature parameter declaration has no name: {declaration:?}");
+    }
+    let type_text = type_text.trim();
+    if type_text.is_empty() {
+        bail!("signature parameter declaration has no type: {declaration:?}");
+    }
+    Ok((type_text, name))
+}
+
+// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). Opaque base names (FILE, stat) resolve to an address-sized unknown base under the pointer, the same information content the decompiler can use for storage assignment
+fn parse_c_type(type_text: &str, address_size: usize) -> Result<Arc<Datatype>> {
+    let (base_text, pointer_depth) = split_pointer_depth(type_text);
+    let mut datatype = match base_text {
+        "void" => Arc::new(Datatype::Void(TypeBase::new(
+            "void".to_string(),
+            0,
+            TypeMetatype::Void,
+        ))),
+        "char" => Arc::new(Datatype::Base(TypeBase::new(
+            "char".to_string(),
+            1,
+            TypeMetatype::Int,
+        ))),
+        "int" => Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(),
+            4,
+            TypeMetatype::Int,
+        ))),
+        "long" => Arc::new(Datatype::Base(TypeBase::new(
+            "long".to_string(),
+            address_size,
+            TypeMetatype::Int,
+        ))),
+        "size_t" | "time_t" => Arc::new(Datatype::Base(TypeBase::new(
+            base_text.to_string(),
+            address_size,
+            TypeMetatype::Uint,
+        ))),
+        "ushort" => Arc::new(Datatype::Base(TypeBase::new(
+            "ushort".to_string(),
+            2,
+            TypeMetatype::Uint,
+        ))),
+        other => Arc::new(Datatype::Base(TypeBase::new(
+            other.to_string(),
+            address_size,
+            TypeMetatype::Unknown,
+        ))),
+    };
+    for _ in 0..pointer_depth {
+        let display = format!("{} *", datatype.get_name());
+        datatype = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new(display, address_size, TypeMetatype::Pointer),
+            ptr_to: datatype,
+            wordsize: 1,
+        }));
+    }
+    Ok(datatype)
+}
+
+// RUGRA-GLUE: separates trailing pointer stars from the base type name in a C type spelling
+fn split_pointer_depth(type_text: &str) -> (&str, usize) {
+    let trimmed = type_text.trim();
+    let base = trimmed.trim_end_matches(" *");
+    let depth = (trimmed.len() - base.len()) / 2;
+    (base.trim(), depth)
+}
+
+
 // RUGRA-GLUE: resolves a concrete function entry address from a DWARF DIE before handing the prototype to Funcdata
 fn subprogram_address(
     dwarf: &Dwarf<DwarfReader>,
@@ -987,6 +1200,76 @@ mod tests {
                 .map(|(name, offset)| (name.to_string(), offset, 8))
                 .chain(floats),
         )
+    }
+
+    #[test]
+    fn libc_signature_table_covers_the_24_locked_imports() {
+        let table = LibcSignatureTable::default();
+        for name in [
+            "free", "malloc", "realloc", "memcpy", "strlen", "strcpy", "strcat", "strdup",
+            "strchr", "strrchr", "strstr", "strtol", "puts", "isatty", "fileno", "fclose",
+            "fopen", "fgets", "fputc", "fwrite", "exit", "time", "__xstat", "__ctype_b_loc",
+        ] {
+            assert!(table.lookup(name).is_some(), "missing signature for {name}");
+        }
+        assert!(table.lookup("not_an_import").is_none());
+        // The stub-section spellings ride the same table (glibc reserved
+        // parameter names included).
+        assert_eq!(table.lookup("free").unwrap().parameters, "void *__ptr");
+        assert_eq!(table.lookup("fwrite").unwrap().return_type, "size_t");
+        assert_eq!(table.lookup("__ctype_b_loc").unwrap().parameters, "");
+    }
+
+    #[test]
+    fn libc_locked_proto_assigns_sysv_storage_and_locks() {
+        let storage = register_resources();
+        let table = LibcSignatureTable::default();
+
+        // free: void return, one void* parameter at RDI (0x38), fully locked.
+        let free = table
+            .locked_proto("free", &storage)
+            .expect("free signature represents")
+            .expect("free is in the table");
+        assert_eq!(free.return_type.get_metatype(), TypeMetatype::Void);
+        assert_eq!(free.num_params(), 1);
+        assert_eq!(free.get_param(0).unwrap().name, "__ptr");
+        assert_eq!(free.get_param(0).unwrap().address.as_u64(), 0x38);
+        assert!(free.is_output_locked());
+        assert!(free.get_param(0).unwrap().is_type_locked());
+
+        // strdup: char * return (8-byte pointer), one char* parameter.
+        let strdup = table
+            .locked_proto("strdup", &storage)
+            .expect("strdup signature represents")
+            .expect("strdup is in the table");
+        assert_eq!(strdup.return_type.get_metatype(), TypeMetatype::Pointer);
+        assert_eq!(strdup.return_type.get_size(), 8);
+        assert_eq!(strdup.get_param(0).unwrap().address.as_u64(), 0x38);
+
+        // strtol: long return, (char*, char**, int) at RDI/RSI/RDX.
+        let strtol = table
+            .locked_proto("strtol", &storage)
+            .expect("strtol signature represents")
+            .expect("strtol is in the table");
+        assert_eq!(strtol.num_params(), 3);
+        assert_eq!(strtol.get_param(1).unwrap().data_type.get_name(), "char **");
+        assert_eq!(strtol.get_param(2).unwrap().address.as_u64(), 0x10);
+
+        // __ctype_b_loc: zero parameters, ushort ** return; the empty
+        // parameter list is a locked void input.
+        let ctype = table
+            .locked_proto("__ctype_b_loc", &storage)
+            .expect("__ctype_b_loc signature represents")
+            .expect("__ctype_b_loc is in the table");
+        assert_eq!(ctype.num_params(), 0);
+        assert_eq!(ctype.return_type.get_name(), "ushort **");
+        assert!(ctype.void_input_locked);
+
+        // Unknown imports stay unlocked (Ok(None) — active recovery decides).
+        assert!(table
+            .locked_proto("not_an_import", &storage)
+            .expect("unknown import does not error")
+            .is_none());
     }
 
     #[test]

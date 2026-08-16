@@ -151,6 +151,19 @@ Corresponds to Ghidra's `FuncCallSpecs` class.
 
 Create a new call specification
 
+### `pub fn set_funcdata(&mut self, display_name: &str, entry: Address)`
+
+(`CALLSPEC-DRIVER-0001`) Associate the callee with this call site — the
+faithful observable port of `FuncCallSpecs::setFuncdata` (fspec.cc:4949-4960):
+the entry address is taken from the callee and a non-empty display name
+replaces `prototype.name`. Ghidra additionally keeps the callee `Funcdata*`
+(and throws `LowlevelError` on a double set); Rugra has no per-callee Funcdata
+objects, so the front-end boundary (`FlowInfo::queryCall`, flow.cc:660-669 —
+driven by the driver's symbol/signature tables) hands the observable
+(name, entry) pair directly, and re-association overwrites instead of
+throwing. The previous `Option<&Funcdata>` form had no callers and was
+consolidated into this signature.
+
 
 ### 2026-06-27（会话3 G5 续）：ParamTrial + ParamActive 基础设施移植
 

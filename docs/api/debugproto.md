@@ -19,6 +19,38 @@ declared variable type with C array decay (0x17660 `glob_expand` →
 `URLGlob **`, 0x17520 `config` → `Configurable *`, 0x17680 `glob_buffer`
 → `char *`).
 
+## Locked libc ABI signatures (`CALLSPEC-DRIVER-0001`)
+
+`LibcSignatureTable` is Rugra's native front-end adapter for the platform-side
+signature data Ghidra ships as generic_clib: the decompile/cpp code never
+parses these declarations — the Program database holds the locked `FuncProto`
+for each EXTERNAL symbol, `FlowInfo::queryCall` (flow.cc:656-672) associates
+the call site with it, and `ActionDefaultParams` (coreaction.cc:2322-2330)
+copies the prototype onto the call site. The table encodes the same 24 public
+glibc ABI declarations verbatim (glibc reserved `__`-prefixed parameter names
+included) that back the external-stub rendering
+(`EXTERNAL-STUB-SUPPORT-0001`).
+
+- `LibcSignatureTable::lookup(name)` — the signature record for an imported
+  symbol, `None` for anything else (unknown imports stay unlocked).
+- `LibcSignatureTable::locked_proto(name, storage)` — materializes the locked
+  call-site `FuncProto`: parameter storage assigned through
+  `X86_64GccStorage::assign` (the locked `x86-64-gcc.cspec` resource order),
+  input and output locked (`FuncProto::setPieces`, fspec.cc:3830), model left
+  unlocked so `ActionDefaultParams` attaches the default model — the golden's
+  "Unknown calling convention -- yet parameter storage is locked" warning is
+  exactly this combination. Returns `Ok(None)` for unknown imports and `Err`
+  when a listed signature cannot be represented (stack/aggregate spill).
+
+Supporting parsers: `split_parameter_list` / `split_declaration` split the
+comma-separated `TYPE NAME` declarations (the trailing identifier run is the
+name, pointer stars belong to the type: `void *__ptr`), and `parse_c_type`
+maps the C spellings (`void`, `char`, `int`, `long`, `size_t`, `time_t`,
+`ushort`, opaque base names, pointer layers) onto `Datatype` metatype/size
+pairs. Unit tests cover the 24-entry table, SYSV storage assignment
+(`free`→RDI void*, `strtol`→RDI/RSI/RDX, `__ctype_b_loc`→locked void input,
+`ushort **` return), and the unknown-import unlock path.
+
 ## Type resolution
 
 `resolve_type` materializes the DWARF type graph into `Datatype` objects:

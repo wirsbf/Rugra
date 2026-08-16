@@ -386,40 +386,123 @@ struct ExternalImport {
     version: Option<String>,
 }
 
-// RUGRA-GLUE: documented libc prototypes for imported symbols. Ghidra draws
-// these from its shipped generic_clib signature data (which is why the golden
-// locks exactly the standard C library ABI); Rugra's minimal library encodes
-// the same public glibc ABI declarations verbatim, including the glibc
-// reserved `__`-prefixed parameter names the decompiler prints. Anything not
-// in the table keeps the unlocked `void F(void)` form.
+// RUGRA-GLUE: documented libc prototypes for imported symbols — delegates to
+// the single source of truth in rugra::debugproto::LibcSignatureTable (see
+// there for the Ghidra generic_clib boundary this mirrors).
 fn libc_import_signature(name: &str) -> Option<(&'static str, &'static str)> {
-    Some(match name {
-        "free" => ("void", "void *__ptr"),
-        "malloc" => ("void *", "size_t __size"),
-        "realloc" => ("void *", "void *__ptr,size_t __size"),
-        "memcpy" => ("void *", "void *__dest,void *__src,size_t __n"),
-        "strlen" => ("size_t", "char *__s"),
-        "strcpy" => ("char *", "char *__dest,char *__src"),
-        "strcat" => ("char *", "char *__dest,char *__src"),
-        "strdup" => ("char *", "char *__s"),
-        "strchr" => ("char *", "char *__s,int __c"),
-        "strrchr" => ("char *", "char *__s,int __c"),
-        "strstr" => ("char *", "char *__haystack,char *__needle"),
-        "strtol" => ("long", "char *__nptr,char **__endptr,int __base"),
-        "puts" => ("int", "char *__s"),
-        "isatty" => ("int", "int __fd"),
-        "fileno" => ("int", "FILE *__stream"),
-        "fclose" => ("int", "FILE *__stream"),
-        "fopen" => ("FILE *", "char *__filename,char *__modes"),
-        "fgets" => ("char *", "char *__s,int __n,FILE *__stream"),
-        "fputc" => ("int", "int __c,FILE *__stream"),
-        "fwrite" => ("size_t", "void *__ptr,size_t __size,size_t __n,FILE *__s"),
-        "exit" => ("void", "int __status"),
-        "time" => ("time_t", "time_t *__timer"),
-        "__xstat" => ("int", "int __ver,char *__filename,stat *__stat_buf"),
-        "__ctype_b_loc" => ("ushort **", ""),
-        _ => return None,
-    })
+    let signature = rugra::debugproto::LibcSignatureTable::default();
+    signature
+        .lookup(name)
+        .map(|sig| (sig.return_type, sig.parameters))
+}
+
+// RUGRA-GLUE: driver-side call-spec resolution, the observable equivalent of
+// Ghidra's FlowInfo::queryCall (flow.cc:656-672) + ActionDefaultParams'
+// callee-proto copy (coreaction.cc:2322-2330). Ghidra's queryFunction hits
+// the Program database the platform analyzers populated (PLT thunk -> EXTERNAL
+// symbol with the generic_clib locked signature); Rugra's front-end state is
+// the driver's ELF/PLT symbol table plus the locked libc ABI table. For each
+// callspec with a direct entry address: (1) set_funcdata with the symbol's
+// display name, (2) when the symbol is a table import, install the locked
+// signature proto on the call site, (3) rebuild the CALL op's fspec
+// annotation varnode keyed by the entry address. Unresolved targets are left
+// exactly as flow produced them (unknown). Returns (named, locked
+// signatures, relinked call ops).
+fn link_call_specs(
+    fd: &mut rugra::funcdata::Funcdata,
+    libc_signatures: &rugra::debugproto::LibcSignatureTable,
+    storage: &rugra::debugproto::X86_64GccStorage,
+    fn_name: &str,
+) -> (usize, usize, usize) {
+    // (op_addr, entry_addr) for every spec flow produced with a direct target.
+    let targets: Vec<(u64, u64)> = fd
+        .callspecs
+        .iter()
+        .filter_map(|fc| fc.entry_addr.map(|entry| (fc.op_addr.as_u64(), entry.as_u64())))
+        .collect();
+    let mut named = 0usize;
+    let mut signatures = 0usize;
+    for (op_addr, entry) in targets {
+        // flow.cc:660: queryFunction(entry) -> the PLT thunk's symbol name.
+        let Some(name) = fd.symbol_table.get(&entry).cloned() else {
+            continue; // Unknown target: stays unknown (no queryCall hit).
+        };
+        // flow.cc:662: fspecs.setFuncdata(otherfunc) — entry + display name.
+        if let Some(fc) = fd.callspecs.iter_mut().find(|fc| fc.op_addr.as_u64() == op_addr) {
+            fc.set_funcdata(&name, rugra::address::Address::new(entry));
+            named += 1;
+        }
+        // coreaction.cc:2327: fc->copy(otherfunc->getFuncProto()) — the
+        // platform side's locked libc signature for the imported callee.
+        match libc_signatures.locked_proto(&name, storage) {
+            Ok(Some(proto)) => {
+                if let Some(fc) = fd.callspecs.iter_mut().find(|fc| fc.op_addr.as_u64() == op_addr) {
+                    fc.prototype = proto;
+                    signatures += 1;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!(
+                "[PREPASS] {} callspec@0x{:x}: libc signature for {} rejected: {}",
+                fn_name, op_addr, name, error
+            ),
+        }
+    }
+    // flow.cc:685 / fspec.cc:5450: opSetInput(op, newVarnodeCallSpecs(fc)).
+    // Ghidra's fspec varnode is a pointer to the FuncCallSpecs and printc's
+    // opCall resolves the callee name through it (printc.cc:589-612
+    // fc->getName()); Rugra's printc resolves the name from the fspec
+    // varnode's offset via the symbol table, so the entry-keyed offset is the
+    // observable equivalent. Same Iop annotation varnode shape flow created,
+    // re-keyed from the spec index to the entry address.
+    let relinked = relink_call_spec_targets(fd);
+    (named, signatures, relinked)
+}
+
+// RUGRA-GLUE: rebuilds each direct CALL's fspec annotation varnode with the
+// entry address as its offset (Funcdata::newVarnodeCallSpecs encodes the
+// callspec vector index instead, which no consumer can resolve back to a
+// symbol). Space/size/annotation flag match the varnode flow created.
+fn relink_call_spec_targets(fd: &mut rugra::funcdata::Funcdata) -> usize {
+    use rugra::space::AddressSpace;
+    use rugra::varnode::varnode_flags;
+    let specs: Vec<(u64, u64)> = fd
+        .callspecs
+        .iter()
+        .filter_map(|fc| fc.entry_addr.map(|entry| (fc.op_addr.as_u64(), entry.as_u64())))
+        .collect();
+    let mut relinked = 0usize;
+    for (op_addr, entry) in specs {
+        // Find the CALL op first (clone the Arc out of the borrow), then
+        // mutate fd for the varnode rebuild and input swap.
+        let mut call_op = None;
+        for op_ref in fd.obank.alivelist.iter() {
+            let matches = {
+                let op = op_ref.0.read().unwrap();
+                op.opcode == rugra::opcodes::OpCode::CPUI_CALL
+                    && !op.is_dead()
+                    && op.get_seq_num().get_addr().as_u64() == op_addr
+            };
+            if matches {
+                call_op = Some(op_ref.0.clone());
+                break;
+            }
+        }
+        let Some(op_arc) = call_op else {
+            continue;
+        };
+        let vn = fd.vbank.create_with_space(
+            std::mem::size_of::<usize>(),
+            AddressSpace::Iop,
+            entry,
+        );
+        vn.write().unwrap().set_flags(varnode_flags::ANNOTATION);
+        let _ = fd.assign_high(&vn);
+        let op_ref = rugra::op::PcodeOpRef(op_arc);
+        fd.op_set_input(&op_ref, vn, 0);
+        relinked += 1;
+    }
+    relinked
 }
 
 // RUGRA-GLUE: collects the EXTERNAL-block import slots in allocation order:
@@ -966,22 +1049,63 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let func_size =
         i32::try_from(target.size).map_err(|_| format!("function {} is too large", target.name))?;
     let mut fd = Funcdata::new(&target.name, Address::new(target.vaddr), func_size);
+    // Seed the symbol table before prototype application so the PLT-import
+    // boundary below can resolve the target's own address.
+    for (address, name) in &request.symbol_entries {
+        fd.add_symbol(*address, name.clone());
+    }
+    for (address, value) in &request.string_entries {
+        fd.add_string(*address, value.clone());
+    }
+    let libc_signatures = rugra::debugproto::LibcSignatureTable::default();
+    let callspec_link_enabled = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
+    let mut dwarf_applied = false;
     match debug_db.apply(&mut fd, &debug_storage) {
-        Ok(true) => eprintln!(
-            "[PREPASS] {} applied locked DWARF prototype: {} params{}",
-            target.name,
-            fd.funcp.num_params(),
-            if fd.funcp.is_varargs() {
-                " + varargs"
-            } else {
-                ""
-            }
-        ),
+        Ok(true) => {
+            dwarf_applied = true;
+            eprintln!(
+                "[PREPASS] {} applied locked DWARF prototype: {} params{}",
+                target.name,
+                fd.funcp.num_params(),
+                if fd.funcp.is_varargs() {
+                    " + varargs"
+                } else {
+                    ""
+                }
+            )
+        }
         Ok(false) => {}
         Err(error) => eprintln!(
             "[PREPASS] {} DWARF prototype rejected: {}",
             target.name, error
         ),
+    }
+    // CALLSPEC-DRIVER-0001, PLT-stub target half: Ghidra's ELF importer marks
+    // each PLT entry as a thunk of the EXTERNAL symbol, and the signature
+    // data locks the thunk's prototype (locked oracle: 0x2320 renders as
+    // `int puts(char *__s)` with the unknown-calling-convention warning —
+    // exactly the locked-storage + unlocked-model combination the libc
+    // table produces). Rugra applies the same locked ABI when the target's
+    // own address is an import slot (address-exact: only PLT entries map to
+    // import names) and DWARF did not already lock a prototype.
+    if callspec_link_enabled && !dwarf_applied {
+        if let Some(import_name) = fd.symbol_table.get(&target.vaddr).cloned() {
+            match libc_signatures.locked_proto(&import_name, &debug_storage) {
+                Ok(Some(proto)) => {
+                    eprintln!(
+                        "[PREPASS] {} applied locked PLT-import signature: {} params",
+                        target.name,
+                        proto.num_params()
+                    );
+                    fd.funcp = proto;
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!(
+                    "[PREPASS] {} PLT-import signature for {} rejected: {}",
+                    target.name, import_name, error
+                ),
+            }
+        }
     }
     fd.external_prototypes = proto_db;
     // Seed the DWARF global types: each address constant referencing a
@@ -1003,12 +1127,6 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .into_iter()
         .filter(|(address, _)| *address == 0x17520)
         .collect();
-    for (address, name) in &request.symbol_entries {
-        fd.add_symbol(*address, name.clone());
-    }
-    for (address, value) in &request.string_entries {
-        fd.add_string(*address, value.clone());
-    }
 
     rugra::flow::follow_flow(&mut fd, &mut sleigh, Address::new(target.vaddr), u64::MAX);
     eprintln!(
@@ -1017,6 +1135,36 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         t0.elapsed(),
         fd.obank.optree.len(),
         fd.bblocks.get_size()
+    );
+
+    // CALLSPEC-DRIVER-0001: resolve every CALL/CALLIND call specification
+    // against the symbol/signature front-end (Ghidra's FlowInfo::queryCall
+    // boundary, flow.cc:656-672). Ghidra queries the Program database here
+    // (populated by the platform ELF/DWARF/signature analyzers); Rugra's
+    // equivalent front-end state is the driver's symbol table plus the
+    // locked libc ABI table. Unresolved targets stay unknown.
+    // A/B measurement gate (same precedent as RUGRA_RULE_STATS): setting
+    // RUGRA_DISABLE_CALLSPEC_LINK disables both halves of the wiring —
+    // the call-spec resolution below and the PLT-import signature above —
+    // so root can isolate this feature's corpus effect on the same tree.
+    let mut named = 0usize;
+    let mut signatures = 0usize;
+    let mut relinked = 0usize;
+    if callspec_link_enabled {
+        (named, signatures, relinked) = link_call_specs(
+            &mut fd,
+            &libc_signatures,
+            &debug_storage,
+            &target.name,
+        );
+    }
+    eprintln!(
+        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} fspec targets relinked",
+        target.name,
+        fd.callspecs.len(),
+        named,
+        signatures,
+        relinked
     );
 
     let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
@@ -1535,7 +1683,7 @@ fn replay_worker_stderr(stderr: &[u8]) -> io::Result<()> {
     output.flush()
 }
 
-const TYPEDEF_PREAMBLE: &str = "\ntypedef unsigned char byte;\ntypedef unsigned long undefined;\ntypedef unsigned long undefined4;\ntypedef unsigned long long undefined8;\ntypedef struct { char _anon[256]; } _struct;\n";
+const TYPEDEF_PREAMBLE: &str = "\ntypedef unsigned char byte;\ntypedef unsigned long undefined;\ntypedef unsigned short undefined2;\ntypedef unsigned long undefined4;\ntypedef unsigned long long undefined8;\ntypedef struct { char _anon[256]; } _struct;\n";
 
 // RUGRA-GLUE: PrintC's process-wide typedef latch is reconstructed at the multi-process boundary.
 fn normalize_worker_typedefs(
@@ -1836,6 +1984,56 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                                 symbol_table.insert(plt_addr, name.to_string());
                             }
                         }
+                    }
+                }
+            }
+
+            // .plt.got slots (CALLSPEC-DRIVER-0001): Ghidra's PLT analyzer
+            // resolves these the same way as .plt.sec entries, but their GOT
+            // slots are owned by R_X86_64_GLOB_DAT relocations in .rela.dyn
+            // (not .rela.plt), so the loop above misses them. Each 8-byte
+            // slot is `endbr64; bnd jmp *disp32(%rip)`: disp32 starts at
+            // slot+7, rip after the jump is slot+11, and the GOT address it
+            // jumps through names the imported symbol. Locked-oracle witness:
+            // 0x22e0 -> __cxa_finalize (golden 0x1022e0 thunk + call site).
+            for header in elf.section_headers.iter() {
+                if elf.shdr_strtab.get_at(header.sh_name) != Some(".plt.got") {
+                    continue;
+                }
+                let file_off = header.sh_offset as usize;
+                let slot_vaddr = header.sh_addr;
+                for slot in 0..(header.sh_size as usize / 8) {
+                    let start = file_off + slot * 8;
+                    let Some(insn) = buffer.get(start..start + 11) else {
+                        continue;
+                    };
+                    // f2 ff 25 <disp32> at slot+4 (after endbr64).
+                    if insn[4] != 0xf2 || insn[5] != 0xff || insn[6] != 0x25 {
+                        continue;
+                    }
+                    let disp = i32::from_le_bytes([
+                        insn[7], insn[8], insn[9], insn[10],
+                    ]) as i64;
+                    let got_addr = (slot_vaddr + slot as u64 + 11) as i64 + disp;
+                    // x86-64 uses RELA dynamic relocations (.rela.dyn);
+                    // fall back to the Rel form for completeness.
+                    let name = elf
+                        .dynrelas
+                        .iter()
+                        .chain(elf.dynrels.iter())
+                        .find_map(|reloc| {
+                            if reloc.r_offset != got_addr as u64 {
+                                return None;
+                            }
+                            elf.dynsyms
+                                .get(reloc.r_sym)
+                                .and_then(|sym| elf.dynstrtab.get_at(sym.st_name))
+                                .filter(|name| !name.is_empty())
+                        });
+                    if let Some(name) = name {
+                        let plt_addr = slot_vaddr + slot as u64;
+                        plt_symbols.insert(plt_addr, name.to_string());
+                        symbol_table.insert(plt_addr, name.to_string());
                     }
                 }
             }
