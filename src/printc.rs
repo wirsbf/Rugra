@@ -275,6 +275,28 @@ fn is_label_symbol(sym: &crate::database::Symbol) -> bool {
     sym.type_name == "label"
 }
 
+// Ghidra: printc.cc:2535-2553 emitScopeVarDecls MapIterator space order
+/// Address-space rank emulating the x86-64 `ScopeInternal::maptable`
+/// iteration order (database.hh:810 maptable; database.cc:1889-1919
+/// MapIterator walks the per-space EntryMaps in space-index order) used by
+/// `emitScopeVarDecls` (printc.cc:2535). For the locked x86-64 oracle the
+/// function-local ScopeLocal only ever holds entries in the unique
+/// (linkSymbol SSA temporaries), register (input/representative storage),
+/// and stack (restructured locals + stack inputs) spaces, and the locked
+/// 12.0.4 golden decl blocks order them Unique < Register < Stack (e.g.
+/// `helpf`: unique temp `lVar1`, then register `in_AL..in_XMM7_Qa`, then
+/// stack `ap`/`local_*`). Any other space (ram globals live in the global
+/// scope, not ScopeLocal) sorts last, deterministically.
+fn local_maptable_space_rank(space: crate::space::AddressSpace) -> u8 {
+    use crate::space::AddressSpace;
+    match space {
+        AddressSpace::Unique => 0,
+        AddressSpace::Register => 1,
+        AddressSpace::Stack => 2,
+        _ => 3,
+    }
+}
+
 /// Represents a detected struct on the stack frame.
 /// When a stack address is passed to a function call (via lea reg, [rsp+X]),
 /// it indicates a struct/buffer at that offset.
@@ -322,43 +344,6 @@ pub struct PrintC {
     used_varnode_names: HashSet<String>,
     /// Track actual types, space and offset of used variables for robust declaration mapping
     used_varnode_types: HashMap<String, (String, crate::space::AddressSpace, u64)>,
-    /// First-use order of used variable names recorded during the REAL emit
-    /// pass (not discovery). Declarations are emitted in this order so they
-    /// are monotonic with compact_name_for's lazy numbering (bVar1, bVar2, ...
-    /// assigned in first-use order). Faithful to Ghidra assignDefaultNames
-    /// (database.cc:2850-2865). Without this, declarations iterated the
-    /// HashMap in RANDOM order (Rust HashMap is randomly seeded), causing
-    /// non-deterministic output: gcc audit varied 22-24/24 across runs.
-    declaration_order: Vec<String>,
-    /// Scope-local stack symbols (from varmap's restructure_varnode) that were
-    /// referenced during the body emit. These MUST be declared even if the
-    /// general discovery/mark path missed them (it sometimes does for STORE
-    /// address LHS, causing 'StackX_N undeclared'). Populated by
-    /// get_stack_variable_name during both discovery and real emit.
-    used_scope_symbols: std::cell::RefCell<std::collections::HashSet<String>>,
-    /// Compact variable renumbering map (raw name → compact name), built
-    /// lazily on first use. Faithful to Ghidra's assignDefaultNames
-    /// (database.cc:2862): variables are renumbered per type-prefix starting
-    /// from 1 (iVar1, iVar2, lVar1, ...) instead of using the raw register
-    /// offset (iVar23, lVar107). Built on-demand in push_varnode and
-    /// get_varnode_display_name during the REAL emit pass (not discovery).
-     compact_rename: HashMap<String, String>,
-    /// Single shared counter for auto-local renaming, faithful to Ghidra's
-    /// `int4 base` in `ActionNameVars::apply` (coreaction.cc:2988) +
-    /// `assignDefaultNames(int4 &base)` (database.cc:2850). Initial value 1,
-    /// monotonically incremented across ALL prefixes (iVar/lVar/bVar/...).
-    /// This replaces the previous per-prefix `HashMap<&str,u32>` counter,
-    /// which was the 181538f bug (per-prefix independent numbering produced
-    /// `bVar1,bVar2` instead of Ghidra's shared `...iVar4,lVar5...`).
-    compact_base: u32,
-    /// Value of the shared `int4 base` counter AFTER the Action-phase naming
-    /// pass (`ScopeLocal::assign_default_names`, database.cc:2850) ran on the
-    /// scope snapshot. Ghidra flows this one counter from
-    /// `ActionNameVars::apply` (coreaction.cc:2988) through both the per-vn
-    /// namerec loop and assignDefaultNames; Rugra runs the scope pass first
-    /// and lets the remaining lazy register-high renumbering continue from
-    /// this value so the counter stays shared across both sources.
-    scope_naming_base: u32,
     /// If true, we are in the discovery pass (only collecting names, not printing)
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
@@ -546,11 +531,6 @@ impl PrintC {
             inlined_ops: HashSet::new(),
             used_varnode_names: HashSet::new(),
             used_varnode_types: HashMap::new(),
-            declaration_order: Vec::new(),
-            used_scope_symbols: std::cell::RefCell::new(std::collections::HashSet::new()),
-            compact_rename: HashMap::new(),
-            compact_base: 1, // faithful to Ghidra int4 base=1 (coreaction.cc:2988)
-            scope_naming_base: 1,
             discovery_pass: false,
             call_targets: HashSet::new(),
         pointer_varnodes: HashSet::new(),
@@ -2806,282 +2786,214 @@ impl PrintC {
         self.emit.tag_variable(&label, 0);
     }
 
-    // RUGRA-GLUE: compact_name_for (no Ghidra counterpart found)
-    /// Return the compact (renumbered) name for a raw variable name, or None
-    /// if the name is not an auto-local that should be renumbered. Faithful
-    /// to Ghidra's assignDefaultNames (database.cc:2862): variables are
-    /// renumbered per type-prefix starting from 1. Built lazily on first use
-    /// during the REAL emit pass so names are stable across body + declarations.
-    fn compact_name_for(&mut self, raw: &str) -> Option<String> {
-        // Only renumber during the real emit pass (not discovery), and only
-        // for auto-local names matching {prefix}{hexdigits} or {prefix}_{hexdigits}.
-        if self.discovery_pass { return None; }
-        // All prefixes producible by Datatype::print_name_base (type.cc) + "Var":
-        // single-letter scalars (l/u/i/b/s/f/d/c/e) and their pointer forms
-        // p{scalar} (pi/pc/ps/pp/pv/pl/pb/pu/pf/pd/pe). Pointer prefixes must
-        // precede their scalar tail so "piVar3" matches "piVar" not "iVar".
-        // Without the full pointer set, Merge::assign_names-generated names
-        // like "plVar5" (long*) would fall through unrenumbered.
-        const PREFIXES: &[&str] = &[
-            "piVar", "pcVar", "psVar", "ppVar", "pvVar",
-            "plVar", "pbVar", "puVar", "pfVar", "pdVar", "peVar",
-            "lVar", "uVar", "iVar", "bVar", "sVar", "fVar", "dVar", "cVar", "eVar",
-        ];
-        // Check if this is an auto-local name we should renumber.
-        let mut matched_prefix: Option<&'static str> = None;
-        for &prefix in PREFIXES {
-            if let Some(rest) = raw.strip_prefix(prefix) {
-                let digits = rest.strip_prefix('_').unwrap_or(rest);
-                if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit()) {
-                    matched_prefix = Some(prefix);
-                    break;
-                }
-            }
-        }
-        let prefix = matched_prefix?;
-        // If already renamed, return the cached compact name.
-        if let Some(compact) = self.compact_rename.get(raw) {
-            return Some(compact.clone());
-        }
-        // Faithful to Ghidra `assignDefaultNames` (database.cc:2850-2865) +
-        // `buildDefaultName`→`buildVariableName` local case (database.cc:2501-2504):
-        //   ct->printNameBase(s); s << "Var" << dec << index++;
-        // `index` is the SINGLE shared `int4 base` (initial 1, monotonic across
-        // all prefixes). This is the 181538f fix: per-prefix counters were wrong;
-        // Ghidra uses one shared counter. NOTE: Ghidra traverses symbols in
-        // `nametree` order (SymbolCompareName: name.compare() then nameDedup),
-        // i.e. creation order — Rugra approximates this by the lazy first-touch
-        // order of `get_varnode_display_name` during op traversal (the closest
-        // analogue available in Rugra's print-time architecture; see
-        // FUNCTION_GAP_REPORT.md for the full nametree-order gap analysis).
-        let n = self.compact_base;
-        self.compact_base += 1;
-        let compact = format!("{}{}", prefix, n);
-        self.compact_rename.insert(raw.to_string(), compact.clone());
-        Some(compact)
+    // Ghidra: printc.cc:2497 PrintC::emitVarDecl
+    /// Emit a formal variable declaration for a `varmap::LocalSymbol`
+    /// (without the trailing `;` or line break). Faithful to
+    /// `PrintC::emitVarDecl(const Symbol*)` (printc.cc:2497-2508), operating
+    /// on Rugra's local-scope symbol model (`varmap::LocalSymbol` mirrors
+    /// Ghidra's `Symbol` for the function-local ScopeLocal; the parallel
+    /// `emit_var_decl` covers `database::Symbol` for global scopes).
+    ///
+    /// Ghidra wraps the body in `emit->beginVarDecl(sym)`/`endVarDecl(id)`
+    /// markup tags, then emits `<type> <name>` via pushTypeStart /
+    /// pushSymbol / pushTypeEnd + recurse().
+    ///
+    /// Alignment Evidence (four decisive-semantics checklist):
+    /// - References/output params: `sym` borrowed read-only (const Symbol*).
+    ///   No mutation; emits via `self.emit`.
+    /// - Loop bounds/order: none (single declaration). Token order is
+    ///   exactly pushTypeStart -> pushSymbol -> pushTypeEnd -> recurse.
+    /// - Counter/accumulator: none.
+    /// - Sort/compare key: none.
+    pub fn emit_local_symbol_decl(&mut self, sym: &crate::varmap::LocalSymbol) {
+        // int4 id = emit->beginVarDecl(sym);
+        self.emit.begin_var_decl();
+        // pushTypeStart(sym->getType(),false);
+        let dt = sym.dtype.clone();
+        self.push_type_start_opt(dt.as_deref(), false);
+        // pushSymbol(sym,(Varnode*)0,(PcodeOp*)0) — push the symbol's
+        // displayName (printc.cc:1935 pushAtom(Atom(sym->getDisplayName(),...))).
+        self.emit.tag_variable(&sym.display_name, 0);
+        // pushTypeEnd(sym->getType());
+        self.push_type_end_opt(dt.as_deref());
+        // emit->endVarDecl(id);
+        self.emit.end_var_decl();
     }
 
-    // Ghidra: database.cc:2850 ScopeInternal::assignDefaultNames (nametree order)
-    /// P4 fix: pre-allocate compact names for register-derived auto-locals in
-    /// def-op address order, matching Ghidra's nametree/nameDedup (symbol
-    /// creation) order. Ghidra traverses SymbolNameTree (sorted by name, tie-
-    /// break nameDedup = creation order). For register vars, the closest
-    /// analogue to creation order is the def-op's address order. This method
-    /// scans all ops, collects register-space output varnodes whose raw name
-    /// matches the auto-local pattern, sorts by def-op address, and pre-fills
-    /// compact_rename so compact_name_for finds cached names during emit.
-    fn preallocate_register_compact_names(&mut self, fd: &Funcdata) {
-        use crate::space::AddressSpace;
-        // Collect (raw_name, def_op_addr) for register auto-locals.
-        let mut candidates: Vec<(String, u64)> = Vec::new();
-        let mut seen_raw: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            if let Some(out_arc) = &op.output {
-                let vn = out_arc.read().unwrap();
-                if vn.get_space() != AddressSpace::Register { continue; }
-                // Skip params (they have their own names).
-                if self.param_names.contains_key(&vn.get_offset()) { continue; }
-                let raw = self.get_varnode_display_name_inner(&vn);
-                // Only auto-local names matching {prefix}_{hex} pattern.
-                if Self::is_raw_register_name(&raw) || raw.contains("Var_") {
-                    if seen_raw.insert(raw.clone()) {
-                        candidates.push((raw, op.start.addr.as_u64()));
-                    }
-                }
-            }
-        }
-        // Sort by def-op address (Ghidra nametree/nameDedup = creation order
-        // analogue). Stable sort preserves first-seen for same-address ties.
-        candidates.sort_by_key(|(_, addr)| *addr);
-        // Pre-allocate compact names in this order. compact_name_for will find
-        // these cached names during emit, so op-traversal order no longer
-        // matters for numbering.
-        for (raw, _) in &candidates {
-            // Temporarily force non-discovery to allow allocation.
-            let saved = self.discovery_pass;
-            self.discovery_pass = false;
-            let _ = self.compact_name_for(raw);
-            self.discovery_pass = saved;
-        }
+    // Ghidra: printc.cc:2510 PrintC::emitVarDeclStatement
+    /// Emit a full variable-declaration statement for a local symbol: a
+    /// leading newline (tagLine), the var-decl body, then a `;`. Faithful to
+    /// `PrintC::emitVarDeclStatement(const Symbol*)` (printc.cc:2510-2516).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `sym` borrowed read-only.
+    /// - Loop/order: none. Order is exactly: tagLine -> emitVarDecl -> ';'.
+    /// - Counter: none.
+    /// - Sort key: none.
+    pub fn emit_local_symbol_decl_statement(&mut self, sym: &crate::varmap::LocalSymbol) {
+        // emit->tagLine();
+        self.emit.tag_line(0);
+        // emitVarDecl(sym);
+        self.emit_local_symbol_decl(sym);
+        // emit->print(SEMICOLON);
+        self.emit.print(";");
     }
 
-    // RUGRA-GLUE: doc_variable_decls_from_funcdata (no Ghidra counterpart found)
-    /// Emit variable declarations at the top of the function body.
-    fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata) {
-        use std::collections::BTreeMap;
-        use crate::space::AddressSpace;
+    // Ghidra: printc.cc:2518 PrintC::emitScopeVarDecls
+    /// Emit a declaration for every qualifying symbol in the function-local
+    /// scope, faithful to `PrintC::emitScopeVarDecls(const Scope*,int4 cat)`
+    /// (printc.cc:2518-2575), operating on Rugra's `varmap::ScopeLocal`.
+    ///
+    /// Ghidra walk order (the decisive semantics):
+    /// 1. cat >= 0 (cc:2523-2534): iterate the category table in slot order,
+    ///    skipping empty-name (cc:2528) and `$$undef` (cc:2529) symbols.
+    ///    No Rugra local-scope caller passes cat >= 0 (both call sites below
+    ///    pass Symbol::no_category, as do printc.cc:2265/2272/2612), and
+    ///    `varmap::ScopeLocal` keeps its category table private, so this
+    ///    branch returns the vacuous `false` (an empty category walk).
+    /// 2. cat < 0 (cc:2535-2553): iterate the full `MapIterator` — Ghidra's
+    ///    `ScopeInternal::maptable` is a vector of per-address-space entry
+    ///    rangemaps (database.hh:810) walked in address-space-index order
+    ///    (database.cc:1889-1919/826-836), each rangemap sorted by entry
+    ///    start address with the use-point `EntrySubsort` as tie-break
+    ///    (database.hh:103-134, getSubsort database.cc:97-107: addrtied
+    ///    entries sort earliest, others by first uselimit address).
+    ///    Filters per entry: isPiece (cc:2539), category != cat (cc:2541),
+    ///    empty name (cc:2542), FunctionSymbol/LabSymbol (cc:2543-2546),
+    ///    multi-entry symbols declared once at their first whole map
+    ///    (cc:2547-2550).
+    /// 3. Dynamic entries (cc:2554-2572): the `dynamicentry` list in
+    ///    insertion order (database.cc:1921-1931), same filters.
+    ///
+    /// Rugra adaptation: each `varmap::LocalSymbol` models a symbol plus its
+    /// single whole SymbolEntry (space/start/usepoint/dyn/hash fields,
+    /// varmap.rs:1444-1490), so the MapIterator walk is emulated by sorting
+    /// non-dynamic symbols by (space rank, start, usepoint) — the space rank
+    /// reproduces the x86-64 maptable order Unique < Register < Stack
+    /// observed in the locked-oracle golden decl blocks (e.g.
+    /// tests/golden/ghidra_curl_1204.c `helpf`: `lVar1` unique-space temp
+    /// before `in_AL..in_XMM7_Qa` register entries before `ap`/`local_*`
+    /// stack entries). `usepoint: None` models the invalid usepoint of an
+    /// addrtied entry, which sorts earliest exactly like Ghidra's minimal
+    /// EntrySubsort. Rugra LocalSymbols are single-entry (no `wholeCount`),
+    /// cannot be FunctionSymbol/LabSymbol (no such creation path in
+    /// `varmap::ScopeLocal`), and never carry `precislo/precishi` piece
+    /// flags, so those three Ghidra filters reduce to no-ops here.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `sym_scope` borrowed read-only; emits via
+    ///   `&mut self.emit`. Returns `notempty` (cc:2521/2574).
+    /// - Loop bounds/order: address-map walk first, dynamic list second
+    ///   (cc:2535 then cc:2554); map order = (space index, start offset,
+    ///   usepoint subsort); category branch in category slot order (cc:2525).
+    /// - Counter/accumulator: single `bool notempty`, set once per emitted
+    ///   decl, never reset inside the walk (cc:2521/2530/2551).
+    /// - Sort/compare key: rangemap (first offset, EntrySubsort usepoint);
+    ///   symbol identity for multi-entry dedup = first whole map only.
+    pub fn emit_scope_local_var_decls(&mut self, sym_scope: &crate::varmap::ScopeLocal, cat: i32) -> bool {
+        let mut notempty = false;
+        // cc:2523-2534: category branch. No local-scope caller passes cat>=0
+        // (printc.cc:2265/2272 pass Symbol::no_category); vacuously empty.
+        if cat >= 0 {
+            return notempty;
+        }
+        // cc:2535-2553: full MapIterator walk, emulated as a stable sort of
+        // the scope's non-dynamic symbols by (space rank, start, usepoint).
+        let mut statics: Vec<&crate::varmap::LocalSymbol> = sym_scope
+            .symbols
+            .iter()
+            .filter(|s| !s.is_dynamic)
+            .collect();
+        statics.sort_by_key(|s| (local_maptable_space_rank(s.space), s.start, s.usepoint));
+        for sym in statics {
+            // cc:2541: if (sym->getCategory() != cat) continue; (cat<0 here)
+            if sym.category != cat {
+                continue;
+            }
+            // cc:2542: if (sym->getName().size() == 0) continue;
+            if sym.name.is_empty() {
+                continue;
+            }
+            // cc:2543-2546: FunctionSymbol/LabSymbol skip — impossible in
+            // Rugra's ScopeLocal model (no such creation path), no-op.
+            // cc:2547-2550: multi-entry dedup — Rugra LocalSymbols are
+            // single-entry, no-op.
+            notempty = true;
+            self.emit_local_symbol_decl_statement(sym);
+        }
+        // cc:2554-2572: dynamic-entry walk in insertion (Vec) order.
+        for sym in sym_scope.symbols.iter().filter(|s| s.is_dynamic) {
+            if sym.category != cat {
+                continue;
+            }
+            if sym.name.is_empty() {
+                continue;
+            }
+            notempty = true;
+            self.emit_local_symbol_decl_statement(sym);
+        }
+        notempty
+    }
 
-        let mut declared: BTreeMap<String, String> = BTreeMap::new();
+    // Ghidra: printc.cc:2656 PrintC::docFunction (emitLocalVarDecls scope source)
+    /// Snapshot the Action-phase local-variable scope (cloned, since the
+    /// printer borrows the Funcdata read-only). Ghidra's printer is a pure
+    /// consumer of the persistent ScopeLocal built by
+    /// ActionRestructureVarnode and named by ActionNameVars
+    /// (coreaction.cc:2978-2998: linkSymbols + buildDefaultName +
+    /// assignDefaultNames all finish BEFORE printing), so PrintC never
+    /// restructures, renames, or renumbers the scope at emit time. There is
+    /// deliberately NO print-time restructure fallback for a missing scope:
+    /// a function without an Action-built scope gets no declarations
+    /// (PRINTC-SCOPE-RESTRUCT-0001, absorbed here). `doc_function` snapshots
+    /// through this entry; fixtures that exercise `emit_local_var_decls`
+    /// directly use it to reproduce the same print-side view.
+    pub fn snapshot_local_scope(&mut self, fd: &Funcdata) {
+        self.scope = fd.scope.clone();
+    }
 
-        let is_declarable = |name: &str, space: AddressSpace, offset: u64, call_targets: &HashSet<u64>| -> bool {
-            if name.is_empty() { return false; }
-            if !name.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
-                return false;
-            }
-            if name.starts_with("DAT_") || name.starts_with("LAB_")
-                || name.starts_with('"') || name.contains('(')
-                || name.starts_with("0x") || name == "argc" || name == "argv"
-            {
-                return false;
-            }
-            // Don't declare parameters (they're already in the function signature)
-            if name.starts_with("param_") && !name.starts_with("param_stack_") {
-                return false;
-            }
-            // Don't declare function call targets as local variables
-            if matches!(space, AddressSpace::Ram | AddressSpace::Const)
-                && call_targets.contains(&offset)
-            {
-                return false;
-            }
-            // Don't declare RIP/RSP/RBP — they're pseudo/frame registers, not local variables
-            // Also don't declare any raw register names — they're architectural temporaries.
-            // Don't declare RIP — it's a pseudo register, not a real variable.
-            // RSP/RBP and callee-saved (R12-R15, RBX) may appear in expressions
-            // when stack-frame analysis is incomplete; declaring them as `long`
-            // keeps the output compilable (they are real 8-byte registers).
-            if space == AddressSpace::Register {
-                // RIP (0x200) is a pseudo register — never declare
-                if offset == 0x200 { return false; }
-                const DECL_PREFIXES: &[&str] = &[
-                    "lVar", "uVar", "iVar", "bVar", "sVar",
-                    "piVar", "pcVar", "psVar", "ppVar", "pvVar",
-                    "fVar", "dVar",
-                    // `in_<hex>` is the fallback name for irregular/unresolved
-                    // input-register CALL args (emit_call_arg_text, faithful to
-                    // Ghidra buildVariableName's irregular-input case,
-                    // database.cc:2470). It must be declarable.
-                    "in_",
-                ];
-                let is_auto_local = DECL_PREFIXES.iter().any(|p| {
-                    if let Some(rest) = name.strip_prefix(p) {
-                        // Accept hex offset names (lVar_a8, uVar_b0) as well as
-                        // decimal renumbered names (lVar1, iVar2). The display
-                        // name generator uses {:x} for offsets (printc.rs:1652).
-                        rest.starts_with(|c: char| c.is_ascii_hexdigit() || c == '_')
-                    } else {
-                        false
-                    }
-                });
-                if is_auto_local {
-                    // Allow declaring variables renamed from registers
-                } else {
-                    // Callee-saved + frame registers: allow declaration as long
-                    // (RSP=0x20, RBP=0x28, RBX=0x18, R12=0xa0..R15=0xb8)
-                    const DECL_REG_OFFSETS: &[u64] = &[
-                        0x20, 0x28, 0x18, 0xa0, 0xa8, 0xb0, 0xb8,
-                    ];
-                    if !DECL_REG_OFFSETS.contains(&offset) {
-                        // All other raw register names (RAX/RCX/flags) — not declared
-                        return false;
-                    }
-                    // For these, only declare if the name is the raw register name
-                    // (RBP, RSP, RBX, R12-R15) — not some other identifier at this offset
-                    const RAW_REG_NAMES: &[&str] = &[
-                        "RSP", "ESP", "RBP", "EBP", "RBX", "EBX",
-                        "R12", "R13", "R14", "R15",
-                    ];
-                    if !RAW_REG_NAMES.contains(&name) {
-                        return false;
-                    }
-                }
-            }
-            // Don't declare names that come from the global symbol or string table
-            if matches!(space, AddressSpace::Ram | AddressSpace::Const) {
-                if call_targets.contains(&offset) {
-                    return false;
-                }
-                // These are global symbols, not local variables
-                return false;
-            }
-            true
-        };
-
-        // Emit declarations in REAL-EMIT first-use order (declaration_order),
-        // matching compact_name_for's numbering order. This fixes non-
-        // determinism: previously iterated used_varnode_types (a randomly-
-        // seeded HashMap), so declaration order varied per run and could
-        // mismatch the lazy numbering, producing undeclared/duplicate names.
-        // Faithful to Ghidra assignDefaultNames (database.cc:2850-2865).
-        let order_snapshot: Vec<String> = self.declaration_order.clone();
-        for name in &order_snapshot {
-            if let Some((type_name, space, offset)) = self.used_varnode_types.get(name) {
-                let (type_name, space, offset) = (type_name.clone(), *space, *offset);
-                let decl_name = self.compact_name_for(name).unwrap_or_else(|| name.clone());
-                if is_declarable(&decl_name, space, offset, &self.call_targets) {
-                    let entry = declared.entry(decl_name).or_insert_with(|| type_name.clone());
-                    if type_name.contains('*') && !entry.contains('*') {
-                        *entry = type_name.clone();
-                    }
-                }
+    // Ghidra: printc.cc:2260 PrintC::emitLocalVarDecls
+    /// Emit a formal variable declaration for every symbol in the given
+    /// function scope (all local variables are declared). Faithful to
+    /// `PrintC::emitLocalVarDecls(const Funcdata*)` (printc.cc:2260-2279).
+    ///
+    /// Ghidra first walks the function's own local scope, then every child
+    /// scope of it in `ScopeMap` id order (cc:2267-2275), each with
+    /// `Symbol::no_category`, and closes the block with one `tagLine` when
+    /// anything was emitted (cc:2277-2278).
+    ///
+    /// Rugra adaptation: `self.scope` is the print-time snapshot of
+    /// `Funcdata::scope` (the Action-phase ScopeLocal; see doc_function).
+    /// `varmap::ScopeLocal` has no child-scope table, so the cc:2267-2275
+    /// children loop never iterates (childrenBegin==childrenEnd in Ghidra's
+    /// model of a childless scope); the observable behavior matches for
+    /// childless local scopes, which is the only shape Rugra's ScopeLocal
+    /// can hold.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: reads the owned scope snapshot; no fd
+    ///   mutation. Emits via `self.emit`.
+    /// - Loop bounds/order: own scope first, children in ScopeMap id order
+    ///   second (cc:2265-2275); final tagLine only if notempty (cc:2277).
+    /// - Counter/accumulator: single `bool notempty` OR-accumulated across
+    ///   scopes, never reset between scopes.
+    /// - Sort/compare key: delegated to emit_scope_local_var_decls (map
+    ///   order); children iterated in ScopeMap uniqueId order.
+    pub fn emit_local_var_decls(&mut self) {
+        // cc:2265: emitScopeVarDecls(fd->getScopeLocal(), Symbol::no_category)
+        let scope_snapshot = self.scope.take();
+        let mut notempty = false;
+        if let Some(scope) = scope_snapshot.as_ref() {
+            if self.emit_scope_local_var_decls(scope, -1) {
+                notempty = true;
             }
         }
-
-        // Safety net: scope-local stack symbols (StackX_*) referenced via
-        // get_stack_variable_name must be declared. The general path above can
-        // miss them (e.g. STORE address LHS where the symbol name is printed but
-        // not routed through mark_variable_used). Declare any not yet declared
-        // as `long` (default register width) to keep the output compilable.
-        for name in self.used_scope_symbols.borrow().iter() {
-            if declared.contains_key(name) { continue; }
-            if is_declarable(name, AddressSpace::Stack, 0, &self.call_targets) {
-                declared.entry(name.clone()).or_insert_with(|| "long".to_string());
-            }
-        }
-        // Also declare any scope symbol whose name appears in used_varnode_names
-        // (covers paths that print the scope name without going through
-        // get_stack_variable_name's recording). The scope is the authoritative
-        // set of this function's stack locals; any that the body references must
-        // be declared.
-        //
-        // Scope symbols carry their final names from the Action-phase
-        // `assignDefaultNames` run (database.cc:2850) at snapshot time —
-        // Stack/StackX locals, param_N entries, and lVar-style locals alike.
-        // PrintC declares them under those names (Ghidra's printer reads
-        // Symbol::getDisplayName) with no print-time renumbering.
-        if let Some(scope) = &self.scope {
-            for sym in &scope.symbols {
-                let name = sym.name.clone();
-                // Skip $$undef placeholders: they model symbols Ghidra would
-                // never leave unnamed before printing; declaring them would
-                // leak illegal identifiers into the C output.
-                if name.starts_with("$$undef") {
-                    continue;
-                }
-                if !declared.contains_key(&name)
-                    && is_declarable(&name, AddressSpace::Stack, 0, &self.call_targets)
-                {
-                    let ty = if sym.size <= 4 { "int" } else { "long" };
-                    declared.insert(name, ty.to_string());
-                }
-            }
-        }
-        let _ = fd;
-
-        // Declare stack_struct names (struct1, struct2, ...) that were detected
-        // during doc_function but may not have been registered in
-        // used_varnode_names. These are used as `*(long *)(structN + off)`
-        // and must be declared as `long`.
-        for ss in &self.stack_structs {
-            if !declared.contains_key(&ss.name) {
-                declared.insert(ss.name.clone(), "long".to_string());
-            }
-        }
-
-        if !declared.is_empty() {
-            for (name, type_name) in &declared {
-                self.emit.tag_line(0);
-                // Join spacing per the type OpTokens (printc.cc:73-77): a
-                // trailing-`*` type name carries ptr_expr's spacing=0, so
-                // `char *uVar2;` has no space after the `*` run. The name's
-                // star run is normalized to `base **` form first.
-                let prefix = Self::normalize_pointer_run(type_name);
-                let join = if prefix.ends_with('*') { "" } else { " " };
-                self.emit.print(&format!("{}{}{};", prefix, join, name));
-            }
+        // cc:2267-2275: children walk — varmap::ScopeLocal has no child
+        // scopes, the loop body never executes.
+        self.scope = scope_snapshot;
+        // cc:2277-2278: if (notempty) emit->tagLine();
+        if notempty {
             self.emit.tag_line(0);
-            self.emit.print("");
         }
     }
 
@@ -3093,18 +3005,8 @@ impl PrintC {
         if name.contains("->") || name.contains('.') || name.contains('[') || name.contains('*') || name.contains('&') {
             return;
         }
-        let is_new = !self.used_varnode_names.contains(&name);
         self.used_varnode_names.insert(name.clone());
         self.used_varnode_types.insert(name.clone(), (type_name, space, offset));
-        // Record first-use order in BOTH passes. compact_name_for numbers
-        // during emit, but names that don't go through it (e.g. in_<hex>
-        // fallbacks) still need declaration. Recording in both passes
-        // ensures every used name is declared in a deterministic order,
-        // while compact names still get monotonic numbering (they're added
-        // in emit order during emit, which is when compact_name_for runs).
-        if is_new {
-            self.declaration_order.push(name);
-        }
     }
 
     // RUGRA-GLUE: mark_varnode_used (no Ghidra counterpart found)
@@ -3140,9 +3042,11 @@ impl PrintC {
     // RUGRA-GLUE: get_varnode_display_name (no Ghidra counterpart found)
     /// Get the display name for a varnode without emitting it
     fn get_varnode_display_name(&mut self, vn: &Varnode) -> String {
-        let raw = self.get_varnode_display_name_inner(vn);
-        // Apply compact renumbering lazily (assignDefaultNames).
-        self.compact_name_for(&raw).unwrap_or(raw)
+        // Names are final at print time: Ghidra finishes all symbol naming
+        // in the Action phase (ActionNameVars::apply, coreaction.cc:2978-2998)
+        // and PrintC only ever consumes Symbol::getDisplayName; there is no
+        // print-time renumbering path in the oracle.
+        self.get_varnode_display_name_inner(vn)
     }
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
@@ -3361,8 +3265,10 @@ impl PrintC {
     /// `ScopeInternal::buildVariableName` local-variable case (database.cc:2501-
     /// 2504): a HighVariable that only carries a register-derived name must be
     /// renamed to `<printNameBase>Var<index>` — here we route it to a size-based
-    /// local name (`<prefix>_<offset>`) that `compact_name_for` then renumbers
-    /// under the shared `compact_base` counter (Ghidra's single `int4 base`).
+    /// local name (`<prefix>_<offset>`). In the oracle the name would have
+    /// been finalized by ActionNameVars/assignDefaultNames before printing
+    /// (coreaction.cc:2978-2998); this path only fires for highs whose
+    /// symbol link is still missing (Rugra coverage gap).
     /// The trailing `_N` is Rugra's SSA-instance disambiguator produced by
     /// `Merge::assign_names` (merge.rs:560-574); stripping it recovers the
     /// underlying register name, matching Ghidra's one-name-per-HighVariable
@@ -3498,7 +3404,6 @@ impl PrintC {
                 sym.name.clone()
             });
             if let Some(assigned_name) = sym_opt {
-                self.used_scope_symbols.borrow_mut().insert(assigned_name.clone());
                 return Some(assigned_name);
             }
             
@@ -4963,45 +4868,21 @@ impl PrintLanguage for PrintC {
             .collect();
         self.string_table = fd.string_table.clone();
 
-        // Restructure the local-variable scope (faithful varmap.cc port).
-        // If ActionRestructureVarnode already built it on fd.scope, reuse it
-        // (cloned, since doc_function takes &Funcdata); otherwise build here.
-        // Built once per function; queried by get_stack_variable_name.
+        // Snapshot the Action-phase local-variable scope (cloned, since
+        // doc_function takes &Funcdata). Ghidra's printer is a pure consumer
+        // of the persistent ScopeLocal built by ActionRestructureVarnode and
+        // named by ActionNameVars (coreaction.cc:2978-2998: linkSymbols +
+        // buildDefaultName + assignDefaultNames all finish BEFORE printing),
+        // so PrintC never restructures, renames, or renumbers the scope at
+        // emit time. There is deliberately NO print-time restructure fallback
+        // for a missing scope: a function without an Action-built scope gets
+        // no declarations (PRINTC-SCOPE-RESTRUCT-0001, absorbed here).
+        // Queried by get_stack_variable_name and emit_local_var_decls.
         // NOTE: Rugra's x86 lift keeps RSP-relative accesses in Register space
         // rather than producing Stack-space varnodes, so gather_varnodes finds
-        // few symbols today. gather_spacebase compensates for RSP-derived
+        // few stack symbols today. gather_spacebase compensates for RSP-derived
         // LOAD/STORE. Full coverage needs type propagation.
-        //
-        // Action-phase naming: Ghidra's ActionNameVars::apply ends with
-        // `data.getScopeLocal()->assignDefaultNames(base)` (coreaction.cc:2998)
-        // BEFORE printing, so PrintC only ever consumes finished symbol names.
-        // Rugra's Action pipeline (coreaction.rs) does not run that pass yet,
-        // so the naming runs here, once per function, at the point the scope
-        // snapshot is taken; the print paths below consume the assigned
-        // `name`/`display_name` and never renumber scope symbols. The shared
-        // `int4 base` counter is captured in scope_naming_base so the lazy
-        // register-high renumbering (compact_name_for) continues it.
-        self.scope = match &fd.scope {
-            Some(s) => {
-                let mut scope = s.clone();
-                let mut base: i32 = 1;
-                if scope.assign_default_names(&mut base).is_none() {
-                    eprintln!("[VARMAP] assign_default_names: makeNameUnique failure");
-                }
-                self.scope_naming_base = base.max(1) as u32;
-                Some(scope)
-            }
-            None => {
-                let mut scope = crate::varmap::ScopeLocal::new();
-                scope.restructure_varnode(fd);
-                let mut base: i32 = 1;
-                if scope.assign_default_names(&mut base).is_none() {
-                    eprintln!("[VARMAP] assign_default_names: makeNameUnique failure");
-                }
-                self.scope_naming_base = base.max(1) as u32;
-                Some(scope)
-            }
-        };
+        self.snapshot_local_scope(fd);
 
         // Populate parameter name mapping from function prototype
         self.param_names.clear();
@@ -5636,15 +5517,6 @@ impl PrintLanguage for PrintC {
         self.inlined_ops.clear();
         self.used_varnode_names.clear();
         self.used_varnode_types.clear();
-        self.declaration_order.clear();
-        self.used_scope_symbols.borrow_mut().clear();
-        // Reset compact variable renumbering for this function. The counter
-        // CONTINUES from the Action-phase assignDefaultNames run
-        // (scope_naming_base) instead of restarting at 1: Ghidra's single
-        // `int4 base` (coreaction.cc:2988) is shared between the per-vn
-        // namerec loop and assignDefaultNames, never reset in between.
-        self.compact_rename.clear();
-        self.compact_base = self.scope_naming_base;
 
         // Pass 1: Discovery (only collect used names silently)
         self.discovery_pass = true;
@@ -5715,6 +5587,13 @@ impl PrintLanguage for PrintC {
         // byte/bool come from size-based inference in ActionInferParams/
         // ActionTypeInfer; without these typedefs the emitted
         // `byte bVarN;` declarations fail C compilation.
+        // NOTE: scope symbols whose data-type still carries the VarnodeBank
+        // adapter's `xunknownN`/`unknown` names (TYPE-UNKNOWN-0001) are
+        // declared verbatim by emitLocalVarDecls (printc.cc:2502 pushes
+        // sym->getType()), matching the oracle mechanism; those spellings
+        // stay uncompilable here until the adapter is unified with the
+        // TypeFactory's undefinedN registration — deliberately NOT aliased
+        // at print time (no upper-layer bypass of the upstream gap).
         // `_struct` is a generic backing type for pointer variables that get
         // dereferenced via `->field_N` (see fix_deref_declarations): declaring
         // such a variable as `_struct *` keeps `X->field_N` legal C.
@@ -5794,13 +5673,13 @@ impl PrintLanguage for PrintC {
         let brace_style = self.option_brace_func;
         self.emit.open_brace_indent("{", brace_style);
 
-        // 2a. Emit variable declarations (now pruned by used_varnode_names)
-        // P4: Pre-allocate compact names for register-derived auto-locals in
-        // def-op address order (matching Ghidra nametree/nameDedup = creation
-        // order). Without this, compact_name_for numbers them at op-traversal
-        // first-touch order, causing numbering diffs vs Ghidra.
-        self.preallocate_register_compact_names(fd);
-        self.doc_variable_decls_from_funcdata(fd);
+        // 2a. Emit variable declarations
+        // Ghidra: printc.cc:2656
+        //   emitLocalVarDecls(fd);
+        // Every symbol of the function-local scope (plus child scopes), per
+        // emitScopeVarDecls's map + dynamic walk (printc.cc:2518-2575); the
+        // declaration type and name come from the Symbol itself.
+        self.emit_local_var_decls();
 
         // 2a.5: Collect goto targets for label emission
         self.goto_targets.clear();
@@ -6611,12 +6490,10 @@ impl PrintLanguage for PrintC {
                         pname.clone()
                     } else {
                         let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
-                        let raw = format!("{}_{:x}", prefix, vn.get_offset());
-                        self.compact_name_for(&raw).unwrap_or(raw)
+                        format!("{}_{:x}", prefix, vn.get_offset())
                     }
                 } else {
-                    let raw = Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size());
-                    self.compact_name_for(&raw).unwrap_or(raw)
+                    Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size())
                 };
                 let name = &display_name;
 
@@ -6812,8 +6689,7 @@ impl PrintLanguage for PrintC {
                     // Faithful to buildVariableName default (database.cc:2501):
                     // size-based local variable name.
                     let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
-                    let raw = format!("{}_{:x}", prefix, vn.get_offset());
-                    self.compact_name_for(&raw).unwrap_or(raw)
+                    format!("{}_{:x}", prefix, vn.get_offset())
                 }
             }
             AddressSpace::Const => {
@@ -10408,31 +10284,79 @@ mod tests {
         assert!(!text.contains("RDI"), "Should NOT contain 'RDI', got: {}", text);
     }
 
-    /// Verify compact_name_for renumbers auto-local variable names.
+    /// Verify the Symbol-driven local declaration walk (printc.cc:2260/2518)
+    /// over a varmap::ScopeLocal snapshot: unique-space temp before register
+    /// input before stack local (MapIterator space order), dynamic entries
+    /// last in insertion order, params (category 0) and empty-name symbols
+    /// skipped (cc:2541/2542). NOTE the map branch has NO $$undef filter —
+    /// a `$$undef` no-category name is emitted verbatim (cc:2535-2553); in
+    /// production such names never reach the printer because
+    /// assignDefaultNames finishes them in the Action phase
+    /// (coreaction.cc:2998). This test pins that faithful asymmetry.
     #[test]
-    fn test_compact_name_for() {
-        // Faithful to Ghidra `assignDefaultNames` (database.cc:2850-2865):
-        // a SINGLE shared `int4 base` (initial 1, monotonic across ALL prefixes),
-        // NOT a per-prefix counter. This test pins the 181538f fix — previously
-        // each prefix had its own counter (bVar1,bVar2,lVar1,lVar2), but Ghidra
-        // shares one base (bVar1,bVar2,lVar3,lVar4).
-        let emit = Box::new(EmitNoMarkup::new());
-        let mut printer = PrintC::new(emit);
-        // bVar21 → bVar1 (shared base = 1)
-        let r1 = printer.compact_name_for("bVar21");
-        assert_eq!(r1, Some("bVar1".to_string()), "bVar21 -> bVar1 (base=1)");
-        // bVar29 → bVar2 (shared base = 2)
-        let r2 = printer.compact_name_for("bVar29");
-        assert_eq!(r2, Some("bVar2".to_string()), "bVar29 -> bVar2 (base=2)");
-        // lVar25 → lVar3 (shared base = 3, NOT a per-prefix lVar1)
-        let r3 = printer.compact_name_for("lVar25");
-        assert_eq!(r3, Some("lVar3".to_string()), "lVar25 -> lVar3 (shared base=3)");
-        // bVar21 again → bVar1 (cached, no new allocation)
-        let r4 = printer.compact_name_for("bVar21");
-        assert_eq!(r4, Some("bVar1".to_string()), "bVar21 cached -> bVar1");
-        // param_1 → None (not an auto-local name, not renumbered)
-        let r5 = printer.compact_name_for("param_1");
-        assert_eq!(r5, None, "param_1 not renumbered");
+    fn test_emit_local_var_decls_symbol_driven() {
+        use crate::space::AddressSpace;
+        use crate::type_system::datatype::{TypeBase, TypeMetatype};
+        use crate::varmap::{symbol_category::FUNCTION_PARAMETER, LocalSymbol, ScopeLocal};
+
+        let mk = |name: &str,
+                  size: i32,
+                  type_name: &str,
+                  space: AddressSpace,
+                  start: u64,
+                  category: i32,
+                  is_dynamic: bool| {
+            let mut s = LocalSymbol::new(
+                name,
+                start,
+                size,
+                Some(std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                    type_name.to_string(),
+                    size as usize,
+                    TypeMetatype::Unknown,
+                )))),
+                category,
+            );
+            s.space = space;
+            s.is_dynamic = is_dynamic;
+            s
+        };
+
+        // Map order: unique(regardless of Vec position) < register < stack,
+        // then dynamic entries in insertion order.
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(mk("in_RCX", 8, "undefined8", AddressSpace::Register, 0x30, -1, false));
+        scope.symbols.push(mk("bVar5", 1, "undefined1", AddressSpace::Unique, 0x900, -1, false));
+        // Param symbol: category 0 → declared in the signature, not here
+        // (cc:2541 sym->getCategory() != no_category).
+        scope.symbols.push(mk("param_1", 8, "long", AddressSpace::Register, 0x38, FUNCTION_PARAMETER, false));
+        // Empty-name symbol → skipped (cc:2542).
+        scope.symbols.push(mk("", 8, "undefined8", AddressSpace::Stack, 0x20, -1, false));
+        scope.symbols.push(mk("local_b8", 8, "undefined8", AddressSpace::Stack, 0xffffffffffffffb8, -1, false));
+        // Same-space subsort: usepoint Some sorts after None (addrtied first).
+        scope.symbols[0].usepoint = Some(0x2000);
+        scope.symbols.push(mk("dynVar", 4, "undefined4", AddressSpace::Unique, 0, -1, true));
+
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        printer.scope = Some(scope);
+        printer.emit_local_var_decls();
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
+
+        let bvar = text.find("undefined1 bVar5;").expect("typed temp decl");
+        let inrcx = text.find("undefined8 in_RCX;").expect("register input decl");
+        let local = text.find("undefined8 local_b8;").expect("stack local decl");
+        let dyn_pos = text.find("undefined4 dynVar;").expect("dynamic decl");
+        assert!(bvar < inrcx, "unique-space temp precedes register entry: {text}");
+        assert!(inrcx < local, "register entry precedes stack entry: {text}");
+        assert!(local < dyn_pos, "address-map walk precedes dynamic list: {text}");
+        assert!(!text.contains("param_1;"), "category-0 param not declared as local");
+        assert_eq!(text.matches("  ;").count() + text.matches("\t;").count(), 0,
+            "empty-name symbol not declared: {text}");
     }
 
     #[test]

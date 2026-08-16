@@ -107,10 +107,41 @@ raw semantics / P-code-like IR
 ### 4. 保守表达
 当某些高层语义尚未完全恢复时，`PrintC` 应优先保持语义可追踪，而不是伪装成完整源码。
 
-### 5. 基于双 Pass 模型的局部变量声明 (Variable Declarations)
-为确保发射的 C 代码语法有效，`PrintC` 实现了精确的局部变量声明收集与发射机制：
-- **Pass 1 (Discovery Pass - 探测阶段)**：通过绑定一个空输出发射器（`NullEmit`）静默执行一遍函数体发射。此阶段的打印动作（如 `push_varnode`）会调用 `mark_varnode_used`，真实收集所有会在 C 文本中呈现的变量名、作用域（Space）、偏移量（Offset）以及类型名称。这能够准确拾取由复制传播、DCE 优化消除定义后悬空使用的 Unique 临时变量（如 `uVar_a0`）和被重命名为 `lVar_XX` 的物理寄存器变量。**2026-06-28 修复**：Pass 1 现在也遍历不可达子图（mirrors Pass 2 的 2c 循环），确保不可达块里的全局符号（如 glob_set 的 glob_buffer）也被收集进 extern 声明。
-- **Pass 2 (Final Emission - 正式发射阶段)**：在输出函数体（`{`）的开头，遍历探测到的 `used_varnode_types` 映射。通过 `is_declarable` 实施严格过滤，跳过非标识符表达式（如 `struct2->field_8` 等成员访问，只保留 `struct2` 基址本身）、已在签名中声明的入参、全局数据等，并在一行内合并声明。
+### 5. Symbol 驱动的局部变量声明 (PRINTC-SYMBOL-DECL-0001)
+声明完全由 Action 阶段建立的 `ScopeLocal` 符号表驱动，逐符号发射
+（对齐 `PrintC::emitLocalVarDecls`/`emitScopeVarDecls`/`emitVarDecl`，
+printc.cc:2260/2518/2497）：
+- **快照**：`doc_function` 通过 `snapshot_local_scope` 克隆 `fd.scope`
+  （ActionRestructureVarnode 构建、ActionNameVars 命名完成的 ScopeLocal）。
+  打印期不重构、不重命名、不重编号；无 scope 则无声明（无兜底）。
+- **遍历序**（emitScopeVarDecls cc:2535-2572）：先地址 map 后 dynamic
+  列表。地址序 =（空间序 Unique<Register<Stack，起始偏移，usepoint 子序）
+  —— `local_maptable_space_rank` 复现 x86-64 maptable 空间序；dynamic 按
+  插入序。过滤器：piece 跳过（Rugra 模型无 piece）、category != no_category
+  跳过（cc:2541，参数类 0 在签名里声明）、空名跳过（cc:2542）；
+  FunctionSymbol/LabSymbol 与多 entry 去重在 Rugra 模型中结构性不可达。
+  **注意**：map 分支没有 `$$undef` 过滤（那是 cc:2529 类别分支独有的）
+  ——`$$undef` 名的 no-category 符号会被原样声明；生产中
+  assignDefaultNames 在 Action 期（coreaction.cc:2998）保证这类名字不会
+  存活到打印。
+- **拼写**：`emit_local_symbol_decl` = begin_var_decl + push_type_start
+  （sym.dtype 逐字）+ display_name + push_type_end + end_var_decl；语句层
+  再加 tagLine 与 `;`（cc:2510-2516）。notempty 时块尾一个 tagLine
+  （cc:2277-2278）。
+- **打印期 renumbering 已删除**：`compact_name_for`/`compact_rename`/
+  `compact_base`/`scope_naming_base`/`preallocate_register_compact_names`/
+  `declaration_order`/`used_scope_symbols` 全部移除——oracle 没有任何打印
+  期重编号路径，命名权威在 Action 阶段（FUNCDATA-LINKSYMBOL-TYPED-0001
+  的 ActionNameVars + 符号→high 桥）。
+- **删除的 GLUE**：`doc_variable_decls_from_funcdata`（used_varnode_types
+  的 xunknown8 类型 + 硬编码 is_declarable 白名单 + long/int 兜底）、
+  打印期 `restructure_varnode` 兜底与二次 `assign_default_names`。
+  `used_varnode_names`/`used_varnode_types` 仍由 `mark_variable_used`
+  记录，仅供 doc_function 的 extern 全局扫描消费。
+- fixture：`tests/oracle/printc_symbol_decl_1204`（cover_rebuild，
+  pinned base=b6b61d5，overlay 含 LINKSYMBOL 4 文件 + printc.rs），
+  4 case（typed temporaries / in_RCX / dynamic 符号 / $$undef+类别跳过）
+  双侧逐字节 MATCH。
 
 ### vn_type_if_meaningful（2026-06-28 增强）
 如果 varnode 是 LOAD op 的输出，返回基于 size 的类型（int/long/byte）而非指针。
@@ -890,3 +921,35 @@ model is not present in Rugra's print layer):
   pinned base=a51e0c5）+ `tools/run_printc_format_oracle.sh`：六 case
   双侧逐字节 MATCH；端到端 curl 差分 skeleton 4530→3996、numbering
   126→6（差分基线换用真 12.0.4 golden `ghidra_curl_1204.c`）。
+
+### 2026-08-16：声明改 Symbol 驱动（PRINTC-SYMBOL-DECL-0001，吸收 PRINTC-SCOPE-RESTRUCT-0001）
+
+- **移植**：`emit_local_var_decls`（printc.cc:2260-2279，含 cc:2267-2275
+  子 scope 遍历——Rugra ScopeLocal 无子 scope，等价空遍）、
+  `emit_scope_local_var_decls`（cc:2518-2575，cat>=0 类别分支对局部声明
+  不可达，cc:2535-2572 全 map 遍历 + dynamic 列表）、
+  `emit_local_symbol_decl`/`emit_local_symbol_decl_statement`
+  （cc:2497-2516）。排序键 =（`local_maptable_space_rank` 空间序
+  Unique<Register<Stack，起始偏移，usepoint——None 最先，等价 addrtied 的
+  最小 EntrySubsort）；`snapshot_local_scope` 暴露 doc_function 的
+  scope 快照入口。
+- **删除**：`compact_name_for`（及其全部调用点）、`preallocate_register_compact_names`、
+  `doc_variable_decls_from_funcdata`（~170 行 GLUE：xunknown8 类型推断 +
+  is_declarable 白名单 + long/int 兜底 + stack_structs/used_scope_symbols
+  安全网）、`compact_rename`/`compact_base`/`scope_naming_base`/
+  `declaration_order`/`used_scope_symbols` 字段、打印期
+  `restructure_varnode` 兜底与二次 `assign_default_names`（doc_function
+  只克隆 fd.scope）。`test_compact_name_for` 由
+  `test_emit_local_var_decls_symbol_driven` 取代（断言 map 序、类别跳过、
+  空名跳过、$$undef 原样发射的不对称）。
+- **验证**：cargo test printc:: 8/8；E2E curl 124/124（76 decompiled，
+  0 失败）；同一上游（LINKSYMBOL WIP live）A/B 差分：numbering
+  258→0、skeleton 5356→4624、defects 0→0、local_ 0→0。
+  fixture `printc_symbol_decl_1204` 4 case 双侧逐字节 MATCH。
+- **已知残差**：符号 dtype 携带 VarnodeBank adapter 的 `xunknownN`/
+  `unknown` 名（TYPE-UNKNOWN-0001 域）时声明拼写不可编译——按铁律 1.4
+  不在打印层改名兜底；未链接符号的 body 引用仍走
+  `uVar_<offset>` 地址回退（LINKSYMBOL 桥覆盖缺口）；
+  `examples/curl_decompile.rs` 的 TYPEDEF_PREAMBLE 前缀契约约束了
+  typedef latch 的形状（不可在其五 typedef 之后追加新 typedef，否则
+  worker 协议失败）。
