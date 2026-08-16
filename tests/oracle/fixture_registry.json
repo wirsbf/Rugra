@@ -1206,6 +1206,38 @@
      "tools/run_heritage_flagfree_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "heritage_driver_switch_1204",
+   "description": "Canonical production driver: verbatim apply, space-keyed LocationMap, probe-based live collect window, idempotent re-entry, cross-space keys, late prev==2 absorption, refinement live re-collect",
+   "runner": [
+    "tools/run_heritage_driver_switch_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/heritage_driver_switch_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/heritage_driver_switch_1204.cc",
+     "rust_fixture": "tests/oracle/heritage_driver_switch_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_heritage_driver_switch_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/heritage.rs",
+     "src/coreaction.rs",
+     "src/funcdata.rs",
+     "tests/oracle/heritage_driver_switch_1204.*",
+     "tools/run_heritage_driver_switch_oracle.sh"
+    ]
+   }
   }
  ]
 }
