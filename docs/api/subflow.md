@@ -121,3 +121,27 @@ oracle fixture `tests/oracle/subflow_outvn_1204.*`（runner
 = 6 sext Some + 6 sext None 状态投影（Ghidra 无法运行 doTrace——null 解引用，
 NO_ORACLE 如实登记；Rust 侧断言 trace abort + IR 不变）+ 3 plain Some。
 <!-- annotation-pass: 2026-07-04 -->
+
+## get_replace_varnode / replace_input：setInputVarnode 移植（HELPF-NONFREE-NORMALIZE-0001，2026-08-17）
+
+`SubvariableFlow::getReplaceVarnode`（Ghidra subflow.cc:1316）在
+`useSameAddress` 判定后调用 `fd->setInputVarnode(rvn->replacement)`（cc:1343），
+`replaceInput`（cc:1258）在 totalReplace 后调用 `fd->deleteVarnode(&oldvn)`
+（cc:1264）。旧 Rugra 实现自述 "setInputVarnode is not ported" 而用原生
+`set_flags(INPUT)`——产生 oracle 不可能态 **INPUT-without-INSERT**
+（`VarnodeBank::setInput` varnode.cc:1358-1372 的 input⇒xref⇒INSERT 链），
+被 `Heritage::collect` 的 read 分支收下后于 `normalizeReadSize`
+（heritage.cc:383）→ `opSetOutput` 触发非自由 varnode fail-fast panic
+（HELPF-NONFREE-NORMALIZE-0001 登记域，watchpoint 背栈直证）。
+
+现改走 `fd.set_input_varnode`（`VarnodeBank::set_input_varnode` =
+funcdata_varnode.cc:340-373 的三步链移植，canonical 返回值回写
+`rvn.replacement`）；`replace_input` 在 totalReplace（先经 op_set_input
+剥离全部读者，funcdata_varnode.cc:1474-1489）后补 `fd.delete_varnode`
+（Ghidra 会传播 LowlevelError；`let _` 吞 Err 为登记残差——faithful 路径上
+totalReplace 后无 def/descend，不可达）。
+
+E2E：curl 74 decompiled/1 panic → **75 decompiled/0 panic**（helpf 0x3980
+恢复复出体）；skeleton/defects/numbering 全持平。独立复核（机制 C 邻域）
+全仓 grep 确认无共享 free varnode / raw `set_flags(INPUT)` 生产者残留。
+<!-- annotation-pass: 2026-08-17 -->

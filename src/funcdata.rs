@@ -128,41 +128,100 @@ fn varnode_use_point_offset(
 }
 
 // Ghidra: database.cc:2392 ScopeInternal::findOverlap
-/// First Symbol (in per-space range-map order, i.e. ascending start offset)
-/// whose storage overlaps `[offset, offset+size)` in the given space.
-/// Faithful to `ScopeInternal::findOverlap` (database.cc:2392-2404): Ghidra
-/// queries the space's EntryMap, so symbols mapped in other spaces (the
-/// linkSymbol register/unique/ram entries) never answer. Same-start ties keep
-/// Vec (creation) order; Ghidra's rangemap cannot hold two entries with an
-/// identical (first,last) pair from the fixture-visible paths.
-fn scope_local_find_overlap(
+/// First Symbol returned by `ScopeInternal::findOverlap`
+/// (database.cc:2392-2404) for the query `[offset, offset+size)` in the given
+/// space. The oracle consults the space's EntryMap (a
+/// `rangemap<SymbolEntry>`, rangemap.hh:65), whose multiset is keyed by
+/// `(last, subsort)` (rangemap.hh:88-91) and whose entries duplicate each
+/// common-refinement partition unit for every record covering it.
+/// `find_overlap(point, end)` (rangemap.hh:411-423) does
+/// `lower_bound(AddrRange(point))` — the first sub-range whose `last >=
+/// point`, i.e. the leftmost partition unit intersecting the query (the unit
+/// containing `point` when covered, else the first unit starting after
+/// `point`) — and returns it iff its `first <= end`. All records covering
+/// that unit cover the whole unit, so the returned record is the one with
+/// the smallest `SymbolEntry::getSubsort()` (database.cc:97-107): the
+/// minimal subsort (0,0) for address-tied symbols (empty uselimit,
+/// `Scope::addMap` database.cc:1149-1150), else `(useindex, useoffset)` of
+/// the first uselimit range — which for one binary's code space reduces to
+/// ordering by first use offset with address-tied always winning. Ties on
+/// an identical subsort keep Vec creation order, standing in for
+/// `std::multiset` insertion order of equivalent keys. Dynamic entries
+/// never enter the static map table (`addDynamicMapInternal`
+/// database.cc:1874-1886 pushes to `dynamicentry`, not maptable), so they
+/// are filtered first (F2, SCOPE-FINDOVERLAP-DYNAMIC-0001).
+pub fn scope_local_find_overlap(
     scope: &crate::varmap::ScopeLocal,
     space: AddressSpace,
     offset: u64,
     size: i32,
 ) -> Option<&crate::varmap::LocalSymbol> {
     let last = offset + size as u64 - 1;
-    scope
+    // Records in this space's EntryMap: (first, last) inclusive.
+    let candidates: Vec<&crate::varmap::LocalSymbol> = scope
         .symbols
         .iter()
+        .filter(|sym| !sym.is_dynamic)
         .filter(|sym| sym.space == space)
+        .filter(|sym| sym.size > 0)
         .filter(|sym| {
             let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
             sym.start <= last && offset <= sym_end
         })
-        .min_by_key(|sym| sym.start)
+        .collect();
+    // rangemap.hh:418: iter = tree.lower_bound(AddrRange(point)) — the first
+    // sub-range with last >= point, i.e. the leftmost partition unit
+    // intersecting the query (the unit containing `point` when covered,
+    // else the first unit starting after `point`). Units before it all end
+    // before `point`, so every address in [point, unit.first) is uncovered:
+    // the unit starts at the smallest address of [point,end] covered by any
+    // record — the minimum over intersecting records of max(start, point).
+    let hit_address = candidates
+        .iter()
+        .map(|sym| sym.start.max(offset))
+        .min()?;
+    // rangemap.hh:420-421: if ((*iter).first <= end) return iter; — among
+    // the records covering the unit (== records covering hit_address), the
+    // multiset order picks the smallest subsort; equal subsorts keep Vec
+    // order (std::multiset insertion order of equivalent keys).
+    candidates
+        .iter()
+        .filter(|sym| sym.start <= hit_address && hit_address < sym.start + sym.size as u64)
+        .min_by_key(|sym| entry_subsort_key(sym))
+        .copied()
+}
+
+// Ghidra: database.cc:97 SymbolEntry::getSubsort
+/// Sub-sort key of a SymbolEntry within one partition unit, faithful to
+/// `SymbolEntry::getSubsort` (database.cc:97-107) +
+/// `EntrySubsort::operator<` (database.hh:127-133): the minimal subsort
+/// (0,0) for address-tied storage (symbol flag set when the mapping has an
+/// empty uselimit, modeled by `usepoint == None`), else
+/// `(useindex, useoffset)` of the first uselimit range. Rugra's
+/// LocalSymbol.usepoint carries only the offset, and every static mapping's
+/// uselimit lives in the (single) code space, so the index component is
+/// uniform and modeled as the constant 1 (> the minimal index 0).
+fn entry_subsort_key(sym: &crate::varmap::LocalSymbol) -> (u8, u64) {
+    match sym.usepoint {
+        None => (0, 0),
+        Some(usepoint) => (1, usepoint),
+    }
 }
 
 // Ghidra: database.hh:597 Scope::inScope
 /// Is the entire `[offset, offset+size)` range owned by the scope's range
 /// tree. Faithful to `Scope::inScope` (database.hh:597) ->
-/// `RangeList::inRange`; the `usepoint` argument of the C++ form is ignored
-/// by the base implementation and is therefore omitted here.
+/// `RangeList::inRange`: the `usepoint` argument is part of the virtual
+/// signature (funcdata_varnode.cc:972-973 passes
+/// `vnexemplar->getUsePoint(*this)`) but the base implementation ignores
+/// it, and ScopeLocal defines no override — modeled by the underscore
+/// parameter.
 fn scope_local_in_scope(
     scope: &crate::varmap::ScopeLocal,
     _space: AddressSpace,
     offset: u64,
     size: i32,
+    _usepoint: Option<u64>,
 ) -> bool {
     let last = offset + size as u64 - 1;
     scope
@@ -2273,11 +2332,11 @@ impl Funcdata {
                 fl = f;
             } else {
                 // cc:971-983: could not find any symbol.
-                // cc:972: usepoint = vnexemplar->getUsePoint(*this) — the
-                // base Scope::inScope (database.hh:597) consults only the
-                // range tree, so the value itself never changes the outcome.
+                // cc:972: usepoint = vnexemplar->getUsePoint(*this) — fed to
+                // the (ignored) third parameter of Scope::inScope exactly as
+                // the oracle call shape (funcdata_varnode.cc:972-973).
                 let usepoint = varnode_use_point_offset(self, &vnexemplar);
-                if scope_local_in_scope(&scope, space, addr, size as i32) {
+                if scope_local_in_scope(&scope, space, addr, size as i32, usepoint) {
                     // cc:976: technically an error — there should be some kind
                     // of symbol if we are in scope.
                     fl = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
@@ -5121,16 +5180,23 @@ impl Funcdata {
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
 
-            // Create input varnodes. For non-constant inputs, reuse an existing
-            // free/input varnode at the same (space, offset, size) if one exists.
-            // This ensures all reads of the same register (e.g. RSP) share ONE
-            // varnode, so its `descend` list accumulates all readers — faithful
-            // to Ghidra's varnode identity model (VarnodeBank::xref dedup).
+            // Create input varnodes. Faithful to PcodeEmitFd::dump
+            // (funcdata.cc:878-908: newVarnode -> opSetInput per
+            // input reference, cc:904-907): every read gets a FRESH free Varnode —
+            // inject_raw_ops_single (the single-op adapter) already does this,
+            // and Ghidra's model forbids the previous dedup: a free varnode
+            // with a second reader makes Varnode::addDescend throw
+            // "Free varnode has multiple descendants" (varnode.cc:331-340).
+            // Pre-merging same-register reads also bypassed Heritage: collect
+            // classified the merged object as one read with 2+ descends,
+            // which refineRead/loneDescend and normalizeReadSize's
+            // opSetOutput("not free") cannot process (HELPF-NONFREE-
+            // NORMALIZE-0001). Read-to-write linking is Heritage's job.
             for input_raw in raw.inputs() {
                 let in_vn = if input_raw.space == AddressSpace::Const {
                     self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank.find_or_create_input_space(
+                    self.vbank.create_with_space(
                         input_raw.size,
                         input_raw.space,
                         input_raw.offset,

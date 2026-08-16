@@ -68,10 +68,11 @@
 //!     `try_call_pull`/`try_call_return_push` conservatively skip and log it.
 //!   - `PcodeOp::get_halt_type` (`try_return_pull`) is not available; the
 //!     artificial-halt guard is conservatively skipped and logged.
-//!   - `Funcdata::set_input_varnode`, `delete_varnode`, `copy_symbol_if_valid`,
-//!     `Address::is_big_endian`, and Architecture options (`aggressive_ext_trim`,
-//!     `split_datatype_config`) are not threaded through here; the relevant
-//!     spots emulate conservatively and log it.
+//!   - `copy_symbol_if_valid`, `Address::is_big_endian`, and Architecture
+//!     options (`aggressive_ext_trim`, `split_datatype_config`) are not
+//!     threaded through here; the relevant spots emulate conservatively and
+//!     log it. (`Funcdata::set_input_varnode`/`delete_varnode` ARE now used
+//!     by `replace_input`/`get_replace_varnode`, subflow.cc:1262/1264/1343.)
 //!   - `SubfloatFlow` / `LaneDivide` / `SplitFlow` (`TransformManager`
 //!     subclasses) are not ported; `RuleSubfloatConvert` and the
 //!     `RuleSplitFlow` rewrite are therefore documented TODOs.
@@ -2306,17 +2307,21 @@ impl SubvariableFlow {
     fn replace_input(fd: &mut Funcdata, rvn: usize, newvarlist: &mut [ReplaceVarnode]) {
         let size = newvarlist[rvn].vn.as_ref().unwrap().read().unwrap().get_size();
         let newvn = fd.new_unique(size);
-        // Ghidra: newvn = fd->setInputVarnode(newvn);
-        // setInputVarnode is not ported to Rugra's Funcdata. We mark the new
-        // varnode as an input conservatively. Logged at module top.
-        {
-            let mut n = newvn.write().unwrap();
-            n.set_flags(crate::varnode::varnode_flags::INPUT);
-        }
+        // cc:1262: newvn = fd->setInputVarnode(newvn) — the canonical bank
+        // transition (transition_input -> xref -> INSERT). The former raw
+        // `set_flags(INPUT)` left the varnode INPUT-without-INSERT outside
+        // the def-tree bookkeeping, an oracle-impossible state (Ghidra:
+        // input => VarnodeBank::setInput => xref => insert,
+        // varnode.cc:1358-1374) that Heritage::collect later classified as
+        // a read and normalizeReadSize's opSetOutput rejected
+        // (HELPF-NONFREE-NORMALIZE-0001).
+        let newvn = fd.set_input_varnode(newvn);
         let oldvn = newvarlist[rvn].vn.clone().unwrap();
         fd.total_replace(&oldvn, newvn.clone());
-        // fd->deleteVarnode(rvn->vn) — Rugra has no deleteVarnode; the old
-        // varnode simply becomes unreferenced. Logged at module top.
+        // cc:1264: fd->deleteVarnode(rvn->vn) — totalReplace severed every
+        // reader, so the old varnode has no descendants and destroys
+        // cleanly (Funcdata::deleteVarnode -> VarnodeBank::destroy).
+        let _ = fd.delete_varnode(&oldvn);
         newvarlist[rvn].vn = Some(newvn);
     }
 
@@ -2427,7 +2432,7 @@ impl SubvariableFlow {
                 mask == rvn_mask
             }
         };
-        let new_vn = if use_same {
+        let mut new_vn = if use_same {
             let v = vn.read().unwrap();
             // getReplacementAddress (subflow.cc:1297-1308): the new Varnode
             // lives at the ORIGINAL varnode's address (+sa), so it inherits
@@ -2449,8 +2454,12 @@ impl SubvariableFlow {
             fd.new_unique(flowsize as usize)
         };
         if is_input {
-            // fd->setInputVarnode(rvn->replacement) — not ported. Mark input.
-            new_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+            // cc:1343: rvn->replacement = fd->setInputVarnode(rvn->replacement)
+            // — canonical transition (overlap dedup + xref INSERT), replacing
+            // the former raw `set_flags(INPUT)` that produced the
+            // oracle-impossible INPUT-without-INSERT state
+            // (HELPF-NONFREE-NORMALIZE-0001).
+            new_vn = fd.set_input_varnode(new_vn);
         }
         newvarlist[rvn].replacement = Some(new_vn.clone());
         new_vn
