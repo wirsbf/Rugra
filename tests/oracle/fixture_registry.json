@@ -1797,6 +1797,68 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "scope_fake_input_symbols_1204",
+   "description": "ScopeLocal::fakeInputSymbols paramrange/group/wraparound observations",
+   "runner": [
+    "tools/run_scope_fake_input_symbols_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/scope_fake_input_symbols_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/scope_fake_input_symbols_1204.cc",
+     "rust_fixture": "tests/oracle/scope_fake_input_symbols_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_scope_fake_input_symbols_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varmap.rs",
+     "tests/oracle/scope_fake_input_symbols_1204.*",
+     "tools/run_scope_fake_input_symbols_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "xml_text_dom_1204",
+   "description": "xml.cc XML text scanner/grammar/DocumentStorage observations",
+   "runner": [
+    "tools/run_xml_text_dom_oracle.sh"
+   ],
+   "timeout_seconds": 1200,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/xml_text_dom_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/xml_text_dom_1204.cc",
+     "rust_fixture": "tests/oracle/xml_text_dom_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_xml_text_dom_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/marshal.rs",
+     "tests/oracle/xml_text_dom_1204.*",
+     "tools/run_xml_text_dom_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }
