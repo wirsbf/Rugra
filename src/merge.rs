@@ -1275,7 +1275,39 @@ impl Merge {
                 let mut second = high2.write().unwrap();
                 first.merge_internal(&mut second, isspeculative);
             }
-            (Some(_), Some(_)) => return false,
+            (Some(piece1), Some(piece2)) => {
+                // Oracle (variable.cc:699-711): with BOTH HighVariables in a
+                // VariablePiece group, a speculative merge is a LowlevelError
+                // ("Trying speculatively merge variables in separate groups",
+                // :701) — unreachable through Merge::merge callers because
+                // mergeTestAdjacent (merge.cc:208-209) rejects both-piece
+                // candidates for every speculative path, and the one direct
+                // HighVariable::merge caller (buildDominantCopy, merge.cc:1236)
+                // passes the freshly allocated dominant-COPY unique, which has
+                // no piece. The non-speculative oracle path is
+                // piece->mergeGroups + pairwise mergeInternal +
+                // markIntersectionDirty (:702-711) — also unreachable in
+                // Rugra today: nothing populates HighVariable.piece
+                // (Merge::group_partials is a named no-op, no protoPartial
+                // registry, merge.cc:967 port at group_partials below), so no
+                // merge_highs caller can present two piece-owning highs.
+                // debug_assert pins both oracle contracts; release builds keep
+                // the pre-existing conservative skip (return false, no
+                // data-flow change) rather than a wrong merge. When the
+                // piece/group machinery is ported, replace this arm with the
+                // mergeGroups loop (VariablePiece::merge_groups exists).
+                debug_assert!(
+                    !isspeculative,
+                    "Trying speculatively merge variables in separate groups (variable.cc:701)"
+                );
+                debug_assert!(
+                    false,
+                    "merge_highs reached the (Some,Some) piece arm — unreachable while \
+                     group_partials is a no-op; port the variable.cc:702-711 mergeGroups path"
+                );
+                let _ = (&piece1, &piece2);
+                return false;
+            }
         }
         let moved_keys: std::collections::HashSet<usize> = moved_instances
             .iter()
@@ -1696,12 +1728,16 @@ impl Merge {
     /// that owns ≥ 2 distinct SymbolEntries (the `is_multi_entry` test,
     /// `whole_count > 1`), merge all its Varnodes into one HighVariable.
     ///
-    /// Unlike Ghidra we cannot `snip` the data flow to resolve cover
-    /// intersections (Rugra has no trim machinery), so the merge is attempted
-    /// *speculatively* via `merge_speculative`: Varnodes whose covers make them
-    /// simultaneously live are left in separate HighVariables rather than
-    /// producing an incorrect union. This mirrors Ghidra's
-    /// `mergeTestRequired` failure path (`newHigh->setUnmerged()`).
+    /// Per-varnode merge attempts follow merge.cc:930-961 exactly:
+    /// `testCache.updateHigh` on anchor and candidate, the
+    /// `mergeTestRequired(high,newHigh)` gate, then
+    /// `merge(high,newHigh,false)` (anchor survives) — each failure marks the
+    /// Symbol via setMergeProblems (`dispflags |= MERGE_PROBLEMS`,
+    /// database.hh:240) and the candidate via setUnmerged
+    /// (variable.hh:168), counts a conflict, and the run closes with Ghidra's
+    /// exact warningHeader text (merge.cc:950-961). Varnodes whose covers make
+    /// them simultaneously live are left in separate HighVariables (merge
+    /// returns false) rather than producing an incorrect union.
     pub fn merge_multi_entry(&mut self, fd: &mut Funcdata) {
         use crate::address::Address;
         use std::collections::HashMap;
@@ -1713,17 +1749,22 @@ impl Merge {
         // count DISTINCT whole-sized entries per Symbol — mirroring Ghidra's
         // `symbol->numEntries()` loop (merge.cc:916-928) which skips piece
         // entries whose size != the Symbol's whole type size.
+        // The owning Symbol Arc is kept in the value (keyed by its ptr) so the
+        // mergeTestRequired failure path can setMergeProblems on it.
         let mut by_symbol: HashMap<
             usize, // Symbol Arc ptr
-            Vec<(Address, usize, Arc<RwLock<Varnode>>)>, // (entry addr, size, vn)
+            (
+                Arc<RwLock<crate::database::Symbol>>,
+                Vec<(Address, usize, Arc<RwLock<Varnode>>)>, // (entry addr, size, vn)
+            ),
         > = HashMap::new();
 
         for vn_ref in &fd.vbank.loc_tree {
             let vn_arc = vn_ref.0.clone();
-            // Resolve (symbol ptr, entry addr, entry size) or skip. A Varnode
+            // Resolve (symbol Arc, entry addr, entry size) or skip. A Varnode
             // with no mapentry is not a symbol storage location and never
             // participates in multi-entry merging.
-            let (sym_ptr, entry_addr, entry_size) = {
+            let (sym_arc, entry_addr, entry_size) = {
                 let vn = vn_arc.read().unwrap();
                 let live = vn.is_input()
                     || self.live_set.contains(&(std::sync::Arc::as_ptr(&vn_arc) as usize));
@@ -1735,23 +1776,34 @@ impl Merge {
                     None => continue, // No symbol mapping: not a symbol entry.
                 };
                 let me = me.read().unwrap();
-                (
-                    std::sync::Arc::as_ptr(&me.get_symbol()) as usize,
-                    me.addr,
-                    me.size as usize,
-                )
+                (me.get_symbol(), me.addr, me.size as usize)
             };
             by_symbol
-                .entry(sym_ptr)
-                .or_default()
+                .entry(std::sync::Arc::as_ptr(&sym_arc) as usize)
+                .or_insert_with(|| (sym_arc.clone(), Vec::new()))
+                .1
                 .push((entry_addr, entry_size, vn_arc));
         }
 
         // For each Symbol group with ≥ 2 distinct whole-sized entries, merge
-        // all its Varnodes into one HighVariable. Faithful to merge.cc:920-948
+        // all its Varnodes into one HighVariable. Faithful to merge.cc:920-961
         // (the per-SymbolEntry loop that accumulates mergeList, then the
-        // merge(anchor, vn, false) loop).
-        for (_, group) in by_symbol.drain() {
+        // mergeTestRequired/merge loop with setMergeProblems/setUnmerged
+        // accounting and the warningHeader report).
+        // Ghidra iterates symbols in SymbolNameTree order — (name, nameDedup)
+        // (database.hh:366-370); HashMap iteration is arbitrary, so collect
+        // and sort by the same comparator for a deterministic traversal.
+        let mut groups: Vec<(Arc<RwLock<crate::database::Symbol>>, Vec<(Address, usize, Arc<RwLock<Varnode>>)>)> =
+            by_symbol
+                .into_iter()
+                .map(|(_, (sym, entries))| (sym, entries))
+                .collect();
+        groups.sort_by(|a, b| {
+            let sa = a.0.read().unwrap();
+            let sb = b.0.read().unwrap();
+            (sa.name.clone(), sa.name_dedup).cmp(&(sb.name.clone(), sb.name_dedup))
+        });
+        for (sym_arc, group) in &groups {
             // Distinct entries (by addr) — Ghidra counts whole-sized entries.
             let distinct_entries: std::collections::HashSet<u64> = group
                 .iter()
@@ -1764,13 +1816,72 @@ impl Merge {
             // attempts merge(anchor, vn, false) for each subsequent vn. We
             // take the first vn as the anchor and merge each other vn's High.
             let group: Vec<Arc<RwLock<Varnode>>> =
-                group.into_iter().map(|(_, _, vn)| vn).collect();
-            let anchor_arc = group[0].clone();
-            for vn_arc in group.into_iter().skip(1) {
-                self.merge_speculative_by_vn(&anchor_arc, &vn_arc, false);
+                group.iter().map(|(_, _, vn)| vn.clone()).collect();
+            // merge.cc:930-931: high = mergeList[0]->getHigh();
+            // testCache.updateHigh(high);
+            let Some(anchor_high) = group[0].read().unwrap().high.clone() else {
+                continue;
+            };
+            self.type_test_cache.update_high(&anchor_high);
+            let mut merge_count: i32 = 0;
+            let mut conflict_count: i32 = 0;
+            for vn_arc in group.iter().skip(1) {
+                // merge.cc:933-935: newHigh = mergeList[i]->getHigh();
+                // if (newHigh == high) continue; testCache.updateHigh(newHigh);
+                let Some(new_high) = vn_arc.read().unwrap().high.clone() else {
+                    continue;
+                };
+                if Arc::ptr_eq(&new_high, &anchor_high) {
+                    continue; // Varnodes already merged
+                }
+                self.type_test_cache.update_high(&new_high);
+                // merge.cc:936-941: required-test gate — on failure mark the
+                // symbol and the unmerged high, count the conflict, continue.
+                if !self.merge_test_required(&anchor_high, &new_high) {
+                    sym_arc
+                        .write()
+                        .unwrap()
+                        .dispflags |= crate::database::display_flags::MERGE_PROBLEMS;
+                    new_high.write().unwrap().set_unmerged();
+                    conflict_count += 1;
+                    continue;
+                }
+                // merge.cc:942-947: attempt the (non-speculative) merge —
+                // ANCHOR survives (merge(high, newHigh, false)); failure marks
+                // the symbol/high and counts the conflict too.
+                if !self.merge_speculative(&anchor_high, &new_high, false) {
+                    sym_arc
+                        .write()
+                        .unwrap()
+                        .dispflags |= crate::database::display_flags::MERGE_PROBLEMS;
+                    new_high.write().unwrap().set_unmerged();
+                    conflict_count += 1;
+                    continue;
+                }
+                merge_count += 1;
+            }
+            // merge.cc:950-961: report unfused symbols via warningHeader.
+            // skipCount is always 0 here: Rugra reconstructs the symbol list
+            // from Varnodes' mapentries, so SymbolEntries with no linked
+            // Varnode (Ghidra's skipCount source) are invisible upstream of
+            // this loop (no ScopeLocal multi-entry registry).
+            let skip_count = 0;
+            if skip_count != 0 || conflict_count != 0 {
+                let mut msg = String::from("Unable to");
+                if merge_count != 0 {
+                    msg.push_str(" fully");
+                }
+                msg.push_str(" merge symbol: ");
+                msg.push_str(sym_arc.read().unwrap().get_name());
+                if skip_count > 0 {
+                    msg.push_str(" -- Some instance varnodes not found.");
+                }
+                if conflict_count > 0 {
+                    msg.push_str(" -- Some merges are forbidden");
+                }
+                fd.warning_header(&msg);
             }
         }
-
         self.detach(fd);
     }
 
@@ -1849,10 +1960,38 @@ impl Merge {
         self.detach(fd);
     }
 
+    // RUGRA-GLUE: Funcdata::newUnique's assignHigh half (funcdata_varnode.cc:89).
+    /// Ghidra's `Funcdata::newUnique` assigns a HighVariable to the fresh
+    /// unique Varnode immediately (`vbank.createUnique` + `assignHigh`,
+    /// funcdata_varnode.cc:88-89). Rugra's `Funcdata::new_unique` leaves the
+    /// Varnode high-less, so the merge-family trim paths that allocate
+    /// uniques (`allocate_copy_trim`, `build_dominant_copy`'s dominant COPY)
+    /// wire the High here exactly as `set_high_level` does — otherwise the
+    /// follow-up merges (mergeIndirect merge.cc:879, mergeOp :766,
+    /// buildDominantCopy :1236) silently no-op on a None high, and mergeOp's
+    /// phase-2 cover loop (:745) treats the trim input as a hard failure and
+    /// over-trims.
+    fn wire_unique_high(fd: &Funcdata, out_vn: &Arc<RwLock<Varnode>>) {
+        if out_vn.read().unwrap().high.is_some() {
+            return;
+        }
+        let dt = out_vn.read().unwrap().v_type.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "undefined".to_string(),
+                    out_vn.read().unwrap().size,
+                    crate::type_system::datatype::TypeMetatype::Unknown,
+                ),
+            ))
+        });
+        let high = Arc::new(RwLock::new(HighVariable::new(dt)));
+        high.write().unwrap().add_instance(out_vn.clone());
+        out_vn.write().unwrap().high = Some(high);
+        let _ = fd;
+    }
+
     // Ghidra: merge.cc:411 Merge::allocateCopyTrim
-    /// Allocate a COPY op (with a unique-space output) that copies `in_vn`,
-    /// inserted to facilitate a forced merge (a "copy trim"). The new COPY is
-    /// recorded in `copy_trims` for later processing by `process_copy_trims`.
+    /// Allocate COPY PcodeOp designed to trim an overextended Cover.
     /// Faithful to `Merge::allocateCopyTrim` (merge.cc:411-434).
     ///
     /// **Union resolution path omitted** (merge.cc:417-428): Ghidra resolves
@@ -1871,6 +2010,7 @@ impl Merge {
         let size = in_vn.read().unwrap().size;
         // new_unique returns a free Varnode; set as COPY output.
         let out_vn = fd.new_unique(size);
+        Self::wire_unique_high(fd, &out_vn);
         fd.op_set_output(&copy_op, out_vn);
         fd.op_set_input(&copy_op, in_vn.clone(), 0);
         self.copy_trims.push(copy_op.clone());
@@ -2301,67 +2441,230 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:783 Merge::collectInputs
-    /// Collect Varnode instances of `high` that are inputs to `op` or its
-    /// predecessor chain (across INDIRECTs). Faithful to `Merge::collectInputs`
-    /// (merge.cc:783-809). Used by snip_output_interference.
+    /// Collect (op, slot) pairs of Varnode instances of `high` (or of pieces in
+    /// `high`'s VariableGroup) that are inputs to `op` and to the chain of
+    /// INDIRECT ops immediately preceding it. Faithful to `Merge::collectInputs`
+    /// (merge.cc:783-802): the walk starts at the effect op and continues over
+    /// `previousOp` while that predecessor is an INDIRECT. Annotation inputs are
+    /// skipped (merge.cc:792). Used by snip_output_interference.
     fn collect_inputs(
         &self,
         fd: &Funcdata,
         high: &Arc<RwLock<HighVariable>>,
         op: &crate::op::PcodeOpRef,
-    ) -> Vec<crate::op::PcodeOpRef> {
-        let _ = fd;
+    ) -> Vec<(crate::op::PcodeOpRef, usize)> {
+        // merge.cc:786-788: group = high->piece ? high->piece->getGroup() : null
+        let group = high
+            .read()
+            .unwrap()
+            .piece
+            .as_ref()
+            .and_then(|p| p.read().unwrap().group.clone());
         let mut oplist = Vec::new();
-        // Ghidra walks previousOp chain. Simplified: just check op's inputs.
-        let o = op.0.read().unwrap();
-        for in_vn in &o.inrefs {
-            let in_high = in_vn.read().unwrap().high.clone();
-            if let Some(ih) = in_high {
-                if Arc::ptr_eq(&ih, high) {
-                    oplist.push(crate::op::PcodeOpRef(op.0.clone()));
-                    break;
+        let mut cur = Some(op.clone());
+        loop {
+            // merge.cc:790-797: scan all input slots of the current op.
+            let Some(o_ref) = cur else { break };
+            let num = o_ref.0.read().unwrap().num_input();
+            for i in 0..num {
+                let Some(in_vn) = o_ref.0.read().unwrap().get_in(i).cloned() else {
+                    continue;
+                };
+                let (is_annotation, test_high) = {
+                    let vn = in_vn.read().unwrap();
+                    (vn.is_annotation(), vn.high.clone())
+                };
+                if is_annotation {
+                    continue;
+                }
+                // Ghidra: testHigh == high || (testHigh->piece != 0 &&
+                // testHigh->piece->getGroup() == group)  (merge.cc:793-796).
+                // A Varnode with no High in Rugra cannot match either arm.
+                let Some(test_high) = test_high else { continue };
+                if Arc::ptr_eq(&test_high, high) {
+                    oplist.push((o_ref.clone(), i));
+                    continue;
+                }
+                if let Some(group) = &group {
+                    let same_group = test_high
+                        .read()
+                        .unwrap()
+                        .piece
+                        .as_ref()
+                        .and_then(|p| p.read().unwrap().group.clone())
+                        .map(|g| Arc::ptr_eq(&g, group))
+                        .unwrap_or(false);
+                    if same_group {
+                        oplist.push((o_ref.clone(), i));
+                    }
                 }
             }
+            // merge.cc:798-801: op = op->previousOp(); break when null or the
+            // predecessor is not an INDIRECT.
+            let prev = {
+                let o = o_ref.0.read().unwrap();
+                o.previous_op_in_block(&fd.obank)
+            };
+            cur = match prev {
+                Some(p) if p.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_INDIRECT => {
+                    Some(p)
+                }
+                _ => break,
+            };
         }
         oplist
     }
 
     // Ghidra: merge.cc:811 Merge::snipOutputInterference
-    /// Check if INDIRECT op's output interferes with inputs of the op causing
-    /// the effect, and snip if so. Faithful to `Merge::snipOutputInterference`
-    /// (merge.cc:811-844). Simplified: if interference detected, trimOpOutput.
+    /// Snip instances of the INDIRECT output's HighVariable that are also
+    /// inputs to the underlying PcodeOp (the op causing the indirect effect).
+    /// Faithful to `Merge::snipOutputInterference` (merge.cc:811-839): collect
+    /// the offending (op, slot) reads via collectInputs, sort them grouped by
+    /// HighVariable (PcodeOpNode::compareByHigh, expression.hh:54 — pointer
+    /// order), allocate ONE COPY trim per distinct HighVariable (merge.cc:830
+    /// NOTE: all inputs to the effect op that are instances of the output high
+    /// must intersect, so they are traceable via COPY to the same root), insert
+    /// it before the first read and redirect every read in the group to its
+    /// output.
     fn snip_output_interference(&mut self, fd: &mut Funcdata, indop: &crate::op::PcodeOpRef) -> bool {
+        // merge.cc:814: op = PcodeOp::getOpFromConst(indop->getIn(1)->getAddr())
+        let effect_op = {
+            let o = indop.0.read().unwrap();
+            o.get_in(1).and_then(|vn| fd.get_op_from_const(vn))
+        };
+        let Some(effect_op) = effect_op else { return false };
         let out_high = {
             let o = indop.0.read().unwrap();
             o.output.as_ref().and_then(|v| v.read().unwrap().high.clone())
         };
         let Some(out_high) = out_high else { return false };
-        // Get the op causing the INDIRECT effect (in(1) via getOpFromConst).
-        let effect_op = {
-            let o = indop.0.read().unwrap();
-            o.get_in(1).and_then(|vn| fd.get_op_from_const(vn))
-        };
-        if let Some(eff) = effect_op {
-            let inputs = self.collect_inputs(fd, &out_high, &eff);
-            if !inputs.is_empty() {
-                // Interference: the INDIRECT output's high is also an input to
-                // the effect op. Trim the output to resolve.
-                self.trim_op_output(fd, indop);
-                return true;
+        // merge.cc:817-820
+        let mut correctable = self.collect_inputs(fd, &out_high, &effect_op);
+        if correctable.is_empty() {
+            return false;
+        }
+        // merge.cc:822: sort by PcodeOpNode::compareByHigh — compares the
+        // reads' HighVariables by POINTER identity (HighVariable* <). Rust
+        // compares Arc allocation addresses; the sort is deterministic.
+        correctable.sort_by(|a, b| {
+            let high_ptr = |e: &(crate::op::PcodeOpRef, usize)| {
+                e.0 .0
+                    .read()
+                    .unwrap()
+                    .get_in(e.1)
+                    .and_then(|v| v.read().unwrap().high.clone())
+                    .map(|h| std::sync::Arc::as_ptr(&h) as usize)
+                    .unwrap_or(0)
+            };
+            high_ptr(a).cmp(&high_ptr(b))
+        });
+        // merge.cc:823-837: one snip COPY per distinct HighVariable; every
+        // read in the group is redirected to that COPY's output.
+        let mut snipop: Option<crate::op::PcodeOpRef> = None;
+        let mut cur_high: Option<usize> = None;
+        for (insertop, slot) in correctable {
+            let vn = insertop.0.read().unwrap().get_in(slot).cloned();
+            let Some(vn) = vn else { continue };
+            let vn_high = vn.read().unwrap().high.clone();
+            let vn_high_ptr = vn_high
+                .as_ref()
+                .map(|h| std::sync::Arc::as_ptr(h) as usize);
+            if vn_high_ptr != cur_high {
+                // merge.cc:832-834
+                let insert_addr = insertop.0.read().unwrap().get_addr();
+                let snip = self.allocate_copy_trim(fd, &vn, insert_addr, &insertop);
+                fd.op_insert_before(&snip, &insertop);
+                snipop = Some(snip);
+                cur_high = vn_high_ptr;
+            }
+            // merge.cc:836
+            if let Some(snip) = &snipop {
+                let snip_out = snip.0.read().unwrap().output.clone();
+                if let Some(out) = snip_out {
+                    fd.op_set_input(&insertop, out, slot);
+                }
             }
         }
-        false
+        true
     }
 
     // Ghidra: merge.cc:846 Merge::mergeIndirect
     /// Force-merge the input and output of an INDIRECT op. Faithful to
-    /// `Merge::mergeIndirect` (merge.cc:846-887). Checks for output
-    /// interference (snipOutputInterference) then delegates to mergeOp logic.
+    /// `Merge::mergeIndirect` (merge.cc:846-882).
+    ///
+    /// If the output is NOT address forced, merge like a MULTIEQUAL
+    /// (mergeOp, :850-853). Otherwise the value must be present at the address
+    /// BEFORE the indirect effect op takes place (:843-844): first try
+    /// `mergeTestRequired` + a merge with the INPUT HighVariable as the
+    /// survivor — `merge(invn0->getHigh(), outvn->getHigh(), false)`
+    /// (:857, INPUT side absorbs the output, opposite direction from
+    /// mergeOp's output-survives merge). If that fails, snip reads of the
+    /// output high that interfere with the effect op's inputs
+    /// (snipOutputInterference, :862) and retry the merge (:864-867). As a
+    /// last resort snip the INDIRECT itself with allocateCopyTrim (:871),
+    /// redirect input 0 through the trim COPY, and re-merge; Ghidra throws
+    /// LowlevelError "Unable to merge address forced indirect" if the final
+    /// merge fails (:878-881) — Rugra logs to stderr instead of aborting the
+    /// pipeline (established merge.rs throw policy, cf. merge_op :765-769).
     fn merge_indirect(&mut self, fd: &mut Funcdata, indop: &crate::op::PcodeOpRef) {
-        // Ghidra: snipOutputInterference first (merge.cc:862).
-        self.snip_output_interference(fd, indop);
-        // Then mergeOp (handles input[0] with output).
-        self.merge_op(fd, indop);
+        // merge.cc:849-853: !isAddrForce → plain MULTIEQUAL-style mergeOp.
+        let out_vn = indop.0.read().unwrap().output.clone();
+        let Some(out_vn) = out_vn else { return };
+        if !out_vn.read().unwrap().is_addr_force() {
+            self.merge_op(fd, indop);
+            return;
+        }
+        // merge.cc:855-859: first merge attempt — INPUT high survives.
+        let invn0 = indop.0.read().unwrap().get_in(0).cloned();
+        let Some(invn0) = invn0 else { return };
+        let out_high = out_vn.read().unwrap().high.clone();
+        let in_high = invn0.read().unwrap().high.clone();
+        let (Some(out_high), Some(in_high)) = (out_high, in_high) else { return };
+        if self.merge_test_required(&out_high, &in_high) {
+            if self.merge_speculative(&in_high, &out_high, false) {
+                return;
+            }
+        }
+        // merge.cc:860-868: snip output interference, then retry the merge.
+        if self.snip_output_interference(fd, indop) {
+            if self.merge_test_required(&out_high, &in_high) {
+                if self.merge_speculative(&in_high, &out_high, false) {
+                    return;
+                }
+            }
+        }
+        // merge.cc:870-877: snip the INDIRECT itself.
+        let indop_addr = indop.0.read().unwrap().get_addr();
+        let newop = self.allocate_copy_trim(fd, &invn0, indop_addr, indop);
+        // merge.cc:872-875: SymbolEntry union-resolution inheritance
+        // (needsResolution) — omitted conservatively: Rugra has no
+        // inheritResolution-on-trim infrastructure yet (same omission as
+        // allocate_copy_trim, merge.cc:417-428).
+        let newop_out = newop.0.read().unwrap().output.clone();
+        if let Some(out) = newop_out {
+            fd.op_set_input(indop, out, 0);
+        }
+        fd.op_insert_before(&newop, indop);
+        // merge.cc:878-881: final merge attempt; Ghidra throws on failure.
+        let in0_high = indop
+            .0
+            .read()
+            .unwrap()
+            .get_in(0)
+            .and_then(|v| v.read().unwrap().high.clone());
+        if let Some(in0_high) = in0_high {
+            let out_high_now = out_vn.read().unwrap().high.clone();
+            let ok = match out_high_now {
+                Some(oh) => {
+                    self.merge_test_required(&oh, &in0_high)
+                        && self.merge_speculative(&in0_high, &oh, false)
+                }
+                None => false,
+            };
+            if !ok {
+                eprintln!("[MERGE] Unable to merge address forced indirect (merge.cc:881)");
+            }
+        }
     }
 
     // Ghidra: merge.cc:1045 Merge::compareCopyByInVarnode
@@ -2496,6 +2799,9 @@ impl Merge {
             fd.op_set_opcode(&new_op, crate::opcodes::OpCode::CPUI_COPY);
             let sz = root_vn.read().unwrap().size;
             let uv = fd.new_unique(sz);
+            // Ghidra data.newUnique assigns the High (funcdata_varnode.cc:89);
+            // required for the :1236 merge of domVn's high below.
+            Self::wire_unique_high(fd, &uv);
             fd.op_set_output(&new_op, uv.clone());
             fd.op_set_input(&new_op, root_vn.clone(), 0);
             fd.op_insert_end(&new_op, &dom_bl);
@@ -2610,13 +2916,25 @@ impl Merge {
                 }
             }
         }
-        // If count > 0 and domCopy is new, merge domVn's high into target.
+        // merge.cc:1235-1237: if (count > 0 && domCopyIsNew)
+        //   high->merge(domVn->getHigh(), (HighIntersectTest *)0, true);
+        // Direct HighVariable::merge with a NULL testCache: NO
+        // testCache.intersection precheck (non-intersection was already
+        // proven per-COPY via bCover/aCover above) and NO
+        // moveIntersectTests. Rust merge_speculative would do both
+        // (Merge::merge, merge.cc:1569-1571) — so call the HighVariable::merge
+        // absorption port (merge_highs) directly. Its trailing
+        // update_high_cover matches oracle content in the clean case
+        // (dirty-gated no-op, variable.cc:327) and eagerly rebuilds in the
+        // dirty case where Ghidra defers to the next lazy updateHigh —
+        // identical rebuilt cover, earlier timing.
         if count > 0 && dom_copy_is_new {
             let dom_high = dom_vn.read().unwrap().high.clone();
             if let Some(dh) = dom_high {
-                // high->merge(domVn->getHigh(), nullptr, true) — target
-                // high survives, speculative merge classes.
-                let _ = self.merge_speculative(high, &dh, true);
+                // variable.cc:678: if (tv2 == this) return;
+                if !Arc::ptr_eq(high, &dh) {
+                    let _ = self.merge_highs(high, &dh, true);
+                }
             }
         }
     }

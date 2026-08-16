@@ -151,13 +151,66 @@ Naming follows Ghidra conventions:
 
 Merge adjacent varnodes (placeholder for future enhancement)
 
-### `pub fn merge_multi_entry(&mut self, _fd: &mut Funcdata)`
+### `pub fn merge_multi_entry(&mut self, fd: &mut Funcdata)`
 
-Merge multi-entry varnodes (placeholder for future enhancement)
+对齐 locked Ghidra 12.0.4 `Merge::mergeMultiEntry`（`merge.cc:908-963`）。
+按拥有 ≥2 个全尺寸 SymbolEntry 的 Symbol 重建分组（Rugra 从 Varnode 的
+mapentry 反向指针重建；Symbol 按 SymbolNameTree 顺序 `(name, nameDedup)`
+排序遍历，database.hh:366-370），对每个符号以 `mergeList[0]` 的 High 为
+anchor：`testCache.updateHigh(anchor/newHigh)`（:930-935）→
+`mergeTestRequired(anchor, newHigh)` 门（:936-941）失败时 `setMergeProblems`
+（`dispflags |= merge_problems`，database.hh:240）+ `newHigh.setUnmerged()`
+（variable.hh:168）+ `conflictCount`，continue → `merge(anchor, newHigh,
+false)`（:942-947，anchor 存活）失败时同样标记；结束按 :950-961 的精确
+warningHeader 文案报告（`Unable to[ fully] merge symbol: N[-- Some instance
+varnodes not found.][-- Some merges are forbidden]`）。skipCount 在 Rust
+重建中恒为 0（无 linked Varnode 的 SymbolEntry 上游不可见，无 ScopeLocal
+multi-entry 注册表）。
 
-### `pub fn merge_marker(&mut self, _fd: &mut Funcdata)`
+### `pub fn merge_marker(&mut self, fd: &mut Funcdata)`
 
-Merge marker varnodes (placeholder for future enhancement)
+对齐 `Merge::mergeMarker`（merge.cc:889-902）：按 alive op 顺序遍历非
+indirect-creation 的 marker op，INDIRECT → `merge_indirect`，MULTIEQUAL →
+`merge_op`。
+
+### `merge_indirect` / `snip_output_interference` / `collect_inputs`（私有）
+
+对齐 `Merge::mergeIndirect`（merge.cc:846-882）全路径：`!isAddrForce` →
+直接 `mergeOp`（:850-853）；否则先 `mergeTestRequired(out,in)` +
+`merge(in_high, out_high, false)`（**输入侧存活**，:857，与 mergeOp 的
+输出侧存活方向相反），失败后 `snip_output_interference`（:862；内部
+`collect_inputs` 沿 previousOp-INDIRECT 链收集输出 high 的读
+merge.cc:783-802，按 `PcodeOpNode::compareByHigh`（expression.hh:54，High
+指针序）分组，每组一个 `allocate_copy_trim` snip COPY + 读重定向
+:822-837），再试合并（:864-867）；最后兜底用 `allocate_copy_trim` 剪断
+INDIRECT 本身（:871-877）并重合并，失败打 `[MERGE]` stderr 日志（Ghidra
+:881 throw 的既定降级）。union 解析继承（:872-875 / :417-428）保守省略。
+
+### `build_dominant_copy` 尾合并（私有）
+
+对齐 merge.cc:1235-1237：`count > 0 && domCopyIsNew` 时直接执行
+`HighVariable::merge(domHigh, NULL, true)` —— **null testCache**：无
+`testCache.intersection` 预检、无 `moveIntersectTests`（Rust 直调
+`merge_highs`，不经过 `merge_speculative`）；speculative 类语义由
+`u.mergeGroup += numMergeClasses`（variable.cc:640-646）观察。
+
+### `merge_highs` 的 (Some,Some) piece 臂（私有）
+
+对齐说明：oracle variable.cc:699-711 对 speculative 抛 LowlevelError（经
+`Merge::merge` 调用者不可达——mergeTestAdjacent merge.cc:208-209 拒绝双
+piece 候选；buildDominantCopy 直调传新分配、无 piece 的 unique），非
+speculative 走 `piece->mergeGroups` + 成对 `mergeInternal` +
+`markIntersectionDirty`。Rugra 无任何 piece 生产路径（`group_partials` 为
+忠实 no-op），该臂以 `debug_assert!` 钉住两条 oracle 契约，release 保留
+保守跳过（return false）。
+
+### `wire_unique_high`（私有，RUGRA-GLUE）
+
+Ghidra `Funcdata::newUnique` 立即为新 unique Varnode 调 `assignHigh`
+（funcdata_varnode.cc:88-89）；Rugra `new_unique` 不分配 High，故
+`allocate_copy_trim` 与 `build_dominant_copy` 的 dominant COPY 输出在此
+补接（否则 :879/:766/:1236 的合并对 None High 静默 no-op、mergeOp phase-2
+对 trim 输入过度剪枝）。funcdata.rs 侧 latent 缺口已登记 TODO。
 
 ### `pub fn merge_by_datatype(&mut self, fd: &mut Funcdata)`
 
@@ -358,3 +411,30 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - fixture 新增 `case_type_gate`（4 行）：INT_LEFT 移位量 size==输出≠1 通过门
   并在 mergeadjacent 合并（groups SH:1/TSH:0 输出侧存活）；FLOAT_TRUNC 同尺寸
   float 输入被拒。runner **17/17 overall=MATCH**。
+
+### 2026-08-16（MERGE-PREEXISTING-GATES-0001）：五项预存在门/方向缺口
+- `merge_indirect` 全路径重写（merge.cc:846-882）：isAddrForce 门、
+  **输入侧存活**的 merge 尝试（:857/:865/:879，方向与 mergeOp 相反）、
+  忠实 `collect_inputs`（previousOp-INDIRECT 链 + piece/group 匹配 +
+  (op,slot) 对，merge.cc:783-802）与 `snip_output_interference`
+  （compareByHigh 分组 + 每 High 一个 snip COPY + 读重定向，:811-839）、
+  `allocate_copy_trim` 剪断 INDIRECT 兜底。旧行为（无条件 trim_op_output
+  + mergeOp）删除。
+- `build_dominant_copy` 尾合并改为 oracle :1236 的 null-testCache 直调
+  （`merge_highs`，无 intersection 预检/moveIntersectTests），不再走带
+  cache 的 `merge_speculative`；speculative 类由 mergeGroup=1 观察。
+- `merge_multi_entry` 补 :936 mergeTestRequired 门 + setMergeProblems/
+  setUnmerged + conflictCount/mergeCount + 精确 warningHeader 文案
+  （:950-961）；Symbol 按 (name,nameDedup) 确定性排序遍历。
+- `compare_just_loc`（variable.rs，配套 docs/api/variable.md 同步）补
+  space 维：`Address::operator<` 全序（space 索引先于 offset，
+  address.hh:375-393），跨空间重叠 offset 不再误序。
+- `merge_highs` (Some,Some) piece 臂：debug_assert 钉 oracle 契约
+  （variable.cc:699-711），release 保守跳过 + 如实注释（Ghidra 侧经
+  Merge::merge 调用者不可达）。
+- RUGRA-GLUE `wire_unique_high`：补 Ghidra newUnique 的 assignHigh 半边
+  （funcdata_varnode.cc:89），修 trim unique 无 High 导致的静默 no-op 与
+  mergeOp phase-2 过度剪枝（funcdata.rs latent 缺口另行登记）。
+- fixture `merge_gates_1204`（4 case 14 行）+ runner：14/14 双侧字节一致
+  （sha 9878946d…），merge_persistent_1204 复跑 17/17 不劣化（仅
+  merge_rs_sha256 重 pin）。

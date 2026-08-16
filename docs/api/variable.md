@@ -199,7 +199,11 @@ holds only a read lock).
 Ghidra: variable.cc:456 `compareName`.
 
 ### `pub fn compare_just_loc(a: &Varnode, b: &Varnode) -> bool` (static)
-Ghidra: variable.cc:439 `compareJustLoc`.
+Ghidra: variable.cc:439 `compareJustLoc`. Compares via `Address::operator<`
+(address.hh:375-393): space index first (`space_id()` mirrors
+`AddrSpace::getIndex()`), then offset — a total order across spaces
+(previously offset-only, which mis-ordered cross-space varnodes in
+`merge_internal`'s `std::merge`).
 
 ### `pub fn has_name(&self) -> bool`
 Ghidra: variable.cc:718 `hasName`.

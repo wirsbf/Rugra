@@ -457,10 +457,20 @@ impl HighVariable {
 
     // Ghidra: variable.cc:439 HighVariable::compareJustLoc
     /// Compare two Varnodes based just on their storage address. Faithful to
-    /// `compareJustLoc` (variable.cc:439-443). Returns true if `a` should be
-    /// ordered before `b`. Ghidra uses `a->getAddr() < b->getAddr()`; Rugra's
-    /// `Address` is a newtype around `u64`, so we compare the inner offset.
+    /// `compareJustLoc` (variable.cc:439-443): `a->getAddr() < b->getAddr()`
+    /// is `Address::operator<` (address.hh:375-393) — a TOTAL order that
+    /// first compares the address space by its index (`AddrSpace::getIndex()`,
+    /// mirrored by `AddressSpace::space_id()`, which carries the SLEIGH spec
+    /// space indices), then the offset. (The operator's null/`~0` base
+    /// sentinels only order invalid addresses; Varnode storage is always in a
+    /// concrete space, so they cannot arise here.) Comparing only offsets —
+    /// as this did before — mis-orders varnodes that live in different
+    /// spaces at overlapping offsets (e.g. unique vs stack) and corrupts the
+    /// `std::merge` instance ordering in `merge_internal` (variable.cc:657).
     pub fn compare_just_loc(a: &Varnode, b: &Varnode) -> bool {
+        if a.address_space != b.address_space {
+            return a.address_space.space_id() < b.address_space.space_id();
+        }
         a.loc < b.loc
     }
 
