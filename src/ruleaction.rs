@@ -167,70 +167,134 @@ impl Rule for RuleTrivialBool {
 pub struct RulePropagateCopy;
 
 impl RulePropagateCopy {
-    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
+    // Ghidra: ruleaction.hh:725 RulePropagateCopy::RulePropagateCopy
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RulePropagateCopy {
-    // Ghidra: ruleaction.cc:3946 RulePropagateCopy::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        let op = op_arc.read().unwrap();
-        if op.opcode != OpCode::CPUI_COPY {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let in_vn_arc = match op.inrefs.get(0) {
-            Some(vn) => vn.clone(),
-            None => return Ok(action_status::NO_CHANGE),
-        };
-
-        let out_vn_arc = match &op.output {
-            Some(vn) => vn.clone(),
-            None => return Ok(action_status::NO_CHANGE),
-        };
-
-        let mut changed = false;
-        let mut to_update = Vec::new();
-
+    // Ghidra: ruleaction.cc:3926 RulePropagateCopy::applyOp
+    /// Propagate the input of a COPY to all the places that read the
+    /// output. 1:1 port of `RulePropagateCopy::applyOp`
+    /// (ruleaction.cc:3926-3957). The rule is dispatched on the READER op
+    /// (registered for all opcodes, see `get_opcodes`): it scans the
+    /// reader's input slots in ascending order, takes the FIRST slot whose
+    /// input is written by a COPY and passes the guards (heritage-known,
+    /// not self-defined, marker sub-guards: no constants into markers, no
+    /// addrforce outputs, no merging of different addrtieds), replaces
+    /// exactly that ONE slot via `Funcdata::op_set_input`
+    /// (funcdata_op.cc:104 — early-out, constant-single-descendant dedup,
+    /// descend erase on the old input + descend add on the new), and
+    /// returns 1; convergence to "all readers" is left to the pool's
+    /// repeat-apply loop (action.cc:877).
+    ///
+    /// Supersedes the drift registered in RULE-PROPAGATECOPY-DRIFT-0001:
+    /// the old implementation dispatched on the COPY itself, redirected
+    /// every reader of its output with raw `inrefs[i] = ...` writes plus a
+    /// raw `descend.push` (bypassing op_set_input's constant dedup and
+    /// leaving a stale descend entry on the COPY's output varnode), and
+    /// had none of the Ghidra guards.
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        use std::sync::Arc;
+        // cc:3929-3931: locals i/copyop/vn/invn — expressed as a single
+        // guarded scan; the op read-guard is dropped before op_set_input
+        // takes its own write lock on the same op.
+        let mut candidate: Option<(usize, Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
         {
-            let out_vn = out_vn_arc.read().unwrap();
-            for descendant_weak in &out_vn.descend {
-                if let Some(descendant_arc) = descendant_weak.upgrade() {
-                    to_update.push(descendant_arc);
+            let op = op_arc.read().unwrap();
+            // cc:3933: if (op->isReturnCopy()) return 0;
+            // RETURN_COPY is set on CPUI_RETURN via TypeOpReturn (typeop.cc:879,
+            // applied by PcodeOp::setOpcode op.cc:284) and on heritage
+            // guardReturns COPYs via Funcdata::markReturnCopy (funcdata.hh:452).
+            if (op.flags & crate::op::pcodeop_flags::RETURN_COPY) != 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:3934-3955: for(i=0;i<op->numInput();++i) — ascending slot
+            // order, first eligible slot wins, single replacement.
+            for (i, vn_arc) in op.inrefs.iter().enumerate() {
+                // cc:3936: if (!vn->isWritten()) continue;
+                let vn = vn_arc.read().unwrap();
+                if !vn.is_written() {
+                    continue;
                 }
+                // cc:3938: copyop = vn->getDef();
+                let copyop_arc = match vn.get_def() {
+                    Some(a) => a,
+                    None => continue,
+                };
+                // cc:3939-3940: if (copyop->code()!=CPUI_COPY) continue;
+                let invn_arc = {
+                    let copyop = copyop_arc.read().unwrap();
+                    if copyop.opcode != OpCode::CPUI_COPY {
+                        continue;
+                    }
+                    // cc:3942: invn = copyop->getIn(0);
+                    match copyop.inrefs.get(0) {
+                        Some(v) => v.clone(),
+                        None => continue,
+                    }
+                };
+                // cc:3943: if (!invn->isHeritageKnown()) continue;
+                // Don't propagate free's away from their first use.
+                if !invn_arc.read().unwrap().is_heritage_known() {
+                    continue;
+                }
+                // cc:3944-3945: if (invn == vn) throw LowlevelError
+                if Arc::ptr_eq(&invn_arc, vn_arc) {
+                    return Err(crate::error::Error::Lowlevel(
+                        "Self-defined varnode".to_string(),
+                    ));
+                }
+                // cc:3946-3952: marker sub-guards.
+                if op.is_marker() {
+                    let invn = invn_arc.read().unwrap();
+                    // cc:3947: Don't propagate constants into markers.
+                    if invn.is_constant() {
+                        continue;
+                    }
+                    // cc:3948: Don't propagate if we are keeping the COPY anyway.
+                    if vn.is_addr_force() {
+                        continue;
+                    }
+                    // cc:3949-3951: We must not allow merging of different
+                    // addrtieds.
+                    if invn.is_addr_tied() {
+                        if let Some(out_arc) = &op.output {
+                            let out_vn = out_arc.read().unwrap();
+                            if out_vn.is_addr_tied() && *out_vn.get_addr() != *invn.get_addr() {
+                                continue;
+                            }
+                        }
+                    }
+                }
+                candidate = Some((i, invn_arc));
+                break;
             }
         }
-
-        for descendant_arc in to_update {
-            let mut descendant = descendant_arc.write().unwrap();
-            for i in 0..descendant.inrefs.len() {
-                if std::sync::Arc::ptr_eq(&descendant.inrefs[i], &out_vn_arc) {
-                    descendant.inrefs[i] = in_vn_arc.clone();
-                    changed = true;
-
-                    // Update descend list for the new input
-                    in_vn_arc.write().unwrap().descend.push(std::sync::Arc::downgrade(&descendant_arc));
-                }
-            }
+        // cc:3953-3954: data.opSetInput(op,invn,i); return 1;
+        if let Some((slot, invn_arc)) = candidate {
+            fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), invn_arc, slot);
+            return Ok(action_status::CHANGE);
         }
-
-        if changed {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // cc:3956: return 0;
+        Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
+    // Ghidra: ruleaction.hh:725 RulePropagateCopy::RulePropagateCopy (name literal "propagatecopy")
     fn get_name(&self) -> &str {
-        "propagate_copy"
+        "propagatecopy"
     }
 
-    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
+    // Ghidra: action.cc:706 Rule::getOpList
+    /// RulePropagateCopy does not override getOpList — it uses the base
+    /// class default (action.cc:706-713), which registers the rule for
+    /// every opcode (ruleaction.hh:730 "applies to all opcodes"). Ghidra
+    /// pushes 0..CPUI_MAX; the 12.0.4 opcode enum starts at CPUI_COPY=1
+    /// (opcodes.hh:37-38) and CPUI_MAX=74 is a sentinel never assigned to
+    /// a live PcodeOp, so the observable opcode set is 1..=73.
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_COPY]
+        (1..74).filter_map(OpCode::from_i32).collect()
     }
 }
 
@@ -19465,6 +19529,166 @@ mod tests {
         let rule = RuleDivOpt::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RulePropagateCopy (ruleaction.cc:3926-3957, RULE-PROPAGATECOPY-DRIFT-0001):
+    /// reader-side dispatch — replace the FIRST eligible input slot of the
+    /// reader with the input of the COPY that defines it, via op_set_input
+    /// (descend erase on the old input, descend add + constant dedup on the
+    /// new one). The old drift version redirected every reader of a COPY's
+    /// output with raw inrefs writes and left a stale descend entry.
+    #[test]
+    fn test_rule_propagate_copy_single_slot() {
+        let mut fd = Funcdata::new("test_propcopy", Address::new(0x1000), 0x10);
+        // COPY(const 5) -> copy_out
+        let const5 = fd.new_constant(4, 5);
+        let copy_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+        let copy_out = fd.new_unique_out(4, &copy_op);
+        fd.op_set_input(&copy_op, const5, 0);
+        fd.obank.alivelist.push(copy_op);
+        // reader: INT_ZEXT(copy_out) — the rule fires on the READER op
+        let reader = fd.new_op(1, Address::new(0x1010));
+        fd.op_set_opcode(&reader, OpCode::CPUI_INT_ZEXT);
+        fd.new_unique_out(8, &reader);
+        fd.op_set_input(&reader, copy_out.clone(), 0);
+        fd.obank.alivelist.push(reader.clone());
+
+        let rule = RulePropagateCopy::new();
+        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::CHANGE);
+        // slot 0 now reads a constant 5 (op_set_input clones the constant per
+        // funcdata_op.cc:108-115 — constants have a single descendant)
+        let new_in = reader.0.read().unwrap().inrefs[0].clone();
+        {
+            let ni = new_in.read().unwrap();
+            assert!(ni.is_constant() && ni.get_val() == 5);
+        }
+        // stale-descend elimination: copy_out no longer lists the reader,
+        // the (cloned) constant does
+        let still_on_copy_out = {
+            let co = copy_out.read().unwrap();
+            co.descend.iter().any(|w| {
+                w.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &reader.0))
+            })
+        };
+        assert!(!still_on_copy_out, "reader must be erased from copy_out.descend");
+        let on_new_in = {
+            let ni = new_in.read().unwrap();
+            ni.descend.iter().any(|w| {
+                w.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &reader.0))
+            })
+        };
+        assert!(on_new_in, "reader must be added to the new input's descend");
+    }
+
+    /// cc:3943 heritage-known guard: a COPY whose input is a free (not
+    /// heritage-known) varnode must NOT be propagated — "Don't propagate
+    /// free's away from their first use".
+    #[test]
+    fn test_rule_propagate_copy_heritage_known_guard() {
+        let mut fd = Funcdata::new("test_propcopy_guard", Address::new(0x1000), 0x10);
+        // free register varnode: no INSERT/CONSTANT/ANNOTATION flags
+        let free_reg = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        assert!(!free_reg.read().unwrap().is_heritage_known());
+        let copy_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+        let copy_out = fd.new_unique_out(4, &copy_op);
+        fd.op_set_input(&copy_op, free_reg, 0);
+        fd.obank.alivelist.push(copy_op);
+        let reader = fd.new_op(1, Address::new(0x1010));
+        fd.op_set_opcode(&reader, OpCode::CPUI_INT_ZEXT);
+        fd.new_unique_out(8, &reader);
+        fd.op_set_input(&reader, copy_out, 0);
+        fd.obank.alivelist.push(reader.clone());
+
+        let rule = RulePropagateCopy::new();
+        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// cc:3946-3947 marker guard: constants must not be propagated into
+    /// marker (MULTIEQUAL/INDIRECT) ops.
+    #[test]
+    fn test_rule_propagate_copy_marker_constant_guard() {
+        let mut fd = Funcdata::new("test_propcopy_marker", Address::new(0x1000), 0x10);
+        let const7 = fd.new_constant(4, 7);
+        let copy_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+        let copy_out = fd.new_unique_out(4, &copy_op);
+        fd.op_set_input(&copy_op, const7, 0);
+        fd.obank.alivelist.push(copy_op);
+        // MULTIEQUAL(copy_out, const1) — marker op
+        let reader = fd.new_op(2, Address::new(0x1010));
+        fd.op_set_opcode(&reader, OpCode::CPUI_MULTIEQUAL);
+        assert!(reader.0.read().unwrap().is_marker());
+        fd.new_unique_out(4, &reader);
+        fd.op_set_input(&reader, copy_out, 0);
+        let const1 = fd.new_constant(4, 1);
+        fd.op_set_input(&reader, const1, 1);
+        fd.obank.alivelist.push(reader.clone());
+
+        let rule = RulePropagateCopy::new();
+        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// cc:3933 return-copy guard: ops flagged return_copy are skipped before
+    /// any input scan.
+    #[test]
+    fn test_rule_propagate_copy_return_copy_guard() {
+        let mut fd = Funcdata::new("test_propcopy_rc", Address::new(0x1000), 0x10);
+        let const5 = fd.new_constant(4, 5);
+        let copy_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+        let copy_out = fd.new_unique_out(4, &copy_op);
+        fd.op_set_input(&copy_op, const5, 0);
+        fd.obank.alivelist.push(copy_op);
+        let reader = fd.new_op(1, Address::new(0x1010));
+        fd.op_set_opcode(&reader, OpCode::CPUI_INT_ZEXT);
+        fd.new_unique_out(8, &reader);
+        fd.op_set_input(&reader, copy_out, 0);
+        fd.obank.alivelist.push(reader.clone());
+        reader.0.write().unwrap().flags |= crate::op::pcodeop_flags::RETURN_COPY;
+
+        let rule = RulePropagateCopy::new();
+        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// cc:3953-3954: exactly ONE slot is replaced per invocation (return 1
+    /// after the first propagation; the pool re-applies for more).
+    #[test]
+    fn test_rule_propagate_copy_first_slot_only() {
+        let mut fd = Funcdata::new("test_propcopy_first", Address::new(0x1000), 0x10);
+        // two COPY-of-constant chains
+        let (copy_out0, copy_out1) = {
+            let mut outs = Vec::new();
+            for k in 0..2u64 {
+                let c = fd.new_constant(4, 10 + k);
+                let copy_op = fd.new_op(1, Address::new(0x1000));
+                fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+                let out = fd.new_unique_out(4, &copy_op);
+                fd.op_set_input(&copy_op, c, 0);
+                fd.obank.alivelist.push(copy_op);
+                outs.push(out);
+            }
+            (outs[0].clone(), outs[1].clone())
+        };
+        let reader = fd.new_op(2, Address::new(0x1010));
+        fd.op_set_opcode(&reader, OpCode::CPUI_INT_ADD);
+        fd.new_unique_out(4, &reader);
+        fd.op_set_input(&reader, copy_out0.clone(), 0);
+        fd.op_set_input(&reader, copy_out1.clone(), 1);
+        fd.obank.alivelist.push(reader.clone());
+
+        let rule = RulePropagateCopy::new();
+        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::CHANGE);
+        let (slot0_replaced, slot1_intact) = {
+            let r = reader.0.read().unwrap();
+            (
+                !Arc::ptr_eq(&r.inrefs[0], &copy_out0),
+                Arc::ptr_eq(&r.inrefs[1], &copy_out1),
+            )
+        };
+        assert!(slot0_replaced, "first eligible slot must be replaced");
+        assert!(slot1_intact, "second slot must be untouched in this invocation");
     }
 
     /// Verify RuleSubCommute transforms SUBPIECE(INT_ADD(a,b),0) into

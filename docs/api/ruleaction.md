@@ -89,6 +89,34 @@ Corresponds to Ghidra's `RulePropagateCopy`
 
 *暂无代码注释*
 
+### `impl Rule for RulePropagateCopy`
+
+#### `fn apply_op(&self, op_arc, fd) -> Result<i32>`
+
+1:1 port of `RulePropagateCopy::applyOp` (ruleaction.cc:3926-3957, RULE-PROPAGATECOPY-DRIFT-0001)。
+Dispatched on the READER op (registered for all opcodes via base `Rule::getOpList`,
+action.cc:706-713): scans input slots ascending, takes the FIRST slot whose input is
+written by a COPY and passes the guards — `isReturnCopy` skip (cc:3933), `isWritten`
+(cc:3936), COPY opcode (cc:3939), `isHeritageKnown` (cc:3943, don't propagate free's
+away from their first use), self-defined throw `LowlevelError("Self-defined varnode")`
+(cc:3944-3945, mapped to `Error::Lowlevel`), and marker sub-guards (cc:3946-3952: no
+constants into markers / no addrforce outputs / no merging of different addrtieds) —
+then replaces exactly that ONE slot via `Funcdata::op_set_input` (funcdata_op.cc:104:
+early-out, constant-single-descendant dedup, descend erase+add) and returns 1.
+Convergence to "all readers" is the pool's repeat-apply loop. The former drift
+(COPY-op dispatch, redirect-all-readers with raw `inrefs[i]` writes + raw
+`descend.push`, no guards, stale descend on the COPY's output) is superseded.
+
+#### `fn get_name(&self) -> &str`
+
+`"propagatecopy"` (name literal from the Ghidra ctor, ruleaction.hh:725).
+
+#### `fn get_opcodes(&self) -> Vec<OpCode>`
+
+Base-class default: `(1..74).filter_map(OpCode::from_i32)` — all live opcodes
+(Ghidra pushes `0..CPUI_MAX`; the 12.0.4 enum starts at `CPUI_COPY=1`,
+`CPUI_MAX=74` is a sentinel never assigned to a live PcodeOp).
+
 ### `pub struct RuleZextEliminate`
 
 Rule for eliminating redundant zero-extensions
