@@ -1238,6 +1238,37 @@
      "tools/run_heritage_driver_switch_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "scope_sync_1204",
+   "description": "syncVarnodesWithSymbols: type projection via getSizedType/exact piece, unmapped alias check, asymmetric addrtied/nolocalalias mask, typelock/mapentry branches",
+   "runner": [
+    "tools/run_scope_sync_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/scope_sync_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/scope_sync_1204.cc",
+     "rust_fixture": "tests/oracle/scope_sync_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_scope_sync_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/funcdata.rs",
+     "src/coreaction.rs",
+     "tests/oracle/scope_sync_1204.*",
+     "tools/run_scope_sync_oracle.sh"
+    ]
+   }
   }
  ]
 }
