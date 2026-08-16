@@ -1083,6 +1083,39 @@
      "tools/run_merge_gates_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "linksymbol_typed_1204",
+   "description": "Typed ScopeLocal symbols for SSA temporaries: linkSymbol no-overlap path, handleSymbolConflict five legs + dynamic/equate, symbol_offset gate with partial coverage, makeRec four clauses, register-name family",
+   "runner": [
+    "tools/run_linksymbol_typed_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/linksymbol_typed_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/linksymbol_typed_1204.cc",
+     "rust_fixture": "tests/oracle/linksymbol_typed_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_linksymbol_typed_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/funcdata.rs",
+     "src/coreaction.rs",
+     "src/varmap.rs",
+     "src/merge.rs",
+     "tests/oracle/linksymbol_typed_1204.*",
+     "tools/run_linksymbol_typed_oracle.sh"
+    ]
+   }
   }
  ]
 }
