@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "fixture_id": "MARSHAL-XML-TEXT-0001",
+  "overall_status": "MISMATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_blobs": {
+      "xml.cc": "ed950a2e084760853c7b64322f15f12fb26dacbd269bea4e9b8366feb469e594",
+      "xml.hh": "128297766a37fe8e90e8585339ceabb5287b18c0da98240ee642086a45ec09df"
+    }
+  },
+  "architecture": "process-global xml text ingestion",
+  "compiler_spec": "N/A",
+  "analysis_options": "none",
+  "coverage": {
+    "projection": "45 parse cases (26 success DOM dumps with ordered attributes, significant-content and whitespace-only rules, entity/char references, CDATA, comments, prolog/XMLDecl, 19 exact error messages) plus DocumentStorage register/getTag/overwrite, null-slot retention, post-failure reuse, and openDocument error",
+    "dom_projection_status": "MATCH",
+    "document_storage_status": "MATCH",
+    "error_message_status": "MATCH",
+    "record_counts": {
+      "P": 45,
+      "E": 31,
+      "A": 11,
+      "T": 3,
+      "X": 3,
+      "S": 1
+    }
+  },
+  "residuals": [
+    {
+      "status": "MISMATCH",
+      "area": "high-byte reference characters",
+      "detail": "Ghidra appends (char)val for converted references, so numeric char references >= 0x80 and the unknown-entity (char)(-1)=0xFF marker enter the byte string as single raw bytes; the Rust String DOM UTF-8-encodes the same low byte (two bytes). ASCII-domain observations are byte-exact; no fixture record exercises the divergence."
+    },
+    {
+      "status": "UNTESTED",
+      "area": "deep-nesting YYMAXDEPTH behavior",
+      "detail": "The bison parser reports 'memory exhausted' past its 10000-state stack limit; the recursive-descent port has no equivalent ceiling and the path is not exercised by any fixture record."
+    }
+  ],
+  "comparand": {
+    "rugra_base_commit": "9ea2a78e3db7e5599af842ae8e5d337fa30dbdce",
+    "rugra_base_tree": "288a5dc242465923b647a445721c9d4ba5a538ee",
+    "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
+    "overlay_paths": [
+      "src/marshal.rs",
+      "docs/api/marshal.md",
+      "tests/oracle/xml_text_dom_1204.cc",
+      "tests/oracle/xml_text_dom_1204.rs",
+      "tests/oracle/xml_text_dom_1204.metadata.json",
+      "tools/run_xml_text_dom_oracle.sh"
+    ],
+    "cpp_fixture_sha256": "f76e98db5b64cf5316b8e1be8ad4767fb9e1d1fb092eccfbc60a6144f2e9d4aa",
+    "rust_fixture_sha256": "fb2157d520c66b818daf16096ab36908c3c1d651c03358bbeb7f5f5e1de89150",
+    "marshal_rs_sha256": "6910e552ddcd6bce84eb4b204716a43943f3b4863564345703255304993882b5",
+    "marshal_doc_sha256": "38c9acbb0eb943bc057d1071043789964aad4a9951185e28520d83e28a827cf2",
+    "runner_sha256": "f7e1b891586c091d54e0fbea537161fc002850986d0b9bf2c52b717d195c3ba4",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+  },
+  "build": {
+    "registry_packages": 164
+  },
+  "host_tools": {
+    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "cxx_target": "x86_64-linux-gnu",
+    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "cc_target": "x86_64-linux-gnu",
+    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
+    "make": "GNU Make 4.3",
+    "python": "Python 3.10.12",
+    "git": "git version 2.34.1",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
+  },
+  "locked_capture": {
+    "records": 94,
+    "bytes": 1926,
+    "stdout_sha256": "7ce5daf5dac1eb381053881009e2064db96a021dc23fe2c7de4ce358d9a2857c"
+  }
+}

@@ -7,8 +7,11 @@
 //! by database.rs, override.rs, and arch.rs as their XML encode/decode L3 gap.
 //!
 //! Status: L1→L2. The registry, DOM tree, and Encoder/Decoder traits are
-//! complete with a working in-memory `XmlEncode`/`XmlDecode` round-trip. The
-//! Packed binary format (`PackedEncode`/`PackedDecode`) is an L3 gap.
+//! complete with a working in-memory `XmlEncode`/`XmlDecode` round-trip.
+//! XML text ingestion (`XmlScan` + grammar driver + `DocumentStorage`,
+//! MARSHAL-XML-TEXT-0001) parses production XML bytes into the ordered
+//! DOM. The Packed binary format (`PackedEncode`/`PackedDecode`) is an
+//! L3 gap.
 //!
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{marshal,xml}.{hh,cc}.
@@ -825,6 +828,1287 @@ impl Document {
     /// Set the root element.
     pub fn set_root(&mut self, root: Arc<RwLock<Element>>) {
         self.root = Some(root);
+    }
+}
+
+// ===========================================================================
+// XML text ingestion — the `xml.cc` scanner + grammar (MARSHAL-XML-TEXT-0001).
+//
+// Ghidra parses XML text with a hand-written byte scanner (`XmlScan`,
+// xml.cc:111-177/2080-2375) driven by a bison LALR grammar (xml.y, compiled
+// into xml.cc). The Rust port below is a 1:1 port of the scanner plus a
+// recursive-descent realization of the same grammar with identical actions
+// and identical token-read timing: every mode-switching reduce in the bison
+// output is a default reduction (single complete item / only-action state),
+// so each action runs before the next token is read. The parser keeps at
+// most one lookahead token and defers reading it (`ensure`) exactly like
+// bison, so the scanner mode at each read matches Ghidra byte for byte.
+// ===========================================================================
+
+/// Scanner token values above the raw byte range. Faithful to the
+/// `XmlScan::token` enumeration (xml.cc:118-126).
+const CHAR_DATA_TOKEN: i32 = 258;
+const CDATA_TOKEN: i32 = 259;
+const ATT_VALUE_TOKEN: i32 = 260;
+const COMMENT_TOKEN: i32 = 261;
+const CHAR_REF_TOKEN: i32 = 262;
+const NAME_TOKEN: i32 = 263;
+const SNAME_TOKEN: i32 = 264;
+const ELEMENT_BRACE_TOKEN: i32 = 265;
+const COMMAND_BRACE_TOKEN: i32 = 266;
+
+/// The byte value returned for end-of-file tokens. Bison maps any token
+/// value `<= 0` to `$end` (xml.cc:1521-1523); the scanner produces -1 after
+/// its single synthetic `'\n'` fill (xml.cc:141-157).
+const TOKEN_EOF: i32 = -1;
+
+/// The XML character scanner modes. Faithful to the `XmlScan::mode`
+/// enumeration (xml.cc:114-116). Modes are one-shot: `nexttoken` resets to
+/// `Single` before dispatching (xml.cc:2285).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanMode {
+    /// Look for `<`, `&`, or `]]>`.
+    CharData,
+    /// Looking for `]]>`.
+    CData,
+    /// Attribute value with single quotes.
+    AttValueSingle,
+    /// Attribute value with double quotes.
+    AttValueDouble,
+    /// Looking for `--`.
+    Comment,
+    /// Character references: decimal or hex digits.
+    CharRef,
+    /// Look for non-name char.
+    Name,
+    /// Scan a Name, allowing white space before.
+    SName,
+    /// Single character mode.
+    Single,
+}
+
+/// An XML character scanner over a byte buffer. Faithful to `XmlScan`
+/// (xml.cc:111-177): a 4-byte ring-buffer lookahead so multi-byte XML
+/// sequences can be checked without consuming, with a single synthetic
+/// `'\n'` entering the stream at end-of-stream (a NUL byte also terminates
+/// the stream, xml.cc:146-148).
+struct XmlScan<'a> {
+    /// The current scanning mode (one-shot per token).
+    curmode: ScanMode,
+    /// The byte buffer being scanned (the `istream &s`).
+    input: &'a [u8],
+    /// Read position into `input`.
+    inpos: usize,
+    /// Raw bytes of the current token string being built (the `string *lvalue`).
+    lbytes: Vec<u8>,
+    /// The 4-byte lookahead ring buffer.
+    lookahead: [i32; 4],
+    /// Current position in the lookahead buffer.
+    pos: usize,
+    /// Has end of stream been reached.
+    endofstream: bool,
+}
+
+impl<'a> XmlScan<'a> {
+    // Ghidra: xml.cc:2080 XmlScan::XmlScan(istream &t)
+    /// Construct the scanner and fill the lookahead buffer.
+    fn new(input: &'a [u8]) -> Self {
+        let mut scan = Self {
+            curmode: ScanMode::Single,
+            input,
+            inpos: 0,
+            lbytes: Vec::new(),
+            lookahead: [0; 4],
+            pos: 0,
+            endofstream: false,
+        };
+        scan.getxmlchar();
+        scan.getxmlchar();
+        scan.getxmlchar();
+        scan.getxmlchar(); // Fill lookahead buffer
+        scan
+    }
+
+    // Ghidra: xml.cc:2096 void XmlScan::clearlvalue(void)
+    /// Clear the current token string.
+    fn clearlvalue(&mut self) {
+        self.lbytes.clear();
+    }
+
+    // Ghidra: xml.cc:141 int4 getxmlchar(void)
+    /// Get the next byte in the stream, maintaining the 4-byte lookahead so
+    /// special XML character sequences can be checked without consuming.
+    fn getxmlchar(&mut self) -> i32 {
+        let ret = self.lookahead[self.pos];
+        if !self.endofstream {
+            let fetched = if self.inpos < self.input.len() {
+                let byte = self.input[self.inpos];
+                self.inpos += 1;
+                Some(byte)
+            } else {
+                None // istream get() failure sets eofbit
+            };
+            match fetched {
+                Some(0) | None => {
+                    // s.eof() || c == '\0': terminate and pad once with '\n'
+                    self.endofstream = true;
+                    self.lookahead[self.pos] = b'\n' as i32;
+                }
+                Some(byte) => {
+                    self.lookahead[self.pos] = byte as i32;
+                }
+            }
+        } else {
+            self.lookahead[self.pos] = TOKEN_EOF;
+        }
+        self.pos = (self.pos + 1) & 3;
+        ret
+    }
+
+    // Ghidra: xml.cc:158 int4 next(int4 i)
+    /// Peek at the next (i-th) byte without consuming.
+    fn next(&self, i: usize) -> i32 {
+        self.lookahead[(self.pos + i) & 3]
+    }
+
+    // Ghidra: xml.cc:159 bool isLetter(int4 val)
+    /// Is the given byte an ASCII letter.
+    fn is_letter(val: i32) -> bool {
+        (0x41..=0x5a).contains(&val) || (0x61..=0x7a).contains(&val)
+    }
+
+    // Ghidra: xml.cc:2256 bool XmlScan::isInitialNameChar(int4 val)
+    /// Is the given byte the valid start of an XML name.
+    fn is_initial_name_char(val: i32) -> bool {
+        if Self::is_letter(val) {
+            return true;
+        }
+        val == '_' as i32 || val == ':' as i32
+    }
+
+    // Ghidra: xml.cc:2264 bool XmlScan::isNameChar(int4 val)
+    /// Is the given byte valid inside an XML name.
+    fn is_name_char(val: i32) -> bool {
+        if Self::is_letter(val) {
+            return true;
+        }
+        if ('0' as i32..='9' as i32).contains(&val) {
+            return true;
+        }
+        val == '.' as i32 || val == '-' as i32 || val == '_' as i32 || val == ':' as i32
+    }
+
+    // Ghidra: xml.cc:2273 bool XmlScan::isChar(int4 val)
+    /// Is the given byte valid as an XML character.
+    fn is_char(val: i32) -> bool {
+        if val >= 0x20 {
+            return true;
+        }
+        val == 0xd || val == 0xa || val == 0x9
+    }
+
+    // Ghidra: xml.cc:2103 int4 XmlScan::scanSingle(void)
+    /// Scan for the next token in single character mode.
+    fn scan_single(&mut self) -> i32 {
+        let res = self.getxmlchar();
+        if res == '<' as i32 {
+            if Self::is_initial_name_char(self.next(0)) {
+                return ELEMENT_BRACE_TOKEN;
+            }
+            return COMMAND_BRACE_TOKEN;
+        }
+        res
+    }
+
+    // Ghidra: xml.cc:2114 int4 XmlScan::scanCharData(void)
+    /// Scan for the next token in character data mode, looking for `<`, `&`,
+    /// or `]]>`.
+    fn scan_char_data(&mut self) -> i32 {
+        self.clearlvalue();
+        while self.next(0) != TOKEN_EOF {
+            if self.next(0) == '<' as i32 {
+                break;
+            }
+            if self.next(0) == '&' as i32 {
+                break;
+            }
+            if self.next(0) == ']' as i32
+                && self.next(1) == ']' as i32
+                && self.next(2) == '>' as i32
+            {
+                break;
+            }
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+        }
+        if self.lbytes.is_empty() {
+            return self.scan_single();
+        }
+        CHAR_DATA_TOKEN
+    }
+
+    // Ghidra: xml.cc:2134 int4 XmlScan::scanCData(void)
+    /// Scan for the next token in CDATA mode, looking for `]]>` and non-Chars.
+    /// CDATA can be empty.
+    fn scan_cdata(&mut self) -> i32 {
+        self.clearlvalue();
+        while self.next(0) != TOKEN_EOF {
+            if self.next(0) == ']' as i32
+                && self.next(1) == ']' as i32
+                && self.next(2) == '>' as i32
+            {
+                break;
+            }
+            if !Self::is_char(self.next(0)) {
+                break;
+            }
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+        }
+        CDATA_TOKEN
+    }
+
+    // Ghidra: xml.cc:2151 int4 XmlScan::scanCharRef(void)
+    /// Scan for the next token in character reference mode (decimal or hex
+    /// digits; the hex form keeps its `x` prefix in the token string).
+    fn scan_char_ref(&mut self) -> i32 {
+        self.clearlvalue();
+        if self.next(0) == 'x' as i32 {
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+            while self.next(0) != TOKEN_EOF {
+                let v = self.next(0);
+                if v < '0' as i32 {
+                    break;
+                }
+                if v > '9' as i32 && v < 'A' as i32 {
+                    break;
+                }
+                if v > 'F' as i32 && v < 'a' as i32 {
+                    break;
+                }
+                if v > 'f' as i32 {
+                    break;
+                }
+                let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+            }
+            if self.lbytes.len() == 1 {
+                return 'x' as i32; // Must be at least 1 hex digit
+            }
+        } else {
+            while self.next(0) != TOKEN_EOF {
+                let v = self.next(0);
+                if v < '0' as i32 {
+                    break;
+                }
+                if v > '9' as i32 {
+                    break;
+                }
+                let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+            }
+            if self.lbytes.is_empty() {
+                return self.scan_single();
+            }
+        }
+        CHAR_REF_TOKEN
+    }
+
+    // Ghidra: xml.cc:2183 int4 XmlScan::scanAttValue(int4 quote)
+    /// Scan for the next token in attribute value mode, stopping at the
+    /// closing quote, `<`, or `&`.
+    fn scan_att_value(&mut self, quote: u8) -> i32 {
+        self.clearlvalue();
+        while self.next(0) != TOKEN_EOF {
+            if self.next(0) == quote as i32 {
+                break;
+            }
+            if self.next(0) == '<' as i32 {
+                break;
+            }
+            if self.next(0) == '&' as i32 {
+                break;
+            }
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+        }
+        if self.lbytes.is_empty() {
+            return self.scan_single();
+        }
+        ATT_VALUE_TOKEN
+    }
+
+    // Ghidra: xml.cc:2199 int4 XmlScan::scanComment(void)
+    /// Scan for the next token in comment mode, looking for `--`.
+    fn scan_comment(&mut self) -> i32 {
+        self.clearlvalue();
+        while self.next(0) != TOKEN_EOF {
+            if self.next(0) == '-' as i32 && self.next(1) == '-' as i32 {
+                break;
+            }
+            if !Self::is_char(self.next(0)) {
+                break;
+            }
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+        }
+        COMMENT_TOKEN
+    }
+
+    // Ghidra: xml.cc:2215 int4 XmlScan::scanName(void)
+    /// Scan a Name, or return a single non-name character.
+    fn scan_name(&mut self) -> i32 {
+        self.clearlvalue();
+        if !Self::is_initial_name_char(self.next(0)) {
+            return self.scan_single();
+        }
+        let byte = self.getxmlchar();
+        self.lbytes.push(byte as u8);
+        while self.next(0) != TOKEN_EOF {
+            if !Self::is_name_char(self.next(0)) {
+                break;
+            }
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+        }
+        NAME_TOKEN
+    }
+
+    // Ghidra: xml.cc:2231 int4 XmlScan::scanSName(void)
+    /// Scan a Name, allowing white space before. Consumed white space is
+    /// reported as a single literal `' '` token when no Name follows.
+    fn scan_sname(&mut self) -> i32 {
+        let mut whitecount = 0usize;
+        while self.next(0) == ' ' as i32
+            || self.next(0) == '\n' as i32
+            || self.next(0) == '\r' as i32
+            || self.next(0) == '\t' as i32
+        {
+            whitecount += 1;
+            self.getxmlchar();
+        }
+        self.clearlvalue();
+        if !Self::is_initial_name_char(self.next(0)) {
+            // First non-whitespace is not a Name char
+            if whitecount > 0 {
+                return ' ' as i32;
+            }
+            return self.scan_single();
+        }
+        let byte = self.getxmlchar();
+        self.lbytes.push(byte as u8);
+        while self.next(0) != TOKEN_EOF {
+            if !Self::is_name_char(self.next(0)) {
+                break;
+            }
+            let byte = self.getxmlchar();
+            self.lbytes.push(byte as u8);
+        }
+        if whitecount > 0 {
+            return SNAME_TOKEN;
+        }
+        NAME_TOKEN
+    }
+
+    // Ghidra: xml.cc:2281 int4 XmlScan::nexttoken(void)
+    /// Get the next token, dispatching on (and resetting) the current mode.
+    fn nexttoken(&mut self) -> i32 {
+        let mymode = self.curmode;
+        self.curmode = ScanMode::Single;
+        match mymode {
+            ScanMode::CharData => self.scan_char_data(),
+            ScanMode::CData => self.scan_cdata(),
+            ScanMode::AttValueSingle => self.scan_att_value(b'\''),
+            ScanMode::AttValueDouble => self.scan_att_value(b'"'),
+            ScanMode::Comment => self.scan_comment(),
+            ScanMode::CharRef => self.scan_char_ref(),
+            ScanMode::Name => self.scan_name(),
+            ScanMode::SName => self.scan_sname(),
+            ScanMode::Single => self.scan_single(),
+        }
+    }
+
+    // Ghidra: xml.cc:174 void setmode(mode m)
+    /// Set the scanning mode.
+    fn setmode(&mut self, m: ScanMode) {
+        self.curmode = m;
+    }
+
+    // Ghidra: xml.cc:176 string *lval(void)
+    /// Return the last token string (taking ownership).
+    fn lval(&mut self) -> String {
+        String::from_utf8_lossy(&self.lbytes).into_owned()
+    }
+}
+
+// Ghidra: xml.cc:2326 int4 convertEntityRef(const string &ref)
+/// Convert an XML entity to its equivalent character, or -1 when unknown.
+fn convert_entity_ref(name: &str) -> i32 {
+    match name {
+        "lt" => '<' as i32,
+        "amp" => '&' as i32,
+        "gt" => '>' as i32,
+        "quot" => '"' as i32,
+        "apos" => '\'' as i32,
+        _ => -1,
+    }
+}
+
+// Ghidra: xml.cc:2337 int4 convertCharRef(const string &ref)
+/// Convert an XML character reference (`x`-prefixed hex or decimal) to its
+/// character value.
+fn convert_char_ref(text: &str) -> i32 {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mult: i32;
+    if !bytes.is_empty() && bytes[0] == b'x' {
+        i = 1;
+        mult = 16;
+    } else {
+        mult = 10;
+    }
+    let mut val: i32 = 0;
+    while i < bytes.len() {
+        let cur: i32 = if bytes[i] <= b'9' {
+            (bytes[i] - b'0') as i32
+        } else if bytes[i] <= b'F' {
+            10 + (bytes[i] - b'A') as i32
+        } else {
+            10 + (bytes[i] - b'a') as i32
+        };
+        val *= mult;
+        val += cur;
+        i += 1;
+    }
+    val
+}
+
+// RUGRA-GLUE: push_reference_char（对应 xml.cc:1610/1628/1790 语法动作里的
+// `*lvalue += (yyvsp[0].i)` —— C++ 经 string::operator+=(char) 截断为单字节；
+// Rust String 侧以 UTF-8 编码同一低字节，ASCII 域 byte-exact，>=0x80 为已登记残余）
+/// Append a converted reference character the way `string::operator+=(char)`
+/// does in the grammar actions: the codepoint is truncated to a single byte.
+fn push_reference_char(buffer: &mut String, val: i32) {
+    if let Some(ch) = char::from_u32((val as u8) as u32) {
+        buffer.push(ch);
+    }
+}
+
+/// The attributes collected for a single element during parsing. Faithful
+/// to the SAX `Attributes` container (xml.hh:45-78): it holds the element
+/// name plus ordered name/value pairs and is not part of the final DOM.
+struct XmlAttributes {
+    /// The name of the XML element.
+    element_name: String,
+    /// Ordered attribute names.
+    names: Vec<String>,
+    /// Ordered attribute values.
+    values: Vec<String>,
+}
+
+impl XmlAttributes {
+    // Ghidra: xml.hh:52 Attributes(string *el)
+    /// Construct from the element name string.
+    fn new(element_name: String) -> Self {
+        Self {
+            element_name,
+            names: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    // Ghidra: xml.hh:59 void add_attribute(string *nm, string *vl)
+    /// Add a formal attribute, preserving source order.
+    fn add_attribute(&mut self, nm: String, vl: String) {
+        self.names.push(nm);
+        self.values.push(vl);
+    }
+}
+
+/// The error thrown by the XML parser. Faithful to `struct DecoderError`
+/// (xml.hh:297-300): it holds the explanatory string passed to the SAX
+/// `setError` callback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecoderError {
+    /// Explanatory string.
+    pub explain: String,
+}
+
+impl DecoderError {
+    // RUGRA-GLUE: constructor mirroring DecoderError(const string &s)
+    /// Construct with the explanatory string.
+    pub fn new(s: impl Into<String>) -> Self {
+        Self { explain: s.into() }
+    }
+}
+
+impl std::fmt::Display for DecoderError {
+    // RUGRA-GLUE: Display for the error type (C++ has no Display)
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.explain)
+    }
+}
+
+impl std::error::Error for DecoderError {}
+
+// RUGRA-GLUE: is_ws_token（xml.y:143-148 whitespace/S 产生式的 token 分类，
+/// scanner 在 SingleMode 逐字符产出空白 token，scanSName 把前导空白物化为 ' '）
+/// Is the token a single XML whitespace character token?
+fn is_ws_token(tok: i32) -> bool {
+    tok == ' ' as i32 || tok == '\n' as i32 || tok == '\r' as i32 || tok == '\t' as i32
+}
+
+/// The tree-building parse of one XML document. Combines the bison parser
+/// driver (`xmlparse`, xml.cc:269/1362) with the `TreeHandler` DOM builder
+/// (xml.cc:2394-2415). A single lookahead token is kept and read lazily so
+/// every grammar action (notably the scanner mode switches) runs at exactly
+/// the same point between token reads as the bison default reductions do.
+struct XmlTreeParser<'a> {
+    /// The scanner.
+    scan: XmlScan<'a>,
+    /// The stack of open elements (`TreeHandler` root/cur pointers).
+    stack: Vec<Arc<RwLock<Element>>>,
+    /// The last error condition (`TreeHandler::error`).
+    error: String,
+    /// Current lookahead token (`yychar`); TOKEN_EOF when never read.
+    tok: i32,
+    /// Whether `tok` holds a valid lookahead (bison's YYEMPTY distinction).
+    tok_valid: bool,
+    /// The `yylval.str` string for tokens above the byte range.
+    lval: Option<String>,
+}
+
+/// The error string bison reports for an unexpected token with
+/// `YYERROR_VERBOSE` disabled (the locked xml.cc build defines it to 0).
+const SYNTAX_ERROR: &str = "syntax error";
+/// The error reported for any processing instruction (xml.cc:1664).
+const PI_ERROR: &str = "Processing instructions are not supported";
+/// The error reported for a DTD declaration (xml.cc:1682).
+const DTD_ERROR: &str = "DTD's not supported";
+
+impl<'a> XmlTreeParser<'a> {
+    // Ghidra: xml.cc:2378 int4 xml_parse(istream &i, ContentHandler *hand, int4 dbg)
+    /// Run the whole parse: start the document, parse, then end the document
+    /// only on success (`TreeHandler` callbacks are no-ops for these two).
+    fn run(input: &'a [u8]) -> Result<Self, String> {
+        let mut parser = Self {
+            scan: XmlScan::new(input),
+            stack: Vec::new(),
+            error: String::new(),
+            tok: TOKEN_EOF,
+            tok_valid: false,
+            lval: None,
+        };
+        // TreeHandler root is the Document element itself (xml.cc:622-632).
+        parser.stack.push(Arc::new(RwLock::new(Element::new())));
+        match parser.parse_document() {
+            Ok(()) => Ok(parser),
+            Err(msg) => Err(msg),
+        }
+    }
+
+    // Ghidra: xml.cc:2362 int xmllex(void)
+    /// Read the next token from the scanner and install it as the
+    /// lookahead, capturing the token string for tokens above the byte
+    /// range.
+    fn advance(&mut self) {
+        let res = self.scan.nexttoken();
+        if res > 255 {
+            self.lval = Some(self.scan.lval());
+        } else {
+            self.lval = None;
+        }
+        self.tok = res;
+        self.tok_valid = true;
+    }
+
+    // RUGRA-GLUE: deferred lookahead read mirroring bison default reductions
+    /// Read the lookahead token only if none is pending. Bison performs
+    /// default reductions without reading a lookahead; deferring the read
+    /// here keeps every scanner mode switch ahead of the next token read.
+    fn ensure(&mut self) {
+        if !self.tok_valid {
+            self.advance();
+        }
+    }
+
+    // RUGRA-GLUE: shift bookkeeping (bison consumes the lookahead on shift)
+    /// Consume the current token; the next read is deferred until `ensure`.
+    fn shift(&mut self) {
+        self.tok_valid = false;
+    }
+
+    // RUGRA-GLUE: yyerror("syntax error") for the locked non-verbose build
+    /// Record the bison syntax error message on the handler.
+    fn syntax_error(&self) -> String {
+        SYNTAX_ERROR.to_string()
+    }
+
+    // Ghidra: xml.cc:2394 void TreeHandler::startElement(...)
+    /// Open a new element as a child of the current one, in source order.
+    fn start_element(&mut self, atts: &XmlAttributes) {
+        let mut newel = Element::new();
+        newel.set_name(&atts.element_name);
+        for i in 0..atts.names.len() {
+            newel.add_attribute(&atts.names[i], &atts.values[i]);
+        }
+        let newel = Arc::new(RwLock::new(newel));
+        self.stack
+            .last()
+            .expect("handler stack empty")
+            .write()
+            .expect("element lock poisoned")
+            .add_child(newel.clone());
+        self.stack.push(newel);
+    }
+
+    // Ghidra: xml.cc:2405 void TreeHandler::endElement(...)
+    /// Close the current element.
+    fn end_element(&mut self) {
+        self.stack.pop();
+    }
+
+    // Ghidra: xml.cc:2411 void TreeHandler::characters(const char *text, ...)
+    /// Append character content to the current element.
+    fn characters(&mut self, text: &str) {
+        self.stack
+            .last()
+            .expect("handler stack empty")
+            .write()
+            .expect("element lock poisoned")
+            .add_content(text);
+    }
+
+    // Ghidra: xml.cc:2309 void print_content(const string &str)
+    /// Send character data to the content handler: whitespace-only runs go
+    /// to `ignorableWhitespace` (dropped by `TreeHandler`), everything else
+    /// to `characters`.
+    fn print_content(&mut self, text: &str) {
+        let all_ws = text
+            .bytes()
+            .all(|b| b == b' ' || b == b'\n' || b == b'\r' || b == b'\t');
+        if all_ws {
+            // handler->ignorableWhitespace: TreeHandler no-op (xml.hh:243)
+        } else {
+            self.characters(text);
+        }
+    }
+
+    // Ghidra: xml.cc:141 document production (xml.y:141-142, xml.cc:269)
+    /// `document: element Misc | prolog element Misc`, then `$end`.
+    fn parse_document(&mut self) -> Result<(), String> {
+        self.advance(); // bison reads the first token before its first decision
+        if self.tok == COMMAND_BRACE_TOKEN || is_ws_token(self.tok) {
+            self.parse_prolog()?;
+        }
+        self.parse_element()?;
+        self.parse_misc()?; // exactly one trailing Misc
+        self.ensure();
+        if self.tok != TOKEN_EOF {
+            return Err(self.syntax_error());
+        }
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1682 doctypedecl action (xml.y:166-174 prolog)
+    /// `prolog: prologpre doctypepro | prologpre` with
+    /// `prologpre: XMLDecl | Misc | prologpre Misc`. A `<!DOCTYPE` always
+    /// reports the DTD error; any `<?` after the optional leading XMLDecl
+    /// reports the processing-instruction error.
+    fn parse_prolog(&mut self) -> Result<(), String> {
+        // prologpre: at most one leading XMLDecl, then Misc*.
+        if is_ws_token(self.tok) {
+            // A leading whitespace Misc opens the prolog as well.
+            self.parse_s_run();
+            self.prolog_misc_loop()?;
+            return Ok(());
+        }
+        self.shift(); // consume COMMBRACE
+        self.ensure();
+        if self.tok == '?' as i32 {
+            self.shift();
+            self.ensure();
+            if self.tok == 'x' as i32 {
+                self.parse_xml_decl()?;
+            } else {
+                // PI: COMMBRACE '?' (xml.cc:1664)
+                return Err(PI_ERROR.to_string());
+            }
+        } else if self.tok == '!' as i32 {
+            // First prologpre position: only a comment can start here.
+            // doctypedecl is unreachable until prologpre is non-empty, so
+            // `<!D...` reports the plain syntax error (bison state after the
+            // initial COMMBRACE has only the commentstart continuation).
+            self.shift();
+            self.ensure();
+            if self.tok == '-' as i32 {
+                self.parse_comment_tail()?;
+            } else {
+                return Err(self.syntax_error());
+            }
+        } else {
+            return Err(self.syntax_error());
+        }
+        self.prolog_misc_loop()?;
+        Ok(())
+    }
+
+    // RUGRA-GLUE: shared Misc* tail of the prolog productions (xml.y:166-174)
+    /// `prologpre: prologpre Misc` continuation loop: Misc entries followed
+    /// by the (always failing) doctypedecl opportunity.
+    fn prolog_misc_loop(&mut self) -> Result<(), String> {
+        loop {
+            self.ensure();
+            if self.tok != COMMAND_BRACE_TOKEN && !is_ws_token(self.tok) {
+                break;
+            }
+            self.parse_misc()?;
+        }
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1688 VersionInfo action (xml.y:182-188)
+    /// `xmldeclstart: COMMBRACE '?' 'x' 'm' 'l' VersionInfo` followed by
+    /// `XMLDecl: xmldeclstart '?' '>' | xmldeclstart S '?' '>' |
+    /// xmldeclstart EncodingDecl '?' '>' | xmldeclstart EncodingDecl S '?' '>'`.
+    /// `setVersion`/`setEncoding` are `TreeHandler` no-ops.
+    fn parse_xml_decl(&mut self) -> Result<(), String> {
+        // Entry: 'x' is the lookahead; shift it, then expect literal "ml".
+        self.shift();
+        self.ensure();
+        for expected in [b'm', b'l'] {
+            if self.tok != expected as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift();
+            self.ensure();
+        }
+        // VersionInfo: S 'v' 'e' 'r' 's' 'i' 'o' 'n' Eq AttValue
+        if !is_ws_token(self.tok) {
+            return Err(self.syntax_error());
+        }
+        self.parse_s_run();
+        for expected in b"version" {
+            if self.tok != *expected as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift();
+            self.ensure();
+        }
+        self.parse_eq();
+        let _version = self.parse_att_value()?; // handler->setVersion: no-op
+        self.ensure(); // the token after the closing quote (SingleMode)
+        if is_ws_token(self.tok) {
+            self.parse_s_run();
+            if self.tok == 'e' as i32 {
+                // EncodingDecl: S 'e' 'n' 'c' 'o' 'd' 'i' 'n' 'g' Eq AttValue
+                for expected in b"encoding" {
+                    if self.tok != *expected as i32 {
+                        return Err(self.syntax_error());
+                    }
+                    self.shift();
+                    self.ensure();
+                }
+                self.parse_eq();
+                let _encoding = self.parse_att_value()?; // setEncoding: no-op
+                self.ensure(); // the token after the closing quote (SingleMode)
+                if is_ws_token(self.tok) {
+                    self.parse_s_run();
+                }
+            }
+        }
+        if self.tok != '?' as i32 {
+            return Err(self.syntax_error());
+        }
+        self.shift();
+        self.ensure();
+        if self.tok != '>' as i32 {
+            return Err(self.syntax_error());
+        }
+        self.shift();
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1658 Comment action (xml.y:178-180 Misc)
+    /// `Misc: Comment | PI | S` from the current lookahead token.
+    fn parse_misc(&mut self) -> Result<(), String> {
+        self.ensure();
+        if self.tok == COMMAND_BRACE_TOKEN {
+            self.shift();
+            self.ensure();
+            return self.parse_misc_after_brace();
+        }
+        if is_ws_token(self.tok) {
+            self.parse_s_run(); // Misc: S
+            return Ok(());
+        }
+        Err(self.syntax_error())
+    }
+
+    // Ghidra: xml.cc:1664 PI / xml.cc:1682 doctypedecl actions
+    /// Dispatch after a shifted COMMBRACE: `!` selects a comment or the
+    /// always-failing DTD, `?` selects the always-failing processing
+    /// instruction.
+    fn parse_misc_after_brace(&mut self) -> Result<(), String> {
+        if self.tok == '?' as i32 {
+            return Err(PI_ERROR.to_string());
+        }
+        if self.tok == '!' as i32 {
+            self.shift();
+            self.ensure();
+            if self.tok == '-' as i32 {
+                return self.parse_comment_tail();
+            }
+            if self.tok == 'D' as i32 {
+                return Err(DTD_ERROR.to_string());
+            }
+            return Err(self.syntax_error());
+        }
+        Err(self.syntax_error())
+    }
+
+    // Ghidra: xml.cc:2235 S token materialization (xml.y:143-148 whitespace/S)
+    /// `S: whitespace | S whitespace` — consume a run of one-or-more single
+    /// whitespace tokens.
+    fn parse_s_run(&mut self) {
+        while is_ws_token(self.tok) {
+            self.shift();
+            self.ensure();
+        }
+    }
+
+    // Ghidra: xml.cc:1748 SAttribute/Eq productions (xml.y:175-177 Eq)
+    /// `Eq: '=' | S '=' | Eq S` — an `=` with optional surrounding
+    /// whitespace.
+    fn parse_eq(&mut self) -> Result<(), String> {
+        if is_ws_token(self.tok) {
+            self.parse_s_run();
+        }
+        if self.tok != '=' as i32 {
+            return Err(self.syntax_error());
+        }
+        self.shift();
+        self.ensure();
+        if is_ws_token(self.tok) {
+            self.parse_s_run();
+        }
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1650 commentstart action (xml.y:159-160)
+    /// `commentstart: COMMBRACE '!' '-' '-'` (the caller has shifted
+    /// COMMBRACE `'!'` and holds the third `-`), then
+    /// `Comment: commentstart COMMENT '-' '-' '>'` with the comment text
+    /// discarded. The lookahead is left unset after the closing `>` so the
+    /// caller's re-arming action runs before the next token is read.
+    fn parse_comment_tail(&mut self) -> Result<(), String> {
+        // tok == '-': the third dash.
+        self.shift();
+        self.ensure();
+        if self.tok != '-' as i32 {
+            return Err(self.syntax_error());
+        }
+        self.shift();
+        self.scan.setmode(ScanMode::Comment); // case 19 action
+        self.ensure();
+        if self.tok != COMMENT_TOKEN {
+            return Err(self.syntax_error());
+        }
+        let _text = self.lval.take(); // Comment text is discarded (case 20)
+        self.shift();
+        self.ensure();
+        let tail = [b'-', b'-', b'>'];
+        for (i, expected) in tail.iter().enumerate() {
+            if self.tok != *expected as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift();
+            if i + 1 < tail.len() {
+                self.ensure();
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1676 CDStart action (xml.y:162-164)
+    /// `CDSect: CDStart CDATA CDEnd` with `CDEnd: ']' ']' '>'`. The caller
+    /// has shifted COMMBRACE `'!'` and holds `[`. CDATA content goes through
+    /// `print_content` (whitespace-only CDATA is dropped).
+    fn parse_cdsect(&mut self) -> Result<(), String> {
+        // tok == '[': consume it, then the literal "CDATA[".
+        self.shift();
+        self.ensure();
+        let literals = *b"CDATA[";
+        for (i, expected) in literals.iter().enumerate() {
+            if self.tok != *expected as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift();
+            if i + 1 < literals.len() {
+                self.ensure();
+            }
+        }
+        self.scan.setmode(ScanMode::CData); // case 23 action
+        self.ensure();
+        if self.tok != CDATA_TOKEN {
+            return Err(self.syntax_error());
+        }
+        let text = self.lval.take().unwrap_or_default();
+        self.shift();
+        self.ensure();
+        let tail = [b']', b']', b'>'];
+        for (i, expected) in tail.iter().enumerate() {
+            if self.tok != *expected as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift();
+            if i + 1 < tail.len() {
+                self.ensure();
+            }
+        }
+        self.print_content(&text); // case 62 action
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1814 Reference action (xml.y:213-219)
+    /// `Reference: EntityRef | CharRef` from a shifted `&`:
+    /// `refstart: '&'` switches to Name mode; `charrefstart: refstart '#'`
+    /// switches to CharRef mode; `EntityRef: refstart NAME ';'` and
+    /// `CharRef: charrefstart CHARREF ';'` return the converted character.
+    fn parse_reference(&mut self) -> Result<i32, String> {
+        self.shift(); // shift '&'
+        self.scan.setmode(ScanMode::Name); // refstart action (case 67)
+        self.ensure();
+        if self.tok == '#' as i32 {
+            self.shift(); // shift '#'
+            self.scan.setmode(ScanMode::CharRef); // case 68 action
+            self.ensure();
+            if self.tok != CHAR_REF_TOKEN {
+                return Err(self.syntax_error());
+            }
+            let digits = self.lval.take().unwrap_or_default();
+            self.shift(); // shift CHARREF — CharRef reduces (case 69: $$=$2)
+            self.ensure();
+            if self.tok != ';' as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift(); // ';' — Reference reduces (case 66)
+            Ok(convert_char_ref(&digits))
+        } else {
+            if self.tok != NAME_TOKEN {
+                return Err(self.syntax_error());
+            }
+            let name = self.lval.take().unwrap_or_default();
+            self.shift(); // shift NAME
+            self.ensure();
+            if self.tok != ';' as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift(); // ';' — EntityRef/Reference reduce (case 70/65)
+            Ok(convert_entity_ref(&name))
+        }
+    }
+
+    // Ghidra: xml.cc:1598 attsinglemid action (xml.y:150-157)
+    /// `AttValue: attsinglemid '\'' | attdoublemid '"'` where the mid rules
+    /// accumulate ATTVALUE pieces and converted Reference characters,
+    /// re-arming the matching AttValue scan mode after each piece.
+    fn parse_att_value(&mut self) -> Result<String, String> {
+        let quote = match self.tok {
+            t if t == '\'' as i32 => b'\'',
+            t if t == '"' as i32 => b'"',
+            _ => return Err(self.syntax_error()),
+        };
+        self.shift(); // shift the opening quote — attXmid reduces (cases 10/13)
+        let mode = if quote == b'\'' {
+            ScanMode::AttValueSingle
+        } else {
+            ScanMode::AttValueDouble
+        };
+        self.scan.setmode(mode);
+        let mut value = String::new(); // new string
+        self.ensure();
+        loop {
+            if self.tok == ATT_VALUE_TOKEN {
+                value.push_str(&self.lval.take().unwrap_or_default()); // cases 11/14
+                self.scan.setmode(mode);
+                self.shift();
+                self.ensure();
+            } else if self.tok == '&' as i32 {
+                let ch = self.parse_reference()?;
+                push_reference_char(&mut value, ch); // cases 12/15
+                self.scan.setmode(mode);
+                self.ensure();
+            } else if self.tok == quote as i32 {
+                self.shift(); // AttValue reduces (cases 16/17)
+                return Ok(value);
+            } else {
+                return Err(self.syntax_error());
+            }
+        }
+    }
+
+    // Ghidra: xml.cc:1736 stagstart action (xml.y:198-199)
+    /// `stagstart: elemstart NAME | stagstart SAttribute` — collect the
+    /// element name and ordered attributes. `elemstart: ELEMBRACE` switches
+    /// to Name mode; each completed attribute re-arms SName mode.
+    fn parse_stagstart(&mut self) -> Result<XmlAttributes, String> {
+        // tok == ELEMENT_BRACE_TOKEN
+        self.shift();
+        self.scan.setmode(ScanMode::Name); // elemstart action (case 18)
+        self.ensure();
+        if self.tok != NAME_TOKEN {
+            return Err(self.syntax_error());
+        }
+        let name = self.lval.take().unwrap_or_default();
+        self.shift(); // the NAME is shifted; bison reads the next lookahead after
+        let mut attrs = XmlAttributes::new(name); // case 52 action
+        self.scan.setmode(ScanMode::SName);
+        self.ensure();
+        while self.tok == SNAME_TOKEN {
+            let aname = self.lval.take().unwrap_or_default();
+            self.shift(); // shift SNAME
+            self.ensure();
+            self.parse_eq()?;
+            let avalue = self.parse_att_value()?; // SAttribute reduces (case 54)
+            attrs.add_attribute(aname, avalue);
+            self.scan.setmode(ScanMode::SName); // case 53 action
+            self.ensure();
+        }
+        Ok(attrs)
+    }
+
+    // Ghidra: xml.cc:1700 element action (xml.y:190-196)
+    /// `element: EmptyElemTag | STag content ETag` — fires `startElement`
+    /// when the opening tag completes, then `endElement` when the element
+    /// closes. The end tag name is not checked against the start tag.
+    fn parse_element(&mut self) -> Result<(), String> {
+        if self.tok != ELEMENT_BRACE_TOKEN {
+            return Err(self.syntax_error());
+        }
+        let attrs = self.parse_stagstart()?;
+        let is_stag = match self.tok {
+            t if t == '>' as i32 => {
+                self.shift(); // STag: stagstart '>' (case 48)
+                true
+            }
+            t if t == '/' as i32 => {
+                self.shift();
+                self.ensure();
+                if self.tok != '>' as i32 {
+                    return Err(self.syntax_error());
+                }
+                self.shift(); // EmptyElemTag: stagstart '/' '>' (case 50)
+                false
+            }
+            t if t == ' ' as i32 => {
+                // The S produced by scanSName.
+                self.shift();
+                self.ensure();
+                if self.tok == '>' as i32 {
+                    self.shift(); // STag: stagstart S '>' (case 49)
+                    true
+                } else if self.tok == '/' as i32 {
+                    self.shift();
+                    self.ensure();
+                    if self.tok != '>' as i32 {
+                        return Err(self.syntax_error());
+                    }
+                    self.shift(); // EmptyElemTag: stagstart S '/' '>' (case 51)
+                    false
+                } else {
+                    return Err(self.syntax_error());
+                }
+            }
+            _ => return Err(self.syntax_error()),
+        };
+        self.start_element(&attrs); // handler->startElement (cases 48-51)
+        if !is_stag {
+            self.end_element(); // element: EmptyElemTag (case 46)
+            return Ok(());
+        }
+        self.scan.setmode(ScanMode::CharData); // content: ε (case 58)
+        self.parse_content()?;
+        self.parse_etag()?; // element: STag content ETag (case 47)
+        self.end_element();
+        Ok(())
+    }
+
+    // Ghidra: xml.cc:1754 etagbrace action (xml.y:201-203)
+    /// `ETag: etagbrace NAME '>' | etagbrace NAME S '>'` where
+    /// `etagbrace: COMMBRACE '/'` switches to Name mode. The caller has
+    /// shifted COMMBRACE and the `/`.
+    fn parse_etag(&mut self) -> Result<String, String> {
+        // etagbrace action already applied by the caller.
+        self.ensure();
+        if self.tok != NAME_TOKEN {
+            return Err(self.syntax_error());
+        }
+        let name = self.lval.take().unwrap_or_default();
+        self.shift();
+        self.ensure();
+        if self.tok == '>' as i32 {
+            self.shift(); // ETag: etagbrace NAME '>' (case 56)
+        } else if is_ws_token(self.tok) {
+            self.parse_s_run();
+            if self.tok != '>' as i32 {
+                return Err(self.syntax_error());
+            }
+            self.shift(); // ETag: etagbrace NAME S '>' (case 57)
+        } else {
+            return Err(self.syntax_error());
+        }
+        Ok(name)
+    }
+
+    // Ghidra: xml.cc:1772 content productions (xml.y:205-211)
+    /// `content:` a sequence of CHARDATA (via `print_content`), child
+    /// elements, References (printed as characters), CDSects, and Comments,
+    /// re-arming CharData mode after each item. A `COMMBRACE '/'` ends the
+    /// loop as the enclosing end tag.
+    fn parse_content(&mut self) -> Result<(), String> {
+        loop {
+            self.ensure();
+            if self.tok == CHAR_DATA_TOKEN {
+                let text = self.lval.take().unwrap_or_default();
+                self.shift();
+                self.print_content(&text); // case 59 action
+                self.scan.setmode(ScanMode::CharData);
+            } else if self.tok == ELEMENT_BRACE_TOKEN {
+                self.parse_element()?;
+                self.scan.setmode(ScanMode::CharData); // case 60 action
+            } else if self.tok == '&' as i32 {
+                let ch = self.parse_reference()?;
+                let mut tmp = String::new();
+                push_reference_char(&mut tmp, ch);
+                self.print_content(&tmp); // case 61 action
+                self.scan.setmode(ScanMode::CharData);
+            } else if self.tok == COMMAND_BRACE_TOKEN {
+                self.shift();
+                self.ensure();
+                if self.tok == '!' as i32 {
+                    self.shift();
+                    self.ensure();
+                    if self.tok == '-' as i32 {
+                        self.parse_comment_tail()?;
+                    } else if self.tok == '[' as i32 {
+                        self.parse_cdsect()?;
+                    } else {
+                        return Err(self.syntax_error());
+                    }
+                    self.scan.setmode(ScanMode::CharData); // cases 63/64
+                } else if self.tok == '?' as i32 {
+                    return Err(PI_ERROR.to_string()); // PI (case 21)
+                } else if self.tok == '/' as i32 {
+                    self.shift();
+                    self.scan.setmode(ScanMode::Name); // etagbrace (case 55)
+                    return Ok(()); // hand the end tag to the caller
+                } else {
+                    return Err(self.syntax_error());
+                }
+            } else {
+                return Err(self.syntax_error());
+            }
+        }
+    }
+
+    // RUGRA-GLUE: document assembly from the TreeHandler root element
+    /// Extract the built document: the grammar admits exactly one root
+    /// element, which becomes the `Document` root (Ghidra's `Document` is
+    /// itself the `Element` whose first child is the root, xml.hh:215-219).
+    fn into_document(self) -> Document {
+        let root_element = self.stack.into_iter().next().expect("root element");
+        let children = root_element.read().expect("element lock poisoned");
+        let mut doc = Document::new();
+        if let Some(first) = children.get_children().first() {
+            doc.set_root(first.clone());
+        }
+        doc
+    }
+}
+
+// Ghidra: xml.cc:2480 Document *xml_tree(istream &i)
+/// Parse the given XML bytes into an in-memory document. On any parse
+/// error the partially built document is discarded and the handler's error
+/// message is thrown as a `DecoderError`.
+pub fn xml_tree(input: &[u8]) -> Result<Document, DecoderError> {
+    match XmlTreeParser::run(input) {
+        Ok(parser) => Ok(parser.into_document()),
+        Err(msg) => Err(DecoderError::new(msg)),
+    }
+}
+
+/// A container for parsed XML documents. Faithful to `DocumentStorage`
+/// (xml.hh:258-291): documents are parsed into an ordered list, and
+/// registered elements can be looked up by tag name.
+#[derive(Debug, Default)]
+pub struct DocumentStorage {
+    /// The list of documents held by this container (null slots preserved
+    /// for parses that failed after the slot was appended).
+    doclist: Vec<Option<Document>>,
+    /// The map from name to registered XML elements (same-name
+    /// registration overwrites, like `map::operator[]`).
+    tagmap: std::collections::BTreeMap<String, Arc<RwLock<Element>>>,
+}
+
+impl DocumentStorage {
+    // RUGRA-GLUE: Default construction (C++ default-constructs members)
+    /// Construct an empty container.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // Ghidra: xml.cc:2444 Document *DocumentStorage::parseDocument(istream &s)
+    /// Parse an XML document from the given bytes. The null document slot
+    /// is appended before parsing, so a failed parse leaves it behind as
+    /// observable partial state; the error is thrown to the caller.
+    pub fn parse_document(&mut self, input: &[u8]) -> Result<&Document, DecoderError> {
+        self.doclist.push(None);
+        match xml_tree(input) {
+            Ok(doc) => {
+                let slot = self.doclist.last_mut().expect("slot just pushed");
+                *slot = Some(doc);
+            }
+            Err(e) => return Err(e),
+        }
+        Ok(self
+            .doclist
+            .last()
+            .and_then(|slot| slot.as_ref())
+            .expect("slot just filled"))
+    }
+
+    // Ghidra: xml.cc:2452 Document *DocumentStorage::openDocument(const string &filename)
+    /// Open and parse an XML file from the local filesystem.
+    pub fn open_document(&mut self, filename: &str) -> Result<&Document, DecoderError> {
+        let bytes = std::fs::read(filename).map_err(|_| {
+            DecoderError::new(format!("Unable to open xml document {}", filename))
+        })?;
+        self.parse_document(&bytes)
+    }
+
+    // Ghidra: xml.cc:2463 void DocumentStorage::registerTag(const Element *el)
+    /// Register the given XML element under its tag name. Only one element
+    /// is stored per tag name; a same-name registration overwrites.
+    pub fn register_tag(&mut self, el: &Arc<RwLock<Element>>) {
+        let name = el.read().expect("element lock poisoned").name.clone();
+        self.tagmap.insert(name, el.clone());
+    }
+
+    // Ghidra: xml.cc:2469 const Element *DocumentStorage::getTag(const string &nm) const
+    /// Retrieve a registered XML element by name, or `None`.
+    pub fn get_tag(&self, nm: &str) -> Option<&Arc<RwLock<Element>>> {
+        self.tagmap.get(nm)
+    }
+
+    // RUGRA-GLUE: doclist_len (Ghidra keeps doclist private with no accessor;
+    // exposed so fixtures can assert the null-slot partial state invariant)
+    /// The number of document slots, including null slots left by failed
+    /// parses. Ghidra's `doclist` is private and unobservable through its
+    /// API; this accessor exists for state-parity assertions only.
+    pub fn doclist_len(&self) -> usize {
+        self.doclist.len()
     }
 }
 
@@ -2096,5 +3380,169 @@ mod tests {
         let eid = dec.open_element();
         assert_eq!(eid, 132);
         dec.close_element(eid);
+    }
+
+    // ---- XML text ingestion (Rugra regression only; oracle parity is
+    // observed by tests/oracle/xml_text_dom_1204, not by these tests). ----
+
+    #[test]
+    fn test_xml_text_basic_tree_and_attribute_order() {
+        let doc = xml_tree(
+            b"<compiler_spec><stackpointer register=\"rsp\" space=\"ram\" growth=\"down\"/></compiler_spec>",
+        )
+        .expect("parse succeeds");
+        let root = doc.get_root().expect("root element");
+        let root = root.read().unwrap();
+        assert_eq!(root.get_name(), "compiler_spec");
+        assert_eq!(root.get_content(), "");
+        assert_eq!(root.get_children().len(), 1);
+        let child = root.get_children()[0].read().unwrap();
+        assert_eq!(child.get_name(), "stackpointer");
+        assert_eq!(child.get_num_attributes(), 3);
+        assert_eq!(child.get_attribute_name(0), "register");
+        assert_eq!(child.get_attribute_value_at(0), "rsp");
+        assert_eq!(child.get_attribute_name(1), "space");
+        assert_eq!(child.get_attribute_value_at(1), "ram");
+        assert_eq!(child.get_attribute_name(2), "growth");
+        assert_eq!(child.get_attribute_value_at(2), "down");
+        assert_eq!(child.get_children().len(), 0);
+    }
+
+    #[test]
+    fn test_xml_text_content_and_whitespace_rules() {
+        // Whitespace-only chardata is dropped (ignorableWhitespace); the
+        // synthetic trailing '\n' after the root element is Misc, not content.
+        let doc = xml_tree(b"<data>  \n\t  </data>").expect("parse succeeds");
+        let root = doc.get_root().unwrap().read().unwrap();
+        assert_eq!(root.get_name(), "data");
+        assert_eq!(root.get_content(), "");
+
+        let doc = xml_tree(b"<data>keep <b/> this</data>").expect("parse succeeds");
+        let root = doc.get_root().unwrap().read().unwrap();
+        // 'keep ' and ' this' are two significant CHARDATA pieces.
+        assert_eq!(root.get_content(), "keep  this");
+        assert_eq!(root.get_children().len(), 1);
+
+        // Whitespace-only CDATA is dropped by the same print_content rule.
+        let doc = xml_tree(b"<data><![CDATA[   ]]></data>").expect("parse succeeds");
+        let root = doc.get_root().unwrap().read().unwrap();
+        assert_eq!(root.get_content(), "");
+
+        // CDATA keeps embedded markup characters as literal content.
+        let doc = xml_tree(b"<data><![CDATA[x<y & z]]></data>").expect("parse succeeds");
+        let root = doc.get_root().unwrap().read().unwrap();
+        assert_eq!(root.get_content(), "x<y & z");
+    }
+
+    #[test]
+    fn test_xml_text_entity_and_char_refs() {
+        let doc = xml_tree(b"<r a=\"&lt;&amp;&quot;\">&#65;&#x42;&amp;</r>").expect("parse");
+        let root = doc.get_root().unwrap().read().unwrap();
+        assert_eq!(root.get_attribute_value("a"), Some("<&\""));
+        assert_eq!(root.get_content(), "AB&");
+    }
+
+    #[test]
+    fn test_xml_text_prolog_comments_endtag_whitespace() {
+        let doc = xml_tree(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><!--c--><r> <!-- inner --> <c/></r>")
+            .expect("parse succeeds");
+        let root = doc.get_root().unwrap().read().unwrap();
+        assert_eq!(root.get_name(), "r");
+        // Whitespace around the inner comment is whitespace-only chardata
+        // (dropped); the comment itself adds nothing.
+        assert_eq!(root.get_content(), "");
+        assert_eq!(root.get_children().len(), 1);
+        assert_eq!(root.get_children()[0].read().unwrap().get_name(), "c");
+
+        // End tag with whitespace, self-closing with whitespace.
+        assert!(xml_tree(b"<r>x</r >").is_ok());
+        assert!(xml_tree(b"<r />").is_ok());
+        // The end tag name is not checked against the start tag name.
+        assert!(xml_tree(b"<r>x</q>").is_ok());
+        // A comment AFTER the root element is always a syntax error: the
+        // document grammar admits exactly one trailing Misc, and the
+        // scanner's synthetic end-of-stream '\n' can then never follow.
+        let err = xml_tree(b"<r/><!--after-->").expect_err("trailing comment");
+        assert_eq!(err.explain, "syntax error");
+        // `]]` followed by a reference is ordinary content.
+        let doc = xml_tree(b"<r>]]&gt;</r>").expect("raw ]] with ref parses");
+        assert_eq!(doc.get_root().unwrap().read().unwrap().get_content(), "]]>");
+        // `<!DOCTYPE` at the very first position is unreachable in the
+        // grammar and reports the plain syntax error.
+        let err = xml_tree(b"<!DOCTYPE x>").expect_err("dtd first");
+        assert_eq!(err.explain, "syntax error");
+        // After any prologpre item, `<!DOCTYPE` reports the DTD error.
+        let err = xml_tree(b"<!--c--><!DOCTYPE x>").expect_err("dtd after misc");
+        assert_eq!(err.explain, "DTD's not supported");
+        let err = xml_tree(b"<?xml version=\"1.0\"?><!DOCTYPE x>").expect_err("dtd after decl");
+        assert_eq!(err.explain, "DTD's not supported");
+        // Processing instructions fail everywhere they can appear.
+        let err = xml_tree(b"<!--c--><?php ?>").expect_err("pi after comment");
+        assert_eq!(err.explain, "Processing instructions are not supported");
+        let err = xml_tree(b"<r><?php ?></r>").expect_err("pi in content");
+        assert_eq!(err.explain, "Processing instructions are not supported");
+        // End tag with newline whitespace.
+        assert!(xml_tree(b"<r>x</r\n>").is_ok());
+        // '<' inside an attribute value is a syntax error.
+        let err = xml_tree(b"<r a=\"<\"/>").expect_err("lt in attribute");
+        assert_eq!(err.explain, "syntax error");
+    }
+
+    #[test]
+    fn test_xml_text_error_messages() {
+        let err = xml_tree(b"<r><b></r>").expect_err("mismatched nesting");
+        assert_eq!(err.explain, "syntax error");
+        let err = xml_tree(b"<r>").expect_err("unclosed");
+        assert_eq!(err.explain, "syntax error");
+        let err = xml_tree(b"<?php ?>").expect_err("processing instruction");
+        assert_eq!(err.explain, "Processing instructions are not supported");
+        let err = xml_tree(b"<!DOCTYPE x>").expect_err("dtd at first position");
+        assert_eq!(err.explain, "syntax error");
+        let err = xml_tree(b"<r/><r/>").expect_err("two roots");
+        assert_eq!(err.explain, "syntax error");
+        let err = xml_tree(b"").expect_err("empty input");
+        assert_eq!(err.explain, "syntax error");
+        let err = xml_tree(b"<r>]]>").map(|_| ()).expect_err("raw ]]> text");
+        assert_eq!(err.explain, "syntax error");
+    }
+
+    #[test]
+    fn test_document_storage_register_and_null_slot() {
+        let mut storage = DocumentStorage::new();
+        let doc1 = storage
+            .parse_document(b"<colors><red/></colors>")
+            .expect("parse succeeds");
+        let red = doc1.get_root().unwrap().read().unwrap().children[0].clone();
+        storage.register_tag(&red);
+        assert!(storage.get_tag("red").is_some());
+        assert!(storage.get_tag("blue").is_none());
+        // Same-name registration overwrites.
+        let doc2 = storage
+            .parse_document(b"<other><red x=\"1\"/></other>")
+            .expect("parse succeeds");
+        let red2 = doc2.get_root().unwrap().read().unwrap().children[0].clone();
+        storage.register_tag(&red2);
+        let fetched = storage.get_tag("red").expect("still registered");
+        assert_eq!(fetched.read().unwrap().get_attribute_value("x"), Some("1"));
+
+        // A failed parse appends the null document slot first and keeps it.
+        let before = storage.doclist_len();
+        let err = storage
+            .parse_document(b"<broken>")
+            .expect_err("parse fails");
+        assert_eq!(err.explain, "syntax error");
+        assert_eq!(storage.doclist_len(), before + 1);
+        // The container remains usable after the failure.
+        storage
+            .parse_document(b"<ok/>")
+            .expect("storage usable after failure");
+
+        let err = storage
+            .open_document("/nonexistent/xml/text/dom/fixture.xml")
+            .expect_err("open fails");
+        assert_eq!(
+            err.explain,
+            "Unable to open xml document /nonexistent/xml/text/dom/fixture.xml"
+        );
     }
 }

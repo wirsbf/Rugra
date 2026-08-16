@@ -116,10 +116,8 @@ XmlDecode).
   traversal. Attribute and child order remain source order.
 
 ## L3 gaps
-- `PackedEncode`/`PackedDecode` — the binary marshaling format
-  (marshal.hh:480-594, marshal.cc).
-- Actual XML text parsing (`XmlScan`, `ContentHandler`) and serialization to
-  XML text.
+- Actual XML text serialization (writing the DOM back out as XML bytes) —
+  ingestion is now covered (see MARSHAL-XML-TEXT-0001 below).
 - `readSpace`/`writeSpace`/`readOpcode`/`writeOpcode` (require AddressSpace/
   OpCode integration).
 - `readSignedIntegerExpectString`.
@@ -132,6 +130,47 @@ directions, unknown names, nonzero scope fallback, repeated initialization,
 status remains `MISMATCH`: the source-manifest ID observations match, while the
 standard-runtime 379-versus-420 registration set and strict TreeDecoder
 close/open error behavior remain registered residuals.
+
+## MARSHAL-XML-TEXT-0001：XML 文本 ingestion（2026-08-16）
+
+`src/marshal.rs` 新增 XML bytes → 有序 DOM 的完整解析链，1:1 移植 Ghidra
+`xml.cc`/`xml.y`：
+
+### `XmlScan`（xml.cc:111-177, 2080-2375）
+- 4 字节环形 lookahead（`getxmlchar`/`next`），EOF 时补一个合成 `'\n'` 再产生
+  `-1`（NUL 字节同样终止流）。
+- 9 种 one-shot 扫描模式（CharData/CData/AttValue×2/Comment/CharRef/Name/SName/
+  Single），`nexttoken` 派发后重置为 Single。
+- `scanSName` 消费空白后无 Name 时返回字面 `' '` token（S 的物化）。
+
+### 语法驱动（xml.y 141-219 的编译动作，xml.cc:1594-1845）
+- 递归下降实现同一 LALR 文法；所有 mode 切换动作在 bison 中均为 default
+  reduction（单完整项/唯一动作状态），故在"shift 最后一个 token 之后、读下一个
+  token 之前"执行——parser 用 `tok_valid`+`ensure()` 的惰性单 lookahead 精确
+  复现该时序。
+- 关键忠实细节：尾随 root 的注释必然 syntax error（`document: element Misc`
+  仅一个 Misc + 合成 `'\n'`）；`<!DOCTYPE` 首位不可达（plain syntax error），
+  仅在 prologpre 非空后报 `DTD's not supported`；`<?` 一律 PI 错误（`<?xml`
+  除外）；end tag 名不校验；纯空白 chardata/CDATA 经 `print_content` 走
+  `ignorableWhitespace` 丢弃；注释文本丢弃；同名属性按源序全保留。
+
+### `DecoderError`（xml.hh:297）
+- `{ explain: String }`，消息与 Ghidra 逐字一致（`syntax error`、
+  `Processing instructions are not supported`、`DTD's not supported`、
+  `Unable to open xml document <name>`、`Unknown attribute: <nm>`）。
+
+### `DocumentStorage`（xml.hh:258, xml.cc:2435-2477）
+- `parse_document(&[u8]) -> Result<&Document, DecoderError>`：先追加 null slot
+  再解析（失败时保留 null slot 的部分状态）。
+- `open_document(filename)`、`register_tag`（同名覆盖）、`get_tag`。
+- `doclist_len()` 为 RUGRA-GLUE 观察访问器（Ghidra doclist 私有无 API）。
+
+### `xml_tree(&[u8]) -> Result<Document, DecoderError>`（xml.cc:2480）
+
+### 已登记残余（fixture metadata）
+1. MISMATCH：≥0x80 的数值字符引用与未知实体 `(char)0xFF` 标记——Ghidra 追加
+   单字节，Rust String 以 UTF-8 编码（ASCII 域 byte-exact）。
+2. UNTESTED：bison YYMAXDEPTH=10000 的 `memory exhausted` 深嵌套路径。
 
 ## 2026-06-27（续）：Decoder trait 新增 attribute_name/element_name
 
