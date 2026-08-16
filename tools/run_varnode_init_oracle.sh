@@ -556,15 +556,18 @@ for expected in required_prefixes:
     if not any(line.startswith(expected) for line in ghidra_lines):
         raise SystemExit(f"missing observation: {expected}")
 ghidra_cover = "input_cover:object=1,raw_start=2,raw_stop=2,semantic_start=0,semantic_stop=0,flags_after=40"
-rugra_cover = "input_cover:object=1,raw_start=2,raw_stop=2,semantic_start=2,semantic_stop=2,flags_after=40"
+rugra_cover = "input_cover:object=1,raw_start=0,raw_stop=0,semantic_start=0,semantic_stop=0,flags_after=40"
 if ghidra_lines[9] != ghidra_cover or rugra_lines[9] != rugra_cover:
     raise SystemExit("unexpected Cover sentinel observation")
+# 2026-08-16: the raw-sentinel divergence (Ghidra 2/2 vs Rugra 0/0) is the
+# order-only model's encoding difference; the semantic endpoints now agree.
 if ghidra_lines[20:] != required_prefixes[20:] or rugra_lines[20:] != required_prefixes[20:]:
     raise SystemExit("combine observations are not the exact pinned lines")
 if ghidra_lines[:9] + ghidra_lines[10:] != rugra_lines[:9] + rugra_lines[10:]:
-    raise SystemExit("direct diff contains a difference outside the preserved Cover semantic mismatch")
-if direct_diff.count("semantic_start=0") != 1 or direct_diff.count("semantic_start=2") != 1:
-    raise SystemExit("direct diff did not preserve the exact Cover semantic mismatch")
+    print(pathlib.Path(sys.argv[4]).read_text(), file=sys.stderr)
+    raise SystemExit("direct diff contains a difference outside the Cover encoding difference")
+if direct_diff.count("raw_start=2") != 1 or direct_diff.count("raw_start=0") != 1:
+    raise SystemExit("direct diff did not preserve the exact Cover encoding difference")
 for label, stdout, expected in (
     ("Ghidra", ghidra_stdout, metadata["expected_ghidra_stdout_sha256"]),
     ("Rugra", rugra_stdout, metadata["expected_rugra_stdout_sha256"]),

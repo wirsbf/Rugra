@@ -166,3 +166,11 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
 <!-- partial-port: 2026-07-22 -->
 <!-- annotation-pass: 2026-07-04 -->
 <!-- printnamebase-port: 1783140112.9236958 -->
+
+### 2026-08-16：`get_inheritable` 修正为锁定 oracle 语义（TYPE-WIRING 收尾）
+
+复核 varnode_init fixture 揭出：Rust 旧实现返回
+`flags & (chartype|utf16|utf32|opaque_string|enumtype)`（引 type.hh:208 的
+过时行号），而锁定 12.0.4 `type.hh:233` 是 `flags & coretype`——只有
+core-type 位向指针传播。已改为 `flags & CORETYPE`；工厂核心类型
+（undefinedN/xunknownN）现正确传播 1。

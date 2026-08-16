@@ -870,15 +870,10 @@ impl Datatype {
 
     // Ghidra: type.hh:165 Datatype::getInheritable (inline)
     /// The subset of flags inherited from a pointed-to type when constructing
-    /// a pointer. Faithful to Ghidra's inline `getInheritable` (type.hh:208):
-    /// `flags & (chartype | utf16 | utf32 | opaque_string | enumtype)`.
+    /// a pointer. Faithful to Ghidra's inline `getInheritable` (type.hh:233):
+    /// `flags & coretype` — only the core-type bit propagates to pointers.
     pub fn get_inheritable(&self) -> u32 {
-        self.get_flags()
-            & (type_flags::CHARTYPE
-                | type_flags::UTF16
-                | type_flags::UTF32
-                | type_flags::OPAQUE_STRUCT
-                | type_flags::ENUMTYPE)
+        self.get_flags() & type_flags::CORETYPE
     }
 
     // Ghidra: type.cc:438 Datatype::encode

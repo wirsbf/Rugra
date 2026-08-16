@@ -331,24 +331,29 @@ int main() {
   std::vector<std::string> spec_paths;
   startDecompilerLibrary(spec_paths);
   FixtureTranslate trans;
-  TypeBase unknown8(8, TYPE_UNKNOWN, "xunknown8");
-  TypeBase unknown4(4, TYPE_UNKNOWN, "xunknown4");
+  FixtureArchitecture architecture;
+  // Draw ct from the factory the way production Funcdata::newVarnode does
+  // (glb->types->getBase(s,TYPE_UNKNOWN)): the standalone-flavor core types
+  // carry hashName ids and the core flag, matching the Rust comparand's
+  // injected Standalone TypeFactory.
+  Datatype *unknown8 = architecture.types->getBase(8, TYPE_UNKNOWN);
+  Datatype *unknown4 = architecture.types->getBase(4, TYPE_UNKNOWN);
   VarnodeBank bank(&trans);
 
   PcodeOp defop(0, SeqNum(Address(trans.getSpace(3), 0x1000), 0));
   Varnode *defined = bank.createDef(
-      8, Address(trans.getSpace(4), 0x20), &unknown8, &defop);
-  Varnode *free = bank.create(8, Address(trans.getSpace(4), 0x38), &unknown8);
+      8, Address(trans.getSpace(4), 0x20), unknown8, &defop);
+  Varnode *free = bank.create(8, Address(trans.getSpace(4), 0x38), unknown8);
   Varnode *constant = bank.create(
-      4, Address(trans.getConstantSpace(), 0x1234), &unknown4);
-  Varnode *input = bank.create(8, Address(trans.getSpace(4), 0x30), &unknown8);
+      4, Address(trans.getConstantSpace(), 0x1234), unknown4);
+  Varnode *input = bank.create(8, Address(trans.getSpace(4), 0x30), unknown8);
   input = bank.setInput(input);
   Varnode *annotation = bank.create(
-      8, Address(trans.getIopSpace(), 0x99), &unknown8);
-  Varnode *unique0 = bank.createUnique(8, &unknown8);
-  Varnode *unique1 = bank.createUnique(4, &unknown4);
+      8, Address(trans.getIopSpace(), 0x99), unknown8);
+  Varnode *unique0 = bank.createUnique(8, unknown8);
+  Varnode *unique1 = bank.createUnique(4, unknown4);
   Varnode *set_def_valid = bank.create(
-      8, Address(trans.getSpace(4), 0x28), &unknown8);
+      8, Address(trans.getSpace(4), 0x28), unknown8);
   Varnode *set_def_source = set_def_valid;
   set_def_valid = bank.setDef(set_def_valid, &defop);
 
@@ -383,16 +388,16 @@ int main() {
 
   const int4 count_before_create_def_duplicate = bank.numVarnodes();
   Varnode *defined_duplicate = bank.createDef(
-      8, Address(trans.getSpace(4), 0x20), &unknown8, &defop);
+      8, Address(trans.getSpace(4), 0x20), unknown8, &defop);
   std::cout << "create_def_duplicate:canonical=" << (defined_duplicate == defined)
             << ",bank_delta=" << (bank.numVarnodes() - count_before_create_def_duplicate)
             << '\n';
 
   Varnode *canonical = bank.create(
-      8, Address(trans.getSpace(4), 0x50), &unknown8);
+      8, Address(trans.getSpace(4), 0x50), unknown8);
   canonical = bank.setInput(canonical);
   Varnode *duplicate = bank.create(
-      8, Address(trans.getSpace(4), 0x50), &unknown8);
+      8, Address(trans.getSpace(4), 0x50), unknown8);
   duplicate->setFlags(Varnode::spacebase);
   PcodeOp reader(2, SeqNum(Address(trans.getSpace(3), 0x1010), 1));
   reader.setInput(duplicate, 0);
@@ -414,7 +419,7 @@ int main() {
   std::string def_nonfree_error;
   std::string def_constant_error;
   Varnode *guard_constant = bank.create(
-      4, Address(trans.getConstantSpace(), 0x55), &unknown4);
+      4, Address(trans.getConstantSpace(), 0x55), unknown4);
   try { bank.setInput(canonical); } catch (const LowlevelError &err) { input_nonfree_error = err.explain; }
   try { bank.setInput(guard_constant); } catch (const LowlevelError &err) { input_constant_error = err.explain; }
   try { bank.setDef(canonical, &defop); } catch (const LowlevelError &err) { def_nonfree_error = err.explain; }
@@ -425,7 +430,7 @@ int main() {
             << ",def_constant=" << def_constant_error << '\n';
 
   Varnode *made_free = bank.createDef(
-      8, Address(trans.getSpace(4), 0x58), &unknown8, &defop);
+      8, Address(trans.getSpace(4), 0x58), unknown8, &defop);
   const int4 count_before_make_free = bank.numVarnodes();
   bank.makeFree(made_free);
   std::cout << "make_free:flags=" << made_free->getFlags()
@@ -434,17 +439,17 @@ int main() {
             << ",bank_delta=" << (bank.numVarnodes() - count_before_make_free) << '\n';
 
   Varnode *destroy_free = bank.create(
-      8, Address(trans.getSpace(4), 0x60), &unknown8);
+      8, Address(trans.getSpace(4), 0x60), unknown8);
   const int4 count_before_destroy = bank.numVarnodes();
   bank.destroy(destroy_free);
   const int4 destroy_free_delta = bank.numVarnodes() - count_before_destroy;
   Varnode *destroy_defined = bank.createDef(
-      8, Address(trans.getSpace(4), 0x68), &unknown8, &defop);
+      8, Address(trans.getSpace(4), 0x68), unknown8, &defop);
   std::string destroy_def_error;
   try { bank.destroy(destroy_defined); }
   catch (const LowlevelError &err) { destroy_def_error = err.explain; }
   Varnode *destroy_descendant = bank.create(
-      8, Address(trans.getSpace(4), 0x70), &unknown8);
+      8, Address(trans.getSpace(4), 0x70), unknown8);
   PcodeOp destroy_reader(1, SeqNum(Address(trans.getSpace(3), 0x1020), 2));
   destroy_reader.setInput(destroy_descendant, 0);
   destroy_descendant->addDescend(&destroy_reader);
@@ -458,10 +463,10 @@ int main() {
   VarnodeBank order_bank(&trans);
   PcodeOp order_op(0, SeqNum(Address(trans.getSpace(3), 0x2000), 2));
   Varnode *class_input = order_bank.create(
-      8, Address(trans.getSpace(4), 0xa0), &unknown8);
+      8, Address(trans.getSpace(4), 0xa0), unknown8);
   class_input = order_bank.setInput(class_input);
-  order_bank.createDef(8, Address(trans.getSpace(4), 0xa0), &unknown8, &order_op);
-  order_bank.create(8, Address(trans.getSpace(4), 0xa0), &unknown8);
+  order_bank.createDef(8, Address(trans.getSpace(4), 0xa0), unknown8, &order_op);
+  order_bank.create(8, Address(trans.getSpace(4), 0xa0), unknown8);
   std::string loc_classes;
   std::string def_classes;
   for (auto iter = order_bank.beginLoc(); iter != order_bank.endLoc(); ++iter)
@@ -474,16 +479,16 @@ int main() {
 
   PcodeOp written_op_late(0, SeqNum(Address(trans.getSpace(3), 0x3000), 9));
   PcodeOp written_op_early(0, SeqNum(Address(trans.getSpace(3), 0x3000), 3));
-  order_bank.createDef(8, Address(trans.getSpace(4), 0xb0), &unknown8, &written_op_late);
-  order_bank.createDef(8, Address(trans.getSpace(4), 0xb0), &unknown8, &written_op_early);
+  order_bank.createDef(8, Address(trans.getSpace(4), 0xb0), unknown8, &written_op_late);
+  order_bank.createDef(8, Address(trans.getSpace(4), 0xb0), unknown8, &written_op_early);
   PcodeOp written_pc_late(0, SeqNum(Address(trans.getSpace(3), 0x4000), 4));
   PcodeOp written_pc_early(0, SeqNum(Address(trans.getSpace(3), 0x3500), 5));
-  order_bank.createDef(8, Address(trans.getSpace(4), 0xb4), &unknown8, &written_pc_late);
-  order_bank.createDef(8, Address(trans.getSpace(4), 0xb4), &unknown8, &written_pc_early);
+  order_bank.createDef(8, Address(trans.getSpace(4), 0xb4), unknown8, &written_pc_late);
+  order_bank.createDef(8, Address(trans.getSpace(4), 0xb4), unknown8, &written_pc_early);
   Varnode *free_early = order_bank.create(
-      8, Address(trans.getSpace(4), 0xb8), &unknown8);
+      8, Address(trans.getSpace(4), 0xb8), unknown8);
   Varnode *free_late = order_bank.create(
-      8, Address(trans.getSpace(4), 0xb8), &unknown8);
+      8, Address(trans.getSpace(4), 0xb8), unknown8);
   std::cout << "tie_breaks:written_loc=";
   for (auto iter = order_bank.beginLoc(); iter != order_bank.endLoc(); ++iter)
     if ((*iter)->isWritten() && (*iter)->getOffset() == 0xb0)
@@ -512,7 +517,7 @@ int main() {
             << (free_early->getCreateIndex() != free_late->getCreateIndex()) << '\n';
 
   for (int4 index = 0; index != 8; ++index)
-    order_bank.create(8, Address(trans.getSpace(index), 0xc0), &unknown8);
+    order_bank.create(8, Address(trans.getSpace(index), 0xc0), unknown8);
   std::cout << "space_order=";
   bool first_space = true;
   for (auto iter = order_bank.beginLoc(); iter != order_bank.endLoc(); ++iter) {
@@ -524,13 +529,13 @@ int main() {
   std::cout << '\n';
 
   Varnode *ram_input = order_bank.create(
-      8, Address(trans.getSpace(3), 0xd0), &unknown8);
+      8, Address(trans.getSpace(3), 0xd0), unknown8);
   order_bank.setInput(ram_input);
   Varnode *register_input = order_bank.create(
-      8, Address(trans.getSpace(4), 0xd0), &unknown8);
+      8, Address(trans.getSpace(4), 0xd0), unknown8);
   order_bank.setInput(register_input);
-  order_bank.createDef(8, Address(trans.getSpace(3), 0xd8), &unknown8, &order_op);
-  order_bank.createDef(8, Address(trans.getSpace(4), 0xd8), &unknown8, &order_op);
+  order_bank.createDef(8, Address(trans.getSpace(3), 0xd8), unknown8, &order_op);
+  order_bank.createDef(8, Address(trans.getSpace(4), 0xd8), unknown8, &order_op);
   std::cout << "def_storage_order:input=";
   for (auto iter = order_bank.beginDef(); iter != order_bank.endDef(); ++iter)
     if ((*iter)->isInput() && (*iter)->getOffset() == 0xd0)
@@ -543,7 +548,7 @@ int main() {
 
   Datatype *unknown8_identity = defined->getType();
   bank.clear();
-  Varnode *after_clear = bank.createUnique(8, &unknown8);
+  Varnode *after_clear = bank.createUnique(8, unknown8);
   std::cout << "after_clear:offset=" << after_clear->getOffset()
             << ",create=" << after_clear->getCreateIndex()
             << ",type_same=" << (after_clear->getType() == unknown8_identity) << '\n';

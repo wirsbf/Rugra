@@ -98,22 +98,22 @@
     "funcdata_delete_destroy": "Inline deleteVarnode plus public VarnodeBank::destroy are checked Result paths; Funcdata::destroyVarnode remains a prevalidated adapter whose stale/foreign/nullable-slot behavior is excluded"
   },
   "comparand": {
-    "cpp_fixture_sha256": "a0287d1d16f081222a43d57f758b97eb83362d6f6f12df107840711398fa9544",
-    "rust_fixture_sha256": "6b805156f0727b620bba0615ed382ef5f195a6e6a45fd9bc18cdade6f7401c6e",
-    "runner_sha256": "0b84ac3f99275adeec6d6da37311945f3ee2701eb0ce4f6b9fc98451c8032be1",
-    "varnode_rs_sha256": "287ebe70a83c42e6a67aed931b0ca9356a40015a203401267c7603b39c94631e",
-    "funcdata_rs_sha256": "ab4d847169a34e852c19fcf16348e47a78f622d1aea77d52d70d0332036fcbc3",
-    "heritage_rs_sha256": "6a02a24798ae1c227846beaadbaa06146875d217dd89a970a91b3aef9306ea15",
+    "cpp_fixture_sha256": "0d8db1313df8432577cfba0689385666394dc3f997f4d506171a1da36ed20b0c",
+    "rust_fixture_sha256": "632566d70dbab22a6e9aece34d173f06c80e18882ec3400baed2f4df7d91b9f9",
+    "runner_sha256": "df754454c3ebf52c185109041b0c755c518db392c6f026dec63d99bda8f9ba9b",
+    "varnode_rs_sha256": "df13df650686431f2f919ee523383b9f5cf4379580b8d3a669b7c8406c74f80e",
+    "funcdata_rs_sha256": "b0be924a431f3e7643d771a62d3815907eb82842cb0584628a96b804a99f3748",
+    "heritage_rs_sha256": "ecd9ae67128a13c34ce2437002e9867895005c818895cb5cccebbf73f040a35e",
     "double_precis_rs_sha256": "73c8e35c76c0b031a5fda6954a77ce607b03b9258d8a6debf3d0b52f231fdf7b",
-    "varnode_doc_sha256": "ce1fb4e0a586a10f318da8ccf59805a348f588ab06c46726ca77b0d3f3a4db0d",
-    "funcdata_doc_sha256": "39e7708ac4fb61b6fbc6efa4dbdf88737428cd32b4c7219e6b02ba2e39089edf",
-    "heritage_doc_sha256": "2662285da7e4e181fe424c22ec81bda2eae24d1ba912d29cc73a58a569bb94f9",
+    "varnode_doc_sha256": "53fd6bb240d153838442d6428fbee7af6cf0ca48845b2044da7ad303acd1c1da",
+    "funcdata_doc_sha256": "0ec191a1cd272b0995a1f0636f67ffd16143293d317caa18c77d1955131a9aa2",
+    "heritage_doc_sha256": "705d40ab10afab01304a94cd0f62a8a66465912a9b13527b7ad2125106a5a8a4",
     "double_precis_doc_sha256": "61ca917e6272ba6ab3e3cd0ed1622149af1826bb5eaf07590be811da5f14e1de",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
     "rust_crate_tree_hash_scheme": "sha256 of rugra-varnode-init-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-    "rust_crate_tree_sha256": "ddcd1175901aadabc06133da61ad4d52fdd603559bc2acb476debd6db8beeaa8",
+    "rust_crate_tree_sha256": "357bb8c6a04e10b3ac3bf8450bc02d23e06025b1ea191a65b070dfb7135c91c7",
     "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
     "host_cxx_target": "x86_64-linux-gnu",
     "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
@@ -134,6 +134,6 @@
     "rust_comparand": "full byte snapshot of declared Rugra library closure; Cargo.lock-checksummed offline vendor; isolated CARGO_HOME and target",
     "registry_packages": 164
   },
-  "expected_ghidra_stdout_sha256": "17581044c6502ad89852ce8616b0085e20ec3df0cc6f79b2831093dd31bf8a21",
-  "expected_rugra_stdout_sha256": "3b0bdfbf6786ef40ff28b653b5e051b3f0579b9586132071a4fb9121ca8f9124"
+  "expected_ghidra_stdout_sha256": "c8153abe843663b05f7677efa86a25f13773401aa7859b77e4e639cd18623155",
+  "expected_rugra_stdout_sha256": "40d96b7169fbeab9d77b4183a3a139cfaf36aee45801cba30b20373e6655df28"
 }

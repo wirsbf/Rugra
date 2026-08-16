@@ -41,8 +41,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=235b91bb552261fb3f94b7974926ef6db9b21515
-rugra_base_tree=6f49b977e46af96c0934114836d457f680caa057
+rugra_base_commit=6597db0afc5b8ca234d65ba6ac29ce328daa62f5
+rugra_base_tree=a83ff098d35e4efd6d4e32c50cccbbbeb27f8295
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/cover_rebuild_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/cover_rebuild_1204.cc"
@@ -398,6 +398,7 @@ for required_key, required_prefix in (
     ("phi_predecessor_setall_fill", "MATCH"),
     ("coverdirty_lifecycle_and_idempotence", "MATCH"),
     ("no_cover_object_dirty_clear", "MATCH"),
+    ("multiequal_reader_of_implied_intermediate", "MATCH"),
     ("multiequal_tip_old_stop", "MISMATCH"),
     ("indirect_target_order", "MISMATCH"),
     ("block_index_assignment", "UNTESTED"),
@@ -699,8 +700,8 @@ for label, status in (
         raise SystemExit(f"{label} exit mismatch: {status}")
 
 lines = ghidra.decode("utf-8").splitlines()
-if len(lines) != 9:
-    raise SystemExit(f"expected nine fixture lines, found {len(lines)}")
+if len(lines) != 10:
+    raise SystemExit(f"expected ten fixture lines, found {len(lines)}")
 if lines[0] != (
     "schema=1|fixture=COVER-REBUILD-SELFLOCK-0001|"
     "oracle=e40ed13014025f82488b1f8f7bca566894ac376b"
@@ -709,7 +710,7 @@ if lines[0] != (
 expected_cases = [
     "input_root", "phi_predecessor_fill", "defined_linear",
     "slot2_selfref_double", "slot2_single", "implied_chain",
-    "dirty_flag_cycle", "no_cover_object",
+    "implied_multiequal_reader", "dirty_flag_cycle", "no_cover_object",
 ]
 actual_cases = [line.split("|", 1)[0].removeprefix("case=") for line in lines[1:]]
 if actual_cases != expected_cases:
@@ -814,4 +815,4 @@ for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
 require("full Rust crate", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 PY
 
-echo "cover_rebuild_1204: MATCH covered_projection=8/8 overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"
+echo "cover_rebuild_1204: MATCH covered_projection=9/9 overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"

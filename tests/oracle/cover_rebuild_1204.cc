@@ -7,7 +7,10 @@
  * lifecycle, and the descendant list after updateCover.  Case
  * slot2_selfref_double reproduces the production self-lock topology: the
  * Varnode whose Cover is rebuilt is itself MULTIEQUAL input slot 2 (and slot
- * 1) of a reader in a join block.
+ * 1) of a reader in a join block.  Case implied_multiequal_reader drives a
+ * MULTIEQUAL reader of an implied intermediate output whose slots never hold
+ * the rebuild root, pinning the root-vs-current identity of the addRefPoint
+ * MULTIEQUAL slot match.
  */
 
 #include <bits/stdc++.h>
@@ -458,6 +461,49 @@ static void runImpliedChain(FixtureArchitecture &arch)
   g.observe("implied_chain", root);
 }
 
+static void runImpliedMultiequalReader(FixtureArchitecture &arch)
+{
+  Graph g(arch, "implied_multiequal_reader", 0x5800);
+  BlockBasic *b0 = g.makeBlock();
+  BlockBasic *b1 = g.makeBlock();
+  BlockBasic *b2 = g.makeBlock();
+  BlockBasic *b3 = g.makeBlock();
+  g.edge(b0, b1);
+  g.edge(b0, b2);
+  g.edge(b1, b3);
+  g.edge(b2, b3);
+  g.edge(b0, b3);
+  Varnode *c8 = g.constant(8, 5);
+  Varnode *c4 = g.constant(4, 7);
+  PcodeOp *d = g.makeOp("d", CPUI_COPY, 1);
+  g.setInput(d, c8, 0);
+  Varnode *root = g.uniqueOut(8, d);
+  g.insertEnd(d, b0);
+  PcodeOp *r1 = g.makeOp("r1", CPUI_INT_AND, 2);
+  g.setInput(r1, root, 0);
+  g.setInput(r1, c4, 1);
+  Varnode *t1 = g.uniqueOut(8, r1);
+  g.insertEnd(r1, b1);
+  t1->setImplied();
+  PcodeOp *r2 = g.makeOp("r2", CPUI_INT_XOR, 2);
+  g.setInput(r2, root, 0);
+  g.setInput(r2, c4, 1);
+  g.uniqueOut(8, r2);
+  g.insertEnd(r2, b2);
+  // No slot of m holds root: only the implied intermediate t1 and constants.
+  // Cover::rebuild passes the ROOT to addRefPoint even when descending from
+  // the implied t1 (cover.cc:490), so the MULTIEQUAL slot match at
+  // cover.cc:606 must find no slot and recurse through no predecessor.
+  PcodeOp *m = g.makeOp("m", CPUI_MULTIEQUAL, 3);
+  g.setInput(m, t1, 0);
+  g.setInput(m, c4, 1);
+  g.setInput(m, c4, 2);
+  g.uniqueOut(8, m);
+  g.insertEnd(m, b3);
+  root->calcCover();
+  g.observe("implied_multiequal_reader", root);
+}
+
 static void runDirtyFlagCycle(FixtureArchitecture &arch)
 {
   Graph g(arch, "dirty_flag_cycle", 0x5600);
@@ -500,6 +546,7 @@ int main(void)
     runSlot2SelfRefDouble(arch);
     runSlot2Single(arch);
     runImpliedChain(arch);
+    runImpliedMultiequalReader(arch);
     runDirtyFlagCycle(arch);
     runNoCoverObject(arch);
   }

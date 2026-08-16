@@ -9,7 +9,7 @@
     "GH12-F-1c7e2d100750ac446e34 ghidra::Cover::addRefRecurse cover.cc:524",
     "GH12-F-7bbe28b1702f29bcfe3d ghidra::Cover::addRefPoint cover.cc:565"
   ],
-  "overall_status": "PARTIAL_MATCH: the eight-case rebuilt-Cover projection (endpoint pairs, flags, dirty lifecycle, descendant/slot identity, op orders) byte-matches the locked oracle, and the production self-lock topology (MULTIEQUAL slot 2 holding the rebuilt root) is covered; order-only CoverBlock residuals (addRefPoint old-stop MULTIEQUAL-tip discrimination, INDIRECT getOpFromConst target order), production FlowBlock index assignment, and the full ActionMergeType caller closure remain outside this atomic change",
+  "overall_status": "PARTIAL_MATCH: the nine-case rebuilt-Cover projection (endpoint pairs, flags, dirty lifecycle, descendant/slot identity, op orders) byte-matches the locked oracle, the production self-lock topology (MULTIEQUAL slot 2 holding the rebuilt root) is covered, and a MULTIEQUAL reader of an implied intermediate confirms addRefPoint matches MULTIEQUAL slots against the rebuild root rather than the worklist-current Varnode (cover.cc:490/606); order-only CoverBlock residuals (addRefPoint old-stop MULTIEQUAL-tip discrimination, INDIRECT getOpFromConst target order), production FlowBlock index assignment, and the full ActionMergeType caller closure remain outside this atomic change",
   "oracle": {
     "tag": "Ghidra_12.0.4_build",
     "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
@@ -35,34 +35,35 @@
       "slot2_selfref_double: 3-input MULTIEQUAL whose slots 1 and 2 are the rebuilt root itself (production self-lock topology) plus a two-slot INT_XOR reader; every exact-identity slot recurses its predecessor",
       "slot2_single: 3-input MULTIEQUAL with the root only at slot 2, isolating single-slot self-reference recursion from the double-slot read",
       "implied_chain: reader whose output is implied pushes that output onto the rebuild worklist so ITS readers extend the cover",
+      "implied_multiequal_reader: the implied intermediate t1 is read at MULTIEQUAL slot 0 of a join-block phi while no slot holds the root, so the rebuild-root slot match of addRefPoint (cover.cc:606 via 490) finds no slot and recurses through no predecessor; block 1 keeps its reader-tail endpoint instead of the fill-to-end a current-identity match would produce",
       "dirty_flag_cycle: calcCover sets coverdirty, updateCover clears it, and a second updateCover is an idempotent no-op",
       "no_cover_object: hasCover varnode with the dirty bit set but no Cover object; updateCover clears the bit without allocating a Cover"
     ],
-    "sha256": "0e5dd75fcf2537b5f8b9596ff413f517d00f26c35aeb93018576a22801fa6542"
+    "sha256": "cf51a0eef429f993d008be0abc480a9337c2f2e377b9f770b00ea3ba18252eae"
   },
   "observation_schema": {
-    "format": "Nine fixed-order UTF-8 lines with final newline: one envelope plus eight case records",
+    "format": "Ten fixed-order UTF-8 lines with final newline: one envelope plus nine case records",
     "state": "coverdirty before/after, hasCover, cover-object presence, input/written/implied, def order",
     "graph": "descendant list order with repeat-slot entries, exact-identity slot list, per-op SeqNum orders",
     "cover": "ascending block-index start-end endpoint pairs in the uindex domain (b/e sentinels or decimal order)"
   },
   "comparand": {
-    "rugra_base_commit": "235b91bb552261fb3f94b7974926ef6db9b21515",
-    "rugra_base_tree": "6f49b977e46af96c0934114836d457f680caa057",
-    "cpp_fixture_sha256": "a4fc0fbcc743f7d26c0b7920b9bd909b9ed2f5164a375a02ae5e5b66cd4004b6",
-    "rust_fixture_sha256": "0a94b8d6856c5e8bb4fe0b3ddbfcf6aefabd45c32e2390419ed670efccdcc95c",
+    "rugra_base_commit": "6597db0afc5b8ca234d65ba6ac29ce328daa62f5",
+    "rugra_base_tree": "a83ff098d35e4efd6d4e32c50cccbbbeb27f8295",
+    "cpp_fixture_sha256": "aebe23193ca42bef1dd4f81fe93d5915dc3c67ceeaec2953abcbe16fabc92d0d",
+    "rust_fixture_sha256": "9d2fc07bd1cb38683886edb7e371237bd95c81bdb9a348ad527e265f02981554",
     "cover_rs_sha256": "799b8d4e5707e9b103fe34689096c59c545c68d0cd843bc441f5ab4768499614",
-    "varnode_rs_sha256": "c0bf253d84cfc86809f184e3dee7bb7ad7d9ebd2f76546da2f126d5ae79fa99c",
-    "merge_rs_sha256": "17cc8680de6a1dcd3b27d288b3a2869f8e49e43f89b6c6330fb5c708257d1152",
+    "varnode_rs_sha256": "df13df650686431f2f919ee523383b9f5cf4379580b8d3a669b7c8406c74f80e",
+    "merge_rs_sha256": "5c5eec13d5519f035a469ca3c270766701278291bb3594aa52f001ba6914dfcb",
     "cover_doc_sha256": "6f69256196e45a2a47eb59a0a02ccf3808883634e317a81896a3ad437e0486a4",
-    "varnode_doc_sha256": "90f960a025d0543d77294aa0891be647ef42bd9ba8fec62142242c6d9ff24723",
-    "merge_doc_sha256": "89f2f2f57f47509d646764f7f7bddd4492f2f560c3494e67361a1aad9a2e5659",
-    "runner_sha256": "697a6efca0ad0d616143618c5a2774591d756e3cacaed57e140e2d150b23d898",
+    "varnode_doc_sha256": "53fd6bb240d153838442d6428fbee7af6cf0ca48845b2044da7ad303acd1c1da",
+    "merge_doc_sha256": "a924000563a40390df453c75e6b0d5e28076e0cf958ad455da0c7cf36c8a4693",
+    "runner_sha256": "c5de115872def35f698439a94474cae794df931861ede9100d211da38f72a389",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
     "rust_crate_tree_hash_scheme": "sha256 of rugra-cover-rebuild-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "265ec546590afa385741fa6f0cb8fea30c47e03feffab71d34cbf5c5fe507660",
+    "rust_crate_tree_sha256": "f306f9865cd8349d0eb48390c3d2ab7d825e239a48337849ae56e37d9defb955",
     "host": {
       "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
       "cxx_target": "x86_64-linux-gnu",
@@ -88,7 +89,7 @@
     "registry_packages": 164,
     "registry_lock_closure_sha256": "2c21c6afe3e9788228776acc3eb0296b6ec0c9e63c7ede26efad3c7273b828bc"
   },
-  "expected_stdout_sha256": "00dba3d1fa0fae9a802c5138253fea331eb0d46b519b5696437c8290fc2cb58e",
+  "expected_stdout_sha256": "3387f7d3db9f37ed030bbe8d4b6fab3498448be4eebcd4e03cacc309c5f27cd7",
   "expected_exit_code": 0,
   "covered_projection_status": "MATCH",
   "coverage": {
@@ -106,6 +107,6 @@
     "indirect_target_order": "MISMATCH: CoverBlock::get_u_index falls back to the INDIRECT op's own SeqNum order instead of resolving the getOpFromConst target order",
     "merge_update_high_cover_caller": "PARTIAL: update_high_cover now calls Varnode::update_cover_locked per instance so the root write lock is never re-entered; the full ActionMergeType caller closure and post-cleanup action order remain PIPE-MERGETYPE-ORDER-0001",
     "start_stop_pointer_identity": "MISMATCH: Rugra stores uindex-domain orders rather than PcodeOp* pointer values; endpoint classification (begin/end/order) is compared instead of raw pointers",
-    "multiequal_reader_of_implied_intermediate": "UNTESTED: no fixture case drives a MULTIEQUAL reader of an implied intermediate output, so the root-vs-current identity discrimination of that sub-branch is source-verified (cover.cc:490/606) but not fixture-observed; registered for a follow-up fixture case"
+    "multiequal_reader_of_implied_intermediate": "MATCH: implied t1 (root -> r1 in block 1 -> implied t1) is read at MULTIEQUAL slot 0 of m in the join block while no m slot holds the root; Cover::rebuild passes the root, not the worklist-current t1, to addRefPoint (cover.cc:490), so the MULTIEQUAL slot match at cover.cc:606 finds no exact-identity slot, recurses through no predecessor, and block 1 keeps its reader-tail endpoint instead of being filled to the block end that a current-identity match (which would match slot 0 and recurse block 1) would produce"
   }
 }

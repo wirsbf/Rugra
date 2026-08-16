@@ -353,6 +353,50 @@ fn main() {
         g.observe("implied_chain", &root);
     }
 
+    // case=implied_multiequal_reader
+    {
+        let mut g = Graph::new("implied_multiequal_reader", 0x5800);
+        let b0 = g.make_block(0);
+        let b1 = g.make_block(1);
+        let b2 = g.make_block(2);
+        let b3 = g.make_block(3);
+        g.edge(&b0, &b1);
+        g.edge(&b0, &b2);
+        g.edge(&b1, &b3);
+        g.edge(&b2, &b3);
+        g.edge(&b0, &b3);
+        let c8 = g.constant(8, 5);
+        let c4 = g.constant(4, 7);
+        let d = g.make_op("d", OpCode::CPUI_COPY, 1);
+        g.set_input(&d, &c8, 0);
+        let root = g.unique_out(8, &d);
+        g.insert_end(&d, &b0);
+        let r1 = g.make_op("r1", OpCode::CPUI_INT_AND, 2);
+        g.set_input(&r1, &root, 0);
+        g.set_input(&r1, &c4, 1);
+        let t1 = g.unique_out(8, &r1);
+        g.insert_end(&r1, &b1);
+        t1.write().unwrap().flags |= varnode_flags::IMPLIED;
+        let r2 = g.make_op("r2", OpCode::CPUI_INT_XOR, 2);
+        g.set_input(&r2, &root, 0);
+        g.set_input(&r2, &c4, 1);
+        g.unique_out(8, &r2);
+        g.insert_end(&r2, &b2);
+        // No slot of m holds root: only the implied intermediate t1 and
+        // constants. Cover::rebuild passes the ROOT to addRefPoint even when
+        // descending from the implied t1 (cover.cc:490), so the MULTIEQUAL
+        // slot match at cover.cc:606 must find no slot and recurse through
+        // no predecessor.
+        let m = g.make_op("m", OpCode::CPUI_MULTIEQUAL, 3);
+        g.set_input(&m, &t1, 0);
+        g.set_input(&m, &c4, 1);
+        g.set_input(&m, &c4, 2);
+        g.unique_out(8, &m);
+        g.insert_end(&m, &b3);
+        root.write().unwrap().calc_cover();
+        g.observe("implied_multiequal_reader", &root);
+    }
+
     // case=dirty_flag_cycle
     {
         let mut g = Graph::new("dirty_flag_cycle", 0x5600);

@@ -276,7 +276,16 @@ fn run_combine_fixture() {
 }
 
 fn main() {
+    // The locked oracle drives SleighArchitecture's standalone buildCoreTypes
+    // (xunknownN names); mirror that registration flavor so bank-allocated
+    // unknown types byte-match the oracle projections.
     let mut bank = VarnodeBank::new();
+    bank.set_type_factory(std::sync::Arc::new(std::sync::RwLock::new(
+        rugra::type_system::typefactory::TypeFactory::new_flavor(
+            8,
+            rugra::type_system::typefactory::CoreTypeFlavor::Standalone,
+        ),
+    )));
     let defop = Arc::new(RwLock::new(PcodeOp::new(
         SeqNum::new(Address::new(0x1000), 0),
         OpCode::CPUI_COPY,
@@ -459,6 +468,12 @@ fn main() {
     );
 
     let mut order_bank = VarnodeBank::new();
+    order_bank.set_type_factory(std::sync::Arc::new(std::sync::RwLock::new(
+        rugra::type_system::typefactory::TypeFactory::new_flavor(
+            8,
+            rugra::type_system::typefactory::CoreTypeFlavor::Standalone,
+        ),
+    )));
     let order_op = Arc::new(RwLock::new(PcodeOp::new(
         SeqNum::new(Address::new(0x2000), 2),
         OpCode::CPUI_COPY,
