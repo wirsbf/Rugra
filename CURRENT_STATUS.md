@@ -10,11 +10,11 @@
 |---|---|---|
 | 单元测试 (`cargo test --lib`) | **1357 通过 / 5 失败 / 3 ignored** | 失败集与 pristine base 逐个复现一致（comment/dynamic/funcdata×2/ruleaction 域外既有） |
 | curl E2E | **124/124 处理，74 反编译 / 1 超时(main churn) / 1 panic(helpf) / 48 导入声明桩** | 全量热测 43s |
-| 12.0.4 差分 | **skeleton 4368 / defects 0 / numbering 20（在修）** | `compare_ghidra.py` 全量 |
+| 12.0.4 差分 | **skeleton 4403 / defects 0 / numbering 0**（LEGACY-DECL-DUP 收官 31cd76c：20→0） | `compare_ghidra.py` 全量 |
 | xunknown/xVar | **0**（TYPE-WIRING 双轨消除） | grep 归零 |
 | FUN_ 未解析调用 | **5**（起点 64；CALLSPEC 接线） | grep |
 | 逐字节一致函数 | **50/122** | compare 差分 |
-| gcc 审计 | **98 OK / 24 FAIL**（old-style 声明为主） | audit_syntax |
+| gcc 审计 | **103 OK / 19 FAIL**（31cd76c 后：old-style/redeclaration 清零，余为表达式层残差） | audit_syntax |
 | 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
 | oracle fixture | **registry 53 个**（session 新增 40：23 个新 fixture + 17 个存量 orphan 补注册，见 77aede3） | fixture_registry.json |
 
