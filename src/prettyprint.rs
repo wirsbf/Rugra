@@ -1838,11 +1838,20 @@ impl EmitNoMarkup {
         // If param_N was inferred as long/int (not pointer), `*param_N` is illegal C.
         // We collect all `*IDENT` occurrences (unary deref, not `*(` cast) and
         // rewrite their declarations to `_struct *` so the deref is legal.
+        // PRINTC-LEGACY-DECL-DUP-0001: skipped inside symbol-driven functions
+        // (Ghidra print layer never rewrites symbol declarations; the oracle
+        // prints sym->getType() verbatim at printc.cc:2503-2506).
         let after_unary = Self::fix_unary_deref_declarations(&struct_pass);
 
         // Twenty-third pass: backfill missing local-variable declarations.
         // Scan each function body for `local_XX` identifiers used but not declared,
         // and insert `int local_XX;` declarations to keep the output compilable.
+        // PRINTC-LEGACY-DECL-DUP-0001: this pass is NOT bypassed for
+        // symbol-driven functions — its declared-name collection recognizes
+        // both pointer spellings, so with the two duplicate sources above
+        // bypassed it only injects names genuinely absent from the symbol
+        // block (unlinked-symbol body references, PRINTC-UNLINKED-REF-0001),
+        // which keeps those functions compilable.
         let after_backfill = Self::backfill_missing_locals(&after_unary);
 
         // Twenty-fourth pass: remove orphan break/continue statements that are
@@ -2567,41 +2576,53 @@ impl EmitNoMarkup {
             let missing: Vec<&String> = used_locals.iter()
                     .filter(|n| !declared.contains(*n))
                     .collect();
-                if !missing.is_empty() {
-                    let indent_str = " ".repeat(decl_indent);
-                    for k in (i + 1)..j {
-                        out.push(lines[k].to_string());
-                    }
-                    for m in &missing {
-                        // Infer type from prefix: lVar/uVar/piVar etc → long/long/pointer
-                        // DAT_ prefixed names are synthetic globals → declare as extern long.
-                        // structN names are stack-allocated structs → declare as int (placeholder).
-                        if m.starts_with("DAT_") {
-                            out.push(format!("{}extern long {};", indent_str, m));
-                            continue;
-                        }
-                        let ty = if m.starts_with("struct") {
-                            "int"
-                        } else if m.starts_with("lVar") || m.starts_with("uVar") {
-                            "long"
-                        } else if m.starts_with("iVar") || m.starts_with("bVar")
-                            || m.starts_with("sVar") || m.starts_with("local_") {
-                            "int"
-                        } else if m.starts_with("piVar") || m.starts_with("pcVar")
-                            || m.starts_with("psVar") || m.starts_with("ppVar")
-                            || m.starts_with("pvVar") {
-                            "char *"
-                        } else if m.starts_with("fVar") { "float" }
-                          else if m.starts_with("dVar") { "double" }
-                          else { "long" };
-                        // Pointer-join spacing (printc.cc:73-77 ptr_expr
-                        // spacing=0): a trailing-`*` type glues to the name.
-                        let join = if ty.ends_with('*') { "" } else { " " };
-                        out.push(format!("{}{}{}{};", indent_str, ty, join, m));
-                    }
-                    i = j;
-                    continue;
+            // PRINTC-LEGACY-DECL-DUP-0001: the duplicate-declaration source
+            // was NOT this pass — backfill's declared-name collection handles
+            // both pointer spellings (`char *uVar20;` 2-token join and
+            // `char * *uVar20;` 3-token), so it only injects names that are
+            // genuinely absent from the declaration block (unlinked-symbol
+            // body references, PRINTC-UNLINKED-REF-0001 domain). The
+            // duplicates came from flush_func_remove_unused (which cannot
+            // recognize the 2-token join form and re-declared those symbols)
+            // and fix_unary_deref_declarations (which rewrote the injected
+            // scalars to pointer form) — both bypassed above. Backfill stays
+            // active for every function so unlinked references keep compiling;
+            // functions without symbol evidence are unaffected either way.
+            if !missing.is_empty() {
+                let indent_str = " ".repeat(decl_indent);
+                for k in (i + 1)..j {
+                    out.push(lines[k].to_string());
                 }
+                for m in &missing {
+                    // Infer type from prefix: lVar/uVar/piVar etc → long/long/pointer
+                    // DAT_ prefixed names are synthetic globals → declare as extern long.
+                    // structN names are stack-allocated structs → declare as int (placeholder).
+                    if m.starts_with("DAT_") {
+                        out.push(format!("{}extern long {};", indent_str, m));
+                        continue;
+                    }
+                    let ty = if m.starts_with("struct") {
+                        "int"
+                    } else if m.starts_with("lVar") || m.starts_with("uVar") {
+                        "long"
+                    } else if m.starts_with("iVar") || m.starts_with("bVar")
+                        || m.starts_with("sVar") || m.starts_with("local_") {
+                        "int"
+                    } else if m.starts_with("piVar") || m.starts_with("pcVar")
+                        || m.starts_with("psVar") || m.starts_with("ppVar")
+                        || m.starts_with("pvVar") {
+                        "char *"
+                    } else if m.starts_with("fVar") { "float" }
+                    else if m.starts_with("dVar") { "double" }
+                    else { "long" };
+                    // Pointer-join spacing (printc.cc:73-77 ptr_expr
+                    // spacing=0): a trailing-`*` type glues to the name.
+                    let join = if ty.ends_with('*') { "" } else { " " };
+                    out.push(format!("{}{}{}{};", indent_str, ty, join, m));
+                }
+                i = j;
+                continue;
+            }
             i += 1;
         }
         out.join("\n")
@@ -2652,8 +2673,22 @@ impl EmitNoMarkup {
             "undefined", "undefined4", "undefined8",
         ];
         let lines: Vec<&str> = text.split('\n').collect();
+        // PRINTC-LEGACY-DECL-DUP-0001 bypass: inside symbol-driven functions
+        // this pass's rewrites corrupt Action-phase symbol declarations —
+        // rewriting the (bypassed) `int uVarN;` injections to `char *uVarN;`
+        // is what made the duplicates survive as pointer-typed re-declarations,
+        // and rewriting a genuine scalar symbol decl (`int uVar0;`) changes its
+        // printed type away from the symbol's Datatype (printc.cc:2503-2506
+        // emitLocalSymbolDecl prints sym->getType() verbatim). Skip lines of
+        // functions whose declaration block is symbol-driven.
+        let symbol_mask = Self::symbol_driven_function_line_mask(&lines);
         let mut out: Vec<String> = Vec::with_capacity(lines.len());
-        for line in lines {
+        for (idx, line) in lines.iter().enumerate() {
+            let line: &str = *line;
+            if symbol_mask[idx] {
+                out.push(line.to_string());
+                continue;
+            }
             let trimmed = line.trim_start();
             let indent_len = line.len() - trimmed.len();
             let mut rewritten = None;
@@ -2951,6 +2986,107 @@ impl EmitNoMarkup {
             .map_or(false, |l| l == "{")
     }
 
+    // RUGRA-GLUE: has_symbol_driven_decls (no Ghidra counterpart — Ghidra's
+    //   print layer has no declaration passes to bypass: printc.cc:2656
+    //   docFunction emits every function-local declaration from Action-phase
+    //   symbols via emitLocalVarDecls and nothing else, so "does this text
+    //   already carry symbol-driven declarations" is a question that only
+    //   exists for Rugra's legacy compensation passes).
+    /// Conservative bypass predicate for the two synthetic-declaration legacy
+    /// passes (`flush_func_remove_unused`, `fix_unary_deref_declarations`):
+    /// does this function chunk, starting at its signature line, already
+    /// carry `emit_local_var_decls` products in its declaration block?
+    /// (`backfill_missing_locals` deliberately does NOT consult this — see
+    /// its PRINTC-LEGACY-DECL-DUP-0001 note.)
+    ///
+    /// Evidence spellings (PRINTC-LEGACY-DECL-DUP-0001):
+    /// - a declaration whose type token starts with `undefined`
+    ///   (undefined1/2/4/8 — core-type spellings only reachable through the
+    ///   symbol-driven emitter; the legacy passes synthesize exclusively
+    ///   int/long/char */float/double), or
+    /// - a declaration whose name token starts with `in_` (register/ram
+    ///   space symbol names like in_RAX / in_ram_00016e70; the legacy passes
+    ///   never generate `in_`-prefixed names).
+    ///
+    /// A decl block without either evidence keeps the legacy passes: those
+    /// functions may still lack symbols and must not lose their backfill
+    /// safety net.
+    fn has_symbol_driven_decls<L: AsRef<str>>(func_lines: &[L]) -> bool {
+        let mut j = 1usize;
+        while j < func_lines.len() {
+            let t = func_lines[j].as_ref().trim();
+            if t.is_empty() || t == "{" {
+                j += 1;
+                continue;
+            }
+            if t.ends_with(';') && !t.contains('(') && !t.contains("return") && !t.contains('=') {
+                let tokens: Vec<&str> = t.trim_end_matches(';').split_whitespace().collect();
+                if !tokens.is_empty() {
+                    if tokens[0].starts_with("undefined") {
+                        return true;
+                    }
+                    let name = tokens[tokens.len() - 1].trim_start_matches('*');
+                    if name.starts_with("in_") {
+                        return true;
+                    }
+                }
+                j += 1;
+                continue;
+            }
+            break;
+        }
+        false
+    }
+
+    // RUGRA-GLUE: symbol_driven_function_line_mask (no Ghidra counterpart —
+    ///   see has_symbol_driven_decls; this is the whole-text segmentation the
+    ///   line-oriented fix_unary_deref_declarations pass needs to skip
+    ///   symbol-driven functions without restructuring its rewrite loop).
+    /// Per-line mask: true = this line belongs to a function whose declaration
+    /// block is symbol-driven (see `has_symbol_driven_decls`). Signature
+    /// detection reuses `signature_opens_function_body` with a prefix set
+    /// covering every return-type spelling the printc layer produces
+    /// (including `undefinedN`, which the flush/backfill call sites'
+    /// historical prefix sets do not list).
+    fn symbol_driven_function_line_mask(lines: &[&str]) -> Vec<bool> {
+        let prefixes = [
+            "int ", "void ", "long ", "byte ", "bool ", "short ",
+            "char ", "float ", "double ", "undefined", "uint ",
+            "ulong ", "ushort ", "size_t ",
+        ];
+        let mut mask = vec![false; lines.len()];
+        let mut i = 0usize;
+        while i < lines.len() {
+            let t = lines[i].trim();
+            if !Self::signature_opens_function_body(t, &prefixes, &lines[i + 1..]) {
+                i += 1;
+                continue;
+            }
+            // Function chunk: signature line through the matching close brace
+            // (brace depth from the signature line itself).
+            let mut end = i + 1;
+            let mut depth: i32 = t.chars().filter(|c| *c == '{').count() as i32
+                - t.chars().filter(|c| *c == '}').count() as i32;
+            while end < lines.len() {
+                let ft = lines[end].trim();
+                depth += ft.chars().filter(|c| *c == '{').count() as i32;
+                depth -= ft.chars().filter(|c| *c == '}').count() as i32;
+                if depth <= 0 {
+                    end += 1;
+                    break;
+                }
+                end += 1;
+            }
+            if Self::has_symbol_driven_decls(&lines[i..end]) {
+                for m in mask.iter_mut().take(end).skip(i) {
+                    *m = true;
+                }
+            }
+            i = end;
+        }
+        mask
+    }
+
     // RUGRA-GLUE: has_enclosing_loop_ctx (post-process goto→break/return
     //   rewrite helper; Ghidra emits break/continue structurally from
     //   FlowBlock::markUnstructured flags at emitGotoStatement, it never
@@ -3019,6 +3155,21 @@ impl EmitNoMarkup {
     /// Remove unused variable declarations from a function's lines
     /// AND add missing declarations for uVarNNN that appear in body but have no declaration
     fn flush_func_remove_unused(func_lines: &[String], out: &mut Vec<String>) {
+        // PRINTC-LEGACY-DECL-DUP-0001 bypass: when the chunk already carries
+        // symbol-driven declarations (emit_local_var_decls products), both
+        // halves of this pass only corrupt them — the missing-injection half
+        // re-declares symbols whose oracle-join pointer spellings
+        // (`char *uVar20;`, 2 tokens) this pass's type_ok table cannot
+        // recognize, producing duplicate `int uVarN;` lines (and K&R
+        // placement between signature and `{` when no uVar decl was
+        // collected at all), and the unused-removal half deletes symbol
+        // declarations Ghidra always prints (printc.cc:2260 emitLocalVarDecls
+        // emits every symbol regardless of body use). Pass the chunk through
+        // untouched; functions without symbol evidence keep the legacy pass.
+        if Self::has_symbol_driven_decls(func_lines) {
+            out.extend(func_lines.iter().cloned());
+            return;
+        }
         // Collect all declaration lines: "  type uVarNNN;"
         let mut decl_indices: Vec<(usize, String)> = Vec::new();
         for (i, line) in func_lines.iter().enumerate() {

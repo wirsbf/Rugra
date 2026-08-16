@@ -297,3 +297,52 @@ Emitter that discards all output (used for discovery pass)
 （printc.cc:73-77）两种拼写一致。避免符号驱动声明落地后指针形被误判
 missing 而合成重复 `int uVarN;`（numbering 残差机制见
 PRINTC-LEGACY-DECL-DUP-0001）。
+
+### 2026-08-16：PRINTC-LEGACY-DECL-DUP-0001 — 符号驱动函数旁路合成声明 pass，消 20 处重复
+
+前次的"三 token 指针形"白名单扩展**未生效**：printc 的 ptr_expr join
+（printc.cc:73-77 spacing=0）产出的是 2-token 形 `char *uVarN;`
+（`split_whitespace` → `["char","*uVarN"]`），三 token 分支
+（`["char","*","uVarN"]`）从不命中，`char *uVar20;` 仍被判 missing →
+`int uVar20;` 注入 → `fix_unary_deref_declarations` 重写为
+`char *uVar20;` → 与符号声明重复（8 函数 20 处 `declared twice`）；无任何
+uVar 声明被收集时 `last_decl_idx=0` 使注入落在签名与 `{` 之间（K&R
+old-style，gcc 11 错）。
+
+**修法（oracle 判断）**：Ghidra 打印期零声明合成/删除——
+printc.cc:2656 `docFunction` 的全部函数局部声明来自
+`emitLocalVarDecls`（printc.cc:2260，Action 期 Symbol），`EmitNoMarkup`
+（prettyprint.hh:547）无任何 post-process。故符号驱动函数不再接受任何
+**合成/改写声明**的文本 pass，而非继续扩白名单（per-name 过滤 hack
+掩盖缺符号函数仍需 backfill 的事实，被 root 指令禁止）。实验数据决定了
+保留边界：三 pass 全旁路时 gcc FAIL 24→25（未链接符号引用如实暴露为
+undeclared，SetHTTPrequest 新增 FAIL）；旁路两个合成 pass、保留 backfill
+（其 declared 收集本就正确处理两种指针拼写，只补真缺名）时 FAIL 24→19
+且 numbering 同为 0——后者使缺符号函数（符号块外的 uVar_<offset> 引用，
+PRINTC-UNLINKED-REF-0001 域）保持可编译，是任务要求的 backfill 保留语义。
+
+- 新增 `has_symbol_driven_decls()`（RUGRA-GLUE）：保守判据 = 函数声明块
+  非空且至少一行声明呈现 ①类型 token 以 `undefined` 开头
+  （undefined1/2/4/8 核心类型拼写，legacy pass 只合成
+  int/long/`char *`/float/double）或 ②名字 token 以 `in_` 开头
+  （in_RAX/in_ram_*/in_register_* 寄存器/内存符号名）。两种拼写只能由
+  `emit_local_var_decls` 产出。
+- 新增 `symbol_driven_function_line_mask()`（RUGRA-GLUE）：整文本按
+  `signature_opens_function_body` 分段（前缀集含 `undefinedN` 返回型），
+  为 `fix_unary_deref_declarations` 的行级重写提供函数归属掩码。
+- 两处旁路：`flush_func_remove_unused` 对符号驱动函数整块直通（不删
+  unused、不注入 missing——Ghidra 无条件发射所有符号声明，
+  printc.cc:2260；该 pass 的 type_ok 表识别不了 2-token join 形
+  `char *uVarN;`，正是重复注入与 K&R 位置的源头）；
+  `fix_unary_deref_declarations` 跳过符号驱动函数的行（不在符号标量
+  声明上重写 `char *`，oracle 按符号 Datatype 逐字打印，
+  printc.cc:2503-2506）。
+- `backfill_missing_locals` **保留对所有函数运行**：其 declared 收集
+  正确处理两种指针拼写，在两个重复源被旁路后只会注入符号块中**真缺**
+  的名字（未链接符号 body 引用，PRINTC-UNLINKED-REF-0001 域），使这些
+  函数保持可编译。验收（12.0.4 golden）：numbering **20→0**、
+  defects 0→0、gcc 审计 FAIL **24→19**（old-style 7 错→0、redeclaration
+  →0；FUN_00102020/SetHTTPrequest_part_0/_init/deregister_tm_clones/
+  register_tm_clones 恢复 OK，零新增 FAIL）；skeleton 4368→4403（+35：
+  backfill 注入组保留所致，重复声明行已消——对照实验：三 pass 全旁路
+  时 skeleton 4052 但 gcc FAIL 25，未链接引用如实暴露为 undeclared）。
