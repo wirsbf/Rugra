@@ -1020,6 +1020,38 @@
      "tools/run_heritage_callguard_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "external_stub_1204",
+   "description": "decodeSpaces/decodeSpace registration, artificial EXTERNAL block classification, and 48-slot UND dynsym import-signature stub projection (halt_baddata form)",
+   "runner": [
+    "tools/run_external_stub_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/external_stub_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/external_stub_1204.cc",
+     "rust_fixture": "tests/oracle/external_stub_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_external_stub_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/space.rs",
+     "src/translate.rs",
+     "examples/curl_decompile.rs",
+     "tests/oracle/external_stub_1204.*",
+     "tools/run_external_stub_oracle.sh"
+    ]
+   }
   }
  ]
 }
