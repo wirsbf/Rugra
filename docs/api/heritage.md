@@ -497,38 +497,31 @@ block.cc:2036-2051）；`buildDomDepth` 根深度 1、子 = 父+1、尾部哨兵
 ## `pub fn place_multiequals(&mut self, fd: &mut Funcdata)`
 
 ### 作用
-插入 `MULTIEQUAL` 节点。
+按锁定 oracle `Heritage::placeMultiequals`（heritage.cc:2599-2645）逐段
+消费当前 `disjoint` TaskList：每段 `collect` 分类 NEW/OLD（cc:2609）、
+`size > 4 && max < size` 时走 `refinement` 细分并重 collect 第一片
+（cc:2610-2616）、无读且无写/输入或内部空间/旧段跳过（cc:2619-2625）、
+`removeRevisitedMarkers`（cc:2626-2627）、`guard_input`（cc:2628）、
+`guard`（cc:2629，addIndirects 取 `new_addresses()`）、`calc_multiequals`
+吃 collect 的 write varnode 列表（cc:2630/2439），随后对 `merge` 里每个
+块用 `Funcdata::new_op(sizeIn, block.start)` + `create_def_with_space` 输出
+（active-heritage）+ 每 slot 一个 fresh free 输入 + `op_insert_begin` 落在
+块首（cc:2631-2642）。
 
 ### 语义
-这是 Phi / 合流节点放置的核心接口之一。
+2026-08-15（HERITAGE-ADT-RENAME-0001）起该函数不再以
+`(space, address)` 分组整个 bank，改按 TaskList 顺序消费；四个输出向量在
+循环外声明、由每次 `collect` 清空复用（cc:2603-2609）；`MemRange` 的
+`clear_property(new_addresses)` 突变经 clone/写回镜像 cc:334 的就地突变。
+块首插入序即创建序的倒序（MULTIEQUAL 的 opInsertBegin 落 index 0），
+`tests/oracle/heritage_adt_rename_1204` 三案例（diamond/oldmark/two-join
+`seq=6,3`）对锁定 oracle 逐字节 MATCH。
 
-### 为什么重要
-在控制流汇合点，如果多个定义路径在同一位置合流，就需要引入类似 Phi 的机制。  
-Rugra 当前实现中，这类节点以 `MULTIEQUAL` 形式体现。
-
-### 已登记分歧（HERITAGE-ADT-RENAME-0001）
-oracle 按 `disjoint` 顺序 collect/refinement/guard；Rugra 仍按
-(space, address) 精确分组写位置（不消费 `disjoint`），插入尺寸取
-分组 varnode 的最大尺寸，块首插入以 bank 创建近似。所有权契约不变：
-单一显式 `&mut Funcdata`，无 Weak 升级 / 嵌套锁。
-
-### 作用
-插入 `MULTIEQUAL` 节点。
-
-### 语义
-这是 Phi / 合流节点放置的核心接口之一。
-
-### 为什么重要
-在控制流汇合点，如果多个定义路径在同一位置合流，就需要引入类似 Phi 的机制。  
-在 Rugra 当前实现中，这类节点以 `MULTIEQUAL` 形式体现。
-
-### 当前应如何表述
-这说明当前 SSA 主线已经考虑并实现了合流节点放置机制。  
-但这**不等于**：
-
-- 放置位置已经和 Ghidra 运行时逐点一致
-- 所有复杂 CFG 都已完成验证
-- 多空间、多层嵌套流图下都已行为稳定
+### 残差（如实登记）
+- `collect` 的扫描窗口是全 bank 偏移区间（Rugra Address 无空间身份），
+  跨空间偏移碰撞会误分类——`HERITAGE-DRIVER-SWITCH-0001` 硬前置。
+- refinement/guardInput concat/removeRevisitedMarkers 已按 oracle 调用
+  形状接线，但 fixture 未触发（UNTESTED）。
 
 ---
 
@@ -544,12 +537,14 @@ oracle 按 `disjoint` 顺序 collect/refinement/guard；Rugra 仍按
 - 让 heritage 过程在共享对象图上更稳定地操作
 - 适配当前工程使用共享读写容器的架构方式
 
-### 当前理解
-这是一个更偏工程安全性与可执行性优化的变体接口，说明项目在 heritage 过程中已经开始关注：
-
-- 图对象共享引用
-- 死锁风险
-- 直接操作 bank 的性能/稳定性问题
+### 确定性（RUN-NONDETERM 最小修，2026-08-15）
+dominance frontier 是 `HashSet<i32>`（std SipHash 每进程随机种子）；
+直接迭代会使 MULTIEQUAL 创建序逐进程随机 → 输出漂移。迭代前先
+`sort_unstable()` 按块索引定序（/tmp 因果验证 20/20 全语料字节一致）。
+canonical 路径不走 dom_frontier——merge 块由深度序 PriorityQueue +
+有序 augment 推导（calcMultiequals cc:2448-2463 / visitIncr cc:2394-2428，
+非块索引序，`seq=6,3` witness 可区分）；生产切换归
+`HERITAGE-DRIVER-SWITCH-0001`。
 
 ---
 
@@ -560,21 +555,30 @@ oracle 按 `disjoint` 顺序 collect/refinement/guard；Rugra 仍按
 执行 SSA rename。
 
 ### 语义
-这是 heritage 过程中的另一个核心环节，用于：
+2026-08-15（HERITAGE-ADT-RENAME-0001）起该函数是
+`Heritage::rename`（heritage.cc:2587-2593）的忠实移植入口：新建
+VariableStack，**仅从 block 0** 起调 `rename_recurse`，随后
+`disjoint.clear()`。`rename_recurse`（cc:2479-2562，迭代化
+Enter/Leave 工作栈镜像"先子树后弹栈"的递归序）逐块：
 
-- 传播版本信息
-- 为值节点建立 SSA 版本序列
-- 让 def-use 更明确
+- 单趟按执行序遍历 op（cc:2489）——MULTIEQUAL 只跳过读替换内层
+  循环（cc:2491），其输出仍在**自身 op 位置**走公共写压栈尾
+  （cc:2523-2529），不再有独立的 phi 预处理趟；
+- 读槽升序（cc:2493）：heritage-known 跳过（cc:2495）、非 active
+  free 跳过且不清标（cc:2496）、消费时清 active（cc:2497）、空栈
+  input 提升（cc:2499-2502）、INDIRECT same-time 深栈
+  （cc:2507-2516）、经 `Funcdata::op_set_input` 替换（cc:2518）、
+  consumed free 删除（cc:2519-2520）；
+- 后继循环（cc:2531-2552）：出边升序、精确 reverse slot、只扫后继
+  **前导** MULTIEQUAL 组（cc:2536 break）；phi 输入只查
+  `isHeritageKnown`（cc:2538——phi 环上已写的 loop-carried 输入保持
+  原样，即 old-marker skip），无 active 检查/清除；
+- domchild 序递归、writelist 按遇到序在全部子树后弹（cc:2553-2561）。
 
-### 为什么重要
-没有 rename，仅有原始节点和合流节点还不足以形成可用的 SSA 形式。
-
-### 当前边界
-这类接口的存在说明项目已经正式建模 SSA rename 过程；  
-但不能把它直接写成：
-
-- “版本号分配已证明与 Ghidra 完全一致”
-- “rename 行为已经过完整对拍”
+`tests/oracle/heritage_adt_rename_1204` 三案例（含 oldmark 环）对该路径
+逐字节 MATCH。生产 direct 路径的差异（全入口块、预置 input 栈、
+v_type 拷贝、宽泛 active 标记）仍留在 `rename_direct`，切换归
+`HERITAGE-DRIVER-SWITCH-0001`。
 
 ---
 
@@ -833,4 +837,63 @@ provenance，不改变 guard 行为或对齐状态。
 - 残差：ScopeLocal queryProperties 的 fl（addrtied → ADDRFORCE）未建模
   （fixture 投影中 `af` 双侧省略）；reprocessFreeStores 的
   discoverIndexedStackPointers 触发链与生产 Action 切换归后续任务。
+
+### 2026-08-15: HERITAGE-ADT-RENAME-0001 — canonical placeMultiequals/rename 消费 disjoint
+
+- `place_multiequals`（heritage.cc:2599-2645）改为逐段消费 `disjoint`
+  TaskList：collect →（>4B 且 max<size 时）refinement → 无读跳过规则
+  （cc:2619-2625，含 IPTR_INTERNAL/oldAddresses）→ removeRevisitedMarkers
+  → guardInput → guard（`new_addresses()` 门控）→ calcMultiequals →
+  块首 MULTIEQUAL 插入。旧的"全 bank (space,address) 分组 + bank 近似插入"
+  删除；phi 经 `fd.new_op(sizeIn, block.start)` +
+  `create_def_with_space`/`set_varnode_properties`（newVarnodeOut 的
+  space-carrying 镜像）+ `op_set_input` + `op_insert_begin` 创建，无条件
+  dominator 重建也一并删除（cc:2599 无 buildADT/buildDomTree 调用，
+  dominator 状态由 driver 的 maxdepth==-1 分支供给）。
+- `calc_multiequals`（cc:2439-2466）签名改为吃 write **varnode** 列表，
+  块索引从 `write[i]->def->parent` 派生（cc:2449）。
+- `collect`（cc:307-347）改为 MemRange 引用形式：write-mask 跳过
+  （cc:326，`Varnode::is_write_mask` 已存在）、marker/return-COPY 旧
+  heritage 证据（cc:329）、`clear_property(NEW_ADDRESSES)`（cc:334）。
+- 新增 `refinement`（cc:1890-1940）orchestrator：size+1 fencepost、
+  边界→分区尺寸转换、`remove13_refinement` 按 cc:1857-1880 重写、
+  tasklist 就地 splice + globaldisjoint 逐片 add（原 pass 号）。
+- `refine_read/refine_write/refine_input`（cc:1772/1806/1836）重写为
+  oracle 调用形状：concatPieces/splitPieces + totalReplace +
+  deleteVarnode；refineInput 不再凭空 setFlags(INPUT)（消除
+  VARNODE-INPLACE-MUTATION-SITES-0001 登记的 heritage.rs 突变点）。
+- `concat_pieces`/`split_pieces` 的 null-insertop 分支对齐 cc:516-519/
+  578-581（start block begin + 函数地址，无 entry 标志时如 Ghidra
+  getStartNode 抛错路径降级为 stderr 警告）；splitPieces 的 Some 分支
+  改为插在写 op **之后**（++insertiter）。
+- **机制 C 复核返工（2026-08-16，M1-M5）**：concatPieces/splitPieces 的
+  插入改为**元素锚**——cc:516-518/582-587 的 insertiter 是进入循环前捕获的
+  固定元素（原首 op X / write 之后的元素 Y），cc:546/602 每片插在该元素
+  **之前**，片序=创建序 [P1..Pn,X] / [W,S1..Sn,Y]；首轮交付的固定数值
+  索引（每轮 index 0 / write_pos+1）会把组反转成 use-before-def 块内序，
+  已由 `adt_refine_order` 案例的 block-order 投影钉死（runner 断言
+  `b1=PIECE,PIECE,PIECE,r` 与 `wa,SUBPIECE,SUBPIECE`）。refineRead 非自由
+  路径按 cc:1786 改为 panic（保留 "Refining non-free varnode" 原文）。
+  二轮复核（M5a/b）修正：warning 文本为 printRaw 原形——`0x` + 按
+  2*addrsize 零填充、高位缩短规则（>>32==0→4B / >>48==0→6B）、**无空间名**
+  （space.cc:206-221），如 `0x00000070`；removeRevisitedMarkers 的重插位置
+  改为**元素锚**——在 opUninsert 之前于移除前列表解析锚（dead/不可解析
+  target→INDIRECT 自身后继 cc:268-269；alive target→target 后继
+  cc:270-272；MULTIEQUAL→组后首个非 ME cc:275-280），uninsert 后
+  `op_insert_before(op, anchor)`、锚为尾时追加——数值索引在移除后列表上
+  平移一位且块尾越界 panic（`adt_revisit_positions` 案例钉死
+  [a2,S,f2]/[a3,S]/[m2,S,x] 三形态）。附带修复 refine_read 把
+  lone_descend 内联进 if-let 条件导致的同线程 RwLock 死锁（读守卫跨块
+  存活 × op_set_input 对同一 varnode 取写锁）。
+- `rename`/`rename_recurse`（cc:2587-2593/2479-2562）：canonical rename
+  不再走 `rename_direct`——block 0 唯一根、单趟 op 序、精确
+  `op_set_input`、phi 输入 old-marker skip、无预置 input 栈、无
+  v_type 拷贝、无宽泛 active 标记；直接路径保持不变（生产用）。
+- RUN-NONDETERM 最小修：`place_multiequals_direct` 的 dom_frontier
+  `HashSet` 迭代前 `sort_unstable()`（详见上文该函数小节）。
+- 锁定 oracle fixture `tests/oracle/heritage_adt_rename_1204`（3 case
+  双侧逐字节 MATCH，含 merge 序 witness `seq=6,3` 与 ownership 波受限
+  phi_cycle 案例的完整投影）。残差：collect 全 bank 偏移窗口
+  （跨空间碰撞，DRIVER-SWITCH 硬前置）、refinement/guardInput concat/
+  removeRevisitedMarkers 分支 UNTESTED。
 

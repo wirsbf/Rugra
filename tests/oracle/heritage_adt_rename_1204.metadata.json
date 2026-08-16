@@ -1,0 +1,116 @@
+{
+ "schema": 2,
+ "fixture_id": "HERITAGE-ADT-RENAME-0001",
+ "stable_function_id": "GH12-F-96ecf8b90e2ecb42b147",
+ "stable_function_closure": [
+  "ghidra::Funcdata::opHeritage funcdata.hh:462",
+  "ghidra::Heritage::heritage heritage.cc:2663",
+  "ghidra::Heritage::buildADT heritage.cc:2316",
+  "ghidra::Heritage::visitIncr heritage.cc:2394",
+  "ghidra::Heritage::calcMultiequals heritage.cc:2439",
+  "ghidra::Heritage::renameRecurse heritage.cc:2479",
+  "ghidra::Heritage::rename heritage.cc:2587",
+  "ghidra::Heritage::placeMultiequals heritage.cc:2599",
+  "ghidra::Heritage::collect heritage.cc:307",
+  "ghidra::Heritage::refinement heritage.cc:1890",
+  "ghidra::Heritage::buildRefinement heritage.cc:1704",
+  "ghidra::Heritage::splitByRefinement heritage.cc:1733",
+  "ghidra::Heritage::remove13Refinement heritage.cc:1857",
+  "ghidra::Heritage::refineRead heritage.cc:1772",
+  "ghidra::Heritage::refineWrite heritage.cc:1806",
+  "ghidra::Heritage::refineInput heritage.cc:1836",
+  "ghidra::Heritage::guardInput heritage.cc:1952",
+  "ghidra::Heritage::guard heritage.cc:1156",
+  "ghidra::Heritage::concatPieces heritage.cc:507",
+  "ghidra::Heritage::splitPieces heritage.cc:563",
+  "ghidra::Heritage::removeRevisitedMarkers heritage.cc:244",
+  "ghidra::Heritage::Heritage heritage.cc:218"
+ ],
+ "overall_status": "PARTIAL_MATCH: the canonical placeMultiequals/rename pipeline (disjoint TaskList consumption, collect NEW/OLD classification, refinement orchestration with element-anchor concatPieces/splitPieces insertion order, guardInput, guard, calcMultiequals write-seeded PriorityQueue merge, block-begin MULTIEQUAL insertion via opInsertBegin, block-0-rooted renameRecurse with empty-stack input promotion, INDIRECT same-time deepening, consumed-free deletion, and the phi-cycle old-marker skip) byte-matches the locked 12.0.4 oracle on all five per-object projections, including the merge-order witness (seq=6,3, pq order not block-index order), the ownership wave's restricted phi_cycle case fully compared, and the mechanism-C rework witnesses pinning creation-order element-anchor insertion for >=3-piece concat/refineWrite split groups (order-discriminating per-op projection) and the removeRevisitedMarkers element-anchored reinsertion shapes (dead-target mid-block/tail + MULTIEQUAL group). Residuals keep the module at L2: guardInput's concat path and removeRevisitedMarkers conversions are wired per the oracle call shape but not exercised by these cases (UNTESTED); collect scans a whole-bank offset window because Rugra's Address lacks space identity (MISMATCH registered, DRIVER-SWITCH precondition); the production Action path still runs the direct two-pass route (UNTESTED, HERITAGE-DRIVER-SWITCH-0001).",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{heritage.cc:244-298,307-347,507-604,1156-1199,1704-1940,1952-2010,2316-2466,2479-2645,funcdata.hh:462,funcdata_block.cc:703,block.cc:1009-1135,1659-1655,2258-2326}"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (funcdata.hh:462) three consecutive times on the same Funcdata; no Action tree, no C emission; the pass counter is read after each call (C++ getHeritagePass / Rust num_heritage_passes)",
+  "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge). Both sides apply the startProcessing steps a synthetic graph can reach: structureLoops+calcForwardDominator (Ghidra) mirrors as find_spanning_tree (the BLOCK-INDEX-ASSIGN-0001 port of block.cc:1009-1135, which assigns the same reverse-post-order FlowBlock indices) + BlockGraph::build_dom_tree, then heritage.buildInfoList (funcdata.cc:166). Distinct constant objects per input slot and one free Varnode per read mirror the raw-p-code single-descendant invariants",
+  "observation": "Per case: pass counter sequence; op count; per-object phi projection (every parented MULTIEQUAL in block-index then block-op-position order: output storage space/offset/size, per-slot input descriptor with defining opcode, and the merge block's in-edge j predecessor index for phi slot j); MULTIEQUAL creation order in op-tree SeqNum order (seq field); op list in PcodeOpBank SeqNum order as name.OPCODE(input descriptors); Varnode count and sorted descriptor multiset. The Rust comparand additionally asserts (abort on violation, before printing) ctor maxdepth==-1, exactly one ADT rebuild (maxdepth constant 2/4/3 across the three passes per case), and the persistent globaldisjoint entry count (7/3/3 per case) surviving every mem::take round-trip",
+  "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, offset or size, def-use class, and defining opcode"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "adt_diamond_phi: diamond b0->{b1,b2}->{b3} with three heritaged register ranges (0x10:8 written INT_ADD@b1/INT_OR@b2, 0x20:4 INT_MULT@b1/INT_ADD@b2, 0x30:1 COPY@b1/COPY@b2) each free-read after the join; one phi per range at the merge block beginning, reverse creation order in the block (opInsertBegin of a MULTIEQUAL lands at index 0), rename wires slot j to the write flowing over the merge block's in-edge j and repoints the join readers at the phi outputs; later passes inert (prev==2 heritage-known skip)",
+   "phi_cycle_oldmark: b0->b1->b2->b1 back edge plus b2->b3 with a manually created MULTIEQUAL m at register 0x28 (previous-heritage marker evidence: collect clears new_addresses for the range and keeps m_out in the write list) and loop-carried INT_ADD t3 feeding m slot 1; heritage places a NEW phi at b1's beginning, rename promotes m's free slot-0 input and SKIPS m's slot-1 t3 (already written, cc:2538 old-marker skip); the HERITAGE-OWNERSHIP restricted no-hang witness is now a full byte-compared projection",
+   "adt_two_join_order: nested joins b0->{b1,b2}->b3->{b4,b5}->b6 with register 0x60:8 written INT_ADD@b1 (shallow) and INT_OR@b5 (deep); the merge vector comes out [b6, b3] because the depth-ordered PriorityQueue extracts the deep write first (calcMultiequals cc:2448-2463) and visitIncr walks the ordered augment vectors (cc:2394-2428), so the seq field reads 6,3; a block-index merge ordering would read 3,6 and is a semantic divergence, not an equivalence",
+   "adt_refine_order: two-block chain whose 8-byte register range (0x70, formed by overlapping 4-byte writes 0x70:4/0x72:4 plus an 8-byte free read) has max write 4 < size 8 -> refinement partitions it into four 2-byte pieces; refineRead's 4-piece chain is built by concatPieces anchored on the reading op (3 PIECE ops in creation order before it) and each refineWrite's 2 SUBPIECEs anchor on the element AFTER the write (splitPieces cc:582-587/602); the block-order projection pins both orders — a fixed numeric-index insertion per round (the rejected first delivery) would reverse each group into use-before-def block order",
+   "adt_revisit_positions: pass 1 heritages range 0x90:4 (write in b0, free read in b1); a mid-pass injection then adds previous-heritage markers and fresh free reads so pass 2 re-adds the ranges and removeRevisitedMarkers converts each 2-byte marker to SUBPIECE at the element-anchored position: dead-target INDIRECT mid-block b1=[.., a2, i, f2] -> [.., a2, S, f2]; dead-target INDIRECT at the block tail b2=[a3, i2] -> [a3, S]; and a 2-byte MULTIEQUAL marker before a full-size MULTIEQUAL b3=[m, m2, x] -> [m2, S, x]. The per-op block-order projection (labels + input descriptors with constant VALUES) pins all three shapes; a numeric index computed on the pre-removal list shifts by one and panics at the block tail"
+  ],
+  "sha256": "3d69a75d3557066bb63cf88f9b37420781a240a07a8bbbe1519443dfb6a39f73"
+ },
+ "observation_schema": {
+  "format": "Six fixed-order UTF-8 lines with final newline: one envelope plus five case records",
+  "state": "pass counter sequence; op count; phi count; per-object phi projection (block index @ op position, output storage, per-slot input descriptor + reverse-predecessor index); MULTIEQUAL creation order (op-tree SeqNum order) where present; op list (SeqNum order, name.OPCODE + per-slot input descriptors); Varnode count and sorted descriptor multiset",
+  "graph": "def-use class and defining opcode per op input slot (input/written+op/free/constant), Varnode space class, offset or size, def-use class and defining opcode multiset, phi slot <-> merge-block in-edge predecessor mapping"
+ },
+ "comparand": {
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-adt-rename-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rugra_base_commit": "194901d0de8bd45069829c948c9c0f991e097d84",
+  "rugra_base_tree": "1fe1b70437cc90d373a697770e45b2a686c5d8a4",
+  "cpp_fixture_sha256": "389417d81e43667c4cde7c6e151f085d38a8c99f2fd250cc902973b9fab2f173",
+  "rust_fixture_sha256": "89d1d133656228927e591d0a583ea398d87f1f1991070460cf7289121893243f",
+  "heritage_rs_sha256": "44beaa455ee4a5faec6275f8e79a5170f2666c472415704da27627589adb5cc5",
+  "heritage_doc_sha256": "3fdc89f007dd70de2b10a7c06c9b04d583b8c50a9f98f1dc09c375d8643e7b3a",
+  "runner_sha256": "d8f83c748a393d49ede6084649e9037e29291169fa13ca40818f7eae43f7b297",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "83754ce86c21858c8e502a8b157cbf56b7c9c5d652ba0fb71537e10ea991a4d7",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
+  }
+ },
+ "build": {
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "89cda82505da38de2a576a1f03e72c3a31fe0f74176eaa07c1ff84cb9e5d732e",
+  "registry_lock_closure_scheme": "sha256 of rugra-heritage-adt-rename-registry-lock-v1 plus sorted length-prefixed name/version/checksum records from the pinned-base Cargo.lock"
+ },
+ "expected_stdout_sha256": "563749be92f29d85f5f6f9aef19f222fe19c50044279af8821dfb51dc4d54d1c",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "diamond_phi_full_projection": "MATCH: three phis at the join block, one per heritaged register range, op/phi/vn projections byte-identical (block-begin reverse creation order, storage, per-slot input identity via defining opcode, join readers repointed at the phi outputs)",
+  "phi_block_begin_reverse_creation_order": "MATCH: creation order follows the disjoint TaskList (0x10, 0x20, 0x30) while the block order reads p0=R30, p1=R20, p2=R10 because opInsertBegin of a MULTIEQUAL lands at index 0 (cc:2631-2642, funcdata_op.cc:413-421)",
+  "phi_input_identity_reverse_predecessor_slot": "MATCH: every phi slot j carries the value flowing over the merge block's in-edge j (pred index printed per slot); empty-stack paths promote one input per range",
+  "phi_cycle_old_marker_skip_full_projection": "MATCH: the heritage phi lands at b1's beginning before the manual MULTIEQUAL m; rename rewrites m's free slot 0 to the promoted input and leaves m's slot 1 (written INT_ADD t3) untouched per cc:2538; replaces the ownership wave's restricted no-hang witness",
+  "merge_order_pq_not_block_index": "MATCH: adt_two_join_order seq=6,3 the deeper merge block's phi is created first because the depth-ordered PriorityQueue extracts the deep write first (calcMultiequals cc:2448-2463) and visitIncr walks the ordered augment vectors (cc:2394-2428); a block-index merge ordering yields 3,6 and fails the runner's seq witness",
+  "collect_new_old_classification": "MATCH: collect classifies the manual MULTIEQUAL output as previous-heritage evidence (size >= range keeps it in the write list and clears new_addresses, cc:329-338) and the unique ranges as write-only (skipped by the IPTR_INTERNAL rule, cc:2623); pass 2/3 disjoint emptiness follows from prev==2 + isHeritageKnown skip (cc:2712)",
+  "refinement_branch": "MATCH: adt_refine_order drives the full refinement path (fencepost, boundary-to-size conversion, remove13 no-op for 2-byte partitions, tasklist/globaldisjoint piece rewrite with the original pass number, per-pass cover counts 6/13/13 asserted Rust-side); the four 2-byte pieces re-collect, guard, and rename identically on both sides",
+  "guard_input_concat_path": "UNTESTED: guardInput's hole-filling + write-mask + start-block concatPieces path (cc:1969-2009) requires pre-existing input varnodes in a multi-piece range; no case creates them",
+  "remove_revisited_markers_old_range": "UNTESTED: removeRevisitedMarkers' INDIRECT/MULTIEQUAL SUBPIECE conversion (mechanism-C M5 rework: printRaw warning text, dead-target self-iterator restore, exact reinsertion positions cc:265-295) requires an OLD range revisit after dead-code removal; no case drives deadremoved > 0",
+  "cross_space_collect_window": "MISMATCH (registered, HERITAGE-DRIVER-SWITCH-0001 hard precondition): collect scans the whole Varnode bank with an offset window because Rugra's Address carries no space identity; Ghidra's beginLoc(memrange.addr) is space-confined. The fixture's register offsets (0x10-0x60) sit far below the unique allocation base (0x10000000), so no cross-space collision is observable here",
+  "production_action_switch": "UNTESTED: ActionHeritage still runs the direct two-pass place/rename route (place_multiequals_direct/rename_direct); the canonical path is exercised through Funcdata::opHeritage only. The RUN-NONDETERM minimal fix (deterministic sort of the direct path's dom_frontier HashSet iteration) is included in the pinned heritage.rs but its per-process determinism is covered by the E2E gate, not this fixture",
+  "refine_concat_element_anchor_order": "MATCH (mechanism-C M1/M3 rework, order-discriminating projection): concatPieces anchors on a fixed ELEMENT (the original first op / the reading op) so pieces keep creation order; the per-op block-order projection prints input descriptors with constant VALUES, making within-group permutations visible — the first delivery's numeric-index insertion reversed the group and is rejected by the runner's order witness",
+  "refine_write_split_element_anchor_order": "MATCH (mechanism-C M2 rework, order-discriminating projection): splitPieces anchors on the element AFTER the write (++insertiter) for the non-null branch and the start block's original first op for the null branch, keeping [W,S1,S2,...] creation order",
+  "refine_read_nonfree": "UNTESTED (mechanism B2, no case exercises it): refineRead's non-free varnode path aborts with the oracle's exact LowlevelError text (Rust panics); unreachable while the lone-descend invariant holds",
+  "remove_revisited_positions": "MATCH (mechanism-C M5(b) rework): adt_revisit_positions pins the three element-anchored reinsertion shapes [.., a2, S, f2] (dead-target mid-block), [a3, S] (dead-target tail — the numeric-index form panics on the opInsert range assert here), and [m2, S, x] (MULTIEQUAL group); the M5(a) printRaw warning text (0x%08x, no space name) is source-aligned but not projected (deadremoved>0 not driven)"
+ }
+}

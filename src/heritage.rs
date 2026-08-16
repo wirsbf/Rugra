@@ -871,17 +871,32 @@ impl Heritage {
 
     // Ghidra: heritage.cc:2439 Heritage::calcMultiequals
     /// Calculate blocks that should contain MULTIEQUALs for one address range.
-    /// Faithful to `calcMultiequals` (heritage.cc:2439-2466).
-    /// After this executes, self.merge holds block indices that should
-    /// contain a MULTIEQUAL (phi node).
-    pub fn calc_multiequals(&mut self, fd: &Funcdata, write_blocks: &[i32]) {
+    /// Faithful to `calcMultiequals` (heritage.cc:2439-2466): consumes the
+    /// normalized write Varnode list, derives each write's block from
+    /// `write[i]->getDef()->getParent()` (cc:2449), always seeds block 0
+    /// (cc:2455-2458), and clears mark/merged flags only after queue
+    /// exhaustion (cc:2464-2465). A write whose defining op lost its parent
+    /// block cannot occur in the locked oracle (cc:2449 would dereference
+    /// it); Rust skips such an entry rather than indexing the flags array
+    /// with an invalid block.
+    pub fn calc_multiequals(&mut self, fd: &Funcdata, write: &[Arc<RwLock<Varnode>>]) {
         // cc:2442: pq.reset(maxdepth)
         self.pq.reset(self.maxdepth);
         // cc:2443: merge.clear()
         self.merge.clear();
 
         // cc:2448-2454: place write blocks into pq.
-        for &blk_idx in write_blocks {
+        for vn_arc in write {
+            let vn = vn_arc.read().unwrap();
+            let blk_idx = match vn
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .and_then(|def| def.read().unwrap().parent.as_ref().and_then(|p| p.upgrade()))
+            {
+                Some(parent) => parent.read().unwrap().get_index(),
+                None => continue,
+            };
             let j = blk_idx as usize;
             if j < self.flags.len() && (self.flags[j] & heritage_flags::MARK_NODE) != 0 {
                 continue; // Already in
@@ -1808,9 +1823,18 @@ impl Heritage {
         self.load_copy_ops.clear();
     }
 
-    // Ghidra: heritage.cc:245 Heritage::removeRevisitedMarkers
-    /// Remove previously-heritaged markers and convert to SUBPIECE.
-    /// Faithful to `removeRevisitedMarkers` (heritage.cc:245-298).
+    // Ghidra: heritage.cc:244 Heritage::removeRevisitedMarkers
+    /// Remove previously-heritaged markers and convert them to SUBPIECE
+    /// of a larger free Varnode. Faithful to `removeRevisitedMarkers`
+    /// (heritage.cc:244-297): an INDIRECT marker is uninserted and
+    /// reinserted AFTER the target of the INDIRECT (cc:265-273, the
+    /// replacement INDIRECT keeps the address so the old output is
+    /// addr-force cleared); a MULTIEQUAL marker is reinserted after ALL
+    /// leading MULTIEQUALs in its block (cc:275-280); a return-form COPY
+    /// is unlinked outright (cc:281-284). The converted op becomes
+    /// SUBPIECE(big, offset) with a fresh active-heritage whole-range
+    /// input (cc:285-294) and the original output is write-masked
+    /// (cc:295).
     pub fn remove_revisited_markers(
         &mut self,
         fd: &mut Funcdata,
@@ -1821,14 +1845,30 @@ impl Heritage {
         let space = remove.first()
             .map(|v| v.read().unwrap().address_space)
             .unwrap_or(AddressSpace::Register);
-        // cc:249: if deadremoved > 0, bump delay + warn
+        // cc:247-257: if deadremoved > 0, bump delay + one-time warning
+        // header naming the revisited address in printRaw form.
+        // AddrSpace::printRaw (space.cc:206-221): "0x" plus the offset
+        // zero-filled to 2*addrsize hex digits, with the leading-zero
+        // shrink rule (offset>>32==0 -> 4 bytes, else >>48==0 -> 6 for
+        // 8-byte spaces); no space name.
         let info_idx = self.infolist.iter().position(|i| i.space == space);
         if let Some(idx) = info_idx {
             if self.infolist[idx].deadremoved > 0 {
                 self.bump_deadcode_delay(space);
                 if !self.infolist[idx].warning_issued {
                     self.infolist[idx].warning_issued = true;
-                    eprintln!("[HERITAGE] WARN: Heritage AFTER dead removal at {:?}", addr);
+                    let mut sz = space.addr_size();
+                    let off = addr.as_u64();
+                    if sz > 4 {
+                        if (off >> 32) == 0 {
+                            sz = 4;
+                        } else if (off >> 48) == 0 {
+                            sz = 6;
+                        }
+                    }
+                    let mut errmsg = String::from("Heritage AFTER dead removal. Revisit: ");
+                    errmsg.push_str(&format!("0x{:0width$x}", off, width = 2 * sz));
+                    fd.warning_header(&errmsg);
                 }
             }
         }
@@ -1838,30 +1878,130 @@ impl Heritage {
                 Some(d) => d, None => continue,
             };
             let def_code = def_op.read().unwrap().opcode;
+            let parent = def_op
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|p| p.upgrade());
+            let Some(bl) = parent else { continue };
             drop(vn_r);
-            if def_code == OpCode::CPUI_COPY {
-                // cc:282-285: unlink return-form COPY
-                let def_ref = PcodeOpRef(def_op);
-                fd.obank.destroy(def_ref);
+            let def_ref = PcodeOpRef(def_op.clone());
+            // cc:265-280 resolve the reinsertion position as an ELEMENT
+            // anchor captured on the PRE-removal block list — Ghidra's
+            // `pos` is a list iterator that keeps pointing at the anchor
+            // element across the opUninsert at cc:286, and opInsert
+            // (cc:294) inserts before it. A numeric index computed on the
+            // pre-removal list shifts by one after the removal (and can
+            // exceed the shrunken list at the block tail, tripping the
+            // opInsert range assert).
+            //   - INDIRECT, dead/unresolvable target: cc:268-269 the
+            //     anchor is the element after the INDIRECT itself.
+            //   - INDIRECT, alive target: cc:270-272 the anchor is the
+            //     element after the target op.
+            //   - MULTIEQUAL: cc:275-280 the anchor is the first
+            //     non-MULTIEQUAL element after the leading ME group.
+            let bl_ops = bl.read().unwrap().get_ops();
+            let self_pos = bl_ops.iter().position(|c| Arc::ptr_eq(&c.0, &def_op));
+            let anchor: Option<crate::op::PcodeOpRef>;
+            if def_code == OpCode::CPUI_INDIRECT {
+                let target = {
+                    let def_r = def_op.read().unwrap();
+                    def_r.get_in(1).and_then(|iop_vn| {
+                        let iv = iop_vn.read().unwrap();
+                        if iv.get_space() == AddressSpace::Iop {
+                            let raw = iv.get_offset() as usize
+                                as *const std::sync::RwLock<PcodeOp>;
+                            // Recover the aliased target op from the bank
+                            // (Ghidra's PcodeOp::getOpFromConst round-trip).
+                            fd.obank
+                                .optree
+                                .iter()
+                                .find(|candidate| {
+                                    std::sync::Arc::as_ptr(&candidate.0) as *const ()
+                                        == raw as *const ()
+                                })
+                                .cloned()
+                        } else {
+                            None
+                        }
+                    })
+                };
+                let target_alive_pos = target.as_ref().and_then(|target_op| {
+                    let target_dead =
+                        (target_op.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD) != 0;
+                    if target_dead {
+                        return None;
+                    }
+                    bl_ops.iter().position(|c| Arc::ptr_eq(&c.0, &target_op.0))
+                });
+                let Some(self_pos) = self_pos else {
+                    // The op is not in its parent block; the locked oracle
+                    // dereferences a stale iterator here. Skip the op.
+                    continue;
+                };
+                let anchor_pos = match target_alive_pos {
+                    // cc:270-272: ++targetOp->getBasicIter()
+                    Some(tp) => {
+                        // If the target's immediate successor is the
+                        // INDIRECT itself (about to be uninserted), the
+                        // anchor degenerates to the INDIRECT's own
+                        // successor — the element after the removed slot.
+                        if tp + 1 == self_pos {
+                            self_pos + 1
+                        } else {
+                            tp + 1
+                        }
+                    }
+                    // cc:268-269: ++op->getBasicIter()
+                    None => self_pos + 1,
+                };
+                anchor = bl_ops.get(anchor_pos).map(|o| crate::op::PcodeOpRef(o.0.clone()));
+                // cc:273: vn->clearAddrForce()
+                vn_arc.write().unwrap().clear_addr_force();
+            } else if def_code == OpCode::CPUI_MULTIEQUAL {
+                let Some(self_pos) = self_pos else {
+                    continue;
+                };
+                let mut pos = self_pos + 1;
+                while pos < bl_ops.len()
+                    && bl_ops[pos].0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL
+                {
+                    pos += 1;
+                }
+                anchor = bl_ops.get(pos).map(|o| crate::op::PcodeOpRef(o.0.clone()));
+            } else {
+                // cc:281-284: remove return form COPY
+                fd.op_unlink(&def_ref);
                 continue;
             }
-            // cc:286: offset = vn->overlap(addr, size)
+            drop(bl_ops);
+            // cc:285-286: offset = vn->overlap(addr,size); opUninsert(op)
             let vn_loc = vn_arc.read().unwrap().loc.as_u64();
-            let offset = vn_loc.saturating_sub(addr.as_u64()) as i64;
+            let offset = vn_loc.wrapping_sub(addr.as_u64());
             let vn_space = vn_arc.read().unwrap().address_space;
-            // cc:287: opUninsert(op)
-            // cc:289-290: big = newVarnode(size, addr); setActiveHeritage
+            fd.op_uninsert(&def_ref);
+            // cc:288-291: big = newVarnode(size,addr); setActiveHeritage;
+            // newInputs = [big, newConstant(4, offset)]
             let big = fd.vbank.create_with_space(size as usize, vn_space, addr.as_u64());
             big.write().unwrap().set_active_heritage();
-            // cc:293-294: opSetOpcode(SUBPIECE); opSetAllInput
-            def_op.write().unwrap().opcode = OpCode::CPUI_SUBPIECE;
-            def_op.write().unwrap().inrefs.clear();
-            def_op.write().unwrap().inrefs.push(big);
-            let off_const = fd.new_constant(4, offset as u64);
-            def_op.write().unwrap().inrefs.push(off_const);
-            def_op.write().unwrap().output = Some(vn_arc.clone());
-            // cc:296: setWriteMask
-            // TODO: WRITEMASK flag not defined yet
+            let off_const = fd.new_constant(4, offset);
+            // cc:292-293: opSetOpcode(SUBPIECE) + opSetAllInput
+            fd.op_set_opcode(&def_ref, OpCode::CPUI_SUBPIECE);
+            fd.op_set_input(&def_ref, big, 0);
+            fd.op_set_input(&def_ref, off_const, 1);
+            // cc:294: opInsert(op, bl, pos) — before the captured anchor
+            // element, or at the end when the anchor is the list end.
+            match anchor {
+                Some(a) => {
+                    fd.op_insert_before(&def_ref, &a);
+                }
+                None => {
+                    fd.op_insert(&def_ref, &bl, None);
+                }
+            }
+            // cc:295: vn->setWriteMask()
+            vn_arc.write().unwrap().set_write_mask();
         }
     }
 
@@ -2779,17 +2919,56 @@ impl Heritage {
         if vnlist.is_empty() { return final_vn.clone(); }
         let mut preexist = vnlist[0].clone();
         let is_bigendian = false; // Rugra: x86-64 is little-endian
-        let op_addr = match insert_op {
-            Some(op) => op.0.read().unwrap().get_addr(),
-            None => Address::new(0),
+        // cc:512-525: with a null insertop the expression goes to the
+        // start block's beginning (getStartBlock + beginOp), and the ops
+        // carry the function address; otherwise the ops insert before
+        // insertop in its own block.
+        //
+        // cc:516-518/546 anchor semantics: insertiter = bl->beginOp() is
+        // captured ONCE before the loop and is an ELEMENT anchor — the
+        // block's original first op X. std::list::insert(insertiter, op)
+        // inserts BEFORE that element every round, so the pieces keep
+        // creation order [P1, P2, ..., X]; with an empty block the anchor
+        // is endOp and every piece appends at the end in creation order.
+        // A fixed numeric index 0 per round would REVERSE the pieces
+        // (each later piece landing before the earlier ones).
+        let (null_anchor, op_addr): (Option<crate::op::PcodeOpRef>, Address) = match insert_op {
+            Some(op) => {
+                let addr = op.0.read().unwrap().get_addr();
+                (None, addr)
+            }
+            None => {
+                let start = fd.bblocks.get_block(0);
+                let has_entry = start
+                    .as_ref()
+                    .map(|b| {
+                        (b.read().unwrap().get_flags() & crate::block::block_flags::ENTRY_POINT)
+                            != 0
+                    })
+                    .unwrap_or(false);
+                if !has_entry {
+                    // Ghidra getStartBlock throws "No start block
+                    // registered" (block.cc:1649-1655); keep the op
+                    // unparented and surface the same condition.
+                    eprintln!("[HERITAGE] WARN: No start block registered");
+                }
+                let anchor = if has_entry {
+                    let bl = fd.bblocks.get_block(0).expect("entry checked above");
+                    let first_op = bl.read().unwrap().get_ops().first().cloned();
+                    first_op.map(|o| crate::op::PcodeOpRef(o.0.clone()))
+                } else {
+                    None
+                };
+                (anchor, *fd.get_address())
+            }
         };
         for i in 1..vnlist.len() {
             let vn = &vnlist[i];
             let newop = fd.new_op(2, op_addr);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
             let newvn = if i == vnlist.len() - 1 {
-                // Final piece uses final_vn as output
-                newop.0.write().unwrap().output = Some(final_vn.clone());
+                // cc:532-535: final op outputs finalvn via opSetOutput
+                fd.op_set_output(&newop, final_vn.clone());
                 final_vn.clone()
             } else {
                 let pre_size = preexist.read().unwrap().get_size();
@@ -2803,10 +2982,24 @@ impl Heritage {
                 fd.op_set_input(&newop, vn.clone(), 0);
                 fd.op_set_input(&newop, preexist.clone(), 1);
             }
-            if let Some(ins_op) = insert_op {
-                fd.op_insert_before(&newop, ins_op);
-            } else {
-                fd.obank.alivelist.insert(0, newop);
+            match insert_op {
+                Some(ins_op) => fd.op_insert_before(&newop, ins_op),
+                None => {
+                    if let Some(anchor) = &null_anchor {
+                        // cc:546: insert before the fixed first-op anchor
+                        // so the pieces keep creation order before X.
+                        fd.op_insert_before(&newop, anchor);
+                    } else if fd.bblocks.get_block(0).is_some()
+                        && (fd.bblocks.get_block(0).unwrap().read().unwrap().get_flags()
+                            & crate::block::block_flags::ENTRY_POINT)
+                            != 0
+                    {
+                        // cc:546 with an empty start block: the anchor is
+                        // endOp; every piece appends at the end.
+                        let bl = fd.bblocks.get_block(0).unwrap();
+                        fd.op_insert(&newop, &bl, None);
+                    }
+                }
             }
             preexist = newvn;
         }
@@ -2831,9 +3024,88 @@ impl Heritage {
         } else {
             addr.as_u64()
         };
-        let op_addr = match insert_op {
-            Some(op) => op.0.read().unwrap().get_addr(),
-            None => Address::new(0),
+        // cc:567-588: with a null insertop the SUBPIECE ops go to the
+        // start block's beginning (getStartBlock + beginOp) carrying the
+        // function address; otherwise they insert AFTER the write
+        // (++insertiter) in the write's own block, carrying its address.
+        //
+        // cc:582-587/602 anchor semantics: ++insertiter follows the
+        // ELEMENT after the write (Y) — every piece inserts BEFORE Y, so
+        // the order is [W, S1, S2, S3, Y] in creation order; if the write
+        // is the block tail the anchor is endOp and pieces append at the
+        // end. The null-insertop anchor is the start block's original
+        // first op (same element-anchor rule as concatPieces cc:516-518).
+        // A fixed numeric write-position+1 per round would REVERSE the
+        // pieces (each later piece landing right after the write).
+        enum InsertAnchor {
+            /// cc:586 ++insertiter: insert before this element every round.
+            Before(Option<crate::op::PcodeOpRef>, std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
+            /// cc:579-581: null insertop — anchor on the start block's
+            /// first element, or append at the end when it is empty.
+            StartBlock,
+            /// Unparented insertop (unreachable in the oracle, which
+            /// dereferences getParent): no insertion.
+            None,
+        }
+        let (anchor, op_addr) = match insert_op {
+            Some(op) => {
+                let (o_addr, parent) = {
+                    let o = op.0.read().unwrap();
+                    (o.get_addr(), o.parent.as_ref().and_then(|p| p.upgrade()))
+                };
+                match parent {
+                    Some(bl) => {
+                        let write_pos = {
+                            let ops = bl.read().unwrap().get_ops();
+                            ops.iter().position(|candidate| Arc::ptr_eq(&candidate.0, &op.0))
+                        };
+                        match write_pos {
+                            Some(pos) => {
+                                let next_elem = bl
+                                    .read()
+                                    .unwrap()
+                                    .get_ops()
+                                    .get(pos + 1)
+                                    .map(|o| crate::op::PcodeOpRef(o.0.clone()));
+                                (InsertAnchor::Before(next_elem, bl), o_addr)
+                            }
+                            // The locked oracle dereferences
+                            // insertop->getParent() and reads its basic
+                            // iterator; an op not in its own parent block
+                            // cannot reach this path.
+                            None => (InsertAnchor::None, o_addr),
+                        }
+                    }
+                    None => (InsertAnchor::None, o_addr),
+                }
+            }
+            None => {
+                let start = fd.bblocks.get_block(0);
+                let has_entry = start
+                    .as_ref()
+                    .map(|b| {
+                        (b.read().unwrap().get_flags() & crate::block::block_flags::ENTRY_POINT)
+                            != 0
+                    })
+                    .unwrap_or(false);
+                if !has_entry {
+                    eprintln!("[HERITAGE] WARN: No start block registered");
+                }
+                (InsertAnchor::StartBlock, *fd.get_address())
+            }
+        };
+        // Resolve the start-block first-op element anchor once (M3: same
+        // element-anchor rule as concatPieces; pieces keep creation order
+        // before the original first op, or append at the end when empty).
+        let start_anchor: Option<crate::op::PcodeOpRef> = match &anchor {
+            InsertAnchor::StartBlock => fd.bblocks.get_block(0).and_then(|bl| {
+                bl.read()
+                    .unwrap()
+                    .get_ops()
+                    .first()
+                    .map(|o| crate::op::PcodeOpRef(o.0.clone()))
+            }),
+            _ => None,
         };
         for vn_arc in vnlist {
             let vn_r = vn_arc.read().unwrap();
@@ -2848,23 +3120,56 @@ impl Heritage {
             fd.op_set_input(&newop, start_vn.clone(), 0);
             let diff_const = fd.new_constant(4, diff);
             fd.op_set_input(&newop, diff_const, 1);
-            newop.0.write().unwrap().output = Some(vn_arc.clone());
-            if let Some(ins_op) = insert_op {
-                fd.op_insert_before(&newop, ins_op);
-            } else {
-                fd.obank.alivelist.insert(0, newop);
+            // cc:601: fd->opSetOutput(newop, vn)
+            fd.op_set_output(&newop, vn_arc.clone());
+            match &anchor {
+                InsertAnchor::Before(next_elem, bl) => match next_elem {
+                    // cc:602: insert before the fixed element after the
+                    // write — pieces keep creation order before Y.
+                    Some(y) => {
+                        fd.op_insert_before(&newop, y);
+                    }
+                    // Write is the block tail: the anchor is endOp, every
+                    // piece appends at the end.
+                    None => {
+                        fd.op_insert(&newop, bl, None);
+                    }
+                },
+                InsertAnchor::StartBlock => {
+                    if let Some(y) = &start_anchor {
+                        fd.op_insert_before(&newop, y);
+                    } else if let Some(bl) = fd.bblocks.get_block(0) {
+                        fd.op_insert(&newop, &bl, None);
+                    }
+                }
+                InsertAnchor::None => {}
             }
         }
     }
 
-    // Ghidra: heritage.cc:308 Heritage::collect
-    /// Collect read/write/input varnodes for a memory range. Faithful to
-    /// `collect` (heritage.cc:308-348). Returns max write size.
+    // Ghidra: heritage.cc:307 Heritage::collect
+    /// Collect free reads, writes, and inputs in the given address range.
+    /// Faithful to `collect` (heritage.cc:307-347): the four output
+    /// vectors are cleared (cc:310-313), write-mask Varnodes are skipped
+    /// (cc:326), a written Varnode whose def is a marker or return-form
+    /// COPY is evidence of previous heritage — smaller than the range it
+    /// goes to `remove` (cc:330-333), otherwise the range's
+    /// new_addresses property is cleared (cc:334) — max write size is
+    /// tracked (cc:336-337) and the written Varnode joins `write`
+    /// (cc:338), a free Varnode with a descendant joins `read`
+    /// (cc:340-341), and an input Varnode joins `input` (cc:342-343).
+    ///
+    /// Space-identity note: Ghidra scans beginLoc(memrange.addr) through
+    /// endLoc(endaddr), which is confined to the MemRange's own address
+    /// space (its Address carries the space); Rugra's offset-only Address
+    /// forces a whole-bank scan with an offset-window filter, so a
+    /// different-space Varnode whose offset falls inside the window is
+    /// misclassified (registered space-collision residual,
+    /// HERITAGE-DRIVER-SWITCH-0001 hard precondition).
     pub fn collect(
         &self,
         fd: &Funcdata,
-        addr: Address,
-        size: i32,
+        memrange: &mut MemRange,
         read: &mut Vec<Arc<RwLock<Varnode>>>,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
         input: &mut Vec<Arc<RwLock<Varnode>>>,
@@ -2874,6 +3179,8 @@ impl Heritage {
         write.clear();
         input.clear();
         remove.clear();
+        let addr = memrange.addr;
+        let size = memrange.size;
         let end_addr = addr.as_u64().wrapping_add(size as u64);
         let mut maxsize: i32 = 0;
         for vn_ref in &fd.vbank.loc_tree {
@@ -2881,18 +3188,24 @@ impl Heritage {
             // Skip if not in range [addr, addr+size)
             let vn_off = vn.loc.as_u64();
             if vn_off < addr.as_u64() || vn_off >= end_addr { continue; }
-            // cc:327: skip writeMask varnodes
-            // Rugra doesn't have writemask flag yet; skip check.
+            // cc:326: if (!vn->isWriteMask()) gates every classification
+            if vn.is_write_mask() {
+                continue;
+            }
             if vn.is_written() {
-                // cc:330: check if marker or returnCopy (previous heritage evidence)
+                // cc:329: marker or return-form COPY = previous heritage
                 let def_op = vn.def.as_ref().and_then(|w| w.upgrade());
                 if let Some(def_op) = def_op {
-                    let is_marker = def_op.read().unwrap().is_marker();
-                    if is_marker {
+                    let def_r = def_op.read().unwrap();
+                    let prior_heritage = def_r.is_marker()
+                        || (def_r.flags & crate::op::pcodeop_flags::RETURN_COPY) != 0;
+                    if prior_heritage {
                         if vn.get_size() < size as usize {
                             remove.push(vn_ref.0.clone());
                             continue;
                         }
+                        // cc:334: previous pass covered everything
+                        memrange.clear_property(memrange_flags::NEW_ADDRESSES);
                     }
                 }
                 if vn.get_size() as i32 > maxsize {
@@ -2908,10 +3221,14 @@ impl Heritage {
         maxsize
     }
 
-    // Ghidra: heritage.cc:1953 Heritage::guardInput
+    // Ghidra: heritage.cc:1952 Heritage::guardInput
     /// Ensure input varnodes fill the entire range. Faithful to
-    /// `guardInput` (heritage.cc:1953-2046). If there are holes,
-    /// create new input varnodes to fill them.
+    /// `guardInput` (heritage.cc:1952-2010): a single full-range input
+    /// links in automatically (cc:1958); otherwise holes are filled with
+    /// freshly promoted inputs (cc:1969-1992), every piece is
+    /// write-masked (cc:1997-1998) and a final unified free Varnode of
+    /// the whole range is built with concatPieces at the start block
+    /// beginning and marked active heritage (cc:2008-2009).
     pub fn guard_input(
         &self,
         fd: &mut Funcdata,
@@ -2920,7 +3237,7 @@ impl Heritage {
         input: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
         if input.is_empty() { return; }
-        // cc:1959: if single input fills everything, skip
+        // cc:1958: if single input fills everything, skip
         if input.len() == 1 && input[0].read().unwrap().get_size() == size as usize {
             return;
         }
@@ -2935,6 +3252,8 @@ impl Heritage {
             if i < input.len() {
                 let vn_off = input[i].read().unwrap().loc.as_u64();
                 if vn_off > cur {
+                    // cc:1973-1976: hole before this input — create the
+                    // missing input piece.
                     let sz = (vn_off - cur) as usize;
                     let vn = fd.vbank.create_with_space(sz, vn_space, cur);
                     let promoted = fd.set_input_varnode(vn);
@@ -2944,6 +3263,7 @@ impl Heritage {
                     i += 1;
                 }
             } else {
+                // cc:1985-1988: tail hole after the last input.
                 let sz = (end - cur) as usize;
                 let vn = fd.vbank.create_with_space(sz, vn_space, cur);
                 let promoted = fd.set_input_varnode(vn);
@@ -2951,13 +3271,24 @@ impl Heritage {
             }
             cur = cur.wrapping_add(newinput.last().unwrap().read().unwrap().get_size() as u64);
         }
-        // cc:1997: if only one piece, it links automatically
+        // cc:1996: if only one piece, it links automatically
         if newinput.len() == 1 { return; }
-        // cc:1998-1999: mark all pieces with writeMask
+        // cc:1997-1998: all pieces carry the write mask
         for vn in &newinput {
-            // TODO: setWriteMask flag (not yet defined in Rugra)
+            vn.write().unwrap().set_write_mask();
         }
-        *input = newinput;
+        // cc:2008-2009: newout = newVarnode(size, addr);
+        // concatPieces(newinput, (PcodeOp *)0, newout)->setActiveHeritage()
+        let space = newinput
+            .first()
+            .map(|v| v.read().unwrap().address_space)
+            .unwrap_or(vn_space);
+        let newout = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+        let unified = self.concat_pieces(fd, &newinput, None, &newout);
+        unified.write().unwrap().set_active_heritage();
+        // cc:1952-2010 never reassigns the caller's `input` vector; the
+        // filled pieces live only in the local newinput consumed by the
+        // concatenation above.
     }
 
     // Ghidra: heritage.cc:359 Heritage::callOpIndirectEffect
@@ -3038,10 +3369,15 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:1773 Heritage::refineRead
-    /// Split a free read Varnode based on refinement, creating a PIECE
-    /// to reconstruct the original. Faithful to `refineRead`
-    /// (heritage.cc:1773-1806).
+    // Ghidra: heritage.cc:1772 Heritage::refineRead
+    /// Split a free read Varnode based on the refinement, replacing it
+    /// with a concatenation expression whose final output is a temporary
+    /// unique. Faithful to `refineRead` (heritage.cc:1772-1787):
+    /// splitByRefinement, newUnique(vn->getSize()), loneDescend slot,
+    /// concatPieces(newvn, op, replacevn), opSetInput, and
+    /// deleteVarnode when the consumed free has no remaining descendant
+    /// (cc:1783-1786 throws "Refining non-free varnode" otherwise; Rust
+    /// keeps the varnode and reports the violation on stderr).
     pub fn refine_read(
         &mut self,
         fd: &mut Funcdata,
@@ -3051,33 +3387,53 @@ impl Heritage {
     ) {
         let mut newvn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
         self.split_by_refinement(&mut *fd, vn, addr, refine, &mut newvn);
-        if newvn.is_empty() { return; }
-        // cc:1779: replacevn = newUnique(vn->getSize())
+        if newvn.is_empty() {
+            return;
+        }
+        // cc:1778: replacevn = fd->newUnique(vn->getSize())
         let vn_size = vn.read().unwrap().get_size();
         let replacevn = fd.new_unique(vn_size);
-        // cc:1780-1781: op = vn->loneDescend(); slot = op->getSlot(vn)
+        // cc:1779-1781: op = vn->loneDescend(); slot = op->getSlot(vn).
+        // Bind the lone-descend result in its own statement: an `if let`
+        // CONDITION temporary would hold vn's read guard for the whole
+        // block, and op_set_input below re-locks the same Varnode for
+        // write (opSetInput's eraseDescend path) — a same-thread
+        // RwLock deadlock.
         let lone_desc = vn.read().unwrap().lone_descend();
         if let Some(read_op) = lone_desc {
             let read_ref = PcodeOpRef(read_op.clone());
-            let slot = read_op.read().unwrap().inrefs.iter()
-                .position(|v| Arc::ptr_eq(v, vn)).unwrap_or(0);
-            if newvn.len() >= 2 {
-                let op_addr = read_op.read().unwrap().get_addr();
-                let piece_op = fd.new_op(2, op_addr);
-                fd.op_set_opcode(&piece_op, OpCode::CPUI_PIECE);
-                fd.op_set_input(&piece_op, newvn[0].clone(), 0);
-                fd.op_set_input(&piece_op, newvn[1].clone(), 1);
-                let _out = fd.new_varnode_out(vn_size, Address::new(0), &piece_op);
-                fd.op_insert_before(&piece_op, &read_ref);
+            let num_input = read_op.read().unwrap().num_input();
+            let slot = read_op
+                .read()
+                .unwrap()
+                .inrefs
+                .iter()
+                .position(|v| Arc::ptr_eq(v, vn))
+                .unwrap_or(num_input);
+            // cc:1782: concatPieces(newvn, op, replacevn)
+            self.concat_pieces(fd, &newvn, Some(&read_ref), &replacevn);
+            // cc:1783: fd->opSetInput(op, replacevn, slot)
+            if slot < num_input {
+                fd.op_set_input(&read_ref, replacevn.clone(), slot);
             }
-            fd.op_set_input(&read_ref, replacevn, slot);
+        }
+        // cc:1784-1786: if (vn->hasNoDescend()) fd->deleteVarnode(vn);
+        // else throw LowlevelError("Refining non-free varnode")
+        if vn.read().unwrap().has_no_descend() {
+            let _ = fd.delete_varnode(vn);
+        } else {
+            // Ghidra aborts the pass here; mirror the throw with the
+            // oracle's exact text (mechanism-C M4 alignment).
+            panic!("Refining non-free varnode");
         }
     }
 
-    // Ghidra: heritage.cc:1807 Heritage::refineWrite
-    /// Split a written Varnode based on refinement, creating SUBPIECE ops
-    /// to extract the pieces. Faithful to `refineWrite`
-    /// (heritage.cc:1807-1836).
+    // Ghidra: heritage.cc:1806 Heritage::refineWrite
+    /// Split a written Varnode based on the refinement: the write is
+    /// redirected to a fresh temporary, SUBPIECE ops define each piece
+    /// from that temporary, the original Varnode is total-replaced by
+    /// the temporary and destroyed. Faithful to `refineWrite`
+    /// (heritage.cc:1806-1818).
     pub fn refine_write(
         &mut self,
         fd: &mut Funcdata,
@@ -3087,32 +3443,41 @@ impl Heritage {
     ) {
         let mut newvn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
         self.split_by_refinement(&mut *fd, vn, addr, refine, &mut newvn);
-        if newvn.is_empty() { return; }
-        // cc:1815-1835: for each piece, create SUBPIECE from vn
-        let vn_size = vn.read().unwrap().get_size();
-        let vn_space = vn.read().unwrap().address_space;
-        let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-        if let Some(def_op) = def_op {
-            let op_addr = def_op.read().unwrap().get_addr();
-            let mut offset: i32 = 0;
-            for piece in &newvn {
-                let piece_size = piece.read().unwrap().get_size();
-                let newop = fd.new_op(2, op_addr);
-                fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
-                let piece_vn = fd.vbank.create_with_space(piece_size, vn_space, piece.read().unwrap().loc.as_u64());
-                fd.op_set_input(&newop, piece_vn, 0);
-                let off_const = fd.new_constant(8, offset as u64);
-                fd.op_set_input(&newop, off_const, 1);
-                let _out = fd.new_varnode_out(piece_size, piece.read().unwrap().loc, &newop);
-                fd.op_insert_before(&newop, &PcodeOpRef(def_op.clone()));
-                offset += piece_size as i32;
-            }
+        if newvn.is_empty() {
+            return;
         }
+        // cc:1812: replacevn = fd->newUnique(vn->getSize())
+        let vn_size = vn.read().unwrap().get_size();
+        let (vn_loc, def_op) = {
+            let r = vn.read().unwrap();
+            (r.loc, r.def.as_ref().and_then(|w| w.upgrade()))
+        };
+        let Some(def_op) = def_op else { return };
+        let def_ref = PcodeOpRef(def_op);
+        let replacevn = fd.new_unique(vn_size);
+        // cc:1814: fd->opSetOutput(def, replacevn)
+        fd.op_set_output(&def_ref, replacevn.clone());
+        // cc:1815: splitPieces(newvn, def, vn->getAddr(), vn->getSize(), replacevn)
+        self.split_pieces(
+            fd,
+            &newvn,
+            Some(&def_ref),
+            vn_loc,
+            vn_size as i32,
+            &replacevn,
+        );
+        // cc:1816-1817: totalReplace + deleteVarnode
+        fd.total_replace(vn, replacevn.clone());
+        let _ = fd.delete_varnode(vn);
     }
 
-    // Ghidra: heritage.cc:1837 Heritage::refineInput
-    /// Split an input Varnode based on refinement. Faithful to
-    /// `refineInput` (heritage.cc:1837-1857).
+    // Ghidra: heritage.cc:1836 Heritage::refineInput
+    /// Split a known input Varnode based on the refinement. Faithful to
+    /// `refineInput` (heritage.cc:1836-1844): the pieces are defined by
+    /// SUBPIECE ops reading the original input (inserted at the start
+    /// block beginning because insertop is null, cc:578-581) and the
+    /// original input is write-masked (cc:1843). No new inputs are
+    /// created and no input flags are mutated here.
     pub fn refine_input(
         &mut self,
         fd: &mut Funcdata,
@@ -3122,33 +3487,166 @@ impl Heritage {
     ) {
         let mut newvn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
         self.split_by_refinement(&mut *fd, vn, addr, refine, &mut newvn);
-        if newvn.is_empty() { return; }
-        // cc:1845-1855: mark each piece as input + activeHeritage
-        for piece in &newvn {
-            piece.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-            piece.write().unwrap().set_active_heritage();
+        if newvn.is_empty() {
+            return;
+        }
+        // cc:1842: splitPieces(newvn, (PcodeOp *)0, vn->getAddr(), vn->getSize(), vn)
+        let (vn_loc, vn_size) = {
+            let r = vn.read().unwrap();
+            (r.loc, r.get_size() as i32)
+        };
+        self.split_pieces(fd, &newvn, None, vn_loc, vn_size, vn);
+        // cc:1843: vn->setWriteMask()
+        vn.write().unwrap().set_write_mask();
+    }
+
+    // Ghidra: heritage.cc:1857 Heritage::remove13Refinement
+    /// Remove 1-byte/3-byte refinement patterns. Faithful to
+    /// `remove13Refinement` (heritage.cc:1857-1880): walk the partition
+    /// sizes left to right; a 1-3 or 3-1 adjacency is replaced by a
+    /// single 4 at the position of the first element (the second
+    /// element's start slot), and the walk continues from the end of the
+    /// second element.
+    pub fn remove13_refinement(&self, refine: &mut [i32]) {
+        if refine.is_empty() {
+            return;
+        }
+        let mut pos: usize = 0;
+        let mut lastsize = refine[pos];
+        pos = pos.saturating_add(lastsize.max(0) as usize);
+        while pos < refine.len() {
+            let cursize = refine[pos];
+            if cursize == 0 {
+                break;
+            }
+            if (lastsize == 1 && cursize == 3) || (lastsize == 3 && cursize == 1) {
+                refine[pos - lastsize as usize] = 4;
+                lastsize = 4;
+                pos += cursize as usize;
+            } else {
+                lastsize = cursize;
+                pos += lastsize as usize;
+            }
         }
     }
 
-    // Ghidra: heritage.cc:1858 Heritage::remove13Refinement
-    /// Remove 1-byte/3-byte refinement patterns. Faithful to
-    /// `remove13Refinement` (heritage.cc:1858-1890). These patterns
-    /// cause excessive splitting without information gain.
-    pub fn remove13_refinement(&self, refine: &mut [i32]) {
-        let n = refine.len();
-        if n < 4 { return; }
-        let mut i = 0;
-        while i < n {
-            if refine[i] == 1 && i + 1 < n && refine[i + 1] == 0 {
-                // Check if next boundary is at i+3 (3-byte element)
-                if i + 3 < n && refine[i + 3] != 0 {
-                    // Remove the 1-byte split: merge into next element
-                    refine[i] = 0;
-                    if i > 0 { refine[i] = refine[i - 1] + 1; }
-                }
-            }
-            i += 1;
+    // Ghidra: heritage.cc:1890 Heritage::refinement
+    /// Find the common refinement of all reads and writes in the address
+    /// range, split them to match, and rewrite both the current-pass
+    /// `disjoint` cover and the persistent `globaldisjoint` map.
+    /// Faithful to `refinement` (heritage.cc:1890-1940):
+    ///   - the refinement array carries the cc:1896 `size+1` fencepost,
+    ///     which buildRefinement may mark at the range end and which is
+    ///     popped (cc:1900) before the boundary-to-partition-size
+    ///     conversion loop (cc:1901-1908);
+    ///   - no non-trivial refinement (`lastpos == 0`, cc:1908) returns
+    ///     `None` (Ghidra returns `disjoint.end()`);
+    ///   - the original MemRange is erased and the pieces are spliced in
+    ///     at the same position so the caller's index walk visits each
+    ///     piece (cc:1921-1938); each piece is re-added to
+    ///     `globaldisjoint` under the original entry's pass number
+    ///     (cc:1922-1924);
+    ///   - returns the index of the first inserted piece.
+    pub fn refinement(
+        &mut self,
+        fd: &mut Funcdata,
+        memidx: usize,
+        readvars: &[Arc<RwLock<Varnode>>],
+        writevars: &[Arc<RwLock<Varnode>>],
+        inputvars: &[Arc<RwLock<Varnode>>],
+    ) -> Option<usize> {
+        let size = self.disjoint.tasklist[memidx].size;
+        // cc:1894: if (size > 1024) return disjoint.end();
+        if size > 1024 {
+            return None;
         }
+        let addr = self.disjoint.tasklist[memidx].addr;
+        let space = self.disjoint.tasklist[memidx].space;
+        // cc:1896: vector<int4> refine(size+1, 0) — with fencepost.
+        let mut refine = vec![0i32; size as usize + 1];
+        self.build_refinement(&mut refine, addr, readvars);
+        self.build_refinement(&mut refine, addr, writevars);
+        self.build_refinement(&mut refine, addr, inputvars);
+        // cc:1900: refine.pop_back() — remove the fencepost.
+        refine.pop();
+        // cc:1901-1908: convert boundary points to partition sizes.
+        let mut lastpos = 0usize;
+        for curpos in 1..size as usize {
+            if refine[curpos] != 0 {
+                refine[lastpos] = (curpos - lastpos) as i32;
+                lastpos = curpos;
+            }
+        }
+        if lastpos == 0 {
+            return None; // No non-trivial refinements
+        }
+        refine[lastpos] = size - lastpos as i32;
+        // cc:1910: remove13Refinement(refine)
+        self.remove13_refinement(&mut refine);
+        // cc:1912-1917: split reads, writes, inputs along the refinement.
+        for vn in readvars {
+            self.refine_read(fd, vn, addr, &refine);
+        }
+        for vn in writevars {
+            self.refine_write(fd, vn, addr, &refine);
+        }
+        for vn in inputvars {
+            self.refine_input(fd, vn, addr, &refine);
+        }
+        // cc:1919-1938: alter the disjoint cover (locally and globally) to
+        // reflect the refinement. The original entry is erased, the pieces
+        // are inserted in its place, and each piece is re-added to
+        // globaldisjoint under the erased entry's pass number.
+        let flags = self.disjoint.tasklist[memidx].flags;
+        let cur_pass = match self.globaldisjoint.themap.remove(&addr) {
+            Some(sp) => sp.pass,
+            // cc:1922-1923 dereferences globaldisjoint.find(addr); an
+            // exact-key miss is unreachable for driver-fed ranges (the
+            // driver adds the same (addr,size) to both structures before
+            // placeMultiequals runs). Fall back to the current pass so a
+            // drifted key cannot fabricate a wrong NEW classification.
+            None => self.pass,
+        };
+        self.disjoint.tasklist.remove(memidx);
+        let mut pieces: Vec<MemRange> = Vec::new();
+        let mut cut = 0i32;
+        let mut piece_addr = addr;
+        while cut < size {
+            let sz = refine[cut as usize];
+            if sz <= 0 {
+                // Partition walks always land on a partition start, where
+                // the converted array holds a positive size; a zero here
+                // means a corrupted refinement array, which the locked
+                // oracle cannot produce (its cc:1926-1938 walk would
+                // never terminate either). Terminate rather than spin.
+                break;
+            }
+            pieces.push(MemRange {
+                addr: piece_addr,
+                size: sz,
+                flags,
+                space,
+            });
+            cut += sz;
+            piece_addr = Address::new(piece_addr.as_u64().wrapping_add(sz as u64));
+        }
+        self.disjoint
+            .tasklist
+            .splice(memidx..memidx, pieces.into_iter());
+        // cc:1929-1937: globaldisjoint.add per piece (same order). The
+        // add() intersect code is discarded exactly as cc:1929-1935 does.
+        cut = 0;
+        piece_addr = addr;
+        while cut < size {
+            let sz = refine[cut as usize];
+            if sz <= 0 {
+                break;
+            }
+            let _ = self.globaldisjoint.add(piece_addr, sz, cur_pass);
+            cut += sz;
+            piece_addr = Address::new(piece_addr.as_u64().wrapping_add(sz as u64));
+        }
+        Some(memidx)
     }
 
     // Ghidra: heritage.cc:1891 Heritage::refinement
@@ -3436,112 +3934,145 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2599 Heritage::placeMultiequals
-    /// Place phi nodes using the ADT algorithm, faithful to the call shape of
-    /// `placeMultiequals` (heritage.cc:2599-2645): it consumes the ADT built
-    /// by the driver (`heritage`, cc:2676-2677) and the current `disjoint`
-    /// cover, then inserts each MULTIEQUAL at the beginning of its merge
-    /// block (cc:2631-2642).
+    /// Place phi nodes using the ADT algorithm, faithful to
+    /// `placeMultiequals` (heritage.cc:2599-2645): it walks the current
+    /// `disjoint` cover in order, consumes `collect` per range
+    /// (cc:2609), optionally refines a range larger than four bytes when
+    /// no write spans it (cc:2610-2616), removes revisited markers
+    /// (cc:2626-2627), fills input holes (cc:2628), guards the range
+    /// (cc:2629), calculates the merge blocks (cc:2630) and inserts each
+    /// MULTIEQUAL at the beginning of its merge block via opInsertBegin
+    /// (cc:2631-2642). The ADT itself is built by the driver
+    /// (`heritage`, cc:2676-2677), never here.
     ///
-    /// KNOWN DIVERGENCES (registered, HERITAGE-ADT-RENAME-0001):
-    ///   - Ghidra walks `disjoint` in order with collect/refinement/guard;
-    ///     Rugra still groups exact written locations by (space, address)
-    ///     from the Varnode bank instead of consuming `disjoint`.
-    ///   - The inserted op's size comes from the grouped varnode's stored
-    ///     range rather than the MemRange, and the block-begin insertion
-    ///     (opInsertBegin) is approximated by bank creation.
-    /// The ownership contract is unchanged: one explicit `&mut Funcdata`,
-    /// no Weak upgrade, no nested lock, banks separated by `mem::take`.
+    /// The four output vectors are declared once outside the loop and
+    /// cleared/reused by every `collect` call, exactly as cc:2603-2609.
+    /// After a refinement, Ghidra reassigns the iterator to the first
+    /// refined piece (`iter = refiter`, cc:2613), re-collects it
+    /// (cc:2614), and the loop's `++iter` then visits the remaining
+    /// pieces; the index-based Rust loop reproduces this by replacing
+    /// the tasklist entry with its pieces and continuing at the first
+    /// piece index.
     pub fn place_multiequals(&mut self, fd: &mut Funcdata) {
-        // Ghidra relies on the dominator state produced upstream by
-        // Funcdata::structureReset; Rugra's producer is build_dom_tree.
-        fd.bblocks.build_dom_tree();
+        let mut readvars: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut writevars: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut inputvars: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut removevars: Vec<Arc<RwLock<Varnode>>> = Vec::new();
 
-        // Ghidra cc:2608-2629: per disjoint range — collect, refinement,
-        // guardInput, then guard(addr, size, memrange.newAddresses(), ...).
-        // collect/refinement/guardInput remain HERITAGE-ADT-RENAME-0001
-        // residuals; the guard() addIndirects half is wired here with
-        // Ghidra's exact gate: INDIRECT guards are added only for ranges
-        // flagged NEW_ADDRESSES (the "already guarded before" rule,
-        // cc:1184-1188 — multiple INDIRECT guards for the same address
-        // around one CALL/STORE confuse renaming). The guard outputs
-        // append to one write list per range, exactly the vector Ghidra's
-        // calcMultiequals consumes; Rugra's calc_multiequals still derives
-        // its own grouping (ADT-RENAME residual).
-        for memrange in self.disjoint.tasklist.clone() {
-            if !memrange.new_addresses() {
-                continue;
+        let mut idx = 0usize;
+        while idx < self.disjoint.tasklist.len() {
+            // Ghidra cc:2609: max = collect(*iter, read, write, input, remove).
+            // collect() takes the MemRange by reference and may clear its
+            // new_addresses property (cc:334); mirror that in-place list
+            // mutation by cloning, collecting, and writing the entry back.
+            let mut memrange = self.disjoint.tasklist[idx].clone();
+            let mut max = self.collect(
+                fd,
+                &mut memrange,
+                &mut readvars,
+                &mut writevars,
+                &mut inputvars,
+                &mut removevars,
+            );
+            self.disjoint.tasklist[idx] = memrange.clone();
+            // Ghidra cc:2610-2616: refine ranges bigger than 4 bytes that
+            // no single write fully spans, then re-collect the first piece.
+            if memrange.size > 4 && max < memrange.size {
+                if let Some(first_piece) =
+                    self.refinement(fd, idx, &readvars, &writevars, &inputvars)
+                {
+                    idx = first_piece;
+                    memrange = self.disjoint.tasklist[idx].clone();
+                    max = self.collect(
+                        fd,
+                        &mut memrange,
+                        &mut readvars,
+                        &mut writevars,
+                        &mut inputvars,
+                        &mut removevars,
+                    );
+                    self.disjoint.tasklist[idx] = memrange.clone();
+                }
             }
-            let mut read = Vec::new();
-            let mut write: Vec<Arc<RwLock<Varnode>>> = Vec::new();
-            let mut input = Vec::new();
+            // Ghidra cc:2617: const MemRange &memrange(*iter);
+            let size = memrange.size;
+            // Ghidra cc:2619-2625: skip ranges with no reads when there is
+            // nothing to merge, or when the space is internal (unique) or
+            // the range was already covered by a previous pass.
+            if readvars.is_empty() {
+                if writevars.is_empty() && inputvars.is_empty() {
+                    idx += 1;
+                    continue;
+                }
+                if memrange.space == AddressSpace::Unique || memrange.old_addresses() {
+                    idx += 1;
+                    continue;
+                }
+            }
+            // Ghidra cc:2626-2627: removeRevisitedMarkers(remove, addr, size)
+            if !removevars.is_empty() {
+                self.remove_revisited_markers(fd, &removevars, memrange.addr, size);
+            }
+            // Ghidra cc:2628: guardInput(addr, size, inputvars)
+            self.guard_input(fd, memrange.addr, size, &mut inputvars);
+            // Ghidra cc:2629: guard(addr, size, newAddresses(), read, write, input)
             self.guard_range(
                 fd,
                 memrange.space,
                 memrange.addr,
-                memrange.size,
-                true,
-                &mut read,
-                &mut write,
-                &mut input,
+                size,
+                memrange.new_addresses(),
+                &mut readvars,
+                &mut writevars,
+                &mut inputvars,
             );
-        }
-
-        // Group written varnodes by (space, address).
-        let mut write_groups: BTreeMap<(AddressSpace, Address), Vec<i32>> = BTreeMap::new();
-        let mut write_sizes: BTreeMap<(AddressSpace, Address), i32> = BTreeMap::new();
-        for vn_ref in &fd.vbank.loc_tree {
-            let vn = vn_ref.0.read().unwrap();
-            if !vn.is_written() { continue; }
-            if let Some(def_weak) = vn.def.as_ref().and_then(|w| w.upgrade()) {
-                let def_op = def_weak.read().unwrap();
-                if let Some(parent_weak) = def_op.parent.as_ref() {
-                    if let Some(parent) = parent_weak.upgrade() {
-                        let blk_idx = parent.read().unwrap().get_index();
-                        let key = (vn.address_space, vn.loc);
-                        write_sizes
-                            .entry(key)
-                            .and_modify(|s| *s = (*s).max(vn.get_size() as i32))
-                            .or_insert(vn.get_size() as i32);
-                        write_groups.entry(key).or_default().push(blk_idx);
-                    }
-                }
-            }
-        }
-
-        // The ADT itself was built by the driver when maxdepth == -1; it is
-        // not rebuilt here (heritage.cc:2599 has no buildADT call).
-        let mut vbank = std::mem::take(&mut fd.vbank);
-        let mut obank = std::mem::take(&mut fd.obank);
-
-        for ((space, addr), write_blocks) in &write_groups {
-            self.calc_multiequals(fd, write_blocks);
-
-            for &blk_idx in &self.merge.clone() {
+            // Ghidra cc:2630: calcMultiequals(writevars)
+            self.calc_multiequals(fd, &writevars);
+            // Ghidra cc:2631-2642: create each MULTIEQUAL at the beginning
+            // of its merge block. The op is allocated with sizeIn() inputs
+            // at the block's start address, the output is a fresh
+            // active-heritage write of the whole range, each input is a
+            // fresh free Varnode of the range storage, and the op is
+            // inserted at the block beginning (before any existing
+            // leading MULTIEQUAL group only for non-MULTIEQUAL inserts —
+            // funcdata_op.cc:413-421).
+            for &blk_idx in self.merge.clone().iter() {
                 let bl = match fd.bblocks.get_block(blk_idx as usize) {
-                    Some(b) => b, None => continue,
+                    Some(b) => b,
+                    None => continue,
                 };
-                let blk_size_in = bl.read().unwrap().size_in();
-                if blk_size_in == 0 { continue; }
-                let start_addr = bl.read().unwrap().get_start_addr();
-                let multiop = obank.create(OpCode::CPUI_MULTIEQUAL, blk_size_in, start_addr);
-                let size = *write_sizes
-                    .get(&(*space, *addr))
-                    .unwrap_or(&8) as usize;
-                let out_vn = vbank.create_with_space(size, *space, addr.as_u64());
-                out_vn.write().unwrap().set_active_heritage();
-                multiop.0.write().unwrap().output = Some(out_vn);
-                for _j in 0..blk_size_in {
-                    let vnin = vbank.create_with_space(size, *space, addr.as_u64());
-                    multiop.0.write().unwrap().inrefs.push(vnin.clone());
-                    vnin.write().unwrap().add_descend(&multiop.0);
+                let (blk_size_in, start_addr) = {
+                    let b = bl.read().unwrap();
+                    (b.size_in(), b.get_start_addr())
+                };
+                let multiop = fd.new_op(blk_size_in, start_addr);
+                // cc:2634-2635: newVarnodeOut(size, addr, multiop) +
+                // setActiveHeritage (space-carrying Address adapter).
+                let vnout = fd.vbank.create_def_with_space(
+                    size as usize,
+                    memrange.space,
+                    memrange.addr.as_u64(),
+                    &multiop.0,
+                );
+                multiop.0.write().unwrap().output = Some(vnout.clone());
+                fd.set_varnode_properties(&vnout);
+                vnout.write().unwrap().set_active_heritage();
+                // cc:2636: opSetOpcode(multiop, CPUI_MULTIEQUAL)
+                fd.op_set_opcode(&multiop, OpCode::CPUI_MULTIEQUAL);
+                for j in 0..blk_size_in {
+                    // cc:2638-2639: newVarnode(size, addr) + opSetInput
+                    let vnin = fd
+                        .vbank
+                        .create_with_space(size as usize, memrange.space, memrange.addr.as_u64());
+                    fd.op_set_input(&multiop, vnin, j);
                 }
-                obank.alivelist.push(multiop.clone());
+                // cc:2641: opInsertBegin(multiop, bl)
+                fd.op_insert_begin(&multiop, &bl);
             }
+            idx += 1;
         }
+        // Ghidra cc:2644: merge.clear()
         self.merge.clear();
-
-        fd.vbank = vbank;
-        fd.obank = obank;
     }
 
     // Ghidra: heritage.cc:219 Heritage::placeMultiequalsDirect
@@ -3630,7 +4161,22 @@ impl Heritage {
                     .map(|b| b.read().unwrap().get_dom_frontier())
                     .unwrap_or_default();
 
-                for y_idx in df {
+                // RUN-NONDETERM root cause: iterating the HashSet
+                // directly makes the MULTIEQUAL creation order random per
+                // process (std SipHash seeds). The canonical
+                // Heritage::placeMultiequals does not use a dominance
+                // frontier at all — it derives merge blocks through the
+                // depth-ordered PriorityQueue/augment walk
+                // (calcMultiequals cc:2439-2466 + visitIncr cc:2394-2428,
+                // mirrored in calc_multiequals). Until the production
+                // switch (HERITAGE-DRIVER-SWITCH-0001) replaces this
+                // direct path, pin the iteration order deterministically
+                // by block index (RUN-NONDETERM minimal fix, causally
+                // verified 20/20 byte-identical).
+                let mut df_sorted: Vec<i32> = df.into_iter().collect();
+                df_sorted.sort_unstable();
+
+                for y_idx in df_sorted {
                     if !has_phi_node.contains(&y_idx) {
                         self.insert_multiequal_direct(vbank, obank, bblocks, space, addr, y_idx);
                         has_phi_node.insert(y_idx);
@@ -3725,15 +4271,287 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2587 Heritage::rename
-    /// Perform SSA renaming. Faithful to `rename` (heritage.cc:2587-2593):
-    /// one fresh VariableStack, renameRecurse rooted at block 0 only, then
-    /// `disjoint.clear()`.
+    /// Perform the renaming algorithm for the current set of address
+    /// ranges. Faithful to `rename` (heritage.cc:2587-2593): one fresh
+    /// VariableStack, renameRecurse rooted at block 0 ONLY (not "every
+    /// entry-like block"), then `disjoint.clear()`.
     pub fn rename(&mut self, fd: &mut Funcdata) {
-        let mut vbank = std::mem::take(&mut fd.vbank);
-        self.rename_direct(&mut vbank, &fd.bblocks);
-        fd.vbank = vbank;
+        let mut varstack: BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>> =
+            BTreeMap::new();
+        if let Some(bl0) = fd.bblocks.get_block(0) {
+            self.rename_recurse(fd, bl0, &mut varstack);
+        }
         // Ghidra cc:2592: disjoint.clear();
         self.disjoint.clear();
+    }
+
+    // Ghidra: heritage.cc:2479 Heritage::renameRecurse
+    /// The heart of the renaming algorithm, faithful to `renameRecurse`
+    /// (heritage.cc:2479-2562). From the given block, walk the dominance
+    /// tree (iterative Enter/Leave work stack reproducing the recursive
+    /// "children then pop" order). At each block:
+    ///   - ONE pass over the ops in execution order (cc:2489): a
+    ///     MULTIEQUAL skips only its input-replacement loop (cc:2491) but
+    ///     still takes the common write-push tail (cc:2523-2529) at its
+    ///     op position — no separate phi pre-pass;
+    ///   - input slots ascending (cc:2493): skip heritage-known (cc:2495),
+    ///     skip-and-keep non-active frees (cc:2496), clear active on
+    ///     consumption (cc:2497), empty-stack input promotion
+    ///     (cc:2499-2502), INDIRECT same-time stack deepening
+    ///     (cc:2507-2516), replacement via Funcdata::opSetInput
+    ///     (cc:2518) and deleteVarnode of the consumed free
+    ///     (cc:2519-2520);
+    ///   - write push (cc:2523-2529): output fetched after the op's read
+    ///     replacement; active outputs are cleared and pushed;
+    ///   - successor loop (cc:2531-2552): out-edges ascending, exact
+    ///     reverse slot, successor's LEADING MULTIEQUAL group only
+    ///     (cc:2536 break); phi inputs check isHeritageKnown ONLY
+    ///     (cc:2538 — the old-marker skip that makes a phi cycle with an
+    ///     already-written loop-carried input leave that input alone);
+    ///     empty-stack promotion and deleteVarnode as above, with NO
+    ///     activeHeritage check or clear on this path;
+    ///   - dominator children in `domchild[index]` order (cc:2555);
+    ///   - writelist popped in encounter order after all children
+    ///     (cc:2558-2561).
+    fn rename_recurse(
+        &mut self,
+        fd: &mut Funcdata,
+        bl: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        varstack: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
+    ) {
+        // Iterative dominator-tree traversal using an explicit work stack:
+        // Enter processes one block's ops/successors and schedules Leave
+        // (pop) plus its dominator children; children are pushed in
+        // reverse so they run in domchild order, and Leave runs after all
+        // of them, reproducing the recursive cc:2553-2561 order without
+        // unbounded Rust recursion.
+        enum WorkItem {
+            Enter(Arc<RwLock<dyn FlowBlock + Send + Sync>>),
+            Leave(Vec<(AddressSpace, Address)>),
+        }
+
+        let mut work: Vec<WorkItem> = vec![WorkItem::Enter(bl)];
+        // Guard against corrupt dominator graphs (which would grow the
+        // work stack unboundedly); the locked oracle's domchild is a tree.
+        let max_work = 100000usize;
+
+        while let Some(item) = work.pop() {
+            if work.len() > max_work {
+                eprintln!(
+                    "[WARN] Heritage rename work stack exceeded {} items, aborting",
+                    max_work
+                );
+                break;
+            }
+            match item {
+                WorkItem::Enter(block_arc) => {
+                    let mut writelist: Vec<(AddressSpace, Address)> = Vec::new();
+
+                    // cc:2489-2530: single pass over ops in execution order.
+                    let ops = block_arc.read().unwrap().get_ops();
+                    for op_ref in &ops {
+                        let op_arc = op_ref.0.clone();
+                        let op_is_multi =
+                            op_arc.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL;
+                        if !op_is_multi {
+                            // cc:2493-2521: replace reads with the stack top.
+                            let num_input = op_arc.read().unwrap().num_input();
+                            for slot in 0..num_input {
+                                let vnin_arc = {
+                                    let op_r = op_arc.read().unwrap();
+                                    match op_r.inrefs.get(slot) {
+                                        Some(v) => v.clone(),
+                                        None => continue,
+                                    }
+                                };
+                                // cc:2495: not free
+                                if vnin_arc.read().unwrap().is_heritage_known() {
+                                    continue;
+                                }
+                                // cc:2496: not being heritaged this round
+                                if !vnin_arc.read().unwrap().is_active_heritage() {
+                                    continue;
+                                }
+                                // cc:2497: consume the active mark
+                                vnin_arc.write().unwrap().clear_active_heritage();
+                                let key = {
+                                    let vn_r = vnin_arc.read().unwrap();
+                                    (vn_r.address_space, vn_r.loc)
+                                };
+                                let stack = varstack.entry(key).or_default();
+                                // cc:2499-2505: empty stack → promote a new input.
+                                let mut vnnew: Arc<RwLock<Varnode>>;
+                                if stack.is_empty() {
+                                    let (vn_size, vn_space, vn_off) = {
+                                        let r = vnin_arc.read().unwrap();
+                                        (r.size, r.address_space, r.loc.as_u64())
+                                    };
+                                    let new_vn =
+                                        fd.vbank.create_with_space(vn_size, vn_space, vn_off);
+                                    let promoted = fd.set_input_varnode(new_vn);
+                                    stack.push(promoted.clone());
+                                    vnnew = promoted;
+                                } else {
+                                    vnnew = stack.last().unwrap().clone();
+                                }
+                                // cc:2506-2517: INDIRECTs and their op really
+                                // happen AT SAME TIME — if the stack top was
+                                // written by an INDIRECT guarding THIS op, use
+                                // the value beneath it on the stack.
+                                let indirect_target_is_cur = {
+                                    let vnnew_r = vnnew.read().unwrap();
+                                    let mut hit = false;
+                                    if vnnew_r.is_written() {
+                                        if let Some(def_weak) =
+                                            vnnew_r.def.as_ref().and_then(|w| w.upgrade())
+                                        {
+                                            let def_r = def_weak.read().unwrap();
+                                            if def_r.opcode == OpCode::CPUI_INDIRECT {
+                                                if let Some(iop_vn) = def_r.get_in(1) {
+                                                    let iv = iop_vn.read().unwrap();
+                                                    if iv.get_space() == AddressSpace::Iop {
+                                                        let ptr_addr = iv.get_offset() as usize;
+                                                        let raw = ptr_addr
+                                                            as *const std::sync::RwLock<PcodeOp>;
+                                                        if raw as *const ()
+                                                            == std::sync::Arc::as_ptr(&op_arc)
+                                                                as *const ()
+                                                        {
+                                                            hit = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    hit
+                                };
+                                if indirect_target_is_cur {
+                                    if stack.len() == 1 {
+                                        // cc:2509-2512: only the INDIRECT entry
+                                        // on the stack — create a new input and
+                                        // insert it at the bottom.
+                                        let (vn_size, vn_space, vn_off) = {
+                                            let r = vnin_arc.read().unwrap();
+                                            (r.size, r.address_space, r.loc.as_u64())
+                                        };
+                                        let new_vn = fd
+                                            .vbank
+                                            .create_with_space(vn_size, vn_space, vn_off);
+                                        let promoted = fd.set_input_varnode(new_vn);
+                                        stack.insert(0, promoted.clone());
+                                        vnnew = promoted;
+                                    } else {
+                                        // cc:2515-2516: vnnew = stack[stack.size()-2]
+                                        vnnew = stack[stack.len() - 2].clone();
+                                    }
+                                }
+                                // cc:2518: fd->opSetInput(op, vnnew, slot)
+                                fd.op_set_input(&PcodeOpRef(op_arc.clone()), vnnew, slot);
+                                // cc:2519-2520: delete the consumed free
+                                if vnin_arc.read().unwrap().has_no_descend() {
+                                    let _ = fd.delete_varnode(&vnin_arc);
+                                }
+                            }
+                        }
+                        // cc:2523-2529: push this op's write onto the stack.
+                        let out_vn = op_arc.read().unwrap().output.clone();
+                        if let Some(vnout) = out_vn {
+                            if !vnout.read().unwrap().is_active_heritage() {
+                                continue; // cc:2526: not a normalized write
+                            }
+                            vnout.write().unwrap().clear_active_heritage();
+                            let key = {
+                                let r = vnout.read().unwrap();
+                                (r.address_space, r.loc)
+                            };
+                            varstack.entry(key).or_default().push(vnout.clone());
+                            writelist.push(key);
+                        }
+                    }
+
+                    // cc:2531-2552: fill phi inputs in successors.
+                    let size_out = block_arc.read().unwrap().size_out();
+                    for i in 0..size_out {
+                        let (succ_arc, my_in_idx) = {
+                            let blk_r = block_arc.read().unwrap();
+                            match blk_r.get_out(i) {
+                                Some(edge) => (edge.point.clone(), edge.reverse_index as usize),
+                                None => continue,
+                            }
+                        };
+                        let succ_ops = succ_arc.read().unwrap().get_ops();
+                        for op_ref in succ_ops {
+                            let op_arc = op_ref.0.clone();
+                            if op_arc.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+                                break; // cc:2536: leading MULTIEQUALs only
+                            }
+                            let vnin_arc = {
+                                let op_r = op_arc.read().unwrap();
+                                match op_r.inrefs.get(my_in_idx) {
+                                    Some(v) => v.clone(),
+                                    None => continue,
+                                }
+                            };
+                            // cc:2538: heritage-known phi inputs are skipped
+                            // (old marker skip — a phi cycle whose incoming
+                            // edge value is already written keeps it).
+                            if vnin_arc.read().unwrap().is_heritage_known() {
+                                continue;
+                            }
+                            let key = {
+                                let vn_r = vnin_arc.read().unwrap();
+                                (vn_r.address_space, vn_r.loc)
+                            };
+                            let stack = varstack.entry(key).or_default();
+                            // cc:2539-2546: empty stack → input promotion.
+                            let vnnew: Arc<RwLock<Varnode>>;
+                            if stack.is_empty() {
+                                let (vn_size, vn_space, vn_off) = {
+                                    let r = vnin_arc.read().unwrap();
+                                    (r.size, r.address_space, r.loc.as_u64())
+                                };
+                                let new_vn =
+                                    fd.vbank.create_with_space(vn_size, vn_space, vn_off);
+                                let promoted = fd.set_input_varnode(new_vn);
+                                stack.push(promoted.clone());
+                                vnnew = promoted;
+                            } else {
+                                vnnew = stack.last().unwrap().clone();
+                            }
+                            // cc:2547: fd->opSetInput(multiop, vnnew, slot)
+                            fd.op_set_input(&PcodeOpRef(op_arc.clone()), vnnew, my_in_idx);
+                            // cc:2548-2549: delete the consumed free
+                            if vnin_arc.read().unwrap().has_no_descend() {
+                                let _ = fd.delete_varnode(&vnin_arc);
+                            }
+                        }
+                    }
+
+                    // cc:2553-2556: recurse to subtrees, in domchild order;
+                    // cc:2557-2561: pop this block's writes after children.
+                    let bl_idx = block_arc.read().unwrap().get_index();
+                    work.push(WorkItem::Leave(writelist));
+                    if let Some(children) = self.domchild.get(bl_idx as usize) {
+                        for child in children.iter().rev() {
+                            if let Some(child_arc) =
+                                fd.bblocks.get_block(*child as usize)
+                            {
+                                work.push(WorkItem::Enter(child_arc));
+                            }
+                        }
+                    }
+                }
+                WorkItem::Leave(writelist) => {
+                    // cc:2558-2561: pop in encounter order.
+                    for key in writelist {
+                        if let Some(stack) = varstack.get_mut(&key) {
+                            stack.pop();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // RUGRA-GLUE: Direct-bank SSA driver around locked Heritage::rename/renameRecurse; it separates Rust-owned banks and its broader driver differences are documented.
