@@ -164,3 +164,15 @@ my_fwrite 的 `LOAD@0x3475` 是 `INT_ADD(param_4=Register:0x8, 8)`——参数�
 - `ScopeLocal::query_by_addr(offset, size) -> Option<(&LocalSymbol, i32)>` — 查栈范围匹配符号，返回符号+偏移（partial read）。
 <!-- annotation-pass: 2026-07-04 -->
  
+
+### 2026-08-16：`Funcdata::linkSymbol` 忠实化（`FUNCDATA-LINKSYMBOL-TYPED-0001`）
+
+`LocalSymbol` 增补 `space`/`is_dynamic`/`hash` 字段：linkSymbol 建立的
+register/unique/ram 空间符号与 restructureVarnode 的栈符号共用
+`ScopeLocal::symbols`，`find_symbol` 及 funcdata.rs 各扫描改为按空间过滤。
+`ScopeLocal::add_symbol` 携带空间参数（Ghidra addSymbol 的 Address 语义）；
+新增 `add_dynamic_symbol`（database.cc:1690-1701）与 `query_properties`
+（database.cc:1263-1281：最小包含 + use-limit 判定，动态项不可按址查询）。
+`buildDefaultName` 无 vn 路径改用符号自身空间；vn 路径的
+`HighVariable::isInput` 读取前先 `update_flags()`（variable.hh:200 的惰性
+updateFlags 语义）。

@@ -26,6 +26,89 @@ fn code_ref_datatype() -> std::sync::Arc<crate::type_system::datatype::Datatype>
     }))
 }
 
+// Ghidra: op.cc:824 PieceNode::findRoot
+/// Find the root of the CONCAT tree of Varnodes marked either
+/// `isProtoPartial()` or `isAddrTied()`: the maximal Varnode containing the
+/// given Varnode (as storage) with a backward path to it through PIECE
+/// operations. Faithful to `PieceNode::findRoot` (op.cc:824-852): at each
+/// step the descendant PIECE op whose output address (adjusted for
+/// endianness and the sibling input's size, then renormalized — a no-op for
+/// word-size-1 spaces like the register/stack spaces PIECE pieces live in)
+/// equals the current Varnode's address is followed; with more than one
+/// valid PIECE the earliest in op order wins (`compareOrder`). Lives here
+/// (not op.rs) because it is consumed only by `Funcdata::linkProtoPartial`.
+fn piece_node_find_root(
+    vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    use crate::opcodes::OpCode;
+    use std::sync::Arc;
+    let mut cur = vn.clone();
+    loop {
+        let (is_pp, is_at, cur_addr, cur_space) = {
+            let r = cur.read().unwrap();
+            (r.is_proto_partial(), r.is_addr_tied(), r.get_offset(), r.get_space())
+        };
+        if !is_pp && !is_at {
+            break;
+        }
+        let mut piece_op: Option<Arc<std::sync::RwLock<crate::op::PcodeOp>>> = None;
+        let readers: Vec<_> = cur.read().unwrap().descend.iter().filter_map(|w| w.upgrade()).collect();
+        for op_arc in readers {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_PIECE {
+                continue;
+            }
+            // int4 slot = op->getSlot(vn);
+            let slot = (0..2)
+                .find(|&i| op.get_in(i).map(|v| Arc::ptr_eq(v, &cur)).unwrap_or(false));
+            let (Some(slot), Some(out)) = (slot, op.output.clone()) else { continue };
+            let out_r = out.read().unwrap();
+            let mut addr = out_r.get_offset();
+            let (in0_size, in1_size) = (
+                op.get_in(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                op.get_in(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+            );
+            // if (addr.getSpace()->isBigEndian() == (slot == 1))
+            //   addr = addr + op->getIn(1-slot)->getSize();
+            if cur_space.is_big_endian() == (slot == 1) {
+                addr = addr.wrapping_add(if slot == 0 { in1_size } else { in0_size } as u64);
+            }
+            // addr.renormalize(vn->getSize()) — identity for word-size-1
+            // spaces (Rugra's scalar Address carries no word size).
+            if addr == cur_addr {
+                match &piece_op {
+                    Some(prev) => {
+                        // Ghidra op.cc:841-843 is `if (op->compareOrder(pieceOp))
+                        // pieceOp = op;` — NONZERO truthiness: both -1 (op
+                        // executes earlier) and 1 (pieceOp executes earlier)
+                        // replace the selection; only 0 (no absolute order)
+                        // keeps it. The oracle's inline comment ("earliest")
+                        // contradicts its literal code; the code is what we
+                        // mirror (reviewer round-2 finding).
+                        let prev_guard = prev.read().unwrap();
+                        if op.compare_order(&prev_guard) != 0 {
+                            drop(prev_guard);
+                            piece_op = Some(op_arc.clone());
+                        }
+                    }
+                    None => piece_op = Some(op_arc.clone()),
+                }
+            }
+        }
+        match piece_op {
+            Some(op_arc) => {
+                let next = op_arc.read().unwrap().output.clone();
+                match next {
+                    Some(n) => cur = n,
+                    None => break,
+                }
+            }
+            None => break,
+        }
+    }
+    Some(cur)
+}
+
 /// Funcdata flags (funcdata.hh:highlevel_flags).
 pub mod funcdata_flags {
     /// Data-type analysis is being performed.
@@ -134,6 +217,21 @@ pub struct Funcdata {
     /// (coreaction.cc:2274) and queried by printc's stack-variable resolution.
     /// Corresponds to Ghidra's `Funcdata::getScopeLocal()`.
     pub scope: Option<crate::varmap::ScopeLocal>,
+    /// HighVariable → ScopeLocal symbol index association (keyed by the
+    /// HighVariable's Arc pointer). RUGRA-GLUE: models `HighVariable::symbol`
+    /// (variable.hh:161-176) for the varmap `ScopeLocal` symbol model — the
+    /// faithful database.rs `Symbol` graph is not yet wired into the
+    /// linkSymbol path, so the Funcdata keeps this side table instead of a
+    /// field on HighVariable (variable.rs is outside this change's lease).
+    pub high_symbols: HashMap<usize, usize>,
+    /// ScopeLocal symbol index → bridged database.rs `SymbolEntry`
+    /// (identity-stable per symbol). RUGRA-GLUE: `Varnode::setSymbolEntry`
+    /// and the faithful `HighVariable::set_symbol` (variable.rs:180, porting
+    /// variable.cc:245-275 incl. the symboloffset four-branch computation)
+    /// consume the database.rs `SymbolEntry` model, so each varmap symbol
+    /// gets a mirror entry here at attach time. The mirrored `Symbol`'s name
+    /// is refreshed by ActionNameVars after the naming phase.
+    pub symbol_entry_cache: HashMap<usize, std::sync::Arc<RwLock<crate::database::SymbolEntry>>>,
     /// Function call specifications, one per call site. Corresponds to
     /// Ghidra's `Funcdata::breefcall` vector.
     pub callspecs: Vec<crate::fspec::FuncCallSpecs>,
@@ -223,6 +321,8 @@ impl Funcdata {
             ),
             external_prototypes: HashMap::new(),
             scope: None,
+            high_symbols: HashMap::new(),
+            symbol_entry_cache: HashMap::new(),
             callspecs: Vec::new(),
             active_output: None,
             arch: None,
@@ -745,40 +845,79 @@ impl Funcdata {
     /// Faithful to `linkSymbolReference` (funcdata_varnode.cc:1193-1213).
     /// Returns the symbol name if found, None otherwise.
     // Ghidra: funcdata_varnode.cc:1156 Funcdata::linkSymbol
-    /// Link a Varnode to a Symbol in the local scope. If a Symbol already
-    /// overlaps the Varnode's address, link it. If not and the Varnode is
-    /// non-persistent, create a new local symbol entry. Faithful to
-    /// `linkSymbol` (funcdata_varnode.cc:1156-1184). Returns the symbol
-    /// name if linked/created, None otherwise.
+    /// Link a Varnode to a Symbol in the local scope. The Symbol is really
+    /// attached to the Varnode's HighVariable (which must exist). If the
+    /// HighVariable already has a Symbol it is returned; otherwise any
+    /// overlapping local-map entry is resolved via `handleSymbolConflict`, and
+    /// with no overlap a new local Symbol holding `high->getType()` is created
+    /// at the Varnode's address with its usepoint (`addSymbol("", type, addr,
+    /// usepoint)`) — the source of the golden's `bVar`/`pcVar` family. Faithful
+    /// to `linkSymbol` (funcdata_varnode.cc:1156-1184). Returns the symbol's
+    /// index into `scope.symbols`, or None (persist varnode with no existing
+    /// Symbol — cc:1174's `if (!vn->isPersist())` gate).
     pub fn link_symbol(
         &mut self,
         vn: &Arc<RwLock<crate::varnode::Varnode>>,
-    ) -> Option<String> {
-        // cc:1164: if high already has a symbol, return it.
-        // Rugra: check if vn already has a symbol_table entry.
-        let (vn_addr, vn_space, is_persist, is_addr_tied, vn_size) = {
+    ) -> Option<usize> {
+        // cc:1159-1160: if (vn->isProtoPartial()) linkProtoPartial(vn);
+        if vn.read().unwrap().is_proto_partial() {
+            self.link_proto_partial(vn);
+        }
+        // cc:1161: HighVariable *high = vn->getHigh();
+        let high_arc = vn.read().unwrap().high.clone()?;
+        // cc:1164-1165: sym = high->getSymbol(); if (sym != 0) return sym;
+        let high_ptr = Arc::as_ptr(&high_arc) as usize;
+        if let Some(&idx) = self.high_symbols.get(&high_ptr) {
+            return Some(idx);
+        }
+        // cc:1167: Address usepoint = vn->getUsePoint(*this); — written
+        // varnodes use their def op's address; everything else comes into
+        // scope at the function start - 1 (varnode.cc:696-703).
+        let usepoint: Option<u64> = {
             let vn_r = vn.read().unwrap();
-            (
-                vn_r.get_offset(),
-                vn_r.get_space(),
-                vn_r.is_persist(),
-                vn_r.is_addr_tied(),
-                vn_r.get_size(),
-            )
+            if vn_r.is_written() {
+                vn_r.get_def()
+                    .map(|d| d.read().unwrap().get_addr().as_u64())
+            } else {
+                Some(self.baseaddr.as_u64().wrapping_sub(1))
+            }
         };
-        // cc:1169: queryProperties — check if a symbol overlaps.
-        if let Some(name) = self.symbol_table.get(&vn_addr).cloned() {
-            return Some(name);
+        // cc:1169: entry = localmap->queryProperties(vn->getAddr(), 1, usepoint, fl);
+        // (the fl side-output has no consumer in linkSymbol)
+        let (vn_space, vn_offset) = {
+            let vn_r = vn.read().unwrap();
+            (vn_r.get_space(), vn_r.get_offset())
+        };
+        let entry_idx = self
+            .scope
+            .as_ref()?
+            .query_properties(vn_space, vn_offset, 1, usepoint);
+        if let Some(idx) = entry_idx {
+            // cc:1170-1172: sym = handleSymbolConflict(entry, vn);
+            self.handle_symbol_conflict(idx, vn)
+        } else {
+            // cc:1173-1181: must create a symbol entry.
+            let mut sym = None;
+            if !vn.read().unwrap().is_persist() {
+                // Only create local symbol.
+                let mut up = usepoint;
+                if vn.read().unwrap().is_addr_tied() {
+                    up = None; // cc:1175-1176: usepoint = Address();
+                }
+                // cc:1177: entry = localmap->addSymbol("", high->getType(), vn->getAddr(), usepoint);
+                let ct = high_arc.read().unwrap().get_type();
+                let idx = self.scope.as_mut()?.add_symbol(
+                    vn_space, "", Some(ct), vn_offset, up,
+                );
+                sym = Some(idx);
+                // cc:1178-1179: sym = entry->getSymbol(); vn->setSymbolEntry(entry)
+                // — varnode.cc:429-439 flags + high->setSymbol (variable.cc:
+                // 245-275 symboloffset) through the shared attach helper.
+                let _ = high_ptr;
+                self.attach_symbol_to_vn(idx, vn);
+            }
+            sym
         }
-        // cc:1173-1180: create new local symbol if not persistent.
-        if !is_persist {
-            // cc:1177: localmap->addSymbol("", type, addr, usepoint)
-            // Rugra: add to symbol_table with auto-generated name.
-            let auto_name = format!("local_{:x}", vn_addr);
-            self.symbol_table.insert(vn_addr, auto_name.clone());
-            return Some(auto_name);
-        }
-        None
     }
 
     // Ghidra: funcdata_varnode.cc:1193 Funcdata::linkSymbolReference
@@ -810,9 +949,15 @@ impl Funcdata {
             // For now, the symbol_table lookup IS the resolution.
             return Some(name.clone());
         }
-        // Also check scope.symbols for stack-relative symbols.
+        // Also check scope.symbols for stack-relative symbols
+        // (queryContainer at cc:1207 consults the spacebase's scope; the
+        // spacebase-derived address is a stack offset, so register/unique
+        // symbols created by linkSymbol never answer here).
         if let Some(ref scope) = self.scope {
             for sym in &scope.symbols {
+                if sym.space != crate::space::AddressSpace::Stack {
+                    continue;
+                }
                 if sym.start == vn_offset {
                     return Some(sym.name.clone());
                 }
@@ -1898,7 +2043,12 @@ impl Funcdata {
                     let off = vn.get_offset();
                     let sz = vn.get_size() as u64;
                     // Does any scope symbol overlap (off, sz)?
+                    // (linkSymbol-created register/unique/ram symbols share
+                    // the Vec but never overlap a Stack-space varnode.)
                     let has_symbol = scope.symbols.iter().any(|sym| {
+                        if sym.space != crate::space::AddressSpace::Stack {
+                            return false;
+                        }
                         let sym_end = sym.start + sym.size as u64;
                         sym.start < off + sz && off < sym_end
                     });
@@ -3122,7 +3272,8 @@ impl Funcdata {
     ///   return NULL;
     /// Rugra: `symbol_table` is address-keyed; we scan it (and `scope.symbols`)
     /// for a name match, then resolve the varnode at that address via the
-    /// VarnodeBank's loc tree.
+    /// VarnodeBank's loc tree. Scope matches carry the symbol's space so
+    /// linkSymbol-created register/unique symbols resolve in their own space.
     pub fn find_high(&self, nm: &str) -> Option<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
         // cc:319-320: queryByName(nm, symList). Rugra: search symbol_table +
         // scope.symbols for an entry whose name matches `nm`.
@@ -3133,7 +3284,7 @@ impl Funcdata {
             .or_else(|| {
                 self.scope.as_ref().and_then(|scope| {
                     scope.symbols.iter().find_map(|s| {
-                        if s.name == nm {
+                        if s.name == nm && !s.is_dynamic {
                             Some(s.start)
                         } else {
                             None
@@ -3200,80 +3351,176 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:997 Funcdata::handleSymbolConflict
-    /// Resolve a Varnode/SymbolEntry overlap. Faithful to
-    /// `Funcdata::handleSymbolConflict` (funcdata_varnode.cc:997-1029):
+    /// Resolve a Varnode/SymbolEntry overlap: make sure the Varnode is part
+    /// of the variable underlying the Symbol, remapping to a distinct
+    /// (dynamic) Symbol otherwise. Faithful to `handleSymbolConflict`
+    /// (funcdata_varnode.cc:997-1029):
     ///   if (vn->isInput() || vn->isAddrTied() || vn->isPersist() ||
     ///       vn->isConstant() || entry->isDynamic()) {
     ///     vn->setSymbolEntry(entry); return entry->getSymbol();
     ///   }
     ///   high = vn->getHigh();
-    ///   // scan overlapping varnodes for a conflicting HighVariable
-    ///   otherHigh = find a vn at (entry->getSize, entry->getAddr()) whose
-    ///               HighVariable != high;
+    ///   // Look for a conflicting HighVariable: walk the loc set at
+    ///   // (entry->getSize(), entry->getAddr()); break on size/addr mismatch;
+    ///   // otherHigh = first varnode whose HighVariable differs.
     ///   if (otherHigh == NULL) { vn->setSymbolEntry(entry); return entry->getSymbol(); }
     ///   buildDynamicSymbol(vn);
     ///   return vn->getSymbolEntry()->getSymbol();
-    /// Rugra: ScopeLocal has no SymbolEntry, so we approximate: if `vn`
-    /// already maps to a symbol (via symbol_table), no conflict; otherwise we
-    /// delegate to `build_dynamic_symbol` which fabricates a name. The full
-    /// conflicting-HighVariable scan requires iterating the loc tree, which we
-    /// perform; the setSymbolEntry step is approximated by recording in
-    /// symbol_table (mirroring `link_symbol`).
+    /// Returns the winning symbol's index in `scope.symbols`.
     pub fn handle_symbol_conflict(
         &mut self,
-        entry_addr: u64,
-        entry_size: usize,
+        entry_idx: usize,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    ) -> Option<String> {
-        // cc:1000-1004: if (vn->isInput() || isAddrTied() || isPersist() ||
-        //                isConstant() || entry->isDynamic()).
-        let (is_input, is_addr_tied, is_persist, is_const, vn_addr) = {
+    ) -> Option<usize> {
+        // cc:1000-1001: if (vn->isInput() || vn->isAddrTied() ||
+        //                vn->isPersist() || vn->isConstant() || entry->isDynamic()).
+        let (is_input, is_addr_tied, is_persist, is_const) = {
             let r = vn.read().unwrap();
-            (r.is_input(), r.is_addr_tied(), r.is_persist(), r.is_constant(), r.get_offset())
+            (r.is_input(), r.is_addr_tied(), r.is_persist(), r.is_constant())
         };
-        if is_input || is_addr_tied || is_persist || is_const {
+        let entry_is_dynamic = self
+            .scope
+            .as_ref()?
+            .symbols
+            .get(entry_idx)?
+            .is_dynamic;
+        if is_input || is_addr_tied || is_persist || is_const || entry_is_dynamic {
             // cc:1002-1003: vn->setSymbolEntry(entry); return entry->getSymbol().
-            // Rugra: register the address in symbol_table if not present.
-            let sym = self
-                .symbol_table
-                .entry(entry_addr)
-                .or_insert_with(|| format!("sym_{:x}", entry_addr))
-                .clone();
-            return Some(sym);
+            self.attach_symbol_to_vn(entry_idx, vn);
+            return Some(entry_idx);
         }
-        // cc:1005-1020: scan overlapping varnodes for a conflicting HighVariable.
+        // cc:1005-1020: Look for a conflicting HighVariable.
+        // VarnodeLocSet::const_iterator iter = beginLoc(entry->getSize(), entry->getAddr());
         let high = vn.read().unwrap().get_high().cloned();
-        let mut conflict = false;
+        let (entry_space, entry_addr, entry_size) = {
+            let sym = self.scope.as_ref()?.symbols.get(entry_idx)?;
+            (sym.space, sym.start, sym.size)
+        };
+        let mut other_high = false;
         if let Some(_high) = &high {
+            // Walk the loc set while size and address still match (cc:1010-1020);
+            // the VarnodeBank's overlap scan yields the same (space, addr)
+            // neighborhood; entries beyond the exact (size, addr) pair break.
             let candidates = self.vbank.overlap_loc(
                 crate::address::Address::new(entry_addr),
-                entry_size,
+                entry_size.max(0) as usize,
             );
             for cv in candidates {
-                if std::sync::Arc::ptr_eq(&cv, vn) {
+                let (cv_size, cv_space, cv_addr, cv_high) = {
+                    let r = cv.read().unwrap();
+                    (r.get_size(), r.get_space(), r.get_offset(), r.high.clone())
+                };
+                if cv_size as i32 != entry_size || cv_space != entry_space || cv_addr != entry_addr
+                {
+                    // cc:1012-1013: the loc-set run is over (Ghidra breaks
+                    // out of the iterator walk; non-matching neighbors are
+                    // simply not candidates).
                     continue;
                 }
-                let c_high = cv.read().unwrap().get_high().cloned();
-                if let (Some(ch), Some(h)) = (c_high, &high) {
+                if let (Some(ch), Some(h)) = (cv_high, &high) {
                     if !std::sync::Arc::ptr_eq(&ch, h) {
-                        conflict = true;
+                        other_high = true; // cc:1015-1018
                         break;
                     }
                 }
             }
         }
-        if !conflict {
+        if !other_high {
             // cc:1021-1024: vn->setSymbolEntry(entry); return entry->getSymbol().
-            let sym = self
-                .symbol_table
-                .entry(entry_addr)
-                .or_insert_with(|| format!("sym_{:x}", entry_addr))
-                .clone();
-            return Some(sym);
+            self.attach_symbol_to_vn(entry_idx, vn);
+            return Some(entry_idx);
         }
-        // cc:1027: buildDynamicSymbol(vn).
-        let _ = vn_addr;
-        self.build_dynamic_symbol(vn)
+        // cc:1026-1028: conflicting variable — buildDynamicSymbol(vn);
+        // return vn->getSymbolEntry()->getSymbol().
+        let dyn_idx = self.build_dynamic_symbol(vn);
+        if dyn_idx.is_none() {
+            // The dynamic symbol failed to hash; keep the original entry so
+            // the caller still sees a Symbol (Ghidra cannot fail here —
+            // uniqueHash either succeeds or throws).
+            self.attach_symbol_to_vn(entry_idx, vn);
+            return Some(entry_idx);
+        }
+        dyn_idx
+    }
+
+    // RUGRA-GLUE: attach_symbol_to_vn (vn->setSymbolEntry + high->setSymbol)
+    /// Attach a ScopeLocal symbol to a Varnode the way
+    // RUGRA-GLUE: symbol_entry_for (bridge varmap symbol → database entry)
+    /// Build (or fetch the identity-stable cached) database.rs `SymbolEntry`
+    /// mirroring the varmap `ScopeLocal` symbol at `entry_idx`: static maps
+    /// carry (offset address, size, single-address uselimit when the varmap
+    /// usepoint is valid), dynamic maps carry the hash instead. The mirrored
+    /// `Symbol` transports the data-type (set_symbol's symboloffset branch 4
+    /// reads its size) and the namelock bit for `Varnode::setSymbolEntry`'s
+    /// flag leg. Names are refreshed by ActionNameVars after the naming pass.
+    fn symbol_entry_for(
+        &mut self,
+        entry_idx: usize,
+    ) -> Option<std::sync::Arc<RwLock<crate::database::SymbolEntry>>> {
+        if let Some(entry) = self.symbol_entry_cache.get(&entry_idx) {
+            return Some(entry.clone());
+        }
+        let sym = self.scope.as_ref()?.symbols.get(entry_idx)?;
+        let mut bridge = crate::database::Symbol::new(0, &sym.name, "");
+        bridge.dtype = sym.dtype.clone();
+        if sym.namelock {
+            bridge.flags |= crate::fspec::protoparam_flags::NAME_LOCKED;
+        }
+        bridge.category = match sym.category {
+            crate::varmap::symbol_category::EQUATE => crate::database::SymbolCategory::Equate,
+            _ => crate::database::SymbolCategory::NoCategory,
+        };
+        let symbol_arc = std::sync::Arc::new(RwLock::new(bridge));
+        let mut uselimit = crate::address::RangeList::new();
+        if let Some(up) = sym.usepoint {
+            if let Some(range) = crate::address::Range::new(
+                crate::address::Address::new(up),
+                crate::address::Address::new(up),
+            ) {
+                uselimit.insert_range(range);
+            }
+        }
+        let entry = if sym.is_dynamic {
+            crate::database::SymbolEntry::new_dynamic(
+                symbol_arc, 0, sym.hash, 0, sym.size.max(0), uselimit,
+            )
+        } else {
+            crate::database::SymbolEntry::new_static(
+                symbol_arc,
+                0,
+                crate::address::Address::new(sym.start),
+                0,
+                sym.size.max(0),
+                uselimit,
+            )
+        };
+        let entry_arc = std::sync::Arc::new(RwLock::new(entry));
+        self.symbol_entry_cache.insert(entry_idx, entry_arc.clone());
+        Some(entry_arc)
+    }
+
+    // RUGRA-GLUE: attach_symbol_to_vn (vn->setSymbolEntry + high->setSymbol)
+    /// Attach a ScopeLocal symbol to a Varnode the way
+    /// `Varnode::setSymbolEntry` (varnode.cc:429-439) does — mapentry plus
+    /// mapped/namelock flags — and then run the faithful
+    /// `HighVariable::set_symbol` (variable.cc:245-275, varnode.cc:438),
+    /// whose symboloffset computation makes coreaction.cc:2965's
+    /// `getSymbolOffset() < 0` namerec gate behave exactly like Ghidra
+    /// (whole-map matches are -1; partial coverage yields the byte offset).
+    /// The varmap side table records the same association for naming.
+    fn attach_symbol_to_vn(
+        &mut self,
+        entry_idx: usize,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        if let Some(entry) = self.symbol_entry_for(entry_idx) {
+            vn.write().unwrap().set_symbol_entry(entry);
+        }
+        if let Some(high) = vn.read().unwrap().get_high().cloned() {
+            high.write().unwrap().set_symbol(vn);
+            let high_ptr = std::sync::Arc::as_ptr(&high) as usize;
+            self.high_symbols.insert(high_ptr, entry_idx);
+        }
     }
 
     // Ghidra: funcdata_varnode.cc:1104 Funcdata::remapVarnode
@@ -3346,55 +3593,49 @@ impl Funcdata {
     ///   rootHigh->establishGroupSymbolOffset();
     ///   entry = sym->getFirstWholeMap();
     ///   vn->setSymbolEntry(entry);
-    /// Rugra: PieceNode::findRoot walks the PIECE composition graph; we
-    /// approximate by following vn's def op (if it's a PIECE input) to the
-    /// PIECE's output. Full multi-level PIECE chains are not yet ported.
     pub fn link_proto_partial(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
-        // cc:1135: high = vn->getHigh(); if (high->getSymbol() != NULL) return.
-        if let Some(high) = vn.read().unwrap().get_high().cloned() {
-            if high.read().unwrap().get_symbol().is_some() {
+        // cc:1135-1136: high = vn->getHigh(); if (high->getSymbol() != NULL) return.
+        let high_arc = vn.read().unwrap().get_high().cloned();
+        if let Some(high) = &high_arc {
+            let high_ptr = std::sync::Arc::as_ptr(high) as usize;
+            if self.high_symbols.contains_key(&high_ptr) {
                 return;
             }
         }
         // cc:1137-1138: rootVn = PieceNode::findRoot(vn); if (rootVn == vn) return.
-        // Rugra: approximate root by following the single reader if it is a
-        // PIECE op, taking its output as the whole.
-        let root_vn = {
-            let readers: Vec<_> = vn.read().unwrap().descend_iter().collect();
-            if readers.len() == 1 {
-                let reader = readers[0].clone();
-                if reader.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_PIECE {
-                    reader.read().unwrap().output.clone()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
+        let root_vn = piece_node_find_root(vn);
         let Some(root_vn) = root_vn else { return };
         if std::sync::Arc::ptr_eq(&root_vn, vn) {
             return;
         }
-        // cc:1140-1142: rootHigh = rootVn->getHigh(); if (!isSameGroup) return.
-        // Rugra: isSameGroup requires HighVariable::is_same_group; if both
-        // share a high group (group_with) we proceed. We conservatively skip
-        // the check and link unconditionally (over-linking is safer than
-        // dropping a legitimate partial symbol).
-        // cc:1143-1145: nameRep = rootHigh->getNameRepresentative(); sym = linkSymbol(nameRep).
-        let sym_name = self.link_symbol(&root_vn);
-        let Some(sym_name) = sym_name else { return };
+        // cc:1140-1142: rootHigh = rootVn->getHigh(); if (!isSameGroup(high)) return.
+        let (root_high, vn_high) = {
+            let r = root_vn.read().unwrap();
+            let v = vn.read().unwrap();
+            (r.get_high().cloned(), v.get_high().cloned())
+        };
+        if let (Some(rh), Some(vh)) = (&root_high, &high_arc) {
+            let same = rh.read().unwrap().is_same_group(&vh.read().unwrap());
+            if !same {
+                return;
+            }
+        }
+        let _ = vn_high;
+        // cc:1143-1144: nameRep = rootHigh->getNameRepresentative();
+        // cc:1144: sym = linkSymbol(nameRep); if (sym == NULL) return.
+        let name_rep = root_high.as_ref().and_then(|h| h.read().unwrap().get_name_representative());
+        let Some(name_rep) = name_rep else { return };
+        let sym_idx = self.link_symbol(&name_rep);
+        let Some(sym_idx) = sym_idx else { return };
         // cc:1146: rootHigh->establishGroupSymbolOffset().
-        if let Some(root_high) = root_vn.read().unwrap().get_high().cloned() {
+        if let Some(root_high) = &root_high {
             root_high.read().unwrap().establish_group_symbol_offset();
         }
         // cc:1147-1148: entry = sym->getFirstWholeMap(); vn->setSymbolEntry(entry).
-        let vn_addr = vn.read().unwrap().get_offset();
-        self.symbol_table.insert(vn_addr, sym_name);
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+        self.attach_symbol_to_vn(sym_idx, vn);
     }
 
     // Ghidra: funcdata_varnode.cc:1218 Funcdata::findLinkedVarnode
@@ -3493,10 +3734,11 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:1283 Funcdata::buildDynamicSymbol
-    /// Create a dynamic Symbol for `vn` keyed by a hash of its local data-flow.
-    /// Faithful to `Funcdata::buildDynamicSymbol` (funcdata_varnode.cc:1283-1305):
-    ///   if (isTypeLock || isNameLock) throw RecovError(...);
-    ///   if (!isHighOn()) throw RecovError(...);
+    /// Build a special \e dynamic Symbol for `vn`: associated via a hash of
+    /// its local data-flow rather than its storage address. Faithful to
+    /// `Funcdata::buildDynamicSymbol` (funcdata_varnode.cc:1283-1305):
+    ///   if (vn->isTypeLock()||vn->isNameLock()) throw RecovError;
+    ///   if (!isHighOn()) throw RecovError;
     ///   high = vn->getHigh();
     ///   if (high->getSymbol() != NULL) return;
     ///   dhash.uniqueHash(vn, this);
@@ -3506,59 +3748,76 @@ impl Funcdata {
     ///   else
     ///     sym = addDynamicSymbol("", high->getType(), addr, hash);
     ///   vn->setSymbolEntry(sym->getFirstWholeMap());
-    /// Rugra: ScopeLocal lacks addEquate/addDynamicSymbol; we synthesize a
-    /// name and record it under a dynamic key in symbol_table (matching the
-    /// `remap_dynamic_varnode` strategy). Errors are logged and returned as
-    /// None rather than thrown.
+    /// Returns the new symbol's index in `scope.symbols`; Ghidra's RecovError
+    /// throws surface as None (the caller keeps the pre-existing entry).
     pub fn build_dynamic_symbol(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    ) -> Option<String> {
+    ) -> Option<usize> {
         // cc:1286-1287: if (isTypeLock || isNameLock) throw.
         let (is_type_lock, is_name_lock) = {
             let r = vn.read().unwrap();
             (r.is_type_lock(), r.is_name_lock())
         };
         if is_type_lock || is_name_lock {
-            eprintln!("[FUNCDATA] buildDynamicSymbol on locked varnode");
+            eprintln!("[FUNCDATA] buildDynamicSymbol on locked varnode (cc:1286 RecovError)");
             return None;
         }
         // cc:1288-1289: if (!isHighOn()) throw.
         if (self.flags & funcdata_flags::HIGHLEVEL_ON) == 0 {
-            eprintln!("[FUNCDATA] buildDynamicSymbol before decompile complete");
+            eprintln!("[FUNCDATA] buildDynamicSymbol before decompile complete (cc:1288 RecovError)");
             return None;
         }
         // cc:1290-1292: high = vn->getHigh(); if (high->getSymbol()) return.
-        if let Some(high) = vn.read().unwrap().get_high().cloned() {
-            if high.read().unwrap().get_symbol().is_some() {
-                // Already has a symbol; return its name.
-                return self.symbol_table.values().next().cloned();
-            }
+        let high_arc = vn.read().unwrap().get_high().cloned()?;
+        let high_ptr = std::sync::Arc::as_ptr(&high_arc) as usize;
+        if let Some(&idx) = self.high_symbols.get(&high_ptr) {
+            return Some(idx);
         }
         // cc:1293-1297: dhash.uniqueHash(vn, this); if (hash == 0) throw.
         let mut dhash = crate::dynamic::DynamicHash::new();
         dhash.unique_hash_vn(vn, self);
         let hash = dhash.get_hash();
         if hash == 0 {
-            eprintln!("[FUNCDATA] buildDynamicSymbol: no unique hash");
+            eprintln!("[FUNCDATA] buildDynamicSymbol: no unique hash (cc:1297 RecovError)");
             return None;
         }
         let addr = dhash.get_address();
-        // cc:1299-1303: build equate/dynamic symbol.
-        let is_const = vn.read().unwrap().is_constant();
-        let sym_name = if is_const {
-            format!("const_{:x}", hash)
-        } else {
-            format!("dyn_{:x}", hash)
+        // cc:1299-1303: equate symbol for constants, dynamic symbol otherwise.
+        let (is_const, vn_offset, vn_space) = {
+            let r = vn.read().unwrap();
+            (r.is_constant(), r.get_offset(), r.get_space())
         };
-        // Rugra: record under a synthetic key (high bit set, above real
-        // 48-bit x86-64 addresses).
-        let key = hash | 0x8000_0000_0000_0000;
-        self.symbol_table.insert(key, sym_name.clone());
+        let idx = if is_const {
+            // localmap->addEquateSymbol("", Symbol::force_hex, vn->getOffset(),
+            //                           dhash.getAddress(), dhash.getHash())
+            // (database.cc:1712-1725): an EQUATE-category symbol whose map
+            // is dynamic with a single-address uselimit; the varmap model
+            // carries the constant value on `start`.
+            let idx = self.scope.as_mut()?.add_dynamic_symbol(
+                "", None, hash, Some(addr.as_u64()),
+            );
+            if let Some(sym) = self.scope.as_mut()?.symbols.get_mut(idx) {
+                sym.category = crate::varmap::symbol_category::EQUATE;
+                sym.start = vn_offset;
+                sym.size = 1;
+                sym.space = vn_space;
+            }
+            idx
+        } else {
+            // localmap->addDynamicSymbol("", high->getType(), dhash.getAddress(), hash)
+            let ct = high_arc.read().unwrap().get_type();
+            let idx = self.scope.as_mut()?.add_dynamic_symbol(
+                "", Some(ct), hash, Some(addr.as_u64()),
+            );
+            if let Some(sym) = self.scope.as_mut()?.symbols.get_mut(idx) {
+                sym.space = vn_space;
+            }
+            idx
+        };
         // cc:1304: vn->setSymbolEntry(sym->getFirstWholeMap()).
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
-        let _ = addr;
-        Some(sym_name)
+        self.attach_symbol_to_vn(idx, vn);
+        Some(idx)
     }
 
     // Ghidra: funcdata.hh:451 Funcdata::markIndirectCreation
@@ -6062,6 +6321,9 @@ impl Funcdata {
         if let Some(scope) = self.scope.as_mut() {
             scope.symbols.clear();
         }
+        // The HighVariable→Symbol associations die with the symbols.
+        self.high_symbols.clear();
+        self.symbol_entry_cache.clear();
 
         // Ghidra: funcp.clearUnlockedOutput();
         // Rugra's FuncProto::clear_unlocked_output exists (fspec.rs:308).

@@ -745,8 +745,13 @@ impl Merge {
         // (run later in the pipeline) consults high.cover via checkImpliedCover.
         self.update_high_covers(fd);
 
-        // Auto-name all HighVariables.
-        self.assign_names(fd);
+        // NOTE (FUNCDATA-LINKSYMBOL-TYPED-0001): Ghidra's merge sequence
+        // (coreaction.cc:5718-5729) has NO naming step — Merge has no
+        // assignNames. Variable naming lives exclusively in
+        // ActionNameVars::apply (coreaction.cc:2978-3000): linkSymbols →
+        // namerec buildDefaultName loop → assignDefaultNames. The former
+        // per-High `assign_names` (self-invented grammar walking the loc
+        // tree) was removed; names now come from the ScopeLocal symbols.
 
         // Persist the accumulated channels for any later merge-family
         // Action (hide_shadows_of is invoked by ActionHideShadow after
@@ -1458,170 +1463,6 @@ impl Merge {
         }
     }
 
-    // Ghidra: merge.hh:83 Merge::assignNames
-    /// Assign human-readable names to all HighVariables in the function.
-    ///
-    /// Naming follows Ghidra conventions:
-    /// - Stack negative offset → `local_Xh`
-    /// - Stack positive offset → `param_stack_Xh`
-    /// - Register → actual register name (RAX, RDI, etc.) or `uVarN` for unmapped offsets
-    /// - Unique temp → `uVarN`
-    /// - RAM global → `DAT_XXXXXXXX`
-    ///
-    /// Faithful to ScopeInternal::assignDefaultNames (database.cc:2850-2865).
-    /// Uses a single shared `base` counter (initial 1), incremented in-place
-    /// via `&index` reference. Names are built via buildVariableName logic
-    /// (database.cc:2434-2518): `printNameBase + "Var" + index++` for locals,
-    /// `param_N` for regular inputs, register names for persist, etc.
-    ///
-    /// **2026-07-05**: Previously used a per-prefix `var_counter` that reset
-    /// to 0 each call, with hardcoded name grammar (`local_`, `param_stack_`,
-    /// `DAT_`, `uVar`). This was an 181538f-class bug — Ghidra uses a single
-    /// shared counter threaded across the entire function, with
-    /// `printNameBase` (virtual, per-Datatype) for the prefix and
-    /// `makeNameUnique` for collision resolution.
-    pub fn assign_names(&mut self, fd: &mut Funcdata) {
-        use std::collections::HashSet;
-
-        self.attach(fd);
-
-        // Ghidra cc:2850: int4 &base — single shared counter, initial 1.
-        let mut base: i32 = 1;
-        let mut named: HashSet<u64> = HashSet::new();
-        // Track all assigned names for makeNameUnique dedup.
-        let mut used_names: HashSet<String> = HashSet::new();
-
-        let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
-            .iter()
-            .filter(|r| {
-                let v = r.0.read().unwrap();
-                if v.is_constant() { return false; }
-                if v.flags & crate::varnode::varnode_flags::ANNOTATION != 0 { return false; }
-                true
-            })
-            .map(|r| r.0.clone())
-            .collect();
-
-        for vn_arc in vn_arcs {
-            let vn = vn_arc.read().unwrap();
-            if let Some(ref high_arc) = vn.high {
-                let high_ptr = Arc::as_ptr(high_arc) as u64;
-                if named.contains(&high_ptr) {
-                    continue;
-                }
-                named.insert(high_ptr);
-
-                // Determine flags for buildVariableName (database.cc:2441-2517).
-                let is_input = vn.is_input();
-                let is_persist = vn.is_persist();
-                let is_addrtied = vn.is_addr_tied();
-                let is_unaffected = vn.is_unaffected();
-                let vn_size = vn.size;
-                let vn_space = vn.address_space;
-                let vn_offset = vn.get_offset();
-
-                // Ghidra database.cc:2501-2517: local variable naming.
-                // printNameBase(ct) + "Var" + index++
-                let name = if is_unaffected {
-                    // cc:2441-2453: unaff_ prefix
-                    let reg_name = register_name(vn_offset, vn_size);
-                    match reg_name {
-                        Some(rn) => format!("unaff_{}", rn),
-                        None => format!("unaff_{:08x}", vn_offset),
-                    }
-                } else if is_persist {
-                    // cc:2455-2468: persist → register name or printNameBase+Space+hex
-                    let reg_name = register_name(vn_offset, vn_size);
-                    match reg_name {
-                        Some(rn) => rn,
-                        None => {
-                            // cc:2463: Capitalize space name
-                            let space_name = vn_space.name();
-                            let cap: String = space_name.chars().next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default()
-                                + &space_name[1..];
-                            format!("{}{:02x}", cap, vn_offset)
-                        }
-                    }
-                } else if is_input && matches!(vn_space, AddressSpace::Register) && vn_offset != 0x20 {
-                    // cc:2480-2482: regular parameter (Register space only)
-                    // param_N where N is the parameter index (based on offset)
-                    let param_idx = match vn_space {
-                        AddressSpace::Register => {
-                            // SysV AMD64 param register order: RDI=0, RSI=1, RDX=2, RCX=3, R8=4, R9=5
-                            match vn_offset {
-                                0x38 => 0, // RDI
-                                0x30 => 1, // RSI
-                                0x10 => 2, // RDX
-                                0x08 => 3, // RCX
-                                0x80 => 4, // R8
-                                0x88 => 5, // R9
-                                _ => { base += 1; (base - 1) }
-                            }
-                        }
-                        _ => { base += 1; (base - 1) }
-                    };
-                    format!("param_{}", param_idx)
-                } else if is_addrtied {
-                    // cc:2483-2490: addr-tied global
-                    let space_name = vn_space.name();
-                    let cap: String = space_name.chars().next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default()
-                        + &space_name[1..];
-                    format!("{}{:08x}", cap, vn_offset)
-                } else {
-                    // cc:2501-2517: local variable — printNameBase + "Var" + index++
-                    // Ghidra: ct->printNameBase(s); s << "Var" << dec << index++;
-                    // printNameBase writes a type-indicator character(s) for the
-                    // HighVariable's Datatype (i/l/b/c/p/u...), matching Ghidra's
-                    // virtual dispatch on Datatype. This produces names like
-                    // "lVar1", "iVar2", "bVar3", "pVar4" instead of bare "Var1".
-                    // (Mirrors PrintC::var_prefix in printc.rs — single source of
-                    // truth for the printNameBase logic.)
-                    let high_ro = high_arc.read().unwrap();
-                    let mut type_prefix = String::new();
-                    high_ro.v_type.print_name_base(&mut type_prefix);
-                    if type_prefix.is_empty() {
-                        // Size-based fallback when the Datatype has no name
-                        // (Rugra-specific; Ghidra always carries a Datatype).
-                        match vn_size {
-                            8 => type_prefix.push('l'),
-                            4 => type_prefix.push('i'),
-                            2 => type_prefix.push('s'),
-                            1 => type_prefix.push('b'),
-                            _ => type_prefix.push('u'),
-                        }
-                    }
-                    if type_prefix.is_empty() {
-                        // Unnamed/void type — fall back to 'u' so the variable
-                        // still gets a non-empty prefix.
-                        type_prefix.push('u');
-                    }
-                    drop(high_ro);
-                    let candidate = format!("{}Var{}", type_prefix, base);
-                    base += 1;
-                    // cc:2505: makeNameUnique — try bumping index up to 10 times.
-                    let mut final_name = candidate.clone();
-                    if used_names.contains(&final_name) {
-                        for _ in 0..10 {
-                            let candidate2 = format!("{}Var{}", type_prefix, base);
-                            base += 1;
-                            if !used_names.contains(&candidate2) {
-                                final_name = candidate2;
-                                break;
-                            }
-                        }
-                    }
-                    used_names.insert(final_name.clone());
-                    final_name
-                };
-
-                let mut high = high_arc.write().unwrap();
-                if high.get_name().is_empty() {
-                    high.set_name(name);
-                }
-            }
-        }
-        self.detach(fd);
-    }
 
     // ------------------------------------------------------------------
     // 9-step merge sequence (coreaction.cc:5718-5729).
@@ -4010,43 +3851,6 @@ fn propagate_cover_through_cfg(cover: &mut Cover, fd: &Funcdata) {
             // This new full-block entry is itself live-out; queue it.
             worklist.push(*succ_idx);
         }
-    }
-}
-
-// Ghidra: merge.hh:83 Merge::registerName
-/// Map x86-64 register offset + size to a human-readable register name.
-///
-/// Returns `None` for offsets that don't correspond to a known general-purpose register.
-fn register_name(offset: u64, size: usize) -> Option<String> {
-    match (offset, size) {
-        (0x00, 8) => Some("RAX".into()),
-        (0x00, 4) => Some("EAX".into()),
-        (0x00, 2) => Some("AX".into()),
-        (0x00, 1) => Some("AL".into()),
-        (0x08, 8) => Some("RCX".into()),
-        (0x08, 4) => Some("ECX".into()),
-        (0x10, 8) => Some("RDX".into()),
-        (0x10, 4) => Some("EDX".into()),
-        (0x18, 8) => Some("RBX".into()),
-        (0x18, 4) => Some("EBX".into()),
-        (0x20, 8) => Some("RSP".into()),
-        (0x20, 4) => Some("ESP".into()),
-        (0x28, 8) => Some("RBP".into()),
-        (0x28, 4) => Some("EBP".into()),
-        (0x30, 8) => Some("RSI".into()),
-        (0x30, 4) => Some("ESI".into()),
-        (0x38, 8) => Some("RDI".into()),
-        (0x38, 4) => Some("EDI".into()),
-        (0x80, 8) => Some("R8".into()),
-        (0x88, 8) => Some("R9".into()),
-        (0x90, 8) => Some("R10".into()),
-        (0x98, 8) => Some("R11".into()),
-        (0xA0, 8) => Some("R12".into()),
-        (0xA8, 8) => Some("R13".into()),
-        (0xB0, 8) => Some("R14".into()),
-        (0xB8, 8) => Some("R15".into()),
-        (0x200, 8) => Some("RIP".into()),
-        _ => None,
     }
 }
 

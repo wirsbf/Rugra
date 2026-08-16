@@ -438,3 +438,12 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - fixture `merge_gates_1204`（4 case 14 行）+ runner：14/14 双侧字节一致
   （sha 9878946d…），merge_persistent_1204 复跑 17/17 不劣化（仅
   merge_rs_sha256 重 pin）。
+
+### 2026-08-16：`Funcdata::linkSymbol` 忠实化（`FUNCDATA-LINKSYMBOL-TYPED-0001`）
+
+`Merge::assignNames`（自创的 merge 期 per-High 命名，注解曾错指
+merge.hh:83）删除：Ghidra 的 merge 序列（coreaction.cc:5718-5729）没有命
+名步骤，Merge 也没有 assignNames。变量命名唯一来源是
+`ActionNameVars::apply`（coreaction.cc:2978-3000）的符号驱动管线；死代码
+`register_name` 表（错注 merge.hh:83 Merge::registerName）一并移除，其表
+内容由 `ActionRestructureVarnode` 安装进 ScopeLocal.register_names。

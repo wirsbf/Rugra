@@ -981,3 +981,29 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 "not settling" 警告=对齐 Ghidra localcount>=7 warn-once 语义）；单测
 1337/6 域外不变。按机制 B2 记 **UNTESTED**（源级对齐+E2E 恢复，returnrecovery
 生命周期逐函数 oracle fixture 为后继项）。
+
+### 2026-08-16：`Funcdata::linkSymbol` 忠实化（`FUNCDATA-LINKSYMBOL-TYPED-0001`）
+
+`ActionNameVars::linkSymbols`（coreaction.cc:2930-2976 对应物）修复
+hasName 语义：`if (!high->hasName()) continue` 是 variable.cc:718-747 的
+"可命名"谓词（coverable/非 implied/unaffected-input 规则），不再是
+"已有名字"；nameRepresentative 为空时跳过（Ghidra 对 instance-less high
+不可达）。`apply`（cc:2978-3000）改为 Ghidra 顺序：linkSymbols →
+lookForFuncParamNames（cc:2858-2897：对 namerec 符号做
+`renameSymbol(makeNameUnique(name))`，不再直写 high.name）→ namerec 的
+`buildDefaultName(sym, base, vn)` 循环 → `assignDefaultNames(base)` ——同
+一共享计数器贯穿。RUGRA-GLUE 桥：命名完成后把符号 display_name 发布到
+`HighVariable::name`（Ghidra 打印侧只读 Symbol::getDisplayName；Rugra
+printc 仍读 high.name，退役归 PRINTC-SYMBOL-DECL-0001）。
+`ActionRestructureVarnode::apply` 安装 x86-64 寄存器名表（translate.hh:380
+`getRegisterName` 的 ScopeLocal 站位）。
+
+### 2026-08-16（复核修正）：`ActionNameVars` 两处对齐收口（同上复核）
+
+`link_symbols` 的 spacebase 分支删除 `continue`——Ghidra cc:2957-2958 落入
+nameRepresentative/hasName/linkSymbol 后续（unaffected RSP input 经
+variable.cc:737-745 会被 linkSymbol）。内联 makeRec 对照 cc:2815-2850 补
+四条：`param->isNameLocked()` 门槛（protoparam_flags::NAME_LOCKED）、
+vn/param 尺寸门、implied+written 的 CAST 展开（vn→def->getIn(0)，类型置
+None 降优先）、重复 high 的 tie-break 用 `Datatype::type_order`（旧类型更
+specific 则保留），rec_map 值扩为 (name, Option<Datatype>)。

@@ -845,6 +845,29 @@ impl Action for ActionRestructureVarnode {
         // Alias calculations are not reliable on the first pass.
         let aliasyes = self.numpass != 0;
         let mut scope = crate::varmap::ScopeLocal::new();
+        // Install the register-name lookup standing in for
+        // `glb->translate->getRegisterName` (translate.hh:380): Ghidra's
+        // ScopeLocal::getRegisterName (varmap.cc:586) reads the SLEIGH
+        // register index; Rugra's ScopeLocal takes a caller-installed table
+        // (see its field docs). x86-64 general-purpose registers.
+        scope.register_names = [
+            (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
+            (0x08, 8, "RCX"), (0x08, 4, "ECX"),
+            (0x10, 8, "RDX"), (0x10, 4, "EDX"),
+            (0x18, 8, "RBX"), (0x18, 4, "EBX"),
+            (0x20, 8, "RSP"), (0x20, 4, "ESP"),
+            (0x28, 8, "RBP"), (0x28, 4, "EBP"),
+            (0x30, 8, "RSI"), (0x30, 4, "ESI"),
+            (0x38, 8, "RDI"), (0x38, 4, "EDI"),
+            (0x80, 8, "R8"), (0x88, 8, "R9"),
+            (0x90, 8, "R10"), (0x98, 8, "R11"),
+            (0xA0, 8, "R12"), (0xA8, 8, "R13"),
+            (0xB0, 8, "R14"), (0xB8, 8, "R15"),
+            (0x200, 8, "RIP"),
+        ]
+        .into_iter()
+        .map(|(o, s, n)| ((o, s), n.to_string()))
+        .collect();
         // Ghidra cc:2280: l1->restructureVarnode(aliasyes).
         // Rugra's restructure_varnode doesn't yet take aliasyes (the
         // markUnaliased aliasyes gate is inside restructure, which is
@@ -4362,11 +4385,12 @@ impl ActionNameVars {
     /// Link symbols associated with a given spacebase Varnode.
     /// Iterates the Varnode's descendant PTRSUB ops and resolves the
     /// constant offset input (in(1)) to a symbol via linkSymbolReference.
-    /// Faithful to `linkSpacebaseSymbol` (cc:2907-2920).
+    /// Faithful to `linkSpacebaseSymbol` (cc:2907-2920). The namerec type is
+    /// the (Varnode, symbol index) pair vector shared with linkSymbols.
     fn link_spacebase_symbol(
         fd: &mut Funcdata,
         vn: &Arc<RwLock<crate::varnode::Varnode>>,
-        namerec: &mut Vec<Arc<RwLock<crate::varnode::Varnode>>>,
+        _namerec: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, usize)>,
     ) {
         use crate::opcodes::OpCode;
         // cc:2910: only process constant or input spacebase varnodes.
@@ -4400,13 +4424,20 @@ impl ActionNameVars {
     }
 
     // Ghidra: coreaction.cc:2930 ActionNameVars::linkSymbols
-    /// Link formal Symbols to their HighVariable representative. Run through
-    /// all Varnodes in all spaces (except constant), and for each that is the
-    /// name representative of its HighVariable, call linkSymbol to associate
-    /// it with a Symbol. Spacebase Varnodes get linkSpacebaseSymbol. Constant
-    /// Varnodes with equate symbols get linked directly. Faithful to
-    /// `linkSymbols` (coreaction.cc:2930-2976).
-    fn link_symbols(fd: &mut Funcdata, _namerec: &mut Vec<Arc<RwLock<crate::varnode::Varnode>>>) {
+    /// Link formal Symbols to their HighVariable representative in the given
+    /// Function. Run through all Varnodes in all spaces (except constant),
+    /// and for each that is the name representative of its HighVariable, call
+    /// linkSymbol to associate it with a Symbol (creating one holding
+    /// `high->getType()` when nothing overlaps — coreaction.cc:2963 →
+    /// funcdata_varnode.cc:1177). Any Symbol without a name whose high
+    /// represents the whole symbol is collected into `namerec` for further
+    /// name resolution. Faithful to `linkSymbols` (coreaction.cc:2930-2976).
+    /// `namerec` entries are (representative Varnode, symbol index) pairs —
+    /// the index stands in for Ghidra's `high->getSymbol()` handle.
+    fn link_symbols(
+        fd: &mut Funcdata,
+        namerec: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, usize)>,
+    ) {
         use crate::space::AddressSpace;
         // Snapshot all varnode arcs to avoid borrow conflicts when calling
         // fd.link_symbol (which needs &mut fd) inside the loop.
@@ -4420,44 +4451,90 @@ impl ActionNameVars {
             let is_sb = vn.is_spacebase();
             drop(vn);
             if has_sym {
-                let _ = fd.link_symbol(vn_arc);
+                let _ = fd.link_symbol(vn_arc); // Special equate symbol
             } else if is_sb {
-                Self::link_spacebase_symbol(fd, vn_arc, _namerec);
+                Self::link_spacebase_symbol(fd, vn_arc, namerec);
             }
         }
-        // cc:2947-2974: iterate all non-constant spaces.
-        let mut seen_highs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // cc:2947-2974: iterate all non-constant spaces, loc order.
         for vn_arc in &vn_arcs {
-            let vn = vn_arc.read().unwrap();
-            if vn.get_space() == AddressSpace::Const { continue; }
-            if vn.is_free() { continue; }
-            let is_sb = vn.is_spacebase();
-            if is_sb {
-                drop(vn);
-                Self::link_spacebase_symbol(fd, vn_arc, _namerec);
-                continue;
+            {
+                let vn = vn_arc.read().unwrap();
+                if vn.get_space() == AddressSpace::Const { continue; }
+                // cc:2954-2956: if (curvn->isFree()) continue;
+                if vn.is_free() { continue; }
+                // cc:2957-2958: if (curvn->isSpacebase()) linkSpacebaseSymbol(...);
+                // Ghidra does NOT continue here — the flow falls through to
+                // the nameRepresentative/hasName/linkSymbol steps (an
+                // unaffected RSP input passes hasName at variable.cc:737-745
+                // and gets linked).
+                if vn.is_spacebase() {
+                    drop(vn);
+                    Self::link_spacebase_symbol(fd, vn_arc, namerec);
+                }
             }
+            // Fall-through (cc:2959+): re-acquire the guard after the
+            // mutable fd call above.
+            let vn = vn_arc.read().unwrap();
+            // cc:2959-2960: vn = curvn->getHigh()->getNameRepresentative();
+            //               if (vn != curvn) continue; — hit each high once.
             let high_arc = vn.high.clone();
             let is_rep = match &high_arc {
-                Some(h) => {
-                    let h_r = h.read().unwrap();
-                    let rep = h_r.get_name_representative();
-                    match &rep {
-                        Some(rep_vn) => Arc::ptr_eq(vn_arc, rep_vn),
-                        None => true,
-                    }
-                }
+                Some(h) => match h.read().unwrap().get_name_representative() {
+                    Some(rep_vn) => Arc::ptr_eq(vn_arc, &rep_vn),
+                    // Ghidra dereferences inst.front() (variable.cc:503) — an
+                    // instance-less high is unreachable there; skip it here.
+                    None => false,
+                },
                 None => false,
             };
             if !is_rep { continue; }
-            let has_name = high_arc.as_ref().map(|h| !h.read().unwrap().name.is_empty()).unwrap_or(false);
-            if !has_name { continue; }
-            if let Some(h) = &high_arc {
-                let h_ptr = Arc::as_ptr(h) as usize;
-                if !seen_highs.insert(h_ptr) { continue; }
-            }
+            // cc:2961-2962: if (!high->hasName()) continue; — hasName is the
+            // "can have a name" predicate (variable.cc:718-747: coverable,
+            // not implied, unaffected-input rules), NOT "already named".
+            // Ghidra's hasName reads isUnaffected/isInput, which lazily run
+            // updateFlags (variable.hh:200/:148) — mirror the refresh so the
+            // flag bits reflect the member varnodes.
+            let nameable = high_arc
+                .as_ref()
+                .map(|h| {
+                    h.write().unwrap().update_flags();
+                    h.read().unwrap().has_name()
+                })
+                .unwrap_or(false);
+            if !nameable { continue; }
+            // cc:2963: sym = data.linkSymbol(vn);
             drop(vn);
-            let _ = fd.link_symbol(vn_arc);
+            let sym_idx = fd.link_symbol(vn_arc);
+            let Some(sym_idx) = sym_idx else { continue };
+            // cc:2964-2973: can we associate high with a nameable symbol?
+            let (sym_undef, sym_size) = {
+                let scope = fd.scope.as_ref().unwrap();
+                let sym = &scope.symbols[sym_idx];
+                (sym.is_name_undefined(), sym.size)
+            };
+            if sym_undef {
+                let high_ro = vn_arc.read().unwrap().high.clone();
+                if let Some(h) = &high_ro {
+                    // cc:2965-2966: if (sym->isNameUndefined() &&
+                    // high->getSymbolOffset() < 0) namerec.push_back(vn);
+                    if h.read().unwrap().get_symbol_offset() < 0 {
+                        namerec.push((vn_arc.clone(), sym_idx));
+                    }
+                }
+            }
+            let _ = sym_size;
+            // cc:2967-2970: if (sym->isSizeTypeLocked() && sizes match)
+            //   overrideSizeLockType — RUGRA-GAP: LocalSymbol models typelock
+            //   only; the size-lock type override has no counterpart yet.
+            // cc:2971-2972: if (vn->isAddrTied() && !sym->getScope()->isGlobal())
+            //   high->finalizeDatatype(typeFactory);
+            if vn_arc.read().unwrap().is_addr_tied() {
+                // The local map is never global.
+                if let Some(h) = vn_arc.read().unwrap().high.clone() {
+                    h.write().unwrap().finalize_datatype();
+                }
+            }
         }
     }
 }
@@ -4469,14 +4546,17 @@ impl Action for ActionNameVars {
 
     // Ghidra: coreaction.cc:2978 ActionNameVars::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra cc:2983: linkSymbols — link formal Symbols to HighVariables.
-        let mut namerec: Vec<Arc<RwLock<crate::varnode::Varnode>>> = Vec::new();
+        // Ghidra cc:2981-2986 — in order:
+        //   linkSymbols(data, namerec);
+        //   recoverNameRecommendationsForSymbols();
+        //   lookForBadJumpTables(data);
+        //   lookForFuncParamNames(data, namerec);
+        let mut namerec: Vec<(Arc<RwLock<crate::varnode::Varnode>>, usize)> = Vec::new();
         Self::link_symbols(fd, &mut namerec);
 
-        // Ghidra cc:2988: scope->assignDefaultNames(base)
-        // Rugra's assign_names (Merge) implements this.
-        let mut merge = crate::merge::Merge::new();
-        merge.assign_names(fd);
+        // cc:2984: data.getScopeLocal()->recoverNameRecommendationsForSymbols()
+        // — make sure recommended names hit before subfunc. RUGRA-GAP: no
+        // name-recommendation store is ported yet (no override framework).
 
         // cc:2985: lookForBadJumpTables — scan calls for bad jump tables and
         // rename the associated symbol to "UNRECOVERED_JUMPTABLE".
@@ -4484,14 +4564,23 @@ impl Action for ActionNameVars {
         // FuncCallSpecs yet, so this is a no-op that matches Ghidra's
         // behavior when no bad jump tables are detected).
 
-        // cc:2986: lookForFuncParamNames — propagate parameter names from
-        // called functions' prototypes to the input varnodes.
-        // Faithful to coreaction.cc:2858-2897.
-        let num_calls = fd.callspecs.len();
-        if num_calls > 0 {
-            // Collect (high_ptr, recommended_name) pairs from callspecs
-            // with locked input and named params.
-            let mut recs: Vec<(usize, String)> = Vec::new(); // (high ptr, name)
+        // cc:2986: lookForFuncParamNames(data, namerec) — propagate locked
+        // prototype parameter names onto the namerec symbols
+        // (coreaction.cc:2858-2897): makeRec (cc:2815-2850) builds the
+        // (high → (name, preferred-type)) recommendation map from locked
+        // callspecs — gates: name-locked param (cc:2818), defined name
+        // (cc:2819), matching varnode size (cc:2820), CAST unwrap for
+        // implied+written varnodes demoting the type to None (cc:2822-2828),
+        // no address-tired targets (cc:2830), no param_N placeholders
+        // (cc:2831); on a repeat high the recommendation wins only with a
+        // non-null type, by Datatype::typeOrder (cc:2833-2845). Then each
+        // namerec symbol whose name is still undefined is renamed, in the
+        // original (address-based) order, via makeNameUnique.
+        let mut rec_map: std::collections::HashMap<
+            usize,
+            (String, Option<std::sync::Arc<crate::type_system::datatype::Datatype>>),
+        > = std::collections::HashMap::new();
+        if !fd.callspecs.is_empty() {
             for fc in &fd.callspecs {
                 if !fc.is_input_locked() { continue; }
                 let num_param = fc.prototype.num_params();
@@ -4505,39 +4594,185 @@ impl Action for ActionNameVars {
                 let max_param = num_param.min(op_r.num_input().saturating_sub(1));
                 for j in 0..max_param {
                     let param = match fc.prototype.get_param(j) { Some(p) => p, None => continue };
-                    if param.name.is_empty() { continue; }
-                    // vn = op->getIn(j+1) — the j-th parameter varnode.
-                    if let Some(vn) = op_r.get_in(j + 1) {
+                    // cc:2818: if (!param->isNameLocked()) return;
+                    if param.flags & crate::fspec::protoparam_flags::NAME_LOCKED == 0 {
+                        continue;
+                    }
+                    // cc:2819: if (param->isNameUndefined()) return;
+                    // cc:2831: name placeholders never propagate.
+                    if param.name.is_empty() || param.name.starts_with("param_") { continue; }
+                    // cc:2876: vn = op->getIn(j+1) — the j-th parameter varnode.
+                    let Some(vn) = op_r.get_in(j + 1) else { continue };
+                    // cc:2820: if (vn->getSize() != param->getSize()) return;
+                    if vn.read().unwrap().get_size() != param.data_type.get_size() {
+                        continue;
+                    }
+                    // Datatype *ct = param->getType();
+                    let mut ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> =
+                        Some(param.data_type.clone());
+                    let mut vn = vn.clone();
+                    // cc:2822-2828: if (vn->isImplied() && vn->isWritten())
+                    //   { castop = vn->getDef(); if (castop->code()==CPUI_CAST) {
+                    //     vn = castop->getIn(0); ct = NULL; } }
+                    {
                         let vn_r = vn.read().unwrap();
-                        if vn_r.is_free() { continue; }
-                        if let Some(high) = &vn_r.high {
-                            let high_ptr = Arc::as_ptr(high) as usize;
-                            recs.push((high_ptr, param.name.clone()));
+                        if vn_r.is_implied() && vn_r.is_written() {
+                            if let Some(def) = vn_r.get_def() {
+                                let def_r = def.read().unwrap();
+                                if def_r.opcode == OpCode::CPUI_CAST {
+                                    if let Some(in0) = def_r.get_in(0) {
+                                        drop(vn_r);
+                                        vn = in0.clone();
+                                        ct = None; // Less preferred (casted) name
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let vn_r = vn.read().unwrap();
+                    if vn_r.is_free() { continue; }
+                    // cc:2830: if (high->isAddrTied()) return; — don't
+                    // propagate a parameter name to an address-tied var.
+                    let Some(high) = &vn_r.high else { continue };
+                    let mut high_w = high.write().unwrap();
+                    high_w.update_flags();
+                    if high_w.is_addr_tied() { continue; }
+                    drop(high_w);
+                    let high_ptr = Arc::as_ptr(high) as usize;
+                    // cc:2833-2845: repeat recommendations keep the more
+                    // specified type (Datatype::typeOrder), never override
+                    // with a null (casted) type.
+                    match rec_map.get_mut(&high_ptr) {
+                        Some(existing) => {
+                            let Some(new_ct) = &ct else { continue };
+                            if let Some(old_ct) = &existing.1 {
+                                if old_ct.type_order(new_ct) <= 0 {
+                                    continue; // oldtype is more specified
+                                }
+                            }
+                            existing.1 = ct.clone();
+                            existing.0 = param.name.clone();
+                        }
+                        None => {
+                            rec_map.insert(high_ptr, (param.name.clone(), ct.clone()));
                         }
                     }
                 }
             }
-            // Apply recommendations: rename unnamed symbols.
-            if !recs.is_empty() {
-                // Build a map from high ptr to name.
-                let rec_map: std::collections::HashMap<usize, &String> =
-                    recs.iter().map(|(p, n)| (*p, n)).collect();
-                // Walk written varnodes and apply.
+        }
+        if !rec_map.is_empty() {
+            // cc:2882-2896: do the actual naming in the original order.
+            for (vn_arc, sym_idx) in &namerec {
+                let vn_r = vn_arc.read().unwrap();
+                if vn_r.is_free() { continue; }
+                if vn_r.is_input() { continue; } // Don't override input naming strategy
+                let Some(high) = &vn_r.high else { continue };
+                // cc:2887: if (high->getNumMergeClasses() > 1) continue;
+                if high.read().unwrap().get_num_merge_classes() > 1 { continue; }
+                // cc:2888-2889: sym = high->getSymbol(); if null or named, skip.
+                let high_ptr = Arc::as_ptr(high) as usize;
+                let Some((name, _ct)) = rec_map.get(&high_ptr) else { continue };
+                let is_undef = fd
+                    .scope
+                    .as_ref()
+                    .map(|s| s.symbols.get(*sym_idx).map(|sy| sy.is_name_undefined()).unwrap_or(false))
+                    .unwrap_or(false);
+                if !is_undef { continue; }
+                // cc:2893-2894: sym->getScope()->renameSymbol(sym,
+                //   localmap->makeNameUnique(namerec)).
+                if let Some(scope) = fd.scope.as_mut() {
+                    if let Some(unique) = scope.make_name_unique(name) {
+                        scope.rename_symbol(*sym_idx, &unique);
+                    }
+                }
+            }
+        }
+
+        // cc:2988-2997: int4 base = 1; for each namerec varnode whose symbol
+        // is still name-undefined, build a default name with the vn
+        // representative (buildDefaultName's vn path drives the in_/unaff_/
+        // param_ branches) and rename the symbol.
+        let mut base: i32 = 1;
+        // The scope is taken out of fd so build_default_name can hold both
+        // the mutable scope and the shared &Funcdata (Ghidra's localmap and
+        // Funcdata are separate objects).
+        let mut scope_taken = fd.scope.take();
+        if let Some(scope) = scope_taken.as_mut() {
+            for (vn_arc, sym_idx) in &namerec {
+                let is_undef = scope
+                    .symbols
+                    .get(*sym_idx)
+                    .map(|sy| sy.is_name_undefined())
+                    .unwrap_or(false);
+                if !is_undef { continue; }
+                let vn_guard = vn_arc.read().unwrap();
+                let newname = scope.build_default_name(
+                    *sym_idx, &mut base, Some(&vn_guard), Some(fd),
+                );
+                drop(vn_guard);
+                if let Some(nm) = newname {
+                    scope.rename_symbol(*sym_idx, &nm);
+                }
+            }
+            // cc:2998: data.getScopeLocal()->assignDefaultNames(base) — walk
+            // the nametree from "$$undef" and name every remaining
+            // placeholder with the SAME shared base counter.
+            if scope.assign_default_names(&mut base).is_none() {
+                eprintln!("[VARMAP] assign_default_names: makeNameUnique failure (coreaction.cc:2998)");
+            }
+        }
+        fd.scope = scope_taken;
+
+        // RUGRA-GLUE: symbol→HighVariable name write-back. Ghidra's PrintC
+        // resolves every variable name through `high->getSymbol()` /
+        // `Symbol::getDisplayName`; Rugra's printc still reads
+        // `HighVariable::name`. Mirror the symbol attachment by publishing
+        // each linked symbol's finished display name onto its high — the
+        // symbol is the single naming authority (earlier direct high.name
+        // writes, e.g. ActionInferParams, are superseded exactly as Ghidra's
+        // namevars output supersedes them). Retirement of this bridge is
+        // PRINTC-SYMBOL-DECL-0001.
+        if let Some(scope) = fd.scope.as_ref() {
+            for (high_ptr, sym_idx) in fd.high_symbols.iter() {
+                let Some(display) = scope
+                    .symbols
+                    .get(*sym_idx)
+                    .map(|s| s.display_name.clone())
+                    .filter(|n| !n.is_empty())
+                else {
+                    continue;
+                };
                 for vn_ref in &fd.vbank.loc_tree {
                     let high_arc = {
                         let vn = vn_ref.0.read().unwrap();
-                        if vn.is_free() { continue; }
-                        if vn.is_input() { continue; }
                         vn.high.clone()
                     };
                     if let Some(high) = high_arc {
-                        let high_ptr = Arc::as_ptr(&high) as usize;
-                        if let Some(name) = rec_map.get(&high_ptr) {
-                            high.write().unwrap().name = name.to_string();
+                        if Arc::as_ptr(&high) as usize == *high_ptr {
+                            high.write().unwrap().set_name(display.clone());
                         }
                     }
                 }
             }
+        }
+
+        // RUGRA-GLUE: refresh the bridged database.rs mirror symbols with
+        // the finished names, so any consumer reading a Varnode's mapentry
+        // (`vn->getSymbolEntry()->getSymbol()`) sees the same name as the
+        // varmap symbol, like Ghidra's single Symbol object would.
+        for (sym_idx, entry) in fd.symbol_entry_cache.iter() {
+            let Some(names) = fd
+                .scope
+                .as_ref()
+                .and_then(|s| s.symbols.get(*sym_idx))
+                .map(|s| (s.name.clone(), s.display_name.clone()))
+            else {
+                continue;
+            };
+            let mut entry_w = entry.write().unwrap();
+            let mut bridge = entry_w.symbol.write().unwrap();
+            bridge.name = names.0;
+            bridge.display_name = names.1;
         }
 
         Ok(action_status::NO_CHANGE)

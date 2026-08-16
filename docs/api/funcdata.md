@@ -1163,3 +1163,32 @@ Varnode 生命周期其余差异（Fspec 空间、HighVariable 分配等）仍�
 INDIRECT 群回跳；构造器不再内置 `set_active_heritage`/硬编码
 `INDIRECT_STORE`（对齐 oracle 的调用方语义）。供 canonical guardCalls
 接线消费；生产 `ActionHeritage` 双 pass 路径不变。
+
+### 2026-08-16：`Funcdata::linkSymbol` 忠实化（`FUNCDATA-LINKSYMBOL-TYPED-0001`）
+
+`Funcdata::linkSymbol`（funcdata_varnode.cc:1156-1184 对应物）重写为逐行
+对齐：proto-partial 走 `link_proto_partial`（`PieceNode::findRoot` 的
+op.cc:824-852 多级 PIECE 回溯为 funcdata.rs 模块级 `piece_node_find_root`）；
+high 已有 Symbol 时提前返回；`queryProperties(addr,1,usepoint)` 查询重叠
+（usepoint 为 def op 地址，input 取函数基址-1，varnode.cc:696-703）；无重
+叠且非 persist 时 `localmap->addSymbol("", high->getType(), addr, usepoint)`
+——`local_XX` HashMap 自创名删除，golden 的 bVar/pcVar 族由此产生。
+`handleSymbolConflict`（:997-1029）与 `buildDynamicSymbol`（:1283-1305）改
+走 ScopeLocal 符号模型（varmap.rs），HighVariable→Symbol 关联由
+`Funcdata::high_symbols` 侧表建模（variable.rs 不在本租约）。persist 无重
+叠仍返回 None。`remapVarnode`/`remapDynamicVarnode` 的 symbol_table 记录
+保留（GLUE，待 DB-LOCALSCOPE-MAP-0001 收编）。
+
+### 2026-08-16（复核修正）：`linkSymbol` 链四处对齐收口（`FUNCDATA-LINKSYMBOL-TYPED-0001` 复核）
+
+`piece_node_find_root` 的多 PIECE 平手改用忠实的 `PcodeOp::compare_order`
+（op.cc:778-791 执行支配序，原为地址数值比较）；`attach_symbol_to_vn` 不再
+手写 flags——经 `Funcdata::symbol_entry_cache`（LocalSymbol→database.rs
+`SymbolEntry` 身份稳定桥接，动态项带 hash、静态项带单址 uselimit）调用
+`Varnode::set_symbol_entry`（varnode.cc:429-439 的 mapped/namelock 腿）+
+忠实 `HighVariable::set_symbol`（variable.cc:245-275 四分支 symboloffset：
+整匹配 -1、部分覆盖=overlap 字节偏移），coreaction.cc:2965 的
+`getSymbolOffset() < 0` namerec 门因此与 Ghidra 同判；桥接 Symbol 的名字
+在命名期后由 ActionNameVars 刷新与 varmap 符号一致。fixture 新增
+partial_coverage case：4 字节临时@0x70（def pc=函数基址-1）+ 1 字节
+input@0x71 → soff=1、被 namerec 门排除，双侧逐字节一致。

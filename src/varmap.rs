@@ -1474,6 +1474,19 @@ pub struct LocalSymbol {
     /// invalid `Address()` (no uselimit range), which `Scope::buildDefaultName`
     /// (database.cc:1776) translates into the `Varnode::addrtied` flag.
     pub usepoint: Option<u64>,
+    /// Ghidra SymbolEntry storage space for `linkSymbol`-created symbols
+    /// (funcdata_varnode.cc:1177 `addSymbol("",...,vn->getAddr(),...)` maps
+    /// the varnode's address, whose space may be register/unique/ram — not
+    /// just this scope's stack space). Stack-restructure symbols
+    /// (varmap.cc createEntry) keep `AddressSpace::Stack`.
+    pub space: crate::space::AddressSpace,
+    /// Ghidra SymbolEntry::isDynamic (database.hh:142): storage identified by
+    /// a dynamic hash instead of an address. `linkSymbol` conflict symbols
+    /// (funcdata_varnode.cc:1303 addDynamicSymbol) set this.
+    pub is_dynamic: bool,
+    /// Ghidra SymbolEntry::hash (database.hh:136): the dynamic storage hash
+    /// (0 for static entries).
+    pub hash: u64,
 }
 
 impl LocalSymbol {
@@ -1498,6 +1511,9 @@ impl LocalSymbol {
             typelock: false,
             namelock: false,
             usepoint: None,
+            space: crate::space::AddressSpace::Stack,
+            is_dynamic: false,
+            hash: 0,
         }
     }
 
@@ -1792,7 +1808,9 @@ impl ScopeLocal {
         // addSymbol("",ct,addr,usepoint) — usepoint is the default invalid Address.
         let start = hint.start;
         let size = hint.size;
-        let idx = self.add_symbol("", Some(final_dt), start, None);
+        let idx = self.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(final_dt), start, None,
+        );
         // SymbolEntry extent: [start, start+size); kept on LocalSymbol for
         // Rugra's query_by_addr/find_symbol consumers.
         self.symbols[idx].size = size;
@@ -2203,6 +2221,7 @@ impl ScopeLocal {
     /// Datatype as optional throughout.)
     pub fn add_symbol(
         &mut self,
+        space: crate::space::AddressSpace,
         nm: &str,
         ct: Option<Arc<Datatype>>,
         start: u64,
@@ -2210,6 +2229,7 @@ impl ScopeLocal {
     ) -> usize {
         let idx = self.symbols.len();
         let mut sym = LocalSymbol::new(nm, start, 1, ct, symbol_category::NO_CATEGORY);
+        sym.space = space;
         if sym.name.is_empty() {
             sym.name = self.build_undefined_name().unwrap_or_else(|| "$$undef00000000".into());
             sym.display_name = sym.name.clone();
@@ -2224,6 +2244,89 @@ impl ScopeLocal {
         self.symbols.push(sym);
         self.insert_name_tree(idx);
         idx
+    }
+
+    // Ghidra: database.cc:1690 Scope::addDynamicSymbol
+    /// Add a symbol whose storage is a dynamic hash rather than an address.
+    /// Faithful to `Scope::addDynamicSymbol` (database.cc:1690-1701) +
+    /// `addDynamicMapInternal` (database.cc:1666-1676): the Symbol is created
+    /// with an empty name (`addSymbolInternal`'s `$$undef` placeholder), the
+    /// dynamic map records `hash`, offset 0, `ct`'s size, extraflags
+    /// `Varnode::mapped`, and a uselimit restricted to the single address
+    /// `caddr` when it is valid. Returns the new symbol's index.
+    pub fn add_dynamic_symbol(
+        &mut self,
+        nm: &str,
+        ct: Option<Arc<Datatype>>,
+        hash: u64,
+        caddr: Option<u64>,
+    ) -> usize {
+        let idx = self.symbols.len();
+        let size = ct.as_ref().map(|d| d.get_size() as i32).unwrap_or(1);
+        let mut sym = LocalSymbol::new(nm, 0, size, ct, symbol_category::NO_CATEGORY);
+        sym.is_dynamic = true;
+        sym.hash = hash;
+        // rnglist.insertRange(caddr) — a valid caddr restricts the uselimit to
+        // that single address; the map's address field stays invalid
+        // (database.cc:1668-1670), modeled by leaving `start` at 0 with
+        // `is_dynamic` set (query_properties skips dynamic entries).
+        sym.usepoint = caddr;
+        if sym.name.is_empty() {
+            sym.name = self.build_undefined_name().unwrap_or_else(|| "$$undef00000000".into());
+            sym.display_name = sym.name.clone();
+        }
+        self.symbols.push(sym);
+        self.insert_name_tree(idx);
+        idx
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties
+    /// Find the smallest static Symbol whose storage contains
+    /// `[offset, offset+size)` in the given space and whose use-limit admits
+    /// `usepoint`. Faithful to `Scope::queryProperties`
+    /// (database.cc:1263-1281, via `stackContainer`) restricted to this local
+    /// scope: the `flags` side-output is dropped (the only linkSymbol caller
+    /// ignores it), dynamic entries are address-unsearchable
+    /// (database.cc:1668 keeps them out of the static map table), and an
+    /// unrestricted use-limit (invalid usepoint at `addMapPoint`,
+    /// database.cc:1552-1555) admits every usepoint. Returns the symbol
+    /// index, mirroring the non-null `SymbolEntry*` return.
+    pub fn query_properties(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        size: i64,
+        usepoint: Option<u64>,
+    ) -> Option<usize> {
+        let mut best: Option<usize> = None;
+        for (idx, sym) in self.symbols.iter().enumerate() {
+            if sym.is_dynamic {
+                continue;
+            }
+            if sym.space != space {
+                continue;
+            }
+            let sym_size = sym.size.max(0) as u64;
+            if sym_size == 0 {
+                continue;
+            }
+            if offset < sym.start || offset + size as u64 > sym.start + sym_size {
+                continue;
+            }
+            // SymbolEntry::inUse (database.cc:117-122): an unrestricted
+            // uselimit (None) is valid throughout the scope; a restricted
+            // one admits exactly its single-address range.
+            if let Some(up) = sym.usepoint {
+                if Some(up) != usepoint {
+                    continue;
+                }
+            }
+            match best {
+                Some(b) if self.symbols[b].size <= sym.size => {}
+                _ => best = Some(idx),
+            }
+        }
+        best
     }
 
     // Ghidra: database.cc:1756 Scope::buildDefaultName
@@ -2256,7 +2359,13 @@ impl ScopeLocal {
                 let high_input = vn
                     .high
                     .as_ref()
-                    .map(|h| h.read().unwrap().is_input())
+                    .map(|h| {
+                        // Ghidra's HighVariable::isInput lazily runs
+                        // updateFlags (variable.hh:200); mirror that here so
+                        // the input bit reflects the member varnodes.
+                        h.write().unwrap().update_flags();
+                        h.read().unwrap().is_input()
+                    })
                     .unwrap_or(false);
                 let dtype = self.symbols[idx].dtype.clone();
                 if self.symbols[idx].category == symbol_category::FUNCTION_PARAMETER
@@ -2280,7 +2389,11 @@ impl ScopeLocal {
         }
         // if (sym->numEntries() != 0) — Rugra LocalSymbol always models one entry.
         let sym = &self.symbols[idx];
-        let space = self.space;
+        // entry->getAddr(): for a dynamic entry the map address is invalid
+        // (database.cc:1668) and only the uselimit (usepoint = caddr) is
+        // meaningful — buildVariableName's local branch (flags==0) never
+        // consults the address there, matching Ghidra's flow.
+        let space = sym.space;
         let addr = sym.start;
         let usepoint = sym.usepoint;
         let dtype = sym.dtype.clone();
@@ -2442,16 +2555,23 @@ impl ScopeLocal {
                 ),
             ));
             // addSymbol("",ct,addr,usepoint-invalid); setCategory(sym, fake_input, -1);
-            let idx = self.add_symbol("", Some(ct), addr, None);
+            let idx = self.add_symbol(
+                crate::space::AddressSpace::Stack, "", Some(ct), addr, None,
+            );
             self.set_category(idx, symbol_category::FAKE_INPUT, -1);
             i = j;
         }
     }
 
     // Ghidra: varmap.cc:341 ScopeLocal::findSymbol
-    /// Look up a symbol by stack offset.
+    /// Look up a symbol by stack offset. Stack-restricted: symbols created by
+    /// `Funcdata::linkSymbol` (funcdata_varnode.cc:1177) in other spaces
+    /// (register/unique/ram) share this Vec but never answer a stack query.
     pub fn find_symbol(&self, offset: u64) -> Option<&LocalSymbol> {
         for sym in &self.symbols {
+            if sym.space != crate::space::AddressSpace::Stack {
+                continue;
+            }
             let end = sym.start.wrapping_add(sym.size as u64);
             if offset >= sym.start && offset < end {
                 return Some(sym);
@@ -2665,9 +2785,12 @@ mod tests {
         // Three unnamed locals with DIFFERENT type prefixes must draw from the
         // ONE shared base counter (per-prefix counters would restart at 1).
         let mut scope = ScopeLocal::new();
-        scope.add_symbol("", Some(named_dt("int", 4, TypeMetatype::Int)), 0xfffffff0, Some(0x1000));
-        scope.add_symbol("", Some(named_dt("char", 1, TypeMetatype::Int)), 0xfffffff4, Some(0x1000));
-        scope.add_symbol("", Some(Arc::new(Datatype::Pointer(
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(named_dt("int", 4, TypeMetatype::Int)), 0xfffffff0, Some(0x1000));
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(named_dt("char", 1, TypeMetatype::Int)), 0xfffffff4, Some(0x1000));
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(Arc::new(Datatype::Pointer(
             crate::type_system::datatype::TypePointer {
                 base: TypeBase::new("char *".into(), 8, TypeMetatype::Pointer),
                 ptr_to: named_dt("int", 4, TypeMetatype::Int),
@@ -2686,14 +2809,18 @@ mod tests {
     #[test]
     fn test_make_name_unique_suffix_forms() {
         let mut scope = ScopeLocal::new();
-        scope.add_symbol("iVar1", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "iVar1", Some(int_dt(4, TypeMetatype::Int)), 0, None);
         // "iVar1" is taken → new sequence "_00".
         assert_eq!(scope.make_name_unique("iVar1").unwrap(), "iVar1_00");
-        scope.add_symbol("iVar1_00", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "iVar1_00", Some(int_dt(4, TypeMetatype::Int)), 0, None);
         // Last existing id 0 → next is 01 (2-digit form).
         assert_eq!(scope.make_name_unique("iVar1").unwrap(), "iVar1_01");
-        scope.add_symbol("iVar1_01", Some(int_dt(4, TypeMetatype::Int)), 0, None);
-        scope.add_symbol("iVar1_02", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "iVar1_01", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "iVar1_02", Some(int_dt(4, TypeMetatype::Int)), 0, None);
         // Last existing id 2 → next is 03.
         assert_eq!(scope.make_name_unique("iVar1").unwrap(), "iVar1_03");
         // A free name returns unchanged.
@@ -2705,8 +2832,10 @@ mod tests {
         // function_parameter category: name comes from catindex+1, and the
         // shared base counter is NOT consumed (database.cc:1777-1781).
         let mut scope = ScopeLocal::new();
-        let p1 = scope.add_symbol("", Some(int_dt(8, TypeMetatype::Int)), 0x20, Some(0x100));
-        let p2 = scope.add_symbol("", Some(int_dt(8, TypeMetatype::Int)), 0x30, Some(0x100));
+        let p1 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(int_dt(8, TypeMetatype::Int)), 0x20, Some(0x100));
+        let p2 = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(int_dt(8, TypeMetatype::Int)), 0x30, Some(0x100));
         scope.set_category(p1, symbol_category::FUNCTION_PARAMETER, 0);
         scope.set_category(p2, symbol_category::FUNCTION_PARAMETER, 1);
         let mut base: i32 = 1;
@@ -2720,10 +2849,12 @@ mod tests {
     fn test_typelocked_name_survives_assign() {
         // A named (locked) symbol is never renamed by assignDefaultNames.
         let mut scope = ScopeLocal::new();
-        let locked = scope.add_symbol("cust_lock", Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
+        let locked = scope.add_symbol(
+            crate::space::AddressSpace::Stack, "cust_lock", Some(int_dt(4, TypeMetatype::Int)), 0x40, None);
         scope.symbols[locked].typelock = true;
         scope.symbols[locked].namelock = true;
-        scope.add_symbol("", Some(int_dt(4, TypeMetatype::Int)), 0x44, Some(0x100));
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(int_dt(4, TypeMetatype::Int)), 0x44, Some(0x100));
         let mut base: i32 = 1;
         scope.assign_default_names(&mut base).unwrap();
         assert_eq!(scope.symbols[locked].name, "cust_lock");
@@ -2735,8 +2866,10 @@ mod tests {
         // Two symbols with the same name get nameDedup 0 and 1
         // (database.cc:2712-2727 insertNameTree).
         let mut scope = ScopeLocal::new();
-        scope.add_symbol("dup", Some(int_dt(4, TypeMetatype::Int)), 0, None);
-        scope.add_symbol("dup", Some(int_dt(4, TypeMetatype::Int)), 8, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "dup", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "dup", Some(int_dt(4, TypeMetatype::Int)), 8, None);
         assert_eq!(scope.symbols[0].name_dedup, 0);
         assert_eq!(scope.symbols[1].name_dedup, 1);
         assert_eq!(scope.find_first_by_name("dup"), Some(0));
@@ -2746,10 +2879,12 @@ mod tests {
     fn test_build_undefined_name_sequence() {
         let mut scope = ScopeLocal::new();
         assert_eq!(scope.build_undefined_name().unwrap(), "$$undef00000000");
-        scope.add_symbol("", Some(int_dt(4, TypeMetatype::Int)), 0, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(int_dt(4, TypeMetatype::Int)), 0, None);
         assert_eq!(scope.symbols[0].name, "$$undef00000000");
         assert_eq!(scope.build_undefined_name().unwrap(), "$$undef00000001");
-        scope.add_symbol("", Some(int_dt(4, TypeMetatype::Int)), 4, None);
+        scope.add_symbol(
+            crate::space::AddressSpace::Stack, "", Some(int_dt(4, TypeMetatype::Int)), 4, None);
         assert_eq!(scope.symbols[1].name, "$$undef00000001");
         assert!(scope.symbols[0].is_name_undefined());
     }
