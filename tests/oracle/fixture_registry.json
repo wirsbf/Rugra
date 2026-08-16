@@ -1052,6 +1052,37 @@
      "tools/run_external_stub_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "merge_gates_1204",
+   "description": "Pre-existing merge gates: mergeIndirect isAddrForce+input-surviving merges+snip interference, buildDominantCopy null-cache merge, mergeMultiEntry required gate+problems, compareJustLoc space order",
+   "runner": [
+    "tools/run_merge_gates_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/merge_gates_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/merge_gates_1204.cc",
+     "rust_fixture": "tests/oracle/merge_gates_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_merge_gates_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/merge.rs",
+     "src/variable.rs",
+     "tests/oracle/merge_gates_1204.*",
+     "tools/run_merge_gates_oracle.sh"
+    ]
+   }
   }
  ]
 }
