@@ -133,6 +133,12 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 - `types: Option<Arc<RwLock<TypeFactory>>>` + `userops: Option<Arc<RwLock<UserOpManage>>>` 字段 + set_types/set_userops。
 - `get_base_type(size, metatype)` — 委托 TypeFactory::get_base。
 - `construct_join_address(hi,sz,lo,sz)`（translate.cc:817）— 桩：contiguous 早返回，否则 0。
+- **2026-08-16（`TYPE-WIRING-0001`）**：新增 `ensure_types()` — 无工厂时安装并返回
+  process-canonical 工厂（`TypeFactory::shared_default()`，DataOrg flavor）。Ghidra 的
+  Architecture 恒持有唯一 `TypeFactory`（type.cc:3106）；Rugra 的 `types` 在
+  CSPEC-TEXT-INGEST-0001 落地前可选。生产接线建议（root，funcdata.rs 租约外）：
+  `fd.set_arch(arch)` 后调 `arch.ensure_types()` 并
+  `fd.vbank.set_type_factory(handle)`，使 Varnode/varmap/打印消费同一工厂。
 <!-- annotation-pass: 2026-07-04 -->
  
 # 2026-08-14：Architecture 消息保持 oracle 原文

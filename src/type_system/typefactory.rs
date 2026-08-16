@@ -1303,11 +1303,34 @@ impl TypeFactory {
             .cloned()
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::TypeFactory(Architecture *g)
+    /// The single TypeFactory instance for the locked-oracle process model.
+    ///
+    /// Ghidra constructs exactly one `TypeFactory` per `Architecture`
+    /// (`TypeFactory::TypeFactory(Architecture *g)`, type.cc:3106-3119 — the
+    /// factory holds `glb` and every `getBase`/`findAdd` call deduplicates
+    /// against that one factory), and the canonical headless oracle runs one
+    /// Architecture per process. Rugra's production `Funcdata` does not yet
+    /// carry an attached `Architecture` (FUNCPROTO-MODEL-BIND-0001 chain), so
+    /// callers with no injectable handle (`VarnodeBank` default typing,
+    /// `ScopeLocal` symbol typing) resolve this process-wide DataOrg-flavor
+    /// factory instead — preserving the oracle's observable identity domain
+    /// (one canonical `undefined{size}` object per size for the whole
+    /// process) until per-Architecture wiring lands. Callers that DO have an
+    /// Architecture must prefer its own `types` handle.
+    pub fn shared_default() -> Arc<RwLock<TypeFactory>> {
+        static SHARED: std::sync::OnceLock<Arc<RwLock<TypeFactory>>> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| Arc::new(RwLock::new(TypeFactory::new(8))))
+            .clone()
+    }
+
     // Ghidra: type.cc:4140 TypeFactory::concretize
     /// Concretize a possibly-abstract data-type into a representable one.
     /// Faithful to `TypeFactory::concretize` (type.cc:4140-4150): a TYPE_CODE
-    /// of size 1 is replaced with a base TYPE_UNKNOWN of size 1; anything
-    /// else is returned unchanged.
+    /// of size 1 is replaced with the factory's `getBase(1, TYPE_UNKNOWN)`
+    /// output (same object identity on repeated calls); anything else is
+    /// returned unchanged.
     pub fn concretize(&self, ct: Arc<Datatype>) -> Arc<Datatype> {
         if ct.get_metatype() == TypeMetatype::Code {
             debug_assert_eq!(
@@ -1315,9 +1338,10 @@ impl TypeFactory {
                 1,
                 "Primitive code data-type that is not size 1"
             );
-            let mut base = TypeBase::new("undefined1".to_string(), 1, TypeMetatype::Unknown);
-            base.flags |= type_flags::CORETYPE;
-            return Arc::new(Datatype::Base(base));
+            // type.cc:4147: ct = getBase(1, TYPE_UNKNOWN);
+            return self
+                .get_base(1, TypeMetatype::Unknown)
+                .expect("factory always produces a base unknown");
         }
         ct
     }

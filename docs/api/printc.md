@@ -953,3 +953,10 @@ model is not present in Rugra's print layer):
   `examples/curl_decompile.rs` 的 TYPEDEF_PREAMBLE 前缀契约约束了
   typedef latch 的形状（不可在其五 typedef 之后追加新 typedef，否则
   worker 协议失败）。
+
+### 2026-08-16：TYPE-WIRING 配套（undefined2 typedef）
+
+`emit_type_preambles` 补 `typedef unsigned short undefined2;`（与 byte/
+undefined/undefined4/undefined8 同族）；driver 的 TYPEDEF_PREAMBLE 协议
+常量同步——缺此 typedef 时 `undefined2 uVar2;` 声明不可编译且 worker
+协议校验失败（复核发现 HEAD 曾因此 76/76 protocol failure）。

@@ -310,7 +310,14 @@ impl RangeHint {
     /// Given that this and the other RangeHint intersect, redefine this so that
     /// it becomes the union of the two. Faithful to `RangeHint::merge`
     /// (varmap.cc:259). Returns true if there was a reconcilable overlap.
-    pub fn merge_with(&mut self, b: &RangeHint) -> bool {
+    /// `types` mirrors the `TypeFactory *typeFactory` parameter of the Ghidra
+    /// signature (varmap.hh:124) — consumed only by the resType==2 concede
+    /// path (varmap.cc:309).
+    pub fn merge_with(
+        &mut self,
+        b: &RangeHint,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> bool {
         let did_reconcile;
         let res_type: i32; // 0=this, 1=b, 2=confuse
 
@@ -352,6 +359,9 @@ impl RangeHint {
             self.absorb(&copy);
         } else {
             // resType == 2: concede confusion, set unknown type.
+            // Ghidra: type = typeFactory->getBase(size,TYPE_UNKNOWN)
+            // (varmap.cc:309) — the factory handle is threaded from
+            // ScopeLocal::restructure's `glb->types` (varmap.cc:1309).
             self.flags = 0;
             self.range_type = RangeType::Fixed;
             let diff = (b.sstart - self.sstart) as i32;
@@ -362,13 +372,7 @@ impl RangeHint {
                 self.size = 1;
                 self.range_type = RangeType::Open;
             }
-            self.dtype = Some(Arc::new(Datatype::Base(
-                crate::type_system::datatype::TypeBase::new(
-                    "unknown".to_string(),
-                    self.size as usize,
-                    TypeMetatype::Unknown,
-                ),
-            )));
+            self.dtype = Some(make_int_type(types, self.size as usize));
             self.flags = 0;
             self.high_ind = -1;
             return false;
@@ -881,17 +885,22 @@ fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)>
     }
 }
 
-// Ghidra: varmap.hh:137 AliasChecker::makeIntType
-/// Build a small unsigned int Datatype of the given size for RangeHint typing.
-/// Ghidra uses the TypeFactory to getBase(size, TYPE_UNKNOWN); we approximate
-/// with an Unknown-metatype base type so the size is preserved and varmap can
-/// reconcile it with real types later.
-fn make_int_type(size: usize) -> Arc<Datatype> {
-    Arc::new(Datatype::Base(crate::type_system::datatype::TypeBase::new(
-        "unknown".to_string(),
-        size,
-        TypeMetatype::Unknown,
-    )))
+// Ghidra: varmap.cc:942 MapState::addFixedType / varmap.cc:1438 ScopeLocal::fakeInputSymbols
+/// Resolve the unknown base type of `size` bytes for RangeHint typing.
+/// Ghidra draws these from the Architecture TypeFactory
+/// (`types->getBase(size,TYPE_UNKNOWN)`, varmap.cc:942/1031/1438); Rugra
+/// threads the factory resolved by `ScopeLocal::restructure_varnode`
+/// (`fd.arch.types`, else the process-canonical default) so the hint, symbol,
+/// and varnode type objects share the factory identity domain.
+fn make_int_type(
+    types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    size: usize,
+) -> Arc<Datatype> {
+    types
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_base(size, TypeMetatype::Unknown)
+        .expect("factory always produces an unknown base type")
 }
 
 // Ghidra: database.cc:2571 ScopeInternal::makeNameUnique (suffix parsing)
@@ -1305,7 +1314,11 @@ impl MapState {
     ///
     /// Corresponds to the Stack-spacebase resolution Ghidra performs via
     /// `ActionSpacebase` + the spacebase input varnode.
-    pub fn gather_spacebase(&mut self, fd: &crate::funcdata::Funcdata) {
+    pub fn gather_spacebase(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) {
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
             match op.opcode {
@@ -1318,7 +1331,7 @@ impl MapState {
                     let addr_vn = op.inrefs[1].clone();
                     if let Some((off, _writable)) = resolve_rsp_offset_via_bank(&addr_vn, fd) {
                         let size = out_size.unwrap_or(1);
-                        let dtype = make_int_type(size);
+                        let dtype = make_int_type(types, size);
                         self.add_fixed_type(off, Some(dtype), 0);
                     }
                 }
@@ -1330,7 +1343,7 @@ impl MapState {
                     let val_size = op.inrefs[2].read().unwrap().get_size();
                     let addr_vn = op.inrefs[1].clone();
                     if let Some((off, _writable)) = resolve_rsp_offset_via_bank(&addr_vn, fd) {
-                        let dtype = make_int_type(val_size);
+                        let dtype = make_int_type(types, val_size);
                         let is_const = op.inrefs[2].read().unwrap().is_constant();
                         let flags = if is_const { range_flags::COPY_CONSTANT } else { 0 };
                         self.add_fixed_type(off, Some(dtype), flags);
@@ -1346,7 +1359,11 @@ impl MapState {
     /// `MapState::gatherOpen` (varmap.cc:1211): for each additive base root,
     /// if its type is a pointer, create an open RangeHint sized to the
     /// pointee; use minItems=3 if an index varnode is present.
-    pub fn gather_open(&mut self, fd: &crate::funcdata::Funcdata, checker: &AliasChecker) {
+    pub fn gather_open(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        checker: &AliasChecker,
+    ) {
         let addbase = checker.get_add_base();
         let aliases = checker.get_aliases();
         for (i, entry) in addbase.iter().enumerate() {
@@ -1360,19 +1377,18 @@ impl MapState {
                 Datatype::Pointer(p) => Some(p.ptr_to.clone()),
                 _ => None,
             });
-            let final_dt: Arc<Datatype> = match &pointee {
+            // Ghidra passes ct = NULL for non-pointers ("Do unknown array",
+            // varmap.cc:1230); MapState::addRange substitutes the default
+            // type (the factory's getBase(1,TYPE_UNKNOWN), varmap.cc:896).
+            let final_dt: Option<Arc<Datatype>> = match &pointee {
                 Some(p) => match p.as_ref() {
-                    Datatype::Array(a) => a.array_of.clone(),
-                    _ => p.clone(),
+                    Datatype::Array(a) => Some(a.array_of.clone()),
+                    _ => Some(p.clone()),
                 },
-                None => Arc::new(Datatype::Base(
-                    crate::type_system::datatype::TypeBase::new(
-                        "unknown".into(), 1, TypeMetatype::Unknown,
-                    ),
-                )),
+                None => None,
             };
             let min_items: i32 = if entry.index.is_some() { 3 } else { -1 };
-            self.add_range(offset, Some(final_dt), 0, RangeType::Open, min_items);
+            self.add_range(offset, final_dt, 0, RangeType::Open, min_items);
         }
         // LoadGuard/StoreGuard handling (varmap.cc:1241-1248) is omitted until
         // Rugra wires LoadGuard into Funcdata for the stack space; the additive
@@ -1662,6 +1678,18 @@ impl ScopeLocal {
         self.category_lists.clear();
         self.overlap_problems = false;
 
+        // Ghidra reads every factory type through `glb->types` (the
+        // Architecture's single TypeFactory member, type.cc:3106). Rugra's
+        // production Funcdata has no attached Architecture yet
+        // (FUNCPROTO-MODEL-BIND-0001 chain), so resolve: the attached
+        // Architecture's factory when present, else the process-canonical
+        // factory modeling the headless oracle's single Architecture.
+        let types: Arc<RwLock<crate::type_system::typefactory::TypeFactory>> = fd
+            .arch
+            .as_ref()
+            .and_then(|a| a.types.clone())
+            .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
+
         // Determine local range. Ghidra derives this from the prototype's
         // getRangeTree/getParamRange (varmap.cc:438-465, resetLocalWindow);
         // Rugra uses the full stack extent.
@@ -1673,13 +1701,12 @@ impl ScopeLocal {
         self.local_range = vec![(local_start, local_end - 1)];
 
         // Build the MapState with a default unknown base type (1 byte),
-        // matching Ghidra's glb->types->getBase(1, TYPE_UNKNOWN).
-        let default_type = Arc::new(Datatype::Base(
-            crate::type_system::datatype::TypeBase::new("unknown".into(), 1, TypeMetatype::Unknown),
-        ));
+        // matching Ghidra's glb->types->getBase(1, TYPE_UNKNOWN)
+        // (varmap.cc:1261).
+        let default_type = make_int_type(&types, 1);
         let mut state = MapState::new_with_default(local_start, local_end, default_type);
         state.gather_varnodes(fd);
-        state.gather_spacebase(fd);
+        state.gather_spacebase(fd, &types);
 
         // Gather alias info.
         let mut checker = AliasChecker::new(self.stack_direction);
@@ -1690,19 +1717,25 @@ impl ScopeLocal {
         state.gather_open(fd, &checker);
 
         // Restructure: merge overlapping ranges into disjoint symbols.
-        self.overlap_problems = self.restructure(&mut state);
+        self.overlap_problems = self.restructure(&mut state, &types);
 
         // Mark unaliased symbols.
         self.mark_unaliased(&aliases);
 
         // Build fake input symbols for parameters.
-        self.fake_input_symbols(fd);
+        self.fake_input_symbols(fd, &types);
     }
 
     // Ghidra: varmap.cc:1294 ScopeLocal::restructure
     /// Merge RangeHints into a definitive set of Symbols.
-    /// Corresponds to ScopeLocal::restructure (varmap.cc:1294).
-    fn restructure(&mut self, state: &mut MapState) -> bool {
+    /// Corresponds to ScopeLocal::restructure (varmap.cc:1294); `types`
+    /// mirrors the `glb->types` handle threaded into `RangeHint::merge`
+    /// (varmap.cc:1309) and `createEntry` (varmap.cc:622).
+    fn restructure(
+        &mut self,
+        state: &mut MapState,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> bool {
         if !state.initialize() { return false; }
 
         let mut overlap_problems = false;
@@ -1724,7 +1757,7 @@ impl ScopeLocal {
             let cur_end = current.sstart.wrapping_add(current.size as i64);
             if next.sstart < cur_end {
                 // Ranges intersect — merge them
-                if current.merge_with(&next) {
+                if current.merge_with(&next, types) {
                     overlap_problems = true;
                 }
             } else {
@@ -1737,7 +1770,7 @@ impl ScopeLocal {
                     // Faithful to ScopeLocal::restructure (varmap.cc:1316):
                     // only create an entry if the range fits.
                     if self.adjust_fit(&mut current) {
-                        self.create_entry(&current);
+                        self.create_entry(&current, types);
                     }
                     current = next;
                 }
@@ -1783,14 +1816,27 @@ impl ScopeLocal {
     /// in `assignDefaultNames` (database.cc:2850). The data-type is concretized
     /// and wrapped into an array when more than one aligned element fits
     /// (varmap.cc:622-625).
-    fn create_entry(&mut self, hint: &RangeHint) {
+    fn create_entry(
+        &mut self,
+        hint: &RangeHint,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) {
         if hint.size <= 0 { return; }
 
-        // Datatype *ct = glb->types->concretize(a.type);
-        let ct = hint.dtype.clone().unwrap_or_else(|| make_int_type(1));
+        // Datatype *ct = glb->types->concretize(a.type); (varmap.cc:622)
+        let raw = hint.dtype.clone().unwrap_or_else(|| make_int_type(types, 1));
+        let ct = types
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .concretize(raw);
         // int4 num = a.size/ct->getAlignSize(); if (num>1) ct = getTypeArray(num,ct);
         let align = ct.get_align_size().max(1) as i32;
         let num = hint.size / align;
+        // NOTE: Ghidra wraps the array through glb->types->getTypeArray
+        // (varmap.cc:625), whose factory deduplication is not yet ported
+        // (no TypeFactory::getTypeArray in Rust); the array shell is built
+        // locally around the factory-owned element type. Registered as a
+        // TYPE-WIRING-0001 residual.
         let final_dt: Arc<Datatype> = if num > 1 {
             Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
                 base: crate::type_system::datatype::TypeBase::new(
@@ -2512,7 +2558,11 @@ impl ScopeLocal {
     /// symbol keeps a `$$undef` placeholder until `assignDefaultNames`.
     /// Rugra approximates the input scan by walking stack-space input
     /// varnodes (no defining op) in the vbank.
-    fn fake_input_symbols(&mut self, fd: &crate::funcdata::Funcdata) {
+    fn fake_input_symbols(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) {
         // Collect (offset, size) of stack-space input varnodes, sorted by offset.
         let mut inputs: Vec<(u64, i32)> = Vec::new();
         for vn_arc in &fd.vbank.loc_tree {
@@ -2548,12 +2598,9 @@ impl ScopeLocal {
                 j += 1;
             }
             let size = (endpoint - addr + 1) as i32;
-            // Datatype *ct = getBase(size, TYPE_UNKNOWN);
-            let ct = Arc::new(Datatype::Base(
-                crate::type_system::datatype::TypeBase::new(
-                    "unknown".into(), size as usize, TypeMetatype::Unknown,
-                ),
-            ));
+            // Datatype *ct = fd->getArch()->types->getBase(size,TYPE_UNKNOWN);
+            // (varmap.cc:1438)
+            let ct = make_int_type(types, size as usize);
             // addSymbol("",ct,addr,usepoint-invalid); setCategory(sym, fake_input, -1);
             let idx = self.add_symbol(
                 crate::space::AddressSpace::Stack, "", Some(ct), addr, None,
@@ -2697,9 +2744,10 @@ mod tests {
     fn test_rangehint_merge_absorb_same_type() {
         // a: int4@[0,4) contained b: int4@[0,4), reconcile true, preferred a
         // → resType=0 → absorb b (no-op since identical).
+        let types = crate::type_system::typefactory::TypeFactory::shared_default();
         let mut a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
         let b = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
-        let overlap = a.merge_with(&b);
+        let overlap = a.merge_with(&b, &types);
         assert!(!overlap); // reconcilable → false
         assert_eq!(a.size, 4);
     }
@@ -2708,13 +2756,19 @@ mod tests {
     fn test_rangehint_merge_confuse_to_unknown() {
         // a: int4@[0,4), b: int8@[2,10) — NOT contained, NOT locked → resType=2.
         // Result: unknown type, size = (2-0)+8 = 10 → not in {1,2,4,8} → size 1, open.
+        let types = crate::type_system::typefactory::TypeFactory::shared_default();
         let mut a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
         let b = RangeHint::new(2, 8, 2, Some(int_dt(8, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
-        let overlap = a.merge_with(&b);
+        let overlap = a.merge_with(&b, &types);
         assert!(!overlap);
         assert_eq!(a.size, 1);
         assert_eq!(a.range_type, RangeType::Open);
         assert_eq!(a.dtype.as_ref().unwrap().get_metatype(), TypeMetatype::Unknown);
+        // resType==2 draws the unknown from the threaded factory
+        // (varmap.cc:309): canonical spelling + factory identity.
+        let dt = a.dtype.as_ref().unwrap();
+        assert_eq!(dt.get_name(), "undefined1");
+        assert!(Arc::ptr_eq(dt, &make_int_type(&types, 1)));
         assert_eq!(a.high_ind, -1);
     }
 
@@ -2930,7 +2984,8 @@ mod tests {
         state.add_range(16, Some(int_t), 0, RangeType::Fixed, -1);
 
         let mut scope = ScopeLocal::new();
-        let overlap = scope.restructure(&mut state);
+        let types = crate::type_system::typefactory::TypeFactory::shared_default();
+        let overlap = scope.restructure(&mut state, &types);
         assert!(!overlap);
         // Two disjoint symbols created.
         assert_eq!(scope.symbols.len(), 2);
@@ -2950,7 +3005,8 @@ mod tests {
         state.add_range(0, Some(int_t), 0, RangeType::Fixed, -1);
 
         let mut scope = ScopeLocal::new();
-        let _overlap = scope.restructure(&mut state);
+        let types = crate::type_system::typefactory::TypeFactory::shared_default();
+        let _overlap = scope.restructure(&mut state, &types);
         // The merged range is emitted once at the finalization step; with the
         // endpoint added by initialize(), the single merged int4 is emitted.
         assert_eq!(scope.symbols.len(), 1);

@@ -36,16 +36,30 @@ fn compare_address_spaces(a: AddressSpace, b: AddressSpace) -> std::cmp::Orderin
     a.space_id().cmp(&b.space_id()).then_with(|| a.cmp(&b))
 }
 
-// RUGRA-GLUE: Bank-local default-type adapter for APIs that do not yet receive
-// Ghidra's caller-supplied `Datatype *ct`. This deliberately models only the
-// fixture's unnamed id=0/non-core xunknown scalar; Architecture TypeFactory
-// identity and core flags remain TYPE-UNKNOWN-0001.
-fn unknown_datatype(size: usize) -> Arc<Datatype> {
-    Arc::new(Datatype::Base(TypeBase::new(
-        format!("xunknown{size}"),
-        size,
-        TypeMetatype::Unknown,
-    )))
+// RUGRA-GLUE: Default-type resolution standing in for Ghidra's
+// caller-supplied `Datatype *ct`. Ghidra's `VarnodeBank::create(s,m,ct)`
+// (varnode.cc:1250) never mints a type itself — every Funcdata `newVarnode*`
+// caller passes `glb->types->getBase(s,TYPE_UNKNOWN)` from the Architecture
+// TypeFactory (funcdata_varnode.cc:69/87/107/132/154/179/193/208). Rugra's
+// historical two-argument constructors cannot receive a `ct`, so this helper
+// resolves the same factory object: an explicitly injected handle wins;
+// otherwise the process-canonical DataOrg factory models the headless
+// oracle's single Architecture. Bank-local `xunknown{size}` minting (the
+// former adapter) is gone — unknown types now carry the canonical
+// `undefined{size}` spelling and per-factory identity.
+fn default_unknown_type(
+    factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+    size: usize,
+) -> Arc<Datatype> {
+    let factory = factory
+        .cloned()
+        .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
+    let guard = factory
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .get_base(size, TypeMetatype::Unknown)
+        .expect("TypeFactory::get_base always produces an unknown base type")
 }
 
 /// Flags for Varnode properties (varnode_flags in Ghidra)
@@ -174,7 +188,11 @@ impl Varnode {
             def: None,
             high: None,
             mapentry: None,
-            v_type: Some(unknown_datatype(size)),
+            // Ghidra's ctor stores the caller's `Datatype *dt`; Rugra's
+            // historical API has no ct parameter, so draw the canonical
+            // factory unknown (the stand-in for the Funcdata caller's
+            // glb->types->getBase(size,TYPE_UNKNOWN), funcdata_varnode.cc:154).
+            v_type: Some(default_unknown_type(None, size)),
             descend: Vec::new(),
             self_ref: Weak::new(),
             cover: None,
@@ -2041,7 +2059,6 @@ impl From<&Varnode> for VarnodeData {
 /// Container for managing Varnodes
 ///
 /// Corresponds to Ghidra's `VarnodeBank` class in `varnode.hh`
-#[derive(Debug)]
 pub struct VarnodeBank {
     /// Sorted by location (VarnodeLocSet in Ghidra)
     pub loc_tree: BTreeSet<VarnodeLocRef>,
@@ -2055,10 +2072,31 @@ pub struct VarnodeBank {
     uniq_space: AddressSpace,
     uniqid: u64,
 
-    /// Bank-local cache for the default-type adapter above. It preserves
-    /// same-size identity within this bank, but is not the owning
-    /// Architecture TypeFactory and has no cross-bank identity guarantee.
-    unknown_types: BTreeMap<usize, Arc<Datatype>>,
+    /// Bank's view of the owning Architecture's TypeFactory. Ghidra's
+    /// VarnodeBank has no factory of its own — the Funcdata caller always
+    /// supplies the `Datatype *ct` drawn from `glb->types`
+    /// (funcdata_varnode.cc:69 et al.). An injected handle reproduces that
+    /// per-Architecture channel; when absent (test paths without an
+    /// Architecture), the process-canonical factory models the headless
+    /// oracle's single Architecture (see `default_unknown_type`).
+    type_factory: Option<Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+}
+
+// RUGRA-GLUE: fmt (no Ghidra counterpart found)
+/// Manual Debug impl: the injected factory handle has no Debug surface;
+/// report only its presence, matching the derive that preceded it.
+impl std::fmt::Debug for VarnodeBank {
+    // RUGRA-GLUE: std::fmt::Debug trait impl; Ghidra has no Debug output.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VarnodeBank")
+            .field("loc_tree", &self.loc_tree)
+            .field("def_tree", &self.def_tree)
+            .field("create_index", &self.create_index)
+            .field("uniq_space", &self.uniq_space)
+            .field("uniqid", &self.uniqid)
+            .field("type_factory", &self.type_factory.is_some())
+            .finish()
+    }
 }
 
 impl VarnodeBank {
@@ -2070,18 +2108,42 @@ impl VarnodeBank {
             create_index: 0,
             uniq_space: AddressSpace::Unique,
             uniqid: ANALYSIS_UNIQUE_START,
-            unknown_types: BTreeMap::new(),
+            type_factory: None,
         }
+    }
+
+    // RUGRA-GLUE: set_type_factory (no Ghidra counterpart found)
+    /// Inject the owning Architecture's TypeFactory handle. Ghidra threads
+    /// `glb->types` through every `Funcdata::newVarnode*` →
+    /// `VarnodeBank::create(s,m,ct)` call (funcdata_varnode.cc:69 et al.,
+    /// varnode.cc:1250); Rust's bank-local default typing consults this
+    /// handle first so an attached Architecture's factory provides the
+    /// unknown-type identity domain.
+    pub fn set_type_factory(
+        &mut self,
+        tf: Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) {
+        self.type_factory = Some(tf);
+    }
+
+    // RUGRA-GLUE: type_factory_handle (no Ghidra counterpart found)
+    /// The injected Architecture TypeFactory handle, if any.
+    pub fn type_factory_handle(
+        &self,
+    ) -> Option<Arc<RwLock<crate::type_system::typefactory::TypeFactory>>> {
+        self.type_factory.clone()
     }
 
     // RUGRA-GLUE: shared Rust allocation half of VarnodeBank::create and
     // createDef; Ghidra performs these field assignments inline.
     fn allocate(&mut self, mut vn: Varnode) -> Arc<RwLock<Varnode>> {
-        let canonical_type = self
-            .unknown_types
-            .entry(vn.size)
-            .or_insert_with(|| unknown_datatype(vn.size))
-            .clone();
+        // Ghidra's create/createDef receive the caller's `Datatype *ct`
+        // (varnode.cc:1250/1411) — the Funcdata caller's
+        // `glb->types->getBase(size,TYPE_UNKNOWN)`. Rugra resolves the same
+        // factory object here: injected handle, else the process-canonical
+        // factory. Same-size requests return the same Arc, matching the
+        // factory's findAdd identity domain.
+        let canonical_type = default_unknown_type(self.type_factory.as_ref(), vn.size);
         vn.v_type = Some(canonical_type);
         vn.create_index = self.create_index;
         self.create_index += 1;
@@ -3177,10 +3239,18 @@ mod tests {
         assert_eq!(vn.flags, varnode_flags::COVERDIRTY);
         assert_eq!(vn.get_consume(), u64::MAX);
         assert_eq!(vn.get_nzm(), u64::MAX);
+        // Bank default typing now draws from the Architecture TypeFactory
+        // (TYPE-WIRING-0001): the canonical headless oracle spells the core
+        // unknowns `undefined{size}` (ghidra_arch.cc:349-355 data
+        // organization path), replacing the former bank-local `xunknown{size}`
+        // adapter. The object is the process-canonical factory's core type
+        // (named, core-flagged, hashed id).
         let dt = vn.get_type().expect("bank creations carry an unknown type");
-        assert_eq!(dt.get_name(), "xunknown4");
+        assert_eq!(dt.get_name(), "undefined4");
         assert_eq!(dt.get_metatype(), TypeMetatype::Unknown);
         assert_eq!(dt.get_size(), 4);
+        assert!(dt.is_coretype());
+        assert!(Arc::ptr_eq(&dt, &default_unknown_type(None, 4)));
     }
 
     #[test]
@@ -3241,6 +3311,47 @@ mod tests {
         assert!(Arc::ptr_eq(
             &defined_rg.get_type().unwrap(),
             &free_rg.get_type().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn test_varnode_bank_injected_factory_flavor_wins() {
+        // TYPE-WIRING-0001: an explicitly injected Architecture TypeFactory
+        // takes precedence over the process-canonical default — this is the
+        // per-Architecture channel Ghidra uses (glb->types, type.cc:3106).
+        // A Standalone-flavor factory (sleigh_arch.cc:229-232) spells the
+        // core unknowns `xunknown{size}`, distinguishing the two tracks.
+        let injected = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new_flavor(
+                8,
+                crate::type_system::typefactory::CoreTypeFlavor::Standalone,
+            ),
+        ));
+        let mut bank = VarnodeBank::new();
+        bank.set_type_factory(injected.clone());
+        let vn = bank.create(4, Address::new(0x40));
+        let dt = vn.read().unwrap().get_type().unwrap().clone();
+        assert_eq!(dt.get_name(), "xunknown4");
+        // Identity flows from the injected factory object itself.
+        assert!(Arc::ptr_eq(
+            &dt,
+            &injected
+                .read()
+                .unwrap()
+                .get_base(4, TypeMetatype::Unknown)
+                .unwrap()
+        ));
+        // A second, uninjected bank resolves the canonical default instead —
+        // the two tracks are distinct objects, matching two Architectures.
+        let other = VarnodeBank::new().create(4, Address::new(0x80));
+        let other_dt = other.read().unwrap().get_type().unwrap().clone();
+        assert_eq!(other_dt.get_name(), "undefined4");
+        assert!(!Arc::ptr_eq(&dt, &other_dt));
+        // Cross-bank identity within the canonical track (one Architecture).
+        let third = VarnodeBank::new().create(4, Address::new(0xc0));
+        assert!(Arc::ptr_eq(
+            &other_dt,
+            &third.read().unwrap().get_type().unwrap()
         ));
     }
 

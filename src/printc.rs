@@ -5608,6 +5608,8 @@ impl PrintLanguage for PrintC {
             self.emit.tag_line(0);
             self.emit.print("typedef unsigned long undefined;");
             self.emit.tag_line(0);
+            self.emit.print("typedef unsigned short undefined2;");
+            self.emit.tag_line(0);
             self.emit.print("typedef unsigned long undefined4;");
             self.emit.tag_line(0);
             self.emit.print("typedef unsigned long long undefined8;");

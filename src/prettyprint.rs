@@ -3023,15 +3023,35 @@ impl EmitNoMarkup {
         let mut decl_indices: Vec<(usize, String)> = Vec::new();
         for (i, line) in func_lines.iter().enumerate() {
             let t = line.trim();
-            // Match "type uVarNNN;" pattern
+            // Match "type uVarNNN;" and "type *uVarNNN;" declaration patterns.
+            // Pointer forms split into a trailing token like "*uVar20", so the
+            // variable name is taken as the substring after any leading '*'.
             if let Some(rest) = t.strip_suffix(';') {
                 let parts: Vec<&str> = rest.split_whitespace().collect();
-                if parts.len() == 2
-                    && (parts[0] == "int" || parts[0] == "long" || parts[0] == "bool"
-                        || parts[0] == "byte" || parts[0] == "short")
-                    && parts[1].starts_with("uVar")
-                {
-                    decl_indices.push((i, parts[1].to_string()));
+                if !parts.is_empty() {
+                    let last = parts[parts.len() - 1];
+                    let name = last.trim_start_matches('*');
+                    let type_first = parts[0];
+                    let type_ok = parts.len() == 2
+                        && (type_first == "int"
+                            || type_first == "long"
+                            || type_first == "bool"
+                            || type_first == "byte"
+                            || type_first == "short"
+                            || type_first.starts_with("undefined"))
+                        || (parts.len() == 3
+                            && (type_first == "char"
+                                || type_first == "int"
+                                || type_first == "long"
+                                || type_first == "void"
+                                || type_first == "undefined8"
+                                || type_first == "undefined4"
+                                || type_first == "undefined2"
+                                || type_first == "undefined")
+                            && parts[1] == "*");
+                    if type_ok && name.starts_with("uVar") {
+                        decl_indices.push((i, name.to_string()));
+                    }
                 }
             }
         }

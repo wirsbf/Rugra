@@ -700,6 +700,29 @@ impl Architecture {
         self.types = Some(tf);
     }
 
+    // RUGRA-GLUE: ensure_types (no Ghidra counterpart found)
+    /// Install the process-canonical TypeFactory if none is set, then return
+    /// the active handle. Ghidra's Architecture always owns exactly one
+    /// `TypeFactory` (`TypeFactory::TypeFactory(Architecture*)`,
+    /// type.cc:3106); Rugra's `types` is optional until the compiler-spec
+    /// ingestion chain lands (CSPEC-TEXT-INGEST-0001), so this borrows the
+    /// canonical headless-oracle factory (`TypeFactory::shared_default`,
+    /// DataOrg flavor) as the stand-in. TYPE-WIRING-0001 production wiring:
+    /// after `fd.set_arch(arch)` (or before VarnodeBank use), call
+    /// `arch.ensure_types()` and `fd.vbank.set_type_factory(handle)` so every
+    /// varnode/symbol unknown type resolves the same factory the printer and
+    /// varmap observe.
+    pub fn ensure_types(
+        &mut self,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>> {
+        if let Some(existing) = &self.types {
+            return existing.clone();
+        }
+        let canonical = crate::type_system::typefactory::TypeFactory::shared_default();
+        self.types = Some(canonical.clone());
+        canonical
+    }
+
     // RUGRA-GLUE: set_userops (no Ghidra counterpart found)
     /// Set the userop manager.
     pub fn set_userops(&mut self, uo: std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>) {

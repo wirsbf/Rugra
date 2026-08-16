@@ -178,4 +178,31 @@ Consequences, registered under `TYPEFACTORY-UNDEFNAME-0001`:
   `unknown_datatype`, `TYPE-UNKNOWN-0001`) still produces `xunknown{size}`
   names and is out of this change's write-set.
 
+## 2026-08-16 TYPE-WIRING-0001
+
+The dual-track unknown typing is closed: `VarnodeBank`'s bank-local
+`xunknown{size}` adapter no longer exists, so every production Varnode /
+RangeHint / symbol unknown type now resolves through a `TypeFactory`.
+
+- `TypeFactory::shared_default()` (`typefactory.rs`) models the locked
+  headless oracle's single Architecture: Ghidra builds exactly one
+  `TypeFactory` per `Architecture` (`TypeFactory::TypeFactory(Architecture*)`,
+  `type.cc:3106-3119`) and the headless oracle runs one Architecture per
+  process. Production Rugra `Funcdata` does not yet carry an attached
+  Architecture (`FUNCPROTO-MODEL-BIND-0001` chain), so factory-less callers
+  resolve this process-wide DataOrg-flavor canonical instance. An explicitly
+  injected handle (`VarnodeBank::set_type_factory`, `fd.arch.types` in
+  `ScopeLocal::restructure_varnode`) always wins, reproducing Ghidra's
+  per-Architecture channel.
+- `TypeFactory::concretize` now routes its TYPE_CODE→unknown substitution
+  through `get_base(1, TYPE_UNKNOWN)` (`type.cc:4147`) instead of minting a
+  fresh `undefined1` object; repeated calls return the same factory `Arc`,
+  and the RUGRA-GLUE `deconcretize` inverse still recognizes the core
+  `undefined1` spelling.
+- Residual: Ghidra's `ScopeLocal::createEntry` wraps multi-element symbols
+  via `glb->types->getTypeArray` (`varmap.cc:625`); Rust has no
+  `TypeFactory::getTypeArray` yet, so the array shell is still built locally
+  around the factory-owned element type (factory array dedup identity
+  remains unproved).
+
 

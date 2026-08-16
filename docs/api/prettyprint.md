@@ -288,3 +288,12 @@ Emitter that discards all output (used for discovery pass)
   （printc.cc:73-77 ptr_expr spacing=0）。
 - 锁定 fixture `tests/oracle/printc_format_1204`（cover_rebuild 模式，
   pinned base=a51e0c5）：六 case 双侧逐字节 MATCH。
+
+### 2026-08-16：声明识别白名单扩展（TYPE-WIRING 配套）
+
+`flush_func_remove_unused` 的声明匹配从 `type uVarN;` 扩展到指针形
+（`char *uVarN;` / `void *uVarN;` / `undefinedN *uVarN;` 三 token 形），
+变量名取尾部 token 去前导 `*`——与 printc 的 ptr_expr join
+（printc.cc:73-77）两种拼写一致。避免符号驱动声明落地后指针形被误判
+missing 而合成重复 `int uVarN;`（numbering 残差机制见
+PRINTC-LEGACY-DECL-DUP-0001）。
