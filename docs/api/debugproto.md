@@ -94,3 +94,14 @@ globals of the curl fixture (`config`, `save`, `beenhere`, `glob_buffer`,
 pattern URLPattern[9] @80, size int @296) and the `&global` pointer map.
 This is useful regression evidence, but it is not a Ghidra DWARF-analyzer
 oracle fixture; the importer remains `NO_ORACLE` under mechanism B2.
+
+#### 会话状态（2026-08-16）
+本 session 在此文件对应的 `src/debugproto.rs` 上落地了
+`CALLSPEC-DRIVER-0001`（`LibcSignatureTable` 24 条 glibc ABI 签名 + 按入口地址
+解析调用目标）与 DWARF 全局变量类型图（`address_pointer_map` 投影，见上文
+`DWARF-TYPE-IMPORT-0001` 段落）。两者均为 front-end 适配层：Ghidra 对应行为
+发生在 Program 数据库与 analyzer 侧，decompile/cpp 内无逐行对应物，因此标注为
+`RUGRA-GLUE` 类桥接，不参与机制 C 核心白名单。端到端效果由
+`result/curl_cur.c` 对 `tests/golden/ghidra_curl_1204.c` 的差分门禁回归
+（`FUN_0` → `free`/`strdup` 调用解析与全局类型指针化在本 session 达到
+byte-stable）。

@@ -1269,6 +1269,534 @@
      "tools/run_scope_sync_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "varnode_init_1204",
+   "description": "Varnode constructor and VarnodeBank transition observations",
+   "runner": [
+    "tools/run_varnode_init_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/varnode_init_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/varnode_init_1204.cc",
+     "rust_fixture": "tests/oracle/varnode_init_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_varnode_init_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varnode.rs",
+     "tests/oracle/varnode_init_1204.*",
+     "tools/run_varnode_init_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "seqnum_identity_1204",
+   "description": "SeqNum identity and ordering observations",
+   "runner": [
+    "tools/run_seqnum_identity_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/seqnum_identity_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/seqnum_identity_1204.cc",
+     "rust_fixture": "tests/oracle/seqnum_identity_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_seqnum_identity_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varnode.rs",
+     "tests/oracle/seqnum_identity_1204.*",
+     "tools/run_seqnum_identity_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "type_unknown_1204",
+   "description": "TYPE_UNKNOWN base type resolution observations",
+   "runner": [
+    "tools/run_type_unknown_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/type_unknown_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/type_unknown_1204.cc",
+     "rust_fixture": "tests/oracle/type_unknown_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_type_unknown_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/type_system/datatype.rs",
+     "tests/oracle/type_unknown_1204.*",
+     "tools/run_type_unknown_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "varmap_gather_offset_1204",
+   "description": "AliasChecker::gatherOffset 8-byte calc_mask boundary observations",
+   "runner": [
+    "tools/run_varmap_gather_offset_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/varmap_gather_offset_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/varmap_gather_offset_1204.cc",
+     "rust_fixture": "tests/oracle/varmap_gather_offset_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_varmap_gather_offset_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varmap.rs",
+     "tests/oracle/varmap_gather_offset_1204.*",
+     "tools/run_varmap_gather_offset_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "block_entry_1204",
+   "description": "FlowInfo::generateBlocks entry block identity and ordered edge observations",
+   "runner": [
+    "tools/run_block_entry_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/block_entry_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/block_entry_1204.cc",
+     "rust_fixture": "tests/oracle/block_entry_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_block_entry_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/flow.rs",
+     "tests/oracle/block_entry_1204.*",
+     "tools/run_block_entry_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "flow_target_boundary_1204",
+   "description": "FlowInfo fallthru boundary visited-join STARTBASIC observations",
+   "runner": [
+    "tools/run_flow_target_boundary_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/flow_target_boundary_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/flow_target_boundary_1204.cc",
+     "rust_fixture": "tests/oracle/flow_target_boundary_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_flow_target_boundary_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/flow.rs",
+     "tests/oracle/flow_target_boundary_1204.*",
+     "tools/run_flow_target_boundary_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "op_insert_1204",
+   "description": "Funcdata::opInsert* PcodeOpBank and BlockBasic atomic update observations",
+   "runner": [
+    "tools/run_op_insert_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/op_insert_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/op_insert_1204.cc",
+     "rust_fixture": "tests/oracle/op_insert_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_op_insert_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/funcdata.rs",
+     "tests/oracle/op_insert_1204.*",
+     "tools/run_op_insert_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "action_perform_1204",
+   "description": "Action reset/perform group and root execution observations",
+   "runner": [
+    "tools/run_action_perform_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/action_perform_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/action_perform_1204.cc",
+     "rust_fixture": "tests/oracle/action_perform_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_action_perform_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/action.rs",
+     "tests/oracle/action_perform_1204.*",
+     "tools/run_action_perform_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "pipeline_lifecycle_1204",
+   "description": "Pipeline lifecycle state transitions across action groups",
+   "runner": [
+    "tools/run_pipeline_lifecycle_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/pipeline_lifecycle_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/pipeline_lifecycle_1204.cc",
+     "rust_fixture": "tests/oracle/pipeline_lifecycle_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_pipeline_lifecycle_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/action.rs",
+     "tests/oracle/pipeline_lifecycle_1204.*",
+     "tools/run_pipeline_lifecycle_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "action_leaf_count_1204",
+   "description": "ActionPool apply/count observation schema across rules",
+   "runner": [
+    "tools/run_action_leaf_count_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/action_leaf_count_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/action_leaf_count_1204.cc",
+     "rust_fixture": "tests/oracle/action_leaf_count_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_action_leaf_count_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/action.rs",
+     "tests/oracle/action_leaf_count_1204.*",
+     "tools/run_action_leaf_count_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "action_opcode_redispatch_1204",
+   "description": "ActionPool::processOp per-rule opcode/dead redispatch and architecture diagnostics",
+   "runner": [
+    "tools/run_action_opcode_redispatch_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/action_opcode_redispatch_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/action_opcode_redispatch_1204.cc",
+     "rust_fixture": "tests/oracle/action_opcode_redispatch_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_action_opcode_redispatch_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/action.rs",
+     "src/arch.rs",
+     "tests/oracle/action_opcode_redispatch_1204.*",
+     "tools/run_action_opcode_redispatch_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "action_deadcode_selfloop_1204",
+   "description": "ActionDeadCode self-loop removal with code cover observations",
+   "runner": [
+    "tools/run_action_deadcode_selfloop_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/action_deadcode_selfloop_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/action_deadcode_selfloop_1204.cc",
+     "rust_fixture": "tests/oracle/action_deadcode_selfloop_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_action_deadcode_selfloop_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/action.rs",
+     "tests/oracle/action_deadcode_selfloop_1204.*",
+     "tools/run_action_deadcode_selfloop_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "rule_collect_terms_1204",
+   "description": "RuleCollectTerms term collection observations",
+   "runner": [
+    "tools/run_rule_collect_terms_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/rule_collect_terms_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/rule_collect_terms_1204.cc",
+     "rust_fixture": "tests/oracle/rule_collect_terms_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_rule_collect_terms_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/ruleaction.rs",
+     "tests/oracle/rule_collect_terms_1204.*",
+     "tools/run_rule_collect_terms_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "rule_multi_collapse_1204",
+   "description": "RuleMultiCollapse collapse observations",
+   "runner": [
+    "tools/run_rule_multi_collapse_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/rule_multi_collapse_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/rule_multi_collapse_1204.cc",
+     "rust_fixture": "tests/oracle/rule_multi_collapse_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_rule_multi_collapse_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/ruleaction.rs",
+     "tests/oracle/rule_multi_collapse_1204.*",
+     "tools/run_rule_multi_collapse_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "scope_category_1204",
+   "description": "Scope category-0 storage operations",
+   "runner": [
+    "tools/run_scope_category_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/scope_category_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/scope_category_1204.cc",
+     "rust_fixture": "tests/oracle/scope_category_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_scope_category_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/database.rs",
+     "tests/oracle/scope_category_1204.*",
+     "tools/run_scope_category_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "cspec_param_model_1204",
+   "description": "ProtoModel parameter effect model observations",
+   "runner": [
+    "tools/run_cspec_param_model_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/cspec_param_model_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/cspec_param_model_1204.cc",
+     "rust_fixture": "tests/oracle/cspec_param_model_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_cspec_param_model_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/fspec.rs",
+     "tests/oracle/cspec_param_model_1204.*",
+     "tools/run_cspec_param_model_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "funcproto_effect_model_1204",
+   "description": "FuncProto effect record model observations",
+   "runner": [
+    "tools/run_funcproto_effect_model_oracle.sh"
+   ],
+   "timeout_seconds": 600,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/funcproto_effect_model_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/funcproto_effect_model_1204.cc",
+     "rust_fixture": "tests/oracle/funcproto_effect_model_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_funcproto_effect_model_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/funcdata.rs",
+     "tests/oracle/funcproto_effect_model_1204.*",
+     "tools/run_funcproto_effect_model_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }
