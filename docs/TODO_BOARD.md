@@ -2,7 +2,27 @@
 
 本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
 
-## 活跃 wave：`W-2026-08-13-QUALITY` — GetStr 首差异驱动的高扇出修复
+## 活跃 wave：`W-2026-08-16-SESSION-CLOSE`（暂停快照）
+
+> 2026-08-16 23:20 暂停。上一活跃 wave `W-2026-08-13-QUALITY` 的地基部分已收官（heritage 四链 +
+> typed-decl 链全部 APPROVE）。恢复时从下方"恢复队列"最上一行继续。
+
+### 恢复队列（按优先级）
+
+1. `PRINTC-LEGACY-DECL-DUP-0001`（P1，IN_PROGRESS，owner legacy_decl_dup_wave）— 消最后 20 处
+   numbering；agent 中断于 src/prettyprint.rs 三遗留 pass 旁路修法（工作树有其 WIP，恢复时先
+   `git diff src/prettyprint.rs` 评估后继续或重派）。
+2. `PRINTC-SCOPE-RESTRUCT-0001`（链④）— 移除打印期 scope 重建，使 SCOPE-SYNC 的 updateType
+   投影在 E2E 显形（GetStr 类 in_RBX→char* 方向）。
+3. `HELPF-NONFREE-NORMALIZE-0001`（P1）+ main churn 复验 — DRIVER-SWITCH 后两处登记域。
+4. `FUNCPROTO-MODEL-BIND-0001` / `CSPEC-TEXT-INGEST-0001` 链 — 351 WARN 与 INDIRECT 风暴的上游。
+5. `SCOPE-FINDOVERLAP-KEY-0001`（F1）/ F2 动态守卫 / F3 warning — SCOPE-SYNC 补复核三条件。
+6. `ACTIONTYPEINFER-VTYPE-0001`（新登记需求）— 38af1fd 后 ActionTypeInfer 的 v_type.is_none()
+   门失效致 funcdata 两测试失败（预存，非回归）。
+
+### 下一 wave 候选（未认领）
+PIPE-MERGETYPE-ORDER 已 DONE；BLOCK-INDEX-WIRE / RAW-OPINSERT / SETALLINPUT /
+PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND 等见下方表格。
 
 **锁定 oracle**：Ghidra 12.0.4 / `Ghidra_12.0.4_build` /
 `e40ed13014025f82488b1f8f7bca566894ac376b`。
@@ -777,7 +797,7 @@
 | `HERITAGE-RAW-OPINSERT-0001` | P2 | READY | unassigned | 三处 heritage 插入点经 op_insert_before 的 INDIRECT 回退 vs oracle 裸 opInsert | `src/heritage.rs`, `src/funcdata.rs`, docs | ADT 三轮复核 R1：cc:294/546/602 全用裸 opInsert（funcdata_op.cc:150-159），Rust 走 opInsertBefore 的前导 INDIRECT 组回退（funcdata_op.cc:351-362）——锚前驱为存活 INDIRECT 时（混合尺寸 guard 组+死 target）插入位分叉；UNTESTED 角落；修法=元素定位+裸 op_insert 原语（约 4 行）+判别 fixture | 2026-08-16 |
 | `OP-SETALLINPUT-TRUNCATE-0001` | P3 | READY | unassigned | opSetAllInput 截断为 2 输入 vs Rust stale inrefs[2..] | `src/funcdata.rs`, `src/op.rs`, docs | ADT 三轮复核 R2：funcdata_op.cc:280 setNumInputs(2)；>2 输入 ME 标记转换后 Rust 残留 stale 输入；fixture ME 均 2 输入未暴露 | 2026-08-16 |
 | `SPACE-PRINTRAW-WORDSIZE-0001` | P3 | READY | unassigned | printRaw wordsize>1 分支 + addr_size 硬编码 8 | `src/space.rs`, docs | ADT 三轮复核 R3：space.cc:216-221 byteToAddress/+cut 后缀未实现；space.rs:190 addr_size() 恒 8（<4 字节地址空间有差异）；当前闭包不可达 | 2026-08-16 |
-| `PRINTC-LEGACY-DECL-DUP-0001` | P1 | READY | unassigned | 打印层遗留声明组与符号驱动声明重复（uVar20 等 20 处） | `src/prettyprint.rs`, `src/printc.rs`, docs | TYPE-WIRING 复核（2026-08-16）E1+E2：symbol 驱动 emit_local_var_decls 落地后，prettyprint 的 flush_func_remove_unused 合成 `int uVarN;`、backfill_missing_locals、fix_unary_deref char* 重写三个遗留 pass 与之叠加，在 8 函数产生 20 处重复声明（uVar20/uVar18/uVar206 等）+ gcc old-style/K&R 形态。修法=符号声明就绪时旁路这三 pass（或以 symbol 集为准过滤 missing）；验收=numbering 归零+gcc 审计 FAIL<10
+| `PRINTC-LEGACY-DECL-DUP-0001` | P1 | IN_PROGRESS | legacy_decl_dup_wave | 打印层遗留声明组与符号驱动声明重复（uVar20 等 20 处） | `src/prettyprint.rs`, `docs/api/prettyprint.md`, 本 TODO 行（root 指令：printc.rs 域外，判据从 prettyprint 侧探测） | TYPE-WIRING 复核（2026-08-16）E1+E2：symbol 驱动 emit_local_var_decls 落地后，prettyprint 的 flush_func_remove_unused 合成 `int uVarN;`、backfill_missing_locals、fix_unary_deref char* 重写三个遗留 pass 与之叠加，在 8 函数产生 20 处重复声明（uVar20/uVar18/uVar206 等）+ gcc old-style/K&R 形态。修法=符号声明就绪时旁路这三 pass（或以 symbol 集为准过滤 missing）；验收=numbering 归零+gcc 审计 FAIL<10。已认领（2026-08-16），实现中 | 2026-08-16 |
 | `HERITAGE-COLLECT-WRAPAROUND-0001` | P3 | READY | unassigned | collect end 地址回绕钳位（heritage.cc:317-320）未镜像 | `src/heritage.rs`, docs | DRIVER-SWITCH 三轮复核非阻塞观察：oracle endaddr 回绕时 enditer 钳 endLoc(space-highest)；Rust wrapping end 立即 break（空窗口）。实际 heritage offset 不可达，预存非 r2 引入 | 2026-08-16 |
 | `SCOPE-FINDOVERLAP-KEY-0001` | P2 | READY | unassigned | `scope_local_find_overlap` min-start vs oracle 分区单元 owner+EntrySubsort | `src/funcdata.rs`, docs | SCOPE-SYNC 补复核（2026-08-16）F1：Ghidra findOverlap（database.cc:2392+rangemap.hh:411-423）返回包含查询起点的分区单元 owner，同单元 tie 按 EntrySubsort(usepoint)（database.hh:107-135），Rust 用 min-start 真重叠——同空间符号互重叠时分歧（当前生产者不可构造）；实现 rangemap 分区语义+修 commit 注释失准 | 2026-08-16 |
 | `SCOPE-FINDOVERLAP-DYNAMIC-0001` | P3 | READY | unassigned | find_overlap 缺 is_dynamic 守卫 | `src/funcdata.rs`, docs | SCOPE-SYNC 补复核 F2：Ghidra maptable 永不见动态条目（database.cc:1666-1676）；Rugra 动态符号默认 Stack/start=0 会压过一切——当前不可达（linkSymbol 晚于两个 sync 点），加一行守卫+TODO | 2026-08-16 |
