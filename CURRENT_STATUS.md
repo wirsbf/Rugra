@@ -16,9 +16,9 @@
 | 逐字节一致函数 | **50/122** | compare 差分 |
 | gcc 审计 | **103 OK / 19 FAIL**（31cd76c 后：old-style/redeclaration 清零，余为表达式层残差） | audit_syntax |
 | 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
-| oracle fixture | **registry 53 个**（session 新增 40：23 个新 fixture + 17 个存量 orphan 补注册，见 77aede3） | fixture_registry.json |
+| oracle fixture | **registry 58 个**（本轮 +5：scope_fake_input_symbols/xml_text_dom/translate_docstore/scope_find_overlap/cspec_text_ingest） | fixture_registry.json |
 
-### 本 session（2026-08-15~16）落地摘要（89 提交）
+### 本 session（2026-08-15~17）落地摘要
 
 **Heritage 全链收官**（全部机制 C APPROVE，历经 1-4 轮复核）：
 OWNERSHIP(0618b1c) → CALLGUARD(126b56f) → ADT-RENAME(c96f699，含确定性根修 df HashSet) → DRIVER-SWITCH(c309130，canonical 单 pass 生产切换)。
