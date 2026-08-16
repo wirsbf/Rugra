@@ -16,7 +16,7 @@
 | 逐字节一致函数 | **50/122** | compare 差分 |
 | gcc 审计 | **98 OK / 24 FAIL**（old-style 声明为主） | audit_syntax |
 | 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
-| oracle fixture | **registry 36 个**（session 新增 23） | fixture_registry.json |
+| oracle fixture | **registry 53 个**（session 新增 40：23 个新 fixture + 17 个存量 orphan 补注册，见 77aede3） | fixture_registry.json |
 
 ### 本 session（2026-08-15~16）落地摘要（89 提交）
 
