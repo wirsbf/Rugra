@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TRANSLATE-DOCSTORE-UNIFY-0001",
+  "overall_status": "MATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_blobs": {
+      "translate.hh": "9c2eba31db70c12460086b390991b4725f2745338bffdafca1708ae6f95ff063"
+    }
+  },
+  "architecture": "N/A (DocumentStorage contract)",
+  "compiler_spec": "N/A",
+  "analysis_options": "none",
+  "coverage": {
+    "projection": "6 initialize-contract records: empty-store getTag miss message (sleigh.cc:560-561), differently-named tag miss, registered <sleigh> content surfaced verbatim in the open error (sleigh.cc:563-565), same-name registerTag overwrite through initialize (xml.cc:2463-2467), sibling-tag lookup isolation",
+    "initialize_contract_status": "MATCH",
+    "record_counts": {
+      "I": 6,
+      "S": 1
+    }
+  },
+  "residuals": [
+    {
+      "status": "UNTESTED",
+      "area": "successful .sla ingest past the open check",
+      "detail": "sla::FormatDecode ingestStream + Sleigh::decode (sleigh.cc:566-568) belong to the SLEIGH engine tasks; no fixture record registers an openable .sla path, so the path past the ifstream open check is not exercised."
+    },
+    {
+      "status": "UNTESTED",
+      "area": "remaining Translate trait methods",
+      "detail": "Rugra still has no production Translate implementor; register/getRegister/oneInstruction/printAssembly etc. have no oracle observation here and remain NO_ORACLE."
+    }
+  ],
+  "comparand": {
+    "rugra_base_commit": "d64ef9c4178ab91bef41d549dc696ae1f0440c29",
+    "rugra_base_tree": "f1426539764f925a0348737f980fdc9757423317",
+    "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
+    "overlay_paths": [
+      "src/translate.rs",
+      "docs/api/translate.md",
+      "tests/oracle/translate_docstore_1204.cc",
+      "tests/oracle/translate_docstore_1204.rs",
+      "tests/oracle/translate_docstore_1204.metadata.json",
+      "tools/run_translate_docstore_oracle.sh"
+    ],
+    "cpp_fixture_sha256": "76a2ef468842487e1606173dd6f9e5c71ab0043a831908e17c1923156ea31e13",
+    "rust_fixture_sha256": "de3b89c44515912d4afae16b20a7b98f3a4bbaeddb430b4cf9e0f5ebfd775a2e",
+    "translate_rs_sha256": "165c5fc4ad470760b6e6440103f1928fd72c0dea02a28ba5fc249f9151032c11",
+    "translate_doc_sha256": "42b5b08e170dd29ab4b9c995267de0015fc37c9bb05f52a4115cbbedc6266b3f",
+    "runner_sha256": "7e974552d049b3d135ccbccaaa301ab107db3bced3f27df8295e9e862b2702f6",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+  },
+  "build": {
+    "registry_packages": 164
+  },
+  "host_tools": {
+    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "cxx_target": "x86_64-linux-gnu",
+    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "cc_target": "x86_64-linux-gnu",
+    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
+    "make": "GNU Make 4.3",
+    "python": "Python 3.10.12",
+    "git": "git version 2.34.1",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
+  },
+  "locked_capture": {
+    "records": 7,
+    "bytes": 336,
+    "stdout_sha256": "27cd2f07996c893345a07e9b948ae977e9362be637ea6a7f255081e6e69a22f4"
+  }
+}

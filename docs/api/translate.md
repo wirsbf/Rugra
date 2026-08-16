@@ -1,6 +1,6 @@
 # `translate.rs` API Reference
 
-**状态**: 🔧 L2 / `NO_ORACLE`（2026-08-11 ANN-J 注释 bootstrap；源码锚点不等于行为对齐）
+**状态**: 🔧 L2 / `NO_ORACLE`（2026-08-11 ANN-J 注释 bootstrap；源码锚点不等于行为对齐。例外：`Translate::initialize` 的 DocumentStorage 消费契约自 2026-08-16 起由 `translate_docstore_1204` fixture 以锁定 oracle 验证 `MATCH`，其余方法仍 `NO_ORACLE`）
 **源代码路径**: `src/translate.rs`  
 **Ghidra 对应**: `translate.hh` / `translate.cc`（1018 / 1018 行）
 
@@ -254,8 +254,14 @@ The processor translation engine. In Ghidra this inherits from
   add `unique_base`).
 - `fn get_float_format(&self, size: usize) -> Option<&FloatFormat>` —
   translate.cc:979.
-- `fn initialize(&mut self, store: &mut dyn DocumentStorage)` —
-  translate.hh:332 (pure virtual).
+- `fn initialize(&mut self, store: &mut crate::marshal::DocumentStorage)`
+  — translate.hh:332 (pure virtual). The concrete `DocumentStorage`
+  (marshal.rs; xml.cc:2435-2478) is passed by mutable reference exactly like
+  the C++ non-const `DocumentStorage &store` parameter. Implementations
+  consume it via `getTag` (Sleigh reads the `<sleigh>` tag registered by
+  `SleighArchitecture::buildSpecFile`, sleigh_arch.cc:409-417, and throws
+  `LowlevelError("Could not find sleigh tag")` on a miss, sleigh.cc:558-561;
+  GhidraTranslate mirrors this at ghidra_translate.cc:35-41).
 - `fn register_context(&mut self, name, sbit, ebit)` — translate.hh:344
   (default no-op).
 - `fn set_context_default(&mut self, name, val)` — translate.hh:353
@@ -274,16 +280,19 @@ The processor translation engine. In Ghidra this inherits from
 - `fn print_assembly(&mut self, emit: &mut dyn AssemblyEmit, baseaddr) -> i32`
   — translate.hh:442 (the main disassembly entry point).
 
-### DocumentStorage (RUGRA-GLUE)
+### DocumentStorage (unified, TRANSLATE-DOCSTORE-UNIFY-0001)
 
-#### `pub trait DocumentStorage`
-
-Local trait abstraction over Ghidra's `DocumentStorage` (defined in
-`xml.hh`), used only to feed configuration documents into
-[`Translate::initialize`]. Concrete engines adapt their real document store
-to this minimal surface:
-
-- `fn next_document(&mut self) -> Option<String>`.
+`Translate::initialize` consumes the concrete
+`crate::marshal::DocumentStorage` — the 1:1 twin of Ghidra's
+`DocumentStorage` (`xml.hh:258-291`, `xml.cc:2435-2478`) with
+`parse_document` / `open_document` / `register_tag` / `get_tag` (see
+`docs/api/marshal.md`). The former local RUGRA-GLUE trait stub
+(`next_document(&mut self) -> Option<String>`, which had no Ghidra
+counterpart — Ghidra exposes no `nextDocument`) was removed on 2026-08-16.
+Behavior is pinned by the `translate_docstore_1204` oracle fixture: the
+`Sleigh::initialize` DocumentStorage prologue (missing-tag message,
+content-as-path open error, same-name overwrite through `registerTag`,
+name-keyed lookup) is byte-identical against the locked 12.0.4 oracle.
 
 ## 2026-08-11 ANN-J annotation bootstrap
 
@@ -294,10 +303,12 @@ not establish `MATCH` or L3:
   VarnodeData::isContiguous`. The oracle calls the concrete space's
   `isBigEndian()` and `wrapOffset()`; Rugra still depends on its flat
   `AddressSpace` model, so endian/wrap branches remain unproven.
-- `TruncationTag::new`, `AddrSpaceManager::fmt`, `addr_mask_for`,
-  `Translate::manager_mut`, and `DocumentStorage::next_document` are explicit
-  Rust glue. In particular, Ghidra's `DocumentStorage` exposes
-  `parseDocument/openDocument/registerTag/getTag`; it has no `nextDocument`.
+- `TruncationTag::new`, `AddrSpaceManager::fmt`, `addr_mask_for`, and
+  `Translate::manager_mut` are explicit Rust glue. The annotation pass had
+  also listed `DocumentStorage::next_document` as glue; that invented trait
+  stub was removed by TRANSLATE-DOCSTORE-UNIFY-0001 (2026-08-16) in favor of
+  the concrete `marshal::DocumentStorage` (Ghidra's `DocumentStorage` exposes
+  `parseDocument/openDocument/registerTag/getTag`; it has no `nextDocument`).
 - `addr_mask_for` is not `AddrSpace::wrapOffset`: it derives a bit mask from
   Rugra's current address-size accessor and cannot preserve all descriptor and
   signed-remainder semantics.

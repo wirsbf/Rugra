@@ -17,6 +17,10 @@
 //! - [`Translate`] (translate.hh:299) — the processor translation engine itself
 //!   (a subclass of `AddrSpaceManager`).
 //!
+//! `Translate::initialize` takes the concrete `DocumentStorage`
+//! (marshal.rs; xml.hh:258-291) by mutable reference, matching the C++
+//! `initialize(DocumentStorage &store)` (translate.hh:332).
+//!
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/translate.{hh,cc}.
 
@@ -1840,8 +1844,16 @@ pub trait Translate {
     // Ghidra: translate.hh:332 Translate::initialize
     /// Initialize the translator given configuration documents. Faithful to
     /// the pure-virtual `initialize(DocumentStorage &store)`
-    /// (translate.hh:332).
-    fn initialize(&mut self, store: &mut dyn DocumentStorage);
+    /// (translate.hh:332): the concrete `DocumentStorage` (marshal.rs,
+    /// xml.cc:2435-2478) is passed by mutable reference, mirroring the C++
+    /// non-const reference parameter. Implementations consume the store via
+    /// `getTag`: the standalone engine reads the `<sleigh>` tag registered by
+    /// `SleighArchitecture::buildSpecFile` (sleigh_arch.cc:409-417, the tag
+    /// wraps the .sla path) and throws
+    /// `LowlevelError("Could not find sleigh tag")` when absent
+    /// (sleigh.cc:558-561); the Ghidra-coupled engine mirrors this with
+    /// `getTag("sleigh")` (ghidra_translate.cc:35-41).
+    fn initialize(&mut self, store: &mut crate::marshal::DocumentStorage);
 
     // Ghidra: translate.hh:344 Translate::registerContext
     /// Add a new context variable to the model for this processor. Faithful
@@ -1908,20 +1920,15 @@ pub trait Translate {
     fn print_assembly(&mut self, emit: &mut dyn AssemblyEmit, baseaddr: Address) -> i32;
 }
 
-// RUGRA-GLUE: DocumentStorage (Ghidra's DocumentStorage is defined in
-// xml.hh and used only as the configuration-document container handed to
-// Translate::initialize. Rugra defines a local trait stub so the Translate
-// trait can name it without pulling in the full xml/marshal port; concrete
-// engines adapt their real document store to this trait.)
-/// Trait abstraction over Ghidra's `DocumentStorage`, used to feed
-/// configuration documents into [`Translate::initialize`]. Mirrors the
-/// minimal surface `Translate::initialize` actually relies on.
-pub trait DocumentStorage {
-    // RUGRA-GLUE: Iterator-shaped adapter for Rugra's local trait stub; Ghidra
-    // DocumentStorage exposes parse/open/registerTag/getTag, not nextDocument.
-    /// Get the next configuration document, or `None` when exhausted.
-    fn next_document(&mut self) -> Option<String>;
-}
+// ============================================================================
+// DocumentStorage unification note (TRANSLATE-DOCSTORE-UNIFY-0001):
+// Ghidra's `DocumentStorage` is a concrete class declared in xml.hh:258-291
+// and defined in xml.cc:2435-2478 (parseDocument/openDocument/registerTag/
+// getTag). Its 1:1 Rust twin lives in marshal.rs; `Translate::initialize`
+// consumes it directly, exactly like the C++ `DocumentStorage &store`
+// parameter (translate.hh:332). The former iterator-shaped local trait stub
+// (`next_document`) had no Ghidra counterpart and was removed.
+// ============================================================================
 
 // ============================================================================
 // translate.cc:254/281 — construction-period space registration

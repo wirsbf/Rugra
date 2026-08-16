@@ -1859,6 +1859,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "translate_docstore_1204",
+   "description": "Translate::initialize DocumentStorage contract observations",
+   "runner": [
+    "tools/run_translate_docstore_oracle.sh"
+   ],
+   "timeout_seconds": 1200,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/translate_docstore_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/translate_docstore_1204.cc",
+     "rust_fixture": "tests/oracle/translate_docstore_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_translate_docstore_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/translate.rs",
+     "tests/oracle/translate_docstore_1204.*",
+     "tools/run_translate_docstore_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }
