@@ -58,3 +58,22 @@ BUILTIN 常量对齐 userop.cc:30-35。register_builtin_by_id/register_string_co
 ### 2026-07-01（续 2）：SegmentOp::execute + supports_far_pointer
 SegmentOp::execute（userop.cc:218-223）：2输入(base,inner)→(base<<4)+inner；1输入→inner。supports_far_pointer 字段 + has_far_pointer_support()。
 <!-- annotation-pass: 2026-07-04 -->
+
+# 2026-08-16：UserOpManage decode 链（CSPEC-UNIVERSAL-CHILD-0001）
+
+- `UserPcodeOp` 摊平 `InjectedUserOp::injectid`（-1 非 injected）。
+- `SegmentOp` 补 Ghidra 字段：`space_id`（spc）、`baseinsize`/`innerinsize`、
+  `constresolve: Option<VarnodeData>`、`inject_id`。
+- `UserOpManage` 补 `jump_assist_ops` 与 decode 链：
+  `register_user_op`（userop.cc:490：同名异 index `Conflicting indices`、
+  同 index 异名 `User op X has same index as Y`、segmentop 同空间
+  `Multiple segmentops defined for same space`）、
+  `decode_call_other_fixup`（cc:589+cc:85：decodeInject 先注册库 payload、
+  再查 Unspecialized userop，错误 `Unknown userop name in <callotherfixup>`/
+  `<callotherfixup> overloads userop with another purpose`）、
+  `decode_segment_op`（cc:533+cc:225）、`decode_jump_assist`（cc:606+cc:302）、
+  `decode_volatile`（cc:551：inputop/outputop 必填、functional→flags、
+  重复注册错误逐字）、`read_varnode_attrs`（pcoderaw.cc:33）。
+- `get_op(index)` 补 builtinmap 回落（userop.cc:408-415）。
+对拍：unknown-target 编译后残留/segment 定制/volatile 双探针 MATCH；
+segmentop/jumpassist 已移植无 oracle 观察（UNTESTED）。模块保持 L2。

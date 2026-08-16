@@ -194,3 +194,15 @@ close/open error behavior remain registered residuals.
 - open_element/close_element/peek_element/next_attribute_id/read_*/rewind_attributes。
 - 支持 BOOLEAN/SIGNEDINT_POSITIVE/NEGATIVE/UNSIGNEDINT/STRING 类型解码。
 <!-- annotation-pass: 2026-07-04 -->
+
+# 2026-08-16：XmlDecode 整数属性 hex/octal 自动识别（CSPEC-TEXT-INGEST 复核 F3）
+
+`TreeDecoder` 的 `read_unsigned_integer`/`read_unsigned_integer_attr`/
+`read_signed_integer`/`read_signed_integer_attr` 原为十进制-only
+`.parse()`，与 Ghidra `XmlDecode` 经 `istringstream` `unsetf(dec|hex|oct)`
+的自动进制识别不符（生产 cspec `<localrange>` 的 `0x…` hex 偏移会被解为
+0）。现按 marshal.cc:296-330/353-381 语义实现 `cpp_stream_unsigned`/
+`cpp_stream_signed`（前导空白跳过、可选符号、`0x`/`0X` hex、前导 `0`
+八进制、最长合法前缀、无数字→0=流失败初值、溢出饱和），四个函数标注
+改为 `// Ghidra: marshal.cc:<line> XmlDecode::read…`（原 RUGRA-GLUE 注释
+不实）。新增单元测试 `test_cpp_stream_integer_bases`。

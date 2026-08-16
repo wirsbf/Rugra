@@ -14,11 +14,122 @@
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/architecture.{hh,cc}.
 
-use crate::address::{Range, RangeList};
+use crate::address::{Range, RangeList, RangeProperties};
 use crate::fspec::{ProtoModelFull, VarnodeData};
 use crate::override_rs::Override;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Language/space queries consumed by the compiler-spec decode chain,
+/// standing in for the `Architecture`'s `AddrSpaceManager` + `Translate`
+/// during `parseCompilerConfig` (space-by-name, per-space highest,
+/// register lookup, overlay enumeration, SLEIGH symbols).  Ghidra reads
+/// these off the Architecture itself; Rugra's `Architecture` does not own
+/// an `AddrSpaceManager` yet, so the parse entry points take this trait.
+pub trait SpecQuery {
+    // Ghidra: sleighbase.cc:133 SleighBase::getRegister (via Translate)
+    /// Resolve a named register to its varnode, or None.
+    fn get_register(&self, name: &str) -> Option<VarnodeData>;
+
+    // Ghidra: translate.cc:590 AddrSpaceManager::getSpaceByName
+    /// Resolve an address space by name, or None.
+    fn space_by_name(&self, name: &str) -> Option<crate::space::AddressSpace>;
+
+    // Ghidra: space.hh:189 AddrSpace::getHighest
+    /// Highest offset addressable in the given space.
+    fn space_highest(&self, spc: crate::space::AddressSpace) -> u64;
+
+    // Ghidra: translate.hh:550 AddrSpaceManager::numSpaces
+    /// Number of address spaces (for the overlay duplication loop of
+    /// `addToGlobalScope`/`addOtherSpace`).  Zero by default: no overlay
+    /// enumeration without a wired space manager.
+    fn num_spaces(&self) -> usize {
+        0
+    }
+
+    // Ghidra: translate.hh:559 AddrSpaceManager::getSpace
+    /// The space at the given index, or None.
+    fn space_at(&self, _i: usize) -> Option<crate::space::AddressSpace> {
+        None
+    }
+
+    // Ghidra: space.hh:165 AddrSpace::isOverlay
+    /// Whether the space is an overlay space.
+    fn is_overlay(&self, _spc: crate::space::AddressSpace) -> bool {
+        false
+    }
+
+    // Ghidra: space.hh:141 AddrSpace::isOverlayBase
+    /// Whether the space is the base of overlay spaces.
+    fn is_overlay_base(&self, _spc: crate::space::AddressSpace) -> bool {
+        false
+    }
+
+    // Ghidra: space.hh:153 AddrSpace::getContain
+    /// The base space an overlay is contained in, or None.
+    fn contain_space(&self, _spc: crate::space::AddressSpace) -> Option<crate::space::AddressSpace> {
+        None
+    }
+
+    // Ghidra: sleigh.hh SleighBase::findSymbol (via PcodeSnippet::lex)
+    /// Resolve a SLEIGH language symbol (registers etc.) by name.
+    fn sleigh_symbol(&self, _name: &str) -> Option<crate::pcodeparse::SleighSymbol> {
+        None
+    }
+
+    // Ghidra: translate.hh:611 Translate::getUniqueStart(Translate::INJECT)
+    /// Unique-space offset where snippet temporaries start
+    /// (`0x200 + unique_base`).
+    fn unique_inject_base(&self) -> u64 {
+        0x200
+    }
+}
+
+/// Residual report produced by `Architecture::parse_compiler_config`.
+/// Every child element the Rust dispatch could not fully decode, every
+/// child the Ghidra oracle itself ignores, and every post-loop step that
+/// depends on other domains is listed here — nothing is silently skipped.
+#[derive(Debug, Default, Clone)]
+pub struct CompilerConfigReport {
+    /// `(child tag, reason/owning TODO)` for children whose full decode
+    /// belongs to another domain.
+    pub skipped_children: Vec<(String, String)>,
+    /// Child tags the Ghidra oracle's own dispatch ignores (no else
+    /// branch in architecture.cc:1249-1305).
+    pub ignored_children: Vec<String>,
+    /// Post-loop steps (initializeSegments, PreferSplitManager,
+    /// setupSizes) that depend on infrastructure outside this slice.
+    pub post_step_residuals: Vec<String>,
+}
+
+// RUGRA-GLUE: find_body_content (Ghidra reads it via readString(ATTRIB_CONTENT))
+/// Extract the character content of the `<body>` child under the LAST
+/// p-code element (`pcode`/`case_pcode`/`addr_pcode`/`default_pcode`/
+/// `size_pcode`) of the given element subtree.  With multiple `<pcode>`
+/// children every one is decoded and the LAST body's text survives in the
+/// payload parsestring (decodeBody overwrites per iteration), so the last
+/// match is what the subsequent compile consumes.  Ghidra's
+/// `XmlDecode::readString(ATTRIB_CONTENT)` (marshal.cc:390-395) reads the
+/// element content field directly; Rugra's `TreeDecoder` cannot surface it
+/// through the `Decoder` trait, so the paired DOM handle provides it.
+fn find_body_content(element: &std::sync::Arc<std::sync::RwLock<crate::marshal::Element>>) -> Option<String> {
+    const PCODE_TAGS: [&str; 5] = ["pcode", "case_pcode", "addr_pcode", "default_pcode", "size_pcode"];
+    let el = element.read().expect("element lock poisoned");
+    let mut result = None;
+    for pcode in &el.children {
+        let pcode_el = pcode.read().expect("element lock poisoned");
+        if !PCODE_TAGS.contains(&pcode_el.name.as_str()) {
+            continue;
+        }
+        for body in &pcode_el.children {
+            let body_el = body.read().expect("element lock poisoned");
+            if body_el.name == "body" {
+                result = Some(body_el.content.clone());
+            }
+        }
+    }
+    result
+}
 
 /// FlowInfo option bit: error on too many instructions. Faithful to
 /// `FlowInfo::error_toomanyinstructions` (used in resetDefaultsInternal).
@@ -261,10 +372,33 @@ pub struct Architecture {
     /// Shared default prototype model.  This is pointer-identical to the entry
     /// in `proto_models`, matching `Architecture::defaultfp`.
     pub defaultfp: Option<Arc<ProtoModelFull>>,
+    /// Default storage location of the return address (for the current
+    /// function).  Faithful to `defaultReturnAddr`
+    /// (architecture.hh:194); `None` mirrors the constructor's
+    /// `space == (AddrSpace *)0` sentinel (architecture.cc:159).
+    pub default_return_addr: Option<VarnodeData>,
     /// Name of the model to use when evaluating the current function.
     pub evalfp_current_name: Option<String>,
     /// Name of the model to use when evaluating called functions.
     pub evalfp_called_name: Option<String>,
+    /// Model used when evaluating the current function.  Faithful to
+    /// `evalfp_current` (architecture.hh:195); identity-shared with the
+    /// `proto_models` entry.
+    pub evalfp_current: Option<Arc<ProtoModelFull>>,
+    /// Model used when evaluating called functions.  Faithful to
+    /// `evalfp_called` (architecture.hh:196).
+    pub evalfp_called: Option<Arc<ProtoModelFull>>,
+    /// Set of address spaces in which a pointer constant is inferable.
+    /// Faithful to `inferPtrSpaces` (architecture.hh:182); appended by
+    /// `addToGlobalScope` (architecture.cc:832).
+    pub infer_ptr_spaces: Vec<crate::space::AddressSpace>,
+    /// The `(space, first, last)` triples applied to the global scope by
+    /// the deferred `<global>` loop and `addOtherSpace`
+    /// (architecture.cc:1332-1335), in application order.  Rugra's
+    /// `Database` scope range tree is not space-keyed yet, so the applied
+    /// triples are recorded here (registered residual
+    /// CSPEC-GLOBAL-APPLY-0001 for the Database-side application).
+    pub global_scope_ranges: Vec<(crate::space::AddressSpace, u64, u64)>,
     /// Ranges for which high-level pointers are not possible. Faithful to
     /// `nohighptr`.
     pub nohighptr: RangeList,
@@ -286,6 +420,9 @@ pub struct Architecture {
     pub types: Option<std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>>,
     /// User-defined op manager (faithful to Architecture `userops`). Optional.
     pub userops: Option<std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>>,
+    /// P-code injection manager.  Faithful to `pcodeinjectlib`
+    /// (architecture.hh:200).
+    pub pcodeinjectlib: Option<std::sync::Arc<std::sync::RwLock<crate::pcodeinject::PcodeInjectLibrary>>>,
     /// Join record database (translate.hh AddrSpaceManager joinrecords).
     pub join_db: crate::space::JoinDatabase,
     /// Comment database. Faithful to `commentdb`.
@@ -317,6 +454,10 @@ pub struct Architecture {
     /// True if the stack grows toward negative offsets (x86 convention).
     /// Faithful to cspec `growth="negative"`.
     pub stack_grows_negative: bool,
+    /// True when the `<stackpointer>` element set `reversejustify="yes"`
+    /// (the `setReverseJustified` effect of `addSpacebase`,
+    /// architecture.cc:566-567).
+    pub stack_reverse_justify: bool,
 }
 
 // Manual Debug impl (the `loader` field is `Arc<dyn LoadImage>` without a
@@ -362,8 +503,13 @@ impl Architecture {
             proto_models: ProtoModelMap::new(),
             defaultfp_name: None,
             defaultfp: None,
+            default_return_addr: None,
             evalfp_current_name: None,
             evalfp_called_name: None,
+            evalfp_current: None,
+            evalfp_called: None,
+            infer_ptr_spaces: Vec::new(),
+            global_scope_ranges: Vec::new(),
             nohighptr: RangeList::new(),
             overrides: Override::new(),
             loadersymbols_parsed: false,
@@ -372,6 +518,7 @@ impl Architecture {
             type_factory_name: None,
             types: None,
             userops: None,
+            pcodeinjectlib: None,
             join_db: crate::space::JoinDatabase::new(),
             commentdb: None,
             string_manager: None,
@@ -385,6 +532,7 @@ impl Architecture {
             stack_pointer_offset: 0x20, // x86-64 RSP
             stack_pointer_size: 8,
             stack_grows_negative: true,
+            stack_reverse_justify: false,
         };
         arch.reset_defaults_internal();
         arch
@@ -466,13 +614,41 @@ impl Architecture {
         addr_size: usize,
         register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
     ) -> Result<Arc<ProtoModelFull>, String> {
+        self.decode_proto_common(decoder, addr_size, register_resolver, None)
+    }
+
+    // Ghidra: architecture.cc:741 Architecture::decodeProto
+    /// The `parseCompilerConfig` path of `decodeProto`: the Architecture's
+    /// `defaultReturnAddr` (set by a preceding `<returnaddress>` element)
+    /// is injected into models that lack their own `<returnaddress>`
+    /// (fspec.cc:2689-2691), exactly like Ghidra reading `glb` state at
+    /// model-decode time.
+    pub fn decode_proto_spec(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        addr_size: usize,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<Arc<ProtoModelFull>, String> {
+        let default_return = self.default_return_addr.clone();
+        self.decode_proto_common(decoder, addr_size, register_resolver, default_return.as_ref())
+    }
+
+    // Ghidra: architecture.cc:741 Architecture::decodeProto
+    /// Shared decode core for both entry points.
+    fn decode_proto_common(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        addr_size: usize,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+        default_return_addr: Option<&VarnodeData>,
+    ) -> Result<Arc<ProtoModelFull>, String> {
         let sub_id = decoder.peek_element();
         let sub_name = decoder.element_name(sub_id).unwrap_or_default();
         if sub_name != "prototype" {
             return Err("Expecting <prototype> or <resolveprototype> tag".to_string());
         }
         let mut model = ProtoModelFull::new(Some(self.stack_space), addr_size);
-        let name = model.decode_with_register_resolver(
+        let name = model.decode_with_defaults(
             decoder,
             Some(self.stack_space),
             addr_size,
@@ -480,6 +656,7 @@ impl Architecture {
             None,
             None,
             register_resolver,
+            default_return_addr,
         )?;
         if self.proto_models.contains_key(&name) {
             return Err(format!("Duplicate ProtoModel name: {name}"));
@@ -498,12 +675,41 @@ impl Architecture {
         addr_size: usize,
         register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
     ) -> Result<(), String> {
+        self.decode_default_proto_common(decoder, addr_size, register_resolver, false)
+    }
+
+    // Ghidra: architecture.cc:795 Architecture::decodeDefaultProto
+    /// The `parseCompilerConfig` path of `decodeDefaultProto`, injecting
+    /// the Architecture default return address into the models.
+    pub fn decode_default_proto_spec(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        addr_size: usize,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<(), String> {
+        self.decode_default_proto_common(decoder, addr_size, register_resolver, true)
+    }
+
+    // Ghidra: architecture.cc:795 Architecture::decodeDefaultProto
+    /// Shared decode core for both entry points.
+    fn decode_default_proto_common(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        addr_size: usize,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+        with_default_return: bool,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
         let elem_id = decoder.open_element();
         while decoder.peek_element() != 0 {
             if self.defaultfp.is_some() {
                 return Err("More than one default prototype model".to_string());
             }
-            let model = self.decode_proto(decoder, addr_size, register_resolver)?;
+            let model = if with_default_return {
+                self.decode_proto_spec(decoder, addr_size, register_resolver)?
+            } else {
+                self.decode_proto(decoder, addr_size, register_resolver)?
+            };
             let name = model.get_name().to_string();
             self.set_default_model(&name);
         }
@@ -515,6 +721,835 @@ impl Architecture {
     /// Retrieve the selected shared default model.
     pub fn get_default_model(&self) -> Option<&Arc<ProtoModelFull>> {
         self.defaultfp.as_ref()
+    }
+
+    // Ghidra: architecture.cc:812 Architecture::decodeGlobal
+    /// Parse a `<global>` element for child `<range>` elements that will be
+    /// added to the global scope.  Ranges are stored in partial form so
+    /// that elements can be parsed before all address spaces exist.
+    /// Faithful to `decodeGlobal` (architecture.cc:812-821): children are
+    /// collected in document order; a failing child aborts the collection
+    /// with the partial vector handed back to the caller (the earlier
+    /// directly-applied model/stack/inject state stays applied).
+    pub fn decode_global(
+        decoder: &mut dyn crate::marshal::Decoder,
+        range_props: &mut Vec<RangeProperties>,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+        while decoder.peek_element() != 0 {
+            range_props.push(RangeProperties::new());
+            RangeProperties::decode(range_props.last_mut().expect("just pushed"), decoder)
+                .map_err(|e| e.to_string())?;
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: address.cc:236 Range::Range(const RangeProperties &,const AddrSpaceManager *)
+    /// Resolve partially parsed range properties against the language.
+    /// Faithful to the `Range` constructor (address.cc:236-260): a register
+    /// range spans the named register varnode (`last = first-1+size`), a
+    /// space range defaults `last` to the space's highest offset, and an
+    /// out-of-bounds or reversed range throws `Illegal range tag`.
+    fn range_from_properties(
+        props: &RangeProperties,
+        host: &dyn SpecQuery,
+    ) -> Result<(crate::space::AddressSpace, u64, u64), String> {
+        if props.is_register {
+            let point = host
+                .get_register(&props.space_name)
+                .ok_or_else(|| format!("Unknown register name: {}", props.space_name))?;
+            let first = point.offset;
+            let last = (first.wrapping_sub(1)).wrapping_add(point.size as u64);
+            return Ok((point.space, first, last));
+        }
+        let spc = host
+            .space_by_name(&props.space_name)
+            .ok_or_else(|| format!("Undefined space: {}", props.space_name))?;
+        let highest = host.space_highest(spc);
+        let first = props.first;
+        let mut last = props.last;
+        if !props.seen_last {
+            last = highest;
+        }
+        if first > highest || last > highest || last < first {
+            return Err("Illegal range tag".to_string());
+        }
+        Ok((spc, first, last))
+    }
+
+    // Ghidra: architecture.cc:826 Architecture::addToGlobalScope
+    /// Add a memory range parsed from a `<global>` tag to the global scope.
+    /// Varnodes in this region will be assumed to be global variables.
+    /// Faithful to `addToGlobalScope` (architecture.cc:826-844): the space
+    /// is appended to `inferPtrSpaces` and the range is applied to the
+    /// global scope; when the space is an overlay base the range is
+    /// duplicated into every overlay space contained in it.  Rugra's
+    /// `Database` scope range tree is not space-keyed yet, so the applied
+    /// (space, first, last) triples are recorded in source order on the
+    /// Architecture (`global_scope_ranges`) — registered residual
+    /// CSPEC-GLOBAL-APPLY-0001 for the Database-side application.
+    pub fn add_to_global_scope(
+        &mut self,
+        props: &RangeProperties,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        let (spc, first, last) = Self::range_from_properties(props, host)?;
+        self.infer_ptr_spaces.push(spc);
+        self.global_scope_ranges.push((spc, first, last));
+        if host.is_overlay_base(spc) {
+            // We need to duplicate the range being marked as global into
+            // the overlay space(s)
+            let num = host.num_spaces();
+            for i in 0..num {
+                let Some(ospc) = host.space_at(i) else { continue };
+                if !host.is_overlay(ospc) {
+                    continue;
+                }
+                if host.contain_space(ospc) != Some(spc) {
+                    continue;
+                }
+                self.global_scope_ranges.push((ospc, first, last));
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:847 Architecture::addOtherSpace
+    /// Explicitly add the OTHER space and any overlays to the global scope.
+    /// Faithful to `addOtherSpace` (architecture.cc:847-862).
+    pub fn add_other_space(&mut self, host: &dyn SpecQuery) -> Result<(), String> {
+        let Some(other_space) = host.space_by_name("other") else {
+            return Err("Undefined space: other".to_string());
+        };
+        let highest = host.space_highest(other_space);
+        self.global_scope_ranges.push((other_space, 0, highest));
+        if host.is_overlay_base(other_space) {
+            let num = host.num_spaces();
+            for i in 0..num {
+                let Some(ospc) = host.space_at(i) else { continue };
+                if !host.is_overlay(ospc) {
+                    continue;
+                }
+                if host.contain_space(ospc) != Some(other_space) {
+                    continue;
+                }
+                self.global_scope_ranges.push((ospc, 0, highest));
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:898 Architecture::decodeReturnAddress
+    /// Apply information from a `<returnaddress>` element and set the
+    /// default storage location for the return address of a function.
+    /// Faithful to `decodeReturnAddress` (architecture.cc:898-909): the
+    /// child is optional but a second `<returnaddress>` tag after the
+    /// default was set throws `Multiple <returnaddress> tags in .cspec`.
+    pub fn decode_return_address(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+        let sub_id = decoder.peek_element();
+        if sub_id != 0 {
+            if self.default_return_addr.is_some() {
+                return Err("Multiple <returnaddress> tags in .cspec".to_string());
+            }
+            // VarnodeData::decode (pcoderaw.cc:23) + decodeFromAttributes
+            // (pcoderaw.cc:33-55): `space` starts null and is only set by a
+            // `space` or `name` attribute — an attribute-less `<varnode/>`
+            // decodes to the null-space sentinel, so the member overwrite
+            // leaves the default return address UNSET (the cc:904 guard and
+            // the fspec.cc:2689 injection both treat it as unset).
+            let child = decoder.open_element();
+            let mut space: Option<crate::space::AddressSpace> = None;
+            let mut offset = 0u64;
+            let mut size = 0i32;
+            let mut register_name: Option<String> = None;
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                match decoder.attribute_name(attrib_id).as_deref() {
+                    Some("space") => {
+                        let space_name = decoder.read_string();
+                        space = Some(
+                            host.space_by_name(&space_name)
+                                .ok_or_else(|| format!("Undefined space: {}", space_name))?,
+                        );
+                    }
+                    Some("offset") => offset = decoder.read_unsigned_integer(),
+                    Some("size") => size = decoder.read_unsigned_integer() as i32,
+                    Some("name") => register_name = Some(decoder.read_string()),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            decoder.close_element(child);
+            // The member is overwritten unconditionally, mirroring the
+            // struct assignment of `defaultReturnAddr.decode(decoder)`.
+            if let Some(name) = register_name {
+                let point = host
+                    .get_register(&name)
+                    .ok_or_else(|| format!("Unknown register name: {}", name))?;
+                self.default_return_addr = Some(point);
+            } else if let Some(space) = space {
+                self.default_return_addr = Some(VarnodeData { space, offset, size });
+            } else {
+                self.default_return_addr = None;
+            }
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:979 Architecture::decodeStackPointer
+    /// Create a stack space and a stack-pointer register from a
+    /// `<stackpointer>` element.  Faithful to `decodeStackPointer`
+    /// (architecture.cc:979-1014): `reversejustify`/`growth`/`space`/
+    /// `register` attributes in source order, the base space attribute is
+    /// mandatory, the register is resolved via the language, and a
+    /// truncated base space truncates the pointer size.  Rugra has no
+    /// dynamic space creation: the decoded values land on the
+    /// `stack_*` fields of the Architecture (the SpacebaseSpace insertion
+    /// is carried by the `stack_space` enum stand-in).
+    pub fn decode_stack_pointer(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+
+        let mut register_name = String::new();
+        let mut stack_growth = true; // Default stack growth is in negative direction
+        let mut is_reverse_justify = false;
+        let mut basespace: Option<crate::space::AddressSpace> = None;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("reversejustify") => is_reverse_justify = decoder.read_bool(),
+                Some("growth") => stack_growth = decoder.read_string() == "negative",
+                Some("space") => {
+                    let space_name = decoder.read_string();
+                    basespace = Some(
+                        host.space_by_name(&space_name)
+                            .ok_or_else(|| format!("Undefined space: {}", space_name))?,
+                    );
+                }
+                Some("register") => register_name = decoder.read_string(),
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+
+        let Some(_base) = basespace else {
+            // ELEM_STACKPOINTER.getName() + " element missing \"space\"
+            // attribute" (architecture.cc:1002) — the element name is the
+            // bare "stackpointer", without angle brackets.
+            return Err("stackpointer element missing \"space\" attribute".to_string());
+        };
+
+        let point = host
+            .get_register(&register_name)
+            .ok_or_else(|| format!("Unknown register name: {}", register_name))?;
+        decoder.close_element(elem_id);
+
+        // If creating a stackpointer to a truncated space, make sure to
+        // truncate the stackpointer.  Rugra's fixed-width spaces are never
+        // truncated, so truncSize stays the register size.
+        let trunc_size = point.size as usize;
+
+        // addSpacebase(basespace,"stack",point,truncSize,
+        //              isreversejustify,stackGrowth,true)
+        self.stack_space = crate::space::AddressSpace::Stack;
+        self.stack_pointer_space = point.space;
+        self.stack_pointer_offset = point.offset;
+        self.stack_pointer_size = trunc_size;
+        self.stack_grows_negative = stack_growth;
+        self.stack_reverse_justify = is_reverse_justify;
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:769 Architecture::decodeProtoEval
+    /// Decode the `<eval_called_prototype>`/`<eval_current_prototype>`
+    /// elements.  Faithful to `decodeProtoEval` (architecture.cc:769-789):
+    /// the named model must already exist and each tag may appear only
+    /// once.
+    pub fn decode_proto_eval(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> Result<(), String> {
+        use crate::marshal::{AttributeId, Decoder};
+        let elem_id = decoder.open_element();
+        let model_name = decoder.read_string_attr(&AttributeId::new("name", 0));
+        let model = self
+            .proto_models
+            .get(&model_name)
+            .cloned()
+            .ok_or_else(|| format!("Unknown prototype model name: {}", model_name))?;
+
+        if decoder.element_name(elem_id).as_deref() == Some("eval_called_prototype") {
+            if self.evalfp_called.is_some() {
+                return Err("Duplicate <eval_called_prototype> tag".to_string());
+            }
+            self.evalfp_called = Some(model.clone());
+            self.evalfp_called_name = Some(model_name);
+        } else {
+            if self.evalfp_current.is_some() {
+                return Err("Duplicate <eval_current_prototype> tag".to_string());
+            }
+            self.evalfp_current = Some(model.clone());
+            self.evalfp_current_name = Some(model_name);
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:1086 Architecture::decodeNoHighPtr
+    /// Configure memory based on a `<nohighptr>` element.  Mark specific
+    /// address ranges to indicate the decompiler will not encounter
+    /// pointers (aliases) into the range.  Faithful to `decodeNoHighPtr`
+    /// (architecture.cc:1086-1096) with the range resolved through the
+    /// same `Range(RangeProperties)` constructor.
+    pub fn decode_no_high_ptr(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+        while decoder.peek_element() != 0 {
+            // Iterate over every range tag in the list
+            let mut props = RangeProperties::new();
+            RangeProperties::decode(&mut props, decoder).map_err(|e| e.to_string())?;
+            let (spc, first, last) = Self::range_from_properties(&props, host)?;
+            let _ = spc;
+            let rng = Range::new(crate::Address::new(first), crate::Address::new(last))
+                .ok_or_else(|| "Illegal range tag".to_string())?;
+            self.add_no_high_ptr(rng);
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:1101 Architecture::decodePreferSplit
+    /// Configure registers based on a `<prefersplit>` element.  Faithful
+    /// to `decodePreferSplit` (architecture.cc:1101-1116): only the
+    /// `inhalf` style is legal and each record's split offset is half its
+    /// storage size.
+    pub fn decode_prefer_split(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::{AttributeId, Decoder};
+        let elem_id = decoder.open_element();
+        let style = decoder.read_string_attr(&AttributeId::new("style", 0));
+        if style != "inhalf" {
+            return Err(format!("Unknown prefersplit style: {}", style));
+        }
+
+        while decoder.peek_element() != 0 {
+            let child = decoder.open_element();
+            let mut register_name: Option<String> = None;
+            let mut space = crate::space::AddressSpace::Register;
+            let mut offset = 0u64;
+            let mut size = 0i32;
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                match decoder.attribute_name(attrib_id).as_deref() {
+                    Some("space") => {
+                        let space_name = decoder.read_string();
+                        space = host
+                            .space_by_name(&space_name)
+                            .ok_or_else(|| format!("Undefined space: {}", space_name))?;
+                    }
+                    Some("offset") => offset = decoder.read_unsigned_integer(),
+                    Some("size") => size = decoder.read_unsigned_integer() as i32,
+                    Some("name") => register_name = Some(decoder.read_string()),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            decoder.close_element(child);
+            if let Some(name) = register_name {
+                let point = host
+                    .get_register(&name)
+                    .ok_or_else(|| format!("Unknown register name: {}", name))?;
+                self.split_records.push(crate::prefersplit::PreferSplitRecord::new(
+                    point.offset,
+                    point.space,
+                    point.size as u32,
+                    point.size / 2,
+                ));
+            } else {
+                self.split_records.push(crate::prefersplit::PreferSplitRecord::new(
+                    offset,
+                    space,
+                    size as u32,
+                    size / 2,
+                ));
+            }
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:1121 Architecture::decodeAggressiveTrim
+    /// Configure, based on the `<aggressivetrim>` element, how aggressively
+    /// the decompiler will remove extension operations.  Faithful to
+    /// `decodeAggressiveTrim` (architecture.cc:1121-1133).
+    pub fn decode_aggressive_trim(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            if decoder.attribute_name(attrib_id).as_deref() == Some("signext") {
+                self.aggressive_ext_trim = decoder.read_bool();
+            } else {
+                let _ = decoder.read_string();
+            }
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:1138 Architecture::createModelAlias
+    /// Create a value-copy alias for a ProtoModel with Ghidra's exact error
+    /// strings: missing parent (`Requesting non-existent prototype model`),
+    /// merged parent (`Cannot make alias of merged model`), alias-of-alias
+    /// (`Cannot make alias of an alias`) and duplicate name (`Duplicate
+    /// ProtoModel name`).  The merged-model check is structurally
+    /// unreachable until `<resolveprototype>`/ProtoModelMerged decode lands
+    /// (CSPEC-PARAMMODEL-0001); the alias-of-alias check reads the copy's
+    /// `compat_model` marker.
+    pub fn create_model_alias_exact(
+        &mut self,
+        alias_name: &str,
+        parent_name: &str,
+    ) -> Result<(), String> {
+        let Some(parent) = self.proto_models.get(parent_name) else {
+            return Err(format!(
+                "Requesting non-existent prototype model: {}",
+                parent_name
+            ));
+        };
+        // Ghidra: model->isMerged() — no merged model can exist before the
+        // resolveprototype decode chain lands.
+        if parent.get_alias_parent_marker().is_some() {
+            return Err(format!("Cannot make alias of an alias: {}", parent_name));
+        }
+        if self.proto_models.contains_key(alias_name) {
+            return Err(format!("Duplicate ProtoModel name: {}", alias_name));
+        }
+        let mut model = parent.as_ref().clone();
+        model.name = alias_name.to_string();
+        // The alias copy constructor sets compatModel to the parent
+        // (fspec.cc:2359-2377); Rugra marks the copy via `compat_model`
+        // (only Some/None is observable; the numeric value is a marker).
+        model.set_alias_parent_marker();
+        model.set_print_in_decl(true);
+        self.proto_models
+            .insert(alias_name.to_string(), Arc::new(model));
+        Ok(())
+    }
+
+    // Ghidra: architecture.cc:1239 Architecture::parseCompilerConfig
+    /// Look for the `<compiler_spec>` tag and set configuration parameters
+    /// based on it.  Faithful port of `parseCompilerConfig`
+    /// (architecture.cc:1239-1351):
+    ///
+    /// - `<global>` children are collected as partial `RangeProperties`
+    ///   and only applied after the main and `specextensions` loops finish
+    ///   (they need to know about all spaces);
+    /// - `<callfixup>` children go through the injection library's
+    ///   `decodeInject` chain (allocate → decode → register/compile);
+    /// - `<callotherfixup>`/`<segmentop>` children go through the userop
+    ///   manager decode chain;
+    /// - after the loops: deferred global application, `addOtherSpace`,
+    ///   default-model fallback (first model in map order), the
+    ///   `__thiscall` alias clone, and the type-factory `setupSizes` step.
+    ///
+    /// Children whose full decode belongs to other domains
+    /// (`data_organization`/`enum` → CSPEC-TYPEORG-STATE-0001,
+    /// `spacebase`/`deadcodedelay`/`inferptrbounds` → space-manager wiring,
+    /// `readonly` → Database property ranges, `context_data` → context spec
+    /// decode, `resolveprototype` → CSPEC-PARAMMODEL-0001) are recorded in
+    /// the returned report rather than silently dropped; children Ghidra's
+    /// own dispatch ignores (unknown tags) are noted as oracle-ignored.
+    pub fn parse_compiler_config(
+        &mut self,
+        store: &mut crate::marshal::DocumentStorage,
+        host: &dyn SpecQuery,
+        addr_size: usize,
+    ) -> Result<CompilerConfigReport, String> {
+        let mut report = CompilerConfigReport::default();
+        let mut global_ranges: Vec<RangeProperties> = Vec::new();
+        let root = store
+            .get_tag("compiler_spec")
+            .cloned()
+            .ok_or_else(|| "No compiler configuration tag found".to_string())?;
+        let registry = Arc::new(std::sync::RwLock::new(crate::marshal::IdRegistry::new()));
+        let children: Vec<_> = root.read().expect("element lock poisoned").children.clone();
+        let register_resolver = |name: &str| host.get_register(name);
+        for child in children {
+            let child_name = child
+                .read()
+                .expect("element lock poisoned")
+                .name
+                .clone();
+            let body_content = find_body_content(&child);
+            let mut decoder = crate::marshal::TreeDecoder::new(child, registry.clone());
+            match child_name.as_str() {
+                "default_proto" => {
+                    self.decode_default_proto_spec(&mut decoder, addr_size, &register_resolver)?;
+                }
+                "prototype" => {
+                    self.decode_proto_spec(&mut decoder, addr_size, &register_resolver)?;
+                }
+                "stackpointer" => {
+                    self.decode_stack_pointer(&mut decoder, host)?;
+                }
+                "returnaddress" => {
+                    self.decode_return_address(&mut decoder, host)?;
+                }
+                "spacebase" => {
+                    report.skipped_children.push((
+                        "spacebase".to_string(),
+                        "SPACE domain: dynamic spacebase space creation (architecture.cc:1071)"
+                            .to_string(),
+                    ));
+                }
+                "nohighptr" => {
+                    self.decode_no_high_ptr(&mut decoder, host)?;
+                }
+                "prefersplit" => {
+                    self.decode_prefer_split(&mut decoder, host)?;
+                }
+                "aggressivetrim" => {
+                    self.decode_aggressive_trim(&mut decoder)?;
+                }
+                "data_organization" => {
+                    report.skipped_children.push((
+                        "data_organization".to_string(),
+                        "CSPEC-TYPEORG-STATE-0001".to_string(),
+                    ));
+                }
+                "enum" => {
+                    report.skipped_children.push(("enum".to_string(), "CSPEC-TYPEORG-STATE-0001".to_string()));
+                }
+                "global" => {
+                    Self::decode_global(&mut decoder, &mut global_ranges)?;
+                }
+                "segmentop" => {
+                    self.ensure_userops();
+                    self.ensure_pcodeinjectlib(host.unique_inject_base());
+                    let space_by_name = |nm: &str| host.space_by_name(nm);
+                    let get_register = |nm: &str| host.get_register(nm);
+                    let inject_arc = self.pcodeinjectlib.as_ref().expect("just ensured").clone();
+                    let userops_arc = self.userops.as_ref().expect("just ensured").clone();
+                    let mut inject_lib = inject_arc.write().expect("lock poisoned");
+                    let mut userops = userops_arc.write().expect("lock poisoned");
+                    userops
+                        .decode_segment_op(
+                            &mut decoder,
+                            &mut inject_lib,
+                            &space_by_name,
+                            &get_register,
+                            body_content.as_deref(),
+                        )?;
+                }
+                "readonly" => {
+                    report.skipped_children.push((
+                        "readonly".to_string(),
+                        "DB property ranges: symboltab->setPropertyRange (architecture.cc:867)"
+                            .to_string(),
+                    ));
+                }
+                "context_data" => {
+                    report.skipped_children.push((
+                        "context_data".to_string(),
+                        "context spec decode: ContextDatabase::decodeFromSpec".to_string(),
+                    ));
+                }
+                "resolveprototype" => {
+                    report.skipped_children.push((
+                        "resolveprototype".to_string(),
+                        "CSPEC-PARAMMODEL-0001: ProtoModelMerged decode".to_string(),
+                    ));
+                }
+                "eval_called_prototype" | "eval_current_prototype" => {
+                    self.decode_proto_eval(&mut decoder)?;
+                }
+                "callfixup" => {
+                    self.ensure_pcodeinjectlib(host.unique_inject_base());
+                    let inject_arc = self.pcodeinjectlib.as_ref().expect("just ensured").clone();
+                    let mut inject_lib = inject_arc.write().expect("lock poisoned");
+                    let source = format!("{} : compiler spec", self.archid);
+                    inject_lib.decode_inject(
+                        &source,
+                        "",
+                        crate::pcodeinject::InjectPayloadType::CallFixup,
+                        &mut decoder,
+                        body_content.as_deref(),
+                    )?;
+                }
+                "callotherfixup" => {
+                    self.ensure_userops();
+                    self.ensure_pcodeinjectlib(host.unique_inject_base());
+                    let inject_arc = self.pcodeinjectlib.as_ref().expect("just ensured").clone();
+                    let userops_arc = self.userops.as_ref().expect("just ensured").clone();
+                    let mut inject_lib = inject_arc.write().expect("lock poisoned");
+                    let mut userops = userops_arc.write().expect("lock poisoned");
+                    userops.decode_call_other_fixup(
+                        &mut decoder,
+                        &mut inject_lib,
+                        body_content.as_deref(),
+                    )?;
+                }
+                "funcptr" => {
+                    self.decode_funcptr_align(&mut decoder)?;
+                }
+                "deadcodedelay" => {
+                    report.skipped_children.push((
+                        "deadcodedelay".to_string(),
+                        "SPACE domain: setDeadcodeDelay per-space state (architecture.cc:1019)"
+                            .to_string(),
+                    ));
+                }
+                "inferptrbounds" => {
+                    report.skipped_children.push((
+                        "inferptrbounds".to_string(),
+                        "SPACE domain: setInferPtrBounds per-space bounds (architecture.cc:1033)"
+                            .to_string(),
+                    ));
+                }
+                "modelalias" => {
+                    use crate::marshal::{AttributeId, Decoder};
+                    let elem_id = decoder.open_element();
+                    let alias_name = decoder.read_string_attr(&AttributeId::new("name", 0));
+                    let parent_name = decoder.read_string_attr(&AttributeId::new("parent", 0));
+                    decoder.close_element(elem_id);
+                    self.create_model_alias_exact(&alias_name, &parent_name)?;
+                }
+                other => {
+                    // Ghidra's compiler_spec dispatch has no else branch:
+                    // unknown children are ignored by the oracle itself.
+                    report
+                        .ignored_children
+                        .push(format!("{}", other));
+                }
+            }
+        }
+
+        // specextensions: look for any user-defined configuration document
+        // (architecture.cc:1308-1327).
+        if let Some(ext_root) = store.get_tag("specextensions").cloned() {
+            let ext_children: Vec<_> = ext_root
+                .read()
+                .expect("element lock poisoned")
+                .children
+                .clone();
+            for child in ext_children {
+                let child_name = child
+                    .read()
+                    .expect("element lock poisoned")
+                    .name
+                    .clone();
+                let body_content = find_body_content(&child);
+                let mut decoder = crate::marshal::TreeDecoder::new(child, registry.clone());
+                match child_name.as_str() {
+                    "prototype" => {
+                        self.decode_proto_spec(&mut decoder, addr_size, &register_resolver)?;
+                    }
+                    "callfixup" => {
+                        self.ensure_pcodeinjectlib(host.unique_inject_base());
+                        let inject_arc =
+                            self.pcodeinjectlib.as_ref().expect("just ensured").clone();
+                        let mut inject_lib = inject_arc.write().expect("lock poisoned");
+                        let source = format!("{} : compiler spec", self.archid);
+                        inject_lib.decode_inject(
+                            &source,
+                            "",
+                            crate::pcodeinject::InjectPayloadType::CallFixup,
+                            &mut decoder,
+                            body_content.as_deref(),
+                        )?;
+                    }
+                    "callotherfixup" => {
+                        self.ensure_userops();
+                        self.ensure_pcodeinjectlib(host.unique_inject_base());
+                        let inject_arc =
+                            self.pcodeinjectlib.as_ref().expect("just ensured").clone();
+                        let userops_arc =
+                            self.userops.as_ref().expect("just ensured").clone();
+                        let mut inject_lib = inject_arc.write().expect("lock poisoned");
+                        let mut userops = userops_arc.write().expect("lock poisoned");
+                        userops.decode_call_other_fixup(
+                            &mut decoder,
+                            &mut inject_lib,
+                            body_content.as_deref(),
+                        )?;
+                    }
+                    "global" => {
+                        Self::decode_global(&mut decoder, &mut global_ranges)?;
+                    }
+                    other => {
+                        // Ghidra's specextensions dispatch has no else
+                        // branch either.
+                        report.ignored_children.push(format!("{}", other));
+                    }
+                }
+            }
+        }
+
+        // <global> tags instantiate the base symbol table.  They need to
+        // know about all spaces, so it must come after parsing of
+        // <stackpointer> and <spacebase> (architecture.cc:1329-1333).
+        for props in &global_ranges {
+            self.add_to_global_scope(props, host)?;
+        }
+
+        self.add_other_space(host)?;
+
+        if self.defaultfp.is_none() {
+            if !self.proto_models.is_empty() {
+                let first_name = self
+                    .proto_models
+                    .iter()
+                    .next()
+                    .map(|(k, _)| k.clone())
+                    .expect("map non-empty");
+                self.set_default_model(&first_name);
+            } else {
+                return Err("No default prototype specified".to_string());
+            }
+        }
+        // We must have a __thiscall calling convention
+        // (architecture.cc:1343-1347).
+        if !self.proto_models.contains_key("__thiscall") {
+            // If __thiscall doesn't exist we clone it off of the default
+            let parent = self
+                .defaultfp
+                .as_ref()
+                .map(|m| m.get_name().to_string())
+                .ok_or_else(|| "No default prototype specified".to_string())?;
+            self.create_model_alias_exact("__thiscall", &parent)?;
+        }
+        // initializeSegments (architecture.cc:648-658): registers
+        // SegmentedResolver objects for each segment op — resolver
+        // insertion requires the AddrSpaceManager resolver store.
+        if self
+            .userops
+            .as_ref()
+            .map(|u| !u.read().expect("lock poisoned").segment_ops.is_empty())
+            .unwrap_or(false)
+        {
+            report.post_step_residuals.push(
+                "initializeSegments: SegmentedResolver insertion needs the AddrSpaceManager resolver store"
+                    .to_string(),
+            );
+        }
+        // PreferSplitManager::initialize(splitrecords) installs the global
+        // prefer-split map (prefersplit.cc); Rugra's PreferSplitManager is
+        // per-Funcdata, so the global install step is a residual.
+        if !self.split_records.is_empty() {
+            report.post_step_residuals.push(
+                "PreferSplitManager::initialize: global install not yet represented".to_string(),
+            );
+        }
+        // types->setupSizes() (architecture.cc:1350): if no
+        // data_organization was registered, set up default values.
+        match &self.types {
+            Some(_) => {
+                // TypeFactory setup is owned by CSPEC-TYPEORG-STATE-0001;
+                // the setupSizes call is recorded as executed-no-op here.
+                report
+                    .post_step_residuals
+                    .push("types->setupSizes: TypeFactory state (CSPEC-TYPEORG-STATE-0001)".to_string());
+            }
+            None => {
+                report
+                    .post_step_residuals
+                    .push("types->setupSizes: no TypeFactory attached (CSPEC-TYPEORG-STATE-0001)".to_string());
+            }
+        }
+        Ok(report)
+    }
+
+    // RUGRA-GLUE: ensure_userops (Ghidra's userops member always exists)
+    /// Install an empty userop manager if none is attached, mirroring the
+    /// always-present `Architecture::userops` member (userops.initialize
+    /// runs earlier in restoreFromSpec, architecture.cc:635).
+    fn ensure_userops(&mut self) {
+        if self.userops.is_none() {
+            self.userops = Some(std::sync::Arc::new(std::sync::RwLock::new(
+                crate::userop::UserOpManage::new(),
+            )));
+        }
+    }
+
+    // RUGRA-GLUE: ensure_pcodeinjectlib (Ghidra's buildPcodeInjectLibrary)
+    /// Install a fresh injection library with the given unique base if
+    /// none is attached, mirroring `buildPcodeInjectLibrary` +
+    /// `PcodeInjectLibrarySleigh(g)` (architecture.cc:638,
+    /// inject_sleigh.cc:343-348).  The SLEIGH symbol lookup (`slgh`) must
+    /// be installed by the owner for snippet compilation.
+    fn ensure_pcodeinjectlib(&mut self, unique_inject_base: u64) {
+        if self.pcodeinjectlib.is_none() {
+            self.pcodeinjectlib = Some(std::sync::Arc::new(std::sync::RwLock::new(
+                crate::pcodeinject::PcodeInjectLibrary::new(unique_inject_base),
+            )));
+        }
+    }
+
+    // Ghidra: architecture.cc:1049 Architecture::decodeFuncPtrAlign
+    /// Pull information from a `<funcptr>` element: turn on alignment
+    /// analysis of function pointers.  Faithful to `decodeFuncPtrAlign`
+    /// (architecture.cc:1049-1066): alignment 0 clears the field, otherwise
+    /// the field holds the position of the first 1 bit.
+    pub fn decode_funcptr_align(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> Result<(), String> {
+        use crate::marshal::{AttributeId, Decoder};
+        let elem_id = decoder.open_element();
+        let mut align = decoder.read_signed_integer_attr(&AttributeId::new("align", 0)) as i64;
+        decoder.close_element(elem_id);
+
+        if align == 0 {
+            self.funcptr_align = 0; // No alignment
+            return Ok(());
+        }
+        let mut bits = 0i32;
+        while (align & 1) == 0 {
+            // Find position of first 1 bit
+            bits += 1;
+            align >>= 1;
+        }
+        self.funcptr_align = bits;
+        Ok(())
     }
 
     // RUGRA-GLUE: high_ptr_possible (no Ghidra counterpart found)
@@ -864,6 +1899,130 @@ mod tests {
     fn test_version() {
         assert_eq!(CapabilityRegistry::major_version(), 6);
         assert_eq!(CapabilityRegistry::minor_version(), 1);
+    }
+
+    /// A tiny language host for the compiler-spec parse tests: one register
+    /// (RSP@0x20 size 8), ram/stack/register spaces with 64-bit highest.
+    struct TestHost;
+
+    impl SpecQuery for TestHost {
+        fn get_register(&self, name: &str) -> Option<VarnodeData> {
+            match name {
+                "RSP" => Some(VarnodeData {
+                    space: crate::space::AddressSpace::Register,
+                    offset: 0x20,
+                    size: 8,
+                }),
+                _ => None,
+            }
+        }
+        fn space_by_name(&self, name: &str) -> Option<crate::space::AddressSpace> {
+            match name {
+                "ram" => Some(crate::space::AddressSpace::Ram),
+                "stack" => Some(crate::space::AddressSpace::Stack),
+                "register" => Some(crate::space::AddressSpace::Register),
+                "other" => Some(crate::space::AddressSpace::Other(0)),
+                _ => None,
+            }
+        }
+        fn space_highest(&self, _spc: crate::space::AddressSpace) -> u64 {
+            u64::MAX
+        }
+    }
+
+    fn parse_store(text: &str) -> crate::marshal::DocumentStorage {
+        let mut store = crate::marshal::DocumentStorage::new();
+        let doc = store.parse_document(text.as_bytes()).expect("parse");
+        let root = doc.root.clone().expect("root");
+        store.register_tag(&root);
+        store
+    }
+
+    #[test]
+    fn test_decode_global_deferred_apply() {
+        // decodeGlobal collects partial ranges; the apply loop runs in
+        // parse_compiler_config AFTER the child loop (architecture.cc:1329).
+        // Without a <default_proto> the oracle itself throws
+        // "No default prototype specified" (architecture.cc:1341).
+        let mut store = parse_store(
+            "<compiler_spec><global><range space=\"ram\"/></global>\
+             <default_proto><prototype name=\"__stdcall\" extrapop=\"8\" stackshift=\"8\">\
+             </prototype></default_proto></compiler_spec>",
+        );
+        let mut arch = Architecture::new();
+        let report = arch
+            .parse_compiler_config(&mut store, &TestHost, 8)
+            .expect("parse");
+        assert!(report.skipped_children.is_empty());
+        // ram full range + the OTHER space range from addOtherSpace.
+        assert_eq!(arch.global_scope_ranges.len(), 2);
+        assert_eq!(arch.global_scope_ranges[0], (crate::space::AddressSpace::Ram, 0, u64::MAX));
+        assert_eq!(arch.infer_ptr_spaces, vec![crate::space::AddressSpace::Ram]);
+
+        let mut bare = parse_store("<compiler_spec/>");
+        let mut arch2 = Architecture::new();
+        assert_eq!(
+            arch2.parse_compiler_config(&mut bare, &TestHost, 8).unwrap_err(),
+            "No default prototype specified"
+        );
+    }
+
+    #[test]
+    fn test_decode_return_address_multiple_tags() {
+        // architecture.cc:904-905: a second <returnaddress> after the first
+        // was set throws "Multiple <returnaddress> tags in .cspec".
+        let mut store = parse_store(
+            "<compiler_spec><returnaddress><varnode space=\"stack\" offset=\"0\" size=\"8\"/>\
+             </returnaddress><returnaddress><varnode space=\"stack\" offset=\"0\" size=\"8\"/>\
+             </returnaddress></compiler_spec>",
+        );
+        let mut arch = Architecture::new();
+        let err = arch
+            .parse_compiler_config(&mut store, &TestHost, 8)
+            .unwrap_err();
+        assert_eq!(err, "Multiple <returnaddress> tags in .cspec");
+    }
+
+    #[test]
+    fn test_parse_compiler_config_minimal() {
+        // Full chain on a minimal cspec: stackpointer + returnaddress +
+        // default_proto; the model must pick up the default return address
+        // (fspec.cc:2689) and the __thiscall alias must be cloned
+        // (architecture.cc:1343-1347).
+        let mut store = parse_store(
+            "<compiler_spec>\
+             <stackpointer register=\"RSP\" space=\"ram\"/>\
+             <returnaddress><varnode space=\"stack\" offset=\"0\" size=\"8\"/></returnaddress>\
+             <default_proto><prototype name=\"__stdcall\" extrapop=\"8\" stackshift=\"8\">\
+             </prototype></default_proto>\
+             </compiler_spec>",
+        );
+        let mut arch = Architecture::new();
+        arch.archid = "test".to_string();
+        let _report = arch
+            .parse_compiler_config(&mut store, &TestHost, 8)
+            .expect("parse");
+        assert_eq!(arch.stack_pointer_offset, 0x20);
+        assert_eq!(arch.stack_pointer_size, 8);
+        assert!(arch.stack_grows_negative);
+        assert_eq!(
+            arch.default_return_addr,
+            Some(VarnodeData {
+                space: crate::space::AddressSpace::Stack,
+                offset: 0,
+                size: 8
+            })
+        );
+        assert_eq!(arch.defaultfp.as_ref().unwrap().get_name(), "__stdcall");
+        assert!(arch.proto_models.contains_key("__thiscall"));
+        // The model decoded after <returnaddress> gets the default injected
+        // as a return_address effect record.
+        let effects = arch.defaultfp.as_ref().unwrap().effect_iter();
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e.get_type(), crate::fspec::EffectType::ReturnAddress)
+                && e.space == crate::space::AddressSpace::Stack
+                && e.offset == 0));
     }
 
     /// A trivial test capability for the registry.

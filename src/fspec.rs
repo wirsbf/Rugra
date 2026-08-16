@@ -5863,6 +5863,21 @@ impl ProtoModelFull {
         Ok(())
     }
 
+    // Ghidra: fspec.cc:2406 ProtoModel::isCompatible (getAliasParent)
+    /// Whether this model is an alias copy (Ghidra's `getAliasParent() !=
+    /// null`).  Only `Some`/`None` is observable; the numeric marker value
+    /// carries no identity.
+    pub fn get_alias_parent_marker(&self) -> Option<usize> {
+        self.compat_model
+    }
+
+    // Ghidra: fspec.cc:2359 ProtoModel::ProtoModel(const string &,const ProtoModel &)
+    /// Mark this model as an alias copy (the copy constructor's
+    /// `compatModel = &op2` assignment).
+    pub fn set_alias_parent_marker(&mut self) {
+        self.compat_model = Some(usize::MAX);
+    }
+
     // Ghidra: fspec.cc:2406 ProtoModel::isCompatible
     /// Return true if `other` can be substituted for this model during
     /// `FuncCallSpecs::deindirect`. Faithful 1:1 port of `isCompatible`
@@ -6193,6 +6208,39 @@ impl ProtoModelFull {
         inject_id_resolver: Option<&dyn Fn(&str, &str) -> Option<i32>>,
         register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
     ) -> Result<String, String> {
+        self.decode_with_defaults(
+            decoder,
+            stack_space,
+            addr_size,
+            stack_grows_negative,
+            void_type,
+            inject_id_resolver,
+            register_resolver,
+            None,
+        )
+    }
+
+    // Ghidra: fspec.cc:2549 ProtoModel::decode
+    /// The `parseCompilerConfig` path of `decode`: the Architecture's
+    /// `defaultReturnAddr` is appended as a `return_address` effect record
+    /// when the model has no `<returnaddress>` child of its own, faithful
+    /// to fspec.cc:2689-2691
+    /// (`if ((!sawretaddr)&&(glb->defaultReturnAddr.space != 0))
+    /// effectlist.push_back(EffectRecord(glb->defaultReturnAddr,
+    /// EffectRecord::return_address))`).  The record is pushed BEFORE the
+    /// effectlist sort, so ordering follows the sorted view like every
+    /// other effect.
+    pub fn decode_with_defaults(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        stack_space: Option<AddressSpace>,
+        addr_size: usize,
+        stack_grows_negative: bool,
+        void_type: Option<Arc<Datatype>>,
+        inject_id_resolver: Option<&dyn Fn(&str, &str) -> Option<i32>>,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+        default_return_addr: Option<&VarnodeData>,
+    ) -> Result<String, String> {
         use crate::marshal::Decoder;
         let mut saw_localrange = false;
         let mut saw_paramrange = false;
@@ -6400,9 +6448,16 @@ impl ProtoModelFull {
 
         // Ghidra: fspec.cc:2689-2695 — default return address + sort lists.
         if !saw_retaddr {
-            // Provide the default return address if one was configured. Rugra
-            // has no Architecture defaultReturnAddr here; skip (matches Ghidra
-            // when defaultReturnAddr.space == null).
+            // Provide the default return address, if there isn't a specific
+            // one for the model (fspec.cc:2689-2691).
+            if let Some(default_return) = default_return_addr {
+                self.effectlist.push(EffectRecord::new(
+                    default_return.space,
+                    default_return.offset,
+                    default_return.size,
+                    EffectType::ReturnAddress,
+                ));
+            }
         }
         // Sort effectlist by (space, offset) — faithful to
         // sort(effectlist, compareByAddress).

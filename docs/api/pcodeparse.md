@@ -185,3 +185,21 @@ annotations do not change parser behavior or alignment status.
 Known wire-ID, decoder/space-registry, and parser-lifecycle differences remain
 owned by `MARSHAL-ID-0001`, `MARSHAL-PACKED-0001`, `SPACE-0001`, and
 `PARSER-0001` respectively.
+
+# 2026-08-16：SLEIGH lookup fallback + 声明语句 + ConstTpl::handle selector
+
+- `SleighSymbolLookup` trait + `PcodeSnippet::set_sleigh_lookup`/`resolve_symbol`：
+  `lex`/`lex_full` 在本地符号表 miss 后回落 SLEIGH 语言符号表
+  （pcodeparse.cc:3215-3265 `sleigh->findSymbol`），命中符号缓存进本地表供
+  语义动作按名再解析。
+- `parse_assign_or_declare` 前置 STRING 分派：`STRING '=' expr ';'`（y:108
+  newOutput(false)）与 `STRING ':' INTEGER '=' expr ';'`（y:110
+  newOutput(true,size)），其余 STRING 走 lhsvarnode 错误（y:107/213）。
+- `ConstTpl::Handle { index, select: HandleSelect, plus }`：v_field selector
+  （semantics.hh:39 v_space/v_offset/v_size/v_offset_plus），operand varnode
+  改为 `VarnodeTpl(hand,false)`（slghsymbol.cc:953-970 + semantics.cc:425-432，
+  size 为 handle 引用而非 Real(0) 未解析哨兵）；assignBitRange 用 OffsetPlus。
+- `ConstructTpl::delayslot` 默认 0（semantics.hh:174，原 -1 哨兵与 oracle
+  encode 输出不一致）。
+对拍：16 callfixup 模板 XML（含 `temp:1 = 0;` COPY@unique 与
+`call [RBP];` CALLIND）逐字节 MATCH。

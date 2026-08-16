@@ -1921,6 +1921,42 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "cspec_text_ingest_1204",
+   "description": "Architecture::parseCompilerConfig text ingest over production x86-64-gcc.cspec",
+   "runner": [
+    "tools/run_cspec_text_ingest_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/cspec_text_ingest_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/cspec_text_ingest_1204.cc",
+     "rust_fixture": "tests/oracle/cspec_text_ingest_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_cspec_text_ingest_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/arch.rs",
+     "src/fspec.rs",
+     "src/pcodeinject.rs",
+     "src/pcodeparse.rs",
+     "src/userop.rs",
+     "src/marshal.rs",
+     "tests/oracle/cspec_text_ingest_1204.*",
+     "tools/run_cspec_text_ingest_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

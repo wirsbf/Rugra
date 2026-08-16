@@ -59,7 +59,9 @@ pub const BUILTIN_STRNCPY: u32 = 0x1000_0004;
 pub const BUILTIN_WCSNCPY: u32 = 0x1000_0005;
 
 /// The base class for a detailed definition of a user-defined p-code operation.
-/// Corresponds to Ghidra's `UserPcodeOp` (userop.hh:47).
+/// Corresponds to Ghidra's `UserPcodeOp` (userop.hh:47) as flattened with the
+/// `InjectedUserOp` subclass (userop.hh:158): the `inject_id` field holds
+/// `InjectedUserOp::injectid` (-1 for ops that are not injected).
 #[derive(Debug, Clone)]
 pub struct UserPcodeOp {
     /// Low-level name of the p-code operator
@@ -70,12 +72,14 @@ pub struct UserPcodeOp {
     pub userop_index: i32,
     /// Boolean attributes (userop_flags)
     pub flags: u32,
+    /// Id of the injected payload for `InjectedUserOp` (-1 otherwise)
+    pub inject_id: i32,
 }
 
 impl UserPcodeOp {
     // Ghidra: userop.hh:47 UserPcodeOp::new
     pub fn new(name: String, op_type: UserOpType, index: i32) -> Self {
-        Self { name, op_type, userop_index: index, flags: 0 }
+        Self { name, op_type, userop_index: index, flags: 0, inject_id: -1 }
     }
 
     // Ghidra: userop.hh:47 UserPcodeOp::getName
@@ -218,14 +222,29 @@ impl VolatileWriteOp {
     }
 }
 
-/// A segment op. Faithful to `SegmentOp` (userop.hh:264).
-/// Handles segmented addressing (e.g., x86 real mode far pointers).
+/// A segment op. Faithful to `SegmentOp` (userop.hh:264; `TermPatternOp`
+/// userop.hh:232). Handles segmented addressing (e.g., x86 real mode far
+/// pointers).
 #[derive(Debug, Clone)]
 pub struct SegmentOp {
     pub base: UserPcodeOp,
     /// The address space this segment op operates on. Faithful to the
-    /// `spc` field (userop.hh:265).
+    /// `spc` field (userop.hh:265); `space` holds the space INDEX used by
+    /// the segment-op vector in `UserOpManage::registerOp`.
     pub space: u32,
+    /// The resolved `spc` AddrSpace handle (enum stand-in).
+    pub space_id: crate::space::AddressSpace,
+    /// Size in bytes of the base/selector input (0 = no base term).
+    /// Faithful to `baseinsize` (userop.hh:241).
+    pub baseinsize: i32,
+    /// Size in bytes of the near-pointer input. Faithful to `innerinsize`.
+    pub innerinsize: i32,
+    /// Constant resolution varnode. Faithful to `constresolve`
+    /// (userop.hh:249).
+    pub constresolve: Option<crate::fspec::VarnodeData>,
+    /// Id of the executable p-code payload. Faithful to `injectId`
+    /// (userop.hh:246).
+    pub inject_id: i32,
     /// Base resolution: how the segment base is computed.
     pub supports_index: bool,
     /// True if the joined pair base:near acts as a far pointer. Faithful to
@@ -240,6 +259,11 @@ impl SegmentOp {
         Self {
             base: UserPcodeOp::new(name, UserOpType::Segment, index),
             space: 0,
+            space_id: crate::space::AddressSpace::Register,
+            baseinsize: 0,
+            innerinsize: 0,
+            constresolve: None,
+            inject_id: -1,
             supports_index: false,
             supports_far_pointer: false,
         }
@@ -344,6 +368,10 @@ pub struct UserOpManage {
     /// Segment ops registered by space index. Faithful to the segment-op
     /// vector in Ghidra's UserOpManage (userop.hh:347 `getSegmentOp`).
     pub segment_ops: HashMap<i32, SegmentOp>,
+    /// Jump-assist ops decoded from `<jumpassist>` elements.  Ghidra stores
+    /// these as `JumpAssistOp` records in the same `useroplist`; Rugra
+    /// keeps the 4 inject ids in this side vector.
+    pub jump_assist_ops: Vec<JumpAssistOp>,
     /// Built-in id (BUILTIN_*) → user op. Faithful to Ghidra's
     /// `UserOpManage::builtinmap` (userop.hh:342), populated by
     /// `registerBuiltin(uint4)` (userop.cc:432-484).
@@ -357,6 +385,7 @@ impl UserOpManage {
             ops: Vec::new(),
             name_map: HashMap::new(),
             segment_ops: HashMap::new(),
+            jump_assist_ops: Vec::new(),
             builtin_map: HashMap::new(),
         }
     }
@@ -368,8 +397,10 @@ impl UserOpManage {
         self.segment_ops.get(&space_idx)
     }
 
-    // Ghidra: userop.cc:490 UserOpManage::registerOp
-    /// Register a new user op, returning its index.
+    // Ghidra: userop.cc:392 UserOpManage::initialize (per-op create+crossref)
+    /// Create a new unspecialized op with the next auto index and
+    /// cross-reference it (the per-op step of `initialize`,
+    /// userop.cc:392-403; `registerOp` itself is `register_user_op`).
     pub fn register_op(&mut self, name: String, op_type: UserOpType) -> i32 {
         let index = self.ops.len() as i32;
         self.name_map.insert(name.clone(), index);
@@ -378,12 +409,14 @@ impl UserOpManage {
     }
 
     // Ghidra: userop.cc:408 UserOpManage::getOp
-    /// Get a user op by its CALLOTHER index.
+    /// Get a user op by its CALLOTHER index.  Faithful to `getOp(uint4)`
+    /// (userop.cc:408-415): indices within the registered list index it
+    /// directly, larger built-in ids fall through to `builtinmap`.
     pub fn get_op(&self, index: i32) -> Option<&UserPcodeOp> {
         if index >= 0 && (index as usize) < self.ops.len() {
             Some(&self.ops[index as usize])
         } else {
-            None
+            self.builtin_map.get(&(index as u32))
         }
     }
 
@@ -507,6 +540,417 @@ impl UserOpManage {
         self.register_op(userop_name.to_string(), UserOpType::Injected)
     }
 
+    // Ghidra: userop.cc:490 UserOpManage::registerOp
+    /// Register a fully decoded `UserPcodeOp`, customizing any existing
+    /// record at the same index.  Faithful to `registerOp`
+    /// (userop.cc:490-527): a same-name op with a different index throws
+    /// `Conflicting indices for userop name`; an occupied index with a
+    /// different name throws `User op X has same index as Y` while an
+    /// identical name customizes the old record in place; segment ops are
+    /// additionally indexed by space with `Multiple segmentops defined for
+    /// same space` on collision.
+    pub fn register_user_op(&mut self, op: UserPcodeOp) -> Result<(), String> {
+        let ind = op.userop_index;
+        if ind < 0 {
+            return Err("UserOp not assigned an index".to_string());
+        }
+        if let Some(existing_index) = self.name_map.get(&op.name) {
+            if *existing_index != ind {
+                return Err(format!("Conflicting indices for userop name {}", op.name));
+            }
+        }
+        while self.ops.len() <= ind as usize {
+            self.ops.push(UserPcodeOp::new(String::new(), UserOpType::Unspecialized, self.ops.len() as i32));
+        }
+        if !self.ops[ind as usize].name.is_empty() && self.ops[ind as usize].name != op.name {
+            return Err(format!(
+                "User op {} has same index as {}",
+                op.name, self.ops[ind as usize].name
+            ));
+        }
+        // We assume this registration customizes an existing userop: the
+        // old spec is replaced.
+        let is_segment = op.op_type == UserOpType::Segment;
+        self.ops[ind as usize] = op.clone();
+        self.name_map.insert(op.name.clone(), ind);
+        if is_segment {
+            // The segment-op vector is keyed by the segment space index; the
+            // segment record carries it (set by decode_segment_op).
+            let seg_index = self.ops[ind as usize].userop_index; // placeholder; real key below
+            let _ = seg_index;
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    // Ghidra: userop.cc:589 UserOpManage::decodeCallOtherFixup (+ userop.cc:85 InjectedUserOp::decode)
+    /// Create an InjectedUserOp description from a `<callotherfixup>`
+    /// element and register it.  Faithful to `decodeCallOtherFixup`
+    /// (userop.cc:589-600) and `InjectedUserOp::decode` (userop.cc:85-96):
+    /// the payload is decoded and registered in the injection library
+    /// FIRST, then the callother target name must match an existing
+    /// unspecialized user op or the error leaves the library registration
+    /// behind as a non-transactional residual.
+    pub fn decode_call_other_fixup(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        inject_lib: &mut crate::pcodeinject::PcodeInjectLibrary,
+        body_content: Option<&str>,
+    ) -> Result<(), String> {
+        // InjectedUserOp::decode body (userop.cc:86-95).
+        let injectid = inject_lib.decode_inject(
+            "userop",
+            "",
+            crate::pcodeinject::InjectPayloadType::CallOtherFixup,
+            decoder,
+            body_content,
+        )?;
+        let name = inject_lib.get_call_other_target(injectid);
+        let base = self.get_op_by_name(&name).cloned();
+        // This tag overrides the base functionality of a userop
+        // so the core userop name and index may already be defined
+        let base = match base {
+            Some(b) => b,
+            None => return Err(format!("Unknown userop name in <callotherfixup>: {}", name)),
+        };
+        if base.op_type != UserOpType::Unspecialized {
+            // Make sure the userop isn't used for some other purpose
+            return Err(format!(
+                "<callotherfixup> overloads userop with another purpose: {}",
+                name
+            ));
+        }
+        let useropindex = base.userop_index; // Get the index from the core userop
+        let mut op = UserPcodeOp::new(name.clone(), UserOpType::Injected, useropindex);
+        op.inject_id = injectid;
+        self.register_user_op(op)
+    }
+
+    // Ghidra: userop.cc:533 UserOpManage::decodeSegmentOp (+ userop.cc:225 SegmentOp::decode)
+    /// Create a SegmentOp description from a `<segmentop>` element and
+    /// register it.  Faithful to `decodeSegmentOp` (userop.cc:533-545) and
+    /// `SegmentOp::decode` (userop.cc:225-290): the op index is the current
+    /// useroplist size, the space attribute is mandatory, the base userop
+    /// must exist and be unspecialized, the `<pcode>` child must declare
+    /// exactly one output and one or two inputs, and a decode failure
+    /// discards only this op (the injected payload stays registered).
+    pub fn decode_segment_op(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        inject_lib: &mut crate::pcodeinject::PcodeInjectLibrary,
+        space_by_name: &dyn Fn(&str) -> Option<crate::space::AddressSpace>,
+        register_lookup: &dyn Fn(&str) -> Option<crate::fspec::VarnodeData>,
+        body_content: Option<&str>,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder as _;
+        let mut s_op = SegmentOp::new(String::new(), self.ops.len() as i32);
+        // SegmentOp::decode (userop.cc:225-290).
+        let elem_id = decoder.open_element();
+        let mut spc: Option<crate::space::AddressSpace> = None;
+        s_op.inject_id = -1;
+        s_op.baseinsize = 0;
+        s_op.innerinsize = 0;
+        s_op.supports_far_pointer = false;
+        s_op.base.name = "segment".to_string(); // Default name, might be overridden by userop attribute
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("space") => {
+                    let space_name = decoder.read_string();
+                    spc = Some(space_by_name(&space_name).ok_or(
+                        "Undefined space: ".to_string() + &space_name,
+                    )?);
+                }
+                Some("farpointer") => {
+                    // Ghidra sets the flag purely on attribute presence
+                    // (userop.cc:240-241) without reading a value.
+                    let _ = decoder.read_string();
+                    s_op.supports_far_pointer = true;
+                }
+                Some("userop") => {
+                    // Based on existing sleigh op
+                    s_op.base.name = decoder.read_string();
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        let Some(space) = spc else {
+            return Err("<segmentop> expecting space attribute".to_string());
+        };
+        s_op.space_id = space;
+        let name = s_op.base.name.clone();
+        let otherop = self.get_op_by_name(&name).cloned();
+        let otherop = match otherop {
+            Some(o) => o,
+            None => return Err(format!("<segmentop> unknown userop {}", name)),
+        };
+        s_op.base.userop_index = otherop.userop_index;
+        if otherop.op_type != UserOpType::Unspecialized {
+            return Err(format!("Redefining userop {}", name));
+        }
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            if sub_name == "constresolve" {
+                decoder.open_element();
+                if decoder.peek_element() != 0 {
+                    // Address::decode(decoder,sz) — <addr space=.. offset=..>
+                    // or <register name=..>.  VarnodeData::decodeFromAttributes
+                    // (pcoderaw.cc:33-55) leaves the space null unless a
+                    // `space` or `name` attribute appears.
+                    let child = decoder.open_element();
+                    let (space, offset, size) = read_varnode_attrs(decoder, register_lookup)?;
+                    decoder.close_element(child);
+                    if space.is_some() {
+                        s_op.constresolve = Some(crate::fspec::VarnodeData {
+                            space: space.unwrap(),
+                            offset,
+                            size,
+                        });
+                    }
+                }
+                decoder.close_element(sub_id);
+            } else if sub_name == "pcode" {
+                let nm = format!("{}_pcode", name);
+                let source = "cspec";
+                s_op.inject_id = inject_lib.decode_inject(
+                    source,
+                    &nm,
+                    crate::pcodeinject::InjectPayloadType::ExecutablePcode,
+                    decoder,
+                    body_content,
+                )?;
+            } else {
+                // Ghidra's loop only advances for constresolve/pcode
+                // children (peek without open); mirror by consuming the
+                // unknown child so the stream does not stall.
+                let child = decoder.open_element();
+                decoder.close_element_skipping(child);
+            }
+        }
+        decoder.close_element(elem_id);
+        if s_op.inject_id < 0 {
+            return Err("Missing <pcode> child in <segmentop> tag".to_string());
+        }
+        let payload = inject_lib
+            .get_payload_by_id(s_op.inject_id)
+            .ok_or("Missing <pcode> child in <segmentop> tag".to_string())?;
+        if payload.size_output() != 1 {
+            return Err("<pcode> child of <segmentop> tag must declare one <output>".to_string());
+        }
+        if payload.size_input() == 1 {
+            s_op.innerinsize = payload.get_input(0).map(|p| p.size).unwrap_or(0) as i32;
+        } else if payload.size_input() == 2 {
+            s_op.baseinsize = payload.get_input(0).map(|p| p.size).unwrap_or(0) as i32;
+            s_op.innerinsize = payload.get_input(1).map(|p| p.size).unwrap_or(0) as i32;
+        } else {
+            return Err(
+                "<pcode> child of <segmentop> tag must declare one or two <input> tags".to_string()
+            );
+        }
+        // registerOp (userop.cc:490-527): the name/index crossrefs run
+        // FIRST; only the tail of registerOp indexes the segment-op vector
+        // (keyed by the space index, with the enum's stable id as the
+        // index stand-in) and throws on a same-space collision.
+        let space_index = s_op.space_id.space_id() as u32;
+        s_op.space = space_index;
+        self.register_user_op(s_op.base.clone())?;
+        if self.segment_ops.contains_key(&(space_index as i32)) {
+            return Err("Multiple segmentops defined for same space".to_string());
+        }
+        self.segment_ops.insert(space_index as i32, s_op);
+        Ok(())
+    }
+
+    // Ghidra: userop.cc:606 UserOpManage::decodeJumpAssist (+ userop.cc:302 JumpAssistOp::decode)
+    /// Create a JumpAssistOp from a `<jumpassist>` element and register it.
+    /// Faithful to `decodeJumpAssist` (userop.cc:606-617) and
+    /// `JumpAssistOp::decode` (userop.cc:302-353): duplicate `<*_pcode>`
+    /// children throw, `<addr_pcode>`/`<default_pcode>` are mandatory, and
+    /// the named user op must exist and be unspecialized.
+    pub fn decode_jump_assist(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        inject_lib: &mut crate::pcodeinject::PcodeInjectLibrary,
+        body_content: Option<&str>,
+    ) -> Result<(), String> {
+        use crate::marshal::{AttributeId, Decoder as _};
+        let mut op = JumpAssistOp::new(String::new(), 0);
+        // JumpAssistOp::decode (userop.cc:302-353).
+        let elem_id = decoder.open_element();
+        op.base.name = decoder.read_string_attr(&AttributeId::new("name", 0));
+        // Mark as not present until we see a tag
+        op.index2case = -1;
+        op.index2addr = -1;
+        op.defaultaddr = -1;
+        op.calcsize = -1;
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            match sub_name.as_str() {
+                "case_pcode" => {
+                    if op.index2case != -1 {
+                        return Err("Too many <case_pcode> tags".to_string());
+                    }
+                    op.index2case = inject_lib.decode_inject(
+                        "jumpassistop",
+                        &format!("{}_index2case", op.base.name),
+                        crate::pcodeinject::InjectPayloadType::ExecutablePcode,
+                        decoder,
+                        body_content,
+                    )?;
+                }
+                "addr_pcode" => {
+                    if op.index2addr != -1 {
+                        return Err("Too many <addr_pcode> tags".to_string());
+                    }
+                    op.index2addr = inject_lib.decode_inject(
+                        "jumpassistop",
+                        &format!("{}_index2addr", op.base.name),
+                        crate::pcodeinject::InjectPayloadType::ExecutablePcode,
+                        decoder,
+                        body_content,
+                    )?;
+                }
+                "default_pcode" => {
+                    if op.defaultaddr != -1 {
+                        return Err("Too many <default_pcode> tags".to_string());
+                    }
+                    op.defaultaddr = inject_lib.decode_inject(
+                        "jumpassistop",
+                        &format!("{}_defaultaddr", op.base.name),
+                        crate::pcodeinject::InjectPayloadType::ExecutablePcode,
+                        decoder,
+                        body_content,
+                    )?;
+                }
+                "size_pcode" => {
+                    if op.calcsize != -1 {
+                        return Err("Too many <size_pcode> tags".to_string());
+                    }
+                    op.calcsize = inject_lib.decode_inject(
+                        "jumpassistop",
+                        &format!("{}_calcsize", op.base.name),
+                        crate::pcodeinject::InjectPayloadType::ExecutablePcode,
+                        decoder,
+                        body_content,
+                    )?;
+                }
+                _ => {
+                    // Ghidra's loop only advances on the four pcode tags
+                    // (peek without open); consume the unknown child so the
+                    // stream does not stall.
+                    let child = decoder.open_element();
+                    decoder.close_element_skipping(child);
+                }
+            }
+        }
+        decoder.close_element(elem_id);
+
+        if op.index2addr == -1 {
+            return Err(format!("userop: {} is missing <addr_pcode>", op.base.name));
+        }
+        if op.defaultaddr == -1 {
+            return Err(format!("userop: {} is missing <default_pcode>", op.base.name));
+        }
+        let base = self.get_op_by_name(&op.base.name).cloned();
+        // This tag overrides the base functionality of a userop
+        // so the core userop name and index may already be defined
+        let base = match base {
+            Some(b) => b,
+            None => {
+                return Err(format!(
+                    "Unknown userop name in <jumpassist>: {}",
+                    op.base.name
+                ))
+            }
+        };
+        if base.op_type != UserOpType::Unspecialized {
+            // Make sure the userop isn't used for some other purpose
+            return Err(format!(
+                "<jumpassist> overloads userop with another purpose: {}",
+                op.base.name
+            ));
+        }
+        op.base.userop_index = base.userop_index; // Get the index from the core userop
+        let record = UserPcodeOp::new(
+            op.base.name.clone(),
+            UserOpType::JumpAssist,
+            op.base.userop_index,
+        );
+        self.register_user_op(record)?;
+        self.jump_assist_ops.push(op);
+        Ok(())
+    }
+
+    // Ghidra: userop.cc:551 UserOpManage::decodeVolatile
+    /// Register the volatile read/write built-ins from a `<volatile>`
+    /// element.  Faithful to `decodeVolatile` (userop.cc:551-583): both
+    /// `inputop` and `outputop` attributes are mandatory, `format`
+    /// selects functional display, and a second registration throws.
+    pub fn decode_volatile(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let mut read_op_name = String::new();
+        let mut write_op_name = String::new();
+        let mut functional_display = false;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("inputop") => read_op_name = decoder.read_string(),
+                Some("outputop") => write_op_name = decoder.read_string(),
+                Some("format") => {
+                    let format = decoder.read_string();
+                    if format == "functional" {
+                        functional_display = true;
+                    }
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if read_op_name.is_empty() || write_op_name.is_empty() {
+            return Err("Missing inputop/outputop attributes in <volatile> element".to_string());
+        }
+        if self.builtin_map.contains_key(&BUILTIN_VOLATILE_READ) {
+            return Err("read_volatile user-op registered more than once".to_string());
+        }
+        if self.builtin_map.contains_key(&BUILTIN_VOLATILE_WRITE) {
+            return Err("write_volatile user-op registered more than once".to_string());
+        }
+        // VolatileReadOp ctor (userop.hh:188-190): flags = functional ? 0
+        // : no_operator.  VolatileWriteOp ctor (userop.hh:203-205): flags =
+        // functional ? 0 : annotation_assignment.
+        let mut vr_op = UserPcodeOp::new(read_op_name, UserOpType::VolatileRead, BUILTIN_VOLATILE_READ as i32);
+        if !functional_display {
+            vr_op.flags = userop_flags::NO_OPERATOR;
+        }
+        self.builtin_map.insert(BUILTIN_VOLATILE_READ, vr_op);
+        let mut vw_op = UserPcodeOp::new(write_op_name, UserOpType::VolatileWrite, BUILTIN_VOLATILE_WRITE as i32);
+        if !functional_display {
+            vw_op.flags = userop_flags::ANNOTATION_ASSIGNMENT;
+        }
+        self.builtin_map.insert(BUILTIN_VOLATILE_WRITE, vw_op);
+        Ok(())
+    }
+
     // Ghidra: userop.cc:367 UserOpManage::getOpByName
     /// Get a UserPcodeOp by name. Faithful to Ghidra
     /// UserOpManage::getOp(string) (userop.cc:419).
@@ -514,6 +958,56 @@ impl UserOpManage {
         let idx = self.get_index_by_name(name)?;
         self.ops.get(idx as usize)
     }
+}
+
+// Ghidra: pcoderaw.cc:33 VarnodeData::decodeFromAttributes
+/// Collect the `space`/`offset`/`size` or `name` (register) attributes of
+/// the current element into a VarnodeData triple.  Faithful to
+/// `VarnodeData::decodeFromAttributes` (pcoderaw.cc:33-55): on `space` the
+/// whole attribute set is re-scanned by the space decoder (Rugra collects
+/// offset/size from the full pass), on `name` the whole varnode is replaced
+/// by the named register; the space stays `None` (Ghidra's null sentinel)
+/// unless a `space` or `name` attribute appears.
+fn read_varnode_attrs(
+    decoder: &mut dyn crate::marshal::Decoder,
+    register_lookup: &dyn Fn(&str) -> Option<crate::fspec::VarnodeData>,
+) -> Result<(Option<crate::space::AddressSpace>, u64, i32), String> {
+    use crate::marshal::Decoder;
+    let mut space: Option<crate::space::AddressSpace> = None;
+    let mut offset = 0u64;
+    let mut size = 0i32;
+    let mut register_name: Option<String> = None;
+    loop {
+        let attrib_id = decoder.next_attribute_id();
+        if attrib_id == 0 {
+            break; // Its possible to have no attributes in an <addr/> tag
+        }
+        match decoder.attribute_name(attrib_id).as_deref() {
+            Some("space") => {
+                let space_name = decoder.read_string();
+                space = Some(crate::pcodeparse::parse_space_name(&space_name));
+            }
+            Some("offset") => {
+                offset = decoder.read_unsigned_integer();
+            }
+            Some("size") => {
+                size = decoder.read_unsigned_integer() as i32;
+            }
+            Some("name") => {
+                register_name = Some(decoder.read_string());
+                break;
+            }
+            _ => {
+                let _ = decoder.read_string();
+            }
+        }
+    }
+    if let Some(name) = register_name {
+        let point = register_lookup(&name)
+            .ok_or_else(|| format!("Unknown register name: {}", name))?;
+        return Ok((Some(point.space), point.offset, point.size));
+    }
+    Ok((space, offset, size))
 }
 
 // Ghidra: userop.cc:367 UserOpManage::createUnspecialized

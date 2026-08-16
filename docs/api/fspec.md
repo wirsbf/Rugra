@@ -380,3 +380,15 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 - 证据：`tests/oracle/heritage_callguard_1204.*`（model_state/effect 探针 +
   trials case 双侧逐字节 MATCH）。
 
+
+# 2026-08-16：defaultReturnAddr 注入点（CSPEC-DEFAULT-RETURN-0001）
+
+`ProtoModelFull::decode_with_defaults`：`decode_with_register_resolver` 的
+超集（追加 `default_return_addr: Option<&VarnodeData>` 参数）。模型无自带
+`<returnaddress>`（!saw_retaddr）且 Architecture defaultReturnAddr 已设置时，
+在 effectlist 排序前追加 `EffectRecord(default, return_address)`——逐字对齐
+fspec.cc:2689-2691。旧入口委托 None（等价 defaultReturnAddr.space==null 的
+Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
+为 parse_compiler_config 路径传真值。另新增
+`get_alias_parent_marker`/`set_alias_parent_marker`（Ghidra
+`getAliasParent()`/copy-ctor `compatModel` 的 Some/None 可观测面）。

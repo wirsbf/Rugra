@@ -3,11 +3,14 @@
 Architecture manager corresponding to Ghidra's `architecture.hh` /
 `architecture.cc`.
 
-**Status:** L2 (locked 12.0.4 audit, 2026-08-14). The structured-DOM
-prototype/default-model slice has a locked oracle fixture, but production
-compiler-spec text ingestion, `resolveprototype`, model rules, factory/init,
-and consumer wiring remain incomplete. The fixture's declared observations
-match; the module-level status remains `MISMATCH` / `UNTESTED`, not L3.
+**Status:** L2 (locked 12.0.4 audit, 2026-08-14; production text-ingest slice
+landed 2026-08-16, oracle fixture MATCH on the covered projection). The
+structured-DOM prototype/default-model slice and the production
+`parse_compiler_config` text-ingest slice have locked oracle fixtures, but
+`data_organization`/`enum` (CSPEC-TYPEORG-STATE-0001), `resolveprototype`
+(CSPEC-PARAMMODEL-0001), `spacebase`/`deadcodedelay`/`inferptrbounds` (space
+manager wiring), `readonly` (Database property ranges) and the factory/init
+chain remain incomplete, so the module stays L2/MISMATCH, not L3.
 
 This is the Ghidra `Architecture` class — distinct from `types::Architecture`
 (which is the target CPU enum). It holds all configuration parameters and owns
@@ -45,6 +48,31 @@ protected virtual methods of `Architecture` (architecture.hh:264-348).
   `build_comment_db()`, `build_string_manager()`,
   `build_constant_pool()`, `build_context()`, `build_symbols()`,
   `build_spec_file()`, `modify_spaces()`, `resolve_architecture()`.
+
+### `SpecQuery`
+Language/space queries consumed by the compiler-spec decode chain, standing
+in for the Architecture's `AddrSpaceManager` + `Translate` during
+`parseCompilerConfig` (Rugra's `Architecture` does not own a space manager
+yet). Mirrors `SleighBase::getRegister` (sleighbase.cc:133),
+`AddrSpaceManager::getSpaceByName` (translate.cc:590),
+`AddrSpace::getHighest`, the overlay enumeration of
+`addToGlobalScope`/`addOtherSpace`, `SleighBase::findSymbol` and
+`Translate::getUniqueStart(Translate::INJECT)`.
+- `get_register(name) -> Option<VarnodeData>`
+- `space_by_name(name) -> Option<AddressSpace>`
+- `space_highest(spc) -> u64`
+- `num_spaces()`, `space_at(i)`, `is_overlay(spc)`, `is_overlay_base(spc)`,
+  `contain_space(spc)` (default: no overlay enumeration)
+- `sleigh_symbol(name) -> Option<SleighSymbol>`
+- `unique_inject_base() -> u64` (default `0x200`)
+
+### `CompilerConfigReport`
+Residual report returned by `parse_compiler_config`: `skipped_children`
+(child tag + owning TODO for children whose full decode belongs to another
+domain), `ignored_children` (tags the Ghidra oracle's own dispatch ignores —
+architecture.cc:1249-1305 has no else branch) and `post_step_residuals`
+(initializeSegments / PreferSplitManager / setupSizes infrastructure gaps).
+Nothing is silently skipped.
 
 ## Structs
 
@@ -88,17 +116,41 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 | `proto_models` | `ProtoModelMap` | Prototype models. |
 | `defaultfp_name` | `Option<String>` | Default model name. |
 | `defaultfp` | `Option<Arc<ProtoModelFull>>` | Shared default model, pointer-identical to its map entry. |
-| `evalfp_current_name` / `evalfp_called_name` | `Option<String>` | Eval models. |
+| `default_return_addr` | `Option<VarnodeData>` | `defaultReturnAddr` (architecture.hh:194); `None` mirrors the ctor's null-space sentinel (architecture.cc:159). |
+| `evalfp_current_name` / `evalfp_called_name` | `Option<String>` | Eval model names. |
+| `evalfp_current` / `evalfp_called` | `Option<Arc<ProtoModelFull>>` | `evalfp_current`/`evalfp_called` (architecture.hh:195-196). |
+| `infer_ptr_spaces` | `Vec<AddressSpace>` | `inferPtrSpaces` (architecture.hh:182), appended by `add_to_global_scope`. |
+| `global_scope_ranges` | `Vec<(AddressSpace, u64, u64)>` | Applied `<global>` + OTHER-space triples in application order (Database-side application is a registered residual). |
+| `pcodeinjectlib` | `Option<Arc<RwLock<PcodeInjectLibrary>>>` | `pcodeinjectlib` (architecture.hh:200). |
 | `nohighptr` | `RangeList` | No-high-pointer ranges. |
 | `overrides` | `Override` | Override commands. |
 | `loadersymbols_parsed` | `bool` | Loader symbols read. |
+| `stack_reverse_justify` | `bool` | `<stackpointer reversejustify>` (`setReverseJustified`, architecture.cc:566). |
 
 **Methods:** `new()`, `reset_defaults_internal()` (architecture.cc:1416),
 `reset_defaults()` (architecture.cc:1438), `get_model(name)`, `has_model(name)`,
 `set_default_model(name)` (architecture.cc:323), `get_default_model()`,
 `decode_proto(decoder, addr_size, register_resolver)` (architecture.cc:741),
-`decode_default_proto(decoder, addr_size, register_resolver)`
-(architecture.cc:795), `high_ptr_possible(addr, size)` (architecture.hh:408),
+`decode_proto_spec(...)` (parseCompilerConfig path injecting
+`default_return_addr`, fspec.cc:2689),
+`decode_default_proto(...)`/`decode_default_proto_spec(...)`
+(architecture.cc:795), `decode_global(decoder, range_props)`
+(architecture.cc:812), `add_to_global_scope(props, host)`
+(architecture.cc:826), `add_other_space(host)` (architecture.cc:847),
+`decode_return_address(decoder, host)` (architecture.cc:898),
+`decode_stack_pointer(decoder, host)` (architecture.cc:979),
+`decode_proto_eval(decoder)` (architecture.cc:769),
+`decode_no_high_ptr(decoder, host)` (architecture.cc:1086),
+`decode_prefer_split(decoder, host)` (architecture.cc:1101),
+`decode_aggressive_trim(decoder)` (architecture.cc:1121),
+`decode_funcptr_align(decoder)` (architecture.cc:1049),
+`create_model_alias_exact(alias, parent)` (architecture.cc:1138 with
+Ghidra's exact error strings),
+`parse_compiler_config(store, host, addr_size) -> Result<CompilerConfigReport, String>`
+(architecture.cc:1239, including the specextensions pass, the deferred
+`<global>` application loop, `addOtherSpace`, the default-model fallback,
+the `__thiscall` alias clone and the post-loop residual disclosure),
+`high_ptr_possible(addr, size)` (architecture.hh:408),
 `add_no_high_ptr(range)` (architecture.cc:576), `globalify()`
 (architecture.cc:437), `create_model_alias(alias, parent)`,
 `decode_flow_override()`, `get_description()`, `print_message(msg)`.
@@ -169,3 +221,51 @@ adapter 尚不能表达 Ghidra 对 merged parent、alias-of-alias、duplicate �
 parent 的异常域，alias-parent 身份也未对拍。`set_default_model(&str)` 对未知名称
 静默返回，而 Ghidra 的 pointer API 不存在相同错误输入；这个 name-adapter 错误域
 同样保持 `MISMATCH`。
+
+# 2026-08-16：CSPEC 文本 ingestion 四切片（GLOBAL-APPLY / DEFAULT-RETURN /
+# PCODEINJECT-CALLFIXUP / UNIVERSAL-CHILD）
+
+`Architecture::parse_compiler_config`（architecture.cc:1239-1351 全链）落地：
+真实 production `x86-64-gcc.cspec` 字节经 marshal `DocumentStorage::parse_document`
+文本 ingest 后逐 child decode。新增（对应 oracle 行号见各函数注释）：
+`SpecQuery` 语言查询 trait、`decode_global`+`add_to_global_scope`+`add_other_space`
+（`<global>` 收集为 RangeProperties、主循环与 specextensions 后按源序延迟应用、
+overlay 复制循环、OTHER space 全域）、`decode_return_address`（多重标签错误
+`Multiple <returnaddress> tags in .cspec`）+ `default_return_addr` 字段、
+`decode_stack_pointer`、`decode_proto_eval`、`decode_no_high_ptr`、
+`decode_prefer_split`、`decode_aggressive_trim`、`decode_funcptr_align`、
+`create_model_alias_exact`（Ghidra 逐字异常消息）、主循环 dispatch（含
+`callfixup`→`PcodeInjectLibrary::decode_inject`、`callotherfixup`/`segmentop`→
+UserOpManage decode 链、`modelalias`、specextensions 二遍）、default-model 回退
+（map 首项）与 `__thiscall` 别名克隆。`decode_proto_spec` 把
+`default_return_addr` 注入无自带 `<returnaddress>` 的模型（fspec.cc:2689，
+`ProtoModelFull::decode_with_defaults` 新入口，旧 `decode_with_register_resolver`
+委托 None 保持兼容）。
+
+配套（同 write-set 模块）：`pcodeinject.rs` 重构为 Ghidra 结构
+（id 索引 `injection` 向量 + name→id map + id→name 向量 + SLEIGH
+tempbase/sleigh 成员；`decode_inject`=allocate→decode→register/compile 全链，
+`parse_inject` 走 `PcodeSnippet` 编译，错误逐字）；`pcodeparse.rs`
+`PcodeSnippet::lex` 补 sleigh symbol fallback（pcodeparse.cc:3223-3224）、
+`STRING ':' INTEGER '='`/`STRING '='` 声明语句（pcodeparse.y:108/110）、
+`ConstTpl::handle` 携带 v_field selector（semantics.cc:425-432）、
+ConstructTpl delayslot 默认 0（semantics.hh:174）；`userop.rs` 补
+`decode_call_other_fixup`/`decode_segment_op`/`decode_jump_assist`/
+`decode_volatile`/`register_user_op`（userop.cc:490/533/551/589/606 +
+InjectedUserOp/SegmentOp/JumpAssistOp decode）。
+
+**对拍证据**：`tools/run_cspec_text_ingest_oracle.sh`（locked 12.0.4 oracle
+BfdArchitecture 真链 init vs Rugra 文本 ingest，同一 cspec/sla/curl 字节），
+67 行投影逐字节一致（含 16 个 `<callfixup>` 的编译模板 XML：LOAD/INT_ADD/
+RETURN、COPY@unique 0x364420/0x364430 递进、13×CALLIND），合成探针覆盖
+callotherfixup 编译失败残留（count 16→17、residue id）、未知名错误、
+"segment" 定制成功（type 2/index 0）、volatile 注册+重复注册错误。
+
+**残差（如实登记，非静默跳过）**：`data_organization`/`enum` →
+CSPEC-TYPEORG-STATE-0001；`spacebase`/`deadcodedelay`/`inferptrbounds` →
+空间管理器接线；`readonly` → Database property ranges；`context_data` →
+context spec decode；`resolveprototype` → CSPEC-PARAMMODEL-0001；
+`inferPtrSpaces` 的 post-init 过滤（cacheAddrSpaceProperties 域）不可观察；
+`<body>` 内容经配对 DOM handle 提供（`XmlDecode::readString(ATTRIB_CONTENT)`
+的 TreeDecoder 缺口，归 MARSHAL 域）；segmentop/jumpassist decode 已移植但
+无 oracle 观察（UNTESTED）。模块保持 L2。

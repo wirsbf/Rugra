@@ -26,6 +26,7 @@ use crate::marshal::{AttributeId, Decoder, ElementId};
 use crate::opcodes::OpCode;
 use crate::space::AddressSpace;
 use crate::varnode::VarnodeData;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Token kinds (pcodeparse.cc:152-211 — Bison `pcodetokentype` enum)
@@ -1203,6 +1204,17 @@ pub struct SleighSymbol {
     pub kind: SleightSymbolKind,
 }
 
+/// Lookup into the SLEIGH language symbol table, standing in for
+/// `PcodeSnippet`'s `const SleighBase *sleigh` member
+/// (pcodeparse.hh:79 / pcodeparse.cc:3223-3224 `sleigh->findSymbol`).
+/// `PcodeSnippet::lex` consults this hook only after the local snippet
+/// table misses, matching Ghidra's local-tree-first order.
+pub trait SleighSymbolLookup: Send + Sync {
+    // Ghidra: pcodeparse.cc:3223 SleighBase::findSymbol (via PcodeSnippet::lex)
+    /// Resolve a SLEIGH language symbol by name, or None.
+    fn find_symbol(&self, name: &str) -> Option<SleighSymbol>;
+}
+
 // ---------------------------------------------------------------------------
 // PcodeData (sleigh.hh:44) — raw p-code op record
 // ---------------------------------------------------------------------------
@@ -1541,6 +1553,12 @@ pub struct PcodeSnippet {
     /// Whether the `local` keyword is required for new temporaries
     /// (`enforceLocalKey` in PcodeCompile).
     enforce_local_key: bool,
+    /// The SLEIGH language symbol table consulted when a STRING token is not
+    /// in the local table (`sleigh->findSymbol` at pcodeparse.cc:3223-3224).
+    /// Ghidra's `PcodeSnippet` holds a `const SleighBase *sleigh`; Rugra has
+    /// no linked SLEIGH engine, so the language symbols arrive through this
+    /// lookup hook (installed by the pcode-inject library before parsing).
+    sleigh_lookup: Option<Arc<dyn SleighSymbolLookup + Send + Sync>>,
     /// The default address space for loads/stores (`defaultspace`).
     default_space: AddressSpace,
     /// The constant address space (`constantspace`).
@@ -1573,6 +1591,7 @@ impl PcodeSnippet {
             labels: Vec::new(),
             label_count: 0,
             enforce_local_key: false,
+            sleigh_lookup: None,
             default_space: AddressSpace::Ram,
             constant_space: AddressSpace::Const,
             unique_space: AddressSpace::Unique,
@@ -1697,18 +1716,27 @@ impl PcodeSnippet {
         });
     }
 
-    // Ghidra: pcodeparse.y:717 PcodeSnippet::lex
+    // Ghidra: pcodeparse.hh:86 PcodeSnippet (slgh member)
+    /// Install the SLEIGH language symbol lookup consulted by `lex` after a
+    /// local-table miss. Mirrors handing the snippet a `const SleighBase *`.
+    pub fn set_sleigh_lookup(&mut self, lookup: Arc<dyn SleighSymbolLookup + Send + Sync>) {
+        self.sleigh_lookup = Some(lookup);
+    }
+
+    // Ghidra: pcodeparse.cc:3215 PcodeSnippet::lex
     /// Pull the next token from the lexer and, for STRING tokens, resolve
     /// them against the local symbol table and the SLEIGH language. Faithful
-    /// to pcodeparse.y:717-768. Returns the Bison token id (258-314, ASCII for
-    /// punctuation, 0 for EOF). Rugra returns `PcodeTokenKind` which carries
-    /// the same information.
+    /// to pcodeparse.cc:3215-3265 (pcodeparse.y:717-768): the local `tree`
+    /// is searched first, then `sleigh->findSymbol`; symbols of other kinds
+    /// (dummy/subtable) fall back to STRING. Returns the Bison token id
+    /// (258-314, ASCII for punctuation, 0 for EOF). Rugra returns
+    /// `PcodeTokenKind` which carries the same information.
     pub fn lex(&mut self) -> PcodeTokenKind {
         let tok = self.lexer.get_next_token();
         if matches!(tok, PcodeTokenKind::String) {
             let ident = self.lexer.get_identifier().to_string();
-            if let Some(sym) = self.symbols.get(&ident).cloned() {
-                // pcodeparse.y:730-758: dispatch on symbol kind.
+            if let Some(sym) = self.resolve_symbol(&ident) {
+                // pcodeparse.cc:3227-3252: dispatch on symbol kind.
                 return match sym.kind {
                     SleightSymbolKind::Space(_) => PcodeTokenKind::SpaceSym,
                     SleightSymbolKind::UserOp(_) => PcodeTokenKind::UserOpSym,
@@ -1718,10 +1746,24 @@ impl PcodeSnippet {
                     SleightSymbolKind::Label(_, _) => PcodeTokenKind::LabelSym,
                 };
             }
-            // pcodeparse.y:760-761: unresolved identifier stays STRING.
+            // pcodeparse.cc:3258-3259: unresolved identifier stays STRING.
             return PcodeTokenKind::String;
         }
         tok
+    }
+
+    // Ghidra: pcodeparse.cc:3220-3225 PcodeSnippet::lex (tree/sleigh lookup)
+    /// Resolve an identifier against the local table first, then the SLEIGH
+    /// language lookup. A SLEIGH symbol is cached into the local table so
+    /// later semantic actions (which re-resolve by name, standing in for
+    /// Bison's `yylval` symbol pointers) observe the same object.
+    fn resolve_symbol(&mut self, ident: &str) -> Option<SleighSymbol> {
+        if let Some(sym) = self.symbols.get(ident).cloned() {
+            return Some(sym);
+        }
+        let sym = self.sleigh_lookup.as_ref()?.find_symbol(ident)?;
+        self.symbols.insert(sym.name.clone(), sym.clone());
+        Some(sym)
     }
 
     // Ghidra: pcodeparse.hh:87 PcodeSnippet::getLocation
@@ -1811,10 +1853,31 @@ pub enum ConstTpl {
     /// `ConstTpl::j_relative` — a relative label index (jumpdest label form,
     /// pcodeparse.y:199).
     JRelative(u32),
-    /// `ConstTpl::handle` — a constructor-operand handle. Carries the operand
-    /// index; used by SLEIGH subtable exports. Rugra retains it for shape
-    /// parity but the standalone snippet parser does not emit it.
-    Handle { index: i32, plus: u64 },
+    /// `ConstTpl::handle` — a reference into a constructor operand handle.
+    /// Faithful to `ConstTpl(handle, ht, select)` (semantics.cc:425-432):
+    /// `select` picks the handle field (`v_space`/`v_offset`/`v_size`/
+    /// `v_offset_plus`) and `plus` carries the `v_offset_plus` increment
+    /// (Ghidra's `value_real`, 0 otherwise).
+    Handle {
+        index: i32,
+        select: HandleSelect,
+        plus: u64,
+    },
+}
+
+/// The handle field selector of a `ConstTpl::handle`
+/// (semantics.hh:39 `enum v_field { v_space=0, v_offset=1, v_size=2,
+/// v_offset_plus=3 }`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleSelect {
+    /// `v_space` — the handle's address space.
+    Space,
+    /// `v_offset` — the handle's offset.
+    Offset,
+    /// `v_size` — the handle's size.
+    Size,
+    /// `v_offset_plus` — the handle's offset plus the `plus` increment.
+    OffsetPlus,
 }
 
 impl ConstTpl {
@@ -2136,7 +2199,8 @@ pub struct StarQuality {
 pub struct ConstructTpl {
     /// The accumulated op list (`getOpvec()`).
     pub opvec: Vec<OpTpl>,
-    /// The delayslot size, if any (`getDelayslot()`). -1 = unset.
+    /// The delayslot size (`getDelayslot()`); 0 by default, matching the
+    /// `ConstructTpl()` constructor (semantics.hh:174 `delayslot=0`).
     pub delayslot: i32,
     /// Whether a delayslot has been declared (used by `addOpList` to detect
     /// the "Multiple delayslot declarations" error at pcodeparse.y:102).
@@ -2148,7 +2212,7 @@ impl ConstructTpl {
     pub fn new() -> Self {
         Self {
             opvec: Vec::new(),
-            delayslot: -1,
+            delayslot: 0,
             num_labels: 0,
         }
     }
@@ -2750,12 +2814,15 @@ impl PcodeSnippet {
                 let _ = fullsz;
                 ConstTpl::Real(off + byteoffset as u64)
             }
-            ConstTpl::Handle { index, plus: _ } => {
-                ConstTpl::Handle {
-                    index,
-                    plus: byteoffset as u64,
-                }
-            }
+            ConstTpl::Handle {
+                index,
+                select: _,
+                plus: _,
+            } => ConstTpl::Handle {
+                index,
+                select: HandleSelect::OffsetPlus,
+                plus: byteoffset as u64,
+            },
             _ => return None,
         };
         Some(VarnodeTpl::new(
@@ -3092,9 +3159,10 @@ impl PcodeSnippet {
         let int_val = self.lexer.get_number();
         let int_overflow = matches!(kind, PcodeTokenKind::BadInteger);
         let ident = self.lexer.get_identifier().to_string();
-        // Resolve STRING identifiers against the symbol table (pcodeparse.y:730-758).
+        // Resolve STRING identifiers against the symbol table, falling back
+        // to the SLEIGH language (pcodeparse.cc:3215-3265).
         let kind = if matches!(kind, PcodeTokenKind::String) {
-            if let Some(sym) = self.symbols.get(&ident).cloned() {
+            if let Some(sym) = self.resolve_symbol(&ident) {
                 match sym.kind {
                     SleightSymbolKind::Space(_) => PcodeTokenKind::SpaceSym,
                     SleightSymbolKind::UserOp(_) => PcodeTokenKind::UserOpSym,
@@ -3468,14 +3536,45 @@ impl PcodeSnippet {
     /// a `specificsymbol` for the redefinition check) and then dispatch on the
     /// following token.
     fn parse_assign_or_declare(&mut self) -> StatementResult {
-        // Peek to decide: STRING might be a temp declaration (`STRING = expr`)
-        // or a labelled assignment. Bison shifts toward declaration
-        // (pcodeparse.y:50-51).
-        let cur_kind = self
-            .current
-            .as_ref()
-            .map(|t| t.kind)
-            .unwrap_or(PcodeTokenKind::Illegal);
+        // Peek to decide: STRING might be a temp declaration (`STRING = expr`
+        // or `STRING : INTEGER = expr`) or the illegal lhsvarnode form.
+        // Bison shifts STRING toward the declaration statements
+        // (pcodeparse.y:108 and 110) when followed by '=' or ':' INTEGER '=';
+        // otherwise the bare lhsvarnode path applies (pcodeparse.y:107).
+        if matches!(
+            self.current.as_ref().map(|t| t.kind),
+            Some(PcodeTokenKind::String)
+        ) {
+            let ident = self
+                .current
+                .as_ref()
+                .map(|t| t.ident.clone())
+                .unwrap_or_default();
+            self.advance(); // consume STRING
+            match self.current.as_ref().map(|t| t.kind) {
+                Some(PcodeTokenKind::Punct('=')) => {
+                    // STRING '=' expr ';'  (pcodeparse.y:108)
+                    self.advance(); // '='
+                    let rhs = self.parse_expr(0)?;
+                    self.expect_punct(';');
+                    return Ok(self.new_output(false, rhs, &ident, 0));
+                }
+                Some(PcodeTokenKind::Punct(':')) => {
+                    // STRING ':' INTEGER '=' expr ';'  (pcodeparse.y:110)
+                    self.advance(); // ':'
+                    let size = self.expect_integer();
+                    self.expect_punct('=');
+                    let rhs = self.parse_expr(0)?;
+                    self.expect_punct(';');
+                    return Ok(self.new_output(true, rhs, &ident, size as u64));
+                }
+                _ => {
+                    // lhsvarnode: STRING — unknown assignment varnode
+                    // (pcodeparse.y:107 via 213).
+                    return Err(format!("Unknown assignment varnode: {}", ident));
+                }
+            }
+        }
         // First, try the lhsvarnode path. lhsvarnode = specificsymbol | STRING.
         let lhs = self.parse_lhs_varnode()?;
         // Now dispatch on the next token.
@@ -3783,13 +3882,28 @@ impl PcodeSnippet {
                 ConstTpl::Real(vd.offset),
                 ConstTpl::Real(vd.size as u64),
             )),
+            // OperandSymbol::getVarnode (slghsymbol.cc:953-970): a snippet
+            // operand without a defining expression builds the
+            // "possible dynamic handle" varnode `VarnodeTpl(hand,false)`
+            // (semantics.cc:425-432) — space/offset/size all read from the
+            // handle, so the size is a handle reference (never the Real(0)
+            // unresolved sentinel).
             SleightSymbolKind::Operand(_, idx) => Ok(VarnodeTpl::new(
-                ConstTpl::SpaceId(AddressSpace::Unique),
                 ConstTpl::Handle {
                     index: *idx,
+                    select: HandleSelect::Space,
                     plus: 0,
                 },
-                ConstTpl::Real(0),
+                ConstTpl::Handle {
+                    index: *idx,
+                    select: HandleSelect::Offset,
+                    plus: 0,
+                },
+                ConstTpl::Handle {
+                    index: *idx,
+                    select: HandleSelect::Size,
+                    plus: 0,
+                },
             )),
             SleightSymbolKind::JumpTarget(_) => Ok(VarnodeTpl::new(
                 ConstTpl::JCurSpace,

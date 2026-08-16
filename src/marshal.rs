@@ -2315,6 +2315,75 @@ impl Encoder for TreeEncoder {
     }
 }
 
+// Ghidra: marshal.cc:296/353 XmlDecode integer attribute extraction
+/// Parse an integer attribute string the way Ghidra's `XmlDecode` does:
+/// through `istringstream` with `unsetf(ios::dec | ios::hex | ios::oct)`.
+/// Leading whitespace is skipped, an optional sign is taken, then the base
+/// is auto-detected (`0x`/`0X` prefix → hex, a leading `0` followed by
+/// more digits → octal, otherwise decimal) and the longest valid digit
+/// prefix is consumed.  No valid digits → 0 (the `res = 0`
+/// initialization); overflow saturates (the C++11 stream behavior).
+fn cpp_stream_magnitude(value: &str) -> (bool, u64) {
+    let text = value.trim_start();
+    let (negative, text) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let (radix, digits) = if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        (16u32, rest)
+    } else if text.len() > 1 && text.starts_with('0') {
+        (8u32, &text[1..])
+    } else {
+        (10u32, text)
+    };
+    let mut end = 0;
+    for (index, ch) in digits.char_indices() {
+        if ch.is_digit(radix) {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        // No valid digits (e.g. a bare "0x"): the stream consumed the "0".
+        return (negative, 0);
+    }
+    let mut magnitude: u64 = 0;
+    for ch in digits[..end].chars() {
+        let digit = ch.to_digit(radix).unwrap_or(0) as u64;
+        magnitude = magnitude
+            .checked_mul(radix as u64)
+            .and_then(|m| m.checked_add(digit))
+            .unwrap_or(u64::MAX);
+        if magnitude == u64::MAX {
+            break;
+        }
+    }
+    (negative, magnitude)
+}
+
+// Ghidra: marshal.cc:353 XmlDecode::readUnsignedInteger (stream extraction)
+/// Unsigned variant of the iostream-style integer parse.
+fn cpp_stream_unsigned(value: &str) -> u64 {
+    let (negative, magnitude) = cpp_stream_magnitude(value);
+    if negative {
+        magnitude.wrapping_neg()
+    } else {
+        magnitude
+    }
+}
+
+// Ghidra: marshal.cc:296 XmlDecode::readSignedInteger (stream extraction)
+/// Signed variant of the iostream-style integer parse.
+fn cpp_stream_signed(value: &str) -> i64 {
+    let (negative, magnitude) = cpp_stream_magnitude(value);
+    if negative {
+        (magnitude as i64).wrapping_neg()
+    } else {
+        magnitude as i64
+    }
+}
+
 /// An in-memory `Decoder` that reads from an `Element` tree. This traverses
 /// the DOM depth-first, mirroring Ghidra's `XmlDecode`.
 pub struct TreeDecoder {
@@ -2492,49 +2561,64 @@ impl Decoder for TreeDecoder {
             .unwrap_or(false)
     }
 
-    // RUGRA-GLUE: read_signed_integer (no Ghidra counterpart found)
+    // Ghidra: marshal.cc:296 XmlDecode::readSignedInteger(void)
+    /// Read the current attribute as a signed integer.  Faithful to
+    /// `XmlDecode::readSignedInteger()` (marshal.cc:296-305): the value is
+    /// parsed through an `istringstream` with `unsetf(dec|hex|oct)`, so
+    /// `0x`-prefixed hex and leading-`0` octal are auto-detected; a failed
+    /// parse yields 0 (the `intb res = 0` initialization).
     fn read_signed_integer(&mut self) -> i64 {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return 0;
         };
         let rg = elem.read().unwrap();
         if attr_idx > 0 && attr_idx - 1 < rg.get_num_attributes() {
-            return rg.get_attribute_value_at(attr_idx - 1).parse().unwrap_or(0);
+            return cpp_stream_signed(rg.get_attribute_value_at(attr_idx - 1));
         }
         0
     }
 
-    // RUGRA-GLUE: read_signed_integer_attr (no Ghidra counterpart found)
+    // Ghidra: marshal.cc:307 XmlDecode::readSignedInteger(const AttributeId &)
+    /// Read a specific attribute as a signed integer, with the same
+    /// hex/octal auto-detection as the stream variant (marshal.cc:309-330).
     fn read_signed_integer_attr(&mut self, attrib_id: &AttributeId) -> i64 {
         let Some((elem, _, _)) = self.stack.last() else {
             return 0;
         };
         let rg = elem.read().unwrap();
         rg.get_attribute_value(&attrib_id.name)
-            .and_then(|v| v.parse().ok())
+            .map(|v| cpp_stream_signed(v))
             .unwrap_or(0)
     }
 
-    // RUGRA-GLUE: read_unsigned_integer (no Ghidra counterpart found)
+    // Ghidra: marshal.cc:353 XmlDecode::readUnsignedInteger(void)
+    /// Read the current attribute as an unsigned integer.  Faithful to
+    /// `XmlDecode::readUnsignedInteger()` (marshal.cc:353-361): the value
+    /// is parsed through an `istringstream` with `unsetf(dec|hex|oct)`, so
+    /// `0x`-prefixed hex and leading-`0` octal are auto-detected (e.g. the
+    /// production cspec `<localrange>` hex offsets); a failed parse yields
+    /// 0 (the `uintb res = 0` initialization).
     fn read_unsigned_integer(&mut self) -> u64 {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return 0;
         };
         let rg = elem.read().unwrap();
         if attr_idx > 0 && attr_idx - 1 < rg.get_num_attributes() {
-            return rg.get_attribute_value_at(attr_idx - 1).parse().unwrap_or(0);
+            return cpp_stream_unsigned(rg.get_attribute_value_at(attr_idx - 1));
         }
         0
     }
 
-    // RUGRA-GLUE: read_unsigned_integer_attr (no Ghidra counterpart found)
+    // Ghidra: marshal.cc:364 XmlDecode::readUnsignedInteger(const AttributeId &)
+    /// Read a specific attribute as an unsigned integer, with the same
+    /// hex/octal auto-detection as the stream variant (marshal.cc:366-381).
     fn read_unsigned_integer_attr(&mut self, attrib_id: &AttributeId) -> u64 {
         let Some((elem, _, _)) = self.stack.last() else {
             return 0;
         };
         let rg = elem.read().unwrap();
         rg.get_attribute_value(&attrib_id.name)
-            .and_then(|v| v.parse().ok())
+            .map(|v| cpp_stream_unsigned(v))
             .unwrap_or(0)
     }
 
@@ -3544,5 +3628,26 @@ mod tests {
             err.explain,
             "Unable to open xml document /nonexistent/xml/text/dom/fixture.xml"
         );
+    }
+    // Ghidra: marshal.cc:296/353 XmlDecode integer extraction semantics
+    #[test]
+    fn test_cpp_stream_integer_bases() {
+        // istringstream unsetf semantics: hex/octal autodetect, failed
+        // parse -> 0, sign handling.
+        assert_eq!(super::cpp_stream_unsigned("0x288"), 0x288);
+        assert_eq!(super::cpp_stream_unsigned("0X10"), 16);
+        assert_eq!(super::cpp_stream_unsigned("010"), 8); // leading 0 -> octal
+        assert_eq!(super::cpp_stream_unsigned("0"), 0);
+        assert_eq!(super::cpp_stream_unsigned("0xfffffffffff0bdc1"), 0xfffffffffff0bdc1);
+        assert_eq!(super::cpp_stream_unsigned("40"), 40);
+        assert_eq!(super::cpp_stream_unsigned("  16"), 16); // leading ws skipped
+        assert_eq!(super::cpp_stream_unsigned("0x"), 0); // bare 0x -> 0
+        assert_eq!(super::cpp_stream_unsigned("zz"), 0); // failed parse -> 0
+        assert_eq!(super::cpp_stream_unsigned("12zz"), 12); // longest prefix
+        assert_eq!(super::cpp_stream_unsigned("08"), 0); // octal stops at 0
+        assert_eq!(super::cpp_stream_signed("-5"), -5);
+        assert_eq!(super::cpp_stream_signed("-0x10"), -16);
+        assert_eq!(super::cpp_stream_signed("+3"), 3);
+        assert_eq!(super::cpp_stream_signed(""), 0);
     }
 }
