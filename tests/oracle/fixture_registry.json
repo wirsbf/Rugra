@@ -1116,6 +1116,36 @@
      "tools/run_linksymbol_typed_oracle.sh"
     ]
    }
+  },
+  {
+   "id": "printc_symbol_decl_1204",
+   "description": "Symbol-driven local declarations: map order (space rank/start/usepoint), dynamic list append, emitVarDecl dtype+name, no-$$undef map asymmetry, notempty tail",
+   "runner": [
+    "tools/run_printc_symbol_decl_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/printc_symbol_decl_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/printc_symbol_decl_1204.cc",
+     "rust_fixture": "tests/oracle/printc_symbol_decl_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_printc_symbol_decl_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/printc.rs",
+     "tests/oracle/printc_symbol_decl_1204.*",
+     "tools/run_printc_symbol_decl_oracle.sh"
+    ]
+   }
   }
  ]
 }
