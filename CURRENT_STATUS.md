@@ -1,20 +1,33 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-08-15（wave 收尾核实更新）
+**日期**: 2026-08-16（session 收尾核实更新）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，2026-08-15 多 agent wave 落地 20 个原子提交**
 
-## 关键指标（2026-08-15 wave 收尾）
+## 关键指标（2026-08-16 session 收尾）
 
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
-| 单元测试 (`cargo test --lib`) | **1337 通过 / 6 失败 / 3 ignored** | 全提交序列实跑；6 个失败全部归因域外（comment/dynamic/funcdata×2/merge/ruleaction，均登记） |
-| curl E2E（隔离 worker 模式） | **24/24 函数反编译成功，0 skipped/failed** | 全提交序列权威复跑（session 起点 21/25） |
-| 锁定 oracle 函数 fixture | **registry 22 个**（本 wave 新增 9 个，8 个全投影 MATCH、1 个 28/29） | `tests/oracle/fixture_registry.json` |
-| erase_descend WARN 风暴 | **1454/函数 → 0** | timeout isolation 日志前后对比 |
-| 函数账本 | scheme 2 位置无关 ID（9494 Ghidra defs / 8644 Rust），`--check` verified | `2dfc91b` |
-| **12.0.4 canonical golden 差分（端到端北極星）** | **skeleton 3996 / defects 0 / numbering 6**（24 函数；起点 4530/0/126 → 双修复后 -12%/-95%；**首个逐字节一致函数 `__libc_csu_fini`**；目标全零） | `python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c`；本轮改善=RuleMultiCollapse 中止修复（main/glob_word/glob_set 三函数恢复完整结构）+ PRINTC 六类格式对齐（c960937） |
-| 11.3.2 诊断 golden | 退役为回归信号 | `ghidra_curl.c` 保留 |
+| 单元测试 (`cargo test --lib`) | **1357 通过 / 5 失败 / 3 ignored** | 失败集与 pristine base 逐个复现一致（comment/dynamic/funcdata×2/ruleaction 域外既有） |
+| curl E2E | **124/124 处理，74 反编译 / 1 超时(main churn) / 1 panic(helpf) / 48 导入声明桩** | 全量热测 43s |
+| 12.0.4 差分 | **skeleton 4368 / defects 0 / numbering 20（在修）** | `compare_ghidra.py` 全量 |
+| xunknown/xVar | **0**（TYPE-WIRING 双轨消除） | grep 归零 |
+| FUN_ 未解析调用 | **5**（起点 64；CALLSPEC 接线） | grep |
+| 逐字节一致函数 | **50/122** | compare 差分 |
+| gcc 审计 | **98 OK / 24 FAIL**（old-style 声明为主） | audit_syntax |
+| 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
+| oracle fixture | **registry 36 个**（session 新增 23） | fixture_registry.json |
+
+### 本 session（2026-08-15~16）落地摘要（89 提交）
+
+**Heritage 全链收官**（全部机制 C APPROVE，历经 1-4 轮复核）：
+OWNERSHIP(0618b1c) → CALLGUARD(126b56f) → ADT-RENAME(c96f699，含确定性根修 df HashSet) → DRIVER-SWITCH(c309130，canonical 单 pass 生产切换)。
+
+**typed-decl 链收官**：①LINKSYMBOL(0e4c6f4，local_ 106→0) → ②SCOPE-SYNC(3888124，8/8 MATCH + 补复核 APPROVE) → ③PRINTC-SYMBOL-DECL(df0da85，numbering 259→0)。
+
+**地基与外围**：ADDRESS 空间句柄(ff3f8c8) / SPACE registry(fb9458e) / undefinedN 双 flavor(b96e6f9) / TYPE-WIRING(38af1fd，xunknown/xVar 归零) / CALLSPEC(a4dcfdf，FUN_ 64→5) / EXTERNAL-STUB(83360f48→0) / SUBCANCEL 死锁修(03ec065，7 函数解锁) / INPLACE-MUTATION(3cee3ac) / merge 持久化+门(7046998/543db17) / 五项 merge 门 / copy_shadow / FinalStructure / get_inheritable coretype 修正 / 六 fixture 重 pin 全绿。
+
+**工具链**：12.0.4 真 headless golden(0c912e9) / 确定性双跑 CI 门禁 / audit_syntax 修复 / oracle registry 治理 / reducer schema-2 / registry ID scheme-2 迁移（STALE/REKEY/UNMAPPABLE 归零）。
 
 ### 2026-08-15 wave 落地摘要（20 提交，全部带真实 oracle 门禁或独立复核）
 
