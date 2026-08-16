@@ -194,3 +194,50 @@ sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 
   canonical golden（tests/golden/ghidra_{curl,httpd}_1204.c + provenance）并跑
   direct-runner 交叉验证；`--direct-runner` 单独重生补充 golden；`--check` 校验
   输入 SHA/oracle/arch/cspec/逐函数行数与 hash。
+
+## 确定性双跑门禁（2026-08-16，`DETERMINISM-GATE-CI-0006`）
+
+`check_determinism.py` 把 run-to-run 输出漂移（RUN-NONDETERM-0001 一类 bug）变成响亮失败：
+
+```bash
+python3 tools/check_determinism.py                    # 默认：all+compare 各 2 跑
+python3 tools/check_determinism.py --mode all --runs 3
+python3 tools/check_determinism.py --mode compare --compare-fn main
+python3 tools/check_determinism.py --self-test        # sed 注入假漂移自检
+```
+
+- **All 模式**：`curl_decompile`（无参全量）stdout sha256 全部相等 + 退出码 0。
+- **compare 模式**：`--rugra-timeout-isolation-compare-function <fn>`（默认 main）
+  不得报 `isolated output changed`，退出码 0，stdout sha256 相等。
+- **失败报告**：两 run 的 sha256/字节数/输出文件路径 + 首个差异行（行号与两侧
+  内容）；输出文件保留在临时目录供 forensics，成功才清理。退出码 0/1/2
+  （2=build 失败）。
+- **`--runs N`（默认 2）/ `--timeout SEC`（默认 900）**：逐跑超时与重复次数。
+- **二进制快照隔离**：先 `cargo build --release --example curl_decompile` 一次
+  （`--no-build` 跳过），再把产物 copy 到临时目录执行整组运行——多 agent 工作区
+  里并发 cargo build 会在两次运行间替换共享二进制（实测 30679B↔50966B 互换），
+  快照后漂移只可能来自进程内部（HashMap 种子等）。
+- **自测**：真实跑一次，`sed` 把输出中间一行替换为漂移标记，断言门禁抓到
+  （sha 不等 + first_diff 行号 = 注入行）。
+
+## audit_syntax 函数提取修复（2026-08-16，`AUDIT-SYNTAX-SKIPLINE-0001`）
+
+`audit_syntax.py` 的 depth 计数原从签名行起算，吞不掉 Ghidra skip_line 布局
+（签名行、空行、独立 `{` 行）的函数体——锁定 golden 自身 116/116 FAIL，
+curl 输出同样 0/112。修复后：
+
+- **skip_line depth**：签名后跳过空行/少量外提局部声明行，到独立 `{` 行才起算
+  depth；找不到 `{` 则签名行单独成 body，gcc 以 `expected '{'` 响亮失败。
+- **字面量安全括号计数**：`cVar3 != '{'` 字符字面量不再破坏函数边界（原 glob_set
+  被吞进 glob_word）。golden 提取覆盖 116→124。
+- **签名词表**：补 Ghidra 基础返回类型（undefinedN/ulong/uint/ushort/byte/
+  time_t/FILE/CURLcode 等）与双词函数名（`processEntry _start`）。
+- **桩环境**：STUB_HEADERS 增 Ghidra 基础 typedef（byte/ushort/uint/ulong/
+  undefinedN/code 等 + 不透明 FILE/stat/EVP_PKEY_CTX）、stdarg.h、PTR_/DAT_
+  约定全局 extern；与被审文件自带 inline typedef/extern 同名时逐函数去重，
+  Rugra 自产声明保持自身拼写。
+- **验证**：`tests/golden/ghidra_curl_1204.c` 0/116 → **104/124 OK**（20 个残余
+  FAIL 均为 golden 固有的非 C 构造：`::` 域限定/`processEntry _start` 双词名/
+  `stack0x…` 槽名/`._0_4_` 位选择器，及需要 DWARF 布局的域结构体成员访问
+  URLGlob/Configurable/FILE/DAT_ 算术）；`result/curl_cur.c` 0/112 → 53/116 OK，
+  残余失败为当前 WIP 输出的真实发现（`xunknown8` 类型拼写、`{` 前外提声明等）。

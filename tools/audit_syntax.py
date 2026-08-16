@@ -26,6 +26,7 @@ PREFIX_TYPE = {
 STUB_HEADERS = r"""
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdarg.h>
 /* typedefs emitted inline by printc before each function body */
 int curl_version(); int maprintf(); int curl_easy_setopt(); int curl_easy_perform();
 int curl_version(); int maprintf(); int curl_easy_setopt(); int curl_easy_perform();
@@ -46,11 +47,76 @@ int FUN_0002a710(); int FUN_0002b430(); int FUN_0002ae60();
  * __xstat, exit, puts, strlen, realloc, strchr) are NOT declared here — gcc
  * provides their own prototypes, and declaring them with int() would cause
  * 'conflicting types' or 'too many/few arguments' false failures. */
+/* Ghidra base type vocabulary (AUDIT-SYNTAX-SKIPLINE-0001): the locked 12.0.4
+ * golden relies on Ghidra's implicit type environment instead of inline
+ * typedefs. Lines here whose name is re-declared by the audited file's own
+ * inline preamble are dropped per function (see _declared_names), so Rugra
+ * output that emits its own typedefs keeps its own spelling. */
+typedef unsigned char byte;
+typedef unsigned short ushort;
+typedef unsigned int uint;
+typedef unsigned long ulong;
+typedef unsigned long long ulonglong;
+typedef unsigned char undefined;
+typedef unsigned char undefined1;
+typedef unsigned short undefined2;
+typedef unsigned int undefined4;
+typedef unsigned long undefined8;
+/* Ghidra prints calls through unknown-signature function pointers as
+ * (*(code *)p)(...) — including result-assigned forms — so code must be an
+ * unprototyped int-returning function type. */
+typedef int code();
+/* Opaque pointer-passed domain types (syntax-level only; member access on
+ * these stays a genuine audit finding). */
+typedef struct _IO_FILE FILE;
+typedef struct stat stat;
+typedef struct EVP_PKEY_CTX EVP_PKEY_CTX;
+typedef long time_t;
+typedef int CURLcode;
+typedef int HttpReq;
+typedef int URLPatternType;
+extern void *stderr;
+extern void *stdin;
+extern void *stdout;
 """
+
+# Convention-stubbed globals: Ghidra names memory-slot pointer globals PTR_*
+# and raw data globals DAT_*; the golden has no extern section for them, so we
+# declare every such token found in the audited text (Rugra output declares
+# its own globals inline, and those inline lines are deduped per function).
+_PTR_GLOBAL_RE = re.compile(r"\b((?:PTR|DAT)_\w+)\b")
+
+
+def _decl_name(line):
+    """Declared name of a typedef/extern line (last identifier before ';')."""
+    s = line.strip()
+    if s.startswith("typedef ") or s.startswith("extern "):
+        m = re.search(r"(\w+)\s*;", s)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _declared_names(lines):
+    """Names declared by typedef/extern lines (last identifier before ';')."""
+    return {n for n in (_decl_name(l) for l in lines) if n}
+
+
+def _brace_delta(line):
+    """Net brace delta of a line, ignoring braces inside literals/comments.
+
+    Ghidra golden bodies contain character literals like cVar3 != '{' whose
+    braces must not perturb function-boundary depth counting (glob_set was
+    previously absorbed into glob_word's body through exactly this).
+    """
+    s = re.sub(r"/\*.*?\*/", "", line)
+    s = re.sub(r"'(\\.|[^'\\])*'", "''", s)
+    s = re.sub(r'"(\\.|[^"\\])*"', '""', s)
+    return s.count("{") - s.count("}")
 
 
 def split_functions(text: str):
-    """从反编译输出文本中切分出每个函数（签名行 '{' 到匹配的 '}'）。"""
+    """从反编译输出文本中切分出每个函数（签名行到匹配的 '}'）。"""
     lines = text.splitlines()
     funcs = []
     pending_typedefs = []
@@ -67,15 +133,39 @@ def split_functions(text: str):
         if not stripped or stripped.startswith("/*") or stripped.startswith("Found ") or stripped.startswith("==="):
             i += 1
             continue
-        # 函数签名行：以返回类型开头，含 '('，下一行或本行以 '{' 结尾
-        m = re.match(r'^(int|long|void|char|short|bool|float|double|size_t|unsigned|long \*|char \*|void \*|int \*)\s+\*?\w+\s*\(', line)
+        # 函数签名行：以返回类型开头，含 '('，下一行或本行以 '{' 结尾。
+        # 词表含 Ghidra 基础类型（undefinedN/ulong/uint/ushort/byte/FILE/time_t/
+        # CURLcode 等），否则 golden 中这些返回类型的函数会被静默漏提取；
+        # 名字允许一个空格分段（Ghidra processEntry _start 布局）。
+        m = re.match(
+            r'^(int|long|void|char|short|bool|float|double|size_t|unsigned|uint|ulong|ushort|byte|wchar_t|time_t|undefined\d*|CURLcode|FILE|uchar)\s'
+            r'(\*{0,3})\s*\w+( \w+)?\s*\(',
+            line,
+        )
         if m:
             # 收集到匹配的 '}'
             start = i
-            depth = line.count('{') - line.count('}')
+            depth = _brace_delta(line)
             j = i + 1
+            if depth == 0:
+                # skip_line 布局（Ghidra 默认）：签名行、空行（或少量外提的局部
+                # 声明行）、独立 '{' 行。depth 从签名行起算会立刻为 0 而吞不掉
+                # 函数体（golden 自身 116/116 FAIL 根因，AUDIT-SYNTAX-
+                # SKIPLINE-0001）。跳过空行/声明行找到独立 '{' 行才起算 depth；
+                # 找不到则回滚到原有基线（j 已指向 i+1，签名行单独成 body，
+                # gcc 会以 expected '{' 响亮失败）。
+                k = j
+                while k < len(lines):
+                    s = lines[k].strip()
+                    if not s or re.match(r'^[A-Za-z_][\w \t\*]*;\s*$', s):
+                        k += 1
+                        continue
+                    break
+                if k < len(lines) and lines[k].strip() == "{":
+                    depth += _brace_delta(lines[k])
+                    j = k + 1
             while j < len(lines) and depth > 0:
-                depth += lines[j].count('{') - lines[j].count('}')
+                depth += _brace_delta(lines[j])
                 j += 1
             body = "\n".join(lines[start:j])
             name_match = re.search(r'\b(\w+)\s*\(', line)
@@ -103,15 +193,30 @@ def audit_one(text: str, label: str):
     if struct_h_path.exists():
         struct_typedef = struct_h_path.read_text()
     # If no struct.h, don't add _struct typedef — it's in the function body
+    # Convention externs for Ghidra memory-slot globals (see STUB_HEADERS
+    # note): PTR_* are pointer slots (compared to NULL / cast to code *),
+    # DAT_* are raw data globals that also appear in arithmetic, hence long.
+    # Types are self-contained so per-function dedup of the typedef block
+    # cannot leave these referencing a removed typedef.
+    conv_globals = sorted(set(_PTR_GLOBAL_RE.findall(text)))
+    ptr_externs = "\n".join(
+        f"extern unsigned char *{g};" if g.startswith("PTR_") else f"extern long {g};"
+        for g in conv_globals
+    )
 
     for name, body in funcs:
         # Build stub that excludes the function being compiled (avoids
         # 'conflicting types' when our int() stub disagrees with the
-        # function's own inferred signature).
-        stub = STUB_HEADERS + struct_typedef
-        # Remove any stub declaration line mentioning this function name
+        # function's own inferred signature). Also drop stub typedef/extern
+        # lines whose name is re-declared by this file's inline preamble, so
+        # audited files that carry their own declarations keep their spelling.
+        stub = STUB_HEADERS + ptr_externs + struct_typedef
+        own_names = _declared_names(
+            l for l in body.splitlines() if l.startswith(("typedef ", "extern "))
+        )
         stub_lines = [l for l in stub.split('\n')
-                      if not (f' {name}(' in l or f' {name};' in l)]
+                      if not (f' {name}(' in l or f' {name};' in l)
+                      and _decl_name(l) not in own_names]
         stub = '\n'.join(stub_lines)
         src = stub + "\n" + body + "\n"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False, encoding="utf-8") as f:
