@@ -654,10 +654,11 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ensure_callspecs**（对齐 FlowInfo::setupCallSpecs flow.cc:680）：扫描所有 alive CALL op，为每个建 FuncCallSpecs（从 inrefs[0] 目标地址初始化 entry_addr），存入 fd.callspecs。此前 callspecs 仅单元测试填充——整个 FuncCallSpecs/trial 恢复链是死代码。
 - **接入管线**：ActionFuncLink 注册在 decompile_group 的 ActionHeritage **之前**（对齐 Ghidra coreaction.cc:5484），确保 funcLink 建的 varnode 进入 SSA rename。
-- **ActionHeritage 接入 discover_and_guard_stack_stores_fd**（2026-06-29）：ActionHeritage::apply 在 place_multiequals/rename 之前调 `Heritage::discover_and_guard_stack_stores_fd(fd)`（对齐 heritage.cc:2707 discoverIndexedStackPointers + guardStores），发现 stack STORE 并建 Stack 空间 INDIRECT。
-- **两 pass heritage**（2026-06-29 续）：ActionHeritage::apply 跑两遍 place+rename。Pass 1 连接 op 图（rename 重写 STORE input 引用 INT_ADD output），Pass 2 的 discover 在连接后的图上发现 stack STOREs 建 Stack INDIRECT。对齐 Ghidra 多 pass heritage。
+- **2026-08-16 切换（HERITAGE-DRIVER-SWITCH-0001）**：`ActionHeritage::apply` 逐字对齐 coreaction.hh:289 —— `{ fd.op_heritage(); Ok(0) }`，无 pass guard、无内嵌 DeadCode、无 direct 双 pass。该 Action 位于 repeatapply mainloop 组（coreaction.cc:5489-5492），执行器每轮迭代重跑 heritage，收敛性由 `Heritage::heritage` 自身保证（per-space delay、prev==2 老范围 heritageKnown 跳过、`pass += 1` 仅末行一次，heritage.cc:2684-2757）。下述 2026-06-29 的 direct 双 pass / discover 夹层 / 内嵌 DeadCode 描述自此作废（历史记录）：
+- **ActionHeritage 接入 discover_and_guard_stack_stores_fd**（2026-06-29，已于 2026-08-16 移除出生产路径）：~~ActionHeritage::apply 在 place_multiequals/rename 之前调 `Heritage::discover_and_guard_stack_stores_fd(fd)`~~。
+- **两 pass heritage**（2026-06-29，已于 2026-08-16 移除）：~~ActionHeritage::apply 跑两遍 place+rename~~。现生产路径为 canonical 单 pass 驱动。
   - **INSERT/activeHeritage 对齐**（2026-06-29 续 2）：rename 使用 `is_heritage_known()` + `is_active_heritage()`（对齐 heritage.cc:2496-2498）。rename_direct 对 free varnode 设 activeHeritage。
-  - **Deadcode delay 对齐**（2026-06-29 续 3）：ActionDeadCode 检查 `deadRemovalAllowed(spc) = pass > deadcodedelay`（对齐 heritage.cc:2843）。Stack 空间 delay=1，pass 0 时 Stack varnode 全标记 consumed（不删）。ActionHeritage::apply 在两 pass 之间插入 dead-code（对齐 mainloop Heritage+DeadCode 交替，coreaction.cc:5503）。
+  - **Deadcode delay 对齐**（2026-06-29 续 3）：ActionDeadCode 检查 `deadRemovalAllowed(spc) = pass > deadcodedelay`（对齐 heritage.cc:2843）。Stack 空间 delay=1，pass 0 时 Stack varnode 全标记 consumed（不删）。~~ActionHeritage::apply 在两 pass 之间插入 dead-code~~（已移除：DeadCode 是 mainloop 的兄弟 Action，由执行器调度，coreaction.cc:5503）。
 - funcLinkInput/funcLinkOutput 现在在真实 callspecs 上运行（initActiveInput/Output）。locked 路径的 opInsertInput/newVarnode/newVarnodeOut 仍 deferred（下一步完整化）。
 - 基础已就绪，无回归：780/780 测试，curl 24/24。
 

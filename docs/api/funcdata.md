@@ -262,9 +262,10 @@ Ghidra 侧该函数体即 `{ heritage.heritage(); }` —— 恰好一次
 pass 0→1→2→3）不可能死锁。
 
 #### 注意事项
-- 生产管线（`ActionHeritage::apply`）**尚未切换**到此桥（见
-  HERITAGE-DRIVER-SWITCH）；当前生产路径仍走
-  `run_heritage_direct` / `place_multiequals_direct`。
+- 生产管线（`ActionHeritage::apply`）**已切换**到此桥（HERITAGE-DRIVER-SWITCH-0001，
+  2026-08-16）：`apply` 逐字对齐 coreaction.hh:289 `{ fd.op_heritage(); Ok(0) }`。
+  `run_heritage_direct` / `place_multiequals_direct` 移出生产路径，仅剩 example
+  侧 throwaway-Funcdata 参数估计与 crate 内测试调用。
 - 与 Ghidra 一致：`Heritage::heritage` 不构建 infolist ——
   `buildInfoList` 属于 `Funcdata::startProcessing`（funcdata.cc:166）。
   未运行 startProcessing 就调用本方法，per-space 阶段对空 infolist
@@ -274,17 +275,17 @@ pass 0→1→2→3）不可能死锁。
 
 ### `pub fn run_heritage_direct(&mut self)`
 
-安全地执行 SSA (heritage) 构建通道，避免死锁。
+执行**非生产**的 direct SSA pass（`place_multiequals_direct` + `rename_direct`）。
 
 #### 语义
-该方法是一个便捷且安全的 SSA 构建入口。它会通过 `std::mem::take` 临时剥离必要的组件（如 `VarnodeBank` 和 `PcodeOpBank`），并将其直接传递给底层的 heritage 算法，从而避免底层的 `Heritage` 在重入时尝试通过 `Weak<RwLock<Funcdata>>` 再次获取自身写锁。
+该方法通过 `std::mem::take` 临时剥离 `VarnodeBank` / `PcodeOpBank`，把它们直接传给 direct 系 heritage 算法。
 
-#### 作用
-在进行函数级分析并需要构造 SSA 时，如果当前上下文已经持有了 `Funcdata` 的可变借用（或 `RwLockWriteGuard`），直接调用 `self.heritage.heritage()` 必然导致死锁。`run_heritage_direct` 就是为了彻底绕过这个问题而提供的官方安全入口。
-
-#### 典型使用场景
-- 单元测试或集成测试中执行 SSA 通道
-- 后续在单线程 / 顺序分析管道中执行 heritage
+#### HERITAGE-DRIVER-SWITCH-0001 状态（2026-08-16）
+Ghidra 没有 `runHeritageDirect` 对应物（此前注释引用的 funcdata.cc:34 实为
+`setSelfRef`，属误引，已更正为 RUGRA-GLUE）。自生产路径切换后，本入口
+**绕过** canonical `Heritage::heritage`（heritage.cc:2663-2758）的
+ADT/guard/refinement 阶段，只服务 example 侧 prototype 估计 helper（在
+丢弃型 Funcdata 上）与 crate 内测试；不得在主管线调用。
 
 #### 注意事项
 这是用于替换旧版测试代码中手动调用 `place_multiequals_direct` 和 `rename_direct` 的推荐方式。

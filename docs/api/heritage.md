@@ -518,7 +518,7 @@ block.cc:2036-2051）；`buildDomDepth` 根深度 1、子 = 父+1、尾部哨兵
 `seq=6,3`）对锁定 oracle 逐字节 MATCH。
 
 ### 残差（如实登记）
-- `collect` 的扫描窗口是全 bank 偏移区间（Rugra Address 无空间身份），
+- `collect` 现为探针驱动的 loc_tree 活窗口（本空间限定；历史全 bank 偏移扫描已废），
   跨空间偏移碰撞会误分类——`HERITAGE-DRIVER-SWITCH-0001` 硬前置。
 - refinement/guardInput concat/removeRevisitedMarkers 已按 oracle 调用
   形状接线，但 fixture 未触发（UNTESTED）。
@@ -742,10 +742,18 @@ pass 计数只代表处理轮次，不等于质量保证。
 `heritage.rs` 是 Rugra 当前 **SSA 构造与 heritage 过程控制** 的核心模块：它负责
 组织版本传播、合流节点放置、rename 及相关辅助状态管理，为后续数据流分析、变量恢复和输出层提供更稳定的函数级语义骨架。
 
+## 2026-08-16：HERITAGE-DRIVER-SWITCH-0001 —— 生产路径切 canonical 单 pass + LocationMap 空间键
+
+- **`ActionHeritage::apply` 切换**（coreaction.rs，逐字对齐 coreaction.hh:289）：`{ fd.op_heritage(); Ok(0) }`。删除 pass>=2 guard、global_struct_ptrs v_type 预戳、direct 双 pass、内嵌 ActionDeadCode 夹层与 discover_and_guard_stack_stores_fd 调用。收敛性验证：curl 124/124 processed、`multiple descendants` WARN 351（=HEAD 基线，FLAGFREE 审计的 44 在 HEAD 不可复现，两态均为 351）、"not settling" 5（=基线，type-propagation 家族）、3× 输出 sha 一致。
+- **LocationMap 空间键**（heritage.hh:48 `map<Address,SizePass>`，Address 含 space；`Address::overlap` 跨空间恒 -1）：`themap` 键从裸 offset 改为 `(AddressSpace, Address)`，`add/find_pass/entry_containing` 只在本空间子区间找候选——跨空间同 offset 碰撞不再误分类 NEW/OLD（126b56f 复核硬前置）。新增看门狗测试 `test_location_map_cross_space_keys_are_disjoint`。
+- **normalize_read_size 修复**（heritage.cc:383-401）：此前直接 `newop.output = Some(vn)` 绕过 `Funcdata::op_set_output`，被归一的 varnode `def` 从未置位、永远 FREE，驱动器每 pass 重新归一、每 pass 新建 SUBPIECE——canonical 切换后实测 main 800+ mainloop 迭代/WARN 21630 的 ping-pong 根因。现走 `op_set_output`（装 def + def_tree）+ cc:398 `set_write_mask`（驱动器 cc:2706 跳过）。
+- **collect 活窗口（复核 M1 修正，2026-08-16 r2；heritage.cc:323-325）**：collect 每 range 用合成探针 varnode（size 0，同 offset 排最前）构造 `loc_tree.range(probe..)`——字面 beginLoc(addr) 语义的**活迭代器**，只走本空间窗口成员（O(log V + hits)），兼修跨空间同 offset 误收。**活性是承载语义的**：refinement（cc:1902-1906）在本 placeMultiequals 行进中创建 pieces，oracle 的 cc:2615 re-collect 与后续各 piece 的 collect 都必须看到；早先的入口冻结快照实现把 pieces 对整个 pass 隐藏、下一 pass 该范围已成 OLD（addIndirects=false）→ INDIRECT 永不补建（x86-64 部分寄存器写高频触发 `size>4 && max<size`）。fixture case E（switch_refinement_recollect）锁定：冻结实现下该 case `free_with_reader=0` 断言失败（判别力实证），live 实现下与 oracle 逐字节一致（`phi.PIECE(R54:4:I,R50:4:W+INT_SUB)`）。
+- **direct 族移出生产路径**：`place_multiequals_direct`/`rename_direct`/`insert_multiequal_direct`/`run_heritage_direct` 仅剩 example 侧 throwaway-Funcdata 参数估计与 crate 内测试调用；无调用者的 `insert_multiequal`（fd 适配壳）删除。`insert_multiequal_direct` 的 phi 尺寸回退（`.unwrap_or(4)`）随之不再有生产可达路径。
+- **E2E 残差**（如实登记，绑定后继）：(1) 生产 callspec 无 model（FUNCPROTO-MODEL-BIND-0001/CSPEC-TEXT-INGEST-0001）→ `FuncCallSpecs::has_effect` 恒 UnknownEffect（fspec.rs 保守分支）→ canonical guardCalls 每 call×range 建 INDIRECT（main pass 0 = 13,462 INDIRECT + 4,098 phi，ops 674→22,186、vns 8K→68K）；(2) varnode bank descend 列表 O(n) `has_no_descend`（Weak upgrade 逐元素）× 共享 free varnode → pass 0 rename 30s。两因叠加 8 函数超 example 的 10s worker 预算（decompiled 76→68），skeleton diff 于 11 个文本变化函数 +1..+277（defects=0 不变）。
+
 ## 2026-06-29：discover_and_guard_stack_stores_fd（heritage.cc:985 + 1539）
 
-- 新增 `Heritage::discover_and_guard_stack_stores_fd(fd: &mut Funcdata)`——对齐 Ghidra 的 `discoverIndexedStackPointers` + `guardStores`。从 RSP input 前向 descend 追踪 INT_ADD/INT_SUB/COPY 链，对到达的 STORE 算 stack offset，调 `new_indirect_op` 建 Stack 空间 INDIRECT。
-- 接入 `ActionHeritage::apply`（coreaction.rs），在 place_multiequals/rename 之前跑。
+- 新增 `Heritage::discover_and_guard_stack_stores_fd(fd: &mut Funcdata)`——对齐 Ghidra 的 `discoverIndexedStackPointers` + `guardStores`。从 RSP input 前向 descend 追踪 INT_ADD/INT_SUB/COPY 链，对到达的 STORE 算 stack offset，调 `new_indirect_op` 建 Stack 空间 INDIRECT。（2026-08-16 起移出生产路径，仅 reprocess_free_stores 近似与测试调用。）
 - 前置依赖：varnode 去重（find_or_create_input_space）修复 descend 碎片化后，RSP input 有 64 个 descendants。
 - 当前局限：written varnode（如 INT_ADD output）未去重，BFS 从 RSP 到 INT_ADD output 后，output 的 descend 不含 STORE（STORE 用独立副本）——待 inject_raw_ops 连接 op 图修复。
 

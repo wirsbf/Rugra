@@ -24,76 +24,15 @@ impl ActionHeritage {
 impl Action for ActionHeritage {
     // Ghidra: coreaction.hh:289 ActionHeritage::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra idempotency guard (heritage.cc:2698-2701): each space has a
-        // delay; Heritage::heritage() skips spaces where pass < delay. After
-        // pass 2, all spaces (register=0, unique=0, stack=1) are heritaged, so
-        // Heritage returns without doing anything. Without this guard, Rugra's
-        // 2-pass heritage runs unconditionally each mainloop iteration, creating
-        // new SSA temporaries every pass → never converges under repeatapply.
-        if fd.heritage.pass >= 2 {
-            return Ok(0);
-        }
-        // Stamp global struct pointer types BEFORE Heritage rename.
-        // This ensures Configurable* type survives rename via the
-        // v_type preservation code in rename_direct (535560e).
-        if !fd.global_struct_ptrs.is_empty() && fd.heritage.pass == 0 {
-            use crate::type_system::datatype::Datatype;
-            let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
-                .map(|(a, d)| (*a, d.clone()))
-                .collect();
-            for vn_ref in &fd.vbank.loc_tree {
-                let vn = vn_ref.0.read().unwrap();
-                if vn.is_annotation() { continue; }
-                let off = vn.get_offset();
-                for &(addr, ref dt) in &globals {
-                    if off == addr && matches!(vn.get_space(),
-                        crate::space::AddressSpace::Const
-                        | crate::space::AddressSpace::Ram)
-                    {
-                        drop(vn);
-                        vn_ref.0.write().unwrap().v_type = Some(dt.clone());
-                                                break;
-                    }
-                }
-            }
-        }
-        // Ghidra heritage.cc:2677-2771 runs a multi-pass heritage where:
-        //   pass 1: discoverIndexedStackPointers (marks STOREs) + place + rename
-        //   The rename in pass 1 connects the op graph (rewrites STORE input
-        //   to reference INT_ADD output via SSA), so subsequent discovery sees
-        //   a connected graph.
-        //
-        // Rugra runs two passes to achieve the same effect:
-        //   pass 1: place + rename (connects op graph)
-        //   pass 2: discover + place + rename (discover on connected graph
-        //           finds stack STOREs, builds Stack INDIRECTs; place/rename
-        //           then handles the new Stack varnodes)
-        {
-            let mut heritage = std::mem::take(&mut fd.heritage);
-            heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
-            heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
-            heritage.pass += 1;
-            fd.heritage = heritage;
-        }
-        // Dead-code between passes, faithful to Ghidra mainloop where each
-        // pass alternates Heritage + DeadCode (coreaction.cc:5503). At this
-        // point heritage.pass=1, Stack delay=1, so deadRemovalAllowed(Stack)
-        // = (1 > 1) = false → Stack INDIRECT varnodes are marked consumed and
-        // survive. Register/Unique varnodes are dead-coded normally.
-        {
-            let mut dc = ActionDeadCode::new();
-            let _ = dc.apply(fd);
-        }
-        // Pass 2: discover stack STOREs on the connected graph, then
-        // place + rename to SSA the new Stack-space INDIRECT varnodes.
-        crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
-        {
-            let mut heritage = std::mem::take(&mut fd.heritage);
-            heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
-            heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
-            heritage.pass += 1;
-            fd.heritage = heritage;
-        }
+        // Ghidra coreaction.hh:289 verbatim: { data.opHeritage(); return 0; }
+        // No pass guard, no embedded DeadCode, no direct double pass:
+        // ActionHeritage sits in the repeatapply "mainloop" group
+        // (coreaction.cc:5489-5492), so the executor re-runs this apply on
+        // every mainloop iteration and Heritage::heritage itself decides
+        // per space what is left to do (heritage.cc:2684-2748: pass < delay
+        // skip, prev==2 old ranges only re-entered when not heritageKnown,
+        // per-space once-only loadGuardSearch/warning).
+        fd.op_heritage();
         Ok(action_status::NO_CHANGE)
     }
 

@@ -751,13 +751,16 @@ impl Funcdata {
         self.heritage = heritage;
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::runHeritageDirect
-    /// Safely run the SSA heritage pass directly, avoiding deadlocks.
-    /// 
-    /// The standard `heritage()` method attempts to acquire a write lock on `Funcdata`
-    /// via a weak pointer. If the caller already holds a lock on `Funcdata`, this
-    /// leads to a deadlock. This method avoids the deadlock by passing the required
-    /// banks directly to the underlying heritage algorithms.
+    // RUGRA-GLUE: legacy direct heritage entry; Ghidra has no runHeritageDirect.
+    /// Run the OFF-PRODUCTION direct SSA pass (`place_multiequals_direct` +
+    /// `rename_direct`) against separated banks. Since
+    /// HERITAGE-DRIVER-SWITCH-0001 the production pipeline drives the
+    /// canonical single-pass `op_heritage` (mirroring coreaction.hh:289
+    /// `ActionHeritage::apply`); this legacy entry survives for the
+    /// example-side prototype estimation helpers (throwaway Funcdata in
+    /// examples/curl_decompile.rs et al.) and tests outside this crate's
+    /// canonical path. It bypasses the ADT/guard/refinement stages of
+    /// `Heritage::heritage` (heritage.cc:2663-2758).
     pub fn run_heritage_direct(&mut self) {
         let mut vbank = std::mem::take(&mut self.vbank);
         let mut obank = std::mem::take(&mut self.obank);

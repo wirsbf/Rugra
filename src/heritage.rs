@@ -16,7 +16,15 @@ use std::sync::{Arc, RwLock, Weak};
 /// Corresponds to Ghidra's `LocationMap`
 #[derive(Debug)]
 pub struct LocationMap {
-    pub themap: BTreeMap<Address, SizePass>,
+    /// Heritaged addresses mapped to range size and pass number. Ghidra keys
+    /// this map by a full `Address` (space + offset, heritage.hh:48
+    /// `map<Address,SizePass>`; `Address::operator<` orders by space index
+    /// then offset, and `Address::overlap` returns -1 for different spaces),
+    /// so entries from different address spaces never merge or overlap.
+    /// Rugra's `Address` is a bare offset, so the space identity is carried
+    /// explicitly in the key tuple (HERITAGE-DRIVER-SWITCH-0001: cross-space
+    /// offset collisions previously misclassified ranges as NEW/OLD).
+    pub themap: BTreeMap<(AddressSpace, Address), SizePass>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,12 +43,17 @@ impl LocationMap {
 
     // Ghidra: heritage.cc:34 LocationMap::add
     /// Add a range to the disjoint cover, merging overlapping entries.
-    /// Faithful to `LocationMap::add` (heritage.cc:34-71).
+    /// Faithful to `LocationMap::add` (heritage.cc:34-71). Candidate entries
+    /// are restricted to `space`'s contiguous sub-range, exactly mirroring
+    /// Ghidra's `map<Address,...>` behaviour where `lower_bound`/`--iter` can
+    /// land on another space's entry but `Address::overlap` then returns -1
+    /// (different spaces never overlap) and the walk advances back into the
+    /// query space.
     /// Returns the intersect code:
     ///   0 = no overlap with existing
     ///   1 = partial overlap (merged)
     ///   2 = completely contained in a previous (older) entry
-    pub fn add(&mut self, mut addr: Address, mut size: i32, mut pass: i32) -> i32 {
+    pub fn add(&mut self, space: AddressSpace, mut addr: Address, mut size: i32, mut pass: i32) -> i32 {
         use crate::address::Address as A;
         // Ghidra cc:37-41: iter = lower_bound(addr); if (iter != begin)
         // --iter; if the resulting entry does not overlap, ++iter. The
@@ -50,7 +63,12 @@ impl LocationMap {
         // contained" classification for exact-start re-adds (prev must be
         // 2, not 1, so a later pass does not re-flag the range NEW).
         let mut intersect = 0;
-        let keys: Vec<Address> = self.themap.keys().cloned().collect();
+        let keys: Vec<Address> = self
+            .themap
+            .keys()
+            .filter(|k| k.0 == space)
+            .map(|k| k.1)
+            .collect();
         let lb = keys.iter().position(|k| *k >= addr);
         let mut i = match lb {
             Some(pos) if pos > 0 => pos - 1,
@@ -58,14 +76,14 @@ impl LocationMap {
             None => keys.len().saturating_sub(1),
         };
         if i < keys.len()
-            && A::overlap(&addr, 0, keys[i], self.themap[&keys[i]].size) == -1
+            && A::overlap(&addr, 0, keys[i], self.themap[&(space, keys[i])].size) == -1
         {
             i += 1;
         }
         // Ghidra cc:43-57: containment / first merge on the selected entry.
         if i < keys.len() {
             let k_addr = keys[i];
-            let k_sp = self.themap[&k_addr];
+            let k_sp = self.themap[&(space, k_addr)];
             let where_ = A::overlap(&addr, 0, k_addr, k_sp.size);
             if where_ != -1 {
                 // Ghidra cc:46-49: completely contained?
@@ -79,14 +97,14 @@ impl LocationMap {
                     intersect = 1;
                     pass = k_sp.pass;
                 }
-                self.themap.remove(&k_addr);
+                self.themap.remove(&(space, k_addr));
                 i += 1;
             }
         }
         // Ghidra cc:58-66: continue merging subsequent overlapping entries.
         while i < keys.len() {
-            let (k_addr, k_sp) = (keys[i], self.themap.get(&keys[i]).copied().unwrap_or(SizePass { size: 0, pass: 0 }));
-            if self.themap.get(&keys[i]).is_none() { i += 1; continue; }
+            let (k_addr, k_sp) = (keys[i], self.themap.get(&(space, keys[i])).copied().unwrap_or(SizePass { size: 0, pass: 0 }));
+            if self.themap.get(&(space, keys[i])).is_none() { i += 1; continue; }
             let where_ = A::overlap(&k_addr, 0, addr, size);
             if where_ == -1 { break; }
             if where_ + k_sp.size > size {
@@ -96,11 +114,11 @@ impl LocationMap {
                 intersect = 1;
                 pass = k_sp.pass;
             }
-            self.themap.remove(&keys[i]);
+            self.themap.remove(&(space, keys[i]));
             i += 1;
         }
         // Ghidra cc:67-70: insert merged entry.
-        self.themap.insert(addr, SizePass { size, pass });
+        self.themap.insert((space, addr), SizePass { size, pass });
         intersect
     }
 
@@ -108,22 +126,34 @@ impl LocationMap {
     /// Return the pass number when the given address was heritaged, or -1
     /// if it was not heritaged. Faithful to `findPass` (heritage.cc:91-100):
     /// upper_bound(addr), back up one, check overlap.
-    pub fn find_pass(&self, addr: Address) -> i32 {
-        // Ghidra cc:94: upper_bound(addr) — first key > addr
-        let keys: Vec<&Address> = self.themap.keys().filter(|k| **k > addr).collect();
+    pub fn find_pass(&self, space: AddressSpace, addr: Address) -> i32 {
+        // Ghidra cc:94: upper_bound(addr) — first key > addr (within space;
+        // entries of other spaces can never overlap this address).
+        let keys: Vec<Address> = self
+            .themap
+            .keys()
+            .filter(|k| k.0 == space && k.1 > addr)
+            .map(|k| k.1)
+            .collect();
         // Ghidra cc:95: if (iter == begin) return -1
         let prev_key = if keys.is_empty() {
             // No key > addr → use the last key (if any)
-            self.themap.keys().max().copied()
+            self.themap
+                .range((space, Address::new(0))..=(space, Address::new(u64::MAX)))
+                .next_back()
+                .map(|(k, _)| k.1)
         } else {
             // The key just before the first key > addr
             let first_after = keys[0];
-            self.themap.keys().filter(|k| **k < *first_after).max().copied()
+            self.themap
+                .range((space, Address::new(0))..(space, first_after))
+                .next_back()
+                .map(|(k, _)| k.1)
         };
         // Ghidra cc:97-98: if overlap != -1 return pass
         match prev_key {
             Some(k) => {
-                let sp = self.themap.get(&k).copied().unwrap_or(SizePass { size: 0, pass: -1 });
+                let sp = self.themap.get(&(space, k)).copied().unwrap_or(SizePass { size: 0, pass: -1 });
                 if addr.overlap(0, k, sp.size) != -1 {
                     sp.pass
                 } else {
@@ -141,23 +171,33 @@ impl LocationMap {
     /// range; the driver then reads `(*liter).first` / `(*liter).second.size`
     /// (heritage.cc:2710/2719/2722). Rugra's `add` returns only the intersect
     /// code, so this upper_bound/back-up lookup recovers the same entry.
-    pub fn entry_containing(&self, addr: Address) -> Option<(Address, i32)> {
-        // upper_bound(addr): first key > addr, then back up one.
-        let mut iter = self.themap.range((std::ops::Bound::Excluded(addr), std::ops::Bound::Unbounded));
-        let prev_key = match iter.next() {
-            Some((k, _)) => {
-                // First key > addr exists; the candidate is the key before it.
-                self.themap
-                    .range(..k)
-                    .next_back()
-                    .map(|(k2, _)| *k2)?
-            }
-            None => {
-                // No key > addr; the candidate is the last key.
-                self.themap.iter().next_back().map(|(k2, _)| *k2)?
+    /// Scans only `space`'s sub-range — entries in other spaces can never
+    /// contain this address (Ghidra `Address::overlap` is -1 cross-space).
+    pub fn entry_containing(&self, space: AddressSpace, addr: Address) -> Option<(Address, i32)> {
+        // upper_bound(addr): first key > addr (within space), then back up one.
+        let prev_key = {
+            let first_after = self
+                .themap
+                .range((space, addr)..=(space, Address::new(u64::MAX)))
+                .find(|(k, _)| k.1 > addr);
+            match first_after {
+                Some((k, _)) => {
+                    // First key > addr exists; the candidate is the key before it.
+                    self.themap
+                        .range((space, Address::new(0))..*k)
+                        .next_back()
+                        .map(|(k2, _)| k2.1)?
+                }
+                None => {
+                    // No key > addr; the candidate is the last key of this space.
+                    self.themap
+                        .range((space, Address::new(0))..=(space, Address::new(u64::MAX)))
+                        .next_back()
+                        .map(|(k2, _)| k2.1)?
+                }
             }
         };
-        let sp = self.themap.get(&prev_key)?;
+        let sp = self.themap.get(&(space, prev_key))?;
         if addr.overlap(0, prev_key, sp.size) != -1 {
             Some((prev_key, sp.size))
         } else {
@@ -924,7 +964,18 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:219 Heritage::discoverAndGuardStackStoresFd
+    // RUGRA-GLUE: Rugra-specific stack-store discovery; no 1:1 Ghidra function.
+    /// Forward-descend the stack-pointer input varnode, mark STOREs whose
+    /// pointer reaches it as spacebase users, and materialize stack-space
+    /// INDIRECT writes for them. This is Rugra's approximation of the
+    /// marking half of `Heritage::discoverIndexedStackPointers`
+    /// (heritage.cc:985-1108) + `protectFreeStores` (heritage.cc:943-968,
+    /// `opMarkSpacebasePtr`); it does not implement the indexed-pointer
+    /// traversal states (HERITAGE-CALLGUARD-0001 residual family).
+    /// Since HERITAGE-DRIVER-SWITCH-0001 the production ActionHeritage no
+    /// longer calls this between passes: canonical placeMultiequals runs
+    /// its own guard/stores logic per range. Remaining callers are the
+    /// reprocessFreeStores approximation and tests.
     pub fn discover_and_guard_stack_stores_fd(fd: &mut Funcdata) {
         let (sp_space, sp_offset, sp_size) = (
             fd.stack_pointer_space,
@@ -1498,11 +1549,18 @@ impl Heritage {
         // cc:395-396: opSetInput(newop, vn1, 0); opSetInput(newop, vn2, 1)
         fd.op_set_input(&newop, vn1.clone(), 0);
         fd.op_set_input(&newop, vn2, 1);
-        // cc:397: opSetOutput(newop, vn) — old vn becomes SUBPIECE output
-        newop.0.write().unwrap().output = Some(vn.clone());
-        // cc:398: setWriteMask — Ghidra flag writemask.
-        // Rugra doesn't have WRITEMASK flag defined yet; skip for now.
-        // TODO: add WRITEMASK to varnode_flags.
+        // cc:397: opSetOutput(newop, vn) — old vn becomes SUBPIECE output.
+        // Must go through Funcdata::op_set_output (funcdata_op.cc:70): the
+        // previous direct `output = Some(vn)` assignment left vn.def unset,
+        // so the "normalized" varnode stayed FREE in the bank, the driver
+        // re-collected it every pass, and each pass re-normalized it with a
+        // fresh SUBPIECE — the Heritage/DeadCode ping-pong that kept the
+        // mainloop from converging (HERITAGE-DRIVER-SWITCH-0001).
+        fd.op_set_output(&newop, vn.clone());
+        // cc:398: newop->getOut()->setWriteMask() — the driver skips
+        // writemasked varnodes (cc:2706), so the SUBPIECE output is never
+        // re-collected as a heritage candidate.
+        vn.write().unwrap().set_write_mask();
         // cc:399: opInsertBefore(newop, op)
         fd.op_insert_before(&newop, &PcodeOpRef(op.clone()));
         vn1
@@ -3161,11 +3219,11 @@ impl Heritage {
     ///
     /// Space-identity note: Ghidra scans beginLoc(memrange.addr) through
     /// endLoc(endaddr), which is confined to the MemRange's own address
-    /// space (its Address carries the space); Rugra's offset-only Address
-    /// forces a whole-bank scan with an offset-window filter, so a
-    /// different-space Varnode whose offset falls inside the window is
-    /// misclassified (registered space-collision residual,
-    /// HERITAGE-DRIVER-SWITCH-0001 hard precondition).
+    /// space (its Address carries the space); the probe-based live window
+    /// below preserves exactly that — entries of other spaces never enter
+    /// the iteration (HERITAGE-DRIVER-SWITCH-0001 space-key fix; the
+    /// historical whole-bank offset filter misclassified cross-space
+    /// collisions).
     pub fn collect(
         &self,
         fd: &Funcdata,
@@ -3183,11 +3241,36 @@ impl Heritage {
         let size = memrange.size;
         let end_addr = addr.as_u64().wrapping_add(size as u64);
         let mut maxsize: i32 = 0;
-        for vn_ref in &fd.vbank.loc_tree {
-            let vn = vn_ref.0.read().unwrap();
-            // Skip if not in range [addr, addr+size)
-            let vn_off = vn.loc.as_u64();
-            if vn_off < addr.as_u64() || vn_off >= end_addr { continue; }
+        // Ghidra cc:323-325: beginLoc(memrange.addr) .. endLoc(addr+size) —
+        // LIVE ordered-window iteration over the bank's loc-set. Liveness is
+        // load-bearing: refinement (refineRead/refineWrite/refineInput,
+        // cc:1902-1906) creates piece varnodes earlier in this same
+        // placeMultiequals walk, and the oracle's re-collect of the first
+        // piece (cc:2615) plus every later piece's collect must see them —
+        // an entry-frozen snapshot would hide the pieces for the whole pass
+        // and, because the next pass classifies the range OLD
+        // (addIndirects=false), the missed INDIRECTs would never be built
+        // (review finding M1). Rugra's loc_tree is a
+        // BTreeSet<VarnodeLocRef> whose Ord acquires varnode read locks
+        // during comparison, so the RangeFrom bound is built from a
+        // synthetic probe varnode: size 0 sorts before every same-offset
+        // member, so `probe..` starts exactly at beginLoc(addr). The window
+        // walk itself touches only window members (other spaces never
+        // enter — space-major ordering mirrors VarnodeCompareLocDef), and
+        // classification reads live flags, matching the oracle iterator.
+        let probe = crate::varnode::VarnodeLocRef(std::sync::Arc::new(
+            std::sync::RwLock::new(Varnode::new_with_space(
+                0,
+                memrange.space,
+                addr.as_u64(),
+            )),
+        ));
+        for entry in fd.vbank.loc_tree.range(probe..) {
+            let vn_arc = entry.0.clone();
+            let vn = vn_arc.read().unwrap();
+            if vn.address_space != memrange.space || vn.loc.as_u64() >= end_addr {
+                break;
+            }
             // cc:326: if (!vn->isWriteMask()) gates every classification
             if vn.is_write_mask() {
                 continue;
@@ -3201,7 +3284,7 @@ impl Heritage {
                         || (def_r.flags & crate::op::pcodeop_flags::RETURN_COPY) != 0;
                     if prior_heritage {
                         if vn.get_size() < size as usize {
-                            remove.push(vn_ref.0.clone());
+                            remove.push(vn_arc.clone());
                             continue;
                         }
                         // cc:334: previous pass covered everything
@@ -3211,11 +3294,11 @@ impl Heritage {
                 if vn.get_size() as i32 > maxsize {
                     maxsize = vn.get_size() as i32;
                 }
-                write.push(vn_ref.0.clone());
+                write.push(vn_arc.clone());
             } else if !vn.is_heritage_known() && !vn.has_no_descend() {
-                read.push(vn_ref.0.clone());
+                read.push(vn_arc.clone());
             } else if vn.is_input() {
-                input.push(vn_ref.0.clone());
+                input.push(vn_arc.clone());
             }
         }
         maxsize
@@ -3598,7 +3681,7 @@ impl Heritage {
         // are inserted in its place, and each piece is re-added to
         // globaldisjoint under the erased entry's pass number.
         let flags = self.disjoint.tasklist[memidx].flags;
-        let cur_pass = match self.globaldisjoint.themap.remove(&addr) {
+        let cur_pass = match self.globaldisjoint.themap.remove(&(space, addr)) {
             Some(sp) => sp.pass,
             // cc:1922-1923 dereferences globaldisjoint.find(addr); an
             // exact-key miss is unreachable for driver-fed ranges (the
@@ -3642,7 +3725,7 @@ impl Heritage {
             if sz <= 0 {
                 break;
             }
-            let _ = self.globaldisjoint.add(piece_addr, sz, cur_pass);
+            let _ = self.globaldisjoint.add(space, piece_addr, sz, cur_pass);
             cut += sz;
             piece_addr = Address::new(piece_addr.as_u64().wrapping_add(sz as u64));
         }
@@ -3824,12 +3907,12 @@ impl Heritage {
             for (vn_arc, vn_addr, vn_size) in vns_in_space {
                 // cc:2708: LocationMap::iterator liter =
                 //   globaldisjoint.add(vn->getAddr(),vn->getSize(),pass,prev);
-                let prev = self.globaldisjoint.add(vn_addr, vn_size, pass);
+                let prev = self.globaldisjoint.add(space, vn_addr, vn_size, pass);
                 // (*liter).first / (*liter).second.size: the merged map
                 // entry covering vn_addr (LocationMap::add returns the
                 // iterator to the merged entry; Rugra's add returns only the
                 // intersect code, so re-locate the containing entry).
-                let (m_addr, m_size) = match self.globaldisjoint.entry_containing(vn_addr) {
+                let (m_addr, m_size) = match self.globaldisjoint.entry_containing(space, vn_addr) {
                     Some(e) => e,
                     None => (vn_addr, vn_size),
                 };
@@ -3977,6 +4060,10 @@ impl Heritage {
             self.disjoint.tasklist[idx] = memrange.clone();
             // Ghidra cc:2610-2616: refine ranges bigger than 4 bytes that
             // no single write fully spans, then re-collect the first piece.
+            // collect's loc_tree window is LIVE (probe-based beginLoc), so
+            // the pieces refinement just created are visible here and to
+            // every later piece — matching the oracle's iterators
+            // (review finding M1: an entry-frozen snapshot hid them).
             if memrange.size > 4 && max < memrange.size {
                 if let Some(first_piece) =
                     self.refinement(fd, idx, &readvars, &writevars, &inputvars)
@@ -4075,8 +4162,15 @@ impl Heritage {
         self.merge.clear();
     }
 
-    // Ghidra: heritage.cc:219 Heritage::placeMultiequalsDirect
-    /// Insert Phi nodes directly using bank references (avoids lock deadlocks)
+    // RUGRA-GLUE: Rugra-specific dominance-frontier phi placement; Ghidra has no `placeMultiequalsDirect`.
+    /// Insert Phi nodes directly using bank references. NOT the canonical
+    /// algorithm: Ghidra's `placeMultiequals` (heritage.cc:2599-2645) derives
+    /// merge blocks from the augmented dominator tree, not a dominance
+    /// frontier. Since HERITAGE-DRIVER-SWITCH-0001 this is off the
+    /// production path (ActionHeritage drives the canonical
+    /// `Heritage::heritage`); it survives only for the legacy
+    /// `Funcdata::run_heritage_direct` entry (example-side prototype
+    /// estimation on throwaway Funcdata) and in-crate tests.
     pub fn place_multiequals_direct(
         &mut self,
         vbank: &mut VarnodeBank,
@@ -4190,15 +4284,9 @@ impl Heritage {
         }
     }
 
-    // RUGRA-GLUE: Borrow-safe adapter for the heritage.cc:2631-2642 MULTIEQUAL insertion slice; separates Funcdata banks before delegating below.
-    /// Helper to insert a MULTIEQUAL (Phi) op into a block
-    fn insert_multiequal(&mut self, fd: &mut Funcdata, space: AddressSpace, addr: Address, block_idx: i32) {
-        let mut vbank = std::mem::take(&mut fd.vbank);
-        let mut obank = std::mem::take(&mut fd.obank);
-        self.insert_multiequal_direct(&mut vbank, &mut obank, &fd.bblocks, space, addr, block_idx);
-        fd.vbank = vbank;
-        fd.obank = obank;
-    }
+    // RUGRA-GLUE: Borrow-safe extraction of one merge-block insertion from Heritage::placeMultiequals (heritage.cc:2631-2642).
+    // (The former `insert_multiequal` Funcdata-bank adapter wrapper was removed with the production direct path in
+    // HERITAGE-DRIVER-SWITCH-0001: it had no remaining callers.)
 
     // RUGRA-GLUE: Borrow-safe extraction of one merge-block insertion from Heritage::placeMultiequals (heritage.cc:2631-2642).
     fn insert_multiequal_direct(
@@ -4233,11 +4321,13 @@ impl Heritage {
         // This direct-bank adapter sets the equivalent parent back-pointer.
         op_ref.0.write().unwrap().parent = Some(std::sync::Arc::downgrade(&block_arc) as std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
 
-        // Query globaldisjoint LocationMap for precise size (note: LocationMap also uses Address only, which is a broader bug, but we fallback to vbank)
+        // Query globaldisjoint LocationMap for precise size (keyed by
+        // (space, offset); falls back to a vbank lookup, then 4 — see the
+        // direct-route residual note in the fn doc below).
         let size = self
             .globaldisjoint
             .themap
-            .get(&addr)
+            .get(&(space, addr))
             .map(|sp| sp.size)
             .unwrap_or_else(|| {
                 // Fallback to searching vbank if not tracked
@@ -4560,6 +4650,10 @@ impl Heritage {
     /// `fd->setInputVarnode` and cc:2520/2549 calls `fd->deleteVarnode`,
     /// both of which mutate the bank. Rugra ports these as
     /// `VarnodeBank::set_input_varnode` / `VarnodeBank::destroy_varnode`.
+    /// Since HERITAGE-DRIVER-SWITCH-0001 this is off the production path
+    /// (ActionHeritage drives canonical `Heritage::heritage`); remaining
+    /// callers are `Funcdata::run_heritage_direct` (example-side prototype
+    /// estimation on throwaway Funcdata) and in-crate tests.
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
         // Mark all read+write varnodes as active heritage, faithful to
         // Ghidra's guard() (heritage.cc:1174/1181) which calls
@@ -5284,9 +5378,36 @@ mod tests {
     #[test]
     fn test_location_map() {
         let mut lm = LocationMap::new();
-        lm.add(Address::new(0x100), 4, 1);
-        assert_eq!(lm.find_pass(Address::new(0x100)), 1);
-        assert_eq!(lm.find_pass(Address::new(0x200)), -1);
+        lm.add(AddressSpace::Register, Address::new(0x100), 4, 1);
+        assert_eq!(lm.find_pass(AddressSpace::Register, Address::new(0x100)), 1);
+        assert_eq!(lm.find_pass(AddressSpace::Register, Address::new(0x200)), -1);
+    }
+
+    /// HERITAGE-DRIVER-SWITCH-0001: Ghidra's LocationMap is keyed by a full
+    /// Address (space + offset, heritage.hh:48), and `Address::overlap`
+    /// returns -1 across spaces, so equal offsets in different spaces are
+    /// disjoint entries. The bare-offset key previously merged them and
+    /// misclassified the second space's range as OLD (prev==2).
+    #[test]
+    fn test_location_map_cross_space_keys_are_disjoint() {
+        use crate::space::AddressSpace;
+        let mut lm = LocationMap::new();
+        // Register 0x30 heritaged in pass 1.
+        assert_eq!(lm.add(AddressSpace::Register, Address::new(0x30), 8, 1), 0);
+        // A Stack varnode at the SAME offset must be NEW (prev==0), not
+        // contained in the register entry (prev==2).
+        assert_eq!(lm.add(AddressSpace::Stack, Address::new(0x30), 8, 2), 0);
+        // Re-adding the register range at a later pass is contained (prev==2).
+        assert_eq!(lm.add(AddressSpace::Register, Address::new(0x30), 8, 3), 2);
+        // Each space queries its own entry only.
+        assert_eq!(lm.find_pass(AddressSpace::Register, Address::new(0x30)), 1);
+        assert_eq!(lm.find_pass(AddressSpace::Stack, Address::new(0x30)), 2);
+        // entry_containing never crosses spaces either.
+        assert_eq!(
+            lm.entry_containing(AddressSpace::Stack, Address::new(0x33)),
+            Some((Address::new(0x30), 8))
+        );
+        assert_eq!(lm.entry_containing(AddressSpace::Unique, Address::new(0x33)), None);
     }
 
     #[test]
