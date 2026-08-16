@@ -7052,18 +7052,16 @@ impl Rule for RuleSubCommute {
             }
             last_in = Some(vn);
         }
-        // opSetOutput(longform, outvn) — move the original SUBPIECE's output
-        // to longform, then destroy the SUBPIECE (cc:4670-4671).
-        {
-            // Unset longform's current output def link.
-            let mut lf = longform_arc.write().unwrap();
-            if let Some(ref old_out) = lf.output {
-                old_out.write().unwrap().def = None;
-            }
-            lf.output = Some(outvn.clone());
-            outvn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-            outvn.write().unwrap().def = Some(std::sync::Arc::downgrade(&longform_arc));
-        }
+        // cc:4650: data.opSetOutput(longform,outvn) — Funcdata::opSetOutput
+        // (funcdata_op.cc:70-87) first unsets longform's current output
+        // (VarnodeBank::makeFree returns it to the free class) and unlinks
+        // outvn from the old SUBPIECE, then VarnodeBank::setDef re-keys outvn
+        // under longform in the def tree — never an in-place mutation of a
+        // tree-resident key field.
+        fd.op_set_output(&crate::op::PcodeOpRef(longform_arc.clone()), outvn);
+        // cc:4651: data.opDestroy(op) — get rid of the old SUBPIECE (its
+        // output was already severed by opSetOutput, so opDestroy only
+        // unsets the inputs and marks the op dead).
         fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
         let _ = insize;
         Ok(action_status::CHANGE)
@@ -14791,15 +14789,18 @@ impl Rule for RuleStoreVarnode {
         let offset_bytes = offoff.wrapping_mul(word_size);
 
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
-        // Address addr(baseoff, offoff);
-        // data.newVarnodeOut(size, addr, op);
-        // Rugra's new_varnode_out places the output in Register space at `addr`.
-        // To honour the resolved stack/global space we create the output in the
-        // resolved space and wire it manually.
-        let new_out = fd.vbank.create_with_space(val_size, baseoff, offset_bytes);
-        new_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        new_out.write().unwrap().def = Some(std::sync::Arc::downgrade(&op_ref.0));
+        // cc:4331-4332: Address addr(baseoff,offoff);
+        // data.newVarnodeOut(size,addr,op) — newVarnodeOut
+        // (funcdata_varnode.cc:104-122) is VarnodeBank::createDef
+        // (varnode.cc:1411-1418): the varnode is created already WRITTEN
+        // under its final (space,offset) def keys (no free-form insert
+        // followed by an in-place key mutation), then op->setOutput and the
+        // queryProperties step. Rugra's split Address model passes the
+        // resolved space explicitly instead of routing through the
+        // Register-space-only Funcdata::new_varnode_out adapter.
+        let new_out = fd.vbank.create_def_with_space(val_size, baseoff, offset_bytes, &op_ref.0);
         op_ref.0.write().unwrap().output = Some(new_out.clone());
+        fd.set_varnode_properties(&new_out);
 
         // op->getOut()->setStackStore(); // Mark as originally from CPUI_STORE
         new_out.write().unwrap().addlflags |= crate::varnode::addl_flags::STACK_STORE;

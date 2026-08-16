@@ -1131,12 +1131,28 @@ impl TransformManager {
         let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
         for &(rvn_idx, is_duplicate) in input_list {
             if !is_duplicate {
-                // Ghidra calls fd->deleteVarnode(rvn->vn). Rugra's VarnodeBank
-                // does not yet expose deleteVarnode; we skip removal.
+                // cc:734-735: fd->deleteVarnode(rvn->vn) — the old input
+                // varnode is detached at this point (removeOld destroyed its
+                // remaining readers), so Funcdata::deleteVarnode
+                // (funcdata.hh:294) removes it from both trees instead of
+                // leaving a stale entry behind.
+                if let Some(old_vn) = self.new_varnodes[rvn_idx].vn.clone() {
+                    if let Err(error) = fd.delete_varnode(&old_vn) {
+                        eprintln!("[TRANSFORM] WARN: deleteVarnode(rvn->vn) failed: {error:#}");
+                    }
+                }
             }
+            // cc:736: rvn->replacement = fd->setInputVarnode(rvn->replacement)
+            // — Funcdata::setInputVarnode (funcdata_varnode.cc:340-373)
+            // routes through VarnodeBank::setInput (varnode.cc:1358), which
+            // erases both tree entries by identity, sets the INPUT flag and
+            // re-inserts under the input key. The canonical return value
+            // must be stored back so placeInputs wires the bank-owned
+            // varnode; never an in-place INPUT flag mutation on a
+            // tree-resident varnode.
             if let Some(rep) = self.new_varnodes[rvn_idx].replacement.clone() {
-                // Ghidra calls fd->setInputVarnode(rep). Rugra marks input.
-                rep.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+                let canonical = fd.set_input_varnode(rep);
+                self.new_varnodes[rvn_idx].replacement = Some(canonical);
             }
         }
     }

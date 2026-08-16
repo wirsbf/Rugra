@@ -822,6 +822,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - 守卫：base 必须 loneDescend == op（cc:4641）；INT_LEFT 的 in(0) 必须是 ZEXT/PIECE；INT_DIV/INT_REM 的输入必须是 ZEXT。
 - 2 单元测试：test_rule_sub_commute_add（验证转换）+ test_rule_sub_commute_no_lone_descend（验证守卫）。注册进 oppool1（5577）。
 - 实测 curl/httpd 未触发（curl 的 P-code 已被前置简化），但模式匹配时正确生效。
+- 2026-08-15（VARNODE-INPLACE-MUTATION-SITES-0001）：尾部换绑改为 `fd.op_set_output(longform, outvn)`（cc:4650，funcdata_op.cc:70-87）——先对 longform 旧输出走 `makeFree`、把 outvn 从旧 SUBPIECE 解绑，再 `VarnodeBank::setDef` 重键；替换旧手写 `old_out.def=None` + `outvn` 原地 WRITTEN/def 突变（不还树造成 def 树残留死键）。随后 `op_destroy`（cc:4651）。
 
 ### 2026-06-29：RuleFloatSign（ruleaction.cc:10714 + typeop.cc:153）
 - `RuleFloatSign` — 检测浮点符号位操作并转换为 FLOAT_ABS/FLOAT_NEG：`x & 0x7fffffff => FLOAT_ABS(x)`，`x ^ 0x80000000 => FLOAT_NEG(x)`。辅助函数 `float_sign_manipulation` 对应 Ghidra `TypeOp::floatSignManipulation`（typeop.cc:153-176）。
@@ -952,7 +953,7 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 
 ### 2026-07-01（续 6）：oppool2 完整移植（5 条 Rule，0%→100%）
 - RuleLoadVarnode（ruleaction.cc:4285）+ correct_spacebase/vn_spacebase/check_spacebase helper — LOAD→COPY 栈变量化。
-- RuleStoreVarnode（4339）— STORE→COPY 栈变量化。
+- RuleStoreVarnode（4339）— STORE→COPY 栈变量化。2026-08-15（VARNODE-INPLACE-MUTATION-SITES-0001）：输出创建改为 `vbank.create_def_with_space`（对应 `Funcdata::newVarnodeOut` funcdata_varnode.cc:104-122 → `VarnodeBank::createDef` varnode.cc:1411-1418，cc:4331-4332）——以最终 (space,offset) def 键直接创建已 WRITTEN varnode + op 输出接线 + `set_varnode_properties`；替换旧的 free 创建后原地 WRITTEN/def 突变。
 - RulePtrArith（6629）+ AddTreeState 状态机 + verify_preferred_pointer/evaluate_pointer_expression — INT_ADD/MULT→PTRADD/PTRSUB。
 - RulePushPtr（6852）+ build_varnode_out/collect_duplicate_needs/duplicate_need — 指针 push 到使用点。
 - RuleStructOffset0（6678）— struct offset 0 下钻 PTRSUB。

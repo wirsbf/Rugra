@@ -4475,26 +4475,28 @@ impl Funcdata {
         let vn_addr = vn.read().unwrap().loc.clone();
         let vn_space = vn.read().unwrap().address_space;
 
-        // Faithful to funcdata_varnode.cc:1553-1565: for each descendant
-        // except the last, create a new op cloning the definition, give it a
-        // new output varnode, and redirect that descendant to the new output.
-        let last_idx = descendents.len() - 1;
-        for (i, (useop, slot)) in descendents.iter().enumerate() {
-            if i == last_idx {
-                break; // Last descendant keeps the original op.
-            }
-            if *slot < 0 {
+        // Faithful to funcdata_varnode.cc:1549-1565: the descendant iterator
+        // is advanced BEFORE each rewrite, so EVERY original descendant is
+        // processed exactly once — there is no "keep the last reader on the
+        // original op" special case; the original op is left dead for
+        // dead-code removal. Rugra snapshots the descendant list up front,
+        // which preserves the same one-pass order.
+        for (useop, slot) in descendents {
+            if slot < 0 {
                 continue;
             }
             // newop = newOp(op->numInput(), op->getAddr())
             let newop = self.new_op(num_inputs, def_addr.clone());
-            // newvn = newVarnode(vn->getSize(), vn->getAddr(), vn->getType())
-            let newvn = self.vbank.create(vn_size, vn_addr.clone());
-            newvn.write().unwrap().address_space = vn_space;
-            // opSetOutput(newop, newvn)
-            newvn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-            newvn.write().unwrap().def = Some(std::sync::Arc::downgrade(&newop.0));
-            newop.0.write().unwrap().output = Some(newvn.clone());
+            // cc:1556: newvn = newVarnode(vn->getSize(), vn->getAddr(),
+            // vn->getType()) — VarnodeBank::create (varnode.cc:1250) inserts
+            // the free varnode under its FINAL (space, loc) tree keys, so no
+            // post-insert key mutation can drift the tree order.
+            let newvn = self.vbank.create_with_space(vn_size, vn_space, vn_addr.as_u64());
+            // cc:1557: opSetOutput(newop,newvn) — Funcdata::opSetOutput
+            // (funcdata_op.cc:70-87) routes through VarnodeBank::setDef for
+            // the WRITTEN flag and the def-tree re-key; never an in-place
+            // mutation of a tree-resident key field.
+            self.op_set_output(&newop, newvn.clone());
             // opSetOpcode(newop, op->code())
             self.op_set_opcode(&newop, def_opcode);
             // for each input: opSetInput(newop, op->getIn(i), i)
@@ -4502,12 +4504,12 @@ impl Funcdata {
                 self.op_set_input(&newop, inp.clone(), idx);
             }
             // opSetInput(useop, newvn, slot)
-            self.op_set_input(useop, newvn.clone(), *slot as usize);
+            self.op_set_input(&useop, newvn, slot as usize);
             // opInsertBefore(newop, op)
             let def_ref = crate::op::PcodeOpRef(def_arc.clone());
             self.op_insert_before(&newop, &def_ref);
         }
-        // Dead-code actions should remove the original op if now unused.
+        // cc:1566: Dead-code actions should remove original op
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::cseElimination

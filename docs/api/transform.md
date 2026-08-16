@@ -91,9 +91,14 @@ orchestrates 变换生命周期。
 ## 已知限制
 - `transferVarnodeProperties`（transform.cc:208）尚未实现 — Rugra 的 Varnode 未暴露
   完整的属性转移 API。
-- `deleteVarnode` / `setInputVarnode` / `markIndirectCreation` / `opInsertBegin` —
-  Rugra 的 VarnodeBank/Funcdata 未暴露这些方法，当前用 best-effort 替代（标记
-  INPUT flag / 使用 op_insert_before 代替 opInsertBegin）。
+- `markIndirectCreation` / `opInsertBegin` — Rugra 未暴露，当前用 best-effort 替代
+  （使用 op_insert_before 代替 opInsertBegin）。
+- ~~`deleteVarnode` / `setInputVarnode` 未暴露~~ — 2026-08-15
+  （VARNODE-INPLACE-MUTATION-SITES-0001）已接入：`transform_input_varnodes` 对旧
+  输入走 `fd.delete_varnode`（cc:734-735，funcdata.hh:294），新输入走
+  `fd.set_input_varnode`（cc:736，funcdata_varnode.cc:340-373 → `VarnodeBank::setInput`
+  varnode.cc:1358 身份删除+INPUT 重键），canonical 返回值存回 `replacement` 供
+  placeInputs 接线；不再原地 set_flags(INPUT) 突变树驻留 varnode。
 - `ConstantIop` 类型使用常量 fallback（Rugra 无 iop space）。
 - `inherit_indirect` 的 indirect-zero 检查保守地假设 possible-out。
 

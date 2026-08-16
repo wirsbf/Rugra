@@ -805,6 +805,13 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 - `split_uses(vn)` — `Funcdata::splitUses`（funcdata_varnode.cc:1540-1567）：若 vn 由 op 定义（如 INT_ADD）且有多个后代，复制定义 op 使每个读取者获得独立输出副本。允许按用户分析（如同一空间基派生指针的不同栈偏移）。
 - **验证**：curl uVar 碎片 149→0，httpd uVar→0，while/goto 不变，776/776 测试 + curl 24/24 + httpd 29/29 gcc 审计通过。
 
+### 2026-08-15：split_uses 对齐 VarnodeBank 转换（VARNODE-INPLACE-MUTATION-SITES-0001）
+
+- `split_uses(vn)` — `Funcdata::splitUses`（funcdata_varnode.cc:1540-1567）两处对齐修正：
+  1. **bank 转换**：新输出 varnode 由 `vbank.create_with_space`（`VarnodeBank::create`，varnode.cc:1250）以最终 (space, loc) 键创建，再经 `op_set_output`（`Funcdata::opSetOutput`，funcdata_op.cc:70-87 → `VarnodeBank::setDef`）完成 WRITTEN 置位与 def 树重键。替换旧的手写 `address_space`/`WRITTEN`/`def` 原地突变（树驻留 key 字段突变会漂移树序、破坏查找语义）。
+  2. **循环边界**：Ghidra 迭代器先推进再重写（cc:1551/1563-1564），**每个**原始 descendant 都被重定向到新克隆 op；没有「最后一个读者保留原 op」特例（旧 Rugra `last_idx` break 是移植缺陷）。原 op 留给 dead-code 移除（cc:1566）。
+- 验证：HEAD worktree 基线对比证明 5 个失败单测为域外既有（零新增）；E2E curl 124/124；全语料 5 连跑 sha256 一致（03d97945…）；差分 defects=0/numbering=0。
+
 ### 2026-06-27（续 5）：CSE 基础设施
 
 - `cse_elimination(op1, op2) -> PcodeOpRef` — `Funcdata::cseElimination`（funcdata_op.cc:1358）：消除两个公共子表达式 op 之一（保留序列号较小的），total_replace 输出后销毁重复 op。
