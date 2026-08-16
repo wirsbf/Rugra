@@ -954,6 +954,33 @@ model is not present in Rugra's print layer):
   typedef latch 的形状（不可在其五 typedef 之后追加新 typedef，否则
   worker 协议失败）。
 
+### 2026-08-16：scope 不变性看门狗（PRINTC-SCOPE-RESTRUCT-0001 验收证据）
+
+- **背景**：TODO 验收要求"以 Action 后 scope、PrintC 前后状态与最终 C
+  文本 direct diff 证明无副作用"。oracle 面已核实——`PrintC::docFunction`
+  （printc.cc:2641）签名为 `const Funcdata *fd`，整链（cc:2597
+  `pushScope(fd->getScopeLocal())`、cc:2260-2279 emitLocalVarDecls、
+  cc:2518-2575 emitScopeVarDecls）只读消费；`restructureVarnode`
+  oracle 全库唯一调用点是 `ActionRestructureVarnode::apply`
+  （coreaction.cc:2280，Action 阶段）。Rugra 生产 actionlist 已接线
+  （action.rs:999 mainloop RestructureVarnode、action.rs:1077
+  post-fullloop NameVars→`assign_default_names`，coreaction.rs:4670）。
+- **新增**：`test_doc_function_leaves_action_scope_unchanged`——用真实
+  `ActionRestructureVarnode` 构建 scope，再叠加 ActionNameVars 输出形态
+  的符号（assigned name/nameDedup/typelock/register/unique/dynamic+hash），
+  跑完整 `doc_function`（discovery+emit 两遍），断言：① `fd.scope`
+  前后 Debug 指纹逐位一致；② printer 私有快照 `printer.scope` 与
+  Action 后状态一致（咬住"打印期重建/重编号快照"的旧兜底形态——
+  突变实验注入 `_x` 后缀改名即失败，验证有牙）；③ 声明确实从快照
+  发射（char *pcVar1/int iVar2/dynVar）。
+- **验证**：cargo test --lib 1367 过/5 已知失败（+1 本测试）；E2E
+  curl 124/124、74 decompiled/1 timeout/1 panic（HELPF-NONFREE 域，
+  基线一致）；`result/curl_cur.c` sha256 `ab25f148…` 与改动前逐字节
+  一致（最终 C 文本 direct diff 零差异）；差分 4403/defects 0/
+  numbering 0 与基线持平；GetStr 声明块 `char *in_RBX;` 确认
+  SCOPE-SYNC updateType 投影已显形（GetStr 残差 diff=29 归因上游
+  IR/结构化域，非打印期 scope）。
+
 ### 2026-08-16：TYPE-WIRING 配套（undefined2 typedef）
 
 `emit_type_preambles` 补 `typedef unsigned short undefined2;`（与 byte/

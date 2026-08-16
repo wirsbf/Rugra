@@ -10361,6 +10361,100 @@ mod tests {
             "empty-name symbol not declared: {text}");
     }
 
+    /// PRINTC-SCOPE-RESTRUCT-0001 acceptance watchdog: PrintC is a pure
+    /// consumer of the Action-phase scope. Ghidra's `PrintC::docFunction`
+    /// (printc.cc:2641) takes `const Funcdata *fd` and its whole chain —
+    /// emitFunctionDeclaration's `pushScope(fd->getScopeLocal())`
+    /// (printc.cc:2597), emitLocalVarDecls (printc.cc:2260-2279) and
+    /// emitScopeVarDecls (printc.cc:2518-2575) — only reads symbols/entries;
+    /// the only clear() in docFunction (printc.cc:2673) resets the printer's
+    /// own RPN state, never the scope. restructureVarnode has exactly one
+    /// caller oracle-wide: ActionRestructureVarnode::apply (coreaction.cc:2280).
+    ///
+    /// This runs the real doc_function (discovery + emit passes) over a
+    /// Funcdata whose scope carries post-Action state — built by the real
+    /// ActionRestructureVarnode, then extended with the symbol shapes
+    /// ActionNameVars leaves behind (assigned names, nameDedup, typelock,
+    /// register/unique/dynamic entries) — and asserts `fd.scope` is
+    /// bit-for-bit unchanged afterwards. Any re-introduced print-time
+    /// restructure/rename/renumber/clear fallback trips this test.
+    #[test]
+    fn test_doc_function_leaves_action_scope_unchanged() {
+        use crate::space::AddressSpace;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        use crate::varmap::{LocalSymbol, ScopeLocal};
+
+        let mut fd = Funcdata::new("watch", Address::new(0x2000), 0x10);
+        // Real Action-phase scope construction (ActionRestructureVarnode,
+        // coreaction.cc:2274-2294) — populates the persistent ScopeLocal the
+        // same way the production mainloop does.
+        let mut restructure = crate::coreaction::ActionRestructureVarnode::new();
+        crate::action::Action::apply(&mut restructure, &mut fd).unwrap();
+        assert!(fd.scope.is_some(), "Action phase must have built the scope");
+
+        // Post-ActionNameVars symbol shapes (coreaction.cc:2978-2998:
+        // linkSymbol + buildDefaultName + assignDefaultNames output):
+        // assigned names, nameDedup, locks, cross-space entries, dynamic.
+        {
+            let scope = fd.scope.as_mut().unwrap();
+            let mut s1 = LocalSymbol::new("pcVar1", 0x30, 8,
+                Some(std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                    "char *".to_string(), 8, TypeMetatype::Pointer)))),
+                -1);
+            s1.space = AddressSpace::Register;
+            s1.usepoint = Some(0x2100);
+            s1.name_dedup = 2;
+            s1.typelock = true;
+            s1.unaliased = true;
+            scope.symbols.push(s1);
+            let mut s2 = LocalSymbol::new("iVar2", 0x900, 4,
+                Some(std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                    "int".to_string(), 4, TypeMetatype::Int)))),
+                -1);
+            s2.space = AddressSpace::Unique;
+            scope.symbols.push(s2);
+            let mut s3 = LocalSymbol::new("dynVar", 0, 4, None, -1);
+            s3.is_dynamic = true;
+            s3.hash = 0xdeadbeef;
+            scope.symbols.push(s3);
+        }
+
+        // Action-后 scope state fingerprint (full structural Debug dump).
+        let before = format!("{:?}", fd.scope);
+
+        // Full print: discovery pass + real emit pass over the same fd.
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        printer.doc_function(&fd);
+
+        // The printer's own snapshot must equally be the untouched Action
+        // state — this is what bites on a re-introduced print-time
+        // restructure/assign_default_names fallback (the pre-df0da85 shape
+        // rebuilt or renumbered the snapshot; fd.scope was never written).
+        // Same-module access to the private `scope` field; taken before
+        // take_emit(), which consumes the printer.
+        let printer_scope_after = format!("{:?}", printer.scope);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
+
+        // The consumer path actually ran: the scope symbols were declared.
+        assert!(text.contains("char *pcVar1;"), "decl from snapshot: {text}");
+        assert!(text.contains("int iVar2;"), "decl from snapshot: {text}");
+        assert!(text.contains("dynVar;"), "dynamic decl from snapshot: {text}");
+
+        // PrintC 前后状态 direct diff: bit-for-bit identical scope state.
+        let after = format!("{:?}", fd.scope);
+        assert_eq!(before, after,
+            "doc_function mutated the Action-phase scope at emit time \
+             (PRINTC-SCOPE-RESTRUCT-0001 regression)");
+        assert_eq!(printer_scope_after, after,
+            "print-time renumbering/restructuring of the scope snapshot \
+             (PRINTC-SCOPE-RESTRUCT-0001 regression)");
+    }
+
     #[test]
     fn test_child_needs_parens_precedence() {
         use crate::opcodes::OpCode::*;
