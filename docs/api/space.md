@@ -105,11 +105,23 @@ Check if this is a big-endian space
 
 ### `pub fn word_size(&self) -> usize`
 
-Get the word size for this space (in bytes)
+Get the word size for this space (in bytes). Faithful to `AddrSpace::getWordSize`
+(space.hh:340): every hardwired space is wordsize 1 (ConstantSpace space.cc:357,
+OtherSpace space.cc:397, UniqueSpace space.cc:428, JoinSpace space.cc:447, IopSpace
+op.cc:36) and the x86-64 spec spaces (ram/register/stack) are wordsize 1. Spec
+spaces with wordsize>1 project only through the registry handle
+(`AddrSpace::get_word_size`).
 
 ### `pub fn addr_size(&self) -> usize`
 
-Get the address size for this space (in bytes)
+Get the address size for this space (in bytes). Faithful to
+`AddrSpace::getAddrSize` (space.hh:348) over the constructors that build each
+space kind: const/OTHER/iop = 8 (sizeof(uintb)/sizeof(void *), space.cc:357/397,
+op.cc:36), unique = `UniqueSpace::SIZE` = 4 (space.cc:418/428), join =
+sizeof(uintm) = 4 (types.h:27, space.cc:447); ram/register/stack/overlay carry
+the architecture spec values, modeled with the x86-64 production sizes
+(8/8/8; an overlay copies its base space, space.cc:670). Locked by
+`tests/oracle/space_printraw_wordsize_1204` (SPACE-PRINTRAW-WORDSIZE-0001).
 
 ### `pub fn name(&self) -> &'static str`
 
@@ -322,6 +334,32 @@ Oracle 证据：`tests/oracle/address_space_handle_1204.{cc,rs}`（锁定 12.0.4
 printRaw 覆盖 const/ram/register 路径与 wordsize 换算）。SPACE-0001 残差中
 `resolveConstant`/join-record 统一**未**在本 wave 完成（JoinDB 仍在 translate.rs 旧 manager），
 登记为 ADDRESS 后继原子。
+
+### 2026-08-17：SPACE-PRINTRAW-WORDSIZE-0001（Ghidra space.cc:206-222 + space.hh:348）
+
+可达性复核结论：printRaw 的 wordsize>1 分支在当前 x86-64 生产闭包不可达
+（x86-64.sla 的 ram/register 均 wordsize=1，硬编码空间 const/OTHER/unique/join/iop
+亦 wordsize=1），但 registry `AddrSpace::print_raw` 的 wordsize>1 实现
+（`byteToAddress` 缩放 + `+cut` 后缀）已在位；本轮以锁定 oracle fixture 逐字节验证。
+legacy 平面枚举 `AddressSpace::addr_size()` 原恒 8，与 Ghidra 构造真值在
+unique（`UniqueSpace::SIZE`=4，space.cc:418/428）与 join（sizeof(uintm)=4，types.h:27、
+space.cc:447）分歧，本轮按构造器真值建模（const/OTHER/iop/overlay=8、unique/join=4、
+x86-64 ram/register/stack=8）；受影响调用面（heritage.rs deadcode 警告宽度、
+translate.rs `addr_mask_for`、pcodeparse.rs `addressOf` 的 unique 角落）随枚举修正
+自动对齐，E2E C 输出零影响（流经空间 ram/register/stack/const 尺寸不变）。
+
+Oracle 证据：`tests/oracle/space_printraw_wordsize_1204.{cc,rs}`（锁定 12.0.4，
+5 case 61 行逐字节 MATCH：addrsize 投影 9 空间 + legacy 9 映射、wordsize 1/2/4
+打印含收缩规则/`+cut` 后缀/setw 最小宽度语义、const/OTHER 覆盖）。
+runner：`tools/run_space_printraw_wordsize_oracle.sh`。
+
+残差（登记后续原子，不在本 TODO write-set）：
+- `JoinSpace::printRaw`（space.cc:590）的花括号 pieces 形式未派发（需要 join-record
+  数据库经 manager 解析，registry 句柄无 manager 回链）；
+- `IopSpace::printRaw`（op.cc:41）的 op/block 信息形式未派发（需要 PcodeOp/BlockBasic
+  下钻）；registry `print_raw` 对这两类空间走通用 hex 分支。
+- `heritage.rs:1918` deadcode 警告内联复刻 printRaw 未含 wordsize>1 缩放/`+cut`
+  （wordsize>1 空间在当前闭包不可达，触发前需迁移到 `space.print_raw` 调用）。
 
 ### 2026-08-15：EXTERNAL-STUB-SUPPORT-0001 构造期 decode 注册（Ghidra translate.cc:254/281 + space.cc:87/304/339）
 

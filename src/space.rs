@@ -174,8 +174,15 @@ impl AddressSpace {
         false
     }
 
-    // RUGRA-GLUE: word_size (no Ghidra counterpart found)
-    /// Get the word size for this space (in bytes)
+    // Ghidra: space.hh:340 AddrSpace::getWordSize
+    /// Get the addressable unit size (wordsize) for this space, in bytes.
+    /// Faithful to `getWordSize` over the constructors that exist in the
+    /// production closure: every hardwired space passes wordsize 1
+    /// (ConstantSpace space.cc:357, OtherSpace space.cc:397, UniqueSpace
+    /// space.cc:428, JoinSpace space.cc:447, IopSpace op.cc:36) and the
+    /// x86-64 spec spaces (ram/register/stack, sleigh_specs/x86-64.sla) are
+    /// all wordsize 1. Spec spaces with wordsize>1 project only through the
+    /// registry handle (see [`AddrSpace::get_word_size`]).
     pub fn word_size(&self) -> usize {
         match self {
             AddressSpace::Register | AddressSpace::Ram | AddressSpace::Stack => 1,
@@ -185,11 +192,29 @@ impl AddressSpace {
         }
     }
 
-    // RUGRA-GLUE: addr_size (no Ghidra counterpart found)
-    /// Get the address size for this space (in bytes)
+    // Ghidra: space.hh:348 AddrSpace::getAddrSize
+    /// Get the address size for this space, in bytes. Faithful to
+    /// `getAddrSize` over the constructors that build each space kind:
+    /// const = sizeof(uintb) = 8 (space.cc:357), OTHER = sizeof(uintb) = 8
+    /// (space.cc:397), iop = sizeof(void *) = 8 (op.cc:36), unique =
+    /// UniqueSpace::SIZE = 4 (space.cc:418/428), join = sizeof(uintm) = 4
+    /// (types.h:27, space.cc:447). ram/register/stack/overlay carry the
+    /// architecture spec values, modeled with the x86-64 production sizes
+    /// (8/8/8; an overlay copies its base space, space.cc:670) until the
+    /// enum migrates onto the registry handle (ADDRESS-0001), which carries
+    /// the real per-spec size (see [`AddrSpace::get_addr_size`]).
     pub fn addr_size(&self) -> usize {
-        // Default to 8 bytes (64-bit), can be configured per architecture
-        8
+        match self {
+            AddressSpace::Ram => 8,
+            AddressSpace::Register => 8,
+            AddressSpace::Unique => 4, // UniqueSpace::SIZE (space.cc:418)
+            AddressSpace::Const => 8, // sizeof(uintb) (space.cc:357)
+            AddressSpace::Stack => 8,
+            AddressSpace::Join => 4,    // sizeof(uintm) (space.cc:447)
+            AddressSpace::Iop => 8,     // sizeof(void *) (op.cc:36)
+            AddressSpace::Overlay => 8, // copies its base space (space.cc:670)
+            AddressSpace::Other(_) => 8, // sizeof(uintb) (space.cc:397)
+        }
     }
 
     // RUGRA-GLUE: name (no Ghidra counterpart found)

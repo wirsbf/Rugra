@@ -2085,6 +2085,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "space_printraw_wordsize_1204",
+   "description": "AddrSpace::printRaw wordsize/addrsize observations",
+   "runner": [
+    "tools/run_space_printraw_wordsize_oracle.sh"
+   ],
+   "timeout_seconds": 1500,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/space_printraw_wordsize_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/space_printraw_wordsize_1204.cc",
+     "rust_fixture": "tests/oracle/space_printraw_wordsize_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_space_printraw_wordsize_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/space.rs",
+     "tests/oracle/space_printraw_wordsize_1204.*",
+     "tools/run_space_printraw_wordsize_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }
