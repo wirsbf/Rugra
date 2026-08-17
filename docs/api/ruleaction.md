@@ -1057,3 +1057,12 @@ Ghidra 的 `hasTruncations` 检查 `glb->getDefaultDataSpace()->isTruncated()`�
 该形状曾使 curl 的 main/glob_word/glob_set 三函数管线中止于
 `RuleMultiCollapse functional branch has no definition`（scope=None、
 HighVariable=0、sblocks=0）；修复后三函数完整产出结构。
+
+## 测试区维护（2026-08-17）
+
+`test_rule_sub_commute_add` / `test_rule_sub_right_basic` 的 harness 修正
+（VARNODE-ADDDESCEND-THROW-0001 前置件）：被规则代码重读的 free 寄存器
+varnode 经 `VarnodeBank::set_input`（varnode.cc:1358 setInput 映射）登记为
+INPUT，消除 addDescend throw 会触发的 Ghidra 不可达 harness 态；断言与
+规则分支路径（is_written/is_addr_tied 保持 false）零变化，生产代码未动。
+<!-- annotation-pass: 2026-08-17 -->

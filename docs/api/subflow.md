@@ -145,3 +145,12 @@ E2E：curl 74 decompiled/1 panic → **75 decompiled/0 panic**（helpf 0x3980
 恢复复出体）；skeleton/defects/numbering 全持平。独立复核（机制 C 邻域）
 全仓 grep 确认无共享 free varnode / raw `set_flags(INPUT)` 生产者残留。
 <!-- annotation-pass: 2026-08-17 -->
+
+## 测试区维护（2026-08-17）
+
+`test_rule_dumpty_hump_late_*`×2 / `test_split_copy_performs_real_transform`
+的 harness 修正（VARNODE-ADDDESCEND-THROW-0001 前置件）：同 ruleaction 侧
+模式——被 totalReplace/preserve 分支（subflow.cc:3051）/buildInSubpieces
+（subflow.cc:2734）重读的 free varnode 经 `set_input` 转 INPUT；断言零变化，
+生产代码未动。
+<!-- annotation-pass: 2026-08-17 -->

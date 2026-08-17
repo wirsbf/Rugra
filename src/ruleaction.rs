@@ -19700,6 +19700,14 @@ mod tests {
         // Two 8-byte registers a, b.
         let a = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
         let b = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x208);
+        // Register a/b as function inputs (VarnodeBank::setInput,
+        // varnode.cc:1358). In Ghidra the rule universe runs post-heritage:
+        // every read target is written/input, and the rule-created
+        // SUBPIECEs re-read a/b. A free varnode handed to that re-read is a
+        // Ghidra-unreachable state — Varnode::addDescend would throw
+        // "Free varnode has multiple descendants" (varnode.cc:333-336).
+        let a = fd.vbank.set_input(a).unwrap();
+        let b = fd.vbank.set_input(b).unwrap();
         // INT_ADD(a, b) -> long_out (8 bytes)
         let add_op = fd.new_op(2, Address::new(0x1000));
         fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
@@ -19879,6 +19887,14 @@ mod tests {
     fn test_rule_sub_right_basic() {
         let mut fd = Funcdata::new("test_subright", Address::new(0x1000), 0x10);
         let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        // Register a as a function input (VarnodeBank::setInput,
+        // varnode.cc:1358). RuleSubRight re-reads a from the inserted shift
+        // op (ruleaction.cc:7303 opSetInput(shiftop,a,0)); in Ghidra a is
+        // written/input at that point. A free a is Ghidra-unreachable —
+        // addDescend would throw "Free varnode has multiple descendants"
+        // (varnode.cc:333-336). INPUT keeps is_written()/is_addr_tied()
+        // false, so the rule takes the identical branch as before.
+        let a = fd.vbank.set_input(a).unwrap();
         let sub_op = fd.new_op(2, Address::new(0x1000));
         fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
         let _sub_out = fd.new_unique_out(2, &sub_op);

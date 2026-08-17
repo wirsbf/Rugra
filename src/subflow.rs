@@ -5063,6 +5063,13 @@ mod tests {
         let dt = make_struct_dt();
         let in_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x10);
         let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
+        // Register in_vn as a function input (VarnodeBank::setInput,
+        // varnode.cc:1358). splitCopy's per-component SUBPIECEs each re-read
+        // in_vn (buildInSubpieces analogue, subflow.cc:2730-2736); in Ghidra
+        // the COPY input is written/input there — free-with-reader is
+        // Ghidra-unreachable and addDescend would throw "Free varnode has
+        // multiple descendants" (varnode.cc:333-336).
+        let in_vn = fd.vbank.set_input(in_vn).unwrap();
         in_vn.write().unwrap().update_type(dt.clone());
         out_vn.write().unwrap().update_type(dt);
         let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
@@ -5289,6 +5296,14 @@ mod tests {
         // PIECE inputs: hi (4 bytes), lo (4 bytes).
         let hi = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
         let lo = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        // Register lo as a function input (VarnodeBank::setInput,
+        // varnode.cc:1358). totalReplace rewrites the descendant to read lo,
+        // so free-with-reader would be re-read: in Ghidra every read target
+        // is written/input — a free lo is Ghidra-unreachable and addDescend
+        // would throw "Free varnode has multiple descendants"
+        // (varnode.cc:333-336). INPUT keeps is_written() false so the
+        // backtrack loop and COPY-advance behave exactly as before.
+        let lo = fd.vbank.set_input(lo).unwrap();
         // PIECE -> piece_out (8 bytes).
         let piece_out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
         let _piece_op = make_op(0, OpCode::CPUI_PIECE, vec![hi.clone(), lo.clone()], Some(piece_out.clone()));
@@ -5319,6 +5334,14 @@ mod tests {
         // PIECE of two 8-byte halves.
         let hi = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
         let lo = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        // Register lo as a function input (VarnodeBank::setInput,
+        // varnode.cc:1358). The size-mismatch path sets SUBPIECE input 0 to
+        // lo (subflow.cc:3051), re-reading it: in Ghidra lo is written/input
+        // there — free-with-reader is Ghidra-unreachable and addDescend
+        // would throw "Free varnode has multiple descendants"
+        // (varnode.cc:333-336). INPUT keeps is_written() false so the
+        // backtrack loop breaks at the same point as before.
+        let lo = fd.vbank.set_input(lo).unwrap();
         let piece_out = fd.vbank.create_with_space(16, AddressSpace::Register, 0x30);
         let _piece_op = make_op(0, OpCode::CPUI_PIECE, vec![hi, lo.clone()], Some(piece_out.clone()));
         // SUBPIECE(piece_out, 0) -> out (4 bytes). trunc=0 < lo size(8) ->
