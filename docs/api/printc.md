@@ -16,6 +16,55 @@ prototype remain separate residuals; the module remains L2.
 ## 文档状态
 
 - **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——默认 RPN 把 invisible root group 发成未闭合 `(`；多数 op 绕过 RPN，terminal mask 被忽略，`doc_function` 又重发顶层循环。当前 11.3.2 最终 C golden 只作回归诊断，不能证明 12.0.4 token/markup parity。详见 `CONTROL_OUTPUT_PIPELINES_2026-08-11.md`。
+- **2026-08-17 修复（`PRINTC-BINARY-RPN-0001` 二元 op 接入 RPN token 流）**:
+  `dispatch_op_rpn` 的二元算术/比较/逻辑臂此前 `emit.tag_op(" + ")` 直发，
+  括号决策全靠 legacy 侧 `child_needs_parens` 的**倒置教科书启发式**（左操作数
+  等优先级永不加括号），与 Ghidra `PrintLanguage::parentheses`
+  （printlanguage.cc:269-323，binary 分支 277-286：等优先级且非 associative 即
+  `return true`）相悖——输出残留 3 处 `(bool)x == y + 0 - z < 0` 形态
+  （ADD 嵌 SUB 左槽 / SUB 嵌 ADD 右槽等优先级无括号；`+ 0 -` 裸形态）。修复：
+  - `optoken` 模块重写为**逐字段 OpToken 注册表** `BINARY_TOKENS`（20 项，
+    printc.cc:36-55 逐字：multiply `*`54assoc / divide `/`54 / modulo `%`54 /
+    binary_plus `+`50assoc / binary_minus `-`50 / shift_left `<<`46 /
+    shift_right|shift_sright `>>`46×2 / less_than `<`42 / less_equal `<=`42 /
+    greater_than `>`42 / greater_equal `>=`42 / equal `==`38 / not_equal `!=`38 /
+    bitwise_and `&`34assoc / bitwise_xor `^`30assoc / bitwise_or `|`26assoc /
+    boolean_and `&&`22 / boolean_xor `^^`20 / boolean_or `||`18；全部
+    spacing=1 bump=0，negate 按 printc.cc:129-134 翻转对），`binary_token(opc)`
+    按 printc.hh:283-318 虚拟 dispatch 表解析 opcode→token（INT_LESS/SLESS/
+    FLOAT_LESS 同 less_than 实例、INT_ADD/FLOAT_ADD 同 binary_plus 实例等，
+    以 token id 表达 Ghidra 的 OpToken 指针同一性）。**修正既有失配**：
+    BOOL_XOR 原映射 `^`@30 → Ghidra 为 boolean_xor `^^`@20（printc.cc:54）。
+  - `build_rpn_token_table` 追加这 20 个 token（索引 9..=28，negate 存翻转
+    token 的表索引）；新增 `rpn_tok_binary(opc)`（printlanguage.cc:539-545
+    negatetoken 翻转前奏 + printc.hh dispatch 映射）。
+  - `dispatch_op_rpn` 二元臂：`rpn_push_op(tok)` 接管操作符发射（emitOp 在
+    printlanguage.cc:332-337 以 spacing=1 打印 ` op `，与旧直发文本逐字节一致），
+    操作数保持 `make_atom_for_vn` 叶子原子（in0-atom/op/in1-atom 顺序=printlanguage
+    .cc:551-552 的左先右后打印序）。**刻意不采用** pushVn/nodepend 队列：Rugra
+    的隐式操作数内联是 PRINT-RPN-0001 未完成域，队列化会全语料改写语句形态
+    （实测 numbering 0→16，my_get_token/glob_word/next_url/match_url 重复声明），
+    已回退；INT_ADD 结构体字段短路改走 pointer_member token 流
+    （`pushOp(->66)+base atom+field atom`，opPtrsub printc.cc:476-484 形态）。
+  - `child_needs_parens` 重写为 parentheses() binary 分支的忠实移植
+    （277/278/281/286 逐行；等优先级非 assoc 双侧都加括号=Ghidra 保守风格
+    `(a - b) - c`；同 token 且 assoc 才免括号=`a + (b + c)`）；
+    `emit_inline_expr` 与 `op_binary` 的操作符文本改由注册表生成（print1+
+    spacing，含 BOOL_XOR `^^` 修正）；`emit_condition` Case-1/Case-2 操作数经
+    `push_input_parenthesized`（父上下文参与括号决策——3 处残差的实际发射
+    路径，emit_structured_condition→capture_block_condition→emit_condition 链，
+    实证 [DBG2] 捕获）；BOOL_AND/OR 递归两侧经 `condition_side_needs_parens`
+    （&&/|| 非 assoc，等优先级组合子互相嵌套加括号）。删除死代码
+    `c_binary_op_str`。
+  - 单元测试 `test_child_needs_parens_precedence` 重写为 277/278/281/286 语义
+    （含 `(x==y)<0` 案例判别、`(a+b)-c`、`a&&(b&&c)`、XOR@20 共 20 断言）。
+  - **验收**：`+ 0 -` 裸形态 grep 3→**0**；`(==|!=) … (<|<=…)` 无括号邻接
+    0；3 处原残差站点现形 `(bool)uVar_20b == (bool)uVar_10 + (0 - …) < 0`
+    （`0 - X` 已括号化=278/286 决策；外层 EQUAL(38)⊃SLESS(42) 嵌套按
+    printlanguage.cc:278 `38<42 → false` 正确免括号——IR 树 EQUAL 为外层，
+    [DBG3]/[DBG4] def 链实证）；Matched 123 不降、defects 0、numbering 0、
+    gcc 106 OK/17 FAIL（=门禁上限）；cargo test --lib 1412/5（5 失败=
+    comment/dynamic/funcdata×2/ruleaction 预存集）。
 - **2026-08-12 `PRINTC-0001` display-format wire 修复**: `display_format` 现与锁定
   Ghidra `database.hh:199-204` / `type.cc:728-762` 一致：`DEFAULT=0`、
   `HEX=1`、`DEC=2`、`OCT=3`、`BIN=4`、`CHAR=5`。此前 Rugra 把

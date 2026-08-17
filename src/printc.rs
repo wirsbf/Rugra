@@ -24,52 +24,125 @@ use std::sync::{Arc, RwLock};
 /// `PrintC` per function, so this must live outside the instance.
 static TYPEDEFS_EMITTED: AtomicBool = AtomicBool::new(false);
 
-// Ghidra: printc.cc:23-76 OpToken static instances (precedence + associativity)
-/// Operator precedence/associativity table mirroring Ghidra's static OpToken
-/// instances in printc.cc (lines 23-76). Each opcode maps to (precedence,
-/// associative). Higher precedence binds tighter. Faithful to Ghidra's
-/// C operator precedence model used by printlanguage.cc:269 parentheses().
+// Ghidra: printc.cc:36-55 OpToken static instances (precedence + associativity)
+/// Canonical binary-operator token registry mirroring the static OpToken
+/// instances in printc.cc (lines 36-55), plus the opcode→token dispatch table
+/// in printc.hh (lines 283-318: `opIntAdd → opBinary(&binary_plus, op)` etc.).
+/// Every field is a field-for-field copy of the aggregate-init form
+/// `{ print1, print2, stage=2, precedence, associative, binary, spacing, bump }`,
+/// with `negate` mirroring the flip-token wiring in the PrintC constructor
+/// (printc.cc:129-134). This registry is the single source of truth for:
+///   - `build_rpn_token_table` (RPN `pushOp` token flow),
+///   - `child_needs_parens` (the printlanguage.cc:269-323 parentheses port),
+///   - binary operator text emission on the legacy direct-emit path.
 pub mod optoken {
     use crate::opcodes::OpCode;
 
-    // Ghidra: printc.cc:36-55 OpToken static instances (precedence field)
-    /// Return the precedence for a binary opcode, or None if it is not a
-    /// binary arithmetic/comparison/logical op. Values mirror printc.cc:36-55:
-    ///   multiply/divide/modulo=54, add/sub=50, shift=46, relational=42,
-    ///   equality=38, bitwise_and=34, bitwise_xor=30, bitwise_or=26,
-    ///   boolean_and=22, boolean_or=18.
-    pub fn binary_precedence(opc: OpCode) -> Option<i32> {
+    /// One printc.cc binary OpToken spec. `id` is the registry index; Ghidra
+    /// compares OpToken *pointers* for associativity (printlanguage.cc:281
+    /// `topToken == op2`), the id is the Rust equivalent of that identity.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct BinaryTokenSpec {
+        /// Registry index (identity of the OpToken instance).
+        pub id: usize,
+        /// print1 field: the operator text (printc.cc aggregate col 1).
+        pub print1: &'static str,
+        /// precedence field (printc.cc aggregate col 4). Higher binds tighter.
+        pub precedence: i32,
+        /// associative field (printc.cc aggregate col 5).
+        pub associative: bool,
+        /// spacing field (printc.cc aggregate col 7): spaces on each side.
+        pub spacing: i32,
+        /// negate field: registry index of the flipped token, if any
+        /// (printc.cc:129-134).
+        pub negate: Option<usize>,
+    }
+
+    // Ghidra: printc.cc:36-55 OpToken static instances, in declaration order.
+    /// All 20 binary operator tokens from printc.cc:36-55, field-for-field:
+    /// multiply "*" 54 assoc / divide "/" 54 / modulo "%" 54 /
+    /// binary_plus "+" 50 assoc / binary_minus "-" 50 /
+    /// shift_left "<<" 46 / shift_right ">>" 46 / shift_sright ">>" 46 /
+    /// less_than "<" 42 / less_equal "<=" 42 / greater_than ">" 42 /
+    /// greater_equal ">=" 42 / equal "==" 38 / not_equal "!=" 38 /
+    /// bitwise_and "&" 34 assoc / bitwise_xor "^" 30 assoc /
+    /// bitwise_or "|" 26 assoc / boolean_and "&&" 22 /
+    /// boolean_xor "^^" 20 / boolean_or "||" 18.
+    /// All carry spacing=1, bump=0. greater_than/greater_equal exist only as
+    /// flip targets (printc.cc:129-132), matching Ghidra where no virtual
+    /// op emitter dispatches to them directly (printc.hh:283-288).
+    pub const BINARY_TOKENS: [BinaryTokenSpec; 20] = [
+        BinaryTokenSpec { id: 0, print1: "*", precedence: 54, associative: true, spacing: 1, negate: None },          // multiply (printc.cc:36)
+        BinaryTokenSpec { id: 1, print1: "/", precedence: 54, associative: false, spacing: 1, negate: None },         // divide (printc.cc:37)
+        BinaryTokenSpec { id: 2, print1: "%", precedence: 54, associative: false, spacing: 1, negate: None },         // modulo (printc.cc:38)
+        BinaryTokenSpec { id: 3, print1: "+", precedence: 50, associative: true, spacing: 1, negate: None },          // binary_plus (printc.cc:39)
+        BinaryTokenSpec { id: 4, print1: "-", precedence: 50, associative: false, spacing: 1, negate: None },         // binary_minus (printc.cc:40)
+        BinaryTokenSpec { id: 5, print1: "<<", precedence: 46, associative: false, spacing: 1, negate: None },        // shift_left (printc.cc:41)
+        BinaryTokenSpec { id: 6, print1: ">>", precedence: 46, associative: false, spacing: 1, negate: None },        // shift_right (printc.cc:42)
+        BinaryTokenSpec { id: 7, print1: ">>", precedence: 46, associative: false, spacing: 1, negate: None },        // shift_sright (printc.cc:43)
+        BinaryTokenSpec { id: 8, print1: "<", precedence: 42, associative: false, spacing: 1, negate: Some(11) },     // less_than, negate=greater_equal (printc.cc:44,129)
+        BinaryTokenSpec { id: 9, print1: "<=", precedence: 42, associative: false, spacing: 1, negate: Some(10) },    // less_equal, negate=greater_than (printc.cc:45,130)
+        BinaryTokenSpec { id: 10, print1: ">", precedence: 42, associative: false, spacing: 1, negate: Some(9) },     // greater_than, negate=less_equal (printc.cc:46,131)
+        BinaryTokenSpec { id: 11, print1: ">=", precedence: 42, associative: false, spacing: 1, negate: Some(8) },    // greater_equal, negate=less_than (printc.cc:47,132)
+        BinaryTokenSpec { id: 12, print1: "==", precedence: 38, associative: false, spacing: 1, negate: Some(13) },   // equal, negate=not_equal (printc.cc:48,133)
+        BinaryTokenSpec { id: 13, print1: "!=", precedence: 38, associative: false, spacing: 1, negate: Some(12) },   // not_equal, negate=equal (printc.cc:49,134)
+        BinaryTokenSpec { id: 14, print1: "&", precedence: 34, associative: true, spacing: 1, negate: None },         // bitwise_and (printc.cc:50)
+        BinaryTokenSpec { id: 15, print1: "^", precedence: 30, associative: true, spacing: 1, negate: None },         // bitwise_xor (printc.cc:51)
+        BinaryTokenSpec { id: 16, print1: "|", precedence: 26, associative: true, spacing: 1, negate: None },         // bitwise_or (printc.cc:52)
+        BinaryTokenSpec { id: 17, print1: "&&", precedence: 22, associative: false, spacing: 1, negate: None },       // boolean_and (printc.cc:53)
+        BinaryTokenSpec { id: 18, print1: "^^", precedence: 20, associative: false, spacing: 1, negate: None },       // boolean_xor (printc.cc:54)
+        BinaryTokenSpec { id: 19, print1: "||", precedence: 18, associative: false, spacing: 1, negate: None },       // boolean_or (printc.cc:55)
+    ];
+
+    // Ghidra: printc.hh:283-318 opcode→OpToken dispatch
+    /// Resolve a binary opcode to its OpToken spec, mirroring the virtual
+    /// emitter dispatch in printc.hh:283-318 (opIntEqual→equal,
+    /// opIntAdd→binary_plus, opIntDiv/opIntSdiv→divide, opBoolXor→boolean_xor,
+    /// ...). Distinct opcodes share one token where Ghidra shares the static
+    /// OpToken instance (e.g. INT_LESS/INT_SLESS/FLOAT_LESS→less_than;
+    /// INT_DIV/INT_SDIV/FLOAT_DIV→divide; INT_RIGHT/INT_SRIGHT are distinct
+    /// tokens shift_right/shift_sright that only differ by print1=">>").
+    pub fn binary_token(opc: OpCode) -> Option<BinaryTokenSpec> {
         use OpCode::*;
-        match opc {
-            CPUI_INT_MULT | CPUI_FLOAT_MULT | CPUI_INT_DIV | CPUI_INT_SDIV
-            | CPUI_FLOAT_DIV | CPUI_INT_REM | CPUI_INT_SREM => Some(54),
-            CPUI_INT_ADD | CPUI_FLOAT_ADD | CPUI_INT_SUB | CPUI_FLOAT_SUB => Some(50),
-            CPUI_INT_LEFT | CPUI_INT_RIGHT | CPUI_INT_SRIGHT => Some(46),
-            CPUI_INT_LESS | CPUI_INT_SLESS | CPUI_FLOAT_LESS
-            | CPUI_INT_LESSEQUAL | CPUI_INT_SLESSEQUAL | CPUI_FLOAT_LESSEQUAL => Some(42),
-            CPUI_INT_EQUAL | CPUI_INT_NOTEQUAL | CPUI_FLOAT_EQUAL
-            | CPUI_FLOAT_NOTEQUAL => Some(38),
-            CPUI_INT_AND => Some(34),
-            CPUI_INT_XOR | CPUI_BOOL_XOR => Some(30),
-            CPUI_INT_OR => Some(26),
-            CPUI_BOOL_AND => Some(22),
-            CPUI_BOOL_OR => Some(18),
-            _ => None,
-        }
+        let id = match opc {
+            CPUI_INT_MULT | CPUI_FLOAT_MULT => 0,
+            CPUI_INT_DIV | CPUI_INT_SDIV | CPUI_FLOAT_DIV => 1,
+            CPUI_INT_REM | CPUI_INT_SREM => 2,
+            CPUI_INT_ADD | CPUI_FLOAT_ADD => 3,
+            CPUI_INT_SUB | CPUI_FLOAT_SUB => 4,
+            CPUI_INT_LEFT => 5,
+            CPUI_INT_RIGHT => 6,
+            CPUI_INT_SRIGHT => 7,
+            CPUI_INT_LESS | CPUI_INT_SLESS | CPUI_FLOAT_LESS => 8,
+            CPUI_INT_LESSEQUAL | CPUI_INT_SLESSEQUAL | CPUI_FLOAT_LESSEQUAL => 9,
+            CPUI_INT_EQUAL | CPUI_FLOAT_EQUAL => 12,
+            CPUI_INT_NOTEQUAL | CPUI_FLOAT_NOTEQUAL => 13,
+            CPUI_INT_AND => 14,
+            CPUI_INT_XOR => 15,
+            CPUI_INT_OR => 16,
+            CPUI_BOOL_AND => 17,
+            CPUI_BOOL_XOR => 18,
+            CPUI_BOOL_OR => 19,
+            _ => return None,
+        };
+        Some(BINARY_TOKENS[id])
+    }
+
+    // Ghidra: printc.cc:37-55 OpToken static instances (precedence field)
+    /// Return the precedence for a binary opcode, or None if it is not a
+    /// binary arithmetic/comparison/logical op. Values mirror printc.cc:37-55
+    /// via the token registry (single source of truth).
+    pub fn binary_precedence(opc: OpCode) -> Option<i32> {
+        binary_token(opc).map(|t| t.precedence)
     }
 
     // Ghidra: printc.cc:36-55 OpToken static instances (associative field)
-    /// Return whether a binary opcode is associative (printc.cc associative field).
-    /// multiply=associative (line 36); add=associative (39); bitwise_and/xor/or
-    /// = associative (50/51/52). All others (div/mod/sub/shift/relational/
-    /// equality/boolean_and/boolean_or) are non-associative.
+    /// Return whether a binary opcode's OpToken is associative
+    /// (multiply/binary_plus/bitwise_and/bitwise_xor/bitwise_or only –
+    /// printc.cc:36,39,50,51,52; note boolean_xor "^^" is NOT associative,
+    /// printc.cc:54).
     pub fn binary_associative(opc: OpCode) -> bool {
-        use OpCode::*;
-        matches!(
-            opc,
-            CPUI_INT_MULT | CPUI_FLOAT_MULT | CPUI_INT_ADD | CPUI_FLOAT_ADD
-            | CPUI_INT_AND | CPUI_INT_XOR | CPUI_BOOL_XOR | CPUI_INT_OR
-        )
+        binary_token(opc).map(|t| t.associative).unwrap_or(false)
     }
 
     /// Unary prefix precedence (printc.cc:29-34): ~ ! - + & * = 62.
@@ -78,55 +151,64 @@ pub mod optoken {
     /// Cast precedence (printc.cc:35 typecast): presurround = 62.
     pub const CAST_PRECEDENCE: i32 = 62;
 
-    // Ghidra: printlanguage.cc:269 PrintLanguage::parentheses
-    /// Decide whether a child sub-expression needs parentheses, given the
-    /// child's opcode and which operand slot of the parent it occupies.
-    /// Mirrors PrintLanguage::parentheses (printlanguage.cc:269-323) for the
-    /// common binary/unary cases:
-    ///   - If child precedence > parent precedence → needs parens (child binds
-    ///     tighter but, per Ghidra's rule for the binary/unary_prefix cases,
-    ///     a higher-precedence child still gets parens because the operators
-    ///     are adjacent and the lower-precedence parent is being emitted).
-    ///     NOTE: this is the OPPOSITE of textbook C; Ghidra's parentheses()
-    ///     returns true when topToken->precedence > op2->precedence. The
-    ///     function decides whether the *already-emitted* child (topToken)
-    ///     needs wrapping relative to the *parent* (op2) about to be emitted.
+    // Ghidra: printlanguage.cc:269-286 PrintLanguage::parentheses (binary case)
+    /// Decide whether a binary child sub-expression needs parentheses when
+    /// inlined into `parent_opc`'s operand `slot` (0=left/in0, 1=right/in1).
     ///
-    /// In Rugra's model we call this BEFORE emitting the child, so we invert:
-    /// we are given the parent opcode and the child opcode, and decide if the
-    /// child needs wrapping. Textbook rule applies: wrap the child if its
-    /// precedence is LOWER than the parent's, OR equal-and-non-associative on
-    /// the right operand (to preserve left-to-right evaluation order).
+    /// Faithful port of the `OpToken::binary` branch of
+    /// `PrintLanguage::parentheses` (printlanguage.cc:269-323), evaluated at
+    /// the point where the child's operator token is pushed under the parent
+    /// (`topToken` = parent, `op2` = child):
     ///
-    /// `is_right_operand`: true if the child is the right operand of a
-    /// non-associative binary parent (e.g. the `b` in `a - b`). For the left
-    /// operand of an associative op, no parens needed even at equal precedence.
+    /// ```text
+    /// printlanguage.cc:277  if (topToken->precedence > op2->precedence) return true;
+    /// printlanguage.cc:278  if (topToken->precedence < op2->precedence) return false;
+    /// printlanguage.cc:281  if (topToken->associative && (topToken == op2)) return false;
+    /// printlanguage.cc:283  if ((op2->type==postsurround)&&(stage==0)) return false;
+    /// printlanguage.cc:286  return true;
+    /// ```
+    ///
+    /// Decisive consequences (verified against the oracle source):
+    /// - Parent binds tighter (`prec >`) → parens, e.g. EQUAL(38) under
+    ///   LESS(42) → `(x == y) < 0`.
+    /// - Equal precedence → parens UNLESS the parent token is associative AND
+    ///   parent and child resolve to the SAME token instance (pointer equality
+    ///   in Ghidra, registry-id equality here). So `(a + b) - c` and
+    ///   `(a - b) + c` DO get parens (binary_minus is not associative), and
+    ///   `a + (b + c)` does not (both binary_plus, associative).
+    /// - A child that is not a binary-token op (leaf, COPY, LOAD, cast …)
+    ///   never takes this decision in Ghidra (no operator token is pushed),
+    ///   so it returns false here.
+    ///
+    /// `is_right_operand` is kept for call-site readability: it is the
+    /// `stage` input of printlanguage.cc:283-285, which only exempts
+    /// postsurround children (function calls / array subscripts) — a binary
+    /// child never takes that branch, so the flag does not change the result.
     pub fn child_needs_parens(parent_opc: OpCode, child_opc: OpCode, is_right_operand: bool) -> bool {
-        let parent_prec = match binary_precedence(parent_opc) {
-            Some(p) => p,
-            None => return false, // parent isn't a tracked binary op
+        let _ = is_right_operand; // printlanguage.cc:283-285 postsurround-only
+        let parent = match binary_token(parent_opc) {
+            Some(t) => t,
+            None => return false, // parent isn't a binary-token op
         };
-        let child_prec = match binary_precedence(child_opc) {
-            Some(p) => p,
-            None => return false, // child isn't a tracked binary op (leaf or other)
+        let child = match binary_token(child_opc) {
+            Some(t) => t,
+            None => return false, // child pushes no operator token → no parens
         };
-        if child_prec < parent_prec {
-            // Child binds looser → must parenthesize to preserve grouping.
+        // printlanguage.cc:277
+        if parent.precedence > child.precedence {
             return true;
         }
-        if child_prec == parent_prec {
-            // Equal precedence: left operand never needs parens (left-assoc);
-            // right operand needs parens if parent is non-associative
-            // (to keep left-to-right order, e.g. (a - b) - c needs no parens
-            // but a - (b - c) does).
-            if is_right_operand && !binary_associative(parent_opc) {
-                return true;
-            }
-            // Also parenthesize if the operators differ and child is on the
-            // right of a non-associative op at the same level (rare, but
-            // faithful to Ghidra's "operators adjacent, evaluated first" rule).
+        // printlanguage.cc:278
+        if parent.precedence < child.precedence {
+            return false;
         }
-        false
+        // printlanguage.cc:281: same OpToken instance (Ghidra pointer eq)
+        if parent.associative && parent.id == child.id {
+            return false;
+        }
+        // printlanguage.cc:283-285: binary op2 is never postsurround.
+        // printlanguage.cc:286
+        true
     }
 }
 
@@ -206,30 +288,6 @@ fn format_constant_value(val: u64) -> String {
     }
 }
 
-// RUGRA-GLUE: c_binary_op_str (RPN path helper; mirrors the OpToken print1
-// strings for each binary opcode as defined in printc.cc:36-55).
-fn c_binary_op_str(opc: crate::opcodes::OpCode) -> &'static str {
-    use crate::opcodes::OpCode::*;
-    match opc {
-        CPUI_INT_MULT | CPUI_FLOAT_MULT => "*",
-        CPUI_INT_DIV | CPUI_INT_SDIV | CPUI_FLOAT_DIV => "/",
-        CPUI_INT_REM | CPUI_INT_SREM => "%",
-        CPUI_INT_ADD | CPUI_FLOAT_ADD => "+",
-        CPUI_INT_SUB | CPUI_FLOAT_SUB => "-",
-        CPUI_INT_LEFT => "<<",
-        CPUI_INT_RIGHT | CPUI_INT_SRIGHT => ">>",
-        CPUI_INT_LESS | CPUI_INT_SLESS | CPUI_FLOAT_LESS => "<",
-        CPUI_INT_LESSEQUAL | CPUI_INT_SLESSEQUAL | CPUI_FLOAT_LESSEQUAL => "<=",
-        CPUI_INT_AND => "&",
-        CPUI_INT_XOR | CPUI_BOOL_XOR => "^",
-        CPUI_INT_OR => "|",
-        CPUI_BOOL_AND => "&&",
-        CPUI_BOOL_OR => "||",
-        CPUI_INT_EQUAL | CPUI_FLOAT_EQUAL => "==",
-        CPUI_INT_NOTEQUAL | CPUI_FLOAT_NOTEQUAL => "!=",
-        _ => " /* ? */ ",
-    }
-}
 // RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
 /// Escape a raw string from the binary into a C string literal.
 /// Converts control characters to their escape sequences:
@@ -613,7 +671,9 @@ impl PrintC {
     /// Build the per-instance OpToken slice the RPN free-functions index into.
     /// Indices 0..=6 must agree with the rpn_tok_* constants assigned in new().
     /// Faithful to the static OpToken definitions in printc.cc:25/26/33/34/35/56
-    /// plus the hidden token (printc.cc:29). Field-for-field copies of the
+    /// plus the hidden token (printc.cc:29) and the 20 binary operator tokens
+    /// (printc.cc:36-55, appended at indices RPN_TOK_BINARY_BASE..=+19 in
+    /// optoken::BINARY_TOKENS order). Field-for-field copies of the
     /// aggregate-init form: { print1, print2, stage, precedence, associative,
     /// type, spacing, bump, negate }.
     fn build_rpn_token_table() -> Vec<crate::printlanguage::OpToken> {
@@ -658,9 +718,9 @@ impl PrintC {
         // index 7 - function_call "(" ")" (printc.cc:28): postsurround,
         // prec 66, spacing 0, bump 10.
         let function_call = OpToken::postsurround("(", ")", 66, 0, 10);
-        // index 8 - comma "," (printc.cc:55): binary, prec 2, associative.
+        // index 8 - comma "," (printc.cc:57): binary, prec 2, associative.
         let comma = OpToken::binary(",", 2, true, 0, 0, -1);
-        vec![
+        let mut tokens = vec![
             assignment,
             dereference,
             hidden,
@@ -670,7 +730,28 @@ impl PrintC {
             addressof,
             function_call,
             comma,
-        ]
+        ];
+        // indices 9..=28 - the 20 binary operator tokens (printc.cc:36-55),
+        // field-for-field from the optoken registry (single source of truth):
+        // { print1, "", stage=2, precedence, associative, binary, spacing=1,
+        //   bump=0, negate }. `negate` stores the token-table index of the
+        // flipped comparison token (printc.cc:129-134), i.e.
+        // RPN_TOK_BINARY_BASE + registry negate-id.
+        for spec in optoken::BINARY_TOKENS {
+            let negate = spec
+                .negate
+                .map(|id| (Self::RPN_TOK_BINARY_BASE + id) as i32)
+                .unwrap_or(-1);
+            tokens.push(OpToken::binary(
+                spec.print1,
+                spec.precedence,
+                spec.associative,
+                spec.spacing,
+                0,
+                negate,
+            ));
+        }
+        tokens
     }
 
     /// Enable/disable the RPN emit path in doc_function. When true, blocks are
@@ -679,6 +760,43 @@ impl PrintC {
     // RUGRA-GLUE: migration-only runtime switch; Ghidra always uses its RPN printer and exposes no equivalent toggle
     pub fn set_rpn_enabled(&mut self, enabled: bool) {
         self.rpn_enabled = enabled;
+    }
+
+    /// First index of the binary-token block appended by build_rpn_token_table
+    /// (indices 9..=28, in optoken::BINARY_TOKENS order — printc.cc:36-55).
+    const RPN_TOK_BINARY_BASE: usize = 9;
+
+    // Ghidra: printc.hh:283-318 + printlanguage.cc:539-545
+    /// Map a binary opcode to its rpn_token_table index — the Rust equivalent
+    /// of the virtual dispatch `opIntAdd → opBinary(&binary_plus, op)`
+    /// (printc.hh:283-318) including opBinary's negatetoken prelude
+    /// (printlanguage.cc:539-545):
+    ///
+    /// ```text
+    /// if (isSet(negatetoken)) {
+    ///   tok = tok->negate; unsetMod(negatetoken);
+    ///   if (tok == (const OpToken *)0) throw LowlevelError("Could not find fliptoken");
+    /// }
+    /// ```
+    ///
+    /// Ghidra throws when a token has no flip target; Rugra keeps the
+    /// original token in that case because the negatetoken mod is only ever
+    /// set around comparison tokens by opBoolNegate (printc.cc:814-824),
+    /// which Rugra's RPN path has not wired yet — a null-negate flip here
+    /// would be unreachable in practice and printc has no error channel.
+    fn rpn_tok_binary(&mut self, opc: OpCode) -> usize {
+        let mut spec = match optoken::binary_token(opc) {
+            Some(t) => t,
+            None => return self.rpn_tok_hidden,
+        };
+        // printlanguage.cc:539-544: flip token under negatetoken.
+        if self.mods & print_mods::NEGATETOKEN != 0 {
+            self.mods &= !print_mods::NEGATETOKEN;
+            if let Some(nid) = spec.negate {
+                spec = optoken::BINARY_TOKENS[nid];
+            }
+        }
+        Self::RPN_TOK_BINARY_BASE + spec.id
     }
 
     // ---- Step 2: RPN push/recurse wrappers (printlanguage.cc:129/162/514) ----
@@ -982,7 +1100,12 @@ impl PrintC {
                 // inlines as `ptr->field` / `(type)x` instead of a bare leaf.
                 self.rpn_push_in(op_arc, op, 0, self.mods);
             }
-            // printlanguage.cc:546 opBinary.
+            // printlanguage.cc:537-553 PrintLanguage::opBinary, dispatched from
+            // the virtual emitters in printc.hh:283-318 (opIntAdd→binary_plus,
+            // opIntSub→binary_minus, opIntMult→multiply, opIntDiv/Sdiv→divide,
+            // opIntRem/Srem→modulo, opIntXor→bitwise_xor, opBoolXor→boolean_xor,
+            // ...). Every binary op flows through pushOp + the nodepend queue
+            // so printlanguage.cc:269-323 parentheses() decides nesting parens.
             OpCode::CPUI_INT_ADD
             | OpCode::CPUI_INT_SUB
             | OpCode::CPUI_INT_MULT
@@ -1013,7 +1136,11 @@ impl PrintC {
             | OpCode::CPUI_FLOAT_NOTEQUAL
             | OpCode::CPUI_FLOAT_LESS
             | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                // Struct field access: INT_ADD(ptr, offset) → ptr->field
+                // Struct field access: INT_ADD(ptr, offset) → ptr->field.
+                // Rugra's substitute for PTRSUB/opPtrsub (printc.cc:476-484:
+                // pushOp(&pointer_member,op); pushVn(in0); pushConstant(off)
+                // … field atom), routed through the pointer_member RPN token
+                // (printc.cc:26, prec 66) so nesting parenthesization engages.
                 if op.opcode == OpCode::CPUI_INT_ADD {
                     if let (Some(i0), Some(i1)) = (op.get_in(0), op.get_in(1)) {
                         let v0 = i0.read().unwrap();
@@ -1039,23 +1166,43 @@ impl PrintC {
                             } else { None }
                         } else { None };
                         if let Some(fn_) = fm {
-                            let bt = self.get_varnode_display_name(&bv);
+                            let base_atom = self.make_atom_for_vn(&bv, op);
                             drop(bv); drop(v0); drop(v1);
-                            self.emit.print(&bt);
-                            self.emit.print("->");
-                            self.emit.print(&fn_);
+                            // printc.cc:476-484 opPtrsub shape:
+                            // pushOp(&pointer_member); base atom; field atom.
+                            self.rpn_push_op(self.rpn_tok_pointer_member);
+                            self.rpn_push_atom(&base_atom);
+                            use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+                            let field_atom = Atom::new(&fn_, TagType::Syntax, SyntaxHighlight::NoColor);
+                            self.rpn_push_atom(&field_atom);
                             return;
                         }
                         drop(bv); drop(v0); drop(v1);
                     }
                 }
-                let tok_text = c_binary_op_str(op.opcode);
+                // printlanguage.cc:550: pushOp(tok, op) — push on reverse
+                // polish notation (parentheses() decides openParen/openGroup,
+                // emitOp prints " op " with the token's spacing=1 at
+                // printlanguage.cc:332-337 when the first operand completes).
+                //
+                // Operand emission keeps the leaf-atom form (make_atom_for_vn)
+                // rather than Ghidra's pushVn/in(1)-then-in(0) nodepend queue
+                // (printlanguage.cc:551-552): routing implied operands through
+                // rpn_recurse would inline whole sub-expressions, which is the
+                // PRINT-RPN-0001 implied-inlining gap and changes statement
+                // output corpus-wide. The token-flow operator + leaf atoms
+                // yield byte-identical text to the previous direct emission
+                // (`a + b`) while pushOp's parentheses() decision now governs
+                // nesting; the in0-atom, op, in1-atom order matches Ghidra's
+                // left-then-right print order (nodepend LIFO ⇒ in0 first).
+                // Missing-input ops skip emission entirely, as before.
+                let tok_index = self.rpn_tok_binary(op.opcode);
                 if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
+                    self.rpn_push_op(tok_index);
                     let v0 = in0.read().unwrap();
                     let a0 = self.make_atom_for_vn(&v0, op);
                     drop(v0);
                     self.rpn_push_atom(&a0);
-                    self.emit.tag_op(&format!(" {} ", tok_text));
                     let v1 = in1.read().unwrap();
                     let a1 = self.make_atom_for_vn(&v1, op);
                     drop(v1);
@@ -4089,26 +4236,18 @@ impl PrintC {
                 }
 
                 self.push_input_parenthesized(def_op, def_op.opcode, 0);
-                let op_sym = match def_op.opcode {
-                    OpCode::CPUI_INT_EQUAL | OpCode::CPUI_FLOAT_EQUAL => " == ",
-                    OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_FLOAT_NOTEQUAL => " != ",
-                    OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS | OpCode::CPUI_FLOAT_LESS => " < ",
-                    OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_FLOAT_LESSEQUAL => " <= ",
-                    OpCode::CPUI_INT_ADD | OpCode::CPUI_FLOAT_ADD => " + ",
-                    OpCode::CPUI_INT_SUB | OpCode::CPUI_FLOAT_SUB => " - ",
-                    OpCode::CPUI_INT_MULT | OpCode::CPUI_FLOAT_MULT => " * ",
-                    OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_FLOAT_DIV => " / ",
-                    OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM => " % ",
-                    OpCode::CPUI_INT_AND => " & ",
-                    OpCode::CPUI_INT_OR => " | ",
-                    OpCode::CPUI_INT_XOR | OpCode::CPUI_BOOL_XOR => " ^ ",
-                    OpCode::CPUI_INT_LEFT => " << ",
-                    OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => " >> ",
-                    OpCode::CPUI_BOOL_AND => " && ",
-                    OpCode::CPUI_BOOL_OR => " || ",
-                    _ => " op ",
-                };
-                self.emit.print(op_sym);
+                // Operator text from the OpToken registry (printc.cc:36-55
+                // print1 + spacing=1 per side, exactly what emitOp prints for
+                // a binary token at printlanguage.cc:332-337). Single source
+                // of truth with the RPN pushOp token flow. Note CPUI_BOOL_XOR
+                // is boolean_xor "^^" prec 20 (printc.cc:54), not "^".
+                let op_sym = optoken::binary_token(def_op.opcode)
+                    .map(|t| {
+                        let pad = " ".repeat(t.spacing.max(0) as usize);
+                        format!("{pad}{}{pad}", t.print1)
+                    })
+                    .unwrap_or_else(|| " op ".to_string());
+                self.emit.print(&op_sym);
                 self.push_input_parenthesized(def_op, def_op.opcode, 1);
             }
             OpCode::CPUI_INT_NEGATE => { self.emit.print("~"); self.push_input(def_op, 0); }
@@ -4796,6 +4935,23 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printlanguage.cc:269-286 PrintLanguage::parentheses (binary case)
+    /// Whether a boolean-combinator side (a condition varnode whose defining
+    /// op is looked up through the same COPY-chasing def strategy as
+    /// emit_condition Strategy 0) must be parenthesized under `parent_opc`.
+    /// Applies the optoken::child_needs_parens port of parentheses(): an
+    /// equal-precedence non-associative combinator child (e.g. `||` under
+    /// `||`, `&&` under `&&`) parenthesizes; a tighter child (&& / ^^ /
+    /// comparisons under ||) does not; a leaf or non-binary def never does.
+    fn condition_side_needs_parens(parent_opc: OpCode, vn_arc: &Arc<RwLock<Varnode>>) -> bool {
+        Self::get_defining_op(vn_arc)
+            .map(|op_arc| {
+                let opc = op_arc.read().unwrap().opcode;
+                optoken::child_needs_parens(parent_opc, opc, false)
+            })
+            .unwrap_or(false)
+    }
+
     // RUGRA-GLUE: emit_condition (no Ghidra counterpart found)
     /// Emit a condition expression, inlining comparisons.
     ///
@@ -4947,11 +5103,14 @@ impl PrintC {
                             self.inlined_ops.insert(*def_op.get_seq_num());
                             self.inlined_ops.insert(*inner_def_op.get_seq_num());
 
-                            let a = self.resolve_varnode(&inner_def_op.inrefs[0]).unwrap_or_else(|| inner_def_op.inrefs[0].clone());
-                            let b = self.resolve_varnode(&inner_def_op.inrefs[1]).unwrap_or_else(|| inner_def_op.inrefs[1].clone());
-                            self.push_varnode(&a.read().unwrap(), None);
+                            // Operands via the paren-aware push (flip tokens
+                            // share the precedence class of their source —
+                            // equal↔not_equal 38, less_than↔greater_equal 42 —
+                            // so deciding on the pre-flip opcode is equivalent
+                            // to deciding on the flipped one).
+                            self.push_input_parenthesized(&inner_def_op, inner_def_op.opcode, 0);
                             self.emit.print(sym);
-                            self.push_varnode(&b.read().unwrap(), None);
+                            self.push_input_parenthesized(&inner_def_op, inner_def_op.opcode, 1);
                             return;
                         }
                     }
@@ -5028,6 +5187,13 @@ impl PrintC {
                         // Fallback tautology detection: emit each side to temp buffer,
                         // then check if they form a complementary pair
                         if bool_opcode == OpCode::CPUI_BOOL_OR {
+                            // printlanguage.cc:277-286: a boolean-combinator
+                            // side whose defining op is an equal-precedence
+                            // non-associative combinator (e.g. `||` under
+                            // `||`) parenthesizes; a tighter child (&& / ^^ /
+                            // comparisons under ||) does not.
+                            let wrap_left = Self::condition_side_needs_parens(bool_opcode, &a_arc);
+                            let wrap_right = Self::condition_side_needs_parens(bool_opcode, &b_arc);
                             // Save current emit state and emit to temp buffers
                             let orig_emit = std::mem::replace(&mut self.emit,
                                 Box::new(crate::prettyprint::EmitNoMarkup::new()));
@@ -5057,25 +5223,42 @@ impl PrintC {
                                 return;
                             }
 
-                            // Not a tautology — emit normally
+                            // Not a tautology — emit normally (parens per the
+                            // parentheses() port, see wrap_* above)
+                            if wrap_left { self.emit.print("("); }
                             self.emit.print(&left_text);
+                            if wrap_left { self.emit.print(")"); }
                             self.emit.print(sym);
+                            if wrap_right { self.emit.print("("); }
                             self.emit.print(&right_text);
+                            if wrap_right { self.emit.print(")"); }
                             return;
                         }
 
                         // Can't fold — emit each side as a condition recursively
+                        // (parens per the parentheses() port: printlanguage.cc:277-286)
+                        let wrap_a = Self::condition_side_needs_parens(bool_opcode, &a_arc);
+                        let wrap_b = Self::condition_side_needs_parens(bool_opcode, &b_arc);
+                        if wrap_a { self.emit.print("("); }
                         self.emit_condition(&a_arc);
+                        if wrap_a { self.emit.print(")"); }
                         self.emit.print(sym);
+                        if wrap_b { self.emit.print("("); }
                         self.emit_condition(&b_arc);
+                        if wrap_b { self.emit.print(")"); }
                         return;
                     }
 
-                    let a = self.resolve_varnode(&def_op.inrefs[0]).unwrap_or_else(|| def_op.inrefs[0].clone());
-                    let b = self.resolve_varnode(&def_op.inrefs[1]).unwrap_or_else(|| def_op.inrefs[1].clone());
-                    self.push_varnode(&a.read().unwrap(), None);
+                    // Operands via the paren-aware push so a nested implied
+                    // comparison/arithmetic sub-expression is wrapped per
+                    // printlanguage.cc:277-286 — e.g. EQUAL(38) under LESS(42)
+                    // parenthesizes: `(x == y) < 0`. push_input_parenthesized
+                    // renders exactly as the previous push_varnode pair
+                    // (resolve + push_varnode) and only adds the parens the
+                    // parentheses() port requires.
+                    self.push_input_parenthesized(&def_op, def_op.opcode, 0);
                     self.emit.print(sym);
-                    self.push_varnode(&b.read().unwrap(), None);
+                    self.push_input_parenthesized(&def_op, def_op.opcode, 1);
                     return;
                 }
             }
@@ -6387,30 +6570,18 @@ impl PrintLanguage for PrintC {
 
             self.push_input_parenthesized(op, op.opcode, 0);
 
-            let op_sym = match op.opcode {
-                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_FLOAT_EQUAL => " == ",
-                OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_FLOAT_NOTEQUAL => " != ",
-                OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS | OpCode::CPUI_FLOAT_LESS => " < ",
-                OpCode::CPUI_INT_LESSEQUAL
-                | OpCode::CPUI_INT_SLESSEQUAL
-                | OpCode::CPUI_FLOAT_LESSEQUAL => " <= ",
-                OpCode::CPUI_INT_ADD | OpCode::CPUI_FLOAT_ADD => " + ",
-                OpCode::CPUI_INT_SUB | OpCode::CPUI_FLOAT_SUB => " - ",
-                OpCode::CPUI_INT_MULT | OpCode::CPUI_FLOAT_MULT => " * ",
-                OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_FLOAT_DIV => " / ",
-                OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM => " % ",
-                OpCode::CPUI_INT_AND => " & ",
-                OpCode::CPUI_INT_OR => " | ",
-                OpCode::CPUI_INT_XOR => " ^ ",
-                OpCode::CPUI_INT_LEFT => " << ",
-                OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => " >> ",
-                OpCode::CPUI_BOOL_AND => " && ",
-                OpCode::CPUI_BOOL_OR => " || ",
-                OpCode::CPUI_BOOL_XOR => " ^ ",
-                _ => " op ",
-            };
+            // Operator text from the OpToken registry (printc.cc:36-55 print1
+            // + spacing=1 per side = emitOp printlanguage.cc:332-337). Single
+            // source of truth with the RPN pushOp token flow; CPUI_BOOL_XOR is
+            // boolean_xor "^^" prec 20 (printc.cc:54), not "^".
+            let op_sym = optoken::binary_token(op.opcode)
+                .map(|t| {
+                    let pad = " ".repeat(t.spacing.max(0) as usize);
+                    format!("{pad}{}{pad}", t.print1)
+                })
+                .unwrap_or_else(|| " op ".to_string());
 
-            self.emit.print(op_sym);
+            self.emit.print(&op_sym);
             self.push_input_parenthesized(op, op.opcode, 1);
         }
     }
@@ -10732,53 +10903,84 @@ mod tests {
     #[test]
     fn test_child_needs_parens_precedence() {
         use crate::opcodes::OpCode::*;
-        // Mirrors PrintLanguage::parentheses (printlanguage.cc:269) precedence
-        // rules applied at recursion point. Parent is the op being emitted;
-        // child is the sub-expression input; is_right_operand = slot 1.
+        // Faithful port of PrintLanguage::parentheses (printlanguage.cc:269-323,
+        // binary-parent case), evaluated at the child's pushOp point: parent
+        // token = topToken, child token = op2.
+        //   277: top.prec > op2.prec → true
+        //   278: top.prec < op2.prec → false
+        //   281: top.assoc && same OpToken instance → false
+        //   286: otherwise → true (equal precedence parenthesizes unless
+        //        associative-same-token)
         use crate::printc::optoken::child_needs_parens;
 
-        // (a + b) << c : ADD(50) child of LEFT(46) → child looser? No: 50>46.
-        // LEFT binds looser than ADD, so a+b needs NO parens (already tighter).
+        // printlanguage.cc:278: (a + b) << c : ADD(50) child of LEFT(46) →
+        // parent binds looser → NO parens.
         assert!(!child_needs_parens(CPUI_INT_LEFT, CPUI_INT_ADD, false),
-            "a + b << c: ADD(50) > LEFT(46), left operand no parens");
+            "a + b << c: ADD(50) > LEFT(46), no parens");
 
-        // a << b + c : LEFT(46) child of ADD(50) right operand → 46<50 → parens.
-        // Textbook: a + (b << c) ... wait this is "does the child need parens".
-        // Parent=ADD, child=LEFT on right: 46<50 → yes parens → a + (b << c).
+        // printlanguage.cc:277: a + (b << c) : LEFT(46) child of ADD(50) →
+        // parent binds tighter → parens.
         assert!(child_needs_parens(CPUI_INT_ADD, CPUI_INT_LEFT, true),
-            "a + (b << c): LEFT(46) < ADD(50), right operand needs parens");
+            "a + (b << c): LEFT(46) < ADD(50), parens");
 
-        // a == b && c : EQUAL(38) child of BOOL_AND(22) → 38>22 → no parens.
+        // a == b && c : EQUAL(38) child of BOOL_AND(22) → 22 < 38 → no parens.
         assert!(!child_needs_parens(CPUI_BOOL_AND, CPUI_INT_EQUAL, false),
-            "a == b && c: EQUAL(38) > BOOL_AND(22), left no parens");
+            "a == b && c: EQUAL(38) > BOOL_AND(22), no parens");
 
-        // a && b == c : BOOL_AND(22) child of EQUAL(38) right → 22<38 → parens.
+        // a == (b && c) : BOOL_AND(22) child of EQUAL(38) → parens.
         assert!(child_needs_parens(CPUI_INT_EQUAL, CPUI_BOOL_AND, true),
-            "a == (b && c): BOOL_AND(22) < EQUAL(38), right needs parens");
+            "a == (b && c): BOOL_AND(22) < EQUAL(38), parens");
 
-        // Associative equal-precedence, left operand: (a * b) * c → no parens.
+        // PRINTC-BINARY-RPN-0001 residual class: EQUAL(38) under LESS(42)
+        // as the LEFT operand → 42 > 38 → parens: `(x == y) < 0`.
+        assert!(child_needs_parens(CPUI_INT_LESS, CPUI_INT_EQUAL, false),
+            "(x == y) < 0: EQUAL(38) < LESS(42), left operand needs parens");
+        assert!(child_needs_parens(CPUI_INT_SLESS, CPUI_INT_NOTEQUAL, false),
+            "(x != y) < 0: NOTEQUAL(38) < SLESS(42), parens");
+
+        // printlanguage.cc:281 (associative && same OpToken instance):
+        // (a * b) * c and a * (b * c) → no parens (both multiply, associative).
         assert!(!child_needs_parens(CPUI_INT_MULT, CPUI_INT_MULT, false),
-            "(a * b) * c: associative left, no parens");
-        // Associative equal-precedence, right operand: a * (b * c) → no parens
-        // (associative, order doesn't matter).
+            "(a * b) * c: associative same token, no parens");
         assert!(!child_needs_parens(CPUI_INT_MULT, CPUI_INT_MULT, true),
-            "a * (b * c): associative right, no parens");
+            "a * (b * c): associative same token, no parens");
+        // INT_ADD and FLOAT_ADD share the binary_plus OpToken instance
+        // (printc.hh:291/314) → same token id → associative no-parens holds.
+        assert!(!child_needs_parens(CPUI_INT_ADD, CPUI_FLOAT_ADD, true),
+            "a + (b + c) mixed int/float: same binary_plus token, no parens");
 
-        // Non-associative equal-precedence, left operand: (a - b) - c → no parens.
-        assert!(!child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, false),
-            "(a - b) - c: non-assoc left, no parens (left-to-right)");
-        // Non-associative equal-precedence, right operand: a - (b - c) → parens.
+        // printlanguage.cc:286 (equal precedence, non-associative parent):
+        // BOTH operand slots parenthesize — Ghidra conservatively emits
+        // `(a - b) - c` and `a - (b - c)`.
+        assert!(child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, false),
+            "(a - b) - c: equal prec, binary_minus non-assoc → parens (printlanguage.cc:286)");
         assert!(child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, true),
-            "a - (b - c): non-assoc right, needs parens");
+            "a - (b - c): equal prec, binary_minus non-assoc → parens");
+        // The `+ 0 -` residual class: ADD under SUB at the left slot.
+        assert!(child_needs_parens(CPUI_INT_SUB, CPUI_INT_ADD, false),
+            "(a + b) - c: ADD(50) under SUB(50) non-assoc → parens");
 
-        // Bitwise: a & b | c → AND(34) child of OR(26) left → 34>26 → no parens.
+        // Bitwise: a & b | c → AND(34) child of OR(26) → no parens;
+        // a & (b | c) → OR(26) child of AND(34) → parens.
         assert!(!child_needs_parens(CPUI_INT_OR, CPUI_INT_AND, false),
-            "a & b | c: AND(34) > OR(26), left no parens");
-        // a | b & c → OR(26) child of AND(34) right → 26<34 → parens.
+            "a & b | c: AND(34) > OR(26), no parens");
         assert!(child_needs_parens(CPUI_INT_AND, CPUI_INT_OR, true),
-            "a & (b | c): OR(26) < AND(34), right needs parens");
+            "a & (b | c): OR(26) < AND(34), parens");
 
-        // Non-binary child (e.g. COPY/LOAD) → no parens.
+        // Boolean combinators: && (22) under && (22) — boolean_and is NOT
+        // associative (printc.cc:53) → parens; && (22) under || (18) → no parens.
+        assert!(child_needs_parens(CPUI_BOOL_AND, CPUI_BOOL_AND, true),
+            "a && (b && c): boolean_and non-assoc → parens");
+        assert!(!child_needs_parens(CPUI_BOOL_OR, CPUI_BOOL_AND, false),
+            "a && b || c: AND(22) > OR(18), no parens");
+        // BOOL_XOR is boolean_xor "^^" prec 20 (printc.cc:54): under
+        // BOOL_AND(22) → 22 > 20 → parens; under BOOL_OR(18) → no parens.
+        assert!(child_needs_parens(CPUI_BOOL_AND, CPUI_BOOL_XOR, true),
+            "a && (b ^^ c): XOR(20) < AND(22), parens");
+        assert!(!child_needs_parens(CPUI_BOOL_OR, CPUI_BOOL_XOR, false),
+            "a ^^ b || c: XOR(20) > OR(18), no parens");
+
+        // Non-binary child (e.g. COPY) pushes no operator token → no parens.
         assert!(!child_needs_parens(CPUI_INT_ADD, CPUI_COPY, true),
             "COPY child: not a tracked binary op, no parens");
     }
