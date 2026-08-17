@@ -2179,6 +2179,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "cspec_typeorg_state_1204",
+   "description": "TypeFactory data_organization/alignment map state observations",
+   "runner": [
+    "tools/run_cspec_typeorg_state_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/cspec_typeorg_state_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/cspec_typeorg_state_1204.cc",
+     "rust_fixture": "tests/oracle/cspec_typeorg_state_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_cspec_typeorg_state_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/type_system/typefactory.rs",
+     "tests/oracle/cspec_typeorg_state_1204.*",
+     "tools/run_cspec_typeorg_state_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

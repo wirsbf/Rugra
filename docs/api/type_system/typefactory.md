@@ -178,6 +178,62 @@ Consequences, registered under `TYPEFACTORY-UNDEFNAME-0001`:
   `unknown_datatype`, `TYPE-UNKNOWN-0001`) still produces `xunknown{size}`
   names and is out of this change's write-set.
 
+## 2026-08-17 CSPEC-TYPEORG-STATE-0001
+
+`TypeFactory` now persists the `<data_organization>` state Ghidra keeps in
+its private members (`type.hh:763-771`), replacing the previous
+return-only snapshots:
+
+- New private fields `size_of_int/long/char/wchar/pointer/alt_pointer`,
+  `enum_size`, `enum_type`, `align_map` — zeroed at construction exactly as
+  `TypeFactory::TypeFactory` (type.cc:3106-3119). Public snapshot getters
+  `get_size_of_int/long/char/wchar/pointer/alt_pointer` mirror the inline
+  accessors at type.hh:813-818.
+- `decode_data_organization` (type.cc:4583-4615) stores the five consumed
+  size children into the fields; every other child
+  (`machine_alignment`, `short_size`, `float_size`, ...) is
+  closed-and-skipped. No defaulting happens at decode: an absent
+  `<char_size>` leaves `size_of_char == 0` until `setup_sizes`. The
+  `<size_alignment_map>` branch falls through to the unified
+  `close_element(sub_id)` exactly as the oracle's sam branch falls to
+  `closeElement` (type.cc:4604-4612), so children *after* the map are
+  still consumed (review-rework fix: a stray `continue` used to leave the
+  TreeDecoder stack on the map element and silently drop trailing
+  children).
+- `decode_alignment_map` (type.cc:4619-4641) fixed three divergences:
+  index 0 now keeps the `-1` fill sentinel (unless an explicit
+  `<entry size="0">` exists), an empty `<size_alignment_map>` leaves the
+  map empty (the default install belongs to `setup_sizes`, and no invented
+  exception), and duplicates let the later entry win as in the oracle.
+- `set_default_alignment_map` (type.cc:4644-4656) now applies
+  `resize(9, 0)` semantics, so the default map is
+  `[0,1,2,2,4,4,4,4,8]` — index 0 is 0, not 1.
+- `setup_sizes(arch: &SizeArchInputs)` (type.cc:3137-3170) applies the
+  full default derivation 1:1 (int from the stack spacebase clamped to 4,
+  long via `(int==4) ? 8 : int`, char 1, wchar 2, pointer from the default
+  data space, far-pointer `alt_pointer`, default map, enum defaults).
+  Because Rugra's factory has no `glb` Architecture handle yet, the
+  `glb->getStackSpace()/getDefaultDataSpace()/getSegmentOp()/getDefaultSize()`
+  lookups are passed in as `SizeArchInputs` (RUGRA-GLUE).
+- New readers `get_alignment(u32) -> Result<i32, String>` (type.cc:3296;
+  verbatim `LowlevelError("TypeFactory alignment map not initialized")`
+  text, last-entry fallback for sizes at/beyond the map end) and
+  `get_primitive_align_size(u32)` (type.cc:3312; unsigned 32-bit modulo
+  semantics, so a `-1` alignment behaves as `0xFFFFFFFF`).
+- `parse_enum_config` (type.cc:4662-4672) is now an instance method that
+  stores `enum_size`/`enum_type` instead of returning a tuple.
+
+Oracle evidence: `tests/oracle/cspec_typeorg_state_1204.{cc,rs,metadata.json}`
++ `tools/run_cspec_typeorg_state_oracle.sh` — the locked 12.0.4 oracle
+(production `BfdArchitecture::init` chain plus seven synthetic
+`<data_organization>` documents) and the Rust comparand emit
+byte-identical state projections (`DECLARED_OBSERVATIONS_MATCH`,
+expected_stdout_sha256 locked in metadata). Residuals (UNTESTED/MISMATCH)
+are registered in the metadata `coverage` block: enum state is private in
+the oracle (no getters), live Architecture input derivation is unwired on
+Rust, ill-formed non-entry map children diverge (unreachable via
+well-formed specs), zero-alignment primitive queries abort on both sides.
+
 ## 2026-08-16 TYPE-WIRING-0001
 
 The dual-track unknown typing is closed: `VarnodeBank`'s bank-local

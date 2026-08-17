@@ -41,6 +41,30 @@ pub struct TypeFactory {
     /// (the "stripped" form). Mirrors Ghidra's `Datatype::typedefImm`
     /// (type.hh:196) and `TypeFactory::getTypedef` (type.cc:3818-3840).
     typedefs: BTreeMap<String, Arc<Datatype>>,
+
+    /// Size of the core "int" data-type (Ghidra `sizeOfInt`, type.hh:763).
+    /// Persisted state of `decodeDataOrganization`/`setupSizes`.
+    size_of_int: i32,
+    /// Size of the core "long" data-type (Ghidra `sizeOfLong`, type.hh:764).
+    size_of_long: i32,
+    /// Size of the core "char" data-type (Ghidra `sizeOfChar`, type.hh:765).
+    size_of_char: i32,
+    /// Size of the core "wchar_t" data-type (Ghidra `sizeOfWChar`, type.hh:766).
+    size_of_wchar: i32,
+    /// Size of pointers into the default data space (Ghidra `sizeOfPointer`,
+    /// type.hh:767).
+    size_of_pointer: i32,
+    /// Size of alternate pointers, 0 when unused (Ghidra `sizeOfAltPointer`,
+    /// type.hh:768). Only `setupSizes`'s far-pointer branch writes this.
+    size_of_alt_pointer: i32,
+    /// Size of an enumerated type (Ghidra `enumsize`, type.hh:769).
+    enum_size: i32,
+    /// Default enumeration meta-type (Ghidra `enumtype`, type.hh:770).
+    enum_type: TypeMetatype,
+    /// Alignment of primitive data-types keyed by size (Ghidra `alignMap`,
+    /// type.hh:771). Element value -1 marks "not set" during decode; index 0
+    /// stays -1 unless an explicit `<entry size="0">` exists.
+    align_map: Vec<i32>,
 }
 
 /// Which core-unknown registration path the architecture uses. Ghidra
@@ -80,6 +104,23 @@ impl TypeFactory {
             ptr_size,
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
+            // Ghidra: type.cc:3106 TypeFactory::TypeFactory zeroes every
+            // size field (int/long/char/wchar/pointer/altpointer/enumsize)
+            // and leaves alignMap default-constructed (empty).
+            size_of_int: 0,
+            size_of_long: 0,
+            size_of_char: 0,
+            size_of_wchar: 0,
+            size_of_pointer: 0,
+            size_of_alt_pointer: 0,
+            enum_size: 0,
+            // Ghidra leaves `enumtype` uninitialized in the constructor
+            // (type.cc:3108-3118); it is only read after parseEnumConfig or
+            // setupSizes assigns it. Rust must initialize: Unknown is a
+            // non-production placeholder never observable through the
+            // mapped call graph.
+            enum_type: TypeMetatype::Unknown,
+            align_map: Vec::new(),
         };
         factory.init_core_types_flavor(flavor);
         factory
@@ -1407,28 +1448,70 @@ impl TypeFactory {
     // Ghidra: type.cc:3137 TypeFactory::setupSizes
     /// Set up default values for the size of "int", the structure alignment,
     /// and the default enum size. Faithful to `TypeFactory::setupSizes`
-    /// (type.cc:3137-3170).
+    /// (type.cc:3137-3170): every zeroed size field gets its default, an
+    /// empty alignment map installs `setDefaultAlignmentMap`, and a zero
+    /// `enumsize` takes the architecture default size with unsigned
+    /// meta-type.
     ///
-    /// Rugra gap: Ghidra derives these from the `Architecture` (`glb`):
-    /// `getStackSpace().getSpacebase(0).size`, `getDefaultDataSpace().getAddrSize()`,
-    /// `getDefaultSize()`, segment-op far-pointer support, and the alignment
-    /// map. Rugra's `TypeFactory` does not yet hold an `Architecture` handle
-    /// (see type_audit.md "Architecture 集成缺失"), so the sizes default to
-    /// the values Ghidra falls back to when no architecture is present:
-    /// `sizeOfInt = 1` (then clamped), `sizeOfChar = 1`, `sizeOfWChar = 2`,
-    /// `sizeOfPointer` = this factory's `ptr_size`. The enum defaults and
-    /// alignment map use Ghidra's `setDefaultAlignmentMap` fallback. When the
-    /// Architecture plumbing lands, replace the bodies with the `glb` lookups.
-    pub fn setup_sizes(&mut self) {
-        // Ghidra: if (sizeOfInt == 0) { sizeOfInt = 1; ... clamp to 4 }
-        // Rugra: sizeOfInt is not stored on the factory; documented gap.
-        // Ghidra: if (sizeOfPointer == 0) sizeOfPointer = glb->getDefaultDataSpace()->getAddrSize();
-        // Rugra: ptr_size is set at construction; nothing to do here.
+    /// Rugra glue: Ghidra pulls the stack spacebase size, default data space
+    /// address size, default size, and far-pointer segment op from the
+    /// `Architecture` handle (`glb`). Rugra's `TypeFactory` does not hold an
+    /// Architecture yet, so those lookups are passed in as `SizeArchInputs`
+    /// by the caller; the derivation arithmetic below is 1:1 with the
+    /// oracle.
+    pub fn setup_sizes(&mut self, arch: &SizeArchInputs) {
+        // Ghidra: if (sizeOfInt == 0) { sizeOfInt = 1; spc = glb->getStackSpace();
+        //        if (spc) { sizeOfInt = spdata.size; if (sizeOfInt > 4) sizeOfInt = 4; } }
+        if self.size_of_int == 0 {
+            self.size_of_int = 1; // Default if we can't find a better value
+            if let Some(spacebase_size) = arch.stack_spacebase_size {
+                // Use stack pointer as likely indicator of "int" size.
+                self.size_of_int = spacebase_size;
+                if self.size_of_int > 4 {
+                    // "int" is rarely bigger than 4 bytes
+                    self.size_of_int = 4;
+                }
+            }
+        }
+        // Ghidra: if (sizeOfLong == 0) sizeOfLong = (sizeOfInt == 4) ? 8 : sizeOfInt;
+        if self.size_of_long == 0 {
+            self.size_of_long = if self.size_of_int == 4 {
+                8
+            } else {
+                self.size_of_int
+            };
+        }
+        // Ghidra: if (sizeOfChar == 0) sizeOfChar = 1;
+        if self.size_of_char == 0 {
+            self.size_of_char = 1;
+        }
+        // Ghidra: if (sizeOfWChar == 0) sizeOfWChar = 2;
+        if self.size_of_wchar == 0 {
+            self.size_of_wchar = 2;
+        }
+        // Ghidra: if (sizeOfPointer == 0) sizeOfPointer =
+        //        glb->getDefaultDataSpace()->getAddrSize();
+        if self.size_of_pointer == 0 {
+            self.size_of_pointer = arch.default_data_space_addr_size;
+        }
+        // Ghidra: segOp = glb->getSegmentOp(glb->getDefaultDataSpace());
+        //        if (segOp && segOp->hasFarPointerSupport()) {
+        //          sizeOfPointer = segOp->getInnerSize();
+        //          sizeOfAltPointer = sizeOfPointer + segOp->getBaseSize(); }
+        if let Some((inner_size, base_size)) = arch.far_pointer {
+            self.size_of_pointer = inner_size;
+            self.size_of_alt_pointer = inner_size + base_size;
+        }
         // Ghidra: if (alignMap.empty()) setDefaultAlignmentMap();
-        // Rugra: no alignMap field yet; the default map is exposed via
-        //        `set_default_alignment_map` for callers that need it.
-        // Ghidra: if (enumsize == 0) { enumsize = glb->getDefaultSize(); enumtype = TYPE_ENUM_UINT; }
-        // Rugra: no enumsize/enumtype fields; documented gap.
+        if self.align_map.is_empty() {
+            self.set_default_alignment_map();
+        }
+        // Ghidra: if (enumsize == 0) { enumsize = glb->getDefaultSize();
+        //        enumtype = TYPE_ENUM_UINT; }
+        if self.enum_size == 0 {
+            self.enum_size = arch.default_size;
+            self.enum_type = TypeMetatype::Uint;
+        }
     }
 
     // Ghidra: type.cc:3178 TypeFactory::setCoreType
@@ -1594,17 +1677,16 @@ impl TypeFactory {
     /// Recover size defaults (`sizeOfInt`, `sizeOfLong`, `sizeOfPointer`,
     /// `sizeOfChar`, `sizeOfWChar`) and the alignment map by parsing a
     /// `<data_organization>` element. Faithful to
-    /// `TypeFactory::decodeDataOrganization` (type.cc:4583-4615).
-    ///
-    /// Rugra gap: the size fields are not stored on the factory (documented
-    /// gap); this parses the element and consumes its children so the decoder
-    /// position is correct, returning the recovered sizes for the caller to
-    /// apply. The alignment map is exposed via `decode_alignment_map`.
+    /// `TypeFactory::decodeDataOrganization` (type.cc:4583-4615): only the
+    /// five size children and `<size_alignment_map>` are consumed, every
+    /// other child is closed-and-skipped, and the parsed sizes overwrite the
+    /// factory fields (no defaulting happens here — that is `setupSizes`).
+    /// Returns a snapshot of the five sizes for callers; the same values are
+    /// persisted on the factory.
     pub fn decode_data_organization(
         &mut self,
         decoder: &mut dyn Decoder,
     ) -> DataOrganizationSizes {
-        let mut sizes = DataOrganizationSizes::default();
         let elem_id = decoder.open_element_matching(&elem::element("data_organization"));
         loop {
             let sub_id = decoder.open_element();
@@ -1614,28 +1696,28 @@ impl TypeFactory {
             let name = decoder.element_name(sub_id).unwrap_or_default();
             match name.as_str() {
                 "integer_size" => {
-                    sizes.size_of_int =
-                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                    // Ghidra: sizeOfInt = decoder.readSignedInteger(ATTRIB_VALUE);
+                    self.size_of_int = decoder.read_signed_integer_attr(&attrib("value")) as i32;
                 }
                 "long_size" => {
-                    sizes.size_of_long =
-                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                    self.size_of_long = decoder.read_signed_integer_attr(&attrib("value")) as i32;
                 }
                 "pointer_size" => {
-                    sizes.size_of_pointer =
-                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                    self.size_of_pointer =
+                        decoder.read_signed_integer_attr(&attrib("value")) as i32;
                 }
                 "char_size" => {
-                    sizes.size_of_char =
-                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                    self.size_of_char = decoder.read_signed_integer_attr(&attrib("value")) as i32;
                 }
                 "wchar_size" => {
-                    sizes.size_of_wchar =
-                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                    self.size_of_wchar = decoder.read_signed_integer_attr(&attrib("value")) as i32;
                 }
                 "size_alignment_map" => {
+                    // Ghidra: decodeAlignmentMap(decoder); — no continue:
+                    // falls through to the unified closeElement(subId)
+                    // below, which closes <size_alignment_map> itself
+                    // (type.cc:4604-4606 -> 4612).
                     self.decode_alignment_map(decoder);
-                    continue; // decode_alignment_map closes its own element
                 }
                 _ => {
                     decoder.close_element_skipping(sub_id);
@@ -1647,75 +1729,192 @@ impl TypeFactory {
         if elem_id != 0 {
             decoder.close_element(elem_id);
         }
-        sizes
+        DataOrganizationSizes {
+            size_of_int: self.size_of_int,
+            size_of_long: self.size_of_long,
+            size_of_pointer: self.size_of_pointer,
+            size_of_char: self.size_of_char,
+            size_of_wchar: self.size_of_wchar,
+        }
     }
 
     // Ghidra: type.cc:4619 TypeFactory::decodeAlignmentMap
     /// Recover the size→alignment map from the children of a
     /// `<size_alignment_map>` element. Faithful to
-    /// `TypeFactory::decodeAlignmentMap` (type.cc:4619-4644). Returns the map;
-    /// the caller (`decode_data_organization`) drives the element iteration
-    /// and this reads the `<entry>` children, applying Ghidra's
-    /// forward-fill for unassigned sizes.
-    pub fn decode_alignment_map(&mut self, decoder: &mut dyn Decoder) -> Vec<i64> {
-        let mut align_map: Vec<i64> = Vec::new();
+    /// `TypeFactory::decodeAlignmentMap` (type.cc:4619-4641): the map is
+    /// cleared, each `<entry size alignment>` grows the vector with -1 fill
+    /// and assigns its size slot (a later duplicate entry wins), and a final
+    /// forward pass copies the nearest earlier explicit alignment into every
+    /// remaining -1 slot starting from `curAlign = 1` at index 1. Index 0 is
+    /// never touched by the fill pass: it stays -1 unless an explicit
+    /// `<entry size="0">` set it. An empty `<size_alignment_map>` leaves the
+    /// map empty — no default is installed here (that is `setupSizes` via
+    /// `setDefaultAlignmentMap`) and no exception is raised. Returns a
+    /// snapshot of the persisted map.
+    ///
+    /// Rugra divergence (ill-formed input only): when a non-`<entry>` child
+    /// appears mid-map, Ghidra breaks with the element left open (its parent
+    /// `closeElement` then throws `DecoderError`); Rugra's TreeDecoder must
+    /// close the opened child to keep its position coherent, so the child is
+    /// skipped instead. Well-formed compiler specs (only `<entry>` children)
+    /// never reach this branch.
+    pub fn decode_alignment_map(&mut self, decoder: &mut dyn Decoder) -> Vec<i32> {
+        // Ghidra: alignMap.clear();
+        self.align_map.clear();
         loop {
             let map_id = decoder.open_element();
             let name = decoder.element_name(map_id).unwrap_or_default();
             if name != "entry" {
-                // Not an <entry>; rewind by closing if we opened something.
+                // Ghidra: if (mapId != ELEM_ENTRY) break; — openElement
+                // returning 0 (end of children) also lands here.
                 if map_id != 0 {
                     decoder.close_element_skipping(map_id);
                 }
                 break;
             }
+            // Ghidra: int4 sz = readSignedInteger(ATTRIB_SIZE);
+            //        int4 val = readSignedInteger(ATTRIB_ALIGNMENT);
             let sz = decoder.read_signed_integer_attr(&attrib("size")) as usize;
-            let val = decoder.read_signed_integer_attr(&attrib("alignment"));
-            while align_map.len() <= sz {
-                align_map.push(-1);
+            let val = decoder.read_signed_integer_attr(&attrib("alignment")) as i32;
+            // Ghidra: while (alignMap.size() <= sz) alignMap.push_back(-1);
+            while self.align_map.len() <= sz {
+                self.align_map.push(-1);
             }
-            align_map[sz] = val;
+            self.align_map[sz] = val;
             decoder.close_element(map_id);
         }
-        if align_map.is_empty() {
-            // Ghidra throws LowlevelError("Alignment map empty"); Rugra returns
-            // the default map instead so callers can proceed.
-            return Self::default_alignment_map();
-        }
-        align_map[0] = 1;
-        let mut cur_align: i64 = 1;
-        for sz in 1..align_map.len() {
-            let tmp = align_map[sz];
+        // Ghidra: int4 curAlign = 1;
+        //        for (sz = 1; sz < alignMap.size(); ++sz) { ... }
+        let mut cur_align: i32 = 1;
+        for sz in 1..self.align_map.len() {
+            let tmp = self.align_map[sz];
             if tmp == -1 {
-                align_map[sz] = cur_align; // Copy from nearest explicit value.
+                self.align_map[sz] = cur_align; // Copy from nearest explicit value.
             } else {
                 cur_align = tmp;
             }
         }
-        align_map
+        self.align_map.clone()
     }
 
-    // Ghidra: type.cc:4647 TypeFactory::setDefaultAlignmentMap
+    // Ghidra: type.cc:4644 TypeFactory::setDefaultAlignmentMap
     /// The default alignment map used when the compiler spec has no
-    /// `<size_alignment_map>`. Faithful to `TypeFactory::setDefaultAlignmentMap`
-    /// (type.cc:4647-4659).
-    pub fn default_alignment_map() -> Vec<i64> {
-        // alignMap.resize(9,1); alignMap[1..8] as below.
-        vec![1, 1, 2, 2, 4, 4, 4, 4, 8]
+    /// `<size_alignment_map>`. Faithful to
+    /// `TypeFactory::setDefaultAlignmentMap` (type.cc:4644-4656): the vector
+    /// is resized to 9 with 0 fill (so a fresh install yields
+    /// `[0,1,2,2,4,4,4,4,8]` — index 0 is 0, not 1) and slots 1..=8 are
+    /// assigned the x86-style powers-of-two ladder.
+    pub fn set_default_alignment_map(&mut self) {
+        // Ghidra: alignMap.resize(9,0);
+        self.align_map.resize(9, 0);
+        self.align_map[1] = 1;
+        self.align_map[2] = 2;
+        self.align_map[3] = 2;
+        self.align_map[4] = 4;
+        self.align_map[5] = 4;
+        self.align_map[6] = 4;
+        self.align_map[7] = 4;
+        self.align_map[8] = 8;
     }
 
-    // Ghidra: type.cc:4665 TypeFactory::parseEnumConfig
+    // Ghidra: type.hh:813 TypeFactory::getSizeOfInt
+    /// Snapshot getter mirroring Ghidra's inline `getSizeOfInt`
+    /// (type.hh:813).
+    pub fn get_size_of_int(&self) -> i32 {
+        self.size_of_int
+    }
+
+    // Ghidra: type.hh:814 TypeFactory::getSizeOfLong
+    /// Snapshot getter mirroring Ghidra's inline `getSizeOfLong`
+    /// (type.hh:814).
+    pub fn get_size_of_long(&self) -> i32 {
+        self.size_of_long
+    }
+
+    // Ghidra: type.hh:815 TypeFactory::getSizeOfChar
+    /// Snapshot getter mirroring Ghidra's inline `getSizeOfChar`
+    /// (type.hh:815).
+    pub fn get_size_of_char(&self) -> i32 {
+        self.size_of_char
+    }
+
+    // Ghidra: type.hh:816 TypeFactory::getSizeOfWChar
+    /// Snapshot getter mirroring Ghidra's inline `getSizeOfWChar`
+    /// (type.hh:816).
+    pub fn get_size_of_wchar(&self) -> i32 {
+        self.size_of_wchar
+    }
+
+    // Ghidra: type.hh:817 TypeFactory::getSizeOfPointer
+    /// Snapshot getter mirroring Ghidra's inline `getSizeOfPointer`
+    /// (type.hh:817).
+    pub fn get_size_of_pointer(&self) -> i32 {
+        self.size_of_pointer
+    }
+
+    // Ghidra: type.hh:818 TypeFactory::getSizeOfAltPointer
+    /// Snapshot getter mirroring Ghidra's inline `getSizeOfAltPointer`
+    /// (type.hh:818).
+    pub fn get_size_of_alt_pointer(&self) -> i32 {
+        self.size_of_alt_pointer
+    }
+
+    // Ghidra: type.cc:3296 TypeFactory::getAlignment
+    /// Return the alignment associated with a primitive data-type of the
+    /// given size. Faithful to `TypeFactory::getAlignment`
+    /// (type.cc:3296-3305): a size at or beyond the map end returns the last
+    /// entry, an empty map raises `LowlevelError("TypeFactory alignment map
+    /// not initialized")` (returned as `Err` with the same message), and any
+    /// other size returns its slot (which may be -1 for index 0 when no
+    /// explicit size-0 entry exists).
+    pub fn get_alignment(&self, size: u32) -> Result<i32, String> {
+        if size as usize >= self.align_map.len() {
+            if self.align_map.is_empty() {
+                return Err("TypeFactory alignment map not initialized".to_string());
+            }
+            return Ok(self.align_map[self.align_map.len() - 1]);
+        }
+        Ok(self.align_map[size as usize])
+    }
+
+    // Ghidra: type.cc:3312 TypeFactory::getPrimitiveAlignSize
+    /// Return the amount of room a data-type takes up in memory (the
+    /// `\b sizeof` size). Faithful to `TypeFactory::getPrimitiveAlignSize`
+    /// (type.cc:3312-3320): `uint4 mod = size % align` converts the signed
+    /// alignment to unsigned 32-bit first, so a -1 alignment behaves as
+    /// 0xFFFFFFFF; the remainder is then padded up. A zero alignment (the
+    /// default map's index 0) is a division by zero in Ghidra and panics
+    /// here — never query size 0 against a default-installed map.
+    pub fn get_primitive_align_size(&self, size: u32) -> Result<i32, String> {
+        let align = self.get_alignment(size)?;
+        let align_u = align as u32;
+        let rem = size % align_u;
+        let result = if rem != 0 {
+            size.wrapping_add(align_u.wrapping_sub(rem))
+        } else {
+            size
+        };
+        Ok(result as i32)
+    }
+
+    // Ghidra: type.cc:4662 TypeFactory::parseEnumConfig
     /// Recover default enumeration properties (size and signedness) from an
-    /// `<enum>` XML tag. Faithful to `TypeFactory::parseEnumConfig`
-    /// (type.cc:4665-4675). Returns `(enumsize, is_signed)`.
-    pub fn parse_enum_config(decoder: &mut dyn Decoder) -> (usize, bool) {
+    /// `<enum>` XML tag and store them (`enumsize`/`enumtype`). Faithful to
+    /// `TypeFactory::parseEnumConfig` (type.cc:4662-4672).
+    pub fn parse_enum_config(&mut self, decoder: &mut dyn Decoder) {
         let elem_id = decoder.open_element_matching(&elem::element("enum"));
-        let enumsize = decoder.read_signed_integer_attr(&attrib("size")) as usize;
-        let is_signed = decoder.read_bool_attr(&attrib("signed"));
+        // Ghidra: enumsize = decoder.readSignedInteger(ATTRIB_SIZE);
+        self.enum_size = decoder.read_signed_integer_attr(&attrib("size")) as i32;
+        // Ghidra: if (decoder.readBool(ATTRIB_SIGNED)) enumtype = TYPE_ENUM_INT;
+        //        else enumtype = TYPE_ENUM_UINT;
+        self.enum_type = if decoder.read_bool_attr(&attrib("signed")) {
+            TypeMetatype::Int
+        } else {
+            TypeMetatype::Uint
+        };
         if elem_id != 0 {
             decoder.close_element(elem_id);
         }
-        (enumsize, is_signed)
     }
 
     // Ghidra: type.cc:4155 TypeFactory::decodeType
@@ -2148,20 +2347,42 @@ impl TypeFactory {
 }
 
 /// Recovered size defaults from a `<data_organization>` element. Returned by
-/// `TypeFactory::decode_data_organization`; Rugra does not store these on the
-/// factory yet (documented gap), so the caller receives them.
-#[derive(Debug, Clone, Default)]
+/// `TypeFactory::decode_data_organization` as a snapshot of the persisted
+/// factory state (the factory also stores these in its own fields, mirroring
+/// Ghidra's `sizeOf*` members).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DataOrganizationSizes {
     /// Default size of "int" (Ghidra `sizeOfInt`).
-    pub size_of_int: usize,
+    pub size_of_int: i32,
     /// Default size of "long" (Ghidra `sizeOfLong`).
-    pub size_of_long: usize,
+    pub size_of_long: i32,
     /// Default pointer size (Ghidra `sizeOfPointer`).
-    pub size_of_pointer: usize,
+    pub size_of_pointer: i32,
     /// Default char size (Ghidra `sizeOfChar`).
-    pub size_of_char: usize,
+    pub size_of_char: i32,
     /// Default wide-char size (Ghidra `sizeOfWChar`).
-    pub size_of_wchar: usize,
+    pub size_of_wchar: i32,
+}
+
+// RUGRA-GLUE: Architecture-handle lookups of TypeFactory::setupSizes
+/// The architecture-derived inputs `TypeFactory::setup_sizes` reads from
+/// `glb` in Ghidra (type.cc:3142-3167). Rugra's `TypeFactory` has no
+/// Architecture handle yet, so callers provide the same observations:
+/// `getStackSpace()->getSpacebase(0).size` (`None` when there is no stack
+/// space), `getDefaultDataSpace()->getAddrSize()`, `getDefaultSize()`, and
+/// the far-pointer segment op `(innerSize, baseSize)` when one with
+/// far-pointer support resolves.
+pub struct SizeArchInputs {
+    /// `glb->getStackSpace()->getSpacebase(0).size`, or `None` when the
+    /// architecture has no stack space (`getStackSpace() == 0`).
+    pub stack_spacebase_size: Option<i32>,
+    /// `glb->getDefaultDataSpace()->getAddrSize()`.
+    pub default_data_space_addr_size: i32,
+    /// `glb->getDefaultSize()`.
+    pub default_size: i32,
+    /// `(innerSize, baseSize)` of a far-pointer segment op on the default
+    /// data space, `None` when there is none.
+    pub far_pointer: Option<(i32, i32)>,
 }
 
 /// Side record for a relative pointer: the containing parent type and the
@@ -2583,5 +2804,231 @@ mod tests {
                 .unwrap_err(),
             "Trying to alter definition of type: fixture_unknown3"
         );
+    }
+
+    // ---- data_organization / alignment-map state (oracle-verified numbers
+    // ---- come from tests/oracle/cspec_typeorg_state_1204; these are the
+    // ---- Rust regression mirrors).
+
+    use crate::marshal::{Element, IdRegistry, TreeDecoder};
+
+    fn elem_node(name: &str, attrs: &[(&str, &str)]) -> Arc<RwLock<Element>> {
+        let mut el = Element::new();
+        el.set_name(name);
+        for (k, v) in attrs {
+            el.add_attribute(k, v);
+        }
+        Arc::new(RwLock::new(el))
+    }
+
+    fn decoder_over(root: Arc<RwLock<Element>>) -> TreeDecoder {
+        TreeDecoder::new(root, Arc::new(RwLock::new(IdRegistry::new())))
+    }
+
+    fn data_org_node(children: Vec<Arc<RwLock<Element>>>) -> Arc<RwLock<Element>> {
+        let root = elem_node("data_organization", &[]);
+        {
+            let mut rg = root.write().unwrap();
+            for child in children {
+                rg.add_child(child);
+            }
+        }
+        root
+    }
+
+    fn size_node(name: &str, value: &str) -> Arc<RwLock<Element>> {
+        elem_node(name, &[("value", value)])
+    }
+
+    fn entry_node(size: &str, alignment: &str) -> Arc<RwLock<Element>> {
+        elem_node("entry", &[("size", size), ("alignment", alignment)])
+    }
+
+    fn align_probe(factory: &TypeFactory, sizes: &[u32]) -> Vec<i32> {
+        sizes
+            .iter()
+            .map(|&sz| factory.get_alignment(sz).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn test_data_organization_persists_sizes_and_skips_unknown_children() {
+        let mut factory = TypeFactory::new(8);
+        let root = data_org_node(vec![
+            size_node("machine_alignment", "2"), // not consumed: skipped
+            size_node("pointer_size", "8"),
+            size_node("wchar_size", "4"),
+            size_node("short_size", "2"), // not consumed: skipped
+            size_node("integer_size", "4"),
+            size_node("long_size", "8"),
+            size_node("float_size", "4"), // not consumed: skipped
+        ]);
+        let snapshot = factory.decode_data_organization(&mut decoder_over(root));
+        // Production x86-64-gcc.cspec values (no char_size element: stays 0).
+        assert_eq!(snapshot.size_of_int, 4);
+        assert_eq!(snapshot.size_of_long, 8);
+        assert_eq!(snapshot.size_of_pointer, 8);
+        assert_eq!(snapshot.size_of_char, 0);
+        assert_eq!(snapshot.size_of_wchar, 4);
+        assert_eq!(factory.get_size_of_int(), 4);
+        assert_eq!(factory.get_size_of_long(), 8);
+        assert_eq!(factory.get_size_of_char(), 0);
+        assert_eq!(factory.get_size_of_wchar(), 4);
+        assert_eq!(factory.get_size_of_pointer(), 8);
+        assert_eq!(factory.get_size_of_alt_pointer(), 0);
+    }
+
+    #[test]
+    fn test_alignment_map_sparse_fill_leaves_index0_minus1() {
+        let mut factory = TypeFactory::new(8);
+        let map = elem_node("size_alignment_map", &[]);
+        {
+            let mut rg = map.write().unwrap();
+            rg.add_child(entry_node("1", "1"));
+            rg.add_child(entry_node("2", "2"));
+            rg.add_child(entry_node("4", "4"));
+            rg.add_child(entry_node("8", "8"));
+            rg.add_child(entry_node("16", "16"));
+        }
+        let root = data_org_node(vec![map]);
+        let observed = factory.decode_data_organization(&mut decoder_over(root));
+        assert_eq!(observed.size_of_int, 0); // sizes untouched by map-only doc
+        // Forward-fill semantics: index 0 keeps -1, 3<-2, 5..7<-4, 9..15<-8.
+        assert_eq!(
+            align_probe(&factory, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17]),
+            vec![-1, 1, 2, 2, 4, 4, 4, 4, 8, 8, 8, 16, 16]
+        );
+    }
+
+    #[test]
+    fn test_alignment_map_empty_stays_empty_until_setup_sizes() {
+        let mut factory = TypeFactory::new(8);
+        let root = data_org_node(vec![elem_node("size_alignment_map", &[])]);
+        factory.decode_data_organization(&mut decoder_over(root));
+        // decodeAlignmentMap installs nothing; getAlignment raises the oracle
+        // LowlevelError text.
+        assert_eq!(
+            factory.get_alignment(1).unwrap_err(),
+            "TypeFactory alignment map not initialized"
+        );
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        // setDefaultAlignmentMap: resize(9,0) then slots 1..=8 — index 0 is 0.
+        assert_eq!(
+            align_probe(&factory, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            vec![0, 1, 2, 2, 4, 4, 4, 4, 8, 8]
+        );
+    }
+
+    #[test]
+    fn test_alignment_map_explicit_zero_entry_and_duplicate_wins() {
+        let mut factory = TypeFactory::new(8);
+        let map = elem_node("size_alignment_map", &[]);
+        {
+            let mut rg = map.write().unwrap();
+            rg.add_child(entry_node("0", "1"));
+            rg.add_child(entry_node("2", "2"));
+            rg.add_child(entry_node("8", "8"));
+            rg.add_child(entry_node("8", "4")); // duplicate size: later wins
+            rg.add_child(entry_node("5", "0")); // explicit zero alignment
+        }
+        let root = data_org_node(vec![map]);
+        factory.decode_data_organization(&mut decoder_over(root));
+        // Fill: 1<-1, 3..4<-2, 6..7<-0, 8 stays 4 (duplicate winner).
+        assert_eq!(
+            align_probe(&factory, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            vec![1, 1, 2, 2, 2, 0, 0, 0, 4, 4]
+        );
+    }
+
+    #[test]
+    fn test_setup_sizes_derives_defaults_from_arch_inputs() {
+        let mut factory = TypeFactory::new(8);
+        // Only char_size present: everything else derives (type.cc:3137-3170).
+        let root = data_org_node(vec![size_node("char_size", "3")]);
+        factory.decode_data_organization(&mut decoder_over(root));
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8), // stack pointer is 8 -> clamp to 4
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        assert_eq!(factory.get_size_of_int(), 4);
+        assert_eq!(factory.get_size_of_long(), 8); // (int==4) ? 8 : int
+        assert_eq!(factory.get_size_of_char(), 3); // already set: untouched
+        assert_eq!(factory.get_size_of_wchar(), 2);
+        assert_eq!(factory.get_size_of_pointer(), 8);
+        assert_eq!(factory.get_size_of_alt_pointer(), 0);
+
+        // int != 4 branch: sizeOfLong copies sizeOfInt instead of becoming 8.
+        let mut factory2 = TypeFactory::new(8);
+        let root2 = data_org_node(vec![size_node("integer_size", "2")]);
+        factory2.decode_data_organization(&mut decoder_over(root2));
+        factory2.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        assert_eq!(factory2.get_size_of_int(), 2);
+        assert_eq!(factory2.get_size_of_long(), 2);
+
+        // No stack space: sizeOfInt keeps the literal fallback 1.
+        let mut factory3 = TypeFactory::new(8);
+        factory3.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: None,
+            default_data_space_addr_size: 4,
+            default_size: 4,
+            far_pointer: Some((2, 2)),
+        });
+        assert_eq!(factory3.get_size_of_int(), 1);
+        assert_eq!(factory3.get_size_of_long(), 1);
+        assert_eq!(factory3.get_size_of_pointer(), 2); // far-pointer override
+        assert_eq!(factory3.get_size_of_alt_pointer(), 4); // inner + base
+    }
+
+    #[test]
+    fn test_data_organization_consumes_children_after_alignment_map() {
+        // Reviewer probe (CSPEC-TYPEORG-STATE-0001 rework): Ghidra's sam
+        // branch falls through to closeElement(subId) (type.cc:4604-4612),
+        // so children AFTER <size_alignment_map> are still consumed. A
+        // missing close would leave the TreeDecoder stack on the sam
+        // element, break the loop early, and silently drop them.
+        let mut factory = TypeFactory::new(8);
+        let map = elem_node("size_alignment_map", &[]);
+        {
+            let mut rg = map.write().unwrap();
+            rg.add_child(entry_node("1", "1"));
+        }
+        let root = data_org_node(vec![map, size_node("char_size", "3")]);
+        let snapshot = factory.decode_data_organization(&mut decoder_over(root));
+        assert_eq!(snapshot.size_of_char, 3);
+        assert_eq!(factory.get_size_of_char(), 3);
+        assert_eq!(factory.get_alignment(1).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_primitive_align_size_pads_like_sizeof() {
+        let mut factory = TypeFactory::new(8);
+        let map = elem_node("size_alignment_map", &[]);
+        {
+            let mut rg = map.write().unwrap();
+            rg.add_child(entry_node("1", "1"));
+            rg.add_child(entry_node("2", "2"));
+            rg.add_child(entry_node("4", "4"));
+        }
+        let root = data_org_node(vec![map]);
+        factory.decode_data_organization(&mut decoder_over(root));
+        assert_eq!(factory.get_primitive_align_size(1).unwrap(), 1);
+        assert_eq!(factory.get_primitive_align_size(2).unwrap(), 2);
+        assert_eq!(factory.get_primitive_align_size(3).unwrap(), 4);
+        assert_eq!(factory.get_primitive_align_size(4).unwrap(), 4);
+        assert_eq!(factory.get_primitive_align_size(5).unwrap(), 8); // 5%4=1 -> +3
+        assert_eq!(factory.get_primitive_align_size(7).unwrap(), 8);
+        assert_eq!(factory.get_primitive_align_size(8).unwrap(), 8); // align 4
     }
 }
