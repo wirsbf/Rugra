@@ -556,6 +556,40 @@ Ghidra: `op.cc:178 PcodeOp::isMoveable`。判断该操作是否可在所属基�
 
 ---
 
+### `pub fn previous_op_in_block(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef>`
+
+Ghidra: `op.cc:344 PcodeOp::previousOp`。返回在同一基本块内紧邻本 op 之前的 op；本 op 是块首时返回 `None`。搜索范围**不越过所属基本块**。
+
+#### 决定性语义
+- **引用/输出参数**: `&self` 只读；Ghidra 版本无 bank 参数（只读 `basiciter`/`parent`），Rugra 保留 `bank` 参数仅为既有调用点签名兼容，函数体不使用它。
+- **遍历顺序**: **父块 op 列表序（`BlockBasic::ops` 的下标序，等价 Ghidra `basiciter` 前驱）**，不是 `alivelist` 的 mark-alive 追加序。`op_insert_before` 晚插入的 op（如 INDIRECT guard）位于块中部但 alivelist 尾部——本函数必须返回它。
+- **计数器**: 无计数器/累加器。
+- **排序/比较键**: 用 `PcodeOp` 对象地址（`&*guard as *const PcodeOp`）在父块 `ops` 中定位自身下标（等价 Ghidra 裸 `PcodeOp*` 身份）；下标为 0（块首）返回 `None`，否则返回 `ops[index-1]`。
+
+#### 注意
+- 死 op / 未挂块 op（`parent == None`）返回 `None`；Ghidra 对 dead op 读 stale `basiciter` 是未定义行为，Rugra 以安全 `None` 收敛（调用方约定只在 alive op 上调用，与 Ghidra 调用点一致）。
+- Ghidra 的 `basiciter` 是 O(1) 存储迭代器；Rugra 按地址重算下标为 O(块大小)，可观察语义一致。
+- Oracle fixture: `tests/oracle/op_previous_block_order_1204.*`（runner `tools/run_op_previous_block_order_oracle.sh`，状态 MATCH）。
+
+---
+
+### `pub fn next_op_in_flow(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef>`
+
+Ghidra: `op.cc:323 PcodeOp::nextOp`。返回流程上紧随本 op 的下一个 op：通常是同块内后继；本 op 是块内最后一个 op 时，沿 out 边 0（fall-thru）进入后继块取其首 op，**仅当本块出度恰为 1 或 2**（`op.cc:334`）；出度为 0 或 ≥3 时返回 `None`。
+
+#### 决定性语义
+- **引用/输出参数**: `&self` 只读；`bank` 参数同上仅签名兼容，不参与计算。
+- **遍历顺序**: 先父块 op 列表 `index = 自身下标 + 1`（等价 `basiciter++`）；命中块尾（`index == ops.len()`，等价 `iter == p->endOp()`）时循环检查 `size_out() ∈ {1,2}`，否则返回 `None`；满足则 `p = get_out(0).point`，`index = 0`（等价 `iter = p->beginOp()`）继续。
+- **计数器/状态机**: 循环变量 `p`（当前块）与 `index`（块内下标），跨块时 `index` 重置为 0；无其他累加器。
+- **排序/比较键**: 同 `previous_op_in_block`——`PcodeOp` 对象地址定位自身下标；出边选择固定 `get_out(0)`（Ghidra `p->getOut(0)`）。
+
+#### 注意
+- 出度 ≥3（switch 块）与出度 0（末端块）都终止搜索返回 `None`。
+- 后继块为空块时与 Ghidra 一样继续沿其后继搜索（忠实移植 `while` 循环）。
+- Oracle fixture: 同上 `op_previous_block_order_1204.*`（`edges` 阶段覆盖 sizeOut=2 穿越、sizeOut=3 拒绝）。
+
+---
+
 ## 5. `PcodeOpRef`
 
 ### `pub struct PcodeOpRef(pub Arc<RwLock<PcodeOp>>)`

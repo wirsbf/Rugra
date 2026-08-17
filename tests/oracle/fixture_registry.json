@@ -2023,6 +2023,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "op_previous_block_order_1204",
+   "description": "PcodeOp previousOp/nextOp block-list order observations",
+   "runner": [
+    "tools/run_op_previous_block_order_oracle.sh"
+   ],
+   "timeout_seconds": 1500,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/op_previous_block_order_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/op_previous_block_order_1204.cc",
+     "rust_fixture": "tests/oracle/op_previous_block_order_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_op_previous_block_order_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/op.rs",
+     "tests/oracle/op_previous_block_order_1204.*",
+     "tools/run_op_previous_block_order_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

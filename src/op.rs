@@ -870,26 +870,93 @@ impl PcodeOp {
     // Ghidra: op.cc:376 PcodeOp::printDebug
     // Already implemented above as print_debug()
 
+    // RUGRA-GLUE: borrow-safe resolution of this PcodeOp's `basiciter`
+    // equivalent. Ghidra stores a `list<PcodeOp*>::iterator basiciter` inside
+    // the op (op.hh:127), set by BlockBasic::insert (block.cc:2266) and used
+    // by nextOp/previousOp. Rust cannot hold an iterator into the parent
+    // block's Vec across Arc boundaries, so the position is recomputed by
+    // PcodeOp object address. Ghidra identity is the raw `PcodeOp*`; the
+    // stable address of `PcodeOp` inside its `Arc<RwLock<PcodeOp>>`
+    // allocation is the exact analogue. Cost is O(block size) vs Ghidra O(1);
+    // observable semantics (which op, which order) are identical.
+    fn basic_block_index(&self, bb: &crate::block::BlockBasic) -> Option<usize> {
+        let self_ptr = self as *const PcodeOp;
+        bb.ops.iter().position(|r| {
+            let guard = r.0.read().unwrap();
+            (&*guard as *const PcodeOp) == self_ptr
+        })
+    }
+
     // Ghidra: op.cc:323 PcodeOp::nextOp
-    pub fn next_op_in_flow(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef> {
-        let self_seq = &self.start;
-        let mut found = false;
-        for r in &bank.alivelist {
-            if found { return Some(r.clone()); }
-            if &r.0.read().unwrap().start == self_seq { found = true; }
+    /// Find the next op in sequence from this op. Usually in the same basic
+    /// block; when this op is the block's last op, the search follows flow
+    /// into successive blocks via out-edge 0, so long as the block has
+    /// exactly 1 or 2 out edges (op.cc:333-337). Order is the parent block's
+    /// op list (`basiciter`), NOT the alivelist mark-alive insertion order.
+    /// The `bank` parameter is retained for call-site compatibility; Ghidra's
+    /// method reads only `basiciter`/`parent` and no bank.
+    pub fn next_op_in_flow(&self, _bank: &PcodeOpBank) -> Option<PcodeOpRef> {
+        // cc:329-332: p = parent; iter = basiciter; iter++
+        let parent_arc = self.parent.as_ref().and_then(|w| w.upgrade())?;
+        let mut p = parent_arc;
+        let mut index = {
+            let guard = p.read().unwrap();
+            let bb = guard
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>()?;
+            self.basic_block_index(bb)? + 1
+        };
+        loop {
+            // cc:333/338: while (iter == p->endOp()) ... return *iter
+            let candidate = {
+                let guard = p.read().unwrap();
+                let bb = guard
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockBasic>()?;
+                bb.ops.get(index).cloned()
+            };
+            let Some(next) = candidate else {
+                // cc:334: if ((p->sizeOut() != 1)&&(p->sizeOut()!=2)) return 0
+                let out_zero = {
+                    let guard = p.read().unwrap();
+                    let size_out = guard.size_out();
+                    if size_out != 1 && size_out != 2 {
+                        return None;
+                    }
+                    // cc:335: p = (BlockBasic *) p->getOut(0)
+                    guard.get_out(0).map(|edge| edge.point)
+                };
+                p = out_zero?;
+                // cc:336: iter = p->beginOp()
+                index = 0;
+                continue;
+            };
+            return Some(next);
         }
-        None
     }
 
     // Ghidra: op.cc:344 PcodeOp::previousOp
-    pub fn previous_op_in_block(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef> {
-        let self_seq = &self.start;
-        let mut prev: Option<PcodeOpRef> = None;
-        for r in &bank.alivelist {
-            if &r.0.read().unwrap().start == self_seq { return prev; }
-            prev = Some(r.clone());
+    /// Find the previous op that flowed uniquely into this op, if it exists.
+    /// Searches no farther than the basic block containing this op: returns
+    /// `None` at the block head (op.cc:349), otherwise the block-list
+    /// predecessor (`basiciter - 1`, op.cc:350-352). Order is the parent
+    /// block's op list, NOT the alivelist mark-alive insertion order.
+    /// The `bank` parameter is retained for call-site compatibility; Ghidra's
+    /// method reads only `basiciter`/`parent` and no bank. A dead/unattached
+    /// op (parent None) returns `None` (Ghidra would read a stale iterator).
+    pub fn previous_op_in_block(&self, _bank: &PcodeOpBank) -> Option<PcodeOpRef> {
+        // cc:349: if (basiciter == parent->beginOp()) return (PcodeOp *)0
+        // cc:350-352: iter = basiciter; iter--; return *iter
+        let parent_arc = self.parent.as_ref().and_then(|w| w.upgrade())?;
+        let guard = parent_arc.read().unwrap();
+        let bb = guard
+            .as_any()
+            .downcast_ref::<crate::block::BlockBasic>()?;
+        let index = self.basic_block_index(bb)?;
+        if index == 0 {
+            return None;
         }
-        None
+        Some(bb.ops[index - 1].clone())
     }
 
     // Ghidra: op.cc:360 PcodeOp::target
