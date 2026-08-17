@@ -90,6 +90,26 @@ model object. The selected `defaultfp` is the same `Arc` as its map entry,
 mirroring Ghidra's pointer identity rather than copying a lightweight name
 record.
 
+### `TrackedRegister`
+A tracked register (Varnode storage) and the value it contains, decoded from
+a pspec `<tracked_set>`'s `<set>` children. Faithful to `TrackedContext`
+(globalcontext.hh:78-83): `loc: VarnodeData` (register storage by `name`
+attribute or explicit `space`/`offset`/`size`) + `val: u64`. Distinct from
+`crate::context::TrackedContext` (space-less) until the ContextDatabase
+gains a space-keyed partmap (SLEIGH-0002C).
+
+### `TrackedSetMap`
+Space-aware partition map of tracked register sets keyed on
+`(space order, offset)` — the stand-in for `ContextInternal::trackbase`
+(`partmap<Address,TrackedSet>`, globalcontext.hh:284) with the mirrored
+`split`/`clearRange`/`getValue` step semantics (partmap.hh:81-157).
+- `new()`, `get_value(space, offset) -> &[TrackedRegister]`
+  (upper_bound + predecessor; empty default before the first split).
+Ordering caveat: Ghidra orders `Address` by the live baselist index, Rugra
+by `AddressSpace::space_id()`; same-space lookups agree (the only
+production consumer, `ActionConstbase`, queries the function address in
+ram), cross-space interleavings stay UNTESTED (SLEIGH-0002C / ADDRESS-0001).
+
 ### `Architecture`
 Manager for all the major decompiler subsystems. Faithful to `Architecture`
 (architecture.hh:165).
@@ -125,6 +145,8 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 | `nohighptr` | `RangeList` | No-high-pointer ranges. |
 | `overrides` | `Override` | Override commands. |
 | `loadersymbols_parsed` | `bool` | Loader symbols read. |
+| `tracked_set_map` | `TrackedSetMap` | pspec `<context_data>` tracked partitions — stand-in for `ContextInternal::trackbase` (globalcontext.hh:284) behind `Architecture::context`, fed by `decode_context_data` (ARCH-CONTEXT-TRACKED-0001). |
+| `context_set_children_skipped` | `usize` | `<context_set>` children consumed but not decoded (low-level SLEIGH context blob, SLEIGH-0002C residual). |
 | `stack_reverse_justify` | `bool` | `<stackpointer reversejustify>` (`setReverseJustified`, architecture.cc:566). |
 
 **Methods:** `new()`, `reset_defaults_internal()` (architecture.cc:1416),
@@ -153,7 +175,17 @@ the `__thiscall` alias clone and the post-loop residual disclosure),
 `high_ptr_possible(addr, size)` (architecture.hh:408),
 `add_no_high_ptr(range)` (architecture.cc:576), `globalify()`
 (architecture.cc:437), `create_model_alias(alias, parent)`,
-`decode_flow_override()`, `get_description()`, `print_message(msg)`.
+`decode_flow_override()`, `get_description()`, `print_message(msg)`,
+`decode_context_data(decoder, host)` (ContextInternal::decodeFromSpec,
+globalcontext.cc:531, reached via both `parseProcessorConfig`
+architecture.cc:1190 and `parseCompilerConfig` architecture.cc:1278 — the
+cspec dispatch arm calls it since ARCH-CONTEXT-TRACKED-0001),
+`get_tracked_set(space, offset) -> &[TrackedRegister]`
+(ContextInternal::getTrackedSet, globalcontext.hh:304 — the ActionConstbase
+consumer entry point, coreaction.cc:692),
+`get_tracked_default() -> &[TrackedRegister]` (ContextDatabase::
+getTrackedDefault, globalcontext.hh:211/303 — empty on this ingest path:
+decodeFromSpec never assigns the partition-map default value).
 
 ## L3 gaps
 - Virtual factory hooks (`buildTranslator`, `buildLoader`, `buildTypegrp`, …)
@@ -288,3 +320,57 @@ cspec 解析（restoreFromSpec 等价步骤）之前，调用既有
 （coreaction.cc:4908）——E2E stderr 从 48 条（eprintln 回退 × 双注册）降为 0，
 警告以 `Comment::warningheader` 类型按函数地址入库，等待 printc 侧
 `emitCommentFuncHeader`（printc.cc:3272）接线后进入 C 输出。
+
+## 2026-08-17：ARCH-CONTEXT-TRACKED-0001 — pspec `<context_data>` tracked 摄取
+
+Ghidra 摄取链（12.0.4 e40ed130）：`Architecture::init`
+（architecture.cc:1391-1414）:1398 `buildContext` → `context = new
+ContextInternal()`（sleigh_arch.cc:259-262，同一对象随后注入 SLEIGH
+translator —— sleigh_arch.cc:181/185，Sleigh 构造器持它做反汇编 context）；
+`restoreFromSpec`（:629）→ `parseProcessorConfig`（:1172-1223）在
+`ELEM_CONTEXT_DATA` 分支（:1190）调 `context->decodeFromSpec(decoder)`
+（globalcontext.cc:531-549）。cspec 侧 `parseCompilerConfig` 的同标签分支
+（architecture.cc:1278-1279）走同一函数。
+
+落地（src/arch.rs）：
+
+- `TrackedRegister`（`TrackedContext`，globalcontext.hh:78）与
+  `TrackedSetMap`（`ContextInternal::trackbase`，globalcontext.hh:284；
+  `split`/`clearRange`/`getValue` 逐步镜像 partmap.hh:81-157，含 split
+  复制前值、clearRange 删中间 split、"later set overrides earlier" 语义）。
+- `Architecture::decode_context_data`（decodeFromSpec 镜像）：子元素文档序
+  消费；`range_from_attributes`（address.cc:316-353：space/first/last/name
+  早返回、"No address space indicated in range tag"/"Illegal range tag"
+  逐字）+ `last_addr_open`（address.cc:265-281：last==highest → 下一空间
+  基址 0，Rugra 以 `(space_id+1, 0)` 表达）+ `decode_tracked`
+  （globalcontext.cc:85：clear + 文档序 append）+
+  `decode_tracked_context`（globalcontext.cc:56：`Expecting <set> but got
+  <X>` 逐字）+ `varnode_data_from_attributes`（pcoderaw.cc:33-53：space
+  分支 rewind 重扫 offset/size、`Address is missing offset`；name 分支
+  `Unknown register name: X`）。`<context_set>` 子元素按 SLEIGH-0002C 残差
+  消费+计数（`context_set_children_skipped`），不静默丢弃。
+- 查询面：`get_tracked_set(space, offset)`（getTrackedSet，
+  globalcontext.hh:304，ActionConstbase 消费入口 coreaction.cc:692）与
+  `get_tracked_default()`（getTrackedDefault，globalcontext.hh:211/303）。
+- `parse_compiler_config` 的 `context_data` 分支由 skipped 记录改为调用
+  `decode_context_data`（生产 x86-64-gcc.cspec 无该子元素，行为零变化）。
+
+Oracle fixture：`tests/oracle/arch_context_tracked_1204.{cc,rs,metadata.json}`
++ `tools/run_arch_context_tracked_oracle.sh`（模式同 cspec_typeorg_state）。
+C++ 侧真实 BfdArchitecture::init 链（锁定 spec 集 + curl）观察生产
+tracked 状态；Rust 侧锁定 x86-64.pspec 真字节 + SLEIGH FFI 寄存器目录过
+`decode_context_data`。投影逐字节一致（stdout sha256 见 metadata）：
+production（DF register:20a:1 val=0 全 ram 域、context_set_children=1、
+default_count=0）、c1 整域、c2 显式 range+双 set 文档序、c3 后 set 覆盖
+（含 0x300 空 tail split）、c4 `name="DF"` 寄存器域 range、c5 显式
+space/offset/size 形态 + uintb 最大值、e1-e6 七条逐字错误文本（含
+`Bad <context_data> tag` 需带 range 属性行才可达——无 space 的子元素先死在
+range 解码）。
+
+残差（登记）：`<context_set>` 低层 context blob（变量注册在 .sla context
+layout，SLEIGH-0002C）；跨空间 partition 交错 UNTESTED（Ghidra baselist 序
+vs Rugra space_id 序，生产只查 ram）；`TreeDecoder` 对锁定 ElementId 表外
+元素名只给 `XMLunknown`（e6 因此选用表内 `<register>` 名）；缺失 `val`
+属性行为 oracle UB（marshal.cc:371-372 负下标），Rust 镜像返回 0。
+ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后另行
+接线（见 TODO_BOARD ARCH-CONTEXT-TRACKED-0001 交接）。

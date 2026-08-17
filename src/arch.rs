@@ -102,6 +102,113 @@ pub struct CompilerConfigReport {
     pub post_step_residuals: Vec<String>,
 }
 
+// Ghidra: globalcontext.hh:78 TrackedContext
+/// A tracked register (Varnode storage) and the value it contains, decoded
+/// from a pspec `<tracked_set>`'s `<set>` children.  Faithful to
+/// `TrackedContext` (globalcontext.hh:78-83): `VarnodeData loc` (register
+/// storage resolved by `name` attribute or explicit
+/// `space`/`offset`/`size` attributes) + `uintb val`.
+///
+/// Distinct from `crate::context::TrackedContext` (offset/size/val without a
+/// space dimension), which predates space-aware ingest and stays in place
+/// until the ContextDatabase itself gains a space-keyed partmap
+/// (SLEIGH-0002C); the ActionConstbase consumer needs the full
+/// `Address(ctx.loc.space, ctx.loc.offset)` (coreaction.cc:693).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedRegister {
+    /// Storage details of the register being tracked (`loc`).
+    pub loc: VarnodeData,
+    /// The value of the register (`val`).
+    pub val: u64,
+}
+
+// Ghidra: globalcontext.hh:284 ContextInternal::trackbase (partmap<Address,TrackedSet>)
+/// Space-aware partition map of tracked register sets, keyed on
+/// `(space order, offset)` — the Rugra stand-in for
+/// `ContextInternal::trackbase` (globalcontext.hh:284,
+/// `partmap<Address,TrackedSet>`), holding the partitions fed by pspec
+/// `<context_data><tracked_set>` children through the mirrored
+/// `split`/`clearRange`/`getValue` step semantics (partmap.hh:81-157).
+///
+/// Ordering caveat (registered residual): Ghidra orders `Address` by the
+/// live `AddrSpaceManager` baselist index; Rugra orders by
+/// `AddressSpace::space_id()`.  The two agree for all same-space lookups —
+/// the only production consumer (`ActionConstbase`,
+/// coreaction.cc:692) queries the function's address in `ram`.
+/// Cross-space partition interleavings stay UNTESTED until the space
+/// registry carries real baselist indices (SLEIGH-0002C / ADDRESS-0001).
+#[derive(Debug, Clone, Default)]
+pub struct TrackedSetMap {
+    /// Sorted split points `((space order, offset), tracked set)` — the
+    /// `database` member of `partmap` (partmap.hh:56).  Absence of an
+    /// earlier split means the (empty) `defaultvalue` applies.
+    splits: Vec<((u8, u64), Vec<TrackedRegister>)>,
+}
+
+impl TrackedSetMap {
+    // RUGRA-GLUE: new (C++ aggregate construction of partmap)
+    /// Construct an empty partition map (empty `defaultvalue`).
+    pub fn new() -> Self {
+        Self {
+            splits: Vec::new(),
+        }
+    }
+
+    // Ghidra: partmap.hh:81 partmap::getValue
+    /// Look up the first split point coming before the given point and
+    /// return the tracked set it maps to; the empty default value if there
+    /// is no earlier split.  Faithful to `partmap::getValue`
+    /// (partmap.hh:81-112), including the `upper_bound` + `--iter`
+    /// predecessor lookup.
+    pub fn get_value(&self, space: crate::space::AddressSpace, offset: u64) -> &[TrackedRegister] {
+        let key = (space.space_id(), offset);
+        // upper_bound(key): first split with key strictly greater.
+        let upper = self.splits.partition_point(|(k, _)| *k <= key);
+        if upper == 0 {
+            return &[];
+        }
+        &self.splits[upper - 1].1
+    }
+
+    // Ghidra: partmap.hh:117 partmap::split
+    /// Introduce (if not already present) a split point, copying the value
+    /// object of the partition it falls into (the default value when the
+    /// point precedes every split).  Faithful to `partmap::split`
+    /// (partmap.hh:117-136); returns the index of the split's value.
+    fn split(&mut self, key: (u8, u64)) -> usize {
+        let upper = self.splits.partition_point(|(k, _)| *k <= key);
+        if upper > 0 {
+            if self.splits[upper - 1].0 == key {
+                return upper - 1; // Point matches exactly — return old ref
+            }
+            let value = self.splits[upper - 1].1.clone();
+            self.splits.insert(upper, (key, value));
+            return upper;
+        }
+        self.splits.insert(0, (key, Vec::new())); // Copy of defaultvalue
+        0
+    }
+
+    // Ghidra: partmap.hh:144 partmap::clearRange
+    /// Split at both boundary points of the given range and erase the split
+    /// points strictly between them; the value object at the left boundary
+    /// keeps its identity (the caller clears and refills it, mirroring
+    /// `ContextInternal::createSet`, globalcontext.cc:470-475).  Faithful to
+    /// `partmap::clearRange` (partmap.hh:144-157); returns the mutable
+    /// value assigned to the range.
+    fn clear_range(&mut self, key1: (u8, u64), key2: (u8, u64)) -> &mut Vec<TrackedRegister> {
+        self.split(key1);
+        self.split(key2);
+        let beg = self.splits.partition_point(|(k, _)| *k < key1); // lower_bound(key1)
+        let end = self.splits.partition_point(|(k, _)| *k < key2); // lower_bound(key2)
+        if end > beg + 1 {
+            // database.erase(beg+1, end): drop splits strictly inside.
+            self.splits.drain(beg + 1..end);
+        }
+        &mut self.splits[beg].1
+    }
+}
+
 // RUGRA-GLUE: find_body_content (Ghidra reads it via readString(ATTRIB_CONTENT))
 /// Extract the character content of the `<body>` child under the LAST
 /// p-code element (`pcode`/`case_pcode`/`addr_pcode`/`default_pcode`/
@@ -433,6 +540,24 @@ pub struct Architecture {
     pub cpool: Option<std::sync::Arc<std::sync::RwLock<crate::cpool::ConstantPoolInternal>>>,
     /// Context database. Faithful to `context`.
     pub context_db: Option<std::sync::Arc<std::sync::RwLock<crate::context::ContextInternal>>>,
+    /// pspec `<context_data>` tracked-register partitions — Rugra-side
+    /// stand-in for the `ContextInternal::trackbase` partition map
+    /// (globalcontext.hh:284) behind `Architecture::context`
+    /// (architecture.hh:191), filled by the `ELEM_CONTEXT_DATA` arm of
+    /// `Architecture::parseProcessorConfig` (architecture.cc:1190 ->
+    /// `ContextInternal::decodeFromSpec`, globalcontext.cc:531).  Kept on
+    /// the Architecture because `crate::context::ContextInternal` keys on
+    /// the space-less `crate::address::Address`; merge under SLEIGH-0002C.
+    pub tracked_set_map: TrackedSetMap,
+    /// Count of pspec `<context_set>` children consumed by
+    /// [`Architecture::decode_context_data`] but not decoded: the low-level
+    /// context-variable blob (`ContextInternal::decodeContext`,
+    /// globalcontext.cc:345) requires the .sla context layout registered in
+    /// the Rust ContextDatabase (SLEIGH-0002C residual; Ghidra registers the
+    /// variables via `SleighBase::reregisterContext`, sleighbase.cc:125-131,
+    /// into the same `ContextInternal` the SLEIGH translator shares,
+    /// sleigh_arch.cc:181).
+    pub context_set_children_skipped: usize,
     /// Options database. Faithful to `options`.
     pub options_db: Option<std::sync::Arc<std::sync::RwLock<crate::options::OptionDatabase>>>,
     /// Prefer-split records. Faithful to `splitrecords`.
@@ -524,6 +649,8 @@ impl Architecture {
             string_manager: None,
             cpool: None,
             context_db: None,
+            tracked_set_map: TrackedSetMap::new(),
+            context_set_children_skipped: 0,
             options_db: None,
             split_records: Vec::new(),
             lane_records: Vec::new(),
@@ -839,6 +966,340 @@ impl Architecture {
             }
         }
         Ok(())
+    }
+
+    // ---- pspec <context_data> tracked-register ingest (ARCH-CONTEXT-TRACKED-0001) ----
+
+    // Ghidra: globalcontext.cc:531 ContextInternal::decodeFromSpec
+    /// Decode a pspec `<context_data>` element into tracked-register
+    /// partitions.  Faithful to `ContextInternal::decodeFromSpec`
+    /// (globalcontext.cc:531-549), which the `ELEM_CONTEXT_DATA` arm of
+    /// `Architecture::parseProcessorConfig` invokes
+    /// (architecture.cc:1172-1223, dispatch at :1190):
+    /// - children are consumed in strict document order via
+    ///   `openElement()` until exhaustion (`subId == 0`);
+    /// - every child MUST carry range attributes
+    ///   (`Range::decodeFromAttributes`, address.cc:316-353);
+    /// - a `<tracked_set>` child installs a tracked partition over
+    ///   [addr1, addr2) — `createSet` (globalcontext.cc:470) +
+    ///   `decodeTracked` (globalcontext.cc:85) fill the SAME vector the
+    ///   partition map returned (reference, not copy);
+    /// - a `<context_set>` child targets the low-level SLEIGH context blob
+    ///   (`decodeContext`, globalcontext.cc:345) — consumed and counted
+    ///   here, decode residual SLEIGH-0002C;
+    /// - any other child throws `Bad <context_data> tag` (verbatim oracle
+    ///   text, globalcontext.cc:547).
+    pub fn decode_context_data(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+        let root_name = decoder.element_name(elem_id).unwrap_or_default();
+        if root_name != "context_data" {
+            // XmlDecode::openElement(const ElementId &) mismatch text
+            // (marshal.cc:185).
+            return Err(format!("Expecting <context_data> but got <{}>", root_name));
+        }
+        loop {
+            let sub_id = decoder.open_element();
+            if sub_id == 0 {
+                break;
+            }
+            // Range range; range.decodeFromAttributes(decoder); // There MUST be a range
+            let (spc, first, last) = Self::range_from_attributes(decoder, host)?;
+            let addr1 = (spc.space_id(), first);
+            // Address addr2 = range.getLastAddrOpen(decoder.getAddrSpaceManager())
+            let addr2 = Self::last_addr_open(spc, last, host);
+            let child_name = decoder.element_name(sub_id).unwrap_or_default();
+            match child_name.as_str() {
+                "context_set" => {
+                    // Ghidra: decodeContext(decoder,addr1,addr2) consumes the
+                    // <set> children (globalcontext.cc:349-368) against the
+                    // SLEIGH-registered context variables.  Residual: the
+                    // .sla context layout is not registered in the Rust
+                    // ContextDatabase (SLEIGH-0002C), so the children are
+                    // consumed (document order, one close per child) and the
+                    // occurrence is counted instead of decoded.
+                    self.context_set_children_skipped += 1;
+                    loop {
+                        let inner = decoder.open_element();
+                        if inner == 0 {
+                            break;
+                        }
+                        decoder.close_element(inner);
+                    }
+                }
+                "tracked_set" => {
+                    // TrackedSet &res(trackbase.clearRange(addr1,addr2));
+                    // res.clear(); return res;  (globalcontext.cc:470-475)
+                    let slot = self.tracked_set_map.clear_range(addr1, addr2);
+                    Self::decode_tracked(slot, decoder, host)?;
+                }
+                _ => return Err("Bad <context_data> tag".to_string()),
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: address.cc:316 Range::decodeFromAttributes
+    /// Reconstruct a `Range` from the attributes of a `<context_set>`/
+    /// `<tracked_set>` child.  Faithful to
+    /// `Range::decodeFromAttributes` (address.cc:316-353): `space` resolves
+    /// through the space manager (`XmlDecode::readSpace` error text,
+    /// marshal.cc:407), `first`/`last` are unsigned integers, `name`
+    /// resolves to the register extent and RETURNS EARLY ("There should be
+    /// no (space,first,last) attributes"); a missing space throws
+    /// `No address space indicated in range tag`; `last` defaults to the
+    /// space's highest offset; bounds violations throw `Illegal range tag`.
+    fn range_from_attributes(
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(crate::space::AddressSpace, u64, u64), String> {
+        use crate::marshal::Decoder;
+        let mut spc: Option<crate::space::AddressSpace> = None;
+        let mut seen_last = false;
+        let mut first = 0u64;
+        let mut last = 0u64;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("space") => {
+                    let space_name = decoder.read_string();
+                    spc = Some(host.space_by_name(&space_name).ok_or_else(|| {
+                        format!("Unknown address space name: {}", space_name)
+                    })?);
+                }
+                Some("first") => first = decoder.read_unsigned_integer(),
+                Some("last") => {
+                    last = decoder.read_unsigned_integer();
+                    seen_last = true;
+                }
+                Some("name") => {
+                    // const VarnodeData &point(trans->getRegister(...));
+                    // spc/first/last come from the register extent and the
+                    // attribute loop RETURNS immediately.
+                    let register_name = decoder.read_string();
+                    let point = host
+                        .get_register(&register_name)
+                        .ok_or_else(|| format!("Unknown register name: {}", register_name))?;
+                    let first = point.offset;
+                    let last = (first.wrapping_sub(1)).wrapping_add(point.size as u64);
+                    return Ok((point.space, first, last));
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        let Some(spc) = spc else {
+            return Err("No address space indicated in range tag".to_string());
+        };
+        let highest = host.space_highest(spc);
+        if !seen_last {
+            last = highest;
+        }
+        if first > highest || last > highest || last < first {
+            return Err("Illegal range tag".to_string());
+        }
+        Ok((spc, first, last))
+    }
+
+    // Ghidra: address.cc:265 Range::getLastAddrOpen
+    /// The open right boundary of a tracked partition — the split key one
+    /// past the range.  Faithful to `Range::getLastAddrOpen`
+    /// (address.cc:265-281): when `last` is the space's highest offset the
+    /// boundary is the NEXT SPACE IN ORDER at offset 0
+    /// (`AddrSpaceManager::getNextSpaceInOrder`, translate.cc:647-667);
+    /// otherwise it is `last + 1` in the same space.  Rugra orders spaces
+    /// by `AddressSpace::space_id()`, so the next space in order is
+    /// `(sid + 1, 0)` — strictly greater than every `(sid, off)` key, which
+    /// is what makes a query at the space's highest offset still resolve to
+    /// the partition (see TrackedSetMap's ordering caveat).  The
+    /// maximal-address sentinel (no next space, `Address::m_maximal`) also
+    /// orders after every same-space key; the `checked_add` overflow arm
+    /// models it with `(sid, u64::MAX)`.
+    fn last_addr_open(
+        spc: crate::space::AddressSpace,
+        last: u64,
+        host: &dyn SpecQuery,
+    ) -> (u8, u64) {
+        if last == host.space_highest(spc) {
+            match spc.space_id().checked_add(1) {
+                Some(next) => (next, 0),
+                None => (spc.space_id(), u64::MAX),
+            }
+        } else {
+            (spc.space_id(), last + 1)
+        }
+    }
+
+    // Ghidra: globalcontext.cc:85 ContextDatabase::decodeTracked
+    /// Restore a sequence of tracked register values from the `<set>`
+    /// children of one `<tracked_set>`.  Faithful to
+    /// `ContextDatabase::decodeTracked` (globalcontext.cc:85-93): the
+    /// vector is cleared first ("Clear out any old stuff"), then one
+    /// `TrackedContext` per remaining child element, appended in document
+    /// order (`vec.emplace_back(); vec.back().decode(decoder);`).
+    fn decode_tracked(
+        vec: &mut Vec<TrackedRegister>,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        vec.clear(); // Clear out any old stuff
+        while decoder.peek_element() != 0 {
+            let mut ctx = TrackedRegister {
+                loc: VarnodeData {
+                    space: crate::space::AddressSpace::Ram,
+                    offset: 0,
+                    size: 0,
+                },
+                val: 0,
+            };
+            Self::decode_tracked_context(&mut ctx, decoder, host)?;
+            vec.push(ctx);
+        }
+        Ok(())
+    }
+
+    // Ghidra: globalcontext.cc:56 TrackedContext::decode
+    /// Parse one `<set>` element into a tracked register.  Faithful to
+    /// `TrackedContext::decode` (globalcontext.cc:56-63): the element name
+    /// is checked (`XmlDecode::openElement(ELEM_SET)` mismatch text,
+    /// marshal.cc:185), the storage comes from
+    /// `VarnodeData::decodeFromAttributes` (pcoderaw.cc:33-53), and `val`
+    /// is read by attribute id.  Divergence note: a `<set>` missing the
+    /// `val` attribute indexes out of bounds in the oracle
+    /// (`XmlDecode::readUnsignedInteger(attribId)`, marshal.cc:371-372);
+    /// the Rust mirror yields 0 instead of undefined behavior.
+    fn decode_tracked_context(
+        ctx: &mut TrackedRegister,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let elem_id = decoder.open_element();
+        let name = decoder.element_name(elem_id).unwrap_or_default();
+        if name != "set" {
+            return Err(format!("Expecting <set> but got <{}>", name));
+        }
+        ctx.loc = Self::varnode_data_from_attributes(decoder, host)?;
+        ctx.val =
+            decoder.read_unsigned_integer_attr(&crate::marshal::AttributeId::new("val", 0));
+        decoder.close_element(elem_id);
+        Ok(())
+    }
+
+    // Ghidra: pcoderaw.cc:33 VarnodeData::decodeFromAttributes
+    /// Collect the storage attributes of a `<set>` element.  Faithful to
+    /// `VarnodeData::decodeFromAttributes` (pcoderaw.cc:33-53): a `space`
+    /// attribute rewinds and re-scans for `offset`/`size` by attribute id
+    /// (`AddrSpace::decodeAttributes`, space.cc:339-356 — `size` is read
+    /// SIGNED, a missing `offset` throws `Address is missing offset`) and
+    /// then breaks; a `name` attribute resolves the whole storage through
+    /// the translator's register map (`SleighBase::getRegister`,
+    /// sleighbase.cc:133-142) and returns immediately; other attributes are
+    /// skipped.  An attribute-less element decodes to Ghidra's null-space
+    /// sentinel (`space = (AddrSpace*)0; size = 0`, pcoderaw.cc:35-36),
+    /// which Rugra's space enum cannot represent — the default
+    /// `VarnodeData` (ram/0/0) stands in for the sentinel.
+    fn varnode_data_from_attributes(
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<VarnodeData, String> {
+        use crate::marshal::Decoder;
+        let mut space: Option<crate::space::AddressSpace> = None;
+        let mut offset = 0u64;
+        let mut size = 0i32;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("space") => {
+                    let space_name = decoder.read_string();
+                    let spc = host.space_by_name(&space_name).ok_or_else(|| {
+                        format!("Unknown address space name: {}", space_name)
+                    })?;
+                    // decoder.rewindAttributes(); offset =
+                    // space->decodeAttributes(decoder,size);
+                    decoder.rewind_attributes();
+                    let mut found_offset = false;
+                    loop {
+                        let inner = decoder.next_attribute_id();
+                        if inner == 0 {
+                            break;
+                        }
+                        match decoder.attribute_name(inner).as_deref() {
+                            Some("offset") => {
+                                offset = decoder.read_unsigned_integer();
+                                found_offset = true;
+                            }
+                            Some("size") => size = decoder.read_signed_integer() as i32,
+                            _ => {
+                                let _ = decoder.read_string();
+                            }
+                        }
+                    }
+                    if !found_offset {
+                        return Err("Address is missing offset".to_string());
+                    }
+                    space = Some(spc);
+                    break;
+                }
+                Some("name") => {
+                    let register_name = decoder.read_string();
+                    let point = host
+                        .get_register(&register_name)
+                        .ok_or_else(|| format!("Unknown register name: {}", register_name))?;
+                    return Ok(point); // *this = point;
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        Ok(VarnodeData {
+            space: space.unwrap_or(crate::space::AddressSpace::Ram),
+            offset,
+            size,
+        })
+    }
+
+    // Ghidra: globalcontext.hh:304 ContextInternal::getTrackedSet
+    /// The tracked register set in effect at the given address — the
+    /// `ActionConstbase` consumer entry point (coreaction.cc:692:
+    /// `data.getArch()->context->getTrackedSet(data.getAddress())`).
+    /// Faithful to `ContextInternal::getTrackedSet` (globalcontext.hh:304:
+    /// `trackbase.getValue(addr)`): the partition of the last split at or
+    /// before the address, or the empty default set.
+    pub fn get_tracked_set(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+    ) -> &[TrackedRegister] {
+        self.tracked_set_map.get_value(space, offset)
+    }
+
+    // Ghidra: globalcontext.hh:303 ContextInternal::getTrackedDefault
+    /// The set of default tracked-register values — the `defaultvalue` of
+    /// the partition map, returned for addresses preceding every split.
+    /// Faithful to `ContextDatabase::getTrackedDefault`
+    /// (globalcontext.hh:211-212 / globalcontext.hh:303).
+    /// `ContextInternal::decodeFromSpec` installs partitions exclusively
+    /// through `createSet` (split points) and never assigns the default
+    /// value (globalcontext.cc:531-549), so the default stays the empty set
+    /// on this ingest path — mirrored by the empty slice.
+    pub fn get_tracked_default(&self) -> &[TrackedRegister] {
+        &[]
     }
 
     // Ghidra: architecture.cc:898 Architecture::decodeReturnAddress
@@ -1288,10 +1749,11 @@ impl Architecture {
                     ));
                 }
                 "context_data" => {
-                    report.skipped_children.push((
-                        "context_data".to_string(),
-                        "context spec decode: ContextDatabase::decodeFromSpec".to_string(),
-                    ));
+                    // Ghidra: architecture.cc:1278-1279 — both
+                    // parseProcessorConfig (:1190) and parseCompilerConfig
+                    // (:1278) route `<context_data>` to the same
+                    // ContextDatabase::decodeFromSpec call.
+                    self.decode_context_data(&mut decoder, host)?;
                 }
                 "resolveprototype" => {
                     report.skipped_children.push((
