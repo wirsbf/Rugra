@@ -1451,10 +1451,36 @@ impl Funcdata {
                     (r.size, r.loc.as_u64())
                 };
                 let cvn = self.new_constant(sz, off);
-                // Ghidra cc:112: cvn->copySymbol(vn);
-                let sym = vn.read().unwrap().mapentry.clone();
-                if sym.is_some() {
-                    cvn.write().unwrap().mapentry = sym;
+                // Ghidra cc:112: cvn->copySymbol(vn) — Varnode::copySymbol
+                // (varnode.cc:493-505). The field half (cc:496-499) is
+                // Varnode::copy_symbol (varnode.rs): Datatype pointer copy
+                // (cc:496), mapentry copy (cc:497), then clear and re-inherit
+                // ONLY the typelock|namelock bits from vn (cc:498-499 — not
+                // mapped/insert/coverdirty, which stay cvn-local). Previously
+                // this branch copied mapentry only, so a typelock/namelock
+                // equate constant lost its locks and type on dedup
+                // (VARNODE-COPYSYMBOL-FIELDS-0001).
+                {
+                    let src = vn.read().unwrap();
+                    cvn.write().unwrap().copy_symbol(&src);
+                }
+                // cc:500-504 high bookkeeping (high->typeDirty(); if
+                // mapentry != 0 high->setSymbol(this)) lives at this call
+                // site in the attach_symbol_to_vn house pattern because
+                // copy_symbol's &mut self cannot recover the Arc-to-self
+                // that HighVariable::set_symbol takes. Unreachable today:
+                // Rugra's new_constant does not call the assignHigh
+                // counterpart (funcdata_varnode.cc:72 gap,
+                // VARNODE-COPYSYMBOL-FIELDS-0001 residual R1), so cvn.high
+                // is always None here; wired so the block goes live the day
+                // assignHigh is completed.
+                if let Some(high) = cvn.read().unwrap().get_high().cloned() {
+                    let has_mapentry = cvn.read().unwrap().mapentry.is_some();
+                    let mut h = high.write().unwrap();
+                    h.type_dirty();
+                    if has_mapentry {
+                        h.set_symbol(&cvn);
+                    }
                 }
                 cvn
             } else {

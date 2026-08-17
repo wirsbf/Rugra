@@ -1,0 +1,89 @@
+{
+ "schema": 2,
+ "fixture_id": "VARNODE-COPYSYMBOL-FIELDS-0001",
+ "stable_function_id": "GH12-F-aa7e5e32b19125cfeab6",
+ "overall_status": "MATCH: opSetInput const-dedup copySymbol field semantics (type pointer, mapentry pointer, typelock|namelock bit masking, identity early-return, spacebase exemption) byte-match the locked oracle; copySymbol cc:500-504 high bookkeeping registered NO_ORACLE (see coverage)",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "entrypoint": "production Funcdata::opSetInput on bank-created constant varnodes; highlevel_on never enabled so assignHigh stays inert (funcdata_varnode.cc:51) on both sides",
+  "address_model": "64-bit uintb, byte-addressed, all fixture spaces little-endian",
+  "lock_seeding": "typelock via Varnode::updateType(int4,true,false) (varnode.cc:474-489); namelock via setFlags; mapentry via production Varnode::setSymbolEntry with a name-locked Symbol statically mapped at the constant's own constant-space address",
+  "dedup_trigger": "first opSetInput attaches the source (no descendant yet); second opSetInput on a different op sees hasNoDescend()==false and enters the copy branch (funcdata_op.cc:108-115)",
+  "identity_probe": "re-setting the same varnode in the same slot exercises the cc:107 early return",
+  "spacebase_probe": "a constant flagged spacebase exercises the cc:110 exemption",
+  "high_block": "copySymbol cc:500-504 (high->typeDirty/setSymbol) not driven: fixture keeps highlevel_on off; Rugra side cvn.high is always None until the new_constant/assignHigh port lands (residual R1)"
+ },
+ "input_manifest": {
+  "canonicalization": "RFC 8785-compatible JSON subset: UTF-8, sorted keys, compact separators, no floats",
+  "cases": [
+   "locks_type: typelock+namelock+int4 constant dedup copies Datatype pointer, typelock|namelock bits, offset/size; source unchanged with its single descendant",
+   "no_locks: unlocked constant copy keeps the ctor unknown base type pointer and gains no lock bits",
+   "mapentry_symbol: name-locked SymbolEntry on the constant is pointer-copied to the copy; mapped flag NOT copied (only typelock|namelock bits are)",
+   "mapentry_copy: copied entry keeps symbol name and entry identity (entry_same=1)",
+   "identity_return: same varnode re-set in the same slot returns at cc:107 without doubling descend",
+   "spacebase_exempt: spacebase-flagged constant skips dedup; both ops share the original varnode with two descendants"
+  ],
+  "sha256": "a6efd2a0a4322667de0010664ed63f3b2b325ec15d09b6ee177c5cae1dccf105"
+ },
+ "coverage": {
+  "opsetinput_dedup_locks_and_type": "MATCH",
+  "opsetinput_dedup_no_locks_baseline": "MATCH",
+  "opsetinput_dedup_mapentry_lock_bits_only": "MATCH",
+  "opsetinput_identity_early_return": "MATCH",
+  "opsetinput_spacebase_exemption": "MATCH",
+  "copysymbol_high_type_dirty_and_setsymbol": "NO_ORACLE: cc:500-504 requires a HighVariable on the fresh copy; Ghidra attaches one only when highlevel_on (funcdata_varnode.cc:48-59 via newConstant cc:72), which this fixture never enables, and Rugra's new_constant has no assignHigh call yet — dual-side unreachable state, no oracle observation possible this round",
+  "funcdata_newconstant_assignhigh": "NO_ORACLE: Rugra Funcdata::new_constant (funcdata.rs, Ghidra funcdata_varnode.cc:66-76) omits the assignHigh(vn) call; existing assign_high helper also never wires vn.high/instances — residual R1 on VARNODE-COPYSYMBOL-FIELDS-0001, fix path: complete assignHigh wiring and call it from new_constant/newVarnode family per funcdata_varnode.cc:72,89,110,135,157,182,196,212,231,604 (separate task, high E2E blast radius)",
+  "copysymbolifvalid_equate_valueclose": "NO_ORACLE: distinct call-site family (varnode.cc:510-522, EquateSymbol::isValueClose) not driven here; RulePropagateCopy follow-up",
+  "mapentry_equate_category": "NO_ORACLE: fixture builds an equate-shaped static entry (name-locked symbol at the constant's own address); production equate entries are dynamic hash maps built by buildDynamicSymbol (funcdata_varnode.cc:1283-1305) — pointer-copy mechanics observed identical either way, category itself unobserved"
+ },
+ "exact_function_boundaries": {
+  "op_set_input": "Funcdata::opSetInput (funcdata_op.cc:104-125) is the entry under test: cc:107 identity early return, cc:108-115 constant dedup guard incl. spacebase exemption, cc:111 newConstant fresh copy, cc:112 copySymbol. opUnsetInput/addDescend/setInput legs are exercised as side effects but their exhaustive coverage belongs to other fixtures.",
+  "copy_symbol": "Varnode::copySymbol (varnode.cc:493-505) is driven through the cc:112 call only: cc:496 type pointer copy, cc:497 mapentry pointer copy, cc:498-499 typelock|namelock clear-and-inherit (mapped/insert/coverdirty NOT inherited). cc:500-504 high block unreachable in this fixture (see coverage)."
+ },
+ "comparand": {
+  "rugra_base_commit": "dce02f7897757ba647105987b40a839425d30219",
+  "rugra_base_tree": "885fd034236d56c66b2eead5a5786293b54ce8d1",
+  "cpp_fixture_sha256": "740c7492a0315d36b9db71f589561c2cfc44f06725b0c241e2d67c46d071bf3b",
+  "rust_fixture_sha256": "d244b0e4eb422dbc5f57cc2c480c01e393a32f9a174162890bfb20c77eeb15fd",
+  "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
+  "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
+  "runner_sha256": "454cb2a37eb4b142a65ac05bea6def484b273a7048ddb1a94985b17f03067600",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-varnode-copysymbol-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "68df56a61a7a2c7f492339001dcedce5f928c11fe105519e27e8f20b21c0d163",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
+  }
+ },
+ "build": {
+  "cpp_oracle": "full locked decompiler libdecomp.a rebuilt from git archive of the oracle commit; fixture compiled in a separate directory against that archive",
+  "rust_comparand": "pinned Rugra base commit plus live overlay of src/funcdata.rs only (the task write-set); Cargo.lock-checksummed offline vendor; isolated CARGO_HOME and target",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "89b958e229163a47b1ac845efadd1ec6871dfe5d42951ff3a73cf3960df1c6a5"
+ },
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "expected_stdout_sha256": "9d856026b46f8d11e166f3bbde22ed8f7a67cb3e7c3915bdf919f5b3e4ae9f02"
+}

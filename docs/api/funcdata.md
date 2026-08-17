@@ -1227,3 +1227,26 @@ input@0x71 → soff=1、被 namerec 门排除，双侧逐字节一致。
   即 `glb` 可用时刻。效果：DWARF/PLT locked-prototype overlay 之后不再出现
   非法 `model_locked && !has_model`；callspec 克隆自 fd.funcp 时携带 model，
   `FuncCallSpecs::has_effect` 返回 cspec 声明效果而非保守 UnknownEffect。
+
+### 2026-08-17：op_set_input 常量去重分支补全 copySymbol（VARNODE-COPYSYMBOL-FIELDS-0001）
+
+- `op_set_input`（funcdata_op.cc:104-125）常量单读者去重分支的
+  cc:112 `cvn->copySymbol(vn)` 此前只内联拷贝 mapentry，丢失
+  `Varnode::copySymbol`（varnode.cc:493-505）的其余簿记：Datatype 指针
+  拷贝（cc:496）与 typelock|namelock 位的清空重继承（cc:498-499，
+  不含 mapped/insert）。现改为直接调用 `Varnode::copy_symbol`
+  （varnode.rs，cc:496-499 字段腿），equate 锁定常量在去重后不再丢
+  type/typelock/namelock。
+- cc:500-504 的 high 簿记（`high->typeDirty()`；有 mapentry 时
+  `high->setSymbol(this)`）按 attach_symbol_to_vn 房式（Varnode 字段腿
+  + Funcdata 调用侧 high 腿）接在调用侧，因为 `copy_symbol` 的
+  `&mut self` 拿不到 `HighVariable::set_symbol` 所需的 Arc-to-self。
+  当前不可达：Rugra `new_constant` 未接 `Funcdata::assignHigh`
+  （funcdata_varnode.cc:72 缺口，残差 R1 登记 VARNODE-COPYSYMBOL-FIELDS-0001），
+  cvn.high 恒 None；assignHigh 补全后该块即生效。
+- oracle fixture `tests/oracle/varnode_copy_symbol_1204.{cc,rs}` +
+  `tools/run_varnode_copy_symbol_oracle.sh`（pinned base dce02f7 +
+  src/funcdata.rs overlay）：locks_type / no_locks / mapentry_symbol
+  （含 mapentry 指针拷贝与 mapped 位不拷贝的判别）/ identity_return
+  （cc:107 早退）/ spacebase_exempt（cc:110 豁免）6 行双侧逐字节 MATCH；
+  high 块 NO_ORACLE（fixture 不开 highlevel_on，双侧 cvn.high==null）。
