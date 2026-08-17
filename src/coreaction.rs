@@ -5475,34 +5475,73 @@ impl ActionConstbase {
 impl Action for ActionConstbase {
     // Ghidra: coreaction.cc:678 ActionConstbase::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: get entry block and function address,
-        // check for tracked context. Without ContextDatabase integration,
-        // we can't create the COPY ops, but we correctly handle the
-        // no-blocks case and verify the entry block exists.
         if fd.bblocks.get_size() == 0 {
-            return Ok(action_status::NO_CHANGE);
+            return Ok(action_status::NO_CHANGE); // No blocks
         }
-
-        // Get the entry block (block 0).
-        let _entry_block = match fd.bblocks.get_block(0) {
+        // Get start block, which is constructed to have nothing
+        // falling into it
+        let bb = match fd.bblocks.get_block(0) {
             Some(b) => b,
             None => return Ok(action_status::NO_CHANGE),
         };
 
-        // Get the function address.
-        let _func_addr = *fd.get_address();
+        // Ghidra: coreaction.cc:686-690 — int4 injectid =
+        //   data.getFuncProto().getInjectUponEntry();
+        //   if (injectid >= 0) { pcodeinjectlib->getPayload(injectid);
+        //   data.doLiveInject(payload, bb->getStart(), bb, bb->beginOp()); }
+        // Rugra's FuncProto stores no injection id (FuncProto::set_inject_id
+        // is the INJECT-0001 no-op, and ProtoModelFull::inject_upon_entry is
+        // only assigned through a prototype-model <inject> resolver that no
+        // worker wires — production -1), so the leg reads as the INJECT-0001
+        // compatibility fallback "-1 = none" (same pattern as
+        // FuncCallSpecsExt::get_inject_id, flow.rs).
+        // TODO(INJECT-0001): doLiveInject(payload, bb start, bb, bb beginOp).
+        let _injectid: i32 = -1;
+        if _injectid >= 0 {
+            // doLiveInject residual (INJECT-0001): unreachable under the
+            // current production wiring (no inject resolver registered).
+        }
 
-        // Full Ghidra: for each tracked register from ContextDatabase:
-        //   op = newOp(1, entry_start)
-        //   newVarnodeOut(size, addr, op)
-        //   opSetInput(op, newConstant(size, val), 0)
-        //   opSetOpcode(op, CPUI_COPY)
-        //   opInsertBegin(op, entry_block)
-        //
-        // Without ContextDatabase integration, there are no tracked
-        // registers to inject. Return NO_CHANGE.
-        // L3 gap: requires ContextDatabase integration into Funcdata.
+        // Ghidra: coreaction.cc:692 — const TrackedSet trackset(
+        //   data.getArch()->context->getTrackedSet(data.getAddress()));
+        // The function entry address lives in the default code space
+        // (x86-64 ram); Rugra's Address carries no space dimension, so the
+        // ram space is passed explicitly (same-space lookup is provably
+        // equivalent to Ghidra's baselist-ordered Address compare — see
+        // TrackedSetMap's ordering caveat in arch.rs).  The snapshot ends
+        // the immutable fd borrow before the mutating loop; Ghidra's
+        // reference points into the global context database, which nothing
+        // in this loop mutates, so a shallow copy is observationally
+        // identical.
+        let trackset: Vec<crate::arch::TrackedRegister> = match fd.get_arch() {
+            Some(arch) => arch
+                .get_tracked_set(crate::space::AddressSpace::Ram, fd.get_address().as_u64())
+                .to_vec(),
+            None => Vec::new(),
+        };
 
+        for ctx in &trackset {
+            // Ghidra: coreaction.cc:697 — Address addr(ctx.loc.space,ctx.loc.offset);
+            // (Funcdata::new_varnode_out pins the Register space for the
+            // defined varnode — correct for every pspec register-resolved
+            // tracked loc like DF register:0x20a; a non-register tracked
+            // loc needs the space-aware vbank create first.)
+            let addr = crate::address::Address::new(ctx.loc.offset);
+            // Ghidra: coreaction.cc:698 — PcodeOp *op = data.newOp(1,bb->getStart());
+            let op = fd.new_op(1, bb.read().expect("entry block read lock").get_start_addr());
+            // Ghidra: coreaction.cc:699 — data.newVarnodeOut(ctx.loc.size,addr,op);
+            fd.new_varnode_out(ctx.loc.size as usize, addr, &op);
+            // Ghidra: coreaction.cc:700 — Varnode *vnin = data.newConstant(ctx.loc.size,ctx.val);
+            let vnin = fd.new_constant(ctx.loc.size as usize, ctx.val);
+            // Ghidra: coreaction.cc:701 — data.opSetOpcode(op,CPUI_COPY);
+            fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+            // Ghidra: coreaction.cc:702 — data.opSetInput(op,vnin,0);
+            fd.op_set_input(&op, vnin, 0);
+            // Ghidra: coreaction.cc:703 — data.opInsertBegin(op,bb);
+            fd.op_insert_begin(&op, &bb);
+        }
+        // Ghidra: coreaction.cc:705 — return 0; (unconditionally, even
+        // when COPY ops were inserted: no change counter in this action).
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "constbase" mirrors ctor at coreaction.hh:259
@@ -11665,4 +11704,115 @@ mod tests {
         let mut a = ActionNodeJoin::new();
         let _ = a.apply(&mut fd).unwrap();
         assert!(a.count >= 1, "diamond join candidate must be detected");
+    }
+
+    // Ghidra: coreaction.cc:692-704 ActionConstbase::apply (tracked COPY loop)
+    /// Single-side regression pin of the tracked-COPY insertion form: after
+    /// ingesting the production x86-64.pspec tracked_set shape (DF=0 resolved
+    /// to register:0x20a:1) through the mapped decode, ActionConstbase
+    /// inserts exactly one COPY at the HEAD of entry block 0 — out = DF
+    /// storage, in0 = constant 0 — and returns 0 (no change counter,
+    /// coreaction.cc:705).  The oracle side of this observable is pinned
+    /// per-object by the 02b CALLGUARD projection (block0 COPY
+    /// out=reg:0x20a:1 in0=const0, guards 18->20) against the locked
+    /// getstr_pipeline_1204 fixture; this test is the Rugra regression leg
+    /// (mechanism B2: a hand-written expectation cannot lift NO_ORACLE).
+    #[test]
+    fn test_action_constbase_inserts_tracked_copy_at_entry_head() {
+        use crate::address::Address;
+        use crate::block::BlockBasic;
+
+        // Ingest host: DF resolves through the SLEIGH register catalog shape
+        // (register space 0x20a:1); spaces from the locked table.
+        struct TrackedHost;
+        impl crate::arch::SpecQuery for TrackedHost {
+            // Ghidra: sleighbase.cc:133 SleighBase::getRegister (test host leg)
+            fn get_register(&self, name: &str) -> Option<crate::fspec::VarnodeData> {
+                match name {
+                    "DF" => Some(crate::fspec::VarnodeData {
+                        space: crate::space::AddressSpace::Register,
+                        offset: 0x20a,
+                        size: 1,
+                    }),
+                    _ => None,
+                }
+            }
+            // Ghidra: translate.cc:590 AddrSpaceManager::getSpaceByName (test host leg)
+            fn space_by_name(&self, name: &str) -> Option<crate::space::AddressSpace> {
+                match name {
+                    "ram" => Some(crate::space::AddressSpace::Ram),
+                    "register" => Some(crate::space::AddressSpace::Register),
+                    "const" => Some(crate::space::AddressSpace::Const),
+                    _ => None,
+                }
+            }
+            // Ghidra: space.hh:189 AddrSpace::getHighest (test host leg)
+            fn space_highest(&self, _spc: crate::space::AddressSpace) -> u64 {
+                u64::MAX
+            }
+        }
+
+        // The production pspec <tracked_set space="ram"><set name="DF" val="0"/>
+        // document, built as the fixture-local DOM the mapped decode reads.
+        let root = {
+            use crate::marshal::Element;
+            let mut context_data = Element::new();
+            context_data.set_name("context_data");
+            let mut tracked_set = Element::new();
+            tracked_set.set_name("tracked_set");
+            tracked_set.add_attribute("space", "ram");
+            let mut set = Element::new();
+            set.set_name("set");
+            set.add_attribute("name", "DF");
+            set.add_attribute("val", "0");
+            tracked_set.add_child(std::sync::Arc::new(std::sync::RwLock::new(set)));
+            context_data.add_child(std::sync::Arc::new(std::sync::RwLock::new(tracked_set)));
+            std::sync::Arc::new(std::sync::RwLock::new(context_data))
+        };
+
+        let mut arch = crate::arch::Architecture::new();
+        {
+            let registry = std::sync::Arc::new(std::sync::RwLock::new(
+                crate::marshal::IdRegistry::new(),
+            ));
+            let mut decoder = crate::marshal::TreeDecoder::new(root, registry);
+            arch.decode_context_data(&mut decoder, &TrackedHost)
+                .expect("tracked_set decode");
+        }
+        // cc:692 precondition: the function address resolves to the DF
+        // partition (whole-ram range from the pspec shape).
+        assert_eq!(arch.get_tracked_set(crate::space::AddressSpace::Ram, 0x403000).len(), 1);
+
+        let mut fd = Funcdata::new("t", Address::new(0x403000), 0x40);
+        fd.set_arch(std::sync::Arc::new(arch));
+        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x403000))));
+        fd.bblocks.add_block(b0.clone());
+        // One pre-existing op: the tracked COPY must land at the HEAD
+        // (opInsertBegin, coreaction.cc:703).
+        let pre = fd.new_op(1, Address::new(0x403000));
+        fd.op_set_opcode(&pre, OpCode::CPUI_STORE);
+        fd.op_insert_end(&pre, &fd.bblocks.get_block(0).unwrap());
+        assert_eq!(b0.read().unwrap().ops.len(), 1);
+
+        let mut action = ActionConstbase::new();
+        // cc:705: unconditional return 0.
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        let ops = b0.read().unwrap().ops.clone();
+        assert_eq!(ops.len(), 2, "exactly one COPY per tracked context");
+        let copy = ops[0].0.read().unwrap();
+        assert_eq!(copy.opcode, OpCode::CPUI_COPY, "tracked COPY at block head");
+        let out_arc = copy.output.clone().expect("COPY output");
+        let in0_arc = copy.inrefs[0].clone();
+        drop(copy);
+        let out = out_arc.read().unwrap();
+        assert_eq!(out.get_space(), crate::space::AddressSpace::Register);
+        assert_eq!(out.get_offset(), 0x20a);
+        assert_eq!(out.size, 1);
+        let in0 = in0_arc.read().unwrap();
+        assert_eq!(in0.get_space(), crate::space::AddressSpace::Const);
+        assert_eq!(in0.get_offset(), 0, "tracked DF value 0");
+        assert_eq!(in0.size, 1);
+        // Idempotence shape: a second apply inserts a second COPY (Ghidra
+        // has no guard either), so only the single-run form is pinned here.
     }

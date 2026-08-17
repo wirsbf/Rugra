@@ -1096,6 +1096,54 @@ fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, St
         arch.userops = Some(Arc::new(std::sync::RwLock::new(
             rugra::userop::UserOpManage::new(),
         )));
+        // ARCH-CONTEXT-TRACKED-0001: Architecture::restoreFromSpec runs
+        // parseProcessorConfig BEFORE parseCompilerConfig
+        // (architecture.cc:639->641); its ELEM_CONTEXT_DATA arm
+        // (architecture.cc:1190) feeds ContextInternal::decodeFromSpec.
+        // The full pspec text pipeline is the ARCH-0001 residual; this
+        // minimal wiring parses the locked x86-64.pspec bytes with the
+        // worker's DocumentStorage and hands every <context_data> child
+        // to the mapped Architecture::decode_context_data (same DOM
+        // extraction model as tests/oracle/arch_context_tracked_1204.rs),
+        // making the tracked registers (DF=0) queryable when
+        // ActionConstbase runs (coreaction.cc:692).
+        let pspec_bytes = fs::read("sleigh_specs/x86-64.pspec")
+            .map_err(|error| format!("unable to read processor spec: {error}"))?;
+        let pspec_doc = store
+            .parse_document(&pspec_bytes)
+            .map_err(|error| format!("processor spec parse failed: {error}"))?;
+        let pspec_root = pspec_doc
+            .root
+            .clone()
+            .ok_or_else(|| "processor spec has no root element".to_string())?;
+        if pspec_root
+            .read()
+            .map_err(|_| "processor spec element lock poisoned".to_string())?
+            .name
+            != "processor_spec"
+        {
+            return Err("processor spec root is not processor_spec".to_string());
+        }
+        let pspec_children: Vec<_> = pspec_root
+            .read()
+            .map_err(|_| "processor spec element lock poisoned".to_string())?
+            .children
+            .clone();
+        let pspec_registry = Arc::new(std::sync::RwLock::new(rugra::marshal::IdRegistry::new()));
+        for child in pspec_children {
+            let child_name = child
+                .read()
+                .map_err(|_| "processor spec element lock poisoned".to_string())?
+                .name
+                .clone();
+            if child_name != "context_data" {
+                continue;
+            }
+            let mut decoder =
+                rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
+            arch.decode_context_data(&mut decoder, host.as_ref())
+                .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
+        }
         arch.parse_compiler_config(&mut store, host.as_ref(), 8)
             .map_err(|error| format!("compiler spec parse failed: {error}"))?;
         if arch.defaultfp.is_none() {

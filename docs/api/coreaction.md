@@ -1129,3 +1129,50 @@ instr=user2|warning）。E2E 现状：管线侧 24 PLT thunk 函数的警告已�
 对接后无重复）；3 真实函数（main_init/main_free/hugehelp）被 debugproto.rs:260
 DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isModelUnknown
 = false），属 UNKNOWN-PROTOMODEL 父项模型语义域。
+
+## 2026-08-17：ARCH-CONTEXT-TRACKED-0001 — ActionConstbase tracked COPY 循环落地
+
+- `ActionConstbase::apply`（coreaction.rs，oracle coreaction.cc:678-706）从 stub
+  升级为逐行移植：
+  - cc:681 空块早退 → `fd.bblocks.get_size() == 0` 返回 0；
+  - cc:684 entry block = `getBlock(0)`（C 风格 cast，Rugra 走 trait 对象）；
+  - cc:686-690 injectid≥0 腿（`getFuncProto().getInjectUponEntry()` →
+    `getPayload` + `doLiveInject`）保持门控：Rugra `FuncProto` 不存 injection id
+    （`set_inject_id` 为 INJECT-0001 no-op，ProtoModelFull::inject_upon_entry 仅经
+    protomodel `<inject>` resolver 赋值而生产 worker 不注册），按 flow.rs
+    `FuncCallSpecsExt::get_inject_id` 同款 INJECT-0001 兼容回退读作 -1；
+  - cc:692 `getTrackedSet(data.getAddress())` →
+    `fd.get_arch().get_tracked_set(AddressSpace::Ram, fd.get_address().as_u64())`
+    （Rugra Address 无空间维，函数地址=默认代码空间 ram，同空间查找与 Ghidra
+    baselist 序全等——见 arch.rs TrackedSetMap 排序 caveat）；快照 `to_vec()`
+    结束不可变借用后再进变异循环（Ghidra 引用指向全局 context，循环不触其变异）；
+  - cc:694-704 每 tracked ctx：`Address(ctx.loc.space,ctx.loc.offset)` →
+    `Address::new(ctx.loc.offset)`（`new_varnode_out` 钉 Register 空间——DF
+    register:0x20a:1 正确；非 register tracked loc 需 space-aware vbank create，
+    已注释登记）→ `new_op(1, bb.get_start_addr())` → `new_varnode_out(size,addr,op)`
+    → `new_constant(size, ctx.val)` → `op_set_opcode(CPUI_COPY)` →
+    `op_set_input(op,vnin,0)` → `op_insert_begin(op,&bb)`（多 ctx 时逆序居块头，
+    与 opInsertBegin 语义一致）；
+  - cc:705 无条件 `return 0`（无 change 计数器）→ `NO_CHANGE`。
+- worker pspec 喂入（examples/curl_decompile.rs 与
+  examples/getstr_stage_snapshot.rs 的 `worker_architecture` 镜像）：
+  `restoreFromSpec` 先 `parseProcessorConfig` 后 `parseCompilerConfig`
+  （architecture.cc:639→641），其 ELEM_CONTEXT_DATA 臂（:1190）→ 读
+  `sleigh_specs/x86-64.pspec`、DocumentStorage 解析、每个 `<context_data>` 子元素
+  经 `TreeDecoder` 喂 `arch.decode_context_data`（fixture 同款 DOM 提取，ARCH-0001
+  最小接线；其余 pspec 子元素仍为 pspec 文本管线残差）。
+- 生产验证：GetStr 02b 层 [CALLGUARD] 投影 18 → **20**（每 call 补第 10 个
+  0x20a range，相对序 0,30,38,200,202,206,207,20a,20b,288 与 oracle 全等）；
+  block0 头部 COPY out=register:0x20a:1 in0=const0（被两个 INDIRECT guard 读）。
+- E2E（HEAD 004816a 干净 worktree 基线对比）：skeleton 3155→3151
+  （my_get_line/helpf/file2string.part.0/getparameter.constprop.0 各消 1 行
+  幽灵 `in_register_0000020a` 声明——golden 无此行，方向朝 oracle）；
+  defects=0/numbering=0/Matched=123 不降；gcc audit 16 FAIL（≤16 基线内，前值 17）。
+- 回归测试：`coreaction::test_action_constbase_inserts_tracked_copy_at_entry_head`
+  （单侧 Rugra 断言：DF tracked_set 摄取 → COPY 居块头、out=reg:20a:1、
+  in0=const0、返回 0；机制 B2：手写 expected 不升 MATCH，oracle 侧证据=
+  getstr_pipeline_1204 02b 层逐对象投影）。
+- 既有 fixture 影响：`heritage_callguard2_1204` runner 的 `heritage_rs_sha256`
+  钉在 base 102c476，committed 漂移（heritage.rs +14/funcdata.rs +195）致其在
+  干净 HEAD 同样 mismatch（本改动前已破，非本 write-set 所致；需 fixture owner
+  重钉 base）。
