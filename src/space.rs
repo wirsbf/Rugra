@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// Address space identifier
 pub type SpaceId = u8;
@@ -431,6 +431,245 @@ impl JoinDatabase {
     }
 }
 
+/// Registry-side join-record store, the 1:1 twin of Ghidra's
+/// `AddrSpaceManager` join halves (`splitset`/`splitlist`,
+/// translate.hh:234-235) plus the `JoinRecord` they hold
+/// (translate.hh:196) — here with registry `AddrSpace` handles in the
+/// pieces, exactly like Ghidra's `VarnodeData.space` (`AddrSpace *`,
+/// pcoderaw.hh:35-37). The legacy enum-based [`JoinRecord`] above stays
+/// for un-migrated consumers (`arch.rs`'s `join_db`,
+/// `translate.rs`'s manager); this module is the canonical placement the
+/// `JoinSpace::printRaw` specialization consumes
+/// (space.cc:593 `getManager()->findJoin`).
+pub mod manager_join {
+    use super::{AddrSpace, SpaceVarnodeData};
+
+    // Ghidra: translate.hh:196 JoinRecord
+    /// A record describing how a join-space address maps to its physical
+    /// pieces (most significant to least significant).
+    #[derive(Debug, Clone)]
+    pub struct JoinRecord {
+        // Ghidra: translate.hh:198 pieces
+        /// All the physical pieces of the symbol, most significant to least.
+        pub pieces: Vec<SpaceVarnodeData>,
+        // Ghidra: translate.hh:199 unified
+        /// Special entry representing the entire symbol in one chunk.
+        pub unified: SpaceVarnodeData,
+    }
+
+    impl JoinRecord {
+        // Ghidra: translate.hh:201 JoinRecord::numPieces
+        pub fn num_pieces(&self) -> usize {
+            self.pieces.len()
+        }
+        // Ghidra: translate.hh:202 JoinRecord::isFloatExtension
+        pub fn is_float_extension(&self) -> bool {
+            self.pieces.len() == 1
+        }
+        // Ghidra: translate.hh:203 JoinRecord::getPiece
+        pub fn get_piece(&self, i: usize) -> &SpaceVarnodeData {
+            &self.pieces[i]
+        }
+        // Ghidra: translate.hh:204 JoinRecord::getUnified
+        pub fn get_unified(&self) -> &SpaceVarnodeData {
+            &self.unified
+        }
+
+        // Ghidra: translate.cc:172 JoinRecord::operator<
+        /// Lexicographic record ordering: `unified.size` first (float
+        /// extensions may share pieces at different logical sizes), then the
+        /// piece sequence via `VarnodeData::operator<` (pcoderaw.hh:64-68:
+        /// space index, then offset, then size DESCENDING — bigger sizes
+        /// first); a shorter piece list that is a prefix of a longer one is
+        /// the smaller record.
+        pub fn less_than(&self, op2: &JoinRecord) -> bool {
+            // Some joins may have same piece but different unified size
+            // (floating point)
+            if self.unified.size != op2.unified.size {
+                return self.unified.size < op2.unified.size;
+            }
+            let mut i = 0;
+            loop {
+                if self.pieces.len() == i {
+                    // If more pieces in op2, it is bigger (return true), if
+                    // same number this==op2, return false
+                    return op2.pieces.len() > i;
+                }
+                if op2.pieces.len() == i {
+                    return false; // More pieces in -this-, so it is bigger
+                }
+                if self.pieces[i] != op2.pieces[i] {
+                    return self.pieces[i].less_than(&op2.pieces[i]);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    // RUGRA-GLUE: PartialEq derived from less_than (Ghidra has no
+    // JoinRecord::operator==; the splitset dedup treats records as equal
+    // when neither is less than the other, which is exactly this).
+    impl PartialEq for JoinRecord {
+        // RUGRA-GLUE: trait method head for the impl above.
+        fn eq(&self, other: &Self) -> bool {
+            !self.less_than(other) && !other.less_than(self)
+        }
+    }
+
+    impl SpaceVarnodeData {
+        // Ghidra: pcoderaw.hh:64 VarnodeData::operator<
+        /// Ordering by the space's index, then the offset, then by size
+        /// DESCENDING (big sizes come first). Uses the crate-level
+        /// `PartialEq for SpaceVarnodeData` (pointer-identity space +
+        /// offset + size, Ghidra `VarnodeData::operator==`,
+        /// pcoderaw.hh:77) for the `!=` in Ghidra's loop.
+        pub fn less_than(&self, op2: &SpaceVarnodeData) -> bool {
+            if self.space != op2.space {
+                return self.space.get_index() < op2.space.get_index();
+            }
+            if self.offset != op2.offset {
+                return self.offset < op2.offset;
+            }
+            self.size > op2.size // BIG sizes come first
+        }
+    }
+
+    // Ghidra: translate.hh:233 AddrSpaceManager::joinallocate +
+    //   translate.hh:234 AddrSpaceManager::splitset +
+    //   translate.hh:235 AddrSpaceManager::splitlist
+    /// The manager's join-record halves plus the allocation counter.
+    /// `split_set` holds every distinct split ordered by
+    /// `JoinRecord::operator<` (the dedup side); `split_list` indexes the
+    /// records by join address in ascending allocation order
+    /// (`join_allocate` only ever grows in 16-byte-aligned steps, so a
+    /// plain push_back keeps the binary search in `find_join` valid —
+    /// translate.cc:713).
+    #[derive(Debug, Default)]
+    pub struct JoinRecordTables {
+        /// Ghidra `uintb joinallocate` — next offset to allocate in the
+        /// join space.
+        pub join_allocate: u64,
+        /// Ghidra `set<JoinRecord*,JoinRecordCompare> splitset` as a Vec
+        /// sorted by `JoinRecord::operator<`.
+        pub split_set: Vec<JoinRecord>,
+        /// Ghidra `vector<JoinRecord*> splitlist` (ascending
+        /// `unified.offset`).
+        pub split_list: Vec<JoinRecord>,
+    }
+
+    impl JoinRecordTables {
+        // Ghidra: translate.cc:671 AddrSpaceManager::findAddJoin
+        /// Find a pre-existing split record, or create a new one for
+        /// `pieces` (most significant to least significant). Faithful to
+        /// `findAddJoin` (translate.cc:671-715): the four LowlevelError
+        /// validations with Ghidra's exact strings, `totalsize` from
+        /// `logical_size` (single piece only) or the piece-size sum, dedup
+        /// against `split_set` via the record ordering, and allocation of
+        /// the unified varnode at `join_allocate` rounded up to the next
+        /// multiple of 16 (`roundsize`).
+        ///
+        /// Ghidra returns the new (or found) `JoinRecord *`; Rugra returns
+        /// the unified join-space offset, from which the record stays
+        /// reachable via [`JoinRecordTables::find_join`].
+        pub fn find_add_join(
+            &mut self,
+            pieces: &[SpaceVarnodeData],
+            logical_size: u32,
+            joinspace: &AddrSpace,
+        ) -> u64 {
+            if pieces.is_empty() {
+                panic!("Cannot create a join without pieces");
+            }
+            if pieces.len() == 1 && logical_size == 0 {
+                panic!("Cannot create a single piece join without a logical size");
+            }
+            let totalsize: u32 = if logical_size != 0 {
+                if pieces.len() != 1 {
+                    panic!("Cannot specify logical size for multiple piece join");
+                }
+                logical_size
+            } else {
+                let mut acc: u32 = 0;
+                for piece in pieces {
+                    acc += piece.size as u32;
+                }
+                if acc == 0 {
+                    panic!("Cannot create a zero size join");
+                }
+                acc
+            };
+            // JoinRecord testnode; testnode.pieces = pieces;
+            // testnode.unified.size = totalsize;
+            // set<JoinRecord*,JoinRecordCompare>::find(&testnode)
+            let probe = JoinRecord {
+                pieces: pieces.to_vec(),
+                unified: SpaceVarnodeData {
+                    space: joinspace.clone(),
+                    offset: 0,
+                    size: totalsize as i32,
+                },
+            };
+            if let Ok(idx) = self
+                .split_set
+                .binary_search_by(|rec| rec_less_than_as_ordering(rec, &probe))
+            {
+                // If already in the set
+                return self.split_set[idx].unified.offset;
+            }
+            // uint4 roundsize = (totalsize + 15) & ~((uint4)0xf);
+            let roundsize = (totalsize + 15) & !0xfu32;
+            // newjoin->unified.space = joinspace; .offset = joinallocate;
+            // joinallocate += roundsize; .size = totalsize;
+            let newjoin = JoinRecord {
+                pieces: pieces.to_vec(),
+                unified: SpaceVarnodeData {
+                    space: joinspace.clone(),
+                    offset: self.join_allocate,
+                    size: totalsize as i32,
+                },
+            };
+            self.join_allocate += roundsize as u64;
+            // splitset.insert(newjoin); splitlist.push_back(newjoin);
+            let pos = self
+                .split_set
+                .binary_search_by(|rec| rec_less_than_as_ordering(rec, &newjoin))
+                .unwrap_or_else(|e| e);
+            self.split_set.insert(pos, newjoin);
+            self.split_list.push(self.split_set[pos].clone());
+            self.split_list.last().expect("just pushed").unified.offset
+        }
+
+        // Ghidra: translate.cc:746 AddrSpaceManager::findJoin
+        /// Find the JoinRecord whose unified offset is exactly `offset`.
+        /// Faithful to `findJoin` (translate.cc:746-762): a binary search of
+        /// `split_list` on `unified.offset`, panicking with Ghidra's
+        /// `LowlevelError("Unlinked join address")` message when no record
+        /// matches (the offset must have come from a findAddJoin record).
+        pub fn find_join(&self, offset: u64) -> &JoinRecord {
+            match self
+                .split_list
+                .binary_search_by_key(&offset, |r| r.unified.offset)
+            {
+                Ok(idx) => &self.split_list[idx],
+                Err(_) => panic!("Unlinked join address"),
+            }
+        }
+    }
+
+    // RUGRA-GLUE: rec_less_than_as_ordering — TotalOrder adapter around
+    // JoinRecord::operator< for binary_search_by; Ghidra's std::set uses
+    // the same operator for its red-black tree ordering.
+    fn rec_less_than_as_ordering(a: &JoinRecord, b: &JoinRecord) -> std::cmp::Ordering {
+        if a.less_than(b) {
+            std::cmp::Ordering::Less
+        } else if b.less_than(a) {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    }
+}
+
 /// Join space (for combining multiple spaces)
 ///
 /// Corresponds to Ghidra's `JoinSpace` in space.hh
@@ -823,6 +1062,14 @@ struct AddrSpaceInner {
     refcount: i32,
     /// Spacebase-subclass state; `None` for non-IPTR_SPACEBASE spaces.
     spacebase: Option<SpacebaseState>,
+    // Ghidra: space.hh:118 AddrSpace::manage (manager backlink, join half).
+    /// Weak link to the owning manager's join-record tables, wired when the
+    /// registry inserts this space (Rugra's constructors take no manager, so
+    /// `insertSpace` is the association point). Only the join space reads
+    /// it — `JoinSpace::printRaw` resolves its pieces through
+    /// `getManager()->findJoin` (space.cc:593); `None` on every other kind
+    /// and on a join space that was never registered.
+    manager_join_tables: Option<Weak<RefCell<manager_join::JoinRecordTables>>>,
 }
 
 /// Architecture-owned address-space handle. Faithful to Ghidra's `AddrSpace`
@@ -872,6 +1119,7 @@ impl AddrSpace {
             deadcode_delay: dead,
             refcount: 0,
             spacebase: None,
+            manager_join_tables: None,
         };
         if big_end {
             inner.flags |= space_flags::BIG_ENDIAN;
@@ -1061,6 +1309,7 @@ impl AddrSpace {
             delay: dl,
             deadcode_delay: dl,
             refcount: 0,
+            manager_join_tables: None,
             spacebase: Some(SpacebaseState {
                 contain: Some(base.clone()),
                 has_base_register: false,
@@ -1116,6 +1365,7 @@ impl AddrSpace {
             delay: base.get_delay(),
             deadcode_delay: base.get_deadcode_delay(),
             refcount: 0,
+            manager_join_tables: None,
             spacebase: Some(SpacebaseState {
                 contain: Some(base.clone()),
                 has_base_register: false,
@@ -1173,6 +1423,7 @@ impl AddrSpace {
             delay: 0,
             deadcode_delay: 0,
             refcount: 0,
+            manager_join_tables: None,
             spacebase: None,
         };
         AddrSpace(Rc::new(RefCell::new(inner)))
@@ -1420,6 +1671,24 @@ impl AddrSpace {
     /// Clear a cached attribute (Ghidra: protected).
     pub fn clear_flags(&self, fl: u32) {
         self.0.borrow_mut().flags &= !fl;
+    }
+
+    // RUGRA-GLUE: set_manager_join_tables — Ghidra's AddrSpace receives its
+    // `AddrSpaceManager *manage` backlink in the constructor (space.hh:118);
+    // Rugra's constructors take no manager, so the registry wires the
+    // join-record half (the only half any space method reads) when it
+    // inserts the space. This is the injection point for
+    // `JoinSpace::printRaw`'s `getManager()->findJoin` (space.cc:593).
+    /// Wire the owning registry's join-record tables into this space.
+    pub fn set_manager_join_tables(&self, tables: &Rc<RefCell<manager_join::JoinRecordTables>>) {
+        self.0.borrow_mut().manager_join_tables = Some(Rc::downgrade(tables));
+    }
+
+    // RUGRA-GLUE: get_manager_join_tables — the read side of the
+    /// `AddrSpace::manage` join half. `None` for spaces that were never
+    /// inserted into a registry.
+    fn get_manager_join_tables(&self) -> Option<Rc<RefCell<manager_join::JoinRecordTables>>> {
+        self.0.borrow().manager_join_tables.as_ref().and_then(|w| w.upgrade())
     }
 
     // Ghidra: space.hh:277 AddrSpace::getName
@@ -1768,9 +2037,30 @@ impl AddrSpace {
     /// `ConstantSpace::printRaw` (space.cc:372) and `OtherSpace::printRaw`
     /// (space.cc:410) override with unpadded hex; the dispatch below keys on
     /// the constant type and the `is_otherspace` flag, which only production
-    /// OtherSpaces set.
+    /// OtherSpaces set. `JoinSpace::printRaw` (space.cc:590) and
+    /// `IopSpace::printRaw` (op.cc:41) override with the pieces/op forms.
     pub fn print_raw(&self, offset: u64) -> String {
-        if self.get_type() == SpaceType::Constant || self.is_other_space() {
+        match self.get_type() {
+            // Ghidra: space.cc:372 ConstantSpace::printRaw and space.cc:410
+            //   OtherSpace::printRaw overrides (unpadded hex).
+            SpaceType::Constant => return format!("0x{:x}", offset),
+            SpaceType::Join => return self.print_raw_join(offset),
+            SpaceType::Iop => {
+                // Ghidra: op.cc:41 IopSpace::printRaw override — RESIDUAL
+                // SPACE-IOP-PRINTRAW-0001: both terminal renders (the
+                // non-branch SeqNum form via `SeqNum.addr`, the branch
+                // `code_`+shortcut+block-start form via
+                // `BlockBasic::start_addr`) need the address's space, which
+                // the legacy spaceless model does not carry; blocked by
+                // ADDRESS-0001. Until the future `IopSpace::print_raw` in
+                // op.rs can render them, the base form below is the output
+                // (the pre-specialization observable). Kept inline so this
+                // file compiles standalone under registry-overlay runners
+                // pinned to pre-op.rs-specialization bases.
+            }
+            _ => {}
+        }
+        if self.is_other_space() {
             return format!("0x{:x}", offset);
         }
         let (address_size, word_size) = {
@@ -1796,6 +2086,47 @@ impl AddrSpace {
                 out.push_str(&format!("+{}", cut));
             }
         }
+        out
+    }
+
+    // Ghidra: space.cc:590 JoinSpace::printRaw
+    /// The join-space specialization: `JoinRecord *rec =
+    /// getManager()->findJoin(offset)` resolves the offset back to its
+    /// pieces, each piece is printed by its own space's `printRaw`
+    /// (`vdat.space->printRaw(s,vdat.offset)`), pieces are comma-separated
+    /// inside braces, and a single-piece join (float extension) appends
+    /// `:` + the unified (logical) size. Faithful to the quirk that the
+    /// `szsum` accumulator from the loop is discarded and replaced by
+    /// `rec->getUnified().size` when `num == 1` (space.cc:604-606).
+    ///
+    /// Unlinked offsets (no JoinRecord) panic with Ghidra's
+    /// `LowlevelError("Unlinked join address")` from `findJoin`
+    /// (translate.cc:761); a join space never registered with a registry has
+    /// no manager backlink, which Ghidra cannot express (its constructor
+    /// always takes the manager) — mapped to the same deterministic panic.
+    fn print_raw_join(&self, offset: u64) -> String {
+        // JoinRecord *rec = getManager()->findJoin(offset);
+        let tables = self.get_manager_join_tables();
+        let tables = tables.unwrap_or_else(|| panic!("Unlinked join address"));
+        let tables_ref = tables.borrow();
+        let rec = tables_ref.find_join(offset);
+        let mut szsum: i32 = 0;
+        let num = rec.num_pieces();
+        let mut out = String::from("{");
+        for i in 0..num {
+            let vdat = rec.get_piece(i);
+            szsum += vdat.size;
+            if i != 0 {
+                out.push(',');
+            }
+            // vdat.space->printRaw(s,vdat.offset);
+            out.push_str(&vdat.space.print_raw(vdat.offset));
+        }
+        if num == 1 {
+            szsum = rec.get_unified().size;
+            out.push_str(&format!(":{}", szsum));
+        }
+        out.push('}');
         out
     }
 
@@ -1909,11 +2240,19 @@ pub struct SpaceRegistry {
     /// Stack space associated with the processor.
     stack_space: Option<AddrSpace>,
     // Ghidra: translate.hh:232 uniqspace
-    /// Temporary space associated with the processor.
+    /// Unique space associated with the processor.
     uniq_space: Option<AddrSpace>,
-    // Ghidra: translate.hh:233 joinallocate
-    /// Next offset to be allocated in the join space.
-    join_allocate: u64,
+    // Ghidra: translate.hh:233 AddrSpaceManager::joinallocate +
+    //   translate.hh:234 AddrSpaceManager::splitset +
+    //   translate.hh:235 AddrSpaceManager::splitlist
+    /// The join-record halves plus the join-space allocation counter,
+    /// shared with every registered join space via the
+    /// `manager_join_tables` backlink (the join half of Ghidra's
+    /// `AddrSpace::manage`, space.hh:118) so `JoinSpace::printRaw`
+    /// (space.cc:593) can run `getManager()->findJoin` from the space
+    /// handle alone. Shared (not a plain field) precisely because the
+    /// spaces hold weak links into it.
+    join_tables: Rc<RefCell<manager_join::JoinRecordTables>>,
 }
 
 impl SpaceRegistry {
@@ -1970,6 +2309,13 @@ impl SpaceRegistry {
                 if self.join_space.is_some() {
                     duplicate_name = true;
                 }
+                // Wire the manager backlink (Ghidra's JoinSpace receives its
+                // AddrSpaceManager in the constructor, space.cc:446; Rugra
+                // constructors take no manager, so insertSpace is the
+                // association point). Wired before validation so an insert
+                // that throws still leaves the space pointing at this
+                // manager, like a Ghidra-constructed space.
+                spc.set_manager_join_tables(&self.join_tables);
                 self.join_space = Some(spc.clone());
             }
             SpaceType::Iop => {
@@ -2140,6 +2486,34 @@ impl SpaceRegistry {
     /// Get the joining space (translate.hh:475-477).
     pub fn get_join_space(&self) -> Option<AddrSpace> {
         self.join_space.clone()
+    }
+
+    // Ghidra: translate.hh:270 AddrSpaceManager::findAddJoin
+    /// Get (or create) the JoinRecord for `pieces` (most significant to
+    /// least significant). Faithful to `findAddJoin`
+    /// (translate.cc:671-715 — see
+    /// [`manager_join::JoinRecordTables::find_add_join`]); returns the
+    /// unified join-space offset of the record, from which
+    /// [`SpaceRegistry::find_join`] recovers the pieces. Requires the join
+    /// space to be registered (Ghidra's manager always has one when
+    /// findAddJoin runs).
+    pub fn find_add_join(&mut self, pieces: &[SpaceVarnodeData], logical_size: u32) -> u64 {
+        let joinspace = self
+            .join_space
+            .clone()
+            .expect("findAddJoin without a registered join space");
+        self.join_tables
+            .borrow_mut()
+            .find_add_join(pieces, logical_size, &joinspace)
+    }
+
+    // Ghidra: translate.hh:271 AddrSpaceManager::findJoin
+    /// Find the JoinRecord for join-space `offset` (translate.cc:746-762).
+    /// Panics with `Unlinked join address` when no record matches, exactly
+    /// like Ghidra's LowlevelError. Returns a clone so the caller does not
+    /// hold the shared-table borrow.
+    pub fn find_join(&self, offset: u64) -> manager_join::JoinRecord {
+        self.join_tables.borrow().find_join(offset).clone()
     }
 
     // Ghidra: translate.hh:259 AddrSpaceManager::getStackSpace
@@ -2864,5 +3238,213 @@ mod tests {
         m.truncate_space("ram", 4).unwrap();
         assert!(ram.is_truncated());
         assert_eq!(ram.get_minimum_ptr_size(), 4);
+    }
+
+    // RUGRA-GLUE: test helper building the fixture-shaped registry (const=0,
+    // unique=2, ram=3, register=4, join=6, iop=7) like the locked oracle
+    // fixture space_printraw_special_1204.
+    fn special_printraw_registry() -> (SpaceRegistry, AddrSpace, AddrSpace) {
+        let mut m = SpaceRegistry::new();
+        m.insert_space(AddrSpace::new_constant_space(false)).unwrap();
+        m.insert_space(AddrSpace::new_unique_space(2, 0, false)).unwrap();
+        let ram = AddrSpace::new_space(
+            SpaceType::Processor, "ram", false, 8, 1, 3, space_flags::HASPHYSICAL, 0, 0,
+        );
+        m.insert_space(ram.clone()).unwrap();
+        let reg = AddrSpace::new_space(
+            SpaceType::Processor, "register", false, 8, 1, 4, space_flags::HASPHYSICAL, 0, 0,
+        );
+        m.insert_space(reg.clone()).unwrap();
+        let join = AddrSpace::new_join_space(6, false);
+        m.insert_space(join.clone()).unwrap();
+        m.insert_space(AddrSpace::new_iop_space(7, false)).unwrap();
+        (m, ram, reg)
+    }
+
+    // RUGRA-GLUE: panic payload extraction (panic!("literal") payloads are
+    // &str; panic!("{}", x) payloads are String).
+    fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = e.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            unreachable!("panic payload was not a string")
+        }
+    }
+
+    #[test]
+    fn test_join_print_raw_two_pieces() {
+        // Ghidra: space.cc:590 JoinSpace::printRaw — rugra regression only;
+        // the byte-exact oracle is tests/oracle/space_printraw_special_1204.
+        let (mut m, ram, reg) = special_printraw_registry();
+        let join = m.get_join_space().unwrap();
+        let pieces = [
+            SpaceVarnodeData { space: reg.clone(), offset: 0x18, size: 4 },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x10, size: 4 },
+        ];
+        let off = m.find_add_join(&pieces, 0);
+        assert_eq!(off, 0);
+        assert_eq!(join.print_raw(off), "{0x00000018,0x00000010}");
+        // Dedup: identical pieces return the same record/offset.
+        assert_eq!(m.find_add_join(&pieces, 0), 0);
+    }
+
+    #[test]
+    fn test_join_print_raw_three_pieces_distinct_spaces() {
+        let (mut m, ram, reg) = special_printraw_registry();
+        let join = m.get_join_space().unwrap();
+        let pieces = [
+            SpaceVarnodeData { space: ram.clone(), offset: 0x1000, size: 4 },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x20, size: 2 },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x22, size: 2 },
+        ];
+        let off = m.find_add_join(&pieces, 0);
+        assert_eq!(off, 0); // fresh registry: first allocation, 16-byte aligned
+        assert_eq!(join.print_raw(off), "{0x00001000,0x00000020,0x00000022}");
+    }
+
+    #[test]
+    fn test_join_print_raw_single_piece_float_extension() {
+        let (mut m, ram, reg) = special_printraw_registry();
+        let join = m.get_join_space().unwrap();
+        let pieces = [SpaceVarnodeData { space: reg.clone(), offset: 0x100, size: 8 }];
+        let off = m.find_add_join(&pieces, 4);
+        assert_eq!(off, 0);
+        // num==1: the loop's szsum is discarded and replaced by the unified
+        // (logical) size (space.cc:604-606).
+        assert_eq!(join.print_raw(off), "{0x00000100:4}");
+    }
+
+    #[test]
+    fn test_join_print_raw_wordsize2_piece_recursion() {
+        let (mut m, ram, reg) = special_printraw_registry();
+        let ws2 = AddrSpace::new_space(SpaceType::Processor, "ws2", false, 4, 2, 5, 0, 0, 0);
+        m.insert_space(ws2.clone()).unwrap();
+        let join = m.get_join_space().unwrap();
+        let pieces = [
+            SpaceVarnodeData { space: ws2.clone(), offset: 0x101, size: 2 },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x30, size: 2 },
+        ];
+        let off = m.find_add_join(&pieces, 0);
+        // The piece recursion goes through the piece space's own printRaw
+        // (scaling + "+cut" suffix): 0x101 -> 0x80+1, 8-hex-digit field for
+        // the 4-byte address size.
+        assert_eq!(join.print_raw(off), "{0x00000080+1,0x00000030}");
+    }
+
+    #[test]
+    fn test_join_print_raw_unlinked_panics() {
+        let (m, _ram, _reg) = special_printraw_registry();
+        let join = m.get_join_space().unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            join.print_raw(0xdeadb0)
+        }));
+        assert_eq!(panic_message(result.unwrap_err()), "Unlinked join address");
+    }
+
+    #[test]
+    fn test_join_space_unregistered_has_no_manager_backlink() {
+        // A join space never inserted into a registry cannot reach the
+        // join tables; Ghidra cannot express this (its constructor always
+        // takes the manager) — mapped to the same deterministic panic.
+        let join = AddrSpace::new_join_space(6, false);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            join.print_raw(0)
+        }));
+        assert_eq!(panic_message(result.unwrap_err()), "Unlinked join address");
+    }
+
+    #[test]
+    fn test_iop_print_raw_residual_falls_back_to_base_form() {
+        // SPACE-IOP-PRINTRAW-0001 residual: the specialization returns None
+        // for both forms (spaceless SeqNum.addr / BlockBasic::start_addr),
+        // so the dispatch falls back to the base AddrSpace::printRaw form.
+        let (m, _ram, _reg) = special_printraw_registry();
+        let iop = m.get_iop_space().unwrap();
+        assert_eq!(crate::op::IopSpace::print_raw(0x1234), None);
+        assert_eq!(iop.print_raw(0x1234), "0x00001234");
+    }
+
+    #[test]
+    fn test_join_record_ordering_operator() {
+        // Ghidra: translate.cc:172 JoinRecord::operator< — unified.size
+        // first, then pieces lexicographically (space index, offset, size
+        // DESCENDING), shorter-prefix-is-smaller.
+        let (m, ram, reg) = special_printraw_registry();
+        let piece = |sp: &AddrSpace, off: u64, sz: i32| SpaceVarnodeData {
+            space: sp.clone(),
+            offset: off,
+            size: sz,
+        };
+        let rec = |sz: i32, pieces: Vec<SpaceVarnodeData>| manager_join::JoinRecord {
+            pieces,
+            unified: SpaceVarnodeData { space: ram.clone(), offset: 0, size: sz },
+        };
+        // Size dominates.
+        assert!(rec(4, vec![piece(&reg, 0, 4)]).less_than(&rec(8, vec![piece(&reg, 0, 4)])));
+        // Same size: piece offset decides.
+        assert!(rec(4, vec![piece(&reg, 0x10, 4)]).less_than(&rec(4, vec![piece(&reg, 0x18, 4)])));
+        // Same space+offset: BIG sizes come first.
+        assert!(rec(4, vec![piece(&reg, 0x10, 8)]).less_than(&rec(4, vec![piece(&reg, 0x10, 4)])));
+        // Prefix is smaller.
+        assert!(rec(4, vec![piece(&reg, 0x10, 4)])
+            .less_than(&rec(4, vec![piece(&reg, 0x10, 4), piece(&ram, 0, 4)])));
+        // Equal records.
+        assert!(!rec(4, vec![piece(&reg, 0x10, 4)]).less_than(&rec(4, vec![piece(&reg, 0x10, 4)])));
+        let _ = m;
+    }
+
+    #[test]
+    fn test_find_add_join_validations() {
+        // Ghidra: translate.cc:675-691 validation strings.
+        let (mut m, _ram, reg) = special_printraw_registry();
+        let empty: [SpaceVarnodeData; 0] = [];
+        assert_eq!(
+            panic_message(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.find_add_join(&empty, 0)))
+                    .unwrap_err()
+            ),
+            "Cannot create a join without pieces"
+        );
+        assert_eq!(
+            panic_message(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    m.find_add_join(&[SpaceVarnodeData { space: reg.clone(), offset: 0, size: 4 }], 0)
+                }))
+                .unwrap_err()
+            ),
+            "Cannot create a single piece join without a logical size"
+        );
+        assert_eq!(
+            panic_message(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    m.find_add_join(
+                        &[
+                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 4 },
+                            SpaceVarnodeData { space: reg.clone(), offset: 4, size: 4 },
+                        ],
+                        8,
+                    )
+                }))
+                .unwrap_err()
+            ),
+            "Cannot specify logical size for multiple piece join"
+        );
+        assert_eq!(
+            panic_message(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    m.find_add_join(
+                        &[
+                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 0 },
+                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 0 },
+                        ],
+                        0,
+                    )
+                }))
+                .unwrap_err()
+            ),
+            "Cannot create a zero size join"
+        );
     }
 }

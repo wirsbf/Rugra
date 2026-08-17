@@ -107,8 +107,8 @@
   "comparand_sha256": {
     "cpp_fixture": "c1891cf540f49f9865b2ff9cf3335d9b21ba21212f37067994f24424c37236b7",
     "rust_fixture": "7ba0f7a7e8164d48c913362320314cb5b533e9f9e8fc7be22df1b57a830431b1",
-    "rugra_space_source": "686091a23552782a51884e8ed1bccb4bc7f483d36e94ccf97886995e57a19e15",
-    "api_document": "9616a5a35eba83a95c48eaaf2854933e0c78a807eeb2231f0b5eeee6ff32ff6d",
+    "rugra_space_source": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
+    "api_document": "d727d55667d7dcde51aa28482fcd911abaca428516748a010864d41125490acc",
     "runner": "df76be8f897deb3398804e47ae17950e05e6bd01f3005a0f9a65926572baabdd"
   },
   "expected_stdout_sha256": "6ee9ab9889c05a302b011f26bc78d192c22f21956cdfe2b4d4475de10c5993cf",

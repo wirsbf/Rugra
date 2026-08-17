@@ -361,6 +361,48 @@ runner：`tools/run_space_printraw_wordsize_oracle.sh`。
 - `heritage.rs:1918` deadcode 警告内联复刻 printRaw 未含 wordsize>1 缩放/`+cut`
   （wordsize>1 空间在当前闭包不可达，触发前需迁移到 `space.print_raw` 调用）。
 
+### 2026-08-17：SPACE-PRINTRAW-SPECIAL-0001（Ghidra space.cc:590-609 JoinSpace::printRaw + translate.cc:671-762 join 半部）
+
+上一节登记的 JoinSpace/IopSpace printRaw 残差收尾（SPACE-PRINTRAW 集成 c484715 的
+P3 残差）。registry 侧新增 Ghidra `AddrSpaceManager` join 半部的 1:1 对应物（模块
+`space::manager_join`）：
+
+- `manager_join::JoinRecord`（translate.hh:196）：pieces（`SpaceVarnodeData` 句柄，
+  对应 Ghidra `VarnodeData.space: AddrSpace*`）+ unified；`less_than`（translate.cc:172
+  `operator<`：先 unified.size，再 pieces 字典序——空间 index、offset、size 降序
+  （pcoderaw.hh:64 `VarnodeData::operator<` 的 BIG sizes come first），短前缀更小）。
+- `manager_join::JoinRecordTables`（translate.hh:233-235）：`join_allocate` +
+  `split_set`（`operator<` 排序的去重面）+ `split_list`（按 unified.offset 升序的
+  地址索引面）；`find_add_join`（translate.cc:671-715：四条逐字 LowlevelError 校验、
+  逻辑尺寸/尺寸和、split_set 去重、16 字节对齐 roundsize 分配）与 `find_join`
+  （translate.cc:746-762：split_list 二分，未命中 panic `"Unlinked join address"`）。
+- `AddrSpaceInner.manager_join_tables`（space.hh:118 `AddrSpace::manage` 的 join 半）：
+  `insert_space` 注册 Join 空间时接线（Rugra 构造器不收 manager，insertSpace 即关联
+  点；校验前接线，与 Ghidra 构造即持有 manager 的可观察序一致）。`SpaceRegistry`
+  持有共享表并提供 `find_add_join`/`find_join` 桥（translate.hh:270/271）。
+- `AddrSpace::print_raw` 派发新增 `SpaceType::Join → print_raw_join`（space.cc:590）：
+  `getManager()->findJoin` 解析 offset 回 pieces，逐 piece 调其自身空间的 printRaw
+  （`vdat.space->printRaw(s,vdat.offset)`），逗号分隔花括号包裹；num==1（float
+  extension）时循环累加的 `szsum` 被 `rec->getUnified().size`（逻辑尺寸）覆盖后以
+  `:szsum` 追加（space.cc:604-606 的丢弃怪癖逐字保留）；未链接 offset 与未注册
+  join 空间均映射为同一确定性 panic（Ghidra 的 null-manager 状态不可构造）。
+- IopSpace 半侧（op.cc:41）：派发臂以残差注释形式在位（`SpaceType::Iop`），
+  但两种终态形式都因 legacy 无空间地址模型阻塞：`SeqNum.addr`（非分支 SeqNum
+  形式）与 `BlockBasic::start_addr`（block.rs，flow.rs:1918 赋标量形态）均是无
+  空间句柄的 `Address(u64)`，`pc.printRaw` 的宽度/wordsize 缩放与
+  `getShortcut()` 均不可导出。登记残差 `SPACE-IOP-PRINTRAW-0001`（阻塞链
+  ADDRESS-0001；`src/address.rs` 现由 CSPEC-RANGEPROPS-0001 租约中），落地前
+  派发臂内联回落 base printRaw 形式，且不引用 op.rs 侧未来落位函数
+  （`op::IopSpace::print_raw`，同为残差 stub），保持 space.rs 独立编译、不破坏
+  按旧 base 钉住仅 overlay space.rs 的既有 runner。
+
+Oracle 证据：`tests/oracle/space_printraw_special_1204.{cc,rs}`（锁定 12.0.4，
+3 case 11 行逐字节 MATCH：2-piece/3-piece/1-piece float-extension pieces 形式、
+wordsize-2 piece 递归（缩放 + `+cut` 出现在花括号内）、findAddJoin 去重与
+16 字节对齐分配序列 0x0/0x10/0x20/0x30/0x40、未链接地址 `Unlinked join address`
+异常）。runner：`tools/run_space_printraw_special_oracle.sh`（base 102c476 +
+space.rs/op.rs overlay）。IopSpace 形式按上述残差不在本 fixture 内。
+
 ### 2026-08-15：EXTERNAL-STUB-SUPPORT-0001 构造期 decode 注册（Ghidra translate.cc:254/281 + space.cc:87/304/339）
 
 `AddrSpace` 句柄新增 decode 期构造与属性解码面，`SpaceRegistry` 新增（impl 于

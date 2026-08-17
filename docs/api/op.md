@@ -321,6 +321,30 @@ Ghidra: `op.cc:276 PcodeOp::setOpcode`。清空 14 位 opcode-衍生标志（含
 - 用于支持 IR / op 级建模
 - 不直接面向最终 C 代码使用者
 
+### 2026-08-17：SPACE-IOP-PRINTRAW-0001（Ghidra op.cc:41-59 IopSpace::printRaw）
+
+`IopSpace` 新增 `print_raw(offset) -> Option<String>`（op.cc:41 的 Rust 落位，
+Ghidra 虚派发对应物；`space::AddrSpace::print_raw` 的 `SpaceType::Iop` 分支为同
+残差登记的内联回落，解阻塞后同 wave 接上本函数）。Ghidra 语义：offset 即
+`(PcodeOp *)(uintp)offset`（op.cc:46，`Funcdata::newVarnodeIop` 的同一编码，
+Rugra 侧为 `Arc::as_ptr` 数据指针）；非分支 op 打印其 `SeqNum`（address.cc:32：
+`pc.printRaw` + `':'` + uniq/time，ostream 粘滞 hex 故 uniq 为无填充小写 hex）；
+分支 op 打印非落 fall-thru 目标块 `code_` + 目标块起始地址空间 shortcut + 起始
+地址 printRaw（父块 `sizeOut()==2` 时 `isFallthruTrue() ? getOut(0) : getOut(1)`，
+否则 `getOut(0)`）。
+
+配套新增 `PcodeOp::is_fallthru_true`（op.hh:193，`flags & fallthru_true`）。
+
+当前状态（登记残差 `SPACE-IOP-PRINTRAW-0001`，见 docs/TODO_BOARD.md）：两种终态
+渲染均被 legacy 无空间地址模型阻塞——`SeqNum.addr`（address.rs）与
+`BlockBasic::start_addr`（block.rs；flow.rs:1918 赋标量形态）均不携带空间句柄，
+`pc.printRaw` 的宽度/wordsize 缩放与 `getShortcut()` 不可从 op 导出；阻塞链
+ADDRESS-0001（`src/address.rs` 现由 CSPEC-RANGEPROPS-0001 租约中）。落地前
+`print_raw` 对两种形式返回 `None`，space.rs 派发臂内联回落 base
+`AddrSpace::print_raw`（与特化引入前的可观察行为一致，且 space.rs 保持独立编译、
+不依赖本函数，避免破坏按旧 base 钉住的 registry-overlay runner），iop 字节级形式
+不在 `tests/oracle/space_printraw_special_1204` fixture 覆盖内。
+
 ---
 
 ## 4. `PcodeOp`

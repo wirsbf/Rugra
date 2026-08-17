@@ -255,6 +255,37 @@ pub struct IopSpace;
 
 impl IopSpace {
     pub const NAME: &'static str = "iop";
+
+    // Ghidra: op.cc:41 IopSpace::printRaw
+    /// Print info about the op this address refers to, faithful to
+    /// `IopSpace::printRaw(ostream &s,uintb offset)` (op.cc:41-59): the
+    /// offset is reinterpreted as the `PcodeOp` it aliases
+    /// (`(PcodeOp *)(uintp)offset`, op.cc:46 — the encoding
+    /// `Funcdata::new_varnode_iop` produces); a non-branch op prints its
+    /// `SeqNum` (`address.cc:32 operator<<`: `pc.printRaw` then `':'` then
+    /// the uniq/time field in sticky-hex), and a branch op prints the
+    /// non-fallthru target block as `code_` + the block start address's
+    /// space shortcut + the block start address printRaw
+    /// (`op->isFallthruTrue() ? bs->getOut(0) : bs->getOut(1)` when the
+    /// parent block has two out edges, else `getOut(0)`).
+    ///
+    /// RESIDUAL `SPACE-IOP-PRINTRAW-0001` (see docs/TODO_BOARD.md): both
+    /// terminal renders are blocked by the spaceless legacy address model —
+    /// `SeqNum.addr` (non-branch form) and `BlockBasic::start_addr`
+    /// (`block.rs`, flow.rs:1918 assigns the scalar form) are legacy
+    /// `Address(u64)` with no space handle, so neither `pc.printRaw`'s
+    /// width/wordsize scaling nor `getShortcut()` can be derived. Both
+    /// unblock with the ADDRESS-0001 consumer migration (`src/address.rs`
+    /// is currently leased by CSPEC-RANGEPROPS-0001). Until then this
+    /// returns `None` for both forms; the
+    /// `crate::space::AddrSpace::print_raw` Iop dispatch arm documents the
+    /// same residual and falls back to the base form inline (kept decoupled
+    /// so space.rs compiles standalone under registry-overlay runners
+    /// pinned to older bases). When this lands, the dispatch arm starts
+    /// calling this function in the same wave.
+    pub fn print_raw(_offset: u64) -> Option<String> {
+        None
+    }
 }
 
 /// Represents a single P-code operation in the data flow graph
@@ -512,6 +543,13 @@ impl PcodeOp {
     // Ghidra: op.hh:185 PcodeOp::isBranch
     pub fn is_branch(&self) -> bool {
         (self.flags & pcodeop_flags::BRANCH) != 0
+    }
+
+    /// Does the fallthru edge happen on the TRUE condition? Faithful to
+    /// `PcodeOp::isFallthruTrue` (op.hh:193): `flags & fallthru_true`.
+    // Ghidra: op.hh:193 PcodeOp::isFallthruTrue
+    pub fn is_fallthru_true(&self) -> bool {
+        (self.flags & pcodeop_flags::FALLTHRU_TRUE) != 0
     }
 
     /// Is this op's output a calculated boolean value? Faithful to
