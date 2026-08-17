@@ -60,12 +60,51 @@ The Bison lexer states (pcodeparse.hh:33-45): `Start`, `Special2`, `Special3`,
 Tagged enum mirroring the `SleighSymbol` type switch in
 `PcodeSnippet::lex` (pcodeparse.y:730-758): `Space(AddressSpace)`,
 `UserOp(u32)`, `Varnode(VarnodeData)`, `Operand(String, i32)`,
-`JumpTarget(String)`, `Label(String, u32)`.
+`JumpTarget(JumpTargetKind)`, `Label(String, u32)`.
 
 The `UserOp` payload is the `UserOpSymbol::getIndex()` value, not the symbol
 name. Both statement and expression forms place that value in the 4-byte
 constant input 0 of `CPUI_CALLOTHER`, matching `createUserOpNoOut`
 (`pcodecompile.cc:529`).
+
+### `JumpTargetKind`
+The five JUMPSYM `SpecificSymbol` subclasses folded into one tag
+(slghsymbol.hh:359 `StartSymbol`, :376 `EndSymbol`, :393 `Next2Symbol`,
+:410 `FlowDestSymbol`, :422 `FlowRefSymbol`): `InstStart` (`inst_start`),
+`InstNext` (`inst_next`), `InstNext2` (`inst_next2`), `InstDest`
+(`inst_dest`), `InstRef` (`inst_ref`). The class identity decides the
+dynamic offset placeholder produced by `getVarnode()`
+(slghsymbol.cc:1090/1155/1220/1276/1308):
+
+- `get_varnode(self, const_space) -> VarnodeTpl` — `(spaceid const_space,
+  j_start|j_next|j_next2|j_flowdest|j_flowref, real 0)` (the `sz_zero` of
+  Ghidra's five overrides). The `jumpdest` grammar rule re-wraps the offset
+  with `j_curspace`/`j_curspace_size` (pcodeparse.y:195); the
+  `varnode`/`lhsvarnode` rules use it as-is (pcodeparse.y:202/212).
+
+`inst_dest`/`inst_ref` are seeded into every `PcodeSnippet::new()` local
+tree (pcodeparse.y:693-694); `inst_start`/`inst_next`/`inst_next2` live in
+every `.sla` language table (slgh_compile.cc:1986-1991 predefinedSymbols,
+kept by `SymbolTable::purge`) and reach the snippet compiler through the
+language lookup.
+
+### `ConstTpl` dynamic offset variants
+`ConstTpl` carries the `j_start`/`j_next`/`j_next2`/`j_flowref`/
+`j_flowdest` members of Ghidra's `const_type` (semantics.hh:36-38) as
+`JStart`/`JNext`/`JNext2`/`JFlowRef`/`JFlowDest`. `j_flowref_size`(10) /
+`j_flowdest_size`(12) are omitted: they have no snippet-compiler producer
+(they only arise decoding `.sla` constructor templates, semantics.cc:412/
+418).
+
+### `PredefinedJumpSymbols<L>` (Host-side wrapper)
+`SleighSymbolLookup` adapter layering the three predefined JUMPSYM
+language symbols (`PREDEFINED_JUMP_SYMBOLS`: inst_start/inst_next/
+inst_next2) over an inner lookup, standing in for the fact that a real
+`SleighBase` always carries them (`SleighCompile::predefinedSymbols`,
+slgh_compile.cc:1968-1996). The inner lookup keeps priority. Hosts that
+install this wrapper expose the full JUMPSYM surface to callfixup /
+jumpassist / executable-pcode snippet bodies exactly like the locked
+oracle (see `tests/oracle/jumpdest_instsym_1204.*`).
 
 `tools/run_userop_index_oracle.sh` compiles the locked Ghidra 12.0.4
 `SleighCompile`/`PcodeCompile` implementation and verifies the observable
@@ -203,3 +242,36 @@ owned by `MARSHAL-ID-0001`, `MARSHAL-PACKED-0001`, `SPACE-0001`, and
   encode 输出不一致）。
 对拍：16 callfixup 模板 XML（含 `temp:1 = 0;` COPY@unique 与
 `call [RBP];` CALLIND）逐字节 MATCH。
+
+# 2026-08-17：JUMPSYM 语言符号 + 动态 offset ConstTpl（CSPEC-JUMPDEST-INSTSYM-0001）
+
+- `SleightSymbolKind::JumpTarget(JumpTargetKind)` 类型化：五个 JUMPSYM
+  `SpecificSymbol` 子类（StartSymbol/EndSymbol/Next2Symbol/FlowDestSymbol/
+  FlowRefSymbol，slghsymbol.hh:359-434）的类身份决定 `getVarnode()` 产出的
+  动态 offset 占位符（此前 JumpTarget 只带名字、语义动作硬编码 offset 0）。
+- `ConstTpl` 新增 `JStart`/`JNext`/`JNext2`/`JFlowRef`/`JFlowDest`
+  （semantics.hh:36-38 const_type 2/3/4/9/11；运行期解析语义在
+  `ConstTpl::fix`，semantics.cc:122-139）。j_flowref_size/j_flowdest_size
+  仅由 .sla decode 产生（semantics.cc:412/418），snippet 编译器无产生点，
+  枚举省略并注释说明。
+- `specific_symbol_varnode`（varnode/lhsvarnode 规则）JumpTarget 分支改为
+  `(spaceid const, j_xxx, sz_zero)`（pcodeparse.y:202 `$$ = $1->getVarnode()`；
+  slghsymbol.cc:1276/1308）；此前错误地输出 `(j_curspace, real 0,
+  j_curspace_size)`（jumpdest 的形态）。
+- `parse_jumpdest` JumpSym 分支改为重包装 offset：`(j_curspace, sym 获取的
+  动态 offset, j_curspace_size)`（pcodeparse.y:195 逐字）；此前 offset 硬编码
+  `Real(0)`，`goto inst_next` 会丢掉 j_next 占位符。
+- Host 侧 `PredefinedJumpSymbols<L>` 组合器 + `PREDEFINED_JUMP_SYMBOLS`：
+  inst_start/inst_next/inst_next2 是每个 SLEIGH 语言必然序列化的预定义符号
+  （slgh_compile.cc:1986-1991；`SymbolTable::purge` default 臂放行），经
+  `sleigh->findSymbol` 命中并映射为 JUMPSYM（pcodeparse.cc:3223-3252）。
+  Rugra 无 SLEIGH 引擎，语言符号经 `SleighSymbolLookup` Host hook 注入，
+  组合器把该语言不变量分层到任意内层 lookup 之上（inner 优先）。
+- 新 fixture `tests/oracle/jumpdest_instsym_1204.{cc,rs}` + runner
+  `tools/run_jumpdest_instsym_oracle.sh`：裸 SLEIGH 引擎（x86-64.sla，即
+  parseInject 的 `const SleighBase*` 句柄）对拍 10 个 JUMPSYM snippet。
+  双侧 byte-identical MATCH：SYM 投影（inst_start=start_symbol(9)/
+  inst_next=end_symbol(10)/inst_next2=next2_symbol(11)；inst_dest/inst_ref/
+  epsilon 在语言表 ABSENT——前二者 snippet 本地注入、EpsilonSymbol 被
+  purge 删除）+ 全部 jumpdest/varnode 形态模板 XML + 两条 lexer 回落错误
+  消息。

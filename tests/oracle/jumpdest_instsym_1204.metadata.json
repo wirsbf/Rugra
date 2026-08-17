@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "fixture_id": "CSPEC-JUMPDEST-INSTSYM-0001",
+  "title": "JUMPSYM snippet-compiler parity (inst_start/inst_next/inst_next2 language symbols + snippet-local inst_dest/inst_ref)",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "entry": "Sleigh::initialize on x86-64.sla -> PcodeSnippet(slgh)->parseStream (the PcodeInjectLibrarySleigh::parseInject compile path, inject_sleigh.cc:387-416)"
+  },
+  "architecture": "x86:LE:64:default (SLEIGH x86-64)",
+  "compiler_spec": "not ingested (bare SLEIGH engine; callfixup/jumpassist pcode bodies are the payload class under test)",
+  "analysis_options": "bare Sleigh + ContextInternal + zero LoadImage; snippet tempbase 0 (PcodeSnippet default)",
+  "input_fingerprints": {
+    "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+  },
+  "comparand": {
+    "rugra_head_at_capture": "032419b (WIP working tree; re-pin to the integration commit hash when committed)",
+    "snapshot_model": "working-tree build (cargo build --release --lib) — no overlay archive; re-pin comparand file hashes at integration commit",
+    "cpp_fixture_sha256": "7bbeffb737e24901e30b4b5e2051ec595b451e674fcbab859e6416870d55bdc0",
+    "rust_fixture_sha256": "922e22b4f620d70f3fc5c886dd5d715eabe60c0e7521b47314455dfc36c17885",
+    "runner_sha256": "3c655627933f50d6b9b9ded45372e16e522fcb0a48c58ce8cdbb8ddaf10dfae9"
+  },
+  "coverage": {
+    "jumpsym_symbol_status": "MATCH",
+    "record_counts": {
+      "SCHEMA": 1,
+      "SYM": 6,
+      "SNIP": 10,
+      "DONE": 1
+    },
+    "observed_facts": {
+      "language_symbols": "findSymbol: inst_start=start_symbol(9), inst_next=end_symbol(10), inst_next2=next2_symbol(11); inst_dest/inst_ref/epsilon ABSENT from the language table (inst_dest/inst_ref are snippet-local per pcodeparse.y:693-694; EpsilonSymbol is dropped by SymbolTable::purge)",
+      "jumpdest_rule": "goto JUMPSYM -> (const_curspace, const_{flowdest,flowref,next,start,next2}, const_curspace_size) per pcodeparse.y:195",
+      "varnode_rule": "local x:8 = JUMPSYM -> COPY in (const_spaceid const, const_{flowref,flowdest,next}, 0x8) after propagateSize fills sz_zero from the 8-byte destination",
+      "lexer_fallback": "unknown name in jumpdest -> 'Unknown jump destination: <name>'; epsilon in varnode -> 'Unknown varnode parameter: epsilon'"
+    }
+  },
+  "residuals": [],
+  "locked_capture": {
+    "bytes": 2444,
+    "records": 18,
+    "stdout_sha256": "a74cdae24115b18e0372645100191a3a2cbf3c339d0cf0ba21713cbecfd55512"
+  }
+}

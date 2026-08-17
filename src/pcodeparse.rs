@@ -1188,8 +1188,11 @@ pub enum SleightSymbolKind {
     /// `operand_symbol` — a constructor operand. Maps to OPERANDSYM.
     Operand(String, i32),
     /// `start_symbol`/`end_symbol`/`next2_symbol`/`flowdest_symbol`/
-    /// `flowref_symbol` — all map to JUMPSYM.
-    JumpTarget(String),
+    /// `flowref_symbol` — all map to JUMPSYM. The payload records which of
+    /// the five `SpecificSymbol` subclasses the language symbol is, because
+    /// each produces a different dynamic-offset `ConstTpl` in
+    /// `getVarnode()` (slghsymbol.cc:1090/1155/1220/1276/1308).
+    JumpTarget(JumpTargetKind),
     /// `label_symbol` — a branch label. Maps to LABELSYM.
     Label(String, u32),
 }
@@ -1213,6 +1216,109 @@ pub trait SleighSymbolLookup: Send + Sync {
     // Ghidra: pcodeparse.cc:3223 SleighBase::findSymbol (via PcodeSnippet::lex)
     /// Resolve a SLEIGH language symbol by name, or None.
     fn find_symbol(&self, name: &str) -> Option<SleighSymbol>;
+}
+
+/// Which of the five JUMPSYM `SpecificSymbol` subclasses a jump-target
+/// symbol is. Ghidra models these as distinct classes
+/// (slghsymbol.hh:359 `StartSymbol`, :376 `EndSymbol`, :393 `Next2Symbol`,
+/// :410 `FlowDestSymbol`, :422 `FlowRefSymbol`); Rugra folds the class
+/// identity into this tag because the only snippet-compiler-visible
+/// behavior that differs between them is the dynamic offset produced by
+/// `getVarnode()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JumpTargetKind {
+    /// `StartSymbol` — `inst_start`, the address of the instruction being
+    /// injected (slghsymbol.hh:359; offset `j_start`).
+    InstStart,
+    /// `EndSymbol` — `inst_next`, the address of the following instruction
+    /// (slghsymbol.hh:376; offset `j_next`).
+    InstNext,
+    /// `Next2Symbol` — `inst_next2`, the address after the next instruction
+    /// (slghsymbol.hh:393; offset `j_next2`).
+    InstNext2,
+    /// `FlowDestSymbol` — `inst_dest`, the original destination of the
+    /// CALL being injected (slghsymbol.hh:410; offset `j_flowdest`).
+    InstDest,
+    /// `FlowRefSymbol` — `inst_ref`, the target of the reference on the
+    /// injected instruction (slghsymbol.hh:422; offset `j_flowref`).
+    InstRef,
+}
+
+impl JumpTargetKind {
+    // Ghidra: slghsymbol.cc:1090 StartSymbol::getVarnode (also 1155 EndSymbol,
+    // 1220 Next2Symbol, 1276 FlowDestSymbol, 1308 FlowRefSymbol)
+    /// Build the varnode template a JUMPSYM symbol contributes, faithful to
+    /// the five `getVarnode()` overrides: space is the constant space
+    /// (`ConstTpl spc(const_space)`), the offset is the class-specific
+    /// dynamic placeholder, and the size is `ConstTpl sz_zero` (the default
+    /// `ConstTpl()` is `real,0`). The `jumpdest` grammar rule re-wraps this
+    /// offset with `j_curspace`/`j_curspace_size` (pcodeparse.y:195); the
+    /// `varnode`/`lhsvarnode` rules use it as-is.
+    pub fn get_varnode(self, const_space: AddressSpace) -> VarnodeTpl {
+        let offset = match self {
+            JumpTargetKind::InstStart => ConstTpl::JStart,
+            JumpTargetKind::InstNext => ConstTpl::JNext,
+            JumpTargetKind::InstNext2 => ConstTpl::JNext2,
+            JumpTargetKind::InstDest => ConstTpl::JFlowDest,
+            JumpTargetKind::InstRef => ConstTpl::JFlowRef,
+        };
+        VarnodeTpl::new(ConstTpl::SpaceId(const_space), offset, ConstTpl::Real(0))
+    }
+}
+
+/// Language-level JUMPSYM symbols every SLEIGH language defines.
+/// Faithful to `SleighCompile::predefinedSymbols`
+/// (slgh_compile.cc:1968-1996), which declares `inst_start` (StartSymbol),
+/// `inst_next` (EndSymbol) and `inst_next2` (Next2Symbol) in the global
+/// scope of every language before compilation; `SymbolTable::purge`
+/// (slghsymbol.cc:248-255) lets them through the `default:` arm, so they
+/// are serialized into every `.sla` and `SleighBase::findSymbol` therefore
+/// always resolves these three names. (The `epsilon` EpsilonSymbol and the
+/// `instruction` SubtableSymbol predefined alongside them are NOT
+/// JUMPSYM: `PcodeSnippet::lex` maps them through the switch `default`
+/// arm back to STRING, i.e. they stay invisible to snippet compilation.)
+pub const PREDEFINED_JUMP_SYMBOLS: [(&str, JumpTargetKind); 3] = [
+    ("inst_start", JumpTargetKind::InstStart),
+    ("inst_next", JumpTargetKind::InstNext),
+    ("inst_next2", JumpTargetKind::InstNext2),
+];
+
+/// `SleighSymbolLookup` wrapper that layers the three predefined JUMPSYM
+/// language symbols over an inner lookup, standing in for the fact that a
+/// real `SleighBase` always carries them. Consulted by
+/// `PcodeSnippet::lex` via `sleigh->findSymbol`
+/// (pcodeparse.cc:3223-3224) after the local snippet tree misses; the
+/// inner lookup keeps priority so a (hypothetical) language-visible
+/// duplicate is never masked.
+pub struct PredefinedJumpSymbols<L: SleighSymbolLookup> {
+    inner: L,
+}
+
+impl<L: SleighSymbolLookup> PredefinedJumpSymbols<L> {
+    // RUGRA-GLUE: new (Ghidra installs the symbols at .sla build time via
+    // SleighCompile::predefinedSymbols; Rugra composes them over the host
+    // lookup because it links no SLEIGH engine.)
+    /// Wrap the given language lookup with the predefined JUMPSYM symbols.
+    pub fn new(inner: L) -> Self {
+        Self { inner }
+    }
+}
+
+impl<L: SleighSymbolLookup + Send + Sync> SleighSymbolLookup for PredefinedJumpSymbols<L> {
+    // Ghidra: slgh_compile.cc:1986-1991 predefinedSymbols + pcodeparse.cc:3223
+    // SleighBase::findSymbol (via PcodeSnippet::lex)
+    fn find_symbol(&self, name: &str) -> Option<SleighSymbol> {
+        if let Some(sym) = self.inner.find_symbol(name) {
+            return Some(sym);
+        }
+        PREDEFINED_JUMP_SYMBOLS
+            .iter()
+            .find(|(sym_name, _)| *sym_name == name)
+            .map(|(sym_name, kind)| SleighSymbol {
+                name: sym_name.to_string(),
+                kind: SleightSymbolKind::JumpTarget(*kind),
+            })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1615,13 +1721,16 @@ impl PcodeSnippet {
             });
         }
         // pcodeparse.y:693-694: add inst_dest / inst_ref flow symbols.
+        // FlowDestSymbol("inst_dest") / FlowRefSymbol("inst_ref"), both
+        // backed by the constant space; the class identity drives the
+        // getVarnode offset placeholder (j_flowdest / j_flowref).
         s.add_symbol(SleighSymbol {
             name: "inst_dest".to_string(),
-            kind: SleightSymbolKind::JumpTarget("inst_dest".to_string()),
+            kind: SleightSymbolKind::JumpTarget(JumpTargetKind::InstDest),
         });
         s.add_symbol(SleighSymbol {
             name: "inst_ref".to_string(),
-            kind: SleightSymbolKind::JumpTarget("inst_ref".to_string()),
+            kind: SleightSymbolKind::JumpTarget(JumpTargetKind::InstRef),
         });
         s
     }
@@ -1833,10 +1942,16 @@ fn space_symbol_name(sp: &AddressSpace) -> String {
 ///   - a reference to an address space (by index or by the special
 ///     `j_curspace`/`j_curspace_size` markers used by the `jumpdest` rule),
 ///   - a handle into a constructor operand,
-///   - a relative jump offset (`j_relative`).
+///   - a relative jump offset (`j_relative`),
+///   - a dynamic per-instruction offset placeholder
+///     (`j_start`/`j_next`/`j_next2`/`j_flowref`/`j_flowdest`, semantics.hh:36).
 ///
 /// Rugra collapses Ghidra's `const_type` enum + value fields into a tagged
-/// enum so the kinds are exhaustive at the type level.
+/// enum so the kinds are exhaustive at the type level. The
+/// `j_flowref_size`/`j_flowdest_size` members of Ghidra's enum
+/// (semantics.hh:36-38, values 10/12) have no snippet-compiler producer —
+/// they only arise when decoding `.sla` constructor templates
+/// (semantics.cc:412/418) — so the snippet-local enum omits them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstTpl {
     /// `ConstTpl::real` — a concrete integer (pcodecompile.cc uses this for
@@ -1853,6 +1968,32 @@ pub enum ConstTpl {
     /// `ConstTpl::j_relative` — a relative label index (jumpdest label form,
     /// pcodeparse.y:199).
     JRelative(u32),
+    /// `ConstTpl::j_start` (semantics.hh:36, `const_type` value 2) — offset
+    /// placeholder resolved at emit time to the start address of the
+    /// instruction being injected (`ConstTpl::fix`, semantics.cc:122:
+    /// `walker.getAddr().getOffset()`). Produced by
+    /// `StartSymbol::getVarnode` (slghsymbol.cc:1090-1097).
+    JStart,
+    /// `ConstTpl::j_next` (semantics.hh:36, value 3) — resolved at emit
+    /// time to the address of the following instruction (semantics.cc:124:
+    /// `walker.getNaddr().getOffset()`). Produced by
+    /// `EndSymbol::getVarnode` (slghsymbol.cc:1155-1162).
+    JNext,
+    /// `ConstTpl::j_next2` (semantics.hh:36, value 4) — resolved at emit
+    /// time to the address after the next instruction (semantics.cc:126:
+    /// `walker.getN2addr().getOffset()`). Produced by
+    /// `Next2Symbol::getVarnode` (slghsymbol.cc:1220-1227).
+    JNext2,
+    /// `ConstTpl::j_flowref` (semantics.hh:36, value 9) — resolved at emit
+    /// time to the target of the reference on the injected instruction
+    /// (semantics.cc:128: `walker.getRefAddr().getOffset()`). Produced by
+    /// `FlowRefSymbol::getVarnode` (slghsymbol.cc:1308-1315).
+    JFlowRef,
+    /// `ConstTpl::j_flowdest` (semantics.hh:36, value 11) — resolved at
+    /// emit time to the original destination of the CALL being injected
+    /// (semantics.cc:132: `walker.getDestAddr().getOffset()`). Produced by
+    /// `FlowDestSymbol::getVarnode` (slghsymbol.cc:1276-1283).
+    JFlowDest,
     /// `ConstTpl::handle` — a reference into a constructor operand handle.
     /// Faithful to `ConstTpl(handle, ht, select)` (semantics.cc:425-432):
     /// `select` picks the handle field (`v_space`/`v_offset`/`v_size`/
@@ -3657,12 +3798,25 @@ impl PcodeSnippet {
             .ok_or_else(|| "Unexpected end of input".to_string())?;
         match cur.kind {
             PcodeTokenKind::JumpSym => {
+                // pcodeparse.y:195 `jumpdest: JUMPSYM { VarnodeTpl *sym =
+                // $1->getVarnode(); $$ = new VarnodeTpl(
+                // ConstTpl(ConstTpl::j_curspace), sym->getOffset(),
+                // ConstTpl(ConstTpl::j_curspace_size)); delete sym; }` —
+                // the JUMPSYM varnode is built for its offset placeholder
+                // only, then re-wrapped with the current-space markers.
+                let kind = self
+                    .symbols
+                    .get(&cur.ident)
+                    .and_then(|sym| match sym.kind {
+                        SleightSymbolKind::JumpTarget(kind) => Some(kind),
+                        _ => None,
+                    })
+                    .ok_or_else(|| format!("Unresolved jump symbol: {}", cur.ident))?;
                 self.advance();
-                // JUMPSYM -> getVarnode(): (j_curspace, sym.offset, j_curspace_size).
-                // Rugra's JumpTarget carries only a name, so we use offset 0.
+                let sym = kind.get_varnode(self.constant_space);
                 Ok(VarnodeTpl::new(
                     ConstTpl::JCurSpace,
-                    ConstTpl::Real(0),
+                    sym.get_offset(),
                     ConstTpl::JCurSpaceSize,
                 ))
             }
@@ -3905,11 +4059,14 @@ impl PcodeSnippet {
                     plus: 0,
                 },
             )),
-            SleightSymbolKind::JumpTarget(_) => Ok(VarnodeTpl::new(
-                ConstTpl::JCurSpace,
-                ConstTpl::Real(0),
-                ConstTpl::JCurSpaceSize,
-            )),
+            // pcodeparse.y:202/212/220 `varnode|lhsvarnode|specificsymbol:
+            // JUMPSYM { $$ = $1->getVarnode(); }` — the JUMPSYM
+            // getVarnode is (const_space, class-specific dynamic offset,
+            // sz_zero), NOT the jumpdest re-wrap (slghsymbol.cc:1090/1155/
+            // 1220/1276/1308).
+            SleightSymbolKind::JumpTarget(kind) => {
+                Ok(kind.get_varnode(self.constant_space))
+            }
             other => Err(format!("Symbol {} is not a specific symbol: {:?}", name, other)),
         }
     }
@@ -4927,6 +5084,145 @@ mod tests {
             .expect("INT_ADD op present");
         assert!(add_op.out.is_some(), "INT_ADD has output");
         assert_eq!(add_op.num_input(), 2);
+    }
+
+    #[test]
+    fn test_parse_goto_jumpsym_dynamic_offsets() {
+        // pcodeparse.y:195 `jumpdest: JUMPSYM` — the branch target keeps the
+        // class-specific dynamic offset placeholder (via getVarnode) but
+        // re-wraps space/size with j_curspace / j_curspace_size. The
+        // j_curspace_size size is not `real`, so propagateSize never
+        // touches a BRANCH input built this way.
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("goto inst_dest;"),
+            "{}",
+            snip.get_error_message()
+        );
+        let ct = snip.release_result().expect("result set");
+        assert_eq!(ct.get_opvec().len(), 1);
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_BRANCH);
+        let target = &ct.get_opvec()[0].inputs[0];
+        assert_eq!(target.space, ConstTpl::JCurSpace);
+        assert_eq!(target.offset, ConstTpl::JFlowDest);
+        assert_eq!(target.size, ConstTpl::JCurSpaceSize);
+
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("goto inst_ref;"),
+            "{}",
+            snip.get_error_message()
+        );
+        let ct = snip.release_result().expect("result set");
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_BRANCH);
+        let target = &ct.get_opvec()[0].inputs[0];
+        assert_eq!(target.space, ConstTpl::JCurSpace);
+        assert_eq!(target.offset, ConstTpl::JFlowRef);
+        assert_eq!(target.size, ConstTpl::JCurSpaceSize);
+    }
+
+    #[test]
+    fn test_parse_goto_jumpsym_via_predefined_host() {
+        // inst_next is NOT in the local snippet tree (pcodeparse.y:693-694
+        // only adds inst_dest/inst_ref); it resolves through the SLEIGH
+        // language lookup — every .sla carries the predefined
+        // StartSymbol/EndSymbol/Next2Symbol (slgh_compile.cc:1986-1991).
+        // The PredefinedJumpSymbols wrapper models that language invariant.
+        struct EmptyHost;
+        impl SleighSymbolLookup for EmptyHost {
+            fn find_symbol(&self, _name: &str) -> Option<SleighSymbol> {
+                None
+            }
+        }
+        let mut snip = PcodeSnippet::new();
+        snip.set_sleigh_lookup(std::sync::Arc::new(PredefinedJumpSymbols::new(EmptyHost)));
+        assert!(
+            snip.parse_stream("goto inst_next;"),
+            "{}",
+            snip.get_error_message()
+        );
+        let ct = snip.release_result().expect("result set");
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_BRANCH);
+        let target = &ct.get_opvec()[0].inputs[0];
+        assert_eq!(target.space, ConstTpl::JCurSpace);
+        assert_eq!(target.offset, ConstTpl::JNext);
+        assert_eq!(target.size, ConstTpl::JCurSpaceSize);
+
+        // Without the wrapper the same snippet fails exactly like Ghidra
+        // with no SLEIGH engine: inst_next is an unresolved identifier and
+        // the jumpdest rule reports the unknown destination.
+        let mut snip = PcodeSnippet::new();
+        assert!(!snip.parse_stream("goto inst_next;"));
+    }
+
+    #[test]
+    fn test_jumpsym_varnode_rule_uses_const_space_form() {
+        // pcodeparse.y:202 `varnode: specificsymbol { $$ = $1->getVarnode(); }`
+        // — in expression position the JUMPSYM varnode keeps the constant
+        // space and the sz_zero size from getVarnode
+        // (slghsymbol.cc:1276-1283/1308-1315); propagateSize then fills the
+        // zero size from the 8-byte destination of the COPY.
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local x:8 = inst_ref;"),
+            "{}",
+            snip.get_error_message()
+        );
+        let ct = snip.release_result().expect("result set");
+        let copy: Vec<&OpTpl> = ct
+            .get_opvec()
+            .iter()
+            .filter(|op| op.opc == OpCode::CPUI_COPY)
+            .collect();
+        assert_eq!(copy.len(), 1);
+        let input = &copy[0].inputs[0];
+        assert_eq!(input.space, ConstTpl::SpaceId(AddressSpace::Const));
+        assert_eq!(input.offset, ConstTpl::JFlowRef);
+        assert_eq!(input.size, ConstTpl::Real(8));
+    }
+
+    #[test]
+    fn test_predefined_jump_symbols_wrapper() {
+        // The three predefined JUMPSYM names resolve through the wrapper
+        // (slgh_compile.cc:1986-1991); the inner lookup keeps priority.
+        struct InnerHost;
+        impl SleighSymbolLookup for InnerHost {
+            fn find_symbol(&self, name: &str) -> Option<SleighSymbol> {
+                if name == "RAX" {
+                    Some(SleighSymbol {
+                        name: "RAX".to_string(),
+                        kind: SleightSymbolKind::Varnode(VarnodeData {
+                            space: AddressSpace::Register,
+                            offset: 0,
+                            size: 8,
+                        }),
+                    })
+                } else {
+                    None
+                }
+            }
+        }
+        let host = PredefinedJumpSymbols::new(InnerHost);
+        // Inner symbols pass through unchanged.
+        assert!(matches!(
+            host.find_symbol("RAX").map(|s| s.kind),
+            Some(SleightSymbolKind::Varnode(_))
+        ));
+        // Predefined JUMPSYM symbols carry their class identity.
+        assert!(matches!(
+            host.find_symbol("inst_start").map(|s| s.kind),
+            Some(SleightSymbolKind::JumpTarget(JumpTargetKind::InstStart))
+        ));
+        assert!(matches!(
+            host.find_symbol("inst_next").map(|s| s.kind),
+            Some(SleightSymbolKind::JumpTarget(JumpTargetKind::InstNext))
+        ));
+        assert!(matches!(
+            host.find_symbol("inst_next2").map(|s| s.kind),
+            Some(SleightSymbolKind::JumpTarget(JumpTargetKind::InstNext2))
+        ));
+        // Unknown names stay unresolved.
+        assert!(host.find_symbol("no_such_symbol").is_none());
     }
 
     #[test]
