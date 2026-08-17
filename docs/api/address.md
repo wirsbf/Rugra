@@ -12,6 +12,20 @@
 > 2026-08-12 ANN-N 仅补 provenance：标量 `new` 是缺少 AddrSpace 参数的
 > Rust 兼容层胶水；`as_u64` 对应锁定 oracle 的 inline `Address::getOffset`。
 > 本次未改变行为或模块状态。
+>
+> 2026-08-17 ADDRESS-0001 阶段一：`Address` 增 `space: Option<SpaceTag>`
+> 兼容字段（intern 线程域 tag → 强句柄表），保持 `Copy` 因此 55 个消费
+> 文件零改动。比较链按 address.hh:356/375 重写：`Eq`=(tag,offset)、
+> `Ord`=None 先行（≡null-base，address.hh:377）→space index（:389）→
+> offset（:391）→tag tiebreak；`Hash` 随 `Eq`。None↔None 保持 offset-only
+> （现存铸造点全部产出 None，行为零变化，E2E stdout 逐字节相同）；`Some`
+> 时 `offset/next/prev` 经 `wrapOffset`（address.hh:423/433）、`overlap`
+> 启用同空间+constant 排除+wrap（address.cc:153-165）。新桥接
+> `with_space/get_space/from_space_address/to_space_address` 与
+> `is_invalid`（address.hh:285 null-base 镜像）。分阶段路线与消费面清单见
+> `docs/alignment_docs/ADDRESS_SPACE_PHASES.md`。模块保持 L2
+> （consumer 迁移未做，双侧 fixture `address_space_phase1_1204` 覆盖
+> 比较语义投影：None 兼容回退/空间序/tag 身份/wrap+overlap）。
 
 ## 模块说明 (Module Doc)
 
@@ -30,18 +44,48 @@ types used throughout the decompiler.
 
 ## 导出的公共 API (Public API)
 
-### `pub struct Address(u64)`
+### `pub struct Address { offset: u64, space: Option<SpaceTag> }`
 
-Memory address type
+Memory address type（ADDRESS-0001 阶段一形态）
 
-Represents a virtual memory address in the target binary.
-Internally stored as u64 to support 64-bit architectures.
+Represents a virtual memory address in the target binary: an offset plus an
+optional interned address-space tag mirroring Ghidra's `AddrSpace *base`
+(address.hh:61). The transitional `None` form is the legacy spaceless
+address; it orders before every tagged space (Ghidra null-`base` rule,
+address.hh:377) and equals only another `None` with the same offset.
 
 Corresponds to Ghidra's `Address` class in `address.hh`
 
+### `pub struct SpaceTag(NonZeroU32)`
+
+Copyable interned identity of an `AddrSpace` handle（阶段一过渡 adapter；
+Ghidra 存裸指针）。tag 相等 ⟺ 同一 `AddrSpace` 分配（指针身份）。表为
+thread-local（`AddrSpace` 是 `Rc<RefCell>` 单线程句柄，SPACE-0001 残差）。
+
 ### `pub const fn new(addr: u64) -> Self`
 
-Create a new address
+Create a new address（legacy spaceless form, `space = None`）
+
+### `pub fn with_space(spc: &AddrSpace, off: u64) -> Self`
+
+Create a space-carrying address（对应 address.hh:270 inline
+`Address(AddrSpace *id,uintb off)`；space 经 intern 表换取 Copy tag）
+
+### `pub fn get_space(&self) -> Option<AddrSpace>`
+
+The address space handle, or `None` for a legacy spaceless address
+（对应 address.hh:323 `getSpace`，NULL-if-invalid）
+
+### `pub fn from_space_address(sa: &SpaceAddress) -> Self`
+
+Bridge from the space-carrying `SpaceAddress`：real space→tagged，null
+base→legacy `None`（保持 offset）。`m_maximal` 哨兵 panic——legacy 无极值
+形态，静默映射会将其排序从最后翻到最前。
+
+### `pub fn to_space_address(&self) -> SpaceAddress`
+
+Bridge to `SpaceAddress`：tagged→`SpaceAddress::new`，`None`→
+`from_offset`（null base/invalid，同 offset）。
 
 ### `pub const fn as_u64(&self) -> u64`
 
@@ -49,7 +93,21 @@ Get the raw address value
 
 ### `pub fn offset(&self, offset: i64) -> Self`
 
-Add an offset to the address
+Add an offset to the address（address.hh:423 `operator+`：tagged 经空间
+`wrapOffset` 环绕；legacy plain-wrap 保持阶段一前行为）
+
+### `pub fn overlap(&self, skip: i64, op: Address, size: i32) -> i32`
+
+If `self + skip` falls in `[op, op+size)` return the relative offset else
+-1（address.cc:153-165：双侧 tagged 时同空间必需、constant 排除、wrap
+距离；legacy 参与者保持 offset-only 行为）
+
+### `pub fn is_invalid(&self) -> bool`
+
+Is this a Ghidra-invalid (null-`base`) address（address.hh:285）。For the
+legacy type that is exactly the spaceless form: every pre-existing
+construction site mints Ghidra-invalid addresses; `to_space_address` maps
+`None` to the null-base `SpaceAddress::from_offset`.
 
 ### `pub fn is_null(&self) -> bool`
 

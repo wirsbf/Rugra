@@ -15,105 +15,347 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroU32;
 
-/// Memory address type
+/// Memory address type (legacy offset carrier with an optional space tag)
 ///
-/// Represents a virtual memory address in the target binary.
-/// Internally stored as u64 to support 64-bit architectures.
+/// Represents a virtual memory address in the target binary: an offset plus,
+/// as of ADDRESS-0001 phase 1, an optional interned address-space tag that
+/// mirrors Ghidra's `AddrSpace *base` slot (address.hh:61).
 ///
-/// Corresponds to Ghidra's `Address` class in `address.hh`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Address(u64);
+/// Corresponds to Ghidra's `Address` class in `address.hh`. The transitional
+/// `None` space is the legacy spaceless form every pre-existing construction
+/// site produces: `None`-to-`None` comparisons stay offset-only, so those
+/// call sites behave exactly as before. `None` follows Ghidra's null-`base`
+/// rules where the two models meet: it sorts before every real space
+/// (address.hh:377) and never equals a space-carrying address
+/// (address.hh:356 `base==op2.base` fails). It dies in phase 3 when the
+/// space-carrying `SpaceAddress` and this type merge.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Address {
+    /// Offset in bytes (address.hh:62 `offset`).
+    offset: u64,
+    /// Interned space tag for the `AddrSpace *base` slot (address.hh:61).
+    /// `None` = legacy spaceless address (Ghidra's null `base`).
+    space: Option<SpaceTag>,
+}
+
+// RUGRA-GLUE: SpaceTag (ADDRESS-0001 phase-1 transitional adapter; Ghidra
+// stores a raw `AddrSpace *base` which cannot keep the legacy `Address`
+// `Copy`. The tag is a copyable intern-table slot; the table keeps a strong
+// handle so the space's allocation — and therefore its `identity_ptr` — can
+// never be reused by a different space while the tag exists.)
+/// Copyable interned identity of an [`AddrSpace`] registry handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpaceTag(NonZeroU32);
+
+// RUGRA-GLUE: SPACE_TAG_TABLE (Ghidra's `base` is an architecture-owned
+// pointer that needs no side table; Rust cannot store a pointer and stay
+// `Copy`, so the tag resolves through this address.rs-owned table. The
+// table is thread-local because the `AddrSpace` handle is an
+// `Rc<RefCell<..>>` single-thread handle — SPACE-0001's documented
+// residual — so tags, like the handles they came from, are thread-scoped:
+// an `Address` carrying a tag must be compared, wrapped or printed on the
+// thread whose spaces minted it. Phase-2 domain migrations inherit the
+// existing one-Architecture-per-worker thread discipline.)
+thread_local! {
+    /// Slot + 1 = tag value; slot holds the strong space handle.
+    static SPACE_TAG_TABLE: std::cell::RefCell<Vec<AddrSpace>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+// RUGRA-GLUE: intern_space (no Ghidra counterpart; ADDRESS-0001 bridge)
+/// Return the (stable, thread-scoped) tag for a space handle, interning it
+/// on first sight. Two tags are equal iff they came from the same
+/// `AddrSpace` allocation (Ghidra's pointer identity). The table holds a
+/// strong handle so the space's allocation — and therefore its
+/// `identity_ptr` — can never be reused by a different space while the
+/// tag exists.
+fn intern_space(spc: &AddrSpace) -> SpaceTag {
+    let identity = spc.identity_ptr();
+    SPACE_TAG_TABLE.with(|table| {
+        let mut table = table.borrow_mut();
+        for (slot, existing) in table.iter().enumerate() {
+            if existing.identity_ptr() == identity {
+                return SpaceTag(NonZeroU32::new(slot as u32 + 1).unwrap());
+            }
+        }
+        table.push(spc.clone());
+        SpaceTag(NonZeroU32::new(table.len() as u32).unwrap())
+    })
+}
+
+// RUGRA-GLUE: resolve_space_tag (no Ghidra counterpart; ADDRESS-0001 bridge)
+/// Resolve a tag back to its space handle. Panics for tags not issued on
+/// this thread (see `SPACE_TAG_TABLE`'s thread-scope contract).
+fn resolve_space_tag(tag: SpaceTag) -> AddrSpace {
+    SPACE_TAG_TABLE.with(|table| {
+        table
+            .borrow()
+            .get(tag.0.get() as usize - 1)
+            .cloned()
+            .expect("SpaceTag was not issued by intern_space on this thread")
+    })
+}
 
 impl Address {
     /// Create a new address
-    // RUGRA-GLUE: Scalar-address constructor; Ghidra also requires an AddrSpace, which this representation omits.
+    // RUGRA-GLUE: Scalar-address constructor; Ghidra also requires an AddrSpace, which this form omits (None = legacy spaceless).
     pub const fn new(addr: u64) -> Self {
-        Address(addr)
+        Address {
+            offset: addr,
+            space: None,
+        }
+    }
+
+    // RUGRA-GLUE: with_space (ADDRESS-0001 phase-1 bridge; the Ghidra form is
+    // the inline `Address(AddrSpace *id,uintb off)` at address.hh:270.)
+    /// Create an address carrying a space handle, like Ghidra's basic
+    /// `Address(AddrSpace*, uintb)` constructor. The space is interned into
+    /// a copyable tag so `Address` stays `Copy`.
+    pub fn with_space(spc: &AddrSpace, off: u64) -> Self {
+        Address {
+            offset: off,
+            space: Some(intern_space(spc)),
+        }
+    }
+
+    // RUGRA-GLUE: get_space (Ghidra's address.hh:323 returns the raw `base`
+    // pointer, NULL if invalid; the tag table resolution is the Rust form.)
+    /// The address space handle, or `None` for a legacy spaceless address
+    /// (Ghidra's null `base`).
+    pub fn get_space(&self) -> Option<AddrSpace> {
+        self.space.map(resolve_space_tag)
+    }
+
+    // RUGRA-GLUE: from_space_address (ADDRESS-0001 phase-1 bridge between the
+    // space-carrying `SpaceAddress` and this transitional type.)
+    /// Cross the bridge from [`SpaceAddress`]: a real space becomes a tagged
+    /// address, a null base becomes the legacy spaceless form. The
+    /// `m_maximal` sentinel panics: the legacy type has no extremal form, and
+    /// mapping it to `None` would flip its sort position from last to first.
+    pub fn from_space_address(sa: &SpaceAddress) -> Self {
+        match &sa.base {
+            SpaceBase::Space(spc) => Address::with_space(spc, sa.offset),
+            SpaceBase::Null => Address::new(sa.offset),
+            SpaceBase::Maximal => panic!(
+                "m_maximal sentinel cannot cross the legacy Address bridge (ADDRESS-0001)"
+            ),
+        }
+    }
+
+    // RUGRA-GLUE: to_space_address (ADDRESS-0001 phase-1 bridge; `None`
+    // maps to `SpaceAddress::from_offset`'s null-base invalid form.)
+    /// Cross the bridge to [`SpaceAddress`]: a tagged space carries over,
+    /// `None` becomes the null-base (invalid) address with the same offset.
+    pub fn to_space_address(&self) -> SpaceAddress {
+        match self.space {
+            Some(tag) => SpaceAddress::new(resolve_space_tag(tag), self.offset),
+            None => SpaceAddress::from_offset(self.offset),
+        }
     }
 
     /// Get the raw address value
     // Ghidra: address.hh:329 Address::getOffset
     pub const fn as_u64(&self) -> u64 {
-        self.0
+        self.offset
     }
 
-    // Ghidra: address.cc:91 Address::offset
-    /// Add an offset to the address
+    // Ghidra: address.hh:423 Address::operator+(int8 off)
+    /// Add an offset to the address. A tagged space wraps through the
+    /// space's `wrapOffset` (address.hh:424); a legacy spaceless address
+    /// plain-wraps (pre-phase-1 behavior).
     pub fn offset(&self, offset: i64) -> Self {
-        Address((self.0 as i64 + offset) as u64)
+        let raw = self.offset.wrapping_add(offset as u64);
+        Address {
+            offset: match self.space.map(resolve_space_tag) {
+                Some(spc) => spc.wrap_offset(raw),
+                None => raw,
+            },
+            space: self.space,
+        }
     }
 
     // Ghidra: address.cc:153 Address::overlap
     /// If `self + skip` falls in the range `[op, op+size)`, return the
     /// offset of `self+skip` relative to `op`. Otherwise return -1.
-    /// Faithful to `Address::overlap` (address.cc:153-165).
-    /// Rugra's single-space model skips the `base != op.base` check.
+    /// Faithful to `Address::overlap` (address.cc:153-165) when both
+    /// addresses carry spaces: same base pointer required, constants never
+    /// overlap, distance wraps through the space. Legacy spaceless
+    /// participants keep the pre-phase-1 offset-only behavior.
     pub fn overlap(&self, skip: i64, op: Address, size: i32) -> i32 {
-        let dist = self.0.wrapping_add(skip as u64).wrapping_sub(op.0);
-        if dist >= size as u64 {
-            return -1;
+        match (self.space, op.space) {
+            (Some(a), Some(b)) => {
+                if a != b {
+                    return -1; // Must be in same address space to overlap
+                }
+                let spc = resolve_space_tag(a);
+                if spc.get_type() == SpaceType::Constant {
+                    return -1; // Must not be constants
+                }
+                let dist = spc.wrap_offset(
+                    self.offset
+                        .wrapping_add(skip as u64)
+                        .wrapping_sub(op.offset),
+                );
+                if dist >= size as u64 {
+                    return -1; // but must fall before op+size
+                }
+                dist as i32
+            }
+            _ => {
+                let dist = self
+                    .offset
+                    .wrapping_add(skip as u64)
+                    .wrapping_sub(op.offset);
+                if dist >= size as u64 {
+                    return -1;
+                }
+                dist as i32
+            }
         }
-        dist as i32
+    }
+
+    // Ghidra: address.hh:285 Address::isInvalid
+    /// Is this a Ghidra-invalid (null-`base`) address? For the legacy type
+    /// that is exactly the spaceless form: every pre-phase-1 construction
+    /// site mints Ghidra-invalid addresses, which is why `to_space_address`
+    /// maps `None` to `SpaceAddress::from_offset` (the null-base form).
+    pub fn is_invalid(&self) -> bool {
+        self.space.is_none()
     }
 
     // Ghidra: address.cc:91 Address::isNull
     /// Check if address is null (0x0)
     pub fn is_null(&self) -> bool {
-        self.0 == 0
+        self.offset == 0
     }
 
     // Ghidra: address.cc:91 Address::isAligned
     /// Check if address is aligned to the given boundary
     pub fn is_aligned(&self, alignment: u64) -> bool {
-        self.0 % alignment == 0
+        self.offset % alignment == 0
     }
 
-    // Ghidra: address.cc:91 Address::next
-    /// Get the next address
+    // Ghidra: address.hh:423 Address::operator+(int8 off)
+    /// Get the next address (`operator+(1)`; wraps through the space)
     pub fn next(&self) -> Self {
-        Address(self.0.wrapping_add(1))
+        self.offset(1)
     }
 
-    // Ghidra: address.cc:91 Address::prev
-    /// Get the previous address
+    // Ghidra: address.hh:433 Address::operator-(int8 off)
+    /// Get the previous address (`operator-(1)`; wraps through the space)
     pub fn prev(&self) -> Self {
-        Address(self.0.wrapping_sub(1))
+        self.offset(-1)
+    }
+}
+
+// RUGRA-GLUE: PartialEq for Address (Ghidra compares the raw `base` pointers
+// then offsets inline in address.hh:356-358; the intern tag is the pointer
+// identity, and `None` — Ghidra's null base — equals only `None`.)
+impl PartialEq for Address {
+    // Ghidra: address.hh:356 Address::operator==
+    fn eq(&self, other: &Self) -> bool {
+        self.space == other.space && self.offset == other.offset
+    }
+}
+impl Eq for Address {}
+
+// RUGRA-GLUE: Ord for Address (Ghidra has operator< only, address.hh:375-393;
+// Rust needs a total order for sorted containers, built from the same branch
+// ladder.)
+impl Ord for Address {
+    // Ghidra: address.hh:375 Address::operator<
+    /// Natural ordering (address.hh:368-393): space first, then offset.
+    /// `None` (Ghidra's null base) sorts before every tagged space
+    /// (address.hh:377); different tagged spaces order by index
+    /// (address.hh:389); same space orders by offset (address.hh:391). The
+    /// final tag tiebreak — unreachable inside one registry, where index and
+    /// tag are bijective — keeps `Ord` consistent with `PartialEq` for the
+    /// cross-registry test state of two distinct spaces sharing an index.
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.space, other.space) {
+            (None, None) => self.offset.cmp(&other.offset),
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (Some(a), Some(b)) => {
+                if a != b {
+                    let sa = resolve_space_tag(a);
+                    let sb = resolve_space_tag(b);
+                    return match sa.get_index().cmp(&sb.get_index()) {
+                        Ordering::Equal => {
+                            let by_offset = self.offset.cmp(&other.offset);
+                            if by_offset != Ordering::Equal {
+                                by_offset
+                            } else {
+                                a.0.cmp(&b.0)
+                            }
+                        }
+                        order => order,
+                    };
+                }
+                self.offset.cmp(&other.offset)
+            }
+        }
+    }
+}
+
+impl PartialOrd for Address {
+    // Ghidra: address.hh:398 Address::operator<=
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+// RUGRA-GLUE: Hash for Address (Ghidra has no hash for Address; the key must
+// agree with PartialEq: intern tag identity then offset.)
+impl Hash for Address {
+    // RUGRA-GLUE: fn hash — trait method required by Rust std Hash; delegates
+    // to the space tag then offset, mirroring the PartialEq ordering above.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.space.hash(state);
+        self.offset.hash(state);
     }
 }
 
 impl fmt::Display for Address {
-    // Ghidra: address.cc:91 Address::fmt
+    // Ghidra: address.cc:47 operator<<(ostream &s,const Address &addr)
+    /// Debug/console form. A tagged space uses its `printRaw`
+    /// (address.cc:50); the legacy spaceless form keeps the historical
+    /// `0x{:x}` spelling so no existing output changes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "0x{:x}", self.0)
+        match self.space.map(resolve_space_tag) {
+            Some(spc) => write!(f, "{}", spc.print_raw(self.offset)),
+            None => write!(f, "0x{:x}", self.offset),
+        }
     }
 }
 
 impl fmt::LowerHex for Address {
     // Ghidra: address.cc:91 Address::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:x}", self.0)
+        write!(f, "{:x}", self.offset)
     }
 }
 
 impl fmt::UpperHex for Address {
     // Ghidra: address.cc:91 Address::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:X}", self.0)
+        write!(f, "{:X}", self.offset)
     }
 }
 
 impl From<u64> for Address {
     // Ghidra: address.cc:91 Address::from
     fn from(addr: u64) -> Self {
-        Address(addr)
+        Address::new(addr)
     }
 }
 
 impl From<Address> for u64 {
     // Ghidra: address.cc:91 Address::from
     fn from(addr: Address) -> Self {
-        addr.0
+        addr.offset
     }
 }
 
@@ -2095,5 +2337,167 @@ mod tests {
             SpaceRange::from_properties(&illegal, &m),
             Err("Illegal range tag".to_string())
         );
+    }
+
+    // --------------------------------------------------------------------
+    // ADDRESS-0001 phase-1: legacy spaceless compatibility + space-tagged
+    // comparison chain (single-side regression; oracle parity is proven by
+    // tests/oracle/address_compat_order_1204.* + runner).
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn test_phase1_none_addresses_keep_offset_only_semantics() {
+        // Every pre-phase-1 construction site produces None; ordering,
+        // equality and hashing among them must be exactly the old u64
+        // semantics.
+        let mut addrs: Vec<Address> = vec![
+            Address::new(0x2000),
+            Address::new(0x1000),
+            Address::new(0),
+            Address::new(u64::MAX),
+            Address::new(0x1500),
+        ];
+        addrs.sort();
+        let offsets: Vec<u64> = addrs.iter().map(|a| a.as_u64()).collect();
+        assert_eq!(offsets, vec![0, 0x1000, 0x1500, 0x2000, u64::MAX]);
+        assert_eq!(Address::new(0x1000), Address::new(0x1000));
+        assert_ne!(Address::new(0x1000), Address::new(0x1001));
+        // Legacy display unchanged.
+        assert_eq!(Address::new(0x1234).to_string(), "0x1234");
+        // Hash/Ord key consistency for None addresses.
+        use std::collections::{BTreeSet, HashSet};
+        let set: HashSet<Address> = [0x10, 0x20, 0x10]
+            .iter()
+            .map(|&o| Address::new(o))
+            .collect();
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&Address::new(0x10)));
+        let bset: BTreeSet<Address> = [3, 1, 2]
+            .iter()
+            .map(|&o| Address::new(o))
+            .collect();
+        assert_eq!(
+            bset.iter().map(|a| a.as_u64()).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // None arithmetic keeps the legacy plain wrap.
+        assert_eq!(Address::new(0x10).offset(-0x11).as_u64(), u64::MAX);
+        assert_eq!(Address::new(u64::MAX).next().as_u64(), 0);
+        assert_eq!(Address::new(0).prev().as_u64(), u64::MAX);
+    }
+
+    #[test]
+    fn test_phase1_space_tag_ordering_and_equivalence() {
+        let (_m, ram) = registry_with_ram();
+        let register = AddrSpace::new_space(
+            crate::space::SpaceType::Processor,
+            "register",
+            false,
+            8,
+            1,
+            4,
+            crate::space::space_flags::HASPHYSICAL,
+            0,
+            0,
+        );
+        let ram_a = Address::with_space(&ram, 0x1000);
+        let ram_b = Address::with_space(&ram, 0x800);
+        let reg_a = Address::with_space(&register, 0x1000);
+        // Same space: offset order (address.hh:391).
+        assert!(ram_b < ram_a);
+        // Different spaces: index order, ram(3) < register(4) (address.hh:389).
+        assert!(ram_a < reg_a);
+        // None (null base) sorts before every real space (address.hh:377)
+        // and never equals one (address.hh:356).
+        let none_a = Address::new(0x1000);
+        assert!(none_a < ram_b);
+        assert!(none_a < reg_a);
+        assert_ne!(none_a, ram_a);
+        // Equality needs the identical space and offset.
+        assert_eq!(ram_a, Address::with_space(&ram, 0x1000));
+        assert_ne!(ram_a, reg_a);
+        assert_ne!(ram_a, ram_b);
+        // Sorted container walks None first, then (index, offset).
+        let mut all = vec![reg_a, ram_a, none_a, ram_b];
+        all.sort();
+        assert_eq!(
+            all.iter().map(|a| a.as_u64()).collect::<Vec<_>>(),
+            vec![0x1000, 0x800, 0x1000, 0x1000]
+        );
+        assert!(all[0].get_space().is_none());
+        assert_eq!(all[1].get_space().unwrap().get_name(), "ram");
+        assert_eq!(all[3].get_space().unwrap().get_name(), "register");
+        // Interning is stable and idempotent for the same handle.
+        assert_eq!(
+            ram_a.get_space().unwrap().identity_ptr(),
+            ram.identity_ptr()
+        );
+    }
+
+    #[test]
+    fn test_phase1_space_aware_wrap_and_overlap() {
+        let mut m = crate::space::SpaceRegistry::new();
+        let flash4 = AddrSpace::new_space(
+            crate::space::SpaceType::Processor,
+            "flash4",
+            false,
+            4,
+            1,
+            8,
+            0,
+            0,
+            0,
+        );
+        m.insert_space(flash4.clone()).unwrap();
+        let constant = AddrSpace::new_constant_space(false);
+        m.insert_space(constant.clone()).unwrap();
+        // operator+ wraps through the space (address.hh:423-425).
+        assert_eq!(
+            Address::with_space(&flash4, 0xfffffffe)
+                .offset(3)
+                .as_u64(),
+            1
+        );
+        assert_eq!(
+            Address::with_space(&flash4, 0x10).offset(-0x11).as_u64(),
+            0xffffffff
+        );
+        // overlap: constants never overlap (address.cc:159); different
+        // spaces never overlap (address.cc:158); wrap-aware distance
+        // (address.cc:161).
+        assert_eq!(
+            Address::with_space(&constant, 0x10)
+                .overlap(0, Address::with_space(&constant, 0x8), 16),
+            -1
+        );
+        assert_eq!(
+            Address::with_space(&flash4, 0x10)
+                .overlap(0, Address::with_space(&constant, 0x8), 16),
+            -1
+        );
+        assert_eq!(
+            Address::with_space(&flash4, 0xfffffffe)
+                .overlap(4, Address::with_space(&flash4, 0x1), 8),
+            1
+        );
+    }
+
+    #[test]
+    fn test_phase1_space_address_bridge() {
+        let (_m, ram) = registry_with_ram();
+        let sa = SpaceAddress::new(ram.clone(), 0x1000);
+        let bridged = Address::from_space_address(&sa);
+        assert_eq!(bridged, Address::with_space(&ram, 0x1000));
+        assert_eq!(bridged.to_space_address(), sa);
+        // None <-> null base round trip.
+        let none_sa = Address::new(0x1000).to_space_address();
+        assert!(none_sa.is_invalid());
+        assert_eq!(none_sa.get_offset(), 0x1000);
+        assert_eq!(Address::from_space_address(&none_sa), Address::new(0x1000));
+        // The maximal sentinel refuses to cross (would flip sort position).
+        let result = std::panic::catch_unwind(|| {
+            Address::from_space_address(&SpaceAddress::maximal())
+        });
+        assert!(result.is_err());
     }
 }
