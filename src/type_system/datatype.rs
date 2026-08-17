@@ -280,6 +280,19 @@ impl TypeField {
     }
 }
 
+/// (parent,op,slot)-keyed union-resolution cache — Rust-side view of
+/// Ghidra's `Funcdata::unionMap` (funcdata.hh:100, keyed by `ResolveEdge`).
+/// Passed to [`Datatype::find_truncation`] as the equivalent of Ghidra's
+/// `op->getParent()->getFuncdata()` channel (type.cc:2189-2190): the Rust
+/// type layer has no Funcdata back-pointer, so callers hand in the snapshot
+/// (`PrintC::union_resolutions` clones `Funcdata::union_map` at
+/// doc_function time; op-level fixtures install it via
+/// `PrintC::snapshot_union_resolutions`).
+pub type UnionResolveMap = std::collections::BTreeMap<
+    crate::unionresolve::ResolveEdge,
+    crate::unionresolve::ResolvedUnion,
+>;
+
 /// Base structure for all data types containing common fields
 #[derive(Debug, Clone)]
 pub struct TypeBase {
@@ -576,27 +589,42 @@ impl Datatype {
     ///   strictly contain `off`: `field.offset <= off < field.offset+size`);
     ///   the piece must also fit inside that field
     ///   (`noff + sz <= field.type->getSize()`, type.cc:1634), else `None`.
-    ///   `newoff` is the offset relative to the field start.
-    /// - `TypeUnion::findTruncation` (type.cc:2185-2199): consults the
-    ///   per-(op,slot) union-resolution cache (`fd->getUnionField`) and
-    ///   returns the cached field if the piece fits inside it. Rugra's print
-    ///   path does not yet wire the `Funcdata` union-resolution cache into
-    ///   the `Datatype` layer, so the "no cached result" arm applies and this
-    ///   returns `None` for unions — the same observable Ghidra behavior for
-    ///   any op/slot that has no cached `ResolvedUnion`.
+    ///   `newoff` is the offset relative to the field start. `op`/`slot` are
+    ///   not consulted (Ghidra's override ignores them).
+    /// - `TypeUnion::findTruncation` (type.cc:2185-2199): "No new scoring is
+    ///   done, but if a cached result is available, return it" — a READ-ONLY
+    ///   consult of the (parent,op,slot) union-resolution cache reached in
+    ///   Ghidra via `op->getParent()->getFuncdata()->getUnionField(this, op,
+    ///   slot)` (type.cc:2189-2190). On miss (or `getFieldNum() < 0`) it
+    ///   returns null WITHOUT writing the cache (contrast
+    ///   `TypeUnion::resolveTruncation`, type.cc:2147-2177, which scores and
+    ///   calls `fd->setUnionField` on miss). On hit, `newoff = offset -
+    ///   field->offset` and the piece must fit inside the field
+    ///   (`newoff + sz > field->type->getSize()` → null, "Truncation spans
+    ///   more than one field", type.cc:2194-2195).
     /// - `TypePartialUnion::findTruncation` (type.cc:2440-2444): delegates to
-    ///   the container union at `off + offset` (which, per the union arm
-    ///   above, is `None` without a cached resolution).
+    ///   the container union at `off + offset`, passing the SAME op/slot —
+    ///   the container is therefore the cache-key parent, exactly as in
+    ///   Ghidra's delegation.
     ///
-    /// Ghidra passes `op`/`slot` for the union cache lookup only; the struct
-    /// arm (the one driving SUBPIECE field extraction on piece-structured
-    /// types) never consults them, so they are not carried here. The matched
-    /// field is returned as an owned `TypeField` clone (Ghidra returns a
-    /// `const TypeField*`; the clone carries the same name/offset/type
-    /// identity because `TypeField` is a value record).
+    /// Ghidra threads `op`/`slot` as virtual parameters; Rugra's type layer
+    /// has no Funcdata back-pointer, so the cache travels as the
+    /// `resolutions` snapshot (the printer's clone of `Funcdata::union_map`,
+    /// see `PrintC::union_resolutions`). `op == None` (no op context) or
+    /// `resolutions == None` behaves as a cache miss for the union arm. The
+    /// matched field is returned as an owned `TypeField` clone (Ghidra
+    /// returns a `const TypeField*`; the clone carries the same
+    /// name/offset/type identity because `TypeField` is a value record).
     ///
     /// Returns `Some((TypeField, newoff))` or `None`.
-    pub fn find_truncation(&self, off: i64, sz: usize) -> Option<(TypeField, i64)> {
+    pub fn find_truncation(
+        &self,
+        off: i64,
+        sz: usize,
+        op: Option<&crate::op::PcodeOp>,
+        slot: i32,
+        resolutions: Option<&UnionResolveMap>,
+    ) -> Option<(TypeField, i64)> {
         match self {
             // type.cc:1624 TypeStruct::findTruncation
             Datatype::Struct(s) => {
@@ -609,14 +637,44 @@ impl Datatype {
                 }
                 Some((curfield.clone(), noff))
             }
-            // type.cc:2185 TypeUnion::findTruncation: no cached resolution
-            // available from the Datatype layer (see doc comment).
-            Datatype::Union(_) => None,
+            // type.cc:2185 TypeUnion::findTruncation
+            Datatype::Union(u) => {
+                // type.cc:2189-2190: const Funcdata *fd =
+                //   op->getParent()->getFuncdata();
+                //   const ResolvedUnion *res = fd->getUnionField(this,op,slot);
+                // No op context / no snapshot channel == cache miss.
+                let (op, resolutions) = match (op, resolutions) {
+                    (Some(op), Some(resolutions)) => (op, resolutions),
+                    _ => return None,
+                };
+                let res = resolutions
+                    .get(&crate::unionresolve::ResolveEdge::new(self, op, slot))?;
+                // type.cc:2191: res != 0 && res->getFieldNum() >= 0
+                if res.get_field_num() < 0 {
+                    return None;
+                }
+                // type.cc:2192: getField(res->getFieldNum()) (direct index in
+                // Ghidra; the .get() bounds guard is unreachable there).
+                let field = u.fields.get(res.get_field_num() as usize)?;
+                // type.cc:2193: newoff = offset - field->offset;
+                let newoff = off - field.offset as i64;
+                // type.cc:2194-2195: Truncation spans more than one field.
+                if newoff + sz as i64 > field.type_ptr.get_size() as i64 {
+                    return None;
+                }
+                Some((field.clone(), newoff))
+            }
             // type.cc:2440 TypePartialUnion::findTruncation:
             // container->findTruncation(off + offset, sz, op, slot, newoff)
-            Datatype::PartialUnion(pu) => pu
-                .container
-                .find_truncation(off + pu.offset, sz),
+            // — the SAME op/slot/resolutions channel threads to the
+            // container, so the container becomes the cache-key parent.
+            Datatype::PartialUnion(pu) => pu.container.find_truncation(
+                off + pu.offset,
+                sz,
+                op,
+                slot,
+                resolutions,
+            ),
             // type.cc:160 Datatype::findTruncation (base): no field components.
             _ => None,
         }
@@ -4857,24 +4915,95 @@ mod tests {
             ],
         });
         // Exact field at off 0, sz 4 → field lo, newoff 0.
-        let (f, newoff) = s.find_truncation(0, 4).unwrap();
+        let (f, newoff) = s.find_truncation(0, 4, None, 0, None).unwrap();
         assert_eq!(f.name, "lo");
         assert_eq!(newoff, 0);
         // Interior of field hi at off 5, sz 2 → field hi, newoff 1.
-        let (f, newoff) = s.find_truncation(5, 2).unwrap();
+        let (f, newoff) = s.find_truncation(5, 2, None, 0, None).unwrap();
         assert_eq!(f.name, "hi");
         assert_eq!(newoff, 1);
         // Piece spanning two fields → None (type.cc:1634-1635).
-        assert!(s.find_truncation(2, 4).is_none());
+        assert!(s.find_truncation(2, 4, None, 0, None).is_none());
         // Offset not inside any field → None.
-        assert!(s.find_truncation(8, 1).is_none());
+        assert!(s.find_truncation(8, 1, None, 0, None).is_none());
         // Array input type has no field components (base findTruncation).
         let arr = Datatype::Array(TypeArray {
             base: TypeBase::new("a".into(), 4, TypeMetatype::Array),
             array_of: short2,
             num_elements: 2,
         });
-        assert!(arr.find_truncation(0, 2).is_none());
+        assert!(arr.find_truncation(0, 2, None, 0, None).is_none());
+    }
+
+    // Ghidra: type.cc:2185 TypeUnion::findTruncation + type.cc:2440
+    // TypePartialUnion::findTruncation — the (op,slot)-keyed cache read side.
+    #[test]
+    fn test_find_truncation_union_cache() {
+        use crate::address::{Address, SeqNum};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::unionresolve::{ResolveEdge, ResolvedUnion};
+
+        let int4 = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let uint4 = Arc::new(Datatype::Base(TypeBase::new("uint".into(), 4, TypeMetatype::Uint)));
+        let union = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("alt".into(), 4, TypeMetatype::Union),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: int4.clone() },
+                TypeField { name: "b".into(), offset: 0, type_ptr: uint4.clone() },
+            ],
+        }));
+        // The artificial SUBPIECE slot 1 edge (printc.cc:862).
+        let op: PcodeOpRef = PcodeOpRef(Arc::new(std::sync::RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x100), 1),
+            OpCode::CPUI_SUBPIECE,
+        ))));
+        let op = op.0.read().unwrap();
+        let mut map: crate::type_system::datatype::UnionResolveMap =
+            std::collections::BTreeMap::new();
+        // Cache miss (type.cc:2197-2198): no entry, or op/channel absent.
+        assert!(union.find_truncation(0, 4, Some(&op), 1, Some(&map)).is_none());
+        assert!(union.find_truncation(0, 4, None, 1, Some(&map)).is_none());
+        assert!(union.find_truncation(0, 4, Some(&op), 1, None).is_none());
+        // Entry with getFieldNum() < 0 (whole-union resolution) → None
+        // (type.cc:2191).
+        map.insert(
+            ResolveEdge::new(&union, &op, 1),
+            ResolvedUnion { resolve: union.clone(), base_type: union.clone(), field_num: -1, lock: false },
+        );
+        assert!(union.find_truncation(0, 4, Some(&op), 1, Some(&map)).is_none());
+        // Field-resolved hit (fieldNum 1 = b, uint4): newoff = 0-0 = 0,
+        // 0+4 > 4 false → Some((b, 0)) (type.cc:2192-2196).
+        map.insert(
+            ResolveEdge::new(&union, &op, 1),
+            ResolvedUnion { resolve: uint4.clone(), base_type: union.clone(), field_num: 1, lock: false },
+        );
+        let (f, newoff) = union.find_truncation(0, 4, Some(&op), 1, Some(&map)).unwrap();
+        assert_eq!(f.name, "b");
+        assert_eq!(newoff, 0);
+        // Different slot (0) has no entry → miss.
+        assert!(union.find_truncation(0, 4, Some(&op), 0, Some(&map)).is_none());
+        // Span check (type.cc:2194-2195): off 2 + sz 4 > field size 4 → None.
+        assert!(union.find_truncation(2, 4, Some(&op), 1, Some(&map)).is_none());
+        // Exact fit at sz 4 still returns the field.
+        assert!(union.find_truncation(0, 4, Some(&op), 1, Some(&map)).is_some());
+        // TypePartialUnion::findTruncation (type.cc:2440-2444): delegates to
+        // the container at off + offset with the SAME op/slot — the cache key
+        // is the CONTAINER union (the entry above hits through the partial).
+        let pu = Arc::new(Datatype::PartialUnion(TypePartialUnion::new(
+            union.clone(), 0, 4, None,
+        )));
+        let (f, newoff) = pu.find_truncation(0, 4, Some(&op), 1, Some(&map)).unwrap();
+        assert_eq!(f.name, "b");
+        assert_eq!(newoff, 0);
+        // Non-zero partial offset shifts the lookup offset into the container.
+        let pu2 = Arc::new(Datatype::PartialUnion(TypePartialUnion::new(
+            union.clone(), 2, 2, None,
+        )));
+        // container lookup at 0+2=2 with sz 2: newoff=2, 2+2 > 4 false → hit.
+        let (f, newoff) = pu2.find_truncation(0, 2, Some(&op), 1, Some(&map)).unwrap();
+        assert_eq!(f.name, "b");
+        assert_eq!(newoff, 2);
     }
 
     // Ghidra: type.cc:1257 TypeArray::getSubEntry — element stride is the

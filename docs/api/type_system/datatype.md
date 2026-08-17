@@ -99,6 +99,14 @@ alignment map、calc_align_size、struct/array subtype、type_order（size & met
 - `is_char_print()`（type.hh:218）— 检查 CHARTYPE|UTF16|UTF32|OPAQUE_STRUCT flag。
 - `is_piece_structured()`（type.hh:929-935）— Struct|Union|Array 语义判断（Ghidra 用 metatype<=TYPE_ARRAY，Rugra 枚举值不同故用 matches!）。
 
+### 2026-08-18：TYPEUNION-CACHE-READSIDE-0001——find_truncation (op,slot) 参数化 + Union 臂解析缓存读侧接线
+- `find_truncation(off, sz, op, slot, resolutions) -> Option<(TypeField, newoff)>`（type.cc:160 base / :1624 TypeStruct / :2185 TypeUnion / :2440 TypePartialUnion）——签名扩展为 Ghidra 虚函数的参数形态（`op`/`slot` + 缓存通道）：
+  - **Struct 臂**不变（Ghidra override 忽略 op/slot）。
+  - **Union 臂**（type.cc:2185-2199）落地真正的读侧："No new scoring is done"——只读查询 (parent=this, op, slot) 的 ResolvedUnion 缓存（`fd->getUnionField`，funcdata.cc:917），miss 或 `field_num < 0` → None（**不写缓存**，区别于 resolveTruncation 的打分+写入）；命中时 `newoff = off - field.offset`，跨字段（`newoff + sz > field.type_ptr.get_size()`，严格 `>`）→ None。通道为 `Option<&UnionResolveMap>`（新公开类型别名 = `BTreeMap<ResolveEdge, ResolvedUnion>`，即 `Funcdata::union_map` 的快照视图）；`op=None` 或 `resolutions=None` 等价缓存 miss（无 op 语境兼容）。
+  - **PartialUnion 臂**（type.cc:2440-2444）委托 `container.find_truncation(off + offset, sz, op, slot, resolutions)`——同一 (op,slot) 透传，**容器成为缓存键的 parent**（与 Ghidra 委托语义一致；Ghidra ResolveEdge 构造器的 TYPE_PARTIALUNION 臂 unionresolve.cc:74-75 同样按容器 id 键控）。
+- 真 oracle 证据：fixture `printc_subpiece_fieldextract_1204` 新增 5 条 union 记录（armB.unionhit=U.b / armA.unionhit=V.b / armA.unionmiss=W / armA.unionspan=X / armA.unionsynth=Z._0_2_），经真 `Funcdata::setUnionField`（funcdata.cc:937）写侧注入、12.0.4 oracle 逐字节 MATCH（31 records）。
+- 新增单元测试 `test_find_truncation_union_cache`（miss/负 fieldNum/命中/跨 slot/跨字段/PartialUnion 委托含非零偏移）。
+
 ### 2026-08-17：PRINTC-SUBPIECE-FIELDEXTRACT-0001 缺口 b/c——is_piece_structured 宽度 + find_truncation/array_get_sub_entry
 - `is_piece_structured()` 匹配集扩为 **{Struct, Union, Array, PartialStruct, PartialUnion}**（Ghidra `metatype <= TYPE_ARRAY` 按**存储** metatype 的实际可达集合）。两个被真 oracle 纠正的细节：Ghidra `TypeEnum` 构造器（type.hh:489-494）把存储 metatype 归一为 TYPE_INT/TYPE_UINT，且 `TypePartialEnum`（type.cc:2255-2262）经同一构造器落到 TYPE_UINT——故 enum/partialenum **不是** piece-structured（fixture `piece.enum=0`/`piece.partialenum=0` 由 12.0.4 oracle 实测确认）。
 - `find_truncation(off, sz) -> Option<(TypeField, newoff)>`（type.cc:160 base / :1624 TypeStruct / :2185 TypeUnion / :2440 TypePartialUnion）——SUBPIECE 字段抽取的判定原语：Struct 臂经 `struct_get_field_iter`（字段严格包含 off）+ 跨字段拒绝（`noff+sz > size`，type.cc:1634）；Union 臂无 (op,slot) 解析缓存时返回 None（Ghidra TypeUnion::findTruncation 无缓存 ResolvedUnion 同样返回 null）；PartialUnion 臂委托 `container.find_truncation(off + offset, sz)`。

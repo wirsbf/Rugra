@@ -795,6 +795,21 @@ impl PrintC {
         self.rpn_enabled = enabled;
     }
 
+    /// Install the (parent,op,slot)-keyed union-resolution cache snapshot from
+    /// the given Funcdata — the read channel behind
+    /// `rpn_push_partial_symbol`'s findResolve/findTruncation consults and
+    /// `opSubpiece`'s union findTruncation arm
+    /// (`Funcdata::getUnionField`, funcdata.cc:917-926).
+    // RUGRA-GLUE: extracted from doc_function (which remains the sole pipeline
+    // installer) so op-level fixtures — rendering single PcodeOps via
+    // op_subpiece_rpn without a full doc_function run — can install the same
+    // snapshot the pipeline printer sees. Ghidra needs no equivalent: its
+    // Datatype virtuals reach the live Funcdata through
+    // op->getParent()->getFuncdata() (type.cc:2189).
+    pub fn snapshot_union_resolutions(&mut self, fd: &Funcdata) {
+        self.union_resolutions = fd.union_map.clone();
+    }
+
     /// First index of the binary-token block appended by build_rpn_token_table
     /// (indices 10..=29, in optoken::BINARY_TOKENS order — printc.cc:36-55).
     const RPN_TOK_BINARY_BASE: usize = 10;
@@ -1550,16 +1565,23 @@ impl PrintC {
                                     }
                                 }
                                 // printc.cc:862-868: findTruncation field arm
-                                // (artificial slot 1; Rugra's union arm has no
-                                // cached resolution, so this is the struct
-                                // path until unionresolve wiring lands).
+                                // (artificial slot 1 — "The slot is
+                                // artificial in this case"). For a
+                                // union/partial-union ct this consults the
+                                // (parent,op,slot) resolution cache snapshot
+                                // (TypeUnion::findTruncation type.cc:2185-
+                                // 2199, READ-ONLY; miss → fall thru).
                                 let out_size = op
                                     .get_out()
                                     .map(|a| a.read().unwrap().get_size())
                                     .unwrap_or(0);
-                                if let Some((field, offset)) =
-                                    ct.find_truncation(byte_off, out_size)
-                                {
+                                if let Some((field, offset)) = ct.find_truncation(
+                                    byte_off,
+                                    out_size,
+                                    Some(op),
+                                    1,
+                                    Some(&self.union_resolutions),
+                                ) {
                                     if offset == 0 {
                                         // pushOp(&object_member,op);
                                         // pushVn(vn,op,mods);
@@ -1950,8 +1972,11 @@ impl PrintC {
     ///   doc_function snapshot.
     /// - TYPE_ARRAY → `getSubEntry` element descent with a `subscript` entry
     ///   (1986-2000); the walk offset is re-anchored to the element.
-    /// - TYPE_UNION → `findTruncation` (no cached resolution → None, see
-    ///   `Datatype::find_truncation`), else `size==sz` → break (2001-2016).
+    /// - TYPE_UNION → `findTruncation` consults the same
+    ///   `union_resolutions` snapshot (printc.cc:2003 →
+    ///   `TypeUnion::findTruncation`, type.cc:2185-2199 — READ-ONLY cache
+    ///   hit descends into the field with an `object_member` entry; miss →
+    ///   `size==sz` → break, else the synthetic entry (2001-2016)).
     /// - anything else + `allowCast` → `isSubpieceCastEndian` truncation cast
     ///   (2018-2029): the final cast is pushed as `(type)` prefix. `vn` here
     ///   is the SUBPIECE OUTPUT varnode (printc.cc:859 passes
@@ -2052,7 +2077,13 @@ impl PrintC {
                             break;
                         }
                     }
-                    if let Some((field, newoff)) = dt.find_truncation(off, sz as usize) {
+                    if let Some((field, newoff)) = dt.find_truncation(
+                        off,
+                        sz as usize,
+                        Some(op),
+                        slot,
+                        Some(&self.union_resolutions),
+                    ) {
                         off = newoff;
                         stack.push(Entry {
                             token: self.rpn_tok_object_member,
@@ -2082,11 +2113,36 @@ impl PrintC {
                 }
                 // printc.cc:2001-2016: TYPE_UNION.
                 TypeMetatype::Union => {
-                    // findTruncation consults the (op,slot) resolution cache;
-                    // with no cached resolution it returns null (type.cc:2197),
-                    // which is Rugra's behaviour (Datatype::find_truncation).
-                    if dt.get_size() as i64 == sz {
-                        // printc.cc:2015-2016: don't need to resolve the field.
+                    // printc.cc:2003: field = ct->findTruncation(off,sz,op,
+                    // slot,newoff) — TypeUnion::findTruncation (type.cc:2185-
+                    // 2199) is a READ-ONLY consult of the (parent,op,slot)
+                    // resolution cache ("No new scoring is done, but if a
+                    // cached result is available, return it"); it returns
+                    // null on miss WITHOUT writing the cache. The snapshot
+                    // here is the same union_resolutions channel the struct
+                    // arm's findResolve consults above.
+                    if let Some((field, newoff)) = dt.find_truncation(
+                        off,
+                        sz as usize,
+                        Some(op),
+                        slot,
+                        Some(&self.union_resolutions),
+                    ) {
+                        // printc.cc:2004-2014: descend into the resolved
+                        // field with an object_member entry.
+                        off = newoff;
+                        stack.push(Entry {
+                            token: self.rpn_tok_object_member,
+                            offset: 0,
+                            size: 0,
+                            field: Some(field.clone()),
+                            hilite: SyntaxHighlight::NoColor,
+                        });
+                        ct = Some(field.type_ptr.clone());
+                        succeeded = true;
+                    } else if dt.get_size() as i64 == sz {
+                        // printc.cc:2015-2016: Turns out we don't need to
+                        // resolve the field.
                         break;
                     }
                 }
@@ -5775,10 +5831,9 @@ impl PrintLanguage for PrintC {
         // `None` when the Funcdata has no Architecture (legacy callers).
         self.cpool = fd.arch.as_ref().and_then(|a| a.cpool.clone());
         self.userops = fd.arch.as_ref().and_then(|a| a.userops.clone());
-        // Snapshot the union-resolution cache for the walk's findResolve
-        // consults (see field doc): Funcdata::getUnionField equivalents
-        // (funcdata.cc:917) key on (parent type, op, slot).
-        self.union_resolutions = fd.union_map.clone();
+        // Snapshot the union-resolution cache for the walk's findResolve and
+        // findTruncation consults (see field doc).
+        self.snapshot_union_resolutions(fd);
 
         // Load symbol and string tables from Funcdata, sanitizing C identifiers
         self.symbol_table = fd.symbol_table.iter()
@@ -10876,12 +10931,22 @@ impl PrintC {
                                 return;
                             }
                         }
-                        // printc.cc:862-868: findTruncation formal-field arm.
+                        // printc.cc:862-868: findTruncation formal-field arm
+                        // (artificial slot 1). The union/partial-union ct
+                        // consults the doc_function union_resolutions
+                        // snapshot (TypeUnion::findTruncation type.cc:2185-
+                        // 2199, READ-ONLY).
                         let out_size = op
                             .get_out()
                             .map(|a| a.read().unwrap().get_size())
                             .unwrap_or(0);
-                        if let Some((field, offset)) = ct.find_truncation(byte_off, out_size) {
+                        if let Some((field, offset)) = ct.find_truncation(
+                            byte_off,
+                            out_size,
+                            Some(op),
+                            1,
+                            Some(&self.union_resolutions),
+                        ) {
                             if offset == 0 {
                                 // pushOp(&object_member,op); pushVn(vn,op,mods);
                                 // pushAtom(Atom(field->name,fieldtoken,...))

@@ -280,6 +280,14 @@ printc.cc:2260/2518/2497）：
 - **衍生登记**：`TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001`（Rugra `TypeFactory::set_fields` 不置单字段 needs_resolution，type.cc:1569-1871——铁律 1.5 基础设施缺口；fixture Rust 侧手动置 flag 规避并注释指向 TODO）。
 - **fixture 重钉**：runner 22→**26 records**（+`armA.nested=N.in.x`、+`cast.int_partialenum_0=1`、+`cast.partialenum_out_0=1`、+`armA.allowcast=(uint2)C.lo`，cast sweep 8→10），双侧逐字节 MATCH；E2E 复跑零回归（diff 0 行），门禁 defects=0/numbering=0；metadata 登记修正（`needs_resolution_struct_break` UNTESTED→MATCH，`union_resolution_cache` → 读侧已接线/写侧 UNTESTED，`pipeline_needs_resolution_production` → MISSING 指向 TYPEFACTORY TODO）。
 
+### TYPEUNION-CACHE-READSIDE-0001——UNION 臂 findTruncation 缓存读侧接线（2026-08-18）
+
+- **UNION 臂补上缺失的 findTruncation 调用**（printc.cc:2001-2016）：原 `rpn_push_partial_symbol` 的 Union 臂直接做 `size==sz` break（把"无缓存 miss"当成了唯一行为）。oracle 的 union 臂先 `ct->findTruncation(off,sz,op,slot,newoff)`（printc.cc:2003）——`TypeUnion::findTruncation`（type.cc:2185-2199）是 (parent,op,slot) 解析缓存的**只读**消费方（"No new scoring is done"）：命中且 `fieldNum>=0` → `newoff = off - field.offset`、跨字段拒绝（严格 `>`）后下降字段（object_member 条目，2004-2014）；miss/null → `size==sz` break（2015-2016）→ 否则合成条目。修正后 Union 臂与 Ghidra 同序。
+- **find_truncation (op,slot) 参数化**（docs/api/type_system/datatype.md 详述）：union/partial-union 的 ct 现在能通过 `union_resolutions` 快照命中缓存；RPN `opSubpiece` 两臂（dispatch 的 findTruncation 字段 atom 臂 slot=1 与 `rpn_push_partial_symbol`）与 legacy `op_subpiece` 均传入 `(Some(op), slot, Some(&self.union_resolutions))`。
+- **新公开方法 `snapshot_union_resolutions(&mut self, fd)`**（RUGRA-GLUE）：从 doc_function 提取的快照入口（doc_function 仍是主管线唯一安装点），供 op 级 fixture（不经完整 doc_function 直接 `op_subpiece_rpn` 渲染单 op）安装同一 (parent,op,slot) 键控通道。Ghidra 无对应物：其类型层经 `op->getParent()->getFuncdata()` 直达活 Funcdata（type.cc:2189）。
+- **fixture 26→31 records**：新增 5 条 union 读侧记录（`armB.unionhit=U.b`/`armA.unionhit=V.b`/`armA.unionmiss=W`/`armA.unionspan=X`/`armA.unionsynth=Z._0_2_`），C++ 侧经真 `Funcdata::setUnionField`（funcdata.cc:937）+ `ResolvedUnion(altUnion,1,types)`（unionresolve.cc:40）注入缓存（artificial slot 1），Rust 侧镜像经 `Funcdata::set_union_field` 写端口 + `snapshot_union_resolutions` 读通道。双侧逐字节 MATCH（runner `records=31 MATCH`）。
+- **Differential（curl 语料）**：隔离归因验证零影响——同一工作树上仅回退本改动的两文件（datatype.rs/printc.rs）重跑 curl，输出 diff 0 行；主管线 `fd.union_map` 当前无可被 SUBPIECE (op,slot=1) 边命中的条目（unionresolve 生产方未接入主管线），miss 路径与改前行为逐字节一致。门禁 defects=0/numbering=0 维持。
+
 
 ---
 

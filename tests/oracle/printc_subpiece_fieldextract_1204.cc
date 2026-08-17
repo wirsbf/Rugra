@@ -28,6 +28,23 @@
  *                     armB.field     — non-explicit Varnode + Symbol ->
  *                                     findTruncation/object_member arm
  *                                     (printc.cc:862-868) -> "S.lo"
+ *   - arm*.union* : the TypeUnion::findTruncation (type.cc:2185-2199)
+ *                   (op,slot)-resolution-cache READ side. Entries are
+ *                   installed through the real write side
+ *                   (Funcdata::setUnionField, funcdata.cc:937) at the
+ *                   artificial SUBPIECE slot 1 (printc.cc:862):
+ *                     armB.unionhit  — cached field, field-atom arm -> "U.b"
+ *                     armA.unionhit  — cached field, pushPartialSymbol union
+ *                                      arm descent (printc.cc:2001-2014)
+ *                                      -> "V.b"
+ *                     armA.unionmiss — no entry: findTruncation null
+ *                                      (type.cc:2197-2198), size==sz break
+ *                                      (printc.cc:2015-2016) -> "W"
+ *                     armA.unionspan — cached field but off+sz overrun:
+ *                                      "Truncation spans more than one
+ *                                      field" (type.cc:2194-2195) -> "X"
+ *                     armA.unionsynth — no entry, size!=sz: synthetic
+ *                                      unnamedField(0,2) -> "Z._0_2_"
  *
  * Object graph: GetStr Funcdata over the pinned curl binary (BfdArchitecture,
  * same construction pattern as printc_symbol_decl_1204.cc): a register-space
@@ -43,6 +60,7 @@
 #include "printc.hh"
 #include "prettyprint.hh"
 #include "type.hh"
+#include "unionresolve.hh"
 
 #include <iostream>
 #include <sstream>
@@ -191,7 +209,7 @@ struct SubpieceFixture {
   // `outSize`/`outType` shape the SUBPIECE output varnode (outType may be
   // null for the unknown default); the offset constant selects the extracted
   // byte range on the little-endian x86:64 target (lsb == byteOff).
-  PcodeOp *buildSubpiece(TypeStruct *containerType, const char *symbolName,
+  PcodeOp *buildSubpiece(Datatype *containerType, const char *symbolName,
                          uintb regOffset, int4 vnSize, int4 truncLsb,
                          int4 outSize, Datatype *outType, bool explicitVn)
   {
@@ -321,6 +339,62 @@ void runSubpieceArms(Funcdata &fd, Architecture *glb, const FixtureTypes &ft)
     Datatype *uint2 = glb->types->getBase(2, TYPE_UINT);
     PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "C", 0x68, 8, 0, 2, uint2, true);
     std::cout << "armA.allowcast=" << fx.render(sub) << '\n';
+  }
+  // ---- union-resolution cache read side (TYPEUNION-CACHE-READSIDE-0001) ----
+  // TypeUnion::findTruncation (type.cc:2185-2199) does NO scoring: it is a
+  // read-only consult of fd->getUnionField(this,op,slot). The cache entries
+  // are installed through the real write side (Funcdata::setUnionField,
+  // funcdata.cc:937) at the ARTIFICIAL slot 1 (printc.cc:862: "The slot is
+  // artificial in this case"). The read-facing type of the union varnode
+  // (varnode.cc:665-671) consults slot 0 instead — no entry there, so
+  // TypeUnion::findResolve (type.cc:2137-2145, also read-only) returns the
+  // union itself and ct stays fixture_alt.
+  // armB.unionhit: NON-explicit vn, symbol U over fixture_alt, lsb=0,
+  // outsize 4, cached (altUnion,op,slot=1) -> field b (uint4):
+  // findTruncation(0,4,op,1) hits with offset 0 -> object_member field atom.
+  {
+    SubpieceFixture fx(fd, glb, 0xb000);
+    PcodeOp *sub = fx.buildSubpiece(ft.altUnion, "U", 0x70, 4, 0, 4, 0, false);
+    ResolvedUnion resolve(ft.altUnion, 1, *glb->types);
+    fd.setUnionField(ft.altUnion, sub, 1, resolve);
+    std::cout << "armB.unionhit=" << fx.render(sub) << '\n';
+  }
+  // armA.unionhit: explicit vn, symbol V over fixture_alt, lsb=0, outsize 4,
+  // same cached entry -> pushPartialSymbol union arm (printc.cc:2001-2014):
+  // no loop-top break (unions always needsResolution, type.hh:551),
+  // findTruncation hit descends .b, then at ct=uint4 sz==size -> break.
+  {
+    SubpieceFixture fx(fd, glb, 0xc000);
+    PcodeOp *sub = fx.buildSubpiece(ft.altUnion, "V", 0x78, 4, 0, 4, 0, true);
+    ResolvedUnion resolve(ft.altUnion, 1, *glb->types);
+    fd.setUnionField(ft.altUnion, sub, 1, resolve);
+    std::cout << "armA.unionhit=" << fx.render(sub) << '\n';
+  }
+  // armA.unionmiss: NO cache entry -> findTruncation returns null
+  // (type.cc:2197-2198: no scoring, no write), then printc.cc:2015-2016
+  // size==sz -> break -> whole union symbol.
+  {
+    SubpieceFixture fx(fd, glb, 0xd000);
+    PcodeOp *sub = fx.buildSubpiece(ft.altUnion, "W", 0x80, 4, 0, 4, 0, true);
+    std::cout << "armA.unionmiss=" << fx.render(sub) << '\n';
+  }
+  // armA.unionspan: cached field b (uint4) but lsb=2, outsize 4: newoff=2
+  // and 2+4 > 4 -> "Truncation spans more than one field" (type.cc:2194-
+  // 2195) -> null -> size==sz break -> whole union symbol.
+  {
+    SubpieceFixture fx(fd, glb, 0xe000);
+    PcodeOp *sub = fx.buildSubpiece(ft.altUnion, "X", 0x88, 4, 2, 4, 0, true);
+    ResolvedUnion resolve(ft.altUnion, 1, *glb->types);
+    fd.setUnionField(ft.altUnion, sub, 1, resolve);
+    std::cout << "armA.unionspan=" << fx.render(sub) << '\n';
+  }
+  // armA.unionsynth: NO cache entry, lsb=0, outsize 2: findTruncation null,
+  // size(4) != sz(2) so no break -> synthetic unnamedField(0,2)
+  // (printc.cc:2030-2041).
+  {
+    SubpieceFixture fx(fd, glb, 0xf000);
+    PcodeOp *sub = fx.buildSubpiece(ft.altUnion, "Z", 0x90, 4, 0, 2, 0, true);
+    std::cout << "armA.unionsynth=" << fx.render(sub) << '\n';
   }
 }
 

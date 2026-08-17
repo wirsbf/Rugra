@@ -23,9 +23,14 @@
       "PrintC::opSubpiece (printc.cc:843)",
       "PrintC::pushPartialSymbol (printc.cc:1947)",
       "TypeStruct::findTruncation (type.cc:1624)",
+      "TypeUnion::findTruncation (type.cc:2185)",
+      "TypeUnion::findResolve (type.cc:2137)",
+      "Varnode::getHighTypeReadFacing (varnode.cc:665)",
       "TypeArray::getSubEntry (type.cc:1257)",
       "TypeOpSubpiece::computeByteOffsetForComposite (typeop.cc:2195)",
-      "Funcdata::opMarkSpecialPrint (funcdata.hh:483)"
+      "Funcdata::opMarkSpecialPrint (funcdata.hh:483)",
+      "Funcdata::setUnionField (funcdata.cc:937)",
+      "ResolvedUnion::ResolvedUnion(Datatype*,int4,TypeFactory&) (unionresolve.cc:40)"
     ],
     "fixture_model": "GetStr Funcdata over BfdArchitecture; per arm case: type-locked ScopeLocal symbol (addSymbol + setAttribute(typelock), unrestricted usepoint) attached to a register-space 8-byte Varnode via Varnode::setSymbolProperties (varnode.cc:409-421); SUBPIECE defined via newOp/opSetOpcode/opSetInput/newUniqueOut; high level via fd.setHighLevel(); SPECIAL_PRINT set via opMarkSpecialPrint; rendering through FixturePrintC::opSubpiece with pushScope(fd->getScopeLocal()) preamble (printc.cc:2597) and EmitNoMarkup",
     "type_construction": "FixtureTypes builds each factory type exactly once per process (a second getTypeStruct on a completed name throws 'Trying to alter definition of type', type.cc:3421-3423; setFields requires an incomplete struct, type.cc:3482). fixture_arr carries a tail field so TypeStruct::setFields does not set needs_resolution (type.cc:1569-1871) on the outer walk level; fixture_inner is deliberately single-field-fills-struct so the REAL factory DOES set needs_resolution there — that flag drives the armA.nested findResolve arm (printc.cc:1967-1971). The defining COPY and SUBPIECE are inserted into a fresh basic block (const_cast<BlockGraph&>(fd.getBasicBlocks()).newBlockBasic + opInsertEnd) so TypeStruct::findResolve's op->getParent()->getFuncdata() (type.cc:1945) is reachable",
@@ -99,6 +104,31 @@
       "id": "armA.allowcast",
       "records": 1,
       "covers": "REWORK #3: printc.cc:859 passes op->getOut() as pushPartialSymbol's vn, so the allowCast arm's outtype = vn->getHigh()->getType() (2019) reads the SUBPIECE OUTPUT high type. Walk: .lo descent (lsb=0, outsize 2 within int4 lo), then at ct=int4 isSubpieceCastEndian(uint2,int4,0,LE) -> true -> finalcast prefix -> (uint2)C.lo. The original Rugra port passed the input varnode (outtype whitelist always rejected -> finalcast dead code, MISMATCH, audit-verified)"
+    },
+    {
+      "id": "armB.unionhit",
+      "records": 1,
+      "covers": "TYPEUNION-CACHE-READSIDE-0001: TypeUnion::findTruncation (type.cc:2185-2199) read-only cache consult at the ARTIFICIAL SUBPIECE slot 1 (printc.cc:862). NON-explicit vn, symbol U over fixture_alt, cached (altUnion,op,slot=1) -> field b installed through the real write side (Funcdata::setUnionField, funcdata.cc:937). The read-facing type (varnode.cc:665-671) consults slot 0 — no entry there, so TypeUnion::findResolve (type.cc:2137-2145, read-only) returns the union itself — then findTruncation(0,4,op,1) hits field b with offset 0 -> object_member field atom -> U.b"
+    },
+    {
+      "id": "armA.unionhit",
+      "records": 1,
+      "covers": "TYPEUNION-CACHE-READSIDE-0001: pushPartialSymbol union arm (printc.cc:2001-2014) with a cached resolution: no loop-top break (unions always needsResolution, type.hh:551; TypeUnion::setFields never clears it, type.cc:2002-2009), findTruncation hit descends .b, then at ct=uint4 sz==size -> break -> V.b"
+    },
+    {
+      "id": "armA.unionmiss",
+      "records": 1,
+      "covers": "TYPEUNION-CACHE-READSIDE-0001: NO cache entry -> TypeUnion::findTruncation returns null WITHOUT scoring or writing (type.cc:2188 comment 'No new scoring is done', 2197-2198), then printc.cc:2015-2016 size==sz -> break -> whole union symbol W"
+    },
+    {
+      "id": "armA.unionspan",
+      "records": 1,
+      "covers": "TYPEUNION-CACHE-READSIDE-0001: cached field b (uint4) but byteOff=2, outsize 4: newoff=2 and 2+4 > 4 -> 'Truncation spans more than one field' (type.cc:2194-2195) -> null -> size==sz break -> whole union symbol X"
+    },
+    {
+      "id": "armA.unionsynth",
+      "records": 1,
+      "covers": "TYPEUNION-CACHE-READSIDE-0001: NO cache entry, lsb=0, outsize 2: findTruncation null, size(4) != sz(2) so the printc.cc:2015-2016 break does not fire -> synthetic unnamedField(0,2) (printc.cc:2030-2041) -> Z._0_2_"
     }
   ],
   "input_model_difference": "Ghidra renders through the real Funcdata/ScopeLocal/VarnodeBank object graph (Scope::addSymbol, VarnodeBank-backed varnodes, HighVariable::setSymbol); the Rust fixture constructs the equivalent PcodeOp/Varnode/HighVariable/Symbol graph directly. The observable compared is the emitted C text of the op-level opSubpiece call plus the two predicate sweeps, which do not depend on the bank plumbing",
@@ -111,15 +141,16 @@
     "armB_find_truncation_field": "MATCH",
     "armA_nested_needs_resolution": "MATCH (REWORK #1: the no-cache findResolve path — field[0].type fallback, no break; was MISMATCH before the rework, audit-verified)",
     "armA_allow_cast_finalcast": "MATCH (REWORK #3: outtype from the SUBPIECE output high type; was MISMATCH/dead-code before the rework, audit-verified)",
-    "union_resolution_cache_hit_break": "UNTESTED (the read side is wired via the doc_function union_resolutions snapshot and the (parent,op,slot) ResolveEdge key; the WRITE side — Funcdata::setUnionField producing an entry whose getDatatype()==ct for a struct on this path — is not exercised by any fixture yet; the pipeline's unionresolve producers do not currently emit such entries)",
+    "union_resolution_cache_hit_break": "MATCH (TYPEUNION-CACHE-READSIDE-0001: the UNION findTruncation read side — hit descent U.b/V.b, miss break W, span rejection X, miss synthetic Z._0_2_ — is exercised through the real Funcdata::setUnionField write port and the doc_function union_resolutions snapshot channel, 5 records byte-identical)",
+    "struct_findresolve_self_break": "UNTESTED (the STRUCT arm's findResolve early-break when the cached resolution resolves to ct itself — printc.cc:1967-1971 with getDatatype()==ct — still has no fixture; the fixture's inner-struct record covers only the no-cache field[0].type fallback)",
     "symbol_offset_positive": "UNTESTED (printc.cc:856-857 suboff>0 requires a partial-symbol map entry not constructed here)",
     "big_endian_byte_offset": "UNTESTED (x86:LE target; computeByteOffsetForComposite big-endian arm unexercised)",
     "pipeline_needs_resolution_production": "MISSING (Rugra TypeFactory::set_fields does not set needs_resolution for single-field-fills-struct, type.cc:1569-1871 — TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001; the Rust fixture sets the flag manually on fixture_inner to mirror the oracle factory)"
   },
   "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "cpp_fixture_sha256": "5c716207b5c136de7c370c264dfe6bea50d9efd1fe6ca551a5f0fb2fa0b463ad",
-  "rust_fixture_sha256": "2ed04654614e3647a3ad9f76e9f120377bb31ec9fc58e1de6bfbb3582cd2fd91",
-  "expected_stdout_sha256": "f012e98e47e421504d9e62f944bde5a377fc827bcf874e661e9118ae7f79f8fb",
-  "overall_status": "MATCH: all 26 records byte-identical against the locked 12.0.4 oracle (including the three audit-rework records: nested needsResolution findResolve no-cache descent, PartialEnum in/out cast whitelists, allowCast finalcast from the SUBPIECE output high type)"
+  "cpp_fixture_sha256": "1a5c924fe842683b0569c9a44682a523b7214afb3a76c526e633d20e357f762e",
+  "rust_fixture_sha256": "f181ea84619773c6c99fdbf00c7a7c1870a1c7a9109d0c0c622362dbbc1b1cf1",
+  "expected_stdout_sha256": "718903810d79ec80f12286f935af50484d0bfe0cc1ea6477cbe44a41bb58bc5d",
+  "overall_status": "MATCH: all 31 records byte-identical against the locked 12.0.4 oracle (26 prior records including the three audit-rework records, plus the five TYPEUNION-CACHE-READSIDE-0001 union-cache read-side records: armB.unionhit=U.b / armA.unionhit=V.b / armA.unionmiss=W / armA.unionspan=X / armA.unionsynth=Z._0_2_)"
 }

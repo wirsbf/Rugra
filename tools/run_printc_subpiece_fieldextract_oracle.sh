@@ -4,7 +4,7 @@
 # Rebuilds the locked Ghidra 12.0.4 decompiler library from the pinned
 # ghidra/ checkout, compiles the C++ fixture against it (real oracle), builds
 # the Rugra crate (live working tree, consuming the printc/cast/datatype
-# WIP) and the Rust fixture, runs both, and requires the 22 stdout records
+# WIP) and the Rust fixture, runs both, and requires the 31 stdout records
 # to be byte-identical:
 #   piece.*  — Datatype::isPieceStructured sweep incl. the TypeEnum ctor
 #              metatype normalization (type.hh:489-494).
