@@ -921,3 +921,51 @@ prefercomplement(:5714) → structuretransform(:5715) → normalizebranches(:571
   testCache 惰性建 cover，Rugra 每 Action 新建 `Merge::new()`（live_set/
   covers 未建立）——`merge_adjacent` 对同尺寸 (in,out) 对会凭空合并。merge.rs
   域外租约，登记跟进 TODO；fixture 图以常量输入规避该路径。
+
+---
+
+## 2026-08-17：UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ — 双注册去重 + base 组 oracle 序
+
+### `build_default_pipeline` 单注册过滤（coreaction.cc:5462-5738）
+
+`universalAction` 对每个 Action 恰好注册一次（`ActionPrototypeWarnings` 仅在
+:5737）。`build_default_pipeline` 此前把 `build_full_pipeline_actions()` 的
+Vec 整体平铺进 universal 顶层，与本函数下方按 oracle 位置显式注册的条目
+形成双注册：`ActionPrototypeWarnings` 每函数跑两次（E2E stderr
+48 = 24×2 条 unknown-convention 警告），DefaultParams/PrototypeTypes/
+VarnodeProps/ParamDouble/DirectWrite/ActiveParam/ReturnRecovery/NonzeroMask/
+InferTypes/UnjustifiedParams/StartTypes/ActiveReturn/SwitchNorm/HideShadow
+也各多跑一趟错误位置（:5482 之前）。
+
+现按 `get_name()` 跳过本 builder 拥有的 15 个名字（常量
+`BUILDER_OWNED_ACTION_NAMES`）；Vec 存活条目（FuncLinkOutOnly :5485、
+Segmentize :5494、InternalStorage :5495、MultiCse :5653、ShadowVar :5654、
+Deindirect :5655）保持原注册上下文。
+
+### base 组重排为 coreaction.cc:5477-5485 逐字序
+
+`start(:5477) → constbase(:5478) → [normalizesetup 排除——normalanalysis 组
+不在 decompile 根 toggle 集，coreaction.cc:5424-5443] → defaultparams(:5480)
+→ extrapopsetup(:5482) → prototypetypes(:5483) → funclink(:5484)`。此前
+FunLink 在 ExtraPopSetup/PrototypeTypes 之前，与 oracle 相反。
+
+### 登记残差（DELIBERATE RESIDUAL）
+
+`outputprototype`/`inputprototype`/`setcasts` 仍双注册（顶层各 2 份）。
+A/B 实测：去重这三者会暴露 printc 侧局部名碰撞（`uVarN` 重复声明，
+numbering 0→3，仅 glob_url；复核方四变体独立复现）；保留三者的提前趟时 numbering=0——改动前基线 16 系当时并发 WIP 瞬态（先前"双注册所致"的归因修正已撤回）
+顺带消除了改动前基线的 16 条 numbering（此前误归因于并发 printc WIP，
+实为双注册所致）。等 printc/printlanguage 租约方的局部声明命名去重落地
+后，从跳过集中删去这三个名字即达全量单注册。
+
+### 度量（锁定 curl E2E）
+
+- Matched 123 不变 / defects 0 不变 / numbering 16 → **0** / skeleton 3152 → 3166。
+- stderr unknown-convention 警告 48 → 24（配合 ① commentdb 接线后为 0——
+  警告改存 CommentDatabaseInternal）。
+
+### 新增测试
+
+- `test_prototype_warnings_registered_once`：prototypewarnings 顶层恰 1 份；
+  15 个去重名字的顶层份数；3 个残差双注册恰 2 份。
+- `test_base_group_order_matches_ghidra_5477_5485`：顶层前缀逐字序。

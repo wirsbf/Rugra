@@ -269,3 +269,22 @@ context spec decode；`resolveprototype` → CSPEC-PARAMMODEL-0001；
 `<body>` 内容经配对 DOM handle 提供（`XmlDecode::readString(ATTRIB_CONTENT)`
 的 TreeDecoder 缺口，归 MARSHAL 域）；segmentop/jumpassist decode 已移植但
 无 oracle 观察（UNTESTED）。模块保持 L2。
+
+## 2026-08-17：UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ① — commentdb 工作侧分配
+
+Ghidra 的 `Architecture::init`（architecture.cc:1391-1414）在 :1400 调
+`buildCommentDB`，`SleighArchitecture::buildCommentDB`（sleigh_arch.cc:241-245）
+分配内存态 `CommentDatabaseInternal`；构造器本身保持
+`commentdb = (CommentDatabase *)0`（architecture.cc:166，Rugra
+`Architecture::new` 的 `commentdb: None` 已对齐）。
+
+Rugra 的分配点在 worker 的 init 等价物
+`examples/curl_decompile.rs::worker_architecture`：`Architecture::new()` 之后、
+cspec 解析（restoreFromSpec 等价步骤）之前，调用既有
+`set_commentdb(Arc<RwLock<CommentDatabaseInternal::new>>)`,
+与 init 序中 buildCommentDB 先于 restoreFromSpec(:1405) 的位置一致。此后
+`Funcdata::warning_header`/`warning`（funcdata.cc:135/119）全部入库——包括
+`ActionPrototypeWarnings` 的 unknown-calling-convention 警告
+（coreaction.cc:4908）——E2E stderr 从 48 条（eprintln 回退 × 双注册）降为 0，
+警告以 `Comment::warningheader` 类型按函数地址入库，等待 printc 侧
+`emitCommentFuncHeader`（printc.cc:3272）接线后进入 C 输出。

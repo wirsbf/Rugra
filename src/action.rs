@@ -897,23 +897,70 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
             1,
         );
 
-        // --- Top-level Actions (coreaction.cc:5477-5485) ---
-        universal.add_action(Box::new(ActionStart::new()));
+        // --- Top-level Actions (coreaction.cc:5477-5485, oracle order) ---
+        universal.add_action(Box::new(ActionStart::new())); // :5477
         universal.add_action(Box::new(crate::coreaction::ActionConstbase::new())); // :5478
-        // Ghidra: coreaction.cc:5421-5441,5479. ActionNormalizeSetup belongs
-        // only to the `normalanalysis` group. That group is present in the
-        // `normalize` root and absent from the default `decompile` root, so a
-        // normal decompilation must preserve imported prototype locks.
+        // Ghidra: coreaction.cc:5419-5443,5479. ActionNormalizeSetup belongs
+        // only to the `normalanalysis` group. That group is a member of the
+        // `normalize` root (coreaction.cc:5438-5443) and absent from the
+        // default `decompile` root's toggle set (coreaction.cc:5424-5432), so
+        // a normal decompilation must preserve imported prototype locks.
         universal.add_action(Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
-        universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
-        // Wire in additional implemented Actions from coreaction (Ghidra
-        // coreaction.cc:5479-5485: NormalizeSetup/DefaultParams/PrototypeTypes/
-        // FuncLinkOutOnly).
-        for extra in crate::coreaction::build_full_pipeline_actions() {
-            universal.add_action(extra);
-        }
         universal.add_action(Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
         universal.add_action(Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
+        universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new())); // :5484
+        // SINGLE REGISTRATION (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④):
+        // universalAction (coreaction.cc:5462-5738) registers every Action
+        // exactly once — e.g. ActionPrototypeWarnings appears only at :5737.
+        // build_full_pipeline_actions() (coreaction.rs) returns the
+        // implemented-but-unregistered Actions, but this builder registers
+        // most of them explicitly below at their oracle positions (base group
+        // above, mainloop :5490-5508, fullloop :5679-5688, merge/casts
+        // :5714-5738). Consuming those vec entries here as well double-
+        // registered them: ActionPrototypeWarnings ran twice per function
+        // (stderr 48 = 24×2 unknown-convention warnings), and DefaultParams /
+        // PrototypeTypes / VarnodeProps / ParamDouble / DirectWrite /
+        // ActiveParam / ReturnRecovery / NonzeroMask / InferTypes /
+        // UnjustifiedParams / StartTypes / ActiveReturn / SwitchNorm /
+        // HideShadow each ran an extra pass at the wrong (pre-:5482)
+        // position. Skip every name this builder owns; the surviving vec
+        // entries (FuncLinkOutOnly :5485, Segmentize :5494, InternalStorage
+        // :5495, MultiCse :5653, ShadowVar :5654, Deindirect :5655) keep their
+        // current registration context.
+        //
+        // DELIBERATE RESIDUAL (registered in UNKNOWN-PROTOMODEL-WARN-EMIT-0001):
+        // outputprototype/inputprototype/setcasts stay double-registered for
+        // now. A/B on the locked curl corpus: deduplicating them exposes a
+        // printc-side local-name collision (duplicate `uVarN` declarations,
+        // numbering 0 -> 35; with the three early runs kept, numbering is 0
+        // — better than the pre-change baseline's 16, which this same dedup
+        // of the other 15 actions eliminates). Remove the three names from
+        // this skip set once the local-declaration naming pass deduplicates
+        // names (printc/printlanguage lease) to reach the oracle's single
+        // registration for every Action.
+        const BUILDER_OWNED_ACTION_NAMES: [&str; 15] = [
+            "defaultparams",      // :5480 above
+            "prototypetypes",     // :5483 above
+            "varnodeprops",       // mainloop :5491
+            "paramdouble",        // mainloop :5493
+            "directwrite",        // mainloop :5497/:5498 + fullloop :5680/:5681
+            "activeparam",        // mainloop :5499
+            "returnrecovery",     // mainloop :5500
+            "nonzeromask",        // mainloop :5507
+            "infertypes",         // mainloop :5508
+            "unjustifiedparams",  // fullloop :5686
+            "starttypes",         // fullloop :5687
+            "activereturn",       // fullloop :5688
+            "switchnorm",         // fullloop :5684
+            "hideshadow",         // :5728
+            "prototypewarnings",  // :5737
+        ];
+        for extra in crate::coreaction::build_full_pipeline_actions() {
+            if BUILDER_OWNED_ACTION_NAMES.contains(&extra.get_name()) {
+                continue;
+            }
+            universal.add_action(extra);
+        }
 
         // --- fullloop (coreaction.cc:5487, repeatapply) ---
         // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
@@ -1175,6 +1222,92 @@ mod tests {
         assert_eq!(names.iter().filter(|n| **n == "assignhigh").count(), 1);
         assert_eq!(names.iter().filter(|n| **n == "dominantcopy").count(), 1);
         assert_eq!(names.iter().filter(|n| **n == "copymarker").count(), 1);
+    }
+
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④: universalAction registers every
+    // Action exactly once (coreaction.cc:5462-5738); ActionPrototypeWarnings
+    // appears only at :5737. The build_full_pipeline_actions() consumption
+    // used to double-register it (stderr 48 = 24×2 unknown-convention
+    // warnings per E2E run) along with 14 other Actions this builder owns.
+    #[test]
+    fn test_prototype_warnings_registered_once() {
+        let root = build_default_pipeline();
+        let names = root.child_names();
+        // coreaction.cc:5737 — exactly one top-level prototypewarnings.
+        assert_eq!(names.iter().filter(|n| **n == "prototypewarnings").count(), 1);
+        // DELIBERATE RESIDUAL (see the skip-set comment above): the three
+        // early runs kept registered until the printc naming fix land as
+        // exactly two top-level instances each (early + oracle position).
+        for name in ["outputprototype", "inputprototype", "setcasts"] {
+            assert_eq!(
+                names.iter().filter(|n| **n == name).count(),
+                2,
+                "residual double for {name}"
+            );
+        }
+        // The other deduplicated builder-owned names: base/merge ones appear
+        // exactly once at top level, mainloop/fullloop ones only inside their
+        // group (zero top-level instances).
+        for (name, expected_top_level) in [
+            ("defaultparams", 1),      // :5480
+            ("prototypetypes", 1),     // :5483
+            ("hideshadow", 1),         // :5728
+            ("varnodeprops", 0),       // mainloop :5491
+            ("paramdouble", 0),        // mainloop :5493
+            ("directwrite", 0),        // mainloop/fullloop only
+            ("activeparam", 0),        // mainloop :5499
+            ("returnrecovery", 0),     // mainloop :5500
+            ("nonzeromask", 0),        // mainloop :5507
+            ("infertypes", 0),         // mainloop :5508
+            ("unjustifiedparams", 0),  // fullloop :5686
+            ("starttypes", 0),         // fullloop :5687
+            ("activereturn", 0),       // fullloop :5688
+            ("switchnorm", 0),         // fullloop :5684
+        ] {
+            assert_eq!(
+                names.iter().filter(|n| **n == name).count(),
+                expected_top_level,
+                "top-level count for {name}"
+            );
+        }
+    }
+
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④: the base group order is
+    // coreaction.cc:5477-5485 verbatim (Start, Constbase, [NormalizeSetup
+    // excluded — normalanalysis group, not in the decompile root's toggle
+    // set], DefaultParams, ExtraPopSetup, PrototypeTypes, FuncLink,
+    // FuncLinkOutOnly), followed by the remaining build_full_pipeline_actions
+    // survivors and fullloop.
+    #[test]
+    fn test_base_group_order_matches_ghidra_5477_5485() {
+        let root = build_default_pipeline();
+        let names = root.child_names();
+        let expected_prefix = [
+            "start",             // :5477
+            "constbase",         // :5478
+            "defaultparams",     // :5480
+            "extrapopsetup",     // :5482
+            "prototypetypes",    // :5483
+            "funclink",          // :5484
+            "funclinkoutonly",   // :5485 (vec survivor, base position)
+            "segmentize",        // :5494 (vec survivor)
+            "internalstorage",   // :5495 (vec survivor)
+            "multicse",          // :5653 (vec survivor)
+            "shadowvar",         // :5654 (vec survivor)
+            "deindirect",        // :5655 (vec survivor)
+            // DELIBERATE RESIDUAL doubles (see the skip-set comment above):
+            // the early outputprototype/inputprototype/setcasts runs stay
+            // registered until the printc-side local-name collision is
+            // fixed; their oracle positions (:5730/:5731/:5735) hold the
+            // second instance.
+            "outputprototype",   // :5730 (residual early double)
+            "inputprototype",    // :5731 (residual early double)
+            "setcasts",          // :5735 (residual early double)
+            "fullloop",          // :5487 group
+        ];
+        assert!(names.len() >= expected_prefix.len());
+        let prefix: Vec<&str> = names[..expected_prefix.len()].to_vec();
+        assert_eq!(prefix, expected_prefix.to_vec());
     }
 
     struct ScriptAction {

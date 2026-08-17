@@ -1076,6 +1076,19 @@ fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, St
         store.register_tag(&root);
         let mut arch = rugra::arch::Architecture::new();
         arch.archid = "x86:LE:64:default".to_string();
+        // Ghidra: sleigh_arch.cc:241-245 SleighArchitecture::buildCommentDB
+        // (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ①). Architecture::init
+        // (architecture.cc:1391-1414) calls buildCommentDB at :1400, before
+        // restoreFromSpec (:1405) — this function is Rugra's worker-side
+        // equivalent of that init sequence (cspec parse below is the
+        // restoreFromSpec step), so the in-memory CommentDatabaseInternal is
+        // allocated at the same point here. Every Funcdata::warningHeader /
+        // warning (funcdata.cc:135/119) — including ActionPrototypeWarnings'
+        // "Unknown calling convention" comments (coreaction.cc:4908) — then
+        // stores into this database instead of falling back to stderr.
+        arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::comment::CommentDatabaseInternal::new(),
+        )));
         let mut inject_lib =
             rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
         inject_lib.set_sleigh_lookup(host.clone());

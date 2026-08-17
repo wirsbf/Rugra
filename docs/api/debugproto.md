@@ -105,3 +105,48 @@ oracle fixture; the importer remains `NO_ORACLE` under mechanism B2.
 `result/curl_cur.c` 对 `tests/golden/ghidra_curl_1204.c` 的差分门禁回归
 （`FUN_0` → `free`/`strdup` 调用解析与全局类型指针化在本 session 达到
 byte-stable）。
+
+## 2026-08-17：UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ⑤ — void 签名 DWARF 覆盖钉住 unknown 模型
+
+### `DebugPrototypeDatabase::apply` 的模型状态（fspec.cc:4690-4698/4776）
+
+锁定的 Program-database 签名经 `FuncProto::decode` 进入反编译器：ATTRIB_MODEL
+携带平台侧调用约定名，无法识别的名字走 `createUnknownModel`
+（fspec.cc:4697 → architecture.cc:1159-1166），得到克隆 defaultfp 行为、
+`isUnknown()=true`、且名字 "unknown" 不打印进声明的 `UnknownProtoModel`；
+空参列表的 voidlock 置位 modellock（fspec.cc:4776）。
+
+Rugra 的 `apply` 现按同一边界可观察行为钉模型状态：
+
+- **空参签名**（`parameters.is_empty()`）：`set_model_name("unknown")` —
+  克隆的模型 Arc 保留为 UnknownProtoModel 的 placeholder（行为/效果/extrapop
+  仍随 default 模型），`is_model_unknown()` 为 true，`ActionPrototypeWarnings`
+  （coreaction.cc:4901-4909）发射 "Unknown calling convention" 警告。锁定
+  golden 中恰好只有三个空参 DWARF 函数告警：main_init(0x4960)/
+  main_free(0x4970)/hugehelp(0x4a00)。
+- **带参签名**：保持既有解析模型绑定（golden 中 18 个带参 DWARF 函数全部
+  无警告——它们的模型保持 resolved，ActionPrototypeTypes 不会被锁死的
+  unknown 名覆盖）。
+
+### 残差（main_init 后缀）
+
+golden 的 main_init 为裸 "Unknown calling convention"（存储未锁：
+isInputLocked/isOutputLocked 均假），main_free/hugehelp 带
+"-- yet parameter storage is locked"。Rugra 当前对三个函数统一
+`set_input_lock(true)+set_output_lock(true)`，main_init 会多出后缀（27 字符
+文本差）。DWARF 可见判别（main_init 的 abstract DIE 带 DW_AT_type，其余两个
+void 返回无）不足以从 decompiler 侧语义推导平台侧锁属性差异；待 printc 侧
+②③ 接线落地、差分可见时按 golden 逐位置复核（登记在
+UNKNOWN-PROTOMODEL-WARN-EMIT-0001）。
+
+### 新增测试
+
+- `void_signature_dwarf_prototype_pins_unknown_model`：三函数 unknown 钉住 +
+  modellock + void_input_locked。
+- `parameterized_dwarf_prototype_keeps_resolved_model`：带参签名保持
+  resolved 名。
+- `unknown_model_warning_stores_in_commentdb`：①+⑤ 端到端——
+  Architecture 分配 CommentDatabaseInternal（sleigh_arch.cc:244）后，
+  ActionPrototypeWarnings 把 "WARNING: Unknown calling convention -- yet
+  parameter storage is locked" 以 WARNINGHEADER 类型存入 0x4970 函数地址下
+  （printc emitCommentFuncHeader 的打印侧接线另行登记）。

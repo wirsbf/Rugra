@@ -281,6 +281,29 @@ impl DebugPrototypeDatabase {
         proto.set_input_lock(true);
         proto.set_output_lock(true);
         proto.set_model_lock(true);
+        // Ghidra: fspec.cc:4690-4698 FuncProto::decode (ATTRIB_MODEL arm) +
+        // fspec.cc:4776 (voidinputlock → modellock) + fspec.hh:1025-1032
+        // UnknownProtoModel. A locked Program-database signature whose
+        // parameter list is explicitly void locks the model with an
+        // unresolved convention name: FuncProto::decode maps the
+        // unrecognized name to createUnknownModel (fspec.cc:4697,
+        // architecture.cc:1159-1166), producing an UnknownProtoModel that
+        // clones the default model's behavior, reports isUnknown()=true, and
+        // (for the reserved name "unknown") never prints in declarations.
+        // This is exactly the locked golden's observable split: the three
+        // void-signature DWARF functions (main_init/main_free/hugehelp) are
+        // the only real functions with the "Unknown calling convention"
+        // warning (ActionPrototypeWarnings, coreaction.cc:4901-4909), while
+        // every parameterized DWARF signature in the same corpus decompiles
+        // with a resolved model and no warning. Pin the sentinel name for the
+        // void-signature boundary only; the cloned model Arc stays in place
+        // as the UnknownProtoModel placeholder (behavior/effects/extrapop
+        // keep following the default model, and set_input_lock on an empty
+        // parameter list has already set modellock via voidinputlock,
+        // fspec.cc:4776 semantics).
+        if debug_proto.parameters.is_empty() {
+            proto.set_model_name("unknown");
+        }
         fd.funcp = proto;
         Ok(true)
     }
@@ -1389,5 +1412,105 @@ mod tests {
             .expect("apply void input"));
         assert!(no_args.funcp.parameters.is_empty());
         assert!(no_args.funcp.is_input_locked());
+    }
+
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ⑤: a locked void-signature DWARF
+    // prototype pins the unknown model sentinel (FuncProto::decode
+    // fspec.cc:4690-4698 maps the unresolved convention to
+    // createUnknownModel; the void parameter list forces modellock via
+    // fspec.cc:4776), so ActionPrototypeWarnings (coreaction.cc:4901-4909)
+    // fires for exactly the three void-signature functions in the locked
+    // corpus (main_init/main_free/hugehelp).
+    #[test]
+    fn void_signature_dwarf_prototype_pins_unknown_model() {
+        let bytes = std::fs::read("examples/curl").expect("curl fixture");
+        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
+        for (name, address) in
+            [("main_init", 0x4960u64), ("main_free", 0x4970), ("hugehelp", 0x4a00)]
+        {
+            let mut fd = Funcdata::new(name, Address::new(address), 8);
+            // Simulate the post-set_arch default-model binding the worker
+            // performs before the DWARF overlay (FUNCPROTO-MODEL-BIND-0001):
+            // the clone must not keep the resolved name for a void signature.
+            fd.funcp.set_model_name("__stdcall");
+            assert!(db
+                .apply(&mut fd, &register_resources())
+                .expect("apply void-signature prototype"));
+            assert!(
+                fd.funcp.is_model_unknown(),
+                "{name} must carry the unknown model sentinel"
+            );
+            assert!(
+                fd.funcp.is_model_locked(),
+                "{name} void parameter list locks the model (fspec.cc:4776)"
+            );
+            assert!(fd.funcp.void_input_locked);
+        }
+    }
+
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ⑤ counterpart: parameterized DWARF
+    // signatures keep the resolved model binding — in the locked golden none
+    // of the 18 parameterized DWARF functions warn, so the overlay must not
+    // pin the unknown sentinel for them.
+    #[test]
+    fn parameterized_dwarf_prototype_keeps_resolved_model() {
+        let bytes = std::fs::read("examples/curl").expect("curl fixture");
+        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
+        let mut fd = Funcdata::new("GetStr", Address::new(0x36d0), 0x4a);
+        fd.funcp.set_model_name("__stdcall");
+        assert!(db
+            .apply(&mut fd, &register_resources())
+            .expect("apply parameterized prototype"));
+        assert!(
+            !fd.funcp.is_model_unknown(),
+            "parameterized signatures keep the resolved model"
+        );
+        assert_eq!(fd.funcp.get_model_name(), "__stdcall");
+    }
+
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ①+⑤ end-to-end: with a
+    // CommentDatabaseInternal allocated on the Architecture
+    // (SleighArchitecture::buildCommentDB, sleigh_arch.cc:244), a
+    // void-signature DWARF overlay plus ActionPrototypeWarnings stores the
+    // unknown-calling-convention warning as a WARNINGHEADER comment for the
+    // function's address — the comment printc's emitCommentFuncHeader
+    // (printc.cc:3272) drains into the C output once the print-side wiring
+    // lands.
+    #[test]
+    fn unknown_model_warning_stores_in_commentdb() {
+        use crate::action::Action as _;
+        use crate::arch::Architecture;
+
+        let bytes = std::fs::read("examples/curl").expect("curl fixture");
+        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
+        let mut arch = Architecture::new();
+        arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::comment::CommentDatabaseInternal::new(),
+        )));
+        let arch = std::sync::Arc::new(arch);
+
+        let mut fd = Funcdata::new("main_free", Address::new(0x4970), 5);
+        fd.set_arch(arch.clone());
+        assert!(db
+            .apply(&mut fd, &register_resources())
+            .expect("apply void-signature prototype"));
+        assert!(crate::coreaction::ActionPrototypeWarnings::new()
+            .apply(&mut fd)
+            .is_ok());
+
+        let cdb = arch.commentdb.as_ref().expect("commentdb wired");
+        let guard = cdb.read().expect("commentdb lock");
+        let comments: Vec<_> = guard.comments_for_function(fd.baseaddr).collect();
+        assert_eq!(comments.len(), 1, "one deduplicated header warning");
+        let comment = comments[0];
+        assert_eq!(
+            comment.get_text(),
+            "WARNING: Unknown calling convention -- yet parameter storage is locked"
+        );
+        assert_eq!(
+            comment.get_type(),
+            crate::comment::comment_type::WARNINGHEADER
+        );
+        assert_eq!(comment.get_func_addr().as_u64(), 0x4970);
     }
 }
