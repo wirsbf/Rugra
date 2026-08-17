@@ -10,13 +10,15 @@
 |---|---|---|
 | 单元测试 (`cargo test --lib`) | **1357 通过 / 5 失败 / 3 ignored** | 失败集与 pristine base 逐个复现一致（comment/dynamic/funcdata×2/ruleaction 域外既有） |
 | curl E2E | **124/124 处理，74 反编译 / 1 超时(main churn) / 1 panic(helpf) / 48 导入声明桩** | 全量热测 43s |
-| 12.0.4 差分 | **skeleton 4403 / defects 0 / numbering 0**（LEGACY-DECL-DUP 收官 31cd76c：20→0） | `compare_ghidra.py` 全量 |
+| 12.0.4 差分 | **skeleton 3092 / defects 0 / numbering 0 / Matched 123/124** | `compare_ghidra.py` 全量 |
 | xunknown/xVar | **0**（TYPE-WIRING 双轨消除） | grep 归零 |
 | FUN_ 未解析调用 | **5**（起点 64；CALLSPEC 接线） | grep |
 | 逐字节一致函数 | **50/122** | compare 差分 |
-| gcc 审计 | **103 OK / 19 FAIL**（31cd76c 后：old-style/redeclaration 清零，余为表达式层残差） | audit_syntax |
+| gcc 审计 | **107 OK / 16 FAIL**（畸形 cast 1262→0、`+ 0 -` 3→0 后余量=varmap/typedef 域） | audit_syntax |
 | 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
-| oracle fixture | **registry 58 个**（本轮 +5：scope_fake_input_symbols/xml_text_dom/translate_docstore/scope_find_overlap/cspec_text_ingest） | fixture_registry.json |
+| oracle fixture | **registry 71 个**；`multiple descendants` 家族 351→0 且 throw 上线后 0 触发 | fixture_registry.json |
+
+### 终局指标（2026-08-17 收官）：warning 51/51=golden、`=` ( 畸形 1262→0、INDIRECT UnknownEffect −73%、stderr 风暴 48→0、11+ 轮机制 C（4 轮 REJECT 拦截真实分叉/误引）
 
 ### 本 session（2026-08-15~17）落地摘要
 
