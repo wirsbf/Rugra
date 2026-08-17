@@ -3224,6 +3224,13 @@ impl Heritage {
     /// the iteration (HERITAGE-DRIVER-SWITCH-0001 space-key fix; the
     /// historical whole-bank offset filter misclassified cross-space
     /// collisions).
+    ///
+    /// Wraparound note (cc:317-320): when `memrange.addr + memrange.size`
+    /// wraps past the top of the space (wrapped end offset < start offset),
+    /// the oracle does NOT use beginLoc(endaddr) — it clamps the window end
+    /// to endLoc(Address(space, getHighest())), i.e. the scan runs from
+    /// start to the END of the space with no offset bound
+    /// (HERITAGE-COLLECT-WRAPAROUND-0001).
     pub fn collect(
         &self,
         fd: &Funcdata,
@@ -3239,7 +3246,28 @@ impl Heritage {
         remove.clear();
         let addr = memrange.addr;
         let size = memrange.size;
-        let end_addr = addr.as_u64().wrapping_add(size as u64);
+        // cc:315: uintb start = memrange.addr.getOffset();
+        // cc:316: Address endaddr = memrange.addr + memrange.size —
+        // Address::operator+ (address.hh:423) = wrapOffset(offset + size)
+        // (space.hh:383), the int4->int8 sign-extending add taken modulo
+        // the space size. Rugra spaces are 64-bit addressable (see
+        // space_highest, heritage.hh:142 note), so wrapOffset is the
+        // identity and the plain u64 wrapping add IS the oracle arithmetic
+        // (`size as u64` sign-extends exactly like int4->int8).
+        let start = addr.as_u64();
+        let end_addr = start.wrapping_add(size as u64);
+        // cc:317-320: Wraparound — the wrapped end offset fell below start
+        // (the range crosses the top of the space). The oracle clamps
+        // enditer to fd->endLoc(Address(space, space->getHighest())), which
+        // (varnode.cc:1596-1602) is the lower bound at the NEXT space in
+        // order: the window runs from start to the end of memrange's space.
+        // Reachable only when a MemRange straddles the space top — a
+        // varnode at offset == getHighest() with size > 1 entering the
+        // disjoint cover at cc:2708-2710; for 8-byte spaces that means
+        // offset 0xffffffffffffffff, which no real loader emits
+        // (pre-existing divergence, not r2-introduced; single-point fixture
+        // heritage_collect_wraparound_1204 pins the branch).
+        let wrapped = end_addr < start;
         let mut maxsize: i32 = 0;
         // Ghidra cc:323-325: beginLoc(memrange.addr) .. endLoc(addr+size) —
         // LIVE ordered-window iteration over the bank's loc-set. Liveness is
@@ -3268,7 +3296,19 @@ impl Heritage {
         for entry in fd.vbank.loc_tree.range(probe..) {
             let vn_arc = entry.0.clone();
             let vn = vn_arc.read().unwrap();
-            if vn.address_space != memrange.space || vn.loc.as_u64() >= end_addr {
+            // cc:324: iterate beginLoc(memrange.addr) .. enditer. Both
+            // enditer forms (beginLoc(endaddr), or the wraparound clamp at
+            // the next space in order) live inside or at the far edge of
+            // memrange's space, so the first foreign-space member ends the
+            // monotone space-major walk.
+            if vn.address_space != memrange.space {
+                break;
+            }
+            // cc:321-322: non-wrapped window end is beginLoc(endaddr) —
+            // the first varnode whose start offset >= endaddr. In the
+            // wrapped case (cc:317-320) there is no offset bound: the
+            // window extends to the end of the space.
+            if !wrapped && vn.loc.as_u64() >= end_addr {
                 break;
             }
             // cc:326: if (!vn->isWriteMask()) gates every classification

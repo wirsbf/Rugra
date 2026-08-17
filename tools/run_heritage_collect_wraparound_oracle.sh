@@ -11,9 +11,8 @@ if [[ -z "$runner_source" || ! -f "$runner_source" || -L "$runner_source" ]]; th
   echo "immutable runner fd does not resolve to a regular file" >&2
   exit 1
 fi
-
 repo_root=$(builtin cd "$(/usr/bin/dirname "$runner_source")/.." && builtin pwd -P)
-runner="$repo_root/tools/run_heritage_driver_switch_oracle.sh"
+runner="$repo_root/tools/run_heritage_collect_wraparound_oracle.sh"
 if [[ "$runner_source" != "$runner" ]]; then
   echo "runner fd resolved outside the expected repository path" >&2
   exit 1
@@ -42,12 +41,12 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=9dadb2a32b02216a25e5af4483782d8f5f7d3027
-rugra_base_tree=7c7518f8adddb10d1075d4d2942fb9b4d7e0becc
+rugra_base_commit=c48471545d38ef5db959deffde0aa5092cb96971
+rugra_base_tree=3d10e835076d21c38f6fb3fce9af2fe8799b262c
 ghidra_root="$repo_root/ghidra"
-metadata="$repo_root/tests/oracle/heritage_driver_switch_1204.metadata.json"
-cpp_fixture="$repo_root/tests/oracle/heritage_driver_switch_1204.cc"
-rust_fixture="$repo_root/tests/oracle/heritage_driver_switch_1204.rs"
+metadata="$repo_root/tests/oracle/heritage_collect_wraparound_1204.metadata.json"
+cpp_fixture="$repo_root/tests/oracle/heritage_collect_wraparound_1204.cc"
+rust_fixture="$repo_root/tests/oracle/heritage_collect_wraparound_1204.rs"
 heritage_rs="$repo_root/src/heritage.rs"
 heritage_doc="$repo_root/docs/api/heritage.md"
 registry_cache="$user_home/.cargo/registry/cache"
@@ -127,9 +126,9 @@ host_cargo=$(/usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" 
   "$host_cargo_bin" --version)
 host_platform=$(/usr/bin/uname -srm)
 
-oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-heritage-driver-switch-1204.XXXXXX)
+oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-heritage-collect-wraparound-1204.XXXXXX)
 cleanup() {
-  if [[ "$oracle_tmp" != /tmp/rugra-heritage-driver-switch-1204.?????? ]]; then
+  if [[ "$oracle_tmp" != /tmp/rugra-heritage-collect-wraparound-1204.?????? ]]; then
     echo "refusing to remove unexpected temporary path: $oracle_tmp" >&2
     return 1
   fi
@@ -197,9 +196,9 @@ cargo_home.mkdir(parents=True)
 registry_cache = pathlib.Path(registry_cache_raw)
 
 expected_paths = {
-    pathlib.Path(metadata_raw): repo / "tests/oracle/heritage_driver_switch_1204.metadata.json",
-    pathlib.Path(cpp_raw): repo / "tests/oracle/heritage_driver_switch_1204.cc",
-    pathlib.Path(rust_raw): repo / "tests/oracle/heritage_driver_switch_1204.rs",
+    pathlib.Path(metadata_raw): repo / "tests/oracle/heritage_collect_wraparound_1204.metadata.json",
+    pathlib.Path(cpp_raw): repo / "tests/oracle/heritage_collect_wraparound_1204.cc",
+    pathlib.Path(rust_raw): repo / "tests/oracle/heritage_collect_wraparound_1204.rs",
     pathlib.Path(heritage_raw): repo / "src/heritage.rs",
     pathlib.Path(heritage_doc_raw): repo / "docs/api/heritage.md",
 }
@@ -255,8 +254,6 @@ def live_file(relative):
 
 overlay_files = {
     pathlib.Path("src/heritage.rs"),
-    pathlib.Path("src/coreaction.rs"),
-    pathlib.Path("src/funcdata.rs"),
 }
 crate_files = [
     pathlib.Path("Cargo.toml"),
@@ -269,7 +266,7 @@ crate_files = [
 ] + base_source_files("src") + base_source_files("sleigh_shim")
 crate_files = sorted(set(crate_files), key=lambda item: item.as_posix())
 crate_hasher = hashlib.sha256()
-crate_hasher.update(b"rugra-heritage-driver-switch-base-overlay-v1\0")
+crate_hasher.update(b"rugra-heritage-collect-wraparound-base-overlay-v1\0")
 crate_hasher.update(rugra_base_commit.encode())
 crate_bytes = {}
 for relative in crate_files:
@@ -285,13 +282,11 @@ for relative in crate_files:
     crate_hasher.update(data)
 
 special_paths = [
-    pathlib.Path("tests/oracle/heritage_driver_switch_1204.cc"),
-    pathlib.Path("tests/oracle/heritage_driver_switch_1204.rs"),
-    pathlib.Path("tests/oracle/heritage_driver_switch_1204.metadata.json"),
+    pathlib.Path("tests/oracle/heritage_collect_wraparound_1204.cc"),
+    pathlib.Path("tests/oracle/heritage_collect_wraparound_1204.rs"),
+    pathlib.Path("tests/oracle/heritage_collect_wraparound_1204.metadata.json"),
     pathlib.Path("docs/api/heritage.md"),
-    pathlib.Path("docs/api/coreaction.md"),
-    pathlib.Path("docs/api/funcdata.md"),
-    pathlib.Path("tools/run_heritage_driver_switch_oracle.sh"),
+    pathlib.Path("tools/run_heritage_collect_wraparound_oracle.sh"),
 ]
 special = {}
 for relative in special_paths:
@@ -309,8 +304,8 @@ require("live runner/FD hash", sha(live_file(special_paths[-1])), runner_snapsho
 metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
-require("fixture id", metadata["fixture_id"], "HERITAGE-DRIVER-SWITCH-0001")
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("fixture id", metadata["fixture_id"], "HERITAGE-COLLECT-WRAPAROUND-0001")
+require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),
@@ -327,11 +322,7 @@ observed_hashes = {
     "cpp_fixture_sha256": sha(special[special_paths[0].as_posix()]),
     "rust_fixture_sha256": sha(special[special_paths[1].as_posix()]),
     "heritage_rs_sha256": sha(crate_bytes["src/heritage.rs"]),
-    "coreaction_rs_sha256": sha(crate_bytes["src/coreaction.rs"]),
-    "funcdata_rs_sha256": sha(crate_bytes["src/funcdata.rs"]),
     "heritage_doc_sha256": sha(special[special_paths[3].as_posix()]),
-    "coreaction_doc_sha256": sha(special[special_paths[4].as_posix()]),
-    "funcdata_doc_sha256": sha(special[special_paths[5].as_posix()]),
     "runner_sha256": runner_snapshot_sha,
     "cargo_toml_sha256": sha(crate_bytes["Cargo.toml"]),
     "cargo_lock_sha256": sha(crate_bytes["Cargo.lock"]),
@@ -341,7 +332,7 @@ observed_hashes = {
 require(
     "crate snapshot scheme",
     comparand["rust_crate_tree_hash_scheme"],
-    "sha256 of rugra-heritage-driver-switch-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "sha256 of rugra-heritage-collect-wraparound-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
 )
 for key, actual in observed_hashes.items():
     require(key, actual, comparand[key])
@@ -379,14 +370,11 @@ require("covered projection status", metadata["covered_projection_status"], "MAT
 
 coverage = metadata["coverage"]
 for required_key, required_prefix in (
-    ("single_pass_written_link", "MATCH"),
-    ("reentry_idempotence_diamond", "MATCH"),
-    ("cross_space_location_map", "MATCH"),
-    ("late_free_reentry_absorption", "MATCH"),
-    ("refinement_live_recollect", "MATCH"),
-    ("free_with_reader_census", "MATCH"),
-    ("production_action_switch", "MATCH"),
-    ("e2e_throughput_residual", "MISMATCH"),
+    ("wraparound_straddle_subpiece_link", "MATCH"),
+    ("nonwrap_control_same_shape", "MATCH"),
+    ("wraparound_exact_top_direct_link", "MATCH"),
+    ("globaldisjoint_cover_witness", "MATCH"),
+    ("clamp_regression_power", "MATCH"),
 ):
     if required_key not in coverage:
         raise SystemExit(f"coverage table missing {required_key}")
@@ -421,7 +409,7 @@ for block in package_blocks:
 require("locked registry package count", len(registry_packages), metadata["build"]["registry_packages"])
 
 registry_hasher = hashlib.sha256()
-registry_hasher.update(b"rugra-heritage-driver-switch-registry-lock-v1\0")
+registry_hasher.update(b"rugra-heritage-collect-wraparound-registry-lock-v1\0")
 for name, version, checksum in registry_packages:
     record = f"{name}\0{version}\0{checksum}".encode()
     registry_hasher.update(len(record).to_bytes(8, "big"))
@@ -509,9 +497,9 @@ for name, version, checksum in registry_packages:
 )
 PY
 
-snapshot_metadata="$snapshot_root/tests/oracle/heritage_driver_switch_1204.metadata.json"
-snapshot_cpp="$snapshot_root/tests/oracle/heritage_driver_switch_1204.cc"
-snapshot_rust="$snapshot_root/tests/oracle/heritage_driver_switch_1204.rs"
+snapshot_metadata="$snapshot_root/tests/oracle/heritage_collect_wraparound_1204.metadata.json"
+snapshot_cpp="$snapshot_root/tests/oracle/heritage_collect_wraparound_1204.cc"
+snapshot_rust="$snapshot_root/tests/oracle/heritage_collect_wraparound_1204.rs"
 
 oracle_archive="$oracle_tmp/ghidra-cpp.tar"
 /usr/bin/mkdir -p "$oracle_tmp/source"
@@ -544,7 +532,7 @@ if [[ ! -f "$oracle_cpp/libdecomp.a" || -L "$oracle_cpp/libdecomp.a" ]]; then
   exit 1
 fi
 
-cpp_binary="$oracle_tmp/heritage_driver_switch_1204_cpp"
+cpp_binary="$oracle_tmp/heritage_collect_wraparound_1204_cpp"
 if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_cxx_bin" -std=c++11 -O2 -Wall -Wno-sign-compare -m64 \
     -I"$oracle_cpp" "$snapshot_cpp" "$oracle_cpp/libdecomp.cc" \
@@ -579,7 +567,7 @@ fi
 
 if $ghidra_only; then
   /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-  echo "heritage_driver_switch_1204: GHIDRA_LOCKED_OUTPUT_OK overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"
+  echo "heritage_collect_wraparound_1204: GHIDRA_LOCKED_OUTPUT_OK overall=MATCH stdout_sha256=$actual_stdout_sha"
   exit 0
 fi
 
@@ -624,7 +612,7 @@ if [[ -L "$native_archive" || ! -f "$native_archive" ]]; then
 fi
 native_dir=$(/usr/bin/dirname "$native_archive")
 
-rust_binary="$oracle_tmp/heritage_driver_switch_1204_rust"
+rust_binary="$oracle_tmp/heritage_collect_wraparound_1204_rust"
 if ! /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
   RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --edition=2021 -O \
@@ -689,67 +677,56 @@ for label, status in (
         raise SystemExit(f"{label} exit mismatch: {status}")
 
 lines = ghidra.decode("utf-8").splitlines()
-if len(lines) != 6:
-    raise SystemExit(f"expected six fixture lines, found {len(lines)}")
+if len(lines) != 4:
+    raise SystemExit(f"expected four fixture lines, found {len(lines)}")
 if lines[0] != (
-    "schema=1|fixture=HERITAGE-DRIVER-SWITCH-0001|"
+    "schema=1|fixture=HERITAGE-COLLECT-WRAPAROUND-0001|"
     "oracle=e40ed13014025f82488b1f8f7bca566894ac376b"
 ):
     raise SystemExit("fixture envelope mismatch")
 expected_cases = [
-        "switch_written_read",
-        "switch_diamond_reherit",
-        "switch_cross_space",
-        "switch_late_free_reentry",
-        "switch_refinement_recollect",
+        "wraparound_straddling_write",
+        "nonwrap_control_same_shape",
+        "wraparound_exact_top",
     ]
 actual_cases = [line.split("|", 1)[0].removeprefix("case=") for line in lines[1:]]
 if actual_cases != expected_cases:
     raise SystemExit(f"fixture case order mismatch: {actual_cases}")
-expected_fields = {
-        "switch_written_read": ("pass=1", "hp_reg=0", "hp_stack=-1", "free_with_reader=0"),
-        "switch_diamond_reherit": ("pass=3", "hp_reg=0", "free_with_reader=0"),
-        "switch_cross_space": ("pass=2", "hp_reg=0", "hp_stack=1", "free_with_reader=0"),
-        "switch_late_free_reentry": ("pass=2", "hp_reg=0", "free_with_reader=0"),
-        "switch_refinement_recollect": ("pass=1", "hp_reg=0", "free_with_reader=0"),
-    }
-for line in lines[1:]:
-    case = line.split("|", 1)[0].removeprefix("case=")
-    for field in expected_fields[case]:
+for field in ("pass=1",):
+    for line in lines[1:]:
         if field not in line:
             raise SystemExit(f"fixture line missing {field}: {line}")
-# SSA-ification witnesses (the varnode.cc:330-338 unreachability premise):
-# every case must end its heritage pass with ZERO free varnodes carrying
-# descendants, and the BOOL flag input descriptor must show the specific
-# link form per case.
+# Wraparound-clamp witnesses (heritage.cc:317-320): every case must end
+# its heritage pass with ZERO free varnodes carrying descendants (the
+# varnode.cc:330-338 throw precondition), and each BOOL input descriptor
+# must show the link form the clamped collect window produces.
 for line in lines[1:]:
     if "|free_with_reader=0|" not in line:
         raise SystemExit(f"free-with-reader census not zero: {line}")
-# Driver-switch witnesses (case order: written_read, diamond_reherit,
-# cross_space, late_free_reentry).
-if "|read_in=R30:8:W+INT_SUB|" not in lines[1]:
-    raise SystemExit("written case: read input must link to the INT_SUB write")
-if "r.INT_OR(R30:8:W+INT_SUB" not in lines[1]:
-    raise SystemExit("written case op projection must show the replaced read")
-if "|read_in=R38:8:W+MULTIEQUAL|" not in lines[2]:
-    raise SystemExit("diamond case: read input must be the phi output")
-# reverse-predecessor-slot witness: phi slot 0 reads the INT_SUB arm (pred
-# index 2) and slot 1 the INT_OR arm (pred index 1) — renameRecurse cc:2531-2552.
-if "s0<R38:8:W+INT_SUB>#p2" not in lines[2] or "s1<R38:8:W+INT_OR>#p1" not in lines[2]:
-    raise SystemExit("diamond case phi slot wiring witness wrong")
-# cross-space witness: BOTH spaces link their own writes at the same offset.
-if "|read_in=R30:8:W+INT_SUB|" not in lines[3] or "|read_in2=S30:8:W+INT_OR|" not in lines[3]:
-    raise SystemExit("cross-space case: each space's read must link to its own write")
-# late-free re-entry witness: absorbed with zero op growth.
-if "|read_in=R40:8:W+INT_SUB|" not in lines[4] or "|ops_after_pass0=4|" not in lines[4]:
-    raise SystemExit("late-free re-entry case: read must link to the existing write with no new ops")
-# refinement live-visibility witness (review M1): the partial write forces
-# refinement; the SECOND piece must be heritaged THIS pass by the live
-# re-collect (promoted input R54:4:I reassembled by a PIECE op).
-if "|read_in=U8:W+PIECE|" not in lines[5]:
-    raise SystemExit("refinement case: full-width read must be the PIECE output")
-if "phi.PIECE(R54:4:I,R50:4:W+INT_SUB)" not in lines[5]:
-    raise SystemExit("refinement case: second piece must get its own promoted input (live re-collect)")
+# case A — the straddling wrap range keeps BOTH varnodes in the window;
+# renameRecurse resolves the 1-byte read through normalizeReadSize (cc:382-412).
+if "|bool_in=Rffffffffffffffff:1:W+SUBPIECE|" not in lines[1]:
+    raise SystemExit("straddle case: BOOL input must be the SUBPIECE output (clamp window)")
+if "phi.SUBPIECE(Rffffffffffffffff:2:W+INT_SUB,C8:0)" not in lines[1]:
+    raise SystemExit("straddle case: SUBPIECE must read the 2-byte range write (cc:391-396)")
+if "|gd=register:ffffffffffffffff:2:p0|" not in lines[1]:
+    raise SystemExit("straddle case: globaldisjoint cover must hold the wrapping range")
+# case B — the byte-identical non-wrapping control: same link form, proving
+# the clamp preserves collect behavior rather than changing it.
+if "|bool_in=R206:1:W+SUBPIECE|" not in lines[2]:
+    raise SystemExit("control case: BOOL input must be the same SUBPIECE form at 0x206")
+if "phi.SUBPIECE(R206:2:W+INT_SUB,C8:0)" not in lines[2]:
+    raise SystemExit("control case: SUBPIECE must read the 2-byte range write")
+if "|gd=register:206:2:p0|" not in lines[2]:
+    raise SystemExit("control case: globaldisjoint cover must hold the 0x206 range")
+# case C — exact-top wrap with equal sizes: direct write link, no SUBPIECE
+# (and the inclusive top edge: offset == getHighest() is inside the window).
+if "|bool_in=Rffffffffffffffff:1:W+INT_SUB|" not in lines[3]:
+    raise SystemExit("exact-top case: BOOL input must link directly to the write")
+if "SUBPIECE" in lines[3].split("|ops_proj=")[1]:
+    raise SystemExit("exact-top case: equal sizes must not create a SUBPIECE")
+if "|gd=register:ffffffffffffffff:1:p0|" not in lines[3]:
+    raise SystemExit("exact-top case: globaldisjoint cover must hold the top-byte range")
 PY
 
 /usr/bin/sha256sum "${owned_files[@]}" >"$oracle_tmp/owned.after"
@@ -773,7 +750,7 @@ runner_fd = pathlib.Path(sys.argv[2])
 host_git = sys.argv[3]
 rugra_base_commit = sys.argv[4]
 metadata = json.loads(
-    (repo / "tests/oracle/heritage_driver_switch_1204.metadata.json").read_text(encoding="utf-8")
+    (repo / "tests/oracle/heritage_collect_wraparound_1204.metadata.json").read_text(encoding="utf-8")
 )
 
 def sha(data):
@@ -787,22 +764,18 @@ comparand = metadata["comparand"]
 require("runner FD", sha(runner_fd.read_bytes()), comparand["runner_sha256"])
 require(
     "live runner",
-    sha((repo / "tools/run_heritage_driver_switch_oracle.sh").read_bytes()),
+    sha((repo / "tools/run_heritage_collect_wraparound_oracle.sh").read_bytes()),
     comparand["runner_sha256"],
 )
 for label, relative, key in (
-    ("C++ fixture", "tests/oracle/heritage_driver_switch_1204.cc", "cpp_fixture_sha256"),
-    ("Rust fixture", "tests/oracle/heritage_driver_switch_1204.rs", "rust_fixture_sha256"),
+    ("C++ fixture", "tests/oracle/heritage_collect_wraparound_1204.cc", "cpp_fixture_sha256"),
+    ("Rust fixture", "tests/oracle/heritage_collect_wraparound_1204.rs", "rust_fixture_sha256"),
     ("heritage implementation", "src/heritage.rs", "heritage_rs_sha256"),
-    ("coreaction implementation", "src/coreaction.rs", "coreaction_rs_sha256"),
-    ("funcdata implementation", "src/funcdata.rs", "funcdata_rs_sha256"),
     ("heritage API document", "docs/api/heritage.md", "heritage_doc_sha256"),
-    ("coreaction API document", "docs/api/coreaction.md", "coreaction_doc_sha256"),
-    ("funcdata API document", "docs/api/funcdata.md", "funcdata_doc_sha256"),
 ):
     require(label, sha((repo / relative).read_bytes()), comparand[key])
 
-overlay_files = {"src/heritage.rs", "src/coreaction.rs", "src/funcdata.rs"}
+overlay_files = {"src/heritage.rs"}
 relative_files = [pathlib.Path(path) for path in (
     "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
     "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
@@ -817,7 +790,7 @@ for directory in ("src", "sleigh_shim"):
         pathlib.Path(item.decode()) for item in raw.split(b"\0") if item
     )
 hasher = hashlib.sha256()
-hasher.update(b"rugra-heritage-driver-switch-base-overlay-v1\0")
+hasher.update(b"rugra-heritage-collect-wraparound-base-overlay-v1\0")
 hasher.update(rugra_base_commit.encode())
 for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
     if relative.as_posix() in overlay_files:
@@ -842,4 +815,4 @@ for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
 require("full Rust crate", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 PY
 
-echo "heritage_driver_switch_1204: MATCH covered_projection=5/5 overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"
+echo "heritage_collect_wraparound_1204: MATCH covered_projection=3/3 overall=MATCH stdout_sha256=$actual_stdout_sha"

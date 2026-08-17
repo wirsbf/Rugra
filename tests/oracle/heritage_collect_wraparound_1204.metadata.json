@@ -1,0 +1,94 @@
+{
+ "schema": 2,
+ "fixture_id": "HERITAGE-COLLECT-WRAPAROUND-0001",
+ "stable_function_id": "GH12-F-b7d2e4c9a1f6038257c",
+ "stable_function_closure": [
+  "ghidra::Funcdata::opHeritage funcdata.hh:462",
+  "ghidra::Heritage::heritage heritage.cc:2663",
+  "ghidra::Heritage::placeMultiequals heritage.cc:2599",
+  "ghidra::Heritage::collect heritage.cc:307",
+  "ghidra::Heritage::guard heritage.cc:1156",
+  "ghidra::Heritage::rename heritage.cc:2587",
+  "ghidra::Heritage::renameRecurse heritage.cc:2479",
+  "ghidra::Heritage::normalizeReadSize heritage.cc:382",
+  "ghidra::VarnodeBank::beginLoc varnode.cc:1582",
+  "ghidra::VarnodeBank::endLoc varnode.cc:1593",
+  "ghidra::AddrSpace::wrapOffset space.hh:383",
+  "ghidra::Address::operator+ address.hh:423"
+ ],
+ "overall_status": "MATCH: the Heritage::collect end-address wraparound clamp (heritage.cc:317-320) now mirrors the locked 12.0.4 oracle byte-for-byte — when the wrapped end offset falls below the range start, the collect window end is endLoc(Address(space, getHighest())) (the next-space boundary, varnode.cc:1596-1602), i.e. the scan runs from start to the end of the range's space with no offset bound, instead of beginLoc(wrapped-end) which terminates the window immediately. All three cases (straddling 2-byte write at the space top with a 1-byte BOOL read, the byte-identical non-wrapping control at 0x206, and the exact-top 1-byte write/read pair) produce identical pass counters, op counts, BOOL-input link forms, free-with-reader censuses, globaldisjoint cover dumps, phi projections, op lists, and Varnode multisets on both sides. Production reachability note (registered at review): the branch needs a MemRange straddling the space top — a varnode at offset 0xffffffffffffffff with size > 1 entering the disjoint cover — which no real loader emits; the divergence was pre-existing, not r2-introduced, and is pinned structurally per the oracle regardless.",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{heritage.cc:307-347,2663-2758,2599-2645,1952-2010,382-412,funcdata.hh:462,varnode.cc:1250-1258,1560-1620,space.hh:354-391,address.hh:418-435}"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; all spaces 8-byte addressable (register highest = 0xffffffffffffffff); register delay=0, stack delay=1",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (funcdata.hh:462) once per case on a fresh Funcdata; no Action tree, no C emission; the pass counter is read after the call (C++ getHeritagePass / Rust num_heritage_passes)",
+  "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic). Both sides apply the startProcessing steps a synthetic graph can reach: structureLoops+calcForwardDominator (Ghidra) mirrors as find_spanning_tree (BLOCK-INDEX-ASSIGN-0001) + BlockGraph::build_dom_tree, then heritage.buildInfoList (funcdata.cc:166). Each BOOL read is a fresh free Varnode with exactly one descendant, mirroring the PcodeEmitFd::dump single-descendant invariant (funcdata.cc:878-908); free reads are created AFTER the same-location write so the pair stays two objects (VarnodeBank::create reuses only free varnodes, varnode.cc:1250-1258)",
+  "observation": "Per case: pass counter; live op count; bool_in (descriptor of the BOOL op's flag input after rename); free_with_reader (whole-bank census of free Varnodes with descendants — the varnode.cc:334-336 throw precondition); gd (persistent globaldisjoint cover dump over processor/stack spaces, name:hexoff:size:p<pass> — unique-space entries are allocation-dependent and excluded); phi projection; full op list in PcodeOpTree order as name.OPCODE(input descriptors); sorted Varnode descriptor multiset. The Rust comparand additionally asserts (abort on violation, no stdout) the clamp witnesses: the cover holds the case range at pass 0 with the expected size and the census is zero",
+  "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, offset or size, def-use class, and defining opcode; the cover dump re-sorts by the synthetic architecture's space index then offset to match the oracle's map<Address,SizePass> order"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "wraparound_straddling_write: single block b0 with w=INT_SUB(C2:0,C2:1) writing register 0xffffffffffffffff:2 (straddling the 8-byte space top) and n=BOOL_NEGATE(fresh free Rffffffffffffffff:1) with unique temp output plus c=CBRANCH(C8:2000, n_out); the disjoint cover range [0xffffffffffffffff,+2) wraps to end offset 1, the cc:317-320 clamp keeps both varnodes in the collect window, and after one opHeritage the BOOL input is the SUBPIECE output (normalizeReadSize cc:382-412, constant C8:0 per newConstant(addr.getAddrSize(),0)) reading the 2-byte write; census 0",
+   "nonwrap_control_same_shape: the byte-identical graph at register 0x206 (endaddr 0x208 does not wrap); identical window membership and the same SUBPIECE link form — the differential control proving the clamp preserves collect behavior rather than changing it; census 0",
+   "wraparound_exact_top: w=INT_SUB(C1:0,C1:1) writing register 0xffffffffffffffff:1 (endaddr wraps to 0 < start) with a same-size free read at the top byte; the clamp window contains both (inclusive top edge: endLoc(space,getHighest()) runs through offset == highest) and rename links the read directly to the write with no SUBPIECE; census 0"
+  ],
+  "sha256": "3411417a367d7b824ef0878d3b1ad6bb0a6abb520213ab629c7c356b8f5574c8"
+ },
+ "observation_schema": {
+  "format": "Four fixed-order UTF-8 lines with final newline: one envelope plus three case records",
+  "state": "pass counter; live op count; BOOL input descriptor; free-with-reader census; globaldisjoint cover dump; phi projection; op list (PcodeOpTree order, name.OPCODE + per-slot input descriptors); sorted Varnode descriptor multiset",
+  "graph": "def-use class and defining opcode per op input slot, Varnode space class, offset or size, def-use class and defining opcode multiset, cover range size and pass"
+ },
+ "comparand": {
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-collect-wraparound-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rugra_base_commit": "c48471545d38ef5db959deffde0aa5092cb96971",
+  "rugra_base_tree": "3d10e835076d21c38f6fb3fce9af2fe8799b262c",
+  "cpp_fixture_sha256": "266e39b9cda437d897d4f9057517e3c3a6b396706340ecf7e1305f04a6a6f39f",
+  "rust_fixture_sha256": "95005788979266321550f44974a9c12448746c4917348cb958f66b4f30d0847f",
+  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
+  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
+  "runner_sha256": "d0a4da4744da8de6c9f8e07ed7982e4a20a96ccaaab9d7358ee92b83384a74ab",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "4b558dcde410c2d6dafc458756da8399259e716946f02505e9f2b1a2f5b79b27",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
+  }
+ },
+ "build": {
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "63a5c38b4053025cd753d07d71d601d455916a251a7aa2817048fdf1c55312a3",
+  "registry_lock_closure_scheme": "sha256 of rugra-heritage-collect-wraparound-registry-lock-v1 plus sorted length-prefixed name/version/checksum records from the pinned-base Cargo.lock"
+ },
+ "expected_stdout_sha256": "41fcb44105867464f8d2ccd9463231aa0e35679bb4a469bdc8a3fb8d7151ed79",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "wraparound_straddle_subpiece_link": "MATCH: wraparound_straddling_write — endaddr wraps to 1 < start (2-byte range at the 8-byte space top), the clamp window keeps read+write, normalizeReadSize produces bool_in=Rffffffffffffffff:1:W+SUBPIECE with phi.SUBPIECE(Rffffffffffffffff:2:W+INT_SUB,C8:0); byte-identical projection",
+  "nonwrap_control_same_shape": "MATCH: nonwrap_control_same_shape — the byte-identical graph at 0x206 (endaddr 0x208, no wrap) yields the same link form (R206:1:W+SUBPIECE, phi.SUBPIECE(R206:2:W+INT_SUB,C8:0)); proves the clamp preserves collect behavior (same shape modulo offset)",
+  "wraparound_exact_top_direct_link": "MATCH: wraparound_exact_top — 1-byte range at the top byte (endaddr wraps to 0), inclusive top edge keeps both varnodes in the window, equal sizes link directly (bool_in=Rffffffffffffffff:1:W+INT_SUB, no SUBPIECE, ops=3)",
+  "globaldisjoint_cover_witness": "MATCH: every case's persistent globaldisjoint cover holds the case range at pass 0 with the expected size (register:ffffffffffffffff:2:p0 / register:206:2:p0 / register:ffffffffffffffff:1:p0) on both sides — the wrapping ranges really entered the cover through the canonical cc:2708-2710 candidate scan",
+  "clamp_regression_power": "MATCH (discriminating-power evidence, not an oracle comparison): reverting the Rust window end to the pre-fix single break (offset bound applied unconditionally) makes the Rust comparand abort in case A — the wrapped end offset terminates the window before any member, the free read stays free-with-descendant, and the silent census witness fires (exit 101, observed in the dry run); the branch is pinned, not decorative"
+ }
+}

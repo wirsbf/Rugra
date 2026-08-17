@@ -520,6 +520,16 @@ block.cc:2036-2051）；`buildDomDepth` 根深度 1、子 = 父+1、尾部哨兵
 ### 残差（如实登记）
 - `collect` 现为探针驱动的 loc_tree 活窗口（本空间限定；历史全 bank 偏移扫描已废），
   跨空间偏移碰撞会误分类——`HERITAGE-DRIVER-SWITCH-0001` 硬前置。
+- 2026-08-17（HERITAGE-COLLECT-WRAPAROUND-0001）起 collect 已镜像 oracle 的
+  endaddr 回绕钳位（heritage.cc:317-320）：`endaddr = wrapOffset(addr+size)` 落到
+  start 之下时，窗口终点不用 beginLoc(endaddr)（会立刻截断成空窗口），而是钳到
+  `endLoc(space, getHighest())` —— 从 start 扫到本空间末尾（首个异空间成员终止，
+  无偏移上界）。Rugra 空间均为 8 字节寻址（`space_highest` 约定），u64 wrapping add
+  即 oracle 算术。生产可达性：仅当 MemRange 跨越空间顶端（offset 0xffffffffffffffff
+  且 size>1 的 varnode 进入 disjoint cover）触发，真实 loader 不产出 —— 预存非 r2
+  引入。单点 fixture `tests/oracle/heritage_collect_wraparound_1204` 三案例（回绕
+  跨顶 SUBPIECE 链接 / 同形非回绕对照 / 回绕恰顶字节直连）与锁定 oracle 逐字节
+  MATCH；去掉钳位后 fixture 的 free_with_reader 断言即失败（判别力实证）。
 - refinement/guardInput concat/removeRevisitedMarkers 已按 oracle 调用
   形状接线，但 fixture 未触发（UNTESTED）。
 

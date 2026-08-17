@@ -1,96 +1,96 @@
 {
- "schema": 2,
- "fixture_id": "HERITAGE-FLAGFREE-SSA-0001",
- "stable_function_id": "GH12-F-a3e5f8c2f1d09b67325a",
- "stable_function_closure": [
-  "ghidra::Funcdata::opHeritage funcdata.hh:462",
-  "ghidra::Heritage::heritage heritage.cc:2663",
-  "ghidra::Heritage::buildADT heritage.cc:2316",
-  "ghidra::Heritage::calcMultiequals heritage.cc:2439",
-  "ghidra::Heritage::renameRecurse heritage.cc:2479",
-  "ghidra::Heritage::rename heritage.cc:2587",
-  "ghidra::Heritage::placeMultiequals heritage.cc:2599",
-  "ghidra::Heritage::collect heritage.cc:307",
-  "ghidra::Heritage::guard heritage.cc:1156",
-  "ghidra::Heritage::guardInput heritage.cc:1952",
-  "ghidra::Varnode::addDescend varnode.cc:330",
-  "ghidra::VarnodeBank::create varnode.cc:1250"
- ],
- "overall_status": "PARTIAL_MATCH: the canonical Heritage chain (candidate collection keeping free-with-descendant Varnodes at heritage.cc:2704, collect's read classification cc:340-341, guard's active marking cc:1164-1175, placeMultiequals' join phi cc:2631-2642, and renameRecurse's write-link / empty-stack input promotion / consumed-free deletion cc:2493-2521) byte-matches the locked 12.0.4 oracle on all three SLEIGH BOOL flag-free shapes (written-flag link, read-before-write input promotion, two-arm phi link with reverse-predecessor slot wiring), with the whole-bank free-with-reader census reading 0 in every case — the varnode.cc:330-338 throw precondition. The Rust comparand additionally asserts the same invariants over the DIRECT production route (Funcdata::run_heritage_direct = place_multiequals_direct + rename_direct, the route ActionHeritage drives). Residuals keep the module at L2: the direct-route assertions have no oracle counterpart (UNTESTED by mechanism B2 — Ghidra has no direct route; they lock the production-path invariant only), collect scans a whole-bank offset window because Rugra's Address lacks space identity (MISMATCH registered, DRIVER-SWITCH precondition), and the E2E 351-WARN signal this TODO targets is NOT in Heritage at all: post-heritage pipeline churn re-creates free reads and ActionHeritage's pass>=2 early-out (coreaction.rs) blocks the oracle's per-mainloop-iteration re-SSA (coreaction.hh:289 has no guard; heritage.cc:2711-2719 re-heritages old ranges). Relaxing only that guard in an instrumented tree measured 351->44 WARNs.",
- "oracle": {
-  "tag": "Ghidra_12.0.4_build",
-  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{heritage.cc:244-298,307-347,1156-1199,2479-2645,2663-2758,funcdata.hh:462,varnode.cc:316-340,1250-1327}"
- },
- "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
- "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
- "analysis_options": {
-  "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (funcdata.hh:462) once per case on a fresh Funcdata; no Action tree, no C emission; the pass counter is read after the call (C++ getHeritagePass / Rust num_heritage_passes)",
-  "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge). Both sides apply the startProcessing steps a synthetic graph can reach: structureLoops+calcForwardDominator (Ghidra) mirrors as find_spanning_tree (BLOCK-INDEX-ASSIGN-0001, block.cc:1009-1135 reverse-post-order indices) + BlockGraph::build_dom_tree, then heritage.buildInfoList (funcdata.cc:166). Each BOOL flag read is a fresh free Varnode with exactly one descendant, mirroring the PcodeEmitFd::dump single-descendant invariant (funcdata.cc:878-908)",
-  "observation": "Per case: pass counter; live op count; bool_in (descriptor of the BOOL op's flag input after rename); free_with_reader (whole-bank census of free Varnodes with descendants — the varnode.cc:334-336 throw precondition); phi projection (every parented MULTIEQUAL in block-index then block-op-position order with output descriptor, per-slot input descriptor and the merge block's in-edge j predecessor index); full op list in SeqNum order as name.OPCODE(input descriptors); sorted Varnode descriptor multiset. The Rust comparand additionally asserts (abort on violation, no stdout) the same invariants over the DIRECT production route Funcdata::run_heritage_direct (place_multiequals_direct + rename_direct): BOOL input not free and zero free-with-reader",
-  "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, offset or size, def-use class, and defining opcode"
- },
- "input_manifest": {
-  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-  "cases": [
-   "flagfree_bool_read_written: single block b0 with w=INT_SUB(C1:0,C1:1) writing register 0x206:1, n=BOOL_NEGATE(fresh free R206:1) with unique temp output, c=CBRANCH(C8:2000, n_out) — the jne-on-ZF SLEIGH form; after one opHeritage the BOOL input links to the write (R206:1:W+INT_SUB) and the consumed free read is deleted",
-   "flagfree_bool_read_unwritten: single block b0 with n=BOOL_NEGATE(fresh free R207:1) and c=CBRANCH(C8:3000, n_out) — condition read before any write; empty-stack input promotion (cc:2499-2502) yields R207:1:I",
-   "flagfree_bool_diamond: b0->{b1,b2}->b3 with w1=INT_SUB writing R206:1 in b1, w2=INT_OR writing R206:1 in b2, n=BOOL_NEGATE(fresh free R206:1) + c=CBRANCH in b3; placeMultiequals inserts one phi at b3's beginning and rename links the BOOL read to the phi output (R206:1:W+MULTIEQUAL) with slots wired by reverse predecessor (cc:2631-2642 + cc:2531-2552)"
+  "schema": 2,
+  "fixture_id": "HERITAGE-FLAGFREE-SSA-0001",
+  "stable_function_id": "GH12-F-a3e5f8c2f1d09b67325a",
+  "stable_function_closure": [
+    "ghidra::Funcdata::opHeritage funcdata.hh:462",
+    "ghidra::Heritage::heritage heritage.cc:2663",
+    "ghidra::Heritage::buildADT heritage.cc:2316",
+    "ghidra::Heritage::calcMultiequals heritage.cc:2439",
+    "ghidra::Heritage::renameRecurse heritage.cc:2479",
+    "ghidra::Heritage::rename heritage.cc:2587",
+    "ghidra::Heritage::placeMultiequals heritage.cc:2599",
+    "ghidra::Heritage::collect heritage.cc:307",
+    "ghidra::Heritage::guard heritage.cc:1156",
+    "ghidra::Heritage::guardInput heritage.cc:1952",
+    "ghidra::Varnode::addDescend varnode.cc:330",
+    "ghidra::VarnodeBank::create varnode.cc:1250"
   ],
-  "sha256": "a42f6794aae9d4302b01a7458517d0b09b13b71db4d44a22291adfcfc9eaa198"
- },
- "observation_schema": {
-  "format": "Four fixed-order UTF-8 lines with final newline: one envelope plus three case records",
-  "state": "pass counter; live op count; bool_in descriptor; free_with_reader census; phi projection; op list (SeqNum order, name.OPCODE + per-slot input descriptors); sorted Varnode descriptor multiset",
-  "graph": "def-use class and defining opcode per op input slot (input/written+op/free/constant), Varnode space class, offset or size, def-use class and defining opcode multiset, phi slot <-> merge-block in-edge predecessor mapping"
- },
- "comparand": {
-  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-flagfree-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-  "rugra_base_commit": "17c64d3437966bb180312fcac92006d1074bd93e",
-  "rugra_base_tree": "11212874e9732da30d1c8de7e487deda58fefad0",
-  "cpp_fixture_sha256": "0b59675ef73a5695c9344472ffc060abe6e1270555e065756e21c79b5a4e7dcf",
-  "rust_fixture_sha256": "27a4de37228504c02e022b10c84247a3c5edcaeb01bb28ddc05cfa75a40e6fea",
-  "heritage_rs_sha256": "44beaa455ee4a5faec6275f8e79a5170f2666c472415704da27627589adb5cc5",
-  "heritage_doc_sha256": "3fdc89f007dd70de2b10a7c06c9b04d583b8c50a9f98f1dc09c375d8643e7b3a",
-  "runner_sha256": "6a683435ae427309d3c2f68f11f738bb58d5df9fa8be4571d5819e811e06816e",
-  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "1af61f00bf24f3dbf249cf4080e88adac5ff7af860beac4912d409adba329f96",
-  "host": {
-   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-   "cxx_target": "x86_64-linux-gnu",
-   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-   "make_path": "/usr/bin/make",
-   "python_path": "/usr/bin/python3.10",
-   "git_path": "/usr/bin/git",
-   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-124-generic x86_64"
+  "overall_status": "PARTIAL_MATCH: the canonical Heritage chain (candidate collection keeping free-with-descendant Varnodes at heritage.cc:2704, collect's read classification cc:340-341, guard's active marking cc:1164-1175, placeMultiequals' join phi cc:2631-2642, and renameRecurse's write-link / empty-stack input promotion / consumed-free deletion cc:2493-2521) byte-matches the locked 12.0.4 oracle on all three SLEIGH BOOL flag-free shapes (written-flag link, read-before-write input promotion, two-arm phi link with reverse-predecessor slot wiring), with the whole-bank free-with-reader census reading 0 in every case — the varnode.cc:330-338 throw precondition. The Rust comparand additionally asserts the same invariants over the DIRECT production route (Funcdata::run_heritage_direct = place_multiequals_direct + rename_direct, the route ActionHeritage drives). Residuals keep the module at L2: the direct-route assertions have no oracle counterpart (UNTESTED by mechanism B2 — Ghidra has no direct route; they lock the production-path invariant only), collect scans a whole-bank offset window because Rugra's Address lacks space identity (MISMATCH registered, DRIVER-SWITCH precondition), and the E2E 351-WARN signal this TODO targets is NOT in Heritage at all: post-heritage pipeline churn re-creates free reads and ActionHeritage's pass>=2 early-out (coreaction.rs) blocks the oracle's per-mainloop-iteration re-SSA (coreaction.hh:289 has no guard; heritage.cc:2711-2719 re-heritages old ranges). Relaxing only that guard in an instrumented tree measured 351->44 WARNs.",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{heritage.cc:244-298,307-347,1156-1199,2479-2645,2663-2758,funcdata.hh:462,varnode.cc:316-340,1250-1327}"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (funcdata.hh:462) once per case on a fresh Funcdata; no Action tree, no C emission; the pass counter is read after the call (C++ getHeritagePass / Rust num_heritage_passes)",
+    "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge). Both sides apply the startProcessing steps a synthetic graph can reach: structureLoops+calcForwardDominator (Ghidra) mirrors as find_spanning_tree (BLOCK-INDEX-ASSIGN-0001, block.cc:1009-1135 reverse-post-order indices) + BlockGraph::build_dom_tree, then heritage.buildInfoList (funcdata.cc:166). Each BOOL flag read is a fresh free Varnode with exactly one descendant, mirroring the PcodeEmitFd::dump single-descendant invariant (funcdata.cc:878-908)",
+    "observation": "Per case: pass counter; live op count; bool_in (descriptor of the BOOL op's flag input after rename); free_with_reader (whole-bank census of free Varnodes with descendants — the varnode.cc:334-336 throw precondition); phi projection (every parented MULTIEQUAL in block-index then block-op-position order with output descriptor, per-slot input descriptor and the merge block's in-edge j predecessor index); full op list in SeqNum order as name.OPCODE(input descriptors); sorted Varnode descriptor multiset. The Rust comparand additionally asserts (abort on violation, no stdout) the same invariants over the DIRECT production route Funcdata::run_heritage_direct (place_multiequals_direct + rename_direct): BOOL input not free and zero free-with-reader",
+    "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, offset or size, def-use class, and defining opcode"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "flagfree_bool_read_written: single block b0 with w=INT_SUB(C1:0,C1:1) writing register 0x206:1, n=BOOL_NEGATE(fresh free R206:1) with unique temp output, c=CBRANCH(C8:2000, n_out) — the jne-on-ZF SLEIGH form; after one opHeritage the BOOL input links to the write (R206:1:W+INT_SUB) and the consumed free read is deleted",
+      "flagfree_bool_read_unwritten: single block b0 with n=BOOL_NEGATE(fresh free R207:1) and c=CBRANCH(C8:3000, n_out) — condition read before any write; empty-stack input promotion (cc:2499-2502) yields R207:1:I",
+      "flagfree_bool_diamond: b0->{b1,b2}->b3 with w1=INT_SUB writing R206:1 in b1, w2=INT_OR writing R206:1 in b2, n=BOOL_NEGATE(fresh free R206:1) + c=CBRANCH in b3; placeMultiequals inserts one phi at b3's beginning and rename links the BOOL read to the phi output (R206:1:W+MULTIEQUAL) with slots wired by reverse predecessor (cc:2631-2642 + cc:2531-2552)"
+    ],
+    "sha256": "a42f6794aae9d4302b01a7458517d0b09b13b71db4d44a22291adfcfc9eaa198"
+  },
+  "observation_schema": {
+    "format": "Four fixed-order UTF-8 lines with final newline: one envelope plus three case records",
+    "state": "pass counter; live op count; bool_in descriptor; free_with_reader census; phi projection; op list (SeqNum order, name.OPCODE + per-slot input descriptors); sorted Varnode descriptor multiset",
+    "graph": "def-use class and defining opcode per op input slot (input/written+op/free/constant), Varnode space class, offset or size, def-use class and defining opcode multiset, phi slot <-> merge-block in-edge predecessor mapping"
+  },
+  "comparand": {
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-flagfree-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rugra_base_commit": "17c64d3437966bb180312fcac92006d1074bd93e",
+    "rugra_base_tree": "11212874e9732da30d1c8de7e487deda58fefad0",
+    "cpp_fixture_sha256": "0b59675ef73a5695c9344472ffc060abe6e1270555e065756e21c79b5a4e7dcf",
+    "rust_fixture_sha256": "27a4de37228504c02e022b10c84247a3c5edcaeb01bb28ddc05cfa75a40e6fea",
+    "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
+    "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
+    "runner_sha256": "6a683435ae427309d3c2f68f11f738bb58d5df9fa8be4571d5819e811e06816e",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_sha256": "1a2ae8c91169ceb8c953ec010b85a6ac748d7ddbfe147bd833eba3b99a01e5b3",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "85e13068c98d4dd53c9310e32cbc97ab4d981afc88932caf1b4a9e995f4b6990",
+    "registry_lock_closure_scheme": "sha256 of rugra-heritage-flagfree-registry-lock-v1 plus sorted length-prefixed name/version/checksum records from the pinned-base Cargo.lock"
+  },
+  "expected_stdout_sha256": "53d6287d904cb1c8d34563e711d52d238138f72346f47ed2b69b53f88b69361e",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "canonical_written_link": "MATCH: flagfree_bool_read_written — after one opHeritage the BOOL_NEGATE input reads R206:1:W+INT_SUB (heritage.cc:2493-2521 replacement with the dominating write) and the consumed free read is deleted from the bank; op projection and Varnode multiset byte-identical",
+    "canonical_unwritten_input_promotion": "MATCH: flagfree_bool_read_unwritten — empty-stack promotion (cc:2499-2502) turns the fresh free read into input R207:1:I; byte-identical projection",
+    "canonical_diamond_phi_link": "MATCH: flagfree_bool_diamond — placeMultiequals inserts one phi at the join beginning (cc:2631-2642), rename wires slot 0 to the INT_SUB arm over in-edge predecessor 2 and slot 1 to the INT_OR arm over predecessor 1 (cc:2531-2552), and the BOOL read takes the phi output; byte-identical projection",
+    "free_with_reader_census": "MATCH: every case ends with free_with_reader=0 — the varnode.cc:330-338 addDescend throw precondition holds over the whole bank after Heritage on both sides",
+    "direct_route_invariants": "UNTESTED (mechanism B2: no oracle counterpart — Ghidra has no direct route): the Rust comparand asserts over Funcdata::run_heritage_direct (place_multiequals_direct + rename_direct, the production ActionHeritage route) that the BOOL input is not free and the census is 0 for all three shapes; these lock the production-path invariant at heritage time only and do not cover the post-heritage pipeline churn that produces the E2E 351-WARN signal (root cause outside heritage.rs: ActionHeritage pass>=2 early-out, see TODO HERITAGE-FLAGFREE-SSA-0001)",
+    "cross_space_collect_window": "MISMATCH (registered, HERITAGE-DRIVER-SWITCH-0001 hard precondition): collect scans the whole Varnode bank with an offset window because Rugra's Address carries no space identity; Ghidra's beginLoc(memrange.addr) is space-confined. The fixture's register offsets sit far below the unique allocation base, so no cross-space collision is observable here",
+    "production_action_switch": "UNTESTED: ActionHeritage still runs the direct two-pass place/rename route with the pass>=2 early-out; the canonical path is exercised through Funcdata::opHeritage only"
   }
- },
- "build": {
-  "registry_packages": 164,
-  "registry_lock_closure_sha256": "85e13068c98d4dd53c9310e32cbc97ab4d981afc88932caf1b4a9e995f4b6990",
-  "registry_lock_closure_scheme": "sha256 of rugra-heritage-flagfree-registry-lock-v1 plus sorted length-prefixed name/version/checksum records from the pinned-base Cargo.lock"
- },
- "expected_stdout_sha256": "53d6287d904cb1c8d34563e711d52d238138f72346f47ed2b69b53f88b69361e",
- "expected_exit_code": 0,
- "covered_projection_status": "MATCH",
- "coverage": {
-  "canonical_written_link": "MATCH: flagfree_bool_read_written — after one opHeritage the BOOL_NEGATE input reads R206:1:W+INT_SUB (heritage.cc:2493-2521 replacement with the dominating write) and the consumed free read is deleted from the bank; op projection and Varnode multiset byte-identical",
-  "canonical_unwritten_input_promotion": "MATCH: flagfree_bool_read_unwritten — empty-stack promotion (cc:2499-2502) turns the fresh free read into input R207:1:I; byte-identical projection",
-  "canonical_diamond_phi_link": "MATCH: flagfree_bool_diamond — placeMultiequals inserts one phi at the join beginning (cc:2631-2642), rename wires slot 0 to the INT_SUB arm over in-edge predecessor 2 and slot 1 to the INT_OR arm over predecessor 1 (cc:2531-2552), and the BOOL read takes the phi output; byte-identical projection",
-  "free_with_reader_census": "MATCH: every case ends with free_with_reader=0 — the varnode.cc:330-338 addDescend throw precondition holds over the whole bank after Heritage on both sides",
-  "direct_route_invariants": "UNTESTED (mechanism B2: no oracle counterpart — Ghidra has no direct route): the Rust comparand asserts over Funcdata::run_heritage_direct (place_multiequals_direct + rename_direct, the production ActionHeritage route) that the BOOL input is not free and the census is 0 for all three shapes; these lock the production-path invariant at heritage time only and do not cover the post-heritage pipeline churn that produces the E2E 351-WARN signal (root cause outside heritage.rs: ActionHeritage pass>=2 early-out, see TODO HERITAGE-FLAGFREE-SSA-0001)",
-  "cross_space_collect_window": "MISMATCH (registered, HERITAGE-DRIVER-SWITCH-0001 hard precondition): collect scans the whole Varnode bank with an offset window because Rugra's Address carries no space identity; Ghidra's beginLoc(memrange.addr) is space-confined. The fixture's register offsets sit far below the unique allocation base, so no cross-space collision is observable here",
-  "production_action_switch": "UNTESTED: ActionHeritage still runs the direct two-pass place/rename route with the pass>=2 early-out; the canonical path is exercised through Funcdata::opHeritage only"
- }
 }
