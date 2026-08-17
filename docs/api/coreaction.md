@@ -1,5 +1,35 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-17：`build_full_pipeline_actions` 移除 ActionSetCasts（HERITAGE-FLAGFREE-SSA-0001）
+
+- **Ghidra 结构事实（复核 coreaction.cc:5462-5738 全文）**：
+  `ActionDatabase::universalAction` 的 root（ActionRestartGroup "universal"）
+  head 仅 8 个直接子 action（:5477-5485：Start/Constbase/
+  [NormalizeSetup 被注释 :5481]/DefaultParams/ExtraPopSetup/PrototypeTypes/
+  FuncLink/FuncLinkOutOnly），随后才是 `actfullloop`（:5690 加入 root）。
+  `ActionSetCasts("casts")` 在全文**唯一**出现于 :5735——位于 fullloop
+  之后、NameVars(:5734) 之后、FinalStructure(:5736) 之前的尾部序列。
+- **缺陷**：`build_full_pipeline_actions` 的 extras 幸存条目会被
+  `set_default_actions`（action.rs）注册为 root 直接子节点，执行位置在
+  fullloop/mainloop(heritage) **之前**。extras 里的 `ActionSetCasts` 因此
+  对 pre-SSA IR 跑 CAST：`cast_input` 的 `op_set_input(cast, in_vn, 0)`
+  （coreaction.rs，镜像 coreaction.cc:2702-2712）给翻译期 SLEIGH BOOL
+  flag/字节寄存器 free 读（唯一读者=BOOL_NEGATE/BOOL_OR/BOOL_AND/
+  BOOL_XOR）加第二读者 → E2E 351 条 `multiple descendants` WARN
+  （Ghidra varnode.cc:330-338 在该状态 throw；oracle 管线中 heritage 先行
+  SSA 化全部 free 读，该状态不可达）。
+- **修复**：extras 删除 `ActionSetCasts` 一行。其唯一注册留在
+  `set_default_actions` 的 :5735 oracle 位置（action.rs，post-heritage）。
+  ActionSetCasts 本体（cast_input/cast_output/apply）无任何改动。
+- **测试**：`test_build_full_pipeline_actions_nonempty` 改写——断言
+  extras 不含 `setcasts`，且 `build_default_pipeline` root 恰有 1 个
+  `setcasts`（oracle :5735 单注册）。
+- **E2E 证据（当前树，含 WARN-EMIT2 WIP）**：WARN 351→0；
+  75 decompiled/0 panic/1 timeout 保持；defects=0；Matched 123 不降；
+  skeleton 3147→3155；numbering 0→3（glob_url 嵌套 scope 双局部声明块，
+  显式登记移交 printc/varmap 域，随其修复归零；不得在 coreaction 侧加
+  守卫补偿）。
+
 ## 2026-08-14：ActionDeadCode consume 闭包与自环 MULTIEQUAL
 
 - `push_consumed` 现在逐句实现锁定 Ghidra 12.0.4
@@ -818,7 +848,7 @@ ActionInferTypes::apply 移植 coreaction.cc:5374-5416：
 - propagate_one_type（coreaction.cc:5172）：DFS 后代+定义边传播。
 - propagate_across_returns（coreaction.cc:5342）。
 - write_back（coreaction.cc:5043）：update_type 回写。
-build_full_pipeline_actions()：返回 26 个已实现非 stub Action，按 Ghidra 顺序排列（含 ActionSetCasts，现可用）。
+build_full_pipeline_actions()：返回已实现非 stub Action，按 Ghidra 顺序排列（ActionSetCasts 曾在此列；2026-08-17 移除，见顶部 2026-08-17 节——其唯一合法位置 :5735 归 set_default_actions）。
 
 ### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
 action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。

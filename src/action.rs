@@ -929,15 +929,17 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         // current registration context.
         //
         // DELIBERATE RESIDUAL (registered in UNKNOWN-PROTOMODEL-WARN-EMIT-0001):
-        // outputprototype/inputprototype/setcasts stay double-registered for
+        // outputprototype/inputprototype stay double-registered for
         // now. A/B on the locked curl corpus: deduplicating them exposes a
-        // printc-side local-name collision (duplicate `uVarN` declarations,
-        // numbering 0 -> 35; with the three early runs kept, numbering is 0
-        // — better than the pre-change baseline's 16, which this same dedup
-        // of the other 15 actions eliminates). Remove the three names from
+        // printc-side local-name collision (duplicate `uVarN` declarations;
+        // with the early runs kept, numbering is 0). setcasts was removed
+        // from this skip set by HERITAGE-FLAGFREE-SSA-0001: its early run
+        // cast pre-SSA IR (351 multiple-descendants WARNs, Ghidra root head
+        // has no such entry, sole registration at coreaction.cc:5735) and
+        // the printc naming gate (prettyprint control_flow_opener) has
+        // since removed the collision. Remove the remaining two names from
         // this skip set once the local-declaration naming pass deduplicates
-        // names (printc/printlanguage lease) to reach the oracle's single
-        // registration for every Action.
+        // names to reach the oracle's single registration for every Action.
         const BUILDER_OWNED_ACTION_NAMES: [&str; 15] = [
             "defaultparams",      // :5480 above
             "prototypetypes",     // :5483 above
@@ -1235,16 +1237,22 @@ mod tests {
         let names = root.child_names();
         // coreaction.cc:5737 — exactly one top-level prototypewarnings.
         assert_eq!(names.iter().filter(|n| **n == "prototypewarnings").count(), 1);
-        // DELIBERATE RESIDUAL (see the skip-set comment above): the three
+        // DELIBERATE RESIDUAL (see the skip-set comment above): the two
         // early runs kept registered until the printc naming fix land as
         // exactly two top-level instances each (early + oracle position).
-        for name in ["outputprototype", "inputprototype", "setcasts"] {
+        // setcasts is single-registered since HERITAGE-FLAGFREE-SSA-0001.
+        for name in ["outputprototype", "inputprototype"] {
             assert_eq!(
                 names.iter().filter(|n| **n == name).count(),
                 2,
                 "residual double for {name}"
             );
         }
+        assert_eq!(
+            names.iter().filter(|n| **n == "setcasts").count(),
+            1,
+            "setcasts must be sole-registered at the :5735 position"
+        );
         // The other deduplicated builder-owned names: base/merge ones appear
         // exactly once at top level, mainloop/fullloop ones only inside their
         // group (zero top-level instances).
@@ -1296,13 +1304,13 @@ mod tests {
             "shadowvar",         // :5654 (vec survivor)
             "deindirect",        // :5655 (vec survivor)
             // DELIBERATE RESIDUAL doubles (see the skip-set comment above):
-            // the early outputprototype/inputprototype/setcasts runs stay
+            // the early outputprototype/inputprototype runs stay
             // registered until the printc-side local-name collision is
-            // fixed; their oracle positions (:5730/:5731/:5735) hold the
-            // second instance.
+            // fixed; their oracle positions (:5730/:5731) hold the
+            // second instance. setcasts left this list via
+            // HERITAGE-FLAGFREE-SSA-0001 (sole registration :5735).
             "outputprototype",   // :5730 (residual early double)
             "inputprototype",    // :5731 (residual early double)
-            "setcasts",          // :5735 (residual early double)
             "fullloop",          // :5487 group
         ];
         assert!(names.len() >= expected_prefix.len());

@@ -10253,7 +10253,9 @@ impl Action for ActionNodeJoin {
 //   ActionDynamicMapping, ActionForceGoto, ActionStart (already registered).
 //
 // The ordering below mirrors Ghidra's pipeline groups (base → fullloop mainloop
-// → stackstall → deadcontrolflow → post-fullloop → merge/fixate/casts).
+// → stackstall → deadcontrolflow → post-fullloop → merge/fixate).
+// ActionSetCasts is NOT in this list: its only legal position (:5735) is
+// post-fullloop, owned by set_default_actions (HERITAGE-FLAGFREE-SSA-0001).
 
 /// Build the set of implemented-but-unregistered core Actions, ordered to match
 /// Ghidra's `ActionDatabase::universalAction` (coreaction.cc:5477-5738).
@@ -10306,7 +10308,7 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         // NOTE: ActionDoNothing runs inside ActionBlockStructure.
         Box::new(ActionSwitchNorm::new()),       // :5684
 
-        // --- merge/fixate/casts (coreaction.cc:5714-5738) ---
+        // --- merge/fixate (coreaction.cc:5714-5738) ---
         // NOTE: ActionPreferComplement (:5714) / ActionStructureTransform (:5715)
         // excluded — they mutate the structured block tree and conflict with the
         // staged structurer. ActionAssignHigh (:5717), ActionDominantCopy
@@ -10316,10 +10318,20 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         // so they must not appear here as well. ActionMarkIndirectOnly (:5725)
         // and ActionMapGlobals (:5732) are excluded as stubs (Rugra lacks the
         // symbol/flag APIs).
+        // ActionSetCasts (:5735) MUST NOT be here (HERITAGE-FLAGFREE-SSA-0001):
+        // every surviving vec entry is registered as a root child BEFORE
+        // fullloop/mainloop (see the set_default_actions consumption in
+        // action.rs), but universalAction runs ActionSetCasts exactly once at
+        // coreaction.cc:5735 — after fullloop heritage, after NameVars (:5734).
+        // An early CAST on pre-SSA IR gives translation-phase free flag reads
+        // (1-byte register/unique BOOL_NEGATE/BOOL_OR/... inputs) a second
+        // reader via castInput's op_set_input -> 351 `multiple descendants`
+        // WARNs (Ghidra varnode.cc:330-338 throws there; heritage SSA-izes
+        // every free read first, making the state unreachable). Its single
+        // registration lives in set_default_actions at the :5735 position.
         Box::new(ActionHideShadow::new()),       // :5728
         Box::new(ActionOutputPrototype::new()),  // :5730
         Box::new(ActionInputPrototype::new()),   // :5731
-        Box::new(ActionSetCasts::new()),         // :5735 (requires ActionInferTypes, now ready)
         Box::new(ActionPrototypeWarnings::new()),// :5737
         // ActionStop (:5738) is a pure end-of-pipeline marker with no effect in
         // Rugra — excluded.
@@ -11034,10 +11046,29 @@ mod tests {
         // Must include the newly-implemented ActionInferTypes.
         assert!(actions.iter().any(|a| a.get_name() == "infertypes"));
         // And several other implemented actions.
-        assert!(actions.iter().any(|a| a.get_name() == "setcasts"));
         assert!(actions.iter().any(|a| a.get_name() == "nonzeromask"));
         assert!(actions.iter().any(|a| a.get_name() == "deindirect"));
         assert!(actions.iter().any(|a| a.get_name() == "outputprototype"));
+        // HERITAGE-FLAGFREE-SSA-0001: setcasts must NOT be in this vec. The
+        // vec survivors are registered as root children BEFORE
+        // fullloop/mainloop (set_default_actions consumption in action.rs),
+        // but universalAction (coreaction.cc:5462-5738) runs ActionSetCasts
+        // exactly once at :5735 — after fullloop heritage and NameVars
+        // (:5734). An early CAST on pre-SSA IR adds a second reader to
+        // translation-phase free flag reads (351 `multiple descendants`
+        // WARNs). The single registration must come from
+        // set_default_actions at the :5735 position.
+        assert!(
+            !actions.iter().any(|a| a.get_name() == "setcasts"),
+            "setcasts must not run pre-fullloop"
+        );
+        let root = crate::action::build_default_pipeline();
+        let root_names = root.child_names();
+        assert_eq!(
+            root_names.iter().filter(|n| **n == "setcasts").count(),
+            1,
+            "setcasts must be registered exactly once (oracle :5735)"
+        );
         // No stubs should slip in.
         assert!(!actions.iter().any(|a| a.get_name() == "lanedivide"));
         assert!(!actions.iter().any(|a| a.get_name() == "dynamicsymbols"));

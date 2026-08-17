@@ -969,3 +969,13 @@ numbering 0→3，仅 glob_url；复核方四变体独立复现）；保留三�
 - `test_prototype_warnings_registered_once`：prototypewarnings 顶层恰 1 份；
   15 个去重名字的顶层份数；3 个残差双注册恰 2 份。
 - `test_base_group_order_matches_ghidra_5477_5485`：顶层前缀逐字序。
+
+## setcasts 单注册（2026-08-17，HERITAGE-FLAGFREE-SSA-0001）
+
+`BUILDER_OWNED_ACTION_NAMES` 的 DELIBERATE RESIDUAL 注释与相关断言随
+setcasts 的移出更新：`test_prototype_warnings_registered_once` 现断言
+setcasts 顶层恰 1（:5735 位）、base 组前缀不再含 setcasts；残余双注册
+清单只剩 outputprototype/inputprototype（等 printc 命名去重的最后收口）。
+早期 setcasts 注册曾对 pre-SSA IR 跑 CAST（351 multiple-descendants WARN
+的根因，Ghidra root head 无此条目）。
+<!-- annotation-pass: 2026-08-17 -->
