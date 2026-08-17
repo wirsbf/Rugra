@@ -508,6 +508,12 @@ pub struct PrintC {
     /// Index of the address-of token (&, unary prefix, prec 62). Mirrors
     /// PrintC::addressof (printc.cc:33).
     rpn_tok_addressof: usize,
+    /// Index of the function-call surround token `(` `)` (postsurround,
+    /// prec 66, bump 10). Mirrors PrintC::function_call (printc.cc:28).
+    rpn_tok_function_call: usize,
+    /// Index of the comma token (binary, prec 2, associative). Mirrors
+    /// PrintC::comma (printc.cc:55).
+    rpn_tok_comma: usize,
     /// True when doc_function emits via the RPN path. Default false.
     rpn_enabled: bool,
 }
@@ -579,6 +585,8 @@ impl PrintC {
             rpn_tok_object_member: 4,
             rpn_tok_typecast: 5,
             rpn_tok_addressof: 6,
+            rpn_tok_function_call: 7,
+            rpn_tok_comma: 8,
             rpn_enabled: true,
         }
     }
@@ -614,8 +622,25 @@ impl PrintC {
         let assignment = OpToken::binary("=", 14, false, 1, 5, -1);
         // index 1 - dereference (printc.cc:34)
         let dereference = OpToken::unary_prefix("*", 62, 0, 0);
-        // index 2 - hidden (printc.cc:29, never prints).
-        let hidden = OpToken::hidden_function();
+        // index 2 - hidden (printc.cc:23): { "", "", 1, 70, false,
+        // hiddenfunction, 0, 0 }. Stage is 1 — the token completes on a
+        // single operand atom push — and precedence is 70 (looser than
+        // function_call's 66, so an implied extension cast hidden inside a
+        // call argument needs no parens). The printlanguage.rs convenience
+        // ctor hard-codes stage=2/precedence=0, which would leave an
+        // incomplete revpol entry after the operand (the PRINTC-CAST-EXPR
+        // leak class), so build the exact aggregate here instead.
+        let hidden = OpToken {
+            print1: String::new(),
+            print2: String::new(),
+            stage: 1,
+            precedence: 70,
+            associative: false,
+            type_: crate::printlanguage::TokenType::HiddenFunction,
+            spacing: 0,
+            bump: 0,
+            negate: -1,
+        };
         // index 3 - pointer_member "->" (printc.cc:26): binary, prec 66, assoc.
         let pointer_member = OpToken::binary("->", 66, true, 0, 0, -1);
         // index 4 - object_member "." (printc.cc:25): binary, prec 66, assoc.
@@ -624,6 +649,11 @@ impl PrintC {
         let typecast = OpToken::presurround("(", ")", 62, 0);
         // index 6 - addressof "&" (printc.cc:33): unary prefix, prec 62.
         let addressof = OpToken::unary_prefix("&", 62, 0, 0);
+        // index 7 - function_call "(" ")" (printc.cc:28): postsurround,
+        // prec 66, spacing 0, bump 10.
+        let function_call = OpToken::postsurround("(", ")", 66, 0, 10);
+        // index 8 - comma "," (printc.cc:55): binary, prec 2, associative.
+        let comma = OpToken::binary(",", 2, true, 0, 0, -1);
         vec![
             assignment,
             dereference,
@@ -632,6 +662,8 @@ impl PrintC {
             object_member,
             typecast,
             addressof,
+            function_call,
+            comma,
         ]
     }
 
@@ -648,7 +680,17 @@ impl PrintC {
     // Ghidra: printlanguage.cc:129 PrintLanguage::pushOp
     /// Push an operator token (by index into rpn_token_table) onto the RPN
     /// stack. Faithful wrapper over crate::printlanguage::rpn_push_op.
+    ///
+    /// printlanguage.cc:132-133 runs the REAL `recurse()` when pending
+    /// varnodes are queued. The free fn in printlanguage.rs cannot dispatch
+    /// (no op arena), so its internal no-op recurse would DISCARD those
+    /// pending entries — dropping operands mid-expression. Route the
+    /// drain through PrintC's real dispatcher first (same single
+    /// `if (pending < nodepend.size()) recurse();` semantics).
     fn rpn_push_op(&mut self, tok_index: usize) {
+        if self.rpn_pending < self.nodepend.len() {
+            self.rpn_recurse();
+        }
         crate::printlanguage::rpn_push_op(
             &mut self.revpol,
             &mut self.nodepend,
@@ -663,7 +705,14 @@ impl PrintC {
     // Ghidra: printlanguage.cc:162 PrintLanguage::pushAtom
     /// Push a leaf Atom onto the RPN stack, draining as much of the stack as
     /// is now complete. Faithful wrapper over rpn_push_atom.
+    ///
+    /// Same real-recurse routing as `rpn_push_op` above (printlanguage.cc:
+    /// 165-166): a pending implied input must be dispatched through the real
+    /// opcode dispatcher before this atom is emitted, or it is lost.
     fn rpn_push_atom(&mut self, atom: &crate::printlanguage::Atom) {
+        if self.rpn_pending < self.nodepend.len() {
+            self.rpn_recurse();
+        }
         crate::printlanguage::rpn_push_atom(
             &mut self.revpol,
             &mut self.nodepend,
@@ -741,11 +790,14 @@ impl PrintC {
                     // Drop the locks on np.vn / np.op before any &mut self call
                     // that might re-lock a PcodeOp (def_op_arc is a distinct op
                     // from np.op, but dropping keeps the borrow graph simple).
+                    // Keep the reading op's arc: printlanguage.cc:532 passes it
+                    // as the readOp argument of the opcode push.
+                    let read_op_arc = np.op.clone();
                     drop(vn_guard);
                     drop(op_guard);
                     let def_guard = def_op_arc.read().unwrap();
                     // printlanguage.cc:532: defOp->getOpcode()->push(this, defOp, op)
-                    self.dispatch_op_rpn(&def_op_arc, &def_guard);
+                    self.dispatch_op_rpn(&def_op_arc, &def_guard, Some(&read_op_arc));
                     drop(def_guard);
                 } else {
                     drop(vn_guard);
@@ -893,8 +945,9 @@ impl PrintC {
             drop(out_vn);
             self.rpn_push_atom(&atom);
         }
-        // printc.cc:2493: op->getOpcode()->push(this, op, 0)
-        self.dispatch_op_rpn(op_arc, op);
+        // printc.cc:2493: op->getOpcode()->push(this, op, 0) — readOp is null
+        // from emitExpression.
+        self.dispatch_op_rpn(op_arc, op, None);
         // printc.cc:2494: recurse()
         self.rpn_recurse();
     }
@@ -913,6 +966,7 @@ impl PrintC {
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
+        read_op: Option<&std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
     ) {
         use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
         match op.opcode {
@@ -1175,64 +1229,116 @@ impl PrintC {
             // `typecast` is a presurround token (printc.cc:35), so the RPN
             // emit machinery prints "(typename)" then the operand.
             OpCode::CPUI_CAST => {
-                use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
-                // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing().
-                // Datatype + TypeMetatype are in scope at file level.
-                let out_dt = op.get_out()
-                    .and_then(|o| o.read().unwrap().get_high_type_def_facing());
-                // printc.cc:452-458: array-decay address-of shortcut.
-                // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
-                // does not port; we take the common case where in0 is itself an
-                // array lvalue decaying into the pointer-to-array target. This
-                // matches the legacy op_type_cast behaviour.
-                let mut took_shortcut = false;
-                if let Some(ref dt) = out_dt {
-                    if Self::is_pointer_to_array(dt) {
-                        let in0_is_array = op.get_in(0).map(|a| {
-                            a.read().unwrap().get_high_type_read_facing(op, 0)
-                                .map(|t| t.get_metatype() == TypeMetatype::Array)
-                                .unwrap_or(false)
-                        }).unwrap_or(false);
-                        if in0_is_array {
-                            // pushOp(&addressof,op); pushVn(in0).
-                            self.rpn_push_op(self.rpn_tok_addressof);
-                            self.rpn_push_in(op_arc, op, 0, self.mods);
-                            took_shortcut = true;
-                        }
+                self.rpn_op_type_cast(op_arc, op);
+            }
+            // printc.cc:786 PrintC::opIntZext: if isZextCast(out,in) →
+            // opHiddenFunc (when option_hide_exts and the extension is
+            // implied by C promotion) or opTypeCast; else opFunc.
+            OpCode::CPUI_INT_ZEXT => {
+                // printc.cc:789: castStrategy->isZextCast(outDef, inRead).
+                let (out_dt, in_dt) = {
+                    let out = op.get_out().map(|a| a.read().unwrap());
+                    let in0 = op.get_in(0).map(|a| a.read().unwrap());
+                    match (out, in0) {
+                        (Some(o), Some(i)) => (
+                            o.get_high_type_def_facing(),
+                            i.get_high_type_read_facing(op, 0),
+                        ),
+                        _ => (None, None),
                     }
-                }
-                if took_shortcut {
-                    return;
-                }
-                // printc.cc:459-462: if (!option_nocasts) {
-                //   pushOp(&typecast,op); pushType(dt); }
-                if !self.option_nocasts {
-                    self.rpn_push_op(self.rpn_tok_typecast);
-                    if let Some(ref dt) = out_dt {
-                        // pushType(dt) renders the type's display name as a
-                        // TypeToken syntax Atom (printc.cc:2013 pushType).
-                        let type_name = dt.get_name().to_string();
-                        let type_atom = Atom::with_type(
-                            &type_name,
-                            TagType::TypeToken,
-                            SyntaxHighlight::TypeColor,
-                            0,
-                        );
-                        self.rpn_push_atom(&type_atom);
+                };
+                let is_zext = match (&out_dt, &in_dt) {
+                    (Some(o), Some(i)) => self.cast_strategy.is_zext_cast(o, i),
+                    _ => false,
+                };
+                if is_zext {
+                    // printc.cc:790: option_hide_exts && isExtensionCastImplied
+                    // (cast.cc:249 returns false when readOp is null).
+                    if self.option_hide_exts && read_op.is_some() && read_op.map(|r| {
+                        let g = r.read().unwrap();
+                        self.is_extension_cast_implied(op, &g)
+                    }).unwrap_or(false) {
+                        self.rpn_op_hidden_func(op_arc, op);
                     } else {
-                        // No resolved type: cast renders as (long), the
-                        // generic integer cast (mirrors castInput default).
-                        let type_atom = Atom::with_type(
-                            "long",
-                            TagType::TypeToken,
-                            SyntaxHighlight::TypeColor,
-                            0,
-                        );
-                        self.rpn_push_atom(&type_atom);
+                        self.rpn_op_type_cast(op_arc, op);
                     }
+                } else {
+                    // printc.cc:796: opFunc(op) — getOperatorName is
+                    // "ZEXT" + dec(insize) + dec(outsize) (typeop.cc:1122).
+                    let nm = Self::rpn_operator_name_ext("ZEXT", op);
+                    self.rpn_op_func(op_arc, op, &nm);
                 }
-                // printc.cc:463: pushVn(op->getIn(0),op,mods).
-                self.rpn_push_in(op_arc, op, 0, self.mods);
+            }
+            // printc.cc:799 PrintC::opIntSext: same shape as opIntZext but
+            // isSextCast (input must be signed) and name "SEXT".
+            OpCode::CPUI_INT_SEXT => {
+                let (out_dt, in_dt) = {
+                    let out = op.get_out().map(|a| a.read().unwrap());
+                    let in0 = op.get_in(0).map(|a| a.read().unwrap());
+                    match (out, in0) {
+                        (Some(o), Some(i)) => (
+                            o.get_high_type_def_facing(),
+                            i.get_high_type_read_facing(op, 0),
+                        ),
+                        _ => (None, None),
+                    }
+                };
+                let is_sext = match (&out_dt, &in_dt) {
+                    (Some(o), Some(i)) => self.cast_strategy.is_sext_cast(o, i),
+                    _ => false,
+                };
+                if is_sext {
+                    if self.option_hide_exts && read_op.is_some() && read_op.map(|r| {
+                        let g = r.read().unwrap();
+                        self.is_extension_cast_implied(op, &g)
+                    }).unwrap_or(false) {
+                        self.rpn_op_hidden_func(op_arc, op);
+                    } else {
+                        self.rpn_op_type_cast(op_arc, op);
+                    }
+                } else {
+                    // typeop.cc:1148: "SEXT" + dec(insize) + dec(outsize).
+                    let nm = Self::rpn_operator_name_ext("SEXT", op);
+                    self.rpn_op_func(op_arc, op, &nm);
+                }
+            }
+            // printc.cc:843 PrintC::opSubpiece: the doesSpecialPrinting
+            // field-extraction branch (printc.cc:846-871) requires the
+            // PcodeOp::special flag + piece-structured types, neither of
+            // which Rugra's SUBPIECE ops carry (opcode_flags: binary only),
+            // so it is unreachable here exactly as in a Ghidra IR without
+            // special-printing markers. Main path: isSubpieceCast →
+            // opTypeCast, else opFunc.
+            OpCode::CPUI_SUBPIECE => {
+                // printc.cc:872-874: isSubpieceCast(outDef, inRead, offset).
+                let (out_dt, in_dt, offset) = {
+                    let out = op.get_out().map(|a| a.read().unwrap());
+                    let in0 = op.get_in(0).map(|a| a.read().unwrap());
+                    let off = op.get_in(1)
+                        .map(|a| a.read().unwrap().get_offset())
+                        .unwrap_or(0);
+                    match (out, in0) {
+                        (Some(o), Some(i)) => (
+                            o.get_high_type_def_facing(),
+                            i.get_high_type_read_facing(op, 0),
+                            off as u32,
+                        ),
+                        _ => (None, None, off as u32),
+                    }
+                };
+                let is_sub = match (&out_dt, &in_dt) {
+                    (Some(o), Some(i)) => {
+                        self.cast_strategy.is_subpiece_cast(o, i, offset)
+                    }
+                    _ => false,
+                };
+                if is_sub {
+                    self.rpn_op_type_cast(op_arc, op);
+                } else {
+                    // typeop.cc:2127: "SUB" + dec(insize) + dec(outsize).
+                    let nm = Self::rpn_operator_name_ext("SUB", op);
+                    self.rpn_op_func(op_arc, op, &nm);
+                }
             }
             // printc.cc:929 opPtrsub: struct/union field access `ptr->field`,
             // array element pointer `*ptr`/`ptr[0]`, or `&ptr->field`.
@@ -1365,6 +1471,133 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printc.cc:448 PrintC::opTypeCast
+    /// RPN-path port of `PrintC::opTypeCast(const PcodeOp*)`
+    /// (printc.cc:448-464). Shared by the CPUI_CAST dispatch arm and the
+    /// ZEXT/SEXT/SUBPIECE arms (printc.cc:793/806/875 all call opTypeCast).
+    /// Order is exactly:
+    ///   if (dt->isPointerToArray() && checkAddressOfCast(op)) {
+    ///     pushOp(&addressof,op); pushVn(in0); return; }
+    ///   if (!option_nocasts) { pushOp(&typecast,op); pushType(dt); }
+    ///   pushVn(in0);
+    fn rpn_op_type_cast(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing().
+        let out_dt = op.get_out()
+            .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+        // printc.cc:452-458: array-decay address-of shortcut.
+        // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
+        // does not port; we take the common case where in0 is itself an
+        // array lvalue decaying into the pointer-to-array target. This
+        // matches the legacy op_type_cast behaviour.
+        if let Some(ref dt) = out_dt {
+            if Self::is_pointer_to_array(dt) {
+                let in0_is_array = op.get_in(0).map(|a| {
+                    a.read().unwrap().get_high_type_read_facing(op, 0)
+                        .map(|t| t.get_metatype() == TypeMetatype::Array)
+                        .unwrap_or(false)
+                }).unwrap_or(false);
+                if in0_is_array {
+                    // pushOp(&addressof,op); pushVn(in0).
+                    self.rpn_push_op(self.rpn_tok_addressof);
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                    return;
+                }
+            }
+        }
+        // printc.cc:459-462: if (!option_nocasts) {
+        //   pushOp(&typecast,op); pushType(dt); }
+        if !self.option_nocasts {
+            self.rpn_push_op(self.rpn_tok_typecast);
+            if let Some(ref dt) = out_dt {
+                // pushType(dt) renders the type's display name as a
+                // TypeToken syntax Atom (printc.cc:2013 pushType).
+                let type_name = dt.get_name().to_string();
+                let type_atom = Atom::with_type(
+                    &type_name,
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            } else {
+                // No resolved type: cast renders as (long), the
+                // generic integer cast (mirrors castInput default).
+                let type_atom = Atom::with_type(
+                    "long",
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            }
+        }
+        // printc.cc:463: pushVn(op->getIn(0),op,mods).
+        self.rpn_push_in(op_arc, op, 0, self.mods);
+    }
+
+    // Ghidra: printc.cc:424 PrintC::opFunc
+    /// RPN-path port of `PrintC::opFunc(const PcodeOp*)` (printc.cc:424-442):
+    /// functional syntax `name(arg0,arg1,...)` built from the function_call
+    /// postsurround token, comma tokens, and inputs recorded in reverse
+    /// order (printc.cc:437 comment; the LIFO nodepend drain in recurse
+    /// then emits them in forward order).
+    fn rpn_op_func(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+        nm: &str,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        // printc.cc:427: pushOp(&function_call,op)
+        self.rpn_push_op(self.rpn_tok_function_call);
+        // printc.cc:430-431: name as optoken with funcname color.
+        let name_atom = Atom::with_op(nm, TagType::OpToken, SyntaxHighlight::FuncnameColor, -1);
+        self.rpn_push_atom(&name_atom);
+        let n = op.num_input();
+        if n > 0 {
+            // printc.cc:433-434: numInput()-1 comma tokens.
+            for _ in 0..n.saturating_sub(1) {
+                self.rpn_push_op(self.rpn_tok_comma);
+            }
+            // printc.cc:437-438: inputs pushed in reverse order for the
+            // LIFO nodepend drain.
+            for i in (0..n).rev() {
+                self.rpn_push_in(op_arc, op, i, self.mods);
+            }
+        } else {
+            // printc.cc:440-441: empty blank token for void.
+            let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
+            self.rpn_push_atom(&blank);
+        }
+    }
+
+    // Ghidra: printc.cc:474 PrintC::opHiddenFunc
+    /// RPN-path port of `PrintC::opHiddenFunc(const PcodeOp*)`
+    /// (printc.cc:474-479): pushOp(&hidden) + pushVn(in0). The hidden token
+    /// (printc.cc:29) never prints; it only guards evaluation order.
+    fn rpn_op_hidden_func(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        self.rpn_push_op(self.rpn_tok_hidden);
+        self.rpn_push_in(op_arc, op, 0, self.mods);
+    }
+
+    // Ghidra: typeop.cc:1122 TypeOpIntZext::getOperatorName
+    /// `name + dec(insize) + dec(outsize)` for ZEXT/SEXT/SUB functional
+    /// syntax (typeop.cc:1122/1148/2127 all build the name this way).
+    fn rpn_operator_name_ext(prefix: &str, op: &PcodeOp) -> String {
+        let in_size = op.get_in(0).map(|a| a.read().unwrap().get_size()).unwrap_or(0);
+        let out_size = op.get_out().map(|a| a.read().unwrap().get_size()).unwrap_or(0);
+        format!("{}{}{}", prefix, in_size, out_size)
+    }
+
     // RUGRA-GLUE: rpn_emit_subscript (printlanguage.cc postsurround emit)
     /// Emit a subscript `op[atom]` via direct text, matching the legacy
     /// `in0[off]` fallback shape for variable-offset PTRSUB. This is a
@@ -1419,8 +1652,26 @@ impl PrintC {
     ) {
         for op_ref in ops {
             let op_guard = op_ref.0.read().unwrap();
-            // printc.cc:2696: if (inst->notPrinted()) continue;
+            // Rugra's dead ops stay in the block's op list (Ghidra unlinks
+            // them from PcodeOpBank), so keep the is_dead guard first.
             if op_guard.is_dead() {
+                continue;
+            }
+            // printc.cc:2696: if (inst->notPrinted()) continue;
+            // PcodeOp::notPrinted (op.hh:182) tests
+            //   (flags & (marker | nonprinting | noreturn)) != 0.
+            // MULTIEQUAL/INDIRECT carry `marker` from their TypeOp ctors
+            // (typeop.cc:1947/1988, mirrored by opcode_flags in op.rs), so
+            // phi/INDIRECT ops are NEVER emitted as standalone statements.
+            // Skipping them here is load-bearing for the RPN stack: a marker
+            // op reaching emit_statement would push the assignment token +
+            // LHS atom and then dispatch to the empty opMultiequal
+            // (printc.hh:331), leaving an incomplete revpol entry that leaks
+            // into the next statement's emission (`= (x;` / `))))` cascades).
+            if op_guard.is_marker()
+                || (op_guard.flags & crate::op::pcodeop_flags::NONPRINTING) != 0
+                || (op_guard.flags & crate::op::pcodeop_flags::NORETURN) != 0
+            {
                 continue;
             }
             // printc.cc:2697-2702: `no_branch` suppresses every branch-flagged

@@ -186,6 +186,22 @@ printc.cc:2260/2518/2497）：
 - **当前生效限制（诚实声明）**：`CPUI_PTRSUB`/`CPUI_CAST` op 目前在 curl/httpd 中**不被产生**——Rugra 缺少 `RulePtrsub`（INT_ADD→PTRSUB 的创建规则，ruleaction.cc，仅移植了 `RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo` 这类消费现有 op 的规则），且 `ActionSetCasts::castInput` 的 PTRADD/PTRSUB pointer-fit 检查与 castOutput 延后（coreaction.rs:2893-2897 注释），故 CAST 创建对 curl 当前类型推断结果不触发（`cast_standard_full` 返回 None）。本 PR 的 dispatch 分支已就位且经过 Ghidra 行逐行核对，待上述底层 infra 补齐后即生效。
 - **效果（curl diff 门禁）**：skeleton diff 2880→2873（轻微改善，来自 implied 算术 def 现在内联），defects 0→0，numbering 0→0，1287/1287 单元测试通过。无回归。
 
+### RPN 表达式层畸形发射修复：notPrinted 过滤 + ZEXT/SEXT/SUBPIECE dispatch + 真 recurse 路由（2026-08-17，PRINTC-CAST-EXPR-0001）
+
+- **背景**：`result/curl_cur.c` 出现 1168+ 处 `= (uVar28;` / `* = uVar20)))) = 0x3489;` 形态的畸形行。根因（纯发射层，非上游 IR）：
+  1. `emit_block_basic_rpn` 缺 Ghidra `notPrinted()` 过滤（printc.cc:2696；op.hh:182 = `marker|nonprinting|noreturn`）。MULTIEQUAL/INDIRECT 的 TypeOp ctor 带 `marker`（typeop.cc:1947/1988），Ghidra 因此从不把它们作为语句打印；Rugra 放行后，`emit_expression_rpn` 已 push assignment token + LHS atom，而 dispatch 落入 no-op（`opMultiequal` 本身就是空实现，printc.hh:331）→ 语句结束时 `revpol` 残留 `assignment(visited=1 < stage=2)` 不完整条目，泄漏进下一语句的 `rpn_emit_op`，在错误位置输出 ` = ` / `(` / `)`——即全部 `= (` 行与 `))))` 连串。
+  2. `INT_ZEXT`/`INT_SEXT`/`SUBPIECE` 同样落 `_ => {}`（Ghidra 是 printc.cc:786/799/843 的 cast-or-opFunc 双臂）。
+  3. `rpn_push_op`/`rpn_push_atom` wrapper 把 printlanguage.cc:132-133/165-166 的 `recurse()` 委托给 printlanguage.rs 的 no-op 自由函数（无 op arena）——mid-expression push 时 pending 输入被静默丢弃。
+  4. `hidden` token 表字段与 printc.cc:23 不符（应为 stage=1/prec 70，便捷 ctor 写死 stage=2/prec 0——同样残留 incomplete 条目）。
+- **本改动（faithful port）**：
+  - `emit_block_basic_rpn` 增加 notPrinted 过滤：`is_marker() || (flags & NONPRINTING) || (flags & NORETURN)`（flags 由 `opcode_flags` 在 op 创建时正确初始化，已核实）。
+  - `dispatch_op_rpn` 新增 `CPUI_INT_ZEXT`/`CPUI_INT_SEXT`/`CPUI_SUBPIECE` 三臂：`cast_strategy.is_zext_cast/is_sext_cast/is_subpiece_cast` 命中 → `rpn_op_type_cast`；否则 `rpn_op_func`（`getOperatorName` = `"ZEXT/SEXT/SUB" + insize + outsize`，typeop.cc:1122/1148/2127）。SUBPIECE 的 `doesSpecialPrinting` 字段抽取分支（printc.cc:846-871）依赖 piece-structured 类型 + SPECIAL flag，Rugra 均无，不可达分支如实省略。
+  - token 表新增 `function_call`（`(`/`)` postsurround prec 66 bump 10，printc.cc:28）与 `comma`（binary prec 2 assoc，printc.cc:55）；`hidden` 改为表内直构聚合 `{ "", "", 1, 70, … }`（printc.cc:23）。
+  - `rpn_op_func`/`rpn_op_hidden_func`/`rpn_op_type_cast`（自 CAST 臂重构共享）/`rpn_operator_name_ext` 四个 helper；`readOp` 线穿 dispatch（`emit_expression_rpn` 传 `None` = printc.cc:2493 的字面 0；`rpn_recurse` 传读 op = printlanguage.cc:532；`isExtensionCastImplied` 对 `readOp==null` 返回 false，与 cast.cc:257 一致）。
+  - `rpn_push_op`/`rpn_push_atom` wrapper 先走真 `self.rpn_recurse()`（单一 `if (pending < nodepend.size()) recurse();` 语义不变），再进自由函数——Ghidra 的 recurse 是虚调用真实现，此前路由到 no-op 等于丢操作数。
+- **效果（干净 worktree = HEAD a301036 + 仅本 printc.rs overlay）**：`= (` 计数 1262→6 且 6 处全为合法 C（cast 赋值 / `== (bool)` 比较），真畸形 0；`))))` 连串 0；ZEXT/SEXT 按 oracle 的 opFunc 形态发射（`ZEXT48(x)`/`SEXT18(bVar1)`）；差分 skeleton 4724→3300、defects 0→0、numbering 0→0；gcc 审计 103 OK/20 FAIL → 105 OK/18 FAIL（GetStr+hugehelp 修复，其余 18 与基线同错同位）；124/124 75 decompiled/0 panic/1 timeout=基线；cargo test --lib 1373/5 失败集逐名一致。
+- **当前生效限制（诚实声明）**：二元算术仍走 `emit.tag_op(" + ")` 直发不经 RPN token（嵌套优先级括号缺失，3 处 `== … + 0 - … < 0` 形残差）——binary token 化为后继 TODO（PRINTC-BINARY-RPN-0001 建议）；`uVara0` 类名字 use-registered 但声明缺失为 varmap 域既有残差。
+
 
 ---
 
