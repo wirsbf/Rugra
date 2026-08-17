@@ -928,19 +928,21 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         // :5495, MultiCse :5653, ShadowVar :5654, Deindirect :5655) keep their
         // current registration context.
         //
-        // DELIBERATE RESIDUAL (registered in UNKNOWN-PROTOMODEL-WARN-EMIT-0001):
-        // outputprototype/inputprototype stay double-registered for
-        // now. A/B on the locked curl corpus: deduplicating them exposes a
-        // printc-side local-name collision (duplicate `uVarN` declarations;
-        // with the early runs kept, numbering is 0). setcasts was removed
-        // from this skip set by HERITAGE-FLAGFREE-SSA-0001: its early run
-        // cast pre-SSA IR (351 multiple-descendants WARNs, Ghidra root head
-        // has no such entry, sole registration at coreaction.cc:5735) and
-        // the printc naming gate (prettyprint control_flow_opener) has
-        // since removed the collision. Remove the remaining two names from
-        // this skip set once the local-declaration naming pass deduplicates
-        // names to reach the oracle's single registration for every Action.
-        const BUILDER_OWNED_ACTION_NAMES: [&str; 15] = [
+        // RESIDUAL CLOSED (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 R2): the skip
+        // set below is now exhaustive — every Action this builder registers
+        // at its oracle position is skipped in the vec consumption, so each
+        // Action has exactly one registration, matching universalAction
+        // (coreaction.cc:5462-5738). outputprototype/inputprototype were
+        // the last two residual doubles: their early (pre-fullloop) runs
+        // stayed registered because A/B on the locked curl corpus showed a
+        // printc-side local-name collision (duplicate `uVarN` declaration
+        // block in glob_url, numbering 0→3). That unblocking condition was
+        // satisfied by 533412a (printc naming gate — prettyprint
+        // control_flow_opener, PRINTC-WARN-EMIT-0001 R2); with it landed,
+        // full dedup holds numbering=0 (verified on a fresh locked-oracle
+        // curl E2E). setcasts had left earlier via
+        // HERITAGE-FLAGFREE-SSA-0001 (sole registration at :5735).
+        const BUILDER_OWNED_ACTION_NAMES: [&str; 17] = [
             "defaultparams",      // :5480 above
             "prototypetypes",     // :5483 above
             "varnodeprops",       // mainloop :5491
@@ -955,6 +957,8 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
             "activereturn",       // fullloop :5688
             "switchnorm",         // fullloop :5684
             "hideshadow",         // :5728
+            "outputprototype",    // :5730
+            "inputprototype",     // :5731
             "prototypewarnings",  // :5737
         ];
         for extra in crate::coreaction::build_full_pipeline_actions() {
@@ -1230,22 +1234,22 @@ mod tests {
     // Action exactly once (coreaction.cc:5462-5738); ActionPrototypeWarnings
     // appears only at :5737. The build_full_pipeline_actions() consumption
     // used to double-register it (stderr 48 = 24×2 unknown-convention
-    // warnings per E2E run) along with 14 other Actions this builder owns.
+    // warnings per E2E run) along with 16 other Actions this builder owns.
     #[test]
     fn test_prototype_warnings_registered_once() {
         let root = build_default_pipeline();
         let names = root.child_names();
         // coreaction.cc:5737 — exactly one top-level prototypewarnings.
         assert_eq!(names.iter().filter(|n| **n == "prototypewarnings").count(), 1);
-        // DELIBERATE RESIDUAL (see the skip-set comment above): the two
-        // early runs kept registered until the printc naming fix land as
-        // exactly two top-level instances each (early + oracle position).
-        // setcasts is single-registered since HERITAGE-FLAGFREE-SSA-0001.
+        // R2 closeout (unblocked by 533412a, see the skip-set comment
+        // above): outputprototype/inputprototype are sole-registered at
+        // their oracle positions — exactly one top-level instance each,
+        // never in the pre-fullloop vec-survivor run.
         for name in ["outputprototype", "inputprototype"] {
             assert_eq!(
                 names.iter().filter(|n| **n == name).count(),
-                2,
-                "residual double for {name}"
+                1,
+                "sole registration for {name}"
             );
         }
         assert_eq!(
@@ -1303,14 +1307,13 @@ mod tests {
             "multicse",          // :5653 (vec survivor)
             "shadowvar",         // :5654 (vec survivor)
             "deindirect",        // :5655 (vec survivor)
-            // DELIBERATE RESIDUAL doubles (see the skip-set comment above):
-            // the early outputprototype/inputprototype runs stay
-            // registered until the printc-side local-name collision is
-            // fixed; their oracle positions (:5730/:5731) hold the
-            // second instance. setcasts left this list via
+            // R2 closeout (UNKNOWN-PROTOMODEL-WARN-EMIT-0001): the residual
+            // early outputprototype/inputprototype doubles are gone from
+            // this prefix — they are no longer vec survivors; their sole
+            // registrations sit at :5730/:5731 (asserted by
+            // test_post_cleanup_sequence_matches_ghidra_5714_5738 and
+            // test_prototype_warnings_registered_once). setcasts left via
             // HERITAGE-FLAGFREE-SSA-0001 (sole registration :5735).
-            "outputprototype",   // :5730 (residual early double)
-            "inputprototype",    // :5731 (residual early double)
             "fullloop",          // :5487 group
         ];
         assert!(names.len() >= expected_prefix.len());

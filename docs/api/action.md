@@ -951,12 +951,17 @@ FunLink 在 ExtraPopSetup/PrototypeTypes 之前，与 oracle 相反。
 
 ### 登记残差（DELIBERATE RESIDUAL）
 
-`outputprototype`/`inputprototype`/`setcasts` 仍双注册（顶层各 2 份）。
-A/B 实测：去重这三者会暴露 printc 侧局部名碰撞（`uVarN` 重复声明，
-numbering 0→3，仅 glob_url；复核方四变体独立复现）；保留三者的提前趟时 numbering=0——改动前基线 16 系当时并发 WIP 瞬态（先前"双注册所致"的归因修正已撤回）
-顺带消除了改动前基线的 16 条 numbering（此前误归因于并发 printc WIP，
-实为双注册所致）。等 printc/printlanguage 租约方的局部声明命名去重落地
-后，从跳过集中删去这三个名字即达全量单注册。
+> 2026-08-17 更新：该残差已全部收口——setcasts 由 HERITAGE-FLAGFREE-SSA-0001
+> 移出，outputprototype/inputprototype 由 R2 收口移出（见下方
+> 「outputprototype/inputprototype 单注册」节），跳过集现为 17 名，无残余。
+
+[历史记录，已被 R2 收口取代——保留作归因审计] 当时 `outputprototype`/
+`inputprototype`/`setcasts` 仍双注册（顶层各 2 份）。A/B 实测：去重这三者
+会暴露 printc 侧局部名碰撞（`uVarN` 重复声明，numbering 0→3，仅 glob_url；
+复核方四变体独立复现）。setcasts 由 HERITAGE-FLAGFREE-SSA-0001（8fa91f5）
+先行移出（早期趟在 pre-SSA IR 上跑 CAST 是 351 WARN 家族根因）；
+outputprototype/inputprototype 由 R2 收口（本节上方）移出——解除条件
+（printc 局部声明命名去重 = 533412a 的 control_flow_opener 门控）已满足。
 
 ### 度量（锁定 curl E2E）
 
@@ -975,7 +980,38 @@ numbering 0→3，仅 glob_url；复核方四变体独立复现）；保留三�
 `BUILDER_OWNED_ACTION_NAMES` 的 DELIBERATE RESIDUAL 注释与相关断言随
 setcasts 的移出更新：`test_prototype_warnings_registered_once` 现断言
 setcasts 顶层恰 1（:5735 位）、base 组前缀不再含 setcasts；残余双注册
-清单只剩 outputprototype/inputprototype（等 printc 命名去重的最后收口）。
+清单只剩 outputprototype/inputprototype（等 printc 命名去重的最后收口；
+已于同日 R2 收口，见下节）。
 早期 setcasts 注册曾对 pre-SSA IR 跑 CAST（351 multiple-descendants WARN
 的根因，Ghidra root head 无此条目）。
+
+## outputprototype/inputprototype 单注册（2026-08-17，UNKNOWN-PROTOMODEL-WARN-EMIT-0001 R2 收口）
+
+`BUILDER_OWNED_ACTION_NAMES` 15 → **17** 名，加入 `outputprototype`(:5730)/
+`inputprototype`(:5731)：提前趟（fullloop 前平铺位）从 Vec 消费中移除，
+两 Action 与 `universalAction`（coreaction.cc:5462-5738）一致地全树恰一份，
+唯一注册在 :5730（`ActionOutputPrototype("localrecovery")`）与 :5731
+（`ActionInputPrototype("fixateproto")`）——已在锁定 oracle 全函数体
+（5462-5739 行）核实无第二处注册。**残余双注册清单清空**。解除条件已由
+533412a（printc 命名门控，prettyprint `control_flow_opener`，
+PRINTC-WARN-EMIT-0001 R2）满足：glob_url 的 `uVarN` 重复声明块根因
+（`if ((bool)(piVar1 <= 0x1000 /* 4096 */))` 的十六进制注解 ` */` 被误判为
+签名形状）已修，全量去重后 numbering 保持 0。
+
+### 测试更新
+
+- `test_prototype_warnings_registered_once`：残余双注册断言循环（count=2）
+  改为单注册断言（count=1，:5730/:5731 位）；17 名去重清单注释同步。
+- `test_base_group_order_matches_ghidra_5477_5485`：前缀中的
+  `outputprototype`/`inputprototype` 两项为「residual early double」注释标注
+  的临时项（读测试确认语义：其存在仅因双注册的 Vec 提前趟），随收口从前缀
+  删除——前缀现为 `deindirect → fullloop` 直连；两名的唯一位置由
+  `test_post_cleanup_sequence_matches_ghidra_5714_5738`（:5730/:5731 尾段）
+  与单注册计数断言锁定。
+
+### 度量（锁定 curl E2E，收口前后新鲜捕获对照）
+
+收口前（004816a 干净树）与收口后均：Matched **123** / defects **0** /
+numbering **0** / `multiple descendants` 0 / `/* WARNING: Unknown calling
+convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重复注入）。
 <!-- annotation-pass: 2026-08-17 -->
