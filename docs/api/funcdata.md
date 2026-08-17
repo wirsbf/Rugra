@@ -670,7 +670,15 @@ PcodeOpRaw
 - `new_unique(s)` — `Funcdata::newUnique` (288)
 - `op_set_opcode(op, opc)` — `Funcdata::opSetOpcode` (463)。**2026-07-02**：对齐 `PcodeOp::setOpcode` (op.cc:276) — 清除 opcode 派生 flag 位（CALL/BRANCH/RETURNS/MARKER/CODEREF/...）后按新 OpCode 重设。修复前 CPUI_CALL 的 output 永远不带 CALL flag → ActionMarkExplicit 的 `def->isCall()` 失败 → output 未被 force-explicit → ActionMarkImplied 标 implied → printc 跳过 CALL 语句（curl 丢失约 130 处调用）。
 - `op_set_input(op, vn, slot)` — `Funcdata::opSetInput` (467)，扩展 inrefs、维护 descend
-- `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput` (479)
+- `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput`（funcdata_op.cc:308-317）：
+  扩槽（`PcodeOp::insertInput` op.cc:311-318，`slot` 及之后的旧输入右移一格）后
+  **经完整 `op_set_input` 路径**落位——常量去重（cc:108-115）、fresh 空槽跳过
+  `opUnsetInput`（cc:118-121 NULL guard）、`addDescend` free 检查 + coverdirty
+  （varnode.cc:330-340）。**2026-08-17 收编**（VARNODE-ADDDESCEND-THROW-0001 子项）：
+  此前直接 `descend.push` 绕过 opSetInput，是 addDescend 同族最后一个生产者缺口
+  （缺 free 检查/coverdirty/常量去重）。Rugra `Vec` 无法物化 Ghidra 的瞬态 NULL
+  槽，实现将尾部 split_off 后由 `op_set_input` 追加进新槽（两步间所有 Ghidra 语句
+  对 NULL 槽均为 no-op），无需分配可观察的 sentinel Varnode。
 - `op_remove_input(op, slot)` — `Funcdata::opRemoveInput`（funcdata_op.cc:291）：先按
   `opUnsetInput` 擦除旧 Varnode 的一个 descendant edge，再从 Rust `Vec` 删除该槽。
 - `op_insert_before(op, follow)` — `Funcdata::opInsertBefore`

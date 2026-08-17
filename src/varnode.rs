@@ -1787,9 +1787,12 @@ impl Varnode {
     /// illegal state (subflow raw INPUT flagging, inject_raw_ops shared free
     /// varnode) were eliminated in aa3d5e8; the E2E corpus must stay at
     /// 0 panics, otherwise an uneliminated producer exists.
-    /// Also sets coverdirty (Ghidra cc:339); Rugra's cover system is simplified
-    /// (see merge.rs compute_varnode_covers) and does not track the coverdirty
-    /// flag — TODO tracked in ALIGNMENT_ROADMAP (cover.cc full port).
+    /// Also sets coverdirty (Ghidra cc:339); the flag is consumed by
+    /// get_cover/update_cover_locked (varnode.rs cover recompute path),
+    /// so op_insert_input's newly coverdirty inputs surface as extra
+    /// [HERITAGE] WARN diagnostics on httpd — same direction as Ghidra's
+    /// cc:339 unconditional set (observation registered in the
+    /// op_insert_input commit's Differential).
     pub fn add_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         if self.is_free() && !self.is_spacebase() {
             // Ghidra cc:333-336 throws when descend (checked via

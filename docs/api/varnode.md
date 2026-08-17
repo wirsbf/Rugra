@@ -843,3 +843,13 @@
   varnode.cc:982/987/992 的裸指针 `==` 对应物）；全文件审计确认无其它
   「基址 vs payload」混用点（2090 行 `Arc::as_ptr(&op) as usize` 仅作 BTreeMap
   key，形式一致自洽；1779 行 `as_ptr` 仅用于诊断打印）。
+
+## add_descend 注释更正（2026-08-17，随 op_insert_input 收编）
+
+`add_descend` 的 coverdirty 说明更正：该 flag 实际被
+`get_cover/update_cover_locked` 消费（cover 重算路径）——op_insert_input
+收编后新增的 coverdirty 输入在 httpd 侧表现为 `[HERITAGE] WARN` 诊断
+量增（+11363 行，stdout/throw/函数集三方不变），与 Ghidra cc:339 无条件
+置位同方向。旧注释"does not track the coverdirty flag"系 585bdd7 遗留，
+已删除。
+<!-- annotation-pass: 2026-08-17 -->

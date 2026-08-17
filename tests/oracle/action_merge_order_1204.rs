@@ -80,7 +80,7 @@ impl Graph {
         self.fd.new_constant(size, value)
     }
 
-    fn set_input(&self, op: &OpRef, vn: &VnRef, slot: usize) {
+    fn set_input(&mut self, op: &OpRef, vn: &VnRef, slot: usize) {
         self.fd.op_insert_input(
             &rugra::op::PcodeOpRef(op.clone()),
             vn.clone(),

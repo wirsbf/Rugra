@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "fixture_id": "VARNODE-ADDDESCEND-THROW-0001/op_insert_input",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
+  "analysis_options": "direct Funcdata::opInsertInput (funcdata_op.cc:308-317) transitions on a Funcdata whose ops are built with newOp(0) and populated purely through opInsertInput; no Actions; constants via newConstant; free/register Varnodes via newVarnode(register-space offsets); function input via setInputVarnode",
+  "input": {
+    "function": "insert_input@0x5000 size 0x20 (synthetic Funcdata on FixtureArchitecture)",
+    "cases": [
+      "shift: [reg@0x4444] then opInsertInput(zero-const,0) -> [zero,reg]; observe numInput, slot offsets, reg descend count (shift preserves it), zero flags (constant|coverdirty via opSetInput->addDescend varnode.cc:339)",
+      "middle: [a@0x1110], append b@0x1118 at len, then opInsertInput(c-const@0x2222,1) -> [a,c,b]; b keeps exactly one descend entry",
+      "same_vn: setInputVarnode'd Varnode inserted into slots 0 and 1 of one op; two descend entries (cc:107 compares against the fresh NULL slot only)",
+      "const_dedup: shared constant with one live descendant re-inserted -> opSetInput cc:108-115 clone; distinct pointer, same offset 0x33, original descend stays 1, clone descend 1, numVarnodes +1",
+      "free_first: free register Varnode's first opInsertInput accepted (addDescend free guard passes on empty descend)",
+      "free_second_throw: second opInsertInput of the same free Varnode throws LowlevelError(\"Free varnode has multiple descendants\") from addDescend (varnode.cc:336) inside opSetInput; descend count and flags unchanged (throw before push_back/setFlags)"
+    ]
+  },
+  "declared_divergence": {
+    "abandoned_op_state_after_throw": "after the caught free-second throw the abandoned op's slot count differs (C++ keeps the insertInput-expanded NULL slot, numInput=1; Rugra's split-tail representation never materialized it, len=0). Production aborts the whole function on LowlevelError so that state is never read; the fixture observes only the throwing Varnode's state, which byte-matches.",
+    "null_slot_representation": "all ops are built with newOp(0) so C++ and Rust agree slot-for-slot; Rugra's Vec cannot represent Ghidra's newOp(N) nullable preallocated slots (see op_insert_1204 metadata)"
+  },
+  "coverage": {
+    "slot_shift_prefix": "MATCH",
+    "slot_append_at_len": "MATCH",
+    "slot_middle_shift": "MATCH",
+    "descend_preserved_by_shift": "MATCH",
+    "coverdirty_on_insert": "MATCH",
+    "same_vn_two_slots_two_descends": "MATCH",
+    "const_dedup_clone": "MATCH",
+    "free_first_accepted": "MATCH",
+    "free_second_throw_text_verbatim": "MATCH",
+    "free_second_throw_state_unchanged": "MATCH"
+  },
+  "cpp_fixture_sha256": "ce256b4319037de53469e7c2bf0f02f7acadbfa8f7e072d47386b3d4a5bfc30d",
+  "rust_fixture_sha256": "fe2b6696d35d0b673e342a67bf1934a7776489b6d4bdc50161e4a40c766b3f15",
+  "expected_stdout_sha256": "a3ea1d451fdd0425d8f7555aeda07da0fa0c439ed7a1fc35953502fa0016ee54",
+  "expected_stdout_lines": 6,
+  "status": "MATCH"
+}

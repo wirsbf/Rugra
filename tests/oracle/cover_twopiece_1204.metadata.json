@@ -54,7 +54,7 @@
     "rugra_base_commit": "a301036407de8f1b2291abf600f0ac72335a1912",
     "rugra_base_tree": "b8ea38f30882068bb2e902db2a5cc836b28c6891",
     "cpp_fixture_sha256": "23ded8939901206c7e323056df69567f1d32a0c0c738588fba9b632c3b573cd3",
-    "rust_fixture_sha256": "34621982c52f7ce2ea93044acff1cc109fb347f5a46cc5f2aa4f2e60aa4f9bee",
+    "rust_fixture_sha256": "62f10a4a6d9e1b693258bb4b27487bd746c22cb5a0d1f4cd1deb453a310fe2a7",
     "cover_rs_sha256": "8c6b9d9dd076afb5ebb45418275fb3fa3f21d949f3ba19ac8d73dd6f2e0e2033",
     "merge_rs_sha256": "6c7671aaee1f0f8f2378bcd8416b6795f030c04a8e1610ad8d8ee30d2cdae354",
     "cover_doc_sha256": "e3c7a9e7d7da7ee25fe208e3f1303dcc773b68ac1f7c58de3200a80755bcda1f",

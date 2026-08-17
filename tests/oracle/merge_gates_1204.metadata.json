@@ -47,7 +47,7 @@
   },
   "comparand": {
     "cpp_fixture_sha256": "d8f2c898d44f7412afab27ab563ca077b34be1f2b7273ee60456b6ddeef121ae",
-    "rust_fixture_sha256": "23348e270966b4b123d8be288d642ccb005890ffd4437a37322b2e9211626812",
+    "rust_fixture_sha256": "4d8aab6f65ffd48b1f94823a4ca82ed4821e7150572ffc4b34ec1a3c2777e1ff",
     "merge_rs_sha256": "29a5f0b5cafe53b472b00c65dff235475bce80c9da052d6d9d42bb574bff798e",
     "variable_rs_sha256": "7f16cf0fec5414f84aec88a30aba61fc3f483c68825310a60bbe20357904d10a",
     "runner_sha256": "ce700635fed86fa2fb0e47233b5e63fa464f10cc1aca34ed885e8c0cb55f0165",

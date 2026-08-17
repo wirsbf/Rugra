@@ -120,7 +120,7 @@ impl Graph {
         self.fd.new_constant(size, value)
     }
 
-    fn set_input(&self, op: &PcodeOpRef, vn: &VnRef, slot: usize) {
+    fn set_input(&mut self, op: &PcodeOpRef, vn: &VnRef, slot: usize) {
         self.fd.op_insert_input(op, vn.clone(), slot);
     }
 

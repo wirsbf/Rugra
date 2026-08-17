@@ -27,7 +27,7 @@
       "docs/api/subflow.md"
     ],
     "cpp_fixture_sha256": "94a3952ed498f8c97ef3969cd014b871f023fb0c3550a80b8e85ff5f93064493",
-    "rust_fixture_sha256": "b50b049fd5f9ddc630ef2de92be84c4afc62962f1322a7d4b1c218892af79b2e",
+    "rust_fixture_sha256": "05ad3cc5ee2fdf016d160ebd2286c9ffef85b48f2657b29d50940d1f12d2959d",
     "subflow_rs_sha256": "4f6ac0110c9a6e4697416f828271353cc4a443aca1d4e7f84e603d10396fd9d1",
     "subflow_doc_sha256": "35d3f0f0ea926e11c86af8cd4fd77f824fc69c184a62ddd2679d9825fc7654d8",
     "runner_sha256": "21ca04096f41fb4c80d5a98f8f793361ef1730e14df54c939256991b246c701d",

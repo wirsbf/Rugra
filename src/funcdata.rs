@@ -1555,14 +1555,45 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opInsertInput
-    /// Insert a new Varnode into the operand list at `slot`. Faithful to
-    /// `Funcdata::opInsertInput` (funcdata.hh:479).
-    pub fn op_insert_input(&self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
-        let mut o = op.0.write().unwrap();
-        let slot = slot.min(o.inrefs.len());
-        o.inrefs.insert(slot, vn.clone());
-        vn.write().unwrap().descend.push(std::sync::Arc::downgrade(&op.0));
+    // Ghidra: funcdata_op.cc:308 Funcdata::opInsertInput
+    /// Insert a new Varnode into the operand list at `slot`; any existing
+    /// input Varnodes with slot indices >= `slot` are pushed into the next
+    /// slot. Faithful to `Funcdata::opInsertInput` (funcdata_op.cc:308-317):
+    /// `op->insertInput(slot)` then `opSetInput(op,vn,slot)` — the full
+    /// opSetInput path (const dedup cc:108-115, addDescend free-check +
+    /// coverdirty bookkeeping varnode.cc:330-340), never a raw descend push.
+    pub fn op_insert_input(&mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
+        // cc:315 op->insertInput(slot) — PcodeOp::insertInput
+        // (op.cc:311-318) pushes a NULL slot at `slot` and shifts existing
+        // inputs at/after `slot` up by one. Descend entries store the op
+        // pointer, not the slot index, so the shift needs no descend
+        // update. Rugra's inrefs Vec cannot hold the transient NULL without
+        // allocating an observable sentinel Varnode in the bank, and every
+        // Ghidra statement between insertInput and opSetInput's final
+        // setInput is a no-op on that NULL slot (cc:107 vn != NULL so the
+        // early-return cannot fire; cc:118-121 opUnsetInput is guarded by
+        // getIn(slot) != NULL), so the tail is split off here and the
+        // delegated op_set_input appends into the fresh slot below. Ghidra
+        // has no clamp (callers never exceed numInput); the defensive
+        // clamp to len is Rust-side bounds glue.
+        let (slot, tail) = {
+            let mut o = op.0.write().unwrap();
+            let slot = slot.min(o.inrefs.len());
+            let tail = if slot < o.inrefs.len() {
+                Some(o.inrefs.split_off(slot))
+            } else {
+                None
+            };
+            (slot, tail)
+        };
+        // cc:316 opSetInput(op,vn,slot) — with inrefs.len()==slot this
+        // takes the fresh-slot path: no early-return (NULL != vn), no
+        // opUnsetInput (NULL guard), const dedup when the same constant
+        // already has a live descendant, then addDescend + setInput.
+        self.op_set_input(op, vn, slot);
+        if let Some(tail) = tail {
+            op.0.write().unwrap().inrefs.extend(tail);
+        }
     }
 
     // Ghidra: funcdata_op.cc:291 Funcdata::opRemoveInput

@@ -81,7 +81,7 @@ impl Graph {
         self.fd.vbank.set_input(vn).expect("fresh input varnode")
     }
 
-    fn set_input(&self, op: &OpRef, vn: &VnRef, slot: usize) {
+    fn set_input(&mut self, op: &OpRef, vn: &VnRef, slot: usize) {
         self.fd.op_insert_input(op, vn.clone(), slot);
     }
 
