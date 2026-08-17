@@ -621,16 +621,22 @@ impl PrintLanguageCapability {
 /// given the operator currently on top of the RPN stack. Faithful to
 /// `PrintLanguage::parentheses` (printlanguage.cc:269-323).
 ///
-/// `top_token` is the operator already on the stack (the parent); `op2` is the
-/// token about to be pushed as a child; `stage` is `top.visited`.
+/// `top` is the operator already on the stack (the parent, = `revpol.back()`);
+/// `op2` is the token about to be pushed as a child; `stage` is `top.visited`;
+/// `prev` is the token of `revpol[revpol.size()-2]` (the unresolved previous
+/// token under the parent), or `None` when the stack holds only the parent
+/// (Ghidra: `revpol.size() > 1`). Only the `hiddenfunction` branch reads it —
+/// the hidden token prints nothing, so a new token pushed under it lands
+/// adjacent to that previous token and parenthesization is decided against it.
 ///
 /// **Four decisive semantics (verified against printlanguage.cc:269-323):**
-/// - Reference params: none — pure value semantics on token pointers.
+/// - Reference params: none — pure value semantics on token references;
+///   `prev` borrows `revpol[size-2]` but is never written.
 /// - Loop boundaries: single switch on `topToken->type`, no iteration.
 /// - Counters: `stage` (= `top.visited`) read but not modified here.
 /// - Sort/comparison key: `precedence` (higher binds tighter), then `type`
 ///   for tie-breaking adjacency rules.
-pub fn parentheses(top: &OpToken, stage: i32, op2: &OpToken) -> bool {
+pub fn parentheses(top: &OpToken, stage: i32, op2: &OpToken, prev: Option<&OpToken>) -> bool {
     match top.type_ {
         TokenType::Space | TokenType::Binary => {
             // printlanguage.cc:277-286
@@ -698,10 +704,30 @@ pub fn parentheses(top: &OpToken, stage: i32, op2: &OpToken) -> bool {
             true
         }
         TokenType::HiddenFunction => {
-            // printlanguage.cc:309-319. Note: the full Ghidra path reads
-            // `revpol[revpol.size()-2]` for the unresolved-previous-token case;
-            // that requires stack context and is handled by the caller via
-            // `parentheses_in_stack`. Here we return the fallback `true`.
+            // printlanguage.cc:309-319. The hidden token prints nothing, so
+            // when it has not yet consumed its operand (stage==0) and there
+            // is an unresolved previous token on the stack below it, the new
+            // token is printed next to that previous token: parenthesization
+            // is decided against `prevToken` (= revpol[size-2].tok). A
+            // prevToken that is neither binary nor unary_prefix cannot
+            // visually absorb the new token, and a looser-precedence
+            // prevToken binds less tightly, so both skip parens; equal
+            // precedence keeps parens so two adjacent tokens are never
+            // treated as associative.
+            if stage == 0 {
+                if let Some(prev_token) = prev {
+                    if prev_token.type_ != TokenType::Binary
+                        && prev_token.type_ != TokenType::UnaryPrefix
+                    {
+                        return false;
+                    }
+                    if prev_token.precedence < op2.precedence {
+                        return false;
+                    }
+                    // If precedence is equal, make sure we don't treat two
+                    // tokens as associative, i.e. we should have parentheses.
+                }
+            }
             true
         }
     }
@@ -1092,7 +1118,15 @@ pub fn rpn_push_op(
         let top_tok = &token_table[revpol.last().unwrap().tok_index];
         let stage = revpol.last().unwrap().visited;
         let new_tok = &token_table[tok_index];
-        paren = parentheses(top_tok, stage, new_tok);
+        // printlanguage.cc:312 (hiddenfunction branch): `revpol[revpol.size()-2].tok`
+        // — the unresolved previous token under the parent. `None` encodes
+        // `revpol.size() <= 1`.
+        let prev_tok = if revpol.len() > 1 {
+            Some(&token_table[revpol[revpol.len() - 2].tok_index])
+        } else {
+            None
+        };
+        paren = parentheses(top_tok, stage, new_tok, prev_tok);
         if paren {
             emit.open_paren();
             id = 0; // Ghidra: emit->openParen(OPEN_PAREN)
@@ -1648,7 +1682,7 @@ mod tests {
         let parent = OpToken::binary("+", 50, true, 1, 0, -1);
         let child = OpToken::binary("*", 54, true, 1, 0, -1);
         // top.precedence(50) < op2.precedence(54) → false
-        assert!(!parentheses(&parent, 0, &child));
+        assert!(!parentheses(&parent, 0, &child, None));
     }
 
     #[test]
@@ -1657,7 +1691,7 @@ mod tests {
         let parent = OpToken::binary("*", 54, true, 1, 0, -1);
         let child = OpToken::binary("+", 50, true, 1, 0, -1);
         // top.precedence(54) > op2.precedence(50) → true
-        assert!(parentheses(&parent, 0, &child));
+        assert!(parentheses(&parent, 0, &child, None));
     }
 
     #[test]
@@ -1666,14 +1700,76 @@ mod tests {
         let parent = OpToken::binary("+", 50, true, 1, 0, -1);
         // Need same pointer for the std::ptr::eq check
         let child = &parent;
-        assert!(!parentheses(&parent, 0, child));
+        assert!(!parentheses(&parent, 0, child, None));
     }
 
     #[test]
     fn test_parentheses_hidden_function_defaults_true() {
+        // printlanguage.cc:310: stage==0 but revpol.size()<=1 (prev=None)
+        // → the inner block is skipped, fallback return true.
         let hf = OpToken::hidden_function();
         let child = OpToken::binary("+", 50, true, 1, 0, -1);
-        assert!(parentheses(&hf, 0, &child));
+        assert!(parentheses(&hf, 0, &child, None));
+    }
+
+    #[test]
+    fn test_parentheses_hidden_function_prev_binary_tighter_precedence() {
+        // printlanguage.cc:313-315: prevToken is binary and its precedence
+        // is >= op2's → parens. `a - (hidden) * b` shape: minus (50) under
+        // hidden, new token `+` (50): equal precedence keeps parens.
+        let hf = OpToken::hidden_function();
+        let prev = OpToken::binary("-", 50, true, 1, 0, -1);
+        let child = OpToken::binary("+", 50, true, 1, 0, -1);
+        assert!(parentheses(&hf, 0, &child, Some(&prev)));
+        // prev strictly tighter than child (54 > 50) → still parens
+        let tighter_prev = OpToken::binary("*", 54, true, 1, 0, -1);
+        assert!(parentheses(&hf, 0, &child, Some(&tighter_prev)));
+    }
+
+    #[test]
+    fn test_parentheses_hidden_function_prev_binary_looser_precedence() {
+        // printlanguage.cc:315: prevToken binary with precedence < op2's →
+        // no parens. `a + (hidden) * b` shape: plus (50) under hidden, new
+        // token `*` (54) binds tighter than what precedes it.
+        let hf = OpToken::hidden_function();
+        let prev = OpToken::binary("+", 50, true, 1, 0, -1);
+        let child = OpToken::binary("*", 54, true, 1, 0, -1);
+        assert!(!parentheses(&hf, 0, &child, Some(&prev)));
+    }
+
+    #[test]
+    fn test_parentheses_hidden_function_prev_non_binary() {
+        // printlanguage.cc:313-314: prevToken neither binary nor
+        // unary_prefix (e.g. a postsurround call `(`) → no parens.
+        let hf = OpToken::hidden_function();
+        let prev = OpToken::postsurround("(", ")", 66, 0, 10);
+        let child = OpToken::binary("+", 50, true, 1, 0, -1);
+        assert!(!parentheses(&hf, 0, &child, Some(&prev)));
+    }
+
+    #[test]
+    fn test_parentheses_hidden_function_prev_unary_prefix_looser() {
+        // printlanguage.cc:313/315: prevToken unary_prefix is kept, and a
+        // prevToken precedence strictly looser than op2's skips parens.
+        // deref `*` (62) under hidden; new token scope `::` (70,
+        // printc.cc:24): 62 < 70 → false.
+        let hf = OpToken::hidden_function();
+        let prev = OpToken::unary_prefix("*", 62, 0, 0);
+        let child = OpToken::binary("::", 70, true, 0, 0, -1);
+        assert!(!parentheses(&hf, 0, &child, Some(&prev)));
+        // prev unary_prefix at equal precedence (62 == 62) keeps parens.
+        let child62 = OpToken::binary("x", 62, true, 0, 0, -1);
+        assert!(parentheses(&hf, 0, &child62, Some(&prev)));
+    }
+
+    #[test]
+    fn test_parentheses_hidden_function_stage1_ignores_prev() {
+        // printlanguage.cc:310: stage!=0 → inner block skipped even when a
+        // previous token exists → fallback true.
+        let hf = OpToken::hidden_function();
+        let prev = OpToken::postsurround("(", ")", 66, 0, 10);
+        let child = OpToken::binary("*", 54, true, 1, 0, -1);
+        assert!(parentheses(&hf, 1, &child, Some(&prev)));
     }
 
     #[test]

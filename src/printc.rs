@@ -624,9 +624,15 @@ impl PrintC {
         let dereference = OpToken::unary_prefix("*", 62, 0, 0);
         // index 2 - hidden (printc.cc:23): { "", "", 1, 70, false,
         // hiddenfunction, 0, 0 }. Stage is 1 — the token completes on a
-        // single operand atom push — and precedence is 70 (looser than
-        // function_call's 66, so an implied extension cast hidden inside a
-        // call argument needs no parens). The printlanguage.rs convenience
+        // single operand atom push — and precedence is 70 (tighter than
+        // function_call's 66: higher precedence binds tighter, so a parent
+        // function_call token hits `topToken->precedence < op2->precedence`
+        // and an implied extension cast hidden inside a call argument needs
+        // no parens). The converse parent side is governed by the
+        // hiddenfunction branch of parentheses() (printlanguage.cc:309-319):
+        // a new token under a stage-0 hidden is decided against the
+        // unresolved grandparent `revpol[size-2]`, which can yield false.
+        // The printlanguage.rs convenience
         // ctor hard-codes stage=2/precedence=0, which would leave an
         // incomplete revpol entry after the operand (the PRINTC-CAST-EXPR
         // leak class), so build the exact aggregate here instead.
@@ -1302,13 +1308,24 @@ impl PrintC {
                     self.rpn_op_func(op_arc, op, &nm);
                 }
             }
-            // printc.cc:843 PrintC::opSubpiece: the doesSpecialPrinting
-            // field-extraction branch (printc.cc:846-871) requires the
-            // PcodeOp::special flag + piece-structured types, neither of
-            // which Rugra's SUBPIECE ops carry (opcode_flags: binary only),
-            // so it is unreachable here exactly as in a Ghidra IR without
-            // special-printing markers. Main path: isSubpieceCast →
-            // opTypeCast, else opFunc.
+            // printc.cc:843 PrintC::opSubpiece. The doesSpecialPrinting
+            // field-extraction branch (printc.cc:846-871) IS reachable in
+            // Rugra: `does_special_printing()` reads addlflags &
+            // SPECIAL_PRINT (op.rs ↔ op.hh:208 special_print) and is set by
+            // RuleSubRight (ruleaction.rs ↔ ruleaction.cc:7257
+            // opMarkSpecialPrint), registered in the main pipeline
+            // (action.rs ↔ coreaction.cc:5700); `is_piece_structured()`
+            // (type_system/datatype.rs:443) is true for Struct/Union/Array.
+            // The field-extraction body itself (printc.cc:853-868:
+            // explicit-vn pushPartialSymbol arm + findTruncation/
+            // object_member field atom arm) is inherited-MISSING in the RPN
+            // path, so we deliberately fall through to isSubpieceCast →
+            // opTypeCast, else opFunc — the same observable output as the
+            // legacy op_subpiece path. Downgrade registered as
+            // PRINTC-SUBPIECE-FIELDEXTRACT-0001 (three adjacent gaps:
+            // pushPartialSymbol/findTruncation field-extraction bodies,
+            // is_piece_structured narrower than Ghidra metatype<=TYPE_ARRAY,
+            // is_subpiece_cast missing PartialStruct/PartialUnion arms).
             OpCode::CPUI_SUBPIECE => {
                 // printc.cc:872-874: isSubpieceCast(outDef, inRead, offset).
                 let (out_dt, in_dt, offset) = {
@@ -1555,8 +1572,14 @@ impl PrintC {
         use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
         // printc.cc:427: pushOp(&function_call,op)
         self.rpn_push_op(self.rpn_tok_function_call);
-        // printc.cc:430-431: name as optoken with funcname color.
-        let name_atom = Atom::with_op(nm, TagType::OpToken, SyntaxHighlight::FuncnameColor, -1);
+        // printc.cc:428-431: "Using function syntax but don't markup the
+        // name as a normal function call" — `pushAtom(Atom(nm, optoken,
+        // EmitMarkup::no_color, op))`: NoColor, not FuncnameColor, and the
+        // atom anchors to the op itself. Rugra's RPN path has no op arena
+        // (all atoms carry op_index=-1), so the op anchor is not
+        // materialized; the text emitter's tagOp consumes neither the
+        // highlight nor the anchor, so output is unchanged.
+        let name_atom = Atom::with_op(nm, TagType::OpToken, SyntaxHighlight::NoColor, -1);
         self.rpn_push_atom(&name_atom);
         let n = op.num_input();
         if n > 0 {

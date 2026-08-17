@@ -74,7 +74,7 @@ Rugra 的 `PrintC` 目前为了输出质量直接通过 `Emit` 发射；本模�
 
 ### RPN 引擎函数
 
-- `pub fn parentheses(top: &OpToken, stage: i32, op2: &OpToken) -> bool` — 括号化判定（cc:269）
+- `pub fn parentheses(top: &OpToken, stage: i32, op2: &OpToken, prev: Option<&OpToken>) -> bool` — 括号化判定（cc:269-323）。`prev` = `revpol[size-2].tok` 的 token（None 编码 `revpol.size()<=1`），仅 hiddenfunction 分支读取（cc:309-319，2026-08-17 审计修复：原硬编码 `true` 改为按祖父 token 类型/优先级精确判定）
 - `pub fn rpn_push_op(...)` — 运算符入栈（cc:129）
 - `pub fn rpn_push_atom(...)` — Atom 入栈（cc:162）
 - `pub fn rpn_push_vn(...)` — 隐含 Varnode 入待处理列表（cc:197）

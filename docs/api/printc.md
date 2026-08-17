@@ -195,12 +195,19 @@ printc.cc:2260/2518/2497）：
   4. `hidden` token 表字段与 printc.cc:23 不符（应为 stage=1/prec 70，便捷 ctor 写死 stage=2/prec 0——同样残留 incomplete 条目）。
 - **本改动（faithful port）**：
   - `emit_block_basic_rpn` 增加 notPrinted 过滤：`is_marker() || (flags & NONPRINTING) || (flags & NORETURN)`（flags 由 `opcode_flags` 在 op 创建时正确初始化，已核实）。
-  - `dispatch_op_rpn` 新增 `CPUI_INT_ZEXT`/`CPUI_INT_SEXT`/`CPUI_SUBPIECE` 三臂：`cast_strategy.is_zext_cast/is_sext_cast/is_subpiece_cast` 命中 → `rpn_op_type_cast`；否则 `rpn_op_func`（`getOperatorName` = `"ZEXT/SEXT/SUB" + insize + outsize`，typeop.cc:1122/1148/2127）。SUBPIECE 的 `doesSpecialPrinting` 字段抽取分支（printc.cc:846-871）依赖 piece-structured 类型 + SPECIAL flag，Rugra 均无，不可达分支如实省略。
+  - `dispatch_op_rpn` 新增 `CPUI_INT_ZEXT`/`CPUI_INT_SEXT`/`CPUI_SUBPIECE` 三臂：`cast_strategy.is_zext_cast/is_sext_cast/is_subpiece_cast` 命中 → `rpn_op_type_cast`；否则 `rpn_op_func`（`getOperatorName` = `"ZEXT/SEXT/SUB" + insize + outsize`，typeop.cc:1122/1148/2127）。SUBPIECE 的 `doesSpecialPrinting` 字段抽取分支（printc.cc:846-871）**可达**：SPECIAL_PRINT addlflag（op.rs ↔ op.hh:208）由 RuleSubRight（ruleaction.cc:7257，主管线已注册）设置，`is_piece_structured`（datatype.rs:443）对 Struct/Union/Array 为真；但字段抽取体（printc.cc:853-868 的 pushPartialSymbol/findTruncation+object_member 两臂）为继承 MISSING，RPN 路径落到 isSubpieceCast → opTypeCast / opFunc（与 legacy `op_subpiece` 同样 fall-through，行为非回归），降级登记 `PRINTC-SUBPIECE-FIELDEXTRACT-0001`（2026-08-17 事后审计修正，原文"Rugra 均无、不可达"失实）。
   - token 表新增 `function_call`（`(`/`)` postsurround prec 66 bump 10，printc.cc:28）与 `comma`（binary prec 2 assoc，printc.cc:55）；`hidden` 改为表内直构聚合 `{ "", "", 1, 70, … }`（printc.cc:23）。
   - `rpn_op_func`/`rpn_op_hidden_func`/`rpn_op_type_cast`（自 CAST 臂重构共享）/`rpn_operator_name_ext` 四个 helper；`readOp` 线穿 dispatch（`emit_expression_rpn` 传 `None` = printc.cc:2493 的字面 0；`rpn_recurse` 传读 op = printlanguage.cc:532；`isExtensionCastImplied` 对 `readOp==null` 返回 false，与 cast.cc:257 一致）。
   - `rpn_push_op`/`rpn_push_atom` wrapper 先走真 `self.rpn_recurse()`（单一 `if (pending < nodepend.size()) recurse();` 语义不变），再进自由函数——Ghidra 的 recurse 是虚调用真实现，此前路由到 no-op 等于丢操作数。
 - **效果（干净 worktree = HEAD a301036 + 仅本 printc.rs overlay）**：`= (` 计数 1262→6 且 6 处全为合法 C（cast 赋值 / `== (bool)` 比较），真畸形 0；`))))` 连串 0；ZEXT/SEXT 按 oracle 的 opFunc 形态发射（`ZEXT48(x)`/`SEXT18(bVar1)`）；差分 skeleton 4724→3300、defects 0→0、numbering 0→0；gcc 审计 103 OK/20 FAIL → 105 OK/18 FAIL（GetStr+hugehelp 修复，其余 18 与基线同错同位）；124/124 75 decompiled/0 panic/1 timeout=基线；cargo test --lib 1373/5 失败集逐名一致。
 - **当前生效限制（诚实声明）**：二元算术仍走 `emit.tag_op(" + ")` 直发不经 RPN token（嵌套优先级括号缺失，3 处 `== … + 0 - … < 0` 形残差）——binary token 化为后继 TODO（PRINTC-BINARY-RPN-0001 建议）；`uVara0` 类名字 use-registered 但声明缺失为 varmap 域既有残差。
+
+### PRINTC-CAST-EXPR-0001 事后审计窄面修复（2026-08-17，F1/F2/F3）
+
+- **F1 证据失实修正**：上文 198 行 SUBPIECE 分支"不可达"表述已就地改为"可达、字段抽取体为继承 MISSING、已登记降级"（见上）。`src/printc.rs` SUBPIECE 臂注释同步修正，并登记 `PRINTC-SUBPIECE-FIELDEXTRACT-0001`（三个邻接继承缺口：pushPartialSymbol/findTruncation 字段抽取体缺失；`is_piece_structured` 只匹配 Struct|Union|Array，窄于 Ghidra `metatype<=TYPE_ARRAY`（type.hh:929-934，含 enum/partial）；`is_subpiece_cast` 缺 PartialStruct/PartialUnion 输入臂（cast.cc:413-418 vs type_system/cast.rs:85-87））。
+- **F2 parentheses hiddenfunction 分支精确移植**（printlanguage.cc:309-319）：top 为 hidden 且 stage==0 且 revpol 长度>1 时，读 `revpol[size-2].tok`（前一个未完成 token）——非 binary 且非 unary_prefix → false；其 precedence 严格小于 op2 → false；相等保留括号（防相邻 token 被当作 associative）。Rugra 侧 `parentheses()` 增 `prev: Option<&OpToken>` 参数（None 编码 `revpol.size()<=1`），`rpn_push_op` 调用点从 revpol 倒数第二项构造。原实现硬编码 `return true` 且注释引用不存在的 `parentheses_in_stack`——已删除。curl 语料 hidden 路径 0 触发，E2E 输出逐字节不变（预期，见 Differential）。
+- **F2 附带注释修正**：`build_rpn_token_table` hidden 项 "precedence 70 (looser than function_call's 66…)" → "tighter"（高 precedence=绑更紧；70>66 使父 function_call 走 `topToken->prec < op2->prec` 免括号），并补全 parent 侧由 hiddenfunction 分支经祖父 token 决定的表述。
+- **F3 markup 对齐**：`rpn_op_func` name atom 由 `FuncnameColor + op_index=-1` 改为 `NoColor + op 锚`（printc.cc:428-431 "don't markup the name as a normal function call"，`pushAtom(Atom(nm,optoken,EmitMarkup::no_color,op))`）。纯 markup 变更，无文本输出影响（text emitter 忽略颜色与锚）。
 
 
 ---
