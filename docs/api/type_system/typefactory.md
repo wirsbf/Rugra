@@ -34,11 +34,17 @@ Find a type by name
 
 ### `pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype>`
 
-Get or create a pointer type to the given base type
+Get or create a pointer type to the given base type. Applies the
+`TypePointer::calcSubmeta` needs_resolution inheritance arm
+(type.cc:1051-1052): a pointer to a resolution-needing non-pointer pointee
+inherits `needs_resolution` (see 2026-08-18 section below).
 
 ### `pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype>`
 
-Get or create an array type
+Get or create an array type. Applies the inline `TypeArray` ctor arm
+(type.hh:937-944): `num_elements == 1` sets `needs_resolution` ("A varnode
+which is an array of size 1, should generally always be treated as the
+element data-type").
 
 ### `pub fn create_struct(&mut self, name: &str) -> Arc<Datatype>`
 
@@ -46,7 +52,28 @@ Create a new structure type
 
 ### `pub fn set_fields(&mut self, name: &str, fields: Vec<TypeField>) -> Option<Arc<Datatype>>`
 
-Set fields for an existing structure and update its size
+Set fields for an existing structure and update its size (size derived from
+the fields — the grammar.cc:2798 derived-newSize form). Applies the
+`TypeStruct::setFields` single-field arm (type.cc:1569-1571) against
+Ghidra's caller-supplied `newSize` semantics: for the grammar path (this
+function's only production caller) the arm recomputes
+`calc_align_size(field.get_align_size(), field.get_alignment().max(1))`
+(`TypeStruct::assignFieldOffsets`, type.cc:1971-1993) and ORs
+`needs_resolution` in when the single field's full `get_size()` equals it.
+Comparing against the derived `max(offset + get_size())` instead would
+over-fire for a field type whose `alignSize > size` (an XML-decoded
+unrounded struct: Ghidra newSize 8 vs field size 5 keeps the flag clear) —
+pinned by the `grammar.overfire` fixture record.
+
+### `pub fn set_fields_sized(&mut self, name: &str, fields: Vec<TypeField>, new_size: usize, new_align: usize) -> Option<Arc<Datatype>>`
+
+Explicit-newSize twin of `TypeFactory::setFields` (type.cc:3479-3490 /
+`TypeStruct::setFields` type.cc:1563-1574): sets `size = new_size`
+unconditionally and evaluates the single-field needs_resolution arm against
+that EXPLICIT size. This is the only form under which the "single field
+does not fill" and "offset not examined" matrix cells are reachable.
+`new_align` is accepted for signature parity (Rugra `TypeBase` has no
+alignment field yet).
 
 ### `pub fn num_types(&self) -> usize`
 
@@ -260,5 +287,77 @@ RangeHint / symbol unknown type now resolves through a `TypeFactory`.
   `TypeFactory::getTypeArray` yet, so the array shell is still built locally
   around the factory-owned element type (factory array dedup identity
   remains unproved).
+
+## 2026-08-18 TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001
+
+The complete `needs_resolution` setting matrix is now mirrored on every
+TypeFactory creation path, closing the audit gap where Rugra never produced
+a single-field `needsResolution` struct (the SUBPIECE findResolve write-side
+producer):
+
+- `set_fields` — `TypeStruct::setFields` single-field arm
+  (type.cc:1569-1571): ORs the flag in (never cleared) when exactly one
+  field's full `get_size()` equals the caller-supplied `newSize`. Rugra's
+  arm recomputes the grammar-path newSize
+  (`calc_align_size(field.get_align_size(), field.get_alignment().max(1))`,
+  `assignFieldOffsets` type.cc:1971-1993) instead of comparing against the
+  derived `max(offset + get_size())`, which would over-fire for a field type
+  with `alignSize > size` (XML-decoded unrounded struct) — pinned by the
+  `grammar.overfire` record.
+- `set_fields_sized` (new) — explicit `newSize`/`newAlign` twin of
+  `TypeFactory::setFields` (type.cc:3479-3490): `size = new_size`
+  unconditionally, single-field arm against the EXPLICIT size. Proves the
+  "not fills" (explicit size > field size → 0) and "offset not examined"
+  (single field @4 whose type size == newSize → 1) cells.
+- `decode_struct` — the full `TypeStruct::decodeFields` acceptance loop
+  (type.cc:1839-1870) plus tail (1871-1877): per-field void-metatype throw,
+  strictly-lower-offset order throw, overlap throw-out (the dropped field is
+  observable via the surviving field count and feeds the single-field arm),
+  does-not-fit throw — all four LowlevelError texts verbatim; tail leaves
+  the factory type `type_incomplete` iff it ended with zero fields (the
+  decodeStruct→`TypeFactory::setFields` transfer, type.cc:4350-4356 +
+  3487-3488) and sets the single-field arm against the decoded `size`
+  attribute.
+- `get_ptr` / `get_type_pointer` / `get_type_pointer_rel` /
+  `resize_pointer` / decode pointer branch — `TypePointer::calcSubmeta`
+  inheritance arm (type.cc:1051-1052, run by every Ghidra `TypePointer`
+  ctor): pointer to a resolution-needing pointee inherits the flag, never
+  through a second pointer level. Consumers waive `TYPE_PTR` at every
+  needsResolution rejection (printc.cc:1962), so the flag on pointers
+  changes no resolved type — it makes the waiver load-bearing, as in Ghidra.
+- `get_array` — inline `TypeArray` ctor size-1 arm (type.hh:937-944).
+- decode array branch — `TypeArray::decode` `arraysize == 1` arm
+  (type.cc:1341-1342) plus the `arraysize<=0 || arraysize*alignSize != size`
+  validation (type.cc:1338-1339, "Bad size for array of type"), plus a real
+  bug fix: the branch now `rewind_attributes()` after `decode_basic` before
+  reading `arraysize` (type.cc:1331) — previously the attribute loop had
+  consumed the element and every decoded array errored "Bad size for array
+  of type".
+
+Scope notes: calcSubmeta's SUB_PTR/SUB_PTR_STRUCT reclassification and the
+ctors' `flags = ptrto->getInheritable()` (coretype inheritance, type.hh:413)
+are not yet modelled (no sub_metatype field on `TypePointer`); only the
+needs_resolution arm is mirrored. `set_fields`'s stored `st.base.size` stays
+the derived `max(offset + get_size())` (can differ from Ghidra's
+align-rounded grammar newSize for trailing padding; plumbing the explicit
+size from the grammar caller is a registered follow-up in grammar.rs's
+domain).
+
+Oracle evidence: `tests/oracle/typefactory_needsres_1204.{cc,rs,metadata.json}`
++ `tools/run_typefactory_needsres_oracle.sh` — 27 records
+(set/grammar/dec/arr.factory/ptr/union.setfields + grammar.regressions
+[overfire + nested], ptr.ordering [stub-time pointer never inherits; cached
+pointer stays clear; differently-sized new pointer inherits],
+dec.acceptance [overlap throw-out ×2, empty size-8 and size-0 incomplete
+residue], dec.err [order/fit/void/name-empty/name+void-precedence verbatim
+error texts]), real locked-12.0.4 oracle vs Rugra byte-identical
+(`records=27 … MATCH`), expected stdout sha256 locked in metadata. E2E curl
+output byte-identical to the pre-change baseline (diff 0 lines;
+differential gates defects=0/numbering=0 on both
+`tests/golden/ghidra_curl.c` and `result/ghidra_curl_12.0.4.c`), confirming
+the activated flag paths have no observable E2E effect on the current corpus
+(all pointer consumers waive TYPE_PTR; no curl-parsed single-field struct
+reaches the SUBPIECE walk). The printc_subpiece fixture's Rust-side manual
+flag on `fixture_inner` is now reclaimable (root noted: not urgent).
 
 

@@ -79,7 +79,7 @@ pub enum CoreTypeFlavor {
 }
 
 impl TypeFactory {
-    // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3106) with the
+    // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3850) with the
     // standalone SLEIGH fallback bootstrap (sleigh_arch.cc:204).
     /// Create a new TypeFactory and initialize core types
     ///
@@ -104,7 +104,7 @@ impl TypeFactory {
             ptr_size,
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
-            // Ghidra: type.cc:3106 TypeFactory::TypeFactory zeroes every
+            // Ghidra: type.cc:3850 TypeFactory::TypeFactory zeroes every
             // size field (int/long/char/wchar/pointer/altpointer/enumsize)
             // and leaves alignMap default-constructed (empty).
             size_of_int: 0,
@@ -355,7 +355,39 @@ impl TypeFactory {
         Ok(datatype)
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::getPtr
+    // Ghidra: type.cc:1035 TypePointer::calcSubmeta (needs_resolution arm)
+    /// The `needs_resolution` inheritance arm of `TypePointer::calcSubmeta`
+    /// (type.cc:1051-1052): `if (ptrto->needsResolution() && ptrtoMeta !=
+    /// TYPE_PTR) flags |= needs_resolution;` — a pointer to a
+    /// resolution-needing type (union, single-field struct, size-1 array)
+    /// inherits the flag, but never through a second pointer level. In Ghidra
+    /// this runs in every `TypePointer` constructor (type.hh:413/416) and in
+    /// `TypePointer::decode` (type.cc:1027); Rugra applies it at each pointer
+    /// construction site in this factory (get_ptr, get_type_pointer,
+    /// get_type_pointer_rel, resize_pointer, and the decode `<type>` pointer
+    /// branch), which are the paths that flow through the ctor in Ghidra.
+    ///
+    /// Consumers treat a pointer's flag as identity-resolution only
+    /// (`Datatype::findResolve` base returns `this`; every needsResolution
+    /// rejection in printc/cast waives `TYPE_PTR`), so the flag on pointers
+    /// changes no resolved type — it makes the printc.cc:1962 TYPE_PTR waiver
+    /// load-bearing, exactly as in Ghidra.
+    ///
+    /// NOTE (scope): calcSubmeta's submeta reclassification
+    /// (SUB_PTR/SUB_PTR_STRUCT) and the `pointer_to_array` flag are not yet
+    /// modelled on Rugra's `TypePointer` (no sub_metatype field); only the
+    /// needs_resolution arm — the setting this factory's matrix owns — is
+    /// mirrored here. The constructors' `flags = ptrto->getInheritable()`
+    /// (type.hh:413, coretype inheritance) is likewise not yet mirrored.
+    fn pointer_inherit_needs_resolution(ptr_to: &Datatype) -> u32 {
+        if ptr_to.needs_resolution() && ptr_to.get_metatype() != TypeMetatype::Pointer {
+            type_flags::NEEDS_RESOLUTION
+        } else {
+            0
+        }
+    }
+
+    // Ghidra: type.cc:3850 TypeFactory::getPtr
     /// Get or create a pointer type to the given base type
     pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype> {
         let name = format!("{} *", ptr_to.get_name());
@@ -363,8 +395,11 @@ impl TypeFactory {
             return existing;
         }
 
+        let mut base = TypeBase::new(name.clone(), self.ptr_size, TypeMetatype::Pointer);
+        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance.
+        base.flags |= Self::pointer_inherit_needs_resolution(&ptr_to);
         let ptr_type = Arc::new(Datatype::Pointer(TypePointer {
-            base: TypeBase::new(name.clone(), self.ptr_size, TypeMetatype::Pointer),
+            base,
             ptr_to,
             wordsize: 1,
         }));
@@ -372,7 +407,7 @@ impl TypeFactory {
         ptr_type
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::getArray
+    // Ghidra: type.cc:3850 TypeFactory::getArray
     /// Get or create an array type
     pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype> {
         let name = format!("{}[{}]", array_of.get_name(), num_elements);
@@ -381,8 +416,19 @@ impl TypeFactory {
         }
 
         let size = array_of.get_size() * num_elements;
+        let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Array);
+        // Ghidra: type.hh:937-944 inline TypeArray ctor (the path
+        // TypeFactory::getTypeArray takes, type.cc:3902-3908):
+        //   // A varnode which is an array of size 1, should generally
+        //   // always be treated as the element data-type
+        //   if (n == 1) flags |= needs_resolution;
+        // TypeArray::decode (type.cc:1341-1342) sets the same flag on the
+        // arraysize==1 decode arm, so both creation paths agree.
+        if num_elements == 1 {
+            base.flags |= type_flags::NEEDS_RESOLUTION;
+        }
         let array_type = Arc::new(Datatype::Array(TypeArray {
-            base: TypeBase::new(name.clone(), size, TypeMetatype::Array),
+            base,
             array_of,
             num_elements,
         }));
@@ -390,7 +436,7 @@ impl TypeFactory {
         array_type
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::createStruct
+    // Ghidra: type.cc:3850 TypeFactory::createStruct
     /// Create a new structure type
     pub fn create_struct(&mut self, name: &str) -> Arc<Datatype> {
         // Note: Ghidra allows multiple structs with same name in different scopes,
@@ -404,7 +450,34 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:3479 TypeFactory::setFields
-    /// Set fields for an existing structure and update its size
+    /// Set fields for an existing structure and update its size.
+    ///
+    /// Includes the `TypeStruct::setFields` single-field arm (type.cc:1569-1571):
+    /// a structure with exactly one field whose type's full size
+    /// (`getSize`, NOT `getAlignSize`) equals the structure size passed by
+    /// the caller is marked `needs_resolution` — the write-side producer that
+    /// feeds `TypeStruct::findResolve`/`resolveInFlow` (type.cc:1944-1960)
+    /// and the printc pushPartialSymbol needsResolution early-break
+    /// (printc.cc:1967). Ghidra ORs the flag in (never clears) and checks
+    /// `field[0].type`'s full size only — the field's offset is not examined
+    /// by `setFields` itself.
+    ///
+    /// NOTE on the comparison operand: Ghidra's `TypeStruct::setFields`
+    /// receives `newSize` explicitly (type.cc:1567). The grammar caller
+    /// passes `assignFieldOffsets`' output (type.cc:2798-2799), which for a
+    /// single unassigned field is
+    /// `calcAlignSize(field.getAlignSize(), max(1, field.getAlignment()))`
+    /// (type.cc:1971-1993: running offset starts at 0 and advances by
+    /// ALIGN sizes; the struct size is the align-rounded end). Rugra's
+    /// `set_fields` takes no size parameter, so the arm recomputes that
+    /// grammar-form `newSize` instead of comparing against the derived
+    /// `st.base.size` (`max(offset + get_size())`): comparing against the
+    /// derived size OVER-FIRES for a field type whose `alignSize > size`
+    /// (e.g. an XML-decoded unrounded struct type — Ghidra's grammar
+    /// `newSize` is 8 for a size-5/align-4 field type so the flag stays
+    /// clear, while the derived size 5 would match the field's full size).
+    /// Relies on `get_align_size`/`get_alignment` (Rugra derives alignment
+    /// from size via the default map — the registered datatype.rs gap).
     pub fn set_fields(&mut self, name: &str, fields: Vec<TypeField>) -> Option<Arc<Datatype>> {
         if let Some(dt) = self.types.get_mut(name) {
             if let Datatype::Struct(ref mut st) = Arc::make_mut(dt) {
@@ -418,6 +491,81 @@ impl TypeFactory {
                     }
                 }
                 st.base.size = max_size;
+                // Ghidra: type.cc:1569-1571 TypeStruct::setFields:
+                //   if (field.size() == 1) {
+                //     if (field[0].type->getSize() == size)
+                //       flags |= needs_resolution;
+                //   }
+                // `size` is the caller-supplied newSize; for the grammar path
+                // (this function's only production caller, grammar.rs
+                // new_struct) it equals calcAlignSize(field.getAlignSize(),
+                // newAlign) with newAlign = max(1, field.getAlignment()).
+                if st.fields.len() == 1 {
+                    let field = &st.fields[0];
+                    let new_align = field.type_ptr.get_alignment().max(1);
+                    let ghidra_new_size = crate::type_system::datatype::calc_align_size(
+                        field.type_ptr.get_align_size(),
+                        new_align,
+                    );
+                    if field.type_ptr.get_size() == ghidra_new_size {
+                        st.base.flags |= type_flags::NEEDS_RESOLUTION;
+                    }
+                }
+                return Some(dt.clone());
+            }
+        }
+        None
+    }
+
+    // Ghidra: type.cc:3479 TypeFactory::setFields (explicit newSize/newAlign arm)
+    /// Set fields on an existing structure with an EXPLICIT final size and
+    /// alignment, mirroring the full `TypeFactory::setFields(const
+    /// vector<TypeField> &fd, TypeStruct *ot, int4 newSize, int4 newAlign,
+    /// uint4 flags)` signature (type.cc:3479-3490) whose core is
+    /// `TypeStruct::setFields(fd, newSize, newAlign)` (type.cc:1563-1574):
+    /// `size = newSize` unconditionally, then the single-field
+    /// needs_resolution arm compares `field[0].type->getSize()` against that
+    /// EXPLICIT size — not against anything derived from the fields.
+    ///
+    /// This is the form Ghidra's non-grammar callers use (`decodeStruct`'s
+    /// stub fill at type.cc:4355 passes the decoded size attribute;
+    /// `setStructDecl` passes the stored declaration size), and the only form
+    /// under which the "single field does NOT fill the struct" cell
+    /// (field size < newSize) and the "offset not examined" cell (single field
+    /// at offset > 0 whose type size still equals newSize) are reachable.
+    /// The size-derived `set_fields` above is the grammar-path twin
+    /// (grammar.cc:2798-2799 derives newSize via `assignFieldOffsets`, so
+    /// there the derived and explicit conditions coincide for offset-0
+    /// fields with `alignSize == size`).
+    ///
+    /// Divergences kept out of scope (Rugra registry has no structural tree):
+    /// the `isIncomplete` guard, `tree.erase/insert`, and the
+    /// `flags & (opaque_string | variable_length | type_incomplete)` merge.
+    /// `new_align` is accepted for signature parity; Rugra's `TypeBase` does
+    /// not yet store an alignment field (Ghidra's `alignment = newAlign;
+    /// alignSize = calcAlignSize(size, alignment)` tail).
+    pub fn set_fields_sized(
+        &mut self,
+        name: &str,
+        fields: Vec<TypeField>,
+        new_size: usize,
+        new_align: usize,
+    ) -> Option<Arc<Datatype>> {
+        let _ = new_align; // no alignment field on TypeBase yet
+        if let Some(dt) = self.types.get_mut(name) {
+            if let Datatype::Struct(ref mut st) = Arc::make_mut(dt) {
+                st.fields = fields;
+                st.base.size = new_size;
+                // Ghidra: type.cc:1569-1571 TypeStruct::setFields:
+                //   if (field.size() == 1) {
+                //     if (field[0].type->getSize() == size)
+                //       flags |= needs_resolution;
+                //   }
+                // `size` is the explicitly provided newSize; the field's
+                // offset is not part of the condition.
+                if st.fields.len() == 1 && st.fields[0].type_ptr.get_size() == st.base.size {
+                    st.base.flags |= type_flags::NEEDS_RESOLUTION;
+                }
                 return Some(dt.clone());
             }
         }
@@ -647,7 +795,7 @@ impl TypeFactory {
         dt
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::setUnionFields
+    // Ghidra: type.cc:3850 TypeFactory::setUnionFields
     /// Set the fields of an existing union, recomputing its size as the max
     /// field size (union members overlap at offset 0). Mirrors the union
     /// behaviour of `TypeUnion::setFields` used by `TypeFactory::setFields`.
@@ -942,6 +1090,9 @@ impl TypeFactory {
         }
         let mut base = TypeBase::new(name.clone(), self.ptr_size, TypeMetatype::Pointer);
         base.flags |= type_flags::IS_PTRREL;
+        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance
+        // (TypePointerRel ctor delegates to the TypePointer ctor, type.hh:662).
+        base.flags |= Self::pointer_inherit_needs_resolution(&ptr_to);
         let dt = Arc::new(Datatype::Pointer(TypePointer {
             base,
             ptr_to,
@@ -982,6 +1133,9 @@ impl TypeFactory {
         }
         let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Pointer);
         base.flags |= type_flags::IS_PTRREL; // mark as non-core
+        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance
+        // (TypeFactory::getTypePointer builds via the TypePointer ctor).
+        base.flags |= Self::pointer_inherit_needs_resolution(&ptr_to);
         let dt = Arc::new(Datatype::Pointer(TypePointer {
             base,
             ptr_to,
@@ -1264,7 +1418,7 @@ impl TypeFactory {
         dt
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::getTypedefTarget
+    // Ghidra: type.cc:3850 TypeFactory::getTypedefTarget
     /// Look up the typedef target (the stripped form) for a typedef name.
     /// Returns the aliased data-type, or `None` if `name` is not a typedef.
     pub fn get_typedef_target(&self, name: &str) -> Option<&Arc<Datatype>> {
@@ -1297,7 +1451,11 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&cache_key) {
             return existing;
         }
-        let base = TypeBase::new(cache_key.clone(), new_size, TypeMetatype::Pointer);
+        let mut base = TypeBase::new(cache_key.clone(), new_size, TypeMetatype::Pointer);
+        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance
+        // (TypeFactory::resizePointer builds `TypePointer tmp(newSize,pt,
+        // wordsize)` via the ctor, type.cc:4077).
+        base.flags |= Self::pointer_inherit_needs_resolution(&pointee);
         let dt = Arc::new(Datatype::Pointer(TypePointer {
             base,
             ptr_to: pointee,
@@ -1344,11 +1502,11 @@ impl TypeFactory {
             .cloned()
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::TypeFactory(Architecture *g)
+    // Ghidra: type.cc:3850 TypeFactory::TypeFactory(Architecture *g)
     /// The single TypeFactory instance for the locked-oracle process model.
     ///
     /// Ghidra constructs exactly one `TypeFactory` per `Architecture`
-    /// (`TypeFactory::TypeFactory(Architecture *g)`, type.cc:3106-3119 — the
+    /// (`TypeFactory::TypeFactory(Architecture *g)`, type.cc:3850-3119 — the
     /// factory holds `glb` and every `getBase`/`findAdd` call deduplicates
     /// against that one factory), and the canonical headless oracle runs one
     /// Architecture per process. Rugra's production `Funcdata` does not yet
@@ -1387,7 +1545,7 @@ impl TypeFactory {
         ct
     }
 
-    // Ghidra: type.cc:3106 TypeFactory::deconcretize
+    // Ghidra: type.cc:3850 TypeFactory::deconcretize
     /// Inverse of `concretize`. NOTE: Ghidra has **no** `TypeFactory::deconcretize`
     /// (verified absent across the whole `cpp/` tree). The decompiler only ever
     /// "concretizes" in one direction (varmap.cc:622). Rugra provides this as
@@ -1412,7 +1570,7 @@ impl TypeFactory {
     }
 }
 
-// Ghidra: type.cc:3106 TypeFactory::hashSize
+// Ghidra: type.cc:3850 TypeFactory::hashSize
 /// Reversibly hash a size into a data-type id. Faithful to
 /// `Datatype::hashSize` (type.hh:206). This is the inverse-stable
 /// `id*size + size` folding Ghidra uses for variable-length base ids.
@@ -1420,7 +1578,7 @@ pub fn hash_size(id: u64, sz: usize) -> u64 {
     (id << 8) | (sz as u64 & 0xff)
 }
 
-// Ghidra: type.cc:3106 TypeFactory::charNameForSize
+// Ghidra: type.cc:3850 TypeFactory::charNameForSize
 /// Produce the canonical name for a char type of `size` bytes. Mirrors
 /// Ghidra's `charcache` (1→"char", 2→"wchar2", 4→"wchar4").
 fn char_name_for_size(size: usize) -> String {
@@ -1430,7 +1588,7 @@ fn char_name_for_size(size: usize) -> String {
     }
 }
 
-// Ghidra: type.cc:3106 TypeFactory::unicodeNameForSize
+// Ghidra: type.cc:3850 TypeFactory::unicodeNameForSize
 /// Produce the canonical name for a unicode char type of `size` bytes.
 fn unicode_name_for_size(size: usize) -> String {
     match size {
@@ -2019,6 +2177,10 @@ impl TypeFactory {
                 let mut base = TypeBase::new(name, basic.size, TypeMetatype::Pointer);
                 base.id = basic.id;
                 base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+                // type.cc:1027 TypePointer::decode calls calcSubmeta() —
+                // mirror its needs_resolution inheritance arm
+                // (type.cc:1051-1052) on the freshly decoded pointer.
+                base.flags |= Self::pointer_inherit_needs_resolution(&ptrto);
                 let dt = Arc::new(Datatype::Pointer(TypePointer {
                     base,
                     ptr_to: ptrto,
@@ -2032,9 +2194,29 @@ impl TypeFactory {
             }
             TypeMetatype::Array => {
                 let basic = Datatype::decode_basic(decoder);
+                // Ghidra: type.cc:1329 TypeArray::decode rewinds attributes
+                // after decodeBasic before re-reading ATTRIB_ARRAYSIZE —
+                // decodeBasic's attribute loop has otherwise consumed the
+                // element's attributes, and arraysize would stay -1.
+                decoder.rewind_attributes();
                 let num_elements = TypeArray::decode_array_attributes(decoder);
-                let _ = num_elements; // validated against size below
                 let array_of = self.decode_type(decoder)?;
+                // Ghidra: type.cc:1338-1339 TypeArray::decode:
+                //   if ((arraysize<=0)||(arraysize*arrayof->getAlignSize()!=size))
+                //     throw LowlevelError("Bad size for array of type "+arrayof->getName());
+                // `decode_array_attributes` folds an absent or negative
+                // `arraysize` attribute to 0, matching Ghidra's `<= 0` arm.
+                // Ghidra multiplies in int4; Rust's usize cannot wrap, so an
+                // overflowing product is rejected directly (such inputs would
+                // only pass Ghidra's compare by int4 wraparound coincidence;
+                // unreachable from well-formed specs).
+                let product = num_elements.checked_mul(array_of.get_align_size());
+                if product != Some(basic.size) {
+                    return Err(format!(
+                        "Bad size for array of type {}",
+                        array_of.get_name()
+                    ));
+                }
                 let mut name = basic.name.clone();
                 if name.is_empty() {
                     name = format!("{}[{}]", array_of.get_name(), num_elements);
@@ -2042,6 +2224,15 @@ impl TypeFactory {
                 let mut base = TypeBase::new(name, basic.size, TypeMetatype::Array);
                 base.id = basic.id;
                 base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+                // Ghidra: type.cc:1341-1342 TypeArray::decode:
+                //   if (arraysize == 1)
+                //     flags |= needs_resolution;	// Array of size 1 needs special treatment
+                // Same condition as the inline TypeArray ctor arm applied by
+                // get_array (type.hh:937-944), so decode and factory
+                // creation agree.
+                if num_elements == 1 {
+                    base.flags |= type_flags::NEEDS_RESOLUTION;
+                }
                 let dt = Arc::new(Datatype::Array(TypeArray {
                     base,
                     array_of,
@@ -2235,18 +2426,64 @@ impl TypeFactory {
             }));
             self.insert(stub);
         }
-        // Decode fields.
+        // Decode fields. Per-field this mirrors, in order:
+        //  - `TypeField::TypeField(Decoder&,TypeFactory&)` (type.cc:768-794):
+        //    decode attributes, then `decodeType`, then the name-empty and
+        //    offset-negative throws, then closeElement;
+        //  - the `TypeStruct::decodeFields` acceptance loop
+        //    (type.cc:1839-1870): void-metatype throw, out-of-order throw,
+        //    overlap throw-out, does-not-fit throw.
         let mut fields: Vec<TypeField> = Vec::new();
+        // decodeFields loop state (type.cc:1835-1837).
+        let mut last_off: i64 = -1;
+        let mut calc_size: i64 = 0;
         while decoder.peek_element() != 0 {
             let child_id = decoder.open_element();
             let attrs = TypeField::decode_field_attributes(decoder);
+            // type.cc:786: type = typegrp.decodeType(decoder);
+            let field_type = self.decode_type(decoder)?;
+            // type.cc:787-790 (TypeField ctor, in this order).
             if attrs.name.is_empty() {
                 return Err("name attribute must not be empty in <field> tag".to_string());
             }
             if attrs.offset < 0 {
                 return Err("offset attribute invalid for <field> tag".to_string());
             }
-            let field_type = self.decode_type(decoder)?;
+            if child_id != 0 {
+                decoder.close_element(child_id);
+            }
+            // type.cc:1842-1843: null type is impossible in Rust (decode_type
+            // returns Result); the TYPE_VOID arm remains.
+            if field_type.get_metatype() == TypeMetatype::Void {
+                return Err(format!(
+                    "Bad field data-type for structure: {}",
+                    basic.name
+                ));
+            }
+            // type.cc:1846-1848: strictly-lower-than-previous offset is out of
+            // order; equal offsets fall through to the overlap check below.
+            if (attrs.offset as i64) < last_off {
+                return Err("Fields are out of order".to_string());
+            }
+            last_off = attrs.offset as i64;
+            // type.cc:1849-1860: a field starting inside the previous field's
+            // extent is thrown out with a warning (warning storage — the
+            // `warning_issued` flag and the factory warnings list — is not
+            // modelled on Rugra; the FIELD DROP is observable and mirrored).
+            if (attrs.offset as i64) < calc_size {
+                continue;
+            }
+            // type.cc:1861-1866: field must fit within the declared size.
+            calc_size = attrs.offset as i64 + field_type.get_size() as i64;
+            if calc_size > basic.size as i64 {
+                return Err(format!(
+                    "Field {} does not fit in structure {}",
+                    attrs.name, basic.name
+                ));
+            }
+            // type.cc:1867-1869 (calcAlign accumulation) feeds only the
+            // `alignment`/`alignSize` tail, which Rugra's TypeBase does not
+            // store (registered datatype.rs gap).
             let ident = if attrs.ident < 0 {
                 attrs.offset
             } else {
@@ -2258,14 +2495,43 @@ impl TypeFactory {
                 offset: attrs.offset as usize,
                 type_ptr: field_type,
             });
-            if child_id != 0 {
-                decoder.close_element(child_id);
-            }
         }
         // Replace the stub with the fully-defined struct.
         let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Struct);
         base.id = basic.id;
         base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+        // decodeFields tail (type.cc:1871-1874) on the scratch:
+        //   if (size == 0) flags |= type_incomplete;
+        //   if (field.size() > 0) markComplete();   // clears type_incomplete
+        // then decodeStruct transfers via TypeFactory::setFields
+        // (type.cc:3487-3488: clear, then masked-OR the scratch's
+        // opaque_string|variable_length|type_incomplete). The scratch always
+        // starts incomplete (TypeStruct() default ctor, type.hh:518), so the
+        // observable residue is: the factory type stays incomplete iff it
+        // ended with zero fields (a size-0 struct cannot accept any field —
+        // the fit check above rejects `calcSize > 0 == size`), and an XML
+        // `incomplete="true"` attribute is overridden by non-empty fields,
+        // exactly as Ghidra's markComplete-then-transfer sequence does.
+        if fields.is_empty() {
+            base.flags |= type_flags::TYPE_INCOMPLETE;
+        } else {
+            base.flags &= !type_flags::TYPE_INCOMPLETE;
+        }
+        // Ghidra: type.cc:1875-1877 TypeStruct::decodeFields tail:
+        //   if (field.size() == 1) {
+        //     if (field[0].type->getSize() == size)
+        //       flags |= needs_resolution;		// needs special resolution
+        //   }
+        // `size` is the struct size decoded from the <type> element's
+        // attributes (decodeBasic), exactly the member `TypeStruct::decodeFields`
+        // reads (and the `newSize` decodeStruct passes through
+        // `TypeFactory::setFields` at type.cc:4355, whose
+        // `TypeStruct::setFields` arm re-derives the same flag, type.cc:1569-1571);
+        // the comparison uses the field type's full `getSize` against the
+        // post-throw-out field list. The flag is ORed in, never cleared.
+        if fields.len() == 1 && fields[0].type_ptr.get_size() == basic.size {
+            base.flags |= type_flags::NEEDS_RESOLUTION;
+        }
         let dt = Arc::new(Datatype::Struct(TypeStruct { base, fields }));
         self.insert(dt.clone());
         Ok(dt)

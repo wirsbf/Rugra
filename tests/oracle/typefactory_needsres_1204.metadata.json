@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default:gcc",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "usage": "Locked BfdArchitecture initialization over examples/curl; archid asserted as x86:LE:64:default:gcc by the C++ fixture"
+  },
+  "analysis_options": {
+    "apis": [
+      "TypeStruct::setFields single-field arm (type.cc:1569-1571)",
+      "TypeFactory::setFields (type.cc:3479-3490)",
+      "CParse::newStruct assignFieldOffsets derivation (grammar.cc:2798-2799)",
+      "TypeStruct::decodeFields tail (type.cc:1874-1877)",
+      "TypeArray::decode arraysize==1 arm (type.cc:1341-1342)",
+      "TypeArray inline ctor size-1 arm (type.hh:937-944)",
+      "TypeFactory::getTypeArray (type.cc:3902-3908)",
+      "TypePointer::calcSubmeta needs_resolution inheritance (type.cc:1051-1052)",
+      "TypeUnion ctor flag + TypeUnion::setFields (type.hh:551, type.cc:2002-2009)"
+    ],
+    "fixture_model": "Production TypeFactory of the BfdArchitecture over examples/curl; each fixture type built exactly once under a unique fixture_nres_* name (a second getTypeStruct/setFields round on a completed name throws 'Trying to alter definition of type', type.cc:3421-3423). The set.* cells call TypeFactory::setFields with an explicit newSize; grammar.* cells derive newSize/newAlign via TypeStruct::assignFieldOffsets on offset=-1 fields exactly as CParse::newStruct does; dec.* cells feed equivalent XML (3 unnamed <type size=\"1\"> carry name=\"oct1\" on the Rust side; names are outside every compared observation) through the public TypeFactory::decodeType entry with inline <type> children (no <typeref> ids)",
+    "type_construction": "All 15 records observe Datatype::needsResolution() ? 1 : 0 on the factory-owned object. set.single.offset proves the OFFSET is not part of the condition (single long@4 in an 8-byte struct still sets the flag); set.single.notfills proves an explicit newSize larger than the field keeps the flag clear; arr.factory vs the get_array twin proves the inline TypeArray ctor arm (type.hh:937-944) fires on the factory path too; ptr.ptrptr proves the calcSubmeta inheritance never passes through a second pointer level",
+    "debug_macros": "none",
+    "normalization": "none: raw needsResolution() bits, no id/pointer normalization (no temporary ids are compared)"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    },
+    "binary": {
+      "path": "examples/curl",
+      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+      "source_policy": "WIP live-tree runner consumed the working-tree examples/curl; the integration runner should re-pin to the base-commit Git blob (34a3febf blob 4e26a362f92f1961bab63000215a84b4d7212dd, sha256 4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a) exactly like run_printc_symbol_decl_oracle.sh and regenerate expected_stdout_sha256 under that input"
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+    }
+  },
+  "cases": [
+    {
+      "id": "set",
+      "records": 4,
+      "covers": "TypeFactory::setFields explicit-newSize matrix: single-field-fills sets the flag (type.cc:1569-1571); single-field-notfills (explicit newSize 8 over an int4 field) stays clear; single field at offset 4 whose type size equals newSize still sets the flag (the offset is NOT examined); two fields never set it"
+    },
+    {
+      "id": "grammar",
+      "records": 2,
+      "covers": "CParse::newStruct path: assignFieldOffsets derives newSize from the fields (grammar.cc:2798-2799), so a single long field yields derived size 8 == field size -> flag set; two ints -> clear. This is the cell Rugra's size-deriving set_fields models"
+    },
+    {
+      "id": "dec",
+      "records": 4,
+      "covers": "XML decode path: TypeStruct::decodeFields tail single-field arm against the decoded size attribute (fills -> 1, notfills size=12/int4 -> 0, multi -> 0) and TypeArray::decode arraysize==1 arm -> 1"
+    },
+    {
+      "id": "arr.factory",
+      "records": 1,
+      "covers": "TypeFactory::getTypeArray(1, int): the inline TypeArray ctor arm (type.hh:937-944) sets the flag on the factory path as well -> 1"
+    },
+    {
+      "id": "ptr",
+      "records": 3,
+      "covers": "TypePointer::calcSubmeta needs_resolution inheritance (type.cc:1051-1052): pointer to the single-field-fills struct -> 1; pointer to that pointer -> 0 (never through a second pointer level); pointer to long -> 0"
+    },
+    {
+      "id": "union.setfields",
+      "records": 1,
+      "covers": "TypeUnion ctor starts type_incomplete|needs_resolution (type.hh:551) and TypeUnion::setFields (type.cc:2002-2009) never touches flags -> 1"
+    },
+    {
+      "id": "grammar.regressions",
+      "records": 2,
+      "covers": "grammar.overfire: an XML-decoded UNROUNDED struct (size 5, align 4, alignSize 8) as a single grammar field — Ghidra's assignFieldOffsets newSize is calcAlignSize(8,4)=8 != 5 so the flag stays CLEAR (a naive max(offset+getSize) derivation would fire); grammar.nested: inner single-field struct flags, and an outer whose single field IS that inner (size 4 == derived newSize 4) flags too"
+    },
+    {
+      "id": "ptr.ordering",
+      "records": 1,
+      "covers": "calcSubmeta runs at pointer construction only: a pointer built while the struct is still an incomplete stub never inherits (stub=0, struct=1 after definition, cached same-name pointer stays 0, differently-sized new pointer inherits=1)"
+    },
+    {
+      "id": "dec.acceptance",
+      "records": 4,
+      "covers": "decodeFields overlap throw-out (second field dropped, first survives; the survivor then fills the struct -> flag set, complete) and the incomplete residue (no fields -> incomplete stays set for both size=8 and old-style size=0)"
+    },
+    {
+      "id": "dec.err",
+      "records": 5,
+      "covers": "decode rejection texts verbatim: 'Fields are out of order', 'Field z does not fit in structure <name>', 'Bad field data-type for structure: <name>', and the TypeField ctor's 'name attribute must not be empty in <field> tag' firing before the decodeFields void check for both the name and name+void documents"
+    }
+  ],
+  "input_model_difference": "Ghidra drives its real production TypeFactory inside the BfdArchitecture (tree/nametree cross-references, findAdd dedup); the Rust fixture drives a standalone TypeFactory::new(8) with the same construction calls. The observable compared is the needs_resolution flag bit on each factory-owned type, which does not depend on the tree plumbing",
+  "observation_scope": {
+    "set_explicit_newsize": "MATCH",
+    "grammar_derived_size": "MATCH",
+    "decode_struct_tail": "MATCH",
+    "decode_array_size1": "MATCH (required fixing Rugra's array decode branch to rewind attributes after decode_basic before reading arraysize, mirroring type.cc:1329 — without it arraysize was never read and every decoded array errored 'Bad size for array of type')",
+    "factory_array_ctor": "MATCH (required adding the inline TypeArray ctor size-1 arm to get_array, type.hh:937-944)",
+    "pointer_inheritance": "MATCH (calcSubmeta arm applied at get_ptr/get_type_pointer/get_type_pointer_rel/resize_pointer/decode pointer branch)",
+    "union_flag_persistence": "MATCH",
+    "grammar_overfire_regression": "MATCH (required routing the Rust grammar-path cell through set_fields_sized with assign_field_offsets's derived (size,align) — grammar.cc:2798-2799 passes the derived newSize into setFields; a self-deriving set_fields would fire the flag for unrounded field types)",
+    "pointer_ordering": "MATCH (construction-time-only inheritance; cached same-name pointer never re-evaluated)",
+    "decode_overlap_and_incomplete_residue": "MATCH (merged decodeFields validation loop: overlap throw-out keeps the first field; empty field list keeps type_incomplete)",
+    "decode_rejection_texts": "MATCH (all five LowlevelError::explain strings byte-identical)"
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cpp_fixture_sha256": "40ed17f80795b5daaabdd9623274baf680c08e25d744f8a5284b9928583280be",
+  "rust_fixture_sha256": "2d3767f89cb78be6eac67940818c56ce49f731fc135ae84c670f69306e8831d6",
+  "expected_stdout_sha256": "662610e69e55ec5f154181faf82cf6f31fbd8f0d1bebcc794686a3cfec6669db",
+  "overall_status": "MATCH: all 27 records byte-identical against the locked 12.0.4 oracle (set-path fills/notfills/offset/multi, grammar-path derived size + overfire/nested regressions, decode-path struct tail + array size1 + overlap throw-out + incomplete residue + five verbatim rejection texts, factory array ctor, pointer calcSubmeta inheritance incl. pointer-to-pointer cutoff and construction-time ordering, union flag persistence)"
+}

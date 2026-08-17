@@ -2554,6 +2554,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "typefactory_needsres_1204",
+   "description": "TypeFactory needs_resolution setting matrix observations",
+   "runner": [
+    "tools/run_typefactory_needsres_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/typefactory_needsres_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/typefactory_needsres_1204.cc",
+     "rust_fixture": "tests/oracle/typefactory_needsres_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_typefactory_needsres_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/type_system/typefactory.rs",
+     "tests/oracle/typefactory_needsres_1204.*",
+     "tools/run_typefactory_needsres_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }
