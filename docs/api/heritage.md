@@ -915,3 +915,17 @@ provenance，不改变 guard 行为或对齐状态。
   （跨空间碰撞，DRIVER-SWITCH 硬前置）、refinement/guardInput concat/
   removeRevisitedMarkers 分支 UNTESTED。
 
+
+## 测试区维护（2026-08-17）
+
+`test_op_heritage_leaves_deadcode_to_the_action_executor` 的 harness 修正
+（VARNODE-ADDDESCEND-THROW-0001 前置件，最后一个 WARN 源）：原 harness 把同一
+free varnode 对象同时交给 b0 的 d1 读与 b1 的 r1 读（free-with-2-readers）。
+Ghidra 的 PcodeEmitFd::dump 对每个输入引用独立调 newVarnode（funcdata.cc:905），
+同一寄存器两处读=两个分立 free varnode（loc-tree 以 createIndex 区分，
+VarnodeCompareLocDef），单对象双读者会触发 addDescend throw（varnode.cc:336）。
+修法=分立 per-read free 实例（不走 set_input：保持 free 才能保留 heritage 的
+read 工作负载——INPUT 会置 insert 使 isHeritageKnown 跳过该读）；两实例仍在
+Register@0x30 同一 loc，collect 按地址窗口照常收作 read，断言（alive 计数差、
+pass==3）零变化，生产代码未动。
+<!-- annotation-pass: 2026-08-17 -->

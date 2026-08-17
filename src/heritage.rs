@@ -5765,6 +5765,14 @@ mod tests {
             let c4 = g.constant(4, 7);
 
             // d1: writes register 0x30 from a free read (heritage work).
+            // Per-read free instances: Ghidra's PcodeEmitFd::dump calls
+            // newVarnode per input reference (funcdata.cc:905), so the same
+            // register read at two pcs is TWO distinct free varnodes
+            // (loc-tree frees are distinguished by createIndex,
+            // VarnodeCompareLocDef). One free object with 2 readers is
+            // Ghidra-unreachable — addDescend would throw "Free varnode has
+            // multiple descendants" (varnode.cc:336). Both instances stay
+            // free, so heritage still sees the same address-based read work.
             let free = g.free_register(0x30, 8);
             let d1 = g.op(OpCode::CPUI_INT_ADD, 2);
             g.set_input(&d1, &free, 0);
@@ -5772,9 +5780,11 @@ mod tests {
             let _d1out = g.written_register(0x30, 8, &d1);
             g.insert_end(&d1, &b0);
 
-            // r1: reads the same free varnode in the successor block.
+            // r1: reads its own free instance of register 0x30 in the
+            // successor block (independent per-read object, same loc).
+            let free_r1 = g.free_register(0x30, 8);
             let r1 = g.op(OpCode::CPUI_INT_OR, 2);
-            g.set_input(&r1, &free, 0);
+            g.set_input(&r1, &free_r1, 0);
             g.set_input(&r1, &c4, 1);
             let _t3 = g.fd.new_unique_out(8, &r1);
             g.insert_end(&r1, &b1);

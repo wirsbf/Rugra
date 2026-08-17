@@ -1250,3 +1250,16 @@ input@0x71 → soff=1、被 namerec 门排除，双侧逐字节一致。
   （含 mapentry 指针拷贝与 mapped 位不拷贝的判别）/ identity_return
   （cc:107 早退）/ spacebase_exempt（cc:110 豁免）6 行双侧逐字节 MATCH；
   high 块 NO_ORACLE（fixture 不开 highlevel_on，双侧 cvn.high==null）。
+
+## 测试区维护（2026-08-17）
+
+`test_split_uses_duplicates_op` / `test_unlink_then_destroy_does_not_disturb_other_readers`
+的 harness 修正（VARNODE-ADDDESCEND-THROW-0001 前置件，同 aa0b6e1 ruleaction/subflow
+模式）：被 splitUses 重读（funcdata_varnode.cc:1560 对每个复制 op 重设全部输入）或
+被双读者共享的 free 寄存器 varnode 经 `VarnodeBank::set_input`（varnode.cc:1358 setInput
+映射）登记为 INPUT，消除 addDescend throw（varnode.cc:336 "Free varnode has multiple
+descendants"）会触发的 Ghidra 不可达 harness 态。INPUT 保持 is_written/is_addr_tied
+false，split_uses / op_unlink / op_destroy / op_unset_input 无 input-flag 分支，
+断言与被测路径零变化；setInput 在唯一 loc 上返回同一 Arc，ptr_eq 断言原样通过。
+生产代码未动。
+<!-- annotation-pass: 2026-08-17 -->

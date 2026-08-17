@@ -12072,6 +12072,15 @@ mod tests {
         fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
         let tmp_out = fd.new_unique_out(8, &add_op);
         let rsp = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        // Register rsp as a function input (VarnodeBank::setInput,
+        // varnode.cc:1358). splitUses re-reads every defining-op input on each
+        // duplicated op (funcdata_varnode.cc:1560 opSetInput(newop,op->getIn(i),i));
+        // in the Ghidra rule universe those inputs are written/input at that
+        // point. A free rsp is Ghidra-unreachable — Varnode::addDescend would
+        // throw "Free varnode has multiple descendants" (varnode.cc:336).
+        // INPUT keeps is_written() false, and split_uses/op_set_input have no
+        // input-flag branch, so the duplication path is identical.
+        let rsp = fd.vbank.set_input(rsp).unwrap();
         let off = fd.vbank.create_constant(8, 0x10);
         fd.op_set_input(&add_op, rsp, 0);
         fd.op_set_input(&add_op, off, 1);
@@ -12397,6 +12406,17 @@ mod tests {
         let vn = fd
             .vbank
             .create_with_space(4, AddressSpace::Register, 0x100);
+        // Register vn as a function input (VarnodeBank::setInput,
+        // varnode.cc:1358). The harness links TWO readers to one varnode; in
+        // Ghidra a multi-reader varnode is written/input (per-read frees are
+        // separate objects — PcodeEmitFd::dump, funcdata.cc:905), so a free
+        // vn gaining a second descend is Ghidra-unreachable: addDescend would
+        // throw "Free varnode has multiple descendants" (varnode.cc:336).
+        // INPUT keeps is_written() false and op_unlink/op_destroy/op_unset_input
+        // have no input-flag branch, so the double-unset no-op path under test
+        // is identical. setInput returns the same Arc here (unique loc, xref
+        // re-inserts the same object), so the ptr_eq assertions still bind.
+        let vn = fd.vbank.set_input(vn).unwrap();
         let reader = fd.new_op(1, Address::new(0x1000));
         fd.op_set_input(&reader, vn.clone(), 0);
         let other = fd.new_op(1, Address::new(0x1002));
