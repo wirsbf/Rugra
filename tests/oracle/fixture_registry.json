@@ -2332,6 +2332,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "varnode_add_descend_1204",
+   "description": "Varnode::addDescend free-multi-descendant throw observations",
+   "runner": [
+    "tools/run_varnode_add_descend_oracle.sh"
+   ],
+   "timeout_seconds": 1500,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/varnode_add_descend_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/varnode_add_descend_1204.cc",
+     "rust_fixture": "tests/oracle/varnode_add_descend_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_varnode_add_descend_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/varnode.rs",
+     "tests/oracle/varnode_add_descend_1204.*",
+     "tools/run_varnode_add_descend_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

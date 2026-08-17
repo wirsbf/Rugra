@@ -803,6 +803,26 @@
   无法终止的根源之一；`total_replace` 侧已改为 Ghidra 迭代器快照语义
   （见 docs/api/funcdata.md 2026-08-15 节）。
 
+### 2026-08-17: add_descend 恢复 throw 语义（VARNODE-ADDDESCEND-THROW-0001）
+
+- `Varnode::add_descend`（varnode.cc:330-340）：free 非 spacebase varnode 已有
+  live descendant 时，WARN 软化恢复为与 `throw LowlevelError("Free varnode
+  has multiple descendants")`（varnode.cc:336）一致的 `panic!`，消息逐字相同；
+  panic 在 push/coverdirty 之前触发，与 C++ throw 前状态不变语义一致。
+  错误通道选择 `panic!` 而非 `Result`：Ghidra 的 addDescend 为 void + throw，
+  E2E worker 的 per-function 隔离把 panic 归入该函数失败桶，正对应 Ghidra
+  LowlevelError 中止单函数的模型（memstate.rs 只读 bank 写入同款先例）。
+  两个非法生产者（subflow raw INPUT / inject_raw_ops 共享 free）已随 aa3d5e8
+  消除；恢复后 E2E 剩余触发点的登记见 docs/TODO_BOARD.md 该行。
+- 常量无豁免：`isFree()`（varnode.hh:238）只查 written|input，常量在
+  addDescend 层同样是 free，仅靠 `Funcdata::opSetInput` 的常量去重
+  （funcdata_op.cc:108-115）上游保护——fixture `varnode_add_descend_1204`
+  双侧钉死该分支。
+- fixture：`tests/oracle/varnode_add_descend_1204.{cc,rs,metadata.json}` +
+  `tools/run_varnode_add_descend_oracle.sh`（锁定 oracle 双侧逐字对拍：
+  throw 文本、spacebase 豁免、written/input 累积、push 顺序、throw 后状态
+  不变）。
+
 ### 2026-08-15: copy_shadow 身份比较修复（VARNODE-COPYSHADOW-ARC-0001）
 
 - `Varnode::copy_shadow`（varnode.cc:977-995）从「两侧收集 Arc 集合求交」重写为

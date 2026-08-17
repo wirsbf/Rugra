@@ -1779,9 +1779,14 @@ impl Varnode {
     // Ghidra: varnode.cc:330 Varnode::addDescend
     /// Add a descendant op reference. Faithful to `Varnode::addDescend`
     /// (varnode.hh:295). Per Ghidra cc:333-336, a free non-spacebase varnode
-    /// with existing descend throws LowlevelError; Rugra logs (eprintln) and
-    /// continues conservatively — IR construction should not panic on
-    /// transient inconsistency.
+    /// with an existing descendant throws
+    /// `LowlevelError("Free varnode has multiple descendants")` — Rugra
+    /// panics with the identical message (memstate.rs read-only-bank
+    /// precedent). The panic fires before the push, so — like the C++ throw —
+    /// the Varnode state is unchanged on failure. The two producers of the
+    /// illegal state (subflow raw INPUT flagging, inject_raw_ops shared free
+    /// varnode) were eliminated in aa3d5e8; the E2E corpus must stay at
+    /// 0 panics, otherwise an uneliminated producer exists.
     /// Also sets coverdirty (Ghidra cc:339); Rugra's cover system is simplified
     /// (see merge.rs compute_varnode_covers) and does not track the coverdirty
     /// flag — TODO tracked in ALIGNMENT_ROADMAP (cover.cc full port).
@@ -1797,8 +1802,11 @@ impl Varnode {
             // already filter dead entries the same way).
             let has_live_descend = self.descend.iter().any(|w| w.strong_count() > 0);
             if has_live_descend {
-                eprintln!("[VN] WARN: free varnode space={:?} off={:#x} gets multiple descendants",
-                    self.address_space, self.loc.as_u64());
+                // Ghidra: throw LowlevelError("Free varnode has multiple
+                // descendants") (varnode.cc:336). Per-function isolation in
+                // the decompile worker maps the panic onto Ghidra's
+                // LowlevelError-aborts-this-function model.
+                panic!("Free varnode has multiple descendants");
             }
         }
         self.descend.push(std::sync::Arc::downgrade(op));
@@ -3423,6 +3431,83 @@ mod tests {
             other_key == overlay_key,
             other_key.cmp(&overlay_key).is_eq()
         );
+    }
+
+    /// Catch an add_descend panic and return its message. The global panic
+    /// hook is silenced only around the catch (the throw is the behavior
+    /// under test); assertions run with the normal hook restored so failures
+    /// stay observable. The Varnode lock is poisoned by the unwinding writer
+    /// guard — a Rust artifact with no Ghidra counterpart — so post-throw
+    /// reads use into_inner.
+    fn catch_add_descend_panic_message(
+        vn: &Arc<RwLock<Varnode>>,
+        op: &Arc<RwLock<crate::op::PcodeOp>>,
+    ) -> Option<String> {
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            vn.write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add_descend(op);
+        }));
+        std::panic::set_hook(previous_hook);
+        // panic!("literal") payloads are &str; formatted ones are String.
+        result.err().and_then(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        })
+    }
+
+    #[test]
+    fn test_add_descend_throws_on_free_multi_descendant() {
+        // VARNODE-ADDDESCEND-THROW-0001: Varnode::addDescend
+        // (varnode.cc:330-340) throws LowlevelError on the second descendant
+        // of a free non-spacebase varnode; the panic fires before the push so
+        // the state is unchanged. Constants get no exemption at this level
+        // (isFree checks written|input only, varnode.hh:238) — the production
+        // protection is Funcdata::opSetInput's dedup. The spacebase exemption
+        // and non-free accumulation are pinned by
+        // test_varnode_bank_xref_returns_canonical_and_rewires_repeated_slots
+        // and the varnode_add_descend_1204 oracle fixture.
+        let op1 = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1000), 1),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+        let op2 = Arc::new(RwLock::new(crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x1010), 2),
+            crate::opcodes::OpCode::CPUI_COPY,
+        )));
+        let free = Arc::new(RwLock::new(Varnode::new_with_space(
+            8,
+            AddressSpace::Register,
+            0x80,
+        )));
+        free.write().unwrap().add_descend(&op1);
+        let message = catch_add_descend_panic_message(&free, &op2)
+            .expect("second free descendant must throw");
+        assert_eq!(message, "Free varnode has multiple descendants");
+        let value = free.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(value.count_descends(), 1, "throw must not push");
+        assert_eq!(
+            value.flags,
+            varnode_flags::COVERDIRTY,
+            "throw must not touch flags"
+        );
+        drop(value);
+
+        // Constant varnodes are free by the isFree() test and get no
+        // addDescend-level exemption.
+        let constant = Arc::new(RwLock::new(Varnode::new_with_space(
+            4,
+            AddressSpace::Const,
+            0x1234,
+        )));
+        constant.write().unwrap().add_descend(&op1);
+        let message = catch_add_descend_panic_message(&constant, &op2)
+            .expect("second constant descendant must throw");
+        assert_eq!(message, "Free varnode has multiple descendants");
     }
 
     #[test]
