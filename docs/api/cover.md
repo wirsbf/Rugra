@@ -1,10 +1,11 @@
 # `cover.rs` API Reference
 
-**状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
+**状态**: 核心语义已对齐（two-piece 回绕 + 指针身份域）；Ghidra 12.0.4 对齐级别 L2（oracle fixture `COVER-TWOPIECE-RESIDUAL-0001` 全 13 case `MATCH`）
 **源代码路径**: `src/cover.rs`
 
-> Null/End/Input/Op endpoint 身份、`start>stop` 回绕 cover、CFG 前驱递归、
-> dirty rebuild 与 PcodeOpSet/HighIntersectTest 尚未对齐。
+> 残留（order-only 限制族）：INDIRECT 端点的 `getOpFromConst` 目标 order 解析
+> 仍回退到 INDIRECT 自身 SeqNum order（需 Funcdata op-bank 访问，登记于
+> `COVER-TWOPIECE-RESIDUAL-0001` 后继）。
 
 ## 模块说明 (Module Doc)
 
@@ -12,45 +13,106 @@ Liveness cover for varnodes
 
 Corresponds to Ghidra's `cover.hh`
 
+## 表示法 (Representation)
+
+Ghidra 的 `CoverBlock`（cover.hh:75-96）以两个 `const PcodeOp*` 存储区间边界，
+含三个特殊编码：`(PcodeOp*)0`（块首，getUIndex→0）、`(PcodeOp*)1`（块尾，
+getUIndex→`~0`）、`(PcodeOp*)2`（函数输入标记，getUIndex→0）。所有集合比较
+走 `getUIndex` 投影（cover.cc:29-49），但 `empty()`/`boundary()`/`merge` 的
+internal3/internal4、MULTIEQUAL-tip 判别还依赖**原始指针身份**。
+
+Rugra 以 `CoverEndpoint` 枚举建模指针身份域，`CoverBlock::start`/`end`（pub
+u32）缓存 `getUIndex` 投影。**当 `end < start` 且块非空时表示 two-piece 回绕
+区间** `[start, ~0] ∪ [0, end]`（Ghidra merge 的 disjoint 分支 cover.cc:175-181
+与 addRefPoint 的 not-contained `setEnd` cover.cc:587 产生）。
+
 ## 导出的公共 API (Public API)
+
+### `pub enum CoverEndpoint`
+
+CoverBlock 边界的指针身份域：
+
+- `Begin` — Ghidra `(const PcodeOp *)0`，块首哨兵（`u_index() == 0`）
+- `EndMark` — Ghidra `(const PcodeOp *)1`，块尾哨兵（`u_index() == u32::MAX`）
+- `InputMark` — Ghidra `(const PcodeOp *)2`，函数输入标记（`u_index() == 0`）
+- `Op { order: u32, multiequal: bool }` — 真实 PcodeOp 边界（`getUIndex` 投影
+  域：普通 op 为 SeqNum order，MULTIEQUAL 折叠为 0 并保留 marker 身份）
+
+#### `pub fn u_index(self) -> u32`
+
+端点的 `getUIndex` 比较值（cover.cc:29-49 的投影）。
+
+#### `pub fn from_op(op: &PcodeOp) -> Self`
+
+从活动 PcodeOp 构造端点身份：MULTIEQUAL → order 0 + marker；INDIRECT 回退到
+自身 order（已知残留）；普通 op → SeqNum order。
 
 ### `pub struct CoverBlock`
 
 Range of P-code ops within a single basic block where a varnode is alive
 
-Corresponds to Ghidra's `CoverBlock` class
+Corresponds to Ghidra's `CoverBlock` class. `pub start`/`pub end` 为投影域
+（观察层兼容），私有 `start_id`/`end_id` 为身份域；两者恒同步。
 
 ### `pub fn new() -> Self`
 
-Create an empty cover block
+Create an empty cover block（Ghidra `start=0; stop=0;`）
 
 ### `pub fn clear(&mut self)`
 
-Clear the cover block
+Clear the cover block（指针级清空）
 
-### `pub fn set_begin(&mut self, s: u32)`
+### `pub fn set_begin(&mut self, s: u32)` / `pub fn set_begin_id(&mut self, begin: CoverEndpoint)`
 
-Set the start of liveness
+Reset start of range。忠实 `setBegin`（cover.hh:86-87）：若 stop 为块首哨兵
+则提升为块尾哨兵（`if (stop==0) stop=1`）。
 
-### `pub fn set_end(&mut self, e: u32)`
+### `pub fn set_end(&mut self, e: u32)` / `pub fn set_end_id(&mut self, end: CoverEndpoint)`
 
-Set the end of liveness
+Reset end of range（cover.hh:88）。
+
+### `pub fn get_start_id(&self) -> CoverEndpoint` / `pub fn get_stop_id(&self) -> CoverEndpoint`
+
+取边界身份（Ghidra `getStart`/`getStop`）。
+
+### `pub fn set_all(&mut self)`
+
+Mark the entire block as covered（`(Begin, EndMark)` → 投影 `(0, u32::MAX)`）。
 
 ### `pub fn empty(&self) -> bool`
 
-Check if the cover block is empty
+指针级空判别 `(Begin, Begin)`（cover.hh:90-91）。two-piece（`end < start`）
+**不是** empty——旧 order-only 模型把回绕误判为空是本修复的核心。
 
 ### `pub fn contain(&self, point: u32) -> bool`
 
-Check if the cover block contains a specific point
+点包含判定（cover.cc:107-120），含回绕分支
+`upoint <= ustop || upoint >= ustart`。
+
+### `pub fn boundary(&self, point: u32) -> i32`
+
+边界刻画（cover.cc:129-142）：0 非边界 / 1 尾边界 / 2 定义点边界
+（`start_id != Begin` 指针级判别，修复旧投影域误判）。
 
 ### `pub fn merge(&mut self, other: &CoverBlock)`
 
-Merge another cover block into this one
+并集合并（cover.cc:147-184）：完整 internal1..4 判别（含
+`op2.stop==EndMark`/`stop==EndMark` 身份判别）、setAll、disjoint 分支取较早
+start 配另一区间 stop（可产生回绕）。
+
+### `pub fn intersect_char(&self, op2: &CoverBlock) -> i32`
+
+非破坏性交集刻画（cover.cc:59-102）四象限：one/one、one/two、two/one、
+two/two。返回 0 无相交 / 1 仅边界接触 / 2 区间相交。
 
 ### `pub fn intersect(&mut self, other: &CoverBlock)`
 
-Intersect another cover block with this one
+RUGRA-GLUE：Rust 侧破坏性区间交助手（Ghidra 无此形态）；仅 one-piece 输入
+在契约内。
+
+### `pub fn get_u_index(op: &PcodeOp) -> u32`
+
+活动 PcodeOp 的比较索引（`CoverEndpoint::from_op(op).u_index()`）。
 
 ### `pub struct Cover`
 
@@ -58,80 +120,71 @@ Full liveness cover of a varnode across multiple blocks
 
 Corresponds to Ghidra's `Cover` class
 
-### `pub fn new() -> Self`
+#### `pub fn new() -> Self` / `pub fn clear(&mut self)`
 
-Create a new empty cover
+空 cover 构造/清空（`BTreeMap<i32, CoverBlock>`）。
 
-### `pub fn clear(&mut self)`
+#### `pub fn get_cover_block(&self, i: i32) -> Option<&CoverBlock>`
 
-Clear the cover
+取第 i 块的 CoverBlock（Ghidra 返回全局空块；Rust 返回 `Option`）。
 
-### `pub fn add_def_point(&mut self, block_idx: i32, point: u32)`
+#### `pub fn compare_to(&self, op2: &Cover) -> i32`
 
-Add a definition point to the cover
+按首个覆盖块索引排序（cover.cc:223-247；空 cover 视作 1000000）。
 
-### `pub fn add_ref_point(&mut self, block_idx: i32, point: u32)`
+#### `pub fn add_def_point(&mut self, block_idx: i32, point: u32)`
 
-Add a reference point to the cover
+order 域便捷入口：置块为单定义点（`set_begin`+`set_end`，对应
+addDefPoint 的 def 分支）。
 
-### `pub fn contain(&self, block_idx: i32, point: u32) -> bool`
+#### `pub fn add_ref_point(&mut self, block_idx: i32, point: u32)`
 
-Check if the cover contains a point within a block
+order 域便捷入口：空块 `set_end(ref)`；否则 not-contained 时延伸 stop
+（可能回绕）。无 CFG 递归（无块图访问）。
 
-### `pub fn merge(&mut self, other: &Cover)`
+#### `pub fn contain(&self, block_idx: i32, point: u32) -> bool`
 
-Merge another cover into this one
+指定块上的点包含判定。
 
-### `pub fn intersect(&mut self, other: &Cover)`
+#### `pub fn contain_varnode_def_at(&self, is_input: bool, block_idx: i32, order: u32) -> i32`
 
-Intersect another cover with this one
+Varnode 定义点包含刻画（cover.cc:441-462）：0/1/2/3。
 
+#### `pub fn merge(&mut self, other: &Cover)`
 
-### 2026-07-04：新增 CoverBlock::boundary + Cover::contain_varnode_def_at
-- `CoverBlock::boundary(point)`（对齐 cover.cc:129-142）：返回 0/1/2（非边界/tail/defining point）。
-- `Cover::contain_varnode_def_at(is_input, block, order)`（对齐 cover.cc:441-462）：返回 0/1/2/3（未包含/内部/定义边界/tail边界）。供 eliminate_intersect 使用。
+逐块 `CoverBlock::merge`（cover.cc:465-472）。
 
-### 2026-07-04（续）：新增 intersect_char（非破坏性相交特征）
-- `CoverBlock::intersect_char(op2)`（对齐 cover.cc:59）：返回 0/1/2（无/边界/区间相交）。
-- `Cover::intersect_char(op2)`（对齐 cover.cc:269）：遍历两个 cover 的 block map，对共同 block 调 CoverBlock::intersect_char。返回 0/1/2。
-<!-- annotation-pass: 2026-07-04 -->
+#### `pub fn intersect(&mut self, other: &Cover)`
 
-### 2026-08-11：ANN-E 注释溯源
+RUGRA-GLUE：破坏性集合交（无 Ghidra 对应）。
 
-本轮只补函数来源标注，不改变运行时行为。源码 oracle 固定为 Ghidra
-12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`：
+#### `pub fn intersects(&self, other: &Cover) -> bool`
 
-- `PcodeOpSetImpl::populate` 与 `affects_test` 映射到 `cover.hh` 中的两个
-  pure-virtual 方法。
-- `Cover::{block_index_of_op, order_of_op, predecessors_of}` 是 Rust
-  所有权/锁释放适配；Ghidra 在对应调用点直接解引用 `PcodeOp*` 和
-  `FlowBlock*`，没有独立函数。
-- `PcodeOpSet` 的 `Debug`、四个只读访问器，以及临时 `NoOpOwner` 的两个
-  trait 方法属于 Rust 可见性、快照或借用检查胶水，不计作 Ghidra 函数映射。
+非破坏性相交谓词（委托 two-piece 感知的 `intersect_char != 0`）。
 
-这些标注不提升模块对齐级别；文件头列出的 endpoint 身份、回绕 cover、CFG
-递归和 PcodeOpSet 交集缺口仍然存在。
+#### `pub fn intersect_char(&self, op2: &Cover) -> i32`
 
-### 2026-08-15：`COVER-REBUILD-SELFLOCK-0001` root-identity 重建
+非破坏性交集刻画（cover.cc:269-297）。
 
-生产路径曾出现永久自锁：`Merge::update_high_cover` 持 root Varnode 写锁时，
-`Cover::rebuild` 再对同一 Arc 取读锁。现按锁定 `cover.cc:477-496` /
-`varnode.cc:233-241` 改为显式共享 root identity：
+#### `pub fn intersect_list(&self, op2: &Cover, level: i32) -> Vec<i32>`
 
-- `Cover::rebuild(root: &Arc<RwLock<Varnode>>)` 签名改为共享句柄；worklist
-  语义不变（root + implied outputs，`addRefPoint` 恒以 root 为身份）。
-- `add_ref_point_full(op_arc, root)` 在持有 op 读锁的窗口内用
-  `Arc::ptr_eq` 快照全部 MULTIEQUAL 匹配槽（Ghidra `ref->getIn(j)==vn` 的
-  指针恒等），随后释放块读锁再递归，不再自创 dedup。
-- `add_def_point_full(def, is_input)` 接收定义 op 与 input 标志快照。
-- 空块分支显式 `set_begin(0)` 物化 Ghidra nullptr start 的可比值（Ghidra
-  `setEnd(ref)` 不触碰 start；投影一致，见 cover.hh:75-91）。
-- `rebuild_from_root_snapshot` 是锁释放适配（RUGRA-GLUE）：updateCover 持
-  root 写锁时先快照 def/is_input/descend/is_implied，rebuild 全程不再锁
-  root；op 输出恰为 root 时用快照的 `root_is_implied` 判定，避免写锁重入。
+相交块索引列表（cover.cc:307-334）。
 
-已知残差：order-only `CoverBlock` 无法恢复 addRefPoint "旧 stop" 的
-MULTIEQUAL-tip 判别（保守放行 MULTIEQUAL 递归）；INDIRECT 的
-`getOpFromConst` 目标 order 仍回退自身 order。`COVER-REBUILD-SELFLOCK-0001`
-fixture（8 case 合成图，含 slot2 self-reference、双槽读、implied 链、
-setAll 前驱填充、no-cover-object dirty 清除）负责该投影的行为门禁。
+#### `pub fn intersect_by_block(&self, blk: i32, op2: &Cover) -> i32`
+
+指定块上的交集刻画（cover.cc:392-406）。
+
+#### `pub fn rebuild(&mut self, root: &Arc<RwLock<Varnode>>)`
+
+按 def-use 链重建（cover.cc:477-496；implied 输出传递扩展）。
+
+#### `pub fn add_ref_recurse(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>)`
+
+递归回填前驱（cover.cc:524-558）：空块 setAll；非空块填底
+（two-piece 保持回绕不填底）；精确 MULTIEQUAL-tip 判别
+（`start_id == Begin` + 旧 stop 的 marker 身份）。
+
+### `pub struct PcodeOpSet` / `pub trait PcodeOpSetImpl`
+
+Ghidra `PcodeOpSet`（cover.hh:35-65）：懒 populate 的 PcodeOp 集合与
+secondary affects 测试；`finalize` 按 (block index, SeqNum order) 排序。

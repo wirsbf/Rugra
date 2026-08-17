@@ -447,3 +447,11 @@ merge.hh:83）删除：Ghidra 的 merge 序列（coreaction.cc:5718-5729）没�
 `ActionNameVars::apply`（coreaction.cc:2978-3000）的符号驱动管线；死代码
 `register_name` 表（错注 merge.hh:83 Merge::registerName）一并移除，其表
 内容由 `ActionRestructureVarnode` 安装进 ScopeLocal.register_names。
+
+### 2026-08-17：cover 端点 setter 化（`COVER-TWOPIECE-RESIDUAL-0001` 配套）
+
+`compute_varnode_covers` 与（已禁用的）`propagate_cover_through_cfg` 中对
+`CoverBlock::start/end` 的直接字段赋值改为 `set_begin/set_end/set_all`
+调用：CoverBlock 引入指针身份域（`start_id/end_id`，对齐 Ghidra
+`PcodeOp*` 哨兵语义）后，字段直写会破坏投影域与身份域的同步不变式。
+区间值与语义零变化（详见 docs/api/cover.md 表示法一节）。

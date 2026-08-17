@@ -5,62 +5,202 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Range of P-code ops within a single basic block where a varnode is alive
+/// Pointer-identity domain of one `CoverBlock` range boundary.
 ///
-/// Corresponds to Ghidra's `CoverBlock` class
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoverBlock {
-    /// Start of liveness (order in SeqNum)
-    pub start: u32,
-    /// End of liveness (order in SeqNum)
-    pub end: u32,
+/// Ghidra's `CoverBlock` (cover.hh:75-96) stores its two range boundaries as
+/// raw `const PcodeOp *` pointers with three special encodings:
+///   - `(PcodeOp*)0` — very beginning of the block (`getUIndex` -> 0)
+///   - `(PcodeOp*)1` — very end of the block   (`getUIndex` -> `~0`)
+///   - `(PcodeOp*)2` — function-input marker   (`getUIndex` -> 0)
+/// plus real PcodeOp pointers. Every set-membership comparison goes through
+/// the `getUIndex` projection (cover.cc:29-49), but several methods ALSO
+/// discriminate on the raw pointer identity itself:
+///   - `empty()` is the pointer-level `start==0 && stop==0` (cover.hh:90-91)
+///   - `boundary()` requires `start != (PcodeOp*)0` (cover.cc:137)
+///   - `merge()` tests `stop==(PcodeOp*)1` for internal3/internal4
+///     (cover.cc:162,165)
+///   - the MULTIEQUAL-tip tests in `Cover::addRefPoint`/`addRefRecurse` call
+///     `op->code()==CPUI_MULTIEQUAL` on the stored stop pointer
+///     (cover.cc:547, 590-591)
+/// Rugra models the pointer with this enum; the `getUIndex` projection is
+/// cached in the public `CoverBlock::start`/`end` u32 fields.
+// Ghidra: cover.hh:76-77 CoverBlock::start / CoverBlock::stop (pointer values)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverEndpoint {
+    /// Ghidra `(const PcodeOp *)0`: very beginning of the block. getUIndex -> 0.
+    Begin,
+    /// Ghidra `(const PcodeOp *)1`: very end of the block. getUIndex -> ~0.
+    EndMark,
+    /// Ghidra `(const PcodeOp *)2`: function-input marker. getUIndex -> 0.
+    InputMark,
+    /// A real PcodeOp boundary, stored in the `getUIndex` projection domain:
+    /// SeqNum order for ordinary ops, 0 for MULTIEQUAL markers (which
+    /// "are considered very beginning", cover.cc:41-43). `multiequal` caches
+    /// the marker-op identity Ghidra recovers from the raw pointer via
+    /// `op->code()==CPUI_MULTIEQUAL`.
+    Op { order: u32, multiequal: bool },
 }
 
-impl CoverBlock {
-    // Ghidra: cover.hh:75 CoverBlock::new
-    /// Create an empty cover block
-    pub fn new() -> Self {
-        Self {
-            start: u32::MAX,
-            end: 0,
+impl CoverEndpoint {
+    /// The `getUIndex` comparison value of this endpoint.
+    // Ghidra: cover.cc:29 CoverBlock::getUIndex
+    pub fn u_index(self) -> u32 {
+        match self {
+            // Ghidra: case 0 -> 0, case 2 -> 0
+            CoverEndpoint::Begin | CoverEndpoint::InputMark => 0,
+            // Ghidra: case 1 -> ~((uintm)0)
+            CoverEndpoint::EndMark => u32::MAX,
+            // Ghidra: marker MULTIEQUAL -> 0 (stored), else -> SeqNum order
+            CoverEndpoint::Op { order, .. } => order,
         }
     }
 
-    // Ghidra: cover.hh:75 CoverBlock::clear
-    /// Clear the cover block
+    /// Build the endpoint identity of a live PcodeOp, applying the marker
+    /// rules of `CoverBlock::getUIndex` (cover.cc:29-49): MULTIEQUALs are
+    /// considered very beginning (order collapses to 0, marker identity
+    /// kept for the tip tests); INDIRECTs should map to the order of the op
+    /// they are indirect for, which requires a Funcdata op-bank lookup
+    /// Rugra cannot perform here (registered residual — see `from_op`
+    /// callers), so this constructor falls back to the INDIRECT's own
+    /// SeqNum order exactly like `CoverBlock::get_u_index`.
+    // Ghidra: cover.cc:29 CoverBlock::getUIndex
+    pub fn from_op(op: &crate::op::PcodeOp) -> Self {
+        if op.is_marker() {
+            match op.get_opcode() {
+                // Ghidra: MULTIEQUALs are considered very beginning
+                crate::opcodes::OpCode::CPUI_MULTIEQUAL => {
+                    CoverEndpoint::Op { order: 0, multiequal: true }
+                }
+                // Ghidra: INDIRECTs are at the location of the op they are
+                // indirect for: PcodeOp::getOpFromConst(op->getIn(1)->getAddr())
+                //   ->getSeqNum().getOrder(). Rugra cannot resolve that here
+                // without Funcdata access; fall back to the INDIRECT's own
+                // SeqNum order (order-only residual, same as get_u_index).
+                _ => CoverEndpoint::Op {
+                    order: op.get_seq_num().get_order(),
+                    multiequal: false,
+                },
+            }
+        } else {
+            // Ghidra: return op->getSeqNum().getOrder();
+            CoverEndpoint::Op {
+                order: op.get_seq_num().get_order(),
+                multiequal: false,
+            }
+        }
+    }
+}
+
+/// Range of P-code ops within a single basic block where a varnode is alive
+///
+/// Corresponds to Ghidra's `CoverBlock` class. The range is interpreted on
+/// the `getUIndex` circle: when `end < start` (and the block is not empty)
+/// the covered set wraps through the end-of-block sentinel — the two-piece
+/// (wrap-around) interval `[start, ~0] ∪ [0, end]` that Ghidra produces via
+/// `merge`'s disjoint branch (cover.cc:175-181) and `addRefPoint`'s
+/// not-contained `setEnd` (cover.cc:587). Every method below carries the
+/// corresponding wrap-around branch of the Ghidra original.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoverBlock {
+    /// Start of liveness — `getUIndex` projection of the Ghidra start
+    /// pointer (SeqNum order domain). Kept `pub` for the order-domain
+    /// observation layer; always equals `start_id.u_index()`.
+    pub start: u32,
+    /// End of liveness — `getUIndex` projection of the Ghidra stop pointer.
+    /// `end < start` on a non-empty block encodes the two-piece wrap.
+    pub end: u32,
+    /// Pointer-identity domain of the Ghidra start pointer.
+    start_id: CoverEndpoint,
+    /// Pointer-identity domain of the Ghidra stop pointer.
+    end_id: CoverEndpoint,
+}
+
+impl CoverBlock {
+    // Ghidra: cover.hh:79 CoverBlock::CoverBlock
+    /// Create an empty cover block (Ghidra: `start = 0; stop = 0;`).
+    pub fn new() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            start_id: CoverEndpoint::Begin,
+            end_id: CoverEndpoint::Begin,
+        }
+    }
+
+    // Ghidra: cover.hh:83 CoverBlock::clear
+    /// Clear the cover block (Ghidra: `start = 0; stop = 0;`).
     pub fn clear(&mut self) {
-        self.start = u32::MAX;
-        self.end = 0;
+        *self = Self::new();
     }
 
-    // Ghidra: cover.hh:75 CoverBlock::setBegin
-    /// Set the start of liveness
+    // Ghidra: cover.hh:86 CoverBlock::setBegin
+    /// Set the start of liveness (order-domain convenience overload; see
+    /// `set_begin_id` for the pointer-identity variant).
     pub fn set_begin(&mut self, s: u32) {
-        self.start = s;
+        self.set_begin_id(CoverEndpoint::Op { order: s, multiequal: false });
     }
 
-    // Ghidra: cover.hh:75 CoverBlock::setEnd
-    /// Set the end of liveness
+    /// Reset start of range keeping the raw pointer identity. Faithful to
+    /// `CoverBlock::setBegin` (cover.hh:86-87):
+    /// `start = begin; if (stop==(const PcodeOp *)0) stop = (const PcodeOp *)1;`
+    // Ghidra: cover.hh:86 CoverBlock::setBegin
+    pub fn set_begin_id(&mut self, begin: CoverEndpoint) {
+        self.start_id = begin;
+        self.start = begin.u_index();
+        if self.end_id == CoverEndpoint::Begin {
+            self.set_end_id(CoverEndpoint::EndMark);
+        }
+    }
+
+    // Ghidra: cover.hh:88 CoverBlock::setEnd
+    /// Set the end of liveness (order-domain convenience overload; see
+    /// `set_end_id` for the pointer-identity variant).
     pub fn set_end(&mut self, e: u32) {
-        self.end = e;
+        self.set_end_id(CoverEndpoint::Op { order: e, multiequal: false });
+    }
+
+    /// Reset end of range keeping the raw pointer identity. Faithful to
+    /// `CoverBlock::setEnd` (cover.hh:88): `stop = end;`.
+    // Ghidra: cover.hh:88 CoverBlock::setEnd
+    pub fn set_end_id(&mut self, end: CoverEndpoint) {
+        self.end_id = end;
+        self.end = end.u_index();
+    }
+
+    /// Get the pointer-identity of the start boundary (Ghidra `getStart`).
+    // Ghidra: cover.hh:81 CoverBlock::getStart
+    pub fn get_start_id(&self) -> CoverEndpoint {
+        self.start_id
+    }
+
+    /// Get the pointer-identity of the stop boundary (Ghidra `getStop`).
+    // Ghidra: cover.hh:82 CoverBlock::getStop
+    pub fn get_stop_id(&self) -> CoverEndpoint {
+        self.end_id
     }
 
     // Ghidra: cover.hh:84 CoverBlock::setAll
     /// Mark the entire block as covered. Faithful to `CoverBlock::setAll`
     /// (cover.hh:84-85): Ghidra sets `start=(PcodeOp*)0` (begin-of-block
     /// sentinel) and `stop=(PcodeOp*)1` (end-of-block sentinel). In Rugra's
-    /// u32-order model, begin-of-block is order 0 and end-of-block is
+    /// u32-order projection, begin-of-block is order 0 and end-of-block is
     /// `u32::MAX` (the `~((uintm)0)` value returned by `getUIndex` for the
     /// sentinel-1 stop).
     pub fn set_all(&mut self) {
+        self.start_id = CoverEndpoint::Begin;
         self.start = 0;
+        self.end_id = CoverEndpoint::EndMark;
         self.end = u32::MAX;
     }
 
-    // Ghidra: cover.hh:75 CoverBlock::empty
-    /// Check if the cover block is empty
+    // Ghidra: cover.hh:90 CoverBlock::empty
+    /// Check if the cover block is empty. Faithful to `CoverBlock::empty`
+    /// (cover.hh:90-91): Ghidra's pointer-level test
+    /// `start==(PcodeOp*)0 && stop==(PcodeOp*)0`. The order-only predecessor
+    /// used `start > end`, which wrongly classified the two-piece wrap
+    /// (`ustop < ustart`, cover.cc:90-101) as empty.
     pub fn empty(&self) -> bool {
-        self.start > self.end
+        self.start_id == CoverEndpoint::Begin && self.end_id == CoverEndpoint::Begin
     }
 
     // Ghidra: cover.cc:29 CoverBlock::getUIndex
@@ -90,70 +230,130 @@ impl CoverBlock {
     /// live `PcodeOp` without duplicating the marker/sentinel logic.
     pub fn get_u_index(op: &crate::op::PcodeOp) -> u32 {
         // Ghidra: switch(switchval) { case 0: return 0; case 1: return ~0; case 2: return 0; }
-        // Rugra stores orders directly; the sentinels are inlined into the
-        // stored u32 values at insertion time, so for a live PcodeOp we only
-        // need to handle the marker case (MULTIEQUAL / INDIRECT).
-        if op.is_marker() {
-            match op.get_opcode() {
-                // Ghidra: MULTIEQUALs are considered very beginning
-                crate::opcodes::OpCode::CPUI_MULTIEQUAL => 0,
-                // Ghidra: INDIRECTs are at the location of the op they are
-                // indirect for: PcodeOp::getOpFromConst(op->getIn(1)->getAddr())
-                //   ->getSeqNum().getOrder(). Rugra cannot resolve that here
-                //   without Funcdata access (the iop input holds an Address
-                //   that must be looked up in the op bank); fall back to the
-                //   INDIRECT's own SeqNum order, matching the non-marker path.
-                // Callers that need the precise indirect-target order should
-                // resolve it via Funcdata::get_op_from_const and pass the
-                // resolved order directly to set_begin/set_end.
-                _ => op.get_seq_num().get_order(),
-            }
-        } else {
-            // Ghidra: return op->getSeqNum().getOrder();
-            op.get_seq_num().get_order()
-        }
+        // plus the marker rules; all folded into the endpoint constructor.
+        CoverEndpoint::from_op(op).u_index()
     }
 
     // Ghidra: cover.cc:107 CoverBlock::contain
-    /// Check if the cover block contains a specific point
+    /// Check if the cover block contains a specific point. Faithful to
+    /// `CoverBlock::contain` (cover.cc:107-120), including the wrap-around
+    /// branch: when the block's own range is two-piece (`ustart > ustop`)
+    /// the covered set is `[ustart, ~0] ∪ [0, ustop]`, so the point is
+    /// contained when `upoint <= ustop || upoint >= ustart`.
     pub fn contain(&self, point: u32) -> bool {
-        point >= self.start && point <= self.end
+        // Ghidra: if (empty()) return false;
+        if self.empty() {
+            return false;
+        }
+        let upoint = point;
+        let ustart = self.start;
+        let ustop = self.end;
+        // Ghidra: if (ustart<=ustop) return ((upoint>=ustart)&&(upoint<=ustop));
+        //         return ((upoint<=ustop)||(upoint>=ustart));
+        if ustart <= ustop {
+            upoint >= ustart && upoint <= ustop
+        } else {
+            upoint <= ustop || upoint >= ustart
+        }
     }
 
     /// Characterize where a point falls on the cover boundary.
     /// Faithful to `CoverBlock::boundary` (cover.cc:129-142).
     /// Returns:
-    ///   - 0 if point not on boundary
     // Ghidra: cover.cc:129 CoverBlock::boundary
+    ///   - 0 if point not on boundary
     ///   - 1 if on the tail (== stop)
-    ///   - 2 if on the defining point (== start, and start is a real def)
+    ///   - 2 if on the defining point (== start, and start is not the
+    ///     begin-of-block sentinel — Ghidra's `start!=(const PcodeOp *)0`
+    ///     pointer test)
     pub fn boundary(&self, point: u32) -> i32 {
+        // Ghidra: if (empty()) return 0;
         if self.empty() {
             return 0;
         }
-        // Ghidra: if (getUIndex(start)==val) { if (start != 0) return 2; }
-        // Rugra: start==u32::MAX means "no real def" (input varnode); only
-        // return 2 (defining point) if start is a real op order.
-        if self.start == point && self.start != u32::MAX {
+        let val = point;
+        // Ghidra: if (getUIndex(start)==val) { if (start!=(const PcodeOp *)0) return 2; }
+        if self.start == val && self.start_id != CoverEndpoint::Begin {
             return 2;
         }
-        if self.end == point {
+        // Ghidra: if (getUIndex(stop)==val) return 1;
+        if self.end == val {
             return 1;
         }
         0
     }
 
     // Ghidra: cover.cc:147 CoverBlock::merge
-    /// Merge another cover block into this one
+    /// Merge another cover block into this one. Faithful to
+    /// `CoverBlock::merge` (cover.cc:147-184) including the two-piece
+    /// handling: `internal1..4` use pointer-identity discriminators
+    /// (`op2.stop==(PcodeOp*)1`, `stop==(PcodeOp*)1`), and the disjoint
+    /// branch picks the earliest start together with the *other* interval's
+    /// stop, which may legitimately leave `stop < start` (the wrap-around
+    /// union on the getUIndex circle).
     pub fn merge(&mut self, other: &CoverBlock) {
-        if other.empty() { return; }
-        if self.start > other.start { self.start = other.start; }
-        if self.end < other.end { self.end = other.end; }
+        // Ghidra: if (op2.empty()) return; // Nothing to merge in
+        if other.empty() {
+            return;
+        }
+        // Ghidra: if (empty()) { start = op2.start; stop = op2.stop; return; }
+        if self.empty() {
+            self.start_id = other.start_id;
+            self.start = other.start;
+            self.end_id = other.end_id;
+            self.end = other.end;
+            return;
+        }
+        let ustart = self.start;
+        let u2start = other.start;
+        // Ghidra: internal4 = ((ustart==(uintm)0)&&(op2.stop==(const PcodeOp *)1));
+        let internal4 = ustart == 0 && other.end_id == CoverEndpoint::EndMark;
+        // Ghidra: internal1 = internal4 || op2.contain(start);
+        let internal1 = internal4 || other.contain(ustart);
+        // Ghidra: internal3 = ((u2start==0)&&(stop==(const PcodeOp *)1));
+        let internal3 = u2start == 0 && self.end_id == CoverEndpoint::EndMark;
+        // Ghidra: internal2 = internal3 || contain(op2.start);
+        let internal2 = internal3 || self.contain(u2start);
+
+        // Ghidra: if (internal1&&internal2)
+        //           if ((ustart!=u2start)|| internal3 || internal4) {
+        //             setAll(); return;
+        //           }
+        if internal1 && internal2 && (ustart != u2start || internal3 || internal4) {
+            // Covered entire block
+            self.set_all();
+            return;
+        }
+        // Ghidra: if (internal1) start = op2.start; // Pick non-internal start
+        if internal1 {
+            self.start_id = other.start_id;
+            self.start = other.start;
+        } else if !internal2 {
+            // Ghidra: else if ((!internal1)&&(!internal2)) { // Disjoint intervals
+            //           if (ustart < u2start) stop = op2.stop; // Pick earliest start
+            //           else start = op2.start;                // then take other stop
+            //           return;
+            //         }
+            if ustart < u2start {
+                self.end_id = other.end_id;
+                self.end = other.end;
+            } else {
+                self.start_id = other.start_id;
+                self.start = other.start;
+            }
+            return;
+        }
+        // Ghidra: if (internal3 || op2.contain(stop)) stop = op2.stop; // Pick non-internal stop
+        if internal3 || other.contain(self.end) {
+            self.end_id = other.end_id;
+            self.end = other.end;
+        }
     }
 
     // Ghidra: cover.cc:59 CoverBlock::intersect
     /// Characterize the intersection with another CoverBlock (non-destructive).
-    /// Faithful to `CoverBlock::intersect` (cover.cc:59-102). Returns:
+    /// Faithful to `CoverBlock::intersect` (cover.cc:59-102) across all four
+    /// one-piece/two-piece quadrants. Returns:
     ///   - 0 no intersection
     ///   - 1 only boundary points intersect
     ///   - 2 a whole interval intersects
@@ -165,22 +365,57 @@ impl CoverBlock {
         let ustop = self.end;
         let u2start = op2.start;
         let u2stop = op2.end;
-        // Both one-piece (cover.cc:73-79). Rugra models single intervals only.
-        if ustop <= u2start || u2stop <= ustart {
-            if ustart == u2stop || ustop == u2start {
-                return 1; // Boundary intersection
+        if ustart <= ustop {
+            if u2start <= u2stop {
+                // Ghidra: both one-piece (cover.cc:73-79)
+                if ustop <= u2start || u2stop <= ustart {
+                    if ustart == u2stop || ustop == u2start {
+                        return 1; // Boundary intersection
+                    }
+                    return 0; // No intersection
+                }
+            } else {
+                // Ghidra: they are two-piece, we are one-piece (cover.cc:81-87):
+                // we intersect only inside their complement gap (u2stop, u2start)
+                if ustart >= u2stop && ustop <= u2start {
+                    if ustart == u2stop || ustop == u2start {
+                        return 1;
+                    }
+                    return 0;
+                }
             }
-            return 0; // No intersection
+        } else if u2start <= u2stop {
+            // Ghidra: they are one piece, we are two-piece (cover.cc:91-97)
+            if u2start >= ustop && u2stop <= ustart {
+                if u2start == ustop || u2stop == ustart {
+                    return 1;
+                }
+                return 0;
+            }
         }
+        // Ghidra: if both are two-pieces, then the intersection must be an
+        // interval (cover.cc:99) — falls through to the interval result.
         2 // Interval intersection
     }
 
     // Ghidra: cover.cc:59 CoverBlock::intersect
     /// Intersect another cover block with this one
+    // RUGRA-GLUE: Rust-side destructive set-intersection helper; Ghidra's
+    // `CoverBlock::intersect` is the const characterization above and has no
+    // mutating form. Defined for one-piece operands only; two-piece inputs
+    /// are outside this helper's contract (no production caller passes them).
     pub fn intersect(&mut self, other: &CoverBlock) {
-        if self.start < other.start { self.start = other.start; }
-        if self.end > other.end { self.end = other.end; }
-        if self.start > self.end { self.clear(); }
+        if other.start > self.start {
+            self.start = other.start;
+            self.start_id = other.start_id;
+        }
+        if other.end < self.end {
+            self.end = other.end;
+            self.end_id = other.end_id;
+        }
+        if self.start > self.end {
+            self.clear();
+        }
     }
 }
 
@@ -243,17 +478,26 @@ impl Cover {
     }
 
     // Ghidra: cover.cc:501 Cover::addDefPoint
-    /// Add a definition point to the cover
+    /// Add a definition point to the cover. Order-domain convenience entry
+    /// mirroring the def branch of `Cover::addDefPoint` (cover.cc:501-519):
+    /// `block.setBegin(def); block.setEnd(def);` — the block is set to the
+    /// single defining point.
     pub fn add_def_point(&mut self, block_idx: i32, point: u32) {
         let cb = self.blocks.entry(block_idx).or_insert_with(CoverBlock::new);
         cb.set_begin(point);
+        cb.set_end(point);
     }
 
     // Ghidra: cover.cc:565 Cover::addRefPoint
-    /// Add a reference point to the cover
+    /// Add a reference point to the cover. Order-domain convenience entry
+    /// mirroring the endpoint update of `Cover::addRefPoint`
+    /// (cover.cc:565-612) without its CFG recursion (this entry has no
+    /// block-graph access): on an empty block `setEnd(ref)` leaves the
+    /// begin sentinel as start; otherwise a not-contained ref extends the
+    /// stop, which may wrap (`stop < start`, two-piece).
     pub fn add_ref_point(&mut self, block_idx: i32, point: u32) {
         let cb = self.blocks.entry(block_idx).or_insert_with(CoverBlock::new);
-        if cb.empty() || point > cb.end {
+        if cb.empty() || !cb.contain(point) {
             cb.set_end(point);
         }
     }
@@ -337,14 +581,14 @@ impl Cover {
 
     // Ghidra: cover.hh:36 Cover::intersects
     /// Non-mutating predicate: true iff this cover and `other` share at least
-    /// one live point. Used by cover-based merging to decide whether two
-    /// HighVariables are simultaneously live (and thus cannot share a name).
+    /// one live point (boundary contact counts). Used by cover-based merging
+    /// to decide whether two HighVariables are simultaneously live (and thus
+    /// cannot share a name). Implemented on the two-piece-aware
+    /// `CoverBlock::intersect_char` characterization.
     pub fn intersects(&self, other: &Cover) -> bool {
         for (idx, cb) in &self.blocks {
             if let Some(other_cb) = other.blocks.get(idx) {
-                let lo = std::cmp::max(cb.start, other_cb.start);
-                let hi = std::cmp::min(cb.end, other_cb.end);
-                if lo <= hi {
+                if cb.intersect_char(other_cb) != 0 {
                     return true;
                 }
             }
@@ -493,16 +737,6 @@ impl Cover {
         Some(idx)
     }
 
-    /// Resolve the SeqNum comparison order of a PcodeOp, applying the
-    /// `CoverBlock::getUIndex` marker/sentinel rules. Returns None if the op
-    /// is an INDIRECT whose target order must be resolved through Funcdata
-    /// (callers may then fall back to the INDIRECT's own order).
-    // RUGRA-GLUE: Rust forwarding helper for the order-only endpoint model;
-    // Ghidra calls CoverBlock::getUIndex directly and has no separate wrapper.
-    fn order_of_op(op: &crate::op::PcodeOp) -> u32 {
-        CoverBlock::get_u_index(op)
-    }
-
     // Ghidra: cover.cc:501 Cover::addDefPoint (op-based variant)
     /// Reset this Cover to the single point where `vn` is defined. Faithful
     /// to `Cover::addDefPoint` (cover.cc:501-519). Clears the cover first.
@@ -520,21 +754,22 @@ impl Cover {
             // Ghidra: def->getParent()->getIndex()
             let blk = Self::block_index_of_op(&def_rg).unwrap_or(0);
             // Ghidra: CoverBlock &block(cover[blk]); block.setBegin(def); block.setEnd(def);
-            let order = Self::order_of_op(&def_rg);
+            // The endpoint keeps the full pointer identity: a MULTIEQUAL def
+            // stores order 0 with its marker identity (getUIndex, cover.cc:41-43).
+            let endpoint = CoverEndpoint::from_op(&def_rg);
             let cb = self.blocks.entry(blk).or_insert_with(CoverBlock::new);
-            cb.set_begin(order);
-            cb.set_end(order);
+            cb.set_begin_id(endpoint);
+            cb.set_end_id(endpoint);
         } else if is_input {
             // Ghidra: CoverBlock &block(cover[0]);
             //         block.setBegin((const PcodeOp*)2); block.setEnd((const PcodeOp*)2);
-            // The pointer sentinel 2 is the input marker; every comparison
-            // goes through CoverBlock::getUIndex, which maps it to 0
-            // (cover.cc:29-49). Rugra's order-only model stores the
-            // uindex-domain value directly, so both endpoints are 0 here —
-            // identical to Ghidra's (2,2) state under getUIndex projection.
+            // The pointer sentinel 2 is the input marker; every set-membership
+            // comparison goes through CoverBlock::getUIndex, which maps it to
+            // 0 (cover.cc:29-49), but boundary/merge discriminate the raw
+            // pointer identity, so the InputMark identity is kept.
             let cb = self.blocks.entry(0).or_insert_with(CoverBlock::new);
-            cb.set_begin(0);
-            cb.set_end(0);
+            cb.set_begin_id(CoverEndpoint::InputMark);
+            cb.set_end_id(CoverEndpoint::InputMark);
         }
     }
 
@@ -552,7 +787,7 @@ impl Cover {
         op_arc: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
-        let (order, opcode, op_parent, matching_slots) = {
+        let (order, endpoint, opcode, op_parent, matching_slots) = {
             let op = op_arc.read().unwrap();
             let opcode = op.get_opcode();
             let matching_slots = if opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
@@ -564,8 +799,10 @@ impl Cover {
             } else {
                 Vec::new()
             };
+            let endpoint = CoverEndpoint::from_op(&op);
             (
-                Self::order_of_op(&op),
+                endpoint.u_index(),
+                endpoint,
                 opcode,
                 op.parent.as_ref().and_then(|parent| parent.upgrade()),
                 matching_slots,
@@ -584,11 +821,9 @@ impl Cover {
 
         if block_was_empty {
             // Ghidra: block.setEnd(ref);
-            // In Ghidra the untouched start pointer remains the block-begin
-            // sentinel.  Materialize its comparable value in the order-only
-            // representation before storing the reference endpoint.
-            cb.set_begin(0);
-            cb.set_end(order);
+            // The untouched start pointer remains the begin-of-block
+            // sentinel (cover.hh:79 default), preserved in start_id.
+            cb.set_end_id(endpoint);
         } else {
             // Ghidra: if (block.contain(ref)) { if (ref->code()!=MULTIEQUAL) return; }
             if cb.contain(order) {
@@ -601,24 +836,41 @@ impl Cover {
                 // Ghidra: const PcodeOp *op = block.getStop();
                 //         const PcodeOp *startop = block.getStart();
                 //         block.setEnd(ref);
-                //         ustop = getUIndex(block.getStop());
-                //         if (ustop >= getUIndex(startop)) { ...MULTIEQUAL tip... return; }
-                let startop_order = cb.start;
-                cb.set_end(order);
-                let ustop = order;
-                if ustop >= startop_order {
-                    // Infinitesimal MULTIEQUAL tip: op (the OLD stop) was a
-                    // MULTIEQUAL with startop at block-begin. We cannot recover
-                    // the old stop PcodeOp* from the order-based model, so we
-                    // cannot perfectly distinguish this branch. Conservatively
-                    // fall through to the recurse step only for MULTIEQUAL refs
-                    // (handled uniformly below); otherwise return.
-                    if opcode != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-                        return;
+                //         ustop = CoverBlock::getUIndex(block.getStop());
+                let old_stop = cb.get_stop_id();
+                let startop = cb.get_start_id();
+                cb.set_end_id(endpoint);
+                let ustop = cb.end;
+                // Ghidra: if (ustop >= CoverBlock::getUIndex(startop)) {
+                //           if ((op!=0)&&(op!=2)&&(op->code()==CPUI_MULTIEQUAL)&&
+                //               (startop==(const PcodeOp*)0)) { ...recurse... }
+                //           return;
+                //         }
+                if ustop >= startop.u_index() {
+                    // Infinitesimal MULTIEQUAL tip: the OLD stop was a
+                    // MULTIEQUAL with startop at the block-begin sentinel —
+                    // the block contains only a tip of cover through one
+                    // branch of a MULTIEQUAL, so traverse through the other
+                    // branches too (cover.cc:590-597).
+                    if startop == CoverEndpoint::Begin
+                        && matches!(
+                            old_stop,
+                            CoverEndpoint::Op { multiequal: true, .. }
+                        )
+                    {
+                        let preds = Self::predecessors_of(&bl_arc);
+                        for pred in preds {
+                            self.add_ref_recurse(&pred);
+                        }
                     }
-                } else {
                     return;
                 }
+                // ustop < ustart: the new stop sits before the start on the
+                // getUIndex circle — the block is now a two-piece wrap-around
+                // range [start, ~0] ∪ [0, stop]. Ghidra does NOT return here;
+                // it falls through to the bottom recursion so the reading
+                // point's predecessors still get filled backward
+                // (cover.cc:584-599).
             }
         }
 
@@ -788,46 +1040,64 @@ impl Cover {
             return;
         }
 
-        // Ghidra: const PcodeOp *op = block.getStop();
-        //         ustart = getUIndex(block.getStart());
-        //         ustop  = getUIndex(op);
+        // Ghidra: const PcodeOp *op = block.getStop();   (before setEnd)
+        //         ustart = CoverBlock::getUIndex(block.getStart());
+        //         ustop  = CoverBlock::getUIndex(op);
+        let old_stop = cb.get_stop_id();
         let ustart = cb.start;
         let ustop = cb.end;
-        // Ghidra: if ((ustop != ~0) && (ustop >= ustart)) block.setEnd((PcodeOp*)1);
-        // Fill in to the bottom of the block.
+        // Ghidra: if ((ustop != ~((uintm)0))&&( ustop >= ustart))
+        //           block.setEnd((const PcodeOp *)1); // Fill in to the bottom
+        // A two-piece block (ustop < ustart) is deliberately left untouched:
+        // its wrap-around range already reaches the block bottom.
         if ustop != u32::MAX && ustop >= ustart {
-            cb.set_end(u32::MAX);
+            cb.set_end_id(CoverEndpoint::EndMark);
         }
 
-        // Ghidra: if ((ustop==0) && (block.getStart()==(PcodeOp*)0)) {
-        //           if (op!=0 && op->code()==CPUI_MULTIEQUAL) {
+        // Ghidra: if ((ustop==(uintm)0)&&(block.getStart() == (const PcodeOp *)0)) {
+        //           if ((op != (const PcodeOp *)0)&&(op->code()==CPUI_MULTIEQUAL)) {
         //             for(j=0;j<bl->sizeIn();++j) addRefRecurse(bl->getIn(j));
         //           }
         //         }
         // This block contains only an infinitesimal tip of cover through one
         // branch of a MULTIEQUAL; traverse through the other branches too.
-        if ustop == 0 && ustart == 0 {
-            // We cannot, from the Cover side alone, recover the stop PcodeOp*
-            // to test its opcode. The infinitesimal-tip condition (start==0,
-            // stop==0 with a real MULTIEQUAL def) is exactly the case where a
-            // MULTIEQUAL defined the cover at the block very-beginning; we
-            // conservatively recurse through predecessors whenever the tip
-            // condition holds, matching Ghidra's branch.
-            let preds = Self::predecessors_of(bl);
-            for pred in preds {
-                self.add_ref_recurse(&pred);
+        // start_id is the raw-pointer begin-sentinel test; old_stop carries
+        // the MULTIEQUAL marker identity of the stored stop op.
+        if ustop == 0 && cb.get_start_id() == CoverEndpoint::Begin {
+            if matches!(old_stop, CoverEndpoint::Op { multiequal: true, .. }) {
+                let preds = Self::predecessors_of(bl);
+                for pred in preds {
+                    self.add_ref_recurse(&pred);
+                }
             }
         }
     }
 }
 
 impl fmt::Display for CoverBlock {
-    // Ghidra: cover.hh:36 Cover::fmt
+    // Ghidra: cover.cc:188 CoverBlock::print
+    // RUGRA-GLUE: Ghidra prints the raw SeqNum of a real-op endpoint; the
+    // projection model only keeps the order, so real ops print their decimal
+    // order. Sentinel classification (begin/end) matches print's branches.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ep = |id: CoverEndpoint| -> String {
+            match id {
+                CoverEndpoint::Begin => "begin".to_string(),
+                CoverEndpoint::EndMark => "end".to_string(),
+                CoverEndpoint::InputMark => "begin".to_string(),
+                CoverEndpoint::Op { order, multiequal } => {
+                    if multiequal {
+                        format!("{}(me)", order)
+                    } else {
+                        order.to_string()
+                    }
+                }
+            }
+        };
         if self.empty() {
-            write!(f, "[]")
+            write!(f, "empty")
         } else {
-            write!(f, "[{:x}, {:x}]", self.start, self.end)
+            write!(f, "{}-{}", ep(self.start_id), ep(self.end_id))
         }
     }
 }

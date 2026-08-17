@@ -3726,8 +3726,10 @@ impl Merge {
                     },
                 };
                 let cb = cover.blocks.entry(bi).or_insert_with(CoverBlock::new);
-                cb.start = start;
-                cb.end = end;
+                // Setter form keeps the pointer-identity domain (start_id/
+                // end_id) in sync with the u32 projection fields.
+                cb.set_begin(start);
+                cb.set_end(end);
             }
 
             // NOTE: We intentionally do NOT propagate covers through CFG
@@ -3846,8 +3848,8 @@ fn propagate_cover_through_cfg(cover: &mut Cover, fd: &Funcdata) {
                 .blocks
                 .entry(*succ_idx)
                 .or_insert_with(CoverBlock::new);
-            cb.start = 0;
-            cb.end = u32::MAX;
+            // Full-block fill via the setAll setter (identity domain sync).
+            cb.set_all();
             // This new full-block entry is itself live-out; queue it.
             worklist.push(*succ_idx);
         }
