@@ -1215,3 +1215,15 @@ high 已有 Symbol 时提前返回；`queryProperties(addr,1,usepoint)` 查询�
 在命名期后由 ActionNameVars 刷新与 varmap 符号一致。fixture 新增
 partial_coverage case：4 字节临时@0x70（def pc=函数基址-1）+ 1 字节
 input@0x71 → soff=1、被 namerec 门排除，双侧逐字节一致。
+
+### 2026-08-17：set_arch 绑定 Architecture default model（FUNCPROTO-MODEL-BIND-0001）
+
+- `set_arch` 不再只赋 `arch` 字段——它镜像 Ghidra named ctor 的绑定链
+  （funcdata.cc:48 `glb = scope->getArch()` → funcdata.cc:69
+  `funcp.setScope(localmap, baseaddr-1)` → fspec.cc:3884
+  `if (model == 0) setModel(s->getArch()->defaultfp)`）：当 `funcp` 尚无
+  model 时安装 `Architecture::defaultfp` 的共享 Arc。Rugra 的 Funcdata
+  构造没有 ctor 期 Scope（FUNCDATA-LOCALSCOPE-OWNERSHIP-0001），set_arch
+  即 `glb` 可用时刻。效果：DWARF/PLT locked-prototype overlay 之后不再出现
+  非法 `model_locked && !has_model`；callspec 克隆自 fd.funcp 时携带 model，
+  `FuncCallSpecs::has_effect` 返回 cspec 声明效果而非保守 UnknownEffect。

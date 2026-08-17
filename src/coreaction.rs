@@ -5593,6 +5593,28 @@ impl Action for ActionPrototypeTypes {
         // 3. If output locked: insert return varnodes for each RETURN
         // 4. Else: init active output gathering
 
+        // Step 1 (coreaction.cc:4615-4619, FUNCPROTO-MODEL-BIND-0001):
+        //   ProtoModel *evalfp = data.getArch()->evalfp_current;
+        //   if (evalfp == 0) evalfp = data.getArch()->defaultfp;
+        //   if ((!data.getFuncProto().isModelLocked()) && !hasMatchingModel(evalfp))
+        //     data.getFuncProto().setModel(evalfp);
+        // The locked guard is load-bearing: a model-locked prototype (DWARF/
+        // PLT locked storage) is never overridden by the evaluation model.
+        if let Some(arch) = fd.get_arch() {
+            let evalfp = arch
+                .evalfp_current
+                .clone()
+                .or_else(|| arch.defaultfp.clone());
+            if let Some(evalfp) = evalfp {
+                if !fd.funcp.is_model_locked() {
+                    let matches = fd.funcp.has_matching_model(&evalfp);
+                    if !matches {
+                        fd.funcp.set_model(Some(evalfp));
+                    }
+                }
+            }
+        }
+
         // Step 2: Strip indirect register from RETURN ops
         // (Ghidra coreaction.cc:4628-4635: "Strip the indirect register from
         // all RETURN ops because we don't want to see this compiler mechanism
@@ -5810,26 +5832,79 @@ impl Action for ActionDefaultParams {
     // Ghidra: coreaction.cc:2311 ActionDefaultParams::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDefaultParams::apply (coreaction.cc:2311-2337).
-        // For each call without a model:
-        // 1. If the called function is known (has Funcdata), copy its prototype
-        // 2. Otherwise, set internal with the default model + void type
-        // Then insert any necessary pcode (e.g. extra pop adjustments).
+        // cc:2313-2315: evalfp = evalfp_called, or the default model when the
+        // evaluation option is unset.
+        let evalfp = match fd.get_arch() {
+            Some(arch) => arch
+                .evalfp_called
+                .clone()
+                .or_else(|| arch.defaultfp.clone()),
+            // No Architecture bound (legacy callers): the modelless state is
+            // preserved exactly as before FUNCPROTO-MODEL-BIND-0001.
+            None => None,
+        };
+        // cc:2316-2317: types->getTypeVoid() for the internal store's output.
+        let type_void = match fd.get_arch() {
+            Some(arch) => arch
+                .types
+                .as_ref()
+                .and_then(|factory| factory.read().ok().map(|f| f.get_type_void()))
+                .unwrap_or_else(|| {
+                    crate::type_system::typefactory::TypeFactory::shared_default()
+                        .read()
+                        .expect("shared type factory lock poisoned")
+                        .get_type_void()
+                }),
+            None => std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
+                crate::type_system::datatype::TypeBase::new(
+                    "void".to_string(),
+                    0,
+                    crate::type_system::datatype::TypeMetatype::Void,
+                ),
+            )),
+        };
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
             if let Some(fc) = fd.get_call_specs_mut(i) {
-                if !fc.has_model() {
-                    // No Funcdata lookup available (Rugra doesn't resolve called
-                    // functions to Funcdata objects yet). Assign default calling
-                    // convention.
-                    if fc.prototype.calling_convention == "unknown" {
-                        fc.prototype.calling_convention = "default".to_string();
+                // cc:2318: if (!fc->hasModel()) — the single Ghidra model
+                // field maps to the FuncProto full model that hasEffect/
+                // effect_iter consult.
+                if !fc.prototype.has_model() {
+                    // Rugra cannot resolve fc->getFuncdata() to a per-callee
+                    // Funcdata registry yet, so the cc:2321-2326
+                    // copy-from-callee branch is unreachable and the
+                    // cc:2327-2328 else branch runs for every modelless
+                    // callspec: fc->setInternal(evalfp, void).
+                    //
+                    // Locked-guard (rework of the first WIP): Ghidra's
+                    // modelless callspecs never carry locked storage — a
+                    // platform-locked callee proto arrives WITH a model
+                    // (setPieces model, or an UnknownProtoModel clone of the
+                    // default, architecture.cc:1155-1166) — so setInternal
+                    // never clobbers a locked prototype there. Rugra's
+                    // LibcSignatureTable/DWARF boundary CAN produce a
+                    // modelless + model-locked callspec
+                    // (UNKNOWN-PROTOMODEL-0001 residual): setInternal's
+                    // void-output/store swap would destroy that locked
+                    // storage and return type (integration rework
+                    // regression 2). For those, install ONLY the shared eval
+                    // model — mirroring the UnknownProtoModel behavior clone
+                    // (effects known via the default, locked storage intact)
+                    // — and never run setInternal on a locked prototype.
+                    if fc.prototype.is_model_locked() {
+                        fc.prototype.set_model(evalfp.clone());
+                    } else {
+                        fc.prototype.set_internal(evalfp.clone(), type_void.clone());
                     }
-                    // setInternal equivalent: ensure model is set
+                    // RUGRA-GLUE: dual-model seam — keep the simplified
+                    // type_system model seeded for possible_input_param
+                    // consumers (no Ghidra counterpart: one model field).
                     if fc.proto_model.is_none() {
                         fc.proto_model = Some(crate::type_system::protomodel::ProtoModel::default_x86_64());
                     }
                 }
-                // insertPcode: Rugra doesn't have pcode injection for calls yet
+                // cc:2329 fc->insertPcode(data): callfixup injection for
+                // calls is not wired in Rugra yet (CALLFIXUP-INJECT domain).
             }
         }
         Ok(action_status::NO_CHANGE)
@@ -10204,6 +10279,71 @@ mod tests {
         assert!(fd.funcp.parameters.is_empty());
         assert!(matches!(
             fd.funcp.return_type.as_ref(),
+            crate::type_system::datatype::Datatype::Void(_)
+        ));
+    }
+
+    #[test]
+    fn test_action_default_params_locked_callspec_keeps_storage() {
+        // FUNCPROTO-MODEL-BIND-0001 rework regression 2: a modelless +
+        // model-locked callspec (the LibcSignatureTable/DWARF boundary that
+        // Ghidra represents as an UnknownProtoModel clone) must NOT run the
+        // setInternal void-output swap — only the shared eval model is
+        // installed, so the locked return type and parameters survive.
+        let mut arch = crate::arch::Architecture::new();
+        let mut model = crate::fspec::ProtoModelFull::new(
+            Some(crate::space::AddressSpace::Stack),
+            8,
+        );
+        model.name = "test_default".to_string();
+        model.extrapop = 0;
+        let model = std::sync::Arc::new(model);
+        arch.proto_models.insert("test_default".to_string(), model);
+        arch.set_default_model("test_default");
+
+        let mut fd = Funcdata::new("caller", crate::address::Address::new(0x1000), 0x10);
+        fd.set_arch(std::sync::Arc::new(arch));
+
+        let long_type = std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "long".to_string(),
+                8,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        ));
+        // Locked libc-style callspec: parameters + return locked, modelless.
+        let mut locked_proto = crate::fspec::FuncProto::new("locked_callee".to_string(), long_type.clone());
+        locked_proto.set_input_lock(true);
+        locked_proto.set_output_lock(true);
+        let locked_fc = crate::fspec::FuncCallSpecs::new(
+            crate::address::Address::new(0x2000),
+            locked_proto,
+        );
+        // Unlocked modelless callspec: the plain cc:2327-2328 else branch.
+        let unlocked_fc = crate::fspec::FuncCallSpecs::new(
+            crate::address::Address::new(0x2100),
+            crate::fspec::FuncProto::new(String::new(), long_type.clone()),
+        );
+        fd.callspecs.push(locked_fc);
+        fd.callspecs.push(unlocked_fc);
+
+        let mut action = ActionDefaultParams::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        let locked = &fd.callspecs[0].prototype;
+        assert!(locked.has_model());
+        assert!(locked.is_model_locked());
+        // setInternal must NOT have run: the locked return type survives.
+        assert!(matches!(
+            locked.return_type.as_ref(),
+            crate::type_system::datatype::Datatype::Base(_)
+        ));
+        assert_eq!(locked.get_model_name(), "test_default");
+        let unlocked = &fd.callspecs[1].prototype;
+        assert!(unlocked.has_model());
+        // The unlocked branch DID run setInternal: void default output.
+        assert!(matches!(
+            unlocked.return_type.as_ref(),
             crate::type_system::datatype::Datatype::Void(_)
         ));
     }

@@ -934,6 +934,167 @@ fn elf_symbol_matches(elf: &goblin::elf::Elf, target: &WorkerTarget) -> bool {
     })
 }
 
+// FUNCPROTO-MODEL-BIND-0001: locked x86-64 address-space facts shared by the
+// spec host (index-ordered like the oracle's AddrSpaceManager enumeration —
+// only name/highest are consulted by the parse).
+const SPEC_SPACES: [(&str, u64); 9] = [
+    ("const", u64::MAX),
+    ("OTHER", u64::MAX),
+    ("unique", 0xffff_ffff),
+    ("ram", u64::MAX),
+    ("register", 0xffff_ffff),
+    ("fspec", u64::MAX),
+    ("iop", u64::MAX),
+    ("join", 0xffff_ffff),
+    ("stack", u64::MAX),
+];
+
+// FUNCPROTO-MODEL-BIND-0001: `Translate::getUniqueStart(Translate::INJECT)`
+// for the locked x86-64 .sla (0x200 + the .sla unique base; verified against
+// the locked oracle run in the cspec text-ingest fixture).
+const SPEC_UNIQUE_INJECT_BASE: u64 = 0x364_400;
+
+// FUNCPROTO-MODEL-BIND-0001: language host for the worker-side compiler-spec
+// parse — registers from the real .sla, spaces from the locked table.
+struct WorkerSpecHost {
+    registers: HashMap<String, rugra::fspec::VarnodeData>,
+}
+
+fn spec_space_by_name(name: &str) -> Option<rugra::space::AddressSpace> {
+    use rugra::space::AddressSpace;
+    match name {
+        "ram" => Some(AddressSpace::Ram),
+        "stack" => Some(AddressSpace::Stack),
+        "register" => Some(AddressSpace::Register),
+        "OTHER" | "other" => Some(AddressSpace::Other(1)),
+        "unique" => Some(AddressSpace::Unique),
+        "const" => Some(AddressSpace::Const),
+        _ => None,
+    }
+}
+
+impl rugra::arch::SpecQuery for WorkerSpecHost {
+    fn get_register(&self, name: &str) -> Option<rugra::fspec::VarnodeData> {
+        self.registers.get(name).copied()
+    }
+    fn space_by_name(&self, name: &str) -> Option<rugra::space::AddressSpace> {
+        spec_space_by_name(name)
+    }
+    fn space_highest(&self, spc: rugra::space::AddressSpace) -> u64 {
+        let name = match spc {
+            rugra::space::AddressSpace::Const => "const",
+            rugra::space::AddressSpace::Other(_) => "OTHER",
+            rugra::space::AddressSpace::Unique => "unique",
+            rugra::space::AddressSpace::Ram => "ram",
+            rugra::space::AddressSpace::Register => "register",
+            rugra::space::AddressSpace::Stack => "stack",
+            rugra::space::AddressSpace::Iop => "iop",
+            rugra::space::AddressSpace::Join => "join",
+            rugra::space::AddressSpace::Overlay => "OTHER",
+        };
+        SPEC_SPACES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, highest)| *highest)
+            .unwrap_or(u64::MAX)
+    }
+    fn unique_inject_base(&self) -> u64 {
+        SPEC_UNIQUE_INJECT_BASE
+    }
+}
+
+impl rugra::pcodeparse::SleighSymbolLookup for WorkerSpecHost {
+    fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
+        self.registers.get(name).map(|vd| rugra::pcodeparse::SleighSymbol {
+            name: name.to_string(),
+            kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
+                space: vd.space,
+                offset: vd.offset,
+                size: vd.size.max(0) as usize,
+            }),
+        })
+    }
+}
+
+// FUNCPROTO-MODEL-BIND-0001: worker-local Architecture built from the locked
+// production compiler spec.  Ghidra's BfdArchitecture::init completes
+// (Architecture::parseCompilerConfig establishes `defaultfp`,
+// architecture.cc:1239-1351, with the "No default prototype specified" guard
+// at cc:1337-1341) before any Funcdata is constructed, so the named-ctor
+// chain `Funcdata::Funcdata -> funcp.setScope -> setModel(defaultfp)`
+// (funcdata.cc:48-69, fspec.cc:3879-3884) always observes a resolved model.
+// The worker mirrors that ordering: the Architecture is built once per
+// worker process and attached to the Funcdata before any prototype overlay
+// (DWARF/PLT) can lock a modelless prototype.
+// CURL-CSPEC-SNAPSHOT-0001 residual: the spec bytes are read from the
+// process cwd (`sleigh_specs/x86-64-gcc.cspec`, same convention as the
+// default SLEIGH asset path) instead of being carried and
+// fingerprint-verified inside the worker request.
+fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+    static CACHE: std::sync::OnceLock<
+        Result<std::sync::Arc<rugra::arch::Architecture>, String>,
+    > = std::sync::OnceLock::new();
+    match CACHE.get_or_init(|| {
+        let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
+            .map_err(|error| format!("unable to read compiler spec: {error}"))?;
+        let sleigh = rugra::sleigh_ffi::SleighCtx::new()
+            .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
+        let mut registers = HashMap::new();
+        for index in 0..sleigh.num_registers() {
+            let Some((name, space, offset, size)) = sleigh.register_info(index) else {
+                continue;
+            };
+            let Ok(space_id) = u8::try_from(space) else {
+                continue;
+            };
+            registers.insert(
+                name.to_string(),
+                rugra::fspec::VarnodeData {
+                    space: rugra::space::AddressSpace::from_id(space_id),
+                    offset,
+                    size,
+                },
+            );
+        }
+        let host = Arc::new(WorkerSpecHost { registers });
+        let mut store = rugra::marshal::DocumentStorage::new();
+        let doc = store
+            .parse_document(&cspec_bytes)
+            .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+        let root = doc
+            .root
+            .clone()
+            .ok_or_else(|| "compiler spec has no root element".to_string())?;
+        if root
+            .read()
+            .map_err(|_| "compiler spec element lock poisoned".to_string())?
+            .name
+            != "compiler_spec"
+        {
+            return Err("compiler spec root is not compiler_spec".to_string());
+        }
+        store.register_tag(&root);
+        let mut arch = rugra::arch::Architecture::new();
+        arch.archid = "x86:LE:64:default".to_string();
+        let mut inject_lib =
+            rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
+        inject_lib.set_sleigh_lookup(host.clone());
+        arch.pcodeinjectlib = Some(Arc::new(std::sync::RwLock::new(inject_lib)));
+        arch.userops = Some(Arc::new(std::sync::RwLock::new(
+            rugra::userop::UserOpManage::new(),
+        )));
+        arch.parse_compiler_config(&mut store, host.as_ref(), 8)
+            .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+        if arch.defaultfp.is_none() {
+            return Err("No default prototype specified".to_string());
+        }
+        Ok(Arc::new(arch))
+    }) {
+        Ok(arch) => Ok(arch.clone()),
+        Err(message) => Err(message.clone()),
+    }
+}
+
 // RUGRA-GLUE: reconstructs the original per-function prototype pre-pass inside the cancellable worker.
 fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> {
     let obj = Object::parse(&request.binary_image)
@@ -977,6 +1138,10 @@ fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> 
     }
 
     let mut fd = Funcdata::new(&target.name, Address::new(target.vaddr), target.size as i32);
+    // FUNCPROTO-MODEL-BIND-0001: attach the worker-local Architecture before
+    // any analysis — the named-ctor model binding (FuncProto::setScope ->
+    // setModel(defaultfp)) rides on it.
+    fd.set_arch(worker_architecture()?);
     fd.inject_raw_ops(&raw_ops);
     fd.run_heritage_direct();
     use rugra::action::Action;
@@ -1049,6 +1214,11 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let func_size =
         i32::try_from(target.size).map_err(|_| format!("function {} is too large", target.name))?;
     let mut fd = Funcdata::new(&target.name, Address::new(target.vaddr), func_size);
+    // FUNCPROTO-MODEL-BIND-0001: attach the worker-local Architecture before
+    // the DWARF/PLT prototype overlays below — the named-ctor model binding
+    // (FuncProto::setScope -> setModel(defaultfp)) rides on it, so an overlay
+    // can lock the prototype only after a model is in place.
+    fd.set_arch(worker_architecture()?);
     // Seed the symbol table before prototype application so the PLT-import
     // boundary below can resolve the target's own address.
     for (address, name) in &request.symbol_entries {

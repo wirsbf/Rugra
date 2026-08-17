@@ -1989,6 +1989,40 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "funcproto_model_bind_1204",
+   "description": "Funcdata/FuncProto prototype-model binding chain observations",
+   "runner": [
+    "tools/run_funcproto_model_bind_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/funcproto_model_bind_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/funcproto_model_bind_1204.cc",
+     "rust_fixture": "tests/oracle/funcproto_model_bind_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_funcproto_model_bind_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/funcdata.rs",
+     "src/fspec.rs",
+     "src/coreaction.rs",
+     "examples/curl_decompile.rs",
+     "tests/oracle/funcproto_model_bind_1204.*",
+     "tools/run_funcproto_model_bind_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

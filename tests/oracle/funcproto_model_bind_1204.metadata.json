@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "fixture_id": "FUNCPROTO-MODEL-BIND-0001",
+  "title": "Prototype-model binding chain parity (named Funcdata ctor / overlay lock / callspec setInternal / hasEffect)",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "entry": "BfdArchitecture::init -> Scope::addFunction -> FunctionSymbol::getFunction -> Funcdata ctor / FuncCallSpecs ctor (real spec-dir scan of x86-64-gcc.cspec)"
+  },
+  "architecture": "x86:LE:64:default (SLEIGH x86-64)",
+  "compiler_spec": "x86-64-gcc.cspec (production bytes)",
+  "analysis_options": "default BfdArchitecture target=default; no option overrides; evalfp_current/evalfp_called unset (option database defaults)",
+  "input_fingerprints": {
+    "x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "curl": "pinned from locked base examples/curl"
+  },
+  "comparand": {
+    "rugra_base_commit": "ee71076f367f946123982d5d6cae2b2a8abb5025",
+    "rugra_base_tree": "6bdb0954413f9fcb5091e7a73599a2249f58f9f5",
+    "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
+    "overlay_paths": [
+      "src/funcdata.rs",
+      "src/fspec.rs",
+      "src/coreaction.rs",
+      "docs/api/funcdata.md",
+      "docs/api/fspec.md",
+      "docs/api/coreaction.md",
+      "examples/curl_decompile.rs",
+      "tests/oracle/funcproto_model_bind_1204.cc",
+      "tests/oracle/funcproto_model_bind_1204.rs",
+      "tests/oracle/funcproto_model_bind_1204.metadata.json",
+      "tools/run_funcproto_model_bind_oracle.sh"
+    ],
+    "cpp_fixture_sha256": "de5139b1a2a978cf25e65a74188356e2d448e7d5aa1db132787efbe50b6143b8",
+    "rust_fixture_sha256": "bf3983a98809174e756968386a03eb117b00329a3f36c7a93c0f8c8308aa7264",
+    "funcdata_rs_sha256": "3d42ea81a6a87ba46ca4e53f29295acaa780903fb64a9cf13ab8930bd2f7a9e5",
+    "fspec_rs_sha256": "796ae0142c157ed1bf939da2b902c26c1bd3df6ffdbddc99c2e6677c079f7cfd",
+    "coreaction_rs_sha256": "39089bd73aebefbadbb553917cbe9168966f330a52aefdfadb38b3e11b72de38",
+    "funcdata_doc_sha256": "169af3876f83adefd098b47ea60a4b1644e04c963d3781b5db54851632d50cef",
+    "fspec_doc_sha256": "a8fdefdad8e6e664be5970dbeb903e9cd53ec60101a46e1a96c9a5320009ca1d",
+    "coreaction_doc_sha256": "93dd7ef9233d604dc1ffb4ce7d5ba8aef2b54532a5d297c9f48a1d317eadf854",
+    "example_sha256": "88286ef0f37cac2792907a0106269f262cc59c78155165057175af0d049834ab",
+    "runner_sha256": "1fc067fc1e80dd3cf8d52dbf06a07683b9433bc45ba3104191f36347b980cd03",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+  },
+  "host_tools": {
+    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "cxx_target": "x86_64-linux-gnu",
+    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "cc_target": "x86_64-linux-gnu",
+    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
+    "make": "GNU Make 4.3",
+    "python": "Python 3.10.12",
+    "git": "git version 2.34.1",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
+  },
+  "build": {
+    "registry_packages": 164
+  },
+  "coverage": {
+    "model_bind_status": "MATCH",
+    "record_counts": {
+      "SCHEMA": 1,
+      "ARCH_DEFAULTFP": 1,
+      "ARCH_DEFAULTFP_EXTRAPOP": 1,
+      "THISCALL_ALIAS": 1,
+      "PRINTFLAG": 4,
+      "CTOR_BIND": 1,
+      "OVERLAY_LOCK": 1,
+      "CTOR_UNNAMED": 1,
+      "PROTOTYPE_TYPES_BIND": 1,
+      "CALLSPEC_PRE": 1,
+      "CALLSPEC_POST": 1,
+      "EFFECT": 6,
+      "CALLSPEC_REBIND": 1,
+      "DONE": 1
+    },
+    "observations": [
+      "ARCH_DEFAULTFP: parseCompilerConfig resolves the default model (__stdcall, extrapop 8) and the __thiscall alias clone (architecture.cc:1337-1347)",
+      "CTOR_BIND: the named Funcdata constructor binds the default model immediately with pointer identity (Scope::addFunction -> FunctionSymbol::getFunction -> funcp.setScope, funcdata.cc:48-69, fspec.cc:3879-3884)",
+      "OVERLAY_LOCK: the external locked-prototype overlay (input/output/model locks) observes the model already bound — never modellocked-without-model",
+      "CTOR_UNNAMED: the unnamed ctor path (funcdata.cc:55-56) keeps a null model",
+      "PRINTFLAG: setDefaultModel print-flag side effect (architecture.cc:323-330, rework regression 1) — the resolved default is forced not to print, a non-default model keeps the constructor default (true), and re-defaulting flips the previous back to true / the new one to false",
+      "PROTOTYPE_TYPES_BIND: the ActionPrototypeTypes tail (coreaction.cc:4615-4619) binds evalfp_current ?: defaultfp to the unlocked unnamed prototype",
+      "CALLSPEC_PRE/POST: a fresh FuncCallSpecs is modelless; the ActionDefaultParams else-branch setInternal(evalfp, void) (coreaction.cc:2327-2328, fspec.cc:3891-3898) installs the shared default model",
+      "EFFECT: post-binding hasEffect (fspec.cc:4234) answers with the cspec-declared effects: RAX killedbycall, RBX/RSP unaffected, RCX unknown (unlisted), stack:0 return_address (fspec.cc:2689 injection), stack:0x100 unknown",
+      "CALLSPEC_REBIND: a bound-then-locked callspec survives a second ActionDefaultParams pass untouched (outer hasModel guard, coreaction.cc:2318, and the !isModelLocked setModel guard, cc:2325 — rework regression 2)"
+    ]
+  },
+  "residuals": [
+    {
+      "id": "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
+      "status": "MISMATCH",
+      "note": "Rugra's Funcdata has no constructor-time Scope, so the setScope model binding is ported onto set_arch (the glb-availability seam); the ScopeLocal attach/identity itself is owned by that TODO"
+    },
+    {
+      "id": "UNKNOWN-PROTOMODEL-0001",
+      "status": "MISMATCH",
+      "note": "Ghidra wraps unrecognized convention names in UnknownProtoModel (clones default behavior, isUnknown=true); Rugra keeps PLT-locked protos modelless with the 'unknown' name sentinel (warning parity preserved); callspec consumers reach the default effects via ActionDefaultParams instead"
+    },
+    {
+      "id": "CALLSPEC-COPY-0001",
+      "status": "UNTESTED",
+      "note": "the cc:2321-2326 copy-from-callee Funcdata branch of ActionDefaultParams is unreachable in Rugra (no per-callee Funcdata registry)"
+    },
+    {
+      "id": "CALLFIXUP-INJECT-0001",
+      "status": "UNTESTED",
+      "note": "fc->insertPcode (cc:2329) callfixup injection for calls is not wired in Rugra"
+    },
+    {
+      "id": "PROTOSTORE-SYMBOL-0001",
+      "status": "UNTESTED",
+      "note": "setInternal's ProtoStoreInternal swap is modeled only by the void return-type observable; the store system itself is owned by the PROTOSTORE TODO"
+    }
+  ],
+  "locked_capture": {
+    "records": 22,
+    "bytes": 460,
+    "stdout_sha256": "7c7be18ed21a903efbbbe1daff0fa69b7d02bafc8df92cd0f968ab4a0dede8a3",
+    "note": "re-pinned after the rework probes (PRINTFLAG x4 + CALLSPEC_REBIND) at base ee71076"
+  }
+}

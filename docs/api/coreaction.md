@@ -1014,3 +1014,35 @@ variable.cc:737-745 会被 linkSymbol）。内联 makeRec 对照 cc:2815-2850 �
 vn/param 尺寸门、implied+written 的 CAST 展开（vn→def->getIn(0)，类型置
 None 降优先）、重复 high 的 tie-break 用 `Datatype::type_order`（旧类型更
 specific 则保留），rec_map 值扩为 (name, Option<Datatype>)。
+
+### 2026-08-17：ActionDefaultParams 逐字镜像 model 绑定（FUNCPROTO-MODEL-BIND-0001）
+
+- `ActionDefaultParams::apply` 对齐 coreaction.cc:2311-2337：
+  `evalfp = arch.evalfp_called ?: arch.defaultfp`（cc:2313-2315）；对每个
+  `!fc.prototype.has_model()` 的 callspec 走 cc:2327-2328 else 分支
+  `fc->setInternal(evalfp, types->getTypeVoid())`（Rugra 无法解析
+  per-callee Funcdata，copy 分支不可达）；`fc->insertPcode` 的 callfixup
+  注入仍缺（CALLFIXUP 域）。删除旧 "unknown→default" calling_convention
+  字符串种子——模型名由 `set_model` 从真实模型取（`__stdcall`）。
+  RUGRA-GLUE：简化 `proto_model`（type_system）种子保留给
+  `possible_input_param` 消费者（Ghidra 单 model 字段无双轨）。
+  生产效果：callspec `has_effect` 从恒 UnknownEffect 变为 cspec 声明效果，
+  guardCalls 的 INDIRECT 风暴（main pass0=13,462）消退。
+
+### 2026-08-17（r2 返工）：locked 守卫 + ActionPrototypeTypes 绑定尾（FUNCPROTO-MODEL-BIND-0001）
+
+- 集成复测两回归的返工：①`ActionDefaultParams::apply` 对 modelless +
+  model-locked callspec（LibcSignatureTable/DWARF 边界，Ghidra 对应
+  UnknownProtoModel 克隆，architecture.cc:1155-1166）不再走 setInternal 的
+  void 输出/store 交换——只安装共享 eval model（行为克隆等价，锁定
+  storage/返回类型保全）；未锁 callspec 仍走 cc:2327-2328 setInternal。
+  ②`ActionPrototypeTypes::apply` 补 cc:4615-4619 绑定尾：
+  `evalfp = evalfp_current ?: defaultfp`；`!isModelLocked() &&
+  !hasMatchingModel(evalfp)` 才 setModel——locked 守卫逐字。配套
+  `FuncProto::has_matching_model`（fspec.hh:1391 指针相等 → Arc::ptr_eq）。
+  新增单测 `test_action_default_params_locked_callspec_keeps_storage`
+  （locked 保 storage/返回类型、unlocked 走 void 交换）。
+- fixture 新观察点（双侧 oracle 验证）：PRINTFLAG×4（setDefaultModel
+  副作用 architecture.cc:323-330——默认强制不打印、非默认 true、换默认后
+  旧恢复 true）与 CALLSPEC_REBIND（绑定后锁定的 callspec 二过
+  ActionDefaultParams 不被触碰）。

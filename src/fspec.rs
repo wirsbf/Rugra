@@ -511,9 +511,18 @@ impl FuncProto {
     // locked differential fixture without leaking the stored Arc.
     pub fn shares_model_with(&self, other: &FuncProto) -> bool {
         match (&self.model, &other.model) {
-            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (Some(left), (Some(right))) => Arc::ptr_eq(left, right),
             _ => false,
         }
+    }
+
+    // Ghidra: fspec.hh:1391 FuncProto::hasMatchingModel
+    /// Does \b this use the given shared model? Faithful inline accessor
+    /// `hasMatchingModel` (fspec.hh:1391): `(model == op2)` pointer
+    /// equality, consumed by the ActionPrototypeTypes bind guard
+    /// (coreaction.cc:4617) and ActionDefaultParams (coreaction.cc:2325).
+    pub fn has_matching_model(&self, op2: &Arc<ProtoModelFull>) -> bool {
+        self.model.as_ref().is_some_and(|m| Arc::ptr_eq(m, op2))
     }
 
     // Ghidra: fspec.cc:3778 FuncProto::addEffect
@@ -787,9 +796,19 @@ impl FuncProto {
     }
 
     // Ghidra: fspec.cc:3891 FuncProto::setInternal
-    /// Set up an internal prototype (no scope, no model).
-    pub fn set_internal(&mut self, _model: Option<Arc<crate::type_system::protomodel::ProtoModel>>, vt: Arc<Datatype>) {
+    /// Set up an internal prototype. Faithful to `setInternal`
+    /// (fspec.cc:3891-3898): the output/parameter backing switches to the
+    /// internal store (Rugra models only the store's void output flavor as
+    /// `return_type`, PROTOSTORE-SYMBOL-0001 owns the store itself) and the
+    /// model is installed only when there is none yet — the exact
+    /// `if (model == (ProtoModel *)0) setModel(m)` guard, so a previously
+    /// bound model (e.g. the Architecture default bound via the Funcdata
+    /// construction chain) is never replaced by a later internal setup.
+    pub fn set_internal(&mut self, model: Option<Arc<ProtoModelFull>>, vt: Arc<Datatype>) {
         self.return_type = vt;
+        if self.model.is_none() {
+            self.set_model(model);
+        }
     }
 
     // Ghidra: fspec.cc:3572 FuncProto::updateThisPointer
@@ -844,14 +863,17 @@ impl FuncProto {
     // Ghidra: fspec.hh:1395 FuncProto::printModelInDecl
     /// Return true if the model name should be printed in declarations.
     /// Faithful to `FuncProto::printModelInDecl()` (fspec.hh:1395), which
-    /// delegates to `model->printInDecl()` (fspec.hh:981, returns `isPrinted`).
-    /// Unknown models have `isPrinted=false`, so their name is never printed.
-    /// For known models, Rugra conservatively returns true (matching Ghidra's
-    /// default for non-unknown models where `isPrinted` is set during model
-    /// loading). This guards the `option_convention` branch in
+    /// delegates to the model's own `printInDecl()` flag (fspec.hh:981).
+    /// `Architecture::setDefaultModel` flips the previous default to true and
+    /// the newly selected default to false (architecture.cc:326-329), so the
+    /// resolved default model is NOT printed in declarations; only models
+    /// explicitly marked (e.g. via `<prototype>` decode or the __thiscall
+    /// alias clone) print. A modelless prototype (pre-binding legacy
+    /// callers) never reaches Ghidra's print stage; Rugra keeps the
+    /// historical false. This guards the `option_convention` branch in
     /// `emit_function_declaration` (printc.cc:2583-2589).
     pub fn print_model_in_decl(&self) -> bool {
-        !self.is_model_unknown()
+        self.model.as_ref().is_some_and(|model| model.print_in_decl())
     }
 
     // Ghidra: fspec.cc:4052 FuncProto::updateInputTypes

@@ -891,9 +891,22 @@ impl Funcdata {
     pub fn get_arch(&self) -> Option<&Arc<crate::arch::Architecture>> {
         self.arch.as_ref()
     }
-    // Ghidra: funcdata.cc:34 Funcdata::setArch
-    /// Set the Architecture reference (Ghidra sets it in the ctor from scope).
+    // RUGRA-GLUE: Rust ownership seam for the Architecture reference Ghidra's
+    // Funcdata constructor obtains from its Scope (`glb = scope->getArch()`,
+    // funcdata.cc:48). Rugra's Funcdata has no constructor-time Scope yet
+    // (FUNCDATA-LOCALSCOPE-OWNERSHIP-0001), so `set_arch` is the moment `glb`
+    // becomes available and must also run the constructor's model-binding
+    // tail: funcdata.cc:69 `funcp.setScope(localmap,baseaddr+ -1)` ->
+    // fspec.cc:3884 `if (model == (ProtoModel *)0) setModel(s->getArch()->defaultfp)`.
+    /// Set the Architecture reference and bind the Architecture's resolved
+    /// default prototype model into `funcp` when no model is bound yet —
+    /// mirroring the named-ctor chain so a later locked-prototype overlay
+    /// (DWARF/PLT) can never observe `model_locked && !has_model`.
     pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
+        // Ghidra: fspec.cc:3879 FuncProto::setScope (model-binding tail)
+        if !self.funcp.has_model() {
+            self.funcp.set_model(arch.get_default_model().cloned());
+        }
         self.arch = Some(arch);
     }
 

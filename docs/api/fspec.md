@@ -392,3 +392,29 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
 为 parse_compiler_config 路径传真值。另新增
 `get_alias_parent_marker`/`set_alias_parent_marker`（Ghidra
 `getAliasParent()`/copy-ctor `compatModel` 的 Some/None 可观测面）。
+
+### 2026-08-17：setInternal 签名对齐（FUNCPROTO-MODEL-BIND-0001）
+
+- `set_internal(&mut self, model: Option<Arc<ProtoModelFull>>, vt)`——参数从
+  简化 `type_system::protomodel::ProtoModel` 改为完整 `ProtoModelFull`，并
+  逐字对齐 fspec.cc:3891-3898：`return_type = vt`（内部 store 的 void 输出
+  可观测面，store 本体属 PROTOSTORE-SYMBOL-0001）+ `if (model == None)
+  set_model(model)` 守卫——已绑定 model（如 set_arch 链安装的 defaultfp）
+  不被后续 internal setup 覆盖。零调用者受签名影响（此前无生产调用点）。
+
+### 2026-08-17（续）：print_model_in_decl 修复为模型自有 flag（FUNCPROTO-MODEL-BIND-0001）
+
+- `print_model_in_decl()` 原实现 `!is_model_unknown()` 是字符串哨兵简化——
+  model 绑定后会把 `__stdcall` 打进所有声明（golden 为 0 处）。修复为
+  fspec.hh:1395 的 `model->printInDecl()` 委托：`setDefaultModel` 将旧默认
+  置 true、新默认置 false（architecture.cc:326-329，Rugra `set_default_model`
+  已实现同一翻转），别名 clone（copy-ctor `isPrinted=true` 不继承，
+  fspec.cc:2360-2366）保持打印。modelless（PLT 锁定路径）保持 false，
+  `is_model_unknown` 哨兵语义（"Unknown calling convention" golden warning）
+  不受影响。
+
+### 2026-08-17（r2 返工）：has_matching_model（FUNCPROTO-MODEL-BIND-0001）
+
+- `FuncProto::has_matching_model(&Arc<ProtoModelFull>)`——逐字移植
+  fspec.hh:1391 内联 `(model == op2)` 指针相等，供 ActionPrototypeTypes
+  绑定守卫（coreaction.cc:4617）与 ActionDefaultParams（cc:2325）消费。
