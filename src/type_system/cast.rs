@@ -78,22 +78,47 @@ impl CastStrategyC {
     }
     // Ghidra: cast.cc:411 CastStrategyC::isSubpieceCast
     /// Check if a SUBPIECE op should be rendered as a cast.
-    /// Faithful to Ghidra CastStrategyC::isSubpieceCast (cast.cc:411).
+    /// Faithful to Ghidra CastStrategyC::isSubpieceCast (cast.cc:411-432):
+    ///
+    /// ```text
+    /// if (offset != 0) return false;
+    /// type_metatype inmeta = intype->getMetatype();
+    /// if (inmeta!=TYPE_INT && inmeta!=TYPE_UINT && inmeta!=TYPE_UNKNOWN && inmeta!=TYPE_PTR &&
+    ///     inmeta!=TYPE_PARTIALSTRUCT && inmeta!=TYPE_PARTIALUNION)
+    ///   return false;
+    /// ```
+    ///
+    /// The input whitelist carries the PartialStruct/PartialUnion arms
+    /// (cast.cc:417, PRINTC-SUBPIECE-FIELDEXTRACT-0001 gap (c)).
+    ///
+    /// Enum mapping note: Ghidra `TypeEnum` constructors (type.hh:489-494)
+    /// normalize the stored metatype to TYPE_INT/TYPE_UINT
+    /// (`metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT`), so a Ghidra
+    /// TypeEnum input/output passes these whitelists as UINT/INT. Rugra's
+    /// `TypeMetatype::Enum` is that same TypeEnum surface (it keeps its own
+    /// tag), so `Enum` is listed in both whitelists and in the PTR->int
+    /// special case to preserve the observable decision — same convention as
+    /// `check_int_promotion_for_extension/compare` above (cast.rs:186/197).
     pub fn is_subpiece_cast(&self, out_type: &Datatype, in_type: &Datatype, offset: u32) -> bool {
         if offset != 0 { return false; }
+        // cast.cc:415-418: input metatype whitelist.
         let in_meta = in_type.get_metatype();
         if !matches!(in_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
-            | TypeMetatype::Pointer)
+            | TypeMetatype::Pointer | TypeMetatype::PartialStruct | TypeMetatype::PartialUnion
+            | TypeMetatype::Enum)
         { return false; }
+        // cast.cc:419-422: output metatype whitelist.
         let out_meta = out_type.get_metatype();
         if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
-            | TypeMetatype::Pointer | TypeMetatype::Float)
+            | TypeMetatype::Pointer | TypeMetatype::Float | TypeMetatype::Enum)
         { return false; }
+        // cast.cc:423-430: pointer-input special cases.
         if in_meta == TypeMetatype::Pointer {
             if out_meta == TypeMetatype::Pointer {
                 if out_type.get_size() < in_type.get_size() { return true; }
             }
-            if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint) { return false; }
+            if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint
+                | TypeMetatype::Enum) { return false; }
         }
         true
     }
@@ -351,6 +376,49 @@ mod tests {
         assert!(s.is_subpiece_cast(&int4, &int8, 0));
         // offset != 0 → not a cast
         assert!(!s.is_subpiece_cast(&int4, &int8, 4));
+    }
+
+    // Ghidra: cast.cc:413-418 — PartialStruct/PartialUnion input arms.
+    #[test]
+    fn test_is_subpiece_cast_partial_inputs() {
+        use crate::type_system::datatype::{TypePartialStruct, TypePartialUnion, TypeStruct, TypeUnion};
+        let s = CastStrategyC::new(4);
+        let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        let int8 = Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int));
+        let struct8 = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("pair".into(), 8, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let union8 = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("alt".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        }));
+        let ps = Datatype::PartialStruct(TypePartialStruct::new(struct8.clone(), 4, 4, None));
+        let pu = Datatype::PartialUnion(TypePartialUnion::new(union8, 0, 4, None));
+        // cast.cc:417: TYPE_PARTIALSTRUCT input at offset 0 → cast.
+        assert!(s.is_subpiece_cast(&int4, &ps, 0));
+        // cast.cc:417: TYPE_PARTIALUNION input at offset 0 → cast.
+        assert!(s.is_subpiece_cast(&int4, &pu, 0));
+        // offset != 0 still rejects partial inputs (cast.cc:414).
+        assert!(!s.is_subpiece_cast(&int4, &ps, 4));
+        assert!(!s.is_subpiece_cast(&int4, &pu, 2));
+        // PartialStruct output is NOT whitelisted (cast.cc:419-422).
+        assert!(!s.is_subpiece_cast(&ps, &int8, 0));
+        // Struct input is NOT whitelisted (cast.cc:416).
+        assert!(!s.is_subpiece_cast(&int4, struct8.as_ref(), 0));
+    }
+
+    // Ghidra: type.hh:489-494 TypeEnum ctor normalizes metatype to INT/UINT,
+    // so a Ghidra enum passes the cast.cc:416 whitelist as UINT/INT; Rugra's
+    // TypeMetatype::Enum is that same surface (see is_subpiece_cast doc).
+    #[test]
+    fn test_is_subpiece_cast_enum_mapping() {
+        let s = CastStrategyC::new(4);
+        let enum4 = Datatype::Base(TypeBase::new("mode".into(), 4, TypeMetatype::Enum));
+        let int8 = Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int));
+        let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        assert!(s.is_subpiece_cast(&int4, &enum4, 0));
+        assert!(s.is_subpiece_cast(&enum4, &int8, 0));
     }
 
     #[test]

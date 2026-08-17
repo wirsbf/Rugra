@@ -258,6 +258,19 @@ printc.cc:2260/2518/2497）：
 - **F2 附带注释修正**：`build_rpn_token_table` hidden 项 "precedence 70 (looser than function_call's 66…)" → "tighter"（高 precedence=绑更紧；70>66 使父 function_call 走 `topToken->prec < op2->prec` 免括号），并补全 parent 侧由 hiddenfunction 分支经祖父 token 决定的表述。
 - **F3 markup 对齐**：`rpn_op_func` name atom 由 `FuncnameColor + op_index=-1` 改为 `NoColor + op 锚`（printc.cc:428-431 "don't markup the name as a normal function call"，`pushAtom(Atom(nm,optoken,EmitMarkup::no_color,op))`）。纯 markup 变更，无文本输出影响（text emitter 忽略颜色与锚）。
 
+### PRINTC-SUBPIECE-FIELDEXTRACT-0001 三缺口实现收口（2026-08-17）
+
+- **缺口 (a) RPN `opSubpiece` 字段抽取体（printc.cc:846-871）**：`dispatch_op_rpn` 的 `CPUI_SUBPIECE` 臂补齐 oracle 两臂——
+  - 臂 (a)（printc.cc:853-861）：`vn.is_explicit()` 且 high 带 Symbol 时走 `rpn_push_partial_symbol`（`PrintC::pushPartialSymbol` printc.cc:1947-2065 的 RPN 全量移植）：从 **symbol 的类型**（非 facing 类型）出发的 bottom-up walk（STRUCT→`find_truncation` 字段下降 + object_member 条目；ARRAY→`array_get_sub_entry` 元素下降 + subscript 条目；UNION→无缓存解析时 break；其他 metatype→allowCast 的 `is_subpiece_cast_endian` 截断 cast；全部失败→`unnamedField(off,sz)`=`_off_sz_` 合成条目，printlanguage.cc:719-727），发射顺序 = finalcast 前缀 + 条目 token 逆序 + 基符号 atom + 条目 atom 正序（printc.cc:2044-2064）。`suboff>0` 时 `byteOff += suboff`；`slot = needs_resolution ? 1 : 0`（人工 slot）。
+  - 臂 (b)（printc.cc:862-868）：无符号/非 explicit vn 时 `find_truncation(byteOff, outSize)`（slot=1）返回 `offset==0` 的形式字段 → `pushOp(object_member) + pushVn + Atom(field.name, fieldtoken)`。
+  - `byteOff` 来自 `compute_byte_offset_for_composite`（typeop.cc:2195-2207 的忠实移植，含 big-endian 臂 `vn.size - outsize - lsb`）。
+  - token 表新增 `subscript`（`[`/`]` postsurround prec 66，printc.cc:27，index 9；binary 块基址 9→10）。
+  - 新公开入口 `op_subpiece_rpn`（镜像 Ghidra public virtual `PrintC::opSubpiece` printc.hh:334）供 oracle fixture 做 op 级观测；`cast_strategy` 字段转 pub（镜像 `PrintLanguage::getCastStrategy` printlanguage.hh:449）。legacy 直发 `op_subpiece` 同步补两臂（经 `push_partial_symbol`/`find_truncation`），并修正其合成字段名 `.field_X_Y`→`._X_Y_`（unnamedField 格式）。
+- **缺口 (b) `is_piece_structured` 宽度（type.hh:929）**：见 docs/api/type_system/datatype.md——匹配集扩为 {Struct, Union, Array, PartialStruct, PartialUnion}；oracle 实测证实 enum/partialenum 因 TypeEnum 构造器 metatype 归一化（type.hh:489-494）报告 TYPE_UINT/TYPE_INT，**不属于** piece-structured（"含 enum" 的直觉表述被真 oracle 输出纠正）。
+- **缺口 (c) `is_subpiece_cast` PartialStruct/PartialUnion 输入臂（cast.cc:413-418）**：见 docs/api/type_system/cast.md；附带 enum 输入/输出映射（Ghidra TypeEnum 归一化后以 UINT/INT 通过白名单，cast.rs 既有先例 186/197 行同约定）。
+- **fixture**：`tests/oracle/printc_subpiece_fieldextract_1204.{cc,rs,metadata.json}` + `tools/run_printc_subpiece_fieldextract_oracle.sh`——22 条记录（10 piece sweep + 8 cast sweep + armA.field=`S.hi`/armA.array=`A.arr[0]`/armA.synthetic=`Y._2_4_`/armB.field=`B.lo`）与锁定 12.0.4 oracle **逐字节一致**（runner 输出 `records=22 MATCH`）。C++ 侧为真 Funcdata 图（type-locked ScopeLocal 符号 + `opMarkSpecialPrint`）；Rust 侧经 `op_subpiece_rpn` 同图构造。
+- **Differential（curl 语料）**：输出与改前逐字节不变（`diff result/curl_cur.c` 前后 0 行）——语料中无 RuleSubRight 置位且输入为 piece-structured 的 SUBPIECE，亦无 offset-0 的 enum/partial SUBPIECE cast；门禁 defects=0/numbering=0 维持。
+
 
 ---
 

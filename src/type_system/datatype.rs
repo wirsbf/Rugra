@@ -436,14 +436,34 @@ impl Datatype {
     }
 
     // Ghidra: type.hh:929 Datatype::isPieceStructured
-    /// Is this a structured type composed of pieces (struct/union/array)?
-    /// Faithful to `Datatype::isPieceStructured` (type.hh:929-935). Ghidra
-    /// checks `metatype <= TYPE_ARRAY`; Rugra's enum values differ so we use
-    /// a semantic match.
+    /// Is this a structured type composed of pieces?
+    /// Faithful to `Datatype::isPieceStructured` (type.hh:929-935):
+    ///
+    /// ```text
+    /// //  if (metatype == TYPE_STRUCT || metatype == TYPE_ARRAY || metatype == TYPE_UNION ||
+    /// //      metatype == TYPE_PARTIALUNION || metatype == TYPE_PARTIALSTRUCT)
+    ///   return (metatype <= TYPE_ARRAY);
+    /// ```
+    ///
+    /// Ghidra's `metatype <= TYPE_ARRAY` (TYPE_ARRAY == 7) covers the stored
+    /// metatypes {TYPE_PARTIALUNION(0), TYPE_PARTIALSTRUCT(1), TYPE_UNION(3),
+    /// TYPE_STRUCT(4), TYPE_ARRAY(7)}. Two subtleties preserved from the
+    /// oracle (PRINTC-SUBPIECE-FIELDEXTRACT-0001 gap (b)):
+    /// - Enums do NOT count: the `TypeEnum` constructors (type.hh:489-494)
+    ///   normalize the stored metatype to TYPE_INT/TYPE_UINT
+    ///   (`metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT`), so a
+    ///   Ghidra enum instance reports 13/14, never 5/6.
+    /// - `TypePartialEnum` also does NOT count: it delegates to the same
+    ///   TypeEnum constructor with TYPE_PARTIALENUM, which the ternary maps
+    ///   to TYPE_UINT (type.cc:2255-2262) — so `metatype <= TYPE_ARRAY` is
+    ///   false for it too.
+    /// Rugra's `TypeMetatype` numeric order differs from Ghidra's enum, so
+    /// the set is matched explicitly instead of by `<=`.
     pub fn is_piece_structured(&self) -> bool {
         matches!(
             self.get_metatype(),
             TypeMetatype::Struct | TypeMetatype::Union | TypeMetatype::Array
+                | TypeMetatype::PartialStruct | TypeMetatype::PartialUnion
         )
     }
 
@@ -543,6 +563,92 @@ impl Datatype {
             // until the component no longer overruns the partial's size.
             Datatype::PartialStruct(ps) => partial_struct_get_sub_type(ps, off),
         }
+    }
+
+    // Ghidra: type.cc:160 Datatype::findTruncation
+    /// Given a byte range within this data-type, determine the field it is
+    /// contained in and return the renormalized offset. Faithful to
+    /// `Datatype::findTruncation` (type.cc:160-164) and its overrides:
+    ///
+    /// - Base (`Datatype::findTruncation`, type.cc:160): always `None`.
+    /// - `TypeStruct::findTruncation` (type.cc:1624-1638): binary-search the
+    ///   field list (`getFieldIter`, type.cc:1579-1597 — the field must
+    ///   strictly contain `off`: `field.offset <= off < field.offset+size`);
+    ///   the piece must also fit inside that field
+    ///   (`noff + sz <= field.type->getSize()`, type.cc:1634), else `None`.
+    ///   `newoff` is the offset relative to the field start.
+    /// - `TypeUnion::findTruncation` (type.cc:2185-2199): consults the
+    ///   per-(op,slot) union-resolution cache (`fd->getUnionField`) and
+    ///   returns the cached field if the piece fits inside it. Rugra's print
+    ///   path does not yet wire the `Funcdata` union-resolution cache into
+    ///   the `Datatype` layer, so the "no cached result" arm applies and this
+    ///   returns `None` for unions — the same observable Ghidra behavior for
+    ///   any op/slot that has no cached `ResolvedUnion`.
+    /// - `TypePartialUnion::findTruncation` (type.cc:2440-2444): delegates to
+    ///   the container union at `off + offset` (which, per the union arm
+    ///   above, is `None` without a cached resolution).
+    ///
+    /// Ghidra passes `op`/`slot` for the union cache lookup only; the struct
+    /// arm (the one driving SUBPIECE field extraction on piece-structured
+    /// types) never consults them, so they are not carried here. The matched
+    /// field is returned as an owned `TypeField` clone (Ghidra returns a
+    /// `const TypeField*`; the clone carries the same name/offset/type
+    /// identity because `TypeField` is a value record).
+    ///
+    /// Returns `Some((TypeField, newoff))` or `None`.
+    pub fn find_truncation(&self, off: i64, sz: usize) -> Option<(TypeField, i64)> {
+        match self {
+            // type.cc:1624 TypeStruct::findTruncation
+            Datatype::Struct(s) => {
+                let i = struct_get_field_iter(s, off)?;
+                let curfield = &s.fields[i];
+                let noff = off - curfield.offset as i64;
+                // type.cc:1634: Requested piece spans more than one field.
+                if noff + sz as i64 > curfield.type_ptr.get_size() as i64 {
+                    return None;
+                }
+                Some((curfield.clone(), noff))
+            }
+            // type.cc:2185 TypeUnion::findTruncation: no cached resolution
+            // available from the Datatype layer (see doc comment).
+            Datatype::Union(_) => None,
+            // type.cc:2440 TypePartialUnion::findTruncation:
+            // container->findTruncation(off + offset, sz, op, slot, newoff)
+            Datatype::PartialUnion(pu) => pu
+                .container
+                .find_truncation(off + pu.offset, sz),
+            // type.cc:160 Datatype::findTruncation (base): no field components.
+            _ => None,
+        }
+    }
+
+    // Ghidra: type.cc:1257 TypeArray::getSubEntry
+    /// Given a contiguous piece of this array, figure out which element
+    /// overlaps the piece, returning the element data-type, the renormalized
+    /// offset, and the element index. Faithful to `TypeArray::getSubEntry`
+    /// (type.cc:1257-1267):
+    ///
+    /// ```text
+    /// int4 noff = off % arrayof->getAlignSize();
+    /// int4 nel = off / arrayof->getAlignSize();
+    /// if (noff+sz > arrayof->getAlignSize()) // Requesting parts of more than one element
+    ///   return (Datatype *)0;
+    /// *newoff = noff; *el = nel; return arrayof;
+    /// ```
+    ///
+    /// Note the Ghidra element stride is `getAlignSize()` (aligned size),
+    /// not `getSize()`. Returns `None` for non-array data-types or when the
+    /// piece overlaps more than one element.
+    pub fn array_get_sub_entry(&self, off: i64, sz: usize) -> Option<(Arc<Datatype>, i64, i64)> {
+        let a = match self { Datatype::Array(a) => a, _ => return None };
+        let align = a.array_of.get_align_size() as i64;
+        let noff = off % align;
+        let nel = off / align;
+        if noff + sz as i64 > align {
+            // Requesting parts of more than one element.
+            return None;
+        }
+        Some((a.array_of.clone(), noff, nel))
     }
 
     // Ghidra: type.hh:165 Datatype::getHoleSize
@@ -4694,5 +4800,106 @@ mod tests {
         // None clears it.
         code.set_prototype(None);
         assert!(code.proto.is_none());
+    }
+
+    // Ghidra: type.hh:929 Datatype::isPieceStructured (metatype <= TYPE_ARRAY)
+    #[test]
+    fn test_is_piece_structured_width() {
+        let mk_base = |mt: TypeMetatype| {
+            Arc::new(Datatype::Base(TypeBase::new("b".into(), 4, mt)))
+        };
+        let int4 = mk_base(TypeMetatype::Int);
+        let enum4 = mk_base(TypeMetatype::Enum);
+        let struct8 = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("s".into(), 8, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let union8 = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("u".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        }));
+        let arr8 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a".into(), 8, TypeMetatype::Array),
+            array_of: mk_base(TypeMetatype::Uint),
+            num_elements: 2,
+        }));
+        let ps = Arc::new(Datatype::PartialStruct(TypePartialStruct::new(
+            struct8.clone(), 4, 4, None,
+        )));
+        let pu = Arc::new(Datatype::PartialUnion(TypePartialUnion::new(
+            union8.clone(), 0, 4, None,
+        )));
+        // True set: PartialUnion(0), PartialStruct(1), Union(3), Struct(4),
+        // Array(7) — the stored metatypes <= TYPE_ARRAY.
+        assert!(pu.is_piece_structured());
+        assert!(ps.is_piece_structured());
+        assert!(union8.is_piece_structured());
+        assert!(struct8.is_piece_structured());
+        assert!(arr8.is_piece_structured());
+        // False: base ints and enums. Enums report INT/UINT after the
+        // TypeEnum ctor normalization (type.hh:489-494), PartialEnum maps to
+        // TYPE_UINT through the same ctor (type.cc:2255-2262).
+        assert!(!int4.is_piece_structured());
+        assert!(!enum4.is_piece_structured());
+    }
+
+    // Ghidra: type.cc:1624 TypeStruct::findTruncation + type.cc:1257
+    // TypeArray::getSubEntry
+    #[test]
+    fn test_find_truncation_struct() {
+        let int4 = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let short2 = Arc::new(Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int)));
+        let s = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("pair".into(), 8, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "lo".into(), offset: 0, type_ptr: int4.clone() },
+                TypeField { name: "hi".into(), offset: 4, type_ptr: int4.clone() },
+            ],
+        });
+        // Exact field at off 0, sz 4 → field lo, newoff 0.
+        let (f, newoff) = s.find_truncation(0, 4).unwrap();
+        assert_eq!(f.name, "lo");
+        assert_eq!(newoff, 0);
+        // Interior of field hi at off 5, sz 2 → field hi, newoff 1.
+        let (f, newoff) = s.find_truncation(5, 2).unwrap();
+        assert_eq!(f.name, "hi");
+        assert_eq!(newoff, 1);
+        // Piece spanning two fields → None (type.cc:1634-1635).
+        assert!(s.find_truncation(2, 4).is_none());
+        // Offset not inside any field → None.
+        assert!(s.find_truncation(8, 1).is_none());
+        // Array input type has no field components (base findTruncation).
+        let arr = Datatype::Array(TypeArray {
+            base: TypeBase::new("a".into(), 4, TypeMetatype::Array),
+            array_of: short2,
+            num_elements: 2,
+        });
+        assert!(arr.find_truncation(0, 2).is_none());
+    }
+
+    // Ghidra: type.cc:1257 TypeArray::getSubEntry — element stride is the
+    // element's ALIGNED size.
+    #[test]
+    fn test_array_get_sub_entry() {
+        let elem = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let arr = Datatype::Array(TypeArray {
+            base: TypeBase::new("ints".into(), 16, TypeMetatype::Array),
+            array_of: elem,
+            num_elements: 4,
+        });
+        // Element 2, whole element → newoff 0, index 2.
+        let (sub, newoff, el) = arr.array_get_sub_entry(8, 4).unwrap();
+        assert_eq!(sub.get_size(), 4);
+        assert_eq!(newoff, 0);
+        assert_eq!(el, 2);
+        // Interior of element 1 → newoff 1.
+        let (_, newoff, el) = arr.array_get_sub_entry(5, 2).unwrap();
+        assert_eq!(newoff, 1);
+        assert_eq!(el, 1);
+        // Piece spanning two elements → None (type.cc:1262-1263).
+        assert!(arr.array_get_sub_entry(2, 4).is_none());
+        // Non-array → None.
+        let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        assert!(int4.array_get_sub_entry(0, 4).is_none());
     }
 }

@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "fixture_id": "PRINTC-SUBPIECE-FIELDEXTRACT-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default:gcc",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "usage": "Locked BfdArchitecture initialization over examples/curl; archid asserted as x86:LE:64:default:gcc by the C++ fixture"
+  },
+  "analysis_options": {
+    "apis": [
+      "Datatype::isPieceStructured (type.hh:929)",
+      "CastStrategyC::isSubpieceCast (cast.cc:411)",
+      "PrintC::opSubpiece (printc.cc:843)",
+      "PrintC::pushPartialSymbol (printc.cc:1947)",
+      "TypeStruct::findTruncation (type.cc:1624)",
+      "TypeArray::getSubEntry (type.cc:1257)",
+      "TypeOpSubpiece::computeByteOffsetForComposite (typeop.cc:2195)",
+      "Funcdata::opMarkSpecialPrint (funcdata.hh:483)"
+    ],
+    "fixture_model": "GetStr Funcdata over BfdArchitecture; per arm case: type-locked ScopeLocal symbol (addSymbol + setAttribute(typelock), unrestricted usepoint) attached to a register-space 8-byte Varnode via Varnode::setSymbolProperties (varnode.cc:409-421); SUBPIECE defined via newOp/opSetOpcode/opSetInput/newUniqueOut; high level via fd.setHighLevel(); SPECIAL_PRINT set via opMarkSpecialPrint; rendering through FixturePrintC::opSubpiece with pushScope(fd->getScopeLocal()) preamble (printc.cc:2597) and EmitNoMarkup",
+    "type_construction": "FixtureTypes builds each factory type exactly once per process (a second getTypeStruct on a completed name throws 'Trying to alter definition of type', type.cc:3421-3423; setFields requires an incomplete struct, type.cc:3482). fixture_arr carries a tail field so TypeStruct::setFields does not set needs_resolution (type.cc:1569-1571, which would route the walk through findResolve and dereference the parentless op)",
+    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent; __TERMINAL__ only through the locked Makefile libdecomp.a closure",
+    "normalization": "None; the 22 stdout records are compared byte-for-byte"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+    },
+    "binary": {
+      "path": "examples/curl",
+      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+      "source_policy": "WIP live-tree runner consumed the working-tree examples/curl; the integration runner should re-pin to the base-commit Git blob (34a3febf blob 4e26a362f92f1961bab63000215a84b4d7212dd, sha256 4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a) exactly like run_printc_symbol_decl_oracle.sh and regenerate expected_stdout_sha256 under that input"
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "cases": [
+    {
+      "id": "piece",
+      "records": 10,
+      "covers": "isPieceStructured for struct/union/array/partialstruct/partialunion (true) and enum/partialenum/int/uint/pointer (false). The enum/partialenum=false lines are the REAL oracle answer for the TypeEnum ctor metatype normalization (type.hh:489-494: metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT; TypePartialEnum routes through the same ctor with TYPE_PARTIALENUM, type.cc:2255-2262, landing on TYPE_UINT)"
+    },
+    {
+      "id": "cast",
+      "records": 8,
+      "covers": "isSubpieceCast PartialStruct/PartialUnion input arms (cast.cc:416-418) true at offset 0; offset!=0 rejection; struct-input rejection; enum input/output accepted as the normalized UINT/INT surface; PartialStruct output rejected (cast.cc:419-422)"
+    },
+    {
+      "id": "armA.field",
+      "records": 1,
+      "covers": "printc.cc:853-861 explicit-vn symbol arm: pushPartialSymbol walk over fixture_pair from lsb=4, outsize 4 -> S.hi"
+    },
+    {
+      "id": "armA.array",
+      "records": 1,
+      "covers": "printc.cc:1972-2000 struct-field descent (.arr) then TypeArray::getSubEntry element descent ([0]) with the subscript token -> A.arr[0]"
+    },
+    {
+      "id": "armA.synthetic",
+      "records": 1,
+      "covers": "printc.cc:2030-2041: findTruncation(2,4) spans past field lo (noff+sz>size, type.cc:1634) and the allowCast isSubpieceCastEndian(offset!=0) arm fails -> synthetic unnamedField(2,4) = '_2_4_' (printlanguage.cc:719-727) -> Y._2_4_"
+    },
+    {
+      "id": "armB.field",
+      "records": 1,
+      "covers": "printc.cc:862-868: NON-explicit vn (vn->isExplicit()==false skips the symbol arm), findTruncation(0,4) returns field lo with offset==0 -> pushOp(object_member) + pushVn + field atom -> B.lo"
+    }
+  ],
+  "input_model_difference": "Ghidra renders through the real Funcdata/ScopeLocal/VarnodeBank object graph (Scope::addSymbol, VarnodeBank-backed varnodes, HighVariable::setSymbol); the Rust fixture constructs the equivalent PcodeOp/Varnode/HighVariable/Symbol graph directly. The observable compared is the emitted C text of the op-level opSubpiece call plus the two predicate sweeps, which do not depend on the bank plumbing",
+  "observation_scope": {
+    "piece_sweep": "MATCH",
+    "cast_sweep": "MATCH",
+    "armA_explicit_symbol": "MATCH",
+    "armA_array_walk": "MATCH",
+    "armA_synthetic_unnamed_field": "MATCH",
+    "armB_find_truncation_field": "MATCH",
+    "union_resolution_cache": "UNTESTED (Rugra's print path has no Funcdata union-resolution cache wiring; Ghidra TypeUnion::findTruncation without a cached ResolvedUnion also returns null)",
+    "symbol_offset_positive": "UNTESTED (printc.cc:856-857 suboff>0 requires a partial-symbol map entry not constructed here)",
+    "big_endian_byte_offset": "UNTESTED (x86:LE target; computeByteOffsetForComposite big-endian arm unexercised)",
+    "needs_resolution_struct_break": "UNTESTED (printc.cc:1967-1971; fixture structs deliberately avoid the flag, see type_construction)"
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cpp_fixture_sha256": "f2df89cce96fd2b7c46b6711652149520ad4e18b61a8cad89e4be40784bd0a77",
+  "rust_fixture_sha256": "bb200409af87d7daa464eb7675f7995413859754b1950b957e07891dc4f7cc04",
+  "expected_stdout_sha256": "d1e25108a830045189ae5bca01fbd1ffcef3f75f3caa6b4fa13bdff754ad7ef5",
+  "overall_status": "MATCH: all 22 records byte-identical against the locked 12.0.4 oracle"
+}

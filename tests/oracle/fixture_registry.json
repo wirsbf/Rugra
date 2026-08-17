@@ -2363,6 +2363,39 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "printc_subpiece_fieldextract_1204",
+   "description": "opSubpiece field extraction / partial cast arms / isPieceStructured observations",
+   "runner": [
+    "tools/run_printc_subpiece_fieldextract_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/printc_subpiece_fieldextract_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/printc_subpiece_fieldextract_1204.cc",
+     "rust_fixture": "tests/oracle/printc_subpiece_fieldextract_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_printc_subpiece_fieldextract_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/printc.rs",
+     "src/type_system/cast.rs",
+     "src/type_system/datatype.rs",
+     "tests/oracle/printc_subpiece_fieldextract_1204.*",
+     "tools/run_printc_subpiece_fieldextract_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

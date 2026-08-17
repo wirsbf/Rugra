@@ -416,7 +416,11 @@ pub struct PrintC {
     /// Recursion guard to prevent infinite inlining loops
     inline_depth: u32,
     /// Cast strategy for determining when explicit casts are required
-    cast_strategy: CastStrategyC,
+    /// Cast strategy (CastStrategyC, printc.cc:136 `castStrategy = new
+    /// CastStrategyC()`). Public to mirror Ghidra's
+    /// `PrintLanguage::getCastStrategy()` accessor (printlanguage.hh:449)
+    /// for op-level oracle fixtures.
+    pub cast_strategy: CastStrategyC,
     /// Parameter register offset → parameter name mapping
     /// Populated from fd.funcp.parameters in doc_function
     param_names: HashMap<u64, String>,
@@ -579,6 +583,9 @@ pub struct PrintC {
     /// Index of the comma token (binary, prec 2, associative). Mirrors
     /// PrintC::comma (printc.cc:55).
     rpn_tok_comma: usize,
+    /// RPN token-table index of the `subscript` "[ ]" token (printc.cc:27),
+    /// used by `rpn_push_partial_symbol` for array-element entries.
+    rpn_tok_subscript: usize,
     /// True when doc_function emits via the RPN path. Default false.
     rpn_enabled: bool,
 }
@@ -656,6 +663,7 @@ impl PrintC {
             rpn_tok_addressof: 6,
             rpn_tok_function_call: 7,
             rpn_tok_comma: 8,
+            rpn_tok_subscript: 9,
             rpn_enabled: true,
         }
     }
@@ -680,7 +688,7 @@ impl PrintC {
 
     // RUGRA-GLUE: build_rpn_token_table
     /// Build the per-instance OpToken slice the RPN free-functions index into.
-    /// Indices 0..=6 must agree with the rpn_tok_* constants assigned in new().
+    /// Indices 0..=9 must agree with the rpn_tok_* constants assigned in new().
     /// Faithful to the static OpToken definitions in printc.cc:25/26/33/34/35/56
     /// plus the hidden token (printc.cc:29) and the 20 binary operator tokens
     /// (printc.cc:36-55, appended at indices RPN_TOK_BINARY_BASE..=+19 in
@@ -731,6 +739,9 @@ impl PrintC {
         let function_call = OpToken::postsurround("(", ")", 66, 0, 10);
         // index 8 - comma "," (printc.cc:57): binary, prec 2, associative.
         let comma = OpToken::binary(",", 2, true, 0, 0, -1);
+        // index 9 - subscript "[" "]" (printc.cc:27): postsurround,
+        // prec 66, spacing 0, bump 0.
+        let subscript = OpToken::postsurround("[", "]", 66, 0, 0);
         let mut tokens = vec![
             assignment,
             dereference,
@@ -741,8 +752,9 @@ impl PrintC {
             addressof,
             function_call,
             comma,
+            subscript,
         ];
-        // indices 9..=28 - the 20 binary operator tokens (printc.cc:36-55),
+        // indices 10..=29 - the 20 binary operator tokens (printc.cc:36-55),
         // field-for-field from the optoken registry (single source of truth):
         // { print1, "", stage=2, precedence, associative, binary, spacing=1,
         //   bump=0, negate }. `negate` stores the token-table index of the
@@ -774,8 +786,8 @@ impl PrintC {
     }
 
     /// First index of the binary-token block appended by build_rpn_token_table
-    /// (indices 9..=28, in optoken::BINARY_TOKENS order — printc.cc:36-55).
-    const RPN_TOK_BINARY_BASE: usize = 9;
+    /// (indices 10..=29, in optoken::BINARY_TOKENS order — printc.cc:36-55).
+    const RPN_TOK_BINARY_BASE: usize = 10;
 
     // Ghidra: printc.hh:283-318 + printlanguage.cc:539-545
     /// Map a binary opcode to its rpn_token_table index — the Rust equivalent
@@ -1467,24 +1479,89 @@ impl PrintC {
                 }
             }
             // printc.cc:843 PrintC::opSubpiece. The doesSpecialPrinting
-            // field-extraction branch (printc.cc:846-871) IS reachable in
-            // Rugra: `does_special_printing()` reads addlflags &
-            // SPECIAL_PRINT (op.rs ↔ op.hh:208 special_print) and is set by
-            // RuleSubRight (ruleaction.rs ↔ ruleaction.cc:7257
-            // opMarkSpecialPrint), registered in the main pipeline
-            // (action.rs ↔ coreaction.cc:5700); `is_piece_structured()`
-            // (type_system/datatype.rs:443) is true for Struct/Union/Array.
-            // The field-extraction body itself (printc.cc:853-868:
-            // explicit-vn pushPartialSymbol arm + findTruncation/
-            // object_member field atom arm) is inherited-MISSING in the RPN
-            // path, so we deliberately fall through to isSubpieceCast →
-            // opTypeCast, else opFunc — the same observable output as the
-            // legacy op_subpiece path. Downgrade registered as
-            // PRINTC-SUBPIECE-FIELDEXTRACT-0001 (three adjacent gaps:
-            // pushPartialSymbol/findTruncation field-extraction bodies,
-            // is_piece_structured narrower than Ghidra metatype<=TYPE_ARRAY,
-            // is_subpiece_cast missing PartialStruct/PartialUnion arms).
+            // field-extraction branch (printc.cc:846-871) — active port:
+            // `does_special_printing()` reads addlflags & SPECIAL_PRINT
+            // (op.rs ↔ op.hh:208 special_print) and is set by RuleSubRight
+            // (ruleaction.rs ↔ ruleaction.cc:7257 opMarkSpecialPrint),
+            // registered in the main pipeline (action.rs ↔ coreaction.cc:5700);
+            // `is_piece_structured()` (type_system/datatype.rs:443) matches
+            // Ghidra metatype<=TYPE_ARRAY. Two arms per the oracle:
+            //   (a) printc.cc:853-861 explicit-vn symbol arm → pushPartialSymbol
+            //       (rpn_push_partial_symbol, printc.cc:1947);
+            //   (b) printc.cc:862-868 findTruncation/object_member field-atom
+            //       arm (slot=1 artificial).
+            // Non-matching cases fall through to isSubpieceCast → opTypeCast,
+            // else opFunc (printc.cc:872-877), exactly as the oracle's
+            // "Fall thru to functional printing" comment (printc.cc:869).
             OpCode::CPUI_SUBPIECE => {
+                if op.does_special_printing() {
+                    // printc.cc:847-848: vn = in(0); ct = read-facing type.
+                    if let Some(in0_arc) = op.get_in(0) {
+                        let vn = in0_arc.read().unwrap();
+                        if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
+                            if ct.is_piece_structured() {
+                                // printc.cc:851: byte offset into composite.
+                                let mut byte_off = Self::compute_byte_offset_for_composite(op);
+                                // printc.cc:852-861: explicit-vn symbol arm.
+                                let high_info = vn.get_high().map(|h| {
+                                    let g = h.read().unwrap();
+                                    (g.get_symbol(), g.get_symbol_offset())
+                                });
+                                if let Some((Some(sym_arc), suboff)) = high_info {
+                                    if vn.is_explicit() {
+                                        let sz = op
+                                            .get_out()
+                                            .map(|a| a.read().unwrap().get_size())
+                                            .unwrap_or(0);
+                                        if suboff > 0 {
+                                            byte_off += suboff as i64;
+                                        }
+                                        // printc.cc:858: artificial slot for
+                                        // initial resolution.
+                                        let slot =
+                                            if ct.needs_resolution() { 1 } else { 0 };
+                                        let sym = sym_arc.read().unwrap();
+                                        self.rpn_push_partial_symbol(
+                                            &sym, &vn, op, byte_off, sz as i64, slot, true,
+                                        );
+                                        return;
+                                    }
+                                }
+                                // printc.cc:862-868: findTruncation field arm
+                                // (artificial slot 1; Rugra's union arm has no
+                                // cached resolution, so this is the struct
+                                // path until unionresolve wiring lands).
+                                let out_size = op
+                                    .get_out()
+                                    .map(|a| a.read().unwrap().get_size())
+                                    .unwrap_or(0);
+                                if let Some((field, offset)) =
+                                    ct.find_truncation(byte_off, out_size)
+                                {
+                                    if offset == 0 {
+                                        // pushOp(&object_member,op);
+                                        // pushVn(vn,op,mods);
+                                        // pushAtom(field->name,...)
+                                        self.rpn_push_op(self.rpn_tok_object_member);
+                                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                                        let field_atom =
+                                            crate::printlanguage::Atom::with_field(
+                                                &field.name,
+                                                crate::printlanguage::TagType::FieldToken,
+                                                crate::printlanguage::SyntaxHighlight::NoColor,
+                                                0,
+                                                field.offset as i32,
+                                                -1,
+                                            );
+                                        self.rpn_push_atom(&field_atom);
+                                        return;
+                                    }
+                                }
+                                // printc.cc:869: Fall thru to functional printing.
+                            }
+                        }
+                    }
+                }
                 // printc.cc:872-874: isSubpieceCast(outDef, inRead, offset).
                 let (out_dt, in_dt, offset) = {
                     let out = op.get_out().map(|a| a.read().unwrap());
@@ -1789,6 +1866,322 @@ impl PrintC {
         self.emit.print("[");
         rpn_emit_atom(&mut *self.emit, idx_atom);
         self.emit.print("]");
+    }
+
+    // ---- SUBPIECE special-printing field extraction (printc.cc:843-878) ----
+
+    // Ghidra: typeop.cc:2195 TypeOpSubpiece::computeByteOffsetForComposite
+    /// Compute the byte offset into an assumed composite data-type produced
+    /// by the given CPUI_SUBPIECE. Faithful to the oracle body
+    /// (typeop.cc:2195-2207):
+    ///
+    /// ```text
+    /// int4 outSize = op->getOut()->getSize();
+    /// int4 lsb = (int4)op->getIn(1)->getOffset();
+    /// const Varnode *vn = op->getIn(0);
+    /// if (vn->getSpace()->isBigEndian())
+    ///   byteOff = vn->getSize() - outSize - lsb;
+    /// else
+    ///   byteOff = lsb;
+    /// ```
+    ///
+    /// The lsb comes from the SUBPIECE constant input in(1); endianness is
+    /// the input varnode's space endianness (Rugra x86/x64 spaces are
+    /// little-endian, so the common case is `byteOff = lsb`).
+    fn compute_byte_offset_for_composite(op: &PcodeOp) -> i64 {
+        let out_size = op.get_out().map(|a| a.read().unwrap().get_size()).unwrap_or(0) as i64;
+        let lsb = op
+            .get_in(1)
+            .map(|a| a.read().unwrap().get_offset() as i64)
+            .unwrap_or(0);
+        let vn_size = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0) as i64;
+        let is_big_endian = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_space().is_big_endian())
+            .unwrap_or(false);
+        if is_big_endian {
+            vn_size - out_size - lsb
+        } else {
+            lsb
+        }
+    }
+
+    // Ghidra: printc.cc:1947 PrintC::pushPartialSymbol
+    /// RPN-path port of `PrintC::pushPartialSymbol` (printc.cc:1947-2065):
+    /// emit a symbol reference accessing a sub-field at byte `off` of size
+    /// `sz`, walking the SYMBOL's data-type bottom-up so parentheses come out
+    /// right — `globalstruct.arrayfield[0]`, not `globalstruct.(arrayfield[0])`.
+    ///
+    /// Faithful walk of the oracle stack construction (printc.cc:1960-2042):
+    /// - `off==0` and `sz` covers the whole type (and it needs no resolution,
+    ///   or is a pointer) → done (printc.cc:1961-1964).
+    /// - TYPE_STRUCT → optional needsResolution/findResolve early-break
+    ///   (1967-1971; base `Datatype::findResolve` returns `this`, type.cc:588,
+    ///   so `outtype == ct` → break), then `findTruncation` field descent
+    ///   with an `object_member` entry (1972-1984).
+    /// - TYPE_ARRAY → `getSubEntry` element descent with a `subscript` entry
+    ///   (1986-2000); the walk offset is re-anchored to the element.
+    /// - TYPE_UNION → `findTruncation` (no cached resolution → None, see
+    ///   `Datatype::find_truncation`), else `size==sz` → break (2001-2016).
+    /// - anything else + `allowCast` → `isSubpieceCastEndian` truncation cast
+    ///   (2018-2029): the final cast is pushed as `(type)` prefix.
+    /// - no descent succeeded → synthetic `unnamedField(off,sz)` entry
+    ///   (2030-2041), `ct = null`.
+    ///
+    /// Emission order (printc.cc:2044-2064): final cast token first, then
+    /// the entry tokens in REVERSE, then the base symbol atom, then the
+    /// entry atoms front-to-back (field names, subscript indices via
+    /// `push_integer`, synthetic `_off_sz_` names via
+    /// `PrintLanguage::unnamedField`, printlanguage.cc:719-727).
+    ///
+    /// Alignment evidence (four decisive semantics):
+    /// - 引用/输出参数: `off`/`sz` are in-out walk state (Ghidra mutates
+    ///   both; `sz==0` is re-assigned to `ct->getSize()-off` in the
+    ///   synthetic arm, printc.cc:2034-2035).
+    /// - 循环边界/遍历顺序: `while (ct != null)`; each iteration either
+    ///   descends (struct field / array element / cast) or terminates the
+    ///   walk via the synthetic entry; emission reverses the token stack.
+    /// - 计数器/累加器: `stack` accumulates one entry per descent level;
+    ///   `off`/`sz` carry-over between levels; no per-level reset.
+    /// - 排序/比较键: field containment via `findTruncation`
+    ///   (`field.offset <= off < field.offset+size`, piece must fit);
+    ///   array stride is `getAlignSize()` (aligned size, type.cc:1260).
+    fn rpn_push_partial_symbol(
+        &mut self,
+        sym: &crate::database::Symbol,
+        vn: &Varnode,
+        op: &PcodeOp,
+        mut off: i64,
+        mut sz: i64,
+        _slot: i32,
+        allow_cast: bool,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        use crate::type_system::datatype::{Datatype, TypeField, TypeMetatype};
+
+        /// One PartialSymbolEntry (printc.cc:1954 vector element): the RPN
+        /// token index, the offset/size for synthetic or subscript entries,
+        /// the formal field (when resolved), and the markup highlight.
+        struct Entry {
+            token: usize,
+            offset: i64,
+            size: i64,
+            field: Option<TypeField>,
+            hilite: SyntaxHighlight,
+        }
+
+        let mut stack: Vec<Entry> = Vec::new();
+        let mut finalcast: Option<Arc<Datatype>> = None;
+        // printc.cc:1958: Datatype *ct = sym->getType(); — the walk starts
+        // over from the SYMBOL's type, not the varnode's facing type.
+        let mut ct: Option<Arc<Datatype>> = sym.get_type();
+        while let Some(dt) = ct.clone() {
+            // printc.cc:1961-1964: off==0 and sz covers the whole type.
+            if off == 0 {
+                if sz == 0
+                    || (sz as usize == dt.get_size()
+                        && (!dt.needs_resolution()
+                            || dt.get_metatype() == TypeMetatype::Pointer))
+                {
+                    break;
+                }
+            }
+            let mut succeeded = false;
+            match dt.get_metatype() {
+                // printc.cc:1966-1985: TYPE_STRUCT.
+                TypeMetatype::Struct => {
+                    if dt.needs_resolution() && dt.get_size() as i64 == sz {
+                        // ct->findResolve(op,slot): base returns `this`
+                        // (type.cc:588) → outtype == ct → break. TypeStruct
+                        // has no findResolve override in the oracle.
+                        break;
+                    }
+                    if let Some((field, newoff)) = dt.find_truncation(off, sz as usize) {
+                        off = newoff;
+                        stack.push(Entry {
+                            token: self.rpn_tok_object_member,
+                            offset: 0,
+                            size: 0,
+                            field: Some(field.clone()),
+                            hilite: SyntaxHighlight::NoColor,
+                        });
+                        ct = Some(field.type_ptr.clone());
+                        succeeded = true;
+                    }
+                }
+                // printc.cc:1986-2000: TYPE_ARRAY (getSubEntry).
+                TypeMetatype::Array => {
+                    if let Some((arrayof, newoff, el)) = dt.array_get_sub_entry(off, sz as usize) {
+                        off = newoff;
+                        stack.push(Entry {
+                            token: self.rpn_tok_subscript,
+                            offset: el,
+                            size: 0,
+                            field: None,
+                            hilite: SyntaxHighlight::ConstColor,
+                        });
+                        ct = Some(arrayof);
+                        succeeded = true;
+                    }
+                }
+                // printc.cc:2001-2016: TYPE_UNION.
+                TypeMetatype::Union => {
+                    // findTruncation consults the (op,slot) resolution cache;
+                    // with no cached resolution it returns null (type.cc:2197),
+                    // which is Rugra's behaviour (Datatype::find_truncation).
+                    if dt.get_size() as i64 == sz {
+                        // printc.cc:2015-2016: don't need to resolve the field.
+                        break;
+                    }
+                }
+                // printc.cc:2018-2029: allowCast truncation-as-cast arm —
+                // reached for every non-struct/array/union metatype
+                // (including PartialStruct/PartialUnion, whose stored
+                // metatypes are outside the three composite arms).
+                _ => {
+                    if allow_cast {
+                        // vn->getHigh()->getType()
+                        let outtype = vn
+                            .get_high()
+                            .map(|h| h.read().unwrap().get_type());
+                        // spc = sym->getFirstWholeMap()->getAddr().getSpace();
+                        // if (spc == null) spc = vn->getSpace();
+                        // Rugra's `Address` is a bare scalar with no
+                        // AddrSpace (address.rs:26), so a SymbolEntry address
+                        // cannot supply the space; this is Ghidra's null-space
+                        // fallback arm: the varnode's own space endianness.
+                        let is_big_endian = vn.get_space().is_big_endian();
+                        if let Some(outtype) = outtype {
+                            let outtype = Arc::new((*outtype).clone());
+                            if self
+                                .cast_strategy
+                                .is_subpiece_cast_endian(&outtype, &dt, off as u32, is_big_endian)
+                            {
+                                // Treat truncation as SUBPIECE style cast.
+                                finalcast = Some(outtype);
+                                ct = None;
+                                succeeded = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !succeeded {
+                // printc.cc:2030-2041: synthetic entry, then ct = null.
+                if sz == 0 {
+                    sz = dt.get_size() as i64 - off;
+                }
+                stack.push(Entry {
+                    token: self.rpn_tok_object_member,
+                    offset: off,
+                    size: sz,
+                    field: None,
+                    hilite: SyntaxHighlight::NoColor,
+                });
+                ct = None;
+            }
+        }
+
+        // printc.cc:2044-2047: final cast prefix.
+        if let Some(ref finalcast) = finalcast {
+            if !self.option_nocasts {
+                self.rpn_push_op(self.rpn_tok_typecast);
+                let type_atom = Atom::with_type(
+                    finalcast.get_name(),
+                    TagType::TypeToken,
+                    SyntaxHighlight::TypeColor,
+                    0,
+                );
+                self.rpn_push_atom(&type_atom);
+            }
+        }
+        // printc.cc:2049-2050: entry tokens in reverse order.
+        for i in (0..stack.len()).rev() {
+            self.rpn_push_op(stack[i].token);
+        }
+        // printc.cc:2051: pushSymbol(sym,vn,op) — display name atom. Ghidra's
+        // highlight cascade (printc.cc:1905-1911: volatile→special,
+        // global→global, param→param, equate→const, else var) is markup-only;
+        // the plain-text emitter renders the display name either way. The
+        // param arm is preserved because SymbolCategory carries it.
+        let sym_color = match sym.category {
+            crate::database::SymbolCategory::FunctionParameter => {
+                SyntaxHighlight::ParamColor
+            }
+            _ => SyntaxHighlight::VarColor,
+        };
+        let sym_atom = Atom::with_op_vn(
+            sym.get_display_name(),
+            TagType::VarToken,
+            sym_color,
+            -1,
+            vn.get_offset() as i64,
+        );
+        self.rpn_push_atom(&sym_atom);
+        // printc.cc:2052-2064: entry atoms front-to-back.
+        for entry in &stack {
+            match &entry.field {
+                None => {
+                    if entry.size <= 0 {
+                        // printc.cc:2055-2056: push_integer(offset, size,
+                        // offset<0, syntax, null, op) — the subscript index
+                        // atom (size==0 entries). Decimal rendering matches
+                        // PrintC::push_integer for a non-negative index with
+                        // no forced display format.
+                        let name = if entry.offset < 0 {
+                            format!("-{}", entry.offset.wrapping_abs())
+                        } else {
+                            format!("{}", entry.offset)
+                        };
+                        let int_atom =
+                            Atom::new(&name, TagType::Syntax, SyntaxHighlight::ConstColor);
+                        self.rpn_push_atom(&int_atom);
+                    } else {
+                        // printc.cc:2057-2059: unnamedField(off,size) builds
+                        // "_off_size_" (printlanguage.cc:719-727).
+                        let field = format!("_{}_{}_", entry.offset, entry.size);
+                        let atom = Atom::new(&field, TagType::Syntax, entry.hilite);
+                        self.rpn_push_atom(&atom);
+                    }
+                }
+                Some(field) => {
+                    // printc.cc:2063: Atom(field->name, fieldtoken,
+                    // stack[i].hilite, stack[i].parent, field->ident, op).
+                    let atom = Atom::with_field(
+                        &field.name,
+                        TagType::FieldToken,
+                        entry.hilite,
+                        0,
+                        field.offset as i32,
+                        -1,
+                    );
+                    self.rpn_push_atom(&atom);
+                }
+            }
+        }
+        let _ = op;
+    }
+
+    // Ghidra: printc.hh:334 PrintC::opSubpiece (public virtual entry)
+    /// RPN-path public entry for rendering a single SUBPIECE op as an
+    /// expression — the Rust twin of Ghidra's public virtual
+    /// `PrintC::opSubpiece(const PcodeOp*)` (printc.hh:334, printc.cc:843),
+    /// which oracle fixtures call directly for op-level observation (no
+    /// enclosing statement). Dispatches through the same
+    /// `dispatch_op_rpn` CPUI_SUBPIECE arm the main pipeline uses, then
+    /// drains the pending-implied list exactly like `emitExpression`'s
+    /// trailing `recurse()` (printc.cc:2494).
+    pub fn op_subpiece_rpn(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) {
+        let op = op_arc.read().unwrap();
+        self.dispatch_op_rpn(op_arc, &op, None);
+        drop(op);
+        self.rpn_recurse();
     }
 
     // ---- Step 6: emit_statement_rpn + emit_block_basic_rpn ----
@@ -10108,11 +10501,13 @@ impl PrintC {
                     continue;
                 }
             }
-            // printc.cc:2030-2041: synthetic entry, then ct=nullptr.
+            // printc.cc:2030-2041: synthetic entry, then ct=nullptr. The
+            // atom text is `PrintLanguage::unnamedField(off,size)`
+            // (printlanguage.cc:719-727): `s << '_' << off << '_' << size << '_'`.
             if sz == 0 {
                 sz = dt.get_size() as i64 - off;
             }
-            entries.push(format!(".field_{}_{}", off, sz));
+            entries.push(format!("._{}_{}_", off, sz));
             break;
         }
         // printc.cc:2044-2047: SUBPIECE-style cast is a TODO hook (Rugra has
@@ -10371,16 +10766,16 @@ impl PrintC {
     // Ghidra: printc.cc:843 PrintC::opSubpiece
     /// Emit a SUBPIECE op. If the op does special printing (field extraction
     /// from a piece-structured composite), render the field access; else if
-    /// the cast strategy recognizes the truncation as a cast, render
+    /// the cast strategy recognizes the truncation as a cast, render it as
     /// `(type)in0`; else fall through to the generic binary rendering.
     ///
     /// Faithful to `PrintC::opSubpiece(const PcodeOp*)` (printc.cc:843-878).
-    /// The special-printing branch (piece-structured composite field lookup
-    /// via `findTruncation`/`pushPartialSymbol`) requires the full symbol /
-    /// type-resolution machinery that Rugra's direct-emit layer does not yet
-    /// expose; when `doesSpecialPrinting()` is true but the field cannot be
-    /// resolved we fall through to the functional rendering, matching Ghidra's
-    /// "Fall thru to functional printing" comment (printc.cc:869).
+    /// The special-printing branch (printc.cc:846-871) has both oracle arms:
+    /// the explicit-vn symbol arm drives the legacy
+    /// [`push_partial_symbol`] (printc.cc:1947 pushPartialSymbol), and the
+    /// findTruncation arm renders `vn.field` via the object_member shape.
+    /// This is the legacy direct-emit twin of the RPN-path arm in
+    /// `dispatch_op_rpn` (PRINTC-SUBPIECE-FIELDEXTRACT-0001).
     pub fn op_subpiece(&mut self, op: &PcodeOp) {
         if op.does_special_printing() {
             // Field extraction from a piece-structured composite.
@@ -10389,19 +10784,53 @@ impl PrintC {
                 if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
                     if ct.is_piece_structured() {
                         // byteOff = TypeOpSubpiece::computeByteOffsetForComposite(op)
-                        // For little-endian (Rugra's x86/x64 target) this is
-                        // the SUBPIECE offset constant (in(1)).
-                        let byte_off = op.get_in(1).map(|c| {
-                            let cv = c.read().unwrap();
-                            if cv.is_constant() { cv.get_offset() as u32 } else { 0 }
-                        }).unwrap_or(0);
-                        // Attempt formal field lookup: findTruncation(byteOff,
-                        // outSize, op, slot=1, &offset). Rugra's Datatype does
-                        // not yet expose findTruncation, so we cannot resolve a
-                        // named field here. Fall through to functional printing
-                        // (Ghidra printc.cc:869 comment) - the cast/func branch
-                        // below.
-                        let _ = byte_off;
+                        // (typeop.cc:2195) — endianness-aware; Rugra's x86/x64
+                        // spaces are little-endian, reducing to in(1).
+                        let mut byte_off = Self::compute_byte_offset_for_composite(op);
+                        // printc.cc:852-861: explicit-vn symbol arm.
+                        let high_info = vn.get_high().map(|h| {
+                            let g = h.read().unwrap();
+                            (g.get_symbol(), g.get_symbol_offset())
+                        });
+                        if let Some((Some(sym_arc), suboff)) = high_info {
+                            if vn.is_explicit() {
+                                let sz = op
+                                    .get_out()
+                                    .map(|a| a.read().unwrap().get_size())
+                                    .unwrap_or(0);
+                                if suboff > 0 {
+                                    byte_off += suboff as i64;
+                                }
+                                let sym = sym_arc.read().unwrap();
+                                let sym_type = sym.get_type().map(|t| t.as_ref().clone());
+                                let name = sym.get_display_name().to_string();
+                                drop(sym);
+                                drop(vn);
+                                self.push_partial_symbol(
+                                    &name,
+                                    byte_off,
+                                    sz as i64,
+                                    sym_type.as_ref(),
+                                );
+                                return;
+                            }
+                        }
+                        // printc.cc:862-868: findTruncation formal-field arm.
+                        let out_size = op
+                            .get_out()
+                            .map(|a| a.read().unwrap().get_size())
+                            .unwrap_or(0);
+                        if let Some((field, offset)) = ct.find_truncation(byte_off, out_size) {
+                            if offset == 0 {
+                                // pushOp(&object_member,op); pushVn(vn,op,mods);
+                                // pushAtom(Atom(field->name,fieldtoken,...))
+                                self.push_varnode(&vn, Some(op));
+                                self.emit.print(".");
+                                self.emit.tag_field(&field.name, 0);
+                                return;
+                            }
+                        }
+                        // printc.cc:869: Fall thru to functional printing.
                     }
                 }
             }

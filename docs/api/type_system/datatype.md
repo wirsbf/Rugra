@@ -99,6 +99,12 @@ alignment map、calc_align_size、struct/array subtype、type_order（size & met
 - `is_char_print()`（type.hh:218）— 检查 CHARTYPE|UTF16|UTF32|OPAQUE_STRUCT flag。
 - `is_piece_structured()`（type.hh:929-935）— Struct|Union|Array 语义判断（Ghidra 用 metatype<=TYPE_ARRAY，Rugra 枚举值不同故用 matches!）。
 
+### 2026-08-17：PRINTC-SUBPIECE-FIELDEXTRACT-0001 缺口 b/c——is_piece_structured 宽度 + find_truncation/array_get_sub_entry
+- `is_piece_structured()` 匹配集扩为 **{Struct, Union, Array, PartialStruct, PartialUnion}**（Ghidra `metatype <= TYPE_ARRAY` 按**存储** metatype 的实际可达集合）。两个被真 oracle 纠正的细节：Ghidra `TypeEnum` 构造器（type.hh:489-494）把存储 metatype 归一为 TYPE_INT/TYPE_UINT，且 `TypePartialEnum`（type.cc:2255-2262）经同一构造器落到 TYPE_UINT——故 enum/partialenum **不是** piece-structured（fixture `piece.enum=0`/`piece.partialenum=0` 由 12.0.4 oracle 实测确认）。
+- `find_truncation(off, sz) -> Option<(TypeField, newoff)>`（type.cc:160 base / :1624 TypeStruct / :2185 TypeUnion / :2440 TypePartialUnion）——SUBPIECE 字段抽取的判定原语：Struct 臂经 `struct_get_field_iter`（字段严格包含 off）+ 跨字段拒绝（`noff+sz > size`，type.cc:1634）；Union 臂无 (op,slot) 解析缓存时返回 None（Ghidra TypeUnion::findTruncation 无缓存 ResolvedUnion 同样返回 null）；PartialUnion 臂委托 `container.find_truncation(off + offset, sz)`。
+- `array_get_sub_entry(off, sz) -> Option<(Arc<Datatype>, newoff, el)>`（type.cc:1257 TypeArray::getSubEntry）——元素步长为 **getAlignSize()**（对齐尺寸），跨元素（`noff+sz > align`）返回 None。
+- 新增 3 个单元测试（宽度 sweep / struct findTruncation 边界 / array getSubEntry 对齐步长与跨元素）。
+
 ### 2026-07-01（续）：needs_resolution/find_resolve/is_enum_type/get_stripped/equate + type_flags 对齐
 - needs_resolution()（type.hh:231）、find_resolve()（type.cc:586）、is_enum_type()（type.hh:219）、has_stripped()（type.hh:229）。
 - mark_equate/mark_un_equate/is_equated（Rugra 私有 EQUATED 位，Ghidra 对应 EquateSymbol）。
