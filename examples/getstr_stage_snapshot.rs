@@ -406,8 +406,158 @@ fn write_snapshot(
     Ok(())
 }
 
-fn build_funcdata(input: &FunctionInput) -> Funcdata {
+// FUNCPROTO-MODEL-BIND-0001 mirror of examples/curl_decompile.rs: locked
+// x86-64 address-space facts + spec host for the worker-side compiler-spec
+// parse. The production driver binds this Architecture to every Funcdata
+// before analysis (fd.set_arch), so the production-path heritage
+// observation below must run with the same real-cspec default model.
+const SPEC_SPACES: [(&str, u64); 9] = [
+    ("const", u64::MAX),
+    ("OTHER", u64::MAX),
+    ("unique", 0xffff_ffff),
+    ("ram", u64::MAX),
+    ("register", 0xffff_ffff),
+    ("fspec", u64::MAX),
+    ("iop", u64::MAX),
+    ("join", 0xffff_ffff),
+    ("stack", u64::MAX),
+];
+
+const SPEC_UNIQUE_INJECT_BASE: u64 = 0x364_400;
+
+struct WorkerSpecHost {
+    registers: HashMap<String, rugra::fspec::VarnodeData>,
+}
+
+fn spec_space_by_name(name: &str) -> Option<rugra::space::AddressSpace> {
+    use rugra::space::AddressSpace;
+    match name {
+        "ram" => Some(AddressSpace::Ram),
+        "stack" => Some(AddressSpace::Stack),
+        "register" => Some(AddressSpace::Register),
+        "OTHER" | "other" => Some(AddressSpace::Other(1)),
+        "unique" => Some(AddressSpace::Unique),
+        "const" => Some(AddressSpace::Const),
+        _ => None,
+    }
+}
+
+impl rugra::arch::SpecQuery for WorkerSpecHost {
+    fn get_register(&self, name: &str) -> Option<rugra::fspec::VarnodeData> {
+        self.registers.get(name).copied()
+    }
+    fn space_by_name(&self, name: &str) -> Option<rugra::space::AddressSpace> {
+        spec_space_by_name(name)
+    }
+    fn space_highest(&self, spc: rugra::space::AddressSpace) -> u64 {
+        let name = match spc {
+            rugra::space::AddressSpace::Const => "const",
+            rugra::space::AddressSpace::Other(_) => "OTHER",
+            rugra::space::AddressSpace::Unique => "unique",
+            rugra::space::AddressSpace::Ram => "ram",
+            rugra::space::AddressSpace::Register => "register",
+            rugra::space::AddressSpace::Stack => "stack",
+            rugra::space::AddressSpace::Iop => "iop",
+            rugra::space::AddressSpace::Join => "join",
+            rugra::space::AddressSpace::Overlay => "OTHER",
+        };
+        SPEC_SPACES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, highest)| *highest)
+            .unwrap_or(u64::MAX)
+    }
+    fn unique_inject_base(&self) -> u64 {
+        SPEC_UNIQUE_INJECT_BASE
+    }
+}
+
+impl rugra::pcodeparse::SleighSymbolLookup for WorkerSpecHost {
+    fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
+        self.registers.get(name).map(|vd| rugra::pcodeparse::SleighSymbol {
+            name: name.to_string(),
+            kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
+                space: vd.space,
+                offset: vd.offset,
+                size: vd.size.max(0) as usize,
+            }),
+        })
+    }
+}
+
+fn worker_architecture() -> Result<Arc<rugra::arch::Architecture>, String> {
+    static CACHE: std::sync::OnceLock<Result<Arc<rugra::arch::Architecture>, String>> =
+        std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
+                .map_err(|error| format!("unable to read compiler spec: {error}"))?;
+            let sleigh = rugra::sleigh_ffi::SleighCtx::new()
+                .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
+            let mut registers = HashMap::new();
+            for index in 0..sleigh.num_registers() {
+                let Some((name, space, offset, size)) = sleigh.register_info(index) else {
+                    continue;
+                };
+                let Ok(space_id) = u8::try_from(space) else {
+                    continue;
+                };
+                registers.insert(
+                    name.to_string(),
+                    rugra::fspec::VarnodeData {
+                        space: rugra::space::AddressSpace::from_id(space_id),
+                        offset,
+                        size,
+                    },
+                );
+            }
+            let host = Arc::new(WorkerSpecHost { registers });
+            let mut store = rugra::marshal::DocumentStorage::new();
+            let doc = store
+                .parse_document(&cspec_bytes)
+                .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+            let root = doc
+                .root
+                .clone()
+                .ok_or_else(|| "compiler spec has no root element".to_string())?;
+            if root
+                .read()
+                .map_err(|_| "compiler spec element lock poisoned".to_string())?
+                .name
+                != "compiler_spec"
+            {
+                return Err("compiler spec root is not compiler_spec".to_string());
+            }
+            store.register_tag(&root);
+            let mut arch = rugra::arch::Architecture::new();
+            arch.archid = "x86:LE:64:default".to_string();
+            arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+                rugra::comment::CommentDatabaseInternal::new(),
+            )));
+            let mut inject_lib =
+                rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
+            inject_lib.set_sleigh_lookup(host.clone());
+            arch.pcodeinjectlib = Some(Arc::new(std::sync::RwLock::new(inject_lib)));
+            arch.userops = Some(Arc::new(std::sync::RwLock::new(
+                rugra::userop::UserOpManage::new(),
+            )));
+            arch.parse_compiler_config(&mut store, host.as_ref(), 8)
+                .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+            if arch.defaultfp.is_none() {
+                return Err("No default prototype specified".to_string());
+            }
+            Ok(Arc::new(arch))
+        })
+        .clone()
+}
+
+fn build_funcdata(input: &FunctionInput) -> Result<Funcdata, Box<dyn Error>> {
     let mut fd = Funcdata::new(&input.name, Address::new(input.address), input.size as i32);
+    // Production binding (examples/curl_decompile.rs decompile_request):
+    // the worker Architecture — carrying the locked x86-64-gcc cspec
+    // default model — is attached before any analysis so callspec
+    // effect lookups resolve against the real effect list.
+    fd.set_arch(worker_architecture()?);
     for (&address, name) in &input.symbols {
         fd.add_symbol(address, name.clone());
     }
@@ -421,7 +571,7 @@ fn build_funcdata(input: &FunctionInput) -> Funcdata {
         Address::new(input.address),
         u64::MAX,
     );
-    fd
+    Ok(fd)
 }
 
 fn load_input(binary: &Path) -> Result<FunctionInput, Box<dyn Error>> {
@@ -488,11 +638,96 @@ fn load_input(binary: &Path) -> Result<FunctionInput, Box<dyn Error>> {
     })
 }
 
+/// Per-object projection of the INDIRECT call guards created by the
+/// production-path `guardCalls` (HERITAGE-CALLGUARD-0001 observation):
+/// for every alive INDIRECT op in block/position order print the parent
+/// block index and position, the iop-aliased causing op (resolved through
+/// the same Funcdata::get_op_from_const boundary Ghidra's
+/// PcodeOp::getOpFromConst uses), the input[0] form (indirectly-created
+/// constant zero vs prior storage value), and the output storage + flags.
+fn report_production_call_guards(fd: &Funcdata) {
+    let mut guard_count = 0usize;
+    eprintln!("[CALLGUARD] production heritage guards:");
+    for block in &fd.bblocks.blocks {
+        let block_read = block.read().expect("guard block read lock");
+        let Some(basic) = block_read
+            .as_any()
+            .downcast_ref::<rugra::block::BlockBasic>()
+        else {
+            continue;
+        };
+        for (position, op_ref) in basic.ops.iter().enumerate() {
+            let op = op_ref.0.read().expect("guard op read lock");
+            if op.opcode != rugra::opcodes::OpCode::CPUI_INDIRECT {
+                continue;
+            }
+            let Some(in1) = op.get_in(1) else {
+                continue;
+            };
+            if in1.read().expect("guard iop read lock").address_space
+                != rugra::space::AddressSpace::Iop
+            {
+                continue;
+            }
+            let causing = fd
+                .get_op_from_const(in1)
+                .map(|target| target.0.read().expect("guard target read lock").start.addr.as_u64())
+                .unwrap_or(0);
+            let form = op.is_indirect_creation();
+            let describe = |vn: &Arc<RwLock<Varnode>>| -> String {
+                let v = vn.read().expect("guard varnode read lock");
+                let mut flags = String::new();
+                if v.is_written() {
+                    flags.push('W');
+                }
+                if v.is_input() {
+                    flags.push('I');
+                }
+                if v.is_active_heritage() {
+                    flags.push('h');
+                }
+                if (v.flags & rugra::varnode::varnode_flags::INDIRECT_CREATION) != 0 {
+                    flags.push('c');
+                }
+                if (v.flags & rugra::varnode::varnode_flags::RETURN_ADDRESS) != 0 {
+                    flags.push('r');
+                }
+                if v.is_constant() {
+                    format!("const:{}:{}", v.size, flags)
+                } else {
+                    format!(
+                        "{}:{:x}:{}:{}",
+                        v.address_space.name(),
+                        v.loc.as_u64(),
+                        v.size,
+                        flags
+                    )
+                }
+            };
+            let in0 = op
+                .get_in(0)
+                .map(describe)
+                .unwrap_or_else(|| "none".to_string());
+            let out = op
+                .output
+                .as_ref()
+                .map(describe)
+                .unwrap_or_else(|| "none".to_string());
+            eprintln!(
+                "[CALLGUARD] block={}.{} ind{} call@0x{:x} in0={} out={}",
+                basic.index, position, if form { "+ic" } else { "" }, causing, in0, out
+            );
+            guard_count += 1;
+        }
+    }
+    eprintln!("[CALLGUARD] total INDIRECT call guards = {guard_count}");
+}
+
 fn run(binary: &Path, output_directory: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(output_directory)?;
     let input = load_input(binary)?;
 
-    let raw_fd = build_funcdata(&input);
+    let raw_fd = build_funcdata(&input)?;
     write_snapshot(
         output_directory,
         "00_raw_pcode.json",
@@ -504,7 +739,7 @@ fn run(binary: &Path, output_directory: &Path) -> Result<(), Box<dyn Error>> {
         &snapshot("01_cfg", &raw_fd, false, false, true, false, None),
     )?;
 
-    let mut heritage_fd = build_funcdata(&input);
+    let mut heritage_fd = build_funcdata(&input)?;
     let mut heritage = ActionHeritage::new();
     heritage.apply(&mut heritage_fd)?;
     write_snapshot(
@@ -521,7 +756,68 @@ fn run(binary: &Path, output_directory: &Path) -> Result<(), Box<dyn Error>> {
         ),
     )?;
 
-    let action_fd = Arc::new(RwLock::new(build_funcdata(&input)));
+    // 02b: the production-path heritage moment. Ghidra's locked fixture
+    // observes the same instant through a post-heritage breakpoint in the
+    // universal action list (getstr_pipeline_1204.cc). Rugra's action.rs has
+    // no breakpoint table yet, so this diagnostic replays the exact pre-
+    // heritage action sequence from build_default_pipeline (universal
+    // children before fullloop, then mainloop's varnodeprops) and snapshots
+    // immediately after the production ActionHeritage — the guardCalls
+    // boundary HERITAGE-CALLGUARD-0001 observes per-object.
+    let production_fd = Arc::new(RwLock::new(build_funcdata(&input)?));
+    production_fd
+        .write()
+        .expect("Funcdata write lock")
+        .set_self_ref(Arc::downgrade(&production_fd));
+    {
+        let mut fd = production_fd
+            .write()
+            .expect("Funcdata production-prefix write lock");
+        let mut prefix: Vec<Box<dyn rugra::action::Action>> = vec![
+            Box::new(rugra::coreaction::ActionStart::new()),
+            Box::new(rugra::coreaction::ActionConstbase::new()),
+            Box::new(rugra::coreaction::ActionDefaultParams::new()),
+            Box::new(rugra::coreaction::ActionExtraPopSetup::new()),
+            Box::new(rugra::coreaction::ActionPrototypeTypes::new()),
+            Box::new(rugra::coreaction::ActionFuncLink::new()),
+            Box::new(rugra::coreaction::ActionFuncLinkOutOnly::new()),
+            Box::new(rugra::coreaction::ActionSegmentize::new()),
+            Box::new(rugra::coreaction::ActionInternalStorage::new()),
+            Box::new(rugra::coreaction::ActionMultiCse::new()),
+            Box::new(rugra::coreaction::ActionShadowVar::new()),
+            Box::new(rugra::coreaction::ActionDeindirect::new()),
+            Box::new(rugra::coreaction::ActionVarnodeProps::new()),
+        ];
+        for action in prefix.iter_mut() {
+            action
+                .apply(&mut fd)
+                .map_err(|e| format!("production prefix action failed: {e}"))?;
+        }
+        rugra::coreaction::ActionHeritage::new()
+            .apply(&mut fd)
+            .map_err(|e| format!("production ActionHeritage failed: {e}"))?;
+    }
+    {
+        let fd = production_fd
+            .read()
+            .expect("Funcdata production-heritage read lock");
+        write_snapshot(
+            output_directory,
+            "02b_production_heritage.json",
+            &snapshot(
+                "02b_production_heritage",
+                &fd,
+                true,
+                true,
+                true,
+                false,
+                None,
+            ),
+        )?;
+        report_production_call_guards(&fd);
+    }
+
+    let action_fd = Arc::new(RwLock::new(build_funcdata(&input)?));
     action_fd
         .write()
         .expect("Funcdata write lock")

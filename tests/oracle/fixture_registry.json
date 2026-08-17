@@ -2210,6 +2210,66 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "heritage_callguard2_1204",
+   "description": "Production-entry call-guard per-object observations",
+   "runner": [
+    "tools/run_heritage_callguard2_oracle.sh"
+   ],
+   "timeout_seconds": 1500,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/heritage_callguard2_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/heritage_callguard2_1204.cc",
+     "rust_fixture": "tests/oracle/heritage_callguard2_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_heritage_callguard2_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "tests/oracle/heritage_callguard2_1204.*",
+     "tools/run_heritage_callguard2_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
+  },
+  {
+   "id": "space_printraw_special_1204",
+   "description": "JoinSpace printRaw pieces + manager join halves",
+   "runner": [
+    "tools/run_space_printraw_special_oracle.sh"
+   ],
+   "timeout_seconds": 1500,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/space_printraw_special_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/space_printraw_special_1204.cc",
+     "rust_fixture": "tests/oracle/space_printraw_special_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_space_printraw_special_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "tests/oracle/space_printraw_special_1204.*",
+     "tools/run_space_printraw_special_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }
