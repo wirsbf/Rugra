@@ -14637,17 +14637,17 @@ impl Rule for RuleIgnoreNan {
 }
 
 // ============================================================================
-// RuleLoadVarnode / RuleStoreVarnode  (ruleaction.cc:4185-4361)
+// RuleLoadVarnode / RuleStoreVarnode  (ruleaction.cc:4165-4341)
 // ============================================================================
 
 /// Convert LOAD operations using a constant offset (or a spacebase + offset)
 /// into a COPY of a named stack/global varnode.
 ///
-/// Faithful to Ghidra's `RuleLoadVarnode` (ruleaction.cc:4285-4325) plus its
+/// Faithful to Ghidra's `RuleLoadVarnode` (ruleaction.cc:4265-4305) plus its
 /// three static helpers:
-///   - `correctSpacebase` (ruleaction.cc:4193-4204)
-///   - `vnSpacebase`      (ruleaction.cc:4214-4247)
-///   - `checkSpacebase`   (ruleaction.cc:4256-4283)
+///   - `correctSpacebase` (ruleaction.cc:4173-4184)
+///   - `vnSpacebase`      (ruleaction.cc:4194-4227)
+///   - `checkSpacebase`   (ruleaction.cc:4236-4263)
 ///
 /// A LOAD's address operand (slot 1) is examined. If it is a plain constant,
 /// the load resolves directly into the LOAD's named space. If it is
@@ -14659,21 +14659,25 @@ impl RuleLoadVarnode {
     // Ghidra: ruleaction.cc:4285 RuleLoadVarnode
     pub fn new() -> Self { Self }
 
-    /// Faithful to `RuleLoadVarnode::correctSpacebase` (ruleaction.cc:4193-4204).
+    /// Faithful to `RuleLoadVarnode::correctSpacebase` (ruleaction.cc:4173-4184).
     ///
     /// Returns the `AddressSpace` associated with the given varnode if it is an
     /// *active* spacebase for `spc`; otherwise `None`.
     ///
     /// - A constant spacebase pseudo-varnode is associated with `spc`.
-    /// - A non-constant spacebase must be a function input; its associated
-    ///   space (looked up via `getSpaceBySpacebase`) must *contain* `spc`.
+/// - A non-constant spacebase must be a function input; its associated
+///   space (looked up via `Architecture::get_space_by_spacebase`,
+///   architecture.cc:264-282) must *contain* `spc` (`getContain`:
+///   base space.hh:505, `SpacebaseSpace` override translate.hh:187).
     ///
-    /// TODO(spacebase-registry): Rugra has no `getSpaceBySpacebase` /
-    /// `getContain` yet, so the non-constant spacebase-input branch returns
-    /// `None`. The constant spacebase branch (used by global pseudo-spacebases)
-    /// and the early `isSpacebase()` guard are fully faithful.
-    // Ghidra: ruleaction.cc:4193 RuleLoadVarnode::correctSpacebase
+    /// `glb` mirrors the oracle's `Architecture *glb` parameter; it is an
+    /// `Option` only because a Rugra `Funcdata` can exist before
+    /// `set_arch` (Ghidra always has `glb`). The constant branch never
+    /// consults `glb`, matching the oracle; an arch-less caller takes the
+    /// miss branch for the input-register case.
+    // Ghidra: ruleaction.cc:4173 RuleLoadVarnode::correctSpacebase
     fn correct_spacebase(
+        glb: Option<&crate::arch::Architecture>,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         spc: crate::space::AddressSpace,
     ) -> Option<crate::space::AddressSpace> {
@@ -14688,25 +14692,32 @@ impl RuleLoadVarnode {
         if !v.is_input() {
             return None;
         }
-        // Ghidra: assoc = glb->getSpaceBySpacebase(vn->getAddr(), vn->getSize());
-        //         if (assoc->getContain() != spc) return 0;
-        // Rugra lacks the spacebase→space registry, so we cannot resolve the
-        // associated space for a non-constant spacebase input. Bail out.
-        None
+        // Ghidra: assoc = glb->getSpaceBySpacebase(vn->getAddr(),vn->getSize());
+        let (loc_space, loc_offset, size) = (v.get_space(), v.get_offset(), v.get_size());
+        drop(v);
+        let glb = glb?;
+        let assoc = glb.get_space_by_spacebase(loc_space, loc_offset, size)?;
+        // Ghidra: if (assoc->getContain() != spc) return 0;
+        if glb.get_contain(assoc) != Some(spc) {
+            // Loading off right space? No.
+            return None;
+        }
+        Some(assoc)
     }
 
-    /// Faithful to `RuleLoadVarnode::vnSpacebase` (ruleaction.cc:4214-4247).
+    /// Faithful to `RuleLoadVarnode::vnSpacebase` (ruleaction.cc:4194-4227).
     ///
     /// If `vn` is `spacebase + const`, pass back the constant offset in `val`
     /// and return the associated space; otherwise `None`.
-    // Ghidra: ruleaction.cc:4214 RuleLoadVarnode::vnSpacebase
+    // Ghidra: ruleaction.cc:4194 RuleLoadVarnode::vnSpacebase
     fn vn_spacebase(
+        glb: Option<&crate::arch::Architecture>,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         val: &mut u64,
         spc: crate::space::AddressSpace,
     ) -> Option<crate::space::AddressSpace> {
         // Path 1: vn is itself an active spacebase (offset 0).
-        if let Some(retspace) = Self::correct_spacebase(vn, spc) {
+        if let Some(retspace) = Self::correct_spacebase(glb, vn, spc) {
             *val = 0;
             return Some(retspace);
         }
@@ -14724,7 +14735,7 @@ impl RuleLoadVarnode {
         let vn2 = match d.get_in(1) { Some(v) => v.clone(), None => return None };
         drop(d);
         // Try vn1 as spacebase, vn2 as the constant offset.
-        if let Some(retspace) = Self::correct_spacebase(&vn1, spc) {
+        if let Some(retspace) = Self::correct_spacebase(glb, &vn1, spc) {
             if vn2.read().unwrap().is_constant() {
                 *val = vn2.read().unwrap().get_offset();
                 return Some(retspace);
@@ -14732,7 +14743,7 @@ impl RuleLoadVarnode {
             return None;
         }
         // Try vn2 as spacebase, vn1 as the constant offset.
-        if let Some(retspace) = Self::correct_spacebase(&vn2, spc) {
+        if let Some(retspace) = Self::correct_spacebase(glb, &vn2, spc) {
             if vn1.read().unwrap().is_constant() {
                 *val = vn1.read().unwrap().get_offset();
                 return Some(retspace);
@@ -14741,7 +14752,7 @@ impl RuleLoadVarnode {
         None
     }
 
-    /// Faithful to `RuleLoadVarnode::checkSpacebase` (ruleaction.cc:4256-4283).
+    /// Faithful to `RuleLoadVarnode::checkSpacebase` (ruleaction.cc:4236-4263).
     ///
     /// Checks if a STORE/LOAD is off of `spacebase + constant`. If so, returns
     /// the associated space and passes back the offset in `offoff`.
@@ -14750,8 +14761,9 @@ impl RuleLoadVarnode {
     /// a constant-space varnode (the LOAD/STORE space-id operand, slot 0).
     /// Rugra encodes the space-id as a constant whose value is the space-id, so
     /// we decode it via `AddressSpace::from_id`.
-    // Ghidra: ruleaction.cc:4346 RuleLoadVarnode::checkSpacebase
+    // Ghidra: ruleaction.cc:4236 RuleLoadVarnode::checkSpacebase
     fn check_spacebase(
+        glb: Option<&crate::arch::Architecture>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         offoff: &mut u64,
     ) -> Option<crate::space::AddressSpace> {
@@ -14791,22 +14803,24 @@ impl RuleLoadVarnode {
                 return None;
             }
             // Fall through to vnSpacebase(inner) — but Ghidra reassigns offvn.
-            return Self::vn_spacebase(&inner, offoff, loadspace);
+            return Self::vn_spacebase(glb, &inner, offoff, loadspace);
         } else if offvn.read().unwrap().is_constant() {
             // Check for plain constant.
             *offoff = offvn.read().unwrap().get_offset();
             return Some(loadspace);
         }
-        Self::vn_spacebase(&offvn, offoff, loadspace)
+        Self::vn_spacebase(glb, &offvn, offoff, loadspace)
     }
 }
 
 impl Rule for RuleLoadVarnode {
-    // Ghidra: ruleaction.cc:4297 RuleLoadVarnode::applyOp
+    // Ghidra: ruleaction.cc:4277 RuleLoadVarnode::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleLoadVarnode::applyOp (ruleaction.cc:4297-4325).
+        // Faithful to RuleLoadVarnode::applyOp (ruleaction.cc:4277-4305).
+        // checkSpacebase(data.getArch(),op,offoff)
+        let glb = fd.get_arch().map(std::sync::Arc::as_ref);
         let mut offoff: u64 = 0;
-        let baseoff = match Self::check_spacebase(op_arc, &mut offoff) {
+        let baseoff = match Self::check_spacebase(glb, op_arc, &mut offoff) {
             Some(s) => s,
             None => return Ok(action_status::NO_CHANGE),
         };
@@ -14835,42 +14849,43 @@ impl Rule for RuleLoadVarnode {
         // data.opSetOpcode(op, CPUI_COPY);
         fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
 
-        // The spacebase-placeholder / call-resolve tail (ruleaction.cc:4314-4323)
+        // The spacebase-placeholder / call-resolve tail (ruleaction.cc:4294-4303)
         // requires FuncCallSpecs / resolveSpacebaseRelative, which Rugra does
         // not yet model. The core LOAD→COPY transform is complete.
         // TODO(callspecs): port resolveSpacebaseRelative once call specs exist.
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:4285 RuleLoadVarnode
+    // Ghidra: ruleaction.cc:4265 RuleLoadVarnode
     fn get_name(&self) -> &str { "load_varnode" }
-    // Ghidra: ruleaction.cc:4291 RuleLoadVarnode::getOpList
+    // Ghidra: ruleaction.cc:4271 RuleLoadVarnode::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
 
 /// Convert STORE operations using a constant offset into a COPY of a named
 /// stack/global varnode.
 ///
-/// Faithful to Ghidra's `RuleStoreVarnode` (ruleaction.cc:4339-4361). Shares
+/// Faithful to Ghidra's `RuleStoreVarnode` (ruleaction.cc:4307-4341). Shares
 /// the `check_spacebase` helper from `RuleLoadVarnode` (just as Ghidra does —
 /// `RuleLoadVarnode::checkSpacebase`).
 pub struct RuleStoreVarnode;
 
 impl RuleStoreVarnode {
-    // Ghidra: ruleaction.cc:4327 RuleStoreVarnode
+    // Ghidra: ruleaction.cc:4307 RuleStoreVarnode
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleStoreVarnode {
-    // Ghidra: ruleaction.cc:4339 RuleStoreVarnode::applyOp
+    // Ghidra: ruleaction.cc:4319 RuleStoreVarnode::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleStoreVarnode::applyOp (ruleaction.cc:4339-4361).
+        // Faithful to RuleStoreVarnode::applyOp (ruleaction.cc:4319-4341).
+        // checkSpacebase(data.getArch(),op,offoff)
+        let glb = fd.get_arch().map(std::sync::Arc::as_ref);
         let mut offoff: u64 = 0;
-        let baseoff = match RuleLoadVarnode::check_spacebase(op_arc, &mut offoff) {
+        let baseoff = match RuleLoadVarnode::check_spacebase(glb, op_arc, &mut offoff) {
             Some(s) => s,
             None => return Ok(action_status::NO_CHANGE),
         };
-
         // size = op->getIn(2)->getSize();
         let val_size = {
             let op = op_arc.read().unwrap();
@@ -14906,15 +14921,15 @@ impl Rule for RuleStoreVarnode {
         // data.opSetOpcode(op, CPUI_COPY);
         fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
 
-        // The isStoreUnmapped / markNotMapped tail (ruleaction.cc:4357-4359)
+        // The isStoreUnmapped / markNotMapped tail (ruleaction.cc:4337-4339)
         // needs ScopeLocal::markNotMapped, which Rugra does not model.
         // TODO(scopelocal): port markNotMapped once scope-mapping exists.
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:4327 RuleStoreVarnode
+    // Ghidra: ruleaction.cc:4307 RuleStoreVarnode
     fn get_name(&self) -> &str { "store_varnode" }
-    // Ghidra: ruleaction.cc:4333 RuleStoreVarnode::getOpList
+    // Ghidra: ruleaction.cc:4313 RuleStoreVarnode::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
 }
 
@@ -20492,12 +20507,170 @@ mod tests {
     fn test_rule_load_varnode_correct_spacebase_non_spacebase() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        let r = RuleLoadVarnode::correct_spacebase(&vn, crate::space::AddressSpace::Stack);
+        let r = RuleLoadVarnode::correct_spacebase(None, &vn, crate::space::AddressSpace::Stack);
         assert!(r.is_none());
     }
 
+    /// RuleLoadVarnode::correct_spacebase non-constant branch (ruleaction.cc:4180-4183):
+    /// a spacebase-flagged INPUT register at the architecture's stack-pointer
+    /// record resolves via getSpaceBySpacebase, and the contain check
+    /// (`assoc->getContain() != spc`) gates the associated space.
+    #[test]
+    fn test_rule_load_varnode_correct_spacebase_input_registry() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // x86-64 RSP: register space, offset 0x20, size 8 — the default
+        // stack-pointer record on Architecture::new().
+        let rsp = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        rsp.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        fd.set_input_varnode(rsp.clone());
+        let arch = crate::arch::Architecture::new();
+
+        // spc = ram: contain(stack)=ram == spc → associated stack space.
+        let r = RuleLoadVarnode::correct_spacebase(
+            Some(&arch), &rsp, crate::space::AddressSpace::Ram,
+        );
+        assert_eq!(r, Some(crate::space::AddressSpace::Stack));
+
+        // spc = stack: contain(stack)=ram != stack → miss (loading off the
+        // wrong space).
+        let r = RuleLoadVarnode::correct_spacebase(
+            Some(&arch), &rsp, crate::space::AddressSpace::Stack,
+        );
+        assert!(r.is_none());
+
+        // Registry mismatch: a spacebase input at an unregistered register
+        // (0x40) misses the record walk.
+        let other = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        other.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        fd.set_input_varnode(other.clone());
+        let r = RuleLoadVarnode::correct_spacebase(
+            Some(&arch), &other, crate::space::AddressSpace::Ram,
+        );
+        assert!(r.is_none());
+
+        // No Architecture (arch-less Funcdata): registry unresolvable → miss.
+        let r = RuleLoadVarnode::correct_spacebase(None, &rsp, crate::space::AddressSpace::Ram);
+        assert!(r.is_none());
+
+        // A spacebase-flagged WRITTEN varnode (not input) → miss (cc:4179).
+        let written = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        written.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        let r = RuleLoadVarnode::correct_spacebase(
+            Some(&arch), &written, crate::space::AddressSpace::Ram,
+        );
+        assert!(r.is_none());
+    }
+
+    /// RuleStoreVarnode non-constant branch (ruleaction.cc:4319-4341): a STORE
+    /// whose offset operand is `INT_ADD(RSP_input, const)` — the prologue
+    /// `push`/register-save form — resolves through the spacebase registry and
+    /// rewrites to a stack-space COPY with setStackStore (cc:4333).
+    #[test]
+    fn test_rule_store_varnode_spacebase_input_chain() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let arch = std::sync::Arc::new(crate::arch::Architecture::new());
+        fd.set_arch(arch.clone());
+
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let rsp = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        rsp.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        fd.set_input_varnode(rsp.clone());
+        let k8 = fd.vbank.create_constant(8, (-8i64) as u64);
+        let add = {
+            let seq = SeqNum::new(Address::new(0x1000), 0);
+            let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+            op.inrefs = vec![rsp.clone(), k8];
+            Arc::new(RwLock::new(op))
+        };
+        // opSetOutput wires the def link that vnSpacebase reads.
+        let addout = fd.new_unique_out(8, &crate::op::PcodeOpRef(add.clone()));
+
+        let val = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let seq = SeqNum::new(Address::new(0x1000), 1);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
+        op.inrefs = vec![spaceid, addout, val.clone()];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStoreVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        {
+            let o = op_arc.read().unwrap();
+            assert_eq!(o.opcode, OpCode::CPUI_COPY);
+            assert_eq!(o.inrefs.len(), 1);
+            let newout = o.output.as_ref().unwrap();
+            let no = newout.read().unwrap();
+            // Stack-space def at RSP-8, marked STACK_STORE.
+            assert_eq!(no.get_space(), crate::space::AddressSpace::Stack);
+            assert_eq!(no.get_offset(), (-8i64) as u64);
+            assert_ne!(no.addlflags & crate::varnode::addl_flags::STACK_STORE, 0);
+        }
+
+        // Swapped INT_ADD operand order (const, RSP_input) — the vn2 branch
+        // of vnSpacebase (cc:4219-4225).
+        let k16 = fd.vbank.create_constant(8, 0x10);
+        let add2 = {
+            let seq = SeqNum::new(Address::new(0x1000), 2);
+            let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+            op.inrefs = vec![k16, rsp];
+            Arc::new(RwLock::new(op))
+        };
+        let add2out = fd.new_unique_out(8, &crate::op::PcodeOpRef(add2.clone()));
+        let spaceid2 = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x308);
+        let seq = SeqNum::new(Address::new(0x1000), 3);
+        let mut op2 = PcodeOp::new(seq, OpCode::CPUI_STORE);
+        op2.inrefs = vec![spaceid2, add2out, val];
+        op2.output = Some(out2);
+        let op2_arc = Arc::new(RwLock::new(op2));
+        let result = rule.apply_op(&op2_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        {
+            let o = op2_arc.read().unwrap();
+            assert_eq!(o.opcode, OpCode::CPUI_COPY);
+            let no = o.output.as_ref().unwrap().read().unwrap();
+            assert_eq!(no.get_space(), crate::space::AddressSpace::Stack);
+            assert_eq!(no.get_offset(), 0x10);
+        }
+    }
+
+    /// RuleStoreVarnode: contain mismatch — a spacebase chain STORE whose
+    /// space-id names the stack space (contain(stack)=ram != stack) stays
+    /// untouched (cc:4181-4182).
+    #[test]
+    fn test_rule_store_varnode_spacebase_contain_mismatch() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let arch = std::sync::Arc::new(crate::arch::Architecture::new());
+        fd.set_arch(arch);
+
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
+        let rsp = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        rsp.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        fd.set_input_varnode(rsp.clone());
+        let k8 = fd.vbank.create_constant(8, (-8i64) as u64);
+        let add = {
+            let seq = SeqNum::new(Address::new(0x1000), 0);
+            let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+            op.inrefs = vec![rsp, k8];
+            Arc::new(RwLock::new(op))
+        };
+        let addout = fd.new_unique_out(8, &crate::op::PcodeOpRef(add.clone()));
+        let val = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let seq = SeqNum::new(Address::new(0x1000), 1);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
+        op.inrefs = vec![spaceid, addout, val];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStoreVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_STORE);
+    }
+
     /// RuleStoreVarnode: STORE(stack_spaceid, const offset, value) → COPY with
-    /// the output marked STACK_STORE (ruleaction.cc:4339-4361).
+    /// the output marked STACK_STORE (ruleaction.cc:4319-4341).
     #[test]
     fn test_rule_store_varnode_const_offset() {
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);

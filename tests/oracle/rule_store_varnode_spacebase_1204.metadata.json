@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "fixture_id": "PRINTC-INPUTREG-DEADSTORE-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "instrumentation_policy": "No instrumentation: the fixture drives the public RuleStoreVarnode/RuleLoadVarnode::applyOp and Funcdata::spacebase entry points of the locked oracle; observations read only public state (Varnode space/offset/size, isStackStore, PcodeOp opcode/inputs)."
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "entry": "Direct RuleStoreVarnode::applyOp / RuleLoadVarnode::applyOp calls over hand-built Funcdata IR (one STORE/LOAD per case), preceded by the real Funcdata::spacebase flagging pass",
+    "spacebase_registry": "BfdArchitecture-init full cspec (x86-64-gcc): stack space contain=ram, single spacebase record register:0x20:8 (RSP)",
+    "normalization": "Stable case names only. Unique-space offsets and raw space-id constant values are not observed on either side (allocation-only temporaries / process-local space-id encodings). No flags, input order, opcode, output space/offset/size, stack-store flag, result value, or iteration state is normalized."
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "host_tools": {
+    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+    "platform": "Linux 6.8.0-124-generic x86_64"
+  },
+  "known_dependencies": {
+    "ARCH-0001": {
+      "status": "MISMATCH",
+      "detail": "Rugra's enum-space Architecture stands in for Ghidra's AddrSpace* registry: getSpaceBySpacebase/getContain are keyed by the AddressSpace enum + flattened stack_* config rather than per-space record stores. This fixture proves the observable spacebase-resolution behavior (9/9 records byte-identical) but not full AddrSpace object identity."
+    },
+    "CALLSPECS-0001": {
+      "status": "UNTESTED",
+      "detail": "RuleLoadVarnode::applyOp spacebase-placeholder tail (ruleaction.cc:4294-4303, resolveSpacebaseRelative via FuncCallSpecs) is not modeled in Rugra; the fixture's LOAD case has no spacebase-placeholder output so the tail is unreached on both sides."
+    },
+    "SCOPELOCAL-0001": {
+      "status": "UNTESTED",
+      "detail": "RuleStoreVarnode::applyOp isStoreUnmapped/markNotMapped tail (ruleaction.cc:4337-4339) needs ScopeLocal::markNotMapped, not modeled in Rugra; the fixture's STORE is not store-unmapped so the tail is unreached on both sides."
+    }
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "98385dd5bfbbe676fa473c03eedcf46a3baea51a1a0961e6c871de66184fe5e0",
+    "rust_fixture_sha256": "991472ca4ea9bd04576e32568d670492aa82d9d88c59df541903d5160361371b",
+    "runner_sha256": "a2084def6192db2fa51b65be4445fdb5d7947ec3f03df2251565002fda3fa565",
+    "rust_crate_tree_sha256": "5cf5059edbb1c0e0337b9089586d4f33416ad9a250ea2e29fa1298d5b4c272af",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-store-varnode-spacebase-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents"
+  },
+  "input_manifest": {
+    "binary": {
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a"
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0
+    },
+    "cases": [
+      "registry_stack_contain_and_record",
+      "store_sbinput_off0",
+      "store_sbinput_add",
+      "store_sbinput_swap",
+      "store_contain_mismatch",
+      "store_written_base",
+      "store_copy_wrapped",
+      "load_sbinput_add",
+      "store_non_spacebase"
+    ],
+    "sha256": "5b0b5a566d1a73948fe4f2631fba55cedbea2bfb400c78e844292cb114f26cec"
+  },
+  "coverage": {
+    "registry_stack_contain_and_record": "MATCH",
+    "store_sbinput_off0": "MATCH",
+    "store_sbinput_add": "MATCH",
+    "store_sbinput_swap": "MATCH",
+    "store_contain_mismatch": "MATCH",
+    "store_written_base": "MATCH",
+    "store_copy_wrapped": "MATCH",
+    "load_sbinput_add": "MATCH",
+    "store_non_spacebase": "MATCH"
+  },
+  "expected_stdout_sha256": "bd259cea5d4792e837aecd47c31b1889b52fd6a71efbb1c7b5ae1b9c70920d40",
+  "expected_exit_code": 0,
+  "overall_status": "MATCH: spacebase-registry observations (stack contain link + spacebase record, 8 rule-call cases incl. hit/miss families) are byte-identical under the locked oracle; ARCH-0001 enum-space stand-in remains a known MISMATCH at the full-state level and CALLSPECS-0001/SCOPELOCAL-0001 tails remain UNTESTED"
+}

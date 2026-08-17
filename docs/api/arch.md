@@ -185,7 +185,19 @@ cspec dispatch arm calls it since ARCH-CONTEXT-TRACKED-0001),
 consumer entry point, coreaction.cc:692),
 `get_tracked_default() -> &[TrackedRegister]` (ContextDatabase::
 getTrackedDefault, globalcontext.hh:211/303 — empty on this ingest path:
-decodeFromSpec never assigns the partition-map default value).
+decodeFromSpec never assigns the partition-map default value),
+`get_space_by_spacebase(loc_space, loc_offset, size) -> Option<AddressSpace>`
+(Architecture::getSpaceBySpacebase, architecture.cc:264-282 — walks the
+spacebase records in baselist order matching size/space/offset; Rugra's
+enum-space registry reduces to the single stack record; returns `None`
+instead of Ghidra's `throw LowlevelError("Unable to find entry for
+spacebase register")` — pre-registered deviation,
+PRINTC-INPUTREG-DEADSTORE-0001),
+`get_contain(spc) -> Option<AddressSpace>` (relocation of the
+`AddrSpace::getContain` family, space.hh:505 base → null /
+SpacebaseSpace override translate.hh:187 → the cspec basespace; the contain
+link lives on Architecture as `stack_base_space` because the enum space
+model has no per-space record store).
 
 ## L3 gaps
 - Virtual factory hooks (`buildTranslator`, `buildLoader`, `buildTypegrp`, …)
@@ -193,7 +205,9 @@ decodeFromSpec never assigns the partition-map default value).
 - Production XML text ingestion and full processor/compiler-spec dispatch
   (`parseProcessorConfig`, `parseCompilerConfig`, …). The current decode
   methods intentionally begin at an existing structured `TreeDecoder`.
-- `AddrSpaceManager` integration (`getSpaceBySpacebase`, `getSegmentOp`).
+- `AddrSpaceManager` integration (`getSegmentOp`; `getSpaceBySpacebase` is
+  served by the Architecture-level registry since
+  PRINTC-INPUTREG-DEADSTORE-0001).
 - `DocumentStorage` for `init`/`restoreXml`.
 
 ## 2026-06-27 历史实现记录（“达到 L3”结论已于 2026-08-11 撤回）

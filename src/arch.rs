@@ -583,6 +583,17 @@ pub struct Architecture {
     /// (the `setReverseJustified` effect of `addSpacebase`,
     /// architecture.cc:566-567).
     pub stack_reverse_justify: bool,
+    /// The stack space's containing space: the cspec `<stackpointer
+    /// space="...">` basespace that `Architecture::addSpacebase`
+    /// (architecture.cc:559-570) hands to the `SpacebaseSpace`
+    /// constructor as its `contain` link (translate.hh:174, exposed by
+    /// the `getContain` override at translate.hh:187; the base
+    /// `AddrSpace::getContain` null is space.hh:505). Defaults to Ram,
+    /// matching every locked x86-64 gcc cspec (`space="ram"`). Powers the
+    /// `assoc->getContain() != spc` check of
+    /// `RuleLoadVarnode::correctSpacebase` (ruleaction.cc:4181) via
+    /// [`Architecture::get_contain`].
+    pub stack_base_space: crate::space::AddressSpace,
 }
 
 // Manual Debug impl (the `loader` field is `Arc<dyn LoadImage>` without a
@@ -660,6 +671,7 @@ impl Architecture {
             stack_pointer_size: 8,
             stack_grows_negative: true,
             stack_reverse_justify: false,
+            stack_base_space: crate::space::AddressSpace::Ram,
         };
         arch.reset_defaults_internal();
         arch
@@ -708,6 +720,83 @@ impl Architecture {
     /// `hasModel` (architecture.cc:247).
     pub fn has_model(&self, nm: &str) -> bool {
         self.proto_models.contains_key(nm)
+    }
+
+    // Ghidra: architecture.cc:264 Architecture::getSpaceBySpacebase
+    /// Get the address space associated with the indicated \e spacebase
+    /// register. Faithful to `getSpaceBySpacebase`
+    /// (architecture.cc:264-282): walk every space (in baselist index
+    /// order) and each space's spacebase records, returning the first
+    /// space whose record matches the register's size/space/offset.
+    ///
+    /// Registry source: Rugra's enum-space Architecture keeps the
+    /// spacebase records as flat config (Ghidra stores them on the spaces
+    /// via `numSpacebase`/`getSpacebase`, space.hh:155-156); the locked
+    /// x86-64 oracle has exactly one record-bearing space — the stack
+    /// space, whose single record is the `<stackpointer>` triple
+    /// [`Self::stack_pointer_space`]/[`Self::stack_pointer_offset`]/
+    /// [`Self::stack_pointer_size`] — so the iteration reduces to that
+    /// one record.
+    ///
+    /// Deviation from the throw: Ghidra ends with
+    /// `throw LowlevelError("Unable to find entry for spacebase
+    /// register")`; this port returns `None` so the caller
+    /// (`RuleLoadVarnode::correct_spacebase`) can take the miss branch —
+    /// a pre-registered conservative degradation
+    /// (PRINTC-INPUTREG-DEADSTORE-0001): the oracle throw only fires for
+    /// a spacebase-flagged input at an unregistered location, which
+    /// `Funcdata::spacebase` (funcdata.cc:230) never produces.
+    pub fn get_space_by_spacebase(
+        &self,
+        loc_space: crate::space::AddressSpace,
+        loc_offset: u64,
+        size: usize,
+    ) -> Option<crate::space::AddressSpace> {
+        // (assoc space, record point (space, offset, size)) in baselist
+        // order; today: the stack record only.
+        let records = [(
+            self.stack_space,
+            self.stack_pointer_space,
+            self.stack_pointer_offset,
+            self.stack_pointer_size,
+        )];
+        for (assoc, point_space, point_offset, point_size) in records {
+            if point_size != size {
+                continue;
+            }
+            if point_space != loc_space {
+                continue;
+            }
+            if point_offset != loc_offset {
+                continue;
+            }
+            return Some(assoc);
+        }
+        None
+    }
+
+    // Ghidra: space.hh:505 AddrSpace::getContain (stack override: translate.hh:187)
+    /// Return the containing space of a virtual space, `None` otherwise.
+    ///
+    /// Faithful relocation of the `getContain` family: the base
+    /// `AddrSpace::getContain` (space.hh:505-507) returns null for
+    /// non-virtual spaces, and the `SpacebaseSpace` override
+    /// (translate.hh:187) returns the space's `contain` link
+    /// (translate.hh:174) — for the stack space, the cspec basespace
+    /// installed by `addSpacebase` (architecture.cc:564-565). Rugra's
+    /// enum-space model has no per-space record store, so the link lives
+    /// on the Architecture ([`Self::stack_base_space`]) and the lookup is
+    /// keyed by the associated space. Callers compare the result against
+    /// the load/store space exactly as the oracle compares
+    /// `assoc->getContain() != spc` (ruleaction.cc:4181).
+    pub fn get_contain(
+        &self,
+        spc: crate::space::AddressSpace,
+    ) -> Option<crate::space::AddressSpace> {
+        if spc == self.stack_space {
+            return Some(self.stack_base_space);
+        }
+        None
     }
 
     // Ghidra: architecture.cc:323 Architecture::setDefaultModel
@@ -1414,7 +1503,7 @@ impl Architecture {
             }
         }
 
-        let Some(_base) = basespace else {
+        let Some(base) = basespace else {
             // ELEM_STACKPOINTER.getName() + " element missing \"space\"
             // attribute" (architecture.cc:1002) — the element name is the
             // bare "stackpointer", without angle brackets.
@@ -1433,10 +1522,13 @@ impl Architecture {
 
         // addSpacebase(basespace,"stack",point,truncSize,
         //              isreversejustify,stackGrowth,true)
+        // (architecture.cc:1013) — SpacebaseSpace(basespace,...) installs
+        // basespace as the stack space's contain link.
         self.stack_space = crate::space::AddressSpace::Stack;
         self.stack_pointer_space = point.space;
         self.stack_pointer_offset = point.offset;
         self.stack_pointer_size = trunc_size;
+        self.stack_base_space = base;
         self.stack_grows_negative = stack_growth;
         self.stack_reverse_justify = is_reverse_justify;
         Ok(())
