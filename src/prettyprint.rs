@@ -2469,8 +2469,33 @@ impl EmitNoMarkup {
             let trimmed = line.trim();
             // Detect function signature opener: a signature line ends with '{'
             // (legacy layout) or, in the oracle skip_line layout
-            // (printc.cc:1590/2655), ends with ')' and the lone '{` follows.
-            let sig_shape = trimmed.contains('(')
+            // (printc.cc:1590/2655), ends with ')' and the lone `{` follows.
+            // WARN-EMIT2 R2 (printc-side naming collision root cause): the
+            // `contains(" *")` arm also matches control-flow openers whose
+            // condition carries a `/* N */` hex annotation — e.g.
+            // `if ((bool)(piVar1 <= 0x1000 /* 4096 */)) {` contains `(`,
+            // contains `" *"` (inside ` /* 4096 */`), and ends with `{`. The
+            // pass then treated the if-body as a nested function, found the
+            // block's auto-prefixed names "undeclared" (its declared-name
+            // walk only covers the block, not the function scope), and
+            // re-injected the whole decl set INSIDE the block — duplicate
+            // `piVar1`/`uVar0` declarations (glob_url numbering 0->3). Gate
+            // every control-flow opener out of sig_shape; only real function
+            // signatures (first token is a type) reach the injection path.
+            let control_flow_opener = trimmed.starts_with("if (")
+                || trimmed.starts_with("if(")
+                || trimmed.starts_with("while (")
+                || trimmed.starts_with("while(")
+                || trimmed.starts_with("for (")
+                || trimmed.starts_with("for(")
+                || trimmed.starts_with("switch (")
+                || trimmed.starts_with("switch(")
+                || trimmed.starts_with("do {")
+                || trimmed.starts_with("else")
+                || trimmed.starts_with("case ")
+                || trimmed.starts_with("default:");
+            let sig_shape = !control_flow_opener
+                && trimmed.contains('(')
                 && (trimmed.starts_with("int ") || trimmed.starts_with("long ")
                     || trimmed.starts_with("void ") || trimmed.starts_with("char ")
                     || trimmed.starts_with("short ") || trimmed.starts_with("bool ")

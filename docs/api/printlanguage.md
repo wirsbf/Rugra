@@ -121,3 +121,19 @@ nested_parenthesized=a * (b + c)
 - `pub trait PrintLanguage` — 遗留 trait shim，保持 `printc.rs` 的 `impl PrintLanguage for PrintC` 编译。新代码应使用上述自由函数与数据类型。
 
 <!-- annotation-pass: 2026-07-22 -->
+
+### 2026-08-17：emitLineComment 全量移植落在 PrintC + resetDefaultsInternal 掩码勘误
+
+- `PrintLanguage::emitLineComment`（printlanguage.cc:589-648）在 Rust 侧的
+  完整移植落在 `impl PrintLanguage for PrintC`（`printc.rs`）——Ghidra 的
+  该成员非虚函数，PrintC 直接继承基类实现；Rust trait 的默认体是 no-op，
+  故实装放 PrintC。逐字节 token 循环、`line_commentindent=20`
+  （printlanguage.cc:580）、负 indent 回退语义（cc:595-596）全部按 oracle；
+  C 风格 `"/* "`/`" */"` 界定符是 PrintC `resetDefaultsPrintC`→
+  `setCStyleComments()`（printc.cc:1594→printc.hh:242）的不变量。
+- `resetDefaults_internal_state` 自由函数（本文件，cc:575-583 移植）原本
+  只接管 mods/line_commentindent/namespc_strategy；本轮在 PrintC 构造器
+  对调并修正了两个注释掩码的默认值引用：`head_comment_type =
+  header|warningheader`（cc:579）、`instr_comment_type = user2|warning`
+  （cc:582）——此前两值互换（详见 docs/api/printc.md 2026-08-17 节
+  UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ③）。

@@ -346,3 +346,23 @@ PRINTC-UNLINKED-REF-0001 域）保持可编译，是任务要求的 backfill 保
   register_tm_clones 恢复 OK，零新增 FAIL）；skeleton 4368→4403（+35：
   backfill 注入组保留所致，重复声明行已消——对照实验：三 pass 全旁路
   时 skeleton 4052 但 gcc FAIL 25，未链接引用如实暴露为 undeclared）。
+
+### 2026-08-17：WARN-EMIT2 R2 — backfill 签名启发式误匹配控制流行（重复声明根因）
+
+`backfill_missing_locals` 的函数签名判定 `sig_shape` 含
+`trimmed.contains(" *")` 臂（本意覆盖 `char *foo(...)` 这类前缀表外签名）。
+该臂同时命中**带 `/* N */` 十六进制注解的控制流开行**：例如
+`if ((bool)(piVar1 <= 0x1000 /* 4096 */)) {` ——含 `(`、含 `" *"`
+（` /* 4096 */` 里的 ` */`）、以 `{` 结尾，三条件全真。pass 随即把 if 体
+当作嵌套函数：declared 收集只看块内（函数顶声明不可见）→ 块内全部
+匈牙利前缀名被判 missing → 五条声明**整组注入 if 体内**，与函数顶那组
+逐字重复（glob_url 的 `piVar1`/`uVar0`/`uVar20`/`uVar_1000004a`/
+`uVar_9100`，numbering 0→3 的直接来源；隔离复现：删干净双批后单次
+`post_process_output` 即再生两批）。
+
+修复：`sig_shape` 前置 `control_flow_opener` 排除
+（`if (/while (/for (/switch (/do {/else/case /default:` 各带无空格变体），
+只有真函数签名（首 token 为类型）能进入注入路径。验收：glob_url 单批注入
+（保留 PRINTC-UNLINKED-REF-0001 兜底语义）；锁定 12.0.4 golden 差分
+numbering 3→**0**、defects 0 不变、Matched 123 不降；11.3.2 回归 golden
+同 0/0。诊断期临时插桩（RUGRA_DUMP_PRE_POSTPROCESS 等五处）已全部移除。

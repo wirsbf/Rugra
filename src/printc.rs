@@ -500,13 +500,20 @@ pub struct PrintC {
     option_brace_func: crate::prettyprint::BraceStyle,
     /// Mask of instruction-relative comment types to print (printlanguage.hh:271
     /// `instr_comment_type`). Gated read in `emitCommentGroup` (printc.cc:3238).
-    /// Defaults to `Comment::header | Comment::warningheader` (printlanguage.cc:582).
+    /// Defaults to `Comment::user2 | Comment::warning`
+    /// (printlanguage.cc:582 resetDefaultsInternal).
     instr_comment_type: u32,
     /// Mask of function-header comment types to print (printlanguage.hh:272
     /// `head_comment_type`). Gated read in `emitCommentFuncHeader`
-    /// (printc.cc:3280). Defaults to `Comment::user2 | Comment::warning`
-    /// (printlanguage.cc:582).
+    /// (printc.cc:3280). Defaults to `Comment::header | Comment::warningheader`
+    /// (printlanguage.cc:579 resetDefaultsInternal).
     head_comment_type: u32,
+    /// Column at which in-body comments are emitted when the caller passes a
+    /// negative indent (printlanguage.hh:275 `line_commentindent`). Set to 20
+    /// by `resetDefaultsInternal` (printlanguage.cc:580); read by
+    /// `emitLineComment` (printlanguage.cc:595-596) when `indent < 0` — the
+    /// `emitCommentGroup` path (printc.cc:3239 emitLineComment(-1, comm)).
+    line_commentindent: i32,
     /// Per-function comment sorter. Faithful to `PrintC::commsorter`
     /// (printc.hh:158). Populated by `doc_function` via
     /// `commsorter.setupFunctionList` (printc.cc:2650) and drained by
@@ -622,13 +629,17 @@ impl PrintC {
             option_inplace_ops: false, // printc.cc:1586 resetDefaultsPrintC
             option_unplaced: false,    // printc.cc:1589 resetDefaultsPrintC
             option_brace_func: crate::prettyprint::BraceStyle::SkipLine, // printc.cc:1590
-            // printlanguage.cc:582 resetDefaultsInternalState comment-type masks:
-            //   instr_comment_type = Comment::header | Comment::warningheader
-            //   head_comment_type  = Comment::user2 | Comment::warning
-            instr_comment_type: crate::comment::comment_type::HEADER
-                | crate::comment::comment_type::WARNINGHEADER,
-            head_comment_type: crate::comment::comment_type::USER2
+            // printlanguage.cc:575-583 resetDefaultsInternal comment-type
+            // masks (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ③ — the two were
+            // previously transposed):
+            //   head_comment_type  = Comment::header | Comment::warningheader  (cc:579)
+            //   instr_comment_type = Comment::user2 | Comment::warning        (cc:582)
+            instr_comment_type: crate::comment::comment_type::USER2
                 | crate::comment::comment_type::WARNING,
+            head_comment_type: crate::comment::comment_type::HEADER
+                | crate::comment::comment_type::WARNINGHEADER,
+            // printlanguage.cc:580: line_commentindent = 20.
+            line_commentindent: 20,
             comment_sorter: crate::comment::CommentSorter::new(),
             cpool: None,
             userops: None,
@@ -6115,6 +6126,44 @@ impl PrintLanguage for PrintC {
             self.emit.print("");
         }
 
+        // Ghidra: printc.cc:2650-2653 docFunction's comment setup and header
+        // emission (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ②). Call order is
+        // verbatim from the oracle:
+        //   2650  commsorter.setupFunctionList(instr_comment_type|head_comment_type,
+        //                                      fd,*fd->getArch()->commentdb,
+        //                                      option_unplaced);
+        //   2651  int4 id1 = emit->beginFunction(fd);
+        //   2652  emitCommentFuncHeader(fd);
+        //   2653  emit->tagLine();
+        // `beginFunction` is markup-only in the oracle's text path
+        // (prettyprint.cc:877 beginFunction → checkstart + markup token; no
+        // plain-text bytes), matching Rugra's no-op EmitNoMarkup::begin_function.
+        // Without an Architecture/commentdb (legacy callers) the sorter stays
+        // empty and emit_comment_func_header emits nothing, exactly as
+        // Ghidra would for an empty comment database.
+        if let Some(db) = fd.arch.as_ref().and_then(|a| a.commentdb.clone()) {
+            let db_read = db.read().unwrap();
+            self.comment_sorter.setup_function_list(
+                self.instr_comment_type | self.head_comment_type,
+                fd,
+                &db_read,
+                self.option_unplaced,
+            );
+        }
+        // cc:2651: emit->beginFunction(fd);
+        self.emit.begin_function();
+        // cc:2652: emitCommentFuncHeader(fd);
+        self.emit_comment_func_header(fd);
+        // cc:2653: emit->tagLine();  NOTE: the oracle's EmitPrettyPrint
+        // tagLine writes endl unconditionally, so after a header comment the
+        // signature lands one blank line below it. Rugra's
+        // EmitNoMarkup::tag_line suppresses a newline when the output
+        // already ends with one (see the same note on open_brace_indent),
+        // so the warning/signature separator collapses to a single line
+        // break here; the gate normalizes blank lines, and the comment
+        // position (last line before the declaration) is unchanged.
+        self.emit.tag_line(0);
+
         // Ghidra: printc.cc:2661 PrintC::docFunction delegates the complete
         // declaration to emitFunctionDeclaration. Parameter recovery and
         // return-type decisions are finalized in FuncProto before printing;
@@ -6184,6 +6233,107 @@ impl PrintLanguage for PrintC {
         }
 
         self.emit.end_function();
+    }
+
+    // Ghidra: printlanguage.cc:589 PrintLanguage::emitLineComment
+    /// Emit the comment as a single line, using the high-level language's
+    /// delimiters, with the given indent level. Faithful port of
+    /// `PrintLanguage::emitLineComment(int4 indent,const Comment *comm)`
+    /// (printlanguage.cc:589-648). Ghidra's emitLineComment is a
+    /// non-virtual base member, so PrintC inherits it verbatim; Rugra's
+    /// `PrintLanguage` trait declared a no-op default body, so the real port
+    /// lives here on PrintC.
+    ///
+    /// **Four decisive semantics (verified against printlanguage.cc:589-648):**
+    /// - Reference/output params: reads `comm->getText()` (Rugra: the `text`
+    ///   slice) and `comm->getAddr()` (Rugra: elided — used only for markup
+    ///   tags the plain-text emitter drops).
+    /// - Loop boundaries: `while(pos < text.size())` — byte walk from 0;
+    ///   space runs consume their whole run, word tokens stop at
+    ///   `isspace(tok)`, `{@` annotations run to the closing `}`.
+    /// - Counters: `pos` advanced by exactly the token bytes consumed;
+    ///   `count` accumulates the current run length before
+    ///   `text.substr(pos-count,count)`.
+    /// - Sort/comparison keys: none — straight-line emission.
+    ///
+    /// Delimiters: PrintC installs C-style comments in
+    /// `resetDefaultsPrintC` via `setCStyleComments()` (printc.cc:1594 →
+    /// printc.hh:242 `setCommentDelimeter("/* "," */",false)`), so
+    /// `commentstart == "/* "` and `commentend == " */"` are PrintC
+    /// invariants here. `indent < 0` selects `line_commentindent`
+    /// (cc:595-596; value 20 per printlanguage.cc:580).
+    fn emit_line_comment(&mut self, indent: i32, text: &str) {
+        // cc:595-596: if (indent <0) indent = line_commentindent;
+        let indent = if indent < 0 {
+            self.line_commentindent
+        } else {
+            indent
+        };
+        // cc:597: emit->tagLine(indent);
+        self.emit.tag_line(indent);
+        // cc:598-602: startComment + the opening delimiter. Markup calls are
+        // no-ops for the plain-text emitter; only the delimiter prints.
+        // cc:601: emit->tagComment(commentstart, comment_color, spc, off);
+        self.emit.tag_comment("/* ");
+        // cc:603-644: byte token walk over the comment text.
+        let chars: Vec<char> = text.chars().collect();
+        let mut pos = 0usize;
+        while pos < chars.len() {
+            let tok = chars[pos];
+            pos += 1;
+            if tok == ' ' || tok == '\t' {
+                // cc:605-614: collapse the full space/tab run into
+                // emit->spaces(count). The Emit trait has no spaces(); the
+                // plain-text bytes are identical via print.
+                let mut count = 1usize;
+                while pos < chars.len() {
+                    let next = chars[pos];
+                    if next != ' ' && next != '\t' {
+                        break;
+                    }
+                    count += 1;
+                    pos += 1;
+                }
+                self.emit.print(&" ".repeat(count));
+            } else if tok == '\n' {
+                // cc:616-617: a newline inside the comment body breaks the line.
+                self.emit.tag_line(indent);
+            } else if tok == '\r' {
+                // cc:618-619: carriage returns are dropped.
+            } else if tok == '{' && pos < chars.len() && chars[pos] == '@' {
+                // cc:620-632: {@annotation@} passes through as ONE comment
+                // token: count starts at 1 (the '{'), each consumed char
+                // (including the closing '}') increments, and the substring
+                // is [pos-count, pos).
+                let mut count = 1usize;
+                while pos < chars.len() {
+                    let next = chars[pos];
+                    count += 1;
+                    pos += 1;
+                    if next == '}' {
+                        break;
+                    }
+                }
+                let annote: String = chars[pos - count..pos].iter().collect();
+                self.emit.tag_comment(&annote);
+            } else {
+                // cc:633-643: a word token runs until the next whitespace.
+                let mut count = 1usize;
+                while pos < chars.len() {
+                    let next = chars[pos];
+                    if next.is_whitespace() {
+                        break;
+                    }
+                    count += 1;
+                    pos += 1;
+                }
+                let sub: String = chars[pos - count..pos].iter().collect();
+                self.emit.tag_comment(&sub);
+            }
+        }
+        // cc:645-646: if (commentend.size() != 0) tagComment(commentend, ...).
+        self.emit.tag_comment(" */");
+        // cc:647: stopComment — markup only, no plain-text bytes.
     }
 
     // Ghidra: printc.cc:123 PrintC::docAllProto

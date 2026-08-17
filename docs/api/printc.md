@@ -1059,3 +1059,63 @@ model is not present in Rugra's print layer):
 undefined/undefined4/undefined8 同族）；driver 的 TYPEDEF_PREAMBLE 协议
 常量同步——缺此 typedef 时 `undefined2 uVar2;` 声明不可编译且 worker
 协议校验失败（复核发现 HEAD 曾因此 76/76 protocol failure）。
+
+### 2026-08-17：UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ②③ — docFunction 注释链接线 + mask 对调
+
+**③（mask 对调，printlanguage.cc:579/582）**：构造器里
+`instr_comment_type`/`head_comment_type` 两个掩码此前互相装反——Rugra 写成
+`instr = header|warningheader`、`head = user2|warning`，而 oracle
+`PrintLanguage::resetDefaultsInternal`（printlanguage.cc:575-583）为
+
+```cpp
+head_comment_type = Comment::header | Comment::warningheader;   // cc:579
+instr_comment_type = Comment::user2 | Comment::warning;         // cc:582
+```
+
+已对调并同步字段 doc 注释。装反的直接后果：`emitCommentFuncHeader`
+（printc.cc:3280 `(head_comment_type & comm->getType())==0 → continue`）把
+`warningheader`(32) 注释全部滤掉（旧 head 掩码 18 与 32 按位与为 0）——
+即使接线也不会发射。
+
+**②（docFunction 注释链接线，printc.cc:2650-2653 逐字调用序）**：
+`doc_function` 在 `emit_function_declaration` 前补齐 oracle 的注释调用序：
+
+```cpp
+commsorter.setupFunctionList(instr_comment_type|head_comment_type,
+    fd,*fd->getArch()->commentdb,option_unplaced);   // cc:2650
+int4 id1 = emit->beginFunction(fd);                  // cc:2651（文本无字节）
+emitCommentFuncHeader(fd);                           // cc:2652
+emit->tagLine();                                     // cc:2653
+```
+
+- `setup_function_list` 从 `fd.arch.commentdb`（每 worker 的
+  `CommentDatabaseInternal`，examples 在 `Architecture::new` 后分配）按
+  函数地址收集；无 Architecture/commentdb 的 legacy 调用方 sorter 保持空，
+  与 Ghidra 空库行为一致。
+- `emit_comment_func_header`（printc.cc:3272-3311 移植体，原零调用方）由此
+  获得 doc_function 调用方；`option_unplaced`/`option_nocasts` 默认 false，
+  header_basic 排水循环按 `head_comment_type` 掩码过滤。
+- **`emit_line_comment` 实装**（printlanguage.cc:589-648 全量移植，作为
+  `PrintLanguage` trait 在 `impl PrintLanguage for PrintC` 的覆盖；原 trait
+  默认体是 no-op，`emit_comment_func_header`/`emit_comment_group` 全部经它
+  发射）。语义：`indent<0` 取 `line_commentindent`（新字段，默认 20，
+  printlanguage.cc:580）；`tag_line(indent)` 后发 `"/* "`（PrintC 经
+  `setCStyleComments()`=printc.hh:242 `setCommentDelimeter("/* "," */",false)`
+  的不变量）；逐字节 token 循环（空格/tab run→等长空格、`\n`→换行、
+  `\r` 丢弃、`{@…@}` 注解单 token、词边界=isspace）后发 `" */"`。
+- cc:2653 的 `tagLine()`：oracle 的 `EmitPrettyPrint::tagLine` 无条件写
+  endl，注释与签名间隔一空行；Rugra `EmitNoMarkup::tag_line` 在输出已以
+  `\n` 结尾时抑制重复换行，故警告与签名间只保留单个换行（差分门禁对空行
+  归一化，注释位置=签名前最后一行不变；与 `open_brace_indent` 处登记的
+  同源发射器差异）。
+
+**验收（锁定 curl E2E 新鲜 stdout 捕获）**：`/* WARNING: Unknown calling
+convention` **24 → 51**，与锁定 12.0.4 golden
+（`tests/golden/ghidra_curl_1204.c`）**51/51 逐位置零失配**（24 PLT stub
++ 24 EXTERNAL stub + main_init/main_free/hugehelp 3 个真实函数；地址按
+0x100000 运行基址归一后按（地址,函数名,字节数,警告文本）四元组逐处对照）。
+差分门禁（双 golden）：defects=0 / numbering=0 / Matched 123 不降。R3 复核
+结论：锁定 12.0.4 golden 的 main_init(:2128)/main_free(:2139)/hugehelp(:2191)
+全部带完整 ` -- yet parameter storage is locked` 后缀——旧 11.3.2 golden
+（`tests/golden/ghidra_curl.c`）的"裸 main_init"是过版误引，R3 残差在锁定
+oracle 下不存在，无需也不应在 DWARF apply 侧改锁属性。
