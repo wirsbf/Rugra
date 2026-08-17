@@ -536,6 +536,15 @@ pub struct PrintC {
     /// which calls `glb->userops.getOp(op->getIn(0)->getOffset())`). `None`
     /// when the architecture has no registered user ops.
     userops: Option<std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>>,
+    /// Snapshot of the Funcdata union-resolution cache (`unionMap`,
+    /// funcdata.cc:917 getUnionField), cloned at doc_function time. Consulted
+    /// by `rpn_push_partial_symbol`'s STRUCT findResolve arm (printc.cc:1968
+    /// `ct->findResolve(op,slot)` → TypeStruct::findResolve type.cc:1944-1951,
+    /// which reads `fd->getUnionField(this,op,slot)` via the op's Funcdata).
+    /// Rugra's PcodeOp/blocks carry no Funcdata back-pointer, so the printer
+    /// snapshots the map instead — same (parent,op-time,slot)-keyed lookups.
+    union_resolutions:
+        std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
 
     // ===========================================================================
     // RPN engine state (printlanguage.hh:280-290 - PrintLanguage members).
@@ -598,6 +607,7 @@ impl PrintC {
             emit,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
+            union_resolutions: std::collections::BTreeMap::new(),
             func_start: 0,
             func_end: 0,
             copy_map: HashMap::new(),
@@ -1509,9 +1519,12 @@ impl PrintC {
                                 });
                                 if let Some((Some(sym_arc), suboff)) = high_info {
                                     if vn.is_explicit() {
-                                        let sz = op
+                                        let out_vn = op
                                             .get_out()
-                                            .map(|a| a.read().unwrap().get_size())
+                                            .map(|a| a.read().unwrap());
+                                        let sz = out_vn
+                                            .as_ref()
+                                            .map(|v| v.get_size())
                                             .unwrap_or(0);
                                         if suboff > 0 {
                                             byte_off += suboff as i64;
@@ -1521,10 +1534,19 @@ impl PrintC {
                                         let slot =
                                             if ct.needs_resolution() { 1 } else { 0 };
                                         let sym = sym_arc.read().unwrap();
-                                        self.rpn_push_partial_symbol(
-                                            &sym, &vn, op, byte_off, sz as i64, slot, true,
-                                        );
-                                        return;
+                                        if let Some(out_vn) = out_vn {
+                                            // printc.cc:859: pushPartialSymbol(
+                                            //   sym, byteOff, sz, op->getOut(), …)
+                                            //   — the OUTPUT varnode is the vn
+                                            //   argument: its high type feeds
+                                            //   the allowCast finalcast (2019)
+                                            //   and its space the endian
+                                            //   fallback (2020-2022).
+                                            self.rpn_push_partial_symbol(
+                                                &sym, &out_vn, op, byte_off, sz as i64, slot, true,
+                                            );
+                                            return;
+                                        }
                                     }
                                 }
                                 // printc.cc:862-868: findTruncation field arm
@@ -1919,15 +1941,22 @@ impl PrintC {
     /// - `off==0` and `sz` covers the whole type (and it needs no resolution,
     ///   or is a pointer) → done (printc.cc:1961-1964).
     /// - TYPE_STRUCT → optional needsResolution/findResolve early-break
-    ///   (1967-1971; base `Datatype::findResolve` returns `this`, type.cc:588,
-    ///   so `outtype == ct` → break), then `findTruncation` field descent
-    ///   with an `object_member` entry (1972-1984).
+    ///   (1967-1971): `TypeStruct::findResolve` override (type.cc:1944-1951)
+    ///   returns the cached (this,op,slot) `ResolvedUnion::getDatatype()`,
+    ///   or `field[0].type` when nothing is cached; the walk breaks ONLY
+    ///   when that resolves to `ct` itself — otherwise it continues into
+    ///   `findTruncation` field descent with an `object_member` entry
+    ///   (1972-1984). The cache is read from the `union_resolutions`
+    ///   doc_function snapshot.
     /// - TYPE_ARRAY → `getSubEntry` element descent with a `subscript` entry
     ///   (1986-2000); the walk offset is re-anchored to the element.
     /// - TYPE_UNION → `findTruncation` (no cached resolution → None, see
     ///   `Datatype::find_truncation`), else `size==sz` → break (2001-2016).
     /// - anything else + `allowCast` → `isSubpieceCastEndian` truncation cast
-    ///   (2018-2029): the final cast is pushed as `(type)` prefix.
+    ///   (2018-2029): the final cast is pushed as `(type)` prefix. `vn` here
+    ///   is the SUBPIECE OUTPUT varnode (printc.cc:859 passes
+    ///   `op->getOut()`), so `outtype = vn->getHigh()->getType()` (2019) and
+    ///   the space fallback (2020-2022) read the OUTPUT.
     /// - no descent succeeded → synthetic `unnamedField(off,sz)` entry
     ///   (2030-2041), `ct = null`.
     ///
@@ -1956,7 +1985,7 @@ impl PrintC {
         op: &PcodeOp,
         mut off: i64,
         mut sz: i64,
-        _slot: i32,
+        slot: i32,
         allow_cast: bool,
     ) {
         use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
@@ -1994,10 +2023,34 @@ impl PrintC {
                 // printc.cc:1966-1985: TYPE_STRUCT.
                 TypeMetatype::Struct => {
                     if dt.needs_resolution() && dt.get_size() as i64 == sz {
-                        // ct->findResolve(op,slot): base returns `this`
-                        // (type.cc:588) → outtype == ct → break. TypeStruct
-                        // has no findResolve override in the oracle.
-                        break;
+                        // printc.cc:1968: ct->findResolve(op,slot) —
+                        // TypeStruct::findResolve override (type.cc:1944-1951):
+                        //   cached (this,op,slot) resolution → getDatatype();
+                        //   no cache entry → field[0].type ("If not calculated
+                        //   before, assume referring to field").
+                        // printc.cc:1969-1971: break ONLY when the resolve
+                        // returns ct itself; otherwise keep descending.
+                        let cached = self
+                            .union_resolutions
+                            .get(&crate::unionresolve::ResolveEdge::new(&dt, op, slot))
+                            .map(|r| r.get_datatype().clone());
+                        let resolved = cached.unwrap_or_else(|| {
+                            match dt.as_ref() {
+                                Datatype::Struct(s) => s
+                                    .fields
+                                    .first()
+                                    .map(|f| f.type_ptr.clone())
+                                    // Empty struct: Ghidra's field[0] on an
+                                    // empty vector is unreachable (the flag is
+                                    // only set when a field exists,
+                                    // type.cc:1569-1871); defensive self.
+                                    .unwrap_or_else(|| dt.clone()),
+                                _ => dt.clone(),
+                            }
+                        });
+                        if Arc::ptr_eq(&resolved, &dt) {
+                            break;
+                        }
                     }
                     if let Some((field, newoff)) = dt.find_truncation(off, sz as usize) {
                         off = newoff;
@@ -5722,6 +5775,10 @@ impl PrintLanguage for PrintC {
         // `None` when the Funcdata has no Architecture (legacy callers).
         self.cpool = fd.arch.as_ref().and_then(|a| a.cpool.clone());
         self.userops = fd.arch.as_ref().and_then(|a| a.userops.clone());
+        // Snapshot the union-resolution cache for the walk's findResolve
+        // consults (see field doc): Funcdata::getUnionField equivalents
+        // (funcdata.cc:917) key on (parent type, op, slot).
+        self.union_resolutions = fd.union_map.clone();
 
         // Load symbol and string tables from Funcdata, sanitizing C identifiers
         self.symbol_table = fd.symbol_table.iter()
@@ -10477,8 +10534,12 @@ impl PrintC {
             depth += 1;
             let Some(dt) = current else { break; };
             // printc.cc:1960-1964: off==0 and sz covers whole type -> done.
+            // The needsResolution rejection is waived for TYPE_PTR pointers
+            // (`(!ct->needsResolution() || ct->getMetatype()==TYPE_PTR)`,
+            // printc.cc:1962).
             if off == 0 && (sz == 0 || (sz as usize == dt.get_size()
-                    && !dt.needs_resolution())) {
+                    && (!dt.needs_resolution()
+                        || dt.get_metatype() == TypeMetatype::Pointer))) {
                 break;
             }
             let metatype = dt.get_metatype();

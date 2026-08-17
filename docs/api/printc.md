@@ -271,6 +271,15 @@ printc.cc:2260/2518/2497）：
 - **fixture**：`tests/oracle/printc_subpiece_fieldextract_1204.{cc,rs,metadata.json}` + `tools/run_printc_subpiece_fieldextract_oracle.sh`——22 条记录（10 piece sweep + 8 cast sweep + armA.field=`S.hi`/armA.array=`A.arr[0]`/armA.synthetic=`Y._2_4_`/armB.field=`B.lo`）与锁定 12.0.4 oracle **逐字节一致**（runner 输出 `records=22 MATCH`）。C++ 侧为真 Funcdata 图（type-locked ScopeLocal 符号 + `opMarkSpecialPrint`）；Rust 侧经 `op_subpiece_rpn` 同图构造。
 - **Differential（curl 语料）**：输出与改前逐字节不变（`diff result/curl_cur.c` 前后 0 行）——语料中无 RuleSubRight 置位且输入为 piece-structured 的 SUBPIECE，亦无 offset-0 的 enum/partial SUBPIECE cast；门禁 defects=0/numbering=0 维持。
 
+### PRINTC-SUBPIECE-FIELDEXTRACT-0001 审计返工（2026-08-17，三处 MISMATCH 修正）
+
+- **REWORK #1 STRUCT 臂 findResolve**：原实现 `needs_resolution && size==sz` 时无条件 break——错误。oracle 的 `TypeStruct::findResolve` 有 override（type.cc:1944-1951）：**无缓存**返回 `field[0].type`（≠ct → 不 break，继续 findTruncation 下降），**有缓存**返回 `ResolvedUnion::getDatatype()`，仅 `==ct` 才 break（printc.cc:1969-1971）。修正：`rpn_push_partial_symbol` 查 `union_resolutions` 快照（PrintC 新字段，doc_function 时从 `fd.union_map` 克隆——Rugra 的 PcodeOp/block 无 Funcdata 反向指针，快照等价于 Ghidra 经 `op->getParent()->getFuncdata()` 的查询），无缓存回退 `field[0].type`，`Arc::ptr_eq` 判等。真 oracle 验证：`armA.nested=N.in.x`（fixture_inner 单字段填满 → 真 TypeFactory::setFields 置 needs_resolution，type.cc:1569-1871）。
+- **REWORK #2 PartialEnum 白名单**：`TypePartialEnum` 构造器（type.cc:2255-2262）委托 TypeEnum 归一化为 TYPE_UINT → Ghidra 三白名单全过；Rugra 侧 `is_subpiece_cast` 三处白名单（in/out/PTR→int 特例）补 `TypeMetatype::PartialEnum`。真 oracle 验证：`cast.int_partialenum_0=1` / `cast.partialenum_out_0=1`。
+- **REWORK #3 allowCast 臂实参**：Ghidra printc.cc:859 传 `op->getOut()`（**输出** varnode）——2019 行 `outtype = vn->getHigh()->getType()` 读输出 high 类型，2020-2022 的 space 回退同源；原实现传输入 vn → outtype 落输入类型 → 白名单恒拒 → finalcast 死代码。修正：dispatch 臂 (a) 传输出 varnode；符号 atom 的 vn 锚点同步取输出。真 oracle 验证：`armA.allowcast=(uint2)C.lo`（输出 typed uint2 → `(uint2)` 前缀可达）。
+- **同批**：legacy `push_partial_symbol` 补 loop-top TYPE_PTR 豁免（printc.cc:1962 `(!needsResolution || metatype==TYPE_PTR)`）；C++ fixture 的 COPY/SUBPIECE 插入真实基本块（`const_cast<BlockGraph&>(fd.getBasicBlocks()).newBlockBasic` + `opInsertEnd`）使 `findResolve` 的 `op->getParent()->getFuncdata()` 可达。
+- **衍生登记**：`TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001`（Rugra `TypeFactory::set_fields` 不置单字段 needs_resolution，type.cc:1569-1871——铁律 1.5 基础设施缺口；fixture Rust 侧手动置 flag 规避并注释指向 TODO）。
+- **fixture 重钉**：runner 22→**26 records**（+`armA.nested=N.in.x`、+`cast.int_partialenum_0=1`、+`cast.partialenum_out_0=1`、+`armA.allowcast=(uint2)C.lo`，cast sweep 8→10），双侧逐字节 MATCH；E2E 复跑零回归（diff 0 行），门禁 defects=0/numbering=0；metadata 登记修正（`needs_resolution_struct_break` UNTESTED→MATCH，`union_resolution_cache` → 读侧已接线/写侧 UNTESTED，`pipeline_needs_resolution_production` → MISSING 指向 TYPEFACTORY TODO）。
+
 
 ---
 

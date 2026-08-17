@@ -94,23 +94,30 @@ impl CastStrategyC {
     /// Enum mapping note: Ghidra `TypeEnum` constructors (type.hh:489-494)
     /// normalize the stored metatype to TYPE_INT/TYPE_UINT
     /// (`metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT`), so a Ghidra
-    /// TypeEnum input/output passes these whitelists as UINT/INT. Rugra's
-    /// `TypeMetatype::Enum` is that same TypeEnum surface (it keeps its own
-    /// tag), so `Enum` is listed in both whitelists and in the PTR->int
-    /// special case to preserve the observable decision — same convention as
-    /// `check_int_promotion_for_extension/compare` above (cast.rs:186/197).
+    /// TypeEnum input/output passes these whitelists as UINT/INT.
+    /// `TypePartialEnum` (type.cc:2255-2262) delegates to that same TypeEnum
+    /// constructor with TYPE_PARTIALENUM, which the ternary also maps to
+    /// TYPE_UINT — so Ghidra partial-enums pass the whitelists identically
+    /// (verified against the locked oracle: cast.int_partialenum_0=1 /
+    /// cast.partialenum_out_0=1). Rugra's `TypeMetatype::Enum` and
+    /// `TypeMetatype::PartialEnum` are those same TypeEnum surfaces, so both
+    /// are listed in the three whitelists to preserve the observable
+    /// decision — same convention as
+    /// `check_int_promotion_for_extension/compare` above (cast.rs:186/197),
+    /// and consistent with the is_piece_structured doc (datatype.rs).
     pub fn is_subpiece_cast(&self, out_type: &Datatype, in_type: &Datatype, offset: u32) -> bool {
         if offset != 0 { return false; }
         // cast.cc:415-418: input metatype whitelist.
         let in_meta = in_type.get_metatype();
         if !matches!(in_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
             | TypeMetatype::Pointer | TypeMetatype::PartialStruct | TypeMetatype::PartialUnion
-            | TypeMetatype::Enum)
+            | TypeMetatype::Enum | TypeMetatype::PartialEnum)
         { return false; }
         // cast.cc:419-422: output metatype whitelist.
         let out_meta = out_type.get_metatype();
         if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
-            | TypeMetatype::Pointer | TypeMetatype::Float | TypeMetatype::Enum)
+            | TypeMetatype::Pointer | TypeMetatype::Float | TypeMetatype::Enum
+            | TypeMetatype::PartialEnum)
         { return false; }
         // cast.cc:423-430: pointer-input special cases.
         if in_meta == TypeMetatype::Pointer {
@@ -118,7 +125,7 @@ impl CastStrategyC {
                 if out_type.get_size() < in_type.get_size() { return true; }
             }
             if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint
-                | TypeMetatype::Enum) { return false; }
+                | TypeMetatype::Enum | TypeMetatype::PartialEnum) { return false; }
         }
         true
     }
@@ -411,14 +418,25 @@ mod tests {
     // Ghidra: type.hh:489-494 TypeEnum ctor normalizes metatype to INT/UINT,
     // so a Ghidra enum passes the cast.cc:416 whitelist as UINT/INT; Rugra's
     // TypeMetatype::Enum is that same surface (see is_subpiece_cast doc).
+    // TypePartialEnum (type.cc:2255-2262) delegates to the same ctor and so
+    // passes as TYPE_UINT too (audit-verified: cast.int_partialenum_0=1 /
+    // cast.partialenum_out_0=1 against the locked oracle).
     #[test]
     fn test_is_subpiece_cast_enum_mapping() {
+        use crate::type_system::datatype::TypePartialEnum;
         let s = CastStrategyC::new(4);
         let enum4 = Datatype::Base(TypeBase::new("mode".into(), 4, TypeMetatype::Enum));
         let int8 = Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int));
         let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
         assert!(s.is_subpiece_cast(&int4, &enum4, 0));
         assert!(s.is_subpiece_cast(&enum4, &int8, 0));
+        // PartialEnum in-arm and out-arm (REWORK #2).
+        let partial_enum =
+            Datatype::PartialEnum(TypePartialEnum::new(Arc::new(enum4.clone()), 0, 2, None));
+        assert!(s.is_subpiece_cast(&int4, &partial_enum, 0));
+        assert!(s.is_subpiece_cast(&partial_enum, &int8, 0));
+        // offset != 0 still rejects.
+        assert!(!s.is_subpiece_cast(&int4, &partial_enum, 2));
     }
 
     #[test]
