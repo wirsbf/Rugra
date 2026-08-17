@@ -1262,4 +1262,44 @@ descendants"）会触发的 Ghidra 不可达 harness 态。INPUT 保持 is_writt
 false，split_uses / op_unlink / op_destroy / op_unset_input 无 input-flag 分支，
 断言与被测路径零变化；setInput 在唯一 loc 上返回同一 Arc，ptr_eq 断言原样通过。
 生产代码未动。
+
+### 2026-08-17（续）：assign_high 双向挂接 + new_* 族十处接线（FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001）
+
+- `assign_high`（funcdata_varnode.cc:48-59）补全 Ghidra `new HighVariable(vn)`
+  ctor（variable.cc:220-235）的全部副作用：`add_instance(vn)`（cc:231）、
+  `vn.mergegroup = 0; vn.high = high`（cc:232 setHigh(this, numMergeClasses-1)）、
+  `vn.getSymbolEntry().is_some()` 时 `set_symbol(vn)`（cc:233-234）。此前只
+  返回 HighVariable Arc 由调用者丢弃，vn.high 恒 None。
+- newVarnode 族十处调用面接线（全部在 funcdata_varnode.cc，任务清单原写
+  funcdata.cc 系笔误，oracle 已核实）：
+  | oracle 行 | 函数 | Rugra 接线 |
+  |---|---|---|
+  | :72 | newConstant | `new_constant` assign_high |
+  | :89 | newUnique | `new_unique` assign_high |
+  | :110 | newVarnodeOut | `new_varnode_out` assign_high（queryProperties 腿前） |
+  | :135 | newUniqueOut | `new_unique_out` assign_high |
+  | :157 | newVarnode(s,m,ct) | `new_varnode` assign_high |
+  | :182 | newVarnodeIop | `new_varnode_iop` assign_high（annotation no-op 腿） |
+  | :196 | newVarnodeSpace | 已有调用，本次随 assign_high 补全而生效 |
+  | :212 | newVarnodeCallSpecs | 已有（annotation no-op） |
+  | :231 | newCodeRef | 已有（annotation no-op） |
+  | :604 | setHighLevel | `set_high_level` 重写为经 assign_high 单一真源 |
+- `Funcdata` 新增 `high_level_index: u32` 字段（funcdata.hh:76）；
+  `set_high_level` 补 cc:600 `high_level_index = vbank.get_create_index()` 与
+  annotation 拒绝门（iop/fspec/coderef varnode 不挂 high，cc:54 guard）。
+  merge.rs `wire_unique_high` house pattern 自动退化为 no-op（early return）。
+- 上节 "当前不可达：cvn.high 恒 None" 已失效——highlevel_on 置位后
+  `op_set_input` 去重副本的 cc:500-504 high 腿可达，
+  VARNODE-COPYSYMBOL-FIELDS-0001 残差 R1 关闭（fixture dedup_high 观察）。
+- oracle fixture `tests/oracle/funcdata_assign_high_1204.{cc,rs,metadata.json}` +
+  `tools/run_funcdata_assign_high_oracle.sh`：20 行双侧逐字节 MATCH，覆盖
+  highlevel 门（off 2 行）/ setHighLevel 扫掠（7 行：flag、index、const/written
+  +cover/input/iop、instances 形状、幂等）/ on 态十处族（7 行）/ opSetInput
+  dedup high 腿（R1 关闭观察）/ copySymbol typedirty 重臂 + symbol guard。
+  Ghidra 12.0.4 `Varnode::getHigh()` 在 high==NULL 时 throw
+  LowlevelError("Requesting non-existent high-level")（varnode.cc:92），
+  fixture 两侧都读裸字段（C++ `->high` / Rust `high: Option`）对齐观察通道。
+  E2E：curl + httpd stdout 与接线前零差异（Matched 123 不降、defects=0、
+  numbering=0）。
 <!-- annotation-pass: 2026-08-17 -->
+

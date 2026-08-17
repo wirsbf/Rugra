@@ -390,6 +390,12 @@ pub struct Funcdata {
     /// Bit-set of Funcdata flags (mirrors Ghidra's `flags` field).
     pub flags: u32,
 
+    /// Creation index of the first Varnode created after HighVariables were
+    /// assigned (Ghidra `high_level_index`, funcdata.hh:76). Recorded by
+    /// `set_high_level` (funcdata_varnode.cc:600) as `vbank.getCreateIndex()`.
+    /// (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+    pub high_level_index: u32,
+
     /// Bank of all varnodes in this function
     pub vbank: VarnodeBank,
     /// Bank of all P-code operations in this function
@@ -524,6 +530,7 @@ impl Funcdata {
             baseaddr: addr,
             size,
             flags: 0,
+            high_level_index: 0,
             vbank: VarnodeBank::new(),
             obank: PcodeOpBank::new(),
             bblocks: BlockGraph::new(),
@@ -605,11 +612,23 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newVarnode
+    // Ghidra: funcdata_varnode.cc:148 Funcdata::newVarnode
     /// Create a varnode of `size` bytes at a specific address. Faithful to
-    /// `Funcdata::newVarnode(int4, const Address&)` (funcdata.hh:282).
+    /// `Funcdata::newVarnode(int4, const Address&, Datatype*)`
+    /// (funcdata_varnode.cc:148-169):
+    ///   vn = vbank.create(s, m, ct);
+    ///   assignHigh(vn);
+    ///   if (s >= minLanedSize) checkForLanedRegister(s, m);
+    ///   <queryProperties/setSymbolProperties/setFlags leg>
+    ///   return vn;
+    /// The localmap queryProperties half (:161-166) is a registered gap
+    /// (Rugra's symbol_table is consulted via set_varnode_properties at
+    /// other call sites); the laned-register half is likewise a gap.
     pub fn new_varnode(&mut self, size: usize, addr: crate::address::Address) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        self.vbank.create(size, addr)
+        let vn = self.vbank.create(size, addr);
+        // cc:157: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
+        vn
     }
 
     // Ghidra: funcdata_varnode.cc:340 Funcdata::setInputVarnode
@@ -1013,18 +1032,26 @@ impl Funcdata {
     }
 
     /// Assign a HighVariable to every Varnode that lacks one. Faithful to
-    /// `Funcdata::setHighLevel` (funcdata_varnode.cc:595-605) + the
-    /// `assignHigh` per-Varnode call (funcdata_varnode.cc:48-59). Sets the
-    /// `HIGHLEVEL_ON` flag (Ghidra `highlevel_on`) to make this idempotent.
+    /// `Funcdata::setHighLevel` (funcdata_varnode.cc:595-605):
+    ///   if ((flags & highlevel_on)!=0) return;
+    ///   flags |= highlevel_on;
+    ///   high_level_index = vbank.getCreateIndex();
+    ///   for(iter=vbank.beginLoc();iter!=vbank.endLoc();++iter)
+    ///     assignHigh(*iter);
     /// Called by ActionAssignHigh (coreaction.hh:339-347) which runs BEFORE
     /// the merge stage, so ActionMarkExplicit/Implied see HighVariables.
     // Ghidra: funcdata_varnode.cc:595 Funcdata::setHighLevel
     pub fn set_high_level(&mut self) {
-        use crate::variable::HighVariable;
-        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
         if (self.flags & funcdata_flags::HIGHLEVEL_ON) != 0 { return; }
         self.flags |= funcdata_flags::HIGHLEVEL_ON;
+        // cc:600: high_level_index = vbank.getCreateIndex().
+        self.high_level_index = self.vbank.get_create_index();
 
+        // cc:603-604: for every Varnode in the bank, assignHigh(*iter).
+        // Ghidra's loop is unconditional, but before highlevel_on no Varnode
+        // can hold a HighVariable (assignHigh is the sole allocator and is
+        // gated on the flag), so the `high.is_none()` filter is
+        // behavior-equivalent plus defensive for non-pipeline callers.
         let vn_arcs: Vec<Arc<RwLock<crate::varnode::Varnode>>> = self.vbank.loc_tree
             .iter()
             .filter(|r| r.0.read().unwrap().high.is_none())
@@ -1032,25 +1059,11 @@ impl Funcdata {
             .collect();
 
         for vn_arc in vn_arcs {
-            let dt = {
-                let vn = vn_arc.read().unwrap();
-                vn.v_type.clone().unwrap_or_else(|| {
-                    Arc::new(Datatype::Base(TypeBase::new(
-                        "undefined".to_string(), vn.size, TypeMetatype::Unknown,
-                    )))
-                })
-            };
-            // Ghidra funcdata_varnode.cc:52-53 (setHighLevel → assignHigh):
-            // if (vn->hasCover()) vn->calcCover(); — allocate the Cover and
-            // mark it dirty so the merge-family Actions' lazy updateCover
-            // (HighIntersectTest::updateHigh) can rebuild it. Without this
-            // the standalone merge Actions run on a null-cover premise.
-            if vn_arc.read().unwrap().has_cover() {
-                vn_arc.write().unwrap().calc_cover();
-            }
-            let high = Arc::new(RwLock::new(HighVariable::new(dt)));
-            high.write().unwrap().add_instance(vn_arc.clone());
-            vn_arc.write().unwrap().high = Some(high);
+            // cc:604 → funcdata_varnode.cc:48-59 assignHigh: the
+            // highlevel_on gate now passes; annotation Varnodes (iop/fspec
+            // space, code refs) are rejected by the is_annotation guard and
+            // stay high-less, exactly as in Ghidra.
+            let _ = self.assign_high(&vn_arc);
         }
     }
 
@@ -1295,20 +1308,37 @@ impl Funcdata {
 
     // Ghidra: funcdata_varnode.cc:129 Funcdata::newUniqueOut
     /// Create a new temporary output Varnode of size `s` for `op`.
-    /// Faithful to `Funcdata::newUniqueOut` (funcdata.hh:281).
+    /// Faithful to `Funcdata::newUniqueOut` (funcdata_varnode.cc:129-140):
+    ///   Varnode *vn = vbank.createDefUnique(s, ct, op);
+    ///   op->setOutput(vn);
+    ///   assignHigh(vn);
+    ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
+    ///   return vn;
+    /// (Rugra has no laned-register support; the checkForLanedRegister half
+    /// is a registered gap.)
     pub fn new_unique_out(&mut self, s: usize, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         // cc:134-135 creates the written form directly. Mutating a free
         // Varnode after insertion would change both BTreeSet keys in-place.
         let vn = self.vbank.create_def_unique(s, &op.0);
         op.0.write().unwrap().output = Some(vn.clone());
+        // cc:135: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
         vn
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newConstant
+    // Ghidra: funcdata_varnode.cc:66 Funcdata::newConstant
     /// Create a new constant Varnode. Faithful to `Funcdata::newConstant`
-    /// (funcdata.hh:283).
+    /// (funcdata_varnode.cc:66-76):
+    ///   Varnode *vn = vbank.create(s, glb->getConstant(constant_val), ct);
+    ///   assignHigh(vn);
+    ///   return vn;
     pub fn new_constant(&mut self, s: usize, val: u64) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        self.vbank.create_constant(s, val)
+        let vn = self.vbank.create_constant(s, val);
+        // cc:72: assignHigh(vn) — constant Varnodes do get a HighVariable
+        // (hasCover() is false for constants, so no calcCover; they are not
+        // annotations). (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
+        vn
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::newExtendedConstant
@@ -1363,11 +1393,20 @@ impl Funcdata {
         None
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newUnique
+    // Ghidra: funcdata_varnode.cc:83 Funcdata::newUnique
     /// Create a new temporary Varnode (no defining op). Faithful to
-    /// `Funcdata::newUnique` (funcdata.hh:288).
+    /// `Funcdata::newUnique` (funcdata_varnode.cc:83-95):
+    ///   Varnode *vn = vbank.createUnique(s, ct);
+    ///   assignHigh(vn);
+    ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
+    ///   return vn;
+    /// (Rugra has no laned-register support; the checkForLanedRegister half
+    /// is a registered gap.)
     pub fn new_unique(&mut self, s: usize) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        self.vbank.create_unique(s)
+        let vn = self.vbank.create_unique(s);
+        // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
+        vn
     }
 
     // Ghidra: funcdata_op.cc:37 Funcdata::opMarkHalt
@@ -1468,12 +1507,12 @@ impl Funcdata {
                 // mapentry != 0 high->setSymbol(this)) lives at this call
                 // site in the attach_symbol_to_vn house pattern because
                 // copy_symbol's &mut self cannot recover the Arc-to-self
-                // that HighVariable::set_symbol takes. Unreachable today:
-                // Rugra's new_constant does not call the assignHigh
-                // counterpart (funcdata_varnode.cc:72 gap,
-                // VARNODE-COPYSYMBOL-FIELDS-0001 residual R1), so cvn.high
-                // is always None here; wired so the block goes live the day
-                // assignHigh is completed.
+                // that HighVariable::set_symbol takes. Reachable since
+                // FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001: new_constant now
+                // calls assignHigh (funcdata_varnode.cc:72), so when
+                // highlevel_on is set the dedup constant carries a fresh
+                // HighVariable into this leg — closing the
+                // VARNODE-COPYSYMBOL-FIELDS-0001 residual R1.
                 if let Some(high) = cvn.read().unwrap().get_high().cloned() {
                     let has_mapentry = cvn.read().unwrap().mapentry.is_some();
                     let mut h = high.write().unwrap();
@@ -1767,7 +1806,14 @@ impl Funcdata {
 
     // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
     /// Create an already-written Varnode under its final BTree keys and install
-    /// it as the output of `op`.
+    /// it as the output of `op`. Faithful to `Funcdata::newVarnodeOut`
+    /// (funcdata_varnode.cc:104-122):
+    ///   Varnode *vn = vbank.createDef(s, m, ct, op);
+    ///   op->setOutput(vn);
+    ///   assignHigh(vn);
+    ///   if (s >= minLanedSize) checkForLanedRegister(s, m);
+    ///   <queryProperties/setSymbolProperties/setFlags leg>
+    ///   return vn;
     pub fn new_varnode_out(
         &mut self,
         size: usize,
@@ -1781,6 +1827,9 @@ impl Funcdata {
             &op.0,
         );
         op.0.write().unwrap().output = Some(vn.clone());
+        // cc:110: assignHigh(vn) — comes BEFORE the queryProperties leg.
+        // (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
+        let _ = self.assign_high(&vn);
         self.set_varnode_properties(&vn);
         vn
     }
@@ -3066,11 +3115,16 @@ impl Funcdata {
         newop
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::newVarnodeIop
+    // Ghidra: funcdata_varnode.cc:176 Funcdata::newVarnodeIop
     /// Create a varnode in the iop address space referencing `op`.
-    /// Faithful to `Funcdata::newVarnodeIop` (funcdata_varnode.cc:176-184).
+    /// Faithful to `Funcdata::newVarnodeIop` (funcdata_varnode.cc:176-184):
+    ///   Varnode *vn = vbank.create(sizeof(op), Address(cspc,(uintb)(uintp)op), ct);
+    ///   assignHigh(vn);
+    ///   return vn;
     /// Ghidra encodes the raw op pointer as the iop-space offset; Rugra
     /// encodes `Arc::as_ptr()` (the stable address of the inner RwLock).
+    /// The assignHigh call is a structural no-op for iop varnodes (they are
+    /// annotations), kept for call-site parity with cc:182.
     pub fn new_varnode_iop(&mut self, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         // Encode the op's identity as a raw address. We use the Arc's data
         // pointer, which is stable for the Arc's lifetime (matching Ghidra's
@@ -3082,6 +3136,9 @@ impl Funcdata {
             ptr_addr,
         );
         vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        // cc:182: assignHigh(vn) — iop varnodes are annotations, so this is
+        // the documented no-op leg (funcdata_varnode.cc:54-56 guard).
+        let _ = self.assign_high(&vn);
         vn
     }
 
@@ -3659,9 +3716,12 @@ impl Funcdata {
     ///     if (!vn->isAnnotation()) return new HighVariable(vn);
     ///   }
     ///   return NULL;
-    /// Returns the new HighVariable Arc (or None). The caller may attach it to
-    /// the varnode; the C++ ctor side-effect of registering vn as an instance
-    /// is left to higher-level glue (Rugra's HighVariable allocates by type).
+    /// The C++ `new HighVariable(vn)` ctor (variable.cc:220-235) additionally
+    /// does the two-way wiring:
+    ///   inst.push_back(vn);                        // variable.cc:231
+    ///   vn->setHigh(this, numMergeClasses-1);      // variable.cc:232 (mg=0)
+    ///   if (vn->getSymbolEntry() != 0) setSymbol(vn); // variable.cc:233-234
+    /// (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
     pub fn assign_high(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -3687,8 +3747,25 @@ impl Funcdata {
                 ),
             ))
         });
-        let high = crate::variable::HighVariable::new(vn_type);
-        Some(std::sync::Arc::new(std::sync::RwLock::new(high)))
+        let high = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::variable::HighVariable::new(vn_type),
+        ));
+        // variable.cc:231: inst.push_back(vn) — register vn as the sole
+        // instance of the fresh HighVariable.
+        high.write().unwrap().add_instance(vn.clone());
+        // variable.cc:232: vn->setHigh(this, numMergeClasses-1). Fresh ctor
+        // has numMergeClasses==1, so mergegroup = 0.
+        {
+            let mut vn_w = vn.write().unwrap();
+            vn_w.mergegroup = 0;
+            vn_w.high = Some(high.clone());
+        }
+        // variable.cc:233-234: if (vn->getSymbolEntry() != 0) setSymbol(vn).
+        // set_symbol re-reads the entry itself and early-outs on None.
+        if vn.read().unwrap().get_symbol_entry().is_some() {
+            high.write().unwrap().set_symbol(vn);
+        }
+        Some(high)
     }
 
     // Ghidra: funcdata_varnode.cc:316 Funcdata::findHigh
