@@ -2622,18 +2622,56 @@ impl Action for ActionNormalizeSetup {
 }
 
 /// Generate prototype warnings. Faithful to `ActionPrototypeWarnings`
-/// (coreaction.cc).
+/// (coreaction.cc:4886).
 ///
-/// Generates override warning messages and checks for prototype errors.
-/// In a full implementation, this generates header warnings for:
-/// - Override messages (deadcode delay, etc.)
-/// - Input/output parameter errors
-/// - Unknown calling convention model
+/// Emits the override-message batch, the prototype error warnings and the
+/// unknown-calling-convention warning through `Funcdata::warningHeader`, and
+/// per-call-site parameter/return errors through `Funcdata::warning` — the
+/// same commentdb channels Ghidra uses, so the comments surface as
+/// `/* WARNING: ... */` header lines in the C output.
 pub struct ActionPrototypeWarnings;
 impl ActionPrototypeWarnings {
     // Ghidra: coreaction.hh:1047 ActionPrototypeWarnings (constructor mirror)
     pub fn new() -> Self { Self }
 }
+
+// Ghidra: fspec.hh:1461 FuncProto::hasInputErrors
+/// Faithful mirror of the `FuncProto::hasInputErrors()` inline accessor
+/// (fspec.hh:1461): `flags & error_inputparam`. Rugra's `FuncProto` does not
+/// model the `error_inputparam`/`error_outputparam` flag bits (fspec.hh:1351-
+/// 1352): in Ghidra they are set only when parameter-storage assignment
+/// throws `ParamUnassignedError` (fspec.cc:4220-4222) — a failure path Rugra's
+/// recovery pipeline cannot produce yet (no writer exists anywhere in src/).
+/// The predicate therefore reads false for every reachable Rugra state, which
+/// is observably identical to the oracle today. Revisit when the
+/// ParamUnassignedError path is ported.
+fn proto_has_input_errors(_proto: &crate::fspec::FuncProto) -> bool { false }
+
+// Ghidra: fspec.hh:1464 FuncProto::hasOutputErrors
+/// Faithful mirror of `FuncProto::hasOutputErrors()` (fspec.hh:1464):
+/// `flags & error_outputparam`. See [`proto_has_input_errors`] for why the
+/// unmodeled flag reads false.
+fn proto_has_output_errors(_proto: &crate::fspec::FuncProto) -> bool { false }
+
+// Ghidra: fspec.hh:1400 FuncProto::hasCustomStorage
+/// Faithful mirror of `FuncProto::hasCustomStorage()` (fspec.hh:1400):
+/// `flags & custom_storage`. In Ghidra the bit is set only when a decoded
+/// prototype carries ATTRIB_CUSTOM (fspec.cc:4724-4727); Rugra's prototype
+/// decoder stubs that attribute as a no-op and no writer exists, so false is
+/// observably identical to the oracle today.
+fn proto_has_custom_storage(_proto: &crate::fspec::FuncProto) -> bool { false }
+
+// Ghidra: fspec.hh:1686 FuncCallSpecs::getEntryAddress
+/// Faithful mirror of `FuncCallSpecs::getEntryAddress()` (fspec.hh:1686).
+/// The oracle leaves `entryaddress` invalid for indirect calls (fspec.cc:4943
+/// "If call is indirect, we leave address as invalid"); Rugra models an
+/// unknown target as `None`, normalized here to offset 0 — the same offset
+/// Ghidra's default-constructed invalid Address carries (address.cc:94-97).
+fn call_entry_address(fc: &crate::fspec::FuncCallSpecs) -> crate::address::Address {
+    fc.entry_addr
+        .unwrap_or(crate::address::Address::new(0))
+}
+
 impl Action for ActionPrototypeWarnings {
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1047
     fn get_flags(&self) -> u32 {
@@ -2642,31 +2680,81 @@ impl Action for ActionPrototypeWarnings {
 
     // Ghidra: coreaction.cc:4886 ActionPrototypeWarnings::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionPrototypeWarnings::apply (coreaction.cc:4886-4920).
-        // Check prototype for errors/warnings and emit diagnostic messages.
-        // Ghidra uses data.warningHeader() which logs to the decompiler's
-        // warning system. Rugra uses eprintln! (stderr).
+        // Faithful to ActionPrototypeWarnings::apply (coreaction.cc:4886-4936).
+        // Warnings flow exclusively through Funcdata::warningHeader /
+        // Funcdata::warning (the commentdb channels), never stderr.
 
-        // Check function's own prototype for issues
-        if fd.funcp.calling_convention == "unknown" {
-            let is_locked = fd.funcp.parameters.iter().any(|p| {
-                (p.flags & crate::fspec::protoparam_flags::TYPE_LOCKED) != 0
-            });
-            if is_locked {
-                eprintln!("[WARN] {} Unknown calling convention -- yet parameter storage is locked", fd.name);
-            }
+        // coreaction.cc:4889-4892: override messages (deadcode-delay restart
+        // notices). Space-name indexing needs Architecture's indexed space
+        // manager (override.cc:51-56 getSpace(i)->getName()); Rugra's
+        // Architecture has no indexed space list yet and no code path inserts
+        // deadcode-delay overrides, so the message list is provably empty —
+        // the empty name table is observably identical today.
+        for message in fd
+            .localoverride
+            .generate_override_messages(&[] as &[String])
+        {
+            // coreaction.cc:4892: data.warningHeader(overridemessages[i]);
+            fd.warning_header(&message);
         }
 
-        // Check each call site for prototype issues
-        let n_calls = fd.num_calls();
-        for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                if fc.prototype.calling_convention == "unknown" && fc.has_model() {
-                    eprintln!("[WARN] {} call at {:?} has unknown calling convention", fd.name, fc.op_addr);
-                }
+        // coreaction.cc:4894-4897: this function's own prototype input errors.
+        if proto_has_input_errors(&fd.funcp) {
+            fd.warning_header(
+                "Cannot assign parameter locations for this function: Prototype may be inaccurate",
+            );
+        }
+        // coreaction.cc:4898-4900: output errors.
+        if proto_has_output_errors(&fd.funcp) {
+            fd.warning_header(
+                "Cannot assign location of return value for this function: Return value may be inaccurate",
+            );
+        }
+        // coreaction.cc:4901-4909: unknown calling convention.
+        if fd.funcp.is_model_unknown() {
+            let mut s = String::from("Unknown calling convention");
+            if fd.funcp.print_model_in_decl() {
+                s.push_str(": ");
+                s.push_str(fd.funcp.get_model_name());
+            }
+            if !proto_has_custom_storage(&fd.funcp)
+                && (fd.funcp.is_input_locked() || fd.funcp.is_output_locked())
+            {
+                s.push_str(" -- yet parameter storage is locked");
+            }
+            // coreaction.cc:4908: data.warningHeader(s.str());
+            fd.warning_header(&s);
+        }
+        // coreaction.cc:4910-4934: per-call-site parameter/return errors.
+        let numcalls = fd.num_calls();
+        for i in 0..numcalls {
+            let Some(fc) = fd.get_call_specs(i) else { continue };
+            // The oracle prints the callee Funcdata's name, falling back to
+            // "<indirect>" when the callspec has no Funcdata link
+            // (coreaction.cc:4913-4920). Rugra's front-end boundary binds the
+            // observable (name, entry) pair on the callspec prototype via
+            // set_funcdata; an empty name is the no-link case.
+            let callee = if fc.prototype.name.is_empty() {
+                "<indirect>".to_string()
+            } else {
+                fc.prototype.name.clone()
+            };
+            if proto_has_input_errors(&fc.prototype) {
+                let s = format!(
+                    "Cannot assign parameter location for function {callee}: Prototype may be inaccurate"
+                );
+                // coreaction.cc:4922: data.warning(s.str(),fc->getEntryAddress());
+                fd.warning(&s, call_entry_address(fc));
+            }
+            if proto_has_output_errors(&fc.prototype) {
+                let s = format!(
+                    "Cannot assign location of return value for function {callee}: Return value may be inaccurate"
+                );
+                // coreaction.cc:4932: data.warning(s.str(),fc->getEntryAddress());
+                fd.warning(&s, call_entry_address(fc));
             }
         }
-
+        // coreaction.cc:4935: return 0; (no IR mutation).
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "prototypewarnings" mirrors ctor at coreaction.hh:1047
@@ -10281,6 +10369,131 @@ mod tests {
             fd.funcp.return_type.as_ref(),
             crate::type_system::datatype::Datatype::Void(_)
         ));
+    }
+
+    // Ghidra: coreaction.cc:4901-4909 ActionPrototypeWarnings::apply (isModelUnknown arm)
+    /// Locked-storage + unknown-model prototype — the PLT-thunk/DWARF shape
+    /// that produces the golden's `/* WARNING: Unknown calling convention --
+    /// yet parameter storage is locked */` header line. The oracle observable
+    /// is the commentdb write (funcdata.cc:135-145 warningHeader ->
+    /// addCommentNoDuplicate(warningheader, baseaddr, baseaddr)), not stderr.
+    #[test]
+    fn test_prototype_warnings_unknown_convention_locked_storage_writes_commentdb() {
+        let mut arch = crate::arch::Architecture::new();
+        let db = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::comment::CommentDatabaseInternal::new(),
+        ));
+        arch.set_commentdb(db.clone());
+        let mut fd = Funcdata::new(
+            "plt_thunk",
+            crate::address::Address::new(0x1022f0),
+            11,
+        );
+        fd.set_arch(std::sync::Arc::new(arch));
+        // The libc-signature lock combination (debugproto locked_proto /
+        // Ghidra's platform-side locked signature): input+output locked, model
+        // left unresolved (set_model(None) keeps calling_convention
+        // "unknown").
+        fd.funcp.set_input_lock(true);
+        fd.funcp.set_output_lock(true);
+        assert!(fd.funcp.is_model_unknown());
+
+        let mut action = ActionPrototypeWarnings::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        let comments: Vec<_> = db
+            .read()
+            .unwrap()
+            .comments_for_function(crate::address::Address::new(0x1022f0))
+            .cloned()
+            .collect();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(
+            comments[0].get_type(),
+            crate::comment::comment_type::WARNINGHEADER
+        );
+        assert_eq!(comments[0].get_addr().as_u64(), 0x1022f0);
+        assert_eq!(
+            comments[0].get_text(),
+            "WARNING: Unknown calling convention -- yet parameter storage is locked"
+        );
+        // funcdata.cc:144 addCommentNoDuplicate: a re-run adds no duplicate.
+        action.apply(&mut fd).unwrap();
+        assert_eq!(db.read().unwrap().num_comments(), 1);
+    }
+
+    // Ghidra: coreaction.cc:4901-4908 ActionPrototypeWarnings::apply (isModelUnknown arm)
+    /// Unlocked prototype with unknown model: the warning still fires
+    /// (unconditional on isModelUnknown) but carries no lock suffix — the
+    /// exact ostringstream assembly at coreaction.cc:4902-4907.
+    #[test]
+    fn test_prototype_warnings_unknown_convention_without_lock_has_no_suffix() {
+        let mut arch = crate::arch::Architecture::new();
+        let db = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::comment::CommentDatabaseInternal::new(),
+        ));
+        arch.set_commentdb(db.clone());
+        let mut fd = Funcdata::new(
+            "unresolved",
+            crate::address::Address::new(0x2000),
+            0x10,
+        );
+        fd.set_arch(std::sync::Arc::new(arch));
+        assert!(fd.funcp.is_model_unknown());
+        assert!(!fd.funcp.is_input_locked());
+        assert!(!fd.funcp.is_output_locked());
+
+        let mut action = ActionPrototypeWarnings::new();
+        action.apply(&mut fd).unwrap();
+
+        let comments: Vec<_> = db
+            .read()
+            .unwrap()
+            .comments_for_function(crate::address::Address::new(0x2000))
+            .cloned()
+            .collect();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].get_text(), "WARNING: Unknown calling convention");
+    }
+
+    // Ghidra: coreaction.cc:4889-4892 ActionPrototypeWarnings::apply (override arm)
+    /// Override messages ride the same warningHeader channel
+    /// (coreaction.cc:4892). The deadcode-delay message text comes from
+    /// override.cc:51-56 generateDeadcodeDelayMessage; with Rugra's empty
+    /// space-name table (no indexed space manager yet) the space reads
+    /// "unknown" — the channel and ordering are the oracle observables here.
+    #[test]
+    fn test_prototype_warnings_override_message_writes_commentdb() {
+        let mut arch = crate::arch::Architecture::new();
+        let db = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::comment::CommentDatabaseInternal::new(),
+        ));
+        arch.set_commentdb(db.clone());
+        let mut fd = Funcdata::new(
+            "with_override",
+            crate::address::Address::new(0x3000),
+            0x10,
+        );
+        fd.set_arch(std::sync::Arc::new(arch));
+        // Fixture tweak: bind a non-unknown model name so the isModelUnknown
+        // arm stays silent and only the override message is observable.
+        fd.funcp.set_model_name("__stdcall");
+        fd.localoverride.insert_deadcode_delay(0, 3);
+
+        let mut action = ActionPrototypeWarnings::new();
+        action.apply(&mut fd).unwrap();
+
+        let comments: Vec<_> = db
+            .read()
+            .unwrap()
+            .comments_for_function(crate::address::Address::new(0x3000))
+            .cloned()
+            .collect();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(
+            comments[0].get_text(),
+            "WARNING: Restarted to delay deadcode elimination for space: unknown"
+        );
     }
 
     #[test]

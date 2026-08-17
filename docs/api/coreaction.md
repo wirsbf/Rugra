@@ -806,6 +806,7 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 检查函数原型 + 调用点原型是否有未知调用约定（hasModel but calling_convention=="unknown"）。用 eprintln! 输出警告。
 - 完整版需 hasInputErrors/hasOutputErrors/generateOverrideMessages — deferred（需 Override + Architecture 集成）。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
+- **[2026-08-17 已被 r3 取代]**：eprintln/stderr 非 oracle 通道；完整 warningHeader/warning commentdb 通道移植见 2026-08-17（r3）节。
 
 ### 2026-07-01（管线改造）：Action trait apply &self→&mut self + ActionDeadCode local mut
 管线架构改造的连锁签名修改：所有 Action 的 apply 签名从 &self 改为 &mut self（支持 perform 状态机）。
@@ -1046,3 +1047,55 @@ specific 则保留），rec_map 值扩为 (name, Option<Datatype>)。
   副作用 architecture.cc:323-330——默认强制不打印、非默认 true、换默认后
   旧恢复 true）与 CALLSPEC_REBIND（绑定后锁定的 callspec 二过
   ActionDefaultParams 不被触碰）。
+
+### 2026-08-17（r3）：ActionPrototypeWarnings::apply 完整移植——warningHeader/warning 通道（UNKNOWN-PROTOMODEL-0001 warning 子项）
+
+旧实现只在参数锁定时 eprintln 到 stderr（非 oracle 通道），且 callspec 分支发
+oracle 不存在的 "call at ... has unknown calling convention"。现按
+coreaction.cc:4886-4936 逐段移植，全部警告走 `Funcdata::warning_header` /
+`Funcdata::warning`（funcdata.cc:135-145/119-129 → commentdb
+addCommentNoDuplicate(warningheader/warning, baseaddr, ...)）：
+
+- override 消息（cc:4889-4892）：`fd.localoverride.generate_override_messages`
+  （override.cc:279-287，仅 deadcode-delay 类）逐条 warningHeader。
+- 自身原型 input/output 错误（cc:4894-4900）：`hasInputErrors/hasOutputErrors`
+  为 fspec.hh:1461/1464 flag 位，Rugra FuncProto 未建模（fspec.hh:1351-1352；
+  唯一置位源头 = assignParameterStorage 抛 ParamUnassignedError，fspec.cc:4220-
+  4222，Rugra 无该路径；另有 fspec.cc:5507-5508 `FuncCallSpecs::forceSet` 的
+  error-flag 复制——纯源 proto 拷贝非独立源头，且 error_outputparam 全库无
+  直接置位源头；custom_storage 的 ATTRIB_CUSTOM decode 在 Rugra 为 no-op 丢弃，
+  fspec.rs:1129，系未来接线风险点）——`proto_has_input_errors/output_errors`
+  镜像谓词在所有可达状态下读 false，与 oracle 可观测等价（复核方独立 grep
+  验证，含 forceSet 复制点）。
+- isModelUnknown（cc:4901-4909）：`"Unknown calling convention"` +
+  `printModelInDecl()` 时 `": " + getModelName()` + `!hasCustomStorage() &&
+  (isInputLocked||isOutputLocked)` 时 `" -- yet parameter storage is locked"`
+  （custom_storage 仅 ATTRIB_CUSTOM decode 置位，fspec.cc:4724-4727，Rugra
+  decoder 该属性为 no-op stub——`proto_has_custom_storage` 同上等价 false）。
+- 每调用点错误（cc:4910-4934）：`FuncCallSpecs : public FuncProto`（继承）在
+  Rugra 为组合，谓词读 `fc.prototype`；名字取 `prototype.name`（set_funcdata
+  绑定的 display name），空名 → `"<indirect>"`（cc:4913-4920）；定位地址 =
+  `call_entry_address`（fspec.hh:1686 getEntryAddress；oracle 间接调用保持
+  invalid 地址，fspec.cc:4943——Rugra None 归一为 offset 0）。
+
+新增 fixture×3（coreaction.rs tests）：locked+unknown 写入 commentdb 精确文本
+`WARNING: Unknown calling convention -- yet parameter storage is locked`
+（WARNINGHEADER 类型 @baseaddr，二跑 addCommentNoDuplicate 去重=1 条）；未锁
+unknown 无后缀；override 消息走同通道。验证：`cargo test --lib` 1391 pass/
+5 fail（与基线同集：comment/dynamic/funcdata×2/ruleaction 预存，见
+RULE-SUBCANCEL-RWLOCK-0001 记录）；curl E2E Matched 123、defects=0、gcc 17
+FAIL 不变；annotations/refs 门禁过。
+
+**C 输出发射仍断链（printc/arch 域，登记 UNKNOWN-PROTOMODEL-WARN-EMIT-0001）**：
+arch.commentdb 默认 None（arch.rs:523，oracle sleigh_arch.cc:244 构造即
+`new CommentDatabaseInternal()`）；printc doc_function（printc.rs:5120）未调
+`commsorter.setup_function_list`（oracle printc.cc:2650）也未调
+`emit_comment_func_header`（printc.cc:2652；Rugra 已有实现 printc.rs:8450 但零
+调用方）；且 printc.rs:570-573 的 head/instr comment mask 与
+printlanguage.cc:579/582 **接反**（oracle head=header|warningheader、
+instr=user2|warning）。E2E 现状：管线侧 24 PLT thunk 函数的警告已经 warning
+通道产出（stderr fallback 48=24 函数×2——action.rs:912 批量与 :1085 单独
+双注册 ActionPrototypeWarnings，commentdb 侧 addCommentNoDuplicate 去重所以
+对接后无重复）；3 真实函数（main_init/main_free/hugehelp）被 debugproto.rs:260
+DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isModelUnknown
+= false），属 UNKNOWN-PROTOMODEL 父项模型语义域。
