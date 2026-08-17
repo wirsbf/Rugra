@@ -28,9 +28,9 @@
       "Funcdata::opMarkSpecialPrint (funcdata.hh:483)"
     ],
     "fixture_model": "GetStr Funcdata over BfdArchitecture; per arm case: type-locked ScopeLocal symbol (addSymbol + setAttribute(typelock), unrestricted usepoint) attached to a register-space 8-byte Varnode via Varnode::setSymbolProperties (varnode.cc:409-421); SUBPIECE defined via newOp/opSetOpcode/opSetInput/newUniqueOut; high level via fd.setHighLevel(); SPECIAL_PRINT set via opMarkSpecialPrint; rendering through FixturePrintC::opSubpiece with pushScope(fd->getScopeLocal()) preamble (printc.cc:2597) and EmitNoMarkup",
-    "type_construction": "FixtureTypes builds each factory type exactly once per process (a second getTypeStruct on a completed name throws 'Trying to alter definition of type', type.cc:3421-3423; setFields requires an incomplete struct, type.cc:3482). fixture_arr carries a tail field so TypeStruct::setFields does not set needs_resolution (type.cc:1569-1571, which would route the walk through findResolve and dereference the parentless op)",
+    "type_construction": "FixtureTypes builds each factory type exactly once per process (a second getTypeStruct on a completed name throws 'Trying to alter definition of type', type.cc:3421-3423; setFields requires an incomplete struct, type.cc:3482). fixture_arr carries a tail field so TypeStruct::setFields does not set needs_resolution (type.cc:1569-1871) on the outer walk level; fixture_inner is deliberately single-field-fills-struct so the REAL factory DOES set needs_resolution there — that flag drives the armA.nested findResolve arm (printc.cc:1967-1971). The defining COPY and SUBPIECE are inserted into a fresh basic block (const_cast<BlockGraph&>(fd.getBasicBlocks()).newBlockBasic + opInsertEnd) so TypeStruct::findResolve's op->getParent()->getFuncdata() (type.cc:1945) is reachable",
     "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent; __TERMINAL__ only through the locked Makefile libdecomp.a closure",
-    "normalization": "None; the 22 stdout records are compared byte-for-byte"
+    "normalization": "None; the 26 stdout records are compared byte-for-byte"
   },
   "assets": {
     "sla": {
@@ -67,8 +67,8 @@
     },
     {
       "id": "cast",
-      "records": 8,
-      "covers": "isSubpieceCast PartialStruct/PartialUnion input arms (cast.cc:416-418) true at offset 0; offset!=0 rejection; struct-input rejection; enum input/output accepted as the normalized UINT/INT surface; PartialStruct output rejected (cast.cc:419-422)"
+      "records": 10,
+      "covers": "isSubpieceCast PartialStruct/PartialUnion input arms (cast.cc:416-418) true at offset 0; offset!=0 rejection; struct-input rejection; enum input/output accepted as the normalized UINT/INT surface; PartialEnum input AND output accepted (REWORK #2: TypePartialEnum delegates to the TypeEnum ctor, type.cc:2255-2262, which normalizes the stored metatype to TYPE_UINT — audit-verified cast.int_partialenum_0=1/cast.partialenum_out_0=1); PartialStruct output rejected (cast.cc:419-422)"
     },
     {
       "id": "armA.field",
@@ -89,25 +89,37 @@
       "id": "armB.field",
       "records": 1,
       "covers": "printc.cc:862-868: NON-explicit vn (vn->isExplicit()==false skips the symbol arm), findTruncation(0,4) returns field lo with offset==0 -> pushOp(object_member) + pushVn + field atom -> B.lo"
+    },
+    {
+      "id": "armA.nested",
+      "records": 1,
+      "covers": "REWORK #1: fixture_inner { long x } is single-field-fills-struct, so the REAL TypeFactory::setFields sets needs_resolution (type.cc:1569-1871). The walk descends .in from fixture_outer (16 bytes, lsb=0, outsize 8), then at ct=inner: needsResolution && size==sz -> TypeStruct::findResolve override (type.cc:1944-1951) finds NO cached (inner,op,slot) resolution and returns field[0].type (long) != inner -> printc.cc:1969-1971 does NOT break and findTruncation descends .x -> N.in.x. The original Rugra port broke unconditionally here (MISMATCH, audit-verified); the fix consults the doc_function union_resolutions snapshot and only breaks on a self-resolve"
+    },
+    {
+      "id": "armA.allowcast",
+      "records": 1,
+      "covers": "REWORK #3: printc.cc:859 passes op->getOut() as pushPartialSymbol's vn, so the allowCast arm's outtype = vn->getHigh()->getType() (2019) reads the SUBPIECE OUTPUT high type. Walk: .lo descent (lsb=0, outsize 2 within int4 lo), then at ct=int4 isSubpieceCastEndian(uint2,int4,0,LE) -> true -> finalcast prefix -> (uint2)C.lo. The original Rugra port passed the input varnode (outtype whitelist always rejected -> finalcast dead code, MISMATCH, audit-verified)"
     }
   ],
   "input_model_difference": "Ghidra renders through the real Funcdata/ScopeLocal/VarnodeBank object graph (Scope::addSymbol, VarnodeBank-backed varnodes, HighVariable::setSymbol); the Rust fixture constructs the equivalent PcodeOp/Varnode/HighVariable/Symbol graph directly. The observable compared is the emitted C text of the op-level opSubpiece call plus the two predicate sweeps, which do not depend on the bank plumbing",
   "observation_scope": {
     "piece_sweep": "MATCH",
-    "cast_sweep": "MATCH",
+    "cast_sweep": "MATCH (including the REWORK #2 PartialEnum in/out records)",
     "armA_explicit_symbol": "MATCH",
     "armA_array_walk": "MATCH",
     "armA_synthetic_unnamed_field": "MATCH",
     "armB_find_truncation_field": "MATCH",
-    "union_resolution_cache": "UNTESTED (Rugra's print path has no Funcdata union-resolution cache wiring; Ghidra TypeUnion::findTruncation without a cached ResolvedUnion also returns null)",
+    "armA_nested_needs_resolution": "MATCH (REWORK #1: the no-cache findResolve path — field[0].type fallback, no break; was MISMATCH before the rework, audit-verified)",
+    "armA_allow_cast_finalcast": "MATCH (REWORK #3: outtype from the SUBPIECE output high type; was MISMATCH/dead-code before the rework, audit-verified)",
+    "union_resolution_cache_hit_break": "UNTESTED (the read side is wired via the doc_function union_resolutions snapshot and the (parent,op,slot) ResolveEdge key; the WRITE side — Funcdata::setUnionField producing an entry whose getDatatype()==ct for a struct on this path — is not exercised by any fixture yet; the pipeline's unionresolve producers do not currently emit such entries)",
     "symbol_offset_positive": "UNTESTED (printc.cc:856-857 suboff>0 requires a partial-symbol map entry not constructed here)",
     "big_endian_byte_offset": "UNTESTED (x86:LE target; computeByteOffsetForComposite big-endian arm unexercised)",
-    "needs_resolution_struct_break": "UNTESTED (printc.cc:1967-1971; fixture structs deliberately avoid the flag, see type_construction)"
+    "pipeline_needs_resolution_production": "MISSING (Rugra TypeFactory::set_fields does not set needs_resolution for single-field-fills-struct, type.cc:1569-1871 — TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001; the Rust fixture sets the flag manually on fixture_inner to mirror the oracle factory)"
   },
   "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "cpp_fixture_sha256": "f2df89cce96fd2b7c46b6711652149520ad4e18b61a8cad89e4be40784bd0a77",
-  "rust_fixture_sha256": "bb200409af87d7daa464eb7675f7995413859754b1950b957e07891dc4f7cc04",
-  "expected_stdout_sha256": "d1e25108a830045189ae5bca01fbd1ffcef3f75f3caa6b4fa13bdff754ad7ef5",
-  "overall_status": "MATCH: all 22 records byte-identical against the locked 12.0.4 oracle"
+  "cpp_fixture_sha256": "5c716207b5c136de7c370c264dfe6bea50d9efd1fe6ca551a5f0fb2fa0b463ad",
+  "rust_fixture_sha256": "2ed04654614e3647a3ad9f76e9f120377bb31ec9fc58e1de6bfbb3582cd2fd91",
+  "expected_stdout_sha256": "f012e98e47e421504d9e62f944bde5a377fc827bcf874e661e9118ae7f79f8fb",
+  "overall_status": "MATCH: all 26 records byte-identical against the locked 12.0.4 oracle (including the three audit-rework records: nested needsResolution findResolve no-cache descent, PartialEnum in/out cast whitelists, allowCast finalcast from the SUBPIECE output high type)"
 }

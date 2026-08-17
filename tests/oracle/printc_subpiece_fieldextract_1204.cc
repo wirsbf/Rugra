@@ -90,6 +90,8 @@ public:
 struct FixtureTypes {
   TypeStruct *pairStruct;
   TypeStruct *arrStruct;
+  TypeStruct *innerStruct;
+  TypeStruct *outerStruct;
   TypeUnion *altUnion;
   TypeArray *intArray2;
   TypePartialStruct *pairPartial;
@@ -125,6 +127,24 @@ struct FixtureTypes {
       arrFields.push_back(TypeField(1, 8, "tail", int4));
       types->setFields(arrFields, arrStruct, 12, 4, 0);
     }
+    // fixture_inner { long x } — single field fills the whole struct, so the
+    // REAL TypeFactory::setFields sets needs_resolution (type.cc:1569-1571).
+    innerStruct = types->getTypeStruct("fixture_inner");
+    if (innerStruct->isIncomplete()) {
+      vector<TypeField> innerFields;
+      innerFields.push_back(TypeField(0, 0, "x", int8));
+      types->setFields(innerFields, innerStruct, 8, 8, 0);
+    }
+    // fixture_outer { fixture_inner in @0; long tail @8 } — two fields, no
+    // needs_resolution; the walk descends into `in` and then hits the inner
+    // struct's needsResolution findResolve arm (printc.cc:1967-1971).
+    outerStruct = types->getTypeStruct("fixture_outer");
+    if (outerStruct->isIncomplete()) {
+      vector<TypeField> outerFields;
+      outerFields.push_back(TypeField(0, 0, "in", innerStruct));
+      outerFields.push_back(TypeField(1, 8, "tail", int8));
+      types->setFields(outerFields, outerStruct, 16, 8, 0);
+    }
     altUnion = types->getTypeUnion("fixture_alt");
     {
       vector<TypeField> ufields;
@@ -157,35 +177,47 @@ struct SubpieceFixture {
   }
 
   // Build a struct-typed register Varnode carrying a whole-map Symbol:
-  //  1. addSymbol("S", structType, register addr, usepoint) +
+  //  1. addSymbol("S", structType, register addr, invalid usepoint) +
   //     setAttribute(typelock) on the local scope, THEN
-  //  2. fd.newVarnode(8, register addr) — newVarnode's localmap->
+  //  2. fd.newVarnode(N, register addr) — newVarnode's localmap->
   //     queryProperties finds the type-locked entry and
   //     Varnode::setSymbolProperties (varnode.cc:409-421) sets the mapentry,
   //     forces the struct type, and propagates
   //     HighVariable::setSymbol (varnode.cc:416-417).
-  // Returns the SUBPIECE PcodeOp; the offset constant selects the extracted
+  // The defining COPY and the SUBPIECE are inserted into a fresh basic block
+  // so op->getParent()->getFuncdata() is reachable — the STRUCT
+  // needsResolution arm's findResolve (type.cc:1944-1951) dereferences the
+  // parent Funcdata for the union-resolution cache.
+  // `outSize`/`outType` shape the SUBPIECE output varnode (outType may be
+  // null for the unknown default); the offset constant selects the extracted
   // byte range on the little-endian x86:64 target (lsb == byteOff).
   PcodeOp *buildSubpiece(TypeStruct *containerType, const char *symbolName,
-                         uintb regOffset, int4 truncLsb, bool explicitVn)
+                         uintb regOffset, int4 vnSize, int4 truncLsb,
+                         int4 outSize, Datatype *outType, bool explicitVn)
   {
     SymbolEntry *entry = fd.getScopeLocal()->addSymbol(
         symbolName, containerType, Address(registerSpace, regOffset), Address());
     fd.getScopeLocal()->setAttribute(entry->getSymbol(), Varnode::typelock);
-    Varnode *vn = fd.newVarnode(8, Address(registerSpace, regOffset));
+    Varnode *vn = fd.newVarnode(vnSize, Address(registerSpace, regOffset));
     if (vn->getSymbolEntry() == (SymbolEntry *)0)
       throw std::runtime_error("type-locked symbol did not attach to the varnode");
     PcodeOp *defop = fd.newOp(1, Address(codeSpace, pc));
     pc += 0x10;
     fd.opSetOpcode(defop, CPUI_COPY);
-    fd.opSetInput(defop, fd.newConstant(8, 0x1122334455667788), 0);
+    fd.opSetInput(defop, fd.newConstant(vnSize, 0x1122334455667788), 0);
     fd.opSetOutput(defop, vn);
     PcodeOp *sub = fd.newOp(2, Address(codeSpace, pc));
     pc += 0x10;
     fd.opSetOpcode(sub, CPUI_SUBPIECE);
     fd.opSetInput(sub, vn, 0);
     fd.opSetInput(sub, fd.newConstant(1, (uintb)truncLsb), 1);
-    fd.newUniqueOut(4, sub);
+    Varnode *outvn = fd.newUniqueOut(outSize, sub);
+    if (outType != (Datatype *)0)
+      outvn->updateType(outType);
+    BlockBasic *bl =
+        const_cast<BlockGraph &>(fd.getBasicBlocks()).newBlockBasic(&fd);
+    fd.opInsertEnd(defop, bl);
+    fd.opInsertEnd(sub, bl);
     fd.setHighLevel();
     if (vn->getHigh()->getSymbol() == (Symbol *)0)
       throw std::runtime_error("symbol did not attach to the high");
@@ -227,6 +259,11 @@ void runCastSweep(Architecture *glb, const FixtureTypes &ft)
   std::cout << "cast.int_struct_0=" << (cs->isSubpieceCast(ft.int4, ft.pairStruct, 0) ? 1 : 0) << '\n';
   std::cout << "cast.int_enum_0=" << (cs->isSubpieceCast(ft.int4, ft.modeEnum, 0) ? 1 : 0) << '\n';
   std::cout << "cast.enum_int8_0=" << (cs->isSubpieceCast(ft.modeEnum, ft.int8, 0) ? 1 : 0) << '\n';
+  // TypePartialEnum delegates to the TypeEnum ctor (type.cc:2255-2262) which
+  // normalizes the stored metatype to TYPE_UINT, so a Ghidra partial-enum
+  // passes BOTH whitelists like a plain enum.
+  std::cout << "cast.int_partialenum_0=" << (cs->isSubpieceCast(ft.int4, ft.modePartialEnum, 0) ? 1 : 0) << '\n';
+  std::cout << "cast.partialenum_out_0=" << (cs->isSubpieceCast(ft.modePartialEnum, ft.int8, 0) ? 1 : 0) << '\n';
   std::cout << "cast.partialstruct_out_0=" << (cs->isSubpieceCast(ft.pairPartial, ft.int8, 0) ? 1 : 0) << '\n';
 }
 
@@ -235,14 +272,14 @@ void runSubpieceArms(Funcdata &fd, Architecture *glb, const FixtureTypes &ft)
   // armA.field: explicit vn, symbol S over fixture_pair, lsb=4 -> S.hi
   {
     SubpieceFixture fx(fd, glb, 0x5000);
-    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "S", 0x40, 4, true);
+    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "S", 0x40, 8, 4, 4, 0, true);
     std::cout << "armA.field=" << fx.render(sub) << '\n';
   }
   // armA.array: explicit vn, symbol A over fixture_arr, lsb=0, outsize 4
   // -> struct descent (.arr) + array element ([0]) -> A.arr[0]
   {
     SubpieceFixture fx(fd, glb, 0x6000);
-    PcodeOp *sub = fx.buildSubpiece(ft.arrStruct, "A", 0x48, 0, true);
+    PcodeOp *sub = fx.buildSubpiece(ft.arrStruct, "A", 0x48, 8, 0, 4, 0, true);
     std::cout << "armA.array=" << fx.render(sub) << '\n';
   }
   // armA.synthetic: explicit vn, symbol Y over fixture_pair, lsb=2, outsize
@@ -251,7 +288,7 @@ void runSubpieceArms(Funcdata &fd, Architecture *glb, const FixtureTypes &ft)
   // unnamedField(2,4) entry is taken at the struct level: Y._2_4_.
   {
     SubpieceFixture fx(fd, glb, 0x7000);
-    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "Y", 0x50, 2, true);
+    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "Y", 0x50, 8, 2, 4, 0, true);
     std::cout << "armA.synthetic=" << fx.render(sub) << '\n';
   }
   // armB.field: NON-explicit vn (high still has symbol B so pushVn resolves
@@ -259,8 +296,31 @@ void runSubpieceArms(Funcdata &fd, Architecture *glb, const FixtureTypes &ft)
   // field lo, offset==0 -> "B.lo"
   {
     SubpieceFixture fx(fd, glb, 0x8000);
-    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "B", 0x58, 0, false);
+    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "B", 0x58, 8, 0, 4, 0, false);
     std::cout << "armB.field=" << fx.render(sub) << '\n';
+  }
+  // armA.nested: explicit vn, symbol N over fixture_outer (16 bytes),
+  // lsb=0, outsize 8. The walk descends .in (fixture_inner, 8 bytes) and
+  // then hits the inner struct's needsResolution arm: TypeStruct::findResolve
+  // (type.cc:1944-1951) has NO cached resolution for (inner,op,slot=1), so it
+  // returns field[0].type (long) != inner — printc.cc:1969-1971 does NOT
+  // break and findTruncation descends .x -> N.in.x.
+  {
+    SubpieceFixture fx(fd, glb, 0x9000);
+    PcodeOp *sub = fx.buildSubpiece(ft.outerStruct, "N", 0x60, 16, 0, 8, 0, true);
+    std::cout << "armA.nested=" << fx.render(sub) << '\n';
+  }
+  // armA.allowcast: explicit vn, symbol C over fixture_pair, lsb=0, outsize
+  // 2 typed uint2. Walk: .lo descent (off=0 sz=2 within int4 lo), then at
+  // ct=int4: allowCast (printc.cc:2018-2029) reads outtype from the OUTPUT
+  // varnode's high (printc.cc:859 passes op->getOut() as vn; 2019
+  // vn->getHigh()->getType()) -> isSubpieceCastEndian(uint2,int4,0,LE) true
+  // -> finalcast prefix -> (ushort)C.lo.
+  {
+    SubpieceFixture fx(fd, glb, 0xa000);
+    Datatype *uint2 = glb->types->getBase(2, TYPE_UINT);
+    PcodeOp *sub = fx.buildSubpiece(ft.pairStruct, "C", 0x68, 8, 0, 2, uint2, true);
+    std::cout << "armA.allowcast=" << fx.render(sub) << '\n';
   }
 }
 
