@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "fixture_id": "RULE-PROPCOPY-BOOKKEEP-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "api": "Direct RulePropagateCopy::applyOp invocation on the dispatched READER op; no ActionGroup or other Rule runs",
+    "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies the Ghidra Funcdata and address spaces; each synthetic case clears prior analysis state and creates one real BlockBasic. Rugra creates an equivalent isolated Funcdata and BlockBasic per case.",
+    "ir": "All initial ops are alive members of the synthetic block and are wired only through Funcdata op editing APIs. Register inputs are SSA input varnodes (setInputVarnode, insert flag set via VarnodeBank::xref). COPY outputs are unique-space written varnodes (newUniqueOut, insert flag set). Constants are newConstant varnodes. The guarded free input is a bare newUnique varnode with no insert/constant/annotation flag, so isHeritageKnown is false. The observation is target-relevant structural state, not every unrelated PcodeOp/Varnode annotation.",
+    "normalization": "Only allocation-only unique-space offsets are replaced by deterministic fixture identities. Block order, alive/dead order, operand slots, parent/order fields, Varnode storage/value/SSA class, alias identity, definitions, descendant order, rule return values, LowlevelError messages, and all target-relevant structural mutations represented by observation_schema are preserved.",
+    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+    "random_seed": "none; RulePropagateCopy and fixture construction are deterministic",
+    "error_injection": "none"
+  },
+  "assets": {
+    "source_policy": "Materialize the four SLEIGH/spec files and curl binary from verified Git blob IDs at the pinned Rugra provenance commit; never consume their working-tree copies",
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544,
+      "source_policy": "Materialize the pinned provenance commit's examples/curl Git blob by verified object ID; never read the working-tree binary"
+    },
+    "bfd": {
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "host_tools": {
+    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "1e2c188b447476886cbe9931d33b5a742023da519976cf0c4ecae208a08535b4",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0,
+      "symbol_source": "ELF/BFD"
+    },
+    "cases": [
+      {
+        "id": "reader_propagate_slot0",
+        "shape": "INT_ADD reader slot0 reads COPY(register input)",
+        "expect": "propagate slot0, ret=1"
+      },
+      {
+        "id": "slot_scan_unwritten_const",
+        "shape": "slot0 constant unwritten; slot1 COPY out",
+        "expect": "skip slot0 (cc:3936), propagate slot1, ret=1"
+      },
+      {
+        "id": "slot_scan_noncopy_def",
+        "shape": "slot0 INT_SUB output; slot1 COPY out",
+        "expect": "skip slot0 (cc:3939-3940), propagate slot1, ret=1"
+      },
+      {
+        "id": "free_input_guard",
+        "shape": "COPY(free unique) input isHeritageKnown=false",
+        "expect": "guard reject (cc:3943), ret=0, state unchanged"
+      },
+      {
+        "id": "return_copy_guard",
+        "shape": "CPUI_RETURN reader carries return_copy flag",
+        "expect": "short-circuit (cc:3933), ret=0"
+      },
+      {
+        "id": "marker_constant_guard",
+        "shape": "MULTIEQUAL marker reader; COPY input is constant",
+        "expect": "marker constant guard (cc:3946-3947), ret=0"
+      },
+      {
+        "id": "multi_reader_bookkeeping",
+        "shape": "COPY out feeds r1 INT_SUB slot0 and r2 INT_OR slot1 (r2 slot0 is INT_SUB out)",
+        "expect": "two sequential applies ret=1 each; opSetInput erase-old/add-new descend records"
+      },
+      {
+        "id": "constant_dedup_bookkeeping",
+        "shape": "COPY input is constant already read by the COPY",
+        "expect": "propagate dedups to a fresh constant (funcdata_op.cc:108-115), ret=1"
+      },
+      {
+        "id": "self_defined_throw",
+        "shape": "COPY reads its own output",
+        "expect": "LowlevelError throw:Self-defined varnode (cc:3944-3945)"
+      }
+    ]
+  },
+  "observation_schema": {
+    "format": "Nineteen fixed-order UTF-8 records (before/after per case; multi_reader_bookkeeping has before/after_r1/after_r2) with a final newline",
+    "op_state": "Target-relevant structural state: exact block/alive/dead order plus opcode, dead flag, parent block index, sequence order, ordered input identities, and output identity",
+    "varnode_state": "Every fixture-tracked and transformation-created reachable Varnode in deterministic discovery order: space, size, semantic offset, constant/input/written/free classification, defining op, and ordered descendant op.slot list; whole-bank membership, create_index, and unrelated type/symbol/high annotations are outside this narrow observation schema",
+    "mutation_scope": "The constant-dedup fresh constant created by opSetInput during propagation is discovered and projected as g0. Detached original operands remain in the tracked Varnode list so descend-list xref removal is observable. Detached nullable-slot sentinel Varnodes from the known OPBANK-0001 gap are not projected."
+  },
+  "known_dependencies": {
+    "OPBANK-0001": {
+      "status": "MISMATCH",
+      "detail": "Rugra PcodeOpBank cannot represent Ghidra's initially-null input slots. Funcdata::op_set_input replaces temporary sentinel Varnodes before RulePropagateCopy runs, but those detached bank-only sentinels have no Ghidra counterpart and are outside this target-relevant observation schema. This gap was surfaced and retained by OP-INSERT-0001 PARTIAL_MATCH; the fixture cannot prove whole-bank identity while OPBANK-0001 remains MISMATCH."
+    },
+    "TYPE-UNKNOWN-0001": {
+      "status": "UNTESTED",
+      "detail": "The projection does not compare the Architecture TypeFactory-backed datatype identity/flags attached to created Varnodes (including the dedup constant's copySymbol-inherited type locks)."
+    },
+    "ARCH-0001": {
+      "status": "MISMATCH",
+      "detail": "Ghidra runs the synthetic IR in a BfdArchitecture-backed Funcdata, while Rugra's synthetic Funcdata has no equivalent fully loaded Architecture/services graph. RulePropagateCopy's guarded scan does not read that graph on the nine projected paths (the addrforce/addrtied marker sub-guards are additionally UNTESTED)."
+    }
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "453811b2114034a978339d969ecbece33b4622b9c21622f625d926651c0dbab4",
+    "rust_fixture_sha256": "9f95b66b2273485448a646db7f62d5575bce210eab5d3409e56e726a553c6f48",
+    "runner_sha256": "584cbf04071eea843468091aa82676b236f40d64a5ca12e33c7c82e9cb3ab4e6",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-propcopy-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+    "rust_crate_tree_sha256": "ca9de384f1ceeb4ed4f055dd223e63d40b4fa446a02b1d04c1ba501061716c64"
+  },
+  "expected_stdout_sha256": "91e10260ad9d9dba288cbe51de54dc5222b183a7e09941874f937a065977f751",
+  "expected_exit_code": 0,
+  "coverage": {
+    "reader_propagate_slot0": "TARGET_STRUCTURAL_MATCH",
+    "slot_scan_unwritten_const": "TARGET_STRUCTURAL_MATCH",
+    "slot_scan_noncopy_def": "TARGET_STRUCTURAL_MATCH",
+    "free_input_guard": "TARGET_STRUCTURAL_MATCH",
+    "return_copy_guard": "TARGET_STRUCTURAL_MATCH",
+    "marker_constant_guard": "TARGET_STRUCTURAL_MATCH",
+    "multi_reader_bookkeeping": "TARGET_STRUCTURAL_MATCH",
+    "constant_dedup_bookkeeping": "TARGET_STRUCTURAL_MATCH",
+    "self_defined_throw": "TARGET_STRUCTURAL_MATCH",
+    "marker_addrforce_guard": "UNTESTED",
+    "marker_addrtied_merge_guard": "UNTESTED",
+    "nonmarker_addrtied_paths": "UNTESTED",
+    "reader_without_any_copy_input": "UNTESTED",
+    "getoplist_all_opcode_registration": "UNTESTED",
+    "pool_repeat_apply_convergence": "UNTESTED",
+    "malformed_or_parentless_ir": "OUT_OF_DOMAIN"
+  },
+  "visible_output_regression": {
+    "status": "NONZERO_KNOWN_DIFFERENTIAL",
+    "scope": "Non-authoritative end-to-end regression signal required for a ruleaction.rs change (mechanism B); it is not the locked 12.0.4 function oracle above.",
+    "environment": "Isolated git worktree at e81294b + the three fixture/runner files (ghidra symlinked per concurrent-tree protocol); no src/ruleaction.rs delta in this delivery because the reader-side rewrite itself already landed as commit 1cc588d, so this run re-proves the committed state root will integrate.",
+    "curl_e2e": {
+      "command": "cargo run --release --offline --locked --example curl_decompile > result/curl_cur.c",
+      "exit_code": 0,
+      "summary": "124/124 golden-corpus functions processed: 74 decompiled, 0 empty-output, 2 timeout, 0 panic, 48 external-stub(import-signature declared), 0 worker-failure, 0 protocol-failure",
+      "output_lines": 2600
+    },
+    "ghidra_regression_compare": {
+      "command": "python3 tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c --summary-only",
+      "golden": "tests/golden/ghidra_curl_1204.c (locked 12.0.4 golden)",
+      "exit_code": 0,
+      "rugra_functions": 122,
+      "skeleton_diff_lines": 2728,
+      "defects": 0,
+      "numbering_issues": 0
+    },
+    "unit_tests": {
+      "command": "cargo test --lib ruleaction",
+      "result": "167 passed; 1 failed; the single failure is the pre-existing baseline test_rule_add_unsigned_fires (RuleAddUnsigned domain), zero new failures"
+    },
+    "differential": "defects=0 and numbering=0 hold against the locked 12.0.4 golden; the standing 2728 skeleton lines are the registered pipeline-wide printing/naming residuals and are outside RulePropagateCopy's write-set."
+  },
+  "overall_status": "PARTIAL_MATCH: nine target-relevant structural projections match; full-state input/output remains MISMATCH through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain UNTESTED"
+}

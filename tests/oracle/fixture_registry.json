@@ -2618,6 +2618,37 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "rule_propcopy_1204",
+   "description": "RulePropagateCopy reader-dispatch, isHeritageKnown/marker/self-defined guards, opSetInput bookkeeping (constant dedup + multi-reader descend erase)",
+   "runner": [
+    "tools/run_rule_propcopy_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "PARTIAL_MATCH",
+   "cache": {
+    "metadata": "tests/oracle/rule_propcopy_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/rule_propcopy_1204.cc",
+     "rust_fixture": "tests/oracle/rule_propcopy_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_rule_propcopy_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/ruleaction.rs",
+     "tests/oracle/rule_propcopy_1204.*",
+     "tools/run_rule_propcopy_oracle.sh"
+    ],
+    "rust_function_ids": []
+   }
   }
  ]
 }

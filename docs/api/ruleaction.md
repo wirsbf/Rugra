@@ -107,6 +107,15 @@ Convergence to "all readers" is the pool's repeat-apply loop. The former drift
 (COPY-op dispatch, redirect-all-readers with raw `inrefs[i]` writes + raw
 `descend.push`, no guards, stale descend on the COPY's output) is superseded.
 
+Oracle evidence (RULE-PROPCOPY-BOOKKEEP-0001): `tests/oracle/rule_propcopy_1204.{cc,rs}`
++ `tools/run_rule_propcopy_oracle.sh` — 19 records / 9 cases against the locked
+12.0.4 oracle (reader-trigger hit, slot-scan unwritten/non-COPY-def skips,
+`isHeritageKnown` free-input guard, `return_copy` short-circuit, marker-constant
+guard, two-reader descend erase+add bookkeeping, opSetInput constant-dedup fresh
+constant, `Self-defined varnode` throw path). Overall PARTIAL_MATCH (OPBANK-0001 /
+ARCH-0001 / TYPE-UNKNOWN-0001); the nine target projections are
+TARGET_STRUCTURAL_MATCH byte-identical.
+
 #### `fn get_name(&self) -> &str`
 
 `"propagatecopy"` (name literal from the Ghidra ctor, ruleaction.hh:725).

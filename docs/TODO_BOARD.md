@@ -18,7 +18,7 @@
 | `CSPEC-TEXT-INGEST-0001`（残余切片续作） | P0 | 中断交接 | cspec_slices_w19（2026-08-19 因模型限流 1305 中断，未交付；下任可从 patch 恢复） | `src/arch.rs`, `docs/api/arch.md`, `tests/oracle/cspec_text_ingest_1204.*`, `tools/run_cspec_text_ingest_oracle.sh`；部分实现归档 `docs/alignment_docs/handoff/cspec_slices_w19_partial_arch_rs.patch`（+191 行未验证，已撤出工作树） |
 | `BLOCK-INDEX-WIRE-0001` | P1 | IN_PROGRESS | block_index_wire_w19 | `src/blockaction.rs`, `docs/api/blockaction.md`，curl E2E 差分 |
 | `MERGE-PERSISTENT-STATE-0001`（r2-M2 残差） | P1 | IN_PROGRESS | merge_r2m2_w19 | `src/merge.rs`, `docs/api/merge.md`, shift/float-trunc fixture 重 pin |
-| `RULE-PROPCOPY-BOOKKEEP-0001` | P1 | IN_PROGRESS | propcopy_w19 | `src/ruleaction.rs`, `docs/api/ruleaction.md`，补 fixture |
+| `RULE-PROPCOPY-BOOKKEEP-0001` | P1 | DONE | propcopy_w19 | `src/ruleaction.rs`, `docs/api/ruleaction.md`，补 fixture | evidence=`this commit`（root 集成）。核实：核心重写已在 HEAD `1cc588d` 落地，本环交付 oracle fixture `rule_propcopy_1204`（19 records / 9 目标 case 双侧逐字节一致：读者触发/六层守卫序/opSetInput 四段记账含常量去重 g0 与多读者 descend 擦除/self-defined throw 双侧复现）；root 隔离 worktree 复跑 runner exit0 同哈希。残差（预登记跨域，非本环引入）：OPBANK-0001（NULL 输入槽哨兵不可表示）、ARCH-0001（BfdArchitecture vs 合成 Funcdata）、TYPE-UNKNOWN-0001（copySymbol typelock/namelock 未投影）+ 5 条 UNTESTED 分支（metadata 已登记）。E2E（12.0.4 golden）：defects=0/numbering=0/Matched 122 |
 | `SCOPE-FINDOVERLAP-KEY-0001`（F1/F2/F3） | P1 | IN_PROGRESS | scope_overlap_w19 | `src/varmap.rs`, `docs/api/varmap.md` |
 
 ### 恢复队列（按优先级，未认领）
