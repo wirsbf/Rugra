@@ -1,0 +1,230 @@
+diff --git a/src/arch.rs b/src/arch.rs
+index 7434830..51e8a84 100644
+--- a/src/arch.rs
++++ b/src/arch.rs
+@@ -83,6 +83,34 @@ pub trait SpecQuery {
+     fn unique_inject_base(&self) -> u64 {
+         0x200
+     }
++
++    // Ghidra: space.hh:315 AddrSpace::getDelay
++    /// Heritage delay of the given space (`AddrSpace::delay`).  Read by
++    /// `Architecture::addSpacebase` (architecture.cc:565,
++    /// `ptrdata.space->getDelay()+1`) to derive the new spacebase space's
++    /// delay and dead-code delay.  Default 0 stands in until the space
++    /// registry carries real delays; the locked x86-64 facts are
++    /// const/OTHER/unique/register/join = 0, ram/fspec/iop/stack = 1.
++    fn space_delay(&self, _spc: crate::space::AddressSpace) -> i32 {
++        0
++    }
++
++    // Ghidra: translate.hh:448 AddrSpaceManager::getDefaultSize
++    /// Address size of the default code space
++    /// (`defaultcodespace->getAddrSize()`).  Read by
++    /// `TypeFactory::setupSizes` for the default enumeration size
++    /// (type.cc:3167).  Default 8 is the locked x86-64 fact.
++    fn default_code_space_addrsize(&self) -> usize {
++        8
++    }
++
++    // Ghidra: translate.hh:453 AddrSpaceManager::getDefaultDataSpace
++    /// Address size of the default data space.  Read by
++    /// `TypeFactory::setupSizes` for the default pointer size
++    /// (type.cc:3158).  Default 8 is the locked x86-64 fact.
++    fn default_data_space_addrsize(&self) -> usize {
++        8
++    }
+ }
+ 
+ /// Residual report produced by `Architecture::parse_compiler_config`.
+@@ -102,6 +130,125 @@ pub struct CompilerConfigReport {
+     pub post_step_residuals: Vec<String>,
+ }
+ 
++// Ghidra: type.hh:81 type_metatype (TYPE_ENUM_INT / TYPE_ENUM_UINT values)
++/// The default enumeration meta-type written by `<enum>` decode and
++/// `setupSizes`.  Ghidra stores a full `type_metatype` in
++/// `TypeFactory::enumtype` (type.hh:770); only `TYPE_ENUM_INT` (5) and
++/// `TYPE_ENUM_UINT` (6) are reachable through the compiler-spec chain
++/// (`TypeFactory::parseEnumConfig`, type.cc:4667-4670, and the
++/// `enumsize == 0` default in `setupSizes`, type.cc:3168), so the mirror
++/// keeps just those two, exposing the numeric metatype for projections.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum EnumConfigType {
++    /// `TYPE_ENUM_INT` (type.hh:92) — signed enumeration.
++    EnumInt,
++    /// `TYPE_ENUM_UINT` (type.hh:93) — unsigned enumeration.
++    EnumUint,
++}
++
++impl EnumConfigType {
++    // RUGRA-GLUE: metatype (Ghidra stores the raw type_metatype value)
++    /// The numeric `type_metatype` of this enumeration flavor.
++    pub fn metatype(&self) -> i32 {
++        match self {
++            EnumConfigType::EnumInt => 5,  // TYPE_ENUM_INT
++            EnumConfigType::EnumUint => 6, // TYPE_ENUM_UINT
++        }
++    }
++}
++
++// Ghidra: type.hh:763-771 TypeFactory data-organization fields
++/// The data-organization ingest state driven by the `<data_organization>`,
++/// `<enum>` children and the post-loop `types->setupSizes()` step of
++/// `Architecture::parseCompilerConfig` (architecture.cc:1268-1271, 1350).
++///
++/// Mirrors the `TypeFactory` fields (type.hh:763-771) with the exact
++/// constructor defaults (`TypeFactory::TypeFactory`, type.cc:3106-3118:
++/// every size 0, `alignMap` empty) and the exact write semantics of
++/// `decodeDataOrganization` (type.cc:4583-4615),
++/// `decodeAlignmentMap`/`setDefaultAlignmentMap` (type.cc:4619-4656),
++/// `parseEnumConfig` (type.cc:4662-4672) and `setupSizes`
++/// (type.cc:3137-3170).  Installing these values into the live
++/// `crate::type_system::typefactory::TypeFactory` is the registered
++/// residual CSPEC-TYPEORG-STATE-0001.
++#[derive(Debug, Clone, Default)]
++pub struct DataOrganizationState {
++    /// Size of the core "int" data-type (`sizeOfInt`).
++    pub size_of_int: i32,
++    /// Size of the core "long" data-type (`sizeOfLong`).
++    pub size_of_long: i32,
++    /// Size of the core "char" data-type (`sizeOfChar`).
++    pub size_of_char: i32,
++    /// Size of the core "wchar_t" data-type (`sizeOfWChar`).
++    pub size_of_wchar: i32,
++    /// Size of pointers into the default data space (`sizeOfPointer`).
++    pub size_of_pointer: i32,
++    /// Size of alternate (far) pointers, or 0 (`sizeOfAltPointer`).
++    pub size_of_alt_pointer: i32,
++    /// Size of an enumerated type (`enumsize`).
++    pub enum_size: i32,
++    /// Default enumeration meta-type (`enumtype`).  Ghidra's field is
++    /// uninitialized until `parseEnumConfig` or `setupSizes` assigns it;
++    /// `None` models the never-assigned state.
++    pub enum_type: Option<EnumConfigType>,
++    /// Alignment of primitive data-types by size (`alignMap`); `-1`
++    /// marks sizes never explicitly listed before the fill-in loop.
++    pub align_map: Vec<i32>,
++}
++
++impl DataOrganizationState {
++    // Ghidra: type.cc:3088 TypeFactory::getAlignment
++    /// Alignment of a primitive data-type of the given size.  Faithful to
++    /// `TypeFactory::getAlignment` (type.cc:3088-3097): a size beyond the
++    /// map reads the LAST entry, and an empty map is the
++    /// `TypeFactory alignment map not initialized` error (only reachable
++    /// before `setupSizes`).
++    pub fn get_alignment(&self, size: usize) -> Result<i32, String> {
++        if size >= self.align_map.len() {
++            if self.align_map.is_empty() {
++                return Err("TypeFactory alignment map not initialized".to_string());
++            }
++            return Ok(self.align_map[self.align_map.len() - 1]);
++        }
++        Ok(self.align_map[size])
++    }
++}
++
++// Ghidra: translate.cc:57 SpacebaseSpace (constructor state at install)
++/// One `<spacebase>` install as performed by `Architecture::addSpacebase`
++/// (architecture.cc:559-570): a `SpacebaseSpace` created at index
++/// `numSpaces()` with delay `ptrdata.space->getDelay()+1`, inserted into
++/// the space manager and given its base register by
++/// `AddrSpaceManager::addSpacebasePointer` ->
++/// `SpacebaseSpace::setBaseRegister` (translate.cc:86-102).  Rugra has no
++/// dynamic space creation, so the install is recorded here; live
++/// `SpacebaseSpace` insertion is the registered SPACE-domain residual.
++#[derive(Debug, Clone)]
++pub struct SpacebaseInstall {
++    /// Name of the created spacebase space (`nm`).
++    pub name: String,
++    /// Index the space was created at (`ind = numSpaces()`).
++    pub index: i32,
++    /// Containing space (`contain = base`).
++    pub base_space: crate::space::AddressSpace,
++    /// The base register storage (`ptrdata`; `baseloc`/`baseOrig` before
++    /// any truncation adjust).
++    pub ptrdata: VarnodeData,
++    /// Truncated register size (`truncSize`; `SpacebaseSpace` address
++    /// size).
++    pub trunc_size: i32,
++    /// Heritage delay and dead-code delay of the new space
++    /// (`dl = ptrdata.space->getDelay()+1`).
++    pub delay: i32,
++    /// The `setReverseJustified` effect (space flag `reverse_justified`).
++    pub reverse_justified: bool,
++    /// Stack growth direction (`isNegativeStack` after
++    /// `setBaseRegister`).
++    pub stack_growth_negative: bool,
++    /// Formal stack space indicator (`isFormal`).
++    pub is_formal: bool,
++}
++
+ // Ghidra: globalcontext.hh:78 TrackedContext
+ /// A tracked register (Varnode storage) and the value it contains, decoded
+ /// from a pspec `<tracked_set>`'s `<set>` children.  Faithful to
+@@ -565,6 +712,39 @@ pub struct Architecture {
+     /// Laned register records. Faithful to `lanerecords`.
+     pub lane_records: Vec<crate::transform::LanedRegister>,
+ 
++    // ---- compiler-spec space-manager wiring (CSPEC-TEXT-INGEST-0001) ----
++    /// `<spacebase>` installs (decode order) — the recorded effect of
++    /// `Architecture::addSpacebase` (architecture.cc:559-570).  Live
++    /// `SpacebaseSpace` insertion into a space manager is the registered
++    /// SPACE-domain residual.
++    pub spacebase_records: Vec<SpacebaseInstall>,
++    /// `<deadcodedelay>` writes (decode order) — the recorded effect of
++    /// `AddrSpaceManager::setDeadcodeDelay` (translate.cc:768-772,
++    /// `spc->deadcodedelay = delaydelta`).  Later entries for the same
++    /// space win, mirroring the field write.
++    pub deadcode_delay_overrides: Vec<(crate::space::AddressSpace, i32)>,
++    /// `<inferptrbounds>` writes (decode order) — the recorded effect of
++    /// `AddrSpaceManager::setInferPtrBounds` (translate.cc:483-488,
++    /// `pointerLowerBound`/`pointerUpperBound` on the range's space).
++    /// Later entries for the same space win.
++    pub infer_ptr_bounds: Vec<(crate::space::AddressSpace, u64, u64)>,
++    /// `<readonly>` property ranges (decode order) — the space-keyed
++    /// shadow of `Database::setPropertyRange(Varnode::readonly, ...)`
++    /// (architecture.cc:867-877, database.cc:3220-3239).  When a
++    /// `symboltab` is attached the range is ALSO applied through
++    /// `Database::set_property_range`; the Database-side flagbase is not
++    /// space-keyed yet (registered residual).
++    pub readonly_property_ranges: Vec<(crate::space::AddressSpace, u64, u64)>,
++    /// Data-organization ingest state (`<data_organization>`, `<enum>`,
++    /// `types->setupSizes()`); see [`DataOrganizationState`].
++    pub data_organization: DataOrganizationState,
++    /// Whether a `<stackpointer>` element created the formal stack space
++    /// (the `formal_stackspace` flag `Architecture::getStackSpace()`
++    /// keys on, architecture.hh:415-418); `TypeFactory::setupSizes`
++    /// reads the stack pointer size only when a stack space exists
++    /// (type.cc:3142).
++    pub stack_space_installed: bool,
++
+     // ---- Stack space / spacebase configuration (cspec <stackpointer>) ----
+     /// The address space that the stack pointer indexes into (IPTR_SPACEBASE).
+     /// Faithful to `glb->getStackSpace()`. Defaults to AddressSpace::Stack.
+@@ -665,6 +845,12 @@ impl Architecture {
+             options_db: None,
+             split_records: Vec::new(),
+             lane_records: Vec::new(),
++            spacebase_records: Vec::new(),
++            deadcode_delay_overrides: Vec::new(),
++            infer_ptr_bounds: Vec::new(),
++            readonly_property_ranges: Vec::new(),
++            data_organization: DataOrganizationState::default(),
++            stack_space_installed: false,
+             stack_space: crate::space::AddressSpace::Stack,
+             stack_pointer_space: crate::space::AddressSpace::Register,
+             stack_pointer_offset: 0x20, // x86-64 RSP
+@@ -1531,6 +1717,11 @@ impl Architecture {
+         self.stack_base_space = base;
+         self.stack_grows_negative = stack_growth;
+         self.stack_reverse_justify = is_reverse_justify;
++        // The formal_stackspace flag (SpacebaseSpace ctor, translate.cc:64-65)
++        // is what Architecture::getStackSpace() keys on; TypeFactory::setupSizes
++        // reads the stack pointer only while a formal stack space exists
++        // (type.cc:3141-3148).
++        self.stack_space_installed = true;
+         Ok(())
+     }
+ 

@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | `BLOCK-DOMROOT-0001`（在途收尾） | P1 | DONE | block_domroot_wave + 独立复核 agent | `src/{block,funcdata,heritage}.rs` + fixture 三件套 + runner | evidence=`9825db1`（root 集成）。权威 runner MATCH stdout_sha256=080948a5…（四 case：rootlist swap/入口回环/多根 VRoot 别名/单根）；机制 C 独立复核 APPROVE（四类语义零 MISMATCH + 独立复跑 MATCH）；registry 登记 block_domroot_1204（第 79 个）。残差：BLOCK-FINDIRREDUCIBLE-0001（findIrreducible/calcLoop 域）+ removeUnreachableBlocks 消费者未接线 |
 | `PIPE-HEAD-FLAT-ACTIONS-0001`（新登记，PIPE-0001 子项，源出 HERITAGE-FLAGFREE-SSA-0001 根因） | P0 | IN_PROGRESS | pipe_head_w19 | `src/{action,coreaction}.rs`, `docs/api/{action,coreaction}.md`，E2E 差分门禁 |
-| `CSPEC-TEXT-INGEST-0001`（残余切片续作） | P0 | IN_PROGRESS | cspec_slices_w19 | `src/arch.rs`, `docs/api/arch.md`, `tests/oracle/cspec_text_ingest_1204.*`, `tools/run_cspec_text_ingest_oracle.sh` |
+| `CSPEC-TEXT-INGEST-0001`（残余切片续作） | P0 | 中断交接 | cspec_slices_w19（2026-08-19 因模型限流 1305 中断，未交付；下任可从 patch 恢复） | `src/arch.rs`, `docs/api/arch.md`, `tests/oracle/cspec_text_ingest_1204.*`, `tools/run_cspec_text_ingest_oracle.sh`；部分实现归档 `docs/alignment_docs/handoff/cspec_slices_w19_partial_arch_rs.patch`（+191 行未验证，已撤出工作树） |
 | `BLOCK-INDEX-WIRE-0001` | P1 | IN_PROGRESS | block_index_wire_w19 | `src/blockaction.rs`, `docs/api/blockaction.md`，curl E2E 差分 |
 | `MERGE-PERSISTENT-STATE-0001`（r2-M2 残差） | P1 | IN_PROGRESS | merge_r2m2_w19 | `src/merge.rs`, `docs/api/merge.md`, shift/float-trunc fixture 重 pin |
 | `RULE-PROPCOPY-BOOKKEEP-0001` | P1 | IN_PROGRESS | propcopy_w19 | `src/ruleaction.rs`, `docs/api/ruleaction.md`，补 fixture |
