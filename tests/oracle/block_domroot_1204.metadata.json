@@ -1,0 +1,77 @@
+{
+  "schema": 2,
+  "fixture_id": "HTTPD-ADDDESCEND-THROW-0001",
+  "stable_function_id": "GH12-F-cfd29a1e6f04b3f2c1e4",
+  "stable_function_closure": [
+    "GH12-F-53bf522d4708a537d1f7 ghidra::BlockGraph::findSpanningTree block.cc:1009",
+    "GH12-F-9a1f5a5e4d81f3d7a0f2 ghidra::BlockGraph::calcForwardDominator block.cc:1954",
+    "GH12-F-c30e7d8fbdc509d8f17e ghidra::BlockGraph::structureLoops block.cc:2194",
+    "GH12-F-87c9a5900b5ff9dbb9d1 ghidra::FlowBlock::FlowBlock block.cc:61",
+    "GH12-F-49056a46f355bb8dc2e8 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
+    "GH12-F-3b8e07f662ff27d4d9a1 ghidra::BlockGraph::createVirtualRoot block.cc:988"
+  ],
+  "overall_status": "MATCH: the four-case projection (reverse post order with per-block index, final rootlist, per-block immediate dominator) byte-matches the locked oracle on both entries — the structureLoops->findSpanningTree reorder chain consumed by Funcdata::structureReset, and the side-effect-free build_dom_tree entry (local-RPO path) used by heritage/blockaction/coreaction glue callers; findIrreducible/calcLoop (irreducible-CFG rebuild) and the removeUnreachableBlocks consumer of the blocks_unreachable flag are outside this fixture and registered separately",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.cc:1009-1136,block.cc:1954-2032,block.cc:2194-2215,block.cc:61-69,block.cc:988-995}",
+    "signature": "void BlockGraph::structureLoops(vector<FlowBlock *> &rootlist); void BlockGraph::calcForwardDominator(const vector<FlowBlock *> &rootlist)"
+  },
+  "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph::newBlock/addEdge; no AddrSpace, no Funcdata, no PcodeOps (structureLoops and calcForwardDominator touch only blocks, edges, and FlowBlock scalar state)",
+  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of locked BlockGraph::structureLoops + calcForwardDominator on synthetic component graphs built through production BlockGraph APIs; the Rust side additionally runs BlockGraph::build_dom_tree on fresh identical graphs and asserts the same immediate-dominator set (silent on success so stdout stays byte-identical)",
+    "prestate": "Per-case fresh BlockGraph with blocks appended in a fixed vector order and edges inserted in a fixed order (the in-edge order of merges feeds the calcForwardDominator first-processed-predecessor scan, block.cc:1995-1999)",
+    "observation": "Per case: title; rpo line = component list order after `list = rpostorder` (block.cc:1135) with each block's index field; rootlist line = final rootlist after the block.cc:1129 swap; one idom line per block in list order with the immed_dom block name or NULL",
+    "normalization": "Block identity prints as per-case names (E/A/B/O1/O2, R0/M/X/R1, X/Y), never pointers. NULL is printed for immed_dom == 0 (the virtual-root excise result and the single-root cc:2031 clear). No index normalization is needed: both sides print the same reverse-post-order numbers."
+  },
+  "input_manifest": {
+    "canonicalization": "case titles plus block/edge lists as listed below",
+    "cases": [
+      "case A multi-root trailing orphans: blocks E,A,B,O1,O2 (vector order), edges E->A, A->B; O1/O2 are in0/out0 orphans appended at the END of the component vector — the httpd lifter shape. Pins the rootlist head/tail swap (block.cc:1031-1035): E (the first sizeIn()==0 candidate) finishes the DFS last and takes RPO slot 0; orphans may never steal RPO[0]. rootlist ends [E, O1, O2]; E/O1/O2 all idom NULL (virtual-root create + excise); A idom E; B idom A.",
+      "case B single root with back-edge into entry: blocks E,A; edges E->A, A->E. Pins the createVirtualRoot branch at block.cc:1978-1984 (rootlist.size()==1, rootlist[0]==b, b->sizeIn()!=0): E gets an artificial root and ends with immed_dom NULL; A idom E.",
+      "case C cross-root merge: blocks R0,M,X,R1 (vector order), edges R0->M, R1->M, M->X (in-edge order of M = [R0, R1]). Pins the virtual-root finger-arithmetic alias: a freshly constructed FlowBlock has index == 0 (block.cc:61-69), so a finger walking into the virtual root lands on numnodes-0 = the postorder slot of list[0]; the merge M of two different roots' subtrees converges to immed_dom == R0 (NOT NULL). R0/R1 idom NULL; M idom R0; X idom M.",
+      "case D pure cycle, no root candidate: blocks X,Y; edges X->Y, Y->X. Pins the rootlist fallback rootlist = { list[0] } (block.cc:1036-1038): X assumed entry, X idom NULL (back-edge-into-entry virtual root), Y idom X."
+    ]
+  },
+  "observation_schema": {
+    "format": "Four case records, each: title line, rpo line, rootlist line, then one idom line per block in final list order, final newline",
+    "state": "per-block index (reverse post order) on the rpo line; per-block immed_dom (name or NULL) on idom lines",
+    "graph": "final component list order (list = rpostorder), final rootlist order after the block.cc:1129 swap"
+  },
+  "comparand": {
+    "fixture": "worktree WIP of HTTPD-ADDDESCEND-THROW-0001 (src/block.rs findSpanningTree/calcForwardDominator port + compute_spanning_rpo local-RPO entry)",
+    "cpp_fixture_sha256": "c0292493013d854da0ffdf5f1eaabf68cd5eddbfc53f71d3f061a931204ad70f",
+    "rust_fixture_sha256": "d04c6c7d9385209cf8f4ab3232640f3e4b5e593dc0d74579ca562ce6f0d82a90",
+    "host": {
+      "cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-124-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+    "private_state_observer": "Read-only observation through #define private public and #define class struct (BlockGraph helper members are implicitly private without an access label) in the fixture translation unit only; no oracle source is modified",
+    "rust_comparand": "The current repository crate is built with cargo build --offline --locked --lib and the fixture is linked with rustc --extern rugra=librugra.rlib (run_block_entry_1204 pattern; the base-commit-overlay hardening used by block_index_assign_1204 is a registered follow-up)"
+  },
+  "expected_stdout_sha256": "080948a5e1ecf90e7a1165e90dc336d6204aafede837c3732da24094a6bee7fa",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "multi_orphan_rootlist_swap": "MATCH: case A — trailing in0/out0 orphans cannot steal RPO[0]; the original head takes slot 0 and ends at rootlist front (block.cc:1031-1035 + 1129-1133); the HTTPD-ADDDESCEND-THROW-0001 root-cause shape",
+    "virtual_root_create_excise": "MATCH: case A/C — multi-root graphs get createVirtualRoot (block.cc:1970-1973), rootlist entries are pre-filled immed_dom=virtualroot (block.cc:1986-1987), and the excise (block.cc:2022-2029) leaves exactly those entries with immed_dom NULL",
+    "virtual_root_index_alias": "MATCH: case C — the fresh FlowBlock's index==0 makes a dominator finger walking into the virtual root converge on the postorder slot of list[0], so a cross-root merge gets immed_dom == R0, not NULL (block.cc:61-69 + 2004-2012)",
+    "back_edge_into_entry_root": "MATCH: case B — rootlist.size()==1 with root[0]==start node carrying an in-edge takes the second createVirtualRoot branch (block.cc:1978-1984); entry ends NULL (excise) instead of self-domination",
+    "no_root_assume_first": "MATCH: case D — empty candidate list falls back to rootlist={list[0]} (block.cc:1036-1038) and the cycle still gets a full RPO with X at slot 0",
+    "build_dom_tree_local_rpo_parity": "MATCH: the Rust-side build_dom_tree assertions (non-reordering entry used by heritage/blockaction/coreaction glue callers) produce the identical immediate-dominator set on all four cases, asserted inside the fixture (silent on success so stdout stays byte-identical)",
+    "first_processed_predecessor_order": "MATCH: case C's in-edge insertion order [R0, R1] fixes the first-processed-predecessor scan (block.cc:1995-1999) — reorder-sensitivity is pinned by construction",
+    "findIrreducible_rebuild_loop": "UNTESTED: all four cases are reducible, so findIrreducible (block.cc:1147) never forces a rebuild and calcLoop (block.cc:2104) never runs; Rugra structure_loops does not port them (registered with BLOCK-FINDIRREDUCIBLE-0001)",
+    "root_with_inedges_throw": "UNTESTED: the LowlevelError('Problems finding root node of graph') branch (block.cc:1979-1980) requires rootlist.size()!=1 or rootlist[0]!=b with a mismatched caller; both production call paths derive rootlist from the same spanning tree, so no constructible production state reaches it",
+    "second_virtualroot_after_multiroot": "UNTESTED: with rootlist.size()>1 the start node is the fresh virtual root (sizeIn()==0), so the second createVirtualRoot (block.cc:1981) is unreachable from constructible production inputs; exercised logically in cases A/C where the first branch already created it",
+    "removeUnreachableBlocks_consumer": "UNTESTED: the blocks_unreachable flag consumer (funcdata_block.cc:360) is not ported yet; residual httpd throws from unreachable-block CBRANCHs are registered on the follow-up TODO family"
+  }
+}

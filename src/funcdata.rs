@@ -368,6 +368,14 @@ pub mod funcdata_flags {
     /// Analysis must be restarted because of new override info (Ghidra
     /// `restart_pending`, funcdata.hh:84 = 0x400).
     pub const RESTART_PENDING: u32 = 1 << 10;
+    /// At least one basic block is currently unreachable (Ghidra
+    /// `blocks_unreachable`, funcdata.hh:60 = 0x4). Rugra uses bit 6 to
+    /// avoid clashing with the remapped flag space (HIGHLEVEL_ON occupies
+    /// Ghidra's bit 2; see BLOCKS_GENERATED's note). Set/cleared only by
+    /// `structure_reset` mirroring funcdata_block.cc:710/713-714
+    /// (`rootlist.size() > 1` after structureLoops) and read via
+    /// `has_unreachable_blocks` (funcdata.hh:149).
+    pub const BLOCKS_UNREACHABLE: u32 = 1 << 6;
 }
 
 use crate::varnode::VarnodeBank;
@@ -2163,23 +2171,103 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::structureReset
+    // Ghidra: funcdata_block.cc:704 Funcdata::structureReset
     /// Recompute loop structure, dominance, and reset the structured-block
     /// hierarchy for the current CFG. Faithful to
     /// `Funcdata::structureReset` (funcdata_block.cc:705-735).
     ///
     /// Must be called after any mutation that changes the CFG so that
     /// dominator/loop information stays consistent.
+    ///
+    /// Oracle chain, mirrored statement by statement:
+    /// - cc:710 `flags &= ~blocks_unreachable`
+    /// - cc:711 `bblocks.structureLoops(rootlist)` — findSpanningTree puts
+    ///   the component list in reverse post order (block.cc:1135) and fills
+    ///   rootlist with every entry point (multi-root graphs keep the
+    ///   original head at RPO[0] via the block.cc:1031-1035 swap)
+    /// - cc:712 `bblocks.calcForwardDominator(rootlist)` — CHK dominators
+    ///   rooted at postorder.back(), with the createVirtualRoot/excise path
+    ///   (block.cc:1970-2029) so multi-root entries end with immed_dom null
+    /// - cc:713-714 `if (rootlist.size() > 1) flags |= blocks_unreachable`
+    /// - cc:716-727 dead jumptable elimination
+    /// - cc:728 `sblocks.clear()`
+    /// - cc:730 `heritage.forceRestructure()` (maxdepth = -1)
+    ///
+    /// Rugra glue tail (no oracle counterpart on the Funcdata level):
+    /// refresh the per-block dominator depth/subtree/frontier caches so
+    /// Rugra consumers (find_common_block, phi placement) stay coherent
+    /// with the freshly written immed_dom set — Ghidra computes dominator
+    /// depth locally inside Heritage::buildADT (heritage.cc:2338).
+    ///
+    /// Errors: Ghidra's LowlevelError channel (findSpanningTree /
+    /// calcForwardDominator throws) is mirrored by panic — per-function
+    /// worker isolation maps it onto Ghidra's abort-this-function model,
+    /// same policy as `Varnode::add_descend`.
     pub fn structure_reset(&mut self) {
-        // Ghidra clears blocks_unreachable, recomputes loops + dominators,
-        // then rebuilds the high-level structured hierarchy. Rugra's
-        // structured hierarchy (sblocks) is rebuilt by blockaction on demand;
-        // here we refresh the basic-block dominator tree and loop flags so
-        // subsequent analyses see a consistent CFG.
-        self.bblocks.build_dom_tree();
-        let _ = self.bblocks.structure_loops();
-        // Clear any cached high-level structure; it will be regenerated.
+        // cc:710: clear any old blocks flag.
+        self.flags &= !funcdata_flags::BLOCKS_UNREACHABLE;
+        // cc:711: (re)calculate the loop structure and the reverse post
+        // order; rootlist receives every entry point.
+        let mut rootlist: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> =
+            Vec::new();
+        if let Err(e) = self.bblocks.structure_loops(&mut rootlist) {
+            panic!("{}", e);
+        }
+        // cc:712: calculate forward dominators (reads the list in the
+        // reverse post order established by structure_loops).
+        if let Err(e) = self.bblocks.calc_forward_dominator(&rootlist) {
+            panic!("{}", e);
+        }
+        // cc:713-714: more than one entry point -> unreachable code exists.
+        if rootlist.len() > 1 {
+            self.flags |= funcdata_flags::BLOCKS_UNREACHABLE;
+        }
+        // cc:716-727: check for dead jumptables; eliminated ones are
+        // dropped (Ghidra: `delete jt`) with a header warning.
+        let mut alivejumps: Vec<Arc<RwLock<crate::jumptable::JumpTable>>> = Vec::new();
+        for jt_arc in std::mem::take(&mut self.jump_tables) {
+            let dead = {
+                let jt = jt_arc.read().unwrap();
+                match jt.get_indirect_op() {
+                    Some(indop) => indop.read().unwrap().is_dead(),
+                    // Ghidra dereferences getIndirectOp() unconditionally
+                    // (funcdata_block.cc:719); Rugra's Option is treated as
+                    // alive — no production path leaves a jumptable without
+                    // its indirect op here.
+                    None => false,
+                }
+            };
+            if dead {
+                self.warning_header("Recovered jumptable eliminated as dead code");
+                continue; // delete jt
+            }
+            alivejumps.push(jt_arc);
+        }
+        self.jump_tables = alivejumps;
+        // cc:728: force the structuring algorithm to start over.
         self.sblocks.clear();
+        // cc:730: force regeneration of the heritage basic-block structures
+        // (maxdepth = -1), so the next Heritage pass rebuilds the augmented
+        // dominator tree from the CFG re-established above.
+        self.heritage.force_restructure();
+        // RUGRA-GLUE: refresh Rugra's per-block dominator caches (dom depth,
+        // subtree children, dominance frontiers) that other passes read
+        // directly off FlowBlock; the immed_dom set written by
+        // calc_forward_dominator is the oracle-observable state.
+        self.bblocks.build_dom_depth();
+        self.bblocks.build_dom_subtree();
+        self.bblocks.calc_dom_frontier();
+    }
+
+    // Ghidra: funcdata.hh:149 Funcdata::hasUnreachableBlocks
+    /// Did this function exhibit unreachable code — the cached
+    /// `blocks_unreachable` flag maintained by `structure_reset`
+    /// (funcdata_block.cc:710/714). Ghidra consumers: condexe.cc:485,
+    /// double.cc:3267/3348 gate their analysis on it, and
+    /// `removeUnreachableBlocks` (funcdata_block.cc:360) uses it as the
+    /// cached existence check.
+    pub fn has_unreachable_blocks(&self) -> bool {
+        (self.flags & funcdata_flags::BLOCKS_UNREACHABLE) != 0
     }
 
     // Ghidra: funcdata_block.cc:688 Funcdata::installSwitchDefaults

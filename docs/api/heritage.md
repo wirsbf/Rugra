@@ -929,3 +929,12 @@ read 工作负载——INPUT 会置 insert 使 isHeritageKnown 跳过该读）�
 Register@0x30 同一 loc，collect 按地址窗口照常收作 read，断言（alive 计数差、
 pass==3）零变化，生产代码未动。
 <!-- annotation-pass: 2026-08-17 -->
+
+## force_restructure（block_domroot_1204，2026-08-19）
+
+**`Heritage::force_restructure`** — `heritage.hh:333`
+`void forceRestructure(void) { maxdepth = -1; }` 的一行移植。闭环：
+`heritage()` 入口 `maxdepth==-1` → `build_dom_tree + build_adt`
+（对应 heritage.cc:2676-2677 增广支配树重建），调用点为
+`Funcdata::structure_reset` 尾部（funcdata_block.cc:730）。对齐证据：
+block_domroot_1204 权威 runner MATCH + 机制 C 复核 APPROVE（2026-08-19）。

@@ -1311,3 +1311,25 @@ false，split_uses / op_unlink / op_destroy / op_unset_input 无 input-flag 分�
   numbering=0）。
 <!-- annotation-pass: 2026-08-17 -->
 
+
+## structure_reset 支配树重置链（block_domroot_1204，2026-08-19）
+
+**`Funcdata::structure_reset`** — `funcdata_block.cc:704-731`
+`structureReset` 的语句级镜像：清 `blocks_unreachable` →
+`bblocks.structureLoops(rootlist)` → `bblocks.calcForwardDominator(rootlist)`
+→ `rootlist.len()>1` 置 unreachable → 死 jumptable 消灭循环（jumpvec 保序、
+`warning_header` 先于 drop、isDead 经 PcodeOp 读锁）→ `sblocks.clear()` →
+`heritage.force_restructure()`。RUGRA-GLUE 尾部补
+`build_dom_depth/build_dom_subtree/calc_dom_frontier` 缓存刷新（Ghidra 的
+dom depth 是 Heritage::buildADT 局部计算 heritage.cc:2338，Rugra 为
+per-block 缓存；不触碰 oracle 可观测状态）。LowlevelError 通道按项目既有
+策略映射为 panic（与 `Varnode::add_descend` 同款，per-function worker 隔离）。
+
+**`funcdata_flags::BLOCKS_UNREACHABLE`**（bit 6 重映射，Ghidra
+`blocks_unreachable` = funcdata.hh:60 = 0x4；flags 无序列化出口，按名访问
+无外部可观测差异）与 **`has_unreachable_blocks`**（funcdata.hh:149）。
+
+**对齐证据：** `tools/run_block_domroot_1204_oracle.sh` MATCH（见
+docs/api/block.md 同节）；机制 C 独立复核 APPROVE。残差：死 jumptable 的
+`get_indirect_op()==None` 输入域 UNTESTED（Ghidra 无条件解引用=null 即 UB，
+Rugra 防御性视为 alive，生产不可达已注释）。

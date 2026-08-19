@@ -616,6 +616,22 @@ impl Default for Heritage {
 }
 
 impl Heritage {
+    // Ghidra: heritage.hh:333 Heritage::forceRestructure
+    /// Force regeneration of basic block structures. Faithful one-line port
+    /// of `Heritage::forceRestructure` (heritage.hh:333):
+    /// `void forceRestructure(void) { maxdepth = -1; }` — resetting the
+    /// sentinel makes the next `Heritage::heritage` pass rebuild the
+    /// augmented dominator tree (heritage.cc:2676-2677), so dominator-rooted
+    /// state (domchild/depth/augment) is recomputed from the CFG as
+    /// re-established by `Funcdata::structureReset`
+    /// (funcdata_block.cc:712-730). Called from `structure_reset` at the
+    /// oracle call site (funcdata_block.cc:730).
+    pub fn force_restructure(&mut self) {
+        self.maxdepth = -1;
+    }
+}
+
+impl Heritage {
     // Ghidra: heritage.hh:257 Heritage::getInfo
     /// Look up the HeritageInfo for `space`. Faithful to `getInfo`
     /// (heritage.hh:257). Ghidra indexes infolist by spc->getIndex();

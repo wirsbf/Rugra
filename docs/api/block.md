@@ -1076,3 +1076,30 @@ e40ed130 重建 + pinned base + overlay src/block.rs），8 case 逐字节一致
 首块 + 回环/不可达分量两遍 extraroots/stale-root 机制 + 自环/irreducible 与
 goto 预置 label 全清）。blockaction.rs 私有变体保留未接线（接线需统一
 index 域并重过差分门禁，注释已注明）。
+
+## 支配树重建域（block_domroot_1204，2026-08-19）
+
+**`BlockGraph::structure_loops(&mut rootlist)`** — `block.cc:2194-2215`
+`BlockGraph::structureLoops(vector<FlowBlock*> &rootlist)` 的可归约路径移植：
+经公共 `find_spanning_tree`（cc:1009-1136）产出 RPO + 边分类 + rootlist（含
+cc:1031-1035/1129-1133 orighead 尾交换）后返回。`findIrreducible`
+（cc:1147）与 `calcLoop`（cc:2104）未移植，登记
+`BLOCK-FINDIRREDUCIBLE-0001`；可归约 CFG 下与 oracle 路径逐语句等价。
+
+**`BlockGraph::calc_forward_dominator(&rootlist)`**（及预留
+`calc_forward_dominator_on`）— `block.cc:1954-2032`
+`calcForwardDominator` 的 CHK 迭代支配树：prefill `dom[root]=VRoot`、
+postorder 降序主循环（排除 root 槽位）、first-processed-pred 按 in-edge 序、
+无前驱 idom 置 null。多根图虚拟根（createVirtualRoot/excise，cc:1970-2029）
+以 `Dom::VRoot`（dom_index=0，复刻 FlowBlock ctor `index=0` 别名语义，
+cc:61-69）建模——finger 走入 VRoot 时落到 rpo[0] 的 postorder 槽
+（cross-root merge 得 idom=rpo[0]），excise 后入口块 immed_dom=null。
+
+**`compute_spanning_rpo`** — RUGRA-GLUE：block.cc:1009-1136 的无副作用
+RPO 视图（不重排成员列表），供 fixture 观察使用。
+
+**对齐证据：** `tools/run_block_domroot_1204_oracle.sh` 权威差分（锁定
+oracle e40ed130 导出重建 libdecomp.a + 不可变 fd runner + fixture 哈希
+pin），四 case 双侧逐字节 MATCH（stdout_sha256=080948a5…）：A 尾部孤儿
+rootlist swap / B 入口回环 / C 多根 cross-merge VRoot 别名 / D 单根基线。
+复核：机制 C 独立 APPROVE（2026-08-19，含四类语义逐项）。

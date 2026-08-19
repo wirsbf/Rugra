@@ -2119,6 +2119,506 @@ impl BlockGraph {
         }
     }
 
+    /// \brief Calculate the immediate dominator for each node in \b this
+    /// BlockGraph, for forward control-flow.
+    ///
+    /// Faithful port of `BlockGraph::calcForwardDominator`
+    /// (block.cc:1954-2032), Cooper-Harvey-Kennedy over a forward post-order
+    /// list, including the oracle's virtual-root and excise semantics:
+    ///
+    /// - The official start node is `postorder.back()`: with a single root
+    ///   that is `rpo[0]` (= Ghidra `list[0]` after `findSpanningTree`'s
+    ///   `list = rpostorder`); with multiple roots a virtual root is created
+    ///   (`createVirtualRoot`, block.cc:988-995) whose out-edges reach every
+    ///   rootlist entry (cc:1970-1973).
+    /// - A single root that itself has in-edges (a back-edge into the entry)
+    ///   also gets a virtual root (cc:1978-1984); any other root-with-inedges
+    ///   shape throws `LowlevelError("Problems finding root node of graph")`
+    ///   (cc:1979-1980), mirrored here as `anyhow::bail!`.
+    /// - The successors of the start node are pre-filled with
+    ///   `immed_dom = start node` (cc:1986-1987) — for the virtual root its
+    ///   "successors" are exactly the rootlist entries in rootlist order
+    ///   (each `rootlist[i]->addInEdge(newroot,0)` is two-sided, block.cc:76-79,
+    ///   so it materializes the virtual root's out-edge as well).
+    /// - The finger arithmetic (cc:2004-2012) reads the idom node's `index`
+    ///   field. A freshly constructed `FlowBlock` has `index == 0`
+    ///   (block.cc:61-69 FlowBlock ctor), so a finger that walks into the
+    ///   virtual root aliases to `numnodes - 0`, the postorder slot of
+    ///   `rpo[0]`. This is load-bearing oracle behavior: a block whose
+    ///   dominator chain escapes to the virtual root (a merge of two
+    ///   different roots' subtrees) converges at `rpo[0]`'s slot and ends up
+    ///   with `immed_dom == rpo[0]`, NOT null. Replicated verbatim via
+    ///   `DomNode::VRoot` contributing index 0 in `dom_index`.
+    /// - Excise (cc:2022-2029): after convergence every node whose idom is
+    ///   the virtual root (exactly the pre-filled rootlist entries — the
+    ///   finger walk can never *produce* the virtual root as `new_idom`)
+    ///   gets `immed_dom = null` and the virtual root is deleted; with no
+    ///   virtual root the start node's self-domination is cleared instead
+    ///   (cc:2031).
+    ///
+    /// Rugra binding note: Ghidra reads the RPO ordering from the graph's
+    /// own `list` (contract: "blocks are in reverse post-order and this is
+    /// reflected in the index field", block.hh:434). This port takes the RPO
+    /// view as an explicit slice because Rugra's shared `blocks` vector is
+    /// position-indexed by other passes and must not be reordered outside
+    /// `find_spanning_tree` (BLOCK-INDEX-ASSIGN-0001); the rpo slot number
+    /// plays the role of the oracle's `index` field.
+    ///
+    /// Output: every block's `immed_dom` is overwritten (null for dominator
+    /// roots, mirroring the cc:1967 clear + cc:2022-2031 post-processing) —
+    /// stale values never survive.
+    // Ghidra: block.cc:1954 BlockGraph::calcForwardDominator
+    pub fn calc_forward_dominator(
+        &mut self,
+        rootlist: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    ) -> anyhow::Result<()> {
+        let list: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+            self.blocks.iter().cloned().collect();
+        Self::calc_forward_dominator_impl(&list, rootlist)
+    }
+
+    /// Same algorithm as `calc_forward_dominator`, but the reverse
+    /// post-order view is supplied explicitly instead of being read from
+    /// `self.blocks`. Used by `build_dom_tree`, which must not reorder the
+    /// shared component vector mid-pipeline (see the binding note on
+    /// `calc_forward_dominator`).
+    // RUGRA-GLUE: explicit-RPO entry sharing the calcForwardDominator core (oracle reads list)
+    pub fn calc_forward_dominator_on(
+        &self,
+        rpo: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+        rootlist: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    ) -> anyhow::Result<()> {
+        Self::calc_forward_dominator_impl(rpo, rootlist)
+    }
+
+    // Ghidra: block.cc:1954 BlockGraph::calcForwardDominator
+    fn calc_forward_dominator_impl(
+        rpo: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+        rootlist: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    ) -> anyhow::Result<()> {
+        // cc:1963: if (list.empty()) return;
+        let n = rpo.len();
+        if n == 0 {
+            return Ok(());
+        }
+        let numnodes = (n as i32) - 1; // cc:1964
+
+        // cc:1966-1969: clear the dominator field on every node and build
+        // the forward post-order list: postorder[numnodes-i] = list[i]. Node
+        // ids are rpo slots; the virtual root (when present) is appended at
+        // the end (cc:1972/1982).
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Node {
+            Rpo(usize),
+            VRoot,
+        }
+        // immed_dom per rpo slot; None mirrors Ghidra's null FlowBlock*.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Dom {
+            None,
+            Rpo(usize),
+            VRoot,
+        }
+        let mut postorder: Vec<Node> = vec![Node::Rpo(0); n]; // cc:1965 resize
+        for i in 0..n {
+            postorder[(numnodes - i as i32) as usize] = Node::Rpo(i);
+        }
+        let mut dom: Vec<Dom> = vec![Dom::None; n];
+        // cc:1970-1975: multiple roots -> create the virtual root now.
+        let mut virtualroot = rootlist.len() > 1;
+        if virtualroot {
+            postorder.push(Node::VRoot); // cc:1972
+        }
+
+        // cc:1977: b = postorder.back() — the official start node.
+        let mut b = *postorder.last().unwrap();
+        // cc:1978-1984: the root must have no in-edges.
+        let start_has_in_edges = match b {
+            Node::Rpo(0) => rpo[0].read().unwrap().size_in() != 0,
+            Node::VRoot => false, // fresh FlowBlock: no in-edges
+            Node::Rpo(_) => unreachable!("postorder.back() is slot 0 or VRoot"),
+        };
+        if start_has_in_edges {
+            // cc:1979-1980: if ((rootlist.size() != 1)||(rootlist[0] != b))
+            //   throw LowlevelError("Problems finding root node of graph");
+            let ptr = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+                Arc::as_ptr(a) as *const () as usize
+            };
+            if rootlist.len() != 1 || ptr(&rootlist[0]) != ptr(&rpo[0]) {
+                anyhow::bail!("Problems finding root node of graph");
+            }
+            virtualroot = true; // cc:1981: createVirtualRoot(rootlist)
+            postorder.push(Node::VRoot); // cc:1982
+            b = Node::VRoot; // cc:1983
+        }
+
+        // cc:1985: b->immed_dom = b. For the real single root this is the
+        // slot-0 self-domination cleared again at cc:2031; the virtual
+        // root's self-domination lives on the temporary node only.
+        match b {
+            Node::Rpo(0) => dom[0] = Dom::Rpo(0),
+            Node::VRoot => {} // deleted with the temporary node (cc:2028)
+            Node::Rpo(_) => unreachable!(),
+        }
+        // cc:1986-1987: fill in dom of nodes the start node immediately
+        // connects to ("to deal with possible artificial edge"). The virtual
+        // root's out-edges are exactly the rootlist entries, in rootlist
+        // order (createVirtualRoot block.cc:992-994).
+        match b {
+            Node::VRoot => {
+                let ptr = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+                    Arc::as_ptr(a) as *const () as usize
+                };
+                let slot_of: std::collections::HashMap<usize, usize> =
+                    rpo.iter().enumerate().map(|(s, a)| (ptr(a), s)).collect();
+                for root in rootlist {
+                    if let Some(&slot) = slot_of.get(&(ptr(root))) {
+                        dom[slot] = Dom::VRoot;
+                    }
+                }
+            }
+            Node::Rpo(0) => {
+                let ptr = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+                    Arc::as_ptr(a) as *const () as usize
+                };
+                let slot_of: std::collections::HashMap<usize, usize> =
+                    rpo.iter().enumerate().map(|(s, a)| (ptr(a), s)).collect();
+                let outs: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                    let bg = rpo[0].read().unwrap();
+                    let mut v = Vec::with_capacity(bg.size_out());
+                    for i in 0..bg.size_out() {
+                        if let Some(e) = bg.get_out(i) {
+                            v.push(e.point);
+                        }
+                    }
+                    v
+                };
+                for tgt in outs {
+                    if let Some(&slot) = slot_of.get(&(ptr(&tgt))) {
+                        dom[slot] = Dom::Rpo(0);
+                    }
+                }
+            }
+            Node::Rpo(_) => unreachable!(),
+        }
+
+        // Predecessor rpo slots in in-edge order for each block (the CHK
+        // "first processed predecessor" scan walks Ghidra's intothis order).
+        let ptr = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+            Arc::as_ptr(a) as *const () as usize
+        };
+        let slot_of: std::collections::HashMap<usize, usize> =
+            rpo.iter().enumerate().map(|(s, a)| (ptr(a), s)).collect();
+        let preds: Vec<Vec<usize>> = rpo
+            .iter()
+            .map(|blk| {
+                let bg = blk.read().unwrap();
+                let mut v = Vec::with_capacity(bg.size_in());
+                for j in 0..bg.size_in() {
+                    if let Some(e) = bg.get_in(j) {
+                        if let Some(&s) = slot_of.get(&(ptr(&e.point))) {
+                            v.push(s);
+                        }
+                    }
+                }
+                v
+            })
+            .collect();
+
+        // The oracle index a dominator node contributes to the finger
+        // arithmetic: real blocks use their reverse-post-order number (= the
+        // rpo slot); the virtual root's fresh FlowBlock has index == 0
+        // (block.cc:61-69), aliasing its postorder slot onto rpo[0]'s.
+        let dom_index = |d: Dom| -> i32 {
+            match d {
+                Dom::Rpo(s) => s as i32,
+                Dom::VRoot => 0, // FlowBlock ctor: index = 0 (block.cc:65)
+                Dom::None => panic!("dominator finger walked into null immed_dom"),
+            }
+        };
+
+        let root_dom = match *postorder.last().unwrap() {
+            Node::VRoot => Dom::VRoot,
+            Node::Rpo(0) => Dom::Rpo(0),
+            Node::Rpo(_) => unreachable!(),
+        };
+
+        // cc:1988-2021: iterate to convergence, processing nodes in reverse
+        // post-order except the root.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for pos in (0..postorder.len() - 1).rev() {
+                // cc:1993: b = postorder[i] — always a real block (the root
+                // is the excluded last slot).
+                let Node::Rpo(i) = postorder[pos] else {
+                    unreachable!("virtual root only occupies the final slot");
+                };
+                // cc:1994: if (b->immed_dom != postorder.back())
+                if dom[i] != root_dom {
+                    // cc:1995-1999: find the first processed predecessor.
+                    // Mirrors the unguarded C++ exit: if no predecessor is
+                    // processed, new_idom holds the LAST in-edge tried; if
+                    // the block has no in-edges at all, new_idom stays null
+                    // (cc:1989 initialization).
+                    let mut new_idom: Option<usize> = None; // cc:1989
+                    let mut j = 0usize;
+                    while j < preds[i].len() {
+                        new_idom = Some(preds[i][j]);
+                        if dom[preds[i][j]] != Dom::None {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if let Some(mut nid) = new_idom {
+                        let mut j2 = j + 1; // cc:2000: j += 1
+                        while j2 < preds[i].len() {
+                            let rho = preds[i][j2];
+                            // cc:2003: if (rho->immed_dom != 0)
+                            if dom[rho] != Dom::None {
+                                // cc:2004-2012: intersection routine.
+                                let mut finger1 = numnodes - dom_index(Dom::Rpo(rho));
+                                let mut finger2 = numnodes - dom_index(Dom::Rpo(nid));
+                                while finger1 != finger2 {
+                                    while finger1 < finger2 {
+                                        let Node::Rpo(s1) = postorder[finger1 as usize] else {
+                                            unreachable!("finger escaped to virtual-root slot")
+                                        };
+                                        finger1 =
+                                            numnodes - dom_index(dom[s1]);
+                                    }
+                                    while finger2 < finger1 {
+                                        let Node::Rpo(s2) = postorder[finger2 as usize] else {
+                                            unreachable!("finger escaped to virtual-root slot")
+                                        };
+                                        finger2 =
+                                            numnodes - dom_index(dom[s2]);
+                                    }
+                                }
+                                // cc:2012: new_idom = postorder[finger1];
+                                let Node::Rpo(s) = postorder[finger1 as usize] else {
+                                    unreachable!("finger converged on virtual-root slot")
+                                };
+                                nid = s;
+                            }
+                            j2 += 1;
+                        }
+                        // cc:2015-2018: if (b->immed_dom != new_idom)
+                        if dom[i] != Dom::Rpo(nid) {
+                            dom[i] = Dom::Rpo(nid);
+                            changed = true;
+                        }
+                    } else if dom[i] != Dom::None {
+                        // cc:2015-2018 with new_idom == null: a block with
+                        // no in-edges that is not the registered root gets a
+                        // null dominator.
+                        dom[i] = Dom::None;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // cc:2022-2029: excise the virtual root from the dominator tree.
+        if virtualroot {
+            for i in 0..n {
+                // cc:2023-2025: postorder[i] for i < list.size() are exactly
+                // the real blocks.
+                if dom[i] == Dom::VRoot {
+                    dom[i] = Dom::None;
+                }
+            }
+            // cc:2026-2028: remove the virtual root's edges and delete it —
+            // the Rust Node::VRoot enum value is dropped with postorder.
+        } else {
+            // cc:2031: postorder.back()->immed_dom = 0;
+            dom[0] = Dom::None;
+        }
+
+        // Write the results back onto the blocks.
+        for (slot, d) in dom.iter().enumerate() {
+            match d {
+                Dom::Rpo(j) => {
+                    let target = rpo[*j].clone();
+                    rpo[slot]
+                        .write()
+                        .unwrap()
+                        .set_immed_dom(Some(Arc::downgrade(&target)));
+                }
+                Dom::VRoot => {
+                    // Unreachable: the excise pass converted every surviving
+                    // VRoot link to None above.
+                    rpo[slot].write().unwrap().set_immed_dom(None);
+                }
+                Dom::None => {
+                    rpo[slot].write().unwrap().set_immed_dom(None);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Compute the reverse post-order and root list for \b this graph using
+    /// exactly the traversal of `BlockGraph::findSpanningTree`
+    /// (block.cc:1009-1136), without any of its mutation side effects:
+    ///
+    /// - root candidates are the blocks with `size_in() == 0` collected in
+    ///   component-vector order (cc:1028-1030);
+    /// - with more than one candidate the first and last are swapped so the
+    ///   original head is visited LAST and therefore finishes the DFS last,
+    ///   taking reverse-post-order slot 0 (cc:1031-1035) — a trailing orphan
+    ///   block can never steal RPO[0];
+    /// - with no candidate at all the first block is assumed to be the entry
+    ///   (cc:1036-1038);
+    /// - the two-pass extraroots mechanism (cc:1041-1127) guarantees every
+    ///   block receives a slot while keeping the original head at RPO[0];
+    /// - the final swap (cc:1129-1133) puts the original head back at the
+    ///   front of the rootlist.
+    ///
+    /// Differences from the public `find_spanning_tree` port, all documented
+    /// in place: the component vector is not reordered to `rpostorder`
+    /// (cc:1135), edge flags are neither cleared nor written (cc:1045's
+    /// clear makes pass one treat every edge as unlabelled, which this local
+    /// traversal reproduces by never skipping an edge — the only producer of
+    /// f_irreducible labels is the findIrreducible rebuild loop inside
+    /// structureLoops, block.cc:2204-2209), and visitcount/numdesc/copymap
+    /// are not stored on the blocks.
+    // RUGRA-GLUE: side-effect-free RPO+rootlist mirror of findSpanningTree (block.cc:1009) for position-indexed graphs
+    fn compute_spanning_rpo(
+        &self,
+    ) -> (
+        Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    ) {
+        let n = self.blocks.len();
+        if n == 0 {
+            return (Vec::new(), Vec::new());
+        }
+        let key = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+            Arc::as_ptr(a) as *const () as usize
+        };
+        // cc:1023-1030: collect potential roots in list order.
+        let mut rootlist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        for i in 0..n {
+            if self.blocks[i].read().unwrap().size_in() == 0 {
+                rootlist.push(self.blocks[i].clone());
+            }
+        }
+        if rootlist.len() > 1 {
+            // cc:1031-1035: orighead visited last -> RPO[0].
+            let last = rootlist.len() - 1;
+            rootlist.swap(0, last);
+        } else if rootlist.is_empty() {
+            // cc:1036-1038: assume the first block is the entry point.
+            rootlist.push(self.blocks[0].clone());
+        }
+        let origrootpos = rootlist.len() - 1; // cc:1039
+
+        let mut preorder: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        for repeat in 0..2 {
+            let mut extraroots = false;
+            let mut rpostcount = n as i32; // cc:1043
+            let mut rootindex = 0usize; // cc:1044
+            let mut visited: std::collections::HashSet<usize> =
+                std::collections::HashSet::with_capacity(n);
+            let mut rpostorder: Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> =
+                vec![None; n];
+            // cc:1046: while (preorder.size() < list.size())
+            while preorder.len() < n {
+                // cc:1048-1058: take the next unvisited root, dropping
+                // roots already visited this pass (stale roots).
+                let mut startbl: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+                while rootindex < rootlist.len() {
+                    let cand = rootlist[rootindex].clone();
+                    rootindex += 1;
+                    if !visited.contains(&key(&cand)) {
+                        startbl = Some(cand);
+                        break;
+                    }
+                    rootlist.remove(rootindex - 1);
+                    rootindex -= 1;
+                }
+                let startbl: Arc<RwLock<dyn FlowBlock + Send + Sync>> = match startbl {
+                    Some(b) => b,
+                    None => {
+                        // cc:1059-1067: no unvisited root — treat the next
+                        // unvisited block (list order) as another root.
+                        extraroots = true;
+                        let mut found = self.blocks[n - 1].clone();
+                        for i in 0..n {
+                            let cand = self.blocks[i].clone();
+                            if !visited.contains(&key(&cand)) {
+                                found = cand;
+                                break;
+                            }
+                        }
+                        rootlist.push(found.clone());
+                        rootindex += 1;
+                        found
+                    }
+                };
+                // cc:1069-1073: discover the start block (preorder).
+                visited.insert(key(&startbl));
+                preorder.push(startbl.clone());
+                // cc:1075-1107: iterative DFS. Edge classification (cc:1093,
+                // 1100-1105) is not stored — no flags are written.
+                let mut state: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = vec![startbl];
+                let mut istate: Vec<usize> = vec![0];
+                while !state.is_empty() {
+                    let curbl = state.last().unwrap().clone();
+                    let finished = {
+                        let size_out = curbl.read().unwrap().size_out();
+                        size_out <= *istate.last().unwrap()
+                    };
+                    if finished {
+                        // cc:1077-1084: assign the reverse-post-order index.
+                        state.pop();
+                        istate.pop();
+                        rpostcount -= 1;
+                        rpostorder[rpostcount as usize] = Some(curbl);
+                    } else {
+                        let edgenum = *istate.last().unwrap();
+                        *istate.last_mut().unwrap() += 1;
+                        let childbl = match curbl.read().unwrap().get_out(edgenum) {
+                            Some(e) => e.point,
+                            None => continue,
+                        };
+                        if !visited.contains(&key(&childbl)) {
+                            visited.insert(key(&childbl));
+                            preorder.push(childbl.clone());
+                            state.push(childbl);
+                            istate.push(0);
+                        }
+                    }
+                }
+            }
+            if !extraroots {
+                // cc:1109: spanning tree complete in one pass.
+                let rpo: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = rpostorder
+                    .into_iter()
+                    .map(|slot| slot.expect("rpostorder fully assigned by DFS"))
+                    .collect();
+                if rootlist.len() > 1 {
+                    // cc:1129-1133: orighead to the front of rootlist.
+                    let last = rootlist.len() - 1;
+                    rootlist.swap(0, last);
+                }
+                return (rpo, rootlist);
+            }
+            if repeat == 1 {
+                // cc:1110-1111: throw LowlevelError("Could not generate
+                // spanning tree") — panic channel mirrors the oracle throw.
+                panic!("Could not generate spanning tree");
+            }
+            // cc:1114-1116: move the entry block to the last rootlist
+            // position and redo the traversal so the entry keeps RPO[0].
+            let last = rootlist.len() - 1;
+            rootlist.swap(last, origrootpos);
+            preorder.clear(); // cc:1124
+        }
+        unreachable!("repeat loop covers both passes");
+    }
+
     /// Build the dominator tree for the graph
     ///
     /// Corresponds to Ghidra's `BlockGraph::buildDomTree`
@@ -2130,110 +2630,26 @@ impl BlockGraph {
         for (i, blk) in self.blocks.iter_mut().enumerate() {
             blk.write().unwrap().set_index(i as i32);
         }
-
-        let rpo = self.calc_rpo();
-        if rpo.is_empty() {
+        if self.blocks.is_empty() {
             return;
         }
 
-        let mut idom_indices = vec![-1i32; self.blocks.len()];
-        let mut rpo_indices = vec![-1i32; self.blocks.len()];
-
-        for (i, node) in rpo.iter().enumerate() {
-            rpo_indices[node.read().unwrap().get_index() as usize] = i as i32;
-        }
-
-        let start_node_index = rpo[0].read().unwrap().get_index() as usize;
-        idom_indices[start_node_index] = start_node_index as i32;
-
-        let mut changed = true;
-        let max_dom_iters = self.blocks.len() * 3 + 10;
-        let mut dom_iters = 0;
-        while changed && dom_iters < max_dom_iters {
-            dom_iters += 1;
-            changed = false;
-            for i in 1..rpo.len() {
-                let node = &rpo[i];
-                let node_idx = node.read().unwrap().get_index() as usize;
-
-                // Pre-collect predecessor indices to avoid holding read lock during edge traversal
-                let preds: Vec<usize> = {
-                    let n = node.read().unwrap();
-                    let size_in = n.size_in();
-                    let mut edges = Vec::with_capacity(size_in);
-                    for slot in 0..size_in {
-                        if let Some(edge) = n.get_in(slot) {
-                            edges.push(edge.point.clone());
-                        }
-                    }
-                    drop(n); // Release node read lock before reading edge targets
-                    edges.iter().map(|p| p.read().unwrap().get_index() as usize).collect()
-                };
-
-                let mut new_idom_idx = -1i32;
-
-                // Find first processed predecessor
-                for &pred_idx in &preds {
-                    if idom_indices[pred_idx] != -1 {
-                        new_idom_idx = pred_idx as i32;
-                        break;
-                    }
-                }
-
-                if new_idom_idx != -1 {
-                    for &pred_idx in &preds {
-                        if pred_idx as i32 != new_idom_idx && idom_indices[pred_idx] != -1 {
-                            new_idom_idx = self.intersect(
-                                pred_idx as i32,
-                                new_idom_idx,
-                                &idom_indices,
-                                &rpo_indices,
-                            );
-                        }
-                    }
-
-                    if idom_indices[node_idx] != new_idom_idx {
-                        idom_indices[node_idx] = new_idom_idx;
-                        changed = true;
-                    }
-                }
-            }
-        }
-
-        // Apply immediate dominators to blocks
-        for (i, &idom_idx) in idom_indices.iter().enumerate() {
-            if idom_idx != -1 && idom_idx != i as i32 {
-                let mut node = self.blocks[i].write().unwrap();
-                node.set_immed_dom(Some(Arc::downgrade(&self.blocks[idom_idx as usize])));
-            }
+        // Dominators are computed with the oracle root semantics: the
+        // spanning-tree RPO (rootlist swap keeps the original head at
+        // RPO[0], block.cc:1031-1035) feeds calcForwardDominator
+        // (block.cc:1954), whose official root is postorder.back() = the
+        // first RPO slot, with the virtual-root create/excise path for
+        // multi-root graphs and back-edges into the entry.
+        let (rpo, rootlist) = self.compute_spanning_rpo();
+        if let Err(e) = Self::calc_forward_dominator_impl(&rpo, &rootlist) {
+            // Ghidra throws LowlevelError up the structureReset chain; the
+            // panic channel mirrors the oracle single-function abort model.
+            panic!("{}", e);
         }
 
         self.build_dom_depth();
         self.build_dom_subtree();
         self.calc_dom_frontier();
-    }
-
-    // RUGRA-GLUE: Cooper-Harvey-Kennedy intersect helper for buildDomTree (algorithmic glue; not a direct Ghidra method)
-    fn intersect(&self, mut b1: i32, mut b2: i32, idom: &[i32], rpo: &[i32]) -> i32 {
-        let max_iters = idom.len() * 2 + 10;
-        let mut iters = 0;
-        while b1 != b2 {
-            while rpo[b1 as usize] > rpo[b2 as usize] {
-                let next = idom[b1 as usize];
-                if next == b1 || next < 0 { return b1; } // safety: self-loop or uninitialized
-                b1 = next;
-                iters += 1;
-                if iters > max_iters { return b1; }
-            }
-            while rpo[b2 as usize] > rpo[b1 as usize] {
-                let next = idom[b2 as usize];
-                if next == b2 || next < 0 { return b2; } // safety: self-loop or uninitialized
-                b2 = next;
-                iters += 1;
-                if iters > max_iters { return b2; }
-            }
-        }
-        b1
     }
 
     /// Build depth information based on the dominator tree
@@ -2400,67 +2816,55 @@ impl BlockGraph {
     }
 
     /// Calculate Reverse Post-Order (RPO) of blocks
+    ///
+    /// Delegates to the side-effect-free spanning-tree traversal mirror
+    /// (`compute_spanning_rpo`), which reproduces the root selection of
+    /// `BlockGraph::findSpanningTree` (block.cc:1009-1136): candidates are
+    /// the `size_in()==0` blocks collected in component order (NOT
+    /// entry-flagged blocks), with more than one candidate the first/last
+    /// swap (block.cc:1031-1035) makes the original head finish the DFS last
+    /// and take RPO slot 0, an empty candidate list falls back to the first
+    /// block (block.cc:1036-1038), and the two-pass extraroots mechanism
+    /// (block.cc:1041-1127) keeps the original head at RPO[0] while
+    /// covering every block. Previously this accessor DFS'd the entry
+    /// candidates in vector order, letting a trailing orphan block steal
+    /// RPO[0] (HTTPD-ADDDESCEND-THROW-0001 root cause).
     // RUGRA-GLUE: Rugra RPO calculation (Ghidra uses findSpanningTree + orderBlocks block.cc:1009)
     pub fn calc_rpo(&self) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        let mut visited = std::collections::HashSet::new();
-        let mut post_order = Vec::new();
-
-        // Start from entry points (blocks with no incoming edges or marked as entry)
-        for block in &self.blocks {
-            let is_entry = {
-                let b = block.read().unwrap();
-                b.size_in() == 0 || (b.get_flags() & block_flags::ENTRY_POINT) != 0
-            };
-            if is_entry {
-                self.dfs_visit(block, &mut visited, &mut post_order);
-            }
-        }
-
-        // Ensure all reachable blocks are covered
-        for block in &self.blocks {
-            self.dfs_visit(block, &mut visited, &mut post_order);
-        }
-
-        post_order.reverse();
-        post_order
-    }
-
-    // RUGRA-GLUE: Rugra DFS helper for calc_rpo (Ghidra uses findSpanningTree block.cc:1009)
-    fn dfs_visit(
-        &self,
-        block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        visited: &mut std::collections::HashSet<i32>,
-        post_order: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
-    ) {
-        let idx = block.read().unwrap().get_index();
-        if visited.contains(&idx) {
-            return;
-        }
-        visited.insert(idx);
-
-        let size_out = block.read().unwrap().size_out();
-        let mut out_edges = Vec::new();
-        for i in 0..size_out {
-            if let Some(edge) = block.read().unwrap().get_out(i) {
-                out_edges.push(edge);
-            }
-        }
-
-        for edge in out_edges {
-            self.dfs_visit(&edge.point, visited, post_order);
-        }
-
-        post_order.push(block.clone());
+        self.compute_spanning_rpo().0
     }
 
     /// Structure a loop
     ///
     /// Corresponds to Ghidra's `BlockGraph::structureLoops`
     // Ghidra: block.cc:2194 BlockGraph::structureLoops
-    pub fn structure_loops(&mut self) -> bool {
-        // Simple loop detection and structuring logic
-        // Identifying back-edges and creating BlockWhileDo/BlockDoWhile
-        false
+    pub fn structure_loops(
+        &mut self,
+        rootlist: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    ) -> anyhow::Result<()> {
+        // Faithful to block.cc:2197-2215:
+        //   do { findSpanningTree(preorder, rootlist);
+        //        needrebuild = findIrreducible(preorder, irreduciblecount);
+        //        if (needrebuild) { clearEdgeFlags(...); preorder.clear();
+        //                           rootlist.clear(); } } while (needrebuild);
+        //   if (irreduciblecount > 0) calcLoop();
+        //
+        // findSpanningTree (the public 1:1 port) establishes the reverse
+        // post-order (reordering the component list, block.cc:1135
+        // `list = rpostorder`), relabels tree/forward/cross/back edges, and
+        // fills rootlist with every entry point — the inputs
+        // calcForwardDominator and Funcdata::structureReset consume.
+        //
+        // Registered gap: `findIrreducible` (block.cc:1147) and `calcLoop`
+        // (block.cc:2104) are not yet ported. The irreducible-rebuild loop
+        // only matters for irreducible CFGs (a tree edge found inside a
+        // reachunder set forces one rebuild), and calcLoop only labels
+        // f_loop_edge on irreducible graphs; for reducible control flow the
+        // oracle path is exactly findSpanningTree + return, which is what
+        // this port performs. Porting both is tracked with
+        // BLOCK-FINDIRREDUCIBLE-0001 (irreducible-CFG domain).
+        let mut preorder: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        self.find_spanning_tree(&mut preorder, rootlist)
     }
 
     /// Add a loop edge
