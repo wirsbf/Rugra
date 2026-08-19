@@ -1608,7 +1608,41 @@ impl<'a> CollapseStructure<'a> {
         // blockaction.cc:1126-1143). This replaces the earlier dominator-based
         // back-edge test, which silently failed on curl `main` (0 back-edges
         // found despite 25 candidate edges).
-        self.find_spanning_tree();
+        //
+        // BLOCK-INDEX-WIRE-0001: the tree now comes from the PUBLIC 1:1 port
+        // BlockGraph::find_spanning_tree (src/block.rs, Ghidra block.cc:1009-
+        // 1136) with the full oracle side-effect set: index=RPO + component
+        // list reorder (cc:1135 `list = rpostorder`), visitcount=preorder,
+        // numdesc accumulation, copymap=self, edge labels mirrored on both
+        // halves, per-pass wipe of all edge flags (cc:1045), rootlist swaps
+        // (cc:1031-1035/1114-1116/1129-1133), two-pass extraroots. In the
+        // oracle, orderLoopBodies itself never computes a tree: the
+        // StructureGraph path runs structureLoops immediately before
+        // CollapseStructure (ghidra_process.cc:354), and the in-process
+        // ActionBlockStructure path inherits the same labels through buildCopy
+        // (newBlockCopy copies intothis/outofthis edge labels + index +
+        // numdesc, block.cc:1685-1691). Rugra's build_copy creates fresh
+        // (unlabeled) edges, so the tree is recomputed here on the public
+        // port, reproducing the entry state the oracle's collapseAll sees.
+        let mut preorder = Vec::new();
+        let mut rootlist = Vec::new();
+        if let Err(e) = self.graph.find_spanning_tree(&mut preorder, &mut rootlist) {
+            // Oracle channel: LowlevelError("Could not generate spanning
+            // tree") (block.cc:1110-1111), mirrored as a panic — same policy
+            // as Funcdata::structureReset's structure_loops call site.
+            panic!("{}", e);
+        }
+        // Ghidra collapseAll head (blockaction.cc:1882-1884): finaltrace =
+        // false; graph.clearVisitCount(); orderLoopBodies(). The port leaves
+        // visitcount at each block's preorder number; TraceDAG below starts
+        // from a cleared count (removeTrace increments it, cc:661; checkOpen
+        // reads it, cc:824), so reset to 0 exactly where the oracle does (one
+        // statement earlier, at the collapseAll head before orderLoopBodies).
+        for i in 0..self.graph.get_size() {
+            if let Some(b) = self.graph.get_block(i) {
+                b.write().unwrap().set_visit_count(0);
+            }
+        }
         // Dominators are still needed elsewhere (switch-case detection,
         // LoopBody helpers), so keep them up to date.
         self.compute_dominators();
@@ -2335,207 +2369,6 @@ impl<'a> CollapseStructure<'a> {
             false
         }
     }
-
-    // Ghidra: blockaction.hh:46 LoopBody::findSpanningTree
-    /// Compute immediate dominators using iterative dataflow (Cooper et al.
-    /// 2001 simplified algorithm). Stores result in self.idom.
-    /// DFS spanning-tree computation. Faithful to Ghidra's
-    /// `BlockGraph::findSpanningTree` (block.cc:1009-1110) and
-    /// `BlockGraph::structureLoops` (block.cc:2194-2215).
-    ///
-    /// Computes a DFS spanning tree and labels every out-edge as one of:
-    ///   - `F_TREE_EDGE`    : edge to an unvisited child (spanning tree)
-    ///   - `F_BACK_EDGE`|`F_LOOP_EDGE` : edge to a node still on the DFS stack
-    ///     (this defines a loop — `order_loop_bodies` reads `F_BACK_EDGE`)
-    ///   - `F_FORWARD_EDGE` : edge to an already-finished descendant
-    ///   - `F_CROSS_EDGE`   : edge to an already-finished non-descendant
-    ///
-    /// Returns the list of roots (entry blocks) in visitation order.
-    ///
-    /// The back-edge labelling is what makes loop detection work: a back edge
-    /// `(src -> tgt)` means `tgt` is a loop header and `src` is a loop tail.
-    /// This replaces Rugra's earlier (buggy) dominator-based back-edge test,
-    /// which failed to find any loop in curl `main` (102 blocks, 0 back-edges
-    /// detected despite 25 candidate edges) due to a broken intersect step.
-    ///
-    /// IMPORTANT: this uses LOCAL DFS state (HashMaps), NOT the FlowBlock
-    /// `index`/`visit_count` fields. In Rugra, `index` is the block's
-    /// position in `BlockGraph.blocks` and is relied upon by
-    /// `compute_dominators`, `collect_loop_body`, etc. Ghidra overloads
-    /// `index` for rpostorder because its `getBlock(i)` is list-position
-    /// indexed while `get_index()` is rpostorder — Rugra conflates these, so
-    /// we keep them separate to avoid corrupting the dominator computation.
-    ///
-    /// BLOCK-INDEX-ASSIGN-0001: the faithful 1:1 port of Ghidra
-    /// `BlockGraph::findSpanningTree` (block.cc:1009-1136) now exists as the
-    /// PUBLIC `BlockGraph::find_spanning_tree` in src/block.rs (writes
-    /// FlowBlock index/visitcount/numdesc/copymap, mirrors edge labels on
-    /// both edge halves, wipes all edge flags per pass, and reorders the
-    /// component list into reverse post order). This private position-index
-    /// variant is deliberately NOT rewired to it: switching would rewrite
-    /// `FlowBlock.index` and reorder `blocks`, changing this structurer
-    /// pass's observable behavior. Unifying the index domain and migrating
-    /// this caller onto the public port requires its own oracle-gated change.
-    fn find_spanning_tree(&mut self) -> Vec<i32> {
-        use crate::block::edge_flags as ef;
-        let size = self.graph.get_size();
-        if size == 0 { return Vec::new(); }
-
-        // Local DFS state, keyed by block position index (NOT rpostorder).
-        // preorder_num: order first visited (-1 = unvisited)
-        // rpost_num:    reverse-postorder finish number (-1 = on stack/unfinished)
-        let mut preorder_num: std::collections::HashMap<i32, i32> =
-            std::collections::HashMap::with_capacity(size);
-        let mut rpost_num: std::collections::HashMap<i32, i32> =
-            std::collections::HashMap::with_capacity(size);
-        for i in 0..size {
-            preorder_num.insert(i as i32, -1);
-            rpost_num.insert(i as i32, -1);
-        }
-
-        // Collect root candidates (blocks with no in-edges). Ghidra swaps
-        // first and last root so the "original head" is visited last (first
-        // in reverse-post-order). We mirror this.
-        let mut rootlist: Vec<i32> = Vec::new();
-        for i in 0..size {
-            if let Some(blk) = self.graph.get_block(i) {
-                if blk.read().unwrap().size_in() == 0 {
-                    rootlist.push(i as i32);
-                }
-            }
-        }
-        if rootlist.len() > 1 {
-            let last = rootlist.len() - 1;
-            rootlist.swap(0, last);
-        } else if rootlist.is_empty() {
-            rootlist.push(0); // No obvious entry — assume block 0 (Ghidra: list[0]).
-        }
-
-        // Clear any prior spanning-tree labels on all out-edges.
-        for i in 0..size {
-            if let Some(blk) = self.graph.get_block(i) {
-                blk.write().unwrap().clear_edge_flags(ef::SPANNING_MASK);
-            }
-        }
-
-        // Iterative DFS (mirrors Ghidra's state/istate stacks). state holds
-        // block position indices; istate holds the next child slot to try.
-        let mut state: Vec<i32> = Vec::with_capacity(size);
-        let mut istate: Vec<usize> = Vec::with_capacity(size);
-        let mut preorder_count: i32 = 0;
-        let mut rpostcount = size as i32;
-        let mut rootindex: usize = 0;
-        let mut usedroots: Vec<i32> = Vec::new();
-
-        // Ghidra runs the DFS up to twice: the first pass may discover
-        // unreachable blocks and promotes them to extra roots; the second
-        // pass re-runs with the expanded root list.
-        for _repeat in 0..2 {
-            let mut extraroots = false;
-            rpostcount = size as i32;
-            rootindex = 0;
-            preorder_count = 0;
-            // Reset for a fresh traversal.
-            for i in 0..size {
-                preorder_num.insert(i as i32, -1);
-                rpost_num.insert(i as i32, -1);
-            }
-            for i in 0..size {
-                if let Some(blk) = self.graph.get_block(i) {
-                    blk.write().unwrap().clear_edge_flags(ef::SPANNING_MASK);
-                }
-            }
-            state.clear();
-            istate.clear();
-            usedroots.clear();
-
-            while preorder_count < size as i32 {
-                // Pick the next start block: prefer an unused root, else any
-                // unvisited block (which becomes a new root).
-                let mut startbl: i32 = -1;
-                while rootindex < rootlist.len() {
-                    let cand = rootlist[rootindex];
-                    rootindex += 1;
-                    if preorder_num[&cand] == -1 {
-                        startbl = cand;
-                        usedroots.push(cand);
-                        break;
-                    }
-                }
-                if startbl == -1 {
-                    extraroots = true;
-                    for i in 0..size {
-                        if preorder_num[&(i as i32)] == -1 {
-                            startbl = i as i32;
-                            break;
-                        }
-                    }
-                    if startbl == -1 { break; }
-                    rootlist.push(startbl);
-                    rootindex += 1;
-                    usedroots.push(startbl);
-                }
-
-                state.push(startbl);
-                istate.push(0);
-                preorder_num.insert(startbl, preorder_count);
-                preorder_count += 1;
-
-                while !state.is_empty() {
-                    let curbl = *state.last().unwrap();
-                    let cur_block = self.graph.get_block(curbl as usize).unwrap();
-                    let nout = cur_block.read().unwrap().size_out();
-                    if nout <= *istate.last().unwrap() {
-                        // All children visited: finish this node.
-                        state.pop();
-                        istate.pop();
-                        rpostcount -= 1;
-                        rpost_num.insert(curbl, rpostcount);
-                    } else {
-                        let edgenum = *istate.last().unwrap();
-                        *istate.last_mut().unwrap() += 1;
-                        // Child target of this out-edge (block position index).
-                        let childbl = match cur_block.read().unwrap().get_out(edgenum) {
-                            Some(e) => {
-                                // The child's position index. Note: edge.point's
-                                // get_index() returns the block's stored index,
-                                // which (for BlockBasic) is its position in the
-                                // graph's blocks list — same space we key on.
-                                e.point.read().unwrap().get_index()
-                            }
-                            None => continue,
-                        };
-                        let child_pre = preorder_num.get(&childbl).copied().unwrap_or(-2);
-                        let child_rpost = rpost_num.get(&childbl).copied().unwrap_or(-2);
-                        let cur_pre = preorder_num[&curbl];
-
-                        if child_pre == -1 {
-                            // Unvisited: tree edge, descend.
-                            cur_block.write().unwrap().set_out_edge_flag(edgenum, ef::F_TREE_EDGE);
-                            state.push(childbl);
-                            istate.push(0);
-                            preorder_num.insert(childbl, preorder_count);
-                            preorder_count += 1;
-                        } else if child_rpost == -1 {
-                            // Child still on the DFS stack → back edge (loop).
-                            cur_block.write().unwrap()
-                                .set_out_edge_flag(edgenum, ef::F_BACK_EDGE | ef::F_LOOP_EDGE);
-                        } else if cur_pre >= 0 && cur_pre < child_pre {
-                            // curbl visited before childbl, child finished → forward edge.
-                            cur_block.write().unwrap().set_out_edge_flag(edgenum, ef::F_FORWARD_EDGE);
-                        } else {
-                            // Already finished, not forward → cross edge.
-                            cur_block.write().unwrap().set_out_edge_flag(edgenum, ef::F_CROSS_EDGE);
-                        }
-                    }
-                }
-            }
-            if !extraroots { break; }
-        }
-
-        usedroots
-    }
-
 
     // Ghidra: blockaction.hh:46 LoopBody::computeDominators
     fn compute_dominators(&mut self) {

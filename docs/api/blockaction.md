@@ -797,3 +797,31 @@ ANN-M 不提升本模块的对齐状态，也不替代锁定 oracle 的函数级
 MATCH）。本模块的私有 TraceDAG 变体（`src/blockaction.rs:2369` 起）**保留未接线**，
 源码注释已注明公共 port 的位置与接线前提；迁移属 `BLOCK-INDEX-WIRE-0001`，须
 保证 TraceDAG 行为零变化并通过主管线差分门禁。本轮对本模块零行为改动。
+
+### 2026-08-19：私有 `find_spanning_tree` 迁移到公共 port（`BLOCK-INDEX-WIRE-0001` 完成）
+
+删除 blockaction.rs 的私有位置索引变体（原 :2369 起，局部 HashMap DFS、只写
+out-half 边 label、不写 index/visitcount/numdesc/copymap、不重排 blocks），
+`order_loop_bodies` 改调公共 `BlockGraph::find_spanning_tree`
+（`src/block.rs`，Ghidra block.cc:1009-1136）——index=RPO + 组件表重排
+（cc:1135）、visitcount=preorder、numdesc 累计、copymap=self、边 label 双侧
+镜像、每遍 wipe 全部边 flag（cc:1045）、rootlist 首尾 swap（cc:1031-1035/
+1114-1116/1129-1133）、两遍 extraroots。
+
+Oracle 依据：`orderLoopBodies` 本身从不计算树——StructureGraph 路径在
+CollapseStructure 前一步跑 `structureLoops`（ghidra_process.cc:354），进程内
+ActionBlockStructure 路径经 `newBlockCopy` 继承同一批 label/index/numdesc
+（block.cc:1685-1691）。Rugra `build_copy` 造全新无边 label 的边，故在
+`order_loop_bodies` 内以公共 port 重算树，重现 oracle collapseAll 的入口状态。
+树调用后立即把全图 visitcount 清 0，对齐 Ghidra `collapseAll` 头部
+`graph.clearVisitCount()`（blockaction.cc:1883，oracle 在 orderLoopBodies 前
+一条语句执行）。
+
+非零差异（差分门禁，`## Differential` 详见任务报告）：curl E2E 基线 vs 修改
+defects 0→0、numbering 0→0、golden 函数匹配 122/124→123/124、decompiled
+74→75、timeout 2→1（`next_url` 0x4ff0 从 >10s 超时变为成功反编译）、
+skeleton 2785→2904（增量主体为 `next_url` 新函数体；`my_get_line` -10、
+`helpf` +12、`my_get_token` ±0，均 defects=0）。输出非 byte 级一致：私有变体
+消费的是 bblocks 旧 RPO 域（可能滞后于 dead-flow 清理后的图），公共 port 对
+清理后图现算 RPO——即本任务目标「index 域统一」本身，方向与 StructureGraph
+oracle 路径（对最终图 fresh 计算）一致。
