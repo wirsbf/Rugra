@@ -2686,6 +2686,53 @@
      "RG-F-8611217bf12db0f7e435"
     ]
    }
+  },
+  {
+   "id": "comment_warning_codec_1204",
+   "description": "Comment WARNING XML codec: type/space/offset/XMLcontent, ordering, dedup/filter, and error partial-state observations",
+   "runner": [
+    "tools/run_comment_warning_codec_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/comment_warning_codec_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/comment_warning_codec_1204.cc",
+     "rust_fixture": "tests/oracle/comment_warning_codec_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_comment_warning_codec_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/comment.rs",
+     "docs/api/comment.md",
+     "tests/oracle/comment_warning_codec_1204.*",
+     "tools/run_comment_warning_codec_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-d0a9b029f3fc3e55108f",
+     "GH12-F-0c71e7330ce7d4d801fa",
+     "GH12-F-77fed2e6354de5a10e12",
+     "GH12-F-2327c140c7727317e1ef",
+     "GH12-F-66306cf569036577f1a1",
+     "GH12-F-d7c934cfe8b6f8d26b41"
+    ],
+    "rust_function_ids": [
+     "RG-F-df9b557772629c82c099",
+     "RG-F-a92f756efac285069b26",
+     "RG-F-4af38f584677830f2543",
+     "RG-F-9d4636cae1a7a0a193b9",
+     "RG-F-44cfd6e63414ff7df968",
+     "RG-F-b5089bee9ac9eb341fbb"
+    ]
+   }
   }
  ]
 }

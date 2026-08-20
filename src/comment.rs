@@ -9,6 +9,7 @@
 
 use crate::address::Address;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
+use anyhow::{bail, Result};
 
 /// Possible properties associated with a comment. Faithful to
 /// `Comment::comment_type` (comment.hh:53).
@@ -118,32 +119,26 @@ impl Comment {
     // Ghidra: comment.cc:37 Comment::encode
     /// Encode the comment to a stream. Faithful to `Comment::encode`
     /// (comment.cc:37).
-    pub fn encode(&self, encoder: &mut dyn Encoder) {
-        let tpname = decode_comment_type(self.type_flags);
+    pub fn encode(&self, encoder: &mut dyn Encoder) -> Result<()> {
+        let tpname = decode_comment_type(self.type_flags)?;
         let comment_elem = ElementId::new("comment", 0);
-        let addr_elem = ElementId::new("addr", 0);
         let text_elem = ElementId::new("text", 0);
         encoder.open_element(&comment_elem);
         encoder.write_string(&AttributeId::new("type", 0), &tpname);
-        // Function address.
-        encoder.open_element(&addr_elem);
-        encoder.write_unsigned_integer(&AttributeId::new("space", 0), self.funcaddr.as_u64());
-        encoder.close_element(&addr_elem);
-        // Comment address.
-        encoder.open_element(&addr_elem);
-        encoder.write_unsigned_integer(&AttributeId::new("space", 0), self.addr.as_u64());
-        encoder.close_element(&addr_elem);
+        encode_addr_child(encoder, self.funcaddr)?;
+        encode_addr_child(encoder, self.addr)?;
         // Text content.
         encoder.open_element(&text_elem);
-        encoder.write_string(&AttributeId::new("content", 1), &self.text);
+        encoder.write_string(&AttributeId::new("XMLcontent", 1), &self.text);
         encoder.close_element(&text_elem);
         encoder.close_element(&comment_elem);
+        Ok(())
     }
 
     // Ghidra: comment.cc:57 Comment::decode
     /// Decode the comment from a stream. Faithful to `Comment::decode`
     /// (comment.cc:57).
-    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) -> Result<()> {
         self.emitted = false;
         self.type_flags = 0;
         let comment_id = decoder.open_element();
@@ -154,87 +149,111 @@ impl Comment {
                 break;
             }
             if decoder.attribute_name(aid).as_deref() == Some("type") {
-                self.type_flags = encode_comment_type(&decoder.read_string());
+                self.type_flags = encode_comment_type(&decoder.read_string())?;
             } else {
-                let _ = decoder.read_string();
+                // Ghidra's iterator advances independently of value reads.
             }
         }
         // Read two <addr> children (funcaddr, addr).
-        self.funcaddr = read_addr_child(decoder);
-        self.addr = read_addr_child(decoder);
+        self.funcaddr = read_addr_child(decoder)?;
+        self.addr = read_addr_child(decoder)?;
         // Read <text> child if present.
         let sub_id = decoder.peek_element();
         if sub_id != 0 {
             decoder.open_element();
-            loop {
-                let aid = decoder.next_attribute_id();
-                if aid == 0 {
-                    break;
-                }
-                if decoder.attribute_name(aid).as_deref() == Some("content") {
-                    self.text = decoder.read_string();
-                } else {
-                    let _ = decoder.read_string();
-                }
-            }
+            self.text = decoder.read_string_attr(&AttributeId::new("XMLcontent", 1));
             decoder.close_element(sub_id);
         }
         decoder.close_element(comment_id);
+        Ok(())
     }
 }
 
-// Ghidra: comment.cc:63 Comment::encodeCommentType
+// Ghidra: comment.cc:77 Comment::encodeCommentType
 /// Convert a name string to a comment property. Faithful to
-/// `encodeCommentType` (comment.cc:77). Returns 0 for unknown names.
-pub fn encode_comment_type(name: &str) -> u32 {
-    match name {
+/// `encodeCommentType` (comment.cc:77). Unknown names are errors, matching
+/// Ghidra's `LowlevelError` path.
+pub fn encode_comment_type(name: &str) -> Result<u32> {
+    Ok(match name {
         "user1" => comment_type::USER1,
         "user2" => comment_type::USER2,
         "user3" => comment_type::USER3,
         "header" => comment_type::HEADER,
         "warning" => comment_type::WARNING,
         "warningheader" => comment_type::WARNINGHEADER,
-        _ => 0,
-    }
+        _ => bail!("Unknown comment type: {name}"),
+    })
 }
 
-// Ghidra: comment.cc:40 Comment::decodeCommentType
+// Ghidra: comment.cc:97 Comment::decodeCommentType
 /// Convert a comment property to its string representation. Faithful to
-/// `decodeCommentType` (comment.cc:97). Returns empty string for unknown.
-pub fn decode_comment_type(val: u32) -> String {
-    match val {
+/// `decodeCommentType` (comment.cc:97). Unknown values are errors, matching
+/// Ghidra's `LowlevelError` path.
+pub fn decode_comment_type(val: u32) -> Result<String> {
+    Ok(match val {
         comment_type::USER1 => "user1".to_string(),
         comment_type::USER2 => "user2".to_string(),
         comment_type::USER3 => "user3".to_string(),
         comment_type::HEADER => "header".to_string(),
         comment_type::WARNING => "warning".to_string(),
         comment_type::WARNINGHEADER => "warningheader".to_string(),
-        _ => String::new(),
-    }
+        _ => bail!("Unknown comment type"),
+    })
 }
 
-// Ghidra: comment.cc:30 Comment::readAddrChild
-/// Read a single `<addr>` child element and return its address offset.
-fn read_addr_child(decoder: &mut dyn Decoder) -> Address {
+// Ghidra: space.cc:143 AddrSpace::encodeAttributes
+/// Encode one `<addr>` child with distinct `space` and `offset` attributes.
+fn encode_addr_child(encoder: &mut dyn Encoder, address: Address) -> Result<()> {
+    let Some(space) = address.get_space() else {
+        bail!("Cannot encode address without an address space");
+    };
+    let addr_elem = ElementId::new("addr", 0);
+    encoder.open_element(&addr_elem);
+    encoder.write_string(&AttributeId::new("space", 0), &space.get_name());
+    encoder.write_unsigned_integer(&AttributeId::new("offset", 0), address.as_u64());
+    encoder.close_element(&addr_elem);
+    Ok(())
+}
+
+// Ghidra: address.cc:205 Address::decode
+/// Read a single `<addr>` child and recover its required offset.
+///
+/// The current `Decoder` trait has no `AddrSpaceManager`, so this projection
+/// validates and consumes the space name but returns the legacy offset-only
+/// `Address`. Restoring the exact space handle remains an ADDRESS codec gap.
+fn read_addr_child(decoder: &mut dyn Decoder) -> Result<Address> {
     let sub_id = decoder.peek_element();
     if sub_id == 0 {
-        return Address::new(0);
+        bail!("Address element is missing");
     }
     decoder.open_element();
-    let mut offset = 0u64;
+    let mut saw_space = false;
+    let mut offset = None;
     loop {
         let aid = decoder.next_attribute_id();
         if aid == 0 {
             break;
         }
-        if decoder.attribute_name(aid).as_deref() == Some("space") {
-            offset = decoder.read_unsigned_integer();
-        } else {
-            let _ = decoder.read_string();
+        match decoder.attribute_name(aid).as_deref() {
+            Some("space") => {
+                saw_space = !decoder.read_string().is_empty();
+            }
+            Some("offset") => {
+                offset = Some(decoder.read_unsigned_integer());
+            }
+            _ => {
+                // Ghidra's AddrSpace::decodeAttributes ignores other attrs.
+            }
         }
     }
+    if !saw_space {
+        bail!("Address is missing space");
+    }
+    let Some(offset) = offset else {
+        bail!("Address is missing offset");
+    };
     decoder.close_element(sub_id);
-    Address::new(offset)
+    Ok(Address::new(offset))
 }
 
 // Ghidra: comment.cc:30 Comment::commentSortKey
@@ -279,9 +298,8 @@ impl CommentDatabaseInternal {
     /// Clear all comments matching (one of) the indicated types, restricted to
     /// a specific function. Faithful to `clearType` (comment.cc:158).
     pub fn clear_type(&mut self, fad: Address, tp: u32) {
-        self.comments.retain(|c| {
-            !(c.funcaddr == fad && (c.type_flags & tp) != 0)
-        });
+        self.comments
+            .retain(|c| !(c.funcaddr == fad && (c.type_flags & tp) != 0));
     }
 
     // Ghidra: comment.cc:178 CommentDatabaseInternal::addComment
@@ -334,9 +352,7 @@ impl CommentDatabaseInternal {
     /// Iterate over all comments for a single function. Faithful to
     /// `beginComment`/`endComment`.
     pub fn comments_for_function(&self, fad: Address) -> impl Iterator<Item = &Comment> {
-        self.comments
-            .iter()
-            .filter(move |c| c.funcaddr == fad)
+        self.comments.iter().filter(move |c| c.funcaddr == fad)
     }
 
     // Ghidra: comment.cc:134 CommentDatabaseInternal::allComments
@@ -347,19 +363,20 @@ impl CommentDatabaseInternal {
 
     // Ghidra: comment.cc:242 CommentDatabaseInternal::encode
     /// Encode all comments to a stream. Faithful to `encode` (comment.cc:242).
-    pub fn encode(&self, encoder: &mut dyn Encoder) {
+    pub fn encode(&self, encoder: &mut dyn Encoder) -> Result<()> {
         let db_elem = ElementId::new("commentdb", 0);
         encoder.open_element(&db_elem);
         for c in &self.comments {
-            c.encode(encoder);
+            c.encode(encoder)?;
         }
         encoder.close_element(&db_elem);
+        Ok(())
     }
 
     // Ghidra: comment.cc:253 CommentDatabaseInternal::decode
     /// Decode all comments from a `<commentdb>` element. Faithful to `decode`
     /// (comment.cc:253).
-    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) -> Result<()> {
         let db_id = decoder.open_element();
         loop {
             let sub_id = decoder.peek_element();
@@ -367,10 +384,16 @@ impl CommentDatabaseInternal {
                 break;
             }
             let mut com = Comment::new_empty();
-            com.decode(decoder);
-            self.add_comment(com.get_type(), com.get_func_addr(), com.get_addr(), com.get_text());
+            com.decode(decoder)?;
+            self.add_comment(
+                com.get_type(),
+                com.get_func_addr(),
+                com.get_addr(),
+                com.get_text(),
+            );
         }
         decoder.close_element(db_id);
+        Ok(())
     }
 }
 
@@ -585,19 +608,18 @@ impl CommentSorter {
     }
 
     // Ghidra: comment.cc:394 CommentSorter::setupHeader
-    /// Prepare to walk comments in the header. Faithful to `setupHeader`
-    /// (comment.cc:394).
+    /// Prepare to walk comments in the header. The full iterator mutation of
+    /// `setupHeader` (comment.cc:394) is tracked by
+    /// COMMENT-SORTER-ITERATORS-0001.
     pub fn setup_header(&self, _header_type: u32) {
-        // Iterator setup; with the simplified model this is a no-op as the
-        // commmap already holds header comments.
+        // TODO(COMMENT-SORTER-ITERATORS-0001): maintain start/opstop over the
+        // exact (index=-1, order=header_type, pos) Subsort interval.
     }
 
     // Ghidra: comment.hh:195 CommentSorter::hasHeaderComments
     /// Return true if there are more comments to emit in the header.
     pub fn has_header_comments(&self) -> bool {
-        self.commmap
-            .keys()
-            .any(|k| k.index == u32::MAX)
+        self.commmap.keys().any(|k| k.index == u32::MAX)
     }
 
     // Ghidra: comment.hh:195 CommentSorter::headerComments
@@ -614,6 +636,21 @@ impl CommentSorter {
 mod tests {
     use super::*;
     use crate::marshal::{IdRegistry, TreeDecoder, TreeEncoder};
+    use crate::space::{space_flags, AddrSpace, SpaceType};
+
+    fn ram_space() -> AddrSpace {
+        AddrSpace::new_space(
+            SpaceType::Processor,
+            "ram",
+            false,
+            8,
+            1,
+            3,
+            space_flags::HASPHYSICAL,
+            0,
+            0,
+        )
+    }
 
     #[test]
     fn test_comment_construction() {
@@ -642,17 +679,23 @@ mod tests {
             comment_type::WARNING,
             comment_type::WARNINGHEADER,
         ] {
-            let name = decode_comment_type(tp);
-            assert_eq!(encode_comment_type(&name), tp);
+            let name = decode_comment_type(tp).unwrap();
+            assert_eq!(encode_comment_type(&name).unwrap(), tp);
         }
-        assert_eq!(encode_comment_type("unknown"), 0);
+        assert!(encode_comment_type("unknown").is_err());
+        assert!(decode_comment_type(0).is_err());
     }
 
     #[test]
     fn test_database_add_comment() {
         let mut db = CommentDatabaseInternal::new();
         assert_eq!(db.num_comments(), 0);
-        db.add_comment(comment_type::WARNING, Address::new(0x1000), Address::new(0x2000), "Warning!");
+        db.add_comment(
+            comment_type::WARNING,
+            Address::new(0x1000),
+            Address::new(0x2000),
+            "Warning!",
+        );
         assert_eq!(db.num_comments(), 1);
     }
 
@@ -685,8 +728,18 @@ mod tests {
     #[test]
     fn test_database_clear_type() {
         let mut db = CommentDatabaseInternal::new();
-        db.add_comment(comment_type::WARNING, Address::new(0x1000), Address::new(0x2000), "W");
-        db.add_comment(comment_type::HEADER, Address::new(0x1000), Address::new(0x3000), "H");
+        db.add_comment(
+            comment_type::WARNING,
+            Address::new(0x1000),
+            Address::new(0x2000),
+            "W",
+        );
+        db.add_comment(
+            comment_type::HEADER,
+            Address::new(0x1000),
+            Address::new(0x3000),
+            "H",
+        );
         assert_eq!(db.num_comments(), 2);
         db.clear_type(Address::new(0x1000), comment_type::WARNING);
         assert_eq!(db.num_comments(), 1);
@@ -695,9 +748,24 @@ mod tests {
     #[test]
     fn test_database_comments_for_function() {
         let mut db = CommentDatabaseInternal::new();
-        db.add_comment(comment_type::WARNING, Address::new(0x1000), Address::new(0x2000), "A");
-        db.add_comment(comment_type::WARNING, Address::new(0x1000), Address::new(0x3000), "B");
-        db.add_comment(comment_type::WARNING, Address::new(0x5000), Address::new(0x6000), "C");
+        db.add_comment(
+            comment_type::WARNING,
+            Address::new(0x1000),
+            Address::new(0x2000),
+            "A",
+        );
+        db.add_comment(
+            comment_type::WARNING,
+            Address::new(0x1000),
+            Address::new(0x3000),
+            "B",
+        );
+        db.add_comment(
+            comment_type::WARNING,
+            Address::new(0x5000),
+            Address::new(0x6000),
+            "C",
+        );
         let func1: Vec<_> = db.comments_for_function(Address::new(0x1000)).collect();
         assert_eq!(func1.len(), 2);
         let func2: Vec<_> = db.comments_for_function(Address::new(0x5000)).collect();
@@ -709,20 +777,31 @@ mod tests {
         let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
         {
             let mut r = registry.write().unwrap();
-            for nm in &["type", "space", "content"] {
+            for nm in &["type", "space", "offset", "XMLcontent"] {
                 r.register_attribute(nm);
             }
             for nm in &["comment", "commentdb", "addr", "text"] {
                 r.register_element(nm);
             }
         }
+        let ram = ram_space();
         let mut db = CommentDatabaseInternal::new();
-        db.add_comment(comment_type::WARNING, Address::new(0x1000), Address::new(0x2000), "Test warning");
-        db.add_comment(comment_type::HEADER, Address::new(0x1000), Address::new(0x1000), "Header");
+        db.add_comment(
+            comment_type::WARNING,
+            Address::with_space(&ram, 0x1000),
+            Address::with_space(&ram, 0x2000),
+            "Test warning",
+        );
+        db.add_comment(
+            comment_type::HEADER,
+            Address::with_space(&ram, 0x1000),
+            Address::with_space(&ram, 0x1000),
+            "Header",
+        );
 
         // Encode.
         let mut enc = TreeEncoder::new(registry.clone());
-        db.encode(&mut enc);
+        db.encode(&mut enc).unwrap();
         let doc = enc.into_document();
         assert!(doc.get_root().is_some());
 
@@ -730,19 +809,108 @@ mod tests {
         let root = doc.get_root().unwrap().clone();
         let mut db2 = CommentDatabaseInternal::new();
         let mut dec = TreeDecoder::new(root, registry.clone());
-        db2.decode(&mut dec);
+        db2.decode(&mut dec).unwrap();
 
         assert_eq!(db2.num_comments(), 2);
         let comments: Vec<_> = db2
             .comments_for_function(Address::new(0x1000))
-            .map(|c| (c.get_type(), c.get_addr().as_u64(), c.get_text().to_string()))
+            .map(|c| {
+                (
+                    c.get_type(),
+                    c.get_addr().as_u64(),
+                    c.get_text().to_string(),
+                )
+            })
             .collect();
-        assert!(comments.iter().any(|(t, a, txt)| {
-            *t == comment_type::WARNING && *a == 0x2000 && txt == "Test warning"
-        }));
-        assert!(comments.iter().any(|(t, a, txt)| {
-            *t == comment_type::HEADER && *a == 0x1000 && txt == "Header"
-        }));
+        assert!(
+            comments.iter().any(|(t, a, txt)| {
+                *t == comment_type::WARNING && *a == 0x2000 && txt == "Test warning"
+            }),
+            "decoded comments: {comments:?}"
+        );
+        assert!(comments
+            .iter()
+            .any(|(t, a, txt)| { *t == comment_type::HEADER && *a == 0x1000 && txt == "Header" }));
+    }
+
+    #[test]
+    fn test_decode_unknown_type_partial_state() {
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        {
+            let mut r = registry.write().unwrap();
+            r.register_attribute("type");
+            r.register_element("comment");
+        }
+        let comment_elem = ElementId::new("comment", 0);
+        let mut enc = TreeEncoder::new(registry.clone());
+        enc.open_element(&comment_elem);
+        enc.write_string(&AttributeId::new("type", 0), "bogus");
+        enc.close_element(&comment_elem);
+        let root = enc.into_document().get_root().unwrap().clone();
+
+        let mut comment = Comment::new(
+            comment_type::HEADER,
+            Address::new(0xaaaa),
+            Address::new(0xbbbb),
+            7,
+            "sentinel",
+        );
+        comment.set_emitted(true);
+        let mut dec = TreeDecoder::new(root, registry);
+        assert_eq!(
+            comment.decode(&mut dec).unwrap_err().to_string(),
+            "Unknown comment type: bogus"
+        );
+        assert_eq!(comment.get_type(), 0);
+        assert!(!comment.is_emitted());
+        assert_eq!(comment.get_func_addr().as_u64(), 0xaaaa);
+        assert_eq!(comment.get_addr().as_u64(), 0xbbbb);
+        assert_eq!(comment.get_uniq(), 7);
+        assert_eq!(comment.get_text(), "sentinel");
+    }
+
+    #[test]
+    fn test_decode_missing_offset_partial_state() {
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        {
+            let mut r = registry.write().unwrap();
+            for nm in &["type", "space", "offset", "XMLcontent"] {
+                r.register_attribute(nm);
+            }
+            for nm in &["comment", "addr", "text"] {
+                r.register_element(nm);
+            }
+        }
+        let comment_elem = ElementId::new("comment", 0);
+        let addr_elem = ElementId::new("addr", 0);
+        let mut enc = TreeEncoder::new(registry.clone());
+        enc.open_element(&comment_elem);
+        enc.write_string(&AttributeId::new("type", 0), "warning");
+        enc.open_element(&addr_elem);
+        enc.write_string(&AttributeId::new("space", 0), "ram");
+        enc.close_element(&addr_elem);
+        enc.close_element(&comment_elem);
+        let root = enc.into_document().get_root().unwrap().clone();
+
+        let mut comment = Comment::new(
+            comment_type::HEADER,
+            Address::new(0xaaaa),
+            Address::new(0xbbbb),
+            7,
+            "sentinel",
+        );
+        comment.set_emitted(true);
+        let mut dec = TreeDecoder::new(root, registry);
+        assert_eq!(
+            comment.decode(&mut dec).unwrap_err().to_string(),
+            "Address is missing offset"
+        );
+        assert_eq!(comment.get_type(), comment_type::WARNING);
+        assert!(!comment.is_emitted());
+        assert_eq!(comment.get_func_addr().as_u64(), 0xaaaa);
+        assert_eq!(comment.get_addr().as_u64(), 0xbbbb);
+        assert_eq!(comment.get_uniq(), 7);
+        assert_eq!(comment.get_text(), "sentinel");
     }
 
     #[test]
