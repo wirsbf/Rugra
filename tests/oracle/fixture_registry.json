@@ -2733,6 +2733,49 @@
      "RG-F-b5089bee9ac9eb341fbb"
     ]
    }
+  },
+  {
+   "id": "rule_addunsigned_typeprecond_1204",
+   "description": "RuleAddUnsigned canonical UNKNOWN/UINT precondition and high-quarter transform projection",
+   "runner": [
+    "tools/run_rule_addunsigned_typeprecond_oracle.sh"
+   ],
+   "timeout_seconds": 1200,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/rule_addunsigned_typeprecond_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/rule_addunsigned_typeprecond_1204.cc",
+     "rust_fixture": "tests/oracle/rule_addunsigned_typeprecond_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_rule_addunsigned_typeprecond_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/ruleaction.rs",
+     "docs/api/ruleaction.md",
+     "tests/oracle/rule_addunsigned_typeprecond_1204.*",
+     "tools/run_rule_addunsigned_typeprecond_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-891ed2e6ca63b0fd1b5d",
+     "GH12-F-d84e70176098c32ecdab",
+     "GH12-F-a3651759e7b0124e5b38",
+     "GH12-F-0260ec2f3fc7053a0355"
+    ],
+    "rust_function_ids": [
+     "RG-F-44b899bfa2ad8d8a3feb",
+     "RG-F-12d6470ee45b74a19780",
+     "RG-F-d52042debf66c9654698",
+     "RG-F-fca48a1e0a6bc6daca86"
+    ]
+   }
   }
  ]
 }

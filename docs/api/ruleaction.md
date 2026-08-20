@@ -933,7 +933,7 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - `RuleDivOpt`（ruleaction.cc:8295）：补上 signed-division 路径缺失的 `moveSignBitExtraction` 调用（Ghidra ruleaction.cc:8335）。忠实移植 `moveSignBitExtraction`(8210-8253) 为 `move_sign_bit_extraction` + 辅助 `resolve_shift_const`。
 
 **cleanup 池新增（coreaction.cc:5696-5708）**：
-- `RuleAddUnsigned`(7200) — INT_ADD，`V+0xff..⇒V-0x00..`（数值变换 1:1）
+- `RuleAddUnsigned`(7182) — INT_ADD，`V+0xff..⇒V-0x00..`；仅锁定 fixture 覆盖的基础 UINT/UNKNOWN 路径已对拍，完整函数仍为 PARTIAL_MATCH。
 - `RuleSubRight`(7269) — INT_SUB，sub right 规范化（含 lone-shift lump）
 - `RuleFloatSignCleanup`(10789) — floatSignManipulation 1:1
 - `RuleExpandLoad`(10937) — helpers(checkAndComparison/modifyAndComparison) 1:1；applyOp 标 TODO（需 pointer datatype）
@@ -987,13 +987,13 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - RulePtrsubCharConstant: push_const_further 加 outtype 参数 + update_type（cc:7351）
 - RuleExpandLoad: modify_and_comparison 加 dt 参数 + update_type ×2（cc:10915）
 - RuleExpandLoad apply: new_out update_type（cc:10994）
-- RuleAddUnsigned: copy_symbol（cc:7228）
+- RuleAddUnsigned: copy_symbol（cc:7211）
 - RulePullsubIndirect: indirect-creation 分支完整移植 new_indirect_creation（cc:998-1002）
 - RuleIndirectCollapse: STORE guard 完整移植 get_store_guard + is_guarded（cc:3223-3236）
 - RuleSwitchSingle: 完整 applyOp（find_jump_table + jt 判断 + BRANCH 改写 + remove_jump_table + structure clear，cc:5430-5477）
 
 ### 2026-07-01（续 4）：Layer-6 剩余 TODO 填补（12 处）
-RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSubRight: does_special_printing + is_piece_structured + is_addr_tied + get_base_type(Uint/Int)+update_type。RuleFloatSignCleanup: TYPE_FLOAT 判断。RuleExpandLoad: get_base_type(Uint) 重写。RuleIndirectCollapse: has_no_local_alias + no_indirect_collapse + INDIRECT_CREATION。RuleSwitchSingle: warning_header 替换 eprintln。RulePtrsubUndo: clear_stop_type_propagation + op_undo_ptradd 完整接入。RuleSegment: userops.get_segment_op 接入 + contiguous_test/findContiguousWhole 移植。RuleTransformCpool: tf.find_by_name(rec.type_name) + update_type_lock。剩余 10 处 TODO 每处精确标注缺失 API（SymbolEntry/resolveConstant/PieceNode/CloneBlockOps/functionalEquality/SegmentOp.execute）。
+RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫（cc:7188-7190）。RuleSubRight: does_special_printing + is_piece_structured + is_addr_tied + get_base_type(Uint/Int)+update_type。RuleFloatSignCleanup: TYPE_FLOAT 判断。RuleExpandLoad: get_base_type(Uint) 重写。RuleIndirectCollapse: has_no_local_alias + no_indirect_collapse + INDIRECT_CREATION。RuleSwitchSingle: warning_header 替换 eprintln。RulePtrsubUndo: clear_stop_type_propagation + op_undo_ptradd 完整接入。RuleSegment: userops.get_segment_op 接入 + contiguous_test/findContiguousWhole 移植。RuleTransformCpool: tf.find_by_name(rec.type_name) + update_type_lock。剩余 10 处 TODO 每处精确标注缺失 API（SymbolEntry/resolveConstant/PieceNode/CloneBlockOps/functionalEquality/SegmentOp.execute）。
 
 ### 2026-07-01（续 5）：determine_datatype partial path + RulePtrsubCharConstant full transform
 - determine_datatype（ruleaction.cc:7481-7510）：partial 路径用 get_structured_type + get_symbol_entry + SymbolEntry::get_addr/get_offset + get_sub_type walk 实现。不再对 partial 返回 None。
@@ -1075,3 +1075,20 @@ varnode 经 `VarnodeBank::set_input`（varnode.cc:1358 setInput 映射）登记�
 INPUT，消除 addDescend throw 会触发的 Ghidra 不可达 harness 态；断言与
 规则分支路径（is_written/is_addr_tied 保持 false）零变化，生产代码未动。
 <!-- annotation-pass: 2026-08-17 -->
+
+### 2026-08-20：RuleAddUnsigned 类型前置条件与真实 oracle（RULE-ADDUNSIGNED-TYPEPRECOND-0001）
+
+`RuleAddUnsigned::applyOp`（锁定 12.0.4 `ruleaction.cc:7182-7214`）先读取
+slot 1 常量的 read-facing 类型，并在位模式判断前要求 `TYPE_UINT`。因此
+`Funcdata::newConstant` 产生的 canonical `TYPE_UNKNOWN`（
+`funcdata_varnode.cc:66-75`）不是可触发输入。旧的两个单元测试现在显式使用
+同一 `TypeFactory` 的 canonical `TYPE_UINT`；另加默认 UNKNOWN 拒绝回归，
+生产 `apply_op` 守卫未放宽。
+
+锁定 fixture `rule_addunsigned_typeprecond_1204` 覆盖 `getOpList` 以及
+`unknown_ff`、`uint_ff`、`uint_7f` 三例，逐字节比较 7 行：返回值、opcode、
+输入/输出身份、新常量值与 create-index、canonical 类型身份、type/name lock、
+SymbolEntry 链接、def-use、alive/dead/block 状态均为 `MATCH`。整体状态保持
+`PARTIAL_MATCH`：Rust-only `None` 路径、op-aware union resolution、char-print、
+真实 named equate、enum named-value、规则名 `add_unsigned`/`addunsigned` 以及
+pool repeat 尚未闭合，全部继续绑定 `RULE-ADDUNSIGNED-TYPEPRECOND-0001`。

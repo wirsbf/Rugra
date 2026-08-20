@@ -10529,28 +10529,30 @@ impl Rule for RulePullsubMulti {
 
 /// Cleanup: Convert INT_ADD of constants to INT_SUB: `V + 0xff.. ⇒ V - 0x00..`
 ///
-/// Faithful to `RuleAddUnsigned` (ruleaction.cc:7200-7249). When the constant
+/// Mirrors the covered base-type paths of `RuleAddUnsigned`
+/// (ruleaction.cc:7174-7214). When the constant
 /// being added has its high quarter of bits all set, it is more naturally
 /// printed as a subtraction of the negated (small positive) value.
 ///
 /// NOTE: Ghidra consults the constant's read-facing data-type (`TYPE_UINT`,
-/// not char-print, enum/equate name-locks). Rugra now resolves the
-/// read-facing type via `get_type_read_facing()` and applies the `TYPE_UINT` /
-/// `!isCharPrint()` guards; if the varnode has no type it falls back to the
-/// numeric transform. The `SymbolEntry`/`EquateSymbol` name-lock guard and the
-/// enum named-value re-naming still require SymbolEntry infra not in Rugra, so
-/// those are skipped (see TODO at the guard site).
+/// not char-print, enum/equate name-locks). Rugra resolves the non-union base
+/// type via `get_type_read_facing()` and applies the `TYPE_UINT` /
+/// `!isCharPrint()` guards. Factory-backed constants always carry a type, so
+/// their default `TYPE_UNKNOWN` is rejected. A malformed Rust-only `None`
+/// type still falls through; op-aware union resolution and the equate/enum
+/// branches remain under `RULE-ADDUNSIGNED-TYPEPRECOND-0001`.
 pub struct RuleAddUnsigned;
 
 impl RuleAddUnsigned {
-    // Ghidra: ruleaction.cc:7192 RuleAddUnsigned
+    // Ghidra: ruleaction.hh:1145 RuleAddUnsigned::RuleAddUnsigned
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAddUnsigned {
-    // Ghidra: ruleaction.cc:7200 RuleAddUnsigned::applyOp
+    // Ghidra: ruleaction.cc:7182 RuleAddUnsigned::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleAddUnsigned::applyOp (ruleaction.cc:7200-7249).
+        // Covered base-type paths of RuleAddUnsigned::applyOp
+        // (ruleaction.cc:7182-7214).
         let constvn = {
             let op = op_arc.read().unwrap();
             match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
@@ -10560,10 +10562,10 @@ impl Rule for RuleAddUnsigned {
         }
         use crate::type_system::datatype::TypeMetatype;
         // Ghidra: dt = constvn->getTypeReadFacing(op); require metatype==
-        // TYPE_UINT, skip char-print types (ruleaction.cc:7206-7208). Rugra's
-        // get_type_read_facing returns the varnode's resolved type; if absent
-        // (type recovery not yet run on this varnode) we conservatively keep
-        // the legacy numeric-only behaviour.
+        // TYPE_UINT, skip char-print types (ruleaction.cc:7188-7190). Rugra's
+        // get_type_read_facing returns the varnode's resolved base type. Its
+        // Rust-only None fall-through has no valid Ghidra Varnode analogue and
+        // remains a registered RULE-ADDUNSIGNED-TYPEPRECOND-0001 mismatch.
         if let Some(dt) = constvn.read().unwrap().get_type_read_facing() {
             if dt.get_metatype() != TypeMetatype::Uint {
                 return Ok(action_status::NO_CHANGE);
@@ -10571,10 +10573,10 @@ impl Rule for RuleAddUnsigned {
             if dt.is_char_print() {
                 return Ok(action_status::NO_CHANGE); // Only change integer forms
             }
-            // TODO(symbolentry): Ghidra also skips name-locked EquateSymbol
-            //   (ruleaction.cc:7214-7220) and re-names via enum named values
-            //   (7222-7226). Rugra has no SymbolEntry/EquateSymbol lookup on a
-            //   Varnode, so these two sub-checks are omitted.
+            // TODO(RULE-ADDUNSIGNED-TYPEPRECOND-0001): Ghidra also skips
+            //   name-locked EquateSymbol values (ruleaction.cc:7196-7201) and
+            //   checks enum named values (7204-7207). These paths are outside
+            //   the three-case base-type fixture and remain unproved.
         }
         let size = constvn.read().unwrap().get_size();
         let val = constvn.read().unwrap().get_offset();
@@ -10589,7 +10591,7 @@ impl Rule for RuleAddUnsigned {
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SUB);
         let cvn = fd.new_constant(size, negated_val);
         // Ghidra: cvn->copySymbol(constvn); propagate the constant's symbol/type
-        // + lock flags into the new constant (ruleaction.cc:7229).
+        // + lock flags into the new constant (ruleaction.cc:7211).
         {
             let cvn_lock = constvn.read().unwrap();
             cvn.write().unwrap().copy_symbol(&cvn_lock);
@@ -10598,9 +10600,9 @@ impl Rule for RuleAddUnsigned {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:7192 RuleAddUnsigned
+    // Ghidra: ruleaction.hh:1145 RuleAddUnsigned::RuleAddUnsigned
     fn get_name(&self) -> &str { "add_unsigned" }
-    // Ghidra: ruleaction.cc:7194 RuleAddUnsigned::getOpList
+    // Ghidra: ruleaction.cc:7176 RuleAddUnsigned::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -19799,12 +19801,34 @@ mod tests {
             crate::space::AddressSpace::Const, 0xff, 1,    // 0xff (high quarter all 1s)
             1,
         );
+        // Funcdata::newConstant installs the owning factory's canonical
+        // TYPE_UNKNOWN (funcdata_varnode.cc:66-75). RuleAddUnsigned requires
+        // the same factory's canonical TYPE_UINT read-facing type
+        // (ruleaction.cc:7188-7190), so establish that production precondition
+        // explicitly instead of weakening the rule guard.
+        let type_factory = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        fd.vbank.set_type_factory(type_factory.clone());
+        let uint1 = type_factory
+            .read()
+            .unwrap()
+            .get_base(1, crate::type_system::datatype::TypeMetatype::Uint)
+            .expect("canonical uint1");
+        let source_constant = op_arc.read().unwrap().inrefs[1].clone();
+        source_constant.write().unwrap().update_type(uint1.clone());
         let rule = RuleAddUnsigned::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_INT_SUB);
         // negatedVal = (-0xff) & 0xff = 1
-        assert_eq!(op_arc.read().unwrap().inrefs[1].read().unwrap().get_offset(), 1);
+        let replacement = op_arc.read().unwrap().inrefs[1].clone();
+        let replacement_guard = replacement.read().unwrap();
+        assert_eq!(replacement_guard.get_offset(), 1);
+        assert!(Arc::ptr_eq(
+            replacement_guard.v_type.as_ref().expect("replacement type"),
+            &uint1,
+        ));
     }
 
     /// RuleAddUnsigned must NOT fire when the high quarter isn't all ones.
@@ -19816,9 +19840,57 @@ mod tests {
             crate::space::AddressSpace::Const, 0x7f, 4, // high quarter not all 1s
             4,
         );
+        let type_factory = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        fd.vbank.set_type_factory(type_factory.clone());
+        let uint4 = type_factory
+            .read()
+            .unwrap()
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Uint)
+            .expect("canonical uint4");
+        let source_constant = op_arc.read().unwrap().inrefs[1].clone();
+        source_constant.write().unwrap().update_type(uint4);
         let rule = RuleAddUnsigned::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
+        assert!(Arc::ptr_eq(
+            &op_arc.read().unwrap().inrefs[1],
+            &source_constant,
+        ));
+    }
+
+    /// RuleAddUnsigned rejects the canonical default TYPE_UNKNOWN before the
+    /// high-quarter value test, matching ruleaction.cc:7188-7189.
+    #[test]
+    fn test_rule_add_unsigned_default_unknown_no_fire() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_ADD,
+            crate::space::AddressSpace::Register, 0x00, 1,
+            crate::space::AddressSpace::Const, 0xff, 1,
+            1,
+        );
+        let source_constant = op_arc.read().unwrap().inrefs[1].clone();
+        assert_eq!(
+            source_constant
+                .read()
+                .unwrap()
+                .get_type_read_facing()
+                .expect("factory-backed default type")
+                .get_metatype(),
+            crate::type_system::datatype::TypeMetatype::Unknown,
+        );
+
+        let result = RuleAddUnsigned::new()
+            .apply_op(&op_arc, &mut fd)
+            .unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
+        assert!(Arc::ptr_eq(
+            &op_arc.read().unwrap().inrefs[1],
+            &source_constant,
+        ));
     }
 
     /// RuleNegateNegate: `~~V ⇒ V`.
