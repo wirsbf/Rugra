@@ -147,9 +147,21 @@ Naming follows Ghidra conventions:
 - Unique temp → `uVarN`
 - RAM global → `DAT_XXXXXXXX`
 
-### `pub fn merge_adjacent(&mut self, _fd: &mut Funcdata)`
+### `pub fn merge_adjacent(&mut self, fd: &mut Funcdata)`
 
-Merge adjacent varnodes (placeholder for future enhancement)
+当前实现覆盖 locked Ghidra 12.0.4 `Merge::mergeAdjacent`
+（`merge.cc:983-1012`）的主循环：按 alive op 顺序对每个非 call op 的输出
+尝试与其各输入合并。已覆盖门链：
+`mergeTestBasic`（out/in）→ **`outputTypeLocal()==inputTypeLocal(i)` 类型门**
+（:1001，`adjacent_local_types_match` 以 `LocalTypeKey` 规范等值 + 经
+`factory_nochar_distinct` 比较 `get_base/get_base_no_char` 的实际 canonical
+`Arc`）→ 尺寸相等 →
+`mergeTestAdjacent`（:175-218 全守卫链）→ 非相交 cover 时推测合并
+（`merge_speculative_by_vn(..., true)`，输出侧存活）。但 local-type 门仍是
+上层 `LocalTypeKey` 模型，不是 Ghidra TypeFactory/TypeOp 返回的实际 canonical
+对象身份；自定义 core 名称和多 non-char INT1 的 nochar 关系已闭合，Java
+ZEXT、CPOOLREF/CALLOTHER/INDIRECT 等仍绑定
+`TYPEOP-LOCALTYPE-DISPATCH-0001`。因此本函数保持 MISMATCH/L2。
 
 ### `pub fn merge_multi_entry(&mut self, fd: &mut Funcdata)`
 
@@ -411,6 +423,40 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - fixture 新增 `case_type_gate`（4 行）：INT_LEFT 移位量 size==输出≠1 通过门
   并在 mergeadjacent 合并（groups SH:1/TSH:0 输出侧存活）；FLOAT_TRUNC 同尺寸
   float 输入被拒。runner **17/17 overall=MATCH**。
+
+### 2026-08-19（MERGE-PERSISTENT-STATE-0001 r2-M2 残差）：nochar 等值改为工厂注册态驱动
+- 复核登记的两处 MISMATCH：FLOAT_TRUNC `(Int,Float)`（typeop.cc:1913）与
+  `getBaseNoChar` 方向（type.cc:3619-3626）——两处在 HEAD 已正确；残余缺陷是
+  `(Int,1)` 无条件视为不等。按源码：`getBaseNoChar(1,TYPE_INT)` 仅在
+  `type_nochar` 已注册时返回独立条目（type.cc:3622-3623，cacheCoreTypes 自
+  注册的 1 字节非 ASCII INT 核心类型填充，:3220-3221），且 `getBase(1,
+  TYPE_INT)` 是 `typecache[1][INT]` 的 ASCII char（:3225-3229 优先覆盖；
+  无 char 时单个非 ASCII int 自填 :3240-3242 → 两指针相同）。ASCII char 与
+  non-char INT1 共存是产生不同指针的常见生产状态；多个 non-char INT1 也可能因
+  typecache first-fill 与 type_nochar 后写产生不同身份。最终判定只能比较工厂实际
+  canonical 对象，不能化约为名称或“是否同时存在某两类”的布尔规则。
+- `LocalTypeKey` 弃手写 `PartialEq`，改为 `local_type_key_eq(a,b,
+  nochar_distinct)`；`merge_adjacent` 每次 walk 经 `factory_nochar_distinct`
+  读取 `fd.get_arch()→arch.types` 的实际 `get_base(1,INT)` 与
+  `get_base_no_char(1,INT)` Arc 身份；无工厂 = type_nochar null 世界 → 相等。
+- fixture 扩展三 case（12 行，runner 17→29）：`float_trunc_cast`（同尺寸
+  cast 形 FLOAT_TRUNC + COPY 对照）、`char_gate_null`（无 1 字节 INT 核心类型
+  → T1/SH1 与 4 字节对照 T4/SH4 同样合并，type.cc:3624 fallthrough）、
+  `char_gate_char`（第二 FixtureArchitecture 以自定义名称注册 non-char/ASCII
+  INT1 → T1/SH1 被拒、T4/SH4 仍合并；Rust 侧同样 clear→register custom
+  names→cache 后挂 `fd.set_arch`）。runner **29/29 covered projection=MATCH**，
+  整体仍为 **MISMATCH**。
+- 单测新增 `local_type_key_eq` 双世界断言与 `factory_nochar_distinct`
+  三态注册断言（仅回归；oracle 证据在 fixture）。
+- 2026-08-20 独立复核 REJECT：`factory_nochar_distinct` 以固定名称
+  `char`/`int1` 推断缓存身份，而 Ghidra `cacheCoreTypes` 按任意名称 core type
+  的属性与 DatatypeSet 遍历更新实际 `type_nochar/typecache` 指针；另 Java ZEXT
+  和 CPOOLREF local type 已可由源码证明分叉。修复必须下沉 TypeFactory/TypeOp，
+  本节原“工厂状态驱动”仅对 fixture 的两个已测世界成立。
+- r2 已关闭上述名称启发式：`a4a2fe9` 提供 canonical cache/nochar Arc，
+  `factory_nochar_distinct` 直接 `Arc::ptr_eq`；fixture 使用
+  `signed_byte_custom`/`ascii_glyph_custom` 仍保持投影一致。Java/CPOOL 与
+  持久通道残差不变。
 
 ### 2026-08-16（MERGE-PREEXISTING-GATES-0001）：五项预存在门/方向缺口
 - `merge_indirect` 全路径重写（merge.cc:846-882）：isAddrForce 门、

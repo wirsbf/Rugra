@@ -928,7 +928,7 @@
   },
   {
    "id": "merge_persistent_1204",
-   "description": "Persistent merge channels on Funcdata: attach-depth nesting, standalone-Action cover premise, mergeTestAdjacent + canonical typeLocal gate table, survivor direction via groups projections, pipeline-tail canary",
+   "description": "Merge family 29-line grouping/Cover projection: persistent Action sequence, survivor direction, FLOAT_TRUNC and custom-name nochar canonical-identity gates; registered TypeOp/channel residuals remain",
    "runner": [
     "tools/run_merge_persistent_oracle.sh"
    ],
@@ -937,7 +937,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/merge_persistent_1204.metadata.json",
     "inputs": {
@@ -955,6 +955,12 @@
      "docs/api/merge.md",
      "tests/oracle/merge_persistent_1204.*",
      "tools/run_merge_persistent_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-fedc9cc2e86e67fc6003"
+    ],
+    "rust_function_ids": [
+     "RG-F-54f07738020d7f6006d3"
     ]
    }
   },

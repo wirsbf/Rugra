@@ -9,9 +9,12 @@
 // the earlier ones produced — Ghidra gets this for free from the by-value
 // `Funcdata::covermerge` member (funcdata.hh:96).
 //
-// Current per-case status (pinned in metadata.json): all three cases —
-// disjoint_copy, copy_shadow_ladder, pipeline_tail — byte-match the locked
-// oracle on every projected line (13/13).  The copy-shadow family merge and
+// Current projection status (pinned in metadata.json): all seven cases
+// byte-match the locked oracle on every projected line (29/29).  Overall
+// status remains MISMATCH: Java/CPOOL local types and persistent
+// cache/trim/protoPartial/clear channels are not closed
+// (TYPEOP-LOCALTYPE-DISPATCH-0001, MERGE-PERSISTENCE-CHANNELS-0001).
+// The copy-shadow family merge and
 // the mergeadjacent single-accept (tC only) both require: the persistent
 // cover premise (set_high_level calcCover), the transitive copy_shadow
 // (VARNODE-COPYSHADOW-ARC-0001, fixed at e87ebfc), the mergeTestAdjacent +
@@ -354,7 +357,8 @@ fn run_pipeline_tail() {
         let mut merge = Merge::new();
         merge.merge_all(&mut g.fd);
     }
-    // MERGE-PERSISTENT round-2 review M1 canary: the nested attach/detach
+    // MERGE-PERSISTENT round-2 Rust regression canary (NOT bilateral oracle
+    // evidence): the nested attach/detach
     // sequence inside merge_all must return the persistent channels to the
     // Funcdata mount (depth-balanced). If an inner early-return leaked +1,
     // live_set would come back empty and the intersection cache empty.
@@ -415,9 +419,117 @@ fn run_type_gate() {
     );
 }
 
+// case_float_trunc_cast: isolates the merge.cc:1001 FLOAT_TRUNC gate entry
+// with a cast-shaped same-size op — a wrong (Int,Int) pair would let TF
+// merge with F2; the locked (Int,Float) pair (typeop.cc:1913) rejects it.
+fn run_float_trunc_cast() {
+    let mut g = Graph::new("float_trunc_cast", 0x7400);
+    let b0 = g.make_block(0);
+
+    let op1 = g.make_op(OpCode::CPUI_COPY, 1);
+    let vn_shx = g.register_out(4, 0x10, &op1);
+    let c1 = g.constant(4, 0x51);
+    g.set_input(&op1, &c1, 0);
+    g.insert_end(&op1, &b0);
+    let op2 = g.make_op(OpCode::CPUI_COPY, 1);
+    let vn_f2 = g.register_out(4, 0x18, &op2);
+    let c2 = g.constant(4, 0x52);
+    g.set_input(&op2, &c2, 0);
+    g.insert_end(&op2, &b0);
+    let op3 = g.make_op(OpCode::CPUI_FLOAT_TRUNC, 1);
+    let t_f = g.register_out(4, 0x30, &op3);
+    g.set_input(&op3, &vn_f2, 0);
+    g.insert_end(&op3, &b0);
+    let op4 = g.make_op(OpCode::CPUI_COPY, 1);
+    let vn_c = g.register_out(4, 0x38, &op4);
+    g.set_input(&op4, &vn_shx, 0);
+    g.insert_end(&op4, &b0);
+
+    g.run_actions(
+        "float_trunc_cast",
+        &["SHX", "F2", "TF", "C"],
+        &[vn_shx, vn_f2, t_f, vn_c],
+    );
+}
+
+// case_char_gate_null / case_char_gate_char: the 1-byte Int char
+// determination of type.cc:3619-3626. `register_char_core` mirrors the
+// Ghidra fixture's second architecture by mounting a TypeFactory with
+// deliberately custom-named non-ASCII/ASCII 1-byte INT core types. This
+// proves `Merge::factory_nochar_distinct` reads canonical factory identity,
+// not "int1"/"char" names. Without it (arch=None →
+// no factory registration) the null world applies: getBaseNoChar(1,INT)
+// IS getBase(1,INT) (type.cc:3624) and the 1-byte shift amount T1/SH1
+// merges like the 4-byte control; with it the registered type_nochar
+// differs from the char (type.cc:3220-3229) and the 1-byte pair is
+// rejected while T4/SH4 (size!=1) still merges.
+fn run_char_gate(case_name: &str, base: u64, register_char_core: bool) {
+    let mut g = Graph::new(case_name, base);
+    if register_char_core {
+        let mut arch = rugra::arch::Architecture::new();
+        let mut custom_factory = rugra::type_system::typefactory::TypeFactory::new(8);
+        custom_factory.clear();
+        custom_factory.set_core_type(
+            "signed_byte_custom",
+            1,
+            rugra::type_system::TypeMetatype::Int,
+            false,
+        );
+        custom_factory.set_core_type(
+            "ascii_glyph_custom",
+            1,
+            rugra::type_system::TypeMetatype::Int,
+            true,
+        );
+        custom_factory.cache_core_types();
+        let factory = std::sync::Arc::new(std::sync::RwLock::new(custom_factory));
+        arch.set_types(factory);
+        g.fd.set_arch(std::sync::Arc::new(arch));
+    }
+    let b0 = g.make_block(0);
+
+    let vn_big = {
+        let vn = g
+            .fd
+            .vbank
+            .create_with_space(8, AddressSpace::Register, 0x08);
+        g.fd.vbank.set_input(vn.clone()).expect("fresh input varnode");
+        vn
+    };
+    let op1 = g.make_op(OpCode::CPUI_COPY, 1);
+    let vn_sh1 = g.register_out(1, 0x10, &op1);
+    let c1 = g.constant(1, 0x61);
+    g.set_input(&op1, &c1, 0);
+    g.insert_end(&op1, &b0);
+    let op2 = g.make_op(OpCode::CPUI_COPY, 1);
+    let vn_sh4 = g.register_out(4, 0x20, &op2);
+    let c2 = g.constant(4, 0x62);
+    g.set_input(&op2, &c2, 0);
+    g.insert_end(&op2, &b0);
+    let op3 = g.make_op(OpCode::CPUI_INT_LEFT, 2);
+    let t1 = g.register_out(1, 0x30, &op3);
+    g.set_input(&op3, &vn_big, 0);
+    g.set_input(&op3, &vn_sh1, 1);
+    g.insert_end(&op3, &b0);
+    let op4 = g.make_op(OpCode::CPUI_INT_LEFT, 2);
+    let t4 = g.register_out(4, 0x38, &op4);
+    g.set_input(&op4, &vn_big, 0);
+    g.set_input(&op4, &vn_sh4, 1);
+    g.insert_end(&op4, &b0);
+
+    g.run_actions(
+        case_name,
+        &["SH1", "T1", "SH4", "T4"],
+        &[vn_sh1, t1, vn_sh4, t4],
+    );
+}
+
 fn main() {
     run_copy_shadow_ladder();
     run_disjoint_copy();
     run_pipeline_tail();
     run_type_gate();
+    run_float_trunc_cast();
+    run_char_gate("char_gate_null", 0x7500, false);
+    run_char_gate("char_gate_char", 0x7600, true);
 }

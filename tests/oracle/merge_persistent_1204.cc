@@ -13,15 +13,15 @@
  *   ActionMergeAdjacent (coreaction.hh:381: mergeAdjacent)
  *
  * Every apply() dereferences data.getMerge() — the by-value Funcdata member
- * `covermerge` (funcdata.hh:96) — so the HighIntersectTest cache entries,
- * pending COPY trims and the lazily built Varnode/HighVariable covers
- * produced by one Action are observable preconditions of the next.  The
- * projections printed after each stage expose exactly those channels:
+ * `covermerge` (funcdata.hh:96).  This fixture currently projects only:
  *
- *   cache_entries  fd.getMerge().testCache.highedgemap.size()
- *   trims          fd.getMerge().copyTrims.size()
  *   high grouping  numInstances + shared-HighVariable identity booleans
  *   covers         per-Varnode rebuilt Cover as [blk:uindex-uindex,...]
+ *
+ * It does NOT print testCache/copyTrims/protoPartial state or clear-lifecycle
+ * transitions.  Those channels remain outside this projection and are bound
+ * to MERGE-PERSISTENCE-CHANNELS-0001 and its child TODOs.  A byte-identical
+ * line here must not be interpreted as proof of the full persistent state.
  *
  * case_copy_shadow_ladder: two COPYs from one source whose outputs'
  * read-ranges interleave.  Ghidra's transitive Varnode::copyShadow
@@ -39,6 +39,18 @@
  * tail including ActionMergeType's mergeByDatatype (coreaction.hh:414-415)
  * on the one persistent getMerge() object, so the cross-Action channel
  * hand-off itself is under observation end to end.
+ *
+ * case_type_gate / case_float_trunc_cast / case_char_gate_null /
+ * case_char_gate_char: the merge.cc:1001 canonical local-type gate.  The
+ * shift-amount slot override (typeop.cc:1513-1514 getBaseNoChar) and the
+ * FLOAT_TRUNC ctor pair (typeop.cc:1913 (TYPE_INT,TYPE_FLOAT)) are pinned
+ * across BOTH core-type registration worlds of type.cc:3619-3626: with no
+ * registered 1-byte INT core type (type_nochar null, type.cc:3131) the
+ * nochar lookup IS the plain base (type.cc:3624) and even a 1-byte shift
+ * amount passes the gate; with the production "int1"+"char" pair
+ * (sleigh_arch.cc:204-241) the registered type_nochar differs from the
+ * ASCII char in typecache[1][INT] (type.cc:3220-3229) and the 1-byte pair
+ * is rejected while size!=1 pairs still pass.
  */
 
 #include <bits/stdc++.h>
@@ -121,7 +133,17 @@ protected:
   void modifySpaces(Translate *) override {}
   void resolveArchitecture(void) override {}
 public:
-  FixtureArchitecture() {
+  // char_core_types uses deliberately custom names for the same properties
+  // as the production SLEIGH core-type pair (sleigh_arch.cc:204-241), proving
+  // the type.cc:3619-3626 decision is property/identity based, not name based:
+  // the non-ASCII 1-byte TYPE_INT fills type_nochar (type.cc:3220-3221),
+  // while the ASCII char-print TYPE_INT claims
+  // typecache[1][TYPE_INT] (type.cc:3225-3229), so getBaseNoChar(1,
+  // TYPE_INT) != getBase(1, TYPE_INT). The default (false) keeps the
+  // original registration where no 1-byte INT core type exists at all and
+  // type_nochar stays null (type.cc:3131) — getBaseNoChar falls through to
+  // the plain base (type.cc:3624) and the two are the same pointer.
+  FixtureArchitecture(bool char_core_types = false) {
     FixtureTranslate *fixtureTranslate = new FixtureTranslate();
     translate = fixtureTranslate;
     copySpaces(fixtureTranslate);
@@ -132,6 +154,10 @@ public:
     types->setCoreType("xunknown2",2,TYPE_UNKNOWN,false);
     types->setCoreType("xunknown4",4,TYPE_UNKNOWN,false);
     types->setCoreType("xunknown8",8,TYPE_UNKNOWN,false);
+    if (char_core_types) {
+      types->setCoreType("signed_byte_custom",1,TYPE_INT,false);
+      types->setCoreType("ascii_glyph_custom",1,TYPE_INT,true);
+    }
     types->cacheCoreTypes();
     TypeOp::registerInstructions(inst,types,translate);
     symboltab = new Database(this,false);
@@ -480,6 +506,86 @@ void runTypeGate(FixtureArchitecture &arch)
   g.runActions("type_gate", names, vns);
 }
 
+// case_float_trunc_cast: isolates the merge.cc:1001 FLOAT_TRUNC gate entry.
+// The op is cast-shaped (same 4-byte size on input and output), so a wrong
+// ctor-table pair like (TYPE_INT, TYPE_INT) would let the gate pass and TF
+// would merge with F2 at mergeadjacent exactly like the control COPY pair
+// SHX/C merges at mergecopy; with the locked pair (TYPE_INT, TYPE_FLOAT)
+// (typeop.cc:1913) the gate rejects the pair and TF stays alone.
+void runFloatTruncCast(FixtureArchitecture &arch)
+{
+  Graph g(arch, "float_trunc_cast", 0x7400);
+  BlockBasic *b0 = g.makeBlock();
+
+  PcodeOp *op1 = g.makeOp(CPUI_COPY, 1);
+  Varnode *vnShx = g.registerOut(4, 0x10, op1);
+  g.setInput(op1, g.constant(4, 0x51), 0);
+  g.insertEnd(op1, b0);
+  PcodeOp *op2 = g.makeOp(CPUI_COPY, 1);
+  Varnode *vnF2 = g.registerOut(4, 0x18, op2);
+  g.setInput(op2, g.constant(4, 0x52), 0);
+  g.insertEnd(op2, b0);
+  PcodeOp *op3 = g.makeOp(CPUI_FLOAT_TRUNC, 1);
+  Varnode *tF = g.registerOut(4, 0x30, op3);
+  g.setInput(op3, vnF2, 0);
+  g.insertEnd(op3, b0);
+  PcodeOp *op4 = g.makeOp(CPUI_COPY, 1);
+  Varnode *vnC = g.registerOut(4, 0x38, op4);
+  g.setInput(op4, vnShx, 0);
+  g.insertEnd(op4, b0);
+
+  vector<string> names;
+  names.push_back("SHX"); names.push_back("F2"); names.push_back("TF"); names.push_back("C");
+  vector<Varnode *> vns;
+  vns.push_back(vnShx); vns.push_back(vnF2); vns.push_back(tF); vns.push_back(vnC);
+  g.runActions("float_trunc_cast", names, vns);
+}
+
+// case_char_gate_null / case_char_gate_char: the 1-byte Int char
+// determination of type.cc:3619-3626. The same graph runs under two core-
+// type registrations; only the INT_LEFT shift-amount slots observe the
+// difference (typeop.cc:1513-1514 slot-1 getBaseNoChar):
+//   - null world (no 1-byte INT core type): type_nochar stays null
+//     (type.cc:3131), so getBaseNoChar(1,TYPE_INT) IS getBase(1,TYPE_INT)
+//     (type.cc:3624) — the gate passes and T1 merges with its 1-byte shift
+//     amount SH1, exactly like the 4-byte control T4/SH4.
+//   - char world ("int1"+"char" registered, sleigh_arch.cc:204-241):
+//     type_nochar = "int1" (type.cc:3220-3221) while typecache[1][INT] is
+//     the ASCII "char" (type.cc:3228-3229), so the pointers differ — the
+//     gate REJECTS the 1-byte pair (T1 stays alone) while the 4-byte
+//     control T4/SH4 (getBaseNoChar(4,INT) == getBase(4,INT)) still merges.
+void runCharGate(FixtureArchitecture &arch, const string &caseName, uintb base)
+{
+  Graph g(arch, caseName, base);
+  BlockBasic *b0 = g.makeBlock();
+
+  Varnode *vnBig = g.inputReg(0x08, 8);
+  PcodeOp *op1 = g.makeOp(CPUI_COPY, 1);
+  Varnode *vnSh1 = g.registerOut(1, 0x10, op1);
+  g.setInput(op1, g.constant(1, 0x61), 0);
+  g.insertEnd(op1, b0);
+  PcodeOp *op2 = g.makeOp(CPUI_COPY, 1);
+  Varnode *vnSh4 = g.registerOut(4, 0x20, op2);
+  g.setInput(op2, g.constant(4, 0x62), 0);
+  g.insertEnd(op2, b0);
+  PcodeOp *op3 = g.makeOp(CPUI_INT_LEFT, 2);
+  Varnode *t1 = g.registerOut(1, 0x30, op3);
+  g.setInput(op3, vnBig, 0);
+  g.setInput(op3, vnSh1, 1);
+  g.insertEnd(op3, b0);
+  PcodeOp *op4 = g.makeOp(CPUI_INT_LEFT, 2);
+  Varnode *t4 = g.registerOut(4, 0x38, op4);
+  g.setInput(op4, vnBig, 0);
+  g.setInput(op4, vnSh4, 1);
+  g.insertEnd(op4, b0);
+
+  vector<string> names;
+  names.push_back("SH1"); names.push_back("T1"); names.push_back("SH4"); names.push_back("T4");
+  vector<Varnode *> vns;
+  vns.push_back(vnSh1); vns.push_back(t1); vns.push_back(vnSh4); vns.push_back(t4);
+  g.runActions(caseName, names, vns);
+}
+
 } // namespace
 
 int main()
@@ -492,6 +598,10 @@ int main()
     runDisjointCopy(architecture);
     runPipelineTail(architecture);
     runTypeGate(architecture);
+    runFloatTruncCast(architecture);
+    runCharGate(architecture, "char_gate_null", 0x7500);
+    FixtureArchitecture charArchitecture(true);
+    runCharGate(charArchitecture, "char_gate_char", 0x7600);
   }
   catch(const LowlevelError &error) {
     cerr << error.explain << '\n';

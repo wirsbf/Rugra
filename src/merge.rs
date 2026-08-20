@@ -311,7 +311,7 @@ enum LocalTypeKey {
     /// `TypeFactory::getBaseNoChar(size, metatype)` — returns the SAME
     /// canonical entry as the plain base except for the single
     /// `(size==1, TYPE_INT, type_nochar registered)` case (type.cc:3619-
-    /// 3626); see the manual PartialEq below. Shift-amount slots
+    /// 3626); see `local_type_key_eq` below. Shift-amount slots
     /// (typeop.cc:1510-1516/1535-1541/1600-1606).
     BaseNoChar(TypeMetatype, usize),
     /// `TypeFactory::getTypeCode()` (INDIRECT slot 1, typeop.cc:1992-1998).
@@ -319,35 +319,31 @@ enum LocalTypeKey {
 }
 
 // Ghidra: type.cc:3619-3626 TypeFactory::getBaseNoChar
-/// Canonical-pointer equality: `getBaseNoChar(s, m)` returns the
+/// Canonical-pointer equality between two local-type keys, exactly as the
+/// `ct != op->inputTypeLocal(i)` Datatype-pointer comparison
+/// (merge.cc:1001) observes it. `getBaseNoChar(s, m)` returns the
 /// distinguished `type_nochar` entry ONLY for `(s==1, TYPE_INT,
-/// type_nochar registered)` and `getBase(s, m)` otherwise — the very same
-/// pointer. So a `BaseNoChar` key equals the plain `Base` at the same
-/// (metatype, size) except for the registered 1-byte int. The fixture
-/// architecture registers no 1-byte TYPE_INT core type (type_nochar stays
-/// null, type.cc:3131/3220-3222), where even the size-1 case collapses to
-/// the plain base; production csps register it, so the distinction is kept
-/// for `(Int, 1)`.
-impl PartialEq for LocalTypeKey {
-    // Ghidra: type.cc:3619-3626 TypeFactory::getBaseNoChar (canonical identity)
-    fn eq(&self, other: &Self) -> bool {
-        use TypeMetatype::Int;
-        match (self, other) {
-            (LocalTypeKey::BaseNoChar(m1, s1), LocalTypeKey::Base(m2, s2))
-            | (LocalTypeKey::Base(m2, s2), LocalTypeKey::BaseNoChar(m1, s1)) => {
-                *m1 == *m2 && *s1 == *s2 && !(*s1 == 1 && *m1 == Int)
-            }
-            (LocalTypeKey::Base(m1, s1), LocalTypeKey::Base(m2, s2)) => {
-                *m1 == *m2 && *s1 == *s2
-            }
-            (LocalTypeKey::BaseNoChar(m1, s1), LocalTypeKey::BaseNoChar(m2, s2)) => {
-                *m1 == *m2 && *s1 == *s2
-            }
-            _ => false,
+/// type_nochar registered)` (type.cc:3622-3623) and `getBase(s, m)`
+/// otherwise — the very same pointer — so a `BaseNoChar` key equals the
+/// plain `Base` at the same (metatype, size) except at the registered
+/// 1-byte int. Whether the factory distinguishes that pair is
+/// architecture state (the registered core-type set filled by
+/// `TypeFactory::cacheCoreTypes`, type.cc:3200-3248), resolved per
+/// mergeAdjacent walk by `factory_nochar_distinct` below.
+fn local_type_key_eq(a: &LocalTypeKey, b: &LocalTypeKey, nochar_distinct: bool) -> bool {
+    use TypeMetatype::Int;
+    match (a, b) {
+        (LocalTypeKey::BaseNoChar(m1, s1), LocalTypeKey::Base(m2, s2))
+        | (LocalTypeKey::Base(m2, s2), LocalTypeKey::BaseNoChar(m1, s1)) => {
+            *m1 == *m2 && *s1 == *s2 && !(*s1 == 1 && *m1 == Int && nochar_distinct)
         }
+        (LocalTypeKey::Base(m1, s1), LocalTypeKey::Base(m2, s2))
+        | (LocalTypeKey::BaseNoChar(m1, s1), LocalTypeKey::BaseNoChar(m2, s2)) => {
+            *m1 == *m2 && *s1 == *s2
+        }
+        _ => false,
     }
 }
-impl Eq for LocalTypeKey {}
 
 // Ghidra: funcdata.hh:96 Funcdata::covermerge (member declaration)
 /// Persistent cross-Action merge state, mounted as a `Funcdata` member.
@@ -2891,6 +2887,13 @@ impl Merge {
     pub fn merge_adjacent(&mut self, fd: &mut Funcdata) {
         self.attach(fd);
 
+        // Ghidra merge.cc:999: ct = op->outputTypeLocal() — every local
+        // type resolves through the architecture's TypeFactory, so the
+        // (1, TYPE_INT) nochar distinction is factory registration state
+        // (type.cc:3200-3248/3619-3626), fixed for the whole walk like the
+        // factory it reads.
+        let nochar_distinct = Self::factory_nochar_distinct(fd);
+
         // Gather (op, out, inputs) for every alive non-call op with a
         // cover-eligible output.
         let adjacent_pairs: Vec<(crate::op::PcodeOpRef, Arc<RwLock<Varnode>>, Vec<Arc<RwLock<Varnode>>>)> = fd
@@ -2938,7 +2941,7 @@ impl Merge {
                 }
                 // Ghidra merge.cc:1001: only merge if the local types should
                 // be the same (ct != op->inputTypeLocal(i) → skip).
-                if !Self::adjacent_local_types_match(&op_ref, slot_index) {
+                if !Self::adjacent_local_types_match(&op_ref, slot_index, nochar_distinct) {
                     continue;
                 }
                 if in_size != out_size {
@@ -3142,10 +3145,60 @@ impl Merge {
     // Ghidra: merge.cc:1001 mergeAdjacent local-type gate
     /// `if (ct != op->inputTypeLocal(i)) continue;` — compare the two
     /// factory-canonical keys for identity. Equal iff same factory entry
-    /// (kind + metatype + size), which is exactly the Ghidra pointer
-    /// comparison of TypeFactory-canonical Datatype objects.
-    fn adjacent_local_types_match(op: &crate::op::PcodeOpRef, slot: usize) -> bool {
-        Self::output_type_local_key(op) == Self::input_type_local_key(op, slot)
+    /// (kind + metatype + size), with the registered 1-byte-int nochar
+    /// distinction resolved from the effective TypeFactory
+    /// (`factory_nochar_distinct`).
+    fn adjacent_local_types_match(
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        nochar_distinct: bool,
+    ) -> bool {
+        local_type_key_eq(
+            &Self::output_type_local_key(op),
+            &Self::input_type_local_key(op, slot),
+            nochar_distinct,
+        )
+    }
+
+    // Ghidra: type.cc:3200-3248 TypeFactory::cacheCoreTypes
+    /// Whether the effective TypeFactory distinguishes
+    /// `getBaseNoChar(1, TYPE_INT)` from `getBase(1, TYPE_INT)` — i.e.
+    /// whether the merge.cc:1001 pointer gate treats a 1-byte int shift
+    /// amount as different from the 1-byte int output local type.
+    ///
+    /// `cacheCoreTypes` fills `type_nochar` from a registered core 1-byte
+    /// non-ASCII TYPE_INT (type.cc:3220-3221), while an ASCII 1-byte char
+    /// claims `typecache[1][TYPE_INT]` ("Char is preferred over other int
+    /// types", type.cc:3225-3229); with no ASCII char registered the
+    /// non-ASCII 1-byte int itself fills that cache slot
+    /// (type.cc:3240-3242), making `getBase(1,TYPE_INT)` the very same
+    /// pointer as `type_nochar` (equal). So the two pointers differ
+    /// exactly when the factory registers BOTH a 1-byte char-print INT
+    /// core type AND a non-char 1-byte INT core type — the production
+    /// SLEIGH defaults ("char" + "int1", sleigh_arch.cc:204-241). With no
+    /// such registrations `type_nochar` stays null (type.cc:3131) and
+    /// `getBaseNoChar` falls through to the plain base (type.cc:3624).
+    ///
+    /// The result is derived from the two actual canonical factory entries,
+    /// never from core-type names.  This preserves custom core names and the
+    /// DatatypeSet/cache traversal decision made by `cache_core_types`.
+    fn factory_nochar_distinct(fd: &Funcdata) -> bool {
+        let Some(factory) = fd.get_arch().and_then(|arch| arch.types.clone()) else {
+            // No attached factory = no core-type registration = null
+            // type_nochar world (type.cc:3131): the gate falls through to
+            // plain-base identity.
+            return false;
+        };
+        let factory = factory
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(base) = factory.get_base(1, TypeMetatype::Int) else {
+            return false;
+        };
+        let Some(nochar) = factory.get_base_no_char(1, TypeMetatype::Int) else {
+            return false;
+        };
+        !Arc::ptr_eq(&base, &nochar)
     }
 
     // Ghidra: merge.cc:359 Merge::mergeByDatatype
@@ -4290,6 +4343,76 @@ mod tests {
             !Arc::ptr_eq(&h1, &h2),
             "single-entry symbol varnodes must NOT be merged by merge_multi_entry"
         );
+    }
+
+    /// Regression-only checks (Rugra side; oracle proof lives in
+    /// tests/oracle/merge_persistent_1204): `local_type_key_eq` mirrors
+    /// getBaseNoChar canonical identity (type.cc:3619-3626) — the
+    /// BaseNoChar/Base pair differs ONLY at (Int, 1) and ONLY when the
+    /// factory registers both the ASCII 1-byte char and the non-ASCII
+    /// 1-byte int (type.cc:3220-3242).
+    #[test]
+    fn test_local_type_key_eq_nochar_semantics() {
+        use TypeMetatype::{Float, Int};
+
+        let base_int1 = LocalTypeKey::Base(Int, 1);
+        let nochar_int1 = LocalTypeKey::BaseNoChar(Int, 1);
+        // Null-type_nochar world (type.cc:3624 fallthrough): same pointer.
+        assert!(local_type_key_eq(&base_int1, &nochar_int1, false));
+        assert!(local_type_key_eq(&nochar_int1, &base_int1, false));
+        // Registered char+int1 world (type.cc:3622-3623): typecache[1][INT]
+        // is the char, getBaseNoChar returns type_nochar — different.
+        assert!(!local_type_key_eq(&base_int1, &nochar_int1, true));
+        assert!(!local_type_key_eq(&nochar_int1, &base_int1, true));
+        // Same-kind identity holds in both worlds.
+        assert!(local_type_key_eq(&nochar_int1, &nochar_int1, true));
+        assert!(local_type_key_eq(&base_int1, &base_int1, true));
+        // Sizes != 1: getBaseNoChar IS getBase (type.cc:3624).
+        assert!(local_type_key_eq(
+            &LocalTypeKey::Base(Int, 4),
+            &LocalTypeKey::BaseNoChar(Int, 4),
+            true
+        ));
+        // Non-INT metatypes at size 1: the type_nochar guard needs
+        // m == TYPE_INT (type.cc:3622).
+        assert!(local_type_key_eq(
+            &LocalTypeKey::Base(Float, 1),
+            &LocalTypeKey::BaseNoChar(Float, 1),
+            true
+        ));
+    }
+
+    /// The nochar distinction is the effective factory's actual canonical
+    /// identity relation. These tests cover no factory, the default single
+    /// non-char INT1 (equal), and custom-named non-char+ASCII INT1 (distinct).
+    /// Multiple non-char ordering is covered by typefactory_local_cache_1204.
+    #[test]
+    fn test_factory_nochar_distinct_registration_state() {
+        let fd = Funcdata::new("nochar_null", Address::new(0x7100), 0x80);
+        assert!(!Merge::factory_nochar_distinct(&fd));
+
+        let mut fd_int1_only = Funcdata::new("nochar_int1", Address::new(0x7101), 0x80);
+        let mut arch = crate::arch::Architecture::new();
+        arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        )));
+        fd_int1_only.set_arch(std::sync::Arc::new(arch));
+        // TypeFactory::new registers "int1" but no ASCII char: the
+        // non-ASCII int fills typecache[1][INT] itself (type.cc:3240-3242),
+        // so getBase(1,INT) == type_nochar — NOT distinct.
+        assert!(!Merge::factory_nochar_distinct(&fd_int1_only));
+
+        let mut fd_char = Funcdata::new("nochar_char", Address::new(0x7102), 0x80);
+        let mut arch = crate::arch::Architecture::new();
+        let mut custom_factory = crate::type_system::typefactory::TypeFactory::new(8);
+        custom_factory.clear();
+        custom_factory.set_core_type("signed_byte_custom", 1, TypeMetatype::Int, false);
+        custom_factory.set_core_type("ascii_glyph_custom", 1, TypeMetatype::Int, true);
+        custom_factory.cache_core_types();
+        let factory = std::sync::Arc::new(std::sync::RwLock::new(custom_factory));
+        arch.set_types(factory);
+        fd_char.set_arch(std::sync::Arc::new(arch));
+        assert!(Merge::factory_nochar_distinct(&fd_char));
     }
 
 }

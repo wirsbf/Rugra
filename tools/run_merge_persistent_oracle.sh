@@ -31,7 +31,7 @@ clean_path=/usr/bin:/bin
 rust_toolchain=nightly-x86_64-unknown-linux-gnu
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=e87ebfc54444d5f043a321ea1a46e3c8004eff23
+rugra_base_commit=a4a2fe947e9798beccdf8c1b10641ad5c7a5e1e0
 ghidra_root="$repo_root/ghidra"
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
 host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
@@ -62,9 +62,10 @@ trap cleanup EXIT HUP INT TERM
 # Snapshot every live candidate exactly once before hashing or compiling. The
 # runner itself is read from the already-open immutable descriptor above.
 # NOTE: src/funcdata.rs is deliberately NOT snapshotted from the working tree
-# — it carries unrelated in-flight leases. The pinned overlay is reconstructed
-# inside this runner from rugra_base_commit:src/funcdata.rs plus exactly the
-# four MERGE-PERSISTENT-STATE-0001 hunks, and hash-verified against metadata.
+# — it carries unrelated in-flight leases. The pinned base commit carries the
+# committed Funcdata merge_state mount (7046998: field/ctor/clear hook) and
+# the assignHigh calcCover premise (funcdata_varnode.cc:52-53), so the base
+# blob is used verbatim; only src/merge.rs is overlaid from this lease.
 /usr/bin/mkdir -p "$oracle_tmp/candidate"
 for candidate in \
   tests/oracle/merge_persistent_1204.metadata.json \
@@ -106,7 +107,7 @@ fi
 
 # Freeze both sides: rebuild Ghidra from the locked commit, and build Rugra
 # from the pinned base commit with only the owned merge.rs candidate overlaid
-# plus the reconstructed funcdata.rs mount overlay.
+# (funcdata.rs comes verbatim from the base: the mount is committed there).
 /usr/bin/mkdir -p "$oracle_tmp/ghidra" "$oracle_tmp/rugra"
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
   "$host_git_bin" -C "$ghidra_root" archive --format=tar "$oracle_commit" -- \
@@ -118,74 +119,6 @@ fi
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
   | /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -x -C "$oracle_tmp/rugra"
 /usr/bin/cp -- "$merge_source" "$oracle_tmp/rugra/src/merge.rs"
-
-# Reconstruct the funcdata.rs overlay: pinned base blob + the four
-# MERGE-PERSISTENT-STATE-0001 hunks, fail-closed on any anchor mismatch.
-/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
-  "$host_git_bin" -C "$repo_root" show "$rugra_base_commit:src/funcdata.rs" \
-  > "$oracle_tmp/candidate/funcdata_base.rs"
-/usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S - \
-  "$oracle_tmp/candidate/funcdata_base.rs" \
-  "$oracle_tmp/rugra/src/funcdata.rs" \
-  "$metadata" <<'PYRECON'
-import hashlib, json, pathlib, sys
-
-base_path, out_path, metadata_path = sys.argv[1:]
-base = pathlib.Path(base_path).read_text(encoding="utf-8")
-metadata = json.loads(pathlib.Path(metadata_path).read_text(encoding="utf-8"))
-
-h_field = (
-    "\n"
-    "    /// Persistent cross-Action merge state (testCache / copyTrims / live\n"
-    "    /// premise). Faithful to `Funcdata::covermerge` (funcdata.hh:96): the\n"
-    "    /// by-value `Merge` member constructed with \\b this (funcdata.cc:39),\n"
-    "    /// shared by every merge-family Action via `getMerge()`\n"
-    "    /// (funcdata.hh:440), and cleared only by `Funcdata::clear()`\n"
-    "    /// (funcdata.cc:108). Rugra's merge Actions construct local `Merge`\n"
-    "    /// instances, so only the persistent channels are mounted here; see\n"
-    "    /// `merge::MergePersistentState`.\n"
-    "    pub merge_state: crate::merge::MergePersistentState,\n"
-)
-anchor_field = "    /// SSA construction manager\n    pub heritage: Heritage,\n"
-h_ctor = (
-    "            merge_state: crate::merge::MergePersistentState::default(),\n"
-)
-anchor_ctor = "            heritage: Heritage::new(),\n"
-h_clear = (
-    "        // Ghidra funcdata.cc:108: covermerge.clear()\n"
-    "        self.merge_state.clear();\n"
-)
-anchor_clear = "        self.heritage.clear();\n"
-h_cover = (
-    "            // Ghidra funcdata_varnode.cc:52-53 (setHighLevel \u2192 assignHigh):\n"
-    "            // if (vn->hasCover()) vn->calcCover(); \u2014 allocate the Cover and\n"
-    "            // mark it dirty so the merge-family Actions' lazy updateCover\n"
-    "            // (HighIntersectTest::updateHigh) can rebuild it. Without this\n"
-    "            // the standalone merge Actions run on a null-cover premise.\n"
-    "            if vn_arc.read().unwrap().has_cover() {\n"
-    "                vn_arc.write().unwrap().calc_cover();\n"
-    "            }\n"
-)
-anchor_cover = (
-    "            let high = Arc::new(RwLock::new(HighVariable::new(dt)));\n"
-    "            high.write().unwrap().add_instance(vn_arc.clone());"
-)
-
-for anchor in (anchor_field, anchor_ctor, anchor_clear, anchor_cover):
-    if base.count(anchor) != 1:
-        raise SystemExit(f"funcdata overlay anchor not unique in pinned base: {anchor[:60]!r}")
-
-overlay = base.replace(anchor_field, anchor_field + h_field, 1)
-overlay = overlay.replace(anchor_ctor, anchor_ctor + h_ctor, 1)
-overlay = overlay.replace(anchor_clear, anchor_clear + h_clear, 1)
-overlay = overlay.replace(anchor_cover, h_cover + anchor_cover, 1)
-
-actual = hashlib.sha256(overlay.encode()).hexdigest()
-expected = metadata["comparand"]["funcdata_overlay_sha256"]
-if actual != expected:
-    raise SystemExit(f"funcdata overlay reconstruction hash mismatch: {expected} != {actual}")
-pathlib.Path(out_path).write_text(overlay, encoding="utf-8")
-PYRECON
 
 /usr/bin/mkdir -p "$oracle_tmp/rugra/ghidra/Ghidra/Features/Decompiler/src/decompile"
 /usr/bin/ln -s "$oracle_tmp/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp" \
@@ -223,12 +156,20 @@ if metadata["oracle"]["tag"] != oracle_tag or metadata["oracle"]["commit"] != or
     raise SystemExit("metadata oracle mismatch")
 if metadata["rugra_base_commit"] != rugra_base_commit:
     raise SystemExit("metadata Rugra base commit mismatch")
-if metadata["overall_status"] != "MATCH":
-    raise SystemExit("fixture must remain MATCH overall (17/17 lines)")
+if metadata["overall_status"] != "MISMATCH":
+    raise SystemExit("fixture must remain MISMATCH overall until registered residuals close")
+if metadata.get("projection_status") != "MATCH":
+    raise SystemExit("covered 29-line projection must remain MATCH")
 if metadata["coverage"]["copy_shadow_ladder_full_sequence"] != "MATCH":
     raise SystemExit("copy_shadow_ladder coverage must be MATCH")
 if metadata["coverage"]["pipeline_tail_full_sequence_with_merge_all_entry"] != "MATCH":
     raise SystemExit("pipeline_tail coverage must be MATCH")
+if metadata["coverage"].get("float_trunc_cast_gate_reject") != "MATCH":
+    raise SystemExit("float_trunc_cast coverage must be MATCH")
+if metadata["coverage"].get("char_gate_null_world_size1_pass") != "MATCH":
+    raise SystemExit("char_gate_null coverage must be MATCH")
+if metadata["coverage"].get("char_gate_registered_world_size1_reject") != "MATCH":
+    raise SystemExit("char_gate_char coverage must be MATCH")
 for field in ("architecture", "compiler_spec", "analysis_options", "input_manifest"):
     if not metadata.get(field):
         raise SystemExit(f"missing oracle descriptor: {field}")
@@ -424,8 +365,8 @@ native_dir=$(/usr/bin/dirname "$native_archive")
   2>"$oracle_tmp/rugra.stderr"
 test ! -s "$oracle_tmp/ghidra.stderr"
 test ! -s "$oracle_tmp/rugra.stderr"
-test "$(wc -l < "$oracle_tmp/ghidra.stdout")" -eq 17
-test "$(wc -l < "$oracle_tmp/rugra.stdout")" -eq 17
+test "$(wc -l < "$oracle_tmp/ghidra.stdout")" -eq 29
+test "$(wc -l < "$oracle_tmp/rugra.stdout")" -eq 29
 
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S - \
   "$metadata" "$oracle_tmp/ghidra.stdout" "$oracle_tmp/rugra.stdout" <<'PYVERDICT'
@@ -447,17 +388,17 @@ if rugra_sha != metadata["comparand"]["expected_rugra_stdout_sha256"]:
 ghidra_lines = ghidra_out.decode().splitlines()
 rugra_lines = rugra_out.decode().splitlines()
 match_lines = sum(1 for g, r in zip(ghidra_lines, rugra_lines) if g == r)
-print(f"covered_projection={match_lines}/17 lines byte-identical")
+print(f"covered_projection={match_lines}/29 lines byte-identical")
 for g, r in zip(ghidra_lines, rugra_lines):
     if g != r:
         print(f"MISMATCH ghidra: {g}")
         print(f"MISMATCH rugra:  {r}")
-if match_lines != 17:
-    raise SystemExit("fixture regression: projection no longer 17/17")
+if match_lines != 29:
+    raise SystemExit("fixture regression: projection no longer 29/29")
 PYVERDICT
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'merge_persistent_1204: covered_projection=17/17 overall_status=MATCH\n'
-printf 'persistent_premise=MATCH: attach_depth counter + Funcdata merge_state mount; nested merge_all entry covered by pipeline_tail\n'
-printf 'gates=MATCH: mergeTestAdjacent (merge.cc:175-218) + outputTypeLocal==inputTypeLocal (:1001) wired; high-cover union rebuild (variable.cc:660-663) absorbed from MERGE-HIGHCOVER-UNION-0001\n'
-printf 'residuals=marker/trim paths, testCache/copyTrims counters (default-private), Funcdata::clear lifecycle: UNTESTED at oracle level\n'
+printf 'merge_persistent_1204: covered_projection=29/29 projection_status=MATCH overall_status=MISMATCH\n'
+printf 'persistent_premise=UNTESTED: grouping/covers are bilateral; attach-depth/cache-size checks are Rust-only until MERGE-PERSISTENCE-CHANNELS-0001\n'
+printf 'gates=PARTIAL_MATCH: mergeTestAdjacent/FLOAT_TRUNC/custom-name nochar canonical Arc cases match; Java ZEXT and CPOOLREF remain MISMATCH\n'
+printf 'residuals=TYPEOP-LOCALTYPE-DISPATCH-0001,MERGE-PROTOPARTIAL-GROUP-0001,MERGE-COPYTRIMS-CACHE-0001,MERGE-MARKER-TRIM-0001,MERGE-CLEAR-LIFECYCLE-0001\n'
