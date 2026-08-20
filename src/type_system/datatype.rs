@@ -172,6 +172,39 @@ pub enum TypeMetatype {
     PartialUnion = 15,
 }
 
+// Ghidra: type.hh:103 sub_metatype
+/// Propagation-specific type ordering used by Ghidra's `Datatype::compare`.
+/// This mirrors Ghidra's `sub_metatype` exactly and is intentionally separate
+/// from Rugra's private `TypeMetatype` discriminants.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SubMetatype {
+    PartialUnion = 0,
+    Union = 1,
+    Struct = 2,
+    Array = 3,
+    PtrStruct = 4,
+    PtrRel = 5,
+    Ptr = 6,
+    PtrRelUnknown = 7,
+    Float = 8,
+    Code = 9,
+    Bool = 10,
+    UintUnicode = 11,
+    IntUnicode = 12,
+    UintEnum = 13,
+    UintPartialEnum = 14,
+    IntEnum = 15,
+    UintPlain = 16,
+    IntPlain = 17,
+    UintChar = 18,
+    IntChar = 19,
+    PartialStruct = 20,
+    Unknown = 21,
+    Spacebase = 22,
+    Void = 23,
+}
+
 /// Flags for Datatype properties (corresponds to the `Datatype` enum in
 /// type.hh:169-186). Values mirror Ghidra exactly.
 pub mod type_flags {
@@ -187,6 +220,7 @@ pub mod type_flags {
     pub const IS_PTRREL: u32 = 1 << 9;         // is_ptrrel
     pub const TYPE_INCOMPLETE: u32 = 1 << 10;  // type_incomplete
     pub const NEEDS_RESOLUTION: u32 = 1 << 11; // needs_resolution
+    pub const POINTER_TO_ARRAY: u32 = 1 << 16; // pointer_to_array
     // Bits 0x7000..0x8000 are `force_format` in Ghidra (3 display-format bits).
     // Bit 0x8000 is `truncate_bigendian`, 0x10000 is `pointer_to_array`,
     // 0x20000 is `warning_issued`. Ghidra has NO equate flag on Datatype —
@@ -293,6 +327,17 @@ pub type UnionResolveMap = std::collections::BTreeMap<
     crate::unionresolve::ResolvedUnion,
 >;
 
+// Ghidra: type.hh:647 TypePointerRel
+/// TypePointerRel-only state. Ghidra stores these fields on the derived
+/// `TypePointerRel`; Rugra keeps them with the pointer's base record so legacy
+/// `TypePointer` struct literals remain source-compatible.
+#[derive(Debug, Clone)]
+pub struct PointerRelState {
+    pub parent: Arc<Datatype>,
+    pub offset: i64,
+    pub stripped: Option<Arc<Datatype>>,
+}
+
 /// Base structure for all data types containing common fields
 #[derive(Debug, Clone)]
 pub struct TypeBase {
@@ -301,6 +346,12 @@ pub struct TypeBase {
     pub metatype: TypeMetatype,
     pub id: u64,
     pub flags: u32,
+    /// Concrete-class override for Ghidra's independently stored `submeta`.
+    pub submeta_override: Option<SubMetatype>,
+    /// Address space attached to a TypePointer, if any.
+    pub pointer_space: Option<AddressSpace>,
+    /// TypePointerRel parent/offset/stripped state, if this is relative.
+    pub pointer_rel: Option<PointerRelState>,
 }
 
 impl TypeBase {
@@ -312,7 +363,139 @@ impl TypeBase {
             metatype,
             id: 0,
             flags: 0,
+            submeta_override: None,
+            pointer_space: None,
+            pointer_rel: None,
         }
+    }
+
+    // Ghidra: type.hh:356 TypeChar::TypeChar
+    /// Construct a character base type with the exact char sub-metatype.
+    pub fn new_char(name: String, metatype: TypeMetatype) -> Self {
+        let mut base = Self::new(name, 1, metatype);
+        base.flags |= type_flags::CHARTYPE;
+        base.submeta_override = Some(if metatype == TypeMetatype::Uint {
+            SubMetatype::UintChar
+        } else {
+            SubMetatype::IntChar
+        });
+        base
+    }
+
+    // Ghidra: type.cc:861 TypeUnicode::TypeUnicode
+    /// Construct a Unicode base type, preserving the Unicode sub-metatype even
+    /// for the 1-byte form whose only display flag is `chartype`.
+    pub fn new_unicode(name: String, size: usize, metatype: TypeMetatype) -> Self {
+        let mut base = Self::new(name, size, metatype);
+        if size == 1 {
+            base.flags |= type_flags::CHARTYPE;
+        } else if size == 2 {
+            base.flags |= type_flags::UTF16;
+        } else if size == 4 {
+            base.flags |= type_flags::UTF32;
+        }
+        base.submeta_override = Some(if metatype == TypeMetatype::Uint {
+            SubMetatype::UintUnicode
+        } else {
+            SubMetatype::IntUnicode
+        });
+        base
+    }
+}
+
+// Ghidra: type.cc:23 Datatype::base2sub
+/// Recover Ghidra's propagation sub-metatype for an atomic/base data-type.
+fn base_submeta(base: &TypeBase) -> SubMetatype {
+    if let Some(submeta) = base.submeta_override {
+        return submeta;
+    }
+    match base.metatype {
+        TypeMetatype::PartialUnion => SubMetatype::PartialUnion,
+        TypeMetatype::Union => SubMetatype::Union,
+        TypeMetatype::Struct => SubMetatype::Struct,
+        TypeMetatype::Array => SubMetatype::Array,
+        TypeMetatype::Pointer => SubMetatype::Ptr,
+        TypeMetatype::Float => SubMetatype::Float,
+        TypeMetatype::Code => SubMetatype::Code,
+        TypeMetatype::Bool => SubMetatype::Bool,
+        TypeMetatype::PartialEnum => SubMetatype::UintPartialEnum,
+        TypeMetatype::Enum => SubMetatype::IntEnum,
+        TypeMetatype::Uint => {
+            if (base.flags & type_flags::ENUMTYPE) != 0 {
+                SubMetatype::UintEnum
+            } else if (base.flags & (type_flags::UTF16 | type_flags::UTF32)) != 0 {
+                SubMetatype::UintUnicode
+            } else if (base.flags & type_flags::CHARTYPE) != 0 {
+                SubMetatype::UintChar
+            } else {
+                SubMetatype::UintPlain
+            }
+        }
+        TypeMetatype::Int => {
+            if (base.flags & type_flags::ENUMTYPE) != 0 {
+                SubMetatype::IntEnum
+            } else if (base.flags & (type_flags::UTF16 | type_flags::UTF32)) != 0 {
+                SubMetatype::IntUnicode
+            } else if (base.flags & type_flags::CHARTYPE) != 0 {
+                SubMetatype::IntChar
+            } else {
+                SubMetatype::IntPlain
+            }
+        }
+        TypeMetatype::PartialStruct => SubMetatype::PartialStruct,
+        TypeMetatype::Unknown => SubMetatype::Unknown,
+        TypeMetatype::Spacebase => SubMetatype::Spacebase,
+        TypeMetatype::Void => SubMetatype::Void,
+    }
+}
+
+// Ghidra: type.cc:1035 TypePointer::calcSubmeta
+/// Recover the pointer-specific sub-metatype calculated by Ghidra.
+fn pointer_submeta(pointer: &TypePointer) -> SubMetatype {
+    if let Some(submeta) = pointer.base.submeta_override {
+        return submeta;
+    }
+    if (pointer.base.flags & type_flags::IS_PTRREL) != 0 {
+        if (pointer.base.flags & type_flags::HAS_STRIPPED) != 0
+            && pointer.ptr_to.get_metatype() == TypeMetatype::Unknown
+        {
+            return SubMetatype::PtrRelUnknown;
+        }
+        return SubMetatype::PtrRel;
+    }
+    match pointer.ptr_to.as_ref() {
+        Datatype::Struct(structure)
+            if structure.fields.len() > 1
+                || (structure.base.flags & type_flags::TYPE_INCOMPLETE) != 0 =>
+        {
+            SubMetatype::PtrStruct
+        }
+        Datatype::Union(_) => SubMetatype::PtrStruct,
+        _ => SubMetatype::Ptr,
+    }
+}
+
+// Ghidra: type.hh:78 type_metatype
+/// Translate Rugra's private metatype values to the stored Ghidra values used
+/// by the first-level struct/union tie-break.
+fn ghidra_metatype_rank(datatype: &Datatype) -> i32 {
+    match datatype.get_metatype() {
+        TypeMetatype::PartialUnion => 0,
+        TypeMetatype::PartialStruct => 1,
+        TypeMetatype::PartialEnum => 13, // Stored as TYPE_UINT in Ghidra
+        TypeMetatype::Union => 3,
+        TypeMetatype::Struct => 4,
+        TypeMetatype::Enum => 14, // Rugra's default enum is signed
+        TypeMetatype::Array => 7,
+        TypeMetatype::Pointer => 9,
+        TypeMetatype::Float => 10,
+        TypeMetatype::Code => 11,
+        TypeMetatype::Bool => 12,
+        TypeMetatype::Uint => 13,
+        TypeMetatype::Int => 14,
+        TypeMetatype::Unknown => 15,
+        TypeMetatype::Spacebase => 16,
+        TypeMetatype::Void => 17,
     }
 }
 
@@ -403,6 +586,30 @@ impl Datatype {
             Datatype::PartialStruct(ps) => ps.base.metatype,
             Datatype::PartialEnum(pe) => pe.base.metatype,
             Datatype::PartialUnion(pu) => pu.base.metatype,
+        }
+    }
+
+    // Ghidra: type.hh:236 Datatype::getSubMeta
+    /// Get the propagation sub-metatype used by compare/compareDependency.
+    pub fn get_submeta(&self) -> SubMetatype {
+        match self {
+            Datatype::Pointer(pointer) => pointer_submeta(pointer),
+            Datatype::Array(_) => SubMetatype::Array,
+            Datatype::Struct(_) => SubMetatype::Struct,
+            Datatype::Enum(enumeration) => {
+                if enumeration.base.metatype == TypeMetatype::Uint {
+                    SubMetatype::UintEnum
+                } else {
+                    SubMetatype::IntEnum
+                }
+            }
+            Datatype::Union(_) => SubMetatype::Union,
+            Datatype::Code(_) => SubMetatype::Code,
+            Datatype::Spacebase(_) => SubMetatype::Spacebase,
+            Datatype::PartialStruct(_) => SubMetatype::PartialStruct,
+            Datatype::PartialEnum(_) => SubMetatype::UintPartialEnum,
+            Datatype::PartialUnion(_) => SubMetatype::PartialUnion,
+            Datatype::Void(base) | Datatype::Base(base) => base_submeta(base),
         }
     }
 
@@ -738,28 +945,18 @@ impl Datatype {
         }
     }
 
-    // Ghidra: type.hh:165 Datatype::typeOrder
+    // Ghidra: type.hh:283 Datatype::typeOrder
     /// Order this data-type with `other`. Negative if `self < other`,
     /// zero if equal, positive if `self > other`.
     /// Corresponds to Ghidra's `Datatype::typeOrder` (type.hh:283), which is a
-    /// thin wrapper over `Datatype::compare` (type.cc:212):
-    ///   - compare submeta (metatype), then size.
+    /// thin wrapper over virtual `Datatype::compare(other, 10)`.
     /// Used by varmap `RangeHint::preferred` to prefer more specific types.
     pub fn type_order(&self, other: &Datatype) -> i32 {
         // Identity shortcut (type.hh:283).
         if std::ptr::eq(self, other) {
             return 0;
         }
-        // metatype (submeta) ordering first.
-        let mt_a = self.get_metatype() as u8;
-        let mt_b = other.get_metatype() as u8;
-        if mt_a != mt_b {
-            return if mt_a < mt_b { -1 } else { 1 };
-        }
-        // Then size: Ghidra returns (op.size - size), i.e. smaller size first.
-        let sa = self.get_size();
-        let sb = other.get_size();
-        (sb as i32) - (sa as i32)
+        self.compare_at_level(other, 10)
     }
 
     // Ghidra: type.hh:916 Datatype::typeOrderBool
@@ -779,20 +976,18 @@ impl Datatype {
     }
 
     // Ghidra: type.cc:212 Datatype::compare
-    /// Compare two datatypes for structural equality.
-    /// Faithful to Datatype::compare (type.cc:212).
+    /// Invoke the concrete variant's virtual compare with propagation depth 10.
     pub fn compare(&self, other: &Datatype) -> i32 {
-        let self_meta = self.get_metatype() as i32;
-        let other_meta = other.get_metatype() as i32;
-        if self_meta != other_meta { return self_meta - other_meta; }
-        let self_size = self.get_size() as i32;
-        let other_size = other.get_size() as i32;
-        if self_size != other_size { return self_size - other_size; }
-        match self.get_name().cmp(other.get_name()) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Greater => 1,
-            std::cmp::Ordering::Equal => 0,
-        }
+        self.compare_at_level(other, 10)
+    }
+
+    // Ghidra: type.cc:212 Datatype::compare
+    /// Run the non-virtual base prefix used by concrete compare overrides.
+    fn compare_base(&self, other: &Datatype) -> i32 {
+        datatype_compare_base(
+            self.get_submeta(), self.get_size(),
+            other.get_submeta(), other.get_size(),
+        )
     }
 
     // Ghidra: type.hh:273 Datatype::printNameBase
@@ -830,10 +1025,21 @@ impl Datatype {
     }
 
     // Ghidra: type.cc:227 Datatype::compareDependency
-    /// Compare datatypes by dependency order.
-    /// Faithful to Datatype::compareDependency (type.cc:227).
+    /// Invoke the concrete variant's virtual dependency comparison.
     pub fn compare_dependency(&self, other: &Datatype) -> i32 {
-        self.compare(other)
+        match (self, other) {
+            (Datatype::Pointer(a), Datatype::Pointer(b)) => a.compare_dependency(b),
+            (Datatype::Array(a), Datatype::Array(b)) => a.compare_dependency(b),
+            (Datatype::Struct(a), Datatype::Struct(b)) => a.compare_dependency(b),
+            (Datatype::Union(a), Datatype::Union(b)) => a.compare_dependency(b),
+            (Datatype::Enum(a), Datatype::Enum(b)) => a.compare_dependency(b, 0),
+            (Datatype::Code(a), Datatype::Code(b)) => a.compare_dependency(b),
+            (Datatype::Spacebase(a), Datatype::Spacebase(b)) => a.compare_dependency(b),
+            (Datatype::PartialStruct(a), Datatype::PartialStruct(b)) => a.compare_dependency(b),
+            (Datatype::PartialEnum(a), Datatype::PartialEnum(b)) => a.compare_dependency(b),
+            (Datatype::PartialUnion(a), Datatype::PartialUnion(b)) => a.compare_dependency(b),
+            _ => self.compare_base(other),
+        }
     }
 
     // Ghidra: type.cc:212/933/1211/1416/1742/2045/2608/2828 TypeXxx::compare (recursive)
@@ -845,10 +1051,8 @@ impl Datatype {
     /// 2608 PointerRel, 2828 Code). `level` bounds the recursion depth;
     /// when it drops below 0 the comparison falls back to `id`, matching
     /// Ghidra's `if (level < 0) { ...compare id... }` short-circuit. The base
-    /// `Datatype::compare` (this file, above) is the non-recursive variant
-    /// retained for callers (e.g. modelrules) that only want the shallow
-    /// (metatype, size, name) comparison.
-    pub fn compare_deep(&self, other: &Datatype, level: i32) -> i32 {
+    /// Public level-parameterized form of Ghidra's virtual compare.
+    pub fn compare_at_level(&self, other: &Datatype, level: i32) -> i32 {
         match (self, other) {
             (Datatype::Pointer(a), Datatype::Pointer(b)) => a.compare(b, level),
             (Datatype::Array(a), Datatype::Array(b)) => a.compare(b, level),
@@ -856,9 +1060,19 @@ impl Datatype {
             (Datatype::Union(a), Datatype::Union(b)) => a.compare(b, level),
             (Datatype::Enum(a), Datatype::Enum(b)) => a.compare(b, level),
             (Datatype::Code(a), Datatype::Code(b)) => a.compare(b, level),
-            // No subclass override recurses; fall back to the base comparison.
-            _ => self.compare(other),
+            (Datatype::Spacebase(a), Datatype::Spacebase(b)) => a.compare(b),
+            (Datatype::PartialStruct(a), Datatype::PartialStruct(b)) => a.compare(b, level),
+            (Datatype::PartialEnum(a), Datatype::PartialEnum(b)) => a.compare(b, level),
+            (Datatype::PartialUnion(a), Datatype::PartialUnion(b)) => a.compare(b, level),
+            // Atomic types have no subclass recursion.
+            _ => self.compare_base(other),
         }
+    }
+
+    // RUGRA-GLUE: Compatibility alias for the pre-alignment Rust API; virtual
+    // dispatch now lives in `compare_at_level`/`compare`.
+    pub fn compare_deep(&self, other: &Datatype, level: i32) -> i32 {
+        self.compare_at_level(other, level)
     }
 
     // Ghidra: type.cc:227/954/1225/1422/1782/2084 TypeXxx::compareDependency (recursive)
@@ -867,16 +1081,7 @@ impl Datatype {
     /// the per-subclass `compareDependency` overrides (type.cc:954 Pointer,
     /// 1225 Array, 1422 Enum, 1782 Struct, 2084 Union, 2860 Code).
     pub fn compare_dependency_deep(&self, other: &Datatype) -> i32 {
-        match (self, other) {
-            (Datatype::Pointer(a), Datatype::Pointer(b)) => a.compare_dependency(b),
-            (Datatype::Array(a), Datatype::Array(b)) => a.compare_dependency(b),
-            (Datatype::Struct(a), Datatype::Struct(b)) => a.compare_dependency(b),
-            (Datatype::Union(a), Datatype::Union(b)) => a.compare_dependency(b),
-            (Datatype::Enum(a), Datatype::Enum(b)) => a.compare_dependency(b, 0),
-            (Datatype::Code(a), Datatype::Code(b)) => a.compare_dependency(b),
-            // No subclass override; fall back to the base comparison.
-            _ => self.compare(other),
-        }
+        self.compare_dependency(other)
     }
 
     // Ghidra: type.cc:561 Datatype::getStripped
@@ -889,6 +1094,10 @@ impl Datatype {
     /// stripped form on each partial variant.
     pub fn get_stripped(&self) -> &Datatype {
         match self {
+            Datatype::Pointer(pointer) => pointer
+                .get_stripped_pointer()
+                .map(|stripped| stripped.as_ref())
+                .unwrap_or(self),
             Datatype::PartialStruct(ps) => ps.stripped.as_deref().unwrap_or(self),
             Datatype::PartialEnum(pe) => pe.stripped.as_deref().unwrap_or(self),
             Datatype::PartialUnion(pu) => pu.stripped.as_deref().unwrap_or(self),
@@ -902,6 +1111,12 @@ impl Datatype {
     /// Faithful to `Datatype::needsResolution` (type.hh:231).
     pub fn needs_resolution(&self) -> bool {
         (self.get_flags() & type_flags::NEEDS_RESOLUTION) != 0
+    }
+
+    // Ghidra: type.hh:226 Datatype::isPointerToArray
+    /// Is this pointer known to point directly to an array type?
+    pub fn is_pointer_to_array(&self) -> bool {
+        (self.get_flags() & type_flags::POINTER_TO_ARRAY) != 0
     }
 
     // Ghidra: type.hh:165 Datatype::isEnumType
@@ -1678,7 +1893,7 @@ pub fn pointer_rel_compare(
     other_stripped: bool,
 ) -> i32 {
     // Compare as plain pointers first (TypePointer::compare, type.cc:933).
-    let res = self_ptr.compare(other_ptr, level);
+    let res = self_ptr.compare_plain(other_ptr, level);
     if res != 0 {
         return res;
     }
@@ -1705,9 +1920,9 @@ pub fn pointer_rel_compare_dependency(
     self_parent: &Datatype,
     other_parent: &Datatype,
 ) -> i32 {
-    // submeta (metatype) comparison.
-    let sm = self_ptr.base.metatype as i32;
-    let om = other_ptr.base.metatype as i32;
+    // submeta comparison.
+    let sm = pointer_submeta(self_ptr);
+    let om = pointer_submeta(other_ptr);
     if sm != om {
         return if sm < om { -1 } else { 1 };
     }
@@ -2096,16 +2311,129 @@ pub struct TypePointer {
 }
 
 impl TypePointer {
+    // Ghidra: type.hh:412 TypePointer::TypePointer(int4,Datatype*,uint4)
+    /// Construct a plain pointer and run the complete `calcSubmeta` state
+    /// transition, including inherited core/needs-resolution flags.
+    pub fn new(size: usize, ptr_to: Arc<Datatype>, wordsize: usize) -> Self {
+        let mut base = TypeBase::new(String::new(), size, TypeMetatype::Pointer);
+        base.flags = ptr_to.get_inheritable();
+        let mut pointer = Self { base, ptr_to, wordsize };
+        pointer.calc_submeta();
+        pointer
+    }
+
+    // Ghidra: type.hh:415 TypePointer::TypePointer(Datatype*,AddrSpace*)
+    /// Construct a pointer tied to a specific address space.
+    pub fn new_with_space(ptr_to: Arc<Datatype>, space: AddressSpace) -> Self {
+        let mut pointer = Self::new(space.addr_size(), ptr_to, space.word_size());
+        pointer.base.pointer_space = Some(space);
+        pointer
+    }
+
+    // Ghidra: type.hh:662 TypePointerRel::TypePointerRel
+    /// Construct a formal relative pointer with parent and byte offset state.
+    pub fn new_relative(
+        size: usize,
+        ptr_to: Arc<Datatype>,
+        wordsize: usize,
+        parent: Arc<Datatype>,
+        offset: i64,
+    ) -> Self {
+        let mut pointer = Self::new(size, ptr_to, wordsize);
+        pointer.base.flags |= type_flags::IS_PTRREL;
+        pointer.base.submeta_override = Some(SubMetatype::PtrRel);
+        pointer.base.pointer_rel = Some(PointerRelState {
+            parent,
+            offset,
+            stripped: None,
+        });
+        pointer
+    }
+
+    // Ghidra: type.hh:950 TypePointerRel::markEphemeral
+    /// Mark a relative pointer ephemeral and install its stripped plain form.
+    pub fn mark_ephemeral(&mut self, stripped: Arc<Datatype>) {
+        self.base.flags |= type_flags::HAS_STRIPPED;
+        if let Some(state) = self.base.pointer_rel.as_mut() {
+            state.stripped = Some(stripped);
+        }
+        if self.ptr_to.get_metatype() == TypeMetatype::Unknown {
+            self.base.submeta_override = Some(SubMetatype::PtrRelUnknown);
+        }
+    }
+
+    // Ghidra: type.cc:1035 TypePointer::calcSubmeta
+    /// Calculate pointer specialization and write every flag/submeta mutation.
+    pub fn calc_submeta(&mut self) {
+        self.base.submeta_override = Some(SubMetatype::Ptr);
+        match self.ptr_to.as_ref() {
+            Datatype::Struct(structure)
+                if structure.fields.len() > 1
+                    || (structure.base.flags & type_flags::TYPE_INCOMPLETE) != 0 =>
+            {
+                self.base.submeta_override = Some(SubMetatype::PtrStruct);
+            }
+            Datatype::Union(_) => {
+                self.base.submeta_override = Some(SubMetatype::PtrStruct);
+            }
+            Datatype::Array(_) => {
+                self.base.flags |= type_flags::POINTER_TO_ARRAY;
+            }
+            _ => {}
+        }
+        if self.ptr_to.needs_resolution()
+            && self.ptr_to.get_metatype() != TypeMetatype::Pointer
+        {
+            self.base.flags |= type_flags::NEEDS_RESOLUTION;
+        }
+    }
+
+    // Ghidra: type.hh:419 TypePointer::getSpace
+    pub fn get_space(&self) -> Option<AddressSpace> { self.base.pointer_space }
+
+    // Ghidra: type.hh:664 TypePointerRel::getParent
+    pub fn get_parent(&self) -> Option<&Arc<Datatype>> {
+        self.base.pointer_rel.as_ref().map(|state| &state.parent)
+    }
+
+    // Ghidra: type.hh:674 TypePointerRel::getByteOffset
+    pub fn get_byte_offset(&self) -> Option<i64> {
+        self.base.pointer_rel.as_ref().map(|state| state.offset)
+    }
+
+    // Ghidra: type.hh:695 TypePointerRel::getStripped
+    pub fn get_stripped_pointer(&self) -> Option<&Arc<Datatype>> {
+        self.base.pointer_rel.as_ref().and_then(|state| state.stripped.as_ref())
+    }
+
     // Ghidra: type.cc:933 TypePointer::compare
     /// Compare two pointers. Faithful to `TypePointer::compare`
     /// (type.cc:933-952): base `Datatype::compare` first, then `wordsize`,
-    /// then `spaceid` (skipped — Rugra's TypePointer has no spaceid field;
-    /// see type_audit.md "AddrSpace 集成缺失"). If `level > 0`, recurse into
+    /// then `spaceid`. If `level > 0`, recurse into
     /// `ptrto` with `level-1`; otherwise compare by `id`.
     pub fn compare(&self, other: &TypePointer, level: i32) -> i32 {
+        let res = self.compare_plain(other, level);
+        if res != 0 {
+            return res;
+        }
+        if (self.base.flags & type_flags::IS_PTRREL) == 0 {
+            return 0;
+        }
+        let self_stripped = self.get_stripped_pointer().is_some();
+        let other_stripped = other.get_stripped_pointer().is_some();
+        match (self_stripped, other_stripped) {
+            (false, true) => -1,
+            (true, false) => 1,
+            _ => 0,
+        }
+    }
+
+    // Ghidra: type.cc:933 TypePointer::compare
+    /// Compare the plain-pointer prefix before TypePointerRel's stripped tie.
+    fn compare_plain(&self, other: &TypePointer, level: i32) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            pointer_submeta(self), self.base.size,
+            pointer_submeta(other), other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -2113,26 +2441,31 @@ impl TypePointer {
         if self.wordsize != other.wordsize {
             return if self.wordsize < other.wordsize { -1 } else { 1 };
         }
-        // Ghidra compares spaceid here; Rugra has no spaceid field, so this
-        // branch is a no-op (documented gap).
-        let mut lvl = level - 1;
+        if self.base.pointer_space != other.base.pointer_space {
+            match (self.base.pointer_space, other.base.pointer_space) {
+                (None, Some(_)) => return 1,
+                (Some(_), None) => return -1,
+                (Some(left), Some(right)) => {
+                    return if left.space_id() < right.space_id() { -1 } else { 1 };
+                }
+                (None, None) => {}
+            }
+        }
+        let lvl = level - 1;
         if lvl < 0 {
             return cmp_u64(self.base.id, other.base.id);
         }
-        if lvl < 0 {
-            lvl = 0;
-        }
-        self.ptr_to.compare_deep(&other.ptr_to, lvl)
+        self.ptr_to.compare_at_level(&other.ptr_to, lvl)
     }
 
     // Ghidra: type.cc:954 TypePointer::compareDependency
     /// Compare for the type-factory tree sort. Faithful to
     /// `TypePointer::compareDependency` (type.cc:954-967): submeta, then
-    /// `ptrto` by pointer identity, then `wordsize`, then `spaceid` (skipped,
-    /// see `compare`), then `(op.size - size)`.
+    /// `ptrto` by pointer identity, then `wordsize`, then `spaceid`, then
+    /// `(op.size - size)`.
     pub fn compare_dependency(&self, other: &TypePointer) -> i32 {
-        let sm = self.base.metatype as i32;
-        let om = other.base.metatype as i32;
+        let sm = pointer_submeta(self);
+        let om = pointer_submeta(other);
         if sm != om {
             return if sm < om { -1 } else { 1 };
         }
@@ -2141,10 +2474,40 @@ impl TypePointer {
         if sp != op {
             return if sp < op { -1 } else { 1 };
         }
+        if (self.base.flags & type_flags::IS_PTRREL) != 0 {
+            match (&self.base.pointer_rel, &other.base.pointer_rel) {
+                (Some(left), Some(right)) => {
+                    if left.offset != right.offset {
+                        return if left.offset < right.offset { -1 } else { 1 };
+                    }
+                    let lp = Arc::as_ptr(&left.parent) as usize;
+                    let rp = Arc::as_ptr(&right.parent) as usize;
+                    if lp != rp {
+                        return if lp < rp { -1 } else { 1 };
+                    }
+                }
+                (Some(_), None) => return -1,
+                (None, Some(_)) => return 1,
+                (None, None) => {}
+            }
+            if self.wordsize != other.wordsize {
+                return if self.wordsize < other.wordsize { -1 } else { 1 };
+            }
+            return other.base.size as i32 - self.base.size as i32;
+        }
         if self.wordsize != other.wordsize {
             return if self.wordsize < other.wordsize { -1 } else { 1 };
         }
-        // spaceid comparison skipped (no field).
+        if self.base.pointer_space != other.base.pointer_space {
+            match (self.base.pointer_space, other.base.pointer_space) {
+                (None, Some(_)) => return 1,
+                (Some(_), None) => return -1,
+                (Some(left), Some(right)) => {
+                    return if left.space_id() < right.space_id() { -1 } else { 1 };
+                }
+                (None, None) => {}
+            }
+        }
         other.base.size as i32 - self.base.size as i32
     }
 
@@ -2152,9 +2515,8 @@ impl TypePointer {
     /// Encode this pointer as a `<type>` element with a child reference to the
     /// pointed-to type. Faithful to `TypePointer::encode` (type.cc:969-984).
     /// Emits `encodeBasic` then `wordsize` (when != 1) then `ptrto->encodeRef`.
-    /// The `spaceid` branch of Ghidra (`writeSpace(ATTRIB_SPACE, spaceid)`) is
-    /// omitted because Rugra's `TypePointer` has no `spaceid` field (see
-    /// type_audit.md "AddrSpace 集成缺失").
+    /// Rugra stores `spaceid` for identity/ordering, but the marshal `Encoder`
+    /// still lacks Ghidra's `writeSpace`; that codec branch remains TYPE-0001.
     ///
     /// `typedef_target` is `Some` when this pointer is a typedef alias; it is
     /// encoded via `Datatype::encode_typedef` instead (Ghidra checks
@@ -2174,8 +2536,8 @@ impl TypePointer {
         if self.wordsize != 1 {
             encoder.write_unsigned_integer(&attrib("wordsize"), self.wordsize as u64);
         }
-        // Ghidra: if (spaceid != null) encoder.writeSpace(ATTRIB_SPACE, spaceid);
-        // Omitted: Rugra TypePointer has no spaceid field.
+        // Ghidra: if (spaceid != null) encoder.writeSpace(ATTRIB_SPACE, spaceid).
+        // Omitted until Encoder carries address-space identity.
         self.ptr_to.encode_ref(encoder);
         encoder.close_element(&elem::type_());
     }
@@ -2188,8 +2550,9 @@ impl TypePointer {
     /// this. The child pointed-to data-type is decoded separately by the
     /// `TypeFactory` via `decodeType`.
     ///
-    /// Returns the parsed `wordsize` (1 if absent). The `ATTRIB_SPACE` branch
-    /// of Ghidra is omitted (Rugra has no `spaceid` field).
+    /// Returns the parsed `wordsize` (1 if absent). The legacy return shape
+    /// cannot yet return the parsed space identity; codec wiring remains
+    /// TYPE-0001 even though in-memory pointer state now carries it.
     pub fn decode_pointer_attributes(
         decoder: &mut dyn Decoder,
         basic: &DecodeBasicResult,
@@ -2202,7 +2565,7 @@ impl TypePointer {
             }
             match decoder.attribute_name(attrib_id).as_deref() {
                 Some("wordsize") => wordsize = decoder.read_unsigned_integer() as usize,
-                // Ghidra: spaceid = decoder.readSpace(); — omitted (no field).
+                // Ghidra: spaceid = decoder.readSpace(); — legacy helper cannot return it.
                 Some("space") => {
                     let _ = decoder.read_string();
                 }
@@ -2234,20 +2597,17 @@ impl TypeArray {
     /// by `id`.
     pub fn compare(&self, other: &TypeArray, level: i32) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Array, self.base.size,
+            SubMetatype::Array, other.base.size,
         );
         if base_res != 0 {
             return base_res;
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return cmp_u64(self.base.id, other.base.id);
         }
-        if lvl < 0 {
-            lvl = 0;
-        }
-        self.array_of.compare_deep(&other.array_of, lvl)
+        self.array_of.compare_at_level(&other.array_of, lvl)
     }
 
     // Ghidra: type.cc:1225 TypeArray::compareDependency
@@ -2255,11 +2615,6 @@ impl TypeArray {
     /// `TypeArray::compareDependency` (type.cc:1225-1232): submeta, then
     /// `arrayof` by pointer identity, then `(op.size - size)`.
     pub fn compare_dependency(&self, other: &TypeArray) -> i32 {
-        let sm = self.base.metatype as i32;
-        let om = other.base.metatype as i32;
-        if sm != om {
-            return if sm < om { -1 } else { 1 };
-        }
         let sp = Arc::as_ptr(&self.array_of) as usize;
         let op = Arc::as_ptr(&other.array_of) as usize;
         if sp != op {
@@ -2468,10 +2823,10 @@ impl TypeStruct {
     /// then per-field (offset, name, metatype). If `level > 0`, recurse into
     /// each field's type with `level-1`; otherwise compare by `id`.
     pub fn compare(&self, other: &TypeStruct, level: i32) -> i32 {
-        // Datatype::compare: submeta, then size, then name.
+        // Datatype::compare: submeta, then size.
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Struct, self.base.size,
+            SubMetatype::Struct, other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -2487,24 +2842,21 @@ impl TypeStruct {
             if f1.name != f2.name {
                 return if f1.name < f2.name { -1 } else { 1 };
             }
-            let m1 = f1.type_ptr.get_metatype() as i32;
-            let m2 = f2.type_ptr.get_metatype() as i32;
+            let m1 = ghidra_metatype_rank(f1.type_ptr.as_ref());
+            let m2 = ghidra_metatype_rank(f2.type_ptr.as_ref());
             if m1 != m2 {
                 return if m1 < m2 { -1 } else { 1 };
             }
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return cmp_u64(self.base.id, other.base.id);
-        }
-        if lvl < 0 {
-            lvl = 0;
         }
         // Second pass: recurse into each field type.
         for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
             // Short-circuit recursive loops on pointer identity.
             if !Arc::ptr_eq(&f1.type_ptr, &f2.type_ptr) {
-                let c = f1.type_ptr.compare_deep(&f2.type_ptr, lvl);
+                let c = f1.type_ptr.compare_at_level(&f2.type_ptr, lvl);
                 if c != 0 {
                     return c;
                 }
@@ -2520,8 +2872,8 @@ impl TypeStruct {
     /// identity).
     pub fn compare_dependency(&self, other: &TypeStruct) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Struct, self.base.size,
+            SubMetatype::Struct, other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -2548,33 +2900,18 @@ impl TypeStruct {
 }
 
 // Ghidra: type.cc:212 Datatype::compare (base portion)
-/// The `Datatype::compare` base comparison: submeta (metatype), then
-/// `(op.size - size)`, then name lexicographically. Returns -1/0/1. Mirrors
-/// the first three lines of `Datatype::compare` (type.cc:212-220) used as the
-/// prefix of every subclass `compare`/`compareDependency` override.
+/// The base comparison: submeta, then `(op.size - size)`. Name and id are not
+/// inspected here.
 fn datatype_compare_base(
-    self_meta: TypeMetatype,
+    self_submeta: SubMetatype,
     self_size: usize,
-    self_name: &str,
-    other_meta: TypeMetatype,
+    other_submeta: SubMetatype,
     other_size: usize,
-    other_name: &str,
 ) -> i32 {
-    let sm = self_meta as i32;
-    let om = other_meta as i32;
-    if sm != om {
-        return sm - om;
+    if self_submeta != other_submeta {
+        return if self_submeta < other_submeta { -1 } else { 1 };
     }
-    let sd = self_size as i32;
-    let od = other_size as i32;
-    if sd != od {
-        return sd - od;
-    }
-    match self_name.cmp(other_name) {
-        std::cmp::Ordering::Less => -1,
-        std::cmp::Ordering::Greater => 1,
-        std::cmp::Ordering::Equal => 0,
-    }
+    other_size as i32 - self_size as i32
 }
 
 /// Three-way compare of two `u64` ids returning -1/0/1. Used by the
@@ -2855,13 +3192,20 @@ impl TypeEnum {
     /// We accept `level` only to match the calling convention used by other
     /// `compare` overloads in this port; it is ignored.
     pub fn compare_dependency(&self, other: &TypeEnum, _level: i32) -> i32 {
-        // TypeBase::compareDependency: submeta(metatype), then (op.size - size).
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
-        let res = other.base.size as i32 - self.base.size as i32;
+        // TypeBase::compareDependency: submeta, then (op.size - size).
+        let self_submeta = if self.base.metatype == TypeMetatype::Uint {
+            SubMetatype::UintEnum
+        } else {
+            SubMetatype::IntEnum
+        };
+        let other_submeta = if other.base.metatype == TypeMetatype::Uint {
+            SubMetatype::UintEnum
+        } else {
+            SubMetatype::IntEnum
+        };
+        let res = datatype_compare_base(
+            self_submeta, self.base.size, other_submeta, other.base.size,
+        );
         if res != 0 {
             return res;
         }
@@ -2999,8 +3343,8 @@ impl TypeUnion {
     /// field's type with `level-1`; otherwise compare by `id`.
     pub fn compare(&self, other: &TypeUnion, level: i32) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Union, self.base.size,
+            SubMetatype::Union, other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -3013,23 +3357,20 @@ impl TypeUnion {
             if f1.name != f2.name {
                 return if f1.name < f2.name { -1 } else { 1 };
             }
-            let m1 = f1.type_ptr.get_metatype() as i32;
-            let m2 = f2.type_ptr.get_metatype() as i32;
+            let m1 = ghidra_metatype_rank(f1.type_ptr.as_ref());
+            let m2 = ghidra_metatype_rank(f2.type_ptr.as_ref());
             if m1 != m2 {
                 return if m1 < m2 { -1 } else { 1 };
             }
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return cmp_u64(self.base.id, other.base.id);
-        }
-        if lvl < 0 {
-            lvl = 0;
         }
         // Second pass: recurse into each field type.
         for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
             if !Arc::ptr_eq(&f1.type_ptr, &f2.type_ptr) {
-                let c = f1.type_ptr.compare_deep(&f2.type_ptr, lvl);
+                let c = f1.type_ptr.compare_at_level(&f2.type_ptr, lvl);
                 if c != 0 {
                     return c;
                 }
@@ -3045,8 +3386,8 @@ impl TypeUnion {
     /// identity).
     pub fn compare_dependency(&self, other: &TypeUnion) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Union, self.base.size,
+            SubMetatype::Union, other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -3167,11 +3508,8 @@ impl TypeCode {
             (Some(_), None) => return -1,
             (Some(p1), Some(p2)) => {
                 // hasModel / model name comparison.
-                // Ghidra: `proto->hasModel()` = (model != null). Rugra stores
-                // the model as a string on FuncProto, so "has model" maps to
-                // `!is_model_unknown()` (fspec.hh:1394).
-                let p1_has = !p1.is_model_unknown();
-                let p2_has = !p2.is_model_unknown();
+                let p1_has = p1.has_model();
+                let p2_has = p2.has_model();
                 if !p1_has {
                     if p2_has {
                         return 1;
@@ -3192,8 +3530,8 @@ impl TypeCode {
                     // Ghidra: (opnump < nump) ? -1 : 1
                     return if opnump < nump { -1 } else { 1 };
                 }
-                let myflags = comparable_flags(p1);
-                let opflags = comparable_flags(p2);
+                let myflags = p1.get_comparable_flags();
+                let opflags = p2.get_comparable_flags();
                 if myflags != opflags {
                     return if myflags < opflags { -1 } else { 1 };
                 }
@@ -3210,8 +3548,8 @@ impl TypeCode {
     /// parameter type and the return type.
     pub fn compare(&self, other: &TypeCode, level: i32) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Code, self.base.size,
+            SubMetatype::Code, other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -3220,12 +3558,9 @@ impl TypeCode {
         if res != 2 {
             return res;
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return cmp_u64(self.base.id, other.base.id);
-        }
-        if lvl < 0 {
-            lvl = 0;
         }
         // Both protos are present (compareBasic returned 2).
         let (p1, p2) = match (self.proto.as_ref(), other.proto.as_ref()) {
@@ -3242,7 +3577,7 @@ impl TypeCode {
                 Some(pp) => pp,
                 None => return 0,
             };
-            let c = param.data_type.compare_deep(&opparam.data_type, lvl);
+            let c = param.data_type.compare_at_level(&opparam.data_type, lvl);
             if c != 0 {
                 return c;
             }
@@ -3250,7 +3585,7 @@ impl TypeCode {
         // Output (return) type comparison.
         let otype = &p1.return_type;
         let opotype = &p2.return_type;
-        otype.compare_deep(opotype, lvl)
+        otype.compare_at_level(opotype, lvl)
     }
 
     // Ghidra: type.cc:2860 TypeCode::compareDependency
@@ -3260,8 +3595,8 @@ impl TypeCode {
     /// pointer identity.
     pub fn compare_dependency(&self, other: &TypeCode) -> i32 {
         let base_res = datatype_compare_base(
-            self.base.metatype, self.base.size, &self.base.name,
-            other.base.metatype, other.base.size, &other.base.name,
+            SubMetatype::Code, self.base.size,
+            SubMetatype::Code, other.base.size,
         );
         if base_res != 0 {
             return base_res;
@@ -3376,26 +3711,6 @@ impl TypeCode {
     }
 }
 
-// Ghidra: fspec.hh:1618 FuncProto::getComparableFlags
-/// The subset of `FuncProto::flags` that participate in `TypeCode::compareBasic`.
-/// Faithful to `FuncProto::getComparableFlags` (fspec.hh:1618):
-///   `(flags & (dotdotdot | is_constructor | is_destructor | has_thisptr))`.
-///
-/// Rugra note: Rugra's `FuncProto` currently only carries `is_dotdotdot`; the
-/// `is_constructor`/`is_destructor`/`has_thisptr` bits are not yet ported
-/// (they originate from demangled names / ProtoModel analysis). We surface
-/// only the `dotdotdot` bit here so that varargs-vs-fixed prototypes compare
-/// distinctly, which is the comparison that matters for function-pointer
-/// deduplication. When the remaining flags are added to `FuncProto`, extend
-/// this mask.
-fn comparable_flags(proto: &FuncProto) -> u32 {
-    let mut flags = 0u32;
-    if proto.is_dotdotdot {
-        flags |= 0x1; // dotdotdot
-    }
-    flags
-}
-
 /// Type representing a spacebase (e.g. stack frame, register bank)
 ///
 /// Corresponds to Ghidra's `TypeSpacebase` class in `type.hh:721-746`.
@@ -3450,7 +3765,7 @@ impl TypeSpacebase {
     // RUGRA-GLUE: TypeSpacebase-local predicate extracted from Ghidra's direct
     // localframe.isInvalid() calls; there is no TypeSpacebase::isInvalid method.
     pub fn is_invalid(&self) -> bool {
-        self.localframe.as_u64() == 0
+        self.localframe.is_invalid()
     }
 
     // Ghidra: type.cc:2935 TypeSpacebase::getMap
@@ -3518,29 +3833,23 @@ impl TypeSpacebase {
     /// first, then `spaceid`, then `localframe` (only if not a global
     /// spacebase).
     pub fn compare_dependency(&self, other: &TypeSpacebase) -> i32 {
-        // Base comparison: submeta(metatype), then size (Datatype::compareDependency).
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
-        let res = other.base.size as i32 - self.base.size as i32;
+        // Base comparison: submeta, then size (Datatype::compareDependency).
+        let res = datatype_compare_base(
+            SubMetatype::Spacebase, self.base.size,
+            SubMetatype::Spacebase, other.base.size,
+        );
         if res != 0 {
             return res;
         }
-        // spaceid comparison (type.cc:3051). Rugra has no pointer identity for
-        // enums; use word_size as a proxy that distinguishes distinct spaces
-        // in the common single-space model.
-        let s_ws = self.spaceid.map(|s| s.word_size()).unwrap_or(0);
-        let o_ws = other.spaceid.map(|s| s.word_size()).unwrap_or(0);
-        if s_ws != o_ws {
-            return if s_ws < o_ws { -1 } else { 1 };
+        // Ghidra compares the AddrSpace identities, not word size.
+        if self.spaceid != other.spaceid {
+            return if self.spaceid < other.spaceid { -1 } else { 1 };
         }
         // Global spacebase: localframe comparison skipped (type.cc:3052).
         if self.is_invalid() {
             return 0;
         }
-        match self.localframe.as_u64().cmp(&other.localframe.as_u64()) {
+        match self.localframe.cmp(&other.localframe) {
             std::cmp::Ordering::Less => -1,
             std::cmp::Ordering::Greater => 1,
             std::cmp::Ordering::Equal => 0,
@@ -3708,19 +4017,17 @@ impl TypePartialStruct {
     /// (if `level > 0`) the container.
     pub fn compare(&self, other: &TypePartialStruct, level: i32) -> i32 {
         // Base comparison (Datatype::compare): submeta, then size.
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
-        let res = other.base.size as i32 - self.base.size as i32;
+        let res = datatype_compare_base(
+            SubMetatype::PartialStruct, self.base.size,
+            SubMetatype::PartialStruct, other.base.size,
+        );
         if res != 0 {
             return res;
         }
         if self.offset != other.offset {
             return if self.offset < other.offset { -1 } else { 1 };
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return if self.base.id == other.base.id {
                 0
@@ -3730,10 +4037,7 @@ impl TypePartialStruct {
                 1
             };
         }
-        if lvl < 0 {
-            lvl = 0;
-        }
-        self.container.compare(&other.container)
+        self.container.compare_at_level(&other.container, lvl)
     }
 
     // Ghidra: type.cc:2406 TypePartialStruct::compareDependency
@@ -3742,11 +4046,6 @@ impl TypePartialStruct {
     /// then container by identity (Rugra uses `Arc::as_ptr`), then offset,
     /// then `(op.size - size)`.
     pub fn compare_dependency(&self, other: &TypePartialStruct) -> i32 {
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
         // Compare container by pointer identity (type.cc:2411).
         let sp = Arc::as_ptr(&self.container) as usize;
         let op = Arc::as_ptr(&other.container) as usize;
@@ -3830,19 +4129,17 @@ impl TypePartialEnum {
     /// (type.cc:2286-2300): base `Datatype::compare` first, then offset, then
     /// (if `level > 0`) the parent.
     pub fn compare(&self, other: &TypePartialEnum, level: i32) -> i32 {
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
-        let res = other.base.size as i32 - self.base.size as i32;
+        let res = datatype_compare_base(
+            SubMetatype::UintPartialEnum, self.base.size,
+            SubMetatype::UintPartialEnum, other.base.size,
+        );
         if res != 0 {
             return res;
         }
         if self.offset != other.offset {
             return if self.offset < other.offset { -1 } else { 1 };
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return if self.base.id == other.base.id {
                 0
@@ -3852,10 +4149,7 @@ impl TypePartialEnum {
                 1
             };
         }
-        if lvl < 0 {
-            lvl = 0;
-        }
-        self.parent.compare(&other.parent)
+        self.parent.compare_at_level(&other.parent, lvl)
     }
 
     // Ghidra: type.cc:2302 TypePartialEnum::compareDependency
@@ -3863,11 +4157,6 @@ impl TypePartialEnum {
     /// `TypePartialEnum::compareDependency` (type.cc:2302-2310): submeta, then
     /// parent by identity, then offset, then `(op.size - size)`.
     pub fn compare_dependency(&self, other: &TypePartialEnum) -> i32 {
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
         let sp = Arc::as_ptr(&self.parent) as usize;
         let op = Arc::as_ptr(&other.parent) as usize;
         if sp != op {
@@ -3975,19 +4264,17 @@ impl TypePartialUnion {
     /// (type.cc:2462-2476): base `Datatype::compare` first, then offset, then
     /// (if `level > 0`) the container.
     pub fn compare(&self, other: &TypePartialUnion, level: i32) -> i32 {
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
-        let res = other.base.size as i32 - self.base.size as i32;
+        let res = datatype_compare_base(
+            SubMetatype::PartialUnion, self.base.size,
+            SubMetatype::PartialUnion, other.base.size,
+        );
         if res != 0 {
             return res;
         }
         if self.offset != other.offset {
             return if self.offset < other.offset { -1 } else { 1 };
         }
-        let mut lvl = level - 1;
+        let lvl = level - 1;
         if lvl < 0 {
             return if self.base.id == other.base.id {
                 0
@@ -3997,10 +4284,7 @@ impl TypePartialUnion {
                 1
             };
         }
-        if lvl < 0 {
-            lvl = 0;
-        }
-        self.container.compare(&other.container)
+        self.container.compare_at_level(&other.container, lvl)
     }
 
     // Ghidra: type.cc:2478 TypePartialUnion::compareDependency
@@ -4008,11 +4292,6 @@ impl TypePartialUnion {
     /// `TypePartialUnion::compareDependency` (type.cc:2478-2486): submeta,
     /// then container by identity, then offset, then `(op.size - size)`.
     pub fn compare_dependency(&self, other: &TypePartialUnion) -> i32 {
-        let self_meta = self.base.metatype as i32;
-        let other_meta = other.base.metatype as i32;
-        if self_meta != other_meta {
-            return self_meta - other_meta;
-        }
         let sp = Arc::as_ptr(&self.container) as usize;
         let op = Arc::as_ptr(&other.container) as usize;
         if sp != op {
@@ -4282,30 +4561,27 @@ mod tests {
         assert!(sub.is_none());
     }
 
-    // --- type_order (Ghidra compare: submeta, then size smaller-first) ---
+    // --- type_order (Ghidra compare: submeta, then larger size first) ---
 
     #[test]
     fn test_type_order_basic() {
         let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
         let int8 = Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int));
-        // same metatype, size 4 < size 8 → int4 orders before int8
-        // type_order returns (op.size - size): (8-4)=+4 means self<int? No:
-        // Ghidra: returns (op.size - size); positive → self < other in sort.
-        // We mirror that: smaller size → positive → "preferred".
-        assert!(int4.type_order(&int8) > 0);   // int4 preferred over int8
+        // Ghidra returns (op.size - size), so larger int8 orders earlier.
+        assert!(int4.type_order(&int8) > 0);
         assert!(int8.type_order(&int4) < 0);
         assert_eq!(int4.type_order(&int4), 0);
     }
 
     #[test]
     fn test_type_order_metatype() {
-        // Unknown < Int per the enum ordering (Unknown=0, Int=3).
+        // SUB_INT_PLAIN=17 is more specific than SUB_UNKNOWN=21.
         let unk = Datatype::Base(TypeBase::new("unk".into(), 4, TypeMetatype::Unknown));
         let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
-        // Same size; Unknown (metatype 0) orders before Int (metatype 3).
-        // type_order(unk, int4): metatype 0 < 3 → return -1.
-        assert_eq!(unk.type_order(&int4), -1);
-        assert_eq!(int4.type_order(&unk), 1);
+        assert_eq!(unk.type_order(&int4), 1);
+        assert_eq!(int4.type_order(&unk), -1);
+        assert_eq!(unk.get_submeta(), SubMetatype::Unknown);
+        assert_eq!(int4.get_submeta(), SubMetatype::IntPlain);
     }
 
     // --- new Datatype methods aligned with type.hh / type.cc ---
@@ -5030,5 +5306,133 @@ mod tests {
         // Non-array → None.
         let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
         assert!(int4.array_get_sub_entry(0, 4).is_none());
+    }
+
+    #[test]
+    fn test_public_compare_dispatches_pointer_variants() {
+        let int_type = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        )));
+        let uint_type = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(), 4, TypeMetatype::Uint,
+        )));
+        let left = Datatype::Pointer(TypePointer::new(8, int_type, 1));
+        let right = Datatype::Pointer(TypePointer::new(8, uint_type, 1));
+        assert_eq!(left.compare(&right).signum(), 1);
+
+        let duplicate = Arc::new(Datatype::Base(TypeBase::new(
+            "int_copy".into(), 4, TypeMetatype::Int,
+        )));
+        let dep = Datatype::Pointer(TypePointer::new(8, duplicate, 1));
+        assert_ne!(left.compare_dependency(&dep), 0);
+        assert_eq!(
+            left.compare_dependency(&dep).signum(),
+            -dep.compare_dependency(&left).signum(),
+        );
+    }
+
+    #[test]
+    fn test_pointer_calc_submeta_writes_flags_and_relative_state() {
+        let int_type = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        )));
+        let mut array_base = TypeBase::new("A1".into(), 4, TypeMetatype::Array);
+        array_base.flags |= type_flags::NEEDS_RESOLUTION;
+        let array_type = Arc::new(Datatype::Array(TypeArray {
+            base: array_base,
+            array_of: int_type.clone(),
+            num_elements: 1,
+        }));
+        let array_pointer = Datatype::Pointer(TypePointer::new(8, array_type, 1));
+        assert!(array_pointer.is_pointer_to_array());
+        assert!(array_pointer.needs_resolution());
+
+        let parent = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField {
+                name: "a".into(), offset: 0, type_ptr: int_type.clone(),
+            }],
+        }));
+        let mut relative = TypePointer::new_relative(
+            8, int_type.clone(), 1, parent.clone(), 4,
+        );
+        assert_eq!(relative.get_parent().map(Arc::as_ptr), Some(Arc::as_ptr(&parent)));
+        assert_eq!(relative.get_byte_offset(), Some(4));
+        let stripped = Arc::new(Datatype::Pointer(TypePointer::new(8, int_type, 1)));
+        relative.mark_ephemeral(stripped.clone());
+        assert_eq!(
+            relative.get_stripped_pointer().map(Arc::as_ptr),
+            Some(Arc::as_ptr(&stripped)),
+        );
+        assert_ne!(relative.base.flags & type_flags::HAS_STRIPPED, 0);
+    }
+
+    #[test]
+    fn test_unicode_one_byte_keeps_unicode_submeta() {
+        let unicode = Datatype::Base(TypeBase::new_unicode(
+            "unicode1".into(), 1, TypeMetatype::Int,
+        ));
+        let character = Datatype::Base(TypeBase::new_char(
+            "char1".into(), TypeMetatype::Int,
+        ));
+        assert_eq!(unicode.get_submeta(), SubMetatype::IntUnicode);
+        assert_eq!(character.get_submeta(), SubMetatype::IntChar);
+        assert!(unicode.type_order(&character) < 0);
+    }
+
+    #[test]
+    fn test_type_code_uses_full_comparable_flags() {
+        let void_type = Arc::new(Datatype::Void(TypeBase::new(
+            "void".into(), 0, TypeMetatype::Void,
+        )));
+        let mut model = crate::fspec::ProtoModelFull::new(None, 8);
+        model.name = "fixture".into();
+        let model = Arc::new(model);
+        let make_code = |constructor: bool, destructor: bool, has_this: bool| {
+            let mut proto = FuncProto::new(String::new(), void_type.clone());
+            proto.set_model(Some(model.clone()));
+            proto.set_constructor(constructor);
+            proto.set_destructor(destructor);
+            proto.set_has_thisptr(has_this);
+            Datatype::Code(TypeCode {
+                base: TypeBase::new(String::new(), 1, TypeMetatype::Code),
+                proto: Some(Arc::new(proto)),
+            })
+        };
+        let plain = make_code(false, false, false);
+        let constructor = make_code(true, false, false);
+        let destructor = make_code(false, true, false);
+        let this_method = make_code(false, false, true);
+        assert!(plain.compare(&constructor) < 0);
+        assert!(constructor.compare(&destructor) < 0);
+        assert!(destructor.compare(&this_method) < 0);
+    }
+
+    #[test]
+    fn test_spacebase_invalidity_and_space_identity() {
+        let ram = crate::space::AddrSpace::new_space(
+            crate::space::SpaceType::Processor,
+            "ram", false, 8, 1, 3, 0, 0, 0,
+        );
+        let invalid = Address::new(0x55);
+        let valid_zero = Address::with_space(&ram, 0);
+        assert!(invalid.is_invalid());
+        assert!(!valid_zero.is_invalid());
+
+        let make_spacebase = |spaceid, frame| TypeSpacebase {
+            base: TypeBase::new(String::new(), 0, TypeMetatype::Spacebase),
+            address: frame,
+            fd: None,
+            spaceid,
+            localframe: frame,
+            scope: None,
+        };
+        let ram_base = make_spacebase(Some(AddressSpace::Ram), valid_zero);
+        let register_base = make_spacebase(Some(AddressSpace::Register), valid_zero);
+        assert_ne!(ram_base.compare_dependency(&register_base), 0);
+        assert_eq!(
+            ram_base.compare_dependency(&register_base).signum(),
+            -register_base.compare_dependency(&ram_base).signum(),
+        );
     }
 }

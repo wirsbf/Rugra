@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/type_system/datatype.rs`
 **Ghidra 对应**: `type.hh` / `type.cc` (`Datatype` 类层次)
-**状态**: 🔧 **L2（2026-08-11 锁定审计）**——submeta、派生 compare/compareDependency、alignment、Pointer spaceid/PointerRel/Spacebase/FuncProto 完整状态与 codec 尚未对齐；方法名覆盖与 Rust 单测不能支撑 L3。
+**状态**: 🔧 **L2 / overall MISMATCH（2026-08-21 R3 返工）**——datatype 层的 submeta、公开虚派发 compare/compareDependency、Pointer state/space、PointerRel、TypeCode flags、Spacebase identity 和 1-byte Unicode 已有 12.0.4 行为证据；生产 TypeFactory 仍有 6 个已钉住差异，另有完整比较矩阵 `UNTESTED`，绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` / `TYPEFACTORY-SUBMETA-RECLASS-0001` / `DATATYPE-TYPEORDER-RESIDUAL-0001`，不能升 L3。
 
 ## 模块说明
 
@@ -29,11 +29,14 @@ behavior:
 - `cmp_u64` is Rust glue extracted from repeated inline id comparisons in the
   concrete Ghidra `compare` methods; there is no standalone C++ function.
 - `TypeSpacebase::is_invalid` is Rust glue extracted from direct
-  `localframe.isInvalid()` calls. Rugra currently treats numeric address zero
-  as invalid, whereas Ghidra invalidity is a null address-space identity.
+  `localframe.isInvalid()` calls. R2 now delegates to `Address::is_invalid`,
+  so a spaceless nonzero address is invalid and a space-tagged zero address is valid.
 
-These annotations provide provenance only. They do not raise the module above
-L2 or change its formal `NO_ORACLE` status.
+At the time of that annotation-only pass, these markers provided provenance
+without raising the module above L2, and the formal status remained
+`NO_ORACLE`. The 2026-08-21 R3 fixture now supersedes that historical status
+for its covered projection; the module remains L2 with overall `MISMATCH` and
+explicit `UNTESTED` residuals as stated above.
 
 ## 2026-08-15 TYPEFACTORY-UNDEFNAME-0001（命名下游影响）
 
@@ -78,11 +81,63 @@ Struct: 距下一字段或结构末尾的距离 (type.cc:1652)。
 
 ### `pub fn type_order(&self, other: &Datatype) -> i32`
 对应 `Datatype::typeOrder` (type.hh:283) = `compare(other, 10)`。
-先比 submeta(metatype)，再比 size（小者优先，返回 `(op.size - size)`）。
+先比独立的 submeta（不是 Rust `TypeMetatype` discriminant），再比 size（大者优先，返回
+`op.size - size`），随后按具体派生类的虚函数规则递归；递归层级耗尽才比较 id。
 varmap `RangeHint::preferred` 用其选择更具体的类型。
 
 ### `pub fn type_order_bool(&self, other: &Datatype) -> i32`
 对应 `Datatype::typeOrderBool` (type.hh:916)：bool 永不被优先。
+
+## 2026-08-20：DATATYPE-TYPEORDER-0001
+
+旧实现直接比较 Rugra 私有 enum 序（`Unknown=0`），把 UNKNOWN 错排在
+PTR/INT/UINT 前；同时浅 compare 错把名字当 tie-break、同 metatype 尺寸方向也反了。
+本轮按锁定 `type.cc/.hh` 恢复：
+
+- `SubMetatype` 以 `#[repr(i32)]` 完整镜像 Ghidra `sub_metatype` 的 0..23
+  数值与特异性顺序；`get_submeta()` 返回该类型，避免再把 Rugra 私有
+  `TypeMetatype` discriminant 当传播次序。
+- `get_submeta()` 映射 `Datatype::base2sub`，并覆盖 INT/UINT 的 enum、char、unicode
+  特化以及 `TypePointer::calcSubmeta` 的 incomplete/multi-field struct、union 和
+  relative-pointer 分支。
+- `type_order()` 保留同对象 identity 快路，然后以 level=10 进入派生 compare；Pointer、
+  Array、Struct、Union、Enum、Code、Spacebase 和三个 Partial 变体均走现有 API 的虚派发
+  闭包。
+- R2 修正公开 API：`Datatype::compare()` 与 `compare_dependency()` 本身执行 enum 虚派发；
+  `compare_at_level()` 只承载显式递归深度，旧 `compare_deep()` 降为兼容别名。fixture
+  通过 `Datatype&` / `&Datatype` 基类入口钉住 Pointer 派生判别。
+- base compare 只看 submeta 与反向 size 差，绝不比较名称；Struct/Union 的第一层字段
+  metatype tie-break 使用 Ghidra `type_metatype` 数值，不使用 Rust discriminant。
+- 深递归在 `level-1 < 0` 时按 id 决胜；dependency compare 对组件采用 `Arc` 对象身份，
+  fixture 只观察相等/非零和反对称性，不跨进程比较原始地址。
+- `TypePointer::{new,new_with_space,new_relative,mark_ephemeral,calc_submeta}` 写入
+  pointer-to-array、needs-resolution、core inheritance、space、parent/offset/stripped 和
+  SUB_PTRREL_UNK 状态；PointerRel 普通 compare 比 stripped，dependency compare 比
+  ptrto/offset/parent/wordsize/size。
+  `PointerRelState` 逻辑上对应 Ghidra 派生类字段；为兼容仓库既有 `TypePointer` struct
+  literal，Rust 将该可选状态随 `TypeBase` 克隆保存，而不是继续依赖 TypeFactory 的名称侧表。
+- `TypeCode::compare_basic` 直接调用 `FuncProto::{has_model,get_comparable_flags}`；真实
+  decoded `hasthis` ProtoModel 与 constructor/destructor 三类 flag 均已双侧覆盖；has-this
+  判别两侧使用同名 `fixture_same` model，并显式输出 model-name 相等，确保此前所有键相同
+  后才落到 comparable flags。
+- Spacebase 改用 space identity 和 `Address::is_invalid()`；`TypeBase::new_unicode` 用
+  submeta override 保证 1-byte Unicode 仍为 `SUB_INT_UNICODE`，不会退化为 char。
+
+真 oracle 证据为 `tests/oracle/datatype_type_order_1204.{cc,rs,metadata.json}` 与
+`tools/run_datatype_type_order_oracle.sh`：78 条固定记录中 datatype 投影 72 MATCH、
+TypeFactory 接线 6 MISMATCH；oracle/Rugra stdout SHA-256 分别为
+`d248dd40722e8c6fbc51927ee557895caf096599a8048ab57c4942e32f0ac573` /
+`7fdbbcf8b40b62af7cb1bed3a62ecc747cbe3b45de9e3e9cdbacccdbbba2a218`。fixture 使用
+x86:LE:64:default/gcc、固定 curl/spec Git 输入和隔离 Rugra 基线 overlay。
+
+6 个已解释残差全部在 `typefactory.rs`（本任务无写租约）：显式非默认普通 Pointer 被误置
+`IS_PTRREL`；ephemeral relative pointer 缺 `HAS_STRIPPED`，从而 unknown target 仍为
+SUB_PTRREL(5) 而非 SUB_PTRREL_UNK(7)；factory array pointer 缺 pointer-to-array；factory
+pointer 缺 coretype 继承；factory 1-byte Unicode 仍退化成 SUB_INT_PLAIN(17)。分别绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` 与
+`TYPEFACTORY-SUBMETA-RECLASS-0001`，故 projection=MATCH、overall=MISMATCH，模块保持 L2。
+metadata 为 schema 2，逐项 coverage 使用结构化 `status/covers/residual_todo_ids`；TypeCode
+剩余矩阵、Array/Union/Partial 全矩阵、Struct offset/dependency、legacy same-kind space identity
+及 24 个 submeta 的穷举对拍均保持 `UNTESTED`，绑定 `DATATYPE-TYPEORDER-RESIDUAL-0001`。
 
 ### `pub fn calc_align_size(sz, align) -> usize`
 对应 `Datatype::calcAlignSize` (type.cc:536)。

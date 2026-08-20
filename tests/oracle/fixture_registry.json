@@ -2971,6 +2971,72 @@
      "RG-F-b27acdbef8958743d403"
     ]
    }
+  },
+  {
+   "id": "datatype_type_order_1204",
+   "description": "Datatype submeta, virtual compare/dependency dispatch, pointer and pointer-relative state, TypeCode flags, Spacebase identity and explicit TypeFactory residuals",
+   "runner": [
+    "tools/run_datatype_type_order_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/datatype_type_order_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/datatype_type_order_1204.cc",
+     "rust_fixture": "tests/oracle/datatype_type_order_1204.rs",
+     "binary": "examples/curl",
+     "sla": "sleigh_specs/x86-64.sla",
+     "processor_spec": "sleigh_specs/x86-64.pspec",
+     "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+     "language_definitions": "sleigh_specs/x86.ldefs"
+    },
+    "tools": {
+     "runner": "tools/run_datatype_type_order_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/type_system/datatype.rs",
+     "docs/api/type_system/datatype.md",
+     "tests/oracle/datatype_type_order_1204.*",
+     "tools/run_datatype_type_order_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-408d1c81c6d78ed61280",
+     "GH12-F-0ea77e1346dedd29b89f",
+     "GH12-F-c0cf5f913a4128cf1244",
+     "GH12-F-27ab22a69d90a295326f",
+     "GH12-F-23fd234ee281a2274623",
+     "GH12-F-10229c47562b4d4d75f2",
+     "GH12-F-467b50d652b84584ac73",
+     "GH12-F-1b2a715979418db8cd0c",
+     "GH12-F-d7cb0a42d7d40e7a7ea1",
+     "GH12-F-ec1c9d8b5435a19f9d24",
+     "GH12-F-7f1aa93fb03acc22e851"
+    ],
+    "rust_function_ids": [
+     "RG-F-4bb073dcb1264136b32d",
+     "RG-F-b56b557b7afea5d368ef",
+     "RG-F-87ac42386d86faca0030",
+     "RG-F-67a5ed8a5be342ff93ea",
+     "RG-F-17906905a4ea1e9a1a72",
+     "RG-F-9a9250c75394aef0a5d7",
+     "RG-F-96f600724784492e60ef",
+     "RG-F-403a95cf22ede49b9d33",
+     "RG-F-ea6b82eabb7e070c056c",
+     "RG-F-2f10c3d32d8d3e98b372",
+     "RG-F-95b168ab610cc93e2a0c",
+     "RG-F-124c60f184e9a6762411",
+     "RG-F-e8e43f8cb0dfb3fe633d",
+     "RG-F-936ba78d16dcf879f5dd",
+     "RG-F-7c158480861d89ccdc8f"
+    ]
+   }
   }
  ]
 }
