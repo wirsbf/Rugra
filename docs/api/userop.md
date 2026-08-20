@@ -20,11 +20,15 @@
 ### `pub struct UserOpManage`
 所有注册用户操作的管理器。对应 Ghidra `UserOpManage`。
 - `register_op(name, type) -> i32` / `get_op(index)` / `get_index_by_name(name)` / `num_ops()`
+- `register_datatype_user_op(descriptor)` — 在主 descriptor 容器中定制 typed userop
+- `get_output_local(index)` / `get_input_local(index, slot)` — 查询 canonical local type metadata
+- `register_builtin_with_local_types(id, out, inputs)` — 用 TypeFactory canonical Arc 首次注册 typed builtin
+- `try_register_builtin_by_id(id)` — 保留 missing-metadata 兼容路径并显式返回未知 id 错误
 
 ### Built-in IDs
 `BUILTIN_STRINGDATA/VOLATILE_READ/VOLATILE_WRITE/MEMCPY/STRNCPY/WCSNCPY`
 
-测试：userop::tests 3 个。
+测试：`userop::tests` 现有 15 个。
 
 ## 2026-06-26（续）：userop.rs 完善实现
 
@@ -77,3 +81,37 @@ SegmentOp::execute（userop.cc:218-223）：2输入(base,inner)→(base<<4)+inne
 - `get_op(index)` 补 builtinmap 回落（userop.cc:408-415）。
 对拍：unknown-target 编译后残留/segment 定制/volatile 双探针 MATCH；
 segmentop/jumpassist 已移植无 oracle 观察（UNTESTED）。模块保持 L2。
+
+## 2026-08-20：DatatypeUserOp local-type 元数据（USEROP-LOCALTYPE-METADATA-0001）
+
+- `UserPcodeOp` descriptor 直接持有 TypeFactory 产出的 canonical
+  `Arc<Datatype>` output/input handles；`UserOpManage` 的 index/name 查询返回
+  同一个 descriptor，不另设 `index -> type` 旁路表。
+- `DatatypeUserOp::new` 严格复现 `userop.cc:55`：只检查前四个 input，
+  并依次追加其中的非空项，因而空洞会压缩；`get_input_local(slot)` 再按
+  `slot - 1` 查询，slot 0、越界和负 slot 返回 `None`。
+- `UserOpManage::get_output_local(index)` / `get_input_local(index, slot)`
+  通过 descriptor 虚拟语义查询。无 metadata 时返回 `None`，供后续
+  `TypeOpCallother` 使用 TypeOp 的 size-derived fallback。
+- `register_datatype_user_op` 消耗 `DatatypeUserOp` wrapper 并把其 base
+  descriptor 放入唯一的 `ops` 容器；同名同 index 替换、同名异 index、
+  同 index 异名和负 index 的错误顺序与 `UserOpManage::registerOp` 一致。
+  稀疏 index 使用真实空 slot，`get_op` 不再把占位记录当成已注册 op。
+- `register_builtin_with_local_types` 显式接收 Architecture TypeFactory 的
+  canonical Arc，覆盖 `builtin_memcpy` / `builtin_strncpy` /
+  `builtin_wcsncpy`；首次注册胜出，重复注册保持同一 descriptor 和原始
+  metadata。兼容 API `register_builtin_by_id` 对这三项建立正确的
+  `Datatype` descriptor 类型，但明确保留 missing-metadata fallback；未知
+  builtin 由 `try_register_builtin_by_id` 返回逐字 `Bad built-in userop id`。
+- `builtin_map`/`ops` 内部用 `Box` 保持 descriptor 地址在容器增长时稳定，
+  对应 Ghidra manager 存放 heap-allocated `UserPcodeOp*` 的身份语义。
+
+真实 12.0.4 门禁：
+`tools/run_userop_localtype_metadata_oracle.sh` 对比 61 条完整观察记录，覆盖
+builtin factory identity、slot-1/空洞压缩、missing metadata、重复注册、
+三类注册异常及异常后的索引/名称/descriptor 状态，投影结果
+`projection_status=MATCH`。runner 从提交 `a29f5b7` 的完整归档构建，只覆盖
+当前 `src/userop.rs`，不读取工作树中的 TypeFactory 或其他依赖源码。
+`TypeOpCallother` 的 Architecture-owned caller/fallback 闭包尚未接入对拍，
+所以 `overall_status=UNTESTED`；该证据只解锁 CALLOTHER metadata 地基，
+下游仍属于 `TYPEOP-LOCALTYPE-DISPATCH-0001`，模块总体保持 L2。

@@ -2776,6 +2776,55 @@
      "RG-F-fca48a1e0a6bc6daca86"
     ]
    }
+  },
+  {
+   "id": "userop_localtype_metadata_1204",
+   "description": "DatatypeUserOp/UserOpManage canonical local-type descriptor, slot mapping, sparse registration, and error-state projection",
+   "runner": [
+    "tools/run_userop_localtype_metadata_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "UNTESTED",
+   "cache": {
+    "metadata": "tests/oracle/userop_localtype_metadata_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/userop_localtype_metadata_1204.cc",
+     "rust_fixture": "tests/oracle/userop_localtype_metadata_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_userop_localtype_metadata_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/userop.rs",
+     "docs/api/userop.md",
+     "tests/oracle/userop_localtype_metadata_1204.*",
+     "tools/run_userop_localtype_metadata_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-dbeaea721f2e1874fe92",
+     "GH12-F-35cfd33755f8489d090f",
+     "GH12-F-20b91d9f376a71d9321e",
+     "GH12-F-90064fc8831742bee5d7",
+     "GH12-F-d032ce60ff250599c679",
+     "GH12-F-a14f701417ad89ca18c3",
+     "GH12-F-55b9507b9acb25c198dc"
+    ],
+    "rust_function_ids": [
+     "RG-F-0c4ea6c76d347b9f1815",
+     "RG-F-e808077ecb988fc7b9f7",
+     "RG-F-afb4faafea878ed695c3",
+     "RG-F-6ff8ff8a0f1acae51cd9",
+     "RG-F-73dc4e776768b8941d3e",
+     "RG-F-bac621effbf7417c2739",
+     "RG-F-7b64b2de257aa634ef6a"
+    ]
+   }
   }
  ]
 }

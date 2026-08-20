@@ -13,11 +13,12 @@
 //! - `UserOpManage`: manager holding all registered user ops
 //!
 //! # Status
-//! Core data structures (UserPcodeOp, UserOpType, flags) and manager skeleton.
-//! Specialized subclasses (VolatileRead/Write, SegmentOp, JumpAssist) deferred.
+//! The typed descriptor registry has a locked 12.0.4 behavior fixture.
+//! Dynamic specialized semantics remain at module L2 as documented in
+//! `docs/api/userop.md`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use crate::op::PcodeOp;
 use crate::type_system::Datatype;
 
@@ -74,12 +75,28 @@ pub struct UserPcodeOp {
     pub flags: u32,
     /// Id of the injected payload for `InjectedUserOp` (-1 otherwise)
     pub inject_id: i32,
+    /// Factory-canonical output type carried by a `DatatypeUserOp`.
+    /// Other descriptor kinds leave this unset, matching the virtual base
+    /// implementation's null return.
+    local_output_type: Option<Arc<Datatype>>,
+    /// Factory-canonical input types carried by a `DatatypeUserOp`.  Ghidra's
+    /// constructor appends only non-null arguments, so this vector contains
+    /// no holes and CALLOTHER slot 1 maps to element 0.
+    local_input_types: Vec<Arc<Datatype>>,
 }
 
 impl UserPcodeOp {
     // Ghidra: userop.hh:47 UserPcodeOp::new
     pub fn new(name: String, op_type: UserOpType, index: i32) -> Self {
-        Self { name, op_type, userop_index: index, flags: 0, inject_id: -1 }
+        Self {
+            name,
+            op_type,
+            userop_index: index,
+            flags: 0,
+            inject_id: -1,
+            local_output_type: None,
+            local_input_types: Vec::new(),
+        }
     }
 
     // Ghidra: userop.hh:47 UserPcodeOp::getName
@@ -91,6 +108,20 @@ impl UserPcodeOp {
     // Ghidra: userop.hh:47 UserPcodeOp::getDisplay
     pub fn get_display(&self) -> u32 {
         self.flags & (userop_flags::ANNOTATION_ASSIGNMENT | userop_flags::NO_OPERATOR | userop_flags::DISPLAY_STRING)
+    }
+
+    // Ghidra: userop.hh:101 UserPcodeOp::getOutputLocal
+    /// Return the descriptor's fixed output type, if one was specified.
+    pub fn get_output_local(&self) -> Option<&Arc<Datatype>> {
+        self.local_output_type.as_ref()
+    }
+
+    // Ghidra: userop.hh:108 UserPcodeOp::getInputLocal
+    /// Return the descriptor's fixed input type for a raw CALLOTHER slot.
+    /// Slot zero is the user-op id, so typed operands begin at slot one.
+    pub fn get_input_local(&self, slot: i32) -> Option<&Arc<Datatype>> {
+        let typed_slot = usize::try_from(slot.checked_sub(1)?).ok()?;
+        self.local_input_types.get(typed_slot)
     }
 
     // Ghidra: userop.hh:47 UserPcodeOp::getOperatorName
@@ -150,34 +181,28 @@ impl UserPcodeOp {
 #[derive(Debug, Clone)]
 pub struct DatatypeUserOp {
     pub base: UserPcodeOp,
-    pub out_type: Option<Arc<Datatype>>,
-    pub in_types: Vec<Option<Arc<Datatype>>>,
 }
 
 impl DatatypeUserOp {
     // Ghidra: userop.cc:55 DatatypeUserOp::new
     pub fn new(name: String, index: i32, out: Option<Arc<Datatype>>, ins: Vec<Option<Arc<Datatype>>>) -> Self {
-        Self {
-            base: UserPcodeOp::new(name, UserOpType::Datatype, index),
-            out_type: out,
-            in_types: ins,
-        }
+        let mut base = UserPcodeOp::new(name, UserOpType::Datatype, index);
+        base.local_output_type = out;
+        base.local_input_types = ins.into_iter().take(4).flatten().collect();
+        Self { base }
     }
 
     // Ghidra: userop.cc:70 DatatypeUserOp::getOutputLocal
     /// Get the output data-type. Faithful to `DatatypeUserOp::getOutputLocal`.
-    pub fn get_output_local(&self) -> Option<&Arc<Datatype>> { self.out_type.as_ref() }
+    pub fn get_output_local(&self) -> Option<&Arc<Datatype>> {
+        self.base.get_output_local()
+    }
 
     // Ghidra: userop.cc:76 DatatypeUserOp::getInputLocal
     /// Get the input data-type at a given slot. Faithful to
     /// `DatatypeUserOp::getInputLocal` (userop.cc:76-83).
     pub fn get_input_local(&self, slot: i32) -> Option<&Arc<Datatype>> {
-        let s = slot - 1; // Skip the CALLOTHER id in slot 0
-        if s >= 0 && (s as usize) < self.in_types.len() {
-            self.in_types[s as usize].as_ref()
-        } else {
-            None
-        }
+        self.base.get_input_local(slot)
     }
 }
 
@@ -362,7 +387,7 @@ impl InternalStringOp {
 /// Corresponds to Ghidra's `UserOpManage` (userop.hh).
 pub struct UserOpManage {
     /// All registered user ops by index
-    pub ops: Vec<UserPcodeOp>,
+    pub ops: Vec<Option<Box<UserPcodeOp>>>,
     /// Map from name to index
     pub name_map: HashMap<String, i32>,
     /// Segment ops registered by space index. Faithful to the segment-op
@@ -375,7 +400,7 @@ pub struct UserOpManage {
     /// Built-in id (BUILTIN_*) → user op. Faithful to Ghidra's
     /// `UserOpManage::builtinmap` (userop.hh:342), populated by
     /// `registerBuiltin(uint4)` (userop.cc:432-484).
-    pub builtin_map: HashMap<u32, UserPcodeOp>,
+    pub builtin_map: HashMap<u32, Box<UserPcodeOp>>,
 }
 
 impl UserOpManage {
@@ -404,7 +429,8 @@ impl UserOpManage {
     pub fn register_op(&mut self, name: String, op_type: UserOpType) -> i32 {
         let index = self.ops.len() as i32;
         self.name_map.insert(name.clone(), index);
-        self.ops.push(UserPcodeOp::new(name, op_type, index));
+        self.ops
+            .push(Some(Box::new(UserPcodeOp::new(name, op_type, index))));
         index
     }
 
@@ -414,10 +440,25 @@ impl UserOpManage {
     /// directly, larger built-in ids fall through to `builtinmap`.
     pub fn get_op(&self, index: i32) -> Option<&UserPcodeOp> {
         if index >= 0 && (index as usize) < self.ops.len() {
-            Some(&self.ops[index as usize])
+            self.ops[index as usize].as_deref()
         } else {
-            self.builtin_map.get(&(index as u32))
+            self.builtin_map.get(&(index as u32)).map(Box::as_ref)
         }
+    }
+
+    // Ghidra: userop.hh:101 UserPcodeOp::getOutputLocal
+    /// Query fixed output metadata through the descriptor selected by the
+    /// CALLOTHER index. `None` is the base-class result and tells TypeOp to
+    /// use its size-derived fallback.
+    pub fn get_output_local(&self, index: i32) -> Option<&Arc<Datatype>> {
+        self.get_op(index)?.get_output_local()
+    }
+
+    // Ghidra: userop.hh:108 UserPcodeOp::getInputLocal
+    /// Query fixed input metadata through the descriptor selected by the
+    /// CALLOTHER index, including DatatypeUserOp's slot-minus-one mapping.
+    pub fn get_input_local(&self, index: i32, slot: i32) -> Option<&Arc<Datatype>> {
+        self.get_op(index)?.get_input_local(slot)
     }
 
     // Ghidra: userop.cc:367 UserOpManage::getIndexByName
@@ -437,21 +478,63 @@ impl UserOpManage {
     /// `builtin_map` and returned as the CALLOTHER constant index. Idempotent:
     /// repeated calls return the same id.
     pub fn register_builtin_by_id(&mut self, builtin_id: u32) -> u32 {
+        self.try_register_builtin_by_id(builtin_id)
+            .unwrap_or_else(|message| panic!("{message}"))
+    }
+
+    // Ghidra: userop.cc:432 UserOpManage::registerBuiltin
+    /// Fallible form of `register_builtin_by_id`, preserving Ghidra's exact
+    /// bad-id exception and its no-mutation-on-error ordering.  Datatype
+    /// builtins created through this compatibility path intentionally carry
+    /// no local metadata; callers with the Architecture TypeFactory must use
+    /// `register_builtin_with_local_types` on first registration.
+    pub fn try_register_builtin_by_id(&mut self, builtin_id: u32) -> Result<u32, String> {
         if self.builtin_map.contains_key(&builtin_id) {
-            return builtin_id;
+            return Ok(builtin_id);
         }
         let (name, op_type) = match builtin_id {
-            BUILTIN_STRINGDATA => ("builtin_string_data", UserOpType::StringData),
+            BUILTIN_STRINGDATA => ("stringdata", UserOpType::StringData),
             BUILTIN_VOLATILE_READ => ("read_volatile", UserOpType::VolatileRead),
             BUILTIN_VOLATILE_WRITE => ("write_volatile", UserOpType::VolatileWrite),
-            BUILTIN_MEMCPY => ("builtin_memcpy", UserOpType::StringData),
-            BUILTIN_STRNCPY => ("builtin_strncpy", UserOpType::StringData),
-            BUILTIN_WCSNCPY => ("builtin_wcsncpy", UserOpType::StringData),
-            _ => ("builtin_unknown", UserOpType::Unspecialized),
+            BUILTIN_MEMCPY => ("builtin_memcpy", UserOpType::Datatype),
+            BUILTIN_STRNCPY => ("builtin_strncpy", UserOpType::Datatype),
+            BUILTIN_WCSNCPY => ("builtin_wcsncpy", UserOpType::Datatype),
+            _ => return Err("Bad built-in userop id".to_string()),
         };
         let op = UserPcodeOp::new(name.to_string(), op_type, builtin_id as i32);
-        self.builtin_map.insert(builtin_id, op);
-        builtin_id
+        self.builtin_map.insert(builtin_id, Box::new(op));
+        Ok(builtin_id)
+    }
+
+    // Ghidra: userop.cc:432 UserOpManage::registerBuiltin
+    /// Register one of Ghidra's three DatatypeUserOp builtins using the
+    /// canonical `Arc<Datatype>` handles produced by the owning TypeFactory.
+    /// The first registration wins exactly like `builtinmap`; later calls
+    /// return the existing descriptor without replacing its metadata.
+    pub fn register_builtin_with_local_types(
+        &mut self,
+        builtin_id: u32,
+        out_type: Option<Arc<Datatype>>,
+        input_types: Vec<Option<Arc<Datatype>>>,
+    ) -> Result<u32, String> {
+        if self.builtin_map.contains_key(&builtin_id) {
+            return Ok(builtin_id);
+        }
+        let name = match builtin_id {
+            BUILTIN_MEMCPY => "builtin_memcpy",
+            BUILTIN_STRNCPY => "builtin_strncpy",
+            BUILTIN_WCSNCPY => "builtin_wcsncpy",
+            _ => return Err("Bad built-in userop id".to_string()),
+        };
+        let descriptor = DatatypeUserOp::new(
+            name.to_string(),
+            builtin_id as i32,
+            out_type,
+            input_types,
+        );
+        self.builtin_map
+            .insert(builtin_id, Box::new(descriptor.base));
+        Ok(builtin_id)
     }
 
     // Ghidra: userop.cc:367 UserOpManage::registerStringCopyOp
@@ -484,7 +567,10 @@ impl UserOpManage {
         // Built-in ids are large sentinel values (0x1000_00xx); small values
         // index the registered list.
         if index >= 0x1000_0000 {
-            return self.builtin_map.get(&index).map(|op| op.name.as_str());
+            return self
+                .builtin_map
+                .get(&index)
+                .map(|op| op.name.as_str());
         }
         self.get_op(index as i32).map(|op| op.name.as_str())
     }
@@ -514,7 +600,7 @@ impl UserOpManage {
     /// Get a mutable user op by its CALLOTHER index.
     pub fn get_op_mut(&mut self, index: i32) -> Option<&mut UserPcodeOp> {
         if index >= 0 && (index as usize) < self.ops.len() {
-            Some(&mut self.ops[index as usize])
+            self.ops[index as usize].as_deref_mut()
         } else {
             None
         }
@@ -546,9 +632,9 @@ impl UserOpManage {
     /// (userop.cc:490-527): a same-name op with a different index throws
     /// `Conflicting indices for userop name`; an occupied index with a
     /// different name throws `User op X has same index as Y` while an
-    /// identical name customizes the old record in place; segment ops are
-    /// additionally indexed by space with `Multiple segmentops defined for
-    /// same space` on collision.
+    /// identical name customizes the old record in place. `decode_segment_op`
+    /// performs Ghidra's remaining segment-space cross-reference immediately
+    /// after this common registration step.
     pub fn register_user_op(&mut self, op: UserPcodeOp) -> Result<(), String> {
         let ind = op.userop_index;
         if ind < 0 {
@@ -560,27 +646,32 @@ impl UserOpManage {
             }
         }
         while self.ops.len() <= ind as usize {
-            self.ops.push(UserPcodeOp::new(String::new(), UserOpType::Unspecialized, self.ops.len() as i32));
+            self.ops.push(None);
         }
-        if !self.ops[ind as usize].name.is_empty() && self.ops[ind as usize].name != op.name {
-            return Err(format!(
-                "User op {} has same index as {}",
-                op.name, self.ops[ind as usize].name
-            ));
+        if let Some(existing) = self.ops[ind as usize].as_deref() {
+            if existing.name != op.name {
+                return Err(format!(
+                    "User op {} has same index as {}",
+                    op.name, existing.name
+                ));
+            }
         }
         // We assume this registration customizes an existing userop: the
         // old spec is replaced.
-        let is_segment = op.op_type == UserOpType::Segment;
-        self.ops[ind as usize] = op.clone();
-        self.name_map.insert(op.name.clone(), ind);
-        if is_segment {
-            // The segment-op vector is keyed by the segment space index; the
-            // segment record carries it (set by decode_segment_op).
-            let seg_index = self.ops[ind as usize].userop_index; // placeholder; real key below
-            let _ = seg_index;
-            return Ok(());
-        }
+        self.ops[ind as usize] = Some(Box::new(op));
+        let installed = self.ops[ind as usize]
+            .as_deref()
+            .expect("registered userop slot must be populated");
+        self.name_map.insert(installed.name.clone(), ind);
         Ok(())
+    }
+
+    // Ghidra: userop.cc:490 UserOpManage::registerOp
+    /// Install a DatatypeUserOp in the same indexed descriptor container used
+    /// by every other user-op specialization.  This deliberately consumes the
+    /// wrapper so there is no second metadata table that can drift.
+    pub fn register_datatype_user_op(&mut self, op: DatatypeUserOp) -> Result<(), String> {
+        self.register_user_op(op.base)
     }
 
     // Ghidra: userop.cc:589 UserOpManage::decodeCallOtherFixup (+ userop.cc:85 InjectedUserOp::decode)
@@ -942,12 +1033,14 @@ impl UserOpManage {
         if !functional_display {
             vr_op.flags = userop_flags::NO_OPERATOR;
         }
-        self.builtin_map.insert(BUILTIN_VOLATILE_READ, vr_op);
+        self.builtin_map
+            .insert(BUILTIN_VOLATILE_READ, Box::new(vr_op));
         let mut vw_op = UserPcodeOp::new(write_op_name, UserOpType::VolatileWrite, BUILTIN_VOLATILE_WRITE as i32);
         if !functional_display {
             vw_op.flags = userop_flags::ANNOTATION_ASSIGNMENT;
         }
-        self.builtin_map.insert(BUILTIN_VOLATILE_WRITE, vw_op);
+        self.builtin_map
+            .insert(BUILTIN_VOLATILE_WRITE, Box::new(vw_op));
         Ok(())
     }
 
@@ -956,7 +1049,7 @@ impl UserOpManage {
     /// UserOpManage::getOp(string) (userop.cc:419).
     pub fn get_op_by_name(&self, name: &str) -> Option<&UserPcodeOp> {
         let idx = self.get_index_by_name(name)?;
-        self.ops.get(idx as usize)
+        self.ops.get(idx as usize)?.as_deref()
     }
 }
 
@@ -1018,7 +1111,7 @@ pub fn create_unspecialized(name: String, index: i32) -> UserPcodeOp {
 }
 
 // Ghidra: userop.cc:367 UserOpManage::createInjected
-/// Create an injected user op placeholder.
+/// Create an injected user-op descriptor.
 /// Corresponds to Ghidra's `InjectedUserOp`.
 pub fn create_injected(name: String, index: i32) -> UserPcodeOp {
     UserPcodeOp::new(name, UserOpType::Injected, index)
@@ -1102,6 +1195,14 @@ mod tests {
         // Idempotent.
         let id2 = mgr.register_builtin_by_id(BUILTIN_STRNCPY);
         assert_eq!(id2, BUILTIN_STRNCPY);
+        assert_eq!(
+            mgr.get_op(BUILTIN_STRNCPY as i32).unwrap().get_type(),
+            UserOpType::Datatype,
+        );
+        assert!(mgr.get_output_local(BUILTIN_STRNCPY as i32).is_none());
+        assert!(mgr
+            .get_input_local(BUILTIN_STRNCPY as i32, 1)
+            .is_none());
         // Name lookup.
         assert_eq!(mgr.get_call_other_name(BUILTIN_STRNCPY), Some("builtin_strncpy"));
         assert_eq!(mgr.get_call_other_name(BUILTIN_MEMCPY), None);
@@ -1162,6 +1263,120 @@ mod tests {
         let idx = mgr.manual_call_other_fixup("my_fixup", "out", &["in1".into(), "in2".into()]);
         assert!(mgr.get_op(idx).is_some());
         assert_eq!(mgr.get_op(idx).unwrap().get_type(), UserOpType::Injected);
+    }
+
+    #[test]
+    fn test_datatype_user_op_compacts_null_inputs() {
+        let factory = crate::type_system::typefactory::TypeFactory::new(8);
+        let void_type = factory.get_type_void();
+        let int_type = factory
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .expect("canonical int type");
+        let descriptor = DatatypeUserOp::new(
+            "typed".to_string(),
+            7,
+            Some(void_type.clone()),
+            vec![None, Some(int_type.clone()), None, Some(void_type.clone())],
+        );
+
+        assert!(std::sync::Arc::ptr_eq(
+            descriptor.get_output_local().expect("output metadata"),
+            &void_type,
+        ));
+        assert!(descriptor.get_input_local(0).is_none());
+        assert!(std::sync::Arc::ptr_eq(
+            descriptor.get_input_local(1).expect("compacted input zero"),
+            &int_type,
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            descriptor.get_input_local(2).expect("compacted input one"),
+            &void_type,
+        ));
+        assert!(descriptor.get_input_local(3).is_none());
+    }
+
+    #[test]
+    fn test_manager_preserves_typed_registration_error_state() {
+        let factory = crate::type_system::typefactory::TypeFactory::new(8);
+        let void_type = factory.get_type_void();
+        let int_type = factory
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .expect("canonical int type");
+        let mut manager = UserOpManage::new();
+        manager
+            .register_user_op(UserPcodeOp::new(
+                "typed".to_string(),
+                UserOpType::Unspecialized,
+                2,
+            ))
+            .expect("initial descriptor");
+        manager
+            .register_datatype_user_op(DatatypeUserOp::new(
+                "typed".to_string(),
+                2,
+                Some(void_type.clone()),
+                vec![Some(int_type.clone())],
+            ))
+            .expect("typed customization");
+
+        assert!(manager.get_op(0).is_none());
+        assert!(manager.get_op(1).is_none());
+        assert_eq!(
+            manager
+                .register_datatype_user_op(DatatypeUserOp::new(
+                    "typed".to_string(),
+                    3,
+                    Some(int_type.clone()),
+                    Vec::new(),
+                ))
+                .unwrap_err(),
+            "Conflicting indices for userop name typed",
+        );
+        assert!(manager.get_op(3).is_none());
+        assert!(std::sync::Arc::ptr_eq(
+            manager.get_output_local(2).expect("preserved output metadata"),
+            &void_type,
+        ));
+    }
+
+    #[test]
+    fn test_typed_builtin_first_registration_wins() {
+        let factory = crate::type_system::typefactory::TypeFactory::new(8);
+        let void_type = factory.get_type_void();
+        let int_type = factory
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .expect("canonical int type");
+        let mut manager = UserOpManage::new();
+        manager
+            .register_builtin_with_local_types(
+                BUILTIN_MEMCPY,
+                Some(void_type.clone()),
+                vec![Some(int_type.clone())],
+            )
+            .expect("typed builtin");
+        let first = manager
+            .get_op(BUILTIN_MEMCPY as i32)
+            .expect("first descriptor") as *const UserPcodeOp;
+        manager
+            .register_builtin_with_local_types(
+                BUILTIN_MEMCPY,
+                Some(int_type),
+                Vec::new(),
+            )
+            .expect("repeated typed builtin");
+
+        assert!(std::ptr::eq(
+            first,
+            manager
+                .get_op(BUILTIN_MEMCPY as i32)
+                .expect("stable descriptor") as *const UserPcodeOp,
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            manager
+                .get_output_local(BUILTIN_MEMCPY as i32)
+                .expect("first output metadata"),
+            &void_type,
+        ));
     }
 
     #[test]
