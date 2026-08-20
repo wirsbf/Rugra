@@ -944,14 +944,18 @@ impl DynamicHash {
         fd: &crate::funcdata::Funcdata,
         addr: Address,
     ) {
-        for op_ref in &fd.obank.alivelist {
-            let op_r = op_ref.0.read().unwrap();
-            if op_r.is_dead() {
+        for op_ref in fd.obank.begin_addr(addr) {
+            let (op_addr, is_dead) = {
+                let op = op_ref.0.read().unwrap();
+                (op.start.addr, op.is_dead())
+            };
+            if op_addr > addr {
+                break;
+            }
+            if is_dead {
                 continue;
             }
-            if op_r.start.addr == addr {
-                op_list.push(op_ref.0.clone());
-            }
+            op_list.push(op_ref.0.clone());
         }
     }
 
@@ -1194,11 +1198,31 @@ mod tests {
     #[test]
     fn test_gather_ops_at_address() {
         let mut fd = Funcdata::new("t", Address::new(0), 8);
-        let (op, _, _, _) = build_add_ir(&mut fd);
-        let mut ops: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
-        DynamicHash::gather_ops_at_address(&mut ops, &fd, op.read().unwrap().get_addr());
-        assert_eq!(ops.len(), 1);
-        assert!(Arc::ptr_eq(&ops[0], &op));
+        let block = fd.create_new_block();
+        let target = Address::new(0x1000);
+        let before = fd.new_op_with_seq(0, &crate::address::SeqNum::new(Address::new(0x0fff), 40));
+        let late = fd.new_op_with_seq(0, &crate::address::SeqNum::new(target, 30));
+        let dead = fd.new_op_with_seq(0, &crate::address::SeqNum::new(target, 20));
+        let early = fd.new_op_with_seq(0, &crate::address::SeqNum::new(target, 10));
+        let after = fd.new_op_with_seq(0, &crate::address::SeqNum::new(Address::new(0x1001), 0));
+        for op in [&before, &late, &early, &after] {
+            fd.op_insert_end(op, &block);
+        }
+
+        let seed = Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0xdead), 0),
+            OpCode::CPUI_COPY,
+        )));
+        let mut ops = vec![seed.clone()];
+        DynamicHash::gather_ops_at_address(&mut ops, &fd, target);
+        assert_eq!(ops.len(), 3);
+        assert!(Arc::ptr_eq(&ops[0], &seed));
+        assert!(Arc::ptr_eq(&ops[1], &early.0));
+        assert!(Arc::ptr_eq(&ops[2], &late.0));
+        assert!(dead.0.read().unwrap().is_dead());
+        assert!(!early.0.read().unwrap().is_dead());
+        assert!(!late.0.read().unwrap().is_dead());
+
         ops.clear();
         DynamicHash::gather_ops_at_address(&mut ops, &fd, Address::new(0xdead));
         assert!(ops.is_empty());

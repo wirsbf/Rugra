@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "fixture_id": "DYNAMIC-GATHEROPS-ALIVE-0001",
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/dynamic.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/dynamic.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "cb43401df869f5771f2c1acadc53de102773b4d9",
+    "base_tree": "d1aa4cfc9588d53fbe8ac63e3a4becbdb2a2b518",
+    "base_src_tree": "49d1c043da33bccc9b3d6be4dc357f988f2a2fb1",
+    "base_dynamic_blob": "2bdfbcaa0c217b55d2173331876ac4e5d4fd23c6",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlay": {
+      "path": "src/dynamic.rs",
+      "sha256": "16a9140e7328deb32f929594e125f29285ee944fbd56fe23fcce333da3008026",
+      "policy": "The only live library-source input; hash-verify it before replacing the pinned base commit's src/dynamic.rs"
+    },
+    "archive_policy": "Extract the explicit dependency closure from the immutable base commit, then apply only the verified dynamic.rs overlay; unrelated worktree sources are never read"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "api": "DynamicHash::gatherOpsAtAddress(vector<PcodeOp *> &, const Funcdata *, const Address &)",
+    "funcdata": "BfdArchitecture over the immutable 34a3febf:examples/curl Git blob; query the global GetStr function shell; no followFlow and no Action pass; append one synthetic BlockBasic",
+    "lifecycle": "Create five CPUI_COPY ops with explicit SeqNum values. Insert late, before, after, early through Funcdata::opInsertEnd so they become alive; leave dead uninserted on the dead list",
+    "address_and_sequence": "before=(0x0fff,time40), early=(0x1000,time10), dead=(0x1000,time20), late=(0x1000,time30), after=(0x1001,time0); alive integration order is late,before,after,early",
+    "calls": "Seed [before], gather at 0x1000; then seed [after], gather at empty 0x2000. Observe output vectors and the complete fixture bank/tree/block/parent/dead-state projection before and after",
+    "random_seed": "none; no randomized component",
+    "error_injection": "none",
+    "debug_macros": "__TERMINAL__ only through the locked Makefile libdecomp closure; OPACTION_DEBUG, CPUI_DEBUG, and TYPEPROP_DEBUG are absent",
+    "diagnostics": "BfdArchitecture initialization diagnostics are retained in a private ostringstream and are not part of the gatherOpsAtAddress observation",
+    "normalization": "None; fixed-order UTF-8 records and final newlines are compared byte-for-byte"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "a0e69cef400c0a3b6eb02b7b09e8c23e597c4ce7cae26177f49bf14c2f81fc4a",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "funcdata_size": 0,
+      "elf_symbol_extent": 74,
+      "symbol_source": "ELF/BFD"
+    },
+    "cases": [
+      {
+        "id": "target_with_seed",
+        "query_address": 4096,
+        "initial_output": ["before"],
+        "optree_order": ["before", "early", "dead", "late", "after"],
+        "alive_integration_order": ["late", "before", "after", "early"],
+        "expected_output": ["before", "early", "late"]
+      },
+      {
+        "id": "empty_with_seed",
+        "query_address": 8192,
+        "initial_output": ["after"],
+        "expected_output": ["after"]
+      }
+    ]
+  },
+  "observation_schema": {
+    "format": "Four fixed-order pipe-delimited UTF-8 records with final newline",
+    "record_order": ["bank", "target", "empty", "post"],
+    "bank": "Exact fixture alive-list, dead-list, optree and basic-block orders before either call",
+    "target": "Seed-preserving output pointer identity order, both returned target SeqNum.time values, and the excluded target dead flag",
+    "empty": "Seed-preserving result for an empty address range",
+    "post": "Exact alive/dead/tree/block orders, parent index for every fixture op, and all alive op dead flags after both calls",
+    "preserved": "Pointer identities are rendered only through fixed fixture labels; no order, alias, address, lifecycle, parent, block or state field is normalized"
+  },
+  "build": {
+    "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
+    "supplemental_source_units": [
+      "libdecomp.cc",
+      "sleigh_arch.cc",
+      "inject_sleigh.cc",
+      "bfd_arch.cc",
+      "loadimage_bfd.cc"
+    ],
+    "cxx_flags": ["-std=c++11", "-O2", "-Wall", "-Wno-sign-compare"],
+    "rugra_archive": "Immutable cb43401d dependency closure plus the hash-pinned live src/dynamic.rs overlay",
+    "rust_build": "Cargo --locked --offline in an isolated target, followed by rustc for the separately hashed fixture"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "db16f489259dd59645233a4b0c151c36e51fb29c3f89820862f3439b1d346089",
+    "rust_fixture_sha256": "e6d7fb7689c8b02b9415f8548119e3c29836e53e9f4ea58f583877b8738b504a",
+    "dynamic_overlay_sha256": "16a9140e7328deb32f929594e125f29285ee944fbd56fe23fcce333da3008026",
+    "runner_sha256": "16a9358150d6dea1b2c045cc94fb323f91ed474bf0643cbc714b6faf8f17462e"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "98182189d918895858f90ee825af9fef25030e84e94cfa86ec19f075975ddc3e",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "98182189d918895858f90ee825af9fef25030e84e94cfa86ec19f075975ddc3e",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "coverage": {
+    "output_append_preserved": "MATCH",
+    "dead_filtered": "MATCH",
+    "same_address_seqnum_order": "MATCH",
+    "lower_address_excluded": "MATCH",
+    "upper_address_excluded": "MATCH",
+    "empty_range_append_only": "MATCH",
+    "bank_state_unchanged": "MATCH"
+  },
+  "overall_status": "MATCH"
+}

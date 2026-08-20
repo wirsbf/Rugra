@@ -2649,6 +2649,43 @@
     ],
     "rust_function_ids": []
    }
+  },
+  {
+   "id": "dynamic_gatherops_alive_1204",
+   "description": "DynamicHash gatherOpsAtAddress: optree SeqNum range order, dead filtering, append-only output, and unchanged bank/block lifecycle",
+   "runner": [
+    "tools/run_dynamic_gatherops_alive_oracle.sh"
+   ],
+   "timeout_seconds": 2400,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/dynamic_gatherops_alive_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/dynamic_gatherops_alive_1204.cc",
+     "rust_fixture": "tests/oracle/dynamic_gatherops_alive_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_dynamic_gatherops_alive_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/dynamic.rs",
+     "docs/api/dynamic.md",
+     "tests/oracle/dynamic_gatherops_alive_1204.*",
+     "tools/run_dynamic_gatherops_alive_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-89307177973b162912e0"
+    ],
+    "rust_function_ids": [
+     "RG-F-8611217bf12db0f7e435"
+    ]
+   }
   }
  ]
 }

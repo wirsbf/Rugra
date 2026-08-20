@@ -59,7 +59,16 @@ opcode 索引到哈希翻译值的映射表，将变体合并到同一哈希值�
 - `move_off_skip(op, slot)` — 穿越 CAST 等跳过 op (dynamic.cc:389-407)
 - `dedup_varnodes(varlist)` — 去重保序 (dynamic.cc:619-634)
 - `gather_first_level_vars(varlist, fd, addr, h)` — 收集 addr 处直接挂接的 Varnode (dynamic.cc:645-685)
-- `gather_ops_at_address(op_list, fd, addr)` — 收集 addr 处所有活 op (dynamic.cc:692-702)
+- `gather_ops_at_address(op_list, fd, addr)` — 按 `PcodeOpTree` 的
+  `(Address, SeqNum.time)` 顺序遍历目标地址的闭合区间，跳过 dead op，并把活 op
+  追加到调用方已有的 `op_list`；不清空输出容器 (dynamic.cc:692-702)。
+
+`DYNAMIC-GATHEROPS-ALIVE-0001` 修正了历史实现对 `alivelist` 的直接扫描。
+Ghidra 的 `beginOp(addr)` / `endOp(addr)` 实际委托给 `PcodeOpBank::begin/end`，
+在包含 alive 与 dead 的 `optree` 上用 `lower_bound(SeqNum(addr,0))` 和
+`upper_bound(SeqNum(addr,UINT_MAX))` 划定范围，再由 `gatherOpsAtAddress` 显式
+过滤 `isDead()`。因此结果顺序是稳定的 SeqNum 顺序，不是 op 进入 alive-list
+的先后顺序；`newOp` 后尚未 `opInsert` 的 op 必须保持 dead 且不得出现在结果中。
 
 ### 哈希解码静态方法（dynamic.cc:707-771）
 64 位哈希位布局：
