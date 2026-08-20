@@ -2925,6 +2925,52 @@
      "RG-F-baab3859aa0f9749d49b"
     ]
    }
+  },
+  {
+   "id": "cpool_typed_record_1204",
+   "description": "Constant-pool typed record identity, tags, reference order, duplicate/clear and exception partial-state projection with packed/codeflags residuals",
+   "runner": [
+    "tools/run_cpool_typed_record_oracle.sh"
+   ],
+   "timeout_seconds": 1800,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/cpool_typed_record_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/cpool_typed_record_1204.cc",
+     "rust_fixture": "tests/oracle/cpool_typed_record_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_cpool_typed_record_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/cpool.rs",
+     "docs/api/cpool.md",
+     "tests/oracle/cpool_typed_record_1204.*",
+     "tools/run_cpool_typed_record_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-350edf75342cf5433514",
+     "GH12-F-ecdff246e784931a40b0",
+     "GH12-F-3931d552ea18d40381b8",
+     "GH12-F-ca75960283eea803df25",
+     "GH12-F-f5a3296940670da2782f",
+     "GH12-F-0d335dcc0f670fb186ec"
+    ],
+    "rust_function_ids": [
+     "RG-F-1e9b7219794cbcbfb440",
+     "RG-F-beaf3f5ae97b361b0049",
+     "RG-F-7246b7de066e40097f3c",
+     "RG-F-53b26421decf161ce35d",
+     "RG-F-b27acdbef8958743d403"
+    ]
+   }
   }
  ]
 }

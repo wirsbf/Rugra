@@ -8,7 +8,40 @@
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/cpool.{hh,cc}.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
+use crate::type_system::datatype::Datatype;
+use crate::type_system::typefactory::TypeFactory;
+
+const ATTRIB_CONTENT_ID: u32 = 1;
+const ATTRIB_CONSTRUCTOR_ID: u32 = 4;
+const ATTRIB_DESTRUCTOR_ID: u32 = 5;
+const ATTRIB_A_ID: u32 = 80;
+const ATTRIB_B_ID: u32 = 81;
+const ATTRIB_LENGTH_ID: u32 = 82;
+const ATTRIB_TAG_ID: u32 = 83;
+
+const ELEM_DATA_ID: u32 = 1;
+const ELEM_VALUE_ID: u32 = 9;
+const ELEM_CONSTANTPOOL_ID: u32 = 109;
+const ELEM_CPOOLREC_ID: u32 = 110;
+const ELEM_REF_ID: u32 = 111;
+const ELEM_TOKEN_ID: u32 = 112;
+
+// RUGRA-GLUE: Rust materializes Ghidra's process-global AttributeId objects
+// at call sites because AttributeId owns its name String.
+fn attrib(name: &str, id: u32) -> AttributeId {
+    AttributeId::new(name, id)
+}
+
+// RUGRA-GLUE: Rust materializes Ghidra's process-global ElementId objects at
+// call sites because ElementId owns its name String.
+fn elem(name: &str, id: u32) -> ElementId {
+    ElementId::new(name, id)
+}
 
 /// Generic constant pool tag types. Faithful to the `CPoolRecord` enum
 /// (cpool.hh:59).
@@ -52,21 +85,25 @@ pub struct CPoolRecord {
     pub token: String,
     /// Constant value of the object (if known).
     pub value: u64,
-    /// Data-type name associated with the object.
+    /// Factory-owned canonical data-type associated with the object. This is
+    /// the authoritative equivalent of Ghidra's `Datatype *type`.
+    data_type: Option<Arc<Datatype>>,
+    /// Compatibility display name derived from `data_type` whenever a type is
+    /// installed. Consumers performing type analysis must use `get_type()`.
     pub type_name: String,
     /// For string literals, the raw byte data.
     pub byte_data: Option<Vec<u8>>,
 }
 
 impl Default for CPoolRecord {
-    // Ghidra: cpool.hh:56 CPoolRecord::default
+    // Ghidra: cpool.hh:83 CPoolRecord::CPoolRecord(void)
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl CPoolRecord {
-    // Ghidra: cpool.hh:56 CPoolRecord::new
+    // Ghidra: cpool.hh:83 CPoolRecord::CPoolRecord(void)
     /// Construct an empty record. Faithful to the constructor (cpool.hh:83).
     pub fn new() -> Self {
         Self {
@@ -74,60 +111,77 @@ impl CPoolRecord {
             flags: 0,
             token: String::new(),
             value: 0,
+            data_type: None,
             type_name: String::new(),
             byte_data: None,
         }
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::getTag
+    // Ghidra: cpool.hh:85 CPoolRecord::getTag(void) const
     /// Get the type of record. Faithful to `getTag`.
     pub fn get_tag(&self) -> u32 {
         self.tag
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::getToken
+    // Ghidra: cpool.hh:86 CPoolRecord::getToken(void) const
     /// Get name of method or data-type. Faithful to `getToken`.
     pub fn get_token(&self) -> &str {
         &self.token
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::getByteData
+    // Ghidra: cpool.hh:87 CPoolRecord::getByteData(void) const
     /// Get string literal byte data. Faithful to `getByteData`.
     pub fn get_byte_data(&self) -> Option<&[u8]> {
         self.byte_data.as_deref()
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::getByteDataLength
+    // Ghidra: cpool.hh:88 CPoolRecord::getByteDataLength(void) const
     /// Number of bytes of string literal data. Faithful to `getByteDataLength`.
     pub fn get_byte_data_length(&self) -> usize {
         self.byte_data.as_ref().map_or(0, |d| d.len())
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::getTypeName
-    /// Get the data-type name. Faithful to `getType`.
+    // Ghidra: cpool.hh:89 CPoolRecord::getType(void) const
+    /// Get the factory-owned canonical data-type.
+    pub fn get_type(&self) -> Option<&Arc<Datatype>> {
+        self.data_type.as_ref()
+    }
+
+    // RUGRA-GLUE: Compatibility display accessor for legacy Rugra printers;
+    // Ghidra callers use getType()->getName().
+    /// Get the compatibility display name derived from the canonical type.
     pub fn get_type_name(&self) -> &str {
         &self.type_name
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::getValue
+    // RUGRA-GLUE: Rust keeps the Arc and its compatibility display name in
+    // sync; Ghidra assigns the raw Datatype pointer directly as a friend.
+    /// Install a factory-owned canonical data-type.
+    pub fn set_type(&mut self, data_type: Arc<Datatype>) {
+        self.type_name = data_type.get_name().to_string();
+        self.data_type = Some(data_type);
+    }
+
+    // Ghidra: cpool.hh:90 CPoolRecord::getValue(void) const
     /// Get the constant value. Faithful to `getValue`.
     pub fn get_value(&self) -> u64 {
         self.value
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::isConstructor
+    // Ghidra: cpool.hh:91 CPoolRecord::isConstructor(void) const
     /// Is the object a constructor method? Faithful to `isConstructor`.
     pub fn is_constructor(&self) -> bool {
         (self.flags & cpool_flags::IS_CONSTRUCTOR) != 0
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::isDestructor
+    // Ghidra: cpool.hh:92 CPoolRecord::isDestructor(void) const
     /// Is the object a destructor method? Faithful to `isDestructor`.
     pub fn is_destructor(&self) -> bool {
         (self.flags & cpool_flags::IS_DESTRUCTOR) != 0
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::tagToString
+    // RUGRA-GLUE: Named Rust helper for the branch chain in
+    // CPoolRecord::encode (cpool.cc:36-51).
     /// Convert a tag to its string name for encoding. Faithful to the
     /// encode logic (cpool.cc:36-51).
     pub fn tag_to_string(tag: u32) -> &'static str {
@@ -143,7 +197,8 @@ impl CPoolRecord {
         }
     }
 
-    // Ghidra: cpool.hh:56 CPoolRecord::stringToTag
+    // RUGRA-GLUE: Named Rust helper for the branch chain in
+    // CPoolRecord::decode (cpool.cc:99-115).
     /// Convert a string name to a tag for decoding. Faithful to the decode
     /// logic (cpool.cc:99-115).
     pub fn string_to_tag(s: &str) -> u32 {
@@ -157,6 +212,167 @@ impl CPoolRecord {
             "classref" => cpool_tag::CLASS_REFERENCE,
             _ => cpool_tag::PRIMITIVE,
         }
+    }
+
+    // Ghidra: cpool.cc:32 CPoolRecord::encode(Encoder &) const
+    /// Encode this record as a `<cpoolrec>` element, including value/data,
+    /// flags, and the canonical data-type reference in Ghidra's exact order.
+    pub fn encode(&self, encoder: &mut dyn Encoder) -> Result<(), String> {
+        let rec_elem = elem("cpoolrec", ELEM_CPOOLREC_ID);
+        encoder.open_element(&rec_elem);
+        encoder.write_string(&attrib("tag", ATTRIB_TAG_ID), Self::tag_to_string(self.tag));
+        if self.is_constructor() {
+            encoder.write_bool(&attrib("constructor", ATTRIB_CONSTRUCTOR_ID), true);
+        }
+        if self.is_destructor() {
+            encoder.write_bool(&attrib("destructor", ATTRIB_DESTRUCTOR_ID), true);
+        }
+        if self.tag == cpool_tag::PRIMITIVE {
+            let value_elem = elem("value", ELEM_VALUE_ID);
+            encoder.open_element(&value_elem);
+            encoder.write_unsigned_integer(&attrib("XMLcontent", ATTRIB_CONTENT_ID), self.value);
+            encoder.close_element(&value_elem);
+        }
+        if let Some(bytes) = self.byte_data.as_ref() {
+            let data_elem = elem("data", ELEM_DATA_ID);
+            encoder.open_element(&data_elem);
+            encoder.write_signed_integer(&attrib("length", ATTRIB_LENGTH_ID), bytes.len() as i64);
+            let mut content = String::new();
+            for (index, byte) in bytes.iter().enumerate() {
+                // `uint1` is an unsigned-char typedef, so Ghidra's ostream
+                // insertion writes one raw character after setw(2)'s '0'
+                // padding; it does not format the numeric byte as hex.
+                content.push('0');
+                content.push(char::from(*byte));
+                content.push(' ');
+                if (index + 1) % 16 == 0 {
+                    content.push('\n');
+                }
+            }
+            encoder.write_string(&attrib("XMLcontent", ATTRIB_CONTENT_ID), &content);
+            encoder.close_element(&data_elem);
+        } else {
+            let token_elem = elem("token", ELEM_TOKEN_ID);
+            encoder.open_element(&token_elem);
+            encoder.write_string(&attrib("XMLcontent", ATTRIB_CONTENT_ID), &self.token);
+            encoder.close_element(&token_elem);
+        }
+        let data_type = self
+            .data_type
+            .as_ref()
+            .ok_or_else(|| "Bad constant pool record: missing data-type".to_string())?;
+        data_type.encode_ref(encoder);
+        encoder.close_element(&rec_elem);
+        Ok(())
+    }
+
+    // Ghidra: cpool.cc:89 CPoolRecord::decode(Decoder &,TypeFactory &)
+    /// Decode a `<cpoolrec>` into this record. Mutations happen in Ghidra's
+    /// source order, so an error leaves the same observable prefix of state.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        typegrp: &mut TypeFactory,
+    ) -> Result<(), String> {
+        self.tag = cpool_tag::PRIMITIVE;
+        self.value = 0;
+        self.flags = 0;
+        let elem_id = decoder.open_element_matching(&elem("cpoolrec", ELEM_CPOOLREC_ID));
+        if elem_id != ELEM_CPOOLREC_ID {
+            return Err("Expected <cpoolrec> element".to_string());
+        }
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match attrib_id {
+                ATTRIB_TAG_ID => self.tag = Self::string_to_tag(&decoder.read_string()),
+                ATTRIB_CONSTRUCTOR_ID => {
+                    if decoder.read_bool() {
+                        self.flags |= cpool_flags::IS_CONSTRUCTOR;
+                    }
+                }
+                ATTRIB_DESTRUCTOR_ID => {
+                    if decoder.read_bool() {
+                        self.flags |= cpool_flags::IS_DESTRUCTOR;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if self.tag == cpool_tag::PRIMITIVE {
+            let sub_id = decoder.open_element_matching(&elem("value", ELEM_VALUE_ID));
+            if sub_id != ELEM_VALUE_ID {
+                return Err(
+                    "Expected <value> element in primitive constant pool record".to_string()
+                );
+            }
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                if attrib_id == ATTRIB_CONTENT_ID {
+                    self.value = decoder.read_unsigned_integer();
+                }
+            }
+            decoder.close_element(sub_id);
+        }
+        let sub_id = decoder.open_element();
+        if sub_id == 0 {
+            return Err("Bad constant pool record: missing <token> or <data>".to_string());
+        }
+        if sub_id == ELEM_TOKEN_ID {
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                if attrib_id == ATTRIB_CONTENT_ID {
+                    self.token = decoder.read_string();
+                }
+            }
+        } else {
+            let mut length = 0;
+            let mut content = String::new();
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                match attrib_id {
+                    ATTRIB_LENGTH_ID => length = decoder.read_signed_integer(),
+                    ATTRIB_CONTENT_ID => content = decoder.read_string(),
+                    _ => {}
+                }
+            }
+            if length < 0 {
+                return Err("Bad constant pool record: negative <data> length".to_string());
+            }
+            let mut bytes = Vec::with_capacity(length as usize);
+            for word in content.split_whitespace().take(length as usize) {
+                let value = u32::from_str_radix(word, 16)
+                    .map_err(|_| "Bad constant pool record: malformed <data>".to_string())?;
+                bytes.push(value as u8);
+            }
+            if bytes.len() != length as usize {
+                return Err("Bad constant pool record: short <data>".to_string());
+            }
+            self.byte_data = Some(bytes);
+        }
+        decoder.close_element(sub_id);
+        if self.tag == cpool_tag::STRING_LITERAL && self.byte_data.is_none() {
+            return Err("Bad constant pool record: missing <data>".to_string());
+        }
+        // TODO(TYPEFACTORY-CODEFLAGS-DECODE-0001): Ghidra calls
+        // decodeTypeWithCodeFlags when either flag is set. Until that factory
+        // API exists, decode_type consumes and canonicalizes the same pointer
+        // type but cannot inject constructor/destructor flags into TypeCode.
+        let data_type = typegrp.decode_type(decoder)?;
+        self.set_type(data_type);
+        decoder.close_element(elem_id);
+        Ok(())
     }
 }
 
@@ -174,7 +390,7 @@ pub struct CheapSorter {
 }
 
 impl CheapSorter {
-    // Ghidra: cpool.hh:175 CheapSorter::fromRefs
+    // Ghidra: cpool.hh:181 CheapSorter::CheapSorter(const vector<uintb> &)
     /// Construct from an array of reference integers. Faithful to the
     /// constructor (cpool.hh:181).
     pub fn from_refs(refs: &[u64]) -> Self {
@@ -184,48 +400,95 @@ impl CheapSorter {
         }
     }
 
-    // Ghidra: cpool.hh:175 CheapSorter::apply
+    // Ghidra: cpool.hh:195 CheapSorter::apply(vector<uintb> &) const
     /// Convert the reference back to a formal array of integers. Faithful to
     /// `apply` (cpool.hh:195).
     pub fn apply(&self) -> Vec<u64> {
         vec![self.a, self.b]
+    }
+
+    // Ghidra: cpool.cc:176 ConstantPoolInternal::CheapSorter::encode(Encoder &) const
+    /// Encode the two-component reference as `<ref a="..." b="..."/>`.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        let ref_elem = elem("ref", ELEM_REF_ID);
+        encoder.open_element(&ref_elem);
+        encoder.write_unsigned_integer(&attrib("a", ATTRIB_A_ID), self.a);
+        encoder.write_unsigned_integer(&attrib("b", ATTRIB_B_ID), self.b);
+        encoder.close_element(&ref_elem);
+    }
+
+    // Ghidra: cpool.cc:187 ConstantPoolInternal::CheapSorter::decode(Decoder &)
+    /// Decode a two-component reference from a `<ref>` element.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) -> Result<(), String> {
+        let elem_id = decoder.open_element_matching(&elem("ref", ELEM_REF_ID));
+        if elem_id != ELEM_REF_ID {
+            return Err("Expected <ref> element".to_string());
+        }
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match attrib_id {
+                ATTRIB_A_ID => self.a = decoder.read_unsigned_integer(),
+                ATTRIB_B_ID => self.b = decoder.read_unsigned_integer(),
+                _ => {}
+            }
+        }
+        decoder.close_element(elem_id);
+        Ok(())
     }
 }
 
 /// An interface to the pool of constant objects for byte-code languages.
 /// Faithful to `ConstantPool` (cpool.hh:104).
 pub trait ConstantPool: Send + Sync {
-    // Ghidra: cpool.hh:175 CheapSorter::getRecord
+    // Ghidra: cpool.hh:119 ConstantPool::getRecord(const vector<uintb> &) const
     /// Retrieve a constant pool record given a reference. Faithful to
     /// `getRecord`.
     fn get_record(&self, refs: &[u64]) -> Option<&CPoolRecord>;
 
-    // Ghidra: cpool.hh:175 CheapSorter::createRecord
+    // Ghidra: cpool.hh:111 ConstantPool::createRecord(const vector<uintb> &)
     /// Allocate a new CPoolRecord associated with the reference. Faithful to
     /// `createRecord`. Returns a mutable reference to the new record.
     fn create_record(&mut self, refs: &[u64]) -> Result<&mut CPoolRecord, String>;
 
-    // Ghidra: cpool.hh:175 CheapSorter::putRecord
+    // Ghidra: cpool.cc:157 ConstantPool::putRecord(const vector<uintb> &,uint4,const string &,Datatype *)
     /// Add a new constant pool record. Faithful to `putRecord`
     /// (cpool.cc:157).
-    fn put_record(&mut self, refs: &[u64], tag: u32, tok: &str, type_name: &str) {
-        match self.create_record(refs) {
-            Ok(rec) => {
-                rec.tag = tag;
-                rec.token = tok.to_string();
-                rec.type_name = type_name.to_string();
-            }
-            Err(e) => {
-                eprintln!("[CPOOL] Failed to put record: {e}");
-            }
-        }
+    fn put_record(
+        &mut self,
+        refs: &[u64],
+        tag: u32,
+        tok: &str,
+        data_type: Arc<Datatype>,
+    ) -> Result<(), String> {
+        let rec = self.create_record(refs)?;
+        rec.tag = tag;
+        rec.token = tok.to_string();
+        rec.set_type(data_type);
+        Ok(())
     }
 
-    // Ghidra: cpool.hh:175 CheapSorter::isEmpty
+    // Ghidra: cpool.cc:166 ConstantPool::decodeRecord(const vector<uintb> &,Decoder &,TypeFactory &)
+    /// Allocate and decode a record. If decoding fails, the newly allocated
+    /// partial record remains associated with `refs`, matching Ghidra.
+    fn decode_record(
+        &mut self,
+        refs: &[u64],
+        decoder: &mut dyn Decoder,
+        typegrp: &mut TypeFactory,
+    ) -> Result<&CPoolRecord, String> {
+        self.create_record(refs)?.decode(decoder, typegrp)?;
+        self.get_record(refs)
+            .ok_or_else(|| "Decoded constant pool record disappeared".to_string())
+    }
+
+    // Ghidra: cpool.hh:141 ConstantPool::empty(void) const
     /// Is the container empty of records? Faithful to `empty`.
     fn is_empty(&self) -> bool;
 
-    // Ghidra: cpool.hh:175 CheapSorter::clear
+    // Ghidra: cpool.hh:142 ConstantPool::clear(void)
     /// Release any (local) resources. Faithful to `clear`.
     fn clear(&mut self);
 }
@@ -238,14 +501,15 @@ pub struct ConstantPoolInternal {
 }
 
 impl Default for ConstantPoolInternal {
-    // Ghidra: cpool.hh:165 ConstantPoolInternal::default
+    // RUGRA-GLUE: Rust Default delegates to the empty C++ map state.
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl ConstantPoolInternal {
-    // Ghidra: cpool.hh:165 ConstantPoolInternal::new
+    // RUGRA-GLUE: Rust constructor for the implicitly default-constructed
+    // ConstantPoolInternal::cpoolMap.
     /// Construct an empty constant pool.
     pub fn new() -> Self {
         Self {
@@ -253,110 +517,59 @@ impl ConstantPoolInternal {
         }
     }
 
-    // Ghidra: cpool.hh:165 ConstantPoolInternal::numRecords
+    // RUGRA-GLUE: Read-only map-size accessor for tests and diagnostics.
     /// Number of records in the pool.
     pub fn num_records(&self) -> usize {
         self.cpool_map.len()
     }
 
-    // Ghidra: cpool.hh:165 ConstantPoolInternal::records
+    // RUGRA-GLUE: Read-only iterator exposing the C++ map's native ordering.
     /// Iterate over all (reference, record) pairs.
     pub fn records(&self) -> impl Iterator<Item = (&CheapSorter, &CPoolRecord)> {
         self.cpool_map.iter()
     }
 
-    // Ghidra: cpool.cc:218 ConstantPoolInternal::encode
+    // Ghidra: cpool.cc:218 ConstantPoolInternal::encode(Encoder &) const
     /// Encode all records to a stream. Faithful to `ConstantPoolInternal::encode`
     /// (cpool.cc:218). Emits `<constantpool>` with `<ref>` + `<cpoolrec>` children.
-    pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
-        use crate::marshal::{AttributeId, ElementId};
-        let cp_elem = ElementId::new("constantpool", 0);
-        let ref_elem = ElementId::new("ref", 0);
-        let rec_elem = ElementId::new("cpoolrec", 0);
-        let token_elem = ElementId::new("token", 0);
+    pub fn encode(&self, encoder: &mut dyn Encoder) -> Result<(), String> {
+        let cp_elem = elem("constantpool", ELEM_CONSTANTPOOL_ID);
         encoder.open_element(&cp_elem);
         for (sorter, rec) in &self.cpool_map {
-            // <ref a=".." b=".."/>
-            encoder.open_element(&ref_elem);
-            encoder.write_unsigned_integer(&AttributeId::new("a", 0), sorter.a);
-            encoder.write_unsigned_integer(&AttributeId::new("b", 0), sorter.b);
-            encoder.close_element(&ref_elem);
-            // <cpoolrec tag=".." [constructor] [destructor]> <token>..</token> </cpoolrec>
-            encoder.open_element(&rec_elem);
-            encoder.write_string(&AttributeId::new("tag", 0), CPoolRecord::tag_to_string(rec.tag));
-            encoder.open_element(&token_elem);
-            encoder.write_string(&AttributeId::new("content", 1), &rec.token);
-            encoder.close_element(&token_elem);
-            encoder.close_element(&rec_elem);
+            sorter.encode(encoder);
+            rec.encode(encoder)?;
         }
         encoder.close_element(&cp_elem);
+        Ok(())
     }
 
-    // Ghidra: cpool.cc:230 ConstantPoolInternal::decode
+    // Ghidra: cpool.cc:230 ConstantPoolInternal::decode(Decoder &,TypeFactory &)
     /// Restore records from a stream. Faithful to `ConstantPoolInternal::decode`
     /// (cpool.cc:230).
-    pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
-        use crate::marshal::{AttributeId, ElementId};
-        let cp_id = decoder.open_element();
-        loop {
-            let sub_id = decoder.peek_element();
-            if sub_id == 0 { break; }
-            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
-            if elem_name != "ref" {
-                decoder.open_element();
-                decoder.close_element_skipping(sub_id);
-                continue;
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        typegrp: &mut TypeFactory,
+    ) -> Result<(), String> {
+        let cp_id = decoder.open_element_matching(&elem("constantpool", ELEM_CONSTANTPOOL_ID));
+        if cp_id != ELEM_CONSTANTPOOL_ID {
+            return Err("Expected <constantpool> element".to_string());
+        }
+        while decoder.peek_element() != 0 {
+            let next_id = decoder.peek_element();
+            if next_id != ELEM_REF_ID {
+                let next_name = decoder
+                    .element_name(next_id)
+                    .unwrap_or_else(|| format!("id:{next_id}"));
+                return Err(format!("Expected <ref> element, got <{next_name}>"));
             }
-            // Read <ref>.
-            decoder.open_element();
-            let mut a = 0u64;
-            let mut b = 0u64;
-            loop {
-                let aid = decoder.next_attribute_id();
-                if aid == 0 { break; }
-                match decoder.attribute_name(aid).as_deref() {
-                    Some("a") => a = decoder.read_unsigned_integer(),
-                    Some("b") => b = decoder.read_unsigned_integer(),
-                    _ => { let _ = decoder.read_string(); }
-                }
-            }
-            decoder.close_element(sub_id);
-            // Read <cpoolrec>.
-            let rec_id = decoder.peek_element();
-            if rec_id != 0 {
-                decoder.open_element();
-                let mut tag = 0u32;
-                let mut token = String::new();
-                loop {
-                    let aid = decoder.next_attribute_id();
-                    if aid == 0 { break; }
-                    if decoder.attribute_name(aid).as_deref() == Some("tag") {
-                        tag = CPoolRecord::string_to_tag(&decoder.read_string());
-                    } else { let _ = decoder.read_string(); }
-                }
-                // Read <token> child.
-                let tok_id = decoder.peek_element();
-                if tok_id != 0 {
-                    decoder.open_element();
-                    loop {
-                        let aid = decoder.next_attribute_id();
-                        if aid == 0 { break; }
-                        if decoder.attribute_name(aid).as_deref() == Some("content") {
-                            token = decoder.read_string();
-                        } else { let _ = decoder.read_string(); }
-                    }
-                    decoder.close_element(tok_id);
-                }
-                decoder.close_element(rec_id);
-                // Store the record.
-                let sorter = CheapSorter { a, b };
-                let mut rec = CPoolRecord::new();
-                rec.tag = tag;
-                rec.token = token;
-                self.cpool_map.insert(sorter, rec);
-            }
+            let mut sorter = CheapSorter::default();
+            sorter.decode(decoder)?;
+            let refs = sorter.apply();
+            self.create_record(&refs)?.decode(decoder, typegrp)?;
         }
         decoder.close_element(cp_id);
+        Ok(())
     }
 }
 
@@ -370,14 +583,13 @@ impl ConstantPool for ConstantPoolInternal {
     // Ghidra: cpool.cc:196 ConstantPoolInternal::createRecord
     fn create_record(&mut self, refs: &[u64]) -> Result<&mut CPoolRecord, String> {
         let sorter = CheapSorter::from_refs(refs);
-        if self.cpool_map.contains_key(&sorter) {
-            return Err(format!(
-                "Creating duplicate entry in constant pool: {:?}",
-                sorter
-            ));
+        match self.cpool_map.entry(sorter) {
+            Entry::Vacant(entry) => Ok(entry.insert(CPoolRecord::new())),
+            Entry::Occupied(entry) => Err(format!(
+                "Creating duplicate entry in constant pool: {}",
+                entry.get().get_token()
+            )),
         }
-        self.cpool_map.insert(sorter.clone(), CPoolRecord::new());
-        Ok(self.cpool_map.get_mut(&sorter).unwrap())
     }
 
     // Ghidra: cpool.hh:165 ConstantPoolInternal::isEmpty
@@ -394,6 +606,13 @@ impl ConstantPool for ConstantPoolInternal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::marshal::{IdRegistry, PackedDecode, PackedEncode, TreeDecoder, TreeEncoder};
+    use crate::type_system::datatype::TypeMetatype;
+    use std::sync::RwLock;
+
+    fn fixture_type(factory: &mut TypeFactory, name: &str) -> Arc<Datatype> {
+        factory.set_core_type(name, 4, TypeMetatype::Int, false)
+    }
 
     #[test]
     fn test_cpool_record_default() {
@@ -449,18 +668,21 @@ mod tests {
     #[test]
     fn test_constant_pool_create_get() {
         let mut pool = ConstantPoolInternal::new();
+        let mut factory = TypeFactory::new(8);
+        let code_type = fixture_type(&mut factory, "cpool_create_type");
         assert!(pool.is_empty());
         {
             let rec = pool.create_record(&[1, 2]).unwrap();
             rec.tag = cpool_tag::POINTER_METHOD;
             rec.token = "main".to_string();
-            rec.type_name = "func".to_string();
+            rec.set_type(code_type.clone());
         }
         assert!(!pool.is_empty());
         assert_eq!(pool.num_records(), 1);
         let rec = pool.get_record(&[1, 2]).unwrap();
         assert_eq!(rec.get_tag(), cpool_tag::POINTER_METHOD);
         assert_eq!(rec.get_token(), "main");
+        assert!(Arc::ptr_eq(rec.get_type().unwrap(), &code_type));
     }
 
     #[test]
@@ -474,18 +696,31 @@ mod tests {
     #[test]
     fn test_constant_pool_put_record() {
         let mut pool = ConstantPoolInternal::new();
-        pool.put_record(&[5, 0], cpool_tag::POINTER_FIELD, "field_x", "int");
+        let mut factory = TypeFactory::new(8);
+        let int_type = fixture_type(&mut factory, "cpool_put_type");
+        pool.put_record(
+            &[5, 0],
+            cpool_tag::POINTER_FIELD,
+            "field_x",
+            int_type.clone(),
+        )
+        .unwrap();
         let rec = pool.get_record(&[5, 0]).unwrap();
         assert_eq!(rec.get_tag(), cpool_tag::POINTER_FIELD);
         assert_eq!(rec.get_token(), "field_x");
-        assert_eq!(rec.get_type_name(), "int");
+        assert_eq!(rec.get_type_name(), int_type.get_name());
+        assert!(Arc::ptr_eq(rec.get_type().unwrap(), &int_type));
     }
 
     #[test]
     fn test_constant_pool_clear() {
         let mut pool = ConstantPoolInternal::new();
-        pool.put_record(&[1], cpool_tag::PRIMITIVE, "", "");
-        pool.put_record(&[2], cpool_tag::PRIMITIVE, "", "");
+        let mut factory = TypeFactory::new(8);
+        let int_type = fixture_type(&mut factory, "cpool_clear_type");
+        pool.put_record(&[1], cpool_tag::PRIMITIVE, "", int_type.clone())
+            .unwrap();
+        pool.put_record(&[2], cpool_tag::PRIMITIVE, "", int_type)
+            .unwrap();
         assert_eq!(pool.num_records(), 2);
         pool.clear();
         assert!(pool.is_empty());
@@ -521,10 +756,147 @@ mod tests {
     #[test]
     fn test_constant_pool_records_iter() {
         let mut pool = ConstantPoolInternal::new();
-        pool.put_record(&[1], cpool_tag::PRIMITIVE, "a", "");
-        pool.put_record(&[2], cpool_tag::PRIMITIVE, "b", "");
-        pool.put_record(&[3], cpool_tag::PRIMITIVE, "c", "");
+        let mut factory = TypeFactory::new(8);
+        let int_type = fixture_type(&mut factory, "cpool_records_type");
+        pool.put_record(&[1], cpool_tag::PRIMITIVE, "a", int_type.clone())
+            .unwrap();
+        pool.put_record(&[2], cpool_tag::PRIMITIVE, "b", int_type.clone())
+            .unwrap();
+        pool.put_record(&[3], cpool_tag::PRIMITIVE, "c", int_type)
+            .unwrap();
         let names: Vec<_> = pool.records().map(|(_, r)| r.get_token()).collect();
         assert_eq!(names, vec!["a", "b", "c"]); // sorted by CheapSorter
+    }
+
+    #[test]
+    fn test_reference_projection_and_duplicate_preserves_record() {
+        let mut factory = TypeFactory::new(8);
+        let original_type = fixture_type(&mut factory, "cpool_original_type");
+        let replacement_type = fixture_type(&mut factory, "cpool_replacement_type");
+        let mut pool = ConstantPoolInternal::new();
+        pool.put_record(
+            &[7, 3, 99],
+            cpool_tag::POINTER_FIELD,
+            "original",
+            original_type.clone(),
+        )
+        .unwrap();
+
+        assert!(pool.get_record(&[7, 3]).is_some());
+        assert!(pool.get_record(&[7, 3, 1234]).is_some());
+        assert!(pool.get_record(&[3, 7]).is_none());
+        let error = pool
+            .put_record(
+                &[7, 3],
+                cpool_tag::CHECK_CAST,
+                "replacement",
+                replacement_type,
+            )
+            .unwrap_err();
+        assert_eq!(error, "Creating duplicate entry in constant pool: original");
+        let record = pool.get_record(&[7, 3]).unwrap();
+        assert_eq!(record.get_tag(), cpool_tag::POINTER_FIELD);
+        assert_eq!(record.get_token(), "original");
+        assert!(Arc::ptr_eq(record.get_type().unwrap(), &original_type));
+    }
+
+    #[test]
+    fn test_tree_decode_preserves_type_identity_value_and_data() {
+        let mut factory = TypeFactory::new(8);
+        let int_type = fixture_type(&mut factory, "cpool_roundtrip_type");
+        let int_name = int_type.get_name().to_string();
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        let mut encoder = TreeEncoder::new(registry.clone());
+        let cp_elem = elem("constantpool", ELEM_CONSTANTPOOL_ID);
+        let ref_elem = elem("ref", ELEM_REF_ID);
+        let rec_elem = elem("cpoolrec", ELEM_CPOOLREC_ID);
+        let value_elem = elem("value", ELEM_VALUE_ID);
+        let token_elem = elem("token", ELEM_TOKEN_ID);
+        let data_elem = elem("data", ELEM_DATA_ID);
+        let typeref_elem = elem("typeref", 63);
+        encoder.open_element(&cp_elem);
+        encoder.open_element(&ref_elem);
+        encoder.write_unsigned_integer(&attrib("a", ATTRIB_A_ID), 9);
+        encoder.write_unsigned_integer(&attrib("b", ATTRIB_B_ID), 4);
+        encoder.close_element(&ref_elem);
+        encoder.open_element(&rec_elem);
+        encoder.write_string(&attrib("tag", ATTRIB_TAG_ID), "primitive");
+        encoder.open_element(&value_elem);
+        encoder.write_unsigned_integer(&attrib("XMLcontent", ATTRIB_CONTENT_ID), 0x1122_3344);
+        encoder.close_element(&value_elem);
+        encoder.open_element(&token_elem);
+        encoder.write_string(&attrib("XMLcontent", ATTRIB_CONTENT_ID), "primitive-token");
+        encoder.close_element(&token_elem);
+        encoder.open_element(&typeref_elem);
+        encoder.write_string(&attrib("name", 14), &int_name);
+        encoder.close_element(&typeref_elem);
+        encoder.close_element(&rec_elem);
+        encoder.open_element(&ref_elem);
+        encoder.write_unsigned_integer(&attrib("a", ATTRIB_A_ID), 2);
+        encoder.write_unsigned_integer(&attrib("b", ATTRIB_B_ID), 8);
+        encoder.close_element(&ref_elem);
+        encoder.open_element(&rec_elem);
+        encoder.write_string(&attrib("tag", ATTRIB_TAG_ID), "string");
+        encoder.open_element(&data_elem);
+        encoder.write_signed_integer(&attrib("length", ATTRIB_LENGTH_ID), 17);
+        encoder.write_string(
+            &attrib("XMLcontent", ATTRIB_CONTENT_ID),
+            "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 ",
+        );
+        encoder.close_element(&data_elem);
+        encoder.open_element(&typeref_elem);
+        encoder.write_string(&attrib("name", 14), &int_name);
+        encoder.close_element(&typeref_elem);
+        encoder.close_element(&rec_elem);
+        encoder.close_element(&cp_elem);
+        let document = encoder.into_document();
+        let root = document.get_root().unwrap().clone();
+        let mut decoder = TreeDecoder::new(root, registry);
+        let mut decoded = ConstantPoolInternal::new();
+        decoded.decode(&mut decoder, &mut factory).unwrap();
+
+        let primitive = decoded.get_record(&[9, 4]).unwrap();
+        assert_eq!(primitive.get_value(), 0x1122_3344);
+        assert_eq!(primitive.get_token(), "primitive-token");
+        assert!(Arc::ptr_eq(primitive.get_type().unwrap(), &int_type));
+        let string = decoded.get_record(&[2, 8]).unwrap();
+        assert_eq!(
+            string.get_byte_data(),
+            Some((0u8..17).collect::<Vec<_>>().as_slice())
+        );
+        assert!(Arc::ptr_eq(string.get_type().unwrap(), &int_type));
+    }
+
+    #[test]
+    fn test_decode_error_keeps_inserted_partial_record() {
+        let mut encoder = PackedEncode::new();
+        let cp_elem = elem("constantpool", ELEM_CONSTANTPOOL_ID);
+        let ref_elem = elem("ref", ELEM_REF_ID);
+        let rec_elem = elem("cpoolrec", ELEM_CPOOLREC_ID);
+        let token_elem = elem("token", ELEM_TOKEN_ID);
+        encoder.open_element(&cp_elem);
+        encoder.open_element(&ref_elem);
+        encoder.write_unsigned_integer(&attrib("a", ATTRIB_A_ID), 13);
+        encoder.write_unsigned_integer(&attrib("b", ATTRIB_B_ID), 6);
+        encoder.close_element(&ref_elem);
+        encoder.open_element(&rec_elem);
+        encoder.write_string(&attrib("tag", ATTRIB_TAG_ID), "string");
+        encoder.open_element(&token_elem);
+        encoder.write_string(&attrib("XMLcontent", ATTRIB_CONTENT_ID), "not-data");
+        encoder.close_element(&token_elem);
+        encoder.close_element(&rec_elem);
+        encoder.close_element(&cp_elem);
+
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        let mut decoder = PackedDecode::new(encoder.into_bytes(), registry);
+        let mut factory = TypeFactory::new(8);
+        let mut pool = ConstantPoolInternal::new();
+        let error = pool.decode(&mut decoder, &mut factory).unwrap_err();
+        assert_eq!(error, "Bad constant pool record: missing <data>");
+        assert_eq!(pool.num_records(), 1);
+        let partial = pool.get_record(&[13, 6]).unwrap();
+        assert_eq!(partial.get_tag(), cpool_tag::STRING_LITERAL);
+        assert_eq!(partial.get_token(), "not-data");
+        assert!(partial.get_type().is_none());
     }
 }
