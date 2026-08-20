@@ -1,22 +1,32 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-08-16（session 收尾核实更新）
+**日期**: 2026-08-20（HEAD `973efbf` 隔离核实）
 **版本**: 0.1.0
-**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，2026-08-15 多 agent wave 落地 20 个原子提交**
+**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，本 wave 已落地 18 个原子提交**
 
-## 关键指标（2026-08-16 session 收尾）
+## 关键指标（2026-08-20，HEAD `973efbf`）
 
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
-| 单元测试 (`cargo test --lib`) | **1357 通过 / 5 失败 / 3 ignored** | 失败集与 pristine base 逐个复现一致（comment/dynamic/funcdata×2/ruleaction 域外既有） |
-| curl E2E | **124/124 处理，74 反编译 / 1 超时(main churn) / 1 panic(helpf) / 48 导入声明桩** | 全量热测 43s |
-| 12.0.4 差分 | **skeleton 3092 / defects 0 / numbering 0 / Matched 123/124** | `compare_ghidra.py` 全量 |
+| 单元测试 (`cargo test --lib --locked --offline`) | **1448 通过 / 2 失败 / 3 ignored** | 从 HEAD `git archive` 隔离构建；仅余 `funcdata::test_type_propagation` 与 `test_infer_params_and_return_type`，均绑定 `ACTIONTYPEINFER-VTYPE-0001` 依赖链 |
+| curl E2E | **本轮未重新生成**；上次记录为 124/124 处理 | 禁止把旧产物冒充本轮 HEAD 运行证据 |
+| 12.0.4 差分 | **skeleton 2926 / defects 0 / numbering 0 / Matched 123/124** | 对现有 `result/curl_cur.c` 与 canonical `tests/golden/ghidra_curl_1204.c` 复核；不是本轮重生成 E2E |
 | xunknown/xVar | **0**（TYPE-WIRING 双轨消除） | grep 归零 |
 | FUN_ 未解析调用 | **5**（起点 64；CALLSPEC 接线） | grep |
 | 逐字节一致函数 | **50/122** | compare 差分 |
 | gcc 审计 | **107 OK / 16 FAIL**（畸形 cast 1262→0、`+ 0 -` 3→0 后余量=varmap/typedef 域） | audit_syntax |
 | 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
-| oracle fixture | **registry 71 个**；`multiple descendants` 家族 351→0 且 throw 上线后 0 触发 | fixture_registry.json |
+| oracle fixture | **registry 87 个** | `jq '.fixtures | length' tests/oracle/fixture_registry.json` |
+
+> 全局完成度仍未证明：逐函数账本分母与旧报告尚未完成生成器重建核对，且账本仍含 `MISSING/MISMATCH/NO_ORACLE/UNTESTED`。本页的局部 MATCH 不代表模块或项目 L3。
+
+### 2026-08-20 当前 wave 落地
+
+- 基线失败从 5 项收敛到 2 项：Comment 地址/XML content codec（`20cc7b2`）、DynamicHash op-tree 顺序（`a29f5b7`）、RuleAddUnsigned 类型前提测试（`c97ac93`）均有锁定 12.0.4 双侧 fixture。
+- 高扇出地基已原子化：RangeMap common refinement 与稳定 cursor（`8ec6bee`，43/43 MATCH、独立复核 APPROVE）、TypeFactory ordered local cache（`a4a2fe9`，99-record 投影 MATCH、整体 MISMATCH）、typed UserOp metadata（`128a127`，61-record 投影 MATCH）、typed CPoolRecord（`973efbf`，16/16 覆盖投影 MATCH、整体 MISMATCH）。
+- Merge 的固定名称启发式已替换为 canonical no-char 类型身份（`e15b91b`，29/29 覆盖投影 MATCH、整体 MISMATCH，窄面独立复核 APPROVE）。
+- 独立复核阻止了三次虚假收口：pipeline tree、旧 varmap 查询实现和 datatype type-order r1 均为 REJECT；前两项保持未提交，datatype 正在 r2 返工。
+- 剩余两项全量测试失败不能用 `None`/fallback 快修；正确依赖链为 `DATATYPE-TYPEORDER → TYPEOP-LOCALTYPE-DISPATCH → VARNODE-LOCALTYPE-RESOLUTION → ACTION-INFERTYPES-DISPATCH`。
 
 ### 终局指标（2026-08-17 收官）：warning 51/51=golden、`=` ( 畸形 1262→0、INDIRECT UnknownEffect −73%、stderr 风暴 48→0、11+ 轮机制 C（4 轮 REJECT 拦截真实分叉/误引）
 
