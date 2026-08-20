@@ -2825,6 +2825,56 @@
      "RG-F-7b64b2de257aa634ef6a"
     ]
    }
+  },
+  {
+   "id": "rangemap_common_refinement_1204",
+   "description": "Generic rangemap common refinement, equivalent-key ordering, zip/unzip/erase, bounded walks, and stable cursor identity",
+   "runner": [
+    "tools/run_rangemap_common_refinement_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MATCH",
+   "cache": {
+    "metadata": "tests/oracle/rangemap_common_refinement_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/rangemap_common_refinement_1204.cc",
+     "rust_fixture": "tests/oracle/rangemap_common_refinement_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_rangemap_common_refinement_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/rangemap.rs",
+     "docs/api/rangemap.md",
+     "tests/oracle/rangemap_common_refinement_1204.*",
+     "tools/run_rangemap_common_refinement_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-d3fec74a367aab5c941e",
+     "GH12-F-cb7bc7e6d2f49ccbd36e",
+     "GH12-F-7f4bbd8555089299f754",
+     "GH12-F-392cd8adfb69d7434ae9",
+     "GH12-F-f0e61533e19e131da5de",
+     "GH12-F-15350b4b2e2c5976468d",
+     "GH12-F-d5e7d5d12b04bef75ef8",
+     "GH12-F-c4a20adc7a0a022c2ba5",
+     "GH12-F-565923118d65e9369b5f"
+    ],
+    "rust_function_ids": [
+     "RG-F-7cf087a6c9e2f7d05118",
+     "RG-F-c019c6d723d3e6c245a3",
+     "RG-F-ad827825ccedaefb7758",
+     "RG-F-4a6a34f5d823387175f9",
+     "RG-F-61d01e788ae03d20510c",
+     "RG-F-437bdab47a0fc981eb6c"
+    ]
+   }
   }
  ]
 }

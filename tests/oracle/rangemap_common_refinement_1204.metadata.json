@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "fixture_id": "RANGEMAP-COMMON-REFINEMENT-1204",
+  "projection_status": "MATCH",
+  "overall_status": "MATCH",
+  "status_note": "All 43 ordered common-refinement, equivalent-key, erase/zip and stable-cursor observations byte-match locked rangemap.hh. The generic RangeMap template closure covered by this fixture is MATCH; production SymbolEntry/ParamEntryRange/ScopeMapper consumers remain separate TODOs and do not raise their modules above L2.",
+  "todo_ids": [
+    "RANGEMAP-COMMON-REFINEMENT-0001"
+  ],
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/rangemap.hh",
+    "source_sha256": "2abc18210bec58433794b4804613f6232ea9411c137a120d7ed71951f62fed30"
+  },
+  "rugra_base_commit": "8012627083360e0111506dc70d891552383a8c65",
+  "architecture": "host-independent direct template instantiation; linetype=unsigned long long/u64",
+  "compiler_spec": {
+    "id": "none-direct-rangemap-template",
+    "path": "Ghidra/Features/Decompiler/src/decompile/cpp/rangemap.hh"
+  },
+  "analysis_options": {
+    "api": "Direct public ghidra::rangemap<TestRecord> and rugra::rangemap::RangeMap<TestRecord> calls; no Architecture, Funcdata, Action, Rule, P-code, SSA, or printer pipeline is constructed",
+    "record_type": "Inclusive uint64 ranges; TestRecord name is the observable identity; integer Subsort orders by value and uses false/minimum=0 and true/maximum=1000000 on both sides",
+    "oracle_build": "g++ -std=c++11 -O2 -Wall -Wextra -pedantic against rangemap.hh archived from the locked oracle commit",
+    "rugra_build": "cargo build --offline --locked --lib from repository commit 8012627083360e0111506dc70d891552383a8c65 with only src/rangemap.rs overlaid, followed by direct rustc compilation of the Rust fixture",
+    "iteration_observable": "Each line records record names in raw PartIterator/RangeMapIter order. Repeated names are preserved and expose common-refinement multiplicity. begin_list/records order is separately recorded. Live cursors are retained across mutations and dereferenced without re-querying.",
+    "mutation_observable": "Insert observations include both hinted and unhinted comparator-equivalent positions. Stable cursors cover insertion before/after, equivalent-key insertion, and unzip. Erase observations retain all pre-erase output and expose direct part invalidation, zip-left invalidation, zip-right survival, end stability, left/right sewing, and remaining record-list order.",
+    "invalid_cursor_observation": "The C++ fixture never compares or dereferences an invalid iterator (which would be undefined behavior). Its three invalid labels are derived from the locked erase/zip statements and the std::multiset rule that erase invalidates only erased elements; the Rust side computes the corresponding safe cursor_is_valid results. All retained-cursor dereferences and erase-through-cursor cases are executed behaviorally on both sides.",
+    "normalization": "none; Ghidra and Rugra stdout are compared byte-for-byte, with no ID, order, multiplicity, boundary, or state normalization",
+    "debug_macros": "none",
+    "error_injection": "none",
+    "random_seed": "none; all operations and output are deterministic"
+  },
+  "cases": [
+    "equal_after_a/equal_after_b/equal_after_hi/equal_after_lo: exact-range insertions expose Ghidra's hinted-before and unhinted-after equivalent-key positions after every mutation",
+    "equal_range/equal_subsort_window/equal_ordered_walk: equal ranges, equal sub-sorts, distinct sub-sorts, find overload bounds, full partition walk, and record-list walk",
+    "wide_first_left/middle/right/walk: wide [100,140] then narrow [110,120], covering both unzip boundaries and every refined unit",
+    "narrow_first_left/middle/right/walk: identical ranges inserted in the opposite order, requiring the same common refinement and ordered partition walk",
+    "split_before_erase/split_three_way: outer, inner, and right-overlap ranges produce five boundary units and a three-record middle query",
+    "erase_inner_zip_left/erase_inner_middle/erase_inner_overlap: erasing the inner range sews its left boundary while preserving the boundary required by the right overlap",
+    "erase_right_zip_both/erase_right_outer: erasing the right overlap removes the remaining unnecessary boundaries and leaves one outer partition",
+    "gap_hit/gap_miss/inside_order: find_overlap starts at lower_bound(point), distinguishes a reachable next partition from a gap miss, and returns the minimum sub-sort in a containing unit",
+    "bounded_walk: find_begin(304) through find_end(316) preserves every visited refined partition and duplicate record",
+    "equivalent_split/equivalent_split_middle: two equal full ranges and an equal-subsort cutter exercise hinted insertion order while unzip splits comparator-equivalent entries",
+    "equivalent_erase_cut/equivalent_erase_peer: erase and zip retain Ghidra's equivalent multiplicity/order before reducing to one record",
+    "cursor_insert_before_initial/after/erase: canonical counterexample A [100,110], retain its iterator, insert B [50,60], then erase through the retained iterator; A remains selected and B remains in the map",
+    "cursor_insert_after/cursor_insert_after_erase: inserting a later disjoint key does not invalidate or retarget the retained A cursor",
+    "cursor_equivalent_after/cursor_equivalent_erase: hinted-before and unhinted-after equivalent B parts bracket A without retargeting A's iterator",
+    "cursor_unzip_after/cursor_unzip_erase: unzip mutates the original wide part in place and the retained cursor continues to erase wide rather than the newly inserted narrow record",
+    "cursor_end_insert: a retained past-the-end iterator remains equal to end after insertion",
+    "cursor_matrix_before/after/right_erase: erasing inner invalidates its own part, zip-left removes the retained left outer part, zip-right removes the middle outer part, the right outer part extended in place survives and can erase outer, and end remains stable"
+  ],
+  "input_manifest": {
+    "canonicalization": "SHA-256 of the UTF-8 input_manifest object before adding canonicalization/sha256, json.dumps sort_keys=true, separators=(',',':'), ensure_ascii=false",
+    "sha256": "befb92b8289f7687d9302ada7094537e2d09943e886645c2e88242941ffd1c35",
+    "binary": "none; header-only container fixture",
+    "ghidra_source": "rangemap.hh @ e40ed13014025f82488b1f8f7bca566894ac376b",
+    "line_domain": "decimal unsigned 64-bit offsets 10..440",
+    "subsort_domain": "integer values 1,2,3,4,5,7,8,9 with sentinels 0 and 1000000",
+    "mutation_sequences": [
+      "four equal [10,20] insertions with equal and distinct sub-sorts",
+      "wide/narrow insertion in both orders",
+      "three-way overlap followed by inner and right erasure",
+      "gapped overlap and bounded iterator queries",
+      "equal-range/equal-subsort peers split by a nested cutter followed by two erasures",
+      "stable PartIterator probes across insertion before/after/equivalent keys, unzip, erase, zip, and end"
+    ]
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "MATCH: record and refined-part identity are preserved; RangeMapCursor uses owner_generation plus stable part_serial, cross-map cursors are rejected, and erase/zip invalidate only removed parts.",
+    "loop_bounds_and_order": "MATCH: inclusive first/last refinement, lower/upper bounds, begin/end walks and equivalent hinted/unhinted insertion positions preserve locked multiset order without normalization.",
+    "counters_and_accumulators": "MATCH: f advances only after a refined unit, final unhinted insertion still occurs after exact-end break, new parts receive monotonic serials, unzip keeps the original right serial, and clear cannot alias old cursors.",
+    "sort_and_comparison_keys": "MATCH: the tree key remains exactly (last,subsort); owner_generation and serial are identity-only and never participate in ordering or equivalent-key tie breaking."
+  },
+  "comparand_sha256": {
+    "cpp_fixture": "f42ec00298318543c7f6e7a0451d254a210eacdea0f79db14cc1a70d539dbce8",
+    "rust_fixture": "750466758314c4a58b153b7fd3b781f7fc05c4bf7acbf9fa952445abde225722",
+    "rugra_rangemap_source": "b4e987cbc42b899aa49a0004d956e4a4f1a514e2be251037647973bdbbaac52e",
+    "api_document": "9ba33188988f3c9ccbb3bc6ce4c37afc705e4a24992723d03cba828bdd54a67f",
+    "runner": "050f78793a0e9fd689dc19866e5205e374c9c157fbd59e25e8dc463836649bd4"
+  },
+  "expected_stdout_sha256": "6655aeb3cda8b19237274548f732d36dc774da2821b34570d0c73c9f29c630e6",
+  "expected_record_count": 43
+}

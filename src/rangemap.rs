@@ -19,46 +19,204 @@
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/rangemap.{hh},
 //! partmap.hh.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 // ---------------------------------------------------------------------------
 // RangeMap — interval map for overlapping records
 // ---------------------------------------------------------------------------
 
-/// A record in a RangeMap, occupying the interval [first, last]. The user of
-/// RangeMap provides records that implement this trait.
-pub trait RangeRecord: Clone {
+/// Sub-sort values used by [`RangeMap`].
+///
+/// Ghidra requires `subsorttype(false)` and `subsorttype(true)` to construct
+/// values before and after every real sub-sort respectively
+/// (`rangemap.hh:50-55`).  Custom Rust sub-sort types express that contract
+/// explicitly through this trait.
+pub trait RangeSubsort: Ord + Clone {
+    // RUGRA-GLUE: Rust trait spelling of rangemap.hh's subsorttype(false) contract.
+    fn minimum() -> Self;
+
+    // RUGRA-GLUE: Rust trait spelling of rangemap.hh's subsorttype(true) contract.
+    fn maximum() -> Self;
+}
+
+impl RangeSubsort for () {
+    // RUGRA-GLUE: Unit is the Rust analogue of ScopeMapper::NullSubsort.
+    fn minimum() -> Self {}
+
+    // RUGRA-GLUE: Unit is the Rust analogue of ScopeMapper::NullSubsort.
+    fn maximum() -> Self {}
+}
+
+macro_rules! impl_numeric_range_subsort {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl RangeSubsort for $ty {
+                // RUGRA-GLUE: Primitive convenience implementation for a Rust record sub-sort.
+                fn minimum() -> Self { <$ty>::MIN }
+
+                // RUGRA-GLUE: Primitive convenience implementation for a Rust record sub-sort.
+                fn maximum() -> Self { <$ty>::MAX }
+            }
+        )+
+    };
+}
+
+impl_numeric_range_subsort!(i8, i16, i32, i64, i128, isize);
+impl_numeric_range_subsort!(u8, u16, u32, u64, u128, usize);
+
+/// A record in a [`RangeMap`], occupying the inclusive interval
+/// `[first, last]`.
+pub trait RangeRecord {
+    type Subsort: RangeSubsort;
+
     // RUGRA-GLUE: first (no Ghidra counterpart found)
     /// The start of the record's range.
     fn first(&self) -> u64;
+
     // RUGRA-GLUE: last (no Ghidra counterpart found)
     /// The end of the record's range (inclusive).
     fn last(&self) -> u64;
+
+    // RUGRA-GLUE: Rust trait spelling of recordtype::getSubsort required by rangemap.hh:36.
+    /// Return the value used to order records sharing one refined partition.
+    fn subsort(&self) -> Self::Subsort;
 }
 
-/// A sub-range entry in the internal refinement. Sorted by `last` boundary.
-#[derive(Clone)]
-struct SubRange<R: RangeRecord> {
-    /// Start of this disjoint sub-range.
-    first: u64,
-    /// End of this disjoint sub-range (inclusive).
+/// Stable identity for a record stored in a [`RangeMap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RangeMapId(u64);
+
+static NEXT_RANGE_MAP_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Opaque stable iterator into the ordered sub-range multiset.
+///
+/// The cursor identifies one `AddrRange`-equivalent part by identity rather
+/// than by its current ordinal.  Like `std::multiset` iterators, unrelated
+/// insertions do not invalidate it; erasing that specific part does.  `None`
+/// represents the owning map's past-the-end iterator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RangeMapCursor {
+    owner_generation: u64,
+    part_serial: Option<u64>,
+}
+
+/// Iterator over records attached to refined sub-ranges.
+pub struct RangeMapIter<'a, R> {
+    inner: std::vec::IntoIter<&'a R>,
+}
+
+impl<'a, R> Iterator for RangeMapIter<'a, R> {
+    type Item = &'a R;
+
+    // Ghidra: rangemap.hh:107 PartIterator &operator++(void)
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    // RUGRA-GLUE: size_hint forwards the owned reference-vector iterator metadata.
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<R> DoubleEndedIterator for RangeMapIter<'_, R> {
+    // Ghidra: rangemap.hh:110 PartIterator &operator--(void)
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
+impl<R> ExactSizeIterator for RangeMapIter<'_, R> {
+    // RUGRA-GLUE: ExactSizeIterator exposure for the materialized iterator domain.
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RangeKey<S: RangeSubsort> {
     last: u64,
-    /// The actual record this sub-range belongs to.
-    record: R,
+    subsort: S,
+}
+
+/// A sub-range entry in the internal common refinement.
+#[derive(Clone)]
+struct SubRange<S: RangeSubsort> {
+    serial: u64,
+    first: u64,
+    last: u64,
+    full_first: u64,
+    full_last: u64,
+    subsort: S,
+    record_id: RangeMapId,
+}
+
+struct StoredRecord<R> {
+    id: RangeMapId,
+    value: R,
+}
+
+/// Exact `std::multiset<AddrRange>` model.
+///
+/// The B-tree key is precisely Ghidra's `AddrRange::operator<` key:
+/// `(last, subsort)`.  The vector in a bucket is not an extra tie-break; it is
+/// the ordered multiplicity of comparator-equivalent multiset elements.
+struct RangeTree<S: RangeSubsort> {
+    buckets: BTreeMap<RangeKey<S>, Vec<SubRange<S>>>,
+}
+
+impl<S: RangeSubsort> Default for RangeTree<S> {
+    // RUGRA-GLUE: constructs the Rust backing store for std::multiset<AddrRange>.
+    fn default() -> Self {
+        Self {
+            buckets: BTreeMap::new(),
+        }
+    }
+}
+
+impl<S: RangeSubsort> RangeTree<S> {
+    // RUGRA-GLUE: materializes multiset order while retaining equivalent-element order.
+    fn ordered_parts(&self) -> Vec<SubRange<S>> {
+        self.buckets
+            .values()
+            .flat_map(|bucket| bucket.iter().cloned())
+            .collect()
+    }
+
+    // RUGRA-GLUE: rebuilds exact comparator-equivalence buckets after mutation.
+    fn replace_ordered_parts(&mut self, parts: Vec<SubRange<S>>) {
+        self.buckets.clear();
+        for part in parts {
+            let key = RangeKey {
+                last: part.last,
+                subsort: part.subsort.clone(),
+            };
+            self.buckets.entry(key).or_default().push(part);
+        }
+    }
+
+    // RUGRA-GLUE: exposes immutable flattened multiset positions to Rust cursors.
+    fn ordered_part_refs(&self) -> Vec<&SubRange<S>> {
+        self.buckets
+            .values()
+            .flat_map(|bucket| bucket.iter())
+            .collect()
+    }
 }
 
 /// An interval map container. Records can overlap; the container maintains a
-/// sorted list of disjoint sub-ranges for efficient lookup. Faithful to
-/// `rangemap<>` (rangemap.hh:65).
-///
-/// This is a simplified implementation that uses linear scan for find_overlap
-/// but sorted insertion for correct ordering. Full Ghidra uses a multiset of
-/// AddrRange; we use a Vec sorted by (last, first).
+/// multiset of disjoint sub-ranges forming the common refinement of all record
+/// ranges.  Ordering and multiplicity follow Ghidra's `rangemap<>` exactly:
+/// sub-range end first, then record sub-sort, with comparator-equivalent
+/// entries retained in multiset order.
 pub struct RangeMap<R: RangeRecord> {
-    /// Sorted sub-ranges (by last boundary, then first).
-    sub_ranges: Vec<SubRange<R>>,
-    /// All records stored (for iteration).
-    records: Vec<R>,
+    tree: RangeTree<R::Subsort>,
+    records: Vec<StoredRecord<R>>,
+    owner_generation: u64,
+    next_record_id: u64,
+    next_part_serial: u64,
 }
 
 impl<R: RangeRecord> Default for RangeMap<R> {
@@ -73,21 +231,24 @@ impl<R: RangeRecord> RangeMap<R> {
     /// Create an empty range map.
     pub fn new() -> Self {
         Self {
-            sub_ranges: Vec::new(),
+            tree: RangeTree::default(),
             records: Vec::new(),
+            owner_generation: NEXT_RANGE_MAP_GENERATION.fetch_add(1, AtomicOrdering::Relaxed),
+            next_record_id: 0,
+            next_part_serial: 0,
         }
     }
 
-    // RUGRA-GLUE: is_empty (no Ghidra counterpart found)
+    // Ghidra: rangemap.hh:135 bool empty(void) const
     /// Is the container empty? Faithful to `empty`.
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
 
-    // RUGRA-GLUE: clear (no Ghidra counterpart found)
+    // Ghidra: rangemap.hh:136 void clear(void)
     /// Clear all records. Faithful to `clear`.
     pub fn clear(&mut self) {
-        self.sub_ranges.clear();
+        self.tree.buckets.clear();
         self.records.clear();
     }
 
@@ -97,74 +258,530 @@ impl<R: RangeRecord> RangeMap<R> {
         self.records.len()
     }
 
-    // RUGRA-GLUE: insert (no Ghidra counterpart found)
-    /// Insert a new record into the container. Faithful to `insert`.
-    /// The record occupies [a, b]. A sub-range entry is created and inserted
-    /// in sorted position.
-    pub fn insert(&mut self, record: R) {
-        let a = record.first();
-        let b = record.last();
-        let sr = SubRange {
-            first: a,
-            last: b,
-            record: record.clone(),
-        };
-        // Insert sorted by (last, first).
-        let pos = self
-            .sub_ranges
-            .partition_point(|s| (s.last, s.first) < (sr.last, sr.first));
-        self.sub_ranges.insert(pos, sr);
-        self.records.push(record);
+    // RUGRA-GLUE: comparison helper implementing AddrRange::operator< without an artificial tie-break.
+    fn compare_part_to_key(part: &SubRange<R::Subsort>, key: &RangeKey<R::Subsort>) -> Ordering {
+        part.last
+            .cmp(&key.last)
+            .then_with(|| part.subsort.cmp(&key.subsort))
     }
 
-    // RUGRA-GLUE: find_overlap (no Ghidra counterpart found)
-    /// Find the first record overlapping the given interval [point, end].
-    /// Faithful to `find_overlap` (rangemap.hh:159). Returns the index of the
-    /// overlapping record, or None.
-    pub fn find_overlap(&self, point: u64, end: u64) -> Option<&R> {
-        for sr in &self.sub_ranges {
-            // Overlap: sr.first <= end && point <= sr.last
-            if sr.first <= end && point <= sr.last {
-                return Some(&sr.record);
+    // RUGRA-GLUE: std::multiset::lower_bound adapter over an ordered mutation snapshot.
+    fn lower_bound(parts: &[SubRange<R::Subsort>], key: &RangeKey<R::Subsort>) -> usize {
+        parts.partition_point(|part| Self::compare_part_to_key(part, key) == Ordering::Less)
+    }
+
+    // RUGRA-GLUE: std::multiset::upper_bound adapter over an ordered mutation snapshot.
+    fn upper_bound(parts: &[SubRange<R::Subsort>], key: &RangeKey<R::Subsort>) -> usize {
+        parts.partition_point(|part| Self::compare_part_to_key(part, key) != Ordering::Greater)
+    }
+
+    // RUGRA-GLUE: allocates internal identity needed to preserve C++ iterator identity across Vec snapshots.
+    fn allocate_part(
+        &mut self,
+        first: u64,
+        last: u64,
+        full_first: u64,
+        full_last: u64,
+        subsort: R::Subsort,
+        record_id: RangeMapId,
+    ) -> SubRange<R::Subsort> {
+        let serial = self.next_part_serial;
+        self.next_part_serial = self.next_part_serial.wrapping_add(1);
+        SubRange {
+            serial,
+            first,
+            last,
+            full_first,
+            full_last,
+            subsort,
+            record_id,
+        }
+    }
+
+    // RUGRA-GLUE: finds a stable internal iterator after multiset insertion.
+    fn index_of_serial(parts: &[SubRange<R::Subsort>], serial: u64) -> usize {
+        parts
+            .iter()
+            .position(|part| part.serial == serial)
+            .expect("internal rangemap iterator must remain present")
+    }
+
+    // RUGRA-GLUE: exact std::multiset hinted insertion, including insertion before an equivalent hint.
+    fn insert_hinted(
+        parts: &mut Vec<SubRange<R::Subsort>>,
+        hint_serial: u64,
+        part: SubRange<R::Subsort>,
+    ) -> usize {
+        let hint = Self::index_of_serial(parts, hint_serial);
+        let key = RangeKey {
+            last: part.last,
+            subsort: part.subsort.clone(),
+        };
+        let fits_before_hint = (hint == 0
+            || Self::compare_part_to_key(&parts[hint - 1], &key) != Ordering::Greater)
+            && Self::compare_part_to_key(&parts[hint], &key) != Ordering::Less;
+        let fits_after_hint = hint + 1 == parts.len()
+            || (Self::compare_part_to_key(&parts[hint], &key) != Ordering::Greater
+                && Self::compare_part_to_key(&parts[hint + 1], &key) != Ordering::Less);
+        let position = if fits_before_hint {
+            hint
+        } else if fits_after_hint {
+            hint + 1
+        } else {
+            Self::lower_bound(parts, &key)
+        };
+        parts.insert(position, part);
+        Self::index_of_serial(parts, hint_serial)
+    }
+
+    // RUGRA-GLUE: std::multiset::insert places an unhinted equivalent after existing equivalents.
+    fn insert_unhinted(parts: &mut Vec<SubRange<R::Subsort>>, part: SubRange<R::Subsort>) {
+        let key = RangeKey {
+            last: part.last,
+            subsort: part.subsort.clone(),
+        };
+        let position = Self::upper_bound(parts, &key);
+        parts.insert(position, part);
+    }
+
+    // Ghidra: rangemap.hh:177 void rangemap<_recordtype>::zip(linetype i,typename std::multiset<AddrRange>::iterator iter)
+    fn zip(parts: &mut Vec<SubRange<R::Subsort>>, mut boundary: u64, iter: usize) {
+        let first = parts[iter].first;
+        while iter < parts.len() && parts[iter].last == boundary {
+            parts.remove(iter);
+        }
+        boundary = boundary.wrapping_add(1);
+        let mut cursor = iter;
+        while cursor < parts.len() && parts[cursor].first == boundary {
+            parts[cursor].first = first;
+            cursor += 1;
+        }
+    }
+
+    // Ghidra: rangemap.hh:196 void rangemap<_recordtype>::unzip(linetype i,typename std::multiset<AddrRange>::iterator iter)
+    fn unzip(
+        &mut self,
+        parts: &mut Vec<SubRange<R::Subsort>>,
+        boundary: u64,
+        iter: usize,
+    ) -> usize {
+        let hint_serial = parts[iter].serial;
+        if parts[iter].last == boundary {
+            return iter;
+        }
+        let plus_one = boundary.wrapping_add(1);
+        let mut current_serial = Some(hint_serial);
+        while let Some(serial) = current_serial {
+            let current = Self::index_of_serial(parts, serial);
+            if parts[current].first > boundary {
+                break;
             }
+            let next = parts.get(current + 1).map(|part| part.serial);
+            let old_first = parts[current].first;
+            parts[current].first = plus_one;
+            let left = self.allocate_part(
+                old_first,
+                boundary,
+                parts[current].full_first,
+                parts[current].full_last,
+                parts[current].subsort.clone(),
+                parts[current].record_id,
+            );
+            Self::insert_hinted(parts, hint_serial, left);
+            current_serial = next;
+        }
+        Self::index_of_serial(parts, hint_serial)
+    }
+
+    // Ghidra: rangemap.hh:223 typename std::list<_recordtype>::iterator rangemap<_recordtype>::insert(const inittype &data,linetype a,linetype b)
+    /// Insert a record and return its stable identity.
+    pub fn insert(&mut self, record: R) -> RangeMapId {
+        let a = record.first();
+        let b = record.last();
+        let subsort = record.subsort();
+        let mut parts = self.tree.ordered_parts();
+        let low_key = RangeKey {
+            last: a,
+            subsort: R::Subsort::minimum(),
+        };
+        let mut low = Self::lower_bound(&parts, &low_key);
+        if low < parts.len() && parts[low].first < a {
+            low = self.unzip(&mut parts, a.wrapping_sub(1), low);
+        }
+
+        let id = RangeMapId(self.next_record_id);
+        self.next_record_id = self.next_record_id.wrapping_add(1);
+        let spot_key = RangeKey {
+            last: b,
+            subsort: subsort.clone(),
+        };
+        let spot = Self::lower_bound(&parts, &spot_key);
+        let record_position = parts
+            .get(spot)
+            .and_then(|part| {
+                self.records
+                    .iter()
+                    .position(|stored| stored.id == part.record_id)
+            })
+            .unwrap_or(self.records.len());
+        self.records
+            .insert(record_position, StoredRecord { id, value: record });
+
+        let mut first = a;
+        while low < parts.len() && parts[low].first <= b {
+            if first <= parts[low].last {
+                if first < parts[low].first {
+                    let existing_first = parts[low].first;
+                    let hint_serial = parts[low].serial;
+                    let gap = self.allocate_part(
+                        first,
+                        existing_first.wrapping_sub(1),
+                        a,
+                        b,
+                        subsort.clone(),
+                        id,
+                    );
+                    low = Self::insert_hinted(&mut parts, hint_serial, gap);
+                    first = existing_first;
+                }
+                if parts[low].last <= b {
+                    let partition_last = parts[low].last;
+                    let hint_serial = parts[low].serial;
+                    let overlap =
+                        self.allocate_part(first, partition_last, a, b, subsort.clone(), id);
+                    low = Self::insert_hinted(&mut parts, hint_serial, overlap);
+                    if partition_last == b {
+                        break;
+                    }
+                    first = partition_last.wrapping_add(1);
+                } else if b < parts[low].last {
+                    self.unzip(&mut parts, b, low);
+                    break;
+                }
+            }
+            low += 1;
+        }
+        if first <= b {
+            let tail = self.allocate_part(first, b, a, b, subsort, id);
+            Self::insert_unhinted(&mut parts, tail);
+        }
+        self.tree.replace_ordered_parts(parts);
+        id
+    }
+
+    // Ghidra: rangemap.hh:281 void rangemap<_recordtype>::erase(typename std::list<_recordtype>::iterator v)
+    /// Erase one record and sew partition boundaries no longer required by
+    /// any remaining record.
+    pub fn erase(&mut self, id: RangeMapId) -> Option<R> {
+        let record_index = self.records.iter().position(|stored| stored.id == id)?;
+        let a = self.records[record_index].value.first();
+        let b = self.records[record_index].value.last();
+        let mut parts = self.tree.ordered_parts();
+        let low_key = RangeKey {
+            last: a,
+            subsort: R::Subsort::minimum(),
+        };
+        let mut low = Self::lower_bound(&parts, &low_key);
+        let mut upper_low = low;
+        let mut left_sew = true;
+        let mut right_sew = true;
+        let mut right_overlap = false;
+        let mut left_overlap = false;
+        let a_minus_one = a.wrapping_sub(1);
+        while upper_low != 0 {
+            upper_low -= 1;
+            if parts[upper_low].last != a_minus_one {
+                break;
+            }
+            if parts[upper_low].full_last == a_minus_one {
+                left_sew = false;
+                break;
+            }
+        }
+        while low < parts.len() {
+            if parts[low].record_id == id {
+                parts.remove(low);
+            } else {
+                if parts[low].full_first < a {
+                    left_overlap = true;
+                } else if parts[low].full_first == a {
+                    left_sew = false;
+                }
+                if b < parts[low].full_last {
+                    right_overlap = true;
+                } else if parts[low].full_last == b {
+                    right_sew = false;
+                }
+                low += 1;
+            }
+            if low == parts.len() || parts[low].first > b {
+                break;
+            }
+        }
+        if low < parts.len() && parts[low].full_first.wrapping_sub(1) == b {
+            right_sew = false;
+        }
+        if left_sew && left_overlap {
+            let key = RangeKey {
+                last: a_minus_one,
+                subsort: R::Subsort::minimum(),
+            };
+            let iter = Self::lower_bound(&parts, &key);
+            Self::zip(&mut parts, a_minus_one, iter);
+        }
+        if right_sew && right_overlap {
+            let key = RangeKey {
+                last: b,
+                subsort: R::Subsort::minimum(),
+            };
+            let iter = Self::lower_bound(&parts, &key);
+            Self::zip(&mut parts, b, iter);
+        }
+        self.tree.replace_ordered_parts(parts);
+        Some(self.records.remove(record_index).value)
+    }
+
+    // Ghidra: rangemap.hh:168 void erase(const_iterator iter)
+    /// Erase the record referenced by a sub-range cursor.
+    pub fn erase_at(&mut self, cursor: RangeMapCursor) -> Option<R> {
+        let position = self.resolve_cursor(cursor)?;
+        let id = self
+            .tree
+            .ordered_part_refs()
+            .get(position)
+            .map(|part| part.record_id)?;
+        self.erase(id)
+    }
+
+    // RUGRA-GLUE: resolves stable PartIterator identity after non-invalidating tree mutations.
+    fn resolve_cursor(&self, cursor: RangeMapCursor) -> Option<usize> {
+        if cursor.owner_generation != self.owner_generation {
+            return None;
+        }
+        let parts = self.tree.ordered_part_refs();
+        match cursor.part_serial {
+            Some(serial) => parts.iter().position(|part| part.serial == serial),
+            None => Some(parts.len()),
+        }
+    }
+
+    // RUGRA-GLUE: constructs a stable Rust cursor from a current multiset ordinal.
+    fn cursor_for_position(
+        &self,
+        parts: &[&SubRange<R::Subsort>],
+        position: usize,
+    ) -> RangeMapCursor {
+        RangeMapCursor {
+            owner_generation: self.owner_generation,
+            part_serial: parts.get(position).map(|part| part.serial),
+        }
+    }
+
+    // RUGRA-GLUE: safe validity observation for C++ iterator-invalidating operations.
+    /// Return whether a cursor still denotes a live part or this map's end.
+    pub fn cursor_is_valid(&self, cursor: RangeMapCursor) -> bool {
+        self.resolve_cursor(cursor).is_some()
+    }
+
+    // Ghidra: rangemap.hh:106 _recordtype &operator*(void)
+    /// Return the record referenced by a live non-end cursor.
+    pub fn record_at_cursor(&self, cursor: RangeMapCursor) -> Option<&R> {
+        let position = self.resolve_cursor(cursor)?;
+        let part = self.tree.ordered_part_refs().get(position).copied()?;
+        Some(self.record_by_id(part.record_id))
+    }
+
+    // Ghidra: rangemap.hh:107 PartIterator &operator++(void)
+    /// Advance a live non-end cursor to the following part (possibly end).
+    pub fn next_cursor(&self, cursor: RangeMapCursor) -> Option<RangeMapCursor> {
+        let position = self.resolve_cursor(cursor)?;
+        let parts = self.tree.ordered_part_refs();
+        if position == parts.len() {
+            return None;
+        }
+        Some(self.cursor_for_position(&parts, position + 1))
+    }
+
+    // Ghidra: rangemap.hh:110 PartIterator &operator--(void)
+    /// Move a live cursor to the preceding part; end moves to the final part.
+    pub fn previous_cursor(&self, cursor: RangeMapCursor) -> Option<RangeMapCursor> {
+        let position = self.resolve_cursor(cursor)?;
+        if position == 0 {
+            return None;
+        }
+        let parts = self.tree.ordered_part_refs();
+        Some(self.cursor_for_position(&parts, position - 1))
+    }
+
+    // RUGRA-GLUE: resolves stable record identity to a Rust reference.
+    fn record_by_id(&self, id: RangeMapId) -> &R {
+        &self
+            .records
+            .iter()
+            .find(|stored| stored.id == id)
+            .expect("rangemap partition must reference a live record")
+            .value
+    }
+
+    // RUGRA-GLUE: materializes a Rust iterator from the opaque PartIterator index domain.
+    fn iterator_for_bounds(&self, start: usize, end: usize) -> RangeMapIter<'_, R> {
+        let parts = self.tree.ordered_part_refs();
+        let end = end.min(parts.len());
+        let start = start.min(end);
+        let records = parts[start..end]
+            .iter()
+            .map(|part| self.record_by_id(part.record_id))
+            .collect::<Vec<_>>();
+        RangeMapIter {
+            inner: records.into_iter(),
+        }
+    }
+
+    // Ghidra: rangemap.hh:332 rangemap<_recordtype>::find(linetype point) const
+    /// Iterate over every sub-range intersecting `point` in ascending sub-sort
+    /// and comparator-equivalent multiset order.
+    pub fn find(&self, point: u64) -> RangeMapIter<'_, R> {
+        let parts = self.tree.ordered_part_refs();
+        let key = RangeKey {
+            last: point,
+            subsort: R::Subsort::minimum(),
+        };
+        let start = parts.partition_point(|part| {
+            part.last < key.last || (part.last == key.last && part.subsort < key.subsort)
+        });
+        if start == parts.len() || point < parts[start].first {
+            return self.iterator_for_bounds(start, start);
+        }
+        let last = parts[start].last;
+        let end_key = RangeKey {
+            last,
+            subsort: R::Subsort::maximum(),
+        };
+        let end = parts.partition_point(|part| {
+            part.last < end_key.last
+                || (part.last == end_key.last && part.subsort <= end_key.subsort)
+        });
+        self.iterator_for_bounds(start, end)
+    }
+
+    // Ghidra: rangemap.hh:355 rangemap<_recordtype>::find(linetype point,const subsorttype &sub1,const subsorttype &sub2) const
+    /// Iterate over intersecting sub-ranges bounded by Ghidra's sub-sort
+    /// lower/upper keys.
+    pub fn find_with_subsort(
+        &self,
+        point: u64,
+        subsort1: &R::Subsort,
+        subsort2: &R::Subsort,
+    ) -> RangeMapIter<'_, R> {
+        let parts = self.tree.ordered_part_refs();
+        let start_key = RangeKey {
+            last: point,
+            subsort: subsort1.clone(),
+        };
+        let start = parts.partition_point(|part| {
+            part.last < start_key.last
+                || (part.last == start_key.last && part.subsort < start_key.subsort)
+        });
+        if start == parts.len() || point < parts[start].first {
+            return self.iterator_for_bounds(start, start);
+        }
+        let end_key = RangeKey {
+            last: parts[start].last,
+            subsort: subsort2.clone(),
+        };
+        let end = parts.partition_point(|part| {
+            part.last < end_key.last
+                || (part.last == end_key.last && part.subsort <= end_key.subsort)
+        });
+        self.iterator_for_bounds(start, end)
+    }
+
+    // Ghidra: rangemap.hh:375 typename rangemap<_recordtype>::const_iterator rangemap<_recordtype>::find_begin(linetype point) const
+    /// Return the first multiset position whose ending boundary is at or after
+    /// `point`.
+    pub fn find_begin(&self, point: u64) -> RangeMapCursor {
+        let parts = self.tree.ordered_part_refs();
+        let position = parts.partition_point(|part| part.last < point);
+        self.cursor_for_position(&parts, position)
+    }
+
+    // Ghidra: rangemap.hh:389 typename rangemap<_recordtype>::const_iterator rangemap<_recordtype>::find_end(linetype point) const
+    /// Return the first position after the partition containing `point`, or
+    /// the first position beyond `point` if it lies in a gap.
+    pub fn find_end(&self, point: u64) -> RangeMapCursor {
+        let parts = self.tree.ordered_part_refs();
+        let mut iter = parts.partition_point(|part| part.last <= point);
+        if iter == parts.len() || point < parts[iter].first {
+            return self.cursor_for_position(&parts, iter);
+        }
+        let containing_last = parts[iter].last;
+        iter = parts.partition_point(|part| part.last <= containing_last);
+        self.cursor_for_position(&parts, iter)
+    }
+
+    // RUGRA-GLUE: Rust range adapter for two Ghidra PartIterator cursors.
+    /// Iterate between two cursors returned by this map.
+    pub fn iter_between(&self, begin: RangeMapCursor, end: RangeMapCursor) -> RangeMapIter<'_, R> {
+        let Some(begin) = self.resolve_cursor(begin) else {
+            return self.iterator_for_bounds(0, 0);
+        };
+        let Some(end) = self.resolve_cursor(end) else {
+            return self.iterator_for_bounds(0, 0);
+        };
+        self.iterator_for_bounds(begin, end)
+    }
+
+    // Ghidra: rangemap.hh:411 typename rangemap<_recordtype>::const_iterator rangemap<_recordtype>::find_overlap(linetype point,linetype end) const
+    /// Find the first record overlapping the given interval [point, end].
+    /// This is the first sub-range in `(last, subsort)` multiset order, which
+    /// can begin after `point` when the query starts in a gap.
+    pub fn find_overlap(&self, point: u64, end: u64) -> Option<&R> {
+        let parts = self.tree.ordered_part_refs();
+        let iter = parts.partition_point(|part| part.last < point);
+        let part = parts.get(iter)?;
+        if part.first <= end {
+            return Some(self.record_by_id(part.record_id));
         }
         None
     }
 
-    // RUGRA-GLUE: find_at_point (no Ghidra counterpart found)
-    /// Find all records overlapping the given point. Returns indices.
-    /// Faithful to `find` (rangemap.hh:146).
+    // RUGRA-GLUE: compatibility collector over Ghidra rangemap::find.
+    /// Collect all sub-range records intersecting `point`.
     pub fn find_at_point(&self, point: u64) -> Vec<&R> {
-        self.sub_ranges
-            .iter()
-            .filter(|sr| sr.first <= point && point <= sr.last)
-            .map(|sr| &sr.record)
-            .collect()
+        self.find(point).collect()
     }
 
-    // RUGRA-GLUE: find_container (no Ghidra counterpart found)
+    // RUGRA-GLUE: Scope-style smallest-container query retained for existing Rust consumers.
     /// Find the smallest containing record for [point, size).
     /// Used by Scope::findContainer.
     pub fn find_container(&self, point: u64, size: u64) -> Option<&R> {
-        let end = point + size - 1;
+        let end = point.wrapping_add(size).wrapping_sub(1);
         let mut best: Option<&R> = None;
         let mut best_span = u64::MAX;
-        for sr in &self.sub_ranges {
-            if sr.first <= point && end <= sr.last {
-                let span = sr.last - sr.first + 1;
+        for record in self.find(point).rev() {
+            if record.first() <= point && end <= record.last() {
+                let span = record.last().wrapping_sub(record.first()).wrapping_add(1);
                 if span < best_span {
                     best_span = span;
-                    best = Some(&sr.record);
+                    best = Some(record);
                 }
             }
         }
         best
     }
 
-    // RUGRA-GLUE: records (no Ghidra counterpart found)
-    /// Iterate over all records.
-    pub fn records(&self) -> &[R] {
-        &self.records
+    // Ghidra: rangemap.hh:137 typename std::list<_recordtype>::const_iterator begin_list(void) const
+    /// Iterate once over each record in Ghidra's internal list order.
+    pub fn records(&self) -> impl DoubleEndedIterator<Item = &R> {
+        self.records.iter().map(|stored| &stored.value)
+    }
+
+    // Ghidra: rangemap.hh:142 const_iterator begin(void) const
+    /// Iterate over the complete refined sub-range multiset.  Records appear
+    /// once per stored sub-range and may therefore repeat.
+    pub fn iter(&self) -> RangeMapIter<'_, R> {
+        let len = self.tree.ordered_part_refs().len();
+        self.iterator_for_bounds(0, len)
     }
 }
 
@@ -253,7 +870,10 @@ impl<V: Clone> PartMap<V> {
         // Remove keys in (pnt1, pnt2).
         let keys_to_remove: Vec<u64> = self
             .database
-            .range((std::ops::Bound::Excluded(pnt1), std::ops::Bound::Excluded(pnt2)))
+            .range((
+                std::ops::Bound::Excluded(pnt1),
+                std::ops::Bound::Excluded(pnt2),
+            ))
             .map(|(k, _)| *k)
             .collect();
         for k in keys_to_remove {
@@ -304,21 +924,16 @@ impl<V: Clone> PartMap<V> {
         }
         // Find the split point <= pnt.
         let lower = self.database.range(..=pnt).next_back();
-        let upper = self.database.range((std::ops::Bound::Excluded(pnt), std::ops::Bound::Unbounded)).next();
+        let upper = self
+            .database
+            .range((std::ops::Bound::Excluded(pnt), std::ops::Bound::Unbounded))
+            .next();
 
         match (lower, upper) {
-            (Some((lo_k, lo_v)), Some((hi_k, _))) => {
-                (lo_v, *lo_k, *hi_k, 0)
-            }
-            (Some((lo_k, lo_v)), None) => {
-                (lo_v, *lo_k, 0, 2)
-            }
-            (None, Some((hi_k, _))) => {
-                (&self.default_value, 0, *hi_k, 1)
-            }
-            (None, None) => {
-                (&self.default_value, 0, 0, 3)
-            }
+            (Some((lo_k, lo_v)), Some((hi_k, _))) => (lo_v, *lo_k, *hi_k, 0),
+            (Some((lo_k, lo_v)), None) => (lo_v, *lo_k, 0, 2),
+            (None, Some((hi_k, _))) => (&self.default_value, 0, *hi_k, 1),
+            (None, None) => (&self.default_value, 0, 0, 3),
         }
     }
 
@@ -341,11 +956,51 @@ mod tests {
     }
 
     impl RangeRecord for TestRecord {
+        type Subsort = i32;
+
         fn first(&self) -> u64 {
             self.first
         }
+
         fn last(&self) -> u64 {
             self.last
+        }
+
+        fn subsort(&self) -> Self::Subsort {
+            0
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct OrderedRecord {
+        first: u64,
+        last: u64,
+        subsort: i32,
+        name: &'static str,
+    }
+
+    impl RangeRecord for OrderedRecord {
+        type Subsort = i32;
+
+        fn first(&self) -> u64 {
+            self.first
+        }
+
+        fn last(&self) -> u64 {
+            self.last
+        }
+
+        fn subsort(&self) -> Self::Subsort {
+            self.subsort
+        }
+    }
+
+    fn ordered_record(name: &'static str, subsort: i32, first: u64, last: u64) -> OrderedRecord {
+        OrderedRecord {
+            first,
+            last,
+            subsort,
+            name,
         }
     }
 
@@ -359,8 +1014,16 @@ mod tests {
     #[test]
     fn test_rangemap_insert_find_overlap() {
         let mut rm = RangeMap::new();
-        rm.insert(TestRecord { first: 100, last: 199, name: "A" });
-        rm.insert(TestRecord { first: 300, last: 399, name: "B" });
+        rm.insert(TestRecord {
+            first: 100,
+            last: 199,
+            name: "A",
+        });
+        rm.insert(TestRecord {
+            first: 300,
+            last: 399,
+            name: "B",
+        });
 
         let r = rm.find_overlap(150, 160).unwrap();
         assert_eq!(r.name, "A");
@@ -374,8 +1037,16 @@ mod tests {
     #[test]
     fn test_rangemap_find_at_point() {
         let mut rm = RangeMap::new();
-        rm.insert(TestRecord { first: 100, last: 199, name: "A" });
-        rm.insert(TestRecord { first: 150, last: 250, name: "B" });
+        rm.insert(TestRecord {
+            first: 100,
+            last: 199,
+            name: "A",
+        });
+        rm.insert(TestRecord {
+            first: 150,
+            last: 250,
+            name: "B",
+        });
 
         let results = rm.find_at_point(175);
         assert_eq!(results.len(), 2); // Both A and B overlap at 175.
@@ -384,8 +1055,16 @@ mod tests {
     #[test]
     fn test_rangemap_find_container() {
         let mut rm = RangeMap::new();
-        rm.insert(TestRecord { first: 100, last: 399, name: "big" });
-        rm.insert(TestRecord { first: 100, last: 199, name: "small" });
+        rm.insert(TestRecord {
+            first: 100,
+            last: 399,
+            name: "big",
+        });
+        rm.insert(TestRecord {
+            first: 100,
+            last: 199,
+            name: "small",
+        });
 
         let r = rm.find_container(150, 10).unwrap();
         assert_eq!(r.name, "small"); // Smaller container wins.
@@ -394,19 +1073,132 @@ mod tests {
     #[test]
     fn test_rangemap_records() {
         let mut rm = RangeMap::new();
-        rm.insert(TestRecord { first: 0, last: 10, name: "X" });
-        rm.insert(TestRecord { first: 20, last: 30, name: "Y" });
+        rm.insert(TestRecord {
+            first: 0,
+            last: 10,
+            name: "X",
+        });
+        rm.insert(TestRecord {
+            first: 20,
+            last: 30,
+            name: "Y",
+        });
         assert_eq!(rm.len(), 2);
-        assert_eq!(rm.records()[0].name, "X");
-        assert_eq!(rm.records()[1].name, "Y");
+        let names = rm.records().map(|record| record.name).collect::<Vec<_>>();
+        assert_eq!(names, vec!["X", "Y"]);
     }
 
     #[test]
     fn test_rangemap_clear() {
         let mut rm = RangeMap::new();
-        rm.insert(TestRecord { first: 0, last: 10, name: "X" });
+        rm.insert(TestRecord {
+            first: 0,
+            last: 10,
+            name: "X",
+        });
         rm.clear();
         assert!(rm.is_empty());
+    }
+
+    #[test]
+    fn test_rangemap_common_refinement_and_equivalent_multiset_order() {
+        let mut map = RangeMap::new();
+        map.insert(ordered_record("eq_a", 5, 10, 20));
+        map.insert(ordered_record("eq_b", 5, 10, 20));
+        map.insert(ordered_record("sub_hi", 9, 10, 20));
+        map.insert(ordered_record("sub_lo", 1, 10, 20));
+
+        let walk = map.iter().map(|record| record.name).collect::<Vec<_>>();
+        assert_eq!(
+            walk,
+            vec!["sub_lo", "sub_lo", "eq_b", "eq_a", "eq_b", "sub_hi", "sub_hi"]
+        );
+        let list = map.records().map(|record| record.name).collect::<Vec<_>>();
+        assert_eq!(list, vec!["sub_lo", "eq_b", "eq_a", "sub_hi"]);
+    }
+
+    #[test]
+    fn test_rangemap_erase_sews_obsolete_boundaries() {
+        let mut map = RangeMap::new();
+        map.insert(ordered_record("outer", 5, 200, 240));
+        let inner = map.insert(ordered_record("inner", 3, 210, 230));
+        let right = map.insert(ordered_record("right", 7, 220, 250));
+
+        map.erase(inner);
+        assert_eq!(
+            map.iter().map(|record| record.name).collect::<Vec<_>>(),
+            vec!["outer", "outer", "right", "right"]
+        );
+        map.erase(right);
+        assert_eq!(
+            map.iter().map(|record| record.name).collect::<Vec<_>>(),
+            vec!["outer"]
+        );
+    }
+
+    #[test]
+    fn test_rangemap_cursor_survives_insert_before_and_erases_original_record() {
+        let mut map = RangeMap::new();
+        map.insert(ordered_record("A", 5, 100, 110));
+        let cursor = map.find_begin(100);
+        map.insert(ordered_record("B", 5, 50, 60));
+
+        assert_eq!(map.record_at_cursor(cursor).unwrap().name, "A");
+        let mut other_map = RangeMap::new();
+        other_map.insert(ordered_record("foreign", 5, 100, 110));
+        assert!(!other_map.cursor_is_valid(cursor));
+        assert_eq!(map.erase_at(cursor).unwrap().name, "A");
+        assert!(!map.cursor_is_valid(cursor));
+        assert_eq!(
+            map.records().map(|record| record.name).collect::<Vec<_>>(),
+            vec!["B"]
+        );
+    }
+
+    #[test]
+    fn test_rangemap_cursor_identity_and_precise_invalidation() {
+        let mut map = RangeMap::new();
+        let end_before_insert = map.find_begin(0);
+        map.insert(ordered_record("outer", 5, 200, 240));
+        let original_outer = map.find_begin(220);
+        let inner_id = map.insert(ordered_record("inner", 3, 210, 230));
+
+        let left_outer = map.find_begin(205);
+        let inner_middle = map.find_begin(220);
+        let middle_outer = map.next_cursor(inner_middle).unwrap();
+        let right_outer = map.find_begin(235);
+
+        assert!(map.cursor_is_valid(end_before_insert));
+        assert!(map.record_at_cursor(end_before_insert).is_none());
+        assert!(map.cursor_is_valid(original_outer));
+        assert_eq!(map.record_at_cursor(original_outer).unwrap().name, "outer");
+
+        map.erase(inner_id);
+        assert!(!map.cursor_is_valid(left_outer));
+        assert!(!map.cursor_is_valid(inner_middle));
+        assert!(!map.cursor_is_valid(middle_outer));
+        assert!(map.cursor_is_valid(right_outer));
+        assert_eq!(map.record_at_cursor(right_outer).unwrap().name, "outer");
+        assert!(map.cursor_is_valid(end_before_insert));
+    }
+
+    #[test]
+    fn test_rangemap_cursor_survives_equivalent_and_unzip_insertions() {
+        let mut equivalent = RangeMap::new();
+        equivalent.insert(ordered_record("eq_a", 5, 10, 20));
+        let eq_a_cursor = equivalent.find_begin(15);
+        equivalent.insert(ordered_record("eq_b", 5, 10, 20));
+        assert_eq!(
+            equivalent.record_at_cursor(eq_a_cursor).unwrap().name,
+            "eq_a"
+        );
+
+        let mut split = RangeMap::new();
+        split.insert(ordered_record("wide", 5, 100, 140));
+        let original_wide = split.find_begin(120);
+        split.insert(ordered_record("narrow", 2, 110, 120));
+        assert!(split.cursor_is_valid(original_wide));
+        assert_eq!(split.record_at_cursor(original_wide).unwrap().name, "wide");
     }
 
     // PartMap tests
