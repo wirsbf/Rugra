@@ -29,6 +29,14 @@ pub struct TypeFactory {
     /// Fast preferred-core lookup corresponding to Ghidra's `typecache`.
     base_cache: RwLock<BTreeMap<(usize, TypeMetatype), Arc<Datatype>>>,
 
+    /// The non-character signed byte selected by `cacheCoreTypes`, matching
+    /// Ghidra's `type_nochar` side cache (type.hh:777).
+    type_nochar: RwLock<Option<Arc<Datatype>>>,
+
+    /// Preferred printable character types by byte size, matching Ghidra's
+    /// `charcache[5]` (type.hh:778). Only sizes 0..=4 can be populated.
+    char_cache: RwLock<BTreeMap<usize, Arc<Datatype>>>,
+
     /// The default size of a pointer for this architecture
     ptr_size: usize,
 
@@ -79,7 +87,7 @@ pub enum CoreTypeFlavor {
 }
 
 impl TypeFactory {
-    // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3850) with the
+    // RUGRA-GLUE: Combines TypeFactory construction (type.cc:3106) with the
     // standalone SLEIGH fallback bootstrap (sleigh_arch.cc:204).
     /// Create a new TypeFactory and initialize core types
     ///
@@ -101,10 +109,12 @@ impl TypeFactory {
             core_types: BTreeMap::new(),
             base_type_tree: RwLock::new(BTreeMap::new()),
             base_cache: RwLock::new(BTreeMap::new()),
+            type_nochar: RwLock::new(None),
+            char_cache: RwLock::new(BTreeMap::new()),
             ptr_size,
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
-            // Ghidra: type.cc:3850 TypeFactory::TypeFactory zeroes every
+            // Ghidra: type.cc:3106 TypeFactory::TypeFactory zeroes every
             // size field (int/long/char/wchar/pointer/altpointer/enumsize)
             // and leaves alignMap default-constructed (empty).
             size_of_int: 0,
@@ -184,10 +194,16 @@ impl TypeFactory {
             base.id = Datatype::hash_name(&name);
             self.add_core_type(Arc::new(Datatype::Base(base)));
         }
+
+        // Both locked architecture registration paths call cacheCoreTypes
+        // after every core type has entered the ordered tree
+        // (sleigh_arch.cc:237, ghidra_arch.cc:355).
+        self.cache_core_types();
     }
 
-    // RUGRA-GLUE: Combines TypeFactory::setCoreType (type.cc:3178), insert
-    // (type.cc:3390), and cacheCoreTypes (type.cc:3200) for Rust-owned Arcs.
+    // RUGRA-GLUE: Rust-owned Arc insertion used by the architecture bootstrap;
+    // Ghidra performs the same flag mutation in setCoreType (type.cc:3178)
+    // and ordered-tree insertion in findAdd (type.cc:3412).
     /// Internal helper to register a core type
     fn add_core_type(&mut self, mut dt: Arc<Datatype>) {
         if let Some(dt_mut) = Arc::get_mut(&mut dt) {
@@ -200,7 +216,7 @@ impl TypeFactory {
         self.core_types.insert(name.clone(), dt.clone());
         self.types.insert(name, dt.clone());
         let tree_key = (
-            Self::base_submeta(dt.get_metatype()),
+            Self::datatype_submeta(&dt),
             Reverse(dt.get_size()),
             dt.get_id(),
         );
@@ -209,12 +225,6 @@ impl TypeFactory {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         tree.entry(tree_key).or_insert_with(|| dt.clone());
-        let cache_key = (dt.get_size(), dt.get_metatype());
-        let cache = self
-            .base_cache
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.entry(cache_key).or_insert(dt);
     }
 
     // Ghidra: type.cc:23 Datatype::base2sub
@@ -241,6 +251,22 @@ impl TypeFactory {
         }
     }
 
+    // RUGRA-GLUE: Rust enum dispatch for the sub-metatype written by Ghidra's
+    // TypeChar/TypeUnicode/TypeEnum constructors (type.hh:356, type.cc:858,
+    // type.hh:489) before DatatypeCompare orders the TypeFactory tree.
+    fn datatype_submeta(datatype: &Datatype) -> u8 {
+        let flags = datatype.get_flags();
+        match datatype.get_metatype() {
+            TypeMetatype::Int if flags & type_flags::CHARTYPE != 0 => 19,
+            TypeMetatype::Uint if flags & type_flags::CHARTYPE != 0 => 18,
+            TypeMetatype::Int if flags & type_flags::ENUMTYPE != 0 => 15,
+            TypeMetatype::Uint if flags & type_flags::ENUMTYPE != 0 => 13,
+            TypeMetatype::Int if flags & (type_flags::UTF16 | type_flags::UTF32) != 0 => 12,
+            TypeMetatype::Uint if flags & (type_flags::UTF16 | type_flags::UTF32) != 0 => 11,
+            metatype => Self::base_submeta(metatype),
+        }
+    }
+
     // Ghidra: type.cc:3366 TypeFactory::findByName
     /// Find a type by name
     pub fn find_by_name(&self, name: &str) -> Option<Arc<Datatype>> {
@@ -250,72 +276,61 @@ impl TypeFactory {
     // Ghidra: type.cc:3631 TypeFactory::getBase
     /// Get a base scalar type of `size` bytes with metatype `m`.
     ///
-    /// For `Unknown`, this follows Ghidra's `TypeFactory::getBase`
-    /// (`type.cc:3631-3660`) exactly for sizes within the architecture's base
-    /// type limit: cached core types win; otherwise one unnamed `TypeBase` is
-    /// inserted into the factory and every later request returns the same
-    /// object. The other metatypes retain Rugra's existing named-core lookup.
+    /// This implements the cache-first and in-base-limit identity projection
+    /// of Ghidra `TypeFactory::getBase` (`type.cc:3631-3651,3658-3660`): a
+    /// preferred core entry wins regardless of name; otherwise one unnamed
+    /// `TypeBase` is canonicalized by the ordered tree. The intervening
+    /// `size > max_basetype_size` array conversion remains `MISSING`.
     pub fn get_base(&self, size: usize, m: TypeMetatype) -> Option<Arc<Datatype>> {
-        use TypeMetatype::*;
-        match m {
-            Unknown => {
-                let cache_key = (size, Unknown);
-                let cache = self
-                    .base_cache
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some(existing) = cache.get(&cache_key) {
-                    return Some(existing.clone());
-                }
-                drop(cache);
-                let tree_key = (Self::base_submeta(Unknown), Reverse(size), 0);
-                let tree = self
-                    .base_type_tree
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some(existing) = tree.get(&tree_key) {
-                    return Some(existing.clone());
-                }
-                drop(tree);
-                let mut tree = self
-                    .base_type_tree
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                Some(
-                    tree
-                        .entry(tree_key)
-                        .or_insert_with(|| {
-                            Arc::new(Datatype::Base(TypeBase::new(
-                                String::new(),
-                                size,
-                                Unknown,
-                            )))
-                        })
-                        .clone(),
-                )
-            }
-            Int => {
-                let name = if size == 4 { "int".to_string() } else { format!("int{}", size) };
-                self.find_by_name(&name).or_else(|| {
-                    Some(Arc::new(Datatype::Base(TypeBase::new(name, size, Int))))
-                })
-            }
-            Uint => {
-                let name = if size == 4 { "uint".to_string() } else { format!("uint{}", size) };
-                self.find_by_name(&name).or_else(|| {
-                    Some(Arc::new(Datatype::Base(TypeBase::new(name, size, Uint))))
-                })
-            }
-            Float => {
-                let name = if size <= 4 { "float".to_string() } else { "double".to_string() };
-                self.find_by_name(&name).or_else(|| {
-                    Some(Arc::new(Datatype::Base(TypeBase::new(name, size, Float))))
-                })
-            }
-            Bool => self.find_by_name("bool"),
-            Void => self.find_by_name("void"),
-            _ => None,
+        let cache_key = (size, m);
+        let cache = self
+            .base_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = cache.get(&cache_key) {
+            return Some(existing.clone());
         }
+        drop(cache);
+
+        // Ghidra constructs an unnamed TypeBase and canonicalizes it through
+        // findAdd when no preferred core entry exists. Its structural key is
+        // the plain base sub-metatype, descending size, then id zero.
+        let tree_key = (Self::base_submeta(m), Reverse(size), 0);
+        let tree = self
+            .base_type_tree
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = tree.get(&tree_key) {
+            return Some(existing.clone());
+        }
+        drop(tree);
+
+        let mut tree = self
+            .base_type_tree
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(
+            tree.entry(tree_key)
+                .or_insert_with(|| Arc::new(Datatype::Base(TypeBase::new(String::new(), size, m))))
+                .clone(),
+        )
+    }
+
+    // Ghidra: type.cc:3619 TypeFactory::getBaseNoChar
+    /// Get a canonical base type, excluding the printable ASCII character
+    /// specialization for a one-byte signed integer when a non-character core
+    /// type was selected by `cache_core_types`.
+    pub fn get_base_no_char(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>> {
+        if size == 1 && metatype == TypeMetatype::Int {
+            let nochar = self
+                .type_nochar
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(datatype) = nochar.as_ref() {
+                return Some(datatype.clone());
+            }
+        }
+        self.get_base(size, metatype)
     }
 
     // Ghidra: type.cc:3667 TypeFactory::getBase
@@ -700,6 +715,39 @@ impl TypeFactory {
         }
     }
 
+    // Ghidra: type.cc:3122 TypeFactory::clearCache
+    /// Clear every preferred-type side cache without changing the ordered
+    /// factory tree. Ghidra invokes this from the constructor and `clear`.
+    fn clear_cache(&mut self) {
+        self.base_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        *self
+            .type_nochar
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        self.char_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+
+    // Ghidra: type.cc:3251 TypeFactory::clear
+    /// Remove every factory-owned type and reset all preferred-type caches.
+    /// Size/alignment configuration is deliberately retained, as in Ghidra.
+    pub fn clear(&mut self) {
+        self.types.clear();
+        self.core_types.clear();
+        self.base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.clear_cache();
+        self.rel_pointers.clear();
+        self.typedefs.clear();
+    }
+
     // Ghidra: type.cc:3266 TypeFactory::clearNoncore
     /// Clear all non-core types
     pub fn clear_non_core(&mut self) {
@@ -740,9 +788,18 @@ impl TypeFactory {
     /// `chartype` flag set — and adds it. Rugra represents this as
     /// `Datatype::Base` with `metatype=Int` and the `CHARTYPE` flag.
     pub fn get_type_char(&mut self, size: usize) -> Arc<Datatype> {
-        // Ghidra also has `getTypeChar(int4 s)` (type.cc:3678) which looks up
-        // a core char type from `charcache[s]`. We implement that lookup
-        // path: core chars are registered during init for sizes 1..=4.
+        let cache = self
+            .char_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = cache.get(&size) {
+            return existing.clone();
+        }
+        drop(cache);
+
+        // The historical Rugra API also constructs an unregistered character
+        // when no core cache entry exists; callers that need Ghidra's throwing
+        // size-only lookup use a previously cached core type.
         let name = char_name_for_size(size);
         if let Some(existing) = self.find_by_name(&name) {
             return existing;
@@ -1679,10 +1736,10 @@ impl TypeFactory {
     /// void it returns the singleton; otherwise a plain base type. The
     /// `coretype` flag is set on the result.
     ///
-    /// Returns the (possibly newly created) core type. Rugra note: Ghidra's
-    /// `getTypeChar`/`getTypeUnicode`/`getTypeCode`/`getTypeVoid`/`getBase` are
-    /// mirrored by the existing `get_type_char`/`get_type_unicode`/etc.; this
-    /// method dispatches to them and ORs in the core flag.
+    /// Returns the (possibly newly created) core type. A conflicting existing
+    /// definition raises the same message as Ghidra's `findAdd` path. The
+    /// immutable-`Arc` alias limitation when promoting an existing non-core
+    /// object is tracked by `TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001`.
     pub fn set_core_type(
         &mut self,
         name: &str,
@@ -1690,33 +1747,88 @@ impl TypeFactory {
         meta: TypeMetatype,
         chartp: bool,
     ) -> Arc<Datatype> {
-        let ct = if chartp {
-            if size == 1 {
-                self.get_type_char(size)
-            } else {
-                // Ghidra: getTypeUnicode(name, size, meta). Rugra's
-                // get_type_unicode derives the metatype internally; the `meta`
-                // arg is dropped (it is Int for signed unicode, which is the
-                // only form Rugra's TypeUnicode supports).
-                let _ = meta;
-                self.get_type_unicode(size)
-            }
-        } else if meta == TypeMetatype::Code {
-            self.get_type_code()
-        } else if meta == TypeMetatype::Void {
-            self.get_type_void()
+        let (actual_name, actual_size, actual_meta) = if chartp && size == 1 {
+            (name, 1, TypeMetatype::Int)
+        } else if !chartp && meta == TypeMetatype::Void {
+            ("void", 0, TypeMetatype::Void)
+        } else if !chartp && meta == TypeMetatype::Code {
+            (name, 1, TypeMetatype::Code)
         } else {
-            self.get_base(size, meta)
-                .unwrap_or_else(|| Arc::new(Datatype::Base(TypeBase::new(name.to_string(), size, meta))))
+            (name, size, meta)
         };
-        // Ghidra: ct->flags |= Datatype::coretype;
-        if let Some(ct_mut) = Arc::get_mut(&mut ct.clone()) {
-            match ct_mut {
-                Datatype::Void(b) | Datatype::Base(b) => b.flags |= type_flags::CORETYPE,
-                _ => {}
+
+        let mut base = TypeBase::new(actual_name.to_string(), actual_size, actual_meta);
+        base.id = Datatype::hash_name(actual_name);
+        if chartp {
+            if actual_size == 1 {
+                base.flags |= type_flags::CHARTYPE;
+            } else if actual_size == 2 {
+                base.flags |= type_flags::UTF16;
+            } else if actual_size == 4 {
+                base.flags |= type_flags::UTF32;
             }
         }
-        ct
+
+        let candidate = if !chartp && actual_meta == TypeMetatype::Void {
+            Datatype::Void(base)
+        } else if !chartp && actual_meta == TypeMetatype::Code {
+            Datatype::Code(TypeCode { base, proto: None })
+        } else {
+            Datatype::Base(base)
+        };
+
+        if let Some(existing) = self.find_by_name(actual_name) {
+            let same_variant = matches!(
+                (existing.as_ref(), &candidate),
+                (Datatype::Void(_), Datatype::Void(_))
+                    | (Datatype::Base(_), Datatype::Base(_))
+                    | (Datatype::Code(_), Datatype::Code(_))
+            );
+            let same_definition = same_variant
+                && existing.get_size() == candidate.get_size()
+                && existing.get_metatype() == candidate.get_metatype()
+                && Self::datatype_submeta(&existing) == Self::datatype_submeta(&candidate);
+            if !same_definition {
+                panic!("Trying to alter definition of type: {actual_name}");
+            }
+            if existing.is_coretype() {
+                return existing;
+            }
+
+            let tree_key = (
+                Self::datatype_submeta(&existing),
+                Reverse(existing.get_size()),
+                existing.get_id(),
+            );
+            let mut promoted = existing.as_ref().clone();
+            match &mut promoted {
+                Datatype::Void(base) | Datatype::Base(base) => {
+                    base.flags |= type_flags::CORETYPE;
+                }
+                Datatype::Code(code) => code.base.flags |= type_flags::CORETYPE,
+                _ => unreachable!("same_variant restricts core promotion"),
+            }
+            let promoted = Arc::new(promoted);
+            self.types.insert(actual_name.to_string(), promoted.clone());
+            self.core_types.insert(actual_name.to_string(), promoted.clone());
+            self.base_type_tree
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(tree_key, promoted.clone());
+            return promoted;
+        }
+
+        let mut candidate = candidate;
+        match &mut candidate {
+            Datatype::Void(base) | Datatype::Base(base) => {
+                base.flags |= type_flags::CORETYPE;
+            }
+            Datatype::Code(code) => code.base.flags |= type_flags::CORETYPE,
+            _ => unreachable!("setCoreType only constructs atomic types"),
+        }
+        let datatype = Arc::new(candidate);
+        self.add_core_type(datatype.clone());
+        datatype
     }
 
     // Ghidra: type.cc:3200 TypeFactory::cacheCoreTypes
@@ -1724,16 +1836,86 @@ impl TypeFactory {
     /// quick lookup. Faithful to `TypeFactory::cacheCoreTypes`
     /// (type.cc:3200-3248).
     ///
-    /// Rugra gap: Ghidra populates a 2-D `typecache[size][metatype]` matrix
-    /// and `charcache[5]`/`typecache10`/`typecache16`/`type_nochar` from the
-    /// ordered `tree`. Rugra's `TypeFactory` uses a flat `BTreeMap` keyed by
-    /// name and already caches core types in `core_types` during
-    /// `init_core_types`, so the elaborate matrix is redundant. This method is
-    /// a no-op that preserves the Ghidra call-site contract (it is invoked at
-    /// the end of `decode_core_types`); once a cache matrix is needed for
-    /// hot-loop type lookups, populate it here.
     pub fn cache_core_types(&mut self) {
-        // Intentionally a no-op: core types are already in `core_types`.
+        let ordered: Vec<Arc<Datatype>> = self
+            .base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        let cache = self
+            .base_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let nochar = self
+            .type_nochar
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let char_cache = self
+            .char_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        for datatype in ordered {
+            if !datatype.is_coretype() {
+                continue;
+            }
+            let size = datatype.get_size();
+            let metatype = datatype.get_metatype();
+            if size > 8 {
+                if metatype == TypeMetatype::Float && (size == 10 || size == 16) {
+                    cache.insert((size, metatype), datatype);
+                }
+                continue;
+            }
+
+            match metatype {
+                TypeMetatype::Int => {
+                    let is_ascii = datatype.get_flags() & type_flags::CHARTYPE != 0;
+                    if size == 1 && !is_ascii {
+                        *nochar = Some(datatype.clone());
+                    }
+                    if datatype.is_enum_type() {
+                        continue;
+                    }
+                    if datatype.is_char_print() {
+                        if size < 5 {
+                            char_cache.insert(size, datatype.clone());
+                        }
+                        if is_ascii {
+                            cache.insert((size, metatype), datatype);
+                        }
+                        continue;
+                    }
+                    cache.entry((size, metatype)).or_insert(datatype);
+                }
+                TypeMetatype::Uint => {
+                    if datatype.is_enum_type() {
+                        continue;
+                    }
+                    let is_ascii = datatype.get_flags() & type_flags::CHARTYPE != 0;
+                    if datatype.is_char_print() {
+                        if size < 5 {
+                            char_cache.insert(size, datatype.clone());
+                        }
+                        if is_ascii {
+                            cache.insert((size, metatype), datatype);
+                        }
+                        continue;
+                    }
+                    cache.entry((size, metatype)).or_insert(datatype);
+                }
+                TypeMetatype::Void
+                | TypeMetatype::Unknown
+                | TypeMetatype::Bool
+                | TypeMetatype::Code
+                | TypeMetatype::Float => {
+                    cache.entry((size, metatype)).or_insert(datatype);
+                }
+                _ => {}
+            }
+        }
     }
 
     // Ghidra: type.cc:4216 TypeFactory::encode
@@ -3070,6 +3252,97 @@ mod tests {
                 .unwrap_err(),
             "Trying to alter definition of type: fixture_unknown3"
         );
+    }
+
+    #[test]
+    fn test_core_cache_uses_ordered_identity_not_names() {
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+
+        let plain_a = factory.set_core_type("plain_high", 1, TypeMetatype::Int, false);
+        let plain_b = factory.set_core_type("aaaaaaaa", 1, TypeMetatype::Int, false);
+        let uint_a = factory.set_core_type("unsigned_custom_a", 1, TypeMetatype::Uint, false);
+        let uint_b = factory.set_core_type("unsigned_custom_b", 1, TypeMetatype::Uint, false);
+        let ascii = factory.set_core_type("custom_ascii_glyph", 1, TypeMetatype::Int, true);
+        factory.cache_core_types();
+
+        let preferred = factory
+            .get_base(1, TypeMetatype::Int)
+            .expect("preferred signed byte");
+        assert!(Arc::ptr_eq(&preferred, &ascii));
+        let preferred_char = factory.get_type_char(1);
+        assert!(Arc::ptr_eq(&preferred_char, &ascii));
+
+        let expected_nochar = if plain_a.get_id() > plain_b.get_id() {
+            &plain_a
+        } else {
+            &plain_b
+        };
+        let nochar = factory
+            .get_base_no_char(1, TypeMetatype::Int)
+            .expect("non-character signed byte");
+        assert!(Arc::ptr_eq(&nochar, expected_nochar));
+
+        let expected_uint = if uint_a.get_id() < uint_b.get_id() {
+            &uint_a
+        } else {
+            &uint_b
+        };
+        let preferred_uint = factory
+            .get_base(1, TypeMetatype::Uint)
+            .expect("preferred unsigned byte");
+        assert!(Arc::ptr_eq(&preferred_uint, expected_uint));
+        assert_eq!(preferred.get_name(), "custom_ascii_glyph");
+    }
+
+    #[test]
+    fn test_core_cache_repeat_late_plain_and_clear() {
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+
+        let first_plain = factory.set_core_type("aaaaaaaa", 1, TypeMetatype::Int, false);
+        let ascii = factory.set_core_type("custom_ascii_glyph", 1, TypeMetatype::Int, true);
+        factory.cache_core_types();
+        let first_preferred = factory.get_base(1, TypeMetatype::Int).unwrap();
+        let first_nochar = factory.get_base_no_char(1, TypeMetatype::Int).unwrap();
+        assert!(Arc::ptr_eq(&first_preferred, &ascii));
+        assert!(Arc::ptr_eq(&first_nochar, &first_plain));
+
+        factory.cache_core_types();
+        assert!(Arc::ptr_eq(
+            &first_preferred,
+            &factory.get_base(1, TypeMetatype::Int).unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &first_nochar,
+            &factory.get_base_no_char(1, TypeMetatype::Int).unwrap()
+        ));
+
+        let late_plain = factory.set_core_type("zzzzzzzz", 1, TypeMetatype::Int, false);
+        assert!(late_plain.get_id() > first_plain.get_id());
+        factory.cache_core_types();
+        assert!(Arc::ptr_eq(
+            &ascii,
+            &factory.get_base(1, TypeMetatype::Int).unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &late_plain,
+            &factory.get_base_no_char(1, TypeMetatype::Int).unwrap()
+        ));
+
+        factory.clear();
+        factory.clear();
+        assert!(factory.find_by_name("custom_ascii_glyph").is_none());
+        let post_clear = factory.set_core_type("post_clear_plain", 1, TypeMetatype::Int, false);
+        factory.cache_core_types();
+        assert!(Arc::ptr_eq(
+            &post_clear,
+            &factory.get_base(1, TypeMetatype::Int).unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            &post_clear,
+            &factory.get_base_no_char(1, TypeMetatype::Int).unwrap()
+        ));
     }
 
     // ---- data_organization / alignment-map state (oracle-verified numbers

@@ -32,6 +32,38 @@ Create a new TypeFactory and initialize core types
 
 Find a type by name
 
+### `pub fn get_base(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>>`
+
+Returns the canonical preferred core type for `(size, metatype)` when the
+ordered core cache contains one; otherwise returns the canonical unnamed
+atomic type from the structural tree. Core names are never inferred.
+
+### `pub fn get_base_no_char(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>>`
+
+Matches Ghidra `getBaseNoChar`: only `(1, Int)` can select the cached
+non-ASCII signed-byte type instead of the preferred printable ASCII type;
+all other requests delegate to `get_base`.
+
+### `pub fn clear(&mut self)`
+
+Clears all factory-owned types and the preferred/nochar/character caches,
+while retaining size and alignment configuration.
+
+### `pub fn set_core_type(&mut self, name: &str, size: usize, metatype: TypeMetatype, chartp: bool) -> Arc<Datatype>`
+
+Applies Ghidra's dispatch first, then registers those actual properties:
+one-byte character requests force `Int`; void forces the singleton name
+`void` and size 0; code forces size 1; other scalar/unicode requests retain
+the supplied name, size, and metatype. The resulting canonical `Arc` enters
+the ordered atomic tree. Preferred caches are refreshed separately by
+`cache_core_types`, as in Ghidra's architecture builders.
+
+### `pub fn cache_core_types(&mut self)`
+
+Walks the ordered core tree and updates preferred atomic, character, 10/16-byte
+float, and one-byte non-character caches with Ghidra's overwrite/first-fill
+rules.
+
 ### `pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype>`
 
 Get or create a pointer type to the given base type. Applies the
@@ -360,4 +392,59 @@ the activated flag paths have no observable E2E effect on the current corpus
 reaches the SUBPIECE walk). The printc_subpiece fixture's Rust-side manual
 flag on `fixture_inner` is now reclaimable (root noted: not urgent).
 
+## 2026-08-20 TYPEFACTORY-LOCALTYPE-CACHE-0001
 
+The local atomic-core cache now follows locked Ghidra 12.0.4
+`TypeFactory::cacheCoreTypes/getBase/getBaseNoChar` identity semantics
+(`type.cc:3200-3248`, `3619-3660`) instead of inferring `int1`, `uint1`,
+`float`, or `double` names:
+
+- `set_core_type` preserves the properties after Ghidra's dispatch: one-byte
+  character requests force `TYPE_INT`; void forces `void`/size 0; code forces
+  size 1; the remaining scalar/unicode branches retain caller properties.
+  It assigns the resulting `hashName` id/core and character flags and inserts
+  the canonical `Arc` into the atomic cache-traversal tree.
+- `cache_core_types` implements ordinary first-fill, ASCII character forced
+  preference, `charcache` updates, 10/16-byte float slots, and enum exclusion
+  for core entries that actually reach `base_type_tree`, plus the ordered
+  overwrite of `type_nochar` by each such non-ASCII one-byte `TYPE_INT`. It
+  deliberately does not clear first, preserving repeated-call state.
+- `get_base` is cache-first and returns cached named core `Arc`s independent
+  of spelling. For the within-base-limit projection, a miss creates/reuses an
+  unnamed id-zero structural entry. The architecture-dependent large-base
+  array branch remains missing. `get_base_no_char` substitutes `type_nochar`
+  only for `(size=1, metatype=Int)` and otherwise delegates unchanged.
+- `clear` resets the full type registry plus `base_cache`, `type_nochar`, and
+  `char_cache`, retaining data-organization sizes/alignment.
+
+The locked differential fixture is
+`tests/oracle/typefactory_local_cache_1204.{cc,rs,metadata.json}`, run by
+`tools/run_typefactory_local_cache_oracle.sh`. Its 99 fixed-order records
+compare exact custom names, unsigned ids, flags, metatypes, and canonical
+pointer/`Arc` identity for two non-ASCII signed bytes, two unsigned bytes,
+an ASCII byte, repeated cache calls, a later higher-id signed byte, double
+clear, empty-cache fallback, and post-clear plain→ASCII reconstruction. The
+runner builds Ghidra at commit `e40ed130…376b` and an isolated Rugra closure
+from pinned commit `8012627…8c65` with only this task's hash-verified
+`typefactory.rs` overlaid, so concurrent dirty files cannot affect the
+comparand. Result: all 99 records byte-identical, stdout SHA-256
+`4780c75cf8247139ef631fe9060300d4c8bb393248a03b8b9711685ed9c14879`.
+
+This is a targeted cache/nochar projection `MATCH`; fixture
+`overall_status=MISMATCH`, and neither the mapped functions nor the module are
+L3. Existing-noncore promotion cannot preserve the old external `Arc`'s
+identity/flag mutation and is tracked by
+`TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001`. Other known mismatches are:
+decoded core enums do not enter `base_type_tree`; same-name conflicts panic
+instead of surfacing a `LowlevelError`-equivalent `Result`;
+`get_type_char(size)` constructs on cache miss instead of throwing; raw
+`TypeFactory::new` is architecture-bootstrap glue rather than Ghidra's empty
+constructor; and large-base requests cannot inspect
+`Architecture::max_basetype_size`. Core-stream decode is known `MISSING`
+(`clear_non_core` plus child skipping instead of `clear` plus force-core
+decode); wide-character and 10/16-byte float observations, lock poisoning,
+external-handle lifetime after `clear`, and the general pointer/aggregate tree
+remain `UNTESTED` or covered by the existing `TYPE-0001` mismatch.
+Constructor/destructor propagation in
+`decodeTypeWithCodeFlags` is the separate serial follow-up
+`TYPEFACTORY-CODEFLAGS-DECODE-0001`.

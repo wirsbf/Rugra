@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TYPEFACTORY-LOCALTYPE-CACHE-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984"
+  },
+  "architecture": "x86:LE:64:default:gcc",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "usage": "The locked BfdArchitecture is initialized over examples/curl only to supply the production TypeFactory and alignment/architecture state; the fixture then calls TypeFactory::clear and owns every compared registration."
+  },
+  "analysis_options": {
+    "apis": [
+      "TypeFactory::clearCache(void) (type.cc:3122-3134)",
+      "TypeFactory::setCoreType(const string &,int4,type_metatype,bool) (type.cc:3178-3195)",
+      "TypeFactory::cacheCoreTypes(void) (type.cc:3200-3248)",
+      "TypeFactory::clear(void) (type.cc:3251-3263)",
+      "TypeFactory::getBaseNoChar(int4,type_metatype) (type.cc:3619-3625)",
+      "TypeFactory::getBase(int4,type_metatype) (type.cc:3631-3660)",
+      "Datatype::hashName(const string &) (type.cc:689-701)",
+      "DatatypeCompare (type.hh:302-308)"
+    ],
+    "factory_state": "After BfdArchitecture::init, clear the TypeFactory. Initial wave registers two plain signed bytes, two plain unsigned bytes, and one caller-named ASCII signed byte, then caches twice. A later higher-id plain signed byte is registered and cached. The factory is cleared twice, an empty-cache unnamed signed byte is observed, cleared again, then a post-clear plain byte and later ASCII byte are registered across repeated cache calls.",
+    "ordering": "DatatypeSet order is sub-metatype, descending size, then unsigned id. All compared scalar sizes are one byte; ids are the exact locked hashName results. Ordinary preferred slots are first-fill, ASCII character slots overwrite, and type_nochar is overwritten by every ordered non-ASCII TYPE_INT size-1 core entry.",
+    "normalization": "None. Exact names, unsigned ids, size, numeric locked metatype, core/ASCII flags, and boolean same-factory pointer identity are emitted in fixed order and compared byte-for-byte.",
+    "random_seed": "none; ordered tree traversal and name hashing are deterministic",
+    "error_injection": "none; conflicting same-name registration and Rust lock poisoning are outside this fixture"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps(payload, sort_keys=True, separators=(',',':'))",
+    "sha256": "06ab440dc881677bec12fc569249a92296f52c85d7521e3367fbce51b1a19578",
+    "payload": {
+      "architecture": "x86:LE:64:default:gcc",
+      "compiler_spec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+      "initial": [
+        ["plain_high", 1, "TYPE_INT", false],
+        ["aaaaaaaa", 1, "TYPE_INT", false],
+        ["unsigned_custom_a", 1, "TYPE_UINT", false],
+        ["unsigned_custom_b", 1, "TYPE_UINT", false],
+        ["custom_ascii_glyph", 1, "TYPE_INT", true]
+      ],
+      "late": ["zzzzzzzz", 1, "TYPE_INT", false],
+      "post_clear": [
+        ["post_clear_plain", 1, "TYPE_INT", false],
+        ["post_clear_ascii", 1, "TYPE_INT", true]
+      ],
+      "sequence": [
+        "clear",
+        "register_initial",
+        "cache",
+        "cache",
+        "register_late",
+        "cache",
+        "clear",
+        "clear",
+        "getBase_empty",
+        "clear",
+        "register_post_plain",
+        "cache",
+        "cache",
+        "register_post_ascii",
+        "cache"
+      ]
+    }
+  },
+  "observation_schema": {
+    "format": "99 newline-terminated key=value records in fixed order",
+    "type_record": "exact name, unsigned id, byte size, locked numeric metatype, core flag, and ASCII flag",
+    "identity": "Pointer equality in Ghidra and Arc::ptr_eq in Rugra for preferred, nochar, charcache, repeated access, repeated cache, late registration, empty-cache fallback, and post-clear reconstruction",
+    "lifetime": "No pre-clear Ghidra pointer is dereferenced or compared after clear deletes it"
+  },
+  "assets": {
+    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  },
+  "comparand": {
+    "rust_base_commit": "8012627083360e0111506dc70d891552383a8c65",
+    "rust_base_tree": "e94f9ee28049d6b26db645f74f0157a376116bf8",
+    "typefactory_base_blob": "17a87bc991ab68004bb3f6311aee0534271672d7",
+    "datatype_base_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
+    "datatype_base_sha256": "8b64f171080f666261736041024d8fb46522cc62c04e602c6777cd4c7fb76e50",
+    "typefactory_rs_sha256": "c78d12f21449acfd1b296bac6d2721d224a8e3260010397774dfe1defceecaf9",
+    "cpp_fixture_sha256": "0ab2bfc1ea8d49a8d3c2994198783a9e7ba42eb8e5420e1e920312a6e6b6161b",
+    "rust_fixture_sha256": "666d817f4d859dbb6aaf66c1a1130b97338429e88bff2aa3fb4240503092b75d",
+    "runner_sha256": "f831931716cfe92c9662912d137c64f2a9c79911e99b9f15ebfa5a3fd71551c2",
+    "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the hash-verified live src/type_system/typefactory.rs, build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed.",
+    "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  },
+  "expected_stdout_sha256": "4780c75cf8247139ef631fe9060300d4c8bb393248a03b8b9711685ed9c14879",
+  "expected_exit_code": 0,
+  "coverage": {
+    "caller_supplied_core_names_and_hash_ids": "MATCH",
+    "multiple_non_ascii_int1_type_nochar_order": "MATCH",
+    "ascii_char_preferred_override": "MATCH",
+    "ordinary_uint_first_fill": "MATCH",
+    "charcache_identity": "MATCH",
+    "get_base_and_get_base_no_char_repeat_identity": "MATCH",
+    "repeat_cache_identity": "MATCH",
+    "late_higher_id_nochar_reselection": "MATCH",
+    "late_ascii_preferred_persistence": "MATCH",
+    "double_clear_and_old_name_removal": "MATCH",
+    "empty_cache_nochar_fallback": "MATCH",
+    "post_clear_plain_then_ascii_rebuild": "MATCH",
+    "external_old_handle_lifetime_after_clear": "UNTESTED: Ghidra deletes the objects while an external Rust Arc can retain them; no invalid Ghidra pointer is compared; TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+    "decode_core_types_stream_rebuild": "MISSING: Rust retains core entries with clear_non_core and skips every child instead of Ghidra clear()+decodeTypeNoRef(forcecore=true); TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "wide_character_and_float10_float16_slots": "UNTESTED: TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "core_enum_cache_participation": "MISMATCH: decoded core enums enter the flat name map through insert but not base_type_tree, so the signed-size1 pre-enum type_nochar assignment and enum exclusion order cannot run; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "get_type_char_missing_cache_exception": "MISMATCH: the cached custom-name path matches, but the historical Rugra API still constructs a character type on cache miss instead of throwing Ghidra's unsupported-character LowlevelError; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "same_name_conflicting_core_registration": "MISMATCH: the compatibility API panics with Ghidra's message instead of returning a Rust Result equivalent to LowlevelError, so the exception type differs; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "existing_noncore_to_core_alias_identity": "MISMATCH: immutable Arc promotion replaces the factory canonical Arc, so an external pre-promotion Arc does not observe Ghidra's in-place core flag mutation; TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+    "constructor_empty_factory_state": "MISMATCH: Rugra TypeFactory::new is architecture-bootstrap glue and installs core types, while the raw Ghidra TypeFactory constructor only clears caches; the fixture intentionally clears both factories before its projection; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "rust_lock_poisoning": "UNTESTED: RwLock is Rust ownership glue with no Ghidra input equivalent; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "max_basetype_size_array_conversion": "MISSING: get_base does not carry Architecture::max_basetype_size and cannot yet take Ghidra's array-of-unknown-byte branch; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "general_pointer_array_aggregate_tree": "MISMATCH: existing TYPE-0001 structural-registry gap",
+    "code_pointer_constructor_destructor_decode": "MISSING: follow-up TYPEFACTORY-CODEFLAGS-DECODE-0001"
+  },
+  "residual_todo_ids": [
+    "TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+    "TYPEFACTORY-CODEFLAGS-DECODE-0001",
+    "TYPE-0001"
+  ],
+  "projection_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "status_note": "All 99 targeted TypeFactory local core-cache/name/nochar/clear observations are byte-identical against locked Ghidra 12.0.4. The mapped functions and module are not globally MATCH because existing-noncore promotion identity, raw-constructor state, large-base conversion, decode, error, and non-atomic tree behavior remain MISMATCH/MISSING/UNTESTED as listed in coverage."
+}
