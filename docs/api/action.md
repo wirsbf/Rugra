@@ -1015,3 +1015,12 @@ PRINTC-WARN-EMIT-0001 R2）满足：glob_url 的 `uVarN` 重复声明块根因
 numbering **0** / `multiple descendants` 0 / `/* WARNING: Unknown calling
 convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重复注入）。
 <!-- annotation-pass: 2026-08-17 -->
+
+## 嵌套树寻址 WIP（2026-08-22，PIPE-DERIVED-TREE-0001）
+
+- `Action::as_action_group` / `ActionGroup::as_action_group` / `child_actions` —
+  树下行访问原语（为 ':'名字路径寻址与 pipeline_tree_1204 DFS 投影铺路，
+  对应 action.cc getSubAction/getSubRule 寻址族）；default 树 head/mainloop/
+  stackstall 子序列断言（coreaction.cc:5477-5486/:5493-5500/:5651-5656）。
+  WIP：derive tree 双侧 fixture pending，见 docs/alignment_docs/
+  PIPELINE_STAGES_1204.md 阶段树参考。

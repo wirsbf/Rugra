@@ -1176,3 +1176,12 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
   钉在 base 102c476，committed 漂移（heritage.rs +14/funcdata.rs +195）致其在
   干净 HEAD 同样 mismatch（本改动前已破，非本 write-set 所致；需 fixture owner
   重钉 base）。
+
+## default 管线树重构 WIP（2026-08-22，PIPE-DERIVED-TREE-0001 / PIPE-HEAD-FLAT-ACTIONS-0001）
+
+- 扁平 `build_full_pipeline_actions` 重构为 Ghidra 嵌套树镜像：universal 头部
+  8 Action（coreaction.cc:5477-5486）、mainloop Segmentize/InternalStorage 槽位
+  （:5493-5500）、stackstall 子序列 oppool1→LaneDivide→MultiCse→ShadowVar→
+  Deindirect→StackPtrFlow（:5651-5656）；`find_group_recursive` 树查询。
+  WIP：pipeline_tree_1204 双侧 fixture 与 stackstall count 反馈 pending；
+  参考 docs/alignment_docs/PIPELINE_STAGES_1204.md。

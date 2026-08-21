@@ -88,6 +88,11 @@ pub trait Action {
     /// Prepare one `apply()` attempt for the current executor status.
     fn prepare_apply(&mut self, _status: u32) {}
 
+    // RUGRA-GLUE: fixture-only nested tree view; Ghidra exposes the same nesting via Action::print (action.cc:417-440)
+    /// Read-only downcast for tree-walking fixtures: returns the container
+    /// view if this Action is an ActionGroup/ActionRestartGroup.
+    fn as_action_group(&self) -> Option<&ActionGroup> { None }
+
     // Ghidra: action.cc:298 Action::perform
     /// Run this action to completion using Ghidra's status/count state machine.
     /// Positive Rust `apply()` results adapt Ghidra actions that increment their
@@ -262,6 +267,10 @@ impl ActionGroup {
     pub fn child_names(&self) -> Vec<&str> {
         self.actions.iter().map(|a| a.get_name()).collect()
     }
+    // RUGRA-GLUE: fixture-only read-only child view for tree-walking tests (Ghidra iterates the same protected list in Action::print)
+    pub fn child_actions(&self) -> &[Box<dyn Action>] {
+        &self.actions
+    }
     // RUGRA-GLUE: fixture executor view — drives child `index` through the exact perform() call ActionGroup::apply makes (src/action.rs ActionGroup::apply line above); Ghidra's ActionGroup::apply drives Action::perform the same way (action.cc:511-527)
     pub fn perform_child(
         &mut self,
@@ -299,6 +308,9 @@ impl Action for ActionGroup {
     fn get_name(&self) -> &str { &self.name }
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
+
+    // RUGRA-GLUE: fixture-only nested tree view (see Action::as_action_group)
+    fn as_action_group(&self) -> Option<&ActionGroup> { Some(self) }
 
     // RUGRA-GLUE: externalizes Ghidra ActionGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
@@ -424,6 +436,8 @@ impl Action for ActionRestartGroup {
     fn prepare_apply(&mut self, status: u32) {
         self.group.prepare_apply(status);
     }
+    // RUGRA-GLUE: fixture-only nested tree view (see Action::as_action_group)
+    fn as_action_group(&self) -> Option<&ActionGroup> { Some(&self.group) }
     // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.pending_count)
@@ -909,64 +923,32 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         universal.add_action(Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
         universal.add_action(Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new())); // :5484
-        // SINGLE REGISTRATION (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④):
-        // universalAction (coreaction.cc:5462-5738) registers every Action
-        // exactly once — e.g. ActionPrototypeWarnings appears only at :5737.
-        // build_full_pipeline_actions() (coreaction.rs) returns the
-        // implemented-but-unregistered Actions, but this builder registers
-        // most of them explicitly below at their oracle positions (base group
-        // above, mainloop :5490-5508, fullloop :5679-5688, merge/casts
-        // :5714-5738). Consuming those vec entries here as well double-
-        // registered them: ActionPrototypeWarnings ran twice per function
-        // (stderr 48 = 24×2 unknown-convention warnings), and DefaultParams /
-        // PrototypeTypes / VarnodeProps / ParamDouble / DirectWrite /
-        // ActiveParam / ReturnRecovery / NonzeroMask / InferTypes /
-        // UnjustifiedParams / StartTypes / ActiveReturn / SwitchNorm /
-        // HideShadow each ran an extra pass at the wrong (pre-:5482)
-        // position. Skip every name this builder owns; the surviving vec
-        // entries (FuncLinkOutOnly :5485, Segmentize :5494, InternalStorage
-        // :5495, MultiCse :5653, ShadowVar :5654, Deindirect :5655) keep their
-        // current registration context.
-        //
-        // RESIDUAL CLOSED (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 R2): the skip
-        // set below is now exhaustive — every Action this builder registers
-        // at its oracle position is skipped in the vec consumption, so each
-        // Action has exactly one registration, matching universalAction
-        // (coreaction.cc:5462-5738). outputprototype/inputprototype were
-        // the last two residual doubles: their early (pre-fullloop) runs
-        // stayed registered because A/B on the locked curl corpus showed a
-        // printc-side local-name collision (duplicate `uVarN` declaration
-        // block in glob_url, numbering 0→3). That unblocking condition was
-        // satisfied by 533412a (printc naming gate — prettyprint
-        // control_flow_opener, PRINTC-WARN-EMIT-0001 R2); with it landed,
-        // full dedup holds numbering=0 (verified on a fresh locked-oracle
-        // curl E2E). setcasts had left earlier via
-        // HERITAGE-FLAGFREE-SSA-0001 (sole registration at :5735).
-        const BUILDER_OWNED_ACTION_NAMES: [&str; 17] = [
-            "defaultparams",      // :5480 above
-            "prototypetypes",     // :5483 above
-            "varnodeprops",       // mainloop :5491
-            "paramdouble",        // mainloop :5493
-            "directwrite",        // mainloop :5497/:5498 + fullloop :5680/:5681
-            "activeparam",        // mainloop :5499
-            "returnrecovery",     // mainloop :5500
-            "nonzeromask",        // mainloop :5507
-            "infertypes",         // mainloop :5508
-            "unjustifiedparams",  // fullloop :5686
-            "starttypes",         // fullloop :5687
-            "activereturn",       // fullloop :5688
-            "switchnorm",         // fullloop :5684
-            "hideshadow",         // :5728
-            "outputprototype",    // :5730
-            "inputprototype",     // :5731
-            "prototypewarnings",  // :5737
-        ];
-        for extra in crate::coreaction::build_full_pipeline_actions() {
-            if BUILDER_OWNED_ACTION_NAMES.contains(&extra.get_name()) {
-                continue;
-            }
-            universal.add_action(extra);
-        }
+        // Ghidra: coreaction.cc:5485 ActionFuncLinkOutOnly — sole registration
+        // at its universal head slot (PIPE-HEAD-FLAT-ACTIONS-0001: previously
+        // delivered pre-fullloop as a flat root child by the deleted
+        // build_full_pipeline_actions() vec consumption).
+        // NOTE: `noproto` is absent from the default `decompile` grouplist
+        // (coreaction.cc:5424-5431), so Ghidra's derived decompile root drops
+        // this instance (Action::clone returns null — coreaction.hh:715-719
+        // pattern). Rugra keeps it registered per the wave target head
+        // (coreaction.cc:5477-5486); its funcLinkOutput work
+        // (coreaction.cc:1588-1595) is subsumed and idempotent under
+        // ActionFuncLink :5484 (funcLinkInput+funcLinkOutput, coreaction.cc:
+        // 1575-1586), so the registration is observably inert on the
+        // decompile root.
+        universal.add_action(Box::new(crate::coreaction::ActionFuncLinkOutOnly::new())); // :5485
+        // SINGLE REGISTRATION (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ +
+        // PIPE-HEAD-FLAT-ACTIONS-0001): universalAction (coreaction.cc:5462-
+        // 5738) registers every Action exactly once at a fixed tree slot, and
+        // a root is derived by cloning that tree (ActionDatabase::
+        // deriveAction, action.cc:1145-1158) — never by appending flat
+        // children. The former build_full_pipeline_actions() consumption that
+        // flattened Segmentize/InternalStorage/MultiCse/ShadowVar/Deindirect
+        // (plus FuncLinkOutOnly above) as root children before fullloop is
+        // removed; each is now registered below at its exact oracle slot
+        // (Segmentize/InternalStorage → mainloop :5494/:5495;
+        // MultiCse/ShadowVar/Deindirect/StackPtrFlow → stackstall
+        // :5653-:5656).
 
         // --- fullloop (coreaction.cc:5487, repeatapply) ---
         // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
@@ -974,8 +956,9 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         // infinite-loops even after reverting mainloop — fullloop re-runs
         // mainloop + ActionDeadCode each cycle, and one of those reports a
         // change every pass (non-idempotent). Reverted to keep the build/test
-        // suite green. stackstall repeatapply is retained (its only child, the
-        // simplify pool, is designed to converge to a fixed point).
+        // suite green. stackstall repeatapply is retained (oppool1 converges
+        // to a fixed point; the :5652-:5656 actions terminate on a clean
+        // pass — see the stackstall comment above).
         let mut fullloop = ActionGroup::with_flags("fullloop", action_flags::RULE_REPEATAPPLY);
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
@@ -1003,12 +986,19 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         mainloop.add_action(Box::new(crate::coreaction::ActionVarnodeProps::new())); // :5491
         mainloop.add_action(Box::new(ActionHeritage::new())); // :5492
         mainloop.add_action(Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
-        mainloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497
+        // Ghidra: coreaction.cc:5494-5495 — Segmentize/InternalStorage at
+        // their mainloop slots, between ParamDouble (:5493) and DirectWrite
+        // (:5497). PIPE-HEAD-FLAT-ACTIONS-0001: moved in from flat root-child
+        // registration (they ran pre-fullloop on pre-SSA IR before).
+        // ActionForceGoto (:5496, blockrecovery) stays unregistered — Rugra
+        // port is a no-op stub (see coreaction.rs inventory comment).
+        mainloop.add_action(Box::new(crate::coreaction::ActionSegmentize::new())); // :5494
+        mainloop.add_action(Box::new(crate::coreaction::ActionInternalStorage::new())); // :5495
+        mainloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497 (protorecovery_a; the :5498 protorecovery_b instance is filtered from the decompile root — coreaction.cc:5424-5431)
         mainloop.add_action(Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
         mainloop.add_action(Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionNonzeroMask::new())); // :5507
-        mainloop.add_action(Box::new(ActionStackPtrFlow::new()));
         // Rugra-local Actions (TODO: replace with Ghidra mechanisms once
         // ActionActiveParam / ActionDefaultParams / ActionDirectWrite are wired).
         // A5 ActionInferParams: KEPT — provides unique parameter inference
@@ -1026,9 +1016,26 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         // Verified redundant: cargo test 952/952, compare_ghidra defects=0.
 
         // --- stackstall (coreaction.cc:5509, repeatapply) ---
+        // Ghidra: coreaction.cc:5509-5657 — full child sequence:
+        //   oppool1 (:5511-5650), LaneDivide (:5652), MultiCse (:5653),
+        //   ShadowVar (:5654), Deindirect (:5655), StackPtrFlow (:5656).
+        // PIPE-HEAD-FLAT-ACTIONS-0001: MultiCse/ShadowVar/Deindirect move in
+        // from flat root-child registration; StackPtrFlow moves in from its
+        // former early mainloop slot (before oppool1) to the oracle's
+        // last-child slot; LaneDivide (:5652) is registered as the ported
+        // no-op stub so the group structure matches the oracle. Convergence
+        // under RULE_REPEATAPPLY: oppool1 is a fixed-point pool; LaneDivide /
+        // StackPtrFlow return 0 unconditionally; MultiCse/ShadowVar/Deindirect
+        // only report counts while they keep rewriting, so a clean pass
+        // terminates the loop.
         let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
         // oppool1 (coreaction.cc:5511, repeatapply)
         stackstall.add_action(Box::new(build_simplify_pool()));
+        stackstall.add_action(Box::new(crate::coreaction::ActionLaneDivide::new())); // :5652 — no-op stub
+        stackstall.add_action(Box::new(crate::coreaction::ActionMultiCse::new())); // :5653
+        stackstall.add_action(Box::new(crate::coreaction::ActionShadowVar::new())); // :5654
+        stackstall.add_action(Box::new(crate::coreaction::ActionDeindirect::new())); // :5655
+        stackstall.add_action(Box::new(ActionStackPtrFlow::new())); // :5656
 
         mainloop.add_action(Box::new(stackstall));
 
@@ -1082,7 +1089,7 @@ pub fn build_default_pipeline() -> ActionRestartGroup {
         fullloop.add_action(Box::new(crate::coreaction::ActionUnjustifiedParams::new())); // :5686
         fullloop.add_action(Box::new(crate::coreaction::ActionStartTypes::new())); // :5687
         fullloop.add_action(Box::new(crate::coreaction::ActionActiveReturn::new())); // :5688
-        fullloop.add_action(Box::new(ActionDeadCode::new())); // :5687
+        fullloop.add_action(Box::new(ActionDeadCode::new())); // :5682
 
         universal.add_action(Box::new(fullloop));
 
@@ -1232,19 +1239,21 @@ mod tests {
 
     // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④: universalAction registers every
     // Action exactly once (coreaction.cc:5462-5738); ActionPrototypeWarnings
-    // appears only at :5737. The build_full_pipeline_actions() consumption
-    // used to double-register it (stderr 48 = 24×2 unknown-convention
-    // warnings per E2E run) along with 16 other Actions this builder owns.
+    // appears only at :5737. The former build_full_pipeline_actions()
+    // consumption used to double-register it (stderr 48 = 24×2
+    // unknown-convention warnings per E2E run) along with 16 other Actions
+    // this builder owns; that vec path is now deleted outright
+    // (PIPE-HEAD-FLAT-ACTIONS-0001).
     #[test]
     fn test_prototype_warnings_registered_once() {
         let root = build_default_pipeline();
         let names = root.child_names();
         // coreaction.cc:5737 — exactly one top-level prototypewarnings.
         assert_eq!(names.iter().filter(|n| **n == "prototypewarnings").count(), 1);
-        // R2 closeout (unblocked by 533412a, see the skip-set comment
-        // above): outputprototype/inputprototype are sole-registered at
-        // their oracle positions — exactly one top-level instance each,
-        // never in the pre-fullloop vec-survivor run.
+        // R2 closeout (unblocked by 533412a; see the SINGLE REGISTRATION
+        // comment in build_default_pipeline): outputprototype/inputprototype
+        // are sole-registered at their oracle positions — exactly one
+        // top-level instance each, never in any pre-fullloop flat run.
         for name in ["outputprototype", "inputprototype"] {
             assert_eq!(
                 names.iter().filter(|n| **n == name).count(),
@@ -1284,12 +1293,15 @@ mod tests {
         }
     }
 
-    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④: the base group order is
-    // coreaction.cc:5477-5485 verbatim (Start, Constbase, [NormalizeSetup
-    // excluded — normalanalysis group, not in the decompile root's toggle
-    // set], DefaultParams, ExtraPopSetup, PrototypeTypes, FuncLink,
-    // FuncLinkOutOnly), followed by the remaining build_full_pipeline_actions
-    // survivors and fullloop.
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ + PIPE-HEAD-FLAT-ACTIONS-0001:
+    // the base group order is coreaction.cc:5477-5485 verbatim (Start,
+    // Constbase, [NormalizeSetup excluded — normalanalysis group, not in the
+    // decompile root's toggle set], DefaultParams, ExtraPopSetup,
+    // PrototypeTypes, FuncLink, FuncLinkOutOnly), immediately followed by
+    // fullloop — the former flat vec-survivor run (segmentize/
+    // internalstorage/multicse/shadowvar/deindirect before fullloop) is
+    // gone; those Actions now live inside mainloop/stackstall at their
+    // oracle slots (asserted by the coreaction.rs tree tests).
     #[test]
     fn test_base_group_order_matches_ghidra_5477_5485() {
         let root = build_default_pipeline();
@@ -1301,19 +1313,7 @@ mod tests {
             "extrapopsetup",     // :5482
             "prototypetypes",    // :5483
             "funclink",          // :5484
-            "funclinkoutonly",   // :5485 (vec survivor, base position)
-            "segmentize",        // :5494 (vec survivor)
-            "internalstorage",   // :5495 (vec survivor)
-            "multicse",          // :5653 (vec survivor)
-            "shadowvar",         // :5654 (vec survivor)
-            "deindirect",        // :5655 (vec survivor)
-            // R2 closeout (UNKNOWN-PROTOMODEL-WARN-EMIT-0001): the residual
-            // early outputprototype/inputprototype doubles are gone from
-            // this prefix — they are no longer vec survivors; their sole
-            // registrations sit at :5730/:5731 (asserted by
-            // test_post_cleanup_sequence_matches_ghidra_5714_5738 and
-            // test_prototype_warnings_registered_once). setcasts left via
-            // HERITAGE-FLAGFREE-SSA-0001 (sole registration :5735).
+            "funclinkoutonly",   // :5485 (head slot, sole registration)
             "fullloop",          // :5487 group
         ];
         assert!(names.len() >= expected_prefix.len());

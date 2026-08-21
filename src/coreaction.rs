@@ -8965,8 +8965,9 @@ impl Action for ActionForceGoto {
 // lacks the underlying API (scope/symbol discovery for mapGlobals,
 // ConditionalJoin for nodejoin, collapseInternal/structure tree for the
 // block transforms), the struct + `impl Action` is still provided with a
-// faithful-but-stub `apply()` so the action exists in the inventory; only
-// actions with real effect are wired into `build_full_pipeline_actions`.
+// faithful-but-stub `apply()` so the action exists in the inventory; stubs
+// are registered in the default pipeline wherever the oracle has the node
+// (registration of a no-op is observably inert).
 //
 // ActionParamShiftStart / ActionParamShiftStop (coreaction.hh:772-793) are
 // COMMENTED OUT in Ghidra (both the class bodies and their pipeline
@@ -9374,9 +9375,11 @@ impl Action for ActionMapGlobals {
 
 // ---- Block-transform Actions (blockaction.hh) ----------------------------
 // These operate on the structured control-flow tree / basic-block graph and
-// can split or delete blocks. They are intentionally NOT registered in
-// build_full_pipeline_actions (see PIPELINE_DIFF / inclusion criteria),
-// because Rugra's staged structurer assumes block indices are stable and a
+// can split or delete blocks. ActionPreferComplement (:5714) and
+// ActionStructureTransform (:5715) ARE registered at their oracle slots in
+// build_default_pipeline; ActionFinalStructure (:5736) likewise. Any struct
+// here that remains unregistered says so in its own doc comment, because
+// Rugra's staged structurer assumes block indices are stable and a
 // mid-pipeline block edit would push it out of bounds. The structs exist so
 // the inventory matches Ghidra and so they can be enabled once the
 // collapseInternal migration lands.
@@ -10271,111 +10274,49 @@ impl Action for ActionNodeJoin {
 }
 
 // ---------------------------------------------------------------------------
-// Full Ghidra decompile pipeline: implemented-but-unregistered Actions
+// Default decompile pipeline assembly (RUGRA-GLUE, see src/action.rs)
 // ---------------------------------------------------------------------------
 //
-// `set_default_actions` (action.rs, which this file may not edit) registers a
-// subset of the decompile pipeline. Many Actions in this file have faithful,
-// non-stub `apply()` implementations but are never wired into the default
-// pipeline. `build_full_pipeline_actions` returns those Actions in Ghidra's
-// canonical order (coreaction.cc:5477-5738) so a caller can build a fuller
-// pipeline without touching action.rs.
+// `build_default_pipeline` (action.rs) mirrors Ghidra's
+// `ActionDatabase::universalAction` (coreaction.cc:5462-5738) and registers
+// every implemented Action exactly once at its oracle tree slot. The former
+// `build_full_pipeline_actions()` flat vec — which handed
+// implemented-but-unregistered Actions to the action layer and flattened
+// FuncLinkOutOnly/Segmentize/InternalStorage/MultiCse/ShadowVar/Deindirect
+// as ROOT children running before fullloop/mainloop(heritage) — was removed
+// by PIPE-HEAD-FLAT-ACTIONS-0001: those six Actions are now registered at
+// their exact oracle slots (head :5485, mainloop :5494/:5495, stackstall
+// :5653-:5655), and every other vec entry was already sole-registered by the
+// builder (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ + HERITAGE-FLAGFREE-SSA-0001
+// moved setcasts to :5735; PIPE-MERGETYPE-ORDER-0001 moved assignhigh/
+// dominantcopy/copymarker to :5717/:5723/:5729).
 //
-// Inclusion criteria (audited by reading each `apply()` body):
-//   - the Action has a real `apply()` (does meaningful work, not a stub that
-//     unconditionally returns NO_CHANGE / does nothing), AND
-//   - it is NOT already registered in set_default_actions.
+// Actions with faithful-but-stub `apply()` bodies are registered wherever
+// the oracle has the node (the stubs are observably inert): e.g. LaneDivide
+// inside stackstall (:5652), Constbase/ExtraPopSetup/Stop at head/tail,
+// MappedLocalSync (:5691), StartCleanUp (:5692), MarkIndirectOnly (:5725),
+// MapGlobals (:5732), both DynamicSymbols instances (:5724/:5733), NameVars
+// (:5734). Remaining unregistered oracle nodes — all documented deviations:
+//   - ActionForceGoto (:5496) and ActionDynamicMapping (:5504): ported as
+//     no-op stubs, not registered (registration is observably inert either
+//     way; kept out to minimize tree churn until real implementations land).
+//   - ActionUnreachable base instance (:5490): Rugra registers a single
+//     Unreachable at the :5673 slot (after BlockStructure) — running the
+//     :5490 instance before bblocks are complete caused false-positive
+//     unreachable removal (see the mainloop NOTE in action.rs).
+//   - the `noproto` FuncLinkOutOnly and `protorecovery_b` DirectWrite
+//     instances are decompile-grouplist-filtered in Ghidra itself
+//     (coreaction.cc:5424-5431); Rugra keeps FuncLinkOutOnly registered at
+//     :5485 (inert under FuncLink) and drops the protorecovery_b pair, per
+//     the wave target head (coreaction.cc:5477-5486).
+// ActionInferParams (mainloop, after StackPtrFlow's former slot) is
+// RUGRA-GLUE with no oracle counterpart — it provides Rugra's parameter
+// inference until ActionActiveParam/ActionDefaultParams fully cover it.
 //
-// Excluded as pure stubs (return NO_CHANGE with no effect):
-//   ActionConstbase, ActionExtraPopSetup, ActionLaneDivide, ActionConditionalConst,
-//   ActionLikelyTrash, ActionMappedLocalSync, ActionDynamicSymbols, ActionNameVars,
-//   ActionDynamicMapping, ActionForceGoto, ActionStart (already registered).
-//
-// The ordering below mirrors Ghidra's pipeline groups (base → fullloop mainloop
-// → stackstall → deadcontrolflow → post-fullloop → merge/fixate).
-// ActionSetCasts is NOT in this list: its only legal position (:5735) is
-// post-fullloop, owned by set_default_actions (HERITAGE-FLAGFREE-SSA-0001).
-
-/// Build the set of implemented-but-unregistered core Actions, ordered to match
-/// Ghidra's `ActionDatabase::universalAction` (coreaction.cc:5477-5738).
-///
-/// The returned Vec is intended for consumption by the action registration layer
-/// (action.rs). Each entry is a `Box<dyn Action>` ready to `add_action` into an
-/// `ActionGroup`. Already-registered Actions (those wired in by
-/// `set_default_actions`) are intentionally omitted to avoid double registration.
-// RUGRA-GLUE: Rugra pipeline builder; mirrors ActionDatabase::buildDefaultGroups (coreaction.cc:5419) but returns a Vec<Box<dyn Action>> for Rust ownership
-pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
-    vec![
-        // --- base group (coreaction.cc:5477-5485) ---
-        // ActionNormalizeSetup(:5479) is group `normalanalysis`, which is not
-        // a member of Ghidra's default `decompile` group (coreaction.cc:
-        // 5421-5441). It must not be flattened into this decompile helper.
-        Box::new(ActionDefaultParams::new()),    // :5480
-        Box::new(ActionPrototypeTypes::new()),   // :5483
-        Box::new(ActionFuncLinkOutOnly::new()),  // :5485
-
-        // --- mainloop (coreaction.cc:5490-5508) ---
-        // NOTE: ActionUnreachable/DoNothing/RedundBranch/DeterminedBranch run
-        // INSIDE ActionBlockStructure (as a pre-structuring pass), not as
-        // standalone pipeline Actions — they mutate the CFG and running them
-        // in the repeatapply mainloop causes timeouts. See blockaction.rs.
-        Box::new(ActionVarnodeProps::new()),     // :5491
-        Box::new(ActionParamDouble::new()),      // :5493
-        Box::new(ActionSegmentize::new()),       // :5494
-        Box::new(ActionInternalStorage::new()),  // :5495
-        Box::new(ActionDirectWrite::new()),      // :5497-5498 (protorecovery_a)
-        Box::new(ActionActiveParam::new()),      // :5499
-        Box::new(ActionReturnRecovery::new()),   // :5500
-        Box::new(ActionNonzeroMask::new()),      // :5507
-        Box::new(ActionInferTypes::new()),       // :5508 (now fully implemented)
-
-        // --- stackstall (coreaction.cc:5509-5657) ---
-        Box::new(ActionMultiCse::new()),         // :5653
-        Box::new(ActionShadowVar::new()),        // :5654
-        Box::new(ActionDeindirect::new()),       // :5655
-
-        // --- mainloop tail / deadcontrolflow (coreaction.cc:5658-5676) ---
-        // NOTE: RedundBranch/DeterminedBranch run inside ActionBlockStructure.
-        // (ActionConditionalConst at :5676 is detect-only — excluded.)
-
-        // --- fullloop tail (coreaction.cc:5679-5688) ---
-        Box::new(ActionUnjustifiedParams::new()),// :5686
-        Box::new(ActionStartTypes::new()),       // :5687 — flips the type-recovery bit
-        Box::new(ActionActiveReturn::new()),     // :5688
-
-        // --- post-fullloop (coreaction.cc:5691) ---
-        // NOTE: ActionDoNothing runs inside ActionBlockStructure.
-        Box::new(ActionSwitchNorm::new()),       // :5684
-
-        // --- merge/fixate (coreaction.cc:5714-5738) ---
-        // NOTE: ActionPreferComplement (:5714) / ActionStructureTransform (:5715)
-        // excluded — they mutate the structured block tree and conflict with the
-        // staged structurer. ActionAssignHigh (:5717), ActionDominantCopy
-        // (:5723), and ActionCopyMarker (:5729) were moved OUT of this helper
-        // into their exact oracle positions in set_default_actions
-        // (PIPE-MERGETYPE-ORDER-0001) — they are registered, not unregistered,
-        // so they must not appear here as well. ActionMarkIndirectOnly (:5725)
-        // and ActionMapGlobals (:5732) are excluded as stubs (Rugra lacks the
-        // symbol/flag APIs).
-        // ActionSetCasts (:5735) MUST NOT be here (HERITAGE-FLAGFREE-SSA-0001):
-        // every surviving vec entry is registered as a root child BEFORE
-        // fullloop/mainloop (see the set_default_actions consumption in
-        // action.rs), but universalAction runs ActionSetCasts exactly once at
-        // coreaction.cc:5735 — after fullloop heritage, after NameVars (:5734).
-        // An early CAST on pre-SSA IR gives translation-phase free flag reads
-        // (1-byte register/unique BOOL_NEGATE/BOOL_OR/... inputs) a second
-        // reader via castInput's op_set_input -> 351 `multiple descendants`
-        // WARNs (Ghidra varnode.cc:330-338 throws there; heritage SSA-izes
-        // every free read first, making the state unreachable). Its single
-        // registration lives in set_default_actions at the :5735 position.
-        Box::new(ActionHideShadow::new()),       // :5728
-        Box::new(ActionOutputPrototype::new()),  // :5730
-        Box::new(ActionInputPrototype::new()),   // :5731
-        Box::new(ActionPrototypeWarnings::new()),// :5737
-        // ActionStop (:5738) is a pure end-of-pipeline marker with no effect in
-        // Rugra — excluded.
-    ]
-}
+// ActionParamShiftStart / ActionParamShiftStop (coreaction.hh:772-793) are
+// COMMENTED OUT in Ghidra (both the class bodies and their pipeline
+// registration at coreaction.cc:5481/5501) and are therefore intentionally
+// NOT ported.
 
 #[cfg(test)]
 mod tests {
@@ -11021,7 +10962,7 @@ mod tests {
         assert_eq!(cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST);
     }
 
-    // ---- ActionInferTypes + build_full_pipeline_actions tests ----
+    // ---- ActionInferTypes + default-pipeline tree tests ----
 
     #[test]
     fn test_action_infertypes_name() {
@@ -11078,86 +11019,151 @@ mod tests {
         );
     }
 
+    // PIPE-HEAD-FLAT-ACTIONS-0001: build_full_pipeline_actions() and its
+    // skip-set consumption are deleted; build_default_pipeline (action.rs)
+    // mirrors universalAction (coreaction.cc:5462-5738) with every Action
+    // at its oracle tree slot. These tests pin the migrated slots.
+
+    // RUGRA-GLUE: test-only recursive tree search over the pipeline (Ghidra
+    // walks the same tree in Action::print, action.cc:417-440).
+    fn find_group_recursive<'a>(
+        node: &'a dyn crate::action::Action,
+        name: &str,
+    ) -> Option<&'a crate::action::ActionGroup> {
+        if node.get_name() == name {
+            if let Some(g) = node.as_action_group() {
+                return Some(g);
+            }
+        }
+        let g = node.as_action_group()?;
+        for child in g.child_actions() {
+            if let Some(found) = find_group_recursive(child.as_ref(), name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    // Ghidra: coreaction.cc:5477-5486 universalAction head (8 actions;
+    // NormalizeSetup :5479 is normalanalysis-group and filtered from the
+    // decompile root — coreaction.cc:5424-5431).
     #[test]
-    fn test_build_full_pipeline_actions_nonempty() {
-        let actions = build_full_pipeline_actions();
-        assert!(!actions.is_empty(), "pipeline must contain actions");
-        // Must include the newly-implemented ActionInferTypes.
-        assert!(actions.iter().any(|a| a.get_name() == "infertypes"));
-        // And several other implemented actions.
-        assert!(actions.iter().any(|a| a.get_name() == "nonzeromask"));
-        assert!(actions.iter().any(|a| a.get_name() == "deindirect"));
-        assert!(actions.iter().any(|a| a.get_name() == "outputprototype"));
-        // HERITAGE-FLAGFREE-SSA-0001: setcasts must NOT be in this vec. The
-        // vec survivors are registered as root children BEFORE
-        // fullloop/mainloop (set_default_actions consumption in action.rs),
-        // but universalAction (coreaction.cc:5462-5738) runs ActionSetCasts
-        // exactly once at :5735 — after fullloop heritage and NameVars
-        // (:5734). An early CAST on pre-SSA IR adds a second reader to
-        // translation-phase free flag reads (351 `multiple descendants`
-        // WARNs). The single registration must come from
-        // set_default_actions at the :5735 position.
+    fn test_default_pipeline_head_matches_ghidra_5477_5486() {
+        let root = crate::action::build_default_pipeline();
+        let names = root.child_names();
         assert!(
-            !actions.iter().any(|a| a.get_name() == "setcasts"),
-            "setcasts must not run pre-fullloop"
+            names.len() >= 8,
+            "head + fullloop must exist, got {names:?}"
         );
-        let root = crate::action::build_default_pipeline();
-        let root_names = root.child_names();
         assert_eq!(
-            root_names.iter().filter(|n| **n == "setcasts").count(),
-            1,
-            "setcasts must be registered exactly once (oracle :5735)"
+            &names[..8],
+            &[
+                "start",            // :5477
+                "constbase",        // :5478
+                "defaultparams",    // :5480
+                "extrapopsetup",    // :5482
+                "prototypetypes",   // :5483
+                "funclink",         // :5484
+                "funclinkoutonly",  // :5485
+                "fullloop",         // :5487
+            ][..]
         );
-        // No stubs should slip in.
-        assert!(!actions.iter().any(|a| a.get_name() == "lanedivide"));
-        assert!(!actions.iter().any(|a| a.get_name() == "dynamicsymbols"));
+        // No flat survivors: the six former root children must live only in
+        // their oracle groups (mainloop :5494/:5495, stackstall :5653-:5656).
+        for name in [
+            "segmentize",
+            "internalstorage",
+            "multicse",
+            "shadowvar",
+            "deindirect",
+            "stackptrflow",
+        ] {
+            assert!(
+                !names.contains(&name),
+                "{name} must not be a flat root child (got {names:?})"
+            );
+        }
+        // setcasts stays sole-registered at :5735 (HERITAGE-FLAGFREE-SSA-0001).
+        assert_eq!(names.iter().filter(|n| **n == "setcasts").count(), 1);
     }
 
+    // Ghidra: coreaction.cc:5493-5500 mainloop slot order — Segmentize
+    // :5494 and InternalStorage :5495 sit between ParamDouble :5493 and
+    // DirectWrite :5497.
     #[test]
-    fn test_build_full_pipeline_actions_unique_names() {
-        let actions = build_full_pipeline_actions();
-        let mut names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
-        names.sort();
-        let before = names.len();
-        names.dedup();
-        assert_eq!(names.len(), before, "duplicate action name in pipeline");
-    }
-
-    // ---- Tests for the 12 newly-implemented Actions ----
-
-    #[test]
-    fn test_build_full_pipeline_actions_has_new_actions() {
-        // The merge/merge-prerequisite + real-work actions must be present.
-        let actions = build_full_pipeline_actions();
-        let names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
-        assert!(names.contains(&"starttypes"), "ActionStartTypes missing");
-        // PIPE-MERGETYPE-ORDER-0001: AssignHigh/DominantCopy/CopyMarker moved
-        // to their exact oracle positions (coreaction.cc:5717/5723/5729) in
-        // set_default_actions — they must no longer run prematurely here.
-        assert!(!names.contains(&"assignhigh"), "ActionAssignHigh must not run pre-fullloop");
-        assert!(!names.contains(&"dominantcopy"), "ActionDominantCopy must not run pre-fullloop");
-        assert!(!names.contains(&"copymarker"), "ActionCopyMarker must not run pre-fullloop");
-        // The authoritative placement is the default pipeline root.
+    fn test_default_pipeline_mainloop_segmentize_internalstorage_slots() {
         let root = crate::action::build_default_pipeline();
-        let root_names = root.child_names();
-        assert_eq!(root_names.iter().filter(|n| **n == "assignhigh").count(), 1);
-        assert_eq!(root_names.iter().filter(|n| **n == "dominantcopy").count(), 1);
-        assert_eq!(root_names.iter().filter(|n| **n == "copymarker").count(), 1);
+        let mainloop =
+            find_group_recursive(&root, "mainloop").expect("mainloop group must exist");
+        let names = mainloop.child_names();
+        let expect = [
+            "varnodeprops",    // :5491
+            "heritage",        // :5492
+            "paramdouble",     // :5493
+            "segmentize",      // :5494
+            "internalstorage", // :5495
+            "directwrite",     // :5497 (protorecovery_a instance)
+            "activeparam",     // :5499
+            "returnrecovery",  // :5500
+        ];
+        let pos: Vec<usize> = expect
+            .iter()
+            .map(|n| names.iter().position(|x| x == n).unwrap_or_else(|| {
+                panic!("{n} must be registered in mainloop, got {names:?}")
+            }))
+            .collect();
+        assert!(
+            pos.windows(2).all(|w| w[0] < w[1]),
+            "mainloop slot order broken: {names:?}"
+        );
     }
 
+    // Ghidra: coreaction.cc:5651-5656 stackstall children — oppool1, then
+    // LaneDivide :5652, MultiCse :5653, ShadowVar :5654, Deindirect :5655,
+    // StackPtrFlow :5656.
     #[test]
-    fn test_build_full_pipeline_actions_excludes_block_mutators_and_stubs() {
-        // Block-tree mutators that break the staged structurer must NOT be in
-        // the flat pipeline; their structs exist but are unregistered.
-        let actions = build_full_pipeline_actions();
-        let names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
-        assert!(!names.contains(&"prefercomplement"));
-        assert!(!names.contains(&"structuretransform"));
-        assert!(!names.contains(&"returnsplit"));
-        assert!(!names.contains(&"nodejoin"));
-        // Pure stubs that do nothing in Rugra must not slip in.
-        assert!(!names.contains(&"markindirectonly"));
-        assert!(!names.contains(&"mapglobals"));
+    fn test_default_pipeline_stackstall_children_match_ghidra_5651_5656() {
+        let root = crate::action::build_default_pipeline();
+        let stackstall =
+            find_group_recursive(&root, "stackstall").expect("stackstall group must exist");
+        assert_eq!(
+            stackstall.child_names(),
+            vec![
+                "simplifypool", // oppool1 (coreaction.cc:5511)
+                "lanedivide",   // :5652
+                "multicse",     // :5653
+                "shadowvar",    // :5654
+                "deindirect",   // :5655
+                "stackptrflow", // :5656
+            ]
+        );
+    }
+
+    // PIPE-MERGETYPE-ORDER-0001 + UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④:
+    // assignhigh/dominantcopy/copymarker/setcasts are sole-registered at
+    // their oracle positions in the root tail — never early, never twice.
+    #[test]
+    fn test_default_pipeline_sole_registrations_survive() {
+        let root = crate::action::build_default_pipeline();
+        let names = root.child_names();
+        for (name, expected) in [
+            ("assignhigh", 1),      // :5717
+            ("dominantcopy", 1),    // :5723
+            ("copymarker", 1),      // :5729
+            ("setcasts", 1),        // :5735
+            ("prototypewarnings", 1), // :5737
+            ("hideshadow", 1),      // :5728
+            ("outputprototype", 1), // :5730
+            ("inputprototype", 1),  // :5731
+            ("starttypes", 0),      // fullloop :5687 only
+            ("infertypes", 0),      // mainloop :5508 only
+        ] {
+            assert_eq!(
+                names.iter().filter(|n| **n == name).count(),
+                expected,
+                "top-level count for {name}"
+            );
+        }
     }
 
     #[test]
