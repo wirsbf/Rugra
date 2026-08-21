@@ -249,13 +249,25 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 ## ⚙️ 构建与验证
 
 ```bash
-cargo build --release                              # 构建
+cargo check --lib                                  # 日常类型/借用快速反馈
+cargo build --profile fast-release --lib           # 日常优化库构建
+cargo build --release                              # wave 收尾正式构建
 cargo test --lib                                   # 单元测试
-cargo run --release --example curl_decompile       # curl 反编译
-cargo run --release --example httpd_decompile      # httpd 反编译
-python tools/audit_syntax.py result/curl_cur.c     # gcc 语法审计
+cargo run --release --example curl_decompile       # curl 正式反编译门禁
+cargo run --release --example httpd_decompile      # httpd 正式反编译门禁
+python tools/audit_syntax.py result/curl_cur.c      # gcc 语法审计
 python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --summary-only  # 差分门禁
 ```
+
+### 编译反馈效率（Agent 执行规范）
+
+- Agent 按验证目的选择最小 Cargo target：源码编辑首轮使用 `cargo check --lib`，需要优化库产物时使用 `cargo build --profile fast-release --lib`，E2E 验证精确选择对应 example。
+- 主 Agent 在 wave 收尾、主管线集成和发布验证阶段集中执行正式 `cargo build --release`、全量测试与 oracle 门禁。
+- 编译性能实验使用固定源码快照、固定 toolchain、固定 target 冷热状态与固定后台负载；每个候选至少记录 wall/user/sys、峰值 RSS、Cargo timing 报告和退出状态。
+- nightly 并行前端实验依次测量 `-Zthreads=4/8/16`，codegen 实验依次测量 `codegen-units=16/32/64`，Cargo 调度实验依次测量物理核附近的 jobs 值；Agent 以重复测量中位数选择本机默认值。
+- 多 Agent 并发构建为每个 writer 分配独立源码快照；使用共享编译缓存时为各 Agent 分配独立 `CARGO_TARGET_DIR`，使用共享 target 时由主 Agent 调度构建时段。
+- Agent 保留可复用的 Cargo 依赖与增量缓存；临时 benchmark target 使用明确的任务专属路径，并在证据归档后清理该路径。
+- 编译配置优化提交同步记录基线、候选、收益比例、缓存命中条件和正式 release 回归结果；正式 release 与 oracle 差分结果作为语义验收终点。
 
 当前反编译质量数据见 `CURRENT_STATUS.md`(不再放 AGENTS.md,避免数据过期)。
 
