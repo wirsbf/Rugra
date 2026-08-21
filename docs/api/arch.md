@@ -388,3 +388,9 @@ vs Rugra space_id 序，生产只查 ram）；`TreeDecoder` 对锁定 ElementId 
 属性行为 oracle UB（marshal.cc:371-372 负下标），Rust 镜像返回 0。
 ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后另行
 接线（见 TODO_BOARD ARCH-CONTEXT-TRACKED-0001 交接）。
+
+## laned-register 查询（2026-08-22 WIP，LANEDIVIDE-INFRA-0001）
+
+- `get_laned_register` — Architecture 侧 laned 寄存器查表（register.mm/arch
+  `getLanedRegister` 镜像）；`get_minimum_laned_register_size` — 最小 laned 尺寸。
+  WIP：oracle 对拍 pending（见 lanedivide_infra_1204 fixture）。

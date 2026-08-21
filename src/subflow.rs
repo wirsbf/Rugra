@@ -3571,6 +3571,915 @@ impl SplitFlow {
     }
 }
 
+// =====================================================================
+// LaneDivide — TransformManager subclass for splitting arbitrary logical
+// lane descriptions (subflow.hh:420-456, subflow.cc:3518-4128).
+// =====================================================================
+
+struct LaneWorkNode {
+    lanes: usize,
+    num_lanes: i32,
+    skip_lanes: i32,
+}
+
+/// Trace and split data-flow over an arbitrary [`LaneDescription`]. This is
+/// the production transform used by Ghidra's ActionLaneDivide.
+pub struct LaneDivide {
+    pub mgr: TransformManager,
+    description: LaneDescription,
+    work_list: Vec<LaneWorkNode>,
+    allow_subpiece_terminator: bool,
+}
+
+impl LaneDivide {
+    // Ghidra: subflow.cc:3518 LaneDivide::setReplacement
+    fn set_replacement(
+        &mut self,
+        vn: &Arc<RwLock<Varnode>>,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> Option<usize> {
+        if vn.read().unwrap().is_mark() {
+            return Some(self.mgr.get_split_subset(
+                vn.clone(),
+                &self.description,
+                num_lanes as usize,
+                skip_lanes as usize,
+            ));
+        }
+        if vn.read().unwrap().is_constant() {
+            return Some(self.mgr.new_split_subset(
+                vn.clone(),
+                &self.description,
+                num_lanes as usize,
+                skip_lanes as usize,
+            ));
+        }
+
+        let (type_locked, metatype, is_free) = {
+            let vn = vn.read().unwrap();
+            (
+                vn.is_type_lock(),
+                vn.get_type().map(|data_type| data_type.get_metatype()),
+                vn.is_free(),
+            )
+        };
+        if type_locked {
+            use crate::type_system::datatype::TypeMetatype;
+            if !matches!(
+                metatype,
+                Some(
+                    TypeMetatype::Array
+                        | TypeMetatype::Enum
+                        | TypeMetatype::PartialEnum
+                        | TypeMetatype::PartialStruct
+                        | TypeMetatype::PartialUnion
+                )
+            ) {
+                return None;
+            }
+        }
+
+        vn.write().unwrap().set_mark();
+        let result = self.mgr.new_split_subset(
+            vn.clone(),
+            &self.description,
+            num_lanes as usize,
+            skip_lanes as usize,
+        );
+        if !is_free {
+            self.work_list.push(LaneWorkNode {
+                lanes: result,
+                num_lanes,
+                skip_lanes,
+            });
+        }
+        Some(result)
+    }
+
+    // Ghidra: subflow.cc:3559 LaneDivide::buildUnaryOp
+    fn build_unary_op(
+        &mut self,
+        opcode: OpCode,
+        op: &crate::op::PcodeOpRef,
+        input_vars: usize,
+        output_vars: usize,
+        num_lanes: i32,
+    ) {
+        for lane in 0..num_lanes as usize {
+            let replacement = self.mgr.new_op_replace(1, opcode, op.clone());
+            self.mgr.op_set_output(replacement, output_vars + lane);
+            self.mgr.op_set_input(replacement, input_vars + lane, 0);
+        }
+    }
+
+    // Ghidra: subflow.cc:3578 LaneDivide::buildBinaryOp
+    fn build_binary_op(
+        &mut self,
+        opcode: OpCode,
+        op: &crate::op::PcodeOpRef,
+        input0_vars: usize,
+        input1_vars: usize,
+        output_vars: usize,
+        num_lanes: i32,
+    ) {
+        for lane in 0..num_lanes as usize {
+            let replacement = self.mgr.new_op_replace(2, opcode, op.clone());
+            self.mgr.op_set_output(replacement, output_vars + lane);
+            self.mgr.op_set_input(replacement, input0_vars + lane, 0);
+            self.mgr.op_set_input(replacement, input1_vars + lane, 1);
+        }
+    }
+
+    // Ghidra: subflow.cc:3599 LaneDivide::buildPiece
+    fn build_piece(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let (high_vn, low_vn) = {
+            let op = op.0.read().unwrap();
+            let (Some(high), Some(low)) = (op.get_in(0).cloned(), op.get_in(1).cloned()) else {
+                return false;
+            };
+            (high, low)
+        };
+        let high_size = high_vn.read().unwrap().get_size() as i32;
+        let low_size = low_vn.read().unwrap().get_size() as i32;
+        let Some((high_lanes, high_skip)) = self.description.restriction(
+            num_lanes,
+            skip_lanes,
+            low_size,
+            high_size,
+        ) else {
+            return false;
+        };
+        let Some((low_lanes, low_skip)) = self.description.restriction(
+            num_lanes,
+            skip_lanes,
+            0,
+            low_size,
+        ) else {
+            return false;
+        };
+
+        if high_lanes == 1 {
+            let high_input = self.mgr.get_preexisting_varnode(high_vn);
+            let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+            self.mgr.op_set_input(replacement, high_input, 0);
+            self.mgr
+                .op_set_output(replacement, output_vars + num_lanes as usize - 1);
+        } else {
+            let Some(high_vars) = self.set_replacement(&high_vn, high_lanes, high_skip) else {
+                return false;
+            };
+            let output_high_start = num_lanes - high_lanes;
+            for lane in 0..high_lanes as usize {
+                let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+                self.mgr.op_set_input(replacement, high_vars + lane, 0);
+                self.mgr.op_set_output(
+                    replacement,
+                    output_vars + output_high_start as usize + lane,
+                );
+            }
+        }
+
+        if low_lanes == 1 {
+            let low_input = self.mgr.get_preexisting_varnode(low_vn);
+            let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+            self.mgr.op_set_input(replacement, low_input, 0);
+            self.mgr.op_set_output(replacement, output_vars);
+        } else {
+            let Some(low_vars) = self.set_replacement(&low_vn, low_lanes, low_skip) else {
+                return false;
+            };
+            for lane in 0..low_lanes as usize {
+                let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+                self.mgr.op_set_input(replacement, low_vars + lane, 0);
+                self.mgr.op_set_output(replacement, output_vars + lane);
+            }
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3654 LaneDivide::buildMultiequal
+    fn build_multiequal(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let inputs = op.0.read().unwrap().inrefs.clone();
+        let mut input_sets = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let Some(input_vars) = self.set_replacement(&input, num_lanes, skip_lanes) else {
+                return false;
+            };
+            input_sets.push(input_vars);
+        }
+        for lane in 0..num_lanes as usize {
+            let replacement =
+                self.mgr
+                    .new_op_replace(input_sets.len(), OpCode::CPUI_MULTIEQUAL, op.clone());
+            self.mgr.op_set_output(replacement, output_vars + lane);
+            for (slot, input_vars) in input_sets.iter().copied().enumerate() {
+                self.mgr.op_set_input(replacement, input_vars + lane, slot);
+            }
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3681 LaneDivide::buildIndirect
+    fn build_indirect(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let (input, iop) = {
+            let op = op.0.read().unwrap();
+            let (Some(input), Some(iop)) = (op.get_in(0).cloned(), op.get_in(1).cloned()) else {
+                return false;
+            };
+            (input, iop)
+        };
+        let Some(input_vars) = self.set_replacement(&input, num_lanes, skip_lanes) else {
+            return false;
+        };
+        for lane in 0..num_lanes as usize {
+            let replacement =
+                self.mgr
+                    .new_op_replace(2, OpCode::CPUI_INDIRECT, op.clone());
+            self.mgr.op_set_output(replacement, output_vars + lane);
+            self.mgr.op_set_input(replacement, input_vars + lane, 0);
+            let iop_var = self.mgr.new_iop(iop.clone());
+            self.mgr.op_set_input(replacement, iop_var, 1);
+            self.mgr.new_ops[replacement].inherit_indirect(op);
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3704 LaneDivide::buildStore
+    fn build_store(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let (space_vn, original_pointer, value) = {
+            let op = op.0.read().unwrap();
+            let (Some(space), Some(pointer), Some(value)) = (
+                op.get_in(0).cloned(),
+                op.get_in(1).cloned(),
+                op.get_in(2).cloned(),
+            ) else {
+                return false;
+            };
+            (space, pointer, value)
+        };
+        let Some(input_vars) = self.set_replacement(&value, num_lanes, skip_lanes) else {
+            return false;
+        };
+        let (space_constant, space_constant_size) = {
+            let space = space_vn.read().unwrap();
+            (space.get_offset(), space.get_size() as i32)
+        };
+        let space = crate::space::AddressSpace::from_id(space_constant as crate::space::SpaceId);
+        let (pointer_is_free, pointer_is_constant, pointer_size) = {
+            let pointer = original_pointer.read().unwrap();
+            (
+                pointer.is_free(),
+                pointer.is_constant(),
+                pointer.get_size() as i32,
+            )
+        };
+        if pointer_is_free && !pointer_is_constant {
+            return false;
+        }
+        let base_pointer = self.mgr.get_preexisting_varnode(original_pointer);
+        let mut byte_position = 0u64;
+        for count in 0..num_lanes {
+            let lane = if space.is_big_endian() {
+                num_lanes - 1 - count
+            } else {
+                count
+            };
+            let store = self
+                .mgr
+                .new_op_replace(3, OpCode::CPUI_STORE, op.clone());
+            let pointer = if byte_position == 0 {
+                base_pointer
+            } else {
+                let pointer = self.mgr.new_unique(pointer_size);
+                let add = self.mgr.new_op(2, OpCode::CPUI_INT_ADD, store);
+                self.mgr.op_set_output(add, pointer);
+                self.mgr.op_set_input(add, base_pointer, 0);
+                let offset = self.mgr.new_constant(pointer_size, 0, byte_position);
+                self.mgr.op_set_input(add, offset, 1);
+                pointer
+            };
+            let space_input =
+                self.mgr
+                    .new_constant(space_constant_size, 0, space_constant);
+            self.mgr.op_set_input(store, space_input, 0);
+            self.mgr.op_set_input(store, pointer, 1);
+            self.mgr
+                .op_set_input(store, input_vars + lane as usize, 2);
+            byte_position += self
+                .description
+                .get_size((skip_lanes + lane) as usize) as u64;
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3753 LaneDivide::buildLoad
+    fn build_load(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let (space_vn, original_pointer) = {
+            let op = op.0.read().unwrap();
+            let (Some(space), Some(pointer)) =
+                (op.get_in(0).cloned(), op.get_in(1).cloned())
+            else {
+                return false;
+            };
+            (space, pointer)
+        };
+        let (space_constant, space_constant_size) = {
+            let space = space_vn.read().unwrap();
+            (space.get_offset(), space.get_size() as i32)
+        };
+        let space = crate::space::AddressSpace::from_id(space_constant as crate::space::SpaceId);
+        let (pointer_is_free, pointer_is_constant, pointer_size) = {
+            let pointer = original_pointer.read().unwrap();
+            (
+                pointer.is_free(),
+                pointer.is_constant(),
+                pointer.get_size() as i32,
+            )
+        };
+        if pointer_is_free && !pointer_is_constant {
+            return false;
+        }
+        let base_pointer = self.mgr.get_preexisting_varnode(original_pointer);
+        let mut byte_position = 0u64;
+        for count in 0..num_lanes {
+            let load = self
+                .mgr
+                .new_op_replace(2, OpCode::CPUI_LOAD, op.clone());
+            let lane = if space.is_big_endian() {
+                num_lanes - 1 - count
+            } else {
+                count
+            };
+            let pointer = if byte_position == 0 {
+                base_pointer
+            } else {
+                let pointer = self.mgr.new_unique(pointer_size);
+                let add = self.mgr.new_op(2, OpCode::CPUI_INT_ADD, load);
+                self.mgr.op_set_output(add, pointer);
+                self.mgr.op_set_input(add, base_pointer, 0);
+                let offset = self.mgr.new_constant(pointer_size, 0, byte_position);
+                self.mgr.op_set_input(add, offset, 1);
+                pointer
+            };
+            let space_input =
+                self.mgr
+                    .new_constant(space_constant_size, 0, space_constant);
+            self.mgr.op_set_input(load, space_input, 0);
+            self.mgr.op_set_input(load, pointer, 1);
+            self.mgr
+                .op_set_output(load, output_vars + lane as usize);
+            byte_position += self
+                .description
+                .get_size((skip_lanes + lane) as usize) as u64;
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3800 LaneDivide::buildRightShift
+    fn build_right_shift(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let (input, shift) = {
+            let op = op.0.read().unwrap();
+            let (Some(input), Some(shift)) = (op.get_in(0).cloned(), op.get_in(1).cloned()) else {
+                return false;
+            };
+            (input, shift)
+        };
+        if !shift.read().unwrap().is_constant() {
+            return false;
+        }
+        let mut shift_size = shift.read().unwrap().get_offset() as i32;
+        if shift_size & 7 != 0 {
+            return false;
+        }
+        shift_size /= 8;
+        let start_position = shift_size + self.description.get_position(skip_lanes as usize);
+        let start_lane = self.description.get_boundary(start_position);
+        if start_lane < 0 {
+            return false;
+        }
+        let mut source_lane = start_lane;
+        let mut destination_lane = skip_lanes;
+        while source_lane - skip_lanes < num_lanes {
+            if source_lane < 0
+                || destination_lane < 0
+                || source_lane as usize >= self.description.get_num_lanes()
+                || destination_lane as usize >= self.description.get_num_lanes()
+                || self.description.get_size(source_lane as usize)
+                    != self.description.get_size(destination_lane as usize)
+            {
+                return false;
+            }
+            source_lane += 1;
+            destination_lane += 1;
+        }
+        let Some(input_vars) = self.set_replacement(&input, num_lanes, skip_lanes) else {
+            return false;
+        };
+        let lane_shift = start_lane - skip_lanes;
+        self.build_unary_op(
+            OpCode::CPUI_COPY,
+            op,
+            input_vars + lane_shift as usize,
+            output_vars,
+            num_lanes - lane_shift,
+        );
+        for zero_lane in (num_lanes - lane_shift)..num_lanes {
+            let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+            self.mgr
+                .op_set_output(replacement, output_vars + zero_lane as usize);
+            let zero = self
+                .mgr
+                .new_constant(self.description.get_size(zero_lane as usize), 0, 0);
+            self.mgr.op_set_input(replacement, zero, 0);
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3837 LaneDivide::buildLeftShift
+    fn build_left_shift(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let (input, shift) = {
+            let op = op.0.read().unwrap();
+            let (Some(input), Some(shift)) = (op.get_in(0).cloned(), op.get_in(1).cloned()) else {
+                return false;
+            };
+            (input, shift)
+        };
+        if !shift.read().unwrap().is_constant() {
+            return false;
+        }
+        let mut shift_size = shift.read().unwrap().get_offset() as i32;
+        if shift_size & 7 != 0 {
+            return false;
+        }
+        shift_size /= 8;
+        let start_position = shift_size + self.description.get_position(skip_lanes as usize);
+        let start_lane = self.description.get_boundary(start_position);
+        if start_lane < 0 {
+            return false;
+        }
+        let mut destination_lane = start_lane;
+        let mut source_lane = skip_lanes;
+        while destination_lane - skip_lanes < num_lanes {
+            if source_lane < 0
+                || destination_lane < 0
+                || source_lane as usize >= self.description.get_num_lanes()
+                || destination_lane as usize >= self.description.get_num_lanes()
+                || self.description.get_size(source_lane as usize)
+                    != self.description.get_size(destination_lane as usize)
+            {
+                return false;
+            }
+            source_lane += 1;
+            destination_lane += 1;
+        }
+        let Some(input_vars) = self.set_replacement(&input, num_lanes, skip_lanes) else {
+            return false;
+        };
+        let lane_shift = start_lane - skip_lanes;
+        for zero_lane in 0..lane_shift {
+            let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+            self.mgr
+                .op_set_output(replacement, output_vars + zero_lane as usize);
+            let zero = self
+                .mgr
+                .new_constant(self.description.get_size(zero_lane as usize), 0, 0);
+            self.mgr.op_set_input(replacement, zero, 0);
+        }
+        self.build_unary_op(
+            OpCode::CPUI_COPY,
+            op,
+            input_vars,
+            output_vars + lane_shift as usize,
+            num_lanes - lane_shift,
+        );
+        true
+    }
+
+    // Ghidra: subflow.cc:3875 LaneDivide::buildZext
+    fn build_zext(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        output_vars: usize,
+        num_lanes: i32,
+        skip_lanes: i32,
+    ) -> bool {
+        let input = match op.0.read().unwrap().get_in(0).cloned() {
+            Some(input) => input,
+            None => return false,
+        };
+        let input_size = input.read().unwrap().get_size() as i32;
+        let Some((input_lanes, input_skip)) =
+            self.description
+                .restriction(num_lanes, skip_lanes, 0, input_size)
+        else {
+            return false;
+        };
+        if input_lanes == 1 {
+            let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+            let input_var = self.mgr.get_preexisting_varnode(input);
+            self.mgr.op_set_input(replacement, input_var, 0);
+            self.mgr.op_set_output(replacement, output_vars);
+        } else {
+            let Some(input_vars) = self.set_replacement(&input, input_lanes, input_skip) else {
+                return false;
+            };
+            for lane in 0..input_lanes as usize {
+                let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+                self.mgr.op_set_input(replacement, input_vars + lane, 0);
+                self.mgr.op_set_output(replacement, output_vars + lane);
+            }
+        }
+        for lane in 0..(num_lanes - input_lanes) {
+            let replacement = self.mgr.new_op_replace(1, OpCode::CPUI_COPY, op.clone());
+            let zero = self.mgr.new_constant(
+                self.description
+                    .get_size((skip_lanes + input_lanes + lane) as usize),
+                0,
+                0,
+            );
+            self.mgr.op_set_input(replacement, zero, 0);
+            self.mgr
+                .op_set_output(replacement, output_vars + input_lanes as usize + lane as usize);
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:3916 LaneDivide::traceForward
+    fn trace_forward(&mut self, replacement_var: usize, num_lanes: i32, skip_lanes: i32) -> bool {
+        let original = match self.mgr.new_varnodes[replacement_var].vn.clone() {
+            Some(original) => original,
+            None => return false,
+        };
+        let descendants: Vec<crate::op::PcodeOpRef> = original
+            .read()
+            .unwrap()
+            .descend_iter()
+            .map(crate::op::PcodeOpRef)
+            .collect();
+        for op in descendants {
+            let output = op.0.read().unwrap().get_out().cloned();
+            if output
+                .as_ref()
+                .is_some_and(|varnode| varnode.read().unwrap().is_mark())
+            {
+                continue;
+            }
+            let opcode = op.0.read().unwrap().opcode;
+            match opcode {
+                OpCode::CPUI_SUBPIECE => {
+                    let Some(output) = output else {
+                        return false;
+                    };
+                    let byte_position = match op.0.read().unwrap().get_in(1).cloned() {
+                        Some(offset) => offset.read().unwrap().get_offset() as i32,
+                        None => return false,
+                    };
+                    let output_size = output.read().unwrap().get_size() as i32;
+                    let restriction = self.description.restriction(
+                        num_lanes,
+                        skip_lanes,
+                        byte_position,
+                        output_size,
+                    );
+                    let Some((output_lanes, output_skip)) = restriction else {
+                        if !self.allow_subpiece_terminator {
+                            return false;
+                        }
+                        let lane_index = self.description.get_boundary(byte_position);
+                        if lane_index < 0
+                            || lane_index as usize >= self.description.get_num_lanes()
+                            || self.description.get_size(lane_index as usize) <= output_size
+                            || lane_index < skip_lanes
+                        {
+                            return false;
+                        }
+                        let replacement =
+                            self.mgr
+                                .new_preexisting_op(2, OpCode::CPUI_SUBPIECE, op.clone());
+                        self.mgr.op_set_input(
+                            replacement,
+                            replacement_var + (lane_index - skip_lanes) as usize,
+                            0,
+                        );
+                        let zero = self.mgr.new_constant(4, 0, 0);
+                        self.mgr.op_set_input(replacement, zero, 1);
+                        continue;
+                    };
+                    if output_lanes == 1 {
+                        let replacement =
+                            self.mgr
+                                .new_preexisting_op(1, OpCode::CPUI_COPY, op.clone());
+                        self.mgr.op_set_input(
+                            replacement,
+                            replacement_var + (output_skip - skip_lanes) as usize,
+                            0,
+                        );
+                    } else if self
+                        .set_replacement(&output, output_lanes, output_skip)
+                        .is_none()
+                    {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_PIECE => {
+                    let Some(output) = output else {
+                        return false;
+                    };
+                    let (input0, input1_size) = {
+                        let op = op.0.read().unwrap();
+                        let (Some(input0), Some(input1)) =
+                            (op.get_in(0).cloned(), op.get_in(1).cloned())
+                        else {
+                            return false;
+                        };
+                        let input1_size = input1.read().unwrap().get_size() as i32;
+                        (input0, input1_size)
+                    };
+                    let byte_position = if Arc::ptr_eq(&input0, &original) {
+                        input1_size
+                    } else {
+                        0
+                    };
+                    let output_size = output.read().unwrap().get_size() as i32;
+                    let Some((output_lanes, output_skip)) = self.description.extension(
+                        num_lanes,
+                        skip_lanes,
+                        byte_position,
+                        output_size,
+                    ) else {
+                        return false;
+                    };
+                    if self
+                        .set_replacement(&output, output_lanes, output_skip)
+                        .is_none()
+                    {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_COPY
+                | OpCode::CPUI_INT_NEGATE
+                | OpCode::CPUI_INT_AND
+                | OpCode::CPUI_INT_OR
+                | OpCode::CPUI_INT_XOR
+                | OpCode::CPUI_MULTIEQUAL
+                | OpCode::CPUI_INDIRECT => {
+                    let Some(output) = output else {
+                        return false;
+                    };
+                    if self
+                        .set_replacement(&output, num_lanes, skip_lanes)
+                        .is_none()
+                    {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_INT_RIGHT => {
+                    let Some(output) = output else {
+                        return false;
+                    };
+                    let shift_is_constant = op
+                        .0
+                        .read()
+                        .unwrap()
+                        .get_in(1)
+                        .is_some_and(|shift| shift.read().unwrap().is_constant());
+                    if !shift_is_constant
+                        || self
+                            .set_replacement(&output, num_lanes, skip_lanes)
+                            .is_none()
+                    {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_STORE => {
+                    let stored_value = op.0.read().unwrap().get_in(2).cloned();
+                    if !stored_value
+                        .as_ref()
+                        .is_some_and(|value| Arc::ptr_eq(value, &original))
+                        || !self.build_store(&op, num_lanes, skip_lanes)
+                    {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:4012 LaneDivide::traceBackward
+    fn trace_backward(&mut self, replacement_var: usize, num_lanes: i32, skip_lanes: i32) -> bool {
+        let defining_op = self.mgr.new_varnodes[replacement_var]
+            .vn
+            .as_ref()
+            .and_then(|varnode| varnode.read().unwrap().get_def())
+            .map(crate::op::PcodeOpRef);
+        let Some(op) = defining_op else {
+            return true;
+        };
+        let opcode = op.0.read().unwrap().opcode;
+        match opcode {
+            OpCode::CPUI_INT_NEGATE | OpCode::CPUI_COPY => {
+                let input = match op.0.read().unwrap().get_in(0).cloned() {
+                    Some(input) => input,
+                    None => return false,
+                };
+                let Some(input_vars) = self.set_replacement(&input, num_lanes, skip_lanes) else {
+                    return false;
+                };
+                self.build_unary_op(opcode, &op, input_vars, replacement_var, num_lanes);
+            }
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR => {
+                let (input0, input1) = {
+                    let op = op.0.read().unwrap();
+                    let (Some(input0), Some(input1)) =
+                        (op.get_in(0).cloned(), op.get_in(1).cloned())
+                    else {
+                        return false;
+                    };
+                    (input0, input1)
+                };
+                let Some(input0_vars) = self.set_replacement(&input0, num_lanes, skip_lanes) else {
+                    return false;
+                };
+                let Some(input1_vars) = self.set_replacement(&input1, num_lanes, skip_lanes) else {
+                    return false;
+                };
+                self.build_binary_op(
+                    opcode,
+                    &op,
+                    input0_vars,
+                    input1_vars,
+                    replacement_var,
+                    num_lanes,
+                );
+            }
+            OpCode::CPUI_MULTIEQUAL => {
+                if !self.build_multiequal(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_INDIRECT => {
+                if !self.build_indirect(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_SUBPIECE => {
+                let (input, byte_position) = {
+                    let op = op.0.read().unwrap();
+                    let (Some(input), Some(offset)) =
+                        (op.get_in(0).cloned(), op.get_in(1).cloned())
+                    else {
+                        return false;
+                    };
+                    let byte_position = offset.read().unwrap().get_offset() as i32;
+                    (input, byte_position)
+                };
+                let input_size = input.read().unwrap().get_size() as i32;
+                let Some((input_lanes, input_skip)) = self.description.extension(
+                    num_lanes,
+                    skip_lanes,
+                    byte_position,
+                    input_size,
+                ) else {
+                    return false;
+                };
+                let Some(input_vars) = self.set_replacement(&input, input_lanes, input_skip) else {
+                    return false;
+                };
+                self.build_unary_op(
+                    OpCode::CPUI_COPY,
+                    &op,
+                    input_vars + (skip_lanes - input_skip) as usize,
+                    replacement_var,
+                    num_lanes,
+                );
+            }
+            OpCode::CPUI_PIECE => {
+                if !self.build_piece(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_LOAD => {
+                if !self.build_load(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_INT_RIGHT => {
+                if !self.build_right_shift(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_INT_LEFT => {
+                if !self.build_left_shift(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_INT_ZEXT => {
+                if !self.build_zext(&op, replacement_var, num_lanes, skip_lanes) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:4085 LaneDivide::processNextWork
+    fn process_next_work(&mut self) -> bool {
+        let work = self.work_list.pop().expect("LaneDivide work list is non-empty");
+        if !self.trace_backward(work.lanes, work.num_lanes, work.skip_lanes) {
+            return false;
+        }
+        self.trace_forward(work.lanes, work.num_lanes, work.skip_lanes)
+    }
+
+    // Ghidra: subflow.cc:4102 LaneDivide::LaneDivide
+    pub fn new(
+        fd: &mut Funcdata,
+        root: Arc<RwLock<Varnode>>,
+        description: LaneDescription,
+        allow_downcast: bool,
+    ) -> Self {
+        let num_lanes = description.get_num_lanes() as i32;
+        let mut manager = TransformManager::new();
+        manager.init(fd);
+        let mut result = Self {
+            mgr: manager,
+            description,
+            work_list: Vec::new(),
+            allow_subpiece_terminator: allow_downcast,
+        };
+        result.set_replacement(&root, num_lanes, 0);
+        result
+    }
+
+    // Ghidra: subflow.cc:4112 LaneDivide::doTrace
+    pub fn do_trace(&mut self) -> bool {
+        if self.work_list.is_empty() {
+            return false;
+        }
+        let mut result = true;
+        while !self.work_list.is_empty() {
+            if !self.process_next_work() {
+                result = false;
+                break;
+            }
+        }
+        self.mgr.clear_varnode_marks();
+        result
+    }
+
+    // Ghidra: transform.cc:756 TransformManager::apply
+    /// Materialize the successful trace using the inherited transform apply
+    /// lifecycle.
+    pub fn apply(&mut self, fd: &mut Funcdata) {
+        self.mgr.apply(fd);
+    }
+}
+
 /// `RuleSplitFlow` (subflow.cc:239-248, 2039-2088).
 ///
 /// Detects an artificially joined Varnode (a SUBPIECE taking the most-
@@ -5500,5 +6409,82 @@ mod tests {
         let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
         assert_eq!(res, action_status::NO_CHANGE);
     }
-}
 
+    #[test]
+    fn test_lane_divide_piece_subpiece_apply() {
+        let mut fd = Funcdata::new("lane_piece", Address::new(0x1000), 0x10);
+        let block = fd.create_new_block();
+        let piece = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&piece, OpCode::CPUI_PIECE);
+        let root = fd.new_unique_out(4, &piece);
+        let high = fd.new_constant(2, 0x1122);
+        let low = fd.new_constant(2, 0x3344);
+        fd.op_set_input(&piece, high, 0);
+        fd.op_set_input(&piece, low, 1);
+        fd.op_insert_end(&piece, &block);
+
+        let low_piece = fd.new_op(2, Address::new(0x1001));
+        fd.op_set_opcode(&low_piece, OpCode::CPUI_SUBPIECE);
+        let low_output = fd.new_unique_out(2, &low_piece);
+        fd.op_set_input(&low_piece, root.clone(), 0);
+        let zero = fd.new_constant(4, 0);
+        fd.op_set_input(&low_piece, zero, 1);
+        fd.op_insert_end(&low_piece, &block);
+
+        let high_piece = fd.new_op(2, Address::new(0x1002));
+        fd.op_set_opcode(&high_piece, OpCode::CPUI_SUBPIECE);
+        let high_output = fd.new_unique_out(2, &high_piece);
+        fd.op_set_input(&high_piece, root.clone(), 0);
+        let two = fd.new_constant(4, 2);
+        fd.op_set_input(&high_piece, two, 1);
+        fd.op_insert_end(&high_piece, &block);
+
+        let mut divide = LaneDivide::new(
+            &mut fd,
+            root.clone(),
+            LaneDescription::uniform(4, 2),
+            false,
+        );
+        assert!(divide.do_trace());
+        assert!(!root.read().unwrap().is_mark());
+        divide.apply(&mut fd);
+
+        assert!(piece.0.read().unwrap().is_dead());
+        assert_eq!(low_piece.0.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(high_piece.0.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(low_piece.0.read().unwrap().num_input(), 1);
+        assert_eq!(high_piece.0.read().unwrap().num_input(), 1);
+        assert_eq!(low_output.read().unwrap().get_size(), 2);
+        assert_eq!(high_output.read().unwrap().get_size(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 4);
+    }
+
+    #[test]
+    fn test_lane_divide_failure_clears_mark_without_ir_mutation() {
+        let mut fd = Funcdata::new("lane_failure", Address::new(0x2000), 0x10);
+        let block = fd.create_new_block();
+        let multiply = fd.new_op(2, Address::new(0x2000));
+        fd.op_set_opcode(&multiply, OpCode::CPUI_INT_MULT);
+        let root = fd.new_unique_out(4, &multiply);
+        let left = fd.new_constant(4, 3);
+        let right = fd.new_constant(4, 7);
+        fd.op_set_input(&multiply, left, 0);
+        fd.op_set_input(&multiply, right, 1);
+        fd.op_insert_end(&multiply, &block);
+        let before_ops = block.read().unwrap().get_ops();
+
+        let mut divide = LaneDivide::new(
+            &mut fd,
+            root.clone(),
+            LaneDescription::uniform(4, 2),
+            false,
+        );
+        assert!(!divide.do_trace());
+        assert!(!root.read().unwrap().is_mark());
+        let after_ops = block.read().unwrap().get_ops();
+        assert_eq!(before_ops.len(), after_ops.len());
+        assert!(Arc::ptr_eq(&before_ops[0].0, &after_ops[0].0));
+        assert_eq!(multiply.0.read().unwrap().opcode, OpCode::CPUI_INT_MULT);
+        assert!(!multiply.0.read().unwrap().is_dead());
+    }
+}

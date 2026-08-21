@@ -382,6 +382,33 @@ use crate::varnode::VarnodeBank;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
 
+/// Ordered storage key for potential laned-register accesses. This is the
+/// split-address Rust equivalent of Ghidra's `VarnodeData` map key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LanedStorage {
+    pub space: crate::space::AddressSpace,
+    pub offset: u64,
+    pub size: usize,
+}
+
+impl PartialOrd for LanedStorage {
+    // Ghidra: pcoderaw.hh:67 VarnodeData::operator<
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LanedStorage {
+    // Ghidra: pcoderaw.hh:67 VarnodeData::operator<
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.space
+            .space_id()
+            .cmp(&other.space.space_id())
+            .then_with(|| self.offset.cmp(&other.offset))
+            .then_with(|| other.size.cmp(&self.size))
+    }
+}
+
 /// Main container for a function being decompiled
 ///
 /// Corresponds to Ghidra's `Funcdata` class. This class ties together
@@ -502,12 +529,17 @@ pub struct Funcdata {
     /// `clear()`.
     pub union_map: std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
 
-    /// Candidate laned-register storage, populated by `checkForLanedRegister`.
-    /// Faithful to `Funcdata::lanedMap` (funcdata.hh:107). Keyed by
-    /// (offset, size). RUGRA-GAP: Ghidra maps to a `LanedRegister*` record;
-    /// Rugra stores unit placeholders until the Architecture's lane table is
-    /// ported. Cleared by `clear()`.
-    pub laned_map: std::collections::BTreeMap<(u64, u32), ()>,
+    /// Minimum Varnode size that can enter the laned-register access map.
+    /// `u32::MAX` is Ghidra's unsigned representation of the Architecture
+    /// `-1` sentinel when no lane records exist.
+    pub min_laned_size: u32,
+    /// Candidate laned-register storage, ordered by address-space index,
+    /// offset, then descending size. Values share identity with the matching
+    /// immutable Architecture lane record.
+    pub laned_map: std::collections::BTreeMap<
+        LanedStorage,
+        std::sync::Arc<crate::transform::LanedRegister>,
+    >,
 
     /// Per-function override container. Faithful to `Funcdata::localoverride`
     /// (funcdata.hh:108). Holds force-goto / deadcode-delay / flow-override /
@@ -566,6 +598,7 @@ impl Funcdata {
             cond_const_done: false,
             jump_tables: Vec::new(),
             union_map: std::collections::BTreeMap::new(),
+            min_laned_size: u32::MAX,
             laned_map: std::collections::BTreeMap::new(),
             localoverride: crate::override_rs::Override::new(),
             stack_space: crate::space::AddressSpace::Stack,
@@ -636,6 +669,9 @@ impl Funcdata {
         let vn = self.vbank.create(size, addr);
         // cc:157: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
+        if size >= self.min_laned_size as usize {
+            self.check_for_laned_register(size, crate::space::AddressSpace::Ram, addr);
+        }
         vn
     }
 
@@ -934,6 +970,7 @@ impl Funcdata {
         if !self.funcp.has_model() {
             self.funcp.set_model(arch.get_default_model().cloned());
         }
+        self.min_laned_size = arch.get_minimum_laned_register_size() as u32;
         self.arch = Some(arch);
     }
 
@@ -1331,6 +1368,13 @@ impl Funcdata {
         op.0.write().unwrap().output = Some(vn.clone());
         // cc:135: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
+        if s >= self.min_laned_size as usize {
+            let (space, addr) = {
+                let vn = vn.read().unwrap();
+                (vn.get_space(), crate::address::Address::new(vn.get_offset()))
+            };
+            self.check_for_laned_register(s, space, addr);
+        }
         vn
     }
 
@@ -1414,6 +1458,13 @@ impl Funcdata {
         let vn = self.vbank.create_unique(s);
         // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
+        if s >= self.min_laned_size as usize {
+            let (space, addr) = {
+                let vn = vn.read().unwrap();
+                (vn.get_space(), crate::address::Address::new(vn.get_offset()))
+            };
+            self.check_for_laned_register(s, space, addr);
+        }
         vn
     }
 
@@ -1869,6 +1920,13 @@ impl Funcdata {
         // cc:110: assignHigh(vn) — comes BEFORE the queryProperties leg.
         // (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
+        if size >= self.min_laned_size as usize {
+            self.check_for_laned_register(
+                size,
+                crate::space::AddressSpace::Register,
+                addr,
+            );
+        }
         self.set_varnode_properties(&vn);
         vn
     }
@@ -5718,6 +5776,10 @@ impl Funcdata {
     // Ghidra: funcdata.cc:84 Funcdata::clear
     /// Clear all analysis state
     pub fn clear(&mut self) {
+        self.min_laned_size = self
+            .arch
+            .as_ref()
+            .map_or(u32::MAX, |arch| arch.get_minimum_laned_register_size() as u32);
         self.vbank.clear();
         self.obank.clear();
         self.bblocks.clear();
@@ -5726,7 +5788,6 @@ impl Funcdata {
         // Ghidra funcdata.cc:108: covermerge.clear()
         self.merge_state.clear();
         self.union_map.clear();
-        self.laned_map.clear();
         // Ghidra's clear() does not reset localoverride (commands survive
         // restarts), so we leave it intact here.
     }
@@ -8092,17 +8153,53 @@ impl Funcdata {
     ///   if (lanedRegister == NULL) return;
     ///   VarnodeData storage{addr.getSpace(), addr.getOffset(), sz};
     ///   lanedMap[storage] = lanedRegister;
-    /// Rugra has no LanedRegister database wired to the Architecture yet; this
-    /// port records the candidate storage in `laned_map` keyed by (offset,
-    /// size) so downstream lane-analysis passes can query it. Because Rugra
-    /// cannot currently classify a storage as lane-forming without the global
-    /// table, we conservatively record every candidate and defer the
-    /// filter. RUGRA-GAP: link Architecture's LanedRegister table when ported.
-    pub fn check_for_laned_register(&mut self, sz: usize, addr: crate::address::Address) {
-        // RUGRA-GAP: glb->getLanedRegister(addr, sz) is not ported; record all
-        // candidates so downstream passes see the same storage set.
-        let key = (addr.as_u64(), sz as u32);
-        self.laned_map.insert(key, ());
+    /// The explicit `space` parameter restores the address-space component
+    /// carried by Ghidra's `Address`, which Rugra's scalar `Address` separates.
+    pub fn check_for_laned_register(
+        &mut self,
+        sz: usize,
+        space: crate::space::AddressSpace,
+        addr: crate::address::Address,
+    ) {
+        let Some(record) = self
+            .arch
+            .as_ref()
+            .and_then(|arch| arch.get_laned_register(addr, sz))
+        else {
+            return;
+        };
+        let storage = LanedStorage {
+            space,
+            offset: addr.as_u64(),
+            size: sz,
+        };
+        self.laned_map.insert(storage, record);
+    }
+
+    // Ghidra: funcdata.hh:155 Funcdata::setLanedRegGenerated
+    /// Stop recording newly created laned-register accesses for the remainder
+    /// of the current ActionLaneDivide lifecycle.
+    pub fn set_laned_reg_generated(&mut self) {
+        self.min_laned_size = 1_000_000;
+    }
+
+    // Ghidra: funcdata.hh:397 Funcdata::beginLaneAccess
+    /// Iterate recorded lane accesses in `VarnodeData::operator<` order.
+    pub fn lane_accesses(
+        &self,
+    ) -> std::collections::btree_map::Iter<
+        '_,
+        LanedStorage,
+        std::sync::Arc<crate::transform::LanedRegister>,
+    > {
+        self.laned_map.iter()
+    }
+
+    // Ghidra: funcdata.hh:399 Funcdata::clearLanedAccessMap
+    /// Clear all recorded candidate storage locations without changing the
+    /// current minimum-size gate.
+    pub fn clear_laned_access_map(&mut self) {
+        self.laned_map.clear();
     }
 
     // Ghidra: funcdata_varnode.cc:494 Funcdata::adjustInputVarnodes
@@ -13614,5 +13711,76 @@ impl CloneBlockOps {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod laned_access_tests {
+    use super::*;
+
+    #[test]
+    fn order_identity_and_minimum_lifecycle() {
+        let mut architecture = crate::arch::Architecture::new();
+        architecture.set_lane_records(vec![
+            crate::transform::LanedRegister::with_sizes(16, 1 << 4),
+            crate::transform::LanedRegister::with_sizes(8, 1 << 2),
+        ]);
+        let architecture = Arc::new(architecture);
+        let record16 = architecture
+            .get_laned_register(Address::new(0), 16)
+            .unwrap();
+        let mut fd = Funcdata::new("lanes", Address::new(0x1000), 0x20);
+        fd.set_arch(architecture);
+
+        fd.check_for_laned_register(12, AddressSpace::Register, Address::new(0x20));
+        assert!(fd.laned_map.is_empty());
+        fd.check_for_laned_register(8, AddressSpace::Register, Address::new(0x20));
+        fd.check_for_laned_register(16, AddressSpace::Register, Address::new(0x20));
+        fd.check_for_laned_register(8, AddressSpace::Unique, Address::new(5));
+        let keys = fd
+            .lane_accesses()
+            .map(|(storage, _)| *storage)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec![
+                LanedStorage {
+                    space: AddressSpace::Unique,
+                    offset: 5,
+                    size: 8,
+                },
+                LanedStorage {
+                    space: AddressSpace::Register,
+                    offset: 0x20,
+                    size: 16,
+                },
+                LanedStorage {
+                    space: AddressSpace::Register,
+                    offset: 0x20,
+                    size: 8,
+                },
+            ]
+        );
+        assert!(Arc::ptr_eq(
+            fd.laned_map
+                .get(&LanedStorage {
+                    space: AddressSpace::Register,
+                    offset: 0x20,
+                    size: 16,
+                })
+                .unwrap(),
+            &record16,
+        ));
+
+        let before_generation = fd.laned_map.len();
+        fd.set_laned_reg_generated();
+        let _ = fd.new_unique(16);
+        assert_eq!(fd.laned_map.len(), before_generation);
+        fd.clear();
+        assert_eq!(fd.laned_map.len(), before_generation);
+        let _ = fd.new_unique(16);
+        assert_eq!(fd.laned_map.len(), before_generation + 1);
+        fd.clear_laned_access_map();
+        assert!(fd.laned_map.is_empty());
     }
 }

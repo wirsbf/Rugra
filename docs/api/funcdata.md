@@ -1333,3 +1333,10 @@ per-block 缓存；不触碰 oracle 可观测状态）。LowlevelError 通道按
 docs/api/block.md 同节）；机制 C 独立复核 APPROVE。残差：死 jumptable 的
 `get_indirect_op()==None` 输入域 UNTESTED（Ghidra 无条件解引用=null 即 UB，
 Rugra 防御性视为 alive，生产不可达已注释）。
+
+## laned-map 生命周期（2026-08-22 WIP，LANEDIVIDE-INFRA-0001）
+
+- `check_for_laned_register` / `set_laned_reg_generated` / `lane_accesses` /
+  `clear_laned_access_map` — Funcdata 侧 typed ordered lanedMap 生命周期
+  （funcdata.hh `lanedMap` 镜像），含 map 排序 `PartialOrd/Ord`。
+  WIP：oracle 对拍 pending（见 lanedivide_infra_1204 fixture）。

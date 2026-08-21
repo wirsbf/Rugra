@@ -562,8 +562,10 @@ pub struct Architecture {
     pub options_db: Option<std::sync::Arc<std::sync::RwLock<crate::options::OptionDatabase>>>,
     /// Prefer-split records. Faithful to `splitrecords`.
     pub split_records: Vec<crate::prefersplit::PreferSplitRecord>,
-    /// Laned register records. Faithful to `lanerecords`.
-    pub lane_records: Vec<crate::transform::LanedRegister>,
+    /// Laned register records, ordered by whole-register size. The shared
+    /// allocation preserves the pointer identity returned by Ghidra's
+    /// `getLanedRegister` across lookups and Funcdata lane-map entries.
+    pub lane_records: Vec<std::sync::Arc<crate::transform::LanedRegister>>,
 
     // ---- Stack space / spacebase configuration (cspec <stackpointer>) ----
     /// The address space that the stack pointer indexes into (IPTR_SPACEBASE).
@@ -2348,10 +2350,60 @@ impl Architecture {
         self.split_records = records;
     }
 
-    // RUGRA-GLUE: set_lane_records (no Ghidra counterpart found)
-    /// Set the laned register records.
+    // RUGRA-GLUE: configuration adapter for Architecture::decodeRegisterData
+    // (architecture.cc:929); the production decoder builds the same unique,
+    // whole-size-ordered vector by accumulating a size-indexed maskList.
+    /// Replace the laned-register records while restoring the ordering and
+    /// duplicate-size mask merge invariant established by `decodeRegisterData`.
     pub fn set_lane_records(&mut self, records: Vec<crate::transform::LanedRegister>) {
-        self.lane_records = records;
+        let mut records = records;
+        records.sort_by_key(crate::transform::LanedRegister::get_whole_size);
+        let mut merged: Vec<crate::transform::LanedRegister> = Vec::new();
+        for record in records {
+            if let Some(last) = merged.last_mut() {
+                if last.get_whole_size() == record.get_whole_size() {
+                    last.size_bit_mask |= record.get_size_bit_mask();
+                    continue;
+                }
+            }
+            merged.push(record);
+        }
+        self.lane_records = merged.into_iter().map(std::sync::Arc::new).collect();
+    }
+
+    // Ghidra: architecture.cc:291 Architecture::getLanedRegister
+    /// Look up the shared laned-register record for a storage size. As in the
+    /// locked oracle, the address is currently ignored and the ordered vector
+    /// is searched by whole-register size.
+    pub fn get_laned_register(
+        &self,
+        _loc: crate::address::Address,
+        size: usize,
+    ) -> Option<std::sync::Arc<crate::transform::LanedRegister>> {
+        let mut min = 0i32;
+        let mut max = self.lane_records.len() as i32 - 1;
+        while min <= max {
+            let mid = (min + max) / 2;
+            let record = &self.lane_records[mid as usize];
+            let whole_size = record.get_whole_size();
+            if whole_size < size as i32 {
+                min = mid + 1;
+            } else if (size as i32) < whole_size {
+                max = mid - 1;
+            } else {
+                return Some(record.clone());
+            }
+        }
+        None
+    }
+
+    // Ghidra: architecture.cc:312 Architecture::getMinimumLanedRegisterSize
+    /// Return the smallest configured whole-register size, or `-1` when no
+    /// laned registers are configured.
+    pub fn get_minimum_laned_register_size(&self) -> i32 {
+        self.lane_records
+            .first()
+            .map_or(-1, |record| record.get_whole_size())
     }
 }
 
@@ -2639,5 +2691,35 @@ mod tests {
         // Still findable by name.
         assert!(reg.get_capability("raw").is_some());
         assert!(reg.get_capability("elf").is_some());
+    }
+
+    #[test]
+    fn test_laned_register_lookup_minimum_order_and_identity() {
+        let mut arch = Architecture::new();
+        arch.set_lane_records(vec![
+            crate::transform::LanedRegister::with_sizes(16, 1 << 4),
+            crate::transform::LanedRegister::with_sizes(8, 1 << 2),
+            crate::transform::LanedRegister::with_sizes(16, 1 << 8),
+        ]);
+        assert_eq!(arch.get_minimum_laned_register_size(), 8);
+        assert_eq!(
+            arch.lane_records
+                .iter()
+                .map(|record| record.get_whole_size())
+                .collect::<Vec<_>>(),
+            vec![8, 16]
+        );
+        let first = arch
+            .get_laned_register(Address::new(0x10), 16)
+            .unwrap();
+        let second = arch
+            .get_laned_register(Address::new(0xdead), 16)
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(first.get_size_bit_mask(), (1 << 4) | (1 << 8));
+        assert!(arch.get_laned_register(Address::new(0), 12).is_none());
+
+        arch.set_lane_records(Vec::new());
+        assert_eq!(arch.get_minimum_laned_register_size(), -1);
     }
 }
