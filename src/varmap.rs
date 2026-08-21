@@ -306,10 +306,15 @@ impl RangeHint {
         }
     }
 
-    // Ghidra: varmap.hh:90 RangeHint::mergeWith
+    // Ghidra: varmap.cc:259 RangeHint::merge
     /// Given that this and the other RangeHint intersect, redefine this so that
     /// it becomes the union of the two. Faithful to `RangeHint::merge`
-    /// (varmap.cc:259). Returns true if there was a reconcilable overlap.
+    /// (varmap.cc:259). Returns `Ok(true)` if there was a reconcilable
+    /// overlap, `Ok(false)` on the ordinary fall-through paths, and `Err`
+    /// for the LowlevelError at varmap.cc:280 (both ranges type-locked and
+    /// unreconcilable) — the exception unwinds `ScopeLocal::restructure`
+    /// and `restructureVarnode` entirely, so the error text must reach the
+    /// caller's abort channel, not a debug log (F3, SCOPE-FINDOVERLAP-KEY-0001).
     /// `types` mirrors the `TypeFactory *typeFactory` parameter of the Ghidra
     /// signature (varmap.hh:124) — consumed only by the resType==2 concede
     /// path (varmap.cc:309).
@@ -317,7 +322,7 @@ impl RangeHint {
         &mut self,
         b: &RangeHint,
         types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         let did_reconcile;
         let res_type: i32; // 0=this, 1=b, 2=confuse
 
@@ -333,15 +338,26 @@ impl RangeHint {
             res_type = if self.is_type_lock() { 0 } else { 2 };
         }
 
-        // Check for really problematic cases.
+        // Check for really problematic cases (varmap.cc:277-284): the
+        // discard-b guard hangs off `isTypeLock()` alone — a typelocked
+        // self with an UNlocked b is discarded whenever the starts differ.
         if !did_reconcile {
-            if self.is_type_lock() && b.is_type_lock() {
-                // Ghidra throws LowlevelError; we log via eprintln and discard b.
-                let n1 = self.dtype.as_ref().map(|d| d.get_name()).unwrap_or("?");
-                let n2 = b.dtype.as_ref().map(|d| d.get_name()).unwrap_or("?");
-                eprintln!("[VARMAP] overlapping forced variable types: {} {}", n1, n2);
+            if self.is_type_lock() {
+                if b.is_type_lock() {
+                    // throw LowlevelError("Overlapping forced variable types : "
+                    //   + type->getName() + "   " + b->type->getName());
+                    // (varmap.cc:280) — text kept verbatim (colon-space,
+                    // three spaces between the names).
+                    let n1 = self.dtype.as_ref().map(|d| d.get_name()).unwrap_or("?");
+                    let n2 = b.dtype.as_ref().map(|d| d.get_name()).unwrap_or("?");
+                    return Err(anyhow::anyhow!(
+                        "Overlapping forced variable types : {}   {}",
+                        n1,
+                        n2
+                    ));
+                }
                 if self.start != b.start {
-                    return false; // Discard b entirely
+                    return Ok(false); // Discard b entirely (varmap.cc:281-282)
                 }
             }
         }
@@ -375,9 +391,9 @@ impl RangeHint {
             self.dtype = Some(make_int_type(types, self.size as usize));
             self.flags = 0;
             self.high_ind = -1;
-            return false;
+            return Ok(false);
         }
-        false
+        Ok(false)
     }
 
     // Ghidra: varmap.cc:321 RangeHint::compare
@@ -1647,6 +1663,19 @@ pub struct ScopeLocal {
     /// empty default returns "" exactly like a Translate with no matching
     /// register.
     pub register_names: std::collections::BTreeMap<(u64, i32), String>,
+    /// Exact `Funcdata::warningHeader` texts emitted inside scope methods
+    /// that Ghidra routes through the scope's `fd` member
+    /// (varmap.cc:536 markNotMapped; varmap.cc:1439-1445 fakeInputSymbols
+    /// takes its fd parameter directly). ScopeLocal holds no Funcdata handle
+    /// (`Funcdata.scope` owns the ScopeLocal — a Rust ownership seam), so
+    /// the texts wait here for the caller-side drain into
+    /// `Funcdata::warning_header` (F3, SCOPE-FINDOVERLAP-KEY-0001).
+    pub pending_warnings: Vec<String>,
+    /// The LowlevelError message that unwound `restructureVarnode`
+    /// (`RangeHint::merge`, varmap.cc:280). Ghidra's exception aborts the
+    /// whole action pipeline for the function; the buffered text preserves
+    /// the exact message for the caller's abort channel (F3).
+    pub pending_lowlevel_error: Option<String>,
 }
 
 impl ScopeLocal {
@@ -1669,21 +1698,45 @@ impl ScopeLocal {
             max_param_offset: 0,
             stack_grows_negative: true,
             register_names: std::collections::BTreeMap::new(),
+            pending_warnings: Vec::new(),
+            pending_lowlevel_error: None,
         }
     }
 
     // Ghidra: varmap.cc:510 ScopeLocal::markNotMapped
     /// Mark a specific stack address range as not mapped. Faithful to
-    /// `ScopeLocal::markNotMapped` (varmap.cc:510-546): when `parameter` is
-    /// true the range extends the min/max parameter-offset window consumed by
-    /// `buildVariableName`'s Y-region test (varmap.cc:519-524), then any
-    /// symbols overlapping the range are removed. (The typelock/fake-input
-    /// early returns and the symboltab range removal at varmap.cc:545 have no
-    /// Rugra counterpart yet: LocalSymbol carries no symboltab linkage.)
+    /// `ScopeLocal::markNotMapped` (varmap.cc:510-546): `last` is clamped to
+    /// the space highest on wrap/over-extension (varmap.cc:516-519), a
+    /// parameter-flagged call extends the min/max parameter-offset window
+    /// consumed by `buildVariableName`'s Y-region test (varmap.cc:519-524),
+    /// then the removal loop re-issues the partition-owner `findOverlap`
+    /// query after every removal (varmap.cc:528-544): a typelocked symbol
+    /// aborts with `fd->warningHeader("Variable defined which should be
+    /// unmapped: "+name)` — silenced for the shared-return special case
+    /// (`parameter && category == function_parameter`, varmap.cc:531-537)
+    /// (F3) — a fake_input symbol aborts silently (varmap.cc:539-541), and
+    /// plain overlapping symbols are removed one at a time. The window then
+    /// loses `[first,last]` from the symboltab range tree (varmap.cc:545).
+    ///
+    /// (Ghidra's `space != spc` early return (varmap.cc:513) has no Rugra
+    /// counterpart: the signature models the scope-space calls of the only
+    /// production caller (ActionRestrictLocal, coreaction.cc:1968-1983).
+    /// ScopeLocal holds no Funcdata handle — a Rust ownership seam, since
+    /// `Funcdata.scope` owns the ScopeLocal — so the exact warningHeader
+    /// texts are buffered in `pending_warnings` for the caller-side drain;
+    /// the drain into the comment database is a funcdata/coreaction lease.)
     pub fn mark_not_mapped(&mut self, offset: u64, size: i32, parameter: bool) {
-        let last = offset + size as u64 - 1;
+        // uintb last = first + sz - 1; (varmap.cc:514) with the wrap and
+        // over-extension clamp (varmap.cc:516-519) against the stack space
+        // highest — u64::MAX for the 8-byte stack model.
+        let mut last = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
+        if last < offset {
+            last = u64::MAX;
+        } else if last > u64::MAX {
+            last = u64::MAX;
+        }
         if parameter {
-            // Everything above parameter
+            // Everything above parameter (varmap.cc:520-524)
             if offset < self.min_param_offset {
                 self.min_param_offset = offset;
             }
@@ -1691,39 +1744,241 @@ impl ScopeLocal {
                 self.max_param_offset = last;
             }
         }
-        // Remove any symbols whose range overlaps [offset, last].
-        self.symbols.retain(|sym| {
-            let sym_start = sym.start;
-            let sym_end = sym.start + sym.size as u64 - 1;
-            // No overlap if sym_end < offset or sym_start > last
-            !(sym_end >= offset && sym_start <= last)
-        });
+        // SymbolEntry *overlap = findOverlap(addr,sz); while(overlap != 0)
+        // {...} (varmap.cc:528-544) — sz is the ORIGINAL size, only the
+        // range-tree removal uses the clamped last.
+        while let Some(idx) = self.find_overlap(self.space, offset, size) {
+            let (is_typelock, category, name) = {
+                let sym = &self.symbols[idx];
+                (sym.typelock, sym.category, sym.name.clone())
+            };
+            if is_typelock {
+                // If the symbol and the use are both as parameters this is
+                // likely the special case of a shared return call sharing
+                // the parameter location of the original function, in which
+                // case we don't print a warning (varmap.cc:531-537).
+                if !parameter || category != symbol_category::FUNCTION_PARAMETER {
+                    self.pending_warnings
+                        .push(format!("Variable defined which should be unmapped: {}", name));
+                }
+                return;
+            } else if category == symbol_category::FAKE_INPUT {
+                return; // Inputs in the stack space should not be unmapped
+            }
+            self.remove_symbol(idx);
+        }
+        // glb->symboltab->removeRange(this,space,first,last) (varmap.cc:545)
+        self.local_range_remove_range(offset, last);
     }
 
-    // Ghidra: varmap.cc:341 ScopeLocal::hasOverlap
-    /// Check if a stack address range overlaps any symbol. Used by
-    /// ActionRestrictLocal to verify storage locations.
+    // Ghidra: database.cc:2138 ScopeInternal::removeSymbol
+    /// Remove the symbol: null its category slot (popping trailing nulls,
+    /// database.cc:2141-2146), drop its mappings, and erase it from the
+    /// nametree (database.cc:2147-2149). The Vec-based storage re-keys every
+    /// nametree/category index above the hole down by one.
+    fn remove_symbol(&mut self, idx: usize) {
+        let key = (self.symbols[idx].name.clone(), self.symbols[idx].name_dedup);
+        if self.symbols[idx].category >= 0 {
+            let cat = self.symbols[idx].category as usize;
+            let ci = self.symbols[idx].cat_index as usize;
+            if let Some(list) = self.category_lists.get_mut(cat) {
+                if ci < list.len() {
+                    list[ci] = None;
+                }
+                while matches!(list.last(), Some(None)) {
+                    list.pop();
+                }
+            }
+        }
+        self.symbols.remove(idx);
+        self.nametree.remove(&key);
+        for value in self.nametree.values_mut() {
+            if *value > idx {
+                *value -= 1;
+            }
+        }
+        for list in &mut self.category_lists {
+            for slot in list.iter_mut().flatten() {
+                if *slot > idx {
+                    *slot -= 1;
+                }
+            }
+        }
+    }
+
+    // Ghidra: address.cc:417 RangeList::removeRange
+    /// Remove `[first,last]` from the scope's local window: every
+    /// intersecting range is dropped, keeping only its non-intersecting
+    /// remainders (splitting a bridging range in two). Faithful to
+    /// `RangeList::removeRange` (address.cc:417-448) over the sorted
+    /// inclusive-range model.
+    fn local_range_remove_range(&mut self, first: u64, last: u64) {
+        let mut result: Vec<(u64, u64)> = Vec::with_capacity(self.local_range.len() + 1);
+        for &(rfirst, rlast) in &self.local_range {
+            // Ranges are disjoint and sorted; a range intersects iff
+            // rfirst <= last && first <= rlast.
+            if rfirst <= last && first <= rlast {
+                if rfirst < first {
+                    result.push((rfirst, first.wrapping_sub(1)));
+                }
+                if rlast > last {
+                    result.push((last.wrapping_add(1), rlast));
+                }
+            } else {
+                result.push((rfirst, rlast));
+            }
+        }
+        self.local_range = result;
+    }
+
+    // Ghidra: database.cc:2392 ScopeInternal::findOverlap
+    /// First Symbol of the scope overlapping `[offset, offset+size-1]` in
+    /// the given space — the canonical `ScopeInternal::findOverlap`
+    /// (database.cc:2392-2403). The oracle consults the space's EntryMap (a
+    /// `rangemap<SymbolEntry>`, database.hh:164), whose multiset is keyed by
+    /// `(last, subsort)` (rangemap.hh:88-91) and whose entries duplicate each
+    /// common-refinement partition unit for every record covering it.
+    /// `find_overlap(point, end)` (rangemap.hh:411-423) does
+    /// `lower_bound(AddrRange(point))` — the first sub-range whose `last >=
+    /// point`, i.e. the leftmost partition unit intersecting the query (the
+    /// unit containing `point` when covered, else the first unit starting
+    /// after `point`) — and returns it iff its `first <= end`. All records
+    /// covering that unit cover the whole unit, so the returned record is
+    /// the one with the smallest `SymbolEntry::getSubsort()`
+    /// (database.cc:97-107); ties on an identical subsort keep Vec order,
+    /// standing in for `std::multiset` insertion order of equivalent keys.
+    /// Dynamic entries never enter the static map table
+    /// (`addDynamicMapInternal` database.cc:1874-1886 pushes to
+    /// `dynamicentry`, not maptable), so they are filtered first (F2,
+    /// SCOPE-FINDOVERLAP-KEY-0001). Returns the symbol index, mirroring the
+    /// non-null `SymbolEntry*` return.
+    pub fn find_overlap(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> Option<usize> {
+        let last = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
+        // Records in this space's EntryMap: (first, last) inclusive.
+        let candidates: Vec<usize> = self
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, sym)| !sym.is_dynamic && sym.space == space && sym.size > 0)
+            .filter(|(_, sym)| {
+                let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
+                sym.start <= last && offset <= sym_end
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        // rangemap.hh:418: iter = tree.lower_bound(AddrRange(point)) — the
+        // first sub-range with last >= point, i.e. the leftmost partition
+        // unit intersecting the query. Units before it all end before
+        // point, so every address in [point, unit.first) is uncovered: the
+        // unit starts at the smallest address of [point,end] covered by any
+        // record — the minimum over intersecting records of max(start, point).
+        let hit_address = candidates
+            .iter()
+            .map(|&idx| self.symbols[idx].start.max(offset))
+            .min()?;
+        // rangemap.hh:420-421: if ((*iter).first <= end) return iter; —
+        // among the records covering the unit (== records covering
+        // hit_address), the multiset order picks the smallest subsort;
+        // equal subsorts keep Vec order (std::multiset insertion order of
+        // equivalent keys).
+        candidates
+            .iter()
+            .copied()
+            .filter(|&idx| {
+                let sym = &self.symbols[idx];
+                sym.start <= hit_address && hit_address < sym.start.wrapping_add(sym.size as u64)
+            })
+            .min_by_key(|&idx| Self::entry_subsort_key(&self.symbols[idx]))
+    }
+
+    // Ghidra: database.cc:97 SymbolEntry::getSubsort
+    /// Sub-sort key of a SymbolEntry within one partition unit, faithful to
+    /// `SymbolEntry::getSubsort` (database.cc:97-107) +
+    /// `EntrySubsort::operator<` (database.hh:107-135): the minimal subsort
+    /// (0,0) for address-tied storage (the symbol flag set when the mapping
+    /// has an empty uselimit, database.cc:1148-1150, modeled by
+    /// `usepoint == None`), else `(useindex, useoffset)` of the first
+    /// uselimit range. Rugra's LocalSymbol.usepoint carries only the offset,
+    /// and every static mapping's uselimit lives in the (single) code space,
+    /// so the index component is uniform and modeled as the constant 1
+    /// (> the minimal index 0).
+    fn entry_subsort_key(sym: &LocalSymbol) -> (u8, u64) {
+        match sym.usepoint {
+            None => (0, 0),
+            Some(usepoint) => (1, usepoint),
+        }
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties (via findContainer,
+    // database.cc:2250, with an INVALID usepoint — funcdata_varnode.cc:1699)
+    /// Does a static address-tied Symbol contain `[offset, offset+size-1]`?
+    /// The boolean form of the `mapGlobals` queryProperties probe
+    /// (funcdata_varnode.cc:1697-1701: `localmap->queryProperties(addr,1,
+    /// Address(), fl)`): `findContainer` with an invalid usepoint admits
+    /// only address-tied entries (`SymbolEntry::inUse`,
+    /// database.cc:114-120), and dynamic entries are not in the address
+    /// range map (F2, database.cc:1874-1886).
+    ///
+    /// (The probe's space dimension — Ghidra's
+    /// `maptable[addr.getSpace()->getIndex()]` — cannot be keyed here: the
+    /// frozen signature is shared with the funcdata.rs map_globals caller.
+    /// Residual: thread the query space through Funcdata::map_globals.)
     pub fn has_overlap(&self, offset: u64, size: i32) -> bool {
-        let last = offset + size as u64 - 1;
+        let last = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
         self.symbols.iter().any(|sym| {
-            let sym_end = sym.start + sym.size as u64 - 1;
-            sym_end >= offset && sym.start <= last
+            !sym.is_dynamic
+                && sym.usepoint.is_none() // inUse(invalid) == isAddrTied()
+                && sym.size > 0 && {
+                    let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
+                    sym.start <= offset && last <= sym_end
+                }
         })
     }
 
-    // Ghidra: varmap.cc:341 ScopeLocal::queryByAddr
-    /// Find the LocalSymbol whose storage range contains `(offset, offset+size)`.
-    /// Faithful to `ScopeLocal::queryByAddr` / `Scope::findContainer`.
-    /// Returns the symbol and the offset within the symbol (for partial reads).
-    pub fn query_by_addr(&self, offset: u64, size: i32) -> Option<(&LocalSymbol, i32)> {
-        let last = offset + size as u64 - 1;
-        for sym in &self.symbols {
-            let sym_end = sym.start + sym.size as u64 - 1;
-            if sym.start <= offset && sym_end >= last {
-                return Some((sym, (offset - sym.start) as i32));
-            }
-        }
-        None
+    // Ghidra: database.cc:2224 ScopeInternal::findAddr
+    /// Find the Symbol whose mapping STARTS exactly at `offset` in the given
+    /// space and is valid at `usepoint`. Faithful to
+    /// `ScopeInternal::findAddr` (database.cc:2224-2248): the partition unit
+    /// containing `offset` is scanned in DESCENDING subsort order
+    /// (the `--res.second` walk over the `find(offset, subsorttype(false),
+    /// subsorttype(usepoint-or-true))` window), so among equally-subsorted
+    /// exact-start entries the LAST inserted wins; `inUse` (an unrestricted
+    /// uselimit admits everything, a restricted one admits exactly its
+    /// single-address range — `None` queries admit only address-tied
+    /// entries) gates the return. Dynamic entries are address-unsearchable
+    /// (F2, database.cc:1874-1886). Returns the symbol index.
+    pub fn find_addr(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        usepoint: Option<u64>,
+    ) -> Option<usize> {
+        // Exact-start static candidates of the queried space's EntryMap.
+        let mut candidates: Vec<usize> = self
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, sym)| !sym.is_dynamic && sym.space == space && sym.size > 0)
+            .filter(|(_, sym)| sym.start == offset)
+            .filter(|(_, sym)| match (sym.usepoint, usepoint) {
+                // isAddrTied() -> valid throughout scope (database.cc:117)
+                (None, _) => true,
+                // usepoint.isInvalid() -> false for restricted entries
+                // (database.cc:118)
+                (Some(_), None) => false,
+                (Some(up), Some(query)) => up == query,
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        // Backward multiset walk: descending subsort, equivalent keys in
+        // reverse insertion order (the last inserted wins).
+        candidates.sort_by_key(|&idx| Self::entry_subsort_key(&self.symbols[idx]));
+        candidates.pop()
     }
 
     // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode
@@ -1736,6 +1991,8 @@ impl ScopeLocal {
         self.nametree.clear();
         self.category_lists.clear();
         self.overlap_problems = false;
+        self.pending_warnings.clear();
+        self.pending_lowlevel_error = None;
 
         // Ghidra reads every factory type through `glb->types` (the
         // Architecture's single TypeFactory member, type.cc:3106). Rugra's
@@ -1775,8 +2032,19 @@ impl ScopeLocal {
         // Gather open (pointer-referenced) ranges.
         state.gather_open(fd, &checker);
 
-        // Restructure: merge overlapping ranges into disjoint symbols.
-        self.overlap_problems = self.restructure(&mut state, &types);
+        // Restructure: merge overlapping ranges into disjoint symbols
+        // (varmap.cc:1270). A LowlevelError from `RangeHint::merge`
+        // (varmap.cc:280) unwinds restructureVarnode entirely in the oracle
+        // — markUnaliased and fakeInputSymbols never run — modeled by the
+        // early return with the exact message buffered for the caller's
+        // abort channel (F3, SCOPE-FINDOVERLAP-KEY-0001).
+        self.overlap_problems = match self.restructure(&mut state, &types) {
+            Ok(problems) => problems,
+            Err(err) => {
+                self.pending_lowlevel_error = Some(err.to_string());
+                return;
+            }
+        };
 
         // Mark unaliased symbols.
         self.mark_unaliased(&aliases);
@@ -1789,18 +2057,20 @@ impl ScopeLocal {
     /// Merge RangeHints into a definitive set of Symbols.
     /// Corresponds to ScopeLocal::restructure (varmap.cc:1294); `types`
     /// mirrors the `glb->types` handle threaded into `RangeHint::merge`
-    /// (varmap.cc:1309) and `createEntry` (varmap.cc:622).
+    /// (varmap.cc:1309) and `createEntry` (varmap.cc:622). Returns
+    /// `Err` for the LowlevelError thrown by `RangeHint::merge`
+    /// (varmap.cc:280), which in the oracle unwinds out of this walk.
     fn restructure(
         &mut self,
         state: &mut MapState,
         types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
-    ) -> bool {
-        if !state.initialize() { return false; }
+    ) -> anyhow::Result<bool> {
+        if !state.initialize() { return Ok(false); }
 
         let mut overlap_problems = false;
         let mut current = match state.next_hint() {
             Some(h) => h.clone(),
-            None => return false,
+            None => return Ok(false),
         };
 
         while state.get_next() {
@@ -1815,8 +2085,10 @@ impl ScopeLocal {
             // treats them as huge positives → wrong intersection decision.
             let cur_end = current.sstart.wrapping_add(current.size as i64);
             if next.sstart < cur_end {
-                // Ranges intersect — merge them
-                if current.merge_with(&next, types) {
+                // Ranges intersect — merge them (varmap.cc:1309). The
+                // LowlevelError from RangeHint::merge (varmap.cc:280)
+                // propagates out of this walk unchecked.
+                if current.merge_with(&next, types)? {
                     overlap_problems = true;
                 }
             } else {
@@ -1836,35 +2108,106 @@ impl ScopeLocal {
             }
         }
 
-        overlap_problems
+        Ok(overlap_problems)
     }
 
     // Ghidra: varmap.cc:587 ScopeLocal::adjustFit
-    /// Shrink the RangeHint as necessary so it fits in the mapped region and
-    /// does not overlap an existing Symbol. Faithful to
-    /// `ScopeLocal::adjustFit` (varmap.cc:587). Returns true if a valid
-    /// adjustment was made.
+    /// Shrink the RangeHint as necessary so it fits in the mapped region of
+    /// the Scope and doesn't overlap any other Symbols. Faithful to
+    /// `ScopeLocal::adjustFit` (varmap.cc:587-612): the mapped region is
+    /// consulted through `RangeList::longestFit` over the scope's range
+    /// window (`local_range`, standing in for the symboltab range tree),
+    /// then `findOverlap` — the partition-owner overlap query (F1,
+    /// SCOPE-FINDOVERLAP-KEY-0001) — answers "ANY symbol that might be
+    /// within this range" (varmap.cc:599), whose start clamps the hint from
+    /// above. Returns true if a valid adjustment was made.
     fn adjust_fit(&self, a: &mut RangeHint) -> bool {
         if a.size == 0 {
-            return false;
+            return false; // Nothing to fit (varmap.cc:590)
         }
         if a.is_type_lock() {
-            return false; // Already entered.
+            return false; // Already entered (varmap.cc:591)
         }
-        // Check for overlap with an existing symbol. Rugra does not model
-        // getRangeTree/longestFit, so we only guard against symbol overlaps.
-        if let Some(existing) = self.find_symbol(a.start) {
-            if existing.start <= a.start {
-                return false;
-            }
-            let maxsize = existing.start - a.start;
-            let type_size = a.dtype.as_ref().map(|d| d.get_size()).unwrap_or(1) as i64;
-            if (maxsize as i64) < type_size {
-                return false; // Can't shrink for this type.
+        // uintb maxsize = getRangeTree().longestFit(addr,a.size);
+        // (varmap.cc:593) — the scope's range tree; Rugra's window is the
+        // inclusive-range `local_range` model.
+        let mut maxsize = self.longest_fit(a.start, a.size as u64);
+        if maxsize == 0 {
+            return false; // varmap.cc:594
+        }
+        // Ghidra reads a.type->getSize() (never null on this path); the
+        // optional dtype keeps the 1-byte fallback of the previous port.
+        let type_size = a.dtype.as_ref().map(|d| d.get_size()).unwrap_or(1) as u64;
+        if maxsize < a.size as u64 {
+            // Suggested range doesn't fit (varmap.cc:595-598)
+            if maxsize < type_size {
+                return false; // Can't shrink that much
             }
             a.size = maxsize as i32;
         }
+        // SymbolEntry *entry = findOverlap(addr,a.size); (varmap.cc:600) —
+        // partition-owner semantics, dynamic entries invisible (F2).
+        let entry = self.find_overlap(self.space, a.start, a.size);
+        let entry_start = match entry {
+            None => return true, // varmap.cc:601-602
+            Some(idx) => self.symbols[idx].start,
+        };
+        if entry_start <= a.start {
+            // < generally shouldn't be possible (varmap.cc:603-607)
+            return false;
+        }
+        maxsize = entry_start - a.start;
+        if maxsize < type_size {
+            return false; // Can't shrink for this type (varmap.cc:609)
+        }
+        a.size = maxsize as i32;
         true
+    }
+
+    // Ghidra: address.cc:512 RangeList::longestFit
+    /// Size of the biggest contiguous sequence of addresses in the scope's
+    /// local window containing `offset`, capped by `maxsize` (the caller's
+    /// hint size). Faithful to `RangeList::longestFit`
+    /// (address.cc:512-537): locate the last range whose `first <= offset`
+    /// (the window is kept sorted ascending), require `last >= offset`,
+    /// then chain consecutive ranges — the walk stops at the first gap,
+    /// a different space, a range starting after the chain point, or once
+    /// `sizeres >= maxsize` (address.cc:533).
+    fn longest_fit(&self, offset: u64, maxsize: u64) -> u64 {
+        if self.local_range.is_empty() {
+            return 0; // address.cc:518
+        }
+        // iter = tree.upper_bound(Range(offset,offset)); if (iter ==
+        // tree.begin()) return 0; --iter; — the last window range with
+        // first <= offset (the Vec is sorted by construction).
+        let pos = self
+            .local_range
+            .partition_point(|&(first, _)| first <= offset);
+        if pos == 0 {
+            return 0; // address.cc:523
+        }
+        let mut i = pos - 1;
+        let mut sizeres: u64 = 0;
+        if self.local_range[i].1 < offset {
+            return sizeres; // address.cc:527
+        }
+        let mut chain = offset;
+        loop {
+            let (first, last) = self.local_range[i];
+            if first > chain {
+                break; // address.cc:530
+            }
+            sizeres = sizeres.wrapping_add(last.wrapping_sub(chain).wrapping_add(1));
+            chain = last.wrapping_add(1); // address.cc:532
+            if sizeres >= maxsize {
+                break; // address.cc:533
+            }
+            i += 1; // address.cc:534 — next range in the chain
+            if i >= self.local_range.len() {
+                break; // iter == tree.end()
+            }
+        }
+        sizeres
     }
 
     // Ghidra: varmap.cc:617 ScopeLocal::createEntry
@@ -2403,32 +2746,54 @@ impl ScopeLocal {
         size: i64,
         usepoint: Option<u64>,
     ) -> Option<usize> {
-        let mut best: Option<usize> = None;
-        for (idx, sym) in self.symbols.iter().enumerate() {
-            if sym.is_dynamic {
-                continue;
-            }
-            if sym.space != space {
-                continue;
-            }
-            let sym_size = sym.size.max(0) as u64;
-            if sym_size == 0 {
-                continue;
-            }
-            if offset < sym.start || offset + size as u64 > sym.start + sym_size {
-                continue;
-            }
-            // SymbolEntry::inUse (database.cc:117-122): an unrestricted
-            // uselimit (None) is valid throughout the scope; a restricted
-            // one admits exactly its single-address range.
-            if let Some(up) = sym.usepoint {
-                if Some(up) != usepoint {
-                    continue;
+        // findContainer (database.cc:2250) walks the partition unit
+        // containing `offset` in DESCENDING multiset order (the
+        // `--res.second` walk, database.cc:2267-2268) and keeps an entry
+        // only on a strictly smaller size — so among equally-sized
+        // containers the entry with the LARGEST EntrySubsort wins. Order
+        // the candidates by ascending subsort (stable: equivalent keys keep
+        // Vec order = multiset insertion order) and walk backwards.
+        let mut candidates: Vec<usize> = self
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, sym)| {
+                if sym.is_dynamic {
+                    return false; // F2: never in the static map table
                 }
-            }
-            match best {
-                Some(b) if self.symbols[b].size <= sym.size => {}
-                _ => best = Some(idx),
+                if sym.space != space {
+                    return false;
+                }
+                let sym_size = sym.size.max(0) as u64;
+                if sym_size == 0 {
+                    return false;
+                }
+                if offset < sym.start || offset + size as u64 > sym.start + sym_size {
+                    return false;
+                }
+                // SymbolEntry::inUse (database.cc:117-122): an unrestricted
+                // uselimit (None) is valid throughout the scope; a restricted
+                // one admits exactly its single-address range.
+                match (sym.usepoint, usepoint) {
+                    (None, _) => true,
+                    (Some(_), None) => false,
+                    (Some(up), Some(query)) => up == query,
+                }
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        candidates.sort_by_key(|&idx| Self::entry_subsort_key(&self.symbols[idx]));
+        let mut best: Option<usize> = None;
+        let mut oldsize: i64 = -1;
+        for &idx in candidates.iter().rev() {
+            let entry_size = self.symbols[idx].size as i64;
+            // entry->getSize() < oldsize || oldsize == -1 (database.cc:2271)
+            if entry_size < oldsize || oldsize == -1 {
+                best = Some(idx);
+                if entry_size == size {
+                    break; // database.cc:2274 — exact match short-circuits
+                }
+                oldsize = entry_size;
             }
         }
         best
@@ -2849,21 +3214,18 @@ impl ScopeLocal {
         Ok(())
     }
 
-    // Ghidra: varmap.cc:341 ScopeLocal::findSymbol
-    /// Look up a symbol by stack offset. Stack-restricted: symbols created by
-    /// `Funcdata::linkSymbol` (funcdata_varnode.cc:1177) in other spaces
-    /// (register/unique/ram) share this Vec but never answer a stack query.
+    // Ghidra: database.cc:2392 ScopeInternal::findOverlap (single-byte stack probe)
+    /// Look up a stack symbol by offset — the partition-owner answer of
+    /// `ScopeInternal::findOverlap` for the one-byte query at `offset`: the
+    /// record covering the partition unit containing the byte with the
+    /// smallest EntrySubsort, dynamic entries invisible (F1+F2,
+    /// SCOPE-FINDOVERLAP-KEY-0001). Stack-restricted as before: symbols
+    /// created by `Funcdata::linkSymbol` (funcdata_varnode.cc:1177) in other
+    /// spaces (register/unique/ram) share this Vec but never answer a stack
+    /// query.
     pub fn find_symbol(&self, offset: u64) -> Option<&LocalSymbol> {
-        for sym in &self.symbols {
-            if sym.space != crate::space::AddressSpace::Stack {
-                continue;
-            }
-            let end = sym.start.wrapping_add(sym.size as u64);
-            if offset >= sym.start && offset < end {
-                return Some(sym);
-            }
-        }
-        None
+        let idx = self.find_overlap(crate::space::AddressSpace::Stack, offset, 1)?;
+        Some(&self.symbols[idx])
     }
 }
 
@@ -2986,7 +3348,7 @@ mod tests {
         let types = crate::type_system::typefactory::TypeFactory::shared_default();
         let mut a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
         let b = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
-        let overlap = a.merge_with(&b, &types);
+        let overlap = a.merge_with(&b, &types).unwrap();
         assert!(!overlap); // reconcilable → false
         assert_eq!(a.size, 4);
     }
@@ -2998,7 +3360,7 @@ mod tests {
         let types = crate::type_system::typefactory::TypeFactory::shared_default();
         let mut a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
         let b = RangeHint::new(2, 8, 2, Some(int_dt(8, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
-        let overlap = a.merge_with(&b, &types);
+        let overlap = a.merge_with(&b, &types).unwrap();
         assert!(!overlap);
         assert_eq!(a.size, 1);
         assert_eq!(a.range_type, RangeType::Open);
@@ -3290,8 +3652,11 @@ mod tests {
         state.add_range(16, Some(int_t), 0, RangeType::Fixed, -1);
 
         let mut scope = ScopeLocal::new();
+        // adjustFit consults longestFit over the scope's range window
+        // (varmap.cc:593); an empty window admits nothing.
+        scope.local_range = vec![(0, 0xfffff)];
         let types = crate::type_system::typefactory::TypeFactory::shared_default();
-        let overlap = scope.restructure(&mut state, &types);
+        let overlap = scope.restructure(&mut state, &types).unwrap();
         assert!(!overlap);
         // Two disjoint symbols created.
         assert_eq!(scope.symbols.len(), 2);
@@ -3311,13 +3676,229 @@ mod tests {
         state.add_range(0, Some(int_t), 0, RangeType::Fixed, -1);
 
         let mut scope = ScopeLocal::new();
+        scope.local_range = vec![(0, 0xfffff)];
         let types = crate::type_system::typefactory::TypeFactory::shared_default();
-        let _overlap = scope.restructure(&mut state, &types);
+        let _overlap = scope.restructure(&mut state, &types).unwrap();
         // The merged range is emitted once at the finalization step; with the
         // endpoint added by initialize(), the single merged int4 is emitted.
         assert_eq!(scope.symbols.len(), 1);
         assert_eq!(scope.symbols[0].start, 0);
         assert_eq!(scope.symbols[0].size, 4);
+    }
+
+    // --- SCOPE-FINDOVERLAP-KEY-0001 (F1/F2/F3) ---
+
+    fn overlap_sym(name: &str, start: u64, size: i32, usepoint: Option<u64>) -> LocalSymbol {
+        let mut sym = LocalSymbol::new(name, start, size, None, symbol_category::NO_CATEGORY);
+        sym.usepoint = usepoint;
+        sym
+    }
+
+    #[test]
+    fn test_find_overlap_partition_unit_and_subsort() {
+        // F1: "wide" [0x300,0x30f] usepoint 0x1010 vs "narrow" [0x308,0x30b]
+        // usepoint 0x1000. The query start 0x309 lands in partition unit
+        // [0x308,0x30b]; both records cover the unit, EntrySubsort picks
+        // "narrow" (smaller first use). Min-START overlap would pick "wide".
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(overlap_sym("wide", 0x300, 16, Some(0x1010)));
+        scope.symbols.push(overlap_sym("narrow", 0x308, 4, Some(0x1000)));
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x309, 2).unwrap();
+        assert_eq!(scope.symbols[hit].name, "narrow");
+        // Query start 0x300 is in the wide-only unit [0x300,0x307].
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x300, 2).unwrap();
+        assert_eq!(scope.symbols[hit].name, "wide");
+        // Address-tied beats use-limited on a shared unit regardless of
+        // insertion order (database.cc:97-107: addrtied subsort (0,0)).
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(overlap_sym("used", 0x320, 8, Some(0x1000)));
+        scope.symbols.push(overlap_sym("tied", 0x320, 8, None));
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x322, 4).unwrap();
+        assert_eq!(scope.symbols[hit].name, "tied");
+    }
+
+    #[test]
+    fn test_find_overlap_gap_query_leftmost_unit() {
+        // F1: query start uncovered — the leftmost partition unit starting
+        // after the query start answers iff it begins before the query end.
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(overlap_sym("gapend", 0x340, 4, Some(0x1000)));
+        scope.symbols.push(overlap_sym("gapfar", 0x344, 4, Some(0x1001)));
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x338, 0x10).unwrap();
+        assert_eq!(scope.symbols[hit].name, "gapend");
+        assert_eq!(scope.find_overlap(crate::space::AddressSpace::Stack, 0x338, 0x6), None);
+    }
+
+    #[test]
+    fn test_find_overlap_dynamic_invisible() {
+        // F2: dynamic entries never enter the static map table
+        // (addDynamicMapInternal database.cc:1874-1886).
+        let mut scope = ScopeLocal::new();
+        let mut dyn_sym = overlap_sym("dyn", 0, 8, Some(0x1000));
+        dyn_sym.is_dynamic = true;
+        dyn_sym.hash = 0x1234;
+        scope.symbols.push(dyn_sym);
+        assert_eq!(scope.find_overlap(crate::space::AddressSpace::Stack, 0, 8), None);
+        // find_symbol delegates to the same probe.
+        assert!(scope.find_symbol(0).is_none());
+        // has_overlap models the queryProperties invalid-usepoint container
+        // probe: dynamic + non-addrtied both filtered.
+        assert!(!scope.has_overlap(0, 1));
+        scope.symbols.push(overlap_sym("staticfar", 0x360, 4, None));
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x360, 4).unwrap();
+        assert_eq!(scope.symbols[hit].name, "staticfar");
+    }
+
+    #[test]
+    fn test_find_addr_descending_subsort_and_inuse() {
+        // F1: exact-start match with the descending multiset walk — among
+        // equally-subsorted entries the LAST inserted wins; use-limited
+        // entries never answer an invalid usepoint.
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(overlap_sym("used1", 0x320, 8, Some(0x1000)));
+        scope.symbols.push(overlap_sym("used2", 0x320, 8, Some(0x1010)));
+        scope.symbols.push(overlap_sym("tied", 0x320, 8, None));
+        let hit = scope
+            .find_addr(crate::space::AddressSpace::Stack, 0x320, Some(0x1000))
+            .unwrap();
+        assert_eq!(scope.symbols[hit].name, "used1");
+        // Invalid usepoint: only the address-tied entry is in use.
+        let hit = scope.find_addr(crate::space::AddressSpace::Stack, 0x320, None).unwrap();
+        assert_eq!(scope.symbols[hit].name, "tied");
+        // A usepoint no restricted uselimit admits and no addrtied entry at
+        // a different start: null.
+        assert_eq!(
+            scope.find_addr(crate::space::AddressSpace::Stack, 0x328, Some(0x1000)),
+            None
+        );
+        // Two equal-subsort (both addrtied) exact-start entries: the last
+        // inserted wins (reverse multiset insertion order).
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(overlap_sym("first", 0x400, 4, None));
+        scope.symbols.push(overlap_sym("second", 0x400, 4, None));
+        let hit = scope.find_addr(crate::space::AddressSpace::Stack, 0x400, Some(0x999)).unwrap();
+        assert_eq!(scope.symbols[hit].name, "second");
+    }
+
+    #[test]
+    fn test_longest_fit_chains_and_stops() {
+        // RangeList::longestFit (address.cc:512-537): chain consecutive
+        // ranges containing the offset, stop at a gap or past maxsize.
+        let mut scope = ScopeLocal::new();
+        scope.local_range = vec![(0x100, 0x1ff), (0x300, 0x3ff), (0x500, 0x5ff)];
+        assert_eq!(scope.longest_fit(0x180, 0x1000), 0x80); // to end of first range
+        assert_eq!(scope.longest_fit(0x100, 0x1000), 0x100);
+        assert_eq!(scope.longest_fit(0x2a0, 0x1000), 0); // in a gap
+        assert_eq!(scope.longest_fit(0x500, 0x10), 0x100); // early break, return NOT capped (address.cc:533)
+        assert_eq!(scope.longest_fit(0x600, 0x10), 0); // past every range
+    }
+
+    #[test]
+    fn test_local_range_remove_range_splits() {
+        // RangeList::removeRange (address.cc:417-448): a bridging range
+        // splits around the removed span; disjoint neighbors are trimmed.
+        let mut scope = ScopeLocal::new();
+        scope.local_range = vec![(0x100, 0x2ff), (0x400, 0x4ff)];
+        scope.local_range_remove_range(0x180, 0x401);
+        assert_eq!(scope.local_range, vec![(0x100, 0x17f), (0x402, 0x4ff)]);
+        // Removing past the end clamps (markNotMapped varmap.cc:516-519
+        // wraps `last` to the space highest first).
+        scope.local_range_remove_range(0x4f0, u64::MAX);
+        assert_eq!(scope.local_range, vec![(0x100, 0x17f), (0x402, 0x4ef)]);
+    }
+
+    #[test]
+    fn test_mark_not_mapped_guards_and_warning_channel() {
+        // F1+F3 (varmap.cc:510-546): the removal loop re-issues findOverlap
+        // after every removal; a typelocked symbol aborts with the exact
+        // warningHeader text — silenced for the shared-return special case —
+        // and a fake_input symbol aborts silently.
+        let mut scope = ScopeLocal::new();
+        let mut p = overlap_sym("p", 0x40, 8, None);
+        p.typelock = true;
+        p.category = symbol_category::FUNCTION_PARAMETER;
+        let mut f = overlap_sym("f", 0x60, 8, None);
+        f.category = symbol_category::FAKE_INPUT;
+        scope.symbols.push(p);
+        scope.symbols.push(f);
+        scope.symbols.push(overlap_sym("u", 0x70, 4, None));
+        scope.symbols.push(overlap_sym("v", 0x80, 4, None));
+        scope.local_range = vec![(0, 0xfffff)];
+
+        // parameter=true on a function_parameter typelocked symbol: the
+        // shared-return special case keeps the warning silent, everything
+        // survives (varmap.cc:531-537).
+        scope.mark_not_mapped(0x38, 0x50, true);
+        assert_eq!(scope.symbols.len(), 4);
+        assert!(scope.pending_warnings.is_empty());
+
+        // parameter=false: the exact warningHeader text fires (F3), the
+        // walk aborts before removing anything.
+        scope.mark_not_mapped(0x38, 0x50, false);
+        assert_eq!(
+            scope.pending_warnings,
+            vec!["Variable defined which should be unmapped: p".to_string()]
+        );
+        assert_eq!(scope.symbols.len(), 4);
+
+        // fake_input early return (varmap.cc:539-541): the later symbol u
+        // survives even though the range covers it.
+        scope.pending_warnings.clear();
+        scope.mark_not_mapped(0x60, 0x14, true);
+        assert!(scope.pending_warnings.is_empty());
+        assert_eq!(scope.symbols.len(), 4);
+
+        // Plain symbols only: the loop removes every overlapping entry and
+        // the window loses the range (varmap.cc:542-545).
+        scope.mark_not_mapped(0x70, 0x14, false);
+        assert_eq!(scope.symbols.len(), 2); // p and f survive, u and v removed
+        assert_eq!(scope.local_range, vec![(0, 0x6f), (0x84, 0xfffff)]);
+        // The parameter=true call extended the min/max window
+        // (varmap.cc:520-524); parameter=false calls leave it untouched.
+        assert_eq!(scope.min_param_offset, 0x38);
+        assert_eq!(scope.max_param_offset, 0x87);
+    }
+
+    #[test]
+    fn test_merge_with_typelock_throw_text_and_discard_guard() {
+        // F3 (varmap.cc:277-284): both typelocked and unreconcilable throws
+        // LowlevelError with the verbatim text (colon-space, three spaces).
+        let types = crate::type_system::typefactory::TypeFactory::shared_default();
+        let mut a = RangeHint::new(
+            0, 4, 0, Some(named_dt("int4", 4, TypeMetatype::Int)),
+            range_flags::TYPE_LOCK, RangeType::Fixed, -1,
+        );
+        let b = RangeHint::new(
+            2, 8, 2, Some(named_dt("uint8", 8, TypeMetatype::Uint)),
+            range_flags::TYPE_LOCK, RangeType::Fixed, -1,
+        );
+        let err = a.merge_with(&b, &types).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Overlapping forced variable types : int4   uint8"
+        );
+        // The discard-b guard hangs off isTypeLock() alone (varmap.cc:278,
+        // 281-282): a typelocked self with an UNLOCKED b and differing
+        // starts discards b — Ok(false), no error.
+        let mut a2 = RangeHint::new(
+            0, 4, 0, Some(int_dt(4, TypeMetatype::Int)),
+            range_flags::TYPE_LOCK, RangeType::Fixed, -1,
+        );
+        let b2 = RangeHint::new(
+            2, 8, 2, Some(int_dt(8, TypeMetatype::Int)),
+            0, RangeType::Fixed, -1,
+        );
+        assert!(!a2.merge_with(&b2, &types).unwrap());
+        // Same starts: the guard falls through to the resType handling.
+        let b3 = RangeHint::new(
+            0, 8, 0, Some(int_dt(8, TypeMetatype::Int)),
+            0, RangeType::Fixed, -1,
+        );
+        let mut a3 = RangeHint::new(
+            0, 4, 0, Some(int_dt(4, TypeMetatype::Int)),
+            range_flags::TYPE_LOCK, RangeType::Fixed, -1,
+        );
+        assert!(!a3.merge_with(&b3, &types).unwrap());
     }
 
     // --- resolve_rsp_offset (Stack-spacebase resolution) ---

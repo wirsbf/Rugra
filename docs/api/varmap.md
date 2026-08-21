@@ -185,3 +185,14 @@ register/unique/ram 空间符号与 restructureVarnode 的栈符号共用
 `buildDefaultName` 无 vn 路径改用符号自身空间；vn 路径的
 `HighVariable::isInput` 读取前先 `update_flags()`（variable.hh:200 的惰性
 updateFlags 语义）。
+
+## ScopeInternal 查询层 r2（2026-08-22 WIP，SCOPELOCAL-QUERY-0001）
+
+r1 复核 REJECT 后的重做（WIP，owner scopelocal_query_r2）：
+- `remove_symbol`（database.cc:2138）/ `local_range_remove_range`（address.cc:417
+  RangeList::removeRange 镜像）/ `find_overlap`（database.cc:2392
+  ScopeInternal::findOverlap）/ `entry_subsort_key`（database.cc:97
+  SymbolEntry::getSubsort）/ `find_addr`（database.cc:2224 ScopeInternal::findAddr）/
+  `longest_fit`（address.cc:512 RangeList::longestFit）
+状态：varmap:: 37/37 单测绿；queryProperties flags/parent/space 缺口修复与
+scopelocal_query_1204 双侧 fixture 仍 pending，r1 REJECT 项逐一关闭后方可送审。
