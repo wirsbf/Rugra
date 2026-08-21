@@ -3037,6 +3037,50 @@
      "RG-F-7c158480861d89ccdc8f"
     ]
    }
+  },
+  {
+   "id": "transform_multiequal_insert_1204",
+   "description": "Transform replacement and delayed-insertion ordering for MULTIEQUAL versus ordinary ops, with explicit untested insertion residuals",
+   "runner": [
+    "tools/run_transform_multiequal_insert_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "UNTESTED",
+   "cache": {
+    "metadata": "tests/oracle/transform_multiequal_insert_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/transform_multiequal_insert_1204.cc",
+     "rust_fixture": "tests/oracle/transform_multiequal_insert_1204.rs",
+     "binary": "examples/curl",
+     "sla": "sleigh_specs/x86-64.sla",
+     "processor_spec": "sleigh_specs/x86-64.pspec",
+     "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+     "language_definitions": "sleigh_specs/x86.ldefs"
+    },
+    "tools": {
+     "runner": "tools/run_transform_multiequal_insert_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "src/transform.rs",
+     "docs/api/transform.md",
+     "tests/oracle/transform_multiequal_insert_1204.*",
+     "tools/run_transform_multiequal_insert_oracle.sh"
+    ],
+    "ghidra_function_ids": [
+     "GH12-F-54d7f0e201913bf39baf",
+     "GH12-F-854f35985e810e691e3e"
+    ],
+    "rust_function_ids": [
+     "RG-F-e265749fc7b88ea591dc",
+     "RG-F-17ee0386eef0983bff6e"
+    ]
+   }
   }
  ]
 }

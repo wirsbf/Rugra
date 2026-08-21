@@ -514,7 +514,15 @@ impl TransformOp {
                 if let Some(follow_rep) = follow_rep {
                     let my_rep = self.replacement.clone().unwrap();
                     if self.opc == OpCode::CPUI_MULTIEQUAL {
-                        fd.op_insert_before(&my_rep, &follow_rep);
+                        let parent = follow_rep
+                            .0
+                            .read()
+                            .unwrap()
+                            .parent
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                            .expect("MULTIEQUAL follow replacement has no basic block");
+                        fd.op_insert_begin(&my_rep, &parent);
                     } else {
                         fd.op_insert_before(&my_rep, &follow_rep);
                     }
@@ -936,7 +944,8 @@ impl TransformManager {
     /// (transform.cc:654-660).
     fn special_handling(&self, rop: &TransformOp) {
         // Ghidra calls fd->markIndirectCreation on the replacement op.
-        // Rugra does not yet expose markIndirectCreation; this is a no-op.
+        // TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001: Rugra does not yet
+        // expose markIndirectCreation; this remains a no-op.
         let _ = rop;
     }
 
@@ -989,7 +998,19 @@ impl TransformManager {
             }
             if self.new_ops[op_idx].follow.is_none() {
                 // Can be inserted immediately.
-                fd.op_insert_before(&newop, &op_ref);
+                if opc == OpCode::CPUI_MULTIEQUAL {
+                    let parent = op_ref
+                        .0
+                        .read()
+                        .unwrap()
+                        .parent
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade)
+                        .expect("MULTIEQUAL replacement target has no basic block");
+                    fd.op_insert_begin(&newop, &parent);
+                } else {
+                    fd.op_insert_before(&newop, &op_ref);
+                }
             }
             self.new_ops[op_idx].replacement = Some(newop);
         }
@@ -1424,5 +1445,46 @@ mod tests {
         let idx = mgr.get_preexisting_varnode(vn);
         assert_eq!(mgr.new_varnodes[idx].var_type, TransformVarType::Constant);
         assert_eq!(mgr.new_varnodes[idx].val, 0xff);
+    }
+
+    fn insertion_times(opcode: OpCode, use_follow: bool) -> Vec<u32> {
+        let mut fd = Funcdata::new("insert", Address::new(0x1000), 0);
+        let block = fd.create_new_block();
+        let anchor = fd.new_op(0, Address::new(0x1000));
+        fd.op_set_opcode(&anchor, OpCode::CPUI_COPY);
+        fd.op_insert_end(&anchor, &block);
+        let mut manager = TransformManager::new();
+        manager.init(&mut fd);
+        if use_follow {
+            let follow = manager.new_op_replace(0, OpCode::CPUI_COPY, anchor.clone());
+            manager.new_op(0, opcode, follow);
+            manager.new_op(0, opcode, follow);
+        } else {
+            manager.new_op_replace(0, opcode, anchor.clone());
+            manager.new_op_replace(0, opcode, anchor);
+        }
+        manager.apply(&mut fd);
+        let result = block
+            .read()
+            .unwrap()
+            .get_ops()
+            .iter()
+            .map(|op| op.0.read().unwrap().start.get_time())
+            .collect();
+        result
+    }
+
+    #[test]
+    fn test_multiequal_insert_begin_vs_nonphi_order() {
+        assert_eq!(
+            insertion_times(OpCode::CPUI_MULTIEQUAL, false),
+            vec![2, 1]
+        );
+        assert_eq!(insertion_times(OpCode::CPUI_COPY, false), vec![1, 2]);
+        assert_eq!(
+            insertion_times(OpCode::CPUI_MULTIEQUAL, true),
+            vec![3, 2, 1]
+        );
+        assert_eq!(insertion_times(OpCode::CPUI_COPY, true), vec![2, 3, 1]);
     }
 }

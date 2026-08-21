@@ -1,0 +1,270 @@
+{
+  "schema_version": 2,
+  "fixture_id": "TRANSFORM-MULTIEQUAL-INSERT-0001",
+  "status_note": "The five targeted insertion projections are byte-identical MATCH, but six distinct branches remain UNTESTED under TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001, so the fixture-level B2 status is UNTESTED.",
+  "decisive_semantics": {
+    "reference_output_parameters": "TransformOp.follow refers to the exact placeholder whose replacement supplies the parent block; replacement/output/input identities are preserved and compared through stable encounter labels. createReplacement mutates each TransformOp.replacement and, when output is non-null, the paired TransformVar.replacement/def relationship.",
+    "loop_bounds_traversal_order": "TransformManager::createOps visits newOps once in list/arena creation order, then repeatedly visits the same order until no follow remains. Two MULTIEQUALs are each inserted at block begin, so the later-created op precedes the earlier one; non-PHI ops insert immediately before the same target and retain creation order.",
+    "counter_accumulator_lifecycle": "The target functions have no explicit local accumulator. PcodeOpBank uniqid advances exactly once per created replacement and SeqNum time is observed; createOps followCount is reset to zero each retry, incremented only for still-pending insertions, and terminates at zero.",
+    "sorting_comparison_keys": "The decisive branch key is exact opcode equality with CPUI_MULTIEQUAL plus follow->follow completion state. No container sort is performed; final order is determined by BlockBasic insertion position, while the fixture compares opcode, SeqNum time/order, identity, def-use and counts without re-sorting."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/transform.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/transform.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "5dc86bacaf959cf9921ad9b170494bb652c4a12f",
+    "base_tree": "e721a81955ad102d6b34d01a9e4df31cc2589b1f",
+    "base_src_tree": "a6d4ca9fe7d4688101153815233aa7827dffe7b4",
+    "base_transform_blob": "42dea35c14354256fc7df864eb25aceac7201cb9",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlay": {
+      "path": "src/transform.rs",
+      "sha256": "13145910b094ca5bd188276de3363310fca0400899f8b4315495edd49c0a876b",
+      "policy": "The only live library-source input; hash-verify before replacing the pinned base transform.rs"
+    },
+    "archive_policy": "Immutable explicit dependency closure plus one verified transform.rs overlay; unrelated worktree files are excluded"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "apis": [
+      "TransformOp::createReplacement",
+      "TransformOp::attemptInsertion",
+      "TransformManager::createOps",
+      "TransformManager::apply"
+    ],
+    "funcdata": "Four BfdArchitecture function shells over immutable 34a3febf:examples/curl; no followFlow and no Action pass; one synthetic BlockBasic and one integrated outputless COPY anchor per case",
+    "placeholder_construction": "Each immediate case creates two newOpReplace placeholders against the same anchor. Each follow case creates one immediate COPY replacement followed by two newOp placeholders sharing it. Every generated op has a unique output and fixed constant inputs",
+    "case_matrix": "createReplacement immediate and attemptInsertion follow branches crossed with CPUI_MULTIEQUAL and CPUI_COPY",
+    "random_seed": "none",
+    "error_injection": "none",
+    "debug_macros": "__TERMINAL__ only; OPACTION_DEBUG, CPUI_DEBUG and TYPEPROP_DEBUG absent",
+    "diagnostics": "BfdArchitecture initialization diagnostics captured privately and excluded from the target API observation",
+    "normalization": "Only raw unique-space offsets and process pointer values are omitted. Stable vN/oN encounter labels preserve all aliasing; opcode, SeqNum time/order, parent, create index, size, space index, constant value, def-use and counts are byte-compared"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "ead10183910ef5ea43cdca9d6566dc2d9c45fbbadd1f0a344216a61931a0c596",
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "functions": [
+      {"name": "GetStr", "entry": 14032, "elf_symbol_extent": 74},
+      {"name": "main_free", "entry": 18800, "elf_symbol_extent": 5},
+      {"name": "hugehelp", "entry": 18944, "elf_symbol_extent": 84},
+      {"name": "main_init", "entry": 18784, "elf_symbol_extent": 7}
+    ],
+    "cases": [
+      {"id": "replace_phi", "builder": "newOpReplace", "opcode": 60, "generated_ops": 2, "inputs_per_op": 2, "expected_times": [2, 1]},
+      {"id": "follow_phi", "builder": "newOp(follow)", "opcode": 60, "generated_ops": 2, "inputs_per_op": 2, "expected_times": [3, 2, 1]},
+      {"id": "replace_copy", "builder": "newOpReplace", "opcode": 1, "generated_ops": 2, "inputs_per_op": 1, "expected_times": [1, 2]},
+      {"id": "follow_copy", "builder": "newOp(follow)", "opcode": 1, "generated_ops": 2, "inputs_per_op": 1, "expected_times": [2, 3, 1]}
+    ]
+  },
+  "observation_schema": {
+    "format": "Four fixed-order pipe-delimited UTF-8 records with final newline",
+    "record_order": ["replace_phi", "follow_phi", "replace_copy", "follow_copy"],
+    "op_projection": "Exact block order, opcode, SeqNum time/order, parent index, output identity and ordered input identities",
+    "varnode_projection": "First-encounter identity, create index, size, address-space index, constant value, defining op and ordered descendant ops",
+    "count_projection": "block ops, projected varnodes, alive/dead/all bank ops and total Funcdata varnodes",
+    "anchor_projection": "Original anchor dead state and parent detachment",
+    "preserved": "No order, alias, control-flow, identity or count field is normalized; only unique offsets and raw pointers are intentionally absent"
+  },
+  "build": {
+    "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
+    "supplemental_source_units": ["libdecomp.cc", "sleigh_arch.cc", "inject_sleigh.cc", "bfd_arch.cc", "loadimage_bfd.cc"],
+    "cxx_flags": ["-std=c++11", "-O2", "-Wall", "-Wno-sign-compare"],
+    "rugra_archive": "Immutable 5dc86bac dependency closure plus hash-pinned src/transform.rs overlay",
+    "rust_build": "Cargo --locked --offline in isolated target, then rustc for separately hashed fixture"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "b99738c4ea493236caaf392ca06f794a48efe1d9ed93a8abf8f7a081bdfdfa76",
+    "rust_fixture_sha256": "7494cd162a00189d0104fcefd3963a6c3476aa57d67b114ca7be16e040d4c45a",
+    "transform_overlay_sha256": "13145910b094ca5bd188276de3363310fca0400899f8b4315495edd49c0a876b",
+    "runner_sha256": "904f638fb4c1cd773dd4415840a20dcde3cf4372782561cd82700d36013f7f59"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "69f613f40559194c1adb9cef3abe56c3a11cc689369883b7838b238a4f8571be",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "69f613f40559194c1adb9cef3abe56c3a11cc689369883b7838b238a4f8571be",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "coverage": {
+    "replacement_multiequal_begin_order": {
+      "status": "MATCH",
+      "covers": "createReplacement immediate path with two CPUI_MULTIEQUAL replacements, including reversed block-begin order",
+      "residual_todo_ids": []
+    },
+    "follow_multiequal_begin_order": {
+      "status": "MATCH",
+      "covers": "attemptInsertion follow path with two CPUI_MULTIEQUAL ops sharing one completed follow",
+      "residual_todo_ids": []
+    },
+    "replacement_nonphi_order": {
+      "status": "MATCH",
+      "covers": "createReplacement immediate non-PHI control with two CPUI_COPY replacements retaining creation order",
+      "residual_todo_ids": []
+    },
+    "follow_nonphi_order": {
+      "status": "MATCH",
+      "covers": "attemptInsertion follow non-PHI control with two CPUI_COPY ops retaining before-follow creation order",
+      "residual_todo_ids": []
+    },
+    "identity_and_counts": {
+      "status": "MATCH",
+      "covers": "all four cases compare op/varnode identity, aliases, SeqNum time/order, parent, def-use and block/bank counts",
+      "residual_todo_ids": []
+    },
+    "op_preexisting_resize_path": {
+      "status": "UNTESTED",
+      "covers": "op_preexisting opcode mutation and input shrink/grow/null-slot handling are not exercised",
+      "residual_todo_ids": ["TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"]
+    },
+    "nested_follow_chain": {
+      "status": "UNTESTED",
+      "covers": "attemptInsertion while follow->follow is still non-null and requires another retry is not exercised",
+      "residual_todo_ids": ["TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"]
+    },
+    "indirect_special_handling": {
+      "status": "UNTESTED",
+      "covers": "INDIRECT creation flags, inheritIndirect and specialHandling are not exercised",
+      "residual_todo_ids": ["TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"]
+    },
+    "insertion_error_paths": {
+      "status": "UNTESTED",
+      "covers": "missing-parent, malformed-placeholder and injected failure behavior are not exercised",
+      "residual_todo_ids": ["TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"]
+    },
+    "create_replacement_output_null": {
+      "status": "UNTESTED",
+      "covers": "createReplacement with output == nullptr, where no output TransformVar is materialized, is not exercised",
+      "residual_todo_ids": ["TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"]
+    },
+    "blockbasic_setorder_renumber_boundary": {
+      "status": "UNTESTED",
+      "covers": "an exhausted SeqNum order midpoint that forces BlockBasic::setOrder renumbering during insertion is not exercised",
+      "residual_todo_ids": ["TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"]
+    }
+  },
+  "projection_status": "MATCH",
+  "residual_todo_ids": [
+    "TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"
+  ],
+  "residual_union": {
+    "todo_id": "TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001",
+    "status": "UNTESTED",
+    "branches": [
+      {
+        "id": "op_preexisting_resize_path",
+        "status": "UNTESTED",
+        "detail": "TransformOp::createReplacement's op_preexisting opcode/input resize path is outside this insertion fixture"
+      },
+      {
+        "id": "nested_follow_chain",
+        "status": "UNTESTED",
+        "detail": "attemptInsertion with a follow whose own follow remains pending is not covered"
+      },
+      {
+        "id": "indirect_special_handling",
+        "status": "UNTESTED",
+        "detail": "INDIRECT creation flags and specialHandling are not exercised"
+      },
+      {
+        "id": "insertion_error_paths",
+        "status": "UNTESTED",
+        "detail": "missing-parent, malformed-placeholder and failure injection paths are not exercised"
+      },
+      {
+        "id": "create_replacement_output_null",
+        "status": "UNTESTED",
+        "detail": "createReplacement with output == nullptr is not exercised"
+      },
+      {
+        "id": "blockbasic_setorder_renumber_boundary",
+        "status": "UNTESTED",
+        "detail": "BlockBasic insertion with no midpoint order available, forcing setOrder renumbering, is not exercised"
+      }
+    ]
+  },
+  "overall_status": "UNTESTED"
+}

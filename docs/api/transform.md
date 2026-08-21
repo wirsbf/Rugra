@@ -2,9 +2,8 @@
 
 **源代码路径**: `src/transform.rs`
 **Ghidra 对应**: `transform.hh` / `transform.cc` (767 行)
-**状态**: ✅ L3 — 完整移植。所有 `TransformManager` 算法（createOps/createVarnodes/
-removeOld/transformInputVarnodes/placeInputs/apply）+ TransformVar/TransformOp 的
-createReplacement/attemptInsertion + LanedRegister/LaneDescription 全部实现。
+**状态**: 🔧 L2 — `TransformManager` 五阶段与主要 API 已实现；本轮 PHI 插入
+目标投影为 `MATCH`，但模块仍有已登记 `UNTESTED`/实现残差，不能宣称 L3。
 
 ## 模块说明
 
@@ -57,7 +56,8 @@ Ghidra 使用原始 `TransformVar*` / `TransformOp*` 指针指向 `TransformMana
 
 ### `TransformOp` (transform.hh:63)
 变换后的 PcodeOp 占位符。
-- `attempt_insertion(fd, ops)` — 插入到基本块 (transform.cc:254)
+- `attempt_insertion(fd, ops)` — follow 已落块后完成延迟插入；`MULTIEQUAL`
+  使用 `op_insert_begin`，其他 opcode 使用 `op_insert_before` (transform.cc:254)
 - `inherit_indirect(ind_op)` — 继承 INDIRECT 标记 (transform.cc:273)
 - 字段：`op` / `replacement` / `opc` / `special` / `output` / `input` / `follow`
 
@@ -91,8 +91,8 @@ orchestrates 变换生命周期。
 ## 已知限制
 - `transferVarnodeProperties`（transform.cc:208）尚未实现 — Rugra 的 Varnode 未暴露
   完整的属性转移 API。
-- `markIndirectCreation` / `opInsertBegin` — Rugra 未暴露，当前用 best-effort 替代
-  （使用 op_insert_before 代替 opInsertBegin）。
+- `markIndirectCreation` 尚未完整接入；`inherit_indirect` 仍保守地假设
+  possible-out。`opInsertBegin` 已由 Funcdata 暴露并用于 PHI 插入。
 - ~~`deleteVarnode` / `setInputVarnode` 未暴露~~ — 2026-08-15
   （VARNODE-INPLACE-MUTATION-SITES-0001）已接入：`transform_input_varnodes` 对旧
   输入走 `fd.delete_varnode`（cc:734-735，funcdata.hh:294），新输入走
@@ -103,11 +103,34 @@ orchestrates 变换生命周期。
 - `inherit_indirect` 的 indirect-zero 检查保守地假设 possible-out。
 
 ## 测试
-19 个单元测试覆盖 LanedRegister（basic/parse_sizes）、LaneDescription（uniform/
+20 个单元测试覆盖 LanedRegister（basic/parse_sizes）、LaneDescription（uniform/
 two_lane/get_boundary/subset/restriction/extension）、TransformVar（initialize）、
 TransformManager（preexisting/unique/constant/constant-shift/split/op-replace/
 op-set-input-output/preexisting-guard/constant-getpiece）。
 
 ### 2026-07-01（续）：TransformManager::apply 确认完整
 TransformManager::apply（transform.cc:756-765）：create_ops→create_varnodes→remove_old→place_inputs→transform_input_varnodes。SplitFlow 委托此方法。
+
+### 2026-08-21：TRANSFORM-MULTIEQUAL-INSERT-0001
+
+`TransformOp::createReplacement` 的 immediate 分支和 `attemptInsertion` 的 follow
+分支现在都保留锁定 Ghidra 的 opcode 特判：新 `MULTIEQUAL` 总是通过
+`Funcdata::op_insert_begin` 插到基本块开头，其他新 op 仍紧邻原 op/follow 之前。
+连续创建两个 PHI 时，第二个创建的 op 因再次插到 block begin 而排在第一个之前；
+COPY 等非 PHI 保持创建顺序。对应单测同时覆盖 immediate/follow 两条路径及
+PHI/non-PHI 四种组合；锁定 12.0.4 fixture 对比完整 op/varnode identity、
+SeqNum time/order、def-use、块内顺序和 bank 计数。
+
+证据状态严格区分为：`projection_status=MATCH`、`overall_status=UNTESTED`。
+所有未覆盖项统一绑定 `TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001`：
+
+- `op_preexisting` 的 opcode/input resize 与 nullable-slot 路径；
+- 多层 follow 链仍未落块时的 retry；
+- INDIRECT `inheritIndirect` / `specialHandling`；
+- missing-parent、畸形 placeholder 和错误注入路径；
+- `createReplacement` 的 `output == nullptr` 分支；
+- SeqNum midpoint 不足、触发 `BlockBasic::setOrder` 整块重排的插入边界。
+
+fixture metadata 使用 schema 2：每个 coverage 项都包含 `{status, covers,
+residual_todo_ids}`，顶层 residual union 与逐项 union 由 runner fail-closed 核对。
 <!-- annotation-pass: 2026-07-04 -->
