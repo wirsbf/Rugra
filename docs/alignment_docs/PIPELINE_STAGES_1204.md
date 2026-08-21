@@ -102,6 +102,30 @@ universal (ActionRestartGroup, onceperfunc, max=1)          ← pending restart 
   任何"每阶段缓存/断点续跑"设施在 Rugra 侧均无 oracle 对应物,属 RUGRA-GLUE 工具层,
   禁止进入对齐语义路径(见 §5)。
 
+### 3.1 阶段寻址与停/续是 oracle 原生机制(逐行核实 2026-08-22)
+
+- **名字路径寻址**:`getSubAction/getSubRule`(`action.cc:265-282`,`next_specifyterm` 按
+  `:` 切分)——`setBreakPoint(type, "universal:fullloop:mainloop")` 式路径即官方阶段地址。
+  `enableRule/disableRule` 同样走名字路径。
+- **可停可续**:`Action::perform`(`action.cc:298-340`)是完整状态机
+  (`status_start → breakstarthit → repeat → mid → actionbreak`,switch fall-through);
+  断点返回 -1,官方注释明言 **"A successive call to perform() will 'continue' from the
+  break point"**。`ActionGroup::apply` 在 `status_mid` 时保留子节点迭代器 `state`,
+  下次从 `++state` 继续。断点类型:`break_start / break_action / tmpbreak_start /
+  tmpbreak_action`。
+- **每 Action 变更投影(原生)**:`#ifdef OPACTION_DEBUG` + `Funcdata::debugActivate /
+  debugModCheck / debugModPrint`(`funcdata.cc:1010-1052`,`funcdata.hh:584-602`):
+  每个 Action 应用后,对 PC/unique 范围内被改的每个 PcodeOp 打印 **before/after
+  `printDebug` 对**,附 Action 名与全局递增序号;可按第 N 条 debug 再断点
+  (`opactdbg_breakcount`)。注意:这是**编译期开关**,生产 oracle 构建默认未启用,
+  fixture 若用必须在 metadata 记录 `-DOPACTION_DEBUG` 构建标志。
+- **每 Action 计数**:`count / lcount / count_tests / count_apply` 是逐 Action 的
+  变更计数器,循环收敛判据与 stackstall 反馈都建立在它上面(对应
+  `PIPE-STACKSTALL-COUNT-0001`)。
+
+> 结论:阶段寻址、停/续、变更投影、计数**全部有 oracle 对应物**,应按对齐移植
+> (不是 RUGRA-GLUE);只有"缓存/断点续跑的持久化"没有 oracle 对应物,属工具层。
+
 ## 4. 稳定切点 vs 不稳定切点(差分/fixture 边界规则)
 
 | 切点 | 稳定性 | 规则 |
