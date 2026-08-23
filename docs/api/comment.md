@@ -2,10 +2,15 @@
 
 Faithful port of Ghidra's `comment.hh` / `comment.cc` (406 lines).
 
-**Status:** L2. The in-memory ordering/database projection and the observed
-comment codec state match the locked 12.0.4 oracle. Full codec L3 remains
-blocked on restoring the decoded `AddrSpace` handle through `Decoder`/
-`AddrSpaceManager` (`ADDRESS-0001`, `MARSHAL-PACKED-0001`).
+**Status:** L2. The in-memory ordering/database projection, the observed
+comment codec state, and the CommentSorter shared-iterator walking machinery
+(setupBlockList/setupOpList/setupHeader + hasNext/getNext interleaving) match
+the locked 12.0.4 oracle byte-for-byte (`COMMENT-SORTER-ITERATORS-0001`,
+38-line projection MATCH). Full codec L3 remains blocked on restoring the
+decoded `AddrSpace` handle through `Decoder`/`AddrSpaceManager`
+(`ADDRESS-0001`, `MARSHAL-PACKED-0001`); the sorter keeps three registered
+representation residuals (block-cover projection, cloned-Comment ownership,
+printc.rs glue consumers) under `COMMENT-SORTER-ITERATORS-0001`.
 
 Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/comment.{hh,cc}`.
 
@@ -49,18 +54,52 @@ In-memory CommentDatabase (comment.hh:161).
 
 ### `Subsort`
 Sorting key for placing a Comment within a basic block (comment.hh:203).
-- `set_header(header_type)`, `set_block(index, order)`.
-- Derives `Ord` for BTreeMap compatibility.
+- `index` is the signed basic-block index, `-1` for a function header (Ghidra's
+  `int4`), so header keys order before every block key.
+- `set_header(header_type)`, `set_block(i, ord)` mutate index/order in place
+  and leave `pos` untouched (the caller-owned uniqueness counter,
+  comment.hh:224/233).
+- Derives `Ord` over `(index, order, pos)` — Ghidra's `Subsort::operator<`.
 
 ### `CommentSorter`
-Sorts comments into and within basic blocks (comment.hh:195).
-- `new()`, `setup_function_list(tp, fd_addr, db, display_unplaced)`
-  (comment.cc:334).
-- `has_header_comments()`, `header_comments()`.
-- `setup_block_list`/`setup_op_list` currently return collected vectors instead
-  of mutating the shared `start/stop/opstop` iterator state. `setup_header` is
-  still a no-op. The exact iterator-state closure is tracked by
-  `COMMENT-SORTER-ITERATORS-0001`.
+Sorts comments into and within basic blocks (comment.hh:195) and acts as the
+state for walking comments within one basic block or the header.
+- `new()` — `displayUnplacedComments = false` (comment.hh:245).
+- `setup_function_list(tp, fd, db, display_unplaced) -> Result<()>`
+  (comment.cc:334) — walks every comment of the function (no type filtering;
+  consumers apply the mask), places each via `find_position`, resets
+  `emitted`, and advances the shared `pos` counter only on placement. Dead
+  ops surface the oracle's `Dead op reaching CommentSorter` LowlevelError
+  text (comment.cc:289/303).
+- `setup_block_bounds(bl_index)` (comment.cc:379) — `start =
+  lower_bound((bl,0,0))`, `stop = upper_bound((bl,0xffffffff,0xffffffff))`.
+- `setup_op_stop(op: Option<&PcodeOpRef>)` (comment.cc:362) — `NULL` sets
+  `opstop = stop`; otherwise `opstop = upper_bound((bl, op order,
+  0xffffffff))`. `start` persists across calls, so successive landmarks emit
+  only the comments between them (the printc.cc:3234 protocol).
+- `setup_header(header_type)` (comment.cc:394) — `start =
+  lower_bound((-1,headerType,0))`, `opstop =
+  upper_bound((-1,headerType,0xffffffff))`.
+- `has_next()` / `get_next()` (comment.hh:250-251) — `hasNext` compares the
+  `start`/`opstop` iterator ranks; `getNext` returns the current comment and
+  advances `start`.
+- Legacy glue for printc.rs consumers: `setup_block_list(block_index) ->
+  Vec<&Comment>`, `setup_op_list(block_index, op_order) -> Vec<&Comment>`
+  (drives the faithful machine and drains it), `has_header_comments()`,
+  `header_comments()`. Migration of printc.rs to the direct protocol remains
+  open under `COMMENT-SORTER-ITERATORS-0001`.
+
+The `map<Subsort, Comment *>` is modeled as a sorted vector of
+`(Subsort, comment index)` pairs; the `start`/`stop`/`opstop` members are
+ranks into that order (`len` == `end()`), stored in `Cell`s because Ghidra's
+`start` is `mutable` inside const `hasNext`/`getNext` (comment.hh:239-241).
+`lower_bound`/`upper_bound` are partition-point rank projections of the
+`std::map` bounds. `find_position` (comment.cc:270) implements the full
+eight-way placement ladder (header-at-entry, PcodeOpTree lower-bound
+containment, previous-op `0xffffffff` tail, migrated backupOp, op-less
+`(0,0)`, `displayUnplaced` salvage, excised drop, dead-op error);
+`BlockBasic::contains` is projected from `[start_addr, last-op addr]`
+because Rugra has no block cover RangeList (block.hh:476 residual).
 
 ## Codec evidence and residual
 
@@ -83,17 +122,54 @@ can only return the legacy offset-only `Address`. Unknown space-name rejection
 and exact address-space identity remain with `ADDRESS-0001` and
 `MARSHAL-PACKED-0001`; this module must not be promoted to L3 before they land.
 
-## 2026-06-27（续）：CommentSorter::findPosition 实现记录
+## 2026-08-23：CommentSorter 共享迭代器状态机移植记录（COMMENT-SORTER-ITERATORS-0001）
 
-- **CommentSorter::find_position**：完整实现——遍历 Funcdata 的基本块和 ops，查找注释地址对应的 op，将注释关联到基本块。支持 3 种情况：
-  1. Header 注释在函数地址 → HEADER_BASIC
-  2. 注释地址有对应 op → 关联到该 op 的基本块 + seq order
-  3. 注释地址无 op 但在块范围内 → 关联到块末尾
-  4. 无法定位 → HEADER_UNPLACED（如果 displayUnplaced=true）
-- **setup_function_list**：现接受 Funcdata 参数（而非 Address），调用 find_position。
-- **setup_block_list**：现返回指定块的注释列表（Vec<&Comment>）。
-- **setup_op_list**：现返回指定块中 op_order 之前的注释列表。
-- `find_position` 的放置分类已实现，但 `setup_block_list/setup_op_list/
-  setup_header` 尚未复现同一共享 iterator 状态；此前“缺口已关闭”的声明不成立，
-  现绑定 `COMMENT-SORTER-ITERATORS-0001`。模块同时受前述 codec 地址空间残差约束。
-<!-- annotation-pass: 2026-07-04 -->
+- **Subsort.index 改为 `i32`、`-1` 表头注释**：对齐 Ghidra 的 `int4 index`
+  （comment.hh:204），头部键排在一切块键之前；`set_header`/`set_block` 改为
+  原地修改且不再触碰 `pos`（comment.hh:224/233——`pos` 是 setupFunctionList
+  的调用方计数器）。
+- **find_position 重写为 comment.cc:270-325 的八臂判定梯**：type==0 丢弃 →
+  header/warningheader@fad → header_basic；PcodeOpTree lower_bound
+  （(addr,time) 序，op.cc:1146）命中且所在块 contains → 该 op 的 order；
+  前一 op 块 contains → 块尾 0xffffffff；精确地址 backupOp（op 迁移出原块）；
+  无任何 op → (0,0)；displayUnplaced → header_unplaced；否则块被切除丢弃。
+  死 op（optree 内无 parent）抛出与 oracle 逐字节相同的
+  `Dead op reaching CommentSorter`（comment.cc:289/303，anyhow 通道）。
+  旧实现的"块起始地址兜底"是自创算法，已删除。
+- **setup_function_list 去掉自创 type 预过滤**：Ghidra 在 setup 阶段不按 tp
+  过滤（消费端才做，printc.cc:3238/3280）；`pos` 计数器只在放置成功时递增
+  且跨迭代持续（comment.cc:344/351）；放置后 `set_emitted(false)`。
+- **start/stop/opstop 迭代器状态机**：`commmap` 建模为排序
+  `Vec<(Subsort, usize)>`，三个迭代器建模为秩（`len` == `end()`），存于
+  `Cell<usize>`（Ghidra 的 `mutable start` 在 const hasNext/getNext 中推进，
+  comment.hh:239-251）。`setup_block_bounds`/`setup_op_stop`/`setup_header`
+  分别复现 comment.cc:379/362/394 的 lower_bound/upper_bound 边界；
+  `setup_op_stop(None)` 取 `opstop = stop`。连续 landmark 之间 `start` 不回退，
+  只收窄 `opstop`——即 printc emitCommentGroup 的交错消费协议。
+- **Vec 胶水适配器保留**（`setup_block_list`/`setup_op_list`/
+  `header_comments`）：printc.rs 消费端不在本租约 write-set 内，适配器现在
+  内部驱动状态机再排空，观测行为与旧版逐项一致；printc.rs 迁移到
+  `setup_block_bounds`/`setup_op_stop`/`has_next`/`get_next` 直接协议仍开放
+  （残差 3）。
+- **Oracle 证据**：`tools/run_comment_sorter_iterators_oracle.sh`
+  （pin-base 296c128 + src/comment.rs overlay，schema-2 metadata）——
+  锁定 Ghidra 12.0.4 (e40ed130) 与 Rugra 的 38 行交错消费投影
+  **byte-identical**：header basic/unplaced 两轮、三个块的
+  setupBlockList→setupOpList(op…)→setupOpList(NULL) 交错行走、
+  0xffffffff 块尾放置、迁移 backupOp、空块 0 排空、tp 掩码外的 USER1
+  注释照常放置（证明 setup 不过滤）、displayUnplaced=false 切除、
+  死 op 错误文本、无 op 函数 (0,0) 放置。
+- **残差（绑定 `COMMENT-SORTER-ITERATORS-0001`）**：
+  1. `BlockBasic::contains` 用 `[start_addr, 末 op 地址]` 投影 Ghidra 的
+     cover RangeList（Rugra 无块 cover 系统，block.hh:476）；fixture 两侧
+     把块范围钉到相同边界，管线中块 cover 终值 == 末指令地址，故等价，
+     但形式化等价未证。
+  2. CommentSorter 持有 Comment 克隆而非数据库指针：setupFunctionList 的
+     `setEmitted(false)` 不回写 CommentDatabaseInternal（Ghidra 经
+     `mutable emitted` 直改库内对象）。
+  3. printc.rs 消费端仍走 Vec 胶水快照（行为等价已由适配器内部驱动状态机
+     保证，但未走直接协议）。
+  模块整体仍为 L2/MISMATCH：codec 的 `ADDRESS-0001`/`MARSHAL-PACKED-0001`
+  残差不变。
+<!-- annotation-pass: 2026-08-23 -->
+
