@@ -2118,45 +2118,69 @@ impl JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1137 JumpBasic::calcRange
+    // Ghidra: jumptable.cc:1120 JumpBasic::calcRange
     /// Calculate the range of values in the given varnode that direct
-    /// control-flow to the switch. Faithful to `calcRange`
-    /// (jumptable.cc:1137).
+    /// control-flow to the switch. The initial range is derived from the
+    /// size/type of the varnode (single value for constants, [0,2) for
+    /// boolean-producing defs, maxValue/stride otherwise), then every guard
+    /// range that applies to the varnode (valueMatch != 0) is intersected
+    /// INTO the range in place, and finally a too-large range is truncated
+    /// to positive values. Constants do not early-return: they flow through
+    /// the guard loop and the positive truncation exactly like the oracle.
+    /// Faithful to `calcRange` (jumptable.cc:1120-1156).
     pub fn calc_range(&self, vn: &Arc<RwLock<Varnode>>, rng: &mut CircleRange) {
-        let vn_rg = vn.read().unwrap();
-        let mut stride = 1;
-        if vn_rg.is_constant() {
-            *rng = CircleRange::single(vn_rg.get_offset(), vn_rg.get_size());
-            return;
+        // cc:1124: int4 stride = 1; -- only the else branch updates it, so
+        // constant and bool-output varnodes keep stride 1 for the positive
+        // truncation below.
+        let mut stride: u64 = 1;
+        let vn_size;
+        {
+            let vn_rg = vn.read().unwrap();
+            vn_size = vn_rg.get_size();
+            if vn_rg.is_constant() {
+                // cc:1125-1126: rng = CircleRange(vn->getOffset(),vn->getSize());
+                // No early return: the guard loop at cc:1139-1145 still runs.
+                *rng = CircleRange::single(vn_rg.get_offset(), vn_rg.get_size());
+            } else if vn_rg.is_written()
+                && vn_rg
+                    .def
+                    .as_ref()
+                    .and_then(|w| w.upgrade())
+                    .is_some_and(|d| d.read().unwrap().is_bool_output())
+            {
+                // cc:1127-1128: only 0 or 1 possible.
+                *rng = CircleRange::new(0, 2, 1, 1);
+            } else {
+                // cc:1129-1133: initial range from maxValue and nzmask stride.
+                let max_value = Self::get_max_value(&vn_rg);
+                stride = Self::get_stride(&vn_rg) as u64;
+                *rng = CircleRange::new(0, max_value, vn_rg.get_size(), stride);
+            }
         }
-        if vn_rg.is_written() {
-            // isBoolOutput requires def(); conservatively treat as unrestricted.
-            let max_value = Self::get_max_value(&vn_rg);
-            stride = Self::get_stride(&vn_rg);
-            *rng = CircleRange::new(0, max_value, vn_rg.get_size(), stride as u64);
-        } else {
-            let max_value = Self::get_max_value(&vn_rg);
-            stride = Self::get_stride(&vn_rg);
-            *rng = CircleRange::new(0, max_value, vn_rg.get_size(), stride as u64);
-        }
-        drop(vn_rg);
 
-        // Intersect any guard ranges which apply to vn.
+        // cc:1135-1145: intersect any guard ranges which apply to -vn-.
         let (base_vn, bits_preserved) = quasi_copy(vn);
         for guard in &self.selectguards {
             let matchval = guard.value_match(vn, &base_vn, bits_preserved);
+            // cc:1142: if (matchval == 2) TODO: we need to check for aliases
+            // -- the alias check is not implemented in the oracle either, so
+            // any non-zero match applies the guard range.
             if matchval == 0 {
                 continue;
             }
-            // Clone to avoid mutating the guard's stored range.
-            let mut gr = guard.range.clone();
-            let _ = gr.intersect(rng);
+            // cc:1144: if (rng.intersect(guard.getRange())!=0) continue;
+            // The intersect mutates -rng- in place (write-back); the !=0
+            // continue is a trailing no-op in the oracle loop body.
+            if rng.intersect(&guard.range) != 0 {
+                continue;
+            }
         }
 
-        // If the size is too big, try only positive values.
+        // cc:1147-1155: it may be an assumption that the switch value is
+        // positive; if the size is too big, try only positive values.
         if rng.get_size() > 0x10000 {
             let mut positive =
-                CircleRange::new(0, (rng.get_mask() >> 1) + 1, vn.read().unwrap().get_size(), stride as u64);
+                CircleRange::new(0, (rng.get_mask() >> 1) + 1, vn_size, stride);
             positive.intersect(rng);
             if !positive.is_empty() {
                 *rng = positive;
@@ -2242,9 +2266,9 @@ impl JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1258 JumpBasic::markFoldableGuards
+    // Ghidra: jumptable.cc:1239 JumpBasic::markFoldableGuards
     /// Mark the guard CBRANCHs that are truly part of the model. Faithful to
-    /// `markFoldableGuards` (jumptable.cc:1258).
+    /// `markFoldableGuards` (jumptable.cc:1239-1251).
     pub fn mark_foldable_guards(&mut self) {
         if self.varnode_index as usize >= self.path_meld.num_common_varnode() {
             return;
@@ -2258,12 +2282,21 @@ impl JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1273 JumpBasic::markModel
-    /// Mark or unmark all pcode ops involved in the model. Faithful to
-    /// `markModel` (jumptable.cc:1273).
+    // Ghidra: jumptable.cc:1254 JumpBasic::markModel
+    /// Mark or unmark all pcode ops involved in the model. Guards whose
+    /// CBRANCH was cleared (by `markFoldableGuards`) are skipped: the oracle
+    /// reads `getBranch()` first and continues on null before touching
+    /// `getReadOp()`. Faithful to `markModel` (jumptable.cc:1254-1267).
     pub fn mark_model(&self, val: bool) {
         self.path_meld.mark_paths(val, self.varnode_index as usize);
         for guard in &self.selectguards {
+            // cc:1259-1260: PcodeOp *op = selectguards[i].getBranch();
+            // if (op == (PcodeOp *)0) continue;
+            let Some(_branch) = guard.get_branch() else {
+                continue;
+            };
+            // cc:1261: readOp is never null when cbranch is set (the
+            // GuardRecord invariant); the Rust Option guard is glue.
             let Some(read_op) = guard.get_read_op() else {
                 continue;
             };

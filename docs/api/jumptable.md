@@ -168,11 +168,28 @@ The basic switch model (jumptable.hh:374). Notable methods:
 - `is_prune(Varnode)`, `is_point(Varnode)`, `get_stride(Varnode)`,
   `get_max_value(Varnode)`, `duplicate_varnodes(&[Varnode])`.
 - `find_determining_varnodes(op, slot)` (jumptable.cc:556).
-- `calc_range(vn, &mut CircleRange)` (jumptable.cc:1120).
+- `calc_range(vn, &mut CircleRange)` (jumptable.cc:1120). **2026-08-23 修正
+  (JUMPTABLE-CALCRANGE-0001)**：初始 range 按 oracle 三分支派发——constant 取
+  single(offset,size) 且**不再提前 return**（继续走守卫交集与 positive 截断）；
+  `is_written() && def.is_bool_output()`（op.hh:184，经 `set_opcode_flags` 缓存的
+  BOOLOUTPUT 位）取 `CircleRange(0,2,1,1)`；否则 getMaxValue/getStride 初始
+  range（stride 仅此分支更新，constant/布尔分支保持 1）。守卫循环
+  `rng.intersect(guard.range)` **就地写回**（cc:1144），`valueMatch!=0` 即应用；
+  size>0x10000 时尝试 positive 半区截断（cc:1150-1155）。
 - `find_smallest_normal(matchsize)` (jumptable.cc:1165).
 - `mark_foldable_guards()` (jumptable.cc:1239).
-- `mark_model(val)` (jumptable.cc:1254).
+- `mark_model(val)` (jumptable.cc:1254). **2026-08-23 修正
+  (JUMPTABLE-CALCRANGE-0001 / JUMPTABLE-MARKMODEL-0001)**：先取
+  `guard.get_branch()`，为 None（被 `mark_foldable_guards` 清除的守卫）则
+  continue **跳过 readOp 标记**（cc:1259-1260），不再以 `get_read_op()` 判空。
 - `analyze_guards(bl, pathout)` (jumptable.cc:1046).
+
+### JT-CALCRANGE-1204 fixture
+`tests/oracle/jt_calcrange_1204.{cc,rs,metadata.json}` +
+`tools/run_jt_calcrange_oracle.sh`：锁定 12.0.4 双侧差分（base f6fd4ea +
+jumptable.rs overlay，pin-base schema2）。三个场景（无符号守卫链 /
+constant 输入 / markModel skip）投影全 MATCH，residuals 为空；sc2 的
+constant-空交集判别力受 rangeutil `intersect` 保守实现限制（RANGE-0001）。
 
 ## `JumpTable`
 A map from values to control-flow targets within a function
