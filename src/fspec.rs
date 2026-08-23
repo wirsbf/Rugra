@@ -3027,6 +3027,10 @@ pub mod param_trial_flags {
 #[derive(Debug, Clone)]
 pub struct ParamTrial {
     flags: u32,
+    /// Address-space component of Ghidra's `Address`. Rugra's legacy
+    /// `Address` stores only the offset, so the component is carried beside
+    /// it until the address layer is unified.
+    space: AddressSpace,
     addr: Address,
     size: i32,
     slot: i32,
@@ -3040,14 +3044,22 @@ pub struct ParamTrial {
 }
 
 impl ParamTrial {
-    // Ghidra: fspec.hh:210 ParamTrial::new
-    /// Construct from (address, size, slot). Faithful to the C++ constructor.
+    // RUGRA-GLUE: compatibility constructor for legacy spaceless Address
+    // callers; production parameter trials use `new_in_space`.
     pub fn new(addr: Address, sz: i32, sl: i32) -> Self {
+        Self::new_in_space(AddressSpace::Register, addr, sz, sl)
+    }
+    // Ghidra: fspec.hh:235 ParamTrial::ParamTrial
+    /// Construct from the complete storage address, size, and input slot.
+    pub fn new_in_space(space: AddressSpace, addr: Address, sz: i32, sl: i32) -> Self {
         Self {
-            flags: 0, addr, size: sz, slot: sl, offset: -1, fixed_position: -1,
+            flags: 0, space, addr, size: sz, slot: sl, offset: -1, fixed_position: -1,
             entry_index: None,
         }
     }
+    // Ghidra: fspec.hh:239 ParamTrial::getAddress
+    /// Return the address-space component of the trial storage address.
+    pub fn get_space(&self) -> AddressSpace { self.space }
     // Ghidra: fspec.hh:210 ParamTrial::getAddress
     pub fn get_address(&self) -> Address { self.addr }
     // Ghidra: fspec.hh:210 ParamTrial::getSize
@@ -3058,6 +3070,9 @@ impl ParamTrial {
     pub fn set_slot(&mut self, val: i32) { self.slot = val; }
     // Ghidra: fspec.hh:210 ParamTrial::getOffset
     pub fn get_offset(&self) -> i32 { self.offset }
+    // RUGRA-GLUE: expose the packed flags for differential-fixture
+    // serialization; Ghidra exposes the same state through flag predicates.
+    pub fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: fspec.hh:230 ParamTrial::setEntry
     /// Record which ParamEntry (by index into the model's entry list) holds
     /// this trial, plus the slot offset within that entry. Faithful to
@@ -3066,10 +3081,13 @@ impl ParamTrial {
         self.entry_index = Some(entry_index);
         self.offset = off;
     }
-    // Ghidra: fspec.hh:230 ParamTrial::clearEntry
-    /// Detach this trial from its ParamEntry. Faithful to the
-    /// `entry = (const ParamEntry *)0` reset.
-    pub fn clear_entry(&mut self) { self.entry_index = None; }
+    // RUGRA-GLUE: Rust Option representation of Ghidra's
+    // `setEntry((const ParamEntry *)0, 0)` calls.
+    /// Detach this trial from its ParamEntry and reset its entry offset.
+    pub fn clear_entry(&mut self) {
+        self.entry_index = None;
+        self.offset = 0;
+    }
     // Ghidra: fspec.hh:230 ParamTrial::getEntry
     /// Return the index of the ParamEntry that holds this trial, or `None`
     /// if no entry matches. Stands in for Ghidra's `const ParamEntry*` — the
@@ -3131,7 +3149,7 @@ impl ParamTrial {
     /// trial's address and slot and inherits the full `flags` word
     /// (`res.flags = flags`), so used/checked/active state survives the split.
     pub fn split_hi(&self, sz: i32) -> ParamTrial {
-        let mut res = ParamTrial::new(self.addr, sz, self.slot);
+        let mut res = ParamTrial::new_in_space(self.space, self.addr, sz, self.slot);
         res.flags = self.flags;
         res
     }
@@ -3145,7 +3163,7 @@ impl ParamTrial {
     pub fn split_lo(&self, sz: i32) -> ParamTrial {
         // Ghidra: Address newaddr = addr + (size-sz);
         let newaddr = self.addr.offset((self.size - sz) as i64);
-        let mut res = ParamTrial::new(newaddr, sz, self.slot + 1);
+        let mut res = ParamTrial::new_in_space(self.space, newaddr, sz, self.slot + 1);
         res.flags = self.flags;
         res
     }
@@ -3282,10 +3300,10 @@ impl ParamActive {
     pub fn new(recoversub: bool) -> Self {
         Self {
             trial: Vec::new(),
-            slotbase: 0,
+            slotbase: 1,
             stackplaceholder: -1,
             numpasses: 0,
-            maxpass: 4,
+            maxpass: 0,
             isfullychecked: false,
             needsfinalcheck: false,
             recoversubcall: recoversub,
@@ -3296,11 +3314,11 @@ impl ParamActive {
     /// Reset to empty. Faithful to `ParamActive::clear` (fspec.cc:1949).
     pub fn clear(&mut self) {
         self.trial.clear();
-        self.slotbase = 0;
+        self.slotbase = 1;
         self.stackplaceholder = -1;
         self.numpasses = 0;
         self.isfullychecked = false;
-        self.needsfinalcheck = false;
+        self.join_reverse = false;
     }
     // Ghidra: fspec.cc:1936 ParamActive::getNumTrials
     pub fn get_num_trials(&self) -> usize { self.trial.len() }
@@ -3341,20 +3359,52 @@ impl ParamActive {
     /// Mark all trials as fully checked. Faithful to `markFullyChecked`.
     pub fn mark_fully_checked(&mut self) { self.isfullychecked = true; }
 
-    // Ghidra: fspec.cc:1963 ParamActive::registerTrial
-    /// Add a new trial at (addr, sz). Faithful to `registerTrial`
-    /// (fspec.cc:1963). Slot is assigned as the current trial count.
+    // RUGRA-GLUE: compatibility wrapper for legacy spaceless Address
+    // callers. Hardware-register storage is the conservative default.
     pub fn register_trial(&mut self, addr: Address, sz: i32) {
-        let slot = self.trial.len() as i32;
-        self.trial.push(ParamTrial::new(addr, sz, slot));
+        self.register_trial_in_space(AddressSpace::Register, addr, sz);
+    }
+
+    // Ghidra: fspec.cc:1963 ParamActive::registerTrial
+    /// Add a trial at the complete storage address. The assigned slot is the
+    /// current `slotbase`; non-spacebase trials are marked killed-by-call;
+    /// then `slotbase` advances by one.
+    pub fn register_trial_in_space(&mut self, space: AddressSpace, addr: Address, sz: i32) {
+        let mut trial = ParamTrial::new_in_space(space, addr, sz, self.slotbase);
+        if space != AddressSpace::Stack {
+            trial.mark_killed_by_call();
+        }
+        self.trial.push(trial);
+        self.slotbase += 1;
     }
 
     // Ghidra: fspec.cc:1982 ParamActive::whichTrial
     /// Find the trial index matching (addr, sz), or -1. Faithful to
     /// `whichTrial` (fspec.cc:1982).
     pub fn which_trial(&self, addr: Address, sz: i32) -> i32 {
+        self.which_trial_in_space(AddressSpace::Register, addr, sz)
+    }
+
+    // Ghidra: fspec.cc:1982 ParamActive::whichTrial
+    /// Return the first trial overlapping either end of the complete query
+    /// range in the same address space.
+    pub fn which_trial_in_space(&self, space: AddressSpace, addr: Address, sz: i32) -> i32 {
         for (i, t) in self.trial.iter().enumerate() {
-            if t.get_address() == addr && t.get_size() == sz {
+            let trial_first = t.get_address().as_u64();
+            let trial_last = trial_first.wrapping_add(t.get_size() as u64).wrapping_sub(1);
+            let query_first = addr.as_u64();
+            if t.get_space() == space
+                && query_first >= trial_first
+                && query_first <= trial_last
+            {
+                return i as i32;
+            }
+            if sz <= 1 { return -1; }
+            let query_last = query_first.wrapping_add((sz - 1) as u64);
+            if t.get_space() == space
+                && query_last >= trial_first
+                && query_last <= trial_last
+            {
                 return i as i32;
             }
         }
@@ -3498,7 +3548,7 @@ impl ParamActive {
                 new_trials.push(cur.clone());
             } else if curslot == slot {
                 sizecheck += cur.get_size();
-                let mut joined = ParamTrial::new(addr, sz, slot);
+                let mut joined = ParamTrial::new_in_space(cur.get_space(), addr, sz, slot);
                 joined.mark_used();
                 joined.mark_active();
                 new_trials.push(joined);
@@ -4821,13 +4871,12 @@ impl ParamListStandard {
         let mut float_count = 0i32;
         let mut int_count = 0i32;
         for i in 0..active.get_num_trials() {
-            let (addr, size) = { let t = active.get_trial(i); (t.get_address(), t.get_size()) };
+            let (space, addr, size) = {
+                let t = active.get_trial(i);
+                (t.get_space(), t.get_address(), t.get_size())
+            };
             // Ghidra: const ParamEntry *entrySlot = findEntry(paramtrial.getAddress(), paramtrial.getSize(), true);
-            // The trial's space rides Ghidra's Address (`addr.getSpace()`);
-            // Rugra's legacy trial addresses are spaceless (ADDRESS-0001
-            // transitional), so the scan runs without a space restriction
-            // until trials carry spaces.
-            let entry_slot = self.find_entry(None, addr, size, true);
+            let entry_slot = self.find_entry(Some(space), addr, size, true);
             if entry_slot.is_none() {
                 active.get_trial_mut(i).mark_no_use();
                 continue;
@@ -4858,7 +4907,7 @@ impl ParamListStandard {
                     .get_addr_by_slot(&mut next_slot, sz, 1)
                     .unwrap_or(Address::new(0));
                 let trial_pos = active.get_num_trials();
-                active.register_trial(addr, sz);
+                active.register_trial_in_space(self.entry[curentry].get_space(), addr, sz);
                 active.get_trial_mut(trial_pos).mark_unref();
                 active.get_trial_mut(trial_pos).set_entry(curentry, 0);
             } else {
@@ -4883,7 +4932,9 @@ impl ParamListStandard {
                                 .get_addr_by_slot(&mut next_slot, align, 1)
                                 .unwrap_or(Address::new(0));
                             let trial_pos = active.get_num_trials();
-                            active.register_trial(addr, align);
+                            active.register_trial_in_space(
+                                self.entry[curentry].get_space(), addr, align,
+                            );
                             active.get_trial_mut(trial_pos).mark_unref();
                             active.get_trial_mut(trial_pos).set_entry(curentry, 0);
                         }
@@ -5435,23 +5486,27 @@ impl ParamListStandardOut {
     /// Return the runtime type tag. Faithful to `getType` (fspec.hh:664).
     pub fn get_type(&self) -> ParamListKind { ParamListKind::StandardOut }
 
+    // Ghidra: fspec.hh:620 ParamListStandard::getEntry
+    /// Iterate the inherited output-resource entries in declaration order.
+    pub fn get_entry(&self) -> &[ParamEntry] { self.base.get_entry() }
+
+    // Ghidra: fspec.hh:643 ParamListStandard::isAutoKilledByCall
+    /// Return the inherited killed-by-call output property.
+    pub fn is_auto_killed_by_call(&self) -> bool {
+        self.base.is_auto_killed_by_call()
+    }
+
     // Ghidra: fspec.cc:1614 ParamListStandardOut::initialize
     /// Cache ModelRule information. Faithful 1:1 port of `initialize`
     /// (fspec.cc:1614-1627): scans `modelRules`; if no rule can affect the
     /// fillin output (`canAffectFillinOutput`), `use_fillin_fallback` stays
     /// `true` and `auto_killed_by_call` is forced on (legacy behaviour).
-    /// Rugra has no `ModelRule` port yet, so the scan is empty and the
-    /// legacy path is taken unconditionally.
+    /// Concrete `ModelRule` ownership remains a dependency of this output
+    /// list, so the current decoded representation conservatively keeps the
+    /// legacy fallback enabled.
     pub fn initialize(&mut self) {
         self.use_fillin_fallback = true;
-        // TODO(ALIGNMENT_ROADMAP): depends on unported `ModelRule` /
-        // `ModelRule::canAffectFillinOutput` (modelrules.hh). Ghidra iterates
-        // `modelRules` and clears `use_fillin_fallback` if any rule can
-        // affect the fillin output. With no rules ported, the legacy path is
-        // taken.
-        if self.use_fillin_fallback {
-            self.base.set_auto_killed_by_call(true);
-        }
+        self.base.set_auto_killed_by_call(true);
     }
 
     // Ghidra: fspec.cc:1569 ParamListStandardOut::assignMap
@@ -5567,11 +5622,11 @@ impl ParamListStandardOut {
             }
             let mut putative_match = false;
             for j in 0..num_trials {
-                let (t_addr, t_size, t_active) = {
+                let (t_space, t_addr, t_size, t_active) = {
                     let t = active.get_trial(j);
-                    (t.get_address(), t.get_size(), t.is_active())
+                    (t.get_space(), t.get_address(), t.get_size(), t.is_active())
                 };
-                if t_active {
+                if t_active && curentry.get_space() == t_space {
                     let res = curentry.justified_contain(t_addr, t_size);
                     if res >= 0 {
                         active.get_trial_mut(j).set_entry(entry_idx, res);
@@ -5628,11 +5683,11 @@ impl ParamListStandardOut {
             Some(best) => {
                 let best_entry_ref = &self.base.get_entry()[best];
                 for i in 0..active.get_num_trials() {
-                    let (t_addr, t_size, t_active) = {
+                    let (t_space, t_addr, t_size, t_active) = {
                         let t = active.get_trial(i);
-                        (t.get_address(), t.get_size(), t.is_active())
+                        (t.get_space(), t.get_address(), t.get_size(), t.is_active())
                     };
-                    if t_active {
+                    if t_active && best_entry_ref.get_space() == t_space {
                         let res = best_entry_ref.justified_contain(t_addr, t_size);
                         if res >= 0 {
                             let t = active.get_trial_mut(i);
@@ -5669,16 +5724,13 @@ impl ParamListStandardOut {
             return;
         }
         for i in 0..active.get_num_trials() {
-            let (t_addr, t_size, t_active) = {
+            let (t_space, t_addr, t_size, t_active) = {
                 let t = active.get_trial(i);
-                (t.get_address(), t.get_size(), t.is_active())
+                (t.get_space(), t.get_address(), t.get_size(), t.is_active())
             };
             active.get_trial_mut(i).clear_entry();
             if !t_active { continue; }
-            // Trial space unavailable on the legacy spaceless trial address
-            // (ADDRESS-0001 transitional); Ghidra reads it from the trial's
-            // Address. See find_entry.
-            let entry = self.base.find_entry(None, t_addr, t_size, false);
+            let entry = self.base.find_entry(Some(t_space), t_addr, t_size, false);
             if entry.is_none() {
                 active.get_trial_mut(i).mark_no_use();
                 continue;
@@ -5696,11 +5748,10 @@ impl ParamListStandardOut {
             active.get_trial_mut(i).set_entry(entry_idx, res);
         }
         active.sort_trials(self.base.get_entry());
-        // TODO(ALIGNMENT_ROADMAP): depends on unported
-        // `ModelRule::fillinOutputMap` (modelrules.hh). Ghidra walks
-        // `modelRules` and, on the first rule whose `fillinOutputMap`
-        // succeeds, marks all active trials used and returns. With no rules
-        // ported, we fall through to the fallback.
+        // FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 residual: concrete
+        // `ModelRule::fillinOutputMap` ownership is not yet connected to
+        // this list. The locked implementation walks rules in declaration
+        // order before reaching the first-entry-only fallback.
         self.fillin_map_fallback(active, true);
     }
 
@@ -5710,8 +5761,9 @@ impl ParamListStandardOut {
     /// `justifiedContain`s the range. Differs from `ParamListStandard`'s
     /// override (which uses `find_entry`) because output entries are
     /// evaluated per-class, not by exact match.
-    pub fn possible_param(&self, loc: Address, size: i32) -> bool {
+    pub fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool {
         for cur in self.base.get_entry() {
+            if cur.get_space() != space { continue; }
             if cur.justified_contain(loc, size) >= 0 { return true; }
         }
         false
@@ -5719,20 +5771,17 @@ impl ParamListStandardOut {
 
     // Ghidra: fspec.cc:1776 ParamListStandardOut::decode
     /// Decode this list, then cache the model-rule information. Faithful to
-    /// `decode` (fspec.cc:1776-1780): delegates the `<pentry>` parse to
-    /// `ParamListStandard::decode` and then calls `initialize()`. Rugra's
-    /// XML decoder is unported, so this is a structural stub that runs the
-    /// initialize step (the only behaviour reachable without the decoder).
+    /// `decode` (fspec.cc:1776-1780): delegates the complete `<pentry>` /
+    /// `<group>` / `<rule>` parse to `ParamListStandard::decode`, then calls
+    /// `initialize()` to select the output fill-in strategy.
     pub fn decode(
         &mut self,
-        _decoder: &mut dyn crate::marshal::Decoder,
-        _effectlist: &mut Vec<EffectRecord>,
-        _normalstack: bool,
+        decoder: &mut dyn crate::marshal::Decoder,
+        effectlist: &mut Vec<EffectRecord>,
+        normalstack: bool,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
     ) -> Result<(), String> {
-        // TODO(ALIGNMENT_ROADMAP): depends on unported
-        // `ParamListStandard::decode` XML path. Ghidra:
-        //   ParamListStandard::decode(decoder, effectlist, normalstack);
-        //   initialize();
+        self.base.decode(decoder, effectlist, normalstack, register_resolver)?;
         self.initialize();
         Ok(())
     }
@@ -5825,6 +5874,131 @@ impl ParamListRegisterOut {
     pub fn clone_reg_out(&self) -> ParamListRegisterOut { self.clone() }
 }
 
+/// Rust representation of Ghidra's virtual `ParamList *output` ownership.
+/// The enum preserves the concrete output-list class selected by
+/// `ProtoModel::buildParamList` while keeping ownership local to the model.
+#[derive(Debug, Clone)]
+pub enum ParamListOutput {
+    Standard(ParamListStandardOut),
+    Register(ParamListRegisterOut),
+}
+
+impl Default for ParamListOutput {
+    // RUGRA-GLUE: Rust enum default for Ghidra's owning `ParamList *output`.
+    fn default() -> Self { Self::standard() }
+}
+
+impl ParamListOutput {
+    // RUGRA-GLUE: owning enum constructor corresponding to
+    // `new ParamListStandardOut()` in ProtoModel::buildParamList.
+    pub fn standard() -> Self {
+        Self::Standard(ParamListStandardOut::new())
+    }
+
+    // RUGRA-GLUE: owning enum constructor corresponding to
+    // `new ParamListRegisterOut()` in ProtoModel::buildParamList.
+    pub fn register() -> Self {
+        Self::Register(ParamListRegisterOut::new())
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for virtual ParamList::getType.
+    pub fn get_type(&self) -> ParamListKind {
+        match self {
+            Self::Standard(list) => list.get_type(),
+            Self::Register(list) => list.get_type(),
+        }
+    }
+
+    // RUGRA-GLUE: Rust enum projection of the shared
+    // ParamListStandardOut base class.
+    fn standard_out(&self) -> &ParamListStandardOut {
+        match self {
+            Self::Standard(list) => list,
+            Self::Register(list) => &list.base,
+        }
+    }
+
+    // RUGRA-GLUE: mutable Rust enum projection of the shared
+    // ParamListStandardOut base class.
+    fn standard_out_mut(&mut self) -> &mut ParamListStandardOut {
+        match self {
+            Self::Standard(list) => list,
+            Self::Register(list) => &mut list.base,
+        }
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for inherited
+    // ParamListStandard::characterizeAsParam.
+    pub fn characterize_as_param(
+        &self,
+        space: AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> i32 {
+        self.standard_out().base.characterize_as_param(space, offset, size)
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for inherited
+    // ParamListStandard::getBiggestContainedParam.
+    pub fn get_biggest_contained_param(
+        &self,
+        space: AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> Option<(AddressSpace, u64, i32)> {
+        self.standard_out()
+            .base
+            .get_biggest_contained_param(space, offset, size)
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for inherited
+    // ParamListStandard::isAutoKilledByCall.
+    pub fn is_auto_killed_by_call(&self) -> bool {
+        self.standard_out().is_auto_killed_by_call()
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for virtual ParamList::assignMap.
+    pub fn assign_map(
+        &self,
+        proto: &PrototypePieces,
+        type_factory: &crate::type_system::TypeFactory,
+        result: &mut Vec<ParameterPieces>,
+    ) -> Result<(), String> {
+        match self {
+            Self::Standard(list) => list.assign_map(proto, type_factory, result),
+            Self::Register(list) => list.assign_map(proto, type_factory, result),
+        }
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for virtual ParamList::fillinMap.
+    pub fn fillin_map(&self, active: &mut ParamActive) {
+        self.standard_out().fillin_map(active);
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for virtual ParamList::possibleParam.
+    pub fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool {
+        self.standard_out().possible_param(space, loc, size)
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for virtual ParamList::decode.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        effectlist: &mut Vec<EffectRecord>,
+        normalstack: bool,
+        register_resolver: &dyn Fn(&str) -> Option<VarnodeData>,
+    ) -> Result<(), String> {
+        self.standard_out_mut()
+            .decode(decoder, effectlist, normalstack, register_resolver)
+    }
+
+    // RUGRA-GLUE: Rust enum dispatch for inherited
+    // ParamListStandard::getEntry.
+    pub fn get_entry(&self) -> &[ParamEntry] {
+        self.standard_out().get_entry()
+    }
+}
+
 /// Internal enum mirroring Ghidra's `AssignAction` hidden-return codes
 /// (modelrules.hh:264-271). Rugra's `AssignActionResponse` collapses these
 /// into `Fail`/`Success`; `ParamListStandardOut::assign_map` re-expands
@@ -5872,7 +6046,7 @@ pub struct ProtoModelFull {
     pub input: ParamListStandard,
     /// Output (return value) parameter resource list. Faithful to
     /// `ParamList *output`.
-    pub output: ParamListStandard,
+    pub output: ParamListOutput,
     /// Side-effects on non-parameter storage. Faithful to `effectlist`.
     /// Must be kept sorted by address for `lookup_effect`.
     pub effectlist: Vec<EffectRecord>,
@@ -5942,7 +6116,7 @@ impl ProtoModelFull {
             name: String::new(),
             extrapop: 0,
             input: ParamListStandard::new(),
-            output: ParamListStandard::new(),
+            output: ParamListOutput::standard(),
             effectlist: Vec::new(),
             likelytrash: Vec::new(),
             internalstorage: Vec::new(),
@@ -6031,24 +6205,20 @@ impl ProtoModelFull {
     }
 
     // Ghidra: fspec.cc:2323 ProtoModel::buildParamList
-    /// Allocate the input/output `ParamListStandard` based on the resource
-    /// `strategy` string. Faithful 1:1 port of `buildParamList`
-    /// (fspec.cc:2323-2336). "" or "standard" yields standard lists; "register"
-    /// yields register lists (modelled here as `ParamListStandard` with the
-    /// register variant flagged via `get_type`, since Rugra has not yet split
-    /// out the `ParamListRegister`/`ParamListRegisterOut` subclasses). Any
-    /// other strategy is a hard error, exactly as in Ghidra.
+    /// Allocate parameter lists based on the resource `strategy` string.
+    /// Faithful to the output half of `buildParamList` (fspec.cc:2323-2336):
+    /// ""/"standard" owns `ParamListStandardOut`, while "register" owns
+    /// `ParamListRegisterOut`. Unknown strategies are a hard error.
     pub fn build_param_list(&mut self, strategy: &str) -> Result<(), String> {
         if strategy.is_empty() || strategy == "standard" {
             self.input = ParamListStandard::new();
-            self.output = ParamListStandard::new();
+            self.output = ParamListOutput::standard();
         } else if strategy == "register" {
-            // Ghidra allocates ParamListRegister / ParamListRegisterOut here.
-            // Rugra models the register variant as a standard list until the
-            // subclasses are ported; the resource list is functionally
-            // equivalent for assignMap/possibleParam.
+            // FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 covers the output virtual
+            // class. Input ParamListRegister ownership remains a separately
+            // observable residual of this atom.
             self.input = ParamListStandard::new();
-            self.output = ParamListStandard::new();
+            self.output = ParamListOutput::register();
         } else {
             return Err(format!("Unknown strategy type: {}", strategy));
         }
@@ -6120,8 +6290,12 @@ impl ProtoModelFull {
         ignore_output_error: bool,
         void_type: Option<Arc<Datatype>>,
     ) -> Result<(), String> {
+        let type_factory = crate::type_system::TypeFactory::shared_default();
+        let type_factory = type_factory
+            .read()
+            .map_err(|_| "shared type factory lock poisoned".to_string())?;
         if ignore_output_error {
-            match self.output.assign_map(proto, res) {
+            match self.output.assign_map(proto, &type_factory, res) {
                 Ok(()) => {}
                 Err(_e) => {
                     // Ghidra: catch ParamUnassignedError → clear res, push a
@@ -6135,7 +6309,7 @@ impl ProtoModelFull {
                 }
             }
         } else {
-            self.output.assign_map(proto, res)?;
+            self.output.assign_map(proto, &type_factory, res)?;
         }
         self.input.assign_map(proto, res)?;
 
@@ -6156,6 +6330,29 @@ impl ProtoModelFull {
             res[this_index].flags |= THIS_POINTER_PIECE;
         }
         Ok(())
+    }
+
+    // Ghidra: fspec.hh:798 ProtoModel::deriveOutputMap
+    /// Derive the return-value map through the output-specific ParamList.
+    pub fn derive_output_map(&self, active: &mut ParamActive) {
+        self.output.fillin_map(active);
+    }
+
+    // Ghidra: fspec.hh:892 ProtoModel::possibleOutputParam
+    /// Test a complete storage address against the output resource list.
+    pub fn possible_output_param(
+        &self,
+        space: AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> bool {
+        self.output.possible_param(space, Address::new(offset), size)
+    }
+
+    // Ghidra: fspec.hh:1014 ProtoModel::getOutput
+    /// Iterate output resource entries in compiler-spec declaration order.
+    pub fn output_entries(&self) -> &[ParamEntry] {
+        self.output.get_entry()
     }
 
     // Ghidra: fspec.cc:2472 ProtoModel::lookupEffect (static)
@@ -6971,9 +7168,15 @@ mod tests {
     fn test_param_active_register_and_split() {
         let mut pa = ParamActive::new(true);
         assert_eq!(pa.get_num_trials(), 0);
+        assert_eq!(pa.get_slot_base(), 1);
+        assert_eq!(pa.get_max_pass(), 0);
         pa.register_trial(Address::new(0x200), 8);
         pa.register_trial(Address::new(0x208), 8);
         assert_eq!(pa.get_num_trials(), 2);
+        assert_eq!(pa.get_trial(0).get_slot(), 1);
+        assert_eq!(pa.get_trial(1).get_slot(), 2);
+        assert!(pa.get_trial(0).is_killed_by_call());
+        assert_eq!(pa.get_trial(0).get_space(), AddressSpace::Register);
         assert_eq!(pa.which_trial(Address::new(0x208), 8), 1);
         assert_eq!(pa.which_trial(Address::new(0x300), 8), -1);
         // Split trial 0 at 4 bytes.
@@ -7257,9 +7460,20 @@ mod tests {
         assert_eq!(pa.get_trial(1).get_size(), 8);
         assert_eq!(pa.get_trial(1).get_address(), Address::new(0x104));
         assert_eq!(pa.get_trial(2).get_address(), Address::new(0x200));
-        // The survivor above slot 0 shifts from slot 1 to slot 2.
-        assert_eq!(pa.get_trial(2).get_slot(), 2);
+        // The survivor above slot 1 shifts from slot 2 to slot 3.
+        assert_eq!(pa.get_trial(2).get_slot(), 3);
         assert_eq!(pa.get_slot_base(), base + 1);
+    }
+
+    // Ghidra: fspec.cc:2323 ProtoModel::buildParamList
+    #[test]
+    fn test_proto_model_full_builds_output_specific_paramlist() {
+        let mut model = ProtoModelFull::new(Some(AddressSpace::Stack), 8);
+        model.build_param_list("standard").unwrap();
+        assert_eq!(model.input.get_type(), ParamListKind::Standard);
+        assert_eq!(model.output.get_type(), ParamListKind::StandardOut);
+        model.build_param_list("register").unwrap();
+        assert_eq!(model.output.get_type(), ParamListKind::RegisterOut);
     }
 
     // Ghidra: fspec.cc:1893 ParamTrial::operator< + fspec.hh:316 sortTrials

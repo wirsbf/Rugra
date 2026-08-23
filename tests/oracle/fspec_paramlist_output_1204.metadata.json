@@ -1,0 +1,361 @@
+{
+  "schema": 2,
+  "fixture_id": "FSPEC-PARAMLIST-OUTPUT-1204",
+  "task_id": "FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001",
+  "overall_status": "UNTESTED",
+  "covered_projection_status": "MATCH",
+  "covered_projection": "Production x86-64-gcc standard-output resource decode plus possibleOutputParam and deriveOutputMap for first floating/general resources, mixed active/inactive trials, and an invalid output register; every serialized model, ParamActive, and ParamTrial field matches byte for byte.",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "comparand": {
+    "rugra_base_commit": "4c4808d12dfabeecd7043c49da852adf9a10e68f",
+    "rugra_base_tree": "71ed04342212855062188a1ed1dff27c1ebf4892",
+    "overlay_paths": [
+      "src/fspec.rs",
+      "docs/api/fspec.md",
+      "tests/oracle/fspec_paramlist_output_1204.cc",
+      "tests/oracle/fspec_paramlist_output_1204.rs",
+      "tests/oracle/fspec_paramlist_output_1204.metadata.json",
+      "tools/run_fspec_paramlist_output_oracle.sh"
+    ],
+    "overlay_sha256": {
+      "src/fspec.rs": "7dba228d0b0e4502dd376e32f0554ff5b72f1049535d066d99a7ed8589f50c9c",
+      "docs/api/fspec.md": "3dc75d6b476e208bf2f3a3495a34500523be021dd77147faea2d5da6aede60f2",
+      "tests/oracle/fspec_paramlist_output_1204.cc": "0ceb9429d16b12282f6816e52736ff230540aee0617af01a29340f77f5e98373",
+      "tests/oracle/fspec_paramlist_output_1204.rs": "e0c2c8801fa6a95af864d164bef3e7faebe8798005d8527d193e57a359c6779c",
+      "tools/run_fspec_paramlist_output_oracle.sh": "80cee291fa9eb1fa9ad1318a0c30067f014fdde0b14e13313e2f53df99589735"
+    },
+    "crate_closure_sha256": "03a6644000e8ad016aefacd3061a0d11c8e2392afb4e80e027e7ca01593982fa",
+    "crate_closure_hash_scheme": "SHA-256 over sorted Cargo.toml, Cargo.lock, build.rs, src/**/*.rs, and sleigh_shim regular files in the pinned base-plus-overlay snapshot; each path and content is unsigned-64-bit big-endian length-prefixed.",
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "cxx_target": "x86_64-pc-linux-gnu",
+      "cxx_path": "/usr/bin/g++",
+      "cc_path": "/usr/bin/gcc",
+      "ar_path": "/usr/bin/ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.14",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "cargo_path": "/usr/bin/cargo",
+      "rustc_path": "/usr/bin/rustc",
+      "platform": "Linux 7.1.8-arch1-3 x86_64"
+    }
+  },
+  "external_inputs": {
+    "bfd_header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  },
+  "assets": {
+    "binary": {
+      "path": "examples/curl",
+      "git_blob": "76d9343ea3add321aa4134856323663b36365807",
+      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+      "size": 161728
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "git_blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "git_blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "git_blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    }
+  },
+  "architecture": {
+    "id": "x86:LE:64:default:gcc",
+    "loader": "Ghidra BfdArchitecture on examples/curl; Rugra production SLA Host plus Architecture::parse_compiler_config",
+    "endianness": "little",
+    "pointer_size": 8,
+    "address_spaces": "Named spaces and registers are resolved from the pinned x86-64 SLA; no fixture-local ABI table."
+  },
+  "compiler_spec": {
+    "id": "x86-64-gcc.cspec",
+    "default_model": "__stdcall",
+    "default_model_extrapop": 8,
+    "output_resources": "XMM0_Qa and XMM1_Qa floating exclusions followed by RAX and RDX general exclusions; join_dual_class and hidden_return rules follow the entries.",
+    "identity": "Both sides select the Architecture-owned default ProtoModelFull decoded from the same pinned compiler-spec bytes."
+  },
+  "analysis_options": {
+    "api": "Direct production ProtoModel::possibleOutputParam and ProtoModel::deriveOutputMap calls after full architecture/compiler-spec initialization; no Action, Rule, PrintC, or fixture-local XML parser.",
+    "active_container": "ParamActive(recoversubcall=false), no placeholder, no completed passes, no final-check request, no join reversal.",
+    "trial_registration": "Trials are registered in case order, active/inactive flags are then applied, and all public state is serialized before and after deriveOutputMap.",
+    "normalization": "None. Model name/extrapop, possible-query booleans, container counters/booleans, trial order, address space, offset, size, slot, entry group, entry offset, and packed public flags are emitted verbatim.",
+    "debug_macros": "none on either side",
+    "random_seed": "none; compiler-spec decode and trial traversal are deterministic",
+    "error_injection": "none; invalid_output is a valid trial in a register absent from the output resource list"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,assets,cases}, sort_keys=true, separators=(',',':'), ensure_ascii=true)",
+    "cases": [
+      {
+        "id": "possible_output",
+        "queries": [
+          "register:XMM0_Qa/8",
+          "register:RAX/8",
+          "register:RCX/8"
+        ],
+        "expect": "XMM0_Qa=true, RAX=true, RCX=false"
+      },
+      {
+        "id": "float_only",
+        "active": ["XMM0_Qa"],
+        "inactive": [],
+        "expect": "The floating first-class entry is group 0 and the trial becomes used."
+      },
+      {
+        "id": "general_only",
+        "active": ["RAX"],
+        "inactive": [],
+        "expect": "The general first-class entry is group 2 and the trial becomes used."
+      },
+      {
+        "id": "general_beats_float",
+        "active": ["RAX"],
+        "inactive": ["XMM0_Qa"],
+        "expect": "RAX becomes used; inactive XMM0_Qa becomes definitely-not-used and has null entry with offset 0."
+      },
+      {
+        "id": "invalid_output",
+        "active": ["RCX"],
+        "inactive": [],
+        "expect": "No output entry matches; RCX becomes definitely-not-used with null entry and offset 0."
+      }
+    ],
+    "case_order": [
+      "possible_output",
+      "float_only",
+      "general_only",
+      "general_beats_float",
+      "invalid_output"
+    ],
+    "sha256": "aca58ad63a30b9f09500877f2361249f78eb74f42595a7c2f73d219bbc57e28c"
+  },
+  "observation_schema": {
+    "format": "29 fixed-order UTF-8 lines with a final newline.",
+    "model": "SCHEMA, oracle commit, Architecture default model name, extrapop, and three possible-output booleans.",
+    "container": "For each trial case, BEFORE/AFTER count, getNumUsed, numpasses, maxpass, fully-checked, needs-final-check, recoversubcall, and join-reverse.",
+    "trials": "For every trial in current order: index, space name, hexadecimal offset, size, original/current slot, entry group or -1, entry offset, and the packed flags exposed by Ghidra predicates.",
+    "mutations": "Used/no-use flag changes, entry attachment/detachment, entry offset reset, and any creation/deletion/reordering are observable; these cases create/delete no trials and preserve registration order."
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "deriveOutputMap receives ParamActive* and mutates the caller-owned container/trials in place. ParamTrial stores a ParamEntry pointer in Ghidra; Rust stores an index into the same model-owned declaration-order entry slice. Output decode owns a concrete output list inside the architecture model.",
+    "loop_bounds_traversal_order": "possibleParam walks every output entry from begin to end. fillinMap/fallback evaluates entries in declaration order and trials from index 0 through getNumTrials()-1, then sorts using ParamTrial::operator<. The fixture prints the resulting order without normalization.",
+    "counters_and_accumulators": "ParamActive starts slotbase=1, numpasses=0, maxpass=0; registerTrial consumes the current slot then increments once and marks non-spacebase trials killed-by-call. fillinMapFallback resets bestcover=0 and bestclass=TYPECLASS_PTR once, and offmatch=0 independently for each entry.",
+    "sort_and_comparison_keys": "Best output entry prefers a more generic type class or larger contiguous byte coverage. Trial sorting uses model group, entry declaration identity, justified offset for exclusions, reverse-stack-aware address for non-exclusions, then size; no fixture case contains comparator-equal duplicates."
+  },
+  "ghidra_functions": [
+    {
+      "id": "GH12-F-0dd1e0ac41180832f685",
+      "signature": "ghidra::ParamActive::ParamActive(bool recoversub)",
+      "source": "fspec.cc:1936",
+      "closure": "Complete constructor body through fspec.cc:1947."
+    },
+    {
+      "id": "GH12-F-c3567cea1ed400eb7413",
+      "signature": "void ghidra::ParamActive::registerTrial(const Address & addr,int4 sz)",
+      "source": "fspec.cc:1963",
+      "closure": "Complete body through fspec.cc:1976."
+    },
+    {
+      "id": "GH12-F-edb947b74618d34a603f",
+      "signature": "void ghidra::ParamTrial::setEntry(const ParamEntry * ent,int4 off)",
+      "source": "fspec.hh:242",
+      "closure": "Complete inline definition."
+    },
+    {
+      "id": "GH12-F-ff7381ff18beac1bef7d",
+      "signature": "void ghidra::ParamListStandard::decode(Decoder & decoder,vector<EffectRecord> & effectlist,bool normalstack)",
+      "source": "fspec.cc:1451",
+      "closure": "Complete body through fspec.cc:1517."
+    },
+    {
+      "id": "GH12-F-0809d70ef8845a413c99",
+      "signature": "void ghidra::ParamListStandardOut::initialize(void)",
+      "source": "fspec.cc:1614",
+      "closure": "Complete body through fspec.cc:1627."
+    },
+    {
+      "id": "GH12-F-19ec31ee568d55230202",
+      "signature": "void ghidra::ParamListStandardOut::fillinMapFallback(ParamActive * active,bool firstOnly) const",
+      "source": "fspec.cc:1638",
+      "closure": "Complete body through fspec.cc:1719."
+    },
+    {
+      "id": "GH12-F-af6b79bd69c355acd430",
+      "signature": "void ghidra::ParamListStandardOut::fillinMap(ParamActive * active) const",
+      "source": "fspec.cc:1721",
+      "closure": "Complete body through fspec.cc:1763."
+    },
+    {
+      "id": "GH12-F-d228ba888f28cde4b7d8",
+      "signature": "bool ghidra::ParamListStandardOut::possibleParam(const Address & loc,int4 size) const",
+      "source": "fspec.cc:1765",
+      "closure": "Complete body through fspec.cc:1774."
+    },
+    {
+      "id": "GH12-F-ba151aebe1d592c2f13c",
+      "signature": "void ghidra::ParamListStandardOut::decode(Decoder & decoder,vector<EffectRecord> & effectlist,bool normalstack)",
+      "source": "fspec.cc:1776",
+      "closure": "Complete body through fspec.cc:1781."
+    },
+    {
+      "id": "GH12-F-e91552803fdf0ed0b26d",
+      "signature": "void ghidra::ProtoModel::buildParamList(const string & strategy)",
+      "source": "fspec.cc:2323",
+      "closure": "Complete body through fspec.cc:2336."
+    },
+    {
+      "id": "GH12-F-c82f18b5a601d9bb7409",
+      "signature": "void ghidra::ProtoModel::deriveOutputMap(ParamActive * active) const",
+      "source": "fspec.hh:798",
+      "closure": "Complete inline virtual-dispatch definition."
+    },
+    {
+      "id": "GH12-F-452627ab5311c84e46c8",
+      "signature": "bool ghidra::ProtoModel::possibleOutputParam(const Address & loc,int4 size) const",
+      "source": "fspec.hh:892",
+      "closure": "Complete inline virtual-dispatch definition."
+    }
+  ],
+  "rugra_functions": [
+    {
+      "id": "RG-F-e2ae768e78b0f9d2407f",
+      "signature": "fn new_in_space(space: AddressSpace, addr: Address, sz: i32, sl: i32) -> Self",
+      "source": "src/fspec.rs:3054",
+      "owner": "ParamTrial"
+    },
+    {
+      "id": "RG-F-f04406088247341ddb09",
+      "signature": "fn clear_entry(&mut self)",
+      "source": "src/fspec.rs:3087",
+      "owner": "ParamTrial"
+    },
+    {
+      "id": "RG-F-b445c51b636b8d0099bb",
+      "signature": "fn register_trial_in_space(&mut self, space: AddressSpace, addr: Address, sz: i32)",
+      "source": "src/fspec.rs:3372",
+      "owner": "ParamActive"
+    },
+    {
+      "id": "RG-F-abd234dc93f9affbeef5",
+      "signature": "fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder, effect_list: &mut Vec<EffectRecord>, normal_stack: bool, register_resolver: &dyn Fn(&str) -> Option<VarnodeData>) -> Result<(), String>",
+      "source": "src/fspec.rs:4491",
+      "owner": "ParamListStandard"
+    },
+    {
+      "id": "RG-F-7270c458a0bfc7ada4e8",
+      "signature": "fn initialize(&mut self)",
+      "source": "src/fspec.rs:5507",
+      "owner": "ParamListStandardOut"
+    },
+    {
+      "id": "RG-F-d8069a368d3cde54f438",
+      "signature": "fn fillin_map_fallback(&self, active: &mut ParamActive, first_only: bool)",
+      "source": "src/fspec.rs:5609",
+      "owner": "ParamListStandardOut"
+    },
+    {
+      "id": "RG-F-890197e3c61e8d298db1",
+      "signature": "fn fillin_map(&self, active: &mut ParamActive)",
+      "source": "src/fspec.rs:5720",
+      "owner": "ParamListStandardOut"
+    },
+    {
+      "id": "RG-F-165d45a203c4b7b0a40d",
+      "signature": "fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool",
+      "source": "src/fspec.rs:5764",
+      "owner": "ParamListStandardOut"
+    },
+    {
+      "id": "RG-F-8da24b5ec162432b2e21",
+      "signature": "fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder, effectlist: &mut Vec<EffectRecord>, normalstack: bool, register_resolver: &dyn Fn(&str) -> Option<VarnodeData>) -> Result<(), String>",
+      "source": "src/fspec.rs:5777",
+      "owner": "ParamListStandardOut"
+    },
+    {
+      "id": "RG-F-58e5a8b2d544465ae841",
+      "signature": "fn build_param_list(&mut self, strategy: &str) -> Result<(), String>",
+      "source": "src/fspec.rs:6212",
+      "owner": "ProtoModelFull"
+    },
+    {
+      "id": "RG-F-cba1ca033fe56fb95dc4",
+      "signature": "fn derive_output_map(&self, active: &mut ParamActive)",
+      "source": "src/fspec.rs:6337",
+      "owner": "ProtoModelFull"
+    },
+    {
+      "id": "RG-F-987c0c4685c579ad3ef3",
+      "signature": "fn possible_output_param(&self, space: AddressSpace, offset: u64, size: i32) -> bool",
+      "source": "src/fspec.rs:6343",
+      "owner": "ProtoModelFull"
+    }
+  ],
+  "coverage": {
+    "production_compiler_spec_output_decode": "MATCH",
+    "standard_output_possible_param": "MATCH",
+    "standard_output_fallback_first_float": "MATCH",
+    "standard_output_fallback_first_general": "MATCH",
+    "mixed_active_inactive_trial_mutation": "MATCH",
+    "invalid_output_trial_mutation": "MATCH",
+    "absolute_slotbase_and_killedbycall": "MATCH",
+    "register_strategy_output_ownership": "UNTESTED",
+    "model_rule_success": "UNTESTED",
+    "hidden_return_assignment": "UNTESTED",
+    "dual_register_join": "UNTESTED",
+    "error_and_endian_boundaries": "UNTESTED"
+  },
+  "residuals": [
+    {
+      "todo_id": "FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001",
+      "status": "UNTESTED",
+      "detail": "Concrete ModelRule decode/ownership/execution is not connected to ParamListStandard, so successful join_dual_class and hidden-return output branches are outside the MATCH projection."
+    },
+    {
+      "todo_id": "FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001",
+      "status": "UNTESTED",
+      "detail": "The register strategy now owns ParamListRegisterOut, but this production cspec selects standard strategy; RegisterOut assignMap and its error path are unit-tagged but not run against Ghidra by this fixture."
+    },
+    {
+      "todo_id": "FSPEC-MODEL-UNIFY-0001",
+      "status": "UNTESTED",
+      "detail": "Input ParamListRegister ownership, FuncCallSpecs single-model delegation, and coreaction/architecture consumers are successor work and are not claimed by this atom."
+    }
+  ],
+  "expected": {
+    "exit_code": 0,
+    "stdout_lines": 29,
+    "ghidra_stdout_sha256": "0344d76589c1d927dfb421fff54b557438122bbce4ba7ecf21402bd932d20167",
+    "rugra_stdout_sha256": "0344d76589c1d927dfb421fff54b557438122bbce4ba7ecf21402bd932d20167"
+  },
+  "build": {
+    "ghidra": "Archive the locked decompiler C++ subtree, rebuild libdecomp.a, compile the fixture with libdecomp/sleigh/bfd loader sources and the pinned BFD shared object, then run against the pinned specs and curl binary.",
+    "rugra": "Archive the pinned Rugra base, overlay only the six owned paths, attach the locked Ghidra C++ tree for build.rs, cargo build --lib --locked --offline under /tmp/rugra-target-fspec-writer/fspec-paramlist-output with the global Cargo flock, then compile the Rust fixture with /usr/bin/rustc.",
+    "runner_mode": "0755 immutable-FD self-read; owned inputs are hashed before/after and the live runner is compared with its open descriptor"
+  }
+}

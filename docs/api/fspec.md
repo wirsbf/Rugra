@@ -16,6 +16,15 @@ declaration order), unique-space storage is always unaffected, size-zero
 records cover their whole space, only fully contained ranges inherit an
 effect, and constant-space addresses do not overlap ordinary records.
 
+`ProtoModelFull::output` now owns a concrete output parameter-list variant
+through `ParamListOutput`: the standard strategy dispatches to
+`ParamListStandardOut`, while the register strategy dispatches to
+`ParamListRegisterOut`. Output decode, assignment, recovery, possibility
+queries, entry iteration, containment queries, and killed-by-call state all
+flow through that one owned variant. `ParamTrial` also carries its complete
+address space; `ParamActive::register_trial_in_space` preserves Ghidra's
+1-based slot sequence and marks non-spacebase trials killed-by-call.
+
 The locked differential fixture
 `tools/run_funcproto_effect_model_oracle.sh` compares these observations
 against Ghidra 12.0.4 commit
@@ -39,10 +48,10 @@ As in `FuncProto::setInputLock` / `setOutputLock` (`fspec.cc:3921-3948`),
 setting either lock also locks the prototype model. Clearing an individual
 input/output lock does not implicitly unlock the model.
 
-**状态**: 🔧 **L2（2026-08-14 锁定审计）**——结构化 DOM 中的
+**状态**: 🔧 **L2（2026-08-23 锁定审计）**——结构化 DOM 中的
 `ParamEntry` / `ParamListStandard` / `ProtoModelFull` 解码切片已有锁定
-12.0.4 行为对拍，但生产 `.cspec` 文本 ingestion、`ModelRule` 构造与若干
-未覆盖分支仍为 `MISMATCH` / `UNTESTED`，因此不升 L3。
+12.0.4 行为对拍，生产 `.cspec` loader 已进入 output fixture；但
+`ModelRule` 构造与若干未覆盖分支仍为 `MISMATCH` / `UNTESTED`，因此不升 L3。
 **源代码路径**: `src/fspec.rs`
 
 ## 模块说明 (Module Doc)
@@ -173,6 +182,10 @@ consolidated into this signature.
 **ParamActive**（15+ 方法）：试验容器，registerTrial/whichTrial/splitTrial/getNumUsed 等。
 
 **关键状态**：ParamTrial/ParamActive 数据结构 + 核心方法完整移植，4 单元测试验证（标志位、split、register/split、num_used）。但 FuncCallSpecs 尚未持有 `active_input`/`active_output` 字段——这是下一个接入点，接入后即可移植 ActionFuncLink 等 Action 的 apply()。
+
+当前实现已由 2026-08-23 的 output fixture 补齐 `AddressSpace`、1-based
+`slotbase`、非 spacebase `killedbycall` 标记及空 entry 的 offset=0 状态；
+本段保留为历史接入记录。
 
 ### 2026-06-27（会话3 G5 接入）：FuncCallSpecs active_input/active_output 字段 + 访问器
 
@@ -349,9 +362,9 @@ oracle `fspec_phase0_1204` fixture（`tools/run_fspec_phase0_oracle.sh`，pin-ba
   改为查询空间 vs entry 空间比较（`e.get_space() != space`），对齐 Ghidra 每空间
   `resolverMap` 的语义（`populateResolver` 只把 entry 注册进它自己空间的 resolver，
   cc:1191-1216）。签名增补 `space: Option<AddressSpace>`：`Some(s)` 精确对齐（寄存器/栈
-  entry 正常命中，const/unique 查询不会在别的空间 offset 上假命中）；`None` 标记遗留
-  无空间 trial 地址（ADDRESS-0001 过渡期），退化为无空间限制的 offset 匹配 ——
-  `build_trial_map`/`ParamListStandardOut::fillin_map` 两个 trial 驱动调用点暂走 `None`。
+  entry 正常命中，const/unique 查询不会在别的空间 offset 上假命中）；`None` 只保留给
+  遗留 spaceless 兼容调用。`build_trial_map`/output fill-in 两个 trial 驱动调用点现从
+  `ParamTrial` 读取完整空间并传入 `Some(space)`。
   下游 `possible_param`/`possible_param_with_slot`/`check_join`/`check_split` 签名随之增补
   显式 `space: AddressSpace`（同 `characterize_as_param`/`get_biggest_contained_param`
   的既有模式）。
@@ -378,14 +391,43 @@ oracle `fspec_phase0_1204` fixture（`tools/run_fspec_phase0_oracle.sh`，pin-ba
 - fixture `fspec_phase0_1204`：跨空间 entry 查找（register 命中 / const/unique/ram 交叉
   miss / minsize 门）、无空间过滤的容器/扩展判定（register INT_ZEXT、ram PIECE、COPY 门）、
   comparator 阶梯排序（group/entry/offset/reverseStack/null-entry）、12/4 切分的边界地址与
-  flags 继承、split_trial slot 重编号。slot 观测用 delta：Ghidra slot 1 基
-  （cc:4062 `triallist[trial.getSlot()-1]`）vs Rust 消费方 0 基耦合，绝对基数是 fixture
-  覆盖投影之外的登记残差（见 runner residual 声明）。
+  flags 继承、split_trial slot 重编号。该旧 fixture 只比较 slot delta；绝对 1-based
+  slot 与 register-trial flags 现由 `fspec_paramlist_output_1204` 直接观察。
 
 **验证**：cargo check --lib 0 错误；cargo test --lib fspec:: 19/19；全库 1473 通过、
 2 失败均为 base 即存的 funcdata 推断测试（`test_infer_params_and_return_type`/
 `test_type_propagation`，与本改动无关，已 stash 复核）。
 `tools/run_fspec_phase0_oracle.sh`：covered_projection=6/6 MATCH。
+
+### 2026-08-23：output ParamList 多态分派（FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001）
+
+- `ParamListOutput::{Standard,Register}` 是 Ghidra `ProtoModel::output`
+  虚函数所有权在 Rust 中的封闭表示；`build_param_list("")` /
+  `build_param_list("standard")` 建立 `ParamListStandardOut`，而
+  `build_param_list("register")` 建立 `ParamListRegisterOut`。所有 output
+  decode/assign/fillin/possible/containment/entry 查询均由该枚举按具体类分派，
+  不再把 output 存成 input 型 `ParamListStandard`。
+- `ParamListStandardOut::decode` 现在完整委托 `ParamListStandard::decode` 后执行
+  `initialize`；`ProtoModelFull::decode_with_defaults` 因而把生产 cspec 的 output
+  pentry 写入 output 自有列表。`derive_output_map` 与
+  `possible_output_param(space,offset,size)` 直接消费同一列表。
+- `ParamTrial` 增加 address-space 分量；`register_trial_in_space` 使用 1-based
+  slotbase，并对非 Stack/spacebase trial 设置 `KILLEDBYCALL`。output fallback
+  以 trial space 查 entry，`setEntry(nullptr,0)` 的 Rust 表示同时清 entry index
+  和 offset；before/after 序列化因此覆盖 slot、entry group/offset 和全部 flags。
+- 锁定 fixture：`tools/run_fspec_paramlist_output_oracle.sh` 使用真实
+  `BfdArchitecture` + `examples/curl` + `x86-64-gcc.cspec` 运行 Ghidra，Rust 侧
+  使用生产 `DocumentStorage` / SLA / `Architecture::parse_compiler_config`。
+  `float_only`、`general_only`、`general_beats_float`、`invalid_output` 四 case 的
+  model/possible 查询及全部 trial 容器突变逐字节一致；双方 stdout SHA256 均为
+  `0344d76589c1d927dfb421fff54b557438122bbce4ba7ecf21402bd932d20167`，covered
+  projection 状态为 `MATCH`。
+
+保守残差：`ModelRule` 具体对象仍未接入本列表，因此能命中
+`join_dual_class` / hidden-return 的分支为 `UNTESTED`；input 侧
+`ParamListRegister` 所有权、register-output assignment、void/oversize hidden
+return、双寄存器 join、错误路径与 endian 边界也不在本 fixture 的 MATCH 投影内。
+这些残差使 fspec 保持 L2；本批不声称 output 参数模型整体 L3。
 
 ### 2026-08-11：ANN-C 函数来源注释审计
 
