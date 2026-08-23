@@ -888,3 +888,29 @@
   `tests/oracle/varnode_copysymbol_1204`（pin-base schema2，
   `tools/run_varnode_copysymbol_oracle.sh`）。
 <!-- annotation-pass: 2026-08-23 -->
+
+### 2026-08-23（续）：copySymbol high!=0 分支完整移植（VARNODE-COPYSYMBOL-HIGHBRANCH-0001）
+
+- `Varnode::copy_symbol_arc(self_arc, vn)`（varnode.cc:493-505 完整移植）：
+  字段半（cc:496-499）复用 `copy_symbol`，随后补上此前缺失的 cc:500-504
+  high 簿记——`high->typeDirty()`（variable.hh:166）无条件触发；
+  `mapentry != 0` 时 `high->setSymbol(this)`（variable.cc:245，注意传的是
+  **目标** varnode 而非 vn）。以关联函数 + `&Arc<RwLock<Varnode>>` self 的
+  形态存在，因为 `HighVariable::set_symbol` 需要目标的 Arc 身份，`&mut
+  self` 签名无法恢复；write guard 在簿记前释放，避免 set_symbol 内部
+  重取 read 锁死锁。
+- `Varnode::copy_symbol(&mut self, vn)` 保留为字段半（cc:496-499），
+  funcdata.rs 去重腿与 ruleaction.rs RuleAddUnsigned 两个越界调用点不变
+  （前者在调用点手工执行等价簿记，后者登记残差）。
+- `Varnode::copy_symbol_if_valid(self_arc, vn)` 拓宽为关联函数：cc:519
+  isValueClose 以短 read 锁读取目标 loc/size 后释放，cc:520 尾调用完整
+  `copy_symbol_arc`；op.rs `collapse_constant_symbol` 调用点同步适配。
+- oracle 行为门禁：`tests/oracle/varnode_highbranch_1204`（pin-base
+  schema2，`tools/run_varnode_highbranch_oracle.sh`）——双侧覆盖 close
+  传播（typeDirty 位 0→1、setSymbol 附着 FIXTURE_EQ/-1、惰性 isTypeLock/
+  type 重推导翻转）/ not-close 干净 / 空 mapentry 仅 typeDirty / 无 high
+  外层守卫 / op 级 markedInput 五投影，逐字节 MATCH。
+- 残差登记：`HighVariable::get_type` 缺少 variable.hh:174 的惰性
+  `updateType()`（建议 VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001）；
+  ruleaction.rs:10588 RuleAddUnsigned 调用点走字段半未执行 high 簿记
+  （建议 RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001）。
