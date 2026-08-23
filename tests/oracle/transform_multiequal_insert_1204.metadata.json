@@ -43,7 +43,7 @@
   ],
   "overlay": {
    "path": "src/transform.rs",
-   "sha256": "13145910b094ca5bd188276de3363310fca0400899f8b4315495edd49c0a876b",
+   "sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
    "policy": "The only live library-source input; hash-verify before replacing the pinned base transform.rs"
   },
   "archive_policy": "Immutable explicit dependency closure plus one verified transform.rs overlay; unrelated worktree files are excluded"
@@ -338,7 +338,7 @@
  "comparand": {
   "cpp_fixture_sha256": "072731a6ade0060d77ef1968638bac1151174465b90fa443fec3e1d020d4516d",
   "rust_fixture_sha256": "0b8a0be9400306e2edf574cef19a473945caa76b5b6a0bfc9ed62e44d6060536",
-  "transform_overlay_sha256": "12e46745a6fc2b2148f3b15e7485fa441e411437fcab333e43c0d44ad2efb902",
+  "transform_overlay_sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
   "runner_sha256": "8e557dba77eab12ebf88cc6e517724741a9928c0434c5377f99b81d64a52957c"
  },
  "expected_results": {

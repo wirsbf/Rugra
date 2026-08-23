@@ -174,3 +174,18 @@ zext/indirect/restricted-window/typelock 分支；NO_ORACLE：subflow.cc:3942
 `rvn+(laneIndex-skipLanes)` 负索引为 oracle UB，Rugra 保守拒绝并注释），
 登记见 tests/oracle/lanedivide_infra_1204.metadata.json。核心算法白名单
 模块，合并需机制 C 独立复核。
+
+### 2026-08-23：SplitFlow::add_op INDIRECT iop 占位符 + ConstantIop 空指针解码（SUBFLOW-SPLITFLOW-SIGABRT-0001）
+- `SplitFlow::add_op` INDIRECT 臂（subflow.cc:1805-1811）：lo/hi 各自调用
+  `new_iop`（两个独立 constant_iop 占位符），对齐 cc:1806-1807 的两次
+  `newIop(op->getIn(1))` 调用 — createReplacement 为每个新 INDIRECT 物化
+  独立 iop 注记 varnode。此前共享单个占位符会把同一 free varnode 接入
+  两个 op（"Free varnode has multiple descendants"，varnode.cc:333-336），
+  是 Ghidra per-call `emplace_back` 不可达的状态。
+- `transform::get_op_from_const_offset` 改返回 `Option<PcodeOpRef>`：
+  offset 0 → `None`（Ghidra `(PcodeOp*)(uintp)0 == NULL` 的非空 Arc 映射），
+  消除 `Arc::from_raw(null)` UB（nightly `NonNull::new_unchecked` 前置检查
+  触发 SIGABRT，`test_split_flow_full_transform_through_indirect` 干净基线
+  即崩）；`create_replacement` constant_iop 臂 `None` 时按 `newVarnodeIop(NULL)`
+  语义（funcdata_varnode.cc:176-184）直接物化 offset 0 的 iop 空间注记
+  varnode。非零 offset 的解码路径逐字节不变。
