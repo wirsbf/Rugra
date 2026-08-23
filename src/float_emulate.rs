@@ -1,16 +1,46 @@
 //! Floating-point format encoding/decoding and emulation.
 //!
-//! Corresponds to Ghidra's `float.hh` / `float.cc` (773 lines).
+//! Corresponds to Ghidra's `float.hh` / `float.cc` (673 lines).
 //!
 //! FloatFormat supports IEEE754 single/double precision encoding/decoding
 //! and floating-point operation emulation (opAdd/opMult/opDiv/etc.).
 //!
 //! # Status
 //! Core FloatFormat with IEEE754 single/double construction, host float
-//! conversion, and basic operations. Uses Rust's f64/f32 for host format.
+//! conversion, and basic operations. The host conversions run the oracle's
+//! bit ladder end to end: `getHostFloat` extracts the **top-aligned**
+//! fraction (`extractFractionalCode`, float.cc:113-119), re-derives the
+//! signif via the jbit room (`frac >>= 1; frac |= 1<<63`, float.cc:261-266)
+//! and composes through the static `createFloat` ldexp ladder
+//! (float.cc:67-80); `getEncoding` decomposes through the static
+//! `extractExpSig` frexp ladder (float.cc:89-109) and packs via
+//! `roundToNearestEven` + the top-aligned `setFractionalCode`/
+//! `setExponentCode`/`setSign` primitives (float.cc:144-177).
 //! opInt2Float sign-extends its integer input from `size_in` bytes
 //! (float.cc:611-617) and opFloat2Float delegates to the bit-level
 //! convertEncoding port (float.cc:276-288/352-419).
+//!
+//! Structural oracle proof: `tests/oracle/float_fmt_struct_1204`
+//! (runner `tools/run_float_fmt_struct_oracle.sh`); value-level int2float /
+//! float2float regression: `tests/oracle/float_int2float_sign_1204`.
+
+// RUGRA-GLUE: float.cc binds the host libm routines through `using
+// std::ldexp; using std::frexp;` (float.cc:25-26). Rust std exposes no
+// stable equivalents, so the same host libm symbols the C++ oracle links
+// against are bound here. This matters for parity: ldexp(x, e) scales by
+// 2^e with correct gradual underflow/overflow saturation, which a plain
+// `x * 2f64.powi(e)` cannot reproduce once the power itself over/underflows
+// (e.g. createFloat for the smallest f64 denormal computes
+// ldexp(2^11, -1085) == 2^-1074, while 2f64.powi(-1085) already flushes
+// to 0). These declarations have no bodies (FFI), hence the glue comment.
+extern "C" {
+    // RUGRA-GLUE: FFI declaration (no body) for the host libm ldexp the
+    // oracle calls at float.cc:76.
+    fn ldexp(x: f64, exp: i32) -> f64;
+    // RUGRA-GLUE: FFI declaration (no body) for the host libm frexp the
+    // oracle calls at float.cc:100.
+    fn frexp(x: f64, exp: *mut i32) -> f64;
+}
 
 /// The various classes of floating-point encodings.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -82,61 +112,199 @@ impl FloatFormat {
     /// Get the size of the encoding in bytes.
     pub fn get_size(&self) -> usize { self.size }
 
+    // Ghidra: float.cc:67 FloatFormat::createFloat
+    /// Create a double given sign, fractional, and exponent.
+    /// Faithful to Ghidra FloatFormat::createFloat (float.cc:67-80, static
+    /// per float.hh:54): `signif` arrives **top-aligned** (bit 63 = MSB of
+    /// the fraction field); the function drops 1 bit of precision
+    /// (`signif >>= 1`, a by-value parameter copy in the oracle) so the
+    /// remaining word fits exactly in a double, then scales by
+    /// `exp - precis + 1` through ldexp (gradual underflow / overflow
+    /// saturation, not a powi product) and applies the sign last.
+    pub fn create_float(sign: bool, signif: u64, exp: i32) -> f64 {
+        let signif = signif >> 1; // Throw away 1 bit of precision we will
+        // lose anyway, to make sure highbit is 0
+        let precis = 8 * std::mem::size_of::<u64>() as i32 - 1; // fullword - 1 we threw away
+        let mut res = signif as f64;
+        let expchange = exp - precis + 1; // change in exponent is precis - 1 integer bit
+        res = unsafe { ldexp(res, expchange) };
+        if sign {
+            res = res * -1.0;
+        }
+        res
+    }
+
+    // Ghidra: float.cc:89 FloatFormat::extractExpSig
+    /// Extract the sign, fractional, and exponent from a given
+    /// floating-point value. Faithful to Ghidra
+    /// FloatFormat::extractExpSig (float.cc:89-109, static per
+    /// float.hh:55): `signbit` is read first (observable on NaN), the
+    /// zero/infinity/NaN early returns come before any normalization, the
+    /// magnitude is forced positive, then frexp normalizes to [1/2, 1) and
+    /// ldexp scales to [2^62, 2^63) before the exact `(uintb)` truncation
+    /// (no rounding: norm's 53-bit significand sits at bits 62..10).
+    /// `*signif` comes out **top-aligned** with bit 63 set; the exponent is
+    /// rebased to the [1, 2) normalization (`e -= 1`).
+    pub fn extract_exp_sig(x: f64, sgn: &mut bool, signif: &mut u64, exp: &mut i32) -> FloatClass {
+        *sgn = x.is_sign_negative();
+        if x == 0.0 {
+            return FloatClass::Zero;
+        }
+        if x.is_infinite() {
+            return FloatClass::Infinity;
+        }
+        if x.is_nan() {
+            return FloatClass::Nan;
+        }
+        let mut x = x;
+        if *sgn {
+            x = -x;
+        }
+        let mut e: i32 = 0;
+        let mut norm = unsafe { frexp(x, &mut e) }; // norm is between 1/2 and 1
+        norm = unsafe { ldexp(norm, 8 * std::mem::size_of::<u64>() as i32 - 1) }; // norm between 2^62 and 2^63
+
+        *signif = norm as u64; // Convert to normalized integer
+        *signif <<= 1;
+
+        e -= 1; // Consider normalization between 1 and 2
+        *exp = e;
+        FloatClass::Normalized
+    }
+
     // Ghidra: float.cc:228 FloatFormat::getHostFloat
     /// Convert an encoding into the host's f64.
+    /// Faithful to Ghidra FloatFormat::getHostFloat (float.cc:228-268): the
+    /// sign/fraction/exponent fields are extracted in the oracle's
+    /// declaration order with the fraction **top-aligned**
+    /// (`extractFractionalCode`, float.cc:113-119); zero / denormalized /
+    /// infinity / NaN early returns key off the raw exponent code (0 vs
+    /// maxexponent); the true exponent is `exp - bias` for every
+    /// non-early-return path; the jbit room (`frac >>= 1; frac |= 1<<63`)
+    /// applies only when `normal && jbitimplied`; the value is finally
+    /// composed through the static `createFloat` ldexp ladder — no
+    /// f32/f64 bit-cast and no powi product.
     pub fn get_host_float(&self, encoding: u64, ftype: &mut FloatClass) -> f64 {
-        let sign = self.extract_sign(encoding);
-        let exp_code = self.extract_exponent_code(encoding);
-        let frac = self.extract_fractional_code(encoding);
+        let sgn = self.extract_sign(encoding);
+        let mut frac = self.extract_fractional_code(encoding);
+        let mut exp = self.extract_exponent_code(encoding) as i32;
+        let mut normal = true;
 
-        if exp_code == 0 {
+        if exp == 0 {
             if frac == 0 {
+                // Floating point zero
                 *ftype = FloatClass::Zero;
-                return if sign { -0.0 } else { 0.0 };
+                return if sgn { -0.0 } else { 0.0 };
             }
             *ftype = FloatClass::Denormalized;
-            // Denormalized: value = (-1)^sign * 0.frac * 2^(1-bias)
-            let val = (frac as f64) * 2f64.powi(1 - self.bias);
-            return if sign { -val } else { val };
-        }
-        if exp_code as i32 == self.max_exponent {
+            // Number is denormalized
+            normal = false;
+        } else if exp == self.max_exponent {
             if frac == 0 {
+                // Floating point infinity
                 *ftype = FloatClass::Infinity;
-                return if sign { f64::NEG_INFINITY } else { f64::INFINITY };
+                let infinity = f64::INFINITY;
+                return if sgn { -infinity } else { infinity };
             }
             *ftype = FloatClass::Nan;
-            // Ghidra float.cc:253-254 applies the encoding's sign to the NaN
-            // (`return sgn ? -nan : +nan;`) — negation flips the sign bit.
-            return if sign { -f64::NAN } else { f64::NAN };
-        }
-        *ftype = FloatClass::Normalized;
-        // Normalized: value = (-1)^sign * 1.frac * 2^(exp-bias)
-        let significand = if self.jbit_implied {
-            (1u64 << self.frac_size) | frac
+            // encoding is "Not a Number" NaN
+            let nan = f64::NAN;
+            return if sgn { -nan } else { nan }; // Sign is usually ignored
         } else {
-            frac
-        };
-        let val = (significand as f64) * 2f64.powi(exp_code as i32 - self.bias - self.frac_size as i32);
-        if sign { -val } else { val }
+            *ftype = FloatClass::Normalized;
+        }
+
+        // Get "true" exponent and fractional
+        exp -= self.bias;
+        if normal && self.jbit_implied {
+            frac >>= 1; // Make room for 1 jbit
+            let highbit = 1u64 << 63;
+            frac |= highbit; // Stick bit in at top
+        }
+        Self::create_float(sgn, frac, exp)
     }
 
     // Ghidra: float.cc:293 FloatFormat::getEncoding
     /// Convert the host's f64 into this encoding.
+    /// Faithful to Ghidra FloatFormat::getEncoding (float.cc:293-346): the
+    /// decomposition runs through the static `extractExpSig` frexp ladder
+    /// (**top-aligned** signif with bit 63 set), zero/infinity/NaN map to
+    /// their dedicated encodings (NaN payloads are dropped — only the quiet
+    /// bit survives via `getNaNEncoding`), `exp += bias` precedes the
+    /// `-frac_size` / `< 1` / `>= maxexponent` range gates, denormalized
+    /// outputs re-round at `64 - frac_size - exp` and shift the top-aligned
+    /// signif down by `-exp` before packing, the normal path rounds at
+    /// `64 - frac_size - 1` with the uintb wrap-carry rebalance, and the
+    /// final pack is the top-aligned setFractionalCode + setExponentCode +
+    /// setSign ladder with the jbitimplied `<<= 1` cut. No host f32/f64
+    /// bit-cast is involved.
     pub fn get_encoding(&self, host: f64) -> u64 {
-        match self.size {
-            4 => (host as f32).to_bits() as u64,
-            8 => host.to_bits(),
-            _ => panic!("Unsupported float size"),
+        let mut signif: u64 = 0;
+        let mut exp: i32 = 0;
+        let mut sgn = false;
+        let ftype = Self::extract_exp_sig(host, &mut sgn, &mut signif, &mut exp);
+
+        if ftype == FloatClass::Zero {
+            return self.get_zero_encoding(sgn);
+        } else if ftype == FloatClass::Infinity {
+            return self.get_infinity_encoding(sgn);
+        } else if ftype == FloatClass::Nan {
+            return self.get_nan_encoding(sgn);
         }
+
+        // convert exponent and fractional to their encodings
+        exp += self.bias;
+
+        if exp < -(self.frac_size as i32) {
+            // Exponent is too small to represent
+            return self.get_zero_encoding(sgn); // TODO handle round to non-zero
+        }
+
+        if exp < 1 {
+            // Must be denormalized
+            if Self::round_to_nearest_even(&mut signif, 64 - self.frac_size as i32 - exp) {
+                // TODO handle round to normal case
+                if (signif >> 63) == 0 {
+                    signif = 1u64 << 63;
+                    exp += 1;
+                }
+            }
+            let res = self.get_zero_encoding(sgn);
+            return self.set_fractional_code(res, signif >> (-exp));
+        }
+
+        if Self::round_to_nearest_even(&mut signif, 64 - self.frac_size as i32 - 1) {
+            // if high bit is clear, then the add overflowed. Increase exp and set
+            // signif to 1.
+            if (signif >> 63) == 0 {
+                signif = 1u64 << 63;
+                exp += 1;
+            }
+        }
+
+        if exp >= self.max_exponent {
+            // Exponent is too big to represent
+            return self.get_infinity_encoding(sgn);
+        }
+
+        if self.jbit_implied && exp != 0 {
+            signif <<= 1; // Cut off top bit (which should be 1)
+        }
+
+        let mut res: u64 = 0;
+        res = self.set_fractional_code(res, signif);
+        res = self.set_exponent_code(res, exp as u32);
+        self.set_sign(res, sgn)
     }
 
     // Ghidra: float.cc:276 FloatFormat::roundToNearestEven
     /// Round a floating point value to the nearest even.
     /// Faithful to Ghidra FloatFormat::roundToNearestEven (float.cc:276-288,
-    /// static per float.hh:56): `signif` is mutated in place (reference
-    /// parameter), and `lowbitpos` indexes the least-significant retained
+    /// static private per float.hh:56): `signif` is mutated in place
+    /// (reference parameter, so it must stay callable from the oracle
+    /// fixture), and `lowbitpos` indexes the least-significant retained
     /// bit; returns whether rounding carried up.
-    pub(crate) fn round_to_nearest_even(signif: &mut u64, lowbitpos: i32) -> bool {
+    pub fn round_to_nearest_even(signif: &mut u64, lowbitpos: i32) -> bool {
         let lowbitmask = if lowbitpos < 64 { 1u64 << lowbitpos } else { 0 };
         let midbitmask = 1u64 << (lowbitpos - 1);
         let epsmask = midbitmask - 1;
@@ -155,23 +323,18 @@ impl FloatFormat {
     /// `formin`, returned as the equivalent value in `self` (the output
     /// format). Faithful to Ghidra FloatFormat::convertEncoding
     /// (float.cc:352-419): sign/fraction/exponent are extracted from
-    /// `formin` bit-level, NaN/Infinity map through the *output* format's
-    /// maxexponent, subnormal inputs are normalized via count_leading_zeros
-    /// (address.cc:773), and too-small/too-large exponents clamp to
-    /// zero/infinity encodings — never an intermediate host double.
-    ///
-    /// Alignment caveat (decisive): oracle `extractFractionalCode`
-    /// (float.cc:113-119) aligns the fraction to the TOP of the 64-bit word,
-    /// and the whole convertEncoding ladder (normalize `<<lz`, jbit room
-    /// `(1<<63)|(signif>>1)`, roundToNearestEven positions, final `<<1` cut,
-    /// `setFractionalCode` drop) is written in that top-aligned convention.
-    /// This port therefore uses local top-aligned extract/pack operations;
-    /// the right-aligned `extract_fractional_code`/`set_fractional_code`
-    /// helpers serve the separate host-double paths only.
+    /// `formin` bit-level (fraction **top-aligned** via
+    /// `extractFractionalCode`, float.cc:113-119), NaN/Infinity map through
+    /// the *output* format's maxexponent, subnormal inputs are normalized
+    /// via count_leading_zeros (address.cc:773) with the rebased exponent
+    /// `exp = -formin->bias - lz`, and too-small/too-large exponents clamp
+    /// to zero/infinity encodings — never an intermediate host double. The
+    /// whole ladder (normalize `<<lz`, jbit room `(1<<63)|(signif>>1)` —
+    /// keyed on the *output* format's jbitimplied, float.cc:379,
+    /// roundToNearestEven positions, final `<<1` cut, packing) runs in the
+    /// top-aligned convention through the shared setters.
     pub fn convert_encoding(&self, encoding: u64, formin: &FloatFormat) -> u64 {
-        // float.cc:113 extractFractionalCode, top-aligned: >>= frac_pos then
-        // <<= 64 - frac_size (no mask needed: higher bits are the exponent).
-        let mut signif = (encoding >> formin.frac_pos) << (64 - formin.frac_size);
+        let mut signif = formin.extract_fractional_code(encoding);
         let sgn = formin.extract_sign(encoding);
         let mut exp = formin.extract_exponent_code(encoding) as i32;
 
@@ -208,10 +371,6 @@ impl FloatFormat {
             return self.get_zero_encoding(sgn); // TODO handle round to non-zero
         }
 
-        // float.cc:144 setFractionalCode, top-aligned OR-into-zero:
-        // code >>= 64 - frac_size, then <<= frac_pos.
-        let pack_frac = |code: u64| (code >> (64 - self.frac_size)) << self.frac_pos;
-
         if exp < 1 {
             // Must be denormalized
             if Self::round_to_nearest_even(&mut signif, 64 - self.frac_size as i32 - exp) {
@@ -222,7 +381,7 @@ impl FloatFormat {
                 }
             }
             let res = self.get_zero_encoding(sgn);
-            return res | pack_frac(signif >> (-exp));
+            return self.set_fractional_code(res, signif >> (-exp));
         }
 
         if Self::round_to_nearest_even(&mut signif, 64 - self.frac_size as i32 - 1) {
@@ -244,15 +403,22 @@ impl FloatFormat {
         }
 
         let mut res: u64 = 0;
-        res |= pack_frac(signif);
-        res |= (exp as u64) << self.exp_pos; // float.cc:171 setExponentCode
+        res = self.set_fractional_code(res, signif);
+        res = self.set_exponent_code(res, exp as u32);
         self.set_sign(res, sgn)
     }
 
     // Ghidra: float.cc:113 FloatFormat::extractFractionalCode
-    /// Extract the fractional part of the encoding.
+    /// Extract the fractional part of the encoding, **aligned to the top of
+    /// the 64-bit word** (float.cc:111-119: `x >>= frac_pos;` then
+    /// `x <<= 8*sizeof(uintb) - frac_size`). The MSB of the fraction field
+    /// lands in bit 63; bits of the exponent/sign above it are shifted out,
+    /// no mask is needed.
     pub fn extract_fractional_code(&self, x: u64) -> u64 {
-        (x >> self.frac_pos) & ((1u64 << self.frac_size) - 1)
+        let mut x = x;
+        x >>= self.frac_pos; // Eliminate bits below
+        x <<= 64 - self.frac_size; // Align with top of word
+        x
     }
 
     // Ghidra: float.cc:123 FloatFormat::extractSign
@@ -269,49 +435,87 @@ impl FloatFormat {
 
     // Ghidra: float.cc:144 FloatFormat::setFractionalCode
     /// Set the fractional code bits in the encoding.
-    /// Faithful to Ghidra FloatFormat::setFractionalCode (float.cc:144).
+    /// Faithful to Ghidra FloatFormat::setFractionalCode (float.cc:144-153):
+    /// `code` arrives **top-aligned**; it is shifted right by
+    /// `64 - frac_size` (aligning with the bottom of the word, dropping the
+    /// bits of precision there is no room for) then shifted into place by
+    /// `frac_pos` and OR-ed in. The oracle does NOT mask `x` — the caller
+    /// contract (float.cc:141) is that the fraction field of `x` is already
+    /// zero.
     pub fn set_fractional_code(&self, x: u64, code: u64) -> u64 {
-        let mask = ((1u64 << self.frac_size) - 1) << self.frac_pos;
-        (x & !mask) | ((code << self.frac_pos) & mask)
+        let code = code >> (64 - self.frac_size); // Align with bottom of word, also drops
+        // bits of precision we don't have room for
+        let code = code << self.frac_pos; // Move bits into position
+        x | code
     }
 
     // Ghidra: float.cc:158 FloatFormat::setSign
     /// Set the sign bit in the encoding.
-    /// Faithful to Ghidra FloatFormat::setSign (float.cc:158).
+    /// Faithful to Ghidra FloatFormat::setSign (float.cc:158-166): a false
+    /// sign is an **identity** — the bit is assumed already zero and `x` is
+    /// returned unchanged (the oracle never clears a set sign bit); a true
+    /// sign OR-s the mask in.
     pub fn set_sign(&self, x: u64, sign: bool) -> u64 {
-        if sign { x | (1u64 << self.signbit_pos) } else { x & !(1u64 << self.signbit_pos) }
+        if !sign {
+            return x; // Assume bit is already zero
+        }
+        let mask = 1u64 << self.signbit_pos;
+        x | mask // Stick in the bit
     }
 
     // Ghidra: float.cc:171 FloatFormat::setExponentCode
     /// Set the exponent bits in the encoding.
-    /// Faithful to Ghidra FloatFormat::setExponentCode (float.cc:171).
+    /// Faithful to Ghidra FloatFormat::setExponentCode (float.cc:171-177):
+    /// the code is shifted into position by `exp_pos` and OR-ed in. The
+    /// oracle does NOT mask `x` — the caller contract (float.cc:168) is
+    /// that the exponent field of `x` is already zero.
     pub fn set_exponent_code(&self, x: u64, code: u32) -> u64 {
-        let mask = ((1u64 << self.exp_size) - 1) << self.exp_pos;
-        (x & !mask) | (((code as u64) << self.exp_pos) & mask)
+        let code = (code as u64) << self.exp_pos; // Move bits into position
+        x | code
     }
 
     // Ghidra: float.cc:181 FloatFormat::getZeroEncoding
     /// Get the encoding for zero (positive or negative).
-    /// Faithful to Ghidra FloatFormat::getZeroEncoding (float.cc:181).
+    /// Faithful to Ghidra FloatFormat::getZeroEncoding (float.cc:181-189):
+    /// builds through the three setters — setFractionalCode(0),
+    /// setExponentCode(0), setSign — per the IEEE 754 standard zero
+    /// encoding.
     pub fn get_zero_encoding(&self, sgn: bool) -> u64 {
-        self.set_sign(0, sgn)
+        let mut res: u64 = 0;
+        // Use IEEE 754 standard for zero encoding
+        res = self.set_fractional_code(res, 0);
+        res = self.set_exponent_code(res, 0);
+        self.set_sign(res, sgn)
     }
 
     // Ghidra: float.cc:193 FloatFormat::getInfinityEncoding
     /// Get the encoding for infinity (positive or negative).
-    /// Faithful to Ghidra FloatFormat::getInfinityEncoding (float.cc:193).
+    /// Faithful to Ghidra FloatFormat::getInfinityEncoding
+    /// (float.cc:193-201): builds through setFractionalCode(0) +
+    /// setExponentCode(maxexponent) + setSign per the IEEE 754 standard
+    /// infinity encoding.
     pub fn get_infinity_encoding(&self, sgn: bool) -> u64 {
-        let inf_exp = (1u64 << self.exp_size) - 1; // All exponent bits set
-        self.set_sign(self.set_fractional_code(0, 0) | (inf_exp << self.exp_pos), sgn)
+        let mut res: u64 = 0;
+        // Use IEEE 754 standard for infinity encoding
+        res = self.set_fractional_code(res, 0);
+        res = self.set_exponent_code(res, self.max_exponent as u32);
+        self.set_sign(res, sgn)
     }
 
     // Ghidra: float.cc:205 FloatFormat::getNaNEncoding
     /// Get the encoding for NaN (positive or negative).
-    /// Faithful to Ghidra FloatFormat::getNaNEncoding (float.cc:205).
+    /// Faithful to Ghidra FloatFormat::getNaNEncoding (float.cc:205-215):
+    /// the quiet-NaN bit is created **top-aligned** (`mask <<= 63`) and
+    /// lowered into the fraction field by setFractionalCode — landing on
+    /// the fraction MSB (`frac_size - 1`) — then the exponent field is set
+    /// to maxexponent and the sign applied. Payload bits do not exist.
     pub fn get_nan_encoding(&self, sgn: bool) -> u64 {
-        let inf_exp = (1u64 << self.exp_size) - 1;
-        let nan_frac = 1u64 << (self.frac_size - 1); // MSB of fraction
-        self.set_sign(self.set_fractional_code(0, nan_frac) | (inf_exp << self.exp_pos), sgn)
+        let mut res: u64 = 0;
+        // Use IEEE 754 standard for NaN encoding
+        let mask = 1u64 << 63; // Create "quiet" NaN
+        res = self.set_fractional_code(res, mask);
+        res = self.set_exponent_code(res, self.max_exponent as u32);
+        self.set_sign(res, sgn)
     }
 
     // Ghidra: float.cc:483 FloatFormat::opNotEqual
@@ -508,6 +712,163 @@ mod tests {
         assert!((val - 1.5).abs() < 1e-6);
     }
 
+    // Regression for the FLOAT-FMT-STRUCT-0001 structural port
+    // (float.cc:67-109/113-153/228-346): the host conversions run the oracle
+    // bit ladder — top-aligned fraction convention, createFloat/extractExpSig
+    // statics, ldexp gradual underflow, denormalized createFloat path, NaN
+    // canonicalization through getNaNEncoding, setSign identity on false, and
+    // the OR-style setters. Oracle proof lives in
+    // tests/oracle/float_fmt_struct_1204 (runner
+    // tools/run_float_fmt_struct_oracle.sh); these asserts pin the Rust side
+    // against drift.
+    #[test]
+    fn test_top_aligned_fraction_convention() {
+        let fmt4 = FloatFormat::new(4);
+        let fmt8 = FloatFormat::new(8);
+        // float.cc:113-119: x >>= frac_pos then x <<= 64 - frac_size.
+        assert_eq!(fmt4.extract_fractional_code(0x00800001), 1u64 << 41);
+        assert_eq!(fmt4.extract_fractional_code(0x007FFFFF), 0xFFFFFE0000000000);
+        assert_eq!(fmt8.extract_fractional_code(0x3FF0000000000001), 1u64 << 12);
+        // float.cc:144-153: top-aligned code is dropped into the field via
+        // >>= 64 - frac_size, <<= frac_pos, OR (x fraction bits assumed 0).
+        assert_eq!(fmt4.set_fractional_code(0x3F800000, 0xC000000000000000), 0x3F800000 | 0x600000);
+        assert_eq!(fmt8.set_fractional_code(0, 0x8000000000000000), 0x0008000000000000);
+        // float.cc:158-166: setSign(false) is an identity — never clears.
+        assert_eq!(fmt4.set_sign(0xFF800000, false), 0xFF800000);
+        assert_eq!(fmt4.set_sign(0x7F800000, true), 0xFF800000);
+        // float.cc:171-177: exponent OR-ed in, no masking.
+        assert_eq!(fmt4.set_exponent_code(0x007FFFFF, 1), 0x00FFFFFF);
+    }
+
+    #[test]
+    fn test_extract_exp_sig_top_aligned() {
+        // Static (float.cc:89, float.hh:55) — no format instance involved.
+        let mut sgn = false;
+        let mut signif: u64 = 0;
+        let mut exp: i32 = 0;
+        // 7.0 = 1.75 * 2^2 -> frexp norm 0.875, e=3 -> exp 2, signif = 111b << 61.
+        assert_eq!(
+            FloatFormat::extract_exp_sig(7.0, &mut sgn, &mut signif, &mut exp),
+            FloatClass::Normalized
+        );
+        assert!(!sgn);
+        assert_eq!(signif, 0xE000000000000000);
+        assert_eq!(exp, 2);
+        // -7.0 shares the magnitude signif; only sgn flips.
+        FloatFormat::extract_exp_sig(-7.0, &mut sgn, &mut signif, &mut exp);
+        assert!(sgn);
+        assert_eq!(signif, 0xE000000000000000);
+        // 0.5 normalizes to [1,2) with exp -1.
+        FloatFormat::extract_exp_sig(0.5, &mut sgn, &mut signif, &mut exp);
+        assert_eq!((signif, exp), (0x8000000000000000, -1));
+        // Classes: zero/-zero/inf/-inf/NaN/-NaN. The zero/inf/NaN early
+        // returns never write signif/exp (they keep the 0.5 call's values).
+        assert_eq!(FloatFormat::extract_exp_sig(0.0, &mut sgn, &mut signif, &mut exp), FloatClass::Zero);
+        assert!(!sgn);
+        FloatFormat::extract_exp_sig(-0.0, &mut sgn, &mut signif, &mut exp);
+        assert_eq!(sgn, true);
+        assert_eq!((signif, exp), (0x8000000000000000, -1));
+        assert_eq!(FloatFormat::extract_exp_sig(f64::INFINITY, &mut sgn, &mut signif, &mut exp), FloatClass::Infinity);
+        assert_eq!(FloatFormat::extract_exp_sig(f64::NAN, &mut sgn, &mut signif, &mut exp), FloatClass::Nan);
+        FloatFormat::extract_exp_sig(-f64::NAN, &mut sgn, &mut signif, &mut exp);
+        assert!(sgn);
+    }
+
+    #[test]
+    fn test_host_float_denormal_bit_ladder() {
+        let fmt4 = FloatFormat::new(4);
+        let fmt8 = FloatFormat::new(8);
+        let mut fc = FloatClass::Zero;
+        // Min f32 denormal 0x00000001 == 2^-149 through createFloat/ldexp
+        // (previously value-broken: powi product returned 2^-126).
+        let val = fmt4.get_host_float(0x00000001, &mut fc);
+        assert_eq!(fc, FloatClass::Denormalized);
+        assert_eq!(val.to_bits(), (2f64.powi(-149)).to_bits());
+        // Max f32 denormal = (2^23-1) * 2^-149.
+        let val = fmt4.get_host_float(0x007FFFFF, &mut fc);
+        assert_eq!(val.to_bits(), (((1u64 << 23) - 1) as f64 * 2f64.powi(-149)).to_bits());
+        // Min f64 denormal 2^-1074 exercises ldexp(2^11, -1085): the naive
+        // powi factor flushes to zero, the libm ladder saturates exactly.
+        let val = fmt8.get_host_float(0x0000000000000001, &mut fc);
+        assert_eq!(fc, FloatClass::Denormalized);
+        assert_eq!(val.to_bits(), 1); // f64 bits of 2^-1074
+        // Normal path keeps exactness: 1.5f.
+        let val = fmt4.get_host_float(0x3FC00000, &mut fc);
+        assert_eq!(fc, FloatClass::Normalized);
+        assert_eq!(val, 1.5);
+    }
+
+    #[test]
+    fn test_get_encoding_bit_ladder() {
+        let fmt4 = FloatFormat::new(4);
+        let fmt8 = FloatFormat::new(8);
+        // RNE ties on the f32 fraction (getEncoding ladder, float.cc:293-346).
+        assert_eq!(fmt4.get_encoding(f64::from_bits(0x3FF0000010000000)), 0x3F800000);
+        assert_eq!(fmt4.get_encoding(f64::from_bits(0x3FF0000018000000)), 0x3F800001);
+        // Denormalized outputs (exp < 1 branch).
+        assert_eq!(fmt4.get_encoding(2f64.powi(-149)), 0x00000001);
+        assert_eq!(fmt4.get_encoding(2f64.powi(-150)), 0x00000000); // half-tie -> even 0
+        assert_eq!(fmt4.get_encoding(1.5 * 2f64.powi(-149)), 0x00000002); // tie -> even mantissa 2
+        assert_eq!(fmt4.get_encoding(2f64.powi(-127)), 0x00400000); // exp==0 boundary
+        // Underflow (< -frac_size) and overflow.
+        assert_eq!(fmt4.get_encoding(2f64.powi(-151)), 0x00000000);
+        assert_eq!(fmt4.get_encoding(2f64.powi(128)), 0x7F800000);
+        assert_eq!(fmt4.get_encoding(f64::MAX), 0x7F800000);
+        // NaN inputs canonicalize to the quiet bit only (payload dropped,
+        // sign preserved) — float.cc:301-307 -> getNaNEncoding.
+        assert_eq!(fmt4.get_encoding(f64::from_bits(0x7FF0000000000001)), 0x7FC00000);
+        assert_eq!(fmt4.get_encoding(f64::from_bits(0xFFF0000000000001)), 0xFFC00000);
+        // +/-0, +/-inf.
+        assert_eq!(fmt4.get_encoding(0.0), 0x00000000);
+        assert_eq!(fmt4.get_encoding(-0.0), 0x80000000);
+        assert_eq!(fmt4.get_encoding(f64::INFINITY), 0x7F800000);
+        assert_eq!(fmt4.get_encoding(f64::NEG_INFINITY), 0xFF800000);
+        // f64 target round-trips exact doubles.
+        assert_eq!(fmt8.get_encoding(3.14), 3.14f64.to_bits());
+        assert_eq!(fmt8.get_encoding(-7.0), 0xC01C000000000000);
+    }
+
+    #[test]
+    fn test_create_float_ldexp_saturation() {
+        // createFloat(sgn, signif, exp) = (signif>>1) * 2^(exp-62), sign last.
+        assert_eq!(FloatFormat::create_float(false, 0xE000000000000000, 2), 7.0);
+        assert_eq!(FloatFormat::create_float(true, 0xE000000000000000, 2), -7.0);
+        // Gradual underflow through ldexp: 2^62 * 2^-1136 == 2^-1074 exactly.
+        assert_eq!(FloatFormat::create_float(false, 0x8000000000000000, -1074).to_bits(), 1);
+        // One deeper: 2^-1075 is the exact half of the min denormal ->
+        // round-to-even flushes to +0.
+        assert_eq!(FloatFormat::create_float(false, 0x8000000000000000, -1075), 0.0);
+        // 1.5 * 2^-1074 ties between 1x (mantissa 1, odd) and 2x (even) ->
+        // ties-to-even keeps 2x min denormal (bits == 2).
+        assert_eq!(
+            FloatFormat::create_float(false, 0xC000000000000000, -1074).to_bits(),
+            2
+        );
+        // Overflow saturates to infinity.
+        assert_eq!(FloatFormat::create_float(false, 0x8000000000000000, 1024), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_round_to_nearest_even_direct() {
+        // float.cc:276-288 driven directly, including the uintb wrap carry.
+        let mut signif: u64 = 0b1010; // even, exact tie at lowbitpos=2 -> stays
+        assert!(!FloatFormat::round_to_nearest_even(&mut signif, 2));
+        assert_eq!(signif, 0b1010);
+        let mut signif: u64 = 0b1110; // odd, exact tie -> carries up
+        assert!(FloatFormat::round_to_nearest_even(&mut signif, 2));
+        assert_eq!(signif, 0b10000);
+        let mut signif: u64 = 0b1011; // below-tie bits set (eps!=0) -> carries up
+        assert!(FloatFormat::round_to_nearest_even(&mut signif, 2));
+        assert_eq!(signif, 0b1101);
+        let mut signif: u64 = u64::MAX; // wrap-around carry: signif becomes 1
+        assert!(FloatFormat::round_to_nearest_even(&mut signif, 2));
+        assert_eq!(signif, 1);
+        // lowbitpos == 64: lowbitmask is 0 (odd=false), only mid/eps decide.
+        let mut signif: u64 = 0x8000000000000003;
+        assert!(FloatFormat::round_to_nearest_even(&mut signif, 64));
+        assert_eq!(signif, 3);
+    }
+
     #[test]
     fn test_float_zero() {
         let fmt = FloatFormat::new(8);
@@ -588,7 +949,11 @@ mod tests {
     fn test_set_get_encoding_ops() {
         let fmt = FloatFormat::new(8);
         let x = fmt.get_encoding(1.5);
+        // extract_fractional_code is TOP-ALIGNED (float.cc:113-119): the
+        // fraction MSB lands in bit 63.
         let frac = fmt.extract_fractional_code(x);
+        assert_ne!(frac, 0x8000000000000); // right-aligned would be this
+        assert_eq!(frac, 0x8000000000000000); // 1.5 => frac MSB only, top word
         let exp = fmt.extract_exponent_code(x);
         let sign = fmt.extract_sign(x);
         let y = fmt.set_fractional_code(0, frac);
