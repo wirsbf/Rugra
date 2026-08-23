@@ -76,6 +76,11 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 - `category: i32` — Symbol::category（-1/0/1/2/3 = 无/参数/equate/union_facet/fake_input，见 `symbol_category`）
 - `cat_index: u32` — Symbol::catindex，category 内位置
 - `typelock`/`namelock: bool` — Symbol::flags 的 typelock/namelock 位
+- `addrtied: bool` — database.cc:1149-1150（任一空 uselimit 静态映射置位）
+- `persist: bool` — database.cc:1131-1132/1138-1139（全局 scope 或全局发现域
+  命中，装图时折入符号）
+- `property_flags: u32` — database.cc:1153 的 addMap 属性折入位（flagbase 的
+  readonly/volatile 折到符号 flags，一次性、装图时）
 - `usepoint: Option<u64>` — 首个 SymbolEntry 的 first use address（None = invalid Address；`buildDefaultName` 据此决定 addrtied flag，database.cc:1776）
 - `is_name_undefined()` — `Symbol::isNameUndefined`（database.cc:246）：15 字符 `$$undef` 前缀
 
@@ -206,11 +211,26 @@ oracle 证据承担：
   `materialize_maptable` 每查询按序重放成 `RangeMap`（`ScopeLocal: Clone`
   无法持有非 Clone 的 RangeMap；等价键插入序与 erase 后幸存者相对序由
   重放保真，fixture 的 removal 案例覆盖）。
-- `add_map_entry`（database.cc:1843 addMapInternal）——条目安装：空 uselimit
-  置符号 addrtied、uselimit 按 `(index,first)` 排序并合并相邻（address.cc
-  RangeList 语义）、subsort 在插入时冻结（rangemap.hh:238）。
+- `add_map_entry`（database.cc:1843 addMapInternal）——条目安装（无属性折入
+  的生产形态，`property` 恒 0——Database 未接线，DB-LOCALSCOPE-MAP-0001）：
+  委托 `add_map_entry_with_property`。
+- `add_map_entry_with_property`（database.cc:1843 + addMap 折入
+  database.cc:1149-1153）——空 uselimit 置符号 addrtied **并**把
+  `property(space, start)`（`glb->symboltab->getProperty(entry.addr)` 的
+  flagbase 查询）OR 进 `LocalSymbol::property_flags`（符号级，一次性，
+  装图时折入；后装属性区间不污染已装符号——victim 构造序）；uselimit 按
+  `(index,first)` 排序并合并相邻（address.cc RangeList 语义）、subsort 在
+  插入时冻结（rangemap.hh:238，属性位不入 getSubsort，database.cc:98-106）。
 - `install_symbol`——fixture/测试构造路径（addSymbol+addMapPoint 单条目镜像；
-  动态符号不装静态条目）。`add_symbol` 生产路径现在同步建条目。
+  动态符号不装静态条目；零属性闭包）。`add_symbol` 生产路径现在同步建条目。
+- `install_symbol_with_property` / `install_symbol_addmap`（database.cc:1530 +
+  1126-1155）——完整 addMap 规则集：全局 scope 置 `LocalSymbol::persist`
+  （database.cc:1131-1132）；`addmap` 形态另带全局发现域闭包
+  （`glbScope->inScope`，database.cc:1138）——命中置 persist **并清 uselimit**
+  （database.cc:1140），清空后的 uselimit 进入 addrtied+折入分支
+  （db_localscope_map_1204 的 fold_discovery 决定性案例）；空 uselimit 折入
+  property_flags。`entry_all_flags` 把 persist/property_flags 投影进
+  getAllFlags（database.hh:271）。
 - `find_overlap`/`find_overlap_entry`（database.cc:2392）——直接委托
   `RangeMap::find_overlap`：`(last,subsort)` 最左相交分区单元的 owner。
   oracle 实测怪癖：等值等 subsort 的二次插入会以 hinted+tail 双 part
