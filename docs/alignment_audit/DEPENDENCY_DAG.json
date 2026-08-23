@@ -4297,14 +4297,6 @@
       "to": "MARSHAL-ID-0001"
     },
     {
-      "from": "ORACLE-BFD-CACHE-PROVENANCE-0001",
-      "to": "ORACLE-REGISTRY-HARDEN-0002"
-    },
-    {
-      "from": "ORACLE-BFD-CACHE-PROVENANCE-0001",
-      "to": "ORACLE-RUNNER-PIN-0001"
-    },
-    {
       "from": "ORACLE-BFD-RUNNER-MIGRATE-0001",
       "to": "ORACLE-BFD-CACHE-PROVENANCE-0001"
     },
