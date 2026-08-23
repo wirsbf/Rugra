@@ -765,7 +765,7 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-06-26（续）：op_destroy / op_unset_input
 
-- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：调用 `destroy_varnode` 删除输出及其 bank identity，按 slot 顺序断开所有输入；有 parent 时 markDead 并从原 `BlockBasic` 删除。dead op 的 NULL-slot 保留仍受上述 nullable 表示缺口约束。
+- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：调用 `destroy_varnode` 删除输出及其 bank identity，按 slot 顺序断开所有输入；有 parent 时 markDead 并从原 `BlockBasic` 删除。（2026-08-23 修正：无 parent 路径也必须 mark_dead——Ghidra 后置条件是 opDestroy 后 op 恒为 dead：Ghidra 中无 parent 的 op 由 `PcodeOpBank::create`（op.cc:946）起始即 dead、在 deadlist，仅 opInsert 的 markAlive（funcdata_op.cc:157）转活；Rugra 的 create 起始即 alive，故无 parent 销毁（未插入 op 或 block Arc 已释放）需显式 mark_dead，否则无输入 alive op 滞留 ActionPool 迭代（processOp isDead 检查 action.cc:830），使读取 getIn(0) 的 Rule（如 RuleSubvarSubpiece subflow.cc:1593）panic——glob_word 修复。）dead op 的 NULL-slot 保留仍受上述 nullable 表示缺口约束。
 - `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链。
 解锁 RuleEarlyRemoval。
 
@@ -865,7 +865,7 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 ### 2026-06-27（会话2）：CFG 重写原语（解锁 condexe）
 
 为支撑 condexe 核心图重写（condexe.cc:712），Funcdata 新增忠实于 Ghidra funcdata_block.cc 的方法：
-- `remove_from_flow_split(bl, swap) -> Result<(), String>` — `Funcdata::removeFromFlowSplit`（funcdata_block.cc:892 + block.cc:1575）：移除一个 2 入/2 出的空块，将每条入边重连到对应的出边。swap=true 时 In(0)->Out(0)/In(1)->Out(1)；否则交叉连接。condexe execute() 用此消除冗余路径汇合。
+- `remove_from_flow_split(bl, swap) -> Result<(), String>` — `Funcdata::removeFromFlowSplit`（funcdata_block.cc:881-889）+ `BlockGraph::removeFromFlowSplit`（block.cc:1575-1590）：移除一个 2 入/2 出的空块，将每条入边重连到对应的出边。swap=true 时 In(0)->Out(1)/In(1)->Out(0)（交叉）；swap=false 时 In(0)->Out(0)/In(1)->Out(1)（直连）（funcdata_block.cc:880）。序列忠实 block.cc:1584-1589：swap ⇒ `replaceEdgesThru(0,1)`，否则 `replaceEdgesThru(1,1)`，随后 `replaceEdgesThru(0,0)`（swap 经 funcdata_block.cc:886 直传为 flipflow）。condexe execute() 用此消除冗余路径汇合。（2026-08-23 修正：旧实现的 swap 分支序列 (0,0),(0,1) 在第二次调用时越界 panic（block.rs:1613），swap=false 分支误用 flipflow=true 的交叉序列——CONDEXE-CFG-0001。）
 - `structure_reset()` — `Funcdata::structureReset`（funcdata_block.cc:705）：重算循环结构 + 支配者树 + 清空 sblocks。任何 CFG 变更后调用以保持一致性。
 
 ### 2026-06-27（会话3 G3 续）：inject Phase 4 use-def linking（验证有效，暂禁用）

@@ -1732,6 +1732,20 @@ impl Funcdata {
         if let Some(parent) = parent {
             self.obank.mark_dead(op.clone());
             Self::block_remove_op(op, &parent);
+        } else {
+            // Ghidra postcondition of opDestroy: the op is ALWAYS dead
+            // afterwards. A parentless op in Ghidra is already in the
+            // deadlist (PcodeOpBank::create starts ops dead, op.cc:946;
+            // only opInsert's markAlive, funcdata_op.cc:157, brings them
+            // alive), so Ghidra needs no explicit markDead here. Rugra's
+            // create() (op.rs) starts ops alive in the alivelist, so a
+            // parentless destroy (never-inserted op, or a block whose Arc
+            // was already dropped) must still mark_dead to reach the same
+            // terminal state — otherwise an input-less alive SUBPIECE stays
+            // in the ActionPool iteration (processOp's isDead check,
+            // action.cc:830) and panics Rules that read getIn(0) (e.g.
+            // RuleSubvarSubpiece, subflow.cc:1593).
+            self.obank.mark_dead(op.clone());
         }
     }
 
@@ -2723,18 +2737,16 @@ impl Funcdata {
         updateoccurred
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::removeFromFlowSplit
+    // Ghidra: funcdata_block.cc:881 Funcdata::removeFromFlowSplit
     /// Remove a 2-in/2-out empty block, rejoining each in-edge to the
     /// corresponding out-edge. Faithful to `Funcdata::removeFromFlowSplit`
-    /// (funcdata_block.cc:892-900) + `BlockGraph::removeFromFlowSplit`
+    /// (funcdata_block.cc:881-889) + `BlockGraph::removeFromFlowSplit`
     /// (block.cc:1575-1590).
     ///
     /// `bl` must have exactly 2 in-edges and 2 out-edges and no ops.
-    /// If `swap` is false: In(0)->Out(1), In(1)->Out(0).
-    /// If `swap` is true:  In(0)->Out(0), In(1)->Out(1).
-    ///
-    /// (Ghidra's flipflow semantics: flipflow=true maps to replaceEdgesThru(0,0)
-    ///  joining in0->out0; flipflow=false joins in0->out1 first. We mirror this.)
+    /// If `swap` is true:  In(0)->Out(1), In(1)->Out(0) (crossed).
+    /// If `swap` is false: In(0)->Out(0), In(1)->Out(1) (straight).
+    /// (funcdata_block.cc:880: "swap is true to force In(0)->Out(1)".)
     pub fn remove_from_flow_split(
         &mut self,
         bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -2759,21 +2771,24 @@ impl Funcdata {
         }
 
         // Faithful to BlockGraph::removeFromFlowSplit (block.cc:1584-1589):
-        //   if flipflow: replaceEdgesThru(0,1)  // in0 -> out1
-        //   else:        replaceEdgesThru(1,1)  // in1 -> out1
-        //   then:        replaceEdgesThru(0,0)  // remaining in0 -> out0
-        // Note: Ghidra's param is `flipflow`; our `swap` matches flipflow
-        // (swap=true => in0->out0, in1->out1).
+        //   if flipflow: replaceEdgesThru(0,1)  // In(0) -> Out(1)
+        //   else:        replaceEdgesThru(1,1)  // In(1) -> Out(1)
+        //   then:        replaceEdgesThru(0,0)  // remaining In(0) -> Out(0)
+        // Funcdata::removeFromFlowSplit (funcdata_block.cc:886) passes `swap`
+        // straight through as `flipflow`. The old body ran (0,0),(0,1) for
+        // swap=true — the second call indexed outgoing[1] after only one
+        // out-edge remained (block.rs:1613 OOB panic) — and used the
+        // flipflow=true sequence (0,1),(0,0) for swap=false, silently
+        // crossing edges that should stay straight (CONDEXE-CFG-0001).
         {
             let mut bl_rg = bl.write().unwrap();
             if let Some(bb) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
                 if swap {
-                    bb.replace_edges_thru(0, 0);
                     bb.replace_edges_thru(0, 1);
                 } else {
-                    bb.replace_edges_thru(0, 1);
-                    bb.replace_edges_thru(0, 0);
+                    bb.replace_edges_thru(1, 1);
                 }
+                bb.replace_edges_thru(0, 0);
             } else {
                 return Err("remove_from_flow_split: only BlockBasic supported".to_string());
             }
