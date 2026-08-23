@@ -1962,12 +1962,12 @@ impl<'a> FlowInfo<'a> {
                 if iter == self.fd.callspecs.len() {
                     break;
                 }
-                // The for-header `++iter` (flow.cc:1365) now advances past
-                // the successor of the erased spec: the call spec
-                // immediately following a converted one is NOT examined on
-                // this pass. This quirk is load-bearing oracle behavior and
-                // is deliberately reproduced (see fixture case `multi`).
-                iter += 1;
+                // Fall through to the single for-header `++iter` below: it
+                // advances past the successor of the erased spec, so the
+                // call spec immediately following a converted one is NOT
+                // examined on this pass. This quirk is load-bearing oracle
+                // behavior and is deliberately reproduced (see fixture
+                // case `multi`).
             } else {
                 // flow.cc:1400-1402: target strictly inside a visited
                 // instruction — offcut warning only, no op changes.

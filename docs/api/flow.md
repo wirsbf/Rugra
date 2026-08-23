@@ -333,3 +333,12 @@ jumptable 内循环之后）、`setPossibleUnreachable` 的设置点 `inlineSubF
 （`test_infer_params_and_return_type`/`test_type_propagation`，基线 e959d08
 同样失败，类型推断子系统，与本改动无关）。逐函数 oracle 差分见
 `tools/run_flow_containedcall_oracle.sh`。
+
+### 2026-08-23（续）：erase-后继跳过的单一自增修正
+
+修正 `check_contained_call` 首版的一个移植缺陷：erase 后多写了一个
+`iter += 1`，使每次转换前进两步、索引越过表尾（fixture `multi` case 直接
+panic）。Ghidra 每个循环体执行**恰好一次**自增（for 头部 `++iter`，
+flow.cc:1365），该唯一自增本身就是"跳过被删元素后继"的实现。修正后
+`tools/run_flow_containedcall_oracle.sh` 11/11 MATCH（`multi` 双侧第二个
+call 均保留为 CPUI_CALL + callspec）。
