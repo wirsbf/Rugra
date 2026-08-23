@@ -5351,10 +5351,16 @@ impl Action for ActionMultiCse {
                 break;
             }
         }
-        if local_count > 0 {
-            return Ok(action_status::NO_CHANGE);
-        }
+        // Ghidra: coreaction.cc:873 — every successful processBlock merge
+        // increments the inherited Action::count member; perform() returns
+        // that count so the parent stackstall group's rule_repeatapply
+        // fixed point sees this action's changes (PIPE-STACKSTALL-COUNT-0001).
+        self.count += local_count;
         Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:873) into the Rust ActionState accumulator
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "multicse" mirrors ctor at coreaction.hh:163
     fn get_name(&self) -> &str { "multicse" }
@@ -6312,12 +6318,19 @@ impl Action for ActionShadowVar {
                 if let Some(prev_out) = prev_out {
                     fd.op_set_opcode(op, OpCode::CPUI_COPY);
                     // Ghidra: opSetAllInput(op, {prev_out}). In Rugra, we
-                    // truncate inputs to 1 and set slot 0.
+                    // truncate inputs to 1 and set slot 0.  The length read
+                    // is hoisted out of the branch condition: an `if`-condition
+                    // temporary read guard lives through the branch body, and
+                    // op_set_input's write lock on the same op would deadlock
+                    // (PIPE-STACKSTALL-COUNT-0001; first execution of this
+                    // rewrite path hung the whole pipeline).
                     while op.0.read().unwrap().inrefs.len() > 1 {
-                        fd.op_remove_input(op, op.0.read().unwrap().inrefs.len() - 1);
+                        let last = op.0.read().unwrap().inrefs.len() - 1;
+                        fd.op_remove_input(op, last);
                     }
-                    if op.0.read().unwrap().inrefs.is_empty() {
-                        fd.op_set_input(op, prev_out, 0);
+                    let remaining = op.0.read().unwrap().inrefs.len();
+                    if remaining == 0 {
+                        fd.op_insert_input(op, prev_out, 0);
                     } else {
                         fd.op_set_input(op, prev_out, 0);
                     }
@@ -6327,10 +6340,16 @@ impl Action for ActionShadowVar {
             }
         }
 
-        if local_count > 0 {
-            return Ok(action_status::NO_CHANGE);
-        }
+        // Ghidra: coreaction.cc:945 — every MULTIEQUAL rewritten to a COPY
+        // increments the inherited Action::count member; perform() returns
+        // that count so the parent stackstall group's rule_repeatapply
+        // fixed point sees this action's changes (PIPE-STACKSTALL-COUNT-0001).
+        self.count += local_count;
         Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:945) into the Rust ActionState accumulator
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "shadowvar" mirrors ctor at coreaction.hh:177
     fn get_name(&self) -> &str { "shadowvar" }
@@ -6753,11 +6772,16 @@ impl Action for ActionDeindirect {
             change_count += 1;
         }
 
-        if change_count > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra: coreaction.cc:1240 — every resolved indirect call increments
+        // the inherited Action::count member; perform() returns that count so
+        // the parent stackstall group's rule_repeatapply fixed point sees this
+        // action's changes (PIPE-STACKSTALL-COUNT-0001).
+        self.count += change_count;
+        Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:1240) into the Rust ActionState accumulator
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "deindirect" mirrors ctor at coreaction.hh:206
     fn get_name(&self) -> &str { "deindirect" }
@@ -7251,11 +7275,33 @@ pub fn analyze_extra_pop(
 ///
 /// analyzeExtraPop (coreaction.cc:261-318) uses StackSolver to recover
 /// extra-pop across undetermined sub-functions.
-pub struct ActionStackPtrFlow;
+///
+/// Ghidra carries `analysis_finished` (coreaction.hh:91) — set on the first
+/// clean pass and cleared only by reset (coreaction.hh:99) — and reports a
+/// repaired clog through the inherited Action::count member
+/// (coreaction.cc:492) so the parent stackstall group's rule_repeatapply
+/// fixed point sees the change (PIPE-STACKSTALL-COUNT-0001).
+pub struct ActionStackPtrFlow {
+    /// True if analysis already performed (coreaction.hh:91).
+    analysis_finished: bool,
+    /// Inherited Action::count channel (repaired clogs; coreaction.cc:492).
+    count: i32,
+}
 
 impl ActionStackPtrFlow {
     // Ghidra: coreaction.hh:89 ActionStackPtrFlow (constructor mirror)
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self {
+            analysis_finished: false,
+            count: 0,
+        }
+    }
+
+    // RUGRA-GLUE: fixture view of the protected analysis_finished member (coreaction.hh:91); Ghidra fixtures read the flag through the same test-only access shim
+    /// Read the `analysis_finished` state (fixture view of coreaction.hh:91).
+    pub fn is_analysis_finished(&self) -> bool {
+        self.analysis_finished
+    }
 
     /// Is `vn` defined as `spcbasein + constant`? Returns the constant offset.
     /// Faithful to isStackRelative (coreaction.cc:329-344).
@@ -7376,34 +7422,47 @@ impl ActionStackPtrFlow {
         let _ = reached_load;
         0
     }
-}
-impl Action for ActionStackPtrFlow {
-    // Ghidra: coreaction.cc:481 ActionStackPtrFlow::apply
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+
+    // Ghidra: coreaction.cc:432 ActionStackPtrFlow::checkClog
+    /// Find any stack pointer clogs and pass them to the repair routine.
+    /// Returns the number of clogs repaired (cc:478) together with the
+    /// spacebase register location/size (used by analyzeExtraPop, cc:435-436).
+    /// With no spacebase input the count is 0 (cc:444).
+    fn check_clog(
+        fd: &mut Funcdata,
+    ) -> (
+        i32,
+        Option<(crate::address::Address, usize)>,
+    ) {
         use crate::opcodes::OpCode;
         // Locate the spacebase (stack-pointer) INPUT varnode: an input varnode
         // flagged is_spacebase. Faithful to checkClog's beginLoc lookup
         // (coreaction.cc:440-447).
-        let spcbasein = {
-            let mut found: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
-            for op_ref in &fd.obank.alivelist {
-                let o = op_ref.0.read().unwrap();
-                for in_vn in o.inrefs.iter() {
-                    let g = in_vn.read().unwrap();
-                    if g.is_spacebase() && g.is_input() {
-                        found = Some(in_vn.clone());
-                        break;
-                    }
+        let mut spcbasein: Option<
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        > = None;
+        for op_ref in &fd.obank.alivelist {
+            let o = op_ref.0.read().unwrap();
+            for in_vn in o.inrefs.iter() {
+                let g = in_vn.read().unwrap();
+                if g.is_spacebase() && g.is_input() {
+                    spcbasein = Some(in_vn.clone());
+                    break;
                 }
-                if found.is_some() { break; }
             }
-            match found {
-                Some(s) => s,
-                None => return Ok(action_status::NO_CHANGE), // no stack pointer input
+            if spcbasein.is_some() {
+                break;
             }
+        }
+        let Some(spcbasein) = spcbasein else {
+            return (0, None); // cc:444 — no spacebase input, no clogs
         };
-        // checkClog (coreaction.cc:448-480): find INT_ADD(spcbasein, y) where
-        // y is a non-constant (loaded) value — a "clog" — and repair it.
+        let spacebase_loc = {
+            let g = spcbasein.read().unwrap();
+            Some((g.loc.clone(), g.get_size()))
+        };
+        // cc:448-480: find INT_ADD(spcbasein, y) where y is a non-constant
+        // (loaded) value — a "clog" — and repair it.
         let mut clogcount = 0;
         let add_ops: Vec<crate::op::PcodeOpRef> = fd
             .obank
@@ -7415,10 +7474,7 @@ impl Action for ActionStackPtrFlow {
         for add_ref in add_ops {
             let (in0, in1) = {
                 let a = add_ref.0.read().unwrap();
-                (
-                    a.inrefs.get(0).cloned(),
-                    a.inrefs.get(1).cloned(),
-                )
+                (a.inrefs.get(0).cloned(), a.inrefs.get(1).cloned())
             };
             let (in0, in1) = match (in0, in1) {
                 (Some(a), Some(b)) => (a, b),
@@ -7432,10 +7488,12 @@ impl Action for ActionStackPtrFlow {
             } else {
                 continue;
             };
-            let constx = match Self::is_stack_relative(&spcbasein, &x) {
-                Some(c) => c,
+            // cc:458-461 — x must be stack-relative (the guard itself; the
+            // constant value is only used through the LOAD pointer below).
+            match Self::is_stack_relative(&spcbasein, &x) {
+                Some(_) => {}
                 None => continue,
-            };
+            }
             let y_g = y.read().unwrap();
             if !y_g.is_written() {
                 continue; // y must not be a constant (coreaction.cc:455)
@@ -7447,14 +7505,74 @@ impl Action for ActionStackPtrFlow {
             drop(y_g);
             let loadopc = loadop_arc.read().unwrap().opcode;
             if loadopc == OpCode::CPUI_LOAD {
-                clogcount += Self::repair(fd, &spcbasein, &crate::op::PcodeOpRef(loadop_arc), constx);
+                // cc:473-475 — constz is the LOAD's pointer stack offset, not
+                // the clog ADD's operand offset.
+                let ptrvn = {
+                    let l = loadop_arc.read().unwrap();
+                    l.inrefs.get(1).cloned()
+                };
+                let Some(ptrvn) = ptrvn else { continue };
+                let Some(constz) = Self::is_stack_relative(&spcbasein, &ptrvn) else {
+                    continue;
+                };
+                clogcount += Self::repair(
+                    fd,
+                    &spcbasein,
+                    &crate::op::PcodeOpRef(loadop_arc),
+                    constz,
+                );
             }
         }
-        if clogcount > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        (clogcount, spacebase_loc)
+    }
+}
+impl Action for ActionStackPtrFlow {
+    // Ghidra: coreaction.cc:481 ActionStackPtrFlow::apply
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // cc:484-485 — analysis already performed; a successive pass does
+        // nothing until reset() (coreaction.hh:99) clears the flag.
+        if self.analysis_finished {
+            return Ok(action_status::NO_CHANGE);
         }
+        // cc:490 — checkClog(data, stackspace, 0). A null stackspace
+        // (cc:486-489) has no Rugra counterpart: the spacebase-input lookup
+        // returning None is the same "nothing to analyze" condition and falls
+        // into the clean-pass arm below, mirroring the finish side-effect.
+        let (numchange, spacebase_loc) = Self::check_clog(fd);
+        if numchange > 0 {
+            // cc:492 — the repair feeds the inherited Action::count member so
+            // the parent stackstall group's rule_repeatapply fixed point
+            // re-runs the group (PIPE-STACKSTALL-COUNT-0001).
+            self.count += 1;
+        }
+        if numchange == 0 {
+            // cc:495 analyzeExtraPop. The cc:264-267 guard reads the
+            // architecture's evalfp_called/defaultfp proto model and elides
+            // the solver when the model's extra-pop is known; Rugra reads the
+            // function prototype's resolved extra_pop (same "known" answer in
+            // the default pipeline once the model is installed). The unknown
+            // path runs StackSolver — its callspec write-back is still
+            // unwired (see analyze_extra_pop), tracked by
+            // PIPE-STACKSTALL-COUNT-0001's solver residual.
+            if fd.funcp.get_extra_pop() == crate::fspec::EXTRAPOP_UNKNOWN_FULL {
+                if let Some((spacebase_addr, spacebase_size)) = spacebase_loc {
+                    analyze_extra_pop(fd, spacebase_addr, spacebase_size, 0);
+                }
+            }
+            // cc:496 — analysis finished on a clean pass.
+            self.analysis_finished = true;
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+    // Ghidra: coreaction.hh:99 ActionStackPtrFlow::reset — purge the
+    // per-function analysis state (the inherited Action::reset status/flag
+    // handling lives in the externalized ActionState, see ActionGroup::reset).
+    fn reset(&mut self, _fd: &mut Funcdata) {
+        self.analysis_finished = false;
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:492) into the Rust ActionState accumulator
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "stackptrflow" mirrors ctor at coreaction.hh:89
     fn get_name(&self) -> &str { "stackptrflow" }
