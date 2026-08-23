@@ -213,6 +213,7 @@ cleanup 池重复的 RuleTrivialArith）。26 项拟登记 TODO 详见报告 §5
 - **myfwrite 分析回收（3 层根因，主因推翻初始假设）**：主因=RuleSplitLoad/RuleSplitStore 缺 getValueDatatype 门禁（subflow.cc:2970-2983/2910-2938/2244-2274；一条 mov 拆 44 字段 load，门禁模拟实证 45→16 行+全量 2467→2433 零回归）→ 派发 wt/splitgate｜次因=merge_addr_tied 全空间分组（oracle merge.cc:609-648 双门：仅 IPTR_PROCESSOR/SPACEBASE+addrtied 标志）→ 派发 wt/addrtied｜MERGE-MIXEDHIGH 部分成立（次要，等前两修后重triage）｜次生登记：unique 偏移碰撞、reassemble_via_piece 自环。
 - **myprog 分析回收**：myprogress/progressbarinit 差异主体是 RC-A 第三形态（吞 GetStr 函数体=扫过尾+jmp PLT 尾调用丢，已补 sharedret 规格）｜find_partial_field 原型修复已 stash（patch=/tmp/myprog_find_partial_field.patch，A/B 验证零回归），归 RC-C opPtrsub 派发时合并。
 - **派发 wt/recovered**：恢复组重triage（原 panic/未产出 11 函数在新基线的形态）。
+- **myprog 详细分析回收（P1-P7/M1-M8 根因表）**：P6/M1=RC-A（已入 sharedret）；P1 splitstore 越窗=splitgate 域；P2/M5=RuleStructOffset0 offset 硬编码+STOP_TYPE_PROPAGATION 未消费+type_infer 自创传播器（已补 rulebisect 输入）；M4=DWARF 局部变量导入缺失（已补 dwarfagg 规格）；M3/P7a/P5+find_partial_field 原型=myprog 租约内续修（已指令）；P4=动态符号映射缺口（待 merge/varmap 域认领）；M6=RPN 残留族（PRINTC-CAST-EXPR-0001）。
 
 | 组 | owner | write-set | 目标函数（rugra vs golden 字符） |
 |---|---|---|---|
