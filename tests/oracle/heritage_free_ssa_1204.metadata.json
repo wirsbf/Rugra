@@ -32,7 +32,7 @@
     "observation": "Five fixed-order lines. Each case records pre-state and complete post-state relevant to the boundary. order traverses the current BlockGraph list and each block's live op list in execution order; for every op it emits output then every declared input slot, with a first-seen alias id, storage class, input/written/free/constant/annotation class, exact descendant count, primary flags, activeHeritage, heritageKnown and defining-op label. Additional fields record pass, old-bank deletion, alias equalities, free-with-reader census, exact caught error, and unsorted PHI slot->predecessor->input mapping.",
     "normalization": "Only raw object addresses are replaced by deterministic first-seen aN ids, preserving all equality/alias relations. Unique-space offsets and raw IOP pointer offsets are omitted because they are implementation allocation identities; size, class, flags, definition and descendants remain. The Rust Vec missing reserved-null input after the caught second-reader panic is projected as the same declared s0=null slot as Ghidra; this known representation difference is not claimed MATCH. No block, op, predecessor, slot or descendant order is sorted or removed."
   },
-  "input_fingerprint": "sha256:b089db1c60f8923dc3085019c75cae3f22ccd23a273f3109ec1081295b64e959",
+  "input_fingerprint": "sha256:0d00bed7447dfe6e2155ea9163f35440797de9fb40e10e5bee5d4c884bf559c9",
   "input_manifest": {
     "schema": "rugra-heritage-free-ssa-input-v2",
     "canonicalization": "SHA-256 over the entire input_manifest object encoded as UTF-8 by json.dumps with sort_keys=true, separators=(',',':'), ensure_ascii=false; no floats",
@@ -130,12 +130,13 @@
       }
     },
     "rugra": {
-      "repository_commit": "2be910a2513a9a049eb8bad0bd0a7c13a566bd6a",
-      "repository_tree": "4810d810e0f1932537cd849a634ce51f19f067d9",
-      "tracked_crate_tree_hash_scheme": "sha256 of rugra-heritage-free-ssa-current-crate-v1 plus sorted length-prefixed tracked Cargo.toml/Cargo.lock/build.rs/src/sleigh_shim paths and bytes",
-      "tracked_crate_tree_sha256": "828ebb135f2378b116312851b9ad9a64a4d1dabc0d50bdfabf7bd466f1d409e0",
+      "repository_commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+      "repository_tree": "320c207975ee2d3157e4821c15336858fbb8bdd4",
+      "repository_src_tree": "ae8f4a750f671d6b875dacba308877321540ed8d",
+      "tracked_crate_tree_hash_scheme": "sha256 of rugra-heritage-free-ssa-checkpoint-crate-v2 plus sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at repository_commit",
+      "tracked_crate_tree_sha256": "fffe107be4805c45987f25db4dd65d4f51db409b46ed4e972e7ae68bc7665718",
       "critical_source_blobs": {
-        "src/block.rs": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
+        "src/block.rs": "f47a57fa6926b33f687bf5fceb5622a0fa63d354",
         "src/funcdata.rs": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
         "src/heritage.rs": "cca06c8bb4060784da8c50d177f672e0b5d453c6",
         "src/op.rs": "1f8908d74c0e5b72e41a910e46313066d48ce919",
@@ -150,18 +151,19 @@
     "mutation": "old free bank membership/deletion; new slot identity and descendants; exact exception pre/post Varnode state; PHI slot reverse-edge mapping"
   },
   "comparand": {
-    "rugra_base_commit": "2be910a2513a9a049eb8bad0bd0a7c13a566bd6a",
-    "rugra_base_tree": "4810d810e0f1932537cd849a634ce51f19f067d9",
+    "rugra_base_commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+    "rugra_base_tree": "320c207975ee2d3157e4821c15336858fbb8bdd4",
+    "rugra_base_src_tree": "ae8f4a750f671d6b875dacba308877321540ed8d",
     "cpp_fixture_sha256": "9bc24f130e18b859531227572ef21b41b18dc6973ee74ccf230c744fc4a9a64f",
     "rust_fixture_sha256": "a9f69c1c31dcae94e62e30830d14dae73fe8f9292751478c97c93ceb6e2e5824",
-    "runner_sha256": "9298556550c20fbdd1613ea0f273f1e9cb4f0f76db80d0cf2e2bd92d62d56fea",
+    "runner_sha256": "50dcc5d9a951024e4e467ef2344c3a78ee603cf291d107aa201b42cfd1318e15",
     "heritage_rs_sha256": "55e82e71e0aaad072383752721f0ced7e13720e9c717a5ce8b10c9f8cc8d3d26",
     "funcdata_rs_sha256": "708eb8e3f523e64ba77452c13dad2f110c1f3d82c6f3028eb4aed5d2c5eb6a34",
     "varnode_rs_sha256": "9b797e2a739dc58d0f88333ae8880dea3e377a3c25fc7b004d4f0ec405cb2a4a",
     "op_rs_sha256": "ca3dc3685d332cc15a370625a2f449a94a35853ce2533c41975a5ba07f9a58ba",
-    "block_rs_sha256": "409bc6cb867c56aef497fbc7ee256911c840e6aaabe08a893d621d39dd4d4109",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-free-ssa-current-crate-v1 plus sorted length-prefixed tracked Cargo.toml/Cargo.lock/build.rs/src/sleigh_shim paths and bytes",
-    "rust_crate_tree_sha256": "828ebb135f2378b116312851b9ad9a64a4d1dabc0d50bdfabf7bd466f1d409e0",
+    "block_rs_sha256": "aa89511224fadb3075eb79454dcda0027ca81139a6898e010d0f171817898c9c",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-free-ssa-checkpoint-crate-v2 plus sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at repository_commit",
+    "rust_crate_tree_sha256": "fffe107be4805c45987f25db4dd65d4f51db409b46ed4e972e7ae68bc7665718",
     "host": {
       "cxx": "g++ (GCC) 16.2.1 20260810",
       "cxx_target": "x86_64-pc-linux-gnu",
@@ -172,7 +174,7 @@
   },
   "build": {
     "oracle": "Runner exports the complete decompiler/cpp subtree from the locked commit, rebuilds libdecomp.a in a private temporary tree, and links the C++ fixture there.",
-    "comparand": "Runner refuses any full tracked crate-tree hash drift, serializes cargo build --offline --locked --lib with /tmp/rugra-cargo-build.lock, and uses CARGO_TARGET_DIR=/tmp/rugra-target-heritage-free-ssa. On this host that exact dedicated target path is a verified symlink to ~/.cache/rugra-target-heritage-free-ssa so the tmpfs quota cannot truncate artifacts.",
+    "comparand": "Runner exports all 103 tracked library, build, manifest, README and explicitly declared bench/example inputs from Rugra checkpoint 36633d9, verifies their full tree hash, overlays only the frozen Rust fixture outside that source tree, serializes cargo build --offline --locked --lib with /tmp/rugra-cargo-build.lock, and uses CARGO_TARGET_DIR=/tmp/rugra-target-heritage-free-ssa. On this host that exact dedicated target path is a verified symlink to ~/.cache/rugra-target-heritage-free-ssa so the tmpfs quota cannot truncate artifacts.",
     "private_observer": "The locked Funcdata prefix layout shim is used solely for Heritage::buildInfoList, mirroring startProcessing funcdata.cc:166; no oracle source is modified."
   },
   "expected_stdout_sha256": "a436a160d3cc9210c0971ccd403bf148f8a2bfbc8cd89d1b395a92777bfa5a3f",

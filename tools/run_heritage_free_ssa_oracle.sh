@@ -1,9 +1,9 @@
 #!/usr/bin/env -S -i PATH=/usr/bin:/bin /usr/bin/bash
 set -euo pipefail
 
-# HERITAGE-FREE-SSA-FIXTURE-0001.  The runner snapshots the locked Ghidra
-# source at e40ed130, pins the complete current Rust crate comparand, serializes
-# Cargo through the repository-wide lock, and compares stdout byte-for-byte.
+# HERITAGE-FREE-SSA-FIXTURE-0001.  The runner snapshots both locked Ghidra
+# e40ed130 and Rugra 36633d9 sources, overlays the frozen fixture, serializes
+# only Cargo through the repository-wide lock, and compares stdout byte-for-byte.
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -26,8 +26,9 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=2be910a2513a9a049eb8bad0bd0a7c13a566bd6a
-rugra_base_tree=4810d810e0f1932537cd849a634ce51f19f067d9
+rugra_source_commit=36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba
+rugra_source_tree=320c207975ee2d3157e4821c15336858fbb8bdd4
+rugra_source_src_tree=ae8f4a750f671d6b875dacba308877321540ed8d
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/heritage_free_ssa_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/heritage_free_ssa_1204.cc"
@@ -76,27 +77,66 @@ if [[ -n "$(/usr/bin/git -C "$ghidra_root" status --porcelain -- \
   echo "locked Ghidra decompiler tree is dirty" >&2
   exit 1
 fi
-if [[ "$(/usr/bin/git -C "$repo_root" rev-parse "$rugra_base_commit^{commit}")" != "$rugra_base_commit" || \
-      "$(/usr/bin/git -C "$repo_root" rev-parse "$rugra_base_commit^{tree}")" != "$rugra_base_tree" ]]; then
-  echo "pinned Rugra base identity mismatch" >&2
+if [[ "$(/usr/bin/git -C "$repo_root" rev-parse "$rugra_source_commit^{commit}")" != "$rugra_source_commit" || \
+      "$(/usr/bin/git -C "$repo_root" rev-parse "$rugra_source_commit^{tree}")" != "$rugra_source_tree" || \
+      "$(/usr/bin/git -C "$repo_root" rev-parse "$rugra_source_commit:src")" != "$rugra_source_src_tree" ]]; then
+  echo "pinned Rugra source identity mismatch" >&2
   exit 1
 fi
 
+oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-heritage-free-ssa-1204.XXXXXX)
+cleanup() {
+  case "$oracle_tmp" in
+    /tmp/rugra-heritage-free-ssa-1204.??????)
+      [[ ! -e "$oracle_tmp" || ( -d "$oracle_tmp" && ! -L "$oracle_tmp" ) ]] || return 1
+      /usr/bin/rm -rf -- "$oracle_tmp"
+      ;;
+    *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2; return 1 ;;
+  esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+owned=("$metadata" "$cpp_fixture" "$rust_fixture" "$runner")
+/usr/bin/sha256sum "${owned[@]}" >"$oracle_tmp/owned.before"
+/usr/bin/mkdir -p "$oracle_tmp/source" "$oracle_tmp/rugra" "$oracle_tmp/overlay"
+/usr/bin/cp -- "$cpp_fixture" "$oracle_tmp/overlay/heritage_free_ssa_1204.cc"
+/usr/bin/cp -- "$rust_fixture" "$oracle_tmp/overlay/heritage_free_ssa_1204.rs"
+cpp_fixture_snapshot="$oracle_tmp/overlay/heritage_free_ssa_1204.cc"
+rust_fixture_snapshot="$oracle_tmp/overlay/heritage_free_ssa_1204.rs"
+/usr/bin/git -C "$ghidra_root" archive --format=tar "$oracle_commit" \
+  Ghidra/Features/Decompiler/src/decompile/cpp | \
+  /usr/bin/tar -xf - -C "$oracle_tmp/source"
+oracle_cpp="$oracle_tmp/source/Ghidra/Features/Decompiler/src/decompile/cpp"
+/usr/bin/git -C "$repo_root" archive --format=tar "$rugra_source_commit" \
+  Cargo.toml Cargo.lock README.md build.rs src sleigh_shim \
+  benches/decompile_bench.rs tests/oracle/decompress_1204.rs \
+  tests/oracle/funcproto_lock_1204.rs | \
+  /usr/bin/tar -xf - -C "$oracle_tmp/rugra"
+rugra_snapshot="$oracle_tmp/rugra"
+/usr/bin/mkdir -p "$rugra_snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile"
+/usr/bin/ln -s "$oracle_cpp" \
+  "$rugra_snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
+
 runner_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
-/usr/bin/python3 -I -S - "$repo_root" "$ghidra_root" "$metadata" "$cpp_fixture" \
-  "$rust_fixture" "$runner_sha" "$oracle_tag" "$oracle_commit" \
-  "$oracle_cpp_tree" "$oracle_makefile_blob" "$rugra_base_commit" \
-  "$rugra_base_tree" <<'PY'
+/usr/bin/python3 -I -S - "$repo_root" "$ghidra_root" "$rugra_snapshot" "$metadata" \
+  "$cpp_fixture_snapshot" "$rust_fixture_snapshot" "$runner_sha" "$oracle_tag" \
+  "$oracle_commit" "$oracle_cpp_tree" "$oracle_makefile_blob" \
+  "$rugra_source_commit" "$rugra_source_tree" "$rugra_source_src_tree" <<'PY'
 import hashlib
 import json
 import pathlib
 import subprocess
 import sys
 
-(repo_raw, ghidra_raw, metadata_raw, cpp_raw, rust_raw, runner_sha, oracle_tag,
- oracle_commit, cpp_tree, makefile_blob, base_commit, base_tree) = sys.argv[1:]
+(repo_raw, ghidra_raw, rugra_snapshot_raw, metadata_raw, cpp_raw, rust_raw,
+ runner_sha, oracle_tag, oracle_commit, cpp_tree, makefile_blob, source_commit,
+ source_tree, source_src_tree) = sys.argv[1:]
 repo = pathlib.Path(repo_raw).resolve()
 ghidra_repo = pathlib.Path(ghidra_raw).resolve()
+rugra_snapshot = pathlib.Path(rugra_snapshot_raw).resolve()
 metadata_path = pathlib.Path(metadata_raw)
 cpp_path = pathlib.Path(cpp_raw)
 rust_path = pathlib.Path(rust_raw)
@@ -117,8 +157,8 @@ def git_output(repository, *arguments):
 def committed_blob(repository, revision, relative):
     return git_output(repository, "rev-parse", f"{revision}:{relative}")
 
-def worktree_blob(repository, relative):
-    return git_output(repository, "hash-object", "--no-filters", str(repository / relative))
+def file_blob(repository, path):
+    return git_output(repository, "hash-object", "--no-filters", str(path))
 
 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 oracle = metadata["oracle"]
@@ -127,24 +167,28 @@ require("oracle commit", oracle["commit"], oracle_commit)
 require("oracle cpp tree", oracle["decompiler_cpp_tree"], cpp_tree)
 require("oracle Makefile", oracle["decompiler_makefile_blob"], makefile_blob)
 comparand = metadata["comparand"]
-require("base commit", comparand["rugra_base_commit"], base_commit)
-require("base tree", comparand["rugra_base_tree"], base_tree)
+require("source commit", comparand["rugra_base_commit"], source_commit)
+require("source tree", comparand["rugra_base_tree"], source_tree)
+require("source src tree", comparand["rugra_base_src_tree"], source_src_tree)
 require("C++ fixture hash", sha(cpp_path.read_bytes()), comparand["cpp_fixture_sha256"])
 require("Rust fixture hash", sha(rust_path.read_bytes()), comparand["rust_fixture_sha256"])
 require("runner hash", runner_sha, comparand["runner_sha256"])
 
 raw_paths = subprocess.check_output([
-    "/usr/bin/git", "-C", str(repo), "ls-files", "-z", "--",
-    "Cargo.toml", "Cargo.lock", "build.rs", "src", "sleigh_shim",
+    "/usr/bin/git", "-C", str(repo), "ls-tree", "-r", "-z", "--name-only",
+    source_commit, "--",
+    "Cargo.toml", "Cargo.lock", "README.md", "build.rs", "src", "sleigh_shim",
+    "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
+    "tests/oracle/funcproto_lock_1204.rs",
 ])
 paths = sorted(
     (pathlib.Path(item.decode()) for item in raw_paths.split(b"\0") if item),
     key=lambda path: path.as_posix(),
 )
 hasher = hashlib.sha256()
-hasher.update(b"rugra-heritage-free-ssa-current-crate-v1\0")
+hasher.update(b"rugra-heritage-free-ssa-checkpoint-crate-v2\0")
 for relative in paths:
-    source = repo / relative
+    source = rugra_snapshot / relative
     if source.is_symlink() or not source.is_file():
         raise SystemExit(f"crate input is not a regular file: {relative}")
     data = source.read_bytes()
@@ -154,9 +198,9 @@ for relative in paths:
     hasher.update(len(data).to_bytes(8, "big"))
     hasher.update(data)
 require("crate hash scheme", comparand["rust_crate_tree_hash_scheme"],
-        "sha256 of rugra-heritage-free-ssa-current-crate-v1 plus sorted length-prefixed tracked Cargo.toml/Cargo.lock/build.rs/src/sleigh_shim paths and bytes")
+        "sha256 of rugra-heritage-free-ssa-checkpoint-crate-v2 plus sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at repository_commit")
 crate_tree_sha = hasher.hexdigest()
-require("current crate hash", crate_tree_sha, comparand["rust_crate_tree_sha256"])
+require("source crate hash", crate_tree_sha, comparand["rust_crate_tree_sha256"])
 for relative, key in (
     ("src/heritage.rs", "heritage_rs_sha256"),
     ("src/funcdata.rs", "funcdata_rs_sha256"),
@@ -164,7 +208,7 @@ for relative, key in (
     ("src/op.rs", "op_rs_sha256"),
     ("src/block.rs", "block_rs_sha256"),
 ):
-    require(key, sha((repo / relative).read_bytes()), comparand[key])
+    require(key, sha((rugra_snapshot / relative).read_bytes()), comparand[key])
 
 architecture = (
     "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, "
@@ -250,23 +294,31 @@ oracle_source_blobs = {
     for name in oracle_source_names
 }
 for name, blob in oracle_source_blobs.items():
-    actual_blob = worktree_blob(ghidra_repo, pathlib.Path(oracle_source_root) / name)
+    actual_blob = file_blob(
+        ghidra_repo, ghidra_repo / pathlib.Path(oracle_source_root) / name
+    )
     require(f"locked oracle worktree blob {name}", actual_blob, blob)
 
 rugra_source_names = (
     "src/block.rs", "src/funcdata.rs", "src/heritage.rs", "src/op.rs", "src/varnode.rs",
 )
 rugra_source_blobs = {
-    name: committed_blob(repo, base_commit, name) for name in rugra_source_names
+    name: committed_blob(repo, source_commit, name) for name in rugra_source_names
 }
 for name, blob in rugra_source_blobs.items():
-    require(f"current Rugra blob {name}", worktree_blob(repo, pathlib.Path(name)), blob)
+    require(
+        f"snapshotted Rugra blob {name}",
+        file_blob(repo, rugra_snapshot / pathlib.Path(name)),
+        blob,
+    )
 
 fixture_records = {}
-for fixture_path in (cpp_path, rust_path):
-    relative = fixture_path.resolve().relative_to(repo).as_posix()
+for relative, fixture_path in (
+    ("tests/oracle/heritage_free_ssa_1204.cc", cpp_path),
+    ("tests/oracle/heritage_free_ssa_1204.rs", rust_path),
+):
     fixture_records[relative] = {
-        "git_blob_oid": worktree_blob(repo, pathlib.Path(relative)),
+        "git_blob_oid": file_blob(repo, fixture_path),
         "sha256": sha(fixture_path.read_bytes()),
     }
 
@@ -287,8 +339,9 @@ expected_manifest = {
     "cases": cases,
     "fixtures": fixture_records,
     "rugra": {
-        "repository_commit": base_commit,
-        "repository_tree": base_tree,
+        "repository_commit": source_commit,
+        "repository_tree": source_tree,
+        "repository_src_tree": source_src_tree,
         "tracked_crate_tree_hash_scheme": comparand["rust_crate_tree_hash_scheme"],
         "tracked_crate_tree_sha256": crate_tree_sha,
         "critical_source_blobs": rugra_source_blobs,
@@ -325,40 +378,18 @@ if not coverage["remaining_heritage_closure"].startswith("UNTESTED"):
     raise SystemExit("remaining_heritage_closure must remain UNTESTED")
 PY
 
-oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-heritage-free-ssa-1204.XXXXXX)
-cleanup() {
-  case "$oracle_tmp" in
-    /tmp/rugra-heritage-free-ssa-1204.??????)
-      [[ ! -e "$oracle_tmp" || ( -d "$oracle_tmp" && ! -L "$oracle_tmp" ) ]] || return 1
-      /usr/bin/rm -rf -- "$oracle_tmp"
-      ;;
-    *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2; return 1 ;;
-  esac
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-owned=("$metadata" "$cpp_fixture" "$rust_fixture" "$runner")
-/usr/bin/sha256sum "${owned[@]}" >"$oracle_tmp/owned.before"
-/usr/bin/mkdir -p "$oracle_tmp/source"
-/usr/bin/git -C "$ghidra_root" archive --format=tar "$oracle_commit" \
-  Ghidra/Features/Decompiler/src/decompile/cpp | \
-  /usr/bin/tar -xf - -C "$oracle_tmp/source"
-oracle_cpp="$oracle_tmp/source/Ghidra/Features/Decompiler/src/decompile/cpp"
 jobs=$(/usr/bin/getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 if (( jobs > 8 )); then jobs=8; fi
 /usr/bin/nice -n 10 /usr/bin/make --silent -C "$oracle_cpp" -j "$jobs" \
   CXX="/usr/bin/g++ -std=c++11" EXTRA= libdecomp.a
 /usr/bin/g++ -std=c++11 -O2 -Wall -Wno-sign-compare -m64 -I"$oracle_cpp" \
-  "$cpp_fixture" "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
+  "$cpp_fixture_snapshot" "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
   "$oracle_cpp/inject_sleigh.cc" -Wl,--whole-archive "$oracle_cpp/libdecomp.a" \
   -Wl,--no-whole-archive -lz -o "$oracle_tmp/fixture_cpp"
 
 /usr/bin/flock "$cargo_lock" -c \
-  "CARGO_TARGET_DIR='$cargo_target' /usr/bin/cargo build --offline --locked --quiet --lib --manifest-path '$repo_root/Cargo.toml'"
-/usr/bin/rustc --edition=2021 -O "$rust_fixture" \
+  "CARGO_TARGET_DIR='$cargo_target' /usr/bin/cargo build --offline --locked --quiet --lib --manifest-path '$rugra_snapshot/Cargo.toml'"
+/usr/bin/rustc --edition=2021 -O "$rust_fixture_snapshot" \
   --extern "rugra=$cargo_target/debug/librugra.rlib" \
   -L "dependency=$cargo_target/debug/deps" \
   -o "$oracle_tmp/fixture_rust"
