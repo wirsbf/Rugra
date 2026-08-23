@@ -68,3 +68,7 @@ tools/__pycache__/
 
 # Vendored Ghidra source (reference only, do not commit; huge tree)
 /ghidra/
+
+# Local oracle tree symlink (worktrees only; the main repo has ghidra/ as
+# untracked checkout)
+/ghidra/

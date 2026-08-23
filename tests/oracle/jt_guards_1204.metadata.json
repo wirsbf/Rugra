@@ -1,0 +1,196 @@
+{
+  "schema_version": 2,
+  "fixture_id": "JT-GUARDS-1204",
+  "status_note": "analyzeGuards/checkUnrolledGuard/valueMatch/quasiCopy differential fixture for JUMPTABLE-GUARDS-0001. Rugra side pinned as base commit 32a136d plus the working-tree src/jumptable.rs overlay recorded in comparand.jumptable_overlay_sha256; update that sha (and expected_results) whenever src/jumptable.rs changes. Declared residuals are outside the JUMPTABLE-GUARDS-0001 write-set (rangeutil.rs pull_back_binary INT_SLESS/INT_SLESSEQUAL; funcdata.rs calc_nz_mask unwritten-input initialization) and are surfaced as known_diffs, not hidden.",
+  "decisive_semantics": {
+    "reference_output_parameters": "analyzeGuards mutates selectguards in place (vector push_back order = observation order); GuardRecord stores rng by value and readOp/cbranch as raw PcodeOp pointers; valueMatch is const and takes vn2/baseVn2/bitsPreserved2 by pointer/value without mutating them.",
+    "loop_bounds_traversal_order": "for(i=0;i<maxbranch=2;++i) over CBRANCHs; inner walk-back for(;;) while bl->sizeIn()==1 and prevbl->sizeOut()==1; pullback for(j=0;j<maxpullback=2;++j) breaks on !isWritten/pullBack null/empty range; checkUnrolledGuard iterates varArray in in-edge order and pushes one guard per surviving pullback level.",
+    "counter_accumulator_lifecycle": "pathout is consumed once (set to -1 after first use); bl is stepped to prevbl after each CBRANCH iteration; i!=0 guards the other-switch check; checkUnrolledGuard readOp stays cbranch for every push (Ghidra inner declaration shadows the outer).",
+    "sorting_comparison_keys": "findMultiequal walks varArray[0] descend order and requires parent==bl plus exact input-slot identity; valueMatch early-returns on vn pointer identity, then bitsPreserved equality plus baseVn pointer identity, then oneOffMatch opcode+in(0) identity+matching_constants, then LOAD spaceid offset, pointer INT_ADD base identity and constant offset equality."
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc"
+  },
+  "analysis_options": {
+    "default": true
+  },
+  "rugra_source": {
+    "base_commit": "32a136de1327e863799f75f1c0c833f51cf1b60f",
+    "base_tree": "829e64782d43b8b192533877d1ad7cc2176c016b",
+    "base_src_tree": "1fb9e4fa6c609fc1f54a3fc38ed3a39379768963",
+    "base_jumptable_blob": "deb1b0009ea7f648a66f8c40e13edfd9de4ef8e1",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "97cc8564bbb5e0b0b059f3efa942ad0dad2b96d5c1843bb20c82d6bd7488fcd3",
+    "rust_fixture_sha256": "2afb90fd24d3732287186db59642552068e8ec96aa1313dd51872216ba2a2972",
+    "jumptable_overlay_sha256": "6b248b2536bb8707bc7e040f7fefb3e3fbec037df50baca8b32a0c1b2fae9ae8",
+    "runner_sha256": "451978bf4c80fad6a1e201a0f787be897d8999d9615168e7a738db97f92a097d"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "binary": {
+      "path": "examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "functions": [
+      "GetStr"
+    ],
+    "cases": [
+      "sc1_chain_range",
+      "sc2_unrolled",
+      "sc3_neg_const",
+      "sc4_other_switch",
+      "sc5_pathout",
+      "sc6_quasi_vm"
+    ],
+    "sha256": "dc48e858656bead965bdf4f0b11cdaecb2db9c70ea51e049b18b9fe0e7d945bb"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "6cb41c4bcd219019b894c1c5d3b6c652b606edd9d96e24603be0d48cd663fb3a",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "2cb4b99d3f458625cf3671adc3313c95054f3c727421ff8b11dace6aba9bf2d0",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "71ade49a9d9147b9b389c8e46533cad0ffee62b50232015a4fb6dfa3eec9fe67",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 1
+  },
+  "coverage": {
+    "sc1_chain_range": {
+      "status": "MISMATCH",
+      "covers": "Two chained range guards (x>2 && x<10): walk-back across both CBRANCHs, i=0/i=1 iterations, FlipPath-adjusted indpath, pullBack expansion, valueMatch probes.",
+      "residual_todo_ids": [
+        "JUMPTABLE-GUARDS-RESIDUAL-0001"
+      ]
+    },
+    "sc2_unrolled": {
+      "status": "MATCH",
+      "covers": "sizeIn>1 walk-back dispatches to checkUnrolledGuard: MULTIEQUAL guard at j=0, duplicateVarnodes guard at j=1 after liftVerifyUnroll, quasiCopy base via constructor, unrolled flag, readOp==cbranch shadowing.",
+      "residual_todo_ids": []
+    },
+    "sc3_neg_const": {
+      "status": "MISMATCH",
+      "covers": "Single guard with negative signed constant (x >=s -5, 0xfffffffb): constant encoding, signed pullBack range.",
+      "residual_todo_ids": [
+        "JUMPTABLE-GUARDS-RESIDUAL-0001"
+      ]
+    },
+    "sc4_other_switch": {
+      "status": "MATCH",
+      "covers": "i!=0 other-switch protection: foreign BRANCHIND on the second CBRANCH's other out-edge stops analysis (no guards from that CBRANCH).",
+      "residual_todo_ids": []
+    },
+    "sc5_pathout": {
+      "status": "MATCH",
+      "covers": "pathout stepping (JumpBasic2 style): analyzeGuards(X5,1) steps through out(1), analyzes X5's own CBRANCH with indpath=1/toswitchval=true, then breaks on the foreign BRANCHIND at i=1.",
+      "residual_todo_ids": []
+    },
+    "sc6_quasi_vm": {
+      "status": "MISMATCH",
+      "covers": "quasiCopy walks (INT_AND mask / COPY / SUBPIECE / SEXT-not-walked) and valueMatch deep branches: samevn=1, samebase=1, oneOffMatch INT_ADD=1, offconst=0, LOAD equivalence=2, offset-differing LOAD=0, const bitsdiff/basediff=0.",
+      "residual_todo_ids": [
+        "JUMPTABLE-GUARDS-RESIDUAL-0002"
+      ]
+    }
+  },
+  "known_diffs": [
+    {
+      "expect_line_prefix": "sc1_chain_range|",
+      "residual_todo_id": "JUMPTABLE-GUARDS-RESIDUAL-0001"
+    },
+    {
+      "expect_line_prefix": "sc3_neg_const|",
+      "residual_todo_id": "JUMPTABLE-GUARDS-RESIDUAL-0001"
+    },
+    {
+      "expect_line_prefix": "sc6_quasi_vm|",
+      "residual_todo_id": "JUMPTABLE-GUARDS-RESIDUAL-0002"
+    }
+  ],
+  "residuals": [
+    {
+      "todo_id": "JUMPTABLE-GUARDS-RESIDUAL-0001",
+      "status": "MISMATCH",
+      "detail": "Rugra CircleRange::pull_back_binary (src/rangeutil.rs) lacks the CPUI_INT_SLESS/CPUI_INT_SLESSEQUAL cases of oracle rangeutil.cc:882-917, so analyzeGuards' pullBack loop through a signed comparison returns None and the guard record for the switch variable is never pushed (sc1 g1, sc3 g1). Fix belongs to the rangeutil owner (related: RANGE-0001); jumptable.rs-side wiring is correct.",
+      "branches": [
+        {
+          "id": "sc1_chain_range_g1_missing",
+          "status": "MISMATCH",
+          "detail": "ghidra g1:cb=B.cb,ro=B.cmp2,rng=2147483648/4 absent on rugra side."
+        },
+        {
+          "id": "sc3_neg_const_g1_missing",
+          "status": "MISMATCH",
+          "detail": "ghidra g1:cb=G3.cb,ro=G3.cmp,rng=4294967291/2147483648 absent on rugra side."
+        }
+      ]
+    },
+    {
+      "todo_id": "JUMPTABLE-GUARDS-RESIDUAL-0002",
+      "status": "MISMATCH",
+      "detail": "Rugra Funcdata::calc_nz_mask (src/funcdata.rs) is a simplified single pass: it does not perform the oracle's unwritten-input initialization (funcdata_varnode.cc:889-893 sets vn->nzm = calc_mask(size) for unwritten non-constant varnodes), so quasiCopy(y) reads bits=64 (stale ~0 field) instead of the oracle's 32. Suggested new TODO FUNCDATA-CALCNZM-0001 (write-set src/funcdata.rs); jumptable.rs-side quasiCopy now reads the raw nzm field like the oracle.",
+      "branches": [
+        {
+          "id": "sc6_quasi_vm_y_bits",
+          "status": "MISMATCH",
+          "detail": "q:y=y/64 (rugra) vs q:y=y/32 (ghidra)."
+        }
+      ]
+    }
+  ],
+  "projection_status": "MISMATCH",
+  "overall_status": "MISMATCH"
+}
