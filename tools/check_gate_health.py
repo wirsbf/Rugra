@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -16,8 +17,24 @@ CPP = GHIDRA / "Ghidra/Features/Decompiler/src/decompile/cpp"
 
 
 def git_output(*args: str, cwd: Path = ROOT) -> str:
+    # GATE-WORKTREE-GITDIR-0001: git exports GIT_DIR/GIT_WORK_TREE (and friends)
+    # to hooks when invoked from a linked worktree; those env vars override
+    # per-cwd repo discovery and hijack the embedded ghidra HEAD query.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+        )
+    }
     result = subprocess.run(
-        ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
+        ["git", *args], cwd=cwd, text=True, capture_output=True, check=False, env=env
     )
     return result.stdout.strip() if result.returncode == 0 else ""
 
