@@ -3209,6 +3209,37 @@
         "typeop::evaluate_unary",
         "typeop::evaluate_binary"
       ]
+    },
+    {
+      "id": "jt_guards_1204",
+      "description": "JumpBasic analyzeGuards/valueMatch/checkUnrolledGuard vs locked 12.0.4: unrolled guard wiring, other-switch protection, pathout stepping, FlipPath, readOp shadowing, oneOffMatch and LOAD-equivalence branches (3/6 byte-MATCH; 3 MISMATCH attributed to RANGE-PULLBACK-SLESS-0001 and FUNCDATA-CALCNZM-0001)",
+      "runner": [
+        "tools/run_jt_guards_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/jt_guards_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/jt_guards_1204.cc",
+          "rust_fixture": "tests/oracle/jt_guards_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "JumpBasic::analyzeGuards",
+        "JumpBasic::valueMatch",
+        "JumpBasic::checkUnrolledGuard"
+      ],
+      "rust_function_ids": [
+        "jumptable::JumpBasic::analyze_guards",
+        "jumptable::JumpBasic::value_match",
+        "jumptable::JumpBasic::check_unrolled_guard"
+      ]
     }
   ]
 }
