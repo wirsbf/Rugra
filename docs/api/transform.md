@@ -2,8 +2,10 @@
 
 **源代码路径**: `src/transform.rs`
 **Ghidra 对应**: `transform.hh` / `transform.cc` (767 行)
-**状态**: 🔧 L2 — `TransformManager` 五阶段与主要 API 已实现；本轮 PHI 插入
-目标投影为 `MATCH`，但模块仍有已登记 `UNTESTED`/实现残差，不能宣称 L3。
+**状态**: 🔧 L2 — `TransformManager` 五阶段与全部 API 已实现；fixture
+`TRANSFORM-MULTIEQUAL-INSERT-0001` 十一项 coverage 全部 12.0.4 oracle `MATCH`
+（含原六个 UNTESTED 残差分支），模块内其余外围函数（`parseSizes`/`getPiece`
+的 throw 严格性等）残差见「已知限制」与 fixture `out_of_scope_observations`。
 
 ## 模块说明
 
@@ -17,6 +19,13 @@ Ghidra 使用原始 `TransformVar*` / `TransformOp*` 指针指向 `TransformMana
 `TransformManager` 拥有 `Vec<TransformVar>` 和 `Vec<TransformOp>`，引用使用稳定
 的 `usize` 索引。Split 数组（Ghidra 的 `new TransformVar[n]`）存储为连续的 run，
 其起始索引记录在 `piece_map` 中。
+
+NULL input slot 建模：Ghidra 的 `PcodeOp` 构造函数（op.cc:71，`inrefs(s)`）
+把输入槽预置为 NULL，`TransformOp::createReplacement` 的 grow 循环
+（transform.cc:236）也插入 NULL 槽，直到 `placeInputs` 逐槽覆写。Rugra 的
+`inrefs` 是非可选 `Vec<Arc<RwLock<Varnode>>>`，因此用 `null_slot_sentinel()`
+（脱离 bank、size-0 的 Varnode）表示 NULL 槽：不经 `VarnodeBank` 创建（无
+create-index/计数副作用）、不带 descendant、在观察投影中按 NULL 处理。
 
 ## 导出的公共 API
 
@@ -46,7 +55,9 @@ Ghidra 使用原始 `TransformVar*` / `TransformOp*` 指针指向 `TransformMana
 ### `TransformVar` (transform.hh:34)
 变换后的 Varnode 占位符。
 - `initialize(type, vn, bits, bytes, value)` — 原始初始化 (transform.hh:203)
-- `create_replacement(fd, def_op)` — 创建实际 Varnode (transform.cc:175)
+- `create_replacement(fd, def_op)` — 创建实际 Varnode (transform.cc:175)；
+  `piece` 类型 bit 未字节对齐时 `panic!("Varnode piece is not byte aligned")`
+  （cc:197-198 LowlevelError 的 panic 映射，同 funcdata.rs 既有惯例）
 - 字段：`vn` / `replacement` / `var_type` / `flags` / `byte_size` / `bit_size` /
   `val` / `def`
 
@@ -58,14 +69,22 @@ Ghidra 使用原始 `TransformVar*` / `TransformOp*` 指针指向 `TransformMana
 变换后的 PcodeOp 占位符。
 - `attempt_insertion(fd, ops)` — follow 已落块后完成延迟插入；`MULTIEQUAL`
   使用 `op_insert_begin`，其他 opcode 使用 `op_insert_before` (transform.cc:254)
-- `inherit_indirect(ind_op)` — 继承 INDIRECT 标记 (transform.cc:273)
+- `inherit_indirect(ind_op)` — 继承 INDIRECT 标记 (transform.cc:273-282)：
+  源 op 带 `PcodeOp::indirect_creation` 时，按 in(0) 的 `is_indirect_zero`
+  （`indirect_creation|constant` 双标志，varnode.hh:271）分派
+  `INDIRECT_CREATION` 或 `INDIRECT_CREATION_POSSIBLE_OUT`
 - 字段：`op` / `replacement` / `opc` / `special` / `output` / `input` / `follow`
 
 ### `TransformManager` (transform.hh:156)
 orchestrates 变换生命周期。
 - `new()` / `default()` / `init(fd)`
-- `preserve_address(vn, bit_size, lsb_offset)` — 是否保留地址 (transform.cc:348)
+- `preserve_address(vn, bit_size, lsb_offset)` — 是否保留地址 (transform.cc:348)。
+  这是 Ghidra 的虚函数分派点（transform.hh:171；`SubfloatFlow::preserveAddress`
+  subflow.cc:3451 覆写返回 `vn->isInput()`）；Rust 用
+  `preserve_address_override` 钩子镜像 vtable 槽，`None` 走基类逻辑
+- `set_preserve_address_override(f)` — 安装上述覆写钩子（RUGRA-GLUE）
 - `clear_varnode_marks()` — 清除所有占位符 Varnode 的 mark (transform.cc:356)
+- 字段：`preserve_address_override`（pub，虚分派镜像）
 
 **占位符创建**（transform.cc:370-575）：
 - `new_preexisting_varnode(vn)` / `new_unique(size)` / `new_constant(size, lsb, val)`
@@ -84,23 +103,50 @@ orchestrates 变换生命周期。
 
 **apply 生命周期**（transform.cc:651-765）：
 - `apply(fd)` — 完整应用变换（createOps→createVarnodes→removeOld→
-  transformInputVarnodes→placeInputs）
+  transformInputVarnodes→placeInputs）；`createVarnodes` 中 piece 未对齐会
+  panic 并保留异常前部分状态
 - 私有：`create_op_replacement(op_idx)` / `create_ops()` / `create_varnodes(input_list)`
-  / `remove_old()` / `transform_input_varnodes(input_list)` / `place_inputs()`
+  / `remove_old()` / `transform_input_varnodes(input_list)` / `place_inputs()` /
+  `special_handling(rop)`
+
+**`create_op_replacement` 分支**（transform.cc:225-250）：
+- `op_preexisting` 臂：原 op 原地改 opcode；`while input.len() < numInput()`
+  从末尾 `op_remove_input` 收缩；逐槽 `op_unset_input` 清空（槽置 NULL 哨兵）；
+  `while numInput() < input.len()` 在 `numInput()-1` 槽位插入 NULL 哨兵
+  （Ghidra `opInsertInput(op,(Varnode*)0,slot)` 中 `opSetInput` 对新鲜 NULL 槽
+  cc:107 早退，净效果即裸槽插入，不产生 bank Varnode）；不重新插入、不被
+  removeOld 销毁
+- 新 op 臂：`fd.new_op(input.len(), addr)` 后预填 NULL 哨兵槽（对齐 op.cc:71
+  `inrefs(s)` 的预置语义，弥补 op.rs `create` 只 reserve 的缺口）；
+  `output == None` 时不物化输出 Varnode（cc:241-242）
+
+**`special_handling`**（transform.cc:654-660）：`INDIRECT_CREATION` →
+`fd.mark_indirect_creation(replacement, false)`，`INDIRECT_CREATION_POSSIBLE_OUT`
+→ `mark_indirect_creation(replacement, true)`（funcdata_op.cc:736-748 在
+replacement op/out/(非 possible-out 时) in(0) 上置标志）。
 
 ## 已知限制
 - `transferVarnodeProperties`（transform.cc:208）尚未实现 — Rugra 的 Varnode 未暴露
   完整的属性转移 API。
-- `markIndirectCreation` 尚未完整接入；`inherit_indirect` 仍保守地假设
-  possible-out。`opInsertBegin` 已由 Funcdata 暴露并用于 PHI 插入。
+- `Funcdata::mark_indirect_creation`（src/funcdata.rs）对 in(0) 非常量走
+  eprintln 而非 Ghidra 的 LowlevelError throw（funcdata_op.cc:743-744）；
+  fixture 只覆盖常量 in(0) 路径（FUNCDATA-MARKINDIRECT-STRICT-0001）。
+- `PcodeOpBank::create`（src/op.rs）只 reserve 输入槽，不预置 NULL 槽
+  （Ghidra op.cc:71 预置）；transform.rs 以 detached 哨兵补偿
+  （OP-BANK-CREATE-NULL-SLOTS-0001）。
+- `parse_sizes` 非法尺寸走日志跳过而非 throw（transform.cc:323-324，
+  TRANSFORM-PARSESIZES-STRICT-0001）；`get_piece` 重复 piece 冲突同样
+  （transform.cc:607，TRANSFORM-GETPIECE-DUP-THROW-0001）。
+- `ConstantIop` 类型使用常量 fallback（Rugra 无 iop space）。
 - ~~`deleteVarnode` / `setInputVarnode` 未暴露~~ — 2026-08-15
   （VARNODE-INPLACE-MUTATION-SITES-0001）已接入：`transform_input_varnodes` 对旧
   输入走 `fd.delete_varnode`（cc:734-735，funcdata.hh:294），新输入走
   `fd.set_input_varnode`（cc:736，funcdata_varnode.cc:340-373 → `VarnodeBank::setInput`
   varnode.cc:1358 身份删除+INPUT 重键），canonical 返回值存回 `replacement` 供
   placeInputs 接线；不再原地 set_flags(INPUT) 突变树驻留 varnode。
-- `ConstantIop` 类型使用常量 fallback（Rugra 无 iop space）。
-- `inherit_indirect` 的 indirect-zero 检查保守地假设 possible-out。
+- ~~`inherit_indirect` 保守假设 possible-out~~ / ~~`special_handling` no-op~~ —
+  2026-08-23（TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001）已按 cc:273-282 /
+  cc:654-660 接入双臂分派与 `mark_indirect_creation` 调用。
 
 ## 测试
 20 个单元测试覆盖 LanedRegister（basic/parse_sizes）、LaneDescription（uniform/
@@ -121,16 +167,32 @@ COPY 等非 PHI 保持创建顺序。对应单测同时覆盖 immediate/follow �
 PHI/non-PHI 四种组合；锁定 12.0.4 fixture 对比完整 op/varnode identity、
 SeqNum time/order、def-use、块内顺序和 bank 计数。
 
-证据状态严格区分为：`projection_status=MATCH`、`overall_status=UNTESTED`。
-所有未覆盖项统一绑定 `TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001`：
+### 2026-08-23：TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 六分支补齐
 
-- `op_preexisting` 的 opcode/input resize 与 nullable-slot 路径；
-- 多层 follow 链仍未落块时的 retry；
-- INDIRECT `inheritIndirect` / `specialHandling`；
-- missing-parent、畸形 placeholder 和错误注入路径；
-- `createReplacement` 的 `output == nullptr` 分支；
-- SeqNum midpoint 不足、触发 `BlockBasic::setOrder` 整块重排的插入边界。
+六个 UNTESTED 分支双侧补到 `MATCH`，fixture 由 4 记录扩到 11 记录：
 
-fixture metadata 使用 schema 2：每个 coverage 项都包含 `{status, covers,
-residual_todo_ids}`，顶层 residual union 与逐项 union 由 runner fail-closed 核对。
+- `preexisting_ops`：`op_preexisting` 臂（cc:228-237）— opcode 原地重定向、
+  输入收缩 3→1（末尾 removeInput + 逐槽 unset）、增长 1→3（`numInput()-1`
+  槽位 NULL 插入，placeInputs 全覆写）、identity/位置/输出保持、不销毁；
+- `nested_follow`：top(COPY)→mid(MULTIEQUAL)→follow 两跳链，mid 先落 block
+  begin、top 再插到 mid 的 replacement 之前（`follow->replacement` 二跳间接
+  可观察）；公有 `newOp` API 下 do-while retry 体不可达（创建序不变式，
+  CREATEOPS-RETRY-UNREACHABLE-0001）；
+- `indirect_zero` / `indirect_possible`：`inheritIndirect` 双臂 +
+  `specialHandling`→`markIndirectCreation(false/true)` 的 op/out/in(0) 标志投影
+  （`I`/`x` 位），并覆盖 `opInsertBefore` 跳过前置 INDIRECT 臂与非跳过臂；
+- `piece_error`：`preserveAddress` 覆写（cf. SubfloatFlow）强制 misaligned
+  `piece`，apply 在 createVarnodes 中抛出/panic
+  `Varnode piece is not byte aligned`，双侧对比异常前部分状态（op 已建已插、
+  输出已物化、NULL 输入槽 `_,_`、removeOld 未跑、anchor 存活）；
+- `output_null`：`output == nullptr` 臂 — 0 输入 COPY 与 2 输入 MULTIEQUAL
+  replacement 无输出物化；
+- `seqnum_renumber`：25 个 MULTIEQUAL begin 插入耗尽 `ordbefore=2` 的 midpoint
+  阶梯，`BlockBasic::setOrder`（block.cc:2638-2651，25-op 块 step=171798690）
+  中途整块重排后 midpoint 恢复 — 全 r 向量可观察。
+
+证据状态：`projection_status=MATCH`、`overall_status=MATCH`、residual_todo_ids
+为空；runner fail-closed 校验同步收紧（coverage 状态集必须为 `{MATCH}`、
+不得残留 `residual_union`、`out_of_scope_observations` 逐条校验）。fixture
+metadata schema 2 的每个 coverage 项仍为 `{status, covers, residual_todo_ids}`。
 <!-- annotation-pass: 2026-07-04 -->

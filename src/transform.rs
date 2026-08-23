@@ -405,8 +405,11 @@ impl TransformVar {
             TransformVarType::Piece => {
                 let mut byte_pos = self.val as i32;
                 if (byte_pos & 7) != 0 {
-                    eprintln!("[TRANSFORM] Varnode piece is not byte aligned");
-                    return;
+                    // cc:197-198 throws LowlevelError("Varnode piece is not
+                    // byte aligned"); panic! is Rugra's established
+                    // LowlevelError mapping (cf. funcdata.rs opSetOutput
+                    // precondition, funcdata.rs:1706).
+                    panic!("Varnode piece is not byte aligned");
                 }
                 byte_pos >>= 3;
                 let (vn_size, vn_space, vn_offset, is_big_endian) = {
@@ -538,16 +541,27 @@ impl TransformOp {
 
     // Ghidra: transform.cc:273 TransformOp::inheritIndirect
     /// Set indirect-creation flags based on the given INDIRECT op. Faithful to
-    /// `inheritIndirect` (transform.cc:273-282).
+    /// `inheritIndirect` (transform.cc:273-282): if `indOp` carries
+    /// `PcodeOp::indirect_creation`, the `indirect_creation` placeholder bit
+    /// is taken when input(0) is an "indirect zero" (`isIndirectZero`,
+    /// varnode.hh:271: indirect_creation|constant flags both set), otherwise
+    /// `indirect_creation_possible_out`.
     pub fn inherit_indirect(&mut self, ind_op: &PcodeOpRef) {
-        let is_indirect_creation = {
+        let (is_indirect_creation, in0_indirect_zero) = {
             let r = ind_op.0.read().unwrap();
-            (r.flags & crate::op::pcodeop_flags::INDIRECT_CREATION) != 0
+            let creation = (r.flags & crate::op::pcodeop_flags::INDIRECT_CREATION) != 0;
+            let zero = r
+                .get_in(0)
+                .map(|vn| vn.read().unwrap().is_indirect_zero())
+                .unwrap_or(false);
+            (creation, zero)
         };
         if is_indirect_creation {
-            // Check input(0) for indirect-zero. Rugra has no INDIRECT_ZERO flag
-            // on Varnode; we conservatively assume possible-out.
-            self.special |= transform_op_special::INDIRECT_CREATION_POSSIBLE_OUT;
+            if in0_indirect_zero {
+                self.special |= transform_op_special::INDIRECT_CREATION;
+            } else {
+                self.special |= transform_op_special::INDIRECT_CREATION_POSSIBLE_OUT;
+            }
         }
     }
 }
@@ -571,6 +585,27 @@ pub struct TransformManager {
     pub new_varnodes: Vec<TransformVar>,
     /// Storage for PcodeOp placeholder nodes.
     pub new_ops: Vec<TransformOp>,
+    /// RUGRA-GLUE: Ghidra's `preserveAddress` is virtual (transform.hh:171)
+    /// and overridden by subclasses (e.g. `SubfloatFlow::preserveAddress`,
+    /// subflow.cc:3451, which returns `vn->isInput()`). Rust has no
+    /// inheritance, so this optional override hook plays the role of the
+    /// subclass vtable slot; `None` runs the base implementation. The hook
+    /// observes the same `(vn, bitSize, lsbOffset)` arguments Ghidra passes.
+    pub preserve_address_override: Option<fn(&Varnode, i32, i32) -> bool>,
+}
+
+// RUGRA-GLUE: detached, never-bank-resident size-0 Varnode modelling Ghidra's
+// NULL input slot. Ghidra's `PcodeOp` ctor (op.cc:71) pre-sizes `inrefs` to
+// `inputs` NULL slots, and `TransformOp::createReplacement` (transform.cc:236)
+// inserts further NULL slots via `opInsertInput(op, (Varnode*)0, ...)`; the
+// NULLs persist until `placeInputs` (transform.cc:750) overwrites every slot.
+// Rugra's `inrefs` is a `Vec<Arc<RwLock<Varnode>>>` and cannot hold NULL, so
+// this sentinel stands in: it is never created through `VarnodeBank` (no
+// create-index or bank count side effects), carries no descendants (the
+// `opSetInput` early-return on a fresh NULL slot, funcdata_op.cc:107, becomes
+// a no-op on it), and observation projections treat size 0 as the NULL slot.
+fn null_slot_sentinel() -> std::sync::Arc<RwLock<Varnode>> {
+    std::sync::Arc::new(RwLock::new(Varnode::new(0, Address::new(0))))
 }
 
 // SAFETY: `*mut Funcdata` is only dereferenced within `&mut self` methods while
@@ -593,6 +628,7 @@ impl TransformManager {
             piece_map: BTreeMap::new(),
             new_varnodes: Vec::new(),
             new_ops: Vec::new(),
+            preserve_address_override: None,
         }
     }
 
@@ -606,16 +642,30 @@ impl TransformManager {
     }
 
     // Ghidra: transform.cc:348 TransformManager::preserveAddress
-    /// Should the address of the given Varnode be preserved when constructing
-    /// a piece? Faithful to `preserveAddress` (transform.cc:348-354). Returns
+    /// Should the address of the given Varnode be preserved when constructing a
+    /// piece? Faithful to `preserveAddress` (transform.cc:348-354). Returns
     /// false if the logical value is not byte-aligned or the Varnode is in the
-    /// internal (unique) space.
-    pub fn preserve_address(&self, vn: &Arc<RwLock<Varnode>>, _bit_size: i32, lsb_offset: i32) -> bool {
+    /// internal (unique) space. This is Ghidra's virtual dispatch point
+    /// (transform.hh:171; `SubfloatFlow::preserveAddress`, subflow.cc:3451,
+    /// overrides it), so an installed `preserve_address_override` hook takes
+    /// precedence over the base logic.
+    pub fn preserve_address(&self, vn: &Arc<RwLock<Varnode>>, bit_size: i32, lsb_offset: i32) -> bool {
+        if let Some(override_fn) = self.preserve_address_override {
+            let guard = vn.read().unwrap();
+            return override_fn(&guard, bit_size, lsb_offset);
+        }
         if (lsb_offset & 7) != 0 {
             return false; // Logical value not aligned.
         }
         let vn_rg = vn.read().unwrap();
         vn_rg.space() != AddressSpace::Unique
+    }
+
+    // RUGRA-GLUE: setter for the virtual-dispatch hook documented on
+    // `preserve_address_override` (Ghidra reaches the same effect by
+    /// subclassing TransformManager; Rust mirrors the vtable slot).
+    pub fn set_preserve_address_override(&mut self, f: fn(&Varnode, i32, i32) -> bool) {
+        self.preserve_address_override = Some(f);
     }
 
     // Ghidra: transform.cc:356 TransformManager::clearVarnodeMarks
@@ -941,26 +991,46 @@ impl TransformManager {
 
     // Ghidra: transform.cc:654 TransformManager::specialHandling
     /// Handle special PcodeOp marking. Faithful to `specialHandling`
-    /// (transform.cc:654-660).
+    /// (transform.cc:654-660): `indirect_creation` routes to
+    /// `Funcdata::markIndirectCreation(replacement, false)`,
+    /// `indirect_creation_possible_out` to `markIndirectCreation(replacement,
+    /// true)` (funcdata_op.cc:736-748 sets `PcodeOp::indirect_creation` on the
+    /// replacement, `Varnode::indirect_creation` on the output and — only for
+    /// the non-possible-out form — on input(0)).
     fn special_handling(&self, rop: &TransformOp) {
-        // Ghidra calls fd->markIndirectCreation on the replacement op.
-        // TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001: Rugra does not yet
-        // expose markIndirectCreation; this remains a no-op.
-        let _ = rop;
+        let fd = unsafe { &*self.fd.expect("TransformManager not initialized") };
+        if (rop.special & transform_op_special::INDIRECT_CREATION) != 0 {
+            if let Some(replacement) = &rop.replacement {
+                fd.mark_indirect_creation(replacement, false);
+            }
+        } else if (rop.special & transform_op_special::INDIRECT_CREATION_POSSIBLE_OUT) != 0 {
+            if let Some(replacement) = &rop.replacement {
+                fd.mark_indirect_creation(replacement, true);
+            }
+        }
     }
 
     // Ghidra: transform.hh:32 TransformManager::createOpReplacement
     /// Create a new PcodeOp or modify an existing one to match the placeholder
     /// at `op_idx`. Faithful to `TransformOp::createReplacement`
-    /// (transform.cc:225-250). Handles output Varnode creation via the arena.
+    /// (transform.cc:225-250). The `op_preexisting` arm retargets the existing
+    /// op in place (opcode + shrink/clear/grow input slots, cc:228-237); the
+    /// new-op arm creates the PcodeOp, materializes the output placeholder
+    /// (cc:241-242) and inserts immediately when no follow is pending
+    /// (cc:243-248). NULL input slots are modelled by detached size-0
+    /// sentinels (`null_slot_sentinel`).
     fn create_op_replacement(&mut self, op_idx: usize) {
         let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
         let is_preexisting = (self.new_ops[op_idx].special & transform_op_special::OP_PREEXISTING) != 0;
         if is_preexisting {
+            // cc:228: replacement = op (identity preserved; never re-inserted).
             let op = self.new_ops[op_idx].op.clone().unwrap();
-            fd.op_set_opcode(&op, self.new_ops[op_idx].opc);
-            // Trim/extend inputs to match placeholder count.
+            // cc:229-230: fd->opSetOpcode(op, opc).
+            let opc = self.new_ops[op_idx].opc;
+            fd.op_set_opcode(&op, opc);
             let target_len = self.new_ops[op_idx].input.len();
+            // cc:231-232: while (input.size() < op->numInput())
+            //   fd->opRemoveInput(op, op->numInput()-1);  — trim from the end.
             loop {
                 let cur = op.0.read().unwrap().inrefs.len();
                 if cur <= target_len {
@@ -968,28 +1038,47 @@ impl TransformManager {
                 }
                 fd.op_remove_input(&op, cur - 1);
             }
-            // Clear any remaining inputs.
+            // cc:233-234: opUnsetInput(op, i) for every remaining slot — the
+            // Varnode loses this descendant and the slot becomes NULL; the
+            // detached sentinel models that NULL (Rugra's inrefs are
+            // non-optional).
             let cur = op.0.read().unwrap().inrefs.len();
             for i in 0..cur {
-                if i < op.0.read().unwrap().inrefs.len() {
-                    fd.op_unset_input(&op, i);
-                }
+                fd.op_unset_input(&op, i);
+                op.0.write().unwrap().inrefs[i] = null_slot_sentinel();
             }
-            // Extend with null inputs up to placeholder size.
+            // cc:235-236: while (op->numInput() < input.size())
+            //   fd->opInsertInput(op, (Varnode *)0, op->numInput()-1);
+            // opInsertInput (funcdata_op.cc:308-317) is insertInput(slot)
+            // followed by opSetInput(op, NULL, slot), which early-returns on
+            // the fresh NULL slot (funcdata_op.cc:107), so the net effect is a
+            // bare slot insertion at numInput()-1 — no bank Varnode involved.
             while op.0.read().unwrap().inrefs.len() < target_len {
-                let insert_slot = op.0.read().unwrap().inrefs.len();
-                let placeholder = fd.new_constant(0, 0);
-                fd.op_insert_input(&op, placeholder, insert_slot);
+                let slot = op.0.read().unwrap().inrefs.len() - 1;
+                op.0.write().unwrap().inrefs.insert(slot, null_slot_sentinel());
             }
             self.new_ops[op_idx].replacement = Some(op);
         } else {
             let op_ref = self.new_ops[op_idx].op.clone().unwrap();
             let addr = op_ref.0.read().unwrap().get_addr();
             let input_len = self.new_ops[op_idx].input.len();
+            // cc:239: fd->newOp(input.size(), op->getAddr()) — Ghidra's
+            // PcodeOp ctor (op.cc:71, `inrefs(s)`) pre-sizes the input slots
+            // to NULL; Rugra's PcodeOpBank::create only reserves capacity, so
+            // pre-fill sentinels to keep numInput identical until placeInputs
+            // (transform.cc:747-751) overwrites every slot.
             let newop = fd.new_op(input_len, addr);
+            if input_len > 0 {
+                let mut guard = newop.0.write().unwrap();
+                for _ in 0..input_len {
+                    guard.inrefs.push(null_slot_sentinel());
+                }
+            }
             let opc = self.new_ops[op_idx].opc;
+            // cc:240: fd->opSetOpcode(replacement, opc).
             fd.op_set_opcode(&newop, opc);
-            // Create the output Varnode now that the op exists.
+            // cc:241-242: if (output != 0) output->createReplacement(fd) —
+            // with output == nullptr no output Varnode is materialized.
             if let Some(out_idx) = self.new_ops[op_idx].output {
                 self.new_varnodes[out_idx].create_replacement(fd, Some(&newop));
                 if let Some(out_vn) = self.new_varnodes[out_idx].replacement.clone() {
@@ -997,7 +1086,7 @@ impl TransformManager {
                 }
             }
             if self.new_ops[op_idx].follow.is_none() {
-                // Can be inserted immediately.
+                // cc:243-248: Can be inserted immediately.
                 if opc == OpCode::CPUI_MULTIEQUAL {
                     let parent = op_ref
                         .0

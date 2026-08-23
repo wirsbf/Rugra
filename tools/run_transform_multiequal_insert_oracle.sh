@@ -231,16 +231,15 @@ canonical = json.dumps(
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("overall", metadata["overall_status"], "MATCH")
 expected_matches = {
     "replacement_multiequal_begin_order", "follow_multiequal_begin_order",
     "replacement_nonphi_order", "follow_nonphi_order", "identity_and_counts",
-}
-expected_residuals = {
     "op_preexisting_resize_path", "nested_follow_chain",
     "indirect_special_handling", "insertion_error_paths",
     "create_replacement_output_null", "blockbasic_setorder_renumber_boundary",
 }
+expected_residuals = set()
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict):
     raise SystemExit("coverage must be an object")
@@ -276,9 +275,7 @@ for key, record in coverage.items():
     coverage_residual_ids.update(residual_ids)
 for key in expected_matches:
     require(f"coverage.{key}.status", coverage[key]["status"], "MATCH")
-for key in expected_residuals:
-    require(f"coverage.{key}.status", coverage[key]["status"], "UNTESTED")
-require("coverage status set", observed_statuses, {"MATCH", "UNTESTED"})
+require("coverage status set", observed_statuses, {"MATCH"})
 require(
     "projection/coverage consistency",
     metadata["projection_status"],
@@ -290,30 +287,25 @@ require(
     "UNTESTED" if any(record["status"] == "UNTESTED" for record in coverage.values()) else "MATCH",
 )
 top_residual_ids = metadata.get("residual_todo_ids")
-if not isinstance(top_residual_ids, list) or not top_residual_ids:
-    raise SystemExit("top-level residual_todo_ids must be a non-empty list")
+if not isinstance(top_residual_ids, list):
+    raise SystemExit("top-level residual_todo_ids must be a list")
 if any(not isinstance(item, str) or not item for item in top_residual_ids):
     raise SystemExit("top-level residual_todo_ids contains an invalid id")
 if len(top_residual_ids) != len(set(top_residual_ids)):
     raise SystemExit("top-level residual_todo_ids contains duplicates")
 require("coverage/top-level residual union", coverage_residual_ids, set(top_residual_ids))
-require(
-    "top-level residual ids",
-    set(top_residual_ids),
-    {"TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001"},
-)
-residual = metadata["residual_union"]
-require("residual TODO", residual["todo_id"], "TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001")
-require("residual status", residual["status"], "UNTESTED")
-require(
-    "residual branch union",
-    {branch["id"] for branch in residual["branches"]},
-    expected_residuals,
-)
-for branch in residual["branches"]:
-    require(f"residual {branch['id']} status", branch["status"], "UNTESTED")
-    if not branch["detail"]:
-        raise SystemExit(f"residual {branch['id']} has no detail")
+require("top-level residual ids", set(top_residual_ids), set())
+if "residual_union" in metadata:
+    raise SystemExit("resolved fixture must not carry a residual_union block")
+observations = metadata.get("out_of_scope_observations")
+if not isinstance(observations, list):
+    raise SystemExit("out_of_scope_observations must be a list")
+for observation in observations:
+    if not isinstance(observation, dict):
+        raise SystemExit("out_of_scope_observations entries must be objects")
+    require(f"observation {observation.get('id')!r} fields", set(observation), {"id", "note"})
+    if not observation["id"] or not observation["note"]:
+        raise SystemExit("out_of_scope_observations entries must be non-empty")
 PY
 
 git -C "$ghidra_root" archive --format=tar \
@@ -386,7 +378,9 @@ for key, actual in (
         raise SystemExit(f"{key} mismatch")
 records = paths["ghidra_stdout_sha256"].read_text(encoding="utf-8").splitlines()
 if [record.split("|", 1)[0] for record in records] != [
-    "replace_phi", "follow_phi", "replace_copy", "follow_copy"
+    "replace_phi", "follow_phi", "replace_copy", "follow_copy",
+    "preexisting_ops", "nested_follow", "indirect_zero", "indirect_possible",
+    "piece_error", "output_null", "seqnum_renumber"
 ]:
     raise SystemExit(f"observation order mismatch: {records}")
 if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha256"].stat().st_size != 0:
@@ -394,4 +388,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha2
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'transform_multiequal_insert_1204: covered_projection=5/5 projection_status=MATCH overall_status=UNTESTED residual=TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001\n'
+printf 'transform_multiequal_insert_1204: covered_projection=11/11 projection_status=MATCH overall_status=MATCH residual=none\n'
