@@ -6740,12 +6740,20 @@ impl PrintLanguage for PrintC {
         // Ghidra would for an empty comment database.
         if let Some(db) = fd.arch.as_ref().and_then(|a| a.commentdb.clone()) {
             let db_read = db.read().unwrap();
-            self.comment_sorter.setup_function_list(
+            // Ghidra's setupFunctionList throws LowlevelError on a dead op
+            // (comment.cc:289/303) and aborts the print; `doc_function` has
+            // no error channel (PrintLanguage trait returns ()), so the
+            // failure is logged and the partially-placed sorter stands —
+            // the same log-and-continue projection used by the print layer's
+            // other LowlevelError sites (e.g. emit_type_definition).
+            if let Err(err) = self.comment_sorter.setup_function_list(
                 self.instr_comment_type | self.head_comment_type,
                 fd,
                 &db_read,
                 self.option_unplaced,
-            );
+            ) {
+                eprintln!("[DECOMP] comment sorter setup failed: {err}");
+            }
         }
         // cc:2651: emit->beginFunction(fd);
         self.emit.begin_function();
@@ -9083,7 +9091,8 @@ impl PrintC {
     /// `get_block(i)`, BlockCopy via `original`, BlockGoto via its wrapped
     /// block's ops, BlockIf/BlockWhileDo/etc. via their held sub-blocks). The
     /// `t_copy` collapse and `t_plain` early-return are preserved. For a
-    /// `t_basic` leaf we look up the block's index for `setup_block_list`.
+    /// `t_basic` leaf we drive the sorter's direct protocol:
+    /// `setup_block_bounds(index)` + `emit_comment_group(None)`.
     ///
     /// NOTE: signature changed from `&self` to `&mut self` vs. the previous
     /// empty stub, because `emit_comment_group` mutates `self.comment_sorter`.
@@ -9156,27 +9165,15 @@ impl PrintC {
             return;
         }
 
-        // cc:3265-3266: t_basic leaf → commsorter.setupBlockList(bl); emitCommentGroup(0);
-        let block_index = cur.read().unwrap().get_index().max(0) as u32;
-        // Clone the comments out of the sorter (it borrows &self) so we can
-        // mutably call emit_line_comment in the loop below.
-        let comms: Vec<crate::comment::Comment> = self.comment_sorter
-            .setup_block_list(block_index)
-            .into_iter()
-            .cloned()
-            .collect();
-        // emitCommentGroup((const PcodeOp *)0): flush every comment the sorter
-        // associated with this block, skipping already-emitted ones and those
-        // not in the instr_comment_type mask. Faithful to printc.cc:3231-3241.
-        for comm in &comms {
-            if comm.is_emitted() {
-                continue;
-            }
-            if (self.instr_comment_type & comm.get_type()) == 0 {
-                continue;
-            }
-            self.emit_line_comment(-1, comm.get_text());
-        }
+        // cc:3265-3266: t_basic leaf → commsorter.setupBlockList(bl);
+        // emitCommentGroup((const PcodeOp *)0). The block's index is passed
+        // straight to setup_block_bounds (Ghidra hands FlowBlock::getIndex()
+        // to setupBlockList, comment.cc:383).
+        let block_index = cur.read().unwrap().get_index();
+        self.comment_sorter.setup_block_bounds(block_index);
+        // Emit any comments for the block: setupOpList(NULL) picks up every
+        // remaining comment in the block (opstop = stop, comment.cc:365-367).
+        self.emit_comment_group(None);
     }
 
     // Ghidra: printc.cc:2303 PrintC::emitGotoStatement
@@ -9304,38 +9301,24 @@ impl PrintC {
     /// }
     /// ```
     ///
-    /// Rugra adaptation: `CommentSorter::setup_op_list(block_index, op_order)`
-    /// takes a block index + op order (the within-block position), returning
-    /// the comments up to that op landmark. We look up the op's owning basic
-    /// block (the block whose ops contain `inst`'s address) and its order. When
-    /// `inst` is null (the `emitCommentGroup(0)` form used to drain remaining
-    /// block comments) we pass `u32::MAX` as the order so every comment for the
-    /// block is returned.
-    pub fn emit_comment_group(&mut self, inst: Option<&PcodeOp>) {
-        // Resolve the op's (block_index, op_order) landmark. When the op is
-        // null (cc:3241 form `emitCommentGroup((const PcodeOp *)0)`) we still
-        // need a block index; Rugra's CommentSorter only drains by block, so
-        // without a block context we have nothing to flush (matching Ghidra's
-        // `setupOpList(null)` no-op when the sorter was never given a block).
-        let (block_index, op_order) = match inst {
-            Some(op) => {
-                // PcodeOp has no block_index field; derive it from the op's
-                // parent FlowBlock (the basic block owning it).
-                let bi = op.parent.as_ref().and_then(|p| p.upgrade())
-                    .map(|b| b.read().unwrap().get_index().max(0) as u32)
-                    .unwrap_or(0);
-                (bi, op.get_seq_num().order)
-            }
-            None => return,
-        };
-        // Clone the comments out of the sorter (it borrows &self) so we can
-        // mutably call emit_line_comment in the loop below.
-        let comms: Vec<crate::comment::Comment> = self.comment_sorter
-            .setup_op_list(block_index, op_order)
-            .into_iter()
-            .cloned()
-            .collect();
-        for comm in &comms {
+    /// Rugra adaptation: the loop drives the sorter's iterator state machine
+    /// directly (`setup_op_stop` + `has_next`/`get_next`, the cc:3234-3236
+    /// protocol). `inst == None` is the cc:3241/3266 form
+    /// `emitCommentGroup((const PcodeOp *)0)`: `setupOpList(NULL)` sets
+    /// `opstop = stop` so the walk picks up every remaining comment in the
+    /// current basic block (comment.cc:365-367) — it must follow a
+    /// `setup_block_bounds` to have a block window. The `setEmitted(true)`
+    /// that Ghidra performs inside `emitLineComment` (printlanguage.cc:648)
+    /// is applied at the call site: the text is copied out of the sorter's
+    /// comment first so the immutable borrow ends before `emit_line_comment`
+    /// takes `&mut self`; nothing reads `is_emitted` between the mark and the
+    /// emit bytes, so the observation order is equivalent.
+    pub fn emit_comment_group(&mut self, inst: Option<&crate::op::PcodeOpRef>) {
+        // cc:3234: commsorter.setupOpList(inst);
+        self.comment_sorter.setup_op_stop(inst);
+        while self.comment_sorter.has_next() {
+            // cc:3236: Comment *comm = commsorter.getNext();
+            let comm = self.comment_sorter.get_next();
             // cc:3237: if (comm->isEmitted()) continue;
             if comm.is_emitted() {
                 continue;
@@ -9344,8 +9327,11 @@ impl PrintC {
             if (self.instr_comment_type & comm.get_type()) == 0 {
                 continue;
             }
-            // cc:3239: emitLineComment(-1, comm);
-            self.emit_line_comment(-1, comm.get_text());
+            // cc:3239: emitLineComment(-1, comm); — with the trailing
+            // comm->setEmitted(true) of printlanguage.cc:648.
+            let text = comm.get_text().to_string();
+            comm.set_emitted(true);
+            self.emit_line_comment(-1, &text);
         }
     }
 
@@ -9360,20 +9346,26 @@ impl PrintC {
     /// `option_nocasts`, emit the "DISPLAY WARNING: Type casts are NOT being
     /// printed" banner. Emit a trailing linebreak if any comment was emitted.
     ///
-    /// Rugra adaptation: `CommentSorter::header_comments()` yields every
-    /// header-positioned comment (both HEADER_BASIC and HEADER_UNPLACED
-    /// subsorts); we partition by the comment's `head_comment_type` mask and by
-    /// the unplaced banner. The synthetic banner Comments are built via
-    /// `Comment::new(warningheader, ...)` exactly as in Ghidra.
+    /// Rugra adaptation: both passes drive the sorter's iterator state
+    /// machine directly (`setup_header` windows + `has_next`/`get_next`), so
+    /// the header_basic loop walks only the (-1, header_basic, *) keys and
+    /// the unplaced banner loop only the (-1, header_unplaced, *) keys — the
+    /// same disjoint windows the oracle's map iterators produce. The
+    /// `setEmitted(true)` that Ghidra performs at the end of
+    /// `emitLineComment` (printlanguage.cc:648) is applied at the call site
+    /// (text copied out first so the immutable borrow ends before
+    /// `emit_line_comment` takes `&mut self`; nothing reads `is_emitted`
+    /// in between, so the observation order is equivalent). The synthetic
+    /// banner Comments are local objects exactly as in Ghidra (marking them
+    /// emitted is unobservable, so no flag is set for them).
     pub fn emit_comment_func_header(&mut self, fd: &Funcdata) {
         let mut extralinebreak = false;
         // cc:3276: commsorter.setupHeader(CommentSorter::header_basic);
         self.comment_sorter.setup_header(crate::comment::header_type::HEADER_BASIC);
-        // Collect header comments (basic + unplaced subsorts share index==MAX).
-        let header_comms: Vec<crate::comment::Comment> = self.comment_sorter.header_comments().cloned().collect();
         // cc:3277-3283: drain header_basic.
-        let fd_addr = *fd.get_address();
-        for comm in &header_comms {
+        while self.comment_sorter.has_next() {
+            // cc:3278: Comment *comm = commsorter.getNext();
+            let comm = self.comment_sorter.get_next();
             // cc:3279: if (comm->isEmitted()) continue;
             if comm.is_emitted() {
                 continue;
@@ -9382,24 +9374,35 @@ impl PrintC {
             if (self.head_comment_type & comm.get_type()) == 0 {
                 continue;
             }
-            // cc:3281: emitLineComment(0, comm);
-            self.emit_line_comment(0, comm.get_text());
+            // cc:3281: emitLineComment(0, comm); (+ printlanguage.cc:648)
+            let text = comm.get_text().to_string();
+            comm.set_emitted(true);
+            self.emit_line_comment(0, &text);
             extralinebreak = true;
         }
+        let fd_addr = *fd.get_address();
         // cc:3284-3300: option_unplaced → drain header_unplaced under a banner.
         if self.option_unplaced {
             if extralinebreak {
                 self.emit.tag_line(0);
             }
             extralinebreak = false;
+            // cc:3288: commsorter.setupHeader(CommentSorter::header_unplaced);
             self.comment_sorter.setup_header(crate::comment::header_type::HEADER_UNPLACED);
-            for comm in &header_comms {
+            // cc:3289-3299: drain header_unplaced. NOTE (faithful): the
+            // oracle applies NO head_comment_type mask on this pass — every
+            // unplaced comment prints regardless of type.
+            while self.comment_sorter.has_next() {
+                // cc:3290: Comment *comm = commsorter.getNext();
+                let comm = self.comment_sorter.get_next();
+                // cc:3291: if (comm->isEmitted()) continue;
                 if comm.is_emitted() {
                     continue;
                 }
-                // Only unplaced comments belong under this banner (subsort
-                // HEADER_UNPLACED). We approximate by emitting any header
-                // comment not already drained by the basic pass.
+                let text = comm.get_text().to_string();
+                comm.set_emitted(true);
+                // cc:3292-3297: the banner is emitted lazily before the
+                // first unplaced comment.
                 if !extralinebreak {
                     let label = crate::comment::Comment::new(
                         crate::comment::comment_type::WARNINGHEADER,
@@ -9413,7 +9416,7 @@ impl PrintC {
                     extralinebreak = true;
                 }
                 // cc:3298: emitLineComment(1, comm);
-                self.emit_line_comment(1, comm.get_text());
+                self.emit_line_comment(1, &text);
             }
         }
         // cc:3301-3308: option_nocasts → "DISPLAY WARNING" banner.

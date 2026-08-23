@@ -1163,3 +1163,46 @@ convention` **24 → 51**，与锁定 12.0.4 golden
 全部带完整 ` -- yet parameter storage is locked` 后缀——旧 11.3.2 golden
 （`tests/golden/ghidra_curl.c`）的"裸 main_init"是过版误引，R3 残差在锁定
 oracle 下不存在，无需也不应在 DWARF apply 侧改锁属性。
+
+### 2026-08-23：COMMENT-SORTER-PRINTC-0001 — 注释消费端迁到直接协议
+
+printc.rs 的三个注释消费端从 `CommentSorter` 的 Vec 胶水快照
+（`setup_block_list`/`setup_op_list`/`header_comments`，已随本迁移从
+comment.rs 删除）迁移到 oracle 的迭代器状态机直接驱动：
+
+- **`emit_comment_group(inst: Option<&PcodeOpRef>)`**（printc.cc:3231-3241）：
+  `setup_op_stop(inst)` + `while has_next() { get_next(); isEmitted→skip;
+  instr 掩码→skip; emit_line_comment(-1) }`。签名从 `Option<&PcodeOp>` 改为
+  `Option<&PcodeOpRef>`（`setup_op_stop` 的原生参数；原先在消费端手工推导
+  block_index/op_order 的胶水删除）。**`None` 分支补上
+  `setupOpList(NULL)` 语义**（comment.cc:365-367）：`opstop = stop`，排空当前
+  块剩余注释——旧实现 `None => return` 是缺语义（cc:3241/3266 的
+  `emitCommentGroup((const PcodeOp *)0)` 尾排空）；调用约定同 oracle：需先
+  `setup_block_bounds` 建立块窗口（emitBasicBlock cc:2684 首行 /
+  emitCommentBlockTree cc:3265）。
+- **`emit_comment_func_header`**（printc.cc:3272-3311）：两轮
+  `setup_header(HEADER_BASIC)` / `setup_header(HEADER_UNPLACED)` 窗口行走
+  取代一次性 `header_comments()` 快照——unplaced 横幅轮现在只走
+  (-1, header_unplaced, *) 键（旧快照轮重复迭代 basic 键，在
+  `option_unplaced=true` 时会把 header 注释在横幅下二次发射；该偏差
+  随直接协议关闭。oracle 的 unplaced 轮无 head 掩码——逐字保留）。
+- **`emit_comment_block_tree` 叶子**（printc.cc:3265-3266）：
+  `setup_block_bounds(index)` + `emit_comment_group(None)`，与 oracle
+  `commsorter.setupBlockList(bl); emitCommentGroup(0)` 一一对应。
+- **`setEmitted(true)` 落地**（printlanguage.cc:648）：`Comment.emitted` 改
+  `AtomicBool`（`mutable bool emitted` 的 1:1，comment.hh:50；不用
+  `Cell<bool>` 因 `ffi.rs` 的 `Mutex<Option<Funcdata>>` 全局要求 `Sync`），
+  三个消费端在发射处调用 `comm.set_emitted(true)`。Rust 投影：先复制
+  text、标记、再 `emit_line_comment(&mut self)`（不可变借用先结束）；
+  mark 与 emit 字节之间无人读 `is_emitted`，观测顺序等价。
+- **`doc_function` 的 `setup_function_list` Result 处理**（原 :6743 unused
+  Result 警告）：死 op LowlevelError（comment.cc:289/303）经
+  `eprintln!("[DECOMP] ...")` 记录后继续——print 层既定 log-and-continue
+  投影（同 `emit_type_definition` 的 LowlevelError 处理）。
+
+**迁移纯度**：E2E 可观测行为不变（块级注释仍只经 `emit_comment_block_tree`
+发射；Rugra 的语句行走本就不跑 per-op `emitCommentGroup` 链——该已知缺口
+不变，见 `doc_statement` 处注释）。回归：printc:: 9 过 / comment:: 16 过；
+oracle fixture `comment_sorter_iterators_1204` Rust 侧 38 行 stdout sha256
+`072c03b2…` 与 pin 逐字节一致（注册 runner 的 `comment_rs_sha256` 门随
+comment.rs 编辑失效，需主仓重登记）。

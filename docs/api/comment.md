@@ -8,9 +8,10 @@ comment codec state, and the CommentSorter shared-iterator walking machinery
 the locked 12.0.4 oracle byte-for-byte (`COMMENT-SORTER-ITERATORS-0001`,
 38-line projection MATCH). Full codec L3 remains blocked on restoring the
 decoded `AddrSpace` handle through `Decoder`/`AddrSpaceManager`
-(`ADDRESS-0001`, `MARSHAL-PACKED-0001`); the sorter keeps three registered
-representation residuals (block-cover projection, cloned-Comment ownership,
-printc.rs glue consumers) under `COMMENT-SORTER-ITERATORS-0001`.
+(`ADDRESS-0001`, `MARSHAL-PACKED-0001`); the sorter keeps two registered
+representation residuals (block-cover projection, cloned-Comment ownership)
+under `COMMENT-SORTER-ITERATORS-0001` — the printc.rs glue-snapshot residual
+was resolved 2026-08-23 when the consumers moved to the direct protocol.
 
 Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/comment.{hh,cc}`.
 
@@ -30,6 +31,15 @@ A comment attached to a specific function and code address (comment.hh:43).
 - `new(tp, fad, ad, uq, txt)`, `new_empty()`.
 - `get_type()`, `get_func_addr()`, `get_addr()`, `get_uniq()`, `get_text()`,
   `set_emitted(val)`, `is_emitted()`.
+- `emitted` is an `AtomicBool` mirroring Ghidra's `mutable bool emitted`
+  (comment.hh:50): `set_emitted` mutates through a shared reference exactly
+  like the const `setEmitted` (comment.hh:63), so
+  `PrintLanguage::emitLineComment`'s `comm->setEmitted(true)`
+  (printlanguage.cc:648) ports to a call-site mark during the sorter's const
+  walk. `Cell<bool>` was rejected because `Funcdata` reaches a `Sync` bound
+  via `ffi.rs`'s `Mutex<Option<Funcdata>>` global; `Relaxed` orderings keep
+  plain-bool semantics. `Clone` is field-wise (re-loads the current flag),
+  matching C++'s implicit copy.
 - `encode(encoder) -> Result<()>` (comment.cc:37),
   `decode(decoder) -> Result<()>` (comment.cc:57).
   Address children use distinct `space` and `offset` attributes through the
@@ -83,11 +93,10 @@ state for walking comments within one basic block or the header.
 - `has_next()` / `get_next()` (comment.hh:250-251) — `hasNext` compares the
   `start`/`opstop` iterator ranks; `getNext` returns the current comment and
   advances `start`.
-- Legacy glue for printc.rs consumers: `setup_block_list(block_index) ->
-  Vec<&Comment>`, `setup_op_list(block_index, op_order) -> Vec<&Comment>`
-  (drives the faithful machine and drains it), `has_header_comments()`,
-  `header_comments()`. Migration of printc.rs to the direct protocol remains
-  open under `COMMENT-SORTER-ITERATORS-0001`.
+- The legacy Vec snapshot adapters (`setup_block_list`, `setup_op_list`,
+  `has_header_comments`, `header_comments`) were removed 2026-08-23:
+  printc.rs now drives this state machine directly (see docs/api/printc.md,
+  `emit_comment_group`/`emit_comment_func_header`/`emit_comment_block_tree`).
 
 The `map<Subsort, Comment *>` is modeled as a sorted vector of
 `(Subsort, comment index)` pairs; the `start`/`stop`/`opstop` members are
@@ -146,11 +155,14 @@ and exact address-space identity remain with `ADDRESS-0001` and
   分别复现 comment.cc:379/362/394 的 lower_bound/upper_bound 边界；
   `setup_op_stop(None)` 取 `opstop = stop`。连续 landmark 之间 `start` 不回退，
   只收窄 `opstop`——即 printc emitCommentGroup 的交错消费协议。
-- **Vec 胶水适配器保留**（`setup_block_list`/`setup_op_list`/
-  `header_comments`）：printc.rs 消费端不在本租约 write-set 内，适配器现在
-  内部驱动状态机再排空，观测行为与旧版逐项一致；printc.rs 迁移到
-  `setup_block_bounds`/`setup_op_stop`/`has_next`/`get_next` 直接协议仍开放
-  （残差 3）。
+- **Vec 胶水适配器已删除**（原 `setup_block_list`/`setup_op_list`/
+  `has_header_comments`/`header_comments`）：2026-08-23 printc.rs 消费端
+  （`emit_comment_group`/`emit_comment_func_header`/`emit_comment_block_tree`）
+  迁移到 `setup_block_bounds`/`setup_op_stop`/`setup_header`/
+  `has_next`/`get_next` 直接协议，原残差 3 关闭；`Comment.emitted` 改为
+  `AtomicBool` 内部可变（对齐 `mutable bool emitted`，comment.hh:50），
+  使 `emit_line_comment` 后的 `set_emitted(true)`（printlanguage.cc:648）
+  可经共享引用在排序器行走中落地。
 - **Oracle 证据**：`tools/run_comment_sorter_iterators_oracle.sh`
   （pin-base 296c128 + src/comment.rs overlay，schema-2 metadata）——
   锁定 Ghidra 12.0.4 (e40ed130) 与 Rugra 的 38 行交错消费投影
@@ -165,10 +177,10 @@ and exact address-space identity remain with `ADDRESS-0001` and
      把块范围钉到相同边界，管线中块 cover 终值 == 末指令地址，故等价，
      但形式化等价未证。
   2. CommentSorter 持有 Comment 克隆而非数据库指针：setupFunctionList 的
-     `setEmitted(false)` 不回写 CommentDatabaseInternal（Ghidra 经
+     `setEmitted(false)` 与消费端发射后的 `set_emitted(true)` 都只改
+     排序器副本，不回写 CommentDatabaseInternal（Ghidra 经
      `mutable emitted` 直改库内对象）。
-  3. printc.rs 消费端仍走 Vec 胶水快照（行为等价已由适配器内部驱动状态机
-     保证，但未走直接协议）。
+  （原残差 3「printc.rs 胶水快照消费端」已于 2026-08-23 关闭。）
   模块整体仍为 L2/MISMATCH：codec 的 `ADDRESS-0001`/`MARSHAL-PACKED-0001`
   残差不变。
 <!-- annotation-pass: 2026-08-23 -->
