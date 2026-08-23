@@ -155,16 +155,22 @@ E2E：curl 74 decompiled/1 panic → **75 decompiled/0 panic**（helpf 0x3980
 生产代码未动。
 <!-- annotation-pass: 2026-08-17 -->
 
-## `LaneDivide`（subflow.cc:3518-4119，2026-08-22 WIP）
+## `LaneDivide`（subflow.cc:3518-4128，LANEDIVIDE-INFRA-0001）
 
-Ghidra `LaneDivide` 类 1:1 移植（LANEDIVIDE-INFRA-0001，进行中）：
+Ghidra `LaneDivide` 类 1:1 移植（LANEDIVIDE-INFRA-0001）：
 - `set_replacement` (3518) / `build_unary_op` (3559) / `build_binary_op` (3578) /
   `build_piece` (3599) / `build_multiequal` (3654) / `build_indirect` (3681) /
   `build_store` (3704) / `build_load` (3753) / `build_right_shift` (3800) /
   `build_left_shift` (3837) / `build_zext` (3875) — lane 重建 op 族
 - `trace_forward` (3916) / `trace_backward` (4012) — 双向 lane 追踪
-- `process_next_work` (4085) — 工作队列
+- `process_next_work` (4085) — LIFO 工作队列（back/pop，先 backward 后 forward）
 - `new` (4102) / `do_trace` (4112) / `apply`（TransformManager::apply, transform.cc:756）
 
-状态：WIP——单测 47/47 绿；oracle fixture（lanedivide_infra_1204）与独立复核
-pending，模块保持 L2.5 以下。
+对拍：`tools/run_lanedivide_infra_oracle.sh` MATCH（锁定 12.0.4 oracle 逐字节），
+覆盖 PIECE（双 1-lane SUBPIECE → preexisting COPY 路径）、MULTIEQUAL（块首
+逆序 + 常量 lane 拆分）成功投影与 INT_MULT 失败零突变投影；单测 47/47 绿。
+残差 LANEDIVIDE-INFRA-RESIDUAL-0001（UNTESTED：terminator/store/load/shift/
+zext/indirect/restricted-window/typelock 分支；NO_ORACLE：subflow.cc:3942
+`rvn+(laneIndex-skipLanes)` 负索引为 oracle UB，Rugra 保守拒绝并注释），
+登记见 tests/oracle/lanedivide_infra_1204.metadata.json。核心算法白名单
+模块，合并需机制 C 独立复核。

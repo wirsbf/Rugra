@@ -389,8 +389,14 @@ vs Rugra space_id 序，生产只查 ram）；`TreeDecoder` 对锁定 ElementId 
 ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后另行
 接线（见 TODO_BOARD ARCH-CONTEXT-TRACKED-0001 交接）。
 
-## laned-register 查询（2026-08-22 WIP，LANEDIVIDE-INFRA-0001）
+## laned-register 查询（LANEDIVIDE-INFRA-0001）
 
-- `get_laned_register` — Architecture 侧 laned 寄存器查表（register.mm/arch
-  `getLanedRegister` 镜像）；`get_minimum_laned_register_size` — 最小 laned 尺寸。
-  WIP：oracle 对拍 pending（见 lanedivide_infra_1204 fixture）。
+- `get_laned_register`（architecture.cc:290-306 镜像，按 whole size 二分、
+  忽略地址）与 `get_minimum_laned_register_size`（architecture.cc:312-318 镜像，
+  空表 -1 / 最小 whole size）；`set_lane_records` 还原
+  `decodeRegisterData`（architecture.cc:970-974）的升序唯一 +
+  同尺寸 mask 合并不变式，记录以 `Arc` 共享身份进入 lanedMap。
+- 对拍：`tools/run_lanedivide_infra_oracle.sh` MATCH（锁定 12.0.4 oracle，
+  arch/min/ordered sizes/跨空间记录身份/size-12 miss 逐字节一致）；残差
+  LANEDIVIDE-INFRA-RESIDUAL-0001（fixture 未覆盖分支见
+  tests/oracle/lanedivide_infra_1204.metadata.json）。

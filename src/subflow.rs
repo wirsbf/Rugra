@@ -4188,6 +4188,19 @@ impl LaneDivide {
                             return false;
                         }
                         let lane_index = self.description.get_boundary(byte_position);
+                        // Ghidra subflow.cc:3934-3944 only rejects laneIndex < 0,
+                        // laneIndex >= numLanes and lane size <= output size. When
+                        // laneIndex < skipLanes it still evaluates
+                        // `rvn + (laneIndex - skipLanes)` (subflow.cc:3942), a
+                        // negative index into the numLanes-sized array allocated by
+                        // newSplit(vn,description,numLanes,startLane)
+                        // (transform.cc:484) — undefined behavior in the oracle.
+                        // The oracle target getBoundary(bytePos) also feeds a
+                        // window-relative offset in global coordinates, so this
+                        // corner is reachable for restricted windows
+                        // (skipLanes > 0). Rugra conservatively refuses the
+                        // split instead of dereferencing out of bounds; tracked
+                        // as LANEDIVIDE-INFRA-RESIDUAL-0001.
                         if lane_index < 0
                             || lane_index as usize >= self.description.get_num_lanes()
                             || self.description.get_size(lane_index as usize) <= output_size
