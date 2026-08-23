@@ -8656,17 +8656,237 @@ impl Action for ActionMappedLocalSync {
     fn get_name(&self) -> &str { "mapped_local_sync" }
 }
 
-/// Lane divide analysis. Faithful to `ActionLaneDivide`
-/// (coreaction.cc).
-pub struct ActionLaneDivide;
-impl ActionLaneDivide {
-    // Ghidra: coreaction.hh:113 ActionLaneDivide (constructor mirror)
-    pub fn new() -> Self { Self }
+/// Find Varnodes with a vectorized lane scheme and attempt to split the
+/// lanes. Faithful to `ActionLaneDivide` (coreaction.hh:107-123,
+/// coreaction.cc:509-622).
+///
+/// The Architecture lists (vector) registers that may be used to perform
+/// parallelized operations on \b lanes within the register. This action
+/// looks for these registers as Varnodes, determines if a particular lane
+/// scheme makes sense in terms of the function's data-flow, and then
+/// rewrites the data-flow so that the lanes become explicit Varnodes.
+pub struct ActionLaneDivide {
+    /// Ghidra protected `Action::count`, incremented per successful split
+    /// (coreaction.cc:578 `count += 1`).
+    count: i32,
 }
+
+// Ghidra: varnode.cc:1620 VarnodeBank::beginLoc(int4 s,const Address&) / endLoc
+/// Varnodes of exact size `storage.size` at exact storage `(space,offset)`,
+/// in loc-tree order. This is the Rust equivalent of walking Ghidra's
+/// `[beginLoc(sz,addr), endLoc(sz,addr))` range: the loc set is ordered by
+/// (address, size ascending, input/written/free, def SeqNum/createIndex)
+/// via `VarnodeCompareLocDef` (varnode.cc:34-53), and the exact
+/// (size,address) restriction selects a contiguous run in that order.
+/// The live iteration is emulated by re-collecting the snapshot after every
+/// successful split, mirroring the `Recalculate bounds` step at
+/// coreaction.cc:606-607.
+fn varnodes_at_storage(fd: &Funcdata, storage: &crate::funcdata::LanedStorage) -> Vec<Arc<RwLock<crate::varnode::Varnode>>> {
+    fd.vbank
+        .loc_tree
+        .iter()
+        .filter(|entry| {
+            let vn = entry.0.read().unwrap();
+            vn.get_space() == storage.space
+                && vn.get_offset() == storage.offset
+                && vn.get_size() == storage.size
+        })
+        .map(|entry| entry.0.clone())
+        .collect()
+}
+
+impl ActionLaneDivide {
+    // Ghidra: coreaction.hh:117 ActionLaneDivide::ActionLaneDivide
+    /// Constructor mirror: `Action(rule_onceperfunc,"lanedivide",g)` with
+    /// `count` zero-initialized by the Action base.
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    // Ghidra: coreaction.cc:509 ActionLaneDivide::collectLaneSizes
+    /// Examine the PcodeOps using the given Varnode to determine possible
+    /// lane sizes. Faithful to `collectLaneSizes` (coreaction.cc:509-540):
+    /// walk the descendant ops first (step 0), then the defining op
+    /// (step 1). A CPUI_SUBPIECE descendant contributes its output size; a
+    /// CPUI_PIECE definition contributes `min(in(0) size, in(1) size)`.
+    /// Each putative size registers only when
+    /// `allowedLanes.allowedLane(curSize)` accepts it.
+    fn collect_lane_sizes(
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        allowed_lanes: &crate::transform::LanedRegister,
+        check_lanes: &mut crate::transform::LanedRegister,
+    ) {
+        // cc:512: live descendant-list iteration; nothing mutates during
+        // collection, so the snapshot preserves Ghidra's insertion order.
+        let descendants: Vec<Arc<RwLock<crate::op::PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        let mut step = 0usize; // 0 = descendants, 1 = def, 2 = done
+        let mut iter = 0usize;
+        if descendants.is_empty() {
+            // cc:514-516: with no descendants, jump straight to the def.
+            step = 1;
+        }
+        while step < 2 {
+            let cur_size: i32; // Putative lane size
+            if step == 0 {
+                let op = descendants[iter].read().unwrap();
+                iter += 1;
+                if iter == descendants.len() {
+                    step = 1; // cc:522-523: advance step before filtering
+                }
+                if op.opcode != OpCode::CPUI_SUBPIECE {
+                    // cc:524: only SUBPIECE splits the big register
+                    continue;
+                }
+                cur_size = op
+                    .get_out()
+                    .map_or(0, |out| out.read().unwrap().get_size() as i32);
+            } else {
+                step = 2; // cc:528
+                let vng = vn.read().unwrap();
+                if !vng.is_written() {
+                    continue;
+                }
+                let Some(def) = vng.get_def() else {
+                    continue;
+                };
+                let op = def.read().unwrap();
+                if op.opcode != OpCode::CPUI_PIECE {
+                    // cc:531: only PIECE forms the big register from pieces
+                    continue;
+                }
+                // cc:532-535: lane size capped by the smaller PIECE input.
+                let in0 = op
+                    .get_in(0)
+                    .map_or(0, |input| input.read().unwrap().get_size() as i32);
+                let in1 = op
+                    .get_in(1)
+                    .map_or(0, |input| input.read().unwrap().get_size() as i32);
+                cur_size = in0.min(in1);
+            }
+            if allowed_lanes.allowed_lane(cur_size) {
+                check_lanes.add_lane_size(cur_size); // cc:537-538
+            }
+        }
+    }
+
+    // Ghidra: coreaction.cc:558 ActionLaneDivide::processVarnode
+    /// Search for a likely lane size and try to divide a single Varnode
+    /// into these lanes. Faithful to `processVarnode`
+    /// (coreaction.cc:558-583). Modes 0/1 collect putative lane sizes from
+    /// the local ops (mode 1 additionally allows SUBPIECE downcast
+    /// terminators); mode 2 falls back to the architecture's default lane
+    /// size. Lane sizes are tried smallest first (LanedIterator bitmask
+    /// order); the first successful `LaneDivide::doTrace` applies the
+    /// split and increments the change counter.
+    fn process_varnode(
+        &mut self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        laned_register: &crate::transform::LanedRegister,
+        mode: i32,
+    ) -> bool {
+        let mut check_lanes = crate::transform::LanedRegister::default(); // no lanes yet
+        let allow_downcast = mode > 0;
+        if mode < 2 {
+            Self::collect_lane_sizes(vn, laned_register, &mut check_lanes);
+        } else {
+            // cc:566-569: default lane size is the pointer size, except
+            // non-4-byte pointers normalize to 8.
+            let mut default_size = fd
+                .arch
+                .as_ref()
+                .and_then(|arch| {
+                    arch.types
+                        .as_ref()
+                        .map(|types| types.read().unwrap().get_size_of_pointer())
+                })
+                .unwrap_or(0);
+            if default_size != 4 {
+                default_size = 8;
+            }
+            check_lanes.add_lane_size(default_size);
+        }
+        // cc:571-572: LanedRegister::const_iterator walks lane sizes
+        // smallest first (transform.hh:98-110 bitmask iterator).
+        for cur_size in check_lanes.lane_sizes() {
+            // cc:574: lane scheme dictated by curSize over the whole register
+            let description =
+                crate::transform::LaneDescription::uniform(laned_register.get_whole_size(), cur_size);
+            let mut lane_divide =
+                crate::subflow::LaneDivide::new(fd, vn.clone(), description, allow_downcast);
+            if lane_divide.do_trace() {
+                lane_divide.apply(fd);
+                self.count += 1; // cc:578: indicate a change was made
+                return true;
+            }
+        }
+        false
+    }
+}
+
 impl Action for ActionLaneDivide {
     // Ghidra: coreaction.cc:585 ActionLaneDivide::apply
-    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // cc:588: stop recording laned-register accesses before any split
+        // varnode is created.
+        fd.set_laned_reg_generated();
+        for mode in 0..3i32 {
+            // cc:591
+            let mut all_storage_processed = true;
+            // cc:592: live map<VarnodeData,const LanedRegister*> iteration.
+            // The map is provably stable for the duration of apply: every
+            // insert path (newUnique/newVarnode/newVarnodeOut/
+            // newUniqueOut -> checkForLanedRegister) is gated by
+            // minLanedSize == 1000000 from setLanedRegGenerated above, and
+            // nothing removes entries before the final
+            // clearLanedAccessMap. The per-mode snapshot taken in
+            // BTreeMap (=std::map VarnodeData::operator<) order is
+            // observably equivalent to Ghidra's live iterator.
+            let lane_accesses: Vec<(crate::funcdata::LanedStorage, Arc<crate::transform::LanedRegister>)> =
+                fd.lane_accesses()
+                    .map(|(storage, record)| (*storage, record.clone()))
+                    .collect();
+            for (storage, laned_reg) in &lane_accesses {
+                // cc:594-597: sz/addr from the VarnodeData key feed
+                // [beginLoc(sz,addr), endLoc(sz,addr)) in loc-tree order;
+                // varnodes_at_storage applies the same exact
+                // (space,offset,size) restriction.
+                let mut varnodes = varnodes_at_storage(fd, storage);
+                let mut all_varnodes_processed = true; // cc:598
+                let mut index = 0usize;
+                while index < varnodes.len() {
+                    let vn = varnodes[index].clone();
+                    if vn.read().unwrap().has_no_descend() {
+                        index += 1; // cc:601-604
+                        continue;
+                    }
+                    if self.process_varnode(fd, &vn, laned_reg, mode) {
+                        // cc:606-608: recalculate bounds and restart the
+                        // walk from beginLoc.
+                        varnodes = varnodes_at_storage(fd, storage);
+                        index = 0;
+                        all_varnodes_processed = true;
+                    } else {
+                        index += 1;
+                        all_varnodes_processed = false; // cc:611-612
+                    }
+                }
+                if !all_varnodes_processed {
+                    all_storage_processed = false; // cc:615-616
+                }
+            }
+            if all_storage_processed {
+                break; // cc:618-619
+            }
+        }
+        fd.clear_laned_access_map(); // cc:620
         Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:578) into the Rust ActionState accumulator.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:117 (Action(rule_onceperfunc,"lanedivide",g))
     fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
