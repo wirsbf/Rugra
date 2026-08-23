@@ -2,7 +2,10 @@
 
 **源代码路径**: `src/condexe.rs`
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
-**状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——底层 op/block 生命周期与双向 edge 已破坏变换前提；`remove_from_flow_split` 映射相反且一支可越界，true/false 被重复翻转，Action guard/count/stage、pullback storage/order 与异常路径均未对齐。正式门禁 `NO_ORACLE`。
+**状态**: 🔧 **L2（2026-08-23 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002，2026-08-23 集成）与
+pullbackOp storage/插入位置（CONDEXE-PULLBACK-0005，2026-08-23，`condexe_pullback_1204`
+5/5 MATCH）已对齐；`remove_from_flow_split` 映射相反且一支可越界（CFG-0001）、
+Action guard/count/stage 与异常路径仍未对齐，故保持 L2。
 
 ## 模块说明
 
@@ -100,6 +103,42 @@ postb），并通过把读推入正确路径来保留 MULTIEQUAL 数据流。
 供 locked oracle fixture（tests/oracle/condexe_trueout_1204）在隔离状态下驱动
 私有阶段并观察 init2a_true / camethruposta_slot / zero_path_is_true；Ghidra 侧经
 `#define private public` 读取同一批私有成员。
+
+## 2026-08-23（CONDEXE-PULLBACK-0005）：pullbackOp storage/插入位置对齐
+
+审计（docs/alignment_audit/CONDEXE_GAPS_2026-08-22.md §1 #8）定位的两处缺陷修复：
+
+1. **storage（cc:182）**：`pullback_op` 的复制输出原为 `new_unique_out`（匿名
+   unique 地址）；Ghidra 是 `fd->newVarnodeOut(origOutVn->getSize(),
+   origOutVn->getAddr(), newOp)` — 保留原输出地址**与其地址空间**。新增私有
+   `pullback_new_varnode_out`（funcdata_varnode.cc:104 newVarnodeOut 的逐语句复制：
+   createDef → setOutput → assignHigh → laned → queryProperties），因 Rugra
+   `Funcdata::new_varnode_out` 在 split Address 模型下硬编码 Register 空间，
+   无法表达 unique 空间原地址（P2 投影即钉死该差异）。
+2. **插入位置（cc:187）**：`op_insert_begin` → `op_insert_end`（funcdata_op.cc:435-446，
+   落在块尾、trailing flow-break 之前，而非 MULTIEQUAL 组之后）。
+3. **defOp slot 语义（cc:172）**：`defOp->getIn(inbranch)` 缺槽时不再回退原
+   varnode，而是按 Ghidra 的不可达语义向上传播 `None`。
+
+**fixture**：`tests/oracle/condexe_pullback_1204`（.cc/.rs/.metadata.json）+
+`tools/run_condexe_pullback_oracle.sh`（pin-base schema2，base 0d9f8a1 + 单
+src/condexe.rs overlay）。三投影（块位 idx/nops、SeqNum pc:time、storage
+space:offset/size）覆盖：P1/P1b SUBPIECE 经 iblock MULTIEQUAL 的 inbranch 0/1
+pullback（目标块 = iblock->In(inbranch)，input 0 = MULTIEQUAL slot）、P3
+findPullback 缓存命中（同指针、零新 op）、P2 跨块 immedDom pullback（unique
+空间原地址保留）、P5 常量 input 0 直传 immedDom、G1-G8 testOpRead 准入矩阵
+（INT_ADD/PTRSUB 非常量 input 1 拒绝 cc:126-128、非 MULTIEQUAL in-ib 定义者拒绝
+cc:131-133、free/常量 input 0 拒绝 cc:135-136）。14/14 记录双侧字节一致
+（`covered_projection=5/5 projection_status=MATCH`）。负向对照已验证：回退到
+`new_unique_out`+`op_insert_begin` 后 P1-P5 全部 MISMATCH（`out=unique:<counter>`、
+`idx=0`）。
+
+新增 fixture 胶水：`ConditionalExecution::fixture_pullback_op` /
+`fixture_test_op_read`（同上 trueout 胶水模式）。
+
+**残差（CFG-0001）**：execute/doReplacement/removeFromFlowSplit 与 pullback 输出的
+交互未投影（fixture metadata `residual_union`）；doReplacement RETURN 腿的
+newVarnodeOut 地址保留（condexe.cc:340-349）留待同一后续任务。
 
 ## 2026-06-27（续）：RuleOrPredicate 完整移植（condexe.cc:509-712）
 
