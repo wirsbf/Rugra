@@ -8,6 +8,7 @@
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/comment.{hh,cc}.
 
 use crate::address::Address;
+use crate::block::FlowBlock;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use anyhow::{bail, Result};
 
@@ -407,12 +408,13 @@ pub mod header_type {
 }
 
 /// The sorting key for placing a Comment within a specific basic block.
-/// Faithful to `CommentSorter::Subsort` (comment.hh:203).
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+/// Faithful to `CommentSorter::Subsort` (comment.hh:203): `index` is the
+/// signed basic-block index, -1 for a function header, so header keys order
+/// before every block key exactly as Ghidra's `int4` comparison does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subsort {
-    /// Either the basic block index or u32::MAX for a function header (-1 in
-    /// Ghidra).
-    pub index: u32,
+    /// Either the basic block index or -1 for a function header.
+    pub index: i32,
     /// The order index within the basic block.
     pub order: u32,
     /// A final count to guarantee a unique sorting.
@@ -420,24 +422,40 @@ pub struct Subsort {
 }
 
 impl Subsort {
-    // Ghidra: comment.hh:203 Subsort::setHeader
-    /// Initialize a key for a header comment. Faithful to `setHeader`.
-    pub fn set_header(header_type: u32) -> Self {
-        Self {
-            index: u32::MAX,
-            order: header_type,
-            pos: 0,
-        }
+    // Ghidra: comment.hh:224 Subsort::setHeader
+    /// Initialize the key for a header comment. Faithful to `setHeader`
+    /// (comment.hh:224-227): sets `index = -1` and `order = headerType`,
+    /// leaving `pos` untouched (the caller-owned uniqueness counter).
+    pub fn set_header(&mut self, header_type: u32) {
+        self.index = -1;
+        self.order = header_type;
     }
 
-    // Ghidra: comment.hh:203 Subsort::setBlock
-    /// Initialize a key for a basic block position. Faithful to `setBlock`.
-    pub fn set_block(i: u32, ord: u32) -> Self {
-        Self {
-            index: i,
-            order: ord,
-            pos: 0,
+    // Ghidra: comment.hh:233 Subsort::setBlock
+    /// Initialize the key for a basic block position. Faithful to `setBlock`
+    /// (comment.hh:233-236): sets `index`/`order`, leaving `pos` untouched.
+    pub fn set_block(&mut self, i: i32, ord: u32) {
+        self.index = i;
+        self.order = ord;
+    }
+}
+
+// Ghidra: block.hh:476 BlockBasic::contains
+/// Determine if the given address is contained in the block's original range.
+///
+/// Ghidra projects `BlockBasic::contains` through the cover `RangeList`
+/// (`cover.inRange(addr, 1)`, a single `[setInitialRange(beg,end)]` range for
+/// blocks established by `Funcdata::setBasicBlockRange`). Rugra has no block
+/// cover system, so the range is projected as `[start_addr, last-op addr]`
+/// (`get_stop_addr`), same-space only — mirroring `RangeList::inRange`'s
+/// per-space range lookup. The oracle fixture pins both sides to identical
+/// ranges (block end == address of the last op in the block).
+fn block_basic_contains(bb: &crate::block::BlockBasic, addr: &Address) -> bool {
+    match (addr.get_space(), bb.start_addr.get_space()) {
+        (Some(space), Some(block_space)) if space == block_space => {
+            *addr >= bb.start_addr && *addr <= bb.get_stop_addr()
         }
+        _ => false,
     }
 }
 
@@ -446,189 +464,370 @@ impl Subsort {
 ///
 /// The decompiler maintains information about basic blocks that have been
 /// entirely removed, in which case, the user can elect to not display the
-/// corresponding comments.
+/// corresponding comments. This class also acts as state for walking comments
+/// within a specific basic block or within the header: `start`/`stop`/`opstop`
+/// bound the current walk exactly as Ghidra's `map<Subsort,Comment *>::const_iterator`
+/// members do (comment.hh:239-241). The iterators are modeled as ranks into
+/// the sorted `commmap` (rank == `commmap.len()` is `end()`), and live in
+/// `Cell`s because Ghidra's `start` is `mutable` inside const
+/// `hasNext`/`getNext` (comment.hh:239, 250-251).
 #[derive(Debug, Default)]
 pub struct CommentSorter {
-    /// Comments for the current function, sorted by block.
-    commmap: std::collections::BTreeMap<Subsort, usize>,
-    /// The comments themselves (indexed by the commmap values).
+    /// Comments for the current function, sorted by block. Models Ghidra's
+    /// `map<Subsort,Comment *>` as a sorted vector of (key, comment index).
+    commmap: Vec<(Subsort, usize)>,
+    /// The comments themselves (indexed by the commmap values). Rugra clones
+    /// the placed Comment objects out of the (const) database; Ghidra stores
+    /// raw pointers into it.
     comments: Vec<Comment>,
     /// Display unplaced comments in the header.
     display_unplaced_comments: bool,
+    /// Iterator to the current comment being walked (`mutable start`,
+    /// comment.hh:239).
+    start: std::cell::Cell<usize>,
+    /// Last comment in the current set being walked (`stop`, comment.hh:240).
+    stop: std::cell::Cell<usize>,
+    /// Statement landmark within the current set of comments (`opstop`,
+    /// comment.hh:241).
+    opstop: std::cell::Cell<usize>,
 }
 
 impl CommentSorter {
-    // Ghidra: comment.hh:195 CommentSorter::new
-    /// Construct an empty sorter.
+    // Ghidra: comment.hh:245 CommentSorter::CommentSorter
+    /// Construct an empty sorter with `displayUnplacedComments = false`.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            commmap: Vec::new(),
+            comments: Vec::new(),
+            display_unplaced_comments: false,
+            start: std::cell::Cell::new(0),
+            stop: std::cell::Cell::new(0),
+            opstop: std::cell::Cell::new(0),
+        }
+    }
+
+    // RUGRA-GLUE: std::map<Subsort,Comment*>::lower_bound rank projection.
+    // Ghidra's map iterators are node pointers; Rugra models the sorted map
+    // as a vector and the iterator as its rank (first entry with key >= key).
+    fn lower_bound_rank(&self, key: &Subsort) -> usize {
+        self.commmap.partition_point(|(k, _)| *k < *key)
+    }
+
+    // RUGRA-GLUE: std::map<Subsort,Comment*>::upper_bound rank projection
+    // (first entry with key > key).
+    fn upper_bound_rank(&self, key: &Subsort) -> usize {
+        self.commmap.partition_point(|(k, _)| *k <= *key)
+    }
+
+    // RUGRA-GLUE: PcodeOp::getParent accessor mirroring op.hh's `BlockBasic
+    // *getParent(void)`; Rugra stores the parent as a Weak<dyn FlowBlock>.
+    fn op_parent(
+        op: &crate::op::PcodeOp,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
+        op.parent.as_ref().and_then(|w| w.upgrade())
     }
 
     // Ghidra: comment.cc:270 CommentSorter::findPosition
-    /// Figure out the position of a Comment within the function's basic blocks.
-    /// Faithful to `CommentSorter::findPosition` (comment.cc:270).
+    /// Figure out position of given Comment and initialize its key. Faithful
+    /// to `CommentSorter::findPosition` (comment.cc:270-325).
     ///
-    /// Returns true if the comment can be positioned (placed in a block or
-    /// header). Sets the subsort key accordingly.
+    /// Decision-order: (1) type 0 is never placed; (2) header/warningheader
+    /// comments at the function entry address become `header_basic`; (3) the
+    /// first op at or after the comment address (`PcodeOpTree` lower bound,
+    /// op.cc:1146) places the comment in that op's block at the op's
+    /// SeqNum::order when the block's range contains the address; (4) failing
+    /// that, the op before the lower bound places it at the very end of its
+    /// block (order 0xffffffff) when its block contains the address; (5) an
+    /// exact-address op that migrated out of its original block still hangs
+    /// the comment on it (backupOp); (6) an op-less function places every
+    /// comment at block 0 order 0; (7) `displayUnplacedComments` salvages the
+    /// comment as `header_unplaced`; otherwise (8) the block was excised and
+    /// the comment is dropped. Dead ops (no parent) raise the same
+    /// LowlevelError text as Ghidra (comment.cc:289/303).
     fn find_position(
+        &self,
         subsort: &mut Subsort,
         comm: &Comment,
         fd: &crate::funcdata::Funcdata,
-        display_unplaced: bool,
-    ) -> bool {
+    ) -> Result<bool> {
         if comm.get_type() == 0 {
-            return false;
+            return Ok(false);
         }
         let fad = *fd.get_address();
-
-        // Header comment at the function address.
-        if (comm.get_type() & (comment_type::HEADER | comment_type::WARNINGHEADER)) != 0
+        if ((comm.get_type() & (comment_type::HEADER | comment_type::WARNINGHEADER)) != 0)
             && comm.get_addr() == fad
         {
-            *subsort = Subsort::set_header(header_type::HEADER_BASIC);
-            return true;
+            // If it is a header comment at the address associated with the
+            // beginning of the function
+            subsort.set_header(header_type::HEADER_BASIC);
+            return Ok(true);
         }
 
-        // Try to find the op at the comment's address.
+        // Try to find block containing comment
+        // Find op at lowest address greater or equal to comment's address.
+        // The PcodeOpTree is sorted by SeqNum = (pc, uniq), so the lower
+        // bound of SeqNum(addr, 0) is the first op whose address >= addr.
         let comm_addr = comm.get_addr();
-        let mut found_block: Option<i32> = None;
-        let mut found_order: u32 = 0;
+        let ops_sorted: Vec<crate::op::PcodeOpRef> = fd.obank.optree.iter().cloned().collect();
+        let opiter = ops_sorted
+            .iter()
+            .position(|o| o.0.read().unwrap().get_addr() >= comm_addr);
 
-        // Search through basic blocks for an op at this address.
-        for i in 0..fd.bblocks.get_size() {
-            let bl = match fd.bblocks.get_block(i) {
+        let mut backup_op: Option<crate::op::PcodeOpRef> = None;
+        if let Some(rank) = opiter {
+            // If there is an op at or after the comment
+            let op = ops_sorted[rank].clone();
+            let op_read = op.0.read().unwrap();
+            let block = match Self::op_parent(&op_read) {
                 Some(b) => b,
-                None => continue,
+                None => bail!("Dead op reaching CommentSorter"),
             };
-            let bl_rg = bl.read().unwrap();
-            if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                for op_ref in &any.ops {
-                    let op_rg = op_ref.0.read().unwrap();
-                    if op_rg.get_addr() == comm_addr {
-                        found_block = Some(i as i32);
-                        // Use the op's seq num order as the within-block order.
-                        found_order = op_rg.get_seq_num().order;
-                        break;
-                    }
+            let block_read = block.read().unwrap();
+            if let Some(bb) = block_read
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>()
+            {
+                if block_basic_contains(bb, &comm_addr) {
+                    // If the op's block contains the address:
+                    // associate comment with this op
+                    subsort.set_block(bb.get_index(), op_read.get_seq_num().order);
+                    return Ok(true);
                 }
-                if found_block.is_some() {
-                    break;
+            }
+            if op_read.get_addr() == comm_addr {
+                backup_op = Some(op.clone());
+            }
+        }
+        if opiter.unwrap_or(ops_sorted.len()) > 0 {
+            // If there is a previous op (--opiter)
+            let prev = ops_sorted[opiter.unwrap_or(ops_sorted.len()) - 1].clone();
+            let prev_read = prev.0.read().unwrap();
+            let block = match Self::op_parent(&prev_read) {
+                Some(b) => b,
+                None => bail!("Dead op reaching CommentSorter"),
+            };
+            let block_read = block.read().unwrap();
+            if let Some(bb) = block_read
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>()
+            {
+                if block_basic_contains(bb, &comm_addr) {
+                    // Treat the comment as being in this block at the very end
+                    subsort.set_block(bb.get_index(), 0xffffffff);
+                    return Ok(true);
                 }
             }
         }
-
-        if let Some(block_idx) = found_block {
-            *subsort = Subsort::set_block(block_idx as u32, found_order);
-            return true;
-        }
-
-        // No op at this address — try to find the block containing it
-        // by checking block start addresses.
-        for i in 0..fd.bblocks.get_size() {
-            let bl = match fd.bblocks.get_block(i) {
+        if let Some(backup) = backup_op {
+            // Its possible the op migrated from its original basic block.
+            // Since the address matches exactly, hang the comment on it.
+            let backup_read = backup.0.read().unwrap();
+            let block = match Self::op_parent(&backup_read) {
                 Some(b) => b,
-                None => continue,
+                // Unreachable in the oracle: backupOp's parent was verified
+                // non-null when the candidate was examined above.
+                None => bail!("Dead op reaching CommentSorter"),
             };
-            let bl_rg = bl.read().unwrap();
-            if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                let start = any.start_addr.as_u64();
-                if comm_addr.as_u64() >= start {
-                    // Tentative match — this block starts before the comment.
-                    *subsort = Subsort::set_block(i as u32, u32::MAX);
-                    return true;
-                }
-            }
+            let index = block.read().unwrap().get_index();
+            subsort.set_block(index, backup_read.get_seq_num().order);
+            return Ok(true);
         }
-
-        // Can't place the comment anywhere.
-        if display_unplaced {
-            *subsort = Subsort::set_header(header_type::HEADER_UNPLACED);
-            return true;
+        if ops_sorted.is_empty() {
+            // If there are no ops at all: put comment at the beginning of the
+            // first block
+            subsort.set_block(0, 0);
+            return Ok(true);
         }
-        false
+        if self.display_unplaced_comments {
+            subsort.set_header(header_type::HEADER_UNPLACED);
+            return Ok(true);
+        }
+        Ok(false) // Basic block containing comment has been excised
     }
 
     // Ghidra: comment.cc:334 CommentSorter::setupFunctionList
     /// Collect and sort comments specific to the given function. Faithful to
-    /// `setupFunctionList` (comment.cc:334).
+    /// `setupFunctionList` (comment.cc:334-355): clears the map, records
+    /// `displayUnplaced`, walks the database range for the function's address
+    /// (every Comment of the function regardless of type — the type mask is
+    /// applied by the consumers, printc.cc:3238/3280), and inserts each
+    /// placeable comment under its findPosition key. The `pos` uniqueness
+    /// counter starts at 0 once and increments only for placed comments,
+    /// persisting across iterations.
     ///
-    /// This implementation uses `findPosition` to associate comments with
-    /// basic blocks by searching for ops at the comment's address.
+    /// Errors: dead ops raise `Dead op reaching CommentSorter` (LowlevelError
+    /// in Ghidra, comment.cc:289/303).
     pub fn setup_function_list(
         &mut self,
         tp: u32,
         fd: &crate::funcdata::Funcdata,
         db: &CommentDatabaseInternal,
         display_unplaced: bool,
-    ) {
+    ) -> Result<()> {
         self.commmap.clear();
         self.comments.clear();
+        // Ghidra's map::clear() invalidates start/stop/opstop; reset the rank
+        // projections to end() of the now-empty map. Consumers always issue a
+        // fresh setup* before walking.
+        self.start.set(0);
+        self.stop.set(0);
+        self.opstop.set(0);
         self.display_unplaced_comments = display_unplaced;
         if tp == 0 {
-            return;
+            return Ok(());
         }
         let fd_addr = *fd.get_address();
-        let mut pos = 0u32;
+        let mut subsort = Subsort {
+            index: 0,
+            order: 0,
+            pos: 0,
+        };
 
         for comm in db.comments_for_function(fd_addr) {
-            if (comm.get_type() & tp) == 0 {
-                continue;
-            }
-            let mut subsort = Subsort::default();
-            if Self::find_position(&mut subsort, comm, fd, display_unplaced) {
-                subsort.pos = pos;
-                self.comments.push(comm.clone());
-                self.commmap.insert(subsort, self.comments.len() - 1);
-                pos += 1;
+            if self.find_position(&mut subsort, comm, fd)? {
+                let mut placed = comm.clone();
+                placed.set_emitted(false);
+                self.comments.push(placed);
+                let idx = self.comments.len() - 1;
+                self.commmap.push((subsort, idx));
+                subsort.pos += 1; // Advance the uniqueness counter
             }
         }
+        // Ghidra inserts into a sorted map; keys are unique (per-placement pos
+        // counter), so sorting the collected pairs yields the identical map
+        // iteration order.
+        self.commmap.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(())
     }
 
     // Ghidra: comment.cc:379 CommentSorter::setupBlockList
-    /// Prepare to walk comments from a single basic block. Faithful to
-    /// `setupBlockList` (comment.cc:379). Returns the comments for the
-    /// given block index.
-    pub fn setup_block_list(&self, block_index: u32) -> Vec<&Comment> {
-        self.commmap
-            .iter()
-            .filter(|(ss, _)| ss.index == block_index)
-            .map(|(_, &idx)| &self.comments[idx])
-            .collect()
+    /// Find iterators that bound everything in the basic block. Faithful to
+    /// `setupBlockList` (comment.cc:379-390): `start = lower_bound((bl,0,0))`
+    /// and `stop = upper_bound((bl,0xffffffff,0xffffffff))`.
+    pub fn setup_block_bounds(&self, bl_index: i32) {
+        let mut subsort = Subsort {
+            index: bl_index,
+            order: 0,
+            pos: 0,
+        };
+        self.start.set(self.lower_bound_rank(&subsort));
+        subsort.order = 0xffffffff;
+        subsort.pos = 0xffffffff;
+        self.stop.set(self.upper_bound_rank(&subsort));
     }
 
     // Ghidra: comment.cc:362 CommentSorter::setupOpList
-    /// Prepare to walk comments up to a specific op landmark. Faithful to
-    /// `setupOpList` (comment.cc:362).
-    pub fn setup_op_list(&self, block_index: u32, op_order: u32) -> Vec<&Comment> {
-        self.commmap
-            .iter()
-            .filter(|(ss, _)| ss.index == block_index && ss.order <= op_order)
-            .map(|(_, &idx)| &self.comments[idx])
-            .collect()
+    /// Establish a p-code landmark within the current set of comments.
+    /// Faithful to `setupOpList` (comment.cc:362-374): a NULL op sets
+    /// `opstop = stop` (pick up any remaining comments in this basic block);
+    /// otherwise `opstop = upper_bound((block, op order, 0xffffffff))`.
+    /// `start` is intentionally left alone — successive landmarks emit only
+    /// the comments between them.
+    pub fn setup_op_stop(&self, op: Option<&crate::op::PcodeOpRef>) {
+        let Some(op) = op else {
+            self.opstop.set(self.stop.get());
+            return;
+        };
+        let op_read = op.0.read().unwrap();
+        let Some(parent) = Self::op_parent(&op_read) else {
+            // RUGRA-GLUE: Ghidra dereferences op->getParent() unchecked
+            // (comment.cc:370); every oracle caller passes an op obtained
+            // from a block's op list. Guard by leaving the landmark alone.
+            return;
+        };
+        let subsort = Subsort {
+            index: parent.read().unwrap().get_index(),
+            order: op_read.get_seq_num().order,
+            pos: 0xffffffff,
+        };
+        self.opstop.set(self.upper_bound_rank(&subsort));
     }
 
     // Ghidra: comment.cc:394 CommentSorter::setupHeader
-    /// Prepare to walk comments in the header. The full iterator mutation of
-    /// `setupHeader` (comment.cc:394) is tracked by
-    /// COMMENT-SORTER-ITERATORS-0001.
-    pub fn setup_header(&self, _header_type: u32) {
-        // TODO(COMMENT-SORTER-ITERATORS-0001): maintain start/opstop over the
-        // exact (index=-1, order=header_type, pos) Subsort interval.
+    /// Header comments are grouped together. Set up iterators. Faithful to
+    /// `setupHeader` (comment.cc:394-404): `start =
+    /// lower_bound((-1,headerType,0))`, then `opstop =
+    /// upper_bound((-1,headerType,0xffffffff))`.
+    pub fn setup_header(&self, header_type: u32) {
+        let mut subsort = Subsort {
+            index: -1,
+            order: header_type,
+            pos: 0,
+        };
+        self.start.set(self.lower_bound_rank(&subsort));
+        subsort.pos = 0xffffffff;
+        self.opstop.set(self.upper_bound_rank(&subsort));
     }
 
-    // Ghidra: comment.hh:195 CommentSorter::hasHeaderComments
-    /// Return true if there are more comments to emit in the header.
+    // Ghidra: comment.hh:250 CommentSorter::hasNext
+    /// Return true if there are more comments to emit in the current set.
+    pub fn has_next(&self) -> bool {
+        self.start.get() != self.opstop.get()
+    }
+
+    // Ghidra: comment.hh:251 CommentSorter::getNext
+    /// Advance to the next comment, returning the current one. The caller
+    /// guards with `has_next` (Ghidra's getNext has no bounds check).
+    pub fn get_next(&self) -> &Comment {
+        let rank = self.start.get();
+        let res = &self.comments[self.commmap[rank].1];
+        self.start.set(rank + 1);
+        res
+    }
+
+    // RUGRA-GLUE: legacy Vec snapshot for printc.rs consumers
+    // (emit_comment_block_tree / emit_comment_group) that predate the
+    // setup_block_bounds/setup_op_stop/has_next/get_next state machine.
+    // Drives the faithful machine (setupBlockList + setupOpList(NULL)) and
+    // drains it, so the returned Vec is exactly the comments the oracle would
+    // walk for that block. Migration to the direct protocol is tracked by
+    // COMMENT-SORTER-ITERATORS-0001's printc follow-up.
+    /// Snapshot of every comment placed in the given basic block, in
+    /// (order, pos) order.
+    pub fn setup_block_list(&self, block_index: u32) -> Vec<&Comment> {
+        self.setup_block_bounds(block_index as i32);
+        self.setup_op_stop(None);
+        let mut out = Vec::new();
+        while self.has_next() {
+            out.push(self.get_next());
+        }
+        out
+    }
+
+    // RUGRA-GLUE: legacy Vec snapshot for printc.rs's emit_comment_group
+    /// Snapshot of every comment in the given basic block at or before the
+    /// given op order landmark, in (order, pos) order.
+    pub fn setup_op_list(&self, block_index: u32, op_order: u32) -> Vec<&Comment> {
+        self.setup_block_bounds(block_index as i32);
+        let landmark = Subsort {
+            index: block_index as i32,
+            order: op_order,
+            pos: 0xffffffff,
+        };
+        self.opstop.set(self.upper_bound_rank(&landmark));
+        let mut out = Vec::new();
+        while self.has_next() {
+            out.push(self.get_next());
+        }
+        out
+    }
+
+    // RUGRA-GLUE: legacy header predicate for printc.rs's
+    /// emit_comment_func_header snapshot path.
+    /// Return true if any header comment (index == -1) is placed.
     pub fn has_header_comments(&self) -> bool {
-        self.commmap.keys().any(|k| k.index == u32::MAX)
+        self.commmap.iter().any(|(k, _)| k.index == -1)
     }
 
-    // Ghidra: comment.hh:195 CommentSorter::headerComments
+    // RUGRA-GLUE: legacy header snapshot for printc.rs's
+    /// emit_comment_func_header (yields both header_basic and
+    /// header_unplaced subsorts; the consumers apply the type masks).
     /// Iterate over all header comments (basic + unplaced).
     pub fn header_comments(&self) -> impl Iterator<Item = &Comment> {
         self.commmap
             .iter()
-            .filter(|(k, _)| k.index == u32::MAX)
-            .map(|(_, &idx)| &self.comments[idx])
+            .filter(|(k, _)| k.index == -1)
+            .map(|(_, idx)| &self.comments[*idx])
     }
 }
 
@@ -915,12 +1114,31 @@ mod tests {
 
     #[test]
     fn test_subsort_ordering() {
-        let header = Subsort::set_header(header_type::HEADER_BASIC);
-        let block0 = Subsort::set_block(0, 5);
-        let block1 = Subsort::set_block(1, 0);
-        // Header (index=u32::MAX) sorts after all blocks.
+        let mut header = Subsort::default();
+        header.set_header(header_type::HEADER_BASIC);
+        let mut block0 = Subsort::default();
+        block0.set_block(0, 5);
+        let mut block1 = Subsort::default();
+        block1.set_block(1, 0);
+        // Header (index=-1, a signed int4 in Ghidra) sorts before all blocks.
+        assert!(header < block0);
         assert!(block0 < block1);
-        assert!(block1 < header);
+        // Within one block, order then pos; 0xffffffff is the block tail.
+        let mut tail = block0;
+        tail.order = 0xffffffff;
+        assert!(block0 < tail);
+        // setHeader/setBlock leave pos untouched (caller-owned counter).
+        let mut keyed = Subsort {
+            index: 7,
+            order: 9,
+            pos: 4,
+        };
+        keyed.set_block(2, 3);
+        assert_eq!(keyed.pos, 4);
+        keyed.set_header(header_type::HEADER_UNPLACED);
+        assert_eq!(keyed.pos, 4);
+        assert_eq!(keyed.index, -1);
+        assert_eq!(keyed.order, header_type::HEADER_UNPLACED);
     }
 
     #[test]
@@ -940,16 +1158,203 @@ mod tests {
             "Inline warning",
         );
         let mut sorter = CommentSorter::new();
-        sorter.setup_function_list(
-            comment_type::HEADER | comment_type::WARNING,
-            &fd,
-            &db,
-            false,
-        );
-        // Only the header comment should be placed (the warning is not at fd_addr).
+        sorter
+            .setup_function_list(
+                comment_type::HEADER | comment_type::WARNING,
+                &fd,
+                &db,
+                false,
+            )
+            .unwrap();
+        // The header comment places at header_basic (index == -1); the
+        // warning at 0x2000 has no ops to place against and
+        // displayUnplacedComments is false, so it is excised.
         assert!(sorter.has_header_comments());
-        let headers: Vec<_> = sorter.header_comments().collect();
+        let headers: Vec<_> = sorter.header_comments().cloned().collect();
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].get_text(), "Function header");
     }
+
+    #[test]
+    fn test_comment_sorter_header_walk_state_machine() {
+        // Op-less Funcdata: every placeable comment lands at (0, 0) per
+        // comment.cc:316-318, so block 0 carries them.
+        let mut fd = crate::funcdata::Funcdata::new("test", Address::new(0x1000), 16);
+        let mut db = CommentDatabaseInternal::new();
+        db.add_comment(
+            comment_type::HEADER,
+            Address::new(0x1000),
+            Address::new(0x1000),
+            "hdr",
+        );
+        db.add_comment(
+            comment_type::WARNINGHEADER,
+            Address::new(0x1000),
+            Address::new(0x1000),
+            "whdr",
+        );
+        db.add_comment(comment_type::WARNING, Address::new(0x1000), Address::new(0x1000), "w");
+        db.add_comment(comment_type::USER1, Address::new(0x1000), Address::new(0x1800), "u");
+        let mut sorter = CommentSorter::new();
+        sorter
+            .setup_function_list(0xffff_ffff, &fd, &db, true)
+            .unwrap();
+        // header_basic walk: hdr, whdr in pos order; the inline warning (no
+        // header bit, addr == fad) belongs to block 0, not the header.
+        sorter.setup_header(header_type::HEADER_BASIC);
+        let mut walked = Vec::new();
+        while sorter.has_next() {
+            let c = sorter.get_next();
+            assert!(!c.is_emitted());
+            walked.push(c.get_text().to_string());
+        }
+        assert!(!sorter.has_next());
+        assert_eq!(walked, vec!["hdr", "whdr"]);
+        // header_unplaced walk: only the excised USER1 comment (block 0's
+        // setBlock(0,0) placement took "w" first; "u" at 0x1800 also lands at
+        // block 0 order 0 since there are no ops at all).
+        sorter.setup_header(header_type::HEADER_UNPLACED);
+        assert!(!sorter.has_next());
+        // Block 0 drain: "w" and "u" at order 0, pos order preserved.
+        sorter.setup_block_bounds(0);
+        sorter.setup_op_stop(None);
+        let mut drained = Vec::new();
+        while sorter.has_next() {
+            drained.push(sorter.get_next().get_text().to_string());
+        }
+        assert_eq!(drained, vec!["w", "u"]);
+    }
+
+    #[test]
+    fn test_comment_sorter_op_landmark_interleaving() {
+        // Interleaved landmark walk (printc.cc:3234 protocol): successive
+        // setupOpList calls narrow opstop while start persists, emitting only
+        // the comments between landmarks; a comment placed by the previous-op
+        // rule (order 0xffffffff) only surfaces at the NULL landmark.
+        let ram = ram_space();
+        let fd_addr = Address::with_space(&ram, 0x1000);
+        let mut fd = crate::funcdata::Funcdata::new("test", fd_addr, 16);
+        let mk_block = |fd: &mut crate::funcdata::Funcdata, start: u64| {
+            let bb = std::sync::Arc::new(std::sync::RwLock::new(
+                crate::block::BlockBasic::new(
+                    fd.bblocks.get_size() as i32,
+                    Address::with_space(&ram, start),
+                ),
+            ));
+            fd.bblocks.add_block(bb.clone());
+            bb
+        };
+        let bb0: std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>> = mk_block(&mut fd, 0x1000);
+        let bb1: std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>> = mk_block(&mut fd, 0x1009);
+        // bb0: ops at 0x1000, 0x100a (range [0x1000, 0x100a]).
+        let op_a = fd.new_op(0, Address::with_space(&ram, 0x1000));
+        fd.op_insert_end(&op_a, &bb0);
+        let op_b = fd.new_op(0, Address::with_space(&ram, 0x100a));
+        fd.op_insert_end(&op_b, &bb0);
+        // bb1: ops at 0x1009, 0x100e (range [0x1009, 0x100e]).
+        let op_h = fd.new_op(0, Address::with_space(&ram, 0x1009));
+        fd.op_insert_end(&op_h, &bb1);
+        let op_i = fd.new_op(0, Address::with_space(&ram, 0x100e));
+        fd.op_insert_end(&op_i, &bb1);
+        let mut db = CommentDatabaseInternal::new();
+        let mut c = |tp: u32, ad: u64, txt: &str| {
+            db.add_comment(tp, fd_addr, Address::with_space(&ram, ad), txt)
+        };
+        c(comment_type::WARNING, 0x1000, "at-a");
+        // 0x1007: lower bound is op@0x1009 (bb1 does not contain 0x1007) but
+        // the previous op op@0x1000's block does -> (0, 0xffffffff).
+        c(comment_type::WARNING, 0x1007, "tail");
+        c(comment_type::WARNING, 0x100a, "at-b");
+        let mut sorter = CommentSorter::new();
+        sorter
+            .setup_function_list(0xffff_ffff, &fd, &db, false)
+            .unwrap();
+        sorter.setup_block_bounds(0);
+        let mut seq = Vec::new();
+        for op in [&op_a, &op_b] {
+            sorter.setup_op_stop(Some(op));
+            while sorter.has_next() {
+                seq.push(sorter.get_next().get_text().to_string());
+            }
+        }
+        sorter.setup_op_stop(None);
+        while sorter.has_next() {
+            seq.push(format!("null:{}", sorter.get_next().get_text()));
+        }
+        assert_eq!(seq, vec!["at-a", "at-b", "null:tail"]);
+    }
+
+    #[test]
+    fn test_comment_sorter_dead_op_error() {
+        let ram = ram_space();
+        let fd_addr = Address::with_space(&ram, 0x1000);
+        let mut fd = crate::funcdata::Funcdata::new("test", fd_addr, 16);
+        // A dead op (created, never inserted into a block) at the comment's
+        // address: findPosition must fail with the oracle's LowlevelError.
+        let _dead = fd.new_op(0, Address::with_space(&ram, 0x1010));
+        let mut db = CommentDatabaseInternal::new();
+        db.add_comment(
+            comment_type::WARNING,
+            fd_addr,
+            Address::with_space(&ram, 0x1010),
+            "doomed",
+        );
+        let mut sorter = CommentSorter::new();
+        let err = sorter
+            .setup_function_list(0xffff_ffff, &fd, &db, true)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Dead op reaching CommentSorter");
+    }
+
+    #[test]
+    fn test_comment_sorter_legacy_glue_snapshots() {
+        // The Vec adapters must keep producing the exact pre-state-machine
+        // snapshots: full block drain and order<=landmark prefix.
+        let ram = ram_space();
+        let fd_addr = Address::with_space(&ram, 0x1000);
+        let mut fd = crate::funcdata::Funcdata::new("test", fd_addr, 16);
+        let bb0: std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>> =
+            std::sync::Arc::new(std::sync::RwLock::new(crate::block::BlockBasic::new(
+                0,
+                Address::with_space(&ram, 0x1000),
+            )));
+        fd.bblocks.add_block(bb0.clone());
+        let mut op_orders = Vec::new();
+        for off in [0x1000u64, 0x1005, 0x100a] {
+            let op = fd.new_op(0, Address::with_space(&ram, off));
+            fd.op_insert_end(&op, &bb0);
+            op_orders.push(op.0.read().unwrap().get_seq_num().order);
+        }
+        let mut db = CommentDatabaseInternal::new();
+        let mut c = |ad: u64, txt: &str| {
+            db.add_comment(
+                comment_type::WARNING,
+                fd_addr,
+                Address::with_space(&ram, ad),
+                txt,
+            )
+        };
+        c(0x1000, "a");
+        c(0x1005, "b");
+        c(0x100a, "d");
+        let mut sorter = CommentSorter::new();
+        sorter
+            .setup_function_list(0xffff_ffff, &fd, &db, false)
+            .unwrap();
+        let drain: Vec<_> = sorter
+            .setup_block_list(0)
+            .into_iter()
+            .map(|c| c.get_text().to_string())
+            .collect();
+        assert_eq!(drain, vec!["a", "b", "d"]);
+        // Landmark prefix resets from the block start each call (legacy
+        // snapshot semantics preserved).
+        let up_to_second: Vec<_> = sorter
+            .setup_op_list(0, op_orders[1])
+            .into_iter()
+            .map(|c| c.get_text().to_string())
+            .collect();
+        assert_eq!(up_to_second, vec!["a", "b"]);
+    }
 }
+
