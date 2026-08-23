@@ -1,21 +1,55 @@
 # `float_emulate.rs` API Reference
 
 **源代码路径**: `src/float_emulate.rs`
-**Ghidra 对应**: `float.hh` / `float.cc` (773行)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 FloatFormat 方法覆盖，含 set/get 编码操作 + zero/infinity/nan encoding。12 单元测试。
+**Ghidra 对应**: `float.hh` / `float.cc` (673行)
+**状态**: ✅ **L3（结构级 1:1，2026-08-23 FLOAT-FMT-STRUCT-0001）**——全部 FloatFormat 方法覆盖；
+host 转换走 oracle 位阶梯（createFloat/extractExpSig + 64 位顶对齐 fractional code 约定），
+结构级 oracle 证明见 `tests/oracle/float_fmt_struct_1204`。20 单元测试。
+**2026-08-23 结构重构（FLOAT-FMT-STRUCT-0001）**:
+- `get_host_float`（float.cc:228-268）由 `(significand as f64) * 2f64.powi(...)` 乘积改为 oracle 位阶梯：
+  顶对齐 `extract_fractional_code`（float.cc:113-119）→ `exp -= bias` → jbit room
+  （`frac >>= 1; frac |= 1<<63`，float.cc:261-266）→ 静态 `create_float` ldexp 阶梯（float.cc:67-80）。
+  **修复了 denormalized 分支的值缺陷**：原 `frac * 2^(1-bias)` 按右对齐 frac 计算，denormal 值偏大
+  2^frac_size 倍（f32 0x00000001 原返回 2^-126，oracle 为 2^-149）。
+- `get_encoding`（float.cc:293-346）由 `(host as f32).to_bits()`/`host.to_bits()` 位转换改为
+  extractExpSig（float.cc:89-109，frexp→ldexp(·,63)→`(uintb)`→`<<1` 顶对齐中间态）+
+  roundToNearestEven 位阶梯 + 顶对齐 setFractionalCode/setExponentCode/setSign 打包。
+  **NaN 输入语义变化**：oracle 丢弃 NaN payload（getNaNEncoding 只留 quiet bit + 符号，
+  float.cc:205-215），原实现的 to_bits 透传 payload 与 oracle 分歧；RNE 值行为对非 NaN 输入不变。
+- `extract_fractional_code`/`set_fractional_code` 语义改为 **oracle 顶对齐约定**
+  （float.cc:113-119/144-153）：extract 输出 bit63=frac MSB；set 输入顶对齐 code、
+  `>>= 64-frac_size` 后 OR 入（不 mask x，调用方契约 float.cc:141 假定 frac 位已清零）。
+  原右对齐+mask 语义与 oracle 语义不同；crate 内无外部调用者依赖旧语义。
+- `set_sign`（float.cc:158-166）`sign=false` 时为恒等（oracle 从不清位）；`set_exponent_code`
+  （float.cc:171-177）改为无 mask 的 OR。
+- `get_zero/infinity/nan_encoding`（float.cc:181/193/205）改为 oracle 三 setter 结构；
+  NaN quiet bit 以顶对齐 `1<<63` mask 经 setFractionalCode 落到 frac MSB。
+- 新增静态 `create_float`/`extract_exp_sig`（float.cc:67/89，pub 以供 oracle fixture 直接驱动）
+  与 libm `ldexp`/`frexp` FFI 绑定（oracle float.cc:25-26 `using std::ldexp/frexp`；
+  `x * 2f64.powi(e)` 在指数本身上/下溢时不可复现 ldexp 的渐进下溢，
+  如最小 f64 denormal 需 `ldexp(2^11, -1085) == 2^-1074`）。
+- `round_to_nearest_even` 由 pub(crate) 改 pub（oracle fixture 驱动）。
+- 新增 6 个结构回归测试（顶对齐约定/extractExpSig/denormal 阶梯/getEncoding 阶梯/
+  createFloat ldexp 饱和/roundToNearestEven 直驱含回绕进位）；
+  结构级 oracle 证明 `tests/oracle/float_fmt_struct_1204`（runner
+  `tools/run_float_fmt_struct_oracle.sh`，锁 e40ed130）。
+- `op_trunc`（float.cc:631-640）的 `(intb)val` 越界语义（x86 上为 0x8000...）与 Rust 饱和 cast
+  仍有差异——超出本租约范围，遗留为残差（见下）。
 **2026-07-02 修复（R101）**: `max_exponent` 由硬编码 254/2046 改为 255/2047，对齐 Ghidra `float.cc:59 maxexponent = (1<<exp_size)-1`。原 off-by-one 使 `get_host_float` 的 `exp_code == max_exponent` 检查错过全 1 指数 → infinity/NaN 被误读为 normalized 值。
 **2026-08-23 修复（FLOAT-OPINT2FLOAT-SIGN-0001）**:
 - `op_int2float(a, size_in)` 改为 oracle 符号语义：`sign_extend(a, 8*sizein-1)`（address.hh:543）丢弃
   sizein 符号位以上的比特并符号扩展后再 `(double)` 转换（float.cc:611-617）。原实现按无符号 `a as f64`
   解释输入且忽略 `size_in`，负整数输入与 oracle 分歧。
 - `op_float2_float` 由 host-double 中转改为 1:1 位级 `convert_encoding` 端口（float.cc:352-419），含
-  静态 `round_to_nearest_even`（float.cc:276-288，uintb 进位回绕语义）。注意 oracle
-  `extractFractionalCode`/`setFractionalCode` 是 **64 位字顶对齐**约定（float.cc:113-119/144-153），
-  convert_encoding 内部使用顶对齐局部位操作，而右侧对齐的公共 helper 只服务 host-double 路径。
+  静态 `round_to_nearest_even`（float.cc:276-288，uintb 进位回绕语义）。oracle
+  `extractFractionalCode`/`setFractionalCode` 的 **64 位字顶对齐**约定（float.cc:113-119/144-153）
+  自 FLOAT-FMT-STRUCT-0001 起由公共 helper 本身承载（此前 convert_encoding 用局部顶对齐操作）。
 - `get_host_float` 的 NaN 分支补上编码符号（float.cc:253-254 `return sgn ? -nan : +nan;`）。
 - 注释行号修正：`op_int2float`→float.cc:611、`get_nan_encoding`→float.cc:205、`get_size`→float.hh:66。
 - 新增 2 个符号语义回归测试；oracle 证明见 `tests/oracle/float_int2float_sign_1204`
-  （runner `tools/run_float_int2float_sign_oracle.sh`，锁 e40ed130）。
+  （runner `tools/run_float_int2float_sign_oracle.sh`，锁 e40ed130；
+  该 runner pin-base 冻结于 base 1fc8af3 + 2d85fa8 的 float_emulate.rs sha，
+  本重构后其 sha 门禁会拒绝复跑——36 case 值等价由 float_fmt_struct_1204 全量重覆盖）。
 
 ## 模块说明
 
@@ -29,16 +63,32 @@
 ### `pub struct FloatFormat`
 IEEE754 浮点格式描述。对应 Ghidra `FloatFormat`。
 - `new(size)` — 构造单/双精度格式
-- `get_host_float(encoding, &mut class)` — 编码→f64（NaN 带符号，float.cc:253-254）
-- `get_encoding(host)` — f64→编码
-- `extract_fractional_code/sign/exponent_code` — 位域提取（frac 为右对齐取值语义；oracle 顶对齐
-  约定见 `convert_encoding` 内部）
-- `convert_encoding(encoding, &formin)` — 位级格式互转（float.cc:352-419）
+- `get_host_float(encoding, &mut class)` — 编码→f64，oracle 位阶梯（float.cc:228-268：
+  顶对齐 frac + jbit room + createFloat ldexp；denormalized 分支含值修复）
+- `get_encoding(host)` — f64→编码，oracle 位阶梯（float.cc:293-346：extractExpSig +
+  roundToNearestEven + 顶对齐打包；NaN payload 被规范化为 quiet bit）
+- `create_float(sign, signif, exp)` — 静态组合原语（float.cc:67-80，顶对齐 signif，ldexp 饱和）
+- `extract_exp_sig(x, &mut sgn, &mut signif, &mut exp)` — 静态分解原语（float.cc:89-109，
+  frexp/ldexp 顶对齐中间态；zero/inf/NaN 早退不写出参）
+- `round_to_nearest_even(&mut signif, lowbitpos)` — RNE 原语（float.cc:276-288，uintb 回绕进位）
+- `extract_fractional_code/sign/exponent_code` — 位域提取（frac **顶对齐**：bit63=frac MSB，
+  float.cc:113-119）
+- `set_fractional_code/set_sign/set_exponent_code` — 位域打包（顶对齐 code、OR 语义、
+  set_sign(false) 恒等；float.cc:144-177）
+- `get_zero/infinity/nan_encoding(sgn)` — 特殊值编码（float.cc:181/193/205，三 setter 结构）
+- `convert_encoding(encoding, &formin)` — 位级格式互转（float.cc:352-419，顶对齐约定贯穿）
 - `op_int2float(a, size_in)` — 有符号整数→浮点（sign_extend 自 size_in 字节，float.cc:611-617）
 - `op_float2_float(a, &outformat)` — 精度转换（= outformat.convert_encoding(a, self)，float.cc:622-626）
 - 15 个 op 操作：`op_equal/op_less/op_add/op_sub/op_mult/op_div/op_neg/op_abs/op_sqrt/op_floor/op_ceil/op_nan/op_int2float`
 
-测试：float_emulate::tests 14 个（含 INT2FLOAT 符号扩展与 convertEncoding 位级回归）。
+测试：float_emulate::tests 20 个（含 INT2FLOAT 符号扩展、convertEncoding 位级、
+顶对齐约定、extractExpSig/createFloat/denormal 阶梯与 roundToNearestEven 直驱回归）。
+
+## 已知残差（登记于本文件，供后续 TODO 认领）
+
+- `op_trunc`（float.cc:631-640 `(intb)val` + `calc_mask(sizeout)`）：Rust `va.trunc() as i64` 为饱和
+  cast（越界→i64::MIN/MAX，NaN→0），x86-64 C++ 越界转换为 0x8000000000000000 且无 sizeout mask——
+  越界/NaN 输入下与 oracle 分歧，常规区间值一致。
 
 ## 2026-06-26（续）：float_emulate.rs 完善实现
 
