@@ -7,12 +7,12 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=296c128ad54c8e3a18114ef065b1d6fbb22ed2d5
-rugra_source_tree=9fb4593727541a45eaa6231f6296a79d2d5254f9
-rugra_source_src_tree=1fb9e4fa6c609fc1f54a3fc38ed3a39379768963
-rugra_source_subflow_blob=9555f7ae03978197bfbc427d5d6e09c2fe5fdb8c
+rugra_source_commit=6a256e7960b14d3294dbb7c6c0d25f4a86667ac7
+rugra_source_tree=7875c55167efe04d297e004a2431718d94bfd92c
+rugra_source_src_tree=545bdb2a9bdc66fbfc7165a0124f568f1ef05e69
+rugra_source_subflow_blob=7afa4d6ca2c1a428c6bcd324767684b016b2f46f
 rugra_source_arch_blob=cd3fd77747d6377e14f2e672956ddfbc9ff17877
-rugra_source_funcdata_blob=af417cd95c70087f8b549f7e0971a16dc07d15f3
+rugra_source_funcdata_blob=7ea221fab43544dfc41ad39e556222de3718af0b
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -255,23 +255,22 @@ canonical = json.dumps(
     fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
-require("projection", metadata["projection_status"], "MATCH")
+require("projection", metadata["projection_status"], "UNTESTED")
 require("overall", metadata["overall_status"], "UNTESTED")
 expected_matches = {
     "arch_laned_lookup_minimum_identity", "laned_map_lifecycle_ordering",
     "piece_split_apply_projection", "multiequal_split_apply_projection",
     "failure_zero_mutation",
-}
-expected_residuals = {
     "subpiece_terminator_path", "store_load_lane_split",
-    "shift_zext_lane_split", "indirect_lane_split",
+    "shift_zext_lane_split",
     "restricted_window_trace", "typelock_reject_path",
-    "oracle_ub_lane_index_below_skip",
 }
+expected_mismatch = "indirect_lane_split"
+expected_oracle_ub = "oracle_ub_lane_index_below_skip"
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict):
     raise SystemExit("coverage must be an object")
-require("coverage keys", set(coverage), expected_matches | expected_residuals)
+require("coverage keys", set(coverage), expected_matches | {expected_mismatch, expected_oracle_ub})
 valid_statuses = {"MATCH", "MISMATCH", "NO_ORACLE", "UNTESTED"}
 coverage_residual_ids = set()
 observed_statuses = set()
@@ -303,23 +302,46 @@ for key, record in coverage.items():
     coverage_residual_ids.update(residual_ids)
 for key in expected_matches:
     require(f"coverage.{key}.status", coverage[key]["status"], "MATCH")
-for key in expected_residuals - {"oracle_ub_lane_index_below_skip"}:
-    require(f"coverage.{key}.status", coverage[key]["status"], "UNTESTED")
+require(
+    "coverage indirect mismatch status",
+    coverage[expected_mismatch]["status"],
+    "MISMATCH",
+)
+require(
+    "coverage indirect residual binding",
+    coverage[expected_mismatch]["residual_todo_ids"],
+    ["TRANSFORM-CONSTANT-IOP-SPACE-0001"],
+)
 require(
     "coverage oracle_ub status",
-    coverage["oracle_ub_lane_index_below_skip"]["status"],
+    coverage[expected_oracle_ub]["status"],
     "NO_ORACLE",
 )
-require("coverage status set", observed_statuses, {"MATCH", "UNTESTED", "NO_ORACLE"})
+require("coverage status set", observed_statuses, {"MATCH", "MISMATCH", "NO_ORACLE"})
 require(
     "projection/coverage consistency",
     metadata["projection_status"],
-    "MATCH" if all(coverage[key]["status"] == "MATCH" for key in expected_matches) else "UNTESTED",
+    "MATCH"
+    if all(
+        coverage[key]["status"] == "MATCH"
+        for key in coverage
+        if key != expected_oracle_ub
+    )
+    else "UNTESTED",
 )
+# LANEDIVIDE-INFRA-RESIDUAL-0001: five of the six residual branches resolved to
+# MATCH against the locked oracle; subflow.cc:3942 remains NO_ORACLE (undefined
+# behavior in the oracle itself, no defined observation exists).
+# TRANSFORM-CONSTANT-IOP-SPACE-0001: the indirect branch matches through the
+# LaneDivide layer but TransformVar::createReplacement's constant_iop arm
+# (transform.rs:445-450, stale "no iop space" fallback vs transform.cc:211-215)
+# materializes the annotation as a const-space constant instead of an iop-space
+# varnode; transform.rs is outside this lease, so the branch stays MISMATCH and
+# holds the fixture below MATCH.
 require(
     "overall/coverage consistency",
     metadata["overall_status"],
-    "UNTESTED" if observed_statuses - {"MATCH"} else "MATCH",
+    "MATCH" if not (observed_statuses - {"MATCH", "NO_ORACLE"}) else "UNTESTED",
 )
 top_residual_ids = metadata.get("residual_todo_ids")
 if not isinstance(top_residual_ids, list) or not top_residual_ids:
@@ -332,23 +354,29 @@ require("coverage/top-level residual union", coverage_residual_ids, set(top_resi
 require(
     "top-level residual ids",
     set(top_residual_ids),
-    {"LANEDIVIDE-INFRA-RESIDUAL-0001"},
+    {"LANEDIVIDE-INFRA-RESIDUAL-0001", "TRANSFORM-CONSTANT-IOP-SPACE-0001"},
 )
 residual = metadata["residual_union"]
-require("residual TODO", residual["todo_id"], "LANEDIVIDE-INFRA-RESIDUAL-0001")
-require("residual status", residual["status"], "UNTESTED")
+require(
+    "residual TODO ids",
+    {branch["todo_id"] for branch in residual},
+    {"LANEDIVIDE-INFRA-RESIDUAL-0001", "TRANSFORM-CONSTANT-IOP-SPACE-0001"},
+)
+residual_by_id = {branch["todo_id"]: branch for branch in residual}
+require("residual ub status", residual_by_id["LANEDIVIDE-INFRA-RESIDUAL-0001"]["status"], "NO_ORACLE")
+require(
+    "residual iop status",
+    residual_by_id["TRANSFORM-CONSTANT-IOP-SPACE-0001"]["status"],
+    "MISMATCH",
+)
 require(
     "residual branch union",
-    {branch["id"] for branch in residual["branches"]},
-    expected_residuals,
+    {branch["todo_id"] for branch in residual},
+    {"LANEDIVIDE-INFRA-RESIDUAL-0001", "TRANSFORM-CONSTANT-IOP-SPACE-0001"},
 )
-for branch in residual["branches"]:
-    expected_branch_status = (
-        "NO_ORACLE" if branch["id"] == "oracle_ub_lane_index_below_skip" else "UNTESTED"
-    )
-    require(f"residual {branch['id']} status", branch["status"], expected_branch_status)
-    if not branch["detail"]:
-        raise SystemExit(f"residual {branch['id']} has no detail")
+for branch in residual:
+    if not branch.get("detail"):
+        raise SystemExit(f"residual {branch['todo_id']} has no detail")
 PY
 
 git -C "$ghidra_root" archive --format=tar \
@@ -422,7 +450,8 @@ for key, actual in (
         raise SystemExit(f"{key} mismatch")
 records = paths["ghidra_stdout_sha256"].read_text(encoding="utf-8").splitlines()
 if [record.split("|", 1)[0] for record in records] != [
-    "arch", "map", "piece", "multiequal", "failure"
+    "arch", "map", "piece", "multiequal", "failure", "subpiece", "store",
+    "load", "rightshift", "leftshift", "zext", "indirect", "window", "typelock"
 ]:
     raise SystemExit(f"observation order mismatch: {records}")
 if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha256"].stat().st_size != 0:
@@ -430,4 +459,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha2
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'lanedivide_infra_1204: covered_projection=5/5 projection_status=MATCH overall_status=UNTESTED residual=LANEDIVIDE-INFRA-RESIDUAL-0001\n'
+printf 'lanedivide_infra_1204: covered_projection=10/12 projection_status=UNTESTED overall_status=UNTESTED residual=LANEDIVIDE-INFRA-RESIDUAL-0001 (oracle_ub NO_ORACLE)+TRANSFORM-CONSTANT-IOP-SPACE-0001 (indirect iop materialization MISMATCH)\n'
