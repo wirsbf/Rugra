@@ -200,6 +200,21 @@ cleanup 池重复的 RuleTrivialArith）。26 项拟登记 TODO 详见报告 §5
 - `RULE-PORT-EARLYREMOVAL-0001`（P0）：全 opcode + deadRemovalAllowedSeen/doesDeadcode 门；
   write-set 含 `src/{ruleaction,funcdata,space,coreaction}.rs`（待 funcdata/coreaction 租约释放）
 
+### 函数体差距攻坚 wave（W-2026-08-23-GAP，至周二 16:00；基线=wt/getstr 头 d73ee60，52/68 body 一致）
+
+| 组 | owner | write-set | 目标函数（rugra vs golden 字符） |
+|---|---|---|---|
+| GetStr 六提交复核 | getstr_reviewer | 只读复核 | 五域零差交付的机制C |
+| 产出不足 | truncat (`wt/truncat`) | funcdata/heritage/flow | hugehelp 166/6645、match_url 760/2544、SetHTTPrequest 78/212、glob_url 423/332 |
+| 小幅差异 | smalldelta (`wt/smalldelta`) | printc/prettyprint/varmap命名 | _start 79/336、frame_dummy 28/62、main_init 40/49、__libc_csu_init 355/306、FUN_00102020 |
+| 过度展开-结构 | globstruct (`wt/globstruct`) | blockaction/结构Rule | glob_word 6384/1489、next_url 7602/3137 |
+| 展开+死代码 | globvars (`wt/globvars`) | ruleaction/varmap符号 | glob_set 2776/2326、glob_range 1861/2713；先做 ADDUNSIGNED 一行适配 |
+| 命名域 | myprog (`wt/myprog`) | varmap命名/printc类型 | myprogress 1772/1716、progressbarinit 441/400 |
+| 合并域 | myfwrite (`wt/myfwrite`) | merge/merge族Action | my_fwrite 803/368（疑 MERGE-MIXEDHIGH 受害者） |
+| SIGABRT P0 | sigabrt (`wt/sigabrt`) | subflow/transform | test_split_flow_full_transform |
+| fixture 适配 | ccadapt (`wt/ccadapt`) | containedcall fixture | FLOW-FIXTURE-API-ADAPT |
+| SLESS 拉回（续） | rangepull (`wt/rangepull`) | rangeutil | RANGE-PULLBACK-SLESS |
+
 ## 历史 wave：`W-2026-08-20-CLOSEOUT`（收尾中，租约归 W-2026-08-22-ORCH 接管的以新 wave 为准）
 
 > 2026-08-20 启动，root 编排、显式文件 staging 与串行集成；实现 write-set 互斥，核心算法由独立
