@@ -3047,10 +3047,12 @@ impl ScopeLocal {
         ranges.sort_unstable();
         let mut merged: Vec<(i32, u64, u64)> = Vec::with_capacity(ranges.len());
         for (idx, first, last) in ranges {
-            // RangeList::insertRange merges adjacent/overlapping ranges in
-            // the same space (address.cc:385-410).
+            // RangeList::insertRange merges only overlapping ranges in the
+            // same space; an adjacent predecessor (last == first-1) is
+            // excluded by `(*iter1).last < first` and stays separate
+            // (address.cc:385-410; SCOPELOCAL-RANGE-STATE-0001 invariant).
             if let Some(&(prev_idx, _, prev_last)) = merged.last() {
-                if idx == prev_idx && prev_last.wrapping_add(1) >= first {
+                if idx == prev_idx && prev_last >= first {
                     if last > prev_last {
                         merged.last_mut().unwrap().2 = last;
                     }

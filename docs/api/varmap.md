@@ -236,7 +236,7 @@ oracle 证据承担：
 - `remove_symbol` 改 pub（database.hh:601 公共入口）并维护条目日志
   （retain+重键）。`in_scope`（database.hh:597 rangetree.inRange 全包含）。
 
-验证：varmap:: 43/43 单测绿；`tests/oracle/scopelocal_query_1204` 28 记录
+验证：varmap:: 43/43 单测绿；`tests/oracle/scopelocal_query_1204` 27 记录
 （equal-subsort 双向、wide/narrow 双序、多 uselimit 二区间/间隙、跨空间
 存储、多映射+删除重查、findContainer 最小/等值 tie、partial offset 拆片、
 queryProperties 三分支+parent+常量、markNotMapped 窗口分裂）双侧逐字节
