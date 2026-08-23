@@ -60,7 +60,11 @@ create-index/计数副作用）、不带 descendant、在观察投影中按 NULL
   （cc:197-198 LowlevelError 的 panic 映射，同 funcdata.rs 既有惯例）；
   `constant_iop` 分支 (cc:211-215) 经模块私有 `get_op_from_const_offset`
   把占位符 `val` 解码回受影响 PcodeOp（op.hh:249 静态 `getOpFromConst` 的
-  按 offset 形态），再 `Funcdata::new_varnode_iop` 物化 iop 空间注记
+  按 offset 形态），再 `Funcdata::new_varnode_iop` 物化 iop 空间注记；
+  `val == 0` 时解码为 `None`（Ghidra `(PcodeOp*)(uintp)0 == NULL` 的 Rust
+  非空 Arc 映射），直接按 `newVarnodeIop(NULL)` 语义物化 offset 0 的
+  iop 空间注记 varnode（funcdata_varnode.cc:176-184；annotation 标志由
+  Varnode 构造器自动置位 varnode.cc:599-601）
 - 字段：`vn` / `replacement` / `var_type` / `flags` / `byte_size` / `bit_size` /
   `val` / `def`
 
@@ -68,6 +72,10 @@ create-index/计数副作用）、不带 descendant、在观察投影中按 NULL
 模块私有自由函数：把 iop 空间 offset 解码回 `PcodeOpRef`（`Arc::from_raw` +
 clone + forget，同 `Funcdata::get_op_from_const` funcdata.rs:3325 的重建契约，
 但按裸 offset 取参、无空间校验 — 与 Ghidra 静态方法的无条件指针重解释对齐）。
+返回 `Option<PcodeOpRef>`：`offset == 0` 返回 `None`（Ghidra 的 NULL
+`PcodeOp*`，可传递、从不解引用）；非零 offset 才走 Arc 重建 — Rust `Arc`
+非空，`Arc::from_raw(null)` 是 UB（nightly `NonNull::new_unchecked` 前置
+检查即 SUBFLOW-SPLITFLOW-SIGABRT-0001 的崩溃点）。
 
 ### `transform_op_special` (transform.hh:70)
 常量：`OP_REPLACEMENT`(1) / `OP_PREEXISTING`(2) / `INDIRECT_CREATION`(4) /

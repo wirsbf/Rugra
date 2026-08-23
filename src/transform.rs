@@ -450,9 +450,26 @@ impl TransformVar {
                 // The placeholder `val` (captured by new_iop from the original
                 // iop varnode's offset) is decoded back into the affecting op
                 // and re-materialized as an iop-space annotation varnode —
-                // never as a const-space constant.
-                let indeffect = get_op_from_const_offset(self.val);
-                self.replacement = Some(fd.new_varnode_iop(&indeffect));
+                // never as a const-space constant. getOpFromConst is a bare
+                // `(PcodeOp*)(uintp)addr.getOffset()` (op.hh:249): a zero
+                // offset decodes to a NULL PcodeOp* (valid, non-dereferenced
+                // in Ghidra); Rugra models that as None, and newVarnodeIop
+                // then re-encodes offset 0 (funcdata_varnode.cc:176-184) —
+                // the annotation flag comes from the Varnode ctor
+                // (varnode.cc:599-601) and assignHigh is the annotation
+                // no-op leg (funcdata_varnode.cc:54-56).
+                match get_op_from_const_offset(self.val) {
+                    Some(indeffect) => {
+                        self.replacement = Some(fd.new_varnode_iop(&indeffect));
+                    }
+                    None => {
+                        self.replacement = Some(fd.vbank.create_with_space(
+                            std::mem::size_of::<usize>(),
+                            crate::space::AddressSpace::Iop,
+                            0,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -467,7 +484,16 @@ impl TransformVar {
 /// constructed directly from the placeholder value without a materialized
 /// Varnode. Rugra decodes the same `Arc::as_ptr` encoding written by
 /// `Funcdata::new_varnode_iop` (funcdata.rs:3303).
-fn get_op_from_const_offset(offset: u64) -> PcodeOpRef {
+///
+/// Ghidra's decode is a nullable `(PcodeOp*)(uintp)addr.getOffset()`; offset
+/// 0 decodes to NULL, which `newVarnodeIop` re-encodes without dereferencing.
+/// Rust's `Arc` is non-null, so offset 0 maps to `None` — the reconstruction
+/// below must never run on a null pointer (`NonNull::new_unchecked` UB).
+fn get_op_from_const_offset(offset: u64) -> Option<PcodeOpRef> {
+    if offset == 0 {
+        // Ghidra: NULL PcodeOp* — carried through, never dereferenced.
+        return None;
+    }
     // SAFETY: the offset was obtained from Arc::as_ptr on a PcodeOp that is
     // still alive in the op bank (same reconstruction contract as
     // Funcdata::get_op_from_const, funcdata.rs:3330-3343). Clone to bump the
@@ -477,7 +503,7 @@ fn get_op_from_const_offset(offset: u64) -> PcodeOpRef {
         let arc = std::sync::Arc::from_raw(raw);
         let cloned = std::sync::Arc::clone(&arc);
         std::mem::forget(arc);
-        PcodeOpRef(cloned)
+        Some(PcodeOpRef(cloned))
     }
 }
 

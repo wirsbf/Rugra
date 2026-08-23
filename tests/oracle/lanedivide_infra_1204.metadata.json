@@ -53,7 +53,7 @@
     "overlays": [
       {
         "path": "src/subflow.rs",
-        "sha256": "a9ae7e7d6bf43c851f586b85d0dc98c865098635ca12060ff9b73b7fa1d569b0",
+        "sha256": "e8c4bb3901a5253284e241f1f4dfce68230647261d6a2ea7fc52d2b8708d7688",
         "policy": "LaneDivide class layer; hash-verify before replacing the pinned base subflow.rs"
       },
       {
@@ -63,12 +63,12 @@
       },
       {
         "path": "src/funcdata.rs",
-        "sha256": "01fa6e2d34ce3df0b44981993f996b250d31b5e21f5388d2ebd2274f549cbef8",
+        "sha256": "708eb8e3f523e64ba77452c13dad2f110c1f3d82c6f3028eb4aed5d2c5eb6a34",
         "policy": "lanedMap/minLanedSize lifecycle; hash-verify before replacing the pinned base funcdata.rs"
       },
       {
         "path": "src/transform.rs",
-        "sha256": "4fe857f8cbbc2c110da1fb7e31aa5956930ef9925d858f4c91fd2881024fe1e1",
+        "sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
         "policy": "constant_iop iop-space materialization (TRANSFORM-CONSTANT-IOP-SPACE-0001 fix); hash-verify before replacing the pinned base transform.rs"
       }
     ],
@@ -416,10 +416,10 @@
   "comparand": {
     "cpp_fixture_sha256": "3eb5ec6dda2e5b83d39feff2cc68387f35b43da89b1d68821e60ece12fbf5f45",
     "rust_fixture_sha256": "6d2ccb1ac22612fe5cea904b5218f09313894f3a0aef2c7807789fb46b4a6734",
-    "subflow_overlay_sha256": "a9ae7e7d6bf43c851f586b85d0dc98c865098635ca12060ff9b73b7fa1d569b0",
+    "subflow_overlay_sha256": "e8c4bb3901a5253284e241f1f4dfce68230647261d6a2ea7fc52d2b8708d7688",
     "arch_overlay_sha256": "492efc3a7226fb0a7b2c7def414d9b66abec7df1edc5aca779679aa92237f162",
-    "funcdata_overlay_sha256": "01fa6e2d34ce3df0b44981993f996b250d31b5e21f5388d2ebd2274f549cbef8",
-    "transform_overlay_sha256": "4fe857f8cbbc2c110da1fb7e31aa5956930ef9925d858f4c91fd2881024fe1e1",
+    "funcdata_overlay_sha256": "708eb8e3f523e64ba77452c13dad2f110c1f3d82c6f3028eb4aed5d2c5eb6a34",
+    "transform_overlay_sha256": "d71eef9f58697d4b1128cf1937356a50d27b1632f8d5ba81388f88d0b081c983",
     "runner_sha256": "41004c5cf06ceef553ddfa1cfddb7d98a2469117358566faec3b9b5bc4ddb873"
   },
   "expected_results": {

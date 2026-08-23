@@ -3228,9 +3228,17 @@ impl SplitFlow {
         let mut num_param = num_input;
         if op_code == OpCode::CPUI_INDIRECT {
             let iop_vn = op.read().unwrap().get_in(1).cloned().unwrap();
-            let iop_placeholder = self.mgr.new_iop(iop_vn);
-            self.mgr.op_set_input(lo_op, iop_placeholder, 1);
-            self.mgr.op_set_input(hi_op, iop_placeholder, 1);
+            // cc:1806-1807: TWO distinct newIop calls — loOp and hiOp each get
+            // their own constant_iop placeholder, so createReplacement
+            // materializes two independent iop annotation varnodes (one per
+            // new INDIRECT). Sharing one placeholder would wire a single free
+            // varnode into two ops ("Free varnode has multiple descendants",
+            // varnode.cc:333-336) — a state Ghidra's per-call emplace_back can
+            // never reach.
+            let iop_placeholder_lo = self.mgr.new_iop(iop_vn.clone());
+            let iop_placeholder_hi = self.mgr.new_iop(iop_vn);
+            self.mgr.op_set_input(lo_op, iop_placeholder_lo, 1);
+            self.mgr.op_set_input(hi_op, iop_placeholder_hi, 1);
             self.mgr.new_ops[lo_op].inherit_indirect(&crate::op::PcodeOpRef(op.clone()));
             self.mgr.new_ops[hi_op].inherit_indirect(&crate::op::PcodeOpRef(op.clone()));
             num_param = 1;
