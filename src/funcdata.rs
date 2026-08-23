@@ -5012,107 +5012,382 @@ impl Funcdata {
         res
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::calcNzMask
-    /// Make all reads of the given Varnode unique. Faithful to
-    /// `Funcdata::splitUses` (funcdata_varnode.cc:1540-1567).
-    /// Calculate the non-zero mask (NZM) property on all Varnode objects.
-    /// Faithful to `Funcdata::calcNZMask` (funcdata_varnode.cc:856-930).
-    /// DFS traversal of ops in alive order: for each op whose output hasn't
-    /// been calculated, compute its NZM from input NZMs using
-    /// `PcodeOp::getNZMaskLocal` (op.cc:547-700).
+    // Ghidra: funcdata_varnode.cc:856 Funcdata::calcNZMask
+    /// Calculate the \e non-zero mask (NZM) property on all Varnode objects.
+    /// Faithful to `Funcdata::calcNZMask` (funcdata_varnode.cc:856-926):
+    /// phase 1 is an explicit DFS over the alive-op list that (a) initializes
+    /// every unwritten input as it is first traversed (constants take their
+    /// offset, everything else takes `calc_mask(size)`, spacebase inputs are
+    /// additionally treated as aligned via `&= ~0xff`, cc:887-896) and (b)
+    /// on pop assigns each op's output from `getNZMaskLocal(true)` with
+    /// MULTIEQUAL looping edges clipped (cc:882-885); phase 2 seeds a
+    /// worklist with every MULTIEQUAL and re-propagates
+    /// `getNZMaskLocal(false)` along descendant edges until the masks reach
+    /// a fixed point (cc:904-925). Varnodes are born with `nzm = ~0`
+    /// (varnode.cc:605, constants with their offset, varnode.cc:597).
     pub fn calc_nz_mask(&mut self) {
         use crate::opcodes::OpCode;
-        // Process ops in alive list order (topological-ish).
-        // For each op with an output, compute NZM.
+        // cc:859-902: DFS with an explicit op stack in alive order.
         let ops: Vec<crate::op::PcodeOpRef> = self.obank.alivelist.clone();
-        for op_ref in &ops {
-            let (opcode, out_size) = {
-                let op = op_ref.0.read().unwrap();
-                let sz = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
-                (op.opcode, sz)
-            };
-            if out_size == 0 { continue; }
-            let full_mask = crate::address::calc_mask(out_size);
-            // Get input NZMs
-            let (in0_nzm, in1_nzm, in0_const, in1_const, in0_size, in1_val) = {
-                let op = op_ref.0.read().unwrap();
-                let i0 = op.inrefs.get(0).map(|v| {
-                    let g = v.read().unwrap();
-                    if g.is_constant() { g.get_offset() } else { g.get_nz_mask() }
-                });
-                let i1 = op.inrefs.get(1).map(|v| {
-                    let g = v.read().unwrap();
-                    if g.is_constant() { g.get_offset() } else { g.get_nz_mask() }
-                });
-                let c0 = op.inrefs.get(0).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
-                let c1 = op.inrefs.get(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
-                let s0 = op.inrefs.get(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
-                let v1 = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
-                (i0.unwrap_or(full_mask), i1.unwrap_or(full_mask), c0, c1, s0, v1)
-            };
-            let res_mask = match opcode {
-                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
-                | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
-                | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
-                | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW
-                | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_XOR
-                | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
-                | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
-                | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
-                | OpCode::CPUI_FLOAT_NAN => 1u64,
-                OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT => in0_nzm,
-                OpCode::CPUI_INT_SEXT => {
-                    // sign extend nzm from in0_size to out_size
-                    let signbit = 1u64 << (in0_size * 8 - 1);
-                    if (in0_nzm & signbit) != 0 && out_size > 8 {
-                        full_mask // sign bit set, upper bits all 1
-                    } else if (in0_nzm & signbit) != 0 {
-                        in0_nzm | (full_mask & !crate::address::calc_mask(in0_size))
-                    } else {
-                        in0_nzm
-                    }
-                }
-                OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
-                    if in0_nzm != full_mask { in0_nzm | in1_nzm } else { full_mask }
-                }
-                OpCode::CPUI_INT_AND => {
-                    if in0_nzm != 0 { in0_nzm & in1_nzm } else { 0 }
-                }
-                OpCode::CPUI_INT_LEFT => {
-                    if !in1_const { full_mask }
-                    else {
-                        let sa = in1_val as u32;
-                        if sa >= 64 { 0 } else { in0_nzm.wrapping_shl(sa) & full_mask }
-                    }
-                }
-                OpCode::CPUI_INT_RIGHT => {
-                    if !in1_const { full_mask }
-                    else {
-                        let sa = in1_val as u32;
-                        if sa >= 64 { 0 } else { in0_nzm >> sa }
-                    }
-                }
-                OpCode::CPUI_INT_NEGATE => !in0_nzm & full_mask,
-                OpCode::CPUI_INT_2COMP => {
-                    // -x: if x is power of 2, nzm = x; else full_mask
-                    if in0_nzm != 0 && (in0_nzm & (in0_nzm - 1)) == 0 { in0_nzm }
-                    else { full_mask }
-                }
-                OpCode::CPUI_SUBPIECE => {
-                    let trunc = in1_val as usize;
-                    if trunc * 8 >= 64 { 0 }
-                    else { (in0_nzm >> (trunc * 8)) & full_mask }
-                }
-                OpCode::CPUI_PIECE => {
-                    // hi << lo_size | lo
-                    in0_nzm.wrapping_shl(((out_size - in0_size) * 8) as u32) | in1_nzm
-                }
-                _ => full_mask,
-            };
-            // Set the output varnode's NZM
-            if let Some(out) = op_ref.0.read().unwrap().output.as_ref() {
-                out.write().unwrap().set_nzm(res_mask);
+        let mut opstack: Vec<(crate::op::PcodeOpRef, usize)> = Vec::new();
+        for op_ref in ops {
+            if op_ref.0.read().unwrap().is_mark() {
+                continue; // cc:864
             }
+            opstack.push((op_ref, 0));
+            opstack.last().unwrap().0.0.write().unwrap().set_mark(); // cc:865-866
+            while !opstack.is_empty() {
+                // cc:871-878: no edge left -> assign output nzm, pop a level.
+                let num_input = opstack.last().unwrap().0.0.read().unwrap().num_input();
+                if opstack.last().unwrap().1 >= num_input {
+                    let (popped, _) = opstack.pop().unwrap();
+                    let outvn = popped.0.read().unwrap().output.clone();
+                    if let Some(outvn) = outvn {
+                        let nzm = Self::pcode_op_nz_mask_local(&popped, true); // cc:874
+                        outvn.write().unwrap().nzm = nzm;
+                    }
+                    continue;
+                }
+                // cc:879-880: advance to the next input edge.
+                let oldslot = opstack.last().unwrap().1;
+                opstack.last_mut().unwrap().1 += 1;
+                // cc:882-885: clip looping MULTIEQUAL edges.
+                let (opcode, parent, input_vn) = {
+                    let op = opstack.last().unwrap().0.0.read().unwrap();
+                    (
+                        op.opcode,
+                        op.parent.clone(),
+                        op.get_in(oldslot).cloned(),
+                    )
+                };
+                if opcode == OpCode::CPUI_MULTIEQUAL {
+                    if let Some(parent) = parent.as_ref().and_then(|w| w.upgrade()) {
+                        if parent.read().unwrap().is_loop_in(oldslot) {
+                            continue; // cc:883-884
+                        }
+                    }
+                }
+                // cc:887-900: traverse the edge indicated by the slot.
+                let Some(vn) = input_vn else { continue };
+                let (written, def) = {
+                    let guard = vn.read().unwrap();
+                    (guard.is_written(), guard.def.clone())
+                };
+                if !written {
+                    let mut guard = vn.write().unwrap();
+                    if guard.is_constant() {
+                        guard.nzm = guard.get_offset(); // cc:889-890
+                    } else {
+                        guard.nzm = crate::address::calc_mask(guard.get_size()); // cc:892
+                        if guard.is_spacebase() {
+                            guard.nzm &= !0xffu64; // cc:893-894: aligned
+                        }
+                    }
+                } else if let Some(def) = def.and_then(|w| w.upgrade()) {
+                    let def_ref = crate::op::PcodeOpRef(def);
+                    if !def_ref.0.read().unwrap().is_mark() {
+                        def_ref.0.write().unwrap().set_mark(); // cc:899
+                        opstack.push((def_ref, 0)); // cc:898
+                    }
+                }
+            }
+        }
+
+        // cc:904-911: clear marks; seed the worklist with every MULTIEQUAL.
+        let mut worklist: Vec<crate::op::PcodeOpRef> = Vec::new();
+        for op_ref in &self.obank.alivelist {
+            op_ref.0.write().unwrap().clear_mark();
+            if op_ref.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL {
+                worklist.push(op_ref.clone());
+            }
+        }
+
+        // cc:913-925: propagate changes along all edges until fixed point.
+        while let Some(op_ref) = worklist.pop() {
+            let outvn = op_ref.0.read().unwrap().output.clone();
+            let Some(vn) = outvn else { continue }; // cc:918
+            let nzmask = Self::pcode_op_nz_mask_local(&op_ref, false); // cc:919
+            if nzmask != vn.read().unwrap().nzm {
+                vn.write().unwrap().nzm = nzmask; // cc:921
+                let descend: Vec<crate::op::PcodeOpRef> = vn
+                    .read()
+                    .unwrap()
+                    .descend_iter()
+                    .map(crate::op::PcodeOpRef)
+                    .collect();
+                worklist.extend(descend); // cc:922-923
+            }
+        }
+    }
+
+    // Ghidra: op.cc:547 PcodeOp::getNZMaskLocal
+    /// Compute the non-zero mask for an op's output assuming the input masks
+    /// are already defined. Faithful to `PcodeOp::getNZMaskLocal`
+    /// (op.cc:547-771): `fullmask` derives from the output size; compare and
+    /// boolean ops emit 1; MULTIEQUAL ORs its inputs (skipping looping edges
+    /// when `cliploop`, op.cc:740-757); every unlisted opcode — including
+    /// INT_NEGATE and INT_2COMP — falls to `default:` and emits `fullmask`
+    /// (op.cc:766-768). Raw `>>`/`<<` sites that the oracle leaves unguarded
+    /// use Rust `wrapping_shr`/`wrapping_shl`, mirroring the x86-64
+    /// shift-count masking the locked oracle binary is built with; sites the
+    /// oracle guards through `pcode_right`/`pcode_left` (address.hh:505-517)
+    /// return 0 for shift counts >= 64 exactly like those helpers.
+    ///
+    /// RUGRA-GLUE: this is the complete oracle switch placed in Funcdata file
+    /// scope because `src/op.rs` is outside the FUNCDATA-CALCNZM-0001 lease;
+    /// the pre-existing `PcodeOp::get_nz_mask_local` (op.rs:1175) ignores
+    /// `cliploop`, lacks the INT_DIV/INT_REM/POPCOUNT/LZCOUNT/INT_MULT/CALL
+    /// arms and invents INT_NEGATE/INT_2COMP arms — consolidating onto the
+    /// PcodeOp method is tracked by TODO FUNCDATA-CALCNZM-0002.
+    pub(crate) fn pcode_op_nz_mask_local(
+        op: &crate::op::PcodeOpRef,
+        cliploop: bool,
+    ) -> u64 {
+        use crate::opcodes::OpCode;
+        // pcode_right (address.hh:505-511).
+        let pcode_right = |val: u64, sa: i32| -> u64 {
+            if sa >= 64 { 0 } else { val >> sa }
+        };
+        // pcode_left (address.hh:514-518).
+        let pcode_left = |val: u64, sa: i32| -> u64 {
+            if sa >= 64 { 0 } else { val << sa }
+        };
+        let (opcode, out_size, inputs, parent) = {
+            let guard = op.0.read().unwrap();
+            // op.cc:553: size = output->getSize(); calcNZMask only calls in
+            // with a live output (funcdata_varnode.cc:872-875 / cc:918).
+            let out_size = match &guard.output {
+                Some(o) => o.read().unwrap().get_size(),
+                None => return u64::MAX,
+            };
+            (guard.opcode, out_size, guard.inrefs.clone(), guard.parent.clone())
+        };
+        let fullmask = crate::address::calc_mask(out_size); // op.cc:554
+        // Oracle `Varnode::getNZMask` (varnode.hh:231) is the raw field
+        // access `return nzm;`. Rugra's `Varnode::get_nz_mask` (varnode.rs)
+        // predates the calcNZMask wiring and substitutes a conservative
+        // approximation (constants -> offset, others -> calc_mask), so read
+        // the stored field directly (get_nzm) exactly as the oracle does.
+        let in_nzm = |i: usize| -> u64 {
+            inputs
+                .get(i)
+                .map(|v| v.read().unwrap().get_nzm())
+                .unwrap_or(fullmask)
+        };
+        let in_const = |i: usize| -> Option<u64> {
+            let v = inputs.get(i)?;
+            let r = v.read().unwrap();
+            if r.is_constant() { Some(r.get_offset()) } else { None }
+        };
+        let in_size = |i: usize| -> usize {
+            inputs.get(i).map(|v| v.read().unwrap().get_size()).unwrap_or(out_size)
+        };
+        match opcode {
+            // op.cc:557-576: only 1 bit not guaranteed to be 0.
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW
+            | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
+            | OpCode::CPUI_FLOAT_NAN => 1,
+            // op.cc:577-580
+            OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT => in_nzm(0),
+            // op.cc:581-583
+            OpCode::CPUI_INT_SEXT => {
+                crate::rangeutil::sign_extend_size(in_nzm(0), in_size(0), out_size)
+            }
+            // op.cc:584-589
+            OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                let resmask = in_nzm(0);
+                if resmask != fullmask { resmask | in_nzm(1) } else { resmask }
+            }
+            // op.cc:590-594
+            OpCode::CPUI_INT_AND => {
+                let resmask = in_nzm(0);
+                if resmask != 0 { resmask & in_nzm(1) } else { 0 }
+            }
+            // op.cc:595-603
+            OpCode::CPUI_INT_LEFT => match in_const(1) {
+                Some(sa) => pcode_left(in_nzm(0), sa as i32) & fullmask,
+                None => fullmask,
+            },
+            // op.cc:604-632
+            OpCode::CPUI_INT_RIGHT => match in_const(1) {
+                Some(sa) => {
+                    let sz1 = in_size(0);
+                    let sa = sa as i32;
+                    let mut resmask = pcode_right(in_nzm(0), sa);
+                    if sz1 > 8 {
+                        // op.cc:612-630: resmask did not hold the most
+                        // significant bits of the mask.
+                        if sa >= (8 * sz1) as i32 {
+                            resmask = 0; // op.cc:614-615
+                        } else if sa >= 64 {
+                            // op.cc:616-620: full mask shifted over 64 bits.
+                            resmask = crate::address::calc_mask(sz1 - 8);
+                            resmask >>= sa - 64; // sa < 8*sz1 here
+                        } else {
+                            // op.cc:622-629: fill in the one bits from the
+                            // part of the mask not originally calculated.
+                            let tmp = 0u64.wrapping_sub(1).wrapping_shl(64 - sa as u32);
+                            resmask |= tmp;
+                        }
+                    }
+                    resmask
+                }
+                None => fullmask,
+            },
+            // op.cc:633-647
+            OpCode::CPUI_INT_SRIGHT => match in_const(1) {
+                Some(sa) if out_size <= 8 => {
+                    let sa = sa as i32;
+                    let resmask = in_nzm(0);
+                    if (resmask & (fullmask ^ (fullmask >> 1))) == 0 {
+                        // op.cc:639-641: sign bit known zero -> INT_RIGHT.
+                        pcode_right(resmask, sa)
+                    } else {
+                        // op.cc:643-644: unknown new high bits.
+                        pcode_right(resmask, sa)
+                            | (fullmask.wrapping_shr(sa as u32) ^ fullmask)
+                    }
+                }
+                _ => fullmask,
+            },
+            // op.cc:648-659
+            OpCode::CPUI_INT_DIV => {
+                let val = in_nzm(0);
+                let mut resmask = crate::address::coveringmask(val);
+                if in_const(1).is_some() {
+                    // op.cc:651-658: dividing by a power of 2 is equivalent
+                    // to a right shift.
+                    let sa = crate::address::mostsigbit_set(in_nzm(1));
+                    if sa != -1 {
+                        resmask >>= sa; // sa in [0,63]
+                    }
+                }
+                resmask
+            }
+            // op.cc:660-663: result is less than the modulus.
+            OpCode::CPUI_INT_REM => {
+                let val = in_nzm(1).wrapping_sub(1);
+                crate::address::coveringmask(val)
+            }
+            // op.cc:664-668
+            OpCode::CPUI_POPCOUNT => {
+                let sz1 = in_nzm(0).count_ones() as i32; // popcount (address.cc:756)
+                crate::address::coveringmask(sz1 as u64) & fullmask
+            }
+            // op.cc:669-672
+            OpCode::CPUI_LZCOUNT => {
+                crate::address::coveringmask((in_size(0) * 8) as u64) & fullmask
+            }
+            // op.cc:673-692
+            OpCode::CPUI_SUBPIECE => {
+                let sz1 = in_const(1).unwrap_or(0) as usize; // op.cc:675
+                let mut resmask = in_nzm(0);
+                if in_size(0) <= 8 {
+                    if sz1 < 8 {
+                        resmask >>= 8 * sz1; // op.cc:677-678
+                    } else {
+                        resmask = 0; // op.cc:680
+                    }
+                } else {
+                    // op.cc:682-690: extended precision.
+                    if sz1 < 8 {
+                        resmask >>= 8 * sz1;
+                        if sz1 > 0 {
+                            resmask |= fullmask.wrapping_shl((8 * (8 - sz1)) as u32); // op.cc:686
+                        }
+                    } else {
+                        resmask = fullmask; // op.cc:689
+                    }
+                }
+                resmask & fullmask // op.cc:691
+            }
+            // op.cc:693-698
+            OpCode::CPUI_PIECE => {
+                let sa = in_size(1); // op.cc:694
+                let resmask = in_nzm(0);
+                let shifted = if sa < 8 { resmask << (8 * sa) } else { 0 };
+                shifted | in_nzm(1)
+            }
+            // op.cc:699-731
+            OpCode::CPUI_INT_MULT => {
+                let val = in_nzm(0);
+                let mut resmask = in_nzm(1);
+                if out_size > 8 {
+                    resmask = fullmask; // op.cc:702-704
+                } else {
+                    let sz1 = crate::address::mostsigbit_set(val); // op.cc:706
+                    let sz2 = crate::address::mostsigbit_set(resmask); // op.cc:707
+                    if sz1 == -1 || sz2 == -1 {
+                        resmask = 0; // op.cc:708-710
+                    } else {
+                        let l1 = crate::address::leastsigbit_set(val); // op.cc:712
+                        let l2 = crate::address::leastsigbit_set(resmask); // op.cc:713
+                        let sa = l1 + l2; // op.cc:714
+                        if sa >= (8 * out_size) as i32 {
+                            resmask = 0; // op.cc:715-717
+                        } else {
+                            let w1 = sz1 - l1 + 1; // op.cc:719
+                            let w2 = sz2 - l2 + 1; // op.cc:720
+                            let mut total = w1 + w2; // op.cc:721
+                            if w1 == 1 || w2 == 1 {
+                                total -= 1; // op.cc:722-723
+                            }
+                            resmask = fullmask;
+                            if total < (8 * out_size) as i32 {
+                                resmask >>= (8 * out_size) as i32 - total; // op.cc:725-726
+                            }
+                            resmask = (resmask << sa) & fullmask; // op.cc:727
+                        }
+                    }
+                }
+                resmask
+            }
+            // op.cc:732-739
+            OpCode::CPUI_INT_ADD => {
+                let mut resmask = in_nzm(0);
+                if resmask != fullmask {
+                    resmask |= in_nzm(1);
+                    resmask |= resmask << 1; // account for possible carries
+                    resmask &= fullmask;
+                }
+                resmask
+            }
+            // op.cc:740-757
+            OpCode::CPUI_MULTIEQUAL => {
+                if inputs.is_empty() {
+                    fullmask // op.cc:741-742
+                } else {
+                    let mut resmask = 0u64;
+                    let parent = parent.as_ref().and_then(|w| w.upgrade());
+                    for i in 0..inputs.len() {
+                        if cliploop {
+                            if let Some(p) = &parent {
+                                if p.read().unwrap().is_loop_in(i) {
+                                    continue; // op.cc:748-749
+                                }
+                            }
+                        }
+                        resmask |= in_nzm(i);
+                    }
+                    resmask
+                }
+            }
+            // op.cc:758-765
+            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_CPOOLREF => {
+                if op.0.read().unwrap().is_calculated_bool() {
+                    1 // op.cc:762: output is strictly boolean
+                } else {
+                    fullmask
+                }
+            }
+            // op.cc:766-768
+            _ => fullmask,
         }
     }
 
@@ -12386,6 +12661,90 @@ mod tests {
         // param_2 should appear in the body expression (not just signature)
         assert!(emitted_code.contains("(long)param_2") || emitted_code.contains("param_2"),
             "param_2 should be used in body expression");
+    }
+
+    /// Pipeline wiring proof for FUNCDATA-CALCNZM-0001: the oracle's ONLY
+    /// production call site of `Funcdata::calcNZMask` is
+    /// `ActionNonzeroMask::apply` (coreaction.hh:300), registered in the
+    /// universal mainloop directly after `ActionSpacebase` and before
+    /// `ActionInferTypes` (coreaction.cc:5506-5508; Rugra src/action.rs:1196,
+    /// "analysis" survives the default decompile grouplist). Observable:
+    /// after the default decompile root runs on
+    /// `u1 = EDI & 0x3f0; u2 = u1 / 3; STORE(u2)`, the INT_DIV output carries
+    /// the oracle mask coveringmask(0x3f0) >> mostsigbit_set(3) = 0x1ff
+    /// (op.cc:648-659). With the action unwired every written unique keeps
+    /// its constructor nzm ~0 (varnode.cc:605) and no written varnode can
+    /// hold 0x1ff (the only constants 0x3f0/3/2 init to their own offsets).
+    #[test]
+    fn test_nonzeromask_pipeline_wiring() {
+        use crate::action::ActionDatabase;
+
+        let mut fd = Funcdata::new("nzm_wiring", Address::new(0x1000), 0x100);
+        let block = fd.create_new_block();
+
+        // u1 = INT_AND(EDI, 0x3f0): EDI is an unwritten register read, so
+        // phase 1 initializes it to calc_mask(4) = 0xffffffff and the AND
+        // output takes 0xffffffff & 0x3f0 = 0x3f0 (op.cc:590-594).
+        let and_op = fd.new_op(2, Address::new(0x1010));
+        fd.op_set_opcode(&and_op, OpCode::CPUI_INT_AND);
+        let u1 = fd.new_unique_out(4, &and_op);
+        let edi = fd.vbank.create_with_space(4, AddressSpace::Register, 0x38);
+        fd.op_set_input(&and_op, edi, 0);
+        let mask = fd.new_constant(4, 0x3f0);
+        fd.op_set_input(&and_op, mask, 1);
+        fd.op_insert_end(&and_op, &block);
+
+        // u2 = INT_DIV(u1, 3): 3 is not a power of two, so no rule rewrites
+        // the division into a shift. Oracle nzm: coveringmask(0x3f0) = 0x3ff,
+        // mostsigbit_set(3) = 1, 0x3ff >> 1 = 0x1ff (op.cc:648-659).
+        let div_op = fd.new_op(2, Address::new(0x1020));
+        fd.op_set_opcode(&div_op, OpCode::CPUI_INT_DIV);
+        let u2 = fd.new_unique_out(4, &div_op);
+        fd.op_set_input(&div_op, u1.clone(), 0);
+        let three = fd.new_constant(4, 3);
+        fd.op_set_input(&div_op, three, 1);
+        fd.op_insert_end(&div_op, &block);
+
+        // STORE(ram, ptr, u2) keeps the chain alive through dead code.
+        let store_op = fd.new_op(3, Address::new(0x1030));
+        fd.op_set_opcode(&store_op, OpCode::CPUI_STORE);
+        let spaceid = fd.new_varnode_space(AddressSpace::Ram);
+        fd.op_set_input(&store_op, spaceid, 0);
+        let ptr = fd.new_unique(8);
+        fd.op_set_input(&store_op, ptr, 1);
+        fd.op_set_input(&store_op, u2.clone(), 2);
+        fd.op_insert_end(&store_op, &block);
+
+        // RETURN keeps the block reachable/structured for the pipeline.
+        let ret_op = fd.new_op(2, Address::new(0x1040));
+        fd.op_set_opcode(&ret_op, OpCode::CPUI_RETURN);
+        let ret_addr = fd.new_constant(8, 0x1000);
+        fd.op_set_input(&ret_op, ret_addr, 0);
+        let rax = fd.vbank.create_with_space(8, AddressSpace::Register, 0x0);
+        fd.op_set_input(&ret_op, rax, 1);
+        fd.op_insert_end(&ret_op, &block);
+
+        let mut db = ActionDatabase::new();
+        db.set_default_actions();
+        let _ = db.apply_all(&mut fd);
+
+        // The INT_DIV output must carry the oracle-computed mask 0x1ff.
+        // With the action unwired every written unique keeps its
+        // constructor nzm ~0 (varnode.cc:605) and no written varnode can
+        // hold 0x1ff (the only constants 0x3f0/3 init to their own
+        // offsets).
+        let u2_nzm = u2.read().unwrap().get_nzm();
+        let div_alive = fd
+            .obank
+            .alivelist
+            .iter()
+            .any(|op| op.0.read().unwrap().opcode == OpCode::CPUI_INT_DIV);
+        assert_eq!(
+            u2_nzm, 0x1ff,
+            "decompile root must reach calc_nz_mask (INT_DIV still alive: {})",
+            div_alive
+        );
+        assert_eq!(u1.read().unwrap().get_nzm(), 0x3f0);
     }
 
     /// Verify Funcdata::spacebase() marks the RSP input varnode with the

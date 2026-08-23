@@ -909,9 +909,9 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 ### 2026-06-29（续 3）：Funcdata.active_output 字段
 - 新增 `active_output: Option<ParamActive>` 字段（funcdata.hh）。用于 ActionReturnRecovery 检测函数返回值。当 RETURN op 有 >1 input 时自动创建 active_output。
 
-### 2026-06-29（续 4）：Funcdata::calc_nz_mask（funcdata_varnode.cc:856-930）
-- `calc_nz_mask()` — 计算所有 Varnode 的 non-zero mask（NZM）。遍历 alive ops，根据 opcode 从输入 NZM 推导输出 NZM：COPY/ZEXT 传播、XOR/OR 合并、AND 交集、LEFT/RIGHT 位移、NEGATE/2COMP/SUBPIECE/PIECE 等。
-- 用于 RuleAndMask/RuleOrMask 位优化 + 类型推断变量范围。
+### 2026-06-29（续 4）：Funcdata::calc_nz_mask（funcdata_varnode.cc:856-930）【2026-08-23 已重写为 oracle 结构，见文末】
+- `calc_nz_mask()` — 计算所有 Varnode 的 non-zero mask（NZM）。遍历 alive ops，根据 opcode 从输入 NZM 推导输出 NZM：COPY/ZEXT 传播、XOR/OR 合并、AND 交集、LEFT/RIGHT 位移、SUBPIECE/PIECE 等。
+- 用于 RuleAndMask/RuleOrMask 位优化 + 类型推断变量范围。（初版为简化单遍实现，2026-08-23 按 FUNCDATA-CALCNZM-0001 重写为 oracle 两阶段结构。）
 
 ### 2026-06-29（续 5）：find_varnode_input
 - `find_varnode_input(size, addr)` — 忠实移植 `Funcdata::findVarnodeInput`（funcdata.hh:324）。查找指定 size+address 的 input varnode。用于 ActionRestrictLocal + AncestorRealistic。
@@ -1414,3 +1414,22 @@ Rugra 防御性视为 alive，生产不可达已注释）。
 ## 极性重断言（2026-08-23，root，CONDEXE-TRUEOUT-0002 跟进）
 
 `test_bool_condition_folding_and_pattern` 按 Ghidra 纯位置极性（block.hh:299-300，out[1]=true）重断言：双 CBRANCH 的 **false** 边合流 → `BlockCondition(Or)`（block.cc:1785）；旧 And 断言编码的是翻转前反极性。
+
+## calcNZMask 对齐重写（2026-08-23，FUNCDATA-CALCNZM-0001）
+
+### Funcdata::calc_nz_mask（funcdata_varnode.cc:856-926）— oracle 两阶段结构
+- **Phase 1（cc:859-902）**：显式 DFS opstack 按 alive 顺序遍历。遍历到 unwritten 输入时初始化：常量 → `nzm = offset`（cc:889-890）；非常量 → `nzm = calc_mask(size)`（cc:892）；spacebase 输入额外 `&= ~0xff`（视为对齐，cc:893-894）。op 弹栈时 `outvn->nzm = getNZMaskLocal(true)`（cc:874），MULTIEQUAL 的 looping 输入边被 `isLoopIn(slot)` 裁剪（cc:882-885）。Varnode 构造初值：常量=offset、其余 ~0（varnode.cc:597/601/605）。
+- **Phase 2（cc:904-925）**：清 mark，把所有 MULTIEQUAL 压入 worklist；反复用 `getNZMaskLocal(false)`（不裁剪 loop 边）重算，nzm 变化时把该输出的全部 descend 压回 worklist，直至不动点。
+- 旧实现（简化单遍 + 内联 switch）已删除；旧 switch 中 INT_NEGATE/INT_2COMP 分支是自创语义（oracle 落 `default:` → fullmask），已随重写移除。
+
+### Funcdata::pcode_op_nz_mask_local（op.cc:547 PcodeOp::getNZMaskLocal 的完整移植）
+- 完整 oracle switch（op.cc:547-771）：比较/布尔 → 1；COPY/ZEXT 传播；SEXT sign_extend；XOR/OR/AND；LEFT/RIGHT（含 >8 字节扩展精度分支 cc:612-630）；SRIGHT（符号位已知 0 分支 cc:639-644）；**INT_DIV**（cc:648-659，coveringmask(val) >> mostsigbit_set(常量分母)——sc6 y/64 根因修复）；INT_REM（cc:660-663）；POPCOUNT/LZCOUNT（cc:664-672）；SUBPIECE（含扩展精度 cc:673-692）；PIECE（cc:693-698）；INT_MULT（cc:699-731）；INT_ADD（进位 cc:732-739）；MULTIEQUAL（cliploop 裁剪 cc:740-757）；CALL/CALLIND/CPOOLREF isCalculatedBool→1（cc:758-765）；default→fullmask。
+- **输入 NZM 读取直接访问存储字段 `nzm`**（oracle varnode.hh:231 `getNZMask() { return nzm; }`）。Rugra 的 `Varnode::get_nz_mask()`（varnode.rs）是 calcNZMask 接线前的保守近似（常量→offset、其余→calc_mask），不能用于传播——残差 TODO FUNCDATA-CALCNZM-0003。
+- RUGRA-GLUE：完整 switch 放在 funcdata.rs（op.rs 不在本租约）；op.rs 既有 `PcodeOp::get_nz_mask_local` 忽略 cliploop、缺 DIV/REM/POPCOUNT/LZCOUNT/MULT/CALL 臂且自创 NEGATE/2COMP 臂——合并到 op.rs 登记 TODO FUNCDATA-CALCNZM-0002。
+- 原始 `>>`/`<<` 位点（oracle 未加保护处）用 `wrapping_shr/wrapping_shl` 镜像 x86-64 移位计数掩码语义；oracle 经 `pcode_right/pcode_left`（address.hh:505-517）保护的位点按其语义（sa>=64 → 0）。
+
+### 主管线接线核实（FUNCDATA-CALCNZM-0001）
+- oracle 的 calcNZMask 唯一生产调用点是 `ActionNonzeroMask::apply`（coreaction.hh:300），注册于 universal mainloop 的 `ActionSpacebase` 之后、`ActionInferTypes` 之前（coreaction.cc:5506-5508）。`newUniqueOut` 等 funcdata_varnode.cc 构造函数 **不** 触发 calcNZMask。
+- Rugra 侧对应注册已存在：src/action.rs:1196（`add!(mainloop, "analysis", ActionNonzeroMask)`，"analysis" 在默认 decompile grouplist 内），无需新增接线。
+- 功能证据：新增单测 `test_nonzeromask_pipeline_wiring`（funcdata.rs）——`u1=EDI&0x3f0; u2=u1/3; STORE` 走完整 `decompile` root 后，INT_DIV 输出 nzm == 0x1ff（coveringmask(0x3f0)=0x3ff >> mostsigbit_set(3)=1），未接线时写 unique 保持构造初值 ~0 不可能得到该值。
+
