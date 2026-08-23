@@ -86,6 +86,7 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | REVIEW | 7163dec（wt/tmresid，11/11 MATCH residual=none） | 复核进行中 |
 | PRINTC-UNLINKED-REF-0001（printc 域） | DONE | b155b8a→fcc20d2 | 机制 B 门禁通过：E2E defects=0/numbering=0（skeleton 8679，注入组 117→45 行，glob_url 恢复丢失语句与 golden 同形）；68反编译/8超时=共享负载（前后自测一致），wave 收尾低负载复验；残差两件归 varmap 域（explicit 符号化 + 命名期类型前缀）；B2 fixture 待建 |
 | TYPEFACTORY-LOCALTYPE-CACHE-0001 | REVIEW | f0a7829+9ee59ab（220/220 MATCH，原99字节保持） | 复核进行中；Cross-Review PENDING |
+| RULE-PORT-COLLAPSECONSTANTS-0001 | REVIEW | e9a850d+6399c08（11/11 MATCH；E2E 骨架 1714→1710 全朝 Ghidra 收敛，双差分门禁 defects=0/numbering=0） | 白名单复核进行中 |
 | JUMPTABLE-GUARDS-0001 | REVIEW | 07be5cb+2f84e7e（3/6 MATCH，3 MISMATCH 全归因租约外 RANGE-PULLBACK-SLESS/FUNCDATA-CALCNZM；jumptable:: 27/27） | 白名单复核进行中 |
 | SCOPELOCAL-QUERY-0001 r2 | REVIEW | 3bea8db+31f4046（11/11 MATCH） | varmap 白名单，复核进行中；E2E 差分随 root 跑批 |
 
@@ -107,6 +108,9 @@ forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只�
 | `BLOCKBASIC-COVER-0001` | P2 | comment 审计新增：BlockBasic::contains 的 cover 边界投影形式化等价未证 | `src/block.rs`、fixture | 排队 |
 | `COMMENT-DB-EMITTED-0001` | P2 | comment 审计新增：setEmitted(false) 不回写 CommentDatabaseInternal（Ghidra mutable 直改库内对象） | `src/comment.rs`、`src/database_*.rs` | 排队 |
 | `COMMENT-SORTER-PRINTC-0001` | P2 | comment 审计新增：printc 消费端迁移到直接协议（消除 Vec 快照与 printc.rs:6651 警告） | `src/printc.rs`、`src/comment.rs` | printc 租约释放后认领 |
+| `VARNODE-COPYSYMBOL-EQUATE-0001` | P2 | rulefound 交付发现：copy_symbol_if_valid 不区分 EquateSymbol/isValueClose（varnode.rs 保守近似） | `src/varnode.rs`、fixture | varmap/varnode 租约释放后 |
+| `FLOAT-OPINT2FLOAT-SIGN-0001` | P2 | rulefound 交付发现：float_emulate op_int2float 无符号 vs Ghidra sign_extend（float.cc:614） | `src/float_emulate.rs`、fixture | 无 |
+| `OPBEHAVIOR-SRIGHT-SIZEMASK-0001` | P3 | rulefound 交付发现：混合尺寸 SRIGHT mask 语义（SLEIGH 不产，不可观测） | `src/opbehavior.rs` | 排队 |
 | `RANGE-PULLBACK-SLESS-0001` | P1 | jtguards 交付发现：CircleRange::pull_back_binary 缺 CPUI_INT_SLESS/INT_SLESSEQUAL（rangeutil.cc:882-917），signed 比较守卫拉回失败→守卫记录缺失（jt_guards sc1/sc3 MISMATCH 的根因）；RANGE-0001 家族 | `src/rangeutil.rs`、docs/api/rangeutil.md、fixture | 无 |
 | `FUNCDATA-CALCNZM-0001` | P1 | jtguards 交付发现：calc_nz_mask 简化单遍，缺 unwritten 输入 nzm 初始化（funcdata_varnode.cc:889-893）与 DFS/worklist；主管线未调用（sc6 根因） | `src/funcdata.rs`、`src/heritage.rs`、docs | mergeclear 租约释放后认领 |
 | `DATATYPE-SPACEBASE-SPACEID-0001` | P2 | datatype 审计新增：Ghidra AddrSpace 裸指针身份 vs Rust AddressSpace enum 同 index 折叠；TypePointer::compare 同 index 空间恒返 1 的 Ghidra quirk（type.cc:944）；长期解=ADDRESS-0001 空间注册表迁移 | `src/type_system/datatype.rs`、`src/space.rs` | ADDRESS-0001 方案定稿后认领 |
