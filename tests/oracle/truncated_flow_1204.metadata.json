@@ -1,0 +1,255 @@
+{
+  "schema_version": 2,
+  "fixture_id": "FLOW-TRUNCATED-0001",
+  "status_note": "The controlled clone projection is byte-for-byte MATCH against locked Ghidra 12.0.4: raw dead-list versus SeqNum-tree order, exact uniqId, callspec/FSPEC rebinding and stale-varnode deletion, linked/unlinked jump-table copy/reset/deep identity, per-op dead-to-alive block insertion, and all three requested exceptions including missing-entry lifecycle state and mutation before the missing-table throw. The whole mapped function remains MISMATCH because Rugra cannot represent every FuncCallSpecs field/direct op pointer or nullable PcodeOp input, while FlowInfo private-state and injection branches are not exhaustively driven.",
+  "decisive_semantics": {
+    "reference_output_parameters": "Funcdata::truncatedFlow mutates the target Funcdata through its op/varnode/callspec/jump-table/block banks while reading the source Funcdata and FlowInfo by pointer; cloned callspecs, FSPEC annotations, indirect-op links and JumpModel owners must point into the target, not alias source objects. The fixture observes source/target identity separation, the target mutation retained before the missing-jumptable exception, and the raw clone retained without any block lifecycle mutation before the missing-entry exception.",
+    "loop_bounds_traversal_order": "Raw ops traverse source obank.beginDead()..endDead() in linked-list order [time 1,0,2], independently of the SeqNum-sorted optree [0,1,2]; callspecs and jump tables traverse their source vectors from index 0 to size, unlinked tables are skipped without reordering later linked tables, and splitBasic consumes each dead op in the same [1,0,2] order.",
+    "counter_accumulator_lifecycle": "PcodeOpBank uniqId is one bank-wide next-time counter: cloning explicit times may advance it, then truncatedFlow unconditionally overwrites it with the source value 4. Block SeqNum.order is assigned per insertion from ordbefore=2 and 0x1000000 midpoint increments; callspec and jump-table target vectors append exactly once per accepted source entry and preserve successful prefixes on a later throw. A missing first STARTBASIC retains cloned order 0 and never starts the block-order accumulator.",
+    "sorting_comparison_keys": "PcodeOpTree ordering uses SeqNum address then immutable time, dead/alive lists use insertion/list order, callspec and jump-table lookup use exact call/indirect-op SeqNum identity, and block order follows dead-list traversal rather than the tree. The fixture gives all cloned ops one address so time and list order cannot be conflated."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/fspec.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/fspec.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.hh"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "4c4808d12dfabeecd7043c49da852adf9a10e68f",
+    "base_tree": "71ed04342212855062188a1ed1dff27c1ebf4892",
+    "base_src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
+    "base_funcdata_blob": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
+    "base_flow_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+    "base_op_blob": "1f8908d74c0e5b72e41a910e46313066d48ce919",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [
+      {
+        "path": "src/funcdata.rs",
+        "sha256": "e76cf04650b84b0b66c1fe946db19847adfc4b9eaf7f64e5e9483535c08d8694",
+        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
+      },
+      {
+        "path": "src/flow.rs",
+        "sha256": "0c8aafd6c00b6d6e783490d10ff57593a432eb90d09344d51f110f07d36f93eb",
+        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
+      },
+      {
+        "path": "src/op.rs",
+        "sha256": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
+        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
+      }
+    ],
+    "archive_policy": "Immutable explicit dependency closure plus three verified live source overlays; unrelated worktree files are excluded."
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "apis": [
+      "Funcdata::truncatedFlow (funcdata_op.cc:792-839)",
+      "Funcdata::cloneOp (funcdata_op.cc:616-628)",
+      "Funcdata::cloneVarnode (funcdata_varnode.cc:252-267)",
+      "FlowInfo cloning constructor (flow.cc:52-76)",
+      "FlowInfo::generateBlocks/splitBasic (flow.cc:824-845/983-1017)",
+      "FuncCallSpecs::clone (fspec.cc:4964-4977)",
+      "JumpTable partial copy constructor (jumptable.cc:2401-2425)",
+      "PcodeOpBank::insertAfterDead (op.cc:1039-1048)"
+    ],
+    "construction": "Direct synthetic raw p-code construction inside eight noinline ELF functions; no instruction decode or Actions. All success-case ops share one machine address, have times 0/1/2, and the dead list is reordered to 1/0/2. One destroyed spare advances uniqId to 4. The source flow uses the full default-code-space range, maximum instructions 77, and flags possible_unreachable|error_unimplemented.",
+    "error_injection": "A nonempty target has one pre-existing dead op. The missing-jumptable source has one cloned dead RETURN linked to an accepted first table and one alive COPY (therefore absent from the clone) linked to the second table, proving the first table remains appended when exact SeqNum lookup throws. The missing-entry source has one dead RETURN marked STARTMARK but not STARTBASIC; the fixture captures the completely empty target before cloning and every raw/block/lifecycle bank plus BLOCKS_GENERATED after the exact LowlevelError.",
+    "random_seed": null
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "construction": {
+      "success_dead_times": [1, 0, 2],
+      "success_tree_times": [0, 1, 2],
+      "success_next_uniqid": 4,
+      "callspec_stackoffset": 4660,
+      "callspec_extrapop": 32768,
+      "linked_jump_addresses_from_base": [16, 32],
+      "jump_table_source_order": ["unlinked_skip", "linked_clone"],
+      "error_prefix_tables_before_throw": 1,
+      "missing_entry_startbasic": false,
+      "missing_entry_startmark": true,
+      "missing_entry_blocks_after_throw": 0,
+      "missing_entry_alive_after_throw": 0,
+      "missing_entry_blocks_generated_after_throw": false
+    },
+    "cases": [
+      "success",
+      "nonempty_target",
+      "missing_linked_jumptable_after_successful_prefix",
+      "missing_entry_marker"
+    ],
+    "sha256": "fcb8f78c9ca7e8af347e5365acd3490cae4baacac9bd4c68d17ea89b2ffadc7b"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "bf71fe45be07a0c5f65f049ef5491036e7c93c9a2d8cb3f231731d8020d353ff",
+    "rust_fixture_sha256": "230b74f2e986848fab9b942ca9cc53d20c3065fda952a6e1797a32235069e7e4",
+    "funcdata_overlay_sha256": "e76cf04650b84b0b66c1fe946db19847adfc4b9eaf7f64e5e9483535c08d8694",
+    "flow_overlay_sha256": "0c8aafd6c00b6d6e783490d10ff57593a432eb90d09344d51f110f07d36f93eb",
+    "op_overlay_sha256": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
+    "funcdata_doc_sha256": "134d5c86a1ca1380f70792719b8236ecffb451c72b211161bee8e8d4bf353e72",
+    "flow_doc_sha256": "c46d12252e723ee818cbe0d5bbcccfda9e75946714c2c5c816219d4209bfa29a",
+    "op_doc_sha256": "195be72ee44707fd01edcd07ab360c664e502e654b5b877eede85bbfba785f90",
+    "runner_sha256": "5aa71b34d38c5f20178888ed8f4c1396765d792895939cf12516d6dac8a41c01"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "4a4b2cb1adfcec4fd96b1885cbe6a64971c7b8c2e36672561dedcec5a81d8366",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "4a4b2cb1adfcec4fd96b1885cbe6a64971c7b8c2e36672561dedcec5a81d8366",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "machine_input_sha256": {
+    "fixture_text": "03ff1a50776f000a918b6964d7302be494fc97c6b7e0c6aa160979f570de3425"
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "coverage": {
+    "raw_op_seqnum_list_order_and_uniqid": {
+      "status": "MATCH",
+      "covers": "funcdata_op.cc:798-801 and cloneOp: exact SeqNum tree, independent dead-list traversal [1,0,2], start flags, opcode/input/output shape, and source uniqId overwrite to 4.",
+      "residual_todo_ids": []
+    },
+    "callspec_fspec_rebind_projection": {
+      "status": "MATCH",
+      "covers": "funcdata_op.cc:803-815: qlst order, new callspec identity, exact call SeqNum, target FSPEC self binding, stale cloned FSPEC Varnode deletion, target entry, stackoffset and prototype extrapop.",
+      "residual_todo_ids": []
+    },
+    "callspec_complete_identity_and_fields": {
+      "status": "MISMATCH",
+      "covers": "Rugra FuncCallSpecs stores an op address rather than Ghidra's direct PcodeOp pointer and lacks effective_extrapop, paramshift and isbadjumptable. Annotation-free multiple calls at one address therefore conservatively error instead of guessing identity.",
+      "residual_todo_ids": ["CALLSPEC-0001"]
+    },
+    "jumptable_partial_copy_skip_and_identity": {
+      "status": "MATCH",
+      "covers": "funcdata_op.cc:817-828 plus jumptable.cc:2401-2425: vector order, unlinked skip, exact indirect SeqNum rebinding, address/model/load-state copy, instance-state resets, and distinct table/indirect/model identities.",
+      "residual_todo_ids": []
+    },
+    "splitbasic_per_op_lifecycle_and_order": {
+      "status": "MATCH",
+      "covers": "flow.cc:983-1017: each raw op moves dead->alive immediately before block insertion; block list follows [1,0,2] and midpoint orders are 8388610/16777218/25165826 rather than SeqNum tree order.",
+      "residual_todo_ids": []
+    },
+    "nonempty_precondition_exception": {
+      "status": "MATCH",
+      "covers": "funcdata_op.cc:795-796 exact LowlevelError text and no clone/block mutation beyond the deliberately pre-existing target op.",
+      "residual_todo_ids": []
+    },
+    "missing_jumptable_exception_and_partial_mutation": {
+      "status": "MATCH",
+      "covers": "funcdata_op.cc:817-827 exact error text; one raw op and the first linked table remain cloned, blocks stay absent, and the second linked table fails exact SeqNum lookup.",
+      "residual_todo_ids": []
+    },
+    "clone_varnode_type_and_complete_flag_mask": {
+      "status": "UNTESTED",
+      "covers": "The success projection locks Stack/Register address spaces and offsets, plus FSPEC annotation lifecycle, but does not independently enumerate shared Datatype identity and every retained/rejected flag in funcdata_varnode.cc:252-267.",
+      "residual_todo_ids": ["FLOW-TRUNCATED-0001"]
+    },
+    "flowinfo_private_state_and_branch_stubs": {
+      "status": "UNTESTED",
+      "covers": "The constructor copies range/max/flags through the production adapter, but unprocessed/addrlist/visited-driven artificial halts, nonempty inline recursion, target override recomputation and unreachable pruning are not all behaviorally projected.",
+      "residual_todo_ids": ["FLOW-TRUNCATED-0001"]
+    },
+    "truncated_injection_branch": {
+      "status": "UNTESTED",
+      "covers": "The clone constructor intentionally starts with an empty injectlist under the controlled source. The hasInject/injectPcode branch and injected callspec bookkeeping need an independent production-triggered case.",
+      "residual_todo_ids": ["INJECT-0001"]
+    },
+    "splitbasic_missing_entry_error": {
+      "status": "MATCH",
+      "covers": "flow.cc:990-996 exact LowlevelError text. Both sides retain the already-cloned raw RETURN as dead with order 0, no parent, STARTMARK set and STARTBASIC clear; all op/varnode/callspec/jump-table/block counts, uniqId and BLOCKS_GENERATED are observed before and after, proving no block lifecycle mutation occurs.",
+      "residual_todo_ids": []
+    },
+    "insert_after_dead_invalid_state": {
+      "status": "MISMATCH",
+      "covers": "The successful earlier-op move is MATCH, including Vec index adjustment. Ghidra throws for a non-dead operand; Rugra currently warns and returns.",
+      "residual_todo_ids": ["OP-INSERT-0001"]
+    }
+  },
+  "residual_todo_ids": [
+    "CALLSPEC-0001",
+    "FLOW-TRUNCATED-0001",
+    "INJECT-0001",
+    "OP-INSERT-0001"
+  ],
+  "out_of_scope_observations": [
+    {
+      "id": "STRUCTURAL-JUMPTABLE-PROBE",
+      "note": "The linked table deliberately points at the COPY op to isolate structural copy/rebinding without collectEdges target resolution. Normal production tables point at BRANCHIND; BRANCHIND edge recovery needs separately seeded visited target mappings."
+    },
+    {
+      "id": "FLOW-STATE-OBSERVABILITY",
+      "note": "FlowInfo private containers are captured only through the production truncated_state adapter; this fixture does not add public setters solely for testing, so state-driven branches remain UNTESTED."
+    }
+  ]
+}

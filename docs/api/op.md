@@ -1051,3 +1051,12 @@ PcodeOpRaw
 - `Funcdata::calc_nz_mask` 两个调用点（phase-1 cc:874 / phase-2 cc:919）改调
   `PcodeOp::get_nz_mask_local`，funcdata.rs 暂存副本删除。行为由
   `tests/oracle/funcdata_calcnzm_1204`（6/6 MATCH）门禁。
+## 2026-08-23：dead-list 移动的 Vec 索引语义
+
+`PcodeOpBank::insert_after_dead(op, prev)` 对应 `op.cc:1039-1048`。Ghidra 的
+`std::list` 在删除位于 `prev` 之前的 `op` 后，`prev->insertiter` 仍指向同一节点；
+Rust 的 `Vec` 删除会把后方索引左移。因此实现现在先解析两个节点身份，删除
+`op`，若 `op_idx < prev_idx` 则把目标索引减一，再插到 `prev` 后。真实
+`truncated_flow_1204` fixture 用同地址 times `[0,1,2]` 锁住
+`insertAfterDead(time0,time1)` 的结果必须为 `[1,0,2]`，并继续证明该顺序被
+partial clone 与 `splitBasic` 保留；旧结果 `[1,2,0]` 是 Vec 适配缺陷。

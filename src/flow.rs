@@ -78,8 +78,8 @@ trait FuncCallSpecsExt {
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::getInjectId directly and has no flow-local interface.
     fn get_inject_id(&self) -> i32;
     /// Flow-local adapter for `FuncCallSpecs::getOp` (fspec.hh): the call op backing
-    /// this spec. Rugra stores `op_addr` and resolves the op against the
-    /// alive list (mirrors `FuncCallSpecs::find_call_op`).
+    /// this spec. Rugra stores `op_addr` and resolves the op against the raw
+    /// dead list during flow, with an alive-list fallback after block creation.
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration for resolving a call op from Rugra's stored address instead of Ghidra's direct PcodeOp pointer.
     fn get_op(&self, fd: &Funcdata) -> Option<crate::op::PcodeOpRef>;
     /// Flow-local adapter for `FuncCallSpecs::getName` (fspec.hh): the callee name.
@@ -129,7 +129,17 @@ impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
     }
     // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter resolves Rugra's stored op address because Ghidra FuncCallSpecs keeps a direct PcodeOp pointer.
     fn get_op(&self, fd: &Funcdata) -> Option<crate::op::PcodeOpRef> {
-        self.find_call_op(fd)
+        let is_matching_call = |op_ref: &&crate::op::PcodeOpRef| {
+            let op = op_ref.0.read().unwrap();
+            matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
+                && op.get_addr() == self.op_addr
+        };
+        fd.obank
+            .deadlist
+            .iter()
+            .find(is_matching_call)
+            .cloned()
+            .or_else(|| self.find_call_op(fd))
     }
     // RUGRA-GLUE: ANN-B; Rust adapter reads the nested FuncProto field because Rugra FuncCallSpecs does not inherit Ghidra's name accessor.
     fn get_name(&self) -> &str {
@@ -256,18 +266,42 @@ pub struct FlowInfoSnapshot {
     pub maxaddr: Address,
 }
 
+/// Borrow-safe copy of the configuration and address-tracking state consumed
+/// by Ghidra's `FlowInfo` cloning constructor.  The original C++ object keeps
+/// references to its source `Funcdata`; Rust must release that mutable borrow
+/// before a partial `Funcdata` can borrow the source for `truncated_flow`.
+/// Operation, call-spec, and jump-table ownership is deliberately absent: the
+/// mapped `Funcdata::truncated_flow` routine clones and rebinds those objects.
+#[derive(Clone, Debug)]
+pub struct TruncatedFlowState {
+    pub(crate) unprocessed: Vec<Address>,
+    pub(crate) addrlist: Vec<Address>,
+    pub(crate) visited: std::collections::BTreeMap<u64, VisitStat>,
+    pub(crate) insn_count: u64,
+    pub(crate) insn_max: u64,
+    pub(crate) baddr: u64,
+    pub(crate) eaddr: u64,
+    pub(crate) flags: u32,
+    pub(crate) inline_head: Option<u64>,
+    pub(crate) inline_base: std::collections::BTreeSet<u64>,
+}
+
 /// Reachability-based flow tracker corresponding to `FlowInfo`
 /// (flow.hh:58-169). This type is still `MISMATCH`, not a complete port.
 ///
 /// Phase 1 (`generate_ops`): Decode instructions following control flow
 /// from the entry point, building a work-list of reachable addresses.
-/// Phase 2 (`generate_blocks`): Reuse Rugra's `build_blocks_from_ops`.
+/// Phase 2 (`generate_blocks`): collect raw edges, move dead-list ops into
+/// basic blocks one at a time, connect edges, and prune unreachable blocks.
 ///
-/// **Not yet ported**: jump-table inline expansion (tablelist/recoverJumpTables),
-/// truncatedFlow/partial clone, inlineFlow/subfunction inlining, P-code injection.
+/// The partial-flow cloning path is present, but its copied private state and
+/// exceptional branches are not yet exhaustively covered. Remaining gaps
+/// include complete jump-table expansion and inlineFlow/subfunction inlining.
 pub struct FlowInfo<'a> {
     fd: &'a mut Funcdata,
-    lifter: &'a mut SleighLifter,
+    /// The SLEIGH translator is required while generating new instructions,
+    /// but not by the cloning constructor used for a truncated flow.
+    lifter: Option<&'a mut SleighLifter>,
     /// Work-list of addresses to process (LIFO stack). flow.hh:82 addrlist.
     addrlist: Vec<Address>,
     /// Addresses which are permanently unprocessed (flow.hh:87 unprocessed).
@@ -326,7 +360,7 @@ impl<'a> FlowInfo<'a> {
     pub fn new(fd: &'a mut Funcdata, lifter: &'a mut SleighLifter, baddr: u64, eaddr: u64) -> Self {
         Self {
             fd,
-            lifter,
+            lifter: Some(lifter),
             addrlist: Vec::new(),
             unprocessed: Vec::new(),
             block_edges: Vec::new(),
@@ -345,6 +379,72 @@ impl<'a> FlowInfo<'a> {
             inline_base: std::collections::BTreeSet::new(),
             flowoverride_present: false,
         }
+    }
+
+    // Ghidra: flow.cc:52 FlowInfo::FlowInfo(Funcdata &,PcodeOpBank &,BlockGraph &,vector<FuncCallSpecs *> &,const FlowInfo *)
+    /// Construct the flow controller for a partial clone.  Configuration and
+    /// address-tracking containers are copied in their original order; the
+    /// target function owns the already-cloned p-code/call/jump-table banks.
+    fn from_truncated_state(fd: &'a mut Funcdata, state: &TruncatedFlowState) -> Self {
+        let inline_base = if state.inline_head.is_some() {
+            state.inline_base.clone()
+        } else {
+            std::collections::BTreeSet::new()
+        };
+        let inline_recursion = inline_base.clone();
+        let base = fd.baseaddr.as_u64();
+        let flowoverride_present = fd.localoverride.has_flow_override();
+        Self {
+            fd,
+            lifter: None,
+            addrlist: state.addrlist.clone(),
+            unprocessed: state.unprocessed.clone(),
+            block_edges: Vec::new(),
+            visited: state.visited.clone(),
+            tablelist: Vec::new(),
+            injectlist: Vec::new(),
+            insn_max: state.insn_max,
+            insn_count: state.insn_count,
+            baddr: state.baddr,
+            eaddr: state.eaddr,
+            minaddr: base,
+            maxaddr: base,
+            flags: state.flags,
+            inline_head: state.inline_head,
+            inline_recursion,
+            inline_base,
+            flowoverride_present,
+        }
+    }
+
+    // RUGRA-GLUE: releases FlowInfo's mutable source Funcdata borrow before Funcdata::truncated_flow borrows that source immutably.
+    /// Copy precisely the state read by Ghidra's FlowInfo cloning constructor.
+    pub fn truncated_state(&self) -> TruncatedFlowState {
+        TruncatedFlowState {
+            unprocessed: self.unprocessed.clone(),
+            addrlist: self.addrlist.clone(),
+            visited: self.visited.clone(),
+            insn_count: self.insn_count,
+            insn_max: self.insn_max,
+            baddr: self.baddr,
+            eaddr: self.eaddr,
+            flags: self.flags,
+            inline_head: self.inline_head,
+            inline_base: self.inline_base.clone(),
+        }
+    }
+
+    // RUGRA-GLUE: Rust borrow-boundary helper for funcdata_op.cc:830-837; C++ constructs the stack FlowInfo directly inside Funcdata::truncatedFlow.
+    pub(crate) fn finish_truncated_flow(
+        fd: &'a mut Funcdata,
+        state: &TruncatedFlowState,
+    ) -> crate::error::Result<()> {
+        let mut partial_flow = Self::from_truncated_state(fd, state);
+        if partial_flow.has_inject() {
+            partial_flow.inject_pcode();
+        }
+        partial_flow.clear_flags(!flow_flags::POSSIBLE_UNREACHABLE);
+        partial_flow.generate_blocks()
     }
 
     /// Set the maximum instruction limit. Faithful to `setMaximumInstructions`.
@@ -569,14 +669,13 @@ impl<'a> FlowInfo<'a> {
     /// (flow.cc:240-248): Ghidra walks the raw dead list from `oiter` to
     /// `endDead()` calling `opDestroyRaw`, which destroys the op's
     /// input/output Varnodes and retires the op from the bank
-    /// (funcdata_op.cc:253-261). Rugra's alive list plays the role of the
-    /// dead list during flow (ops are appended in creation order), so
-    /// `start_idx` is the alive-list index of the first op to delete.
+    /// (funcdata_op.cc:253-261). `start_idx` is the dead-list index of the
+    /// first raw op to delete.
     // Ghidra: flow.cc:240 FlowInfo::deleteRemainingOps
     fn delete_remaining_ops_from(&mut self, start_idx: usize) {
         // Snapshot the tail so we can drain without upsetting the borrow
         // checker (op_destroy_raw mutates the list).
-        let to_remove: Vec<crate::op::PcodeOpRef> = self.fd.obank.alivelist[start_idx..].to_vec();
+        let to_remove: Vec<crate::op::PcodeOpRef> = self.fd.obank.deadlist[start_idx..].to_vec();
         for op in &to_remove {
             self.fd.op_destroy_raw(op);
         }
@@ -587,7 +686,7 @@ impl<'a> FlowInfo<'a> {
     /// flow contains no CALL or BRANCH ops.
     // Ghidra: flow.cc:1157 FlowInfo::checkEZModel
     pub fn check_ez_model(&self) -> bool {
-        for op_ref in &self.fd.obank.alivelist {
+        for op_ref in &self.fd.obank.deadlist {
             let op = op_ref.0.read().unwrap();
             match op.opcode {
                 OpCode::CPUI_BRANCH
@@ -852,9 +951,8 @@ impl<'a> FlowInfo<'a> {
         for addr in &stubs {
             let op = self.artificial_halt(*addr, pcodeop_flags::MISSING);
             // Ghidra: data.opMarkStartBasic(op); data.opMarkStartInstruction(op);
-            // RUGRA-GLUE: Rugra applies STARTBASIC/STARTMARK during
-            // build_blocks_from_alive; the halt op is already in the alive
-            // list via new_op. We set the flags directly to match Ghidra.
+            // Ghidra leaves the artificial halt raw/dead here and applies both
+            // marks before splitBasic integrates it into a block.
             {
                 let mut o = op.0.write().unwrap();
                 o.flags |= pcodeop_flags::STARTBASIC;
@@ -879,15 +977,13 @@ impl<'a> FlowInfo<'a> {
     // Ghidra: flow.cc:906 FlowInfo::collectEdges
     pub fn collect_edges(&mut self) -> Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> {
         let mut edges: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = Vec::new();
-        let alive: Vec<crate::op::PcodeOpRef> = self.fd.obank.alivelist.clone();
+        let dead: Vec<crate::op::PcodeOpRef> = self.fd.obank.deadlist.clone();
 
-        for (idx, op_ref) in alive.iter().enumerate() {
+        for (idx, op_ref) in dead.iter().enumerate() {
             let code = op_ref.0.read().unwrap().opcode;
             // flow.cc:922-925: the boundary flag comes from the next op.
-            let nextstart = match alive.get(idx + 1) {
-                Some(next) => {
-                    (next.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0
-                }
+            let nextstart = match dead.get(idx + 1) {
+                Some(next) => (next.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0,
                 None => true, // end of list acts like a block boundary
             };
             match code {
@@ -1362,7 +1458,7 @@ impl<'a> FlowInfo<'a> {
         // flow.cc:1089-1090: if a cloned op is call/branch, xref it.
         // With no clone available there are no new ops to xref; the loop is
         // structural and stays a no-op until clone_op lands.
-        for op_ref in &inlineflow.fd.obank.alivelist {
+        for op_ref in &inlineflow.fd.obank.deadlist {
             let is_call_or_branch = {
                 let o = op_ref.0.read().unwrap();
                 (o.flags & (pcodeop_flags::CALL | pcodeop_flags::BRANCH)) != 0
@@ -1521,10 +1617,9 @@ impl<'a> FlowInfo<'a> {
         op: &crate::op::PcodeOpRef,
         inject_fc_idx: Option<usize>,
     ) {
-        // flow.cc:1180-1183: remember the dead-list position before inject.
-        // Rugra's flow-time "dead list" is the alive list in creation order;
-        // the marker is the index of the first op the injection appends.
-        let first_index = self.fd.obank.alivelist.len();
+        // flow.cc:1180-1183: remember the dead-list position before inject;
+        // this becomes the index of the first op appended by the payload.
+        let first_index = self.fd.obank.deadlist.len();
         // flow.cc:1185: payload->inject(icontext, emitter) — empty
         // injections throw LowlevelError("Empty injection: " + name)
         // (flow.cc:1188-1189); Rugra reports and bails like the rest of the
@@ -1538,11 +1633,11 @@ impl<'a> FlowInfo<'a> {
         };
         self.fd
             .inject_raw_ops_single(&raw_ops, Address::new(icontext.base_addr));
-        if first_index >= self.fd.obank.alivelist.len() {
+        if first_index >= self.fd.obank.deadlist.len() {
             eprintln!("[FLOW] {}: Empty injection: {}", self.fd.name, payload.name);
             return;
         }
-        let firstop = self.fd.obank.alivelist[first_index].clone();
+        let firstop = self.fd.obank.deadlist[first_index].clone();
 
         // flow.cc:1186: startbasic = op->isBlockStart().
         let mut startbasic = (op.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0;
@@ -2044,29 +2139,22 @@ impl<'a> FlowInfo<'a> {
     }
 
     /// The op following `op` in the dead list (Ghidra: `++op->getInsertIter()`
-    /// against `obank.endDead()`, flow.cc:1390-1392). Rugra's alive list
-    /// holds the flow-time ops in creation order — the same ordering Ghidra's
-    /// dead list has during `generateOps` (SeqNum order).
-    // RUGRA-GLUE: dead-list walk over Rugra's alive list because PcodeOpBank
-    // has no separate dead-list iterators.
+    /// against `obank.endDead()`, flow.cc:1390-1392).
+    // RUGRA-GLUE: Vec index adapter for Ghidra's stored dead-list iterator.
     fn dead_list_next(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
         let position = self
             .fd
             .obank
-            .alivelist
+            .deadlist
             .iter()
             .position(|o| std::sync::Arc::ptr_eq(&o.0, &op.0))?;
-        self.fd.obank.alivelist.get(position + 1).cloned()
+        self.fd.obank.deadlist.get(position + 1).cloned()
     }
 
     /// Move the injected op sequence [firstop, lastop] to immediately after
     /// `prev`. Faithful to `PcodeOpBank::moveSequenceDead` (op.cc:1043-1070)
-    /// over the flow-time op container: Rugra's flow-phase dead list is the
-    /// alive list (ops enter it in creation order, exactly like Ghidra's
-    /// dead list during generateOps), while the op.rs ports operate on the
-    /// action-phase `deadlist` — empty during flow.
-    // RUGRA-GLUE: alive-list mirror of op.rs move_sequence_dead because the
-    // flow-time container differs (see PcodeOpBank::create note, op.rs).
+    /// over the flow-time dead-list container.
+    // RUGRA-GLUE: pointer-to-index adapter for PcodeOpBank's Vec dead list.
     fn move_sequence_flow(
         &mut self,
         firstop: &crate::op::PcodeOpRef,
@@ -2077,7 +2165,7 @@ impl<'a> FlowInfo<'a> {
         let first_ptr = ptr_of(firstop);
         let last_ptr = ptr_of(lastop);
         let prev_ptr = ptr_of(prev);
-        let list = &mut self.fd.obank.alivelist;
+        let list = &mut self.fd.obank.deadlist;
         let (Some(first_idx), Some(last_idx), Some(prev_idx)) = (
             list.iter().position(|r| std::sync::Arc::as_ptr(&r.0) == first_ptr),
             list.iter().position(|r| std::sync::Arc::as_ptr(&r.0) == last_ptr),
@@ -2099,9 +2187,9 @@ impl<'a> FlowInfo<'a> {
     }
 
     /// Mark COPY ops in the injected range as incidental. Faithful to
-    /// `PcodeOpBank::markIncidentalCopy` (op.cc:1071-1083) over the
-    /// flow-time op container (see `move_sequence_flow`).
-    // RUGRA-GLUE: alive-list mirror of op.rs mark_incidental_copy.
+    /// `PcodeOpBank::markIncidentalCopy` (op.cc:1071-1083) over the raw
+    /// dead-list container (see `move_sequence_flow`).
+    // RUGRA-GLUE: pointer-range adapter for PcodeOpBank's Vec dead list.
     fn mark_incidental_copy_flow(
         &mut self,
         firstop: &crate::op::PcodeOpRef,
@@ -2111,7 +2199,7 @@ impl<'a> FlowInfo<'a> {
         let first_ptr = ptr_of(firstop);
         let last_ptr = ptr_of(lastop);
         let mut in_range = false;
-        for op_ref in &self.fd.obank.alivelist {
+        for op_ref in &self.fd.obank.deadlist {
             let ptr = std::sync::Arc::as_ptr(&op_ref.0);
             if ptr == first_ptr {
                 in_range = true;
@@ -2137,13 +2225,13 @@ impl<'a> FlowInfo<'a> {
     ///      (`upper_bound` then one predecessor step, rejecting an
     ///      instruction that does not cover the op's address) and the
     ///      fallthru is the first op of the NEXT instruction via `target`.
-    // RUGRA-GLUE: Ghidra walks the dead-list insert iterator; Rugra's ops
-    // live in the alive list during flow, in the same creation order.
+    // RUGRA-GLUE: Ghidra walks a stored list iterator; Rugra resolves the
+    // equivalent position in its Vec-backed dead list.
     fn fallthru_op(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
-        let alive = &self.fd.obank.alivelist;
-        let pos = alive.iter().position(|r| Arc::ptr_eq(&r.0, &op.0))?;
+        let dead = &self.fd.obank.deadlist;
+        let pos = dead.iter().position(|r| Arc::ptr_eq(&r.0, &op.0))?;
         // flow.cc:93-98: next in sequence within the same instruction.
-        if let Some(next) = alive.get(pos + 1) {
+        if let Some(next) = dead.get(pos + 1) {
             if (next.0.read().unwrap().flags & pcodeop_flags::STARTMARK) == 0 {
                 return Some(next.clone());
             }
@@ -2171,22 +2259,20 @@ impl<'a> FlowInfo<'a> {
     /// `order = ordafter/2 + ordbefore/2`, keeping both the values and the
     /// integer-division semantics Ghidra uses ("Beware overflow").
     // Ghidra: flow.cc:983 FlowInfo::splitBasic
-    pub fn split_basic(&mut self) {
-        let alive: Vec<crate::op::PcodeOpRef> = self.fd.obank.alivelist.clone();
-        if alive.is_empty() {
-            return;
+    pub fn split_basic(&mut self) -> crate::error::Result<()> {
+        let dead: Vec<crate::op::PcodeOpRef> = self.fd.obank.deadlist.clone();
+        if dead.is_empty() {
+            return Ok(());
         }
         // flow.cc:993-995: first op must be marked as entry point.
-        if (alive[0].0.read().unwrap().flags & pcodeop_flags::STARTBASIC) == 0 {
-            // Ghidra throws LowlevelError("First op not marked as entry point").
-            eprintln!(
-                "[FLOW] {}: warning: first op not marked as entry point",
-                self.fd.name
-            );
+        if (dead[0].0.read().unwrap().flags & pcodeop_flags::STARTBASIC) == 0 {
+            return Err(crate::error::Error::Lowlevel(
+                "First op not marked as entry point".to_string(),
+            ));
         }
         // flow.cc:996-998: create the first block and register the official
         // entry point before later blocks are built.
-        let mut start = alive[0].0.read().unwrap().get_addr().as_u64();
+        let mut start = dead[0].0.read().unwrap().get_addr().as_u64();
         let mut stop = start;
         let mut current: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
             BlockBasic::new(self.fd.bblocks.get_size() as i32, Address::new(start)),
@@ -2195,7 +2281,7 @@ impl<'a> FlowInfo<'a> {
         Self::set_start_block(&mut self.fd.bblocks, current.clone());
         let mut prev_order: Option<u32> = None;
 
-        for (position, op_ref) in alive.iter().enumerate() {
+        for (position, op_ref) in dead.iter().enumerate() {
             let op_flags = op_ref.0.read().unwrap().flags;
             // flow.cc:1001-1013: every later block-start op closes the
             // previous block's range and opens a new block; any other op
@@ -2220,12 +2306,14 @@ impl<'a> FlowInfo<'a> {
                     stop = next_addr;
                 }
             }
-            // flow.cc:1014: data.opInsert(op,cur,cur->endOp()) — append at
-            // the block end (parent link + BlockBasic::insert order).
+            // funcdata_op.cc:157-158: data.opInsert first moves this one op
+            // from dead to alive, then BlockBasic::insert sets parent/order.
+            self.fd.obank.mark_alive(op_ref.clone());
             Self::block_insert_at_end(&current, op_ref, &mut prev_order);
         }
         // flow.cc:1016: close the final block's range.
         Self::set_block_range(&current, start, stop);
+        Ok(())
     }
 
     /// `Funcdata::setBasicBlockRange(cur,start,stop)` (funcdata.hh:556,
@@ -2279,18 +2367,6 @@ impl<'a> FlowInfo<'a> {
     /// the block graph to add an edge between the parent blocks of each op.
     // Ghidra: flow.cc:1021 FlowInfo::connectBasic
     pub fn connect_basic(&mut self) {
-        // build_blocks_from_alive currently derives provisional edges while
-        // assigning parents. Ghidra does not: connectBasic is the sole edge
-        // writer. Clear those provisional edges before replaying the exact
-        // block_edge1/block_edge2 sequence collected before splitting.
-        let blocks = self.fd.bblocks.blocks.clone();
-        for block in &blocks {
-            let mut block = block.write().unwrap();
-            if let Some(basic) = block.as_any_mut().downcast_mut::<BlockBasic>() {
-                basic.clear_edges();
-            }
-        }
-
         for (source_op, target_op) in self.block_edges.clone() {
             let source = source_op
                 .0
@@ -2352,10 +2428,31 @@ impl<'a> FlowInfo<'a> {
     /// block has no incoming edges, and finally drop unreachable blocks if
     /// the flow flagged possible_unreachable.
     // Ghidra: flow.cc:824 FlowInfo::generateBlocks
-    pub fn generate_blocks(&mut self) {
+    pub fn generate_blocks(&mut self) -> crate::error::Result<()> {
+        // splitBasic cannot discover a valid entry after fillinBranchStubs
+        // unless findUnprocessed is going to mark this exact first op.  Check
+        // that post-fillin invariant without mutating addrlist, block_edges,
+        // the op lifecycle, or the block graph so the LowlevelError is
+        // transactional with respect to block generation.
+        if let Some(first) = self.fd.obank.deadlist.first() {
+            let starts_basic =
+                (first.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0;
+            let pending_mark = !starts_basic
+                && self.addrlist.iter().any(|addr| {
+                    self.seen_instruction(*addr)
+                        && self
+                            .target(*addr)
+                            .is_some_and(|target| Arc::ptr_eq(&target.0, &first.0))
+                });
+            if !starts_basic && !pending_mark {
+                return Err(crate::error::Error::Lowlevel(
+                    "First op not marked as entry point".to_string(),
+                ));
+            }
+        }
         self.fillin_branch_stubs();
         self.collect_edges();
-        self.split_basic();
+        self.split_basic()?;
         self.connect_basic();
         // flow.cc:831-840: a loop back into the official entry would make it
         // a multi-entry node for dominance. Prepend an empty block, connect
@@ -2373,6 +2470,7 @@ impl<'a> FlowInfo<'a> {
             // data.removeUnreachableBlocks(false,true) (flow.cc:844).
             self.fd.remove_unreachable_blocks();
         }
+        Ok(())
     }
 
     /// Generate P-code ops by following control flow from the entry point.
@@ -2406,7 +2504,7 @@ impl<'a> FlowInfo<'a> {
         // while(!tablelist.empty()) — the do-while body runs at least once,
         // so checkContainedCall executes even with no indirect jumps.
         loop {
-            // Collect all BRANCHIND ops currently alive.
+            // Collect all BRANCHIND ops still in the raw dead list.
             let branchinds: Vec<crate::op::PcodeOpRef> = self.collect_branchinds();
             if !branchinds.is_empty() {
                 // Recover jump tables for each BRANCHIND.
@@ -2590,12 +2688,12 @@ impl<'a> FlowInfo<'a> {
         }
     }
 
-    // RUGRA-GLUE: 收集 alive BRANCHIND ops（Ghidra 内联在 generateOps 的 tablelist 循环中）。
-    /// Collect all alive BRANCHIND ops (for tablelist processing).
+    // RUGRA-GLUE: 收集 raw/dead BRANCHIND ops（Ghidra 内联在 generateOps 的 tablelist 循环中）。
+    /// Collect all raw BRANCHIND ops (for tablelist processing).
     fn collect_branchinds(&self) -> Vec<crate::op::PcodeOpRef> {
         self.fd
             .obank
-            .alivelist
+            .deadlist
             .iter()
             .filter(|r| r.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_BRANCHIND)
             .map(|r| crate::op::PcodeOpRef(r.0.clone()))
@@ -2738,7 +2836,7 @@ impl<'a> FlowInfo<'a> {
         // error_toomanyinstructions is set; otherwise it truncates the flow
         // with an artificial halt and CONTINUES processing that halt op.
         if self.insn_count >= self.insn_max {
-            let num_ops_before = self.fd.obank.alivelist.len();
+            let num_ops_before = self.fd.obank.deadlist.len();
             let step = 1usize;
             self.artificial_halt(addr, pcodeop_flags::BADINSTRUCTION);
             self.fd
@@ -2757,9 +2855,14 @@ impl<'a> FlowInfo<'a> {
         // flow.cc:421: step = glb->translate->oneInstruction(emitter,curaddr).
         // The emitter appends the ops directly; errors map to artificial
         // halts with the unimplemented/bad-data flags (flow.cc:423-457).
-        let num_ops_before = self.fd.obank.alivelist.len();
+        let num_ops_before = self.fd.obank.deadlist.len();
         let step: usize;
-        match self.lifter.lift_instruction(addr.as_u64()) {
+        let lift_result = self
+            .lifter
+            .as_deref_mut()
+            .expect("FlowInfo cloning constructor cannot generate instructions")
+            .lift_instruction(addr.as_u64());
+        match lift_result {
             Ok((instruction_length, raw_ops)) => {
                 step = instruction_length;
                 if !raw_ops.is_empty() {
@@ -2838,7 +2941,7 @@ impl<'a> FlowInfo<'a> {
         // flow.cc:466-477: point at the first new op, record its SeqNum,
         // mark it as the instruction start, and xref the new ops.
         let mut isfallthru = true;
-        if let Some(first_op) = self.fd.obank.alivelist.get(num_ops_before) {
+        if let Some(first_op) = self.fd.obank.deadlist.get(num_ops_before) {
             let first_seq = first_op.0.read().unwrap().start;
             if let Some(stat) = self.visited.get_mut(&addr.as_u64()) {
                 stat.first_seq = Some(first_seq);
@@ -2891,8 +2994,8 @@ impl<'a> FlowInfo<'a> {
         let mut last_opcode: Option<OpCode> = None;
         let mut lastop: Option<crate::op::PcodeOpRef> = None;
 
-        while index < self.fd.obank.alivelist.len() {
-            let op_ref = self.fd.obank.alivelist[index].clone();
+        while index < self.fd.obank.deadlist.len() {
+            let op_ref = self.fd.obank.deadlist[index].clone();
             index += 1;
             let opcode = op_ref.0.read().unwrap().opcode;
             last_opcode = Some(opcode);
@@ -2915,7 +3018,7 @@ impl<'a> FlowInfo<'a> {
                     // relative target makes the rest of the instruction dead.
                     if op_ref.0.read().unwrap().get_time() >= maxtime {
                         self.delete_remaining_ops_from(index);
-                        index = self.fd.obank.alivelist.len();
+                        index = self.fd.obank.deadlist.len();
                     }
                     // flow.cc:318: the op after an unconditional branch starts
                     // a basic block.
@@ -2927,7 +3030,7 @@ impl<'a> FlowInfo<'a> {
                     self.tablelist.push(op_ref.clone());
                     if op_ref.0.read().unwrap().get_time() >= maxtime {
                         self.delete_remaining_ops_from(index);
-                        index = self.fd.obank.alivelist.len();
+                        index = self.fd.obank.deadlist.len();
                     }
                     *start_basic = true;
                 }
@@ -2935,7 +3038,7 @@ impl<'a> FlowInfo<'a> {
                     // flow.cc:329-334.
                     if op_ref.0.read().unwrap().get_time() >= maxtime {
                         self.delete_remaining_ops_from(index);
-                        index = self.fd.obank.alivelist.len();
+                        index = self.fd.obank.deadlist.len();
                     }
                     *start_basic = true;
                 }
@@ -3060,13 +3163,18 @@ impl<'a> FlowInfo<'a> {
 /// Replaces the three-stage linear scan (disassemble → lift → inject_raw_ops)
 /// with reachability-driven flow tracking.
 // Ghidra: funcdata_op.cc:756 Funcdata::followFlow
-pub fn follow_flow(fd: &mut Funcdata, lifter: &mut SleighLifter, entry: Address, eaddr: u64) {
+pub fn follow_flow(
+    fd: &mut Funcdata,
+    lifter: &mut SleighLifter,
+    entry: Address,
+    eaddr: u64,
+) -> crate::error::Result<()> {
     let baddr = entry.as_u64();
     let mut flow = FlowInfo::new(fd, lifter, baddr, eaddr);
     flow.generate_ops(entry);
     // funcdata_op.cc:776: generateBlocks is responsible for the official
     // entry identity/flag, ordered edge replay, and synthetic entry creation.
-    flow.generate_blocks();
+    flow.generate_blocks()
 }
 
 // ===================== Injection helpers (RUGRA-GLUE) =====================
@@ -3142,11 +3250,9 @@ mod tests {
     /// Build a CALLOTHER op (index 0, one 4-byte constant operand, output in
     /// the register space) at the given address, mirroring what SLEIGH
     /// emits for a user-defined p-code op.
-    fn build_callother_op(
-        fd: &mut Funcdata,
-        addr: Address,
-    ) -> crate::op::PcodeOpRef {
-        let op = fd.obank.create(OpCode::CPUI_CALLOTHER, 2, addr);
+    fn build_callother_op(fd: &mut Funcdata, addr: Address) -> crate::op::PcodeOpRef {
+        let op = fd.new_op(2, addr);
+        fd.op_set_opcode(&op, OpCode::CPUI_CALLOTHER);
         let id_vn = fd.vbank.create_constant(4, 0);
         fd.op_set_input(&op, id_vn, 0);
         let operand_vn = fd.vbank.create_constant(4, 0x20);
@@ -3171,7 +3277,7 @@ mod tests {
         let mut start_basic = true;
         let index = {
             // The CALLOTHER is the only op; xref from its own position.
-            flow.fd.obank.alivelist.len() - 1
+            flow.fd.obank.deadlist.len() - 1
         };
         flow.xref_control_flow(index, &mut start_basic);
         assert_eq!(
@@ -3193,7 +3299,7 @@ mod tests {
         let mut flow2 = FlowInfo::new(&mut fd2, &mut lifter2, 0x1000, 0x2000);
         let _op2 = build_callother_op(flow2.fd, Address::new(0x1000));
         let mut sb2 = true;
-        let idx2 = flow2.fd.obank.alivelist.len() - 1;
+        let idx2 = flow2.fd.obank.deadlist.len() - 1;
         flow2.xref_control_flow(idx2, &mut sb2);
         assert!(
             !flow2.has_inject(),
@@ -3231,7 +3337,7 @@ mod tests {
         let opcodes: Vec<(OpCode, u64, u32)> = flow
             .fd
             .obank
-            .alivelist
+            .deadlist
             .iter()
             .map(|r| {
                 let o = r.0.read().expect("op read lock");
@@ -3255,7 +3361,7 @@ mod tests {
         // preceded them, then the CALLOTHER was destroyed).
         assert_eq!(add_index, 0);
         // InjectContext substitution: INT_ADD input(1) is the 0x10 constant.
-        let add_op = flow.fd.obank.alivelist[0].clone();
+        let add_op = flow.fd.obank.deadlist[0].clone();
         {
             let o = add_op.0.read().expect("op read lock");
             assert_eq!(o.inrefs.len(), 2);

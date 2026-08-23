@@ -416,3 +416,32 @@ CALLFIXUP 触发不可达）与 `INJECT-0001`（inlineFlow 克隆）登记于
 `flow_inject_1204.metadata.json`。发现并登记：containedcall runner 的
 spec pin `34a3febf…` 在本仓库不可解析（本 fixture 改 pin 已核实的
 identical-asset commit `87aaef2`）。
+## 2026-08-23：`FLOW-TRUNCATED-0001` FlowInfo 克隆与 raw-op 生命周期
+
+新增 `TruncatedFlowState`，作为 Rust 借用边界上的值快照；它保存锁定
+`FlowInfo` clone constructor（`flow.cc:52-76`）实际读取的
+`unprocessed`、`addrlist`、`visited`、instruction 计数/上限、range、flags、
+inline head/base。`FlowInfo::from_truncated_state` 保持这些容器原顺序，按目标
+Funcdata base 重置 min/max，重新查询目标 override 的 flow-override 状态；存在
+inline head 时，recursion 集合指向克隆后的 inline-base 内容。lifter 改为可选，
+因为 partial clone 只消费既有 raw p-code，不解码新机器指令。
+
+raw flow 现在在 block 生成前统一停留于 `PcodeOpBank::deadlist`。控制流交叉引用、
+edge 收集、injection 序列移动和 branchind 收集都读取该容器；
+`split_basic` 按 dead-list 顺序逐 op 调用 `mark_alive`，紧接着插入当前
+`BlockBasic` 并赋 block order。这一点对应 `flow.cc:983-1017` 中每次循环的
+`data.opInsert`，没有在 `generate_blocks` 入口批量激活的额外阶段。
+
+`split_basic` 与 `generate_blocks` 返回 `crate::error::Result<()>`。后者在
+`fillin_branch_stubs`、`collect_edges`、block 创建和 dead→alive 转换之前，以只读
+方式验证 `fillinBranchStubs` 结束时首 op 是否会带 `STARTBASIC`；不满足时传播精确
+`Lowlevel("First op not marked as entry point")`。直接调用 `split_basic` 也保留同一
+守卫。因此错误路径不会产生 block、parent/order、alive-list 或 edge 突变；公开
+`follow_flow` 同步返回并传播该 `Result`。
+
+`truncated_flow_1204` 已证明 clone 后 op/tree/list/block 的投影及首 op 缺少
+`STARTBASIC` 的异常文本/错误后生命周期状态与锁定 oracle 逐字节相同。异常仍保留
+Oracle 在进入 `generateBlocks` 前已经完成的 raw clone，但不会开始 block 生命周期，
+且目标不会误置 `BLOCKS_GENERATED`。clone constructor 的全部地址状态、inline
+recursion 与 injection 分支尚未逐分支驱动，仍标 `UNTESTED`；FlowInfo 模块保持
+L2，不沿用本文早期“Phase 完成”文字推断全模块对齐。

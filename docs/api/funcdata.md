@@ -1436,4 +1436,34 @@ Rugra 防御性视为 alive，生产不可达已注释）。
 - oracle 的 calcNZMask 唯一生产调用点是 `ActionNonzeroMask::apply`（coreaction.hh:300），注册于 universal mainloop 的 `ActionSpacebase` 之后、`ActionInferTypes` 之前（coreaction.cc:5506-5508）。`newUniqueOut` 等 funcdata_varnode.cc 构造函数 **不** 触发 calcNZMask。
 - Rugra 侧对应注册已存在：src/action.rs:1196（`add!(mainloop, "analysis", ActionNonzeroMask)`，"analysis" 在默认 decompile grouplist 内），无需新增接线。
 - 功能证据：新增单测 `test_nonzeromask_pipeline_wiring`（funcdata.rs）——`u1=EDI&0x3f0; u2=u1/3; STORE` 走完整 `decompile` root 后，INT_DIV 输出 nzm == 0x1ff（coveringmask(0x3f0)=0x3ff >> mostsigbit_set(3)=1），未接线时写 unique 保持构造初值 ~0 不可能得到该值。
+## 2026-08-23：`FLOW-TRUNCATED-0001` partial-flow clone
 
+`Funcdata::truncated_flow(source, flow_state)` 对应锁定 Ghidra 12.0.4
+`funcdata_op.cc:792-839`。目标必须没有任何既有 op；函数按 source
+`deadlist` 的链表顺序、原 `SeqNum` 克隆 raw p-code，再无条件把目标 bank 的
+`uniqId` 设成 source 的下一 ID。callspec 依 source qlst 顺序克隆，并用完全相同的
+call-op `SeqNum` 重绑；synthetic FSPEC 输入被新目标 callspec 注解替换，旧克隆
+Varnode 随即从 bank 删除。jump table 依 source vector 顺序处理：未链接项截断，
+已链接项要求能以 indirect-op `SeqNum` 找到克隆 op，随后按
+`jumptable.cc:2401-2425` 复制地址/model/normalization/partial/load 状态并重置
+block/label/default/consume/folded/original-model 等实例状态。最后由克隆
+`FlowInfo` 完成 injection（若有）与基本块生成，成功后才置
+`BLOCKS_GENERATED`。`finish_truncated_flow` 现在传播 `generate_blocks` 的
+`Result`；首 raw op 缺少 `STARTBASIC` 时，克隆前缀依 Oracle 保留，但 block、op
+parent/order、dead→alive、edge 等生命周期尚未开始，且该 flag 保持未设置。
+
+同轮修正 `clone_varnode`：`funcdata_varnode.cc:252-267` 的 `Address` 包含地址空间
+与 offset，且 `vbank.create(..., vn->getType())` 共享原 `Datatype` 指针；Rust 现在
+用 `create_with_space` 保留完整地址并复制 `v_type`，然后只保留 oracle 允许的十类
+flags。`inject_raw_ops_single` 也改为通过 `new_op` 生成 dead raw op，并在 output
+之后、inputs 之前执行 `op_set_opcode`，与 `PcodeEmitFd::dump` 的生命周期/创建
+顺序一致。
+
+真实双侧 fixture `truncated_flow_1204` 的当前投影为 `MATCH`：锁住 dead-list 与
+SeqNum tree 的不同顺序、`uniqId`、op flags/space/order、FSPEC 重绑及 stale
+Varnode 删除、jump-table clone/reset/identity/skip，以及 nonempty、missing-table
+与 missing-entry 三条异常（含 Oracle 抛出前允许的 raw clone/JT 前缀和错误后的完整
+op/varnode/callspec/jump-table/block/flag 状态）。全函数 B2 仍为 `MISMATCH`：Rust callspec 没有
+Ghidra 的直接 `PcodeOp *` 身份，缺少 effective-extrapop/paramshift/bad-jumptable
+字段；无 synthetic annotation 且同地址多 CALL 的输入会保守报错。注入分支及
+完整 FlowInfo 私有状态克隆仍为 `UNTESTED`，不得据此宣称 L3。

@@ -5402,10 +5402,11 @@ impl Funcdata {
                 Some(opc) => opc,
                 None => continue,
             };
-            let addr = raw.seq_num()
-                .map(|s| s.get_addr())
-                .unwrap_or(base_addr);
-            let op_ref = self.obank.create(opcode, raw.num_input(), addr);
+            let addr = raw.seq_num().map(|s| s.get_addr()).unwrap_or(base_addr);
+            // funcdata.cc:884/890: newOp allocates on PcodeOpBank's dead list.
+            // FlowInfo must continue to see raw p-code there until splitBasic
+            // integrates each op into its basic block.
+            let op_ref = self.new_op(raw.num_input(), addr);
             // PcodeEmitFd::dump: the output varnode is created between
             // newOp and opSetOpcode, before any input (funcdata.cc:884-890).
             if let Some(out_raw) = raw.output() {
@@ -5419,6 +5420,10 @@ impl Funcdata {
                 );
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
+            // funcdata.cc:891: opcode assignment follows output creation and
+            // precedes the input walk.  Besides opcode-derived flags this also
+            // maintains PcodeOpBank's opcode-specific lists for dead raw ops.
+            self.op_set_opcode(&op_ref, opcode);
             // PcodeEmitFd::dump: `if (op->isCodeRef())` — the CODEREF flag is
             // only set on BRANCH/CBRANCH/CALL opcodes (typeop.cc:586/605/663;
             // BRANCHIND/CALLIND deliberately lack it).
@@ -5459,7 +5464,6 @@ impl Funcdata {
                 in_vn.write().unwrap().add_descend(&op_ref.0);
                 op_ref.0.write().unwrap().inrefs.push(in_vn);
             }
-            self.obank.mark_alive(op_ref);
         }
     }
 
@@ -7391,12 +7395,11 @@ impl Funcdata {
     /// then the table's addresses are recovered. Returns a success/failure
     /// code.
     ///
-    /// RUGRA-GAP: the partial-clone simplification pipeline (`truncatedFlow`,
-    /// `glb->allacts` action dispatch, `recoverMultistage`) is not ported.
-    /// This implementation performs the parts that exist: flag set, indirect-op
-    /// link, partial/dead checks, return-address test, and
-    /// [`JumpTable::recover_addresses`]. Callers driving real recovery should
-    /// simplify `partial` beforehand.
+    /// `truncated_flow` now provides the partial clone, but this adapter does
+    /// not receive the source `FlowInfo` needed to invoke it. The
+    /// `glb->allacts` action dispatch and `recoverMultistage` legs also remain
+    /// gaps. Callers must construct and simplify `partial` before entering
+    /// this method.
     pub fn stage_jump_table(
         &mut self,
         partial: &mut Funcdata,
@@ -7407,9 +7410,8 @@ impl Funcdata {
             // Do full analysis on the table if we haven't before.
             partial.flags |= funcdata_flags::JUMPTABLERECOVERY_ON;
             // Ghidra: partial.truncatedFlow(this, flow); then runs the
-            // "jumptable" action group on the partial clone.
-            // RUGRA-GAP: truncatedFlow + action group not ported. Callers must
-            // simplify `partial` themselves before invoking this.
+            // "jumptable" action group on the partial clone. This adapter has
+            // no FlowInfo parameter, so its caller must perform both steps.
         }
 
         let op_seqnum = op.0.read().unwrap().get_seq_num().clone();
@@ -8265,11 +8267,17 @@ impl Funcdata {
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         use crate::varnode::varnode_flags as vf;
-        let (size, loc, vflags) = {
+        let (size, space, offset, vflags, v_type) = {
             let r = vn.read().unwrap();
-            (r.size, r.loc, r.flags)
+            (
+                r.size,
+                r.address_space,
+                r.loc.as_u64(),
+                r.flags,
+                r.v_type.clone(),
+            )
         };
-        let newvn = self.vbank.create(size, loc);
+        let newvn = self.vbank.create_with_space(size, space, offset);
         // cc:260-264: keep only the documented flag subset.
         let keep_mask = vf::ANNOTATION
             | vf::EXTERNREF
@@ -8281,7 +8289,14 @@ impl Funcdata {
             | vf::INCIDENTAL_COPY
             | vf::VOLATIL
             | vf::MAPPED;
-        newvn.write().unwrap().set_flags(vflags & keep_mask);
+        {
+            let mut cloned = newvn.write().unwrap();
+            // cc:256 passes vn->getType() to VarnodeBank::create.  Preserve
+            // the same shared Datatype identity, in addition to the complete
+            // Address (space + offset), before applying the restricted flags.
+            cloned.v_type = v_type;
+            cloned.set_flags(vflags & keep_mask);
+        }
         newvn
     }
 
@@ -9316,6 +9331,164 @@ impl Funcdata {
             self.op_set_input(&newop, in_clone, i);
         }
         newop
+    }
+
+    // Ghidra: funcdata_op.cc:792 Funcdata::truncatedFlow
+    /// Clone the raw flow state of `source` into an empty partial function.
+    ///
+    /// The source dead-list is cloned in list order with exact sequence
+    /// numbers, followed by call-spec and linked jump-table rebinding.  The
+    /// cloned `FlowInfo` then performs injection (when requested) and builds
+    /// basic blocks.  As in Ghidra, the target may be partially mutated when
+    /// a later jump-table lookup raises an error.
+    pub fn truncated_flow(
+        &mut self,
+        source: &Funcdata,
+        flow_state: &crate::flow::TruncatedFlowState,
+    ) -> crate::error::Result<()> {
+        if !self.obank.is_empty() {
+            return Err(crate::error::Error::Lowlevel(
+                "Trying to do truncated flow on pre-existing pcode".to_string(),
+            ));
+        }
+
+        // cc:797-799: the raw p-code container is specifically the dead list,
+        // whose linked-list order is independent of SeqNum ordering.
+        for source_op in &source.obank.deadlist {
+            let seq = *source_op.0.read().unwrap().get_seq_num();
+            self.clone_op(source_op, &seq);
+        }
+        // cc:800: preserve the source bank's next allocation id even when it
+        // is greater than every cloned SeqNum time.
+        self.obank.set_uniqid(source.obank.get_uniqid());
+
+        // cc:803-814: clone qlst in vector order.  Ghidra stores a direct
+        // PcodeOp pointer in FuncCallSpecs.  Rugra's synthetic FSPEC varnode
+        // carries the qlst index, which is the exact identity bridge for raw
+        // flow.  The address fallback is accepted only when it is unique.
+        for (source_index, oldspec) in source.callspecs.iter().enumerate() {
+            let annotated: Vec<_> = source
+                .obank
+                .deadlist
+                .iter()
+                .filter(|candidate| {
+                    let op = candidate.0.read().unwrap();
+                    if !matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+                        return false;
+                    }
+                    let Some(input) = op.get_in(0) else {
+                        return false;
+                    };
+                    let input = input.read().unwrap();
+                    input.get_space() == AddressSpace::Iop
+                        && input.is_annotation()
+                        && input.get_offset() == source_index as u64
+                })
+                .cloned()
+                .collect();
+            let source_call = if annotated.len() == 1 {
+                annotated[0].clone()
+            } else if annotated.is_empty() {
+                let by_address: Vec<_> = source
+                    .obank
+                    .deadlist
+                    .iter()
+                    .filter(|candidate| {
+                        let op = candidate.0.read().unwrap();
+                        matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
+                            && op.get_addr() == oldspec.op_addr
+                    })
+                    .cloned()
+                    .collect();
+                if by_address.len() != 1 {
+                    return Err(crate::error::Error::Lowlevel(
+                        "Could not trace callspec across partial clone".to_string(),
+                    ));
+                }
+                by_address[0].clone()
+            } else {
+                return Err(crate::error::Error::Lowlevel(
+                    "Could not trace callspec across partial clone".to_string(),
+                ));
+            };
+
+            let source_seq = *source_call.0.read().unwrap().get_seq_num();
+            let newop = self.obank.find_op(&source_seq).ok_or_else(|| {
+                crate::error::Error::Lowlevel(
+                    "Could not trace callspec across partial clone".to_string(),
+                )
+            })?;
+            let newspec = oldspec.clone_for_op(newop.0.read().unwrap().get_addr());
+
+            let old_input = newop.0.read().unwrap().get_in(0).cloned();
+            if let Some(invn0) = old_input {
+                let is_fspec = {
+                    let input = invn0.read().unwrap();
+                    input.get_space() == AddressSpace::Iop && input.is_annotation()
+                };
+                if is_fspec {
+                    let newvn0 = self.new_varnode_call_specs(self.callspecs.len());
+                    self.op_set_input(&newop, newvn0, 0);
+                    self.delete_varnode(&invn0)?;
+                }
+            }
+            self.callspecs.push(newspec);
+        }
+
+        // cc:816-828: preserve source jumpvec order, but truncate unlinked
+        // overrides.  A linked table is cloned only after its indirect op can
+        // be found by exact SeqNum in the target bank.
+        for source_table in &source.jump_tables {
+            let table = source_table.read().unwrap();
+            let Some(indirect) = table.get_indirect_op() else {
+                continue;
+            };
+            let indirect_seq = *indirect.read().unwrap().get_seq_num();
+            let newop = self.obank.find_op(&indirect_seq).ok_or_else(|| {
+                crate::error::Error::Lowlevel(
+                    "Could not trace jumptable across partial clone".to_string(),
+                )
+            })?;
+
+            // jumptable.cc:2401-2425 JumpTable copy constructor: instance-
+            // specific block/label/default/consume state is reset, while the
+            // address/load/model recovery state is copied.
+            let cloned_table = Arc::new(RwLock::new(crate::jumptable::JumpTable {
+                jmodel: None,
+                origmodel: None,
+                addresstable: table.addresstable.clone(),
+                block2addr: Vec::new(),
+                label: Vec::new(),
+                loadpoints: table.loadpoints.clone(),
+                opaddress: table.opaddress,
+                indirect: None,
+                switch_var_consume: u64::MAX,
+                default_block: -1,
+                last_block: table.last_block,
+                norm_max: table.norm_max,
+                partial_table: table.partial_table,
+                collect_loads: table.collect_loads,
+                default_is_folded: false,
+            }));
+            let cloned_model = table
+                .jmodel
+                .as_ref()
+                .map(|model| model.clone_model(cloned_table.clone()));
+            drop(table);
+            {
+                let mut cloned = cloned_table.write().unwrap();
+                cloned.jmodel = cloned_model;
+                cloned.set_indirect_op(newop.0.clone());
+            }
+            self.jump_tables.push(cloned_table);
+        }
+
+        // cc:830-838: FlowInfo's clone constructor copies configuration and
+        // address containers, then injection/block generation finalizes the
+        // partial function.  blocks_generated is set only after completion.
+        crate::flow::FlowInfo::finish_truncated_flow(self, flow_state)?;
+        self.flags |= funcdata_flags::BLOCKS_GENERATED;
+        Ok(())
     }
 
     // Ghidra: funcdata_op.cc:656 Funcdata::newOpBefore

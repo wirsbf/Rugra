@@ -1721,13 +1721,32 @@ impl PcodeOpBank {
             eprintln!("[OP] WARN: insertAfterDead on non-dead op");
             return;
         }
-        // Remove op from deadlist, reinsert after prev.
+        // Remove op from deadlist, reinsert after prev.  Ghidra keeps an
+        // iterator to `prev`, so erasing an earlier `op` does not move the
+        // insertion point.  Vec indices do move and must be adjusted.
         let op_ptr = Arc::as_ptr(&op.0);
-        let prev_pos = self.deadlist.iter().position(|r| Arc::as_ptr(&r.0) == Arc::as_ptr(&prev.0));
-        if let Some(prev_idx) = prev_pos {
-            self.deadlist.retain(|r| Arc::as_ptr(&r.0) != op_ptr);
-            self.deadlist.insert(prev_idx + 1, op.clone());
-        }
+        let prev_ptr = Arc::as_ptr(&prev.0);
+        let Some(op_idx) = self
+            .deadlist
+            .iter()
+            .position(|candidate| Arc::as_ptr(&candidate.0) == op_ptr)
+        else {
+            return;
+        };
+        let Some(prev_idx) = self
+            .deadlist
+            .iter()
+            .position(|candidate| Arc::as_ptr(&candidate.0) == prev_ptr)
+        else {
+            return;
+        };
+        let moved = self.deadlist.remove(op_idx);
+        let prev_idx = if op_idx < prev_idx {
+            prev_idx - 1
+        } else {
+            prev_idx
+        };
+        self.deadlist.insert(prev_idx + 1, moved);
     }
 
     // Ghidra: op.cc:1056 PcodeOpBank::moveSequenceDead
