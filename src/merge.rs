@@ -3237,7 +3237,7 @@ impl Merge {
     /// exactly when the factory registers BOTH a 1-byte char-print INT
     /// core type AND a non-char 1-byte INT core type — the production
     /// SLEIGH defaults ("char" + "int1", sleigh_arch.cc:204-241). With no
-    /// such registrations `type_nochar` stays null (type.cc:3131) and
+    /// such registrations `type_nochar` stays null (type.cc:3128) and
     /// `getBaseNoChar` falls through to the plain base (type.cc:3624).
     ///
     /// The result is derived from the two actual canonical factory entries,
@@ -3246,7 +3246,7 @@ impl Merge {
     fn factory_nochar_distinct(fd: &Funcdata) -> bool {
         let Some(factory) = fd.get_arch().and_then(|arch| arch.types.clone()) else {
             // No attached factory = no core-type registration = null
-            // type_nochar world (type.cc:3131): the gate falls through to
+            // type_nochar world (type.cc:3128): the gate falls through to
             // plain-base identity.
             return false;
         };

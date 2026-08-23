@@ -530,3 +530,7 @@ merge.hh:83）删除：Ghidra 的 merge 序列（coreaction.cc:5718-5729）没�
 - `fd.getMerge()` 持久化重构（Actions 直接共享单一 Merge 对象）仍归
   COREACTION-STATEFUL-MERGE-0001；本改动只覆盖其 clear 生命周期通道语义。
 <!-- annotation-pass: 2026-08-23 -->
+
+## 引用行号勘误（2026-08-23，root，legacymig 复核跟进）
+
+merge.rs 两处 `type_nochar` 置空引用由 type.cc:3131 修正为 3128（clearCache 内；3131 是 charcache 循环行）。复核确认语义无误，仅引用偏移 3 行。
