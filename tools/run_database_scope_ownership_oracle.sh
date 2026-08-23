@@ -545,13 +545,47 @@ for side, case in (
     ("Rugra", {record["case"]: record for record in rugra}["find_create_scope"]),
 ):
     for key in (
-        "id_matches", "resolver_alias", "repeat_alias", "name_preserved",
-        "parent_child_alias",
+        "id_matches", "resolver_key_present", "repeat_key_same",
+        "name_preserved", "parent_child_key_resolves",
     ):
         if case[key] != "1":
             raise SystemExit(f"{side} find_create_scope.{key} is not true")
     if case["parent_id"] != "0":
         raise SystemExit(f"{side} find_create_scope.parent_id is not global")
+    if case["parent_child_count"] != "1":
+        raise SystemExit(f"{side} find_create_scope.parent_child_count drifted")
+ghidra_find = by_case["find_create_scope"]
+rugra_find = {record["case"]: record for record in rugra}["find_create_scope"]
+for key, expected_value in (
+    ("return_class", "scope_pointer"),
+    ("resolver_return_alias", "1"),
+    ("repeat_return_alias", "1"),
+    ("parent_child_return_alias", "1"),
+    ("resolved_slot_stable", "UNNEEDED"),
+    ("parent_child_resolved_slot_alias", "UNNEEDED"),
+    ("scope_storage_class", "owned_pointer"),
+    ("parent_child_storage_class", "scope_pointer"),
+    ("next_scope_id_before", "UNAVAILABLE"),
+    ("next_scope_id_after_create", "UNAVAILABLE"),
+    ("next_scope_id_after_repeat", "UNAVAILABLE"),
+):
+    if ghidra_find[key] != expected_value:
+        raise SystemExit(f"Ghidra find_create_scope.{key} drifted")
+for key, expected_value in (
+    ("return_class", "u64"),
+    ("resolver_return_alias", "UNAVAILABLE"),
+    ("repeat_return_alias", "UNAVAILABLE"),
+    ("parent_child_return_alias", "UNAVAILABLE"),
+    ("resolved_slot_stable", "1"),
+    ("parent_child_resolved_slot_alias", "1"),
+    ("scope_storage_class", "BTreeMap_value"),
+    ("parent_child_storage_class", "u64"),
+    ("next_scope_id_before", "1"),
+    ("next_scope_id_after_create", "302252035"),
+    ("next_scope_id_after_repeat", "302252035"),
+):
+    if rugra_find[key] != expected_value:
+        raise SystemExit(f"Rugra find_create_scope.{key} drifted")
 for key in (
     "symbol_scope_alias", "function_cached_alias", "function_symbol_backref",
     "function_arch_alias", "local_resolver_alias", "local_parent_alias",

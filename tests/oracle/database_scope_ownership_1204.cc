@@ -150,14 +150,28 @@ void runGraphAndFailures(FixtureArchitecture &arch,vector<string> &events)
   std::cout
       << "case=find_create_scope"
       << "|id_matches=" << (factoryScope->getId() == factoryId)
-      << "|resolver_alias=" <<
-          (db->resolveScope(factoryId) == factoryScope)
-      << "|repeat_alias=" << (factoryAgain == factoryScope)
+      << "|resolver_key_present=" <<
+          (db->resolveScope(factoryId) != (Scope *)0)
+      << "|repeat_key_same=" << (factoryAgain->getId() == factoryId)
       << "|name_preserved=" <<
           (factoryAgain->getName() == "factory_ns")
       << "|parent_id=" << factoryAgain->getParent()->getId()
-      << "|parent_child_alias=" <<
+      << "|parent_child_key_resolves=" <<
+          (global->resolveScope("factory_ns",false) != (Scope *)0)
+      << "|parent_child_count=" << childCount(global)
+      << "|return_class=scope_pointer"
+      << "|resolver_return_alias=" <<
+          (db->resolveScope(factoryId) == factoryScope)
+      << "|repeat_return_alias=" << (factoryAgain == factoryScope)
+      << "|parent_child_return_alias=" <<
           (global->resolveScope("factory_ns",false) == factoryScope)
+      << "|resolved_slot_stable=UNNEEDED"
+      << "|parent_child_resolved_slot_alias=UNNEEDED"
+      << "|scope_storage_class=owned_pointer"
+      << "|parent_child_storage_class=scope_pointer"
+      << "|next_scope_id_before=UNAVAILABLE"
+      << "|next_scope_id_after_create=UNAVAILABLE"
+      << "|next_scope_id_after_repeat=UNAVAILABLE"
       << '\n';
 
   const uint8 namespaceId = 0x12040001;

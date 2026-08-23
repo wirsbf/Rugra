@@ -17,28 +17,53 @@ use rugra::funcdata::Funcdata;
 fn main() {
     let mut database = Database::new(true);
     let factory_id = 0x1204_0002;
+    let next_scope_id_before = database.next_scope_id;
     let created_id = database.find_create_scope(factory_id, "factory_ns", 0);
+    let next_scope_id_after_create = database.next_scope_id;
     let created_ptr = database
         .resolve_scope(created_id)
         .map(|scope| scope as *const _)
         .expect("find_create_scope did not register the created scope");
     let repeated_id = database.find_create_scope(factory_id, "ignored_name", 0);
+    let next_scope_id_after_repeat = database.next_scope_id;
     let repeated = database
         .resolve_scope(repeated_id)
         .expect("find_create_scope repeat did not resolve the scope");
     let repeated_ptr = repeated as *const _;
-    let parent_child_alias = database
-        .get_global_scope()
-        .map(|scope| scope.children.contains(&factory_id))
+    let resolver_key_present = database.resolve_scope(factory_id).is_some();
+    let resolved_slot_stable = database
+        .resolve_scope(factory_id)
+        .map(|scope| std::ptr::eq(scope, repeated))
         .unwrap_or(false);
+    let parent_child_id = database
+        .get_global_scope()
+        .and_then(|scope| scope.children.iter().find(|&&id| id == factory_id))
+        .copied();
+    let parent_child_key_resolves = parent_child_id
+        .and_then(|id| database.resolve_scope(id))
+        .is_some();
+    let parent_child_resolved_slot_alias = parent_child_id
+        .and_then(|id| database.resolve_scope(id))
+        .map(|scope| std::ptr::eq(scope, repeated))
+        .unwrap_or(false);
+    let parent_child_count = database
+        .get_global_scope()
+        .map(|scope| scope.children.len())
+        .unwrap_or(0);
     println!(
-        "case=find_create_scope|id_matches={}|resolver_alias={}|repeat_alias={}|name_preserved={}|parent_id={}|parent_child_alias={}",
+        "case=find_create_scope|id_matches={}|resolver_key_present={}|repeat_key_same={}|name_preserved={}|parent_id={}|parent_child_key_resolves={}|parent_child_count={}|return_class=u64|resolver_return_alias=UNAVAILABLE|repeat_return_alias=UNAVAILABLE|parent_child_return_alias=UNAVAILABLE|resolved_slot_stable={}|parent_child_resolved_slot_alias={}|scope_storage_class=BTreeMap_value|parent_child_storage_class=u64|next_scope_id_before={}|next_scope_id_after_create={}|next_scope_id_after_repeat={}",
         u8::from(created_id == factory_id),
-        u8::from(database.resolve_scope(factory_id).is_some()),
-        u8::from(created_id == repeated_id && created_ptr == repeated_ptr),
+        u8::from(resolver_key_present),
+        u8::from(created_id == repeated_id),
         u8::from(repeated.get_name() == "factory_ns"),
         repeated.parent_id,
-        u8::from(parent_child_alias),
+        u8::from(parent_child_key_resolves),
+        parent_child_count,
+        u8::from(created_ptr == repeated_ptr && resolved_slot_stable),
+        u8::from(parent_child_resolved_slot_alias),
+        next_scope_id_before,
+        next_scope_id_after_create,
+        next_scope_id_after_repeat,
     );
 
     let architecture = Architecture::new();
