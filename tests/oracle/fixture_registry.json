@@ -3811,7 +3811,7 @@
     },
     {
       "id": "float_fmt_struct_1204",
-      "description": "FloatFormat structural 1:1 vs locked 12.0.4: bit-ladder createFloat/extractExpSig, 64-bit top-aligned fractional code, RNE direct drive incl. uintb wraparound, subnormal normalize intermediate states, denormal-min encoding, NaN quiet-bit normalization, plus full 36-case int2float/float2float value regression (134/134 MATCH)",
+      "description": "FloatFormat structural 1:1 vs locked 12.0.4: bit-ladder createFloat/extractExpSig, 64-bit top-aligned fractional code, RNE direct drive incl. uintb wraparound, subnormal normalize intermediate states, denormal-min encoding, NaN quiet-bit normalization, plus full 36-case int2float/float2float value regression (153/153 MATCH); op_trunc OOB/mask semantics (cvttsd2si INT64_MIN + calc_mask(sizeout))",
       "runner": [
         "tools/run_float_fmt_struct_oracle.sh"
       ],
