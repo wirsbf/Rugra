@@ -3142,6 +3142,47 @@
         "arch::Architecture::get_laned_register",
         "funcdata::Funcdata::check_for_laned_register"
       ]
+    },
+    {
+      "id": "condexe_trueout_1204",
+      "description": "CONDEXE-TRUEOUT-0002: purely positional getTrueOut/getFalseOut (block.hh:299-300) and their condexe consumers vs locked 12.0.4 - helper polarity under flip x negateCondition (incl. swapEdges reverse-index fixup), findInitPre init2a_true (7 cases incl. negative), verify camethruposta_slot over the (ib_flip,init_flip) matrix, discoverPathIsTrue zero_path_is_true (3 branches x 2 flips)",
+      "runner": [
+        "tools/run_condexe_trueout_oracle.sh"
+      ],
+      "timeout_seconds": 1200,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "FlowBlock::getTrueOut",
+        "FlowBlock::getFalseOut",
+        "FlowBlock::swapEdges",
+        "BlockBasic::negateCondition",
+        "ConditionalExecution::findInitPre",
+        "ConditionalExecution::verify",
+        "ConditionalExecution::verifySameCondition",
+        "MultiPredicate::discoverPathIsTrue"
+      ],
+      "rust_function_ids": [
+        "block::FlowBlock::get_true_out",
+        "block::FlowBlock::get_false_out",
+        "block::BlockBasic::swap_edges",
+        "block::BlockBasic::negate_condition",
+        "condexe::ConditionalExecution::find_init_pre",
+        "condexe::ConditionalExecution::verify",
+        "condexe::ConditionalExecution::verify_same_condition",
+        "condexe::MultiPredicate::discover_path_is_true"
+      ],
+      "cache": {
+        "metadata": "tests/oracle/condexe_trueout_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/condexe_trueout_1204.cc",
+          "rust_fixture": "tests/oracle/condexe_trueout_1204.rs"
+        }
+      }
     }
   ]
 }
