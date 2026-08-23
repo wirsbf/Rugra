@@ -34,6 +34,12 @@
 //     payload canonicalization through getNaNEncoding (float.cc:293-346)
 //   - the full FLOAT-OPINT2FLOAT-SIGN-0001 36-case value regression
 //     (structural refactor must not change value behavior)
+//   - FLOAT-OPTRUNC-OOB-0001: opTrunc across the (intb) cast range —
+//     normal tier (two's-complement low-byte masking at sizeout 1/2/4),
+//     large out-of-range tier (x86-64 cvttsd2si integer indefinite
+//     INT64_MIN, which calc_mask(sizeout) leaves 0 for sizeout < 8 and
+//     0x8000000000000000 at sizeout 8), and the NaN/Inf tier (same
+//     indefinite semantics) (float.cc:631-640)
 //
 // The private statics/members are reached with the private->public access
 // hack the address_space_phase1/block_index_assign fixtures established
@@ -119,6 +125,12 @@ void f2f(const char *name, const FloatFormat &formin, uintb a,
 {
   std::printf("case=%s|res=0x%016llX\n", name,
               static_cast<unsigned long long>(formin.opFloat2Float(a, outformat)));
+}
+
+void trunc(const char *name, const FloatFormat &fmt, uintb a, int4 sizeout)
+{
+  std::printf("case=%s|res=0x%016llX\n", name,
+              static_cast<unsigned long long>(fmt.opTrunc(a, sizeout)));
 }
 
 } // namespace
@@ -326,5 +338,34 @@ int main()
   f2f("f2f_8to4_negnan", fmt8, 0xFFF8000000000000ULL, fmt4);
   f2f("f2f_8to4_neginf", fmt8, 0xFFF0000000000000ULL, fmt4);
   f2f("f2f_8to4_negzero", fmt8, 0x8000000000000000ULL, fmt4);
+
+  // ---- FLOAT-OPTRUNC-OOB-0001: opTrunc (intb) cast + calc_mask(sizeout)
+  //      (float.cc:631-640). (intb) val on this x86-64 oracle host is
+  //      cvttsd2si: NaN/Inf/magnitude >= 2^63 convert to the integer
+  //      indefinite INT64_MIN, then calc_mask(sizeout) (address.hh:499)
+  //      applies — the low bytes of 0x8000000000000000 are zero for
+  //      sizeout < 8. Three tiers: normal, large out-of-range, NaN/Inf.
+  // normal tier (mask keeps low bytes of the two's complement word)
+  trunc("tr4_pos7_sz4", fmt4, 0x40E00000, 4);                 // 7.0f
+  trunc("tr4_neg7_sz4", fmt4, 0xC0E00000, 4);                 // -7.0f
+  trunc("tr4_neg7_sz1", fmt4, 0xC0E00000, 1);                 // -7 & 0xff
+  trunc("tr8_frac_sz8", fmt8, 0x40091EB851EB851FULL, 8);      // 3.14
+  trunc("tr8_neg300_sz2", fmt8, 0xC072C00000000000ULL, 2);    // -300 & 0xffff
+  trunc("tr4_negzero_sz4", fmt4, 0x80000000, 4);              // -0.0
+  trunc("tr4_denorm_sz1", fmt4, 0x00000001, 1);               // 2^-149 -> 0
+  trunc("tr8_maxi64_sz4", fmt8, 0x43DFFFFFFFFFFFFFULL, 4);    // max < 2^63
+  // large out-of-range tier (integer indefinite then masked)
+  trunc("tr4_max_sz4", fmt4, 0x7F7FFFFF, 4);                  // FLT_MAX
+  trunc("tr4_max_sz8", fmt4, 0x7F7FFFFF, 8);
+  trunc("tr4_negmax_sz4", fmt4, 0xFF7FFFFF, 4);               // -FLT_MAX
+  trunc("tr8_1e300_sz8", fmt8, 0x7E37E43C8800759CULL, 8);     // 1e300
+  trunc("tr8_1e300_sz2", fmt8, 0x7E37E43C8800759CULL, 2);
+  trunc("tr8_2p63_sz8", fmt8, 0x43E0000000000000ULL, 8);      // 2^63 boundary
+  // NaN/Inf tier (same integer-indefinite semantics)
+  trunc("tr4_nan_sz4", fmt4, 0x7FC00000, 4);
+  trunc("tr8_nan_sz8", fmt8, 0x7FF8000000000000ULL, 8);
+  trunc("tr8_nan_sz4", fmt8, 0x7FF8000000000000ULL, 4);
+  trunc("tr8_inf_sz8", fmt8, 0x7FF0000000000000ULL, 8);
+  trunc("tr8_neginf_sz4", fmt8, 0xFFF0000000000000ULL, 4);
   return 0;
 }

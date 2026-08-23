@@ -2,9 +2,10 @@
 
 **源代码路径**: `src/float_emulate.rs`
 **Ghidra 对应**: `float.hh` / `float.cc` (673行)
-**状态**: ✅ **L3（结构级 1:1，2026-08-23 FLOAT-FMT-STRUCT-0001）**——全部 FloatFormat 方法覆盖；
+**状态**: ✅ **L3（结构级 1:1，2026-08-23 FLOAT-FMT-STRUCT-0001；FLOAT-OPTRUNC-OOB-0001 关闭
+opTrunc 越界残差）**——全部 FloatFormat 方法覆盖；
 host 转换走 oracle 位阶梯（createFloat/extractExpSig + 64 位顶对齐 fractional code 约定），
-结构级 oracle 证明见 `tests/oracle/float_fmt_struct_1204`。20 单元测试。
+结构级 oracle 证明见 `tests/oracle/float_fmt_struct_1204`（153 case 含 opTrunc 三档越界）。21 单元测试。
 **2026-08-23 结构重构（FLOAT-FMT-STRUCT-0001）**:
 - `get_host_float`（float.cc:228-268）由 `(significand as f64) * 2f64.powi(...)` 乘积改为 oracle 位阶梯：
   顶对齐 `extract_fractional_code`（float.cc:113-119）→ `exp -= bias` → jbit room
@@ -33,8 +34,20 @@ host 转换走 oracle 位阶梯（createFloat/extractExpSig + 64 位顶对齐 fr
   createFloat ldexp 饱和/roundToNearestEven 直驱含回绕进位）；
   结构级 oracle 证明 `tests/oracle/float_fmt_struct_1204`（runner
   `tools/run_float_fmt_struct_oracle.sh`，锁 e40ed130）。
-- `op_trunc`（float.cc:631-640）的 `(intb)val` 越界语义（x86 上为 0x8000...）与 Rust 饱和 cast
-  仍有差异——超出本租约范围，遗留为残差（见下）。
+- `op_trunc`（float.cc:631-640）的 `(intb)val` 越界/NaN 语义与 `calc_mask(sizeout)` 缺失已由
+  **FLOAT-OPTRUNC-OOB-0001** 修复（见下），经 19 个三档 oracle case 证明 MATCH。
+**2026-08-23 修复（FLOAT-OPTRUNC-OOB-0001）**:
+- `op_trunc(a, size_out)` 对齐 float.cc:631-640 全语义：`(intb)val` 在 x86-64 oracle host 上
+  编译为 cvttsd2si——NaN/±Inf/|val|≥2^63 一律转为整数不定值 INT64_MIN(0x8000000000000000)，
+  随后 `res &= calc_mask(sizeout)`（address.hh:499，uintbmasks 表 address.cc:631-634）。
+  Rust 饱和 `as`（NaN→0、正溢出→i64::MAX）与 oracle 分歧，且原实现完全忽略 size_out 无 mask。
+  修复后按显式范围测试 ±2^63 之外/NaN 走 INT64_MIN，界内截断向零；-2^63 恰好落入不定值分支
+  且其真实转换值即 i64::MIN，两侧一致。calc_mask(8) 原样保留 0x8000000000000000，
+  sizeout<8 时低字节为 0（oracle 实测 tr4_max_sz4=0、tr8_1e300_sz2=0）。
+  oracle 证明：`tests/oracle/float_fmt_struct_1204` 扩展 19 个 trunc case
+  （正常值 mask 档 / 大值越界档 / NaN-Inf 档），153/153 双侧字节一致，
+  runner `tools/run_float_fmt_struct_oracle.sh` EXIT=0；新增单元测试
+  `test_float_trunc_oob_and_mask`。
 **2026-07-02 修复（R101）**: `max_exponent` 由硬编码 254/2046 改为 255/2047，对齐 Ghidra `float.cc:59 maxexponent = (1<<exp_size)-1`。原 off-by-one 使 `get_host_float` 的 `exp_code == max_exponent` 检查错过全 1 指数 → infinity/NaN 被误读为 normalized 值。
 **2026-08-23 修复（FLOAT-OPINT2FLOAT-SIGN-0001）**:
 - `op_int2float(a, size_in)` 改为 oracle 符号语义：`sign_extend(a, 8*sizein-1)`（address.hh:543）丢弃
@@ -79,16 +92,17 @@ IEEE754 浮点格式描述。对应 Ghidra `FloatFormat`。
 - `convert_encoding(encoding, &formin)` — 位级格式互转（float.cc:352-419，顶对齐约定贯穿）
 - `op_int2float(a, size_in)` — 有符号整数→浮点（sign_extend 自 size_in 字节，float.cc:611-617）
 - `op_float2_float(a, &outformat)` — 精度转换（= outformat.convert_encoding(a, self)，float.cc:622-626）
+- `op_trunc(a, size_out)` — 浮点→整数（x86-64 cvttsd2si 语义：NaN/±Inf/|val|≥2^63 →
+  INT64_MIN 整数不定值，界内向零截断；再 `& calc_mask(size_out)`，float.cc:631-640）
 - 15 个 op 操作：`op_equal/op_less/op_add/op_sub/op_mult/op_div/op_neg/op_abs/op_sqrt/op_floor/op_ceil/op_nan/op_int2float`
 
-测试：float_emulate::tests 20 个（含 INT2FLOAT 符号扩展、convertEncoding 位级、
-顶对齐约定、extractExpSig/createFloat/denormal 阶梯与 roundToNearestEven 直驱回归）。
+测试：float_emulate::tests 21 个（含 INT2FLOAT 符号扩展、convertEncoding 位级、
+顶对齐约定、extractExpSig/createFloat/denormal 阶梯、roundToNearestEven 直驱回归，
+以及 opTrunc 三档越界 + mask 回归）。
 
 ## 已知残差（登记于本文件，供后续 TODO 认领）
 
-- `op_trunc`（float.cc:631-640 `(intb)val` + `calc_mask(sizeout)`）：Rust `va.trunc() as i64` 为饱和
-  cast（越界→i64::MIN/MAX，NaN→0），x86-64 C++ 越界转换为 0x8000000000000000 且无 sizeout mask——
-  越界/NaN 输入下与 oracle 分歧，常规区间值一致。
+（无——opTrunc 越界残差已由 FLOAT-OPTRUNC-OOB-0001 关闭。）
 
 ## 2026-06-26（续）：float_emulate.rs 完善实现
 

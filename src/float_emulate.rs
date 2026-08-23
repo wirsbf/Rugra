@@ -550,10 +550,27 @@ impl FloatFormat {
 
     // Ghidra: float.cc:631 FloatFormat::opTrunc
     /// Convert floating-point to integer (truncate toward zero)
-    pub fn op_trunc(&self, a: u64, _size_out: usize) -> u64 {
+    pub fn op_trunc(&self, a: u64, size_out: usize) -> u64 {
         let mut ta = FloatClass::Zero;
         let va = self.get_host_float(a, &mut ta);
-        va.trunc() as i64 as u64
+        // (intb) val (float.cc:636) on the x86-64 oracle host compiles to
+        // cvttsd2si: NaN, +/-Inf, and any magnitude >= 2^63 convert to the
+        // integer-indefinite value INT64_MIN (0x8000000000000000). Rust's
+        // float `as` saturates instead (NaN -> 0, +overflow -> i64::MAX,
+        // -overflow -> i64::MIN), so the conversion range is tested
+        // explicitly. In-range doubles truncate toward zero in both.
+        // -2^63 itself falls into the indefinite branch and is its own
+        // correct conversion; the bounds are the two exactly representable
+        // doubles +/-2^63.
+        let ival: i64 = if va > -9223372036854775808.0 && va < 9223372036854775808.0 {
+            va as i64
+        } else {
+            i64::MIN // x86-64 cvttsd2si integer indefinite
+        };
+        let res = ival as u64;
+        // res &= calc_mask(sizeout) (float.cc:638; inline at address.hh:499
+        // with the uintbmasks table at address.cc:631-634).
+        res & crate::address::calc_mask(size_out)
     }
 
     // Ghidra: float.cc:664 FloatFormat::opRound
@@ -933,6 +950,34 @@ mod tests {
         let a = fmt.get_encoding(3.7);
         let result = fmt.op_trunc(a, 4);
         assert_eq!(result & 0xffffffff, 3);
+    }
+
+    #[test]
+    fn test_float_trunc_oob_and_mask() {
+        // FLOAT-OPTRUNC-OOB-0001: (intb) val on the x86-64 oracle host is
+        // cvttsd2si — NaN/Inf/magnitude >= 2^63 become the integer
+        // indefinite INT64_MIN, then calc_mask(sizeout) applies
+        // (float.cc:636-638).
+        let fmt4 = FloatFormat::new(4);
+        let fmt8 = FloatFormat::new(8);
+        // normal tier: mask keeps low bytes of the two's complement word
+        assert_eq!(fmt4.op_trunc(0x40E00000, 4), 7); // 7.0f
+        assert_eq!(fmt4.op_trunc(0xC0E00000, 4), 0xFFFFFFF9); // -7.0f
+        assert_eq!(fmt4.op_trunc(0xC0E00000, 1), 0xF9); // -7 & 0xff
+        assert_eq!(fmt8.op_trunc(0xC072C00000000000, 2), 0xFED4); // -300 & 0xffff
+        assert_eq!(fmt8.op_trunc(0x43DFFFFFFFFFFFFF, 4), 0xFFFFFC00); // max < 2^63
+        // large tier: integer indefinite then masked (low bytes of
+        // 0x8000000000000000 are zero for sizeout < 8)
+        assert_eq!(fmt4.op_trunc(0x7F7FFFFF, 4), 0); // FLT_MAX, sizeout 4
+        assert_eq!(fmt4.op_trunc(0x7F7FFFFF, 8), 0x8000000000000000);
+        assert_eq!(fmt8.op_trunc(0x7E37E43C8800759C, 8), 0x8000000000000000); // 1e300
+        assert_eq!(fmt8.op_trunc(0x7E37E43C8800759C, 2), 0);
+        assert_eq!(fmt8.op_trunc(0x43E0000000000000, 8), 0x8000000000000000); // 2^63 boundary
+        // NaN/Inf tier: same integer-indefinite semantics
+        assert_eq!(fmt4.op_trunc(0x7FC00000, 4), 0);
+        assert_eq!(fmt8.op_trunc(0x7FF8000000000000, 8), 0x8000000000000000);
+        assert_eq!(fmt8.op_trunc(0x7FF0000000000000, 8), 0x8000000000000000); // +Inf
+        assert_eq!(fmt8.op_trunc(0xFFF0000000000000, 4), 0); // -Inf
     }
 
     #[test]

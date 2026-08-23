@@ -3,7 +3,7 @@
   "fixture_id": "FLOAT-FMT-STRUCT-0001",
   "projection_status": "MATCH",
   "overall_status": "MATCH",
-  "status_note": "Closes the FLOAT-FMT-STRUCT-0001 structural residual of FLOAT-OPINT2FLOAT-SIGN-0001: the oracle's host conversions run bit ladders, not host casts. Directly observed on both sides with same-input/same-output bit patterns: FloatFormat(4)/FloatFormat(8) field initialization incl. jbitimplied; the 64-bit TOP-ALIGNED fractional code convention (extractFractionalCode float.cc:113-119, setFractionalCode float.cc:144-153 with OR packing and no masking of x); setSign identity-when-false (float.cc:158-166); setExponentCode OR pack (float.cc:171-177); getZero/getInfinity/getNaNEncoding 3-setter structure with the quiet-NaN mask created top-aligned 1<<63 (float.cc:181-215); static createFloat incl. ldexp gradual underflow (2^-1074 exact, 2^-1075 ties-to-even flush, 1.5x tie keeps the even 2x) and overflow saturation (float.cc:67-80); static extractExpSig with sentinel out-params proving zero/infinity/NaN early returns never write signif/exp (float.cc:89-109); static roundToNearestEven incl. the uintb wrap-around carry and lowbitpos==64 zero lowbitmask (float.cc:276-288); the convertEncoding subnormal-normalize intermediate state via count_leading_zeros of the top-aligned signif with exp = -bias - lz (float.cc:368-376, address.cc:773); getHostFloat across all five floatclasses incl. the denormalized createFloat path (the pre-port implementation returned denormals scaled by 2^frac_size too large); getEncoding incl. RNE ties, denormalized outputs, and NaN payload canonicalization through getNaNEncoding (the pre-port bit-cast passed payloads through); and the full 36-case FLOAT-OPINT2FLOAT-SIGN-0001 replay proving the structural refactor changed no value behavior. Rugra binds the same host libm ldexp/frexp the oracle uses (float.cc:25-26) so the ladder's saturation semantics are bit-identical; a powi product cannot reproduce ldexp(2^11,-1085)==2^-1074.",
+  "status_note": "Closes the FLOAT-FMT-STRUCT-0001 structural residual of FLOAT-OPINT2FLOAT-SIGN-0001: the oracle's host conversions run bit ladders, not host casts. Directly observed on both sides with same-input/same-output bit patterns: FloatFormat(4)/FloatFormat(8) field initialization incl. jbitimplied; the 64-bit TOP-ALIGNED fractional code convention (extractFractionalCode float.cc:113-119, setFractionalCode float.cc:144-153 with OR packing and no masking of x); setSign identity-when-false (float.cc:158-166); setExponentCode OR pack (float.cc:171-177); getZero/getInfinity/getNaNEncoding 3-setter structure with the quiet-NaN mask created top-aligned 1<<63 (float.cc:181-215); static createFloat incl. ldexp gradual underflow (2^-1074 exact, 2^-1075 ties-to-even flush, 1.5x tie keeps the even 2x) and overflow saturation (float.cc:67-80); static extractExpSig with sentinel out-params proving zero/infinity/NaN early returns never write signif/exp (float.cc:89-109); static roundToNearestEven incl. the uintb wrap-around carry and lowbitpos==64 zero lowbitmask (float.cc:276-288); the convertEncoding subnormal-normalize intermediate state via count_leading_zeros of the top-aligned signif with exp = -bias - lz (float.cc:368-376, address.cc:773); getHostFloat across all five floatclasses incl. the denormalized createFloat path (the pre-port implementation returned denormals scaled by 2^frac_size too large); getEncoding incl. RNE ties, denormalized outputs, and NaN payload canonicalization through getNaNEncoding (the pre-port bit-cast passed payloads through); and the full 36-case FLOAT-OPINT2FLOAT-SIGN-0001 replay proving the structural refactor changed no value behavior. Rugra binds the same host libm ldexp/frexp the oracle uses (float.cc:25-26) so the ladder's saturation semantics are bit-identical; a powi product cannot reproduce ldexp(2^11,-1085)==2^-1074. FLOAT-OPTRUNC-OOB-0001 extension: opTrunc (float.cc:631-640) is now observed across the (intb) cast range on both sides — the normal tier proves calc_mask(sizeout) keeps the two's-complement low bytes (e.g. -7.0f at sizeout 1 -> 0xF9, -300.0 at sizeout 2 -> 0xFED4, the largest double below 2^63 at sizeout 4 -> 0xFFFFFC00); the large out-of-range tier and the NaN/Inf tier prove the x86-64 oracle host compiles (intb) val to cvttsd2si, whose integer-indefinite INT64_MIN (0x8000000000000000) survives calc_mask(8) verbatim and masks to 0 for every sizeout < 8 (FLT_MAX/1e300/ 2^63 boundary/NaN/+Inf/-Inf). The pre-fix Rust saturated `as` cast (NaN -> 0, +overflow -> i64::MAX) and the missing sizeout mask diverged on these tiers; both are now fixed in op_trunc.",
   "oracle": {
     "repository": "NationalSecurityAgency/ghidra",
     "tag": "Ghidra_12.0.4_build",
@@ -578,16 +578,92 @@
       {
         "id": "f2f_8to4_negzero",
         "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+      },
+      {
+        "id": "tr4_pos7_sz4",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr4_neg7_sz4",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr4_neg7_sz1",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr8_frac_sz8",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr8_neg300_sz2",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr4_negzero_sz4",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr4_denorm_sz1",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr8_maxi64_sz4",
+        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+      },
+      {
+        "id": "tr4_max_sz4",
+        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+      },
+      {
+        "id": "tr4_max_sz8",
+        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+      },
+      {
+        "id": "tr4_negmax_sz4",
+        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+      },
+      {
+        "id": "tr8_1e300_sz8",
+        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+      },
+      {
+        "id": "tr8_1e300_sz2",
+        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+      },
+      {
+        "id": "tr8_2p63_sz8",
+        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+      },
+      {
+        "id": "tr4_nan_sz4",
+        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+      },
+      {
+        "id": "tr8_nan_sz8",
+        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+      },
+      {
+        "id": "tr8_nan_sz4",
+        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+      },
+      {
+        "id": "tr8_inf_sz8",
+        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+      },
+      {
+        "id": "tr8_neginf_sz4",
+        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
       }
     ],
-    "sha256": "4dc08bb918ce073b59d44b24d2588f158591c94e4da19a45296f522ca2fed628"
+    "sha256": "299b5a6d2f736069572dbd661c7cf87591493ebf8bec809a21608a9526d175fe"
   },
-  "observation_schema": "One line per case. fields: decimal field dump. x*: res=0x%016llX (top-aligned fraction) or %d (sign/exponent). s*/z*/inf*/nan*/cf*/ge*/i2f*/f2f*: res=0x%016llX (cf* is the f64 bit pattern of the created double). esig*: cls/sgn decimal + signif 0x%016llX + exp decimal (sentinels preserved on early returns). rtne*: up decimal + signif after mutation. lz*: lz decimal + normalized signif + rebased exponent. gh*: cls decimal + f64 bit pattern of the host double. Banner line first; 135 lines total.",
+  "observation_schema": "One line per case. fields: decimal field dump. x*: res=0x%016llX (top-aligned fraction) or %d (sign/exponent). s*/z*/inf*/nan*/cf*/ge*/i2f*/f2f*: res=0x%016llX (cf* is the f64 bit pattern of the created double). esig*: cls/sgn decimal + signif 0x%016llX + exp decimal (sentinels preserved on early returns). rtne*: up decimal + signif after mutation. lz*: lz decimal + normalized signif + rebased exponent. gh*: cls decimal + f64 bit pattern of the host double. tr*: res=0x%016llX (opTrunc uintb result after the (intb) cast and calc_mask). Banner line first; 154 lines total.",
   "decisive_semantics": {
-    "reference_output_parameters": "extractExpSig writes sgn/signif/exp through pointers — the zero/infinity/NaN early returns (float.cc:95-97) return BEFORE any write, proven by sentinel out-params surviving; roundToNearestEven mutates signif by reference including uintb wrap-around; getHostFloat writes the floatclass out-param on every path; setFractionalCode/setSign/setExponentCode take x BY VALUE and return the packed word (no in-place mutation, no masking of x — OR only).",
-    "loop_bounds_traversal_order": "No loops in the ported ladder; all order is statement order. getHostFloat declares sgn then frac (top-aligned extract) then exp, classifies exp==0 (frac==0 ? zero : denormalized) before exp==maxexponent (frac==0 ? infinity : nan) before normalized, then exp -= bias and the jbit room apply to every non-early-return path (normal flag gates only the jbit room). getEncoding: extractExpSig -> zero/infinity/nan encodings -> exp += bias -> exp < -frac_size zero -> exp < 1 denormal branch (RNE at 64-frac_size-exp, signif >> -exp) -> RNE at 64-frac_size-1 with wrap-carry rebalance -> exp >= maxexponent infinity -> jbitimplied <<1 cut -> 3-setter pack. createFloat: >>=1 then (double) then ldexp then sign. extractExpSig: signbit -> x==0.0 -> isinf -> isnan -> negate -> frexp -> ldexp(.,63) -> (uintb) -> <<1 -> e-=1.",
-    "counter_accumulator_lifecycle": "No accumulators. precis = 8*sizeof(uintb)-1 = 63 and expchange = exp - precis + 1 are per-call constants in createFloat; the extractExpSig exponent is rebased once (e -= 1) per call; roundToNearestEven's single signif += midbitmask either wraps (caller detects (signif>>63)==0 and sets signif = 1<<63, exp += 1) or does not; lz/exp in the subnormal normalize are per-input with exp = -formin->bias - lz.",
-    "sorting_comparison_keys": "No sort; all comparisons are exact integer thresholds copied verbatim: exp == 0, exp == maxexponent, frac == 0 (zero vs denormal / infinity vs nan); exp < -frac_size, exp < 1, exp >= maxexponent, exp != 0 (jbitimplied cut); roundToNearestEven tests (signif & midbitmask) != 0 && ((signif & epsmask) != 0 || odd) with lowbitmask == 0 when lowbitpos == 64."
+    "reference_output_parameters": "extractExpSig writes sgn/signif/exp through pointers — the zero/infinity/NaN early returns (float.cc:95-97) return BEFORE any write, proven by sentinel out-params surviving; roundToNearestEven mutates signif by reference including uintb wrap-around; getHostFloat writes the floatclass out-param on every path; setFractionalCode/setSign/setExponentCode take x BY VALUE and return the packed word (no in-place mutation, no masking of x — OR only). opTrunc writes the floatclass out-param through getHostFloat but ignores it afterward; calc_mask(sizeout) is applied by value to a local uintb.",
+    "loop_bounds_traversal_order": "No loops in the ported ladder; all order is statement order. getHostFloat declares sgn then frac (top-aligned extract) then exp, classifies exp==0 (frac==0 ? zero : denormalized) before exp==maxexponent (frac==0 ? infinity : nan) before normalized, then exp -= bias and the jbit room apply to every non-early-return path (normal flag gates only the jbit room). getEncoding: extractExpSig -> zero/infinity/nan encodings -> exp += bias -> exp < -frac_size zero -> exp < 1 denormal branch (RNE at 64-frac_size-exp, signif >> -exp) -> RNE at 64-frac_size-1 with wrap-carry rebalance -> exp >= maxexponent infinity -> jbitimplied <<1 cut -> 3-setter pack. createFloat: >>=1 then (double) then ldexp then sign. extractExpSig: signbit -> x==0.0 -> isinf -> isnan -> negate -> frexp -> ldexp(.,63) -> (uintb) -> <<1 -> e-=1. opTrunc is straight-line: getHostFloat -> (intb) cast -> (uintb) reinterpret -> &= calc_mask(sizeout) (float.cc:634-638).",
+    "counter_accumulator_lifecycle": "No accumulators. precis = 8*sizeof(uintb)-1 = 63 and expchange = exp - precis + 1 are per-call constants in createFloat; the extractExpSig exponent is rebased once (e -= 1) per call; roundToNearestEven's single signif += midbitmask either wraps (caller detects (signif>>63)==0 and sets signif = 1<<63, exp += 1) or does not; lz/exp in the subnormal normalize are per-input with exp = -formin->bias - lz. opTrunc has no accumulators.",
+    "sorting_comparison_keys": "No sort; all comparisons are exact integer thresholds copied verbatim: exp == 0, exp == maxexponent, frac == 0 (zero vs denormal / infinity vs nan); exp < -frac_size, exp < 1, exp >= maxexponent, exp != 0 (jbitimplied cut); roundToNearestEven tests (signif & midbitmask) != 0 && ((signif & epsmask) != 0 || odd) with lowbitmask == 0 when lowbitpos == 64. opTrunc's only comparison is implicit in the (intb) cast: on the x86-64 oracle host (g++ -O2, cvttsd2si) NaN/Inf/magnitude >= 2^63 yield the integer-indefinite INT64_MIN; calc_mask indexes uintbmasks[size < 8 ? size : 8] (address.hh:499, address.cc:631-634)."
   },
   "coverage": {
     "fmt_fields_and_extractors": "MATCH",
@@ -599,25 +675,26 @@
     "subnormal_normalize_intermediate": "MATCH",
     "hostfloat_denormal_ladder": "MATCH",
     "getencoding_ladder_nan_canonical": "MATCH",
-    "int2float_36case_value_regression": "MATCH"
+    "int2float_36case_value_regression": "MATCH",
+    "trunc_integer_indefinite_mask": "MATCH"
   },
   "residual_todo_ids": [],
   "comparand": {
-    "cpp_fixture_sha256": "90837b047d4deab593cb947b5f094c520bb85cf4a9d966358ed84027cb683f76",
-    "rust_fixture_sha256": "b7fcd401bd46696a6eb8f31aca52e032efc94f5e698049dc531c393e02374376",
-    "float_emulate_rs_sha256": "bb211619653cbd1f7d24f382b63fc92452ba7f73f37e83bf47ffeb3f16ef4be4",
-    "runner_sha256": "3b13ce85eb361ffd7ee46c0c312b3f0af0d071d8790d23a3e8ee928c55283283",
+    "cpp_fixture_sha256": "8db6e3cecd015e94020e00f030a21e514c03a732e0dad3eca73fd759cfe91fa6",
+    "rust_fixture_sha256": "6c0ee6ea1beb01247b904ab6203a2153427c727387161df2115a30ba77150c26",
+    "float_emulate_rs_sha256": "e4737bc563f0dd44b9f96e34bf49e8cd158694f5a5e63a94cc76aced79837ed9",
+    "runner_sha256": "80031689848a52f2bbb87cbd071b0a5738a797eecde92c779da5527eb9640015",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "1c3e924a937cc069be31b459a0f563c58161a1ad56038aaf615e99cacf0c84e2",
-    "expected_rugra_stdout_sha256": "1c3e924a937cc069be31b459a0f563c58161a1ad56038aaf615e99cacf0c84e2",
+    "expected_ghidra_stdout_sha256": "2348667280e9fb5263420c0be33c651b1051071e87b633346b5736e2908453ad",
+    "expected_rugra_stdout_sha256": "2348667280e9fb5263420c0be33c651b1051071e87b633346b5736e2908453ad",
     "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
     "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
     "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
   },
   "build": {
     "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a (private->public access hack confined to the fixture translation unit)",
-    "expected_stdout_lines": 135
+    "expected_stdout_lines": 154
   }
 }

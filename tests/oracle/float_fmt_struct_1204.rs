@@ -51,6 +51,10 @@ fn f2f(name: &str, formin: &FloatFormat, a: u64, outformat: &FloatFormat) {
     println!("case={name}|res=0x{:016X}", formin.op_float2_float(a, outformat));
 }
 
+fn trunc(name: &str, fmt: &FloatFormat, a: u64, size_out: usize) {
+    println!("case={name}|res=0x{:016X}", fmt.op_trunc(a, size_out));
+}
+
 fn ldexp(x: f64, e: i32) -> f64 {
     // Fixture-local helper only: the value under test (getEncoding) uses the
     // libm ladder inside the library; this constructs exact power-of-two
@@ -231,4 +235,33 @@ fn main() {
     f2f("f2f_8to4_negnan", &fmt8, 0xFFF8000000000000, &fmt4);
     f2f("f2f_8to4_neginf", &fmt8, 0xFFF0000000000000, &fmt4);
     f2f("f2f_8to4_negzero", &fmt8, 0x8000000000000000, &fmt4);
+
+    // ---- FLOAT-OPTRUNC-OOB-0001: opTrunc (intb) cast + calc_mask(sizeout)
+    //      (float.cc:631-640). (intb) val on this x86-64 oracle host is
+    //      cvttsd2si: NaN/Inf/magnitude >= 2^63 convert to the integer
+    //      indefinite INT64_MIN, then calc_mask(sizeout) (address.hh:499)
+    //      applies — the low bytes of 0x8000000000000000 are zero for
+    //      sizeout < 8. Three tiers: normal, large out-of-range, NaN/Inf.
+    // normal tier (mask keeps low bytes of the two's complement word)
+    trunc("tr4_pos7_sz4", &fmt4, 0x40E00000, 4);                 // 7.0f
+    trunc("tr4_neg7_sz4", &fmt4, 0xC0E00000, 4);                 // -7.0f
+    trunc("tr4_neg7_sz1", &fmt4, 0xC0E00000, 1);                 // -7 & 0xff
+    trunc("tr8_frac_sz8", &fmt8, 0x40091EB851EB851F, 8);         // 3.14
+    trunc("tr8_neg300_sz2", &fmt8, 0xC072C00000000000, 2);       // -300 & 0xffff
+    trunc("tr4_negzero_sz4", &fmt4, 0x80000000, 4);              // -0.0
+    trunc("tr4_denorm_sz1", &fmt4, 0x00000001, 1);               // 2^-149 -> 0
+    trunc("tr8_maxi64_sz4", &fmt8, 0x43DFFFFFFFFFFFFF, 4);       // max < 2^63
+    // large out-of-range tier (integer indefinite then masked)
+    trunc("tr4_max_sz4", &fmt4, 0x7F7FFFFF, 4);                  // FLT_MAX
+    trunc("tr4_max_sz8", &fmt4, 0x7F7FFFFF, 8);
+    trunc("tr4_negmax_sz4", &fmt4, 0xFF7FFFFF, 4);               // -FLT_MAX
+    trunc("tr8_1e300_sz8", &fmt8, 0x7E37E43C8800759C, 8);        // 1e300
+    trunc("tr8_1e300_sz2", &fmt8, 0x7E37E43C8800759C, 2);
+    trunc("tr8_2p63_sz8", &fmt8, 0x43E0000000000000, 8);         // 2^63 boundary
+    // NaN/Inf tier (same integer-indefinite semantics)
+    trunc("tr4_nan_sz4", &fmt4, 0x7FC00000, 4);
+    trunc("tr8_nan_sz8", &fmt8, 0x7FF8000000000000, 8);
+    trunc("tr8_nan_sz4", &fmt8, 0x7FF8000000000000, 4);
+    trunc("tr8_inf_sz8", &fmt8, 0x7FF0000000000000, 8);
+    trunc("tr8_neginf_sz4", &fmt8, 0xFFF0000000000000, 4);
 }
