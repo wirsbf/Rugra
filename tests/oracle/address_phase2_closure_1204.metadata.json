@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ADDRESS-PHASE2-CLOSURE-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_blobs": {
+      "address.cc": "9e8039d486e94a8232cf4436f2e4d76f778db198",
+      "address.hh": "45144daf3e8a351c11e977dae5fa000399e4aecf",
+      "block.cc": "bf7103d9169097b2d879d04513a2690c6d9b1a62",
+      "block.hh": "8319d83b9afa2b5ecdd9008bbc48ba3df72b93e2",
+      "flow.cc": "bbe3028bf271dff738ce708d008fca9b659a7b65",
+      "flow.hh": "8f7bd48c755defc3177cdddd03f22049abc32b06",
+      "funcdata.hh": "083056d7f3b4afadb173ea7cf10a7f506c6b26c1",
+      "funcdata_op.cc": "14ee7313ed5386ebd6496c5395fcbe61891ad237",
+      "op.cc": "dcf7553fd3ab144c8fa2480cf52ab822a539c683",
+      "op.hh": "7e516fdf57185c74ea4efac8d9d3b324f259ade8",
+      "raw_arch.cc": "9e4169cc185ecb307c2c51dacd183b1c371bf1c8",
+      "raw_arch.hh": "8952c5817169b596c84e05bf2076862e5fd18730",
+      "sleigh.cc": "4a6b0090a64b1f645d63c7440498e3b262dce48f",
+      "sleigh.hh": "32ef8565efcb1c190c089690e3e01e29fc114c8b",
+      "space.cc": "dbaa2e775f32e63abb60c1c0b31457967ee52db7",
+      "space.hh": "bc88fcd6c589d585490a395a69ec4755a37b0610"
+    }
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1"
+  },
+  "analysis_options": {
+    "action": "none",
+    "bank_phase": "raw PcodeOpBank create/markAlive/destroy and public target",
+    "split_phase": "direct FlowInfo::splitBasic on four raw ops",
+    "flow_phase": "production SLEIGH oneInstruction via FlowInfo::generateOps then generateBlocks",
+    "flow_options": 32,
+    "max_instructions": 100000,
+    "flow_range": "[tagged entry, tagged entry + 4]",
+    "runs_share_flow_state": false
+  },
+  "input": {
+    "raw_image": {
+      "hex": "750190c3",
+      "length": 4,
+      "sha256": "5c9e2b87ad151eea34a6d63d0042ad037c1c73730281713fd6a74ed4c6a10cd2",
+      "assembly": "jne +1; nop; ret"
+    },
+    "spaces": [
+      {
+        "name": "ram",
+        "index": 3,
+        "kind": "processor",
+        "offsets": [0, 4096]
+      },
+      {
+        "name": "stack",
+        "index": 8,
+        "kind": "spacebase",
+        "offsets": [0, 4096]
+      },
+      {
+        "name": "code_overlay",
+        "index": 9,
+        "kind": "overlay-of-ram",
+        "offsets": [0, 4096]
+      }
+    ],
+    "bank_creation_order": [
+      "S0=stack:0x1000:startmark",
+      "R0=ram:0x1000:startmark",
+      "R1=ram:0x1000",
+      "O0=code_overlay:0x1000:startmark"
+    ],
+    "bank_target_queries": [
+      "ram:0x1000",
+      "ram:0x1001",
+      "code_overlay:0x1000",
+      "code_overlay:0x1001",
+      "stack:0x1000",
+      "stack:0x1001"
+    ],
+    "split_creation_order": [
+      "R0=ram:0x1000:startbasic+startmark",
+      "O0=code_overlay:0x1000:startmark",
+      "S0=stack:0x1000:startbasic+startmark",
+      "S1=stack:0x1001:startmark"
+    ],
+    "malformed_split": "M0=ram:0x2000:startmark-without-startbasic",
+    "flow_entries": [
+      "ram:0",
+      "code_overlay:0",
+      "stack:0"
+    ],
+    "flow_run_relationship": "three independent production runs; never represented as one combined visited map"
+  },
+  "input_fingerprint": "sha256:1e8baca3278147c4e0a4dfd43428ee0315be95b3c3ac9ce54d50d32763b7c45a",
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94"
+    }
+  },
+  "comparand": {
+    "pinned_base_commit": "4f42981d2ed723e6ac53ebb787d90f4b89e889df",
+    "pinned_base_tree": "17fd780210a7139a8b3dc30459e627b1926d763e",
+    "snapshot_scope": "entire tracked tree at pinned_base_commit plus only this Rust fixture",
+    "source_blobs": {
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+      "sleigh_shim/rugra_sleigh.cpp": "a53b7c3223a70720025efc813034a462a595076d",
+      "src/address.rs": "8154a4a0c0a60ea8488f0b25f19c607210e5f8d0",
+      "src/block.rs": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
+      "src/disasm/sleigh_lift.rs": "fd112162c7867fd572b66377fed38b58cf9666a6",
+      "src/flow.rs": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+      "src/funcdata.rs": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
+      "src/op.rs": "1f8908d74c0e5b72e41a910e46313066d48ce919",
+      "src/space.rs": "d3ea6840982f4361845f672862fab3267626ed9d"
+    },
+    "cpp_fixture_sha256": "f4d2aefba2ab51d38ced655f11f160d45552a64be7cb205ccc6d759690ebddfd",
+    "rust_fixture_sha256": "bea3776e22b0923a604bbfa3bbee45324c8dbf8e362a4f93c8823666e1a9b566",
+    "runner_sha256": "aefc7dea7b8cafcfdcaa6d4f5c4eecd7a64a633b113cae15769ea20f6f3b2986"
+  },
+  "decisive_semantics": {
+    "references_outputs": "Op identities are pointer/Arc identities labeled once; target and parent fields refer back to those identities. FlowInfo, PcodeOpBank, BlockGraph, and call vectors retain their production alias relationships.",
+    "iteration_boundaries_order": "Creation order, SeqNum natural optree order, alive/dead list order, visited-map order, block order, and per-block op order are emitted without sorting away semantic order. lower_bound candidates and final bank targets are separate fields.",
+    "counters_accumulators": "PcodeOpBank uniq starts at zero and increments per create; SeqNum time is immutable; pre-block Ghidra order is explicitly UNINITIALIZED rather than read; post-insert mutable order, instruction count, visited count, and block ordinals are observed.",
+    "sort_comparison_keys": "Address ordering is space index then offset; SeqNum optree ordering is Address then time; equal-offset RAM/stack/overlay and equal-address R0/R1 provide both primary and tie-break cases."
+  },
+  "observation": {
+    "overall_status": "MISMATCH",
+    "completion_claim": false,
+    "cases": [
+      {
+        "id": "address_space_identity_order",
+        "status": "MATCH",
+        "detail": "All six cross-space lower_bound candidates and final public bank targets match with full space name/index/offset identity."
+      },
+      {
+        "id": "bank_create_lifecycle",
+        "status": "MISMATCH",
+        "detail": "Ghidra create starts dead with an uninitialized mutable order; Rugra create starts alive and initializes order from time. R1::target also walks in the opposite direction."
+      },
+      {
+        "id": "bank_destroy_alive_exception",
+        "status": "MISMATCH",
+        "detail": "Ghidra throws LowlevelError:Deleting integrated op and preserves membership; Rugra destroys the alive op."
+      },
+      {
+        "id": "split_parent_order",
+        "status": "MATCH",
+        "detail": "After split, block count/entry ordinal, op identity, parent ordinal, within-block op order, and mutable SeqNum order all match."
+      },
+      {
+        "id": "split_entry_start_stop_cover",
+        "status": "MISMATCH",
+        "detail": "Ghidra records one-space RangeList covers and derives entry/start/stop from them; Rugra exposes no entry/cover, drops start space, and approximates stop from the last op."
+      },
+      {
+        "id": "split_missing_start_exception",
+        "status": "MISMATCH",
+        "detail": "Ghidra throws before mutation; Rugra emits a warning and constructs one block."
+      },
+      {
+        "id": "flow_ram_tagged_entry",
+        "status": "MISMATCH",
+        "detail": "Production generation reaches the same instruction/block cardinalities, but Rugra loses space identity from generated ops, visited snapshots, and block range state and uses the opposite raw alive/dead phase."
+      },
+      {
+        "id": "flow_overlay_tagged_entry",
+        "status": "MISMATCH",
+        "detail": "Ghidra retains overlay visited/op identities then throws when the x86 RAM branch target has no overlay-owned op; Rugra erases the tag and completes two blocks."
+      },
+      {
+        "id": "flow_stack_tagged_entry",
+        "status": "MISMATCH",
+        "detail": "Ghidra retains stack visited/op identities then throws when the x86 RAM branch target has no stack-owned op; Rugra erases the tag and completes two blocks."
+      },
+      {
+        "id": "combined_cross_space_visited",
+        "status": "UNTESTED",
+        "detail": "The public Rust API cannot place RAM, overlay, and stack entries into one FlowInfo visited map or invoke private newAddress directly; three independent runs are not reported as a combined state."
+      }
+    ],
+    "residual_id": "ADDRESS-PHASE2-CLOSURE-0001"
+  },
+  "expected": {
+    "ghidra_stdout_sha256": "947a4519a223ff86dcefe964b07cdbf84057c4c41e705d638760cb9c697e6931",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "df2923f7df274c92d6123dee18b6437b730b492c898cfa981cf4ea2055ddbfc6",
+    "rugra_stderr_sha256": "b41873e5535e8564b420e56e4df9983caffac623d713bd701b423aeeef7c1f2c",
+    "unified_diff_sha256": "30bee583384b7d8f0a069910ffa4612b26cbc568742ad0e90ede917274dabb02"
+  }
+}
