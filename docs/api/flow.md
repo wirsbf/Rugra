@@ -291,3 +291,45 @@ fd、锁定 git archive、isolated Cargo.lock vendor 和 byte diff 起草，但 
 该门禁只证明本 fixture 的观察闭包；错误路径（BadData/Unimpl/越界/指令上限）、
 跳转表恢复、inline/injection 与 SeqNum 残差仍属 `SLEIGH-FLOW-0001`/`INJECT-0001`
 等 TODO，flow.rs 整体保持 L2/MISMATCH。
+
+## 2026-08-23：`FLOW-CONTAINEDCALL-0001` checkContainedCall 移植
+
+锁定 oracle 为 Ghidra 12.0.4 commit
+`e40ed13014025f82488b1f8f7bca566894ac376b`。完整读取 `FlowInfo::checkContainedCall`
+（flow.cc:1357-1405）、其唯一调用点 `generateOps`（flow.cc:813，do-while 循环体内、
+jumptable 内循环之后）、`setPossibleUnreachable` 的设置点 `inlineSubFunction`
+（flow.cc:1274）与消费点 `generateBlocks`（flow.cc:843-844）后移植：
+
+- **`check_contained_call`**（flow.cc:1361-1405）：逐 spec 扫描 `fd.callspecs`
+  （= Ghidra Funcdata 持有、FlowInfo 以引用持有的 `qlst`）：
+  - callee 已解析为 Funcdata → 跳过（flow.cc:1367-1368；Rugra `has_funcdata`
+    适配器因 `query_call` 尚未接线恒为 false，CALLSPEC-0001）；
+  - 非 `CPUI_CALL`（按 op 当前 opcode）→ 跳过（flow.cc:1369-1370）；
+  - visited 覆盖判定用 `BTreeMap::range(..=addr).next_back()` 精确复刻
+    `upper_bound` + 前移一步：无 ≤addr 的表项（flow.cc:1375）或
+    `start+size <= addr`（flow.cc:1377-1378）→ 跳过；
+  - 恰为 visited 指令起点（flow.cc:1379）：`Possible PIC construction` header
+    warning → `op_set_opcode(BRANCH)` → `target(addr)` 与 call 后继 op 打
+    STARTBASIC（`opMarkStartBasic` = funcdata.hh:480 置位 startbasic）→
+    `new_code_ref` 恢复 input(0) → 从 callspecs 删除该 spec；
+  - 落在已访问指令中间（flow.cc:1400-1402）：仅
+    `Call to offcut address within same function` warning。
+- **erase-后继跳过 quirk**：Ghidra 的 `iter = qlst.erase(iter); if (iter ==
+  qlst.end()) break;` 加 for 头部 `++iter` 意味着紧随被转换 spec 之后的
+  spec 在本轮**不被检查**。Rugra 以相同索引步进复刻（fixture `multi` case
+  锁定该行为）。
+- **`generate_ops` 接线**（flow.cc:796-821）：重构为 do-while 形状——jumptable
+  内循环（`!branchinds.is_empty()`）之后无条件执行 `check_contained_call()`，
+  即使首轮无 BRANCHIND 也运行一次，对齐 Ghidra 至少执行一次的 do-while 语义；
+  退出条件保持既有 multistage 近似（`checkMultistageJumptables` 仍未移植）。
+- **possible_unreachable 消费端**（跨域）：`setPossibleUnreachable` 由
+  `inlineSubFunction`（flow.cc:1274）设置、`generateBlocks`（flow.cc:843-844）
+  消费 `data.removeUnreachableBlocks(false,true)`。Rugra 的
+  `generate_blocks` 已有 `has_possible_unreachable → remove_unreachable_blocks`
+  接线；`remove_unreachable_blocks` 本体在 funcdata.rs 的对齐深度属 flow 审计
+  另一项（见报告登记的 TODO 建议），本租约未触碰。
+
+验证：`cargo test --lib flow` 57/57 全绿；全量 --lib 除两个预存在失败
+（`test_infer_params_and_return_type`/`test_type_propagation`，基线 e959d08
+同样失败，类型推断子系统，与本改动无关）。逐函数 oracle 差分见
+`tools/run_flow_containedcall_oracle.sh`。
