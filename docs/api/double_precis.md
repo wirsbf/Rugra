@@ -28,6 +28,10 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 - `is_addr_tied_contiguous` / `is_addr_tied_contiguous_result`
 - `verify_mult_neg_one` — MULT(-1) 校验
 - `whole_list` / `find_copies` / `get_true_false`
+  - **2026-08-23（CONDEXE-TRUEOUT-0002）**：`get_true_false` 对齐 double.cc:916-930 全语义 —
+    `getTrueOut/getFalseOut` 纯位置（block.hh:299-300），交换条件改为
+    `boolop->isBooleanFlip() != flip`（此前只看调用方 flip，漏了 CBRANCH 自身的
+    BOOLEAN_FLIP，两种 flip 形态下极性均错）。
 - `prepare_*` / `create_*` / `replace_*` op builders
 - `apply_rule_in` — opcode 分派骨架（*Form 子类依赖 block 级控制流，标 TODO）
 

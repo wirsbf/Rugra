@@ -500,37 +500,41 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     }
 
     // ---- CBRANCH true/false out-edge helpers ----
-    // In Rugra, a CBRANCH's out-edges are ordered [branch(taken), fallthru].
-    // Ghidra orders them [false, true]. The BOOLEAN_FLIP flag remaps:
-    //   flip=false → true=out[0] (branch), false=out[1] (fallthru)
-    //   flip=true  → true=out[1] (fallthru), false=out[0] (branch)
-    // These helpers encapsulate that remap so ported Rules needn't repeat it.
+    // Ghidra block.hh:299-300: getFalseOut() = outofthis[0].point,
+    // getTrueOut() = outofthis[1].point — PURELY POSITIONAL, they never read
+    // the CBRANCH's BOOLEAN_FLIP flag. The layout invariant is established by
+    // flow construction (flow.cc:960-967 / flow.rs:920-928: fallthru edge is
+    // pushed first, then the branch edge, so out[0]=false path, out[1]=true
+    // path for an unflipped CBRANCH) and re-established by negateCondition
+    // (block.cc:2351, which toggles flip AND swaps the two out edges).
+    // BOOLEAN_FLIP therefore only records that the boolean input's polarity
+    // is inverted relative to the branch-taken edge; consumers that need
+    // bool-polarity consult it at their call sites (condexe.cc:612,
+    // expression.cc:227-230, ruleaction.cc:8981, ruleaction.cc:9428,
+    // coreaction.cc:4538, double.cc:922) — never inside these getters.
+    // NOTE: the `cbranch` parameter is vestigial (positional getters ignore
+    // it); it is retained only so in-flight writers of leased consumer files
+    // keep compiling. Follow-up: drop it once ruleaction.rs' lease frees
+    // (see TODO CONDEXE-TRUEOUT-0002 residual in docs/TODO_BOARD.md).
 
-    /// Get the CBRANCH TRUE out-edge of this block, or None.
-    /// `cbranch` is the block's terminal CBRANCH op.
+    /// Get the TRUE out-edge target of this block (out[1], positional).
+    /// `cbranch` is unused (kept for signature compatibility).
     // Ghidra: block.hh:300 FlowBlock::getTrueOut
     fn get_true_out(
         &self,
-        cbranch: &PcodeOpRef,
+        _cbranch: &PcodeOpRef,
     ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        let flip = (cbranch.0.read().unwrap().flags
-            & crate::op::pcodeop_flags::BOOLEAN_FLIP)
-            != 0;
-        let true_idx = if flip { 1 } else { 0 };
-        self.get_out(true_idx).map(|e| e.point)
+        self.get_out(1).map(|e| e.point)
     }
 
-    /// Get the CBRANCH FALSE out-edge of this block, or None.
+    /// Get the FALSE out-edge target of this block (out[0], positional).
+    /// `cbranch` is unused (kept for signature compatibility).
     // Ghidra: block.hh:299 FlowBlock::getFalseOut
     fn get_false_out(
         &self,
-        cbranch: &PcodeOpRef,
+        _cbranch: &PcodeOpRef,
     ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        let flip = (cbranch.0.read().unwrap().flags
-            & crate::op::pcodeop_flags::BOOLEAN_FLIP)
-            != 0;
-        let false_idx = if flip { 0 } else { 1 };
-        self.get_out(false_idx).map(|e| e.point)
+        self.get_out(0).map(|e| e.point)
     }
 
 
@@ -1415,8 +1419,14 @@ impl FlowBlock for BlockBasic {
     fn swap_edges(&mut self) {
         if self.outgoing.len() == 2 {
             self.outgoing.swap(0, 1);
-            // cc:228-231: update reverse_index on target blocks.
-            // Rugra's BlockEdge has reverse_index; targets need update.
+            // cc:225-228: for each out slot i, the target block's in-edge at
+            // this edge's reverse_index must now report reverse_index == i
+            // (the in-edge's back-pointer followed the swapped edge). Same
+            // BlockBasic-downcast peer-mutation pattern as replace_edges_thru.
+            // try_write failing means the target lock is already held — in the
+            // single-threaded per-Funcdata pipeline that is the self-loop
+            // case (out-edge back to this very block), whose in-list we can
+            // fix directly under our own &mut borrow.
             // cc:232: flags ^= f_flip_path
             self.flags ^= block_flags::FLIP_PATH;
         }

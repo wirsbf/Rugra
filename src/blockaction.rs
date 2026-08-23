@@ -2886,10 +2886,12 @@ impl<'a> CollapseStructure<'a> {
         // cc:1783: const FlowBlock *out0 = b2->getOut(0);
         let out0 = b2.read().unwrap().get_out(0).map(|e| e.point.clone());
         // cc:1785: opc = (b1->getFalseOut() == b2) ? INT_OR : INT_AND
-        // Ghidra getFalseOut() = outofthis[0].point (edge 0 = false in Ghidra's
-        // convention). Rugra uses the OPPOSITE edge convention (edge 1 = false
-        // when BOOLEAN_FLIP unset, edge 0 = false when flipped), so we must use
-        // Rugra's CBRANCH-aware get_false_out(cbranch) instead of get_out(0).
+        // Ghidra getFalseOut() = outofthis[0].point, purely positional
+        // (block.hh:299, never reads BOOLEAN_FLIP). Rugra's flow construction
+        // (flow.rs:920-928, flow.cc:960-967) pushes the fallthru edge first,
+        // so out[0] is the false path in both implementations and
+        // get_false_out(cbranch) now returns exactly out[0] — the polarity
+        // below matches block.cc:1785 one-to-one.
         // Find b1's terminal CBRANCH op.
         let b1_cbranch = {
             let b1r = b1.read().unwrap();

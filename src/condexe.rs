@@ -126,9 +126,9 @@ impl<'a> ConditionalExecution<'a> {
         }
     }
 
-    // Ghidra: condexe.cc:432 ConditionalExecution::blockAsBasic
-    // ------------------------------------------------------------------
-    // Graph helpers adapted to Rugra's dynamic-dispatch blocks.
+    // RUGRA-GLUE: graph helpers adapted to Rugra's dynamic-dispatch blocks
+    // (Ghidra accesses BlockBasic members directly; `lastOp` maps to
+    // BlockBasic::lastOp, block.hh:490).
     // ------------------------------------------------------------------
 
     fn block_as_basic(
@@ -144,14 +144,14 @@ impl<'a> ConditionalExecution<'a> {
         rg.as_any().downcast_ref::<BlockBasic>().is_some()
     }
 
-    // Ghidra: condexe.cc:432 ConditionalExecution::lastOp
+    // Ghidra: block.hh:490 BlockBasic::lastOp
     /// Last op of a block, or None.
     fn last_op(arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<PcodeOp>>> {
         arc.read().unwrap().get_ops().last().cloned().map(|r| r.0)
     }
 
-    // Ghidra: condexe.cc:432 ConditionalExecution::ops
-    /// Iterator over all ops of a block (excluding nothing).
+    // RUGRA-GLUE: iterator over all ops of a block (Ghidra iterates
+    /// `bl->beginOp()..endOp()` inline at each call site).
     fn ops(arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Vec<Arc<RwLock<PcodeOp>>> {
         arc.read().unwrap().get_ops().into_iter().map(|r| r.0).collect()
     }
@@ -160,7 +160,7 @@ impl<'a> ConditionalExecution<'a> {
     // testIBlock (condexe.cc:43-52)
     // ------------------------------------------------------------------
 
-    // Ghidra: condexe.cc:432 ConditionalExecution::testIblock
+    // Ghidra: condexe.cc:43 ConditionalExecution::testIBlock
     /// The iblock must have 2 in edges, 2 out edges, and a final CBRANCH.
     fn test_iblock(&mut self) -> bool {
         let ib = match &self.iblock { Some(b) => b.clone(), None => return false };
@@ -218,36 +218,17 @@ impl<'a> ConditionalExecution<'a> {
         if !Arc::ptr_eq(&tmp2, &tmp) { return false; }
         if Arc::ptr_eq(&tmp, &ib) { return false; }
 
-        // init2a_true: does initblock's TRUE out edge reach `last`?
-        self.init2a_true = self.is_true_out_to(&tmp, &last);
+        // condexe.cc:72: init2a_true = (initblock->getTrueOut() == last).
+        // getTrueOut() is purely positional out[1] (block.hh:300, never reads
+        // BOOLEAN_FLIP); the init CBRANCH's flip is consumed later, exactly
+        // once, by verifySameCondition's matchflip composition below.
+        self.init2a_true = tmp
+            .read()
+            .unwrap()
+            .get_out(1)
+            .map(|e| Arc::ptr_eq(&e.point, &last))
+            .unwrap_or(false);
         true
-    }
-
-    // Ghidra: condexe.cc:432 ConditionalExecution::isTrueOutTo
-    /// Return true if `src`'s TRUE out-edge flows (directly) to `dst`.
-    /// Adapts Ghidra's getTrueOut to Rugra. We determine the true edge by
-    /// examining the CBRANCH's boolean_flip flag:
-    ///   - boolean_flip false: TRUE follows the branch (taken) edge.
-    ///   - boolean_flip true:  TRUE follows the fallthru edge.
-    /// In Rugra the CBRANCH out-edges are ordered [branch_target, fallthru]
-    /// (see funcdata.rs edge construction), so without flip out[0] is TRUE.
-    fn is_true_out_to(
-        &self,
-        src: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        dst: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> bool {
-        let cb = match Self::last_op(src) { Some(o) => o, None => return false };
-        let cb_rg = cb.read().unwrap();
-        if cb_rg.opcode != OpCode::CPUI_CBRANCH { return false; }
-        let flip = (cb_rg.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
-        drop(cb_rg);
-        let rg = src.read().unwrap();
-        // true edge index: 0 (branch target) unless flipped.
-        let true_idx = if flip { 1 } else { 0 };
-        match rg.get_out(true_idx) {
-            Some(e) => Arc::ptr_eq(&e.point, dst),
-            None => false,
-        }
     }
 
     // ------------------------------------------------------------------
@@ -499,7 +480,8 @@ impl<'a> ConditionalExecution<'a> {
         Some(new_out)
     }
 
-    // Ghidra: condexe.cc:432 ConditionalExecution::immedDomOf
+    // RUGRA-GLUE: immediate-dominator lookup (Ghidra calls
+    // FlowBlock::getImmedDom, block.hh:162, inline).
     fn immed_dom_of(&self, b: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         b.read().unwrap().get_immed_dom().and_then(|w| w.upgrade())
     }
@@ -744,13 +726,52 @@ impl<'a> ConditionalExecution<'a> {
         let swap = self.posta_outslot != self.camethruposta_slot;
         let _ = self.fd.remove_from_flow_split(&ib, swap);
     }
+
+    // RUGRA-GLUE: fixture observability for CONDEXE-TRUEOUT-0002; the locked
+    // Ghidra fixture reads the same private members and calls the same private
+    // stages through #define private public (tests/oracle/condexe_trueout_1204.cc).
+    /// Set iblock/prea_inslot and run `findInitPre` in isolation, returning
+    /// (ok, init2a_true). Mirrors condexe.cc:55-75 driven directly.
+    #[doc(hidden)]
+    pub fn fixture_find_init_pre(
+        &mut self,
+        ib: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        prea_inslot: i32,
+    ) -> (bool, bool) {
+        self.iblock = Some(ib);
+        self.prea_inslot = prea_inslot;
+        let ok = self.find_init_pre();
+        (ok, self.init2a_true)
+    }
+
+    // RUGRA-GLUE: fixture observability (see fixture_find_init_pre).
+    /// Set iblock/cbranch and run the full `verify` stage in isolation,
+    /// returning (ok, init2a_true, camethruposta_slot, posta, postb).
+    /// Mirrors condexe.cc:402-428 driven directly.
+    #[doc(hidden)]
+    pub fn fixture_verify(
+        &mut self,
+        ib: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        cbranch: crate::op::PcodeOpRef,
+    ) -> (bool, bool, i32, Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>, Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>) {
+        self.iblock = Some(ib);
+        self.cbranch = Some(cbranch.0);
+        let ok = self.verify();
+        (
+            ok,
+            self.init2a_true,
+            self.camethruposta_slot,
+            self.posta_block.clone(),
+            self.postb_block.clone(),
+        )
+    }
 }
 
 // ======================================================================
 // BooleanMatch / BooleanExpressionMatch (expression.cc:57-232)
 // ======================================================================
 
-// Ghidra: condexe.cc:432 ConditionalExecution::varnodeSame
+// Ghidra: expression.cc:93 BooleanMatch::varnodeSame
 /// `BooleanMatch::varnodeSame` (expression.cc:93-100).
 fn varnode_same(a: &Arc<RwLock<Varnode>>, b: &Arc<RwLock<Varnode>>) -> bool {
     if Arc::ptr_eq(a, b) { return true; }
@@ -761,7 +782,7 @@ fn varnode_same(a: &Arc<RwLock<Varnode>>, b: &Arc<RwLock<Varnode>>) -> bool {
     false
 }
 
-// Ghidra: condexe.cc:432 ConditionalExecution::sameOpComplement
+// Ghidra: expression.cc:57 BooleanMatch::sameOpComplement
 /// `BooleanMatch::sameOpComplement` (expression.cc:57-86). Only handles
 /// INT_LESS / INT_SLESS with a constant input.
 fn same_op_complement(bin1: &Arc<RwLock<PcodeOp>>, bin2: &Arc<RwLock<PcodeOp>>) -> bool {
@@ -798,7 +819,7 @@ fn same_op_complement(bin1: &Arc<RwLock<PcodeOp>>, bin2: &Arc<RwLock<PcodeOp>>) 
     true
 }
 
-// Ghidra: condexe.cc:432 ConditionalExecution::booleanMatchEvaluate
+// Ghidra: expression.cc:111 BooleanMatch::evaluate
 /// `BooleanMatch::evaluate` (expression.cc:111-216). Returns SAME /
 /// COMPLEMENTARY / UNCORRELATED.
 fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>, depth: i32) -> i32 {
@@ -936,9 +957,12 @@ fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>
     }
 }
 
-// Ghidra: condexe.cc:432 ConditionalExecution::booleanMatchVerifyCondition
-/// `BooleanExpressionMatch::verifyCondition` (expression.cc:220-232).
-/// Returns SAME / COMPLEMENTARY / UNCORRELATED.
+// Ghidra: expression.cc:220 BooleanExpressionMatch::verifyCondition
+/// `BooleanExpressionMatch::verifyCondition` (expression.cc:220-232),
+/// correlation stage only: returns SAME / COMPLEMENTARY / UNCORRELATED
+/// from `BooleanMatch::evaluate` on the two CBRANCH boolean inputs,
+/// WITHOUT the per-CBRANCH boolean_flip composition (expression.cc:227-230),
+/// which the two Rust callers apply explicitly.
 fn boolean_match_verify_condition(op: &Arc<RwLock<PcodeOp>>, iop: &Arc<RwLock<PcodeOp>>) -> i32 {
     let vn_op = op.read().unwrap().get_in(1).cloned();
     let vn_iop = iop.read().unwrap().get_in(1).cloned();
@@ -952,10 +976,11 @@ fn boolean_match_verify_condition(op: &Arc<RwLock<PcodeOp>>, iop: &Arc<RwLock<Pc
     }
 }
 
-// Ghidra: condexe.cc:432 ConditionalExecution::verifyConditionWithFlip
-/// Like `boolean_match_verify_condition` but also returns the flip flag,
-/// mirroring `BooleanExpressionMatch::getFlip()` (expression.hh:102) which
-/// RuleOrPredicate consults (condexe.cc:678).
+// Ghidra: expression.cc:220 BooleanExpressionMatch::verifyCondition
+/// Full `BooleanExpressionMatch::verifyCondition` (expression.cc:220-232)
+/// including the per-CBRANCH boolean_flip composition (cc:227-230): returns
+/// (correlation, matchflip), mirroring what `verifyCondition` stores in
+/// `matchflip` and `RuleOrPredicate` consults via `getFlip()` (condexe.cc:678).
 fn verify_condition_with_flip(
     op: &Arc<RwLock<PcodeOp>>,
     iop: &Arc<RwLock<PcodeOp>>,
@@ -1103,17 +1128,17 @@ impl MultiPredicate {
         let zero_block = match &self.zero_block { Some(z) => z.clone(), None => return };
         let op = match &self.op { Some(o) => o.clone(), None => return };
         let parent = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-        // Determine TRUE/FALSE out edges via the CBRANCH boolean_flip flag.
-        let cb = self.cbranch.clone();
-        let flip = cb.map(|c| (c.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0).unwrap_or(false);
-        // Rugra out[0]=branch target (true unless flipped), out[1]=fallthru.
+        // condexe.cc:575-582 uses purely positional getTrueOut()/getFalseOut()
+        // (block.hh:299-300: out[1]=true, out[0]=false, never reads
+        // BOOLEAN_FLIP). The cbranch flip is consumed separately, once, in
+        // discoverConditionalZero (condexe.cc:612-613).
         let true_out = {
             let r = cond_block.read().unwrap();
-            r.get_out(if flip { 1 } else { 0 }).map(|e| e.point)
+            r.get_out(1).map(|e| e.point)
         };
         let false_out = {
             let r = cond_block.read().unwrap();
-            r.get_out(if flip { 0 } else { 1 }).map(|e| e.point)
+            r.get_out(0).map(|e| e.point)
         };
         if true_out.as_ref().map(|t| Arc::ptr_eq(t, &zero_block)).unwrap_or(false) {
             self.zero_path_is_true = true;
@@ -1180,6 +1205,28 @@ pub struct RuleOrPredicate;
 impl RuleOrPredicate {
     // Ghidra: condexe.hh:172 RuleOrPredicate::new
     pub fn new() -> Self { Self }
+
+    // RUGRA-GLUE: fixture observability for CONDEXE-TRUEOUT-0002; the locked
+    // Ghidra fixture builds MultiPredicate (a private nested struct,
+    // condexe.hh:174) directly and calls discoverPathIsTrue through
+    // `#define private public` (tests/oracle/condexe_trueout_1204.cc).
+    /// Fill cond_block/zero_block/op/cbranch and run `discoverPathIsTrue` in
+    /// isolation, returning zero_path_is_true. Mirrors condexe.cc:572-582.
+    #[doc(hidden)]
+    pub fn fixture_discover_path_is_true(
+        cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        zero_block: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        op: crate::op::PcodeOpRef,
+        cbranch: crate::op::PcodeOpRef,
+    ) -> bool {
+        let mut mp = MultiPredicate::new();
+        mp.op = Some(op.0);
+        mp.zero_block = Some(zero_block);
+        mp.cond_block = Some(cond_block);
+        mp.cbranch = Some(cbranch.0);
+        mp.discover_path_is_true();
+        mp.zero_path_is_true
+    }
 
     // Ghidra: condexe.cc:617 RuleOrPredicate::getOpList
     pub fn get_opcodes(&self) -> Vec<OpCode> {
