@@ -1030,3 +1030,24 @@ PcodeOpRaw
   （typeDirty + setSymbol），折叠出的新常量在 highlevel_on 下其
   HighVariable 正确附着 equate 符号。行为由
   `tests/oracle/varnode_highbranch_1204`（hb_op_level_marked_input）门禁。
+
+### 2026-08-23：get_nz_mask_local 完整 oracle switch 合并（FUNCDATA-CALCNZM-0002）
+
+- `PcodeOp::get_nz_mask_local(cliploop) -> u64` — `PcodeOp::getNZMaskLocal`
+  （op.cc:547-771）完整 switch 从 funcdata.rs 暂存副本（原
+  `Funcdata::pcode_op_nz_mask_local`）值等价迁回 PcodeOp 方法。旧行为本
+  （divergent，零调用方）已删除：忽略 cliploop、缺 INT_DIV/INT_REM/
+  POPCOUNT/LZCOUNT/INT_MULT/CALL/CALLIND/CPOOLREF 臂、INT_LEFT 用裸
+  wrapping_shl（无 pcode_left 的 sa>=64→0 保护）、INT_RIGHT 缺 >8 字节
+  扩展精度分支（cc:612-630）、INT_SRIGHT 缺符号位已知 0 分支
+  （cc:639-644）、SUBPIECE 缺扩展精度（cc:682-690）、输入 mask 走保守
+  近似 `get_nz_mask()` 而非存储字段。
+- **输入 NZM 读取直接访问存储字段**（`get_nzm`，oracle varnode.hh:231
+  `getNZMask() { return nzm; }`）；`Varnode::get_nz_mask()` 的保守近似合并
+  仍是残差 TODO FUNCDATA-CALCNZM-0003。
+- MULTIEQUAL 臂实现 `cliploop` 裁剪（op.cc:746-751，`parent->isLoopIn(i)`
+  跳过 looping 边）；CALL/CALLIND/CPOOLREF 臂按 `is_calculated_bool()` → 1
+  （op.cc:758-765）。
+- `Funcdata::calc_nz_mask` 两个调用点（phase-1 cc:874 / phase-2 cc:919）改调
+  `PcodeOp::get_nz_mask_local`，funcdata.rs 暂存副本删除。行为由
+  `tests/oracle/funcdata_calcnzm_1204`（6/6 MATCH）门禁。

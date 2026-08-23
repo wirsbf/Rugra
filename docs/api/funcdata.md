@@ -1422,10 +1422,10 @@ Rugra 防御性视为 alive，生产不可达已注释）。
 - **Phase 2（cc:904-925）**：清 mark，把所有 MULTIEQUAL 压入 worklist；反复用 `getNZMaskLocal(false)`（不裁剪 loop 边）重算，nzm 变化时把该输出的全部 descend 压回 worklist，直至不动点。
 - 旧实现（简化单遍 + 内联 switch）已删除；旧 switch 中 INT_NEGATE/INT_2COMP 分支是自创语义（oracle 落 `default:` → fullmask），已随重写移除。
 
-### Funcdata::pcode_op_nz_mask_local（op.cc:547 PcodeOp::getNZMaskLocal 的完整移植）
-- 完整 oracle switch（op.cc:547-771）：比较/布尔 → 1；COPY/ZEXT 传播；SEXT sign_extend；XOR/OR/AND；LEFT/RIGHT（含 >8 字节扩展精度分支 cc:612-630）；SRIGHT（符号位已知 0 分支 cc:639-644）；**INT_DIV**（cc:648-659，coveringmask(val) >> mostsigbit_set(常量分母)——sc6 y/64 根因修复）；INT_REM（cc:660-663）；POPCOUNT/LZCOUNT（cc:664-672）；SUBPIECE（含扩展精度 cc:673-692）；PIECE（cc:693-698）；INT_MULT（cc:699-731）；INT_ADD（进位 cc:732-739）；MULTIEQUAL（cliploop 裁剪 cc:740-757）；CALL/CALLIND/CPOOLREF isCalculatedBool→1（cc:758-765）；default→fullmask。
+### Funcdata::pcode_op_nz_mask_local → PcodeOp::get_nz_mask_local（op.cc:547，FUNCDATA-CALCNZM-0002 合并）
+- **完整 oracle switch（op.cc:547-771）已迁至 `PcodeOp::get_nz_mask_local`（src/op.rs）**：比较/布尔 → 1；COPY/ZEXT 传播；SEXT sign_extend；XOR/OR/AND；LEFT/RIGHT（含 >8 字节扩展精度分支 cc:612-630）；SRIGHT（符号位已知 0 分支 cc:639-644）；**INT_DIV**（cc:648-659，coveringmask(val) >> mostsigbit_set(常量分母)——sc6 y/64 根因修复）；INT_REM（cc:660-663）；POPCOUNT/LZCOUNT（cc:664-672）；SUBPIECE（含扩展精度 cc:673-692）；PIECE（cc:693-698）；INT_MULT（cc:699-731）；INT_ADD（进位 cc:732-739）；MULTIEQUAL（cliploop 裁剪 cc:740-757）；CALL/CALLIND/CPOOLREF isCalculatedBool→1（cc:758-765）；default→fullmask。
 - **输入 NZM 读取直接访问存储字段 `nzm`**（oracle varnode.hh:231 `getNZMask() { return nzm; }`）。Rugra 的 `Varnode::get_nz_mask()`（varnode.rs）是 calcNZMask 接线前的保守近似（常量→offset、其余→calc_mask），不能用于传播——残差 TODO FUNCDATA-CALCNZM-0003。
-- RUGRA-GLUE：完整 switch 放在 funcdata.rs（op.rs 不在本租约）；op.rs 既有 `PcodeOp::get_nz_mask_local` 忽略 cliploop、缺 DIV/REM/POPCOUNT/LZCOUNT/MULT/CALL 臂且自创 NEGATE/2COMP 臂——合并到 op.rs 登记 TODO FUNCDATA-CALCNZM-0002。
+- funcdata.rs 内的暂存副本 `Funcdata::pcode_op_nz_mask_local` 已删除（值等价迁移）；`calc_nz_mask` 的 phase-1（cc:874）与 phase-2（cc:919）调用点直接调用 `PcodeOp::get_nz_mask_local`。原 funcdata.rs 侧 RUGRA-GLUE（op.rs 租约限制）随之解除，TODO FUNCDATA-CALCNZM-0002 的 op.rs divergent 旧版（忽略 cliploop、缺 DIV/REM/POPCOUNT/LZCOUNT/MULT/CALL 臂、输入 mask 走保守近似）已被完整 switch 替换。
 - 原始 `>>`/`<<` 位点（oracle 未加保护处）用 `wrapping_shr/wrapping_shl` 镜像 x86-64 移位计数掩码语义；oracle 经 `pcode_right/pcode_left`（address.hh:505-517）保护的位点按其语义（sa>=64 → 0）。
 
 ### 主管线接线核实（FUNCDATA-CALCNZM-0001）
