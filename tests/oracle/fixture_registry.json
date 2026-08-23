@@ -3723,6 +3723,33 @@
         "database::Scope::add_equate_symbol",
         "database::add_symbol_internal_category"
       ]
+    },
+    {
+      "id": "varnode_highbranch_1204",
+      "description": "Varnode copySymbol high branch vs locked 12.0.4: typeDirty set + setSymbol attach on close propagation, not-close clean, empty-mapentry typeDirty-only, no-high outer guard, op-level markedInput folding chain (5/5 MATCH)",
+      "runner": [
+        "tools/run_varnode_highbranch_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/varnode_highbranch_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/varnode_highbranch_1204.cc",
+          "rust_fixture": "tests/oracle/varnode_highbranch_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Varnode::copySymbol"
+      ],
+      "rust_function_ids": [
+        "varnode::Varnode::copy_symbol_arc"
+      ]
     }
   ]
 }
