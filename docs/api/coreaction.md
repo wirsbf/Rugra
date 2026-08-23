@@ -853,6 +853,10 @@ build_full_pipeline_actions()：返回已实现非 stub Action，按 Ghidra 顺�
 ### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
 action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。
 
+### 2026-08-23：类型推断传播补全（GETSTR-ZERODIFF-D 域）
+
+① `ActionInferTypes::build_localtypes` 增加 Ghidra buildLocaltypes（coreaction.cc:5012-5034）的首步：每个 varnode 的局部类型（v_type）先入 temps——锁定参数符号的类型由此进入传播。② 比较类型传播改为 input↔input（`TypeOpEqual::propagateAcrossCompare` typeop.cc:961-989 移植：`if (inslot==-1||outslot==-1) return 0`——比较输入互传类型使 `value != 0` 的常量获得 char*；布尔输出不参与）。③ LOAD 引导优先取地址输入指针的指向类型（TypeOpLoad::propagateType typeop.cc:487-505 input1→output 边）。④ 平台参数符号对输入 varnode 施加 v_type+TYPELOCK（Ghidra Varnode::setSymbolEntry varnode.cc:418 的 typelock 语义；Rugra sync 只走栈空间故在播种处直接施加）。⑤ Merge::merge_by_datatype 的 cover 重建死循环修复：rebuild_from_root_snapshot 的 implied 遍历无终止（Ghidra Cover::addRefPoint/addRefRecurse cover.cc:549-612 靠 cover 覆盖遏制递归；Rugra 显式 worklist 加 visited 集合等价）——paramlock 使同类型 Arc 分组变大后该缺陷在 my_fwrite/next_url 显形（无限循环→timeout）。
+
 ### 2026-08-23：CALL 输出类型 + 平台参数符号（GETSTR-ZERODIFF-C/E 域）
 
 ① `ActionInferTypes::build_localtypes` 新增 CALL/CALLIND 臂，移植 `TypeOpCall::getOutputLocal`（typeop.cc:720-734）：callspec 输出类型锁定时以被调方返回类型为 CALL 输出 varnode 的种子类型（锁定 libc `char *strdup(...)` → char*；VOID 回退缺省）。配套新增 `Funcdata::get_call_specs_of_op`（funcdata.cc:484-497 的移植：in(0) 注释 varnode 快路径 + 按调用地址线性扫描回退）。效果：GetStr `lVar1`→`pcVar1`（命名经类型前缀链自动跟随）。② `ActionRestructureVarnode::apply` 构造 ScopeLocal 时从 input-locked FuncProto 播种 function_parameter 符号（Ghidra 平台侧等价：Program DB 的函数符号带 DWARF 参数符号，经 decompile.cc <localdb> 进入解编译器；Rugra 的新建 ScopeLocal 为空故在此播种），符号带 namelock+typelock。③ `ScopeLocal::restructure_varnode` 开头的全清改为 `clearUnlockedCategory(-1)` 忠实移植（varmap.cc:1273 + database.cc:2086-2096：category>=0 符号无条件存活；category<0 仅 typelock 存活、未锁名重置 $$undef；其余删除——旧实现全清抹掉了平台参数符号）。效果：GetStr `in_RSI`/`in_RDI` 死声明消失，体内引用以参数名 `value`/`string` 输出。curl 全量 defects=0/numbering=0，skeleton 2459→2439。

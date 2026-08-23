@@ -24,6 +24,11 @@ pub fn base_type_for(size: usize, meta: TypeMetatype) -> Arc<Datatype> {
         (TypeMetatype::Uint, 2) => "ushort",
         (TypeMetatype::Uint, 4) => "uint",
         (TypeMetatype::Uint, 8) => "ulong",
+        // Ghidra's comparison/boolean ops produce the TypeFactory's interned
+        // `bool` base type (TypeOpFunc::getOutputLocal, typeop.cc:365-380);
+        // the old fall-through labeled 1-byte bools as "long".
+        (TypeMetatype::Bool, 1) => "bool",
+        (TypeMetatype::Bool, _) => "bool",
         _ => "long",
     };
     Arc::new(Datatype::Base(TypeBase::new(name.to_string(), size, meta)))

@@ -288,6 +288,29 @@ fn format_constant_value(val: u64) -> String {
     }
 }
 
+// Ghidra: printc.cc:1426 PrintC::printUnicode (char-constant escapes)
+/// Escape one char-codepoint body for a character constant, faithful to
+/// `PrintC::printUnicode` (printc.cc:1426-1466): the special escapes
+/// (\\0 \\a \\b \\t \\n \\v \\f \\r \\\\ \\" \\'), the generic hex
+/// escape for other control codepoints, plain emission otherwise.
+fn escape_char_body(val: u64) -> String {
+    match (val & 0xff) as u32 {
+        0 => "\\0".to_string(),
+        7 => "\\a".to_string(),
+        8 => "\\b".to_string(),
+        9 => "\\t".to_string(),
+        10 => "\\n".to_string(),
+        11 => "\\v".to_string(),
+        12 => "\\f".to_string(),
+        13 => "\\r".to_string(),
+        34 => "\\\"".to_string(),
+        39 => "\\\'".to_string(),
+        92 => "\\\\".to_string(),
+        v if v < 0x20 || v == 0x7f => format!("\\x{:x}", v),
+        v => char::from_u32(v).map(|c| c.to_string()).unwrap_or_else(|| format!("\\x{:x}", v)),
+    }
+}
+
 // RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
 /// Escape a raw string from the binary into a C string literal.
 /// Converts control characters to their escape sequences:
@@ -1138,6 +1161,33 @@ impl PrintC {
     /// resolution logic (get_varnode_display_name) so variable/parameter/
     /// symbol naming stays identical between the legacy and RPN paths.
     /// Constants become a syntax Atom carrying the literal text. `op` is the
+
+    // Ghidra: printc.cc:1744 PrintC::pushConstant (typed arms)
+    /// Typed-constant literal per PrintC::pushConstant (printc.cc:1744-1810):
+    /// a TYPE_PTR zero prints as the cast + integer form `(char *)0x0`
+    /// (default arm cc:1805-1809 with option_nocasts=false — C has no null
+    /// token); a char-print base type prints as a character literal
+    /// `'/0'` (cc:1750-1752 pushCharConstant). Returns None for untyped
+    /// constants and non-zero pointer values (plain integer form).
+    fn typed_constant_literal(vn: &Varnode) -> Option<String> {
+        let ct = vn.v_type.as_ref()?;
+        let val = vn.get_offset();
+        match ct.get_metatype() {
+            crate::type_system::TypeMetatype::Pointer => {
+                (val == 0).then(|| format!("({})0x0", ct.get_name()))
+            }
+            crate::type_system::TypeMetatype::Int | crate::type_system::TypeMetatype::Uint
+                if ct.get_name() == "char" =>
+            {
+                Some(format!("'{}'", escape_char_body(val & 0xff)))
+            }
+            _ => None,
+        }
+    }
+
+    // RUGRA-GLUE: make_atom_for_vn (RPN leaf atom construction; mirrors the
+    /// pushVn leaf paths of printlanguage.cc:221-261 folded into one helper)
+    /// - constants become a syntax Atom carrying the literal text; `op` is the
     /// consuming PcodeOp (carried into the Atom for tagging).
     fn make_atom_for_vn(
         &mut self,
@@ -1148,9 +1198,12 @@ impl PrintC {
         use crate::space::AddressSpace;
         // printlanguage.cc:221-228: annotation / constant fast-paths.
         if vn.is_constant() {
-            // pushConstant (printc.cc:1946) - emit the literal value.
+            // pushConstant (printc.cc:1744-1810) - emit the literal value,
+            // keyed on the constant's propagated type (typed null pointers
+            // as `(char *)0x0`, char-print types as character literals).
             let val = vn.get_offset();
-            let name = format_constant_value(val);
+            let name = Self::typed_constant_literal(vn)
+                .unwrap_or_else(|| format_constant_value(val));
             return Atom {
                 name,
                 type_: TagType::Syntax,
@@ -7995,6 +8048,37 @@ impl PrintLanguage for PrintC {
             }
             AddressSpace::Const => {
                 let val = vn.get_offset();
+                // PrintC::pushConstant (printc.cc:1744-1810) keys the
+                // emission on the constant's PROPAGATED type:
+                // - TYPE_PTR with value 0 (option_NULL off in C) falls to
+                //   the default arm: typecast prefix + integer -> `(char *)0x0`
+                //   (cc:1805-1809 + push_integer).
+                // - A char-print base type emits a character literal ->
+                //   `'\0'` (cc:1750-1752 pushCharConstant).
+                // - Everything else is the plain integer form.
+                if let Some(ct) = &vn.v_type {
+                    match ct.get_metatype() {
+                        crate::type_system::TypeMetatype::Pointer => {
+                            if val == 0 {
+                                let name = ct.get_name();
+                                if !self.discovery_pass {
+                                    self.emit.print(&format!("({})0x0", name));
+                                }
+                                return;
+                            }
+                        }
+                        crate::type_system::TypeMetatype::Int
+                        | crate::type_system::TypeMetatype::Uint
+                            if ct.get_name() == "char" =>
+                        {
+                            if !self.discovery_pass {
+                                self.emit.print(&format!("'{}'", escape_char_body(val & 0xff)));
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 // Symbol/string lookups are handled at Priority 0 above.
                 if val <= 9 {
                     format!("{}", val)

@@ -2,6 +2,9 @@
 
 ## 文档状态
 
+**2026-08-23 修复（GETSTR-ZERODIFF-D）**: `base_type_for` 补 `(Bool,1) => "bool"` 映射——Ghidra 比较类 op 的输出 token 是 TypeFactory 的 interned `bool` 基型（TypeOpFunc::getOutputLocal typeop.cc:365-380），旧 fall-through 把 1 字节 bool 标成 "long"。
+
+
 - **状态**: ✅ **L3（2026-07-02 完整对齐）**——全部 CastStrategyC 方法覆盖（含 is_subpiece_cast/is_sext_cast/is_zext_cast + cast_standard_full 忠实移植 cast.cc:300-392）。5 单元测试。
 - **2026-08-17（PRINTC-SUBPIECE-FIELDEXTRACT-0001 缺口 c）**：`is_subpiece_cast` 输入白名单补齐 PartialStruct/PartialUnion 臂（cast.cc:416-418 逐字 `inmeta!=TYPE_PARTIALSTRUCT && inmeta!=TYPE_PARTIALUNION`），输出白名单与 PTR→int 特例补 enum 映射——Ghidra `TypeEnum` 构造器（type.hh:489-494）把存储 metatype 归一为 TYPE_INT/TYPE_UINT，故 Ghidra 的 enum 输入/输出以 UINT/INT 通过白名单；Rugra `TypeMetatype::Enum` 显式列入（与本文件 check_int_promotion_for_extension/compare 的既有约定一致）。真 oracle fixture（tests/oracle/printc_subpiece_fieldextract_1204）8 条 cast 记录逐字节 MATCH，新增 2 个单元测试（partial 臂 + enum 映射）。
 - **2026-08-17 审计返工（REWORK #2）**：三白名单再补 `TypeMetatype::PartialEnum`——`TypePartialEnum` 构造器（type.cc:2255-2262）委托同一 TypeEnum 构造器归一化为 TYPE_UINT，Ghidra 的 partial-enum 与 plain enum 同样全过白名单（真 oracle 实测 `cast.int_partialenum_0=1`/`cast.partialenum_out_0=1`，fixture cast sweep 8→10 条）。

@@ -532,6 +532,24 @@ pub enum Datatype {
 }
 
 impl Datatype {
+
+    // RUGRA-GLUE: type_equal (no Ghidra counterpart found)
+    /// Structural equality standing in for Ghidra's interned TypeFactory
+    /// pointer comparison (`tokenct == outHighType`, coreaction.cc:2544):
+    /// identical canonical types are the same factory object there. Base
+    /// types compare by (name, size, metatype); all other shapes (pointers,
+    /// structs, ...) have no interning guarantee, so they compare by
+    /// Arc identity, mirroring the pointer comparison for non-canonical
+    /// types.
+    pub fn type_equal(self: &Arc<Self>, other: &Arc<Datatype>) -> bool {
+        match (self.as_ref(), other.as_ref()) {
+            (Datatype::Base(a), Datatype::Base(b)) => {
+                a.name == b.name && a.size == b.size && a.metatype == b.metatype
+            }
+            _ => Arc::ptr_eq(self, other),
+        }
+    }
+
     // Ghidra: type.hh:165 Datatype::getName
     /// Get the name of the data type
     pub fn get_name(&self) -> &str {
