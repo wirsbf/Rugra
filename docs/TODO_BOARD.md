@@ -84,7 +84,7 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | DATATYPE-TYPEORDER-RESIDUAL-0001 | DONE | c14dfa9→1180a72 | 机制C APPROVE（证据型） |
 | COMMENT-SORTER-ITERATORS-0001 | DONE | dc6eb2c→d7a9cae | root 验证，fixture 92 |
 | TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | REVIEW | 7163dec（wt/tmresid，11/11 MATCH residual=none） | 复核进行中 |
-| PRINTC-UNLINKED-REF-0001（printc 域） | REVIEW→门禁中 | b155b8a→fcc20d2 | E2E 差分跑批中；backfill 注入 117→45 行，残差两件归 varmap 域 |
+| PRINTC-UNLINKED-REF-0001（printc 域） | DONE | b155b8a→fcc20d2 | 机制 B 门禁通过：E2E defects=0/numbering=0（skeleton 8679，注入组 117→45 行，glob_url 恢复丢失语句与 golden 同形）；68反编译/8超时=共享负载（前后自测一致），wave 收尾低负载复验；残差两件归 varmap 域（explicit 符号化 + 命名期类型前缀）；B2 fixture 待建 |
 | TYPEFACTORY-LOCALTYPE-CACHE-0001 | REVIEW | f0a7829+9ee59ab（220/220 MATCH，原99字节保持） | 复核进行中；Cross-Review PENDING |
 | SCOPELOCAL-QUERY-0001 r2 | REVIEW | 3bea8db+31f4046（11/11 MATCH） | varmap 白名单，复核进行中；E2E 差分随 root 跑批 |
 
