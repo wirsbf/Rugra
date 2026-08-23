@@ -319,3 +319,7 @@ Symbol and Database encode/decode round-trips. `cargo check --lib` is clean
   `catindex=1`、`get_category_size(equate)=2` 与 C++ 可观察状态一致（此前
   Rust 完全不入类别表）。`add_union_facet_symbol` 存在同样缺口（本租约
   equate 限定，登记为后续 TODO）。
+
+## 测试签名适配（2026-08-23，root）
+
+equate-pipeline 测试随 VARNODE-COPYSYMBOL-HIGHBRANCH-0001 的关联函数签名（copy_symbol_if_valid(&Arc, &Varnode)）适配调用点，修复 opswitch 复核发现的 master lib-test 编译失败（生产代码零改动）。

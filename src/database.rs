@@ -4518,18 +4518,25 @@ mod tests {
             "MY_CONST", 0, 0x33333333, Address::new(0x2000), 0xCAFE,
         );
         let entry = scope.dynamic_entries[0].clone();
-        let mut src = Varnode::new_constant(0x33333333, 4);
-        src.set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
-        let mut dst = Varnode::new_constant(0x33333333, 4);
-        dst.copy_symbol_if_valid(&src);
+        let src = std::sync::Arc::new(std::sync::RwLock::new({
+            let mut v = Varnode::new_constant(0x33333333, 4);
+            v.set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+            v
+        }));
+        let dst = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+            0x33333333, 4,
+        )));
+        Varnode::copy_symbol_if_valid(&dst, &src.read().unwrap());
         assert!(
-            dst.get_symbol_entry().is_some(),
+            dst.read().unwrap().get_symbol_entry().is_some(),
             "pipeline equate must propagate through copy_symbol_if_valid"
         );
         // Not-close destination constant must NOT receive the markup.
-        let mut dst2 = Varnode::new_constant(0x12345678, 4);
-        dst2.copy_symbol_if_valid(&src);
-        assert!(dst2.get_symbol_entry().is_none());
+        let dst2 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+            0x12345678, 4,
+        )));
+        Varnode::copy_symbol_if_valid(&dst2, &src.read().unwrap());
+        assert!(dst2.read().unwrap().get_symbol_entry().is_none());
     }
 
     #[test]
