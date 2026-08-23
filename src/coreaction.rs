@@ -832,9 +832,9 @@ impl Action for ActionRestructureVarnode {
         std::mem::take(&mut self.count)
     }
 
-    // RUGRA-GLUE: Rust Action trait get_name; "restructure_varnode" mirrors ctor at coreaction.hh:855
+    // RUGRA-GLUE: Rust Action trait get_name; "restructure_varnode" mirrors ctor at coreaction.hh:855 (Action(0,"restructure_varnode",g))
     fn get_name(&self) -> &str {
-        "restructureVarnode"
+        "restructure_varnode"
     }
 }
 
@@ -2334,6 +2334,8 @@ impl Action for ActionDoNothing {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_repeatapply bit set in ctor at coreaction.hh:504 (Action(rule_repeatapply,"donothing",g))
+    fn get_flags(&self) -> u32 { action_flags::RULE_REPEATAPPLY }
     // RUGRA-GLUE: Rust Action trait get_name; "donothing" mirrors ctor at coreaction.hh:504
     fn get_name(&self) -> &str { "donothing" }
 }
@@ -2617,6 +2619,8 @@ impl Action for ActionNormalizeSetup {
         // model-lock tracking is added.
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:630 (Action(rule_onceperfunc,"normalizesetup",g))
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "normalizesetup" mirrors ctor at coreaction.hh:630
     fn get_name(&self) -> &str { "normalizesetup" }
 }
@@ -6143,8 +6147,8 @@ impl Action for ActionUnjustifiedParams {
 
         Ok(action_status::NO_CHANGE)
     }
-    // RUGRA-GLUE: Rust Action trait get_name; "unjustifiedparams" mirrors ctor at coreaction.hh:918
-    fn get_name(&self) -> &str { "unjustifiedparams" }
+    // RUGRA-GLUE: Rust Action trait get_name; "unjustparams" mirrors ctor at coreaction.hh:920 (Action(0,"unjustparams",g))
+    fn get_name(&self) -> &str { "unjustparams" }
 }
 
 /// Likely trash analysis. Faithful to `ActionLikelyTrash`
@@ -6679,8 +6683,8 @@ impl Action for ActionFuncLinkOutOnly {
     }
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:715
     fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
-    // RUGRA-GLUE: Rust Action trait get_name; "funclinkoutonly" mirrors ctor at coreaction.hh:715
-    fn get_name(&self) -> &str { "funclinkoutonly" }
+    // RUGRA-GLUE: Rust Action trait get_name; "funclink_outonly" mirrors ctor at coreaction.hh:715 (Action(rule_onceperfunc,"funclink_outonly",g))
+    fn get_name(&self) -> &str { "funclink_outonly" }
 }
 
 /// Deindirect: resolve indirect calls. Faithful to `ActionDeindirect`
@@ -8455,8 +8459,8 @@ impl Action for ActionConditionalConst {
             Ok(action_status::NO_CHANGE)
         }
     }
-    // RUGRA-GLUE: Rust Action trait get_name; "conditionalconst" mirrors ctor at coreaction.hh:569
-    fn get_name(&self) -> &str { "conditionalconst" }
+    // RUGRA-GLUE: Rust Action trait get_name; "condconst" mirrors ctor at coreaction.hh:595 (Action(0,"condconst",g))
+    fn get_name(&self) -> &str { "condconst" }
 }
 
 /// Dynamic mapping. Faithful to `ActionDynamicMapping`
@@ -8530,8 +8534,8 @@ impl Action for ActionMappedLocalSync {
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.count)
     }
-    // RUGRA-GLUE: Rust Action trait get_name; "mappedlocalsync" mirrors ctor at coreaction.hh:867
-    fn get_name(&self) -> &str { "mappedlocalsync" }
+    // RUGRA-GLUE: Rust Action trait get_name; "mapped_local_sync" mirrors ctor at coreaction.hh:869 (Action(0,"mapped_local_sync",g))
+    fn get_name(&self) -> &str { "mapped_local_sync" }
 }
 
 /// Lane divide analysis. Faithful to `ActionLaneDivide`
@@ -8546,6 +8550,8 @@ impl Action for ActionLaneDivide {
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:117 (Action(rule_onceperfunc,"lanedivide",g))
+    fn get_flags(&self) -> u32 { action_flags::RULE_ONCEPERFUNC }
     // RUGRA-GLUE: Rust Action trait get_name; "lanedivide" mirrors ctor at coreaction.hh:113
     fn get_name(&self) -> &str { "lanedivide" }
 }
@@ -10572,7 +10578,7 @@ mod tests {
     #[test]
     fn test_action_restructure_varnode_get_name() {
         let mut action = ActionRestructureVarnode::new();
-        assert_eq!(action.get_name(), "restructureVarnode");
+        assert_eq!(action.get_name(), "restructure_varnode");
     }
 
 
@@ -11044,19 +11050,20 @@ mod tests {
         None
     }
 
-    // Ghidra: coreaction.cc:5477-5486 universalAction head (8 actions;
-    // NormalizeSetup :5479 is normalanalysis-group and filtered from the
-    // decompile root — coreaction.cc:5424-5431).
+    // Ghidra: coreaction.cc:5477-5486 universalAction head after decompile
+    // derive filtering (8 raw slots; NormalizeSetup :5479 group
+    // "normalanalysis" and FuncLinkOutOnly :5485 group "noproto" are both
+    // filtered from the decompile root — coreaction.cc:5424-5431).
     #[test]
     fn test_default_pipeline_head_matches_ghidra_5477_5486() {
         let root = crate::action::build_default_pipeline();
         let names = root.child_names();
         assert!(
-            names.len() >= 8,
+            names.len() >= 7,
             "head + fullloop must exist, got {names:?}"
         );
         assert_eq!(
-            &names[..8],
+            &names[..7],
             &[
                 "start",            // :5477
                 "constbase",        // :5478
@@ -11064,7 +11071,6 @@ mod tests {
                 "extrapopsetup",    // :5482
                 "prototypetypes",   // :5483
                 "funclink",         // :5484
-                "funclinkoutonly",  // :5485
                 "fullloop",         // :5487
             ][..]
         );
@@ -11129,7 +11135,7 @@ mod tests {
         assert_eq!(
             stackstall.child_names(),
             vec![
-                "simplifypool", // oppool1 (coreaction.cc:5511)
+                "oppool1",      // coreaction.cc:5511
                 "lanedivide",   // :5652
                 "multicse",     // :5653
                 "shadowvar",    // :5654

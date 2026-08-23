@@ -423,10 +423,46 @@ Rugra 当前的 `action` 层明显受 Ghidra 反编译器中 `Action` / `Rule` �
 
 ### `pub fn set_default_actions(&mut self)`
 
-建立默认动作集。
+建立默认动作集（生产入口）。
 
 ### 作用
-向当前 `ActionDatabase` 中填充默认分析动作集合。
+镜像 `Architecture::buildAction`（architecture.cc:582-591）的完整序列：
+`universal_action()` 构建原始 universal 树并注册为 `"universal"`，随后
+`reset_defaults()`（action.cc:986）保留 universal、重建默认 grouplist
+（`build_default_groups`，coreaction.cc:5419-5458，六个根：decompile/
+jumptable/normalize/paramid/register/firstpass），最后
+`set_current("decompile")` → `derive_action("universal","decompile")`
+（action.cc:1145）按 decompile grouplist 做 clone 存活过滤，派生出
+默认根并登记为 current。
+
+### 派生过滤（PIPE-DERIVED-TREE-0001）
+`universal_action(Some(&grouplist))` 在每个注册槽上应用 Ghidra
+`Action::clone` 的存活语义（action.cc:391-406/899-914/529-544）：
+叶子当且仅当其 basegroup ∈ grouplist 才注册；组/池当且仅当仍有存活
+子节点才挂到父节点。对默认 `decompile` grouplist（coreaction.cc:5424-5431）：
+- 头部 8 槽中 `normalizesetup`（normalanalysis）与 `funclink_outonly`（noproto）被过滤；
+- `directwrite` 的两个 protorecovery_b 实例（:5498/:5681）被过滤；
+- 尾部 `normalizebranches`（:5716，group 名 normalizebranches 不在 decompile 集）被过滤；
+- 根节点名保持 `"universal"`（clone 保留 getName()），数据库键为 `"decompile"`。
+
+对拍证据：`tests/oracle/pipeline_tree_1204.*` +
+`tools/run_pipeline_tree_oracle.sh`（78 节点 DFS 双侧字节一致，
+path/ordinal/kind/name/basegroup/flags）。
+
+### 相关新增 API
+- `ActionGroupList`（action.hh:31-40）：`from_members`/`contains`。
+- `default_groups` 模块：六个默认 grouplist 的逐字成员表。
+- `ActionDatabase::universal_action()`（coreaction.cc:5462）。
+- `ActionDatabase::reset_defaults()` / `set_current()` / `derive_action()` /
+  `get_current()` / `get_current_name()`（action.cc:986/1021/1145、action.hh:313-314）。
+- `universal_action(Option<&ActionGroupList>) -> Option<ActionRestartGroup>`：
+  coreaction.cc:5462-5738 的全槽镜像构建（None = 原始树）。
+- `build_default_pipeline()`：派生 decompile 根的测试/示例便捷入口。
+- `ActionGroup::add_action_in_group` / `child_group`：注册槽 basegroup 记录
+  （Ghidra 存于 Action 实例的 basegroup 成员）。
+- `Action::as_action_pool`：树遍历 fixture 的池视图。
+- `build_oppool1()`（原 `build_simplify_pool`）：池名从 `simplifypool`
+  改为 oracle 精确名 `oppool1`（coreaction.cc:5511）。
 
 ### 当前意义
 这是当前动作系统中最重要的“默认流水线入口”之一。  
@@ -647,7 +683,7 @@ ActionDeterminedBranch/ActionUnreachable/ActionDoNothing/ActionRedundBranch 的 
 
 ### 2026-07-01：oppool1/cleanup pool 大批补缺 Rule 注册接入
 
-`build_simplify_pool`（oppool1）按 Ghidra coreaction.cc:5511-5649 顺序补齐此前 skip 的注册槽：
+`build_oppool1`（原 `build_simplify_pool`，池名已改为 oracle 精确名 `oppool1`）按 Ghidra coreaction.cc:5511-5649 顺序补齐此前 skip 的注册槽：
 - 5517 RulePullsubIndirect、5551 RuleIndirectCollapse、5565 RuleTransformCpool、5606 RuleSwitchSingle
 - 5621-5628 subvar 族（RuleSubvarAnd/Subpiece/SplitFlow/SubvarCompZero/Shift/Zext/Sext，来自 subflow.rs）
   - 例外：5624 RulePtrFlow 仍未移植（ruleaction.cc:9177，重）
@@ -1024,3 +1060,37 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
   stackstall 子序列断言（coreaction.cc:5477-5486/:5493-5500/:5651-5656）。
   WIP：derive tree 双侧 fixture pending，见 docs/alignment_docs/
   PIPELINE_STAGES_1204.md 阶段树参考。
+
+## 派生默认管线树对拍完成（2026-08-23，PIPE-DERIVED-TREE-0001）
+
+- `ActionDatabase` 重构为 Ghidra actionmap/groupmap/currentact 镜像：
+  `universal_action()`（coreaction.cc:5462）注册原始 universal 树；
+  `reset_defaults()`（action.cc:986）→ `set_current("decompile")` →
+  `derive_action`（action.cc:1145）按 decompile grouplist
+  （coreaction.cc:5424-5431，`default_groups::DECOMPILE` 逐字成员表）
+  做 clone 存活过滤派生默认根；`get_current()`（action.hh:313）返回派生根。
+- `universal_action(Option<&ActionGroupList>)` 以 coreaction.cc:5462-5738
+  的全槽顺序构建（`add!` 宏逐槽应用 action.cc:391-406/899-914/529-544 的
+  clone 存活语义）；组/池仅在仍有存活子节点时挂父。
+- r1 REJECT 修复：`funclink_outonly`（noproto）与 `normalizesetup`
+  （normalanalysis）在派生 decompile 根中过滤（原始树仍注册）；
+  根键 `decompile` vs 根节点名 `universal`（clone 保留 getName()）；
+  `deadcode` 移到 fullloop 尾 :5682 实际位置（donothing 之前）；
+  精确 action 名（`restructure_varnode`/`unjustparams`/`mapped_local_sync`/
+  `funclink_outonly`/`condconst`）；`normalizebranches`（group 名不在
+  decompile 集）从派生根过滤——Ghidra 默认反编译根不运行它（仅在
+  normalize/jumptable 根运行）；mainloop 恢复 oracle 全序
+  （unreachable(base) 首槽、forcegoto :5496、dynamicmapping :5504、
+  restrictlocal→deadcode→restructure_varnode→spacebase→nonzeromask→
+  infertypes）；Rugra-local `inferparams` 从树中移除；池名
+  simplifypool→oppool1；lanedivide=onceperfunc、donothing=repeatapply、
+  normalizesetup=onceperfunc flags 对齐 ctor。
+- 对拍：`tools/run_pipeline_tree_oracle.sh`（pin-base schema2，base=dd76d37
+  + action.rs/coreaction.rs overlay）——Ghidra 真实
+  universalAction→resetDefaults→getCurrent DFS 与 Rugra 实际默认数据库
+  DFS **78 节点字节一致**（path/ordinal/kind/name/basegroup/flags，
+  重复节点保留不排序），stdout_sha256=60af6c04…，overall=MATCH。
+- 残差：rule 级 clone 过滤（非 decompile 根）无 oracle 观察
+  （PIPE-RULE-CLONE-FILTER-0001 建议）；oppool1/cleanup 内 Rugra-local
+  Rule 未在 Action 节点投影中观察（PIPE-POOL-LOCAL-RULES-0001 建议）；
+  节点 apply 体/计数反馈归 PIPE-STACKSTALL-COUNT-0001。

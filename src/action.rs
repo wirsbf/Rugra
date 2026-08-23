@@ -93,6 +93,11 @@ pub trait Action {
     /// view if this Action is an ActionGroup/ActionRestartGroup.
     fn as_action_group(&self) -> Option<&ActionGroup> { None }
 
+    // RUGRA-GLUE: fixture-only pool view; Ghidra holds the same class identity via the virtual ActionPool (action.hh:262)
+    /// Read-only downcast for tree-walking fixtures: returns the pool view
+    /// if this Action is an ActionPool.
+    fn as_action_pool(&self) -> Option<&ActionPool> { None }
+
     // Ghidra: action.cc:298 Action::perform
     /// Run this action to completion using Ghidra's status/count state machine.
     /// Positive Rust `apply()` results adapt Ghidra actions that increment their
@@ -219,6 +224,13 @@ pub struct ActionGroup {
     actions: Vec<Box<dyn Action>>,
     /// Per-child execution state (status/count/etc). Parallel to `actions`.
     child_states: Vec<ActionState>,
+    /// Ghidra: basegroup member of each child Action (action.hh:88). Ghidra
+    /// stores the group inside every Action instance; Rugra records it at
+    /// the registration slot in the parent (RUGRA-GLUE: per-instance storage
+    /// would require touching Action classes owned by other write-sets).
+    /// Observably identical for the default tree: every instance is
+    /// registered exactly once at one fixed slot (coreaction.cc:5462-5738).
+    child_groups: Vec<&'static str>,
     /// Iterator index for breakpoint resume (action.hh:146 `state`).
     state: usize,
     /// This group's rule flags (repeatapply etc).
@@ -240,6 +252,7 @@ impl ActionGroup {
             name: name.to_string(),
             actions: Vec::new(),
             child_states: Vec::new(),
+            child_groups: Vec::new(),
             state: 0,
             flags,
             pending_count: 0,
@@ -248,9 +261,17 @@ impl ActionGroup {
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn add_action(&mut self, action: Box<dyn Action>) {
+        self.add_action_in_group(action, "");
+    }
+
+    // RUGRA-GLUE: registration-site group record mirroring the basegroup string passed to each Ghidra Action ctor (coreaction.cc:5477-5738)
+    /// Add a child together with the basegroup string its Ghidra ctor
+    /// receives at this registration slot (`new ActionX(group)`).
+    pub fn add_action_in_group(&mut self, action: Box<dyn Action>, group: &'static str) {
         let child_flags = action.get_flags();
         self.actions.push(action);
         self.child_states.push(ActionState::new(child_flags));
+        self.child_groups.push(group);
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -270,6 +291,10 @@ impl ActionGroup {
     // RUGRA-GLUE: fixture-only read-only child view for tree-walking tests (Ghidra iterates the same protected list in Action::print)
     pub fn child_actions(&self) -> &[Box<dyn Action>] {
         &self.actions
+    }
+    // RUGRA-GLUE: registration-site basegroup view for tree-walking fixtures (Ghidra Action::getGroup, action.hh:109)
+    pub fn child_group(&self, index: usize) -> &'static str {
+        self.child_groups[index]
     }
     // RUGRA-GLUE: fixture executor view — drives child `index` through the exact perform() call ActionGroup::apply makes (src/action.rs ActionGroup::apply line above); Ghidra's ActionGroup::apply drives Action::perform the same way (action.cc:511-527)
     pub fn perform_child(
@@ -364,6 +389,21 @@ impl ActionRestartGroup {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn add_action(&mut self, action: Box<dyn Action>) {
         self.group.add_action(action);
+    }
+
+    // RUGRA-GLUE: registration-site group record passthrough (see ActionGroup::add_action_in_group)
+    pub fn add_action_in_group(&mut self, action: Box<dyn Action>, group: &'static str) {
+        self.group.add_action_in_group(action, group);
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    pub fn num_actions(&self) -> usize {
+        self.group.num_actions()
+    }
+
+    // RUGRA-GLUE: registration-site basegroup view passthrough (Ghidra Action::getGroup, action.hh:109)
+    pub fn child_group(&self, index: usize) -> &'static str {
+        self.group.child_group(index)
     }
 
     // RUGRA-GLUE: read-only ordered fixture view through to the embedded ActionGroup's children (Ghidra ActionRestartGroup inherits ActionGroup::list)
@@ -575,6 +615,9 @@ impl Action for ActionPool {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
 
+    // RUGRA-GLUE: fixture-only pool view (see Action::as_action_pool)
+    fn as_action_pool(&self) -> Option<&ActionPool> { Some(self) }
+
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn reset(&mut self, _fd: &mut Funcdata) {
         self.total = 0;
@@ -583,16 +626,12 @@ impl Action for ActionPool {
 }
 
 // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-/// Build an `ActionPool` holding the core algebraic-simplification Rules.
-///
-/// Mirrors Ghidra's `oppool1` / `oppool2` rule groups (coreaction.cc:5511+)
-/// that are part of the universal `actprop` simplifier. These Rules fold
-/// redundant P-code (constant collapses, trivial identities, sign/zero
-/// extension elimination, etc.) without altering control flow, so they are
-/// safe to run repeatedly to a fixed point.
-pub fn build_simplify_pool() -> ActionPool {
+/// Build the oppool1 `ActionPool` mirroring Ghidra's `actprop`
+/// (coreaction.cc:5511-5649). Pool name is "oppool1" exactly as
+/// `new ActionPool(Action::rule_repeatapply,"oppool1")` (:5511).
+pub fn build_oppool1() -> ActionPool {
     use crate::ruleaction::*;
-    let mut pool = ActionPool::new("simplifypool");
+    let mut pool = ActionPool::new("oppool1");
     // Mirrors Ghidra's oppool1 (coreaction.cc:5511-5649) — the universal
     // simplification pool applied repeatedly to a fixed point. Rules are
     // registered in Ghidra's exact order so their interactions match.
@@ -790,11 +829,88 @@ pub fn build_cleanup_pool() -> ActionPool {
     pool
 }
 
+/// Ghidra: action.hh:31-40 `ActionGroupList`
 ///
-/// Corresponds to Ghidra's `ActionDatabase` class
+/// The set of group names steering a root-Action derivation. Any Rule or
+/// leaf Action belongs to a group; the groups in this list together define
+/// which children survive `ActionDatabase::deriveAction`'s selective clone.
+#[derive(Debug, Clone)]
+pub struct ActionGroupList {
+    groups: std::collections::BTreeSet<&'static str>,
+}
+
+impl ActionGroupList {
+    // RUGRA-GLUE: static-member constructor (Ghidra fills the same set via ActionDatabase::setGroup's argv, action.cc:1059-1070)
+    pub fn from_members(members: &[&'static str]) -> Self {
+        Self {
+            groups: members.iter().copied().collect(),
+        }
+    }
+
+    // Ghidra: action.hh:39 ActionGroupList::contains
+    pub fn contains(&self, nm: &str) -> bool {
+        self.groups.contains(nm)
+    }
+}
+
+/// Ghidra: coreaction.cc:5419-5458 `ActionDatabase::buildDefaultGroups` —
+/// the preconfigured root-Action grouplists, verbatim member order (set
+/// semantics; order is not observable through `contains`).
+pub mod default_groups {
+    /// `setGroup("decompile", members)` — coreaction.cc:5424-5432. The
+    /// default decompilation root. Note what is ABSENT: `normalanalysis`,
+    /// `noproto`, `protorecovery_b`, `siganalysis`, `normalizebranches`.
+    pub const DECOMPILE: &[&str] = &[
+        "base", "protorecovery", "protorecovery_a", "deindirect", "localrecovery",
+        "deadcode", "typerecovery", "stackptrflow",
+        "blockrecovery", "stackvars", "deadcontrolflow", "switchnorm",
+        "cleanup", "splitcopy", "splitpointer", "merge", "dynamic", "casts", "analysis",
+        "fixateglobals", "fixateproto", "constsequence",
+        "segment", "returnsplit", "nodejoin", "doubleload", "doubleprecis",
+        "unreachable", "subvar", "floatprecision",
+        "conditionalexe",
+    ];
+    /// `setGroup("jumptable", jumptab)` — coreaction.cc:5434-5436.
+    pub const JUMPTABLE: &[&str] = &[
+        "base", "noproto", "localrecovery", "deadcode", "stackptrflow",
+        "stackvars", "analysis", "segment", "subvar", "normalizebranches",
+        "conditionalexe",
+    ];
+    /// `setGroup("normalize", normali)` — coreaction.cc:5438-5443.
+    pub const NORMALIZE: &[&str] = &[
+        "base", "protorecovery", "protorecovery_b", "deindirect", "localrecovery",
+        "deadcode", "stackptrflow", "normalanalysis",
+        "stackvars", "deadcontrolflow", "analysis", "fixateproto", "nodejoin",
+        "unreachable", "subvar", "floatprecision", "normalizebranches",
+        "conditionalexe",
+    ];
+    /// `setGroup("paramid", paramid)` — coreaction.cc:5445-5450.
+    pub const PARAMID: &[&str] = &[
+        "base", "protorecovery", "protorecovery_b", "deindirect", "localrecovery",
+        "deadcode", "typerecovery", "stackptrflow", "siganalysis",
+        "stackvars", "deadcontrolflow", "analysis", "fixateproto",
+        "unreachable", "subvar", "floatprecision",
+        "conditionalexe",
+    ];
+    /// `setGroup("register", regmemb)` — coreaction.cc:5452-5453.
+    pub const REGISTER: &[&str] = &["base", "analysis", "subvar"];
+    /// `setGroup("firstpass", firstmem)` — coreaction.cc:5455-5456.
+    pub const FIRSTPASS: &[&str] = &["base"];
+}
+
+///
+/// Corresponds to Ghidra's `ActionDatabase` class (action.hh:298-324)
 pub struct ActionDatabase {
-    all_actions: Vec<Box<dyn Action>>,
-    current_group: Option<String>,
+    /// Ghidra `actionmap` (action.hh:302): registered root Actions by name.
+    actionmap: Vec<(String, Box<dyn Action>)>,
+    /// Ghidra `groupmap` (action.hh:301): root name → steering grouplist.
+    groupmap: Vec<(String, ActionGroupList)>,
+    /// Ghidra `currentact` (action.hh:299): the current root Action.
+    currentact: Option<usize>,
+    /// Ghidra `currentactname` (action.hh:300).
+    currentactname: String,
+    /// Ghidra `isDefaultGroups` (action.hh:303).
+    is_default_groups: bool,
 }
 // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
@@ -812,34 +928,151 @@ pub fn build_oppool2() -> ActionPool {
 }
 
 impl ActionDatabase {
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    // Ghidra: action.hh:310 ActionDatabase::ActionDatabase
     pub fn new() -> Self {
         Self {
-            all_actions: Vec::new(),
-            current_group: None,
+            actionmap: Vec::new(),
+            groupmap: Vec::new(),
+            currentact: None,
+            currentactname: String::new(),
+            is_default_groups: false,
         }
     }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    // Ghidra: action.cc:1126 ActionDatabase::registerAction
+    /// Register a root Action under `nm`; the database takes ownership
+    /// (Ghidra deletes a previously registered object of the same name).
+    fn register_action_named(&mut self, nm: &str, act: Box<dyn Action>) {
+        if let Some(idx) = self.actionmap.iter().position(|(key, _)| key == nm) {
+            self.actionmap[idx].1 = act;
+        } else {
+            self.actionmap.push((nm.to_string(), act));
+        }
+    }
+
+    // RUGRA-GLUE: legacy pub registration under the Action's own name (Ghidra registers roots by explicit key only)
     pub fn register_action(&mut self, action: Box<dyn Action>) {
-        self.all_actions.push(action);
+        let nm = action.get_name().to_string();
+        self.register_action_named(&nm, action);
     }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    pub fn get_action_mut(&mut self, name: &str) -> Option<&mut (dyn Action)> {
-        for a in &mut self.all_actions {
-            if a.get_name() == name {
-                return Some(a.as_mut());
-            }
-        }
-        None
+    // Ghidra: action.cc:1112 ActionDatabase::getAction (index lookup form)
+    fn action_index(&self, nm: &str) -> Option<usize> {
+        self.actionmap.iter().position(|(key, _)| key == nm)
     }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    // RUGRA-GLUE: pub lookup mirroring Ghidra getAction's throw as None
     pub fn get_action(&self, name: &str) -> Option<&dyn Action> {
-        self.all_actions.iter()
-            .find(|a| a.get_name() == name)
-            .map(|a| a.as_ref())
+        self.action_index(name).map(|idx| self.actionmap[idx].1.as_ref())
+    }
+
+    // RUGRA-GLUE: pub mutable lookup mirroring Ghidra getAction's throw as None
+    pub fn get_action_mut(&mut self, name: &str) -> Option<&mut (dyn Action + '_)> {
+        match self.action_index(name) {
+            Some(idx) => Some(self.actionmap[idx].1.as_mut()),
+            None => None,
+        }
+    }
+
+    // Ghidra: action.cc:1059 ActionDatabase::setGroup (member-list form)
+    fn set_group(&mut self, grp: &str, members: &[&'static str]) {
+        let grouplist = ActionGroupList::from_members(members);
+        if let Some(idx) = self.groupmap.iter().position(|(key, _)| key == grp) {
+            self.groupmap[idx].1 = grouplist;
+        } else {
+            self.groupmap.push((grp.to_string(), grouplist));
+        }
+        self.is_default_groups = false;
+    }
+
+    // Ghidra: action.cc:1006 ActionDatabase::getGroup
+    fn get_group(&self, grp: &str) -> Option<&ActionGroupList> {
+        self.groupmap
+            .iter()
+            .find(|(key, _)| key == grp)
+            .map(|(_, list)| list)
+    }
+
+    // Ghidra: coreaction.cc:5419 ActionDatabase::buildDefaultGroups
+    fn build_default_groups(&mut self) {
+        if self.is_default_groups {
+            return;
+        }
+        self.groupmap.clear();
+        self.set_group("decompile", default_groups::DECOMPILE);
+        self.set_group("jumptable", default_groups::JUMPTABLE);
+        self.set_group("normalize", default_groups::NORMALIZE);
+        self.set_group("paramid", default_groups::PARAMID);
+        self.set_group("register", default_groups::REGISTER);
+        self.set_group("firstpass", default_groups::FIRSTPASS);
+        self.is_default_groups = true;
+    }
+
+    // Ghidra: coreaction.cc:5462 ActionDatabase::universalAction
+    /// Build the raw universal Action and register it under "universal"
+    /// (Ghidra `registerAction(universalname, act)`, coreaction.cc:5475).
+    pub fn universal_action(&mut self) {
+        let act = universal_action(None).expect("universal root always survives");
+        self.register_action_named("universal", Box::new(act));
+    }
+
+    // Ghidra: action.cc:986 ActionDatabase::resetDefaults
+    /// Clear out (possibly altered) root Actions, reset the default groups,
+    /// and set the default root action "decompile".
+    pub fn reset_defaults(&mut self) {
+        // Keep the registered universal; delete every other old root
+        // (action.cc:991-999), then re-register universal in a cleared map.
+        let universal = self
+            .action_index("universal")
+            .map(|idx| self.actionmap.remove(idx));
+        self.actionmap.clear();
+        if let Some((_, act)) = universal {
+            self.actionmap.push(("universal".to_string(), act));
+        }
+        self.build_default_groups();
+        self.set_current("decompile"); // The default root action (action.cc:1003)
+    }
+
+    // Ghidra: action.cc:1021 ActionDatabase::setCurrent
+    pub fn set_current(&mut self, actname: &str) {
+        self.currentactname = actname.to_string();
+        self.derive_action("universal", actname);
+        let index = self
+            .action_index(actname)
+            .expect("setCurrent: derived root must be registered");
+        self.currentact = Some(index);
+    }
+
+    // Ghidra: action.cc:1145 ActionDatabase::deriveAction
+    /// Build the Action object for root name `grp` by selectively copying
+    /// components from `baseaction` based on `grp`'s grouplist. Ghidra
+    /// deep-clones the registered base tree via `Action::clone`; Rugra
+    /// rebuilds through the same construction filtered by the grouplist
+    /// (RUGRA-GLUE: `Box<dyn Action>` is not `Clone`; at derive time every
+    /// Ghidra clone also starts from freshly built state, so the resulting
+    /// tree is observably identical).
+    fn derive_action(&mut self, baseaction: &str, grp: &str) {
+        if self.action_index(grp).is_some() {
+            return; // Already derived this action (action.cc:1149-1151)
+        }
+        let grouplist = self
+            .get_group(grp)
+            .unwrap_or_else(|| panic!("Action group does not exist: {grp}"))
+            .clone();
+        let _ = baseaction; // base is always the registered "universal" tree
+        let newact = universal_action(Some(&grouplist))
+            .unwrap_or_else(|| panic!("derived root {grp} kept no children"));
+        self.register_action_named(grp, Box::new(newact));
+    }
+
+    // Ghidra: action.hh:313 ActionDatabase::getCurrent
+    pub fn get_current(&self) -> &dyn Action {
+        self.actionmap[self.currentact.expect("no current root action")].1.as_ref()
+    }
+
+    // Ghidra: action.hh:314 ActionDatabase::getCurrentName
+    pub fn get_current_name(&self) -> &str {
+        &self.currentactname
     }
 
     // RUGRA-GLUE: Rust ownership adapter for Ghidra's Architecture current Action pointer followed by Action::reset and Action::perform
@@ -849,304 +1082,189 @@ impl ActionDatabase {
         name: &str,
         fd: &mut crate::funcdata::Funcdata,
     ) -> crate::error::Result<Option<i32>> {
-        let Some(index) = self
-            .all_actions
-            .iter()
-            .position(|action| action.get_name() == name)
-        else {
+        let Some(index) = self.action_index(name) else {
             return Ok(None);
         };
-        self.all_actions[index].reset(fd);
-        let mut state = ActionState::new(self.all_actions[index].get_flags());
-        self.all_actions[index]
-            .perform(fd, &mut state)
-            .map(Some)
+        self.actionmap[index].1.reset(fd);
+        let flags = self.actionmap[index].1.get_flags();
+        let mut state = ActionState::new(flags);
+        self.actionmap[index].1.perform(fd, &mut state).map(Some)
     }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Run all registered actions on the given function data
-    /// Run all registered actions on the given function data via perform().
+    // RUGRA-GLUE: mirrors the production driver (ghidra_process.cc:310 allacts.getCurrent()->perform(fd)); the former name is kept for the legacy callers
+    /// Perform the current root Action (after a per-root reset) on the
+    /// given function data.
     pub fn apply_all(&mut self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
-        let mut total = 0;
-        for i in 0..self.all_actions.len() {
-            // Reset per-function state.
-            self.all_actions[i].reset(fd);
-            // Create a state for this root action.
-            let mut state = ActionState::new(self.all_actions[i].get_flags());
-            total += self.all_actions[i].perform(fd, &mut state)?;
-        }
-        Ok(total)
+        let index = self.currentact.expect("no current root action");
+        self.actionmap[index].1.reset(fd);
+        let flags = self.actionmap[index].1.get_flags();
+        let mut state = ActionState::new(flags);
+        self.actionmap[index].1.perform(fd, &mut state)
     }
 
-    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-    /// Set up default decompiler actions by registering the one authoritative
-    /// pipeline tree built by [`build_default_pipeline`] (single source of
-    /// truth: the ordered-action fixture enumerates the same construction).
+    // RUGRA-GLUE: production entry mirroring Architecture::buildAction (architecture.cc:582-591: allacts.universalAction(this); allacts.resetDefaults();)
+    /// Set up the default decompiler actions: build the raw universal tree,
+    /// then derive the default "decompile" root through `resetDefaults`.
     pub fn set_default_actions(&mut self) {
-        self.register_action(Box::new(build_default_pipeline()));
+        self.universal_action();
+        self.reset_defaults();
     }
 }
 
-// RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
-/// Build the default decompile pipeline root. Faithful to Ghidra's
-/// `universalAction` (coreaction.cc:5462-5738) — builds a nested tree:
-///   ActionRestartGroup(universal)
-///   ├─ Start / FuncLink ...
-///   ├─ fullloop (repeatapply)
-///   │  ├─ mainloop (repeatapply)
-///   │  │  ├─ Heritage / Spacebase / StackPtrFlow ...
-///   │  │  ├─ stackstall (repeatapply): oppool1 + LaneDivide/MultiCse/...
-///   │  │  ├─ oppool2 / ConditionalExe ...
-///   │  └─ DeadCode / DoNothing / SwitchNorm ...
-///   ├─ cleanup pool
-///   ├─ PreferComplement → StructureTransform → NormalizeBranches (:5714-5716)
-///   ├─ AssignHigh → MergeRequired → … → MergeAdjacent → MergeType (:5717-5727)
-///   └─ HideShadow → … → SetCasts → FinalStructure → PrototypeWarnings → Stop
-pub fn build_default_pipeline() -> ActionRestartGroup {
-    {
-        // Root: ActionRestartGroup (Ghidra coreaction.cc:5474, onceperfunc, maxrestarts=1)
-        let mut universal = ActionRestartGroup::new(
-            "decompile",
-            action_flags::RULE_ONCEPERFUNC,
-            1,
-        );
-
-        // --- Top-level Actions (coreaction.cc:5477-5485, oracle order) ---
-        universal.add_action(Box::new(ActionStart::new())); // :5477
-        universal.add_action(Box::new(crate::coreaction::ActionConstbase::new())); // :5478
-        // Ghidra: coreaction.cc:5419-5443,5479. ActionNormalizeSetup belongs
-        // only to the `normalanalysis` group. That group is a member of the
-        // `normalize` root (coreaction.cc:5438-5443) and absent from the
-        // default `decompile` root's toggle set (coreaction.cc:5424-5432), so
-        // a normal decompilation must preserve imported prototype locks.
-        universal.add_action(Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
-        universal.add_action(Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
-        universal.add_action(Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
-        universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new())); // :5484
-        // Ghidra: coreaction.cc:5485 ActionFuncLinkOutOnly — sole registration
-        // at its universal head slot (PIPE-HEAD-FLAT-ACTIONS-0001: previously
-        // delivered pre-fullloop as a flat root child by the deleted
-        // build_full_pipeline_actions() vec consumption).
-        // NOTE: `noproto` is absent from the default `decompile` grouplist
-        // (coreaction.cc:5424-5431), so Ghidra's derived decompile root drops
-        // this instance (Action::clone returns null — coreaction.hh:715-719
-        // pattern). Rugra keeps it registered per the wave target head
-        // (coreaction.cc:5477-5486); its funcLinkOutput work
-        // (coreaction.cc:1588-1595) is subsumed and idempotent under
-        // ActionFuncLink :5484 (funcLinkInput+funcLinkOutput, coreaction.cc:
-        // 1575-1586), so the registration is observably inert on the
-        // decompile root.
-        universal.add_action(Box::new(crate::coreaction::ActionFuncLinkOutOnly::new())); // :5485
-        // SINGLE REGISTRATION (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ +
-        // PIPE-HEAD-FLAT-ACTIONS-0001): universalAction (coreaction.cc:5462-
-        // 5738) registers every Action exactly once at a fixed tree slot, and
-        // a root is derived by cloning that tree (ActionDatabase::
-        // deriveAction, action.cc:1145-1158) — never by appending flat
-        // children. The former build_full_pipeline_actions() consumption that
-        // flattened Segmentize/InternalStorage/MultiCse/ShadowVar/Deindirect
-        // (plus FuncLinkOutOnly above) as root children before fullloop is
-        // removed; each is now registered below at its exact oracle slot
-        // (Segmentize/InternalStorage → mainloop :5494/:5495;
-        // MultiCse/ShadowVar/Deindirect/StackPtrFlow → stackstall
-        // :5653-:5656).
-
-        // --- fullloop (coreaction.cc:5487, repeatapply) ---
-        // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
-        // With fullloop repeatapply, test_realistic_curl_function still
-        // infinite-loops even after reverting mainloop — fullloop re-runs
-        // mainloop + ActionDeadCode each cycle, and one of those reports a
-        // change every pass (non-idempotent). Reverted to keep the build/test
-        // suite green. stackstall repeatapply is retained (oppool1 converges
-        // to a fixed point; the :5652-:5656 actions terminate on a clean
-        // pass — see the stackstall comment above).
-        let mut fullloop = ActionGroup::with_flags("fullloop", action_flags::RULE_REPEATAPPLY);
-
-        // --- mainloop (coreaction.cc:5489, repeatapply) ---
-        // NOTE: mainloop repeatapply causes stack overflow even with iterative
-        // ActionGroup.apply and 256MB stack. Root cause appears to be deep
-        // RwLock guard chains inside Rule apply_op (which receive &Arc and
-        // may hold nested read/write guards). The iterative ActionGroup fix
-        // (calling child.apply not child.perform) is retained as an improvement.
-        // Enabling mainloop repeatapply requires either:
-        //   1. Identifying the specific Rule/Action causing deep guard nesting
-        //   2. Refactoring Rule apply_op to avoid nested locks
-        //   3. Using a stack-based (non-recursive) pipeline executor
-        // mainloop repeatapply: not enabled. Despite Arc::as_ptr emitted fix
-        // + per-arm helpers + depth guard + 256MB stack, overflow persists.
-        // The overflow is in a code path not covered by the depth guard
-        // (possibly emit_block_ops or doc_function's discovery pass, which
-        // also recurses). Full diagnosis requires stack trace analysis tools
-        // not available in this environment. The Arc::as_ptr fix is retained
-        // as a correctness improvement. Tracked as TODO.
-        let mut mainloop = ActionGroup::with_flags("mainloop", action_flags::RULE_REPEATAPPLY);
-
-        // ActionUnreachable runs AFTER ActionBlockStructure (see below) where
-        // the CFG is complete. It was moved from here (Ghidra :5490) to avoid
-        // false-positive unreachable detection when bblocks are incomplete.
-        mainloop.add_action(Box::new(crate::coreaction::ActionVarnodeProps::new())); // :5491
-        mainloop.add_action(Box::new(ActionHeritage::new())); // :5492
-        mainloop.add_action(Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
-        // Ghidra: coreaction.cc:5494-5495 — Segmentize/InternalStorage at
-        // their mainloop slots, between ParamDouble (:5493) and DirectWrite
-        // (:5497). PIPE-HEAD-FLAT-ACTIONS-0001: moved in from flat root-child
-        // registration (they ran pre-fullloop on pre-SSA IR before).
-        // ActionForceGoto (:5496, blockrecovery) stays unregistered — Rugra
-        // port is a no-op stub (see coreaction.rs inventory comment).
-        mainloop.add_action(Box::new(crate::coreaction::ActionSegmentize::new())); // :5494
-        mainloop.add_action(Box::new(crate::coreaction::ActionInternalStorage::new())); // :5495
-        mainloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497 (protorecovery_a; the :5498 protorecovery_b instance is filtered from the decompile root — coreaction.cc:5424-5431)
-        mainloop.add_action(Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
-        mainloop.add_action(Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
-        mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
-        mainloop.add_action(Box::new(crate::coreaction::ActionNonzeroMask::new())); // :5507
-        // Rugra-local Actions (TODO: replace with Ghidra mechanisms once
-        // ActionActiveParam / ActionDefaultParams / ActionDirectWrite are wired).
-        // A5 ActionInferParams: KEPT — provides unique parameter inference
-        // (no Ghidra equivalent ported yet; ActionActiveParam/ActionDefaultParams
-        // are the Ghidra counterparts but aren't wired).
-        mainloop.add_action(Box::new(ActionInferParams::new()));
-        mainloop.add_action(Box::new(ActionConstantPtr::new()));
-        // A6 ActionCse DELETED: redundant with mainloop+fullloop repeatapply.
-        // Ghidra's ActionCse (coreaction.cc:708) is historical/commented-out;
-        // the actual CSE work is done by oppool1 Rules (RuleSelectCse etc.)
-        // + mainloop convergence. Verified: 952/952 tests, defects=0.
-        // ActionSimplify DELETED: self-invented Action with no Ghidra counterpart.
-        // With mainloop+fullloop RULE_REPEATAPPLY enabled (commits 534642c/70ca7e6),
-        // oppool1 (simplifypool) + convergence handles all simplification.
-        // Verified redundant: cargo test 952/952, compare_ghidra defects=0.
-
-        // --- stackstall (coreaction.cc:5509, repeatapply) ---
-        // Ghidra: coreaction.cc:5509-5657 — full child sequence:
-        //   oppool1 (:5511-5650), LaneDivide (:5652), MultiCse (:5653),
-        //   ShadowVar (:5654), Deindirect (:5655), StackPtrFlow (:5656).
-        // PIPE-HEAD-FLAT-ACTIONS-0001: MultiCse/ShadowVar/Deindirect move in
-        // from flat root-child registration; StackPtrFlow moves in from its
-        // former early mainloop slot (before oppool1) to the oracle's
-        // last-child slot; LaneDivide (:5652) is registered as the ported
-        // no-op stub so the group structure matches the oracle. Convergence
-        // under RULE_REPEATAPPLY: oppool1 is a fixed-point pool; LaneDivide /
-        // StackPtrFlow return 0 unconditionally; MultiCse/ShadowVar/Deindirect
-        // only report counts while they keep rewriting, so a clean pass
-        // terminates the loop.
-        let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
-        // oppool1 (coreaction.cc:5511, repeatapply)
-        stackstall.add_action(Box::new(build_simplify_pool()));
-        stackstall.add_action(Box::new(crate::coreaction::ActionLaneDivide::new())); // :5652 — no-op stub
-        stackstall.add_action(Box::new(crate::coreaction::ActionMultiCse::new())); // :5653
-        stackstall.add_action(Box::new(crate::coreaction::ActionShadowVar::new())); // :5654
-        stackstall.add_action(Box::new(crate::coreaction::ActionDeindirect::new())); // :5655
-        stackstall.add_action(Box::new(ActionStackPtrFlow::new())); // :5656
-
-        mainloop.add_action(Box::new(stackstall));
-
-        // oppool2 (coreaction.cc:5662) — type-recovery / stack-variable Rules.
-        mainloop.add_action(Box::new(build_oppool2()));
-        // Rugra-local type/copy propagation (TODO: replace with ActionInferTypes).
-        // A2 ActionTypeInfer DELETED: redundant with mainloop+fullloop
-        // repeatapply. Ghidra's type inference is ActionInferTypes
-        // (coreaction.cc:5508) + oppool2 + fullloop convergence.
-        // Verified: 952/952, defects=0.
-        // A3 ActionCopyPropagate DELETED: redundant with mainloop+fullloop
-        // repeatapply. Ghidra's copy propagation is RulePropagateCopy
-        // (oppool1:5566) + fullloop convergence. Verified: 952/952, defects=0.
-        // A4 ActionTypePropagate DELETED: redundant with mainloop+fullloop
-        // repeatapply. Ghidra's type propagation is part of ActionInferTypes
-        // (coreaction.cc:5508); the self-invented ActionTypePropagate
-        // duplicated a subset of that work. Verified: 952/952, defects=0.
-
-        mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
-        mainloop.add_action(Box::new(ActionDeadCode::new()));
-        mainloop.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
-        // Faithful to coreaction.cc:5508: ActionInferTypes runs in mainloop
-        // after RestructureVarnode/Spacebase/NonzeroMask. Propagates Datatype
-        // across data-flow so HighVariables get typed prefixes (pcVar/iVar/...)
-        // instead of falling back to uVar. Self-limited to 7 passes.
-        mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
-        mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
-        // Ghidra coreaction.cc:5658-5659: ActionRedundBranch runs BEFORE
-        // ActionBlockStructure. The dead-branch splice must settle the CFG
-        // BEFORE structuring, otherwise structuring produces sblocks that
-        // immediately go stale when RedundBranch mutates bblocks afterwards
-        // (sblocks cleared on next mainloop iteration, never rebuilt before
-        // print → flat bblocks emission → dangling `goto ;`).
-        mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new())); // :5658
-        mainloop.add_action(Box::new(ActionBlockStructure::new())); // :5659
-        // ActionUnreachable (coreaction.cc:5673) — runs AFTER BlockStructure,
-        // removing blocks that became unreachable after structuring.
-        mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
-        mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new())); // :5673
-        mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674
-        mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676 — enabled (once-per-func guarded)
-
-        fullloop.add_action(Box::new(mainloop));
-        // fullloop post-mainloop Actions (coreaction.cc:5679-5688) — registered
-        // but some may need maturity before enabling.
-        fullloop.add_action(Box::new(crate::coreaction::ActionLikelyTrash::new())); // :5679
-        fullloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5680
-        fullloop.add_action(Box::new(crate::coreaction::ActionDoNothing::new())); // :5683
-        fullloop.add_action(Box::new(crate::coreaction::ActionSwitchNorm::new())); // :5684
-        fullloop.add_action(Box::new(crate::coreaction::ActionReturnSplit::new())); // :5685
-        fullloop.add_action(Box::new(crate::coreaction::ActionUnjustifiedParams::new())); // :5686
-        fullloop.add_action(Box::new(crate::coreaction::ActionStartTypes::new())); // :5687
-        fullloop.add_action(Box::new(crate::coreaction::ActionActiveReturn::new())); // :5688
-        fullloop.add_action(Box::new(ActionDeadCode::new())); // :5682
-
-        universal.add_action(Box::new(fullloop));
-
-        // --- Post-fullloop top-level (coreaction.cc:5691-5738) ---
-        universal.add_action(Box::new(crate::coreaction::ActionMappedLocalSync::new())); // :5691 — stub, safe
-        universal.add_action(Box::new(crate::coreaction::ActionStartCleanUp::new())); // :5692 — stub, safe
-        // Cleanup pool (coreaction.cc:5694, repeatapply)
-        universal.add_action(Box::new(build_cleanup_pool()));
-        // Post-cleanup sequence mirrors coreaction.cc:5714-5738 verbatim.
-        // PIPE-MERGETYPE-ORDER-0001: the three structural transforms come
-        // FIRST after the cleanup pool (:5714-5716), ActionMergeType runs
-        // exactly ONCE late (:5727, after MergeAdjacent, before HideShadow),
-        // and ActionAssignHigh (:5717) attaches HighVariables between the
-        // structural transforms and the merge family (HideShadow/MarkExplicit/
-        // mergeByDatatype dereference getHigh() unconditionally — Ghidra
-        // coreaction.cc:4831/3237, merge.cc:370). The former premature
-        // MergeType right after cleanup and the NormalizeBranches-first
-        // ordering were historical accretion (78186a2/2f3116f/c45b2fa), not
-        // oracle order; see docs/alignment_audit/PIPELINE_TREE_2026-08-13.md.
-        universal.add_action(Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714
-        universal.add_action(Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715
-        universal.add_action(Box::new(ActionNormalizeBranches::new())); // :5716 (blockaction.cc:2117)
-        universal.add_action(Box::new(crate::coreaction::ActionAssignHigh::new())); // :5717 — moved here from build_full_pipeline_actions
-        // Merge stage (coreaction.cc:5718-5726) — faithful order:
-        universal.add_action(Box::new(crate::coreaction::ActionMergeRequired::new())); // :5718
-        universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new())); // :5719
-        universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new())); // :5720
-        universal.add_action(Box::new(crate::coreaction::ActionMergeMultiEntry::new())); // :5721
-        universal.add_action(Box::new(crate::coreaction::ActionMergeCopy::new())); // :5722
-        universal.add_action(Box::new(crate::coreaction::ActionDominantCopy::new())); // :5723 — moved here from build_full_pipeline_actions
-        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5724 — first of oracle's two deliberate instances (stub, safe)
-        universal.add_action(Box::new(crate::coreaction::ActionMarkIndirectOnly::new())); // :5725
-        universal.add_action(Box::new(crate::coreaction::ActionMergeAdjacent::new())); // :5726
-        universal.add_action(Box::new(crate::coreaction::ActionMergeType::new())); // :5727 — the single instance (Merge::merge_all still folds the :5718-5729 steps internally; see ActionMergeType)
-        universal.add_action(Box::new(crate::coreaction::ActionHideShadow::new())); // :5728
-        universal.add_action(Box::new(crate::coreaction::ActionCopyMarker::new())); // :5729 — moved here from build_full_pipeline_actions
-        // ActionOutputPrototype + ActionInputPrototype (coreaction.cc:5730-5731)
-        // — finalize the function prototype from RETURN ops (return type) and
-        // input varnodes (param count/types). Run after merge + MarkExplicit/
-        // Implied, before SetCasts (5735) and FinalStructure (5736).
-        universal.add_action(Box::new(crate::coreaction::ActionOutputPrototype::new())); // :5730
-        universal.add_action(Box::new(crate::coreaction::ActionInputPrototype::new())); // :5731
-        universal.add_action(Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732
-        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733 — second of oracle's two instances
-        universal.add_action(Box::new(crate::coreaction::ActionNameVars::new())); // :5734
-        // ActionSetCasts (coreaction.cc:5735) — inserts CPUI_CAST ops so the
-        // printer emits explicit C type casts. Runs after ActionInferTypes
-        // (mainloop) and ActionMarkExplicit/Implied so input/output types are
-        // settled. Faithful to Ghidra's order: ...MarkImplied → ...NameVars →
-        // SetCasts → FinalStructure → PrototypeWarnings.
-        universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new())); // :5735
-        universal.add_action(Box::new(ActionFinalStructure::new())); // :5736 (blockaction.cc:2186) — before PrototypeWarnings per oracle
-        universal.add_action(Box::new(crate::coreaction::ActionPrototypeWarnings::new())); // :5737
-        universal.add_action(Box::new(crate::coreaction::ActionStop::new())); // :5738 — stub, safe
-
-        universal
+// Ghidra: coreaction.cc:5462-5738 ActionDatabase::universalAction
+/// Build the universal Action tree containing every component at its exact
+/// oracle slot. With `grouplist == None` the raw universal tree is built
+/// (every Action registered). With `Some(list)` the construction mirrors
+/// the survival semantics of `Action::clone` under `deriveAction`
+/// (action.cc:1145-1158): a leaf is registered iff its basegroup is in the
+/// list, and a group/pool node is registered iff at least one child
+/// survived (ActionGroup::clone action.cc:391-406 / ActionPool::clone
+/// action.cc:899-914 / ActionRestartGroup::clone action.cc:529-544).
+/// Rule-level clone filtering inside the pools is scoped out: every rule
+/// group registered below (deadcode/analysis/nodejoin/subvar/
+/// conditionalexe/floatprecision/typerecovery/segment/protorecovery/
+/// doubleload/doubleprecis/cleanup/splitcopy/splitpointer/constsequence/
+/// stackvars) is a member of the default `decompile` grouplist, so the
+/// derived default root is unaffected.
+pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRestartGroup> {
+    // Ghidra clone survival: a leaf is registered iff its basegroup is in
+    // the steering grouplist (action.cc:391-406 / 899-914 / 529-544).
+    let keep = |group: &str| grouplist.map(|list| list.contains(group)).unwrap_or(true);
+    // RUGRA-GLUE: call-site adapter applying the clone-survival check to
+    // each addAction slot, keeping the flat coreaction.cc:5477-5738 shape.
+    macro_rules! add {
+        ($parent:expr, $group:expr, $action:expr) => {
+            if keep($group) {
+                $parent.add_action_in_group($action, $group);
+            }
+        };
     }
+    // Root: ActionRestartGroup(Action::rule_onceperfunc,"universal",1) — coreaction.cc:5474
+    let mut universal = ActionRestartGroup::new(
+        "universal",
+        action_flags::RULE_ONCEPERFUNC,
+        1,
+    );
+
+    // --- Universal head (coreaction.cc:5477-5485) ---
+    add!(universal, "base", Box::new(crate::coreaction::ActionStart::new())); // :5477
+    add!(universal, "base", Box::new(crate::coreaction::ActionConstbase::new())); // :5478
+    add!(universal, "normalanalysis", Box::new(crate::coreaction::ActionNormalizeSetup::new())); // :5479
+    add!(universal, "base", Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
+    add!(universal, "base", Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
+    add!(universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
+    add!(universal, "protorecovery", Box::new(crate::coreaction::ActionFuncLink::new())); // :5484
+    add!(universal, "noproto", Box::new(crate::coreaction::ActionFuncLinkOutOnly::new())); // :5485
+
+    // --- fullloop (coreaction.cc:5487, rule_repeatapply) ---
+    let mut fullloop = ActionGroup::with_flags("fullloop", action_flags::RULE_REPEATAPPLY);
+    {
+        // --- mainloop (coreaction.cc:5489, rule_repeatapply) ---
+        let mut mainloop = ActionGroup::with_flags("mainloop", action_flags::RULE_REPEATAPPLY);
+        add!(mainloop, "base", Box::new(crate::coreaction::ActionUnreachable::new())); // :5490
+        add!(mainloop, "base", Box::new(crate::coreaction::ActionVarnodeProps::new())); // :5491
+        add!(mainloop, "base", Box::new(ActionHeritage::new())); // :5492
+        add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
+        add!(mainloop, "base", Box::new(crate::coreaction::ActionSegmentize::new())); // :5494
+        add!(mainloop, "base", Box::new(crate::coreaction::ActionInternalStorage::new())); // :5495
+        add!(mainloop, "blockrecovery", Box::new(crate::coreaction::ActionForceGoto::new())); // :5496
+        add!(mainloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497 (propagateIndirect=true)
+        add!(mainloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5498 (propagateIndirect=false; filtered from the decompile root)
+        add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
+        add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
+        add!(mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestrictLocal::new())); // :5502
+        add!(mainloop, "deadcode", Box::new(ActionDeadCode::new())); // :5503
+        add!(mainloop, "dynamic", Box::new(crate::coreaction::ActionDynamicMapping::new())); // :5504
+        add!(mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestructureVarnode::new())); // :5505
+        add!(mainloop, "base", Box::new(crate::coreaction::ActionSpacebase::new())); // :5506
+        add!(mainloop, "analysis", Box::new(crate::coreaction::ActionNonzeroMask::new())); // :5507
+        add!(mainloop, "typerecovery", Box::new(crate::coreaction::ActionInferTypes::new())); // :5508
+
+        // --- stackstall (coreaction.cc:5509, rule_repeatapply) ---
+        let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
+        stackstall.add_action(Box::new(build_oppool1())); // :5511-5650 oppool1
+        add!(stackstall, "base", Box::new(crate::coreaction::ActionLaneDivide::new())); // :5652
+        add!(stackstall, "analysis", Box::new(crate::coreaction::ActionMultiCse::new())); // :5653
+        add!(stackstall, "analysis", Box::new(crate::coreaction::ActionShadowVar::new())); // :5654
+        add!(stackstall, "deindirect", Box::new(crate::coreaction::ActionDeindirect::new())); // :5655
+        add!(stackstall, "stackptrflow", Box::new(ActionStackPtrFlow::new())); // :5656
+        if stackstall.num_actions() > 0 {
+            mainloop.add_action(Box::new(stackstall)); // :5657
+        }
+
+        add!(mainloop, "deadcontrolflow", Box::new(crate::coreaction::ActionRedundBranch::new())); // :5658
+        add!(mainloop, "blockrecovery", Box::new(ActionBlockStructure::new())); // :5659
+        add!(mainloop, "typerecovery", Box::new(crate::coreaction::ActionConstantPtr::new())); // :5660
+        mainloop.add_action(Box::new(build_oppool2())); // :5662-5671 oppool2
+        add!(mainloop, "unreachable", Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
+        add!(mainloop, "unreachable", Box::new(crate::coreaction::ActionUnreachable::new())); // :5673
+        add!(mainloop, "nodejoin", Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674
+        add!(mainloop, "conditionalexe", Box::new(crate::condexe::ActionConditionalExe::new())); // :5675
+        add!(mainloop, "analysis", Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676
+        if mainloop.num_actions() > 0 {
+            fullloop.add_action(Box::new(mainloop)); // :5678
+        }
+
+        // --- fullloop tail (coreaction.cc:5679-5688, after mainloop) ---
+        add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionLikelyTrash::new())); // :5679
+        add!(fullloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5680
+        add!(fullloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5681 (filtered from the decompile root)
+        add!(fullloop, "deadcode", Box::new(ActionDeadCode::new())); // :5682
+        add!(fullloop, "deadcontrolflow", Box::new(crate::coreaction::ActionDoNothing::new())); // :5683
+        add!(fullloop, "switchnorm", Box::new(crate::coreaction::ActionSwitchNorm::new())); // :5684
+        add!(fullloop, "returnsplit", Box::new(crate::coreaction::ActionReturnSplit::new())); // :5685
+        add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionUnjustifiedParams::new())); // :5686
+        add!(fullloop, "typerecovery", Box::new(crate::coreaction::ActionStartTypes::new())); // :5687
+        add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionActiveReturn::new())); // :5688
+    }
+    if fullloop.num_actions() > 0 {
+        universal.add_action(Box::new(fullloop)); // :5690
+    }
+
+    // --- Post-fullloop top-level (coreaction.cc:5691-5738) ---
+    add!(universal, "localrecovery", Box::new(crate::coreaction::ActionMappedLocalSync::new())); // :5691
+    add!(universal, "cleanup", Box::new(crate::coreaction::ActionStartCleanUp::new())); // :5692
+    universal.add_action(Box::new(build_cleanup_pool())); // :5694-5712 cleanup pool
+    add!(universal, "blockrecovery", Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714
+    add!(universal, "blockrecovery", Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715
+    add!(universal, "normalizebranches", Box::new(ActionNormalizeBranches::new())); // :5716 (filtered from the decompile root — coreaction.cc:5424-5431)
+    add!(universal, "merge", Box::new(crate::coreaction::ActionAssignHigh::new())); // :5717
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeRequired::new())); // :5718
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMarkExplicit::new())); // :5719
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMarkImplied::new())); // :5720
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeMultiEntry::new())); // :5721
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeCopy::new())); // :5722
+    add!(universal, "merge", Box::new(crate::coreaction::ActionDominantCopy::new())); // :5723
+    add!(universal, "dynamic", Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5724
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMarkIndirectOnly::new())); // :5725
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeAdjacent::new())); // :5726
+    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeType::new())); // :5727
+    add!(universal, "merge", Box::new(crate::coreaction::ActionHideShadow::new())); // :5728
+    add!(universal, "merge", Box::new(crate::coreaction::ActionCopyMarker::new())); // :5729
+    add!(universal, "localrecovery", Box::new(crate::coreaction::ActionOutputPrototype::new())); // :5730
+    add!(universal, "fixateproto", Box::new(crate::coreaction::ActionInputPrototype::new())); // :5731
+    add!(universal, "fixateglobals", Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732
+    add!(universal, "dynamic", Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733
+    add!(universal, "merge", Box::new(crate::coreaction::ActionNameVars::new())); // :5734
+    add!(universal, "casts", Box::new(crate::coreaction::ActionSetCasts::new())); // :5735
+    add!(universal, "blockrecovery", Box::new(ActionFinalStructure::new())); // :5736
+    add!(universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeWarnings::new())); // :5737
+    add!(universal, "base", Box::new(crate::coreaction::ActionStop::new())); // :5738
+
+    // Ghidra: action.cc:529-544 ActionRestartGroup::clone — a restart group
+    // with no surviving children clones to null.
+    if universal.num_actions() == 0 {
+        return None;
+    }
+    Some(universal)
+}
+
+// RUGRA-GLUE: derived default root — mirrors ActionDatabase::resetDefaults + setCurrent("decompile") for callers that only need the tree
+/// Build the derived default "decompile" pipeline root (the tree that
+/// `ActionDatabase::set_default_actions` registers as the current root).
+pub fn build_default_pipeline() -> ActionRestartGroup {
+    universal_action(Some(&ActionGroupList::from_members(default_groups::DECOMPILE)))
+        .expect("decompile grouplist keeps the universal head (base group)")
 }
 
 /// ActionTypePropagate: Conservative P-code struct pointer type propagation.
@@ -1185,11 +1303,14 @@ mod tests {
         Arc,
     };
 
-    // PIPE-MERGETYPE-ORDER-0001: the post-cleanup child sequence of the
-    // default pipeline must mirror coreaction.cc:5714-5738 verbatim — three
-    // structural transforms first (:5714-5716), a single ActionMergeType late
-    // (:5727, after mergeadjacent, before hideshadow), and ActionAssignHigh
-    // (:5717) between the transforms and the merge family.
+    // PIPE-MERGETYPE-ORDER-0001 + PIPE-DERIVED-TREE-0001: the post-cleanup
+    // child sequence of the derived default pipeline must mirror the
+    // coreaction.cc:5714-5738 slots after decompile-grouplist filtering —
+    // ActionNormalizeBranches (:5716, group "normalizebranches") is NOT a
+    // member of the decompile grouplist (coreaction.cc:5424-5431) and is
+    // dropped by the derive clone, three structural transforms lead
+    // (:5714-5715 + assignhigh :5717), a single ActionMergeType late
+    // (:5727, after mergeadjacent, before hideshadow).
     #[test]
     fn test_post_cleanup_sequence_matches_ghidra_5714_5738() {
         let root = build_default_pipeline();
@@ -1204,7 +1325,7 @@ mod tests {
             vec![
                 "prefercomplement",     // :5714
                 "structuretransform",   // :5715
-                "normalizebranches",    // :5716
+                // "normalizebranches" (:5716) filtered: group not in decompile
                 "assignhigh",           // :5717
                 "mergerequired",        // :5718
                 "markexplicit",         // :5719
@@ -1293,15 +1414,14 @@ mod tests {
         }
     }
 
-    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ + PIPE-HEAD-FLAT-ACTIONS-0001:
-    // the base group order is coreaction.cc:5477-5485 verbatim (Start,
-    // Constbase, [NormalizeSetup excluded — normalanalysis group, not in the
-    // decompile root's toggle set], DefaultParams, ExtraPopSetup,
-    // PrototypeTypes, FuncLink, FuncLinkOutOnly), immediately followed by
-    // fullloop — the former flat vec-survivor run (segmentize/
-    // internalstorage/multicse/shadowvar/deindirect before fullloop) is
-    // gone; those Actions now live inside mainloop/stackstall at their
-    // oracle slots (asserted by the coreaction.rs tree tests).
+    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ④ + PIPE-DERIVED-TREE-0001: the
+    // derived decompile head is coreaction.cc:5477-5486 after grouplist
+    // filtering — Start, Constbase, [NormalizeSetup filtered — group
+    // "normalanalysis" is not in the decompile grouplist], DefaultParams,
+    // ExtraPopSetup, PrototypeTypes, FuncLink, [FuncLinkOutOnly filtered —
+    // group "noproto" is not in the decompile grouplist], immediately
+    // followed by fullloop. The raw universal tree still registers both
+    // filtered nodes at their head slots (see universal_action).
     #[test]
     fn test_base_group_order_matches_ghidra_5477_5485() {
         let root = build_default_pipeline();
@@ -1313,10 +1433,31 @@ mod tests {
             "extrapopsetup",     // :5482
             "prototypetypes",    // :5483
             "funclink",          // :5484
-            "funclinkoutonly",   // :5485 (head slot, sole registration)
             "fullloop",          // :5487 group
         ];
         assert!(names.len() >= expected_prefix.len());
+        let prefix: Vec<&str> = names[..expected_prefix.len()].to_vec();
+        assert_eq!(prefix, expected_prefix.to_vec());
+    }
+
+    // PIPE-DERIVED-TREE-0001: the raw universal head keeps both filtered
+    // nodes (normalizesetup :5479, funclink_outonly :5485) — derive only
+    // drops them for roots whose grouplist lacks their groups.
+    #[test]
+    fn test_raw_universal_head_keeps_filtered_nodes() {
+        let root = universal_action(None).expect("raw universal root");
+        let names = root.child_names();
+        let expected_prefix = [
+            "start",              // :5477
+            "constbase",          // :5478
+            "normalizesetup",     // :5479 (normalanalysis)
+            "defaultparams",      // :5480
+            "extrapopsetup",      // :5482
+            "prototypetypes",     // :5483
+            "funclink",           // :5484
+            "funclink_outonly",   // :5485 (noproto)
+            "fullloop",           // :5487
+        ];
         let prefix: Vec<&str> = names[..expected_prefix.len()].to_vec();
         assert_eq!(prefix, expected_prefix.to_vec());
     }
