@@ -126,7 +126,7 @@ forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只�
 
 | ID | P | 标题 | write-set | 依赖 |
 |---|---|---|---|---|
-| `CONDEXE-CFG-0001` | P0 | removeFromFlowSplit 忠实化（swap 序列+越界） | `src/block.rs`(新增)、`src/funcdata.rs:2728-2787`、docs/api/{block,funcdata}.md | 无 |
+| `CONDEXE-CFG-0001` | P0 | DONE(wt/panicfix)：removeFromFlowSplit 忠实化（swap 序列+越界 panic×3）+ op_destroy 无 parent 路径 mark_dead（glob_word RuleSubvarSubpiece panic） | `src/block.rs`(新增)、`src/funcdata.rs:2728-2787`、docs/api/{block,funcdata}.md | 无 |
 | `CONDEXE-TRUEOUT-0002` | P0 | getTrue/FalseOut 纯位置化+消费方迁移 | `src/block.rs:453-485`、`src/condexe.rs`、全部消费方、docs/api/block.md | 无（与 0001 并行需分文件租约） |
 | `CONDEXE-ACTION-0003` | P1 | apply guard/count/活列表遍历/管线移位 | `src/condexe.rs:1346-1389`、`src/action.rs:1053-1076` | 0001,0002 |
 | `CONDEXE-HERITAGE-0004` | P1 | buildHeritageArray + per-space numHeritagePasses 接线 | `src/funcdata.rs:6958`、`src/condexe.rs:104-127/357-396`、`src/heritage.rs` | 无 |
