@@ -965,12 +965,32 @@ impl PrintC {
                     // Keep the reading op's arc: printlanguage.cc:532 passes it
                     // as the readOp argument of the opcode push.
                     let read_op_arc = np.op.clone();
-                    drop(vn_guard);
-                    drop(op_guard);
-                    let def_guard = def_op_arc.read().unwrap();
-                    // printlanguage.cc:532: defOp->getOpcode()->push(this, defOp, op)
-                    self.dispatch_op_rpn(&def_op_arc, &def_guard, Some(&read_op_arc));
-                    drop(def_guard);
+                    // Ghidra's virtual TypeOp::push covers every opcode, so the
+                    // def-op dispatch always has an emitter (marker ops
+                    // MULTIEQUAL/INDIRECT intentionally emit nothing,
+                    // printc.hh:331-332). Rugra's dispatch_op_rpn is partial
+                    // (PRINT-RPN-0001), and dispatching an unhandled/dead def
+                    // would silently DROP the operand text ("a + " fragments).
+                    // Guard: inline only when the def op is live and its
+                    // dispatch arm actually emits; otherwise keep the
+                    // pre-inline leaf-atom form (baseline text preserved).
+                    let inline_ok = {
+                        let def_guard = def_op_arc.read().unwrap();
+                        !def_guard.is_dead() && Self::rpn_def_inline_reachable(&def_guard)
+                    };
+                    if inline_ok {
+                        drop(vn_guard);
+                        drop(op_guard);
+                        let def_guard = def_op_arc.read().unwrap();
+                        // printlanguage.cc:532: defOp->getOpcode()->push(this, defOp, op)
+                        self.dispatch_op_rpn(&def_op_arc, &def_guard, Some(&read_op_arc));
+                        drop(def_guard);
+                    } else {
+                        let atom = self.make_atom_for_vn(&vn_guard, &op_guard);
+                        drop(vn_guard);
+                        drop(op_guard);
+                        self.rpn_push_atom(&atom);
+                    }
                 } else {
                     drop(vn_guard);
                     drop(op_guard);
@@ -1031,6 +1051,83 @@ impl PrintC {
     ) {
         if let Some(vn_arc) = op.get_in(slot) {
             self.rpn_push_vn(vn_arc.clone(), op_arc.clone(), m);
+        }
+    }
+
+    // RUGRA-GLUE: rpn_def_inline_reachable (Ghidra counterpart is the total
+    // TypeOp::push virtual dispatch — typeop.cc registers a pusher for every
+    // opcode — so Ghidra never needs this predicate; it exists only because
+    // Rugra's dispatch_op_rpn match is partial, PRINT-RPN-0001 residual).
+    /// Whether dispatch_op_rpn has an arm that actually emits output for this
+    /// def op (and has the inputs that arm requires). Used by rpn_recurse's
+    /// implied branch to decide between inlining the def expression and
+    /// falling back to the leaf atom: dispatching an arm that emits nothing
+    /// would silently drop the operand from the output text.
+    ///
+    /// Must stay in sync with dispatch_op_rpn's match arms: every opcode that
+    /// reaches an emitting arm (with the inputs it destructures) is `true`;
+    /// opcodes falling into the `_ => {}` arm (PIECE, MULTIEQUAL, INDIRECT,
+    /// BRANCH, BRANCHIND, CPOOLLOAD, CPOOLSTORE, NEW, SEGMENTOP, PCODEOP, ...)
+    /// are `false` and keep the leaf form. MULTIEQUAL/INDIRECT emit nothing in
+    /// Ghidra too (printc.hh:331-332), but Rugra's MarkImplied cover data is
+    /// not proven to exclude phi outputs, so the leaf fallback is the
+    /// conservative choice until PRINT-RPN-0001 completes the dispatch table.
+    fn rpn_def_inline_reachable(op: &PcodeOp) -> bool {
+        use crate::opcodes::OpCode;
+        let has = |slot: usize| op.get_in(slot).is_some();
+        match op.opcode {
+            OpCode::CPUI_COPY => has(0),
+            OpCode::CPUI_INT_ADD
+            | OpCode::CPUI_INT_SUB
+            | OpCode::CPUI_INT_MULT
+            | OpCode::CPUI_INT_DIV
+            | OpCode::CPUI_INT_SDIV
+            | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_SREM
+            | OpCode::CPUI_INT_AND
+            | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INT_LEFT
+            | OpCode::CPUI_INT_RIGHT
+            | OpCode::CPUI_INT_SRIGHT
+            | OpCode::CPUI_INT_EQUAL
+            | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_LESS
+            | OpCode::CPUI_INT_SLESS
+            | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_BOOL_AND
+            | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_FLOAT_ADD
+            | OpCode::CPUI_FLOAT_SUB
+            | OpCode::CPUI_FLOAT_MULT
+            | OpCode::CPUI_FLOAT_DIV
+            | OpCode::CPUI_FLOAT_EQUAL
+            | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS
+            | OpCode::CPUI_FLOAT_LESSEQUAL => has(0) && has(1),
+            OpCode::CPUI_INT_NEGATE
+            | OpCode::CPUI_BOOL_NEGATE
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT
+            | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR
+            | OpCode::CPUI_FLOAT_ROUND => has(0),
+            OpCode::CPUI_LOAD => has(1),
+            OpCode::CPUI_STORE
+            | OpCode::CPUI_CALL
+            | OpCode::CPUI_CALLIND
+            | OpCode::CPUI_RETURN
+            | OpCode::CPUI_CBRANCH => true,
+            OpCode::CPUI_CAST
+            | OpCode::CPUI_INT_ZEXT
+            | OpCode::CPUI_INT_SEXT
+            | OpCode::CPUI_SUBPIECE => has(0),
+            OpCode::CPUI_PTRSUB => true,
+            _ => false,
         }
     }
 
@@ -1214,12 +1311,15 @@ impl PrintC {
                             } else { None }
                         } else { None };
                         if let Some(fn_) = fm {
-                            let base_atom = self.make_atom_for_vn(&bv, op);
                             drop(bv); drop(v0); drop(v1);
                             // printc.cc:476-484 opPtrsub shape:
-                            // pushOp(&pointer_member); base atom; field atom.
+                            // pushOp(&pointer_member); pushVn(base); field atom.
+                            // pushVn records into nodepend (printlanguage.cc:197)
+                            // so an implied base (nested PTRSUB/CAST) is inlined
+                            // by rpn_recurse; the field-atom push drains it
+                            // (rpn_push_atom's pending trigger).
                             self.rpn_push_op(self.rpn_tok_pointer_member);
-                            self.rpn_push_atom(&base_atom);
+                            self.rpn_push_in(op_arc, op, bidx, self.mods);
                             use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
                             let field_atom = Atom::new(&fn_, TagType::Syntax, SyntaxHighlight::NoColor);
                             self.rpn_push_atom(&field_atom);
@@ -1233,28 +1333,20 @@ impl PrintC {
                 // emitOp prints " op " with the token's spacing=1 at
                 // printlanguage.cc:332-337 when the first operand completes).
                 //
-                // Operand emission keeps the leaf-atom form (make_atom_for_vn)
-                // rather than Ghidra's pushVn/in(1)-then-in(0) nodepend queue
-                // (printlanguage.cc:551-552): routing implied operands through
-                // rpn_recurse would inline whole sub-expressions, which is the
-                // PRINT-RPN-0001 implied-inlining gap and changes statement
-                // output corpus-wide. The token-flow operator + leaf atoms
-                // yield byte-identical text to the previous direct emission
-                // (`a + b`) while pushOp's parentheses() decision now governs
-                // nesting; the in0-atom, op, in1-atom order matches Ghidra's
-                // left-then-right print order (nodepend LIFO ⇒ in0 first).
+                // printlanguage.cc:551-552: operands are recorded via pushVn
+                // — in(1) first, then in(0), because nodepend is LIFO and
+                // drains in(0) first (left-to-right print order). rpn_recurse
+                // (printlanguage.cc:526-536) then either inlines the defining
+                // op for implied operands (PRINTC-UNLINKED-REF-0001 fix: the
+                // def expression replaces the GLUE leaf name) or emits the
+                // leaf Atom via pushVnExplicit for explicit operands —
+                // byte-identical to the former direct leaf push.
                 // Missing-input ops skip emission entirely, as before.
                 let tok_index = self.rpn_tok_binary(op.opcode);
-                if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
+                if let (Some(_in0), Some(_in1)) = (op.get_in(0), op.get_in(1)) {
                     self.rpn_push_op(tok_index);
-                    let v0 = in0.read().unwrap();
-                    let a0 = self.make_atom_for_vn(&v0, op);
-                    drop(v0);
-                    self.rpn_push_atom(&a0);
-                    let v1 = in1.read().unwrap();
-                    let a1 = self.make_atom_for_vn(&v1, op);
-                    drop(v1);
-                    self.rpn_push_atom(&a1);
+                    self.rpn_push_in(op_arc, op, 1, self.mods);
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
                 }
             }
             // printlanguage.cc:566 opUnary.
@@ -1275,12 +1367,11 @@ impl PrintC {
                     _ => "",
                 };
                 self.emit.tag_op(prefix);
-                if let Some(in0) = op.get_in(0) {
-                    let v0 = in0.read().unwrap();
-                    let a0 = self.make_atom_for_vn(&v0, op);
-                    drop(v0);
-                    self.rpn_push_atom(&a0);
-                }
+                // printlanguage.cc:572: pushVn(op->getIn(0),op,mods) — record
+                // into nodepend so an implied operand is inlined by the
+                // enclosing rpn_recurse drain; explicit operands drain as
+                // leaf atoms via pushVnExplicit (byte-identical text).
+                self.rpn_push_in(op_arc, op, 0, self.mods);
             }
             // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
             OpCode::CPUI_LOAD => {
@@ -1288,13 +1379,13 @@ impl PrintC {
                 self.rpn_push_in(op_arc, op, 1, self.mods);
             }
             // STORE has no outvn; render *(addr) = value inline.
-            // NOTE: This branch uses direct atom emission (not nodepend
-            // recording) because the `*`/` = ` operator text is emitted inline
-            // via emit.tag_op, which does not compose with deferred implied-def
-            // inlining. As a consequence a PTRSUB write address renders as its
-            // leaf variable name here (the read path via COPY/LOAD/PTRSUB does
-            // inline correctly). Wiring STORE through the assignment/dereference
-            // RPN tokens is tracked as a follow-up.
+            // printc.cc:500-518 opStore: pushOp(assignment); [pushOp(deref)];
+            // pushVn(in2); pushVn(in1). The `*`/` = ` operator text is emitted
+            // inline (not via the assignment/dereference tokens — STORE token
+            // wiring is a PRINT-RPN-0001 follow-up), but the operands are
+            // recorded through pushVn + rpn_recurse so implied defs (e.g. a
+            // PTRSUB write address or an implied value expression) inline at
+            // the use site exactly as printlanguage.cc:526-536 prescribes.
             OpCode::CPUI_STORE => {
                 // Check INT_ADD(struct_ptr, field_offset) -> ptr->field
                 let mut field_access = false;
@@ -1321,22 +1412,34 @@ impl PrintC {
                                 if offset > 0 {
 
                                     let bv = base_arc.read().unwrap();
+                                    // Resolve the field name first, then drop
+                                    // the guard before any &mut self emission.
+                                    let mut field_hit: Option<String> = None;
                                     if let Some(ref vt) = bv.v_type {
                                         use crate::type_system::datatype::Datatype;
                                         if let Datatype::Pointer(ref tp) = vt.as_ref() {
                                             if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
                                                 for field in &ts.fields {
                                                     if field.offset == offset as usize {
-                                                        let bt = self.get_varnode_display_name(&bv);
-                                                        self.emit.print(&bt);
-                                                        self.emit.print("->");
-                                                        self.emit.print(&field.name);
-                                                        field_access = true;
+                                                        field_hit = Some(field.name.clone());
                                                         break;
                                                     }
                                                 }
                                             }
                                         }
+                                    }
+                                    drop(bv);
+                                    if let Some(fname) = field_hit {
+                                        // Base via pushVn semantics: an implied
+                                        // base (nested CAST/PTRSUB) inlines its
+                                        // def expression instead of a leaf
+                                        // name; explicit bases drain as leaf
+                                        // atoms (identical text).
+                                        self.rpn_push_vn(base_arc.clone(), def_arc.clone(), self.mods);
+                                        self.rpn_recurse();
+                                        self.emit.print("->");
+                                        self.emit.print(&fname);
+                                        field_access = true;
                                     }
                                 }
                             }
@@ -1345,20 +1448,12 @@ impl PrintC {
                 }
                 if !field_access {
                     self.emit.tag_op("*");
-                    if let Some(in1) = op.get_in(1) {
-                        let v1 = in1.read().unwrap();
-                        let a1 = self.make_atom_for_vn(&v1, op);
-                        drop(v1);
-                        self.rpn_push_atom(&a1);
-                    }
+                    self.rpn_push_in(op_arc, op, 1, self.mods);
+                    self.rpn_recurse();
                 }
                 self.emit.tag_op(" = ");
-                if let Some(in2) = op.get_in(2) {
-                    let v2 = in2.read().unwrap();
-                    let a2 = self.make_atom_for_vn(&v2, op);
-                    drop(v2);
-                    self.rpn_push_atom(&a2);
-                }
+                self.rpn_push_in(op_arc, op, 2, self.mods);
+                self.rpn_recurse();
             }
             // printc.cc:508 opCall: name(args...).
             OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
@@ -1382,17 +1477,18 @@ impl PrintC {
                 self.emit.print("(");
                 let n = op.num_input();
                 // in(0) is the target; args are in(1..n).
+                // printc.cc:626-631: each arg is pushVn — record + drain so
+                // implied argument expressions (e.g. malloc results feeding a
+                // call) inline at the argument position.
                 let mut first = true;
                 for i in 1..n {
                     if !first {
                         self.emit.print(", ");
                     }
                     first = false;
-                    if let Some(arg) = op.get_in(i) {
-                        let v = arg.read().unwrap();
-                        let a = self.make_atom_for_vn(&v, op);
-                        drop(v);
-                        self.rpn_push_atom(&a);
+                    if op.get_in(i).is_some() {
+                        self.rpn_push_in(op_arc, op, i, self.mods);
+                        self.rpn_recurse();
                     }
                 }
                 self.emit.print(")");
@@ -1401,23 +1497,22 @@ impl PrintC {
             // PRINT-RPN-0001 tracks the halt/noreturn/baddata/missing variants.
             OpCode::CPUI_RETURN => {
                 self.emit.tag_op("return");
-                if let Some(in1) = op.get_in(1) {
+                // printc.cc:754 opReturn plain arm: pushVn(in1) — record +
+                // drain so an implied return-value expression inlines.
+                if op.get_in(1).is_some() {
                     self.emit.print(" ");
-                    let v1 = in1.read().unwrap();
-                    let a1 = self.make_atom_for_vn(&v1, op);
-                    drop(v1);
-                    self.rpn_push_atom(&a1);
+                    self.rpn_push_in(op_arc, op, 1, self.mods);
+                    self.rpn_recurse();
                 }
             }
             // CBRANCH: emit the condition expression in parens.
+            // printc.cc:566 opCbranch: pushVn(op->getIn(1),op,m) — record +
+            // drain so an implied comparison (the bool temp from
+            // PRINTC-UNLINKED-REF-0001) inlines as its relational expression.
             OpCode::CPUI_CBRANCH => {
                 self.emit.print("(");
-                if let Some(in1) = op.get_in(1) {
-                    let v1 = in1.read().unwrap();
-                    let a1 = self.make_atom_for_vn(&v1, op);
-                    drop(v1);
-                    self.rpn_push_atom(&a1);
-                }
+                self.rpn_push_in(op_arc, op, 1, self.mods);
+                self.rpn_recurse();
                 self.emit.print(")");
             }
             // printc.cc:448 opTypeCast: (type)in0, or &in0 for array->pointer decay.
@@ -1733,12 +1828,9 @@ impl PrintC {
                     .unwrap_or(false);
                 if variable_offset {
                     // in0[off] subscript shape — print in0 then [off] inline.
-                    if let Some(in0) = op.get_in(0) {
-                        let v0 = in0.read().unwrap();
-                        let a0 = self.make_atom_for_vn(&v0, op);
-                        drop(v0);
-                        self.rpn_push_atom(&a0);
-                    }
+                    // in0 via pushVn semantics (implied base inlines).
+                    self.rpn_push_in(op_arc, op, 0, self.mods);
+                    self.rpn_recurse();
                     let off_atom = self.make_atom_for_vn(in1.as_ref().unwrap(), op);
                     drop(in1);
                     self.rpn_emit_subscript(&off_atom);
