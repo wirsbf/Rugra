@@ -12,6 +12,7 @@
 #include "xml.hh"
 
 #include <iostream>
+#include <cstdio>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -71,6 +72,63 @@ public:
     setFields(fields,fixedSize,fixedAlign);
     flags &= ~(uint4)type_incomplete;
   }
+  void setId(uint8 value) { id = value; }
+};
+
+class ProbeArray : public TypeArray {
+public:
+  ProbeArray(int4 numElements,Datatype *element)
+    : TypeArray(numElements,element) {}
+  void setId(uint8 value) { id = value; }
+};
+
+class ProbePartialStruct : public TypePartialStruct {
+public:
+  ProbePartialStruct(Datatype *contain,int4 off,int4 sz,Datatype *strip)
+    : TypePartialStruct(contain,off,sz,strip) {}
+  void setId(uint8 value) { id = value; }
+};
+
+class ProbePartialEnum : public TypePartialEnum {
+public:
+  ProbePartialEnum(TypeEnum *par,int4 off,int4 sz,Datatype *strip)
+    : TypePartialEnum(par,off,sz,strip) {}
+  void setId(uint8 value) { id = value; }
+};
+
+class ProbePartialUnion : public TypePartialUnion {
+public:
+  ProbePartialUnion(TypeUnion *contain,int4 off,int4 sz,Datatype *strip)
+    : TypePartialUnion(contain,off,sz,strip) {}
+  void setId(uint8 value) { id = value; }
+};
+
+// Mirrors TypeChar::decode (type.cc:818) for the unsigned 1-byte character
+// form, which has no direct public constructor.
+class ProbeChar : public TypeChar {
+public:
+  ProbeChar(const string &name,type_metatype meta)
+    : TypeChar(name)
+  {
+    metatype = meta;
+    submeta = (metatype == TYPE_INT) ? SUB_INT_CHAR : SUB_UINT_CHAR;
+  }
+};
+
+// Exposes the protected TypePointerRel::markEphemeral for the SUB_PTRREL_UNK
+// construction-time state write.
+class ProbeRel : public TypePointerRel {
+public:
+  ProbeRel(int4 sz,Datatype *pt,uint4 ws,Datatype *par,int4 off)
+    : TypePointerRel(sz,pt,ws,par,off) {}
+  void callMarkEphemeral(TypeFactory &typegrp) { markEphemeral(typegrp); }
+};
+
+class ProbePointerSpace : public TypePointer {
+public:
+  ProbePointerSpace(int4 sz,Datatype *pt,uint4 ws)
+    : TypePointer(sz,pt,ws) {}
+  void setSpace(AddrSpace *space) { spaceid = space; }
 };
 
 class ProbeCode : public TypeCode {
@@ -82,6 +140,19 @@ public:
     proto->setConstructor(constructor);
     proto->setDestructor(destructor);
   }
+  void installPieces(ProtoModel *model,Datatype *voidType,Datatype *outType,
+                     const vector<Datatype *> &inTypes,int4 firstVarArgSlot)
+  {
+    proto = new FuncProto();
+    proto->setInternal(model,voidType);
+    PrototypePieces pieces;
+    pieces.model = model;
+    pieces.outtype = outType;
+    pieces.intypes = inTypes;
+    pieces.firstVarArgSlot = firstVarArgSlot;
+    proto->updateAllTypes(pieces);
+  }
+  void setId(uint8 value) { id = value; }
 };
 
 void emitOrder(const string &key,const Datatype &left,const Datatype &right)
@@ -98,6 +169,17 @@ void decodeComparableModel(Architecture &architecture,ProtoModel &model,bool has
 {
   string xml = "<prototype name=\"fixture_same\" extrapop=\"0\"";
   if (hasThis) xml += " hasthis=\"true\"";
+  xml += "><input/><output/></prototype>";
+  std::istringstream stream(xml);
+  XmlDecode decoder(&architecture);
+  decoder.ingestStream(stream);
+  model.decode(decoder);
+}
+
+void decodeNamedModel(Architecture &architecture,ProtoModel &model,
+                      const string &name)
+{
+  string xml = "<prototype name=\"" + name + "\" extrapop=\"0\"";
   xml += "><input/><output/></prototype>";
   std::istringstream stream(xml);
   XmlDecode decoder(&architecture);
@@ -380,6 +462,414 @@ void runFixture(Architecture &architecture)
             << factoryCorePointer->isCoreType() << '\n';
   std::cout << "factory_gap.unicode1_submeta="
             << static_cast<int4>(unicode1.getSubMeta()) << '\n';
+
+  // TypeCode varargs / model-name / parameter-count / parameter-type /
+  // return-type / level-id residual matrix.
+  Datatype *voidType = architecture.types->getTypeVoid();
+  vector<Datatype *> noTypes;
+  vector<Datatype *> oneIntType;
+  oneIntType.push_back(&sint4);
+  vector<Datatype *> oneUintType;
+  oneUintType.push_back(&uint4);
+  vector<Datatype *> oneIntCopyType;
+  ProbeBase intParamCopy(4,TYPE_INT,"int_param_copy");
+  oneIntCopyType.push_back(&intParamCopy);
+  ProbeCode codeParamPlain;
+  codeParamPlain.installPieces(architecture.defaultfp,voidType,voidType,
+                               oneIntType,-1);
+  ProbeCode codeParamVarargs;
+  codeParamVarargs.installPieces(architecture.defaultfp,voidType,voidType,
+                                 oneIntType,0);
+  ProbeCode codeParamNone;
+  codeParamNone.installPieces(architecture.defaultfp,voidType,voidType,
+                              noTypes,-1);
+  ProbeCode codeParamUint;
+  codeParamUint.installPieces(architecture.defaultfp,voidType,voidType,
+                              oneUintType,-1);
+  ProbeCode codeReturnInt;
+  codeReturnInt.installPieces(architecture.defaultfp,voidType,&int8,
+                              oneIntType,-1);
+  std::cout << "code2.varargs_plain_first="
+            << signum(codeParamPlain.compare(codeParamVarargs,10)) << '\n';
+  std::cout << "code2.param_count_zero_vs_one="
+            << signum(codeParamNone.compare(codeParamPlain,10)) << '\n';
+  std::cout << "code2.param_count_one_vs_zero="
+            << signum(codeParamPlain.compare(codeParamNone,10)) << '\n';
+  std::cout << "code2.param_type_recursion="
+            << signum(codeParamPlain.compare(codeParamUint,10)) << '\n';
+  std::cout << "code2.return_type_recursion="
+            << signum(codeParamPlain.compare(codeReturnInt,10)) << '\n';
+  ProtoModel modelFixtureA(&architecture);
+  ProtoModel modelFixtureB(&architecture);
+  decodeNamedModel(architecture,modelFixtureA,"fixture_a");
+  decodeNamedModel(architecture,modelFixtureB,"fixture_b");
+  ProbeCode codeModelA;
+  ProbeCode codeModelB;
+  codeModelA.install(&modelFixtureA,voidType,false,false);
+  codeModelB.install(&modelFixtureB,voidType,false,false);
+  std::cout << "code2.model_name_differs="
+            << signum(codeModelA.compare(codeModelB,10)) << '\n';
+  ProbeCode codeIdLow;
+  ProbeCode codeIdHigh;
+  codeIdLow.installPieces(architecture.defaultfp,voidType,voidType,
+                          oneIntType,-1);
+  codeIdHigh.installPieces(architecture.defaultfp,voidType,voidType,
+                           oneIntType,-1);
+  codeIdLow.setId(5);
+  codeIdHigh.setId(9);
+  std::cout << "code2.level0_id="
+            << signum(codeIdLow.compare(codeIdHigh,0)) << '\n';
+  ProbeCode codeDepParamA;
+  ProbeCode codeDepParamB;
+  codeDepParamA.installPieces(architecture.defaultfp,voidType,voidType,
+                              oneIntType,-1);
+  codeDepParamB.installPieces(architecture.defaultfp,voidType,voidType,
+                              oneIntCopyType,-1);
+  int4 codeParamDepForward = codeDepParamA.compareDependency(codeDepParamB);
+  int4 codeParamDepReverse = codeDepParamB.compareDependency(codeDepParamA);
+  std::cout << "code2.deep_equal_distinct_params="
+            << signum(codeDepParamA.compare(codeDepParamB,10)) << '\n';
+  std::cout << "code2.dependency_distinct_param_nonzero="
+            << (codeParamDepForward != 0) << '\n';
+  std::cout << "code2.dependency_distinct_param_antisymmetric="
+            << (signum(codeParamDepForward) == -signum(codeParamDepReverse))
+            << '\n';
+  TypeVoid voidOutA;
+  TypeVoid voidOutB;
+  ProbeCode codeDepOutA;
+  ProbeCode codeDepOutB;
+  codeDepOutA.installPieces(architecture.defaultfp,voidType,&voidOutA,
+                            oneIntType,-1);
+  codeDepOutB.installPieces(architecture.defaultfp,voidType,&voidOutB,
+                            oneIntType,-1);
+  int4 codeOutDepForward = codeDepOutA.compareDependency(codeDepOutB);
+  int4 codeOutDepReverse = codeDepOutB.compareDependency(codeDepOutA);
+  std::cout << "code2.deep_equal_distinct_output="
+            << signum(codeDepOutA.compare(codeDepOutB,10)) << '\n';
+  std::cout << "code2.dependency_distinct_output_nonzero="
+            << (codeOutDepForward != 0) << '\n';
+  std::cout << "code2.dependency_distinct_output_antisymmetric="
+            << (signum(codeOutDepForward) == -signum(codeOutDepReverse))
+            << '\n';
+
+  // Array / Union / Partial compare and dependency matrices.
+  ProbeArray arrayIntOne(1,&sint4);
+  ProbeArray arrayIntTwo(2,&sint4);
+  ProbeArray arrayUintOne(1,&uint4);
+  ProbeBase arrayElemCopy(4,TYPE_INT,"array_elem_copy");
+  ProbeArray arrayIntCopyOne(1,&arrayElemCopy);
+  std::cout << "array2.compare_elem_differs="
+            << signum(arrayIntOne.compare(arrayUintOne,10)) << '\n';
+  std::cout << "array2.compare_size="
+            << signum(arrayIntTwo.compare(arrayIntOne,10)) << '\n';
+  ProbeArray arrayIdLow(1,&sint4);
+  ProbeArray arrayIdHigh(1,&sint4);
+  arrayIdLow.setId(5);
+  arrayIdHigh.setId(9);
+  std::cout << "array2.compare_level0_id="
+            << signum(arrayIdLow.compare(arrayIdHigh,0)) << '\n';
+  std::cout << "array2.dependency_size="
+            << signum(arrayIntOne.compareDependency(arrayIntTwo)) << '\n';
+  int4 arrayDepForward = arrayIntOne.compareDependency(arrayIntCopyOne);
+  int4 arrayDepReverse = arrayIntCopyOne.compareDependency(arrayIntOne);
+  std::cout << "array2.dependency_distinct_elem_nonzero="
+            << (arrayDepForward != 0) << '\n';
+  std::cout << "array2.dependency_distinct_elem_antisymmetric="
+            << (signum(arrayDepForward) == -signum(arrayDepReverse)) << '\n';
+
+  vector<TypeField> unionFieldA;
+  unionFieldA.push_back(TypeField(0,0,"a",&sint4));
+  vector<TypeField> unionFieldB;
+  unionFieldB.push_back(TypeField(0,0,"b",&sint4));
+  vector<TypeField> unionFieldUint;
+  unionFieldUint.push_back(TypeField(0,0,"a",&uint4));
+  ProbeUnion unionNameA("UA");
+  unionNameA.define(unionFieldA,4,4);
+  ProbeUnion unionNameB("UB");
+  unionNameB.define(unionFieldB,4,4);
+  ProbeUnion unionUint("UU");
+  unionUint.define(unionFieldUint,4,4);
+  ProbeUnion unionIdLow("UI");
+  unionIdLow.define(unionFieldA,4,4);
+  ProbeUnion unionIdHigh("UI2");
+  unionIdHigh.define(unionFieldA,4,4);
+  unionIdLow.setId(5);
+  unionIdHigh.setId(9);
+  vector<TypeField> unionFieldIntCopy;
+  unionFieldIntCopy.push_back(TypeField(0,0,"a",&intParamCopy));
+  ProbeUnion unionFieldCopy("UC");
+  unionFieldCopy.define(unionFieldIntCopy,4,4);
+  std::cout << "union2.compare_field_name="
+            << signum(unionNameA.compare(unionNameB,10)) << '\n';
+  std::cout << "union2.compare_field_metatype="
+            << signum(unionNameA.compare(unionUint,10)) << '\n';
+  std::cout << "union2.compare_level0_id="
+            << signum(unionIdLow.compare(unionIdHigh,0)) << '\n';
+  int4 unionDepForward = unionNameA.compareDependency(unionFieldCopy);
+  int4 unionDepReverse = unionFieldCopy.compareDependency(unionNameA);
+  std::cout << "union2.dependency_distinct_field_nonzero="
+            << (unionDepForward != 0) << '\n';
+  std::cout << "union2.dependency_distinct_field_antisymmetric="
+            << (signum(unionDepForward) == -signum(unionDepReverse)) << '\n';
+
+  vector<TypeField> offsetFieldZero;
+  offsetFieldZero.push_back(TypeField(0,0,"a",&sint4));
+  vector<TypeField> offsetFieldTwo;
+  offsetFieldTwo.push_back(TypeField(0,2,"a",&sint4));
+  ProbeStruct structOffsetZero("SO0");
+  structOffsetZero.define(offsetFieldZero,8,4);
+  ProbeStruct structOffsetTwo("SO2");
+  structOffsetTwo.define(offsetFieldTwo,8,4);
+  std::cout << "struct2.compare_field_offset="
+            << signum(structOffsetZero.compare(structOffsetTwo,10)) << '\n';
+  vector<TypeField> pointerFieldInt;
+  pointerFieldInt.push_back(TypeField(0,0,"p",&ptrInt));
+  vector<TypeField> pointerFieldUint;
+  pointerFieldUint.push_back(TypeField(0,0,"p",&ptrUint));
+  ProbeStruct structPtrFieldInt("SP1");
+  structPtrFieldInt.define(pointerFieldInt,8,8);
+  ProbeStruct structPtrFieldUint("SP2");
+  structPtrFieldUint.define(pointerFieldUint,8,8);
+  std::cout << "struct2.compare_deep_pointer_field="
+            << signum(structPtrFieldInt.compare(structPtrFieldUint,10))
+            << '\n';
+  ProbeStruct structIdLow("SI");
+  structIdLow.define(offsetFieldZero,8,4);
+  ProbeStruct structIdHigh("SI2");
+  structIdHigh.define(offsetFieldZero,8,4);
+  structIdLow.setId(5);
+  structIdHigh.setId(9);
+  std::cout << "struct2.compare_level0_id="
+            << signum(structIdLow.compare(structIdHigh,0)) << '\n';
+  vector<TypeField> dependencyOffsetFour;
+  dependencyOffsetFour.push_back(TypeField(0,4,"a",&sint4));
+  ProbeStruct structDepOffsetFour("SD4");
+  structDepOffsetFour.define(dependencyOffsetFour,8,4);
+  std::cout << "struct2.dependency_field_offset="
+            << signum(structOffsetZero.compareDependency(structDepOffsetFour))
+            << '\n';
+  vector<TypeField> structFieldCopyVector;
+  structFieldCopyVector.push_back(TypeField(0,0,"a",&intParamCopy));
+  ProbeStruct structFieldCopy("SC");
+  structFieldCopy.define(structFieldCopyVector,8,4);
+  int4 structDepForward = structOffsetZero.compareDependency(structFieldCopy);
+  int4 structDepReverse = structFieldCopy.compareDependency(structOffsetZero);
+  std::cout << "struct2.dependency_distinct_field_nonzero="
+            << (structDepForward != 0) << '\n';
+  std::cout << "struct2.dependency_distinct_field_antisymmetric="
+            << (signum(structDepForward) == -signum(structDepReverse))
+            << '\n';
+
+  ProbePartialStruct partialOffsetZero(&structOne,0,4,&unknown4);
+  ProbePartialStruct partialOffsetFour(&structOne,4,4,&unknown4);
+  std::cout << "partialstruct2.compare_offset="
+            << signum(partialOffsetZero.compare(partialOffsetFour,10))
+            << '\n';
+  ProbePartialStruct partialContainerOne(&structOne,0,4,&unknown4);
+  ProbePartialStruct partialContainerTwo(&structTwo,0,4,&unknown4);
+  std::cout << "partialstruct2.compare_container="
+            << signum(partialContainerOne.compare(partialContainerTwo,10))
+            << '\n';
+  ProbePartialStruct partialIdLow(&structOne,0,4,&unknown4);
+  ProbePartialStruct partialIdHigh(&structOne,0,4,&unknown4);
+  partialIdLow.setId(5);
+  partialIdHigh.setId(9);
+  std::cout << "partialstruct2.compare_level0_id="
+            << signum(partialIdLow.compare(partialIdHigh,0)) << '\n';
+  std::cout << "partialstruct2.dependency_same_container="
+            << signum(partialOffsetZero.compareDependency(
+                partialContainerOne)) << '\n';
+  std::cout << "partialstruct2.dependency_offset="
+            << signum(partialOffsetZero.compareDependency(partialOffsetFour))
+            << '\n';
+  ProbeStruct structOneCopy("S1copy");
+  structOneCopy.define(oneField,4,4);
+  ProbePartialStruct partialContainerCopy(&structOneCopy,0,4,&unknown4);
+  int4 partialStructDepForward =
+      partialOffsetZero.compareDependency(partialContainerCopy);
+  int4 partialStructDepReverse =
+      partialContainerCopy.compareDependency(partialOffsetZero);
+  std::cout << "partialstruct2.dependency_distinct_container_nonzero="
+            << (partialStructDepForward != 0) << '\n';
+  std::cout << "partialstruct2.dependency_distinct_container_antisymmetric="
+            << (signum(partialStructDepForward) ==
+                -signum(partialStructDepReverse)) << '\n';
+
+  ProbePartialEnum partialEnumOffsetZero(&enumA,0,1,&unknown4);
+  ProbePartialEnum partialEnumOffsetOne(&enumA,1,1,&unknown4);
+  std::cout << "partialenum2.compare_offset="
+            << signum(partialEnumOffsetZero.compare(partialEnumOffsetOne,10))
+            << '\n';
+  ProbePartialEnum partialEnumParentB(&enumB,0,1,&unknown4);
+  std::cout << "partialenum2.compare_parent="
+            << signum(partialEnumOffsetZero.compare(partialEnumParentB,10))
+            << '\n';
+  ProbePartialEnum partialEnumIdLow(&enumA,0,1,&unknown4);
+  ProbePartialEnum partialEnumIdHigh(&enumA,0,1,&unknown4);
+  partialEnumIdLow.setId(5);
+  partialEnumIdHigh.setId(9);
+  std::cout << "partialenum2.compare_level0_id="
+            << signum(partialEnumIdLow.compare(partialEnumIdHigh,0)) << '\n';
+  std::cout << "partialenum2.dependency_same_parent="
+            << signum(partialEnumOffsetZero.compareDependency(
+                partialEnumIdLow)) << '\n';
+  std::cout << "partialenum2.dependency_offset="
+            << signum(partialEnumOffsetZero.compareDependency(
+                partialEnumOffsetOne)) << '\n';
+  ProbeEnum enumACopy(4,TYPE_ENUM_INT,"EAC");
+  enumACopy.define(valuesA);
+  ProbePartialEnum partialEnumParentCopy(&enumACopy,0,1,&unknown4);
+  int4 partialEnumDepForward =
+      partialEnumOffsetZero.compareDependency(partialEnumParentCopy);
+  int4 partialEnumDepReverse =
+      partialEnumParentCopy.compareDependency(partialEnumOffsetZero);
+  std::cout << "partialenum2.dependency_distinct_parent_nonzero="
+            << (partialEnumDepForward != 0) << '\n';
+  std::cout << "partialenum2.dependency_distinct_parent_antisymmetric="
+            << (signum(partialEnumDepForward) ==
+                -signum(partialEnumDepReverse)) << '\n';
+
+  vector<TypeField> unionTwoFieldVector;
+  unionTwoFieldVector.push_back(TypeField(0,0,"a",&sint4));
+  unionTwoFieldVector.push_back(TypeField(1,0,"b",&uint4));
+  ProbeUnion unionTwoFields("U2F");
+  unionTwoFields.define(unionTwoFieldVector,4,4);
+  ProbePartialUnion partialUnionOffsetZero(&unionType,0,4,&unknown4);
+  ProbePartialUnion partialUnionOffsetFour(&unionType,4,4,&unknown4);
+  std::cout << "partialunion2.compare_offset="
+            << signum(partialUnionOffsetZero.compare(partialUnionOffsetFour,10))
+            << '\n';
+  ProbePartialUnion partialUnionContainerTwo(&unionTwoFields,0,4,&unknown4);
+  std::cout << "partialunion2.compare_container="
+            << signum(partialUnionOffsetZero.compare(
+                partialUnionContainerTwo,10)) << '\n';
+  ProbePartialUnion partialUnionIdLow(&unionType,0,4,&unknown4);
+  ProbePartialUnion partialUnionIdHigh(&unionType,0,4,&unknown4);
+  partialUnionIdLow.setId(5);
+  partialUnionIdHigh.setId(9);
+  std::cout << "partialunion2.compare_level0_id="
+            << signum(partialUnionIdLow.compare(partialUnionIdHigh,0))
+            << '\n';
+  std::cout << "partialunion2.dependency_same_container="
+            << signum(partialUnionOffsetZero.compareDependency(
+                partialUnionIdLow)) << '\n';
+  std::cout << "partialunion2.dependency_offset="
+            << signum(partialUnionOffsetZero.compareDependency(
+                partialUnionOffsetFour)) << '\n';
+  ProbeUnion unionTypeCopy("Ucopy");
+  unionTypeCopy.define(oneField,4,4);
+  ProbePartialUnion partialUnionContainerCopy(&unionTypeCopy,0,4,&unknown4);
+  int4 partialUnionDepForward =
+      partialUnionOffsetZero.compareDependency(partialUnionContainerCopy);
+  int4 partialUnionDepReverse =
+      partialUnionContainerCopy.compareDependency(partialUnionOffsetZero);
+  std::cout << "partialunion2.dependency_distinct_container_nonzero="
+            << (partialUnionDepForward != 0) << '\n';
+  std::cout << "partialunion2.dependency_distinct_container_antisymmetric="
+            << (signum(partialUnionDepForward) ==
+                -signum(partialUnionDepReverse)) << '\n';
+
+  // same-kind AddrSpace identity: two raw IPTR_PROCESSOR spaces sharing an
+  // index cannot be distinguished by pointer identity in Rugra's enum model.
+  AddrSpace dupSpaceA(&architecture,(const Translate *)0,IPTR_PROCESSOR,
+                      "dup_a",false,8,1,5,AddrSpace::hasphysical,2,3);
+  AddrSpace dupSpaceB(&architecture,(const Translate *)0,IPTR_PROCESSOR,
+                      "dup_b",false,8,1,6,AddrSpace::hasphysical,2,3);
+  AddrSpace dupSpaceA2(&architecture,(const Translate *)0,IPTR_PROCESSOR,
+                       "dup_a2",false,8,1,5,AddrSpace::hasphysical,2,3);
+  TypeSpacebase sameKindA(&dupSpaceA,Address(&dupSpaceA,0),&architecture);
+  TypeSpacebase sameKindB(&dupSpaceB,Address(&dupSpaceB,0),&architecture);
+  TypeSpacebase sameKindA2(&dupSpaceA2,Address(&dupSpaceA2,0),&architecture);
+  int4 sameKindForward = sameKindA.compareDependency(sameKindB);
+  int4 sameKindReverse = sameKindB.compareDependency(sameKindA);
+  std::cout << "sksp.distinct_index_nonzero="
+            << (sameKindForward != 0) << '\n';
+  std::cout << "sksp.distinct_index_antisymmetric="
+            << (signum(sameKindForward) == -signum(sameKindReverse)) << '\n';
+  std::cout << "sksp.same_object_equal="
+            << signum(sameKindA.compareDependency(sameKindA)) << '\n';
+  std::cout << "sksp.same_index_distinct_object_nonzero="
+            << (sameKindA.compareDependency(sameKindA2) != 0) << '\n';
+  ProbePointerSpace ptrDupSpaceA(8,&sint4,1);
+  ProbePointerSpace ptrDupSpaceA2(8,&sint4,1);
+  ptrDupSpaceA.setSpace(&dupSpaceA);
+  ptrDupSpaceA2.setSpace(&dupSpaceA2);
+  std::cout << "ptr_same_kind.same_index_quirk="
+            << signum(ptrDupSpaceA.compare(ptrDupSpaceA2,10)) << '\n';
+
+  // Exhaustive 24-value sub-metatype runtime ordering matrix.
+  TypeVoid voidMatrix;
+  TypeSpacebase spacebaseMatrix(ram,validZero,&architecture);
+  ProbeBase unknownMatrix(4,TYPE_UNKNOWN,"unknown_matrix");
+  TypePartialStruct partialStructMatrix(&twoFieldStruct,0,4,&unknown4);
+  TypeChar charSignedMatrix("cs1");
+  ProbeChar charUnsignedMatrix("cu1",TYPE_UINT);
+  ProbeBase intMatrix(4,TYPE_INT,"int_matrix");
+  ProbeBase uintMatrix(4,TYPE_UINT,"uint_matrix");
+  ProbeEnum enumSignedMatrix(4,TYPE_ENUM_INT,"ES");
+  enumSignedMatrix.define(valuesA);
+  TypePartialEnum partialEnumMatrix(&enumA,0,1,&unknown4);
+  ProbeEnum enumUnsignedMatrix(4,TYPE_ENUM_UINT,"EU");
+  enumUnsignedMatrix.define(valuesA);
+  TypeUnicode unicodeSignedMatrix("ws2",2,TYPE_INT);
+  TypeUnicode unicodeUnsignedMatrix("wu2",2,TYPE_UINT);
+  ProbeBase boolMatrix(1,TYPE_BOOL,"bool_matrix");
+  ProbeCode codeMatrix;
+  ProbeBase floatMatrix(4,TYPE_FLOAT,"float_matrix");
+  ProbeRel relUnkMatrix(8,&unknown4,1,&oneFieldStruct,4);
+  relUnkMatrix.callMarkEphemeral(*architecture.types);
+  ProbePointer ptrPlainMatrix(8,&sint4,1);
+  TypePointerRel relFormalMatrix(8,&sint4,1,&oneFieldStruct,4);
+  ProbePointer ptrStructMatrix(8,&twoFieldStruct,1);
+  TypeArray arrayMatrix(1,&sint4);
+  TypePartialUnion partialUnionMatrix(&unionType,0,4,&unknown4);
+  Datatype *matrixTypes[24] = {
+    &voidMatrix,
+    &spacebaseMatrix,
+    &unknownMatrix,
+    &partialStructMatrix,
+    &charSignedMatrix,
+    &charUnsignedMatrix,
+    &intMatrix,
+    &uintMatrix,
+    &enumSignedMatrix,
+    &partialEnumMatrix,
+    &enumUnsignedMatrix,
+    &unicodeSignedMatrix,
+    &unicodeUnsignedMatrix,
+    &boolMatrix,
+    &codeMatrix,
+    &floatMatrix,
+    &relUnkMatrix,
+    &ptrPlainMatrix,
+    &relFormalMatrix,
+    &ptrStructMatrix,
+    &arrayMatrix,
+    &twoFieldStruct,
+    &unionType,
+    &partialUnionMatrix
+  };
+  for(int4 i=0;i<24;++i) {
+    char key[32];
+    snprintf(key,sizeof(key),"matrix.submeta_%02d",23-i);
+    std::cout << key << '='
+              << static_cast<int4>(matrixTypes[i]->getSubMeta()) << '\n';
+  }
+  for(int4 i=0;i+1<24;++i) {
+    char key[32];
+    snprintf(key,sizeof(key),"matrix.order_%02d_%02d",23-i,22-i);
+    std::cout << key << '='
+              << signum(matrixTypes[i]->compare(*matrixTypes[i+1],10))
+              << '\n';
+  }
+  int4 matrixViolations = 0;
+  for(int4 i=0;i<24;++i) {
+    for(int4 j=i+1;j<24;++j) {
+      if(signum(matrixTypes[i]->compare(*matrixTypes[j],10)) != 1)
+        ++matrixViolations;
+    }
+  }
+  std::cout << "matrix.total_order_violations=" << matrixViolations << '\n';
 }
 
 } // namespace

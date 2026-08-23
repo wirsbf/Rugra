@@ -1,10 +1,11 @@
 //! DATATYPE-TYPEORDER-0001 Rugra comparand for locked Ghidra 12.0.4.
 
-use rugra::fspec::ProtoModelFull;
-use rugra::space::{AddrSpace, SpaceType};
+use rugra::fspec::{ProtoModelFull, ProtoParameter};
+use rugra::space::{space_flags, AddrSpace, SpaceType};
 use rugra::type_system::datatype::{
     type_flags, Datatype, TypeArray, TypeBase, TypeCode, TypeEnum, TypeField, TypeMetatype,
-    TypePointer, TypeSpacebase, TypeStruct, TypeUnion,
+    TypePartialEnum, TypePartialStruct, TypePartialUnion, TypePointer, TypeSpacebase,
+    TypeStruct, TypeUnion,
 };
 use rugra::type_system::typefactory::TypeFactory;
 use rugra::{Address, AddressSpace, FuncProto};
@@ -617,4 +618,683 @@ fn main() {
         "factory_gap.unicode1_submeta={}",
         factory_unicode1.get_submeta() as i32
     );
+
+    // TypeCode varargs / model-name / parameter-count / parameter-type /
+    // return-type / level-id residual matrix.
+    let make_pieces =
+        |dotdotdot: bool, params: &[Arc<Datatype>], out: Arc<Datatype>| -> Arc<FuncProto> {
+            let mut proto = FuncProto::new(String::new(), out);
+            proto.set_model(Some(model.clone()));
+            proto.is_dotdotdot = dotdotdot;
+            for (index, param) in params.iter().enumerate() {
+                proto.add_parameter(ProtoParameter::new(
+                    format!("p{index}"),
+                    param.clone(),
+                    Address::new(0),
+                ));
+            }
+            Arc::new(proto)
+        };
+    let make_code = |proto: Arc<FuncProto>| {
+        Datatype::Code(TypeCode {
+            base: TypeBase::new(String::new(), 1, TypeMetatype::Code),
+            proto: Some(proto),
+        })
+    };
+    let code_param_plain =
+        make_code(make_pieces(false, &[int4.clone()], void_type.clone()));
+    let code_param_varargs =
+        make_code(make_pieces(true, &[int4.clone()], void_type.clone()));
+    let code_param_none = make_code(make_pieces(false, &[], void_type.clone()));
+    let code_param_uint =
+        make_code(make_pieces(false, &[uint4.clone()], void_type.clone()));
+    let code_return_int = make_code(make_pieces(false, &[int4.clone()], int8.clone()));
+    println!(
+        "code2.varargs_plain_first={}",
+        signum(code_param_plain.compare_at_level(&code_param_varargs, 10))
+    );
+    println!(
+        "code2.param_count_zero_vs_one={}",
+        signum(code_param_none.compare_at_level(&code_param_plain, 10))
+    );
+    println!(
+        "code2.param_count_one_vs_zero={}",
+        signum(code_param_plain.compare_at_level(&code_param_none, 10))
+    );
+    println!(
+        "code2.param_type_recursion={}",
+        signum(code_param_plain.compare_at_level(&code_param_uint, 10))
+    );
+    println!(
+        "code2.return_type_recursion={}",
+        signum(code_param_plain.compare_at_level(&code_return_int, 10))
+    );
+    let make_named_model = |name: &str| {
+        let mut named = ProtoModelFull::new(None, 8);
+        named.name = name.to_string();
+        Arc::new(named)
+    };
+    let make_named_code = |name: &str| {
+        let mut proto = FuncProto::new(String::new(), void_type.clone());
+        proto.set_model(Some(make_named_model(name)));
+        Arc::new(proto)
+    };
+    let code_model_a = make_code(make_named_code("fixture_a"));
+    let code_model_b = make_code(make_named_code("fixture_b"));
+    println!(
+        "code2.model_name_differs={}",
+        signum(code_model_a.compare_at_level(&code_model_b, 10))
+    );
+    let mut code_id_low = make_code(make_pieces(false, &[int4.clone()], void_type.clone()));
+    let mut code_id_high = make_code(make_pieces(false, &[int4.clone()], void_type.clone()));
+    if let Datatype::Code(low) = &mut code_id_low {
+        low.base.id = 5;
+    }
+    if let Datatype::Code(high) = &mut code_id_high {
+        high.base.id = 9;
+    }
+    println!(
+        "code2.level0_id={}",
+        signum(code_id_low.compare_at_level(&code_id_high, 0))
+    );
+    let int_param_copy = base("int_param_copy", 4, TypeMetatype::Int);
+    let code_dep_param_a =
+        make_code(make_pieces(false, &[int4.clone()], void_type.clone()));
+    let code_dep_param_b =
+        make_code(make_pieces(false, &[int_param_copy.clone()], void_type.clone()));
+    let code_param_dep_forward = code_dep_param_a.compare_dependency(&code_dep_param_b);
+    let code_param_dep_reverse = code_dep_param_b.compare_dependency(&code_dep_param_a);
+    println!(
+        "code2.deep_equal_distinct_params={}",
+        signum(code_dep_param_a.compare_at_level(&code_dep_param_b, 10))
+    );
+    println!(
+        "code2.dependency_distinct_param_nonzero={}",
+        u8::from(code_param_dep_forward != 0)
+    );
+    println!(
+        "code2.dependency_distinct_param_antisymmetric={}",
+        u8::from(signum(code_param_dep_forward) == -signum(code_param_dep_reverse))
+    );
+    let void_out_a = Arc::new(Datatype::Void(TypeBase::new(
+        "void_a".to_string(),
+        0,
+        TypeMetatype::Void,
+    )));
+    let void_out_b = Arc::new(Datatype::Void(TypeBase::new(
+        "void_b".to_string(),
+        0,
+        TypeMetatype::Void,
+    )));
+    let code_dep_out_a =
+        make_code(make_pieces(false, &[int4.clone()], void_out_a));
+    let code_dep_out_b =
+        make_code(make_pieces(false, &[int4.clone()], void_out_b));
+    let code_out_dep_forward = code_dep_out_a.compare_dependency(&code_dep_out_b);
+    let code_out_dep_reverse = code_dep_out_b.compare_dependency(&code_dep_out_a);
+    println!(
+        "code2.deep_equal_distinct_output={}",
+        signum(code_dep_out_a.compare_at_level(&code_dep_out_b, 10))
+    );
+    println!(
+        "code2.dependency_distinct_output_nonzero={}",
+        u8::from(code_out_dep_forward != 0)
+    );
+    println!(
+        "code2.dependency_distinct_output_antisymmetric={}",
+        u8::from(signum(code_out_dep_forward) == -signum(code_out_dep_reverse))
+    );
+
+    // Array / Union / Partial compare and dependency matrices.
+    let make_array = |element: Arc<Datatype>, count: usize| -> TypeArray {
+        let mut array_base = TypeBase::new(
+            String::new(),
+            element.get_size() * count,
+            TypeMetatype::Array,
+        );
+        if count == 1 {
+            array_base.flags |= type_flags::NEEDS_RESOLUTION;
+        }
+        TypeArray {
+            base: array_base,
+            array_of: element,
+            num_elements: count,
+        }
+    };
+    let array_int_one = make_array(int4.clone(), 1);
+    let array_int_two = make_array(int4.clone(), 2);
+    let array_uint_one = make_array(uint4.clone(), 1);
+    let array_elem_copy = base("array_elem_copy", 4, TypeMetatype::Int);
+    let array_int_copy_one = make_array(array_elem_copy, 1);
+    println!(
+        "array2.compare_elem_differs={}",
+        signum(array_int_one.compare(&array_uint_one, 10))
+    );
+    println!(
+        "array2.compare_size={}",
+        signum(array_int_two.compare(&array_int_one, 10))
+    );
+    let mut array_id_low = make_array(int4.clone(), 1);
+    let mut array_id_high = make_array(int4.clone(), 1);
+    array_id_low.base.id = 5;
+    array_id_high.base.id = 9;
+    println!(
+        "array2.compare_level0_id={}",
+        signum(array_id_low.compare(&array_id_high, 0))
+    );
+    println!(
+        "array2.dependency_size={}",
+        signum(array_int_one.compare_dependency(&array_int_two))
+    );
+    let array_dep_forward = array_int_one.compare_dependency(&array_int_copy_one);
+    let array_dep_reverse = array_int_copy_one.compare_dependency(&array_int_one);
+    println!(
+        "array2.dependency_distinct_elem_nonzero={}",
+        u8::from(array_dep_forward != 0)
+    );
+    println!(
+        "array2.dependency_distinct_elem_antisymmetric={}",
+        u8::from(signum(array_dep_forward) == -signum(array_dep_reverse))
+    );
+
+    let field = |name: &str, offset: usize, type_ptr: Arc<Datatype>| TypeField {
+        name: name.to_string(),
+        offset,
+        type_ptr,
+    };
+    let make_union = |name: &str, fields: Vec<TypeField>| TypeUnion {
+        base: TypeBase::new(name.to_string(), 4, TypeMetatype::Union),
+        fields,
+    };
+    let union_name_a = make_union("UA", vec![field("a", 0, int4.clone())]);
+    let union_name_b = make_union("UB", vec![field("b", 0, int4.clone())]);
+    let union_uint = make_union("UU", vec![field("a", 0, uint4.clone())]);
+    let mut union_id_low = make_union("UI", vec![field("a", 0, int4.clone())]);
+    let mut union_id_high = make_union("UI2", vec![field("a", 0, int4.clone())]);
+    union_id_low.base.id = 5;
+    union_id_high.base.id = 9;
+    let union_field_copy = make_union("UC", vec![field("a", 0, int_param_copy.clone())]);
+    println!(
+        "union2.compare_field_name={}",
+        signum(union_name_a.compare(&union_name_b, 10))
+    );
+    println!(
+        "union2.compare_field_metatype={}",
+        signum(union_name_a.compare(&union_uint, 10))
+    );
+    println!(
+        "union2.compare_level0_id={}",
+        signum(union_id_low.compare(&union_id_high, 0))
+    );
+    let union_dep_forward = union_name_a.compare_dependency(&union_field_copy);
+    let union_dep_reverse = union_field_copy.compare_dependency(&union_name_a);
+    println!(
+        "union2.dependency_distinct_field_nonzero={}",
+        u8::from(union_dep_forward != 0)
+    );
+    println!(
+        "union2.dependency_distinct_field_antisymmetric={}",
+        u8::from(signum(union_dep_forward) == -signum(union_dep_reverse))
+    );
+
+    let struct_offset_zero = TypeStruct {
+        base: TypeBase::new("SO0".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("a", 0, int4.clone())],
+    };
+    let struct_offset_two = TypeStruct {
+        base: TypeBase::new("SO2".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("a", 2, int4.clone())],
+    };
+    println!(
+        "struct2.compare_field_offset={}",
+        signum(struct_offset_zero.compare(&struct_offset_two, 10))
+    );
+    let struct_ptr_field_int = TypeStruct {
+        base: TypeBase::new("SP1".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("p", 0, Arc::new(ptr_int.clone()))],
+    };
+    let struct_ptr_field_uint = TypeStruct {
+        base: TypeBase::new("SP2".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("p", 0, Arc::new(ptr_uint_datatype.clone()))],
+    };
+    println!(
+        "struct2.compare_deep_pointer_field={}",
+        signum(struct_ptr_field_int.compare(&struct_ptr_field_uint, 10))
+    );
+    let mut struct_id_low = TypeStruct {
+        base: TypeBase::new("SI".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("a", 0, int4.clone())],
+    };
+    let mut struct_id_high = TypeStruct {
+        base: TypeBase::new("SI2".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("a", 0, int4.clone())],
+    };
+    struct_id_low.base.id = 5;
+    struct_id_high.base.id = 9;
+    println!(
+        "struct2.compare_level0_id={}",
+        signum(struct_id_low.compare(&struct_id_high, 0))
+    );
+    let struct_dep_offset_four = TypeStruct {
+        base: TypeBase::new("SD4".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("a", 4, int4.clone())],
+    };
+    println!(
+        "struct2.dependency_field_offset={}",
+        signum(struct_offset_zero.compare_dependency(&struct_dep_offset_four))
+    );
+    let struct_field_copy = TypeStruct {
+        base: TypeBase::new("SC".to_string(), 8, TypeMetatype::Struct),
+        fields: vec![field("a", 0, int_param_copy.clone())],
+    };
+    let struct_dep_forward = struct_offset_zero.compare_dependency(&struct_field_copy);
+    let struct_dep_reverse = struct_field_copy.compare_dependency(&struct_offset_zero);
+    println!(
+        "struct2.dependency_distinct_field_nonzero={}",
+        u8::from(struct_dep_forward != 0)
+    );
+    println!(
+        "struct2.dependency_distinct_field_antisymmetric={}",
+        u8::from(signum(struct_dep_forward) == -signum(struct_dep_reverse))
+    );
+
+    let make_partial_struct = |container: &Arc<Datatype>, offset: i64| TypePartialStruct {
+        base: {
+            let mut partial_base =
+                TypeBase::new(String::new(), 4, TypeMetatype::PartialStruct);
+            partial_base.flags |= type_flags::HAS_STRIPPED;
+            partial_base
+        },
+        container: container.clone(),
+        offset,
+        stripped: Some(unknown4.clone()),
+    };
+    // Mirror Ghidra's structOne/structTwo (size 8, 1 vs 2 int/uint fields).
+    let partial_container_one_field = structure(
+        "PartialContainerOne",
+        8,
+        vec![field("a", 0, int4.clone())],
+        false,
+    );
+    let partial_container_two_fields = structure(
+        "PartialContainerTwo",
+        8,
+        vec![
+            field("a", 0, int4.clone()),
+            field("b", 4, uint4.clone()),
+        ],
+        false,
+    );
+    let partial_offset_zero = make_partial_struct(&partial_container_one_field, 0);
+    let partial_offset_four = make_partial_struct(&partial_container_one_field, 4);
+    println!(
+        "partialstruct2.compare_offset={}",
+        signum(partial_offset_zero.compare(&partial_offset_four, 10))
+    );
+    let partial_container_two = make_partial_struct(&partial_container_two_fields, 0);
+    println!(
+        "partialstruct2.compare_container={}",
+        signum(partial_offset_zero.compare(&partial_container_two, 10))
+    );
+    let mut partial_id_low = make_partial_struct(&partial_container_one_field, 0);
+    let mut partial_id_high = make_partial_struct(&partial_container_one_field, 0);
+    partial_id_low.base.id = 5;
+    partial_id_high.base.id = 9;
+    println!(
+        "partialstruct2.compare_level0_id={}",
+        signum(partial_id_low.compare(&partial_id_high, 0))
+    );
+    println!(
+        "partialstruct2.dependency_same_container={}",
+        signum(partial_offset_zero.compare_dependency(&partial_id_low))
+    );
+    println!(
+        "partialstruct2.dependency_offset={}",
+        signum(partial_offset_zero.compare_dependency(&partial_offset_four))
+    );
+    let partial_container_copy = structure(
+        "PartialContainerOneCopy",
+        8,
+        vec![field("a", 0, int4.clone())],
+        false,
+    );
+    let partial_container_copy_piece = make_partial_struct(&partial_container_copy, 0);
+    let partial_struct_dep_forward =
+        partial_offset_zero.compare_dependency(&partial_container_copy_piece);
+    let partial_struct_dep_reverse =
+        partial_container_copy_piece.compare_dependency(&partial_offset_zero);
+    println!(
+        "partialstruct2.dependency_distinct_container_nonzero={}",
+        u8::from(partial_struct_dep_forward != 0)
+    );
+    println!(
+        "partialstruct2.dependency_distinct_container_antisymmetric={}",
+        u8::from(signum(partial_struct_dep_forward) == -signum(partial_struct_dep_reverse))
+    );
+
+    let make_enum = |name: &str, key: u64| {
+        let mut enum_base = TypeBase::new(name.to_string(), 4, TypeMetatype::Int);
+        enum_base.flags |= type_flags::ENUMTYPE;
+        let mut values = BTreeMap::new();
+        values.insert(key, "A".to_string());
+        TypeEnum {
+            base: enum_base,
+            values,
+        }
+    };
+    let make_enum_unsigned = |name: &str, key: u64| {
+        let mut enum_base = TypeBase::new(name.to_string(), 4, TypeMetatype::Uint);
+        enum_base.flags |= type_flags::ENUMTYPE;
+        let mut values = BTreeMap::new();
+        values.insert(key, "A".to_string());
+        TypeEnum {
+            base: enum_base,
+            values,
+        }
+    };
+    let partial_enum_parent_a = Arc::new(Datatype::Enum(make_enum("EA", 1)));
+    let partial_enum_parent_b = Arc::new(Datatype::Enum(make_enum("EB", 2)));
+    let partial_enum_parent_copy = Arc::new(Datatype::Enum(make_enum("EAC", 1)));
+    let make_partial_enum = |parent: &Arc<Datatype>, offset: i64| TypePartialEnum {
+        base: {
+            let mut partial_base =
+                TypeBase::new(String::new(), 1, TypeMetatype::PartialEnum);
+            partial_base.flags |= type_flags::HAS_STRIPPED | type_flags::ENUMTYPE;
+            partial_base
+        },
+        parent: parent.clone(),
+        offset,
+        stripped: Some(unknown4.clone()),
+    };
+    let partial_enum_offset_zero = make_partial_enum(&partial_enum_parent_a, 0);
+    let partial_enum_offset_one = make_partial_enum(&partial_enum_parent_a, 1);
+    println!(
+        "partialenum2.compare_offset={}",
+        signum(partial_enum_offset_zero.compare(&partial_enum_offset_one, 10))
+    );
+    let partial_enum_parent_b_piece = make_partial_enum(&partial_enum_parent_b, 0);
+    println!(
+        "partialenum2.compare_parent={}",
+        signum(partial_enum_offset_zero.compare(&partial_enum_parent_b_piece, 10))
+    );
+    let mut partial_enum_id_low = make_partial_enum(&partial_enum_parent_a, 0);
+    let mut partial_enum_id_high = make_partial_enum(&partial_enum_parent_a, 0);
+    partial_enum_id_low.base.id = 5;
+    partial_enum_id_high.base.id = 9;
+    println!(
+        "partialenum2.compare_level0_id={}",
+        signum(partial_enum_id_low.compare(&partial_enum_id_high, 0))
+    );
+    println!(
+        "partialenum2.dependency_same_parent={}",
+        signum(partial_enum_offset_zero.compare_dependency(&partial_enum_id_low))
+    );
+    println!(
+        "partialenum2.dependency_offset={}",
+        signum(partial_enum_offset_zero.compare_dependency(&partial_enum_offset_one))
+    );
+    let partial_enum_parent_copy_piece = make_partial_enum(&partial_enum_parent_copy, 0);
+    let partial_enum_dep_forward =
+        partial_enum_offset_zero.compare_dependency(&partial_enum_parent_copy_piece);
+    let partial_enum_dep_reverse =
+        partial_enum_parent_copy_piece.compare_dependency(&partial_enum_offset_zero);
+    println!(
+        "partialenum2.dependency_distinct_parent_nonzero={}",
+        u8::from(partial_enum_dep_forward != 0)
+    );
+    println!(
+        "partialenum2.dependency_distinct_parent_antisymmetric={}",
+        u8::from(signum(partial_enum_dep_forward) == -signum(partial_enum_dep_reverse))
+    );
+
+    let partial_union_container = Arc::new(Datatype::Union(make_union(
+        "U",
+        vec![field("a", 0, int4.clone())],
+    )));
+    let partial_union_container_two = Arc::new(Datatype::Union(make_union(
+        "U2F",
+        vec![field("a", 0, int4.clone()), field("b", 0, uint4.clone())],
+    )));
+    let partial_union_container_copy = Arc::new(Datatype::Union(make_union(
+        "Ucopy",
+        vec![field("a", 0, int4.clone())],
+    )));
+    let make_partial_union = |container: &Arc<Datatype>, offset: i64| TypePartialUnion {
+        base: {
+            let mut partial_base =
+                TypeBase::new(String::new(), 4, TypeMetatype::PartialUnion);
+            partial_base.flags |=
+                type_flags::NEEDS_RESOLUTION | type_flags::HAS_STRIPPED;
+            partial_base
+        },
+        container: container.clone(),
+        offset,
+        stripped: Some(unknown4.clone()),
+    };
+    let partial_union_offset_zero = make_partial_union(&partial_union_container, 0);
+    let partial_union_offset_four = make_partial_union(&partial_union_container, 4);
+    println!(
+        "partialunion2.compare_offset={}",
+        signum(partial_union_offset_zero.compare(&partial_union_offset_four, 10))
+    );
+    let partial_union_container_two_piece =
+        make_partial_union(&partial_union_container_two, 0);
+    println!(
+        "partialunion2.compare_container={}",
+        signum(
+            partial_union_offset_zero.compare(&partial_union_container_two_piece, 10)
+        )
+    );
+    let mut partial_union_id_low = make_partial_union(&partial_union_container, 0);
+    let mut partial_union_id_high = make_partial_union(&partial_union_container, 0);
+    partial_union_id_low.base.id = 5;
+    partial_union_id_high.base.id = 9;
+    println!(
+        "partialunion2.compare_level0_id={}",
+        signum(partial_union_id_low.compare(&partial_union_id_high, 0))
+    );
+    println!(
+        "partialunion2.dependency_same_container={}",
+        signum(partial_union_offset_zero.compare_dependency(&partial_union_id_low))
+    );
+    println!(
+        "partialunion2.dependency_offset={}",
+        signum(
+            partial_union_offset_zero.compare_dependency(&partial_union_offset_four)
+        )
+    );
+    let partial_union_container_copy_piece =
+        make_partial_union(&partial_union_container_copy, 0);
+    let partial_union_dep_forward =
+        partial_union_offset_zero.compare_dependency(&partial_union_container_copy_piece);
+    let partial_union_dep_reverse =
+        partial_union_container_copy_piece.compare_dependency(&partial_union_offset_zero);
+    println!(
+        "partialunion2.dependency_distinct_container_nonzero={}",
+        u8::from(partial_union_dep_forward != 0)
+    );
+    println!(
+        "partialunion2.dependency_distinct_container_antisymmetric={}",
+        u8::from(signum(partial_union_dep_forward) == -signum(partial_union_dep_reverse))
+    );
+
+    // same-kind AddrSpace identity: two raw IPTR_PROCESSOR spaces sharing an
+    // index cannot be distinguished by pointer identity in Rugra's enum model.
+    let dup_space_a = AddrSpace::new_space(
+        SpaceType::Processor,
+        "dup_a",
+        false,
+        8,
+        1,
+        0xA5,
+        space_flags::HASPHYSICAL,
+        2,
+        3,
+    );
+    let dup_space_b = AddrSpace::new_space(
+        SpaceType::Processor,
+        "dup_b",
+        false,
+        8,
+        1,
+        0xB6,
+        space_flags::HASPHYSICAL,
+        2,
+        3,
+    );
+    let same_kind_a =
+        make_spacebase(Some(AddressSpace::Other(0xA5)), Address::with_space(&dup_space_a, 0));
+    let same_kind_b =
+        make_spacebase(Some(AddressSpace::Other(0xB6)), Address::with_space(&dup_space_b, 0));
+    let same_kind_a2 =
+        make_spacebase(Some(AddressSpace::Other(0xA5)), Address::with_space(&dup_space_a, 0));
+    let same_kind_forward = same_kind_a.compare_dependency(&same_kind_b);
+    let same_kind_reverse = same_kind_b.compare_dependency(&same_kind_a);
+    println!(
+        "sksp.distinct_index_nonzero={}",
+        u8::from(same_kind_forward != 0)
+    );
+    println!(
+        "sksp.distinct_index_antisymmetric={}",
+        u8::from(signum(same_kind_forward) == -signum(same_kind_reverse))
+    );
+    println!(
+        "sksp.same_object_equal={}",
+        signum(same_kind_a.compare_dependency(&same_kind_a))
+    );
+    println!(
+        "sksp.same_index_distinct_object_nonzero={}",
+        u8::from(same_kind_a.compare_dependency(&same_kind_a2) != 0)
+    );
+    let make_ptr_dup = |space: AddressSpace| {
+        let mut pointer = TypePointer::new(8, int4.clone(), 1);
+        pointer.base.pointer_space = Some(space);
+        Datatype::Pointer(pointer)
+    };
+    let ptr_dup_space_a = make_ptr_dup(AddressSpace::Other(0xA5));
+    let ptr_dup_space_a2 = make_ptr_dup(AddressSpace::Other(0xA5));
+    println!(
+        "ptr_same_kind.same_index_quirk={}",
+        signum(ptr_dup_space_a.compare_at_level(&ptr_dup_space_a2, 10))
+    );
+
+    // Exhaustive 24-value sub-metatype runtime ordering matrix.
+    let matrix_one_field_struct = structure(
+        "OneMatrix",
+        4,
+        vec![field("a", 0, int4.clone())],
+        false,
+    );
+    let matrix_two_field_struct = structure(
+        "TwoMatrix",
+        8,
+        vec![
+            field("a", 0, int4.clone()),
+            field("b", 4, uint4.clone()),
+        ],
+        false,
+    );
+    let matrix_union = Arc::new(Datatype::Union(make_union(
+        "UMatrix",
+        vec![field("a", 0, int4.clone())],
+    )));
+    let mut matrix_rel_unk = TypePointer::new_relative(
+        8,
+        unknown4.clone(),
+        1,
+        matrix_one_field_struct.clone(),
+        4,
+    );
+    matrix_rel_unk.mark_ephemeral(Arc::new(Datatype::Pointer(TypePointer::new(
+        8,
+        unknown4.clone(),
+        1,
+    ))));
+    let matrix_types: Vec<Datatype> = vec![
+        Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)),
+        make_spacebase(Some(AddressSpace::Ram), valid_zero_frame),
+        base("unknown_matrix", 4, TypeMetatype::Unknown).as_ref().clone(),
+        Datatype::PartialStruct(TypePartialStruct {
+            base: {
+                let mut partial_base =
+                    TypeBase::new(String::new(), 4, TypeMetatype::PartialStruct);
+                partial_base.flags |= type_flags::HAS_STRIPPED;
+                partial_base
+            },
+            container: matrix_two_field_struct.clone(),
+            offset: 0,
+            stripped: Some(unknown4.clone()),
+        }),
+        Datatype::Base(TypeBase::new_char("cs1".to_string(), TypeMetatype::Int)),
+        Datatype::Base(TypeBase::new_char("cu1".to_string(), TypeMetatype::Uint)),
+        base("int_matrix", 4, TypeMetatype::Int).as_ref().clone(),
+        base("uint_matrix", 4, TypeMetatype::Uint).as_ref().clone(),
+        Datatype::Enum(make_enum("ES", 1)),
+        Datatype::PartialEnum(TypePartialEnum {
+            base: {
+                let mut partial_base =
+                    TypeBase::new(String::new(), 1, TypeMetatype::PartialEnum);
+                partial_base.flags |= type_flags::HAS_STRIPPED | type_flags::ENUMTYPE;
+                partial_base
+            },
+            parent: partial_enum_parent_a.clone(),
+            offset: 0,
+            stripped: Some(unknown4.clone()),
+        }),
+        Datatype::Enum(make_enum_unsigned("EU", 1)),
+        Datatype::Base(TypeBase::new_unicode(
+            "ws2".to_string(),
+            2,
+            TypeMetatype::Int,
+        )),
+        Datatype::Base(TypeBase::new_unicode(
+            "wu2".to_string(),
+            2,
+            TypeMetatype::Uint,
+        )),
+        base("bool_matrix", 1, TypeMetatype::Bool).as_ref().clone(),
+        Datatype::Code(TypeCode {
+            base: TypeBase::new(String::new(), 1, TypeMetatype::Code),
+            proto: None,
+        }),
+        base("float_matrix", 4, TypeMetatype::Float).as_ref().clone(),
+        Datatype::Pointer(matrix_rel_unk),
+        pointer(int4.clone()),
+        Datatype::Pointer(TypePointer::new_relative(
+            8,
+            int4.clone(),
+            1,
+            matrix_one_field_struct.clone(),
+            4,
+        )),
+        pointer(matrix_two_field_struct.clone()),
+        Datatype::Array(make_array(int4.clone(), 1)),
+        matrix_two_field_struct.as_ref().clone(),
+        matrix_union.as_ref().clone(),
+        Datatype::PartialUnion(make_partial_union(&matrix_union, 0)),
+    ];
+    for (index, matrix_type) in matrix_types.iter().enumerate() {
+        println!(
+            "matrix.submeta_{:02}={}",
+            23 - index,
+            matrix_type.get_submeta() as i32
+        );
+    }
+    for index in 0..23 {
+        println!(
+            "matrix.order_{:02}_{:02}={}",
+            23 - index,
+            22 - index,
+            signum(matrix_types[index].compare_at_level(&matrix_types[index + 1], 10))
+        );
+    }
+    let mut matrix_violations = 0;
+    for i in 0..24 {
+        for j in (i + 1)..24 {
+            if signum(matrix_types[i].compare_at_level(&matrix_types[j], 10)) != 1 {
+                matrix_violations += 1;
+            }
+        }
+    }
+    println!("matrix.total_order_violations={matrix_violations}");
 }

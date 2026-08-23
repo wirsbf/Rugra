@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "fixture_id": "DATATYPE-TYPEORDER-0001",
-  "status_note": "The 72-record datatype-layer projection matches the locked oracle. Six TypeFactory construction/wiring records are declared mismatches, and broader compare matrices remain explicitly untested; module status stays L2.",
+  "status_note": "The 182-record datatype-layer projection matches the locked oracle. Six TypeFactory construction/wiring records and two same-kind AddrSpace identity representation records are declared mismatches; the TypeCode null-output boundary and struct recursive-cycle/incomplete-transition corners remain explicitly untested; module status stays L2.",
   "decisive_semantics": {
     "reference_and_output_parameters": "Datatype/field/pointee/parent/stripped/prototype identities remain shared references; dependency comparisons use raw Ghidra pointer identity versus Arc identity predicates without serializing addresses.",
     "loop_boundaries_and_iteration_order": "Struct/union fields and enum values retain declared/container order; recursive compare decrements level exactly once per component edge and stops only when level becomes negative.",
@@ -55,7 +55,16 @@
       "TypePointer::calcSubmeta(void)",
       "TypePointerRel::compare/compareDependency/markEphemeral",
       "TypeCode::compareBasic(const TypeCode *)",
+      "TypeCode::compare(const Datatype &,int4)",
+      "TypeCode::compareDependency(const Datatype &)",
+      "TypeArray::compare/compareDependency",
+      "TypeStruct::compare/compareDependency",
+      "TypeUnion::compare/compareDependency",
+      "TypePartialStruct::compare/compareDependency",
+      "TypePartialEnum::compare/compareDependency",
+      "TypePartialUnion::compare/compareDependency",
       "TypeSpacebase::compareDependency(const Datatype &)",
+      "Datatype::base2sub / getSubMeta family (all 24 sub_metatype values)",
       "TypeFactory::getTypePointer/getTypePointerRel"
     ],
     "recursive_compare_level": 10,
@@ -63,13 +72,13 @@
       0,
       1
     ],
-    "normalization": "Comparison results are reduced to sign only; raw allocation addresses are never serialized. Dependency pointer/space ordering is observed only as equality/non-equality and forward/reverse antisymmetry. Six pinned TypeFactory gaps are compared as declared MISMATCH records.",
+    "normalization": "Comparison results are reduced to sign only; raw allocation addresses are never serialized. Dependency pointer/space ordering is observed only as equality/non-equality and forward/reverse antisymmetry. Same-kind AddrSpace identity is observed as equality/non-equality predicates over raw objects, never as serialized addresses. Six pinned TypeFactory gaps and two same-kind space representation gaps are compared as declared MISMATCH records.",
     "random_seed": "none; construction and traversal order are fixed",
     "error_injection": "none"
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
-    "sha256": "ce6a2011af3e9dc3690ab377a8d996883e9268dc5a4890ebcf153600c615c1c3",
+    "sha256": "02791ae2343873a77df4b6ece5494dc6cbfbee21695662f6174a70d1a776f8fe",
     "cases": {
       "atomic": [
         "TYPE_UNKNOWN:size4",
@@ -154,24 +163,67 @@
         "array pointer missing pointer_to_array",
         "pointer missing inherited coretype",
         "factory 1-byte Unicode loses SUB_INT_UNICODE class identity"
+      ],
+      "typecode_varargs_model_params_dependency": [
+        "dotdotdot comparable flag ordering",
+        "zero versus one parameter count tie",
+        "parameter type recursion",
+        "return type recursion through the prototype output",
+        "differing model names",
+        "level 0 id fallback",
+        "deep equality with distinct parameter/output objects",
+        "dependency parameter and output pointer identity"
+      ],
+      "array_union_partial_matrices": [
+        "array element type recursion",
+        "array size ordering",
+        "array level 0 id fallback",
+        "array dependency element identity and size tiebreak",
+        "union field name and stored metatype ties",
+        "union level 0 id fallback",
+        "union dependency field identity",
+        "partial struct offset and container recursion",
+        "partial struct dependency container/offset identity",
+        "partial enum offset and parent recursion",
+        "partial enum dependency parent/offset identity",
+        "partial union offset and container recursion",
+        "partial union dependency container/offset identity"
+      ],
+      "struct_offset_dependency_matrices": [
+        "field offset ordering at equal size",
+        "deep pointer-field recursion past the first-pass metatype tie",
+        "level 0 id fallback",
+        "dependency field offset ordering",
+        "dependency distinct field-type identity"
+      ],
+      "same_kind_space_identity": [
+        "two raw IPTR_PROCESSOR spaces with distinct indexes are distinct",
+        "same object identity",
+        "two distinct raw spaces sharing an index are nonzero in Ghidra but collapse to equality in Rugra's AddressSpace enum",
+        "TypePointer same-index space quirk returns 1 in Ghidra but falls through in Rugra"
+      ],
+      "submetatype_runtime_matrix": [
+        "all 24 sub_metatype values constructed and printed",
+        "23 adjacent-pair orders",
+        "total order violation count over all 276 pairs"
       ]
     }
   },
   "observation_schema": {
-    "format": "Seventy-eight fixed-order key=value UTF-8 records with a final newline per side",
-    "record_count": 78,
+    "format": "One hundred eighty-two fixed-order key=value UTF-8 records with a final newline per side",
+    "record_count": 182,
     "submeta": "Exact numeric Ghidra sub_metatype values",
     "order": "-1/0/1 sign of typeOrder/typeOrderBool/compare",
     "dependency": "Exact equality plus nonzero and antisymmetry predicates; no raw pointer address",
-    "mutation": "Fixture-owned id assignment plus TypePointer::calcSubmeta/markEphemeral construction-time state writes",
+    "mutation": "Fixture-owned id assignment plus TypePointer::calcSubmeta/TypePointerRel::markEphemeral construction-time state writes; ProbeChar reproduces the TypeChar::decode unsigned submeta write (type.cc:818) because no public constructor exists for it.",
     "exceptions": "None"
   },
   "comparand": {
     "rust_base_commit": "8012627083360e0111506dc70d891552383a8c65",
     "rust_base_tree": "e94f9ee28049d6b26db645f74f0157a376116bf8",
     "datatype_base_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
-    "cpp_fixture_sha256": "e98eee8fd70428f83d68bc92e0b5406b8e2d1b6158af2940bc4eadc61c9212ac",
-    "rust_fixture_sha256": "13a9071977653442e802f159c8ac4581f121c43416c2574bb0bbd3ecc7a5db8b",
+    "cpp_fixture_sha256": "44b05399e5a68088c2090e12bec28595e6cbf372188fc37b729b3e45a35b4bb7",
+    "rust_fixture_sha256": "51984e0cb080f4746f50f820cb8633a77b9efb4f5531cde659e2e26283cc3277",
     "datatype_rs_sha256": "7d12d27ce21af5249e010f53844832a272794aec938ba088f9687e78f3a83e12",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
@@ -180,8 +232,8 @@
     "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
     "build_mode": "Pinned Rugra base archive plus only the owned datatype.rs overlay; locked Ghidra libdecomp.a rebuilt from the oracle worktree; Cargo --locked --offline"
   },
-  "expected_ghidra_stdout_sha256": "d248dd40722e8c6fbc51927ee557895caf096599a8048ab57c4942e32f0ac573",
-  "expected_rugra_stdout_sha256": "7fdbbcf8b40b62af7cb1bed3a62ecc747cbe3b45de9e3e9cdbacccdbbba2a218",
+  "expected_ghidra_stdout_sha256": "4bc6b452023ac5c7a6b3e9ff3038c5c848ef222f1f5ffa856aedb545659ad1e5",
+  "expected_rugra_stdout_sha256": "85775338934840a3e7f6265a10e6fd1d34af0fd49d0a267b0363ad262d9c3cdd",
   "expected_exit_code": 0,
   "expected_mismatches": {
     "factory_gap.array_pointer_flag": {
@@ -213,6 +265,16 @@
       "ghidra": "12",
       "rugra": "17",
       "todo": "TYPEFACTORY-SUBMETA-RECLASS-0001"
+    },
+    "sksp.same_index_distinct_object_nonzero": {
+      "ghidra": "1",
+      "rugra": "0",
+      "todo": "DATATYPE-TYPEORDER-RESIDUAL-0001"
+    },
+    "ptr_same_kind.same_index_quirk": {
+      "ghidra": "1",
+      "rugra": "0",
+      "todo": "DATATYPE-TYPEORDER-RESIDUAL-0001"
     }
   },
   "coverage": {
@@ -270,37 +332,43 @@
         "TYPEFACTORY-SUBMETA-RECLASS-0001"
       ]
     },
-    "typecode_remaining_compare_matrix": {
-      "status": "UNTESTED",
-      "covers": "Varargs, differing model names, parameter-count and parameter-type recursion, return-type null/identity, dependency pointer keys, and level/id boundaries.",
-      "residual_todo_ids": [
-        "DATATYPE-TYPEORDER-RESIDUAL-0001"
-      ]
-    },
     "array_union_partial_compare_matrix": {
-      "status": "UNTESTED",
-      "covers": "Full Array/Union/PartialStruct/PartialEnum/PartialUnion compare and dependency matrices beyond the observed projection.",
-      "residual_todo_ids": [
-        "DATATYPE-TYPEORDER-RESIDUAL-0001"
-      ]
+      "status": "MATCH",
+      "covers": "Full Array/Union/PartialStruct/PartialEnum/PartialUnion compare and dependency matrices: element/field/container/parent recursion, offsets, level 0 id cutoffs, size tiebreaks, and distinct-object identity predicates.",
+      "residual_todo_ids": []
     },
     "struct_offset_and_dependency_matrix": {
-      "status": "UNTESTED",
-      "covers": "Struct field-offset ordering, all dependency pointer permutations, recursive cycles, and incomplete transitions.",
-      "residual_todo_ids": [
-        "DATATYPE-TYPEORDER-RESIDUAL-0001"
-      ]
+      "status": "MATCH",
+      "covers": "Struct field-offset ordering at equal size, deep pointer-field recursion past the first-pass metatype tie, level 0 id fallback, dependency field-offset ordering, and distinct field-type identity.",
+      "residual_todo_ids": []
     },
     "legacy_same_kind_space_identity": {
-      "status": "UNTESTED",
-      "covers": "Two distinct legacy AddrSpace objects of the same logical kind/index cannot be represented by AddressSpace enum identity.",
+      "status": "MISMATCH",
+      "covers": "Two raw IPTR_PROCESSOR spaces: distinct indexes are nonzero on both sides, but two distinct Ghidra objects sharing an index stay nonzero while Rugra's AddressSpace enum collapses them to equality; the TypePointer same-index quirk (constant 1 in Ghidra) likewise falls through to pointee comparison in Rugra.",
       "residual_todo_ids": [
         "DATATYPE-TYPEORDER-RESIDUAL-0001"
       ]
     },
     "all_24_submetatype_runtime_matrix": {
+      "status": "MATCH",
+      "covers": "All 24 sub_metatype values constructed and printed, 23 adjacent-pair orders, and a zero total-order violation count over all 276 pairs.",
+      "residual_todo_ids": []
+    },
+    "typecode_varargs_model_params_dependency": {
+      "status": "MATCH",
+      "covers": "Varargs flag, zero/one parameter counts, parameter-type and return-type recursion, differing model names, level 0 id fallback, and dependency parameter/output pointer identities.",
+      "residual_todo_ids": []
+    },
+    "typecode_null_output_boundary": {
       "status": "UNTESTED",
-      "covers": "Exhaustive pairwise runtime ordering for all 24 sub_metatype values; the fixture covers only exercised atomic, Unicode, pointer, aggregate, and partial values.",
+      "covers": "TypeCode::compare/compareDependency null output-type branches; unreachable through public construction because ProtoStoreInternal always initializes the output slot (fspec.cc:3306).",
+      "residual_todo_ids": [
+        "DATATYPE-TYPEORDER-RESIDUAL-0001"
+      ]
+    },
+    "struct_recursive_cycles_incomplete_transitions": {
+      "status": "UNTESTED",
+      "covers": "Self-referential struct cycles cannot be built without Rc cycles, and markComplete/incomplete flag transitions on compare are not yet exercised.",
       "residual_todo_ids": [
         "DATATYPE-TYPEORDER-RESIDUAL-0001"
       ]
