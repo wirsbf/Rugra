@@ -402,6 +402,7 @@ fn libc_import_signature(name: &str) -> Option<(&'static str, &'static str)> {
 // the Program database the platform analyzers populated (PLT thunk -> EXTERNAL
 // symbol with the generic_clib locked signature); Rugra's front-end state is
 // the driver's ELF/PLT symbol table plus the locked libc ABI table. For each
+
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
 // signature proto on the call site, (3) rebuild the CALL op's fspec
