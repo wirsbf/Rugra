@@ -825,3 +825,36 @@ skeleton 2785→2904（增量主体为 `next_url` 新函数体；`my_get_line` -
 消费的是 bblocks 旧 RPO 域（可能滞后于 dead-flow 清理后的图），公共 port 对
 清理后图现算 RPO——即本任务目标「index 域统一」本身，方向与 StructureGraph
 oracle 路径（对最终图 fresh 计算）一致。
+
+---
+
+## 2026-08-23：order_loop_bodies 接线完整 structure_loops 驱动（BLOCK-CALCLOOP-0001）
+
+`CollapseStructure::order_loop_bodies` 的生成树重算点从裸
+`BlockGraph::find_spanning_tree(preorder, rootlist)` 升级为完整
+`BlockGraph::structure_loops(&mut rootlist)` 驱动（block.cc:2194-2215）。
+
+**oracle 调用点对照：** Ghidra 侧 CollapseStructure 从不自己算树——
+`Funcdata::structureReset`（funcdata_block.cc:711 `bblocks.structureLoops`）
+在 basic 块图上打完整标签（含 findIrreducible 的 f_irreducible 与
+irreduciblecount>0 时 calcLoop 的 f_loop_edge，cc:2211-2214），
+`ActionBlockStructure::apply`（blockaction.cc:2177）经 `buildCopy`
+（newBlockCopy 复制 intothis/outofthis 边标签 + index + numdesc，
+block.cc:1685-1691）把这些标签带入结构图；StructureGraph 控制台路径
+（ghidra_process.cc:352-355）则 buildCopy 后直接
+`structureLoops + calcForwardDominator` 再 CollapseStructure。Rugra 的
+`build_copy` 造全新（无标签）边，故在 order_loop_bodies 处对结构图重跑
+完整驱动——与两条 oracle 路径"CollapseStructure 消费 structureLoops 产物"
+的入口态等价。
+
+**行为影响：** 可归约图（irreduciblecount==0）与原裸树逐字节一致（驱动
+单遍收敛，无 rebuild、无 calcLoop）；不可归约图新增 f_irreducible 边标
+（is_goto_out 由此为真，影响 select_goto/结构化决策）与 calcLoop 的
+f_loop_edge 环断边标——即 oracle 的入口态，此前缺失。结构化输出按机制 B
+差分白名单由 root 集成时跑 curl 差分门禁（worktree 内 fast-release E2E
+见任务报告）。
+
+**calcLoop 本体：** 见 docs/api/block.md BLOCK-CALCLOOP-0001 节
+（block.cc:2104-2147 完整移植 + oracle fixture
+`tests/oracle/block_calcloop_1204` 七 case 双侧 byte-MATCH，含
+structureReset 链 structureLoops+calcForwardDominator 端到端投影）。

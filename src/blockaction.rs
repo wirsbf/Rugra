@@ -1609,7 +1609,7 @@ impl<'a> CollapseStructure<'a> {
         // back-edge test, which silently failed on curl `main` (0 back-edges
         // found despite 25 candidate edges).
         //
-        // BLOCK-INDEX-WIRE-0001: the tree now comes from the PUBLIC 1:1 port
+        // BLOCK-INDEX-WIRE-0001: the tree comes from the PUBLIC 1:1 port
         // BlockGraph::find_spanning_tree (src/block.rs, Ghidra block.cc:1009-
         // 1136) with the full oracle side-effect set: index=RPO + component
         // list reorder (cc:1135 `list = rpostorder`), visitcount=preorder,
@@ -1624,9 +1624,17 @@ impl<'a> CollapseStructure<'a> {
         // numdesc, block.cc:1685-1691). Rugra's build_copy creates fresh
         // (unlabeled) edges, so the tree is recomputed here on the public
         // port, reproducing the entry state the oracle's collapseAll sees.
-        let mut preorder = Vec::new();
+        //
+        // BLOCK-CALCLOOP-0001: the recompute now runs the FULL
+        // BlockGraph::structure_loops driver (block.cc:2194-2215), not the
+        // bare find_spanning_tree — the oracle entry state carries
+        // findIrreducible's f_irreducible labels and, on irreducible graphs
+        // (irreduciblecount > 0), calcLoop's cycle-breaking f_loop_edge
+        // labels (block.cc:2211-2214). Reducible graphs are byte-identical
+        // to the previous bare-tree behavior (irreduciblecount == 0 → the
+        // driver exits after one findSpanningTree+findIrreducible pass).
         let mut rootlist = Vec::new();
-        if let Err(e) = self.graph.find_spanning_tree(&mut preorder, &mut rootlist) {
+        if let Err(e) = self.graph.structure_loops(&mut rootlist) {
             // Oracle channel: LowlevelError("Could not generate spanning
             // tree") (block.cc:1110-1111), mirrored as a panic — same policy
             // as Funcdata::structureReset's structure_loops call site.
