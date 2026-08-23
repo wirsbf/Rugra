@@ -76,7 +76,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 |---|---|---|---|---|---|
 | 1 | `address.cc` | `address.rs` | 🔧 L2 | **2026-08-23 锁定复审**：phase-1 bridge 仍保留两套地址模型。legacy `Address/RangeList` 被 Database、Flow、Block、Funcdata 主路径消费，却会让 `Address::new(vaddr)` 保持 null-space、Range 合并/排序丢空间、SeqNum clone/order 与 Ghidra 分离语义不等价；较完整的 `SpaceAddress/SpaceRangeList` 尚未进入这些 consumer。`PcodeOpBank::create/target`、Flow visited/bounds、Block cover 因此一起保持 `MISMATCH/UNTESTED`，按 `ADDRESS-PHASE2-CLOSURE-0001` 从完整 Address 域向上迁移。 | `address.cc`, `address.hh` |
 | 2 | `varnode.cc` | `varnode.rs` | 🔧 L2 | **2026-08-13 `VARNODE-INIT-0001`**：锁定 12.0.4 direct runner 为 `PARTIAL_MATCH`，constructor flags、unique/create counter、covered Loc/Def ordering、canonical xref/重复 slot 重接、checked setInput/setDef/makeFree/destroy，以及 synthetic LE `combineInputVarnodes` 调用闭包通过独立复核。**2026-08-15 `COVER-REBUILD-SELFLOCK-0001`**：`update_cover_locked` root-identity 重建（持锁窗口快照、无写锁重入）+ `self_ref` bank 分配 + input sentinel uindex 修正经 cover_rebuild_1204 fixture 8/8 MATCH；「Cover semantic endpoint」残差缩小为 MULTIEQUAL-tip/INDIRECT 目标 order 两项。仍有 Architecture TypeFactory、IOP/FSPEC、动态 Address/SeqNum、nullable slot、BE/ProtoModel、副本外部 Arc/public key mutation、High/query 等 `MISMATCH/UNTESTED`；继续绑定 `VARNODE-0001`/`ADDRESS-0001`/`SEQNUM-0001`/`OPBANK-0001`，模块不升 L3。 | `varnode.cc` |
-| 3 | `op.cc` | `op.rs` | ✅ L3 | 完整对齐 | `op.cc` |
+| 3 | `op.cc` | `op.rs` | 🔧 **L2（2026-08-23 撤销旧 L3）** | 锁定 op/funcdata_op 全函数复审确认：`PcodeOpBank::create` 未建立 NULL slots/DEAD/deadlist，optree 与 list identity/lifecycle、deadandgone/IOP、target/fallthru/range、SeqNum copy/equality/order、special_prop、u32 CSE、collapse/execute out-state 与异常均不等价；raw injection 还绕过 changeOpcode/专用链。当前 op_insert overall=MISMATCH，须在 Flow 租约释放后执行 `OPBANK-LIFECYCLE-0001`。 | `op.cc`, `op.hh`, `funcdata_op.cc` |
 | 4 | `pcoderaw.cc` | `pcoderaw.rs` | ✅ L3 | 完整对齐 | `pcoderaw.cc` |
 | 5 | `opcodes.cc` | `opcodes.rs` | ✅ L3 | 自动生成，完整 | `opcodes.cc` |
 | 6 | `space.cc` | `space.rs` | 🔧 L2 | 固定枚举无法表达架构动态 space index/type/name/address-size/wordsize/endianness/flags，并使 Address/Range/Varnode 跨空间键失真 | `space.cc` |
@@ -91,7 +91,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 11 | `action.cc` | `action.rs` | ✅ L3 | Action/ActionGroup/ActionDatabase 框架对齐 | `action.cc` |
+| 11 | `action.cc` | `action.rs` | 🔧 **L2（2026-08-23 executor 复审）** | Action/Rule start/action breakpoint 状态、临时 flag 清除、Group child cursor 时机、ActionPool live-tree iterator/rule resume/dead cleanup/count/warning 与派生 root group 过滤均未闭合；当前 `ACTION-EXECUTOR-BREAKPOOL-0001` 正在独立 worktree 以双侧状态机 fixture 修复，批准前不得恢复 L3。 | `action.cc`, `action.hh` |
 | 12 | `heritage.cc` | `heritage.rs` | 🔧 L2 | **2026-08-23 全文件锁定复审**：`callOpIndirectEffect` 对 CALLOTHER/NEW 极性错误；`normalizeWriteSize` 不返回并回写替换 Varnode；`guard` 写死 flags 且漏 `guardReturns`；indexed-stack/ValueSet、`guardLoads` COPY、`processJoins` 仍缺失或为空壳。collect/placeMultiequals/rename 主干较完整，但现存 metadata 均未钉当前源码，正式状态仍 `NO_ORACLE/UNTESTED`；按 `HERITAGE-GUARD-NORMALIZE-0001` 等底层切片推进。 | `heritage.cc`, `heritage.hh` |
 | 13 | `merge.cc` | `merge.rs` | 🔧 **L2（2026-08-23 撤销旧 L3）** | 锁定 `merge.cc/.hh` 全文件复审确认静态 `MISSING/STUB/MISMATCH`：`mergeAddrTied` 缺 space/ADDRTIED/free/max-overlap/groupWith 门；`mergeOp` 冻结 inputs，后槽看不到前槽重链；persistent Merge 未携带 StackAffectingOps/protoPartial；`groupPartials` 空壳；copy trims 经 HashMap 丢失首次出现序；`markImplied/inflateTest` 缺 cover/cache/partial-piece 副作用。现有 merge metadata comparand 均不是当前源码，且多份 overall=MISMATCH；旧“完整对齐”声明无效，依 `MERGE-PERSISTENT-STATE-0001`、`MERGE-ADDRTIED-CLOSURE-0001` 串行修复并逐函数对拍。 | `merge.cc`, `merge.hh` |
 | 14 | `variable.cc` | `variable.rs` | 🔧 L2 | HighVariable 未原子建立 VN↔High 关系，annotation/后建 VN 挂接错误，强 Arc 形成环，instances 未按 compareJustLoc 维持顺序，销毁与 dirty 传播未闭合 | `variable.cc` |
@@ -222,7 +222,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 33 | `printc.cc` | `printc.rs` | 🔧 L2 | 默认 RPN 根 invisible group 被发成未闭合字面 `(`；大多数算术/CALL/STORE 绕过 RPN，block walker 忽略 terminal mask，doc_function 又用 fresh set 重发所有循环；当前 11.3.2 最终 C golden 不能证明 12.0.4 token/markup parity | `printc.cc` |
+| 33 | `printc.cc` | `printc.rs` | 🔧 L2 | **2026-08-23 Symbol/constant 复审**：主管线仍在 Funcdata flat map、varmap ScopeLocal、database Scope 三套符号状态间分叉；PrintC production constant leaf 丢消费 op/read-facing High type，绕过较完整 typed dispatcher，导致 curl quoted strings/enum tokens 为0并产生68个自创 decimal 注释。declarator 又把结构 pointer/array 名字当终态。必须先闭合 persistent Scope/global/TypeFactory，再删除打印期 discovery/synthetic typedef/extern/backfill，不能在 emitter 继续补语义。 | `printc.cc`, `printlanguage.cc` |
 | 34 | `printlanguage.cc` | `printlanguage.rs` | 🔧 L2 | RPN token 表/递归/括号 identity 不完整，自由 `rpn_recurse` 可丢 pending node；真实 PcodeOp/Varnode/Datatype 与 group ID/highlight payload 丢失，namespace 三种策略和多个虚方法仍为空 | `printlanguage.cc` |
 | 35 | `prettyprint.cc` | `prettyprint.rs` | 🔧 L2 | Emit 签名无法携带 oracle markup identity；TokenSplit/Oppen scan queue、line width、spaces+bump、group break/indent 状态机缺失，27+ 文本后处理仍在实际路径 | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` | 🔧 L2 | 空参数列表被 `all()` 误判 input-locked，lock/void/model 联动缺失；ParamActive slot 应从 1 而非 0，whichTrial/getNumUsed/split/comparator 与 ParamEntry 分配均有确定差异，storage 部分依赖 ADDRESS-0001 | `fspec.cc` |
