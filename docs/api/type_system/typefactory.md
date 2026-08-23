@@ -573,3 +573,8 @@ input), and the code-flags decode family
 `tests/oracle/typefactory_local_cache_1204.{cc,rs,metadata.json}` fixture —
 see the runner `tools/run_typefactory_local_cache_oracle.sh` output in the
 task report for the record count and stdout SHA.
+
+Fixture-commit addendum (same rework): removed two no-op `drop(&mut …)`
+reference drops (`find_add`, `get_type_void_result`) flagged by the compiler;
+no behavior change — the pinned oracle run in this commit's Differential
+block covers the exact final bytes.

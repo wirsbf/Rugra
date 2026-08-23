@@ -13,43 +13,212 @@
     "id": "gcc",
     "path": "sleigh_specs/x86-64-gcc.cspec",
     "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "usage": "The locked BfdArchitecture is initialized over examples/curl only to supply the production TypeFactory and alignment/architecture state; the fixture then calls TypeFactory::clear and owns every compared registration."
+    "usage": "The locked BfdArchitecture is initialized over examples/curl only to supply the production TypeFactory and alignment/architecture state; the fixture then calls TypeFactory::clear and owns every compared registration. The Rust comparand installs the same <size_alignment_map> (1/1,2/2,4/4,8/8,16/16) before its first clear so findAdd's alignment precondition matches the production factory."
   },
   "analysis_options": {
     "apis": [
+      "TypeFactory::TypeFactory(Architecture *) (type.cc:3106-3119)",
       "TypeFactory::clearCache(void) (type.cc:3122-3134)",
       "TypeFactory::setCoreType(const string &,int4,type_metatype,bool) (type.cc:3178-3195)",
       "TypeFactory::cacheCoreTypes(void) (type.cc:3200-3248)",
       "TypeFactory::clear(void) (type.cc:3251-3263)",
+      "TypeFactory::clearNoncore(void) (type.cc:3266-3285)",
+      "TypeFactory::findAdd(Datatype &) (type.cc:3412-3439)",
+      "TypeFactory::insert(Datatype *) (type.cc:3390-3406)",
+      "TypeFactory::getTypeVoid(void) (type.cc:3575-3588)",
+      "TypeFactory::getTypeChar(const string &) (type.cc:3593-3599)",
+      "TypeFactory::getTypeUnicode(const string &,int4,type_metatype) (type.cc:3606-3612)",
       "TypeFactory::getBaseNoChar(int4,type_metatype) (type.cc:3619-3625)",
       "TypeFactory::getBase(int4,type_metatype) (type.cc:3631-3660)",
+      "TypeFactory::getBase(int4,type_metatype,const string &) (type.cc:3667-3673)",
+      "TypeFactory::getTypeChar(int4) (type.cc:3678-3687)",
+      "TypeFactory::getTypeCode() / getTypeCode(const string &) (type.cc:3692-3717)",
+      "TypeFactory::getTypeArray(int4,Datatype *) (type.cc:3902-3908)",
+      "TypeFactory::getTypeEnum(const string &) (type.cc:3967-3973)",
+      "TypeFactory::decodeCoreTypes(Decoder &) (type.cc:4567-4577)",
+      "TypeFactory::decodeTypeNoRef(Decoder &,bool) (type.cc:4436-4548)",
+      "TypeFactory::decodeEnum(Decoder &,bool) (type.cc:4318-4329)",
       "Datatype::hashName(const string &) (type.cc:689-701)",
-      "DatatypeCompare (type.hh:302-308)"
+      "Datatype::hashSize(uint8,int4) (type.cc:709-716)",
+      "Datatype::compareDependency(const Datatype &) (type.cc:227-234)",
+      "DatatypeCompare (type.hh:306-310)",
+      "Datatype::printRaw (type.cc:139-145, 910-918, 1204-1210)",
+      "Architecture::max_basetype_size (architecture.cc:1422)"
     ],
-    "factory_state": "After BfdArchitecture::init, clear the TypeFactory. Initial wave registers two plain signed bytes, two plain unsigned bytes, and one caller-named ASCII signed byte, then caches twice. A later higher-id plain signed byte is registered and cached. The factory is cleared twice, an empty-cache unnamed signed byte is observed, cleared again, then a post-clear plain byte and later ASCII byte are registered across repeated cache calls.",
-    "ordering": "DatatypeSet order is sub-metatype, descending size, then unsigned id. All compared scalar sizes are one byte; ids are the exact locked hashName results. Ordinary preferred slots are first-fill, ASCII character slots overwrite, and type_nochar is overwritten by every ordered non-ASCII TYPE_INT size-1 core entry.",
-    "normalization": "None. Exact names, unsigned ids, size, numeric locked metatype, core/ASCII flags, and boolean same-factory pointer identity are emitted in fixed order and compared byte-for-byte.",
+    "factory_state": "After BfdArchitecture::init, clear the TypeFactory. Initial wave registers two plain signed bytes, two plain unsigned bytes, and one caller-named ASCII signed byte, then caches twice. A later higher-id plain signed byte is registered and cached. The factory is cleared twice, an empty-cache unnamed signed byte is observed, cleared again, then a post-clear plain byte and later ASCII byte are registered across repeated cache calls. REWORK waves: wide chars (2/4) plus plain int2 and float10/float16 slots; a stack-allocated raw TypeFactory probing the uninitialized alignment map, getTypeVoid, and the char cache miss; a named non-core promo_plain registered via the named getBase then promoted by setCoreType with clearNoncore retention and both conflict error paths; three decodeCoreTypes streams (full six-child rebuild, enum-only nochar winner, shared-id partial state, id-less void) and a large-base u1 wave converting getBase(20,INT)/getBase(12,FLOAT) into unnamed arrays.",
+    "ordering": "DatatypeSet order is sub-metatype ascending, size descending, unsigned id ascending (compareDependency + DatatypeCompare id tie-break). Ordinary preferred slots are first-fill, ASCII character slots overwrite, type_nochar is overwritten by every ordered non-ASCII TYPE_INT size-1 core entry (a size-1 signed enum qualifies before its isEnumType break), and decode children are processed in stream order with cacheCoreTypes skipped when a child throws.",
+    "normalization": "None. Exact names, unsigned ids, size, numeric locked metatype, core/ASCII flags, verbatim single-line LowlevelError texts (and the first line of the multi-line Shared type id message), and boolean same-factory pointer identity are emitted in fixed order and compared byte-for-byte.",
     "random_seed": "none; ordered tree traversal and name hashing are deterministic",
-    "error_injection": "none; conflicting same-name registration and Rust lock poisoning are outside this fixture"
+    "error_injection": "same-name size conflict, same-name char/plain submeta conflict, shared-id structural conflict, id-less named void, size-5 and cache-miss character requests, raw-constructor findAdd; Rust lock poisoning remains outside this fixture"
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of UTF-8 json.dumps(payload, sort_keys=True, separators=(',',':'))",
-    "sha256": "06ab440dc881677bec12fc569249a92296f52c85d7521e3367fbce51b1a19578",
+    "sha256": "128b045ee0778b581c7bfaedec68073d707622b5fa9380b76e0cb2f12ff5c327",
     "payload": {
       "architecture": "x86:LE:64:default:gcc",
       "compiler_spec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
       "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
       "initial": [
-        ["plain_high", 1, "TYPE_INT", false],
-        ["aaaaaaaa", 1, "TYPE_INT", false],
-        ["unsigned_custom_a", 1, "TYPE_UINT", false],
-        ["unsigned_custom_b", 1, "TYPE_UINT", false],
-        ["custom_ascii_glyph", 1, "TYPE_INT", true]
+        [
+          "plain_high",
+          1,
+          "TYPE_INT",
+          false
+        ],
+        [
+          "aaaaaaaa",
+          1,
+          "TYPE_INT",
+          false
+        ],
+        [
+          "unsigned_custom_a",
+          1,
+          "TYPE_UINT",
+          false
+        ],
+        [
+          "unsigned_custom_b",
+          1,
+          "TYPE_UINT",
+          false
+        ],
+        [
+          "custom_ascii_glyph",
+          1,
+          "TYPE_INT",
+          true
+        ]
       ],
-      "late": ["zzzzzzzz", 1, "TYPE_INT", false],
+      "late": [
+        "zzzzzzzz",
+        1,
+        "TYPE_INT",
+        false
+      ],
       "post_clear": [
-        ["post_clear_plain", 1, "TYPE_INT", false],
-        ["post_clear_ascii", 1, "TYPE_INT", true]
+        [
+          "post_clear_plain",
+          1,
+          "TYPE_INT",
+          false
+        ],
+        [
+          "post_clear_ascii",
+          1,
+          "TYPE_INT",
+          true
+        ]
+      ],
+      "rework_wide_float": [
+        [
+          "wide2",
+          2,
+          "TYPE_INT",
+          true
+        ],
+        [
+          "wide4",
+          4,
+          "TYPE_INT",
+          true
+        ],
+        [
+          "plain2",
+          2,
+          "TYPE_INT",
+          false
+        ],
+        [
+          "f10",
+          10,
+          "TYPE_FLOAT",
+          false
+        ],
+        [
+          "f16",
+          16,
+          "TYPE_FLOAT",
+          false
+        ]
+      ],
+      "rework_promotion": [
+        "promo_plain",
+        1,
+        "TYPE_INT",
+        false
+      ],
+      "rework_large_base": [
+        [
+          "u1",
+          1,
+          "TYPE_UNKNOWN",
+          false
+        ],
+        20,
+        12
+      ],
+      "rework_decode_streams": [
+        [
+          "dk_int1",
+          1,
+          "int",
+          "0x5500000000000001"
+        ],
+        [
+          "dk_char",
+          1,
+          "int",
+          "0x5500000000000002"
+        ],
+        [
+          "dk_utf2",
+          2,
+          "int",
+          "0x5500000000000003"
+        ],
+        [
+          "dk_enum1",
+          1,
+          "enum_int",
+          "0x5500000000000004"
+        ],
+        [
+          "void_decoded",
+          0,
+          "void",
+          "0x5500000000000005"
+        ],
+        [
+          "dk_plain2",
+          2,
+          "int",
+          "0x5500000000000006"
+        ],
+        [
+          "dk_enum_only",
+          1,
+          "enum_int",
+          "0x5500000000000011"
+        ],
+        [
+          "dk3_a",
+          1,
+          "int",
+          "0x5500000000000021"
+        ],
+        [
+          "dk3_b",
+          1,
+          "int",
+          "0x5500000000000021"
+        ],
+        [
+          "void_noid",
+          0,
+          "void",
+          null
+        ]
       ],
       "sequence": [
         "clear",
@@ -66,14 +235,38 @@
         "cache",
         "cache",
         "register_post_ascii",
-        "cache"
+        "cache",
+        "clear",
+        "register_wide_float",
+        "cache",
+        "getTypeChar_5_expect_throw",
+        "raw_ctor_align_throw",
+        "raw_ctor_getTypeVoid",
+        "raw_ctor_char_throw",
+        "clear",
+        "getBase_named_promo_pre",
+        "setCoreType_promote",
+        "cache",
+        "clearNoncore_survives",
+        "setCoreType_conflict_size",
+        "setCoreType_conflict_char",
+        "decode_coretypes_wave1",
+        "decode_coretypes_enum_only",
+        "decode_coretypes_shared_id_partial",
+        "decode_coretypes_void_noid",
+        "clear",
+        "register_u1",
+        "cache",
+        "getBase_20_int_array",
+        "getBase_12_float_array"
       ]
     }
   },
   "observation_schema": {
-    "format": "99 newline-terminated key=value records in fixed order",
+    "format": "220 newline-terminated key=value records in fixed order",
     "type_record": "exact name, unsigned id, byte size, locked numeric metatype, core flag, and ASCII flag",
-    "identity": "Pointer equality in Ghidra and Arc::ptr_eq in Rugra for preferred, nochar, charcache, repeated access, repeated cache, late registration, empty-cache fallback, and post-clear reconstruction",
+    "identity": "Pointer equality in Ghidra and Arc::ptr_eq in Rugra for preferred, nochar, charcache, repeated access, repeated cache, late registration, empty-cache fallback, post-clear reconstruction, wide/float slot selection, promotion factory views, conflict survivors, decode rebuild winners, and repeated large-base arrays",
+    "error_records": "verbatim LowlevelError texts for alter-definition (size and submeta variants), unsupported character data-type, alignment map not initialized, Datatype must have a valid id, and the first line of Shared type id; throw/no-throw flags precede each text",
     "lifetime": "No pre-clear Ghidra pointer is dereferenced or compared after clear deletes it"
   },
   "assets": {
@@ -88,21 +281,21 @@
     "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   },
   "comparand": {
-    "rust_base_commit": "8012627083360e0111506dc70d891552383a8c65",
-    "rust_base_tree": "e94f9ee28049d6b26db645f74f0157a376116bf8",
-    "typefactory_base_blob": "17a87bc991ab68004bb3f6311aee0534271672d7",
-    "datatype_base_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
-    "datatype_base_sha256": "8b64f171080f666261736041024d8fb46522cc62c04e602c6777cd4c7fb76e50",
-    "typefactory_rs_sha256": "c78d12f21449acfd1b296bac6d2721d224a8e3260010397774dfe1defceecaf9",
-    "cpp_fixture_sha256": "0ab2bfc1ea8d49a8d3c2994198783a9e7ba42eb8e5420e1e920312a6e6b6161b",
-    "rust_fixture_sha256": "666d817f4d859dbb6aaf66c1a1130b97338429e88bff2aa3fb4240503092b75d",
-    "runner_sha256": "f831931716cfe92c9662912d137c64f2a9c79911e99b9f15ebfa5a3fd71551c2",
-    "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the hash-verified live src/type_system/typefactory.rs, build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed.",
+    "rust_base_commit": "296c128ad54c8e3a18114ef065b1d6fbb22ed2d5",
+    "rust_base_tree": "9fb4593727541a45eaa6231f6296a79d2d5254f9",
+    "typefactory_base_blob": "200a7e0a5931939c5a1dd624bc76095d5da9d569",
+    "datatype_base_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+    "datatype_base_sha256": "7d12d27ce21af5249e010f53844832a272794aec938ba088f9687e78f3a83e12",
+    "typefactory_rs_sha256": "16e15b15d7f117bf33493e87cad8927bd37abc49a7b7c5959af4065115ac2fc7",
+    "cpp_fixture_sha256": "48c783c86b4126236bfb3db7fe91f832d5c7bf3924ae2b309d1794cc5d50c774",
+    "rust_fixture_sha256": "fb83c46735a97c3b942cff13f5612abf759df2fa396e15531f3aacfa08a87e61",
+    "runner_sha256": "528e8c8ff85f9ac2141531863c9b0369d1cff0dba758ef4680f9c9fb02b66a8f",
+    "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the hash-verified live src/type_system/typefactory.rs, build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed. Re-pinned from 8012627 to 296c128 for the REWORK because the faithful ctor ports (TypeBase::new_char/new_unicode, SubMetatype, Datatype::get_submeta) the typefactory now consumes entered datatype.rs between the two bases.",
     "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
     "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
     "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
   },
-  "expected_stdout_sha256": "4780c75cf8247139ef631fe9060300d4c8bb393248a03b8b9711685ed9c14879",
+  "expected_stdout_sha256": "e5891a4317897164a67a2394ce13090c161b3190c69b1b09699c3783b9422529",
   "expected_exit_code": 0,
   "coverage": {
     "caller_supplied_core_names_and_hash_ids": "MATCH",
@@ -117,26 +310,33 @@
     "double_clear_and_old_name_removal": "MATCH",
     "empty_cache_nochar_fallback": "MATCH",
     "post_clear_plain_then_ascii_rebuild": "MATCH",
+    "wide_character_charcache_and_non_preferred": "MATCH: setCoreType chartp size!=1 routes through getTypeUnicode (utf16/utf32 flags, SUB_*_UNICODE ordering); charcache[2] selects the utf2 entry while the preferred (2,INT) slot goes to the plain int2",
+    "float10_float16_dedicated_slots": "MATCH: typecache10/typecache16 serve getBase(10/16,TYPE_FLOAT) after cacheCoreTypes",
+    "char_size5_and_cache_miss_exception": "MATCH: getTypeChar(5) and the raw-factory getTypeChar(1) raise the verbatim Request for unsupported character data-type LowlevelError",
+    "raw_constructor_state": "MATCH: the stack-allocated raw TypeFactory reproduces the uninitialized alignment map LowlevelError on getBase and the self-caching getTypeVoid singleton",
+    "existing_noncore_to_core_promotion_factory_view": "MATCH: the promoted registration keeps name/id/size and flips core, wins preferred/nochar after cacheCoreTypes, and survives clearNoncore",
+    "same_name_conflicting_core_registration": "MATCH: both conflict variants (size and char/plain submeta) return the verbatim alter-definition LowlevelError with unchanged survivor state and unaffected preferred cache",
+    "decode_core_types_stream_rebuild": "MATCH: full clear + force-core children + cacheCoreTypes; the decoded void enters nametree/tree with its explicit id and serves getTypeVoid",
+    "core_enum_cache_participation": "MATCH: decoded enum_int children enter the ordered tree through findAdd; with no plain size-1 INT competitor the enum wins type_nochar while the preferred slot falls through to an unnamed entry",
+    "decode_error_partial_state": "MATCH: the shared-id stream decodes its first child, throws the Shared type id LowlevelError (first line verbatim), leaves the conflicting name absent and the cache pass unrun; the id-less named void raises Datatype must have a valid id",
+    "max_basetype_size_array_conversion": "MATCH: getBase(20,TYPE_INT)/getBase(12,TYPE_FLOAT) convert to unnamed arrays of the cached 1-byte unknown with element identity and repeat canonicalization",
     "external_old_handle_lifetime_after_clear": "UNTESTED: Ghidra deletes the objects while an external Rust Arc can retain them; no invalid Ghidra pointer is compared; TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
-    "decode_core_types_stream_rebuild": "MISSING: Rust retains core entries with clear_non_core and skips every child instead of Ghidra clear()+decodeTypeNoRef(forcecore=true); TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "wide_character_and_float10_float16_slots": "UNTESTED: TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "core_enum_cache_participation": "MISMATCH: decoded core enums enter the flat name map through insert but not base_type_tree, so the signed-size1 pre-enum type_nochar assignment and enum exclusion order cannot run; TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "get_type_char_missing_cache_exception": "MISMATCH: the cached custom-name path matches, but the historical Rugra API still constructs a character type on cache miss instead of throwing Ghidra's unsupported-character LowlevelError; TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "same_name_conflicting_core_registration": "MISMATCH: the compatibility API panics with Ghidra's message instead of returning a Rust Result equivalent to LowlevelError, so the exception type differs; TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "existing_noncore_to_core_alias_identity": "MISMATCH: immutable Arc promotion replaces the factory canonical Arc, so an external pre-promotion Arc does not observe Ghidra's in-place core flag mutation; TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
-    "constructor_empty_factory_state": "MISMATCH: Rugra TypeFactory::new is architecture-bootstrap glue and installs core types, while the raw Ghidra TypeFactory constructor only clears caches; the fixture intentionally clears both factories before its projection; TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "external_stale_handle_promotion_flag_visibility": "MISMATCH: Ghidra ORs the core flag in place so a stale external pointer observes it; Rugra's immutable Arc replaces every factory channel instead, so only factory-mediated observations match. Requires the datatype.rs interior-mutability rework (separate lease); TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+    "legacy_arc_wrapper_callers": "MISMATCH: set_core_type/get_base/get_type_void keep Arc/Option compat signatures for leased callers (cpool.rs/merge.rs tests, grammar.rs); the faithful Result twins are exercised here; TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001",
+    "production_alignment_map_wiring": "UNTESTED: findAdd's alignment gate is enforced only on get_base_result because Rugra's architecture wiring does not feed the decoded map to the factory yet; the fixture installs the production map explicitly; TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001",
     "rust_lock_poisoning": "UNTESTED: RwLock is Rust ownership glue with no Ghidra input equivalent; TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "max_basetype_size_array_conversion": "MISSING: get_base does not carry Architecture::max_basetype_size and cannot yet take Ghidra's array-of-unknown-byte branch; TYPEFACTORY-LOCALTYPE-CACHE-0001",
-    "general_pointer_array_aggregate_tree": "MISMATCH: existing TYPE-0001 structural-registry gap",
+    "general_pointer_array_aggregate_tree": "MISMATCH: existing TYPE-0001 structural-registry gap (container component ordering and the multi-id name cross-reference)",
     "code_pointer_constructor_destructor_decode": "MISSING: follow-up TYPEFACTORY-CODEFLAGS-DECODE-0001"
   },
   "residual_todo_ids": [
     "TYPEFACTORY-LOCALTYPE-CACHE-0001",
     "TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+    "TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001",
+    "TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001",
     "TYPEFACTORY-CODEFLAGS-DECODE-0001",
     "TYPE-0001"
   ],
   "projection_status": "MATCH",
   "overall_status": "MISMATCH",
-  "status_note": "All 99 targeted TypeFactory local core-cache/name/nochar/clear observations are byte-identical against locked Ghidra 12.0.4. The mapped functions and module are not globally MATCH because existing-noncore promotion identity, raw-constructor state, large-base conversion, decode, error, and non-atomic tree behavior remain MISMATCH/MISSING/UNTESTED as listed in coverage."
+  "status_note": "All 220 targeted TypeFactory observations — the original 99 cache/nochar/clear records plus the REWORK waves for wide/float slots, raw-constructor state, promotion, conflict partial state, decodeCoreTypes (enum tree participation, shared-id and missing-id errors), and the large-base array conversion — are byte-identical against locked Ghidra 12.0.4. The module remains overall MISMATCH/L2: external stale-handle promotion flag visibility (immutable Arc model), the legacy Arc compat wrappers, production alignment-map wiring, the general container tree/multi-id name map (TYPE-0001), and the code-flags decode family stay registered."
 }
