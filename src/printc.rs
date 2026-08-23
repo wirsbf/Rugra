@@ -2566,6 +2566,17 @@ impl PrintC {
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
 
+            // Rugra's dead ops can stay in a block's op list snapshots
+            // (Ghidra's Funcdata::opDestroy unlinks them from the owning
+            // BlockBasic immediately, and the structure graph wraps the
+            // ORIGINAL blocks via BlockGraph::buildCopy block.cc:1925, so
+            // Ghidra never iterates a destroyed op). Same guard as
+            // emit_block_basic_rpn: skip destroyed ops before any emission
+            // or def-map bookkeeping.
+            if op.is_dead() {
+                continue;
+            }
+
             // Update block-local register def map: track last op writing to each register
             if let Some(ref out_arc) = op.output {
                 let out_vn = out_arc.read().unwrap();
@@ -2717,6 +2728,12 @@ impl PrintC {
 
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
+            // Destroyed ops are not part of a Ghidra block (opDestroy unlinks
+            // them), so they must not count as emittable body content. Same
+            // guard as emit_block_ops / emit_block_basic_rpn.
+            if op.is_dead() {
+                continue;
+            }
             // Skip branches, COPY, phi-nodes — same skip set as emit_block_ops
             // (emit_block_ops:315-323 skips CBRANCH/BRANCH/BRANCHIND/COPY/MULTIEQUAL/INDIRECT).
             match op.opcode {

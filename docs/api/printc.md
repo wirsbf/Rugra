@@ -16,6 +16,23 @@ prototype remain separate residuals; the module remains L2.
 ## 文档状态
 
 - **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——默认 RPN 把 invisible root group 发成未闭合 `(`；多数 op 绕过 RPN，terminal mask 被忽略，`doc_function` 又重发顶层循环。当前 11.3.2 最终 C golden 只作回归诊断，不能证明 12.0.4 token/markup parity。详见 `CONTROL_OUTPUT_PIPELINES_2026-08-11.md`。
+- **2026-08-23 修复（`PIPE-ORDER-EMPTYELSE-0001` 空 else defect——legacy
+  发射路径补 `is_dead` guard）**:
+  `emit_block_ops` 与 `is_block_body_empty` 此前不跳过已销毁（`DEAD` flag）的
+  PcodeOp——只有 RPN 路径 `emit_block_basic_rpn` 有该 guard。Ghidra 的不变式
+  是 `Funcdata::opDestroy`（funcdata_op.cc:203-222）立即把 op 从所属
+  BlockBasic 的 op 列表摘除，且结构图 `BlockGraph::buildCopy`
+  （block.cc:1925-1936）用 `BlockCopy` 包**原始**块而非克隆，所以 oracle
+  从不会迭代到已销毁 op。Rugra 的 `build_copy`（blockaction.rs:98）把 op
+  列表快照进克隆块，快照之后销毁的 op（flags 含 `DEAD`）滞留在结构节点里；
+  fullloop 尾部 `ActionDeadCode`（coreaction.cc:5682 槽位）销毁的 op 即属
+  此类。后果：else 臂块（仅含 dead INT_ADD + implied LOAD/COPY）被
+  `is_block_body_empty` 判为非空 → 打印 `} else { }`（E2E 唯一 defect，
+  getparameter.constprop.0）。修复：两个函数的 per-op 循环头部加
+  `if op.is_dead() { continue; }`，与 `emit_block_basic_rpn` 的既有 guard
+  一致——在可观测边界恢复 oracle 的块列表不变式。E2E（curl_1204 golden）：
+  defects 1→0、numbering=0、skeleton 2452→2083（28 个函数全部只降不升，
+  `__libc_csu_fini`/`main_free` 达 identical）。
 - **2026-08-17 修复（`PRINTC-BINARY-RPN-0001` 二元 op 接入 RPN token 流）**:
   `dispatch_op_rpn` 的二元算术/比较/逻辑臂此前 `emit.tag_op(" + ")` 直发，
   括号决策全靠 legacy 侧 `child_needs_parens` 的**倒置教科书启发式**（左操作数
