@@ -82,6 +82,7 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | BLOCK-FINDIRREDUCIBLE-0001 | DONE | a494832→636daa1 | 机制C APPROVE，fixture 90 |
 | LANEDIVIDE-INFRA-0001 | DONE | 3fb7be7→a8bd8d0 | 机制C APPROVE，fixture 91 |
 | DATATYPE-TYPEORDER-RESIDUAL-0001 | DONE | c14dfa9→1180a72 | 机制C APPROVE（证据型） |
+| COMMENT-SORTER-PRINTC-0001 | DONE | 57f39db→c5e685c | 纯重构：E2E 输出与基线逐字节一致（sha 9e6dfd51…）；None 分支补 setupOpList(NULL) 语义；fixture 重钉后 exit0；残差仅剩 block-cover/db-comment-clone 两表示层 |
 | COMMENT-SORTER-ITERATORS-0001 | DONE | dc6eb2c→d7a9cae | root 验证，fixture 92 |
 | TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | DONE | 7163dec→a5ceae7 |
 | PIPE-STAGE-BISECT-0001 | DONE | 9513f07→d915255 | 纯工具（stage_bisect.py+selftest 13/13+atf 骨架），root selftest 复验通过 |
