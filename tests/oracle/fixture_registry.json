@@ -3750,6 +3750,35 @@
       "rust_function_ids": [
         "varnode::Varnode::copy_symbol_arc"
       ]
+    },
+    {
+      "id": "funcdata_calcnzm_1204",
+      "description": "Funcdata::calcNZMask 2-phase DFS+worklist vs locked 12.0.4: const/nonconst/spacebase unwritten init, INT_AND convergence, COPY chains, PIECE, INT_DIV family tightening, MULTIEQUAL clipping + worklist fixed point (6/6 MATCH)",
+      "runner": [
+        "tools/run_funcdata_calcnzm_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_calcnzm_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/funcdata_calcnzm_1204.cc",
+          "rust_fixture": "tests/oracle/funcdata_calcnzm_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Funcdata::calcNZMask",
+        "PcodeOp::getNZMaskLocal"
+      ],
+      "rust_function_ids": [
+        "funcdata::Funcdata::calc_nz_mask",
+        "funcdata::Funcdata::pcode_op_nz_mask_local"
+      ]
     }
   ]
 }
