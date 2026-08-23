@@ -100,4 +100,11 @@ Known residuals:
   this byte-for-byte for the fixture's `0x00..0x10` domain; arbitrary
   `>=0x80` byte strings remain constrained by the current UTF-8 `Encoder`
   interface and are not claimed as `MATCH`.
+- 2026-08-23 (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001): the in-file test
+  fixture helper `fixture_type` now registers core types through the faithful
+  `set_core_type_result` twin (panicking with the oracle LowlevelError text,
+  the exact throw semantics of type.cc:3178) instead of the legacy
+  `set_core_type` Arc wrapper. Fixture behavior is unchanged; the runner's
+  Rugra snapshot base is re-pinned to 71971b2 (whose TypeFactory provides the
+  Result twins) with comparand hashes re-recorded.
 <!-- annotation-pass: 2026-07-04 -->

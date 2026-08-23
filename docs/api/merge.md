@@ -457,6 +457,13 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
   `factory_nochar_distinct` 直接 `Arc::ptr_eq`；fixture 使用
   `signed_byte_custom`/`ascii_glyph_custom` 仍保持投影一致。Java/CPOOL 与
   持久通道残差不变。
+- 2026-08-23 (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001)：
+  `factory_nochar_distinct` 迁移到 faithful `get_base_result`/
+  `get_base_no_char_result`（Ghidra getBase/getBaseNoChar 为 non-const，
+  type.cc:3619-3660，故取写锁）；oracle 的 LowlevelError（如未初始化
+  alignment map，type.cc:3300-3302）在 merge walk 无法传播，按 throw 语义
+  显式 panic 带上下文。reachable 状态（缓存命中/工厂注册态）输出与旧
+  lenient twin 逐 Arc 等价；三态注册单测同步迁移。
 
 ### 2026-08-16（MERGE-PREEXISTING-GATES-0001）：五项预存在门/方向缺口
 - `merge_indirect` 全路径重写（merge.cc:846-882）：isAddrForce 门、

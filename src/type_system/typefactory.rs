@@ -344,6 +344,20 @@ impl TypeFactory {
     /// callers on factories whose architecture wiring has not installed an
     /// alignment map yet (registered residual
     /// TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001).
+    ///
+    /// TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 status: every in-lease caller
+    /// (cpool.rs, merge.rs, grammar.rs, typefactory internals) is migrated to
+    /// [`Self::get_base_result`]. The twin is retained for callers outside
+    /// that lease, which take `&TypeFactory` read guards and cannot take the
+    /// `&mut` the faithful twin needs:
+    /// - `src/arch.rs` (the architecture type-query helper at arch.rs:2327),
+    /// - `src/varnode.rs`, `src/userop.rs`, `src/varmap.rs`,
+    /// - `src/coreaction.rs`, `src/ruleaction.rs`,
+    /// - internal [`Self::concretize`] (type.cc:4147; `varmap.rs:2546` holds a
+    ///   read guard on the factory),
+    /// - the pinned `typefactory_local_cache_1204` differential snapshot base
+    ///   (71971b2 `cpool.rs:614`/`merge.rs` compile against this file).
+    /// Migrate them when their leases free up, then delete this twin.
     pub fn get_base(&self, size: usize, m: TypeMetatype) -> Option<Arc<Datatype>> {
         let cache_key = (size, m);
         let cache = self
@@ -501,6 +515,14 @@ impl TypeFactory {
     /// Get a canonical base type, excluding the printable ASCII character
     /// specialization for a one-byte signed integer when a non-character core
     /// type was selected by `cache_core_types`.
+    ///
+    /// TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 status: every in-lease caller
+    /// (merge.rs `factory_nochar_distinct`, typefactory tests) is migrated to
+    /// [`Self::get_base_no_char_result`]; this twin has ZERO current-tree
+    /// callers and is retained only because the pinned
+    /// `typefactory_local_cache_1204` differential snapshot base (296c128
+    /// `merge.rs:3198`) compiles against this file. Delete it when that
+    /// runner is re-pinned to a post-rework base.
     pub fn get_base_no_char(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>> {
         if size == 1 && metatype == TypeMetatype::Int {
             let nochar = self
@@ -1128,9 +1150,17 @@ impl TypeFactory {
     }
 
     // RUGRA-GLUE: shared-reference twin of [`Self::get_type_void_result`]
-    /// for callers holding `&TypeFactory` (userop/funcdata). Every production
-    /// factory bootstraps the void core type, so the cache/name lookup always
+    /// for callers holding `&TypeFactory`. Every production factory
+    /// bootstraps the void core type, so the cache/name lookup always
     /// resolves; the raw-constructor creation path is the `_result` variant.
+    ///
+    /// TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 status: every in-lease caller
+    /// (decode_type_no_ref, decode_code_define, typefactory tests) is
+    /// migrated to [`Self::get_type_void_result`]. The twin is retained for
+    /// callers outside that lease that hold `&TypeFactory`/read guards:
+    /// `src/userop.rs` (tests), `src/funcdata.rs:7022`,
+    /// `src/coreaction.rs:5988/5993`. Migrate them when their leases free
+    /// up, then delete this twin.
     pub fn get_type_void(&self) -> Arc<Datatype> {
         {
             let cache = self
@@ -1480,8 +1510,14 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&key) {
             return existing;
         }
-        let stripped = self.get_base(sz, TypeMetatype::Unknown);
-        let mut ps = TypePartialStruct::new(contain, off, sz, stripped);
+        // Ghidra: Datatype *strip = getBase(sz, TYPE_UNKNOWN); (type.cc:3932)
+        // — the faithful Result twin; its LowlevelError (findAdd alignment
+        // on an uninitialized map, type.cc:3300-3302) is a throw in the
+        // oracle, surfaced as the LowlevelError panic here.
+        let stripped = self
+            .get_base_result(sz, TypeMetatype::Unknown)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        let mut ps = TypePartialStruct::new(contain, off, sz, Some(stripped));
         ps.base.name = key.clone();
         let dt = Arc::new(Datatype::PartialStruct(ps));
         self.types.insert(key, dt.clone());
@@ -1503,8 +1539,13 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&key) {
             return existing;
         }
-        let stripped = self.get_base(sz, TypeMetatype::Unknown);
-        let mut pe = TypePartialEnum::new(contain, off, sz, stripped);
+        // Ghidra: Datatype *strip = getBase(sz, TYPE_UNKNOWN); (type.cc:3983)
+        // — faithful Result twin; see get_type_partial_struct for the
+        // LowlevelError panic rationale.
+        let stripped = self
+            .get_base_result(sz, TypeMetatype::Unknown)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        let mut pe = TypePartialEnum::new(contain, off, sz, Some(stripped));
         pe.base.name = key.clone();
         let dt = Arc::new(Datatype::PartialEnum(pe));
         self.types.insert(key, dt.clone());
@@ -1526,8 +1567,13 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&key) {
             return existing;
         }
-        let stripped = self.get_base(sz, TypeMetatype::Unknown);
-        let mut pu = TypePartialUnion::new(contain, off, sz, stripped);
+        // Ghidra: Datatype *strip = getBase(sz, TYPE_UNKNOWN); (type.cc:3958)
+        // — faithful Result twin; see get_type_partial_struct for the
+        // LowlevelError panic rationale.
+        let stripped = self
+            .get_base_result(sz, TypeMetatype::Unknown)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        let mut pu = TypePartialUnion::new(contain, off, sz, Some(stripped));
         pu.base.name = key.clone();
         let dt = Arc::new(Datatype::PartialUnion(pu));
         self.types.insert(key, dt.clone());
@@ -1756,8 +1802,11 @@ impl TypeFactory {
             }
         }
         if ptrto.is_enum_type() {
-            // Go "into" the enumeration: build a pointer to a 1-byte uint.
-            let tmp = self.get_base(1, TypeMetatype::Uint)?;
+            // Go "into" the enumeration: build a pointer to a 1-byte uint
+            // (type.cc:1104 getBase(1, TYPE_UINT) — non-const, may throw).
+            let tmp = self
+                .get_base_result(1, TypeMetatype::Uint)
+                .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
             *off = 0;
             return Some(self.get_type_pointer(ptr.base.size, tmp, ptr.wordsize));
         }
@@ -1815,28 +1864,20 @@ impl TypeFactory {
                         }
                     }
                     None => {
-                        // Ghidra: base = typegrp.getBase(1, TYPE_UNKNOWN).
-                        return self.get_base(1, TypeMetatype::Unknown)
-                            .unwrap_or_else(|| {
-                                Arc::new(Datatype::Base(TypeBase::new(
-                                    "undefined1".to_string(),
-                                    1,
-                                    TypeMetatype::Unknown,
-                                )))
-                            });
+                        // Ghidra: base = typegrp.getBase(1, TYPE_UNKNOWN)
+                        // (type.cc:2702) — non-null, may throw LowlevelError;
+                        // the faithful Result twin panics with that message.
+                        return self
+                            .get_base_result(1, TypeMetatype::Unknown)
+                            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
                     }
                 }
             }
             cur
         } else {
-            // off <= 0: unknown.
-            self.get_base(1, TypeMetatype::Unknown).unwrap_or_else(|| {
-                Arc::new(Datatype::Base(TypeBase::new(
-                    "undefined1".to_string(),
-                    1,
-                    TypeMetatype::Unknown,
-                )))
-            })
+            // off <= 0: unknown (type.cc:2705 getBase(1, TYPE_UNKNOWN)).
+            self.get_base_result(1, TypeMetatype::Unknown)
+                .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
         }
     }
 
@@ -2039,6 +2080,14 @@ impl TypeFactory {
     /// of size 1 is replaced with the factory's `getBase(1, TYPE_UNKNOWN)`
     /// output (same object identity on repeated calls); anything else is
     /// returned unchanged.
+    ///
+    /// TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 note: the Ghidra method is
+    /// non-const, but Rugra's caller (`varmap.rs:2546`, varmap.cc:622) holds
+    /// a read guard on the shared factory, pinning this port to `&self` and
+    /// therefore to the lenient `get_base` twin (cache/tree probe without the
+    /// findAdd alignment error) — the cached `undefined1` core entry hits the
+    /// identical typecache fast path as the oracle's getBase, so the
+    /// observable result is the canonical entry in every reachable state.
     pub fn concretize(&self, ct: Arc<Datatype>) -> Arc<Datatype> {
         if ct.get_metatype() == TypeMetatype::Code {
             debug_assert_eq!(
@@ -2241,12 +2290,17 @@ impl TypeFactory {
         Ok(self.promote_core(&ct))
     }
 
-    // RUGRA-GLUE: Arc-returning compatibility wrapper around
-    /// [`Self::set_core_type_result`] for callers written before the Result
-    /// port (cpool.rs/merge.rs test fixtures; their files are under other
-    /// leases). The faithful LowlevelError-equivalent path is
-    /// `set_core_type_result`; migrate callers when their leases free up
-    /// (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001).
+    // RUGRA-GLUE: Arc-returning thin assertion layer around
+    /// [`Self::set_core_type_result`]. TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001
+    /// status: every in-lease caller (cpool.rs test fixture, merge.rs test,
+    /// typefactory tests) is migrated to the faithful Result twin, which
+    /// surfaces Ghidra's findAdd LowlevelError (type.cc:3412-3438) as `Err`.
+    /// This layer has ZERO current-tree callers and is retained only because
+    /// the pinned `typefactory_local_cache_1204` differential snapshot base
+    /// (71971b2 `cpool.rs:614`, `merge.rs`) compiles against this file; it
+    /// panics with the oracle's LowlevelError message, exactly the throw
+    /// semantics of type.cc:3178. Delete it when that runner is re-pinned
+    /// to a post-migration commit.
     pub fn set_core_type(
         &mut self,
         name: &str,
@@ -2876,7 +2930,7 @@ impl TypeFactory {
             .element_name(elem_id)
             .unwrap_or_default();
         if elem_name == "void" {
-            let ct = self.get_type_void(); // Automatically a coretype.
+            let ct = self.get_type_void_result(); // Automatically a coretype.
             if elem_id != 0 {
                 decoder.close_element(elem_id);
             }
@@ -3436,7 +3490,7 @@ impl TypeFactory {
             }
         };
         // Ghidra: tc.decodePrototype(decoder, isConstructor, isDestructor, *this);
-        let voidtype = self.get_type_void();
+        let voidtype = self.get_type_void_result();
         tc.decode_prototype(decoder, is_constructor, is_destructor, voidtype)?;
         // Ghidra: if (!ct->isIncomplete()) {
         //           if (0 != ct->compareDependency(tc))
@@ -4019,8 +4073,8 @@ mod tests {
     #[test]
     fn test_get_type_void() {
         // type.cc:3575 — singleton void.
-        let factory = TypeFactory::new(8);
-        let v = factory.get_type_void();
+        let mut factory = TypeFactory::new(8);
+        let v = factory.get_type_void_result();
         assert_eq!(v.get_name(), "void");
         assert_eq!(v.get_metatype(), TypeMetatype::Void);
     }
@@ -4037,7 +4091,9 @@ mod tests {
             factory.get_type_char(1).unwrap_err(),
             "Request for unsupported character data-type"
         );
-        factory.set_core_type("char", 1, TypeMetatype::Int, true);
+        factory
+            .set_core_type_result("char", 1, TypeMetatype::Int, true)
+            .unwrap();
         factory.cache_core_types();
         let c = factory.get_type_char(1).expect("cached char");
         assert_eq!(c.get_size(), 1);
@@ -4070,7 +4126,9 @@ mod tests {
         assert!(u.needs_resolution());
         // Set fields: union size = max field size.
         let int_t = factory.find_by_name("int").unwrap();
-        factory.set_core_type("char", 1, TypeMetatype::Int, true);
+        factory
+            .set_core_type_result("char", 1, TypeMetatype::Int, true)
+            .unwrap();
         factory.cache_core_types();
         let char_t = factory.get_type_char(1).expect("cached char");
         let updated = factory
@@ -4284,7 +4342,9 @@ mod tests {
         // definition LowlevelError with no partial state.
         let mut factory = TypeFactory::new(8);
         factory.clear();
-        factory.set_core_type("plain_x", 1, TypeMetatype::Int, false);
+        factory
+            .set_core_type_result("plain_x", 1, TypeMetatype::Int, false)
+            .unwrap();
         let err = factory
             .set_core_type_result("plain_x", 2, TypeMetatype::Int, false)
             .unwrap_err();
@@ -4311,7 +4371,9 @@ mod tests {
             default_size: 8,
             far_pointer: None,
         });
-        factory.set_core_type("u1", 1, TypeMetatype::Unknown, false);
+        factory
+            .set_core_type_result("u1", 1, TypeMetatype::Unknown, false)
+            .unwrap();
         factory.cache_core_types();
         let big = factory.get_base_result(20, TypeMetatype::Int).unwrap();
         assert_eq!(big.get_metatype(), TypeMetatype::Array);
@@ -4344,7 +4406,10 @@ mod tests {
         // UTF16 is char-printable: charcache[2] holds it.
         assert!(Arc::ptr_eq(&factory.get_type_char(2).unwrap(), &wide2));
         // But not ASCII: the preferred (2, INT) slot goes to the plain int.
-        assert!(Arc::ptr_eq(&factory.get_base(2, TypeMetatype::Int).unwrap(), &plain2));
+        assert!(Arc::ptr_eq(
+            &factory.get_base_result(2, TypeMetatype::Int).unwrap(),
+            &plain2
+        ));
         // Float10/16 dedicated slots.
         assert!(Arc::ptr_eq(&factory.get_base_result(10, TypeMetatype::Float).unwrap(), &f10));
         assert!(Arc::ptr_eq(&factory.get_base_result(16, TypeMetatype::Float).unwrap(), &f16));
@@ -4385,11 +4450,11 @@ mod tests {
         let dk_enum = factory.find_by_name("dk_enum").unwrap();
         assert!(dk_enum.is_coretype());
         assert!(dk_enum.is_enum_type());
-        let nochar = factory.get_base_no_char(1, TypeMetatype::Int).unwrap();
+        let nochar = factory.get_base_no_char_result(1, TypeMetatype::Int).unwrap();
         assert!(Arc::ptr_eq(&nochar, &dk_enum));
         // The enum break leaves typecache[1][INT] to the ASCII char.
         let dk_char = factory.find_by_name("dk_char").unwrap();
-        let preferred = factory.get_base(1, TypeMetatype::Int).unwrap();
+        let preferred = factory.get_base_result(1, TypeMetatype::Int).unwrap();
         assert!(Arc::ptr_eq(&preferred, &dk_char));
     }
 
@@ -4414,7 +4479,7 @@ mod tests {
         // type.cc:4002 — builds a TypeCode with an attached prototype.
         let mut factory = TypeFactory::new(8);
         let int_t = factory.find_by_name("int").unwrap();
-        let void_t = factory.get_type_void();
+        let void_t = factory.get_type_void_result();
         let in_types = vec![int_t.clone(), int_t];
         let sig = crate::fspec::PrototypePieces {
             out_type: Some(void_t.as_ref()),
@@ -4428,7 +4493,7 @@ mod tests {
             factory.find_by_name("int").unwrap(),
             factory.find_by_name("int").unwrap(),
         ];
-        let void_t2 = factory.get_type_void();
+        let void_t2 = factory.get_type_void_result();
         let sig2 = crate::fspec::PrototypePieces {
             out_type: Some(void_t2.as_ref()),
             in_types: &in_types2,
@@ -4456,7 +4521,7 @@ mod tests {
         let dt = Arc::new(Datatype::Code(TypeCode { base, proto: None }));
         factory.types.insert("incomplete_code".to_string(), dt);
         // Set a prototype on it.
-        let void_t = factory.get_type_void();
+        let void_t = factory.get_type_void_result();
         let proto = crate::fspec::FuncProto::new("f".to_string(), void_t);
         let updated = factory
             .set_prototype("incomplete_code", Some(&proto), 0)
@@ -4476,7 +4541,7 @@ mod tests {
         // type.cc:3518 — setting a prototype on a complete code type errors.
         let mut factory = TypeFactory::new(8);
         let code = factory.get_type_code(); // complete (no TYPE_INCOMPLETE)
-        let void_t = factory.get_type_void();
+        let void_t = factory.get_type_void_result();
         let proto = crate::fspec::FuncProto::new("f".to_string(), void_t);
         let res = factory.set_prototype("code", Some(&proto), 0);
         assert!(res.is_err());
@@ -4485,14 +4550,25 @@ mod tests {
     #[test]
     fn test_unknown_base_is_canonical_by_size() {
         let mut factory = TypeFactory::new(8);
-        let core = factory.get_base(8, TypeMetatype::Unknown).unwrap();
-        let core_again = factory.get_base(8, TypeMetatype::Unknown).unwrap();
+        // The faithful getBase twin runs findAdd, whose alignment computation
+        // requires the architecture-installed map (type.cc:3300-3302) — the
+        // same setupSizes the oracle runs on every production factory
+        // (type.cc:3160); clear()/clearNoncore deliberately retain it
+        // (type.cc:3251/3266).
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        let core = factory.get_base_result(8, TypeMetatype::Unknown).unwrap();
+        let core_again = factory.get_base_result(8, TypeMetatype::Unknown).unwrap();
         assert!(Arc::ptr_eq(&core, &core_again));
         assert_eq!(core.get_name(), "undefined8");
         assert!(core.is_coretype());
 
-        let anonymous = factory.get_base(3, TypeMetatype::Unknown).unwrap();
-        let anonymous_again = factory.get_base(3, TypeMetatype::Unknown).unwrap();
+        let anonymous = factory.get_base_result(3, TypeMetatype::Unknown).unwrap();
+        let anonymous_again = factory.get_base_result(3, TypeMetatype::Unknown).unwrap();
         assert!(Arc::ptr_eq(&anonymous, &anonymous_again));
         assert!(!Arc::ptr_eq(&core, &anonymous));
         assert_eq!(anonymous.get_name(), "");
@@ -4504,8 +4580,8 @@ mod tests {
         assert!(ordered.iter().any(|datatype| Arc::ptr_eq(datatype, &anonymous)));
 
         factory.clear_non_core();
-        let recreated = factory.get_base(3, TypeMetatype::Unknown).unwrap();
-        let recreated_again = factory.get_base(3, TypeMetatype::Unknown).unwrap();
+        let recreated = factory.get_base_result(3, TypeMetatype::Unknown).unwrap();
+        let recreated_again = factory.get_base_result(3, TypeMetatype::Unknown).unwrap();
         assert!(!Arc::ptr_eq(&anonymous, &recreated));
         assert!(Arc::ptr_eq(&recreated, &recreated_again));
     }
@@ -4534,15 +4610,25 @@ mod tests {
         let mut factory = TypeFactory::new(8);
         factory.clear();
 
-        let plain_a = factory.set_core_type("plain_high", 1, TypeMetatype::Int, false);
-        let plain_b = factory.set_core_type("aaaaaaaa", 1, TypeMetatype::Int, false);
-        let uint_a = factory.set_core_type("unsigned_custom_a", 1, TypeMetatype::Uint, false);
-        let uint_b = factory.set_core_type("unsigned_custom_b", 1, TypeMetatype::Uint, false);
-        let ascii = factory.set_core_type("custom_ascii_glyph", 1, TypeMetatype::Int, true);
+        let plain_a = factory
+            .set_core_type_result("plain_high", 1, TypeMetatype::Int, false)
+            .unwrap();
+        let plain_b = factory
+            .set_core_type_result("aaaaaaaa", 1, TypeMetatype::Int, false)
+            .unwrap();
+        let uint_a = factory
+            .set_core_type_result("unsigned_custom_a", 1, TypeMetatype::Uint, false)
+            .unwrap();
+        let uint_b = factory
+            .set_core_type_result("unsigned_custom_b", 1, TypeMetatype::Uint, false)
+            .unwrap();
+        let ascii = factory
+            .set_core_type_result("custom_ascii_glyph", 1, TypeMetatype::Int, true)
+            .unwrap();
         factory.cache_core_types();
 
         let preferred = factory
-            .get_base(1, TypeMetatype::Int)
+            .get_base_result(1, TypeMetatype::Int)
             .expect("preferred signed byte");
         assert!(Arc::ptr_eq(&preferred, &ascii));
         let preferred_char = factory.get_type_char(1).expect("cached char");
@@ -4554,7 +4640,7 @@ mod tests {
             &plain_b
         };
         let nochar = factory
-            .get_base_no_char(1, TypeMetatype::Int)
+            .get_base_no_char_result(1, TypeMetatype::Int)
             .expect("non-character signed byte");
         assert!(Arc::ptr_eq(&nochar, expected_nochar));
 
@@ -4564,7 +4650,7 @@ mod tests {
             &uint_b
         };
         let preferred_uint = factory
-            .get_base(1, TypeMetatype::Uint)
+            .get_base_result(1, TypeMetatype::Uint)
             .expect("preferred unsigned byte");
         assert!(Arc::ptr_eq(&preferred_uint, expected_uint));
         assert_eq!(preferred.get_name(), "custom_ascii_glyph");
@@ -4575,48 +4661,56 @@ mod tests {
         let mut factory = TypeFactory::new(8);
         factory.clear();
 
-        let first_plain = factory.set_core_type("aaaaaaaa", 1, TypeMetatype::Int, false);
-        let ascii = factory.set_core_type("custom_ascii_glyph", 1, TypeMetatype::Int, true);
+        let first_plain = factory
+            .set_core_type_result("aaaaaaaa", 1, TypeMetatype::Int, false)
+            .unwrap();
+        let ascii = factory
+            .set_core_type_result("custom_ascii_glyph", 1, TypeMetatype::Int, true)
+            .unwrap();
         factory.cache_core_types();
-        let first_preferred = factory.get_base(1, TypeMetatype::Int).unwrap();
-        let first_nochar = factory.get_base_no_char(1, TypeMetatype::Int).unwrap();
+        let first_preferred = factory.get_base_result(1, TypeMetatype::Int).unwrap();
+        let first_nochar = factory.get_base_no_char_result(1, TypeMetatype::Int).unwrap();
         assert!(Arc::ptr_eq(&first_preferred, &ascii));
         assert!(Arc::ptr_eq(&first_nochar, &first_plain));
 
         factory.cache_core_types();
         assert!(Arc::ptr_eq(
             &first_preferred,
-            &factory.get_base(1, TypeMetatype::Int).unwrap()
+            &factory.get_base_result(1, TypeMetatype::Int).unwrap()
         ));
         assert!(Arc::ptr_eq(
             &first_nochar,
-            &factory.get_base_no_char(1, TypeMetatype::Int).unwrap()
+            &factory.get_base_no_char_result(1, TypeMetatype::Int).unwrap()
         ));
 
-        let late_plain = factory.set_core_type("zzzzzzzz", 1, TypeMetatype::Int, false);
+        let late_plain = factory
+            .set_core_type_result("zzzzzzzz", 1, TypeMetatype::Int, false)
+            .unwrap();
         assert!(late_plain.get_id() > first_plain.get_id());
         factory.cache_core_types();
         assert!(Arc::ptr_eq(
             &ascii,
-            &factory.get_base(1, TypeMetatype::Int).unwrap()
+            &factory.get_base_result(1, TypeMetatype::Int).unwrap()
         ));
         assert!(Arc::ptr_eq(
             &late_plain,
-            &factory.get_base_no_char(1, TypeMetatype::Int).unwrap()
+            &factory.get_base_no_char_result(1, TypeMetatype::Int).unwrap()
         ));
 
         factory.clear();
         factory.clear();
         assert!(factory.find_by_name("custom_ascii_glyph").is_none());
-        let post_clear = factory.set_core_type("post_clear_plain", 1, TypeMetatype::Int, false);
+        let post_clear = factory
+            .set_core_type_result("post_clear_plain", 1, TypeMetatype::Int, false)
+            .unwrap();
         factory.cache_core_types();
         assert!(Arc::ptr_eq(
             &post_clear,
-            &factory.get_base(1, TypeMetatype::Int).unwrap()
+            &factory.get_base_result(1, TypeMetatype::Int).unwrap()
         ));
         assert!(Arc::ptr_eq(
             &post_clear,
-            &factory.get_base_no_char(1, TypeMetatype::Int).unwrap()
+            &factory.get_base_no_char_result(1, TypeMetatype::Int).unwrap()
         ));
     }
 

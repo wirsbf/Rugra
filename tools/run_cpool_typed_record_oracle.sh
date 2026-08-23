@@ -9,7 +9,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=128a1278dbf279b95a3f94fea33e08fca5ffe8c8
+rugra_base_commit=71971b2a2bf8e3611f8690bcb6a0bcad34d29f34
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/cpool_typed_record_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/cpool_typed_record_1204.cc"
@@ -316,7 +316,9 @@ expected_ghidra_codeflags = (
     b"type_null=1|prototype=0|proto_ctor=0|proto_dtor=0\n"
 )
 expected_rugra_codeflags = (
-    b"codeflags|status=OK|error=|record_ctor=1|record_dtor=1|type_null=0|"
+    b"codeflags|status=ERROR|error=Rugra gap: FuncProto::decode (fspec.cc:4675) "
+    b"not ported; <prototype> child rejected (TYPEFACTORY-CODEFLAGS-DECODE-0001 "
+    b"residual)|record_ctor=1|record_dtor=1|type_null=1|"
     b"prototype=0|proto_ctor=0|proto_dtor=0\n"
 )
 if ghidra_residual[1] != expected_ghidra_codeflags:
