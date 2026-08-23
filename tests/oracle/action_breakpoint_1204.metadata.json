@@ -1,0 +1,157 @@
+{
+  "schema_version": 2,
+  "fixture_id": "ACTION-BREAKPOINT-RESUME-0001",
+  "status_note": "Breakpoint/resume MATCH: the locked Ghidra 12.0.4 oracle (real universalAction -> resetDefaults -> getCurrent tree plus scripted probe trees driven through the real setBreakPoint/getSubAction/getSubRule/perform/printState/clearBreakPoints) and Rugra's ported breakpoint machinery (real set_default_actions tree plus the same scripted probes) produce byte-identical 52-line observations covering name-path addressing with ambiguous duplicates, rule paths, set/clear bit landings, real-tree break_start stop/continue at the mainloop and stackstall heads with resume-equals-single equality, the leaf/group tmp+persistent breakpoint matrix, and a rule-level break_action interrupting and resuming a real ActionPool mid-pass with identical per-rule totals. Registered non-observed domains remain in coverage as UNTESTED and are bound to their residual TODO ids.",
+  "decisive_semantics": {
+    "reference_output_parameters": "perform/setBreakPoint operate on the shared per-Action members (status/count/lcount/count_tests/count_apply/breakpoint); Ghidra mutates them in place on the Action*/Rule* resolved by getSubAction/getSubRule, Rugra on the externalized ActionState slots held by the parent container or driver (plus the pool-side rule_breakpoints/rule_tests/rule_applies parallel vectors). ActionGroup::apply advances the protected state iterator in place (++state before the -1 return).",
+    "loop_bounds_traversal_order": "perform's do-while((lcount<count)&&rule_repeatapply) with the switch fall-through: status_start checks the start break BEFORE count_tests += 1; breakstarthit resumes into apply without re-checking the break or re-incrementing tests; actionbreak does not reapply; ActionGroup::apply walks list begin()->end() and resumes at ++state after a group actionbreak; ActionPool::apply walks beginOpAll()->endOpAll() with rule_index < perop[opc].size(), keeping op_state/rule_index across an interrupted apply; getSubAction/getSubRule descend child lists in registration order with matchcount>1 resolving to failure.",
+    "counter_accumulator_lifecycle": "count resets only at status_start and accumulates across an interrupted/resumed run (the pool keeps the interrupted carry internally and returns it with the resumed pass so the externalized total matches the oracle count member at completion); count_tests increments only on unbroken status_start entries; count_apply increments when lcount<count and before the action-break check; tmpbreak bits are cleared when hit (one-shot); per-rule count_tests increments before applyOp and count_apply after a positive return.",
+    "sorting_comparison_keys": "No sorting anywhere: name paths match by exact string equality (name==token, ruleName==remain); ambiguity (two matches) resolves to failure exactly as action.cc:475-476/806-808; per-op rule dispatch follows registration order; the only normalization is the documented underscore deletion for rule-name/spec projections, injective on both sides' name sets."
+  },
+  "oracle": {
+    "repository": "ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "fixture:universal-action-database",
+  "compiler_spec": {
+    "id": "none",
+    "model": "fixture"
+  },
+  "analysis_options": {
+    "apis": [
+      "Action::checkStartBreak",
+      "Action::checkActionBreak",
+      "Action::setBreakPoint",
+      "Action::clearBreakPoints",
+      "next_specifyterm",
+      "Action::getSubAction",
+      "Action::getSubRule",
+      "Action::perform",
+      "ActionGroup::apply",
+      "ActionPool::apply",
+      "ActionPool::processOp",
+      "Action::printState",
+      "ActionDatabase::universalAction",
+      "ActionDatabase::resetDefaults",
+      "ActionDatabase::getCurrent"
+    ],
+    "real_tree": "ActionDatabase::universalAction -> resetDefaults -> getCurrent (architecture.cc:582-591 production derivation); breakpoints set from the universal root and the resolved fullloop/stackstall subtrees driven through Action::perform (getSubAction's Action* equivalents)",
+    "real_tree_break_start": "break_start on universal:fullloop:mainloop observed at the fullloop subtree head, and on universal:fullloop:mainloop:stackstall resumed to completion and compared against a fresh single run (ActionStart and the unbounded followFlow head are outside the driven subtrees; the fixture architecture has no loader)",
+    "scripted_trees": "ScriptedAction/ProbeGroup control only apply() changes; perform/setBreakPoint/getSubAction/getSubRule/apply plumbing are the real locked implementations. Case D drives a real ActionPool (rule_repeatapply) with a CountingRule over two synthetic COPY ops",
+    "initialization": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop); shell Funcdata built through Scope::addFunction -> FunctionSymbol::getFunction (localmap attached by the Funcdata constructor); no loader, no SLEIGH",
+    "rule_names": "Rule names printed underscore-normalized (Rugra names rules in snake_case, the oracle without underscores, e.g. mult_neg_one vs multnegone); normalization is injective on both name sets (pool_purity_1204 precedent)",
+    "pool_resume_observation": "ActionPool::op_state/rule_index are default-private in the oracle header; the pool resume position is observed behaviorally through the rule's per-attempt/per-application trace with op addresses, identical projection on both sides",
+    "warnings": "rule_warnings_on absent in every case; issueWarning emission is not exercised",
+    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+    "normalization": "None besides the documented rule-name/spec underscore deletion; one fixed-order line stream and a final newline compared byte-for-byte"
+  },
+  "rugra_source": {
+    "base_commit": "55edaed3540dd7aa7565a1bad5679d9a37dd75f2",
+    "base_tree": "a929beecfc650658a3d4401554f59a1920b97624",
+    "base_src_tree": "281125cfb0baf116c840fc74e52415415bd771dc",
+    "base_action_blob": "35e806e0e7abbc2760bc6344a7d262de5b038464",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "68037414dfb0b725636a74a1c9d61bc6cd9020bb2c52603fb6837a747a021f73",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "68037414dfb0b725636a74a1c9d61bc6cd9020bb2c52603fb6837a747a021f73",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,inputs}, sort_keys=True, separators=(',',':'))",
+    "sha256": "d082640641fa2c5a6ccb46a7aa390dc8505eaf58fb4789c1b3740471be0a9de9",
+    "inputs": {
+      "binary": null,
+      "sleigh_specs": null,
+      "functions": [
+        {
+          "name": "fixture",
+          "entry": "0x1000 code space",
+          "construction": "Scope::addFunction shell (case B driving)"
+        },
+        {
+          "name": "c1..c6",
+          "entry": "0x4000..0x9100",
+          "construction": "fresh shell Funcdata per scripted case"
+        },
+        {
+          "name": "ds/dr",
+          "entry": "0xa000/0xb000",
+          "construction": "shell Funcdata + two synthetic COPY ops inserted at block end"
+        }
+      ],
+      "ghidra_fixture_architecture": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop)",
+      "rugra_entry": "ActionDatabase::set_default_actions -> get_action_mut(decompile) subtree driving + scripted ActionGroup/ActionPool probes"
+    }
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "18758e639f4db3fa377b12090df9f2bcfdcf4daf2a12b1cf2ad5d45735938b47",
+    "rust_fixture_sha256": "f099ddcd5ca45f7abbd0e7cbb9d1fc6f65f4d52b74cd478ae55839dfb386a1af",
+    "action_overlay_sha256": "26a834a207020eeb102a2c4a0aa5ef7859f9e329f2744bd34327da433563fda5",
+    "runner_sha256": "e45b85c3828d01562cf31abcecee9cec9cd4048bda590d18ae28318e67e5e023"
+  },
+  "coverage": {
+    "name_path_addressing": {
+      "status": "MATCH",
+      "covers": "getSubAction/getSubRule exact, deep, duplicate-disambiguated and ambiguous-failing resolutions on the real derived tree (action.cc:275/285/456/481/789), rule paths with pool projection, group-as-rule and rule-as-action failures, setBreakPoint/clearBreakPoints return values and bit landings",
+      "residual_todo_ids": []
+    },
+    "perform_break_start": {
+      "status": "MATCH",
+      "covers": "break_start returns -1 from status_start before count_tests increments, breakstarthit resume applies without re-check/re-increment, persistent re-fire at the next status_start, tmpbreak_start one-shot clearing (action.cc:52-60/306-315)",
+      "residual_todo_ids": []
+    },
+    "perform_break_action": {
+      "status": "MATCH",
+      "covers": "leaf break_action fires after the change is counted and resumes from status_actionbreak without reapply returning the accumulated count; group-level break_action steps after every changing child with ++state resume and the perform-level actionbreak after a zero-change apply; group tmpbreak_action one-shot with the clear published back to the externalized slot (action.cc:117-125/327-333/346-350/513-524)",
+      "residual_todo_ids": []
+    },
+    "real_tree_stop_continue": {
+      "status": "MATCH",
+      "covers": "break_start at universal:fullloop:mainloop observed through the fullloop subtree (printState fullloop:mainloop start, mainloop status 2), break_start at the stackstall head resumed to completion with count/state equal to a fresh single run (action.cc:295/298)",
+      "residual_todo_ids": []
+    },
+    "pool_rule_breakpoint_resume": {
+      "status": "MATCH",
+      "covers": "rule break_action interrupts ActionPool::processOp after the application, the resume continues from the same op without re-testing the fired rule's op, final per-rule test/apply totals and counts equal the uninterrupted single run (action.cc:718-726/822-887)",
+      "residual_todo_ids": []
+    },
+    "issue_warning_emission": {
+      "status": "UNTESTED",
+      "covers": "rule_warnings_on/rule_warnings_given message emission in perform (action.cc:41-48) and Rule::issueWarning (action.cc:638-645)",
+      "residual_todo_ids": [
+        "PIPE-BREAK-0001"
+      ]
+    },
+    "action_print_listing": {
+      "status": "UNTESTED",
+      "covers": "Action::print's console listing with 'S'/'A' breakpoint marks (action.cc:132-144) and ActionPool::printState's op SeqNum suffix (action.cc:777-787, Rugra SeqNum text format not yet aligned)",
+      "residual_todo_ids": [
+        "ACTION-BREAKPOINT-RESUME-0002"
+      ]
+    },
+    "rule_disable_enable": {
+      "status": "UNTESTED",
+      "covers": "Rule type_disable / disableRule / enableRule name-path toggles (action.cc:226-251, action.hh:225-226)",
+      "residual_todo_ids": [
+        "ACTION-BREAKPOINT-RESUME-0003"
+      ]
+    }
+  },
+  "residual_todo_ids": [
+    "PIPE-BREAK-0001",
+    "ACTION-BREAKPOINT-RESUME-0002",
+    "ACTION-BREAKPOINT-RESUME-0003"
+  ],
+  "overall_status": "MATCH"
+}

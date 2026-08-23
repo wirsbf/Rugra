@@ -1243,3 +1243,5 @@ console 入口）1:1 移植：
   `Action::print`（console 列表 'S'/'A' 标记）与 `ActionPool::printState`
   的 op SeqNum 打印未移植（Rugra SeqNum 文本格式未对齐，登记 TODO）；
   Rule `type_disable`/`disableRule`/`enableRule`（action.cc:226-251）未接。
+- `ActionDatabase::current_root_state() -> Option<&ActionState>`——只读根
+  槽位视图（断点停点 fixture 用，对应 Action::getStatus 的外置根槽）。

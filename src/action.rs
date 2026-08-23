@@ -1687,6 +1687,14 @@ impl ActionDatabase {
         result
     }
 
+    // Ghidra: action.hh:110 Action::getStatus (externalized root slot view for stop-position fixtures)
+    /// Read-only view of the current root's externalized executor state
+    /// (status/breakpoint/counters), persistent across `perform_current`
+    /// calls until `reset_current`.
+    pub fn current_root_state(&self) -> Option<&ActionState> {
+        self.current_root_state.as_ref()
+    }
+
     // Ghidra: ifacedecomp.cc:1196/1222 getCurrent()->setBreakPoint(type, specify) over Action::setBreakPoint (action.cc:171)
     /// Set a breakpoint (`break_flags::BREAK_START`/`BREAK_ACTION`/tmp
     /// variants) on the current root tree by ':'-separated name path,
