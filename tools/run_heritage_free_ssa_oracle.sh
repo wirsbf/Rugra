@@ -83,7 +83,7 @@ if [[ "$(/usr/bin/git -C "$repo_root" rev-parse "$rugra_base_commit^{commit}")" 
 fi
 
 runner_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
-/usr/bin/python3 -I -S - "$repo_root" "$metadata" "$cpp_fixture" \
+/usr/bin/python3 -I -S - "$repo_root" "$ghidra_root" "$metadata" "$cpp_fixture" \
   "$rust_fixture" "$runner_sha" "$oracle_tag" "$oracle_commit" \
   "$oracle_cpp_tree" "$oracle_makefile_blob" "$rugra_base_commit" \
   "$rugra_base_tree" <<'PY'
@@ -93,9 +93,10 @@ import pathlib
 import subprocess
 import sys
 
-(repo_raw, metadata_raw, cpp_raw, rust_raw, runner_sha, oracle_tag,
+(repo_raw, ghidra_raw, metadata_raw, cpp_raw, rust_raw, runner_sha, oracle_tag,
  oracle_commit, cpp_tree, makefile_blob, base_commit, base_tree) = sys.argv[1:]
 repo = pathlib.Path(repo_raw).resolve()
+ghidra_repo = pathlib.Path(ghidra_raw).resolve()
 metadata_path = pathlib.Path(metadata_raw)
 cpp_path = pathlib.Path(cpp_raw)
 rust_path = pathlib.Path(rust_raw)
@@ -106,6 +107,18 @@ def sha(data):
 def require(label, actual, expected):
     if actual != expected:
         raise SystemExit(f"{label} mismatch: expected={expected!r} actual={actual!r}")
+
+def git_output(repository, *arguments):
+    return subprocess.check_output(
+        ["/usr/bin/git", "-C", str(repository), *arguments],
+        text=True,
+    ).strip()
+
+def committed_blob(repository, revision, relative):
+    return git_output(repository, "rev-parse", f"{revision}:{relative}")
+
+def worktree_blob(repository, relative):
+    return git_output(repository, "hash-object", "--no-filters", str(repository / relative))
 
 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 oracle = metadata["oracle"]
@@ -142,7 +155,8 @@ for relative in paths:
     hasher.update(data)
 require("crate hash scheme", comparand["rust_crate_tree_hash_scheme"],
         "sha256 of rugra-heritage-free-ssa-current-crate-v1 plus sorted length-prefixed tracked Cargo.toml/Cargo.lock/build.rs/src/sleigh_shim paths and bytes")
-require("current crate hash", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
+crate_tree_sha = hasher.hexdigest()
+require("current crate hash", crate_tree_sha, comparand["rust_crate_tree_sha256"])
 for relative, key in (
     ("src/heritage.rs", "heritage_rs_sha256"),
     ("src/funcdata.rs", "funcdata_rs_sha256"),
@@ -152,17 +166,146 @@ for relative, key in (
 ):
     require(key, sha((repo / relative).read_bytes()), comparand[key])
 
-manifest = metadata["input_manifest"]
-fingerprinted = {
-    "architecture": metadata["architecture"],
-    "compiler_spec": metadata["compiler_spec"],
-    "analysis_options": metadata["analysis_options"],
-    "cases": manifest["cases"],
+architecture = (
+    "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, "
+    "ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1"
+)
+compiler_spec = (
+    "synthetic prototype fixture: extrapop=0, empty input/output, no effect "
+    "records, no symbols, high-level disabled"
+)
+analysis_options = {
+    "entrypoint": "Fresh Funcdata per case. single_free_promotion, indirect_simultaneous and loop_phi_reverse_slot run one canonical Funcdata::opHeritage call after structureLoops/calcForwardDominator/buildInfoList; double_descendant_error directly calls Funcdata::opSetInput twice and catches the setup-time boundary error. No Action tree or C emission.",
+    "prestate": "All observed PcodeOps are created with production newOp/opSetOpcode, fully inserted into named BlockBasic objects through opInsertEnd before order observation, and connected through opSetInput/opSetOutput/newUniqueOut/newVarnodeIop. Free reads are distinct bank objects with one descendant. The loop is entry->header, header->body, header->exit, body->header.",
+    "observation": "Five fixed-order lines. Each case records pre-state and complete post-state relevant to the boundary. order traverses the current BlockGraph list and each block's live op list in execution order; for every op it emits output then every declared input slot, with a first-seen alias id, storage class, input/written/free/constant/annotation class, exact descendant count, primary flags, activeHeritage, heritageKnown and defining-op label. Additional fields record pass, old-bank deletion, alias equalities, free-with-reader census, exact caught error, and unsorted PHI slot->predecessor->input mapping.",
+    "normalization": "Only raw object addresses are replaced by deterministic first-seen aN ids, preserving all equality/alias relations. Unique-space offsets and raw IOP pointer offsets are omitted because they are implementation allocation identities; size, class, flags, definition and descendants remain. The Rust Vec missing reserved-null input after the caught second-reader panic is projected as the same declared s0=null slot as Ghidra; this known representation difference is not claimed MATCH. No block, op, predecessor, slot or descendant order is sorted or removed.",
 }
+cases = [
+    {
+        "id": "single_free_promotion",
+        "funcdata": "name=single_free_promotion, ram base=0x6100, size=0x40, fresh bank/CFG/Heritage",
+        "blocks_in_order": ["entry"],
+        "edges_in_order": [],
+        "ops_creation_order": [
+            "read@ram:0x6100 COPY declared_inputs=1; s0=fresh free register:0x100:8; out=unique:8; inserted entry",
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call",
+    },
+    {
+        "id": "double_descendant_error",
+        "funcdata": "name=double_descendant, ram base=0x6200, size=0x40, fresh bank/CFG/Heritage",
+        "blocks_in_order": ["entry"],
+        "edges_in_order": [],
+        "ops_creation_order": [
+            "first@ram:0x6200 COPY declared_inputs=1; inserted entry before inputs",
+            "second@ram:0x6201 COPY declared_inputs=1; inserted entry before inputs",
+        ],
+        "input_sequence": [
+            "allocate fresh free register:0x110:8",
+            "set first.s0 to the free Varnode",
+            "attempt set second.s0 to the identical free Varnode and catch the exact setup-time error",
+        ],
+        "preparation": "none",
+        "entrypoint": "two production opSetInput calls; no opHeritage",
+    },
+    {
+        "id": "indirect_simultaneous",
+        "funcdata": "name=indirect_simultaneous, ram base=0x6300, size=0x40, fresh bank/CFG/Heritage",
+        "blocks_in_order": ["entry"],
+        "edges_in_order": [],
+        "ops_creation_order": [
+            "prior@ram:0x6300 COPY declared_inputs=1; s0=constant:8:0x21; out=register:0x120:8",
+            "target@ram:0x6301 INT_ADD declared_inputs=2; s0=fresh free register:0x120:8; s1=constant:8:0x22; out=unique:8",
+            "ind@ram:0x6302 INDIRECT declared_inputs=2; s0=prior.out; s1=IOP(target); out=register:0x120:8",
+        ],
+        "block_op_order": ["prior", "ind", "target"],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call",
+    },
+    {
+        "id": "loop_phi_reverse_slot",
+        "funcdata": "name=loop_phi_reverse_slot, ram base=0x6400, size=0x40, fresh bank/CFG/Heritage",
+        "blocks_in_order": ["entry", "header", "body", "exit"],
+        "edges_in_order": [
+            "entry->header", "header->body", "header->exit", "body->header",
+        ],
+        "ops_creation_order": [
+            "init@ram:0x6400 COPY declared_inputs=1; s0=constant:8:1; out=register:0x130:8; inserted entry",
+            "head_read@ram:0x6401 INT_OR declared_inputs=2; s0=fresh free register:0x130:8; s1=constant:8:2; out=unique:8; inserted header",
+            "step@ram:0x6402 INT_ADD declared_inputs=2; s0=distinct fresh free register:0x130:8; s1=constant:8:3; out=register:0x130:8; inserted body",
+            "exit_read@ram:0x6403 COPY declared_inputs=1; s0=third distinct fresh free register:0x130:8; out=unique:8; inserted exit",
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call",
+    },
+]
+oracle_source_root = "Ghidra/Features/Decompiler/src/decompile/cpp"
+oracle_source_names = (
+    "block.hh", "funcdata_op.cc", "funcdata_varnode.cc", "heritage.cc",
+    "heritage.hh", "op.hh", "varnode.cc", "varnode.hh",
+)
+oracle_source_blobs = {
+    name: committed_blob(ghidra_repo, oracle_commit, f"{oracle_source_root}/{name}")
+    for name in oracle_source_names
+}
+for name, blob in oracle_source_blobs.items():
+    actual_blob = worktree_blob(ghidra_repo, pathlib.Path(oracle_source_root) / name)
+    require(f"locked oracle worktree blob {name}", actual_blob, blob)
+
+rugra_source_names = (
+    "src/block.rs", "src/funcdata.rs", "src/heritage.rs", "src/op.rs", "src/varnode.rs",
+)
+rugra_source_blobs = {
+    name: committed_blob(repo, base_commit, name) for name in rugra_source_names
+}
+for name, blob in rugra_source_blobs.items():
+    require(f"current Rugra blob {name}", worktree_blob(repo, pathlib.Path(name)), blob)
+
+fixture_records = {}
+for fixture_path in (cpp_path, rust_path):
+    relative = fixture_path.resolve().relative_to(repo).as_posix()
+    fixture_records[relative] = {
+        "git_blob_oid": worktree_blob(repo, pathlib.Path(relative)),
+        "sha256": sha(fixture_path.read_bytes()),
+    }
+
+expected_manifest = {
+    "schema": "rugra-heritage-free-ssa-input-v2",
+    "canonicalization": "SHA-256 over the entire input_manifest object encoded as UTF-8 by json.dumps with sort_keys=true, separators=(',',':'), ensure_ascii=false; no floats",
+    "oracle": {
+        "tag": oracle_tag,
+        "commit": oracle_commit,
+        "decompiler_cpp_tree": cpp_tree,
+        "decompiler_makefile_blob": makefile_blob,
+        "source_root": oracle_source_root,
+        "relevant_source_blobs": oracle_source_blobs,
+    },
+    "architecture": architecture,
+    "compiler_spec": compiler_spec,
+    "analysis_options": analysis_options,
+    "cases": cases,
+    "fixtures": fixture_records,
+    "rugra": {
+        "repository_commit": base_commit,
+        "repository_tree": base_tree,
+        "tracked_crate_tree_hash_scheme": comparand["rust_crate_tree_hash_scheme"],
+        "tracked_crate_tree_sha256": crate_tree_sha,
+        "critical_source_blobs": rugra_source_blobs,
+    },
+}
+require("architecture descriptor", metadata["architecture"], architecture)
+require("compiler spec descriptor", metadata["compiler_spec"], compiler_spec)
+require("analysis options descriptor", metadata["analysis_options"], analysis_options)
+require("input manifest", metadata.get("input_manifest"), expected_manifest)
 canonical = json.dumps(
-    fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-).encode()
-require("input fingerprint", sha(canonical), manifest["sha256"])
+    expected_manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+).encode("utf-8")
+require(
+    "input fingerprint",
+    metadata.get("input_fingerprint"),
+    "sha256:" + sha(canonical),
+)
 require("covered projection", metadata["covered_projection_status"], "MATCH")
 if not metadata["overall_status"].startswith("MISMATCH:"):
     raise SystemExit("overall_status must remain conservative MISMATCH")
