@@ -916,5 +916,6 @@
   外层守卫 / op 级 markedInput 五投影，逐字节 MATCH。
 - 残差登记：`HighVariable::get_type` 缺少 variable.hh:174 的惰性
   `updateType()`（建议 VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001）；
-  ruleaction.rs:10588 RuleAddUnsigned 调用点走字段半未执行 high 簿记
-  （建议 RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001）。
+  ~~ruleaction.rs RuleAddUnsigned 调用点走字段半未执行 high 簿记~~
+  （RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001 已于 2026-08-23 交付：
+  调用点改走 `Varnode::copy_symbol_arc` 完整移植，high 簿记闭合）。

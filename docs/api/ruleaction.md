@@ -1166,3 +1166,14 @@ pool repeat 尚未闭合，全部继续绑定 `RULE-ADDUNSIGNED-TYPEPRECOND-0001
 ## equate 门控连带测试修正（2026-08-23，root）
 
 `collapse_constants_symbol_propagation_via_marked_input` 随 VARNODE-COPYSYMBOL-EQUATE-0001 忠实化更新：测试侧注册 equate 值须与 **collapse 后输出** value-close（0x33333333），注册原始输入值（0x11111111）会被 isValueClose 正确拒绝——这是 oracle 语义而非回归。
+
+## RuleAddUnsigned copySymbol 完整移植（2026-08-23，RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001）
+
+`RuleAddUnsigned::applyOp` 的 cc:7211 `cvn->copySymbol(constvn)` 此前调字段半
+`copy_symbol`（仅 cc:496-499 type/mapentry/lock 旗标），丢失 cc:500-504 high
+簿记（`high->typeDirty()` + 条件 `high->setSymbol(this)`）。现改为一行
+`Varnode::copy_symbol_arc(&cvn, &constvn.read())` 完整关联函数
+（varnode.cc:493-505 全量，含 typeDirty/setSymbol；destination 为
+`newConstant` 返回的 fresh `Arc<RwLock<Varnode>>`，与 source 无别名，
+write→read 锁序安全）。ruleaction:: 207/207；残差仅剩
+RULE-ADDUNSIGNED-TYPEPRECOND-0001 域（named equate/enum/char-print 等）。

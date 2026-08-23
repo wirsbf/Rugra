@@ -1070,7 +1070,7 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 | `PIPE-CLEANUP-COUNT-ZERO-0001` | P2 | emptyelse 发现：DoNothing/RedundBranch/DeterminedBranch 的 count 恒 0（oracle cc:3483/3524/3545 递增驱动 fullloop 重入）；曾因测试期望绕过 | `src/coreaction.rs` | 排队 |
 | `FLOAT-OPTRUNC-OOB-0001` | P3 | floatfmt 发现：op_trunc 越界语义（float.cc:631-640 (intb)val + calc_mask(sizeout)）Rust 饱和 cast 分歧且缺 mask | `src/float_emulate.rs` | 排队 |
 | `FUNCDATA-CALCNZM-0002` | P2 | op.rs PcodeOp::get_nz_mask_local divergent 且零调用方；完整 switch 暂在 funcdata.rs，合并回 PcodeOp 需 op.rs 租约 | `src/op.rs`、`src/funcdata.rs` | 排队 |
-| `RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001` | P2 | highbranch 发现：RuleAddUnsigned（ruleaction.rs:10588）仍调字段半 copy_symbol 无 high 簿记；一行适配为 copy_symbol_arc | `src/ruleaction.rs` | rulebehav 租约释放 |
+| `RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001` | P2 | **DONE（2026-08-23，wt/globvars）**：ruleaction.rs RuleAddUnsigned::applyOp 的 `cvn.write().copy_symbol(&constvn)` 字段半调用改为一行 `Varnode::copy_symbol_arc(&cvn, &constvn.read())`（ruleaction.cc:7211 → varnode.cc:493-505 完整移植，含 cc:500-504 typeDirty/setSymbol high 簿记）；ruleaction:: 测试 207/207，E2E 差分门禁 defects=0/numbering=0；docs/api/{ruleaction,varnode}.md 同步 | `src/ruleaction.rs`、docs/api/{ruleaction,varnode}.md | 已交付 |
 | `VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001` | P2 | HighVariable::get_type（variable.rs:1401）缺 variable.hh:174 惰性 updateType（&self 签名无法变异） | `src/variable.rs` | 认领中 |
 | `DATABASE-EQUATE-XMLCONTENT-0001` | P2 | equatereg 发现：真实 XML 的 <value> 是元素文本（ATTRIB_CONTENT），Decoder trait 不暴露；修法=marshal.rs 加 content 访问器 | `src/marshal.rs`、`src/database.rs` | 排队 |
 | `DATABASE-EQUATE-VARMAP-BRIDGE-0001` | P2 | varmap→database 桥（funcdata_varnode.cc:1301 腿） | `src/{varmap,funcdata}.rs` | funcdata 租约 |
