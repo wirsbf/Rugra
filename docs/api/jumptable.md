@@ -5,11 +5,43 @@
 PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
 model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 `NO_ORACLE`。
 
+## 2026-08-23：JUMPTABLE-GUARDS-0001 — analyzeGuards 完整移植 + valueMatch 补全 + checkUnrolledGuard 接线
+
+- `analyze_guards(bl, pathout)`（jumptable.cc:1046-1112）：完整重写。
+  ① `pathout>=0 && sizeOut==2` 首轮步进语义：prevbl=当前块、bl=out(pathout)、
+  indpath=pathout、pathout 消耗为 -1，第一轮即分析步进块自身的 CBRANCH
+  （JumpBasic2 传入 pathout 时守卫不再为空）；② 步进/回走任一分支后
+  `bl = prevbl` 逐轮上移；③ 回走循环遇 `sizeIn != 1`：`sizeIn > 1` 时调
+  `check_unrolled_guard`（cc:1069-1070），随后无条件 return；④ `i != 0` 的
+  other-switch 保护（cc:1083-1091）：第二条 CBRANCH 的旁路出边终点若为
+  BRANCHIND 且不是本表 `get_indirect_op()` 则 break；⑤ `indpathstore =
+  prevbl.getFlipPath() ? 1-indpath : indpath`（cc:1100-1101）；⑥ pullBack
+  循环（j=0..1）按 cc:1103-1111 顺序 break/push。
+- `value_match(vn2, base_vn2, bits_preserved2)`（jumptable.cc:637-680）：补全
+  `oneOffMatch == 1 → 1` 分支与 LOAD 等价 `→ 2` 分支（in(0) 空间偏移相等 +
+  指针相同 或 双方 INT_ADD 同基址同常量偏移）。
+- `check_unrolled_guard`（jumptable.cc:1338-1370）：GuardRecord 改经
+  `GuardRecord::new`（构造器内 quasiCopy 填 base_vn/bits_preserved），并保持
+  oracle 内层 `PcodeOp *readOp = vn->getDef();` 对外层 readOp 的遮蔽 —— 所有
+  push 的 readOp 恒为 cbranch。
+- `find_multiequal`（block.cc:2753-2772）：补上缺失的 `parent == bl` 检查
+  （cc:2761）。
+- `quasi_copy` / `pull_back_through_op`：改读原始 `nzm` 字段
+  （`Varnode::get_nzm`，对应 varnode.hh:231 的 inline `getNZMask` 字段读），
+  不再用按 size 截断的近似。
+- 门禁：`tools/run_jt_guards_oracle.sh` + `tests/oracle/jt_guards_1204.*`
+  （FX-GUARD，oracle 12.0.4 e40ed130 双侧）：sc2_unrolled/sc4_other_switch/
+  sc5_pathout MATCH；sc1/sc3 MISMATCH = `JUMPTABLE-GUARDS-RESIDUAL-0001`
+  （rangeutil.rs `pull_back_binary` 缺 INT_SLESS/INT_SLESSEQUAL，oracle
+  rangeutil.cc:882-917，不在本租约 write-set）；sc6 MISMATCH =
+  `JUMPTABLE-GUARDS-RESIDUAL-0002`（funcdata.rs `calc_nz_mask` 简化，未做
+  unwritten 输入 nzm 初始化，oracle funcdata_varnode.cc:889-893）。
+
 ## 2026-07-16：checkUnrolledGuard + checkCommonCbranch + findMultiequal
 
-- `check_unrolled_guard(bl, max_pullback, use_nzmask)`（jumptable.cc:1357-1390）：检测跨多块展开的守卫。使用 checkCommonCbranch + CircleRange pullBack + liftVerifyUnroll + duplicateVarnodes + findMultiequal 创建 GuardRecord。所有依赖（getFlipPath b661e5e、liftVerifyUnroll b661e5e、pullBack a962f29）已完成。
-- `check_common_cbranch(var_array, bl)`（jumptable.cc:1324-1346）：验证所有 in-edge 来自相同 boolean-flip/out-slot 的 CBRANCH 块，收集 boolean 输入 varnode。
-- `find_multiequal(bl, var_array)`（block.cc:2753-2772）：查找输入匹配 varArray 的 MULTIEQUAL op。
+- `check_unrolled_guard(bl, max_pullback, use_nzmask)`（jumptable.cc:1338-1370）：检测跨多块展开的守卫。使用 checkCommonCbranch + CircleRange pullBack + liftVerifyUnroll + duplicateVarnodes + findMultiequal 创建 GuardRecord。所有依赖（getFlipPath b661e5e、liftVerifyUnroll b661e5e、pullBack a962f29）已完成。2026-08-23 起由 analyzeGuards 的 sizeIn>1 回走分支真正接线（此前为死代码）。
+- `check_common_cbranch(var_array, bl)`（jumptable.cc:1305-1327）：验证所有 in-edge 来自相同 boolean-flip/out-slot 的 CBRANCH 块，收集 boolean 输入 varnode。
+- `find_multiequal(bl, var_array)`（block.cc:2753-2772）：查找输入匹配 varArray 的 MULTIEQUAL op（须位于 bl 内）。
 
 **Status:** L2. Public class coverage does not establish behavior parity; the
 data-flow and CFG-rewriting algorithms still depend on broken Address,
@@ -90,9 +122,9 @@ A switch-variable Varnode and a constraint imposed by a CBRANCH
 
 ### Free functions
 - `quasi_copy(vn) -> (Option<Arc<RwLock<Varnode>>>, i32)` — quasi-COPY chain
-  source (jumptable.cc:721).
+  source (jumptable.cc:719); bits derive from the raw `nzm` field.
 - `one_off_match(op1, op2) -> i32` — 1 if two ops produce the same value
-  (jumptable.cc:686).
+  (jumptable.cc:684).
 
 ## Traits
 
@@ -136,11 +168,11 @@ The basic switch model (jumptable.hh:374). Notable methods:
 - `is_prune(Varnode)`, `is_point(Varnode)`, `get_stride(Varnode)`,
   `get_max_value(Varnode)`, `duplicate_varnodes(&[Varnode])`.
 - `find_determining_varnodes(op, slot)` (jumptable.cc:556).
-- `calc_range(vn, &mut CircleRange)` (jumptable.cc:1137).
-- `find_smallest_normal(matchsize)` (jumptable.cc:1182).
-- `mark_foldable_guards()` (jumptable.cc:1258).
-- `mark_model(val)` (jumptable.cc:1273).
-- `analyze_guards(bl, pathout)` (jumptable.cc:1063).
+- `calc_range(vn, &mut CircleRange)` (jumptable.cc:1120).
+- `find_smallest_normal(matchsize)` (jumptable.cc:1165).
+- `mark_foldable_guards()` (jumptable.cc:1239).
+- `mark_model(val)` (jumptable.cc:1254).
+- `analyze_guards(bl, pathout)` (jumptable.cc:1046).
 
 ## `JumpTable`
 A map from values to control-flow targets within a function
