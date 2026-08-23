@@ -49,6 +49,17 @@ Inherited Varnode property flag aliases (numeric values from `varnode_flags`):
 `INPUT`, `IMPLIED`, `SPACEBASE`, `UNAFFECTED`, `MARK`, `ANNOTATION`,
 `DIRECTWRITE`, `INDIRECT_CREATION`, `PROTO_PARTIAL`.
 
+## `pub struct TypeCell`
+
+RUGRA-GLUE lock domain for the `mutable Datatype *type` cache
+(variable.hh:141): `RwLock<Arc<Datatype>>` keeps `HighVariable` `Send + Sync`
+while letting the const `getType` (variable.hh:174) swap the cache through
+`&self` — the Rust counterpart of C++ logical constness. `get()` clones the
+`Arc` (Ghidra returns the shared `Datatype*`); `set()` swaps it. The
+`highflags`/`flags` words stay plain `pub u32` because raw place-form
+`x.highflags & MASK` readers across the tree (fixtures, test modules) cannot
+be satisfied by a newtype (binary-operator lookup never autorefs).
+
 ## `pub struct HighVariable`
 
 A high-level variable modeled as a list of low-level (SSA) Varnodes.
@@ -59,7 +70,7 @@ Faithful to Ghidra's `HighVariable` (variable.hh:112-232).
 | Field | Type | Ghidra |
 |-------|------|--------|
 | `name` | `String` | (Rugra addition; Ghidra derives from Symbol) |
-| `v_type` | `Arc<Datatype>` | `type` |
+| `v_type` | `TypeCell` (lock domain) | `type` (`mutable`, variable.hh:141) |
 | `instances` | `Vec<Arc<RwLock<Varnode>>>` | `inst` (sorted by storage address) |
 | `flags` | `u32` | `flags` |
 | `id` | `u64` | (Rugra diagnostic) |
@@ -97,20 +108,46 @@ whose Symbol matches.
 ### `pub fn set_symbol(&mut self, vn: &Arc<RwLock<Varnode>>)`
 Ghidra: variable.cc:245 `setSymbol`. Updates Symbol info from a member Varnode;
 computes the offset via `Address::overlap` (Rugra's overlapJoin equivalent).
+Re-arms `typedirty` when the cached type is a partial union (variable.cc:
+272-273, `TYPE_PARTIALUNION` — previously mis-checked as Unknown).
 
 ### `pub fn set_symbol_reference(&mut self, sym: Arc<RwLock<Symbol>>, off: i32)`
 Ghidra: variable.cc:283 `setSymbolReference`.
 
 ## 数据类型
 
-### `pub fn strip_type(&mut self)`
-Ghidra: variable.cc:302 `stripType`.
+### `pub fn strip_type(&self)`
+Ghidra: variable.cc:302 `stripType`. `&self` mirrors the Ghidra const member:
+the write goes through the `mutable` type cache (`TypeCell`). Preserves a
+partial-union/partial-struct when a struct/union backing Symbol exists
+(variable.cc:308-313) and a partial enum on a single constant member
+(variable.cc:315-318).
+
+### `pub fn get_type(&self) -> Arc<Datatype>`
+Ghidra: variable.hh:174 `getType` — `updateType(); return type;`. The lazy
+re-derivation triggers here through a shared reference: when `typedirty` is
+set and the type is not finalized, the representative member's type is
+re-derived into the `TypeCell` cache (variable.cc:408-415, incl. `stripType`),
+so a dirtying event (`typeDirty` from `Varnode::updateType`/`copySymbol`,
+`remove`, `mergeInternal`, `setSymbol` on a partial-union cache) is reflected
+by the next `get_type`, and a second call returns the same stable type.
+Residual (VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001): unlike Ghidra's
+`updateType()`, this `&self` path cannot clear the `typedirty` bit in the
+plain `highflags` word (raw place-form bit readers across the tree require
+the field to stay `u32`); it re-derives idempotently on each call until a
+`&mut` path (`update_type`, `type_dirty`) re-syncs the bit. Output behavior
+is identical; no current consumer observes the raw bit after a `&self`-only
+clean.
 
 ### `pub fn get_type_representative(&self) -> Option<Arc<RwLock<Varnode>>>`
 Ghidra: variable.cc:377 `getTypeRepresentative`. Picks member with strongest type.
 
 ### `pub fn update_type(&mut self)`
 Ghidra: variable.cc:400 `updateType`. Re-derives data-type from members.
+Clears `typedirty` FIRST, then a `TYPE_FINALIZED` type short-circuits
+(variable.cc:405-407). Stays `&mut self`: it owns the authoritative dirty-bit
+clear in the plain `highflags` word; the `&self` lazy read path lives in
+`get_type` (variable.hh:174).
 
 ### `pub fn finalize_datatype(&mut self)`
 Ghidra: variable.cc:551 `finalizeDatatype`. Assigns final type from Symbol.
@@ -159,8 +196,13 @@ Ghidra: variable.cc:352 `updateFlags`. OR's member flags together.
 ### `pub fn has_cover(&self) -> bool` — variable.hh:217
 ### `pub fn is_unattached(&self) -> bool` — variable.hh:221
 ### `pub fn is_type_locked(&self) -> bool`
-Backward-compat shared-ref alias for `is_type_lock` (merge.rs:480).
-### `pub fn is_type_lock(&mut self) -> bool` — variable.hh:222
+Backward-compat shared-ref alias for `is_type_lock` (merge.rs:480, :1140);
+now a faithful alias of `isTypeLock` (variable.hh:222).
+### `pub fn is_type_lock(&self) -> bool` — variable.hh:222
+`updateType(); return (flags & typelock) != 0;` — a const member in Ghidra,
+so `&self`. When the type is dirty, the refreshed typelock value is derived
+transiently from the representative (what `updateType` would write into
+`flags`, variable.cc:413-415); when clean, the cached `flags` bit is read.
 ### `pub fn is_name_lock(&mut self) -> bool` — variable.hh:223
 
 ## 标记 (Mark)
@@ -252,7 +294,9 @@ Ghidra: variable.cc:872 `markExpression`. Returns bitset: 1=call, 2=LOAD.
 ## Legacy Rugra 便利方法
 
 `get_type`, `num_instances`, `get_instance`, and `get_num_merge_classes` map to
-the inline Ghidra accessors at variable.hh:174, :179, :180, and :196.
+the inline Ghidra accessors at variable.hh:174, :179, :180, and :196;
+`get_type` now carries the lazy `updateType()` trigger of variable.hh:174
+(see Data Types above).
 `get_name`, `set_name`, `set_type`, and `add_instance` are legacy
 RUGRA-GLUE APIs: Ghidra derives names through Symbol state, derives/finalizes
 types through dedicated methods, and changes membership through construction
@@ -340,6 +384,19 @@ all 11 high_internal_flags constants.
   high_internal_flags (11 bits), VariableGroup (8 methods), VariablePiece
   (15 methods). 18 unit tests. Property queries take &self for RwLockReadGuard
   callers.
+- 2026-08-23 (`VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001`): `get_type(&self)` now
+  performs the lazy `updateType()` re-derivation of variable.hh:174 (dirty ->
+  representative type -> strip -> cache), via a new `TypeCell`
+  (`RwLock<Arc<Datatype>>`) lock domain standing in for Ghidra's `mutable`
+  cache; `is_type_lock`/`is_type_locked` moved to `&self` with the transient
+  typelock derivation (variable.cc:413-415); `strip_type` to `&self` with the
+  previously-dropped partial-union/partial-struct backing-Symbol guard
+  (variable.cc:308-313) restored; `set_symbol` partial-union re-dirty fixed
+  to `TYPE_PARTIALUNION` (variable.cc:272-273). Compile-required `v_type`
+  accessor adaptations in type_infer.rs/coreaction.rs/merge.rs. Residual:
+  the `&self` path cannot clear the plain-word `typedirty` bit (raw-bit
+  readers require `u32`); registered as VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001
+  follow-up.
 - 2026-08-11 (`ANN-I`): provenance-only annotation bootstrap for 14 functions.
   Four direct inline mappings now cite variable.hh:174/:179/:180/:196; the ten
   remaining legacy, ownership, and `Arc<RwLock>` entry points are explicitly

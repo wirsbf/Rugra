@@ -1138,7 +1138,7 @@ impl Merge {
         let hi = high_in.read().unwrap();
         // typelock: if both locked, types must match (merge.cc:107-109)
         if hi.is_type_locked() && ho.is_type_locked() {
-            if !Arc::ptr_eq(&hi.v_type, &ho.v_type) {
+            if !Arc::ptr_eq(&hi.v_type.get(), &ho.v_type.get()) {
                 return false;
             }
         }
@@ -1252,7 +1252,7 @@ impl Merge {
             (
                 out.flags & high_flags::NAMELOCK != 0
                     && input.flags & high_flags::NAMELOCK != 0,
-                Arc::ptr_eq(&out.v_type, &input.v_type),
+                Arc::ptr_eq(&out.v_type.get(), &input.v_type.get()),
                 out.get_input_varnode(),
                 input.get_input_varnode(),
                 out.symbol.clone(),
@@ -3309,7 +3309,7 @@ impl Merge {
         while !high_list.is_empty() {
             let first = high_list.pop_front().unwrap();
             first.write().unwrap().update_type();
-            let datatype = first.read().unwrap().v_type.clone();
+            let datatype = first.read().unwrap().v_type.get();
             let mut group = vec![first];
             let remaining = high_list.len();
             for _ in 0..remaining {
@@ -3317,7 +3317,7 @@ impl Merge {
                 high.write().unwrap().update_type();
                 let same_type = {
                     let high = high.read().unwrap();
-                    Arc::ptr_eq(&datatype, &high.v_type)
+                    Arc::ptr_eq(&datatype, &high.v_type.get())
                 };
                 if same_type {
                     group.push(high);

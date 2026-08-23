@@ -1256,3 +1256,7 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
   ACTION-LANEDIVIDE-RESIDUAL-0001（mode 1 downcast SUBPIECE 终结符、
   同 storage 多 varnode 的 bounds 重走、多 storage 迭代序、pointer=4 归
   一化分支未在 x86-64 oracle 上覆盖）。
+
+## 2026-08-23（VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001 编译适配）：v_type 读改为 v_type.get()
+
+四处 `h.read().unwrap().v_type.clone()` → `h.read().unwrap().v_type.get()`（:3191/:3266/:3338/:3385）。`HighVariable::v_type` 缓存迁入 `TypeCell` 锁域（Ghidra variable.hh:141 `mutable` 的对应物，详见 docs/api/variable.md）；`.get()` 仍是同一共享分配的 Arc 拷贝读，且现在携带 variable.hh:174 `getType()` 的惰性 updateType 语义。

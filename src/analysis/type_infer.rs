@@ -293,7 +293,7 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
             let real_change = old_name != new_name;
             vn.v_type = Some(new_type.clone());
             if let Some(ref high_arc) = vn.high {
-                high_arc.write().unwrap().v_type = new_type;
+                high_arc.write().unwrap().v_type.set(new_type);
             }
             if real_change {
                 changed = true;
@@ -377,7 +377,7 @@ fn propagate_load_output_types(fd: &mut Funcdata) {
                 // Also update the high-level variable's type so printc's
                 // find_typed_instance sees the element type, not a stale pointer.
                 if let Some(ref high_arc) = out_vn.high {
-                    high_arc.write().unwrap().v_type = elem_type;
+                    high_arc.write().unwrap().v_type.set(elem_type);
                 }
             }
         }

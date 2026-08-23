@@ -13,6 +13,47 @@ use crate::database::{Symbol, SymbolEntry, SymbolCategory};
 use crate::opcodes::OpCode;
 use std::sync::{Arc, RwLock};
 
+// RUGRA-GLUE: Ghidra declares `type` `mutable` (variable.hh:141) precisely so
+// the const getters `getType` (variable.hh:174) and `isTypeLock`
+// (variable.hh:222) can run the lazy `updateType()` re-derivation
+// (variable.cc:400-416) through a const `this` (C++ logical constness). Rust
+// `&self` cannot mutate a plain field, so the data-type cache lives in this
+// `RwLock<Arc<Datatype>>` lock domain: `get_type(&self)` can re-derive and
+// swap the cached type through a shared reference, exactly where Ghidra's
+// `getType()` does. Reads clone the `Arc` (the Rust counterpart of returning
+// Ghidra's shared `Datatype*`); writes are rare (one per re-derivation).
+//
+// The `highflags`/`flags` words stay plain `pub u32`: raw-bit readers across
+// the tree (fixtures, test modules) use place-form `x.highflags & MASK`,
+// which binary-operator lookup cannot satisfy for a newtype. Their dirty
+// bits therefore remain cleared only by the `&mut` paths (`update_type`,
+// `type_dirty`, ...), which keeps every existing observation sequence
+// byte-identical; the `&self` lazy path never needs to write them (see
+// VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001 residual note on `get_type`).
+#[derive(Debug)]
+pub struct TypeCell(pub RwLock<Arc<Datatype>>);
+
+impl TypeCell {
+    // RUGRA-GLUE: constructor for the Rust lock-domain stand-in of Ghidra's
+    // `mutable Datatype *type` (variable.hh:141); Ghidra has no wrapper type.
+    /// Wrap an initial cached type.
+    pub fn new(v: Arc<Datatype>) -> Self {
+        TypeCell(RwLock::new(v))
+    }
+    // RUGRA-GLUE: shared read of the lock-domain cache (Ghidra reads the
+    // `mutable` member directly through const `this`).
+    /// Read the cached type (usable from `&self`).
+    pub fn get(&self) -> Arc<Datatype> {
+        self.0.read().unwrap().clone()
+    }
+    // RUGRA-GLUE: shared write of the lock-domain cache (Ghidra assigns the
+    // `mutable` member through const `this`, e.g. variable.cc:410/319).
+    /// Swap the cached type (usable from `&self`, C++ `mutable` write).
+    pub fn set(&self, v: Arc<Datatype>) {
+        *self.0.write().unwrap() = v;
+    }
+}
+
 // RUGRA-GLUE: Anonymous enum of dirtiness bits from HighVariable (variable.hh:119-131).
 // In Ghidra these are private enum constants on the class; Rust exposes them as
 // a `pub mod` of `u32` consts so callers (Merge, printCover, etc.) can test bits.
@@ -83,17 +124,22 @@ pub mod high_flags {
 pub struct HighVariable {
     /// Name string (Rugra addition; Ghidra derives names from the Symbol).
     pub name: String,
-    /// Data type of the variable (`type` in Ghidra).
-    pub v_type: Arc<Datatype>,
+    /// Data type of the variable (`type` in Ghidra). Interior-mutable
+    /// (`TypeCell`) because Ghidra declares it `mutable` (variable.hh:141) so
+    /// the const `getType` (variable.hh:174) can refresh it via `updateType`.
+    pub v_type: TypeCell,
     /// Member Varnode objects (`inst` in Ghidra), kept sorted by storage address.
     pub instances: Vec<Arc<RwLock<Varnode>>>,
-    /// Inherited Varnode property flags (`flags` in Ghidra).
+    /// Inherited Varnode property flags (`flags` in Ghidra). Plain `u32`:
+    /// refreshed by the `&mut` paths (`update_flags`/`update_type`).
     pub flags: u32,
     /// Unique ID (Rugra addition for diagnostics).
     pub id: u64,
     /// Internal cover: union of all member Varnode covers (`internalCover`).
     pub cover: Cover,
-    /// Dirtiness/status bits (`highflags` in Ghidra).
+    /// Dirtiness/status bits (`highflags` in Ghidra). Plain `u32`:
+    /// all bit mutations happen on the `&mut` paths, exactly as the tree
+    /// already does (`x.highflags |= MASK` etc.).
     pub highflags: u32,
     /// Number of different speculative merge classes (`numMergeClasses`).
     pub num_merge_classes: i32,
@@ -122,7 +168,7 @@ impl HighVariable {
     pub fn new(v_type: Arc<Datatype>) -> Self {
         Self {
             name: String::new(),
-            v_type,
+            v_type: TypeCell::new(v_type),
             instances: Vec::new(),
             flags: 0,
             id: 0,
@@ -241,7 +287,9 @@ impl HighVariable {
         // Faithful to variable.cc:272-274. RUGRA-GLUE: Rugra's TypeMetatype has
         // no TYPE_PARTIALUNION, so this branch never fires; we keep it as a
         // structural guard for the day the metatype is added.
-        if self.v_type.get_metatype() == TypeMetatype::Unknown {
+        // Faithful to variable.cc:272-273: a partial-union cached type must
+        // re-derive (typedirty) when a Symbol attaches.
+        if self.v_type.get().get_metatype() == TypeMetatype::PartialUnion {
             self.highflags |= high_internal_flags::TYPEDIRTY;
         }
         self.highflags &= !high_internal_flags::SYMBOLDIRTY;
@@ -278,19 +326,32 @@ impl HighVariable {
 
     // Ghidra: variable.cc:302 HighVariable::stripType
     /// Take the stripped form of the current data-type. Faithful to `stripType`
-    /// (variable.cc:302-320). Exits early if the type has no stripped form, and
-    /// preserves partial-union/partial-struct/enum types when a backing symbol
-    /// exists (Rugra lacks those metatypes, so those branches are no-ops).
-    pub fn strip_type(&mut self) {
-        if !self.v_type.has_stripped() {
+    /// (variable.cc:302-320). Exits early if the type has no stripped form,
+    /// preserves a partial-union/partial-struct when a struct/union backing
+    /// symbol exists, and preserves a partial enum on a single constant
+    /// member. `&self` mirrors the Ghidra const member: the write goes
+    /// through the `mutable` type cache (variable.hh:141), which Rugra
+    /// models with `Cell`.
+    pub fn strip_type(&self) {
+        let cur = self.v_type.get();
+        if !cur.has_stripped() {
             return;
         }
-        let meta = self.v_type.get_metatype();
-        // RUGRA-GLUE: Rugra's TypeMetatype has no PARTIALUNION/PARTIALSTRUCT
-        // (variable.cc:308). The struct/union backing-symbol guard therefore
-        // never triggers; we fall through to the enum check below.
-        let _ = meta;
-        if self.v_type.is_enum_type() {
+        let meta = cur.get_metatype();
+        // Faithful to variable.cc:308-313: don't strip a partial union/struct
+        // when a bigger backing Symbol of struct/union type exists.
+        if meta == TypeMetatype::PartialUnion || meta == TypeMetatype::PartialStruct {
+            if self.symbol.is_some() && self.symbol_offset != -1 {
+                if let Some(sym) = &self.symbol {
+                    if let Some(sym_type) = sym.read().unwrap().get_type() {
+                        let submeta = sym_type.get_metatype();
+                        if submeta == TypeMetatype::Struct || submeta == TypeMetatype::Union {
+                            return; // Don't strip the partial union/struct.
+                        }
+                    }
+                }
+            }
+        } else if cur.is_enum_type() {
             // Faithful to variable.cc:315-318: only preserve partial enum on a
             // single constant member.
             if self.instances.len() == 1
@@ -301,8 +362,8 @@ impl HighVariable {
         }
         // Faithful to variable.cc:319: type = type->getStripped(). Rugra's
         // get_stripped returns &Datatype; we clone into a fresh Arc.
-        let stripped: Arc<Datatype> = Arc::new(self.v_type.get_stripped().clone());
-        self.v_type = stripped;
+        let stripped: Arc<Datatype> = Arc::new(cur.get_stripped().clone());
+        self.v_type.set(stripped);
     }
 
     // Ghidra: variable.cc:324 HighVariable::updateInternalCover
@@ -379,7 +440,7 @@ impl HighVariable {
         {
             let rep_vn = self.instances[0].read().unwrap();
             rep_is_typelock = rep_vn.is_type_lock();
-            rep_type = rep_vn.get_type().unwrap_or_else(|| self.v_type.clone());
+            rep_type = rep_vn.get_type().unwrap_or_else(|| self.v_type.get());
         }
         for (i, inst) in self.instances.iter().enumerate().skip(1) {
             let vn = inst.read().unwrap();
@@ -388,10 +449,10 @@ impl HighVariable {
                 if vn_is_typelock {
                     rep_idx = i;
                     rep_is_typelock = true;
-                    rep_type = vn.get_type().unwrap_or_else(|| self.v_type.clone());
+                    rep_type = vn.get_type().unwrap_or_else(|| self.v_type.get());
                 }
             } else {
-                let vn_type = vn.get_type().unwrap_or_else(|| self.v_type.clone());
+                let vn_type = vn.get_type().unwrap_or_else(|| self.v_type.get());
                 // Faithful to variable.cc:392: 0 > vn->getType()->typeOrderBool(*rep->getType())
                 if vn_type.type_order_bool(&rep_type) < 0 {
                     rep_idx = i;
@@ -405,8 +466,15 @@ impl HighVariable {
 
     // Ghidra: variable.cc:400 HighVariable::updateType
     /// Re-derive the data-type from member Varnodes. Faithful to `updateType`
-    /// (variable.cc:400-416). Only acts when typedirty. Gets the type
-    /// representative, strips the type, and refreshes the typelock flag.
+    /// (variable.cc:400-416). Only acts when typedirty. The dirty bit is
+    /// cleared FIRST (before the finalized guard), exactly as variable.cc:
+    /// 405-407 does, then a finalized type short-circuits re-derivation.
+    /// Otherwise gets the type representative, strips the type, and refreshes
+    /// the typelock flag. Stays `&mut self`: it owns the authoritative
+    /// `typedirty` clear in the plain `highflags` word (Ghidra's const member
+    /// variable.hh:151 mutates through `mutable`; the `&self` lazy read path
+    /// lives in `get_type`, which never needs the bit clear to stay
+    /// output-faithful).
     pub fn update_type(&mut self) {
         if (self.highflags & high_internal_flags::TYPEDIRTY) == 0 {
             return;
@@ -421,10 +489,10 @@ impl HighVariable {
             let is_typelock;
             {
                 let rep_vn = rep.read().unwrap();
-                new_type = rep_vn.get_type().unwrap_or_else(|| self.v_type.clone());
+                new_type = rep_vn.get_type().unwrap_or_else(|| self.v_type.get());
                 is_typelock = rep_vn.is_type_lock();
             }
-            self.v_type = new_type;
+            self.v_type.set(new_type);
             self.strip_type();
             // Faithful to variable.cc:413-415: refresh typelock from representative.
             self.flags &= !high_flags::TYPELOCK;
@@ -607,7 +675,7 @@ impl HighVariable {
             .read()
             .unwrap()
             .get_type()
-            .unwrap_or_else(|| self.v_type.clone());
+            .unwrap_or_else(|| self.v_type.get());
         let mut off = self.symbol_offset;
         if off < 0 {
             off = 0; // Faithful to variable.cc:557-558.
@@ -630,7 +698,7 @@ impl HighVariable {
             None => return, // Faithful to variable.cc:561-562: null or UNKNOWN -> return.
         };
         // RUGRA-GLUE: no TYPE_UNKNOWN enum check (Rugra's Unknown metatype stands in).
-        self.v_type = tp;
+        self.v_type.set(tp);
         self.strip_type(); // Faithful to variable.cc:564.
         self.highflags |= high_internal_flags::TYPE_FINALIZED; // Faithful to variable.cc:565.
     }
@@ -989,7 +1057,7 @@ impl HighVariable {
             }
         }
         s.push_str("Type: ");
-        s.push_str(&self.v_type.print_raw()); // Faithful to variable.cc:795.
+        s.push_str(&self.v_type.get().print_raw()); // Faithful to variable.cc:795.
         s.push_str("\n\n");
         // Faithful to variable.cc:798-802.
         for inst in &self.instances {
@@ -1177,7 +1245,7 @@ impl HighVariable {
                 s.push_str(&format!(" offset=\"{}\"", self.symbol_offset));
             }
         }
-        s.push_str(&format!(" type=\"{}\"", self.v_type.get_id()));
+        s.push_str(&format!(" type=\"{}\"", self.v_type.get().get_id()));
         s.push('>');
         for inst in &self.instances {
             let idx = inst.read().unwrap().create_index;
@@ -1295,10 +1363,19 @@ impl HighVariable {
     }
 
     // Ghidra: variable.hh:222 HighVariable::isTypeLock
-    /// Re-derive then check the typelock flag. Takes `&mut self` because Ghidra's
-    /// inline calls `updateType()` first.
-    pub fn is_type_lock(&mut self) -> bool {
-        self.update_type();
+    /// Re-derive then check the typelock flag. Faithful to the inline
+    /// `isTypeLock` (variable.hh:222): `updateType(); return ((flags &
+    /// Varnode::typelock)!=0);` — a const member in Ghidra, so `&self` here.
+    /// When the type is dirty, `updateType` would refresh `flags.typelock`
+    /// from the representative (variable.cc:413-415); since the `&self` path
+    /// cannot write the plain `flags` word, the refreshed value is derived
+    /// transiently from the representative instead — same observable value.
+    pub fn is_type_lock(&self) -> bool {
+        if (self.highflags & high_internal_flags::TYPEDIRTY) != 0 {
+            if let Some(rep) = self.get_type_representative() {
+                return rep.read().unwrap().is_type_lock();
+            }
+        }
         (self.flags & high_flags::TYPELOCK) != 0
     }
 
@@ -1397,16 +1474,50 @@ impl HighVariable {
     }
 
     // Ghidra: variable.hh:174 HighVariable::getType
-    /// Get the data type.
+    /// Get the data type. Faithful to the inline `getType`
+    /// (variable.hh:174): `updateType(); return type;` — the lazy
+    /// re-derivation triggers HERE, through a shared reference (Ghidra's is
+    /// a const member; the cache mutation rides the `mutable` domain, which
+    /// Rugra models with the `TypeCell` lock domain). When `typedirty` is
+    /// set and the type is not finalized, the representative member's type
+    /// is re-derived into the cache (variable.cc:408-415, incl. stripType),
+    /// so a dirtying event (`typeDirty` from `Varnode::updateType`/
+    /// `copySymbol`, `remove`, `mergeInternal`, ...) is reflected by the
+    /// next `get_type` and a second call returns the same stable type.
+    ///
+    /// Known residual (VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001): unlike
+    /// Ghidra's `updateType()`, this `&self` path cannot clear the
+    /// `typedirty` bit in the plain `highflags` word, so it re-derives
+    /// (idempotently) on each call until a `&mut` path (`update_type`,
+    /// `type_dirty`) re-syncs the bit. No current consumer observes the raw
+    /// bit after a `&self`-only clean; output behavior is identical.
     pub fn get_type(&self) -> Arc<Datatype> {
-        self.v_type.clone()
+        if (self.highflags & high_internal_flags::TYPEDIRTY) != 0
+            && (self.highflags & high_internal_flags::TYPE_FINALIZED) == 0
+        {
+            if let Some(rep) = self.get_type_representative() {
+                let (new_type, is_typelock) = {
+                    let rep_vn = rep.read().unwrap();
+                    (
+                        rep_vn.get_type().unwrap_or_else(|| self.v_type.get()),
+                        rep_vn.is_type_lock(),
+                    )
+                };
+                self.v_type.set(new_type);
+                self.strip_type();
+                // Transient typelock view (variable.cc:413-415): is_type_lock
+                // re-derives it on demand; nothing else reads it from &self.
+                let _ = is_typelock;
+            }
+        }
+        self.v_type.get()
     }
 
     // RUGRA-GLUE: Legacy cached-type override; Ghidra HighVariable exposes
-    // getType/updateType/finalizeDatatype but no public setType method.
-    /// Set the data type.
+    /// getType/updateType/finalizeDatatype but no public setType method.
+    /// Set the data type directly on the cache.
     pub fn set_type(&mut self, v_type: Arc<Datatype>) {
-        self.v_type = v_type;
+        self.v_type.set(v_type);
     }
 
     // RUGRA-GLUE: Legacy membership mutator; Ghidra adds members only through
@@ -1435,14 +1546,15 @@ impl HighVariable {
     }
 
     /// Check if this variable has a locked type, via a shared reference.
-    /// Kept for callers (merge.rs:480) that hold only a `RwLockReadGuard` and
-    /// use the field name `is_type_locked`. Reads the cached `flags` bit
-    /// directly (Ghidra's `isTypeLock` calls `updateType()` first, but Rugra's
-    /// shared-reference call-sites cannot mutate; the cache is kept fresh by
-    /// the `&mut self` query paths and `update_type`).
+    /// Kept for callers (merge.rs:480, merge.rs:1140) that hold only a
+    /// `RwLockReadGuard` and use the field name `is_type_locked`. Now a
+    /// faithful alias of `isTypeLock` (variable.hh:222): when the type is
+    /// dirty it derives the typelock answer from the representative (what
+    /// `updateType` would refresh into `flags`, variable.cc:413-415),
+    /// closing the former "shared-ref callers see a stale bit" caveat.
     // RUGRA-GLUE: backward-compat alias (variable.hh:222) for shared-ref callers.
     pub fn is_type_locked(&self) -> bool {
-        (self.flags & high_flags::TYPELOCK) != 0
+        self.is_type_lock()
     }
 
     /// Remove a varnode instance by index. Kept for callers (merge.rs:1793).
