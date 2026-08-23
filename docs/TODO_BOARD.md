@@ -94,6 +94,22 @@ forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只�
 | `COMMENT-DB-EMITTED-0001` | P2 | comment 审计新增：setEmitted(false) 不回写 CommentDatabaseInternal（Ghidra mutable 直改库内对象） | `src/comment.rs`、`src/database_*.rs` | 排队 |
 | `COMMENT-SORTER-PRINTC-0001` | P2 | comment 审计新增：printc 消费端迁移到直接协议（消除 Vec 快照与 printc.rs:6651 警告） | `src/printc.rs`、`src/comment.rs` | printc 租约释放后认领 |
 | `DATATYPE-SPACEBASE-SPACEID-0001` | P2 | datatype 审计新增：Ghidra AddrSpace 裸指针身份 vs Rust AddressSpace enum 同 index 折叠；TypePointer::compare 同 index 空间恒返 1 的 Ghidra quirk（type.cc:944）；长期解=ADDRESS-0001 空间注册表迁移 | `src/type_system/datatype.rs`、`src/space.rs` | ADDRESS-0001 方案定稿后认领 |
+
+来自 `docs/alignment_audit/FSPEC_GAPS_2026-08-23.md`（26 类对照：10 类完全缺失
+（ParamListRegister/Merged、ProtoModelMerged、ScoreProtoModel、UnknownProtoModel、ProtoParameter、
+ParameterBasic/Symbol、ProtoStoreSymbol、ParamEntryRange）；~88 MISSING/11 MISMATCH/6 STUB；
+**最重发现=双模型栈分裂**：FuncCallSpecs.proto_model 绑硬编码 SysV stub（protomodel.rs 315 行），
+忠实的 ParamListStandard::fillin_map（fspec.rs:4932 对齐 cc:1285）在主管线是死代码；
+另 findEntry/unjustifiedContainer/assumedExtension 三处 Ram-only 过滤、ParamTrial 排序键错、
+split_lo 地址 `+sz` 应为 `+(size-sz)` 且丢 flags、likelytrash 折叠污染 has_effect）。15 项 TODO 详见报告 §6：
+
+| ID | P | 标题 | write-set | 依赖 |
+|---|---|---|---|---|
+| `FSPEC-MODEL-UNIFY-0001` | P0 | callspec 改绑 Arc<ProtoModelFull>，忠实 fillinMap 接入主管线 | `src/fspec.rs`、`src/coreaction.rs:6030/6451`、docs | coreaction 租约释放 |
+| `FSPEC-SPACEFILTER-0002` | P0 | 删 findEntry/unjustifiedContainer/assumedExtension 三处 Ram-only 过滤 | `src/fspec.rs`、docs | 无 |
+| `FSPEC-TRIALCMP-0003` | P0 | ParamTrial 排序键 + split_lo 地址/flags 修正 | `src/fspec.rs`、docs | 无 |
+| `FSPEC-PHASE1-*`（trashset/effective_extrapop/internal-storage 等 12 项） | P0/P1 | 见报告 §6（解锁 CA-1 的 LikelyTrash/ExtraPopSetup/InternalStorage/StackPtrFlow） | 以 `src/fspec.rs` 为主 | Phase 0 |
+
 | `BLOCK-RWLOCK-RECURSIVE-READ-0001` | P3 | blockirred 复核 NOTE：区间测试快照同时持 x 与 yprime 读锁，yprime==x 时对同一 RwLock 递归 read()（std 标注 might panic，当前实现安全）；建议 ptr_eq 预判分支消除标准库实现依赖 | `src/block.rs` | 排队 |
 | `BLOCK-CALCLOOP-0001` | P2 | BLOCK-FINDIRREDUCIBLE 残差：calcLoop（block.cc:2104-2147）空 stub，Rugra 已在 cc:2213 对应点接线，落地后不可归约端到端闭环；另 structure_loops 生产接线（blockaction.rs structureReset 路径）+ 管线差分 | `src/block.rs`、`src/blockaction.rs` | a494832 集成后认领 |
 | `LANEDIVIDE-INFRA-RESIDUAL-0001` | P2 | lanedivide fixture 8 分支残差（terminator/store/load/shift/zext/indirect/restricted-window/typelock 中 6 UNTESTED + subflow.cc:3942 负索引 UB corner NO_ORACLE） | `src/{arch,funcdata,subflow}.rs`、fixture/runner 扩展 | LANEDIVIDE-INFRA-0001 集成后认领 |
