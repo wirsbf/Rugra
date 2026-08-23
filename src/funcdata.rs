@@ -5311,21 +5311,16 @@ impl Funcdata {
         res_vn
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opFlipCondition
+    // Ghidra: funcdata.hh:489 Funcdata::opFlipCondition
     /// Flip the condition of a CBRANCH/comparison op. Faithful to
-    /// `Funcdata::opFlipCondition` (funcdata_op.cc). Changes the comparison
-    /// opcode to its flipped variant (INT_LESS <-> INT_LESSEQUAL,
-    /// INT_EQUAL <-> INT_NOTEQUAL) and clears the BOOLEAN_FLIP flag.
+    /// `Funcdata::opFlipCondition` (funcdata.hh:489): flips the
+    /// `boolean_flip` flag on the given CBRANCH — nothing else. The old
+    /// Rugra body ran `get_booleanflip` on the CBRANCH's own opcode, which
+    /// returns the CPUI_MAX sentinel for CBRANCH and corrupted the opcode
+    /// field (RuleCondNegate sites); the oracle never rewrites the opcode
+    /// here (comparison-opcode rewriting is opFlipInPlaceExecute's job).
     pub fn op_flip_condition(&mut self, op: &crate::op::PcodeOpRef) {
-        use crate::opcodes::get_booleanflip;
-        let opc = op.0.read().unwrap().opcode;
-        let mut reorder = false;
-        let new_opc = get_booleanflip(opc, &mut reorder);
-        op.0.write().unwrap().opcode = new_opc;
-        if reorder {
-            self.op_swap_input(op, 0, 1);
-        }
-        op.0.write().unwrap().flags &= !crate::op::pcodeop_flags::BOOLEAN_FLIP;
+        op.0.write().unwrap().flags ^= crate::op::pcodeop_flags::BOOLEAN_FLIP;
     }
 
     /// Inject raw P-code operations into this Funcdata
@@ -11917,8 +11912,11 @@ mod tests {
 
         // Search for BlockCondition(And) — after full Ghidra-style collapseAll
         // (including interleaved cat/if rules), it may be standalone, inside a
-        // BlockList, or its original block slot may have been replaced.
-        // Search ALL blocks recursively for any BlockCondition with And.
+        // BlockList, wrapped in a BlockIf (ruleBlockIfNoExit, blockaction.cc:
+        // 1840, runs after the fixpoint and wraps an exit-only clause into an
+        // if), or its original block slot may have been replaced.
+        // Search ALL blocks recursively (one composite level) for any
+        // BlockCondition with And.
         let mut found_or = false;
         for i in 0..graph.get_size() {
             if let Some(block) = graph.get_block(i) {
@@ -11941,12 +11939,22 @@ mod tests {
                             }
                         }
                     }
+                    BlockType::If => {
+                        if let Some(bif) = b.as_any().downcast_ref::<crate::block::BlockIf>() {
+                            let c = bif.condition.read().unwrap();
+                            if c.get_type() == BlockType::Condition {
+                                if let Some(cond) = c.as_any().downcast_ref::<BlockCondition>() {
+                                    if cond.op_type == BoolOp::Or { found_or = true; }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
         }
 
-        assert!(found_or, "Expected BlockCondition(Or) after boolean folding (false-edge merge)");
+        assert!(found_or, "Expected BlockCondition(Or) after boolean folding (false-edge merge; may be wrapped in BlockIf per ruleBlockIfNoExit)");
     }
 
     #[test]

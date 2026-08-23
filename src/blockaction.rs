@@ -16,36 +16,62 @@ use std::sync::{Arc, RwLock};
 /// a flat basic block graph into a hierarchical structure of if, while,
 /// and other high-level blocks.
 pub struct ActionBlockStructure {
-    /// Number of ops when we last structured. If this differs on a subsequent
-    /// call, it means bblocks changed (new ops from Heritage/Simplify/etc.)
-    /// and we must rebuild sblocks to stay in sync.
-    last_op_count: usize,
+    /// CFG topology fingerprint (block count, total edge count) when we last
+    /// structured. If this differs on a subsequent call, bblocks was mutated
+    /// (block split/merge by ConditionalExe etc.) and we must rebuild
+    /// sblocks to stay in sync. The old op-count signal was wrong: rules
+    /// like RuleCondNegate insert ops without touching the CFG, so the
+    /// op-count check re-structured every mainloop pass, and each rebuild
+    /// re-applied ruleBlockOr's negateCondition toggle — ping-ponging with
+    /// RuleCondNegate's materialization forever (Ghidra never re-runs the
+    /// structurer: blockaction.cc:2175 `if (graph.getSize() != 0) return 0`,
+    /// and block mutators explicitly clear the structure).
+    last_topology: (usize, usize),
 }
 
 impl ActionBlockStructure {
     // Ghidra: blockaction.hh:311 ActionBlockStructure::new
     /// Create a new ActionBlockStructure instance
     pub fn new() -> Self {
-        Self { last_op_count: 0 }
+        Self { last_topology: (0, 0) }
+    }
+
+    // RUGRA-GLUE: CFG topology fingerprint — Rugra's equivalent of Ghidra's
+    /// explicit Structure::clear() calls on the block-mutating actions
+    /// (coreaction.cc:4560 ActionSwitchNorm, ruleaction.cc:5457): Rugra's
+    /// pipeline mutates bblocks from several places without clearing the
+    /// structure, so staleness is detected by comparing this fingerprint.
+    fn bblocks_topology(fd: &Funcdata) -> (usize, usize) {
+        let blocks = fd.bblocks.get_size();
+        let edges: usize = fd
+            .bblocks
+            .blocks
+            .iter()
+            .map(|b| b.read().unwrap().size_out())
+            .sum();
+        (blocks, edges)
     }
 }
 
 impl Action for ActionBlockStructure {
     // Ghidra: blockaction.cc:2169 ActionBlockStructure::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Check if bblocks changed since last structuring. If sblocks is
-        // non-empty but the op count differs, bblocks was mutated (e.g. by
-        // Heritage/Simplify in a repeatapply loop) and sblocks is stale.
-        // Clear sblocks to force rebuild.
-        let current_op_count = fd.obank.alivelist.len();
+        // Ghidra blockaction.cc:2173-2175: "Check if already structured:
+        // if (graph.getSize() != 0) return 0;" — the structurer never
+        // re-runs over an existing structure (block-mutating actions clear
+        // the structure explicitly, coreaction.cc:4560 / ruleaction.cc:5457).
+        // Rugra additionally guards with a CFG-topology fingerprint because
+        // its block-mutating stages do not clear sblocks. If sblocks is
+        // non-empty and the bblocks topology is unchanged, return early.
+        let current_topology = Self::bblocks_topology(fd);
         if fd.sblocks.get_size() != 0 {
-            if current_op_count == self.last_op_count {
+            if current_topology == self.last_topology {
                 return Ok(action_status::NO_CHANGE);
             }
-            // bblocks changed — clear sblocks for rebuild.
+            // bblocks topology changed — clear sblocks for rebuild.
             fd.sblocks.clear();
         }
-        self.last_op_count = current_op_count;
+        self.last_topology = current_topology;
 
         // Need at least 1 basic block to structure
         if fd.bblocks.get_size() == 0 {
@@ -82,7 +108,11 @@ impl Action for ActionBlockStructure {
         collapse.collapse_all();
         eprintln!("[BLOCKSTRUCT] {} collapse_all done blocks={}", fd.name, fd.sblocks.get_size());
 
-        Ok(action_status::CHANGE)
+        // Ghidra blockaction.cc:2184: `count += collapse.getChangeCount();
+        // return 0;` — the structurer NEVER feeds the repeatapply loop
+        // (returning a change count here made Rugra's mainloop re-enter
+        // forever once rules also reported changes).
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: blockaction.hh:311 ActionBlockStructure::getName
@@ -3300,7 +3330,12 @@ impl<'a> CollapseStructure<'a> {
 
             // Match found: clause → merge. Create BlockIf via factory
             // (block.cc:1822 newBlockIf). cond at install_idx=i, clause consumed.
-            let negated = dir == 1; // if clause is the false edge, negate
+            // Ghidra blockaction.cc:1413-1415: `if (i==0) negateCondition(true)`
+            // — the clause must end up on the TRUE side, and out[0] is the
+            // fall-through/false edge (flow.cc:960-967 pushes fallthru first),
+            // so a dir==0 clause (fall-through side) is emitted negated.
+            // Rugra records this as BlockIf::negated (printc negatetoken).
+            let negated = dir == 0;
             self.new_block_if(&block, &clause, negated, i);
             return true;
         }
@@ -3326,32 +3361,16 @@ impl<'a> CollapseStructure<'a> {
         });
         if !has_cbranch { return false; }
 
-        // Don't apply if this CBRANCH is part of a cascade chain. A cascade
-        // member is detected by: (a) its fallthrough leads to another CBRANCH,
-        // OR (b) one of its predecessors is a CBRANCH (cascade tail — reached
-        // via fallthrough from the previous CBRANCH in the chain).
-        let is_cascade_member = {
-            let ft_is_cbranch = if let Some(ft_edge) = b.get_out(0) {
-                let ft = ft_edge.point.read().unwrap();
-                if ft.size_out() == 2 {
-                    let ft_ops = ft.get_ops();
-                    ft_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
-                } else { false }
-            } else { false };
-            let pred_is_cbranch = if b.size_in() >= 1 {
-                (0..b.size_in()).any(|slot| {
-                    if let Some(in_edge) = b.get_in(slot) {
-                        let pred = in_edge.point.read().unwrap();
-                        if pred.size_out() == 2 {
-                            let pred_ops = pred.get_ops();
-                            pred_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
-                        } else { false }
-                    } else { false }
-                })
-            } else { false };
-            ft_is_cbranch || pred_is_cbranch
-        };
-        if is_cascade_member { return false; }
+        // Ghidra's ruleBlockIfNoExit (blockaction.cc:1491-1506) guards the
+        // clause ONLY with `clauseblock->isSwitchOut()` (the commented-out
+        // isInteriorGotoTarget check is disabled in the oracle). The old
+        // Rugra-specific "cascade member" guard (commit 290d060) had no
+        // oracle counterpart and wrongly rejected a BlockCondition composite
+        // whose in-edges still reference the already-consumed (DEAD) CBRANCH
+        // blocks of a collapsed Or-pattern — the exact composite
+        // ruleBlockIfNoExit must wrap for GetStr-style short-circuit exits.
+        // Switch-case protection below is the isSwitchOut() equivalent for
+        // Rugra's switch representation.
 
         let cond_idx = b.get_index();
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
@@ -3386,7 +3405,10 @@ impl<'a> CollapseStructure<'a> {
             if c.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
             drop(c);
 
-            let negated = dir == 1;
+            // Ghidra blockaction.cc:1510-1512 (ruleBlockIfNoExit): `if (i==0)
+            // negateCondition(true)` — out[0] is the fall-through/false edge,
+            // so a dir==0 clause is emitted negated (BlockIf::negated).
+            let negated = dir == 0;
             // Create BlockIf via factory (block.cc:1822 newBlockIf).
             self.new_block_if(&block, &clause, negated, i);
             return true;

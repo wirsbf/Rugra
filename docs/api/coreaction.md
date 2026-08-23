@@ -853,6 +853,18 @@ build_full_pipeline_actions()：返回已实现非 stub Action，按 Ghidra 顺�
 ### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
 action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。
 
+### 2026-08-23：ActionPreferComplement 忠实移植（GETSTR-ZERODIFF-A 域）
+
+旧实现（"遍历 sblocks 对每个结构块 CBRANCH 无条件翻 BOOLEAN_FLIP + 比较 opcode"）无 oracle 对应物，且与结构化期 negateCondition 设置的 flag 叠加造成全局极性污染。忠实移植：
+- `apply`（blockaction.cc:2140-2167）：BFS 结构树（跳过 t_copy/t_basic），每块调 `prefer_complement`。
+- `prefer_complement`（block.cc:3093-3109）：仅 3-child BlockIf（有 else 臂）；`getSplitPoint`→`flipInPlaceTest != 0` 拒绝→`flipInPlaceExecute` + `op_flip_in_place_execute` + 交换 then/else 臂。
+- `get_split_point` 分发（block.hh:243 默认 None / BlockBasic sizeOut==2 / BlockCopy 委托 / BlockList 末子 / BlockCondition 自身）。
+- `flip_in_place_test`（block.cc:2368 BlockBasic 经 `op_flip_in_place_test`；block.cc:2990 BlockCondition 双子 splitpoint 递归）。
+- `op_flip_in_place_test`（funcdata_op.cc:1221-1278）：CBRANCH→cond vn loneDescend 递归；EQUAL push+1；BOOL_NEGATE/NOTEQUAL push+0；LESS 家族常量敏感；BOOL_AND/OR 双子递归 push 返回 subtest1。
+- `op_flip_in_place_execute`（funcdata_op.cc:1280-1315）：BOOL_NEGATE 整体删除（输入传播给唯一读者）；BOOL_AND↔OR；其余 get_booleanflip 交换 + swapInput + `replace_lessequal`（funcdata_op.cc:1029-1063，含符号/无符号溢出守卫）。
+- `flip_in_place_execute`（block.cc:2381 BlockBasic：翻 FALLTHRU_TRUE + swapEdges；block.cc:3007 BlockCondition：AND↔OR + 双子执行）。
+测试：test_prefercomplement_flips_if_else_condition（3-child INT_NOTEQUAL 规范化翻转 / 2-child 拒绝 / 已规范化 INT_EQUAL 拒绝）、test_prefercomplement_flip_in_place_execute（INT_LESS→LESSEQUAL swap；BOOL_NEGATE 删除重接）。GetStr 本身不经此路径（其 if 无 else 臂），此修复消除全局极性污染源。
+
 ### 2026-07-01（续 4）：12 个缺失 Action 实现
 简单标记类：ActionStartCleanUp（coreaction.cc:5692）、ActionStartTypes（5687，实际工作：set_type_recovery_started）、ActionStop（5738）。
 Merge 类：ActionAssignHigh（coreaction.hh:339，rule_onceperfunc，建 HighVariable）、ActionDominantCopy（调 dominant_copy）、ActionCopyMarker（调 copy_marker）。
