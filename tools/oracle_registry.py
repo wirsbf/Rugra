@@ -528,6 +528,73 @@ def _validate_record_fields(record: dict, row: dict, prefix: str, label: str) ->
             )
 
 
+def _continuity_reviewed_indexes(generator):
+    transition_required = (
+        "base_id", "from_id", "to_id", "commit", "from_path", "to_path",
+        "parent_blob", "child_blob", "review",
+    )
+    transition_rows = list(generator.CONTINUITY_REVIEWED_TRANSITIONS)
+    transition_index = {}
+    for row in transition_rows:
+        if not isinstance(row, dict) or any(not row.get(field) for field in transition_required):
+            raise HarnessError("generator continuity reviewed transition allowlist is malformed")
+        key = (row["base_id"], row["from_id"], row["to_id"], row["commit"])
+        if key in transition_index:
+            raise HarnessError("generator continuity reviewed transition allowlist has duplicates")
+        transition_index[key] = row
+
+    tombstone_required = (
+        "base_id", "from_id", "commit", "parent_blob", "child_blob", "reason",
+    )
+    tombstone_rows = list(generator.CONTINUITY_REVIEWED_TOMBSTONES)
+    tombstone_index = {}
+    for row in tombstone_rows:
+        if not isinstance(row, dict) or any(not row.get(field) for field in tombstone_required):
+            raise HarnessError("generator continuity reviewed tombstone allowlist is malformed")
+        key = (row["base_id"], row["from_id"], row["commit"])
+        if key in tombstone_index:
+            raise HarnessError("generator continuity reviewed tombstone allowlist has duplicates")
+        tombstone_index[key] = row
+    return transition_index, tombstone_index
+
+
+def _validate_reviewed_continuity_event(
+    origin, event, evidence, reviewed_index, used_reviewed
+) -> None:
+    key = (origin, event["from_id"], event["to_id"], event["commit"])
+    rule = reviewed_index.get(key)
+    if rule is None:
+        raise HarnessError(f"continuity reviewed event is absent from exact allowlist: {key}")
+    expected = {
+        "from_path": event["from_path"],
+        "to_path": event["to_path"],
+        "parent_blob": event["parent_blob"],
+        "child_blob": event["child_blob"],
+    }
+    if any(rule[field] != value for field, value in expected.items()):
+        raise HarnessError(f"continuity reviewed event path/blob pin mismatch: {key}")
+    if evidence != ["reviewed_successor_allowlist", rule["review"]]:
+        raise HarnessError(f"continuity reviewed event evidence/review mismatch: {key}")
+    used_reviewed.add(key)
+
+
+def _validate_continuity_tombstone_alias_chain(base_id, aliases, events) -> str:
+    if (not isinstance(aliases, list) or not aliases
+            or len(aliases) != len(events) + 1
+            or len(aliases) != len(set(aliases))
+            or aliases[0] != base_id):
+        raise HarnessError(
+            f"continuity tombstone aliases must be unique event chain plus terminal: {base_id}"
+        )
+    for index, event in enumerate(events):
+        if (not isinstance(event, dict) or event.get("from_id") != aliases[index]
+                or event.get("to_id") != aliases[index + 1]):
+            raise HarnessError(
+                f"continuity tombstone alias/event chain mismatch at {index}: {base_id}"
+            )
+    return aliases[-1]
+
+
 def _verify_continuity_git(
     root: str, continuity: dict, migration: dict, ledger: dict
 ) -> tuple[set, set, object]:
@@ -706,6 +773,9 @@ def _load_and_validate_continuity(
     baseline_ids, current_ids, generator = _verify_continuity_git(
         root, continuity, migration, ledger
     )
+    reviewed_index, reviewed_tombstone_index = _continuity_reviewed_indexes(generator)
+    used_reviewed = set()
+    used_reviewed_tombstones = set()
     ordered_history = _registry_git(
         root, ["rev-list", "--first-parent", "--reverse",
                f"{continuity['baseline']['commit']}..{continuity['checkpoint']['commit']}"],
@@ -845,8 +915,10 @@ def _load_and_validate_continuity(
                     raise HarnessError(
                         f"continuity automatic evidence does not reproduce from Git for {origin}"
                     )
-            elif evidence[0] != "reviewed_successor_allowlist" or len(evidence) < 2:
-                raise HarnessError(f"continuity event lacks automatic or reviewed evidence: {origin}")
+            else:
+                _validate_reviewed_continuity_event(
+                    origin, event, evidence, reviewed_index, used_reviewed
+                )
             expected_from = event["to_id"]
         if expected_from != expected_terminal:
             raise HarnessError(f"continuity lineage for {origin} terminates at {expected_from}")
@@ -922,10 +994,12 @@ def _load_and_validate_continuity(
         tombstone_bases.add(base_id)
         if base_id not in baseline_ids and base_id not in introduced_by_base:
             raise HarnessError(f"continuity tombstone base has no known origin: {base_id}")
-        if (not isinstance(aliases, list) or not aliases
+        if (not isinstance(aliases, list)
                 or not isinstance(events, list) or not row["reason"]):
             raise HarnessError(f"malformed continuity tombstone {base_id}")
-        final_deleted = aliases[-1]
+        final_deleted = _validate_continuity_tombstone_alias_chain(
+            base_id, aliases, events
+        )
         minimum_order = (
             commit_order[introduced_by_base[base_id]["introduced_at_commit"]]
             if base_id in introduced_by_base else -1
@@ -938,6 +1012,25 @@ def _load_and_validate_continuity(
             raise HarnessError(f"continuity tombstone commit outside history: {base_id}")
         if commit_order[commit] <= last_event_order:
             raise HarnessError(f"continuity tombstone is not after its lineage: {base_id}")
+        tombstone_key = (base_id, final_deleted, commit)
+        tombstone_rule = reviewed_tombstone_index.get(tombstone_key)
+        if tombstone_rule is None:
+            raise HarnessError(
+                f"continuity tombstone is absent from exact allowlist: {tombstone_key}"
+            )
+        tombstone_pins = {
+            "parent_blob": row["parent_blob"],
+            "child_blob": row["child_blob"],
+            "reason": row["reason"],
+        }
+        if any(tombstone_rule[field] != value for field, value in tombstone_pins.items()):
+            raise HarnessError(f"continuity tombstone allowlist pin mismatch: {base_id}")
+        for field in ("path", "module", "owner", "name", "signature"):
+            if field in tombstone_rule and tombstone_rule[field] != row[field]:
+                raise HarnessError(
+                    f"continuity tombstone allowlist {field} mismatch: {base_id}"
+                )
+        used_reviewed_tombstones.add(tombstone_key)
         parent = _registry_git(root, ["rev-parse", f"{commit}^1"]).strip()
         if (_git_path_blob(root, parent, row["path"]) != row["parent_blob"]
                 or _git_path_blob(root, commit, row["path"]) != row["child_blob"]):
@@ -1008,6 +1101,18 @@ def _load_and_validate_continuity(
         raise HarnessError(
             "continuity stats.reviewed_transitions mismatch: "
             f"expected {reviewed_events}, got {stats.get('reviewed_transitions')!r}"
+        )
+    if used_reviewed != set(reviewed_index):
+        raise HarnessError(
+            "continuity reviewed transition allowlist coverage mismatch: "
+            f"missing={sorted(set(reviewed_index)-used_reviewed)} "
+            f"extra={sorted(used_reviewed-set(reviewed_index))}"
+        )
+    if used_reviewed_tombstones != set(reviewed_tombstone_index):
+        raise HarnessError(
+            "continuity reviewed tombstone allowlist coverage mismatch: "
+            f"missing={sorted(set(reviewed_tombstone_index)-used_reviewed_tombstones)} "
+            f"extra={sorted(used_reviewed_tombstones-set(reviewed_tombstone_index))}"
         )
     return live_map, tombstone_map, continuity
 
@@ -2518,6 +2623,66 @@ def self_test() -> int:
 
         def codes(report):
             return {issue["code"] for issue in report["issues"]}
+
+        # Continuity reviewed evidence is not a free-form escape hatch.  This
+        # reproduces the malicious half-in/half-out swap: an event carrying a
+        # reviewed label must still match the exact code allowlist key/pins.
+        malicious_event = {
+            "from_id": "RG-F-" + "01" * 10,
+            "to_id": "RG-F-" + "02" * 10,
+            "commit": "3" * 40,
+            "from_path": "src/block.rs",
+            "to_path": "src/block.rs",
+            "parent_blob": "4" * 40,
+            "child_blob": "5" * 40,
+        }
+        malicious_rejected = False
+        try:
+            _validate_reviewed_continuity_event(
+                malicious_event["from_id"], malicious_event,
+                ["reviewed_successor_allowlist", "forged half-edge swap"], {}, set(),
+            )
+        except HarnessError:
+            malicious_rejected = True
+        expect("forged reviewed continuity event rejected", malicious_rejected)
+
+        exact_key = (
+            malicious_event["from_id"], malicious_event["from_id"],
+            malicious_event["to_id"], malicious_event["commit"],
+        )
+        exact_rule = {
+            "base_id": malicious_event["from_id"],
+            **malicious_event,
+            "review": "independent review receipt",
+        }
+        used = set()
+        _validate_reviewed_continuity_event(
+            malicious_event["from_id"], malicious_event,
+            ["reviewed_successor_allowlist", "independent review receipt"],
+            {exact_key: exact_rule}, used,
+        )
+        expect("exact reviewed continuity event accepted", used == {exact_key})
+
+        chain_a = "RG-F-" + "06" * 10
+        chain_b = "RG-F-" + "07" * 10
+        chain_event = {"from_id": chain_a, "to_id": chain_b}
+        expect("tombstone alias chain has exact event-plus-terminal shape",
+               _validate_continuity_tombstone_alias_chain(
+                   chain_a, [chain_a, chain_b], [chain_event]
+               ) == chain_b)
+        for aliases in (
+            [chain_a],
+            [chain_a, chain_b, "RG-F-" + "08" * 10],
+            [chain_a, chain_b, chain_b],
+        ):
+            rejected = False
+            try:
+                _validate_continuity_tombstone_alias_chain(
+                    chain_a, aliases, [chain_event]
+                )
+            except HarnessError:
+                rejected = True
+            expect(f"malformed tombstone alias chain rejected ({len(aliases)})", rejected)
 
         expect("status parser accepts only colon/parenthesis suffixes",
                status_token("MISMATCH: detail") == "MISMATCH"
