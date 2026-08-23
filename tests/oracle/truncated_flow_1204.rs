@@ -5,6 +5,7 @@
 //! exception injection mirror `truncated_flow_1204.cc` one-for-one.
 
 use rugra::address::Address;
+use rugra::block::BlockBasic;
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::flow::FlowInfo;
 use rugra::fspec::FuncCallSpecs;
@@ -12,7 +13,7 @@ use rugra::funcdata::Funcdata;
 use rugra::jumptable::{JumpModel, JumpModelTrivial, JumpTable, NormMax};
 use rugra::op::{pcodeop_flags, PcodeOpRef};
 use rugra::opcodes::OpCode;
-use rugra::space::AddressSpace;
+use rugra::space::{space_flags, AddrSpace, AddressSpace, SpaceType};
 use std::env;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -133,6 +134,72 @@ fn build_success_source(name: &str, source_addr: u64, callee_addr: u64) -> (Func
     configure_table(&linked, Some(&copy), source_addr);
     source.jump_tables.push(linked);
     (source, oldspec_address)
+}
+
+fn build_range_source(name: &str, source_addr: u64, code_space: &AddrSpace) -> Funcdata {
+    let base = Address::with_space(code_space, source_addr);
+    let mut source = Funcdata::new(name, base, 1);
+
+    let first = source.new_op(0, base);
+    source.op_set_opcode(&first, OpCode::CPUI_COPY);
+    first.0.write().expect("first write lock").flags |=
+        pcodeop_flags::STARTBASIC | pcodeop_flags::STARTMARK;
+
+    let maximum = source.new_op(0, Address::with_space(code_space, source_addr + 0x40));
+    source.op_set_opcode(&maximum, OpCode::CPUI_COPY);
+    maximum.0.write().expect("maximum write lock").flags |= pcodeop_flags::STARTMARK;
+
+    let last = source.new_op(0, Address::with_space(code_space, source_addr + 0x20));
+    source.op_set_opcode(&last, OpCode::CPUI_RETURN);
+    last.0.write().expect("last write lock").flags |= pcodeop_flags::STARTMARK;
+    source
+}
+
+fn print_range(source: &Funcdata, target: &Funcdata, code_space: &AddrSpace) {
+    let block = target.bblocks.blocks[0]
+        .read()
+        .expect("range block read lock");
+    let basic = block
+        .as_any()
+        .downcast_ref::<BlockBasic>()
+        .expect("range clone must produce BlockBasic");
+    let start = block.get_start_addr();
+    let stop = basic.get_stop_addr();
+    let base = Address::with_space(code_space, source.baseaddr.as_u64());
+    let expected_stop = Address::with_space(code_space, source.baseaddr.as_u64() + 0x40);
+    let last = Address::with_space(code_space, source.baseaddr.as_u64() + 0x20);
+    let start_space_same = match (start.get_space(), base.get_space()) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    };
+    let stop_space_same = match (stop.get_space(), base.get_space()) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    };
+    let op_deltas: Vec<_> = block
+        .get_ops()
+        .iter()
+        .map(|op| {
+            let op = op.0.read().expect("range op read lock");
+            (op.get_addr().as_u64() as i64 - source.baseaddr.as_u64() as i64).to_string()
+        })
+        .collect();
+    println!(
+        "case=block_range blocks={} alive={} dead={} start_valid={} stop_valid={} start_space_same={} stop_space_same={} start_exact={} stop_exact={} stop_not_last={} start_delta={} stop_delta={} op_deltas=[{}]",
+        target.bblocks.blocks.len(),
+        target.obank.alivelist.len(),
+        target.obank.deadlist.len(),
+        usize::from(start.get_space().is_some()),
+        usize::from(stop.get_space().is_some()),
+        usize::from(start_space_same),
+        usize::from(stop_space_same),
+        usize::from(start == base),
+        usize::from(stop == expected_stop),
+        usize::from(stop != last),
+        start.as_u64() as i64 - source.baseaddr.as_u64() as i64,
+        stop.as_u64() as i64 - source.baseaddr.as_u64() as i64,
+        op_deltas.join(","),
+    );
 }
 
 fn print_table(table: &Arc<RwLock<JumpTable>>, base: u64) {
@@ -280,9 +347,9 @@ fn print_success(source: &Funcdata, target: &Funcdata, oldspec_address: usize) {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args().collect();
-    if args.len() != 9 {
+    if args.len() != 11 {
         return Err(
-            "usage: truncated_flow_1204 SOURCE TARGET CALLEE NONEMPTY ERROR_SOURCE ERROR_TARGET ENTRY_SOURCE ENTRY_TARGET".into(),
+            "usage: truncated_flow_1204 SOURCE TARGET CALLEE NONEMPTY ERROR_SOURCE ERROR_TARGET ENTRY_SOURCE ENTRY_TARGET RANGE_SOURCE RANGE_TARGET".into(),
         );
     }
     let source_addr = parse_address(&args[1])?;
@@ -293,6 +360,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let error_target_addr = parse_address(&args[6])?;
     let entry_source_addr = parse_address(&args[7])?;
     let entry_target_addr = parse_address(&args[8])?;
+    let range_source_addr = parse_address(&args[9])?;
+    let range_target_addr = parse_address(&args[10])?;
 
     let (mut source, oldspec_address) =
         build_success_source("truncated_flow_source", source_addr, callee_addr);
@@ -300,6 +369,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut target = Funcdata::new("truncated_flow_target", Address::new(target_addr), 1);
     target.truncated_flow(&source, &state)?;
     print_success(&source, &target, oldspec_address);
+
+    let code_space = AddrSpace::new_space(
+        SpaceType::Processor,
+        "ram",
+        false,
+        8,
+        1,
+        4,
+        space_flags::HASPHYSICAL,
+        0,
+        0,
+    );
+    let mut range_source = build_range_source(
+        "truncated_flow_range_source",
+        range_source_addr,
+        &code_space,
+    );
+    let range_state = flow_state(&mut range_source, None);
+    let mut range_target = Funcdata::new(
+        "truncated_flow_range_target",
+        Address::with_space(&code_space, range_target_addr),
+        1,
+    );
+    range_target.truncated_flow(&range_source, &range_state)?;
+    print_range(&range_source, &range_target, &code_space);
 
     let mut nonempty = Funcdata::new("truncated_flow_nonempty", Address::new(nonempty_addr), 1);
     nonempty.new_op(0, Address::new(nonempty_addr));

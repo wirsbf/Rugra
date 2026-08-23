@@ -1086,6 +1086,11 @@ pub struct BlockBasic {
     pub flags: u32,
     /// Start address of the block
     pub start_addr: Address,
+    /// Initial instruction-address range owned by this block.  The two
+    /// endpoints retain their complete address-space identity; the end is
+    /// normalized to the beginning space by `set_initial_range`, matching
+    /// `RangeList::insertRange(beg.getSpace(), beg.getOffset(), end.getOffset())`.
+    initial_range: Option<(Address, Address)>,
 
     /// Immediate dominator of this block
     pub immed_dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
@@ -1120,6 +1125,7 @@ impl BlockBasic {
             parent: None,
             flags: 0,
             start_addr,
+            initial_range: None,
             immed_dom: None,
             dom_depth: -1,
             dom_children: Vec::new(),
@@ -1216,21 +1222,26 @@ impl BlockBasic {
         self.ops.last().cloned()
     }
 
-    // RUGRA-GLUE: 近似 Ghidra BlockBasic::getStop (block.cc:2328)。Ghidra 用块
-    // 的 cover 地址范围；Rugra 无 block cover，用最后 op 地址近似（仅 SeqNum 用）。
-    /// Approximation of Ghidra `BlockBasic::getStop` (block.cc:2328), which
-    /// returns the last address of the block's address cover. Rugra has no
-    /// block cover system, so we approximate with the address of the last op
-    /// (or the entry address if empty). This is used only as a SeqNum address
-    /// for newly inserted ops (e.g. in buildDominantCopy), not for control
-    /// flow, so the approximation is semantically safe.
+    /// Replace the original instruction cover with the single closed range
+    /// `[beg, end]`.  Ghidra takes the address space from `beg` and only the
+    /// offset from `end`; preserving that detail prevents a later scalar
+    /// reconstruction from dropping the space identity.
+    // Ghidra: block.cc:2625 BlockBasic::setInitialRange
+    pub(crate) fn set_initial_range(&mut self, beg: Address, end: Address) {
+        let covered_end = match beg.get_space() {
+            Some(space) => Address::with_space(&space, end.as_u64()),
+            None => Address::new(end.as_u64()),
+        };
+        self.start_addr = beg;
+        self.initial_range = Some((beg, covered_end));
+    }
+
+    /// Return the final address in the original instruction cover.
+    // Ghidra: block.cc:2328 BlockBasic::getStop
     pub fn get_stop_addr(&self) -> crate::address::Address {
-        if let Some(last) = self.ops.last() {
-            let op = last.0.read().unwrap();
-            op.get_addr()
-        } else {
-            self.start_addr
-        }
+        self.initial_range
+            .map(|(_, stop)| stop)
+            .unwrap_or(self.start_addr)
     }
 
     /// Get the first operation in the block
@@ -1334,9 +1345,11 @@ impl FlowBlock for BlockBasic {
         self.ops.insert(index, op);
     }
 
-    // Ghidra: block.hh:478 BlockBasic::getStart
+    // Ghidra: block.cc:2319 BlockBasic::getStart
     fn get_start_addr(&self) -> Address {
-        self.start_addr
+        self.initial_range
+            .map(|(start, _)| start)
+            .unwrap_or(self.start_addr)
     }
 
     // Ghidra: block.hh:161 FlowBlock::getParent

@@ -117,6 +117,14 @@ extern "C" __attribute__((naked, noinline, used)) void truncated_flow_entry_targ
 {
   __asm__ volatile("ret");
 }
+extern "C" __attribute__((naked, noinline, used)) void truncated_flow_range_source(void)
+{
+  __asm__ volatile("ret");
+}
+extern "C" __attribute__((naked, noinline, used)) void truncated_flow_range_target(void)
+{
+  __asm__ volatile("ret");
+}
 
 namespace {
 
@@ -393,6 +401,52 @@ void runFixture(const string &specRoot, const string &binary)
     sourceFlow.setFlags(FlowInfo::possible_unreachable | FlowInfo::error_unimplemented);
     target->truncatedFlow(source,&sourceFlow);
     printSuccess(source,target,callspec,linked);
+
+    Funcdata *rangeSource = requireFunction(architecture,"truncated_flow_range_source");
+    Funcdata *rangeTarget = requireFunction(architecture,"truncated_flow_range_target");
+    const Address rangeBase = rangeSource->getAddress();
+    PcodeOp *rangeFirst = rangeSource->newOp(0,rangeBase);
+    rangeSource->opSetOpcode(rangeFirst,CPUI_COPY);
+    rangeSource->opMarkStartBasic(rangeFirst);
+    rangeSource->opMarkStartInstruction(rangeFirst);
+    PcodeOp *rangeMax = rangeSource->newOp(0,rangeBase + 0x40);
+    rangeSource->opSetOpcode(rangeMax,CPUI_COPY);
+    rangeSource->opMarkStartInstruction(rangeMax);
+    PcodeOp *rangeLast = rangeSource->newOp(0,rangeBase + 0x20);
+    rangeSource->opSetOpcode(rangeLast,CPUI_RETURN);
+    rangeSource->opMarkStartInstruction(rangeLast);
+    FlowInfo rangeFlow(*rangeSource,obank(rangeSource),bblocks(rangeSource),qlst(rangeSource));
+    rangeTarget->truncatedFlow(rangeSource,&rangeFlow);
+    const vector<FlowBlock *> &rangeBlocks = rangeTarget->getBasicBlocks().getList();
+    const BlockBasic *rangeBlock = rangeBlocks.size() == 1
+        ? dynamic_cast<const BlockBasic *>(rangeBlocks[0]) : (const BlockBasic *)0;
+    if (rangeBlock == (const BlockBasic *)0)
+      throw std::runtime_error("range clone did not produce one basic block");
+    const Address rangeStart = rangeBlock->getStart();
+    const Address rangeStop = rangeBlock->getStop();
+    std::cout << "case=block_range blocks=" << rangeBlocks.size()
+              << " alive=" << listCount(obank(rangeTarget).beginAlive(),obank(rangeTarget).endAlive())
+              << " dead=" << listCount(obank(rangeTarget).beginDead(),obank(rangeTarget).endDead())
+              << " start_valid=" << (!rangeStart.isInvalid() ? 1 : 0)
+              << " stop_valid=" << (!rangeStop.isInvalid() ? 1 : 0)
+              << " start_space_same=" << (rangeStart.getSpace() == rangeBase.getSpace() ? 1 : 0)
+              << " stop_space_same=" << (rangeStop.getSpace() == rangeBase.getSpace() ? 1 : 0)
+              << " start_exact=" << (rangeStart == rangeBase ? 1 : 0)
+              << " stop_exact=" << (rangeStop == rangeBase + 0x40 ? 1 : 0)
+              << " stop_not_last=" << (rangeStop != rangeLast->getAddr() ? 1 : 0)
+              << " start_delta="
+              << static_cast<int8>(rangeStart.getOffset() - rangeBase.getOffset())
+              << " stop_delta="
+              << static_cast<int8>(rangeStop.getOffset() - rangeBase.getOffset())
+              << " op_deltas=[";
+    bool rangeFirstOutput = true;
+    for(list<PcodeOp *>::const_iterator it=rangeBlock->beginOp();
+        it!=rangeBlock->endOp();++it) {
+      if (!rangeFirstOutput) std::cout << ',';
+      rangeFirstOutput = false;
+      std::cout << static_cast<int8>((*it)->getAddr().getOffset() - rangeBase.getOffset());
+    }
+    std::cout << "]\n";
 
     Funcdata *nonempty = requireFunction(architecture,"truncated_flow_nonempty");
     nonempty->newOp(0,nonempty->getAddress());

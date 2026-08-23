@@ -276,8 +276,9 @@ fd、锁定 git archive、isolated Cargo.lock vendor 和 byte diff 起草，但 
   官方入口；每个 op 按 `BlockBasic::insert`（block.cc:2258-2289）的 midpoint
   公式赋 mutable `SeqNum::order`（首 op `2 → 2+0x1000000` 中点 `0x800002`，
   之后每步 +0x800000）；块地址范围按 `setBasicBlockRange`（funcdata.hh:556 →
-  block.cc:2625 `setInitialRange`）语义记录（Rugra 无 cover，stop 由最后 op
-  地址导出，与本 fixture 单调地址等价）。
+  block.cc:2625 `setInitialRange`）语义记录。此处现保留完整 `Address`
+  空间身份，`stop` 按 `Address::operator<` 扫描块内所有非起始 op 取最大值，
+  不再降为 `u64` 或使用最后 op 近似。
 - **`collectEdges` 修正**：CBRANCH 先 fallthru 后 branch 边（flow.cc:961-966）；
   BRANCHIND 的 setMark 去重后按 flow.cc:947-956 只清除本次设置的 mark。
 - **`generateOps`** 头部补 `clearProperties()`（flow.cc:790）。
@@ -445,3 +446,9 @@ Oracle 在进入 `generateBlocks` 前已经完成的 raw clone，但不会开始
 且目标不会误置 `BLOCKS_GENERATED`。clone constructor 的全部地址状态、inline
 recursion 与 injection 分支尚未逐分支驱动，仍标 `UNTESTED`；FlowInfo 模块保持
 L2，不沿用本文早期“Phase 完成”文字推断全模块对齐。
+
+2026-08-24 的切片 B 另增单块地址序列 `[0,64,32]`：Ghidra 与
+Rugra 都保留默认 code space 身份，范围为闭区间 `[0,64]`，
+从而同时锁定完整 `Address` 传递、遍历边界与“块内最大值而非最后
+op”。`BlockBasic` 多范围 copy/merge/marshal 仍归 `BLOCKBASIC-COVER-0001`，
+本 fixture 对该部分保持 `UNTESTED`。

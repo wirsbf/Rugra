@@ -2272,10 +2272,10 @@ impl<'a> FlowInfo<'a> {
         }
         // flow.cc:996-998: create the first block and register the official
         // entry point before later blocks are built.
-        let mut start = dead[0].0.read().unwrap().get_addr().as_u64();
+        let mut start = dead[0].0.read().unwrap().get_addr();
         let mut stop = start;
         let mut current: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(self.fd.bblocks.get_size() as i32, Address::new(start)),
+            BlockBasic::new(self.fd.bblocks.get_size() as i32, start),
         ));
         self.fd.bblocks.add_block(current.clone());
         Self::set_start_block(&mut self.fd.bblocks, current.clone());
@@ -2291,7 +2291,7 @@ impl<'a> FlowInfo<'a> {
                 // open a new block at this op.
                 Self::set_block_range(&current, start, stop);
                 let op_addr = op_ref.0.read().unwrap().get_addr();
-                start = op_addr.as_u64();
+                start = op_addr;
                 stop = start;
                 current = Arc::new(RwLock::new(BlockBasic::new(
                     self.fd.bblocks.get_size() as i32,
@@ -2301,7 +2301,7 @@ impl<'a> FlowInfo<'a> {
                 prev_order = None;
             } else {
                 // flow.cc:1010-1012: stop tracks the biggest address.
-                let next_addr = op_ref.0.read().unwrap().get_addr().as_u64();
+                let next_addr = op_ref.0.read().unwrap().get_addr();
                 if stop < next_addr {
                     stop = next_addr;
                 }
@@ -2318,16 +2318,17 @@ impl<'a> FlowInfo<'a> {
 
     /// `Funcdata::setBasicBlockRange(cur,start,stop)` (funcdata.hh:556,
     /// delegating to `BlockBasic::setInitialRange` at block.cc:2625-2631)
-    /// adapter: Rugra's `BlockBasic` has no cover object, so the range is
-    /// recorded on the block's start address and the derived stop (last op
-    /// address — identical to Ghidra's cover stop for non-decreasing op
-    /// addresses within a block).
-    // Ghidra: funcdata.hh:556 Funcdata::setBasicBlockRange (range adapter)
-    fn set_block_range(block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, start: u64, stop: u64) {
+    /// adapter: replace the block's initial closed range while retaining both
+    /// endpoints as complete `Address` values.
+    // Ghidra: funcdata.hh:556 Funcdata::setBasicBlockRange
+    fn set_block_range(
+        block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        start: Address,
+        stop: Address,
+    ) {
         let mut guard = block.write().unwrap();
         if let Some(basic) = guard.as_any_mut().downcast_mut::<BlockBasic>() {
-            basic.start_addr = Address::new(start);
-            let _ = stop; // derived by BlockBasic::get_stop_addr (last op)
+            basic.set_initial_range(start, stop);
         }
     }
 
@@ -2459,8 +2460,10 @@ impl<'a> FlowInfo<'a> {
         // it to the old entry, then transfer f_entry_point to the new block.
         if let Some(start) = self.fd.bblocks.get_block(0) {
             if start.read().unwrap().size_in() != 0 {
+                let mut basic = BlockBasic::new(0, self.fd.baseaddr);
+                basic.set_initial_range(self.fd.baseaddr, self.fd.baseaddr);
                 let new_front: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                    Arc::new(RwLock::new(BlockBasic::new(0, self.fd.baseaddr)));
+                    Arc::new(RwLock::new(basic));
                 self.fd.bblocks.add_block(new_front.clone());
                 self.fd.bblocks.add_edge(new_front.clone(), start);
                 Self::set_start_block(&mut self.fd.bblocks, new_front);

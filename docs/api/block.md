@@ -306,6 +306,23 @@ raw ops / PcodeOp
 - dominance 信息
 - loop 信息
 
+`start_addr` 同时是存量直接读取者的兼容镜像。`FlowInfo::split_basic`
+完成分块时会通过 `set_initial_range` 安装闭区间；区间的两端是完整
+`Address`，因此不会丢失 address-space 身份。与 Ghidra `setInitialRange`
+一样，结束端取 `beg` 的空间和 `end` 的 offset。
+
+### `pub fn get_stop_addr(&self) -> Address`
+
+返回初始指令覆盖范围的最后一个地址，对应 `BlockBasic::getStop`
+(`block.cc:2328-2335`)。这个值来自 `set_initial_range` 记录的结束端，
+不再用块内最后一条 op 的地址近似。尚未安装初始范围的存量
+Rust 块仍回退到构造时的 `start_addr`；Ghidra 原生构造器不接受
+这个兼容参数。
+
+本轮只闭合 `setInitialRange` 建立的单范围。`copyRange`/`mergeRange`、
+多不相连范围下的 `contains`/`getEntryAddr`与 RangeList marshal 仍归
+`BLOCKBASIC-COVER-0001`，不由该字段的存在推断已完成。
+
 ---
 
 ### `pub fn add_op(&mut self, op: PcodeOpRef)`
@@ -976,9 +993,11 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 - **位值偏离技术债**：Ghidra 用 0x10/0x20，但 Rugra 早期把 0x10/0x20 分配给了 DEAD/MARK。本次用新位 1<<10/1<<11，**语义对齐，位值待统一重排**。
 - 用于 `splice_block_basic` 的 flags 合并（block.cc:1609-1619）：splice 后 `bl->flags = (bl & (unstructured_targ|entry_point)) | (outbl & switch_out)`。
 
-### 2026-07-04（续）：find_common_block_n + get_stop_addr
+### 2026-07-04（续）：find_common_block_n + get_stop_addr（历史状态）
 - `BlockGraph::find_common_block_n(block_set)`（对齐 block.cc:796）：N-way 支配树 LCA，用 HashSet 模拟 mark。供 build_dominant_copy 使用。
-- `BlockBasic::get_stop_addr()`（近似 block.cc:2328 getStop）：用最后 op 地址近似块的结束地址（无 cover 系统）。
+- 当时 `BlockBasic::get_stop_addr()` 用最后 op 地址近似块结束。
+  2026-08-24 的 `FLOW-TRUNCATED-0001` 切片 B 已用完整 `Address`
+  初始范围取代该近似；本条仅保留为历史记录。
 
 ### 2026-07-04：block_flags 位值完整对齐 Ghidra block.hh:88-105
 - 所有 Ghidra 共享 flags 用精确位值：SWITCH_OUT=0x10, UNSTRUCTURED_TARG=0x20, MARK=0x80, ENTRY_POINT=0x200, DEAD=0x4000, JOINED_BLOCK=0x20000。

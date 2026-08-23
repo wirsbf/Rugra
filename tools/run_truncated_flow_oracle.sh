@@ -10,6 +10,7 @@ oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
 rugra_source_commit=4c4808d12dfabeecd7043c49da852adf9a10e68f
 rugra_source_tree=71ed04342212855062188a1ed1dff27c1ebf4892
 rugra_source_src_tree=004b20c8ed6da74cf6457a4386570bae4801bc78
+rugra_source_block_blob=b2ffde0323304a21d8a08011be95c84ef3fe289f
 rugra_source_funcdata_blob=9800c38b1c1bb37d9c2c28841151e0ad2bf9c148
 rugra_source_flow_blob=c76bd681b78b55e7855769e5e6d438df8c8c4cc2
 rugra_source_op_blob=1f8908d74c0e5b72e41a910e46313066d48ce919
@@ -24,9 +25,11 @@ ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/truncated_flow_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/truncated_flow_1204.cc"
 rust_fixture="$repo_root/tests/oracle/truncated_flow_1204.rs"
+block_overlay="$repo_root/src/block.rs"
 funcdata_overlay="$repo_root/src/funcdata.rs"
 flow_overlay="$repo_root/src/flow.rs"
 op_overlay="$repo_root/src/op.rs"
+block_doc="$repo_root/docs/api/block.md"
 funcdata_doc="$repo_root/docs/api/funcdata.md"
 flow_doc="$repo_root/docs/api/flow.md"
 op_doc="$repo_root/docs/api/op.md"
@@ -42,8 +45,8 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 for required in "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$funcdata_overlay" "$flow_overlay" "$op_overlay" \
-  "$funcdata_doc" "$flow_doc" "$op_doc" "$runner"; do
+  "$block_overlay" "$funcdata_overlay" "$flow_overlay" "$op_overlay" \
+  "$block_doc" "$funcdata_doc" "$flow_doc" "$op_doc" "$runner"; do
   if [[ ! -f "$required" || -L "$required" ]]; then
     echo "required input is not a regular non-symlink file: $required" >&2
     exit 1
@@ -82,6 +85,7 @@ for binding in \
   "$rugra_source_commit^{commit}:$rugra_source_commit" \
   "$rugra_source_commit^{tree}:$rugra_source_tree" \
   "$rugra_source_commit:src:$rugra_source_src_tree" \
+  "$rugra_source_commit:src/block.rs:$rugra_source_block_blob" \
   "$rugra_source_commit:src/funcdata.rs:$rugra_source_funcdata_blob" \
   "$rugra_source_commit:src/flow.rs:$rugra_source_flow_blob" \
   "$rugra_source_commit:src/op.rs:$rugra_source_op_blob" \
@@ -139,6 +143,7 @@ git -C "$repo_root" archive --format=tar \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
   src sleigh_shim
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
+cp "$block_overlay" "$snapshot_root/src/block.rs"
 cp "$funcdata_overlay" "$snapshot_root/src/funcdata.rs"
 cp "$flow_overlay" "$snapshot_root/src/flow.rs"
 cp "$op_overlay" "$snapshot_root/src/op.rs"
@@ -154,11 +159,11 @@ done
 
 runner_sha=$(sha256sum "$runner" | awk '{print $1}')
 python3 -I -S - "$repo_root" "$snapshot_root" "$metadata" "$cpp_fixture" \
-  "$rust_fixture" "$funcdata_overlay" "$flow_overlay" "$op_overlay" \
-  "$funcdata_doc" "$flow_doc" "$op_doc" "$runner_sha" \
+  "$rust_fixture" "$block_overlay" "$funcdata_overlay" "$flow_overlay" "$op_overlay" \
+  "$block_doc" "$funcdata_doc" "$flow_doc" "$op_doc" "$runner_sha" \
   "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" "$oracle_language_tree" \
   "$oracle_makefile_blob" "$rugra_source_commit" "$rugra_source_tree" \
-  "$rugra_source_src_tree" "$rugra_source_funcdata_blob" \
+  "$rugra_source_src_tree" "$rugra_source_block_blob" "$rugra_source_funcdata_blob" \
   "$rugra_source_flow_blob" "$rugra_source_op_blob" \
   "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
   "$rugra_source_build_rs_blob" "$spec_input_commit" \
@@ -171,10 +176,10 @@ import sys
 
 (
     repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw,
-    funcdata_raw, flow_raw, op_raw, funcdata_doc_raw, flow_doc_raw,
-    op_doc_raw, runner_sha, oracle_commit, oracle_tag, cpp_tree,
+    block_raw, funcdata_raw, flow_raw, op_raw, block_doc_raw, funcdata_doc_raw,
+    flow_doc_raw, op_doc_raw, runner_sha, oracle_commit, oracle_tag, cpp_tree,
     language_tree, makefile_blob, source_commit, source_tree,
-    source_src_tree, source_funcdata_blob, source_flow_blob, source_op_blob,
+    source_src_tree, source_block_blob, source_funcdata_blob, source_flow_blob, source_op_blob,
     source_cargo_toml_blob, source_cargo_lock_blob, source_build_rs_blob,
     spec_input_commit, bfd_header_raw, bfd_library_raw,
 ) = sys.argv[1:]
@@ -226,6 +231,7 @@ for label, actual, expected in (
     ("source commit", source["base_commit"], source_commit),
     ("source tree", source["base_tree"], source_tree),
     ("source src tree", source["base_src_tree"], source_src_tree),
+    ("source block blob", source["base_block_blob"], source_block_blob),
     ("source funcdata blob", source["base_funcdata_blob"], source_funcdata_blob),
     ("source flow blob", source["base_flow_blob"], source_flow_blob),
     ("source op blob", source["base_op_blob"], source_op_blob),
@@ -239,9 +245,11 @@ comparand = metadata["comparand"]
 comparands = {
     "cpp_fixture_sha256": pathlib.Path(cpp_raw),
     "rust_fixture_sha256": pathlib.Path(rust_raw),
+    "block_overlay_sha256": pathlib.Path(block_raw),
     "funcdata_overlay_sha256": pathlib.Path(funcdata_raw),
     "flow_overlay_sha256": pathlib.Path(flow_raw),
     "op_overlay_sha256": pathlib.Path(op_raw),
+    "block_doc_sha256": pathlib.Path(block_doc_raw),
     "funcdata_doc_sha256": pathlib.Path(funcdata_doc_raw),
     "flow_doc_sha256": pathlib.Path(flow_doc_raw),
     "op_doc_sha256": pathlib.Path(op_doc_raw),
@@ -250,8 +258,13 @@ for key, path in comparands.items():
     require(key, sha(path.read_bytes()), comparand[key])
 require("runner sha", runner_sha, comparand["runner_sha256"])
 overlays = {entry["path"]: entry for entry in source["overlays"]}
-require("overlay paths", set(overlays), {"src/funcdata.rs", "src/flow.rs", "src/op.rs"})
+require(
+    "overlay paths",
+    set(overlays),
+    {"src/block.rs", "src/funcdata.rs", "src/flow.rs", "src/op.rs"},
+)
 for relative, path in (
+    ("src/block.rs", pathlib.Path(block_raw)),
     ("src/funcdata.rs", pathlib.Path(funcdata_raw)),
     ("src/flow.rs", pathlib.Path(flow_raw)),
     ("src/op.rs", pathlib.Path(op_raw)),
@@ -300,6 +313,8 @@ expected_statuses = {
     "callspec_complete_identity_and_fields": "MISMATCH",
     "jumptable_partial_copy_skip_and_identity": "MATCH",
     "splitbasic_per_op_lifecycle_and_order": "MATCH",
+    "blockbasic_initial_range_and_max_stop": "MATCH",
+    "blockbasic_multi_range_copy_merge_and_marshal": "UNTESTED",
     "nonempty_precondition_exception": "MATCH",
     "missing_jumptable_exception_and_partial_mutation": "MATCH",
     "clone_varnode_type_and_complete_flag_mask": "UNTESTED",
@@ -373,21 +388,22 @@ g++ -std=c++11 -O0 -fno-pie -no-pie -Wl,--build-id=none \
   "$bfd_library" -lz -o "$oracle_tmp/truncated_flow_cpp"
 
 if ! flock /tmp/rugra-cargo-build.lock -c \
-    "CARGO_TARGET_DIR=/tmp/rugra-target-flow-writer cargo build --offline --locked --quiet --manifest-path '$snapshot_root/Cargo.toml' --lib" \
+    "CARGO_TARGET_DIR=/tmp/rugra-target-flow-blockrange cargo build --offline --locked --quiet --manifest-path '$snapshot_root/Cargo.toml' --lib" \
     >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
   cat "$oracle_tmp/cargo.stdout" "$oracle_tmp/cargo.stderr" >&2
   exit 1
 fi
 rustc --edition=2021 -C opt-level=0 \
   "$snapshot_root/tests/oracle/truncated_flow_1204.rs" \
-  --extern rugra=/tmp/rugra-target-flow-writer/debug/librugra.rlib \
-  -L dependency=/tmp/rugra-target-flow-writer/debug/deps \
+  --extern rugra=/tmp/rugra-target-flow-blockrange/debug/librugra.rlib \
+  -L dependency=/tmp/rugra-target-flow-blockrange/debug/deps \
   -o "$oracle_tmp/truncated_flow_rust"
 
 symbol_args=()
 for symbol in truncated_flow_source truncated_flow_target truncated_flow_callee \
   truncated_flow_nonempty truncated_flow_error_source truncated_flow_error_target \
-  truncated_flow_entry_source truncated_flow_entry_target; do
+  truncated_flow_entry_source truncated_flow_entry_target \
+  truncated_flow_range_source truncated_flow_range_target; do
   address=$(nm -n --defined-only "$oracle_tmp/truncated_flow_cpp" | \
     awk -v name="$symbol" '$3 == name && value == "" { value=$1 } END { print value }')
   if [[ -z "$address" ]]; then
@@ -414,6 +430,9 @@ diff -u --label ghidra --label rugra \
   >"$oracle_tmp/raw.diff"
 diff_status=$?
 set -e
+if [[ "$diff_status" -ne 0 ]]; then
+  cat "$oracle_tmp/raw.diff" >&2
+fi
 
 objcopy --dump-section .text="$oracle_tmp/fixture.text" \
   "$oracle_tmp/truncated_flow_cpp"
@@ -435,11 +454,12 @@ paths = {
     "rugra_stderr_sha256": pathlib.Path(sys.argv[5]),
     "raw_diff_sha256": pathlib.Path(sys.argv[6]),
 }
+mismatches = []
 for key, path in paths.items():
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
     expected = metadata["expected_results"][key]
     if actual != expected:
-        raise SystemExit(f"{key} mismatch: expected={expected} actual={actual}")
+        mismatches.append(f"{key} mismatch: expected={expected} actual={actual}")
 for key, actual in (
     ("ghidra_exit_code", int(sys.argv[8])),
     ("rugra_exit_code", int(sys.argv[9])),
@@ -447,29 +467,37 @@ for key, actual in (
 ):
     expected = metadata["expected_results"][key]
     if actual != expected:
-        raise SystemExit(f"{key} mismatch: expected={expected} actual={actual}")
+        mismatches.append(f"{key} mismatch: expected={expected} actual={actual}")
 fixture_text = hashlib.sha256(pathlib.Path(sys.argv[7]).read_bytes()).hexdigest()
 expected_text = metadata["machine_input_sha256"]["fixture_text"]
 if fixture_text != expected_text:
-    raise SystemExit(
+    mismatches.append(
         f"fixture text mismatch: expected={expected_text} actual={fixture_text}"
     )
+if mismatches:
+    raise SystemExit("\n".join(mismatches))
 if paths["ghidra_stderr_sha256"].stat().st_size != 0:
     raise SystemExit("unexpected Ghidra stderr output")
 if paths["rugra_stderr_sha256"].stat().st_size != 0:
     raise SystemExit("unexpected Rugra stderr output")
 records = paths["ghidra_stdout_sha256"].read_text(encoding="utf-8").splitlines()
-if len(records) != 16:
+if len(records) != 17:
     raise SystemExit(f"unexpected observation line count: {len(records)}")
 if records[0] != "case=success":
     raise SystemExit("success case is not first")
-if not records[12].startswith("case=nonempty error=Trying to do truncated flow"):
+if records[12] != (
+    "case=block_range blocks=1 alive=3 dead=0 start_valid=1 stop_valid=1 "
+    "start_space_same=1 stop_space_same=1 start_exact=1 stop_exact=1 "
+    "stop_not_last=1 start_delta=0 stop_delta=64 op_deltas=[0,64,32]"
+):
+    raise SystemExit("block-range observation missing or reordered")
+if not records[13].startswith("case=nonempty error=Trying to do truncated flow"):
     raise SystemExit("nonempty exception observation missing or reordered")
-if not records[13].startswith("case=missing_jumptable error=Could not trace jumptable"):
+if not records[14].startswith("case=missing_jumptable error=Could not trace jumptable"):
     raise SystemExit("missing-jumptable exception observation missing or reordered")
-if not records[14].startswith("case=missing_entry before_all=0 before_dead=0"):
+if not records[15].startswith("case=missing_entry before_all=0 before_dead=0"):
     raise SystemExit("missing-entry pre-state observation missing or reordered")
-if not records[15].startswith("case=missing_entry error=First op not marked as entry point"):
+if not records[16].startswith("case=missing_entry error=First op not marked as entry point"):
     raise SystemExit("missing-entry exception observation missing or reordered")
 print(
     "truncated_flow_1204 oracle gate: covered projection MATCH; "
