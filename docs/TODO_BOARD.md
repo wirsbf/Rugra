@@ -208,6 +208,7 @@ cleanup 池重复的 RuleTrivialArith）。26 项拟登记 TODO 详见报告 §5
 - SUBFLOW-SPLITFLOW-SIGABRT-0001 集成完毕（f216b8e，双层 UB：空指针构造+共享 iop 占位符，oracle NULL 语义逐字对齐）。
 - FLOW-FIXTURE-API-ADAPT-0001 集成完毕（86a6bb9，根因更正为 runner pin 配对失谐，双 overlay 防复发）。
 - 差距组六 Agent 转入分析优先模式（用户三步走指令），等分析报告回收。
+- **globstruct 分析回收（5 根因）**：RC-A shared-return/FlowOverride 整块缺失（决定性证据=direct-runner 纯核心同样吸收 tail call，golden 干净形态由 Java SharedReturnAnalyzer 提供）｜RC-B follow_flow 下界=入口 vs oracle 0（flow.rs:3063，5 函数受害，但需与 A 同修否则吸 PLT）｜RC-C opPtrsub 无 union/findTruncation/field_0x 回退（printc.rs:1338）｜RC-D 符号声明链（已登记域）｜RC-E blockaction 循环体丢失（direct-runner 对照证独立存在，需 A/B 后定位）。派发：RC-A+B 一个修复 Agent（wt/sharedret）；C/E 待其他分析回收后统一排。
 
 | 组 | owner | write-set | 目标函数（rugra vs golden 字符） |
 |---|---|---|---|
