@@ -157,12 +157,13 @@ Corresponds to Ghidra's `RuleZextEliminate`
 
 *暂无代码注释*
 
-### `pub struct RuleSextEliminate`
+### `pub struct RuleSextEliminate` — 已删除（PIPE-POOL-LOCAL-RULES-0001，2026-08-23）
 
-Rule for eliminating redundant sign-extensions
-
-Corresponds to Ghidra's `RuleSextEliminate`.
-Collapses `INT_SEXT(x)` to `COPY(x)` when input and output sizes match.
+**struct 连同注册一并删除。** 锁定 oracle（e40ed130）全源码树中不存在任何名为
+`RuleSextEliminate` 的类——它是 Rugra 自创并在 oppool1 末尾注册的规则（铁律 1.4
+存量违例）。注册与其 struct 定义（原含"same-size INT_SEXT → COPY"折叠逻辑）已删除；
+oracle 池序 fixture `tests/oracle/pool_purity_1204` 证明删除后 oppool1 与 oracle
+逐条一致。同类 same-size SEXT 场景若 oracle 有处理，应由 oracle 真实规则承担。
 
 ### `pub fn new() -> Self`
 
@@ -437,6 +438,15 @@ AND-比较变换，把 AND 推到更大的定义域：
 `f(V,W) == f(V,W) => true`，`f(V,W) != f(V,W) => false`。两输入功能相等时塌缩为 COPY(1/0)。
 
 测试：ruleaction::tests +3（同 varnode→COPY(1)；同常量 NOTEQUAL→COPY(0)；异常量不变）。
+
+**2026-08-23 注册移除（PIPE-POOL-LOCAL-RULES-0001）**：锁定 oracle 定义了该类
+（ruleaction.hh:243-250，方法体 ruleaction.cc:624/631）但**从未实例化**——全树无
+`new RuleEquality`，coreaction.cc 的 buildUniversalAction 也不在任何池注册它（oracle
+死代码）。Rugra 已从 oppool1 移除其注册；struct 与 3 个单测保留为未注册存档
+（"oracle 死代码，仅存档"），与 oracle 自身的死代码状态 1:1。字面语义注记：oracle
+applyOp 在 `opSetOpcode(op,CPUI_COPY)` **之后**才读 `op->code()`
+（ruleaction.cc:638/640），常量表达式恒为 0；Rugra 移植在变更前捕获 opcode
+（实现文档化意图）。因 oracle 类为死代码，该差异不可观测。
 
 ### 2026-06-26（续）：RuleLessNotEqual
 
@@ -810,6 +820,11 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `test_compare_equivalence(lessop, lessequalop)` — 验证两个比较操作等价
   - 对 24 种 form 组合（const 值 × 位置 × 比较类型）分别重写为直接比较
   - 包括：always true/false、a<b、a<=b、a>b、a>=b、a==b、a!=b
+
+**2026-08-23 诊断名修正（PIPE-POOL-LOCAL-RULES-0001）**：`get_name()` 由
+`"three_way_compare"` 改为 oracle 精确串 `"threewaycomp"`（ruleaction.hh:1504
+`Rule(g, 0, "threewaycomp")`——oracle 用的是截断名）。池纯净度 fixture
+（pool_purity_1204）首次将该名字纳入 oracle 观察时暴露此缺陷。
 
 ## 2026-06-27（续 20）：MultiCollapse 规则
 

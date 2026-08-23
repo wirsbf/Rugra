@@ -1,0 +1,108 @@
+{
+  "schema_version": 2,
+  "fixture_id": "PIPE-POOL-LOCAL-RULES-0001",
+  "status_note": "Pool registration purity projection MATCH: the locked Ghidra 12.0.4 oracle (real ActionDatabase::universalAction -> resetDefaults -> union-grouplist derive + decompile derive) and Rugra's real default action database produce byte-identical rule registration sequences for all three ActionPools (oppool1: 134 rules, oppool2: 5, cleanup: 15), in both the full-union derive of the raw registration site and the production decompile derive. The former Rugra-local registrations are gone: no 'sexteliminate' (no oracle class anywhere), no 'equality' (oracle class ruleaction.hh:243 never instantiated), and 'trivialarith' appears exactly once per root at oppool1 index 10 (coreaction.cc:5522 slot), never in cleanup. Rule diagnostic names are observed through the oracle's public virtual ActionPool::print and normalized by deleting '_' (injective on both sides' name sets); the one pre-existing raw-name defect this exposed (oracle 'threewaycomp' vs former Rugra 'three_way_compare') was fixed to the oracle string. Registered non-observed domains remain in coverage as NO_ORACLE/UNTESTED and are bound to their residual TODO ids.",
+  "decisive_semantics": {
+    "reference_output_parameters": "No output parameters: the pool rule sequence is the shared observable. Oracle side reads it through the PUBLIC virtual ActionPool::print(s,num,depth) (action.cc:753-775), which iterates the private allrules vector in registration order — the same listing the console's printActionList surfaces; Rugra side reads ActionPool::rules() (registration-order slice, action.rs). The raw registration site is reached on the oracle through a public setGroup(\"all\", union-of-default-groups) + setCurrent(\"all\") derive (ActionPool::clone appends surviving rules in allrules order, action.cc:899-914) and on Rugra through get_action(\"universal\").",
+    "loop_bounds_traversal_order": "DFS is pre-order over each ActionGroup child list in registration order; every ActionPool emits its rules as a unit in allrules/addRule order (vector begin()->end(), action.hh:263 / action.rs add_rule push). Duplicate pools across the two roots are kept verbatim with no sort or dedup: root=all block lines 2-158, root=decompile block lines 160-316, and the two blocks must be equal.",
+    "counter_accumulator_lifecycle": "The only counters are the per-pool rule index (0-based, increments once per rule line, resets at each pool) and the rule count printed on the pool line (equals the number of rule lines that follow); there is no cross-pool accumulator.",
+    "sorting_comparison_keys": "No sorting or comparison is applied anywhere in the observation; rule order is exactly the addRule registration order produced by universalAction (coreaction.cc:5512-5646/5664-5669/5696-5710). Name normalization deletes '_' characters only (oracle 'threewaycomp'/'collect_terms' vs Rugra 'three_way_compare'/'collect_terms' conventions); it is injective on both sides' full rule-name sets, so no two distinct rules can collide."
+  },
+  "oracle": {
+    "repository": "ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "fixture:universal-action-database",
+  "compiler_spec": {
+    "id": "none",
+    "model": "fixture"
+  },
+  "analysis_options": {
+    "reset_defaults": true,
+    "roots": [
+      "all",
+      "decompile"
+    ],
+    "all_groups_union": "setGroup(\"all\") = union of the six buildDefaultGroups member arrays (coreaction.cc:5424-5456)",
+    "extra_pool_rules": []
+  },
+  "rugra_source": {
+    "base_commit": "1fc8af3df85ddac9bc87ff4606a27672fd97f675",
+    "base_tree": "b2effc9338f71d37d62ee55ec85cfa4bb36907ac",
+    "base_src_tree": "8b32e893ffe956565db26a1f0a1e5d5ac1ccd446",
+    "base_action_blob": "22c29595478b5c6a186ac7b4fb540cdcd723d3b9",
+    "base_ruleaction_blob": "342e21169fd102cdae9f9f22f43a7055a01a800e",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "75ff31c9dcd59cc3b26a530bac9b5f3e577553ac30118fa5b9a7cadbf0eb01cc",
+    "rust_fixture_sha256": "a98fe31fdf9bc99be1325f0005eb344246f99081644afbc908c94865a26f835c",
+    "action_overlay_sha256": "63d42f171b820f40c6146d401460103a93ee8dbb547d7e6d6063483f70dee5e8",
+    "ruleaction_overlay_sha256": "894e9484989885dc59efa56d81df9506195145c31b531bfafed92b08e308832d",
+    "runner_sha256": "91053e0916c32e6e10b407f1806e0c4b08e9182c047988523be5c5a6537a206e"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "daa3999f5316f3ac879655194dd43ae8e4bf248c5472000a34c2bd9bd85e28d9",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "daa3999f5316f3ac879655194dd43ae8e4bf248c5472000a34c2bd9bd85e28d9",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "input_manifest": {
+    "inputs": {
+      "binary": null,
+      "sleigh_specs": null,
+      "functions": null,
+      "ghidra_fixture_architecture": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop); pool rule names read through the public virtual ActionPool::print (action.cc:753-775)",
+      "rugra_entry": "ActionDatabase::set_default_actions -> get_action(\"universal\") + get_current; ActionPool::rules() registration view"
+    },
+    "sha256": "6dd0e9f314944a751ef23c5bf946a45a0ffc5f8a2b4d577a5e4cb31a597330ef"
+  },
+  "coverage": {
+    "pool_rule_projection": {
+      "status": "MATCH",
+      "covers": "All three pools' full registration sequences identical on both sides and across both roots: oppool1 134 rules ending at doubleout (coreaction.cc:5646; the extra_pool_rules loop at 5647-5649 absorbs zero CPU-specific rules for the fixture Architecture), oppool2 5 rules (5664-5669, the commented RuleIndirectConcat line 5667 is not a registration), cleanup 15 rules ending at stringstore (5696-5710). No sexteliminate (class absent from the entire locked tree), no equality (ruleaction.hh:243 class never instantiated anywhere), trivialarith exactly once per root at oppool1 index 10, never in cleanup.",
+      "residual_todo_ids": []
+    },
+    "rule_name_projection": {
+      "status": "MATCH",
+      "covers": "Every rule diagnostic name identical after the documented underscore-deletion normalization (injective on both sides' name sets). The pre-existing raw-name defect this fixture exposed — oracle 'threewaycomp' (ruleaction.hh:1504) vs former Rugra 'three_way_compare' — was fixed to the exact oracle string in this change.",
+      "residual_todo_ids": []
+    },
+    "raw_rule_name_strings": {
+      "status": "UNTESTED",
+      "covers": "Exact raw diagnostic name strings (oracle 'trivialarith' vs Rugra 'trivial_arith', 'collect_terms' on both, etc.) are compared only through the underscore-free normalization; a raw-string equality sweep across all ~154 rule names is outside this fixture's projection.",
+      "residual_todo_ids": [
+        "PIPE-RULE-RAW-NAMES-0001"
+      ]
+    },
+    "rule_behavior_bodies": {
+      "status": "UNTESTED",
+      "covers": "Rule applyOp bodies, getOpList opcode dispatch sets, per-rule counters (count_tests/count_apply) and pool application dynamics are outside this fixture's domain; only registration membership and order are observed.",
+      "residual_todo_ids": [
+        "PIPE-POOL-RULE-BEHAVIOR-0001"
+      ]
+    },
+    "cpu_extra_pool_rules": {
+      "status": "NO_ORACLE",
+      "covers": "The conf->extra_pool_rules absorption loop (coreaction.cc:5647-5649) has no oracle observation here: the fixture Architecture registers no CPU-specific rules, and Rugra has no extra_pool_rules channel yet (x86-64 gcc spec registers none in the oracle either).",
+      "residual_todo_ids": [
+        "PIPE-CPU-EXTRA-POOL-RULES-0001"
+      ]
+    }
+  },
+  "residual_todo_ids": [
+    "PIPE-RULE-RAW-NAMES-0001",
+    "PIPE-POOL-RULE-BEHAVIOR-0001",
+    "PIPE-CPU-EXTRA-POOL-RULES-0001"
+  ],
+  "overall_status": "MATCH"
+}

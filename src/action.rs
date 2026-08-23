@@ -545,6 +545,13 @@ impl ActionPool {
             self.per_op.entry(opc).or_default().push(idx);
         }
     }
+
+    // RUGRA-GLUE: fixture-only rule registration view (pool purity fixture
+    // tests/oracle/pool_purity_1204; the Ghidra fixture reads the same
+    // sequence through the public virtual ActionPool::print, action.cc:
+    // 753-775, which iterates allrules in registration order). No dispatch
+    // state is exposed.
+    pub fn rules(&self) -> &[Box<dyn Rule>] { &self.rules }
 }
 
 impl Action for ActionPool {
@@ -786,13 +793,13 @@ pub fn build_oppool1() -> ActionPool {
     pool.add_rule(Box::new(crate::double_precis::RuleDoubleIn::new()));    // 5645
     pool.add_rule(Box::new(crate::double_precis::RuleDoubleOut::new()));   // 5646
 
-    // Rugra-local companions that complete RuleSub2Add (5553): it emits
-    // x + (y * -1), RuleMultNegOne collapses y*-1 to INT_NEG(y), Rule2Comp2Sub
-    // handles the 2's-complement form. Grouped after their parent so the pool
-    // converges. RuleSextEliminate/Equality are Rugra-local extras.
-    // (RuleFloatCast moved to its Ghidra-correct slot at 5634 above.)
-    pool.add_rule(Box::new(RuleSextEliminate::new()));
-    pool.add_rule(Box::new(RuleEquality::new()));
+    // Pool ends at RuleDoubleOut (5646), exactly as Ghidra's oppool1. The
+    // remaining oracle loop (coreaction.cc:5647-5649) only absorbs
+    // CPU-specific conf->extra_pool_rules, of which the x86-64 gcc spec
+    // registers none. PIPE-POOL-LOCAL-RULES-0001 removed the former
+    // Rugra-local registrations of RuleSextEliminate (no oracle class at
+    // all) and RuleEquality (oracle class exists, ruleaction.hh:243, but
+    // is never instantiated anywhere in the locked tree).
     // NOTE: RuleMultNegOne (x*-1 -> INT_2COMP) and Rule2Comp2Sub are NOT here
     // — they belong in the separate cleanup pool (see build_cleanup_pool) per
     // Ghidra coreaction.cc:5694-5710. Putting them in oppool1 alongside
@@ -830,14 +837,11 @@ pub fn build_cleanup_pool() -> ActionPool {
     // (tracked as a follow-up; matches Ghidra registration at 5709-5710).
     pool.add_rule(Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
     pool.add_rule(Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
-    // Rugra-local: also fold late-created trivial arithmetic (e.g. self-XOR
-    // x^x→0 created by type-recovery / copy-prop / structuring passes that
-    // run AFTER simplifypool in the mainloop). Ghidra's mainloop repeats
-    // actprop (simplifypool) so late ops get re-simplified; Rugra's pipeline
-    // runs simplifypool once in stackstall, so we re-apply RuleTrivialArith
-    // here as a cleanup to catch trivially-foldable ops (self-XOR/AND/OR/
-    // EQUAL) introduced after simplifypool converged.
-    pool.add_rule(Box::new(RuleTrivialArith::new()));
+    // Pool ends at RuleStringStore (5710), exactly as Ghidra's actcleanup
+    // (coreaction.cc:5694-5711). PIPE-POOL-LOCAL-RULES-0001 removed the
+    // former Rugra-local re-registration of RuleTrivialArith here — the
+    // oracle cleanup pool has no such entry; Ghidra registers
+    // RuleTrivialArith exactly once, in oppool1 (coreaction.cc:5522).
     pool
 }
 
