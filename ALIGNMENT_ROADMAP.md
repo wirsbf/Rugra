@@ -1,6 +1,6 @@
 # Rugra-Ghidra 完整对齐路线图
 
-> 📌 **主管线差异基线（2026-07-01）**：见 [`docs/alignment_docs/PIPELINE_DIFF_2026-07-01.md`](docs/alignment_docs/PIPELINE_DIFF_2026-07-01.md)。
+> 📌 **主管线差异基线（2026-07-01）**：见 [`docs/archive/dated/PIPELINE_DIFF_2026-07-01.md`](docs/archive/dated/PIPELINE_DIFF_2026-07-01.md)。
 > 逐 Action 对齐 Ghidra `universalAction`（coreaction.cc:5462-5739）vs Rugra `set_default_actions`（action.rs:383-492）。
 > **核心发现**：Ghidra 是 4 层嵌套 repeatapply 管线（universal→fullloop→mainloop→stackstall），Rugra 是单遍扁平 24 步；
 > 37 个顶层 Action 中只有 8 个真正对齐，19 个有 impl 未接入，6 个完全缺失；~~oppool1 缺 36 条规则~~（2026-07-01 已补 ~30 条，剩 RulePtrFlow 等 ~6 条），oppool2 整池缺，~~cleanup 缺 11 条~~（已补 10 条，剩 RuleDumptyHumpLate）；
@@ -9,7 +9,7 @@
 >
 > 📌 **2026-07-01 更新**：并发移植 subflow.cc（SubvariableFlow + 8 Rule）、double.cc（SplitVarnode + 4 Rule）、ruleaction.cc 补 21 Rule + 修 RuleDivOpt。oppool1/cleanup 池大批补缺 Rule 已接入主管线。~~832/832 测试，curl 24/24 无回归~~（**2026-07-02 19:29 校对注**：测试数现 960/960，curl 当前 `switch` 已 18→0、`uVar` 已 0，但仍残留 2 个 `if (1) goto ;` 语法错误 + StackX/param 占位名；详见 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节）。
 
-**最后核实**: 2026-08-16（session 收尾快照：以下 L1/L2/L3 为模块级算法对齐状态；本 session 89 提交后 heritage 四链与 typed-decl 链已 APPROVE 收官，逐模块行内证据已随各 commit 更新；输出质量数据见 CURRENT_STATUS.md）（逐行核对 Rugra 源码 vs Ghidra 源码）。**2026-07-02 19:29 校对注**：此日期后已 **204 commit**（含 `docs/QUALITY_GAP_2026-07-02.md` 质量诊断 + `28f1cfe` 全量函数级审计），本文件中模块级 L1/L2/L3 逐行状态仍反映 06-27 核实结果，**输出质量/测试数等可实测项已过时**——以 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节及下方统计汇总表「2026-07-02 19:29 校对」注为准。模块级状态需重新逐行核实 Ghidra 源码后方可更新（铁律 10：禁止形式上改、实质没验证）。
+**最后核实**: 2026-08-16（session 收尾快照：以下 L1/L2/L3 为模块级算法对齐状态；本 session 89 提交后 heritage 四链与 typed-decl 链已 APPROVE 收官，逐模块行内证据已随各 commit 更新；输出质量数据见 CURRENT_STATUS.md）（逐行核对 Rugra 源码 vs Ghidra 源码）。**2026-07-02 19:29 校对注**：此日期后已 **204 commit**（含 `docs/archive/dated/QUALITY_GAP_2026-07-02.md` 质量诊断 + `28f1cfe` 全量函数级审计），本文件中模块级 L1/L2/L3 逐行状态仍反映 06-27 核实结果，**输出质量/测试数等可实测项已过时**——以 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节及下方统计汇总表「2026-07-02 19:29 校对」注为准。模块级状态需重新逐行核实 Ghidra 源码后方可更新（铁律 10：禁止形式上改、实质没验证）。
 **目标**: 完整实现 Ghidra 反编译器的所有算法，不使用简化版。
 
 ## 图例

@@ -684,9 +684,9 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 - [x] 为历史会话日志建立复核提示策略与使用口径。
 - [~] 将复核提示策略逐步回填到历史日志文件。
   - [x] 已为首批高风险历史日志补充或统一复核提示：
-    - [x] `docs/AgentLog/engineering_progress_2026-03-07_api_docs_completion.md`
-    - [x] `docs/AgentLog/engineering_progress_2026-03-08_zero_codegen_pipeline_resolved.md`
-    - [x] `docs/AgentLog/engineering_progress_2026-03-08_output_refinement_and_quality.md`
+    - [x] `docs/archive/agentlog/engineering_progress_2026-03-07_api_docs_completion.md`
+    - [x] `docs/archive/agentlog/engineering_progress_2026-03-08_zero_codegen_pipeline_resolved.md`
+    - [x] `docs/archive/agentlog/engineering_progress_2026-03-08_output_refinement_and_quality.md`
   - [ ] 继续覆盖剩余高风险历史日志
 
 ---
@@ -810,7 +810,7 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
   - [x] `Funcdata`
   - [x] `PrintC` 输出阶段的输入约束
 
-- [~] 审核 `docs/AgentLog/` 历史日志，给明显失真的日志增加“按当时记录，尚待复核”提示。
+- [~] 审核 `docs/archive/agentlog/` 历史日志，给明显失真的日志增加“按当时记录，尚待复核”提示。
   - [x] 已完成首批高风险日志复核提示落地
   - [ ] 继续扩展到剩余历史日志
 - [ ] 为 `docs/branches/` 建立最小状态记录规范，避免该目录空转。
@@ -856,7 +856,7 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 
 ## 历史日志复核提示策略
 
-为避免旧日志继续被误当成当前事实，后续审阅 `docs/AgentLog/` 时应遵守以下口径：
+为避免旧日志继续被误当成当前事实，后续审阅 `docs/archive/agentlog/` 时应遵守以下口径：
 
 ### 适用条件
 如果历史日志中出现以下情况之一，应补“复核提示”：
@@ -967,9 +967,9 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
   - [x] `docs/api/translator/x86_64.md`
   - [x] `docs/api/translator/registers.md`
 - [x] 开始将历史日志复核提示策略回填到高风险 `AgentLog`，包括：
-  - [x] `docs/AgentLog/engineering_progress_2026-03-07_api_docs_completion.md`
-  - [x] `docs/AgentLog/engineering_progress_2026-03-08_zero_codegen_pipeline_resolved.md`
-  - [x] `docs/AgentLog/engineering_progress_2026-03-08_output_refinement_and_quality.md`
+  - [x] `docs/archive/agentlog/engineering_progress_2026-03-07_api_docs_completion.md`
+  - [x] `docs/archive/agentlog/engineering_progress_2026-03-08_zero_codegen_pipeline_resolved.md`
+  - [x] `docs/archive/agentlog/engineering_progress_2026-03-08_output_refinement_and_quality.md`
 - [x] 继续为当前主线 API 文档补齐显式状态标签，已覆盖的高风险页面包括：
   - [x] `docs/api/coreaction.md`
   - [x] `docs/api/ruleaction.md`
@@ -1034,7 +1034,7 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 8. 探索结构体（Struct）成员和偏移量的类型传播恢复方案。
 9. [x] 迭代类型恢复引擎与测试对齐验证：设计并实现基于固定点迭代的多趟数据流类型传播分析（ActionTypeInfer），支持 COPY、ADD/SUB 偏移、LOAD/STORE 解引用及 Phi 等双向传播规则，测试 `test_type_propagation` 完美验证闭环。（2026-05-21）
 10. [x] switch-case 检测（BlockSwitch + jump table） （2026-05-21）
-11. [x] **Cover-based HighVariable merging**（2026-06-21）：实现 `Merge::merge_by_cover` + `Cover::intersects_except_at`，对齐 Ghidra `Merge::mergeByCopy`。curl `uVar` 引用 -44%。修正 `ActionMergeType` 在 `ActionCopyPropagate` 之前的流水线顺序。173 测试通过。详见 `docs/AgentLog/engineering_progress_2026-06-21_cover_based_merge.md`。
+11. [x] **Cover-based HighVariable merging**（2026-06-21）：实现 `Merge::merge_by_cover` + `Cover::intersects_except_at`，对齐 Ghidra `Merge::mergeByCopy`。curl `uVar` 引用 -44%。修正 `ActionMergeType` 在 `ActionCopyPropagate` 之前的流水线顺序。173 测试通过。详见 `docs/archive/agentlog/engineering_progress_2026-06-21_cover_based_merge.md`。
 12. [ ] 区域化控制流结构化（基于 Ghidra `blockaction.cc`）— 当前 5 个 goto、5 个 switch 仍可改进
 13. [ ] for 循环恢复（当前 `for_count=0`，所有循环都是 `while`）
 14. [ ] Cover 跨块传递性扩展（当前 Cover 仅覆盖 def/use 块，未做 CFG 传播，导致部分安全合并被错过）

@@ -63,7 +63,7 @@
 ```
 **证据来源**: `cargo test <test_name>` 通过 (2026-04-24)
 **证据来源**: `src/align/varnode.rs:verify_varnode()` 实现中明确跳过 unique offset 比较
-**证据来源**: 见 `docs/AgentLog/engineering_progress_2026-04-24_*.md`
+**证据来源**: 见 `docs/archive/agentlog/engineering_progress_2026-04-24_*.md`
 ```
 
 ### 证据类型优先级
@@ -71,7 +71,7 @@
 1. **测试通过记录**（最强）：`cargo test <name>` + 日期
 2. **代码引用**：具体文件路径 + 函数名 + 关键逻辑
 3. **示例运行记录**：输入 → 输出 + 日期
-4. **工程日志引用**：`docs/AgentLog/<file>.md` 中的具体段落
+4. **工程日志引用**：`docs/archive/agentlog/<file>.md` 中的具体段落
 5. **设计决策引用**：`docs/decisions/<file>.md`
 
 ### 禁止的证据形式
@@ -86,7 +86,7 @@
 
 每次会话结束前，确认以下项已完成：
 
-- [ ] `docs/AgentLog/` 已新增本次会话的工程日志
+- [ ] `docs/archive/agentlog/` 已新增本次会话的工程日志
 - [ ] `docs/TODO_BOARD.md` 已更新（包括完成项标记、新增待办项、下一步建议）
 - [ ] 如有结构变化：`docs/PROJECT_STRUCTURE.md` 已更新
 - [ ] 如有 README 涉及的变化：`README.md` 已更新

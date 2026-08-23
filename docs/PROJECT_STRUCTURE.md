@@ -252,9 +252,9 @@ CLI 已完整可用”
 
 | 路径 | 说明 |
 |------|------|
-| `docs/AgentLog/` | AI / 工程
+| `docs/archive/agentlog/` | AI / 工程
 会话日志目录 |
-| `docs/AgentLog/TEMPLATE.md` | 会话日志模板 |
+| `docs/archive/agentlog/TEMPLATE.md` | 会话日志模板 |
 
 ###
  6.3 API 文档

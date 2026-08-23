@@ -606,7 +606,7 @@ cargo test --lib align::
   - `examples/` 下的样本运行
   - 指定真实二进制样本的实验记录
 - **文档化实验记录**
-  - `docs/AgentLog/`
+  - `docs/archive/agentlog/`
   - `docs/experiments/`
   - 未来的差异报告或验证记录
 - **人工审阅结果**

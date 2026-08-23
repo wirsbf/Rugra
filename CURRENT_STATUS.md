@@ -260,7 +260,7 @@ OWNERSHIP(0618b1c) → CALLGUARD(126b56f) → ADT-RENAME(c96f699，含确定性�
 - `StackX_*`=98 次(19 个去重,仍残留)
 - `param_N`=74 次(5 个去重)
 - `memcpy`=0 ❌
-- 结构骨架 diff 详见 `docs/QUALITY_GAP_2026-07-02.md`
+- 结构骨架 diff 详见 `docs/archive/dated/QUALITY_GAP_2026-07-02.md`
 
 ### httpd(`httpd_cur.c`,Jun 30,1459 行)
 - `while`=58 / `for`=0 / `switch`=15 / `goto`=0

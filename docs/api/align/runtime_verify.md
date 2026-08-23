@@ -655,7 +655,7 @@ CFG 是 SSA、结构化输出、循环识别和控制流恢复的基础。
 - `ALIGNMENT_PROGRESS.md`
 - `docs/VERIFICATION_GUIDE.md`
 - `docs/experiments/`
-- `docs/AgentLog/`
+- `docs/archive/agentlog/`
 
 ### 4. 禁止在 API 文档中夸大结论
 后续不应再把本模块描述为：
