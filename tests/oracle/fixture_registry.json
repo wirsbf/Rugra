@@ -3272,6 +3272,69 @@
         "jumptable::JumpTable::clear",
         "merge::MergePersistentState::clear"
       ]
+    },
+    {
+      "id": "pipeline_tree_1204",
+      "description": "Derived default decompile pipeline tree vs locked 12.0.4: real universalAction->resetDefaults->getCurrent with grouplist clone filtering, DFS path/ordinal/kind/name/basegroup/flags over 78 nodes, duplicates preserved (78/78 MATCH)",
+      "runner": [
+        "tools/run_pipeline_tree_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/pipeline_tree_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/pipeline_tree_1204.cc",
+          "rust_fixture": "tests/oracle/pipeline_tree_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionDatabase::universalAction",
+        "ActionDatabase::resetDefaults",
+        "Action::clone"
+      ],
+      "rust_function_ids": [
+        "action::ActionDatabase::universal_action",
+        "action::ActionDatabase::set_default_actions"
+      ]
+    },
+    {
+      "id": "stackstall_count_1204",
+      "description": "Stackstall fixed-point count feedback vs locked 12.0.4: MultiCse/ShadowVar/Deindirect/StackPtrFlow count channels, analysis_finished lifecycle, 3+1 passes with reset rerun, IR projections (34/34 MATCH)",
+      "runner": [
+        "tools/run_stackstall_count_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/stackstall_count_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/stackstall_count_1204.cc",
+          "rust_fixture": "tests/oracle/stackstall_count_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionMultiCse::apply",
+        "ActionShadowVar::apply",
+        "ActionDeindirect::apply",
+        "ActionStackPtrFlow::apply"
+      ],
+      "rust_function_ids": [
+        "coreaction::ActionMultiCse",
+        "coreaction::ActionShadowVar",
+        "coreaction::ActionDeindirect",
+        "coreaction::ActionStackPtrFlow"
+      ]
     }
   ]
 }
