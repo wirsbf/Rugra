@@ -1171,103 +1171,263 @@ impl PcodeOp {
     }
 
     // Ghidra: op.cc:547 PcodeOp::getNZMaskLocal
-    /// Compute non-zero mask for this op's output given input masks.
-    /// Faithful to `getNZMaskLocal` (op.cc:547-771). This is a large
-    /// switch on opcode. Rugra delegates to Funcdata::calc_nz_mask for
-    /// the per-opcode switch; this method is the per-op entry point.
-    pub fn get_nz_mask_local(&self, _cliploop: bool) -> u64 {
-        use crate::address::calc_mask;
+    /// Compute the non-zero mask for this op's output assuming the input
+    /// masks are already defined. Faithful to `PcodeOp::getNZMaskLocal`
+    /// (op.cc:547-771): `fullmask` derives from the output size; compare and
+    /// boolean ops emit 1; MULTIEQUAL ORs its inputs (skipping looping edges
+    /// when `cliploop`, op.cc:740-757); every unlisted opcode — including
+    /// INT_NEGATE and INT_2COMP — falls to `default:` and emits `fullmask`
+    /// (op.cc:766-768). Raw `>>`/`<<` sites that the oracle leaves unguarded
+    /// use Rust `wrapping_shr`/`wrapping_shl`, mirroring the x86-64
+    /// shift-count masking the locked oracle binary is built with; sites the
+    /// oracle guards through `pcode_right`/`pcode_left` (address.hh:505-517)
+    /// return 0 for shift counts >= 64 exactly like those helpers.
+    ///
+    /// Oracle `Varnode::getNZMask` (varnode.hh:231) is the raw field access
+    /// `return nzm;`. Rugra's `Varnode::get_nz_mask` (varnode.rs) predates
+    /// the calcNZMask wiring and substitutes a conservative approximation
+    /// (constants -> offset, others -> calc_mask), so this method reads the
+    /// stored field directly (`get_nzm`) exactly as the oracle does
+    /// (consolidating `Varnode::get_nz_mask` itself is tracked by TODO
+    /// FUNCDATA-CALCNZM-0003).
+    pub fn get_nz_mask_local(&self, cliploop: bool) -> u64 {
+        // pcode_right (address.hh:505-511).
+        let pcode_right = |val: u64, sa: i32| -> u64 {
+            if sa >= 64 { 0 } else { val >> sa }
+        };
+        // pcode_left (address.hh:514-518).
+        let pcode_left = |val: u64, sa: i32| -> u64 {
+            if sa >= 64 { 0 } else { val << sa }
+        };
+        // op.cc:553: size = output->getSize(); calcNZMask only calls in
+        // with a live output (funcdata_varnode.cc:872-875 / cc:918).
         let out_size = match &self.output {
             Some(o) => o.read().unwrap().get_size(),
             None => return u64::MAX,
         };
-        let full_mask = calc_mask(out_size);
-        let get_in_nzm = |i: usize| -> u64 {
-            self.inrefs.get(i)
-                .map(|v| v.read().unwrap().get_nz_mask())
-                .unwrap_or(full_mask)
+        let inputs = self.inrefs.clone();
+        let parent = self.parent.clone();
+        let fullmask = crate::address::calc_mask(out_size); // op.cc:554
+        let in_nzm = |i: usize| -> u64 {
+            inputs
+                .get(i)
+                .map(|v| v.read().unwrap().get_nzm())
+                .unwrap_or(fullmask)
         };
-        let get_in_const = |i: usize| -> Option<u64> {
-            let v = self.inrefs.get(i)?;
+        let in_const = |i: usize| -> Option<u64> {
+            let v = inputs.get(i)?;
             let r = v.read().unwrap();
             if r.is_constant() { Some(r.get_offset()) } else { None }
         };
+        let in_size = |i: usize| -> usize {
+            inputs.get(i).map(|v| v.read().unwrap().get_size()).unwrap_or(out_size)
+        };
         match self.opcode {
+            // op.cc:557-576: only 1 bit not guaranteed to be 0.
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
             | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
             | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
-            | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY
-            | OpCode::CPUI_INT_SBORROW
+            | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW
             | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_XOR
             | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
             | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
             | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
             | OpCode::CPUI_FLOAT_NAN => 1,
-            OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT => get_in_nzm(0),
+            // op.cc:577-580
+            OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT => in_nzm(0),
+            // op.cc:581-583
             OpCode::CPUI_INT_SEXT => {
-                let in_sz = self.inrefs.first().map(|v| v.read().unwrap().get_size()).unwrap_or(out_size);
-                crate::rangeutil::sign_extend_size(get_in_nzm(0), in_sz, out_size)
+                crate::rangeutil::sign_extend_size(in_nzm(0), in_size(0), out_size)
             }
+            // op.cc:584-589
             OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
-                let m = get_in_nzm(0);
-                if m != full_mask { m | get_in_nzm(1) } else { m }
+                let resmask = in_nzm(0);
+                if resmask != fullmask { resmask | in_nzm(1) } else { resmask }
             }
+            // op.cc:590-594
             OpCode::CPUI_INT_AND => {
-                let m = get_in_nzm(0);
-                if m != 0 { m & get_in_nzm(1) } else { 0 }
+                let resmask = in_nzm(0);
+                if resmask != 0 { resmask & in_nzm(1) } else { 0 }
             }
-            OpCode::CPUI_INT_LEFT => {
-                match get_in_const(1) {
-                    Some(sa) => {
-                        let m = get_in_nzm(0);
-                        m.wrapping_shl(sa as u32) & full_mask
+            // op.cc:595-603
+            OpCode::CPUI_INT_LEFT => match in_const(1) {
+                Some(sa) => pcode_left(in_nzm(0), sa as i32) & fullmask,
+                None => fullmask,
+            },
+            // op.cc:604-632
+            OpCode::CPUI_INT_RIGHT => match in_const(1) {
+                Some(sa) => {
+                    let sz1 = in_size(0);
+                    let sa = sa as i32;
+                    let mut resmask = pcode_right(in_nzm(0), sa);
+                    if sz1 > 8 {
+                        // op.cc:612-630: resmask did not hold the most
+                        // significant bits of the mask.
+                        if sa >= (8 * sz1) as i32 {
+                            resmask = 0; // op.cc:614-615
+                        } else if sa >= 64 {
+                            // op.cc:616-620: full mask shifted over 64 bits.
+                            resmask = crate::address::calc_mask(sz1 - 8);
+                            resmask >>= sa - 64; // sa < 8*sz1 here
+                        } else {
+                            // op.cc:622-629: fill in the one bits from the
+                            // part of the mask not originally calculated.
+                            let tmp = 0u64.wrapping_sub(1).wrapping_shl(64 - sa as u32);
+                            resmask |= tmp;
+                        }
                     }
-                    None => full_mask,
+                    resmask
                 }
-            }
-            OpCode::CPUI_INT_RIGHT => {
-                match get_in_const(1) {
-                    Some(sa) => get_in_nzm(0).wrapping_shr(sa as u32),
-                    None => full_mask,
-                }
-            }
-            OpCode::CPUI_INT_SRIGHT => {
-                match get_in_const(1) {
-                    Some(sa) if out_size <= 8 => {
-                        let m = get_in_nzm(0);
-                        m.wrapping_shr(sa as u32)
+                None => fullmask,
+            },
+            // op.cc:633-647
+            OpCode::CPUI_INT_SRIGHT => match in_const(1) {
+                Some(sa) if out_size <= 8 => {
+                    let sa = sa as i32;
+                    let resmask = in_nzm(0);
+                    if (resmask & (fullmask ^ (fullmask >> 1))) == 0 {
+                        // op.cc:639-641: sign bit known zero -> INT_RIGHT.
+                        pcode_right(resmask, sa)
+                    } else {
+                        // op.cc:643-644: unknown new high bits.
+                        pcode_right(resmask, sa)
+                            | (fullmask.wrapping_shr(sa as u32) ^ fullmask)
                     }
-                    _ => full_mask,
                 }
+                _ => fullmask,
+            },
+            // op.cc:648-659
+            OpCode::CPUI_INT_DIV => {
+                let val = in_nzm(0);
+                let mut resmask = crate::address::coveringmask(val);
+                if in_const(1).is_some() {
+                    // op.cc:651-658: dividing by a power of 2 is equivalent
+                    // to a right shift.
+                    let sa = crate::address::mostsigbit_set(in_nzm(1));
+                    if sa != -1 {
+                        resmask >>= sa; // sa in [0,63]
+                    }
+                }
+                resmask
             }
+            // op.cc:660-663: result is less than the modulus.
+            OpCode::CPUI_INT_REM => {
+                let val = in_nzm(1).wrapping_sub(1);
+                crate::address::coveringmask(val)
+            }
+            // op.cc:664-668
+            OpCode::CPUI_POPCOUNT => {
+                let sz1 = in_nzm(0).count_ones() as i32; // popcount (address.cc:756)
+                crate::address::coveringmask(sz1 as u64) & fullmask
+            }
+            // op.cc:669-672
+            OpCode::CPUI_LZCOUNT => {
+                crate::address::coveringmask((in_size(0) * 8) as u64) & fullmask
+            }
+            // op.cc:673-692
             OpCode::CPUI_SUBPIECE => {
-                let sz1 = get_in_const(1).unwrap_or(0) as usize;
-                let m = get_in_nzm(0);
-                if sz1 < 8 { m.wrapping_shr((sz1 * 8) as u32) & full_mask } else { 0 }
-            }
-            OpCode::CPUI_PIECE => {
-                let sa = self.inrefs.get(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
-                let m0 = get_in_nzm(0);
-                let shifted = if sa < 8 { m0 << (sa * 8) } else { 0 };
-                shifted | get_in_nzm(1)
-            }
-            OpCode::CPUI_INT_ADD => {
-                let m = get_in_nzm(0);
-                if m != full_mask {
-                    (m | get_in_nzm(1) | (m << 1)) & full_mask
-                } else { m }
-            }
-            OpCode::CPUI_MULTIEQUAL => {
-                if self.inrefs.is_empty() { full_mask }
-                else {
-                    let mut r = 0u64;
-                    for i in 0..self.inrefs.len() {
-                        r |= get_in_nzm(i);
+                let sz1 = in_const(1).unwrap_or(0) as usize; // op.cc:675
+                let mut resmask = in_nzm(0);
+                if in_size(0) <= 8 {
+                    if sz1 < 8 {
+                        resmask >>= 8 * sz1; // op.cc:677-678
+                    } else {
+                        resmask = 0; // op.cc:680
                     }
-                    r
+                } else {
+                    // op.cc:682-690: extended precision.
+                    if sz1 < 8 {
+                        resmask >>= 8 * sz1;
+                        if sz1 > 0 {
+                            resmask |= fullmask.wrapping_shl((8 * (8 - sz1)) as u32); // op.cc:686
+                        }
+                    } else {
+                        resmask = fullmask; // op.cc:689
+                    }
+                }
+                resmask & fullmask // op.cc:691
+            }
+            // op.cc:693-698
+            OpCode::CPUI_PIECE => {
+                let sa = in_size(1); // op.cc:694
+                let resmask = in_nzm(0);
+                let shifted = if sa < 8 { resmask << (8 * sa) } else { 0 };
+                shifted | in_nzm(1)
+            }
+            // op.cc:699-731
+            OpCode::CPUI_INT_MULT => {
+                let val = in_nzm(0);
+                let mut resmask = in_nzm(1);
+                if out_size > 8 {
+                    resmask = fullmask; // op.cc:702-704
+                } else {
+                    let sz1 = crate::address::mostsigbit_set(val); // op.cc:706
+                    let sz2 = crate::address::mostsigbit_set(resmask); // op.cc:707
+                    if sz1 == -1 || sz2 == -1 {
+                        resmask = 0; // op.cc:708-710
+                    } else {
+                        let l1 = crate::address::leastsigbit_set(val); // op.cc:712
+                        let l2 = crate::address::leastsigbit_set(resmask); // op.cc:713
+                        let sa = l1 + l2; // op.cc:714
+                        if sa >= (8 * out_size) as i32 {
+                            resmask = 0; // op.cc:715-717
+                        } else {
+                            let w1 = sz1 - l1 + 1; // op.cc:719
+                            let w2 = sz2 - l2 + 1; // op.cc:720
+                            let mut total = w1 + w2; // op.cc:721
+                            if w1 == 1 || w2 == 1 {
+                                total -= 1; // op.cc:722-723
+                            }
+                            resmask = fullmask;
+                            if total < (8 * out_size) as i32 {
+                                resmask >>= (8 * out_size) as i32 - total; // op.cc:725-726
+                            }
+                            resmask = (resmask << sa) & fullmask; // op.cc:727
+                        }
+                    }
+                }
+                resmask
+            }
+            // op.cc:732-739
+            OpCode::CPUI_INT_ADD => {
+                let mut resmask = in_nzm(0);
+                if resmask != fullmask {
+                    resmask |= in_nzm(1);
+                    resmask |= resmask << 1; // account for possible carries
+                    resmask &= fullmask;
+                }
+                resmask
+            }
+            // op.cc:740-757
+            OpCode::CPUI_MULTIEQUAL => {
+                if inputs.is_empty() {
+                    fullmask // op.cc:741-742
+                } else {
+                    let mut resmask = 0u64;
+                    let parent = parent.as_ref().and_then(|w| w.upgrade());
+                    for i in 0..inputs.len() {
+                        if cliploop {
+                            if let Some(p) = &parent {
+                                if p.read().unwrap().is_loop_in(i) {
+                                    continue; // op.cc:748-749
+                                }
+                            }
+                        }
+                        resmask |= in_nzm(i);
+                    }
+                    resmask
                 }
             }
-            _ => full_mask,
+            // op.cc:758-765
+            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_CPOOLREF => {
+                if self.is_calculated_bool() {
+                    1 // op.cc:762: output is strictly boolean
+                } else {
+                    fullmask
+                }
+            }
+            // op.cc:766-768
+            _ => fullmask,
         }
     }
 }
