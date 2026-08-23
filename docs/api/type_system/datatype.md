@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/type_system/datatype.rs`
 **Ghidra 对应**: `type.hh` / `type.cc` (`Datatype` 类层次)
-**状态**: 🔧 **L2 / overall MISMATCH（2026-08-21 R3 返工）**——datatype 层的 submeta、公开虚派发 compare/compareDependency、Pointer state/space、PointerRel、TypeCode flags、Spacebase identity 和 1-byte Unicode 已有 12.0.4 行为证据；生产 TypeFactory 仍有 6 个已钉住差异，另有完整比较矩阵 `UNTESTED`，绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` / `TYPEFACTORY-SUBMETA-RECLASS-0001` / `DATATYPE-TYPEORDER-RESIDUAL-0001`，不能升 L3。
+**状态**: 🔧 **L2 / overall MISMATCH（2026-08-23 residual 矩阵补齐）**——datatype 层的 submeta、公开虚派发 compare/compareDependency、Pointer state/space、PointerRel、TypeCode varargs/model/param/return/dependency、Array/Union/三个 Partial 全矩阵、Struct offset/dependency、Spacebase identity、1-byte Unicode 和全部 24 个 submetatype 值均有 12.0.4 行为证据；生产 TypeFactory 仍有 6 个已钉住差异，另有两个 same-kind AddrSpace 身份表示差异（Ghidra 裸指针 vs Rust enum），TypeCode null-output 边界与 struct 递归环/incomplete 转移仍未测，绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` / `TYPEFACTORY-SUBMETA-RECLASS-0001` / `DATATYPE-TYPEORDER-RESIDUAL-0001`，不能升 L3。
 
 ## 模块说明
 
@@ -124,11 +124,33 @@ PTR/INT/UINT 前；同时浅 compare 错把名字当 tie-break、同 metatype �
   submeta override 保证 1-byte Unicode 仍为 `SUB_INT_UNICODE`，不会退化为 char。
 
 真 oracle 证据为 `tests/oracle/datatype_type_order_1204.{cc,rs,metadata.json}` 与
-`tools/run_datatype_type_order_oracle.sh`：78 条固定记录中 datatype 投影 72 MATCH、
-TypeFactory 接线 6 MISMATCH；oracle/Rugra stdout SHA-256 分别为
-`d248dd40722e8c6fbc51927ee557895caf096599a8048ab57c4942e32f0ac573` /
-`7fdbbcf8b40b62af7cb1bed3a62ecc747cbe3b45de9e3e9cdbacccdbbba2a218`。fixture 使用
+`tools/run_datatype_type_order_oracle.sh`：182 条固定记录中 datatype 投影 174 MATCH、
+8 MISMATCH（6 个 TypeFactory 接线 + 2 个 same-kind space 表示差异）；oracle/Rugra stdout
+SHA-256 分别为
+`4bc6b452023ac5c7a6b3e9ff3038c5c848ef222f1f5ffa856aedb545659ad1e5` /
+`85775338934840a3e7f6265a10e6fd1d34af0fd49d0a267b0363ad262d9c3cdd`。fixture 使用
 x86:LE:64:default/gcc、固定 curl/spec Git 输入和隔离 Rugra 基线 overlay。
+
+2026-08-23 residual 矩阵补齐（零未解释差异，`datatype.rs` 本轮无需改动）：
+
+- **TypeCode**：varargs（dotdotdot comparable flag）、0/1 参数计数、参数类型递归、
+  返回类型递归、不同 model 名、level-0 id 决胜、以及 dependency 的参数/输出指针身份
+  （深度相等但对象不同时 deep=0、dependency 非零且反对称）全部 MATCH。参数经由真实
+  `FuncProto::updateAllTypes`（fspec.cc:3735）+ `assignParameterStorage` 写入。
+- **Array/Union/Partial**：元素/字段/容器/父类型递归、offset 决胜、level-0 id cutoff、
+  dependency 的元素身份与 size tiebreak 全部 MATCH。
+- **Struct**：等 size 下 field offset 决胜、指针字段穿过第一层 metatype tie 的深递归、
+  dependency field-offset 与不同 field-type 对象身份全部 MATCH。
+- **same-kind AddrSpace**：Ghidra 用裸 `AddrSpace*` 指针身份，Rust 用 `AddressSpace`
+  enum。两个 IPTR_PROCESSOR 空间不同 index 时双侧非零且反对称（MATCH）；但 Ghidra 中
+  共享 index 的两个**不同对象**（fixture 裸构造，真实 AddrSpaceManager 不会产生该状态）
+  仍非零，Rust enum 折叠为相等；`TypePointer::compare` 对同 index 空间恒返回 1 的
+  Ghidra quirk（type.cc:944，索引相等时三元表达式取 `1` 分支）在 Rust 落入 pointee
+  递归——两条登记为 MISMATCH，绑定 `DATATYPE-TYPEORDER-RESIDUAL-0001`。
+- **24 个 submetatype**：全部 24 个 `sub_metatype` 值双侧构造并打印、23 个相邻对
+  order 全部 `+1`、全部 276 对 total-order violation 计数为 0（MATCH）。无公开构造器
+  的 `SUB_UINT_CHAR` 由 `ProbeChar` 复刻 `TypeChar::decode`（type.cc:818）的 submeta
+  写入；`SUB_PTRREL_UNK` 由 `ProbeRel` 暴露 protected `markEphemeral` 构造。
 
 6 个已解释残差全部在 `typefactory.rs`（本任务无写租约）：显式非默认普通 Pointer 被误置
 `IS_PTRREL`；ephemeral relative pointer 缺 `HAS_STRIPPED`，从而 unknown target 仍为
@@ -136,8 +158,8 @@ SUB_PTRREL(5) 而非 SUB_PTRREL_UNK(7)；factory array pointer 缺 pointer-to-ar
 pointer 缺 coretype 继承；factory 1-byte Unicode 仍退化成 SUB_INT_PLAIN(17)。分别绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` 与
 `TYPEFACTORY-SUBMETA-RECLASS-0001`，故 projection=MATCH、overall=MISMATCH，模块保持 L2。
 metadata 为 schema 2，逐项 coverage 使用结构化 `status/covers/residual_todo_ids`；TypeCode
-剩余矩阵、Array/Union/Partial 全矩阵、Struct offset/dependency、legacy same-kind space identity
-及 24 个 submeta 的穷举对拍均保持 `UNTESTED`，绑定 `DATATYPE-TYPEORDER-RESIDUAL-0001`。
+null-output 边界（`ProtoStoreInternal` 总是初始化输出槽，公开构造不可达，fspec.cc:3306）
+与 struct 递归环/incomplete 转移保持 `UNTESTED`，绑定 `DATATYPE-TYPEORDER-RESIDUAL-0001`。
 
 ### `pub fn calc_align_size(sz, align) -> usize`
 对应 `Datatype::calcAlignSize` (type.cc:536)。
