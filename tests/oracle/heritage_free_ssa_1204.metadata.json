@@ -15,7 +15,7 @@
     "GH12-F-f30ffccd55fd89dad612 ghidra::FlowBlock::getOutRevIndex block.hh:303",
     "GH12-F-ac7c77ebb2f6e0e7199d ghidra::PcodeOp::getOpFromConst op.hh:249"
   ],
-  "overall_status": "PARTIAL_MATCH: the four declared projections byte-match locked Ghidra 12.0.4, including complete integrated block/op/slot order, first-seen object alias equivalence, primary flags, active/heritage-known state, definitions, descendant counts, consumed-free bank deletion, exact second-reader message/state, INDIRECT simultaneous selection and loop-PHI reverse-slot wiring. This is not whole-function or module completion: exception transport is Rust panic versus Ghidra LowlevelError, Rust cannot retain Ghidra's nullable reserved slot after the caught setup error, and refinement, overlap inputs, revisit markers, guards/calls/stores/loads/returns, joins, multi-pass state and error injection outside these four cases remain UNTESTED.",
+  "overall_status": "MISMATCH: the four declared projections byte-match locked Ghidra 12.0.4, including complete integrated block/op/slot order, first-seen object alias equivalence, primary flags, active/heritage-known state, definitions, descendant counts, consumed-free bank deletion, exact second-reader message/state, INDIRECT simultaneous selection and loop-PHI reverse-slot wiring. Whole-function and module behavior does not match: exception transport is Rust panic versus Ghidra LowlevelError, and Rust cannot retain Ghidra's nullable reserved slot after the caught setup error. Refinement, overlap inputs, revisit markers, guards/calls/stores/loads/returns, joins, multi-pass state and error injection outside these four cases remain UNTESTED.",
   "covered_projection_status": "MATCH",
   "oracle": {
     "tag": "Ghidra_12.0.4_build",
@@ -53,7 +53,7 @@
     "rugra_base_tree": "4810d810e0f1932537cd849a634ce51f19f067d9",
     "cpp_fixture_sha256": "9bc24f130e18b859531227572ef21b41b18dc6973ee74ccf230c744fc4a9a64f",
     "rust_fixture_sha256": "a9f69c1c31dcae94e62e30830d14dae73fe8f9292751478c97c93ceb6e2e5824",
-    "runner_sha256": "f483f904fdca96dd21a7e0c2b353401c96dbc38e750551b90bd56ee0e2545bf5",
+    "runner_sha256": "d812e5b4b4226cd43aa612b9dd649f90e70549a302f0d920088b8daab849e96a",
     "heritage_rs_sha256": "55e82e71e0aaad072383752721f0ced7e13720e9c717a5ce8b10c9f8cc8d3d26",
     "funcdata_rs_sha256": "708eb8e3f523e64ba77452c13dad2f110c1f3d82c6f3028eb4aed5d2c5eb6a34",
     "varnode_rs_sha256": "9b797e2a739dc58d0f88333ae8880dea3e377a3c25fc7b004d4f0ec405cb2a4a",

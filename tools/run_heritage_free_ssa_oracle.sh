@@ -164,8 +164,22 @@ canonical = json.dumps(
 ).encode()
 require("input fingerprint", sha(canonical), manifest["sha256"])
 require("covered projection", metadata["covered_projection_status"], "MATCH")
-if not metadata["overall_status"].startswith("PARTIAL_MATCH:"):
-    raise SystemExit("overall_status must remain conservative PARTIAL_MATCH")
+if not metadata["overall_status"].startswith("MISMATCH:"):
+    raise SystemExit("overall_status must remain conservative MISMATCH")
+coverage = metadata["coverage"]
+for key in (
+    "single_free_promotion",
+    "double_descendant_message_and_prestate",
+    "indirect_simultaneous_stack_second",
+    "loop_phi_reverse_slot",
+):
+    if not coverage[key].startswith("MATCH"):
+        raise SystemExit(f"covered projection {key} must remain MATCH")
+for key in ("exception_transport", "reserved_null_slot_after_error"):
+    if not coverage[key].startswith("MISMATCH"):
+        raise SystemExit(f"residual {key} must remain MISMATCH")
+if not coverage["remaining_heritage_closure"].startswith("UNTESTED"):
+    raise SystemExit("remaining_heritage_closure must remain UNTESTED")
 PY
 
 oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-heritage-free-ssa-1204.XXXXXX)
@@ -241,4 +255,4 @@ PY
 /usr/bin/sha256sum "${owned[@]}" >"$oracle_tmp/owned.after"
 /usr/bin/diff -u "$oracle_tmp/owned.before" "$oracle_tmp/owned.after"
 /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-echo "heritage_free_ssa_1204: covered_projection=MATCH overall=PARTIAL_MATCH cases=4"
+echo "heritage_free_ssa_1204: covered_projection=MATCH overall=MISMATCH cases=4"
