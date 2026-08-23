@@ -3116,7 +3116,7 @@
     },
     {
       "id": "lanedivide_infra_1204",
-      "description": "LaneDivide infrastructure vs locked 12.0.4: laned-register lookup/min/identity, lanedMap full lifecycle, PIECE split (incl. SUBPIECE->preexisting COPY), MULTIEQUAL split (block-head reverse order + constant lanes), INT_MULT failure zero-mutation",
+      "description": "LaneDivide infrastructure vs locked 12.0.4: laned-register lookup/min/identity, lanedMap full lifecycle, PIECE split (incl. SUBPIECE->preexisting COPY), MULTIEQUAL split (block-head reverse order + constant lanes), INT_MULT failure zero-mutation, six residual branches incl. iop-space INDIRECT materialization (11/12 MATCH, sole residual = oracle UB corner NO_ORACLE)",
       "runner": [
         "tools/run_lanedivide_infra_oracle.sh"
       ],
@@ -3125,7 +3125,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "UNTESTED",
+      "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/lanedivide_infra_1204.metadata.json",
         "inputs": {
@@ -3133,7 +3133,7 @@
           "rust_fixture": "tests/oracle/lanedivide_infra_1204.rs"
         }
       },
-      "wave": "W-2026-08-22-ORCH",
+      "wave": "W-2026-08-22-ORCH (extended 11/12)",
       "ghidra_function_ids": [
         "LaneDivide::*",
         "Architecture::getLanedRegister",
