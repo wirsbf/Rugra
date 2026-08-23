@@ -569,8 +569,8 @@ rootlist（含不可归约边标记）。
 - `Ok(())`；`find_spanning_tree` 两遍后仍有 extraroots 时返回 LowlevelError 等价错误。
 
 #### 注意
-`calc_loop` 仍为登记 stub（见 BLOCK-FINDIRREDUCIBLE-0001 残差）：不可归约图上
-oracle 还会经 calcLoop 补标 f_loop_edge。
+`irreduciblecount > 0` 时调用完整实现的 `calc_loop`（BLOCK-CALCLOOP-0001，
+oracle fixture `block_calcloop_1204` MATCH）：DFS 环检测补标 f_loop_edge。
 
 ---
 
@@ -589,32 +589,42 @@ cross/forward 旧分类；末尾把集合坍缩为 x（清 mark、copymap 指向
 
 ---
 
-### `pub fn add_loop_edge(`
+### `pub fn add_loop_edge(&mut self, begin: &Arc<...>, outindex: usize)`
 
-添加循环边。
+标记既有出边为 loop 边（`BlockGraph::addLoopEdge`，block.cc:1451-1464）。
 
 #### 作用
-用于在 loop 分析或 loop structuring 过程中记录或构建循环相关边关系。
+把 `begin` 的第 `outindex` 条**既有**出边标记为 `f_loop_edge`（cc:1463 经
+`setOutEdgeFlag`，两侧 halves 同写：out 边 + 目标块的镜像 in 边，block.cc:240-246）。
+Ghidra 按 out-index（而非目标块身份）定位边——同一目标的多条平行出边必须可区分
+（cc:1459-1462 注释）。`#ifdef BLOCKCONSISTENT_DEBUG` 的 parent 检查在 oracle
+release 构建中编译掉。
 
 ---
 
 ### `pub fn calc_loop(&mut self)`
 
-计算图中的循环（`BlockGraph::calcLoop`，block.cc:2104-2147）。
+DFS 环检测补标 loop 边（`BlockGraph::calcLoop`，block.cc:2104-2147）。
 
 #### 作用
-识别和组织 loop 相关结构，为后续：
+从 `blocks[0]`（cc:2118 `list.front()`）起做显式栈 DFS，按出边槽序访问
+（cc:2130 先递增 per-path-level 游标再用槽位）。`f_mark`=已访问、
+`f_mark2`=在当前 DFS 路径上（cc:2120）：
 
-- `while`
-- `do-while`
-- 更高级 loop 恢复
+- 出边指向仍带 `f_mark2` 的块 → 成环 → `add_loop_edge(bl, i)` 标
+  `f_loop_edge`（cc:2133-2137，oracle 的 throw 被注释掉——不可归约 failsafe）；
+- 出边已带 `f_loop_edge` → 跳过（cc:2131 `isLoopOut`，重跑时视早前环断边不存在）;
+- 已访问但已弹栈（f_mark 置、f_mark2 清）→ 截断搜索（cc:2138 else）；
+- 新块 → 置 `f_mark|f_mark2` 入栈（cc:2138-2142）。
 
-提供基础。
+弹栈只清 `f_mark2`（cc:2124-2128）；栈空后按 list 序清所有块的
+`f_mark|f_mark2`（cc:2145-2146）。在 structureLoops 中仅当
+`irreduciblecount > 0` 时运行（cc:2211-2214）。
 
-#### 注意
-当前为登记 stub（BLOCK-FINDIRREDUCIBLE-0001 残差，建议 TODO
-`BLOCK-CALCLOOP-0001`）：不可归约图上 oracle 会经 DFS 环检测调
-`addLoopEdge` 补标 f_loop_edge。
+#### 对齐证据
+oracle fixture `tests/oracle/block_calcloop_1204`（BLOCK-CALCLOOP-0001）：
+7 用例（可归约回边/嵌套循环/自环/双跑 isLoopOut 跳过/截断/不可归约
+end-to-end/structureReset 链含支配树）双侧投影 byte-MATCH。
 
 ---
 
@@ -1158,7 +1168,8 @@ Ghidra `f_irreducible` 唯一写者的 1:1 移植：
 **`BlockGraph::structure_loops`** 升级为完整 do-while：`find_spanning_tree`
 → `find_irreducible` → needrebuild 时 `clear_edge_flags_mask(SPANNING_MASK)`
 （cc:2206，保 f_irreducible）+ 清 preorder/rootlist 重跑；收敛后
-`irreduciblecount > 0` 调 `calc_loop`（登记 stub，残差见下）。注意
+`irreduciblecount > 0` 调 `calc_loop`（完整实现见下方 BLOCK-CALCLOOP-0001
+节）。注意
 `find_spanning_tree` 每遍开头的 `clearEdgeFlags(~0)`（cc:1045）会把上一遍
 findIrreducible 标的 f_irreducible 也清掉——重建遍的收敛依赖 cc:1135
 `list = rpostorder` 重排改变下一遍根扫描顺序，与 oracle 一致。
@@ -1186,17 +1197,16 @@ reachunder 成员恒在 x 的 DFS 子树内，其树父不可能既是 x 的真�
 区间包含。该分支为防御性代码，fixture 投影记 UNTESTED（同 BLOCK-INDEX 对
 不可达分支的先例）。
 
-**残差（如实登记）：**
-- `calcLoop`（block.cc:2104-2147）未移植（`calc_loop` 空 stub，建议 TODO
-  `BLOCK-CALCLOOP-0001`）：不可归约图上 structureLoops 还会 DFS 环检测并
-  `addLoopEdge` 补标 f_loop_edge；Rugra 侧 structure_loops 已按 cc:2211-2214
-  调用点接线，stub 落地后即闭环。
+**残差（BLOCK-CALCLOOP-0001 已闭环，更新登记）：**
+- ~~`calcLoop`（block.cc:2104-2147）未移植~~ → 2026-08-23 完整移植
+  （见下方 BLOCK-CALCLOOP-0001 节 + oracle fixture `block_calcloop_1204`
+  全 case MATCH）。
 - `EDGEFLAG-BIT7-COLLISION-0001`（预存）：F_TREE_EDGE 与
   F_DEFAULTSWITCH_EDGE 共享 bit 7。本域投影内 bit 7 只可能是 tree
   （wipe-first 后无 default-switch 写者），与 block_index fixture 同一处理；
   重分配需独立任务审计全部使用点。
-- 生产管线未消费：blockaction.rs 尚无 `BlockGraph::structure_loops` 调用点
-  （blockaction.cc 的 structureReset 路径），接线属后续任务。
+- ~~生产管线未消费~~ → 2026-08-23 blockaction.rs `order_loop_bodies` 接线
+  完整 `structure_loops` 驱动（见 docs/api/blockaction.md）。
 
 **对齐证据：** `tools/run_block_findirreducible_oracle.sh` 权威差分（锁定
 oracle e40ed130 导出重建 libdecomp.a + pinned base 296c128 + overlay
@@ -1206,3 +1216,44 @@ forward→i 提升 / 平行边双计数 / 嵌套不可归约 FIND 复用 + copym
 多根 cross→i 提升 / structureLoops 端到端可归约驱动。投影含
 rebuild/cnt、preorder、rootlist、list、每块
 index/visitcount/numdesc/mark/copymap、出入边双侧 label 终态。
+
+## calcLoop 环断边补标域（block_calcloop_1204，2026-08-23）
+
+### 2026-08-23：BlockGraph::calc_loop 完整移植（BLOCK-CALCLOOP-0001）
+
+Ghidra `f_loop_edge` 唯一写者链的 1:1 移植：`BlockGraph::calcLoop`
+（block.cc:2104-2147）+ 忠实签名的 `BlockGraph::add_loop_edge(begin,
+outindex)`（block.cc:1451-1464，替换原先误标 addLoopEdge 的"加新边"死代码
+——旧实现语义是 addEdge cc:1439 且无调用者）。
+
+**`BlockGraph::calc_loop(&mut self)`** 逐语句对齐：
+- 空图早退（cc:2113）；从 `blocks[0]`（cc:2118 `list.front()`）种子化显式栈
+  DFS，置 `f_mark|f_mark2`（cc:2120）；
+- per-path-level 游标 `state` **先用后增**（cc:2130 `state.back() += 1` 发生在
+  读槽位之后、所有检查之前）——continue 跳过已标边后不会重扫同一槽；
+- `is_loop_out(i)` 跳过已带 `f_loop_edge` 的出边（cc:2131）——单次调用内
+  同槽不重扫，故仅对**调用前已存在**的 l 标签生效（重跑/stale 场景）；
+- 目标带 `f_mark2` → 成环 → `add_loop_edge(&bl, i)`（cc:2133-2137，oracle 的
+  LowlevelError throw 被注释掉）；目标带 `f_mark` 无 `f_mark2` → 截断（else
+  分支无事发生）；否则新块入栈（cc:2138-2142）；
+- 弹栈仅清 `f_mark2`（cc:2125）；栈空后按 list 序对每块清
+  `f_mark|f_mark2`（cc:2145-2146）。
+
+**支撑原语（本次新增）：**
+- `block_flags::MARK2`（=0x100，block.hh:95 f_mark2）；
+- `FlowBlock::clear_flags(f)`（trait 必选方法，block.hh:156 clearFlag
+  `flags &= ~fl`；全部 10 个 FlowBlock 实现类落地）。
+
+**生产接线：** `structure_loops` 内 cc:2211-2214 调用点闭环（此前 stub）；
+blockaction.rs 侧 `order_loop_bodies` 改调完整 `structure_loops` 驱动
+（见 docs/api/blockaction.md BLOCK-CALCLOOP-0001 节）。
+
+**对齐证据：** `tools/run_block_calcloop_1204_oracle.sh` 权威差分（锁定
+oracle e40ed130 导出重建 libdecomp.a + pinned base + overlay
+src/block.rs+src/blockaction.rs，pin-base schema2），7 case 双侧逐字节
+MATCH。投影含 list 序、每块 index/visitcount/numdesc/mark/mark2/copymap/
+immed_dom、rootlist + unreachable 判定、出入边双侧 label 终态。直接调用
+case 的 desc/copymap 投影为 "-"：oracle FlowBlock 用户构造器（cc:61-69）
+不初始化这两个字段（findSpanningTree 才初始化，cc:1025-1027），直接投影
+是堆噪声而非算法输出——这一非确定性两侧同因同果，按"不可比即不投影"处
+理并在 metadata normalization 登记。
