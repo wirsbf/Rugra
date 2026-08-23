@@ -22,8 +22,12 @@ through `ParamListOutput`: the standard strategy dispatches to
 `ParamListRegisterOut`. Output decode, assignment, recovery, possibility
 queries, entry iteration, containment queries, and killed-by-call state all
 flow through that one owned variant. `ParamTrial` also carries its complete
-address space; `ParamActive::register_trial_in_space` preserves Ghidra's
-1-based slot sequence and marks non-spacebase trials killed-by-call.
+address space. `ParamActive::register_trial(Address, ...)` now requires the
+address's architecture-owned space tag, projects its type/index without using
+the space name, and fails closed without mutation when the address is
+spaceless or unrepresentable. Known-space transitional callers use the
+explicit `register_trial_in_space` bridge. Both paths preserve Ghidra's
+1-based slot sequence and mark non-spacebase trials killed-by-call.
 
 The locked differential fixture
 `tools/run_funcproto_effect_model_oracle.sh` compares these observations
@@ -391,8 +395,9 @@ oracle `fspec_phase0_1204` fixture（`tools/run_fspec_phase0_oracle.sh`，pin-ba
 - fixture `fspec_phase0_1204`：跨空间 entry 查找（register 命中 / const/unique/ram 交叉
   miss / minsize 门）、无空间过滤的容器/扩展判定（register INT_ZEXT、ram PIECE、COPY 门）、
   comparator 阶梯排序（group/entry/offset/reverseStack/null-entry）、12/4 切分的边界地址与
-  flags 继承、split_trial slot 重编号。该旧 fixture 只比较 slot delta；绝对 1-based
-  slot 与 register-trial flags 现由 `fspec_paramlist_output_1204` 直接观察。
+  flags 继承、split_trial slot 重编号。该 fixture 的 Rust 侧现在还会断言每个
+  tagged-address 注册成功；它仍只打印 split 前后的 slot delta，而绝对 1-based slot
+  与 register-trial flags 由 `fspec_paramlist_output_1204` 直接观察。
 
 **验证**：cargo check --lib 0 错误；cargo test --lib fspec:: 19/19；全库 1473 通过、
 2 失败均为 base 即存的 funcdata 推断测试（`test_infer_params_and_return_type`/
@@ -411,20 +416,26 @@ oracle `fspec_phase0_1204` fixture（`tools/run_fspec_phase0_oracle.sh`，pin-ba
   `initialize`；`ProtoModelFull::decode_with_defaults` 因而把生产 cspec 的 output
   pentry 写入 output 自有列表。`derive_output_map` 与
   `possible_output_param(space,offset,size)` 直接消费同一列表。
-- `ParamTrial` 增加 address-space 分量；`register_trial_in_space` 使用 1-based
-  slotbase，并对非 Stack/spacebase trial 设置 `KILLEDBYCALL`。output fallback
+- `ParamTrial` 增加 address-space 分量；tagged `register_trial` 不再把缺失空间
+  猜作 Register，无法证明空间时零突变返回 `false`。显式
+  `register_trial_in_space` 使用 1-based slotbase，并对非 Stack/spacebase trial
+  设置 `KILLEDBYCALL`。output fallback
   以 trial space 查 entry，`setEntry(nullptr,0)` 的 Rust 表示同时清 entry index
   和 offset；before/after 序列化因此覆盖 slot、entry group/offset 和全部 flags。
 - 锁定 fixture：`tools/run_fspec_paramlist_output_oracle.sh` 使用真实
   `BfdArchitecture` + `examples/curl` + `x86-64-gcc.cspec` 运行 Ghidra，Rust 侧
   使用生产 `DocumentStorage` / SLA / `Architecture::parse_compiler_config`。
-  `float_only`、`general_only`、`general_beats_float`、`invalid_output` 四 case 的
-  model/possible 查询及全部 trial 容器突变逐字节一致；双方 stdout SHA256 均为
-  `0344d76589c1d927dfb421fff54b557438122bbce4ba7ecf21402bd932d20167`，covered
-  projection 状态为 `MATCH`。
+  `float_only`、`general_only`、`general_beats_float`、`invalid_output` 四个
+  subprojection 的 model/possible 查询及全部 trial 容器突变逐字节一致。
+  fixture 另外逐侧序列化 output 的 `autoKilledByCall` 以及只给
+  `XMM1_Qa`/`RDX` 的 second-resource case：Ghidra 的生产 `join_dual_class`
+  令 `useFillinFallback=false`、`autoKilledByCall=false` 并拒绝缺少首资源的
+  second trial；Rust 尚未拥有/执行 decoded `ModelRule`，仍强制 fallback/auto-kill
+  为 true 并接受该 trial。因此双侧输出分别 pin，overall/covered projection
+  明确为 `MISMATCH`，runner 只有在该差异被完整复现时才成功。
 
-保守残差：`ModelRule` 具体对象仍未接入本列表，因此能命中
-`join_dual_class` / hidden-return 的分支为 `UNTESTED`；input 侧
+保守残差：`ModelRule` 状态/second-resource 行为已是有真实 oracle 的
+`MISMATCH`；成功合成 dual join 与 hidden-return 的分支仍为 `UNTESTED`。input 侧
 `ParamListRegister` 所有权、register-output assignment、void/oversize hidden
 return、双寄存器 join、错误路径与 endian 边界也不在本 fixture 的 MATCH 投影内。
 这些残差使 fspec 保持 L2；本批不声称 output 参数模型整体 L3。

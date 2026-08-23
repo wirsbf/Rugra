@@ -2,9 +2,11 @@
   "schema": 2,
   "fixture_id": "FSPEC-PARAMLIST-OUTPUT-1204",
   "task_id": "FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001",
-  "overall_status": "UNTESTED",
-  "covered_projection_status": "MATCH",
-  "covered_projection": "Production x86-64-gcc standard-output resource decode plus possibleOutputParam and deriveOutputMap for first floating/general resources, mixed active/inactive trials, and an invalid output register; every serialized model, ParamActive, and ParamTrial field matches byte for byte.",
+  "overall_status": "MISMATCH",
+  "covered_projection_status": "MISMATCH",
+  "covered_projection": "Production x86-64-gcc standard-output resource decode plus possibleOutputParam and deriveOutputMap for first and second floating/general resources, mixed active/inactive trials, and an invalid output register. The first-resource, mixed, invalid, slot, and flag observations match; the serialized ModelRule-derived auto-killed state and second-resource mutations expose the missing join_dual_class integration and differ without normalization.",
+  "matched_subprojection_status": "MATCH",
+  "matched_subprojection": "possibleOutputParam plus float_only, general_only, general_beats_float, invalid_output, absolute slotbase, registration order, and killed-by-call observations are byte-identical after excluding no fields; the overall fixture remains MISMATCH because its other observations differ.",
   "oracle": {
     "repository": "NationalSecurityAgency/ghidra",
     "tag": "Ghidra_12.0.4_build",
@@ -24,13 +26,13 @@
       "tools/run_fspec_paramlist_output_oracle.sh"
     ],
     "overlay_sha256": {
-      "src/fspec.rs": "7dba228d0b0e4502dd376e32f0554ff5b72f1049535d066d99a7ed8589f50c9c",
-      "docs/api/fspec.md": "3dc75d6b476e208bf2f3a3495a34500523be021dd77147faea2d5da6aede60f2",
-      "tests/oracle/fspec_paramlist_output_1204.cc": "0ceb9429d16b12282f6816e52736ff230540aee0617af01a29340f77f5e98373",
-      "tests/oracle/fspec_paramlist_output_1204.rs": "e0c2c8801fa6a95af864d164bef3e7faebe8798005d8527d193e57a359c6779c",
-      "tools/run_fspec_paramlist_output_oracle.sh": "80cee291fa9eb1fa9ad1318a0c30067f014fdde0b14e13313e2f53df99589735"
+      "src/fspec.rs": "122050e69065acf2e87f3e8701da4215aae73bc804612734a436da69880acb52",
+      "docs/api/fspec.md": "2ce94349af11315698c87013a4c32a137f33ef986a0c84c6140560f1cc1197d4",
+      "tests/oracle/fspec_paramlist_output_1204.cc": "eb621f8dd608af8b47a7fb55d65373db1bd3b02ac528f2ff91ad063e8bdffb17",
+      "tests/oracle/fspec_paramlist_output_1204.rs": "eeed8845b4dde721472530a6b50e26672603b062f85f2cb617b4aac53a65eaa7",
+      "tools/run_fspec_paramlist_output_oracle.sh": "14cf3a154622e36b693c53e794132edd61feb8e34d8ab4397bf98a7dcc426000"
     },
-    "crate_closure_sha256": "03a6644000e8ad016aefacd3061a0d11c8e2392afb4e80e027e7ca01593982fa",
+    "crate_closure_sha256": "f3a9776f851e8958365155f34b835fc66939cfa4f31cb587baa6217986ac47ca",
     "crate_closure_hash_scheme": "SHA-256 over sorted Cargo.toml, Cargo.lock, build.rs, src/**/*.rs, and sleigh_shim regular files in the pinned base-plus-overlay snapshot; each path and content is unsigned-64-bit big-endian length-prefixed.",
     "host": {
       "cxx": "g++ (GCC) 16.2.1 20260810",
@@ -97,13 +99,13 @@
     "id": "x86-64-gcc.cspec",
     "default_model": "__stdcall",
     "default_model_extrapop": 8,
-    "output_resources": "XMM0_Qa and XMM1_Qa floating exclusions followed by RAX and RDX general exclusions; join_dual_class and hidden_return rules follow the entries.",
+    "output_resources": "XMM0_Qa and XMM1_Qa floating exclusions followed by RAX and RDX general exclusions; join_dual_class and hidden_return rules follow the entries. Ghidra decodes join_dual_class, setting useFillinFallback=false and autoKilledByCall=false; Rugra currently decodes only the entries and retains true for both booleans.",
     "identity": "Both sides select the Architecture-owned default ProtoModelFull decoded from the same pinned compiler-spec bytes."
   },
   "analysis_options": {
     "api": "Direct production ProtoModel::possibleOutputParam and ProtoModel::deriveOutputMap calls after full architecture/compiler-spec initialization; no Action, Rule, PrintC, or fixture-local XML parser.",
     "active_container": "ParamActive(recoversubcall=false), no placeholder, no completed passes, no final-check request, no join reversal.",
-    "trial_registration": "Trials are registered in case order, active/inactive flags are then applied, and all public state is serialized before and after deriveOutputMap.",
+    "trial_registration": "Trials are registered in case order with their real register address space, active/inactive flags are then applied, and all public state is serialized before and after deriveOutputMap.",
     "normalization": "None. Model name/extrapop, possible-query booleans, container counters/booleans, trial order, address space, offset, size, slot, entry group, entry offset, and packed public flags are emitted verbatim.",
     "debug_macros": "none on either side",
     "random_seed": "none; compiler-spec decode and trial traversal are deterministic",
@@ -128,10 +130,22 @@
         "expect": "The floating first-class entry is group 0 and the trial becomes used."
       },
       {
+        "id": "float_second_only",
+        "active": ["XMM1_Qa"],
+        "inactive": [],
+        "expect": "Ghidra's join_dual_class path rejects a second floating resource without the first; Rugra's forced fallback accepts it, exposing the missing ModelRule state."
+      },
+      {
         "id": "general_only",
         "active": ["RAX"],
         "inactive": [],
         "expect": "The general first-class entry is group 2 and the trial becomes used."
+      },
+      {
+        "id": "general_second_only",
+        "active": ["RDX"],
+        "inactive": [],
+        "expect": "Ghidra's join_dual_class path rejects a second general resource without the first; Rugra's forced fallback accepts it, exposing the missing ModelRule state."
       },
       {
         "id": "general_beats_float",
@@ -149,24 +163,26 @@
     "case_order": [
       "possible_output",
       "float_only",
+      "float_second_only",
       "general_only",
+      "general_second_only",
       "general_beats_float",
       "invalid_output"
     ],
-    "sha256": "aca58ad63a30b9f09500877f2361249f78eb74f42595a7c2f73d219bbc57e28c"
+    "sha256": "5cf0f8b46f8087fcf36764155f73b5f9fa38fa750e6907eb4a53b45ed2a52378"
   },
   "observation_schema": {
-    "format": "29 fixed-order UTF-8 lines with a final newline.",
-    "model": "SCHEMA, oracle commit, Architecture default model name, extrapop, and three possible-output booleans.",
+    "format": "40 fixed-order UTF-8 lines with a final newline.",
+    "model": "SCHEMA, oracle commit, Architecture default model name, extrapop, output auto-killed-by-call state, and three possible-output booleans.",
     "container": "For each trial case, BEFORE/AFTER count, getNumUsed, numpasses, maxpass, fully-checked, needs-final-check, recoversubcall, and join-reverse.",
     "trials": "For every trial in current order: index, space name, hexadecimal offset, size, original/current slot, entry group or -1, entry offset, and the packed flags exposed by Ghidra predicates.",
-    "mutations": "Used/no-use flag changes, entry attachment/detachment, entry offset reset, and any creation/deletion/reordering are observable; these cases create/delete no trials and preserve registration order."
+    "mutations": "Used/no-use flag changes, entry attachment/detachment, entry offset reset, and any creation/deletion/reordering are observable; these cases create/delete no trials and preserve registration order. The second-only cases make useFillinFallback behavior observable through their final trial state."
   },
   "decisive_semantics": {
-    "references_and_outputs": "deriveOutputMap receives ParamActive* and mutates the caller-owned container/trials in place. ParamTrial stores a ParamEntry pointer in Ghidra; Rust stores an index into the same model-owned declaration-order entry slice. Output decode owns a concrete output list inside the architecture model.",
-    "loop_bounds_traversal_order": "possibleParam walks every output entry from begin to end. fillinMap/fallback evaluates entries in declaration order and trials from index 0 through getNumTrials()-1, then sorts using ParamTrial::operator<. The fixture prints the resulting order without normalization.",
-    "counters_and_accumulators": "ParamActive starts slotbase=1, numpasses=0, maxpass=0; registerTrial consumes the current slot then increments once and marks non-spacebase trials killed-by-call. fillinMapFallback resets bestcover=0 and bestclass=TYPECLASS_PTR once, and offmatch=0 independently for each entry.",
-    "sort_and_comparison_keys": "Best output entry prefers a more generic type class or larger contiguous byte coverage. Trial sorting uses model group, entry declaration identity, justified offset for exclusions, reverse-stack-aware address for non-exclusions, then size; no fixture case contains comparator-equal duplicates."
+    "references_and_outputs": "deriveOutputMap receives ParamActive* and mutates the caller-owned container/trials in place. ParamTrial stores a ParamEntry pointer in Ghidra; Rust stores an index into the same model-owned declaration-order entry slice. Output and ModelRule decode state belong to the architecture model; Rust currently owns the output entries but not the decoded rules.",
+    "loop_bounds_traversal_order": "possibleParam walks every output entry from begin to end. Ghidra fillinMap first invokes modelRules in declaration order and returns on the first success; only then can fillinMapFallback run. Rust's empty rule vector skips this traversal and always falls back. Fallback evaluates entries in declaration order and trials from index 0 through getNumTrials()-1, then sorts using ParamTrial::operator<. The fixture prints the resulting order without normalization.",
+    "counters_and_accumulators": "ParamActive starts slotbase=1, numpasses=0, maxpass=0; registerTrial consumes the current slot then increments once and marks non-spacebase trials killed-by-call. fillinMapFallback resets bestcover=0 and bestclass=TYPECLASS_PTR once, and offmatch=0 independently for each entry. ModelRule initialization changes output autoKilledByCall from true to false on Ghidra only; the fixture serializes this state.",
+    "sort_and_comparison_keys": "Best fallback output entry prefers a more generic type class or larger contiguous byte coverage. Trial sorting uses model group, entry declaration identity, justified offset for exclusions, reverse-stack-aware address for non-exclusions, then size; no fixture case contains comparator-equal duplicates. join_dual_class compares trial/resource class positions and rejects a second resource without the first, which the two second-only cases expose."
   },
   "ghidra_functions": [
     {
@@ -246,86 +262,119 @@
     {
       "id": "RG-F-e2ae768e78b0f9d2407f",
       "signature": "fn new_in_space(space: AddressSpace, addr: Address, sz: i32, sl: i32) -> Self",
-      "source": "src/fspec.rs:3054",
+      "source": "src/fspec.rs:3067",
       "owner": "ParamTrial"
     },
     {
       "id": "RG-F-f04406088247341ddb09",
       "signature": "fn clear_entry(&mut self)",
-      "source": "src/fspec.rs:3087",
+      "source": "src/fspec.rs:3101",
       "owner": "ParamTrial"
+    },
+    {
+      "id": "RG-F-9f1935e81471cf88494a",
+      "signature": "fn space_from_tagged_address(addr: Address) -> Option<AddressSpace>",
+      "source": "src/fspec.rs:3379",
+      "owner": "ParamActive"
+    },
+    {
+      "id": "RG-F-14308901657e8b225fe7",
+      "signature": "fn register_trial(&mut self, addr: Address, sz: i32) -> bool",
+      "source": "src/fspec.rs:3409",
+      "owner": "ParamActive"
     },
     {
       "id": "RG-F-b445c51b636b8d0099bb",
       "signature": "fn register_trial_in_space(&mut self, space: AddressSpace, addr: Address, sz: i32)",
-      "source": "src/fspec.rs:3372",
+      "source": "src/fspec.rs:3423",
+      "owner": "ParamActive"
+    },
+    {
+      "id": "RG-F-906d05c5305c7111d801",
+      "signature": "fn which_trial(&self, addr: Address, sz: i32) -> i32",
+      "source": "src/fspec.rs:3435",
+      "owner": "ParamActive"
+    },
+    {
+      "id": "RG-F-29dc4b50b4e765955d48",
+      "signature": "fn which_trial_in_space(&self, space: AddressSpace, addr: Address, sz: i32) -> i32",
+      "source": "src/fspec.rs:3446",
       "owner": "ParamActive"
     },
     {
       "id": "RG-F-abd234dc93f9affbeef5",
       "signature": "fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder, effect_list: &mut Vec<EffectRecord>, normal_stack: bool, register_resolver: &dyn Fn(&str) -> Option<VarnodeData>) -> Result<(), String>",
-      "source": "src/fspec.rs:4491",
+      "source": "src/fspec.rs:4546",
       "owner": "ParamListStandard"
     },
     {
       "id": "RG-F-7270c458a0bfc7ada4e8",
       "signature": "fn initialize(&mut self)",
-      "source": "src/fspec.rs:5507",
+      "source": "src/fspec.rs:5561",
       "owner": "ParamListStandardOut"
     },
     {
       "id": "RG-F-d8069a368d3cde54f438",
       "signature": "fn fillin_map_fallback(&self, active: &mut ParamActive, first_only: bool)",
-      "source": "src/fspec.rs:5609",
+      "source": "src/fspec.rs:5663",
       "owner": "ParamListStandardOut"
     },
     {
       "id": "RG-F-890197e3c61e8d298db1",
       "signature": "fn fillin_map(&self, active: &mut ParamActive)",
-      "source": "src/fspec.rs:5720",
+      "source": "src/fspec.rs:5775",
       "owner": "ParamListStandardOut"
     },
     {
       "id": "RG-F-165d45a203c4b7b0a40d",
       "signature": "fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool",
-      "source": "src/fspec.rs:5764",
+      "source": "src/fspec.rs:5819",
       "owner": "ParamListStandardOut"
     },
     {
       "id": "RG-F-8da24b5ec162432b2e21",
       "signature": "fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder, effectlist: &mut Vec<EffectRecord>, normalstack: bool, register_resolver: &dyn Fn(&str) -> Option<VarnodeData>) -> Result<(), String>",
-      "source": "src/fspec.rs:5777",
+      "source": "src/fspec.rs:5833",
       "owner": "ParamListStandardOut"
     },
     {
       "id": "RG-F-58e5a8b2d544465ae841",
       "signature": "fn build_param_list(&mut self, strategy: &str) -> Result<(), String>",
-      "source": "src/fspec.rs:6212",
+      "source": "src/fspec.rs:6268",
       "owner": "ProtoModelFull"
     },
     {
       "id": "RG-F-cba1ca033fe56fb95dc4",
       "signature": "fn derive_output_map(&self, active: &mut ParamActive)",
-      "source": "src/fspec.rs:6337",
+      "source": "src/fspec.rs:6393",
       "owner": "ProtoModelFull"
     },
     {
       "id": "RG-F-987c0c4685c579ad3ef3",
       "signature": "fn possible_output_param(&self, space: AddressSpace, offset: u64, size: i32) -> bool",
-      "source": "src/fspec.rs:6343",
+      "source": "src/fspec.rs:6399",
+      "owner": "ProtoModelFull"
+    },
+    {
+      "id": "RG-F-61659f5a98e9b24e0927",
+      "signature": "fn output_entries(&self) -> &[ParamEntry]",
+      "source": "src/fspec.rs:6411",
       "owner": "ProtoModelFull"
     }
   ],
   "coverage": {
-    "production_compiler_spec_output_decode": "MATCH",
+    "production_compiler_spec_output_entry_decode": "MATCH",
+    "production_compiler_spec_output_model_rule_state": "MISMATCH",
     "standard_output_possible_param": "MATCH",
     "standard_output_fallback_first_float": "MATCH",
     "standard_output_fallback_first_general": "MATCH",
+    "standard_output_second_float_without_first": "MISMATCH",
+    "standard_output_second_general_without_first": "MISMATCH",
     "mixed_active_inactive_trial_mutation": "MATCH",
     "invalid_output_trial_mutation": "MATCH",
     "absolute_slotbase_and_killedbycall": "MATCH",
     "register_strategy_output_ownership": "UNTESTED",
-    "model_rule_success": "UNTESTED",
+    "join_dual_class_success": "UNTESTED",
     "hidden_return_assignment": "UNTESTED",
     "dual_register_join": "UNTESTED",
     "error_and_endian_boundaries": "UNTESTED"
@@ -333,8 +382,8 @@
   "residuals": [
     {
       "todo_id": "FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001",
-      "status": "UNTESTED",
-      "detail": "Concrete ModelRule decode/ownership/execution is not connected to ParamListStandard, so successful join_dual_class and hidden-return output branches are outside the MATCH projection."
+      "status": "MISMATCH",
+      "detail": "Concrete ModelRule decode/ownership/execution is not connected to ParamListStandardOut. With the production join_dual_class rule, Ghidra sets useFillinFallback=false and autoKilledByCall=false and rejects XMM1_Qa/RDX when their first resource is absent; Rust retains both defaults as true and accepts those trials through fallback."
     },
     {
       "todo_id": "FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001",
@@ -347,11 +396,11 @@
       "detail": "Input ParamListRegister ownership, FuncCallSpecs single-model delegation, and coreaction/architecture consumers are successor work and are not claimed by this atom."
     }
   ],
-  "expected": {
+  "expected_results": {
     "exit_code": 0,
-    "stdout_lines": 29,
-    "ghidra_stdout_sha256": "0344d76589c1d927dfb421fff54b557438122bbce4ba7ecf21402bd932d20167",
-    "rugra_stdout_sha256": "0344d76589c1d927dfb421fff54b557438122bbce4ba7ecf21402bd932d20167"
+    "stdout_lines": 40,
+    "ghidra_stdout_sha256": "364799742c8acb869817542cc4ae2146f80c3f679296a5389a181eb917e6785e",
+    "rugra_stdout_sha256": "08850145aa0c7cc12491abe4f3770d9865759f89e8e2e73e64629dc2093c473a"
   },
   "build": {
     "ghidra": "Archive the locked decompiler C++ subtree, rebuild libdecomp.a, compile the fixture with libdecomp/sleigh/bfd loader sources and the pinned BFD shared object, then run against the pinned specs and curl binary.",

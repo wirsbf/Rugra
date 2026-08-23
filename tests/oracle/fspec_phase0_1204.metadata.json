@@ -8,10 +8,12 @@
   "GH12-F-e58eb59384e30cb287a1 ghidra::ParamListStandard::assumedExtension(const Address &, int4, VarnodeData &) const fspec.cc:1426",
   "GH12-F-a099559c511dd787f0ca ghidra::ParamTrial::splitHi(int4) const fspec.cc:1845",
   "GH12-F-19a1599ade2ed2d771ac ghidra::ParamTrial::splitLo(int4) const fspec.cc:1856",
+  "GH12-F-c3567cea1ed400eb7413 ghidra::ParamActive::registerTrial(const Address &, int4) fspec.cc:1963",
   "GH12-F-b1a276a6a091136a35fa ghidra::ParamActive::splitTrial(int4, int4) fspec.cc:2033",
   "ghidra::ParamTrial::operator<(const ParamTrial &) const fspec.cc:1893 (hh inline sortTrials fspec.hh:316)"
  ],
- "overall_status": "PARTIAL_MATCH: the six-case covered projection byte-matches Ghidra 12.0.4's ParamListStandard per-space findEntry, the no-filter unjustifiedContainer/assumedExtension, the operator< sort ladder and the split address/flags/slot mechanics. Overall stays PARTIAL_MATCH for three registered residuals outside the covered projection: (1) trial absolute slot base - Ghidra slots are 1-based (fspec.cc:4062 triallist[trial.getSlot()-1]) while Rugra's ParamActive slotbase starts at 0 with len-based registerTrial slots and 0-based consumer coupling; the fixture observes slot deltas only. (2) unjustifiedContainer/assumedExtension accept legacy spaceless query addresses, so a foreign-space query at a matching offset can false-positive where Ghidra's per-entry Address space checks reject it (ADDRESS-0001 bridge gap). (3) Rust's stable sort_by may order comparator-equal trials differently from libstdc++ introsort.",
+ "overall_status": "UNTESTED",
+ "status_detail": "The six-case covered projection byte-matches Ghidra 12.0.4's ParamListStandard per-space findEntry, the no-filter unjustifiedContainer/assumedExtension, the operator< sort ladder, tagged-space registerTrial, and split address/flags/slot mechanics. Overall remains UNTESTED because cross-space unjustifiedContainer/assumedExtension false positives and comparator-equal ordering are not exercised. Absolute 1-based registration slots are covered as MATCH by the companion fspec_paramlist_output_1204 fixture.",
  "oracle": {
   "repository": "NationalSecurityAgency/ghidra",
   "tag": "Ghidra_12.0.4_build",
@@ -20,33 +22,32 @@
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
  "comparand": {
-  "rugra_base_commit": "8c708788b91a613ee8fc025bc6bb16867267fead",
-  "rugra_base_tree": "b31cc81a7ab2c32bd5f7ff240c2d7cff38628a9a",
+  "rugra_base_commit": "4c4808d12dfabeecd7043c49da852adf9a10e68f",
+  "rugra_base_tree": "71ed04342212855062188a1ed1dff27c1ebf4892",
   "cpp_fixture_sha256": "50f7452e97fb7cc82f41495fc6a64f7d69c6b062a794f6994aa571c4a544cb90",
-  "rust_fixture_sha256": "6218e700d8b86b8873d1da0061ea29d229544a2d69a62cfabc14642045d5af8c",
-  "fspec_rs_sha256": "ecd6cdab26788cbe05f8f15c5badd5d92434998504233096610c024ccdf61b57",
-  "fspec_doc_sha256": "ad6522e513b7de1cc0949e378adb83a5a9f945b7a722cc459c930c798dcd3111",
-  "runner_sha256": "1c7c5e32d3ced604bfbfe721d65c3a31871f1d5704c1ba3c4915abc63c712f04",
+  "rust_fixture_sha256": "3abfe05df0a6dd90af4fd872158b0f547314d082b3c05aba4fc2f629258ded4a",
+  "fspec_rs_sha256": "122050e69065acf2e87f3e8701da4215aae73bc804612734a436da69880acb52",
+  "fspec_doc_sha256": "2ce94349af11315698c87013a4c32a137f33ef986a0c84c6140560f1cc1197d4",
+  "runner_sha256": "7e3e2053b3e8ee56df3f195d2d2c9ac17d1a8a099d63c73919111a59475ae191",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "09a8188b0b4f8af6c24bb8837cff74d01374a1235604ee491f8e8b59577d72eb",
+  "rust_crate_tree_sha256": "68eea84683fbea6a5408a60761e12d0dd0d67344bacc1e17931c88b054961a70",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-phase0-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "host": {
-   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-   "cxx_target": "x86_64-linux-gnu",
-   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
    "make_path": "/usr/bin/make",
-   "python_path": "/usr/bin/python3.10",
+   "python_path": "/usr/bin/python3.14",
    "git_path": "/usr/bin/git",
-   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-   "platform": "Linux 6.8.0-138-generic x86_64"
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
   }
  },
  "architecture": {
@@ -62,7 +63,7 @@
   "calling_convention": "hand-built ParamListStandard via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters); populateResolver/finalize_after_decode complete the model"
  },
  "analysis_options": {
-  "api": "Direct production ParamListStandard::possibleParamWithSlot/unjustifiedContainer/assumedExtension and ParamActive registerTrial/setEntry/sortTrials/splitHi/splitLo/splitTrial calls; no Action, Rule, PrintC or Funcdata pipeline",
+  "api": "Direct production ParamListStandard::possibleParamWithSlot/unjustifiedContainer/assumedExtension and ParamActive registerTrial/setEntry/sortTrials/splitHi/splitLo/splitTrial calls; Rust registerTrial receives the same tagged register/stack AddrSpace identity and each registration is asserted successful; no Action, Rule, PrintC or Funcdata pipeline",
   "model_state": "entry order e0(register,0x30,8,min4,excl,force-left), e1(register,0x38,8,min4,excl,force-left+smallsize_zext), e2(stack,0,64,min4,align8,reverse), e3(ram,0x2000,16,min8,excl,force-left+smallsize_inttype); numgroup=4",
   "normalization": "None. Exact hit booleans, slot/slotsize ints, container (space,offset,size) triples, opcode names, post-sort (addr,size,group,offset) rows and split (addr,size,slot-delta,flag) rows are printed verbatim",
   "debug_macros": "none on either side",
@@ -116,7 +117,7 @@
    "split_hi_lo",
    "split_trial"
   ],
-  "sha256": "44a2367947613f29bf04238e44087ff77ee08d1ddda9aee4833c27f6797e478e"
+  "sha256": "56f2b9c68f1f4d4baf901bdeffed4fe8d738b407cfeb8c6829ffb954f7dbf9a6"
  },
  "observation_schema": {
   "format": "42 fixed-order UTF-8 lines with final newline: one envelope, six case headers, then per-case observation rows (pp/uc/ae/sorted[]/hi/lo/lo8/st[]/deltas)",
@@ -124,7 +125,7 @@
   "no_filter_predicates": "unjustifiedContainer returns the entry container triple; assumedExtension returns the opcode name and container; register-entry answers prove the removed Ram filter",
   "sort_ladder": "post-sort rows expose group order, exclusion offset order, reverseStack address order and the entry-less tail",
   "splits": "hi/lo rows print (space,offset,size), slot deltas and used/active/checked flag inheritance; split_trial rows add survivor slot delta, slotbase delta and trial count",
-  "slots": "slot observations are deltas from the pre-split values; the absolute 1-vs-0 base is a registered residual, not an observation"
+  "slots": "slot observations in this fixture are deltas from the pre-split values; absolute 1-based registerTrial slot/slotbase and killed-by-call state are independently serialized as MATCH by fspec_paramlist_output_1204"
  },
  "decisive_semantics": {
   "references_and_outputs": "findEntry returns the first matching entry (per-space resolver order = entry declaration order); unjustifiedContainer/assumedExtension pass back VarnodeData containers by mutation; splitHi/splitLo return new ParamTrial values with the full flags word copied (fspec.cc:1849/1861); splitTrial replaces the trial vector in place",
@@ -139,20 +140,33 @@
   "sort_trials": "MATCH",
   "split_hi_lo": "MATCH",
   "split_trial": "MATCH",
-  "trial_absolute_slot_base": "UNTESTED",
+  "trial_absolute_slot_base": "MATCH (companion locked fixture fspec_paramlist_output_1204 serializes absolute slot=1 and slotbase-derived registration flags)",
   "unjustified_cross_space_false_positive": "UNTESTED",
   "comparator_equal_tie_order": "UNTESTED"
  },
- "residual_todo_ids": [
-  "FSPEC-PHASE0-RESIDUAL-0001"
+ "residuals": [
+  {
+   "todo_id": "FSPEC-PHASE0-RESIDUAL-0001",
+   "status": "UNTESTED",
+   "detail": "unjustifiedContainer/assumedExtension still accept a legacy spaceless query address in this API slice, so a foreign-space query at a matching offset is not covered."
+  },
+  {
+   "todo_id": "FSPEC-PHASE0-RESIDUAL-0001",
+   "status": "UNTESTED",
+   "detail": "Rust stable sort and libstdc++ introsort can differ for comparator-equal duplicate trials; this fixture deliberately has no comparator-equal pair."
+  }
  ],
  "build": {
   "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "rugra_build": "Archive the pinned base, overlay the owned fspec source, verify the complete Cargo.lock registry closure, then let /usr/bin/cargo --locked --offline select and checksum the current Linux target's cached packages under the global build lock.",
   "expected_stdout_lines": 42,
   "registry_packages": 164,
   "registry_lock_closure_sha256": "02ea4a845d1eaf0a6fc12e059fcde7ff040c1938dc2cbf7880a4b268491e3a4b"
  },
- "expected_exit_code": 0,
  "covered_projection_status": "MATCH",
- "expected_stdout_sha256": "69c762946f01fbb2df1ca7ac0535755fd9cc5fd226eca06019728ee60455a319"
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "69c762946f01fbb2df1ca7ac0535755fd9cc5fd226eca06019728ee60455a319",
+  "rugra_stdout_sha256": "69c762946f01fbb2df1ca7ac0535755fd9cc5fd226eca06019728ee60455a319"
+ }
 }

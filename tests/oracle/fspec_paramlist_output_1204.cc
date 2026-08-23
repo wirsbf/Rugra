@@ -102,6 +102,8 @@ void runFixture(const string &specDirectory, const string &binary)
   cout << "SCHEMA|1\n";
   cout << "ORACLE|e40ed13014025f82488b1f8f7bca566894ac376b\n";
   cout << "MODEL|" << model->getName() << "|extrapop=" << model->getExtraPop() << '\n';
+  cout << "OUTPUT_STATE|auto_killed_by_call="
+       << (model->isAutoKilledByCall() ? 1 : 0) << '\n';
 
   const VarnodeData &xmm0(arch.translate->getRegister("XMM0_Qa"));
   const VarnodeData &rax(arch.translate->getRegister("RAX"));
@@ -111,7 +113,9 @@ void runFixture(const string &specDirectory, const string &binary)
   cout << "POSSIBLE|RCX|" << (model->possibleOutputParam(Address(rcx.space, rcx.offset), rcx.size) ? 1 : 0) << '\n';
 
   runCase(model, arch, "float_only", vector<string>(1, "XMM0_Qa"), vector<string>());
+  runCase(model, arch, "float_second_only", vector<string>(1, "XMM1_Qa"), vector<string>());
   runCase(model, arch, "general_only", vector<string>(1, "RAX"), vector<string>());
+  runCase(model, arch, "general_second_only", vector<string>(1, "RDX"), vector<string>());
   runCase(model, arch, "general_beats_float", vector<string>(1, "RAX"), vector<string>(1, "XMM0_Qa"));
   runCase(model, arch, "invalid_output", vector<string>(1, "RCX"), vector<string>());
   cout << "DONE\n";

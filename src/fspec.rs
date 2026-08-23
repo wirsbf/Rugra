@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crate::address::Address;
-use crate::space::AddressSpace;
+use crate::space::{AddressSpace, SpaceType};
 use crate::type_system::datatype::Datatype;
 
 /// Effect type for a memory range across a call. Faithful to
@@ -2250,6 +2250,20 @@ impl FuncCallSpecs {
         ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
         if !self.is_input_locked() { return; }
+        // Ghidra's ProtoParameter always owns a complete Address. Rugra's
+        // transitional ProtoParameter can still carry a legacy spaceless
+        // Address, so validate every parameter before mutating the CALL or
+        // its ParamActive container. A missing space cannot be guessed.
+        let param_descs: Option<Vec<(Address, crate::space::AddressSpace)>> = self
+            .prototype
+            .parameters
+            .iter()
+            .map(|param| {
+                ParamActive::space_from_tagged_address(param.address)
+                    .map(|space| (param.address, space))
+            })
+            .collect();
+        let Some(param_descs) = param_descs else { return; };
         // Ghidra: Varnode *stackref = getSpacebaseRelative();
         // Rugra does not yet expose getSpacebaseRelative; the placeholder
         // logic below mirrors the structure but the stackref is implicit.
@@ -2274,18 +2288,10 @@ impl FuncCallSpecs {
         let mut no_placehold = true;
 
         // Ghidra: for each param, buildParam + registerTrial + markActive.
-        let numparams = self.prototype.parameters.len();
-        // Snapshot the parameter (address,size) pairs to avoid borrowing self
-        // across the mutable build_param closure.
-        let param_descs: Vec<(Address, i32, crate::space::AddressSpace)> = self
-            .prototype
-            .parameters
-            .iter()
-            .map(|p| (p.address, 0, crate::space::AddressSpace::Register))
-            .collect();
-        let _ = numparams;
+        // `param_descs` is the prevalidated address/space snapshot, avoiding
+        // a borrow of self across the mutable build_param closure.
         for i in 0..param_descs.len() {
-            let (paddr, _psize, _pspace) = param_descs[i];
+            let (paddr, pspace) = param_descs[i];
             // Size of the parameter: read from its data_type.
             let psize = {
                 // Datatype sizes: use the stored data_type's get_size if avail.
@@ -2302,15 +2308,12 @@ impl FuncCallSpecs {
             }
             // activeinput.registerTrial(paddr, psize) + getTrial(i).markActive().
             if let Some(active) = self.active_input.as_mut() {
-                active.register_trial(paddr, 8);
-                if i < active.get_num_trials() {
-                    active.get_trial_mut(i).mark_active();
-                }
+                active.register_trial_in_space(pspace, paddr, 8);
+                let trial_index = active.get_num_trials() - 1;
+                active.get_trial_mut(trial_index).mark_active();
             }
             // First stack-space param becomes the placeholder.
-            if no_placehold {
-                // psize/space check elided: Rugra lacks per-param space; the
-                // first param is treated as the placeholder candidate.
+            if no_placehold && pspace == crate::space::AddressSpace::Stack {
                 let _ = &vn;
                 no_placehold = false;
             }
@@ -2352,16 +2355,26 @@ impl FuncCallSpecs {
         truncate_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
         if !self.is_output_locked() { return; }
+        if new_output.is_empty() {
+            if let Some(active) = self.active_output.as_mut() {
+                active.clear();
+            }
+            return;
+        }
+        let (ret_addr, ret_size) = get_return_addr_size(self);
+        // A locked Ghidra ProtoParameter cannot have a null address space.
+        // Preserve that precondition: a transitional spaceless Rust Address
+        // aborts before the active-output state or CALL graph is mutated.
+        let Some(ret_space) = ParamActive::space_from_tagged_address(ret_addr) else {
+            return;
+        };
         // activeoutput.clear()
         if let Some(active) = self.active_output.as_mut() {
             active.clear();
         }
-
-        if new_output.is_empty() { return; }
-        let (ret_addr, ret_size) = get_return_addr_size(self);
         // activeoutput.registerTrial(param->getAddress(), param->getSize()).
         if let Some(active) = self.active_output.as_mut() {
-            active.register_trial(ret_addr, ret_size);
+            active.register_trial_in_space(ret_space, ret_addr, ret_size);
         }
 
         // Ghidra: find an exact-size match among new_output.
@@ -3027,9 +3040,9 @@ pub mod param_trial_flags {
 #[derive(Debug, Clone)]
 pub struct ParamTrial {
     flags: u32,
-    /// Address-space component of Ghidra's `Address`. Rugra's legacy
-    /// `Address` stores only the offset, so the component is carried beside
-    /// it until the address layer is unified.
+    /// Address-space component of Ghidra's `Address`. Rugra's transitional
+    /// `Address` has an optional full-space tag, while parameter-list code
+    /// still uses the coarse enum, so the component is carried beside it.
     space: AddressSpace,
     addr: Address,
     size: i32,
@@ -3057,7 +3070,8 @@ impl ParamTrial {
             entry_index: None,
         }
     }
-    // Ghidra: fspec.hh:239 ParamTrial::getAddress
+    // RUGRA-GLUE: coarse-space projection of Ghidra's complete Address;
+    // Ghidra reads `getAddress().getSpace()` directly (fspec.hh:236).
     /// Return the address-space component of the trial storage address.
     pub fn get_space(&self) -> AddressSpace { self.space }
     // Ghidra: fspec.hh:210 ParamTrial::getAddress
@@ -3359,13 +3373,50 @@ impl ParamActive {
     /// Mark all trials as fully checked. Faithful to `markFullyChecked`.
     pub fn mark_fully_checked(&mut self) { self.isfullychecked = true; }
 
-    // RUGRA-GLUE: compatibility wrapper for legacy spaceless Address
-    // callers. Hardware-register storage is the conservative default.
-    pub fn register_trial(&mut self, addr: Address, sz: i32) {
-        self.register_trial_in_space(AddressSpace::Register, addr, sz);
+    // RUGRA-GLUE: deterministic projection from Address's tagged AddrSpace
+    // into the transitional coarse AddressSpace enum. Ghidra stores the
+    // AddrSpace pointer directly in Address. No name-based inference occurs.
+    fn space_from_tagged_address(addr: Address) -> Option<AddressSpace> {
+        let tagged = addr.get_space()?;
+        if tagged.is_overlay() {
+            return Some(AddressSpace::Overlay);
+        }
+        match tagged.get_type() {
+            SpaceType::Constant => Some(AddressSpace::Const),
+            SpaceType::SpaceBase => Some(AddressSpace::Stack),
+            SpaceType::Internal => Some(AddressSpace::Unique),
+            // The coarse enum has no FSPEC identity. Collapsing it into IOP
+            // would make two distinct Ghidra spaces compare equal, so reject
+            // it until the address-space migration removes this projection.
+            SpaceType::Fspec => None,
+            SpaceType::Iop => Some(AddressSpace::Iop),
+            SpaceType::Join => Some(AddressSpace::Join),
+            SpaceType::Processor => {
+                let index = u8::try_from(tagged.get_index()).ok()?;
+                Some(match index {
+                    crate::space::SPACEID_RAM => AddressSpace::Ram,
+                    crate::space::SPACEID_REGISTER => AddressSpace::Register,
+                    other => AddressSpace::Other(other),
+                })
+            }
+        }
     }
 
     // Ghidra: fspec.cc:1963 ParamActive::registerTrial
+    /// Register a trial from a complete tagged Address. Returns `false` and
+    /// leaves all state unchanged when the transitional Address is spaceless
+    /// or its processor-space index cannot be represented by AddressSpace.
+    pub fn register_trial(&mut self, addr: Address, sz: i32) -> bool {
+        let Some(space) = Self::space_from_tagged_address(addr) else {
+            return false;
+        };
+        self.register_trial_in_space(space, addr, sz);
+        true
+    }
+
+    // RUGRA-GLUE: explicit coarse-space bridge for production callers whose
+    // legacy Address has no tag; the registration semantics are Ghidra's
+    // ParamActive::registerTrial (fspec.cc:1963-1975).
     /// Add a trial at the complete storage address. The assigned slot is the
     /// current `slotbase`; non-spacebase trials are marked killed-by-call;
     /// then `slotbase` advances by one.
@@ -3379,13 +3430,17 @@ impl ParamActive {
     }
 
     // Ghidra: fspec.cc:1982 ParamActive::whichTrial
-    /// Find the trial index matching (addr, sz), or -1. Faithful to
-    /// `whichTrial` (fspec.cc:1982).
+    /// Find the trial overlapping a complete tagged Address. A spaceless or
+    /// unrepresentable Address fails closed with `-1`.
     pub fn which_trial(&self, addr: Address, sz: i32) -> i32 {
-        self.which_trial_in_space(AddressSpace::Register, addr, sz)
+        let Some(space) = Self::space_from_tagged_address(addr) else {
+            return -1;
+        };
+        self.which_trial_in_space(space, addr, sz)
     }
 
-    // Ghidra: fspec.cc:1982 ParamActive::whichTrial
+    // RUGRA-GLUE: explicit coarse-space bridge for callers whose legacy
+    // Address has no tag; comparison follows fspec.cc:1982-1991.
     /// Return the first trial overlapping either end of the complete query
     /// range in the same address space.
     pub fn which_trial_in_space(&self, space: AddressSpace, addr: Address, sz: i32) -> i32 {
@@ -5497,13 +5552,12 @@ impl ParamListStandardOut {
     }
 
     // Ghidra: fspec.cc:1614 ParamListStandardOut::initialize
-    /// Cache ModelRule information. Faithful 1:1 port of `initialize`
-    /// (fspec.cc:1614-1627): scans `modelRules`; if no rule can affect the
-    /// fillin output (`canAffectFillinOutput`), `use_fillin_fallback` stays
-    /// `true` and `auto_killed_by_call` is forced on (legacy behaviour).
-    /// Concrete `ModelRule` ownership remains a dependency of this output
-    /// list, so the current decoded representation conservatively keeps the
-    /// legacy fallback enabled.
+    /// Cache the output fill-in policy (`initialize`, fspec.cc:1614-1627).
+    /// The locked implementation scans `modelRules`; only when no rule can
+    /// affect fill-in does it keep `use_fillin_fallback=true` and force
+    /// `auto_killed_by_call=true`. Rugra does not yet own the decoded rules,
+    /// so this is exactly the empty-rule branch. Production
+    /// `join_dual_class` therefore remains a fixture-recorded MISMATCH.
     pub fn initialize(&mut self) {
         self.use_fillin_fallback = true;
         self.base.set_auto_killed_by_call(true);
@@ -5710,13 +5764,14 @@ impl ParamListStandardOut {
     }
 
     // Ghidra: fspec.cc:1721 ParamListStandardOut::fillinMap
-    /// Decide the formal output parameter given a set of trials. Faithful
-    /// 1:1 port of `fillinMap` (fspec.cc:1721-1763). If `use_fillinFallback`
+    /// Decide the formal output parameter given a set of trials, following
+    /// the structural branches of `fillinMap` (fspec.cc:1721-1763). If `use_fillinFallback`
     /// is set, defers entirely to the fallback path; otherwise walks the
     /// trials, attaches each active one to its entry (rejecting remainder /
     /// indirect-creation pieces that aren't first-in-class), then asks the
-    /// model rules to settle the output. Rugra has no model rules yet, so
-    /// the non-fallback path falls through to `fillin_map_fallback(true)`.
+    /// model rules to settle the output. Rugra has no decoded model-rule
+    /// objects yet, so the non-fallback path reaches
+    /// `fillin_map_fallback(true)`; the locked fixture records this residual.
     pub fn fillin_map(&self, active: &mut ParamActive) {
         if active.get_num_trials() == 0 { return; }
         if self.use_fillin_fallback {
@@ -5770,10 +5825,11 @@ impl ParamListStandardOut {
     }
 
     // Ghidra: fspec.cc:1776 ParamListStandardOut::decode
-    /// Decode this list, then cache the model-rule information. Faithful to
-    /// `decode` (fspec.cc:1776-1780): delegates the complete `<pentry>` /
-    /// `<group>` / `<rule>` parse to `ParamListStandard::decode`, then calls
-    /// `initialize()` to select the output fill-in strategy.
+    /// Decode this list, then cache the available fill-in information. The
+    /// locked `decode` (fspec.cc:1776-1780) delegates `<pentry>` / `<group>` /
+    /// `<rule>` parsing and calls `initialize()`. Rugra's base decoder keeps
+    /// entry order but only consumes rule elements, so initialization observes
+    /// the empty-rule branch; metadata records the production mismatch.
     pub fn decode(
         &mut self,
         decoder: &mut dyn crate::marshal::Decoder,
@@ -6349,7 +6405,8 @@ impl ProtoModelFull {
         self.output.possible_param(space, Address::new(offset), size)
     }
 
-    // Ghidra: fspec.hh:1014 ProtoModel::getOutput
+    // RUGRA-GLUE: declaration-order view of the concrete output ParamList;
+    // Ghidra consumers iterate the protected ParamListStandard::entry list.
     /// Iterate output resource entries in compiler-spec declaration order.
     pub fn output_entries(&self) -> &[ParamEntry] {
         self.output.get_entry()
@@ -7139,7 +7196,7 @@ mod tests {
 
     #[test]
     fn test_param_trial_flags() {
-        let mut t = ParamTrial::new(Address::new(0x100), 8, 0);
+        let mut t = ParamTrial::new_in_space(AddressSpace::Register, Address::new(0x100), 8, 0);
         assert!(!t.is_used());
         assert!(!t.is_checked());
         t.mark_used();
@@ -7154,7 +7211,7 @@ mod tests {
 
     #[test]
     fn test_param_trial_split() {
-        let t = ParamTrial::new(Address::new(0x100), 8, 2);
+        let t = ParamTrial::new_in_space(AddressSpace::Register, Address::new(0x100), 8, 2);
         let hi = t.split_hi(4);
         let lo = t.split_lo(4);
         assert_eq!(hi.get_size(), 4);
@@ -7170,15 +7227,15 @@ mod tests {
         assert_eq!(pa.get_num_trials(), 0);
         assert_eq!(pa.get_slot_base(), 1);
         assert_eq!(pa.get_max_pass(), 0);
-        pa.register_trial(Address::new(0x200), 8);
-        pa.register_trial(Address::new(0x208), 8);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x200), 8);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x208), 8);
         assert_eq!(pa.get_num_trials(), 2);
         assert_eq!(pa.get_trial(0).get_slot(), 1);
         assert_eq!(pa.get_trial(1).get_slot(), 2);
         assert!(pa.get_trial(0).is_killed_by_call());
         assert_eq!(pa.get_trial(0).get_space(), AddressSpace::Register);
-        assert_eq!(pa.which_trial(Address::new(0x208), 8), 1);
-        assert_eq!(pa.which_trial(Address::new(0x300), 8), -1);
+        assert_eq!(pa.which_trial_in_space(AddressSpace::Register, Address::new(0x208), 8), 1);
+        assert_eq!(pa.which_trial_in_space(AddressSpace::Register, Address::new(0x300), 8), -1);
         // Split trial 0 at 4 bytes.
         pa.split_trial(0, 4);
         assert_eq!(pa.get_num_trials(), 3);
@@ -7188,11 +7245,81 @@ mod tests {
     }
 
     #[test]
+    fn test_param_active_tagged_space_and_spaceless_fail_closed() {
+        let register = crate::space::AddrSpace::new_space(
+            SpaceType::Processor,
+            "not-used-for-classification",
+            false,
+            8,
+            1,
+            crate::space::SPACEID_REGISTER.into(),
+            0,
+            0,
+            0,
+        );
+        let stack = crate::space::AddrSpace::new_space(
+            SpaceType::SpaceBase,
+            "also-not-used-for-classification",
+            false,
+            8,
+            1,
+            42,
+            0,
+            0,
+            0,
+        );
+        let fspec = crate::space::AddrSpace::new_space(
+            SpaceType::Fspec,
+            "cannot-project-to-the-coarse-enum",
+            false,
+            8,
+            1,
+            5,
+            0,
+            0,
+            0,
+        );
+        let wide_processor = crate::space::AddrSpace::new_space(
+            SpaceType::Processor,
+            "index-does-not-fit-the-coarse-enum",
+            false,
+            8,
+            1,
+            300,
+            0,
+            0,
+            0,
+        );
+        let register_address = Address::with_space(&register, 0x40);
+        let stack_address = Address::with_space(&stack, 0x18);
+        let mut active = ParamActive::new(false);
+
+        assert!(active.register_trial(register_address, 8));
+        assert!(active.register_trial(stack_address, 8));
+        assert_eq!(active.get_trial(0).get_space(), AddressSpace::Register);
+        assert!(active.get_trial(0).is_killed_by_call());
+        assert_eq!(active.get_trial(1).get_space(), AddressSpace::Stack);
+        assert!(!active.get_trial(1).is_killed_by_call());
+        assert_eq!(active.which_trial(register_address, 8), 0);
+        assert_eq!(active.which_trial(stack_address, 8), 1);
+
+        let count_before = active.get_num_trials();
+        let slotbase_before = active.get_slot_base();
+        assert!(!active.register_trial(Address::new(0x88), 8));
+        assert!(!active.register_trial(Address::with_space(&fspec, 0x88), 8));
+        assert!(!active.register_trial(Address::with_space(&wide_processor, 0x88), 8));
+        assert_eq!(active.which_trial(Address::new(0x40), 8), -1);
+        assert_eq!(active.which_trial(Address::with_space(&fspec, 0x40), 8), -1);
+        assert_eq!(active.get_num_trials(), count_before);
+        assert_eq!(active.get_slot_base(), slotbase_before);
+    }
+
+    #[test]
     fn test_param_active_num_used() {
         let mut pa = ParamActive::new(false);
-        pa.register_trial(Address::new(0x100), 8);
-        pa.register_trial(Address::new(0x108), 8);
-        pa.register_trial(Address::new(0x110), 8);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x100), 8);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x108), 8);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x110), 8);
         pa.get_trial_mut(0).mark_used();
         pa.get_trial_mut(2).mark_used();
         assert_eq!(pa.get_num_used(), 2);
@@ -7422,7 +7549,7 @@ mod tests {
     /// inherit the full flags word (fspec.cc:1849/1861 `res.flags = flags`).
     #[test]
     fn test_param_trial_split_12_at_4_flags_and_address() {
-        let mut t = ParamTrial::new(Address::new(0x100), 12, 2);
+        let mut t = ParamTrial::new_in_space(AddressSpace::Register, Address::new(0x100), 12, 2);
         t.mark_used();
         t.mark_active(); // also sets checked
         let hi = t.split_hi(4);
@@ -7450,8 +7577,8 @@ mod tests {
     #[test]
     fn test_param_active_split_trial_12_at_4_renumbers_slots() {
         let mut pa = ParamActive::new(true);
-        pa.register_trial(Address::new(0x100), 12);
-        pa.register_trial(Address::new(0x200), 8);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x100), 12);
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x200), 8);
         let base = pa.get_slot_base();
         pa.split_trial(0, 4);
         assert_eq!(pa.get_num_trials(), 3);
@@ -7513,10 +7640,10 @@ mod tests {
         let mut pa = ParamActive::new(true);
         // Register in slot order: stack-first raw addresses would sort
         // differently under the old (addr, size) key.
-        pa.register_trial(Address::new(0x0), 8); // stack slot 0 (group 2)
-        pa.register_trial(Address::new(0x38), 4); // reg group 1
-        pa.register_trial(Address::new(0x10), 8); // stack slot 2 (group 2)
-        pa.register_trial(Address::new(0x30), 8); // reg group 0
+        pa.register_trial_in_space(AddressSpace::Stack, Address::new(0x0), 8); // stack slot 0 (group 2)
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x38), 4); // reg group 1
+        pa.register_trial_in_space(AddressSpace::Stack, Address::new(0x10), 8); // stack slot 2 (group 2)
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x30), 8); // reg group 0
         // Bind entries the way buildTrialMap does (offset 0 into entry).
         pa.get_trial_mut(0).set_entry(2, 0);
         pa.get_trial_mut(1).set_entry(1, 0);

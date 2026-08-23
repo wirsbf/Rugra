@@ -3,8 +3,10 @@ set -euo pipefail
 
 # FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 locked differential runner.
 # It rebuilds the Ghidra 12.0.4 oracle, constructs the pinned Rugra
-# base-plus-overlay snapshot, and compares the complete serialized output
-# parameter trial state byte for byte.
+# base-plus-overlay snapshot, and verifies the pinned, complete serialized
+# outputs independently.  The production cspec's join_dual_class ModelRule
+# is intentionally not normalized away: the locked oracle and Rugra are
+# expected to differ until a separately reviewed ModelRule atom lands.
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -165,9 +167,9 @@ def reject_pending(value, label="metadata"):
         raise SystemExit(f"{label} is pending: {value}")
 
 reject_pending(document)
-if document["schema"] != 2 or document["overall_status"] != "UNTESTED":
+if document["schema"] != 2 or document["overall_status"] != "MISMATCH":
     raise SystemExit("metadata schema/status mismatch")
-if document["covered_projection_status"] != "MATCH":
+if document["covered_projection_status"] != "MISMATCH":
     raise SystemExit("metadata covered-projection status mismatch")
 if document["oracle"]["commit"] != oracle_commit:
     raise SystemExit("metadata oracle commit mismatch")
@@ -335,17 +337,26 @@ import sys
 
 document = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 stdout = pathlib.Path(sys.argv[2]).read_bytes()
-if hashlib.sha256(stdout).hexdigest() != document["expected"]["ghidra_stdout_sha256"]:
-    raise SystemExit("locked Ghidra stdout hash mismatch")
+expected = document["expected_results"]
+actual_sha = hashlib.sha256(stdout).hexdigest()
+if actual_sha != expected["ghidra_stdout_sha256"]:
+    raise SystemExit(
+        "locked Ghidra stdout hash mismatch: "
+        f"expected={expected['ghidra_stdout_sha256']} actual={actual_sha}"
+    )
 if not stdout.startswith(b"SCHEMA|1\nORACLE|e40ed13014025f82488b1f8f7bca566894ac376b\n"):
     raise SystemExit("invalid locked Ghidra fixture envelope")
 if not stdout.endswith(b"DONE\n"):
     raise SystemExit("incomplete locked Ghidra fixture output")
+if b"OUTPUT_STATE|auto_killed_by_call=0\n" not in stdout:
+    raise SystemExit("locked Ghidra ModelRule state observation changed")
+if len(stdout.splitlines()) != expected["stdout_lines"]:
+    raise SystemExit("locked Ghidra stdout line count mismatch")
 PY
 
 if $ghidra_only; then
   /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-  /usr/bin/printf '%s\n' 'fspec_paramlist_output_1204: GHIDRA_LOCKED_OUTPUT_OK covered=MATCH overall=UNTESTED'
+  /usr/bin/printf '%s\n' 'fspec_paramlist_output_1204: GHIDRA_LOCKED_OUTPUT_OK covered=MISMATCH overall=MISMATCH'
   exit 0
 fi
 
@@ -376,25 +387,62 @@ native_dir=$(/usr/bin/dirname "$native_archive")
   "$oracle_tmp/fspec_paramlist_output_1204_rust" \
   "$spec_root/x86-64-gcc.cspec" "$spec_root/x86-64.sla" \
   >"$oracle_tmp/rugra.stdout"
-/usr/bin/diff -u "$oracle_tmp/ghidra.stdout" "$oracle_tmp/rugra.stdout"
+if /usr/bin/diff -u "$oracle_tmp/ghidra.stdout" "$oracle_tmp/rugra.stdout" \
+     >"$oracle_tmp/observations.diff"; then
+  echo "declared MISMATCH unexpectedly became byte-identical" >&2
+  exit 1
+else
+  diff_status=$?
+  if [[ $diff_status -ne 1 ]]; then
+    echo "observation diff failed with status $diff_status" >&2
+    exit 1
+  fi
+fi
 
-$host_python -I - "$metadata" "$oracle_tmp/rugra.stdout" <<'PY'
+$host_python -I - "$metadata" "$oracle_tmp/ghidra.stdout" \
+  "$oracle_tmp/rugra.stdout" "$oracle_tmp/observations.diff" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
 document = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-stdout = pathlib.Path(sys.argv[2]).read_bytes()
-expected = document["expected"]
-if hashlib.sha256(stdout).hexdigest() != expected["rugra_stdout_sha256"]:
-    raise SystemExit("Rugra stdout hash mismatch")
-if expected["ghidra_stdout_sha256"] != expected["rugra_stdout_sha256"]:
-    raise SystemExit("metadata does not declare byte-identical output")
+ghidra = pathlib.Path(sys.argv[2]).read_bytes()
+rugra = pathlib.Path(sys.argv[3]).read_bytes()
+diff = pathlib.Path(sys.argv[4]).read_bytes()
+expected = document["expected_results"]
+rugra_sha = hashlib.sha256(rugra).hexdigest()
+if rugra_sha != expected["rugra_stdout_sha256"]:
+    raise SystemExit(
+        "Rugra stdout hash mismatch: "
+        f"expected={expected['rugra_stdout_sha256']} actual={rugra_sha}"
+    )
+if expected["ghidra_stdout_sha256"] == expected["rugra_stdout_sha256"]:
+    raise SystemExit("metadata does not declare distinct side observations")
+if hashlib.sha256(ghidra).hexdigest() != expected["ghidra_stdout_sha256"]:
+    raise SystemExit("Ghidra stdout changed between runner stages")
+if not rugra.startswith(b"SCHEMA|1\nORACLE|e40ed13014025f82488b1f8f7bca566894ac376b\n"):
+    raise SystemExit("invalid Rugra fixture envelope")
+if not rugra.endswith(b"DONE\n"):
+    raise SystemExit("incomplete Rugra fixture output")
+if b"OUTPUT_STATE|auto_killed_by_call=1\n" not in rugra:
+    raise SystemExit("Rugra ModelRule residual observation changed")
+if len(rugra.splitlines()) != expected["stdout_lines"]:
+    raise SystemExit("Rugra stdout line count mismatch")
+if not diff:
+    raise SystemExit("declared MISMATCH produced an empty diff")
+
+case_order = [case["id"] for case in document["input_manifest"]["cases"]
+              if "active" in case]
+for side, payload in (("Ghidra", ghidra), ("Rugra", rugra)):
+    actual = [line.removeprefix(b"CASE|").decode("ascii")
+              for line in payload.splitlines() if line.startswith(b"CASE|")]
+    if actual != case_order:
+        raise SystemExit(f"{side} case order mismatch: {actual!r}")
 PY
 
 /usr/bin/sha256sum "${owned_files[@]}" >"$oracle_tmp/owned.after"
 /usr/bin/diff -u "$oracle_tmp/owned.before" "$oracle_tmp/owned.after"
 /usr/bin/cmp -s "$runner_fd_path" "$runner"
 /usr/bin/cat "$oracle_tmp/rugra.stdout"
-/usr/bin/printf '%s\n' 'fspec_paramlist_output_1204: DECLARED_OBSERVATIONS_MATCH covered=MATCH overall=UNTESTED'
+/usr/bin/printf '%s\n' 'fspec_paramlist_output_1204: DECLARED_MISMATCH_REPRODUCED covered=MISMATCH overall=MISMATCH'

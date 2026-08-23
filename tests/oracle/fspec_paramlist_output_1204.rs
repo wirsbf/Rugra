@@ -233,6 +233,10 @@ fn run() -> Result<(), String> {
     output.push_str("SCHEMA|1\n");
     output.push_str("ORACLE|e40ed13014025f82488b1f8f7bca566894ac376b\n");
     output.push_str(&format!("MODEL|{}|extrapop={}\n", model.name, model.extrapop));
+    output.push_str(&format!(
+        "OUTPUT_STATE|auto_killed_by_call={}\n",
+        i32::from(model.output.is_auto_killed_by_call()),
+    ));
     for (name, storage) in [("XMM0_Qa", xmm0), ("RAX", rax), ("RCX", rcx)] {
         output.push_str(&format!(
             "POSSIBLE|{}|{}\n",
@@ -245,7 +249,23 @@ fn run() -> Result<(), String> {
         ));
     }
     run_case(&mut output, model, host.as_ref(), "float_only", &["XMM0_Qa"], &[])?;
+    run_case(
+        &mut output,
+        model,
+        host.as_ref(),
+        "float_second_only",
+        &["XMM1_Qa"],
+        &[],
+    )?;
     run_case(&mut output, model, host.as_ref(), "general_only", &["RAX"], &[])?;
+    run_case(
+        &mut output,
+        model,
+        host.as_ref(),
+        "general_second_only",
+        &["RDX"],
+        &[],
+    )?;
     run_case(
         &mut output,
         model,

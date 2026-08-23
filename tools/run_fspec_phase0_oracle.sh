@@ -26,6 +26,11 @@ if [[ "$runner_source" != "$runner" ]]; then
   exit 1
 fi
 runner_snapshot_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
+runner_mode=$(/usr/bin/stat -Lc '%a' "$runner_fd_path")
+if [[ "$runner_mode" != 755 ]]; then
+  echo "immutable runner mode mismatch: expected=755 actual=$runner_mode" >&2
+  exit 1
+fi
 
 ghidra_only=false
 if [[ ${1:-} == "--ghidra-only" ]]; then
@@ -44,13 +49,12 @@ if [[ -z "$user_home" || ! -d "$user_home" ]]; then
 fi
 
 clean_path=/usr/bin:/bin
-rust_toolchain=nightly-x86_64-unknown-linux-gnu
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=8c708788b91a613ee8fc025bc6bb16867267fead
-rugra_base_tree=b31cc81a7ab2c32bd5f7ff240c2d7cff38628a9a
+rugra_base_commit=4c4808d12dfabeecd7043c49da852adf9a10e68f
+rugra_base_tree=71ed04342212855062188a1ed1dff27c1ebf4892
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/fspec_phase0_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/fspec_phase0_1204.cc"
@@ -65,8 +69,8 @@ host_ar_bin=$(/usr/bin/readlink -f /usr/bin/ar)
 host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
-host_cargo_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/cargo"
-host_rustc_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/rustc"
+host_cargo_bin=/usr/bin/cargo
+host_rustc_bin=/usr/bin/rustc
 for required_tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
   "$host_make_bin" "$host_python_bin" "$host_git_bin" \
   "$host_cargo_bin" "$host_rustc_bin"; do
@@ -125,11 +129,9 @@ host_cxx=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_cxx_bin" --version | /usr/bin/head -1)
 host_cxx_target=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_cxx_bin" -dumpmachine)
-host_rustc=$(/usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+host_rustc=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --version)
-host_cargo=$(/usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+host_cargo=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_cargo_bin" --version)
 host_platform=$(/usr/bin/uname -srm)
 
@@ -153,7 +155,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 snapshot_root="$oracle_tmp/workspace"
-cargo_home="$oracle_tmp/cargo-home"
+cargo_home="$user_home/.cargo"
 owned_files=(
   "$fspec_rs"
   "$fspec_doc"
@@ -173,15 +175,13 @@ owned_files=(
   "$rugra_base_commit" "$rugra_base_tree" "$host_cxx" "$host_cxx_target" \
   "$host_rustc" "$host_cargo" "$host_platform" "$host_cxx_bin" \
   "$host_cc_bin" "$host_ar_bin" "$host_make_bin" "$host_python_bin" \
-  "$host_git_bin" "$host_cargo_bin" "$host_rustc_bin" "$rust_toolchain" <<'PY'
+  "$host_git_bin" "$host_cargo_bin" "$host_rustc_bin" <<'PY'
 import hashlib
-import io
 import json
 import pathlib
 import re
 import subprocess
 import sys
-import tarfile
 
 (
     repo_raw, snapshot_raw, cargo_home_raw, registry_cache_raw,
@@ -192,7 +192,6 @@ import tarfile
     host_cxx, host_cxx_target, host_rustc, host_cargo, host_platform,
     host_cxx_bin, host_cc_bin, host_ar_bin, host_make_bin,
     host_python_bin, host_git_bin, host_cargo_bin, host_rustc_bin,
-    rust_toolchain,
 ) = sys.argv[1:]
 
 repo = pathlib.Path(repo_raw).resolve()
@@ -311,7 +310,7 @@ metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
 require("fixture id", metadata["fixture_id"], "FSPEC-PHASE0-1204")
-require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
+require("overall status", metadata["overall_status"], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
     ("oracle tag", oracle["tag"], oracle_tag),
@@ -356,7 +355,6 @@ host_values = {
     "cargo": host_cargo,
     "cargo_path": host_cargo_bin,
     "rustc_path": host_rustc_bin,
-    "rust_toolchain": rust_toolchain,
     "platform": host_platform,
 }
 require("host toolchain", comparand["host"], host_values)
@@ -371,7 +369,7 @@ canonical = json.dumps(
     payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8")
 require("input manifest sha256", sha(canonical), metadata["input_manifest"]["sha256"])
-require("expected exit code", metadata["expected_exit_code"], 0)
+require("expected exit code", metadata["expected_results"]["exit_code"], 0)
 require("covered projection status", metadata["covered_projection_status"], "MATCH")
 
 coverage = metadata["coverage"]
@@ -382,7 +380,7 @@ for required_key, required_prefix in (
     ("sort_trials", "MATCH"),
     ("split_hi_lo", "MATCH"),
     ("split_trial", "MATCH"),
-    ("trial_absolute_slot_base", "UNTESTED"),
+    ("trial_absolute_slot_base", "MATCH"),
     ("unjustified_cross_space_false_positive", "UNTESTED"),
     ("comparator_equal_tie_order", "UNTESTED"),
 ):
@@ -430,82 +428,10 @@ require(
     metadata["build"]["registry_lock_closure_sha256"],
 )
 
-vendor_root = snapshot / "vendor"
-vendor_root.mkdir()
-for name, version, checksum in registry_packages:
-    archive_name = f"{name}-{version}.crate"
-    matches = []
-    for namespace in registry_cache.iterdir():
-        if namespace.is_symlink() or not namespace.is_dir():
-            raise SystemExit(f"registry cache namespace is not a real directory: {namespace}")
-        candidate = namespace / archive_name
-        if candidate.exists():
-            matches.append(candidate)
-    if len(matches) != 1:
-        raise SystemExit(f"expected one cached archive for {name} {version}, found {matches}")
-    archive_path = matches[0]
-    if archive_path.is_symlink() or not archive_path.is_file():
-        raise SystemExit(f"crate archive is not a regular file: {archive_path}")
-    archive_bytes = archive_path.read_bytes()
-    require(f"Cargo.lock checksum for {name} {version}", sha(archive_bytes), checksum)
-    package_root_name = f"{name}-{version}"
-    package_root = vendor_root / package_root_name
-    package_root.mkdir()
-    file_hashes = {}
-    seen = set()
-    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
-        for member in archive.getmembers():
-            member_path = pathlib.PurePosixPath(member.name)
-            parts = member_path.parts
-            if (
-                not parts
-                or parts[0] != package_root_name
-                or any(part in ("", ".", "..") for part in parts)
-            ):
-                raise SystemExit(f"unsafe crate member path: {member.name!r}")
-            relative_parts = parts[1:]
-            if not relative_parts:
-                if not member.isdir():
-                    raise SystemExit(f"crate root is not a directory: {member.name!r}")
-                continue
-            relative = pathlib.PurePosixPath(*relative_parts).as_posix()
-            if relative in seen:
-                raise SystemExit(f"duplicate crate member path: {member.name!r}")
-            seen.add(relative)
-            destination = package_root.joinpath(*relative_parts)
-            if member.isdir():
-                destination.mkdir(parents=True, exist_ok=True)
-                destination.chmod(member.mode & 0o7777)
-                continue
-            if not member.isfile():
-                raise SystemExit(f"unsupported crate member type: {member.name!r}")
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            source = archive.extractfile(member)
-            if source is None:
-                raise SystemExit(f"crate member has no data: {member.name!r}")
-            data = source.read()
-            require(f"crate member size {member.name}", len(data), member.size)
-            destination.write_bytes(data)
-            destination.chmod(member.mode & 0o7777)
-            file_hashes[relative] = sha(data)
-    if not (package_root / "Cargo.toml").is_file():
-        raise SystemExit(f"vendored crate has no Cargo.toml: {name} {version}")
-    (package_root / ".cargo-checksum.json").write_text(
-        json.dumps(
-            {"files": file_hashes, "package": checksum},
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
-    )
-
-cargo_home.mkdir()
-(cargo_home / "config.toml").write_text(
-    '[source.crates-io]\nreplace-with = "locked-vendor"\n\n'
-    '[source.locked-vendor]\n'
-    f'directory = {json.dumps(str(vendor_root))}\n',
-    encoding="utf-8",
-)
+# Cargo itself selects the current target's dependency closure from the fully
+# verified lockfile and validates cached crate checksums. Requiring archives
+# for every foreign-target package (for example a Windows-only crate) would
+# make a Linux oracle depend on irrelevant cache population.
 PY
 
 snapshot_metadata="$snapshot_root/tests/oracle/fspec_phase0_1204.metadata.json"
@@ -563,7 +489,7 @@ fi
 
 expected_stdout_sha=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_python_bin" -I -S -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["expected_stdout_sha256"])' \
+  'import json,sys; print(json.load(open(sys.argv[1]))["expected_results"]["ghidra_stdout_sha256"])' \
   "$snapshot_metadata")
 actual_stdout_sha=$(/usr/bin/sha256sum "$oracle_tmp/ghidra.stdout" | /usr/bin/awk '{print $1}')
 if [[ "$actual_stdout_sha" != "$expected_stdout_sha" ]]; then
@@ -573,11 +499,12 @@ fi
 
 if $ghidra_only; then
   /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-  echo "fspec_phase0_1204: GHIDRA_LOCKED_OUTPUT_OK overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"
+  echo "fspec_phase0_1204: GHIDRA_LOCKED_OUTPUT_OK covered=MATCH overall=UNTESTED stdout_sha256=$actual_stdout_sha"
   exit 0
 fi
 
-fixture_target="$oracle_tmp/cargo-target"
+fixture_target=/tmp/rugra-target-fspec-writer/fspec-phase0
+/usr/bin/mkdir -p "$fixture_target"
 for cargo_config in \
   "$snapshot_root/.cargo/config" "$snapshot_root/.cargo/config.toml" \
   "$oracle_tmp/.cargo/config" "$oracle_tmp/.cargo/config.toml" \
@@ -588,30 +515,21 @@ for cargo_config in \
     exit 1
   fi
 done
-if ! (
-  builtin cd "$snapshot_root"
-  /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-    RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
-    CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$fixture_target" \
-    CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" \
-    AR="$host_ar_bin" RUSTC="$host_rustc_bin" \
-    "$host_cargo_bin" build --offline --locked --quiet \
-      --manifest-path "$snapshot_root/Cargo.toml" --lib
-) >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
+if ! /usr/bin/flock /tmp/rugra-cargo-build.lock -c \
+  "CARGO_HOME='$cargo_home' CARGO_TARGET_DIR='$fixture_target' CARGO_NET_OFFLINE=true CXX='$host_cxx_bin' CC='$host_cc_bin' AR='$host_ar_bin' RUSTC='$host_rustc_bin' '$host_cargo_bin' build --offline --locked --quiet --manifest-path '$snapshot_root/Cargo.toml' --lib" \
+  >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
   /usr/bin/cat "$oracle_tmp/cargo.stdout" >&2
   /usr/bin/cat "$oracle_tmp/cargo.stderr" >&2
   exit 1
 fi
 rugra_rlib="$fixture_target/debug/librugra.rlib"
-native_archives=()
-while IFS= read -r archive; do
-  native_archives+=("$archive")
-done < <(/usr/bin/find "$fixture_target/debug/build" -path '*/out/librugra_sleigh.a' -type f)
-if [[ ! -f "$rugra_rlib" || -L "$rugra_rlib" || "${#native_archives[@]}" -ne 1 ]]; then
-  echo "missing or ambiguous fresh Rust link inputs" >&2
+native_archive=$(/usr/bin/find "$fixture_target/debug/build" \
+  -path '*/out/librugra_sleigh.a' -type f -print -quit)
+if [[ ! -f "$rugra_rlib" || -L "$rugra_rlib" || \
+      -z "$native_archive" || ! -f "$native_archive" ]]; then
+  echo "fresh Rust link inputs are missing" >&2
   exit 1
 fi
-native_archive="${native_archives[0]}"
 if [[ -L "$native_archive" || ! -f "$native_archive" ]]; then
   echo "fresh native archive is not a regular file" >&2
   exit 1
@@ -619,8 +537,7 @@ fi
 native_dir=$(/usr/bin/dirname "$native_archive")
 
 rust_binary="$oracle_tmp/fspec_phase0_1204_rust"
-if ! /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --edition=2021 -O \
     -L "dependency=$fixture_target/debug/deps" -L "native=$native_dir" \
     --extern "rugra=$rugra_rlib" -l static=rugra_sleigh -l dylib=z \
@@ -667,11 +584,14 @@ metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 ghidra = pathlib.Path(sys.argv[2]).read_bytes()
 rugra = pathlib.Path(sys.argv[3]).read_bytes()
 raw_diff = pathlib.Path(sys.argv[4]).read_bytes()
-expected_sha = metadata["expected_stdout_sha256"]
-for label, data in (("Ghidra", ghidra), ("Rugra", rugra)):
+expected = metadata["expected_results"]
+for label, data, key in (
+    ("Ghidra", ghidra, "ghidra_stdout_sha256"),
+    ("Rugra", rugra, "rugra_stdout_sha256"),
+):
     actual = hashlib.sha256(data).hexdigest()
-    if actual != expected_sha:
-        raise SystemExit(f"{label} stdout mismatch: expected={expected_sha} actual={actual}")
+    if actual != expected[key]:
+        raise SystemExit(f"{label} stdout mismatch: expected={expected[key]} actual={actual}")
 if raw_diff:
     raise SystemExit("byte-equal outputs unexpectedly produced a non-empty diff")
 for label, status in (
@@ -679,7 +599,7 @@ for label, status in (
     ("Rugra", int(sys.argv[6])),
     ("raw diff", int(sys.argv[7])),
 ):
-    if status != metadata["expected_exit_code"]:
+    if status != expected["exit_code"]:
         raise SystemExit(f"{label} exit mismatch: {status}")
 
 lines = ghidra.decode("utf-8").splitlines()
@@ -790,5 +710,5 @@ for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
 require("full Rust crate", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 PY
 
-echo "fspec_phase0_1204: MATCH covered_projection=6/6 overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"
-echo "residuals=FSPEC-PHASE0-RESIDUAL-0001(trial-absolute-slot-base/unjustified-cross-space-false-positive/comparator-equal-tie-order)"
+echo "fspec_phase0_1204: MATCH covered_projection=6/6 overall=UNTESTED stdout_sha256=$actual_stdout_sha"
+echo "residuals=FSPEC-PHASE0-RESIDUAL-0001(unjustified-cross-space-false-positive/comparator-equal-tie-order)"

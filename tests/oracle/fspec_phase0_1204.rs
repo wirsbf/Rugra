@@ -169,12 +169,12 @@ fn main() {
     println!("case=sort_trials");
     {
         let mut active = ParamActive::new(false);
-        active.register_trial(Address::with_space(&stack_handle, 0x10), 8);
-        active.register_trial(Address::with_space(&reg_handle, 0x38), 4);
-        active.register_trial(Address::with_space(&stack_handle, 0x0), 8);
-        active.register_trial(Address::with_space(&reg_handle, 0x30), 8);
-        active.register_trial(Address::with_space(&reg_handle, 0x34), 4);
-        active.register_trial(Address::with_space(&reg_handle, 0x50), 8);
+        assert!(active.register_trial(Address::with_space(&stack_handle, 0x10), 8));
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x38), 4));
+        assert!(active.register_trial(Address::with_space(&stack_handle, 0x0), 8));
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x30), 8));
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x34), 4));
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x50), 8));
         active.get_trial_mut(0).set_entry(2, 0);
         active.get_trial_mut(1).set_entry(1, 0);
         active.get_trial_mut(2).set_entry(2, 0);
@@ -196,7 +196,7 @@ fn main() {
     println!("case=split_hi_lo");
     {
         let mut active = ParamActive::new(false);
-        active.register_trial(Address::with_space(&reg_handle, 0x100), 12);
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x100), 12));
         {
             let t = active.get_trial_mut(0);
             t.mark_used();
@@ -228,8 +228,8 @@ fn main() {
     println!("case=split_trial");
     {
         let mut active = ParamActive::new(false);
-        active.register_trial(Address::with_space(&reg_handle, 0x100), 12);
-        active.register_trial(Address::with_space(&reg_handle, 0x200), 8);
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x100), 12));
+        assert!(active.register_trial(Address::with_space(&reg_handle, 0x200), 8));
         {
             let t = active.get_trial_mut(0);
             t.mark_used();
