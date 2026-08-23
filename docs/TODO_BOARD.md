@@ -203,6 +203,12 @@ cleanup 池重复的 RuleTrivialArith）。26 项拟登记 TODO 详见报告 §5
 
 ### 函数体差距攻坚 wave（W-2026-08-23-GAP，至周二 16:00；基线=wt/getstr 头 d73ee60，52/68 body 一致）
 
+**进度（root 维护）**：
+- GETSTR-ZERODIFF-0001 六提交集成完毕（机制C APPROVE 附 2 必改已落：行号勘误 b6c1430）；master 基线升级为 GetStr 树。
+- SUBFLOW-SPLITFLOW-SIGABRT-0001 集成完毕（f216b8e，双层 UB：空指针构造+共享 iop 占位符，oracle NULL 语义逐字对齐）。
+- FLOW-FIXTURE-API-ADAPT-0001 集成完毕（86a6bb9，根因更正为 runner pin 配对失谐，双 overlay 防复发）。
+- 差距组六 Agent 转入分析优先模式（用户三步走指令），等分析报告回收。
+
 | 组 | owner | write-set | 目标函数（rugra vs golden 字符） |
 |---|---|---|---|
 | GetStr 六提交复核 | getstr_reviewer | 只读复核 | 五域零差交付的机制C |
