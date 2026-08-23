@@ -65,7 +65,16 @@ RUST_CONST_RE = re.compile(
 )
 RUST_CRATE_REF_RE = re.compile(r"\bcrate::(?P<path>[A-Za-z_][A-Za-z0-9_:]*)")
 CPP_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"(?P<name>[A-Za-z0-9_.-]+\.hh)"', re.MULTILINE)
-TODO_ID_RE = re.compile(r"`(?P<id>[A-Z][A-Z0-9_-]+)`")
+# A TODO identifier must contain at least one hyphen-separated component.
+# This deliberately excludes evidence/status literals such as `MATCH`,
+# `MISMATCH`, `NO_ORACLE`, and `UNTESTED` from the dependency graph.
+TODO_ID_RE = re.compile(r"`(?P<id>[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)+)`")
+MARKDOWN_SEPARATOR_RE = re.compile(r"^:?-{3,}:?$")
+DEPENDENCY_LABEL_RE = re.compile(
+    r"(?:^|[；;])\s*(?:依赖|dependency|dependencies)\s*(?:=|:|：)?\s*"
+    r"(?P<body>.*?)(?=[；;]|$)",
+    re.IGNORECASE,
+)
 
 # Preprocessor conditionals, used only to derive a stable, content-based
 # disambiguator for duplicate Ghidra definitions (``#ifdef`` variants).
@@ -801,13 +810,137 @@ def rust_module_name(root: Path, path: Path) -> str:
     return "::".join(parts)
 
 
+def markdown_table_cells(line: str) -> list[str]:
+    """Split one Markdown table row without splitting pipes in code spans."""
+
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    cells: list[str] = []
+    current: list[str] = []
+    in_code = False
+    escaped = False
+    for character in stripped[1:]:
+        if escaped:
+            current.append(character)
+            escaped = False
+            continue
+        if character == "\\":
+            current.append(character)
+            escaped = True
+            continue
+        if character == "`":
+            in_code = not in_code
+            current.append(character)
+            continue
+        if character == "|" and not in_code:
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(character)
+    if current or not stripped.endswith("|"):
+        cells.append("".join(current).strip())
+    if cells and not cells[-1]:
+        cells.pop()
+    return cells
+
+
+def dependency_fragments(header: str, cell: str) -> list[str]:
+    """Return only dependency clauses from a TODO table cell.
+
+    Some board tables dedicate a whole column to dependencies, while newer
+    tables combine dependencies, acceptance, evidence, and timestamps.  The
+    combined form must be narrowed to explicit ``依赖=...`` clauses so status
+    and evidence tokens cannot become graph edges.
+    """
+
+    normalized = header.strip().lower()
+    mixed = any(
+        marker in normalized
+        for marker in ("/", "验收", "证据", "evidence", "更新", "acceptance")
+    )
+    if not mixed:
+        return [cell]
+    return [match.group("body").strip() for match in DEPENDENCY_LABEL_RE.finditer(cell)]
+
+
+def todo_dependency_inventory(text: str) -> tuple[set[str], set[tuple[str, str]]]:
+    """Extract TODO nodes and true dependency edges from Markdown tables."""
+
+    nodes: set[str] = set()
+    edges: set[tuple[str, str]] = set()
+    headers: list[str] | None = None
+    for line in text.splitlines():
+        cells = markdown_table_cells(line)
+        if not cells:
+            headers = None
+            continue
+        if all(MARKDOWN_SEPARATOR_RE.fullmatch(cell) for cell in cells):
+            continue
+        first = cells[0].strip().lower()
+        if first in {"id", "todo id", "任务 id", "任务id"}:
+            headers = cells
+            continue
+        # Historical rows sometimes append a state note after the leading
+        # stable ID.  The ID must still be the first complete code span.
+        source_match = TODO_ID_RE.match(cells[0])
+        if source_match is None:
+            continue
+        source = source_match.group("id")
+        nodes.add(source)
+        if headers is None:
+            continue
+        for index, header in enumerate(headers):
+            if index >= len(cells):
+                continue
+            normalized = header.lower()
+            if "依赖" not in header and "dependenc" not in normalized:
+                continue
+            for fragment in dependency_fragments(header, cells[index]):
+                for match in TODO_ID_RE.finditer(fragment):
+                    target = match.group("id")
+                    edges.add((source, target))
+    unknown = sorted({target for _, target in edges} - nodes)
+    if unknown:
+        raise ValueError(
+            "TODO dependency targets have no stable row (refusing implicit nodes): "
+            + ", ".join(unknown)
+        )
+
+    adjacency: dict[str, list[str]] = {node: [] for node in nodes}
+    for source, target in sorted(edges):
+        adjacency[source].append(target)
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    path: list[str] = []
+
+    def visit(node: str) -> None:
+        if node in visited:
+            return
+        if node in visiting:
+            start = path.index(node)
+            cycle = path[start:] + [node]
+            raise ValueError("TODO dependency cycle: " + " -> ".join(cycle))
+        visiting.add(node)
+        path.append(node)
+        for target in adjacency[node]:
+            visit(target)
+        path.pop()
+        visiting.remove(node)
+        visited.add(node)
+
+    for node in sorted(nodes):
+        visit(node)
+    return nodes, edges
+
+
 def dependency_dag(root: Path, cpp: Path) -> dict[str, object]:
     rust_paths = sorted((root / "src").rglob("*.rs"))
     module_by_path = {path: rust_module_name(root, path) for path in rust_paths}
     modules = set(module_by_path.values())
     rust_edges: set[tuple[str, str]] = set()
     for path, source in module_by_path.items():
-        text = path.read_text(encoding="utf-8")
+        text = mask_non_code(path.read_text(encoding="utf-8"))
         for match in RUST_CRATE_REF_RE.finditer(text):
             parts = match.group("path").split("::")
             targets = ["::".join(parts[:size]) for size in range(len(parts), 0, -1)]
@@ -823,24 +956,9 @@ def dependency_dag(root: Path, cpp: Path) -> dict[str, object]:
             if target in ghidra_nodes and target != path.name:
                 ghidra_edges.add((path.name, target))
 
-    todo_edges: set[tuple[str, str]] = set()
-    todo_nodes: set[str] = set()
-    for line in (root / "docs/TODO_BOARD.md").read_text(encoding="utf-8").splitlines():
-        if not line.startswith("| `"):
-            continue
-        fields = line.split("|")
-        if len(fields) < 8:
-            continue
-        source_match = TODO_ID_RE.search(fields[1])
-        if not source_match:
-            continue
-        source = source_match.group("id")
-        todo_nodes.add(source)
-        for match in TODO_ID_RE.finditer(fields[7]):
-            target = match.group("id")
-            todo_nodes.add(target)
-            if target != source:
-                todo_edges.add((source, target))
+    todo_nodes, todo_edges = todo_dependency_inventory(
+        (root / "docs/TODO_BOARD.md").read_text(encoding="utf-8")
+    )
     return {
         "schema": 1,
         "oracle_commit": ORACLE_COMMIT,
@@ -1270,6 +1388,71 @@ def self_test() -> int:  # noqa: C901 - self-test is intentionally linear
     first = stable_id("X", ("a", 1, "b"))
     assert first == stable_id("X", ("a", 1, "b"))
     assert first != stable_id("X", ("a", 2, "b"))
+
+    # Dependency extraction must use the named dependency column, preserve
+    # code-span pipes, and ignore status/evidence tokens in a mixed cell.
+    todo_fixture = """
+| ID | write-set | 依赖 / 验收 / 证据 |
+|---|---|---|
+| `TASK-A-0001` | `left | right` | 依赖=`TASK-B-0001`；验收=`MATCH`；证据提及 `TASK-C-0001` |
+| `TASK-B-0001` | none | 依赖=无；状态=`UNTESTED` |
+| `TASK-C-0001` | none | 依赖=无 |
+| `TASK-E-0001`（历史状态） | none | 依赖=无 |
+
+| ID | 标题 | 依赖 |
+|---|---|---|
+| `TASK-D-0001` | pure dependency column | `TASK-A-0001`、`TASK-C-0001` |
+"""
+    todo_nodes, todo_edges = todo_dependency_inventory(todo_fixture)
+    assert todo_nodes == {
+        "TASK-A-0001",
+        "TASK-B-0001",
+        "TASK-C-0001",
+        "TASK-D-0001",
+        "TASK-E-0001",
+    }
+    assert todo_edges == {
+        ("TASK-A-0001", "TASK-B-0001"),
+        ("TASK-D-0001", "TASK-A-0001"),
+        ("TASK-D-0001", "TASK-C-0001"),
+    }
+    assert not TODO_ID_RE.search("`MATCH` `MISMATCH` `NO_ORACLE` `UNTESTED`")
+
+    try:
+        todo_dependency_inventory(
+            "| ID | 依赖 |\n|---|---|\n| `TASK-A-0001` | `TASK-Z-0001` |\n"
+        )
+    except ValueError as error:
+        assert "no stable row" in str(error)
+    else:
+        raise AssertionError("undefined TODO dependencies must fail closed")
+
+    try:
+        todo_dependency_inventory(
+            "| ID | 依赖 |\n|---|---|\n"
+            "| `TASK-A-0001` | `TASK-B-0001` |\n"
+            "| `TASK-B-0001` | `TASK-A-0001` |\n"
+        )
+    except ValueError as error:
+        assert "dependency cycle" in str(error)
+    else:
+        raise AssertionError("cyclic TODO dependencies must fail closed")
+
+    try:
+        todo_dependency_inventory(
+            "| ID | 依赖 |\n|---|---|\n| `TASK-A-0001` | `TASK-A-0001` |\n"
+        )
+    except ValueError as error:
+        assert "TASK-A-0001 -> TASK-A-0001" in str(error)
+    else:
+        raise AssertionError("self-dependent TODOs must fail closed")
+
+    rust_refs = "crate::real::module; // crate::comment::fake\n\"crate::literal::fake\";"
+    masked_refs = [
+        match.group("path")
+        for match in RUST_CRATE_REF_RE.finditer(mask_non_code(rust_refs))
+    ]
+    assert masked_refs == ["real::module"], "comments and literals must not create Rust edges"
 
     # --- Ghidra guard-context disambiguation -------------------------------
     guarded = [

@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 8644
-  (7232 production + 1412 test)
-- Exact definition-start mappings: 3142
-- Body-line references requiring audit: 379
+- Rugra functions: 9639
+  (7965 production + 1674 test)
+- Exact definition-start mappings: 3586
+- Body-line references requiring audit: 353
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -22,18 +22,18 @@ records complete same-input/same-output evidence.
 
 | File | Definitions | Exact marker | Body-line marker | Unmapped |
 |---|---:|---:|---:|---:|
-| `action.cc` | 72 | 6 | 0 | 66 |
-| `action.hh` | 30 | 0 | 0 | 30 |
-| `address.cc` | 43 | 23 | 0 | 20 |
-| `address.hh` | 56 | 10 | 0 | 46 |
+| `action.cc` | 72 | 14 | 0 | 58 |
+| `action.hh` | 30 | 4 | 0 | 26 |
+| `address.cc` | 43 | 31 | 0 | 12 |
+| `address.hh` | 56 | 41 | 0 | 15 |
 | `analyzesigs.cc` | 8 | 0 | 0 | 8 |
 | `analyzesigs.hh` | 2 | 0 | 0 | 2 |
-| `architecture.cc` | 68 | 6 | 0 | 62 |
+| `architecture.cc` | 68 | 19 | 1 | 48 |
 | `architecture.hh` | 9 | 0 | 0 | 9 |
 | `bfd_arch.cc` | 11 | 0 | 0 | 11 |
 | `bfd_arch.hh` | 1 | 0 | 0 | 1 |
-| `block.cc` | 204 | 96 | 2 | 106 |
-| `block.hh` | 171 | 62 | 0 | 109 |
+| `block.cc` | 204 | 100 | 3 | 101 |
+| `block.hh` | 171 | 67 | 0 | 104 |
 | `blockaction.cc` | 83 | 30 | 1 | 52 |
 | `blockaction.hh` | 29 | 1 | 0 | 28 |
 | `callgraph.cc` | 26 | 22 | 0 | 4 |
@@ -44,30 +44,30 @@ records complete same-input/same-output evidence.
 | `cast.hh` | 3 | 0 | 0 | 3 |
 | `codedata.cc` | 41 | 0 | 0 | 41 |
 | `codedata.hh` | 11 | 0 | 0 | 11 |
-| `comment.cc` | 22 | 15 | 0 | 7 |
-| `comment.hh` | 16 | 0 | 0 | 16 |
+| `comment.cc` | 22 | 17 | 0 | 5 |
+| `comment.hh` | 16 | 6 | 0 | 10 |
 | `comment_ghidra.cc` | 6 | 0 | 0 | 6 |
 | `comment_ghidra.hh` | 5 | 0 | 0 | 5 |
 | `compression.cc` | 11 | 3 | 0 | 8 |
 | `compression.hh` | 3 | 2 | 0 | 1 |
-| `condexe.cc` | 27 | 25 | 0 | 2 |
+| `condexe.cc` | 27 | 26 | 0 | 1 |
 | `condexe.hh` | 4 | 0 | 0 | 4 |
 | `consolemain.cc` | 5 | 0 | 0 | 5 |
 | `constseq.cc` | 31 | 23 | 0 | 8 |
 | `constseq.hh` | 10 | 3 | 0 | 7 |
 | `context.cc` | 11 | 0 | 0 | 11 |
 | `context.hh` | 57 | 0 | 0 | 57 |
-| `coreaction.cc` | 129 | 93 | 0 | 36 |
-| `coreaction.hh` | 151 | 50 | 0 | 101 |
+| `coreaction.cc` | 129 | 98 | 0 | 31 |
+| `coreaction.hh` | 151 | 52 | 0 | 99 |
 | `cover.cc` | 22 | 19 | 0 | 3 |
-| `cover.hh` | 16 | 5 | 0 | 11 |
-| `cpool.cc` | 10 | 4 | 0 | 6 |
-| `cpool.hh` | 18 | 0 | 0 | 18 |
+| `cover.hh` | 16 | 12 | 0 | 4 |
+| `cpool.cc` | 10 | 10 | 0 | 0 |
+| `cpool.hh` | 18 | 11 | 0 | 7 |
 | `cpool_ghidra.cc` | 5 | 0 | 0 | 5 |
 | `cpool_ghidra.hh` | 2 | 0 | 0 | 2 |
 | `crc32.hh` | 1 | 1 | 0 | 0 |
-| `database.cc` | 170 | 105 | 0 | 65 |
-| `database.hh` | 97 | 2 | 0 | 95 |
+| `database.cc` | 170 | 113 | 0 | 57 |
+| `database.hh` | 97 | 9 | 0 | 88 |
 | `database_ghidra.cc` | 18 | 0 | 0 | 18 |
 | `database_ghidra.hh` | 37 | 0 | 0 | 37 |
 | `double.cc` | 109 | 109 | 0 | 0 |
@@ -79,21 +79,21 @@ records complete same-input/same-output evidence.
 | `emulateutil.cc` | 34 | 0 | 0 | 34 |
 | `emulateutil.hh` | 9 | 0 | 0 | 9 |
 | `error.hh` | 3 | 0 | 0 | 3 |
-| `expression.cc` | 17 | 11 | 0 | 6 |
+| `expression.cc` | 17 | 15 | 0 | 2 |
 | `expression.hh` | 20 | 0 | 0 | 20 |
 | `filemanage.cc` | 19 | 0 | 0 | 19 |
 | `filemanage.hh` | 1 | 0 | 0 | 1 |
-| `float.cc` | 36 | 28 | 0 | 8 |
-| `float.hh` | 1 | 0 | 0 | 1 |
-| `flow.cc` | 46 | 43 | 0 | 3 |
+| `float.cc` | 36 | 34 | 0 | 2 |
+| `float.hh` | 1 | 1 | 0 | 0 |
+| `flow.cc` | 46 | 44 | 0 | 2 |
 | `flow.hh` | 16 | 15 | 0 | 1 |
-| `fspec.cc` | 243 | 143 | 0 | 100 |
-| `fspec.hh` | 271 | 57 | 0 | 214 |
+| `fspec.cc` | 243 | 149 | 0 | 94 |
+| `fspec.hh` | 271 | 64 | 0 | 207 |
 | `funcdata.cc` | 43 | 25 | 0 | 18 |
-| `funcdata.hh` | 136 | 20 | 0 | 116 |
-| `funcdata_block.cc` | 34 | 0 | 23 | 11 |
-| `funcdata_op.cc` | 49 | 27 | 6 | 16 |
-| `funcdata_varnode.cc` | 60 | 51 | 0 | 9 |
+| `funcdata.hh` | 136 | 26 | 0 | 110 |
+| `funcdata_block.cc` | 34 | 2 | 23 | 9 |
+| `funcdata_op.cc` | 49 | 31 | 4 | 14 |
+| `funcdata_varnode.cc` | 60 | 57 | 0 | 3 |
 | `ghidra_arch.cc` | 43 | 0 | 0 | 43 |
 | `ghidra_arch.hh` | 10 | 0 | 0 | 10 |
 | `ghidra_context.cc` | 3 | 0 | 0 | 3 |
@@ -102,23 +102,23 @@ records complete same-input/same-output evidence.
 | `ghidra_process.hh` | 5 | 0 | 0 | 5 |
 | `ghidra_translate.cc` | 8 | 0 | 0 | 8 |
 | `ghidra_translate.hh` | 4 | 0 | 0 | 4 |
-| `globalcontext.cc` | 31 | 10 | 0 | 21 |
-| `globalcontext.hh` | 19 | 0 | 0 | 19 |
+| `globalcontext.cc` | 31 | 12 | 0 | 19 |
+| `globalcontext.hh` | 19 | 2 | 0 | 17 |
 | `grammar.cc` | 80 | 59 | 0 | 21 |
 | `grammar.hh` | 31 | 12 | 0 | 19 |
 | `graph.cc` | 17 | 17 | 0 | 0 |
-| `heritage.cc` | 75 | 10 | 52 | 13 |
-| `heritage.hh` | 30 | 8 | 0 | 22 |
+| `heritage.cc` | 75 | 26 | 35 | 14 |
+| `heritage.hh` | 30 | 9 | 0 | 21 |
 | `ifacedecomp.cc` | 138 | 0 | 0 | 138 |
 | `ifacedecomp.hh` | 6 | 0 | 0 | 6 |
 | `ifaceterm.cc` | 7 | 0 | 0 | 7 |
 | `inject_ghidra.cc` | 18 | 0 | 0 | 18 |
 | `inject_ghidra.hh` | 3 | 0 | 0 | 3 |
-| `inject_sleigh.cc` | 31 | 0 | 0 | 31 |
+| `inject_sleigh.cc` | 31 | 12 | 0 | 19 |
 | `inject_sleigh.hh` | 7 | 0 | 0 | 7 |
 | `interface.cc` | 31 | 0 | 0 | 31 |
 | `interface.hh` | 26 | 0 | 0 | 26 |
-| `jumptable.cc` | 132 | 0 | 77 | 55 |
+| `jumptable.cc` | 132 | 17 | 63 | 52 |
 | `jumptable.hh` | 79 | 42 | 2 | 35 |
 | `libdecomp.cc` | 4 | 0 | 0 | 4 |
 | `loadimage.cc` | 7 | 5 | 0 | 2 |
@@ -128,7 +128,7 @@ records complete same-input/same-output evidence.
 | `loadimage_ghidra.cc` | 6 | 0 | 0 | 6 |
 | `loadimage_xml.cc` | 10 | 0 | 0 | 10 |
 | `loadimage_xml.hh` | 2 | 0 | 0 | 2 |
-| `marshal.cc` | 80 | 22 | 0 | 58 |
+| `marshal.cc` | 80 | 26 | 0 | 54 |
 | `marshal.hh` | 33 | 3 | 0 | 30 |
 | `memstate.cc` | 29 | 27 | 0 | 2 |
 | `memstate.hh` | 10 | 4 | 0 | 6 |
@@ -138,8 +138,8 @@ records complete same-input/same-output evidence.
 | `modelrules.hh` | 38 | 32 | 0 | 6 |
 | `multiprecision.cc` | 15 | 0 | 0 | 15 |
 | `multiprecision.hh` | 1 | 0 | 0 | 1 |
-| `op.cc` | 47 | 35 | 0 | 12 |
-| `op.hh` | 99 | 43 | 0 | 56 |
+| `op.cc` | 47 | 38 | 0 | 9 |
+| `op.hh` | 99 | 47 | 0 | 52 |
 | `opbehavior.cc` | 71 | 10 | 24 | 37 |
 | `opbehavior.hh` | 62 | 46 | 0 | 16 |
 | `opcodes.cc` | 3 | 1 | 0 | 2 |
@@ -149,46 +149,46 @@ records complete same-input/same-output evidence.
 | `override.hh` | 2 | 0 | 0 | 2 |
 | `paramid.cc` | 8 | 1 | 0 | 7 |
 | `paramid.hh` | 3 | 0 | 0 | 3 |
-| `partmap.hh` | 15 | 0 | 0 | 15 |
+| `partmap.hh` | 15 | 2 | 0 | 13 |
 | `pcodecompile.cc` | 33 | 31 | 0 | 2 |
 | `pcodecompile.hh` | 16 | 2 | 0 | 14 |
-| `pcodeinject.cc` | 17 | 4 | 0 | 13 |
-| `pcodeinject.hh` | 23 | 0 | 0 | 23 |
-| `pcodeparse.cc` | 25 | 1 | 0 | 24 |
+| `pcodeinject.cc` | 17 | 12 | 0 | 5 |
+| `pcodeinject.hh` | 23 | 1 | 0 | 22 |
+| `pcodeparse.cc` | 25 | 2 | 0 | 23 |
 | `pcodeparse.hh` | 16 | 16 | 0 | 0 |
 | `pcoderaw.cc` | 5 | 4 | 0 | 1 |
-| `pcoderaw.hh` | 17 | 7 | 0 | 10 |
+| `pcoderaw.hh` | 17 | 8 | 0 | 9 |
 | `prefersplit.cc` | 26 | 24 | 0 | 2 |
 | `prefersplit.hh` | 1 | 0 | 0 | 1 |
-| `prettyprint.cc` | 85 | 0 | 0 | 85 |
-| `prettyprint.hh` | 124 | 2 | 0 | 122 |
-| `printc.cc` | 106 | 71 | 1 | 34 |
+| `prettyprint.cc` | 85 | 1 | 0 | 84 |
+| `prettyprint.hh` | 124 | 3 | 0 | 121 |
+| `printc.cc` | 106 | 73 | 1 | 32 |
 | `printc.hh` | 66 | 0 | 0 | 66 |
 | `printjava.cc` | 16 | 0 | 0 | 16 |
 | `printjava.hh` | 1 | 0 | 0 | 1 |
-| `printlanguage.cc` | 31 | 23 | 0 | 8 |
+| `printlanguage.cc` | 31 | 22 | 0 | 9 |
 | `printlanguage.hh` | 31 | 13 | 0 | 18 |
-| `rangemap.hh` | 33 | 0 | 0 | 33 |
+| `rangemap.hh` | 33 | 17 | 0 | 16 |
 | `rangeutil.cc` | 64 | 58 | 0 | 6 |
 | `rangeutil.hh` | 39 | 25 | 0 | 14 |
 | `raw_arch.cc` | 11 | 0 | 0 | 11 |
 | `raw_arch.hh` | 1 | 0 | 0 | 1 |
-| `ruleaction.cc` | 340 | 72 | 144 | 124 |
-| `ruleaction.hh` | 272 | 4 | 0 | 268 |
+| `ruleaction.cc` | 340 | 91 | 133 | 116 |
+| `ruleaction.hh` | 272 | 12 | 0 | 260 |
 | `rulecompile.cc` | 58 | 0 | 0 | 58 |
 | `rulecompile.hh` | 22 | 0 | 0 | 22 |
-| `semantics.cc` | 54 | 0 | 0 | 54 |
+| `semantics.cc` | 54 | 3 | 0 | 51 |
 | `semantics.hh` | 54 | 0 | 0 | 54 |
 | `signature.cc` | 49 | 42 | 0 | 7 |
 | `signature.hh` | 41 | 36 | 0 | 5 |
 | `signature_ghidra.cc` | 6 | 0 | 0 | 6 |
 | `signature_ghidra.hh` | 2 | 0 | 0 | 2 |
 | `slaformat.cc` | 7 | 0 | 0 | 7 |
-| `sleigh.cc` | 37 | 0 | 0 | 37 |
+| `sleigh.cc` | 37 | 3 | 1 | 33 |
 | `sleigh.hh` | 3 | 0 | 0 | 3 |
 | `sleigh_arch.cc` | 30 | 1 | 0 | 29 |
 | `sleigh_arch.hh` | 22 | 1 | 0 | 21 |
-| `sleighbase.cc` | 18 | 0 | 0 | 18 |
+| `sleighbase.cc` | 18 | 1 | 0 | 17 |
 | `sleighbase.hh` | 7 | 0 | 0 | 7 |
 | `sleighexample.cc` | 14 | 0 | 0 | 14 |
 | `slgh_compile.cc` | 148 | 0 | 0 | 148 |
@@ -199,14 +199,14 @@ records complete same-input/same-output evidence.
 | `slghpattern.cc` | 58 | 0 | 0 | 58 |
 | `slghpattern.hh` | 38 | 0 | 0 | 38 |
 | `slghscan.cc` | 48 | 0 | 0 | 48 |
-| `slghsymbol.cc` | 171 | 0 | 0 | 171 |
+| `slghsymbol.cc` | 171 | 1 | 0 | 170 |
 | `slghsymbol.hh` | 173 | 0 | 0 | 173 |
-| `space.cc` | 33 | 16 | 0 | 17 |
-| `space.hh` | 40 | 2 | 0 | 38 |
+| `space.cc` | 33 | 26 | 0 | 7 |
+| `space.hh` | 40 | 36 | 0 | 4 |
 | `string_ghidra.cc` | 3 | 0 | 0 | 3 |
 | `stringmanage.cc` | 17 | 6 | 0 | 11 |
 | `stringmanage.hh` | 1 | 0 | 0 | 1 |
-| `subflow.cc` | 111 | 65 | 0 | 46 |
+| `subflow.cc` | 111 | 81 | 0 | 30 |
 | `subflow.hh` | 27 | 0 | 0 | 27 |
 | `test.cc` | 4 | 0 | 0 | 4 |
 | `test.hh` | 2 | 0 | 0 | 2 |
@@ -214,28 +214,28 @@ records complete same-input/same-output evidence.
 | `testfunction.hh` | 6 | 0 | 0 | 6 |
 | `transform.cc` | 37 | 30 | 0 | 7 |
 | `transform.hh` | 29 | 4 | 0 | 25 |
-| `translate.cc` | 42 | 13 | 0 | 29 |
-| `translate.hh` | 36 | 13 | 0 | 23 |
-| `type.cc` | 235 | 148 | 2 | 85 |
-| `type.hh` | 132 | 13 | 0 | 119 |
+| `translate.cc` | 42 | 16 | 0 | 26 |
+| `translate.hh` | 36 | 17 | 0 | 19 |
+| `type.cc` | 235 | 163 | 0 | 72 |
+| `type.hh` | 132 | 28 | 0 | 104 |
 | `typegrp_ghidra.cc` | 1 | 0 | 0 | 1 |
 | `typegrp_ghidra.hh` | 2 | 0 | 0 | 2 |
-| `typeop.cc` | 210 | 50 | 0 | 160 |
-| `typeop.hh` | 102 | 21 | 0 | 81 |
+| `typeop.cc` | 210 | 51 | 0 | 159 |
+| `typeop.hh` | 102 | 23 | 0 | 79 |
 | `unify.cc` | 142 | 133 | 0 | 9 |
 | `unify.hh` | 163 | 148 | 0 | 15 |
 | `unionresolve.cc` | 21 | 21 | 0 | 0 |
 | `unionresolve.hh` | 11 | 10 | 0 | 1 |
-| `userop.cc` | 32 | 15 | 0 | 17 |
-| `userop.hh` | 32 | 0 | 0 | 32 |
+| `userop.cc` | 32 | 20 | 0 | 12 |
+| `userop.hh` | 32 | 2 | 0 | 30 |
 | `variable.cc` | 51 | 44 | 0 | 7 |
 | `variable.hh` | 55 | 49 | 0 | 6 |
-| `varmap.cc` | 49 | 28 | 0 | 21 |
+| `varmap.cc` | 49 | 30 | 0 | 19 |
 | `varmap.hh` | 33 | 0 | 0 | 33 |
 | `varnode.cc` | 90 | 75 | 0 | 15 |
-| `varnode.hh` | 125 | 21 | 1 | 103 |
-| `xml.cc` | 48 | 0 | 0 | 48 |
-| `xml.hh` | 46 | 0 | 0 | 46 |
+| `varnode.hh` | 125 | 22 | 1 | 102 |
+| `xml.cc` | 48 | 32 | 1 | 15 |
+| `xml.hh` | 46 | 2 | 0 | 44 |
 | `xml_arch.cc` | 10 | 0 | 0 | 10 |
 | `xml_arch.hh` | 1 | 0 | 0 | 1 |
 

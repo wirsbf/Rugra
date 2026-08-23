@@ -1874,19 +1874,11 @@
     },
     {
       "from": "address",
+      "to": "space"
+    },
+    {
+      "from": "address",
       "to": "varnode"
-    },
-    {
-      "from": "align::action",
-      "to": "action"
-    },
-    {
-      "from": "align::action",
-      "to": "coreaction"
-    },
-    {
-      "from": "align::action",
-      "to": "ruleaction"
     },
     {
       "from": "align::block",
@@ -1923,18 +1915,6 @@
     {
       "from": "align::function_snapshot",
       "to": "varnode"
-    },
-    {
-      "from": "align::heritage",
-      "to": "address"
-    },
-    {
-      "from": "align::heritage",
-      "to": "heritage"
-    },
-    {
-      "from": "align::heritage",
-      "to": "space"
     },
     {
       "from": "align::pcodeop",
@@ -2051,6 +2031,14 @@
     {
       "from": "arch",
       "to": "override_rs"
+    },
+    {
+      "from": "arch",
+      "to": "pcodeinject"
+    },
+    {
+      "from": "arch",
+      "to": "pcodeparse"
     },
     {
       "from": "arch",
@@ -2177,6 +2165,14 @@
       "to": "marshal"
     },
     {
+      "from": "comment",
+      "to": "op"
+    },
+    {
+      "from": "comment",
+      "to": "space"
+    },
+    {
       "from": "compression",
       "to": "error"
     },
@@ -2282,6 +2278,10 @@
     },
     {
       "from": "coreaction",
+      "to": "comment"
+    },
+    {
+      "from": "coreaction",
       "to": "error"
     },
     {
@@ -2298,11 +2298,11 @@
     },
     {
       "from": "coreaction",
-      "to": "heritage"
+      "to": "jumptable"
     },
     {
       "from": "coreaction",
-      "to": "jumptable"
+      "to": "marshal"
     },
     {
       "from": "coreaction",
@@ -2326,6 +2326,14 @@
     },
     {
       "from": "coreaction",
+      "to": "subflow"
+    },
+    {
+      "from": "coreaction",
+      "to": "transform"
+    },
+    {
+      "from": "coreaction",
       "to": "type_system"
     },
     {
@@ -2339,6 +2347,14 @@
     {
       "from": "coreaction",
       "to": "type_system::protomodel"
+    },
+    {
+      "from": "coreaction",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "coreaction",
+      "to": "utils"
     },
     {
       "from": "coreaction",
@@ -2373,6 +2389,14 @@
       "to": "marshal"
     },
     {
+      "from": "cpool",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "cpool",
+      "to": "type_system::typefactory"
+    },
+    {
       "from": "database",
       "to": "address"
     },
@@ -2390,7 +2414,23 @@
     },
     {
       "from": "debugproto",
+      "to": "action"
+    },
+    {
+      "from": "debugproto",
       "to": "address"
+    },
+    {
+      "from": "debugproto",
+      "to": "arch"
+    },
+    {
+      "from": "debugproto",
+      "to": "comment"
+    },
+    {
+      "from": "debugproto",
+      "to": "coreaction"
     },
     {
       "from": "debugproto",
@@ -2557,8 +2597,16 @@
       "to": "varnode"
     },
     {
+      "from": "float_emulate",
+      "to": "address"
+    },
+    {
       "from": "flow",
       "to": "address"
+    },
+    {
+      "from": "flow",
+      "to": "arch"
     },
     {
       "from": "flow",
@@ -2594,11 +2642,23 @@
     },
     {
       "from": "flow",
+      "to": "pcodeparse"
+    },
+    {
+      "from": "flow",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "flow",
       "to": "sleigh_ffi"
     },
     {
       "from": "flow",
       "to": "space"
+    },
+    {
+      "from": "flow",
+      "to": "userop"
     },
     {
       "from": "fspec",
@@ -2682,6 +2742,10 @@
     },
     {
       "from": "funcdata",
+      "to": "database"
+    },
+    {
+      "from": "funcdata",
       "to": "disasm"
     },
     {
@@ -2711,6 +2775,10 @@
     {
       "from": "funcdata",
       "to": "jumptable"
+    },
+    {
+      "from": "funcdata",
+      "to": "merge"
     },
     {
       "from": "funcdata",
@@ -2747,6 +2815,10 @@
     {
       "from": "funcdata",
       "to": "stringmanage"
+    },
+    {
+      "from": "funcdata",
+      "to": "transform"
     },
     {
       "from": "funcdata",
@@ -2842,6 +2914,10 @@
     },
     {
       "from": "heritage",
+      "to": "fspec"
+    },
+    {
+      "from": "heritage",
       "to": "funcdata"
     },
     {
@@ -2871,10 +2947,6 @@
     {
       "from": "jumptable",
       "to": "block"
-    },
-    {
-      "from": "jumptable",
-      "to": "emulate"
     },
     {
       "from": "jumptable",
@@ -2926,6 +2998,10 @@
     },
     {
       "from": "merge",
+      "to": "arch"
+    },
+    {
+      "from": "merge",
       "to": "block"
     },
     {
@@ -2959,6 +3035,14 @@
     {
       "from": "merge",
       "to": "type_system"
+    },
+    {
+      "from": "merge",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "merge",
+      "to": "type_system::typefactory"
     },
     {
       "from": "merge",
@@ -3011,6 +3095,10 @@
     {
       "from": "op",
       "to": "rangeutil"
+    },
+    {
+      "from": "op",
+      "to": "typeop"
     },
     {
       "from": "op",
@@ -3086,7 +3174,23 @@
     },
     {
       "from": "pcodeinject",
+      "to": "marshal"
+    },
+    {
+      "from": "pcodeinject",
       "to": "opcodes"
+    },
+    {
+      "from": "pcodeinject",
+      "to": "pcodeparse"
+    },
+    {
+      "from": "pcodeinject",
+      "to": "pcoderaw"
+    },
+    {
+      "from": "pcodeinject",
+      "to": "space"
     },
     {
       "from": "pcodeparse",
@@ -3142,6 +3246,10 @@
     },
     {
       "from": "printc",
+      "to": "action"
+    },
+    {
+      "from": "printc",
       "to": "address"
     },
     {
@@ -3151,6 +3259,10 @@
     {
       "from": "printc",
       "to": "comment"
+    },
+    {
+      "from": "printc",
+      "to": "coreaction"
     },
     {
       "from": "printc",
@@ -3206,6 +3318,10 @@
     },
     {
       "from": "printc",
+      "to": "unionresolve"
+    },
+    {
+      "from": "printc",
       "to": "userop"
     },
     {
@@ -3235,10 +3351,6 @@
     {
       "from": "printlanguage",
       "to": "prettyprint"
-    },
-    {
-      "from": "printlanguage",
-      "to": "printc"
     },
     {
       "from": "printlanguage",
@@ -3286,6 +3398,10 @@
     },
     {
       "from": "ruleaction",
+      "to": "database"
+    },
+    {
+      "from": "ruleaction",
       "to": "error"
     },
     {
@@ -3330,6 +3446,10 @@
     },
     {
       "from": "ruleaction",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "ruleaction",
       "to": "typeop"
     },
     {
@@ -3371,6 +3491,14 @@
     {
       "from": "signature",
       "to": "varnode"
+    },
+    {
+      "from": "space",
+      "to": "marshal"
+    },
+    {
+      "from": "space",
+      "to": "op"
     },
     {
       "from": "stringmanage",
@@ -3525,6 +3653,14 @@
       "to": "opcodes"
     },
     {
+      "from": "type_system::datatype",
+      "to": "space"
+    },
+    {
+      "from": "type_system::datatype",
+      "to": "unionresolve"
+    },
+    {
       "from": "type_system::protomodel",
       "to": "address"
     },
@@ -3559,6 +3695,10 @@
     {
       "from": "typeop",
       "to": "op"
+    },
+    {
+      "from": "typeop",
+      "to": "opbehavior"
     },
     {
       "from": "typeop",
@@ -3638,11 +3778,39 @@
     },
     {
       "from": "userop",
+      "to": "fspec"
+    },
+    {
+      "from": "userop",
+      "to": "marshal"
+    },
+    {
+      "from": "userop",
       "to": "op"
     },
     {
       "from": "userop",
+      "to": "pcodeinject"
+    },
+    {
+      "from": "userop",
+      "to": "pcodeparse"
+    },
+    {
+      "from": "userop",
+      "to": "space"
+    },
+    {
+      "from": "userop",
       "to": "type_system"
+    },
+    {
+      "from": "userop",
+      "to": "type_system::datatype"
+    },
+    {
+      "from": "userop",
+      "to": "type_system::typefactory"
     },
     {
       "from": "userop",
@@ -3686,6 +3854,10 @@
     },
     {
       "from": "varmap",
+      "to": "fspec"
+    },
+    {
+      "from": "varmap",
       "to": "funcdata"
     },
     {
@@ -3698,6 +3870,10 @@
     },
     {
       "from": "varmap",
+      "to": "rangemap"
+    },
+    {
+      "from": "varmap",
       "to": "space"
     },
     {
@@ -3707,6 +3883,10 @@
     {
       "from": "varmap",
       "to": "type_system::datatype"
+    },
+    {
+      "from": "varmap",
+      "to": "type_system::typefactory"
     },
     {
       "from": "varmap",
@@ -3738,6 +3918,10 @@
     },
     {
       "from": "varnode",
+      "to": "rangeutil"
+    },
+    {
+      "from": "varnode",
       "to": "space"
     },
     {
@@ -3747,6 +3931,10 @@
     {
       "from": "varnode",
       "to": "type_system::datatype"
+    },
+    {
+      "from": "varnode",
+      "to": "type_system::typefactory"
     },
     {
       "from": "varnode",
@@ -3853,6 +4041,14 @@
   "schema": 1,
   "todo_dependency_edges": [
     {
+      "from": "ACTION-INFERTYPES-DISPATCH-0001",
+      "to": "VARNODE-LOCALTYPE-RESOLUTION-0001"
+    },
+    {
+      "from": "ACTION-LANEDIVIDE-0001",
+      "to": "LANEDIVIDE-INFRA-0001"
+    },
+    {
       "from": "ACTION-TRACE-0001",
       "to": "IR-INVARIANT-0001"
     },
@@ -3863,10 +4059,6 @@
     {
       "from": "ACTION-TRACE-0001",
       "to": "PIPE-TREE-0001"
-    },
-    {
-      "from": "ADDRESS-0001",
-      "to": "SPACE-0001"
     },
     {
       "from": "ARCH-0001",
@@ -3887,30 +4079,6 @@
     {
       "from": "BLOCK-0001",
       "to": "SEQNUM-0001"
-    },
-    {
-      "from": "BLOCK-ENTRY-0001",
-      "to": "MATCH"
-    },
-    {
-      "from": "BLOCK-INDEX-ASSIGN-0001",
-      "to": "BLOCK-ADDGRAPH-SEMANTICS-0001"
-    },
-    {
-      "from": "BLOCK-INDEX-ASSIGN-0001",
-      "to": "BLOCK-FINDIRREDUCIBLE-0001"
-    },
-    {
-      "from": "BLOCK-INDEX-ASSIGN-0001",
-      "to": "BLOCK-INDEX-WIRE-0001"
-    },
-    {
-      "from": "BLOCK-INDEX-ASSIGN-0001",
-      "to": "EDGEFLAG-BIT7-COLLISION-0001"
-    },
-    {
-      "from": "BLOCK-INDEX-WIRE-0001",
-      "to": "BLOCK-INDEX-ASSIGN-0001"
     },
     {
       "from": "CONDEXE-0001",
@@ -3953,50 +4121,6 @@
       "to": "VARIABLE-0001"
     },
     {
-      "from": "COVER-REBUILD-SELFLOCK-0001",
-      "to": "BLOCK-INDEX-ASSIGN-0001"
-    },
-    {
-      "from": "COVER-REBUILD-SELFLOCK-0001",
-      "to": "COVER-REBUILD-COVERAGE-0002"
-    },
-    {
-      "from": "COVER-REBUILD-SELFLOCK-0001",
-      "to": "COVER-TWOPIECE-RESIDUAL-0001"
-    },
-    {
-      "from": "COVER-REBUILD-SELFLOCK-0001",
-      "to": "FUNC-GLOBRANGE-HANG-0001"
-    },
-    {
-      "from": "COVER-REBUILD-SELFLOCK-0001",
-      "to": "FUNC-TYPEPROP-SETTLE-0001"
-    },
-    {
-      "from": "COVER-REBUILD-SELFLOCK-0001",
-      "to": "SUBFLOW-OUTVN-UNWRAP-0001"
-    },
-    {
-      "from": "CSPEC-DEFAULT-RETURN-0001",
-      "to": "ADDRESS-0001"
-    },
-    {
-      "from": "CSPEC-DEFAULT-RETURN-0001",
-      "to": "CSPEC-PARAMMODEL-0001"
-    },
-    {
-      "from": "CSPEC-DEFAULT-RETURN-0001",
-      "to": "SPACE-0001"
-    },
-    {
-      "from": "CSPEC-GLOBAL-APPLY-0001",
-      "to": "CSPEC-RANGEPROPS-0001"
-    },
-    {
-      "from": "CSPEC-GLOBAL-APPLY-0001",
-      "to": "SPACE-0001"
-    },
-    {
       "from": "CSPEC-MODELRULE-DECODE-0001",
       "to": "CSPEC-PARAMMODEL-0001"
     },
@@ -4006,98 +4130,6 @@
     },
     {
       "from": "CSPEC-MODELRULE-DECODE-0001",
-      "to": "SPACE-0001"
-    },
-    {
-      "from": "CSPEC-PCODEINJECT-CALLFIXUP-0001",
-      "to": "MARSHAL-XML-TEXT-0001"
-    },
-    {
-      "from": "CSPEC-PCODEINJECT-CALLFIXUP-0001",
-      "to": "SPACE-0001"
-    },
-    {
-      "from": "CSPEC-RANGEPROPS-0001",
-      "to": "ADDRESS-0001"
-    },
-    {
-      "from": "CSPEC-RANGEPROPS-0001",
-      "to": "CSPEC-GLOBAL-APPLY-0001"
-    },
-    {
-      "from": "CSPEC-RANGEPROPS-0001",
-      "to": "MARSHAL-ID-0001"
-    },
-    {
-      "from": "CSPEC-RANGEPROPS-0001",
-      "to": "MARSHAL-PACKED-0001"
-    },
-    {
-      "from": "CSPEC-RANGEPROPS-0001",
-      "to": "MARSHAL-XML-TEXT-0001"
-    },
-    {
-      "from": "CSPEC-RANGEPROPS-0001",
-      "to": "SPACE-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-DEFAULT-RETURN-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-GLOBAL-APPLY-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-MODELRULE-DECODE-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-PCODEINJECT-CALLFIXUP-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-RANGEPROPS-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-TYPEORG-STATE-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "CSPEC-UNIVERSAL-CHILD-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "MARSHAL-ID-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "MARSHAL-XML-TEXT-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "SPACE-0001"
-    },
-    {
-      "from": "CSPEC-TEXT-INGEST-0001",
-      "to": "TRANSLATE-DOCSTORE-UNIFY-0001"
-    },
-    {
-      "from": "CSPEC-TYPEORG-STATE-0001",
-      "to": "TYPE-UNKNOWN-0001"
-    },
-    {
-      "from": "CSPEC-UNIVERSAL-CHILD-0001",
-      "to": "CSPEC-TEXT-INGEST-0001"
-    },
-    {
-      "from": "CSPEC-UNIVERSAL-CHILD-0001",
-      "to": "MARSHAL-XML-TEXT-0001"
-    },
-    {
-      "from": "CSPEC-UNIVERSAL-CHILD-0001",
       "to": "SPACE-0001"
     },
     {
@@ -4129,40 +4161,16 @@
       "to": "RANGEADDR-0001"
     },
     {
-      "from": "DEADCODE-SELFLOOP-0001",
-      "to": "PARSECONFIG-RULE-PAIRS-0001"
-    },
-    {
       "from": "DIFF-BISECT-0001",
       "to": "ORACLE-CACHE-0001"
-    },
-    {
-      "from": "DIFF-REDUCE-HARDEN-0002",
-      "to": "PCODE-CFG-REDUCE-0001"
     },
     {
       "from": "DISPLAYFMT-0002",
       "to": "MARSHAL-ID-0001"
     },
     {
-      "from": "DWARF-PROTO-0001",
-      "to": "NO_ORACLE"
-    },
-    {
-      "from": "DWARF-PROTO-0001",
-      "to": "PARAM-RECOVERY-0001"
-    },
-    {
       "from": "FFI-0001",
       "to": "PCODE-0002"
-    },
-    {
-      "from": "FLOW-TARGET-BOUND-0001",
-      "to": "MATCH"
-    },
-    {
-      "from": "FSPEC-0001",
-      "to": "MATCH"
     },
     {
       "from": "FSPEC-0002",
@@ -4171,18 +4179,6 @@
     {
       "from": "FSPEC-0002",
       "to": "FSPEC-0001"
-    },
-    {
-      "from": "FUNC-GLOBRANGE-HANG-0001",
-      "to": "FUNCDATA-SLOT-CAST-0001"
-    },
-    {
-      "from": "FUNC-GLOBRANGE-HANG-0001",
-      "to": "UPSTREAM-OUTVN-DEADWIRE-0001"
-    },
-    {
-      "from": "FUNC-TYPEPROP-SETTLE-0001",
-      "to": "PIPE-MERGETYPE-ORDER-0001"
     },
     {
       "from": "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
@@ -4201,20 +4197,12 @@
       "to": "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001"
     },
     {
-      "from": "FUNCPROTO-MODEL-BIND-0001",
-      "to": "CSPEC-TEXT-INGEST-0001"
-    },
-    {
-      "from": "FUNCPROTO-MODEL-BIND-0001",
-      "to": "CURL-CSPEC-SNAPSHOT-0001"
-    },
-    {
       "from": "FUNCTION-EVIDENCE-0001",
       "to": "ORACLE-REGISTRY-ENFORCE-0001"
     },
     {
-      "from": "FUNCTION-ID-0001",
-      "to": "LEDGER-0001"
+      "from": "FUNCTION-ID-MIGRATE-REKEY-0001",
+      "to": "FUNCTION-LEDGER-REFRESH-0001"
     },
     {
       "from": "HANG-TRIAGE-0001",
@@ -4227,18 +4215,6 @@
     {
       "from": "HANG-TRIAGE-0001",
       "to": "RUNTIME-TIMEOUT-0001"
-    },
-    {
-      "from": "HERITAGE-ADT-RENAME-0001",
-      "to": "HERITAGE-OWNERSHIP-0001"
-    },
-    {
-      "from": "HERITAGE-CALLGUARD-0001",
-      "to": "HERITAGE-OWNERSHIP-0001"
-    },
-    {
-      "from": "HERITAGE-CALLGUARD-0001",
-      "to": "PROTO-EFFECT-MODEL-0001"
     },
     {
       "from": "IMPACT-0001",
@@ -4297,24 +4273,12 @@
       "to": "SPACE-0001"
     },
     {
-      "from": "OP-INSERT-0001",
-      "to": "MATCH"
+      "from": "MERGE-MARKER-TRIM-0001",
+      "to": "MERGE-COPYTRIMS-CACHE-0001"
     },
     {
-      "from": "OP-INSERT-0001",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "OP-INSERT-0001",
-      "to": "OPBANK-0001"
-    },
-    {
-      "from": "OP-INSERT-0001",
-      "to": "SEQNUM-0001"
-    },
-    {
-      "from": "OP-INSERT-0001",
-      "to": "SWITCH_OUT"
+      "from": "MERGE-PERSISTENCE-CHANNELS-0001",
+      "to": "TYPEOP-LOCALTYPE-DISPATCH-0001"
     },
     {
       "from": "OPBANK-0001",
@@ -4329,10 +4293,6 @@
       "to": "MARSHAL-ID-0001"
     },
     {
-      "from": "ORACLE-0002",
-      "to": "SLEIGH-0001"
-    },
-    {
       "from": "ORACLE-CORPUS-PROMOTE-0001",
       "to": "ORACLE-REGISTRY-ENFORCE-0001"
     },
@@ -4342,23 +4302,11 @@
     },
     {
       "from": "ORACLE-METADATA-MIGRATE-0001",
-      "to": "MATCH"
-    },
-    {
-      "from": "ORACLE-METADATA-MIGRATE-0001",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "ORACLE-METADATA-MIGRATE-0001",
-      "to": "NO_ORACLE"
+      "to": "FUNCTION-ID-MIGRATE-REKEY-0001"
     },
     {
       "from": "ORACLE-METADATA-MIGRATE-0001",
       "to": "ORACLE-REGISTRY-0001"
-    },
-    {
-      "from": "ORACLE-METADATA-MIGRATE-0001",
-      "to": "UNTESTED"
     },
     {
       "from": "ORACLE-REGISTRY-0001",
@@ -4371,10 +4319,6 @@
     {
       "from": "ORACLE-RESULT-0001",
       "to": "DIFF-BISECT-0001"
-    },
-    {
-      "from": "ORACLE-RESULT-0001",
-      "to": "NO_ORACLE"
     },
     {
       "from": "ORACLE-RESULT-0001",
@@ -4399,10 +4343,6 @@
     {
       "from": "PARAM-RECOVERY-0001",
       "to": "ARCH-0001"
-    },
-    {
-      "from": "PARAM-RECOVERY-0001",
-      "to": "NO_ORACLE"
     },
     {
       "from": "PARAM-RECOVERY-0001",
@@ -4445,136 +4385,28 @@
       "to": "PCODE-CFG-FUZZ-0001"
     },
     {
-      "from": "PIPE-0000",
-      "to": "HERITAGE-DRIVER-0001"
-    },
-    {
-      "from": "PIPE-0000",
-      "to": "PIPE-ACTION-COUNT-0001"
-    },
-    {
-      "from": "PIPE-0000",
-      "to": "PIPE-BREAK-0001"
-    },
-    {
-      "from": "PIPE-0000",
-      "to": "PIPE-POOL-0001"
-    },
-    {
-      "from": "PIPE-0000",
-      "to": "PIPE-RESTART-0001"
-    },
-    {
-      "from": "PIPE-0000",
-      "to": "VARNODE-INIT-0001"
-    },
-    {
-      "from": "PIPE-0001",
-      "to": "PIPE-0000"
-    },
-    {
       "from": "PIPE-ACTION-COUNT-0001",
       "to": "PIPE-0000"
-    },
-    {
-      "from": "PIPE-ACTION-COUNT-0001A",
-      "to": "RULE_ONCEPERFUNC"
     },
     {
       "from": "PIPE-BREAK-0001",
       "to": "PIPE-0000"
     },
     {
-      "from": "PIPE-MERGETYPE-ORDER-0001",
-      "to": "BASE-EXPLICIT-GAPS-0001"
-    },
-    {
-      "from": "PIPE-MERGETYPE-ORDER-0001",
-      "to": "BLKACT-FINALSTRUCT-COUNT-0001"
-    },
-    {
-      "from": "PIPE-MERGETYPE-ORDER-0001",
-      "to": "MERGE-PERSISTENT-STATE-0001"
-    },
-    {
       "from": "PIPE-POOL-0001",
       "to": "OP-INSERT-0001"
-    },
-    {
-      "from": "PIPE-REACH-0001",
-      "to": "VARMAP-NAMING-0001"
     },
     {
       "from": "PIPE-RESTART-0001",
       "to": "PIPE-0000"
     },
     {
-      "from": "PIPE-SNAPSHOT-0001",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "PIPE-SNAPSHOT-0001",
-      "to": "NO_ORACLE"
-    },
-    {
-      "from": "PIPE-TREE-0001",
-      "to": "PIPE-ACTION-COUNT-0001"
-    },
-    {
-      "from": "PIPE-TREE-0001",
-      "to": "PIPE-BREAK-0001"
-    },
-    {
-      "from": "PIPE-TREE-0001",
-      "to": "PIPE-POOL-0001"
-    },
-    {
-      "from": "PIPE-TREE-0001",
-      "to": "PIPE-RESTART-0001"
+      "from": "PIPE-STACKSTALL-COUNT-0001",
+      "to": "PIPE-DERIVED-TREE-0001"
     },
     {
       "from": "PRETTY-0001",
       "to": "PRINT-RPN-0001"
-    },
-    {
-      "from": "PRINT-DETERMINISM-0001",
-      "to": "PRINT-RPN-0001B"
-    },
-    {
-      "from": "PRINT-RPN-0001A",
-      "to": "MATCH"
-    },
-    {
-      "from": "PRINT-RPN-0001A",
-      "to": "UNTESTED"
-    },
-    {
-      "from": "PRINT-RPN-0001B",
-      "to": "MATCH"
-    },
-    {
-      "from": "PRINT-RPN-0001B",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "PRINT-RPN-0001B",
-      "to": "PRINT-DETERMINISM-0001"
-    },
-    {
-      "from": "PRINT-RPN-0001C",
-      "to": "MATCH"
-    },
-    {
-      "from": "PRINT-RPN-0001C",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "PRINT-RPN-0001C",
-      "to": "PRINT-DETERMINISM-0001"
-    },
-    {
-      "from": "PRINT-SIGNATURE-0001",
-      "to": "NO_ORACLE"
     },
     {
       "from": "PRINTC-SCOPE-RESTRUCT-0001",
@@ -4593,168 +4425,84 @@
       "to": "SCOPE-CAT0-0001"
     },
     {
-      "from": "RANGE-0001",
-      "to": "PCODE-0001"
-    },
-    {
       "from": "RANGEADDR-0001",
       "to": "ADDRESS-0001"
     },
     {
-      "from": "RULE-MULTICOLLAPSE-0001",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "RULE-MULTICOLLAPSE-0001",
-      "to": "OPBANK-0001"
-    },
-    {
-      "from": "RULE-MULTICOLLAPSE-0001",
-      "to": "TARGET_BEHAVIOR_MATCH"
-    },
-    {
-      "from": "SCOPELOCAL-RANGE-STATE-0001",
+      "from": "RANGEHINT-MERGE-ERROR-0001",
       "to": "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001"
     },
     {
+      "from": "RANGEHINT-MERGE-ERROR-0001",
+      "to": "RANGEMAP-COMMON-REFINEMENT-0001"
+    },
+    {
       "from": "SCOPELOCAL-RANGE-STATE-0001",
-      "to": "RANGEADDR-0001"
-    },
-    {
-      "from": "SCOPELOCAL-STATE-0001",
-      "to": "ADDRESS-0001"
-    },
-    {
-      "from": "SCOPELOCAL-STATE-0001",
-      "to": "COREACTION-SCOPE-CALLER-0001"
-    },
-    {
-      "from": "SCOPELOCAL-STATE-0001",
       "to": "DB-LOCALSCOPE-MAP-0001"
     },
     {
-      "from": "SCOPELOCAL-STATE-0001",
+      "from": "SCOPELOCAL-RANGE-STATE-0001",
       "to": "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001"
     },
     {
-      "from": "SCOPELOCAL-STATE-0001",
-      "to": "FUNCDATA-SCOPE-SYNC-0001"
-    },
-    {
-      "from": "SCOPELOCAL-STATE-0001",
-      "to": "MISMATCH"
-    },
-    {
-      "from": "SCOPELOCAL-STATE-0001",
-      "to": "PROTOSTORE-SYMBOL-0001"
-    },
-    {
-      "from": "SCOPELOCAL-STATE-0001",
+      "from": "SCOPELOCAL-RANGE-STATE-0001",
       "to": "RANGEADDR-0001"
     },
     {
-      "from": "SCOPELOCAL-STATE-0001",
-      "to": "SCOPELOCAL-RANGE-STATE-0001"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "MATCH"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "PARTIAL_MATCH"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "SLEIGH-0002B-COVERAGE"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "SLEIGH-0002C"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "SLEIGH-0002D"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "SLEIGH-0003"
-    },
-    {
-      "from": "SLEIGH-0002B",
-      "to": "UNTESTED"
-    },
-    {
       "from": "SLEIGH-0002B-COVERAGE",
       "to": "SLEIGH-0002B"
-    },
-    {
-      "from": "SLEIGH-0002B-COVERAGE",
-      "to": "SLEIGH-0002D"
     },
     {
       "from": "SLEIGH-0002C",
       "to": "SLEIGH-0002B"
     },
     {
-      "from": "SLEIGH-0002C",
-      "to": "SLEIGH-0003"
-    },
-    {
-      "from": "SLEIGH-0002D",
-      "to": "PIPE-REACH-0001"
-    },
-    {
-      "from": "SLEIGH-0002D",
-      "to": "SLEIGH-0002C"
-    },
-    {
       "from": "SLEIGH-0003",
       "to": "SLEIGH-0002B"
-    },
-    {
-      "from": "SLEIGH-0003",
-      "to": "SLEIGH-0002C"
-    },
-    {
-      "from": "SLEIGH-FLOW-0001",
-      "to": "ARCH-0001"
-    },
-    {
-      "from": "SLEIGH-FLOW-0001",
-      "to": "SLEIGH-0002B"
-    },
-    {
-      "from": "SLEIGH-FLOW-0001",
-      "to": "SLEIGH-0002C"
-    },
-    {
-      "from": "SLEIGH-FLOW-0001",
-      "to": "SLEIGH-0002D"
     },
     {
       "from": "SSA-0001",
       "to": "RANGE-0001"
     },
     {
-      "from": "SUBFLOW-OUTVN-UNWRAP-0001",
-      "to": "UPSTREAM-OUTVN-DEADWIRE-0001"
-    },
-    {
       "from": "TRANSLATE-DOCSTORE-UNIFY-0001",
       "to": "MARSHAL-XML-TEXT-0001"
-    },
-    {
-      "from": "TRANSLATE-DOCSTORE-UNIFY-0001",
-      "to": "SPACE-0001"
     },
     {
       "from": "TYPE-0001",
       "to": "SPACE-0001"
     },
     {
-      "from": "UPSTREAM-OUTVN-DEADWIRE-0001",
-      "to": "FUNC-GLOBRANGE-HANG-0001"
+      "from": "TYPEFACTORY-CHAR-REGISTER-0001",
+      "to": "CSPEC-TEXT-INGEST-0001"
+    },
+    {
+      "from": "TYPEFACTORY-CHAR-REGISTER-0001",
+      "to": "CSPEC-TYPEORG-STATE-0001"
+    },
+    {
+      "from": "TYPEFACTORY-CODEFLAGS-DECODE-0001",
+      "to": "TYPEFACTORY-LOCALTYPE-CACHE-0001"
+    },
+    {
+      "from": "TYPEFACTORY-POINTER-CANONICAL-0001",
+      "to": "TYPEFACTORY-LOCALTYPE-CACHE-0001"
+    },
+    {
+      "from": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+      "to": "CPOOL-TYPED-RECORD-0001"
+    },
+    {
+      "from": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+      "to": "TYPEFACTORY-LOCALTYPE-CACHE-0001"
+    },
+    {
+      "from": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+      "to": "TYPEFACTORY-POINTER-CANONICAL-0001"
+    },
+    {
+      "from": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+      "to": "USEROP-LOCALTYPE-METADATA-0001"
     },
     {
       "from": "USEROP-0001",
@@ -4765,14 +4513,6 @@
       "to": "OPBANK-0001"
     },
     {
-      "from": "VARMAP-FAKEINPUT-0001",
-      "to": "SCOPELOCAL-STATE-0001"
-    },
-    {
-      "from": "VARMAP-NAMING-0001",
-      "to": "FUNCDATA-SCOPE-SYNC-0001"
-    },
-    {
       "from": "VARNODE-0001",
       "to": "ADDRESS-0001"
     },
@@ -4781,17 +4521,17 @@
       "to": "SEQNUM-0001"
     },
     {
-      "from": "VARNODE-BANK-KEY-LIVE-0001",
-      "to": "FUNC-GLOBRANGE-HANG-0001"
-    },
-    {
-      "from": "VARNODE-BANK-KEY-LIVE-0001",
-      "to": "VARNODE-INPLACE-MUTATION-SITES-0001"
+      "from": "VARNODE-LOCALTYPE-RESOLUTION-0001",
+      "to": "TYPEOP-LOCALTYPE-DISPATCH-0001"
     }
   ],
   "todo_nodes": [
+    "ACTION-INFERTYPES-DISPATCH-0001",
+    "ACTION-LANEDIVIDE-0001",
     "ACTION-OPCODE-REDISPATCH-0001",
     "ACTION-TRACE-0001",
+    "ACTIONCSE-DEAD-0001",
+    "ACTIONTYPEINFER-VTYPE-0001",
     "ADDRESS-0001",
     "ANN-0001",
     "ANN-A",
@@ -4811,25 +4551,55 @@
     "ANN-O",
     "ANN-P",
     "ARCH-0001",
+    "ARCH-CONTEXT-TRACKED-0001",
+    "AUDIT-SYNTAX-SKIPLINE-0001",
     "BASE-EXPLICIT-GAPS-0001",
     "BLKACT-FINALSTRUCT-COUNT-0001",
     "BLOCK-0001",
     "BLOCK-ADDGRAPH-SEMANTICS-0001",
+    "BLOCK-CALCLOOP-0001",
+    "BLOCK-DOMROOT-0001",
     "BLOCK-ENTRY-0001",
     "BLOCK-FINDIRREDUCIBLE-0001",
+    "BLOCK-FLIPPATH-BIT-0001",
     "BLOCK-INDEX-ASSIGN-0001",
     "BLOCK-INDEX-WIRE-0001",
+    "BLOCK-RWLOCK-RECURSIVE-READ-0001",
+    "BLOCKBASIC-COVER-0001",
+    "BLOCKCOPY-FIDELITY-0001",
+    "BUILDCOPY-SNAPSHOT-DEADOP-0001",
     "CALLSPEC-0001",
+    "CALLSPEC-DRIVER-0001",
+    "CALLSPECS-0001",
+    "COMMENT-DB-EMITTED-0001",
+    "COMMENT-SORTER-ITERATORS-0001",
+    "COMMENT-SORTER-PRINTC-0001",
+    "COMMENT-WARNING-CODEC-0001",
     "COMP-0001",
     "CONDEXE-0001",
+    "CONDEXE-ACTION-0003",
+    "CONDEXE-CFG-0001",
+    "CONDEXE-CONSTBASE-FLIP-0001",
+    "CONDEXE-ERROR-0006",
+    "CONDEXE-FIXTURE-0007",
+    "CONDEXE-GAPS-2026-08-22",
+    "CONDEXE-HERITAGE-0004",
+    "CONDEXE-PULLBACK-0005",
+    "CONDEXE-TRUEOUT-0002",
+    "CONDEXE-TRUEOUT-RESIDUAL-0001",
     "CONSTSEQ-0001",
+    "COREACTION-GAPS-2026-08-22",
+    "COREACTION-RAWWIRE-DEADCODE-0001",
     "COREACTION-SCOPE-CALLER-0001",
     "COVER-0001",
+    "COVER-MIDBLOCK-FILL-0001",
     "COVER-REBUILD-COVERAGE-0002",
     "COVER-REBUILD-SELFLOCK-0001",
     "COVER-TWOPIECE-RESIDUAL-0001",
+    "CPOOL-TYPED-RECORD-0001",
     "CSPEC-DEFAULT-RETURN-0001",
     "CSPEC-GLOBAL-APPLY-0001",
+    "CSPEC-JUMPDEST-INSTSYM-0001",
     "CSPEC-MODELRULE-DECODE-0001",
     "CSPEC-PARAMMODEL-0001",
     "CSPEC-PCODEINJECT-CALLFIXUP-0001",
@@ -4839,55 +4609,122 @@
     "CSPEC-UNIVERSAL-CHILD-0001",
     "CURL-CSPEC-SNAPSHOT-0001",
     "DATABASE-0001",
+    "DATABASE-EQUATE-VALUE-REGISTRY-0001",
+    "DATABASE-EQUATE-VARMAP-BRIDGE-0001",
+    "DATABASE-EQUATE-XMLCONTENT-0001",
+    "DATATYPE-SPACEBASE-SPACEID-0001",
+    "DATATYPE-TYPEORDER-0001",
+    "DATATYPE-TYPEORDER-RESIDUAL-0001",
+    "DB-JOINPIECE-FOLD-0001",
     "DB-LOCALSCOPE-MAP-0001",
     "DBSYM-FLAGS",
     "DEADCODE-SELFLOOP-0001",
+    "DETERMINISM-GATE-CI-0006",
     "DIFF-BISECT-0001",
     "DIFF-REDUCE-HARDEN-0002",
     "DISPLAYFMT-0002",
     "DWARF-PROTO-0001",
+    "DWARF-TYPE-IMPORT-0001",
+    "DYNAMIC-GATHEROPS-ALIVE-0001",
     "EDGEFLAG-BIT7-COLLISION-0001",
+    "EXTERNAL-STUB-SUPPORT-0001",
     "FFI-0001",
+    "FLOAT-FMT-STRUCT-0001",
+    "FLOAT-OPINT2FLOAT-SIGN-0001",
+    "FLOAT-OPTRUNC-OOB-0001",
+    "FLOW-FIXTURE-API-ADAPT-0001",
     "FLOW-TARGET-BOUND-0001",
     "FSPEC-0001",
     "FSPEC-0002",
+    "FSPEC-MODEL-UNIFY-0001",
+    "FSPEC-PHASE0-RESIDUAL-0001",
+    "FSPEC-SPACEFILTER-0002",
+    "FSPEC-TRIALCMP-0003",
+    "FULL-CORPUS-0001",
     "FUNC-GLOBRANGE-HANG-0001",
     "FUNC-TYPEPROP-SETTLE-0001",
+    "FUNCDATA-CALCNZM-0001",
+    "FUNCDATA-CALCNZM-0002",
+    "FUNCDATA-LANEDLEG-WIRING-0001",
+    "FUNCDATA-LINKSYMBOL-TYPED-0001",
     "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
+    "FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001",
+    "FUNCDATA-NEWVARNODEOUT-SPACE-0001",
+    "FUNCDATA-REMOVE-UNREACHABLE-0001",
     "FUNCDATA-SCOPE-SYNC-0001",
     "FUNCDATA-SLOT-CAST-0001",
+    "FUNCPROTO-DECODE-0001",
     "FUNCPROTO-MODEL-BIND-0001",
     "FUNCTION-EVIDENCE-0001",
     "FUNCTION-ID-0001",
+    "FUNCTION-ID-MIGRATE-REKEY-0001",
+    "FUNCTION-LEDGER-REFRESH-0001",
     "GATE-0001",
     "GATE-REF-OPBEHAVIOR",
     "GATE-REF-PRINTC",
     "GATE-REF-RULEACTION",
     "GATE-SCANNER-0001",
+    "GETSTR-ZERODIFF-0001",
+    "GRAMMAR-SETFIELDS-SIZED-0001",
     "HANG-TRIAGE-0001",
+    "HELPF-NONFREE-NORMALIZE-0001",
     "HERITAGE-0001",
-    "HERITAGE-ADT-RENAME-0001",
     "HERITAGE-CALLGUARD-0001",
+    "HERITAGE-COLLECT-WRAPAROUND-0001",
     "HERITAGE-DRIVER-0001",
     "HERITAGE-DRIVER-SWITCH-0001",
+    "HERITAGE-FLAGFREE-SSA-0001",
     "HERITAGE-OWNERSHIP-0001",
+    "HERITAGE-RAW-OPINSERT-0001",
+    "HERITAGE-STACKOUT-LOCK-STUB-0001",
+    "HTTPD-ADDDESCEND-THROW-0001",
     "IMPACT-0001",
     "INJECT-0001",
     "IR-INVARIANT-0001",
     "JUMPTABLE-0001",
+    "JUMPTABLE-ASSISTED-0001",
+    "JUMPTABLE-CALCRANGE-0001",
+    "JUMPTABLE-EMULFN-0001",
+    "JUMPTABLE-GAPS-2026-08-22",
+    "JUMPTABLE-GUARDS-0001",
+    "JUMPTABLE-HYGIENE-0001",
+    "JUMPTABLE-MARKMODEL-0001",
+    "JUMPTABLE-OVERRIDE-0001",
+    "JUMPTABLE-PIPELINE-0001",
+    "JUMPTABLE-SELECTION-0001",
+    "JUMPTABLE-TABLEAPI-0001",
+    "LANEDIVIDE-INFRA-0001",
+    "LANEDIVIDE-INFRA-RESIDUAL-0001",
     "LEDGER-0001",
+    "MAKEREC-CALLIND-0001",
     "MARSHAL-ID-0001",
     "MARSHAL-PACKED-0001",
+    "MARSHAL-SPACE-ATTR-0001",
     "MARSHAL-XML-TEXT-0001",
-    "MATCH",
     "MEMSTATE-0001",
+    "MERGE-CLEAR-LIFECYCLE-0001",
+    "MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
+    "MERGE-COPYTRIMS-CACHE-0001",
     "MERGE-DATATYPE-SCALE-0001",
+    "MERGE-HIGHCOVER-UNION-0001",
+    "MERGE-INFLATE-TEST-STATE-0001",
+    "MERGE-MARKER-TRIM-0001",
+    "MERGE-MIXEDHIGH-0001",
+    "MERGE-PERSISTENCE-CHANNELS-0001",
     "MERGE-PERSISTENT-STATE-0001",
-    "MISMATCH",
+    "MERGE-PREEXISTING-GATES-0001",
+    "MERGE-PROTOPARTIAL-GROUP-0001",
     "MULTI-0001",
-    "NO_ORACLE",
+    "NONDETERM-DOMFRONT-0001",
+    "NONDETERM-DRIVERSNAP-0004",
+    "NONDETERM-MERGEGROUP-0003",
+    "NONDETERM-SYMLOOKUP-0002",
     "OP-INSERT-0001",
+    "OP-PREVIOUS-BLOCK-ORDER-0001",
+    "OP-PREVIOUSOP-ALIVELIST-0001",
+    "OP-SETALLINPUT-TRUNCATE-0001",
     "OPBANK-0001",
+    "OPBEHAVIOR-SRIGHT-SIZEMASK-0001",
     "OPCODE-0001",
     "OPTIONS-0001",
     "ORACLE-0001",
@@ -4900,12 +4737,12 @@
     "ORACLE-REGISTRY-ENFORCE-0001",
     "ORACLE-RESULT-0001",
     "ORACLE-RUNNER-MIGRATE-0001",
+    "ORACLE-RUNNER-PIN-0001",
     "PARAM-BIND-0001",
     "PARAM-RECOVERY-0001",
     "PARSECONFIG-RULE-PAIRS-0001",
     "PARSER-0001",
     "PARSER-0002",
-    "PARTIAL_MATCH",
     "PATHMELD-0001",
     "PCODE-0001",
     "PCODE-0002",
@@ -4922,12 +4759,26 @@
     "PIPE-ACTION-COUNT-0001B",
     "PIPE-ACTION-COUNT-0001C",
     "PIPE-BREAK-0001",
+    "PIPE-CLEANUP-COUNT-ZERO-0001",
+    "PIPE-CPU-EXTRA-POOL-RULES-0001",
+    "PIPE-DEINDIRECT-CHANGE-0001",
+    "PIPE-DERIVED-TREE-0001",
+    "PIPE-HEAD-FLAT-ACTIONS-0001",
     "PIPE-LIFECYCLE-0001",
+    "PIPE-MAINLOOP-REPEATAPPLY-0001",
     "PIPE-MERGETYPE-ORDER-0001",
+    "PIPE-ORDER-EMPTYELSE-0001",
     "PIPE-POOL-0001",
+    "PIPE-POOL-LOCAL-RULES-0001",
+    "PIPE-POOL-RULE-BEHAVIOR-0001",
     "PIPE-REACH-0001",
     "PIPE-RESTART-0001",
+    "PIPE-RULE-CLONE-FILTER-0001",
+    "PIPE-RULE-RAW-NAMES-0001",
     "PIPE-SNAPSHOT-0001",
+    "PIPE-STACKSOLVER-WRITEBACK-0001",
+    "PIPE-STACKSTALL-COUNT-0001",
+    "PIPE-STALL-SHAPE-0001",
     "PIPE-TREE-0001",
     "PRETTY-0001",
     "PRINT-DETERMINISM-0001",
@@ -4938,19 +4789,46 @@
     "PRINT-RPN-0001C",
     "PRINT-SIGNATURE-0001",
     "PRINTC-0001",
+    "PRINTC-BINARY-RPN-0001",
+    "PRINTC-CAST-EXPR-0001",
+    "PRINTC-FORMAT-0001",
+    "PRINTC-INPUTREG-DEADSTORE-0001",
+    "PRINTC-LEGACY-DECL-DUP-0001",
     "PRINTC-SCOPE-RESTRUCT-0001",
+    "PRINTC-SUBPIECE-FIELDEXTRACT-0001",
+    "PRINTC-SYMBOL-DECL-0001",
+    "PRINTC-UNLINKED-REF-0001",
+    "PRINTC-WARN-EMIT-0001",
     "PROTO-EFFECT-MODEL-0001",
     "PROTOSTORE-SYMBOL-0001",
     "RANGE-0001",
+    "RANGE-PULLBACK-SLESS-0001",
     "RANGEADDR-0001",
+    "RANGEHINT-MERGE-ERROR-0001",
+    "RANGEMAP-COMMON-REFINEMENT-0001",
     "REDUCE-0001",
+    "RULE-ADDUNSIGNED-TYPEPRECOND-0001",
     "RULE-COLLECTTERMS-0001",
+    "RULE-GAPS-2026-08-22",
     "RULE-MULTICOLLAPSE-0001",
-    "RULE_ONCEPERFUNC",
+    "RULE-MULTICOLLAPSE-ABORT-0001",
+    "RULE-PROPAGATECOPY-DRIFT-0001",
+    "RULE-PROPCOPY-BOOKKEEP-0001",
+    "RULE-RSPPHI-FOLD-0001",
+    "RULE-SUBCANCEL-RWLOCK-0001",
+    "RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001",
+    "RUN-NONDETERM-0001",
     "RUNTIME-TIMEOUT-0001",
     "SCOPE-CAT0-0001",
+    "SCOPE-FINDOVERLAP-DYNAMIC-0001",
+    "SCOPE-FINDOVERLAP-KEY-0001",
+    "SCOPE-USEPOINT-WARNING-0001",
+    "SCOPELOCAL-0001",
+    "SCOPELOCAL-QUERY-0001",
+    "SCOPELOCAL-QUERY-RESIDUAL-0002",
     "SCOPELOCAL-RANGE-STATE-0001",
     "SCOPELOCAL-STATE-0001",
+    "SCOPELOCAL-WINDOW-ERROR-0001",
     "SEQNUM-0001",
     "SLEIGH-0001",
     "SLEIGH-0002",
@@ -4963,24 +4841,55 @@
     "SLEIGH-FLOW-0001",
     "SLEIGH-FLOW-REL-0001",
     "SPACE-0001",
+    "SPACE-IOP-PRINTRAW-0001",
+    "SPACE-PRINTRAW-SPECIAL-0001",
+    "SPACE-PRINTRAW-WORDSIZE-0001",
     "SSA-0001",
     "SUBFLOW-OUTVN-UNWRAP-0001",
-    "SWITCH_OUT",
-    "TARGET_BEHAVIOR_MATCH",
+    "SUBFLOW-SPLITFLOW-SIGABRT-0001",
+    "TIMEOUT-8FN-0001",
+    "TRANSFORM-CONSTANT-IOP-SPACE-0001",
+    "TRANSFORM-MULTIEQUAL-INSERT-0001",
+    "TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001",
     "TRANSLATE-DOCSTORE-UNIFY-0001",
     "TYPE-0001",
     "TYPE-RECOVERY-EXCEEDED-0001",
     "TYPE-UNKNOWN-0001",
-    "UNTESTED",
+    "TYPE-WIRING-0001",
+    "TYPED-DECL-GAP-0001",
+    "TYPEFACTORY-ARRAYSIZE-ALIGN-0001",
+    "TYPEFACTORY-CHAR-REGISTER-0001",
+    "TYPEFACTORY-CODEFLAGS-DECODE-0001",
+    "TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+    "TYPEFACTORY-DECODE-SIDENOTES-0001",
+    "TYPEFACTORY-LOCALTYPE-CACHE-0001",
+    "TYPEFACTORY-NEEDSRES-SINGLEFIELD-0001",
+    "TYPEFACTORY-POINTER-CANONICAL-0001",
+    "TYPEFACTORY-SUBMETA-RECLASS-0001",
+    "TYPEFACTORY-UNDEFNAME-0001",
+    "TYPEOP-LOCALTYPE-DISPATCH-0001",
+    "TYPEOP-PROPAGATE-BYPASS-0001",
+    "TYPEUNION-CACHE-READSIDE-0001",
+    "UNKNOWN-PROTOMODEL-WARN-EMIT-0001",
     "UPSTREAM-OUTVN-DEADWIRE-0001",
     "USEROP-0001",
+    "USEROP-LOCALTYPE-METADATA-0001",
     "VARIABLE-0001",
+    "VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001",
     "VARMAP-FAKEINPUT-0001",
     "VARMAP-GATHEROFFSET-0001",
     "VARMAP-NAMING-0001",
     "VARNODE-0001",
+    "VARNODE-ADDDESCEND-THROW-0001",
     "VARNODE-BANK-KEY-LIVE-0001",
+    "VARNODE-COPYSHADOW-ARC-0001",
+    "VARNODE-COPYSYMBOL-EQUATE-0001",
+    "VARNODE-COPYSYMBOL-FIELDS-0001",
+    "VARNODE-COPYSYMBOL-HIGHBRANCH-0001",
     "VARNODE-INIT-0001",
-    "VARNODE-INPLACE-MUTATION-SITES-0001"
+    "VARNODE-INPLACE-MUTATION-SITES-0001",
+    "VARNODE-LOCALTYPE-RESOLUTION-0001",
+    "VARNODE-SETSYMBOLENTRY-HIGHLEG-0001",
+    "VARNODE-UPDATETYPE-HIGHDIRTY-0001"
   ]
 }
