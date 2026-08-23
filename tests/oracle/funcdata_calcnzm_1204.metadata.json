@@ -1,0 +1,136 @@
+{
+ "schema_version": 2,
+ "fixture_id": "FUNCDATA-CALCNZM-0001",
+ "status_note": "All six projections (unwritten-input initialization incl. the spacebase ~0xff alignment, INT_AND convergence + COPY chain, PIECE concatenation, the sc6 y/64 INT_DIV/INT_REM shapes, and the MULTIEQUAL loop-clip phase-2 fixed points for both an OR-loop and an AND-loop) are byte-identical MATCH against the locked 12.0.4 oracle. The rewritten Rugra calc_nz_mask (src/funcdata.rs, commit d752ce0) is the complete two-phase DFS+worklist port with the full getNZMaskLocal switch. Outside-fixture residuals stay registered: op.rs PcodeOp::get_nz_mask_local remains divergent and unused (FUNCDATA-CALCNZM-0002), and varnode.rs Varnode::get_nz_mask still returns the pre-wiring conservative approximation instead of the varnode.hh:231 field read (FUNCDATA-CALCNZM-0003).",
+ "decisive_semantics": {
+  "reference_output_parameters": "calcNZMask(void) mutates Varnode::nzm in place through the shared Varnode objects; getNZMaskLocal(bool cliploop) is const, reads output/inrefs/parent only. Rugra mirrors with outvn.write().nzm assignments and a read-only &PcodeOpRef helper (Funcdata::pcode_op_nz_mask_local).",
+  "loop_bounds_traversal_order": "phase 1 iterates beginOpAlive..endOpAlive (== obank alive order, mirrored by alivelist.clone()), inner DFS advances slot 0..numInput and pops when slot >= numInput; MULTIEQUAL looping edges are clipped via parent->isLoopIn(slot) in both phase 1 and the cliploop getNZMaskLocal arm; phase 2 seeds every MULTIEQUAL in alive order, pops from the back, and re-pushes vn->beginDescend() order descendants on change. Rugra mirrors each order exactly.",
+  "counter_accumulator_lifecycle": "no counters; nzm is a value state where phase 2 rewrites only when nzmask != vn->nzm; INT_MULT derives w1/w2/total bit widths from mostsig/leastsigbit_set of the input masks with the sa >= 8*size zero guard. Rugra mirrors both.",
+  "sorting_comparison_keys": "no sorted containers anywhere in calcNZMask/getNZMaskLocal; the only comparisons are mask equality/inequality and the != fullmask / != 0 short-circuits in the OR/AND/ADD arms. Rugra mirrors."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+ "compiler_spec": {
+  "id": "fixture",
+  "note": "synthetic prototype fixture: extrapop=0, empty input/output (cf. funcdata_op_insert_input_1204)"
+ },
+ "analysis_options": "direct Funcdata::calcNZMask (funcdata_varnode.cc:856-926) on synthetic Funcdata objects; ops built via newOp/opSetOpcode/newUniqueOut/opSetInput/opInsertEnd/opInsertBegin; loop blocks via newBlockBasic+addEdge+addLoopEdge (C++) / create_new_block+add_edge+set_out_edge_flag_mirrored (Rugra); no Actions run",
+ "rugra_source": {
+  "base_commit": "d752ce03f383b19d8c4acecc215104b6c9059109",
+  "base_tree": "23404ac9af63aa0c7e2d656a07f76b6499e0c6db",
+  "base_src_tree": "67f91f46f90257042bb8e840bc47c3f57ed5f45f",
+  "base_funcdata_blob": "4ed52dea0926de654dc5097c76deaa21f9d58346",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "overlays": []
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "e8e4f930eb2791732995aa7613b70c676f2095cde2580706db6c3d7a8bae8e4d",
+  "rust_fixture_sha256": "5d819e8437c8f9148f315fe398afe3532b361009a93d4f1213a9e112eaf18041",
+  "runner_sha256": "7dff3ef300ca13f28eb65324b0242fb37bda6b592ac047283b2be9d229c836e1"
+ },
+ "input_manifest": {
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+  "compiler_spec": {
+   "id": "fixture",
+   "note": "synthetic prototype fixture: extrapop=0, empty input/output (cf. funcdata_op_insert_input_1204)"
+  },
+  "analysis_options": "direct Funcdata::calcNZMask (funcdata_varnode.cc:856-926) on synthetic Funcdata objects; ops built via newOp/opSetOpcode/newUniqueOut/opSetInput/opInsertEnd/opInsertBegin; loop blocks via newBlockBasic+addEdge+addLoopEdge (C++) / create_new_block+add_edge+set_out_edge_flag_mirrored (Rugra); no Actions run",
+  "cases": [
+   {
+    "key": "init",
+    "description": "phase-1 unwritten-input initialization (funcdata_varnode.cc:887-896): constant nzm=offset (0x3f0), unwritten register input nzm=calc_mask(4)=0xffffffff, spacebase input nzm=calc_mask(8)&~0xff=0xffffffffffffff00 with sbflag=1 (marked by Funcdata::spacebase), plus COPY propagation of all three masks (op.cc:577-580)"
+   },
+   {
+    "key": "andcopy",
+    "description": "INT_AND mask convergence (op.cc:590-594): EDI&0x3f0 -> 0x3f0, propagated unchanged through a two-deep COPY chain (phase-1 DFS post-order assigns the AND output before the copies pop)"
+   },
+   {
+    "key": "piece",
+    "description": "PIECE concatenation (op.cc:693-698): hi mask 0x1122 shifted up by the 2-byte low input size OR lo mask 0x3344 -> 0x11223344"
+   },
+   {
+    "key": "div",
+    "description": "sc6 shapes: y1=EDI&0xffff=0xffff; d64=y1/64=coveringmask(0xffff)>>mostsigbit_set(64)=0x3ff; dfull=EDI/64=0x3ffffff; dodd=EDI/3=0x7fffffff; dvar=EDI/ESI (non-const denom, no shift term)=0xffffffff; rem=EDI%0x100=coveringmask(0xff)=0xff (op.cc:648-663)"
+   },
+   {
+    "key": "loopor",
+    "description": "MULTIEQUAL loop clipping + phase-2 worklist: phi(const 0xffff, INT_LEFT(phi,8)) in a self-loop block (addLoopEdge) prints isLoopIn=0,1; clipped phase-1 starts at 0xffff then phase-2 (getNZMaskLocal(false)) converges phi=0xffffffff shift=0xffffff00"
+   },
+   {
+    "key": "loopand",
+    "description": "clip precision observable: phi(const 0xff00, phi&0xf0f0) converges clipped to (0xff00,0xf000) with the loop-edge label vs (0xfff0,0xf0f0) for the identical unlabeled graph — clipping starts phase 2 from a lower seed and INT_AND prunes to a strictly tighter fixed point"
+   }
+  ],
+  "sha256": "6332736f32377a40ae82ea9c5322bf40c4bc08f871323e2725b991882843aa8e"
+ },
+ "coverage": {
+  "init_inputs": {
+   "status": "MATCH",
+   "covers": "init line: const offset init 0x3f0, register calc_mask 0xffffffff, spacebase 0xffffffffffffff00 + sbflag, COPY outs triple",
+   "residual_todo_ids": []
+  },
+  "and_copy_chain": {
+   "status": "MATCH",
+   "covers": "andcopy line: INT_AND 0x3f0 convergence and unchanged COPY-chain propagation",
+   "residual_todo_ids": []
+  },
+  "piece_concat": {
+   "status": "MATCH",
+   "covers": "piece line: PIECE 0x11223344",
+   "residual_todo_ids": []
+  },
+  "sc6_div_shapes": {
+   "status": "MATCH",
+   "covers": "div line: y1=0xffff d64=0x3ff dfull=0x3ffffff dodd=0x7fffffff dvar=0xffffffff rem=0xff (op.cc:648-663)",
+   "residual_todo_ids": []
+  },
+  "multiequal_loop_clip": {
+   "status": "MATCH",
+   "covers": "loopor+loopand lines: isLoopIn flags, OR-loop fixed point 0xffffffff/0xffffff00, AND-loop clip precision 0xff00/0xf000 vs unlabeled 0xfff0/0xf0f0",
+   "residual_todo_ids": []
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "MATCH",
+ "residual_todo_ids": [
+  "FUNCDATA-CALCNZM-0002",
+  "FUNCDATA-CALCNZM-0003"
+ ],
+ "residual_union": [
+  {
+   "todo_id": "FUNCDATA-CALCNZM-0002",
+   "status": "UNTESTED",
+   "detail": "op.rs PcodeOp::get_nz_mask_local (op.rs:1175) predates the port: ignores cliploop, lacks INT_DIV/INT_REM/POPCOUNT/LZCOUNT/INT_MULT/CALL arms, invents INT_NEGATE/INT_2COMP arms, and is called by no production path. The complete oracle switch lives in funcdata.rs Funcdata::pcode_op_nz_mask_local. Consolidation onto the PcodeOp method requires an op.rs lease."
+  },
+  {
+   "todo_id": "FUNCDATA-CALCNZM-0003",
+   "status": "MISMATCH",
+   "detail": "varnode.rs Varnode::get_nz_mask (varnode.rs:1466) returns a conservative approximation (constants -> offset, others -> calc_mask(size)) instead of the varnode.hh:231 raw field read; its doc comment wrongly attributes nzm maintenance to Heritage/Cover (it is calcNZMask). Callers outside calc_nz_mask still observe the approximation; requires a varnode.rs lease."
+  }
+ ],
+ "expected_results": {
+  "ghidra_stdout_sha256": "58af0f903dbcf0a6d95e0a184e5998858c8dcf555de19dd96afd005a2e38aba6",
+  "rugra_stdout_sha256": "58af0f903dbcf0a6d95e0a184e5998858c8dcf555de19dd96afd005a2e38aba6",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "observation_prefixes": [
+   "init",
+   "andcopy",
+   "piece",
+   "div",
+   "loopor",
+   "loopand"
+  ]
+ }
+}
