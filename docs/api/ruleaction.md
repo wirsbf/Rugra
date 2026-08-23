@@ -149,9 +149,15 @@ Base-class default: `(1..74).filter_map(OpCode::from_i32)` — all live opcodes
 
 ### `pub struct RuleZextEliminate`
 
-Rule for eliminating redundant zero-extensions
+Eliminate INT_ZEXT in comparisons: `zext(V) == c => V == c`
 
-Corresponds to Ghidra's `RuleZextEliminate`
+Corresponds to Ghidra's `RuleZextEliminate` (ruleaction.cc:2471-2526, RULE-BEHAVIORAL-FIVE-0001 M1 重写)
+- `get_opcodes`：`[INT_EQUAL, INT_NOTEQUAL, INT_LESS, INT_LESSEQUAL]`（cc:2479-2485，dispatch 的是比较 op，不是 zext）
+- `apply_op`：比较的一侧由 INT_ZEXT 写出、另一侧是常量、zext 输出 loneDescend、zext 输入 heritage-known、
+  且 `val >> (8*smallsize) == 0`（常量在小尺寸下无高位损失，cc:2516）时，把比较输入替换为
+  `zext->getIn(0)` 与 resize 后的常量（`copySymbolIfValid` 继承符号，cc:2517-2521）。
+  zext 在 slot 0/1 均可（cc:2501-2506 swap）。旧实现 dispatch INT_ZEXT 做 same-size zext→COPY，
+  属 Ghidra 此 Rule 从不执行的算法，已删除。
 
 ### `pub fn new() -> Self`
 
@@ -182,10 +188,19 @@ Simplifies: `x + 0 → x`, `x - 0 → x`, `x * 1 → x`,
 
 ### `pub struct RuleShiftBitops`
 
-Rule for simplifying shift-by-zero operations
+Shifting away all non-zero bits of one side of a logical/arithmetic op
 
-Corresponds to Ghidra's shift simplification rules.
-Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
+Corresponds to Ghidra's `RuleShiftBitops` (ruleaction.cc:476-566, RULE-BEHAVIORAL-FIVE-0001 M4 重写)
+- `get_opcodes`：`[INT_LEFT, INT_RIGHT, SUBPIECE, INT_MULT]`（cc:481-488；旧注册含 INT_SRIGHT 且只做
+  shift-by-0→COPY，已对齐）。shift-by-0→COPY 是 RuleTrivialShift（cc:3496-3522）的职责。
+- `apply_op`：常量移位（LEFT/RIGHT 直接取值、SUBPIECE 按 `offset*8` 字节、MULT 按
+  `leastsigbit_set`，cc:501-522）作用于 INT_AND/OR/XOR（任方向）或 INT_ADD/INT_MULT（仅左移，
+  cc:525-536）的结果时，逐 bitop 输入检查 `getNZMask << sa & calc_mask(outsize)`，某侧可能非零位
+  全被移走（cc:539-548）则：AND/MULT → 输入0 换 `#0`（结果必为 0）；ADD/XOR/OR → 输入0 换另一侧
+  （该侧贡献为零，需 heritage-known，cc:549-564）。
+- 本模块新增 `pcode_left`/`pcode_right`（address.hh:505/514）与 `nz_mask_exact`（varnode.hh:231
+  `getNZMask` 的 oracle 精确语义：nzm 仅在构造函数设置 — 常量=值、其他=~0，从不被 refine；
+  `Varnode::get_nz_mask` 的 calc_mask 近似在 `sa >= size*8` 时会误判，故此 Rule 内联精确版本）。
 
 ### `pub fn new() -> Self`
 
@@ -304,9 +319,13 @@ INT_LESSEQUAL 与极值常量的简化：
 #### `pub struct RuleTermOrder`（ruleaction.cc:645-674）
 交换交换律 op 的输入，使常量在 slot 1（`INT_ADD(5,V) => INT_ADD(V,5)`），消除表达式组合爆炸。
 
-#### `pub struct RuleShift2Mult`（ruleaction.cc:3720-3771）
-将参与算术（INT_ADD/SUB/MULT）或其输入由算术定义的常量移位转为乘法：
-`(V << c) => V * (1<<c)`，c<32。
+#### `pub struct RuleShift2Mult`（ruleaction.cc:3704-3751）
+将参与算术（INT_ADD/SUB/MULT）或其输入由算术定义的常量左移转为乘法：
+`(V << c) => V * (1<<c)`，c<32。**oplist 仅 INT_LEFT**（cc:3708-3712；
+RULE-BEHAVIORAL-FIVE-0001 M5 修复：旧注册含 INT_RIGHT，会把 `V >> c` 错改写为
+`V * 2^c`，属 Ghidra 不可能产生的语义反转，已移除）。
+
+测试：ruleaction::tests +2（oplist 仅 LEFT、INT_RIGHT 不 dispatch）。
 
 测试：ruleaction::tests +4（TermOrder 交换/已序不变；Shift2Mult 喂入 ADD 转乘/非算术不变）。
 
@@ -332,7 +351,10 @@ INT_LESSEQUAL 与极值常量的简化：
 - `mostsigbit_set(val)` — address.cc:735，最高有效位索引
 
 #### `Varnode::get_nz_mask()`（varnode.hh:231）
-非零掩码。Ghidra 由 Heritage/Cover 维护；Rugra 当前保守近似（常量=值，其他=calc_mask(size)）。
+非零掩码。oracle 事实：`nzm` **仅在构造函数设置**（varnode.cc:590-606：常量=offset、其他=~0），
+之后从不被 refine（锁定 cpp 全量 grep 验证）。Rugra 的近似实现（常量=值，其他=calc_mask(size)）
+在 `sa >= size*8` 时与 oracle 有偏差；RuleShiftBitops 内使用 `nz_mask_exact`（本模块）读取
+oracle 精确值。
 
 #### `pub struct RuleSlessToLess`（ruleaction.cc:2548-2573）
 当两操作数的 NZMask 表明符号位为 0（均为已知非负）时，将 INT_SLESS→INT_LESS、INT_SLESSEQUAL→INT_LESSEQUAL。
@@ -839,14 +861,21 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 
 ## 2026-06-27（续 22）：符号提取归一化规则
 
-- **RuleSignForm**：完整移植 ruleaction.cc:8449-8492。`sub(sext(V), c) s>> n => V s>> (8*|V|-1)`（归一化符号位提取）。
-- **RuleSignForm2**：完整移植 ruleaction.cc:8494-8570。`sub(sext(V) * small, c) s>> 31 => V s>> 31`（当 small 是小的正整数且不溢出到符号位时）。
+- **RuleSignForm**：完整移植 ruleaction.cc:8445-8474（RULE-BEHAVIORAL-FIVE-0001 M2 重写）。
+  **dispatch SUBPIECE**（cc:8447-8451；旧实现 dispatch INT_SRIGHT 是错误触发模式）：
+  `sub(sext(V), c) => V s>> (8*|V|-1)`，要求 c >= |V|（cc:8465-8466）且 V 非 free；
+  移位常量为 4 字节（cc:8471）。
+- **RuleSignForm2**：完整移植 ruleaction.cc:8476-8531。`sub(sext(V) * small, c) s>> 31 => V s>> 31`（当 small 是小的正整数且不溢出到符号位时）。
 
 ## 2026-06-27（续 23）：除法/移位优化规则
 
 - **RulePositiveDiv**：完整移植 ruleaction.cc:7803-7830。当两个输入保证非负时，将 INT_SDIV→INT_DIV / INT_SREM→INT_REM（检查 NZMask 符号位）。
 - **RuleDoubleArithShift**：完整移植 ruleaction.cc:1930-1964。`(V s>> c) s>> d => V s>> (c+d)`（合并连续有符号右移，饱和到最大移位）。
-- **RuleSignNearMult**：完整移植 ruleaction.cc:8543-8610。将近乘法形式转换为有符号除法：`(X + ((X s>> n-1) >> k)) * c => (X s/ 2^n) * 2^n`，其中 c = 2^n。
+- **RuleSignNearMult**：完整移植 ruleaction.cc:8533-8592（RULE-BEHAVIORAL-FIVE-0001 M3 重写）。
+  **dispatch INT_AND**（cc:8535-8539；旧实现 dispatch INT_MULT 改写已存在的乘法，结构映射倒置）：
+  `(V + (V s>> (8|V|-1)) >> (8|V|-n)) & (-1<<n) => (V s/ 2^n) * 2^n`。mask 校验
+  `(calc_mask<<n)&calc_mask == AND 常量`（cc:8567-8569）后，插入 `INT_SDIV(V, 2^n)` 并把 AND 改写为
+  `INT_MULT(sdiv, 2^n)`（cc:8579-8591）。
 
 ## 2026-06-27（续 24）：浮点转换简化
 
