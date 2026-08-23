@@ -16,8 +16,15 @@
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
   },
   "architecture": "fixture:universal-action-database",
-  "compiler_spec": {"id": "none", "model": "fixture"},
-  "analysis_options": {"reset_defaults": true, "root": "decompile", "extra_pool_rules": []},
+  "compiler_spec": {
+    "id": "none",
+    "model": "fixture"
+  },
+  "analysis_options": {
+    "reset_defaults": true,
+    "root": "decompile",
+    "extra_pool_rules": []
+  },
   "rugra_source": {
     "base_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
     "base_tree": "fa3a6d4aeb186599eb00895700b45b47d6862fba",
@@ -31,8 +38,8 @@
   "comparand": {
     "cpp_fixture_sha256": "4dfb916fb7e38d85f677944f87209c6da3a1e268f5cd5129cc16e38c54696d79",
     "rust_fixture_sha256": "4f5120e58c43dfbfc1081ef15070c742ce0d67669dc304e52271b947624769ee",
-    "action_overlay_sha256": "af5a393fbdf54e29ce81f7356f8cf2b0c8b46adf1156a55b57a972cca8d4c901",
-    "coreaction_overlay_sha256": "df76ac0c2987070882532b915314fbb2ef4384121927ee5b82914fdd44311dde",
+    "action_overlay_sha256": "f8d932b75a7cc84747b2e1e7f4c8bdfceaffcbc5ac8a187dcba24b2447c854e9",
+    "coreaction_overlay_sha256": "3cec83f038c9dccb8e06afda0ccd9ebd80f859f4397ff9027e25937e05f0c310",
     "runner_sha256": "2a8c1900fb936baf669c631226907e9a0a22ab58c568d5c38f0bc7f867c723a3"
   },
   "input_manifest": {
@@ -57,7 +64,11 @@
   },
   "observation_schema": {
     "header": "schema=1|fixture=PIPE-DERIVED-TREE-0001|oracle=<commit>",
-    "root": ["root_key=<actionmap key>", "root_name=<cloned ActionRestartGroup name>", "root_flags=<rule flags>"],
+    "root": [
+      "root_key=<actionmap key>",
+      "root_name=<cloned ActionRestartGroup name>",
+      "root_flags=<rule flags>"
+    ],
     "node": "node|ordinal=<pre-order index>|path=<colon-joined names>|kind=<group|pool|leaf>|name=<getName()>|basegroup=<getGroup()>|flags=<rule flags>",
     "trailer": "count=<node total>"
   },
@@ -70,17 +81,23 @@
     "rule_level_clone_filtering": {
       "status": "NO_ORACLE",
       "covers": "Rule-level clone survival inside ActionPool for non-decompile grouplists (jumptable/normalize/paramid/register/firstpass roots) has no oracle observation in this fixture; the decompile grouplist contains every registered rule group so the default root is unaffected.",
-      "residual_todo_ids": ["PIPE-RULE-CLONE-FILTER-0001"]
+      "residual_todo_ids": [
+        "PIPE-RULE-CLONE-FILTER-0001"
+      ]
     },
     "pool_rule_membership": {
       "status": "UNTESTED",
       "covers": "oppool1/oppool2/cleanup rule lists still contain Rugra-local rules with no oracle counterpart (RuleSextEliminate/RuleEquality in oppool1, a second RuleTrivialArith in cleanup); Action-node DFS does not observe rule membership.",
-      "residual_todo_ids": ["PIPE-POOL-LOCAL-RULES-0001"]
+      "residual_todo_ids": [
+        "PIPE-POOL-LOCAL-RULES-0001"
+      ]
     },
     "action_apply_bodies": {
       "status": "UNTESTED",
       "covers": "Node bodies beyond tree identity (apply behavior, count/lcount propagation, stackstall fixed-point feedback, LaneDivide stub no-op) are outside this fixture's domain.",
-      "residual_todo_ids": ["PIPE-STACKSTALL-COUNT-0001"]
+      "residual_todo_ids": [
+        "PIPE-STACKSTALL-COUNT-0001"
+      ]
     }
   },
   "residual_todo_ids": [
