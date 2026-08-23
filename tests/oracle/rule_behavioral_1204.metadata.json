@@ -1,0 +1,218 @@
+{
+  "schema_version": 2,
+  "fixture_id": "RULE-BEHAVIORAL-FIVE-0001",
+  "status_note": "Behavioral five-rule fixture (lease RULE-BEHAVIORAL-FIVE-0001, RULE_GAPS_2026-08-22.md section 2 M1-M5; reworked after independent review disproved the constructor-only nzm premise). RuleZextEliminate/RuleSignForm/RuleSignNearMult/RuleShiftBitops/RuleShift2Mult applyOp driven through ActionPool-equivalent dispatch (applyOp runs only when the op opcode is in getOpList, action.cc:748-750) on synthetic op chains in a real BfdArchitecture Funcdata. Each rule: >=2 positives (oracle performs the transform), >=1 guard negative, >=1 dispatch-refused negative pinning the opcode the old Rugra registration wrongly transformed. RuleShiftBitops additionally runs Funcdata::calcNZMask (funcdata_varnode.cc:856-927) over the assembled chains before applyOp on BOTH sides, so the written-input sparse-nzm positives observe the propagated masks the main pipeline reads (ActionNonzeroMask coreaction.cc:5507 precedes the rule pools). Scope: applyOp-level IR projection; pipeline convergence is covered by the curl E2E differential in the code commits, not this fixture.",
+  "decisive_semantics": {
+    "reference_output_parameters": "op/fd reference mutation per rule: ZextEliminate newConstant(smallsize,val)+copySymbolIfValid(vn2)+opSetInput(zextslot then otherslot) (ruleaction.cc:2517-2520); SignForm opSetInput(a,0)/opSetInput(newConstant(4,n),1)/opSetOpcode(SRIGHT) fixed order (cc:8469-8472); SignNearMult newOp(2,op->getAddr())+newUniqueOut(x->getSize())+opInsertBefore(newdiv,op), AND op becomes INT_MULT(divvn,pow) (cc:8579-8591); ShiftBitops AND/MULT->newConstant(vn->getSize(),0) at slot 0, ADD/XOR/OR->bitop->getIn(1-i) at slot 0 (cc:549-564); Shift2Mult opSetInput(const,1)+opSetOpcode(MULT) (cc:3747-3750).",
+    "loop_bounds_traversal_order": "ZextEliminate tries slot 0 then swaps on a slot-1 zext (cc:2497-2508); SignNearMult scans ADD inputs i=0..1 for INT_RIGHT with constant amount, non-const amount continues to the other slot (cc:8551-8560); ShiftBitops scans bitop inputs i=0..numInput()-1 and breaks at the FIRST input whose shifted nzm & output mask == 0 (cc:539-548), i selects bitop->getIn(1-i) for ADD/XOR/OR; Shift2Mult checks op->getIn(0)->getDef() first, then walks the output's descendants in order until an ADD/SUB/MULT is found (cc:3732-3744); dispatch order is the case list order.",
+    "counter_accumulator_lifecycle": "SignNearMult n = RIGHT amount then n = size*8 - n, both must stay >0, pow = 1<<n (cc:8563-8566/8579); ShiftBitops sa = LEFT/RIGHT offset, SUBPIECE offset*8, INT_MULT leastsigbit_set (-1 rejects), leftshift flag per opcode (cc:501-522); ZextEliminate smallsize = zext->getIn(0)->getSize() and the val>>(8*smallsize)==0 zero-loss check (cc:2514-2516); no counters persist across applyOp calls; nzm lifecycle: constructor init + per-mainloop calcNZMask refinement (ActionNonzeroMask coreaction.cc:5507), never reset mid-rule.",
+    "sorting_comparison_keys": "Dispatch key is exact opcode membership in getOpList (zexteliminate 11,12,15,16; signform 63; signnearmult 27; shiftbitops 29,30,63,32; shift2mult 29) matching action.cc:748-750 perop buckets; guard comparisons: loneDescend==op identity (cc:2513), mask==(calc_mask<<n)&calc_mask value equality (cc:8567-8569), sgnvn->getDef()->code()==INT_SRIGHT with sshiftop->getIn(0)==x pointer identity and amount==8*|x|-1 (cc:8570-8577), c>=a->getSize() for SignForm (cc:8465-8466), nzm swallow comparison vs calc_mask(op->getOut()->getSize()) for ShiftBitops (cc:539-546) where getNZMask (varnode.hh:231) returns the nzm field: constructor-initialized (varnode.cc:590-606, constants=offset, else ~0) and forward-refined by Funcdata::calcNZMask (funcdata_varnode.cc:856-927: DFS pop assignment via PcodeOp::getNZMaskLocal cc:874, non-written inputs cc:890-894, MULTIEQUAL worklist cc:920-921), which ActionNonzeroMask (coreaction.cc:5507) runs before the rule pools each mainloop."
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec"
+  },
+  "analysis_options": {},
+  "rugra_source": {
+    "base_commit": "fe2f5e6eceea700afdb3d6e8d2bd0cee9d8c5849",
+    "base_tree": "29fcebd828e92d717ff0cc97364a674a9e06f7e2",
+    "base_src_tree": "77c67a9e993412c36f5924dee5bd2c8d71ff0203",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "020a3765fccaeea9152a9ddfb146b6079767657f8caf26d3dee3cc3608076b03",
+    "rust_fixture_sha256": "db454a7e189947ed5cac312b589dfbbddda018a70213be3e74132b495ab85991",
+    "runner_sha256": "1ddea78b011216f1bf6b32f34f5f5980d45b52ff7edec4dc321b74fd1da1f088"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "binary": {
+      "path": "examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "functions": [
+      "GetStr"
+    ],
+    "cases": [
+      "oplist_zexteliminate",
+      "oplist_signform",
+      "oplist_signnearmult",
+      "oplist_shiftbitops",
+      "oplist_shift2mult",
+      "zextelim_eq_pos",
+      "zextelim_notequal_slot1_pos",
+      "zextelim_lessequal_pos",
+      "zextelim_less_val_too_big_neg",
+      "zextelim_shared_zext_neg",
+      "zextelim_zext_op_dispatch_neg",
+      "zextelim_nonconst_other_neg",
+      "signform_subpiece_sext_1b_pos",
+      "signform_subpiece_sext_4b_pos",
+      "signform_offset_below_size_neg",
+      "signform_zext_input_neg",
+      "signform_sright_dispatch_neg",
+      "signnear_n4_pos",
+      "signnear_n8_swap_pos",
+      "signnear_mask_mismatch_neg",
+      "signnear_wrong_sshift_neg",
+      "signnear_mult_dispatch_neg",
+      "bitops_and_left_pos",
+      "bitops_add_left_pos",
+      "bitops_or_right_pos",
+      "bitops_subpiece_pos",
+      "bitops_mult_lsb_pos",
+      "bitops_no_swallow_neg",
+      "bitops_add_right_neg",
+      "bitops_shift_by_zero_neg",
+      "bitops_sright_dispatch_neg",
+      "shift2mult_desc_add_pos",
+      "shift2mult_input_add_pos",
+      "shift2mult_desc_sub_pos",
+      "shift2mult_no_arith_neg",
+      "shift2mult_big_shift_neg",
+      "shift2mult_right_dispatch_neg",
+      "bitops_propagated_add_pos",
+      "bitops_propagated_subpiece_pos",
+      "bitops_propagated_dense_neg"
+    ],
+    "sha256": "8e87f9877e9a6e201bf51cf26eb501c550950564ff637dec512584c4e59b9883"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "72e7588d05b1000da61706824cb5503774cd4e6b13ce98eb06bb589b4de310ab",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "72e7588d05b1000da61706824cb5503774cd4e6b13ce98eb06bb589b4de310ab",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0,
+    "case_order": [
+      "oplist_zexteliminate",
+      "oplist_signform",
+      "oplist_signnearmult",
+      "oplist_shiftbitops",
+      "oplist_shift2mult",
+      "zextelim_eq_pos",
+      "zextelim_notequal_slot1_pos",
+      "zextelim_lessequal_pos",
+      "zextelim_less_val_too_big_neg",
+      "zextelim_shared_zext_neg",
+      "zextelim_zext_op_dispatch_neg",
+      "zextelim_nonconst_other_neg",
+      "signform_subpiece_sext_1b_pos",
+      "signform_subpiece_sext_4b_pos",
+      "signform_offset_below_size_neg",
+      "signform_zext_input_neg",
+      "signform_sright_dispatch_neg",
+      "signnear_n4_pos",
+      "signnear_n8_swap_pos",
+      "signnear_mask_mismatch_neg",
+      "signnear_wrong_sshift_neg",
+      "signnear_mult_dispatch_neg",
+      "bitops_and_left_pos",
+      "bitops_add_left_pos",
+      "bitops_or_right_pos",
+      "bitops_subpiece_pos",
+      "bitops_mult_lsb_pos",
+      "bitops_no_swallow_neg",
+      "bitops_add_right_neg",
+      "bitops_shift_by_zero_neg",
+      "bitops_sright_dispatch_neg",
+      "shift2mult_desc_add_pos",
+      "shift2mult_input_add_pos",
+      "shift2mult_desc_sub_pos",
+      "shift2mult_no_arith_neg",
+      "shift2mult_big_shift_neg",
+      "shift2mult_right_dispatch_neg",
+      "bitops_propagated_add_pos",
+      "bitops_propagated_subpiece_pos",
+      "bitops_propagated_dense_neg"
+    ]
+  },
+  "coverage": {
+    "oplist_dispatch_contract": {
+      "status": "MATCH",
+      "covers": "getOpList opcode sets for all five rules (11,12,15,16 / 63 / 27 / 29,30,63,32 / 29) plus ActionPool-equivalent dispatch refusal on non-member opcodes.",
+      "residual_todo_ids": []
+    },
+    "zexteliminate_cases": {
+      "status": "MATCH",
+      "covers": "3 positives (EQUAL slot0, NOTEQUAL slot1 swap, LESSEQUAL 2->4 resize) + guard negatives (val>>(8*smallsize)!=0, shared zext loneDescend, non-constant other input) + INT_ZEXT dispatch refusal replacing the old same-size zext->COPY fold.",
+      "residual_todo_ids": []
+    },
+    "signform_cases": {
+      "status": "MATCH",
+      "covers": "2 positives (sub(sext(V:1->4),2)=>V s>>7, sub(sext(V:4->8),4)=>V s>>31) + guard negatives (offset<|V|, INT_ZEXT input) + INT_SRIGHT dispatch refusal replacing the old sext(V) s>> c pattern.",
+      "residual_todo_ids": []
+    },
+    "signnearmult_cases": {
+      "status": "MATCH",
+      "covers": "2 positives (n=4 and n=8 with the shift side on either ADD slot; SDIV insert pinned via in0def=34/defin1 pow) + guard negatives (mask mismatch, sign shift 30!=31) + INT_MULT dispatch refusal replacing the old rewrite-existing-MULT algorithm.",
+      "residual_todo_ids": []
+    },
+    "shiftbitops_cases": {
+      "status": "MATCH",
+      "covers": "5 constructor-nzm positives (AND+LEFT 20 -> #0, ADD+LEFT 20 -> V, OR+RIGHT 24 -> V, SUBPIECE byte offset, MULT leastsigbit_set) + guard negatives (no swallow, ADD under RIGHT) + shift-by-0 no-fold and INT_SRIGHT dispatch refusal replacing the old shift-by-0->COPY behavior + 3 calcNZMask-propagated cases: bitops_propagated_add_pos (the review counterexample (X + (W&0x80))<<7 -> X<<7, fires only under propagated nzm), bitops_propagated_subpiece_pos (written-input i=0 break -> #0), bitops_propagated_dense_neg (0xfe survives -> no change).",
+      "residual_todo_ids": []
+    },
+    "shift2mult_cases": {
+      "status": "MATCH",
+      "covers": "3 positives (descendant ADD/SUB, input-side ADD) + guard negatives (COPY-only consumer, shift>=32) + INT_RIGHT dispatch refusal removing the old V>>c -> V*2^c semantic inversion.",
+      "residual_todo_ids": []
+    }
+  },
+  "residual_todo_ids": [],
+  "projection_status": "MATCH",
+  "overall_status": "MATCH"
+}

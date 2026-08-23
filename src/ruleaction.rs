@@ -321,52 +321,133 @@ impl Rule for RulePropagateCopy {
     }
 }
 
-/// Rule for eliminating redundant zero-extensions
+/// Eliminate INT_ZEXT in comparisons: `zext(V) == c => V == c`.
 ///
-/// Corresponds to Ghidra's `RuleZextEliminate`
+/// Faithful to Ghidra's `RuleZextEliminate` (ruleaction.cc:2471-2526). The
+/// dispatched op is the **comparison** (INT_EQUAL/INT_NOTEQUAL/INT_LESS/
+/// INT_LESSEQUAL, cc:2479-2485), not the zext: when one comparison input is
+/// written by INT_ZEXT, the other input is a constant, the zext output has no
+/// other descendant (loneDescend, cc:2513), the zext's input is heritage-known
+/// (cc:2512), and the constant's high bits vanish in the smaller size
+/// (`val >> (8*smallsize) == 0`, cc:2516), the comparison inputs become the
+/// zext's input and a resized constant:
+///   - `zext(V) == c  =>  V == c`
+///   - `zext(V) != c  =>  V != c`
+///   - `zext(V) < c   =>  V < c`
+///   - `zext(V) <= c  =>  V <= c`
+/// The new constant inherits vn2's symbol via copySymbolIfValid (cc:2518).
 pub struct RuleZextEliminate;
 
 impl RuleZextEliminate {
-    // Ghidra: ruleaction.cc:2491 RuleZextEliminate
+    // Ghidra: ruleaction.hh:512 RuleZextEliminate::RuleZextEliminate
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleZextEliminate {
-    // Ghidra: ruleaction.cc:2507 RuleZextEliminate::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        let mut op = op_arc.write().unwrap();
-        if op.opcode != OpCode::CPUI_INT_ZEXT {
+    // Ghidra: ruleaction.cc:2487 RuleZextEliminate::applyOp
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleZextEliminate::applyOp (ruleaction.cc:2487-2526).
+        // cc:2497-2508: vn1 = zexted input candidate, vn2 = other input.
+        // Slot 0 is tried first; a zext on slot 1 swaps the roles.
+        let (small_vn, val, zextslot, otherslot, vn2_arc, smallsize) = {
+            let op = op_arc.read().unwrap();
+            if op.num_input() != 2 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let mut vn1 = op.get_in(0).unwrap();
+            let mut vn2 = op.get_in(1).unwrap();
+            let mut zextslot = 0usize;
+            let mut otherslot = 1usize;
+            let vn2_def_zext = {
+                let v = vn2.read().unwrap();
+                v.is_written() && v.get_def().map(|d| d.read().unwrap().opcode) == Some(OpCode::CPUI_INT_ZEXT)
+            };
+            if vn2_def_zext {
+                vn1 = vn2;
+                vn2 = op.get_in(0).unwrap();
+                zextslot = 1;
+                otherslot = 0;
+            } else {
+                let vn1_is_zext = {
+                    let v = vn1.read().unwrap();
+                    v.is_written() && v.get_def().map(|d| d.read().unwrap().opcode) == Some(OpCode::CPUI_INT_ZEXT)
+                };
+                if !vn1_is_zext {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            }
+            // cc:2510: if (!vn2->isConstant()) return 0;
+            if !vn2.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let zext = vn1.read().unwrap().get_def();
+            let zext = match zext {
+                Some(d) => d,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let small_vn = match zext.read().unwrap().get_in(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            // cc:2512: zext input must already be known to heritage.
+            if !small_vn.read().unwrap().is_heritage_known() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:2513: loneDescend(op) — the zext output must feed only this op.
+            let lone_ok = match vn1.read().unwrap().lone_descend() {
+                Some(d) => std::sync::Arc::ptr_eq(&d, op_arc),
+                None => false,
+            };
+            if !lone_ok {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let smallsize = small_vn.read().unwrap().get_size();
+            let val = vn2.read().unwrap().get_offset();
+            (small_vn, val, zextslot, otherslot, vn2.clone(), smallsize)
+        };
+        // cc:2516: if ((val>>(8*smallsize))==0) — the constant keeps no bits
+        // above the small size, so the zero extension is unnecessary. Ghidra
+        // evaluates this shift on an 8-byte uintb; for smallsize==8 the shift
+        // count reaches 64 (x86 masks to 0), an unreachable case for a real
+        // zext (its output would exceed uintb precision).
+        let shift = 8 * smallsize;
+        let shifted = if shift >= 64 { val } else { val >> shift };
+        if shifted != 0 {
+            // cc:2523-2525: no else — constant comparison is not done here.
             return Ok(action_status::NO_CHANGE);
         }
-
-        let in_vn_arc = &op.inrefs[0];
-        let out_vn_arc = match &op.output {
-            Some(vn) => vn,
-            None => return Ok(action_status::NO_CHANGE),
-        };
-
-        let in_size = in_vn_arc.read().unwrap().size;
-        let out_size = out_vn_arc.read().unwrap().size;
-
-        if in_size == out_size {
-            // zext to same size is just a COPY
-            op.opcode = OpCode::CPUI_COPY;
-            return Ok(action_status::CHANGE);
+        let newvn = fd.new_constant(smallsize, val);
+        // cc:2518: newvn->copySymbolIfValid(vn2);
+        {
+            let src = vn2_arc.read().unwrap();
+            crate::varnode::Varnode::copy_symbol_if_valid(&newvn, &src);
         }
-
-        Ok(action_status::NO_CHANGE)
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // cc:2519-2520: replace the zexted input and the constant (in that order).
+        fd.op_set_input(&follow, small_vn, zextslot);
+        fd.op_set_input(&follow, newvn, otherslot);
+        Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:2491 RuleZextEliminate
+    // Ghidra: ruleaction.hh:512 RuleZextEliminate::RuleZextEliminate (name literal "zexteliminate")
     fn get_name(&self) -> &str {
         "zext_eliminate"
     }
 
-    // Ghidra: ruleaction.cc:2499 RuleZextEliminate::getOpList
+    // Ghidra: ruleaction.cc:2479 RuleZextEliminate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_ZEXT]
+        // cc:2482-2484: INT_EQUAL, INT_NOTEQUAL, INT_LESS, INT_LESSEQUAL.
+        // Rugra previously registered only INT_ZEXT and folded same-size
+        // zext->COPY, an algorithm Ghidra never runs in this Rule
+        // (RULE-BEHAVIORAL-FIVE-0001 M1).
+        vec![
+            OpCode::CPUI_INT_EQUAL,
+            OpCode::CPUI_INT_NOTEQUAL,
+            OpCode::CPUI_INT_LESS,
+            OpCode::CPUI_INT_LESSEQUAL,
+        ]
     }
 }
 
@@ -530,14 +611,59 @@ impl Rule for RuleTrivialArith {
     }
 }
 
-/// Rule for simplifying shift-by-zero operations
+// Ghidra: address.hh:505 pcode_right
+/// Perform a CPUI_INT_RIGHT on the given val (shift count saturated at 64,
+/// `sa >= 8*sizeof(uintb)` yields 0). Faithful to `pcode_right`. A negative
+/// `sa` (only possible through int4 truncation of a huge constant, UB in the
+/// oracle) is clamped to the identity shift.
+fn pcode_right(val: u64, sa: i32) -> u64 {
+    if sa >= 64 {
+        0
+    } else {
+        val >> (sa.max(0) as u32)
+    }
+}
+
+// Ghidra: address.hh:514 pcode_left
+/// Perform a CPUI_INT_LEFT on the given val (shift count saturated at 64,
+/// `sa >= 8*sizeof(uintb)` yields 0). Faithful to `pcode_left`; negative `sa`
+/// clamped like `pcode_right`.
+fn pcode_left(val: u64, sa: i32) -> u64 {
+    if sa >= 64 {
+        0
+    } else {
+        val.wrapping_shl(sa.max(0) as u32)
+    }
+}
+
+/// Shifting away all non-zero bits of one side of a logical/arithmetic op:
 ///
-/// Corresponds to Ghidra's shift simplification rules.
-/// Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
+/// - `( V & 0xf000 ) << 20  =>  #0 << 20`
+/// - `( V + 0xf000 ) << 20  =>   V << 20`
+///
+/// Faithful to Ghidra's `RuleShiftBitops` (ruleaction.cc:476-566). The
+/// dispatched op is a constant INT_LEFT/INT_RIGHT/SUBPIECE/INT_MULT
+/// (cc:481-488) whose input-0 is written by an INT_AND/INT_OR/INT_XOR
+/// (either shift direction) or INT_MULT/INT_ADD (left shift only, cc:525-536).
+/// For each bitop input the shifted `getNZMask` is cut to the output mask;
+/// if some input's possible non-zero bits are entirely shifted away
+/// (cc:539-548), then: AND/MULT make the result zero (replace input-0 with
+/// `#0`), while ADD/XOR/OR make the input a no-op (replace input-0 with the
+/// other bitop input, cc:549-564).
+///
+/// `getNZMask` reads the `nzm` field (varnode.hh:231), which is initialized
+/// by the Varnode constructor (varnode.cc:590-606: constants carry their
+/// offset, everything else ~0) and then refined forward through the
+/// dataflow by `Funcdata::calcNZMask` (funcdata_varnode.cc:856-927: DFS
+/// output assignment via PcodeOp::getNZMaskLocal + MULTIEQUAL worklist
+/// propagation). In the main pipeline `ActionNonzeroMask` (coreaction.cc:5507)
+/// runs `calcNZMask` each mainloop round before the rule pools, so this Rule
+/// observes propagated masks — e.g. `(X + (W & 0x80)) << 7` on 1-byte values
+/// fires because the AND output's nzm propagated to 0x80.
 pub struct RuleShiftBitops;
 
 impl RuleShiftBitops {
-    // Ghidra: ruleaction.cc:476 RuleShiftBitops
+    // Ghidra: ruleaction.hh:215 RuleShiftBitops::RuleShiftBitops
     pub fn new() -> Self {
         Self
     }
@@ -545,49 +671,145 @@ impl RuleShiftBitops {
 
 impl Rule for RuleShiftBitops {
     // Ghidra: ruleaction.cc:490 RuleShiftBitops::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        let mut op = op_arc.write().unwrap();
-        if op.inrefs.len() != 2 {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        // Shift amount is always input[1]
-        let shift_val = {
-            let v1 = op.inrefs[1].read().unwrap();
-            if !v1.is_constant() {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleShiftBitops::applyOp (ruleaction.cc:490-566).
+        let (vn_arc, sa, leftshift, outsize) = {
+            let op = op_arc.read().unwrap();
+            // cc:493-494: input 1 must be the constant shift amount / offset /
+            // multiplier. (Memory-safety guard: op always has 2 inputs when
+            // dispatched on the cc:481-488 oplist.)
+            if op.num_input() != 2 {
                 return Ok(action_status::NO_CHANGE);
             }
-            v1.get_val()
-        };
-
-        let is_nop_shift = match op.opcode {
-            OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
-                shift_val == 0
+            let constvn = op.get_in(1).unwrap();
+            if !constvn.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
             }
-            _ => false,
+            let vn_arc = op.get_in(0).unwrap().clone();
+            // cc:496: if (!vn->isWritten()) return 0;
+            if !vn_arc.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:497: if (vn->getSize() > sizeof(uintb)) return 0;
+            if vn_arc.read().unwrap().get_size() > 8 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:501-522: derive the effective shift amount and direction.
+            let (sa, leftshift) = match op.opcode {
+                OpCode::CPUI_INT_LEFT => (constvn.read().unwrap().get_offset() as i32, true),
+                OpCode::CPUI_INT_RIGHT => (constvn.read().unwrap().get_offset() as i32, false),
+                OpCode::CPUI_SUBPIECE => {
+                    // cc:510-513: SUBPIECE truncation offset counts bytes.
+                    (constvn.read().unwrap().get_offset() as i32 * 8, false)
+                }
+                OpCode::CPUI_INT_MULT => {
+                    // cc:515-518: multiplier with only low zero bits is a
+                    // left shift by its least significant set bit.
+                    let lsb = crate::address::leastsigbit_set(constvn.read().unwrap().get_offset());
+                    if lsb == -1 {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    (lsb, true)
+                }
+                _ => return Ok(action_status::NO_CHANGE), // cc:520-521: never reached via getOpList
+            };
+            // cc:541: mask = calc_mask(op->getOut()->getSize()) — read below
+            // through the output varnode (always present for dispatched ops).
+            let outsize = match op.output.as_ref() {
+                Some(o) => o.read().unwrap().get_size(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (vn_arc, sa, leftshift, outsize)
         };
-
-        if is_nop_shift {
-            let identity_vn = op.inrefs[0].clone();
-            op.opcode = OpCode::CPUI_COPY;
-            op.inrefs = vec![identity_vn];
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        // cc:524-536: the shifted value must be produced by a bit operation.
+        let bitop = match vn_arc.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let (bitop_opc, bitop_inputs) = {
+            let b = bitop.read().unwrap();
+            (b.opcode, b.num_input())
+        };
+        match bitop_opc {
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR => {}
+            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_ADD => {
+                // cc:531-533: add/mult only fold under a left shift.
+                if !leftshift {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            }
+            _ => return Ok(action_status::NO_CHANGE),
         }
+        // cc:538-548: find the first bitop input whose possible non-zero bits
+        // all vanish after the shift (bounded by the output mask). getNZMask
+        // (varnode.hh:231) is the raw nzm field — constructor-initialized
+        // (varnode.cc:590-606) and refined by Funcdata::calcNZMask
+        // (funcdata_varnode.cc:856-927), which ActionNonzeroMask
+        // (coreaction.cc:5507) runs before the rule pools each mainloop.
+        let mask = crate::space::calc_mask(outsize as i32);
+        let mut swallowed: Option<usize> = None;
+        for i in 0..bitop_inputs {
+            let in_vn = match bitop.read().unwrap().get_in(i) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let nzm = in_vn.read().unwrap().get_nzm();
+            let shifted = if leftshift {
+                pcode_left(nzm, sa)
+            } else {
+                pcode_right(nzm, sa)
+            };
+            if shifted & mask == 0 {
+                swallowed = Some(i);
+                break;
+            }
+        }
+        let i = match swallowed {
+            Some(i) => i,
+            None => return Ok(action_status::NO_CHANGE), // cc:548
+        };
+        // cc:549-564: rewrite input-0 of the shift according to the bitop.
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        match bitop_opc {
+            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_AND => {
+                // cc:550-553: result will be zero.
+                let vn_size = vn_arc.read().unwrap().get_size();
+                let zero_vn = fd.new_constant(vn_size, 0);
+                fd.op_set_input(&follow, zero_vn, 0);
+            }
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                // cc:555-560: the swallowed side contributes nothing; the
+                // surviving input must be heritage-known.
+                let vn = match bitop.read().unwrap().get_in(1 - i) {
+                    Some(v) => v.clone(),
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                if !vn.read().unwrap().is_heritage_known() {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                fd.op_set_input(&follow, vn, 0);
+            }
+            _ => {}
+        }
+        Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:476 RuleShiftBitops
+    // Ghidra: ruleaction.hh:215 RuleShiftBitops::RuleShiftBitops (name literal "shiftbitops")
     fn get_name(&self) -> &str {
         "shift_bitops"
     }
 
     // Ghidra: ruleaction.cc:481 RuleShiftBitops::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
+        // cc:484-487: INT_LEFT, INT_RIGHT, SUBPIECE, INT_MULT. Rugra
+        // previously registered INT_SRIGHT and only folded shift-by-0 → COPY
+        // (Ghidra handles that in RuleTrivialShift, ruleaction.cc:3496-3522,
+        // not here) — RULE-BEHAVIORAL-FIVE-0001 M4.
         vec![
             OpCode::CPUI_INT_LEFT,
             OpCode::CPUI_INT_RIGHT,
-            OpCode::CPUI_INT_SRIGHT,
+            OpCode::CPUI_SUBPIECE,
+            OpCode::CPUI_INT_MULT,
         ]
     }
 }
@@ -1672,25 +1894,28 @@ impl Rule for RuleTermOrder {
     }
 }
 
-/// Convert a constant shift used arithmetically into a multiply:
+/// Convert a constant left shift used arithmetically into a multiply:
 ///   `(V << c)` used in INT_ADD/INT_SUB/INT_MULT, or `V << c` itself feeding
 ///   such an op, becomes `V * (1 << c)`.
 ///
-/// Faithful to Ghidra's `RuleShift2Mult` (ruleaction.cc:3720-3771). Rewrites
-/// INT_LEFT/INT_RIGHT with a small (<32) constant shift amount into an
-/// INT_MULT by a power-of-two when the shift participates in or feeds an
-/// arithmetic operation.
+/// Faithful to Ghidra's `RuleShift2Mult` (ruleaction.cc:3704-3751). The
+/// oplist is **INT_LEFT only** (cc:3708-3712): Ghidra never converts a right
+/// shift into a multiplication — `V >> c` rewritten as `V * 2^c` would be a
+/// semantic inversion. The shift amount must be a constant < 32 (cc:3727-3731)
+/// and the shift must participate in, or feed, an INT_ADD/INT_SUB/INT_MULT
+/// (cc:3732-3746). The rewrite replaces the shift-amount constant with
+/// `1 << val` and flips the opcode to INT_MULT (cc:3747-3750).
 pub struct RuleShift2Mult;
 
 impl RuleShift2Mult {
-    // Ghidra: ruleaction.cc:3724 RuleShift2Mult
+    // Ghidra: ruleaction.hh:685 RuleShift2Mult::RuleShift2Mult
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleShift2Mult {
-    // Ghidra: ruleaction.cc:3734 RuleShift2Mult::applyOp
+    // Ghidra: ruleaction.cc:3714 RuleShift2Mult::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // constvn (in1) must be a constant shift amount < 32.
         let (vn, val) = {
@@ -1746,14 +1971,18 @@ impl Rule for RuleShift2Mult {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:3724 RuleShift2Mult
+    // Ghidra: ruleaction.hh:685 RuleShift2Mult::RuleShift2Mult (name literal "shift2mult")
     fn get_name(&self) -> &str {
         "shift2mult"
     }
 
-    // Ghidra: ruleaction.cc:3728 RuleShift2Mult::getOpList
+    // Ghidra: ruleaction.cc:3708 RuleShift2Mult::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT]
+        // cc:3711: oplist.push_back(CPUI_INT_LEFT); — INT_LEFT ONLY.
+        // Rugra previously also registered INT_RIGHT, which let the (opcode-
+        // blind) applyOp rewrite `V >> c` into `V * 2^c` — a semantic
+        // inversion Ghidra never performs (RULE-BEHAVIORAL-FIVE-0001 M5).
+        vec![OpCode::CPUI_INT_LEFT]
     }
 }
 
@@ -7801,34 +8030,64 @@ impl Rule for RuleDivChain {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV] }
 }
 
-/// Normalize sign extraction: `sub(sext(V), c) s>> n => V s>> (8*|V|-1)`.
-/// Faithful to Ghidra's `RuleSignForm` (ruleaction.cc:8449-8492).
+/// Normalize sign extraction: `sub(sext(V), c) => V s>> (8*|V|-1)`.
+/// Faithful to Ghidra's `RuleSignForm` (ruleaction.cc:8445-8474).
+///
+/// The dispatched op is the **SUBPIECE** (cc:8447-8451): when its input-0 is
+/// written by INT_SEXT and the truncation offset c (bytes) is at or beyond
+/// `|V|` (cc:8465-8466) and V is not free, the SUBPIECE becomes
+/// `V s>> (8*|V|-1)` with a 4-byte shift-amount constant (cc:8469-8472).
 pub struct RuleSignForm;
 
 impl RuleSignForm {
-    // Ghidra: ruleaction.cc:8463 RuleSignForm
+    // Ghidra: ruleaction.hh:1311 RuleSignForm::RuleSignForm
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignForm {
-    // Ghidra: ruleaction.cc:8471 RuleSignForm::applyOp
+    // Ghidra: ruleaction.cc:8453 RuleSignForm::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleSignForm::applyOp (ruleaction.cc:8471-8492).
+        // Faithful to RuleSignForm::applyOp (ruleaction.cc:8453-8474).
+        // Like the oracle, applyOp trusts the dispatcher for the opcode: it
+        // treats in(1)'s offset as the SUBPIECE truncation offset without
+        // re-checking op->code() (memory-safety guard on input count only).
         let (a, a_size) = {
             let op = op_arc.read().unwrap();
-            if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let sextout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            if !sextout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let sextop = match sextout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
-            if sextop.read().unwrap().opcode != OpCode::CPUI_INT_SEXT { return Ok(action_status::NO_CHANGE); }
-            let a = match sextop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let c = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
-            let a_size = a.read().unwrap().get_size();
-            if c < a_size as i64 { return Ok(action_status::NO_CHANGE); }
-            if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            if op.num_input() != 2 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8459-8463: sextout must be written by INT_SEXT.
+            let sextout = op.get_in(0).unwrap();
+            if !sextout.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let sextop = match sextout.read().unwrap().get_def() {
+                Some(d) => d,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if sextop.read().unwrap().opcode != OpCode::CPUI_INT_SEXT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8464: a = sextop->getIn(0)
+            let a = match sextop.read().unwrap().get_in(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            // cc:8465-8466: int4 c = op->getIn(1)->getOffset(); if (c < a->getSize()) return 0;
+            let c = op.get_in(1).unwrap().read().unwrap().get_offset() as i64;
+            let a_size = a.read().unwrap().get_size() as i64;
+            if c < a_size {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8467: if (a->isFree()) return 0;
+            if a.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
+            }
             (a, a_size)
         };
         let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // cc:8469-8472: sub(sext(V),c) -> V s>> n with n = 8*|V|-1, the shift
+        // amount created as a 4-byte constant.
         fd.op_set_input(&follow, a, 0);
         let n = 8 * a_size - 1;
         let c = fd.new_constant(4, n as u64);
@@ -7837,10 +8096,15 @@ impl Rule for RuleSignForm {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:8463 RuleSignForm
+    // Ghidra: ruleaction.hh:1311 RuleSignForm::RuleSignForm (name literal "signform")
     fn get_name(&self) -> &str { "sign_form" }
-    // Ghidra: ruleaction.cc:8465 RuleSignForm::getOpList
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
+    // Ghidra: ruleaction.cc:8447 RuleSignForm::getOpList
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // cc:8450: SUBPIECE only. Rugra previously dispatched INT_SRIGHT and
+        // required the IR to already be `sext(V) s>> c` — a pattern the
+        // oracle never matches in this Rule (RULE-BEHAVIORAL-FIVE-0001 M2).
+        vec![OpCode::CPUI_SUBPIECE]
+    }
 }
 
 /// Normalize sign extraction: `sub(sext(V) * small, c) s>> 31 => V s>> 31`.
@@ -8012,78 +8276,152 @@ impl Rule for RuleDoubleArithShift {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
-/// Convert near-multiply form into signed division.
-/// Faithful to Ghidra's `RuleSignNearMult` (ruleaction.cc:8543-8610).
+/// Simplify division form:
+/// `(V + (V s>> (8|V|-1)) >> (8|V|-n)) & (-1<<n) => (V s/ 2^n) * 2^n`.
+/// Faithful to Ghidra's `RuleSignNearMult` (ruleaction.cc:8533-8592).
 ///
-/// `(X + ((X s>> (n-1)) >> k)) * c => (X s/ 2^n) * 2^n` where c = 2^n.
+/// The dispatched op is the **INT_AND** with the `-1<<n` mask constant
+/// (cc:8535-8539). Input-0 must be an INT_ADD whose one side is
+/// `INT_RIGHT(signextraction, 8*size-n)` (constant amount, cc:8546-8560)
+/// and whose other side x is the INT_SRIGHT `x s>> (8|x|-1)` input itself
+/// (cc:8570-8577). After the mask check `(calc_mask<<n)&calc_mask ==
+/// and-constant` (cc:8567-8569), a new `INT_SDIV(x, 2^n)` is inserted before
+/// the op and the AND becomes `INT_MULT(sdiv, 2^n)` (cc:8579-8591).
 pub struct RuleSignNearMult;
 
 impl RuleSignNearMult {
-    // Ghidra: ruleaction.cc:8551 RuleSignNearMult
+    // Ghidra: ruleaction.hh:1333 RuleSignNearMult::RuleSignNearMult
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignNearMult {
-    // Ghidra: ruleaction.cc:8559 RuleSignNearMult::applyOp
+    // Ghidra: ruleaction.cc:8541 RuleSignNearMult::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleSignNearMult::applyOp (ruleaction.cc:8559-8610).
-        let (x, const_val, x_size) = {
+        // Faithful to RuleSignNearMult::applyOp (ruleaction.cc:8541-8592).
+        let (x, n, x_size) = {
             let op = op_arc.read().unwrap();
-            if op.opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
-            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            if !const_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-            let const_val = const_vn.read().unwrap().get_offset();
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let addop = match in0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
-            if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
-            // Search for INT_RIGHT in addop's inputs.
-            let mut found_x: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
-            let mut found_n: i64 = 0;
+            if op.num_input() != 2 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8544: if (!op->getIn(1)->isConstant()) return 0;
+            let and_const = op.get_in(1).unwrap();
+            if !and_const.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let and_val = and_const.read().unwrap().get_offset();
+            // cc:8545-8547: input 0 written by INT_ADD.
+            let in0 = op.get_in(0).unwrap();
+            if !in0.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let addop = match in0.read().unwrap().get_def() {
+                Some(d) => d,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8548-8560: find the ADD side defined by INT_RIGHT with a
+            // constant amount. A def that is INT_RIGHT but with a non-const
+            // amount falls through to try the other slot (cc:8556-8557).
+            let mut found: Option<(usize, std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>)> = None;
             for i in 0..2 {
-                let shiftvn = match addop.read().unwrap().get_in(i) { Some(v) => v.clone(), None => continue };
-                if !shiftvn.read().unwrap().is_written() { continue; }
-                let unshiftop = match shiftvn.read().unwrap().get_def() { Some(d) => d, None => continue };
-                if unshiftop.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT { continue; }
-                let sa_vn = match unshiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
-                if !sa_vn.read().unwrap().is_constant() { continue; }
-                let x_candidate = match addop.read().unwrap().get_in(1 - i) { Some(v) => v.clone(), None => continue };
-                if x_candidate.read().unwrap().is_free() { continue; }
-                let n_val = sa_vn.read().unwrap().get_offset() as i64;
-                if n_val <= 0 { continue; }
-                let shift_size = shiftvn.read().unwrap().get_size() as i64;
-                let n = shift_size * 8 - n_val;
-                if n <= 0 { continue; }
-                let mask = calc_mask(shiftvn.read().unwrap().get_size());
-                let expected = (mask << n) & mask;
-                if expected != const_val { continue; }
-                // Check sign extraction.
-                let sgnvn = match unshiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
-                if !sgnvn.read().unwrap().is_written() { continue; }
-                let sshiftop = match sgnvn.read().unwrap().get_def() { Some(d) => d, None => continue };
-                if sshiftop.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { continue; }
-                let ssh_sa = match sshiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
-                if !ssh_sa.read().unwrap().is_constant() { continue; }
-                let ssh_in0 = match sshiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
-                if !std::sync::Arc::ptr_eq(&ssh_in0, &x_candidate) { continue; }
-                let ssh_val = ssh_sa.read().unwrap().get_offset() as i64;
-                if ssh_val != 8 * x_candidate.read().unwrap().get_size() as i64 - 1 { continue; }
-                found_x = Some(x_candidate);
-                found_n = n;
+                let shiftvn = match addop.read().unwrap().get_in(i) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !shiftvn.read().unwrap().is_written() {
+                    continue;
+                }
+                let unshiftop = match shiftvn.read().unwrap().get_def() {
+                    Some(d) => d,
+                    None => continue,
+                };
+                if unshiftop.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT {
+                    continue;
+                }
+                let sa_vn = match unshiftop.read().unwrap().get_in(1) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !sa_vn.read().unwrap().is_constant() {
+                    continue;
+                }
+                found = Some((i, unshiftop));
                 break;
             }
-            match found_x {
-                Some(x) => {
-                    let xs = x.read().unwrap().get_size();
-                    (x, found_n, xs)
-                }
+            let (i, unshiftop) = match found {
+                Some(pair) => pair,
+                None => return Ok(action_status::NO_CHANGE), // cc:8560: i==2
+            };
+            // cc:8561-8562: x is the ADD's other input; it must not be free.
+            let x = match addop.read().unwrap().get_in(1 - i) {
+                Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
+            };
+            if x.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
             }
+            // cc:8563-8566: n = size*8 - shiftamount, both strictly positive.
+            let shiftvn = addop.read().unwrap().get_in(i).unwrap().clone();
+            let mut n = unshiftop.read().unwrap().get_in(1).unwrap().read().unwrap().get_offset() as i64;
+            if n <= 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let shift_size = shiftvn.read().unwrap().get_size() as i64;
+            n = shift_size * 8 - n;
+            if n <= 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8567-8569: mask = (calc_mask(shiftvn->getSize())<<n) & mask
+            // must equal the AND constant.
+            let mask = crate::space::calc_mask(shift_size as i32);
+            let expected = (mask.wrapping_shl(n as u32)) & mask;
+            if expected != and_val {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // cc:8570-8577: the RIGHT shifts the sign extraction of the very
+            // same x: sgnvn written by INT_SRIGHT(x, 8|x|-1).
+            let sgnvn = match unshiftop.read().unwrap().get_in(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if !sgnvn.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let sshiftop = match sgnvn.read().unwrap().get_def() {
+                Some(d) => d,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if sshiftop.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let ssh_sa = match sshiftop.read().unwrap().get_in(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if !ssh_sa.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let ssh_in0 = match sshiftop.read().unwrap().get_in(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if !std::sync::Arc::ptr_eq(&ssh_in0, &x) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let val = ssh_sa.read().unwrap().get_offset() as i64;
+            let x_size = x.read().unwrap().get_size();
+            if val != 8 * x_size as i64 - 1 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (x, n, x_size)
         };
-        let pow = 1u64 << const_val;
+        // cc:8579-8591: build `x s/ 2^n`, insert before the op, and turn the
+        // AND into `INT_MULT(sdiv, 2^n)`.
+        let pow = 1u64.wrapping_shl(n as u32);
         let addr = op_arc.read().unwrap().get_addr();
         let follow = crate::op::PcodeOpRef(op_arc.clone());
-        // Create INT_SDIV(x, pow).
         let new_div = fd.new_op(2, addr);
         fd.op_set_opcode(&new_div, OpCode::CPUI_INT_SDIV);
         let div_vn = fd.new_unique_out(x_size, &new_div);
@@ -8091,7 +8429,6 @@ impl Rule for RuleSignNearMult {
         let c = fd.new_constant(x_size, pow);
         fd.op_set_input(&new_div, c, 1);
         fd.op_insert_before(&new_div, &follow);
-        // Rewrite original op as INT_MULT(div_vn, pow).
         fd.op_set_opcode(&follow, OpCode::CPUI_INT_MULT);
         fd.op_set_input(&follow, div_vn, 0);
         let c2 = fd.new_constant(x_size, pow);
@@ -8099,10 +8436,16 @@ impl Rule for RuleSignNearMult {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:8551 RuleSignNearMult
+    // Ghidra: ruleaction.hh:1333 RuleSignNearMult::RuleSignNearMult (name literal "signnearmult")
     fn get_name(&self) -> &str { "sign_near_mult" }
-    // Ghidra: ruleaction.cc:8553 RuleSignNearMult::getOpList
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
+    // Ghidra: ruleaction.cc:8535 RuleSignNearMult::getOpList
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // cc:8538: INT_AND only. Rugra previously dispatched INT_MULT and
+        // rewrote an already-existing multiply — the oracle's trigger pattern
+        // (AND with a `-1<<n` mask) could never fire
+        // (RULE-BEHAVIORAL-FIVE-0001 M3).
+        vec![OpCode::CPUI_INT_AND]
+    }
 }
 
 /// Simplify redundant float casts. Faithful to Ghidra's `RuleFloatCast`
@@ -16592,6 +16935,32 @@ mod tests {
         assert_eq!(in0.get_size(), size, "constant keeps output size");
     }
 
+    /// Fixture varnode standing in for a heritage-known SSA input: register
+    /// storage promoted through Funcdata::setInputVarnode so the `insert`
+    /// flag makes is_heritage_known() true (varnode.hh:298).
+    fn make_input_vn(fd: &mut Funcdata, size: usize, off: u64) -> std::sync::Arc<RwLock<crate::varnode::Varnode>> {
+        let vn = fd.vbank.create_with_space(size, crate::space::AddressSpace::Register, off);
+        fd.set_input_varnode(vn)
+    }
+
+    /// Build an op through the real Funcdata path (new_op / op_set_opcode /
+    /// op_set_input / new_unique_out) so descend lists and flags are wired
+    /// exactly like Ghidra's opInsertEnd'd pipeline ops.
+    fn build_op(
+        fd: &mut Funcdata,
+        opcode: OpCode,
+        inputs: &[std::sync::Arc<RwLock<crate::varnode::Varnode>>],
+        out_size: usize,
+    ) -> (crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>) {
+        let op = fd.new_op(inputs.len(), Address::new(0x5000));
+        fd.op_set_opcode(&op, opcode);
+        for (slot, vn) in inputs.iter().enumerate() {
+            fd.op_set_input(&op, vn.clone(), slot);
+        }
+        let out = fd.new_unique_out(out_size, &op);
+        (op, out)
+    }
+
     #[test]
     fn collapse_constants_oplist_is_all_opcodes() {
         // action.cc:706-713 base Rule::getOpList pushes 0..CPUI_MAX(74).
@@ -17038,29 +17407,468 @@ mod tests {
 
     #[test]
     fn test_shift_by_zero() {
+        // Ghidra RuleShiftBitops (ruleaction.cc:490-522) never folds
+        // shift-by-0: with sa=0 no bitop input's nzm can be shifted away, so
+        // the loop at cc:539-548 finds nothing and the rule returns 0. The
+        // shift-by-0 -> COPY fold belongs to RuleTrivialShift
+        // (ruleaction.cc:3496-3522). The old Rugra implementation folded it
+        // here (RULE-BEHAVIORAL-FIVE-0001 M4 negative).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (_, copy_out) = build_op(&mut fd, OpCode::CPUI_COPY, &[v], 4);
+        let (_, and_out) = { let c = fd.new_constant(4, 0xf); build_op(&mut fd, OpCode::CPUI_INT_AND, &[copy_out, c], 4) };
+        let (shift_op, _) = { let c = fd.new_constant(4, 0); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[and_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        let (op_arc, mut fd) = make_binary_op(
-            OpCode::CPUI_INT_LEFT,
-            crate::space::AddressSpace::Register, 0x00, 8,
-            crate::space::AddressSpace::Const, 0, 8,
-            8,
-        );
-        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
-        assert_eq!(result, action_status::CHANGE);
-        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_COPY);
+        let result = rule.apply_op(&shift_op.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+        assert_eq!(shift_op.0.read().unwrap().opcode, OpCode::CPUI_INT_LEFT);
+        assert_eq!(shift_op.0.read().unwrap().num_input(), 2);
     }
 
     #[test]
-    fn test_shift_by_nonzero_unchanged() {
+    fn test_shift_bitops_and_mask_swallowed_to_zero() {
+        // `(V & 0xf000) << 20 => #0 << 20` (ruleaction.cc:479/550-553): the
+        // constant 0xf000's nzm shifted left by 20 fully leaves the 4-byte
+        // output mask, so the AND result is zero.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (and_op, and_out) = { let c = fd.new_constant(4, 0xf000); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
+        let (shift_op, _) = { let c = fd.new_constant(4, 20); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[and_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        let (op_arc, mut fd) = make_binary_op(
-            OpCode::CPUI_INT_LEFT,
-            crate::space::AddressSpace::Register, 0x00, 8,
-            crate::space::AddressSpace::Const, 3, 8,
-            8,
+        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let s = shift_op.0.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_LEFT, "opcode stays INT_LEFT");
+        let in0 = s.get_in(0).unwrap().read().unwrap();
+        assert!(in0.is_constant());
+        assert_eq!(in0.get_size(), 4);
+        assert_eq!(in0.get_offset(), 0, "AND result must be #0");
+        let _ = and_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_add_const_swallowed_keeps_v() {
+        // `(V + 0xf000) << 20 => V << 20` (ruleaction.cc:480/555-560): the
+        // ADD's constant side is shifted beyond the 4-byte output mask, so
+        // the shift input becomes the surviving V.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (add_op, add_out) = { let c = fd.new_constant(4, 0xf000); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[v.clone(), c], 4) };
+        let (shift_op, _) = { let c = fd.new_constant(4, 20); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[add_out, c], 4) };
+        let rule = RuleShiftBitops::new();
+        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let s = shift_op.0.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_LEFT);
+        assert!(std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v), "input 0 becomes V");
+        let _ = add_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_or_right_shift_keeps_v() {
+        // `(V | 0xff) >> 24 => V >> 24` — INT_RIGHT dispatch (cc:485) with an
+        // OR bitop (cc:527): non-constant nzm ~0>>24 is non-zero, so the
+        // break happens on the constant side (i=1) and input 0 becomes
+        // bitop->getIn(0) = V.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (or_op, or_out) = { let c = fd.new_constant(4, 0xff); build_op(&mut fd, OpCode::CPUI_INT_OR, &[v.clone(), c], 4) };
+        let (shift_op, _) = { let c = fd.new_constant(4, 24); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[or_out, c], 4) };
+        let rule = RuleShiftBitops::new();
+        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let s = shift_op.0.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_RIGHT);
+        assert!(std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v));
+        let _ = or_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_subpiece_counts_bytes() {
+        // SUBPIECE dispatch (cc:486): sa = offset*8 (cc:510-513). For
+        // `sub(V & 0xff, 1)` on a 4-byte value the constant 0xff >> 8 == 0,
+        // so the AND collapses to #0.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (and_op, and_out) = { let c = fd.new_constant(4, 0xff); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
+        let (sub_op, _) = { let c = fd.new_constant(4, 1); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[and_out, c], 3) };
+        let rule = RuleShiftBitops::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let s = sub_op.0.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_SUBPIECE);
+        let in0 = s.get_in(0).unwrap().read().unwrap();
+        assert!(in0.is_constant());
+        assert_eq!(in0.get_offset(), 0);
+        assert_eq!(in0.get_size(), 4, "constant sized like the bitop output");
+        let _ = and_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_mult_uses_lsb() {
+        // INT_MULT dispatch (cc:487): sa = leastsigbit_set of the constant
+        // multiplier (cc:515-518). `((V & 0xf0000) * 0x10000)` has sa=16 and
+        // 0xf0000<<16 = 0xF00000000 exceeds the 4-byte mask -> #0.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (and_op, and_out) = { let c = fd.new_constant(4, 0xf0000); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
+        let (mult_op, _) = { let c = fd.new_constant(4, 0x10000); build_op(&mut fd, OpCode::CPUI_INT_MULT, &[and_out, c], 4) };
+        let rule = RuleShiftBitops::new();
+        assert_eq!(rule.apply_op(&mult_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let s = mult_op.0.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_MULT);
+        assert_eq!(s.get_in(0).unwrap().read().unwrap().get_offset(), 0);
+        let _ = and_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_no_swallow_no_change() {
+        // `(V & 0xf0) << 4`: 0xf0<<4 = 0xf00 survives in the 4-byte mask and
+        // V's ~0 nzm never vanishes -> cc:548 return 0.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (and_op, and_out) = { let c = fd.new_constant(4, 0xf0); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
+        let (shift_op, _) = { let c = fd.new_constant(4, 4); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[and_out, c], 4) };
+        let rule = RuleShiftBitops::new();
+        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        let _ = and_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_add_right_shift_rejected() {
+        // `(V + 0xf000) >> 4`: ADD is only foldable under a left shift
+        // (cc:531-533).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (add_op, add_out) = { let c = fd.new_constant(4, 0xf000); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[v, c], 4) };
+        let (shift_op, _) = { let c = fd.new_constant(4, 4); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[add_out, c], 4) };
+        let rule = RuleShiftBitops::new();
+        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        let _ = add_op;
+    }
+
+    #[test]
+    fn test_shift_bitops_oplist_matches_oracle() {
+        // ruleaction.cc:481-488: INT_LEFT, INT_RIGHT, SUBPIECE, INT_MULT.
+        let ops = RuleShiftBitops::new().get_opcodes();
+        assert_eq!(
+            ops,
+            vec![
+                OpCode::CPUI_INT_LEFT,
+                OpCode::CPUI_INT_RIGHT,
+                OpCode::CPUI_SUBPIECE,
+                OpCode::CPUI_INT_MULT,
+            ]
         );
-        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
-        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleZextEliminate (ruleaction.cc:2471-2526) ---
+
+    #[test]
+    fn test_zext_eliminate_oplist_matches_oracle() {
+        // ruleaction.cc:2479-2485: the four comparison opcodes only —
+        // never INT_ZEXT.
+        let ops = RuleZextEliminate::new().get_opcodes();
+        assert_eq!(
+            ops,
+            vec![
+                OpCode::CPUI_INT_EQUAL,
+                OpCode::CPUI_INT_NOTEQUAL,
+                OpCode::CPUI_INT_LESS,
+                OpCode::CPUI_INT_LESSEQUAL,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_zext_eliminate_equal_slot0() {
+        // `zext(V:1->4) == 5 => V == 5` (cc:2516-2521): slot 0 carries the
+        // zext; 5 >> 8 == 0 so the constant survives resized to 1 byte.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v.clone()], 4);
+        let (cmp_op, _) = { let c = fd.new_constant(4, 5); build_op(&mut fd, OpCode::CPUI_INT_EQUAL, &[zext_out, c], 1) };
+        let rule = RuleZextEliminate::new();
+        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let c = cmp_op.0.read().unwrap();
+        assert_eq!(c.opcode, OpCode::CPUI_INT_EQUAL, "comparison stays");
+        assert!(std::sync::Arc::ptr_eq(&c.get_in(0).unwrap().clone(), &v), "in0 becomes V");
+        let in1 = c.get_in(1).unwrap().read().unwrap();
+        assert!(in1.is_constant());
+        assert_eq!(in1.get_size(), 1, "constant resized to smallsize");
+        assert_eq!(in1.get_offset(), 5);
+    }
+
+    #[test]
+    fn test_zext_eliminate_notequal_slot1() {
+        // `5 != zext(V:1->4) => 5 != V` — zext on slot 1 swaps the roles
+        // (cc:2501-2506): zextslot=1, otherslot=0.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v.clone()], 4);
+        let (cmp_op, _) = { let c = fd.new_constant(4, 5); build_op(&mut fd, OpCode::CPUI_INT_NOTEQUAL, &[c, zext_out], 1) };
+        let rule = RuleZextEliminate::new();
+        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let c = cmp_op.0.read().unwrap();
+        assert_eq!(c.opcode, OpCode::CPUI_INT_NOTEQUAL);
+        let in0 = c.get_in(0).unwrap().read().unwrap();
+        assert_eq!((in0.get_size(), in0.get_offset()), (1, 5), "slot 0 gets resized constant");
+        assert!(std::sync::Arc::ptr_eq(&c.get_in(1).unwrap().clone(), &v), "slot 1 becomes V");
+    }
+
+    #[test]
+    fn test_zext_eliminate_less_val_too_big_rejected() {
+        // `zext(V:1->4) < 300`: 300 >> 8 != 0, the constant would lose bits
+        // in the small size, so cc:2516 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
+        let (cmp_op, _) = { let c = fd.new_constant(4, 300); build_op(&mut fd, OpCode::CPUI_INT_LESS, &[zext_out, c], 1) };
+        let rule = RuleZextEliminate::new();
+        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(cmp_op.0.read().unwrap().opcode, OpCode::CPUI_INT_LESS);
+    }
+
+    #[test]
+    fn test_zext_eliminate_shared_zext_rejected() {
+        // The zext output feeds a second op, so loneDescend != op and
+        // cc:2513 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
+        let (cmp_op, _) = { let c = fd.new_constant(4, 5); build_op(&mut fd, OpCode::CPUI_INT_EQUAL, &[zext_out.clone(), c], 1) };
+        let (_, _) = build_op(&mut fd, OpCode::CPUI_COPY, &[zext_out], 4);
+        let rule = RuleZextEliminate::new();
+        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_zext_eliminate_non_constant_other_rejected() {
+        // `zext(V) == W` with W an input varnode: cc:2510 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let w = make_input_vn(&mut fd, 4, 0x30);
+        let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
+        let (cmp_op, _) = build_op(&mut fd, OpCode::CPUI_INT_EQUAL, &[zext_out, w], 1);
+        let rule = RuleZextEliminate::new();
+        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_zext_eliminate_same_size_zext_not_this_rule() {
+        // Old Rugra behavior negative: a same-size INT_ZEXT op itself is
+        // never dispatched by this Rule (oplist is comparisons only,
+        // cc:2479-2485), so the zext->COPY fold Ghidra performs elsewhere
+        // (RuleTrivialShift-style COPY collapse is not this Rule's job) must
+        // not happen when applyOp is invoked on the comparison-shaped op set.
+        // Direct call on the INT_ZEXT op: applyOp looks at in(1) as the
+        // "other input", which the 1-input zext lacks -> no change.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (zext_op, _) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
+        let rule = RuleZextEliminate::new();
+        assert_eq!(rule.apply_op(&zext_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(zext_op.0.read().unwrap().opcode, OpCode::CPUI_INT_ZEXT, "zext op untouched");
+    }
+
+    // --- RuleSignForm (ruleaction.cc:8445-8474) ---
+
+    #[test]
+    fn test_sign_form_oplist_matches_oracle() {
+        // ruleaction.cc:8447-8451: SUBPIECE only — never INT_SRIGHT.
+        let ops = RuleSignForm::new().get_opcodes();
+        assert_eq!(ops, vec![OpCode::CPUI_SUBPIECE]);
+    }
+
+    #[test]
+    fn test_sign_form_subpiece_of_sext() {
+        // `sub(sext(V:1->4), 2) => V s>> 7` (cc:8469-8472): c=2 >= |V|=1,
+        // n = 8*1-1 = 7 as a 4-byte constant.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, sext_out) = build_op(&mut fd, OpCode::CPUI_INT_SEXT, &[v.clone()], 4);
+        let (sub_op, _) = { let c = fd.new_constant(4, 2); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[sext_out, c], 1) };
+        let rule = RuleSignForm::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let s = sub_op.0.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_SRIGHT, "SUBPIECE becomes INT_SRIGHT");
+        assert!(std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v), "in0 becomes V");
+        let in1 = s.get_in(1).unwrap().read().unwrap();
+        assert!(in1.is_constant());
+        assert_eq!(in1.get_size(), 4, "shift amount is a 4-byte constant (cc:8471)");
+        assert_eq!(in1.get_offset(), 7);
+    }
+
+    #[test]
+    fn test_sign_form_offset_below_size_rejected() {
+        // `sub(sext(V:1->4), 0)`: c=0 < |V|=1 -> cc:8466 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, sext_out) = build_op(&mut fd, OpCode::CPUI_INT_SEXT, &[v], 4);
+        let (sub_op, _) = { let c = fd.new_constant(4, 0); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[sext_out, c], 1) };
+        let rule = RuleSignForm::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(sub_op.0.read().unwrap().opcode, OpCode::CPUI_SUBPIECE);
+    }
+
+    #[test]
+    fn test_sign_form_zext_input_rejected() {
+        // Input written by INT_ZEXT is not INT_SEXT -> cc:8462-8463 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
+        let (sub_op, _) = { let c = fd.new_constant(4, 2); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[zext_out, c], 1) };
+        let rule = RuleSignForm::new();
+        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_sign_form_sright_op_not_dispatched() {
+        // Old Rugra behavior negative: an INT_SRIGHT op (the pattern the old
+        // implementation required) is not in the oplist, so the dispatcher
+        // never invokes this Rule on it; a direct applyOp call also rejects
+        // because in(1) holds the shift amount, not a SUBPIECE offset — but
+        // `c >= a.size` could accidentally pass, proving only the oplist
+        // guarantees the oracle behavior. Assert the oplist gate.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 1, 0x10);
+        let (_, sext_out) = build_op(&mut fd, OpCode::CPUI_INT_SEXT, &[v], 4);
+        let (sr_op, _) = { let c = fd.new_constant(4, 2); build_op(&mut fd, OpCode::CPUI_INT_SRIGHT, &[sext_out, c], 1) };
+        let rule = RuleSignForm::new();
+        let oplist = rule.get_opcodes();
+        assert!(!oplist.contains(&OpCode::CPUI_INT_SRIGHT));
+        // Engine-equivalent dispatch: only ops whose opcode is in the oplist
+        // reach applyOp (action.cc:748-750 perop buckets).
+        let dispatched = oplist.contains(&sr_op.0.read().unwrap().opcode);
+        assert!(!dispatched, "INT_SRIGHT must never be dispatched to RuleSignForm");
+    }
+
+    // --- RuleSignNearMult (ruleaction.cc:8533-8592) ---
+
+    /// Build `(x + ((x s>> 31) >> k)) & mask` and return the AND op plus x.
+    fn build_near_mult(
+        fd: &mut Funcdata,
+        k: u64,
+        mask: u64,
+    ) -> (crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>) {
+        let x = make_input_vn(fd, 4, 0x10);
+        let (_, ssh_out) = { let c = fd.new_constant(4, 31); build_op(fd, OpCode::CPUI_INT_SRIGHT, &[x.clone(), c], 4) };
+        let (_, right_out) = { let c = fd.new_constant(4, k); build_op(fd, OpCode::CPUI_INT_RIGHT, &[ssh_out, c], 4) };
+        let (_, add_out) = build_op(fd, OpCode::CPUI_INT_ADD, &[x.clone(), right_out], 4);
+        let (and_op, _) = { let c = fd.new_constant(4, mask); build_op(fd, OpCode::CPUI_INT_AND, &[add_out, c], 4) };
+        (and_op, x)
+    }
+
+    #[test]
+    fn test_sign_near_mult_oplist_matches_oracle() {
+        // ruleaction.cc:8535-8539: INT_AND only — never INT_MULT.
+        let ops = RuleSignNearMult::new().get_opcodes();
+        assert_eq!(ops, vec![OpCode::CPUI_INT_AND]);
+    }
+
+    #[test]
+    fn test_sign_near_mult_and_to_mult_sdiv() {
+        // `(V + (V s>>31 >> 28)) & 0xFFFFFFF0 => (V s/ 16) * 16`
+        // (cc:8579-8591): the AND becomes INT_MULT whose input 0 is a new
+        // INT_SDIV(x, 16) inserted before it.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (and_op, x) = build_near_mult(&mut fd, 28, 0xFFFFFFF0);
+        let rule = RuleSignNearMult::new();
+        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let a = and_op.0.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_MULT, "AND becomes INT_MULT");
+        let in0 = a.get_in(0).unwrap();
+        assert!(in0.read().unwrap().is_written());
+        let div = in0.read().unwrap().get_def().unwrap();
+        assert_eq!(div.read().unwrap().opcode, OpCode::CPUI_INT_SDIV);
+        assert!(std::sync::Arc::ptr_eq(&div.read().unwrap().get_in(0).unwrap().clone(), &x), "SDIV divides x");
+        assert_eq!(div.read().unwrap().get_in(1).unwrap().read().unwrap().get_offset(), 16);
+        let in1 = a.get_in(1).unwrap().read().unwrap();
+        assert_eq!((in1.get_size(), in1.get_offset()), (4, 16), "MULT by 2^n");
+    }
+
+    #[test]
+    fn test_sign_near_mult_shift_side_swapped() {
+        // The INT_RIGHT side may sit on either ADD slot (cc:8551-8560 loop).
+        // k=24 -> n=8 -> mask 0xFFFFFF00.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let x = make_input_vn(&mut fd, 4, 0x10);
+        let (_, ssh_out) = { let c = fd.new_constant(4, 31); build_op(&mut fd, OpCode::CPUI_INT_SRIGHT, &[x.clone(), c], 4) };
+        let (_, right_out) = { let c = fd.new_constant(4, 24); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[ssh_out, c], 4) };
+        let (_, add_out) = build_op(&mut fd, OpCode::CPUI_INT_ADD, &[right_out, x.clone()], 4);
+        let (and_op, _) = { let c = fd.new_constant(4, 0xFFFFFF00); build_op(&mut fd, OpCode::CPUI_INT_AND, &[add_out, c], 4) };
+        let rule = RuleSignNearMult::new();
+        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let a = and_op.0.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_MULT);
+        assert_eq!(a.get_in(1).unwrap().read().unwrap().get_offset(), 256, "2^8");
+    }
+
+    #[test]
+    fn test_sign_near_mult_mask_mismatch_rejected() {
+        // k=28 (n=4, expected mask 0xFFFFFFF0) but AND constant 0xFFFFFF00
+        // -> cc:8569 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let (and_op, _) = build_near_mult(&mut fd, 28, 0xFFFFFF00);
+        let rule = RuleSignNearMult::new();
+        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(and_op.0.read().unwrap().opcode, OpCode::CPUI_INT_AND);
+    }
+
+    #[test]
+    fn test_sign_near_mult_wrong_sign_shift_rejected() {
+        // Sign shift amount 30 != 8*4-1 -> cc:8577 rejects.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let x = make_input_vn(&mut fd, 4, 0x10);
+        let (_, ssh_out) = { let c = fd.new_constant(4, 30); build_op(&mut fd, OpCode::CPUI_INT_SRIGHT, &[x, c], 4) };
+        let (_, right_out) = { let c = fd.new_constant(4, 28); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[ssh_out, c], 4) };
+        let (_, add_out) = { let c = fd.new_constant(4, 0); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[c, right_out], 4) };
+        let (and_op, _) = { let c = fd.new_constant(4, 0xFFFFFFF0); build_op(&mut fd, OpCode::CPUI_INT_AND, &[add_out, c], 4) };
+        let rule = RuleSignNearMult::new();
+        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_sign_near_mult_mult_form_not_dispatched() {
+        // Old Rugra behavior negative: the already-multiplied form
+        // `INT_MULT(V + (V s>>31 >> 28), 16)` is NOT in the oplist (INT_AND
+        // only, cc:8538), so the oracle engine never rewrites an existing
+        // INT_MULT here.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let x = make_input_vn(&mut fd, 4, 0x10);
+        let (_, ssh_out) = { let c = fd.new_constant(4, 31); build_op(&mut fd, OpCode::CPUI_INT_SRIGHT, &[x, c], 4) };
+        let (_, right_out) = { let c = fd.new_constant(4, 28); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[ssh_out, c], 4) };
+        let (_, add_out) = { let c = fd.new_constant(4, 0); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[c, right_out], 4) };
+        let (mult_op, _) = { let c = fd.new_constant(4, 16); build_op(&mut fd, OpCode::CPUI_INT_MULT, &[add_out, c], 4) };
+        let rule = RuleSignNearMult::new();
+        let oplist = rule.get_opcodes();
+        assert!(!oplist.contains(&OpCode::CPUI_INT_MULT));
+        assert!(!oplist.contains(&mult_op.0.read().unwrap().opcode));
+    }
+
+    // --- RuleShift2Mult (ruleaction.cc:3704-3751) ---
+
+    #[test]
+    fn test_shift2mult_oplist_left_only() {
+        // ruleaction.cc:3708-3712: INT_LEFT ONLY — the INT_RIGHT registration
+        // was a Rugra-local bug that rewrote `V >> c` into `V * 2^c`
+        // (RULE-BEHAVIORAL-FIVE-0001 M5).
+        let ops = RuleShift2Mult::new().get_opcodes();
+        assert_eq!(ops, vec![OpCode::CPUI_INT_LEFT]);
+        assert!(!ops.contains(&OpCode::CPUI_INT_RIGHT));
+    }
+
+    #[test]
+    fn test_shift2mult_right_shift_not_dispatched() {
+        // `(V >> 3)` feeding an INT_ADD must never become a multiplication.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = make_input_vn(&mut fd, 4, 0x10);
+        let (shift_op, shift_out) = { let c = fd.new_constant(4, 3); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[v, c], 4) };
+        let w = make_input_vn(&mut fd, 4, 0x30);
+        let (_, _) = build_op(&mut fd, OpCode::CPUI_INT_ADD, &[shift_out, w], 4);
+        let rule = RuleShift2Mult::new();
+        let oplist = rule.get_opcodes();
+        assert!(!oplist.contains(&OpCode::CPUI_INT_RIGHT), "INT_RIGHT must not be dispatched");
+        // Direct applyOp (as the old registration would have allowed) is
+        // opcode-blind in the oracle too; the oplist is the only gate, so
+        // assert the gate plus that the op survives a dispatch pass.
+        assert!(!oplist.contains(&shift_op.0.read().unwrap().opcode));
     }
 
     // --- RuleNegateIdentity (ruleaction.cc:444-474) ---
@@ -18136,43 +18944,55 @@ mod tests {
 
     #[test]
     fn test_or_collapse_constant_covers() {
-        // V (register, NZM=0xffffffff) | 0xff (size 1) → COPY (since all V bits covered by 0xff? No.
-        // NZM(V) for a size-1 register is 0xff. (0xff | 0xff)==0xff → collapse.
+        // V (1-byte input, calcNZMask assigns nzm = calc_mask(1) = 0xff,
+        // funcdata_varnode.cc:892) | 0xff → (0xff | 0xff) == 0xff → COPY(0xff).
+        // getNZMask now reads the propagated nzm field, so the test runs
+        // Funcdata::calc_nz_mask first, exactly like ActionNonzeroMask
+        // (coreaction.cc:5507) does before the rule pools.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let c = fd.vbank.create_constant(1, 0xff);
-        let op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_OR,
-        )));
-        {
-            let mut o = op.write().unwrap();
-            o.inrefs = vec![v, c];
-            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20));
-        }
+        let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x5000))));
+        fd.bblocks.add_block(block.clone());
+        let v = {
+            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+            fd.set_input_varnode(vn)
+        };
+        let c = fd.new_constant(1, 0xff);
+        let op = fd.new_op(2, Address::new(0x5000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_OR);
+        fd.op_set_input(&op, v, 0);
+        fd.op_set_input(&op, c, 1);
+        fd.new_unique_out(1, &op);
+        fd.op_insert_end(&op, &block);
+        fd.calc_nz_mask();
         let rule = RuleOrCollapse::new();
-        let result = rule.apply_op(&op, &mut fd).unwrap();
+        let result = rule.apply_op(&op.0, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
-        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_COPY);
     }
 
     #[test]
     fn test_or_collapse_partial_no_change() {
-        // V (size 1, NZM=0xff) | 0x0f → (0xff | 0x0f)=0xff != 0x0f → no change
+        // V (size 1, propagated nzm 0xff) | 0x0f → (0xff | 0x0f)=0xff != 0x0f
+        // → no change (ruleaction.cc:397).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let c = fd.vbank.create_constant(1, 0x0f);
-        let op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_OR,
-        )));
-        {
-            let mut o = op.write().unwrap();
-            o.inrefs = vec![v, c];
-            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20));
-        }
+        let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x5000))));
+        fd.bblocks.add_block(block.clone());
+        let v = {
+            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+            fd.set_input_varnode(vn)
+        };
+        let c = fd.new_constant(1, 0x0f);
+        let op = fd.new_op(2, Address::new(0x5000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_OR);
+        fd.op_set_input(&op, v, 0);
+        fd.op_set_input(&op, c, 1);
+        fd.new_unique_out(1, &op);
+        fd.op_insert_end(&op, &block);
+        fd.calc_nz_mask();
         let rule = RuleOrCollapse::new();
-        let result = rule.apply_op(&op, &mut fd).unwrap();
+        let result = rule.apply_op(&op.0, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
     }
 

@@ -659,10 +659,14 @@
 
 测试：varnode::tests 4 个新增（mark、explicit/implied、addr_tied 双标志、illegal_input）。
 
-## 2026-06-26（续）：get_nz_mask
+## 2026-06-26（续）：get_nz_mask（2026-08-23 FUNCDATA-CALCNZM-0003 更正语义）
 
-- `get_nz_mask(&self) -> u64`（varnode.hh:231）：非零掩码。Ghidra 由 Heritage/Cover 维护；
-  Rugra 当前保守近似（常量=值，其他=calc_mask(size)）。解锁 RuleSlessToLess 等 NZM 相关 Rule。
+- `get_nz_mask(&self) -> u64`（varnode.hh:231）：非零掩码，**直接返回 `nzm` 字段**（oracle 语义）。
+  字段由构造函数初始化（varnode.cc:590-606：常量=offset、其他=~0），并由
+  `Funcdata::calcNZMask`（funcdata_varnode.cc:856-927：DFS 经 `PcodeOp::getNZMaskLocal`
+  赋输出 + MULTIEQUAL worklist 传播）前向精化；主管线中 `ActionNonzeroMask`
+  （coreaction.cc:5507）每轮 mainloop 在规则池之前运行它。旧实现（常量=值、
+  其他=calc_mask(size) 的保守近似）已删除。解锁 RuleSlessToLess 等 NZM 相关 Rule。
 
 ## 2026-06-26（续）：lone_descend / has_no_descend
 
