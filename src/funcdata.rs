@@ -5772,22 +5772,116 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata.cc:84 Funcdata::clear
-    /// Clear all analysis state
+    /// Clear everything associated with decompilation (analysis).
+    /// Faithful to `Funcdata::clear` (funcdata.cc:84-112), step for step in
+    /// the Ghidra statement order:
+    ///
+    ///   cc:88-89   flags &= ~(highlevel_on|blocks_generated|
+    ///              processing_started|typerecovery_start|typerecovery_on|
+    ///              double_precis_on|restart_pending)
+    ///   cc:90-92   clean_up_index = 0; high_level_index = 0;
+    ///              cast_phase_index = 0
+    ///   cc:93      minLanedSize = glb->getMinimumLanedRegisterSize()
+    ///   cc:95-96   localmap->clearUnlocked(); localmap->resetLocalWindow()
+    ///   cc:98      clearActiveOutput()
+    ///   cc:99      funcp.clearUnlockedOutput()
+    ///   cc:100     unionMap.clear()
+    ///   cc:101     clearBlocks()
+    ///   cc:102-103 obank.clear(); vbank.clear()
+    ///   cc:104     clearCallSpecs()
+    ///   cc:105     clearJumpTables()
+    ///   cc:106     // Do not clear overrides
+    ///   cc:107     heritage.clear()
+    ///   cc:108     covermerge.clear()
+    ///
+    /// The flags mask is PARTIAL on purpose: Ghidra preserves
+    /// blocks_unreachable, processing_complete, no_code, jumptablerecovery_on,
+    /// jumptablerecovery_dont, unimplemented_present, baddata_present and
+    /// typerecovery_exceeded across clear (only the seven analysis-phase bits
+    /// die), so a restarted function keeps its completion/limit markers.
+    /// Rugra's remapped `funcdata_flags` bit values differ from Ghidra's raw
+    /// bit positions, but the logical mask is the same seven flags.
+    /// `clean_up_index`/`cast_phase_index` have no Rugra fields (the
+    /// startCleanUp/ActionSetCasts markers in coreaction.rs are faithful
+    /// no-ops), so their reset here is a no-op.
     pub fn clear(&mut self) {
+        // cc:88-89: clear the seven analysis-phase flag bits (Ghidra mask
+        // highlevel_on|blocks_generated|processing_started|typerecovery_start|
+        // typerecovery_on|double_precis_on|restart_pending).
+        self.flags &= !(funcdata_flags::HIGHLEVEL_ON
+            | funcdata_flags::BLOCKS_GENERATED
+            | funcdata_flags::PROCESSING_STARTED
+            | funcdata_flags::TYPE_RECOVERY_START
+            | funcdata_flags::TYPE_RECOVERY_ON
+            | funcdata_flags::DOUBLE_PRECIS_ON
+            | funcdata_flags::RESTART_PENDING);
+        // Ghidra's restart_pending lives in the flags word (funcdata.hh:84,
+        // 0x400); Rugra additionally mirrors it in a dedicated bool
+        // (funcdata.hh:216 hasRestartPending accessor counterpart), so the
+        // same masked bit must clear both projections.
+        self.restart_pending = false;
+        // cc:90-92: counter resets. clean_up_index and cast_phase_index have
+        // no Rugra storage (coreaction.rs no-op markers), so only
+        // high_level_index is reset here.
+        self.high_level_index = 0;
+        // cc:93: minLanedSize = glb->getMinimumLanedRegisterSize()
+        // (architecture.cc:312-317: -1 when lanerecords is empty; u32::MAX is
+        // the same sentinel in Rugra's unsigned representation).
         self.min_laned_size = self
             .arch
             .as_ref()
             .map_or(u32::MAX, |arch| arch.get_minimum_laned_register_size() as u32);
-        self.vbank.clear();
-        self.obank.clear();
-        self.bblocks.clear();
-        self.sblocks.clear();
-        self.heritage.clear();
-        // Ghidra funcdata.cc:108: covermerge.clear()
-        self.merge_state.clear();
+        // cc:95: localmap->clearUnlocked() — clear non-permanent stuff.
+        // RUGRA modeling (same convention as start_processing, funcdata.cc
+        // 160): the varmap ScopeLocal keeps its index-keyed nametree/category
+        // lists private, so the faithful typelock-preserving clearUnlocked
+        // (database.cc:2042-2064) cannot be projected from this module; the
+        // wholesale clear below is the established model. Typelocked-symbol
+        // survival is a registered MISMATCH residual
+        // (MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001 / localmap_typelock_survival).
+        if let Some(scope) = self.scope.as_mut() {
+            scope.symbols.clear();
+            // cc:96: localmap->resetLocalWindow() (varmap.cc:432-463).
+            // minParamOffset = ~(uintb)0; maxParamOffset = 0 (varmap.cc:443-444);
+            // the stackGrowsNegative/local-range re-derivation reads
+            // FuncProto::getLocalRange/isStackGrowsNegative (fspec.hh:1539-1541,
+            // 978) which Rugra's FuncProto does not expose — no Rugra writer
+            // drifts those fields after construction, so their reset is
+            // currently unobservable (residual branch reset_local_window_range).
+            scope.min_param_offset = u64::MAX;
+            scope.max_param_offset = 0;
+        }
+        // The HighVariable→Symbol associations die with the symbols
+        // (same companion clear start_processing performs at funcdata.cc:160).
+        self.high_symbols.clear();
+        self.symbol_entry_cache.clear();
+        // cc:98: clearActiveOutput() (funcdata.hh:420-423: delete + null).
+        self.active_output = None;
+        // cc:99: funcp.clearUnlockedOutput() — inputs are cleared by localmap.
+        // RUGRA residual: fspec.rs clear_unlocked_output is a simplification
+        // of fspec.cc:4001-4013 (no size-lock type reset, no store output
+        // clear, returnBytesConsumed not zeroed) — bound to
+        // MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001 / funcproto_unlocked_output.
+        self.funcp.clear_unlocked_output();
+        // cc:100: unionMap.clear()
         self.union_map.clear();
-        // Ghidra's clear() does not reset localoverride (commands survive
-        // restarts), so we leave it intact here.
+        // cc:101: clearBlocks() (funcdata_block.cc:34-39)
+        self.clear_blocks();
+        // cc:102-103: obank.clear() (op.cc:1194-1210, uniqid restarts at 0);
+        // vbank.clear() (varnode.cc:1230-1241, uniqid resets to the unique
+        // base and create_index to 0).
+        self.obank.clear();
+        self.vbank.clear();
+        // cc:104: clearCallSpecs() (funcdata.cc:464-473)
+        self.clear_call_specs();
+        // cc:105: clearJumpTables() (funcdata_block.cc:42-59)
+        self.clear_jump_tables();
+        // cc:106: Do not clear overrides — localoverride and laned_map both
+        // survive clear (funcdata.hh:108/-99 have no clear call sites).
+        // cc:107: heritage.clear() (heritage.cc:2855-2866)
+        self.heritage.clear();
+        // cc:108: covermerge.clear() (merge.cc:1580-1587)
+        self.merge_state.clear();
     }
 
     // =========================================================================
@@ -7562,19 +7656,20 @@ impl Funcdata {
 
     // Ghidra: funcdata_block.cc:43 Funcdata::clearJumpTables
     /// Clear all derived jump-table data, preserving any manually-overridden
-    /// tables (which are cleared of derived data but kept). Faithful to
-    /// `Funcdata::clearJumpTables` (funcdata_block.cc:43-60). Rugra's
-    /// `JumpTable` has no `clear()` method; an override is replaced with a
-    /// fresh empty table at the same address.
+    /// tables. Faithful to `Funcdata::clearJumpTables`
+    /// (funcdata_block.cc:43-60): for an override the table object survives
+    /// with only its derived data cleared via `JumpTable::clear()`
+    /// (jumptable.cc:2739-2758 — which itself preserves the permanent
+    /// opaddress/maxtablesize/maxaddsub/maxleftright/maxext/collectloads
+    /// fields); non-override tables are dropped entirely.
     pub fn clear_jump_tables(&mut self) {
         let mut remain: Vec<Arc<RwLock<crate::jumptable::JumpTable>>> = Vec::new();
         for jt in self.jump_tables.drain(..) {
             let is_override = jt.read().unwrap().is_override();
             if is_override {
                 // Clear out any derived data but keep the override itself.
-                let addr = jt.read().unwrap().get_op_address();
-                let fresh = Arc::new(RwLock::new(crate::jumptable::JumpTable::new(addr)));
-                remain.push(fresh);
+                jt.write().unwrap().clear();
+                remain.push(jt);
             }
             // else: drop (the Arc is released when it goes out of scope).
         }
