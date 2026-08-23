@@ -14,9 +14,10 @@ use rugra::block::FlowBlock;
 use rugra::comment::CommentDatabaseInternal;
 use rugra::funcdata::Funcdata;
 use rugra::jumptable::{JumpModel, JumpTable, JumpTableRecoveryError, LoadTable, RecoveryMode};
+use rugra::marshal::{xml_tree, IdRegistry, TreeDecoder};
 use rugra::op::PcodeOp;
 use rugra::opcodes::OpCode;
-use rugra::space::{AddrSpace, SpaceType};
+use rugra::space::{AddrSpace, AddressSpace, SpaceType};
 use rugra::varnode::Varnode;
 
 type BlockRef = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
@@ -584,6 +585,19 @@ fn main() {
     let commentdb = Arc::new(RwLock::new(CommentDatabaseInternal::new()));
     let mut architecture = Architecture::new();
     architecture.commentdb = Some(commentdb.clone());
+    architecture.max_basetype_size = 16;
+    architecture.stack_pointer_space = AddressSpace::Register;
+    architecture.stack_pointer_offset = 0;
+    architecture.stack_pointer_size = 8;
+    let prototype_document =
+        xml_tree(b"<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>")
+            .expect("decode fixture prototype XML");
+    let registry = Arc::new(RwLock::new(IdRegistry::new()));
+    let mut decoder = TreeDecoder::from_document(&prototype_document, registry);
+    architecture
+        .decode_proto(&mut decoder, 8, &|_| None)
+        .expect("decode fixture prototype model");
+    architecture.set_default_model("fixture");
     let architecture = Arc::new(architecture);
     const OP: u64 = 0x100000;
     let cases = vec![

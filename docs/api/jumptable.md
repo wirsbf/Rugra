@@ -3,7 +3,10 @@
 对应 Ghidra `jumptable.hh` / `jumptable.cc`。**当前状态：🔧 L2
 （2026-08-11 锁定 12.0.4 审计）**。Override 的 start-op/trial normalization、
 PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
-model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 `NO_ORACLE`。
+model selection（`JUMPTABLE-SELECTION-0001`）与 SwitchNorm/production
+consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍为 L2，
+本专项 overall 为 `MISMATCH`，扩展 24-case 的 current-Rust coverage 为
+`UNTESTED`。
 
 ## 2026-08-24：JUMPTABLE-THUNK-CLASSIFY-0001 — typed recovery failure
 
@@ -24,7 +27,8 @@ model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 
   `try_recover -> Option<JumpTable>` 暂作兼容适配；`try_recover` 已移除
   `catch_unwind`，panic 不再冒充普通恢复失败。
 - B2：`tests/oracle/jt_thunk_classify_1204.{cc,rs,metadata.json}` 与
-  `tools/run_jt_thunk_classify_oracle.sh` 在锁定 12.0.4 上逐字节对拍 24 个场景：
+  `tools/run_jt_thunk_classify_oracle.sh` 定义了锁定 12.0.4 的 24 个逐 case
+  参数/IR 同构场景：
   zero / near / `0xffff` / `0x10000` / multi；isReachable 的单层 false、
   两层 parent 更新、boolean flip、非零常量、`sizeOut != 2`、非 CBRANCH、
   非常量；override；recoverModel fail / tableSize 0 / collectloads=false /
@@ -37,10 +41,19 @@ model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 
   `collapse` 只在 `collectloads=true` 且 `recoverAddresses` 成功返回时记录，并由
   返回后的 loadpoints 证明内部 collapse 已完成；异常与 collectloads=false 路径
   均无 marker。锁定 C++ 输出已生成，当前 Rust source 也通过 31 个 focused
-  jumptable tests；但本 candidate 唯一获准的完整 runner 重试在 Cargo 成功后、
-  Rust fixture 链接前因旧 artifact selector 误匹配 25 个 dependency
-  `root-output` 而停止。cleanup 已删除该次 run-local target，修正后的 runner 未再
-  执行，因此当前 24-case projection 准确记为 `UNTESTED`，不得写作 `MATCH`。
+  jumptable tests；但尚无一次运行把当前 Rust candidate 链入扩展后的 24-case
+  fixture。此前 runner 在 Cargo 成功后、Rust fixture 链接前因 artifact selector
+  误匹配 25 个 dependency `root-output` 而停止，cleanup 随后删除 run-local target。
+  因此上述所有 24-case behavior coverage 当前均为 `UNTESTED`，不得写作 `MATCH`。
+- 双侧现都经 production XML decoder 建立并选中
+  `<prototype name="fixture" extrapop="0"><input/><output/></prototype>`，Rust
+  fixture 同时把 `max_basetype_size=16`、stack pointer `register:0/8` 钉到
+  C++ synthetic Architecture 的值。仍不能把整个 compiler-spec/Architecture
+  全局状态称作同输入：Rugra 的 `ProtoModelFull.output` 仍是输入型
+  `ParamListStandard`，而 locked Ghidra 使用 `ParamListStandardOut`
+  （`FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001`）；两侧未被本 24-case 消费的
+  TypeFactory/instruction registry/symbol scope 也不是同构对象。该输入表示债务与
+  current-Rust 尚未执行共同阻止 fixture 投影升级为 `MATCH`。
 - `LoadTable::collapse_table` 的排序比较键只含 `addr`，对应
   jumptable.hh:59 的 `return addr < op2.addr`；`size/num` 不作 tie-break。比较与
   `nextaddr` 都保留完整 `Address`：先按 address-space index、再按 offset 排序，
@@ -49,27 +62,77 @@ model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 
 - 锁定 oracle 使用 GCC 16.2.1/libstdc++。C++ 标准不规定等价键的 `std::sort`
   排列，而 collapse 后续又读取 `size`，所以排列可见：16 项同址、size 4/8
   交替时走 insertion-sort 边界；17 项时 introsort 的等价组排列会让一项被
-  collapse 丢弃。Rust 完整复现该锁定 libstdc++ 的 median/partition/introsort/
-  heap fallback/final insertion 路径，没有按元素数特判。runner 固定 g++、
-  libstdc++ 二进制及相关 STL headers 的 SHA-256。
+  collapse 丢弃。Rust 实现以该锁定 libstdc++ 的 median/partition/introsort/
+  heap fallback/final insertion 分支为目标，没有按元素数特判；当前保留的
+  fixture 只覆盖 16/17 项阈值和可见等价组排列，heap fallback 仍未有
+  独立双侧证据。runner 固定 g++、libstdc++ 二进制及相关 STL headers
+  的 SHA-256。
 - 生产构造链审计：fresh `recoverAddresses` 中只有
   `JumpBasic::buildAddresses -> EmulateFunction::executeLoad` 产生 load records，
   两参数构造器令每项 `num=1`；同址异 size 仍可由 PathMeld 中不同宽度的 LOAD
   产生。故 16/17 项反例保持生产前置条件（`num` 全为 1），不以任意私有 vector
   冒充生产输入；`num>1` 仅在 collapse 或 decode/clone 后存在。
-- runner 从固定 base archive 加当前 comparand overlay 构造只读快照，记录运行前后
-  index/worktree/runtime-input/toolchain/oracle drift；Cargo 只调用一次，并使用
-  本次 `$oracle_tmp/cargo-target`。`root-output` 只在 build 目录深度 2 搜索，再以
-  直接父目录 basename `rugra-*` 过滤；native archive 与唯一 rlib 均限定在 fresh
-  target，不再读取共享 target 的 latest 产物。此 selector 修正已静态校验，但如上
-  所述尚无完整执行证据。
+- runner 只捕获一次 `HEAD` commit/tree，并要求六个租约文件相对该 HEAD clean、tree
+  与 stage-0 index mode/OID 一致，再以单次 `O_NOFOLLOW` FD 读取前/后独立
+  核对 worktree mode/bytes；原子 comparand 身份是 captured commit blobs，不宣称六个
+  live path 存在一个跨文件原子瞬间。metadata、双侧 fixture、jumptable
+  overlay、API 文档与 runner 全从捕获的 `commit:path` blob 物化到私有快照，编译
+  阶段不再读取 live comparand。runner 的 point-in-time 内容先经独立 FD
+  核对，再从该 FD 在外层 cleanup supervisor 下重新执行；这里的信任边界包含
+  runner 初始入口、内核与本机 root-owned 工具，不声称抵抗可改写同一 FD inode
+  的恶意同 UID 进程。metadata 明示不能
+  自我认证，最终 commit/tree/六 blob OID 由 root 与独立 reviewer 作外部 anchor。
+  base/Ghidra archive 解包内容逐 blob 回验；snapshot comparands、runner FD、
+  compiler 子程序、Make 使用的 shell/uname/sed/mkdir/rm、Rust
+  driver/LLVM 与 target-libdir tree（另钉 sysroot path）、GCC/libstdc++/系统
+  headers、Python stdlib 语义树、枚举的
+  CRT/linker-script/archive、zlib link/runtime 输入及动态库闭包的路径/内容均在
+  comparand 前后重验。外层 supervisor 在 spawn 前先记录 pending signal，以
+  pinned GNU `env --default-signal` 恢复异步 child 继承的 disposition，再由 pinned
+  `setsid --wait` 建独立进程组；只有 child 写入并通过 PID/PGID/SID handshake 后才
+  重放/转发 HUP/INT/QUIT/TERM，wait/reap 后仍以首个请求的 `128+signal` 退出。
+  cleanup 期间屏蔽后续 signal，成功主体若 cleanup 拒绝或删除失败也返回非零。Cargo
+  build/test 只调用一次并持全局 flock（前后另以
+  `cargo --version` 作只读指纹探测）；runner 按 captured `Cargo.lock`
+  checksum 单次读取本机 `.crate`，拒绝歧义、路径逃逸与非 regular archive member，
+  物化为只读 snapshot vendor，并使用空的 run-local `CARGO_HOME` 与本次
+  `$oracle_tmp/cargo-target`；`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER`
+  明确钉到已哈希的 `/usr/bin/gcc`，不经 clean PATH 隐式选择 `/usr/bin/cc`。
+  `LIBZ_SYS_STATIC=1` 令 `libz-sys` 从该已认证 vendor
+  构建 bundled zlib，不查询 pkg-config。`root-output` 只在 build 目录深度 2 搜索并以直接
+  父目录 basename `rugra-*` 过滤，不读取共享 target 的 latest 产物。
+  direct-rustc 前后还绑定 dependency/native 两个完整输入树（含根目录、所有
+  regular file bytes 与目录 mode），最终重验两个 fixture executable；Ghidra
+  冷构建输出严格限制为两个 dependency 文件、locked Makefile 独立展开的 79 个
+  `com_opt` object、两个 0700 build 目录及 `libdecomp.a`，并逐项核对 archive
+  member 顺序、重复性与 member/object bytes，拒绝额外或变型 filesystem node。
 - 剩余 `MISMATCH`（`JUMPTABLE-PIPELINE-0001`）：本租约禁止修改 flow/funcdata，
-  因而生产调用闭包仍通过 bool/Option 兼容层丢失 typed mode；在生产
-  `stageJumpTable` 消费 `JumpTableRecoveryError` 并分别返回 `FailThunk` / ordinary
-  failure 前，不得将模块或 fixture overall 状态提升为 MATCH/L3。
+  因而生产调用闭包仍通过 bool/Option 兼容层丢失 typed mode。另一个
+  独立的可见差异是 `RecoveryMode` 的 Ghidra/Rust 判别值均为
+  normal=1/thunk=2/return=3/callother=4，而 `flow.rs::truncate_indirect_jump`
+  的旧 `u8` 协议却把 0/1/2/other 解释为 thunk/callother/return/default；直接
+  cast 会把 `FailNormal=1` 错当 no-return callother。在生产 `stageJumpTable`
+  消费 typed error，并向 truncate 传递同一 `RecoveryMode` 域前，不得将模块或
+  fixture overall 状态提升为 MATCH/L3。
 - 剩余 `MISMATCH`（`JUMPTABLE-SORT-TOOLCHAIN-0001`）：当前只证明锁定
-  GCC16/libstdc++ 的可观察等价组排列；其他合法 STL/toolchain 可能不同。生产若
+  GCC16/libstdc++ 的预期可观察等价组排列；当前 Rust 24-case 尚未
+  执行，heap fallback 也未有双侧证据，且其他合法 STL/toolchain 可能不同。生产若
   需要跨 toolchain 等价，必须固定 oracle toolchain 或另行定义并双侧验证稳定契约。
+- 剩余 `MISMATCH`（`JUMPTABLE-EMULFN-0001`）：locked
+  `EmulateFunction::executeLoad` 在成功求出 LOAD 地址后，仅当 `loadpoints`
+  非空时先追加 record，再由基类读取 payload；只有 `emulatePath`
+  循环内 `executeCurrentOp` 抛出的 `DataUnavailError` 才转成带当前 op
+  地址的 `LowlevelError`，最后结果 varnode 的读取位于该 catch 之外。起始
+  MULTIEQUAL 无法解析、坏 start-op、普通 MULTIEQUAL 无法用 `lastOp`
+  所在前驱选中输入，以及 BRANCH/BRANCHIND 均有各自精确的 Lowlevel
+  文本和异常时序。其中坏 start 明确指 non-MULTIEQUAL start op 不在 PathMeld，
+  并非泛化所有找不到的起点。Rust 当前没有 loader callback 或 `lastOp` 前驱状态，
+  `get_varnode_value` 回退 0，`execute_op/emulate_path` 用 bool/Option 表示失败，
+  `JumpBasic::build_addresses` 又把 `None` 或缺 start 静默写成 target 0。此缺口
+  不能归入 typed stage 的 `JUMPTABLE-PIPELINE-0001`，且本租约不扩
+  EmulateFunction 接口修复它。
+- 上述 PIPELINE/EMULFN 为 locked-source audit 已知差异，SORT 为跨 toolchain
+  contract residual；它们都不是当前未执行 Rust 的 24-case fixture 观察结果。
 
 ## 2026-08-23：JUMPTABLE-GUARDS-0001 — analyzeGuards 完整移植 + valueMatch 补全 + checkUnrolledGuard 接线
 
@@ -339,18 +402,27 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 
 剩余 L3 缺：emulate_path 地址计算、CFG 重写（foldInGuards/switchOver）。
 
-## 2026-06-27（续 3）：emulate_path 地址计算完成
+## 2026-06-27（续 3）：emulate_path 历史局部实现（完成结论已撤回）
 
 **EmulateFunction 新增方法**：
-- `execute_op(op) -> bool`：执行单个 pcode op，使用 opbehavior::evaluate_unary/binary/ternary 计算结果并存储。LOAD 时收集 loadpoint。
-- `emulate_path(val, path_meld, startop, startvn) -> Option<u64>`（jumptable.cc:218）：从起始值流过 pathMeld 的所有路径到 BRANCHIND，返回计算的目标地址。处理 MULTIEQUAL 起始特殊情况。
+- `execute_op(op) -> bool`：只覆盖可由
+  `opbehavior::evaluate_unary/binary/ternary` 计算的子集。代码中的 LOAD
+  record 分支位于 evaluate 成功后，而当前 `CPUI_LOAD` evaluate 返回
+  `None`，因此该分支不可达，不等价于 locked `executeLoad`。
+- `emulate_path(val, path_meld, startop, startvn) -> Option<u64>`（jumptable.cc:218）：
+  能驱动上述通用运算子集并识别部分起始 MULTIEQUAL 形状；但仍缺
+  loader/DataUnavail 异常通道、普通 MULTIEQUAL 的 `lastOp` 前驱选择、
+  BRANCH 异常语义及精确 Lowlevel 文本，失败被压成 `None`。
 
-**JumpBasic::build_addresses**：现使用 emulate_path 计算每个 switch 值的目标地址（jumptable.cc:1453），不再放置占位符。
+**JumpBasic::build_addresses**：成功时使用 `emulate_path` 计算目标；
+但 `None` 或缺 start op/varnode 仍会写入 0，因此现阶段仍存在可见占位回退。
 **2026-07-05 修正**：jumptable.cc:1465-1469 的 `funcptr_align` 掩码之前被硬编码为 `u64::MAX`（无对齐），与 Ghidra 在任何 `funcptr_align != 0` 的架构上分歧；并补上 jumptable.cc:1475 的 `AddrSpace::addressToByte(addr, spc->getWordSize())`（Rugra 单空间模型下 `wordSize==1`，no-op，已显式标注）。同时把 `loadcounts` 改为 Ghidra 的累计语义（`loadpoints->size()` 而非 per-iter 局部计数）。`curval` 重置（jumptable.cc:289 `mutable curval`）改为在 `build_addresses` 内重置克隆的迭代器，对齐 Ghidra 的 `initializeForReading` 副作用。
 
-测试：新增 2 个（emulate_path INT_ADD + COPY）。
+测试：历史上新增 2 个 Rust 回归（emulate_path INT_ADD + COPY）；它们不是
+loader/MULTIEQUAL/BRANCH/lastOp/Lowlevel 通道的双侧 oracle 证据。
 
-剩余 L3 缺：CFG 重写（foldInGuards/switchOver via Funcdata::pushBranch）。
+剩余 L3 缺：`JUMPTABLE-EMULFN-0001` 中的上述仿真/异常语义，以及 CFG
+重写（foldInGuards/switchOver via Funcdata::pushBranch）。
 
 ## 2026-06-27 历史实现记录（“达到 L3”结论已于 2026-08-11 撤回）
 
@@ -367,7 +439,9 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 **Override 新增方法**：
 - `apply_force_gotos(fd) -> usize`（override.cc:204）：将所有 force-goto 覆写推入函数。
 
-测试：新增 2 个（set_goto_branch 标志 + apply_force_gotos）。jumptable.rs 所有算法 L3 缺口已关闭。
+测试：新增 2 个（set_goto_branch 标志 + apply_force_gotos）。“jumptable.rs
+所有算法 L3 缺口已关闭”为历史误判；已于 2026-08-11 撤回，当前以文档顶部
+L2 状态及已登记 residual 为准。
 
 ### 2026-07-01：JumpTable 接入 Funcdata
 recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNorm 调用 recover_jump_tables。jump_tables 现可被填充，find_jump_table 返回非 None。
