@@ -3808,6 +3808,39 @@
         "condexe::execute",
         "condexe::do_replacement"
       ]
+    },
+    {
+      "id": "float_fmt_struct_1204",
+      "description": "FloatFormat structural 1:1 vs locked 12.0.4: bit-ladder createFloat/extractExpSig, 64-bit top-aligned fractional code, RNE direct drive incl. uintb wraparound, subnormal normalize intermediate states, denormal-min encoding, NaN quiet-bit normalization, plus full 36-case int2float/float2float value regression (134/134 MATCH)",
+      "runner": [
+        "tools/run_float_fmt_struct_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/float_fmt_struct_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/float_fmt_struct_1204.cc",
+          "rust_fixture": "tests/oracle/float_fmt_struct_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "FloatFormat::createFloat",
+        "FloatFormat::extractExpSig",
+        "FloatFormat::getHostFloat",
+        "FloatFormat::getEncoding"
+      ],
+      "rust_function_ids": [
+        "float_emulate::create_float",
+        "float_emulate::extract_exp_sig",
+        "float_emulate::get_host_float",
+        "float_emulate::get_encoding"
+      ]
     }
   ]
 }
