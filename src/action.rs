@@ -6,7 +6,19 @@ use crate::funcdata::Funcdata;
 use crate::error::Result;
 use crate::coreaction::*;
 use crate::blockaction::*;
-// use std::sync::Arc;
+use std::sync::Arc;
+
+// RUGRA-GLUE: Rust type-erased constructor retained at an Action registration slot so a filtered clone can construct the same concrete leaf without widening every concrete Action's write-set
+type ActionFactory = Arc<dyn Fn() -> Box<dyn Action>>;
+// RUGRA-GLUE: Rust type-erased constructor retained at a Rule registration slot so ActionPool::clone can honor Ghidra's fresh-instance Rule::clone contract
+type RuleFactory = Arc<dyn Fn() -> Box<dyn Rule>>;
+
+// RUGRA-GLUE: keeps each concrete Rule constructor at its locked coreaction.cc registration slot while storing a reusable fresh-instance factory
+macro_rules! register_rule {
+    ($pool:expr, $group:expr, $rule:expr) => {
+        $pool.add_rule_factory_in_group($group, || $rule);
+    };
+}
 
 // ---- Action rule/status/break flags (action.hh:55-87) ----
 // These mirror Ghidra's flag bit values exactly, used by the perform() state
@@ -78,6 +90,14 @@ pub trait Action {
     /// Get the rule flags (repeatapply / onceperfunc / etc). Default: 0
     /// (single-pass). Containers override to return their group's flags.
     fn get_flags(&self) -> u32 { 0 }
+
+    // Ghidra: action.hh:119 Action *clone(const ActionGroupList &grouplist) const
+    /// Construct a fresh, selectively filtered copy. Leaf Actions registered
+    /// by Rugra's universal builder use their registration-slot factory;
+    /// container and fixture Actions can implement the virtual directly.
+    fn clone_for_groups(&self, _grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        None
+    }
 
     // RUGRA-GLUE: exposes changes accumulated in a Rust container while preserving Ghidra's apply return convention
     /// Return and clear changes accumulated independently of `apply()`'s
@@ -173,6 +193,8 @@ pub struct ActionState {
     pub lcount: i32,
     pub count_tests: u32,
     pub count_apply: u32,
+    /// Breakpoint mask corresponding to Ghidra `Action::breakpoint`.
+    pub breakpoint: u32,
     /// Rule flags for this Action (repeatapply / onceperfunc).
     pub flags: u32,
 }
@@ -186,6 +208,7 @@ impl ActionState {
             lcount: 0,
             count_tests: 0,
             count_apply: 0,
+            breakpoint: 0,
             flags,
         }
     }
@@ -216,6 +239,28 @@ pub trait Rule {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the opcodes this rule applies to
     fn get_opcodes(&self) -> Vec<crate::opcodes::OpCode>;
+
+    // Ghidra: action.hh:236 Rule *clone(const ActionGroupList &grouplist) const
+    /// Return a fresh Rule when its group survives, or `None` otherwise.
+    /// Production rules are reconstructed by the ActionPool registration-slot
+    /// factory; custom rules may override this virtual contract directly.
+    fn clone_for_groups(&self, _grouplist: &ActionGroupList) -> Option<Box<dyn Rule>> {
+        None
+    }
+
+    // Ghidra: action.hh:216 const string &getGroup(void) const
+    /// Group recorded by a Rule implementation. Production Rule instances use
+    /// the equivalent ActionPool registration-slot group.
+    fn get_group(&self) -> &str { "" }
+
+    // RUGRA-GLUE: read-only fixture projection of Ghidra Rule inherited state (action.hh:220-225)
+    fn get_rule_flags(&self) -> u32 { 0 }
+    // RUGRA-GLUE: read-only fixture projection of Ghidra Rule inherited state (action.hh:221)
+    fn get_breakpoint(&self) -> u32 { 0 }
+    // Ghidra: action.hh:217 Rule::getNumTests
+    fn get_num_tests(&self) -> u32 { 0 }
+    // Ghidra: action.hh:218 Rule::getNumApply
+    fn get_num_apply(&self) -> u32 { 0 }
 }
 
 /// A group of actions executed together
@@ -234,7 +279,10 @@ pub struct ActionGroup {
     /// would require touching Action classes owned by other write-sets).
     /// Observably identical for the default tree: every instance is
     /// registered exactly once at one fixed slot (coreaction.cc:5462-5738).
-    child_groups: Vec<&'static str>,
+    child_groups: Vec<String>,
+    /// Fresh constructors parallel to `actions`. A container can clone itself
+    /// virtually; concrete leaves use the factory retained at registration.
+    child_factories: Vec<Option<ActionFactory>>,
     /// Iterator index for breakpoint resume (action.hh:146 `state`).
     state: usize,
     /// This group's rule flags (repeatapply etc).
@@ -257,6 +305,7 @@ impl ActionGroup {
             actions: Vec::new(),
             child_states: Vec::new(),
             child_groups: Vec::new(),
+            child_factories: Vec::new(),
             state: 0,
             flags,
             pending_count: 0,
@@ -265,17 +314,61 @@ impl ActionGroup {
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn add_action(&mut self, action: Box<dyn Action>) {
-        self.add_action_in_group(action, "");
+        self.push_action(action, "", None);
     }
 
     // RUGRA-GLUE: registration-site group record mirroring the basegroup string passed to each Ghidra Action ctor (coreaction.cc:5477-5738)
     /// Add a child together with the basegroup string its Ghidra ctor
     /// receives at this registration slot (`new ActionX(group)`).
-    pub fn add_action_in_group(&mut self, action: Box<dyn Action>, group: &'static str) {
+    pub fn add_action_in_group(&mut self, action: Box<dyn Action>, group: &str) {
+        self.push_action(action, group, None);
+    }
+
+    // RUGRA-GLUE: captures the concrete Rust constructor at the Ghidra addAction registration site so leaf Action::clone can remain write-set-local
+    pub fn add_action_factory_in_group<F>(&mut self, group: &str, factory: F)
+    where
+        F: Fn() -> Box<dyn Action> + 'static,
+    {
+        let factory: ActionFactory = Arc::new(factory);
+        let action = factory();
+        self.push_action(action, group, Some(factory));
+    }
+
+    // RUGRA-GLUE: single registration path keeping Action/list/state/group/factory vectors in lock-step
+    fn push_action(
+        &mut self,
+        action: Box<dyn Action>,
+        group: &str,
+        factory: Option<ActionFactory>,
+    ) {
         let child_flags = action.get_flags();
         self.actions.push(action);
         self.child_states.push(ActionState::new(child_flags));
-        self.child_groups.push(group);
+        self.child_groups.push(group.to_string());
+        self.child_factories.push(factory);
+    }
+
+    // Ghidra: action.cc:391 Action *ActionGroup::clone(const ActionGroupList &grouplist) const
+    fn clone_group(&self, grouplist: &ActionGroupList) -> Option<Self> {
+        let mut result: Option<Self> = None;
+        for index in 0..self.actions.len() {
+            let cloned = self.actions[index].clone_for_groups(grouplist).or_else(|| {
+                if !grouplist.contains(&self.child_groups[index]) {
+                    return None;
+                }
+                self.child_factories[index].as_ref().map(|factory| factory())
+            });
+            let Some(action) = cloned else {
+                continue;
+            };
+            let group = result.get_or_insert_with(|| Self::with_flags(&self.name, self.flags));
+            group.push_action(
+                action,
+                &self.child_groups[index],
+                self.child_factories[index].clone(),
+            );
+        }
+        result
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -287,6 +380,10 @@ impl ActionGroup {
     // RUGRA-GLUE: read-only fixture/debug view of a child Action's externalized executor state
     pub fn child_state(&self, index: usize) -> Option<&ActionState> {
         self.child_states.get(index)
+    }
+    // RUGRA-GLUE: mutable fixture projection of Ghidra's inherited per-child Action fields
+    pub fn child_state_mut(&mut self, index: usize) -> Option<&mut ActionState> {
+        self.child_states.get_mut(index)
     }
     // RUGRA-GLUE: read-only ordered fixture view of Ghidra ActionGroup::list (action.hh:145); Ghidra prints the same sequence via Action::print (action.cc:417-440)
     pub fn child_names(&self) -> Vec<&str> {
@@ -301,8 +398,8 @@ impl ActionGroup {
         &mut self.actions
     }
     // RUGRA-GLUE: registration-site basegroup view for tree-walking fixtures (Ghidra Action::getGroup, action.hh:109)
-    pub fn child_group(&self, index: usize) -> &'static str {
-        self.child_groups[index]
+    pub fn child_group(&self, index: usize) -> &str {
+        &self.child_groups[index]
     }
     // RUGRA-GLUE: fixture executor view — drives child `index` through the exact perform() call ActionGroup::apply makes (src/action.rs ActionGroup::apply line above); Ghidra's ActionGroup::apply drives Action::perform the same way (action.cc:511-527)
     pub fn perform_child(
@@ -341,6 +438,12 @@ impl Action for ActionGroup {
     fn get_name(&self) -> &str { &self.name }
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
+
+    // Ghidra: action.cc:391 Action *ActionGroup::clone(const ActionGroupList &grouplist) const
+    fn clone_for_groups(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        self.clone_group(grouplist)
+            .map(|group| Box::new(group) as Box<dyn Action>)
+    }
 
     // RUGRA-GLUE: fixture-only nested tree view (see Action::as_action_group)
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(self) }
@@ -402,8 +505,16 @@ impl ActionRestartGroup {
     }
 
     // RUGRA-GLUE: registration-site group record passthrough (see ActionGroup::add_action_in_group)
-    pub fn add_action_in_group(&mut self, action: Box<dyn Action>, group: &'static str) {
+    pub fn add_action_in_group(&mut self, action: Box<dyn Action>, group: &str) {
         self.group.add_action_in_group(action, group);
+    }
+
+    // RUGRA-GLUE: registration-factory passthrough to the embedded ActionGroup
+    pub fn add_action_factory_in_group<F>(&mut self, group: &str, factory: F)
+    where
+        F: Fn() -> Box<dyn Action> + 'static,
+    {
+        self.group.add_action_factory_in_group(group, factory);
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -412,7 +523,7 @@ impl ActionRestartGroup {
     }
 
     // RUGRA-GLUE: registration-site basegroup view passthrough (Ghidra Action::getGroup, action.hh:109)
-    pub fn child_group(&self, index: usize) -> &'static str {
+    pub fn child_group(&self, index: usize) -> &str {
         self.group.child_group(index)
     }
 
@@ -433,6 +544,23 @@ impl ActionRestartGroup {
     // RUGRA-GLUE: read-only fixture/debug view of a child Action's externalized executor state
     pub fn child_state(&self, index: usize) -> Option<&ActionState> {
         self.group.child_state(index)
+    }
+
+    // RUGRA-GLUE: mutable fixture projection passthrough for inherited per-child Action fields
+    pub fn child_state_mut(&mut self, index: usize) -> Option<&mut ActionState> {
+        self.group.child_state_mut(index)
+    }
+
+    // Ghidra: action.cc:529 Action *ActionRestartGroup::clone(const ActionGroupList &grouplist) const
+    pub fn clone_restart_group(&self, grouplist: &ActionGroupList) -> Option<Self> {
+        self.group.clone_group(grouplist).map(|group| Self {
+            name: self.name.clone(),
+            group,
+            maxrestarts: self.maxrestarts,
+            curstart: 0,
+            flags: self.flags,
+            pending_count: 0,
+        })
     }
 }
 
@@ -482,6 +610,11 @@ impl Action for ActionRestartGroup {
     fn get_flags(&self) -> u32 {
         self.flags
     }
+    // Ghidra: action.cc:529 Action *ActionRestartGroup::clone(const ActionGroupList &grouplist) const
+    fn clone_for_groups(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        self.clone_restart_group(grouplist)
+            .map(|group| Box::new(group) as Box<dyn Action>)
+    }
     // RUGRA-GLUE: shares the external restart-group executor status with its embedded Rust ActionGroup
     fn prepare_apply(&mut self, status: u32) {
         self.group.prepare_apply(status);
@@ -512,6 +645,10 @@ impl Action for ActionRestartGroup {
 pub struct ActionPool {
     name: String,
     rules: Vec<Box<dyn Rule>>,
+    /// Ghidra Rule::basegroup at each `allrules` registration slot.
+    rule_groups: Vec<String>,
+    /// Fresh constructors parallel to `rules` for concrete production Rules.
+    rule_factories: Vec<Option<RuleFactory>>,
     /// Opcode → indices into `rules`, built on add_rule for O(1) dispatch.
     per_op: std::collections::HashMap<crate::opcodes::OpCode, Vec<usize>>,
     /// Rule flags — RULE_REPEATAPPLY so perform() loops this pool.
@@ -524,11 +661,18 @@ pub struct ActionPool {
 impl ActionPool {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn new(name: &str) -> Self {
+        Self::with_flags(name, action_flags::RULE_REPEATAPPLY)
+    }
+
+    // Ghidra: action.hh:269 ActionPool::ActionPool(uint4 fl,const string &nm)
+    pub fn with_flags(name: &str, flags: u32) -> Self {
         Self {
             name: name.to_string(),
             rules: Vec::new(),
+            rule_groups: Vec::new(),
+            rule_factories: Vec::new(),
             per_op: std::collections::HashMap::new(),
-            flags: action_flags::RULE_REPEATAPPLY,
+            flags,
             rule_hits: std::collections::HashMap::new(),
             total: 0,
         }
@@ -538,12 +682,53 @@ impl ActionPool {
     /// Register a Rule. Faithful to `ActionPool::addRule` — the rule's
     /// opcodes are indexed for fast per-op dispatch.
     pub fn add_rule(&mut self, rule: Box<dyn Rule>) {
+        let group = rule.get_group().to_string();
+        self.push_rule(rule, &group, None);
+    }
+
+    // RUGRA-GLUE: captures the concrete Rust constructor at the Ghidra addRule registration site so Rule::clone remains fresh without editing concrete Rule modules
+    pub fn add_rule_factory_in_group<F>(&mut self, group: &str, factory: F)
+    where
+        F: Fn() -> Box<dyn Rule> + 'static,
+    {
+        let factory: RuleFactory = Arc::new(factory);
+        let rule = factory();
+        self.push_rule(rule, group, Some(factory));
+    }
+
+    // Ghidra: action.cc:740 void ActionPool::addRule(Rule *rl)
+    fn push_rule(&mut self, rule: Box<dyn Rule>, group: &str, factory: Option<RuleFactory>) {
         let idx = self.rules.len();
         let opcodes = rule.get_opcodes();
         self.rules.push(rule);
+        self.rule_groups.push(group.to_string());
+        self.rule_factories.push(factory);
         for opc in opcodes {
             self.per_op.entry(opc).or_default().push(idx);
         }
+    }
+
+    // Ghidra: action.cc:899 Action *ActionPool::clone(const ActionGroupList &grouplist) const
+    pub fn clone_pool(&self, grouplist: &ActionGroupList) -> Option<Self> {
+        let mut result: Option<Self> = None;
+        for index in 0..self.rules.len() {
+            let cloned = self.rules[index].clone_for_groups(grouplist).or_else(|| {
+                if !grouplist.contains(&self.rule_groups[index]) {
+                    return None;
+                }
+                self.rule_factories[index].as_ref().map(|factory| factory())
+            });
+            let Some(rule) = cloned else {
+                continue;
+            };
+            let pool = result.get_or_insert_with(|| Self::with_flags(&self.name, self.flags));
+            pool.push_rule(
+                rule,
+                &self.rule_groups[index],
+                self.rule_factories[index].clone(),
+            );
+        }
+        result
     }
 
     // RUGRA-GLUE: fixture-only rule registration view (pool purity fixture
@@ -552,6 +737,19 @@ impl ActionPool {
     // 753-775, which iterates allrules in registration order). No dispatch
     // state is exposed.
     pub fn rules(&self) -> &[Box<dyn Rule>] { &self.rules }
+
+    // Ghidra: action.hh:216 const string &Rule::getGroup(void) const
+    pub fn rule_group(&self, index: usize) -> &str { &self.rule_groups[index] }
+
+    // RUGRA-GLUE: ordered fixture projection of ActionPool::perop[opcode], whose list entries are appended by addRule (action.cc:740-751)
+    pub fn rule_names_for_opcode(&self, opcode: crate::opcodes::OpCode) -> Vec<&str> {
+        self.per_op
+            .get(&opcode)
+            .into_iter()
+            .flatten()
+            .map(|index| self.rules[*index].get_name())
+            .collect()
+    }
 }
 
 impl Action for ActionPool {
@@ -634,6 +832,12 @@ impl Action for ActionPool {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
 
+    // Ghidra: action.cc:899 Action *ActionPool::clone(const ActionGroupList &grouplist) const
+    fn clone_for_groups(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        self.clone_pool(grouplist)
+            .map(|pool| Box::new(pool) as Box<dyn Action>)
+    }
+
     // RUGRA-GLUE: fixture-only pool view (see Action::as_action_pool)
     fn as_action_pool(&self) -> Option<&ActionPool> { Some(self) }
 
@@ -656,142 +860,142 @@ pub fn build_oppool1() -> ActionPool {
     // registered in Ghidra's exact order so their interactions match.
     // Entries whose Rust port does not yet exist are noted as skipped.
 
-    pool.add_rule(Box::new(RuleEarlyRemoval::new()));       // 5512 — re-enabled: full 6-guard port (ruleaction.cc:30-40) now blocks INDIRECT-source/memory outputs
-    pool.add_rule(Box::new(RuleTermOrder::new()));          // 5513
-    pool.add_rule(Box::new(RuleSelectCse::new()));          // 5514
-    pool.add_rule(Box::new(RuleCollectTerms::new()));       // 5515
-    pool.add_rule(Box::new(RulePullsubMulti::new()));       // 5516
-    pool.add_rule(Box::new(RulePullsubIndirect::new()));    // 5517
-    pool.add_rule(Box::new(RulePushMulti::new()));          // 5518
-    pool.add_rule(Box::new(RuleSborrow::new()));            // 5519
-    pool.add_rule(Box::new(RuleScarry::new()));             // 5520
-    pool.add_rule(Box::new(RuleIntLessEqual::new()));       // 5521
-    pool.add_rule(Box::new(RuleTrivialArith::new()));       // 5522
-    pool.add_rule(Box::new(RuleTrivialBool::new()));        // 5523
-    pool.add_rule(Box::new(RuleTrivialShift::new()));       // 5524
-    pool.add_rule(Box::new(RuleSignShift::new()));          // 5525
-    pool.add_rule(Box::new(RuleTestSign::new()));           // 5526
-    pool.add_rule(Box::new(RuleIdentityEl::new()));         // 5527
-    pool.add_rule(Box::new(RuleOrMask::new()));             // 5528
-    pool.add_rule(Box::new(RuleAndMask::new()));            // 5529
-    pool.add_rule(Box::new(RuleOrConsume::new()));          // 5530
-    pool.add_rule(Box::new(RuleOrCollapse::new()));         // 5531
-    pool.add_rule(Box::new(RuleAndOrLump::new()));          // 5532
-    pool.add_rule(Box::new(RuleShiftBitops::new()));        // 5533
-    pool.add_rule(Box::new(RuleRightShiftAnd::new()));      // 5534
-    pool.add_rule(Box::new(RuleNotDistribute::new()));      // 5535
-    pool.add_rule(Box::new(RuleHighOrderAnd::new()));       // 5536
-    pool.add_rule(Box::new(RuleAndDistribute::new()));      // 5537
-    pool.add_rule(Box::new(RuleAndCommute::new()));         // 5538
-    pool.add_rule(Box::new(RuleAndPiece::new()));           // 5539
-    pool.add_rule(Box::new(RuleAndZext::new()));            // 5540
-    pool.add_rule(Box::new(RuleAndCompare::new()));         // 5541
-    pool.add_rule(Box::new(RuleDoubleSub::new()));          // 5542
-    pool.add_rule(Box::new(RuleDoubleShift::new()));        // 5543
-    pool.add_rule(Box::new(RuleDoubleArithShift::new()));   // 5544
-    pool.add_rule(Box::new(RuleConcatShift::new()));        // 5545
-    pool.add_rule(Box::new(RuleLeftRight::new()));          // 5546
-    pool.add_rule(Box::new(RuleShiftCompare::new()));       // 5547
-    pool.add_rule(Box::new(RuleShift2Mult::new()));         // 5548
-    pool.add_rule(Box::new(RuleShiftPiece::new()));     // 5549 — (zext(V)<<sa)|zext(V) => PIECE (ruleaction.cc:3791)
-    pool.add_rule(Box::new(RuleMultiCollapse::new()));      // 5550
-    pool.add_rule(Box::new(RuleIndirectCollapse::new()));   // 5551
-    pool.add_rule(Box::new(Rule2Comp2Mult::new()));         // 5552
-    pool.add_rule(Box::new(RuleSub2Add::new()));            // 5553
-    pool.add_rule(Box::new(RuleCarryElim::new()));          // 5554
-    pool.add_rule(Box::new(RuleBxor2NotEqual::new()));      // 5555
-    pool.add_rule(Box::new(RuleLess2Zero::new()));          // 5556
-    pool.add_rule(Box::new(RuleLessEqual2Zero::new()));     // 5557
-    pool.add_rule(Box::new(RuleSLess2Zero::new()));     // 5558 — INT_SLESS with 0/-1 simplification (ruleaction.cc:5711)
-    pool.add_rule(Box::new(RuleEqual2Zero::new()));         // 5559
-    pool.add_rule(Box::new(RuleEqual2Constant::new()));     // 5560
-    pool.add_rule(Box::new(RuleThreeWayCompare::new()));    // 5561
-    pool.add_rule(Box::new(RuleXorCollapse::new()));        // 5562
-    pool.add_rule(Box::new(RuleAddMultCollapse::new()));    // 5563
-    pool.add_rule(Box::new(RuleCollapseConstants::new()));  // 5564
-    pool.add_rule(Box::new(RuleTransformCpool::new()));     // 5565
-    pool.add_rule(Box::new(RulePropagateCopy::new()));      // 5566
-    pool.add_rule(Box::new(RuleZextEliminate::new()));      // 5567
-    pool.add_rule(Box::new(RuleSlessToLess::new()));        // 5568
-    pool.add_rule(Box::new(RuleZextSless::new()));          // 5569
-    pool.add_rule(Box::new(RuleBitUndistribute::new()));    // 5570
-    pool.add_rule(Box::new(RuleBooleanUndistribute::new()));// 5571
-    pool.add_rule(Box::new(RuleBooleanDedup::new()));       // 5572
-    pool.add_rule(Box::new(RuleBoolZext::new()));           // 5573
-    pool.add_rule(Box::new(RuleBooleanNegate::new()));      // 5574
-    pool.add_rule(Box::new(RuleLogic2Bool::new()));         // 5575
-    pool.add_rule(Box::new(RuleSubExtComm::new()));         // 5576
-    pool.add_rule(Box::new(RuleSubCommute::new()));        // 5577 — SUBPIECE commute with binary ops (ruleaction.cc:4534)
-    pool.add_rule(Box::new(RuleConcatCommute::new()));      // 5578
-    pool.add_rule(Box::new(RuleConcatZext::new()));         // 5579
-    pool.add_rule(Box::new(RuleZextCommute::new()));        // 5580
-    pool.add_rule(Box::new(RuleZextShiftZext::new()));      // 5581
-    pool.add_rule(Box::new(RuleShiftAnd::new()));           // 5582
-    pool.add_rule(Box::new(RuleConcatZero::new()));         // 5583
-    pool.add_rule(Box::new(RuleConcatLeftShift::new()));    // 5584
-    pool.add_rule(Box::new(RuleSubZext::new()));            // 5585
-    pool.add_rule(Box::new(RuleSubCancel::new()));          // 5586
-    pool.add_rule(Box::new(RuleShiftSub::new()));           // 5587
-    pool.add_rule(Box::new(RuleHumptyDumpty::new()));       // 5588
-    pool.add_rule(Box::new(RuleDumptyHump::new()));         // 5589
-    pool.add_rule(Box::new(RuleHumptyOr::new()));           // 5590
-    pool.add_rule(Box::new(RuleNegateIdentity::new()));     // 5591
-    pool.add_rule(Box::new(RuleSubNormal::new()));          // 5592
-    pool.add_rule(Box::new(RulePositiveDiv::new()));        // 5593
-    pool.add_rule(Box::new(RuleDivTermAdd::new()));    // 5594 — optimized division term add (ruleaction.cc:7832)
-    pool.add_rule(Box::new(RuleDivTermAdd2::new()));   // 5595 — optimized division term add variant (ruleaction.cc:7955)
-    pool.add_rule(Box::new(RuleDivOpt::new()));             // 5596
-    pool.add_rule(Box::new(RuleSignForm::new()));           // 5597
-    pool.add_rule(Box::new(RuleSignForm2::new()));          // 5598
-    pool.add_rule(Box::new(RuleSignDiv2::new()));           // 5599
-    pool.add_rule(Box::new(RuleDivChain::new()));           // 5600
-    pool.add_rule(Box::new(RuleSignNearMult::new()));       // 5601
-    pool.add_rule(Box::new(RuleModOpt::new()));         // 5602 — x/d*(-d)+x => x%d (ruleaction.cc:8612)
-    pool.add_rule(Box::new(RuleSignMod2nOpt::new()));       // 5603
-    pool.add_rule(Box::new(RuleSignMod2nOpt2::new())); // 5604 — V-(Vadj&~(2^n-1)) => V s% 2^n (ruleaction.cc:8867)
-    pool.add_rule(Box::new(RuleSignMod2Opt::new()));  // 5605 — (V-sign)&1+sign => V s% 2 (ruleaction.cc:8794)
-    pool.add_rule(Box::new(RuleSwitchSingle::new()));       // 5606
-    pool.add_rule(Box::new(RuleCondNegate::new()));         // 5607
-    pool.add_rule(Box::new(RuleBoolNegate::new()));         // 5608
-    pool.add_rule(Box::new(RuleLessEqual::new()));          // 5609
-    pool.add_rule(Box::new(RuleLessNotEqual::new()));       // 5610
-    pool.add_rule(Box::new(RuleLessOne::new()));            // 5611
-    pool.add_rule(Box::new(RuleRangeMeld::new()));          // 5612
-    pool.add_rule(Box::new(RuleFloatRange::new()));         // 5613
-    pool.add_rule(Box::new(RulePiece2Zext::new()));         // 5614
-    pool.add_rule(Box::new(RulePiece2Sext::new()));         // 5615
-    pool.add_rule(Box::new(RulePopcountBoolXor::new())); // 5616 — popcount parity to XOR (ruleaction.cc:10265)
-    pool.add_rule(Box::new(RuleXorSwap::new()));            // 5617
-    pool.add_rule(Box::new(RuleLzcountShiftBool::new()));   // 5618
-    pool.add_rule(Box::new(RuleFloatSign::new()));       // 5619 — float sign-bit manipulation (ruleaction.cc:10714)
-    pool.add_rule(Box::new(RuleOrCompare::new()));          // 5620
+    register_rule!(pool, "deadcode", Box::new(RuleEarlyRemoval::new()));       // 5512 — re-enabled: full 6-guard port (ruleaction.cc:30-40) now blocks INDIRECT-source/memory outputs
+    register_rule!(pool, "analysis", Box::new(RuleTermOrder::new()));          // 5513
+    register_rule!(pool, "analysis", Box::new(RuleSelectCse::new()));          // 5514
+    register_rule!(pool, "analysis", Box::new(RuleCollectTerms::new()));       // 5515
+    register_rule!(pool, "analysis", Box::new(RulePullsubMulti::new()));       // 5516
+    register_rule!(pool, "analysis", Box::new(RulePullsubIndirect::new()));    // 5517
+    register_rule!(pool, "nodejoin", Box::new(RulePushMulti::new()));          // 5518
+    register_rule!(pool, "analysis", Box::new(RuleSborrow::new()));            // 5519
+    register_rule!(pool, "analysis", Box::new(RuleScarry::new()));             // 5520
+    register_rule!(pool, "analysis", Box::new(RuleIntLessEqual::new()));       // 5521
+    register_rule!(pool, "analysis", Box::new(RuleTrivialArith::new()));       // 5522
+    register_rule!(pool, "analysis", Box::new(RuleTrivialBool::new()));        // 5523
+    register_rule!(pool, "analysis", Box::new(RuleTrivialShift::new()));       // 5524
+    register_rule!(pool, "analysis", Box::new(RuleSignShift::new()));          // 5525
+    register_rule!(pool, "analysis", Box::new(RuleTestSign::new()));           // 5526
+    register_rule!(pool, "analysis", Box::new(RuleIdentityEl::new()));         // 5527
+    register_rule!(pool, "analysis", Box::new(RuleOrMask::new()));             // 5528
+    register_rule!(pool, "analysis", Box::new(RuleAndMask::new()));            // 5529
+    register_rule!(pool, "analysis", Box::new(RuleOrConsume::new()));          // 5530
+    register_rule!(pool, "analysis", Box::new(RuleOrCollapse::new()));         // 5531
+    register_rule!(pool, "analysis", Box::new(RuleAndOrLump::new()));          // 5532
+    register_rule!(pool, "analysis", Box::new(RuleShiftBitops::new()));        // 5533
+    register_rule!(pool, "analysis", Box::new(RuleRightShiftAnd::new()));      // 5534
+    register_rule!(pool, "analysis", Box::new(RuleNotDistribute::new()));      // 5535
+    register_rule!(pool, "analysis", Box::new(RuleHighOrderAnd::new()));       // 5536
+    register_rule!(pool, "analysis", Box::new(RuleAndDistribute::new()));      // 5537
+    register_rule!(pool, "analysis", Box::new(RuleAndCommute::new()));         // 5538
+    register_rule!(pool, "analysis", Box::new(RuleAndPiece::new()));           // 5539
+    register_rule!(pool, "analysis", Box::new(RuleAndZext::new()));            // 5540
+    register_rule!(pool, "analysis", Box::new(RuleAndCompare::new()));         // 5541
+    register_rule!(pool, "analysis", Box::new(RuleDoubleSub::new()));          // 5542
+    register_rule!(pool, "analysis", Box::new(RuleDoubleShift::new()));        // 5543
+    register_rule!(pool, "analysis", Box::new(RuleDoubleArithShift::new()));   // 5544
+    register_rule!(pool, "analysis", Box::new(RuleConcatShift::new()));        // 5545
+    register_rule!(pool, "analysis", Box::new(RuleLeftRight::new()));          // 5546
+    register_rule!(pool, "analysis", Box::new(RuleShiftCompare::new()));       // 5547
+    register_rule!(pool, "analysis", Box::new(RuleShift2Mult::new()));         // 5548
+    register_rule!(pool, "analysis", Box::new(RuleShiftPiece::new()));     // 5549 — (zext(V)<<sa)|zext(V) => PIECE (ruleaction.cc:3791)
+    register_rule!(pool, "analysis", Box::new(RuleMultiCollapse::new()));      // 5550
+    register_rule!(pool, "analysis", Box::new(RuleIndirectCollapse::new()));   // 5551
+    register_rule!(pool, "analysis", Box::new(Rule2Comp2Mult::new()));         // 5552
+    register_rule!(pool, "analysis", Box::new(RuleSub2Add::new()));            // 5553
+    register_rule!(pool, "analysis", Box::new(RuleCarryElim::new()));          // 5554
+    register_rule!(pool, "analysis", Box::new(RuleBxor2NotEqual::new()));      // 5555
+    register_rule!(pool, "analysis", Box::new(RuleLess2Zero::new()));          // 5556
+    register_rule!(pool, "analysis", Box::new(RuleLessEqual2Zero::new()));     // 5557
+    register_rule!(pool, "analysis", Box::new(RuleSLess2Zero::new()));     // 5558 — INT_SLESS with 0/-1 simplification (ruleaction.cc:5711)
+    register_rule!(pool, "analysis", Box::new(RuleEqual2Zero::new()));         // 5559
+    register_rule!(pool, "analysis", Box::new(RuleEqual2Constant::new()));     // 5560
+    register_rule!(pool, "analysis", Box::new(RuleThreeWayCompare::new()));    // 5561
+    register_rule!(pool, "analysis", Box::new(RuleXorCollapse::new()));        // 5562
+    register_rule!(pool, "analysis", Box::new(RuleAddMultCollapse::new()));    // 5563
+    register_rule!(pool, "analysis", Box::new(RuleCollapseConstants::new()));  // 5564
+    register_rule!(pool, "analysis", Box::new(RuleTransformCpool::new()));     // 5565
+    register_rule!(pool, "analysis", Box::new(RulePropagateCopy::new()));      // 5566
+    register_rule!(pool, "analysis", Box::new(RuleZextEliminate::new()));      // 5567
+    register_rule!(pool, "analysis", Box::new(RuleSlessToLess::new()));        // 5568
+    register_rule!(pool, "analysis", Box::new(RuleZextSless::new()));          // 5569
+    register_rule!(pool, "analysis", Box::new(RuleBitUndistribute::new()));    // 5570
+    register_rule!(pool, "analysis", Box::new(RuleBooleanUndistribute::new()));// 5571
+    register_rule!(pool, "analysis", Box::new(RuleBooleanDedup::new()));       // 5572
+    register_rule!(pool, "analysis", Box::new(RuleBoolZext::new()));           // 5573
+    register_rule!(pool, "analysis", Box::new(RuleBooleanNegate::new()));      // 5574
+    register_rule!(pool, "analysis", Box::new(RuleLogic2Bool::new()));         // 5575
+    register_rule!(pool, "analysis", Box::new(RuleSubExtComm::new()));         // 5576
+    register_rule!(pool, "analysis", Box::new(RuleSubCommute::new()));        // 5577 — SUBPIECE commute with binary ops (ruleaction.cc:4534)
+    register_rule!(pool, "analysis", Box::new(RuleConcatCommute::new()));      // 5578
+    register_rule!(pool, "analysis", Box::new(RuleConcatZext::new()));         // 5579
+    register_rule!(pool, "analysis", Box::new(RuleZextCommute::new()));        // 5580
+    register_rule!(pool, "analysis", Box::new(RuleZextShiftZext::new()));      // 5581
+    register_rule!(pool, "analysis", Box::new(RuleShiftAnd::new()));           // 5582
+    register_rule!(pool, "analysis", Box::new(RuleConcatZero::new()));         // 5583
+    register_rule!(pool, "analysis", Box::new(RuleConcatLeftShift::new()));    // 5584
+    register_rule!(pool, "analysis", Box::new(RuleSubZext::new()));            // 5585
+    register_rule!(pool, "analysis", Box::new(RuleSubCancel::new()));          // 5586
+    register_rule!(pool, "analysis", Box::new(RuleShiftSub::new()));           // 5587
+    register_rule!(pool, "analysis", Box::new(RuleHumptyDumpty::new()));       // 5588
+    register_rule!(pool, "analysis", Box::new(RuleDumptyHump::new()));         // 5589
+    register_rule!(pool, "analysis", Box::new(RuleHumptyOr::new()));           // 5590
+    register_rule!(pool, "analysis", Box::new(RuleNegateIdentity::new()));     // 5591
+    register_rule!(pool, "analysis", Box::new(RuleSubNormal::new()));          // 5592
+    register_rule!(pool, "analysis", Box::new(RulePositiveDiv::new()));        // 5593
+    register_rule!(pool, "analysis", Box::new(RuleDivTermAdd::new()));    // 5594 — optimized division term add (ruleaction.cc:7832)
+    register_rule!(pool, "analysis", Box::new(RuleDivTermAdd2::new()));   // 5595 — optimized division term add variant (ruleaction.cc:7955)
+    register_rule!(pool, "analysis", Box::new(RuleDivOpt::new()));             // 5596
+    register_rule!(pool, "analysis", Box::new(RuleSignForm::new()));           // 5597
+    register_rule!(pool, "analysis", Box::new(RuleSignForm2::new()));          // 5598
+    register_rule!(pool, "analysis", Box::new(RuleSignDiv2::new()));           // 5599
+    register_rule!(pool, "analysis", Box::new(RuleDivChain::new()));           // 5600
+    register_rule!(pool, "analysis", Box::new(RuleSignNearMult::new()));       // 5601
+    register_rule!(pool, "analysis", Box::new(RuleModOpt::new()));         // 5602 — x/d*(-d)+x => x%d (ruleaction.cc:8612)
+    register_rule!(pool, "analysis", Box::new(RuleSignMod2nOpt::new()));       // 5603
+    register_rule!(pool, "analysis", Box::new(RuleSignMod2nOpt2::new())); // 5604 — V-(Vadj&~(2^n-1)) => V s% 2^n (ruleaction.cc:8867)
+    register_rule!(pool, "analysis", Box::new(RuleSignMod2Opt::new()));  // 5605 — (V-sign)&1+sign => V s% 2 (ruleaction.cc:8794)
+    register_rule!(pool, "analysis", Box::new(RuleSwitchSingle::new()));       // 5606
+    register_rule!(pool, "analysis", Box::new(RuleCondNegate::new()));         // 5607
+    register_rule!(pool, "analysis", Box::new(RuleBoolNegate::new()));         // 5608
+    register_rule!(pool, "analysis", Box::new(RuleLessEqual::new()));          // 5609
+    register_rule!(pool, "analysis", Box::new(RuleLessNotEqual::new()));       // 5610
+    register_rule!(pool, "analysis", Box::new(RuleLessOne::new()));            // 5611
+    register_rule!(pool, "analysis", Box::new(RuleRangeMeld::new()));          // 5612
+    register_rule!(pool, "analysis", Box::new(RuleFloatRange::new()));         // 5613
+    register_rule!(pool, "analysis", Box::new(RulePiece2Zext::new()));         // 5614
+    register_rule!(pool, "analysis", Box::new(RulePiece2Sext::new()));         // 5615
+    register_rule!(pool, "analysis", Box::new(RulePopcountBoolXor::new())); // 5616 — popcount parity to XOR (ruleaction.cc:10265)
+    register_rule!(pool, "analysis", Box::new(RuleXorSwap::new()));            // 5617
+    register_rule!(pool, "analysis", Box::new(RuleLzcountShiftBool::new()));   // 5618
+    register_rule!(pool, "analysis", Box::new(RuleFloatSign::new()));       // 5619 — float sign-bit manipulation (ruleaction.cc:10714)
+    register_rule!(pool, "analysis", Box::new(RuleOrCompare::new()));          // 5620
     // subvar family (subflow.cc, coreaction.cc:5621-5628) — SubvariableFlow
-    pool.add_rule(Box::new(crate::subflow::RuleSubvarAnd::new()));       // 5621
-    pool.add_rule(Box::new(crate::subflow::RuleSubvarSubpiece::new()));  // 5622
-    pool.add_rule(Box::new(crate::subflow::RuleSplitFlow::new()));       // 5623
-    pool.add_rule(Box::new(RulePtrFlow::new()));           // 5624
-    pool.add_rule(Box::new(crate::subflow::RuleSubvarCompZero::new()));  // 5625
-    pool.add_rule(Box::new(crate::subflow::RuleSubvarShift::new()));     // 5626
-    pool.add_rule(Box::new(crate::subflow::RuleSubvarZext::new()));      // 5627
-    pool.add_rule(Box::new(crate::subflow::RuleSubvarSext::new()));      // 5628
-    pool.add_rule(Box::new(RuleNegateNegate::new()));       // 5629
-    pool.add_rule(Box::new(RuleConditionalMove::new()));    // 5630
-    pool.add_rule(Box::new(crate::condexe::RuleOrPredicate::new())); // 5631
-    pool.add_rule(Box::new(RuleFuncPtrEncoding::new()));    // 5632
-    pool.add_rule(Box::new(crate::subflow::RuleSubfloatConvert::new())); // 5633
-    pool.add_rule(Box::new(RuleFloatCast::new()));          // 5634 — registered here per Ghidra (coreaction.cc:5634)
-    pool.add_rule(Box::new(RuleIgnoreNan::new()));          // 5635
-    pool.add_rule(Box::new(RuleUnsigned2Float::new()));     // 5636
-    pool.add_rule(Box::new(RuleInt2FloatCollapse::new()));  // 5637
-    pool.add_rule(Box::new(RulePtraddUndo::new()));         // 5638
-    pool.add_rule(Box::new(RulePtrsubUndo::new()));         // 5639
-    pool.add_rule(Box::new(RuleSegment::new()));            // 5640
-    pool.add_rule(Box::new(RulePiecePathology::new()));     // 5641
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarAnd::new()));       // 5621
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarSubpiece::new()));  // 5622
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSplitFlow::new()));       // 5623
+    register_rule!(pool, "subvar", Box::new(RulePtrFlow::new()));           // 5624
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarCompZero::new()));  // 5625
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarShift::new()));     // 5626
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarZext::new()));      // 5627
+    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarSext::new()));      // 5628
+    register_rule!(pool, "analysis", Box::new(RuleNegateNegate::new()));       // 5629
+    register_rule!(pool, "conditionalexe", Box::new(RuleConditionalMove::new()));    // 5630
+    register_rule!(pool, "conditionalexe", Box::new(crate::condexe::RuleOrPredicate::new())); // 5631
+    register_rule!(pool, "analysis", Box::new(RuleFuncPtrEncoding::new()));    // 5632
+    register_rule!(pool, "floatprecision", Box::new(crate::subflow::RuleSubfloatConvert::new())); // 5633
+    register_rule!(pool, "floatprecision", Box::new(RuleFloatCast::new()));          // 5634 — registered here per Ghidra (coreaction.cc:5634)
+    register_rule!(pool, "floatprecision", Box::new(RuleIgnoreNan::new()));          // 5635
+    register_rule!(pool, "analysis", Box::new(RuleUnsigned2Float::new()));     // 5636
+    register_rule!(pool, "analysis", Box::new(RuleInt2FloatCollapse::new()));  // 5637
+    register_rule!(pool, "typerecovery", Box::new(RulePtraddUndo::new()));         // 5638
+    register_rule!(pool, "typerecovery", Box::new(RulePtrsubUndo::new()));         // 5639
+    register_rule!(pool, "segment", Box::new(RuleSegment::new()));            // 5640
+    register_rule!(pool, "protorecovery", Box::new(RulePiecePathology::new()));     // 5641
     // skip 5642 (gap in Ghidra numbering — reserved)
-    pool.add_rule(Box::new(crate::double_precis::RuleDoubleLoad::new()));  // 5643
-    pool.add_rule(Box::new(crate::double_precis::RuleDoubleStore::new())); // 5644
-    pool.add_rule(Box::new(crate::double_precis::RuleDoubleIn::new()));    // 5645
-    pool.add_rule(Box::new(crate::double_precis::RuleDoubleOut::new()));   // 5646
+    register_rule!(pool, "doubleload", Box::new(crate::double_precis::RuleDoubleLoad::new()));  // 5643
+    register_rule!(pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleStore::new())); // 5644
+    register_rule!(pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleIn::new()));    // 5645
+    register_rule!(pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleOut::new()));   // 5646
 
     // Pool ends at RuleDoubleOut (5646), exactly as Ghidra's oppool1. The
     // remaining oracle loop (coreaction.cc:5647-5649) only absorbs
@@ -819,24 +1023,24 @@ pub fn build_oppool1() -> ActionPool {
 pub fn build_cleanup_pool() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("cleanup");
-    pool.add_rule(Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
-    pool.add_rule(Box::new(RuleAddUnsigned::new()));  // 5697
-    pool.add_rule(Box::new(Rule2Comp2Sub::new()));    // 5698
-    pool.add_rule(Box::new(crate::subflow::RuleDumptyHumpLate::new())); // 5699
-    pool.add_rule(Box::new(RuleSubRight::new()));     // 5700
-    pool.add_rule(Box::new(RuleFloatSignCleanup::new())); // 5701
-    pool.add_rule(Box::new(RuleExpandLoad::new()));   // 5702
-    pool.add_rule(Box::new(RulePtrsubCharConstant::new())); // 5703
-    pool.add_rule(Box::new(RuleExtensionPush::new())); // 5704
-    pool.add_rule(Box::new(RulePieceStructure::new())); // 5705
-    pool.add_rule(Box::new(crate::subflow::RuleSplitCopy::new()));  // 5706
-    pool.add_rule(Box::new(crate::subflow::RuleSplitLoad::new()));  // 5707
-    pool.add_rule(Box::new(crate::subflow::RuleSplitStore::new())); // 5708
+    register_rule!(pool, "cleanup", Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
+    register_rule!(pool, "cleanup", Box::new(RuleAddUnsigned::new()));  // 5697
+    register_rule!(pool, "cleanup", Box::new(Rule2Comp2Sub::new()));    // 5698
+    register_rule!(pool, "cleanup", Box::new(crate::subflow::RuleDumptyHumpLate::new())); // 5699
+    register_rule!(pool, "cleanup", Box::new(RuleSubRight::new()));     // 5700
+    register_rule!(pool, "cleanup", Box::new(RuleFloatSignCleanup::new())); // 5701
+    register_rule!(pool, "cleanup", Box::new(RuleExpandLoad::new()));   // 5702
+    register_rule!(pool, "cleanup", Box::new(RulePtrsubCharConstant::new())); // 5703
+    register_rule!(pool, "cleanup", Box::new(RuleExtensionPush::new())); // 5704
+    register_rule!(pool, "cleanup", Box::new(RulePieceStructure::new())); // 5705
+    register_rule!(pool, "splitcopy", Box::new(crate::subflow::RuleSplitCopy::new()));  // 5706
+    register_rule!(pool, "splitpointer", Box::new(crate::subflow::RuleSplitLoad::new()));  // 5707
+    register_rule!(pool, "splitpointer", Box::new(crate::subflow::RuleSplitStore::new())); // 5708
     // RuleStringCopy / RuleStringStore are wired (constseq.cc:954-1002).
     // Detection phase only — transform requires CALLOTHER/userop infrastructure
     // (tracked as a follow-up; matches Ghidra registration at 5709-5710).
-    pool.add_rule(Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
-    pool.add_rule(Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
+    register_rule!(pool, "constsequence", Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
+    register_rule!(pool, "constsequence", Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
     // Pool ends at RuleStringStore (5710), exactly as Ghidra's actcleanup
     // (coreaction.cc:5694-5711). PIPE-POOL-LOCAL-RULES-0001 removed the
     // former Rugra-local re-registration of RuleTrivialArith here — the
@@ -918,7 +1122,7 @@ pub mod default_groups {
 /// Corresponds to Ghidra's `ActionDatabase` class (action.hh:298-324)
 pub struct ActionDatabase {
     /// Ghidra `actionmap` (action.hh:302): registered root Actions by name.
-    actionmap: Vec<(String, Box<dyn Action>)>,
+    actionmap: Vec<(String, Option<Box<dyn Action>>)>,
     /// Ghidra `groupmap` (action.hh:301): root name → steering grouplist.
     groupmap: Vec<(String, ActionGroupList)>,
     /// Ghidra `currentact` (action.hh:299): the current root Action.
@@ -935,11 +1139,11 @@ pub struct ActionDatabase {
 pub fn build_oppool2() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("oppool2");
-    pool.add_rule(Box::new(RulePushPtr::new()));           // 5664
-    pool.add_rule(Box::new(RuleStructOffset0::new()));     // 5665
-    pool.add_rule(Box::new(RulePtrArith::new()));          // 5666
-    pool.add_rule(Box::new(RuleLoadVarnode::new()));       // 5668
-    pool.add_rule(Box::new(RuleStoreVarnode::new()));      // 5669
+    register_rule!(pool, "typerecovery", Box::new(RulePushPtr::new()));           // 5664
+    register_rule!(pool, "typerecovery", Box::new(RuleStructOffset0::new()));     // 5665
+    register_rule!(pool, "typerecovery", Box::new(RulePtrArith::new()));          // 5666
+    register_rule!(pool, "stackvars", Box::new(RuleLoadVarnode::new()));       // 5668
+    register_rule!(pool, "stackvars", Box::new(RuleStoreVarnode::new()));      // 5669
     pool
 }
 
@@ -958,7 +1162,7 @@ impl ActionDatabase {
     // Ghidra: action.cc:1126 ActionDatabase::registerAction
     /// Register a root Action under `nm`; the database takes ownership
     /// (Ghidra deletes a previously registered object of the same name).
-    fn register_action_named(&mut self, nm: &str, act: Box<dyn Action>) {
+    fn register_action_named(&mut self, nm: &str, act: Option<Box<dyn Action>>) {
         if let Some(idx) = self.actionmap.iter().position(|(key, _)| key == nm) {
             self.actionmap[idx].1 = act;
         } else {
@@ -969,7 +1173,7 @@ impl ActionDatabase {
     // RUGRA-GLUE: legacy pub registration under the Action's own name (Ghidra registers roots by explicit key only)
     pub fn register_action(&mut self, action: Box<dyn Action>) {
         let nm = action.get_name().to_string();
-        self.register_action_named(&nm, action);
+        self.register_action_named(&nm, Some(action));
     }
 
     // Ghidra: action.cc:1112 ActionDatabase::getAction (index lookup form)
@@ -979,19 +1183,24 @@ impl ActionDatabase {
 
     // RUGRA-GLUE: pub lookup mirroring Ghidra getAction's throw as None
     pub fn get_action(&self, name: &str) -> Option<&dyn Action> {
-        self.action_index(name).map(|idx| self.actionmap[idx].1.as_ref())
+        self.action_index(name)
+            .and_then(|idx| self.actionmap[idx].1.as_deref())
     }
 
     // RUGRA-GLUE: pub mutable lookup mirroring Ghidra getAction's throw as None
     pub fn get_action_mut(&mut self, name: &str) -> Option<&mut (dyn Action + '_)> {
-        match self.action_index(name) {
-            Some(idx) => Some(self.actionmap[idx].1.as_mut()),
-            None => None,
-        }
+        let idx = self.action_index(name)?;
+        let action = self.actionmap[idx].1.as_mut()?;
+        Some(action.as_mut())
+    }
+
+    // RUGRA-GLUE: distinguishes Ghidra actionmap's cached null clone from an absent map key for fixtures and callers avoiding getCurrent on null
+    pub fn has_action_entry(&self, name: &str) -> bool {
+        self.action_index(name).is_some()
     }
 
     // Ghidra: action.cc:1059 ActionDatabase::setGroup (member-list form)
-    fn set_group(&mut self, grp: &str, members: &[&'static str]) {
+    pub fn set_group(&mut self, grp: &str, members: &[&'static str]) {
         let grouplist = ActionGroupList::from_members(members);
         if let Some(idx) = self.groupmap.iter().position(|(key, _)| key == grp) {
             self.groupmap[idx].1 = grouplist;
@@ -1029,7 +1238,7 @@ impl ActionDatabase {
     /// (Ghidra `registerAction(universalname, act)`, coreaction.cc:5475).
     pub fn universal_action(&mut self) {
         let act = universal_action(None).expect("universal root always survives");
-        self.register_action_named("universal", Box::new(act));
+        self.register_action_named("universal", Some(Box::new(act)));
     }
 
     // Ghidra: action.cc:986 ActionDatabase::resetDefaults
@@ -1062,11 +1271,7 @@ impl ActionDatabase {
     // Ghidra: action.cc:1145 ActionDatabase::deriveAction
     /// Build the Action object for root name `grp` by selectively copying
     /// components from `baseaction` based on `grp`'s grouplist. Ghidra
-    /// deep-clones the registered base tree via `Action::clone`; Rugra
-    /// rebuilds through the same construction filtered by the grouplist
-    /// (RUGRA-GLUE: `Box<dyn Action>` is not `Clone`; at derive time every
-    /// Ghidra clone also starts from freshly built state, so the resulting
-    /// tree is observably identical).
+    /// deep-clones the registered base tree via `Action::clone`.
     fn derive_action(&mut self, baseaction: &str, grp: &str) {
         if self.action_index(grp).is_some() {
             return; // Already derived this action (action.cc:1149-1151)
@@ -1075,15 +1280,19 @@ impl ActionDatabase {
             .get_group(grp)
             .unwrap_or_else(|| panic!("Action group does not exist: {grp}"))
             .clone();
-        let _ = baseaction; // base is always the registered "universal" tree
-        let newact = universal_action(Some(&grouplist))
-            .unwrap_or_else(|| panic!("derived root {grp} kept no children"));
-        self.register_action_named(grp, Box::new(newact));
+        let newact = self
+            .get_action(baseaction)
+            .unwrap_or_else(|| panic!("Base action does not exist: {baseaction}"))
+            .clone_for_groups(&grouplist);
+        self.register_action_named(grp, newact);
     }
 
     // Ghidra: action.hh:313 ActionDatabase::getCurrent
     pub fn get_current(&self) -> &dyn Action {
-        self.actionmap[self.currentact.expect("no current root action")].1.as_ref()
+        self.actionmap[self.currentact.expect("no current root action")]
+            .1
+            .as_deref()
+            .expect("current root action is null")
     }
 
     // Ghidra: action.hh:314 ActionDatabase::getCurrentName
@@ -1101,10 +1310,13 @@ impl ActionDatabase {
         let Some(index) = self.action_index(name) else {
             return Ok(None);
         };
-        self.actionmap[index].1.reset(fd);
-        let flags = self.actionmap[index].1.get_flags();
+        let Some(action) = self.actionmap[index].1.as_deref_mut() else {
+            return Ok(None);
+        };
+        action.reset(fd);
+        let flags = action.get_flags();
         let mut state = ActionState::new(flags);
-        self.actionmap[index].1.perform(fd, &mut state).map(Some)
+        action.perform(fd, &mut state).map(Some)
     }
 
     // RUGRA-GLUE: mirrors the production driver (ghidra_process.cc:310 allacts.getCurrent()->perform(fd)); the former name is kept for the legacy callers
@@ -1112,10 +1324,14 @@ impl ActionDatabase {
     /// given function data.
     pub fn apply_all(&mut self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
         let index = self.currentact.expect("no current root action");
-        self.actionmap[index].1.reset(fd);
-        let flags = self.actionmap[index].1.get_flags();
+        let action = self.actionmap[index]
+            .1
+            .as_deref_mut()
+            .expect("current root action is null");
+        action.reset(fd);
+        let flags = action.get_flags();
         let mut state = ActionState::new(flags);
-        self.actionmap[index].1.perform(fd, &mut state)
+        action.perform(fd, &mut state)
     }
 
     // RUGRA-GLUE: production entry mirroring Architecture::buildAction (architecture.cc:582-591: allacts.universalAction(this); allacts.resetDefaults();)
@@ -1136,23 +1352,14 @@ impl ActionDatabase {
 /// list, and a group/pool node is registered iff at least one child
 /// survived (ActionGroup::clone action.cc:391-406 / ActionPool::clone
 /// action.cc:899-914 / ActionRestartGroup::clone action.cc:529-544).
-/// Rule-level clone filtering inside the pools is scoped out: every rule
-/// group registered below (deadcode/analysis/nodejoin/subvar/
-/// conditionalexe/floatprecision/typerecovery/segment/protorecovery/
-/// doubleload/doubleprecis/cleanup/splitcopy/splitpointer/constsequence/
-/// stackvars) is a member of the default `decompile` grouplist, so the
-/// derived default root is unaffected.
+/// Rule-level filtering is performed by each ActionPool clone from the exact
+/// group and constructor retained at its locked registration slot.
 pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRestartGroup> {
-    // Ghidra clone survival: a leaf is registered iff its basegroup is in
-    // the steering grouplist (action.cc:391-406 / 899-914 / 529-544).
-    let keep = |group: &str| grouplist.map(|list| list.contains(group)).unwrap_or(true);
-    // RUGRA-GLUE: call-site adapter applying the clone-survival check to
-    // each addAction slot, keeping the flat coreaction.cc:5477-5738 shape.
+    // RUGRA-GLUE: retain the concrete constructor and basegroup at each
+    // addAction slot; selective construction happens only through clone.
     macro_rules! add {
         ($parent:expr, $group:expr, $action:expr) => {
-            if keep($group) {
-                $parent.add_action_in_group($action, $group);
-            }
+            $parent.add_action_factory_in_group($group, || $action);
         };
     }
     // Root: ActionRestartGroup(Action::rule_onceperfunc,"universal",1) — coreaction.cc:5474
@@ -1267,10 +1474,8 @@ pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRes
     add!(universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeWarnings::new())); // :5737
     add!(universal, "base", Box::new(crate::coreaction::ActionStop::new())); // :5738
 
-    // Ghidra: action.cc:529-544 ActionRestartGroup::clone — a restart group
-    // with no surviving children clones to null.
-    if universal.num_actions() == 0 {
-        return None;
+    if let Some(grouplist) = grouplist {
+        return universal.clone_restart_group(grouplist);
     }
     Some(universal)
 }

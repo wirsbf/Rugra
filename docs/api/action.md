@@ -2,6 +2,32 @@
 
 **源代码路径**: `src/action.rs`
 
+## 2026-08-24：ActionPool 选择性 fresh clone 与真实基树派生
+
+锁定 Ghidra `Rule::clone`（`action.hh:230-236`）、`ActionPool::clone`
+（`action.cc:899-914`）和 `ActionDatabase::deriveAction`
+（`action.cc:1145-1160`）的共同契约是：按 `allrules` 注册顺序逐个请求 Rule
+克隆；不在 grouplist 的 Rule 返回 null；第一个幸存 Rule 出现时才创建目标池；
+随后用 `addRule` 重建每个 opcode 的有序索引。Rule 克隆由构造器产生 fresh
+实例，因此不继承 disabled/warning-given、breakpoint 或统计值；ActionPool 本身
+则复制源池的 Action flags/name，但 status、breakpoint 和统计值重新初始化。
+
+Rugra 的 `Rule::clone_for_groups` 和 `Action::clone_for_groups` 提供对应虚拟契约。
+由于本改动的租约不能触碰约 150 个具体 Rule/Action 文件，默认 universal builder
+在每个锁定 `coreaction.cc` 注册槽保存 group 和无捕获构造工厂；容器或自定义实现
+可以直接覆盖虚拟 clone。`ActionPool::clone_pool`、`ActionGroup::clone_group` 与
+`ActionRestartGroup::clone_restart_group` 都保持原 vector 顺序并采用相同的懒创建/
+null 规则，所有克隆执行状态从构造初值开始。`ActionDatabase::derive_action` 不再
+重新调用 universal builder，而是克隆数据库里以 `baseaction` 键注册的真实对象；
+空结果也会作为 null map entry 缓存，重复派生不会再次克隆。
+
+真实双侧门禁 `tools/run_action_pool_clone_filter_oracle.sh` 使用同一合成 Rule 池，
+覆盖 all/custom/empty grouplist、null 派生缓存、Rule 和 per-op 的完整顺序，以及
+池/Rule 的 flags、status、breakpoint、count_tests/count_apply。该覆盖投影为
+`MATCH`。ActionPool 全函数状态仍保守为 `MISMATCH`：现有 Rust `apply` 尚未实现
+per-rule disabled/warnings/breakpoint 调度、`op_state`/`rule_index` 断点续跑，live-op
+快照和 dead-op 处理也仍与 oracle 有已知差异，因此本改动不宣称模块 L3。
+
 ## 2026-08-14：ActionPool opcode 变化后立即重派发
 
 锁定 Ghidra `ActionPool::processOp`（`action.cc:822-875`）在每次 Rule
