@@ -65,3 +65,40 @@ FlowInfo 兼容视图（id 序首匹配）。旧 `register_payload`/`name_to_id`
 对拍：runner 16 真实 callfixup 模板 XML 逐字节 MATCH + callother 编译失败
 残留探针。残差：InjectPayloadDynamic addrMap/debug-decode（仅 ELEM_INJECTDEBUG
 可达）UNTESTED。模块保持 L2。
+
+# 2026-08-23：`InjectPayload::inject` 执行器 + 真空间 `InjectContext`（FLOW-INJECT-WIRING-0001）
+
+锁定 oracle Ghidra 12.0.4 commit `e40ed130…`。完整读取
+`InjectPayloadSleigh::inject`（inject_sleigh.cc:48-65）、`setupParameters`/
+`checkParameterRestrictions`（inject_sleigh.cc:105-159）、`ConstTpl::fix`/
+`fixSpace`（semantics.cc:116-215）、`PcodeBuilder::build`（semantics.cc:925-952）、
+`SleighBuilder::dump`/`generateLocation`（sleigh.cc:160-280）、
+`PcodeCacher::resolveRelatives`/`emit`/`addLabel`/`addLabelRef`（sleigh.cc:86-144）
+后移植：
+
+- **`InjectContext` 真空间化**：`input_list`/`output` 从数值空间标签元组改为
+  `Vec<VarnodeRaw>`（Ghidra 是 `vector<VarnodeData>`，pcodeinject.hh:85-86），
+  模板执行需要真实 `AddressSpace` 做 const 掩码/unique 判定。
+- **`PcodeEmit` trait / `PcodeEmitArray`**：`dump(addr, opc, &[VarnodeRaw],
+  Option<VarnodeRaw>)` 对齐 `PcodeEmit::dump`（translate.hh:96）签名。
+- **`InjectPayload::inject(&self, context) -> Result<Vec<PcodeOpRaw>, String>`**：
+  模板执行链 = checkParameterRestritions（错误逐字）→ setupParameters 固定句柄
+  （inputs 0..n-1、outputs n..，offset_space 恒 null → `isDynamic` 恒 false，
+  动态 LOAD/STORE 展开不可达）→ `PcodeBuilder::build`（BUILD/DELAY_SLOT/
+  CROSSBUILD 硬错误——snippet 禁用；LABELBUILD=CPUI_PTRADD 记 label 位置）→
+  `dump_op`（generateLocation：const 空间 `&calc_mask(size)`、unique 空间
+  uniqueoffset=0、其余 wrapOffset；JRelative input(0) 记 label ref）→
+  `resolve_relatives`（`labels[id]-calling_index` 掩码，缺失 label 报
+  `Reference to non-existant sleigh label` 逐字）→ `cacher.emit(baseaddr)`
+  （每个注入 op 都带 baseaddr）→ `Vec<PcodeOpRaw>`。`fix`/`fix_space` 覆盖
+  JStart/JNext/JNext2/JFlowRef/JFlowDest/JCurSpace(Size)/JRelative/SpaceId/
+  Handle{v_space,v_offset,v_size,v_offset_plus（const 时 `>>8*(plus>>16)`）}。
+  RUGRA-GLUE：JFlowRef/JNext2 在注入上下文未设置（ParserContext 默认
+  Address 偏移 0）；JCurSpaceSize 固定 8（x86-64 机型，ADDRESS-0001 族残差）；
+  非 const/unique 空间不做 wrapOffset 归约（AddressSpace 标签枚举无 highest）。
+- **emit 桥**：inject 产物经 `Funcdata::inject_raw_ops_single`（= `PcodeEmitFd::dump`
+  funcdata.cc:878）入 bank——借用拆分在 flow.rs 侧说明。
+
+测试：pcodeinject::tests 16 全绿（copy/add/label-branch 三 snippet 的
+操作数替换、const 掩码、`<manual callotherfixup …")` 逐字 source、参数
+count/size 失败、无模板失败）。
