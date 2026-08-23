@@ -3917,13 +3917,13 @@ impl JumpTable {
         self.jmodel = self.origmodel.take();
     }
 
-    // Ghidra: jumptable.cc:2265 JumpTable::clearSavedModel
-    /// Clear any saved model. Faithful to `clearSavedModel` (jumptable.cc:2265).
+    // Ghidra: jumptable.cc:2243 JumpTable::clearSavedModel
+    /// Clear any saved model. Faithful to `clearSavedModel` (jumptable.cc:2243).
     pub fn clear_saved_model(&mut self) {
         self.origmodel = None;
     }
 
-    // Ghidra: jumptable.cc:2761 JumpTable::clear
+    // Ghidra: jumptable.cc:2739 JumpTable::clear
     /// Clear instance-specific data for this jump-table. Faithful to `clear()`
     /// (jumptable.cc:2761).
     pub fn clear(&mut self) {

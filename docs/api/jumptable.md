@@ -282,3 +282,7 @@ recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNo
 - `JumpValuesRangeDefault::new/Default`。
 - `JumpBasic::find_normalized`(cc:1223)提取为独立方法。
 - `JumpBasic2` 修复 check_normal_dominance/find_unnormalized/recover_model 类型错误,recover_model 对齐 cc:1698-1734。
+
+## 注释行号勘误（2026-08-23，root）
+
+复核发现的 annotation 漂移已修正：`JumpTable::clear` 引用 jumptable.cc:2739（原误 2761，那行是 encode 的 doc）；`clearSavedModel` 引用 jumptable.cc:2243（原误 2265）。行为零改动。

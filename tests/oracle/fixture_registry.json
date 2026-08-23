@@ -3241,6 +3241,37 @@
         "jumptable::JumpBasic::value_match",
         "jumptable::JumpBasic::check_unrolled_guard"
       ]
+    },
+    {
+      "id": "merge_clear_lifecycle_1204",
+      "description": "Funcdata::clear persistent-state lifecycle vs locked 12.0.4: 7-flag mask + counters, minLanedSize rederive, localmap modeling, clearActiveOutput/UnlockedOutput, call specs, jump tables with override permanent-domain preservation (JumpTable::clear), heritage/covermerge, Merge four channels; lanedMap/localoverride persistence (4/6 MATCH, 2 MISMATCH attributed to varmap clearUnlocked / fspec returnBytesConsumed)",
+      "runner": [
+        "tools/run_merge_clear_lifecycle_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/merge_clear_lifecycle_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/merge_clear_lifecycle_1204.cc",
+          "rust_fixture": "tests/oracle/merge_clear_lifecycle_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Funcdata::clear",
+        "JumpTable::clear",
+        "Merge::clear"
+      ],
+      "rust_function_ids": [
+        "funcdata::Funcdata::clear",
+        "jumptable::JumpTable::clear",
+        "merge::MergePersistentState::clear"
+      ]
     }
   ]
 }
