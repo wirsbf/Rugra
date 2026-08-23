@@ -186,13 +186,62 @@ register/unique/ram 空间符号与 restructureVarnode 的栈符号共用
 `HighVariable::isInput` 读取前先 `update_flags()`（variable.hh:200 的惰性
 updateFlags 语义）。
 
-## ScopeInternal 查询层 r2（2026-08-22 WIP，SCOPELOCAL-QUERY-0001）
+## ScopeInternal 查询层 r2（SCOPELOCAL-QUERY-0001，2026-08-23）
 
-r1 复核 REJECT 后的重做（WIP，owner scopelocal_query_r2）：
-- `remove_symbol`（database.cc:2138）/ `local_range_remove_range`（address.cc:417
-  RangeList::removeRange 镜像）/ `find_overlap`（database.cc:2392
-  ScopeInternal::findOverlap）/ `entry_subsort_key`（database.cc:97
-  SymbolEntry::getSubsort）/ `find_addr`（database.cc:2224 ScopeInternal::findAddr）/
-  `longest_fit`（address.cc:512 RangeList::longestFit）
-状态：varmap:: 37/37 单测绿；queryProperties flags/parent/space 缺口修复与
-scopelocal_query_1204 双侧 fixture 仍 pending，r1 REJECT 项逐一关闭后方可送审。
+r1 复核 REJECT 的逐项关闭：查询层从「符号级 Vec+min_by_key」重构为
+**条目级 rangemap 委托**（复用 RANGEMAP-COMMON-REFINEMENT-0001 已对拍的
+`src/rangemap.rs`），遍历序/subsort tie-break/等价键插入序由该组件的 43/43
+oracle 证据承担：
+
+- `EntrySubsort`（database.hh:107-134）——`(useindex, useoffset)` 全序，
+  `minimum()/maximum()` 对应 `EntrySubsort(false)/(true)`；`ghidra_space_index`
+  按锁定 x86-64 oracle 实测（const=0、unique=2、ram=3、stack=8，
+  fixture setup 记录双端核对）。
+- `LocalMapEntry`（database.hh:75 SymbolEntry）——一条静态映射
+  `{sym, space, start, size, offset, extraflags, uselimit, subsort}`；
+  `uselimit` 为 `(space index, first, last)` 区间表（空=全程有效=符号
+  addrtied，database.cc:1149-1150 的符号级标志由任一空 uselimit 条目置位）；
+  `offset>0` 表达 partial piece（join 拆片，database.cc:1156-1177）。
+  `ScopeLocal::mapentry_log` 为插入序条目日志（maptable 数据源），
+  `materialize_maptable` 每查询按序重放成 `RangeMap`（`ScopeLocal: Clone`
+  无法持有非 Clone 的 RangeMap；等价键插入序与 erase 后幸存者相对序由
+  重放保真，fixture 的 removal 案例覆盖）。
+- `add_map_entry`（database.cc:1843 addMapInternal）——条目安装：空 uselimit
+  置符号 addrtied、uselimit 按 `(index,first)` 排序并合并相邻（address.cc
+  RangeList 语义）、subsort 在插入时冻结（rangemap.hh:238）。
+- `install_symbol`——fixture/测试构造路径（addSymbol+addMapPoint 单条目镜像；
+  动态符号不装静态条目）。`add_symbol` 生产路径现在同步建条目。
+- `find_overlap`/`find_overlap_entry`（database.cc:2392）——直接委托
+  `RangeMap::find_overlap`：`(last,subsort)` 最左相交分区单元的 owner。
+  oracle 实测怪癖：等值等 subsort 的二次插入会以 hinted+tail 双 part
+  「包夹」首条（rangemap.hh:223-277 的 break-不更新-f 路径），双向遍历都
+  答**后插入者**——Rust rangemap 同构复现，fixture equal_subsort 双案覆盖。
+- `find_addr`/`find_addr_entry`（database.cc:2224）——
+  `find_with_subsort(point, min, EntrySubsort(usepoint))` 窗口的 `.rev()`
+  反向走：精确起点 + `entry_in_use`（database.cc:114：addrtied 全程有效，
+  否则 uselimit 区间**包含**判定 + 空间维——跨空间 uselimit 区间不匹配
+  代码空间 usepoint）。
+- `find_container_entry`（database.cc:2250）——反向走 + 严格更小者替换 +
+  精确尺寸短路（oldsize 只在 inUse 通过后更新）。
+- `query_properties_ex`（database.cc:1263 + 943 stackContainer + 3185
+  mapScope）——完整三分支 flags：`getAllFlags`（extraflags|符号
+  addrtied/typelock/namelock/global-persist，database.hh:271）、scope-only
+  `mapped|addrtied(|persist)|property(addr)`、property-only；parent 以
+  `Option<&ScopeLocal>`（`is_global_scope=true`）建模全局 scope 链；
+  常量空间短路（database.cc:950）。`query_properties` 旧签名保持
+  （linkSymbol 投影，parent=None/property=0 的生产残差）。
+- `has_overlap_in(space, offset, size)`——queryProperties 无效 usepoint 探针
+  的空间维形式；`has_overlap(offset,size)` 保持无空间签名（funcdata.rs
+  mapGlobals 冻结调用面的兼容 shim，遍历日志中出现过的空间）。
+- `remove_symbol` 改 pub（database.hh:601 公共入口）并维护条目日志
+  （retain+重键）。`in_scope`（database.hh:597 rangetree.inRange 全包含）。
+
+验证：varmap:: 43/43 单测绿；`tests/oracle/scopelocal_query_1204` 28 记录
+（equal-subsort 双向、wide/narrow 双序、多 uselimit 二区间/间隙、跨空间
+存储、多映射+删除重查、findContainer 最小/等值 tie、partial offset 拆片、
+queryProperties 三分支+parent+常量、markNotMapped 窗口分裂）双侧逐字节
+MATCH。残差：multiEntrySet/wholeCount 迭代无查询可观察（未建模）、
+addMap 属性折入符号 flags（database.cc:1153）与 Database flagbase 归
+DB-LOCALSCOPE-MAP-0001、生产 mapGlobals/linkSymbol 消费者不线程 parent/空间
+归 funcdata 轮（r1 REJECT 第 4 项）。
+
