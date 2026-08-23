@@ -73,6 +73,21 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
   COREACTION-PORT-PROTOTYPEWARNINGS-0001(P2)
 - 复用既有 TODO 12 个（见报告 §5 末尾），不重开。
 
+来自 `docs/alignment_audit/CONDEXE_GAPS_2026-08-22.md`（27 函数对照：20 结构 MATCH 全 UNTESTED、
+1 MISSING（buildHeritageArray）、6 MISMATCH；**勘误 roadmap #19**：PathMeld 归因错误（condexe.cc 零引用）、
+forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只检测"已过时（现 1555 行）；
+两个 Phase-0 共享缺陷=remove_from_flow_split 调用序列反+越界 panic、get_true/false_out 极性反+重复翻转）：
+
+| ID | P | 标题 | write-set | 依赖 |
+|---|---|---|---|---|
+| `CONDEXE-CFG-0001` | P0 | removeFromFlowSplit 忠实化（swap 序列+越界） | `src/block.rs`(新增)、`src/funcdata.rs:2728-2787`、docs/api/{block,funcdata}.md | 无 |
+| `CONDEXE-TRUEOUT-0002` | P0 | getTrue/FalseOut 纯位置化+消费方迁移 | `src/block.rs:453-485`、`src/condexe.rs`、全部消费方、docs/api/block.md | 无（与 0001 并行需分文件租约） |
+| `CONDEXE-ACTION-0003` | P1 | apply guard/count/活列表遍历/管线移位 | `src/condexe.rs:1346-1389`、`src/action.rs:1053-1076` | 0001,0002 |
+| `CONDEXE-HERITAGE-0004` | P1 | buildHeritageArray + per-space numHeritagePasses 接线 | `src/funcdata.rs:6958`、`src/condexe.rs:104-127/357-396`、`src/heritage.rs` | 无 |
+| `CONDEXE-PULLBACK-0005` | P1 | pullbackOp storage+插入位置 | `src/condexe.rs:450-500` | 0002 |
+| `CONDEXE-ERROR-0006` | P1 | resolve 链 Result 化+死循环消灭 | `src/condexe.rs:546-746` | 0001 |
+| `CONDEXE-FIXTURE-0007` | P2 | 27 函数 locked-oracle fixture 补全 | tests/ + tools/ | 0001-0006 |
+
 ## 历史 wave：`W-2026-08-20-CLOSEOUT`（收尾中，租约归 W-2026-08-22-ORCH 接管的以新 wave 为准）
 
 > 2026-08-20 启动，root 编排、显式文件 staging 与串行集成；实现 write-set 互斥，核心算法由独立
