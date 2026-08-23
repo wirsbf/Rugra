@@ -1,0 +1,232 @@
+{
+  "schema_version": 2,
+  "fixture_id": "FLOW-INJECT-WIRING-0001",
+  "status_note": "All three cases match the locked Ghidra 12.0.4 oracle byte-for-byte, including the real xrefControlFlow CALLOTHER arm through the `cpuid` userop (index 44) on both sides, label-relative payload branches, moveSequenceDead placement and the multi-op bookkeeping. The CALLFIXUP trigger (queryCall->copyFlowEffects) and the inlineSubFunction clone remain registered residuals.",
+  "decisive_semantics": {
+    "reference_output_parameters": "doInjection(payload,icontext,op,fc): payload/icontext read-only, op shared across xref/moveSequence/updateTarget/opDestroyRaw; fc threads into setupCallSpecs/setupCallindSpecs for the injection recursion check; the emitter (PcodeEmitFd::dump / inject_raw_ops_single) appends ops to the shared bank - observed via the post-generateBlocks op list, block assignment and drained injectlist.",
+    "loop_bounds_traversal_order": "injectPcode walks injectlist slots in order, nullifying each as consumed (flow.cc:1330-1333); generateOps expands injections after the initial fallthru sweep (794-795) and again after the tablelist refill inside the do-while body (815-820); SleighBuilder walks the template opvec in order; resolveRelatives walks label_refs in record order against labels[id]-calling_index.",
+    "counter_accumulator_lifecycle": "obank uniqid is one counter across machine and injected ops (SeqNum time column); PcodeCacher labels grows with the 0xbadbeef sentinel; InjectContext clear() resets inputlist/output only; injectlist drains to empty exactly once per pending op.",
+    "sorting_comparison_keys": "setupParameters binds parameter index -> fixed handle (inputs 0..n-1 then outputs n.., orderParameters); ConstTpl::Handle compares (handle_index, select) with v_offset_plus using plus&0xffff (non-const) or >>8*(plus>>16) (const); op observation iterates the PcodeOpTree SeqNum (address, then time) order; blocks observe generation order."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/inject_sleigh.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/pcodeinject.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/semantics.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/sleigh.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/userop.hh"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "835456b65f7ad0aa5a00eb568b9f2a9ba53b1985",
+    "base_tree": "f85ad781a03929aaa61e34c53fd5abf31c1c981f",
+    "base_src_tree": "12ed0b9f76e13fc3d12bbc7bb8091a9ac9619aa8",
+    "base_flow_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+    "base_pcodeinject_blob": "329b4ea7f77f51f19f148536ee53449f02ecca2c",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [
+      {
+        "path": "src/flow.rs",
+        "sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
+        "policy": "Live overlay; hash-verified against the pinned base commit blob before replacing."
+      },
+      {
+        "path": "src/pcodeinject.rs",
+        "sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
+        "policy": "Live overlay; hash-verified against the pinned base commit blob before replacing."
+      }
+    ],
+    "archive_policy": "Immutable explicit dependency closure plus two verified src overlays (flow.rs + pcodeinject.rs); unrelated worktree files are excluded"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "apis": [
+      "FlowInfo::doInjection (flow.cc:1177-1208)",
+      "FlowInfo::injectUserOp (flow.cc:1212-1236)",
+      "FlowInfo::injectSubFunction (flow.cc:1284-1303, signature only - trigger blocked by CALLSPEC-0001)",
+      "FlowInfo::injectPcode (flow.cc:1327-1355)",
+      "FlowInfo::generateOps hasInject gates (flow.cc:794-795/819-820)",
+      "InjectPayloadSleigh::inject (inject_sleigh.cc:48-65)",
+      "PcodeInjectLibrarySleigh::manualCallOtherFixup (inject_sleigh.cc:504-518)",
+      "UserOpManage::registerOp + InjectedUserOp (userop.hh:158, userop.cc:490-527)",
+      "PcodeEmitFd::dump (funcdata.cc:878-908)"
+    ],
+    "funcdata": "Three BfdArchitecture shells, one per case, over the fixture-binary .text; inject_cpuid registers the callother-fixup through the public UserOpManage::manualCallOtherFixup (the engine already registered the unspecialized 'cpuid' descriptor from the .sla userop table) and drives the ordinary Funcdata::followFlow, so xrefControlFlow's CALLOTHER arm queues the injection on its own; the two seeded cases compile the payload through the real SLEIGH snippet compiler, install an InjectedUserOp at a synthetic index beyond the engine's userop table (explicit-instantiation access to the private UserOpManage::registerOp on the Ghidra side; direct descriptor registration on the Rugra side), construct a synthetic CALLOTHER at the probe entry and hand-drive FlowInfo (private injectlist seeded on the Ghidra side, documented fixture_queue_inject observation hook on the Rugra side) before the real generateOps/generateBlocks",
+    "probe_construction": "naked noinline C functions; every probe body is pure asm (xor/ret streams of varying length) so the emitted bytes are exactly the designed instruction stream; endbr64 (4 bytes, -fcf-protection) precedes each body, shifting deltas by +4 on both sides identically"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "probes": [
+      {
+        "name": "inject_cpuid",
+        "userop_index": 44,
+        "snippet": "out = in0;",
+        "path": "production xref-arm via UserOpManage::manualCallOtherFixup + followFlow"
+      },
+      {
+        "name": "inject_add",
+        "userop_index": 2001,
+        "snippet": "out = in0 + 0x10:4;",
+        "path": "seeded injectlist"
+      },
+      {
+        "name": "inject_label",
+        "userop_index": 2002,
+        "snippet": "if (in0) goto <over>; out = 0x1:4; <over> out = 0x2:4;",
+        "path": "seeded injectlist"
+      }
+    ],
+    "cases": [
+      "inject_cpuid",
+      "inject_add",
+      "inject_label"
+    ],
+    "sha256": "4c1781b28f3f99a11b94926654d7e4116dc77923b6c5605e8d6d3fda5bbf42aa"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "5d9729e8de1d65a078983e265a630e784531764dff1d75969c400a4d3ac9c996",
+    "rust_fixture_sha256": "d1ac04209d6148cb4907c1e38bad0d274d9c27c9f1ea6d2ee935dd0d3b87b4f3",
+    "flow_overlay_sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
+    "pcodeinject_overlay_sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
+    "runner_sha256": "7cf7c7bd546fb5b0593f7a74f4c15dff9aad767ec32ba41191464e7b9482a65b"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "6effd2324bcbc98df0e5f3bb66958adfe47b69bca1112e3895e91eb62804c80f",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "6effd2324bcbc98df0e5f3bb66958adfe47b69bca1112e3895e91eb62804c80f",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "machine_input_sha256": {
+    "fixture_text": "555928f3486d6492ba5e94e2d5cf77e7697f1c3a6b20a0e906e06e48b554d9ff"
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MATCH",
+  "coverage": {
+    "generateops_hasinject_wiring": {
+      "status": "MATCH",
+      "covers": "flow.cc:794-795 post-fallthru gate fires injectPcode for the seeded injection in every case; the flow.cc:819-820 do-while site executes with an empty list (no phase-2 queue source exists under the pinned specs).",
+      "residual_todo_ids": []
+    },
+    "inject_pcode_dispatch_callother": {
+      "status": "MATCH",
+      "covers": "flow.cc:1327-1355 slot nullification + CALLOTHER arm -> injectUserOp; the destroyed CALLOTHER and drained inject_pending=0 are observed in all three cases.",
+      "residual_todo_ids": []
+    },
+    "inject_user_op_context_and_payload": {
+      "status": "MATCH",
+      "covers": "flow.cc:1212-1236 userop index lookup, payload resolution by inject id, InjectContext fill (baseaddr=op addr, inputlist from in[1..], output) - observed via the substituted operand/output storage in the injected ops.",
+      "residual_todo_ids": []
+    },
+    "do_injection_emit_and_bookkeeping": {
+      "status": "MATCH",
+      "covers": "flow.cc:1177-1208 template emit through the PcodeEmit bridge (every injected op carries the base address), full xrefControlFlow over injected ops (block starts, label-relative branch, dead-tail rules), guarded markIncidentalCopy, moveSequenceDead placement (block-0 op order), updateTarget and opDestroyRaw.",
+      "residual_todo_ids": []
+    },
+    "payload_template_execution": {
+      "status": "MATCH",
+      "covers": "inject_sleigh.cc:48-65 + semantics.cc:116-215 + sleigh.cc:120-144/221-280: operand-handle substitution, const-space masking, label-relative resolution (labels[id]-calling_index), the base-address emission and op order for the copy/add/label snippets match byte-for-byte.",
+      "residual_todo_ids": []
+    },
+    "xref_control_flow_callother_arm": {
+      "status": "MATCH",
+      "covers": "flow.cc:344-348: the x86-64 SLEIGH engine emits CALLOTHER(44) for the real `cpuid` instruction, so case inject_cpuid queues the fixup through xrefControlFlow's CALLOTHER arm on BOTH sides with no seeding; the destroyed CALLOTHER(44) (and surviving CALLOTHERs 45-48+) are observed in the op list.",
+      "residual_todo_ids": []
+    },
+    "callfixup_trigger_via_querycall": {
+      "status": "UNTESTED",
+      "covers": "flow.cc:1337-1345 injectSubFunction arm: triggering it through real flow requires queryCall -> copyFlowEffects to set isInline+injectId on a call spec; Rugra's query_call is a documented no-op (CALLSPEC-0001). The injectSubFunction body itself (context with calladdr, doInjection with fc, paramshift to qlst.back()) is ported and compiles, exercised by the shared doInjection path.",
+      "residual_todo_ids": [
+        "CALLSPEC-0001"
+      ]
+    },
+    "inline_subfunction_clone": {
+      "status": "UNTESTED",
+      "covers": "flow.cc:1347-1350 / 1242-1277 inlineSubFunction: the recursion bookkeeping is ported; the actual Funcdata::inlineFlow partial clone is a documented TODO so the arm cannot complete through real flow yet.",
+      "residual_todo_ids": [
+        "INJECT-0001"
+      ]
+    }
+  },
+  "residual_todo_ids": [
+    "CALLSPEC-0001",
+    "INJECT-0001"
+  ],
+  "out_of_scope_observations": [
+    {
+      "id": "WRAPOFFSET-JCURSPACESIZE",
+      "note": "Rugra's AddressSpace tag enum carries no highest/addrsize metadata: non-const/unique wrapOffset reduction and j_curspace_size resolution are documented glue (ADDRESS-0001 family); no fixture snippet reaches them."
+    },
+    {
+      "id": "INJECT-WARNING-NAMES",
+      "note": "injectPcode warningHeaders lack the call-spec name (Rugra FuncCallSpecs are unnamed until ActionFuncLink); no CALL-arm case runs under the pinned specs so no warning line is produced on either side."
+    },
+    {
+      "id": "CONTAINEDCALL-SPEC-PIN",
+      "note": "tools/run_flow_containedcall_oracle.sh pins spec_input_commit 34a3febf... which does not resolve in this repository (verified 2026-08-23); this fixture pins the verified identical-asset commit 87aaef2 instead. The containedcall runner pin needs a separate repair."
+    }
+  ]
+}
