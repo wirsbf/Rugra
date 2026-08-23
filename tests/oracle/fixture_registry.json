@@ -3777,7 +3777,7 @@
       ],
       "rust_function_ids": [
         "funcdata::Funcdata::calc_nz_mask",
-        "funcdata::Funcdata::pcode_op_nz_mask_local"
+        "op::PcodeOp::get_nz_mask_local"
       ]
     },
     {
