@@ -505,6 +505,59 @@ fn run() {
         &make_shift_feed(&mut fd, &block, OpCode::CPUI_INT_RIGHT, 3, OpCode::CPUI_INT_ADD),
         &mut fd,
     );
+
+    // --- RuleShiftBitops with PROPAGATED nzm (FUNCDATA-CALCNZM follow-up) ---
+    // The main pipeline runs ActionNonzeroMask (coreaction.cc:5507) before
+    // the rule pools each mainloop, so ruleaction.cc:541 reads the nzm field
+    // that Funcdata::calcNZMask (funcdata_varnode.cc:856-927) propagated
+    // through written outputs, not the constructor default. Run calc_nz_mask
+    // once here (after all prior observations are printed) and exercise
+    // sparse written inputs: without propagation the AND output still
+    // reports ~0 and the transforms below cannot fire.
+    // Build the chains first, then run calc_nz_mask (after all prior
+    // observations are printed), then observe: without propagation the AND
+    // output still reports ~0 and the positive transforms cannot fire.
+    let prop_add_shift = {
+        let w = input_varnode(&mut fd, 1, 0x10);
+        let c_mask = constant_input(&mut fd, 0x80, 1);
+        let andw_op = make_op(&mut fd, &block, OpCode::CPUI_INT_AND, &[w, c_mask], 1);
+        let andw_out = andw_op.0.read().unwrap().output.clone().unwrap();
+        let x = input_varnode(&mut fd, 1, 0x10);
+        let add_op = make_op(&mut fd, &block, OpCode::CPUI_INT_ADD, &[x, andw_out], 1);
+        let add_out = add_op.0.read().unwrap().output.clone().unwrap();
+        let c_shift = constant_input(&mut fd, 7, 4);
+        make_op(&mut fd, &block, OpCode::CPUI_INT_LEFT, &[add_out, c_shift], 1)
+    };
+    let prop_sub_sub = {
+        let w = input_varnode(&mut fd, 2, 0x10);
+        let c_mask = constant_input(&mut fd, 0x8080, 2);
+        let andw_op = make_op(&mut fd, &block, OpCode::CPUI_INT_AND, &[w, c_mask], 2);
+        let andw_out = andw_op.0.read().unwrap().output.clone().unwrap();
+        let c_off = constant_input(&mut fd, 2, 4);
+        make_op(&mut fd, &block, OpCode::CPUI_SUBPIECE, &[andw_out, c_off], 1)
+    };
+    let prop_dense_shift = {
+        let w = input_varnode(&mut fd, 1, 0x10);
+        let c_mask = constant_input(&mut fd, 0xff, 1);
+        let andw_op = make_op(&mut fd, &block, OpCode::CPUI_INT_AND, &[w, c_mask], 1);
+        let andw_out = andw_op.0.read().unwrap().output.clone().unwrap();
+        let x = input_varnode(&mut fd, 1, 0x10);
+        let add_op = make_op(&mut fd, &block, OpCode::CPUI_INT_ADD, &[x, andw_out], 1);
+        let add_out = add_op.0.read().unwrap().output.clone().unwrap();
+        let c_shift = constant_input(&mut fd, 1, 4);
+        make_op(&mut fd, &block, OpCode::CPUI_INT_LEFT, &[add_out, c_shift], 1)
+    };
+    fd.calc_nz_mask();
+
+    // positive: calcNZMask assigns AND-out nzm = 0x80; 0x80 << 7 loses the
+    // 1-byte output mask -> break at i=1 -> ADD keeps the surviving X.
+    observe("bitops_propagated_add_pos", &bitops_rule, &prop_add_shift, &mut fd);
+    // positive: AND-out nzm = 0x8080; >> 16 (byte offset 2) is zero -> break
+    // at i=0 on a WRITTEN input -> AND collapses to #0.
+    observe("bitops_propagated_subpiece_pos", &bitops_rule, &prop_sub_sub, &mut fd);
+    // negative: 0xff << 1 keeps 0xfe in the 1-byte mask after propagation ->
+    // no swallow -> untouched.
+    observe("bitops_propagated_dense_neg", &bitops_rule, &prop_dense_shift, &mut fd);
 }
 
 fn main() {

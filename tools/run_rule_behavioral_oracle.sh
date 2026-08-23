@@ -7,9 +7,9 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=a21494510ae8130f243275b0340d82e938b0f7d2
-rugra_source_tree=583d8b554e1a841b457a7cd85f96cfff9d7d8bea
-rugra_source_src_tree=fddf3ab3698920b254a573fc7b93411c2160e2ce
+rugra_source_commit=fe2f5e6eceea700afdb3d6e8d2bd0cee9d8c5849
+rugra_source_tree=29fcebd828e92d717ff0cc97364a674a9e06f7e2
+rugra_source_src_tree=77c67a9e993412c36f5924dee5bd2c8d71ff0203
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -323,4 +323,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha2
     raise SystemExit("fixture stderr must be empty")
 PY
 
-printf 'rule_behavioral_1204: covered_projection=37/37 projection_status=MATCH overall_status=MATCH residuals=none\n'
+printf 'rule_behavioral_1204: covered_projection=40/40 projection_status=MATCH overall_status=MATCH residuals=none\n'

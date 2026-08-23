@@ -415,6 +415,59 @@ void run(Funcdata &fd)
   // V * 2^c): INT_RIGHT is not in the oplist -> untouched.
   observe("shift2mult_right_dispatch_neg", shift2MultRule,
           makeShiftFeed(fd, block, CPUI_INT_RIGHT, 3, CPUI_INT_ADD), fd);
+
+  // --- RuleShiftBitops with PROPAGATED nzm (FUNCDATA-CALCNZM follow-up) ---
+  // The main pipeline runs ActionNonzeroMask (coreaction.cc:5507) before the
+  // rule pools each mainloop, so ruleaction.cc:541 reads the nzm field that
+  // Funcdata::calcNZMask (funcdata_varnode.cc:856-927) propagated through
+  // written outputs, not the constructor default. Build the chains first,
+  // then run calcNZMask (after all prior observations are printed), then
+  // observe: without propagation the AND output still reports ~0 and the
+  // positive transforms below cannot fire.
+  PcodeOp *propAddShift;
+  {
+    // (the review counterexample): (X + (W & 0x80)) << 7 on 1-byte values.
+    Varnode *w = inputVarnode(fd, 1, 0x10);
+    PcodeOp *andwOp = makeOp(fd, block, CPUI_INT_AND,
+                             {w, constantInput(fd, 0x80, 1)}, 1);
+    Varnode *x = inputVarnode(fd, 1, 0x10);
+    PcodeOp *addOp = makeOp(fd, block, CPUI_INT_ADD,
+                            {x, andwOp->getOut()}, 1);
+    propAddShift = makeOp(fd, block, CPUI_INT_LEFT,
+                          {addOp->getOut(), constantInput(fd, 7, 4)}, 1);
+  }
+  PcodeOp *propSubSub;
+  {
+    // right-shift direction: SUBPIECE(W & 0x8080, 2) on 2-byte values.
+    Varnode *w = inputVarnode(fd, 2, 0x10);
+    PcodeOp *andwOp = makeOp(fd, block, CPUI_INT_AND,
+                             {w, constantInput(fd, 0x8080, 2)}, 2);
+    propSubSub = makeOp(fd, block, CPUI_SUBPIECE,
+                        {andwOp->getOut(), constantInput(fd, 2, 4)}, 1);
+  }
+  PcodeOp *propDenseShift;
+  {
+    // (X + (W & 0xff)) << 1 keeps bits after propagation.
+    Varnode *w = inputVarnode(fd, 1, 0x10);
+    PcodeOp *andwOp = makeOp(fd, block, CPUI_INT_AND,
+                             {w, constantInput(fd, 0xff, 1)}, 1);
+    Varnode *x = inputVarnode(fd, 1, 0x10);
+    PcodeOp *addOp = makeOp(fd, block, CPUI_INT_ADD,
+                            {x, andwOp->getOut()}, 1);
+    propDenseShift = makeOp(fd, block, CPUI_INT_LEFT,
+                            {addOp->getOut(), constantInput(fd, 1, 4)}, 1);
+  }
+  fd.calcNZMask();
+
+  // positive: calcNZMask assigns AND-out nzm = 0x80; 0x80 << 7 loses the
+  // 1-byte output mask -> break at i=1 -> ADD keeps the surviving X.
+  observe("bitops_propagated_add_pos", shiftBitopsRule, propAddShift, fd);
+  // positive: AND-out nzm = 0x8080; >> 16 (byte offset 2) is zero -> break
+  // at i=0 on a WRITTEN input -> AND collapses to #0.
+  observe("bitops_propagated_subpiece_pos", shiftBitopsRule, propSubSub, fd);
+  // negative: 0xff << 1 keeps 0xfe in the 1-byte mask after propagation ->
+  // no swallow -> untouched.
+  observe("bitops_propagated_dense_neg", shiftBitopsRule, propDenseShift, fd);
 }
 
 } // anonymous namespace
