@@ -862,6 +862,10 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 - `op_flip_condition(op)` — `Funcdata::opFlipCondition`（funcdata.hh:489 逐字内联 `op->flipFlag(PcodeOp::boolean_flip)`）：仅 toggle CBRANCH 的 `boolean_flip` flag，不改 opcode。解锁 RuleCondNegate。**2026-08-23 勘误（GETSTR-ZERODIFF-A）**：旧实现对该 op 自身调 `get_booleanflip`（对 CBRANCH 返回 CPUI_MAX=74 哨兵，opcodes.cc:94-135）并赋值——RuleCondNegate 站点把 CBRANCH opcode 腐蚀为 74（IR dump 实证 GetStr SeqNum 14066:54 CBRANCH→MAX）。oracle 从不在此改 opcode（比较 opcode 改写是 opFlipInPlaceExecute 的职责，funcdata_op.cc:1280）。
 
+### 2026-08-23：get_call_specs_of_op
+
+- `get_call_specs_of_op(op) -> Option<&FuncCallSpecs>` — `Funcdata::getCallSpecs(const PcodeOp*)`（funcdata.cc:484-497）移植：in(0) fspec/注释 varnode 快路径（Rugra 的 Iop 空间：索引键=flow 创建形态，入口地址键=driver relink 形态），回退按调用地址线性扫描（Rugra FuncCallSpecs 存 op_addr 而非 PcodeOp*）。供 ActionInferTypes CALL 输出类型种子（TypeOpCall::getOutputLocal typeop.cc:720-734）等消费。
+
 ### 2026-06-27（会话2）：CFG 重写原语（解锁 condexe）
 
 为支撑 condexe 核心图重写（condexe.cc:712），Funcdata 新增忠实于 Ghidra funcdata_block.cc 的方法：

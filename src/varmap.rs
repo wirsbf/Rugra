@@ -2298,11 +2298,70 @@ impl ScopeLocal {
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1256).
     pub fn restructure_varnode(&mut self, fd: &crate::funcdata::Funcdata) {
-        // Clear existing symbols.
-        self.symbols.clear();
+        // Ghidra varmap.cc:1273 `clearUnlockedCategory(-1)` — NOT a blanket
+        // clear: symbols with category >= 0 (function parameters, equates)
+        // survive unconditionally (database.cc:2086 `if
+        // (sym->getCategory() >= 0) continue;`); category<0 symbols survive
+        // while type-locked, with an unlocked name reset to the $$undef
+        // placeholder (database.cc:2091-2094); everything else is
+        // removeSymbol'd. Rugra previously cleared every symbol, wiping
+        // platform-seeded parameter symbols between passes.
+        let old_symbols = std::mem::take(&mut self.symbols);
+        let old_mapentries = std::mem::take(&mut self.mapentry_log);
+        let mut kept: Vec<LocalSymbol> = Vec::new();
+        let mut kept_old_idx: Vec<usize> = Vec::new();
+        for (old_idx, mut sym) in old_symbols.into_iter().enumerate() {
+            let survive = if sym.category >= 0 {
+                true
+            } else if sym.typelock {
+                if !sym.namelock && !sym.is_name_undefined() {
+                    // renameSymbol(sym, buildUndefinedName()) (cc:2092-2093)
+                    sym.name = self
+                        .build_undefined_name()
+                        .unwrap_or_else(|| "$$undef00000000".to_string());
+                    sym.display_name = sym.name.clone();
+                }
+                true
+            } else {
+                false
+            };
+            if survive {
+                kept.push(sym);
+                kept_old_idx.push(old_idx);
+            }
+        }
+        // Rebuild all derived containers from the survivors, preserving each
+        // survivor's whole map entry (space/start/size/flags/uselimit) and
+        // category slot.
+        let mut new_symbols: Vec<LocalSymbol> = Vec::new();
+        let mut new_entries: Vec<LocalMapEntry> = Vec::new();
         self.nametree.clear();
         self.category_lists.clear();
-        self.mapentry_log.clear();
+        for (new_idx, sym) in kept.into_iter().enumerate() {
+            let old_idx = kept_old_idx[new_idx];
+            let cat = sym.category;
+            let cat_index = sym.cat_index as i32;
+            let key = (sym.name.clone(), sym.name_dedup);
+            self.nametree.insert(key, new_idx);
+            while self.category_lists.len() <= cat as usize && cat >= 0 {
+                self.category_lists.push(Vec::new());
+            }
+            if cat >= 0 {
+                let list = &mut self.category_lists[cat as usize];
+                while list.len() <= cat_index as usize {
+                    list.push(None);
+                }
+                list[cat_index as usize] = Some(new_idx);
+            }
+            for entry in old_mapentries.iter().filter(|e| e.sym == old_idx) {
+                let mut e = entry.clone();
+                e.sym = new_idx;
+                new_entries.push(e);
+            }
+            new_symbols.push(sym);
+        }
+        self.symbols = new_symbols;
+        self.mapentry_log = new_entries;
         self.overlap_problems = false;
         self.pending_warnings.clear();
         self.pending_lowlevel_error = None;
