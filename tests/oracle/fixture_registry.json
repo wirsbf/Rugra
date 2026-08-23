@@ -3142,6 +3142,39 @@
         "arch::Architecture::get_laned_register",
         "funcdata::Funcdata::check_for_laned_register"
       ]
+    },
+    {
+      "id": "comment_sorter_iterators_1204",
+      "description": "CommentSorter shared start/stop/opstop iterator state machine vs locked 12.0.4: header double-round, three-block landmark interleave, 0xffffffff block-tail, backupOp migration, empty block, over-mask placement, displayUnplaced excision, dead-op error text, no-op, pos lifecycle",
+      "runner": [
+        "tools/run_comment_sorter_iterators_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/comment_sorter_iterators_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/comment_sorter_iterators_1204.cc",
+          "rust_fixture": "tests/oracle/comment_sorter_iterators_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "CommentSorter::setupBlockList",
+        "CommentSorter::setupOpList",
+        "CommentSorter::setupHeader",
+        "CommentSorter::findPosition"
+      ],
+      "rust_function_ids": [
+        "comment::CommentSorter::setup_block_bounds",
+        "comment::CommentSorter::setup_op_stop",
+        "comment::CommentSorter::setup_header",
+        "comment::CommentSorter::find_position"
+      ]
     }
   ]
 }
