@@ -3041,7 +3041,7 @@
     },
     {
       "id": "transform_multiequal_insert_1204",
-      "description": "Transform replacement and delayed-insertion ordering for MULTIEQUAL versus ordinary ops, with explicit untested insertion residuals",
+      "description": "Transform replacement/delayed-insertion ordering vs locked 12.0.4: dual-PHI reverse head-insert, follow PHI, COPY order, op_preexisting in-place redirect with NULL slots, nested follow chains, INDIRECT dual-arm special handling, exception partial state, output==null, SeqNum midpoint exhaustion triggering BlockBasic::setOrder (11 records, all MATCH)",
       "runner": [
         "tools/run_transform_multiequal_insert_oracle.sh"
       ],
@@ -3050,7 +3050,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "UNTESTED",
+      "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/transform_multiequal_insert_1204.metadata.json",
         "inputs": {
@@ -3081,7 +3081,8 @@
           "RG-F-e265749fc7b88ea591dc",
           "RG-F-17ee0386eef0983bff6e"
         ]
-      }
+      },
+      "wave": "W-2026-08-22-ORCH (extended 11/11)"
     },
     {
       "id": "block_findirreducible_1204",
