@@ -1,0 +1,96 @@
+{
+  "schema": 2,
+  "fixture_id": "BLOCK-HALFDELETE-REVIDX-0001",
+  "stable_function_id": "GH12-F-a79a5ed692922aac2e11",
+  "stable_function_closure": [
+    "GH12-F-a79a5ed692922aac2e11 ghidra::FlowBlock::halfDeleteInEdge block.cc:100",
+    "GH12-F-a00ad0d88b1cd779d056 ghidra::FlowBlock::halfDeleteOutEdge block.cc:115",
+    "GH12-F-87c9a5900b5ff9dbb9d1 ghidra::FlowBlock::addInEdge block.cc:73"
+  ],
+  "overall_status": "MATCH: all 19 fixed-order output records byte-match the locked oracle; the projection observes the complete incoming and outgoing BlockEdge state of every block before and after each valid half-delete, including peer identity, slot order, reverse_index, label, surviving reciprocal consistency, and PHI-slot identity mapping",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "locked synthetic BlockBasic control-flow graphs; no AddrSpace, instruction bytes, or PcodeOps are consumed by FlowBlock::halfDeleteInEdge/halfDeleteOutEdge",
+  "compiler_spec": "not applicable: pure BlockEdge/FlowBlock state with no Funcdata prototype model",
+  "analysis_options": {
+    "entrypoint": "Direct private-state invocation of locked FlowBlock::halfDeleteInEdge and FlowBlock::halfDeleteOutEdge on BlockBasic objects connected through production BlockGraph::addEdge; Rust invokes the mapped BlockBasic methods on the same ordered graph shapes",
+    "prestate": "Every case starts from a fresh graph with valid reciprocal half-edges created in a fixed order. Both halves receive the same distinct numeric label. No corrupted reverse index, invalid slot, empty-list deletion, or concurrent writer is introduced.",
+    "observation": "One schema envelope followed by 18 case/phase records. Each record prints every block in creation order and every incoming/outgoing edge in slot order as peer:reverse_index:label, then reports reciprocal consistency for all surviving focus in/out edges and a slot-zipped PHI identity vector where applicable.",
+    "normalization": "Block identity is normalized only from raw pointers/Arc addresses to creation-order names b0..bn. No edge, slot, order, reverse index, label, reciprocal failure, or PHI token is removed or reordered.",
+    "exception_policy": "The locked bodies have no exception or validation branch. Their contract requires an existing slot; invalid or empty-list inputs can reach std::vector operator[]/pop_back undefined behavior and therefore have no defined oracle output to compare. The zero-slide valid boundary is covered with a single edge and with deletion of the last slot."
+  },
+  "input": {
+    "architecture": "locked synthetic BlockBasic control-flow graphs",
+    "compiler_spec": "not applicable",
+    "analysis_options": {
+      "edge_constructor": "BlockGraph::addEdge / BlockGraph::add_edge with fixed creation and insertion order",
+      "labels": "distinct mirrored uint32 labels retained as raw decimal values",
+      "invocation": "direct halfDeleteInEdge/halfDeleteOutEdge on a valid existing slot",
+      "observation": "complete per-block in/out half-edge vectors plus focus reciprocal checks and PHI slot tokens",
+      "normalization": "pointer identity to creation-order bN only"
+    },
+    "cases": [
+      "in_nonlast_phi: four ordered predecessors, delete incoming slot 1, remove the matching test PHI token, observe two shifted surviving source halves",
+      "out_nonlast_ordered: four ordered successors, delete outgoing slot 1, observe two shifted surviving target halves",
+      "consecutive_in_phi: five predecessors, delete incoming slot 1 twice, observe the state after each call and the corresponding PHI token sequence",
+      "self_parallel_in: two self edges interleaved with two external predecessors, delete incoming slot 0 so a surviving self half and external halves shift",
+      "self_parallel_out: two self edges interleaved with two external successors, delete outgoing slot 0 so a surviving self half and external halves shift",
+      "bidirectional_ordered: parallel A-to-B and B-to-A edges interleaved with A-to-C/C-to-A, then one incoming and one outgoing middle deletion",
+      "single_out_slot: delete the only valid outgoing slot, covering zero loop iterations",
+      "last_in_slot: delete the last of two incoming slots, covering a valid last-slot zero-slide boundary"
+    ]
+  },
+  "input_fingerprint": "sha256:80f9006d1be8a7c528f25bd27dd894084f04e6c1b5004d02eb96522b790473e8",
+  "observation_schema": {
+    "format": "19 fixed-order UTF-8 lines with a final newline: one envelope and 18 case/phase records",
+    "edge": "peer creation-order name, reciprocal reverse_index, raw label for both in and out vectors",
+    "state": "complete ordered edge vectors of every block; focus-side surviving reciprocal invariant; slot-zipped PHI identity tokens",
+    "mutation": "before and after each call, plus both intermediate states for consecutive deletion and incoming/outgoing stages for the bidirectional case"
+  },
+  "comparand": {
+    "rugra_base_commit": "8d917bfe76fa53a0ead09b43e4ce1eddd1c90ce5",
+    "rugra_base_tree": "6d1749977d38e63d6540a80917379b9777b1f94c",
+    "overlay": [
+      "src/block.rs"
+    ],
+    "cpp_fixture_sha256": "03c4122b89103effb57b31577b9e46e5dccf0dd7b62aa911fbdf253ac8fefed9",
+    "rust_fixture_sha256": "2b5ae2b1233d924bc2e42f47b7a39946b182a0d363269dcd5fc8d8e59637b42b",
+    "block_rs_sha256": "aa89511224fadb3075eb79454dcda0027ca81139a6898e010d0f171817898c9c",
+    "block_doc_sha256": "bc3f4fa3bf9c056fb1d77bbb88f9d63077e749516fb821103f4ccda925fa39a8",
+    "runner_sha256": "cd27255a4126ed0846bf969915116eaf0cccc74f09cdc4cfc5707010ecd8b13c",
+    "ghidra_block_cc_blob": "bf7103d9169097b2d879d04513a2690c6d9b1a62",
+    "ghidra_block_hh_blob": "8319d83b9afa2b5ecdd9008bbc48ba3df72b93e2",
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "rust_toolchain": "system",
+      "platform": "Linux 7.1.8-arch1-3 x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from locked commit e40ed130 into a fresh temporary directory and libdecomp.a is rebuilt before linking the fixture; live oracle sources are identity- and dirty-state checked but never compiled as the comparand.",
+    "private_state_observer": "#define private public is scoped to the fixture translation unit and exposes halfDeleteInEdge/halfDeleteOutEdge plus the two edge vectors without modifying the locked source.",
+    "rust_comparand": "A tar snapshot of pinned Rugra base 8d917bf is materialized, only src/block.rs is overlaid, locked Ghidra is provided through the verified worktree symlink required by build.rs, and Cargo builds offline/locked with incremental compilation disabled under the global /tmp/rugra-cargo-build.lock and CARGO_TARGET_DIR=/tmp/rugra-target-block-halfdelete.",
+    "drift_check": "All owned source, documentation, fixture, metadata, and runner files are hashed before and after execution."
+  },
+  "expected_stdout_sha256": "e0cf61436b7525ba7d3e900df5c3efcabf95a58d57ab2384af74e0dc7a39b650",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "incoming_nonlast_slide": "MATCH: surviving local incoming entries retain source order/reverse_index/label while each source outgoing half decrements its reciprocal reverse index exactly once per left shift",
+    "outgoing_nonlast_slide": "MATCH: surviving local outgoing entries retain target order/reverse_index/label while each target incoming half decrements its reciprocal reverse index exactly once per left shift",
+    "consecutive_delete": "MATCH: two calls at the same incoming slot preserve the oracle's intermediate and final edge order and cumulative peer-index updates",
+    "phi_slot_to_in_edge": "MATCH: after deleting the same slot from the test PHI identity vector, each remaining token stays zipped to the same predecessor as the shifted incoming edge order; this is the edge-order contract consumed by Funcdata::branchRemoveInternal",
+    "self_and_parallel_edges": "MATCH: both incoming and outgoing cases exercise the held-self-lock path with two parallel self edges interleaved with external peers",
+    "bidirectional_order": "MATCH: interleaved parallel A<->B and A<->C directions preserve their independent incoming/outgoing vector orders through middle-slot deletion",
+    "labels_and_removed_half": "MATCH: every surviving label remains byte-identical and the deliberately retained removed counterpart is visible in the complete graph state, matching the half-delete contract",
+    "valid_zero_slide_boundaries": "MATCH: single-edge and last-slot calls skip the slide loop and pop exactly one local entry",
+    "invalid_or_empty_slot": "EXCLUDED AS UNDEFINED INPUT: the locked implementation has no exception/guard branch and can invoke std::vector undefined behavior; this is not a defined oracle behavior or a Rugra error-path contract",
+    "module_completion": "NOT CLAIMED: block.rs remains L2 and other FlowBlock/BlockGraph algorithms retain separately tracked gaps"
+  }
+}

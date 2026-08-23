@@ -1536,6 +1536,40 @@ impl FlowBlock for BlockBasic {
     }
 }
 
+// RUGRA-GLUE: Rust trait-object field mutation for Ghidra's direct
+// FlowBlock::intothis/outofthis access in halfDeleteInEdge/halfDeleteOutEdge.
+fn decrement_reciprocal_reverse_index(
+    block: &mut dyn FlowBlock,
+    incoming_half: bool,
+    slot: usize,
+) {
+    macro_rules! decrement_for {
+        ($block_type:ty) => {
+            if let Some(concrete) = block.as_any_mut().downcast_mut::<$block_type>() {
+                let edge = if incoming_half {
+                    &mut concrete.incoming[slot]
+                } else {
+                    &mut concrete.outgoing[slot]
+                };
+                edge.reverse_index -= 1;
+                return;
+            }
+        };
+    }
+
+    decrement_for!(BlockBasic);
+    decrement_for!(BlockGoto);
+    decrement_for!(BlockIf);
+    decrement_for!(BlockWhileDo);
+    decrement_for!(BlockDoWhile);
+    decrement_for!(BlockInfLoop);
+    decrement_for!(BlockList);
+    decrement_for!(BlockCondition);
+    decrement_for!(BlockSwitch);
+
+    panic!("edge endpoint does not own a mutable reciprocal edge list");
+}
+
 /// BlockBasic-specific methods for edge manipulation (Ghidra identifyInternal support)
 impl BlockBasic {
     // Ghidra: block.cc:178 FlowBlock::replaceOutEdge
@@ -1568,30 +1602,73 @@ impl BlockBasic {
     }
 
     /// Delete only the incoming half of an edge (our `intothis` entry),
-    /// leaving the matching outgoing entry on the source block stale.
-    /// Faithful to `FlowBlock::halfDeleteInEdge` (block.cc:140).
+    /// leaving the removed edge's outgoing half on the source block stale.
+    /// Surviving entries slide left in order, and each surviving source-side
+    /// half is updated to point back to its new incoming slot.
     // Ghidra: block.cc:100 FlowBlock::halfDeleteInEdge
-    pub fn half_delete_in_edge(&mut self, slot: usize) {
-        self.incoming.remove(slot);
-        // Reverse-indices of our remaining incoming edges that pointed past
-        // `slot` on their source must be decremented.
-        for e in self.incoming.iter_mut() {
-            if e.reverse_index > slot as i32 {
-                e.reverse_index -= 1;
+    pub fn half_delete_in_edge(&mut self, mut slot: usize) {
+        while slot < self.incoming.len() - 1 {
+            let edge = self.incoming[slot + 1].clone();
+            self.incoming[slot] = edge.clone();
+            match edge.point.try_write() {
+                Ok(mut source) => {
+                    decrement_reciprocal_reverse_index(
+                        &mut *source,
+                        false,
+                        edge.reverse_index as usize,
+                    );
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // The per-Funcdata graph rewrite is single-threaded. A
+                    // held peer lock here is therefore the self-loop case:
+                    // mutate the outgoing half through our existing &mut.
+                    decrement_reciprocal_reverse_index(
+                        self,
+                        false,
+                        edge.reverse_index as usize,
+                    );
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal source edge lock: {error}");
+                }
             }
+            slot += 1;
         }
+        self.incoming.pop();
     }
 
-    /// Delete only the outgoing half of an edge. Faithful to
-    /// `FlowBlock::halfDeleteOutEdge` (block.cc:149).
+    /// Delete only the outgoing half of an edge. Surviving entries slide left
+    /// in order, and each surviving target-side half is updated to point back
+    /// to its new outgoing slot.
     // Ghidra: block.cc:115 FlowBlock::halfDeleteOutEdge
-    pub fn half_delete_out_edge(&mut self, slot: usize) {
-        self.outgoing.remove(slot);
-        for e in self.outgoing.iter_mut() {
-            if e.reverse_index > slot as i32 {
-                e.reverse_index -= 1;
+    pub fn half_delete_out_edge(&mut self, mut slot: usize) {
+        while slot < self.outgoing.len() - 1 {
+            let edge = self.outgoing[slot + 1].clone();
+            self.outgoing[slot] = edge.clone();
+            match edge.point.try_write() {
+                Ok(mut target) => {
+                    decrement_reciprocal_reverse_index(
+                        &mut *target,
+                        true,
+                        edge.reverse_index as usize,
+                    );
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // See half_delete_in_edge: the only recursively-held
+                    // endpoint in the single-threaded pipeline is `self`.
+                    decrement_reciprocal_reverse_index(
+                        self,
+                        true,
+                        edge.reverse_index as usize,
+                    );
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal target edge lock: {error}");
+                }
             }
+            slot += 1;
         }
+        self.outgoing.pop();
     }
 
     /// Remove edge `in`/`out` from this block but create a new direct edge
@@ -4927,4 +5004,3 @@ impl BlockSwitch {
         self.index_varnode.clone()
     }
 }
-

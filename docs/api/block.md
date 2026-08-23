@@ -874,11 +874,29 @@ end-to-end/structureReset 链含支配树）双侧投影 byte-MATCH。
 
 ### 2026-06-25：FlowBlock as_any_mut + BlockBasic 边操作
 
+### 2026-08-23：halfDelete reciprocal reverse-index 修复
+
+- `BlockBasic::half_delete_in_edge` 对应 locked Ghidra
+  `FlowBlock::halfDeleteInEdge`（`block.cc:100-112`）：从删除槽开始逐项左移
+  `incoming`，保留 surviving 本地 half-edge 的 `reverse_index` 与 label，并把每条
+  surviving source 的 `outgoing[reverse_index].reverse_index` 逐次减一。
+- `BlockBasic::half_delete_out_edge` 对应
+  `FlowBlock::halfDeleteOutEdge`（`block.cc:115-127`）：对 `outgoing` 做同序滑动，
+  并更新每条 surviving target 的 `incoming[reverse_index].reverse_index`。删除的
+  另一半按 half-delete 契约暂时保留，由 `removeInEdge/removeOutEdge` 等调用者删除。
+- Rust trait-object 边端点可能是任一持有边表的结构化块；内部胶水覆盖这些具体类型。
+  自环在当前 per-`Funcdata` 单线程图改写中复用已持有的 `&mut BlockBasic`，避免二次
+  获取同一 `RwLock`。
+- `BLOCK-HALFDELETE-REVIDX-0001` 的 locked 12.0.4 双侧 fixture 逐槽观察所有块的
+  `peer/reverse_index/label`，覆盖非末槽入/出删除、连续删除、PHI 输入槽映射、
+  self/parallel 边、双向有序边，以及 single/last-slot 合法边界。空表或越界 slot
+  在 Ghidra 函数中没有定义的异常分支，不作为可比较输入。
+
 ### 2026-06-27（会话2）：边操作原语（解锁 condexe）
 
 为支撑 condexe 核心图重写（condexe.cc:712），BlockBasic 新增忠实于 Ghidra block.cc 的边操作：
 - `get_out_rev_index(slot) -> i32` / `get_in_rev_index(slot) -> i32` — `FlowBlock::getOutRevIndex/getInRevIndex`（block.cc）：返回反向边索引。
-- `half_delete_in_edge(slot)` / `half_delete_out_edge(slot)` — `FlowBlock::halfDeleteInEdge/halfDeleteOutEdge`（block.cc:140/149）：只删除边的本端，并修正剩余边的反向索引。
+- `half_delete_in_edge(slot)` / `half_delete_out_edge(slot)` — `FlowBlock::halfDeleteInEdge/halfDeleteOutEdge`（block.cc:100/115）：只删除指定 half-edge；本地 surviving edge 依序左移，对端 surviving half-edge 的 reciprocal reverse index 随槽位更新。
 - `replace_edges_thru(in_slot, out_slot)` — `FlowBlock::replaceEdgesThru`（block.cc:198-216）：移除本块的入/出边，但在入块与出块间建立直连边，保留槽位。condexe 的 `removeFromFlowSplit` 核心。
 
 BlockGraph 新增：
