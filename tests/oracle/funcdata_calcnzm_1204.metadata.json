@@ -1,9 +1,9 @@
 {
  "schema_version": 2,
  "fixture_id": "FUNCDATA-CALCNZM-0001",
- "status_note": "All six projections (unwritten-input initialization incl. the spacebase ~0xff alignment, INT_AND convergence + COPY chain, PIECE concatenation, the sc6 y/64 INT_DIV/INT_REM shapes, and the MULTIEQUAL loop-clip phase-2 fixed points for both an OR-loop and an AND-loop) are byte-identical MATCH against the locked 12.0.4 oracle. The rewritten Rugra calc_nz_mask (src/funcdata.rs, commit d752ce0) is the complete two-phase DFS+worklist port with the full getNZMaskLocal switch. Outside-fixture residuals stay registered: op.rs PcodeOp::get_nz_mask_local remains divergent and unused (FUNCDATA-CALCNZM-0002), and varnode.rs Varnode::get_nz_mask still returns the pre-wiring conservative approximation instead of the varnode.hh:231 field read (FUNCDATA-CALCNZM-0003).",
+ "status_note": "All six projections (unwritten-input initialization incl. the spacebase ~0xff alignment, INT_AND convergence + COPY chain, PIECE concatenation, the sc6 y/64 INT_DIV/INT_REM shapes, and the MULTIEQUAL loop-clip phase-2 fixed points for both an OR-loop and an AND-loop) are byte-identical MATCH against the locked 12.0.4 oracle. FUNCDATA-CALCNZM-0002 consolidated (commit 65a2492): the complete getNZMaskLocal switch now lives in PcodeOp::get_nz_mask_local (src/op.rs, pinned via base_op_blob) and Funcdata::calc_nz_mask calls it directly; the funcdata.rs staged copy is deleted. This re-run pins base 65a2492 and is a value-equivalent pure move, so all observations are unchanged. Outside-fixture residual stays registered: varnode.rs Varnode::get_nz_mask still returns the pre-wiring conservative approximation instead of the varnode.hh:231 field read (FUNCDATA-CALCNZM-0003).",
  "decisive_semantics": {
-  "reference_output_parameters": "calcNZMask(void) mutates Varnode::nzm in place through the shared Varnode objects; getNZMaskLocal(bool cliploop) is const, reads output/inrefs/parent only. Rugra mirrors with outvn.write().nzm assignments and a read-only &PcodeOpRef helper (Funcdata::pcode_op_nz_mask_local).",
+  "reference_output_parameters": "calcNZMask(void) mutates Varnode::nzm in place through the shared Varnode objects; getNZMaskLocal(bool cliploop) is const, reads output/inrefs/parent only. Rugra mirrors with outvn.write().nzm assignments and the read-only PcodeOp method PcodeOp::get_nz_mask_local (src/op.rs, FUNCDATA-CALCNZM-0002 consolidation).",
   "loop_bounds_traversal_order": "phase 1 iterates beginOpAlive..endOpAlive (== obank alive order, mirrored by alivelist.clone()), inner DFS advances slot 0..numInput and pops when slot >= numInput; MULTIEQUAL looping edges are clipped via parent->isLoopIn(slot) in both phase 1 and the cliploop getNZMaskLocal arm; phase 2 seeds every MULTIEQUAL in alive order, pops from the back, and re-pushes vn->beginDescend() order descendants on change. Rugra mirrors each order exactly.",
   "counter_accumulator_lifecycle": "no counters; nzm is a value state where phase 2 rewrites only when nzmask != vn->nzm; INT_MULT derives w1/w2/total bit widths from mostsig/leastsigbit_set of the input masks with the sa >= 8*size zero guard. Rugra mirrors both.",
   "sorting_comparison_keys": "no sorted containers anywhere in calcNZMask/getNZMaskLocal; the only comparisons are mask equality/inequality and the != fullmask / != 0 short-circuits in the OR/AND/ADD arms. Rugra mirrors."
@@ -21,10 +21,11 @@
  },
  "analysis_options": "direct Funcdata::calcNZMask (funcdata_varnode.cc:856-926) on synthetic Funcdata objects; ops built via newOp/opSetOpcode/newUniqueOut/opSetInput/opInsertEnd/opInsertBegin; loop blocks via newBlockBasic+addEdge+addLoopEdge (C++) / create_new_block+add_edge+set_out_edge_flag_mirrored (Rugra); no Actions run",
  "rugra_source": {
-  "base_commit": "d752ce03f383b19d8c4acecc215104b6c9059109",
-  "base_tree": "23404ac9af63aa0c7e2d656a07f76b6499e0c6db",
-  "base_src_tree": "67f91f46f90257042bb8e840bc47c3f57ed5f45f",
-  "base_funcdata_blob": "4ed52dea0926de654dc5097c76deaa21f9d58346",
+  "base_commit": "65a24924826871858c6d0e30d928fff5147e8c79",
+  "base_tree": "561d69ca2572fe86e691eac7596a9162b9a2e3ac",
+  "base_src_tree": "e4b46206d07970a990450223e51a8cebdadedf53",
+  "base_funcdata_blob": "7d317bf56c123b5c50e60654f7ce4811138063f6",
+  "base_op_blob": "1f8908d74c0e5b72e41a910e46313066d48ce919",
   "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
   "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
   "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
@@ -33,7 +34,7 @@
  "comparand": {
   "cpp_fixture_sha256": "e8e4f930eb2791732995aa7613b70c676f2095cde2580706db6c3d7a8bae8e4d",
   "rust_fixture_sha256": "5d819e8437c8f9148f315fe398afe3532b361009a93d4f1213a9e112eaf18041",
-  "runner_sha256": "7dff3ef300ca13f28eb65324b0242fb37bda6b592ac047283b2be9d229c836e1"
+  "runner_sha256": "5d7e8b849346ccb9bc35904dbe79e7904c85dba378172fabd3c79b6706dc9440"
  },
  "input_manifest": {
   "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
@@ -100,15 +101,9 @@
  "projection_status": "MATCH",
  "overall_status": "MATCH",
  "residual_todo_ids": [
-  "FUNCDATA-CALCNZM-0002",
   "FUNCDATA-CALCNZM-0003"
  ],
  "residual_union": [
-  {
-   "todo_id": "FUNCDATA-CALCNZM-0002",
-   "status": "UNTESTED",
-   "detail": "op.rs PcodeOp::get_nz_mask_local (op.rs:1175) predates the port: ignores cliploop, lacks INT_DIV/INT_REM/POPCOUNT/LZCOUNT/INT_MULT/CALL arms, invents INT_NEGATE/INT_2COMP arms, and is called by no production path. The complete oracle switch lives in funcdata.rs Funcdata::pcode_op_nz_mask_local. Consolidation onto the PcodeOp method requires an op.rs lease."
-  },
   {
    "todo_id": "FUNCDATA-CALCNZM-0003",
    "status": "MISMATCH",

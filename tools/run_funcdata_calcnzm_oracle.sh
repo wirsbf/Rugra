@@ -6,16 +6,20 @@ set -euo pipefail
 # bilateral fixture. Pin-base schema2 pattern follows
 # tools/run_lanedivide_infra_oracle.sh; the fixture needs no BFD loader
 # (synthetic FixtureArchitecture, cf. funcdata_op_insert_input_1204).
+# Pin base rebased to 65a2492 (FUNCDATA-CALCNZM-0002 consolidation:
+# the full switch now lives in PcodeOp::get_nz_mask_local, src/op.rs
+# pinned via base_op_blob).
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=d752ce03f383b19d8c4acecc215104b6c9059109
-rugra_source_tree=23404ac9af63aa0c7e2d656a07f76b6499e0c6db
-rugra_source_src_tree=67f91f46f90257042bb8e840bc47c3f57ed5f45f
-rugra_source_funcdata_blob=4ed52dea0926de654dc5097c76deaa21f9d58346
+rugra_source_commit=65a24924826871858c6d0e30d928fff5147e8c79
+rugra_source_tree=561d69ca2572fe86e691eac7596a9162b9a2e3ac
+rugra_source_src_tree=e4b46206d07970a990450223e51a8cebdadedf53
+rugra_source_funcdata_blob=7d317bf56c123b5c50e60654f7ce4811138063f6
+rugra_source_op_blob=1f8908d74c0e5b72e41a910e46313066d48ce919
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -64,6 +68,7 @@ for binding in \
   "$rugra_source_commit^{tree}:$rugra_source_tree" \
   "$rugra_source_commit:src:$rugra_source_src_tree" \
   "$rugra_source_commit:src/funcdata.rs:$rugra_source_funcdata_blob" \
+  "$rugra_source_commit:src/op.rs:$rugra_source_op_blob" \
   "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
   "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
   "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
@@ -82,7 +87,7 @@ python3 -I -S - "$repo_root" "$metadata" "$cpp_fixture" "$rust_fixture" \
   "$oracle_makefile_blob" "$rugra_source_commit" "$rugra_source_tree" \
   "$rugra_source_src_tree" "$rugra_source_funcdata_blob" \
   "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
-  "$rugra_source_build_rs_blob" <<'PY'
+  "$rugra_source_build_rs_blob" "$rugra_source_op_blob" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -92,7 +97,7 @@ import sys
     repo_raw, metadata_raw, cpp_raw, rust_raw, runner_sha, oracle_commit,
     oracle_tag, cpp_tree, makefile_blob, source_commit, source_tree,
     source_src_tree, source_funcdata_blob, source_cargo_toml_blob,
-    source_cargo_lock_blob, source_build_rs_blob,
+    source_cargo_lock_blob, source_build_rs_blob, source_op_blob,
 ) = sys.argv[1:]
 repo = pathlib.Path(repo_raw).resolve()
 
@@ -137,6 +142,7 @@ for label, actual, expected in (
     ("source tree", source["base_tree"], source_tree),
     ("source src tree", source["base_src_tree"], source_src_tree),
     ("source funcdata blob", source["base_funcdata_blob"], source_funcdata_blob),
+    ("source op blob", source["base_op_blob"], source_op_blob),
     ("Cargo.toml blob", source["cargo_toml_blob"], source_cargo_toml_blob),
     ("Cargo.lock blob", source["cargo_lock_blob"], source_cargo_lock_blob),
     ("build.rs blob", source["build_rs_blob"], source_build_rs_blob),
@@ -304,4 +310,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or \
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'funcdata_calcnzm_1204: projection_status=MATCH overall_status=MATCH cases=6 residual=FUNCDATA-CALCNZM-0002(op.rs consolidation)+FUNCDATA-CALCNZM-0003(varnode.rs get_nz_mask approximation)\n'
+printf 'funcdata_calcnzm_1204: projection_status=MATCH overall_status=MATCH cases=6 residual=FUNCDATA-CALCNZM-0003(varnode.rs get_nz_mask approximation)\n'
