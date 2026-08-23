@@ -241,3 +241,54 @@ curl 输出同样 0/112。修复后：
   `stack0x…` 槽名/`._0_4_` 位选择器，及需要 DWARF 布局的域结构体成员访问
   URLGlob/Configurable/FILE/DAT_ 算术）；`result/curl_cur.c` 0/112 → 53/116 OK，
   残余失败为当前 WIP 输出的真实发现（`xunknown8` 类型拼写、`{` 前外提声明等）。
+
+## Pipeline stage 投影首分歧二分（2026-08-23，`PIPE-STAGE-BISECT-0001`）
+
+`stage_bisect.py` 消费**逐 Action/Rule 应用的修改投影**（Ghidra 侧/Rugra 侧各一份，
+由 `tools/stage_bisect_projection.cc` 骨架描述的 fixture harness 产出），定位两侧
+第一个分歧边界，并把缺陷归因到**某 Action/Rule 的某一轮应用**（阶段路径 + restart
+轮次 + repeatapply pass + 计数器状态），比 `stage_diff.py` 的整阶段 artifact hash
+再细一级。RUGRA-GLUE：oracle 无对应物，工具只读投影，不改任何管线语义。
+
+投影格式（每行一项，`--format` 可打印）：
+
+```text
+META side=ghidra commit=e40ed130... func=FUN_00401000 arch=x86:LE:64:default
+@BEGIN universal:fullloop:mainloop:stackstall:oppool1:RulePushPtr
+1 universal:fullloop:mainloop:stackstall:oppool1:RulePushPtr \
+  0040102c: (PTRADD,20) uni4 = uni3 4|0040102c: (PTRSUB,20) uni4 = uni3 4
+@END universal:fullloop:mainloop:stackstall:oppool1:RulePushPtr \
+  changes=1 tests=6 apply=1
+@CONVERGED universal:fullloop:mainloop:stackstall:oppool1
+@RESTART 1
+```
+
+- 记录行 = `<seq> <action_path> <before>|<after>`：`<seq>` 是原生
+  `opactdbg_count`（funcdata.cc:1010-1052），同一应用改 k 个 op 就有 k 行同 seq；
+  before/after 为 `PcodeOp::printDebug`（op.cc:376）原文，`|` 转义为 `\|`。
+- 边界行 = `@BEGIN/@END/@CONVERGED/@RESTART`；轮次状态由工具按"上次 @RESTART
+  以来每路径的 @BEGIN 计数"推导（@RESTART 重置），满足
+  `PIPELINE_STAGES_1204.md` §4 的登记要求。
+
+```bash
+# 定位首分歧（human 可读，含上下文与归因建议）
+python3 tools/stage_bisect.py /tmp/ghidra.proj /tmp/rugra.proj
+
+# 机读报告
+python3 tools/stage_bisect.py /tmp/ghidra.proj /tmp/rugra.proj --json
+
+# triage 辅助：屏蔽 unique 空间 id（仅用于缩小范围，不能当对齐证据）
+python3 tools/stage_bisect.py /tmp/ghidra.proj /tmp/rugra.proj --relax-unique
+
+# 打印 Ghidra 侧投影收集 harness 骨架（含 -DOPACTION_DEBUG 构建/链接命令模板）
+python3 tools/stage_bisect.py --emit-harness
+
+# 自测（合成投影 + 已知分歧点）
+python3 tools/stage_bisect.py --selftest
+```
+
+判定与归因：`AFTER_DIVERGENCE`（同 before 异 after）→ 缺陷在该 Action/Rule 该轮
+apply 内；`BEFORE_DIVERGENCE` → 缺陷更早，回退到报告的 last good boundary 再收窄；
+`PATH/BOUNDARY/SEQ/STREAM_KIND/LENGTH_DIVERGENCE` 分别指向遍历顺序、计数会计、
+序号、事件对齐与提前终止。退出码沿用 `stage_diff.py`：0 一致 / 1 有分歧 / 2 格式
+或用法错误。
