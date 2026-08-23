@@ -1463,6 +1463,39 @@ impl<'a> FlowInfo<'a> {
 
     // ===================== P-code injection (flow.cc:1177-1355) =====================
 
+    /// Clone the architecture handles FlowInfo's injection path needs
+    /// (`glb->userops` / `glb->pcodeinjectlib`, userop.hh / pcodeinject.hh).
+    /// Returns None when either manager is absent — legacy callers and unit
+    /// fixtures construct Funcdata without an Architecture.
+    // RUGRA-GLUE: ARCH-GLUE — Ghidra reaches the managers through the raw
+    // Architecture pointer; Rugra's Funcdata::arch is Option<Arc<..>>.
+    fn arch_inject_sources(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>,
+        std::sync::Arc<std::sync::RwLock<crate::pcodeinject::PcodeInjectLibrary>>,
+    )> {
+        let arch = self.fd.arch.as_ref()?;
+        let userops = arch.userops.clone()?;
+        let inject_lib = arch.pcodeinjectlib.clone()?;
+        Some((userops, inject_lib))
+    }
+
+    /// Queue one op for injection (the flow.hh:90 `injectlist` push that
+    /// `xrefControlFlow` performs for machine-lifted CALLOTHERs at
+    /// flow.cc:345-347 and `checkForFlowModification` for inline call sites
+    /// at flow.cc:639-640).
+    ///
+    /// RUGRA-GLUE: fixture-observation API (same category as `snapshot`).
+    /// The locked x86-64 SLEIGH language declares no user-defined p-code ops,
+    /// so no real instruction can emit a CALLOTHER on either side of the
+    /// oracle; the Ghidra fixture seeds its private `injectlist` directly and
+    /// the Rust fixture mirrors through this hook. Production flow code uses
+    /// the xref/checkForFlowModification paths only.
+    pub fn fixture_queue_inject(&mut self, op: &crate::op::PcodeOpRef) {
+        self.injectlist.push(Some(op.clone()));
+    }
+
     /// Inject the given payload into this flow. Faithful to
     /// `FlowInfo::doInjection` (flow.cc:1177-1208).
     ///
@@ -1471,85 +1504,77 @@ impl<'a> FlowInfo<'a> {
     /// the call, the original op is removed, and the target map is repointed
     /// at the first injected op.
     ///
-    /// RUGRA-GLUE: Ghidra's `payload->inject(icontext, emitter)` runs the
-    /// payload through the architecture's `PcodeEmit` (here `PcodeEmitFd`),
-    /// appending ops to the dead list. Rugra does not yet model that emit
-    /// path inside FlowInfo, so this method takes the already-emitted ops
-    /// (`injected_ops`) as an argument and performs the post-inject
-    /// bookkeeping (xrefControlFlow, moveSequence, updateTarget, opDestroyRaw)
-    /// that Ghidra does at flow.cc:1186-1207.
+    /// Ghidra's `payload->inject(icontext, emitter)` (flow.cc:1185) runs the
+    /// payload template through `InjectPayloadSleigh::inject`, whose emitted
+    /// ops land at the end of the dead list via `PcodeEmitFd::dump`
+    /// (funcdata.cc:878). Rugra splits the same dataflow at the borrow
+    /// boundary: `InjectPayload::inject` (pcodeinject.rs) resolves the
+    /// template into raw ops, and `Funcdata::inject_raw_ops_single` — the
+    /// `PcodeEmitFd::dump` port — appends them to the bank with the
+    /// injection base address (Ghidra's `cacher.emit(con.baseaddr,&emit)`
+    /// passes the base address for every injected op, sleigh.cc:139-144).
     // Ghidra: flow.cc:1177 FlowInfo::doInjection
     pub fn do_injection(
         &mut self,
-        injected_ops: &[crate::op::PcodeOpRef],
+        payload: &crate::pcodeinject::InjectPayload,
+        icontext: &crate::pcodeinject::InjectContext,
         op: &crate::op::PcodeOpRef,
         inject_fc_idx: Option<usize>,
     ) {
         // flow.cc:1180-1183: remember the dead-list position before inject.
-        // Rugra's "dead list" is the alive list (ops are inserted directly);
-        // we record the index just before the injected ops were appended.
-        if injected_ops.is_empty() {
-            // flow.cc:1188-1189: empty injection is an error.
-            eprintln!("[FLOW] {}: Empty injection", self.fd.name);
+        // Rugra's flow-time "dead list" is the alive list in creation order;
+        // the marker is the index of the first op the injection appends.
+        let first_index = self.fd.obank.alivelist.len();
+        // flow.cc:1185: payload->inject(icontext, emitter) — empty
+        // injections throw LowlevelError("Empty injection: " + name)
+        // (flow.cc:1188-1189); Rugra reports and bails like the rest of the
+        // flow error paths.
+        let raw_ops = match payload.inject(icontext) {
+            Ok(ops) => ops,
+            Err(message) => {
+                eprintln!("[FLOW] {}: {}", self.fd.name, message);
+                return;
+            }
+        };
+        self.fd
+            .inject_raw_ops_single(&raw_ops, Address::new(icontext.base_addr));
+        if first_index >= self.fd.obank.alivelist.len() {
+            eprintln!("[FLOW] {}: Empty injection: {}", self.fd.name, payload.name);
             return;
         }
-        let firstop = injected_ops[0].clone();
-        let lastop = injected_ops[injected_ops.len() - 1].clone();
+        let firstop = self.fd.obank.alivelist[first_index].clone();
 
         // flow.cc:1186: startbasic = op->isBlockStart().
         let mut startbasic = (op.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0;
 
-        // flow.cc:1192: xrefControlFlow(iter, startbasic, isfallthru, fc).
-        // We approximate the per-op control-flow xref by walking the injected
-        // ops and applying opMarkStartBasic + xrefInlinedBranch as Ghidra does.
-        for iop in injected_ops {
-            if startbasic {
-                // flow.cc:273-275: opMarkStartBasic + clear startbasic.
-                {
-                    let mut o = iop.0.write().unwrap();
-                    o.flags |= pcodeop_flags::STARTBASIC;
-                }
-                startbasic = false;
-            }
-            // Mirror xrefControlFlow's switch on the op code for control-flow
-            // ops; non-control ops do nothing here (flow.cc:276-360).
-            let code = iop.0.read().unwrap().opcode;
-            match code {
-                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCHIND => {
-                    startbasic = true;
-                }
-                OpCode::CPUI_CALL => {
-                    // flow.cc:330-348: setupCallSpecs(op, fc).
-                    let _ = self.setup_call_specs(iop, inject_fc_idx);
-                    startbasic = true;
-                }
-                OpCode::CPUI_CALLIND => {
-                    // flow.cc:349-360: setupCallindSpecs(op, fc).
-                    let _ = self.setup_callind_specs(iop, inject_fc_idx);
-                    startbasic = true;
-                }
-                OpCode::CPUI_RETURN => {
-                    startbasic = true;
-                }
-                _ => {}
-            }
-        }
+        // flow.cc:1192: xrefControlFlow(iter, startbasic, isfallthru, fc)
+        // over the injected ops — the full op walk (basic-block starts,
+        // callspecs, CALLOTHER chaining, dead-tail deletion).
+        let (lastop, _) = self.xref_control_flow_at(first_index, &mut startbasic, inject_fc_idx);
 
-        // flow.cc:1194-1199: if the injected code does not fall thru, mark
-        // the op after the call as a basic-block start.
+        // flow.cc:1194-1199: if the injected code does NOT fall thru, mark
+        // the op after the call as the start of a basic block. Ghidra
+        // advances the op's own dead-list insert iterator (`++iter` against
+        // `getInsertIter()`), i.e. the immediate dead-list successor — not
+        // `fallthruOp`. This runs BEFORE moveSequenceDead below.
         if startbasic {
-            if let Some(next) = self.fallthru_op(op) {
-                let mut no = next.0.write().unwrap();
-                no.flags |= pcodeop_flags::STARTBASIC;
+            if let Some(next) = self.dead_list_next(op) {
+                next.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
             }
         }
 
-        // flow.cc:1201-1202: markIncidentalCopy(firstop, lastop).
-        self.fd.obank.mark_incidental_copy(&firstop, &lastop);
+        // flow.cc:1201-1202: markIncidentalCopy(firstop, lastop) — guarded
+        // by the payload's incidentalCopy attribute.
+        if payload.is_incidental_copy() {
+            if let Some(last) = &lastop {
+                self.mark_incidental_copy_flow(&firstop, last);
+            }
+        }
         // flow.cc:1203: moveSequenceDead(firstop, lastop, op) — move the
-        // injected sequence to right after the call. Rugra's obank method
-        // reorders the alive list accordingly.
-        self.fd.obank.move_sequence_dead(&firstop, &lastop, op);
+        // injection to right after the call.
+        if let Some(last) = &lastop {
+            self.move_sequence_flow(&firstop, last, op);
+        }
         // flow.cc:1205: updateTarget(op, firstop).
         self.update_target(op, &firstop);
         // flow.cc:1207: opDestroyRaw(op) — get rid of the original call.
@@ -1559,29 +1584,82 @@ impl<'a> FlowInfo<'a> {
     /// Perform injection for a given user-defined (CALLOTHER) p-code op.
     /// Faithful to `FlowInfo::injectUserOp` (flow.cc:1212-1236).
     ///
-    /// Ghidra looks up the user op by CALLOTHER index, fetches the
-    /// `InjectPayload` from `glb->pcodeinjectlib`, fills an `InjectContext`
-    /// from the op's inputs/output, and calls `doInjection`. Rugra has no
-    /// `Architecture`/`PcodeInjectLibrary` handle on FlowInfo, so the caller
-    /// supplies the payload and pre-emitted injected ops; the context build
-    /// is reproduced faithfully for when the emit path lands.
+    /// The op must already be established as a user defined op with an
+    /// associated injection (UserOpType::Injected). The payload is resolved
+    /// through the architecture's `UserOpManage` (CALLOTHER index in
+    /// input(0) → InjectedUserOp inject id) and `PcodeInjectLibrary`, the
+    /// `InjectContext` is filled from the op's operands (skipping the inject
+    /// id slot), and `doInjection` performs the replacement.
     // Ghidra: flow.cc:1212 FlowInfo::injectUserOp
-    pub fn inject_user_op(
-        &mut self,
-        op: &crate::op::PcodeOpRef,
-        payload_name: &str,
-        inject_lib: &crate::pcodeinject::PcodeInjectLibrary,
-        injected_ops: &[crate::op::PcodeOpRef],
-    ) {
-        // flow.cc:1215-1217: resolve the userop + payload + cached context.
-        let _payload = match inject_lib.get_payload(payload_name) {
-            Some(p) => p,
-            None => {
-                eprintln!(
-                    "[FLOW] {}: injectUserOp: payload '{}' not found",
-                    self.fd.name, payload_name
-                );
-                return;
+    pub fn inject_user_op(&mut self, op: &crate::op::PcodeOpRef) {
+        // flow.cc:1215-1217: InjectedUserOp lookup by CALLOTHER index +
+        // payload lookup by inject id (`glb->userops.getOp(...)` /
+        // `glb->pcodeinjectlib->getPayload(userop->getInjectId())`).
+        // Ghidra dereferences getOp() unconditionally (SLEIGH guarantees the
+        // index); Rugra guards the Options and reports, per the flow error
+        // policy (ARCH-GLUE: glb is `Funcdata::arch`).
+        let Some((userops, inject_lib)) = self.arch_inject_sources() else {
+            eprintln!(
+                "[FLOW] {}: injectUserOp: architecture has no userops/pcodeinjectlib",
+                self.fd.name
+            );
+            return;
+        };
+        let (index, inputs, output) = {
+            let o = op.0.read().unwrap();
+            let index = o
+                .inrefs
+                .first()
+                .map(|vn| vn.read().unwrap().get_offset() as i32);
+            let ins: Vec<crate::pcoderaw::VarnodeRaw> = o
+                .inrefs
+                .iter()
+                .skip(1)
+                .map(|vn| {
+                    let v = vn.read().unwrap();
+                    crate::pcoderaw::VarnodeRaw::new(v.get_space(), v.get_offset(), v.size)
+                })
+                .collect();
+            let out = o.output.as_ref().map(|vn| {
+                let v = vn.read().unwrap();
+                crate::pcoderaw::VarnodeRaw::new(v.get_space(), v.get_offset(), v.size)
+            });
+            (index, ins, out)
+        };
+        let Some(index) = index else {
+            eprintln!(
+                "[FLOW] {}: injectUserOp: CALLOTHER without index input",
+                self.fd.name
+            );
+            return;
+        };
+        // flow.cc:1215-1216: userop = userops.getOp(index) (must be
+        // Injected); injectid = userop->getInjectId().
+        let injectid = {
+            let userops = userops.read().expect("lock poisoned");
+            match userops.get_op(index) {
+                Some(userop) if userop.is_injected() => userop.inject_id,
+                _ => {
+                    eprintln!(
+                        "[FLOW] {}: injectUserOp: CALLOTHER index {} is not an injected userop",
+                        self.fd.name, index
+                    );
+                    return;
+                }
+            }
+        };
+        // flow.cc:1216-1217: payload = pcodeinjectlib->getPayload(injectid).
+        let payload = {
+            let lib = inject_lib.read().expect("lock poisoned");
+            match lib.get_payload_by_id(injectid) {
+                Some(p) => p.clone(),
+                None => {
+                    eprintln!(
+                        "[FLOW] {}: injectUserOp: no payload {} for CALLOTHER index {}",
+                        self.fd.name, injectid, index
+                    );
+                    return;
+                }
             }
         };
         // flow.cc:1218-1234: build the InjectContext from the op's operands.
@@ -1591,37 +1669,13 @@ impl<'a> FlowInfo<'a> {
         icontext.base_addr = base;
         icontext.next_addr = base;
         // flow.cc:1221-1227: inputlist from op inputs (skip slot 0 = injectid).
-        let (inputs, output) = {
-            let o = op.0.read().unwrap();
-            let ins: Vec<(u32, u64, u32)> = o
-                .inrefs
-                .iter()
-                .skip(1)
-                .map(|vn| {
-                    let v = vn.read().unwrap();
-                    (
-                        address_space_as_u32(v.get_space()),
-                        v.get_offset(),
-                        v.size as u32,
-                    )
-                })
-                .collect();
-            let out = o.output.as_ref().map(|vn| {
-                let v = vn.read().unwrap();
-                (
-                    address_space_as_u32(v.get_space()),
-                    v.get_offset(),
-                    v.size as u32,
-                )
-            });
-            (ins, out)
-        };
         icontext.input_list = inputs;
+        // flow.cc:1228-1234: output if present.
         if let Some(out) = output {
             icontext.output.push(out);
         }
         // flow.cc:1235: doInjection(payload, icontext, op, NULL).
-        self.do_injection(injected_ops, op, None);
+        self.do_injection(&payload, &icontext, op, None);
     }
 
     /// P-code is generated for the sub-function and then woven into this
@@ -1688,32 +1742,19 @@ impl<'a> FlowInfo<'a> {
     /// to `FlowInfo::injectSubFunction` (flow.cc:1284-1303). Returns true to
     /// indicate the injection happened and the callspec should be deleted.
     ///
-    /// Ghidra fills an InjectContext with the call address, fetches the
-    /// payload via `fc->getInjectId()`, runs `doInjection`, and propagates
-    /// any paramshift to the last callspec. Rugra has no Architecture
-    /// handle, so the caller supplies the payload name + emitted ops.
+    /// The call site must be previously marked with the \e injection id
+    /// (`fc->getInjectId()`); the payload comes from the architecture's
+    /// `PcodeInjectLibrary`. Ghidra's `InjectContext` carries
+    /// baseaddr/nextaddr = the call op's address and calladdr = the callee
+    /// entry address; after `doInjection`, a nonzero `payload->getParamShift()`
+    /// is passed to the LAST callspec (`qlst.back()->setParamshift`).
     // Ghidra: flow.cc:1284 FlowInfo::injectSubFunction
     pub fn inject_sub_function(
         &mut self,
         fc_idx: usize,
-        payload_name: &str,
-        inject_lib: &crate::pcodeinject::PcodeInjectLibrary,
-        injected_ops: &[crate::op::PcodeOpRef],
+        payload: &crate::pcodeinject::InjectPayload,
     ) -> bool {
-        // flow.cc:1295: look up the payload; extract the paramshift up-front
-        // so we can release the immutable borrow before do_injection takes
-        // &mut self.
-        let paramshift = match inject_lib.get_payload(payload_name) {
-            Some(p) => p.get_paramshift(),
-            None => {
-                eprintln!(
-                    "[FLOW] {}: injectSubFunction: payload '{}' not found",
-                    self.fd.name, payload_name
-                );
-                return false;
-            }
-        };
-        // flow.cc:1287-1294: build the context.
+        // flow.cc:1287-1294: build the context from the callspec.
         let (op_ref, call_addr) = {
             let fc = match self.fd.callspecs.get(fc_idx) {
                 Some(f) => f,
@@ -1723,6 +1764,9 @@ impl<'a> FlowInfo<'a> {
                 Some(o) => o,
                 None => return false,
             };
+            // An invalid entry address maps to offset 0 (Ghidra Address
+            // default) — injectUserOp/injectSubFunction only feed it to
+            // inst_dest substitutions.
             (op, fc.entry_addr.map(|a| a.as_u64()).unwrap_or(0))
         };
         let op_addr = op_ref.0.read().unwrap().get_addr().as_u64();
@@ -1731,8 +1775,11 @@ impl<'a> FlowInfo<'a> {
         icontext.next_addr = op_addr;
         icontext.call_addr = call_addr;
         // flow.cc:1296: doInjection(payload, icontext, op, fc).
-        self.do_injection(injected_ops, &op_ref, Some(fc_idx));
-        // flow.cc:1299-1300: propagate paramshift to the last callspec.
+        self.do_injection(payload, &icontext, &op_ref, Some(fc_idx));
+        // flow.cc:1299-1300: if the injection fills in the -paramshift-
+        // field, pass it to the callspec of the injected call, which must be
+        // last in the list.
+        let paramshift = payload.get_paramshift();
         if paramshift != 0 {
             if let Some(last) = self.fd.callspecs.last_mut() {
                 last.set_paramshift(paramshift);
@@ -1745,51 +1792,37 @@ impl<'a> FlowInfo<'a> {
     /// Perform substitution on any op that requires injection. Faithful to
     /// `FlowInfo::injectPcode` (flow.cc:1327-1355).
     ///
-    /// Walks `injectlist`; for each op:
-    ///   - CALLOTHER -> `inject_user_op`
-    ///   - CALL/CALLIND with an inline callspec:
-    ///       - if inject id >= 0 -> `inject_sub_function` + `delete_call_spec`
-    ///       - else -> `inline_sub_function` + `delete_call_spec`
+    /// Walks `injectlist`, nullifying each entry as it goes so nothing is
+    /// injected twice (flow.cc:1333); for each op:
+    ///   - CALLOTHER -> `injectUserOp` (flow.cc:1334-1336)
+    ///   - CALL/CALLIND -> the callspec from input(0)'s constant
+    ///     (`FuncCallSpecs::getFspecFromConst`, flow.cc:1338); if inline:
+    ///       - inject id >= 0 -> `injectSubFunction` + warningHeader +
+    ///         `deleteCallSpec` (flow.cc:1340-1345)
+    ///       - else -> `inlineSubFunction` + warningHeader + `deleteCallSpec`
+    ///         (flow.cc:1347-1351)
     ///
-    /// Ghidra resolves the callspec from input(0)'s constant (flow.cc:1338).
-    /// Rugra has no `FuncCallSpecs::getFspecFromConst`, so the caller-supplied
-    /// `inject_lib` is used for payload lookup and the callspec is matched by
-    /// the op's address against `self.fd.callspecs`.
+    /// Rugra has no `getFspecFromConst` pointer encoding in CALL input(0),
+    /// so the callspec is matched by the call op's address
+    /// (`find_callspec_for_op`); payload resolution goes through the
+    /// architecture's `PcodeInjectLibrary` exactly like Ghidra's
+    /// `glb->pcodeinjectlib`.
     // Ghidra: flow.cc:1327 FlowInfo::injectPcode
-    pub fn inject_pcode(
-        &mut self,
-        inject_lib: &crate::pcodeinject::PcodeInjectLibrary,
-        injected_ops_for: &dyn Fn(&crate::op::PcodeOpRef) -> Vec<crate::op::PcodeOpRef>,
-    ) {
-        // flow.cc:1330: walk the injectlist; we drain a snapshot because the
-        // list may grow during injection (xrefInlinedBranch pushes).
-        let snapshot: Vec<crate::op::PcodeOpRef> =
-            self.injectlist.iter().filter_map(|o| o.clone()).collect();
-        // flow.cc:1333: nullify each entry as we go so we don't inject twice.
-        for slot in &mut self.injectlist {
-            *slot = None;
-        }
-
-        for op in &snapshot {
+    pub fn inject_pcode(&mut self) {
+        for slot in 0..self.injectlist.len() {
+            // flow.cc:1331-1333: skip nulled entries, nullify as we go.
+            let Some(op) = self.injectlist[slot].clone() else {
+                continue;
+            };
+            self.injectlist[slot] = None;
             let code = op.0.read().unwrap().opcode;
             if code == OpCode::CPUI_CALLOTHER {
-                // flow.cc:1334-1336.
-                let payload_name = match resolve_callother_payload_name(inject_lib, op) {
-                    Some(n) => n,
-                    None => {
-                        eprintln!(
-                            "[FLOW] {}: injectPcode: no payload for CALLOTHER at {:#x}",
-                            self.fd.name,
-                            op.0.read().unwrap().get_addr().as_u64()
-                        );
-                        continue;
-                    }
-                };
-                let injected = injected_ops_for(op);
-                self.inject_user_op(op, &payload_name, inject_lib, &injected);
+                // flow.cc:1334-1336: injectUserOp(op).
+                self.inject_user_op(&op);
             } else {
-                // flow.cc:1337-1352: CALL or CALLIND with an inline callspec.
-                let fc_idx = match find_callspec_for_op(self.fd, op) {
+                // flow.cc:1337-1338: CPUI_CALL or CPUI_CALLIND — resolve the
+                // callspec from input(0)'s constant.
+                let fc_idx = match find_callspec_for_op(self.fd, &op) {
                     Some(i) => i,
                     None => continue, // No matching callspec; nothing to do.
                 };
@@ -1797,19 +1830,49 @@ impl<'a> FlowInfo<'a> {
                     let fc = &self.fd.callspecs[fc_idx];
                     (fc.is_inline(), fc.get_inject_id())
                 };
+                // flow.cc:1339: if (!fc->isInline()) — nothing to do.
                 if !is_inline {
                     continue;
                 }
                 if inject_id >= 0 {
-                    // flow.cc:1340-1345: injectSubFunction + warningHeader.
-                    let payload_name = format!("__inject_{}", inject_id);
-                    let injected = injected_ops_for(op);
-                    if self.inject_sub_function(fc_idx, &payload_name, inject_lib, &injected) {
-                        self.fd.warning_header("Function replaced with injection");
+                    // flow.cc:1340-1345: injectSubFunction + warningHeader
+                    // ("Function: <name> replaced with injection: <fixup>")
+                    // + deleteCallSpec.
+                    let payload = self.arch_inject_sources().and_then(|(_u, lib)| {
+                        let lib = lib.read().expect("lock poisoned");
+                        lib.get_payload_by_id(inject_id).cloned()
+                    });
+                    let Some(payload) = payload else {
+                        eprintln!(
+                            "[FLOW] {}: injectPcode: no payload {} for inline call site",
+                            self.fd.name, inject_id
+                        );
+                        continue;
+                    };
+                    if self.inject_sub_function(fc_idx, &payload) {
+                        let fixup_name = self
+                            .arch_inject_sources()
+                            .map(|(_u, lib)| {
+                                let lib = lib.read().expect("lock poisoned");
+                                lib.get_call_fixup_name(inject_id)
+                            })
+                            .unwrap_or_default();
+                        // RUGRA-GLUE: Rugra's FuncCallSpecs carries no name
+                        // (Ghidra `fc->getName()`); the callspecs here are
+                        // created during flow and unnamed until ActionFuncLink.
+                        let fc_name = self.fd.callspecs[fc_idx]
+                            .entry_addr
+                            .map(|a| format!("sub_{:x}", a.as_u64()))
+                            .unwrap_or_default();
+                        self.fd.warning_header(&format!(
+                            "Function: {} replaced with injection: {}",
+                            fc_name, fixup_name
+                        ));
                         self.delete_call_spec(fc_idx);
                     }
                 } else {
-                    // flow.cc:1347-1350: inlineSubFunction + warningHeader.
+                    // flow.cc:1347-1350: inlineSubFunction + warningHeader
+                    // ("Inlined function: <name>") + deleteCallSpec.
                     if self.inline_sub_function(fc_idx) {
                         self.fd.warning_header("Inlined function");
                         self.delete_call_spec(fc_idx);
@@ -1994,6 +2057,73 @@ impl<'a> FlowInfo<'a> {
             .iter()
             .position(|o| std::sync::Arc::ptr_eq(&o.0, &op.0))?;
         self.fd.obank.alivelist.get(position + 1).cloned()
+    }
+
+    /// Move the injected op sequence [firstop, lastop] to immediately after
+    /// `prev`. Faithful to `PcodeOpBank::moveSequenceDead` (op.cc:1043-1070)
+    /// over the flow-time op container: Rugra's flow-phase dead list is the
+    /// alive list (ops enter it in creation order, exactly like Ghidra's
+    /// dead list during generateOps), while the op.rs ports operate on the
+    /// action-phase `deadlist` — empty during flow.
+    // RUGRA-GLUE: alive-list mirror of op.rs move_sequence_dead because the
+    // flow-time container differs (see PcodeOpBank::create note, op.rs).
+    fn move_sequence_flow(
+        &mut self,
+        firstop: &crate::op::PcodeOpRef,
+        lastop: &crate::op::PcodeOpRef,
+        prev: &crate::op::PcodeOpRef,
+    ) {
+        let ptr_of = |r: &crate::op::PcodeOpRef| std::sync::Arc::as_ptr(&r.0);
+        let first_ptr = ptr_of(firstop);
+        let last_ptr = ptr_of(lastop);
+        let prev_ptr = ptr_of(prev);
+        let list = &mut self.fd.obank.alivelist;
+        let (Some(first_idx), Some(last_idx), Some(prev_idx)) = (
+            list.iter().position(|r| std::sync::Arc::as_ptr(&r.0) == first_ptr),
+            list.iter().position(|r| std::sync::Arc::as_ptr(&r.0) == last_ptr),
+            list.iter().position(|r| std::sync::Arc::as_ptr(&r.0) == prev_ptr),
+        ) else {
+            return;
+        };
+        if last_idx < first_idx {
+            return; // Invalid range
+        }
+        // Extract the sequence and reinsert after prev (op.cc:1058-1069).
+        let seq: Vec<crate::op::PcodeOpRef> = list.drain(first_idx..=last_idx).collect();
+        let prev_idx = if prev_idx > last_idx {
+            prev_idx - (last_idx - first_idx + 1)
+        } else {
+            prev_idx
+        };
+        list.splice(prev_idx + 1..prev_idx + 1, seq);
+    }
+
+    /// Mark COPY ops in the injected range as incidental. Faithful to
+    /// `PcodeOpBank::markIncidentalCopy` (op.cc:1071-1083) over the
+    /// flow-time op container (see `move_sequence_flow`).
+    // RUGRA-GLUE: alive-list mirror of op.rs mark_incidental_copy.
+    fn mark_incidental_copy_flow(
+        &mut self,
+        firstop: &crate::op::PcodeOpRef,
+        lastop: &crate::op::PcodeOpRef,
+    ) {
+        let ptr_of = |r: &crate::op::PcodeOpRef| std::sync::Arc::as_ptr(&r.0);
+        let first_ptr = ptr_of(firstop);
+        let last_ptr = ptr_of(lastop);
+        let mut in_range = false;
+        for op_ref in &self.fd.obank.alivelist {
+            let ptr = std::sync::Arc::as_ptr(&op_ref.0);
+            if ptr == first_ptr {
+                in_range = true;
+            }
+            if in_range && op_ref.0.read().unwrap().opcode == OpCode::CPUI_COPY {
+                op_ref.0.write().unwrap().addlflags |=
+                    crate::op::op_addl_flags::INCIDENTAL_COPY;
+            }
+            if ptr == last_ptr {
+                break;
+            }
+        }
     }
 
     // ===================== Private target helpers =====================
@@ -2261,6 +2391,13 @@ impl<'a> FlowInfo<'a> {
             self.fallthru();
         }
 
+        // flow.cc:794-795: after the initial fall-thru sweep, expand any
+        // pending injections (CALLOTHER fixups from xrefControlFlow, inline
+        // call sites from checkForFlowModification).
+        if self.has_inject() {
+            self.inject_pcode();
+        }
+
         // Phase 2: jump-table recovery (flow.cc:796-821).
         // Collect BRANCHIND ops found during Phase 1, recover their jump
         // tables, and push newly discovered addresses to addrlist.
@@ -2333,6 +2470,13 @@ impl<'a> FlowInfo<'a> {
             // flow.cc:814: checkMultistageJumptables(); — not yet ported;
             // Rugra approximates the tablelist refill below via a fresh
             // BRANCHIND census (JUMPTABLE-MULTISTAGE gap, flow_audit.md).
+
+            // flow.cc:815-818: refill tablelist from unreached indirect ops,
+            // then expand any injections queued by this pass before the
+            // `!tablelist.empty()` loop condition (flow.cc:819-820).
+            if self.has_inject() {
+                self.inject_pcode();
+            }
 
             // Check if any new BRANCHINDs appeared (multistage, flow.cc:821
             // while-condition `!tablelist.empty()`).
@@ -2724,17 +2868,35 @@ impl<'a> FlowInfo<'a> {
     /// `newAddress`.
     // Ghidra: flow.cc:264 FlowInfo::xrefControlFlow
     fn xref_control_flow(&mut self, ops_start: usize, start_basic: &mut bool) -> bool {
+        self.xref_control_flow_at(ops_start, start_basic, None).1
+    }
+
+    /// Full `xrefControlFlow` form used by both `processInstruction`
+    /// (fc = None) and `doInjection` (fc = the injecting callspec, used for
+    /// the recursion cycle check in `setupCallSpecs`/`setupCallindSpecs`,
+    /// flow.cc:337/341). Returns the last processed op (Ghidra's return
+    /// value, flow.cc:264-265 "the last processed PcodeOp (or NULL)") plus
+    /// the instruction fall-through flag.
+    // Ghidra: flow.cc:264 FlowInfo::xrefControlFlow
+    fn xref_control_flow_at(
+        &mut self,
+        ops_start: usize,
+        start_basic: &mut bool,
+        inject_fc: Option<usize>,
+    ) -> (Option<crate::op::PcodeOpRef>, bool) {
         let mut isfallthru = false;
         // flow.cc:269: deepest internal relative branch.
         let mut maxtime: u32 = 0;
         let mut index = ops_start;
         let mut last_opcode: Option<OpCode> = None;
+        let mut lastop: Option<crate::op::PcodeOpRef> = None;
 
         while index < self.fd.obank.alivelist.len() {
             let op_ref = self.fd.obank.alivelist[index].clone();
             index += 1;
             let opcode = op_ref.0.read().unwrap().opcode;
             last_opcode = Some(opcode);
+            lastop = Some(op_ref.clone());
             if *start_basic {
                 // flow.cc:272-274.
                 op_ref.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
@@ -2783,16 +2945,38 @@ impl<'a> FlowInfo<'a> {
                     // so it must be xref'd too. The halt lands at `index`
                     // (immediately after the call), so the next loop
                     // iteration processes it — Ghidra's `--oiter`.
-                    self.setup_call_specs(&op_ref, None);
+                    self.setup_call_specs(&op_ref, inject_fc);
                 }
                 OpCode::CPUI_CALLIND => {
                     // flow.cc:340-342: same contract as CALL.
-                    self.setup_callind_specs(&op_ref, None);
+                    self.setup_callind_specs(&op_ref, inject_fc);
                 }
                 OpCode::CPUI_CALLOTHER => {
-                    // flow.cc:344-349: an injected user-op goes on the
-                    // injectlist. Rugra has no Architecture::userops table on
-                    // FlowInfo yet (INJECT-0001), so nothing is queued.
+                    // flow.cc:344-348: an injected user-op goes on the
+                    // injectlist. `glb->userops.getOp(op->getIn(0)->
+                    // getOffset())->getType() == UserPcodeOp::injected` —
+                    // Ghidra dereferences getOp() unconditionally; Rugra
+                    // guards the Option (an unregistered index is simply not
+                    // injected).
+                    let index_const = op_ref
+                        .0
+                        .read()
+                        .unwrap()
+                        .inrefs
+                        .first()
+                        .map(|vn| vn.read().unwrap().get_offset() as i32);
+                    if let Some(userop_index) = index_const {
+                        if let Some((userops, _lib)) = self.arch_inject_sources() {
+                            let userops = userops.read().expect("lock poisoned");
+                            if userops
+                                .get_op(userop_index)
+                                .map(|u| u.is_injected())
+                                .unwrap_or(false)
+                            {
+                                self.injectlist.push(Some(op_ref.clone()));
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -2812,7 +2996,7 @@ impl<'a> FlowInfo<'a> {
                 Some(_) => isfallthru = true,
             }
         }
-        isfallthru
+        (lastop, isfallthru)
     }
 
     /// Shared BRANCH/CBRANCH target cross-reference (flow.cc:277-319): a
@@ -2890,59 +3074,6 @@ pub fn follow_flow(fd: &mut Funcdata, lifter: &mut SleighLifter, entry: Address,
 // Ghidra flow.cc call paths. They are file-local to flow.rs because this
 // alignment task is constrained to editing src/flow.rs.
 
-/// Map an `AddressSpace` to the numeric tag Ghidra stores in an
-/// `InjectContext` operand tuple. RUGRA-GLUE: Rugra's `AddressSpace` enum is
-/// not `#[repr(u32)]`, so we map the discriminants by hand. The numeric tag
-/// is only carried for diagnostic parity; Rugra's injection emit path is
-/// not yet wired to interpret it.
-// RUGRA-GLUE: ANN-B; INJECT-0001 maps a Rust AddressSpace enum into the temporary numeric injection tuple where Ghidra carries an AddrSpace pointer.
-fn address_space_as_u32(space: crate::space::AddressSpace) -> u32 {
-    // Order matches Ghidra's IPTR_* constants (space.hh) for the spaces Rugra
-    // models; values are stable discriminants, not memory offsets.
-    match space {
-        crate::space::AddressSpace::Ram => 0,
-        crate::space::AddressSpace::Register => 1,
-        crate::space::AddressSpace::Unique => 2,
-        crate::space::AddressSpace::Const => 3,
-        crate::space::AddressSpace::Stack => 4,
-        crate::space::AddressSpace::Join => 5,
-        crate::space::AddressSpace::Iop => 6,
-        crate::space::AddressSpace::Overlay => 7,
-        crate::space::AddressSpace::Other(_) => 8,
-    }
-}
-
-/// Resolve the payload name for a CALLOTHER op. Ghidra looks up the user op
-/// by the CALLOTHER index in input(0) (flow.cc:1215) and reads its inject id.
-/// Rugra has no `Architecture::userops` table on FlowInfo, so this helper
-/// scans the inject library's call-other fixups for the first payload whose
-/// name resolves to a valid id. Returns the payload name (the library key)
-/// when a single CALLOTHER payload is registered, otherwise None.
-///
-/// RUGRA-GLUE: a precise mapping from CALLOTHER index to user-op name
-/// requires the `UserOpManage` (Architecture::userops), which Rugra does not
-/// yet thread into FlowInfo. This helper is a best-effort shim so `inject_pcode`
-/// compiles and exercises the inject path; callers with a real user-op table
-/// should resolve the name themselves and call `inject_user_op` directly.
-fn resolve_callother_payload_name(
-    inject_lib: &crate::pcodeinject::PcodeInjectLibrary,
-    _op: &crate::op::PcodeOpRef,
-) -> Option<String> {
-    // The CALLOTHER index is in input(0) as a constant; Ghidra's userops
-    // table maps index -> name -> inject id. Rugra lacks that table, so we
-    // cannot map index -> name here. As a structural shim we report the
-    // single registered call-other payload, if any.
-    //
-    // TODO(INJECT-0001): depends on Architecture::userops (UserOpManage) integration to
-    // map the CALLOTHER index to the user-op name and inject id.
-    let mut found: Option<String> = None;
-    for (name, _id) in &inject_lib.call_other_fixups {
-        found = Some(name.clone());
-        break;
-    }
-    found
-}
-
 /// Find the index in `fd.callspecs` whose call op matches the given op.
 /// Ghidra resolves the callspec from a constant in input(0)
 /// (`FuncCallSpecs::getFspecFromConst`, flow.cc:1338); Rugra has no such
@@ -2957,4 +3088,186 @@ fn find_callspec_for_op(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Option<usi
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::funcdata::Funcdata;
+    use crate::opcodes::OpCode;
+    use crate::space::AddressSpace;
+
+    /// A null SLEIGH symbol lookup wrapped in PredefinedJumpSymbols — the
+    /// language-instantiated stand-in parseInject requires.
+    fn language_ready_injectlib() -> std::sync::Arc<
+        std::sync::RwLock<crate::pcodeinject::PcodeInjectLibrary>,
+    > {
+        use crate::pcodeparse::{PredefinedJumpSymbols, SleighSymbolLookup};
+        struct EmptyHost;
+        impl SleighSymbolLookup for EmptyHost {
+            fn find_symbol(&self, _name: &str) -> Option<crate::pcodeparse::SleighSymbol> {
+                None
+            }
+        }
+        let mut lib = crate::pcodeinject::PcodeInjectLibrary::new(0x200);
+        lib.set_sleigh_lookup(std::sync::Arc::new(PredefinedJumpSymbols::new(EmptyHost)));
+        std::sync::Arc::new(std::sync::RwLock::new(lib))
+    }
+
+    /// Register one injected CALLOTHER userop (index 0) whose payload is the
+    /// given snippet, mirroring `UserOpManage::manualCallOtherFixup` +
+    /// `InjectedUserOp` registration (userop.cc:621-646).
+    fn register_injected_userop(
+        arch: &mut crate::arch::Architecture,
+        lib: &std::sync::Arc<
+            std::sync::RwLock<crate::pcodeinject::PcodeInjectLibrary>,
+        >,
+        snippet: &str,
+    ) {
+        let injectid = lib
+            .write()
+            .expect("lock poisoned")
+            .manual_call_other_fixup("inject_probe", "out", &["in0".to_string()], snippet)
+            .expect("snippet compiles");
+        let mut userops = crate::userop::UserOpManage::new();
+        let index = userops.register_op(
+            "inject_probe".to_string(),
+            crate::userop::UserOpType::Injected,
+        );
+        userops.get_op_mut(index).expect("just registered").inject_id = injectid;
+        arch.userops = Some(std::sync::Arc::new(std::sync::RwLock::new(userops)));
+        arch.pcodeinjectlib = Some(lib.clone());
+    }
+
+    /// Build a CALLOTHER op (index 0, one 4-byte constant operand, output in
+    /// the register space) at the given address, mirroring what SLEIGH
+    /// emits for a user-defined p-code op.
+    fn build_callother_op(
+        fd: &mut Funcdata,
+        addr: Address,
+    ) -> crate::op::PcodeOpRef {
+        let op = fd.obank.create(OpCode::CPUI_CALLOTHER, 2, addr);
+        let id_vn = fd.vbank.create_constant(4, 0);
+        fd.op_set_input(&op, id_vn, 0);
+        let operand_vn = fd.vbank.create_constant(4, 0x20);
+        fd.op_set_input(&op, operand_vn, 1);
+        fd.new_varnode_out(4, Address::new(0x80), &op);
+        op
+    }
+
+    /// flow.cc:344-348: a CALLOTHER whose userop descriptor is Injected goes
+    /// on the injectlist during xrefControlFlow; a non-injected CALLOTHER
+    /// and an unregistered index do not.
+    #[test]
+    fn test_xref_callother_fills_injectlist() {
+        let mut arch = crate::arch::Architecture::new();
+        let lib = language_ready_injectlib();
+        register_injected_userop(&mut arch, &lib, "out = in0;");
+        let mut fd = Funcdata::new("xref_probe", Address::new(0x1000), 8);
+        fd.set_arch(std::sync::Arc::new(arch));
+        let mut lifter = SleighLifter::new();
+        let mut flow = FlowInfo::new(&mut fd, &mut lifter, 0x1000, 0x2000);
+        let op = build_callother_op(flow.fd, Address::new(0x1000));
+        let mut start_basic = true;
+        let index = {
+            // The CALLOTHER is the only op; xref from its own position.
+            flow.fd.obank.alivelist.len() - 1
+        };
+        flow.xref_control_flow(index, &mut start_basic);
+        assert_eq!(
+            flow.injectlist.len(),
+            1,
+            "injected CALLOTHER must land on the injectlist"
+        );
+        assert!(flow.has_inject());
+
+        // A plain (unspecialized) CALLOTHER stays off the list.
+        let mut arch2 = crate::arch::Architecture::new();
+        let mut userops = crate::userop::UserOpManage::new();
+        userops.register_op("plain".to_string(), crate::userop::UserOpType::Unspecialized);
+        arch2.userops = Some(std::sync::Arc::new(std::sync::RwLock::new(userops)));
+        arch2.pcodeinjectlib = Some(language_ready_injectlib());
+        let mut fd2 = Funcdata::new("xref_plain", Address::new(0x1000), 8);
+        fd2.set_arch(std::sync::Arc::new(arch2));
+        let mut lifter2 = SleighLifter::new();
+        let mut flow2 = FlowInfo::new(&mut fd2, &mut lifter2, 0x1000, 0x2000);
+        let _op2 = build_callother_op(flow2.fd, Address::new(0x1000));
+        let mut sb2 = true;
+        let idx2 = flow2.fd.obank.alivelist.len() - 1;
+        flow2.xref_control_flow(idx2, &mut sb2);
+        assert!(
+            !flow2.has_inject(),
+            "unspecialized CALLOTHER must not enter the injectlist"
+        );
+        let _ = op;
+    }
+
+    /// generateOps wiring (flow.cc:794-795): with a pending injection seeded
+    /// before generation, the post-fallthru `hasInject()` gate expands it —
+    /// the CALLOTHER is destroyed and replaced by the payload ops placed at
+    /// its position.
+    #[test]
+    fn test_generate_ops_injection_wiring() {
+        let image: Vec<u8> = vec![0x31, 0xc0, 0xc3]; // xor eax,eax ; ret
+        let entry = 0x1000u64;
+        let mut arch = crate::arch::Architecture::new();
+        let lib = language_ready_injectlib();
+        register_injected_userop(&mut arch, &lib, "out = in0 + 0x10:4;");
+        let mut fd = Funcdata::new("inject_e2e", Address::new(entry), image.len() as i32);
+        fd.set_arch(std::sync::Arc::new(arch));
+        let mut lifter = SleighLifter::new();
+        lifter
+            .configure_x86_64(&image, entry)
+            .expect("SLEIGH configured");
+        // Pre-seed the CALLOTHER (fixture-observation hook): the locked
+        // x86-64 SLEIGH language declares no user ops, so the machine-lifted
+        // path cannot produce one; production flow gets here via
+        // xrefControlFlow (flow.cc:344-348).
+        let callother = build_callother_op(&mut fd, Address::new(entry));
+        let mut flow = FlowInfo::new(&mut fd, &mut lifter, entry, entry + 0x100);
+        flow.fixture_queue_inject(&callother);
+        flow.generate_ops(Address::new(entry));
+
+        let opcodes: Vec<(OpCode, u64, u32)> = flow
+            .fd
+            .obank
+            .alivelist
+            .iter()
+            .map(|r| {
+                let o = r.0.read().expect("op read lock");
+                (o.opcode, o.get_addr().as_u64(), o.get_time())
+            })
+            .collect();
+        // The CALLOTHER itself must be gone (opDestroyRaw, flow.cc:1207).
+        assert!(
+            !opcodes.iter().any(|(c, _, _)| *c == OpCode::CPUI_CALLOTHER),
+            "CALLOTHER must be destroyed by injectPcode"
+        );
+        // The payload's INT_ADD replaced it, carrying the injection base
+        // address (cacher.emit passes baseaddr for every injected op).
+        let add_index = opcodes
+            .iter()
+            .position(|(c, _, _)| *c == OpCode::CPUI_INT_ADD)
+            .expect("injected INT_ADD present");
+        assert_eq!(opcodes[add_index].1, entry);
+        // The injected op sits before the machine ops of the first lifted
+        // instruction (moveSequenceDead moved it after the CALLOTHER, which
+        // preceded them, then the CALLOTHER was destroyed).
+        assert_eq!(add_index, 0);
+        // InjectContext substitution: INT_ADD input(1) is the 0x10 constant.
+        let add_op = flow.fd.obank.alivelist[0].clone();
+        {
+            let o = add_op.0.read().expect("op read lock");
+            assert_eq!(o.inrefs.len(), 2);
+            let operand = o.inrefs[0].read().expect("vn read lock");
+            assert_eq!((operand.get_offset(), operand.size), (0x20, 4));
+            let constant = o.inrefs[1].read().expect("vn read lock");
+            assert_eq!((constant.get_offset(), constant.size), (0x10, 4));
+            let output = o.output.as_ref().expect("INT_ADD output").read().expect("vn read lock");
+            assert_eq!(output.get_space(), AddressSpace::Register);
+            assert_eq!(output.get_offset(), 0x80);
+        }
+        // The injectlist is drained (flow.cc:1354 clear inside injectPcode).
+        assert!(!flow.has_inject());
+    }
 }

@@ -342,3 +342,54 @@ panic）。Ghidra 每个循环体执行**恰好一次**自增（for 头部 `++it
 flow.cc:1365），该唯一自增本身就是"跳过被删元素后继"的实现。修正后
 `tools/run_flow_containedcall_oracle.sh` 11/11 MATCH（`multi` 双侧第二个
 call 均保留为 CPUI_CALL + callspec）。
+
+## 2026-08-23：`FLOW-INJECT-WIRING-0001` P-code 注入接线
+
+锁定 oracle Ghidra 12.0.4 commit `e40ed130…`。完整读取 `FlowInfo::doInjection`
+（flow.cc:1177-1208）、`injectUserOp`（1212-1236）、`injectSubFunction`
+（1284-1303）、`injectPcode`（1327-1355）、`generateOps` 两处 `hasInject()`
+门（794-795/819-820）、`xrefControlFlow` 的 CALLOTHER 臂（344-348）、
+`checkForFlowModification`（639-640）以及 emit 桥 `PcodeEmitFd::dump`
+（funcdata.cc:878-908）后接线：
+
+- **`xref_control_flow` CALLOTHER 臂**（flow.cc:344-348）：
+  `arch.userops.get_op(in(0) 常量).is_injected()` → `injectlist.push`。
+  Ghidra 裸解引用 getOp；Rugra 对 Option 缺失按"非注入"守卫。
+  `xref_control_flow_at` 扩展为返回（最后处理 op, isfallthru）并透传
+  `inject_fc`（Ghidra fc 参数，供 setupCallSpecs/setupCallindSpecs 的注入
+  循环检查，flow.cc:337/341）。
+- **`generate_ops` 两处接线**（flow.cc:794-795/819-820）：phase-1 fallthru
+  扫尾后与 do-while 体内（checkMultistageJumptables/tablelist 回填之后、
+  循环条件之前）各 `if hasInject() inject_pcode()`。
+- **`do_injection` 真实 emit 桥**（flow.cc:1177-1208）：签名改为
+  `(payload, icontext, op, inject_fc)`；`payload->inject(icontext, emitter)`
+  → `InjectPayload::inject`（pcodeinject.rs）+ `inject_raw_ops_single`
+  （= `PcodeEmitFd::dump`，每个注入 op 带 baseaddr，对齐
+  `cacher.emit(con.baseaddr,…)`）。xref 复用完整 `xref_control_flow_at`；
+  startbasic 后继标记改用 dead-list 直接后继（`++getInsertIter()`，
+  非 fallthruOp）；`markIncidentalCopy`/`moveSequenceDead` 由 payload 的
+  incidentalCopy 属性守卫并改走流期容器（`move_sequence_flow`/
+  `mark_incidental_copy_flow`——op.rs 版本作用于 action 期 deadlist，
+  流期为空表，见 PcodeOpBank::create 注）；最后 updateTarget+opDestroyRaw。
+- **`inject_user_op`**（flow.cc:1212-1236）：userop 索引（in(0) 常量）→
+  `UserOpManage` Injected 描述 → inject_id → `PcodeInjectLibrary` payload；
+  icontext 按 op 地址与 in[1..]/output 填充后 doInjection(fc=null)。
+- **`inject_sub_function`**（flow.cc:1284-1303）：icontext 带
+  calladdr=entry；doInjection(fc)；paramshift≠0 → `qlst.back()`（= callspecs
+  末位）set_paramshift。
+- **`inject_pcode`**（flow.cc:1327-1355）：自足签名 `(&mut self)`；逐槽
+  nullify；CALLOTHER→injectUserOp；CALL/CALLIND→callspec（按 op 地址匹配，
+  `getFspecFromConst` 残差）→ isInline → injectId≥0：injectSubFunction+
+  `Function: <name> replaced with injection: <fixup>` warningHeader+
+  deleteCallSpec（Rugra callspec 无名，warning 以 entry 地址拼写，残差）；
+  否则 inlineSubFunction+`Inlined function`+deleteCallSpec；收尾
+  injectlist.clear()。
+- **`fixture_queue_inject`**（RUGRA-GLUE，snapshot() 同类 fixture 观察 API）：
+  锁定的 x86-64 SLEIGH 声明无 userop，双侧都无法用真实指令发射 CALLOTHER；
+  C++ fixture 直写私有 injectlist，Rust fixture 经此钩子镜像。
+
+残差：`query_call` 仍为 no-op（CALLSPEC-0001：copyFlowEffects/set_funcdata
+缺位，CALLFIXUP 经真实 flow 触发不可达，只能 CALLOTHER 路径）；
+`inline_sub_function` 实克隆仍 TODO（inlineFlow）；wrapOffset/JCurSpaceSize
+见 pcodeinject.md。测试：`cargo test --lib flow pcodeinject` 28 绿
+（subflow 既有崩溃与 base 6ee34dc 相同，非本租约）。
