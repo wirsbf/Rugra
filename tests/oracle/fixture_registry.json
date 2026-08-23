@@ -3401,6 +3401,35 @@
         "fspec::ParamTrial::op_less",
         "fspec::split_trial"
       ]
+    },
+    {
+      "id": "varnode_copysymbol_1204",
+      "description": "Varnode copySymbolIfValid equate gating + EquateSymbol isValueClose vs locked 12.0.4: full isValueClose branch table (identity, mask truncation, sign-extension-only, in-mask equals/negate/plusminus), direct copy guards (non-equate reject, not-close reject, typelock/namelock-only copy), collapse marked-input propagation (3/3 MATCH)",
+      "runner": [
+        "tools/run_varnode_copysymbol_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/varnode_copysymbol_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/varnode_copysymbol_1204.cc",
+          "rust_fixture": "tests/oracle/varnode_copysymbol_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Varnode::copySymbolIfValid",
+        "EquateSymbol::isValueClose"
+      ],
+      "rust_function_ids": [
+        "varnode::Varnode::copy_symbol_if_valid",
+        "database::EquateSymbol::is_value_close"
+      ]
     }
   ]
 }

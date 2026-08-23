@@ -16894,9 +16894,17 @@ mod tests {
         fd.new_unique_out(4, &op);
 
         // Attach a SymbolEntry to input 0 (markedInput path).
-        let symbol = crate::database::Symbol::new(0, "EQ", "equ");
+        let symbol = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::database::Symbol::new(0, "EQ", "equ")));
+        // Register the equate payload so copy_symbol_if_valid's
+        // EquateSymbol gating sees it (VARNODE-COPYSYMBOL-EQUATE-0001).
+        // The equate value must be value-close to the COLLAPSED output
+        // (0x33333333): isValueClose compares against the new constant,
+        // so an equate equal to the raw input 0x11111111 is correctly
+        // rejected under the faithful gating.
+        crate::varnode::equate_symbol_registry::register_value(&symbol, 0x33333333);
         let entry = crate::database::SymbolEntry::new_dynamic(
-            std::sync::Arc::new(std::sync::RwLock::new(symbol)),
+            symbol,
             0, 1, 0, 4, Default::default(),
         );
         c0.write().unwrap().set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));

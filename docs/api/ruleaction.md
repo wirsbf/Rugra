@@ -1113,3 +1113,7 @@ SymbolEntry 链接、def-use、alive/dead/block 状态均为 `MATCH`。整体状
 `PARTIAL_MATCH`：Rust-only `None` 路径、op-aware union resolution、char-print、
 真实 named equate、enum named-value、规则名 `add_unsigned`/`addunsigned` 以及
 pool repeat 尚未闭合，全部继续绑定 `RULE-ADDUNSIGNED-TYPEPRECOND-0001`。
+
+## equate 门控连带测试修正（2026-08-23，root）
+
+`collapse_constants_symbol_propagation_via_marked_input` 随 VARNODE-COPYSYMBOL-EQUATE-0001 忠实化更新：测试侧注册 equate 值须与 **collapse 后输出** value-close（0x33333333），注册原始输入值（0x11111111）会被 isValueClose 正确拒绝——这是 oracle 语义而非回归。
