@@ -1140,3 +1140,106 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
 - 残差：mainloop 未启用 RULE_REPEATAPPLY 导致后期 trivial op 不被再简化
   （原 cleanup 补刀掩盖的缺口，现暴露；对齐路径=补 mainloop repeatapply 基础
   设施，非池注册 hack）。
+
+---
+
+## 断点与续跑机制（2026-08-23，ACTION-BREAKPOINT-RESUME-0001）
+
+Ghidra 原生断点/续跑机制（action.cc/action.hh，ifacedecomp.cc:1196/1222 的
+console 入口）1:1 移植：
+
+### `ActionState` 断点成员与检查器
+
+- `ActionState.breakpoint: u32`——Ghidra `uint4 breakpoint`（action.hh:83）的
+  外置槽位（子 Action 槽在父容器，根槽在驱动者）。
+- `ActionState::check_start_break`（action.cc:52-60）：命中
+  `break_start|tmpbreak_start` 返回 true 并清除 tmp 位。
+- `ActionState::check_action_break`（action.cc:117-125）：命中
+  `break_action|tmpbreak_action` 返回 true 并清除 tmp 位（一次性断点）。
+
+### `Action::perform` 状态机断点分支（action.cc:298-362）
+
+- `status_start`：`count=0` 后**先**查 `check_start_break`，命中则
+  `status=breakstarthit` 返回 -1（`count_tests += 1` 在断点检查之后，断掉的
+  start 不计数；从 `breakstarthit` 续跑也不再计数——与 oracle 的
+  switch fall-through 一致）。
+- `apply` 返回 ≥0 且 `lcount < count`：`count_apply += 1` 后查
+  `check_action_break`，命中则 `status=actionbreak` 返回 -1；续跑时
+  `status_actionbreak` 分支**不重放 apply**，直接进入 repeat 判定并最终返回
+  累计 count（action.cc:346-347 注释语义）。
+
+### 名字路径寻址（action.cc:257/275/285/456/481/789）
+
+- `fn next_specifyterm(&str) -> (&str, &str)`——按第一个 `:` 切分
+  （action.cc:257-269）。
+- `Action::get_sub_action(specify) -> Option<Vec<usize>>`——trait 默认=基类
+  自名匹配（空路径=self）；`ActionGroup` 覆盖=逐层下降，路径首段不匹配本组
+  时子树以完整 specify 匹配；**两个子树同时命中 → None（歧义）**
+  （matchcount>1，action.cc:475-476）。Rugra 以父容器 child-index 路径寻址
+  （Ghidra 返回 `Action*`）。
+- `Action::get_sub_rule(specify) -> Option<(Vec<usize>, usize)>`——组匹配自身
+  名不是 Rule（action.cc:486-487）；`ActionPool` 覆盖=池名匹配后按规则名在
+  注册序中唯一命中（重名歧义 → None，action.cc:806-808）。Rugra 规则名与
+  oracle 仅有 `_` 差异（`mult_neg_one` vs `multnegone`），对拍投影沿用
+  删下划线规范化。
+- 实树歧义实例（derived decompile 树）：`universal:fullloop:mainloop:unreachable`
+  （mainloop 两份直接子 :5490/:5673）、`universal:fullloop:deadcode`（fullloop
+  直接子 :5682 + mainloop 后代 :5503）、`universal:dynamicsymbols`（顶层两份
+  :5724/:5733）均 → None；`universal:fullloop:mainloop:deadcode` 唯一命中。
+
+### `set_break_point` / `clear_break_points`（action.cc:171-185/187/382/890）
+
+- `ActionGroup::set_break_point(&mut own_state, tp, specify) -> bool`：
+  先 `get_sub_action` → Action 命中写对应父持 `ActionState.breakpoint |= tp`
+  （self 命中写驱动者持根槽）；否则 `get_sub_rule` → 写池内规则断点槽
+  （`rule_breakpoints[i] |= tp`，对应 `Rule::setBreak`，action.hh:219）。
+- `ActionRestartGroup::set_break_point/clear_break_points`：根入口（console
+  形态，ifacedecomp.cc:1196/1222）。
+- `Action::clear_break_points`（trait 虚分发）：`ActionGroup` 递归清全部子槽
+  与嵌套容器，`ActionPool` 清全部规则槽；基类无自有槽（在父容器）。
+
+### `ActionGroup::apply` 组级断点（action.cc:513-524）
+
+子 perform 返回 >0 时 `count += res` 后查组自身断点（经 `prepare_apply`
+从外置槽缓存的 `own_breakpoint`），命中 → `++state` 后返回 -1（续跑从下一
+子开始）；`finish_apply` 把 tmp 清位发布回外置 `ActionState`（tmp 组断点
+一次性）。子返回 <0 仍为组级部分完成（state 不前移）。
+
+### `ActionPool::processOp` 逐规则断点与续跑（action.cc:822-887）
+
+- 池内 per-Rule `breakpoint/count_tests/count_apply`（action.hh:206/209/210）
+  外置为池的平行向量（Rugra Rule 对象为 `&self` 执行器）：
+  `rule_breakpoints/rule_tests/rule_applies` + 只读视图
+  `rule_tests/rule_applies/rule_breakpoint/op_state_index/rule_index`。
+- `apply` 单遍遍历 op 快照（`op_state`/`rule_index` 为 action.hh:265-266 的
+  续跑成员的快照形态）：规则应用成功后 `count += res`、`rule_applies += 1`、
+  查 `check_rule_action_break`，命中返回 -1 且**不推进 op_state**（rule_index
+  已越过触发规则）——续跑从同一 op 的下一规则继续，与单跑逐测试/逐应用计数
+  相同。规则返回前 `rule_tests += 1`。opcode 变化重派发（rule_index=0）与
+  "changed op without returning 1" 错误消息语义保持。
+- apply 返回值改为携带（含中断 carry 的）本次累计变更；中断部分保存在
+  `pending_count`，续跑完成的 apply 一次性返回，使 perform 的外置 count 总量
+  与 oracle 一致（oracle 的 count 成员在 processOp 内累加，中断亦保留）。
+  直接调 apply 的返回值约定不变（redispatch fixture 既有观察保持）。
+
+### `ActionDatabase` console 形态驱动 API
+
+- `set_break_point(tp, specify) -> bool`——对 current root 设断点
+  （ifacedecomp.cc:1196/1222）。
+- `reset_current(fd)` / `perform_current(fd)`——`getCurrent()->reset/perform`
+  （ghidra_process.cc:309-310）；`perform_current` 保留外置根状态跨调用，
+  -1（断点）后再次调用即从断点继续（action.cc:295 注释；ifacedecomp.cc:2491
+  "Try to continue decompilation"）。
+- `clear_break_points_current()`——ghidra_process.cc:69。
+- 既有 `apply_all/perform_action` 行为不变（每次 reset + 新状态）。
+
+### 测试与残差
+
+- `cargo test --lib action::` 252 通过（基线 244 + 新增 8：start/tmpbreak/
+  leaf action break/组级步进/tmp 发布回写/断点续跑==单跑等价/实树寻址/
+  池规则断点续跑）。
+- 残差：`issueWarning`（rule_warnings_on 消息发射，action.cc:41-48/638-645）
+  未接（PIPE-0000 fixture 已列为 UNTESTED，规约 `PIPE-BREAK-0001` 域）；
+  `Action::print`（console 列表 'S'/'A' 标记）与 `ActionPool::printState`
+  的 op SeqNum 打印未移植（Rugra SeqNum 文本格式未对齐，登记 TODO）；
+  Rule `type_disable`/`disableRule`/`enableRule`（action.cc:226-251）未接。

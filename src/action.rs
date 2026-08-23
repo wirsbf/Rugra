@@ -38,11 +38,17 @@ pub mod status_flags {
     pub const STATUS_ACTIONBREAK: u32 = 32;
 }
 
-/// Breakpoint flags (action.hh:73-77). Used for debugging — halt at specific points.
+/// Breakpoint flags (action.hh:73-77). Break points set on an Action or Rule
+/// make `perform()` return -1 at a specific point (partial completion); a
+/// successive `perform()` call continues from the break point (action.cc:295).
 pub mod break_flags {
+    /// Break at beginning of action (action.hh:74).
     pub const BREAK_START: u32 = 1;
+    /// Temporary break at start of action, cleared when hit (action.hh:75).
     pub const TMPBREAK_START: u32 = 2;
+    /// Break after a change has been made (action.hh:76).
     pub const BREAK_ACTION: u32 = 4;
+    /// Temporary break after a change, cleared when hit (action.hh:77).
     pub const TMPBREAK_ACTION: u32 = 8;
 }
 
@@ -84,9 +90,15 @@ pub trait Action {
     /// control-flow return code. Ghidra stores these in `Action::count`.
     fn take_count_delta(&mut self) -> i32 { 0 }
 
-    // RUGRA-GLUE: passes the external Rust ActionState status to derived actions whose Ghidra base-class status is directly visible
-    /// Prepare one `apply()` attempt for the current executor status.
-    fn prepare_apply(&mut self, _status: u32) {}
+    // RUGRA-GLUE: passes the external Rust ActionState executor fields to derived actions whose Ghidra base-class status/breakpoint members are directly visible (action.hh:82-83)
+    /// Prepare one `apply()` attempt for the current executor status and
+    /// breakpoint.
+    fn prepare_apply(&mut self, _status: u32, _breakpoint: u32) {}
+
+    // RUGRA-GLUE: publishes container-side executor mutations (a fired tmpbreak_action clearing the cached breakpoint copy) back into the external ActionState after apply
+    /// Publish container-side executor state mutations performed during
+    /// `apply()` back into the external `ActionState`.
+    fn finish_apply(&mut self, _state: &mut ActionState) {}
 
     // RUGRA-GLUE: fixture-only nested tree view; Ghidra exposes the same nesting via Action::print (action.cc:417-440)
     /// Read-only downcast for tree-walking fixtures: returns the container
@@ -102,25 +114,74 @@ pub trait Action {
     /// if this Action is an ActionPool.
     fn as_action_pool(&self) -> Option<&ActionPool> { None }
 
+    // RUGRA-GLUE: fixture-only mutable pool view for breakpoint-addressing fixtures (Ghidra reaches the same pool via Action* from getSubRule, action.cc:171-185)
+    /// Mutable downcast mirroring `as_action_pool`.
+    fn as_action_pool_mut(&mut self) -> Option<&mut ActionPool> { None }
+
+    // Ghidra: action.cc:275 Action::getSubAction
+    /// If this Action matches the given name, it is returned. If the name
+    /// matches a sub-action, this is returned (action.cc:271-274). Rugra
+    /// addresses nodes by the child-index path from this node (empty path =
+    /// this node itself); Ghidra returns the `Action*`.
+    fn get_sub_action(&self, specify: &str) -> Option<Vec<usize>> {
+        if self.get_name() == specify {
+            Some(Vec::new())
+        } else {
+            None
+        }
+    }
+
+    // Ghidra: action.cc:285 Action::getSubRule
+    /// Find a Rule, as a component of this Action, with the given name
+    /// (action.cc:282-284). Base Actions hold no rules. Rugra returns the
+    /// (child-index path, rule index in the addressed pool) pair.
+    fn get_sub_rule(&self, _specify: &str) -> Option<(Vec<usize>, usize)> {
+        None
+    }
+
+    // Ghidra: action.cc:148 Action::printState
+    /// Print the Action name and the next step to execute into `out`
+    /// (status externalized in `state`).
+    fn print_state(&self, state: &ActionState, out: &mut String) {
+        print_state_words(self.get_name(), state.status, out);
+    }
+
+    // Ghidra: action.cc:187 Action::clearBreakPoints
+    /// Clear all breakpoints set on this Action (virtual at action.hh:104).
+    /// A node's own breakpoint slot lives in its parent's `ActionState`
+    /// (cleared by the parent's override); the base clears nothing.
+    fn clear_break_points(&mut self) {}
+
     // Ghidra: action.cc:298 Action::perform
-    /// Run this action to completion using Ghidra's status/count state machine.
-    /// Positive Rust `apply()` results adapt Ghidra actions that increment their
-    /// protected `count` field and return zero.
+    /// Run this action to completion or a breakpoint occurs. Depending
+    /// on the behavior properties of this instance, the apply() method may get
+    /// called many times or none.  Generally the number of changes made by
+    /// the action is returned, but if a breakpoint occurs -1 is returned.
+    /// A successive call to perform() will "continue" from the break point
+    /// (action.cc:291-295). Positive Rust `apply()` results adapt Ghidra
+    /// actions that increment their protected `count` field and return zero.
     fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
         loop {
             let apply_now = match state.status {
                 status_flags::STATUS_START => {
-                    state.count = 0;
-                    state.count_tests += 1;
+                    state.count = 0; // No changes made yet by this action (action.cc:306)
+                    if state.check_start_break() {
+                        // action.cc:307-310
+                        state.status = status_flags::STATUS_BREAKSTARTHIT;
+                        return Ok(-1); // Indicate partial completion
+                    }
+                    state.count_tests += 1; // action.cc:311 (after the start-break check)
                     state.lcount = state.count;
                     true
                 }
                 status_flags::STATUS_BREAKSTARTHIT | status_flags::STATUS_REPEAT => {
-                    state.lcount = state.count;
+                    state.lcount = state.count; // action.cc:314
                     true
                 }
                 status_flags::STATUS_MID => true,
-                status_flags::STATUS_END => return Ok(0),
+                status_flags::STATUS_END => return Ok(0), // Rule applied, do not repeat until reset
+                // Returned -1 last time, but we do not reapply (action.cc:346):
+                // we either repeat, or return our count.
                 status_flags::STATUS_ACTIONBREAK => false,
                 _ => {
                     state.status = status_flags::STATUS_START;
@@ -129,17 +190,25 @@ pub trait Action {
             };
 
             if apply_now {
-                self.prepare_apply(state.status);
+                self.prepare_apply(state.status, state.breakpoint);
                 let res = self.apply(fd)?;
+                self.finish_apply(state);
                 let accumulated = self.take_count_delta();
                 state.count += accumulated;
                 if res < 0 {
+                    // negative indicates partial completion (action.cc:323)
                     state.status = status_flags::STATUS_MID;
                     return Ok(res);
                 }
                 state.count += res;
                 if state.lcount < state.count {
+                    // Action has been applied (action.cc:327)
                     state.count_apply += 1;
+                    if state.check_action_break() {
+                        // action.cc:330-333
+                        state.status = status_flags::STATUS_ACTIONBREAK;
+                        return Ok(-1); // Indicate action breakpoint
+                    }
                 }
             }
 
@@ -164,6 +233,21 @@ pub trait Action {
     }
 }
 
+// Ghidra: action.cc:148-164 Action::printState (shared status-word emission)
+/// Emit `name` plus the status word exactly as `Action::printState`:
+/// ` start` for start/breakstarthit/repeat, `:` for mid, ` end` for end.
+fn print_state_words(name: &str, status: u32, out: &mut String) {
+    out.push_str(name);
+    match status {
+        status_flags::STATUS_REPEAT | status_flags::STATUS_BREAKSTARTHIT | status_flags::STATUS_START => {
+            out.push_str(" start");
+        }
+        status_flags::STATUS_MID => out.push(':'),
+        status_flags::STATUS_END => out.push_str(" end"),
+        _ => {}
+    }
+}
+
 /// Per-Action execution state, mirroring Ghidra's Action member fields
 /// (action.hh:79-87). Stored in containers alongside each child Action.
 #[derive(Debug, Clone)]
@@ -175,6 +259,11 @@ pub struct ActionState {
     pub count_apply: u32,
     /// Rule flags for this Action (repeatapply / onceperfunc).
     pub flags: u32,
+    /// Ghidra `uint4 breakpoint` (action.hh:83): breakpoint properties set
+    /// via `set_break_point` and consumed by `check_start_break` /
+    /// `check_action_break`. For child Actions this slot lives in the parent
+    /// container; for the driven root it lives with the driver.
+    pub breakpoint: u32,
 }
 
 impl ActionState {
@@ -187,6 +276,7 @@ impl ActionState {
             count_tests: 0,
             count_apply: 0,
             flags,
+            breakpoint: 0,
         }
     }
 
@@ -194,6 +284,31 @@ impl ActionState {
     /// Resolve effective flags.
     pub fn get_flags_val(&self) -> u32 {
         self.flags
+    }
+
+    // Ghidra: action.cc:52 Action::checkStartBreak
+    /// Check if there was an active start break point on this action,
+    /// clearing a temporary breakpoint when hit (breakpoint member
+    /// externalized in this ActionState).
+    pub fn check_start_break(&mut self) -> bool {
+        if (self.breakpoint & (break_flags::BREAK_START | break_flags::TMPBREAK_START)) != 0 {
+            self.breakpoint &= !break_flags::TMPBREAK_START; // Clear breakpoint if temporary
+            true // Breakpoint was active
+        } else {
+            false // Breakpoint was not active
+        }
+    }
+
+    // Ghidra: action.cc:117 Action::checkActionBreak
+    /// Check if there was an active action breakpoint on this Action,
+    /// clearing a temporary breakpoint when hit.
+    pub fn check_action_break(&mut self) -> bool {
+        if (self.breakpoint & (break_flags::BREAK_ACTION | break_flags::TMPBREAK_ACTION)) != 0 {
+            self.breakpoint &= !break_flags::TMPBREAK_ACTION; // Clear temporary breakpoint
+            true // Breakpoint was active
+        } else {
+            false // Breakpoint was not active
+        }
     }
 }
 
@@ -241,6 +356,11 @@ pub struct ActionGroup {
     flags: u32,
     /// Changes made by completed children since the parent last observed us.
     pending_count: i32,
+    /// Executor copy of this group's own breakpoint (action.hh:83), received
+    /// from the external `ActionState` in `prepare_apply` and published back
+    /// in `finish_apply` (RUGRA-GLUE: the authoritative slot lives in the
+    /// parent container / driver-held root state).
+    own_breakpoint: u32,
 }
 
 impl ActionGroup {
@@ -260,6 +380,7 @@ impl ActionGroup {
             state: 0,
             flags,
             pending_count: 0,
+            own_breakpoint: 0,
         }
     }
 
@@ -312,17 +433,97 @@ impl ActionGroup {
     ) -> crate::error::Result<i32> {
         self.actions[index].perform(fd, &mut self.child_states[index])
     }
+
+    // RUGRA-GLUE: read-only fixture/debug view of the executor slot this node's parent holds for it (Ghidra Action::getStatus, action.hh:110)
+    /// Status of child `index` as held in this container (the externalized
+    /// counterpart of the child's protected Action::status member).
+    pub fn child_status(&self, index: usize) -> u32 {
+        self.child_states[index].status
+    }
+
+    // RUGRA-GLUE: descend the child-index path through group nodes (Ghidra traverses the same children via getSubAction's Action* returns, action.cc:470-477)
+    fn group_at_mut(&mut self, prefix: &[usize]) -> &mut ActionGroup {
+        let mut node = self;
+        for &index in prefix {
+            node = node.actions[index]
+                .as_action_group_mut()
+                .expect("name path traverses only group nodes");
+        }
+        node
+    }
+
+    // RUGRA-GLUE: descend to the pool child addressed by a rule path (Ghidra receives the Rule* from getSubRule, action.cc:179-182)
+    fn pool_at_mut(&mut self, path: &[usize]) -> &mut ActionPool {
+        let (&last, prefix) = path
+            .split_last()
+            .expect("rule path addresses a pool child");
+        let parent = self.group_at_mut(prefix);
+        parent.actions[last]
+            .as_action_pool_mut()
+            .expect("rule path terminates at an ActionPool")
+    }
+
+    // Ghidra: action.cc:171 Action::setBreakPoint
+    /// Set a breakpoint on this subtree by (possibly ':'-separated) name
+    /// path. A match on this group itself writes `own_state` (the driver-held
+    /// externalized slot for this node); deeper matches write the addressed
+    /// child's parent-held `ActionState` or the addressed pool rule's
+    /// breakpoint slot (Ghidra writes `res->breakpoint |= tp` on the resolved
+    /// Action*/`rule->setBreak(tp)` on the resolved Rule*, action.cc:174-184).
+    pub fn set_break_point(
+        &mut self,
+        own_state: &mut ActionState,
+        tp: u32,
+        specify: &str,
+    ) -> bool {
+        if let Some(path) = self.get_sub_action(specify) {
+            match path.split_last() {
+                None => own_state.breakpoint |= tp,
+                Some((&last, prefix)) => {
+                    let parent = self.group_at_mut(prefix);
+                    parent.child_states[last].breakpoint |= tp;
+                }
+            }
+            true
+        } else if let Some((path, rule_index)) = self.get_sub_rule(specify) {
+            self.pool_at_mut(&path).rule_breakpoints[rule_index] |= tp;
+            true
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: action.cc:117 Action::checkActionBreak over this group's cached own breakpoint (tmpbreak cleared in place; finish_apply publishes the clear back)
+    fn check_own_action_break(&mut self) -> bool {
+        if (self.own_breakpoint & (break_flags::BREAK_ACTION | break_flags::TMPBREAK_ACTION)) != 0 {
+            self.own_breakpoint &= !break_flags::TMPBREAK_ACTION;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Action for ActionGroup {
     // Ghidra: action.cc:506 ActionGroup::apply
     /// Run every child through its `perform()` state machine in list order.
+    /// A group-level action breakpoint fires after the first changing child
+    /// and resumes at the next child (`++state` before returning -1,
+    /// action.cc:517-520).
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         while self.state < self.actions.len() {
             let res = self.actions[self.state].perform(fd, &mut self.child_states[self.state])?;
             if res > 0 {
+                // A change was made (action.cc:515-516)
                 self.pending_count += res;
+                if self.check_own_action_break() {
+                    // Check if this is an action breakpoint (action.cc:517)
+                    self.state += 1;
+                    return Ok(-1);
+                }
             } else if res < 0 {
+                // Partial completion of member equates to partial
+                // completion of group action (action.cc:522-523)
                 return Ok(-1);
             }
             self.state += 1;
@@ -330,11 +531,17 @@ impl Action for ActionGroup {
         Ok(0)
     }
 
-    // RUGRA-GLUE: mirrors ActionGroup::apply reading its inherited Action::status before initializing the protected iterator
-    fn prepare_apply(&mut self, status: u32) {
+    // RUGRA-GLUE: mirrors ActionGroup::apply reading its inherited Action::status before initializing the protected iterator (action.cc:511-512); also caches the inherited breakpoint member for the group-level checkActionBreak
+    fn prepare_apply(&mut self, status: u32, breakpoint: u32) {
         if status != status_flags::STATUS_MID {
             self.state = 0;
         }
+        self.own_breakpoint = breakpoint;
+    }
+
+    // RUGRA-GLUE: publishes the cached own breakpoint (possibly tmp-cleared by check_own_action_break) back into the external ActionState
+    fn finish_apply(&mut self, state: &mut ActionState) {
+        state.breakpoint = self.own_breakpoint;
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -352,6 +559,92 @@ impl Action for ActionGroup {
         std::mem::take(&mut self.pending_count)
     }
 
+    // Ghidra: action.cc:456 ActionGroup::getSubAction
+    /// Name-path descent: if the first ':' term matches this group, children
+    /// are searched with the remaining path; otherwise they must match the
+    /// entire specifier. Two matching children make the address ambiguous
+    /// and resolve to None (matchcount > 1, action.cc:467-478). Returns the
+    /// child-index path (empty = this group).
+    fn get_sub_action(&self, specify: &str) -> Option<Vec<usize>> {
+        let (token, mut remain) = next_specifyterm(specify);
+        if self.name == token {
+            if remain.is_empty() {
+                return Some(Vec::new());
+            }
+        } else {
+            remain = specify; // Still have to match entire specify
+        }
+
+        let mut lastaction: Option<Vec<usize>> = None;
+        let mut matchcount = 0;
+        for (index, child) in self.actions.iter().enumerate() {
+            if let Some(sub) = child.get_sub_action(remain) {
+                let mut path = Vec::with_capacity(sub.len() + 1);
+                path.push(index);
+                path.extend(sub);
+                lastaction = Some(path);
+                matchcount += 1;
+                if matchcount > 1 {
+                    return None;
+                }
+            }
+        }
+        lastaction
+    }
+
+    // Ghidra: action.cc:481 ActionGroup::getSubRule
+    /// Name-path rule descent, structurally identical to `get_sub_action`
+    /// except that a match on this group's own name is not a rule
+    /// (action.cc:486-487). Returns (child-index path, rule index in pool).
+    fn get_sub_rule(&self, specify: &str) -> Option<(Vec<usize>, usize)> {
+        let (token, mut remain) = next_specifyterm(specify);
+        if self.name == token {
+            if remain.is_empty() {
+                return None; // Matched this group, but a group is not a rule
+            }
+        } else {
+            remain = specify; // Still have to match entire specify
+        }
+
+        let mut lastrule: Option<(Vec<usize>, usize)> = None;
+        let mut matchcount = 0;
+        for (index, child) in self.actions.iter().enumerate() {
+            if let Some((sub, rule_index)) = child.get_sub_rule(remain) {
+                let mut path = Vec::with_capacity(sub.len() + 1);
+                path.push(index);
+                path.extend(sub);
+                lastrule = Some((path, rule_index));
+                matchcount += 1;
+                if matchcount > 1 {
+                    return None;
+                }
+            }
+        }
+        lastrule
+    }
+
+    // Ghidra: action.cc:444 ActionGroup::printState
+    /// Print this group's state and, when stopped mid-list, the state of the
+    /// child the iterator rests on (action.cc:450-453).
+    fn print_state(&self, state: &ActionState, out: &mut String) {
+        print_state_words(&self.name, state.status, out);
+        if state.status == status_flags::STATUS_MID {
+            self.actions[self.state]
+                .print_state(&self.child_states[self.state], out);
+        }
+    }
+
+    // Ghidra: action.cc:382 ActionGroup::clearBreakPoints (virtual: the trait method is what reaches nested containers through Box<dyn Action>)
+    fn clear_break_points(&mut self) {
+        for state in self.child_states.iter_mut() {
+            state.breakpoint = 0;
+        }
+        for action in self.actions.iter_mut() {
+            action.clear_break_points();
+        }
+        self.own_breakpoint = 0;
+    }
+
     // Ghidra: action.cc:408 ActionGroup::reset
     fn reset(&mut self, fd: &mut Funcdata) {
         self.pending_count = 0;
@@ -360,6 +653,17 @@ impl Action for ActionGroup {
             self.child_states[i].flags &= !action_flags::RULE_WARNINGS_GIVEN;
             self.actions[i].reset(fd);
         }
+    }
+}
+
+// Ghidra: action.cc:257 next_specifyterm
+/// Pull the next token from a ':' separated list of Action and Rule names.
+/// Returns (token, remain): the string up to the next ':' and what is left
+/// after removing the token and ':'.
+fn next_specifyterm(specify: &str) -> (&str, &str) {
+    match specify.find(':') {
+        Some(pos) => (&specify[..pos], &specify[pos + 1..]),
+        None => (specify, ""),
     }
 }
 
@@ -380,6 +684,11 @@ pub struct ActionRestartGroup {
     flags: u32,
     /// Changes accumulated by the embedded ActionGroup across restarts.
     pending_count: i32,
+    /// Executor copy of this restart group's own breakpoint (action.hh:83),
+    /// cached from the driver-held root ActionState in `prepare_apply` so the
+    /// internal restart path can forward it into the embedded group
+    /// (RUGRA-GLUE for the externalized status/breakpoint members).
+    own_breakpoint: u32,
 }
 
 impl ActionRestartGroup {
@@ -393,6 +702,7 @@ impl ActionRestartGroup {
             curstart: 0,
             flags,
             pending_count: 0,
+            own_breakpoint: 0,
         }
     }
 
@@ -434,6 +744,43 @@ impl ActionRestartGroup {
     pub fn child_state(&self, index: usize) -> Option<&ActionState> {
         self.group.child_state(index)
     }
+
+    // Ghidra: action.cc:171 Action::setBreakPoint (root entry — the console calls this on allacts.getCurrent(), ifacedecomp.cc:1196/1222)
+    /// Set a breakpoint on this root tree by (possibly ':'-separated) name
+    /// path. A match on the root itself writes `root_state` (the driver-held
+    /// externalized slot); deeper matches write the addressed node's
+    /// parent-held `ActionState` or the addressed pool rule's slot.
+    pub fn set_break_point(
+        &mut self,
+        root_state: &mut ActionState,
+        tp: u32,
+        specify: &str,
+    ) -> bool {
+        if let Some(path) = self.get_sub_action(specify) {
+            match path.split_last() {
+                None => root_state.breakpoint |= tp,
+                Some((&last, prefix)) => {
+                    let parent = self.group.group_at_mut(prefix);
+                    parent.child_states[last].breakpoint |= tp;
+                }
+            }
+            true
+        } else if let Some((path, rule_index)) = self.get_sub_rule(specify) {
+            self.group.pool_at_mut(&path).rule_breakpoints[rule_index] |= tp;
+            true
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: action.cc:382 ActionGroup::clearBreakPoints (root entry; the driver clears its own held slot)
+    /// Clear every breakpoint in this root tree (children, nested pools, and
+    /// the cached own-breakpoint copies). The driver-held root slot is
+    /// cleared by the caller via `root_state.breakpoint = 0`.
+    pub fn clear_break_points(&mut self) {
+        self.group.clear_break_points();
+        self.own_breakpoint = 0;
+    }
 }
 
 impl Action for ActionRestartGroup {
@@ -469,7 +816,8 @@ impl Action for ActionRestartGroup {
             // resetting children.  Rugra externalizes that status, so prepare
             // the embedded group's protected iterator explicitly before this
             // internal restart attempt.
-            self.group.prepare_apply(status_flags::STATUS_START);
+            self.group
+                .prepare_apply(status_flags::STATUS_START, self.own_breakpoint);
             // Loop back to re-run the group.
         }
     }
@@ -482,9 +830,14 @@ impl Action for ActionRestartGroup {
     fn get_flags(&self) -> u32 {
         self.flags
     }
-    // RUGRA-GLUE: shares the external restart-group executor status with its embedded Rust ActionGroup
-    fn prepare_apply(&mut self, status: u32) {
-        self.group.prepare_apply(status);
+    // RUGRA-GLUE: shares the external restart-group executor fields with its embedded Rust ActionGroup (and caches the own breakpoint for the internal restart path)
+    fn prepare_apply(&mut self, status: u32, breakpoint: u32) {
+        self.own_breakpoint = breakpoint;
+        self.group.prepare_apply(status, breakpoint);
+    }
+    // RUGRA-GLUE: publishes the embedded group's cached own breakpoint back into the external root ActionState
+    fn finish_apply(&mut self, state: &mut ActionState) {
+        self.group.finish_apply(state);
     }
     // RUGRA-GLUE: fixture-only nested tree view (see Action::as_action_group)
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(&self.group) }
@@ -493,6 +846,26 @@ impl Action for ActionRestartGroup {
     // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.pending_count)
+    }
+
+    // Ghidra: ActionRestartGroup inherits ActionGroup::getSubAction/getSubRule (action.hh:158-159); the embedded group carries the same node name
+    fn get_sub_action(&self, specify: &str) -> Option<Vec<usize>> {
+        self.group.get_sub_action(specify)
+    }
+
+    // Ghidra: ActionRestartGroup inherits ActionGroup::getSubRule (action.hh:159)
+    fn get_sub_rule(&self, specify: &str) -> Option<(Vec<usize>, usize)> {
+        self.group.get_sub_rule(specify)
+    }
+
+    // Ghidra: ActionRestartGroup inherits ActionGroup::printState (action.hh:157)
+    fn print_state(&self, state: &ActionState, out: &mut String) {
+        self.group.print_state(state, out);
+    }
+
+    // Ghidra: ActionRestartGroup inherits ActionGroup::clearBreakPoints (action.hh:151)
+    fn clear_break_points(&mut self) {
+        self.group.clear_break_points();
     }
 
     // Ghidra: action.cc:546 ActionRestartGroup::reset
@@ -505,10 +878,12 @@ impl Action for ActionRestartGroup {
 
 /// A pool of Rules applied to every matching P-code op.
 ///
-/// Corresponds to Ghidra's `ActionPool` (action.hh:262). On `apply`, does a
-/// **single pass** over all live ops, dispatching each to matching Rules.
-/// The repeat-until-stable behaviour is driven by the parent's `perform()`
-/// via `rule_repeatapply` (action.cc:350), not by this pool itself.
+/// Corresponds to Ghidra's `ActionPool` (action.hh:262). `apply` walks the
+/// live op list via `processOp` (action.cc:822); a rule-level action
+/// breakpoint returns -1 mid-pass and the next `apply` continues from the
+/// saved `op_state`/`rule_index` (action.cc:880-886). The repeat-until-stable
+/// behaviour is driven by the parent's `perform()` via `rule_repeatapply`
+/// (action.cc:350), not by this pool itself.
 pub struct ActionPool {
     name: String,
     rules: Vec<Box<dyn Rule>>,
@@ -519,6 +894,26 @@ pub struct ActionPool {
     /// Diagnostic stats (gated by RUGRA_RULE_STATS=1).
     rule_hits: std::collections::HashMap<usize, i32>,
     total: i32,
+    /// Ghidra per-Rule members externalized at the pool (action.hh:206/209/
+    /// 210: `breakpoint`, `count_tests`, `count_apply`) — Rugra's `Rule`
+    /// objects are `&self` executors, so the pool keeps the executor-side
+    /// slots parallel to `allrules`.
+    rule_breakpoints: Vec<u32>,
+    rule_tests: Vec<u32>,
+    rule_applies: Vec<u32>,
+    /// Ghidra `op_state`/`rule_index` resume members (action.hh:265-266),
+    /// snapshot form: the op list is captured when a pass starts and the
+    /// indices persist across an interrupted `apply` (action.cc:884-885).
+    ops: Vec<crate::op::PcodeOpRef>,
+    op_state: usize,
+    rule_index: usize,
+    /// Reinitialize the pass snapshot on the next `apply` (set when the
+    /// executor status is not `status_mid`, action.cc:880).
+    rebuild_pending: bool,
+    /// Carry of the externalized `count` accumulation across an interrupted
+    /// apply (Ghidra increments this->count inside processOp, action.cc:849;
+    /// the interrupted portion must survive into the resumed apply's return).
+    pending_count: i32,
 }
 
 impl ActionPool {
@@ -531,6 +926,14 @@ impl ActionPool {
             flags: action_flags::RULE_REPEATAPPLY,
             rule_hits: std::collections::HashMap::new(),
             total: 0,
+            rule_breakpoints: Vec::new(),
+            rule_tests: Vec::new(),
+            rule_applies: Vec::new(),
+            ops: Vec::new(),
+            op_state: 0,
+            rule_index: 0,
+            rebuild_pending: true,
+            pending_count: 0,
         }
     }
 
@@ -541,6 +944,9 @@ impl ActionPool {
         let idx = self.rules.len();
         let opcodes = rule.get_opcodes();
         self.rules.push(rule);
+        self.rule_breakpoints.push(0);
+        self.rule_tests.push(0);
+        self.rule_applies.push(0);
         for opc in opcodes {
             self.per_op.entry(opc).or_default().push(idx);
         }
@@ -552,58 +958,94 @@ impl ActionPool {
     // 753-775, which iterates allrules in registration order). No dispatch
     // state is exposed.
     pub fn rules(&self) -> &[Box<dyn Rule>] { &self.rules }
-}
 
-impl Action for ActionPool {
-    // Ghidra: action.cc:877 ActionPool::apply
-    /// Single-pass Rule application. Faithful to `ActionPool::apply`
-    /// (action.cc:877-887) with `processOp` (action.cc:822-875) inlined. The parent
-    /// `perform()` repeats this until no change (via rule_repeatapply).
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let want_stats = std::env::var("RUGRA_RULE_STATS")
-            .map(|v| v == "1")
-            .unwrap_or(false);
-        let mut pass_changes = 0;
-        let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
-        for op_ref in ops {
-            // Skip dead ops (Ghidra's processOp checks isDead).
-            let (is_dead, mut opc) = {
-                let o = op_ref.0.read().unwrap();
-                (o.is_dead(), o.opcode)
-            };
-            if is_dead { continue; }
-            // processOp: iterate rules for this opcode, with opcode-change
-            // detection after every Rule (action.cc:859-869).  A changed
-            // opcode invalidates the remainder of the old rule list and
-            // restarts dispatch at index zero for the new opcode.
-            'dispatch: loop {
-                let rule_idxs: Vec<usize> = self.per_op.get(&opc)
-                    .cloned()
-                    .unwrap_or_default();
-                if rule_idxs.is_empty() { break; }
-                for ridx in rule_idxs {
-                    let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
-                    if res > 0 {
-                        pass_changes += res;
-                        if want_stats {
-                            *self.rule_hits.entry(ridx).or_insert(0) += res;
-                        }
-                        let (is_dead, new_opc) = {
-                            let op = op_ref.0.read().unwrap();
-                            (op.is_dead(), op.opcode)
-                        };
-                        if is_dead {
-                            break 'dispatch;
-                        }
-                        if new_opc != opc {
-                            opc = new_opc;
-                            continue 'dispatch;
-                        }
-                    } else {
-                        let new_opc = op_ref.0.read().unwrap().opcode;
-                        if new_opc == opc {
-                            continue;
-                        }
+    // RUGRA-GLUE: read-only fixture views of the externalized per-Rule counters (Ghidra Rule::getNumTests/getNumApply, action.hh:217-218) and breakpoint (Rule::getBreakPoint, action.hh:228)
+    pub fn rule_tests(&self, index: usize) -> u32 { self.rule_tests[index] }
+    // RUGRA-GLUE: read-only fixture view of Rule::getNumApply (action.hh:218)
+    pub fn rule_applies(&self, index: usize) -> u32 { self.rule_applies[index] }
+    // RUGRA-GLUE: read-only fixture view of Rule::getBreakPoint (action.hh:228)
+    pub fn rule_breakpoint(&self, index: usize) -> u32 { self.rule_breakpoints[index] }
+
+    // RUGRA-GLUE: read-only fixture views of the dispatch resume members (Ghidra ActionPool::printState exposes the same position via the current op's SeqNum, action.cc:783-786)
+    pub fn op_state_index(&self) -> usize { self.op_state }
+    // RUGRA-GLUE: read-only fixture view of the per-op rule dispatch cursor (Ghidra rule_index, action.hh:266)
+    pub fn rule_index(&self) -> usize { self.rule_index }
+
+    // Ghidra: action.cc:718 Rule::checkActionBreak (breakpoint slot externalized at the pool)
+    fn check_rule_action_break(&mut self, index: usize) -> bool {
+        if (self.rule_breakpoints[index]
+            & (break_flags::BREAK_ACTION | break_flags::TMPBREAK_ACTION))
+            != 0
+        {
+            self.rule_breakpoints[index] &= !break_flags::TMPBREAK_ACTION; // Clear temporary breakpoint
+            true // Breakpoint was active
+        } else {
+            false // Breakpoint was not active
+        }
+    }
+
+    // Ghidra: action.cc:822 ActionPool::processOp
+    /// Apply the next possible Rule to the current PcodeOp. Action
+    /// breakpoints are checked if the Rule successfully applies; 0 is
+    /// returned for no breakpoint, -1 if a breakpoint occurs. If a
+    /// breakpoint occurred, an additional call to processOp() will pick up
+    /// where it left off before the breakpoint: `op_state` still addresses
+    /// this op while `rule_index` has already moved past the fired rule
+    /// (action.cc:816-818).
+    fn process_op(&mut self, fd: &mut Funcdata, want_stats: bool) -> Result<i32> {
+        let op_ref = self.ops[self.op_state].clone();
+        // Ghidra checks op->isDead() at the top of processOp (action.cc:829):
+        // a dead op is dropped (op_state advances, rule dispatch resets).
+        // (Ghidra additionally calls data.opDeadAndGone(op); Rugra's op bank
+        // manages dead-op lifetime itself, so the executor only skips.)
+        let (is_dead, mut opc) = {
+            let o = op_ref.0.read().unwrap();
+            (o.is_dead(), o.opcode)
+        };
+        if is_dead {
+            self.op_state += 1;
+            self.rule_index = 0;
+            return Ok(0);
+        }
+        // Opcode-change redispatch: Ghidra re-evaluates perop[opc].size()
+        // after a rule rewrites the opcode (action.cc:860-863/865-869); the
+        // outer loop recomputes the rule list for the new opcode and the
+        // index restarts at zero.
+        'dispatch: loop {
+            let rule_idxs: Vec<usize> = self.per_op.get(&opc).cloned().unwrap_or_default();
+            while self.rule_index < rule_idxs.len() {
+                let ridx = rule_idxs[self.rule_index];
+                self.rule_index += 1;
+                self.rule_tests[ridx] += 1; // action.cc:842
+                let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
+                if res > 0 {
+                    self.rule_applies[ridx] += 1; // action.cc:848
+                    self.pending_count += res; // count += res (action.cc:849)
+                    if want_stats {
+                        *self.rule_hits.entry(ridx).or_insert(0) += res;
+                    }
+                    if self.check_rule_action_break(ridx) {
+                        // action.cc:851-852
+                        return Ok(-1);
+                    }
+                    let (is_dead, new_opc) = {
+                        let o = op_ref.0.read().unwrap();
+                        (o.is_dead(), o.opcode)
+                    };
+                    if is_dead {
+                        break; // action.cc:859 — abandon remaining rules for this op
+                    }
+                    if new_opc != opc {
+                        // Set of rules to apply to this op has changed
+                        opc = new_opc;
+                        self.rule_index = 0;
+                        continue 'dispatch;
+                    }
+                } else {
+                    let new_opc = op_ref.0.read().unwrap().opcode;
+                    if new_opc != opc {
+                        // Rule changed op without returning result of 1
+                        // (action.cc:865-869)
                         let message = format!(
                             "ERROR: Rule {} changed op without returning result of 1!",
                             self.rules[ridx].get_name(),
@@ -614,19 +1056,63 @@ impl Action for ActionPool {
                             eprintln!("{message}");
                         }
                         opc = new_opc;
+                        self.rule_index = 0;
                         continue 'dispatch;
                     }
                 }
-                break;
+            }
+            break;
+        }
+        self.op_state += 1;
+        self.rule_index = 0;
+        Ok(0)
+    }
+}
+
+impl Action for ActionPool {
+    // Ghidra: action.cc:877 ActionPool::apply
+    /// Single-pass Rule application over the live op snapshot, faithful to
+    /// `ActionPool::apply`/`processOp` (action.cc:877-887): the pass state
+    /// (`op_state`, `rule_index`) is kept when resuming from an interrupted
+    /// apply (`status_mid`) and reinitialized otherwise (action.cc:880-883).
+    /// Returns the changes made by this invocation including the carry from
+    /// a previously interrupted invocation (Ghidra returns 0 and keeps the
+    /// accumulation in the inherited count member; Rugra externalizes that
+    /// member — see `take_count_delta`/`pending_count`).
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        let want_stats = std::env::var("RUGRA_RULE_STATS")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let pass_start = self.pending_count;
+        if self.rebuild_pending {
+            // Initialize the derived action (action.cc:880-883)
+            self.ops = fd.obank.alivelist.clone();
+            self.op_state = 0;
+            self.rule_index = 0;
+            self.rebuild_pending = false;
+        }
+        while self.op_state < self.ops.len() {
+            if self.process_op(fd, want_stats)? != 0 {
+                return Ok(-1); // Rule breakpoint mid-pass; carry is kept
             }
         }
+        let pass_changes = self.pending_count - pass_start;
         self.total += pass_changes;
+        // A completed pass re-initializes on the next apply (Ghidra: apply
+        // re-initializes unless status == status_mid, and only an interrupted
+        // apply leaves status at mid, action.cc:880).
+        self.rebuild_pending = true;
         // Print stats on each pass if enabled.
         if want_stats && pass_changes > 0 {
             let fn_name = fd.name.as_str();
             eprintln!("[RULESTATS] {} pool={} pass_changes={}", fn_name, self.name, pass_changes);
         }
-        Ok(pass_changes)
+        Ok(std::mem::take(&mut self.pending_count))
+    }
+
+    // RUGRA-GLUE: mirrors ActionPool::apply's status check re-initializing the pass state (action.cc:880); prepare_apply is where the external status reaches the container
+    fn prepare_apply(&mut self, status: u32, _breakpoint: u32) {
+        self.rebuild_pending = status != status_flags::STATUS_MID;
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -636,6 +1122,48 @@ impl Action for ActionPool {
 
     // RUGRA-GLUE: fixture-only pool view (see Action::as_action_pool)
     fn as_action_pool(&self) -> Option<&ActionPool> { Some(self) }
+    // RUGRA-GLUE: fixture-only mutable pool view for rule-breakpoint addressing (Ghidra receives the Rule* and calls setBreak, action.hh:219)
+    fn as_action_pool_mut(&mut self) -> Option<&mut ActionPool> { Some(self) }
+
+    // Ghidra: action.cc:789 ActionPool::getSubRule
+    /// Name-path rule lookup: if the first ':' term matches this pool, the
+    /// rule names are matched against the remainder; otherwise against the
+    /// entire specifier. A match on the pool's own name is not a rule
+    /// (action.cc:794-795); two same-named rules are ambiguous (matchcount >
+    /// 1, action.cc:806-808). Returns (child-index path from this pool —
+    /// always empty — , rule index).
+    fn get_sub_rule(&self, specify: &str) -> Option<(Vec<usize>, usize)> {
+        let (token, mut remain) = next_specifyterm(specify);
+        if self.name == token {
+            if remain.is_empty() {
+                return None; // Match, but not a rule
+            }
+        } else {
+            remain = specify; // Still have to match entire specify
+        }
+
+        let mut lastrule: Option<(Vec<usize>, usize)> = None;
+        let mut matchcount = 0;
+        for (index, rule) in self.rules.iter().enumerate() {
+            if rule.get_name() == remain {
+                lastrule = Some((Vec::new(), index));
+                matchcount += 1;
+                if matchcount > 1 {
+                    return None;
+                }
+            }
+        }
+        lastrule
+    }
+
+    // Ghidra: action.cc:890 ActionPool::clearBreakPoints
+    /// Clear breakpoints on every rule in this pool (the pool's own
+    /// breakpoint slot lives in its parent's ActionState).
+    fn clear_break_points(&mut self) {
+        for breakpoint in self.rule_breakpoints.iter_mut() {
+            *breakpoint = 0;
+        }
+    }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn reset(&mut self, _fd: &mut Funcdata) {
@@ -927,6 +1455,11 @@ pub struct ActionDatabase {
     currentactname: String,
     /// Ghidra `isDefaultGroups` (action.hh:303).
     is_default_groups: bool,
+    /// Externalized status/breakpoint members of the current root Action
+    /// (action.hh:82-83), persistent across `perform_current` calls so a
+    /// perform interrupted by a breakpoint resumes on the next call
+    /// (action.cc:295). Reset by `reset_current`.
+    current_root_state: Option<ActionState>,
 }
 // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
@@ -952,6 +1485,7 @@ impl ActionDatabase {
             currentact: None,
             currentactname: String::new(),
             is_default_groups: false,
+            current_root_state: None,
         }
     }
 
@@ -1124,6 +1658,73 @@ impl ActionDatabase {
     pub fn set_default_actions(&mut self) {
         self.universal_action();
         self.reset_defaults();
+    }
+
+    // Ghidra: ghidra_process.cc:309 getCurrent()->reset(*fd) — Action::reset (action.cc:100) sets the externalized status to status_start
+    /// Reset the current root Action for a new function and restart its
+    /// externalized executor state (a breakpoint-interrupted run must be
+    /// reset before driving a fresh function).
+    pub fn reset_current(&mut self, fd: &mut crate::funcdata::Funcdata) {
+        let index = self.currentact.expect("no current root action");
+        let flags = self.actionmap[index].1.get_flags();
+        self.actionmap[index].1.reset(fd);
+        self.current_root_state = Some(ActionState::new(flags));
+    }
+
+    // Ghidra: ghidra_process.cc:310 getCurrent()->perform(*fd); a -1 return from a breakpoint is continued by calling perform again (action.cc:295, ifacedecomp.cc:2491 "Try to continue decompilation")
+    /// Perform the current root Action, resuming from a breakpoint if the
+    /// previous call returned -1 (the externalized root state persists until
+    /// `reset_current`).
+    pub fn perform_current(&mut self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
+        let index = self.currentact.expect("no current root action");
+        let flags = self.actionmap[index].1.get_flags();
+        let mut state = self
+            .current_root_state
+            .take()
+            .unwrap_or_else(|| ActionState::new(flags));
+        let result = self.actionmap[index].1.perform(fd, &mut state);
+        self.current_root_state = Some(state);
+        result
+    }
+
+    // Ghidra: ifacedecomp.cc:1196/1222 getCurrent()->setBreakPoint(type, specify) over Action::setBreakPoint (action.cc:171)
+    /// Set a breakpoint (`break_flags::BREAK_START`/`BREAK_ACTION`/tmp
+    /// variants) on the current root tree by ':'-separated name path,
+    /// addressing an Action or a Rule (repeated names that match more than
+    /// one node fail, mirroring the matchcount>1 ambiguity of
+    /// `ActionGroup::getSubAction`/`getSubRule`, action.cc:475/807).
+    pub fn set_break_point(&mut self, tp: u32, specify: &str) -> bool {
+        let Some(index) = self.currentact else {
+            return false;
+        };
+        let flags = self.actionmap[index].1.get_flags();
+        let mut root_state = self
+            .current_root_state
+            .take()
+            .unwrap_or_else(|| ActionState::new(flags));
+        let root = self.actionmap[index].1.as_mut();
+        let Some(group) = root.as_action_group_mut() else {
+            self.current_root_state = Some(root_state);
+            return false;
+        };
+        let ok = group.set_break_point(&mut root_state, tp, specify);
+        self.current_root_state = Some(root_state);
+        ok
+    }
+
+    // Ghidra: ghidra_process.cc:69 getCurrent()->clearBreakPoints() (action.cc:382, recursive over subtree and rules)
+    /// Clear every breakpoint on the current root tree, including the
+    /// driver-held root slot.
+    pub fn clear_break_points_current(&mut self) {
+        let Some(index) = self.currentact else {
+            return;
+        };
+        if let Some(state) = self.current_root_state.as_mut() {
+            state.breakpoint = 0;
+        }
+        if let Some(group) = self.actionmap[index].1.as_action_group_mut() {
+            group.clear_break_points();
+        }
     }
 }
 
@@ -1574,5 +2175,383 @@ mod tests {
         action.reset(&mut fd);
         assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: break_start returns -1 from
+    // status_start BEFORE count_tests increments (action.cc:306-311); the
+    // next perform continues from status_breakstarthit (which does NOT
+    // re-check the start breakpoint) and the persistent bit fires again on
+    // the next status_start entry.
+    #[test]
+    fn start_break_returns_partial_before_count_tests() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut action = ScriptAction::new(vec![3, 5], 0, calls.clone());
+        let mut state = ActionState::new(0);
+        state.breakpoint = break_flags::BREAK_START;
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), -1);
+        assert_eq!(state.status, status_flags::STATUS_BREAKSTARTHIT);
+        assert_eq!(state.count_tests, 0); // not incremented at the broken start
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        // Resume from status_breakstarthit runs the apply (action.cc:312-315
+        // fall-through; the persistent start break is not re-checked here,
+        // and count_tests is not re-incremented outside status_start).
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 3);
+        assert_eq!(state.count_tests, 0);
+        assert_eq!(state.count_apply, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // With no repeat/once flags the completion returned to status_start,
+        // where the persistent breakpoint fires again.
+        assert_eq!(state.status, status_flags::STATUS_START);
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), -1);
+        assert_eq!(state.count_tests, 0); // still not incremented on the broken start
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Clearing it lets the resume from status_breakstarthit run the
+        // second step; the count_tests increment still only happens on a
+        // fresh status_start entry.
+        state.breakpoint = 0;
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 5);
+        assert_eq!(state.count_tests, 0);
+        assert_eq!(state.count, 5);
+        // The completion returned to status_start: the next perform is a
+        // fresh start (script exhausted) and finally increments count_tests.
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
+        assert_eq!(state.count_tests, 1);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: tmpbreak_start is cleared when hit
+    // (action.cc:55-56) so it stops exactly once.
+    #[test]
+    fn tmpbreak_start_fires_once() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut action = ScriptAction::new(vec![2, 2], action_flags::RULE_REPEATAPPLY, calls.clone());
+        let mut state = ActionState::new(action_flags::RULE_REPEATAPPLY);
+        state.breakpoint = break_flags::TMPBREAK_START;
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), -1);
+        assert_eq!(state.breakpoint, 0); // temporary bit consumed
+        // Resume applies both scripted steps (repeatapply to convergence).
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 4);
+        assert_eq!(state.count, 4);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        // A third perform starts fresh (status_start) and, with the tmp bit
+        // gone, runs through without stopping. count_tests only incremented
+        // on that fresh start (the resume skipped the increment).
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
+        assert_eq!(state.count_tests, 1);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: break_action fires after the change is
+    // counted (action.cc:327-333); resuming from status_actionbreak does not
+    // reapply and returns the accumulated count.
+    #[test]
+    fn leaf_action_break_after_change_then_count_return() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut action = ScriptAction::new(vec![5], 0, calls.clone());
+        let mut state = ActionState::new(0);
+        state.breakpoint = break_flags::BREAK_ACTION;
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), -1);
+        assert_eq!(state.status, status_flags::STATUS_ACTIONBREAK);
+        assert_eq!(state.count, 5);
+        assert_eq!(state.count_apply, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Persistent break on a no-change repeat: perform returns the count
+        // without applying again (action.cc:346-347).
+        assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 5);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(state.status, status_flags::STATUS_START);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: a group-level break_action fires after
+    // every changing child and resumes at the NEXT child (action.cc:513-520);
+    // the final perform run-off hits the perform-level checkActionBreak once
+    // more, and the following perform returns the accumulated count.
+    #[test]
+    fn group_action_break_steps_each_changing_child() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut group = ActionGroup::with_flags("stepper", 0);
+        group.add_action(Box::new(ScriptAction::new(vec![1], 0, calls.clone())));
+        group.add_action(Box::new(ScriptAction::new(vec![2], 0, calls.clone())));
+        group.add_action(Box::new(ScriptAction::new(vec![4], 0, calls.clone())));
+        let mut root_state = ActionState::new(0);
+        root_state.breakpoint = break_flags::BREAK_ACTION;
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), -1);
+        assert_eq!(root_state.status, status_flags::STATUS_MID);
+        assert_eq!(root_state.count, 1);
+        assert_eq!(group.current_index(), 1);
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), -1);
+        assert_eq!(root_state.count, 3);
+        assert_eq!(group.current_index(), 2);
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), -1);
+        assert_eq!(root_state.count, 7);
+        assert_eq!(group.current_index(), 3);
+        // Apply returned 0 with lcount < count: perform-level break fires.
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), -1);
+        assert_eq!(root_state.status, status_flags::STATUS_ACTIONBREAK);
+        // status_actionbreak does not reapply; count is returned.
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: tmpbreak_action on a group fires once;
+    // the finish_apply publish-back clears the temporary bit in the
+    // authoritative ActionState so the resumed run is not stopped again.
+    #[test]
+    fn group_tmpbreak_action_fires_once_and_publishes_clear() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut group = ActionGroup::with_flags("tmpgroup", 0);
+        group.add_action(Box::new(ScriptAction::new(vec![1], 0, calls.clone())));
+        group.add_action(Box::new(ScriptAction::new(vec![2], 0, calls.clone())));
+        let mut root_state = ActionState::new(0);
+        root_state.breakpoint = break_flags::TMPBREAK_ACTION;
+        let mut fd = fixture_funcdata();
+
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), -1);
+        assert_eq!(root_state.breakpoint, 0); // tmp clear published back
+        assert_eq!(group.current_index(), 1);
+        // Resume runs the remaining child with no further stop.
+        assert_eq!(group.perform(&mut fd, &mut root_state).unwrap(), 3);
+        assert_eq!(root_state.status, status_flags::STATUS_START);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: interrupted+resumed group run reaches
+    // the exact same final count as an uninterrupted single run.
+    #[test]
+    fn group_break_resume_equals_single_run() {
+        let single_calls = Arc::new(AtomicUsize::new(0));
+        let mut single = ActionGroup::with_flags("single", 0);
+        single.add_action(Box::new(ScriptAction::new(vec![1], 0, single_calls.clone())));
+        single.add_action(Box::new(ScriptAction::new(vec![2], 0, single_calls.clone())));
+        single.add_action(Box::new(ScriptAction::new(vec![4], 0, single_calls.clone())));
+        let mut single_state = ActionState::new(0);
+        let mut fd = fixture_funcdata();
+        let single_result = single.perform(&mut fd, &mut single_state).unwrap();
+
+        let resume_calls = Arc::new(AtomicUsize::new(0));
+        let mut resumed = ActionGroup::with_flags("resumed", 0);
+        resumed.add_action(Box::new(ScriptAction::new(vec![1], 0, resume_calls.clone())));
+        resumed.add_action(Box::new(ScriptAction::new(vec![2], 0, resume_calls.clone())));
+        resumed.add_action(Box::new(ScriptAction::new(vec![4], 0, resume_calls.clone())));
+        let mut root_state = ActionState::new(0);
+        root_state.breakpoint = break_flags::TMPBREAK_ACTION;
+        let mut fd2 = fixture_funcdata();
+        assert_eq!(resumed.perform(&mut fd2, &mut root_state).unwrap(), -1);
+        let resumed_result = resumed.perform(&mut fd2, &mut root_state).unwrap();
+
+        assert_eq!(single_result, resumed_result);
+        assert_eq!(single_state.count, root_state.count);
+        assert_eq!(single_state.count_apply, root_state.count_apply);
+        assert_eq!(
+            single_calls.load(Ordering::SeqCst),
+            resume_calls.load(Ordering::SeqCst)
+        );
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: ':' name-path addressing on the real
+    // derived default tree (action.cc:257/275/285/456/481/789) — exact node,
+    // unique duplicate disambiguated by path, ambiguous duplicate failure,
+    // rule addressing (underscore-normalized names differ from the oracle),
+    // and non-rule/non-action mismatches.
+    #[test]
+    fn name_path_addressing_on_default_pipeline() {
+        let mut root = build_default_pipeline();
+        let mut root_state = ActionState::new(action_flags::RULE_ONCEPERFUNC);
+
+        // Root self-match (Action::getSubAction, action.cc:278).
+        assert_eq!(root.get_sub_action("universal").map(|p| p.len()), Some(0));
+        // Unique deep node.
+        assert!(root.get_sub_action("universal:fullloop:mainloop").is_some());
+        // Path-disambiguated duplicate: deadcode lives in mainloop and the
+        // fullloop tail; the mainloop instance is unique under its path.
+        assert!(root.get_sub_action("universal:fullloop:mainloop:deadcode").is_some());
+        // Ambiguous duplicates: two "unreachable" children of mainloop
+        // (:5490 and :5673), "deadcode" matching fullloop's direct tail
+        // child (:5682) AND mainloop's descendant (:5503), and two top-level
+        // "dynamicsymbols" (:5724/:5733) all resolve to None (matchcount > 1,
+        // action.cc:475-476).
+        assert_eq!(root.get_sub_action("universal:fullloop:mainloop:unreachable"), None);
+        assert_eq!(root.get_sub_action("universal:fullloop:deadcode"), None);
+        assert_eq!(root.get_sub_action("universal:dynamicsymbols"), None);
+        // Unknown name.
+        assert_eq!(root.get_sub_action("universal:fullloop:nonexistent"), None);
+        // Rule addressing: cleanup pool's first rule (Ghidra "multnegone",
+        // Rugra "mult_neg_one") and a deep oppool1 rule.
+        assert!(root.get_sub_rule("universal:cleanup:mult_neg_one").is_some());
+        assert!(root
+            .get_sub_rule("universal:fullloop:mainloop:stackstall:oppool1:early_removal")
+            .is_some());
+        // A group is not a rule (action.cc:486-487); a rule is not an action.
+        assert_eq!(root.get_sub_rule("universal:fullloop:mainloop"), None);
+        assert_eq!(root.get_sub_action("universal:cleanup:mult_neg_one"), None);
+
+        // set_break_point return values mirror the resolutions
+        // (action.cc:171-185); the breakpoint bit lands in the addressed
+        // node's parent-held ActionState.
+        assert!(root.set_break_point(&mut root_state, break_flags::BREAK_START, "universal:fullloop:mainloop"));
+        {
+            let mainloop_path = root
+                .get_sub_action("universal:fullloop:mainloop")
+                .expect("mainloop resolves");
+            let (&mainloop_index, universal_prefix) =
+                mainloop_path.split_last().expect("non-root path");
+            let fullloop = root
+                .as_action_group()
+                .expect("root group")
+                .child_actions()[universal_prefix[0]]
+                .as_action_group()
+                .expect("fullloop group");
+            assert_eq!(
+                fullloop.child_state(mainloop_index).unwrap().breakpoint,
+                break_flags::BREAK_START
+            );
+        }
+        assert!(!root.set_break_point(&mut root_state, break_flags::BREAK_START, "universal:fullloop:mainloop:unreachable"));
+        assert!(root.set_break_point(&mut root_state, break_flags::BREAK_ACTION, "universal:cleanup:mult_neg_one"));
+        assert!(!root.set_break_point(&mut root_state, break_flags::BREAK_ACTION, "universal:cleanup:mult_neg_one_typo"));
+
+        // clear_break_points wipes every slot (action.cc:382).
+        root.clear_break_points();
+        {
+            let mainloop_path = root
+                .get_sub_action("universal:fullloop:mainloop")
+                .expect("mainloop resolves");
+            let (&mainloop_index, universal_prefix) =
+                mainloop_path.split_last().expect("non-root path");
+            let fullloop = root
+                .as_action_group()
+                .expect("root group")
+                .child_actions()[universal_prefix[0]]
+                .as_action_group()
+                .expect("fullloop group");
+            assert_eq!(fullloop.child_state(mainloop_index).unwrap().breakpoint, 0);
+        }
+        let cleanup_index = root
+            .as_action_group()
+            .expect("root group")
+            .child_names()
+            .iter()
+            .position(|n| *n == "cleanup")
+            .expect("cleanup pool registered");
+        let cleanup_pool = root
+            .as_action_group()
+            .expect("root group")
+            .child_actions()[cleanup_index]
+            .as_action_pool()
+            .expect("cleanup is a pool");
+        assert_eq!(cleanup_pool.rule_breakpoint(0), 0);
+    }
+
+    // ACTION-BREAKPOINT-RESUME-0001: rule-level break_action interrupts
+    // processOp mid-pass (op_state unchanged, rule_index past the fired
+    // rule, action.cc:851-852) and the resumed run accumulates the same
+    // totals as an uninterrupted single run.
+    #[test]
+    fn pool_rule_break_resumes_mid_pass() {
+        use crate::arch::Architecture;
+        use crate::block::{BlockBasic, FlowBlock};
+        use std::sync::RwLock;
+
+        struct CountingRule {
+            name: &'static str,
+            opcode: crate::opcodes::OpCode,
+            budget: std::cell::Cell<i32>,
+        }
+        impl Rule for CountingRule {
+            fn apply_op(
+                &self,
+                _op: &std::sync::Arc<RwLock<crate::op::PcodeOp>>,
+                _fd: &mut Funcdata,
+            ) -> Result<i32> {
+                if self.budget.get() > 0 {
+                    self.budget.set(self.budget.get() - 1);
+                    Ok(1)
+                } else {
+                    Ok(0)
+                }
+            }
+            fn get_name(&self) -> &str { self.name }
+            fn get_opcodes(&self) -> Vec<crate::opcodes::OpCode> { vec![self.opcode] }
+        }
+
+        fn fixture_fd() -> Funcdata {
+            let mut fd = Funcdata::new("pool_break", Address::new(0x2000), 1);
+            let mut architecture = Architecture::new();
+            architecture.archid = "fixture:LE:64:default".to_string();
+            fd.set_arch(Arc::new(architecture));
+            let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x2000))));
+            fd.bblocks.add_block(block.clone());
+            for slot in 0..2 {
+                let op = fd.new_op(1, Address::new(0x2000 + slot));
+                fd.op_set_opcode(&op, crate::opcodes::OpCode::CPUI_COPY);
+                fd.op_insert_end(&op, &block);
+            }
+            fd
+        }
+
+        // Single uninterrupted run.
+        let mut fd = fixture_fd();
+        let mut pool = ActionPool::new("countpool");
+        pool.add_rule(Box::new(CountingRule {
+            name: "counter",
+            opcode: crate::opcodes::OpCode::CPUI_COPY,
+            budget: std::cell::Cell::new(2),
+        }));
+        let mut pool_state = ActionState::new(action_flags::RULE_REPEATAPPLY);
+        let single = pool.perform(&mut fd, &mut pool_state).unwrap();
+        assert_eq!(single, 2);
+        assert_eq!(pool.rule_tests(0), 4); // 2 ops x 2 passes
+        assert_eq!(pool.rule_applies(0), 2);
+
+        // Interrupted run: break_action on the rule stops after the first
+        // application; the resume continues from the same op without
+        // re-applying the fired rule to it. The breakpoint is addressed the
+        // way the console does it (setBreakPoint on the tree root,
+        // action.cc:171-185).
+        let mut fd2 = fixture_fd();
+        let mut pool2 = ActionPool::new("countpool");
+        pool2.add_rule(Box::new(CountingRule {
+            name: "counter",
+            opcode: crate::opcodes::OpCode::CPUI_COPY,
+            budget: std::cell::Cell::new(2),
+        }));
+        let mut group = ActionGroup::with_flags("root", 0);
+        group.add_action(Box::new(pool2));
+        let mut root_state = ActionState::new(0);
+        assert!(group.set_break_point(
+            &mut root_state,
+            break_flags::BREAK_ACTION,
+            "root:countpool:counter"
+        ));
+        assert_eq!(group.perform(&mut fd2, &mut root_state).unwrap(), -1);
+        assert_eq!(root_state.status, status_flags::STATUS_MID);
+        {
+            let pool_view = group.child_actions()[0].as_action_pool().expect("pool child");
+            assert_eq!(pool_view.rule_tests(0), 1);
+            assert_eq!(pool_view.op_state_index(), 0); // same op still addressed
+            assert_eq!(pool_view.rule_index(), 1); // past the fired rule
+        }
+        // The persistent rule break fires again on op1's application; the
+        // resume pass did not re-test op0 (its rule_index was past the rule).
+        assert_eq!(group.perform(&mut fd2, &mut root_state).unwrap(), -1);
+        {
+            let pool_view = group.child_actions()[0].as_action_pool().expect("pool child");
+            assert_eq!(pool_view.rule_tests(0), 2);
+            assert_eq!(pool_view.op_state_index(), 1);
+        }
+        // Final resume completes and converges to the single-run totals.
+        let resumed = group.perform(&mut fd2, &mut root_state).unwrap();
+        assert_eq!(resumed, 2);
+        assert_eq!(root_state.count, 2);
+        let pool_final = group.child_actions()[0].as_action_pool().expect("pool child");
+        assert_eq!(pool_final.rule_tests(0), 4); // identical totals to the single run
+        assert_eq!(pool_final.rule_applies(0), 2);
     }
 }
