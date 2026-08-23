@@ -174,7 +174,8 @@ require("overall", metadata["overall_status"], "MISMATCH")
 
 expected_matches = {
     "single_target_boundary", "multi_target_bypass", "partial_before_thunk",
-    "override_short_circuit_and_collapse", "lowlevel_partial_mutation",
+    "override_short_circuit_and_collapse", "successful_truncation_warning_order",
+    "lowlevel_partial_mutation", "equal_address_load_sort_key",
 }
 expected_residuals = {"production_typed_stage_consumption"}
 coverage = metadata["coverage"]
@@ -297,4 +298,4 @@ if [[ "$ghidra_status" -ne 0 || "$rugra_status" -ne 0 || "$diff_status" -ne 0 ]]
   exit 1
 fi
 
-echo "JT-THUNK-CLASSIFY-1204: projection MATCH (8/8 byte-identical); overall MISMATCH: JUMPTABLE-PIPELINE-0001"
+echo "JT-THUNK-CLASSIFY-1204: projection MATCH (10/10 byte-identical); overall MISMATCH: JUMPTABLE-PIPELINE-0001"

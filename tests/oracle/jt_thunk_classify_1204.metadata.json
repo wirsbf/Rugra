@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "fixture_id": "JT-THUNK-CLASSIFY-1204",
-  "status_note": "The eight targeted JumpTable::sanityCheck/recoverAddresses projections are byte-identical MATCH against locked Ghidra 12.0.4, including exact exception text and the complete address/load/loadcount/partial state at each catch point. Fixture overall remains MISMATCH under JUMPTABLE-PIPELINE-0001 because the production Rugra flow/funcdata stage still consumes the legacy bool/Option adapter instead of the typed recovery result, so FailThunk is not yet propagated through the real stageJumpTable closure.",
+  "status_note": "The ten targeted JumpTable::sanityCheck/recoverAddresses projections are byte-identical MATCH against locked Ghidra 12.0.4. The recover-driven reject case observes exact LowlevelError text and all address/load/loadcount mutations before the failed sanity check, plus the absence of collapse; the successful truncation case observes the warning and recover>build>sanity>collapse sequence; the equal-address case proves LoadTable ordering compares addr only. Fixture overall remains MISMATCH under JUMPTABLE-PIPELINE-0001 because production Rugra flow/funcdata still consumes the legacy bool/Option adapter instead of the typed result.",
   "decisive_semantics": {
     "reference_output_parameters": "sanityCheck receives vector<int4>* loadcounts and passes the same object by reference to JumpModel::sanityCheck; addresstable, loadpoints and partialTable are JumpTable members mutated in place and remain observable when JumptableThunkError/LowlevelError unwinds. Rugra passes Option<&mut Vec<i32>> and the member Vecs directly, returns JumpTableRecoveryError::{Thunk,Lowlevel} with the exact explain text, and deliberately does not roll back model mutations on Err.",
-    "loop_bounds_traversal_order": "sanityCheck order is override return -> snapshot size -> isReachable -> single-entry thunk check -> model sanity -> successful-size warning. isReachable examines at most two predecessor levels (i=0,1), requiring exactly one in-edge and a two-way constant CBRANCH guard. recoverAddresses performs recoverModel/getTableSize/buildAddresses/sanityCheck in that order and only then collapses collected loads; the fixture's reject path proves collapse is skipped on error.",
-    "counter_accumulator_lifecycle": "The saved table size is captured after the override early return and before reachability/thunk/model checks, and is consulted only after model sanity succeeds. The absolute target/op offset difference is computed once for a single entry and compared strictly greater than 0xffff. Fixture recover/build/sanity counters start at zero per case and increment at their exact call sites; override records recover=1/build=1/sanity=0, while thunk cases never increment model sanity.",
-    "sorting_comparison_keys": "The table-level thunk discriminator is keyed first by addresstable.size()==1, then target offset==0 or the unsigned absolute offset difference from indirect->getAddr() > 0xffff; address-space identity and target ordering do not participate. Multi-entry tables bypass this discriminator even when entry 0 is zero/far. LoadTable::collapseTable, reached only after successful sanity, sorts by Address then size and merges contiguous same-size entries; 0x3000 and 0x3004 therefore become 0x3000/4/2 only in the override success case."
+    "loop_bounds_traversal_order": "sanityCheck order is override return -> snapshot size -> isReachable -> single-entry thunk check -> model sanity -> successful-size warning. isReachable examines at most two predecessor levels (i=0,1), requiring exactly one in-edge and a two-way constant CBRANCH guard. recoverAddresses performs recoverModel/getTableSize/buildAddresses/sanityCheck in that order and only then collapses collected loads. The fixture records its collapse marker immediately after recoverAddresses returns successfully, when the emitted post-state proves the internal collapse completed; reject emits recover>build>sanity, no marker, and uncollapsed post-state.",
+    "counter_accumulator_lifecycle": "The saved table size is captured after the override early return and before reachability/thunk/model checks, and is consulted only after model sanity succeeds. The absolute target/op offset difference is computed once for a single entry and compared strictly greater than 0xffff. Per-case recover/build/sanity counters start at zero. Recover-path loadcounts start empty and are captured after build and again after sanity: success_truncate/model_reject expose 2,2,7, sort_equal_addr exposes 3,3, and override exposes 2.",
+    "sorting_comparison_keys": "The thunk discriminator is keyed first by addresstable.size()==1, then target offset==0 or unsigned absolute offset difference from indirect->getAddr() > 0xffff; multi-entry tables bypass it. Locked LoadTable::operator< at jumptable.hh:59 returns addr < op2.addr and has no size/num tie-break. collapseTable's sole sort consumer uses that strict-weak ordering; equal-address 0x4000/8/2 and 0x4000/4/3 remain comparator-equivalent, while later collapse decisions still inspect size and adjacency."
   },
   "oracle": {
     "project": "Ghidra",
@@ -27,15 +27,16 @@
     "prototype": "empty-input-output"
   },
   "analysis_options": {
-    "collect_loads": "override case only",
+    "collect_loads": "all recover-path cases",
     "guard_depth": 2,
     "max_jumptable_size": 1024,
     "op_address": "0x00100000",
-    "initial_loadpoints": [
-      "0x00003004/4/1",
-      "0x00003000/4/1"
-    ],
-    "initial_loadcounts": [1, 2]
+    "load_variants": {
+      "default": ["0x00003004/4/1", "0x00003000/4/1"],
+      "equal_address": ["0x00004000/8/2", "0x00004000/4/3", "0x00004010/8/1"]
+    },
+    "direct_sanity_initial_loadcounts": [1, 2],
+    "recover_initial_loadcounts": []
   },
   "rugra_source": {
     "base_commit": "8d3a5561f259420d00ec3ecb54e766b206f89331",
@@ -64,10 +65,10 @@
     ]
   },
   "comparand": {
-    "cpp_fixture_sha256": "c06f038dcf45eed555d02a0db3d6f136dec3e0b17411d0e1af2db2b2653537bd",
-    "rust_fixture_sha256": "34749d59f923932e1cfc9671858dbedc2ddacd16f6cac55839ed60abe9b4e9aa",
-    "jumptable_overlay_sha256": "180155e28087067efcbb3bf7e3b70b7819732da7b57922f4d5e0a7636699e347",
-    "runner_sha256": "4ea7ea6c3f502cbe35090039a5295480288d5920d9cc22e250b24e61757afd71"
+    "cpp_fixture_sha256": "11d32515548de01b57325484f793606a2d6ea9ab3762914ce3c57a0f50ccb7bd",
+    "rust_fixture_sha256": "b251b7f033b8b903025bbe93644471f0a237be73707e296087ed19d6e14d6bd5",
+    "jumptable_overlay_sha256": "f41b03f8c001878e099df6944d67d92b0c06a906881032de6eb001bfbba95d4e",
+    "runner_sha256": "50c9db454e2896290f621f769ddd567122c6a719dfe98a0d340935babc8e6c25"
   },
   "input_manifest": {
     "cases": [
@@ -78,7 +79,8 @@
         "unreachable": false,
         "override": false,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
         "id": "near",
@@ -87,7 +89,8 @@
         "unreachable": false,
         "override": false,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
         "id": "cutoff",
@@ -96,7 +99,8 @@
         "unreachable": false,
         "override": false,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
         "id": "over",
@@ -105,7 +109,8 @@
         "unreachable": false,
         "override": false,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
         "id": "multi",
@@ -114,7 +119,8 @@
         "unreachable": false,
         "override": false,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
         "id": "partial",
@@ -123,7 +129,8 @@
         "unreachable": true,
         "override": false,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
         "id": "override",
@@ -132,24 +139,49 @@
         "unreachable": true,
         "override": true,
         "model_sanity": true,
-        "model_mutates_before_reject": false
+        "model_mutates_during_sanity": false,
+        "load_variant": "default"
       },
       {
-        "id": "model_reject",
-        "path": "sanity",
+        "id": "success_truncate",
+        "path": "recover",
         "targets": ["0x00100010", "0x00100020"],
         "unreachable": false,
         "override": false,
+        "transient_model_selection_override": true,
+        "model_sanity": true,
+        "model_mutates_during_sanity": true,
+        "load_variant": "default"
+      },
+      {
+        "id": "model_reject",
+        "path": "recover",
+        "targets": ["0x00100010", "0x00100020"],
+        "unreachable": false,
+        "override": false,
+        "transient_model_selection_override": true,
         "model_sanity": false,
-        "model_mutates_before_reject": true
+        "model_mutates_during_sanity": true,
+        "load_variant": "default"
+      },
+      {
+        "id": "sort_equal_addr",
+        "path": "recover",
+        "targets": ["0x00100010", "0x00100020"],
+        "unreachable": false,
+        "override": false,
+        "transient_model_selection_override": true,
+        "model_sanity": true,
+        "model_mutates_during_sanity": false,
+        "load_variant": "equal_address"
       }
     ],
-    "sha256": "83dfcae7c7d84ab497dd4cf3a5b961513270bde8ee3a86b5a08aa1bfe582d69c"
+    "sha256": "806da70b2994f3c5260159a7a3ed9cbe206163cf6c5938a2314cc80a40636b8a"
   },
   "expected_results": {
-    "ghidra_stdout_sha256": "43a973be448d0d0243cac9c61410beb4a85add264818c852b0fdac297a7542e8",
+    "ghidra_stdout_sha256": "62e3805bfeec4867fa91ff9194f107313294f36ae513d47151b0781813d0a839",
     "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "43a973be448d0d0243cac9c61410beb4a85add264818c852b0fdac297a7542e8",
+    "rugra_stdout_sha256": "62e3805bfeec4867fa91ff9194f107313294f36ae513d47151b0781813d0a839",
     "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "ghidra_exit_code": 0,
@@ -174,12 +206,22 @@
     },
     "override_short_circuit_and_collapse": {
       "status": "MATCH",
-      "covers": "recoverAddresses reuses the override model, builds a zero target, sanityCheck returns before reachability/thunk/model sanity, partial stays false, and successful collect-loads processing collapses 0x3000/0x3004 into one two-entry LoadTable.",
+      "covers": "recoverAddresses reuses the override model, builds a zero target, sanityCheck returns before reachability/thunk/model sanity, partial stays false, and internal loadcounts are 2. The successful-return marker yields recover>build>collapse, while the post-state proves the internal collapse produced 0x3000/4/2.",
+      "residual_todo_ids": []
+    },
+    "successful_truncation_warning_order": {
+      "status": "MATCH",
+      "covers": "A recover-driven model is transiently retained for model selection, then acts as non-override during sanity: it truncates two addresses to one, appends load 0x3008 and loadcount 7, and returns true. The exact WARNING comment is emitted; the successful-return marker and post-state prove recover>build>sanity>collapse, with internal loadcounts 2,2,7.",
       "residual_todo_ids": []
     },
     "lowlevel_partial_mutation": {
       "status": "MATCH",
-      "covers": "Model sanity truncates two addresses to one, appends load 0x3008 and loadcount 7, then returns false; ordinary LowlevelError text is exact, all mutations survive, and loadpoints remain uncollapsed.",
+      "covers": "The actual recoverAddresses path transiently retains the fixture model for selection, then calls recover/build/non-override model sanity; sanity truncates two addresses to one, appends load 0x3008 and loadcount 7, and returns false. LowlevelError text is exact, events stop at recover>build>sanity, all mutations survive, warning is absent, and the absent successful-return marker plus post-state prove loadpoints remain uncollapsed.",
+      "residual_todo_ids": []
+    },
+    "equal_address_load_sort_key": {
+      "status": "MATCH",
+      "covers": "Successful recover/collapse receives 0x4000/8/2, 0x4000/4/3 and 0x4010/8/1. The first two compare equivalent because LoadTable::operator< uses addr only; size/num do not reorder them, and the emitted post-collapse order matches the locked oracle.",
       "residual_todo_ids": []
     },
     "production_typed_stage_consumption": {

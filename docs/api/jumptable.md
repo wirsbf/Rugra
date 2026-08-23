@@ -24,10 +24,19 @@ model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 
   `try_recover -> Option<JumpTable>` 暂作兼容适配；`try_recover` 已移除
   `catch_unwind`，panic 不再冒充普通恢复失败。
 - B2：`tests/oracle/jt_thunk_classify_1204.{cc,rs,metadata.json}` 与
-  `tools/run_jt_thunk_classify_oracle.sh` 在锁定 12.0.4 上逐字节对拍 8 个场景：
-  zero / near / `0xffff` / `0x10000` / multi / partial / override / model reject，
-  同时观察异常类别与文本、recovery mode、model 调用次数、错误前 addresses、
-  loadpoints/loadcounts 和 partial flag。该投影为 `MATCH`。
+  `tools/run_jt_thunk_classify_oracle.sh` 在锁定 12.0.4 上逐字节对拍 10 个场景：
+  zero / near / `0xffff` / `0x10000` / multi / partial / override /
+  success truncate / model reject / equal-address load sort。`model_reject`
+  真正经 `recoverAddresses` 驱动并观察 `recover>build>sanity` 后异常、未 collapse
+  的 loadpoints；`success_truncate` 观察完整
+  `recover>build>sanity>collapse`、表长 warning 及成功 collapse；所有 recover
+  case 输出内部 loadcounts。事件中的 `collapse` 在 `recoverAddresses` 成功返回
+  边界记录，并由返回后的 loadpoints 证明内部 collapse 已完成；异常路径既无该
+  marker，loadpoints 也保持未 collapse。该投影为 `MATCH`。
+- `LoadTable::collapse_table` 的排序比较键只含 `addr`，对应
+  jumptable.hh:59 的 `return addr < op2.addr`；`size/num` 不作 tie-break。
+  Rust 不再为 `LoadTable` 派生 `Ord`，唯一排序消费者显式使用 address-only
+  comparator。equal-address fixture 以不同 size/num 固定此语义。
 - 剩余 `MISMATCH`（`JUMPTABLE-PIPELINE-0001`）：本租约禁止修改 flow/funcdata，
   因而生产调用闭包仍通过 bool/Option 兼容层丢失 typed mode；在生产
   `stageJumpTable` 消费 `JumpTableRecoveryError` 并分别返回 `FailThunk` / ordinary
@@ -115,7 +124,8 @@ A description of where and how data was loaded from memory
 - `single(addr, size) -> Self` — single-entry table.
 - `new(addr, size, num) -> Self` — full table.
 - `collapse_table(&mut Vec<LoadTable>)` — sort and merge contiguous entries
-  (jumptable.cc:60).
+  (jumptable.cc:60). The sort key is only `addr` (jumptable.hh:59); equal
+  addresses do not compare `size` or `num`.
 
 ### `PcodeOpNode`
 A data-flow path edge (op + input slot).

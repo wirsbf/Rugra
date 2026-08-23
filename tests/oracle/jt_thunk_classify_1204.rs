@@ -6,10 +6,12 @@
 //! all address/load/partial mutations visible at the error boundary.
 
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use rugra::address::Address;
+use rugra::arch::Architecture;
 use rugra::block::FlowBlock;
+use rugra::comment::CommentDatabaseInternal;
 use rugra::funcdata::Funcdata;
 use rugra::jumptable::{JumpModel, JumpTable, JumpTableRecoveryError, LoadTable, RecoveryMode};
 use rugra::op::PcodeOp;
@@ -24,12 +26,15 @@ struct ModelState {
     recover_calls: AtomicI32,
     build_calls: AtomicI32,
     sanity_calls: AtomicI32,
+    observed_loadcounts: Mutex<Vec<i32>>,
+    events: Mutex<Vec<&'static str>>,
 }
 
 struct FixtureModel {
     override_mode: bool,
+    transient_override: bool,
     sanity_result: bool,
-    mutate_on_reject: bool,
+    mutate_during_sanity: bool,
     reject_load_address: Address,
     build_targets: Vec<Address>,
     build_loads: Vec<LoadTable>,
@@ -39,6 +44,7 @@ struct FixtureModel {
 impl JumpModel for FixtureModel {
     fn is_override(&self) -> bool {
         self.override_mode
+            || (self.transient_override && self.state.recover_calls.load(Ordering::Relaxed) == 0)
     }
 
     fn get_table_size(&self) -> usize {
@@ -53,6 +59,7 @@ impl JumpModel for FixtureModel {
         _maxtablesize: u32,
     ) -> bool {
         self.state.recover_calls.fetch_add(1, Ordering::Relaxed);
+        self.state.events.lock().unwrap().push("recover");
         true
     }
 
@@ -65,6 +72,7 @@ impl JumpModel for FixtureModel {
         loadcounts: Option<&mut Vec<i32>>,
     ) {
         self.state.build_calls.fetch_add(1, Ordering::Relaxed);
+        self.state.events.lock().unwrap().push("build");
         *addresstable = self.build_targets.clone();
 
         let count = if let Some(loadpoints) = loadpoints {
@@ -75,6 +83,7 @@ impl JumpModel for FixtureModel {
         };
         if let Some(loadcounts) = loadcounts {
             loadcounts.extend(std::iter::repeat_n(count, self.build_targets.len()));
+            *self.state.observed_loadcounts.lock().unwrap() = loadcounts.clone();
         }
     }
 
@@ -110,14 +119,18 @@ impl JumpModel for FixtureModel {
         loadcounts: Option<&mut Vec<i32>>,
     ) -> bool {
         self.state.sanity_calls.fetch_add(1, Ordering::Relaxed);
-        if self.mutate_on_reject {
+        self.state.events.lock().unwrap().push("sanity");
+        if self.mutate_during_sanity {
             if addresstable.len() > 1 {
                 addresstable.truncate(1);
             }
             loadpoints.push(LoadTable::single(self.reject_load_address, 4));
             if let Some(loadcounts) = loadcounts {
                 loadcounts.push(7);
+                *self.state.observed_loadcounts.lock().unwrap() = loadcounts.clone();
             }
+        } else if let Some(loadcounts) = loadcounts {
+            *self.state.observed_loadcounts.lock().unwrap() = loadcounts.clone();
         }
         self.sanity_result
     }
@@ -125,8 +138,9 @@ impl JumpModel for FixtureModel {
     fn clone_model(&self, _jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
         Box::new(Self {
             override_mode: self.override_mode,
+            transient_override: self.transient_override,
             sanity_result: self.sanity_result,
-            mutate_on_reject: self.mutate_on_reject,
+            mutate_during_sanity: self.mutate_during_sanity,
             reject_load_address: self.reject_load_address,
             build_targets: self.build_targets.clone(),
             build_loads: self.build_loads.clone(),
@@ -141,8 +155,9 @@ struct CaseConfig {
     unreachable: bool,
     override_mode: bool,
     sanity_result: bool,
-    mutate_on_reject: bool,
+    mutate_during_sanity: bool,
     drive_recover: bool,
+    equal_address_loads: bool,
 }
 
 fn addresses_text(addresses: &[Address]) -> String {
@@ -167,6 +182,10 @@ fn counts_text(counts: &[i32]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn events_text(events: &[&str]) -> String {
+    events.join(">")
 }
 
 fn build_indirect(
@@ -198,9 +217,16 @@ fn build_indirect(
     indirect
 }
 
-fn run_case(code: &AddrSpace, config: CaseConfig) {
+fn run_case(
+    code: &AddrSpace,
+    architecture: &Arc<Architecture>,
+    commentdb: &Arc<RwLock<CommentDatabaseInternal>>,
+    config: CaseConfig,
+) {
     const OP_OFFSET: u64 = 0x100000;
+    commentdb.write().unwrap().clear();
     let mut fd = Funcdata::new(config.id, Address::with_space(code, 0x90000), 0x20000);
+    fd.set_arch(architecture.clone());
     let indirect = build_indirect(&mut fd, code, config.unreachable, OP_OFFSET);
 
     let targets = config
@@ -208,10 +234,18 @@ fn run_case(code: &AddrSpace, config: CaseConfig) {
         .iter()
         .map(|offset| Address::with_space(code, *offset))
         .collect::<Vec<_>>();
-    let initial_loads = vec![
-        LoadTable::single(Address::with_space(code, 0x3004), 4),
-        LoadTable::single(Address::with_space(code, 0x3000), 4),
-    ];
+    let initial_loads = if config.equal_address_loads {
+        vec![
+            LoadTable::new(Address::with_space(code, 0x4000), 8, 2),
+            LoadTable::new(Address::with_space(code, 0x4000), 4, 3),
+            LoadTable::new(Address::with_space(code, 0x4010), 8, 1),
+        ]
+    } else {
+        vec![
+            LoadTable::single(Address::with_space(code, 0x3004), 4),
+            LoadTable::single(Address::with_space(code, 0x3000), 4),
+        ]
+    };
     let mut loadcounts = vec![1, 2];
 
     let mut table = JumpTable::new(Address::with_space(code, OP_OFFSET));
@@ -219,8 +253,9 @@ fn run_case(code: &AddrSpace, config: CaseConfig) {
     let state = Arc::new(ModelState::default());
     table.jmodel = Some(Box::new(FixtureModel {
         override_mode: config.override_mode,
+        transient_override: config.drive_recover && !config.override_mode,
         sanity_result: config.sanity_result,
-        mutate_on_reject: config.mutate_on_reject,
+        mutate_during_sanity: config.mutate_during_sanity,
         reject_load_address: Address::with_space(code, 0x3008),
         build_targets: targets.clone(),
         build_loads: initial_loads.clone(),
@@ -243,6 +278,9 @@ fn run_case(code: &AddrSpace, config: CaseConfig) {
     } else {
         table.sanity_check(&fd, Some(&mut loadcounts))
     };
+    if config.drive_recover && result.is_ok() {
+        state.events.lock().unwrap().push("collapse");
+    }
     let (kind, mode, message) = match result {
         Ok(()) => ("success", RecoveryMode::Success, "none".to_string()),
         Err(error @ JumpTableRecoveryError::Thunk { .. }) => {
@@ -255,8 +293,34 @@ fn run_case(code: &AddrSpace, config: CaseConfig) {
         ),
     };
 
+    let observed_counts = if config.drive_recover {
+        state.observed_loadcounts.lock().unwrap().clone()
+    } else {
+        loadcounts
+    };
+    let events = state.events.lock().unwrap().clone();
+    let warning = {
+        let database = commentdb.read().unwrap();
+        let records = database
+            .comments_for_function(*fd.get_address())
+            .map(|comment| {
+                format!(
+                    "{}@{}:{}",
+                    comment.get_type(),
+                    comment.get_addr(),
+                    comment.get_text()
+                )
+            })
+            .collect::<Vec<_>>();
+        if records.is_empty() {
+            "none".to_string()
+        } else {
+            records.join(",")
+        }
+    };
+
     println!(
-        "case|id={}|path={}|kind={}|mode={}|msg={}|partial={}|override={}|recover_calls={}|build_calls={}|sanity_calls={}|addresses={}|loads={}|loadcounts={}",
+        "case|id={}|path={}|kind={}|mode={}|msg={}|partial={}|override={}|recover_calls={}|build_calls={}|sanity_calls={}|events={}|addresses={}|loads={}|loadcounts={}|warning={}",
         config.id,
         if config.drive_recover { "recover" } else { "sanity" },
         kind,
@@ -267,14 +331,20 @@ fn run_case(code: &AddrSpace, config: CaseConfig) {
         state.recover_calls.load(Ordering::Relaxed),
         state.build_calls.load(Ordering::Relaxed),
         state.sanity_calls.load(Ordering::Relaxed),
+        events_text(&events),
         addresses_text(&table.addresstable),
         loads_text(&table.loadpoints),
-        counts_text(&loadcounts),
+        counts_text(&observed_counts),
+        warning,
     );
 }
 
 fn main() {
     let code = AddrSpace::new_space(SpaceType::Processor, "ram", false, 8, 1, 3, 0, 0, 0);
+    let commentdb = Arc::new(RwLock::new(CommentDatabaseInternal::new()));
+    let mut architecture = Architecture::new();
+    architecture.commentdb = Some(commentdb.clone());
+    let architecture = Arc::new(architecture);
     const OP: u64 = 0x100000;
     let cases = vec![
         CaseConfig {
@@ -283,8 +353,9 @@ fn main() {
             unreachable: false,
             override_mode: false,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: false,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "near",
@@ -292,8 +363,9 @@ fn main() {
             unreachable: false,
             override_mode: false,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: false,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "cutoff",
@@ -301,8 +373,9 @@ fn main() {
             unreachable: false,
             override_mode: false,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: false,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "over",
@@ -310,8 +383,9 @@ fn main() {
             unreachable: false,
             override_mode: false,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: false,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "multi",
@@ -319,8 +393,9 @@ fn main() {
             unreachable: false,
             override_mode: false,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: false,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "partial",
@@ -328,8 +403,9 @@ fn main() {
             unreachable: true,
             override_mode: false,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: false,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "override",
@@ -337,8 +413,19 @@ fn main() {
             unreachable: true,
             override_mode: true,
             sanity_result: true,
-            mutate_on_reject: false,
+            mutate_during_sanity: false,
             drive_recover: true,
+            equal_address_loads: false,
+        },
+        CaseConfig {
+            id: "success_truncate",
+            target_offsets: vec![OP + 0x10, OP + 0x20],
+            unreachable: false,
+            override_mode: false,
+            sanity_result: true,
+            mutate_during_sanity: true,
+            drive_recover: true,
+            equal_address_loads: false,
         },
         CaseConfig {
             id: "model_reject",
@@ -346,12 +433,23 @@ fn main() {
             unreachable: false,
             override_mode: false,
             sanity_result: false,
-            mutate_on_reject: true,
-            drive_recover: false,
+            mutate_during_sanity: true,
+            drive_recover: true,
+            equal_address_loads: false,
+        },
+        CaseConfig {
+            id: "sort_equal_addr",
+            target_offsets: vec![OP + 0x10, OP + 0x20],
+            unreachable: false,
+            override_mode: false,
+            sanity_result: true,
+            mutate_during_sanity: false,
+            drive_recover: true,
+            equal_address_loads: true,
         },
     ];
 
     for config in cases {
-        run_case(&code, config);
+        run_case(&code, &architecture, &commentdb, config);
     }
 }

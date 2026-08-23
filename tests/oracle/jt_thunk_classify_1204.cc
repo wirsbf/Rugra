@@ -16,6 +16,7 @@
 #define class struct
 #include "architecture.hh"
 #include "block.hh"
+#include "comment.hh"
 #include "database.hh"
 #include "funcdata.hh"
 #include "jumptable.hh"
@@ -106,6 +107,7 @@ public:
     TypeOp::registerInstructions(inst,types,translate);
     symboltab = new Database(this,false);
     symboltab->attachScope(new ScopeInternal(0x101,"",this),(Scope *)0);
+    commentdb = new CommentDatabaseInternal();
     ProtoModel *model = new ProtoModel(this);
     istringstream stream("<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>");
     XmlDecode decoder(this);
@@ -121,36 +123,44 @@ struct ModelState {
   int4 recoverCalls;
   int4 buildCalls;
   int4 sanityCalls;
+  vector<int4> observedLoadcounts;
+  vector<string> events;
   ModelState(void) : recoverCalls(0), buildCalls(0), sanityCalls(0) {}
 };
 
 class FixtureModel final : public JumpModel {
   bool overrideMode;
+  bool transientOverride;
   bool sanityResult;
-  bool mutateOnReject;
+  bool mutateDuringSanity;
   AddrSpace *code;
   vector<Address> buildTargets;
   vector<LoadTable> buildLoads;
   ModelState *state;
 public:
-  FixtureModel(JumpTable *jt,bool over,bool sane,bool mutate,AddrSpace *spc,
+  FixtureModel(JumpTable *jt,bool over,bool transient,bool sane,bool mutate,AddrSpace *spc,
                const vector<Address> &targets,const vector<LoadTable> &loads,
                ModelState *st)
-    : JumpModel(jt), overrideMode(over), sanityResult(sane),
-      mutateOnReject(mutate), code(spc), buildTargets(targets),
+    : JumpModel(jt), overrideMode(over), transientOverride(transient), sanityResult(sane),
+      mutateDuringSanity(mutate), code(spc), buildTargets(targets),
       buildLoads(loads), state(st) {}
 
-  bool isOverride(void) const override { return overrideMode; }
+  bool isOverride(void) const override
+  {
+    return overrideMode || (transientOverride && state->recoverCalls == 0);
+  }
   int4 getTableSize(void) const override { return buildTargets.size(); }
   bool recoverModel(Funcdata *,PcodeOp *,uint4,uint4) override
   {
     state->recoverCalls += 1;
+    state->events.push_back("recover");
     return true;
   }
   void buildAddresses(Funcdata *,PcodeOp *,vector<Address> &addresses,
                       vector<LoadTable> *loads,vector<int4> *loadcounts) const override
   {
     state->buildCalls += 1;
+    state->events.push_back("build");
     addresses = buildTargets;
     if (loads != (vector<LoadTable> *)0)
       loads->insert(loads->end(),buildLoads.begin(),buildLoads.end());
@@ -158,6 +168,7 @@ public:
       int4 count = (loads == (vector<LoadTable> *)0) ? 0 : loads->size();
       for(size_t i=0;i<buildTargets.size();++i)
         loadcounts->push_back(count);
+      state->observedLoadcounts = *loadcounts;
     }
   }
   void findUnnormalized(uint4,uint4,uint4) override {}
@@ -168,18 +179,21 @@ public:
                    vector<LoadTable> &loads,vector<int4> *loadcounts) override
   {
     state->sanityCalls += 1;
-    if (mutateOnReject) {
+    state->events.push_back("sanity");
+    if (mutateDuringSanity) {
       if (addresses.size() > 1)
         addresses.resize(1);
       loads.push_back(LoadTable(Address(code,0x3008),4));
       if (loadcounts != (vector<int4> *)0)
         loadcounts->push_back(7);
     }
+    if (loadcounts != (vector<int4> *)0)
+      state->observedLoadcounts = *loadcounts;
     return sanityResult;
   }
   JumpModel *clone(JumpTable *jt) const override
   {
-    return new FixtureModel(jt,overrideMode,sanityResult,mutateOnReject,
+    return new FixtureModel(jt,overrideMode,transientOverride,sanityResult,mutateDuringSanity,
                             code,buildTargets,buildLoads,state);
   }
 };
@@ -190,8 +204,9 @@ struct CaseConfig {
   bool unreachable;
   bool overrideMode;
   bool sanityResult;
-  bool mutateOnReject;
+  bool mutateDuringSanity;
   bool driveRecover;
+  bool equalAddressLoads;
 };
 
 static string addressesText(const vector<Address> &addresses)
@@ -225,6 +240,30 @@ static string countsText(const vector<int4> &counts)
   return s.str();
 }
 
+static string eventsText(const vector<string> &events)
+{
+  ostringstream s;
+  for(size_t i=0;i<events.size();++i) {
+    if (i != 0) s << '>';
+    s << events[i];
+  }
+  return s.str();
+}
+
+static string warningsText(const CommentDatabase *commentdb,const Address &functionAddress)
+{
+  ostringstream s;
+  CommentSet::const_iterator iter = commentdb->beginComment(functionAddress);
+  CommentSet::const_iterator enditer = commentdb->endComment(functionAddress);
+  for(;iter!=enditer;++iter) {
+    if (iter != commentdb->beginComment(functionAddress)) s << ',';
+    s << (*iter)->getType() << '@';
+    (*iter)->getAddr().printRaw(s);
+    s << ':' << (*iter)->getText();
+  }
+  return s.str();
+}
+
 static PcodeOp *buildIndirect(Funcdata &fd,AddrSpace *code,bool unreachable,uintb opOffset)
 {
   BlockGraph &graph = const_cast<BlockGraph &>(fd.getBasicBlocks());
@@ -250,6 +289,7 @@ static PcodeOp *buildIndirect(Funcdata &fd,AddrSpace *code,bool unreachable,uint
 static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
 {
   const uintb opOffset = 0x100000;
+  architecture.commentdb->clear();
   AddrSpace *code = architecture.getSpace(3);
   Scope *global = architecture.symboltab->getGlobalScope();
   Funcdata fd(config.id,config.id,global,Address(code,0x90000),
@@ -260,8 +300,15 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
   for(size_t i=0;i<config.targetOffsets.size();++i)
     targets.push_back(Address(code,config.targetOffsets[i]));
   vector<LoadTable> initialLoads;
-  initialLoads.push_back(LoadTable(Address(code,0x3004),4));
-  initialLoads.push_back(LoadTable(Address(code,0x3000),4));
+  if (config.equalAddressLoads) {
+    initialLoads.push_back(LoadTable(Address(code,0x4000),8,2));
+    initialLoads.push_back(LoadTable(Address(code,0x4000),4,3));
+    initialLoads.push_back(LoadTable(Address(code,0x4010),8,1));
+  }
+  else {
+    initialLoads.push_back(LoadTable(Address(code,0x3004),4));
+    initialLoads.push_back(LoadTable(Address(code,0x3000),4));
+  }
   vector<int4> loadcounts;
   loadcounts.push_back(1);
   loadcounts.push_back(2);
@@ -269,8 +316,9 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
   JumpTable table(&architecture);
   table.setIndirectOp(indirect);
   ModelState state;
-  table.jmodel = new FixtureModel(&table,config.overrideMode,config.sanityResult,
-                                  config.mutateOnReject,code,targets,initialLoads,&state);
+  table.jmodel = new FixtureModel(&table,config.overrideMode,
+                                  config.driveRecover && !config.overrideMode,config.sanityResult,
+                                  config.mutateDuringSanity,code,targets,initialLoads,&state);
   table.addresstable = config.driveRecover ? vector<Address>() : targets;
   table.loadpoints = config.driveRecover ? vector<LoadTable>() : initialLoads;
   table.collectloads = config.driveRecover;
@@ -279,8 +327,10 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
   string message = "none";
   int4 mode = JumpTable::success;
   try {
-    if (config.driveRecover)
+    if (config.driveRecover) {
       table.recoverAddresses(&fd);
+      state.events.push_back("collapse");
+    }
     else
       table.sanityCheck(&fd,&loadcounts);
   }
@@ -295,6 +345,11 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
     mode = JumpTable::fail_normal;
   }
 
+  const vector<int4> &observedCounts = config.driveRecover
+      ? state.observedLoadcounts : loadcounts;
+  string warnings = warningsText(architecture.commentdb,fd.getAddress());
+  if (warnings.empty()) warnings = "none";
+
   cout << "case|id=" << config.id
        << "|path=" << (config.driveRecover ? "recover" : "sanity")
        << "|kind=" << kind
@@ -305,9 +360,11 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
        << "|recover_calls=" << state.recoverCalls
        << "|build_calls=" << state.buildCalls
        << "|sanity_calls=" << state.sanityCalls
+       << "|events=" << eventsText(state.events)
        << "|addresses=" << addressesText(table.addresstable)
        << "|loads=" << loadsText(table.loadpoints)
-       << "|loadcounts=" << countsText(loadcounts)
+       << "|loadcounts=" << countsText(observedCounts)
+       << "|warning=" << warnings
        << '\n';
 }
 
@@ -316,14 +373,16 @@ static void run(void)
   FixtureArchitecture architecture;
   const uintb op = 0x100000;
   const CaseConfig cases[] = {
-    { "zero",       { 0 },                 false, false, true,  false, false },
-    { "near",       { op + 0x20 },         false, false, true,  false, false },
-    { "cutoff",     { op + 0xffff },       false, false, true,  false, false },
-    { "over",       { op + 0x10000 },      false, false, true,  false, false },
-    { "multi",      { 0, op + 0x20000 },   false, false, true,  false, false },
-    { "partial",    { 0 },                 true,  false, true,  false, false },
-    { "override",   { 0 },                 true,  true,  true,  false, true  },
-    { "model_reject", { op + 0x10, op + 0x20 }, false, false, false, true, false },
+    { "zero",       { 0 },                 false, false, true,  false, false, false },
+    { "near",       { op + 0x20 },         false, false, true,  false, false, false },
+    { "cutoff",     { op + 0xffff },       false, false, true,  false, false, false },
+    { "over",       { op + 0x10000 },      false, false, true,  false, false, false },
+    { "multi",      { 0, op + 0x20000 },   false, false, true,  false, false, false },
+    { "partial",    { 0 },                 true,  false, true,  false, false, false },
+    { "override",   { 0 },                 true,  true,  true,  false, true,  false },
+    { "success_truncate", { op + 0x10, op + 0x20 }, false, false, true, true, true, false },
+    { "model_reject", { op + 0x10, op + 0x20 }, false, false, false, true, true, false },
+    { "sort_equal_addr", { op + 0x10, op + 0x20 }, false, false, true, false, true, true },
   };
   for(size_t i=0;i<sizeof(cases)/sizeof(cases[0]);++i)
     runCase(architecture,cases[i]);

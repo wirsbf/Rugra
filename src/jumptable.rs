@@ -85,7 +85,7 @@ impl std::error::Error for JumpTableRecoveryError {}
 /// This is a generic table description, giving the starting address of the
 /// table, the size of an entry, and the number of entries.
 /// Faithful to `LoadTable` (jumptable.hh:50).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadTable {
     /// Starting address of the table.
     pub addr: Address,
@@ -108,7 +108,7 @@ impl LoadTable {
         Self { addr, size, num }
     }
 
-    // Ghidra: jumptable.cc:62 LoadTable::collapseTable
+    // Ghidra: jumptable.cc:60 LoadTable::collapseTable
     /// Sort the entries and collapse any contiguous sequences into a single
     /// `LoadTable` entry. Faithful to `LoadTable::collapseTable`
     /// (jumptable.cc:60).
@@ -138,7 +138,10 @@ impl LoadTable {
             return;
         }
 
-        table.sort();
+        // jumptable.hh:59 LoadTable::operator< compares only the Address.
+        // Equal-address entries are equivalent regardless of size/num, just
+        // as they are for C++ std::sort's strict-weak-order comparator.
+        table.sort_unstable_by(|left, right| left.addr.cmp(&right.addr));
 
         let mut count = 1;
         let mut last = 0;
@@ -4623,6 +4626,24 @@ mod tests {
         ];
         LoadTable::collapse_table(&mut table);
         assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn test_load_table_equal_address_sort_ignores_size_and_num() {
+        let mut table = vec![
+            LoadTable::new(Address::new(0x4000), 8, 2),
+            LoadTable::new(Address::new(0x4000), 4, 3),
+            LoadTable::new(Address::new(0x4010), 8, 1),
+        ];
+        LoadTable::collapse_table(&mut table);
+        assert_eq!(
+            table,
+            vec![
+                LoadTable::new(Address::new(0x4000), 8, 2),
+                LoadTable::new(Address::new(0x4000), 4, 3),
+                LoadTable::new(Address::new(0x4010), 8, 1),
+            ]
+        );
     }
 
     #[test]
