@@ -2,10 +2,12 @@
 
 **源代码路径**: `src/condexe.rs`
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
-**状态**: 🔧 **L2（2026-08-23 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002，2026-08-23 集成）与
-pullbackOp storage/插入位置（CONDEXE-PULLBACK-0005，2026-08-23，`condexe_pullback_1204`
-5/5 MATCH）已对齐；`remove_from_flow_split` 映射相反且一支可越界（CFG-0001）、
-Action guard/count/stage 与异常路径仍未对齐，故保持 L2。
+**状态**: 🔧 **L2（2026-08-23 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002）、
+pullbackOp storage/插入位置（CONDEXE-PULLBACK-0005，`condexe_pullback_1204`
+5/5 MATCH）与错误通道（CONDEXE-ERROR-0006，resolve 链 Result 化 + 逐字
+LowlevelError + doReplacement 死循环消灭，`condexe_error_1204` 3/3 MATCH）已对齐；
+`remove_from_flow_split` 映射相反且一支可越界（CFG-0001）、Action
+guard/count/stage 仍未对齐，故保持 L2。
 
 ## 模块说明
 
@@ -45,15 +47,15 @@ postb），并通过把读推入正确路径来保留 MULTIEQUAL 数据流。
 | `test_removability` | 361 | iblock 内 op 是否可移除 |
 | `verify` | 402 | 完整配置验证 + 所有 op 可移除性检查 |
 | `find_pullback` | 146 | 查找已构造的 pull-back |
-| `pullback_op` | 160 | 将 iblock 内 op 复制到前驱块（MULTIEQUAL slot 选择） |
-| `get_new_multi` | 198 | 在给定块创建 MULTIEQUAL 持有数据流 |
-| `resolve_read` | 224 | 计算通过任意块的读的替换 Varnode |
-| `resolve_iblock_read` | 242 | 计算通过 iblock 的读的替换 |
-| `get_multiequal_read` | 270 | MULTIEQUAL 读的替换 |
-| `get_replacement_read` | 291 | 块的替换 Varnode（缓存 + 支配者回溯） |
-| `do_replacement` | 320 | 重写给定 iblock op 的数据流 |
+| `pullback_op` | 160 | 将 iblock 内 op 复制到前驱块（MULTIEQUAL slot 选择）；Result 化（Err=结构不变量守卫，oracle 无失败路径） |
+| `get_new_multi` | 198 | 在给定块创建 MULTIEQUAL 持有数据流；Result 化（同上） |
+| `resolve_read` | 224 | 计算通过任意块的读的替换 Varnode；Result 化 |
+| `resolve_iblock_read` | 242 | 计算通过 iblock 的读的替换；**Err = 逐字 `LowlevelError("Conditional execution: Illegal op in iblock")`（condexe.cc:261）** |
+| `get_multiequal_read` | 270 | MULTIEQUAL 读的替换；Result 化 |
+| `get_replacement_read` | 291 | 块的替换 Varnode（缓存 + 支配者回溯）；**Err = 逐字 `LowlevelError("Conditional execution: Could not find dominator")`（condexe.cc:303）** |
+| `do_replacement` | 320 | 重写给定 iblock op 的数据流；Result 化（每轮必删一个后继或上抛 Err，无静默跳过） |
 | `trial` | 448 | 测试给定块是否为可修改的 iblock |
-| `execute` | 457 | 消除 iblock 的不必要路径汇合（op_destroy + remove_from_flow_split） |
+| `execute` | 457 | 消除 iblock 的不必要路径汇合；**`Result<()>`——doReplacement/removeFromFlowSplit 的 LowlevelError 上抛（apply 异常中断协议）** |
 
 ### BooleanMatch / BooleanExpressionMatch（expression.cc:57-232）
 
@@ -140,6 +142,60 @@ cc:131-133、free/常量 input 0 拒绝 cc:135-136）。14/14 记录双侧字节
 交互未投影（fixture metadata `residual_union`）；doReplacement RETURN 腿的
 newVarnodeOut 地址保留（condexe.cc:340-349）留待同一后续任务。
 
+## 2026-08-23（CONDEXE-ERROR-0006）：错误通道对齐（resolve 链 Result 化）
+
+审计（CONDEXE_GAPS_2026-08-22.md §1 #11/#13/#14/#19, §2.3 缺陷 E）定位的三处缺陷修复：
+
+1. **resolve/verify 链 Result 化，错误逐字对应 Ghidra throw**：
+   - `resolve_iblock_read`：非法 iblock op（含 COPY 的 input 0 被非 iblock
+     MULTIEQUAL 的 op 写入的 fall-through 腿）→ `Error::Lowlevel(
+     "Conditional execution: Illegal op in iblock")`（condexe.cc:261 逐字）。
+     旧代码此处静默 `None`。
+   - `get_replacement_read`：支配者链走出图仍未到 iblock → `Error::Lowlevel(
+     "Conditional execution: Could not find dominator")`（condexe.cc:303 逐字）。
+     旧代码此处静默 `None`。
+   - Ghidra 中不可达的空指针路径（`op->getIn(0)`/`getDef()`/`getOut()`/
+     `getImmedDom()` 解引用，oracle 里是 UB 崩溃而非 LowlevelError）映射为
+     `structural()` 助手产生的 `Error::Generic`（RUGRA-GLUE，消息明确标注
+     "no oracle counterpart"），与 oracle 可达错误严格区分。
+2. **do_replacement 死循环消灭**：oracle 的循环不变量是每轮恰好移除一个后继
+   （iblock 内 `opUnsetInput`，否则 `opSetInput`，cc:333/352），resolve 链要么
+   给 Varnode 要么 throw，不存在静默跳过。旧 Rust 代码 `rvn == None` 时跳过
+   `op_set_input` → 后继表不收缩 → `descends[0]` 永远是同一 readop → 死循环。
+   现重写为与 cc:320-357 同构：先算 `rvn`（可上抛 Err，保留部分状态），成功则
+   必定 set/unset input（保证前进），slot 丢失映射为 structural Err。
+   RETURN 腿（cc:339-349）保持 oracle 的调用顺序：先建 COPY + 替换 RETURN
+   input[1] + 插入，**再** `get_replacement_read`（此处上抛时 newcopy 无
+   input 0 落地 = oracle throw 后的部分状态）。
+3. **Err 不丢弃——execute/apply 返回协议**：`execute` 改 `Result<()>`，
+   `doReplacement` 的 Err 经 `?` 上抛；`remove_from_flow_split` 的
+   `Result<(), String>` 不再 `let _ =` 丢弃，在调用边界映射为
+   `Error::Lowlevel(msg)`（oracle 侧 Funcdata::removeFromFlowSplit 对非空块
+   `throw LowlevelError("Can only split the flow for an empty block")`，
+   funcdata_block.cc:884-885，异常同样穿透 execute/apply）。
+   `ActionConditionalExe::apply` 用 `condexe.execute()?` 上抛——对应 oracle 的
+   异常中断行为：apply 永不返回，整个反编译管线中止本函数，Funcdata 停留在
+   部分变换状态（已 destroy 的 iblock op 保持 destroyed、出错 op 存活、
+   removeFromFlowSplit 未执行）。Rust 侧 `ActionGroup::apply` 对 `?` 中止
+   （action.rs），语义等价。
+   **RESIDUAL CFG-0001**：Rugra `funcdata.rs remove_from_flow_split` 的 Err
+   消息文本仍是 Rugra 侧文案（"remove_from_flow_split: block must be empty"
+   ≠ oracle 逐字文本）且 swap 映射未修——该文件归 CFG-0001 租约，错误路径
+   在此只做到调用边界并如实登记。
+
+**fixture**：`tests/oracle/condexe_error_1204`（.cc/.rs/.metadata.json）+
+`tools/run_condexe_error_oracle.sh`（pin-base schema2，base e6b4ec0 + 单
+src/condexe.rs overlay）。经 `ActionConditionalExe::apply` 全协议驱动三类错误：
+E1 非法 iblock op（cc:261）、E2 断链 dominator（cc:303）、E3 verify 失败
+（条件不相关 → trial false → apply 正常返回 0、零状态变化）。E1/E2 双侧断言
+逐字错误消息 + 中止点部分状态（逐块 op 存量、iblock 仍在图中 2in/2out、
+出错 op 存活、其后继读未动）；E1 输入同时是死循环回归（旧代码该输入死循环）。
+6/6 记录双侧字节一致。
+
+**新增单元测试**：`test_apply_aborts_illegal_iblock_op`、
+`test_apply_aborts_missing_dominator`（逐字消息 + 部分状态 + 终止性）、
+`test_apply_verify_failure_no_change`。
+
 ## 2026-06-27（续）：RuleOrPredicate 完整移植（condexe.cc:509-712）
 
 condexe.cc 的第二部分，一个独立的 Rule，处理谓词构造：
@@ -170,9 +226,12 @@ condexe.cc 的第二部分，一个独立的 Rule，处理谓词构造：
 
 ## 测试
 
-`condexe::tests`（9 个）：action_name、correlation_constants、varnode_same_identity、
+`condexe::tests`（14 个）：action_name、correlation_constants、varnode_same_identity、
 apply_on_empty_fd、boolean_match_same_condition、trial_rejects_unrelated_conditions、
-rule_or_predicate_rejects_plain_input、rule_or_predicate_opcodes、compare_order_basic。
+rule_or_predicate_rejects_plain_input、rule_or_predicate_opcodes、compare_order_basic、
+rule_or_predicate_trait_name_and_opcodes、rule_or_predicate_trait_apply_no_form、
+apply_aborts_illegal_iblock_op、apply_aborts_missing_dominator、
+apply_verify_failure_no_change（后三个为 CONDEXE-ERROR-0006 错误通道回归）。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 
 ### 2026-07-01（管线改造）：ActionConditionalExe apply &self→&mut self

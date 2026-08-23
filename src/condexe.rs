@@ -30,7 +30,7 @@
 
 use crate::action::{Action, Rule, action_status};
 use crate::funcdata::Funcdata;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::opcodes::OpCode;
 use std::sync::{Arc, RwLock};
 use crate::op::{PcodeOp, PcodeOpRef};
@@ -43,6 +43,22 @@ use crate::varnode::Varnode;
 /// Arc, not the underlying op.
 fn opref(a: &Arc<RwLock<PcodeOp>>) -> PcodeOpRef {
     PcodeOpRef(a.clone())
+}
+
+// RUGRA-GLUE: structural-invariant error (no Ghidra counterpart path)
+/// Ghidra's condexe data-flow rewrite dereferences pointers unconditionally
+/// (`op->getIn(0)`, `vn->getDef()`, `op->getOut()`, `iblock->getImmedDom()`,
+/// condexe.cc:166/172/181/202/274/325) — for IR that passed `verify()` those
+/// are never null, and a null would be undefined behaviour (crash), not a
+/// `LowlevelError`. Rugra's split Arc/Weak model makes those states
+/// representable, so this helper converts them into a clearly-marked,
+/// terminating internal error instead of UB or a silent skip. Oracle-reachable
+/// failures use `Error::Lowlevel` with the verbatim oracle message instead
+/// (see `resolve_iblock_read` / `get_replacement_read`).
+fn structural(detail: &str) -> Error {
+    Error::Generic(format!(
+        "condexe: structural invariant violated (no oracle counterpart): {detail}"
+    ))
 }
 
 /// Correlation between the initblock and iblock CBRANCH booleans.
@@ -433,35 +449,40 @@ impl<'a> ConditionalExecution<'a> {
     /// original output's address AND address space (cc:182), and is inserted
     /// at the END of the target block (cc:187), before any trailing flow-break
     /// op (funcdata_op.cc:435-446).
-    fn pullback_op(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Option<Arc<RwLock<Varnode>>> {
+    ///
+    /// The oracle function has no failure mode (no throw, no null return); the
+    /// `Err` legs here are Rugra structural-invariant guards for states the
+    /// oracle would hit as null-deref UB (see `structural`).
+    fn pullback_op(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Result<Arc<RwLock<Varnode>>> {
         // cc:163-165: cached pullback output for this inbranch wins.
-        if let Some(v) = self.find_pullback(inbranch) { return Some(v); }
+        if let Some(v) = self.find_pullback(inbranch) { return Ok(v); }
         let ib = self.iblock.clone().unwrap();
         // cc:166-179: resolve input 0 and the target block.
-        let invn = op.read().unwrap().get_in(0).cloned()?;
+        let invn = op.read().unwrap().get_in(0).cloned()
+            .ok_or_else(|| structural("pullbackOp op without input 0 (condexe.cc:166 dereferences op->getIn(0))"))?;
         let (invn, bl) = if invn.read().unwrap().is_written() {
             // cc:168-169: invn->isWritten() -> defOp = invn->getDef()
-            let defop = invn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            match defop {
-                Some(defop) => {
-                    let def_parent = defop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-                    let in_iblock = def_parent.map(|p| Arc::ptr_eq(&p, &ib)).unwrap_or(false);
-                    if in_iblock {
-                        // cc:170-173: defOp in iblock (must be MULTIEQUAL):
-                        //   bl = iblock->getIn(inbranch); invn = defOp->getIn(inbranch)
-                        let sel = defop.read().unwrap().get_in(inbranch).cloned()?;
-                        let bl = ib.read().unwrap().get_in(inbranch).map(|e| e.point)?;
-                        (sel, bl)
-                    } else {
-                        // cc:174-175: bl = iblock->getImmedDom()
-                        (invn, self.immed_dom_of(&ib)?)
-                    }
-                }
-                None => (invn.clone(), self.immed_dom_of(&ib)?),
+            let defop = invn.read().unwrap().def.as_ref().and_then(|w| w.upgrade())
+                .ok_or_else(|| structural("pullbackOp written input without def (condexe.cc:169 dereferences getDef())"))?;
+            let def_parent = defop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+            let in_iblock = def_parent.map(|p| Arc::ptr_eq(&p, &ib)).unwrap_or(false);
+            if in_iblock {
+                // cc:170-173: defOp in iblock (must be MULTIEQUAL):
+                //   bl = iblock->getIn(inbranch); invn = defOp->getIn(inbranch)
+                let sel = defop.read().unwrap().get_in(inbranch).cloned()
+                    .ok_or_else(|| structural("pullbackOp defOp missing inbranch input (condexe.cc:172)"))?;
+                let bl = ib.read().unwrap().get_in(inbranch).map(|e| e.point)
+                    .ok_or_else(|| structural("pullbackOp iblock missing in-branch (condexe.cc:171)"))?;
+                (sel, bl)
+            } else {
+                // cc:174-175: bl = iblock->getImmedDom()
+                (invn, self.immed_dom_of(&ib)
+                    .ok_or_else(|| structural("pullbackOp iblock without immediate dominator (condexe.cc:175/178)"))?)
             }
         } else {
             // cc:177-179: not written -> bl = iblock->getImmedDom()
-            (invn.clone(), self.immed_dom_of(&ib)?)
+            (invn.clone(), self.immed_dom_of(&ib)
+                .ok_or_else(|| structural("pullbackOp iblock without immediate dominator (condexe.cc:178)"))?)
         };
         // cc:180: newOp = fd->newOp(op->numInput(), op->getAddr())
         let (n_in, pc, opcode) = {
@@ -471,7 +492,8 @@ impl<'a> ConditionalExecution<'a> {
         let new_op = self.fd.new_op(n_in, pc);
         // cc:181-182: outVn = fd->newVarnodeOut(origOutVn->getSize(),
         //                                     origOutVn->getAddr(), newOp)
-        let orig_out = op.read().unwrap().output.clone()?;
+        let orig_out = op.read().unwrap().output.clone()
+            .ok_or_else(|| structural("pullbackOp op without output (condexe.cc:181-182 dereferences op->getOut())"))?;
         let (out_size, out_space, out_offset) = {
             let r = orig_out.read().unwrap();
             (r.get_size(), r.get_space(), r.get_offset())
@@ -493,7 +515,7 @@ impl<'a> ConditionalExecution<'a> {
         while self.pullback.len() <= inbranch { self.pullback.push(None); }
         self.pullback[inbranch] = Some(new_out.clone());
         // cc:189: return outVn
-        Some(new_out)
+        Ok(new_out)
     }
 
     // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
@@ -538,10 +560,12 @@ impl<'a> ConditionalExecution<'a> {
     }
 
     // Ghidra: condexe.cc:198 ConditionalExecution::getNewMulti
-    /// getNewMulti (condexe.cc:198-217).
-    fn get_new_multi(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<Varnode>>> {
+    /// getNewMulti (condexe.cc:198-217). The oracle has no failure mode; the
+    /// `Err` legs are Rugra structural-invariant guards (see `structural`).
+    fn get_new_multi(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Result<Arc<RwLock<Varnode>>> {
         let outvn_size = op.read().unwrap().output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
-        let outvn = op.read().unwrap().output.clone()?;
+        let outvn = op.read().unwrap().output.clone()
+            .ok_or_else(|| structural("getNewMulti op without output (condexe.cc:202 dereferences op->getOut())"))?;
         let start = bl.read().unwrap().get_start_addr();
         let n_in = bl.read().unwrap().size_in();
         let newop = self.fd.new_op(n_in, start);
@@ -551,12 +575,14 @@ impl<'a> ConditionalExecution<'a> {
             self.fd.op_set_input(&newop, outvn.clone(), i);
         }
         self.fd.op_insert_begin(&newop, bl);
-        Some(newoutvn)
+        Ok(newoutvn)
     }
 
     // Ghidra: condexe.cc:224 ConditionalExecution::resolveRead
-    /// resolveRead (condexe.cc:224-237).
-    fn resolve_read(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<Varnode>>> {
+    /// resolveRead (condexe.cc:224-237). `Err` propagates the
+    /// `resolveIblockRead` LowlevelError verbatim; structural legs are
+    /// Rugra-invariant guards (see `structural`).
+    fn resolve_read(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Result<Arc<RwLock<Varnode>>> {
         let sin = bl.read().unwrap().size_in();
         if sin == 1 {
             // dominator is iblock; In(0) is iblock. Figure which side we came
@@ -565,7 +591,9 @@ impl<'a> ConditionalExecution<'a> {
                 let r = bl.read().unwrap();
                 if let Some(bb) = r.as_any().downcast_ref::<BlockBasic>() {
                     bb.get_in_rev_index(0)
-                } else { return None; }
+                } else {
+                    return Err(structural("resolveRead reader block is not a BlockBasic (condexe.cc:231 calls getInRevIndex on BlockBasic)"));
+                }
             };
             let slot = if rev0 == self.posta_outslot { self.camethruposta_slot } else { 1 - self.camethruposta_slot };
             self.resolve_iblock_read(op, slot as usize)
@@ -575,44 +603,60 @@ impl<'a> ConditionalExecution<'a> {
     }
 
     // Ghidra: condexe.cc:242 ConditionalExecution::resolveIblockRead
-    /// resolveIblockRead (condexe.cc:242-262).
-    fn resolve_iblock_read(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Option<Arc<RwLock<Varnode>>> {
-        let opcode = op.read().unwrap().opcode;
-        if opcode == OpCode::CPUI_COPY {
-            let vn = op.read().unwrap().get_in(0).cloned()?;
+    /// resolveIblockRead (condexe.cc:242-262). Falls through to the oracle's
+    /// terminating failure: `throw LowlevelError("Conditional execution:
+    /// Illegal op in iblock")` (condexe.cc:261) — reproduced verbatim as
+    /// `Error::Lowlevel`. In particular a COPY whose input 0 is written by
+    /// anything other than a MULTIEQUAL in the iblock keeps `op` unchanged
+    /// (cc:249-250) and reaches the throw through the `CPUI_COPY` fall-through,
+    /// exactly like the oracle (the old Rugra code silently returned `None`
+    /// here, which do_replacement then skipped, looping forever).
+    fn resolve_iblock_read(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Result<Arc<RwLock<Varnode>>> {
+        let mut op = op.clone();
+        if op.read().unwrap().opcode == OpCode::CPUI_COPY {
+            let vn = op.read().unwrap().get_in(0).cloned()
+                .ok_or_else(|| structural("resolveIblockRead COPY without input 0 (condexe.cc:246 dereferences op->getIn(0))"))?;
             let written = vn.read().unwrap().is_written();
             if written {
-                let defop = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade())?;
+                let defop = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade())
+                    .ok_or_else(|| structural("resolveIblockRead written varnode without def (condexe.cc:248 dereferences getDef())"))?;
                 let def_code = defop.read().unwrap().opcode;
                 if def_code == OpCode::CPUI_MULTIEQUAL {
                     let ib = self.iblock.clone().unwrap();
                     let def_parent = defop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-                    if let Some(p) = &def_parent {
-                        if Arc::ptr_eq(p, &ib) {
-                            return defop.read().unwrap().get_in(inbranch).cloned();
-                        }
+                    if def_parent.as_ref().map(|p| Arc::ptr_eq(p, &ib)).unwrap_or(false) {
+                        op = defop; // cc:250: op = defOp
                     }
                 }
-                return None;
             } else {
-                return Some(vn);
+                return Ok(vn); // cc:253: unwritten input flows straight through
             }
         }
-        if opcode == OpCode::CPUI_MULTIEQUAL {
-            return op.read().unwrap().get_in(inbranch).cloned();
+        let opc = op.read().unwrap().opcode;
+        if opc == OpCode::CPUI_MULTIEQUAL {
+            return op.read().unwrap().get_in(inbranch).cloned()
+                .ok_or_else(|| structural("resolveIblockRead MULTIEQUAL missing inbranch input (condexe.cc:257)"));
         }
-        if opcode == OpCode::CPUI_SUBPIECE || opcode == OpCode::CPUI_INT_ADD || opcode == OpCode::CPUI_PTRSUB {
-            return self.pullback_op(op, inbranch);
+        if opc == OpCode::CPUI_SUBPIECE || opc == OpCode::CPUI_INT_ADD || opc == OpCode::CPUI_PTRSUB {
+            return self.pullback_op(&op, inbranch);
         }
-        None
+        // condexe.cc:261: throw LowlevelError("Conditional execution: Illegal
+        // op in iblock") — verbatim oracle message.
+        Err(Error::Lowlevel(
+            "Conditional execution: Illegal op in iblock".to_string(),
+        ))
     }
 
     // Ghidra: condexe.cc:270 ConditionalExecution::getMultiequalRead
-    /// getMultiequalRead (condexe.cc:270-279).
-    fn get_multiequal_read(&mut self, op: &Arc<RwLock<PcodeOp>>, readop: &Arc<RwLock<PcodeOp>>, slot: usize) -> Option<Arc<RwLock<Varnode>>> {
-        let read_parent = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade())?;
+    /// getMultiequalRead (condexe.cc:270-279). `Err` propagates the resolve
+    /// chain's LowlevelError verbatim; structural legs are Rugra-invariant
+    /// guards (see `structural`).
+    fn get_multiequal_read(&mut self, op: &Arc<RwLock<PcodeOp>>, readop: &Arc<RwLock<PcodeOp>>, slot: usize) -> Result<Arc<RwLock<Varnode>>> {
+        let read_parent = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade())
+            .ok_or_else(|| structural("getMultiequalRead readop without parent (condexe.cc:273 dereferences getParent())"))?;
         let bl = read_parent;
-        let inbl = bl.read().unwrap().get_in(slot).map(|e| e.point)?;
+        let inbl = bl.read().unwrap().get_in(slot).map(|e| e.point)
+            .ok_or_else(|| structural("getMultiequalRead reader block missing in-edge (condexe.cc:274 dereferences getIn(slot))"))?;
         let ib = self.iblock.clone().unwrap();
         if !Arc::ptr_eq(&inbl, &ib) {
             return self.get_replacement_read(op, &inbl);
@@ -621,125 +665,161 @@ impl<'a> ConditionalExecution<'a> {
             let r = bl.read().unwrap();
             if let Some(bb) = r.as_any().downcast_ref::<BlockBasic>() {
                 bb.get_in_rev_index(slot)
-            } else { return None; }
+            } else {
+                return Err(structural("getMultiequalRead reader block is not a BlockBasic (condexe.cc:277 calls getInRevIndex on BlockBasic)"));
+            }
         };
         let s = if rev == self.posta_outslot { self.camethruposta_slot } else { 1 - self.camethruposta_slot };
         self.resolve_iblock_read(op, s as usize)
     }
 
     // Ghidra: condexe.cc:291 ConditionalExecution::getReplacementRead
-    /// getReplacementRead (condexe.cc:291-315).
-    fn get_replacement_read(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<Varnode>>> {
+    /// getReplacementRead (condexe.cc:291-315). The dominator-chain walk
+    /// reproduces the oracle's terminating failure:
+    /// `throw LowlevelError("Conditional execution: Could not find dominator")`
+    /// (condexe.cc:303) — verbatim as `Error::Lowlevel` — when the chain
+    /// exhausts before reaching a block dominated by the iblock (the old Rust
+    /// code silently returned `None` here).
+    fn get_replacement_read(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Result<Arc<RwLock<Varnode>>> {
         let bl_idx = bl.read().unwrap().get_index();
-        if let Some(v) = self.replacement.get(&bl_idx).cloned() { return Some(v); }
-        // Walk up dominators until we reach a block dominated by iblock.
+        if let Some(v) = self.replacement.get(&bl_idx).cloned() { return Ok(v); }
+        // Walk up dominators until we reach a block dominated by iblock
+        // (cc:300-304: while(curbl->getImmedDom() != iblock) { curbl = ...;
+        // if (curbl == 0) throw ...; }).
         let ib = self.iblock.clone().unwrap();
-        let mut curbl_idx;
         let mut curbl = bl.clone();
         loop {
             let curdom = self.immed_dom_of(&curbl);
             match curdom {
-                Some(d) if Arc::ptr_eq(&d, &ib) => {
-                    curbl_idx = curbl.read().unwrap().get_index();
-                    break;
-                }
+                Some(d) if Arc::ptr_eq(&d, &ib) => break,
                 Some(d) => { curbl = d; }
-                None => return None,
+                // condexe.cc:303: the chain left the graph without passing
+                // through iblock — verbatim oracle message.
+                None => return Err(Error::Lowlevel(
+                    "Conditional execution: Could not find dominator".to_string(),
+                )),
             }
         }
         let cur_idx_key = curbl.read().unwrap().get_index();
         if let Some(v) = self.replacement.get(&cur_idx_key).cloned() {
             self.replacement.insert(bl_idx, v.clone());
-            return Some(v);
+            return Ok(v);
         }
         let res = self.resolve_read(op, &curbl)?;
         self.replacement.insert(cur_idx_key, res.clone());
-        if curbl_idx != bl_idx {
+        if cur_idx_key != bl_idx {
             self.replacement.insert(bl_idx, res.clone());
         }
-        Some(res)
+        Ok(res)
     }
 
     // Ghidra: condexe.cc:320 ConditionalExecution::doReplacement
-    /// doReplacement (condexe.cc:320-357).
-    fn do_replacement(&mut self, op: &Arc<RwLock<PcodeOp>>) {
+    /// doReplacement (condexe.cc:320-357). Result-ized: the oracle has no
+    /// silent-skip path — every loop iteration removes exactly one descendant
+    /// of `op->getOut()` (`opUnsetInput` in the iblock, `opSetInput`
+    /// everywhere else, cc:333/352), and the resolve chain either returns a
+    /// Varnode or throws `LowlevelError`, which unwinds out of `apply` with
+    /// the partial state accumulated so far. The old Rust code returned
+    /// `None` from the resolve chain, skipped the `op_set_input`, and re-fetched
+    /// the same first descendant forever (death loop); now any failure is an
+    /// `Err` that propagates, so the loop always terminates.
+    fn do_replacement(&mut self, op: &Arc<RwLock<PcodeOp>>) -> Result<()> {
         self.replacement.clear();
         self.pullback.clear();
-        let vn = match op.read().unwrap().output.clone() { Some(o) => o, None => return };
-        // Process each descendant. Because replacing an input may invalidate
-        // the descendant list, re-fetch it each iteration (Ghidra resets the
-        // iterator to beginDescend()).
+        let vn = match op.read().unwrap().output.clone() {
+            Some(vn) => vn,
+            // condexe.cc:325-326 dereferences op->getOut() unconditionally;
+            // a null output is UB there. Every caller passes ops that passed
+            // testRemovability, which requires a non-null output
+            // (condexe.cc:382-394). Defensive no-op instead of UB.
+            None => return Ok(()),
+        };
+        // Process each descendant. Ghidra resets the iterator to
+        // beginDescend() after every pass (cc:355) because replacing an input
+        // mutates the descendant list; the loop ends when the last descendant
+        // is gone.
         loop {
-            let descends: Vec<Arc<RwLock<PcodeOp>>> =
-                vn.read().unwrap().descend_iter().collect();
-            if descends.is_empty() { break; }
-            let readop = descends[0].clone();
-            // Find the slot in readop that reads vn.
+            let readop = match vn.read().unwrap().descend_iter().next() {
+                Some(r) => r,
+                None => break,
+            };
+            // cc:329: slot = readop->getSlot(vn) (op.hh:166 returns
+            // inrefs.size() when absent — a state Ghidra would use as an
+            // out-of-range slot, i.e. UB; guarded structurally here).
             let slot = (0..readop.read().unwrap().num_input())
                 .find(|&i| {
                     readop.read().unwrap().get_in(i)
                         .map(|v| Arc::ptr_eq(v, &vn)).unwrap_or(false)
                 });
+            // cc:330: bl = readop->getParent() — captured BEFORE the RETURN
+            // leg reassigns readop (cc:346).
             let read_parent = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
             let ib = self.iblock.clone().unwrap();
             let in_iblock = read_parent.as_ref().map(|p| Arc::ptr_eq(p, &ib)).unwrap_or(false);
-            match (slot, in_iblock) {
-                (Some(s), true) => {
-                    // Unset the input directly.
-                    let r = opref(&readop);
-                    self.fd.op_unset_input(&r, s);
-                }
-                (Some(s), false) => {
-                    let read_code = readop.read().unwrap().opcode;
-                    let rvn = if read_code == OpCode::CPUI_MULTIEQUAL {
-                        self.get_multiequal_read(op, &readop, s)
-                    } else if read_code == OpCode::CPUI_RETURN {
-                        // Ghidra cc:339-349: Cannot replace RETURN input directly;
-                        // create a COPY to hold the input.
-                        let retvn = readop.read().unwrap().get_in(1).cloned();
-                        if let Some(retvn) = retvn {
-                            let pc = readop.read().unwrap().get_addr();
-                            let (size, retvn_addr) = {
-                                let r = retvn.read().unwrap();
-                                (r.get_size(), r.loc)
-                            };
-                            let newcopy = self.fd.new_op(1, pc);
-                            self.fd.op_set_opcode(&newcopy, OpCode::CPUI_COPY);
-                            // Ghidra cc:343: outvn = newVarnodeOut(retvn->getSize(),
-                            //   retvn->getAddr(), newcopyop) — preserve RETURN storage addr.
-                            let outvn = self.fd.new_varnode_out(size, retvn_addr, &newcopy);
-                            // Ghidra cc:344: opSetInput(readop, outvn, 1) —
-                            // RETURN input[1] = COPY output (NOT retvn!).
-                            let r_readop = opref(&readop);
-                            self.fd.op_set_input(&r_readop, outvn.clone(), 1);
-                            // Ghidra cc:345: opInsertBefore(newcopyop, readop).
-                            self.fd.op_insert_before(&newcopy, &r_readop);
-                            // Ghidra cc:346-348: readop = newcopyop; slot = 0;
-                            //   rvn = getReplacementRead(op, bl).
-                            let rp = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-                            if let Some(rp) = rp {
-                                let rvn2 = self.get_replacement_read(op, &rp);
-                                if let Some(rvn2) = rvn2 {
-                                    self.fd.op_set_input(&newcopy, rvn2, 0);
-                                }
-                            }
-                        }
-                        None
-                    } else {
-                        let rp = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-                        match rp {
-                            Some(rp) => self.get_replacement_read(op, &rp),
-                            None => None,
-                        }
+            if in_iblock {
+                // cc:332-334: the read is inside the iblock itself — drop the
+                // input slot entirely.
+                let s = slot.ok_or_else(|| structural("doReplacement descendant does not list the output as an input (condexe.cc:329 getSlot))"))?;
+                let r = opref(&readop);
+                self.fd.op_unset_input(&r, s);
+            } else {
+                let read_code = readop.read().unwrap().opcode;
+                let readop_ref = opref(&readop);
+                if read_code == OpCode::CPUI_MULTIEQUAL {
+                    // cc:336-337: rvn = getMultiequalRead(op, readop, slot).
+                    let s = slot.ok_or_else(|| structural("doReplacement MULTIEQUAL read without matching slot (condexe.cc:337)"))?;
+                    let rvn = self.get_multiequal_read(op, &readop, s)?;
+                    // cc:352: opSetInput(readop, rvn, slot) — removes vn from
+                    // readop's descendants; guaranteed progress.
+                    self.fd.op_set_input(&readop_ref, rvn, s);
+                } else if read_code == OpCode::CPUI_RETURN {
+                    // cc:339-349: cannot replace a RETURN input directly;
+                    // create a COPY to hold the input. Ordering is
+                    // load-bearing: if getReplacementRead below fails, the
+                    // copy op stays created and inserted with no input 0 —
+                    // the same partial state the oracle's throw leaves.
+                    let bl = read_parent
+                        .ok_or_else(|| structural("doReplacement RETURN readop without parent (condexe.cc:330 dereferences getParent())"))?;
+                    let retvn = readop.read().unwrap().get_in(1).cloned()
+                        .ok_or_else(|| structural("doReplacement RETURN without input 1 (condexe.cc:340 dereferences getIn(1))"))?;
+                    let pc = readop.read().unwrap().get_addr();
+                    let (size, retvn_addr) = {
+                        let r = retvn.read().unwrap();
+                        (r.get_size(), r.loc)
                     };
-                    if let Some(rvn) = rvn {
-                        let r_readop = opref(&readop);
-                        self.fd.op_set_input(&r_readop, rvn, s);
-                    }
+                    let newcopy = self.fd.new_op(1, pc);
+                    self.fd.op_set_opcode(&newcopy, OpCode::CPUI_COPY);
+                    // cc:343: outvn = newVarnodeOut(retvn->getSize(),
+                    //   retvn->getAddr(), newcopyop) — preserve RETURN storage addr.
+                    let outvn = self.fd.new_varnode_out(size, retvn_addr, &newcopy);
+                    // cc:344: opSetInput(readop, outvn, 1) — RETURN input[1] =
+                    // COPY output (NOT retvn!); this is what removes vn from
+                    // the RETURN's descendants.
+                    self.fd.op_set_input(&readop_ref, outvn, 1);
+                    // cc:345: opInsertBefore(newcopyop, readop).
+                    self.fd.op_insert_before(&newcopy, &readop_ref);
+                    // cc:346-348: readop = newcopyop; slot = 0;
+                    //   rvn = getReplacementRead(op, bl) — may propagate the
+                    //   dominator/illegal-op LowlevelError, leaving newcopy
+                    //   without input 0 (oracle partial state).
+                    let rvn = self.get_replacement_read(op, &bl)?;
+                    // cc:352 with the cc:346-347 reassignment:
+                    // opSetInput(newcopyop, rvn, 0).
+                    self.fd.op_set_input(&newcopy, rvn, 0);
+                } else {
+                    // cc:350-351: rvn = getReplacementRead(op, bl).
+                    let bl = read_parent
+                        .ok_or_else(|| structural("doReplacement readop without parent (condexe.cc:330 dereferences getParent())"))?;
+                    let s = slot.ok_or_else(|| structural("doReplacement read without matching slot (condexe.cc:329 getSlot)"))?;
+                    let rvn = self.get_replacement_read(op, &bl)?;
+                    // cc:352 — guaranteed progress.
+                    self.fd.op_set_input(&readop_ref, rvn, s);
                 }
-                _ => break,
             }
+            // cc:355: iter = vn->beginDescend() — re-fetch; the processed
+            // descendant is gone (progress invariant).
         }
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -757,7 +837,14 @@ impl<'a> ConditionalExecution<'a> {
     // Ghidra: condexe.cc:457 ConditionalExecution::execute
     /// Eliminate the unnecessary path join at iblock.
     /// Faithful to `ConditionalExecution::execute` (condexe.cc:457-476).
-    pub fn execute(&mut self) {
+    /// `Err` mirrors the oracle's exception protocol: a `LowlevelError` out
+    /// of `doReplacement` (illegal iblock op, cc:261; missing dominator,
+    /// cc:303) or out of `removeFromFlowSplit` ("Can only split the flow for
+    /// an empty block", funcdata_block.cc:884-885) unwinds out of execute —
+    /// and out of `ActionConditionalExe::apply` — leaving every mutation
+    /// performed so far in place (already-destroyed iblock ops stay
+    /// destroyed, the failing op survives, the flow split never happens).
+    pub fn execute(&mut self) -> Result<()> {
         let ib = self.iblock.clone().unwrap();
         // Remove ops in reverse order, skipping branches.
         let mut ops = Self::ops(&ib);
@@ -768,14 +855,23 @@ impl<'a> ConditionalExecution<'a> {
                     || o.opcode == OpCode::CPUI_BRANCHIND || o.opcode == OpCode::CPUI_RETURN
             };
             if !is_branch {
-                self.do_replacement(&op);
+                self.do_replacement(&op)?;
             }
             let r = opref(&op);
             self.fd.op_destroy(&r);
         }
         // removeFromFlowSplit: join prea->posta etc. swap = (posta_outslot != camethruposta_slot).
         let swap = self.posta_outslot != self.camethruposta_slot;
-        let _ = self.fd.remove_from_flow_split(&ib, swap);
+        // cc:475: fd->removeFromFlowSplit(...) — the oracle call throws
+        // LowlevelError on a non-empty block (funcdata_block.cc:884-885), and
+        // that exception propagates. The Err is therefore NOT discarded here
+        // (the old code did `let _ =`); it is mapped into the Lowlevel error
+        // channel at this call boundary. RESIDUAL CFG-0001: the Rugra callee
+        // (funcdata.rs remove_from_flow_split) still returns Rugra-side
+        // message text and the pre-fix swap mapping; its ownership sits with
+        // the funcdata.rs/block.rs lease and is registered as TODO CFG-0001.
+        self.fd.remove_from_flow_split(&ib, swap).map_err(Error::Lowlevel)?;
+        Ok(())
     }
 
     // RUGRA-GLUE: fixture observability for CONDEXE-TRUEOUT-0002; the locked
@@ -821,7 +917,12 @@ impl<'a> ConditionalExecution<'a> {
     // Ghidra fixture drives the same private stages through
     // #define private public (tests/oracle/condexe_pullback_1204.cc).
     /// Set iblock and run `pullbackOp` in isolation, returning the new
-    /// output Varnode. Mirrors condexe.cc:160-190 driven directly.
+    /// output Varnode. Mirrors condexe.cc:160-190 driven directly. The
+    /// underlying pullback_op is Result-typed since CONDEXE-ERROR-0006 (its
+    /// Err legs are structural-invariant guards unreachable for the valid
+    /// fixture inputs, which mirror the oracle's no-failure contract), so the
+    /// Option surface of this glue is unchanged for the pinned pullback
+    /// fixture.
     #[doc(hidden)]
     pub fn fixture_pullback_op(
         &mut self,
@@ -830,7 +931,7 @@ impl<'a> ConditionalExecution<'a> {
         inbranch: usize,
     ) -> Option<Arc<RwLock<Varnode>>> {
         self.iblock = Some(ib);
-        self.pullback_op(&op.0, inbranch)
+        self.pullback_op(&op.0, inbranch).ok()
     }
 
     // RUGRA-GLUE: fixture observability (see fixture_pullback_op).
@@ -1478,6 +1579,13 @@ impl Action for ActionConditionalExe {
     ///   - do-while outer loop until no change (cc:490-500)
     ///   - for inner loop over ALL bblocks, NO break on hit (cc:492-499)
     ///   - returns 0 (count is statistics only, cc:502)
+    /// Error protocol (CONDEXE-ERROR-0006): in the oracle a LowlevelError
+    /// thrown inside condexe.execute() (condexe.cc:261/303 via doReplacement,
+    /// funcdata_block.cc:885 via removeFromFlowSplit) unwinds straight out of
+    /// apply — the action never returns, the surrounding decompiler pipeline
+    /// aborts this function, and the Funcdata keeps its partial state. The
+    /// Rust port propagates the same failure as `Err` from apply
+    /// (ActionGroup::apply aborts on `?`, action.rs), never swallowing it.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut numhits = 0;
         loop {
@@ -1500,7 +1608,9 @@ impl Action for ActionConditionalExe {
                 };
                 if sin == 2 && sout == 2 && is_cb {
                     if condexe.trial(bb.clone()) {
-                        condexe.execute();
+                        // cc:495: condexe.execute() — an exception unwinds out
+                        // of apply in the oracle; here the Err propagates.
+                        condexe.execute()?;
                         numhits += 1;
                         changethisround = true;
                     }
@@ -1679,5 +1789,207 @@ mod tests {
         let res = <RuleOrPredicate as Rule>::apply_op(&rule, &op_arc, &mut fd).unwrap();
         // discoverZeroSlot fails on plain (non-written) inputs -> no form -> 0.
         assert_eq!(res, 0);
+    }
+
+    // ==================================================================
+    // CONDEXE-ERROR-0006: error-channel regression tests
+    // (condexe.cc:261/303 verbatim LowlevelError, death-loop fix,
+    //  execute/apply Err propagation)
+    // ==================================================================
+
+    /// Minimal verified diamond used by the error-channel tests:
+    /// b0 init [COPY bool, CBRANCH bool] -> b1/b2 prea/preb (empty) ->
+    /// b3 iblock [COPY vnY <- vnW, CBRANCH bool] -> b4 posta (reader) /
+    /// b5 postb. b6 floats and defines vnW with a COPY (input 0 of the
+    /// iblock COPY, written OUTSIDE the iblock by a non-MULTIEQUAL op —
+    /// passes testOpRead but is illegal for resolveIblockRead, condexe.cc:261).
+    /// `reader_dom_ib`: wire b4's immed_dom to b3 (legal dominator, walks to
+    /// the illegal-op throw); otherwise the reader block is undominated
+    /// (dominator chain leaves the graph, condexe.cc:303).
+    /// Returns (iblock, ib-copy-output, reader block).
+    fn build_error_diamond(
+        fd: &mut Funcdata,
+        reader_dom_ib: bool,
+    ) -> (
+        Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        Arc<RwLock<Varnode>>,
+        Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
+        use crate::address::Address;
+        let mut next_pc = 0x20000u64;
+        let mut pc = || {
+            let a = Address::new(next_pc);
+            next_pc += 8;
+            a
+        };
+        let b: Vec<_> = (0..7).map(|_| fd.create_new_block()).collect();
+        fd.bblocks.add_edge(b[0].clone(), b[1].clone());
+        fd.bblocks.add_edge(b[0].clone(), b[2].clone());
+        fd.bblocks.add_edge(b[1].clone(), b[3].clone());
+        fd.bblocks.add_edge(b[2].clone(), b[3].clone());
+        fd.bblocks.add_edge(b[3].clone(), b[4].clone());
+        fd.bblocks.add_edge(b[3].clone(), b[5].clone());
+        // Shared written boolean defined in b0, read by both CBRANCHes
+        // (BooleanExpressionMatch -> SAME, condexe.cc:88-93).
+        let boolvn = {
+            let op = fd.new_op(1, pc());
+            fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+            let out = fd.vbank.create_def_with_space(1, crate::space::AddressSpace::Unique, 0x900, &op.0);
+            op.0.write().unwrap().output = Some(out.clone());
+            let c = fd.new_constant(1, 1);
+            fd.op_set_input(&op, c, 0);
+            fd.op_insert_end(&op, &b[0]);
+            out
+        };
+        let cbranch = |fd: &mut Funcdata,
+                       blk: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+                       bv: &Arc<RwLock<Varnode>>,
+                       at: crate::address::Address| {
+            let op = fd.new_op(2, at);
+            fd.op_set_opcode(&op, OpCode::CPUI_CBRANCH);
+            let t = fd.new_constant(8, 0x4000);
+            fd.op_set_input(&op, t, 0);
+            fd.op_set_input(&op, bv.clone(), 1);
+            fd.op_insert_end(&op, blk);
+        };
+        cbranch(fd, &b[0], &boolvn, pc());
+        // b6: floating writer of vnW (outside the iblock, non-MULTIEQUAL).
+        let vn_w = {
+            let op = fd.new_op(1, pc());
+            fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+            let out = fd.vbank.create_def_with_space(4, crate::space::AddressSpace::Unique, 0x1000, &op.0);
+            op.0.write().unwrap().output = Some(out.clone());
+            let c = fd.new_constant(4, 0x41);
+            fd.op_set_input(&op, c, 0);
+            fd.op_insert_end(&op, &b[6]);
+            out
+        };
+        // b3 iblock: COPY vnY <- vnW, then CBRANCH bool.
+        let vn_y = {
+            let op = fd.new_op(1, pc());
+            fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+            let out = fd.vbank.create_def_with_space(4, crate::space::AddressSpace::Unique, 0x2000, &op.0);
+            op.0.write().unwrap().output = Some(out.clone());
+            fd.op_set_input(&op, vn_w, 0);
+            fd.op_insert_end(&op, &b[3]);
+            out
+        };
+        cbranch(fd, &b[3], &boolvn, pc());
+        // b4 posta reader: COPY reading vnY.
+        {
+            let op = fd.new_op(1, pc());
+            fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+            fd.op_set_input(&op, vn_y.clone(), 0);
+            fd.op_insert_end(&op, &b[4]);
+        }
+        if reader_dom_ib {
+            // E1 wiring: b4 is dominated by the iblock — the resolve chain
+            // reaches resolveIblockRead and hits the illegal-op throw.
+            b[4].write().unwrap().set_immed_dom(Some(Arc::downgrade(&b[3])));
+        } else {
+            // E2 wiring: b4 is dominated by the INIT block, not the iblock —
+            // the walk advances once (b4 -> b0) then leaves the graph at the
+            // entry (b0 has no dominator), exercising both the loop-advance
+            // leg and the throw (condexe.cc:303).
+            b[4].write().unwrap().set_immed_dom(Some(Arc::downgrade(&b[0])));
+        }
+        (b[3].clone(), vn_y, b[4].clone())
+    }
+
+    /// E1 (condexe.cc:261): a COPY in the iblock whose input 0 is written
+    /// outside the iblock by a non-MULTIEQUAL op passes verify()/testOpRead
+    /// but is illegal for resolveIblockRead. The oracle throws LowlevelError
+    /// ("Conditional execution: Illegal op in iblock") out of
+    /// ActionConditionalExe::apply; Rugra must return the SAME verbatim Err
+    /// (and must terminate — the pre-fix code silently skipped the
+    /// op_set_input and looped forever on the same descendant).
+    #[test]
+    fn test_apply_aborts_illegal_iblock_op() {
+        let mut fd = Funcdata::new("e1", crate::address::Address::new(0x60000), 0x100);
+        let (ib, vn_y, reader) = build_error_diamond(&mut fd, true);
+        let mut action = ActionConditionalExe::new();
+        let err = action
+            .apply(&mut fd)
+            .expect_err("illegal iblock op must abort apply");
+        match &err {
+            crate::error::Error::Lowlevel(msg) => {
+                // Verbatim oracle message, condexe.cc:261.
+                assert_eq!(msg, "Conditional execution: Illegal op in iblock");
+            }
+            other => panic!("expected Lowlevel error, got {other:?}"),
+        }
+        // Partial state, mirroring the oracle after the throw:
+        // the CBRANCH was destroyed first (execute walks in reverse), the
+        // failing COPY survives untouched, the reader still reads vnY, and
+        // the iblock is still in the graph (removeFromFlowSplit not reached).
+        let ib_ops: Vec<String> = {
+            let ops = ib.read().unwrap().get_ops();
+            ops.iter().map(|o| o.0.read().unwrap().opcode.name().to_string()).collect()
+        };
+        assert_eq!(ib_ops, vec!["COPY"]);
+        assert_eq!(ib.read().unwrap().size_in(), 2);
+        assert_eq!(ib.read().unwrap().size_out(), 2);
+        let readers: usize = vn_y.read().unwrap().descend_iter().count();
+        assert_eq!(readers, 1);
+        assert_eq!(reader.read().unwrap().get_ops().len(), 1);
+    }
+
+    /// E2 (condexe.cc:303): the reader's block is not dominated by the
+    /// iblock, so getReplacementRead's dominator walk leaves the graph. The
+    /// oracle throws LowlevelError ("Conditional execution: Could not find
+    /// dominator"); Rugra must return the SAME verbatim Err (pre-fix: silent
+    /// None + death loop).
+    #[test]
+    fn test_apply_aborts_missing_dominator() {
+        let mut fd = Funcdata::new("e2", crate::address::Address::new(0x60000), 0x100);
+        let (ib, vn_y, _reader) = build_error_diamond(&mut fd, false);
+        let mut action = ActionConditionalExe::new();
+        let err = action
+            .apply(&mut fd)
+            .expect_err("broken dominator chain must abort apply");
+        match &err {
+            crate::error::Error::Lowlevel(msg) => {
+                // Verbatim oracle message, condexe.cc:303.
+                assert_eq!(msg, "Conditional execution: Could not find dominator");
+            }
+            other => panic!("expected Lowlevel error, got {other:?}"),
+        }
+        // Same partial-state shape as E1 (CBRANCH destroyed, COPY intact).
+        let ib_ops: Vec<String> = {
+            let ops = ib.read().unwrap().get_ops();
+            ops.iter().map(|o| o.0.read().unwrap().opcode.name().to_string()).collect()
+        };
+        assert_eq!(ib_ops, vec!["COPY"]);
+        assert_eq!(vn_y.read().unwrap().descend_iter().count(), 1);
+    }
+
+    /// E3: verify() failure (uncorrelated iblock CBRANCH boolean) makes
+    /// trial() return false; apply must complete normally with 0 and leave
+    /// the Funcdata untouched — no Err, no partial destruction.
+    #[test]
+    fn test_apply_verify_failure_no_change() {
+        let mut fd = Funcdata::new("e3", crate::address::Address::new(0x60000), 0x100);
+        let (ib, _, _) = build_error_diamond(&mut fd, true);
+        // Point the iblock CBRANCH's boolean at a constant that does not
+        // correlate with the init CBRANCH's written boolean:
+        // BooleanExpressionMatch -> UNCORRELATED (expression.cc:111), so
+        // verifySameCondition fails (condexe.cc:88-89) before any mutation.
+        let ib_ops: Vec<Arc<RwLock<PcodeOp>>> = {
+            let ops = ib.read().unwrap().get_ops();
+            ops.iter().map(|o| o.0.clone()).collect()
+        };
+        let cbranch_op = ib_ops.last().unwrap().clone();
+        assert_eq!(cbranch_op.read().unwrap().opcode, OpCode::CPUI_CBRANCH);
+        let other_bool = fd.new_constant(1, 0x7a);
+        fd.op_set_input(&crate::op::PcodeOpRef(cbranch_op), other_bool, 1);
+        let mut action = ActionConditionalExe::new();
+        let res = action.apply(&mut fd).expect("verify failure must not abort");
+        assert_eq!(res, action_status::NO_CHANGE);
+        // Untouched: the iblock still holds COPY + CBRANCH.
+        let names: Vec<String> = {
+            let ops = ib.read().unwrap().get_ops();
+            ops.iter().map(|o| o.0.read().unwrap().opcode.name().to_string()).collect()
+        };
+        assert_eq!(names, vec!["COPY", "CBRANCH"]);
     }
 }
