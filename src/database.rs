@@ -2787,6 +2787,40 @@ impl Scope {
         id
     }
 
+    // Ghidra: database.cc:1810 ScopeInternal::addSymbolInternal
+    /// The category-table registration half of `addSymbolInternal`
+    /// (database.cc:1827-1836): when `sym->category >= 0`, grow the outer
+    /// category vector through that category, assign `catindex = list.size()`
+    /// for categories > 0 (the symbol's existing catindex slot is used for
+    /// category 0), pad the list with NULL slots through the index, and place
+    /// the symbol. Called by `add_equate_symbol` to mirror the
+    /// `addSymbolInternal(sym)` step of `Scope::addEquateSymbol`
+    /// (database.cc:1718).
+    fn add_symbol_internal_category(&mut self, sym_arc: &Arc<RwLock<Symbol>>) {
+        // cc:1827 if (sym->category >= 0).
+        let cat = sym_arc.read().unwrap().category as i32;
+        if cat < 0 {
+            return;
+        }
+        // cc:1828-1829 while(category.size() <= sym->category)
+        //              category.push_back(vector<Symbol *>());
+        for c in 0..=cat {
+            self.categories.entry(c).or_default();
+        }
+        // cc:1831-1832 if (sym->category > 0) sym->catindex = list.size();
+        let index = if cat > 0 {
+            self.categories.get(&cat).map_or(0, |l| l.len())
+        } else {
+            sym_arc.read().unwrap().catindex as usize
+        };
+        sym_arc.write().unwrap().catindex = index as u16;
+        // cc:1833-1835 while(list.size() <= sym->catindex) list.push_back(NULL);
+        //              list[sym->catindex] = sym;
+        let list = self.categories.get_mut(&cat).unwrap();
+        list.resize_for_index(index);
+        list.0[index] = Some(Arc::downgrade(sym_arc));
+    }
+
     // Ghidra: database.cc:1712 Scope::addEquateSymbol
     /// Create a symbol that forces display conversion on a constant. Faithful
     /// to `Scope::addEquateSymbol` (database.cc:1712). The C++ form builds an
@@ -2831,7 +2865,10 @@ impl Scope {
         // object IS an EquateSymbol carrying `value`; the registry entry on
         // this Arc is the Rust stand-in for that subtype payload.
         crate::varnode::equate_symbol_registry::register_value(&sym_arc, value);
-        // database.cc:1718 — addSymbolInternal(sym).
+        // database.cc:1718 — addSymbolInternal(sym), whose category block
+        // (database.cc:1827-1836) registers category[equate] and assigns
+        // catindex = list.size().
+        self.add_symbol_internal_category(&sym_arc);
         // database.cc:1719-1721 — RangeList rnglist; insertRange(addr...) if valid.
         let mut rnglist = RangeList::new();
         if addr.as_u64() != 0 {
@@ -4357,6 +4394,30 @@ mod tests {
             "SAME", display_flags::FORCE_DEC, 0x42, Address::new(0x2000), 0x3333,
         );
         assert_ne!(id1, id2, "same-value duplicates are distinct symbols");
+        // database.cc:1827-1836 (addSymbolInternal via cc:1718): both equates
+        // land in category[equate] with catindex = list.size() at insert time
+        // (first 0, second 1).
+        assert_eq!(scope_a.get_category_size(1), 2);
+        assert_eq!(
+            scope_a
+                .symbols
+                .get(&id1)
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_category_index(),
+            0
+        );
+        assert_eq!(
+            scope_a
+                .symbols
+                .get(&id2)
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_category_index(),
+            1
+        );
         // Both scope_a equates are registered with the same value, and each
         // dynamic entry hashes distinctly (database.cc:1722).
         let v1 = scope_a.symbols.get(&id1).cloned().unwrap();
