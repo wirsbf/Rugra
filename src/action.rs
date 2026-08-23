@@ -93,6 +93,10 @@ pub trait Action {
     /// view if this Action is an ActionGroup/ActionRestartGroup.
     fn as_action_group(&self) -> Option<&ActionGroup> { None }
 
+    // RUGRA-GLUE: fixture-only mutable container view for subtree-driving fixtures
+    /// Mutable downcast mirroring `as_action_group`.
+    fn as_action_group_mut(&mut self) -> Option<&mut ActionGroup> { None }
+
     // RUGRA-GLUE: fixture-only pool view; Ghidra holds the same class identity via the virtual ActionPool (action.hh:262)
     /// Read-only downcast for tree-walking fixtures: returns the pool view
     /// if this Action is an ActionPool.
@@ -292,6 +296,10 @@ impl ActionGroup {
     pub fn child_actions(&self) -> &[Box<dyn Action>] {
         &self.actions
     }
+    // RUGRA-GLUE: fixture-only mutable child view for driving one subtree through the exact perform() sequence (Ghidra's ActionGroup::apply drives the same protected list)
+    pub fn child_actions_mut(&mut self) -> &mut [Box<dyn Action>] {
+        &mut self.actions
+    }
     // RUGRA-GLUE: registration-site basegroup view for tree-walking fixtures (Ghidra Action::getGroup, action.hh:109)
     pub fn child_group(&self, index: usize) -> &'static str {
         self.child_groups[index]
@@ -336,6 +344,8 @@ impl Action for ActionGroup {
 
     // RUGRA-GLUE: fixture-only nested tree view (see Action::as_action_group)
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(self) }
+    // RUGRA-GLUE: fixture-only mutable nested tree view for subtree-driving fixtures (Ghidra reaches the same list via protected ActionGroup::list)
+    fn as_action_group_mut(&mut self) -> Option<&mut ActionGroup> { Some(self) }
 
     // RUGRA-GLUE: externalizes Ghidra ActionGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
@@ -478,6 +488,8 @@ impl Action for ActionRestartGroup {
     }
     // RUGRA-GLUE: fixture-only nested tree view (see Action::as_action_group)
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(&self.group) }
+    // RUGRA-GLUE: fixture-only mutable nested tree view for subtree-driving fixtures (Ghidra ActionRestartGroup inherits ActionGroup::list)
+    fn as_action_group_mut(&mut self) -> Option<&mut ActionGroup> { Some(&mut self.group) }
     // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.pending_count)

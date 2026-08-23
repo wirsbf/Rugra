@@ -1094,3 +1094,10 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
   （PIPE-RULE-CLONE-FILTER-0001 建议）；oppool1/cleanup 内 Rugra-local
   Rule 未在 Action 节点投影中观察（PIPE-POOL-LOCAL-RULES-0001 建议）；
   节点 apply 体/计数反馈归 PIPE-STACKSTALL-COUNT-0001。
+
+## 树驱动 fixture 视图（2026-08-23，PIPE-STACKSTALL-COUNT-0001）
+
+- `Action::as_action_group_mut` / `ActionGroup::child_actions_mut`：树下行
+  可变视图，供 stackstall_count_1204 一类子树驱动 fixture 精确复刻
+  ActionGroup::apply 对 protected list 的驱动顺序。
+- `ActionRestartGroup` 透传 `as_action_group_mut`（Ghidra 继承同一 list）。

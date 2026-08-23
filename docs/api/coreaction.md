@@ -1198,3 +1198,27 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
   （:504）、`normalizesetup`→RULE_ONCEPERFUNC（:630）。
 - 对拍证据：`tools/run_pipeline_tree_oracle.sh` 78 节点 DFS 双侧
   字节一致（含每个节点的 name/basegroup/flags），overall=MATCH。
+
+## stackstall 叶子 count 通道与 analysis_finished 生命周期（2026-08-23，PIPE-STACKSTALL-COUNT-0001）
+
+- `ActionMultiCse`/`ActionShadowVar`/`ActionDeindirect` 的 apply 内部变更数
+  此前计算后丢弃，现写入继承 `Action::count` 通道（`take_count_delta` 外化，
+  对应 coreaction.cc:873/:945/:1240 的 `count += 1`），stackstall 的
+  rule_repeatapply 不动点由此感知叶子变更（action.cc:303-350 + 506-527）。
+- `ActionStackPtrFlow` 补齐 `analysis_finished`（coreaction.hh:91，reset 清除
+  ：99）、`apply` 首行短路（cc:484-485）、`numchange>0 → count += 1`
+  （cc:492）、干净趟 `analyzeExtraPop` + `analysis_finished=true`（cc:494-497）；
+  extrapop-known 早退（cc:264-267）经 `fd.funcp.get_extra_pop()` 判定；
+  未知 extrapop 的 StackSolver 路径走已有 `analyze_extra_pop`（其 callspec
+  回写仍未接线，残差 PIPE-STACKSOLVER-WRITEBACK-0001）。
+- 两处缺陷修复：`ActionShadowVar` 重写路径的 RwLock 死锁（`if` 条件临时读
+  guard 贯穿分支体，`op_set_input` 写锁自锁——该路径首次真实执行即挂起整条
+  管线）；`checkClog` 的 `constz` 取值错位（应取 LOAD 指针的栈相对偏移
+  cc:473-475，而非 clog ADD 操作数偏移）。
+- 对拍：`tools/run_stackstall_count_oracle.sh`（pin-base schema2，base=b40a315
+  + overlay）——双侧真实派生树的 stackstall 子树经 action.cc:303-350 外部
+  perform 镜像逐趟观察：run1 三趟收敛（multicse/shadowvar/stackptrflow 各
+  count=1，趟2 oppool1 count=1，终值 4），run2 reset 后单趟零变更且
+  stackptrflow tests 3→4（analysis_finished 复位再分析），IR 投影逐字节一致，
+  stdout_sha256=0a9439b3…，overall=MATCH。残差：deindirect 变更分支
+  （PIPE-DEINDIRECT-CHANGE-0001 建议）、solver 回写。
