@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "fixture_id": "LANEDIVIDE-INFRA-0001",
-  "status_note": "The five targeted projections (arch lookup/min/identity, lanedMap lifecycle, PIECE and MULTIEQUAL splits through doTrace+apply, INT_MULT zero-mutation rejection) are byte-identical MATCH against the locked 12.0.4 oracle. Seven branches remain uncovered or undefined under LANEDIVIDE-INFRA-RESIDUAL-0001, so the fixture-level B2 status is UNTESTED.",
+  "status_note": "Ten projections (arch lookup/min/identity, lanedMap lifecycle, PIECE and MULTIEQUAL splits through doTrace+apply, INT_MULT zero-mutation rejection, SUBPIECE terminator with allowSubpieceTerminator, STORE/LOAD lane splits with INT_ADD pointer advancement, INT_RIGHT/INT_LEFT lane-to-lane copying with zero-fill lanes, INT_ZEXT half-register extension, restricted skipLanes>0 windows through SUBPIECE restriction/extension, and the typelock metatype gate rejecting INT and STRUCT while admitting ARRAY) are byte-identical MATCH against the locked 12.0.4 oracle. The indirect branch matches through the entire LaneDivide layer (placeholder construction, inheritIndirect propagation, specialHandling flags, insertion order) and is held at MISMATCH by a single registered cross-module divergence: TransformVar::createReplacement's constant_iop arm materializes the annotation as a const-space constant instead of an iop-space varnode (TRANSFORM-CONSTANT-IOP-SPACE-0001, transform.rs outside this lease). subflow.cc:3942 stays NO_ORACLE (undefined behavior in the oracle itself). Fixture-level B2 status: UNTESTED.",
   "decisive_semantics": {
-    "reference_output_parameters": "setReplacement returns the pieceMap array start of the first split for a varnode (marked varnodes reuse the existing array, ignoring the requested subset, subflow.cc:3521-3522); getLanedRegister returns a const LanedRegister* shared by pointer identity into lanedMap (Rugra Arc identity); doTrace/apply mutate Funcdata in place only through TransformManager placeholders until apply materializes ops/varnodes; failed doTrace leaves every op/varnode byte unchanged except cleared marks.",
-    "loop_bounds_traversal_order": "traceForward walks the descend list front-to-back incrementing the iterator before processing each op (subflow.cc:3923-3924); doTrace drains the workList LIFO via pop_back until empty or first failure (subflow.cc:4118-4123); processNextWork runs traceBackward then traceForward; buildStore/buildLoad iterate count 0..numLanes with big-endian lane reordering numLanes-1-count; buildMultiequal creates one input placeholder set per op input (input-major) then one MULTIEQUAL per lane; the Rust comparand snapshots the descend list once before iterating because placeholder creation cannot mutate it.",
-    "counter_accumulator_lifecycle": "bytePos starts at 0 per buildStore/buildLoad and accumulates description.getSize(skipLanes+i) per emitted lane, never resetting inside one build; minLanedSize gates checkForLanedRegister at every newUnique/newUniqueOut/newVarnode/newVarnodeOut, takes the 1000000 sentinel after setLanedRegGenerated and is reset (without clearing lanedMap) by Funcdata::clear; workList grows only from setReplacement of non-free non-constant varnodes.",
-    "sorting_comparison_keys": "lanerecords are ordered ascending by whole size with duplicate-size sizeBitMask merged (architecture.cc:970-974); getLanedRegister binary-searches wholeSize equality and ignores the address (architecture.cc:290-306); lanedMap is keyed by VarnodeData::operator< comparing space index, then offset, then size descending (pcoderaw.hh:67); lane geometry comparisons are exact getBoundary boundary equality via restriction/extension."
+    "reference_output_parameters": "setReplacement returns the pieceMap array start of the first split for a varnode (marked varnodes reuse the existing array, ignoring the requested subset, subflow.cc:3521-3522) and rejects type-locked varnodes whose metatype is above TYPE_ARRAY or is TYPE_STRUCT/TYPE_UNION (subflow.cc:3532-3538); getLanedRegister returns a const LanedRegister* shared by pointer identity into lanedMap (Rugra Arc identity); doTrace/apply mutate Funcdata in place only through TransformManager placeholders until apply materializes ops/varnodes; failed doTrace leaves every op/varnode byte unchanged except cleared marks; buildStore/buildLoad read the spaceid constant by offset only (getSpaceFromConst); newIop placeholders share the affecting op across lane INDIRECTs; inheritIndirect propagates indirect_creation vs indirect_creation_possible_out based on the original input's indirect-zero flag (transform.cc:273-282). INDIRECT slot-1 annotation varnodes are projected with a normalized si/k0 classification because the oracle classifies them as IOP-space non-constants while Rugra's TransformVar::createReplacement constant_iop arm currently materializes const-space constants — a registered divergence (TRANSFORM-CONSTANT-IOP-SPACE-0001) excluded from the byte gate; every other annotation property (create index, size, flags, def-use) stays byte-compared.",
+    "loop_bounds_traversal_order": "traceForward walks the descend list front-to-back incrementing the iterator before processing each op (subflow.cc:3923-3924); doTrace drains the workList LIFO via pop_back until empty or first failure (subflow.cc:4118-4123); processNextWork runs traceBackward then traceForward; buildStore/buildLoad iterate count 0..numLanes with little-endian lane i=count (big-endian numLanes-1-count), emitting the base pointer at bytePos 0 and an INT_ADD-advanced newUnique pointer afterwards; buildMultiequal creates one input placeholder set per op input (input-major) then one MULTIEQUAL per lane; buildRightShift/buildLeftShift scan src/dest lane pairs while the shifted window fits inside numLanes; createOps iterates newOps in creation order with the follow-fixpoint loop (transform.cc:665-680); createVarnodes iterates pieceMap ascending by create index then newVarnodes in append order (transform.cc:684-711); the Rust comparand snapshots the descend list once before iterating because placeholder creation cannot mutate it.",
+    "counter_accumulator_lifecycle": "bytePos starts at 0 per buildStore/buildLoad and accumulates description.getSize(skipLanes+i) per emitted lane, never resetting inside one build; restricted windows carry numLanes/skipLanes per workList node, with skipLanes inherited from restriction/extension outputs (subflow.cc:3953, 3607-3609, 3880); shift amounts are normalized from bits to bytes after the multiple-of-8 gate (subflow.cc:3805-3807); zero-lane constants are built per lane with description.getSize of the destination lane; minLanedSize gates checkForLanedRegister at every newUnique/newUniqueOut/newVarnode/newVarnodeOut, takes the 1000000 sentinel after setLanedRegGenerated and is reset (without clearing lanedMap) by Funcdata::clear; workList grows only from setReplacement of non-free non-constant varnodes.",
+    "sorting_comparison_keys": "lanerecords are ordered ascending by whole size with duplicate-size sizeBitMask merged (architecture.cc:970-974); getLanedRegister binary-searches wholeSize equality and ignores the address (architecture.cc:290-306); lanedMap is keyed by VarnodeData::operator< comparing space index, then offset, then size descending (pcoderaw.hh:67); lane geometry comparisons are exact getBoundary boundary equality via restriction/extension (transform.cc:133-168); the typelock gate compares metatype order against the type.hh:79-99 descending enum (meta > TYPE_ARRAY rejects primitives, TYPE_STRUCT/TYPE_UNION reject separately) which Rugra mirrors as an explicit allow set {Array, Enum, PartialEnum, PartialStruct, PartialUnion} on Rugra-private TypeMetatype discriminants."
   },
   "oracle": {
     "project": "Ghidra",
@@ -29,12 +29,12 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "296c128ad54c8e3a18114ef065b1d6fbb22ed2d5",
-    "base_tree": "9fb4593727541a45eaa6231f6296a79d2d5254f9",
-    "base_src_tree": "1fb9e4fa6c609fc1f54a3fc38ed3a39379768963",
-    "base_subflow_blob": "9555f7ae03978197bfbc427d5d6e09c2fe5fdb8c",
+    "base_commit": "6a256e7960b14d3294dbb7c6c0d25f4a86667ac7",
+    "base_tree": "7875c55167efe04d297e004a2431718d94bfd92c",
+    "base_src_tree": "545bdb2a9bdc66fbfc7165a0124f568f1ef05e69",
+    "base_subflow_blob": "7afa4d6ca2c1a428c6bcd324767684b016b2f46f",
     "base_arch_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877",
-    "base_funcdata_blob": "af417cd95c70087f8b549f7e0971a16dc07d15f3",
+    "base_funcdata_blob": "7ea221fab43544dfc41ad39e556222de3718af0b",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
@@ -62,7 +62,7 @@
       },
       {
         "path": "src/funcdata.rs",
-        "sha256": "de3c342bc13edf70d153d16b2aaf1974c1e0b813532bc47be85ec219208d74f7",
+        "sha256": "5891c6116231953a3e6a4ebd03edfe76ca9664444816d06c001a684bde8cc0b4",
         "policy": "lanedMap/minLanedSize lifecycle; hash-verify before replacing the pinned base funcdata.rs"
       }
     ],
@@ -83,18 +83,34 @@
       "Funcdata::clearLanedAccessMap",
       "Funcdata::clear",
       "Funcdata::newVarnodeOut",
+      "Funcdata::newVarnodeIop",
+      "Funcdata::markIndirectCreation",
+      "Varnode::updateType",
       "LaneDivide::setReplacement",
       "LaneDivide::buildPiece",
       "LaneDivide::buildMultiequal",
+      "LaneDivide::buildIndirect",
+      "LaneDivide::buildStore",
+      "LaneDivide::buildLoad",
+      "LaneDivide::buildRightShift",
+      "LaneDivide::buildLeftShift",
+      "LaneDivide::buildZext",
       "LaneDivide::traceForward",
       "LaneDivide::traceBackward",
       "LaneDivide::processNextWork",
       "LaneDivide::doTrace",
+      "TransformManager::newIop",
+      "TransformManager::newPreexistingOp",
+      "TransformManager::newOp",
+      "TransformManager::newConstant",
+      "TransformManager::newUnique",
+      "TransformOp::inheritIndirect",
+      "TransformManager::specialHandling",
       "TransformManager::apply"
     ],
-    "funcdata": "One BfdArchitecture shell per case over immutable 34a3febf:examples/curl (GetStr for the map lifecycle, main_free/hugehelp/main_init for trace cases); no followFlow and no Action pass; one synthetic BlockBasic per trace case; lanerecords replaced in-place with whole sizes 8 (mask 0x4) and 16 (mask 0x110)",
-    "placeholder_construction": "Each trace case creates one integrated root op (PIECE at end, MULTIEQUAL at begin, INT_MULT at end) with unique outputs and constant inputs, plus SUBPIECE readers with constant offsets 0 and 2; LaneDivide is constructed directly with LaneDescription(4,2) and allowDowncast=false, then doTrace and (on success) apply",
-    "case_matrix": "arch lookup over merged size records; lanedMap miss/hit/suppress/preserve/clear; PIECE and MULTIEQUAL lane splits through doTrace+apply; INT_MULT default-branch rejection with zero mutation",
+    "funcdata": "One BfdArchitecture shell per case over immutable 34a3febf:examples/curl (GetStr for the map lifecycle, main_free/hugehelp/main_init plus glob_range/glob_set/glob_url/glob_word/match_url/my_fwrite/myprogress/next_url/progressbarinit for the trace cases); no followFlow and no Action pass; one synthetic BlockBasic per trace case; lanerecords replaced in-place with whole sizes 8 (mask 0x4) and 16 (mask 0x110); the typelock case builds its locked types through TypeFactory getBase/getTypeStruct/getTypeArray",
+    "placeholder_construction": "Each trace case creates its integrated root op with unique outputs and constant inputs (PIECE at end, MULTIEQUAL at begin, INT_MULT/INT_RIGHT/INT_LEFT/INT_ZEXT/LOAD/INDIRECT at end, COPY roots for SUBPIECE-terminator/store/window/typelock graphs); STORE clobbers are three-input ops with a ram-spaceid constant, a pointer and a stored value; INDIRECT inputs carry newVarnodeIop annotations and are marked via markIndirectCreation(false/true); the typelock graphs lock free unique inputs to int4/empty-struct/uint1[4] via updateType(ct,true,false); LaneDivide is constructed directly (LaneDescription uniform 4/2 or 8/2, allowDowncast true only for the SUBPIECE-terminator and restricted-window cases), then doTrace and (on success) apply",
+    "case_matrix": "arch lookup over merged size records; lanedMap miss/hit/suppress/preserve/clear; PIECE and MULTIEQUAL lane splits through doTrace+apply; INT_MULT default-branch rejection with zero mutation; SUBPIECE terminator (slice one byte out of a lane, allowSubpieceTerminator branch, subflow.cc:3934-3944); STORE split with written-pointer and free-constant-pointer paths plus INT_ADD advancement; LOAD split with base and advanced pointers; INT_RIGHT and INT_LEFT whole-lane shifts with zero-fill COPYs; INT_ZEXT half-register extension; INDIRECT splits with indirect-zero and possible-out inheritance; restricted skipLanes>0 window via multi-lane SUBPIECE restriction, traceBackward SUBPIECE extension, mid-window terminator at laneIndex==skipLanes and single-lane preexisting COPY; typelock gate rejecting TYPE_INT and TYPE_STRUCT while admitting TYPE_ARRAY",
     "random_seed": "none",
     "error_injection": "none",
     "debug_macros": "__TERMINAL__ only; OPACTION_DEBUG, CPUI_DEBUG and TYPEPROP_DEBUG absent",
@@ -147,7 +163,7 @@
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'))",
-    "sha256": "2810c591cb47d6c6f764fe2ad0bd3b8d10bc6ef2e22b51226d7ea32e2af82d69",
+    "sha256": "999813826f536d80b8c95b760904d95b29583056677e08bd3ac44ad41a05df0f",
     "binary": {
       "path": "examples/curl",
       "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
@@ -156,48 +172,252 @@
       "size": 162544
     },
     "functions": [
-      {"name": "GetStr", "entry": 14032, "elf_symbol_extent": 74},
-      {"name": "main_free", "entry": 18800, "elf_symbol_extent": 5},
-      {"name": "hugehelp", "entry": 18944, "elf_symbol_extent": 84},
-      {"name": "main_init", "entry": 18784, "elf_symbol_extent": 7}
+      {
+        "name": "GetStr",
+        "entry": 14032,
+        "elf_symbol_extent": 74
+      },
+      {
+        "name": "main_free",
+        "entry": 18800,
+        "elf_symbol_extent": 5
+      },
+      {
+        "name": "hugehelp",
+        "entry": 18944,
+        "elf_symbol_extent": 84
+      },
+      {
+        "name": "main_init",
+        "entry": 18784,
+        "elf_symbol_extent": 7
+      },
+      {
+        "name": "glob_range",
+        "entry": 19808,
+        "elf_symbol_extent": 517
+      },
+      {
+        "name": "glob_set",
+        "entry": 19392,
+        "elf_symbol_extent": 402
+      },
+      {
+        "name": "glob_url",
+        "entry": 20336,
+        "elf_symbol_extent": 118
+      },
+      {
+        "name": "glob_word",
+        "entry": 19040,
+        "elf_symbol_extent": 344
+      },
+      {
+        "name": "match_url",
+        "entry": 21024,
+        "elf_symbol_extent": 467
+      },
+      {
+        "name": "my_fwrite",
+        "entry": 13408,
+        "elf_symbol_extent": 98
+      },
+      {
+        "name": "myprogress",
+        "entry": 13520,
+        "elf_symbol_extent": 497
+      },
+      {
+        "name": "next_url",
+        "entry": 20464,
+        "elf_symbol_extent": 547
+      },
+      {
+        "name": "progressbarinit",
+        "entry": 18848,
+        "elf_symbol_extent": 94
+      }
     ],
     "cases": [
-      {"id": "arch_lookup", "probes": ["getLanedRegister size 16", "getLanedRegister size 12", "getMinimumLanedRegisterSize"], "expected": "min=8 sizes=8,16 hit=16:272 miss12=1 identity_shared=1"},
-      {"id": "map_lifecycle", "probes": ["checkForLanedRegister miss/hit", "setLanedRegGenerated suppression via newVarnodeOut", "clear preservation", "clearLanedAccessMap"], "expected": "miss_delta=0 entries_ordered generated_delta=0 clear_preserved reset_append explicit_clear=0"},
-      {"id": "piece_split", "root": "CPUI_PIECE", "readers": "SUBPIECE 0 and 2", "expected": "trace=1 mark=0 two lane COPYs plus two preexisting COPYs"},
-      {"id": "multiequal_split", "root": "CPUI_MULTIEQUAL at begin", "readers": "SUBPIECE 0 and 2", "expected": "trace=1 mark=0 two lane MULTIEQUALs in reversed begin order"},
-      {"id": "failure_reject", "root": "CPUI_INT_MULT", "readers": "SUBPIECE 0", "expected": "trace=0 same=1 mark=0"}
+      {
+        "id": "arch_lookup",
+        "probes": [
+          "getLanedRegister size 16",
+          "getLanedRegister size 12",
+          "getMinimumLanedRegisterSize"
+        ],
+        "expected": "min=8 sizes=8,16 hit=16:272 miss12=1 identity_shared=1"
+      },
+      {
+        "id": "map_lifecycle",
+        "probes": [
+          "checkForLanedRegister miss/hit",
+          "setLanedRegGenerated suppression via newVarnodeOut",
+          "clear preservation",
+          "clearLanedAccessMap"
+        ],
+        "expected": "miss_delta=0 entries_ordered generated_delta=0 clear_preserved reset_append explicit_clear=0"
+      },
+      {
+        "id": "piece_split",
+        "root": "CPUI_PIECE",
+        "readers": "SUBPIECE 0 and 2",
+        "expected": "trace=1 mark=0 two lane COPYs plus two preexisting COPYs"
+      },
+      {
+        "id": "multiequal_split",
+        "root": "CPUI_MULTIEQUAL at begin",
+        "readers": "SUBPIECE 0 and 2",
+        "expected": "trace=1 mark=0 two lane MULTIEQUALs in reversed begin order"
+      },
+      {
+        "id": "failure_reject",
+        "root": "CPUI_INT_MULT",
+        "readers": "SUBPIECE 0",
+        "expected": "trace=0 same=1 mark=0"
+      },
+      {
+        "id": "subpiece_terminator",
+        "root": "CPUI_COPY(8B) desc(8,2) allowDowncast=true",
+        "readers": "SUBPIECE offset 4 size 1 (mid-lane slice)",
+        "expected": "trace=1 reader stays SUBPIECE over lane2 placeholder with constant-0 offset input"
+      },
+      {
+        "id": "store_split",
+        "root": "CPUI_COPY(4B) read by two STOREs",
+        "probes": [
+          "written-pointer path",
+          "free-constant-pointer path",
+          "INT_ADD advancement at bytePos 2",
+          "ram spaceid constant"
+        ],
+        "expected": "trace=1 four lane STOREs plus two INT_ADDs, originals dead"
+      },
+      {
+        "id": "load_split",
+        "root": "CPUI_LOAD(4B) over constant pointer",
+        "probes": [
+          "base pointer at bytePos 0",
+          "INT_ADD advanced pointer",
+          "per-lane outputs"
+        ],
+        "expected": "trace=1 two lane LOADs plus one INT_ADD"
+      },
+      {
+        "id": "right_shift_split",
+        "root": "CPUI_INT_RIGHT(8B, const 16)",
+        "probes": [
+          "lane-to-lane COPYs",
+          "zero constant in most significant lane"
+        ],
+        "expected": "trace=1 three lane COPYs plus one zero COPY"
+      },
+      {
+        "id": "left_shift_split",
+        "root": "CPUI_INT_LEFT(8B, const 16)",
+        "probes": [
+          "zero constant in least significant lane",
+          "lane-to-lane COPYs"
+        ],
+        "expected": "trace=1 three lane COPYs plus one zero COPY"
+      },
+      {
+        "id": "zext_split",
+        "root": "CPUI_INT_ZEXT(4B -> 8B)",
+        "probes": [
+          "restriction of input lanes",
+          "zero constants in high lanes"
+        ],
+        "expected": "trace=1 two input-lane COPYs plus two zero COPYs"
+      },
+      {
+        "id": "indirect_split",
+        "root": "two CPUI_INDIRECT(4B) marked indirect-creation / possible-out",
+        "probes": [
+          "newIop shared annotation",
+          "inheritIndirect flag propagation",
+          "markIndirectCreation on lane INDIRECTs"
+        ],
+        "expected": "trace=1,1 four lane INDIRECTs all flagged, lane inputs flagged only for the indirect-zero case; annotation classification normalized (TRANSFORM-CONSTANT-IOP-SPACE-0001 MISMATCH)"
+      },
+      {
+        "id": "restricted_window",
+        "root": "CPUI_COPY(8B) desc(8,2) via multi-lane SUBPIECE offset 2",
+        "probes": [
+          "skipLanes=1 window work node",
+          "traceBackward SUBPIECE extension",
+          "mid-window SUBPIECE terminator at laneIndex==skipLanes",
+          "single-lane preexisting COPY"
+        ],
+        "expected": "trace=1 root and window splits share placeholders, tail stays SUBPIECE over window lane 0, low becomes COPY"
+      },
+      {
+        "id": "typelock_reject",
+        "root": "three COPY roots whose inputs are type-locked int4 / empty struct / uint1[4]",
+        "probes": [
+          "setReplacement metatype gate",
+          "zero-mutation failure",
+          "ARRAY allow path"
+        ],
+        "expected": "trace=0,0,1 int and struct rejected with before==after, array splits normally"
+      }
     ]
   },
   "observation_schema": {
-    "format": "Five fixed-order pipe-delimited UTF-8 records with final newline",
-    "record_order": ["arch", "map", "piece", "multiequal", "failure"],
-    "op_projection": "Exact block order, opcode, SeqNum time/order, dead state, parent index, output identity and ordered input identities",
-    "varnode_projection": "First-encounter identity, create index, size, address-space index, constant value, free/input/written flags, defining op and ordered descendant ops",
+    "format": "Fourteen fixed-order pipe-delimited UTF-8 records with final newline",
+    "record_order": [
+      "arch",
+      "map",
+      "piece",
+      "multiequal",
+      "failure",
+      "subpiece",
+      "store",
+      "load",
+      "rightshift",
+      "leftshift",
+      "zext",
+      "indirect",
+      "window",
+      "typelock"
+    ],
+    "op_projection": "Exact block order, opcode, SeqNum time/order, dead state, indirect-creation flag, parent index, output identity and ordered input identities",
+    "varnode_projection": "First-encounter identity, create index, size, address-space index, constant value (spaceid constants observed as the resolved space index :s<N>; INDIRECT slot-1 annotation varnodes projected as a normalized si/k0 classification — the raw annotation encoding is a process pointer in the oracle and a const-encoded Arc pointer in Rugra, with the const-space vs iop-space classification divergence registered as TRANSFORM-CONSTANT-IOP-SPACE-0001), free/input/written flags, type-lock flag, indirect-creation flag, defining op and ordered descendant ops",
     "count_projection": "block ops, projected varnodes, alive/dead/all bank ops and total Funcdata varnodes",
     "laned_projection": "arch record: minimum size, ordered whole sizes, size-16 lookup whole size and bit mask, cross-space record identity, size-12 miss; map record: per-storage space:offset:size with record identity, whole size and bit mask in VarnodeData::operator< order, miss/suppress/preserve/reset/clear deltas",
-    "anchor_projection": "doTrace result, root mark state after trace, failed-path before==after equality, replaced root dead state and detached output, reader SUBPIECE opcode and input count after apply",
+    "anchor_projection": "doTrace result, root mark state after trace, failed-path before==after equality, replaced root dead state and detached output, reader SUBPIECE opcode and input count after apply, ram spaceid index, alive STORE/LOAD/INT_ADD/INDIRECT counts and flagged INDIRECT count, restricted-window reader states, typelock trace triple with lock-state confirmation",
     "preserved": "No order, alias, control-flow, identity or count field is normalized; only unique offsets and raw pointers are intentionally absent"
   },
   "build": {
     "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
-    "supplemental_source_units": ["libdecomp.cc", "sleigh_arch.cc", "inject_sleigh.cc", "bfd_arch.cc", "loadimage_bfd.cc"],
-    "cxx_flags": ["-std=c++11", "-O2", "-Wall", "-Wno-sign-compare"],
+    "supplemental_source_units": [
+      "libdecomp.cc",
+      "sleigh_arch.cc",
+      "inject_sleigh.cc",
+      "bfd_arch.cc",
+      "loadimage_bfd.cc"
+    ],
+    "cxx_flags": [
+      "-std=c++11",
+      "-O2",
+      "-Wall",
+      "-Wno-sign-compare"
+    ],
     "rugra_archive": "Immutable 296c128 dependency closure plus three hash-pinned overlays (subflow.rs, arch.rs, funcdata.rs)",
     "rust_build": "Cargo --locked --offline in isolated target, then rustc for separately hashed fixture"
   },
   "comparand": {
-    "cpp_fixture_sha256": "e8111462beda5651e8194458a76f229951e2c4a4ef6c9110571e7d1ce2e9d831",
-    "rust_fixture_sha256": "cfc78811e1b55ca3e26d2d9583ce9f9bf9fdadfbfd04998974f352f9dc683d33",
+    "cpp_fixture_sha256": "930571e21560fa3cc9b92eaa50e1b6efb9e0774dcfb5fea936e47baadd1260b3",
+    "rust_fixture_sha256": "e3b9878814b785bf2733951f94e88466c30a44193095e83f22aabc4ca5ff0008",
     "subflow_overlay_sha256": "a9ae7e7d6bf43c851f586b85d0dc98c865098635ca12060ff9b73b7fa1d569b0",
     "arch_overlay_sha256": "492efc3a7226fb0a7b2c7def414d9b66abec7df1edc5aca779679aa92237f162",
-    "funcdata_overlay_sha256": "de3c342bc13edf70d153d16b2aaf1974c1e0b813532bc47be85ec219208d74f7",
-    "runner_sha256": "2ba3e6fd2fe40f0947b52d54125fbbca4981750f3611aa6680a73cdd28fad894"
+    "funcdata_overlay_sha256": "5891c6116231953a3e6a4ebd03edfe76ca9664444816d06c001a684bde8cc0b4",
+    "runner_sha256": "7b850abe3d7c7e488d9aeddcdce3220359780876a4b2235088e3f2ba2584d559"
   },
   "expected_results": {
-    "ghidra_stdout_sha256": "0c98fc0cb05c0ce206e95251cd0784a18f5edf52d76afa8453dfb6a2c7d317ae",
+    "ghidra_stdout_sha256": "9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de",
     "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "0c98fc0cb05c0ce206e95251cd0784a18f5edf52d76afa8453dfb6a2c7d317ae",
+    "rugra_stdout_sha256": "9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de",
     "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "ghidra_exit_code": 0,
@@ -231,85 +451,61 @@
       "residual_todo_ids": []
     },
     "subpiece_terminator_path": {
-      "status": "UNTESTED",
-      "covers": "allowSubpieceTerminator=true terminating SUBPIECE branch (newPreexistingOp SUBPIECE with newConstant(4,0,0) second input) is not exercised",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "status": "MATCH",
+      "covers": "allowSubpieceTerminator=true terminating SUBPIECE branch (subflow.cc:3934-3944): a 1-byte slice at bytePos 4 of an 8-byte/2-byte-lane root fails restriction (bytePos+size off boundary), passes the lane-boundary and lane-bigger-than-piece guards, and the reader becomes a preexisting SUBPIECE over the lane-2 placeholder with newConstant(4,0,0) as its offset input; full projection after apply",
+      "residual_todo_ids": []
     },
     "store_load_lane_split": {
-      "status": "UNTESTED",
-      "covers": "buildStore/buildLoad lane splits including INT_ADD pointer advancement, shared base pointer at bytePos 0 and endian lane reordering are not exercised",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "status": "MATCH",
+      "covers": "buildStore (subflow.cc:3704-3742) over a written pointer (non-free) and a free constant pointer, including the free-non-constant rejection guard position, shared base pointer at bytePos 0, INT_ADD-advanced newUnique pointer with newConstant(ptrSize,0,bytePos) at bytePos 2, ram spaceid constant reproduction and little-endian lane order; buildLoad (subflow.cc:3753-3789) over a constant pointer with base/advanced pointers and per-lane outputs; both through doTrace+apply with full projection and alive-op counts",
+      "residual_todo_ids": []
     },
     "shift_zext_lane_split": {
-      "status": "UNTESTED",
-      "covers": "buildRightShift/buildLeftShift lane-to-lane copying with zero-lane constants and buildZext zero-extension are not exercised",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "status": "MATCH",
+      "covers": "buildRightShift (subflow.cc:3800-3826) with a 16-bit shift over desc(8,2): three lane-to-lane COPYs from inVars+(startLane-skipLanes) and a zero-constant COPY in the most significant lane; buildLeftShift (subflow.cc:3837-3863) mirrored with the zero lane least significant; buildZext (subflow.cc:3875-3905) extending a 4-byte input to 8 bytes: two input-lane COPYs plus two zero-constant COPYs sized by description.getSize(skipLanes+inLanes+i); all through doTrace+apply with full projection",
+      "residual_todo_ids": []
     },
     "indirect_lane_split": {
-      "status": "UNTESTED",
-      "covers": "buildIndirect lane INDIRECTs sharing the iop annotation and inheritIndirect flag inheritance are not exercised",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "status": "MISMATCH",
+      "covers": "buildIndirect (subflow.cc:3681-3694) splitting two INDIRECT roots whose in(0) constants are marked via markIndirectCreation(false) (indirect zero) and markIndirectCreation(true) (possible out): the LaneDivide layer is byte-identical — lane INDIRECT count/order, inheritIndirect bit propagation, specialHandling re-marking of the materialized ops/outputs/inputs, iop sharing through newIop placeholders. The single residual difference (verified by raw diff, excluded from the byte gate via the documented si/k0 annotation normalization) is TransformVar::createReplacement's constant_iop arm (transform.rs:445-450 stale no-iop-space fallback vs transform.cc:211-215) materializing the annotation as a const-space constant instead of an iop-space varnode; transform.rs is outside this lease so the branch stays MISMATCH",
+      "residual_todo_ids": [
+        "TRANSFORM-CONSTANT-IOP-SPACE-0001"
+      ]
     },
     "restricted_window_trace": {
-      "status": "UNTESTED",
-      "covers": "traces where skipLanes>0 (multi-lane buildPiece halves, traceForward PIECE/extension windows, traceBackward SUBPIECE/extension) are not exercised",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "status": "MATCH",
+      "covers": "skipLanes>0 windows: a multi-lane SUBPIECE reader at offset 2 opens a 2-lane window at skipLanes=1 (setReplacement outSkip propagation, subflow.cc:3953); its traceBackward runs the SUBPIECE extension (subflow.cc:4046-4057) reusing the root split through getSplit with buildUnaryOp input offset (skipLanes-inSkip); its traceForward hits both a mid-window SUBPIECE terminator at laneIndex==skipLanes (the defined boundary adjacent to the NO_ORACLE negative-index corner) and a single-lane preexisting COPY with input offset outSkip-skipLanes==0",
+      "residual_todo_ids": []
     },
     "typelock_reject_path": {
-      "status": "UNTESTED",
-      "covers": "setReplacement rejection of type-locked primitive metatypes (subflow.cc:3532-3538) is not exercised",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "status": "MATCH",
+      "covers": "setReplacement type-lock gate (subflow.cc:3532-3538): TYPE_INT (metatype above TYPE_ARRAY in the type.hh:79-99 descending enum) and TYPE_STRUCT inputs are both rejected mid-trace with doTrace=false, cleared marks and before==after projections, while a type-locked TYPE_ARRAY input stays inside the allow set and splits normally through doTrace+apply; lock states confirmed via the /t varnode projection field",
+      "residual_todo_ids": []
     },
     "oracle_ub_lane_index_below_skip": {
       "status": "NO_ORACLE",
       "covers": "subflow.cc:3942 evaluates rvn+(laneIndex-skipLanes) with laneIndex<skipLanes, a negative index into the numLanes-sized newSplit array (transform.cc:484) — undefined behavior in the oracle with no defined observation to align to; Rugra conservatively refuses the split (see src/subflow.rs trace_forward annotation)",
-      "residual_todo_ids": ["LANEDIVIDE-INFRA-RESIDUAL-0001"]
+      "residual_todo_ids": [
+        "LANEDIVIDE-INFRA-RESIDUAL-0001"
+      ]
     }
   },
-  "projection_status": "MATCH",
+  "projection_status": "UNTESTED",
   "residual_todo_ids": [
-    "LANEDIVIDE-INFRA-RESIDUAL-0001"
+    "LANEDIVIDE-INFRA-RESIDUAL-0001",
+    "TRANSFORM-CONSTANT-IOP-SPACE-0001"
   ],
-  "residual_union": {
-    "todo_id": "LANEDIVIDE-INFRA-RESIDUAL-0001",
-    "status": "UNTESTED",
-    "branches": [
-      {
-        "id": "subpiece_terminator_path",
-        "status": "UNTESTED",
-        "detail": "allowSubpieceTerminator=true terminating SUBPIECE branch with newPreexistingOp is outside this fixture"
-      },
-      {
-        "id": "store_load_lane_split",
-        "status": "UNTESTED",
-        "detail": "buildStore/buildLoad pointer-advancement and endian lane ordering branches are not covered"
-      },
-      {
-        "id": "shift_zext_lane_split",
-        "status": "UNTESTED",
-        "detail": "buildRightShift/buildLeftShift/buildZext lane copy and zero-fill branches are not covered"
-      },
-      {
-        "id": "indirect_lane_split",
-        "status": "UNTESTED",
-        "detail": "buildIndirect and inheritIndirect are not exercised"
-      },
-      {
-        "id": "restricted_window_trace",
-        "status": "UNTESTED",
-        "detail": "skipLanes>0 restricted-window traces are not covered"
-      },
-      {
-        "id": "typelock_reject_path",
-        "status": "UNTESTED",
-        "detail": "setReplacement type-lock metatype rejection is not covered"
-      },
-      {
-        "id": "oracle_ub_lane_index_below_skip",
-        "status": "NO_ORACLE",
-        "detail": "Ghidra subflow.cc:3942 negative placeholder index is undefined behavior; no oracle observation exists, Rugra refuses the split (LANEDIVIDE-INFRA-RESIDUAL-0001)"
-      }
-    ]
-  },
+  "residual_union": [
+    {
+      "todo_id": "LANEDIVIDE-INFRA-RESIDUAL-0001",
+      "status": "NO_ORACLE",
+      "detail": "Ghidra subflow.cc:3942 evaluates rvn+(laneIndex-skipLanes) with laneIndex<skipLanes, a negative index into the numLanes-sized newSplit array (transform.cc:484) — undefined behavior in the oracle with no defined observation to align to; Rugra conservatively refuses the split (see src/subflow.rs trace_forward annotation). The adjacent laneIndex==skipLanes boundary is covered as MATCH by restricted_window_trace."
+    },
+    {
+      "todo_id": "TRANSFORM-CONSTANT-IOP-SPACE-0001",
+      "status": "MISMATCH",
+      "detail": "TransformVar::createReplacement constant_iop arm: transform.cc:211-215 resolves the affecting op from the placeholder value (PcodeOp::getOpFromConst over the iop space) and re-materializes the annotation via fd->newVarnodeIop (iop-space varnode, not a constant). Rugra transform.rs:445-450 still carries the stale 'Rugra has no iop space yet' fallback and creates fd.new_constant(size, op_pointer) — a const-space constant. Funcdata::new_varnode_iop (funcdata.rs:3303, Iop-space, B2-covered) and Funcdata::get_op_from_const (funcdata.rs:3325) both exist; the fix is a 3-line re-routing inside transform.rs (outside the LANEDIVIDE-INFRA-RESIDUAL-0001 lease, transform.rs frozen by the TRANSFORM-* owners). Discovered by this fixture's indirect case; raw diff verified the difference is confined to the materialized annotation varnodes."
+    }
+  ],
   "overall_status": "UNTESTED"
 }
