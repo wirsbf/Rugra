@@ -73,6 +73,13 @@ pub struct TypeFactory {
     /// type.hh:771). Element value -1 marks "not set" during decode; index 0
     /// stays -1 unless an explicit `<entry size="0">` exists.
     align_map: Vec<i32>,
+
+    /// Maximum size of a scalar "base" type before `getBase` converts the
+    /// request into an array of 1-byte unknowns (Ghidra
+    /// `Architecture::max_basetype_size`, architecture.hh:173, set to 10 at
+    /// architecture.cc:1422). Rugra stores it on the factory because the
+    /// factory has no Architecture handle yet.
+    max_base_type_size: usize,
 }
 
 /// Which core-unknown registration path the architecture uses. Ghidra
@@ -131,8 +138,53 @@ impl TypeFactory {
             // mapped call graph.
             enum_type: TypeMetatype::Unknown,
             align_map: Vec::new(),
+            // Ghidra: architecture.cc:1422 `max_basetype_size = 10;` —
+            // installed by Architecture::resetDefaults, mirrored as the
+            // factory default because TypeFactory reads it from `glb` at
+            // type.cc:3652.
+            max_base_type_size: 10,
         };
         factory.init_core_types_flavor(flavor);
+        factory
+    }
+
+    // Ghidra: type.cc:3106 TypeFactory::TypeFactory(Architecture *g)
+    /// The raw Ghidra constructor projection: an EMPTY container with zeroed
+    /// size fields, no alignment map, no core types, and freshly cleared
+    /// caches. `TypeFactory::new` is the Rust architecture-bootstrap twin
+    /// (Ghidra builds core types from `SleighArchitecture::buildCoreTypes`
+    /// AFTER constructing the raw factory); `raw` exposes the pre-bootstrap
+    /// state itself so the constructor's observable behaviour — `findAdd`
+    /// failing with the uninitialized-alignment-map LowlevelError and
+    /// `getTypeVoid`/`getTypeCode` still working — can be differentially
+    /// tested against the oracle.
+    pub fn raw() -> Self {
+        let mut factory = Self {
+            types: BTreeMap::new(),
+            core_types: BTreeMap::new(),
+            base_type_tree: RwLock::new(BTreeMap::new()),
+            base_cache: RwLock::new(BTreeMap::new()),
+            type_nochar: RwLock::new(None),
+            char_cache: RwLock::new(BTreeMap::new()),
+            // Rugra's pointer-size field has no Ghidra member counterpart
+            // (Ghidra reads glb->sizeof_pointer at use sites); 0 marks the
+            // uninitialized raw-constructor state.
+            ptr_size: 0,
+            rel_pointers: BTreeMap::new(),
+            typedefs: BTreeMap::new(),
+            size_of_int: 0,
+            size_of_long: 0,
+            size_of_char: 0,
+            size_of_wchar: 0,
+            size_of_pointer: 0,
+            size_of_alt_pointer: 0,
+            enum_size: 0,
+            enum_type: TypeMetatype::Unknown,
+            align_map: Vec::new(),
+            max_base_type_size: 10,
+        };
+        // Ghidra: type.cc:3118 `clearCache();` is the constructor's only call.
+        factory.clear_cache();
         factory
     }
 
@@ -216,7 +268,7 @@ impl TypeFactory {
         self.core_types.insert(name.clone(), dt.clone());
         self.types.insert(name, dt.clone());
         let tree_key = (
-            Self::datatype_submeta(&dt),
+            Self::submeta_of(&dt),
             Reverse(dt.get_size()),
             dt.get_id(),
         );
@@ -251,20 +303,16 @@ impl TypeFactory {
         }
     }
 
-    // RUGRA-GLUE: Rust enum dispatch for the sub-metatype written by Ghidra's
-    // TypeChar/TypeUnicode/TypeEnum constructors (type.hh:356, type.cc:858,
-    // type.hh:489) before DatatypeCompare orders the TypeFactory tree.
-    fn datatype_submeta(datatype: &Datatype) -> u8 {
-        let flags = datatype.get_flags();
-        match datatype.get_metatype() {
-            TypeMetatype::Int if flags & type_flags::CHARTYPE != 0 => 19,
-            TypeMetatype::Uint if flags & type_flags::CHARTYPE != 0 => 18,
-            TypeMetatype::Int if flags & type_flags::ENUMTYPE != 0 => 15,
-            TypeMetatype::Uint if flags & type_flags::ENUMTYPE != 0 => 13,
-            TypeMetatype::Int if flags & (type_flags::UTF16 | type_flags::UTF32) != 0 => 12,
-            TypeMetatype::Uint if flags & (type_flags::UTF16 | type_flags::UTF32) != 0 => 11,
-            metatype => Self::base_submeta(metatype),
-        }
+    // Ghidra: type.hh:236 Datatype::getSubMeta (via DatatypeCompare, type.hh:306)
+    /// The propagation sub-metatype used by the factory's structural ordering
+    /// (`DatatypeSet` with `DatatypeCompare`: submeta ascending, size
+    /// descending, id ascending — type.cc:227 `compareDependency`). Rugra
+    /// derives it from the `Datatype` variant exactly as Ghidra's
+    /// constructors assign it (TypeChar type.hh:356, TypeUnicode type.cc:862,
+    /// TypeEnum type.hh:489), including the `submeta_override` those
+    /// constructor ports record.
+    fn submeta_of(datatype: &Datatype) -> u8 {
+        datatype.get_submeta() as i32 as u8
     }
 
     // Ghidra: type.cc:3366 TypeFactory::findByName
@@ -276,11 +324,16 @@ impl TypeFactory {
     // Ghidra: type.cc:3631 TypeFactory::getBase
     /// Get a base scalar type of `size` bytes with metatype `m`.
     ///
-    /// This implements the cache-first and in-base-limit identity projection
-    /// of Ghidra `TypeFactory::getBase` (`type.cc:3631-3651,3658-3660`): a
-    /// preferred core entry wins regardless of name; otherwise one unnamed
-    /// `TypeBase` is canonicalized by the ordered tree. The intervening
-    /// `size > max_basetype_size` array conversion remains `MISSING`.
+    /// Compat projection of Ghidra `TypeFactory::getBase`
+    /// (`type.cc:3631-3651,3658-3660`): a preferred core entry wins regardless
+    /// of name; otherwise one unnamed `TypeBase` is canonicalized by the
+    /// ordered tree. The byte-faithful port — including the
+    /// `size > max_basetype_size` array conversion and the
+    /// uninitialized-alignment-map LowlevelError — is [`Self::get_base_result`];
+    /// this lenient twin preserves the historical Rugra contract for existing
+    /// callers on factories whose architecture wiring has not installed an
+    /// alignment map yet (registered residual
+    /// TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001).
     pub fn get_base(&self, size: usize, m: TypeMetatype) -> Option<Arc<Datatype>> {
         let cache_key = (size, m);
         let cache = self
@@ -316,6 +369,124 @@ impl TypeFactory {
         )
     }
 
+    // Ghidra: type.cc:3631 TypeFactory::getBase
+    /// The faithful `TypeFactory::getBase(int4,type_metatype)` port
+    /// (type.cc:3631-3660), returning Ghidra's LowlevelError messages as
+    /// `Err`:
+    /// - `size < 9` and a printable-scalar metatype: the preferred
+    ///   `typecache[size][m]` entry returns immediately.
+    /// - `size >= 9` and TYPE_FLOAT: `typecache10`/`typecache16` (Rugra's
+    ///   `base_cache[(10|16, Float)]`) return when populated.
+    /// - `size > max_base_type_size` (10, architecture.cc:1422): the request
+    ///   converts to an array of `size` cached 1-byte unknowns, exactly as
+    ///   type.cc:3652-3657 does (including the `getStripped` element strip
+    ///   and the findAdd canonicalization of the unnamed array).
+    /// - otherwise an unnamed `TypeBase` is canonicalized through
+    ///   [`Self::find_add`], whose miss path raises the
+    ///   "TypeFactory alignment map not initialized" LowlevelError when no
+    ///   alignment map has been installed (the raw-constructor state).
+    pub fn get_base_result(&mut self, size: usize, m: TypeMetatype) -> Result<Arc<Datatype>, String> {
+        // Ghidra guards `m >= TYPE_FLOAT` (numeric 10..17: Float, Code, Bool,
+        // Uint, Int, Unknown, Spacebase, Void) for the 9x8 typecache matrix.
+        let printable_scalar = matches!(
+            m,
+            TypeMetatype::Float
+                | TypeMetatype::Code
+                | TypeMetatype::Bool
+                | TypeMetatype::Uint
+                | TypeMetatype::Int
+                | TypeMetatype::Unknown
+                | TypeMetatype::Spacebase
+                | TypeMetatype::Void
+        );
+        if size < 9 && printable_scalar {
+            let cache_key = (size, m);
+            let cache = self
+                .base_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = cache.get(&cache_key) {
+                return Ok(existing.clone());
+            }
+        } else if size >= 9 && m == TypeMetatype::Float {
+            // type.cc:3642-3651: only sizes 10 and 16 have dedicated slots.
+            if size == 10 || size == 16 {
+                let cache = self
+                    .base_cache
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(existing) = cache.get(&(size, m)) {
+                    return Ok(existing.clone());
+                }
+            }
+        }
+        if size > self.max_base_type_size {
+            // type.cc:3652-3657: build an array of unknown bytes to match the
+            // size. Ghidra dereferences typecache[1][TYPE_UNKNOWN] without a
+            // null check — a factory that never cached a 1-byte unknown
+            // crashes; Rugra panics with the same precondition documented.
+            let cache_key = (1_usize, TypeMetatype::Unknown);
+            let element = {
+                let cache = self
+                    .base_cache
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                cache.get(&cache_key).cloned()
+            };
+            let element = element.expect(
+                "getBase array conversion requires a cached 1-byte unknown (type.cc:3654)",
+            );
+            // getTypeArray strips a typedef layer off the element first
+            // (type.cc:3902-3905).
+            let element = if element.get_flags() & type_flags::HAS_STRIPPED != 0 {
+                match self.typedefs.get(element.get_name()) {
+                    Some(target) => target.clone(),
+                    None => element,
+                }
+            } else {
+                element
+            };
+            // TypeArray ctor (type.hh:937-944): size = n * arrayof->getAlignSize(),
+            // alignment inherited, NO inheritable flags, needs_resolution for n==1.
+            let total = size * element.get_align_size();
+            let mut base = TypeBase::new(String::new(), total, TypeMetatype::Array);
+            if size == 1 {
+                base.flags |= type_flags::NEEDS_RESOLUTION;
+            }
+            return self.find_add(
+                Datatype::Array(TypeArray {
+                    base,
+                    array_of: element,
+                    num_elements: size,
+                }),
+                true,
+            );
+        }
+        self.find_add(Datatype::Base(TypeBase::new(String::new(), size, m)), true)
+    }
+
+    // Ghidra: type.cc:3619 TypeFactory::getBaseNoChar
+    /// The faithful `TypeFactory::getBaseNoChar` port (type.cc:3619-3625): a
+    /// one-byte TYPE_INT request returns `type_nochar` when the side cache
+    /// holds a selection; everything else delegates to the faithful
+    /// [`Self::get_base_result`], including its LowlevelError propagation.
+    pub fn get_base_no_char_result(
+        &mut self,
+        size: usize,
+        metatype: TypeMetatype,
+    ) -> Result<Arc<Datatype>, String> {
+        if size == 1 && metatype == TypeMetatype::Int {
+            let nochar = self
+                .type_nochar
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(datatype) = nochar.as_ref() {
+                return Ok(datatype.clone());
+            }
+        }
+        self.get_base_result(size, metatype)
+    }
+
     // Ghidra: type.cc:3619 TypeFactory::getBaseNoChar
     /// Get a canonical base type, excluding the printable ASCII character
     /// specialization for a one-byte signed integer when a non-character core
@@ -333,41 +504,170 @@ impl TypeFactory {
         self.get_base(size, metatype)
     }
 
-    // Ghidra: type.cc:3667 TypeFactory::getBase
-    /// Get or create a named atomic type, rejecting a second definition that
-    /// reuses the name/id with a different size or metatype.
+    // Ghidra: type.cc:3667 TypeFactory::getBase(int4,type_metatype,const string &)
+    /// Get or create a "base" type with a specified name and properties.
+    /// Faithful to `TypeFactory::getBase(int4 s,type_metatype m,const string &n)`
+    /// (type.cc:3667-3673): `TypeBase tmp(s,m,n); tmp.id = hashName(n);
+    /// return findAdd(tmp);`
     pub fn get_base_named(
         &mut self,
         size: usize,
         m: TypeMetatype,
         name: &str,
     ) -> Result<Arc<Datatype>, String> {
-        if let Some(existing) = self.find_by_name(name) {
-            if existing.get_size() != size || existing.get_metatype() != m {
-                return Err(format!("Trying to alter definition of type: {name}"));
-            }
-            return Ok(existing);
-        }
-
         let mut base = TypeBase::new(name.to_string(), size, m);
         base.id = Datatype::hash_name(name);
-        let datatype = Arc::new(Datatype::Base(base));
-        let tree_key = (
-            Self::base_submeta(datatype.get_metatype()),
-            Reverse(datatype.get_size()),
-            datatype.get_id(),
-        );
+        self.find_add(Datatype::Base(base), false)
+    }
+
+    // Ghidra: type.cc:3412 TypeFactory::findAdd
+    /// Use the quickest method (name or id when possible) to locate the
+    /// matching data-type; if not currently in this container, insert the
+    /// candidate. Faithful to `TypeFactory::findAdd` (type.cc:3412-3439):
+    ///
+    /// - Named candidate with id 0 raises
+    ///   `"Datatype must have a valid id: {name}"` (type.cc:3419).
+    /// - A name+id hit whose `compareDependency` differs (sub-metatype or
+    ///   size; type.cc:227-234) raises
+    ///   `"Trying to alter definition of type: {name}"` (type.cc:3423); an
+    ///   equal definition returns the EXISTING factory object (this is the
+    ///   aliasing point `setCoreType` relies on when promoting).
+    /// - An unnamed (or id-missed) candidate is probed structurally in the
+    ///   ordered tree keyed by (sub-metatype, descending size, id) —
+    ///   `DatatypeCompare`, type.hh:306-310 — and returns the canonical entry
+    ///   on equivalence.
+    /// - On a miss the candidate is inserted; the alignment computation
+    /// (type.cc:3433-3436) raises
+    /// `"TypeFactory alignment map not initialized"` when no map was
+    /// installed (the raw-constructor state) — gated behind
+    /// `enforce_alignment`, which is set on the faithful `getBase` port
+    /// [`Self::get_base_result`] only: production Rugra factories do not yet
+    /// thread the decoded alignment map through their architecture wiring
+    /// (registered residual TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001), and a
+    /// tree slot already holding the same key raises
+    /// `"Shared type id: {id:x}"` (type.cc:3393-3403).
+    ///
+    /// Rugra note: `Datatype::compareDependency` on containers walks
+    /// components/element pointers (type.cc:1225 TypeArray uses the element
+    /// POINTER); the tree key here can only carry (submeta, size, id), so
+    /// container candidates are probed/inserted under an additional element
+    /// Arc-identity check, and deep structural container ordering remains the
+    /// registered TYPE-0001 residual. Atomic candidates match the oracle
+    /// exactly.
+    fn find_add(
+        &mut self,
+        candidate: Datatype,
+        enforce_alignment: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let name = candidate.get_name().to_string();
+        let candidate_id = candidate.get_id();
+        let candidate_submeta = Self::submeta_of(&candidate);
+        let candidate_size = candidate.get_size();
+        if !name.is_empty() {
+            // type.cc:3417-3425
+            if candidate_id == 0 {
+                return Err(format!("Datatype must have a valid id: {name}"));
+            }
+            if let Some(existing) = self.types.get(&name) {
+                if existing.get_id() == candidate_id {
+                    // compareDependency: submeta, then size (type.cc:227).
+                    if existing.get_submeta() as i32 != candidate_submeta as i32
+                        || existing.get_size() != candidate_size
+                    {
+                        return Err(format!("Trying to alter definition of type: {name}"));
+                    }
+                    return Ok(existing.clone());
+                }
+                // Ghidra's nametree keeps multiple (name,id) entries; Rugra's
+                // flat map holds one, so an id mismatch falls through to the
+                // structural insert and overwrites the name slot (registered
+                // TYPE-0001 name-map residual).
+            }
+        } else {
+            // type.cc:3427-3430 findNoName: structural probe including id.
+            let tree_key = (candidate_submeta, Reverse(candidate_size), candidate_id);
+            let tree = self
+                .base_type_tree
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = tree.get(&tree_key) {
+                if !matches!(candidate, Datatype::Array(_))
+                    || Self::array_element_matches(&candidate, existing)
+                {
+                    return Ok(existing.clone());
+                }
+            }
+        }
+        // type.cc:3432-3438: alignment computation on the clone. Rugra's
+        // TypeBase has no alignment field (datatype.rs registered gap); the
+        // observable LowlevelError on an uninitialized map is preserved for
+        // the enforcing entry points.
+        if enforce_alignment && self.align_map.is_empty() {
+            return Err("TypeFactory alignment map not initialized".to_string());
+        }
+        let tree_key = (candidate_submeta, Reverse(candidate_size), candidate_id);
         let mut tree = self
             .base_type_tree
-            .write()
+            .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if tree.contains_key(&tree_key) {
-            return Err(format!("Shared type id: {:x}", datatype.get_id()));
+        if let Some(existing) = tree.get(&tree_key) {
+            if matches!(candidate, Datatype::Array(_)) {
+                if Self::array_element_matches(&candidate, existing) {
+                    // Unnamed arrays of the same element canonicalize to one
+                    // entry.
+                    return Ok(existing.clone());
+                }
+                // Ghidra orders same-size arrays of distinct elements by
+                // element pointer (type.cc:1228); Rugra's flat key cannot
+                // hold both, so the second distinct element raises the
+                // shared-id LowlevelError (registered TYPE-0001 residual).
+            }
+            let mut message = format!("Shared type id: {:x}\n  ", candidate_id);
+            message.push_str(&Self::print_raw(&candidate));
+            message.push_str(" : ");
+            message.push_str(&Self::print_raw(existing));
+            return Err(message);
         }
-        tree.insert(tree_key, datatype.clone());
+        let arc = Arc::new(candidate);
+        tree.insert(tree_key, arc.clone());
         drop(tree);
-        self.types.insert(name.to_string(), datatype.clone());
-        Ok(datatype)
+        // type.cc:3404-3405: nametree gets named (id != 0) entries.
+        if !name.is_empty() {
+            self.types.insert(name, arc.clone());
+        }
+        Ok(arc)
+    }
+
+    // RUGRA-GLUE: element comparison for array findAdd probes. Ghidra's
+    // TypeArray::compareDependency (type.cc:1225-1232) orders arrays by the
+    // element POINTER; Arc identity is the Rust observation of that pointer.
+    fn array_element_matches(candidate: &Datatype, existing: &Arc<Datatype>) -> bool {
+        match (candidate, existing.as_ref()) {
+            (Datatype::Array(c), Datatype::Array(e)) => Arc::ptr_eq(&c.array_of, &e.array_of),
+            _ => false,
+        }
+    }
+
+    // Ghidra: type.cc:139 Datatype::printRaw (base), type.cc:910
+    // TypePointer::printRaw, type.cc:1204 TypeArray::printRaw — the fragments
+    /// used by insert's "Shared type id" message (type.cc:3396-3400): the
+    /// name (or `unkbyte<size>`), `element *` for pointers, and
+    /// `element [n]` for arrays.
+    fn print_raw(dt: &Datatype) -> String {
+        match dt {
+            Datatype::Pointer(p) => format!("{} *", Self::print_raw(&p.ptr_to)),
+            Datatype::Array(a) => {
+                format!("{} [{}]", Self::print_raw(&a.array_of), a.num_elements)
+            }
+            _ => {
+                let name = dt.get_name();
+                if name.is_empty() {
+                    format!("unkbyte{}", dt.get_size())
+                } else {
+                    name.to_string()
+                }
+            }
+        }
     }
 
     // Ghidra: type.cc:1035 TypePointer::calcSubmeta (needs_resolution arm)
@@ -749,9 +1049,19 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:3266 TypeFactory::clearNoncore
-    /// Clear all non-core types
+    /// Delete anything that isn't a core type. Faithful to
+    /// `TypeFactory::clearNoncore` (type.cc:3266-3285): the ordered tree (and
+    /// its name cross-reference) is walked retaining exactly the entries
+    /// whose object carries the core flag — INCLUDING entries that were
+    /// promoted in place by `setCoreType` — while the preferred-type caches
+    /// are left untouched (every cached entry is core by construction).
+    /// `warnings`/`incompleteTypedef` have no Rugra counterpart; the relative
+    /// pointer/typedef side registries are glue and follow their objects.
     pub fn clear_non_core(&mut self) {
-        self.types = self.core_types.clone();
+        // Ghidra scans the core flag on the tree entries; the promoted objects
+        // carry it after promote_core replaced every channel.
+        self.types.retain(|_, datatype| datatype.is_coretype());
+        self.core_types.retain(|_, datatype| datatype.is_coretype());
         self.base_type_tree
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -771,66 +1081,126 @@ impl TypeFactory {
     // ---------------------------------------------------------------
 
     // Ghidra: type.cc:3575 TypeFactory::getTypeVoid
-    /// There should be exactly one "void" Datatype object.
-    /// Faithful to `TypeFactory::getTypeVoid` (type.cc:3575-3588).
-    /// Rugra creates the singleton void core-type in `init_core_types`, so
-    /// this just returns it.
+    /// The faithful `TypeFactory::getTypeVoid` port (type.cc:3575-3588): the
+    /// typecache slot `typecache[0][TYPE_VOID-TYPE_FLOAT]` returns
+    /// immediately when filled; otherwise a `TypeVoid` (whose constructor
+    /// sets `coretype` and the name "void", type.hh:389) is given
+    /// `id = hashName("void")`, inserted directly into the tree/name
+    /// cross-reference WITHOUT a findAdd conflict check, and cached in the
+    /// typecache slot itself.
+    pub fn get_type_void_result(&mut self) -> Arc<Datatype> {
+        {
+            let cache = self
+                .base_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = cache.get(&(0, TypeMetatype::Void)) {
+                return existing.clone();
+            }
+        }
+        // TypeVoid ctor (type.hh:389): name "void", size 0, coretype flag.
+        let mut base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
+        base.id = Datatype::hash_name("void");
+        base.flags |= type_flags::CORETYPE;
+        let dt = Arc::new(Datatype::Void(base));
+        let tree_key = (Self::submeta_of(&dt), Reverse(dt.get_size()), dt.get_id());
+        let mut tree = self
+            .base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tree.insert(tree_key, dt.clone());
+        drop(tree);
+        self.types.insert("void".to_string(), dt.clone());
+        self.base_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert((0, TypeMetatype::Void), dt.clone());
+        dt
+    }
+
+    // RUGRA-GLUE: shared-reference twin of [`Self::get_type_void_result`]
+    /// for callers holding `&TypeFactory` (userop/funcdata). Every production
+    /// factory bootstraps the void core type, so the cache/name lookup always
+    /// resolves; the raw-constructor creation path is the `_result` variant.
     pub fn get_type_void(&self) -> Arc<Datatype> {
-        // Mirrors the cached lookup in Ghidra; void is always present.
+        {
+            let cache = self
+                .base_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = cache.get(&(0, TypeMetatype::Void)) {
+                return existing.clone();
+            }
+        }
         self.find_by_name("void")
             .expect("void core type must exist")
     }
 
-    // Ghidra: type.cc:3593 TypeFactory::getTypeChar
-    /// Create a 1-byte character data-type (UTF8). Faithful to
-    /// `TypeFactory::getTypeChar(const string &n)` (type.cc:3593-3599), which
-    /// builds a `TypeChar(n)` — a `TypeBase(1, TYPE_INT, n)` with the
-    /// `chartype` flag set — and adds it. Rugra represents this as
-    /// `Datatype::Base` with `metatype=Int` and the `CHARTYPE` flag.
-    pub fn get_type_char(&mut self, size: usize) -> Arc<Datatype> {
-        let cache = self
-            .char_cache
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(existing) = cache.get(&size) {
-            return existing.clone();
+    // Ghidra: type.cc:3678 TypeFactory::getTypeChar(int4 s)
+    /// If a core character data-type of the given size exists, return it.
+    /// Otherwise raise Ghidra's LowlevelError. Faithful to
+    /// `TypeFactory::getTypeChar(int4 s)` (type.cc:3678-3687): the lookup
+    /// consults `charcache[s]` only for `s < 5`; every other size — and every
+    /// cache miss — raises
+    /// `"Request for unsupported character data-type"` as `Err`.
+    pub fn get_type_char(&self, size: usize) -> Result<Arc<Datatype>, String> {
+        if size < 5 {
+            let cache = self
+                .char_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = cache.get(&size) {
+                return Ok(existing.clone());
+            }
         }
-        drop(cache);
+        Err("Request for unsupported character data-type".to_string())
+    }
 
-        // The historical Rugra API also constructs an unregistered character
-        // when no core cache entry exists; callers that need Ghidra's throwing
-        // size-only lookup use a previously cached core type.
-        let name = char_name_for_size(size);
-        if let Some(existing) = self.find_by_name(&name) {
-            return existing;
-        }
-        let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Int);
-        base.flags |= type_flags::CHARTYPE;
-        let dt = Arc::new(Datatype::Base(base));
-        self.types.insert(name, dt.clone());
-        dt
+    // Ghidra: type.cc:3593 TypeFactory::getTypeChar(const string &n)
+    /// Create a 1-byte character data-type (assumed UTF8). Faithful to
+    /// `TypeFactory::getTypeChar(const string &n)` (type.cc:3593-3599): build
+    /// a `TypeChar(n)` — `TypeBase(1,TYPE_INT,n)` with the `chartype` flag
+    /// and `SUB_INT_CHAR` (type.hh:356) — give it `id = hashName(n)`, and run
+    /// it through `findAdd` (same-definition hit returns the existing object,
+    /// conflicting definitions raise the alter-definition LowlevelError).
+    pub fn get_type_char_named(&mut self, n: &str) -> Result<Arc<Datatype>, String> {
+        let mut base = TypeBase::new_char(n.to_string(), TypeMetatype::Int);
+        base.id = Datatype::hash_name(n);
+        self.find_add(Datatype::Base(base), false)
     }
 
     // Ghidra: type.cc:3606 TypeFactory::getTypeUnicode
-    /// Create a multi-byte unicode character data-type (UTF16/UTF32). Faithful
-    /// to `TypeFactory::getTypeUnicode` (type.cc:3606-3612), which builds a
-    /// `TypeUnicode(nm, sz, m)` — a base type with the `utf16`/`utf32` flag
-    /// depending on size — and adds it.
+    /// Create a multi-byte character data-type (UTF16/UTF32). Faithful to
+    /// `TypeFactory::getTypeUnicode` (type.cc:3606-3612): build a
+    /// `TypeUnicode(nm,sz,m)` — `setflags()` selects `utf16`/`utf32`/
+    /// `chartype` by size (type.cc:837-846) and the sub-metatype is
+    /// `SUB_INT_UNICODE`/`SUB_UINT_UNICODE` regardless of size
+    /// (type.cc:862-867) — give it `id = hashName(nm)`, and run it through
+    /// `findAdd`.
+    pub fn get_type_unicode_named(
+        &mut self,
+        nm: &str,
+        sz: usize,
+        m: TypeMetatype,
+    ) -> Result<Arc<Datatype>, String> {
+        let mut base = TypeBase::new_unicode(nm.to_string(), sz, m);
+        base.id = Datatype::hash_name(nm);
+        self.find_add(Datatype::Base(base), false)
+    }
+
+    // RUGRA-GLUE: size-keyed convenience wrapper over
+    /// [`Self::get_type_unicode_named`] with the historical canonical name
+    /// (wchar2/wchar4). Ghidra has no size-only getTypeUnicode; the
+    /// name-carrying port above is the faithful entry.
     pub fn get_type_unicode(&mut self, size: usize) -> Arc<Datatype> {
         let name = unicode_name_for_size(size);
-        if let Some(existing) = self.find_by_name(&name) {
-            return existing;
+        match self.get_type_unicode_named(&name, size, TypeMetatype::Int) {
+            Ok(dt) => dt,
+            // The legacy API cannot fail on the default factory state it was
+            // designed for (an installed alignment map); surface the faithful
+            // error as a panic rather than silently diverging.
+            Err(message) => panic!("LowlevelError: {message}"),
         }
-        let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Int);
-        // Ghidra TypeUnicode::setflags(): utf16 for 2-byte, utf32 for 4-byte.
-        if size == 2 {
-            base.flags |= type_flags::UTF16;
-        } else if size == 4 {
-            base.flags |= type_flags::UTF32;
-        }
-        let dt = Arc::new(Datatype::Base(base));
-        self.types.insert(name, dt.clone());
-        dt
     }
 
     // Ghidra: type.cc:3940 TypeFactory::getTypeUnion
@@ -877,10 +1247,43 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:3967 TypeFactory::getTypeEnum
-    /// Create an enumeration data-type with no named values yet. Faithful to
-    /// `TypeFactory::getTypeEnum` (type.cc:3967-3973). Ghidra builds it from
-    /// `enumsize`/`enumtype` and sets the `enumtype` flag (type.hh:490-494);
-    /// Rugra defaults to a 4-byte int enum and the `ENUMTYPE` flag.
+    /// The faithful `TypeFactory::getTypeEnum` port (type.cc:3967-3973): a
+    /// `TypeEnum tmp(enumsize, enumtype, n)` — the factory's configured
+    /// `enumsize`/`enumtype` state (type.hh:489-494 sets the `enumtype` flag,
+    /// normalizes the metatype to TYPE_INT/TYPE_UINT, and leaves the
+    /// sub-metatype at base2sub[TYPE_ENUM_INT/UINT] = 15/13) — with
+    /// `id = hashName(n)`, canonicalized through `findAdd` (name cross-
+    /// reference AND the ordered tree, so the enum participates in
+    /// cacheCoreTypes like any other core entry).
+    ///
+    /// `enum_size`/`enum_type` are populated by `parse_enum_config` /
+    /// `setup_sizes`; a factory that never ran either keeps the raw-
+    /// constructor zero state, and the faithful error propagation surfaces
+    /// findAdd's LowlevelErrors as `Err`.
+    pub fn get_type_enum_result(&mut self, name: &str) -> Result<Arc<Datatype>, String> {
+        let meta = if self.enum_type == TypeMetatype::Int {
+            TypeMetatype::Int
+        } else {
+            TypeMetatype::Uint
+        };
+        let mut base = TypeBase::new(name.to_string(), self.enum_size.max(0) as usize, meta);
+        base.id = Datatype::hash_name(name);
+        base.flags |= type_flags::ENUMTYPE;
+        self.find_add(
+            Datatype::Enum(TypeEnum {
+                base,
+                values: std::collections::BTreeMap::new(),
+            }),
+            false,
+        )
+    }
+
+    // RUGRA-GLUE: legacy flat-map twin of [`Self::get_type_enum_result`]
+    /// kept for grammar.rs (its file is under another lease): dedupes by
+    /// name and creates a 4-byte signed stub, which matches the oracle only
+    /// for factories whose `enumsize`/`enumtype` were configured as 4/signed.
+    /// The byte-faithful port reading the configured enum state is
+    /// `get_type_enum_result`.
     pub fn get_type_enum(&mut self, name: &str) -> Arc<Datatype> {
         if let Some(existing) = self.find_by_name(name) {
             return existing;
@@ -914,20 +1317,52 @@ impl TypeFactory {
         None
     }
 
-    // Ghidra: type.cc:3692 TypeFactory::getTypeCode
+    // Ghidra: type.cc:3692 TypeFactory::getTypeCode()
     /// Retrieve or create the core "code" Datatype object with no prototype
-    /// attached. Faithful to `TypeFactory::getTypeCode()` (type.cc:3692-3701),
-    /// which builds a generic (complete) `TypeCode` and adds it. Rugra
-    /// represents code as a 1-byte (size 1 in Ghidra) `TypeCode`.
+    /// attached. Faithful to `TypeFactory::getTypeCode()` (type.cc:3692-3701):
+    /// the typecache slot `typecache[1][TYPE_CODE-TYPE_FLOAT]` returns when
+    /// filled; otherwise a generic complete `TypeCode` — UNNAMED, id 0
+    /// (type.cc:3698-3700) — is canonicalized through `findAdd` (the ordered
+    /// tree dedupes it on (SUB_CODE, size, id)).
     pub fn get_type_code(&mut self) -> Arc<Datatype> {
-        let name = "code";
-        if let Some(existing) = self.find_by_name(name) {
-            return existing;
+        {
+            let cache = self
+                .base_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = cache.get(&(1, TypeMetatype::Code)) {
+                return existing.clone();
+            }
         }
-        let base = TypeBase::new(name.to_string(), 1, TypeMetatype::Code);
-        let dt = Arc::new(Datatype::Code(TypeCode { base, proto: None }));
-        self.types.insert(name.to_string(), dt.clone());
+        let base = TypeBase::new(String::new(), 1, TypeMetatype::Code);
+        // tmp.markComplete() (type.cc:3699): considered complete.
+        let candidate = Datatype::Code(TypeCode { base, proto: None });
+        let tree_key = (Self::submeta_of(&candidate), Reverse(1), 0);
+        let mut tree = self
+            .base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dt = tree
+            .entry(tree_key)
+            .or_insert_with(|| Arc::new(candidate))
+            .clone();
         dt
+    }
+
+    // Ghidra: type.cc:3707 TypeFactory::getTypeCode(const string &nm)
+    /// Create a "function"/"executable" data-type with a name. Faithful to
+    /// `TypeFactory::getTypeCode(const string &nm)` (type.cc:3707-3717): an
+    /// empty name delegates to the unnamed getter; otherwise a generic
+    /// complete `TypeCode` carrying `name`/`displayName` and
+    /// `id = hashName(nm)` is canonicalized through `findAdd`.
+    pub fn get_type_code_named(&mut self, nm: &str) -> Result<Arc<Datatype>, String> {
+        if nm.is_empty() {
+            return Ok(self.get_type_code());
+        }
+        let mut base = TypeBase::new(nm.to_string(), 1, TypeMetatype::Code);
+        base.id = Datatype::hash_name(nm);
+        // tmp.markComplete() (type.cc:3715).
+        self.find_add(Datatype::Code(TypeCode { base, proto: None }), false)
     }
 
     // Ghidra: type.cc:4002 TypeFactory::getTypeCode(PrototypePieces)
@@ -1627,12 +2062,14 @@ impl TypeFactory {
     }
 }
 
-// Ghidra: type.cc:3850 TypeFactory::hashSize
+// Ghidra: type.cc:709 Datatype::hashSize
 /// Reversibly hash a size into a data-type id. Faithful to
-/// `Datatype::hashSize` (type.hh:206). This is the inverse-stable
-/// `id*size + size` folding Ghidra uses for variable-length base ids.
+/// `Datatype::hashSize` (type.cc:709-716): `sizeHash = size *
+/// 0x98251033aecbabaf; id ^= sizeHash;` — feeding the output back with the
+/// same size recovers the original id. Delegates to the canonical
+/// `Datatype::hash_size` port.
 pub fn hash_size(id: u64, sz: usize) -> u64 {
-    (id << 8) | (sz as u64 & 0xff)
+    Datatype::hash_size(id, sz as i32)
 }
 
 // Ghidra: type.cc:3850 TypeFactory::charNameForSize
@@ -1731,15 +2168,68 @@ impl TypeFactory {
 
     // Ghidra: type.cc:3178 TypeFactory::setCoreType
     /// Manually create a "base" core type and mark it as core. Faithful to
-    /// `TypeFactory::setCoreType` (type.cc:3178-3195). For character types it
-    /// builds a `TypeChar`/`TypeUnicode`; for code it builds a `TypeCode`; for
-    /// void it returns the singleton; otherwise a plain base type. The
-    /// `coretype` flag is set on the result.
+    /// `TypeFactory::setCoreType` (type.cc:3178-3195):
     ///
-    /// Returns the (possibly newly created) core type. A conflicting existing
-    /// definition raises the same message as Ghidra's `findAdd` path. The
-    /// immutable-`Arc` alias limitation when promoting an existing non-core
-    /// object is tracked by `TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001`.
+    /// ```text
+    /// if (chartp) { if (size == 1) ct = getTypeChar(name);
+    ///               else ct = getTypeUnicode(name,size,meta); }
+    /// else if (meta == TYPE_CODE) ct = getTypeCode(name);
+    /// else if (meta == TYPE_VOID) ct = getTypeVoid();
+    /// else ct = getBase(size,meta,name);
+    /// ct->flags |= Datatype::coretype;
+    /// ```
+    ///
+    /// Returns the (possibly newly created) core type. Conflicting
+    /// registrations surface Ghidra's `findAdd` LowlevelError messages as
+    /// `Err` ("Trying to alter definition of type: …", "Shared type id: …",
+    /// "Datatype must have a valid id: …", "TypeFactory alignment map not
+    /// initialized") with NO partial state — exactly like the oracle, which
+    /// throws before inserting anything.
+    ///
+    /// Promotion aliasing: Ghidra ORs `coretype` onto the canonical object
+    /// IN PLACE when the name already resolves to an equal definition, so
+    /// every external alias observes the flag immediately. Rust's immutable
+    /// `Arc<Datatype>` cannot mutate through shared handles
+    /// (src/type_system/datatype.rs holds the flag model, a separate lease),
+    /// so [`Self::promote_core`] conservatively replaces the promoted object
+    /// in EVERY factory-owned channel — `types`, `core_types`,
+    /// `base_type_tree`, `base_cache`, `char_cache`, `type_nochar`, and
+    /// identical `typedefs`/`rel_pointers` values — making all
+    /// factory-mediated observations identical. Flag visibility through an
+    /// external stale Arc handle remains the registered residual
+    /// TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001.
+    pub fn set_core_type_result(
+        &mut self,
+        name: &str,
+        size: usize,
+        meta: TypeMetatype,
+        chartp: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let ct = if chartp {
+            if size == 1 {
+                self.get_type_char_named(name)?
+            } else {
+                self.get_type_unicode_named(name, size, meta)?
+            }
+        } else if meta == TypeMetatype::Code {
+            self.get_type_code_named(name)?
+        } else if meta == TypeMetatype::Void {
+            // getTypeVoid returns the singleton, whose constructor already
+            // sets coretype (type.hh:389).
+            return Ok(self.get_type_void_result());
+        } else {
+            self.get_base_named(size, meta, name)?
+        };
+        // type.cc:3194 `ct->flags |= Datatype::coretype;`
+        Ok(self.promote_core(&ct))
+    }
+
+    // RUGRA-GLUE: Arc-returning compatibility wrapper around
+    /// [`Self::set_core_type_result`] for callers written before the Result
+    /// port (cpool.rs/merge.rs test fixtures; their files are under other
+    /// leases). The faithful LowlevelError-equivalent path is
+    /// `set_core_type_result`; migrate callers when their leases free up
+    /// (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001).
     pub fn set_core_type(
         &mut self,
         name: &str,
@@ -1747,88 +2237,122 @@ impl TypeFactory {
         meta: TypeMetatype,
         chartp: bool,
     ) -> Arc<Datatype> {
-        let (actual_name, actual_size, actual_meta) = if chartp && size == 1 {
-            (name, 1, TypeMetatype::Int)
-        } else if !chartp && meta == TypeMetatype::Void {
-            ("void", 0, TypeMetatype::Void)
-        } else if !chartp && meta == TypeMetatype::Code {
-            (name, 1, TypeMetatype::Code)
-        } else {
-            (name, size, meta)
-        };
+        match self.set_core_type_result(name, size, meta, chartp) {
+            Ok(dt) => dt,
+            Err(message) => panic!("LowlevelError: {message}"),
+        }
+    }
 
-        let mut base = TypeBase::new(actual_name.to_string(), actual_size, actual_meta);
-        base.id = Datatype::hash_name(actual_name);
-        if chartp {
-            if actual_size == 1 {
-                base.flags |= type_flags::CHARTYPE;
-            } else if actual_size == 2 {
-                base.flags |= type_flags::UTF16;
-            } else if actual_size == 4 {
-                base.flags |= type_flags::UTF32;
+    // Ghidra: type.cc:3194 `ct->flags |= Datatype::coretype;` (in-place OR)
+    /// OR the `coretype` flag onto the canonical factory object, replacing
+    /// the immutable Arc in every factory-owned channel so that all
+    /// factory-mediated lookups observe the promotion atomically. A type that
+    /// is already core is returned unchanged (the OR is idempotent, exactly
+    /// like the oracle's in-place mutation).
+    ///
+    /// External stale-handle flag visibility cannot be mirrored without an
+    /// interior-mutability rework of `Datatype` (datatype.rs, separate
+    /// lease); that divergence stays registered under
+    /// TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001.
+    fn promote_core(&mut self, ct: &Arc<Datatype>) -> Arc<Datatype> {
+        if ct.is_coretype() {
+            return ct.clone();
+        }
+        let mut promoted = ct.as_ref().clone();
+        match &mut promoted {
+            Datatype::Void(base) | Datatype::Base(base) => base.flags |= type_flags::CORETYPE,
+            Datatype::Enum(e) => e.base.flags |= type_flags::CORETYPE,
+            Datatype::Spacebase(s) => s.base.flags |= type_flags::CORETYPE,
+            Datatype::Pointer(p) => p.base.flags |= type_flags::CORETYPE,
+            Datatype::Array(a) => a.base.flags |= type_flags::CORETYPE,
+            Datatype::Struct(s) => s.base.flags |= type_flags::CORETYPE,
+            Datatype::Union(u) => u.base.flags |= type_flags::CORETYPE,
+            Datatype::Code(c) => c.base.flags |= type_flags::CORETYPE,
+            Datatype::PartialStruct(ps) => ps.base.flags |= type_flags::CORETYPE,
+            Datatype::PartialEnum(pe) => pe.base.flags |= type_flags::CORETYPE,
+            Datatype::PartialUnion(pu) => pu.base.flags |= type_flags::CORETYPE,
+        }
+        let promoted = Arc::new(promoted);
+        let name = promoted.get_name().to_string();
+        if !name.is_empty() {
+            // The factory's core retention set must contain the promoted
+            // object so clearNoncore keeps it (Ghidra scans the core flag in
+            // the tree instead).
+            self.core_types.insert(name.clone(), promoted.clone());
+            if self
+                .types
+                .get(&name)
+                .is_some_and(|old| Arc::ptr_eq(old, ct))
+            {
+                self.types.insert(name, promoted.clone());
             }
         }
-
-        let candidate = if !chartp && actual_meta == TypeMetatype::Void {
-            Datatype::Void(base)
-        } else if !chartp && actual_meta == TypeMetatype::Code {
-            Datatype::Code(TypeCode { base, proto: None })
-        } else {
-            Datatype::Base(base)
-        };
-
-        if let Some(existing) = self.find_by_name(actual_name) {
-            let same_variant = matches!(
-                (existing.as_ref(), &candidate),
-                (Datatype::Void(_), Datatype::Void(_))
-                    | (Datatype::Base(_), Datatype::Base(_))
-                    | (Datatype::Code(_), Datatype::Code(_))
-            );
-            let same_definition = same_variant
-                && existing.get_size() == candidate.get_size()
-                && existing.get_metatype() == candidate.get_metatype()
-                && Self::datatype_submeta(&existing) == Self::datatype_submeta(&candidate);
-            if !same_definition {
-                panic!("Trying to alter definition of type: {actual_name}");
-            }
-            if existing.is_coretype() {
-                return existing;
-            }
-
+        {
             let tree_key = (
-                Self::datatype_submeta(&existing),
-                Reverse(existing.get_size()),
-                existing.get_id(),
+                Self::submeta_of(&promoted),
+                Reverse(promoted.get_size()),
+                promoted.get_id(),
             );
-            let mut promoted = existing.as_ref().clone();
-            match &mut promoted {
-                Datatype::Void(base) | Datatype::Base(base) => {
-                    base.flags |= type_flags::CORETYPE;
-                }
-                Datatype::Code(code) => code.base.flags |= type_flags::CORETYPE,
-                _ => unreachable!("same_variant restricts core promotion"),
-            }
-            let promoted = Arc::new(promoted);
-            self.types.insert(actual_name.to_string(), promoted.clone());
-            self.core_types.insert(actual_name.to_string(), promoted.clone());
-            self.base_type_tree
+            let mut tree = self
+                .base_type_tree
                 .get_mut()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(tree_key, promoted.clone());
-            return promoted;
-        }
-
-        let mut candidate = candidate;
-        match &mut candidate {
-            Datatype::Void(base) | Datatype::Base(base) => {
-                base.flags |= type_flags::CORETYPE;
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match tree.get(&tree_key) {
+                Some(old) if Arc::ptr_eq(old, ct) => {
+                    tree.insert(tree_key, promoted.clone());
+                }
+                None => {
+                    tree.insert(tree_key, promoted.clone());
+                }
+                _ => {}
             }
-            Datatype::Code(code) => code.base.flags |= type_flags::CORETYPE,
-            _ => unreachable!("setCoreType only constructs atomic types"),
         }
-        let datatype = Arc::new(candidate);
-        self.add_core_type(datatype.clone());
-        datatype
+        {
+            // Ghidra's in-place OR never touches the caches; the preferred
+            // slots only ever hold core types (cacheCoreTypes skips
+            // non-core), so a promoted type cannot already occupy a slot.
+            // Replace-by-identity only, for defensive atomicity.
+            let mut cache = self
+                .base_cache
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(slot) = cache.get_mut(&(promoted.get_size(), promoted.get_metatype())) {
+                if Arc::ptr_eq(slot, ct) {
+                    *slot = promoted.clone();
+                }
+            }
+        }
+        {
+            let mut char_cache = self
+                .char_cache
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for slot in char_cache.values_mut() {
+                if Arc::ptr_eq(slot, ct) {
+                    *slot = promoted.clone();
+                }
+            }
+        }
+        {
+            let mut nochar = self
+                .type_nochar
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if nochar.as_ref().is_some_and(|old| Arc::ptr_eq(old, ct)) {
+                *nochar = Some(promoted.clone());
+            }
+        }
+        for target in self.typedefs.values_mut() {
+            if Arc::ptr_eq(target, ct) {
+                *target = promoted.clone();
+            }
+        }
+        for rel in self.rel_pointers.values_mut() {
+            if Arc::ptr_eq(&rel.parent, ct) {
+                rel.parent = promoted.clone();
+            }
+        }
+        promoted
     }
 
     // Ghidra: type.cc:3200 TypeFactory::cacheCoreTypes
@@ -1993,24 +2517,30 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:4567 TypeFactory::decodeCoreTypes
-    /// Parse `<type>` children of a `<coretypes>` element, then refresh the
-    /// core-type cache. Faithful to `TypeFactory::decodeCoreTypes`
-    /// (type.cc:4567-4577). Rugra gap: full type decoding requires the
-    /// Architecture handle (see `decode_type_no_ref`); children are consumed
-    /// to keep the decoder position correct.
-    pub fn decode_core_types(&mut self, decoder: &mut dyn Decoder) {
-        self.clear_non_core(); // Ghidra: clear();
+    /// Parse data-type elements into this container. This stream is presumed
+    /// to contain "core" data-types and the cached matrix will be populated
+    /// from this set. Faithful to `TypeFactory::decodeCoreTypes`
+    /// (type.cc:4567-4577):
+    /// - `clear()` FIRST — a FULL wipe of tree/name cross-reference and
+    /// every preferred-type cache (NOT clearNoncore; core entries from a
+    /// previous stream do not survive),
+    /// - each child element is decoded through `decodeTypeNoRef(decoder,
+    ///   true)` (the forcecore flag ORs `coretype` onto the freshly built
+    ///   candidate, type.cc:4459-4460 etc.),
+    /// - `cacheCoreTypes()` runs at the end — but NOT when a child raised a
+    ///   LowlevelError: the error propagates and the decoded-so-far partial
+    ///   state remains observable.
+    pub fn decode_core_types(&mut self, decoder: &mut dyn Decoder) -> Result<(), String> {
+        self.clear(); // Make sure this routine flushes
         let elem_id = decoder.open_element_matching(&elem::element("coretypes"));
         while decoder.peek_element() != 0 {
-            let child_id = decoder.open_element();
-            if child_id != 0 {
-                decoder.close_element_skipping(child_id);
-            }
+            self.decode_type_no_ref(decoder, true)?;
         }
         if elem_id != 0 {
             decoder.close_element(elem_id);
         }
-        self.cache_core_types(); // Ghidra: cacheCoreTypes();
+        self.cache_core_types();
+        Ok(())
     }
 
     // Ghidra: type.cc:4583 TypeFactory::decodeDataOrganization
@@ -2427,28 +2957,61 @@ impl TypeFactory {
                 Ok(dt)
             }
             TypeMetatype::Enum => {
-                self.decode_enum(decoder, forcecore)
+                // Ghidra's switch distinguishes TYPE_ENUM_INT/TYPE_ENUM_UINT
+                // (type.cc:4482-4485); Rust's TypeMetatype collapses both
+                // variants, so the original attribute string selects the
+                // signedness that TypeEnum::decode derives from the decoded
+                // metatype (type.cc:4323).
+                let ct = self.decode_enum(decoder, forcecore, metastring == "enum_int")?;
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(ct)
             }
             TypeMetatype::Struct => {
-                self.decode_struct(decoder, forcecore)
+                let ct = self.decode_struct(decoder, forcecore)?;
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(ct)
             }
             TypeMetatype::Union => {
-                self.decode_union(decoder, forcecore)
+                let ct = self.decode_union(decoder, forcecore)?;
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(ct)
             }
             TypeMetatype::Code => {
-                self.decode_code(decoder, false, false, forcecore)
+                let ct = self.decode_code(decoder, false, false, forcecore)?;
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(ct)
             }
             TypeMetatype::Void => {
-                // Ghidra: TypeVoid voidType; voidType.decode(decoder,*this); findAdd(voidType);
-                let _id = Datatype::decode_void_id(decoder);
-                let ct = self.get_type_void();
+                // Ghidra: type.cc:4504-4509 — TypeVoid voidType;
+                // voidType.decode(decoder,*this); ct = findAdd(voidType);
+                // The TypeVoid ctor sets name "void" and the coretype flag
+                // (type.hh:389); decode only overwrites the id
+                // (type.cc:887-897), and findAdd runs the full named path —
+                // an absent id raises "Datatype must have a valid id: void".
+                let id = Datatype::decode_void_id(decoder);
+                let mut base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
+                base.id = id;
+                base.flags |= type_flags::CORETYPE;
+                let ct = self.find_add(Datatype::Void(base), false)?;
                 if elem_id != 0 {
                     decoder.close_element(elem_id);
                 }
                 Ok(ct)
             }
             _ => {
-                // default: scan for char/utf, else TypeBase(0, TYPE_UNKNOWN).
+                // Ghidra default arm (type.cc:4511-4544): scan attributes for
+                // char/utf; a `char="true"` builds a TypeChar, `utf="true"`
+                // builds a TypeUnicode, anything else a plain TypeBase — each
+                // merged with decodeBasic's fields and canonicalized through
+                // findAdd.
                 let basic = Datatype::decode_basic(decoder);
                 decoder.rewind_attributes();
                 let mut is_char = false;
@@ -2466,22 +3029,35 @@ impl TypeFactory {
                         }
                     }
                 }
-                let meta = if is_char || is_utf {
-                    TypeMetatype::Int
+                let core_bit = if forcecore { type_flags::CORETYPE } else { 0 };
+                let candidate = if is_char {
+                    // type.cc:4515-4523: TypeChar ctor (type.hh:356) sets
+                    // size 1/TYPE_INT/chartype/SUB_INT_CHAR; the ctor's
+                    // decode then overwrites name/size/metatype/id and
+                    // re-specializes submeta by the decoded metatype
+                    // (type.cc:818).
+                    let mut base = TypeBase::new_char(basic.name.clone(), basic.metatype);
+                    base.size = basic.size;
+                    base.id = basic.id;
+                    base.flags |= basic.flags | core_bit;
+                    Datatype::Base(base)
+                } else if is_utf {
+                    // type.cc:4525-4533: TypeUnicode + decode — setflags()
+                    // picks utf16/utf32/chartype by size (type.cc:837-846)
+                    // and submeta is SUB_INT_UNICODE/SUB_UINT_UNICODE
+                    // regardless of size (type.cc:858).
+                    let mut base =
+                        TypeBase::new_unicode(basic.name.clone(), basic.size, basic.metatype);
+                    base.id = basic.id;
+                    base.flags |= basic.flags | core_bit;
+                    Datatype::Base(base)
                 } else {
-                    basic.metatype
+                    let mut base = TypeBase::new(basic.name.clone(), basic.size, basic.metatype);
+                    base.id = basic.id;
+                    base.flags = basic.flags | core_bit;
+                    Datatype::Base(base)
                 };
-                let mut base = TypeBase::new(basic.name.clone(), basic.size, meta);
-                base.id = basic.id;
-                base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
-                if is_char {
-                    base.flags |= type_flags::CHARTYPE;
-                }
-                if is_utf {
-                    base.flags |= type_flags::UTF16;
-                }
-                let dt = Arc::new(Datatype::Base(base));
-                self.insert(dt.clone());
+                let dt = self.find_add(candidate, false)?;
                 if elem_id != 0 {
                     decoder.close_element(elem_id);
                 }
@@ -2536,15 +3112,24 @@ impl TypeFactory {
     // Ghidra: type.cc:4318 TypeFactory::decodeEnum
     /// Decode an enumeration `<type>` element (with `<val>` children) and add
     /// it to the container. Faithful to `TypeFactory::decodeEnum`
-    /// (type.cc:4318-4329). Returns the (possibly warning-tagged) enum.
+    /// (type.cc:4318-4329): a `TypeEnum` scratch is decoded
+    /// (`TypeEnum::decode` normalizes the metatype to TYPE_INT/TYPE_UINT,
+    /// type.cc:4323), ORs `coretype` when `forcecore`, and is canonicalized
+    /// through `findAdd` — so the enum enters the ordered tree and
+    /// participates in cacheCoreTypes exactly like the oracle.
+    ///
+    /// `signed` carries the TYPE_ENUM_INT/TYPE_ENUM_UINT distinction of
+    /// Ghidra's switch (type.cc:4482-4485), which Rust's collapsed
+    /// `TypeMetatype::Enum` cannot express from `decode_basic` alone.
     pub fn decode_enum(
         &mut self,
         decoder: &mut dyn Decoder,
         forcecore: bool,
+        signed: bool,
     ) -> Result<Arc<Datatype>, String> {
         let basic = Datatype::decode_basic(decoder);
         // Ghidra: metatype = (metatype == TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT;
-        let meta = if basic.metatype == TypeMetatype::Int {
+        let meta = if signed {
             TypeMetatype::Int
         } else {
             TypeMetatype::Uint
@@ -2578,8 +3163,7 @@ impl TypeFactory {
         base.flags = basic.flags
             | type_flags::ENUMTYPE
             | if forcecore { type_flags::CORETYPE } else { 0 };
-        let dt = Arc::new(Datatype::Enum(TypeEnum { base, values }));
-        self.insert(dt.clone());
+        let dt = self.find_add(Datatype::Enum(TypeEnum { base, values }), false)?;
         let _ = warning; // Ghidra: insertWarning(res, warning); — Rugra has no warning store.
         Ok(dt)
     }
@@ -2786,11 +3370,36 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:3390 TypeFactory::insert
-    // Annotation anchor only: this flat name-map overwrite is a known MISMATCH,
-    // not coverage of Ghidra's structural tree plus (name,id) cross-reference.
+    /// Internal method for finally inserting a new Datatype pointer.
+    /// Faithful to the oracle's dual registration (type.cc:3390-3406) for the
+    /// ATOMIC variants this factory's ordered tree models: the tree slot is
+    /// keyed by (sub-metatype, descending size, id) — exactly `DatatypeCompare`
+    /// (type.hh:306-310) — and the name cross-reference only receives NAMED
+    /// (id != 0) entries. Container variants stay name-map-only because the
+    /// flat key cannot express their component ordering (registered TYPE-0001
+    /// residual); the byte-faithful path with the "Shared type id" conflict
+    /// LowlevelError is [`Self::find_add`].
     fn insert(&mut self, dt: Arc<Datatype>) {
         let name = dt.get_name().to_string();
-        self.types.insert(name, dt);
+        let atomic = matches!(
+            dt.as_ref(),
+            Datatype::Void(_) | Datatype::Base(_) | Datatype::Enum(_) | Datatype::Code(_)
+        );
+        if atomic {
+            let tree_key = (Self::submeta_of(&dt), Reverse(dt.get_size()), dt.get_id());
+            self.base_type_tree
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .entry(tree_key)
+                .or_insert_with(|| dt.clone());
+        }
+        // type.cc:3404-3405: `if (newtype->id!=0) nametree.insert(newtype);`
+        // — unnamed entries live in the tree only. decodeBasic's hashName
+        // fallback keeps named decode candidates id-non-zero in practice;
+        // the flat map keeps any named entry for the legacy lookup paths.
+        if !name.is_empty() {
+            self.types.insert(name, dt);
+        }
     }
 }
 
@@ -2921,14 +3530,24 @@ mod tests {
 
     #[test]
     fn test_get_type_char() {
-        // type.cc:3593 — 1-byte char, CHARTYPE flag, metatype Int.
+        // type.cc:3593/3678 — the size-only lookup returns the charcache
+        // selection, which only exists after an ASCII core registration and
+        // cacheCoreTypes (Ghidra's buildCoreTypes registers "char" first,
+        // sleigh_arch.cc:235); an uncached request raises the oracle's
+        // LowlevelError.
         let mut factory = TypeFactory::new(8);
-        let c = factory.get_type_char(1);
+        assert_eq!(
+            factory.get_type_char(1).unwrap_err(),
+            "Request for unsupported character data-type"
+        );
+        factory.set_core_type("char", 1, TypeMetatype::Int, true);
+        factory.cache_core_types();
+        let c = factory.get_type_char(1).expect("cached char");
         assert_eq!(c.get_size(), 1);
         assert_eq!(c.get_metatype(), TypeMetatype::Int);
         assert!(c.is_char_print());
         // dedup: second call returns the same Arc.
-        let c2 = factory.get_type_char(1);
+        let c2 = factory.get_type_char(1).expect("cached char");
         assert!(Arc::ptr_eq(&c, &c2));
     }
 
@@ -2954,7 +3573,9 @@ mod tests {
         assert!(u.needs_resolution());
         // Set fields: union size = max field size.
         let int_t = factory.find_by_name("int").unwrap();
-        let char_t = factory.get_type_char(1);
+        factory.set_core_type("char", 1, TypeMetatype::Int, true);
+        factory.cache_core_types();
+        let char_t = factory.get_type_char(1).expect("cached char");
         let updated = factory
             .set_union_fields("MyUnion", vec![
                 TypeField { name: "a".into(), offset: 0, type_ptr: int_t },
@@ -3124,12 +3745,169 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_constructor_alignment_gate_and_void() {
+        // type.cc:3106/3122 — the raw factory has no alignment map and no
+        // core types; a findAdd miss raises the oracle LowlevelError text.
+        let mut raw = TypeFactory::raw();
+        assert_eq!(
+            raw.get_base_result(1, TypeMetatype::Int).unwrap_err(),
+            "TypeFactory alignment map not initialized"
+        );
+        // getTypeVoid works on the raw factory (type.cc:3575-3588).
+        let void_t = raw.get_type_void_result();
+        assert_eq!(void_t.get_name(), "void");
+        assert_eq!(void_t.get_id(), Datatype::hash_name("void"));
+        assert!(void_t.is_coretype());
+    }
+
+    #[test]
+    fn test_set_core_type_promotes_existing_noncore_factory_view() {
+        // type.cc:3178-3195 — setCoreType on an existing equal definition
+        // ORs the core flag onto the canonical object. Every factory-mediated
+        // lookup observes the promotion.
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+        let pre = factory.get_base_named(1, TypeMetatype::Int, "promo_plain").unwrap();
+        assert!(!pre.is_coretype());
+        let post = factory.set_core_type_result("promo_plain", 1, TypeMetatype::Int, false).unwrap();
+        assert!(post.is_coretype());
+        assert_eq!(post.get_id(), pre.get_id());
+        // The factory view is promoted.
+        let queried = factory.find_by_name("promo_plain").unwrap();
+        assert!(queried.is_coretype());
+        assert!(Arc::ptr_eq(&queried, &post));
+        // The promoted entry survives clearNoncore (Ghidra scans the flag).
+        factory.clear_non_core();
+        assert!(factory.find_by_name("promo_plain").is_some());
+    }
+
+    #[test]
+    fn test_set_core_type_conflict_returns_oracle_error() {
+        // type.cc:3423 — compareDependency mismatch raises the alter-
+        // definition LowlevelError with no partial state.
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+        factory.set_core_type("plain_x", 1, TypeMetatype::Int, false);
+        let err = factory
+            .set_core_type_result("plain_x", 2, TypeMetatype::Int, false)
+            .unwrap_err();
+        assert_eq!(err, "Trying to alter definition of type: plain_x");
+        // Partial state: the original registration is untouched.
+        let survivor = factory.find_by_name("plain_x").unwrap();
+        assert_eq!(survivor.get_size(), 1);
+        // A char/plain submeta mismatch also raises.
+        let err2 = factory
+            .set_core_type_result("plain_x", 1, TypeMetatype::Int, true)
+            .unwrap_err();
+        assert_eq!(err2, "Trying to alter definition of type: plain_x");
+    }
+
+    #[test]
+    fn test_large_base_converts_to_unknown_array() {
+        // type.cc:3652-3657 — sizes over max_basetype_size (10) become an
+        // unnamed array of the cached 1-byte unknown.
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        factory.set_core_type("u1", 1, TypeMetatype::Unknown, false);
+        factory.cache_core_types();
+        let big = factory.get_base_result(20, TypeMetatype::Int).unwrap();
+        assert_eq!(big.get_metatype(), TypeMetatype::Array);
+        assert_eq!(big.get_size(), 20);
+        assert!(big.get_name().is_empty());
+        let repeat = factory.get_base_result(20, TypeMetatype::Int).unwrap();
+        assert!(Arc::ptr_eq(&big, &repeat));
+        match big.as_ref() {
+            crate::type_system::datatype::Datatype::Array(a) => {
+                assert_eq!(a.num_elements, 20);
+                assert_eq!(a.array_of.get_name(), "u1");
+            }
+            _ => panic!("expected an array"),
+        }
+    }
+
+    #[test]
+    fn test_wide_char_and_float_cache_slots() {
+        // type.cc:3182-3186 chartp size!=1 → TypeUnicode; type.cc:3210-3215
+        // float10/16 dedicated slots; unicode fills charcache but never the
+        // preferred ASCII slot.
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+        let wide2 = factory.set_core_type_result("wide2", 2, TypeMetatype::Int, true).unwrap();
+        assert!(wide2.get_flags() & type_flags::UTF16 != 0);
+        let plain2 = factory.set_core_type_result("plain2", 2, TypeMetatype::Int, false).unwrap();
+        let f10 = factory.set_core_type_result("f10", 10, TypeMetatype::Float, false).unwrap();
+        let f16 = factory.set_core_type_result("f16", 16, TypeMetatype::Float, false).unwrap();
+        factory.cache_core_types();
+        // UTF16 is char-printable: charcache[2] holds it.
+        assert!(Arc::ptr_eq(&factory.get_type_char(2).unwrap(), &wide2));
+        // But not ASCII: the preferred (2, INT) slot goes to the plain int.
+        assert!(Arc::ptr_eq(&factory.get_base(2, TypeMetatype::Int).unwrap(), &plain2));
+        // Float10/16 dedicated slots.
+        assert!(Arc::ptr_eq(&factory.get_base_result(10, TypeMetatype::Float).unwrap(), &f10));
+        assert!(Arc::ptr_eq(&factory.get_base_result(16, TypeMetatype::Float).unwrap(), &f16));
+    }
+
+    #[test]
+    fn test_decode_core_types_rebuilds_and_enums_enter_tree() {
+        use crate::marshal::{Element, IdRegistry, TreeDecoder};
+        fn el(name: &str, attrs: &[(&str, &str)]) -> std::sync::Arc<std::sync::RwLock<Element>> {
+            let mut e = Element::new();
+            e.set_name(name);
+            for (k, v) in attrs {
+                e.add_attribute(k, v);
+            }
+            std::sync::Arc::new(std::sync::RwLock::new(e))
+        }
+        let mut factory = TypeFactory::new(8);
+        factory.clear();
+        let root = el("coretypes", &[]);
+        {
+            let mut rg = root.write().unwrap();
+            rg.add_child(el(
+                "type",
+                &[("name", "dk_enum"), ("size", "1"), ("metatype", "enum_int"), ("id", "0x5500000000000011")],
+            ));
+            rg.add_child(el(
+                "type",
+                &[("name", "dk_char"), ("size", "1"), ("metatype", "int"), ("char", "true"), ("id", "0x5500000000000012")],
+            ));
+        }
+        let mut decoder = TreeDecoder::new(root, std::sync::Arc::new(std::sync::RwLock::new(IdRegistry)));
+        factory.decode_core_types(&mut decoder).unwrap();
+        // Full clear wiped the bootstrap entries.
+        assert!(factory.find_by_name("undefined1").is_none());
+        // The decoded enum is core and entered the ordered tree: with no
+        // plain size-1 INT registered, type_nochar selects it (type.cc:3220-
+        // 3222 runs BEFORE the isEnumType break).
+        let dk_enum = factory.find_by_name("dk_enum").unwrap();
+        assert!(dk_enum.is_coretype());
+        assert!(dk_enum.is_enum_type());
+        let nochar = factory.get_base_no_char(1, TypeMetatype::Int).unwrap();
+        assert!(Arc::ptr_eq(&nochar, &dk_enum));
+        // The enum break leaves typecache[1][INT] to the ASCII char.
+        let dk_char = factory.find_by_name("dk_char").unwrap();
+        let preferred = factory.get_base(1, TypeMetatype::Int).unwrap();
+        assert!(Arc::ptr_eq(&preferred, &dk_char));
+    }
+
+    #[test]
     fn test_hash_size_stability() {
-        // type.hh:206 — hashSize folds size into id; different sizes differ.
+        // type.cc:709-716 — hashSize XORs the scaled size into the id; the
+        // transform is an involution: feeding the output back with the same
+        // size recovers the original id.
         let a = hash_size(0x1234, 1);
         let b = hash_size(0x1234, 4);
         assert_ne!(a, b);
         assert_eq!(a, hash_size(0x1234, 1));
+        assert_eq!(hash_size(a, 1), 0x1234);
+        assert_eq!(hash_size(b, 4), 0x1234);
+        assert_eq!(a, Datatype::hash_size(0x1234, 1));
     }
 
     // --- P2 TypeFactory::getTypeCode(PrototypePieces) / setPrototype ---
@@ -3270,7 +4048,7 @@ mod tests {
             .get_base(1, TypeMetatype::Int)
             .expect("preferred signed byte");
         assert!(Arc::ptr_eq(&preferred, &ascii));
-        let preferred_char = factory.get_type_char(1);
+        let preferred_char = factory.get_type_char(1).expect("cached char");
         assert!(Arc::ptr_eq(&preferred_char, &ascii));
 
         let expected_nochar = if plain_a.get_id() > plain_b.get_id() {
