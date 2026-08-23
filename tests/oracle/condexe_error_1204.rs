@@ -5,7 +5,9 @@
 //! tests/oracle/condexe_error_1204.cc case for case against the locked
 //! Ghidra 12.0.4 oracle. Records: err/state E1, E2 (LowlevelError aborts
 //! with verbatim messages and pinned partial state), ret/state E3 (verify
-//! failure -> apply returns 0, untouched Funcdata).
+//! failure -> apply returns 0, untouched Funcdata), pre/ret/state E4
+//! (unreachable-blocks guard: structure_reset sets the cached flag via the
+//! two-root path, apply returns 0 before any mutation, condexe.cc:485-486).
 //!
 //! The C++ side catches LowlevelError out of apply; the Rust side maps the
 //! `Err` out of `Action::apply` — same abort protocol, byte-identical
@@ -237,8 +239,35 @@ fn run_verify_fail_case() {
     print_state(case_id, &mut fd, &d);
 }
 
+/// E4: the condexe.cc:485-486 unreachable-blocks guard. The diamond is the
+/// E1 shape (the data flow that aborts with the illegal-op LowlevelError
+/// when the guard is absent), but before apply() the fixture runs the
+/// production flag-set path: structure_reset's spanning-tree pass collects
+/// every sizeIn()==0 block as a root (block.cc:1028), so the floating b6
+/// yields TWO roots and funcdata_block.cc:713-714 sets blocks_unreachable.
+/// The pre-line echoes the cached flag so a fixture bug that failed to set
+/// it cannot pass the gate vacuously (an unset flag would reproduce the E1
+/// abort, not a clean ret).
+fn run_unreachable_guard_case() {
+    let case_id = "E4";
+    let mut fd = Funcdata::new(case_id, Address::new(0x60000), 0x100);
+    let d = build_diamond(&mut fd, true, true);
+    fd.structure_reset();
+    println!("pre|case={case_id}|unreach={}", if fd.has_unreachable_blocks() { 1 } else { 0 });
+    let mut action = ActionConditionalExe::new();
+    match action.apply(&mut fd) {
+        Ok(r) => println!("ret|case={case_id}|apply={r}|msg=none"),
+        Err(e) => {
+            let kind = if matches!(e, Error::Lowlevel(_)) { "lowlevel" } else { "internal" };
+            println!("err|case={case_id}|kind={kind}|msg={e}");
+        }
+    }
+    print_state(case_id, &mut fd, &d);
+}
+
 fn main() {
     run_error_case("E1", true); // illegal iblock op (condexe.cc:261)
     run_error_case("E2", false); // could not find dominator (condexe.cc:303)
     run_verify_fail_case(); // verify failure -> trial false, no change
+    run_unreachable_guard_case(); // unreachable blocks -> guard return 0 (condexe.cc:485-486)
 }

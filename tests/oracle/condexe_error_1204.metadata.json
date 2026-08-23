@@ -1,11 +1,11 @@
 {
  "schema_version": 2,
  "fixture_id": "CONDEXE-ERROR-0006",
- "status_note": "The three targeted projections (E1 illegal iblock op with verbatim LowlevelError from resolveIblockRead condexe.cc:261, E2 dominator-chain throw from getReplacementRead condexe.cc:303, E3 verify failure with untouched Funcdata) are byte-identical MATCH over 6 records including the pinned partial state at each abort point, but execute/doReplacement success legs and the removeFromFlowSplit error boundary remain UNTESTED under CFG-0001, so the fixture-level B2 status is UNTESTED.",
+ "status_note": "The four targeted projections (E1 illegal iblock op with verbatim LowlevelError from resolveIblockRead condexe.cc:261, E2 dominator-chain throw from getReplacementRead condexe.cc:303, E3 verify failure with untouched Funcdata, E4 the unreachable-blocks early return condexe.cc:485-486 with the flag set through the production structureReset path and zero mutation) are byte-identical MATCH over 9 records including the pinned partial state at each abort point, but execute/doReplacement success legs and the removeFromFlowSplit error boundary remain UNTESTED under CFG-0001, so the fixture-level B2 status is UNTESTED.",
  "decisive_semantics": {
-  "reference_output_parameters": "resolveIblockRead/getReplacementRead/resolveRead/getMultiequalRead/pullbackOp/getNewMulti return the replacement Varnode or throw LowlevelError (condexe.cc:261/303 verbatim messages); doReplacement (cc:320-357) mutates fd in place (opUnsetInput cc:333, opSetInput cc:352, RETURN-copy insertion cc:339-349) and has no out-param; execute (cc:457-476) returns void in the oracle but its two throw sources abort apply; ActionConditionalExe::apply (cc:478-503) returns int4 0 normally and never returns on throw (the exception unwinds the whole action pipeline, Funcdata keeps partial state). The Rust port mirrors this as Result: Err(Error::Lowlevel) from execute() propagates through apply() via ?, ActionGroup aborts on it (action.rs), partial fd mutations persist.",
-  "loop_bounds_traversal_order": "doReplacement re-reads vn->beginDescend() after every iteration (cc:355) and each iteration removes exactly one descendant (progress invariant); execute destroys iblock ops in REVERSE list order (cc:464-474, endOp-1 down to beginOp), calling doReplacement only for non-branch ops, so at the E1/E2 abort the trailing CBRANCH is already destroyed while the failing COPY survives; verify() tests removability of every op except the trailing cbranch (cc:418-426); apply's do-while round loop over bblocks (cc:490-500) never restarts because the throw unwinds it; getReplacementRead's dominator walk is while(curbl->getImmedDom() != iblock) with the null check AFTER the advance (cc:300-304), exercised by E2's reader->init->entry two-step chain.",
-  "counter_accumulator_lifecycle": "ActionConditionalExe::apply accumulates numhits per successful execute (cc:496) and adds to Action::count only AFTER the loop completes (cc:501) — a throw skips both, so no counter state is pinned at the abort points; doReplacement clears replacement/pullback maps once per op (cc:323-324) and refills them per descendant walk; PcodeOpBank uniqid (SeqNum time) increments per newOp in fixture construction order and is NOT consumed by the abort paths (no new op is created before either throw), which the per-block op-count projections pin.",
+  "reference_output_parameters": "resolveIblockRead/getReplacementRead/resolveRead/getMultiequalRead/pullbackOp/getNewMulti return the replacement Varnode or throw LowlevelError (condexe.cc:261/303 verbatim messages); doReplacement (cc:320-357) mutates fd in place (opUnsetInput cc:333, opSetInput cc:352, RETURN-copy insertion cc:339-349) and has no out-param; execute (cc:457-476) returns void in the oracle but its two throw sources abort apply; ActionConditionalExe::apply (cc:478-503) returns int4 0 normally and never returns on throw (the exception unwinds the whole action pipeline, Funcdata keeps partial state); apply's FIRST statement is the unreachable-blocks guard (cc:485-486): data.hasUnreachableBlocks() (the cached blocks_unreachable flag, funcdata.hh:149, maintained by structureReset funcdata_block.cc:710/714) makes apply return 0 before the ConditionalExecution object is constructed (cc:487) — a pure read of Funcdata state with zero mutation. The Rust port mirrors this as Result: Err(Error::Lowlevel) from execute() propagates through apply() via ?, ActionGroup aborts on it (action.rs), partial fd mutations persist; the guard maps to an early `return Ok(NO_CHANGE)` after the same read-only has_unreachable_blocks() check.",
+  "loop_bounds_traversal_order": "doReplacement re-reads vn->beginDescend() after every iteration (cc:355) and each iteration removes exactly one descendant (progress invariant); execute destroys iblock ops in REVERSE list order (cc:464-474, endOp-1 down to beginOp), calling doReplacement only for non-branch ops, so at the E1/E2 abort the trailing CBRANCH is already destroyed while the failing COPY survives; verify() tests removability of every op except the trailing cbranch (cc:418-426); apply's unreachable-blocks guard (cc:485-486) precedes the do-while round loop over bblocks (cc:490-500) — on a guard hit no round ever runs; the loop itself never restarts when a throw unwinds it; getReplacementRead's dominator walk is while(curbl->getImmedDom() != iblock) with the null check AFTER the advance (cc:300-304), exercised by E2's reader->init->entry two-step chain.",
+  "counter_accumulator_lifecycle": "ActionConditionalExe::apply accumulates numhits per successful execute (cc:496) and adds to Action::count only AFTER the loop completes (cc:501) — a throw skips both, and the unreachable-blocks early return (cc:485-486) skips both as well: it returns before the first trial, so numhits stays 0 and count is never touched on the guard path; doReplacement clears replacement/pullback maps once per op (cc:323-324) and refills them per descendant walk; PcodeOpBank uniqid (SeqNum time) increments per newOp in fixture construction order and is NOT consumed by the abort paths (no new op is created before either throw), which the per-block op-count projections pin.",
   "sorting_comparison_keys": "The descendant iteration order (std::list beginDescend vs Rugra descend_iter Vec order) is order-insensitive here because each error case has exactly one descendant on the failing op's output; the dominator walk compares FlowBlock pointer identity (curbl->getImmedDom() != iblock, cc:300) mapped to Arc::ptr_eq; the slot search getSlot(vn) (op.hh:166, first matching input slot) maps to the linear find over num_input; block identification in projections is creation ordinal (bN), identical on both sides."
  },
  "oracle": {
@@ -20,7 +20,8 @@
    "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
    "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_block.cc",
    "Ghidra/Features/Decompiler/src/decompile/cpp/op.hh",
-   "Ghidra/Features/Decompiler/src/decompile/cpp/block.cc"
+   "Ghidra/Features/Decompiler/src/decompile/cpp/block.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh"
   ]
  },
  "rugra_source": {
@@ -66,17 +67,19 @@
    "BlockGraph::addEdge",
    "BlockGraph::newBlockBasic",
    "ActionConditionalExe::apply (action.hh:130, public)",
-   "FlowBlock::immed_dom wiring (test-only)"
+   "FlowBlock::immed_dom wiring (test-only)",
+   "Funcdata::structureReset (funcdata_block.cc:704, public)",
+   "Funcdata::hasUnreachableBlocks (funcdata.hh:149, public)"
   ],
-  "funcdata": "Three synthetic Funcdata objects (E1/E2/E3), each a 7-block diamond: b0 init [COPY bool, CBRANCH bool] -> b1/b2 -> b3 iblock [COPY vnY<-vnW, CBRANCH] -> b4 posta [COPY reader vnY] / b5 postb; b6 floats and writes vnW outside the iblock with a non-MULTIEQUAL COPY (passes testOpRead cc:126-139, illegal for resolveIblockRead cc:261). Heritage::buildInfoList precondition replicated per Funcdata (buildHeritageArray reads numHeritagePasses, condexe.cc:23-37). E3's iblock CBRANCH reads an uncorrelated constant instead of the shared boolean so verifySameCondition fails (cc:88-89).",
-  "case_matrix": "E1: b4 immed_dom=b3 (reader dominated by iblock) -> resolve chain reaches resolveIblockRead and throws the illegal-op LowlevelError; E2: b4 immed_dom=b0 (dominated by init, walk advances once then leaves the graph at the entry) -> throws the no-dominator LowlevelError; E3: uncorrelated booleans -> trial false, apply returns 0, zero mutation",
+  "funcdata": "Four synthetic Funcdata objects (E1/E2/E3/E4), each a 7-block diamond: b0 init [COPY bool, CBRANCH bool] -> b1/b2 -> b3 iblock [COPY vnY<-vnW, CBRANCH] -> b4 posta [COPY reader vnY] / b5 postb; b6 floats and writes vnW outside the iblock with a non-MULTIEQUAL COPY (passes testOpRead cc:126-139, illegal for resolveIblockRead cc:261). Heritage::buildInfoList precondition replicated per Funcdata (buildHeritageArray reads numHeritagePasses, condexe.cc:23-37). E3's iblock CBRANCH reads an uncorrelated constant instead of the shared boolean so verifySameCondition fails (cc:88-89). E4 reuses the E1 data flow but runs fd.structureReset() before apply(): the floating b6 has sizeIn()==0, so findSpanningTree collects two roots (block.cc:1028) and funcdata_block.cc:713-714 sets blocks_unreachable through the production path; the fixture echoes the cached flag as a pre-record so an unset flag cannot pass the gate vacuously (it would reproduce the E1 abort instead of a clean return).",
+  "case_matrix": "E1: b4 immed_dom=b3 (reader dominated by iblock) -> resolve chain reaches resolveIblockRead and throws the illegal-op LowlevelError; E2: b4 immed_dom=b0 (dominated by init, walk advances once then leaves the graph at the entry) -> throws the no-dominator LowlevelError; E3: uncorrelated booleans -> trial false, apply returns 0, zero mutation; E4: E1 diamond + structureReset (two roots via floating b6) sets blocks_unreachable -> apply hits the cc:485-486 guard and returns 0 immediately, zero mutation",
   "random_seed": "none",
   "error_injection": "E1/E2 inject unresolvable reader data-flow shapes (not runtime fault injection); E3 injects a verify-failure shape",
   "normalization": "Only block creation ordinals (bN) replace raw pointers; error messages, op inventories, op counts, in/out edge counts and descendant counts are byte-compared"
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "317bc4ec9ba841d4071c6e9bcecf835e108928174e84e65da2a58d97f1313b99",
+  "sha256": "75352b4eddc44e99d7110c4f8386a8b795da401892c66069bbbb7911c2111171",
   "cases": [
    {
     "id": "E1",
@@ -89,22 +92,30 @@
    {
     "id": "E3",
     "family": "verify_fail"
+   },
+   {
+    "id": "E4",
+    "family": "unreachable_guard"
    }
   ]
  },
  "observation_schema": {
-  "format": "6 fixed-order pipe-delimited UTF-8 records with final newline",
+  "format": "9 fixed-order pipe-delimited UTF-8 records with final newline",
   "record_order": [
    "E1-err",
    "E1-state",
    "E2-err",
    "E2-state",
    "E3-ret",
-   "E3-state"
+   "E3-state",
+   "E4-pre",
+   "E4-ret",
+   "E4-state"
   ],
   "error_projection": "For E1/E2: kind (lowlevel) and the verbatim LowlevelError message caught out of ActionConditionalExe::apply; for E3: apply's return code with no exception. kind=lowlevel is only emitted for Error::Lowlevel on the Rust side so a Rugra-internal error would surface as a projection difference.",
   "state_projection": "Per case after apply: total block count, per-block op-count inventory (bN:count), the iblock's remaining opcode list, its in/out edge counts (still 2/2: removeFromFlowSplit never ran), and the failing COPY output's remaining descendant count",
-  "preserved": "No message text, op count, opcode name, edge count or descendant count is normalized; only raw pointers are replaced by creation ordinals"
+  "preserved": "No message text, op count, opcode name, edge count or descendant count is normalized; only raw pointers are replaced by creation ordinals",
+  "pre_projection": "For E4 only, before apply: the cached blocks_unreachable flag (0/1) read back via hasUnreachableBlocks after the fixture's structureReset call — proving the guard's precondition was established through the production path on both sides"
  },
  "build": {
   "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
@@ -123,15 +134,15 @@
   "rust_build": "Cargo --locked --offline in isolated target, then rustc with the librugra_sleigh native link"
  },
  "comparand": {
-  "cpp_fixture_sha256": "eab9836e5e9b9d2021f3b0ad929d5a7449c9ebd2a88d8845af4e502768836bfc",
-  "rust_fixture_sha256": "5f58bb3be8652d4529c66abd445ce3511792dd04044dbcd6b7edbcedafbecb39",
-  "condexe_overlay_sha256": "951a1661ed7eacc48b5537a7ecdea1586926a4c59008b5f7cff6a5aa3e164b04",
-  "runner_sha256": "d811a1cdf0928d8161f16d8d3fa32c1904d5a649e73d60d4d6780dc08af61f86"
+  "cpp_fixture_sha256": "00bf5a5c2ab6a1a61a6ff824c6e58d1818b3f4866105579d6d71d046b14f9321",
+  "rust_fixture_sha256": "18c0ca7d5112f418efa23c3cc0e07ae3b0bd67ea62612e1c1c482d46b3ef831c",
+  "condexe_overlay_sha256": "c9a926ed1ff15d20a0e56c457c0abe0db94e79b4753a9ddeeb3469d848d7d8e7",
+  "runner_sha256": "9c3d69ef4ccb99c0827f26ec7bd84e197abe03211052572b7c8d488ec679689b"
  },
  "expected_results": {
-  "ghidra_stdout_sha256": "dd7edb09ec40d86bfb61940df6b25d0e288c40fec8694d007ff64ad89c0e4055",
+  "ghidra_stdout_sha256": "f654d29647f61aae096c329309c307f34d3737afb0e85f05fb23d5334ff67e4d",
   "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "rugra_stdout_sha256": "dd7edb09ec40d86bfb61940df6b25d0e288c40fec8694d007ff64ad89c0e4055",
+  "rugra_stdout_sha256": "f654d29647f61aae096c329309c307f34d3737afb0e85f05fb23d5334ff67e4d",
   "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "ghidra_exit_code": 0,
@@ -160,6 +171,11 @@
    "residual_todo_ids": [
     "CFG-0001"
    ]
+  },
+  "unreachable_guard_early_return": {
+   "status": "MATCH",
+   "covers": "E4: apply's first statement (condexe.cc:485-486) — with blocks_unreachable set via the production structureReset path (two roots from the floating b6, funcdata_block.cc:713-714), apply returns 0 IMMEDIATELY: no ConditionalExecution constructed (cc:487), no trial/execute, no exception, numhits stays 0, Funcdata byte-untouched (same state shape as E3). The pre-guard diamond is a guaranteed E1 abort, so only the guard can produce the clean ret — the pre-record (unreach=1) rules out a vacuous pass from an unset flag. Pre-fix Rugra lacked the guard and reproduced the E1 abort on this input (negative control).",
+   "residual_todo_ids": []
   }
  },
  "projection_status": "MATCH",
