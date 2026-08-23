@@ -3430,6 +3430,35 @@
         "varnode::Varnode::copy_symbol_if_valid",
         "database::EquateSymbol::is_value_close"
       ]
+    },
+    {
+      "id": "jt_calcrange_1204",
+      "description": "JumpBasic calcRange guard-intersection writeback + markModel skip vs locked 12.0.4: guard chain intersection (x<8 AND x<10 -> [0,8)), bool-output branch ({1}), constant positive truncation ([0,2^31)), markModel branch-null skip (3/3 MATCH, residuals=none)",
+      "runner": [
+        "tools/run_jt_calcrange_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/jt_calcrange_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/jt_calcrange_1204.cc",
+          "rust_fixture": "tests/oracle/jt_calcrange_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "JumpBasic::calcRange",
+        "JumpBasic::markModel"
+      ],
+      "rust_function_ids": [
+        "jumptable::JumpBasic::calc_range",
+        "jumptable::JumpBasic::mark_model"
+      ]
     }
   ]
 }

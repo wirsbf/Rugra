@@ -2309,7 +2309,7 @@ impl JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1293 JumpBasic::flowsOnlyToModel
+    // Ghidra: jumptable.cc:1274 JumpBasic::flowsOnlyToModel
     /// Check if the given Varnode flows to anything other than this model.
     /// The PcodeOps in this model must have been previously marked with
     /// `mark_model(true)`. Faithful to `flowsOnlyToModel` (jumptable.cc:1293).
@@ -2459,7 +2459,7 @@ impl JumpModel for JumpBasic {
         self.jrange.as_ref().map_or(0, |j| j.get_size() as usize)
     }
 
-    // Ghidra: jumptable.cc:1437 JumpBasic::recoverModel
+    // Ghidra: jumptable.cc:1418 JumpBasic::recoverModel
     fn recover_model(
         &mut self,
         fd: &crate::funcdata::Funcdata,
@@ -2493,7 +2493,7 @@ impl JumpModel for JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1453 JumpBasic::buildAddresses
+    // Ghidra: jumptable.cc:1434 JumpBasic::buildAddresses
     fn build_addresses(
         &self,
         fd: &crate::funcdata::Funcdata,
@@ -2594,7 +2594,7 @@ impl JumpModel for JumpBasic {
         let _ = indop;
     }
 
-    // Ghidra: jumptable.cc:1484 JumpBasic::findUnnormalized
+    // Ghidra: jumptable.cc:1462 JumpBasic::findUnnormalized
     fn find_unnormalized(&mut self, maxaddsub: u32, _maxleftright: u32, maxext: u32) {
         // Faithful to JumpBasic::findUnnormalized (jumptable.cc:1484).
         let mut i = self.varnode_index as usize;

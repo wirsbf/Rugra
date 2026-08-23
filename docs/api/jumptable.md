@@ -303,3 +303,7 @@ recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNo
 ## 注释行号勘误（2026-08-23，root）
 
 复核发现的 annotation 漂移已修正：`JumpTable::clear` 引用 jumptable.cc:2739（原误 2761，那行是 encode 的 doc）；`clearSavedModel` 引用 jumptable.cc:2243（原误 2265）。行为零改动。
+
+## calcRange/markModel 集成与注释行号勘误（2026-08-23，root）
+
+dbcc9cb 集成：守卫交集就地写回、isBoolOutput 分支、常量无 early-return、markModel branch 判空跳过。复核域外 4 处既有注释行号漂移已修正（recoverModel 1437→1418、1453→1434、1484→1462、1293→1274）。
