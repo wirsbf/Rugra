@@ -88,6 +88,18 @@ forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只�
 | `CONDEXE-ERROR-0006` | P1 | resolve 链 Result 化+死循环消灭 | `src/condexe.rs:546-746` | 0001 |
 | `CONDEXE-FIXTURE-0007` | P2 | 27 函数 locked-oracle fixture 补全 | tests/ + tools/ | 0001-0006 |
 
+来自 `docs/alignment_audit/RULE_GAPS_2026-08-22.md`（155 条 Rule 全量对照：struct 级 MISSING=0、
+三池注册齐全且顺序一致；行为级 MISSING=5：ZextEliminate/SignForm/SignNearMult/ShiftBitops/Shift2Mult
+——同名规则实现的是不同算法，Ghidra 会做的变换在 Rugra 永不发生且反之；PARTIAL=24 新发现；
+注册纯净度偏差=3：Rugra 注册了 oracle 不存在的 RuleSextEliminate、从未实例化的 RuleEquality、
+cleanup 池重复的 RuleTrivialArith）。26 项拟登记 TODO 详见报告 §5（`RULE-PORT-<NAME>-0001` 系列），
+最重两项：
+- `RULE-PORT-COLLAPSECONSTANTS-0001`（P0）：全 opcode 常量折叠（基类 getOpList→action.cc:705-714、
+  isCollapsible+PcodeOp::collapse→op.cc:115/450、TypeOp evaluateUnary/Binary 全表、
+  collapseConstantSymbol、opMarkNocollapse 错误路径）；write-set=`src/ruleaction.rs`+`src/op.rs`+docs
+- `RULE-PORT-EARLYREMOVAL-0001`（P0）：全 opcode + deadRemovalAllowedSeen/doesDeadcode 门；
+  write-set 含 `src/{ruleaction,funcdata,space,coreaction}.rs`（待 funcdata/coreaction 租约释放）
+
 ## 历史 wave：`W-2026-08-20-CLOSEOUT`（收尾中，租约归 W-2026-08-22-ORCH 接管的以新 wave 为准）
 
 > 2026-08-20 启动，root 编排、显式文件 staging 与串行集成；实现 write-set 互斥，核心算法由独立
