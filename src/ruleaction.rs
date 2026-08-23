@@ -2492,22 +2492,25 @@ impl Rule for RuleDoubleShift {
     }
 }
 
-/// Remove identity elements: `V + 0 => V`, `V & 0 => 0`, `V * 1 => V`, etc.
+/// Remove identity elements: `V + 0 => V`, `V || 0 => V`, `V * 1 => V`, etc.
 ///
-/// Faithful to Ghidra's `RuleIdentityEl` (ruleaction.cc:3696-3722). For
-/// INT_ADD/INT_SUB/INT_AND/INT_OR/INT_XOR with a constant 0 in slot 1, the
-/// op collapses to COPY(in0). For INT_MULT with 1, same; with 0, COPY(0).
+/// Ghidra's `RuleIdentityEl` (ruleaction.cc:3668-3702) is dispatched only for
+/// INT_ADD/INT_XOR/INT_OR, BOOL_XOR/BOOL_OR, and INT_MULT.  A constant 0 in
+/// slot 1 collapses each non-multiply member to COPY(in0). For INT_MULT with
+/// 1, same; with 0, COPY(0). INT_SUB and INT_AND are deliberately absent from
+/// the dispatch list even though a direct, out-of-pool `applyOp` call would
+/// enter the generic non-multiply branch.
 pub struct RuleIdentityEl;
 
 impl RuleIdentityEl {
-    // Ghidra: ruleaction.cc:3679 RuleIdentityEl
+    // Ghidra: ruleaction.hh:675 RuleIdentityEl::RuleIdentityEl
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleIdentityEl {
-    // Ghidra: ruleaction.cc:3696 RuleIdentityEl::applyOp
+    // Ghidra: ruleaction.cc:3676 RuleIdentityEl::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (val, opc) = {
             let op = op_arc.read().unwrap();
@@ -2520,7 +2523,7 @@ impl Rule for RuleIdentityEl {
         };
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         if val == 0 && opc != OpCode::CPUI_INT_MULT {
-            // +0, -0, &0, |0, ^0 → COPY(in0)
+            // +0, |0, ^0, ||0, ^^0 → COPY(in0)
             fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
             fd.op_remove_input(&follow, 1);
             return Ok(action_status::CHANGE);
@@ -2542,16 +2545,19 @@ impl Rule for RuleIdentityEl {
         Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:3679 RuleIdentityEl
+    // Ghidra: ruleaction.hh:675 RuleIdentityEl::RuleIdentityEl (name literal "identityel")
     fn get_name(&self) -> &str {
-        "identity_el"
+        "identityel"
     }
 
-    // Ghidra: ruleaction.cc:3688 RuleIdentityEl::getOpList
+    // Ghidra: ruleaction.cc:3668 RuleIdentityEl::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
-            OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB,
-            OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
+            OpCode::CPUI_INT_ADD,
+            OpCode::CPUI_INT_XOR,
+            OpCode::CPUI_INT_OR,
+            OpCode::CPUI_BOOL_XOR,
+            OpCode::CPUI_BOOL_OR,
             OpCode::CPUI_INT_MULT,
         ]
     }
@@ -17318,7 +17324,9 @@ mod tests {
 
     #[test]
     fn test_trivial_arith_sub_zero() {
-        // `x - 0 → x` is RuleIdentityEl's job.
+        // Direct apply follows RuleIdentityEl::applyOp's generic non-MULT
+        // branch, but production ActionPool dispatch deliberately excludes
+        // INT_SUB (locked getOpList at ruleaction.cc:3671-3673).
         let rule = RuleIdentityEl::new();
         let (op_arc, mut fd) = make_binary_op(
             OpCode::CPUI_INT_SUB,
@@ -19133,7 +19141,24 @@ mod tests {
         assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0x0fffffff);
     }
 
-    // --- RuleIdentityEl (ruleaction.cc:3696) ---
+    // --- RuleIdentityEl (ruleaction.cc:3668-3702) ---
+
+    #[test]
+    fn test_identity_el_public_opcode_and_name_contract() {
+        let rule = RuleIdentityEl::new();
+        assert_eq!(rule.get_name(), "identityel");
+        assert_eq!(
+            rule.get_opcodes(),
+            vec![
+                OpCode::CPUI_INT_ADD,
+                OpCode::CPUI_INT_XOR,
+                OpCode::CPUI_INT_OR,
+                OpCode::CPUI_BOOL_XOR,
+                OpCode::CPUI_BOOL_OR,
+                OpCode::CPUI_INT_MULT,
+            ]
+        );
+    }
 
     #[test]
     fn test_identity_el_add_zero() {

@@ -391,12 +391,27 @@ worklist）；主管线 `ActionNonzeroMask`（coreaction.cc:5507）每轮 mainlo
 
 测试：ruleaction::tests +2（同向合并 2+3=5；反向抵消 LEFT4/RIGHT4 → AND 0x0fffffff）。
 
-### 2026-06-26（续）：RuleIdentityEl + RuleSignShift
+### 2026-08-23：RuleIdentityEl opcode dispatch / raw name
 
-#### `pub struct RuleIdentityEl`（ruleaction.cc:3696-3722）
-移除单位元：
-- `V + 0 / - 0 / & 0 / | 0 / ^ 0 => COPY(V)`
+#### `pub struct RuleIdentityEl`（ruleaction.cc:3668-3702）
+锁定 Ghidra 12.0.4 仅将该 Rule 注册到 `INT_ADD`/`INT_XOR`/`INT_OR`/
+`BOOL_XOR`/`BOOL_OR`/`INT_MULT`，顺序与 `getOpList` 完全一致。旧实现错把
+`INT_SUB` 和 `INT_AND` 放进派发集，同时漏了两个 BOOL opcode；现已纠正。
+
+通过 ActionPool 的可见转换是：
+- `V + 0 / V ^ 0 / V | 0 / V ^^ 0 / V || 0 => COPY(V)`
 - `V * 1 => COPY(V)`；`V * 0 => COPY(0)`
+- `V - 0` 与 `V & 0` 不会被该 Rule 派发，因此保持原样。
+
+Rule 的 raw name 也按 `ruleaction.hh:675` 从 `identity_el` 修正为
+`identityel`，用于 ActionPool 子 Rule 查找和统计/警告标识。锁定 oracle fixture
+`tests/oracle/rule_identityel_opcodeset_1204.{cc,rs}` 通过真实 ActionPool
+观察 opcode 派发、输入身份、Varnode descendant 顺序和 Rule/Action 计数。
+Rust ActionPool 尚未提供 Ghidra `getSubRule` 的生产 API，因此整体状态保持
+`MISMATCH`，绑定 `ACTION-EXECUTOR-BREAKPOOL-0001`；其余 111 个 Rule raw-name 差异归
+`PIPE-RULE-RAW-NAMES-0001`，本窄批不扩展修改。
+
+### 2026-06-26（历史）：RuleSignShift
 
 #### `pub struct RuleSignShift`（ruleaction.cc:3544-3600）
 符号位提取规范化：`V >> 0x1f => (V s>> 0x1f) * -1`。当逻辑右移符号位参与算术（INT_ADD/MULT）或常量比较时，转为算术右移乘全1。
