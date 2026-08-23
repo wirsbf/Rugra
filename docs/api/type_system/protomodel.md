@@ -29,4 +29,10 @@
 ## 2026-06-27 移植状态
 
 5 个单元测试。**剩余**：ParamListRegister/Merged 变体、XML decode、JoinRecord。
+
+## ParamActive 模型回归测试（2026-08-24）
+
+输入/输出模型测试通过 `register_trial_in_space(AddressSpace::Register, ...)`
+构造完整 trial，不再用无空间 tag 的 `Address` 暗示寄存器。测试仍只覆盖当前
+硬编码 x86-64 模型；它不扩大 `ProtoModel` 的生产对齐声明。
 <!-- annotation-pass: 2026-07-04 -->

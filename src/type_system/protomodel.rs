@@ -282,8 +282,10 @@ mod tests {
         let mut pa = ParamActive::new(true);
         // Register 2 trials: RDI + RSI. DON'T pre-mark them — fillinMap
         // decides active/used status.
-        pa.register_trial(Address::new(0x8), 8);  // RDI
-        pa.register_trial(Address::new(0x30), 8); // RSI
+        // RDI
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x8), 8);
+        // RSI
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x30), 8);
         // Simulate: RDI was seen as active during data-flow analysis.
         // In the real pipeline, checkInputTrialUse sets active BEFORE fillinMap.
         // But mark_active also sets checked, so fillinMap would skip it.
@@ -292,6 +294,8 @@ mod tests {
         // Since mark_active sets CHECKED, we test the resolve path differently:
         // verify that a trial matching a param entry gets processed.
         assert_eq!(pa.get_num_trials(), 2);
+        assert_eq!(pa.get_trial(0).get_space(), AddressSpace::Register);
+        assert_eq!(pa.get_trial(1).get_space(), AddressSpace::Register);
         // Without pre-marking, fillinMap should mark matching trials.
         m.derive_input_map(&mut pa);
         // Both RDI and RSI match entries — neither was marked active, so
@@ -304,8 +308,12 @@ mod tests {
     fn test_derive_output_map() {
         let m = ProtoModel::default_x86_64();
         let mut pa = ParamActive::new(false);
-        pa.register_trial(Address::new(0x0), 8); // RAX
-        pa.register_trial(Address::new(0x8), 8); // RDI (not a return)
+        // RAX
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x0), 8);
+        // RDI (not a return)
+        pa.register_trial_in_space(AddressSpace::Register, Address::new(0x8), 8);
+        assert_eq!(pa.get_trial(0).get_space(), AddressSpace::Register);
+        assert_eq!(pa.get_trial(1).get_space(), AddressSpace::Register);
         pa.get_trial_mut(0).mark_active();
         pa.get_trial_mut(1).mark_active();
         m.derive_output_map(&mut pa);

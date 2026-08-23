@@ -930,6 +930,14 @@ Register@0x30 同一 loc，collect 按地址窗口照常收作 read，断言（a
 pass==3）零变化，生产代码未动。
 <!-- annotation-pass: 2026-08-17 -->
 
+## ParamActive 地址空间传递（2026-08-24）
+
+`guard_calls`、`guard_call_overlapping_input` 和
+`try_output_overlap_guard` 对 trial 的查询与注册均显式携带当前 heritage
+range 的 `AddressSpace`。这对应 Ghidra `transAddr`/`truncAddr` 保留
+`AddrSpace *` 的语义，防止不同空间中 offset 相同的 trial 被误判为同一项；
+trial 大小、注册时机、callspec 遍历顺序与既有分支均未改变。
+
 ## force_restructure（block_domroot_1204，2026-08-19）
 
 **`Heritage::force_restructure`** — `heritage.hh:333`

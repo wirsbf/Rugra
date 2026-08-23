@@ -5728,7 +5728,11 @@ impl Action for ActionInputPrototype {
         for vn_arc in &input_vns {
             let vn = vn_arc.read().unwrap();
             let slot = active.get_num_trials();
-            active.register_trial(crate::address::Address::new(vn.get_offset()), vn.get_size() as i32);
+            active.register_trial_in_space(
+                vn.get_space(),
+                crate::address::Address::new(vn.get_offset()),
+                vn.get_size() as i32,
+            );
             // Mark active if the varnode has descendants (is used)
             if vn.count_descends() > 0 {
                 // Faithful: active.getTrial(slot).markActive()
@@ -6773,8 +6777,8 @@ impl Action for ActionFuncLink {
                             let is_param = model.as_ref()
                                 .map(|m| m.possible_input_param(offset, size, space))
                                 .unwrap_or(true);
-                            if is_param && active.which_trial(addr, size) < 0 {
-                                active.register_trial(addr, size);
+                            if is_param && active.which_trial_in_space(space, addr, size) < 0 {
+                                active.register_trial_in_space(space, addr, size);
                             }
                         }
                     }
@@ -9432,8 +9436,8 @@ fn seed_output_trials(fd: &mut Funcdata) {
     };
     for entry in &model.output_entries {
         let addr = Address::new(entry.base);
-        if active.which_trial(addr, entry.size) < 0 {
-            active.register_trial(addr, entry.size);
+        if active.which_trial_in_space(entry.space, addr, entry.size) < 0 {
+            active.register_trial_in_space(entry.space, addr, entry.size);
         }
     }
 }
@@ -11563,7 +11567,13 @@ mod tests {
         let mut call_op = crate::op::PcodeOp::new(
             crate::address::SeqNum::new(Address::new(0x2000), 0),
             crate::opcodes::OpCode::CPUI_CALL);
-        call_op.inrefs = vec![target_vn];
+        let register_arg = fd.vbank.create_with_space(
+            8,
+            crate::space::AddressSpace::Register,
+            0x18,
+        );
+        let stack_arg = fd.vbank.create_with_space(8, crate::space::AddressSpace::Stack, 0x18);
+        call_op.inrefs = vec![target_vn, register_arg, stack_arg];
         let op_arc = std::sync::Arc::new(std::sync::RwLock::new(call_op));
         fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc));
         // Before: no active input.
@@ -11571,7 +11581,16 @@ mod tests {
         let mut a = ActionFuncLink::new();
         a.apply(&mut fd).unwrap();
         // After: unknown callee → active_input initialized for trial recovery.
-        assert!(fd.get_call_specs(0).unwrap().active_input.is_some());
+        let active = fd.get_call_specs(0).unwrap().active_input.as_ref().unwrap();
+        assert_eq!(active.get_num_trials(), 2);
+        assert_eq!(
+            active.get_trial(0).get_space(),
+            crate::space::AddressSpace::Register
+        );
+        assert_eq!(
+            active.get_trial(1).get_space(),
+            crate::space::AddressSpace::Stack
+        );
     }
 
     /// FuncCallSpecs.is_input_locked: true when all params type-locked.

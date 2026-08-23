@@ -1288,3 +1288,14 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
 ## 引用行号勘误（2026-08-24，root）
 
 buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
+
+## ParamActive 地址空间传递（2026-08-24）
+
+`ActionInputPrototype`、`ActionFuncLink` 的 Heritage fallback，以及
+`seed_output_trials` 现在把来源 Varnode、调用参数或模型条目的已知
+`AddressSpace` 显式传给 `ParamActive::which_trial_in_space` /
+`register_trial_in_space`。
+这保留了 Ghidra `Address` 中的真实空间身份，使仅有 offset 的过渡
+`Address` 不会被 fail-closed 拒绝，也不恢复旧有的 Register 推断。此改动
+只修复 caller 的空间传递；对应 action 中既有的模型硬编码与未完成恢复分支
+仍按原登记残差保留。
