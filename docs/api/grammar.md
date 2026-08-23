@@ -116,6 +116,12 @@ Document type requested from the parser (grammar.hh:217): `Declaration`,
 - Pointer/Array/Function modifier `modType` virtuals (grammar.cc:2403/2412/2465)
   are folded into the free function `mod_type`, which consults Rugra's
   `TypeFactory` (`get_ptr` / `get_array` / `get_type_code`).
+- 2026-08-23 (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001): the in-file tests
+  that build base types for `mod_type` now use the faithful
+  `get_base_result` twin; on the `TypeFactory::new` bootstrap the cached
+  4-byte INT core type satisfies the same typecache fast path
+  (type.cc:3635-3640) the lenient twin read, so the resolved `Arc` is
+  identical.
 - `CParse::newFunc`'s varargs trailer is encoded as a sentinel declarator with
   `flags == u32::MAX` (Rugra-private; flagged `RUGRA-GLUE`), since Rust cannot
   store a `null` slot in `Vec<TypeDeclarator>`.

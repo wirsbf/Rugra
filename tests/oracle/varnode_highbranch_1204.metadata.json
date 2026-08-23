@@ -1,0 +1,91 @@
+{
+  "schema": 2,
+  "fixture_id": "VARNODE-COPYSYMBOL-HIGHBRANCH-0001",
+  "stable_function_id": "GH12-F-aa7e5e32b19125cfeab6",
+  "stable_function": "ghidra::Varnode::copySymbol varnode.cc:493 (high!=0 bookkeeping half varnode.cc:500-504; companions: copySymbolIfValid varnode.cc:510, HighVariable::setSymbol variable.cc:245, HighVariable::typeDirty variable.hh:166)",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "status_note": "Closes the VARNODE-COPYSYMBOL-HIGHBRANCH-0001 residual of the VARNODE-COPYSYMBOL-EQUATE-0001 fixture: the missing varnode.cc:500-504 high bookkeeping (typeDirty + setSymbol(this)) is now ported (Varnode::copy_symbol_arc, with copy_symbol_if_valid widened to &Arc self and the op.rs collapse_constant_symbol caller adapted) and driven against the locked 12.0.4 oracle across both branches of the cc:500 outer guard and the cc:502 inner guard, the cc:519 rejection, and the op-level markedInput integration.",
+  "covered_projection_status": "MATCH",
+  "overall_status": "UNTESTED: all five covered projections are byte-equal MATCH against the locked oracle; two adjacent gaps are registered forward — ruleaction.rs RuleAddUnsigned call site still lacks the cc:500-504 bookkeeping (MISMATCH, RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001) and HighVariable::get_type lacks the variable.hh:174 lazy updateType (VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001)",
+  "expected_exit_code": 0,
+  "expected_stdout_sha256": "41812f9d2c67571035a143d5aada2205733eb7dae50ef9aeaa971fcb32729727",
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level enabled via Funcdata::setHighLevel (funcdata_varnode.cc:595)",
+  "analysis_options": {
+    "entrypoint": "production Varnode::copySymbolIfValid / Varnode::copySymbol (varnode.cc:493-522) driven directly on setHighLevel-enabled Funcdata constants plus the RuleCollapseConstants::applyOp -> PcodeOp::collapseConstantSymbol integration (op.cc:503-540); equates attached through Scope::addEquateSymbol + Varnode::setSymbolEntry"
+  },
+  "coverage": {
+    "copysymbol_high_close_propagates": "MATCH: hb_close_propagates_high — pre-cleaned typedirty cache flips 0->1 (varnode.cc:501 via variable.hh:166), lazy isTypeLock re-derivation flips 0->1 and metatype unknown->int (variable.cc:400-416), high->setSymbol(this) attaches FIXTURE_EQ at offset -1 (variable.cc:245 dynamic-entry branch cc:261-262), destination inherits typelock+mapentry (cc:496-499)",
+    "copysymbol_high_not_close_clean": "MATCH: hb_not_close_no_high_effects — the cc:519 isValueClose rejection leaves the pre-cleaned high untouched: typedirty stays clear, no Symbol attaches, no lock bits or mapentry move onto the destination",
+    "copysymbol_high_null_mapentry_dirty_only": "MATCH: hb_copy_null_mapentry_dirty — direct copySymbol from a typelocked source without a SymbolEntry: cc:501 typeDirty fires while the cc:502 mapentry guard blocks setSymbol (hsym=none); fields still propagate",
+    "copysymbol_high_dst_no_high_guard": "MATCH: hb_dst_no_high — destination created in a highlevel-disabled Funcdata takes the field copy (dst_tl=1, dst_mapentry=1) with the cc:500 outer guard skipping all bookkeeping and no crash",
+    "collapse_marked_input_high_setsymbol": "MATCH: hb_op_level_marked_input — RuleCollapseConstants (ruleaction.cc:3854-3882) -> PcodeOp::collapseConstantSymbol (op.cc:503-540) -> copySymbolIfValid chain: the collapsed constant (now op input 0) carries the markup and its HighVariable has FIXTURE_EQ attached at offset -1 through the adapted op.rs call site",
+    "funcdata_dedup_callsite_manual_high": "NO_ORACLE: funcdata.rs op_setInput dedup leg hand-implements the cc:500-504 bookkeeping at its call site (Arc identity is available there); this fixture does not drive opSetInput dedup with highlevel on, leaving that site to a funcdata.rs lease",
+    "ruleaction_addunsigned_callsite_high_gap": "MISMATCH: ruleaction.rs RuleAddUnsigned (ruleaction.cc:7211) still calls the field-half copy_symbol with no cc:500-504 bookkeeping; residual RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001"
+  },
+  "residual_todo_ids": [
+    "RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001",
+    "VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001"
+  ],
+  "comparand": {
+    "rugra_base_commit": "a42a9b76f55328809222400e23345b088fd8ae1a",
+    "rugra_base_tree": "0e68d7ae9ca2eaf97d9c9f50b4d2e1a805ecc965",
+    "cpp_fixture_sha256": "98f46302aa3c0b246ba7ecd6c0f49e3e33bb2600448c09483c202cf16057f01b",
+    "rust_fixture_sha256": "a794316d31caca44abf95ddf02a8550044d6b85904b8303e41510dee2c313f50",
+    "varnode_rs_sha256": "e16f1609cdcbdadb3a24fcfbcb92d3e7d6ba326326660e8bef706cfc42735074",
+    "op_rs_sha256": "1db2b953215a6a6d9d366b1398900b4a3d3edf129e4ef15de3882d1736c3451f",
+    "varnode_doc_sha256": "2f3a82ffa505bb605205eaa601d65cf3dfec5c0c515e9130c694ffabf30f8c8f",
+    "op_doc_sha256": "586da0a3e72105b1f64e542e84be746d855e64774461785cf88d9777fa098363",
+    "runner_sha256": "6f8508fc152fe90e432ea44a4a796351cbee8d6d6a465b3e1785cb77bc365e52",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-varnode-highbranch-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rust_crate_tree_sha256": "8955f336e678da65543e2c0218624ddb353ec9ee52a68df5feb863ac5e2766f8",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-138-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "full locked decompiler libdecomp.a rebuilt from git archive of the oracle commit; fixture compiled in a separate directory against that archive",
+    "rust_comparand": "pinned Rugra base commit plus live overlay of src/varnode.rs and src/op.rs only (the lease write-set); Cargo.lock-checksummed offline vendor; isolated CARGO_HOME and target",
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "465e6ba05e07484f9fd43f684a2084b94c9e3123ae82bbdc422775a89fc84696"
+  },
+  "input_manifest": {
+    "canonicalization": "RFC 8785-compatible JSON subset: UTF-8, sorted keys, compact separators, no floats",
+    "cases": [
+      "hb_close_propagates_high: close equate copy flips the pre-cleaned typedirty bit 0->1, re-derives isTypeLock 0->1 and metatype unknown->int, attaches FIXTURE_EQ at offset -1, inherits typelock+mapentry",
+      "hb_not_close_no_high_effects: cc:519 not-close rejection leaves the pre-cleaned high clean (dirty=0, no Symbol, no field movement)",
+      "hb_copy_null_mapentry_dirty: direct copySymbol from a typelocked source without a SymbolEntry fires typeDirty but the cc:502 guard blocks setSymbol",
+      "hb_dst_no_high: highlevel-disabled destination takes the field copy with the cc:500 outer guard skipping all bookkeeping",
+      "hb_op_level_marked_input: RuleCollapseConstants -> collapseConstantSymbol -> copySymbolIfValid attaches the equate Symbol to the collapsed constant's HighVariable"
+    ],
+    "sha256": "710c4e30f81694d2f4b4decffc370913c943d0d96d79e4aad4812401050d3622"
+  },
+  "expected_lines": [
+    "case=hb_close_propagates_high|has_high=1|dirty_before=0|tl_before=0|hmeta_before=unknown|dirty_after=1|tl_after=1|hmeta_after=int|hsym=FIXTURE_EQ|hoff=-1|dst_tl=1|dst_nl=0|dst_mapentry=1",
+    "case=hb_not_close_no_high_effects|has_high=1|dirty_before=0|tl_before=0|hmeta_before=unknown|dirty_after=0|tl_after=0|hmeta_after=unknown|hsym=none|hoff=-99|dst_tl=0|dst_nl=0|dst_mapentry=0",
+    "case=hb_copy_null_mapentry_dirty|has_high=1|dirty_before=0|tl_before=0|hmeta_before=unknown|dirty_after=1|tl_after=1|hmeta_after=int|hsym=none|hoff=-99|dst_tl=1|dst_nl=0|dst_mapentry=0",
+    "case=hb_dst_no_high|has_high=0|dirty_before=0|tl_before=0|hmeta_before=none|dirty_after=0|tl_after=0|hmeta_after=none|hsym=none|hoff=-99|dst_tl=1|dst_nl=0|dst_mapentry=1",
+    "case=hb_op_level_marked_input|apply=1|opcode=1|in0_symbol=1|in0_has_high=1|in0_high_symbol=FIXTURE_EQ|in0_high_off=-1"
+  ]
+}

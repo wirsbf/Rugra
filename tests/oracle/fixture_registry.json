@@ -3116,7 +3116,7 @@
     },
     {
       "id": "lanedivide_infra_1204",
-      "description": "LaneDivide infrastructure vs locked 12.0.4: laned-register lookup/min/identity, lanedMap full lifecycle, PIECE split (incl. SUBPIECE->preexisting COPY), MULTIEQUAL split (block-head reverse order + constant lanes), INT_MULT failure zero-mutation",
+      "description": "LaneDivide infrastructure vs locked 12.0.4: laned-register lookup/min/identity, lanedMap full lifecycle, PIECE split (incl. SUBPIECE->preexisting COPY), MULTIEQUAL split (block-head reverse order + constant lanes), INT_MULT failure zero-mutation, six residual branches incl. iop-space INDIRECT materialization (11/12 MATCH, sole residual = oracle UB corner NO_ORACLE)",
       "runner": [
         "tools/run_lanedivide_infra_oracle.sh"
       ],
@@ -3125,7 +3125,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "UNTESTED",
+      "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/lanedivide_infra_1204.metadata.json",
         "inputs": {
@@ -3133,7 +3133,7 @@
           "rust_fixture": "tests/oracle/lanedivide_infra_1204.rs"
         }
       },
-      "wave": "W-2026-08-22-ORCH",
+      "wave": "W-2026-08-22-ORCH (extended 11/12)",
       "ghidra_function_ids": [
         "LaneDivide::*",
         "Architecture::getLanedRegister",
@@ -3522,6 +3522,262 @@
         "float_emulate::op_float2_float",
         "float_emulate::convert_encoding",
         "float_emulate::round_to_nearest_even"
+      ]
+    },
+    {
+      "id": "pool_purity_1204",
+      "description": "Rule pool registration purity vs locked 12.0.4: oppool1=134/oppool2=5/cleanup=15 sequences byte-identical across union-derive and decompile roots; forbidden Rugra-local rules absent (SextEliminate nonexistent, Equality dead-class archived unregistered, TrivialArith only at oppool1 index 10)",
+      "runner": [
+        "tools/run_pool_purity_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/pool_purity_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/pool_purity_1204.cc",
+          "rust_fixture": "tests/oracle/pool_purity_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionDatabase::universalAction pools"
+      ],
+      "rust_function_ids": [
+        "action::build_simplify_pool",
+        "action::build_cleanup_pool"
+      ]
+    },
+    {
+      "id": "varmap_dynamicsym_1204",
+      "description": "Dynamic symbolization chain vs locked 12.0.4: explicit conflict -> dynamic symbol with shared counter, uselimit gate, implied/input/addrtied attach legs, spacebase rejection (6/6 MATCH, zero source changes - chain verified pre-existing and faithful)",
+      "runner": [
+        "tools/run_varmap_dynamicsym_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/varmap_dynamicsym_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/varmap_dynamicsym_1204.cc",
+          "rust_fixture": "tests/oracle/varmap_dynamicsym_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionNameVars::apply",
+        "ScopeInternal::buildDynamicSymbol"
+      ],
+      "rust_function_ids": [
+        "varmap::add_dynamic_symbol",
+        "varmap::build_default_name"
+      ]
+    },
+    {
+      "id": "action_lanedivide_1204",
+      "description": "ActionLaneDivide collect/process/apply vs locked 12.0.4: dual-source collect with mask filter, mode-0 successful split IR + count, mode-2 default-lane rejection zero-mutation, RULE_ONCEPERFUNC second-pass short-circuit, lanedMap clear timing (6/6 MATCH)",
+      "runner": [
+        "tools/run_action_lanedivide_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/action_lanedivide_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/action_lanedivide_1204.cc",
+          "rust_fixture": "tests/oracle/action_lanedivide_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionLaneDivide::collectLaneSizes",
+        "ActionLaneDivide::processVarnode",
+        "ActionLaneDivide::apply"
+      ],
+      "rust_function_ids": [
+        "coreaction::ActionLaneDivide"
+      ]
+    },
+    {
+      "id": "block_calcloop_1204",
+      "description": "BlockGraph::calcLoop cycle-breaking DFS + structureLoops production wiring vs locked 12.0.4: reducible marking, nested loops, irreducible component lb overlay, structureReset end-to-end chain with dominator projection (7/7 MATCH)",
+      "runner": [
+        "tools/run_block_calcloop_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/block_calcloop_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/block_calcloop_1204.cc",
+          "rust_fixture": "tests/oracle/block_calcloop_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "BlockGraph::calcLoop",
+        "BlockGraph::structureLoops"
+      ],
+      "rust_function_ids": [
+        "block::BlockGraph::calc_loop",
+        "block::BlockGraph::structure_loops"
+      ]
+    },
+    {
+      "id": "condexe_pullback_1204",
+      "description": "ConditionalExecution pullbackOp vs locked 12.0.4: storage preserving address AND space (unique/register), opInsertEnd position between leading COPY and trailing CBRANCH, defOp missing-slot abort, constant rejection matrix G1-G8, cache hit zero-new-op, immedDom leg (5/5 MATCH)",
+      "runner": [
+        "tools/run_condexe_pullback_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/condexe_pullback_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/condexe_pullback_1204.cc",
+          "rust_fixture": "tests/oracle/condexe_pullback_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ConditionalExecution::pullbackOp",
+        "ConditionalExecution::testOpRead"
+      ],
+      "rust_function_ids": [
+        "condexe::pullback_op",
+        "condexe::test_op_read"
+      ]
+    },
+    {
+      "id": "flow_containedcall_1204",
+      "description": "FlowInfo::checkContainedCall vs locked 12.0.4: exact conversion fwd/back, offcut warning, beyond-end/before-begin skips, CALLIND guard, extern resolved skip, erase-successor-skip quirk, post-conversion unreachable retention, getpc/mid simm32=0 goto rule zero false-positives (11/11 MATCH)",
+      "runner": [
+        "tools/run_flow_containedcall_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/flow_containedcall_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/flow_containedcall_1204.cc",
+          "rust_fixture": "tests/oracle/flow_containedcall_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "FlowInfo::checkContainedCall"
+      ],
+      "rust_function_ids": [
+        "flow::check_contained_call"
+      ]
+    },
+    {
+      "id": "database_equatereg_1204",
+      "description": "EquateSymbol category/value registry vs locked 12.0.4: category=equate on ctor, value registration identity, duplicate catindex append, cross-scope isolation, getCategorySymbol roundtrip, copySymbolIfValid close+not-close gating (4/4 MATCH)",
+      "runner": [
+        "tools/run_database_equatereg_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/database_equatereg_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/database_equatereg_1204.cc",
+          "rust_fixture": "tests/oracle/database_equatereg_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Scope::addEquateSymbol",
+        "Scope::addSymbolInternal"
+      ],
+      "rust_function_ids": [
+        "database::Scope::add_equate_symbol",
+        "database::add_symbol_internal_category"
+      ]
+    },
+    {
+      "id": "varnode_highbranch_1204",
+      "description": "Varnode copySymbol high branch vs locked 12.0.4: typeDirty set + setSymbol attach on close propagation, not-close clean, empty-mapentry typeDirty-only, no-high outer guard, op-level markedInput folding chain (5/5 MATCH)",
+      "runner": [
+        "tools/run_varnode_highbranch_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/varnode_highbranch_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/varnode_highbranch_1204.cc",
+          "rust_fixture": "tests/oracle/varnode_highbranch_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Varnode::copySymbol"
+      ],
+      "rust_function_ids": [
+        "varnode::Varnode::copy_symbol_arc"
+      ]
+    },
+    {
+      "id": "funcdata_calcnzm_1204",
+      "description": "Funcdata::calcNZMask 2-phase DFS+worklist vs locked 12.0.4: const/nonconst/spacebase unwritten init, INT_AND convergence, COPY chains, PIECE, INT_DIV family tightening, MULTIEQUAL clipping + worklist fixed point (6/6 MATCH)",
+      "runner": [
+        "tools/run_funcdata_calcnzm_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_calcnzm_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/funcdata_calcnzm_1204.cc",
+          "rust_fixture": "tests/oracle/funcdata_calcnzm_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "Funcdata::calcNZMask",
+        "PcodeOp::getNZMaskLocal"
+      ],
+      "rust_function_ids": [
+        "funcdata::Funcdata::calc_nz_mask",
+        "funcdata::Funcdata::pcode_op_nz_mask_local"
       ]
     }
   ]

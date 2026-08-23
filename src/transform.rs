@@ -443,12 +443,41 @@ impl TransformVar {
                 let _ = (vn_size, vn_offset);
             }
             TransformVarType::ConstantIop => {
-                // Ghidra creates a Varnode in the iop space encoding a PcodeOp
-                // reference. Rugra has no iop space yet; fall back to a
-                // constant holding the offset.
-                self.replacement = Some(fd.new_constant(self.byte_size as usize, self.val));
+                // transform.cc:211-215:
+                //   PcodeOp *indeffect = PcodeOp::getOpFromConst(
+                //       Address(fd->getArch()->getIopSpace(),val));
+                //   replacement = fd->newVarnodeIop(indeffect);
+                // The placeholder `val` (captured by new_iop from the original
+                // iop varnode's offset) is decoded back into the affecting op
+                // and re-materialized as an iop-space annotation varnode —
+                // never as a const-space constant.
+                let indeffect = get_op_from_const_offset(self.val);
+                self.replacement = Some(fd.new_varnode_iop(&indeffect));
             }
         }
+    }
+}
+
+// Ghidra: op.hh:249 PcodeOp::getOpFromConst
+/// Resolve an iop-space offset back to the PcodeOp it references. Faithful to
+/// the static `PcodeOp::getOpFromConst(const Address &addr)` (op.hh:249),
+/// which reinterprets the address offset as a `PcodeOp*`. This is the
+/// offset-based overload of `Funcdata::get_op_from_const` (funcdata.rs:3325,
+/// varnode-parametered) mirroring transform.cc:213, where the Address is
+/// constructed directly from the placeholder value without a materialized
+/// Varnode. Rugra decodes the same `Arc::as_ptr` encoding written by
+/// `Funcdata::new_varnode_iop` (funcdata.rs:3303).
+fn get_op_from_const_offset(offset: u64) -> PcodeOpRef {
+    // SAFETY: the offset was obtained from Arc::as_ptr on a PcodeOp that is
+    // still alive in the op bank (same reconstruction contract as
+    // Funcdata::get_op_from_const, funcdata.rs:3330-3343). Clone to bump the
+    // refcount, then forget the reconstructed Arc so it is not dropped twice.
+    let raw = offset as usize as *const std::sync::RwLock<crate::op::PcodeOp>;
+    unsafe {
+        let arc = std::sync::Arc::from_raw(raw);
+        let cloned = std::sync::Arc::clone(&arc);
+        std::mem::forget(arc);
+        PcodeOpRef(cloned)
     }
 }
 

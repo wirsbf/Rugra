@@ -57,9 +57,17 @@ create-index/计数副作用）、不带 descendant、在观察投影中按 NULL
 - `initialize(type, vn, bits, bytes, value)` — 原始初始化 (transform.hh:203)
 - `create_replacement(fd, def_op)` — 创建实际 Varnode (transform.cc:175)；
   `piece` 类型 bit 未字节对齐时 `panic!("Varnode piece is not byte aligned")`
-  （cc:197-198 LowlevelError 的 panic 映射，同 funcdata.rs 既有惯例）
+  （cc:197-198 LowlevelError 的 panic 映射，同 funcdata.rs 既有惯例）；
+  `constant_iop` 分支 (cc:211-215) 经模块私有 `get_op_from_const_offset`
+  把占位符 `val` 解码回受影响 PcodeOp（op.hh:249 静态 `getOpFromConst` 的
+  按 offset 形态），再 `Funcdata::new_varnode_iop` 物化 iop 空间注记
 - 字段：`vn` / `replacement` / `var_type` / `flags` / `byte_size` / `bit_size` /
   `val` / `def`
+
+### `get_op_from_const_offset` (op.hh:249)
+模块私有自由函数：把 iop 空间 offset 解码回 `PcodeOpRef`（`Arc::from_raw` +
+clone + forget，同 `Funcdata::get_op_from_const` funcdata.rs:3325 的重建契约，
+但按裸 offset 取参、无空间校验 — 与 Ghidra 静态方法的无条件指针重解释对齐）。
 
 ### `transform_op_special` (transform.hh:70)
 常量：`OP_REPLACEMENT`(1) / `OP_PREEXISTING`(2) / `INDIRECT_CREATION`(4) /
@@ -137,7 +145,13 @@ replacement op/out/(非 possible-out 时) in(0) 上置标志）。
 - `parse_sizes` 非法尺寸走日志跳过而非 throw（transform.cc:323-324，
   TRANSFORM-PARSESIZES-STRICT-0001）；`get_piece` 重复 piece 冲突同样
   （transform.cc:607，TRANSFORM-GETPIECE-DUP-THROW-0001）。
-- `ConstantIop` 类型使用常量 fallback（Rugra 无 iop space）。
+- ~~`ConstantIop` 类型使用常量 fallback（Rugra 无 iop space）~~ — 2026-08-23
+  （TRANSFORM-CONSTANT-IOP-SPACE-0001）已按 cc:211-215 接入：`create_replacement`
+  经私有 `get_op_from_const_offset`（op.hh:249 `PcodeOp::getOpFromConst` 的按
+  offset 重载，镜像 transform.cc:213 直接从占位符值构造 Address 的调用形态）
+  解析出受影响 op，再经 `Funcdata::new_varnode_iop` 物化为 iop 空间注记
+  varnode（非常量）。lanedivide_infra_1204 的 indirect 投影已去规范化，
+  `si/k0` 分类由真实空间类型驱动，const 空间回归会使字节门禁失败。
 - ~~`deleteVarnode` / `setInputVarnode` 未暴露~~ — 2026-08-15
   （VARNODE-INPLACE-MUTATION-SITES-0001）已接入：`transform_input_varnodes` 对旧
   输入走 `fd.delete_varnode`（cc:734-735，funcdata.hh:294），新输入走

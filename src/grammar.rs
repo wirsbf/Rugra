@@ -3153,7 +3153,11 @@ mod tests {
         // TypeModifier::get_in_types / get_in_names method-form wrappers
         // delegate to collect_param_types / collect_param_names.
         let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
-        let int_type = tf.get_base(4, crate::type_system::datatype::TypeMetatype::Int).unwrap();
+        // Faithful getBase twin (type.cc:3631): TypeFactory::new's cached
+        // 4-byte INT core type satisfies the typecache fast path.
+        let int_type = tf
+            .get_base_result(4, crate::type_system::datatype::TypeMetatype::Int)
+            .unwrap();
         let mut param = TypeDeclarator::new();
         param.basetype = Some(int_type);
         param.ident = "argc".to_string();
@@ -3190,7 +3194,7 @@ mod tests {
         // virtuals; the pointer branch is exercised here.
         let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
         let base = tf
-            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .get_base_result(4, crate::type_system::datatype::TypeMetatype::Int)
             .unwrap();
         let decl = TypeDeclarator::new();
         let ptr_mod = TypeModifier::Pointer { flags: 0 };
@@ -3203,7 +3207,7 @@ mod tests {
         // ArrayModifier::modType (grammar.cc:2412): wraps the base in an array.
         let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
         let base = tf
-            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .get_base_result(4, crate::type_system::datatype::TypeMetatype::Int)
             .unwrap();
         let decl = TypeDeclarator::new();
         let arr_mod = TypeModifier::Array { flags: 0, array_size: 5 };
@@ -3218,7 +3222,7 @@ mod tests {
         // getTypeCode(proto).
         let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
         let base = tf
-            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .get_base_result(4, crate::type_system::datatype::TypeMetatype::Int)
             .unwrap();
         let decl = TypeDeclarator::new();
         let func_mod = TypeModifier::Function {

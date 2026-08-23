@@ -109,6 +109,10 @@ pub mod block_flags {
     pub const SWITCH_OUT: u32 = 0x10;       // f_switch_out (block.hh:92)
     pub const UNSTRUCTURED_TARG: u32 = 0x20; // f_unstructured_targ (block.hh:93)
     pub const MARK: u32 = 0x80;              // f_mark (block.hh:94)
+    /// Ghidra f_mark2 = 0x100 (block.hh:95). A secondary mark. calcLoop
+    /// (block.cc:2120/2133/2138) uses f_mark = "visited" and f_mark2 =
+    /// "on the current DFS path" to detect cycles.
+    pub const MARK2: u32 = 0x100;            // f_mark2 (block.hh:95)
     pub const ENTRY_POINT: u32 = 0x200;      // f_entry_point (block.hh:96)
     /// Ghidra f_interior_gotoout = 0x400 (block.hh:97). Block has an unstructured
     /// jump out of its interior. Set by setGotoBranch (block.cc:311).
@@ -217,6 +221,11 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn get_flags(&self) -> u32;
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32);
+    /// Clear a boolean property (Ghidra `clearFlag`, block.hh:156
+    /// `flags &= ~fl`). Counterpart to `set_flags`; used by calcLoop's
+    /// final sweep (block.cc:2125/2146) and stack pop (block.cc:2125).
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32);
 
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize;
@@ -1275,6 +1284,10 @@ impl FlowBlock for BlockBasic {
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
+    }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
     }
 
     // Ghidra: block.hh:313 FlowBlock::sizeIn
@@ -3181,10 +3194,9 @@ impl BlockGraph {
         // rebuild re-derives the classification over the RPO-reordered
         // component list, which changes the next root scan order.
         //
-        // Registered gap: `calcLoop` (block.cc:2104-2147) is still a no-op
-        // stub — on graphs where irreduciblecount > 0 the oracle
-        // additionally labels cycle-breaking f_loop_edge edges. The
-        // reducible path (irreduciblecount == 0, no rebuild) is complete.
+        // cc:2211-2214: when irreduciblecount > 0 the driver finishes with
+        // calcLoop(), the DFS failsafe that additionally labels
+        // cycle-breaking f_loop_edge edges (BLOCK-CALCLOOP-0001).
         let mut preorder: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
         let mut irreduciblecount: i32 = 0; // cc:2199: initialized once, accumulates
         loop {
@@ -3201,7 +3213,8 @@ impl BlockGraph {
             rootlist.clear();
         }
         if irreduciblecount > 0 {
-            // cc:2211-2214: registered-gap stub (see doc above).
+            // cc:2211-2214: make absolutely sure removing the loop edges
+            // makes a DAG (calcLoop, block.cc:2104-2147).
             self.calc_loop();
         }
         Ok(())
@@ -3209,29 +3222,117 @@ impl BlockGraph {
 
     /// Add a loop edge
     ///
-    /// Corresponds to Ghidra's `BlockGraph::addLoopEdge`
+    /// Faithful to `BlockGraph::addLoopEdge` (block.cc:1451-1464): marks the
+    /// EXISTING `outindex`-th outgoing edge of `begin` as a \e loop edge
+    /// (`f_loop_edge`) via `FlowBlock::setOutEdgeFlag` (block.cc:1463),
+    /// which ORs the label onto both halves — `begin->outofthis[outindex]`
+    /// and the mirrored `intothis[reverse_index]` of the target
+    /// (block.cc:240-246). Ghidra locates the edge by out-index (never by
+    /// target identity) precisely because multiple out-edges to the same
+    /// block must stay distinguishable (block.cc:1459-1462 comment). The
+    /// `#ifdef BLOCKCONSISTENT_DEBUG` parent check (block.cc:1454-1458) is
+    /// compiled out in the oracle release build and has no Rugra
+    /// counterpart.
     // Ghidra: block.cc:1451 BlockGraph::addLoopEdge
     pub fn add_loop_edge(
         &mut self,
-        from: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        to: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        begin: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        outindex: usize,
     ) {
-        let mut f = from.write().unwrap();
-        let mut t = to.write().unwrap();
-
-        let out_idx = f.size_out() as i32;
-        let in_idx = t.size_in() as i32;
-
-        f.add_out_edge(BlockEdge::new(to.clone(), in_idx));
-        t.add_in_edge(BlockEdge::new(from.clone(), out_idx));
+        // cc:1463: begin->setOutEdgeFlag(outindex, f_loop_edge);
+        set_out_edge_flag_mirrored(begin, outindex, edge_flags::F_LOOP_EDGE);
     }
 
-    /// Calculate loops in the graph
+    /// \brief Identify a set of edges whose removal leaves a DAG
     ///
-    /// Corresponds to Ghidra's `BlockGraph::calcLoop`
+    /// Faithful port of `BlockGraph::calcLoop` (block.cc:2104-2147).
+    /// Starting from the FIRST component in the graph list (cc:2118
+    /// `list.front()`), an explicit-stack depth-first search walks the out
+    /// edges of each block in slot order (cc:2130 `state.back() += 1`
+    /// advances the per-path-level child cursor BEFORE the edge is used).
+    /// Two block flags drive the search (cc:2120): `f_mark` = ever visited,
+    /// `f_mark2` = on the current root-to-node path.
+    ///   - An out-edge to a block still carrying `f_mark2` closes a cycle:
+    ///     `addLoopEdge(bl, i)` labels that edge `f_loop_edge` (cc:2133-
+    ///     2137) and the search does NOT descend (the oracle's throw is
+    ///     commented out at cc:2136 — this is the irreducibility failsafe).
+    ///   - An out-edge already labelled `f_loop_edge` is skipped as if it
+    ///     did not exist (cc:2131 `isLoopOut`), so a re-run treats earlier
+    ///     cycle breaks as removed.
+    ///   - An edge to a visited-but-popped block (f_mark set, f_mark2
+    ///     clear) truncates the search (cc:2138's else — nothing happens).
+    ///   - A fresh node is pushed with `f_mark|f_mark2` (cc:2138-2142).
+    /// When a path level exhausts its out-edges the block pops and loses
+    /// only `f_mark2` (cc:2124-2128); after the whole stack empties, every
+    /// block in list order has `f_mark|f_mark2` cleared (cc:2145-2146).
+    /// In structureLoops this runs only when irreduciblecount > 0
+    /// (block.cc:2211-2214) as a final guarantee that the loop edges make
+    /// the graph acyclic.
     // Ghidra: block.cc:2104 BlockGraph::calcLoop
     pub fn calc_loop(&mut self) {
-        // Implement loop identification algorithm (e.g., Tarjan's or Johnson's)
+        // cc:2113: nothing to do on an empty graph.
+        if self.blocks.is_empty() {
+            return;
+        }
+        // cc:2115-2120: seed the DFS from the first component; state[i] is
+        // the next out-edge slot of path[i] to process (0 = no children
+        // visited yet).
+        let mut path: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        let mut state: Vec<usize> = Vec::new();
+        path.push(self.blocks[0].clone());
+        state.push(0);
+        self.blocks[0]
+            .write()
+            .unwrap()
+            .set_flags(block_flags::MARK | block_flags::MARK2);
+        // cc:2121-2144: while(!path.empty())
+        while !path.is_empty() {
+            let bl = path.last().unwrap().clone();
+            let i = *state.last().unwrap();
+            let size_out = bl.read().unwrap().size_out();
+            if i >= size_out {
+                // cc:2124-2128: visited everything below this node, POP.
+                // Only f_mark2 (on-path) is cleared; f_mark (visited) stays.
+                bl.write().unwrap().clear_flags(block_flags::MARK2);
+                path.pop();
+                state.pop();
+            } else {
+                // cc:2130: advance the child cursor before using slot i.
+                *state.last_mut().unwrap() += 1;
+                // cc:2131: previously marked loop-edge — act as if it
+                // doesn't exist.
+                if bl.read().unwrap().is_loop_out(i) {
+                    continue;
+                }
+                let nextbl = match bl.read().unwrap().get_out(i) {
+                    Some(e) => e.point,
+                    None => continue,
+                };
+                let nextflags = nextbl.read().unwrap().get_flags();
+                if (nextflags & block_flags::MARK2) != 0 {
+                    // cc:2133-2137: we found a cycle! (Irreducibility
+                    // failsafe — the oracle's LowlevelError is commented
+                    // out.)
+                    self.add_loop_edge(&bl, i);
+                } else if (nextflags & block_flags::MARK) == 0 {
+                    // cc:2138-2142: fresh node — mark visited+on-path, push.
+                    nextbl
+                        .write()
+                        .unwrap()
+                        .set_flags(block_flags::MARK | block_flags::MARK2);
+                    path.push(nextbl);
+                    state.push(0);
+                }
+                // Visited but not on path (f_mark set, f_mark2 clear):
+                // truncate the search — nothing to do (cc:2138 else).
+            }
+        }
+        // cc:2145-2146: clear our marks on every block in list order.
+        for bl in &self.blocks {
+            bl.write()
+                .unwrap()
+                .clear_flags(block_flags::MARK | block_flags::MARK2);
+        }
     }
 }
 
@@ -3290,6 +3391,10 @@ impl FlowBlock for BlockCopy {
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
+    }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
     }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize {
@@ -3389,6 +3494,10 @@ impl FlowBlock for BlockGoto {
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
+    }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
     }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize {
@@ -3572,6 +3681,8 @@ impl FlowBlock for BlockIf {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
@@ -3819,6 +3930,8 @@ impl FlowBlock for BlockWhileDo {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
@@ -3988,6 +4101,8 @@ impl FlowBlock for BlockDoWhile {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
@@ -4107,6 +4222,8 @@ impl FlowBlock for BlockInfLoop {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
@@ -4307,6 +4424,8 @@ impl FlowBlock for BlockList {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
@@ -4427,6 +4546,8 @@ impl FlowBlock for BlockCondition {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
@@ -4625,6 +4746,8 @@ impl FlowBlock for BlockSwitch {
     fn get_flags(&self) -> u32 { self.flags }
     // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
     // Ghidra: block.hh:312 FlowBlock::sizeOut

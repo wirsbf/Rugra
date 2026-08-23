@@ -1,0 +1,315 @@
+{
+  "schema_version": 2,
+  "fixture_id": "FLOW-CONTAINEDCALL-0001",
+  "status_note": "All eleven coverage projections across eleven probe functions match the locked Ghidra 12.0.4 oracle byte-for-byte (234 stdout lines), including the erase-successor-skip quirk and the retained unreachable block after conversion. The consumed-input chain (possible_unreachable set only by inlineSubFunction, consumed by generateBlocks->removeUnreachableBlocks) is out of scope for this lease and recorded under out_of_scope_observations.",
+  "decisive_semantics": {
+    "reference_output_parameters": "qlst is Funcdata-owned and passed by reference into FlowInfo (Rugra: fd.callspecs); visited is read-only; data.warningHeader/warning write shared commentdb state; opSetOpcode/opMarkStartBasic/opSetInput/newCodeRef mutate shared PcodeOps and their input varnodes - all observed through spec lists, warning comments, op opcode/flag/input projections and the block graph.",
+    "loop_bounds_traversal_order": "for(iter=qlst.begin();iter!=qlst.end();++iter) over spec creation order; visited.upper_bound(addr) then one decrement equals BTreeMap range(..=addr).next_back(); the dead-list ++oiter successor lookup walks the SeqNum-ordered bank; after erase the for-header ++iter skips the erased spec's successor (locked by case multi).",
+    "counter_accumulator_lifecycle": "No counters or accumulators exist in checkContainedCall; warnings go through addCommentNoDuplicate so repeated identical (fad,addr,text) triples collapse exactly once per site.",
+    "sorting_comparison_keys": "visited is keyed by Address (space,offset) ordered; containment compares start+size<=addr with exact equality start==addr selecting the conversion arm; op iteration for observation is the PcodeOpTree SeqNum (address,then time) order, not creation order."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "4d9b05f08d0b8e47cdab5cc28b8c45c2ddcab427",
+    "base_tree": "617de92db063e8e347b677f21b8d925befbb0aa8",
+    "base_src_tree": "ffeb931b21714659197be1c69d095bd82fec2ca0",
+    "base_flow_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlay": {
+      "path": "src/flow.rs",
+      "sha256": "d9733bac5095c036c3d521951c1081040aa3478e606ab5b909e827d1301273e3",
+      "policy": "The only live library-source input; hash-verify before replacing the pinned base flow.rs"
+    },
+    "archive_policy": "Immutable explicit dependency closure plus one verified flow.rs overlay; unrelated worktree files are excluded"
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "apis": [
+      "FlowInfo::checkContainedCall (flow.cc:1361-1405)",
+      "FlowInfo::generateOps do-while wiring (flow.cc:796-821)",
+      "FlowInfo::target (flow.cc:115)",
+      "Funcdata::warningHeader (funcdata.cc:135)",
+      "Funcdata::warning (funcdata.cc:119)",
+      "Funcdata::opSetOpcode/opMarkStartBasic/opSetInput/newCodeRef",
+      "FuncCallSpecs::getOp/getEntryAddress/getFuncdata"
+    ],
+    "funcdata": "Eleven BfdArchitecture shells, one per probe, over the fixture-binary .text compiled from the probes in this fixture's .cc (g++ -O0 -fno-pie -no-pie); each shell follows flow from the probe symbol over the full default code space",
+    "probe_construction": "naked noinline C functions; every probe body is pure asm so the emitted bytes are exactly the designed instruction stream; endbr64 (4 bytes, -fcf-protection) precedes each body, shifting deltas by +4 on both sides identically",
+    "sleigh_spec_rule": "the shared x86-64 .sla compiles CALL with zero displacement (target == next instruction) to goto (ia.sinc:2953 'When is a Call a Jump' rule), so getpc/mid never create a call spec; every checkContainedCall-exercising probe uses non-zero displacement internal targets",
+    "case_matrix": "exact visited-start hit forward and backward, offcut mid-instruction target, target beyond last visited instruction end, target below every visited key, CALLIND opcode guard, callee-Funcdata resolved external symbol, two-call erase-successor skip",
+    "random_seed": "none",
+    "error_injection": "none; all guards are structural",
+    "debug_macros": "__TERMINAL__ only; OPACTION_DEBUG, CPUI_DEBUG and TYPEPROP_DEBUG absent",
+    "diagnostics": "BfdArchitecture initialization diagnostics captured privately into an ostringstream and excluded from the target API observation; both sides' stderr is required empty",
+    "normalization": "Three projections normalize proven non-semantic encodings identically on both sides: (1) the PIC warning's embedded call address is printed via Address::printRaw (ram:000...) on Ghidra and 0x-hex Display on Rugra's legacy spaceless Address (ADDRESS-0001) - both sides parse it back to a base-relative delta; (2) the call-spec annotation varnode lives in Ghidra's Fspec space (offset = heap pointer) and Rugra's Iop space (offset = spec index) - projected to the single token 'callspec'; (3) LOAD/STORE input(0) space-reference constants are heap pointers on Ghidra (run-varying) and stable SPACEID_* indices on Rugra - projected to the referenced space name. No op order, aliasing, control flow or state is dropped."
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659,
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62"
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721,
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182,
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1"
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390,
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94"
+    },
+    "bfd": {
+      "package_version": "2.38-4ubuntu2.12",
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,probes,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "0ba6ce1ae5601f9e59b6b3af250d8a6a9cae7dbedd498572b521fcdfc4736631",
+    "probes": [
+      "containedcall_getpc",
+      "containedcall_mid",
+      "containedcall_fwd",
+      "containedcall_offcut",
+      "containedcall_beyond",
+      "containedcall_multi",
+      "containedcall_back",
+      "containedcall_afterc",
+      "containedcall_before",
+      "containedcall_callind",
+      "containedcall_extern"
+    ],
+    "cases": [
+      {
+        "id": "getpc",
+        "arm": "sleigh_goto_spec_rule",
+        "spec_after": 0,
+        "warnings": 0
+      },
+      {
+        "id": "mid",
+        "arm": "sleigh_goto_spec_rule",
+        "spec_after": 0,
+        "warnings": 0
+      },
+      {
+        "id": "fwd",
+        "arm": "exact_match_conversion_forward",
+        "spec_after": 0,
+        "warnings": 1
+      },
+      {
+        "id": "offcut",
+        "arm": "offcut_warning_only",
+        "spec_after": 1,
+        "warnings": 1
+      },
+      {
+        "id": "beyond",
+        "arm": "beyond_end_silent_skip",
+        "spec_after": 1,
+        "warnings": 0
+      },
+      {
+        "id": "multi",
+        "arm": "erase_successor_skip_quirk",
+        "spec_after": 1,
+        "warnings": 1
+      },
+      {
+        "id": "back",
+        "arm": "exact_match_conversion_backward",
+        "spec_after": 0,
+        "warnings": 1
+      },
+      {
+        "id": "afterc",
+        "arm": "conversion_unreachable_block_retained",
+        "spec_after": 0,
+        "warnings": 1
+      },
+      {
+        "id": "before",
+        "arm": "upper_bound_begin_skip",
+        "spec_after": 1,
+        "warnings": 0
+      },
+      {
+        "id": "callind",
+        "arm": "opcode_guard_not_call",
+        "spec_after": 1,
+        "warnings": 0
+      },
+      {
+        "id": "extern",
+        "arm": "funcdata_resolved_skip",
+        "spec_after": 1,
+        "warnings": 0
+      }
+    ]
+  },
+  "observation_schema": {
+    "format": "Eleven case records in fixed probe order, pipe-free key=value lines: case/calls/spec/warn/blocks/block/op, final newline; 234 lines total",
+    "record_order": [
+      "containedcall_getpc",
+      "containedcall_mid",
+      "containedcall_fwd",
+      "containedcall_offcut",
+      "containedcall_beyond",
+      "containedcall_multi",
+      "containedcall_back",
+      "containedcall_afterc",
+      "containedcall_before",
+      "containedcall_callind",
+      "containedcall_extern"
+    ]
+  },
+  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "machine_input_sha256": {
+    "fixture_text": "6ae5db85e351c594b8787bf6a0842df89075313200746457ccdb5f104d6703c5"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "929de3dcdc478e164b0681c4c6908340058a896e1b6855bbdb354cf101f4b198",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "929de3dcdc478e164b0681c4c6908340058a896e1b6855bbdb354cf101f4b198",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "coverage": {
+    "goto_spec_parity": {
+      "status": "MATCH",
+      "covers": "getpc/mid: zero-displacement internal calls compile to goto in the shared .sla; both sides emit BRANCH at lift time, create zero call specs, and produce no warnings (no false positives from checkContainedCall).",
+      "residual_todo_ids": []
+    },
+    "exact_match_conversion_fwd": {
+      "status": "MATCH",
+      "covers": "fwd: non-zero displacement call to a later visited instruction start converts CALL->BRANCH, emits the warningheader, restores the code-ref input, marks the following op STARTBASIC, splits the block, and erases the spec (calls=0).",
+      "residual_todo_ids": []
+    },
+    "offcut_warning": {
+      "status": "MATCH",
+      "covers": "offcut: target strictly inside a visited 3-byte instruction draws only the 'Call to offcut address within same function' warning attached at the call address; op stays CALL with callspec input and the spec survives (calls=1).",
+      "residual_todo_ids": []
+    },
+    "beyond_end_skip": {
+      "status": "MATCH",
+      "covers": "beyond: target at start+size of the last visited instruction below it (never decoded, ret imm16 has no fallthru) silently skips via flow.cc:1377-1378; spec survives, no warning.",
+      "residual_todo_ids": []
+    },
+    "erase_successor_skip_quirk": {
+      "status": "MATCH",
+      "covers": "multi: two internal calls; the first converts and erases, and the for-header ++iter skips the successor spec, so the second call stays CPUI_CALL with its callspec (calls=1, one warning). Locks the load-bearing oracle quirk.",
+      "residual_todo_ids": []
+    },
+    "exact_match_conversion_back": {
+      "status": "MATCH",
+      "covers": "back: converted call targeting an earlier decoded instruction; target op and following op both STARTBASIC; block graph identical including the retained unreachable ret block.",
+      "residual_todo_ids": []
+    },
+    "conversion_unreachable_block_retained": {
+      "status": "MATCH",
+      "covers": "afterc: converted call followed by a conditional branch; the branch block keeps no in-edges and is retained because checkContainedCall does not set possible_unreachable (only inlineSubFunction flow.cc:1274 does); generateBlocks therefore does not call removeUnreachableBlocks.",
+      "residual_todo_ids": []
+    },
+    "before_begin_skip": {
+      "status": "MATCH",
+      "covers": "before: call target 0x10 below the function entry (inside the int3 pad, never a symbol start, never decoded) skips via upper_bound==visited.begin() (flow.cc:1375); spec survives with negative entry delta.",
+      "residual_todo_ids": []
+    },
+    "callind_opcode_guard": {
+      "status": "MATCH",
+      "covers": "callind: register-indirect call (CPUI_CALLIND) skips on the opcode guard (flow.cc:1370) before any address lookup; spec survives with invalid entry.",
+      "residual_todo_ids": []
+    },
+    "funcdata_resolved_skip": {
+      "status": "MATCH",
+      "covers": "extern: call to a real preceding symbol. Ghidra resolves the callee Funcdata in queryCall and skips at flow.cc:1367-1368; Rugra's query_call is a documented no-op (CALLSPEC-0001) so has_funcdata() is false, but the target is below every visited key and the combined observable (spec kept, no warning, op unchanged) is identical.",
+      "residual_todo_ids": []
+    },
+    "generateops_do_while_wiring": {
+      "status": "MATCH",
+      "covers": "all cases: checkContainedCall executes on the first do-while pass even with zero BRANCHIND ops (flow.cc:813), matching the Ghidra do-while shape; conversions are observable in the same run as the flow trace.",
+      "residual_todo_ids": []
+    }
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MATCH",
+  "residual_todo_ids": [],
+  "out_of_scope_observations": [
+    {
+      "id": "FLOW-CONTAINEDCALL-CONSUME-0001",
+      "note": "possible_unreachable is set only by inlineSubFunction (flow.cc:1274) and consumed by generateBlocks calling data.removeUnreachableBlocks(false,true) (flow.cc:843-844). Rugra's generate_blocks already has the has_possible_unreachable -> fd.remove_unreachable_blocks() wiring, but Funcdata::remove_unreachable_blocks itself lives in funcdata.rs outside this lease; its per-function oracle depth belongs to the flow-audit item that owns funcdata.rs. Suggested TODO id for the orchestrator: FUNCDATA-REMOVE-UNREACHABLE-0001."
+    },
+    {
+      "id": "FLOW-CONTAINEDCALL-QUARK-0002",
+      "note": "Ghidra's FlowInfo::checkMultistageJumptables (flow.cc:1408) is still not ported; Rugra approximates the do-while tablelist refill with a fresh BRANCHIND census. Not observable in this fixture (no indirect jumps)."
+    },
+    {
+      "id": "FLOW-CONTAINEDCALL-CALLSPEC-0003",
+      "note": "The flow.cc:1367-1368 callee-Funcdata guard runs through a CALLSPEC-0001 adapter that is constant false because Rugra's query_call never resolves a Funcdata. The extern case proves the combined observable is identical when the target is not a visited address; a probe with a resolved Funcdata whose entry is also visited (recursion-style) would need CALLSPEC-0001 linkage to stay aligned."
+    },
+    {
+      "id": "FLOW-CONTAINEDCALL-INJECTWIRE-0004",
+      "note": "generateOps' hasInject()->injectPcode() calls (flow.cc:794-795, 819-820) remain unwired in Rugra's generate_ops; injectlist is only populated when FuncCallSpecs::isInline() is true, which the CALLSPEC-0001 adapter never returns, so no behavior difference is observable today (INJECT-0001)."
+    }
+  ],
+  "comparand": {
+    "cpp_fixture_sha256": "111c16cf805d82895096724a0845590a9bbbcaafa8a74561539bee5b697268ed",
+    "rust_fixture_sha256": "0a3963900480074f333a7bc1bc732039ae2a387ea1027ce7aafcc5a734d51f39",
+    "flow_overlay_sha256": "d9733bac5095c036c3d521951c1081040aa3478e606ab5b909e827d1301273e3",
+    "runner_sha256": "dd37fdbc65a161db0bdfc38d89c21c96cbbb700779040311f1a335fade759edb"
+  }
+}

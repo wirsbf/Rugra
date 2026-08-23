@@ -708,7 +708,10 @@ impl PcodeOp {
         // cc:537: copyVn must have a symbol entry
         if let Some(cv) = copy_vn {
             if cv.read().unwrap().get_symbol_entry().is_some() {
-                new_const.write().unwrap().copy_symbol_if_valid(&cv.read().unwrap());
+                // copySymbolIfValid (varnode.cc:510) now takes the destination
+                // Arc so its copySymbol tail can run the full cc:493-505 port
+                // (high bookkeeping included) via copy_symbol_arc.
+                crate::varnode::Varnode::copy_symbol_if_valid(new_const, &cv.read().unwrap());
             }
         }
     }

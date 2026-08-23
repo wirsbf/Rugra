@@ -41,6 +41,18 @@ Core names are never inferred. The byte-faithful port — including the
 "TypeFactory alignment map not initialized" LowlevelError of the raw
 constructor state — is `get_base_result`.
 
+TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 (2026-08-23): every in-lease caller
+(cpool.rs, merge.rs, grammar.rs, typefactory internals incl. the partial-type
+constructors, `down_chain_pointer`, `get_ptr_to_from_parent`, and the decode
+paths) is migrated to `get_base_result`. The twin is retained for callers
+outside that lease holding `&TypeFactory` read guards (`arch.rs:2327`,
+`varnode.rs`, `userop.rs`, `varmap.rs:919`, `coreaction.rs:4240`,
+`ruleaction.rs`, internal `concretize` pinned `&self` by `varmap.rs:2546`)
+and for the pinned `typefactory_local_cache_1204` differential snapshot base
+(71971b2 cpool.rs/merge.rs compile against this file; re-pinned from the
+uncompilable-at-HEAD 296c128 pin by this same migration). Migrate them when
+their leases free up, then delete the twin.
+
 ### `pub fn get_base_result(&mut self, size: usize, metatype: TypeMetatype) -> Result<Arc<Datatype>, String>`
 
 The faithful `TypeFactory::getBase(int4,type_metatype)` port
@@ -59,6 +71,12 @@ non-ASCII signed-byte type instead of the preferred printable ASCII type;
 all other requests delegate to `get_base`. The faithful twin delegating to
 `get_base_result` (LowlevelError propagation included) is
 `get_base_no_char_result`.
+
+TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 (2026-08-23): zero current-tree
+callers (merge.rs `factory_nochar_distinct` and the typefactory tests are
+migrated to `get_base_no_char_result`); retained only for the pinned
+`typefactory_local_cache_1204` differential snapshot base (71971b2
+merge.rs). Delete when that runner re-pins to a post-migration commit.
 
 ### `pub fn clear(&mut self)`
 
@@ -84,10 +102,14 @@ interior-mutability rework of `Datatype`, separate lease).
 
 ### `pub fn set_core_type(&mut self, name: &str, size: usize, metatype: TypeMetatype, chartp: bool) -> Arc<Datatype>`
 
-Arc-returning compatibility wrapper (panics with the LowlevelError text on
-conflict) for the cpool/merge test callers written before the Result port;
-their files sit under other leases
-(TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001).
+Arc-returning thin assertion layer (panics with the LowlevelError text on
+conflict, i.e. exactly the throw of type.cc:3178).
+TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 (2026-08-23): zero current-tree
+callers — cpool.rs, merge.rs and the typefactory tests are migrated to
+`set_core_type_result`; the layer is retained only because the pinned
+`typefactory_local_cache_1204` differential snapshot base (71971b2
+cpool.rs:614, merge.rs) compiles against this file. Delete when that
+runner re-pins to a post-migration commit.
 
 ### `pub fn cache_core_types(&mut self)`
 
@@ -520,8 +542,23 @@ the six registered gaps are closed as follows against locked
   the `Datatype` interior-mutability rework in datatype.rs — separate lease).
 - **Error paths**: conflicts, missing ids, shared ids, and the raw-constructor
   alignment error now propagate as `Result::Err` with the oracle messages and
-  no partial state; the legacy `set_core_type` Arc wrapper remains for
-  leased test callers (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001).
+  no partial state; the legacy `set_core_type` Arc wrapper is now a zero-caller
+  thin assertion layer kept for the pinned differential snapshot base
+  (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001, migrated 2026-08-23).
+- **Legacy-caller migration** (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001,
+  2026-08-23): cpool.rs, merge.rs, grammar.rs and every in-file caller of
+  `set_core_type`/`get_base`/`get_base_no_char`/`get_type_void` are migrated
+  to the faithful Result twins. In-file behavior deltas of the swap, each
+  toward oracle fidelity: `get_type_partial_struct/enum/union` and
+  `get_ptr_to_from_parent` now run the real `findAdd` (alignment error
+  surfaces as the LowlevelError panic instead of a fabricated `undefined1`
+  fallback that the old twin's never-None contract made unreachable);
+  `down_chain_pointer`'s enum arm uses the faithful `getBase(1,TYPE_UINT)`;
+  `decode_type_no_ref`/`decode_code_define` create the void singleton through
+  `get_type_void_result` exactly as Ghidra's getTypeVoid does on a miss.
+  `concretize` stays on the lenient `&self` twin because its caller
+  (varmap.rs:2546, varmap.cc:622) holds a read guard — the cached
+  `undefined1` entry hits the identical typecache fast path.
 - **Core enums enter the tree**: `decode_enum` canonicalizes through
   `find_add` (name map + ordered tree), so a core enum participates in
   `cacheCoreTypes` — a size-1 signed enum wins `type_nochar`

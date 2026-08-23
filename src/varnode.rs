@@ -1010,15 +1010,60 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:493 Varnode::copySymbol
-    /// Copy symbol/type info from another varnode. Faithful to
-    /// `Varnode::copySymbol` (varnode.cc:493-505). Copies type + mapentry +
-    /// typelock/namelock flags.
+    /// Copy symbol/type info from another varnode — the field half of
+    /// `Varnode::copySymbol` (varnode.cc:496-499). Copies type + mapentry +
+    /// typelock/namelock flags. The cc:500-504 high bookkeeping
+    /// (`high->typeDirty()` / `high->setSymbol(this)`) needs the
+    /// destination's `Arc` identity and lives in
+    /// [`Varnode::copy_symbol_arc`]; callers that cannot hand over the Arc
+    /// must perform that half at the call site (see funcdata.rs
+    /// op_set_input's dedup leg).
     pub fn copy_symbol(&mut self, vn: &Varnode) {
         self.v_type = vn.v_type.clone();
         self.mapentry = vn.mapentry.clone();
         self.clear_flags(varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
         let inherit = vn.flags & (varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
         self.set_flags(inherit);
+    }
+
+    // Ghidra: varnode.cc:493 Varnode::copySymbol
+    /// Copy symbol/type info from `vn` into the varnode behind `self_arc` —
+    /// the complete port of `Varnode::copySymbol` (varnode.cc:493-505),
+    /// including the cc:500-504 high bookkeeping:
+    /// ```text
+    /// type = vn->type;                                   // cc:496
+    /// mapentry = vn->mapentry;                           // cc:497
+    /// flags &= ~(Varnode::typelock | Varnode::namelock); // cc:498
+    /// flags |= (Varnode::typelock | Varnode::namelock) & vn->flags; // cc:499
+    /// if (high != (HighVariable *)0) {                   // cc:500
+    ///   high->typeDirty();                               // cc:501
+    ///   if (mapentry != (SymbolEntry *)0)                // cc:502
+    ///     high->setSymbol(this);                         // cc:503
+    /// }
+    /// ```
+    /// The cc:500-504 half needs the destination's `Arc<RwLock<Varnode>>`
+    /// identity — `setSymbol(this)` hands the *destination* varnode (not
+    /// `vn`) to `HighVariable::set_symbol` (variable.cc:245), which
+    /// re-reads its SymbolEntry and offset — so this is an associated
+    /// function rather than a `&mut self` method. The write guard on the
+    /// destination is dropped before the high bookkeeping so `set_symbol`
+    /// can re-acquire the destination read-only without deadlock.
+    pub fn copy_symbol_arc(self_arc: &std::sync::Arc<RwLock<Varnode>>, vn: &Varnode) {
+        let (high, has_mapentry) = {
+            let mut this = self_arc.write().unwrap();
+            this.copy_symbol(vn); // cc:496-499 field half
+            (this.high.clone(), this.mapentry.is_some())
+        };
+        // cc:500-504: high bookkeeping. typeDirty fires whenever a
+        // HighVariable is attached; setSymbol additionally requires a
+        // mapentry to have survived the copy (cc:502 guard).
+        if let Some(high) = high {
+            let mut h = high.write().unwrap();
+            h.type_dirty(); // variable.hh:166 HighVariable::typeDirty
+            if has_mapentry {
+                h.set_symbol(self_arc); // variable.cc:245 HighVariable::setSymbol
+            }
+        }
     }
 
     // Ghidra: varnode.cc:410 Varnode::setSymbolProperties
@@ -1079,8 +1124,11 @@ impl Varnode {
     /// The `dynamic_cast<EquateSymbol*>` subtype test maps to
     /// [`equate_symbol_registry::query_value`]: only symbols registered as
     /// equates (the Rust stand-in for the C++ EquateSymbol subtype identity)
-    /// carry an equate value here.
-    pub fn copy_symbol_if_valid(&mut self, vn: &Varnode) {
+    /// carry an equate value here. This is an associated function taking the
+    /// destination as `&Arc<RwLock<Varnode>>` so the cc:520 `copySymbol(vn)`
+    /// tail can run the complete port (high bookkeeping included) via
+    /// [`Varnode::copy_symbol_arc`].
+    pub fn copy_symbol_if_valid(self_arc: &std::sync::Arc<RwLock<Varnode>>, vn: &Varnode) {
         // cc:513-515: no SymbolEntry on the source varnode -> nothing to copy.
         let map_entry = match vn.get_symbol_entry() {
             Some(e) => e,
@@ -1095,8 +1143,13 @@ impl Varnode {
         };
         // cc:519-521: propagate only when this constant (loc offset + size)
         // is "close" to the equate value (database.cc:640 isValueClose).
-        if crate::database::EquateSymbol::is_value_close_value(value, self.get_offset(), self.size) {
-            self.copy_symbol(vn); // Propagate the markup into our new constant
+        // The read guard is dropped before the copy mutation.
+        let close = {
+            let this = self_arc.read().unwrap();
+            crate::database::EquateSymbol::is_value_close_value(value, this.get_offset(), this.size)
+        };
+        if close {
+            Varnode::copy_symbol_arc(self_arc, vn); // Propagate the markup into our new constant
         }
     }
 
@@ -3272,9 +3325,10 @@ pub fn find_contiguous_whole(vn1: &Varnode) -> Option<Arc<RwLock<Varnode>>> {
 /// `Arc`, and clearing on Drop would re-attribute equate-ness to a new symbol
 /// allocated at a recycled address (ABA); the registry therefore mirrors the
 /// C++ object-lifetime semantics of "an EquateSymbol stays an EquateSymbol".
-/// Boundary: `database::Scope::add_equate_symbol` does not yet register its
-/// symbols (DATABASE-EQUATE-VALUE-REGISTRY residual); pipeline equates must
-/// wire that call before this registry sees main-pipeline traffic.
+/// Wiring: `database::Scope::add_equate_symbol` and the `<equatesymbol>` leg
+/// of `database::Scope::add_map_sym` register their symbols here
+/// (DATABASE-EQUATE-VALUE-REGISTRY-0001), so main-pipeline equates reach
+/// `copy_symbol_if_valid` with their value.
 pub mod equate_symbol_registry {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -3430,10 +3484,15 @@ mod tests {
     fn test_copy_symbol_if_valid_equate_gating() {
         // varnode.cc:510-522: the markup is copied only from an equate symbol
         // whose value is close to this constant (loc offset + size).
+        // Associated-function form: the destination must be an Arc'd varnode
+        // so the copySymbol tail can reach the high bookkeeping (VARNODE-
+        // COPYSYMBOL-HIGHBRANCH-0001).
         use crate::address::RangeList;
         use crate::database::{Symbol, SymbolEntry};
 
-        let attach = |vn: &mut Varnode, symbol: std::sync::Arc<RwLock<Symbol>>, size: i32| {
+        let attach = |vn: &mut Varnode,
+                      symbol: std::sync::Arc<RwLock<Symbol>>,
+                      size: i32| {
             let entry = SymbolEntry::new_dynamic(
                 symbol.clone(),
                 varnode_flags::MAPPED,
@@ -3450,40 +3509,155 @@ mod tests {
             equate_symbol_registry::register_value(&symbol, value);
             symbol
         };
+        let arc = |vn: Varnode| std::sync::Arc::new(RwLock::new(vn));
 
         // cc:519-521 equate value equal to the destination constant: copy.
         let mut src = Varnode::new_constant(0x33333333, 4);
-        let mut dst = Varnode::new_constant(0x33333333, 4);
+        let dst = arc(Varnode::new_constant(0x33333333, 4));
         attach(&mut src, equate_symbol(0x33333333), 4);
-        dst.copy_symbol_if_valid(&src);
-        assert!(dst.get_symbol_entry().is_some(), "close equate propagates");
+        Varnode::copy_symbol_if_valid(&dst, &src);
+        assert!(
+            dst.read().unwrap().get_symbol_entry().is_some(),
+            "close equate propagates"
+        );
 
         // cc:519 not close: reject (VARNODE-COPYSYMBOL-EQUATE-0001 branch).
         let mut src = Varnode::new_constant(0x12345678, 4);
-        let mut dst = Varnode::new_constant(0x33333333, 4);
+        let dst = arc(Varnode::new_constant(0x33333333, 4));
         attach(&mut src, equate_symbol(0x12345678), 4);
-        dst.copy_symbol_if_valid(&src);
-        assert!(dst.get_symbol_entry().is_none(), "not-close equate rejected");
+        Varnode::copy_symbol_if_valid(&dst, &src);
+        assert!(
+            dst.read().unwrap().get_symbol_entry().is_none(),
+            "not-close equate rejected"
+        );
 
         // cc:516-518 non-equate symbol (dynamic_cast fails): reject.
         let mut src = Varnode::new_constant(0x33333333, 4);
-        let mut dst = Varnode::new_constant(0x33333333, 4);
-        attach(&mut src, std::sync::Arc::new(RwLock::new(Symbol::new(0, "PLAIN", "unknown"))), 4);
-        dst.copy_symbol_if_valid(&src);
-        assert!(dst.get_symbol_entry().is_none(), "non-equate symbol rejected");
+        let dst = arc(Varnode::new_constant(0x33333333, 4));
+        attach(
+            &mut src,
+            std::sync::Arc::new(RwLock::new(Symbol::new(0, "PLAIN", "unknown"))),
+            4,
+        );
+        Varnode::copy_symbol_if_valid(&dst, &src);
+        assert!(
+            dst.read().unwrap().get_symbol_entry().is_none(),
+            "non-equate symbol rejected"
+        );
 
         // cc:513-515 source without a mapentry: early return.
         let src = Varnode::new_constant(0x33333333, 4);
-        let mut dst = Varnode::new_constant(0x33333333, 4);
-        dst.copy_symbol_if_valid(&src);
-        assert!(dst.get_symbol_entry().is_none(), "no mapentry -> no copy");
+        let dst = arc(Varnode::new_constant(0x33333333, 4));
+        Varnode::copy_symbol_if_valid(&dst, &src);
+        assert!(
+            dst.read().unwrap().get_symbol_entry().is_none(),
+            "no mapentry -> no copy"
+        );
 
         // cc:652 negate-close still propagates through copySymbolIfValid.
         let mut src = Varnode::new_constant(0xF0F1, 2);
-        let mut dst = Varnode::new_constant(0x0F0F, 2);
+        let dst = arc(Varnode::new_constant(0x0F0F, 2));
         attach(&mut src, equate_symbol(0x0F0F), 2);
-        dst.copy_symbol_if_valid(&src);
-        assert!(dst.get_symbol_entry().is_some(), "negate-close equate propagates");
+        Varnode::copy_symbol_if_valid(&dst, &src);
+        assert!(
+            dst.read().unwrap().get_symbol_entry().is_some(),
+            "negate-close equate propagates"
+        );
+    }
+
+    #[test]
+    fn test_copy_symbol_arc_high_branch() {
+        // varnode.cc:500-504 high bookkeeping half of copySymbol
+        // (VARNODE-COPYSYMBOL-HIGHBRANCH-0001): typeDirty fires whenever the
+        // destination has a HighVariable; setSymbol additionally requires a
+        // mapentry on the destination after the copy.
+        use crate::address::RangeList;
+        use crate::database::{Symbol, SymbolEntry};
+        use crate::variable::high_internal_flags;
+
+        // Destination with a HighVariable, its type cache pre-cleaned by a
+        // first getType (typedirty cleared to 0 before the copy).
+        let dst = std::sync::Arc::new(RwLock::new(Varnode::new_constant(0x33333333, 4)));
+        let high = {
+            let mut h = crate::variable::HighVariable::new(dst.read().unwrap().v_type.clone().unwrap());
+            h.add_instance(dst.clone());
+            h
+        };
+        let high = std::sync::Arc::new(RwLock::new(high));
+        dst.write().unwrap().high = Some(high.clone());
+        high.write().unwrap().update_type(); // clean the typedirty bit
+        assert_eq!(
+            (high.read().unwrap().highflags & high_internal_flags::TYPEDIRTY),
+            0,
+            "pre-clean leaves typedirty clear"
+        );
+
+        // (a) copy from a typelocked source with an equate mapentry: the
+        // full port must set typedirty AND attach the symbol.
+        let mut src = Varnode::new_constant(0x33333333, 4);
+        let symbol = std::sync::Arc::new(RwLock::new(Symbol::new(0, "FIXTURE_EQ", "equ")));
+        equate_symbol_registry::register_value(&symbol, 0x33333333);
+        let entry = SymbolEntry::new_dynamic(
+            symbol,
+            varnode_flags::MAPPED,
+            1,
+            0,
+            4,
+            RangeList::default(),
+        );
+        src.set_symbol_entry(std::sync::Arc::new(RwLock::new(entry)));
+        src.set_flags(varnode_flags::TYPELOCK);
+        Varnode::copy_symbol_arc(&dst, &src);
+        let h = high.read().unwrap();
+        assert_ne!(
+            h.highflags & high_internal_flags::TYPEDIRTY,
+            0,
+            "cc:501 typeDirty fires when high is attached"
+        );
+        assert!(
+            h.symbol.is_some(),
+            "cc:502-503 setSymbol attaches the copied mapentry's symbol"
+        );
+        assert_eq!(h.get_symbol_offset(), -1, "dynamic equate entry -> -1");
+        drop(h);
+        assert!(
+            dst.read().unwrap().is_type_lock(),
+            "cc:499 typelock inherited into the destination"
+        );
+
+        // (b) copy from a source WITHOUT a mapentry (direct copySymbol, inner
+        // guard false side): typeDirty still fires, symbol untouched.
+        let dst2 = std::sync::Arc::new(RwLock::new(Varnode::new_constant(0x44444444, 4)));
+        let high2 = {
+            let mut h = crate::variable::HighVariable::new(
+                dst2.read().unwrap().v_type.clone().unwrap(),
+            );
+            h.add_instance(dst2.clone());
+            h
+        };
+        let high2 = std::sync::Arc::new(RwLock::new(high2));
+        dst2.write().unwrap().high = Some(high2.clone());
+        high2.write().unwrap().update_type();
+        let src2 = Varnode::new_constant(0x44444444, 4);
+        Varnode::copy_symbol_arc(&dst2, &src2);
+        let h2 = high2.read().unwrap();
+        assert_ne!(
+            h2.highflags & high_internal_flags::TYPEDIRTY,
+            0,
+            "cc:501 typeDirty fires even without a mapentry"
+        );
+        assert!(h2.symbol.is_none(), "cc:502 guard blocks setSymbol");
+        drop(h2);
+
+        // (c) destination WITHOUT a HighVariable: the outer guard skips the
+        // bookkeeping entirely (no crash, fields still copied).
+        let dst3 = std::sync::Arc::new(RwLock::new(Varnode::new_constant(0x55555555, 4)));
+        let mut src3 = Varnode::new_constant(0x55555555, 4);
+        src3.set_flags(varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
+        Varnode::copy_symbol_arc(&dst3, &src3);
+        let d3 = dst3.read().unwrap();
+        assert!(d3.high.is_none());
+        assert!(d3.is_type_lock() && d3.is_name_lock());
     }
 
     #[test]

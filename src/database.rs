@@ -1050,10 +1050,17 @@ pub struct EquateSymbol {
 
 impl EquateSymbol {
     // Ghidra: database.cc:624 EquateSymbol::new
-    /// Construct given the name, format, and value.
+    /// Construct given the name, format, and value. Faithful to
+    /// `EquateSymbol::EquateSymbol` (database.cc:624-631): the C++ constructor
+    /// body runs `value = val; category = equate;
+    /// type = sc->getArch()->types->getBase(1,TYPE_UNKNOWN); dispflags |= format;`.
     pub fn new(scope_id: u64, nm: &str, format: u32, value: u64) -> Self {
         let mut symbol = Symbol::new(scope_id, nm, "equ");
+        // cc:630 dispflags |= format.
         symbol.set_display_format(format);
+        // cc:628 category = equate (the decode constructor database.hh:306
+        // sets the same category before decodeHeader re-reads `cat`).
+        symbol.category = SymbolCategory::Equate;
         Self { symbol, value }
     }
 
@@ -2484,8 +2491,43 @@ impl Scope {
         // Decode the symbol element itself (header + body, body skipped).
         let opened = decoder.open_element();
         sym.decode_header(decoder);
+        // database.cc:1572-1573/1587 — an <equatesymbol> child decodes into an
+        // EquateSymbol instance whose decode body (database.cc:670-683) reads
+        // the <value> child after decodeHeader; the object identity carries
+        // the equate payload regardless of the category attribute. The Rust
+        // encoder writes the value as a `val` attribute (EquateSymbol::encode);
+        // an absent/attribute-less <value> leaves the hh:306 default 0.
+        let mut equate_value: Option<u64> = None;
+        if sub_name == "equatesymbol" {
+            let val_id = decoder.peek_element();
+            if val_id != 0 && decoder.element_name(val_id).as_deref() == Some("value") {
+                let v_id = decoder.open_element();
+                loop {
+                    let aid = decoder.next_attribute_id();
+                    if aid == 0 {
+                        break;
+                    }
+                    if decoder.attribute_name(aid).as_deref() == Some("val") {
+                        equate_value = Some(decoder.read_unsigned_integer());
+                    } else {
+                        let _ = decoder.read_string();
+                    }
+                }
+                decoder.close_element(v_id);
+            }
+        }
         decoder.close_element_skipping(opened);
-        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        let sym_arc = Arc::new(RwLock::new(sym));
+        self.symbols.insert(id, sym_arc.clone());
+        if sub_name == "equatesymbol" {
+            // RUGRA-GLUE (database.cc:1572 new EquateSymbol(owner)): the
+            // decoded C++ object is an EquateSymbol; the registry entry on
+            // the registered Arc stands in for that subtype identity.
+            crate::varnode::equate_symbol_registry::register_value(
+                &sym_arc,
+                equate_value.unwrap_or(0),
+            );
+        }
         // Parse subsequent <addr>/<hash> mappings.
         loop {
             let map_id = decoder.peek_element();
@@ -2745,15 +2787,59 @@ impl Scope {
         id
     }
 
+    // Ghidra: database.cc:1810 ScopeInternal::addSymbolInternal
+    /// The category-table registration half of `addSymbolInternal`
+    /// (database.cc:1827-1836): when `sym->category >= 0`, grow the outer
+    /// category vector through that category, assign `catindex = list.size()`
+    /// for categories > 0 (the symbol's existing catindex slot is used for
+    /// category 0), pad the list with NULL slots through the index, and place
+    /// the symbol. Called by `add_equate_symbol` to mirror the
+    /// `addSymbolInternal(sym)` step of `Scope::addEquateSymbol`
+    /// (database.cc:1718).
+    fn add_symbol_internal_category(&mut self, sym_arc: &Arc<RwLock<Symbol>>) {
+        // cc:1827 if (sym->category >= 0).
+        let cat = sym_arc.read().unwrap().category as i32;
+        if cat < 0 {
+            return;
+        }
+        // cc:1828-1829 while(category.size() <= sym->category)
+        //              category.push_back(vector<Symbol *>());
+        for c in 0..=cat {
+            self.categories.entry(c).or_default();
+        }
+        // cc:1831-1832 if (sym->category > 0) sym->catindex = list.size();
+        let index = if cat > 0 {
+            self.categories.get(&cat).map_or(0, |l| l.len())
+        } else {
+            sym_arc.read().unwrap().catindex as usize
+        };
+        sym_arc.write().unwrap().catindex = index as u16;
+        // cc:1833-1835 while(list.size() <= sym->catindex) list.push_back(NULL);
+        //              list[sym->catindex] = sym;
+        let list = self.categories.get_mut(&cat).unwrap();
+        list.resize_for_index(index);
+        list.0[index] = Some(Arc::downgrade(sym_arc));
+    }
+
     // Ghidra: database.cc:1712 Scope::addEquateSymbol
     /// Create a symbol that forces display conversion on a constant. Faithful
     /// to `Scope::addEquateSymbol` (database.cc:1712). The C++ form builds an
-    /// `EquateSymbol(owner, nm, format, value)`, then calls
+    /// `EquateSymbol(owner, nm, format, value)` — a `Symbol` subtype whose
+    /// constructor (database.cc:624-631) sets `value`, `category = equate`,
+    /// `dispflags |= format` — then calls `addSymbolInternal(sym)` and
     /// `addDynamicMapInternal(sym, Varnode::mapped, hash, 0, 1, rnglist)`
-    /// (database.cc:1722), where `rnglist` holds `addr` if valid. Rugra builds
-    /// an `EquateSymbol` struct (for the caller), registers its base `Symbol`
-    /// (with `type_name == "equ"` and the requested display format), and pushes
-    /// a single-byte dynamic `SymbolEntry`.
+    /// (database.cc:1722), where `rnglist` holds `addr` if valid. Rugra
+    /// registers the base `Symbol` (with `type_name == "equ"`, category
+    /// `Equate`, and the requested display format) and pushes a single-byte
+    /// dynamic `SymbolEntry`.
+    ///
+    /// Because Rust has no `Symbol` subtyping, the C++ object identity that
+    /// `dynamic_cast<EquateSymbol*>` (varnode.cc:516) would examine is the
+    /// registered `Arc<RwLock<Symbol>>` itself: we record `value` on that
+    /// identity through [`crate::varnode::equate_symbol_registry::register_value`]
+    /// (the varnodeeq-delivered stand-in for the subtype payload), so
+    /// `copy_symbol_if_valid` sees main-pipeline equates exactly where the
+    /// C++ dynamic_cast would succeed.
     ///
     /// Returns the `(EquateSymbol, symbol_id)` pair so the caller can recover
     /// both the equate view and the registered id.
@@ -2765,13 +2851,24 @@ impl Scope {
         addr: Address,
         hash: u64,
     ) -> (EquateSymbol, u64) {
-        // database.cc:1717 — new EquateSymbol(owner, nm, format, value).
+        // database.cc:1717 — new EquateSymbol(owner, nm, format, value): the
+        // constructor body (database.cc:627-630) sets value, category=equate,
+        // and dispflags |= format on the object being registered.
         let id = self.allocate_id();
         let mut sym = Symbol::new(self.unique_id, nm, "equ");
         sym.symbol_id = id;
-        sym.set_display_format(format);
-        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
-        // database.cc:1718 — addSymbolInternal(sym).
+        sym.set_display_format(format); // cc:630 dispflags |= format.
+        sym.category = SymbolCategory::Equate; // cc:628 category = equate.
+        let sym_arc = Arc::new(RwLock::new(sym));
+        self.symbols.insert(id, sym_arc.clone());
+        // RUGRA-GLUE (database.cc:624 object identity): in C++ the registered
+        // object IS an EquateSymbol carrying `value`; the registry entry on
+        // this Arc is the Rust stand-in for that subtype payload.
+        crate::varnode::equate_symbol_registry::register_value(&sym_arc, value);
+        // database.cc:1718 — addSymbolInternal(sym), whose category block
+        // (database.cc:1827-1836) registers category[equate] and assigns
+        // catindex = list.size().
+        self.add_symbol_internal_category(&sym_arc);
         // database.cc:1719-1721 — RangeList rnglist; insertRange(addr...) if valid.
         let mut rnglist = RangeList::new();
         if addr.as_u64() != 0 {
@@ -2780,7 +2877,6 @@ impl Scope {
             }
         }
         // database.cc:1722 — addDynamicMapInternal(sym, Varnode::mapped, hash, 0, 1, rnglist).
-        let sym_arc = self.symbols.get(&id).cloned().unwrap();
         sym_arc.write().unwrap().whole_count += 1;
         self.dynamic_entries.push(SymbolEntry::new_dynamic(
             sym_arc,
@@ -4265,6 +4361,175 @@ mod tests {
         let s = scope.symbols.get(&id).unwrap().read().unwrap();
         assert_eq!(s.type_name, "equ");
         assert_eq!(s.get_display_format(), display_flags::FORCE_HEX);
+        // database.cc:628 — the EquateSymbol constructor sets category=equate
+        // on the registered object, and the value is part of that object's
+        // identity (dynamic_cast<EquateSymbol*> in varnode.cc:516).
+        assert_eq!(s.category, SymbolCategory::Equate);
+        assert_eq!(equ.symbol.category, SymbolCategory::Equate);
+        drop(s);
+        let sym_arc = scope.symbols.get(&id).cloned().unwrap();
+        assert_eq!(
+            crate::varnode::equate_symbol_registry::query_value(&sym_arc),
+            Some(0x42),
+            "add_equate_symbol must register the value on the symbol identity"
+        );
+    }
+
+    #[test]
+    fn test_add_equate_symbol_same_value_duplicate_and_scope_isolation() {
+        // database.cc:1717 + insertNameTree (database.cc:2712-2723): two
+        // addEquateSymbol calls with the same value produce two distinct
+        // EquateSymbol objects (nameDedup separates the names); each keeps its
+        // own equate identity. Scopes are independent containers: an equate in
+        // one scope is invisible from another.
+        let mut scope_a = Scope::new(1, "funcA", 0);
+        let mut scope_b = Scope::new(2, "funcB", 0);
+        let (_, id1) = scope_a.add_equate_symbol(
+            "SAME", display_flags::FORCE_DEC, 0x42, Address::new(0x2000), 0x1111,
+        );
+        let (_, id2) = scope_a.add_equate_symbol(
+            "SAME", display_flags::FORCE_DEC, 0x42, Address::new(0x2000), 0x2222,
+        );
+        let (_, id3) = scope_b.add_equate_symbol(
+            "SAME", display_flags::FORCE_DEC, 0x42, Address::new(0x2000), 0x3333,
+        );
+        assert_ne!(id1, id2, "same-value duplicates are distinct symbols");
+        // database.cc:1827-1836 (addSymbolInternal via cc:1718): both equates
+        // land in category[equate] with catindex = list.size() at insert time
+        // (first 0, second 1).
+        assert_eq!(scope_a.get_category_size(1), 2);
+        assert_eq!(
+            scope_a
+                .symbols
+                .get(&id1)
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_category_index(),
+            0
+        );
+        assert_eq!(
+            scope_a
+                .symbols
+                .get(&id2)
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_category_index(),
+            1
+        );
+        // Both scope_a equates are registered with the same value, and each
+        // dynamic entry hashes distinctly (database.cc:1722).
+        let v1 = scope_a.symbols.get(&id1).cloned().unwrap();
+        let v2 = scope_a.symbols.get(&id2).cloned().unwrap();
+        let v3 = scope_b.symbols.get(&id3).cloned().unwrap();
+        assert_eq!(
+            crate::varnode::equate_symbol_registry::query_value(&v1),
+            Some(0x42)
+        );
+        assert_eq!(
+            crate::varnode::equate_symbol_registry::query_value(&v2),
+            Some(0x42)
+        );
+        assert_eq!(
+            crate::varnode::equate_symbol_registry::query_value(&v3),
+            Some(0x42)
+        );
+        // Cross-scope isolation: scope_a holds only its two equates.
+        assert_eq!(scope_a.num_symbols(), 2);
+        assert_eq!(scope_b.num_symbols(), 1);
+        assert_eq!(scope_a.dynamic_entries.len(), 2);
+        assert_eq!(scope_b.dynamic_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_add_map_sym_equatesymbol_registers_equate_value() {
+        // database.cc:1572-1573 — <equatesymbol> decodes into an EquateSymbol
+        // instance; database.cc:670-683 reads the <value> child after
+        // decodeHeader. The decoded object keeps its equate identity (the
+        // dynamic_cast in varnode.cc:516 succeeds) with the decoded value, or
+        // the database.hh:306 default 0 when <value> carries no value.
+        use crate::marshal::{Element, IdRegistry, TreeDecoder};
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        {
+            let mut r = registry.write().unwrap();
+            for nm in &["name", "cat", "val"] {
+                r.register_attribute(nm);
+            }
+            for nm in &["mapsym", "equatesymbol", "value"] {
+                r.register_element(nm);
+            }
+        }
+        let build_mapsym = |value_attr: Option<&str>| {
+            // <mapsym><equatesymbol name="EQ" cat="1"><value val="..."/></equatesymbol></mapsym>
+            let mut mapsym = Element::new();
+            mapsym.set_name("mapsym");
+            let mut equ = Element::new();
+            equ.set_name("equatesymbol");
+            equ.add_attribute("name", "EQ");
+            equ.add_attribute("cat", "1");
+            let mut val = Element::new();
+            val.set_name("value");
+            if let Some(v) = value_attr {
+                val.add_attribute("val", v);
+            }
+            equ.add_child(std::sync::Arc::new(std::sync::RwLock::new(val)));
+            mapsym.add_child(std::sync::Arc::new(std::sync::RwLock::new(equ)));
+            mapsym
+        };
+        // With a value attribute: the decoded value is registered on the
+        // symbol identity.
+        let mut scope = Scope::new(1, "func", 0);
+        let root = std::sync::Arc::new(std::sync::RwLock::new(build_mapsym(Some("66"))));
+        let mut dec = TreeDecoder::new(root, registry.clone());
+        let id = scope.add_map_sym(&mut dec);
+        assert_ne!(id, 0);
+        let sym_arc = scope.symbols.get(&id).cloned().unwrap();
+        assert_eq!(sym_arc.read().unwrap().category, SymbolCategory::Equate);
+        assert_eq!(
+            crate::varnode::equate_symbol_registry::query_value(&sym_arc),
+            Some(66),
+            "decoded <equatesymbol> must register its <value> payload"
+        );
+        // Without a value attribute: identity still registers (the C++
+        // object is an EquateSymbol regardless) with the hh:306 default 0.
+        let mut scope2 = Scope::new(2, "func2", 0);
+        let root2 = std::sync::Arc::new(std::sync::RwLock::new(build_mapsym(None)));
+        let mut dec2 = TreeDecoder::new(root2, registry);
+        let id2 = scope2.add_map_sym(&mut dec2);
+        let sym_arc2 = scope2.symbols.get(&id2).cloned().unwrap();
+        assert_eq!(
+            crate::varnode::equate_symbol_registry::query_value(&sym_arc2),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_add_equate_symbol_reaches_copy_symbol_if_valid() {
+        // Main-pipeline connectivity gate (DATABASE-EQUATE-VALUE-REGISTRY-0001):
+        // an equate created through Scope::add_equate_symbol carries its value
+        // on the registered symbol identity, so a Varnode holding the symbol's
+        // dynamic SymbolEntry passes the dynamic_cast<EquateSymbol*> stand-in
+        // in Varnode::copySymbolIfValid (varnode.cc:516) and the markup
+        // propagates exactly where the C++ pipeline would propagate it.
+        use crate::varnode::Varnode;
+        let mut scope = Scope::new(1, "func", 0);
+        let _ = scope.add_equate_symbol(
+            "MY_CONST", 0, 0x33333333, Address::new(0x2000), 0xCAFE,
+        );
+        let entry = scope.dynamic_entries[0].clone();
+        let mut src = Varnode::new_constant(0x33333333, 4);
+        src.set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+        let mut dst = Varnode::new_constant(0x33333333, 4);
+        dst.copy_symbol_if_valid(&src);
+        assert!(
+            dst.get_symbol_entry().is_some(),
+            "pipeline equate must propagate through copy_symbol_if_valid"
+        );
+        // Not-close destination constant must NOT receive the markup.
+        let mut dst2 = Varnode::new_constant(0x12345678, 4);
+        dst2.copy_symbol_if_valid(&src);
+        assert!(dst2.get_symbol_entry().is_none());
     }
 
     #[test]

@@ -783,8 +783,16 @@ printc emit_block_structured +thread_local depth guard（>200 回退）。sblock
 ### 2026-07-01（续 16）：per-arm printc helpers + mainloop repeatapply 最终诊断（无限递归）
 printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply 测试 depth 20-200+256MB：全部溢出。最终诊断=不是栈帧大小而是 sblocks 重建后的真正无限递归。
 
-### cleanup pool 加 RuleTrivialArith（2026-07-03）
-- 在 `build_cleanup_pool` 末尾注册 `RuleTrivialArith`。Ghidra mainloop（coreaction.cc:5503）repeatapply `actprop`（含 RuleTrivialArith）会重简化新创建的 op；Rugra 的 simplifypool 在 stackstall 里只跑一次，mainloop 后期（type-recovery / copy-prop / structuring）创建的 trivially-foldable op（self-XOR x^x→0 等）无法被再简化。cleanup pool 在管线最末运行（universal post-fullloop，coreaction.cc:5694），补这一刀捕获后期 op。Rugra-local 决策（Ghidra 靠 mainloop repeatapply 达同等效果），注释说明。
+### cleanup pool 加 RuleTrivialArith（2026-07-03）— **2026-08-23 已回退（PIPE-POOL-LOCAL-RULES-0001）**
+- ~~在 `build_cleanup_pool` 末尾注册 `RuleTrivialArith`。~~ 该 Rugra-local 注册已
+  删除：oracle actcleanup（coreaction.cc:5694-5711）没有 RuleTrivialArith；Ghidra
+  只在 oppool1（coreaction.cc:5522）注册它一次。Ghidra 靠 mainloop repeatapply
+  `actprop` 重简化后期新创建的 op；Rugra 此前靠 cleanup 补刀是绕过基础设施缺口
+  的上层适配（铁律 1.4/1.5 违例），已回退。"mainloop 不 repeatapply 导致后期
+  trivial op 不被再简化"是真实残差，登记为 TODO（见 pipeline_tree_1204.metadata
+  的 mainloop 阶段残差；对齐路径 = 补齐 mainloop RULE_REPEATAPPLY，而非在
+  cleanup 池塞 oracle 没有的规则）。E2E 门禁数据（2026-08-23，curl 1204 语料）：
+  删除前后 defects/numbering/skeleton 零变化——该补刀在当前语料上无可观测收益。
 
 ### 启用 ActionSetCasts（2026-07-03 续）
 - `set_default_actions` 里 ActionSetCasts 之前被注释掉（注释说"需要 ActionInferTypes 先跑"）。ActionInferTypes 已在 mainloop（line 864）跑，所以条件满足。
@@ -1101,3 +1109,34 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
   可变视图，供 stackstall_count_1204 一类子树驱动 fixture 精确复刻
   ActionGroup::apply 对 protected list 的驱动顺序。
 - `ActionRestartGroup` 透传 `as_action_group_mut`（Ghidra 继承同一 list）。
+
+## oppool1/cleanup 注册纯净度（2026-08-23，PIPE-POOL-LOCAL-RULES-0001）
+
+- **新增 fixture-only API**：`ActionPool::rules() -> &[Box<dyn Rule>]`——注册序
+  规则只读视图（oracle 侧对应物是公有虚函数 `ActionPool::print`，
+  action.cc:753-775，按 allrules 注册序逐条打印规则名，即 console
+  printActionList 的数据源；oracle fixture 经 print 输出解析读取，Rugra
+  fixture 经 rules() 读取，两侧同一投影）。
+- **删除三处 Rugra-local 注册**（ruleaction 审计确认的存量违例，复核锁定
+  oracle e40ed130 全树后执行）：
+  1. oppool1 末尾的 `RuleSextEliminate`——oracle 全源码树不存在该类（grep
+     零命中），struct 连同注册一并删除（无单测引用）。
+  2. oppool1 末尾的 `RuleEquality`——oracle 定义了类（ruleaction.hh:243-250，
+     方法体 ruleaction.cc:624/631）但从未实例化（全树无 `new RuleEquality`）。
+     Rugra 移除注册，struct + 3 单测保留为未注册存档（与 oracle 死代码状态
+     1:1，注释说明）。
+  3. cleanup 池末尾的 `RuleTrivialArith`——oracle actcleanup
+     （coreaction.cc:5694-5711）无此条目；Ghidra 只在 oppool1:5522 注册一次。
+- 删除后 `build_oppool1` 以 `RuleDoubleOut`（5646）结尾、`build_cleanup_pool`
+  以 `RuleStringStore`（5710）结尾，与 oracle 池序逐条一致（oracle 后续只有
+  CPU-specific `conf->extra_pool_rules` 吸收循环，x86-64 gcc spec 注册 0 条）。
+- 对拍：`tools/run_pool_purity_oracle.sh`（pin-base schema2）——Ghidra 真实
+  universalAction 原始树与 Rugra 实际默认数据库中 oppool1/oppool2/cleanup
+  三池的 rule 注册序列投影（pool|index|name|basegroup 逐条）**字节一致**，
+  overall=MATCH。
+- E2E 门禁（curl 1204 语料，fast-release）：删除前后 defects=1/numbering=0/
+  skeleton=2076 全部不变，72 decompiled/1 timeout/3 panic 不变——三处删除在
+  当前语料零可观测输出影响（见 commit `## Differential` 块）。
+- 残差：mainloop 未启用 RULE_REPEATAPPLY 导致后期 trivial op 不被再简化
+  （原 cleanup 补刀掩盖的缺口，现暴露；对齐路径=补 mainloop repeatapply 基础
+  设施，非池注册 hack）。

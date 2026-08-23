@@ -426,58 +426,109 @@ impl<'a> ConditionalExecution<'a> {
     }
 
     // Ghidra: condexe.cc:160 ConditionalExecution::pullbackOp
-    /// pullbackOp (condexe.cc:160-190). Duplicate an iblock op into the
-    /// predecessor block along `inbranch`, selecting the right MULTIEQUAL slot.
+    /// pullbackOp (condexe.cc:160-190). Duplicate an iblock op outside the
+    /// iblock: through the MULTIEQUAL in-branch block when input 0 is defined
+    /// by an iblock MULTIEQUAL, otherwise into the iblock's immediate
+    /// dominator. The duplicate keeps the original op's address (cc:180), the
+    /// original output's address AND address space (cc:182), and is inserted
+    /// at the END of the target block (cc:187), before any trailing flow-break
+    /// op (funcdata_op.cc:435-446).
     fn pullback_op(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Option<Arc<RwLock<Varnode>>> {
+        // cc:163-165: cached pullback output for this inbranch wins.
         if let Some(v) = self.find_pullback(inbranch) { return Some(v); }
         let ib = self.iblock.clone().unwrap();
-        let invn = op.read().unwrap().get_in(0).cloned();
-        let (invn_eff, bl) = match &invn {
-            Some(v) => {
-                let written = v.read().unwrap().is_written();
-                if written {
-                    let defop = v.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-                    if let Some(defop) = defop {
-                        let def_parent = defop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-                        if let Some(p) = &def_parent {
-                            if Arc::ptr_eq(p, &ib) {
-                                // defOp must be MULTIEQUAL; pick the inbranch input.
-                                let sel = defop.read().unwrap().get_in(inbranch).cloned();
-                                let ib_in = ib.read().unwrap().get_in(inbranch).map(|e| e.point);
-                                (sel.unwrap_or_else(|| v.clone()), ib_in)
-                            } else {
-                                (v.clone(), self.immed_dom_of(&ib))
-                            }
-                        } else {
-                            (v.clone(), self.immed_dom_of(&ib))
-                        }
+        // cc:166-179: resolve input 0 and the target block.
+        let invn = op.read().unwrap().get_in(0).cloned()?;
+        let (invn, bl) = if invn.read().unwrap().is_written() {
+            // cc:168-169: invn->isWritten() -> defOp = invn->getDef()
+            let defop = invn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            match defop {
+                Some(defop) => {
+                    let def_parent = defop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                    let in_iblock = def_parent.map(|p| Arc::ptr_eq(&p, &ib)).unwrap_or(false);
+                    if in_iblock {
+                        // cc:170-173: defOp in iblock (must be MULTIEQUAL):
+                        //   bl = iblock->getIn(inbranch); invn = defOp->getIn(inbranch)
+                        let sel = defop.read().unwrap().get_in(inbranch).cloned()?;
+                        let bl = ib.read().unwrap().get_in(inbranch).map(|e| e.point)?;
+                        (sel, bl)
                     } else {
-                        (v.clone(), self.immed_dom_of(&ib))
+                        // cc:174-175: bl = iblock->getImmedDom()
+                        (invn, self.immed_dom_of(&ib)?)
                     }
-                } else {
-                    (v.clone(), self.immed_dom_of(&ib))
                 }
+                None => (invn.clone(), self.immed_dom_of(&ib)?),
             }
-            None => return None,
+        } else {
+            // cc:177-179: not written -> bl = iblock->getImmedDom()
+            (invn.clone(), self.immed_dom_of(&ib)?)
         };
-        let bl = match bl { Some(b) => b, None => return None };
-        let n_in = op.read().unwrap().num_input();
-        let pc = op.read().unwrap().get_addr();
-        let opcode = op.read().unwrap().opcode;
-        let out_size = op.read().unwrap().output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+        // cc:180: newOp = fd->newOp(op->numInput(), op->getAddr())
+        let (n_in, pc, opcode) = {
+            let r = op.read().unwrap();
+            (r.num_input(), r.get_addr(), r.opcode)
+        };
         let new_op = self.fd.new_op(n_in, pc);
+        // cc:181-182: outVn = fd->newVarnodeOut(origOutVn->getSize(),
+        //                                     origOutVn->getAddr(), newOp)
+        let orig_out = op.read().unwrap().output.clone()?;
+        let (out_size, out_space, out_offset) = {
+            let r = orig_out.read().unwrap();
+            (r.get_size(), r.get_space(), r.get_offset())
+        };
+        let new_out = self.pullback_new_varnode_out(out_size, out_space, out_offset, &new_op);
+        // cc:183: fd->opSetOpcode(newOp, op->code())
         self.fd.op_set_opcode(&new_op, opcode);
-        let new_out = self.fd.new_unique_out(out_size, &new_op);
-        self.fd.op_set_input(&new_op, invn_eff, 0);
+        // cc:184: fd->opSetInput(newOp, invn, 0)
+        self.fd.op_set_input(&new_op, invn, 0);
+        // cc:185-186: remaining inputs copied from the original op.
         for i in 1..n_in {
             if let Some(extra) = op.read().unwrap().get_in(i).cloned() {
                 self.fd.op_set_input(&new_op, extra, i);
             }
         }
-        self.fd.op_insert_begin(&new_op, &bl);
+        // cc:187: fd->opInsertEnd(newOp, bl)
+        self.fd.op_insert_end(&new_op, &bl);
+        // cc:188: pullback[inbranch] = outVn
         while self.pullback.len() <= inbranch { self.pullback.push(None); }
         self.pullback[inbranch] = Some(new_out.clone());
+        // cc:189: return outVn
         Some(new_out)
+    }
+
+    // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
+    /// pullbackOp's `fd->newVarnodeOut(origOutVn->getSize(),
+    /// origOutVn->getAddr(), newOp)` leg (condexe.cc:182), preserving the
+    /// original output's storage address INCLUDING its address space
+    /// (register or unique). `Funcdata::new_varnode_out` (funcdata.rs) pins
+    /// AddressSpace::Register because Rugra's split Address model does not
+    /// carry a space; the exact newVarnodeOut leg
+    /// (funcdata_varnode.cc:104-127) is replicated here against the true
+    /// space:
+    ///   Varnode *vn = vbank.createDef(s,m,ct,op);
+    ///   op->setOutput(vn);
+    ///   assignHigh(vn);
+    ///   if (s >= minLanedSize) checkForLanedRegister(s,m);
+    ///   <queryProperties / setSymbolProperties / setFlags leg>
+    fn pullback_new_varnode_out(
+        &mut self,
+        size: usize,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        op: &PcodeOpRef,
+    ) -> Arc<RwLock<Varnode>> {
+        let vn = self.fd.vbank.create_def_with_space(size, space, offset, &op.0);
+        op.0.write().unwrap().output = Some(vn.clone());
+        let _ = self.fd.assign_high(&vn);
+        if size >= self.fd.min_laned_size as usize {
+            self.fd.check_for_laned_register(
+                size,
+                space,
+                crate::address::Address::new(offset),
+            );
+        }
+        self.fd.set_varnode_properties(&vn);
+        vn
     }
 
     // RUGRA-GLUE: immediate-dominator lookup (Ghidra calls
@@ -764,6 +815,36 @@ impl<'a> ConditionalExecution<'a> {
             self.posta_block.clone(),
             self.postb_block.clone(),
         )
+    }
+
+    // RUGRA-GLUE: fixture observability for CONDEXE-PULLBACK-0005; the locked
+    // Ghidra fixture drives the same private stages through
+    // #define private public (tests/oracle/condexe_pullback_1204.cc).
+    /// Set iblock and run `pullbackOp` in isolation, returning the new
+    /// output Varnode. Mirrors condexe.cc:160-190 driven directly.
+    #[doc(hidden)]
+    pub fn fixture_pullback_op(
+        &mut self,
+        ib: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        op: PcodeOpRef,
+        inbranch: usize,
+    ) -> Option<Arc<RwLock<Varnode>>> {
+        self.iblock = Some(ib);
+        self.pullback_op(&op.0, inbranch)
+    }
+
+    // RUGRA-GLUE: fixture observability (see fixture_pullback_op).
+    /// Set iblock and run `testOpRead` in isolation. Mirrors condexe.cc:107-142
+    /// driven directly (the pullback admission gate, including the
+    /// INT_ADD/PTRSUB constant-input-1 rejection at cc:126-128).
+    #[doc(hidden)]
+    pub fn fixture_test_op_read(
+        &mut self,
+        ib: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        vn: Arc<RwLock<Varnode>>,
+        readop: PcodeOpRef,
+    ) -> bool {
+        Self::test_op_read(&vn, &readop.0, &ib)
     }
 }
 

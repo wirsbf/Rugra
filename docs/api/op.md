@@ -1021,3 +1021,12 @@ PcodeOpRaw
  
  
  
+
+### 2026-08-23：collapse_constant_symbol 调用点适配（VARNODE-COPYSYMBOL-HIGHBRANCH-0001）
+
+- `PcodeOp::collapse_constant_symbol`（op.cc:503-540）cc:537 调用点改为
+  `Varnode::copy_symbol_if_valid(new_const, ...)` 关联函数形态：copySymbolIfValid
+  的 copySymbol 尾声现在能携带 varnode.cc:500-504 的 high 簿记
+  （typeDirty + setSymbol），折叠出的新常量在 highlevel_on 下其
+  HighVariable 正确附着 equate 符号。行为由
+  `tests/oracle/varnode_highbranch_1204`（hb_op_level_marked_input）门禁。

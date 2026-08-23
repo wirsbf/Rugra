@@ -1222,3 +1222,37 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
   stackptrflow tests 3→4（analysis_finished 复位再分析），IR 投影逐字节一致，
   stdout_sha256=0a9439b3…，overall=MATCH。残差：deindirect 变更分支
   （PIPE-DEINDIRECT-CHANGE-0001 建议）、solver 回写。
+
+## ActionLaneDivide 完整移植（2026-08-23，ACTION-LANEDIVIDE-0001）
+
+- `ActionLaneDivide` 不再是 no-op stub。三函数完整移植
+  （coreaction.cc:509-622，coreaction.hh:107-123）：
+  - `collect_lane_sizes`（cc:509-540）：descendant 先行（step 0）后 def
+    （step 1）遍历；SUBPIECE descendant 贡献 `out` size，PIECE def 贡献
+    `min(in0,in1)` size；仅 `allowedLane` 接受的 size 注册进 checkLanes
+    （bitmask 语义）。
+  - `process_varnode`（cc:558-583）：mode<2 走 collect；mode 2 用
+    pointer size（`!=4 → 8` 归一化）做默认 lane；lane 尺寸按
+    LanedIterator 升序逐个尝试；首个 `doTrace` 成功即 `apply` 并
+    `count += 1`。
+  - `apply`（cc:585-622）：先 `setLanedRegGenerated`（minLanedSize=1000000
+    封死后续注册）；mode 0..2 三趟，趟内按 `VarnodeData::operator<` 序遍历
+    lanedMap，每个 storage 走 `[beginLoc(sz,addr), endLoc(sz,addr))`
+    （loc-tree 精确 (space,offset,size) 过滤，`VarnodeCompareLocDef` 序）；
+    `hasNoDescend` 跳过；成功拆分后重算 bounds 从头再走；失败推进且记
+    `allVarnodesProcessed=false`；`allStorageProcessed` 才提前 break；
+    最后 `clearLanedAccessMap`。Ghidra 的活 map 迭代在 Rust 侧用每 mode
+    BTreeMap 快照等价实现（apply 期间 map 可证明稳定：插入全部被
+    minLanedSize 门禁封死，删除只在末尾 clear）。
+- count 经 `take_count_delta` 外化（cc:578 `count += 1`）；apply 恒返回 0
+  （cc:621），RULE_ONCEPERFUNC 状态机（action.cc:352-357）使第二趟 perform
+  在 `status_end` 直接短路——不改 stackstall 槽位（:5652，eb8ad57 已集成）。
+- 对拍：`tools/run_action_lanedivide_oracle.sh`（pin-base schema2）——
+  piece 成功路径（collect 双来源 + mode 0 拆分 + count=1 + IR 投影 +
+  lanedMap 1→0）、failure 路径（collect 过滤拒绝 + mode 0/1 空 + mode 2
+  默认 lane 8 对 INT_MULT backward 拒绝 + 零突变 + map 清空）、
+  rule_onceperfunc（re-queue 后第二趟 perform 不清 map、ret2=0、count
+  不变、IR 稳定）双侧逐字节一致，overall projection=MATCH。残差见
+  ACTION-LANEDIVIDE-RESIDUAL-0001（mode 1 downcast SUBPIECE 终结符、
+  同 storage 多 varnode 的 bounds 重走、多 storage 迭代序、pointer=4 归
+  一化分支未在 x86-64 oracle 上覆盖）。

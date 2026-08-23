@@ -1,0 +1,112 @@
+{
+  "schema": 2,
+  "fixture_id": "BLOCK-CALCLOOP-0001",
+  "stable_function_id": "GH12-F-3bc919ab99b4782145f5",
+  "stable_function_closure": [
+    "GH12-F-3bc919ab99b4782145f5 ghidra::BlockGraph::calcLoop block.cc:2104",
+    "GH12-F-2567e2a93eb7e6a7c3b1 ghidra::BlockGraph::addLoopEdge block.cc:1451",
+    "GH12-F-744c41647689c9564722 ghidra::BlockGraph::structureLoops block.cc:2194",
+    "GH12-F-53bf522d4708a537d1f7 ghidra::BlockGraph::findSpanningTree block.cc:1009",
+    "GH12-F-7bfea0ee3fe8e4d3fdfc ghidra::BlockGraph::findIrreducible block.cc:1147",
+    "GH12-F-d15c438a75b11b67ab99 ghidra::BlockGraph::calcForwardDominator block.cc:1954",
+    "GH12-F-49056a46f355bb8dc2e8 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
+    "GH12-F-8f4549050d423d0a738b ghidra::BlockGraph::clearEdgeFlags block.cc:966",
+    "GH12-F-63980ebd222839856da9 ghidra::FlowBlock::setFlag block.hh:155",
+    "GH12-F-599d8647169f4eeb93cf ghidra::FlowBlock::clearFlag block.hh:156",
+    "GH12-F-c977cedc8839e7097cf2 ghidra::FlowBlock::isLoopOut block.hh:317",
+    "GH12-F-fc7423fa547de23fc2b3 ghidra::FlowBlock::getOut block.hh:301",
+    "GH12-F-de3902c66558d4b2d7ec ghidra::FlowBlock::sizeOut block.hh:312"
+  ],
+  "overall_status": "MATCH: the nine-record post-call projection (component list order; per-block index/visitcount/numdesc/mark/mark2/copymap/immed_dom; final rootlist with the rootlist>1 unreachable decision; every out-edge and mirrored in-edge label) byte-matches the locked oracle for the direct calcLoop path (five cases), the full structureLoops driver on the classic two-entry irreducible pair, and the structureReset graph chain structureLoops+calcForwardDominator on a nested irreducible-inside-loop graph; production wiring of the driver into blockaction.rs order_loop_bodies is committed in the same change-set and validated by module tests plus the worktree E2E reported in the task log",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.cc:2104-2147,block.cc:1451-1464,block.cc:2194-2215,block.cc:1009-1136,block.cc:1147-1199,block.cc:1954-2032,block.cc:240-256,block.cc:966-978,block.hh:155-156,block.hh:317}",
+    "signature": "void BlockGraph::calcLoop(void)"
+  },
+  "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph::newBlock/addEdge; no AddrSpace, no Funcdata, no PcodeOps (calcLoop touches only blocks, out-edge labels and the f_mark/f_mark2 flag pair)",
+  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+  "analysis_options": {
+    "entrypoint": "Direct invocation of locked BlockGraph::calcLoop on fresh unlabeled graphs (five cases) or the full BlockGraph::structureLoops driver / structureLoops+calcForwardDominator chain (funcdata_block.cc:711-712 shape) on synthetic component graphs built through production BlockGraph APIs (newBlock/addEdge); no Actions, SSA, or C emission",
+    "prestate": "Per-case fresh BlockGraph with edges added in a fixed creation order; direct calcLoop cases keep constructor state (flags=0, index=0, visitcount=0, immed_dom=0) with copymap/numdesc left indeterminate exactly as the oracle constructor leaves them (block.cc:61-69 initializes neither), driver cases let findSpanningTree establish the full spanning state first",
+    "observation": "Per case: component list order, per-block index/visitcount/numdesc/mark/mark2/copymap (self/other:name/null — projected only for driver cases)/immed_dom (null for dominator roots), every out-edge slot->target plus mirrored in-edge slot<source with semantic label letters (g l d i t f c b x, '-' when unlabeled); driver cases additionally print the final rootlist and the rootlist.size()>1 blocks_unreachable decision (funcdata_block.cc:713-714)",
+    "normalization": "Block identity prints as creation-order names (b0..bn), never pointers. Edge labels print as semantic flag-set membership letters, not raw bits: Rugra's edge_flags bit assignments intentionally differ from Ghidra's (documented remap in src/block.rs edge_flags), and Rugra's F_TREE_EDGE shares bit 7 with F_DEFAULTSWITCH_EDGE (pre-existing EDGEFLAG-BIT7-COLLISION-0001); within this projection bit 7 is classified as tree because findSpanningTree wipes every label at each pass start and no pass here sets default-switch labels. Direct calcLoop cases print desc=- and copy=- : the oracle FlowBlock user-provided constructor (block.cc:61-69) initializes flags/index/visitcount/parent/immed_dom but leaves copymap and numdesc indeterminate until findSpanningTree (block.cc:1025-1027), so those values are heap noise on the direct path and are excluded from both sides identically rather than normalized. The letter order within one label set is fixed by flagsText (g l d i t f c b x) on both sides, so e.g. back+loop prints lb."
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "reducible_backedge_labeled: direct calcLoop on b0->b1->b2->b1; the DFS path b0,b1,b2 sees b1 carrying f_mark2 at b2!0, so addLoopEdge(b2,0) labels the back edge f_loop_edge and nothing else (block.cc:2133-2137); marks swept to 0",
+      "nested_loops_inner_outer: inner latch b3->b2 labeled first, then the DFS continues to b4 and labels the outer latch b4->b1; both latches keep f_loop_edge through the pops (block.cc:2121-2144 stack discipline)",
+      "self_loop_then_child: b1's out slot 0 is the self edge and b1 itself is on the path, so the self edge is the cycle (addLoopEdge(b1,0)); slot 1 still descends into b2, proving the state cursor advances before use (block.cc:2130)",
+      "calc_loop_twice_loopout_skip: second calcLoop run must skip the edge labeled by the first via isLoopOut (block.cc:2131), touch no other label, and clear both marks again (block.cc:2145-2146); projection identical to a single pass",
+      "visited_truncate_no_label: diamond with back edge b3->b1; after b1/b3 pop, b0!1 descends into b2 and b2!0->b3 hits a visited-but-popped block (f_mark set, f_mark2 clear): the search truncates with no label and no descent (block.cc:2138 else)",
+      "irreducible_endtoend_calcloop: classic two-entry pair through the full structureLoops driver; findSpanningTree builds the tree, findIrreducible promotes the second entry b0!1->b2 to f_irreducible (irreduciblecount=1, forward classification cleared), then calcLoop runs (block.cc:2211-2214) and labels the cycle back edge b2!0->b1 f_loop_edge on top of the spanning labels (lb)",
+      "structure_reset_chain_dominator: structureLoops followed by calcForwardDominator (funcdata_block.cc:711-712) on the nested irreducible-inside-loop FIND-reuse graph; irreduciblecount>0 so calcLoop labels both latches (b3!0->b2 lb, b4!0->b1 lb), b1!1->b3 carries i, and the projection pins the combined observable: immed_dom per block with entry null, rootlist [b0], unreachable=0"
+    ],
+    "sha256": "a990a74055966d85c2a5c31a2d4c3001a312219b999daffe062e6d8e3f4f4a48"
+  },
+  "observation_schema": {
+    "format": "Ten fixed-order UTF-8 lines with final newline: one envelope plus nine case records (the two driver cases each emit a trailing _roots record)",
+    "state": "per-block index (reverse post order for driver cases, constructor 0 for direct cases), visitcount, numdesc (driver cases only; '-' on the direct path where the oracle leaves it indeterminate), mark and mark2 (always 0 after the final sweep), copymap identity (driver cases only), immed_dom (null for roots)",
+    "graph": "component list order, per-slot out-edge and mirrored in-edge label classification, final rootlist and the blocks_unreachable decision for driver cases"
+  },
+  "comparand": {
+    "rugra_base_commit": "d915255e200006c9a99dceed0b11311410ef63bb",
+    "rugra_base_tree": "76b42aa10bbc483630138a1b11cebba4ba8d569f",
+    "cpp_fixture_sha256": "9af88021308952f93d94461905e033ec8e90b08d750e37a7dace9933a239c0bd",
+    "rust_fixture_sha256": "d09c18733d0426ec52c7e13f189cb650c67694d4b9f87d47e4ed0005ad9b68dc",
+    "block_rs_sha256": "21e860d9b9d07478ed40e3414f717d3296d9195734f875d53cb2c505489a16ab",
+    "blockaction_rs_sha256": "9e32504a5285f911f031f910f2a473e0b2340162d89654f836bb279c1ccd3237",
+    "block_doc_sha256": "c186c2fbe265f4b1e184fe55c640e20b5046cf4083ef68a188211b8e3aa6f1a7",
+    "blockaction_doc_sha256": "e97a2a05612900ee09c119844306e2530d9eaebc901a7b4ebc8257f7207d1a08",
+    "runner_sha256": "0f014ad6ae8b7cb3154ffb4a4aa40a7d22ec7544cb6c29c6b62558a8e5cee86c",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-block-calcloop-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "rust_crate_tree_sha256": "b295eed151132fb5a0fa08cff2f4ce770716343f0d9a52825f837730accff3b2",
+    "host": {
+      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "cxx_target": "x86_64-linux-gnu",
+      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.10",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+      "platform": "Linux 6.8.0-138-generic x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+    "private_state_observer": "Read-only ABI observation of FlowBlock scalar fields (index/visitcount/numdesc/copymap/immed_dom/flags mark+mark2 bits) and both BlockEdge halves through #define private public and #define class struct (BlockGraph helper members are implicitly private without an access label) in the fixture translation unit only; no oracle source is modified",
+    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base d915255 with only src/block.rs and src/blockaction.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "539b00398e9ec5d9d8e1449a17218c5f66c361c41dafd011e1e069bce37d7333"
+  },
+  "expected_stdout_sha256": "7bb1d0ebe09f5f172ca7d363635c2a4d035a56e5785fe033b372bca020d4b421",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "reducible_backedge_labeling": "MATCH: the single reducible back edge is the only edge labeled f_loop_edge; the f_mark2 on-path test drives it (block.cc:2133-2137)",
+    "nested_loops_labeling": "MATCH: inner latch labeled during descent, outer latch labeled later from the sibling subtree level; both survive the pops",
+    "self_loop_slot_order": "MATCH: a self edge on out slot 0 is labeled because the block is on its own path, and slot 1 still descends — the per-level cursor state.back() advances before the edge is used (block.cc:2130)",
+    "loopout_skip_on_rerun": "MATCH: a second calcLoop pass leaves every label and the whole projection identical to one pass: the isLoopOut skip (block.cc:2131) treats the earlier cycle break as removed and the final sweep clears both marks (block.cc:2145-2146)",
+    "visited_truncate": "MATCH: a cross edge into a visited-but-popped block neither labels nor descends (block.cc:2138 else-branch truncation)",
+    "irreducible_endtoend_calcloop": "MATCH: the full structureLoops driver on the classic two-entry pair: findIrreducible promotes b0!1->b2 to f_irreducible with forward cleared, irreduciblecount=1 fires calcLoop (block.cc:2211-2214), whose DFS labels b2!0->b1 f_loop_edge on top of the back-edge classification (lb); copymap shows b2 collapsed into b1",
+    "structure_reset_chain_dominator": "MATCH: structureLoops+calcForwardDominator (funcdata_block.cc:711-712) on the nested irreducible graph: both latches lb, b1!1->b3 i, per-block immed_dom with entry null, rootlist [b0], unreachable=0",
+    "production_pipeline_wiring": "MATCH: blockaction.rs order_loop_bodies now calls the full BlockGraph::structure_loops driver instead of a bare find_spanning_tree, reproducing the oracle CollapseStructure entry state (labels inherited via buildCopy in the decompile path, block.cc:1685-1691; structureLoops on the copy in the StructureGraph path, ghidra_process.cc:352-355); reducible graphs are byte-identical to the previous bare-tree behavior, irreducible graphs additionally carry f_irreducible/f_loop_edge labels exactly as the oracle; validated by cargo test block::/blockaction:: green plus the worktree fast-release E2E reported in the task log (mechanism-B curl differential remains the root integrator's gate)",
+    "copymap_numdesc_indeterminate": "MATCH: direct calcLoop cases project desc=- and copy=- on both sides because the oracle FlowBlock constructor (block.cc:61-69) leaves those fields indeterminate until findSpanningTree initializes them; the exclusion is identical on both sides and documented in normalization",
+    "edgeflag_bit7_collision": "UNTESTED: pre-existing EDGEFLAG-BIT7-COLLISION-0001 (F_TREE_EDGE and F_DEFAULTSWITCH_EDGE share bit 7) is not exercised because no default-switch labels coexist with tree labels in this domain (wipe-first); reallocation is a separate audited task",
+    "empty_graph_early_return": "UNTESTED: the list.empty() early return (block.cc:2113) is trivially unreachable through the runner's graph-construction API (newBlock always creates one block) and every fixture case starts non-empty; covered instead by the Rust unit-test surface",
+    "stale_loop_label_skip_within_call": "UNTESTED: within a single calcLoop call the isLoopOut skip can only fire on labels that predate the call (the cursor advances past a slot before addLoopEdge labels it, and a popped block is never rescanned), so the within-call stale-label interleave is unconstructible; the cross-call behavior is covered by calc_loop_twice_loopout_skip"
+  }
+}
