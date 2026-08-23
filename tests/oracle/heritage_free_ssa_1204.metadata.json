@@ -1,0 +1,88 @@
+{
+  "schema": 2,
+  "fixture_id": "HERITAGE-FREE-SSA-FIXTURE-0001",
+  "stable_function_id": "GH12-F-d4a2475107e818f1412c",
+  "stable_function_closure": [
+    "GH12-F-18fa37122dd00da59412 ghidra::Heritage::collect heritage.cc:307",
+    "GH12-F-d4a2475107e818f1412c ghidra::Heritage::renameRecurse heritage.cc:2479",
+    "GH12-F-7da47c79af2f9ec5d392 ghidra::Heritage::rename heritage.cc:2587",
+    "GH12-F-96ecf8b90e2ecb42b147 ghidra::Heritage::placeMultiequals heritage.cc:2599",
+    "GH12-F-fb4e4d165fa4fe336897 ghidra::Heritage::heritage heritage.cc:2663",
+    "GH12-F-312e54443d22adf08654 ghidra::Varnode::addDescend varnode.cc:330",
+    "GH12-F-e749ca8c9e7c3a30b1a2 ghidra::Funcdata::opSetInput funcdata_op.cc:104",
+    "GH12-F-db31e0c0fdc59706563a ghidra::Funcdata::setInputVarnode funcdata_varnode.cc:340",
+    "GH12-F-1903513545adb23a522a ghidra::VarnodeBank::destroy varnode.cc:1276",
+    "GH12-F-f30ffccd55fd89dad612 ghidra::FlowBlock::getOutRevIndex block.hh:303",
+    "GH12-F-ac7c77ebb2f6e0e7199d ghidra::PcodeOp::getOpFromConst op.hh:249"
+  ],
+  "overall_status": "PARTIAL_MATCH: the four declared projections byte-match locked Ghidra 12.0.4, including complete integrated block/op/slot order, first-seen object alias equivalence, primary flags, active/heritage-known state, definitions, descendant counts, consumed-free bank deletion, exact second-reader message/state, INDIRECT simultaneous selection and loop-PHI reverse-slot wiring. This is not whole-function or module completion: exception transport is Rust panic versus Ghidra LowlevelError, Rust cannot retain Ghidra's nullable reserved slot after the caught setup error, and refinement, overlap inputs, revisit markers, guards/calls/stores/loads/returns, joins, multi-pass state and error injection outside these four cases remain UNTESTED.",
+  "covered_projection_status": "MATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{heritage.hh:16-337,heritage.cc:307-347,1156-1200,2439-2645,2663-2758,varnode.hh:80-302,varnode.cc:316-340,1250-1410,funcdata_op.cc:70-125,150-190,413-451,funcdata_varnode.cc:340-373,op.hh:249,block.hh:303}"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+  "analysis_options": {
+    "entrypoint": "Fresh Funcdata per case. single_free_promotion, indirect_simultaneous and loop_phi_reverse_slot run one canonical Funcdata::opHeritage call after structureLoops/calcForwardDominator/buildInfoList; double_descendant_error directly calls Funcdata::opSetInput twice and catches the setup-time boundary error. No Action tree or C emission.",
+    "prestate": "All observed PcodeOps are created with production newOp/opSetOpcode, fully inserted into named BlockBasic objects through opInsertEnd before order observation, and connected through opSetInput/opSetOutput/newUniqueOut/newVarnodeIop. Free reads are distinct bank objects with one descendant. The loop is entry->header, header->body, header->exit, body->header.",
+    "observation": "Five fixed-order lines. Each case records pre-state and complete post-state relevant to the boundary. order traverses the current BlockGraph list and each block's live op list in execution order; for every op it emits output then every declared input slot, with a first-seen alias id, storage class, input/written/free/constant/annotation class, exact descendant count, primary flags, activeHeritage, heritageKnown and defining-op label. Additional fields record pass, old-bank deletion, alias equalities, free-with-reader census, exact caught error, and unsorted PHI slot->predecessor->input mapping.",
+    "normalization": "Only raw object addresses are replaced by deterministic first-seen aN ids, preserving all equality/alias relations. Unique-space offsets and raw IOP pointer offsets are omitted because they are implementation allocation identities; size, class, flags, definition and descendants remain. The Rust Vec missing reserved-null input after the caught second-reader panic is projected as the same declared s0=null slot as Ghidra; this known representation difference is not claimed MATCH. No block, op, predecessor, slot or descendant order is sorted or removed."
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options and cases; no floats",
+    "cases": [
+      "single_free_promotion: entry block contains read=COPY(fresh free register 0x100:8)->unique. One opHeritage must allocate/promote a distinct formal input, rewire slot 0, erase the old descendant and delete the consumed free from the bank.",
+      "double_descendant_error: two already-inserted COPY ops; first reads one free register 0x110:8, then installing the same free in second slot 0 must report exactly 'Free varnode has multiple descendants' before changing that Varnode's descendants, flags, free/def state or bank membership.",
+      "indirect_simultaneous: prior=COPY(C8:0x21)->register 0x120:8; ind=INDIRECT(prior,IOP(target))->same register precedes target=INT_ADD(fresh free same register,C8:0x22). renameRecurse must bypass ind output for target and select prior because ind and target happen at the same time.",
+      "loop_phi_reverse_slot: entry write to register 0x130:8, header reader, body read/write step, exit reader on entry->header, header->body/exit, body->header. Natural placement must create one leading header MULTIEQUAL; reverse predecessor slots must bind entry to init and body to step, all three free reads must be deleted, and header/body/exit reads must alias the phi output."
+    ],
+    "sha256": "aced2c5fcadc2190c549c6aae03574121813af874087edf6b8d8399b1b5ebd00"
+  },
+  "observation_schema": {
+    "format": "One envelope plus four fixed-order UTF-8 case lines, final newline",
+    "op_order": "BlockGraph list order, then BlockBasic live list order; output then declared input slots in ascending slot order",
+    "varnode_state": "first-seen alias id; storage/size; C/A/I/W/F class; live descendant count; numeric primary flags; activeHeritage; heritageKnown; defining op",
+    "mutation": "old free bank membership/deletion; new slot identity and descendants; exact exception pre/post Varnode state; PHI slot reverse-edge mapping"
+  },
+  "comparand": {
+    "rugra_base_commit": "2be910a2513a9a049eb8bad0bd0a7c13a566bd6a",
+    "rugra_base_tree": "4810d810e0f1932537cd849a634ce51f19f067d9",
+    "cpp_fixture_sha256": "9bc24f130e18b859531227572ef21b41b18dc6973ee74ccf230c744fc4a9a64f",
+    "rust_fixture_sha256": "a9f69c1c31dcae94e62e30830d14dae73fe8f9292751478c97c93ceb6e2e5824",
+    "runner_sha256": "f483f904fdca96dd21a7e0c2b353401c96dbc38e750551b90bd56ee0e2545bf5",
+    "heritage_rs_sha256": "55e82e71e0aaad072383752721f0ced7e13720e9c717a5ce8b10c9f8cc8d3d26",
+    "funcdata_rs_sha256": "708eb8e3f523e64ba77452c13dad2f110c1f3d82c6f3028eb4aed5d2c5eb6a34",
+    "varnode_rs_sha256": "9b797e2a739dc58d0f88333ae8880dea3e377a3c25fc7b004d4f0ec405cb2a4a",
+    "op_rs_sha256": "ca3dc3685d332cc15a370625a2f449a94a35853ce2533c41975a5ba07f9a58ba",
+    "block_rs_sha256": "409bc6cb867c56aef497fbc7ee256911c840e6aaabe08a893d621d39dd4d4109",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-free-ssa-current-crate-v1 plus sorted length-prefixed tracked Cargo.toml/Cargo.lock/build.rs/src/sleigh_shim paths and bytes",
+    "rust_crate_tree_sha256": "828ebb135f2378b116312851b9ad9a64a4d1dabc0d50bdfabf7bd466f1d409e0",
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "cxx_target": "x86_64-pc-linux-gnu",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "platform": "Linux x86_64"
+    }
+  },
+  "build": {
+    "oracle": "Runner exports the complete decompiler/cpp subtree from the locked commit, rebuilds libdecomp.a in a private temporary tree, and links the C++ fixture there.",
+    "comparand": "Runner refuses any full tracked crate-tree hash drift, serializes cargo build --offline --locked --lib with /tmp/rugra-cargo-build.lock, and uses CARGO_TARGET_DIR=/tmp/rugra-target-heritage-free-ssa. On this host that exact dedicated target path is a verified symlink to ~/.cache/rugra-target-heritage-free-ssa so the tmpfs quota cannot truncate artifacts.",
+    "private_observer": "The locked Funcdata prefix layout shim is used solely for Heritage::buildInfoList, mirroring startProcessing funcdata.cc:166; no oracle source is modified."
+  },
+  "expected_stdout_sha256": "a436a160d3cc9210c0971ccd403bf148f8a2bfbc8cd89d1b395a92777bfa5a3f",
+  "expected_stdout_lines": 5,
+  "coverage": {
+    "single_free_promotion": "MATCH on the declared full mutation/order projection",
+    "double_descendant_message_and_prestate": "MATCH on exact text and unchanged free-Varnode state",
+    "indirect_simultaneous_stack_second": "MATCH on prior-vs-INDIRECT alias choice and complete op/slot state",
+    "loop_phi_reverse_slot": "MATCH on leading phi, unsorted predecessor-slot mapping, read aliases and complete op/slot state",
+    "exception_transport": "MISMATCH outside the normalized projection: Ghidra throws LowlevelError; Rugra panics while holding RwLocks and the fixture catches/decodes the payload",
+    "reserved_null_slot_after_error": "MISMATCH outside the normalized projection: Ghidra retains newOp(1)'s null slot; Rugra only reserves Vec capacity and has length zero after panic",
+    "remaining_heritage_closure": "UNTESTED: refinement, overlaps, revisits, guards, call/store/load/return effects, joins, multi-pass persistence and remaining error paths"
+  }
+}
