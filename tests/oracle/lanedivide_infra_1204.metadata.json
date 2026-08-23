@@ -29,12 +29,12 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "6a256e7960b14d3294dbb7c6c0d25f4a86667ac7",
-    "base_tree": "7875c55167efe04d297e004a2431718d94bfd92c",
-    "base_src_tree": "545bdb2a9bdc66fbfc7165a0124f568f1ef05e69",
+    "base_commit": "a52d3e3e5e5c0e77b257f6815d47762c7d243412",
+    "base_tree": "98d045a5ed602f567125ed8b3b72607106780459",
+    "base_src_tree": "dc37d7228cd6fef14762bce19d7cb24a654fcd81",
     "base_subflow_blob": "7afa4d6ca2c1a428c6bcd324767684b016b2f46f",
     "base_arch_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877",
-    "base_funcdata_blob": "7ea221fab43544dfc41ad39e556222de3718af0b",
+    "base_funcdata_blob": "9bfdcb7839c65c55c58dfde4c98b271f21975f7c",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
@@ -62,7 +62,7 @@
       },
       {
         "path": "src/funcdata.rs",
-        "sha256": "5891c6116231953a3e6a4ebd03edfe76ca9664444816d06c001a684bde8cc0b4",
+        "sha256": "01fa6e2d34ce3df0b44981993f996b250d31b5e21f5388d2ebd2274f549cbef8",
         "policy": "lanedMap/minLanedSize lifecycle; hash-verify before replacing the pinned base funcdata.rs"
       }
     ],
@@ -411,8 +411,8 @@
     "rust_fixture_sha256": "e3b9878814b785bf2733951f94e88466c30a44193095e83f22aabc4ca5ff0008",
     "subflow_overlay_sha256": "a9ae7e7d6bf43c851f586b85d0dc98c865098635ca12060ff9b73b7fa1d569b0",
     "arch_overlay_sha256": "492efc3a7226fb0a7b2c7def414d9b66abec7df1edc5aca779679aa92237f162",
-    "funcdata_overlay_sha256": "5891c6116231953a3e6a4ebd03edfe76ca9664444816d06c001a684bde8cc0b4",
-    "runner_sha256": "7b850abe3d7c7e488d9aeddcdce3220359780876a4b2235088e3f2ba2584d559"
+    "funcdata_overlay_sha256": "01fa6e2d34ce3df0b44981993f996b250d31b5e21f5388d2ebd2274f549cbef8",
+    "runner_sha256": "7ea1ad48e2a113b2bf9b2591384c74a108432351b6cdca34a4ceb63ce61bd420"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "9e7a670accdfad1a2610a3e4304bdbda684767cb3eac10855293913ce14dc6de",
