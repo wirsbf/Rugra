@@ -11844,10 +11844,12 @@ mod tests {
         use crate::op::PcodeOp;
         use crate::address::{Address, SeqNum};
 
-        // AND-pattern CFG:
+        // OR-pattern CFG (positional polarity, block.hh:299-300: out[1]=true):
         // A (CBRANCH): out(0)=B, out(1)=C → false edge to C
         // B (CBRANCH): out(0)=D, out(1)=C → false edge to C (same as A)
-        // Both false edges → C → AND pattern
+        // Both FALSE edges merge into C → boolean-merge collapse yields
+        // BlockCondition(Or) per block.cc:1785 (false-edge merge = Or;
+        // the legacy And assertion encoded the inverted pre-TRUEOUT polarity).
         let mut basic_a = BlockBasic::new(0, Address::new(0x1000));
         basic_a.ops.push(crate::op::PcodeOpRef(Arc::new(RwLock::new(
             PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_CBRANCH),
@@ -11898,14 +11900,14 @@ mod tests {
         // (including interleaved cat/if rules), it may be standalone, inside a
         // BlockList, or its original block slot may have been replaced.
         // Search ALL blocks recursively for any BlockCondition with And.
-        let mut found_and = false;
+        let mut found_or = false;
         for i in 0..graph.get_size() {
             if let Some(block) = graph.get_block(i) {
                 let b = block.read().unwrap();
                 match b.get_type() {
                     BlockType::Condition => {
                         if let Some(cond) = b.as_any().downcast_ref::<BlockCondition>() {
-                            if cond.op_type == BoolOp::And { found_and = true; }
+                            if cond.op_type == BoolOp::Or { found_or = true; }
                         }
                     }
                     BlockType::List => {
@@ -11914,7 +11916,7 @@ mod tests {
                                 let c = child.read().unwrap();
                                 if c.get_type() == BlockType::Condition {
                                     if let Some(cond) = c.as_any().downcast_ref::<BlockCondition>() {
-                                        if cond.op_type == BoolOp::And { found_and = true; }
+                                        if cond.op_type == BoolOp::Or { found_or = true; }
                                     }
                                 }
                             }
@@ -11925,7 +11927,7 @@ mod tests {
             }
         }
 
-        assert!(found_and, "Expected BlockCondition(And) after boolean folding");
+        assert!(found_or, "Expected BlockCondition(Or) after boolean folding (false-edge merge)");
     }
 
     #[test]

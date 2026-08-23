@@ -1410,3 +1410,7 @@ Rugra 防御性视为 alive，生产不可达已注释）。
   （test_infer_params_and_return_type / test_type_propagation）为 base
   2f9725f 上即失败的预存在残差（已用 base 文件复跑验证），与本改动无关。
 <!-- annotation-pass: 2026-08-23 -->
+
+## 极性重断言（2026-08-23，root，CONDEXE-TRUEOUT-0002 跟进）
+
+`test_bool_condition_folding_and_pattern` 按 Ghidra 纯位置极性（block.hh:299-300，out[1]=true）重断言：双 CBRANCH 的 **false** 边合流 → `BlockCondition(Or)`（block.cc:1785）；旧 And 断言编码的是翻转前反极性。
