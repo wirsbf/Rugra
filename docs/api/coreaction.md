@@ -853,6 +853,10 @@ build_full_pipeline_actions()：返回已实现非 stub Action，按 Ghidra 顺�
 ### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
 action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。
 
+### 2026-08-23：CALL 输出类型 + 平台参数符号（GETSTR-ZERODIFF-C/E 域）
+
+① `ActionInferTypes::build_localtypes` 新增 CALL/CALLIND 臂，移植 `TypeOpCall::getOutputLocal`（typeop.cc:720-734）：callspec 输出类型锁定时以被调方返回类型为 CALL 输出 varnode 的种子类型（锁定 libc `char *strdup(...)` → char*；VOID 回退缺省）。配套新增 `Funcdata::get_call_specs_of_op`（funcdata.cc:484-497 的移植：in(0) 注释 varnode 快路径 + 按调用地址线性扫描回退）。效果：GetStr `lVar1`→`pcVar1`（命名经类型前缀链自动跟随）。② `ActionRestructureVarnode::apply` 构造 ScopeLocal 时从 input-locked FuncProto 播种 function_parameter 符号（Ghidra 平台侧等价：Program DB 的函数符号带 DWARF 参数符号，经 decompile.cc <localdb> 进入解编译器；Rugra 的新建 ScopeLocal 为空故在此播种），符号带 namelock+typelock。③ `ScopeLocal::restructure_varnode` 开头的全清改为 `clearUnlockedCategory(-1)` 忠实移植（varmap.cc:1273 + database.cc:2086-2096：category>=0 符号无条件存活；category<0 仅 typelock 存活、未锁名重置 $$undef；其余删除——旧实现全清抹掉了平台参数符号）。效果：GetStr `in_RSI`/`in_RDI` 死声明消失，体内引用以参数名 `value`/`string` 输出。curl 全量 defects=0/numbering=0，skeleton 2459→2439。
+
 ### 2026-08-23：ActionExtraPopSetup 真实实现（GETSTR-ZERODIFF-B 域）
 
 旧体为 no-op stub（注释"x86-64 SysV 不用 extrapop"——错误：cspec `<default_proto><prototype name="__stdcall" extrapop="8">` 即 x86-64 gcc 缺省）。忠实移植 coreaction.cc:1436-1466：对每个 extraPop!=0 的 callspec，在栈指针寄存器上插 op——已知 extrapop 插 `INT_ADD RSP'=RSP+extrapop` 于 CALL 之后，未知插 INDIRECT（iop 引用）于 CALL 之前；free 输入 varnode 在 RSP 地址由 heritage 连接到调用前最新 RSP 定义。该 op 建模被调方 `ret` 弹返回地址：没有它，SLEIGH call push（`RSP-=8; [RSP]=retaddr`）使每次调用后 RSP 永久偏 8 字节，调用点栈相对 STORE 无法被 RuleStoreVarnode 重写为栈空间 COPY（`*(long*)((long)uVar20-8)=0x3710` 幽灵 store 族的根因）。空间基址来自 Architecture stack_pointer_{space,offset,size}（=stackspace->getSpacebase(0)，coreaction.cc:5472+1444）。效果：curl 全量 skeleton diff 2615→2459，GetStr 幽灵 store 消除且 uStackX_0/uVar20 死声明随之消失。

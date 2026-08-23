@@ -3,6 +3,8 @@
 **状态**: 骨架已实现（L2），集成待完成
 **源代码路径**: `src/varmap.rs`
 
+**2026-08-23 修复（GETSTR-ZERODIFF-C）**: `restructure_varnode` 开头的符号全清改为 `clearUnlockedCategory(-1)` 忠实移植（Ghidra varmap.cc:1273 调用 ScopeInternal::clearUnlockedCategory，database.cc:2086-2096：`if (sym->getCategory() >= 0) continue;` —— 参数/equate 类符号无条件存活；category<0 且 typelock 的存活（未锁名重置为 $$undef 占位，cc:2091-2094）；其余 removeSymbol）。旧实现 `self.symbols.clear()` 抹掉平台播种的 function_parameter 符号，导致 input-locked DWARF 参数每次重结构化退化为 in_RXX 不规则输入名。幸存者的 nametree/category/mapentry 以旧索引→新索引重链。
+
 ## 模块说明
 
 Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构和映射。

@@ -1307,6 +1307,39 @@ impl Funcdata {
         self.callspecs.get(i)
     }
 
+    // Ghidra: funcdata.cc:484 Funcdata::getCallSpecs(const PcodeOp *op) const
+    /// Get the call specification associated with a CALL/CALLIND op.
+    /// Faithful to `Funcdata::getCallSpecs(op)` (funcdata.cc:484-497):
+    /// fast path resolves the op's in(0) fspec constant back to the
+    /// FuncCallSpecs; the fallback linearly scans the call list for the
+    /// spec whose op matches. Rugra's in(0) annotation varnode is Iop-space
+    /// (index-keyed when flow created it, entry-keyed after the driver
+    /// relink), so both key forms resolve on the fast path; the fallback
+    /// matches by call-sequence address (Rugra's FuncCallSpecs stores
+    /// op_addr instead of the PcodeOp pointer).
+    pub fn get_call_specs_of_op(
+        &self,
+        op: &crate::op::PcodeOpRef,
+    ) -> Option<&crate::fspec::FuncCallSpecs> {
+        let in0 = op.0.read().unwrap().inrefs.first().cloned()?;
+        let (space, offset) = {
+            let vn = in0.read().unwrap();
+            let spc = vn.address_space.clone();
+            (spc, vn.loc.as_u64())
+        };
+        if space == crate::space::AddressSpace::Iop {
+            // Index-keyed fspec annotation (flow's new_varnode_call_specs).
+            if let Some(fc) = self.callspecs.get(offset as usize) {
+                return Some(fc);
+            }
+            // Entry-keyed relink (driver): fall through to the address scan.
+        }
+        let op_addr = op.0.read().unwrap().get_addr();
+        self.callspecs
+            .iter()
+            .find(|fc| fc.op_addr == op_addr)
+    }
+
     // Ghidra: funcdata.cc:34 Funcdata::getCallSpecsMut
     /// Get mutable call specs by index.
     pub fn get_call_specs_mut(&mut self, i: usize) -> Option<&mut crate::fspec::FuncCallSpecs> {

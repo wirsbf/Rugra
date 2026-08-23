@@ -788,6 +788,51 @@ impl Action for ActionRestructureVarnode {
         // Alias calculations are not reliable on the first pass.
         let aliasyes = self.numpass != 0;
         let mut scope = crate::varmap::ScopeLocal::new();
+        // Ghidra platform-side parameter symbols: the function's local scope
+        // arrives from the Program database with the DWARF function's named
+        // parameter symbols already installed (decompile.cc <localdb>
+        // decode); ScopeLocal::restructureVarnode's fakeInputSymbols
+        // (varmap.cc:1428-1435) then skips inputs that already have a
+        // function_parameter symbol, so printing uses the parameter name
+        // (`string`/`value`) rather than the in_RXX irregular-input fallback
+        // (varmap.cc:1508 buildDefaultName). Rugra's fresh ScopeLocal is
+        // empty, so seed the input-locked FuncProto's parameters here, at
+        // scope construction, before restructure_varnode.
+        if fd.funcp.is_input_locked() {
+            let params: Vec<(String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64)> =
+                fd.funcp
+                    .parameters
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.name.clone(),
+                            p.data_type.clone(),
+                            p.address.as_u64(),
+                        )
+                    })
+                    .collect();
+            for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
+                let idx = scope.add_symbol(
+                    crate::space::AddressSpace::Register,
+                    &name,
+                    Some(dtype.clone()),
+                    offset,
+                    None,
+                );
+                scope.set_category(
+                    idx,
+                    crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                    index as i32,
+                );
+                // Platform parameter symbols are name+type locked (they
+                // come from the debug info); the locks also protect the
+                // symbols from ScopeInternal::clearUnlockedCategory(
+                // Symbol::function_parameter) (varmap.cc:1275), which runs
+                // at the top of every restructureVarnode pass.
+                scope.symbols[idx].namelock = true;
+                scope.symbols[idx].typelock = true;
+            }
+        }
         // Install the register-name lookup standing in for
         // `glb->translate->getRegisterName` (translate.hh:380): Ghidra's
         // ScopeLocal::getRegisterName (varmap.cc:586) reads the SLEIGH
@@ -3642,6 +3687,28 @@ impl ActionInferTypes {
                     if let Some(out) = op.get_out() {
                         let ov = out.read().unwrap();
                         temps.insert(vn_id(&ov), int_types.bool.clone());
+                    }
+                }
+                // TypeOpCall::getOutputLocal (typeop.cc:720-734): a CALL
+                // whose callspec output is type-locked seeds the CALL output
+                // varnode with the callee's return type (e.g. locked libc
+                // `char *strdup(...)` → char*). VOID falls back to the
+                // default; nothing is seeded when the spec is absent or the
+                // output is not locked.
+                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                    if let Some(out) = op.get_out() {
+                        let seed = fd
+                            .get_call_specs_of_op(&crate::op::PcodeOpRef(op_ref.0.clone()))
+                            .filter(|fc| fc.prototype.output_type_locked)
+                            .map(|fc| fc.prototype.return_type.clone())
+                            .filter(|ct| {
+                                use crate::type_system::datatype::TypeMetatype;
+                                ct.get_metatype() != TypeMetatype::Void
+                            });
+                        if let Some(ct) = seed {
+                            let ov = out.read().unwrap();
+                            temps.insert(vn_id(&ov), ct);
+                        }
                     }
                 }
                 // LOAD: address input (slot 1) is a pointer; output gets a
