@@ -1440,8 +1440,14 @@ impl Datatype {
     /// `self`; returns the parsed values via `DecodeBasicResult` so callers
     /// can apply them to whichever `TypeBase` they are constructing.
     ///
+    /// Errors with `"Bad size for type <name>"` when no (or a negative) `size`
+    /// attribute was read, exactly the oracle's `LowlevelError` at
+    /// type.cc:671-672 — including the re-read-on-exhausted-attributes case
+    /// that `TypeFactory::decodeTypeWithCodeFlags` triggers by calling
+    /// `TypeCode::decodeStub` on the same still-open element.
+    ///
     /// Returns the parsed `(name, size, metatype, id, flags)` tuple.
-    pub fn decode_basic(decoder: &mut dyn Decoder) -> DecodeBasicResult {
+    pub fn decode_basic(decoder: &mut dyn Decoder) -> Result<DecodeBasicResult, String> {
         let mut size: i64 = -1;
         let mut metatype = TypeMetatype::Void;
         let mut id: u64 = 0;
@@ -1496,11 +1502,13 @@ impl Datatype {
                 }
             }
         }
+        // Ghidra: if (size < 0) throw LowlevelError("Bad size for type "+name);
+        // The name at this point is whatever the attribute loop actually read —
+        // empty when the attributes were already exhausted by a previous
+        // enumeration on the same element (no implicit rewind in XmlDecode,
+        // marshal.cc:231-241, nor in TreeDecoder).
         if size < 0 {
-            // Ghidra throws LowlevelError; we surface via size 0 + metatype
-            // unchanged so callers can decide. Match Ghidra's defaulting:
-            // alignment = 1, alignSize = size.
-            size = 0;
+            return Err(format!("Bad size for type {}", name));
         }
         // Ghidra: if (id==0 && name.size()>0) id = hashName(name);
         if id == 0 && !name.is_empty() {
@@ -1511,7 +1519,7 @@ impl Datatype {
         if (flags & type_flags::VARLENGTH) != 0 {
             id = Datatype::hash_size(id, size as i32);
         }
-        DecodeBasicResult { name, size: size_u, metatype, id, flags }
+        Ok(DecodeBasicResult { name, size: size_u, metatype, id, flags })
     }
 
     // Ghidra: type.hh:165 Datatype::markComplete (inline)
@@ -2088,12 +2096,13 @@ pub fn test_for_array_slack(dt: &Datatype, off: i64) -> bool {
 
 /// Result of `Datatype::decode_basic`. Mirrors the field updates Ghidra's
 /// `decodeBasic` (type.cc:623-683) performs on the Datatype base. Callers
-/// apply these to whatever `TypeBase` they are constructing.
+/// apply these to whatever `TypeBase` they are constructing. A missing or
+/// negative `size` is an error (`Bad size for type`), never a `0` here.
 #[derive(Debug, Clone, Default)]
 pub struct DecodeBasicResult {
     /// Parsed `name` attribute (empty if absent).
     pub name: String,
-    /// Parsed `size` attribute (0 if absent or invalid).
+    /// Parsed `size` attribute (callers only reach construction with >= 0).
     pub size: usize,
     /// Parsed `metatype` attribute (Void if absent).
     pub metatype: TypeMetatype,
@@ -3676,38 +3685,89 @@ impl TypeCode {
     /// set the `variable_length` flag (Ghidra convention: a `<prototype>` tag
     /// implies variable length), then run `decodeBasic`.
     ///
-    /// Returns `true` if a prototype child is present (so the caller can invoke
-    /// `decode_prototype`). The caller applies the returned `basic` to the
-    /// code's `TypeBase`.
-    pub fn decode_code_stub(decoder: &mut dyn Decoder) -> (DecodeBasicResult, bool) {
+    /// Flag composition is the oracle's: `decodeBasic` never resets `flags`,
+    /// it only ORs attribute bits in, so both pre-states set before it runs
+    /// survive — the `type_incomplete` bit from the `TypeCode` default
+    /// constructor (type.cc:2757-2763) and the conditional `variable_length`
+    /// from the peek (type.cc:2906-2909). These are OR-composed onto the
+    /// decoded attribute flags here.
+    ///
+    /// Returns the composed basic fields plus `true` if a prototype child is
+    /// present (so the caller can invoke `decode_prototype`). Errors with
+    /// `Bad size for type` when the attributes are exhausted or sizeless —
+    /// the behavior `TypeFactory::decodeTypeWithCodeFlags` observes when its
+    /// `decodeCode` callee re-reads the same still-open element.
+    pub fn decode_code_stub(decoder: &mut dyn Decoder) -> Result<(DecodeBasicResult, bool), String> {
         let has_proto = decoder.peek_element() != 0;
-        let basic = Datatype::decode_basic(decoder);
-        (basic, has_proto)
+        // Ghidra: flags |= variable_length; (set on the TypeCode object)
+        // Ghidra: decodeBasic(decoder); — the object's type_incomplete flag
+        // from the ctor is still set and survives the OR-only attribute pass.
+        let mut basic = Datatype::decode_basic(decoder)?;
+        basic.flags |= type_flags::TYPE_INCOMPLETE;
+        if has_proto {
+            basic.flags |= type_flags::VARLENGTH;
+        }
+        Ok((basic, has_proto))
+    }
+
+    // Ghidra: fspec.cc:4675 FuncProto::decode (Rugra gap, fspec.rs lease)
+    /// Decode the `<prototype>` element into an existing `FuncProto`. The
+    /// oracle's `FuncProto::decode` (fspec.cc:4675-4839) reads the
+    /// model/extrapop/flag attributes and the `<returnsym>`/effect children
+    /// through the Architecture's `ProtoStore`; Rugra has not ported it yet
+    /// (owned by the fspec.rs lease chain).
+    ///
+    /// The element is opened and skipped so the decoder advances exactly past
+    /// the `<prototype>` child, matching the cursor position of Ghidra's
+    /// `decoder.openElement(ELEM_PROTOTYPE)` at the point its own decode
+    /// throws — callers that catch the error observe the same partial state.
+    fn decode_func_proto(decoder: &mut dyn Decoder, _proto: &mut FuncProto) -> Result<(), String> {
+        let child_id = decoder.open_element();
+        if child_id != 0 {
+            decoder.close_element_skipping(child_id);
+        }
+        Err("Rugra gap: FuncProto::decode (fspec.cc:4675) not ported; <prototype> child rejected (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual)".to_string())
     }
 
     // Ghidra: type.cc:2918 TypeCode::decodePrototype
     /// Decode the `<prototype>` child of a code `<type>` element. Faithful to
     /// `TypeCode::decodePrototype` (type.cc:2918-2931): if a child element is
     /// present, construct a `FuncProto`, configure it from the Architecture's
-    /// default model + void return type, decode it, and set the
-    /// constructor/destructor flags; finally `markComplete()`.
+    /// default model + the factory's void return type, decode it, and set the
+    /// constructor/destructor flags carried in from
+    /// `TypeFactory::decodeTypeWithCodeFlags`; finally `markComplete()` —
+    /// which runs unconditionally, also when no prototype child is present.
     ///
-    /// Rugra gap: full prototype decoding requires `FuncProto::decode` and an
-    /// `Architecture` handle (for the default model and void type), neither of
-    /// which is wired through the type path yet (see type_audit.md). This port
-    /// consumes the child element so the decoder position is correct, leaving
-    /// `TypeCode.proto = None`; the factory is expected to populate the
-    /// prototype separately once the Architecture plumbing lands.
-    pub fn decode_prototype(decoder: &mut dyn Decoder) {
+    /// Rugra gap: `FuncProto::decode` (fspec.cc:4675-4839) is not ported
+    /// (fspec.rs lease); a present `<prototype>` child therefore errors after
+    /// being consumed. The default-model wiring of `proto->setInternal` is
+    /// likewise architecture-backed (FUNCPROTO-MODEL-BIND-0001). The
+    /// constructor/destructor setters below are the live `isConstructor` /
+    /// `isDestructor` chain and apply as soon as the decode lands.
+    ///
+    /// `voidtype` is the factory's void data-type (`typegrp.getTypeVoid()`).
+    pub fn decode_prototype(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        is_constructor: bool,
+        is_destructor: bool,
+        voidtype: Arc<Datatype>,
+    ) -> Result<(), String> {
         if decoder.peek_element() != 0 {
-            // Consume the <prototype>...</prototype> element so the decoder
-            // advances past it. Full FuncProto construction is deferred.
-            let child_id = decoder.open_element();
-            if child_id != 0 {
-                decoder.close_element_skipping(child_id);
-            }
+            // Ghidra: proto = new FuncProto();
+            //        proto->setInternal(glb->defaultfp, typegrp.getTypeVoid());
+            let mut proto = FuncProto::new(String::new(), voidtype);
+            // Ghidra: proto->decode(decoder,glb);
+            Self::decode_func_proto(decoder, &mut proto)?;
+            // Ghidra: proto->setConstructor(isConstructor);
+            proto.set_constructor(is_constructor);
+            // Ghidra: proto->setDestructor(isDestructor);
+            proto.set_destructor(is_destructor);
+            self.proto = Some(Arc::new(proto));
         }
         // Ghidra: markComplete();
+        self.base.flags &= !type_flags::TYPE_INCOMPLETE;
+        Ok(())
     }
 }
 

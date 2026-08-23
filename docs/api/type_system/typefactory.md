@@ -578,3 +578,60 @@ Fixture-commit addendum (same rework): removed two no-op `drop(&mut …)`
 reference drops (`find_add`, `get_type_void_result`) flagged by the compiler;
 no behavior change — the pinned oracle run in this commit's Differential
 block covers the exact final bytes.
+
+## 2026-08-23 TYPEFACTORY-CODEFLAGS-DECODE-0001
+
+`decodeTypeWithCodeFlags` (type.cc:4193-4212) and the `decodeCode` chain it
+calls are ported 1:1 against locked `type.cc`/`marshal.cc`:
+
+- **`decode_type_with_code_flags`** (type.cc:4193-4212): opens the `<type>`
+  element, runs `decodeBasic`, raises `"Special type decode does not see
+  pointer"` for a non-`ptr` metatype, then executes the WORDSIZE attribute
+  loop **without** a preceding `rewindAttributes` (type.cc:4201-4207, unlike
+  `TypePointer::decode` at type.cc:1015). Because neither `XmlDecode`
+  (marshal.cc:231-241) nor Rugra's `TreeDecoder` restarts an exhausted
+  attribute enumeration, the loop reads nothing and `wordsize` keeps the
+  `TypePointer` ctor default 1 (type.hh:407). `decodeCode` then re-reads the
+  SAME still-open element and raises `"Bad size for type "` (empty name) —
+  the locked 12.0.4 oracle's behaviour for every nested pointer→code XML,
+  verified empirically against the pinned build (all varargs/model/ctor/
+  dtor/thiscall flag combinations byte-identical). The success tail
+  (`closeElement`, `calcTruncate` guard, `findAdd`) is structurally present;
+  `TypePointer.truncate` is the TYPE-0001 structural residual.
+- **`decode_code`** (type.cc:4401-4429) full port replacing the stub-insert
+  version: `decodeStub` + metatype check + forcecore flag +
+  `findByIdLocal(name,id)`; a miss canonicalizes the scratch through
+  `find_add` (stub for recursive definitions), a non-code occupant raises
+  `"Trying to redefine type: {name}"`; `decode_prototype` fills the scratch
+  with the constructor/destructor chain; a completed container entry runs
+  `compareDependency` (`"Redefinition of code data-type: {name}"`), an
+  incomplete stub is defined in place via the factory `setPrototype`
+  wrapper — which completes prototype-less stubs too (Ghidra clears
+  `type_incomplete` even for a null prototype, type.cc:3518-3528);
+  `resolveIncompleteTypedefs` runs at the end.
+- **`set_prototype_define`** (type.cc:3518-3528): the Arc-channel mirror of
+  the factory wrapper — incomplete guard with the verbatim LowlevelError,
+  `TypeCode::setPrototype(this,fp)` copy, `type_incomplete` clear, the
+  `(variable_length | type_incomplete)` flag OR, and re-registration under
+  the unchanged ordered-tree key.
+- **`resolve_incomplete_typedefs`** (type.cc:3777-3809) + the
+  `incomplete_typedefs` list populated by `get_typedef` (type.cc:3837-3838):
+  struct/union entries complete through the setFields wrapper's field copy
+  and flag merge (type.cc:3479-3492 / 3500-3511), code entries through the
+  factory `setPrototype` with the referenced type's prototype and flags.
+- **`decodeCode` is private** in the oracle (type.hh:791): its only public
+  callers are `decodeTypeNoRef` (flags false) and
+  `decodeTypeWithCodeFlags`; the constructor/destructor flag chain therefore
+  has no reachable public success observation in 12.0.4.
+- `decode_basic` (datatype.rs) now raises `"Bad size for type {name}"`
+  (type.cc:671-672) instead of coercing the size to 0; every decode arm
+  propagates the error.
+
+Oracle evidence: `tests/oracle/typefactory_codeflags_decode_1204.{cc,rs,
+metadata.json}` + runner `tools/run_typefactory_codeflags_decode_oracle.sh`
+(89 records, projection MATCH). Registered residual: a present
+`<prototype>` child errors in Rugra until `FuncProto::decode`
+(fspec.cc:4675-4839, fspec.rs lease) is ported — the stub inserted before
+the throw survives exactly like the oracle's own prototype-decode
+failures; live ctor/dtor/`has_thisptr` flag observation is gated on the
+same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
