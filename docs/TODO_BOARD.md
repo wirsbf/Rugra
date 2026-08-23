@@ -30,6 +30,24 @@
 > wave-2 预留：各 writer 完成后由 root 触发机制 C 独立复核 Agent（varmap 核心算法层/
 > subflow 属核心算法白名单的按 AGENTS.md 处理）；复核通过才集成。
 
+### 审计产出登记（root 代登记；writer 释放后作为补员池）
+
+来自 `docs/alignment_audit/JUMPTABLE_GAPS_2026-08-22.md`（128 函数对照：43 MATCH/29 PARTIAL/
+21 MISMATCH/33 MISSING/14 新缺口；结论=守卫/range 比 ROADMAP #21 记载严重一个量级，
+最重地基是 Funcdata 部分克隆 + "jumptable" action 策略链）：
+
+| ID | P | 标题 | write-set | 依赖 |
+|---|---|---|---|---|
+| `JUMPTABLE-EMULFN-0001` | P0 | EmulateFunction 1:1 重写（LOAD/MULTIEQUAL/CALL 忽略/BRANCH 抛错/loader fallback/lastOp） | `src/jumptable.rs`(EmulateFunction)、`src/funcdata.rs`(loader 访问器)、`docs/api/jumptable.md` | loader 桥（loadimage.rs trait 已有） |
+| `JUMPTABLE-CALCRANGE-0001` | P0 | calcRange 守卫交集写回 + isBoolOutput | `src/jumptable.rs`、API 文档 | RANGE-0001 |
+| `JUMPTABLE-GUARDS-0001` | P0 | analyzeGuards 完整移植 + checkUnrolledGuard 接线 + value_match 补全 | `src/jumptable.rs`、API 文档 | —（可与上并行） |
+| `JUMPTABLE-SELECTION-0001` | P0 | recover_model 选择顺序（Assisted→Basic→Basic2，去 Trivial 回退，maxtablesize 读 arch） | `src/jumptable.rs`、`src/arch.rs`、API 文档 | JUMPTABLE-EMULFN-0001 |
+| `JUMPTABLE-OVERRIDE-0001` | P1 | Override 闭包（findStartOp/trialNorm/…/encode/decode） | `src/jumptable.rs`、`src/dynamic.rs`、API 文档 | JUMPTABLE-EMULFN-0001 |
+| `JUMPTABLE-ASSISTED-0001` | P1 | JumpAssisted 全方法 + JumpAssistOp 接线 | `src/jumptable.rs`、`src/userop.rs`、`src/pcodeinject.rs`、API 文档 | INJECT-0001 |
+| `JUMPTABLE-TABLEAPI-0001` | P0 | 表级 13 方法（switchOver/matchModel/recoverLabels/…） | `src/jumptable.rs`、`src/flow.rs`、API 文档 | PATHMELD-0001 |
+| `JUMPTABLE-PIPELINE-0001` | P0 | stageJumpTable partial 克隆简化链 + ActionSwitchNorm 闭包 + 去自创预扫 | `src/{funcdata,fspec,coreaction,flow}.rs`、API 文档 | Layer1-3 全部 |
+| `JUMPTABLE-HYGIENE-0001` | P1 | 卫生项（is_load_in_path 漂移/buildLabels/clone/foldInNormalization/buildAddresses/Basic2/setup_trivial） | `src/jumptable.rs`、API 文档 | 局部 |
+
 ## 历史 wave：`W-2026-08-20-CLOSEOUT`（收尾中，租约归 W-2026-08-22-ORCH 接管的以新 wave 为准）
 
 > 2026-08-20 启动，root 编排、显式文件 staging 与串行集成；实现 write-set 互斥，核心算法由独立
