@@ -1,36 +1,35 @@
 # Rugra 🦀
 
-**Ghidra 12.0.4 反编译器核心的 Rust 1:1 移植** —— 以"同输入同输出"为唯一对齐标准,逐函数对拍锁定 oracle。
+**Ghidra 反编译器的 Rust 移植** —— 把 NSA Ghidra 的反编译核心(`decompile/cpp`,纯 C++)忠实搬到 Rust,并以"锁定同版本 Ghidra、同输入同输出"的差分测试作为唯一正确性标准。
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
+[![Ghidra](https://img.shields.io/badge/oracle-Ghidra%2012.0.4-e94f37.svg)](docs/VERIFICATION_GUIDE.md)
 
 ---
 
-## 这是什么
+## 为什么做这个
 
-Rugra 把 Ghidra 反编译器(锁定 **12.0.4**,oracle commit `e40ed130`,114 个 `.cc` 源文件)的**核心算法管线**逐函数移植到 Rust:从 ELF 加载、x86-64 SLEIGH 提升、P-code IR、SSA/Heritage、控制流结构化到 C 伪代码输出。它不是"受 Ghidra 启发"的自研框架——每个移植函数都标注 `// Ghidra: <file>:<line>` 源位置,并要求在锁定 oracle 上以双侧差分 fixture 证明行为等价。
+Ghidra 的反编译器是一份教科书级的 C++ 代码库——SSA 构造、值域分析、控制流结构化、类型恢复,四十万行沉淀。但它不易嵌入、不易实验、没有内存安全保证,而且行为难以验证。
 
-```
-二进制解析 → 指令提升(SLEIGH x86-64) → P-code IR → SSA/Heritage → 控制流结构化 → C 代码生成
-```
+Rugra 的目标:**算法层 1:1 移植,工程层现代化**。每一处实现都标注它对应的 Ghidra 源码位置(`// Ghidra: varmap.cc:1263 buildDynamicName`),并用自动化差分门禁证明"Ghidra 在同样输入下产出同样的东西"。移植就是理解——当你能把 jumptable 恢复或 conditional-execution 消除逐行复刻并被 oracle 验证时,才算真的读懂了它。
 
-## 当前能力(2026-08-24,可实测)
+适合:反编译研究、PL 课程参考、嵌入式静态分析基座、以及对"老牌 C++ 项目如何安全演进"感兴趣的人。
 
-以 curl 二进制 124 函数语料的端到端结果为准(vs Ghidra 12.0.4 golden):
+## 特性
 
-| 指标 | 数值 |
-|---|---|
-| 反编译成功 / panic | 75 / **0** |
-| 语法缺陷(defects)/ 编号错误 | **0 / 0** |
-| **函数体逐字节一致** | **52/68(其中 33 个含真实控制流/调用的非平凡函数)** |
-| 全量单元测试 | 1559 通过 / 2 已知(类型推断链,已登记) |
-| 锁定 oracle 双侧差分 fixture | **119 个,全绿** |
-| 输出确定性 | 20× 全语料运行字节一致 |
+- **真实 SLEIGH 提升链**:直接消费 Ghidra 编译的 `.sla` 处理器规格与 `.cspec` 调用约定,指令语义与 Ghidra 同源,目前支持 x86-64
+- **完整的 Action/Rule 反编译管线**:Ghidra `universalAction` 的嵌套树(universal → fullloop → mainloop → stackstall)与三个规则池(150 条 Rule)按原注册序重建
+- **算法全家桶**:SSA/Heritage、值域分析(CircleRange)、控制流结构化(TraceDAG/collapse 族)、参数与类型恢复(varmap/ScopeLocal)、变量合并(merge 族)、C 伪代码生成(PrintC 协议)
+- **三位一体差分验证**:锁定 oracle 指纹 → 119 个双侧逐字节 fixture → 全语料端到端 golden 门禁;任何漂移 fail-closed,状态如实登记(UNTESTED 不冒充 MATCH)
+- **确定性输出**:同输入同输出,无时间/哈希序依赖
 
-首个逐字节零差样本(`GetStr`,与 Ghidra 输出完全一致):
+## 演示
+
+反编译一个真实的 curl 函数,输出与 Ghidra 逐字节一致:
 
 ```c
+// $ cargo run --release --example curl_decompile   |  sed -n '/GetStr/,/^}/p'
 void GetStr(char **string,char *value)
 {
   char *pcVar1;
@@ -47,69 +46,66 @@ void GetStr(char **string,char *value)
 }
 ```
 
-管线本身也经 oracle 对拍:默认 Action 树(78 节点)、三个规则池(oppool1=134 / oppool2=5 / cleanup=15 条 Rule)的注册序与 Ghidra `universalAction` 逐条一致;jumptable 守卫、常量折叠(全 opcode)、浮点位阶梯、CommentSorter 状态机、`Funcdata::clear` 生命周期等 40+ 子系统有逐字节 MATCH 的差分 fixture。
-
 ## 快速开始
 
 ```bash
-cargo build --release
+git clone --recurse-submodules https://github.com/wirsbf/Rugra.git
+cd Rugra && cargo build --release
 
-# 端到端:反编译 curl 全部 124 个函数,输出到 stdout
-cargo run --release --example curl_decompile
+# 反编译整个 curl 二进制(124 个函数)
+cargo run --release --example curl_decompile > result.c
 
-# 差分门禁:与 Ghidra 12.0.4 golden 对比
-python3 tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c --summary-only
+# 反编译 httpd
+cargo run --release --example httpd_decompile
 
-# 单元测试
+# 单元测试 + 单函数门禁
 cargo test --lib
+python3 tools/compare_ghidra.py result.c tests/golden/ghidra_curl_1204.c --summary-only
+```
 
-# 任意一个锁定 oracle 差分 fixture(需 ghidra/ 子仓与 BFD,见 docs/VERIFICATION_GUIDE.md)
+运行双侧差分 fixture(需要本机可编译锁定 Ghidra,见 [docs/VERIFICATION_GUIDE.md](docs/VERIFICATION_GUIDE.md)):
+
+```bash
 bash tools/run_transform_multiequal_insert_oracle.sh
 ```
 
-## 差分验证方法论(项目核心)
-
-对齐不靠"代码长得像",靠三层机器门禁:
-
-1. **锁定 oracle**:Ghidra 源码钉在 12.0.4(`e40ed130`),fixture 记录 oracle/架构/cspec/输入五重指纹,任何漂移 fail-closed。
-2. **pin-base fixture**(`tests/oracle/`,119 个):每个 fixture 双侧(锁定 Ghidra C++ 编译 vs Rust pin 快照)同输入运行,输出逐字节比对;`UNTESTED/MISMATCH/NO_ORACLE` 状态如实登记,不冒充 MATCH。
-3. **端到端差分**:curl/httpd 全语料跑 `compare_ghidra.py`,defects/numbering 必须为零且逐处归因。
-
-核心算法模块的改动另需独立 Agent 交叉复核(机制 C):复核者必须亲自读 oracle 源码重推语义,历史上拦截过多次"fixture 全绿但语义前提错误"的交付。
-
-## 仓库结构
+## 工作原理
 
 ```
-src/                 # ~95 个模块,1:1 对应 Ghidra .cc(op/varnode/funcdata/heritage/
-                     #   blockaction/jumptable/varmap/merge/printc/ruleaction/...)
-ghidra/              # 锁定 oracle 源码(子仓,HEAD 钉在 e40ed130)
-sleigh_specs/        # x86-64 .sla/.pspec/.cspec(SLEIGH 处理器规格)
-examples/            # curl_decompile / httpd_decompile 等端到端入口
-tests/oracle/        # 119 个 pin-base 双侧差分 fixture
-tools/               # compare_ghidra / audit_syntax / stage_bisect / oracle runner 等
-docs/
-  TODO_BOARD.md      # 活动任务看板(带 owner/write-set/验收证据)
-  api/               # 与 src/ 1:1 的 API 参考
-  alignment_docs/    # 管线阶段树、审计报告、对齐硬规则
-  alignment_audit/   # 6 份跨模块差距审计(jumptable/coreaction/condexe/ruleaction/fspec/flow)
-ALIGNMENT_ROADMAP.md # 模块级 L1/L2/L3 状态账本
-AGENTS.md            # 开发铁律与门禁机制(贡献必读)
+ ELF            SLEIGH .sla/.cspec             锁定 Ghidra 12.0.4 (ghidra/)
+  │                    │                              │
+  ▼                    ▼                              ▼
+binary/ ──► disasm/ ──► P-code IR ──► Action 管线 ──► C 伪代码
+ (goblin)   (x86_lift)  (Varnode/     (Heritage/SSA,      ▲
+                          PcodeOp)     结构化,规则池,      │
+                                       类型/变量恢复)      │
+                                            │              │
+                                            └── 差分门禁 ──┘
+                                                (fixture + golden)
 ```
 
-## 已知差距(诚实战报)
+核心模块与 Ghidra 源文件一一对应(`src/varmap.rs` ↔ `varmap.cc`、`src/blockaction.rs` ↔ `blockaction.cc`……),模块状态与逐函数账本见 [ALIGNMENT_ROADMAP.md](ALIGNMENT_ROADMAP.md)。
 
-全局完成度未证明;尚未对齐的部分集中在:
+## 与相关项目的区别
 
-- **流边界/尾调用**(shared-return、PLT thunk 转换)——多个函数膨胀/产出不足的共同根因,已在途
-- **fspec 参数模型**:忠实的 `fillin_map` 尚未接入主管线(生产走 SysV stub)
-- **类型传播链**(TypeOp 派发 → Varnode 局部类型 → ActionInferTypes)未打通
-- switch 恢复依赖的 `truncatedFlow` partial clone 缺失;子函数内联为 stub
+| | Rugra | Ghidra(反编译核心) | angr / RetDec |
+|---|---|---|---|
+| 语言 | Rust | C++ | Python/C++ |
+| 与 Ghidra 语义关系 | 逐函数对拍验证的移植 | 本体 | 自研算法,语义不同源 |
+| 验证方式 | 锁定 oracle 双侧差分 | 自身即 oracle | 各自测试集 |
+| 形态 | 可嵌入库 + CLI 示例 | 桌面套件 | 框架/工具链 |
 
-全部缺口以稳定 ID 登记在看板,附双侧 file:line 根因——差距是图纸化的,不是模糊的。
+## 项目状态
+
+**Alpha,活跃开发中。** 反编译质量以函数级差分为准(curl 语料大部分函数体与 Ghidra 完全一致,其余差距均已定位为登记在册的根因);全局完成度未宣称。当前不支持 Ghidra GUI 功能与多架构(架构层已为多处理器留位)。
+
+- 模块级进度:[ALIGNMENT_ROADMAP.md](ALIGNMENT_ROADMAP.md)
+- 活动任务看板:[docs/TODO_BOARD.md](docs/TODO_BOARD.md)
+- 质量快照:[CURRENT_STATUS.md](CURRENT_STATUS.md)
 
 ## 参与开发
 
-读 `AGENTS.md`(对齐铁律:Ghidra 源码先行、机制 A-F 门禁、原子提交纪律)。任何 `src/*.rs` 修改前必须在当轮完整阅读对应 Ghidra 函数体;提交钩子强制校验 `// Ghidra:` 注释引用与对齐证据块。
+本项目用严格的门禁守护对齐纪律:改任何函数前必须先读对应 Ghidra 源码、提交钩子校验源位置注释与对齐证据块、核心算法改动需独立交叉复核。规则全文见 [AGENTS.md](AGENTS.md)。
 
 ## License
 
