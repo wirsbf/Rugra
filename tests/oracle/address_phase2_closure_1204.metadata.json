@@ -123,7 +123,7 @@
   "comparand": {
     "pinned_base_commit": "4f42981d2ed723e6ac53ebb787d90f4b89e889df",
     "pinned_base_tree": "17fd780210a7139a8b3dc30459e627b1926d763e",
-    "snapshot_scope": "entire tracked tree at pinned_base_commit plus only this Rust fixture",
+    "snapshot_scope": "entire tracked tree at the verified pinned_base_commit/tree; C++/Rust fixtures, metadata, and runner are captured once as validated overlays, and only the Rust fixture enters the Rugra source compilation",
     "source_blobs": {
       "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
       "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
@@ -139,7 +139,7 @@
     },
     "cpp_fixture_sha256": "f4d2aefba2ab51d38ced655f11f160d45552a64be7cb205ccc6d759690ebddfd",
     "rust_fixture_sha256": "bea3776e22b0923a604bbfa3bbee45324c8dbf8e362a4f93c8823666e1a9b566",
-    "runner_sha256": "aefc7dea7b8cafcfdcaa6d4f5c4eecd7a64a633b113cae15769ea20f6f3b2986"
+    "runner_sha256": "561d770e44f2507337f4fbee44811d81d97a92fb125c9ba6e5ab302dff7e1c4e"
   },
   "decisive_semantics": {
     "references_outputs": "Op identities are pointer/Arc identities labeled once; target and parent fields refer back to those identities. FlowInfo, PcodeOpBank, BlockGraph, and call vectors retain their production alias relationships.",
