@@ -137,8 +137,8 @@ Rugra: <file>:<line> <对应函数>
 - `src/ruleaction.rs`(Rules 影响 IR 形态)
 
 ```bash
-python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --summary-only
-python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --func <改动函数> -v
+python3 tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c --summary-only
+python3 tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c --func <改动函数> -v
 ```
 
 **判定**:
@@ -146,8 +146,10 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 - `defects>0 或 numbering>0`:commit message 必须含 `## Differential` 块,逐处解释每个缺陷(对齐缺陷 / 已知限制 / 待修)。**未解释的缺陷 = 不可提交。**
 - `skeleton diff>0`:不一定是对齐缺陷(for↔while 等价变换),但需在 `## Differential` 块说明。
 
-> 当前 `tests/golden/ghidra_curl.c` 来自 Ghidra 11.3.2，与锁定的 12.0.4 源码 oracle 不同版。
-> 在 TODO `ORACLE-0002` 重生 12.0.4 golden 前，该文件只是回归信号，不能作为最终对齐证据。
+> 正典 golden 是 `tests/golden/ghidra_curl_1204.c`(12.0.4,与源码 oracle 同版)。
+> `ghidra_curl.c`(11.3.2)仅作历史回归信号。**注意**:compare 的全量 skeleton 数字
+> 受日志噪音影响(stderr 的 `[SYM]`/`[STEP]` 行勿混入 stdout);函数级结论以
+> `--func` 或函数体提取对比为准。
 
 ### 机制 B2 — 逐函数行为差分门禁
 
@@ -233,16 +235,20 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 
 | 文档 | 内容 |
 |---|---|
-| `ALIGNMENT_ROADMAP.md` | L1/L2/L3 全量模块对齐路线图 |
+| `ALIGNMENT_ROADMAP.md` | L1/L2/L3 全量模块对齐路线图(〇节=114 文件架构分类) |
 | `docs/TODO_BOARD.md` | 当前 wave 活动任务、owner/write-set/依赖/验收证据 |
+| `docs/HANDOVER_2026-08-24.md` | **交接文档**:基线验证命令、根因图(RC-A~F 带双侧行号)、salvage 清单、操作套路与坑 |
+| `docs/alignment_docs/PIPELINE_STAGES_1204.md` | **反编译管线完整架构**:78 节点 Action 树、循环/restart/断点机制、稳定切点、阶段投影 |
+| `docs/alignment_docs/HOOK_GUIDE.md` | 机制 E 的 hook 配置与回执操作 |
 | `docs/alignment_audit/FUNCTION_MAP.md` | 锁定 oracle 的逐函数权威账本入口 |
+| `docs/alignment_audit/*_GAPS_*.md` | 6 份跨模块深度审计(jumptable/coreaction/condexe/ruleaction/fspec/flow),逐函数对照+依赖 DAG |
 | `CURRENT_STATUS.md` | 项目整体状态、可靠性评估、当前反编译质量数据 |
 | `GAP_ANALYSIS.md` | 功能鸿沟对比 |
 | `ALIGNMENT_PROGRESS.md` | 类/算法层面的 Ghidra 映射进度 |
-| `docs/VERIFICATION_GUIDE.md` | 对拍验证实操手册 |
-| `docs/alignment_docs/` | 硬核对齐规则(寄存器映射、P-code 对照、HOOK_GUIDE 等) |
+| `docs/VERIFICATION_GUIDE.md` | 对拍验证实操手册(oracle 环境搭建、fixture 跑法) |
+| `docs/alignment_docs/` | 硬核对齐规则(寄存器映射、P-code 对照等)与历史专项报告 |
 | `docs/api/` | 与 `src/` 1:1 映射的 API 参考文档 |
-| `docs/alignment_audit/` | 跨 agent 对齐审计报告 |
+| `ghidra/.../cpp/*.hh` | **Ghidra 自带的权威架构文档**:每个 .hh 头部 doxygen 注释即该子系统的架构描述(铁律 1 的必读物) |
 
 ---
 
@@ -268,6 +274,14 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --su
 - 多 Agent 并发构建为每个 writer 分配独立源码快照；使用共享编译缓存时为各 Agent 分配独立 `CARGO_TARGET_DIR`，使用共享 target 时由主 Agent 调度构建时段。
 - Agent 保留可复用的 Cargo 依赖与增量缓存；临时 benchmark target 使用明确的任务专属路径，并在证据归档后清理该路径。
 - 编译配置优化提交同步记录基线、候选、收益比例、缓存命中条件和正式 release 回归结果；正式 release 与 oracle 差分结果作为语义验收终点。
+
+### 实操坑位备忘(hook/提交/度量)
+
+- **commit message 红词**:`align`/`port`/`对齐`/`faithful` 子串即触发机制 A(连 `RULE-PORT-xxx` 这类 ID 也算);docs-only 提交措辞避开即可,不必硬凑 Evidence 块。
+- **pin 重钉双形态**:fixture 因 src 变更失效时,重钉三件套 = runner shell 变量(commit/tree/**git blob id**)+ metadata comparand(**文件 sha256**)+ overlays 表。`rev-parse` 校验用 blob id、`sha256sum` 校验用文件哈希,两种形态别混。
+- **result/ 回流约定**:每次 E2E 后 `cp /tmp/<run>.log result/curl_cur.c`(gitignored 存档),防陈旧事故。
+- **worktree 惯例**:runner 需 `ghidra -> 主仓/ghidra` symlink(gitignored);GIT_DIR 劫持已修(tools/check_gate_health.py 清环境变量),worktree 提交无需 --no-verify。
+- **oracle 环境**:`/tmp/rugra-ghidra-bfd-2.38` 机器重启即丢;重建用直连 https 拉 binutils-dev deb 解包(**apt 代理不可用**)。
 
 当前反编译质量数据见 `CURRENT_STATUS.md`(不再放 AGENTS.md,避免数据过期)。
 
