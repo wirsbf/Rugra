@@ -1185,3 +1185,16 @@ DWARF overlay `fd.funcp.clone()` 保留已绑定 defaultfp 模型名阻塞（isM
   Deindirect→StackPtrFlow（:5651-5656）；`find_group_recursive` 树查询。
   WIP：pipeline_tree_1204 双侧 fixture 与 stackstall count 反馈 pending；
   参考 docs/alignment_docs/PIPELINE_STAGES_1204.md。
+
+## 精确 action 名与 ctor flags 对齐（2026-08-23，PIPE-DERIVED-TREE-0001）
+
+- 五个 `get_name()` 修正为 Ghidra ctor 字面名：`restructureVarnode`→
+  `restructure_varnode`（coreaction.hh:855）、`unjustifiedparams`→
+  `unjustparams`（:920）、`mappedlocalsync`→`mapped_local_sync`（:869）、
+  `funclinkoutonly`→`funclink_outonly`（:715）、`conditionalconst`→
+  `condconst`（:595）。
+- 三个 `get_flags()` 补齐 ctor rule flag 位：`lanedivide`→
+  RULE_ONCEPERFUNC（coreaction.hh:117）、`donothing`→RULE_REPEATAPPLY
+  （:504）、`normalizesetup`→RULE_ONCEPERFUNC（:630）。
+- 对拍证据：`tools/run_pipeline_tree_oracle.sh` 78 节点 DFS 双侧
+  字节一致（含每个节点的 name/basegroup/flags），overall=MATCH。
