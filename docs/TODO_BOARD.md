@@ -83,12 +83,15 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | LANEDIVIDE-INFRA-0001 | DONE | 3fb7be7→a8bd8d0 | 机制C APPROVE，fixture 91 |
 | DATATYPE-TYPEORDER-RESIDUAL-0001 | DONE | c14dfa9→1180a72 | 机制C APPROVE（证据型） |
 | COMMENT-SORTER-ITERATORS-0001 | DONE | dc6eb2c→d7a9cae | root 验证，fixture 92 |
-| TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | DONE | 7163dec→a5ceae7 | 机制C APPROVE，fixture 4→11 记录升 MATCH |
+| TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | DONE | 7163dec→a5ceae7 |
+| PIPE-STAGE-BISECT-0001 | DONE | 9513f07→d915255 | 纯工具（stage_bisect.py+selftest 13/13+atf 骨架），root selftest 复验通过 |
+| MERGE-CLEAR-LIFECYCLE-0001 | REVIEW | c3b9843+c330dbc（4/6 MATCH，2 MISMATCH 归因 varmap clearUnlocked/fspec returnBytesConsumed） | merge 白名单复核进行中 |
+| PIPE-DERIVED-TREE-0001 + PIPE-STACKSTALL-COUNT-0001 | REVIEW | b40a315+6fe013a+c265a2a（78/78 节点 MATCH + stackstall 不动点 MATCH；发现 ShadowVar 死锁+checkClog 偏移错+NormalizeBranches 不在默认根） | 主管线核心变更，机制C 复核进行中；集成需 E2E 差分门禁 | 机制C APPROVE，fixture 4→11 记录升 MATCH |
 | PRINTC-UNLINKED-REF-0001（printc 域） | DONE | b155b8a→fcc20d2 | 机制 B 门禁通过：E2E defects=0/numbering=0（skeleton 8679，注入组 117→45 行，glob_url 恢复丢失语句与 golden 同形）；68反编译/8超时=共享负载（前后自测一致），wave 收尾低负载复验；残差两件归 varmap 域（explicit 符号化 + 命名期类型前缀）；B2 fixture 待建 |
 | TYPEFACTORY-LOCALTYPE-CACHE-0001 | DONE | f0a7829+9ee59ab→bda7dab | 机制C APPROVE（8 通道穷尽枚举、oracle 手重建验证前缀 sha、排序键逐值核对 24 submeta 表）；type_system:: 106/106；复核域外 3 项登记 TYPEFACTORY-DECODE-SIDENOTES-0001 |
 | RULE-PORT-COLLAPSECONSTANTS-0001 | DONE | e9a850d+6399c08→b94e7f4+01aafa2 | 机制C APPROVE（72-live-opcode 独立验证、EquateSymbol 真符号公证、复核者重读全部引用行）；ruleaction:: 180/180；fixture 93；组合树 E2E 门禁通过（defects=0/numbering=0，skeleton 8674）；残差=VARNODE-COPYSYMBOL-EQUATE/FLOAT-OPINT2FLOAT-SIGN/OPBEHAVIOR-SRIGHT-SIZEMASK |
 | JUMPTABLE-GUARDS-0001 | DONE | 07be5cb+2f84e7e→696916d | 机制C APPROVE（六改动逐项 PASS、3/6 MISMATCH 归因独立证实、readOp 遮蔽语义独立验证、复跑 exit0 27/27）；fixture 94；复核域外发现登记 JUMPTABLE-MARKMODEL-0001 |
-| SCOPELOCAL-QUERY-0001 r2 | REVIEW | 3bea8db+31f4046（11/11 MATCH） | varmap 白名单，复核进行中；E2E 差分随 root 跑批 |
+| SCOPELOCAL-QUERY-0001 r2 | DONE | 3bea8db+31f4046→c258bb3 | 机制C APPROVE（包夹怪癖双向独立推演+libstdc++ 源码级验证）；root 微修 varmap.rs:3053 相邻合并死分支（297ba6c）+fixture 重钉链（5df1a34+），runner 复跑 exit0 11/11；E2E v4 跑批中 |
 
 来自 `docs/alignment_audit/CONDEXE_GAPS_2026-08-22.md`（27 函数对照：20 结构 MATCH 全 UNTESTED、
 1 MISSING（buildHeritageArray）、6 MISMATCH；**勘误 roadmap #19**：PathMeld 归因错误（condexe.cc 零引用）、
@@ -119,6 +122,7 @@ httpd 门禁仍走线性扫描（examples/httpd_decompile.rs:261）。
 | `VARNODE-COPYSYMBOL-EQUATE-0001` | P2 | rulefound 交付发现：copy_symbol_if_valid 不区分 EquateSymbol/isValueClose（varnode.rs 保守近似） | `src/varnode.rs`、fixture | varmap/varnode 租约释放后 |
 | `FLOAT-OPINT2FLOAT-SIGN-0001` | P2 | rulefound 交付发现：float_emulate op_int2float 无符号 vs Ghidra sign_extend（float.cc:614） | `src/float_emulate.rs`、fixture | 无 |
 | `OPBEHAVIOR-SRIGHT-SIZEMASK-0001` | P3 | rulefound 交付发现：混合尺寸 SRIGHT mask 语义（SLEIGH 不产，不可观测） | `src/opbehavior.rs` | 排队 |
+| `SCOPELOCAL-QUERY-RESIDUAL-0002` | P1 | 生产消费者接线：funcdata.rs:153 第二份手写 scope_local_find_overlap（等值 tie 答先插入者，oracle 答后插入者）须改委托 varmap 条目 API；mapGlobals/linkSymbol 线程 parent+space；wholeCount/multiEntrySet 无查询可观察未建模 | `src/funcdata.rs`、`src/varmap.rs` | funcdata 租约释放后 |
 | `TYPEFACTORY-DECODE-SIDENOTES-0001` | P3 | typefactory 复核域外发现：decodeEnum 重复值 warning 丢弃（oracle 经 ghidra_process 可见）；<void> 元素臂沿用 panic 版 get_type_void（clear 后遇 <void> 会 panic）；decode_basic size<0 静默归 0 vs oracle throw | `src/type_system/typefactory.rs`、`src/type_system/datatype.rs` | 排队 |
 | `JUMPTABLE-MARKMODEL-0001` | P2 | jtguards 复核域外发现：mark_model 用 get_read_op() 判 skip，oracle markModel（cc:1258-1264）用 getBranch() 判 null——已 clear 的 guard 在 Rugra 仍被 mark；另 value_match/check_unrolled_guard 内联注释行号漂移 | `src/jumptable.rs`、docs | 无 |
 | `RANGE-PULLBACK-SLESS-0001` | P1 | jtguards 交付发现：CircleRange::pull_back_binary 缺 CPUI_INT_SLESS/INT_SLESSEQUAL（rangeutil.cc:882-917），signed 比较守卫拉回失败→守卫记录缺失（jt_guards sc1/sc3 MISMATCH 的根因）；RANGE-0001 家族 | `src/rangeutil.rs`、docs/api/rangeutil.md、fixture | 无 |
