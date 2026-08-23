@@ -15,11 +15,12 @@
 //! 4. Marks unaliased variables for merge eligibility
 
 use std::collections::BTreeMap;
-use crate::varnode::Varnode;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
+use crate::rangemap::{RangeMap, RangeRecord, RangeSubsort};
 use crate::type_system::Datatype;
 use crate::type_system::TypeMetatype;
+use crate::varnode::Varnode;
 use std::sync::{Arc, RwLock};
 
 /// Range type for RangeHint (varmap.hh:RangeType)
@@ -1560,6 +1561,15 @@ pub struct LocalSymbol {
     pub typelock: bool,
     /// Ghidra Symbol::flags & Varnode::namelock (database.hh:183).
     pub namelock: bool,
+    /// Ghidra Symbol::flags & Varnode::addrtied (database.hh:183): set by
+    /// `Scope::addMap` exactly when a static mapping carries an EMPTY
+    /// uselimit (database.cc:1149-1150) and never cleared afterwards, so a
+    /// Symbol with several entries becomes address-tied as soon as ONE entry
+    /// is unrestricted. `SymbolEntry::getSubsort` (database.cc:101) and
+    /// `SymbolEntry::inUse` (database.cc:117) both read this SYMBOL-level
+    /// flag, not the entry's own uselimit. Dynamic symbols never take it
+    /// (addDynamicMapInternal is outside the database.cc:1149 branch).
+    pub addrtied: bool,
     /// First use-point address of the symbol's first SymbolEntry
     /// (database.cc:122 SymbolEntry::getFirstUseAddress); `None` models an
     /// invalid `Address()` (no uselimit range), which `Scope::buildDefaultName`
@@ -1601,6 +1611,7 @@ impl LocalSymbol {
             cat_index: 0,
             typelock: false,
             namelock: false,
+            addrtied: false,
             usepoint: None,
             space: crate::space::AddressSpace::Stack,
             is_dynamic: false,
@@ -1615,6 +1626,139 @@ impl LocalSymbol {
     pub fn is_name_undefined(&self) -> bool {
         self.name.len() == 15 && self.name.starts_with("$$undef")
     }
+}
+
+// RUGRA-GLUE: canonical Ghidra space indices for the locked x86-64 oracle.
+/// Index of an address space in the locked BfdArchitecture
+/// (x86:LE:64:default:gcc). Ghidra assigns indices in space-creation order;
+/// the live oracle prints const=0, unique=2, ram=3, stack=8
+/// (tests/oracle/scopelocal_query_1204 setup record). These constants feed
+/// `EntrySubsort` comparisons (database.hh:109) — only the uselimit
+/// spaces (ram code space, and any cross-space uselimit range) participate,
+/// so the unverified Register/Join/Iop/Overlay/Other values are inert (a
+/// storage space never reaches a subsort). Migrating to the registry-backed
+/// space model is the ADDRESS-0001 / SPACE-0001 residual.
+pub fn ghidra_space_index(space: &crate::space::AddressSpace) -> i32 {
+    match space {
+        crate::space::AddressSpace::Const => 0,
+        crate::space::AddressSpace::Unique => 2,
+        crate::space::AddressSpace::Ram => 3,
+        crate::space::AddressSpace::Stack => 8,
+        crate::space::AddressSpace::Register => 4,
+        crate::space::AddressSpace::Join => 9,
+        crate::space::AddressSpace::Iop => 10,
+        crate::space::AddressSpace::Overlay => 11,
+        crate::space::AddressSpace::Other(_) => 12,
+    }
+}
+
+/// Ghidra SymbolEntry::EntrySubsort (database.hh:107-134): the sub-sort key
+/// ordering the SymbolEntry records that share one common-refinement
+/// partition unit. Comparison is `useindex` first, then `useoffset`
+/// (database.hh:129-133). `minimum()` is the default-constructed "earliest
+/// possible sub-sort" (database.hh:114) held by address-tied entries;
+/// `maximum()` is the `EntrySubsort(true)` "latest possible" bound
+/// (database.hh:119-122, useindex 0xffff > any real space index).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EntrySubsort {
+    /// Index of the sub-sorting address space (database.hh:109).
+    pub useindex: i32,
+    /// Offset into the sub-sorting address space (database.hh:110).
+    pub useoffset: u64,
+}
+
+impl RangeSubsort for EntrySubsort {
+    // Ghidra: database.hh:114 EntrySubsort::EntrySubsort(void)
+    /// The earliest possible sub-sort: useindex 0, useoffset 0.
+    fn minimum() -> Self {
+        EntrySubsort { useindex: 0, useoffset: 0 }
+    }
+
+    // Ghidra: database.hh:119 EntrySubsort::EntrySubsort(bool)
+    /// The latest possible sub-sort: useindex 0xffff exceeds every real
+    /// space index, so the never-written useoffset is never compared.
+    fn maximum() -> Self {
+        EntrySubsort { useindex: 0xffff, useoffset: 0 }
+    }
+}
+
+/// One static SymbolEntry mapping of a local Symbol (database.hh:75-163):
+/// `[start, start+size-1]` in `space`, covering `offset..offset+size` of the
+/// Symbol (partial pieces carry `offset > 0`), with a uselimit of code-space
+/// ranges (empty = unrestricted = address-tied symbol). This is the record
+/// type of the scope's per-space rangemap (`EntryMap`,
+/// database.hh:164) — one Symbol can own several entries
+/// (Symbol::mapentry, database.hh:189), and queries observe ENTRIES, not
+/// symbols.
+#[derive(Clone, Debug)]
+pub struct LocalMapEntry {
+    /// Index into `ScopeLocal::symbols` of the mapped Symbol.
+    pub sym: usize,
+    /// Storage space of this mapping (`SymbolEntry::addr`'s space).
+    pub space: crate::space::AddressSpace,
+    /// `SymbolEntry::getFirst` (database.hh:146): first offset of the storage.
+    pub start: u64,
+    /// `SymbolEntry::getSize` (database.hh:152): bytes consumed by this piece.
+    pub size: i32,
+    /// `SymbolEntry::getOffset` (database.hh:145): offset of this piece
+    /// within the whole Symbol (partial-offset pieces carry `offset > 0`).
+    pub offset: i32,
+    /// `SymbolEntry::extraflags` (database.hh:78): Varnode flags specific to
+    /// this storage location (`Varnode::mapped` for whole maps,
+    /// precislo/precishi for join pieces).
+    pub extraflags: u32,
+    /// `SymbolEntry::uselimit` (database.hh:83) as sorted inclusive ranges
+    /// `(space index, first, last)`; empty = valid across all code.
+    pub uselimit: Vec<(i32, u64, u64)>,
+    /// Sub-sort frozen at insertion, exactly as `rangemap::insert` calls
+    /// `getSubsort()` once per record (rangemap.hh:238).
+    pub subsort: EntrySubsort,
+}
+
+impl RangeRecord for LocalMapEntry {
+    type Subsort = EntrySubsort;
+
+    // Ghidra: database.hh:146 SymbolEntry::getFirst
+    fn first(&self) -> u64 {
+        self.start
+    }
+
+    // Ghidra: database.hh:147 SymbolEntry::getLast
+    fn last(&self) -> u64 {
+        self.start.wrapping_add(self.size.max(0) as u64).wrapping_sub(1)
+    }
+
+    // Ghidra: rangemap.hh:36 recordtype::getSubsort
+    fn subsort(&self) -> Self::Subsort {
+        self.subsort.clone()
+    }
+}
+
+/// Which scope ended the `stackContainer` walk (database.cc:953-961): the
+/// scope whose `findContainer` answered, the scope that owns the range
+/// ("discovery of new variable"), or neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryFinalScope {
+    /// No scope answered and none owns the range (database.cc:961).
+    None,
+    /// This (querying) scope answered or owns the range.
+    This,
+    /// The parent scope answered or owns the range.
+    Parent,
+}
+
+/// Observable outcome of `Scope::queryProperties` (database.cc:1263-1281):
+/// the answering SymbolEntry (if any) plus the `uint4 &flags` side-output
+/// computed along the oracle's three branches.
+#[derive(Clone, Debug)]
+pub struct QueryPropertiesOutcome {
+    /// The smallest containing in-use SymbolEntry, or None.
+    pub entry: Option<LocalMapEntry>,
+    /// `res->getAllFlags()` / scope-derived / property-only flags
+    /// (database.cc:1270, 1273-1276, 1279).
+    pub flags: u32,
+    /// Which scope terminated the stackContainer walk.
+    pub final_scope: QueryFinalScope,
 }
 
 /// ScopeLocal: the local variable scope for a function.
@@ -1676,6 +1820,23 @@ pub struct ScopeLocal {
     /// whole action pipeline for the function; the buffered text preserves
     /// the exact message for the caller's abort channel (F3).
     pub pending_lowlevel_error: Option<String>,
+    /// Ghidra ScopeInternal::maptable (database.hh:807) as an
+    /// insertion-ordered log of static SymbolEntry records across all
+    /// spaces. The per-space `rangemap<SymbolEntry>` view is materialized
+    /// per query (see `materialize_maptable`) because `ScopeLocal: Clone`
+    /// (printc.rs copies the scope) cannot own the non-Clone `RangeMap`;
+    /// re-inserting the log in order reproduces the oracle's multiset
+    /// state (equal keys keep insertion order, and erase keeps the
+    /// survivors' relative order), verified by
+    /// tests/oracle/scopelocal_query_1204 removal cases.
+    pub mapentry_log: Vec<LocalMapEntry>,
+    /// Ghidra Scope::isGlobal (database.hh:34): a ScopeLocal is never
+    /// global, but the parent-scope mirror threaded through
+    /// `query_properties_ex` models the global scope (persist flag on its
+    /// symbols, database.cc:1131-1132, and the persist bit of the
+    /// no-symbol branch, database.cc:1274-1275). Production ScopeLocal
+    /// instances keep this false.
+    pub is_global_scope: bool,
 }
 
 impl ScopeLocal {
@@ -1700,6 +1861,8 @@ impl ScopeLocal {
             register_names: std::collections::BTreeMap::new(),
             pending_warnings: Vec::new(),
             pending_lowlevel_error: None,
+            mapentry_log: Vec::new(),
+            is_global_scope: false,
         }
     }
 
@@ -1773,10 +1936,16 @@ impl ScopeLocal {
 
     // Ghidra: database.cc:2138 ScopeInternal::removeSymbol
     /// Remove the symbol: null its category slot (popping trailing nulls,
-    /// database.cc:2141-2146), drop its mappings, and erase it from the
-    /// nametree (database.cc:2147-2149). The Vec-based storage re-keys every
-    /// nametree/category index above the hole down by one.
-    fn remove_symbol(&mut self, idx: usize) {
+    /// database.cc:2141-2146), drop its mappings (removeSymbolMappings,
+    /// database.cc:2117-2136 — every maptable entry of the symbol, dynamic
+    /// entries excluded from the static log by construction), and erase it
+    /// from the nametree (database.cc:2147-2149). The Vec-based storage
+    /// re-keys every nametree/category/entry-log reference above the hole
+    /// down by one; entry-log survivors keep their relative order — the
+    /// multiset equivalent-element order `rangemap::erase` preserves.
+    /// (Public: `Scope::removeSymbol` is a public oracle entry point —
+    /// database.hh:601 — and the locked fixture drives it directly.)
+    pub fn remove_symbol(&mut self, idx: usize) {
         let key = (self.symbols[idx].name.clone(), self.symbols[idx].name_dedup);
         if self.symbols[idx].category >= 0 {
             let cat = self.symbols[idx].category as usize;
@@ -1802,6 +1971,12 @@ impl ScopeLocal {
                 if *slot > idx {
                     *slot -= 1;
                 }
+            }
+        }
+        self.mapentry_log.retain(|entry| entry.sym != idx);
+        for entry in &mut self.mapentry_log {
+            if entry.sym > idx {
+                entry.sym -= 1;
             }
         }
     }
@@ -1832,153 +2007,290 @@ impl ScopeLocal {
     }
 
     // Ghidra: database.cc:2392 ScopeInternal::findOverlap
-    /// First Symbol of the scope overlapping `[offset, offset+size-1]` in
-    /// the given space — the canonical `ScopeInternal::findOverlap`
-    /// (database.cc:2392-2403). The oracle consults the space's EntryMap (a
-    /// `rangemap<SymbolEntry>`, database.hh:164), whose multiset is keyed by
-    /// `(last, subsort)` (rangemap.hh:88-91) and whose entries duplicate each
-    /// common-refinement partition unit for every record covering it.
-    /// `find_overlap(point, end)` (rangemap.hh:411-423) does
-    /// `lower_bound(AddrRange(point))` — the first sub-range whose `last >=
-    /// point`, i.e. the leftmost partition unit intersecting the query (the
-    /// unit containing `point` when covered, else the first unit starting
-    /// after `point`) — and returns it iff its `first <= end`. All records
-    /// covering that unit cover the whole unit, so the returned record is
-    /// the one with the smallest `SymbolEntry::getSubsort()`
-    /// (database.cc:97-107); ties on an identical subsort keep Vec order,
-    /// standing in for `std::multiset` insertion order of equivalent keys.
+    /// First SymbolEntry of the scope overlapping
+    /// `[offset, offset+size-1]` in the given space — the canonical
+    /// `ScopeInternal::findOverlap` (database.cc:2392-2403). The oracle
+    /// consults the space's EntryMap (a `rangemap<SymbolEntry>`,
+    /// database.hh:164), whose multiset is keyed by `(last, subsort)`
+    /// (rangemap.hh:88-91): `find_overlap(point, end)`
+    /// (rangemap.hh:411-423) lower-bounds on the first sub-range whose
+    /// `last >= point` — the leftmost partition unit intersecting the query
+    /// — and returns its record iff the unit's `first <= end`. Delegation to
+    /// `RangeMap::find_overlap` (oracle-proven by
+    /// RANGEMAP-COMMON-REFINEMENT-0001) reproduces the traversal order and
+    /// the equal-(last,subsort) insertion-order tie-break exactly; the
+    /// per-query materialization replays `mapentry_log` in insertion order.
     /// Dynamic entries never enter the static map table
     /// (`addDynamicMapInternal` database.cc:1874-1886 pushes to
-    /// `dynamicentry`, not maptable), so they are filtered first (F2,
-    /// SCOPE-FINDOVERLAP-KEY-0001). Returns the symbol index, mirroring the
-    /// non-null `SymbolEntry*` return.
+    /// `dynamicentry`, not maptable), so they are invisible (F2,
+    /// SCOPE-FINDOVERLAP-DYNAMIC-0001). Returns the symbol index, mirroring
+    /// the non-null `SymbolEntry*` return.
     pub fn find_overlap(
         &self,
         space: crate::space::AddressSpace,
         offset: u64,
         size: i32,
     ) -> Option<usize> {
-        let last = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
-        // Records in this space's EntryMap: (first, last) inclusive.
-        let candidates: Vec<usize> = self
-            .symbols
-            .iter()
-            .enumerate()
-            .filter(|(_, sym)| !sym.is_dynamic && sym.space == space && sym.size > 0)
-            .filter(|(_, sym)| {
-                let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
-                sym.start <= last && offset <= sym_end
-            })
-            .map(|(idx, _)| idx)
-            .collect();
-        // rangemap.hh:418: iter = tree.lower_bound(AddrRange(point)) — the
-        // first sub-range with last >= point, i.e. the leftmost partition
-        // unit intersecting the query. Units before it all end before
-        // point, so every address in [point, unit.first) is uncovered: the
-        // unit starts at the smallest address of [point,end] covered by any
-        // record — the minimum over intersecting records of max(start, point).
-        let hit_address = candidates
-            .iter()
-            .map(|&idx| self.symbols[idx].start.max(offset))
-            .min()?;
-        // rangemap.hh:420-421: if ((*iter).first <= end) return iter; —
-        // among the records covering the unit (== records covering
-        // hit_address), the multiset order picks the smallest subsort;
-        // equal subsorts keep Vec order (std::multiset insertion order of
-        // equivalent keys).
-        candidates
-            .iter()
-            .copied()
-            .filter(|&idx| {
-                let sym = &self.symbols[idx];
-                sym.start <= hit_address && hit_address < sym.start.wrapping_add(sym.size as u64)
-            })
-            .min_by_key(|&idx| Self::entry_subsort_key(&self.symbols[idx]))
+        self.find_overlap_entry(space, offset, size).map(|entry| entry.sym)
+    }
+
+    // Ghidra: database.cc:2392 ScopeInternal::findOverlap
+    /// Entry-returning form of `find_overlap` (the oracle returns the
+    /// `SymbolEntry*` itself; Rugra's symbol-index form is the production
+    /// seam). Same traversal and tie-break as `find_overlap`.
+    pub fn find_overlap_entry(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        size: i32,
+    ) -> Option<LocalMapEntry> {
+        let end = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
+        self.materialize_maptable(space)
+            .find_overlap(offset, end)
+            .cloned()
     }
 
     // Ghidra: database.cc:97 SymbolEntry::getSubsort
-    /// Sub-sort key of a SymbolEntry within one partition unit, faithful to
+    /// Sub-sort of a mapping frozen at insertion time, faithful to
     /// `SymbolEntry::getSubsort` (database.cc:97-107) +
-    /// `EntrySubsort::operator<` (database.hh:107-135): the minimal subsort
-    /// (0,0) for address-tied storage (the symbol flag set when the mapping
-    /// has an empty uselimit, database.cc:1148-1150, modeled by
-    /// `usepoint == None`), else `(useindex, useoffset)` of the first
-    /// uselimit range. Rugra's LocalSymbol.usepoint carries only the offset,
-    /// and every static mapping's uselimit lives in the (single) code space,
-    /// so the index component is uniform and modeled as the constant 1
-    /// (> the minimal index 0).
-    fn entry_subsort_key(sym: &LocalSymbol) -> (u8, u64) {
-        match sym.usepoint {
-            None => (0, 0),
-            Some(usepoint) => (1, usepoint),
+    /// `EntrySubsort::operator<` (database.hh:129-133): the minimal subsort
+    /// (0,0) when the SYMBOL is address-tied (the flag `Scope::addMap` sets
+    /// for an empty uselimit, database.cc:1149-1150), else `(useindex,
+    /// useoffset)` of the first uselimit range (RangeList order: space index
+    /// first, then offset — address.hh:202-205). A non-addrtied entry with
+    /// an empty uselimit would hit the oracle's
+    /// `LowlevelError("Map entry with empty uselimit")` (database.cc:104);
+    /// constructors in this module never produce one, and the minimal
+    /// fallback mirrors the address-tied shape.
+    fn entry_subsort(addrtied: bool, uselimit: &[(i32, u64, u64)]) -> EntrySubsort {
+        if addrtied {
+            return EntrySubsort::minimum();
         }
+        match uselimit.first() {
+            None => EntrySubsort::minimum(),
+            Some(&(useindex, useoffset, _)) => EntrySubsort { useindex, useoffset },
+        }
+    }
+
+    // RUGRA-GLUE: per-query materialization of the space's EntryMap.
+    /// Build `maptable[space]` (database.hh:807) by replaying the static
+    /// entry log in insertion order into the oracle-proven `RangeMap`.
+    /// Equal-(last,subsort) keys keep insertion order (std::multiset
+    /// equivalent-element order), and removal-driven rebuilds replay the
+    /// survivors in original order — the state `rangemap::erase` leaves.
+    fn materialize_maptable(&self, space: crate::space::AddressSpace) -> RangeMap<LocalMapEntry> {
+        let mut rangemap = RangeMap::new();
+        for entry in &self.mapentry_log {
+            if entry.space == space {
+                rangemap.insert(entry.clone());
+            }
+        }
+        rangemap
+    }
+
+    // Ghidra: database.cc:114 SymbolEntry::inUse
+    /// Is a mapping valid at `usepoint`? Faithful to `SymbolEntry::inUse`
+    /// (database.cc:114-120): an address-tied SYMBOL is valid throughout the
+    /// scope; an invalid usepoint (None) admits nothing else; otherwise some
+    /// uselimit range in the usepoint's space must contain the offset
+    /// (`RangeList::inRange`, address.cc:483, compares the containing
+    /// range's space). `usepoint` is a code-space offset (the only space
+    /// production queries pass).
+    fn entry_in_use(&self, entry: &LocalMapEntry, usepoint: Option<u64>) -> bool {
+        if self.symbols[entry.sym].addrtied {
+            return true; // database.cc:117
+        }
+        let Some(up) = usepoint else {
+            return false; // database.cc:118
+        };
+        let code_index = ghidra_space_index(&crate::space::AddressSpace::Ram);
+        entry
+            .uselimit
+            .iter()
+            .any(|&(idx, first, last)| idx == code_index && first <= up && up <= last)
+    }
+
+    // Ghidra: database.hh:271 SymbolEntry::getAllFlags
+    /// Union of the entry's extraflags and the Symbol's flags, faithful to
+    /// `getAllFlags` (database.hh:271-273): `extraflags | symbol->getFlags()`.
+    /// The Symbol flags modeled here are addrtied (database.cc:1150),
+    /// typelock/namelock, and persist for global-scope symbols
+    /// (database.cc:1131-1132); readonly/volatile property bits folded into
+    /// the symbol at addMap (database.cc:1153) are the Database flagbase
+    /// residual (DB-LOCALSCOPE-MAP-0001).
+    fn entry_all_flags(&self, entry: &LocalMapEntry) -> u32 {
+        use crate::varnode::varnode_flags;
+        let sym = &self.symbols[entry.sym];
+        let mut flags = entry.extraflags;
+        if sym.addrtied {
+            flags |= varnode_flags::ADDRTIED;
+        }
+        if sym.typelock {
+            flags |= varnode_flags::TYPELOCK;
+        }
+        if sym.namelock {
+            flags |= varnode_flags::NAMELOCK;
+        }
+        if self.is_global_scope {
+            flags |= varnode_flags::PERSIST;
+        }
+        flags
+    }
+
+    // Ghidra: database.hh:597 Scope::inScope
+    /// Does this scope OWN `[offset, offset+size-1]`? Faithful to
+    /// `Scope::inScope` (database.hh:597-598: `rangetree.inRange(addr,size)`,
+    /// full containment — address.cc:484): the ownership tree is modeled by
+    /// `local_range`, which holds this scope's primary-space ranges (the
+    /// local window for a ScopeLocal, the global ranges for the parent
+    /// mirror), so other spaces report false.
+    pub fn in_scope(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        size: i64,
+    ) -> bool {
+        if space != self.space {
+            return false;
+        }
+        let end = offset.wrapping_add(size.max(1) as u64).wrapping_sub(1);
+        self.local_range
+            .iter()
+            .any(|&(first, last)| first <= offset && end <= last)
     }
 
     // Ghidra: database.cc:1263 Scope::queryProperties (via findContainer,
     // database.cc:2250, with an INVALID usepoint — funcdata_varnode.cc:1699)
-    /// Does a static address-tied Symbol contain `[offset, offset+size-1]`?
-    /// The boolean form of the `mapGlobals` queryProperties probe
-    /// (funcdata_varnode.cc:1697-1701: `localmap->queryProperties(addr,1,
-    /// Address(), fl)`): `findContainer` with an invalid usepoint admits
-    /// only address-tied entries (`SymbolEntry::inUse`,
-    /// database.cc:114-120), and dynamic entries are not in the address
-    /// range map (F2, database.cc:1874-1886).
-    ///
-    /// (The probe's space dimension — Ghidra's
-    /// `maptable[addr.getSpace()->getIndex()]` — cannot be keyed here: the
-    /// frozen signature is shared with the funcdata.rs map_globals caller.
-    /// Residual: thread the query space through Funcdata::map_globals.)
+    /// Does a static address-tied SymbolEntry contain
+    /// `[offset, offset+size-1]` in the given space? The boolean form of the
+    /// `mapGlobals` queryProperties probe (funcdata_varnode.cc:1697-1701:
+    /// `localmap->queryProperties(addr,1,Address(),fl)`): `findContainer`
+    /// with an invalid usepoint admits only address-tied entries
+    /// (`SymbolEntry::inUse`, database.cc:114-120), and dynamic entries are
+    /// not in the address range map (F2, database.cc:1874-1886).
+    pub fn has_overlap_in(&self, space: crate::space::AddressSpace, offset: u64, size: i32) -> bool {
+        self.find_container_entry(space, offset, size as i64, None)
+            .is_some()
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties (findContainer chain)
+    /// Backward-compatible `mapGlobals` probe whose frozen signature
+    /// (funcdata.rs, off-lease this round) carries no space: consult every
+    /// space holding entries, preserving the legacy any-space contract.
+    /// Threading the varnode's real space through the funcdata caller is
+    /// the production-consumer residual (SCOPELOCAL-QUERY-0001 r2 /
+    /// FUNCDATA-LOCALSCOPE-OWNERSHIP-0001 chain).
     pub fn has_overlap(&self, offset: u64, size: i32) -> bool {
-        let last = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
-        self.symbols.iter().any(|sym| {
-            !sym.is_dynamic
-                && sym.usepoint.is_none() // inUse(invalid) == isAddrTied()
-                && sym.size > 0 && {
-                    let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
-                    sym.start <= offset && last <= sym_end
-                }
-        })
+        let spaces: Vec<crate::space::AddressSpace> = self
+            .mapentry_log
+            .iter()
+            .map(|entry| entry.space)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        spaces
+            .iter()
+            .any(|&space| self.has_overlap_in(space, offset, size))
     }
 
     // Ghidra: database.cc:2224 ScopeInternal::findAddr
-    /// Find the Symbol whose mapping STARTS exactly at `offset` in the given
-    /// space and is valid at `usepoint`. Faithful to
-    /// `ScopeInternal::findAddr` (database.cc:2224-2248): the partition unit
-    /// containing `offset` is scanned in DESCENDING subsort order
-    /// (the `--res.second` walk over the `find(offset, subsorttype(false),
-    /// subsorttype(usepoint-or-true))` window), so among equally-subsorted
-    /// exact-start entries the LAST inserted wins; `inUse` (an unrestricted
-    /// uselimit admits everything, a restricted one admits exactly its
-    /// single-address range — `None` queries admit only address-tied
-    /// entries) gates the return. Dynamic entries are address-unsearchable
-    /// (F2, database.cc:1874-1886). Returns the symbol index.
+    /// Find the SymbolEntry whose mapping STARTS exactly at `offset` in the
+    /// given space and is valid at `usepoint`. Faithful to
+    /// `ScopeInternal::findAddr` (database.cc:2224-2248): the
+    /// `find(offset, subsorttype(false), subsorttype(usepoint-or-true))`
+    /// window (rangemap.hh:355-369) is walked with `--res.second` —
+    /// DESCENDING multiset order over the partition unit containing
+    /// `offset` — returning the first exact-start entry that passes
+    /// `inUse`. Delegation to `RangeMap::find_with_subsort(...).rev()`
+    /// reproduces both the subsort bound (an entry whose first uselimit
+    /// range sorts after the usepoint never enters the window) and the
+    /// equal-subsort tie-break (the LAST inserted wins, multiset reverse
+    /// order). `usepoint` is a code-space offset; None models the invalid
+    /// `Address()` for which only address-tied entries are in use.
+    /// Dynamic entries are address-unsearchable (F2, database.cc:1874-1886).
+    /// Returns the symbol index.
     pub fn find_addr(
         &self,
         space: crate::space::AddressSpace,
         offset: u64,
         usepoint: Option<u64>,
     ) -> Option<usize> {
-        // Exact-start static candidates of the queried space's EntryMap.
-        let mut candidates: Vec<usize> = self
-            .symbols
-            .iter()
-            .enumerate()
-            .filter(|(_, sym)| !sym.is_dynamic && sym.space == space && sym.size > 0)
-            .filter(|(_, sym)| sym.start == offset)
-            .filter(|(_, sym)| match (sym.usepoint, usepoint) {
-                // isAddrTied() -> valid throughout scope (database.cc:117)
-                (None, _) => true,
-                // usepoint.isInvalid() -> false for restricted entries
-                // (database.cc:118)
-                (Some(_), None) => false,
-                (Some(up), Some(query)) => up == query,
-            })
-            .map(|(idx, _)| idx)
-            .collect();
-        // Backward multiset walk: descending subsort, equivalent keys in
-        // reverse insertion order (the last inserted wins).
-        candidates.sort_by_key(|&idx| Self::entry_subsort_key(&self.symbols[idx]));
-        candidates.pop()
+        self.find_addr_entry(space, offset, usepoint).map(|entry| entry.sym)
+    }
+
+    // Ghidra: database.cc:2224 ScopeInternal::findAddr
+    /// Entry-returning form of `find_addr` (the oracle returns the
+    /// `SymbolEntry*`). Same window walk, subsort bound, and tie-break.
+    pub fn find_addr_entry(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        usepoint: Option<u64>,
+    ) -> Option<LocalMapEntry> {
+        let rangemap = self.materialize_maptable(space);
+        let sub2 = match usepoint {
+            None => EntrySubsort::maximum(), // database.cc:2232-2233
+            Some(up) => EntrySubsort {
+                useindex: ghidra_space_index(&crate::space::AddressSpace::Ram),
+                useoffset: up,
+            }, // database.cc:2237 EntrySubsort(usepoint)
+        };
+        let sub1 = EntrySubsort::minimum();
+        for entry in rangemap.find_with_subsort(offset, &sub1, &sub2).rev() {
+            if entry.start == offset && self.entry_in_use(entry, usepoint) {
+                return Some(entry.clone()); // database.cc:2241-2244
+            }
+        }
+        None
+    }
+
+    // Ghidra: database.cc:2250 ScopeInternal::findContainer
+    /// Find the smallest SymbolEntry that fully contains
+    /// `[offset, offset+size-1]` in the given space and is valid at
+    /// `usepoint`. Faithful to `ScopeInternal::findContainer`
+    /// (database.cc:2250-2282): the same subsort-bounded window as
+    /// `findAddr` walked in DESCENDING multiset order; an entry replaces
+    /// the best only on a STRICTLY smaller size (database.cc:2271), and an
+    /// exact-size hit short-circuits the walk (database.cc:2274) — so among
+    /// equally-sized containers the LARGEST subsort (first met in the
+    /// backward walk) wins, and equal-(last,subsort) entries resolve to the
+    /// LAST inserted. `oldsize` is updated only after an in-use accept.
+    pub fn find_container_entry(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        size: i64,
+        usepoint: Option<u64>,
+    ) -> Option<LocalMapEntry> {
+        let rangemap = self.materialize_maptable(space);
+        let sub2 = match usepoint {
+            None => EntrySubsort::maximum(),
+            Some(up) => EntrySubsort {
+                useindex: ghidra_space_index(&crate::space::AddressSpace::Ram),
+                useoffset: up,
+            },
+        };
+        let sub1 = EntrySubsort::minimum();
+        let end = offset.wrapping_add(size.max(0) as u64).wrapping_sub(1);
+        let mut best: Option<LocalMapEntry> = None;
+        let mut oldsize: i64 = -1;
+        for entry in rangemap.find_with_subsort(offset, &sub1, &sub2).rev() {
+            if entry.last() < end {
+                continue; // database.cc:2270 — must contain the whole range
+            }
+            let entry_size = entry.size as i64;
+            if entry_size < oldsize || oldsize == -1 {
+                // database.cc:2271
+                if self.entry_in_use(entry, usepoint) {
+                    best = Some(entry.clone());
+                    if entry_size == size {
+                        break; // database.cc:2274
+                    }
+                    oldsize = entry_size;
+                }
+            }
+        }
+        best
     }
 
     // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode
@@ -1990,6 +2302,7 @@ impl ScopeLocal {
         self.symbols.clear();
         self.nametree.clear();
         self.category_lists.clear();
+        self.mapentry_log.clear();
         self.overlap_problems = false;
         self.pending_warnings.clear();
         self.pending_lowlevel_error = None;
@@ -2691,6 +3004,110 @@ impl ScopeLocal {
         sym.size = size;
         self.symbols.push(sym);
         self.insert_name_tree(idx);
+        // addMapPoint (database.cc:1548-1557): a valid usepoint restricts the
+        // uselimit to that single address, then Scope::addMap (via
+        // addMapInternal, database.cc:1155) installs the static entry with
+        // extraflags = Varnode::mapped.
+        let code_index = ghidra_space_index(&crate::space::AddressSpace::Ram);
+        let uselimit = match usepoint {
+            None => Vec::new(),
+            Some(up) => vec![(code_index, up, up)],
+        };
+        self.add_map_entry(idx, space, start, size, 0, crate::varnode::varnode_flags::MAPPED, uselimit);
+        idx
+    }
+
+    // Ghidra: database.cc:1843 ScopeInternal::addMapInternal
+    /// Install one static SymbolEntry into the scope's maptable (the entry
+    /// log this module materializes per query). Faithful to
+    /// `addMapInternal` (database.cc:1843-1872) + the addMap flag logic
+    /// (database.cc:1149-1155): an EMPTY uselimit sets the Symbol's
+    /// `addrtied` flag before the sub-sort is frozen; the entry's subsort is
+    /// computed once, at insertion (rangemap.hh:238 calls `getSubsort()` on
+    /// the new record); the uselimit ranges are kept sorted by
+    /// `(space index, first)` — the `set<Range>` order of the oracle's
+    /// RangeList (address.hh:202-205) — with adjacent same-space ranges
+    /// merged the way `RangeList::insertRange` merges them. The wrap check
+    /// (database.cc:1855-1861) is the caller's duty
+    /// (`add_fake_input_symbol` keeps the exact LowlevelError text).
+    pub fn add_map_entry(
+        &mut self,
+        sym: usize,
+        space: crate::space::AddressSpace,
+        start: u64,
+        size: i32,
+        offset: i32,
+        extraflags: u32,
+        uselimit: Vec<(i32, u64, u64)>,
+    ) {
+        if uselimit.is_empty() {
+            self.symbols[sym].addrtied = true; // database.cc:1149-1150
+        }
+        let mut ranges = uselimit;
+        ranges.sort_unstable();
+        let mut merged: Vec<(i32, u64, u64)> = Vec::with_capacity(ranges.len());
+        for (idx, first, last) in ranges {
+            // RangeList::insertRange merges adjacent/overlapping ranges in
+            // the same space (address.cc:385-410).
+            if let Some(&(prev_idx, _, prev_last)) = merged.last() {
+                if idx == prev_idx && prev_last.wrapping_add(1) >= first {
+                    if last > prev_last {
+                        merged.last_mut().unwrap().2 = last;
+                    }
+                    continue;
+                }
+            }
+            merged.push((idx, first, last));
+        }
+        let subsort = Self::entry_subsort(self.symbols[sym].addrtied, &merged);
+        self.mapentry_log.push(LocalMapEntry {
+            sym,
+            space,
+            start,
+            size,
+            offset,
+            extraflags,
+            uselimit: merged,
+            subsort,
+        });
+    }
+
+    // Ghidra: database.cc:1530 Scope::addSymbol
+    /// Install a fully-formed LocalSymbol with its primary mapping — the
+    /// fixture/test construction path mirroring `Scope::addSymbol` +
+    /// `addMapPoint`: the symbol joins the nametree and its static entry is
+    /// derived from the mirror fields (space/start/usepoint; a dynamic
+    /// symbol takes NO static entry, database.cc:1874-1886). Production
+    /// construction goes through `add_symbol`/`add_dynamic_symbol`.
+    pub fn install_symbol(&mut self, sym: LocalSymbol) -> usize {
+        let idx = self.symbols.len();
+        let space = sym.space;
+        let start = sym.start;
+        let size = sym.size;
+        let usepoint = sym.usepoint;
+        let is_dynamic = sym.is_dynamic;
+        let mut sym = sym;
+        // Single-entry equivalence of the addMap flag rule
+        // (database.cc:1149-1150).
+        sym.addrtied = usepoint.is_none() && !is_dynamic;
+        self.symbols.push(sym);
+        self.insert_name_tree(idx);
+        if !is_dynamic {
+            let code_index = ghidra_space_index(&crate::space::AddressSpace::Ram);
+            let uselimit = match usepoint {
+                None => Vec::new(),
+                Some(up) => vec![(code_index, up, up)],
+            };
+            self.add_map_entry(
+                idx,
+                space,
+                start,
+                size,
+                0,
+                crate::varnode::varnode_flags::MAPPED,
+                uselimit,
+            );
+        }
         idx
     }
 
@@ -2729,16 +3146,15 @@ impl ScopeLocal {
     }
 
     // Ghidra: database.cc:1263 Scope::queryProperties
-    /// Find the smallest static Symbol whose storage contains
+    /// Find the smallest static SymbolEntry whose storage contains
     /// `[offset, offset+size)` in the given space and whose use-limit admits
-    /// `usepoint`. Faithful to `Scope::queryProperties`
-    /// (database.cc:1263-1281, via `stackContainer`) restricted to this local
-    /// scope: the `flags` side-output is dropped (the only linkSymbol caller
-    /// ignores it), dynamic entries are address-unsearchable
-    /// (database.cc:1668 keeps them out of the static map table), and an
-    /// unrestricted use-limit (invalid usepoint at `addMapPoint`,
-    /// database.cc:1552-1555) admits every usepoint. Returns the symbol
-    /// index, mirroring the non-null `SymbolEntry*` return.
+    /// `usepoint` — the `linkSymbol` projection of `Scope::queryProperties`
+    /// (database.cc:1263-1281) restricted to this local scope: production
+    /// has no parent-scope handle (the Database unification gap,
+    /// DB-LOCALSCOPE-MAP-0001), and the flags side-output has no linkSymbol
+    /// consumer (funcdata_varnode.cc:1169). See `query_properties_ex` for
+    /// the full stackContainer walk. Returns the symbol index, mirroring
+    /// the non-null `SymbolEntry*` return.
     pub fn query_properties(
         &self,
         space: crate::space::AddressSpace,
@@ -2746,57 +3162,100 @@ impl ScopeLocal {
         size: i64,
         usepoint: Option<u64>,
     ) -> Option<usize> {
-        // findContainer (database.cc:2250) walks the partition unit
-        // containing `offset` in DESCENDING multiset order (the
-        // `--res.second` walk, database.cc:2267-2268) and keeps an entry
-        // only on a strictly smaller size — so among equally-sized
-        // containers the entry with the LARGEST EntrySubsort wins. Order
-        // the candidates by ascending subsort (stable: equivalent keys keep
-        // Vec order = multiset insertion order) and walk backwards.
-        let mut candidates: Vec<usize> = self
-            .symbols
-            .iter()
-            .enumerate()
-            .filter(|(_, sym)| {
-                if sym.is_dynamic {
-                    return false; // F2: never in the static map table
+        self.query_properties_ex(space, offset, size, usepoint, None, &|_, _| 0)
+            .entry
+            .map(|entry| entry.sym)
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties (+ database.cc:943
+    // Scope::stackContainer, database.cc:3185 Database::mapScope)
+    /// Full `Scope::queryProperties` walk, faithful to
+    /// database.cc:1263-1281: `mapScope` returns the querying scope when the
+    /// Database resolvemap is empty (database.cc:3187-3188 — no namespace
+    /// scopes in the fixture domain), then `stackContainer`
+    /// (database.cc:943-962) walks this scope and the optional parent:
+    /// `findContainer` at each level, then the scope-ownership
+    /// (`inScope`, database.hh:597) "discovery of new variable" stop. The
+    /// flags side-output follows the oracle's three branches — the answering
+    /// entry's `getAllFlags()` (database.hh:271),
+    /// `mapped|addrtied(|persist for the global scope)|property(addr)` for
+    /// a scope-only answer (database.cc:1273-1276), and the bare Database
+    /// property for no scope at all (database.cc:1279) — with a
+    /// constant-space address short-circuiting to the last branch
+    /// (database.cc:950). `property` models
+    /// `glb->symboltab->getProperty(addr)` (Database::flagbase,
+    /// database.hh:946); production passes the empty lookup.
+    pub fn query_properties_ex(
+        &self,
+        space: crate::space::AddressSpace,
+        offset: u64,
+        size: i64,
+        usepoint: Option<u64>,
+        parent: Option<&ScopeLocal>,
+        property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
+    ) -> QueryPropertiesOutcome {
+        use crate::varnode::varnode_flags;
+        // stackContainer (database.cc:950): a constant address never enters
+        // a scope.
+        if space == crate::space::AddressSpace::Const {
+            return QueryPropertiesOutcome {
+                entry: None,
+                flags: property(space, offset),
+                final_scope: QueryFinalScope::None,
+            };
+        }
+        // database.cc:1268-1270 — this scope's findContainer answers.
+        if let Some(entry) = self.find_container_entry(space, offset, size, usepoint) {
+            let flags = self.entry_all_flags(&entry);
+            return QueryPropertiesOutcome {
+                entry: Some(entry),
+                flags,
+                final_scope: QueryFinalScope::This,
+            };
+        }
+        // database.cc:957-958 + 1271-1277 — scope ownership without a
+        // symbol: mapped|addrtied, persist only for the global scope.
+        if self.in_scope(space, offset, size) {
+            let mut flags = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
+            if self.is_global_scope {
+                flags |= varnode_flags::PERSIST;
+            }
+            flags |= property(space, offset);
+            return QueryPropertiesOutcome {
+                entry: None,
+                flags,
+                final_scope: QueryFinalScope::This,
+            };
+        }
+        // database.cc:959 — walk to the parent scope.
+        if let Some(parent) = parent {
+            if let Some(entry) = parent.find_container_entry(space, offset, size, usepoint) {
+                let flags = parent.entry_all_flags(&entry);
+                return QueryPropertiesOutcome {
+                    entry: Some(entry),
+                    flags,
+                    final_scope: QueryFinalScope::Parent,
+                };
+            }
+            if parent.in_scope(space, offset, size) {
+                let mut flags = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
+                if parent.is_global_scope {
+                    flags |= varnode_flags::PERSIST; // database.cc:1274-1275
                 }
-                if sym.space != space {
-                    return false;
-                }
-                let sym_size = sym.size.max(0) as u64;
-                if sym_size == 0 {
-                    return false;
-                }
-                if offset < sym.start || offset + size as u64 > sym.start + sym_size {
-                    return false;
-                }
-                // SymbolEntry::inUse (database.cc:117-122): an unrestricted
-                // uselimit (None) is valid throughout the scope; a restricted
-                // one admits exactly its single-address range.
-                match (sym.usepoint, usepoint) {
-                    (None, _) => true,
-                    (Some(_), None) => false,
-                    (Some(up), Some(query)) => up == query,
-                }
-            })
-            .map(|(idx, _)| idx)
-            .collect();
-        candidates.sort_by_key(|&idx| Self::entry_subsort_key(&self.symbols[idx]));
-        let mut best: Option<usize> = None;
-        let mut oldsize: i64 = -1;
-        for &idx in candidates.iter().rev() {
-            let entry_size = self.symbols[idx].size as i64;
-            // entry->getSize() < oldsize || oldsize == -1 (database.cc:2271)
-            if entry_size < oldsize || oldsize == -1 {
-                best = Some(idx);
-                if entry_size == size {
-                    break; // database.cc:2274 — exact match short-circuits
-                }
-                oldsize = entry_size;
+                flags |= property(space, offset);
+                return QueryPropertiesOutcome {
+                    entry: None,
+                    flags,
+                    final_scope: QueryFinalScope::Parent,
+                };
             }
         }
-        best
+        // database.cc:1278-1279 — no scope claimed the address.
+        QueryPropertiesOutcome {
+            entry: None,
+            flags: property(space, offset),
+            final_scope: QueryFinalScope::None,
+        }
     }
 
     // Ghidra: database.cc:1756 Scope::buildDefaultName
@@ -3111,13 +3570,10 @@ impl ScopeLocal {
     /// Find the smallest whole Symbol mapping that fully contains
     /// `[addr, addr+size-1]` and is valid at an INVALID use point — the
     /// container probe behind the `queryProperties` call at varmap.cc:1430.
-    /// Faithful to `ScopeInternal::findContainer` (database.cc:2250-2282)
-    /// combined with `SymbolEntry::inUse` (database.cc:114-120): only
-    /// address-tied entries (no use limit) match an invalid use point, and
-    /// dynamic entries are not in the address range map. The candidate walk
-    /// runs in descending (first,last) order replacing on strictly smaller
-    /// size and breaking on an exact-size hit, which reproduces the backward
-    /// rangemap iteration and its tie-break (last in ascending order wins).
+    /// Thin delegate of `find_container_entry` with `usepoint = None`:
+    /// only address-tied entries (no use limit) match an invalid use point
+    /// (database.cc:114-120), and dynamic entries are not in the address
+    /// range map.
     ///
     /// (Ghidra's `Scope::queryProperties` walks up through parent scopes
     /// after this scope; Rugra's varmap ScopeLocal has no parent linkage —
@@ -3129,37 +3585,8 @@ impl ScopeLocal {
         addr: u64,
         size: i32,
     ) -> Option<usize> {
-        // rangemap = maptable[addr.getSpace()->getIndex()] — only static
-        // whole mappings of the queried space participate.
-        let end = addr.wrapping_add(size as u64).wrapping_sub(1);
-        let mut candidates: Vec<(u64, u64, usize)> = self
-            .symbols
-            .iter()
-            .enumerate()
-            .filter(|(_, sym)| {
-                !sym.is_dynamic
-                    && sym.space == space
-                    && sym.usepoint.is_none() // inUse(invalid) == isAddrTied()
-            })
-            .map(|(idx, sym)| (sym.start, sym.start.wrapping_add(sym.size as u64).wrapping_sub(1), idx))
-            .filter(|(first, last, _)| *first <= addr && *last >= end)
-            .collect();
-        candidates.sort(); // ascending rangemap (first,last) order
-        let mut best: Option<(i32, usize)> = None; // (size, symbol index)
-        let mut oldsize: i32 = -1;
-        for (_, _, idx) in candidates.iter().rev() {
-            let sym = &self.symbols[*idx];
-            let entry_size = sym.size;
-            // entry->getLast() >= end (containment) was pre-filtered above.
-            if entry_size < oldsize || oldsize == -1 {
-                best = Some((entry_size, *idx));
-                if entry_size == size {
-                    break; // cc:2274 — exact match short-circuits the walk
-                }
-                oldsize = entry_size;
-            }
-        }
-        best.map(|(_, idx)| idx)
+        self.find_container_entry(space, addr, size as i64, None)
+            .map(|entry| entry.sym)
     }
 
     // Ghidra: database.cc:1810 ScopeInternal::addSymbolInternal +
@@ -3694,6 +4121,10 @@ mod tests {
         sym
     }
 
+    fn install(scope: &mut ScopeLocal, sym: LocalSymbol) -> usize {
+        scope.install_symbol(sym)
+    }
+
     #[test]
     fn test_find_overlap_partition_unit_and_subsort() {
         // F1: "wide" [0x300,0x30f] usepoint 0x1010 vs "narrow" [0x308,0x30b]
@@ -3701,8 +4132,8 @@ mod tests {
         // [0x308,0x30b]; both records cover the unit, EntrySubsort picks
         // "narrow" (smaller first use). Min-START overlap would pick "wide".
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(overlap_sym("wide", 0x300, 16, Some(0x1010)));
-        scope.symbols.push(overlap_sym("narrow", 0x308, 4, Some(0x1000)));
+        install(&mut scope, overlap_sym("wide", 0x300, 16, Some(0x1010)));
+        install(&mut scope, overlap_sym("narrow", 0x308, 4, Some(0x1000)));
         let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x309, 2).unwrap();
         assert_eq!(scope.symbols[hit].name, "narrow");
         // Query start 0x300 is in the wide-only unit [0x300,0x307].
@@ -3711,8 +4142,8 @@ mod tests {
         // Address-tied beats use-limited on a shared unit regardless of
         // insertion order (database.cc:97-107: addrtied subsort (0,0)).
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(overlap_sym("used", 0x320, 8, Some(0x1000)));
-        scope.symbols.push(overlap_sym("tied", 0x320, 8, None));
+        install(&mut scope, overlap_sym("used", 0x320, 8, Some(0x1000)));
+        install(&mut scope, overlap_sym("tied", 0x320, 8, None));
         let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x322, 4).unwrap();
         assert_eq!(scope.symbols[hit].name, "tied");
     }
@@ -3722,8 +4153,8 @@ mod tests {
         // F1: query start uncovered — the leftmost partition unit starting
         // after the query start answers iff it begins before the query end.
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(overlap_sym("gapend", 0x340, 4, Some(0x1000)));
-        scope.symbols.push(overlap_sym("gapfar", 0x344, 4, Some(0x1001)));
+        install(&mut scope, overlap_sym("gapend", 0x340, 4, Some(0x1000)));
+        install(&mut scope, overlap_sym("gapfar", 0x344, 4, Some(0x1001)));
         let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x338, 0x10).unwrap();
         assert_eq!(scope.symbols[hit].name, "gapend");
         assert_eq!(scope.find_overlap(crate::space::AddressSpace::Stack, 0x338, 0x6), None);
@@ -3737,14 +4168,14 @@ mod tests {
         let mut dyn_sym = overlap_sym("dyn", 0, 8, Some(0x1000));
         dyn_sym.is_dynamic = true;
         dyn_sym.hash = 0x1234;
-        scope.symbols.push(dyn_sym);
+        install(&mut scope, dyn_sym);
         assert_eq!(scope.find_overlap(crate::space::AddressSpace::Stack, 0, 8), None);
         // find_symbol delegates to the same probe.
         assert!(scope.find_symbol(0).is_none());
         // has_overlap models the queryProperties invalid-usepoint container
         // probe: dynamic + non-addrtied both filtered.
         assert!(!scope.has_overlap(0, 1));
-        scope.symbols.push(overlap_sym("staticfar", 0x360, 4, None));
+        install(&mut scope, overlap_sym("staticfar", 0x360, 4, None));
         let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x360, 4).unwrap();
         assert_eq!(scope.symbols[hit].name, "staticfar");
     }
@@ -3755,9 +4186,9 @@ mod tests {
         // equally-subsorted entries the LAST inserted wins; use-limited
         // entries never answer an invalid usepoint.
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(overlap_sym("used1", 0x320, 8, Some(0x1000)));
-        scope.symbols.push(overlap_sym("used2", 0x320, 8, Some(0x1010)));
-        scope.symbols.push(overlap_sym("tied", 0x320, 8, None));
+        install(&mut scope, overlap_sym("used1", 0x320, 8, Some(0x1000)));
+        install(&mut scope, overlap_sym("used2", 0x320, 8, Some(0x1010)));
+        install(&mut scope, overlap_sym("tied", 0x320, 8, None));
         let hit = scope
             .find_addr(crate::space::AddressSpace::Stack, 0x320, Some(0x1000))
             .unwrap();
@@ -3774,10 +4205,185 @@ mod tests {
         // Two equal-subsort (both addrtied) exact-start entries: the last
         // inserted wins (reverse multiset insertion order).
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(overlap_sym("first", 0x400, 4, None));
-        scope.symbols.push(overlap_sym("second", 0x400, 4, None));
+        install(&mut scope, overlap_sym("first", 0x400, 4, None));
+        install(&mut scope, overlap_sym("second", 0x400, 4, None));
         let hit = scope.find_addr(crate::space::AddressSpace::Stack, 0x400, Some(0x999)).unwrap();
         assert_eq!(scope.symbols[hit].name, "second");
+    }
+
+    #[test]
+    fn test_multi_entry_symbol_queries_and_removal() {
+        // Symbol::mapentry holds several entries (database.hh:189); queries
+        // observe ENTRIES, and removeSymbol drops every mapping
+        // (database.cc:2117-2136).
+        let mut scope = ScopeLocal::new();
+        let idx = install(&mut scope, overlap_sym("multi", 0x500, 4, None));
+        // A second mapping of the SAME symbol at a disjoint address.
+        scope.add_map_entry(
+            idx,
+            crate::space::AddressSpace::Stack,
+            0x600,
+            8,
+            0,
+            crate::varnode::varnode_flags::MAPPED,
+            Vec::new(),
+        );
+        assert_eq!(scope.mapentry_log.len(), 2);
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x502, 2).unwrap();
+        assert_eq!(hit, idx);
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x605, 2).unwrap();
+        assert_eq!(hit, idx);
+        // Entry-level view distinguishes the two mappings.
+        let entry = scope
+            .find_container_entry(crate::space::AddressSpace::Stack, 0x605, 2, None)
+            .unwrap();
+        assert_eq!((entry.start, entry.size), (0x600, 8));
+        // A second symbol installed after survives removal with re-keyed
+        // entry references.
+        install(&mut scope, overlap_sym("other", 0x700, 4, None));
+        scope.remove_symbol(idx);
+        assert_eq!(scope.find_overlap(crate::space::AddressSpace::Stack, 0x502, 2), None);
+        assert_eq!(scope.find_overlap(crate::space::AddressSpace::Stack, 0x605, 2), None);
+        // Both mappings of the removed symbol are gone; the survivor keeps
+        // one entry, re-keyed to its new symbol index.
+        assert_eq!(scope.mapentry_log.len(), 1);
+        assert_eq!(scope.symbols[scope.mapentry_log[0].sym].name, "other");
+        let hit = scope.find_overlap(crate::space::AddressSpace::Stack, 0x702, 2).unwrap();
+        assert_eq!(scope.symbols[hit].name, "other");
+    }
+
+    #[test]
+    fn test_find_addr_multi_uselimit_containment() {
+        // inUse checks uselimit CONTAINMENT in any range (database.cc:119,
+        // RangeList::inRange), not single-address equality; the subsort
+        // comes from the FIRST range (database.cc:102-106).
+        let mut scope = ScopeLocal::new();
+        let idx = install(&mut scope, overlap_sym("spread", 0x320, 8, Some(0x1000)));
+        let ram = ghidra_space_index(&crate::space::AddressSpace::Ram);
+        // Replace the single-address uselimit with two disjoint ranges.
+        scope.mapentry_log[0].uselimit = vec![(ram, 0x1000, 0x100f), (ram, 0x2000, 0x200f)];
+        scope.mapentry_log[0].subsort = ScopeLocal::entry_subsort(false, &scope.mapentry_log[0].uselimit);
+        let _ = idx;
+        // Mid-range usepoint of the FIRST range: admitted.
+        assert_eq!(scope.find_addr(crate::space::AddressSpace::Stack, 0x320, Some(0x1005)), Some(idx));
+        // Inside the SECOND range: subsort (ram,0x1000) <= sub2 (ram,0x2005)
+        // admits the window and inUse passes.
+        assert_eq!(scope.find_addr(crate::space::AddressSpace::Stack, 0x320, Some(0x2005)), Some(idx));
+        // Between the ranges: window admits, inUse rejects.
+        assert_eq!(scope.find_addr(crate::space::AddressSpace::Stack, 0x320, Some(0x1500)), None);
+        // Before the first range: the subsort bound itself excludes it.
+        assert_eq!(scope.find_addr(crate::space::AddressSpace::Stack, 0x320, Some(0x0ff0)), None);
+    }
+
+    #[test]
+    fn test_query_properties_flags_branches() {
+        use crate::varnode::varnode_flags;
+        // Branch 1 (database.cc:1269-1270): answering entry's getAllFlags.
+        let mut scope = ScopeLocal::new();
+        scope.local_range = vec![(0x0, 0xffff)];
+        let locked = install(&mut scope, overlap_sym("locked", 0x100, 4, None));
+        scope.symbols[locked].typelock = true;
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Stack, 0x100, 4, None, None, &|_, _| 0,
+        );
+        assert!(out.entry.is_some());
+        assert_eq!(out.final_scope, QueryFinalScope::This);
+        assert_eq!(out.flags, varnode_flags::MAPPED | varnode_flags::ADDRTIED | varnode_flags::TYPELOCK);
+        // Branch 2 (database.cc:1271-1277): scope ownership without a
+        // symbol — mapped|addrtied|property, no persist for a local scope.
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Stack, 0x200, 1, None, None,
+            &|_, _| varnode_flags::READONLY,
+        );
+        assert!(out.entry.is_none());
+        assert_eq!(out.final_scope, QueryFinalScope::This);
+        assert_eq!(out.flags, varnode_flags::MAPPED | varnode_flags::ADDRTIED | varnode_flags::READONLY);
+        // Branch 3 (database.cc:1278-1279): no scope — property only.
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Ram, 0x4000, 1, None, None,
+            &|_, _| varnode_flags::READONLY,
+        );
+        assert_eq!(out.final_scope, QueryFinalScope::None);
+        assert_eq!(out.flags, varnode_flags::READONLY);
+        // Constant-space short-circuit (database.cc:950).
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Const, 5, 1, None, None, &|_, _| varnode_flags::READONLY,
+        );
+        assert_eq!(out.final_scope, QueryFinalScope::None);
+        assert_eq!(out.flags, varnode_flags::READONLY);
+    }
+
+    #[test]
+    fn test_query_properties_parent_branch() {
+        use crate::varnode::varnode_flags;
+        // stackContainer walks to the parent (database.cc:959): the global
+        // scope's symbols carry persist (database.cc:1131-1132) and its
+        // scope-only branch sets persist (database.cc:1274-1275).
+        let mut local = ScopeLocal::new();
+        let mut parent = ScopeLocal::new();
+        parent.is_global_scope = true;
+        parent.space = crate::space::AddressSpace::Ram;
+        parent.local_range = vec![(0x8000, 0x8fff)];
+        let mut sym = LocalSymbol::new(
+            "gsym", 0x4000, 8, None, symbol_category::NO_CATEGORY);
+        sym.space = crate::space::AddressSpace::Ram;
+        parent.install_symbol(sym);
+        // Parent symbol answers through the local scope's query.
+        let out = local.query_properties_ex(
+            crate::space::AddressSpace::Ram, 0x4002, 4, None, Some(&parent), &|_, _| 0,
+        );
+        assert_eq!(out.entry.as_ref().map(|e| e.start), Some(0x4000));
+        assert_eq!(out.final_scope, QueryFinalScope::Parent);
+        assert_eq!(
+            out.flags,
+            varnode_flags::MAPPED | varnode_flags::ADDRTIED | varnode_flags::PERSIST
+        );
+        // Parent scope ownership without a symbol: persist bit set.
+        let out = local.query_properties_ex(
+            crate::space::AddressSpace::Ram, 0x8100, 1, None, Some(&parent), &|_, _| 0,
+        );
+        assert!(out.entry.is_none());
+        assert_eq!(out.final_scope, QueryFinalScope::Parent);
+        assert_eq!(
+            out.flags,
+            varnode_flags::MAPPED | varnode_flags::ADDRTIED | varnode_flags::PERSIST
+        );
+    }
+
+    #[test]
+    fn test_has_overlap_space_dimension() {
+        // maptable[addr.getSpace()->getIndex()] (database.cc:2254): a stack
+        // entry never answers a ram probe; the legacy signatureless helper
+        // keeps its any-space production contract.
+        let mut scope = ScopeLocal::new();
+        install(&mut scope, overlap_sym("stk", 0x100, 8, None));
+        assert!(!scope.has_overlap_in(crate::space::AddressSpace::Ram, 0x100, 4));
+        assert!(scope.has_overlap_in(crate::space::AddressSpace::Stack, 0x100, 4));
+        assert!(scope.has_overlap(0x100, 4)); // legacy any-space
+        // Partial containment fails (findContainer needs the WHOLE range).
+        assert!(!scope.has_overlap_in(crate::space::AddressSpace::Stack, 0xfe, 4));
+    }
+
+    #[test]
+    fn test_add_map_entry_partial_offset_piece() {
+        // addMapInternal's `off` piece offset (database.cc:1843) is observable
+        // on the entry returned by the container query.
+        let mut scope = ScopeLocal::new();
+        let idx = install(&mut scope, overlap_sym("whole", 0x100, 8, None));
+        scope.add_map_entry(
+            idx,
+            crate::space::AddressSpace::Stack,
+            0x700,
+            4,
+            4, // high half of the 8-byte symbol
+            crate::varnode::varnode_flags::PRECISHI,
+            Vec::new(),
+        );
+        let entry = scope
+            .find_container_entry(crate::space::AddressSpace::Stack, 0x701, 2, None)
+            .unwrap();
+        assert_eq!((entry.offset, entry.size), (4, 4));
+        assert_eq!(entry.extraflags, crate::varnode::varnode_flags::PRECISHI);
     }
 
     #[test]
@@ -3819,10 +4425,10 @@ mod tests {
         p.category = symbol_category::FUNCTION_PARAMETER;
         let mut f = overlap_sym("f", 0x60, 8, None);
         f.category = symbol_category::FAKE_INPUT;
-        scope.symbols.push(p);
-        scope.symbols.push(f);
-        scope.symbols.push(overlap_sym("u", 0x70, 4, None));
-        scope.symbols.push(overlap_sym("v", 0x80, 4, None));
+        install(&mut scope, p);
+        install(&mut scope, f);
+        install(&mut scope, overlap_sym("u", 0x70, 4, None));
+        install(&mut scope, overlap_sym("v", 0x80, 4, None));
         scope.local_range = vec![(0, 0xfffff)];
 
         // parameter=true on a function_parameter typelocked symbol: the
