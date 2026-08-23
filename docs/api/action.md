@@ -24,9 +24,46 @@ null 规则，所有克隆执行状态从构造初值开始。`ActionDatabase::d
 真实双侧门禁 `tools/run_action_pool_clone_filter_oracle.sh` 使用同一合成 Rule 池，
 覆盖 all/custom/empty grouplist、null 派生缓存、Rule 和 per-op 的完整顺序，以及
 池/Rule 的 flags、status、breakpoint、count_tests/count_apply。该覆盖投影为
-`MATCH`。ActionPool 全函数状态仍保守为 `MISMATCH`：现有 Rust `apply` 尚未实现
-per-rule disabled/warnings/breakpoint 调度、`op_state`/`rule_index` 断点续跑，live-op
-快照和 dead-op 处理也仍与 oracle 有已知差异，因此本改动不宣称模块 L3。
+`MATCH`。ActionPool 全函数状态仍保守为 `MISMATCH`（rebase 合并 BREAKPOOL 执行器
+后，per-rule disabled/warnings/breakpoint 调度与 `op_state`/`rule_index` 断点续跑
+已由 `tools/run_action_break_pool_oracle.sh` 双侧门禁覆盖，残余差异以两个门禁
+登记的 TODO 为准），因此本改动不宣称模块 L3。
+
+## 2026-08-24：Action/Rule 断点与 live ActionPool 续跑
+
+`ActionState` 与 `RuleState` 现在承载锁定 Ghidra `Action` / `Rule` 基类的
+运行字段，包括 persistent/temporary start/action breakpoint、warning 位和
+tests/applies 统计。`Action::perform` 按 `action.cc:298-362` 的时机执行：start
+break 在 tests 增量前返回 `-1`；temporary 位只在对应检查命中时清除；从
+`status_actionbreak` 继续时不重复调用刚完成的 `apply`；正向完成后按
+warning → applies 增量 → action break 的顺序处理。`reset_for_function` 只恢复
+status 并清 warning-given，断点、warning-enable、行为 flags、count/lcount 和
+统计均保留；`reset_stats` 单独清统计。
+
+公开的 `set_break_point`、`set_warning`、`disable_rule`、`enable_rule` 与
+`clear_break_points` 使用 Ghidra 的首个冒号分段和逐层局部唯一匹配规则。
+同一层出现多个非空匹配即歧义；一个内部已经歧义并返回空的子树不会增加父层
+匹配计数，因此另一 immediate child 的唯一匹配仍可胜出。
+
+`ActionGroup` 在 group 自身 action breakpoint 命中时先推进 child cursor 再
+返回 `-1`；child 自身返回负数时保留当前 cursor。`ActionPool` 不再快照
+`alivelist`，而是保存 `op_state` / `rule_index` 并遍历 live `PcodeOpTree`：Rule
+指针在 disable/test/apply 前以 `rule_index++` 取出；Rule break 保留当前 op 和
+已经推进的 rule index；resume 遇 dead op 时先求后继，再执行 dead-and-gone
+清理。迭代排序键是 `SeqNum(address, creation-time)`，所以当前 cursor 之后的新
+op 本轮可见，之前的新 op 留待下一轮。
+
+锁定双侧门禁为 `tools/run_action_break_pool_oracle.sh`，fixture
+`ACTION-EXECUTOR-BREAKPOOL-0001` 同时比较 stdout 与 warning stderr，覆盖 Action
+和 Rule 断点续跑、Group 游标、Pool 当前 op 前后插入、当前 op 删除、初始 dead
+op 清理、精确 result 累加、disabled Rule、局部 lookup 歧义以及 derived reset
+是否调用基类 reset。该目标投影逐字节 `MATCH`，但 production 调用闭包仍为
+`MISMATCH`：`ActionStackPtrFlow` / `ActionStartTypes`、`RuleSubvarSext` /
+`RuleDoubleIn` 的派生 reset 尚未在各自租约内接入 companion-state seam；
+`ActionRestartGroup` 尚未把根 `ActionState` 传入嵌套 Group，且本批不覆盖
+`clearAnalysis`；派生根 clone filtering 与 `PcodeOpBank::create` 的初始 dead
+lifecycle 分别继续绑定 `PIPE-POOL-0001` 与 `OPBANK-0001`。断点/reset 残差绑定
+`PIPE-BREAK-0001` / `PIPE-RESTART-0001`。
 
 ## 2026-08-14：ActionPool opcode 变化后立即重派发
 
@@ -42,11 +79,9 @@ SUBPIECE 被 RuleSubExtComm 改写为 INT_ZEXT 后仍继续调用旧 SUBPIECE Ru
 `tools/run_action_opcode_redispatch_oracle.sh`；它覆盖返回 1 的正常改写与“改写但
 返回 0”的诊断路径，并比较调用事件、规则尝试/命中观察以及完整目标 op 状态。
 
-完整 ActionPool 仍是 `MISMATCH`：Rust 尚未在 Rule trait/池内承载 disabled、
-per-rule `count_tests`/`count_apply`、warning、breakpoint 与断点续跑的
-`op_state`/`rule_index`；`apply` 的返回值/change 载体、live-op Vec 快照，以及
-初始 dead op 的 `opDeadAndGone` 也与 Ghidra 不同。fixture 因此只将即时重派发
-投影记为 `MATCH`，完整函数状态保持 `MISMATCH`，不得据此升级模块状态。
+上述 2026-08-14 的即时重派发门禁仍保留为窄回归信号；其当时列出的 disabled、
+Rule 统计/warning/breakpoint、`op_state`/`rule_index`、live tree 与 dead cleanup
+缺口已由 2026-08-24 的执行器批次补齐，并由新的组合 fixture 覆盖。
 
 ## 2026-08-12：默认 decompile 组保留已知原型锁
 
