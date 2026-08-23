@@ -265,3 +265,26 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
 过时行号），而锁定 12.0.4 `type.hh:233` 是 `flags & coretype`——只有
 core-type 位向指针传播。已改为 `flags & CORETYPE`；工厂核心类型
 （undefinedN/xunknownN）现正确传播 1。
+
+## 2026-08-23 TYPEFACTORY-CODEFLAGS-DECODE-0001
+
+- **`Datatype::decode_basic`** now returns `Result`: a missing/negative
+  `size` raises `"Bad size for type {name}"` (type.cc:671-672) instead of
+  coercing the size to 0. The name is whatever the attribute enumeration
+  actually read — empty when the attributes were already exhausted by a
+  previous enumeration on the same element, which is exactly the re-read
+  `TypeFactory::decodeTypeWithCodeFlags` triggers through
+  `TypeCode::decodeStub`.
+- **`TypeCode::decode_code_stub`** (type.cc:2903-2911): the peek's
+  `variable_length` bit and the `TypeCode` ctor's `type_incomplete` bit
+  (type.cc:2757-2763) are OR-composed onto the decoded attribute flags —
+  Ghidra's `decodeBasic` never resets `flags`, so pre-states set before it
+  survive.
+- **`TypeCode::decode_prototype`** (type.cc:2918-2931): full signature with
+  `is_constructor`/`isDestructor` and the factory void type; builds the
+  `FuncProto`, applies `setConstructor`/`setDestructor`, assigns the
+  prototype, and runs `markComplete` unconditionally (also with no
+  `<prototype>` child). Rugra residual: `FuncProto::decode`
+  (fspec.cc:4675-4839, fspec.rs lease) is not ported, so a present
+  `<prototype>` child errors after being consumed — cursor partial state
+  preserved (TYPEFACTORY-CODEFLAGS-DECODE-0001).

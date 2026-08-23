@@ -50,6 +50,14 @@ pub struct TypeFactory {
     /// (type.hh:196) and `TypeFactory::getTypedef` (type.cc:3818-3840).
     typedefs: BTreeMap<String, Arc<Datatype>>,
 
+    /// Pending incomplete typedefs awaiting their referenced type's
+    /// completion. Mirrors Ghidra's `incompleteTypedef` list (type.hh:761):
+    /// `getTypedef` appends clones that are still `type_incomplete`
+    /// (type.cc:3837-3838) and `resolveIncompleteTypedefs` drains them
+    /// (type.cc:3777-3809), including the TYPE_CODE arm that installs the
+    /// referenced code type's prototype on the typedef.
+    incomplete_typedefs: Vec<Arc<Datatype>>,
+
     /// Size of the core "int" data-type (Ghidra `sizeOfInt`, type.hh:763).
     /// Persisted state of `decodeDataOrganization`/`setupSizes`.
     size_of_int: i32,
@@ -121,6 +129,7 @@ impl TypeFactory {
             ptr_size,
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
+            incomplete_typedefs: Vec::new(),
             // Ghidra: type.cc:3106 TypeFactory::TypeFactory zeroes every
             // size field (int/long/char/wchar/pointer/altpointer/enumsize)
             // and leaves alignMap default-constructed (empty).
@@ -172,6 +181,7 @@ impl TypeFactory {
             ptr_size: 0,
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
+            incomplete_typedefs: Vec::new(),
             size_of_int: 0,
             size_of_long: 0,
             size_of_char: 0,
@@ -1906,6 +1916,14 @@ impl TypeFactory {
         let dt = Arc::new(dt);
         self.typedefs.insert(name.to_string(), aliased);
         self.types.insert(name.to_string(), dt.clone());
+        // Ghidra: type.cc:3837-3838 getTypedef:
+        //   if (res->isIncomplete()) incompleteTypedef.push_back(res);
+        // The clone inherits the referenced type's type_incomplete flag;
+        // resolveIncompleteTypedefs (type.cc:3777) drains it once the
+        // referenced struct/union/code type completes.
+        if dt.is_incomplete() {
+            self.incomplete_typedefs.push(dt.clone());
+        }
         dt
     }
 
@@ -2876,7 +2894,7 @@ impl TypeFactory {
         let meta = string2metatype(&metastring);
         match meta {
             TypeMetatype::Pointer => {
-                let basic = Datatype::decode_basic(decoder);
+                let basic = Datatype::decode_basic(decoder)?;
                 decoder.rewind_attributes();
                 let wordsize = TypePointer::decode_pointer_attributes(decoder, &basic);
                 // Child pointed-to type:
@@ -2904,7 +2922,7 @@ impl TypeFactory {
                 Ok(dt)
             }
             TypeMetatype::Array => {
-                let basic = Datatype::decode_basic(decoder);
+                let basic = Datatype::decode_basic(decoder)?;
                 // Ghidra: type.cc:1329 TypeArray::decode rewinds attributes
                 // after decodeBasic before re-reading ATTRIB_ARRAYSIZE —
                 // decodeBasic's attribute loop has otherwise consumed the
@@ -3011,7 +3029,7 @@ impl TypeFactory {
                 // builds a TypeUnicode, anything else a plain TypeBase — each
                 // merged with decodeBasic's fields and canonicalized through
                 // findAdd.
-                let basic = Datatype::decode_basic(decoder);
+                let basic = Datatype::decode_basic(decoder)?;
                 decoder.rewind_attributes();
                 let mut is_char = false;
                 let mut is_utf = false;
@@ -3126,7 +3144,7 @@ impl TypeFactory {
         forcecore: bool,
         signed: bool,
     ) -> Result<Arc<Datatype>, String> {
-        let basic = Datatype::decode_basic(decoder);
+        let basic = Datatype::decode_basic(decoder)?;
         // Ghidra: metatype = (metatype == TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT;
         let meta = if signed {
             TypeMetatype::Int
@@ -3176,7 +3194,7 @@ impl TypeFactory {
         decoder: &mut dyn Decoder,
         forcecore: bool,
     ) -> Result<Arc<Datatype>, String> {
-        let basic = Datatype::decode_basic(decoder);
+        let basic = Datatype::decode_basic(decoder)?;
         // Create a stub (empty fields) to allow recursive references.
         let stub_name = basic.name.clone();
         if self.find_by_name(&stub_name).is_none() {
@@ -3311,7 +3329,7 @@ impl TypeFactory {
         decoder: &mut dyn Decoder,
         forcecore: bool,
     ) -> Result<Arc<Datatype>, String> {
-        let basic = Datatype::decode_basic(decoder);
+        let basic = Datatype::decode_basic(decoder)?;
         let mut fields: Vec<TypeField> = Vec::new();
         while decoder.peek_element() != 0 {
             let child_id = decoder.open_element();
@@ -3341,31 +3359,358 @@ impl TypeFactory {
     }
 
     // Ghidra: type.cc:4401 TypeFactory::decodeCode
-    /// Decode a code `<type>` element with an optional `<prototype>` child.
-    /// Faithful to `TypeFactory::decodeCode` (type.cc:4401-4429).
+    /// Decode a code `<type>` element with an optional `<prototype>` child,
+    /// creating a placeholder stub first to allow recursive definitions.
+    /// Faithful to `TypeFactory::decodeCode` (type.cc:4401-4429):
     ///
-    /// Rugra gap: full prototype decoding requires `FuncProto::decode` and an
-    /// Architecture handle (see type_audit.md). The `<prototype>` child is
-    /// consumed; the resulting `TypeCode` has `proto = None`.
+    /// - `decodeStub` peeks for the `<prototype>` child (setting
+    ///   `variable_length`) and reads the element attributes; the scratch
+    ///   `TypeCode` carries the ctor's `type_incomplete` bit throughout,
+    /// - a metatype other than `code` raises `Expecting metatype="code"`,
+    /// - `findByIdLocal(name,id)` either finds the existing container entry
+    ///   (raising `Trying to redefine type` for a non-code occupant) or the
+    ///   scratch is canonicalized through `findAdd` as the stub,
+    /// - `decodePrototype` (with the constructor/destructor chain from
+    ///   `decodeTypeWithCodeFlags`) fills the scratch,
+    /// - a non-incomplete container entry is checked with
+    ///   `compareDependency` (`Redefinition of code data-type`), while an
+    ///   incomplete stub is defined in place through the factory's
+    ///   `setPrototype` — which also completes prototype-less stubs, since
+    ///   Ghidra clears `type_incomplete` even for a null prototype,
+    /// - `resolveIncompleteTypedefs` drains pending code/struct/union
+    ///   typedefs whose referenced type just completed.
+    ///
+    /// The element itself was opened by the caller (`decodeTypeNoRef` /
+    /// `decodeTypeWithCodeFlags`) and stays open; the `<prototype>` child is
+    /// consumed here.
+    ///
+    /// Rugra gap: a present `<prototype>` child errors until
+    /// `FuncProto::decode` (fspec.cc:4675, fspec.rs lease) is ported — the
+    /// stub inserted before the throw survives, matching the oracle's
+    /// partial state on its own prototype-decode failures.
     pub fn decode_code(
         &mut self,
         decoder: &mut dyn Decoder,
-        _is_constructor: bool,
-        _is_destructor: bool,
+        is_constructor: bool,
+        is_destructor: bool,
         forcecore: bool,
     ) -> Result<Arc<Datatype>, String> {
-        let (basic, _has_proto) = TypeCode::decode_code_stub(decoder);
+        // Ghidra: TypeCode tc; tc.decodeStub(decoder);
+        let (mut basic, _has_proto) = TypeCode::decode_code_stub(decoder)?;
+        // Ghidra: if (tc.getMetatype() != TYPE_CODE)
+        //          throw LowlevelError("Expecting metatype=\"code\"");
         if basic.metatype != TypeMetatype::Code {
             return Err("Expecting metatype=\"code\"".to_string());
         }
+        // Ghidra: if (forcecore) tc.flags |= Datatype::coretype;
+        if forcecore {
+            basic.flags |= type_flags::CORETYPE;
+        }
+        // Scratch TypeCode mirroring Ghidra's stack-local `tc` (TypeCode ctor:
+        // type.cc:2757-2763). decode_code_stub already OR-composed the ctor's
+        // type_incomplete and the peek's variable_length into basic.flags.
+        let mut tc = TypeCode {
+            base: TypeBase {
+                name: basic.name.clone(),
+                size: basic.size,
+                metatype: TypeMetatype::Code,
+                id: basic.id,
+                flags: basic.flags,
+                submeta_override: None,
+                pointer_space: None,
+                pointer_rel: None,
+            },
+            proto: None,
+        };
+        // Ghidra: Datatype *ct = findByIdLocal(tc.name,tc.id);
+        //        if (ct == 0) ct = findAdd(tc);   // Create stub to allow recursive definitions
+        //        else if (ct->getMetatype() != TYPE_CODE)
+        //          throw LowlevelError("Trying to redefine type: " + tc.name);
+        let ct = match self.find_by_id_local(&basic.name, basic.id) {
+            None => self.find_add(Datatype::Code(tc.clone()), false)?,
+            Some(existing) => {
+                if existing.get_metatype() != TypeMetatype::Code {
+                    return Err(format!("Trying to redefine type: {}", basic.name));
+                }
+                existing
+            }
+        };
         // Ghidra: tc.decodePrototype(decoder, isConstructor, isDestructor, *this);
-        TypeCode::decode_prototype(decoder);
-        let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Code);
+        let voidtype = self.get_type_void();
+        tc.decode_prototype(decoder, is_constructor, is_destructor, voidtype)?;
+        // Ghidra: if (!ct->isIncomplete()) {
+        //           if (0 != ct->compareDependency(tc))
+        //             throw LowlevelError("Redefinition of code data-type: " + tc.name);
+        //         }
+        //         else setPrototype(tc.proto, (TypeCode *)ct, tc.flags);
+        let result = if !ct.is_incomplete() {
+            if ct.compare_dependency(&Datatype::Code(tc)) != 0 {
+                return Err(format!("Redefinition of code data-type: {}", basic.name));
+            }
+            ct.clone()
+        } else {
+            self.set_prototype_define(&ct, tc.proto.as_deref(), tc.base.flags)?
+        };
+        // Ghidra: resolveIncompleteTypedefs();
+        self.resolve_incomplete_typedefs();
+        // Ghidra: return ct;
+        Ok(result)
+    }
+
+    // Ghidra: type.cc:3518 TypeFactory::setPrototype(const FuncProto *,TypeCode *,uint4)
+    /// Define an incomplete code data-type in place with the given prototype
+    /// and flag transfer. Faithful to the factory's `setPrototype` wrapper
+    /// (type.cc:3518-3528): asserts the target is incomplete (verbatim
+    /// LowlevelError otherwise), copies the prototype in, clears
+    /// `type_incomplete`, ORs in `(variable_length | type_incomplete)` from
+    /// the caller's flags, and re-registers the object.
+    fn set_prototype_define(
+        &mut self,
+        ct: &Arc<Datatype>,
+        fp: Option<&crate::fspec::FuncProto>,
+        flags: u32,
+    ) -> Result<Arc<Datatype>, String> {
+        // Ghidra: if (!newCode->isIncomplete())
+        //          throw LowlevelError("Can only set prototype on incomplete data-type");
+        if !ct.is_incomplete() {
+            return Err("Can only set prototype on incomplete data-type".to_string());
+        }
+        // Ghidra: tree.erase(newCode); newCode->setPrototype(this,fp);
+        //         newCode->flags &= ~(uint4)Datatype::type_incomplete;
+        //         newCode->flags |= (flags & (variable_length | type_incomplete));
+        //         tree.insert(newCode);
+        self.define_replace(ct, |defined| {
+            let code = match defined {
+                Datatype::Code(code) => code,
+                _ => return Err("setPrototype target is not a TypeCode".to_string()),
+            };
+            code.set_prototype(fp);
+            code.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            code.base.flags |= flags & (type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
+            Ok(())
+        })
+    }
+
+    // RUGRA-GLUE: channel-replacing define mutation shared by the
+    /// setPrototype/setFields wrappers (`set_prototype_define`,
+    /// `resolve_incomplete_typedefs`). Ghidra mutates the container object
+    /// in place (tree.erase / mutate / tree.insert of the same pointer);
+    /// Rugra clones the candidate, applies the mutation, and replaces both
+    /// owning channels (ordered tree slot + name map) with the updated
+    /// `Arc`, which preserves every factory-mediated observation
+    /// (re-lookup by name/id, repeated decode identity). Stale external
+    /// handles diverge — the registered
+    /// TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001 immutable-Arc residual.
+    fn define_replace(
+        &mut self,
+        ct: &Arc<Datatype>,
+        mutate: impl FnOnce(&mut Datatype) -> Result<(), String>,
+    ) -> Result<Arc<Datatype>, String> {
+        let mut defined = (**ct).clone();
+        mutate(&mut defined)?;
+        let arc = Arc::new(defined);
+        // The ordered-tree key (submeta, Reverse(size), id) is unchanged by
+        // the flag/field/prototype updates these wrappers apply, so
+        // re-registration is a slot replace — Ghidra's erase+insert round-trip
+        // under an identical DatatypeCompare key.
+        let tree_key = (Self::submeta_of(&arc), Reverse(arc.get_size()), arc.get_id());
+        self.base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(tree_key, arc.clone());
+        let name = arc.get_name().to_string();
+        if !name.is_empty() {
+            self.types.insert(name, arc.clone());
+        }
+        Ok(arc)
+    }
+
+    // Ghidra: type.cc:3777 TypeFactory::resolveIncompleteTypedefs
+    /// Complete any pending typedefs whose referenced data-type has finished
+    /// decoding. Faithful to `TypeFactory::resolveIncompleteTypedefs`
+    /// (type.cc:3777-3809): walks the incomplete-typedef list in order;
+    /// struct entries receive the referenced fields via the struct setFields
+    /// wrapper (type.cc:3479-3492 — incomplete guard, fields+size, flag
+    /// merge `opaque_string|variable_length|type_incomplete`), union entries
+    /// via the union wrapper (type.cc:3500-3511 — merge without
+    /// `opaque_string`), code entries via the factory `setPrototype`, and
+    /// finished entries are removed (Ghidra's `list::erase(iter)` advance).
+    pub fn resolve_incomplete_typedefs(&mut self) {
+        let mut index = 0;
+        while index < self.incomplete_typedefs.len() {
+            let dt = self.incomplete_typedefs[index].clone();
+            // Ghidra: Datatype *defedType = dt->getTypedef();
+            let defed = match self.typedefs.get(dt.get_name().to_string().as_str()) {
+                Some(target) => target.clone(),
+                None => {
+                    index += 1;
+                    continue;
+                }
+            };
+            if defed.is_incomplete() {
+                index += 1;
+                continue;
+            }
+            match (dt.as_ref(), defed.as_ref()) {
+                (Datatype::Struct(_), Datatype::Struct(defed_struct)) => {
+                    // Ghidra: setFields(defedStruct->field, prevStruct,
+                    //                   defedStruct->size, defedStruct->alignment,
+                    //                   defedStruct->flags);
+                    let fields = defed_struct.fields.clone();
+                    let new_size = defed_struct.base.size;
+                    let flags = defed_struct.base.flags;
+                    let _ = self.define_replace(&dt, |defined| {
+                        let st = match defined {
+                            Datatype::Struct(st) => st,
+                            _ => {
+                                return Err(
+                                    "setFields target is not a TypeStruct".to_string()
+                                )
+                            }
+                        };
+                        st.fields = fields;
+                        st.base.size = new_size;
+                        st.base.flags &= !type_flags::TYPE_INCOMPLETE;
+                        st.base.flags |= flags
+                            & (type_flags::OPAQUE_STRUCT
+                                | type_flags::VARLENGTH
+                                | type_flags::TYPE_INCOMPLETE);
+                        Ok(())
+                    });
+                    self.incomplete_typedefs.remove(index);
+                }
+                (Datatype::Union(_), Datatype::Union(defed_union)) => {
+                    let fields = defed_union.fields.clone();
+                    let new_size = defed_union.base.size;
+                    let flags = defed_union.base.flags;
+                    let _ = self.define_replace(&dt, |defined| {
+                        let un = match defined {
+                            Datatype::Union(un) => un,
+                            _ => {
+                                return Err("setFields target is not a TypeUnion".to_string())
+                            }
+                        };
+                        un.fields = fields;
+                        un.base.size = new_size;
+                        un.base.flags &= !type_flags::TYPE_INCOMPLETE;
+                        un.base.flags |= flags
+                            & (type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
+                        Ok(())
+                    });
+                    self.incomplete_typedefs.remove(index);
+                }
+                (Datatype::Code(_), Datatype::Code(defed_code)) => {
+                    // Ghidra: setPrototype(defedCode->proto, prevCode, defedCode->flags);
+                    let _ = self.set_prototype_define(
+                        &dt,
+                        defed_code.proto.as_deref(),
+                        defed_code.base.flags,
+                    );
+                    self.incomplete_typedefs.remove(index);
+                }
+                _ => index += 1,
+            }
+        }
+    }
+
+    // Ghidra: type.cc:4193 TypeFactory::decodeTypeWithCodeFlags
+    /// Restore a data-type from an element and extra "code" flags — the
+    /// "Kludge to get flags into code pointer types, when they can't come
+    /// through the stream" (type.cc:4186-4192) used by `CPoolRecord::decode`
+    /// (cpool.cc:147-151) for method/constructor constant-pool records.
+    /// Faithful to `TypeFactory::decodeTypeWithCodeFlags`
+    /// (type.cc:4193-4212):
+    ///
+    /// - opens the `<type>` element and runs `decodeBasic` on it,
+    /// - a metatype other than `ptr` raises
+    ///   `Special type decode does not see pointer`,
+    /// - the WORDSIZE attribute loop runs WITHOUT a preceding
+    ///   `rewindAttributes` (type.cc:4201-4207, unlike `TypePointer::decode`
+    ///   at type.cc:1015). `decodeBasic`'s enumeration above has already run
+    ///   the attribute index to exhaustion, and neither XmlDecode
+    ///   (marshal.cc:231-241) nor Rugra's `TreeDecoder` restarts enumeration
+    ///   implicitly, so this loop reads nothing and `wordsize` keeps the
+    ///   `TypePointer` ctor default 1 (type.hh:407). The loop is kept
+    ///   structurally identical to the oracle,
+    /// - `decodeCode(decoder, isConstructor, isDestructor, false)` decodes
+    ///   the pointed-to code type on the SAME still-open element — under the
+    ///   exhausted-attributes cursor this is where the oracle's nested
+    ///   pointer→code XML raises `Bad size for type ` (empty name), the
+    ///   empirically verified 12.0.4 behaviour,
+    /// - on success the element is closed, `calcTruncate` runs, and the
+    ///   pointer is canonicalized through `findAdd`.
+    ///
+    /// Exception partial state: every error above leaves the element OPEN
+    /// with its attributes consumed and its children unread — the cursor
+    /// position and the factory state (nothing inserted; the throw precedes
+    /// every insertion) are exactly the oracle's.
+    pub fn decode_type_with_code_flags(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        is_constructor: bool,
+        is_destructor: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        // Ghidra: TypePointer tp; — ctor defaults (type.hh:407):
+        // ptrto = 0, wordsize = 1, spaceid = 0, truncate = 0.
+        // Ghidra: uint4 elemId = decoder.openElement();
+        let elem_id = decoder.open_element();
+        // Ghidra: tp.decodeBasic(decoder);
+        let basic = Datatype::decode_basic(decoder)?;
+        // Ghidra: if (tp.getMetatype() != TYPE_PTR)
+        //          throw LowlevelError("Special type decode does not see pointer");
+        if basic.metatype != TypeMetatype::Pointer {
+            return Err("Special type decode does not see pointer".to_string());
+        }
+        let mut wordsize: u64 = 1; // TypePointer ctor default (type.hh:407)
+        // Ghidra (type.cc:4201-4207): the wordsize attribute loop without
+        // rewindAttributes — see the doc comment; it never reads under the
+        // exhausted cursor, matching XmlDecode's non-restarting enumeration.
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            if decoder.attribute_name(attrib_id).as_deref() == Some("wordsize") {
+                wordsize = decoder.read_unsigned_integer();
+            }
+        }
+        // Ghidra: tp.ptrto = decodeCode(decoder, isConstructor, isDestructor, false);
+        let ptrto = self.decode_code(decoder, is_constructor, is_destructor, false)?;
+        // Ghidra: decoder.closeElement(elemId);
+        if elem_id != 0 {
+            decoder.close_element(elem_id);
+        }
+        // Build the candidate pointer exactly as Ghidra's stack-local `tp`
+        // now holds it: decodeBasic's fields, the ctor-default wordsize, the
+        // ptrto decoded above. calcSubmeta's flag/`pointer_to_array` arms and
+        // the inheritable-flags copy of TypePointer::decode (type.cc:1027-1029)
+        // are NOT part of this kludge path (the oracle never reaches them
+        // either — the decodeCode call above throws first on every real
+        // stream).
+        let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Pointer);
         base.id = basic.id;
-        base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
-        let dt = Arc::new(Datatype::Code(TypeCode { base, proto: None }));
-        self.insert(dt.clone());
-        Ok(dt)
+        base.flags = basic.flags;
+        let candidate =
+            Datatype::Pointer(TypePointer {
+                base,
+                ptr_to: ptrto,
+                wordsize: wordsize as usize,
+            });
+        // Ghidra: tp.calcTruncate(*this); (type.cc:1058-1067) — assigns the
+        // truncated subcomponent when size == getSizeOfAltPointer(); Rugra's
+        // TypePointer has no `truncate` field (TYPE-0001 structural residual),
+        // so the resize is issued for its factory-registration side effect.
+        if candidate.get_size() as i32 == self.get_size_of_alt_pointer() {
+            let _ = self.resize_pointer(
+                &candidate,
+                self.get_size_of_pointer() as usize,
+            );
+        }
+        // Ghidra: return findAdd(tp);
+        // The TypePointer ctor leaves alignment -1, so the oracle's findAdd
+        // recomputes alignment through the (architecture-provided) map — the
+        // enforcing probe mirrors that dependency.
+        self.find_add(candidate, true)
     }
 
     // Ghidra: type.cc:3390 TypeFactory::insert
@@ -3483,6 +3828,159 @@ fn strip_array(dt: Arc<Datatype>) -> Arc<Datatype> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::RwLock;
+
+    // RUGRA-GLUE: fixture-local XML element builder mirroring the oracle
+    // fixture's decode strings (tests have no Ghidra counterpart).
+    fn xml_elem(name: &str, attrs: &[(&str, &str)]) -> std::sync::Arc<RwLock<Element>> {
+        let mut el = Element::new();
+        el.set_name(name);
+        for (k, v) in attrs {
+            el.add_attribute(k, v);
+        }
+        std::sync::Arc::new(RwLock::new(el))
+    }
+
+    fn xml_elem_with_children(
+        name: &str,
+        attrs: &[(&str, &str)],
+        children: Vec<std::sync::Arc<RwLock<Element>>>,
+    ) -> std::sync::Arc<RwLock<Element>> {
+        let el = xml_elem(name, attrs);
+        for child in children {
+            el.write().unwrap().add_child(child);
+        }
+        el
+    }
+
+    fn decoder_for_type(child: std::sync::Arc<RwLock<Element>>) -> TreeDecoder {
+        let root = xml_elem_with_children("root", &[], vec![child]);
+        let mut decoder = TreeDecoder::new(root, std::sync::Arc::new(RwLock::new(IdRegistry)));
+        decoder.open_element();
+        decoder
+    }
+
+    // Ghidra: type.cc:4193 TypeFactory::decodeTypeWithCodeFlags (regression
+    // net for the TYPEFACTORY-CODEFLAGS-DECODE-0001 oracle fixture)
+    #[test]
+    fn test_decode_type_with_code_flags_error_paths() {
+        let mut factory = TypeFactory::new(8);
+        // Nested pointer->code: the oracle's decodeStub re-read of the
+        // attribute-exhausted outer element raises "Bad size for type ".
+        let mut decoder = decoder_for_type(xml_elem_with_children(
+            "type",
+            &[("metatype", "ptr"), ("size", "8")],
+            vec![xml_elem("type", &[("metatype", "code"), ("size", "1")])],
+        ));
+        assert_eq!(
+            factory
+                .decode_type_with_code_flags(&mut decoder, true, false)
+                .unwrap_err(),
+            "Bad size for type "
+        );
+        // Cursor partial state: the failed element is still open with its
+        // children unread.
+        assert!(decoder.peek_element() != 0);
+
+        // Non-pointer metatype: "Special type decode does not see pointer".
+        let mut decoder =
+            decoder_for_type(xml_elem("type", &[("metatype", "code"), ("size", "1")]));
+        assert_eq!(
+            factory
+                .decode_type_with_code_flags(&mut decoder, true, true)
+                .unwrap_err(),
+            "Special type decode does not see pointer"
+        );
+
+        // Missing size on the first decodeBasic (named form).
+        let mut decoder =
+            decoder_for_type(xml_elem("type", &[("metatype", "ptr"), ("name", "vp")]));
+        assert_eq!(
+            factory
+                .decode_type_with_code_flags(&mut decoder, false, true)
+                .unwrap_err(),
+            "Bad size for type vp"
+        );
+    }
+
+    // Ghidra: type.cc:4401 TypeFactory::decodeCode via decodeType — stub
+    // creation, in-place completion, dedup, redefine and clash errors.
+    #[test]
+    fn test_decode_code_stub_completion_and_errors() {
+        let mut factory = TypeFactory::new(8);
+
+        // Prototype-less stub: created incomplete, completed in place by the
+        // setPrototype wrapper (type_incomplete cleared even for a null
+        // prototype, variable_length absent).
+        let ct = factory
+            .decode_type(&mut decoder_for_type(xml_elem(
+                "type",
+                &[("metatype", "code"), ("name", "cf_one"), ("size", "1")],
+            )))
+            .expect("code decode");
+        assert_eq!(ct.get_name(), "cf_one");
+        assert_eq!(ct.get_metatype(), TypeMetatype::Code);
+        assert_eq!(ct.get_flags() & type_flags::TYPE_INCOMPLETE, 0);
+        assert_eq!(ct.get_flags() & type_flags::VARLENGTH, 0);
+        assert!(matches!(ct.as_ref(), Datatype::Code(c) if c.proto.is_none()));
+
+        // Re-decode dedups to the same canonical object.
+        let again = factory
+            .decode_type(&mut decoder_for_type(xml_elem(
+                "type",
+                &[("metatype", "code"), ("name", "cf_one"), ("size", "1")],
+            )))
+            .expect("code re-decode");
+        assert!(std::sync::Arc::ptr_eq(&ct, &again));
+
+        // Same name+id, different size: compareDependency redefinition error,
+        // previous definition survives.
+        let err = factory
+            .decode_type(&mut decoder_for_type(xml_elem(
+                "type",
+                &[("metatype", "code"), ("name", "cf_one"), ("size", "2")],
+            )))
+            .unwrap_err();
+        assert_eq!(err, "Redefinition of code data-type: cf_one");
+        assert_eq!(factory.find_by_name("cf_one").unwrap().get_size(), 1);
+
+        // Non-code occupant: findByIdLocal metatype check.
+        factory
+            .decode_type(&mut decoder_for_type(xml_elem(
+                "type",
+                &[("metatype", "int"), ("name", "clash_t"), ("size", "4")],
+            )))
+            .expect("int decode");
+        let err = factory
+            .decode_type(&mut decoder_for_type(xml_elem(
+                "type",
+                &[("metatype", "code"), ("name", "clash_t"), ("size", "1")],
+            )))
+            .unwrap_err();
+        assert_eq!(err, "Trying to redefine type: clash_t");
+        assert_eq!(
+            factory.find_by_name("clash_t").unwrap().get_metatype(),
+            TypeMetatype::Int
+        );
+
+        // A present <prototype> child is the registered FuncProto::decode gap:
+        // the stub is inserted first, then the error fires (partial state).
+        let err = factory
+            .decode_type(&mut decoder_for_type(xml_elem_with_children(
+                "type",
+                &[("metatype", "code"), ("name", "cf_gap"), ("size", "1")],
+                vec![xml_elem("prototype", &[("model", "__stdcall")])],
+            )))
+            .unwrap_err();
+        assert!(err.contains("FuncProto::decode"), "{err}");
+        let stub = factory
+            .find_by_name("cf_gap")
+            .expect("stub survives the gap error");
+        assert_eq!(
+            stub.get_flags() & type_flags::TYPE_INCOMPLETE,
+            type_flags::TYPE_INCOMPLETE
+        );
+    }
 
     #[test]
     fn test_factory_init() {
