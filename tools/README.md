@@ -292,3 +292,8 @@ apply 内；`BEFORE_DIVERGENCE` → 缺陷更早，回退到报告的 last good 
 `PATH/BOUNDARY/SEQ/STREAM_KIND/LENGTH_DIVERGENCE` 分别指向遍历顺序、计数会计、
 序号、事件对齐与提前终止。退出码沿用 `stage_diff.py`：0 一致 / 1 有分歧 / 2 格式
 或用法错误。
+
+## result/ 产物刷新约定（2026-08-23）
+
+`result/curl_cur.c` 是 `cargo run --release --example curl_decompile` 的 stdout 存档（工具链的正式结构化对比输入）。
+**每次 E2E 门禁后必须回流**：`cp /tmp/<run>.log result/curl_cur.c`，再跑 compare_ghidra/audit_syntax 确认。本 wave 曾出现 06:35 存档滞后到 19:09 的事故（跑批只写 /tmp）——root 已修正。
