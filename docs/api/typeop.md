@@ -183,6 +183,26 @@ This handles the mapping between OpCodes and their TypeOp implementations.
 
 Push this operation to a language printer
 
+### 2026-08-23：RULE-PORT-COLLAPSECONSTANTS-0001（TypeOp::evaluate 桥）
+
+新增模块级 `pub fn evaluate_unary(opc, size_out, size_in, in1) -> Option<u64>` 与
+`pub fn evaluate_binary(opc, size_out, size_in, in1, in2) -> Option<u64>`，
+对应 Ghidra `TypeOp::evaluateUnary/evaluateBinary`（typeop.hh:81-92，内联委托
+`behave->evaluate*`）。Rugra 无 per-op TypeOp 实例，桥承担该角色：
+
+- 非 FLOAT opcode 委托 `opbehavior::{evaluate_unary, evaluate_binary}` 自由函数表
+  （opbehavior.cc:171-792 的整数/布尔/PIECE/SUBPIECE 全表）；
+- FLOAT_* 分支复刻 `OpBehaviorFloat*::evaluate*`（opbehavior.cc:569-750）：
+  按 sizein（INT2FLOAT/FLOAT2FLOAT 按 sizeout）查 `opbehavior::float_format`
+  （`Translate::getFloatFormat` 的静态替身，仅 4/8 字节 IEEE754）；缺格式 →
+  `None`（C++ 基类 LowlevelError "…emulation unimplemented"，RuleCollapseConstants
+  映射为 opMarkNoCollapse）；命中 → `FloatFormat::op_*` 求值；
+- 结果统一 `& calc_mask(size_out)`（保持自由函数 sizing 契约；对 FLOAT_TRUNC
+  同时落实 float.cc:638 的 `res &= calc_mask(sizeout)`）。
+
+`PcodeOp::collapse`（op.rs）改为经本桥求值，对齐
+`PcodeOp::collapse -> TypeOp::evaluate* -> OpBehavior::evaluate*` 分层。
+
  2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 
 ### 2026-07-01：getInputCast/getOutputToken/propagateType 补全

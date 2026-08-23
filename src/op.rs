@@ -673,10 +673,6 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::STARTMARK) != 0
     }
 
-    // Ghidra: op.cc:115 PcodeOp::isCollapsible
-    /// Can this op be collapsed to a copy of a constant? All inputs must be
-    /// constants, the op must be an assignment, must not be marked nocollapse,
-    /// and the output must fit in a uintb. Faithful to `isCollapsible`.
     // Ghidra: op.cc:503 PcodeOp::collapseConstantSymbol
     /// Propagate symbol markup from inputs to a collapsed constant output.
     /// Faithful to `collapseConstantSymbol` (op.cc:503-540).
@@ -1112,10 +1108,14 @@ impl PcodeOp {
 
     // Ghidra: op.cc:450 PcodeOp::collapse
     /// Collapse constant inputs into a single result. Faithful to
-    /// `collapse` (op.cc:450-472). Uses opbehavior evaluate methods.
-    /// Returns Some(result) or None if not collapsible.
+    /// `collapse` (op.cc:450-472). Routes through the TypeOp evaluate
+    /// bridge (`opcode->evaluateUnary/evaluateBinary`, typeop.hh:81-92 —
+    /// `crate::typeop::evaluate_unary/evaluate_binary`), which delegates to
+    /// the OpBehavior table incl. the FLOAT_* dispatch.
+    /// Returns Some((result, marked_input)) or None if the evaluation threw
+    /// (LowlevelError/EvaluationError — the caller's opMarkNoCollapse path).
     pub fn collapse(&self) -> Option<(u64, bool)> {
-        use crate::opbehavior::{evaluate_unary, evaluate_binary};
+        use crate::typeop::{evaluate_unary, evaluate_binary};
         let eval_type = self.get_eval_type();
         let vn0 = self.inrefs.get(0)?;
         let vn0_r = vn0.read().unwrap();

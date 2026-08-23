@@ -2689,6 +2689,109 @@ impl crate::op::PcodeOp {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TypeOp::evaluateUnary / TypeOp::evaluateBinary bridge (typeop.hh:81-92).
+//
+// In Ghidra, `PcodeOp::collapse` (op.cc:450-472) calls
+// `opcode->evaluateUnary/evaluateBinary` — where `opcode` is the op's TypeOp*
+// — and those inline methods (typeop.hh:81-92) delegate directly to the
+// OpBehavior object (`behave->evaluateUnary/evaluateBinary`). Rugra has no
+// per-op TypeOp instance, so this module-level bridge plays that role:
+// integer/bool/piece arms delegate to the `opbehavior` free functions
+// (opbehavior.cc:171-792), and the FLOAT_* arms perform the
+// `OpBehaviorFloat*::evaluate*` dispatch (opbehavior.cc:569-750), including
+// the `translate->getFloatFormat(size)` lookup whose null case is the C++
+// base-class LowlevelError ("Unary/Binary emulation unimplemented").
+// `None` here encodes "Ghidra throws LowlevelError/EvaluationError", which
+// `RuleCollapseConstants::applyOp` maps to `opMarkNoCollapse`
+// (ruleaction.cc:3867-3870).
+// ---------------------------------------------------------------------------
+
+// Ghidra: typeop.hh:81 TypeOp::evaluateUnary
+/// TypeOp evaluate bridge for unary constant folding. Faithful to
+/// `TypeOp::evaluateUnary(int4 sizeout,int4 sizein,uintb in1)`
+/// (typeop.hh:81-82): delegates to the OpBehavior layer. FLOAT_* arms
+/// reproduce `OpBehaviorFloat*::evaluateUnary` (opbehavior.cc:609-750):
+/// the FloatFormat is looked up by input size (output size for
+/// INT2FLOAT/FLOAT2FLOAT); a missing format yields `None` (the C++
+/// LowlevelError path). The final `calc_mask(size_out)` keeps the
+/// free-function sizing contract and implements `FloatFormat::opTrunc`'s
+// own `res &= calc_mask(sizeout)` (float.cc:638).
+pub fn evaluate_unary(opc: OpCode, size_out: usize, size_in: usize, in1: u64) -> Option<u64> {
+    use crate::opbehavior::float_format;
+    let result = match opc {
+        // Ghidra: opbehavior.cc:609 OpBehaviorFloatNan::evaluateUnary
+        OpCode::CPUI_FLOAT_NAN => float_format(size_in)?.op_nan(in1),
+        // Ghidra: opbehavior.cc:659 OpBehaviorFloatNeg::evaluateUnary
+        OpCode::CPUI_FLOAT_NEG => float_format(size_in)?.op_neg(in1),
+        // Ghidra: opbehavior.cc:669 OpBehaviorFloatAbs::evaluateUnary
+        OpCode::CPUI_FLOAT_ABS => float_format(size_in)?.op_abs(in1),
+        // Ghidra: opbehavior.cc:679 OpBehaviorFloatSqrt::evaluateUnary
+        OpCode::CPUI_FLOAT_SQRT => float_format(size_in)?.op_sqrt(in1),
+        // Ghidra: opbehavior.cc:722 OpBehaviorFloatCeil::evaluateUnary
+        OpCode::CPUI_FLOAT_CEIL => float_format(size_in)?.op_ceil(in1),
+        // Ghidra: opbehavior.cc:732 OpBehaviorFloatFloor::evaluateUnary
+        OpCode::CPUI_FLOAT_FLOOR => float_format(size_in)?.op_floor(in1),
+        // Ghidra: opbehavior.cc:742 OpBehaviorFloatRound::evaluateUnary
+        OpCode::CPUI_FLOAT_ROUND => float_format(size_in)?.op_round(in1),
+        // Ghidra: opbehavior.cc:689 OpBehaviorFloatInt2Float::evaluateUnary
+        // (format lookup is by *output* size — the output is the float)
+        OpCode::CPUI_FLOAT_INT2FLOAT => float_format(size_out)?.op_int2float(in1, size_in),
+        // Ghidra: opbehavior.cc:699 OpBehaviorFloatFloat2Float::evaluateUnary
+        // (formatout then formatin; either missing is the error path)
+        OpCode::CPUI_FLOAT_FLOAT2FLOAT => {
+            let formatout = float_format(size_out)?;
+            let formatin = float_format(size_in)?;
+            formatin.op_float2_float(in1, formatout)
+        }
+        // Ghidra: opbehavior.cc:712 OpBehaviorFloatTrunc::evaluateUnary
+        OpCode::CPUI_FLOAT_TRUNC => float_format(size_in)?.op_trunc(in1, size_out),
+        // All non-float unary opcodes (COPY/ZEXT/SEXT/2COMP/NEGATE/
+        // BOOL_NEGATE/POPCOUNT/LZCOUNT) delegate to the OpBehavior table.
+        _ => return crate::opbehavior::evaluate_unary(opc, size_out, size_in, in1),
+    };
+    Some(result & calc_mask(size_out))
+}
+
+// Ghidra: typeop.hh:91 TypeOp::evaluateBinary
+/// TypeOp evaluate bridge for binary constant folding. Faithful to
+/// `TypeOp::evaluateBinary(int4 sizeout,int4 sizein,uintb in1,uintb in2)`
+/// (typeop.hh:91-92): delegates to the OpBehavior layer. FLOAT_* arms
+/// reproduce `OpBehaviorFloat*::evaluateBinary` (opbehavior.cc:569-657):
+/// the FloatFormat is looked up by input size; a missing format yields
+/// `None` (the C++ LowlevelError path).
+pub fn evaluate_binary(
+    opc: OpCode,
+    size_out: usize,
+    size_in: usize,
+    in1: u64,
+    in2: u64,
+) -> Option<u64> {
+    use crate::opbehavior::float_format;
+    let result = match opc {
+        // Ghidra: opbehavior.cc:569 OpBehaviorFloatEqual::evaluateBinary
+        OpCode::CPUI_FLOAT_EQUAL => float_format(size_in)?.op_equal(in1, in2),
+        // Ghidra: opbehavior.cc:579 OpBehaviorFloatNotEqual::evaluateBinary
+        OpCode::CPUI_FLOAT_NOTEQUAL => float_format(size_in)?.op_not_equal(in1, in2),
+        // Ghidra: opbehavior.cc:589 OpBehaviorFloatLess::evaluateBinary
+        OpCode::CPUI_FLOAT_LESS => float_format(size_in)?.op_less(in1, in2),
+        // Ghidra: opbehavior.cc:599 OpBehaviorFloatLessEqual::evaluateBinary
+        OpCode::CPUI_FLOAT_LESSEQUAL => float_format(size_in)?.op_less_equal(in1, in2),
+        // Ghidra: opbehavior.cc:619 OpBehaviorFloatAdd::evaluateBinary
+        OpCode::CPUI_FLOAT_ADD => float_format(size_in)?.op_add(in1, in2),
+        // Ghidra: opbehavior.cc:629 OpBehaviorFloatDiv::evaluateBinary
+        OpCode::CPUI_FLOAT_DIV => float_format(size_in)?.op_div(in1, in2),
+        // Ghidra: opbehavior.cc:639 OpBehaviorFloatMult::evaluateBinary
+        OpCode::CPUI_FLOAT_MULT => float_format(size_in)?.op_mult(in1, in2),
+        // Ghidra: opbehavior.cc:649 OpBehaviorFloatSub::evaluateBinary
+        OpCode::CPUI_FLOAT_SUB => float_format(size_in)?.op_sub(in1, in2),
+        // All non-float binary opcodes (INT_*/BOOL_*/PIECE/SUBPIECE)
+        // delegate to the OpBehavior table.
+        _ => return crate::opbehavior::evaluate_binary(opc, size_out, size_in, in1, in2),
+    };
+    Some(result & calc_mask(size_out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

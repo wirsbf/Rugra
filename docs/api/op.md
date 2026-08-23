@@ -321,6 +321,19 @@ Ghidra: `op.cc:276 PcodeOp::setOpcode`。清空 14 位 opcode-衍生标志（含
 - 用于支持 IR / op 级建模
 - 不直接面向最终 C 代码使用者
 
+### 2026-08-23：RULE-PORT-COLLAPSECONSTANTS-0001（collapse 走 TypeOp evaluate 桥）
+
+`PcodeOp::collapse()`（cc:450-472）的求值路径从直接调 `opbehavior::{evaluate_unary,
+evaluate_binary}` 改为经 `typeop::{evaluate_unary, evaluate_binary}` 桥（typeop.hh:
+81-92 的 Rust 对应物），对齐 Ghidra 分层 `PcodeOp::collapse -> TypeOp::evaluate* ->
+OpBehavior::evaluate*`。行为差异仅 FLOAT_*：此前 FLOAT 族在自由函数表里返回 None
+（即被当作"不可折叠"），现在经桥完成 `OpBehaviorFloat*::evaluate*`（opbehavior.cc:
+569-750）的 `getFloatFormat(sizein/sizeout)` 查找 + `FloatFormat::op*` 求值；
+缺格式（如 2 字节浮点）依旧 None → RuleCollapseConstants 的 opMarkNoCollapse
+错误路径。`is_collapsible`（cc:115-125）与 `collapse_constant_symbol`
+（cc:503-540）本就存在，本次仅修正 `collapse_constant_symbol` 上方一条错挂的
+`isCollapsible` 文档注释（其真正落位在 op.rs `is_collapsible`）。
+
 ### 2026-08-17：SPACE-IOP-PRINTRAW-0001（Ghidra op.cc:41-59 IopSpace::printRaw）
 
 `IopSpace` 新增 `print_raw(offset) -> Option<String>`（op.cc:41 的 Rust 落位，
