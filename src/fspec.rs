@@ -3127,15 +3127,27 @@ impl ParamTrial {
 
     // Ghidra: fspec.cc:1845 ParamTrial::splitHi
     /// Create a trial for the first `sz` bytes (high part). Faithful to
-    /// `ParamTrial::splitHi` (fspec.cc:1845).
+    /// `ParamTrial::splitHi` (fspec.cc:1845-1851): the new trial keeps this
+    /// trial's address and slot and inherits the full `flags` word
+    /// (`res.flags = flags`), so used/checked/active state survives the split.
     pub fn split_hi(&self, sz: i32) -> ParamTrial {
-        ParamTrial::new(self.addr, sz, self.slot)
+        let mut res = ParamTrial::new(self.addr, sz, self.slot);
+        res.flags = self.flags;
+        res
     }
     // Ghidra: fspec.cc:1856 ParamTrial::splitLo
-    /// Create a trial for the last part after `sz` bytes (low part). Faithful
-    /// to `ParamTrial::splitLo` (fspec.cc:1856).
+    /// Create a trial for the last `sz` bytes (low part). Faithful to
+    /// `ParamTrial::splitLo` (fspec.cc:1856-1863): the new trial starts at
+    /// `addr + (size - sz)` (NOT `addr + sz`), takes slot+1, and inherits the
+    /// full `flags` word (`res.flags = flags`). The `sz` parameter is the
+    /// size of the low piece itself, mirroring the C++ calling convention
+    /// `splitLo(trial.getSize() - splitSz)` in `splitTrial` (fspec.cc:2048).
     pub fn split_lo(&self, sz: i32) -> ParamTrial {
-        ParamTrial::new(Address::new(self.addr.as_u64() + sz as u64), self.size - sz, self.slot + 1)
+        // Ghidra: Address newaddr = addr + (size-sz);
+        let newaddr = self.addr.offset((self.size - sz) as i64);
+        let mut res = ParamTrial::new(newaddr, sz, self.slot + 1);
+        res.flags = self.flags;
+        res
     }
 
     // Ghidra: fspec.cc:1871 ParamTrial::testShrink
@@ -3164,6 +3176,63 @@ impl ParamTrial {
         // Ghidra: if (entry != null) return false;
         if self.entry_index.is_some() { return false; }
         true
+    }
+
+    // Ghidra: fspec.cc:1893 ParamTrial::operator<
+    /// Formal-parameter-order comparison. Faithful 1:1 port of
+    /// `ParamTrial::operator<` (fspec.cc:1893-1914):
+    /// 1. A trial with no entry never sorts before any trial
+    ///    (`if (entry == 0) return false`).
+    /// 2. A trial with an entry sorts before one without
+    ///    (`if (b.entry == 0) return true`).
+    /// 3. Different entries compare by model group id
+    ///    (`entry->getGroup()`).
+    /// 4. Same group, different entries compare by entry order
+    ///    (`entry < b.entry` on raw pointers). Rugra compares
+    ///    `entry_index`: Ghidra's entries live in a `std::list` populated
+    ///    by successive `push_back` at decode time with no interleaved
+    ///    frees, so node allocation order == declaration order == index
+    ///    order; the index is the deterministic equivalent of the pointer.
+    /// 5. Same exclusion entry compares by the justified `offset` into the
+    ///    entry (fspec.hh:231).
+    /// 6. Same non-exclusion entry compares by address, reversed for
+    ///    reverse-stack entries, then by size.
+    ///
+    /// `entries` is the owning `ParamListStandard::entry` slice the trial
+    /// indices refer to. Address comparison uses `Address`'s own
+    /// `PartialEq`/`PartialOrd` (Ghidra's `Address::operator==/operator<`,
+    /// space first then offset, address.hh:356/375).
+    pub fn op_less(entries: &[ParamEntry], a: &ParamTrial, b: &ParamTrial) -> bool {
+        // Ghidra: if (entry == (const ParamEntry *)0) return false;
+        let ia = match a.entry_index { Some(i) => i, None => return false };
+        // Ghidra: if (b.entry == (const ParamEntry *)0) return true;
+        let ib = match b.entry_index { Some(i) => i, None => return true };
+        // Ghidra: int4 grpa = entry->getGroup(); int4 grpb = b.entry->getGroup();
+        //         if (grpa != grpb) return (grpa < grpb);
+        let grpa = entries[ia].get_group();
+        let grpb = entries[ib].get_group();
+        if grpa != grpb {
+            return grpa < grpb;
+        }
+        // Ghidra: if (entry != b.entry) return (entry < b.entry);
+        if ia != ib {
+            return ia < ib;
+        }
+        let e = &entries[ia];
+        // Ghidra: if (entry->isExclusion()) return (offset < b.offset);
+        if e.is_exclusion() {
+            return a.offset < b.offset;
+        }
+        // Ghidra: if (addr != b.addr) { reverseStack ? (b.addr < addr) : (addr < b.addr) }
+        if a.addr != b.addr {
+            return if e.is_reverse_stack() {
+                b.addr < a.addr
+            } else {
+                a.addr < b.addr
+            };
+        }
+        // Ghidra: return (size < b.size);
+        a.size < b.size
     }
 
     // Ghidra: fspec.cc:1920 ParamTrial::fixedPositionCompare (static)
@@ -3293,14 +3362,46 @@ impl ParamActive {
     }
 
     // Ghidra: fspec.cc:2033 ParamActive::splitTrial
-    /// Split trial `i` at byte offset `sz`. Faithful to `splitTrial`
-    /// (fspec.cc:2033): replaces trial i with its high part and inserts the
-    /// low part at i+1.
+    /// Split trial `i` into two trials, where the first piece has the given
+    /// size `sz`. Faithful 1:1 port of `splitTrial` (fspec.cc:2033-2057):
+    /// throws (panics) if the stack placeholder has not been recovered,
+    /// renumbers the slots of every trial above the split trial's slot,
+    /// replaces trial i with `splitHi(sz)` followed by
+    /// `splitLo(getSize() - sz)` (the low piece's size is the remainder,
+    /// fspec.cc:2048), and bumps `slotbase` by one.
     pub fn split_trial(&mut self, i: usize, sz: i32) {
-        let hi = self.trial[i].split_hi(sz);
-        let lo = self.trial[i].split_lo(sz);
-        self.trial[i] = hi;
-        self.trial.insert(i + 1, lo);
+        // Ghidra: if (stackplaceholder >= 0)
+        //           throw LowlevelError("Cannot split parameter when the
+        //           placeholder has not been recovered");
+        if self.stackplaceholder >= 0 {
+            panic!("Cannot split parameter when the placeholder has not been recovered");
+        }
+        let slot = self.trial[i].get_slot();
+        let mut new_trials: Vec<ParamTrial> = Vec::new();
+        // Ghidra: for(int4 j=0;j<i;++j) { push trial[j]; bump slots above slot; }
+        for cur in self.trial.iter().take(i) {
+            let mut clone = cur.clone();
+            let oldslot = clone.get_slot();
+            if oldslot > slot {
+                clone.set_slot(oldslot + 1);
+            }
+            new_trials.push(clone);
+        }
+        // Ghidra: newtrials.push_back(trial[i].splitHi(sz));
+        //         newtrials.push_back(trial[i].splitLo(trial[i].getSize()-sz));
+        new_trials.push(self.trial[i].split_hi(sz));
+        new_trials.push(self.trial[i].split_lo(self.trial[i].get_size() - sz));
+        // Ghidra: for(int4 j=i+1;j<trial.size();++j) { push trial[j]; bump slots above slot; }
+        for cur in self.trial.iter().skip(i + 1) {
+            let mut clone = cur.clone();
+            let oldslot = clone.get_slot();
+            if oldslot > slot {
+                clone.set_slot(oldslot + 1);
+            }
+            new_trials.push(clone);
+        }
+        self.slotbase += 1;
+        self.trial = new_trials;
     }
 
     // Ghidra: fspec.cc:2097 ParamActive::getNumUsed
@@ -3309,14 +3410,36 @@ impl ParamActive {
         self.trial.iter().filter(|t| t.is_used()).count()
     }
 
-    // Ghidra: fspec.cc:2087 ParamActive::sortTrials
-    /// Sort the trial list by (address, size). Faithful to
-    /// `ParamActive::sortTrials` (fspec.cc:2087-2095). Called at the end of
-    /// `ParamListStandard::buildTrialMap` so separateSections can assume
-    /// trials are in storage order within each section.
-    pub fn sort_trials(&mut self) {
+    // Ghidra: fspec.hh:316 ParamActive::sortTrials
+    /// Sort the trial list in formal parameter order. Faithful to
+    /// `ParamActive::sortTrials` (fspec.hh:316,
+    /// `sort(trial.begin(),trial.end())`), which orders by
+    /// `ParamTrial::operator<` (fspec.cc:1893-1918): model group first, then
+    /// entry order, then (exclusion) justified offset / (non-exclusion)
+    /// reverseStack-aware address, then size. Called at the end of
+    /// `ParamListStandard::buildTrialMap` (fspec.cc:936) so
+    /// separateSections/forceNoUse/forceInactiveChain see trials in storage
+    /// order within each section.
+    ///
+    /// `entries` is the owning `ParamListStandard::entry` slice the trial
+    /// entry indices refer to (Ghidra dereferences the trial's stored
+    /// `const ParamEntry *`; Rugra's trial stores an index instead).
+    ///
+    /// Residual: Rust's `sort_by` is stable while Ghidra's `std::sort` is
+    /// an unstable introsort, so trials that compare equal under
+    /// `operator<` (same entry, non-exclusion, same address and size —
+    /// differing only in slot/flags) may keep a different relative order
+    /// than libstdc++. Production trial sets do not mint comparator-equal
+    /// duplicates (trials are registered at distinct slots/addresses).
+    pub fn sort_trials(&mut self, entries: &[ParamEntry]) {
         self.trial.sort_by(|a, b| {
-            a.addr.as_u64().cmp(&b.addr.as_u64()).then(a.size.cmp(&b.size))
+            if ParamTrial::op_less(entries, a, b) {
+                std::cmp::Ordering::Less
+            } else if ParamTrial::op_less(entries, b, a) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
         });
     }
 
@@ -4473,15 +4596,36 @@ impl ParamListStandard {
 
     // Ghidra: fspec.cc:661 ParamListStandard::findEntry
     /// Find the (first) entry containing the given memory range. Faithful
-    /// to `findEntry` (fspec.cc:661-680). Rugra uses a linear scan over
-    /// `entry` since the dedicated `rangemap`-based `ParamEntryResolver`
-    /// (fspec.hh:597) is unported.
-    pub fn find_entry(&self, loc: Address, size: i32, just: bool) -> Option<usize> {
+    /// to `findEntry` (fspec.cc:661-680). Ghidra resolves through the
+    /// per-space `resolverMap`: `resolverMap[loc.getSpace()->getIndex()]`
+    /// visits only entries whose space is the query address's space
+    /// (`populateResolver`, fspec.cc:1191-1216, registers each entry in its
+    /// own space's resolver), so register/stack entries hit normally and
+    /// entries of other spaces are never consulted. Rugra's linear scan
+    /// compares the query space with the entry space
+    /// (`e.get_space() != space`), following the explicit-space pattern of
+    /// `characterize_as_param`/`get_biggest_contained_param` (cc:682/cc:1375)
+    /// because the legacy `Address` is spaceless (ADDRESS-0001 transitional).
+    /// `space == None` marks a query whose space is structurally unavailable
+    /// (legacy spaceless trial address); the scan then degrades to
+    /// offset-only matching with no space restriction until trials carry
+    /// spaces.
+    ///
+    /// The dedicated `rangemap`-based `ParamEntryResolver`
+    /// (fspec.hh:597) is unported; the ordered linear scan visits the same
+    /// entry set per space.
+    pub fn find_entry(&self, space: Option<AddressSpace>, loc: Address, size: i32, just: bool) -> Option<usize> {
         // TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
         // rangemap (fspec.hh:597).
         for (i, e) in self.entry.iter().enumerate() {
+            // Ghidra resolverMap gate: only entries in the query's space.
+            if let Some(spc) = space {
+                if e.get_space() != spc { continue; }
+            }
+            // Ghidra: if (testEntry->getMinSize() > size) continue;
             if e.get_min_size() > size { continue; }
-            if e.get_space() != AddressSpace::Ram { continue; }
+            // Ghidra: if (!just || testEntry->justifiedContain(loc,size)==0)
+            //           return testEntry;
             if !just || e.justified_contain(loc, size) == 0 { return Some(i); }
         }
         None
@@ -4678,7 +4822,12 @@ impl ParamListStandard {
         let mut int_count = 0i32;
         for i in 0..active.get_num_trials() {
             let (addr, size) = { let t = active.get_trial(i); (t.get_address(), t.get_size()) };
-            let entry_slot = self.find_entry(addr, size, true);
+            // Ghidra: const ParamEntry *entrySlot = findEntry(paramtrial.getAddress(), paramtrial.getSize(), true);
+            // The trial's space rides Ghidra's Address (`addr.getSpace()`);
+            // Rugra's legacy trial addresses are spaceless (ADDRESS-0001
+            // transitional), so the scan runs without a space restriction
+            // until trials carry spaces.
+            let entry_slot = self.find_entry(None, addr, size, true);
             if entry_slot.is_none() {
                 active.get_trial_mut(i).mark_no_use();
                 continue;
@@ -4742,7 +4891,7 @@ impl ParamListStandard {
                 }
             }
         }
-        active.sort_trials();
+        active.sort_trials(&self.entry);
     }
 
     // Ghidra: fspec.cc:946 ParamListStandard::separateSections
@@ -4955,10 +5104,12 @@ impl ParamListStandard {
 
     // Ghidra: fspec.cc:1315 ParamListStandard::checkJoin
     /// Check if the two (hi/lo) locations can be joined. Faithful to
-    /// `checkJoin` (fspec.cc:1315-1340).
-    pub fn check_join(&self, hi_addr: Address, hi_size: i32, lo_addr: Address, lo_size: i32) -> bool {
-        let entry_hi = match self.find_entry(hi_addr, hi_size, true) { Some(e) => e, None => return false };
-        let entry_lo = match self.find_entry(lo_addr, lo_size, true) { Some(e) => e, None => return false };
+    /// `checkJoin` (fspec.cc:1315-1340). `space` is the query address's
+    /// space (Ghidra reads it from the `const Address &` parameters; the
+    /// legacy spaceless `Address` needs it alongside — see `find_entry`).
+    pub fn check_join(&self, space: AddressSpace, hi_addr: Address, hi_size: i32, lo_addr: Address, lo_size: i32) -> bool {
+        let entry_hi = match self.find_entry(Some(space), hi_addr, hi_size, true) { Some(e) => e, None => return false };
+        let entry_lo = match self.find_entry(Some(space), lo_addr, lo_size, true) { Some(e) => e, None => return false };
         if self.entry[entry_hi].get_group() == self.entry[entry_lo].get_group() {
             if self.entry[entry_hi].is_exclusion() || self.entry[entry_lo].is_exclusion() { return false; }
             if !is_contiguous(hi_addr, hi_size, lo_addr, lo_size) { return false; }
@@ -4978,27 +5129,29 @@ impl ParamListStandard {
 
     // Ghidra: fspec.cc:1342 ParamListStandard::checkSplit
     /// Check if it makes sense to split a single storage location.
-    /// Faithful to `checkSplit` (fspec.cc:1342-1352).
-    pub fn check_split(&self, loc: Address, size: i32, split_point: i32) -> bool {
+    /// Faithful to `checkSplit` (fspec.cc:1342-1352). `space` is the query
+    /// address's space (see `find_entry`).
+    pub fn check_split(&self, space: AddressSpace, loc: Address, size: i32, split_point: i32) -> bool {
         let loc2 = Address::new(loc.as_u64() + split_point as u64);
         let size2 = size - split_point;
-        if self.find_entry(loc, split_point, true).is_none() { return false; }
-        if self.find_entry(loc2, size2, true).is_none() { return false; }
+        if self.find_entry(Some(space), loc, split_point, true).is_none() { return false; }
+        if self.find_entry(Some(space), loc2, size2, true).is_none() { return false; }
         true
     }
 
     // Ghidra: fspec.cc:1354 ParamListStandard::possibleParam
-    pub fn possible_param(&self, loc: Address, size: i32) -> bool {
-        self.find_entry(loc, size, true).is_some()
+    pub fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool {
+        self.find_entry(Some(space), loc, size, true).is_some()
     }
 
     // Ghidra: fspec.cc:1360 ParamListStandard::possibleParamWithSlot
     /// Pass-back the slot and slot size. Faithful to `possibleParamWithSlot`
-    /// (fspec.cc:1360-1373).
+    /// (fspec.cc:1360-1373). `space` is the query address's space (see
+    /// `find_entry`).
     pub fn possible_param_with_slot(
-        &self, loc: Address, size: i32, slot: &mut i32, slot_size: &mut i32,
+        &self, space: AddressSpace, loc: Address, size: i32, slot: &mut i32, slot_size: &mut i32,
     ) -> bool {
-        let entry_num = match self.find_entry(loc, size, true) { Some(e) => e, None => return false };
+        let entry_num = match self.find_entry(Some(space), loc, size, true) { Some(e) => e, None => return false };
         let entry = &self.entry[entry_num];
         *slot = entry.get_slot(loc, 0);
         if entry.is_exclusion() {
@@ -5011,11 +5164,21 @@ impl ParamListStandard {
 
     // Ghidra: fspec.cc:1411 ParamListStandard::unjustifiedContainer
     /// Check if the given storage location looks like an unjustified
-    /// parameter. Faithful to `unjustifiedContainer` (fspec.cc:1411-1424).
+    /// parameter. Faithful to `unjustifiedContainer` (fspec.cc:1411-1424):
+    /// iterates ALL entries with no space filter — Ghidra relies on each
+    /// entry's `justifiedContain` rejecting queries in other spaces
+    /// (fspec.cc:269 / `Address::justifiedContain` address.cc space check).
+    /// Rugra's per-entry predicates are offset-only while the legacy
+    /// `Address` is spaceless (ADDRESS-0001 transitional); this call site
+    /// must not re-introduce a space filter Ghidra does not have.
     pub fn unjustified_container(&self, loc: Address, size: i32, res: &mut VarnodeData) -> bool {
+        // Ghidra: if ((*iter).getMinSize() > size) continue;
+        //         int4 just = (*iter).justifiedContain(loc,size);
+        //         if (just < 0) continue;
+        //         if (just == 0) return false;
+        //         (*iter).getContainer(loc,size,res); return true;
         for cur in &self.entry {
             if cur.get_min_size() > size { continue; }
-            if cur.get_space() != AddressSpace::Ram { continue; }
             let just = cur.justified_contain(loc, size);
             if just < 0 { continue; }
             if just == 0 { return false; }
@@ -5027,11 +5190,15 @@ impl ParamListStandard {
 
     // Ghidra: fspec.cc:1426 ParamListStandard::assumedExtension
     /// Get the type of extension and containing parameter. Faithful to
-    /// `assumedExtension` (fspec.cc:1426-1437).
+    /// `assumedExtension` (fspec.cc:1426-1437): iterates ALL entries with
+    /// no space filter — per-entry `assumedExtension` rejects other-space
+    /// queries itself (fspec.cc:366-394 via `justifiedContain`).
     pub fn assumed_extension(&self, addr: Address, size: i32, res: &mut VarnodeData) -> FspecOpCode {
+        // Ghidra: if ((*iter).getMinSize() > size) continue;
+        //         OpCode ext = (*iter).assumedExtension(addr,size,res);
+        //         if (ext != CPUI_COPY) return ext;
         for cur in &self.entry {
             if cur.get_min_size() > size { continue; }
-            if cur.get_space() != AddressSpace::Ram { continue; }
             let ext = cur.assumed_extension(addr, size, res);
             if ext != FspecOpCode::CPUI_COPY { return ext; }
         }
@@ -5417,7 +5584,7 @@ impl ParamListStandardOut {
                 }
             }
             if !putative_match { continue; }
-            active.sort_trials();
+            active.sort_trials(self.base.get_entry());
             // Count least-justified contiguous bytes covered by this entry.
             let mut offmatch = 0i32;
             let mut k = 0usize;
@@ -5482,7 +5649,7 @@ impl ParamListStandardOut {
                         t.clear_entry();
                     }
                 }
-                active.sort_trials();
+                active.sort_trials(self.base.get_entry());
             }
         }
     }
@@ -5508,7 +5675,10 @@ impl ParamListStandardOut {
             };
             active.get_trial_mut(i).clear_entry();
             if !t_active { continue; }
-            let entry = self.base.find_entry(t_addr, t_size, false);
+            // Trial space unavailable on the legacy spaceless trial address
+            // (ADDRESS-0001 transitional); Ghidra reads it from the trial's
+            // Address. See find_entry.
+            let entry = self.base.find_entry(None, t_addr, t_size, false);
             if entry.is_none() {
                 active.get_trial_mut(i).mark_no_use();
                 continue;
@@ -5525,7 +5695,7 @@ impl ParamListStandardOut {
             }
             active.get_trial_mut(i).set_entry(entry_idx, res);
         }
-        active.sort_trials();
+        active.sort_trials(self.base.get_entry());
         // TODO(ALIGNMENT_ROADMAP): depends on unported
         // `ModelRule::fillinOutputMap` (modelrules.hh). Ghidra walks
         // `modelRules` and, on the first rule whose `fillinOutputMap`
@@ -7033,7 +7203,115 @@ mod tests {
         let mut effects = Vec::new();
         m.parse_pentry(0, true, false, false, &mut effects, e).unwrap();
         m.finalize_after_decode(0);
-        assert!(m.possible_param(Address::new(0x1000), 8));
-        assert!(!m.possible_param(Address::new(0x9000), 8));
+        assert!(m.possible_param(AddressSpace::Ram, Address::new(0x1000), 8));
+        assert!(!m.possible_param(AddressSpace::Ram, Address::new(0x9000), 8));
+        // findEntry's per-space resolver gate (fspec.cc:664-669): a query
+        // whose space has no entries never matches, even at a valid offset.
+        assert!(!m.possible_param(AddressSpace::Register, Address::new(0x1000), 8));
+        assert!(!m.possible_param(AddressSpace::Stack, Address::new(0x1000), 8));
+    }
+
+    // ---- FSPEC-TRIALCMP-0003 unit coverage ----
+
+    // Ghidra: fspec.cc:1845/1856 ParamTrial::splitHi/splitLo
+    /// The audit-mandated 12-byte trial split at 4: the low piece must
+    /// start at `addr + (size - sz)` = 0x108 (not 0x104) and both halves
+    /// inherit the full flags word (fspec.cc:1849/1861 `res.flags = flags`).
+    #[test]
+    fn test_param_trial_split_12_at_4_flags_and_address() {
+        let mut t = ParamTrial::new(Address::new(0x100), 12, 2);
+        t.mark_used();
+        t.mark_active(); // also sets checked
+        let hi = t.split_hi(4);
+        assert_eq!(hi.get_size(), 4);
+        assert_eq!(hi.get_address(), Address::new(0x100));
+        assert_eq!(hi.get_slot(), 2);
+        assert!(hi.is_used() && hi.is_active() && hi.is_checked());
+        // splitLo(sz): last sz bytes at addr + (size - sz) (fspec.cc:1859).
+        let lo = t.split_lo(4);
+        assert_eq!(lo.get_size(), 4);
+        assert_eq!(lo.get_address(), Address::new(0x108));
+        assert_eq!(lo.get_slot(), 3);
+        assert!(lo.is_used() && lo.is_active() && lo.is_checked());
+        // The complementary split of the remaining 8 bytes.
+        let lo8 = t.split_lo(8);
+        assert_eq!(lo8.get_size(), 8);
+        assert_eq!(lo8.get_address(), Address::new(0x104));
+        assert_eq!(lo8.get_slot(), 3);
+    }
+
+    // Ghidra: fspec.cc:2033 ParamActive::splitTrial
+    /// splitTrial on a 12-byte trial at sz=4: hi is [0x100,0x104), lo is
+    /// [0x104,0x10c); the survivor above the split gets its slot bumped and
+    /// slotbase increases (fspec.cc:2041-2056).
+    #[test]
+    fn test_param_active_split_trial_12_at_4_renumbers_slots() {
+        let mut pa = ParamActive::new(true);
+        pa.register_trial(Address::new(0x100), 12);
+        pa.register_trial(Address::new(0x200), 8);
+        let base = pa.get_slot_base();
+        pa.split_trial(0, 4);
+        assert_eq!(pa.get_num_trials(), 3);
+        assert_eq!(pa.get_trial(0).get_size(), 4);
+        assert_eq!(pa.get_trial(0).get_address(), Address::new(0x100));
+        assert_eq!(pa.get_trial(1).get_size(), 8);
+        assert_eq!(pa.get_trial(1).get_address(), Address::new(0x104));
+        assert_eq!(pa.get_trial(2).get_address(), Address::new(0x200));
+        // The survivor above slot 0 shifts from slot 1 to slot 2.
+        assert_eq!(pa.get_trial(2).get_slot(), 2);
+        assert_eq!(pa.get_slot_base(), base + 1);
+    }
+
+    // Ghidra: fspec.cc:1893 ParamTrial::operator< + fspec.hh:316 sortTrials
+    /// The comparator ladder: group id, then entry order, then exclusion
+    /// offset / reverseStack-aware address, then size. Register entries
+    /// (group 0/1) must now order before the stack entry regardless of raw
+    /// address, and a reverse-stack entry orders its section high-to-low.
+    #[test]
+    fn test_param_active_sort_trials_uses_model_order() {
+        let mut m = ParamListStandard::new();
+        // Group 0: register slot at offset 0x30 (exclusion).
+        let mut e0 = ParamEntry::new(0);
+        e0.set_space(AddressSpace::Register);
+        e0.set_base(0x30);
+        e0.set_sizes(8, 4);
+        e0.set_alignment(0); // exclusion
+        // Group 1: register slot at offset 0x38 (exclusion).
+        let mut e1 = ParamEntry::new(1);
+        e1.set_space(AddressSpace::Register);
+        e1.set_base(0x38);
+        e1.set_sizes(8, 4);
+        e1.set_alignment(0);
+        // Group 2: stack entry, reverse-stack slots.
+        let mut e2 = ParamEntry::new(2);
+        e2.set_space(AddressSpace::Stack);
+        e2.set_base(0);
+        e2.set_sizes(64, 4);
+        e2.set_alignment(8);
+        *e2.flags_mut() |= param_entry_flags::REVERSE_STACK;
+        let mut effects = Vec::new();
+        m.parse_pentry(0, true, false, false, &mut effects, e0).unwrap();
+        m.parse_pentry(1, true, false, false, &mut effects, e1).unwrap();
+        m.parse_pentry(2, true, false, false, &mut effects, e2).unwrap();
+        m.finalize_after_decode(0);
+        let entries = m.get_entry();
+
+        let mut pa = ParamActive::new(true);
+        // Register in slot order: stack-first raw addresses would sort
+        // differently under the old (addr, size) key.
+        pa.register_trial(Address::new(0x0), 8); // stack slot 0 (group 2)
+        pa.register_trial(Address::new(0x38), 4); // reg group 1
+        pa.register_trial(Address::new(0x10), 8); // stack slot 2 (group 2)
+        pa.register_trial(Address::new(0x30), 8); // reg group 0
+        // Bind entries the way buildTrialMap does (offset 0 into entry).
+        pa.get_trial_mut(0).set_entry(2, 0);
+        pa.get_trial_mut(1).set_entry(1, 0);
+        pa.get_trial_mut(2).set_entry(2, 0);
+        pa.get_trial_mut(3).set_entry(0, 0);
+        pa.sort_trials(entries);
+        let order: Vec<u64> = (0..4).map(|i| pa.get_trial(i).get_address().as_u64()).collect();
+        // Group 0 (0x30) then group 1 (0x38), then group 2 reverse-stack:
+        // highest stack offset first (0x10 before 0x0).
+        assert_eq!(order, vec![0x30, 0x38, 0x10, 0x0]);
     }
 }

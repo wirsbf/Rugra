@@ -305,7 +305,7 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 - `PrototypePieces`（out_type+in_types+first_var_arg_slot，fspec.hh:445-450）
 - 自由函数：`string_to_type_class`/`metatype_to_type_class`/`justified_contain_range`/`is_contiguous`
 
-**ParamTrial 扩展**：+`entry_index: Option<usize>` 字段（替代 Ghidra `const ParamEntry*` 指针，fspec.hh:230）+ `set_entry(entry_index, off)`/`clear_entry`/`get_entry_index` 访问器。`ParamActive::sort_trials`(cc:2087) 按地址排序试验。
+**ParamTrial 扩展**：+`entry_index: Option<usize>` 字段（替代 Ghidra `const ParamEntry*` 指针，fspec.hh:230）+ `set_entry(entry_index, off)`/`clear_entry`/`get_entry_index` 访问器 + `op_less(entries, a, b)`（`operator<` 1:1 移植，cc:1893-1914）。`ParamActive::sort_trials`（hh:316）按 `op_less` 模型槽序（group → entry 序 → exclusion offset / reverseStack 地址 → size）排序试验，见 2026-08-23 节。
 
 **ALIGNMENT_ROADMAP 记录的未移植依赖**（每个 TODO 均有记录）：
 - `ParamEntryResolver` rangemap（fspec.hh:597）—— `find_entry` 用线性扫描替代
@@ -338,6 +338,54 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
   pentry 与 default-return 注入仍为 `UNTESTED`。fixture 不把这些残差归为匹配。
 
 **验证**：cargo check --lib 0 错误；cargo test --lib fspec:: 12/12 通过（6 原有 + 6 新增：ParamEntry exclusion/aligned/justified_contain + ParamListStandard new/possible_param）。repo 中 6 个预存失败（pcodeparse/unionresolve）与本移植无关。
+
+### 2026-08-23：fspec Phase-0 对齐修复（FSPEC-SPACEFILTER-0002 + FSPEC-TRIALCMP-0003）
+
+审计依据 `docs/alignment_audit/FSPEC_GAPS_2026-08-23.md` §3.B/§3.C/§3.D。两处修复均以锁定
+oracle `fspec_phase0_1204` fixture（`tools/run_fspec_phase0_oracle.sh`，pin-base schema2）
+双侧投影逐字节 MATCH 验证。
+
+- `ParamListStandard::find_entry`（cc:661-680）：删除自创的 `!= AddressSpace::Ram` 过滤，
+  改为查询空间 vs entry 空间比较（`e.get_space() != space`），对齐 Ghidra 每空间
+  `resolverMap` 的语义（`populateResolver` 只把 entry 注册进它自己空间的 resolver，
+  cc:1191-1216）。签名增补 `space: Option<AddressSpace>`：`Some(s)` 精确对齐（寄存器/栈
+  entry 正常命中，const/unique 查询不会在别的空间 offset 上假命中）；`None` 标记遗留
+  无空间 trial 地址（ADDRESS-0001 过渡期），退化为无空间限制的 offset 匹配 ——
+  `build_trial_map`/`ParamListStandardOut::fillin_map` 两个 trial 驱动调用点暂走 `None`。
+  下游 `possible_param`/`possible_param_with_slot`/`check_join`/`check_split` 签名随之增补
+  显式 `space: AddressSpace`（同 `characterize_as_param`/`get_biggest_contained_param`
+  的既有模式）。
+- `unjustified_container`（cc:1411-1424）/`assumed_extension`（cc:1426-1437）：删除
+  Ram-only 过滤，无空间过滤地遍历全部 entry（Ghidra 依赖逐 entry `justifiedContain` 的
+  空间拒绝）。残差：Rust 逐 entry 谓词是 offset-only（遗留无空间 Address），来自异空间
+  的查询理论上可假命中 —— 登记为 ADDRESS-0001 的下游缺口。
+- `ParamTrial::op_less`（cc:1893-1914 新增移植）：排序键逐分支对齐 —— null entry 恒后、
+  group id、entry 指针序（Rust 用 `entry_index`：`std::list` 只在 decode 期 push_back，
+  节点分配序 == 声明序 == 索引序）、exclusion entry 的 justified offset、非 exclusion 的
+  reverseStack 地址序、size。`sort_trials` 签名改为 `(entries: &[ParamEntry])`，四处调用
+  点（`build_trial_map`、`Out::fillin_map`/`fillin_map_fallback`×2）传入所属 entry 表。
+  残差：Rust `sort_by` 稳定 vs `std::sort` introsort 不稳定 —— 比较器等价元素（同 entry/
+  地址/size）的相对次序可能不同；生产 trial 集不会产生比较器等价重复。
+- `ParamTrial::split_hi`/`split_lo`（cc:1845/1856）：`split_lo` 低片地址改
+  `addr + (size - sz)`（原 `+sz` 错误，仅 size==2*sz 时巧合相等；12 字节切 4 时
+  0x104→0x108），两函数补 `res.flags = flags` 复制（used/checked/active 跨切分保留）。
+- `ParamActive::split_trial`（cc:2033-2057 全量移植）：补 stackplaceholder>=0 panic 守卫、
+  分裂点以上 trial 的 slot 重编号、`splitLo(getSize()-sz)` 调用形、`slotbase += 1`。
+- 单测：`test_param_trial_split_12_at_4_flags_and_address`、
+  `test_param_active_split_trial_12_at_4_renumbers_slots`、
+  `test_param_active_sort_trials_uses_model_order`、扩展
+  `test_param_list_standard_possible_param`（空间负例）。
+- fixture `fspec_phase0_1204`：跨空间 entry 查找（register 命中 / const/unique/ram 交叉
+  miss / minsize 门）、无空间过滤的容器/扩展判定（register INT_ZEXT、ram PIECE、COPY 门）、
+  comparator 阶梯排序（group/entry/offset/reverseStack/null-entry）、12/4 切分的边界地址与
+  flags 继承、split_trial slot 重编号。slot 观测用 delta：Ghidra slot 1 基
+  （cc:4062 `triallist[trial.getSlot()-1]`）vs Rust 消费方 0 基耦合，绝对基数是 fixture
+  覆盖投影之外的登记残差（见 runner residual 声明）。
+
+**验证**：cargo check --lib 0 错误；cargo test --lib fspec:: 19/19；全库 1473 通过、
+2 失败均为 base 即存的 funcdata 推断测试（`test_infer_params_and_return_type`/
+`test_type_propagation`，与本改动无关，已 stash 复核）。
+`tools/run_fspec_phase0_oracle.sh`：covered_projection=6/6 MATCH。
 
 ### 2026-08-11：ANN-C 函数来源注释审计
 
