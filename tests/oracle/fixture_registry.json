@@ -3335,6 +3335,39 @@
         "coreaction::ActionDeindirect",
         "coreaction::ActionStackPtrFlow"
       ]
+    },
+    {
+      "id": "condexe_trueout_1204",
+      "description": "CBRANCH true/false out edge positional polarity vs locked 12.0.4: helper polarity incl. flip invariance + negateCondition edge swap + reverse-index maintenance, findinit init2a_true (7 cases incl. negative), verify camethruposta_slot 2x2 flip matrix (XOR composed exactly once), zeropath three-branch x double flip (4/4 MATCH)",
+      "runner": [
+        "tools/run_condexe_trueout_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/condexe_trueout_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/condexe_trueout_1204.cc",
+          "rust_fixture": "tests/oracle/condexe_trueout_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "FlowBlock::getTrueOut",
+        "FlowBlock::getFalseOut",
+        "ConditionalExecution::findInitPre",
+        "ConditionalExecution::discoverPathIsTrue"
+      ],
+      "rust_function_ids": [
+        "block::get_true_out",
+        "block::get_false_out",
+        "condexe::find_init_pre",
+        "condexe::discover_path_is_true"
+      ]
     }
   ]
 }
