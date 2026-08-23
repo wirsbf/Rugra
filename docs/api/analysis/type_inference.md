@@ -237,3 +237,8 @@ Rugra 当前的总控文档已经明确区分：
 > **Rugra 旧版“类型推断”分层思路的历史文档入口，可用于理解类型恢复主题本身的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
 
 ---
+---
+
+## 2026-08-23（VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001 编译适配）：high v_type 直写改为 TypeCell.set()
+
+type_infer.rs 两处 `high_arc.write().unwrap().v_type = X` → `.v_type.set(X)`（:296 new_type、:380 elem_type）。`HighVariable::v_type` 缓存迁入 `TypeCell` 锁域（Ghidra variable.hh:141 `mutable` 的对应物，详见 docs/api/variable.md）。`.set()` 保持原直写缓存语义（不置脏），行为不变。

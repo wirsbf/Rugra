@@ -3188,7 +3188,7 @@ impl ActionSetCasts {
                 let is_annot = in_rg.is_annotation();
                 let in_size = in_rg.get_size();
                 let curtype = in_rg.high.as_ref()
-                    .map(|h| h.read().unwrap().v_type.clone())
+                    .map(|h| h.read().unwrap().v_type.get())
                     .or_else(|| in_rg.v_type.clone())
                     .unwrap_or_else(|| base_type_for(in_size, meta));
                 (in_size, curtype, is_annot)
@@ -3263,7 +3263,7 @@ impl ActionSetCasts {
         };
         // cc:2543: outHighType = outvn->getHigh()->getType()
         let out_high_type = outvn.read().unwrap().high.as_ref()
-            .map(|h| h.read().unwrap().v_type.clone())
+            .map(|h| h.read().unwrap().v_type.get())
             .or_else(|| outvn.read().unwrap().v_type.clone())
             .unwrap_or_else(|| tokenct.clone());
         // cc:2544: if tokenct == outHighType → no cast needed.
@@ -3335,7 +3335,7 @@ impl ActionSetCasts {
                 let is_annot = in_rg.is_annotation();
                 let in_size = in_rg.get_size();
                 let curtype = in_rg.high.as_ref()
-                    .map(|h| h.read().unwrap().v_type.clone())
+                    .map(|h| h.read().unwrap().v_type.get())
                     .or_else(|| in_rg.v_type.clone())
                     .unwrap_or_else(|| reqtype.clone());
                 (in_size, curtype, is_annot)
@@ -3382,7 +3382,7 @@ impl ActionSetCasts {
         let out_rg = out_arc.read().unwrap();
         // Output pointer type: from high type if present, else varnode type.
         let out_type = out_rg.high.as_ref()
-            .map(|h| h.read().unwrap().v_type.clone())
+            .map(|h| h.read().unwrap().v_type.get())
             .or_else(|| out_rg.v_type.clone())?;
         // For PTRSUB `c = PTRSUB(a, off)`: input(0) should be a pointer to
         // the same outer type as c's pointed-to type. In Ghidra this is

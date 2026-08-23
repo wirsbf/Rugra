@@ -534,3 +534,11 @@ merge.hh:83）删除：Ghidra 的 merge 序列（coreaction.cc:5718-5729）没�
 ## 引用行号勘误（2026-08-23，root，legacymig 复核跟进）
 
 merge.rs 两处 `type_nochar` 置空引用由 type.cc:3131 修正为 3128（clearCache 内；3131 是 charcache 循环行）。复核确认语义无误，仅引用偏移 3 行。
+
+## 2026-08-23（VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001 编译适配）：v_type 访问器改 TypeCell 域
+
+HighVariable 的 `v_type` 缓存迁入 `TypeCell`（`RwLock<Arc<Datatype>>`，Ghidra `mutable Datatype *type` variable.hh:141 的 Rust 锁域，详见 docs/api/variable.md）。merge.rs 四处编译必需适配，语义不变：
+- `:1141` `Arc::ptr_eq(&hi.v_type.get(), &ho.v_type.get())`（merge.cc:107-109 双锁类型等同检查，指针等同语义保持）
+- `:1255` 同上（out/input 类型等同）
+- `:3312` `first.read().v_type.get()`（updateType 后读缓存）
+- `:3320` `Arc::ptr_eq(&datatype, &high.v_type.get())`
