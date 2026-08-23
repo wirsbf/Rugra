@@ -3580,6 +3580,64 @@
         "varmap::add_dynamic_symbol",
         "varmap::build_default_name"
       ]
+    },
+    {
+      "id": "action_lanedivide_1204",
+      "description": "ActionLaneDivide collect/process/apply vs locked 12.0.4: dual-source collect with mask filter, mode-0 successful split IR + count, mode-2 default-lane rejection zero-mutation, RULE_ONCEPERFUNC second-pass short-circuit, lanedMap clear timing (6/6 MATCH)",
+      "runner": [
+        "tools/run_action_lanedivide_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/action_lanedivide_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/action_lanedivide_1204.cc",
+          "rust_fixture": "tests/oracle/action_lanedivide_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionLaneDivide::collectLaneSizes",
+        "ActionLaneDivide::processVarnode",
+        "ActionLaneDivide::apply"
+      ],
+      "rust_function_ids": [
+        "coreaction::ActionLaneDivide"
+      ]
+    },
+    {
+      "id": "block_calcloop_1204",
+      "description": "BlockGraph::calcLoop cycle-breaking DFS + structureLoops production wiring vs locked 12.0.4: reducible marking, nested loops, irreducible component lb overlay, structureReset end-to-end chain with dominator projection (7/7 MATCH)",
+      "runner": [
+        "tools/run_block_calcloop_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/block_calcloop_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/block_calcloop_1204.cc",
+          "rust_fixture": "tests/oracle/block_calcloop_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "BlockGraph::calcLoop",
+        "BlockGraph::structureLoops"
+      ],
+      "rust_function_ids": [
+        "block::BlockGraph::calc_loop",
+        "block::BlockGraph::structure_loops"
+      ]
     }
   ]
 }
