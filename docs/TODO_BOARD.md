@@ -91,7 +91,7 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | TYPEFACTORY-LOCALTYPE-CACHE-0001 | DONE | f0a7829+9ee59ab→bda7dab | 机制C APPROVE（8 通道穷尽枚举、oracle 手重建验证前缀 sha、排序键逐值核对 24 submeta 表）；type_system:: 106/106；复核域外 3 项登记 TYPEFACTORY-DECODE-SIDENOTES-0001 |
 | RULE-PORT-COLLAPSECONSTANTS-0001 | DONE | e9a850d+6399c08→b94e7f4+01aafa2 | 机制C APPROVE（72-live-opcode 独立验证、EquateSymbol 真符号公证、复核者重读全部引用行）；ruleaction:: 180/180；fixture 93；组合树 E2E 门禁通过（defects=0/numbering=0，skeleton 8674）；残差=VARNODE-COPYSYMBOL-EQUATE/FLOAT-OPINT2FLOAT-SIGN/OPBEHAVIOR-SRIGHT-SIZEMASK |
 | JUMPTABLE-GUARDS-0001 | DONE | 07be5cb+2f84e7e→696916d | 机制C APPROVE（六改动逐项 PASS、3/6 MISMATCH 归因独立证实、readOp 遮蔽语义独立验证、复跑 exit0 27/27）；fixture 94；复核域外发现登记 JUMPTABLE-MARKMODEL-0001 |
-| SCOPELOCAL-QUERY-0001 r2 | DONE | 3bea8db+31f4046→c258bb3 | 机制C APPROVE（包夹怪癖双向独立推演+libstdc++ 源码级验证）；root 微修 varmap.rs:3053 相邻合并死分支（297ba6c）+fixture 重钉链（5df1a34+），runner 复跑 exit0 11/11；E2E v4 跑批中 |
+| SCOPELOCAL-QUERY-0001 r2 | DONE | 3bea8db+31f4046→c258bb3 | 机制C APPROVE（包夹怪癖双向独立推演+libstdc++ 源码级验证）；root 微修 varmap.rs:3053 相邻合并死分支（297ba6c）+fixture 重钉链（5df1a34+），runner 复跑 exit0 11/11；E2E v4 门禁通过（defects=0/numbering=0，skeleton 8674=查询层重构无可观察输出影响） |
 
 来自 `docs/alignment_audit/CONDEXE_GAPS_2026-08-22.md`（27 函数对照：20 结构 MATCH 全 UNTESTED、
 1 MISSING（buildHeritageArray）、6 MISMATCH；**勘误 roadmap #19**：PathMeld 归因错误（condexe.cc 零引用）、
