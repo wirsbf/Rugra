@@ -2974,7 +2974,7 @@
     },
     {
       "id": "datatype_type_order_1204",
-      "description": "Datatype submeta, virtual compare/dependency dispatch, pointer and pointer-relative state, TypeCode flags, Spacebase identity and explicit TypeFactory residuals",
+      "description": "Datatype compare/dependency/identity full matrix vs locked 12.0.4: TypeCode varargs/model/param+return recursion/level-id, Array/Union/3x Partial matrices, Struct field offset/deep pointer, 24 submetatype total order (182 records, 174 MATCH, 8 declared mismatches bound to TODOs)",
       "runner": [
         "tools/run_datatype_type_order_oracle.sh"
       ],
@@ -3036,7 +3036,8 @@
           "RG-F-936ba78d16dcf879f5dd",
           "RG-F-7c158480861d89ccdc8f"
         ]
-      }
+      },
+      "wave": "W-2026-08-22-ORCH (extended)"
     },
     {
       "id": "transform_multiequal_insert_1204",
