@@ -385,18 +385,40 @@ pub struct MergePersistentState {
     copy_trims: Vec<crate::op::PcodeOpRef>,
     /// RUGRA-GLUE live-varnode premise (Ghidra premise = vbank contents).
     live_set: std::collections::HashSet<usize>,
+    /// Roots of unmapped CONCAT trees (Ghidra merge.hh:88 `protoPartial`).
+    /// Populated by `Merge::groupPartials` (merge.cc) and consumed by the
+    /// proto-partial grouping pass; Rugra's `group_partials` is a documented
+    /// no-op (MERGE-PROTOPARTIAL-GROUP-0001), so this channel is currently
+    /// only deposited/observed by the clear-lifecycle fixture. `Merge::clear`
+    /// (merge.cc:1582) empties it regardless.
+    proto_partial: Vec<crate::op::PcodeOpRef>,
+    /// `PcodeOpSet::opList` of the CALL/STORE ops indirectly affecting stack
+    /// variables (Ghidra merge.hh:85 `stackAffectingOps`, populated by
+    /// `StackAffectingOps::populate` merge.cc:63-76 via
+    /// `HighIntersectTest::testUntiedCallIntersection`
+    /// variable.cc:1080-1081). No Rust production path populates it yet.
+    stack_affecting_ops: Vec<crate::op::PcodeOpRef>,
+    /// `PcodeOpSet::is_pop` mirror of `stackAffectingOps` (cover.hh:39): the
+    /// lazy-populate flag that `PcodeOpSet::clear` (cover.hh:63) resets.
+    stack_affecting_populated: bool,
 }
 
 impl MergePersistentState {
     // Ghidra: merge.cc:1580 Merge::clear
     /// Clear cached intersection tests, pending COPY trims and the live
     /// premise. Faithful to `Merge::clear` (merge.cc:1580-1587), invoked by
-    /// `Funcdata::clear` (funcdata.cc:108). The `stackAffectingOps` /
-    /// `protoPartial` channels have no Rugra counterpart yet.
+    /// `Funcdata::clear` (funcdata.cc:108): the four Ghidra channels are
+    /// testCache.clear() + copyTrims.clear() + protoPartial.clear() +
+    /// stackAffectingOps.clear() (cover.hh:63 expands it to
+    /// is_pop=false/opList.clear()/blockStart.clear()); live_set is the
+    /// RUGRA-GLUE premise channel and dies with the same call.
     pub fn clear(&mut self) {
         self.test_cache.clear();
         self.copy_trims.clear();
         self.live_set.clear();
+        self.proto_partial.clear();
+        self.stack_affecting_ops.clear();
+        self.stack_affecting_populated = false;
     }
 
     // RUGRA-GLUE: fixture observability for the persistent channels; the
@@ -408,6 +430,45 @@ impl MergePersistentState {
             self.copy_trims.len(),
             self.live_set.len(),
         )
+    }
+
+    // RUGRA-GLUE: fixture observability for the two channels whose production
+    // population paths are not ported yet (group_partials no-op,
+    // StackAffectingOps::populate unported). The clear-lifecycle fixture
+    // deposits state here the way an earlier merge Action would, so the
+    // bilateral oracle can observe `Merge::clear` emptying them.
+    /// Return (proto_partial roots, stack_affecting_ops count, is_populated).
+    pub fn channel_sizes_extended(&self) -> (usize, usize, bool) {
+        (
+            self.proto_partial.len(),
+            self.stack_affecting_ops.len(),
+            self.stack_affecting_populated,
+        )
+    }
+
+    // RUGRA-GLUE: fixture deposit hooks (same premise as channel_sizes: the
+    // locked C++ fixture writes the private members directly).
+    /// Deposit `count` synthetic testCache entries.
+    pub fn fixture_deposit_test_cache(&mut self, count: usize) {
+        for i in 0..count {
+            let key = 0x9000_0000_0000_0000usize + i;
+            self.test_cache.tests.insert((key, key + 1), true);
+        }
+    }
+
+    // RUGRA-GLUE: fixture deposit hook (same premise as channel_sizes: the
+    // locked C++ fixture writes the private members directly).
+    /// Deposit COPY-trim / proto-partial-root / stack-affecting ops.
+    pub fn fixture_deposit_channels(
+        &mut self,
+        trims: Vec<crate::op::PcodeOpRef>,
+        proto_roots: Vec<crate::op::PcodeOpRef>,
+        stack_ops: Vec<crate::op::PcodeOpRef>,
+    ) {
+        self.copy_trims.extend(trims);
+        self.proto_partial.extend(proto_roots);
+        self.stack_affecting_ops.extend(stack_ops);
+        self.stack_affecting_populated = true;
     }
 }
 

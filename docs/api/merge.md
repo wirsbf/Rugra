@@ -501,3 +501,25 @@ merge.hh:83）删除：Ghidra 的 merge 序列（coreaction.cc:5718-5729）没�
 调用：CoverBlock 引入指针身份域（`start_id/end_id`，对齐 Ghidra
 `PcodeOp*` 哨兵语义）后，字段直写会破坏投影域与身份域的同步不变式。
 区间值与语义零变化（详见 docs/api/cover.md 表示法一节）。
+
+## 2026-08-23：MERGE-CLEAR-LIFECYCLE-0001 — 持久通道补齐与 clear 语义
+
+- `MergePersistentState`（funcdata.hh:96 covermerge 挂载）补齐 Ghidra
+  `Merge::clear`（merge.cc:1580-1587）清除的全部四个通道：
+  新增 `proto_partial: Vec<PcodeOpRef>`（merge.hh:88，groupPartials 生产
+  路径仍为 no-op，归 MERGE-PROTOPARTIAL-GROUP-0001）与
+  `stack_affecting_ops`/`stack_affecting_populated`（merge.hh:85
+  StackAffectingOps 的 opList/is_pop 镜像；`StackAffectingOps::populate`
+  未移植）。`clear()` 现清 testCache/copyTrims/live_set(GLUE)/protoPartial/
+  stackAffectingOps+is_pop 全部通道。
+- 新增 RUGRA-GLUE fixture 观测/存入钩子：`channel_sizes_extended()` 与
+  `fixture_deposit_test_cache()`/`fixture_deposit_channels()`（与既有
+  `channel_sizes()` 同一前提：锁定 C++ fixture 经 #define private/class
+  struct 直接读成员）。
+- 观察投影：merge_clear_lifecycle_1204 双侧对拍中 merge 通道
+  （testcache 2→0、copytrims 1→0、protopartial 1→0、stackops 1→0、
+  stackpop 1→0）全部 MATCH；生产路径填充（intersection 真实缓存、
+  groupPartials、StackAffectingOps::populate）保持 UNTESTED 登记。
+- `fd.getMerge()` 持久化重构（Actions 直接共享单一 Merge 对象）仍归
+  COREACTION-STATEFUL-MERGE-0001；本改动只覆盖其 clear 生命周期通道语义。
+<!-- annotation-pass: 2026-08-23 -->

@@ -517,22 +517,54 @@ disasm / lifting
 
 ### `pub fn clear(&mut self)`
 
-清空分析状态。
+清空与反编译（analysis）关联的全部状态（`Funcdata::clear`，
+funcdata.cc:84-112 逐步对齐）。
 
 #### 语义
-重置当前 `Funcdata` 中已经建立的分析结果或相关状态。
+按 Ghidra 语句顺序执行：
+
+1. `flags &= ~(HIGHLEVEL_ON|BLOCKS_GENERATED|PROCESSING_STARTED|
+   TYPE_RECOVERY_START|TYPE_RECOVERY_ON|DOUBLE_PRECIS_ON|RESTART_PENDING)`
+   （cc:88-89；七位分析期旗标清零，`BLOCKS_UNREACHABLE`/`PROCESSING_COMPLETE`/
+   `JUMPTABLERECOVERY_*` 等保留位不动），并同步复位独立的
+   `restart_pending: bool` 镜像。
+2. `high_level_index = 0`（cc:91；`clean_up_index`/`cast_phase_index` 无
+   Rust 字段，coreaction.rs 标记为忠实 no-op，此处为 no-op）。
+3. `min_laned_size` 重新从 Architecture 派生（cc:93，无 lane 记录时为 -1，
+   Rust 用 `u32::MAX` 表示同一哨兵）。
+4. localmap 建模（cc:95-96）：`scope.symbols.clear()` + 伴生
+   `high_symbols`/`symbol_entry_cache` 清空（与 start_processing 相同的
+   wholesale-clear 约定），`min_param_offset`/`max_param_offset` 复位
+   （varmap.cc:443-444）；typelock 符号存活为已登记 MISMATCH 残差
+   （MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001）。
+5. `active_output = None`（cc:98 clearActiveOutput）。
+6. `funcp.clear_unlocked_output()`（cc:99；fspec.rs 侧为简化版，残差同上）。
+7. `union_map.clear()`（cc:100）。
+8. `clear_blocks()` → `obank.clear()` → `vbank.clear()`
+   （cc:101-103；obank uniqid 归 0，vbank uniqid 归基址、create_index 归 0）。
+9. `clear_call_specs()`（cc:104）。
+10. `clear_jump_tables()`（cc:105）：override 表调用忠实的
+    `JumpTable::clear()`（jumptable.cc:2739-2758，保留
+    opaddress/maxaddsub/maxleftright/maxext/collectloads 永久域）后保留，
+    非 override 表丢弃。
+11. overrides 与 `laned_map` 不清（cc:106 注释；Ghidra 亦无清除调用点）。
+12. `heritage.clear()`（cc:107）。
+13. `merge_state.clear()`（cc:108 covermerge.clear()）。
 
 #### 作用
 主要用于以下场景：
 
-- 重跑分析流程
+- 重跑分析流程（restart 循环：clear 后 `is_proc_started()==false`，
+  startProcessing 可再次进入 —— Ghidra ActionRestartGroup 的前提）
 - 测试中复位函数容器
 - 在局部失败后回退到更干净的状态
 - 重新注入或重新构建函数图
 
 #### 注意事项
-“清空”并不一定等价于“回到刚创建时的完全裸状态”，具体保留哪些基础信息应以源码实现为准。  
-从文档角度应理解为：它用于清理分析期状态，而不是作为输出层接口。
+“清空”不等于“回到刚创建时的裸状态”：保留域（override JumpTable、
+typelock 符号、localoverride、lanedMap、processing_complete 等旗标位）
+正是 Ghidra restart 语义的组成部分；两侧差集见
+`tools/run_merge_clear_lifecycle_oracle.sh` 的 registered_mismatch_domains。
 
 ---
 
@@ -1340,3 +1372,31 @@ Rugra 防御性视为 alive，生产不可达已注释）。
   `clear_laned_access_map` — Funcdata 侧 typed ordered lanedMap 生命周期
   （funcdata.hh `lanedMap` 镜像），含 map 排序 `PartialOrd/Ord`。
   WIP：oracle 对拍 pending（见 lanedivide_infra_1204 fixture）。
+
+## 2026-08-23：MERGE-CLEAR-LIFECYCLE-0001 — clear 持久状态生命周期对拍
+
+- `Funcdata::clear()`（funcdata.cc:84-112）从 8 步补齐为 13 步全量对齐：
+  新增 7 位分析旗标掩码复位（含 `restart_pending` bool 镜像）、
+  `high_level_index=0`、localmap 建模（symbols+high_symbols+
+  symbol_entry_cache+param window 标量）、`active_output=None`、
+  `funcp.clear_unlocked_output()`、`clear_call_specs()`、`clear_jump_tables()`，
+  并把执行顺序排成 Ghidra 语句序。
+- `clear_jump_tables()`（funcdata_block.cc:43-60）：override 表由"替换为新空表"
+  改为调用忠实的 `JumpTable::clear()`（jumptable.rs 既有实现，
+  jumptable.cc:2739-2758），保留 maxaddsub/maxleftright/maxext/collectloads/
+  opaddress 永久域；此前 fresh-replacement 会丢永久域（MISMATCH 修复）。
+- 观察投影（`tools/run_merge_clear_lifecycle_oracle.sh`，
+  pin-base 2f9725f + funcdata.rs/merge.rs 双 overlay，schema2）：
+  构造带全部持久域的 Funcdata，双侧观察 clear 前后 6 行 stdout。
+  结果 `covered_projection=4/6 projection_status=MATCH overall_status=MISMATCH`；
+  两行登记 MISMATCH：`localmap_typelock_survival`（Ghidra 保留
+  typelock+namelock 符号，Rugra wholesale-clear 丢弃——需 varmap.rs 侧
+  忠实 clearUnlocked）、`funcproto_unlocked_output`（fspec.rs 简化版不清
+  returnBytesConsumed——需 fspec.rs 侧补齐）。残差统一登记
+  MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001（含 4 项 UNTESTED：window range
+  重派生、clean_up/cast_phase index、merge 通道生产路径填充、
+  localoverride 持久性投影）。
+- 既有测试影响：`funcdata::` 42 通过、2 失败
+  （test_infer_params_and_return_type / test_type_propagation）为 base
+  2f9725f 上即失败的预存在残差（已用 base 文件复跑验证），与本改动无关。
+<!-- annotation-pass: 2026-08-23 -->
