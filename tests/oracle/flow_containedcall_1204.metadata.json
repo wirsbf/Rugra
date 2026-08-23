@@ -44,7 +44,7 @@
     ],
     "overlay": {
       "path": "src/flow.rs",
-      "sha256": "d9733bac5095c036c3d521951c1081040aa3478e606ab5b909e827d1301273e3",
+      "sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
       "policy": "The only live library-source input; hash-verify before replacing the pinned base flow.rs"
     },
     "archive_policy": "Immutable explicit dependency closure plus one verified flow.rs overlay; unrelated worktree files are excluded"
@@ -78,28 +78,28 @@
   "assets": {
     "sla": {
       "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
       "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
       "size": 487659,
       "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62"
     },
     "processor_spec": {
       "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
       "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
       "size": 11721,
       "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3"
     },
     "compiler_spec": {
       "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
       "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
       "size": 12182,
       "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1"
     },
     "language_definitions": {
       "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
       "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
       "size": 5390,
       "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94"
@@ -309,7 +309,7 @@
   "comparand": {
     "cpp_fixture_sha256": "111c16cf805d82895096724a0845590a9bbbcaafa8a74561539bee5b697268ed",
     "rust_fixture_sha256": "0a3963900480074f333a7bc1bc732039ae2a387ea1027ce7aafcc5a734d51f39",
-    "flow_overlay_sha256": "d9733bac5095c036c3d521951c1081040aa3478e606ab5b909e827d1301273e3",
-    "runner_sha256": "dd37fdbc65a161db0bdfc38d89c21c96cbbb700779040311f1a335fade759edb"
+    "flow_overlay_sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
+    "runner_sha256": "04d53918cbed2aef823ce81bf2b42f36e4737a8182896e024da6c2ef9b489ff2"
   }
 }

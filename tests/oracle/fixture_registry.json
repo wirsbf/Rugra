@@ -3670,7 +3670,7 @@
     },
     {
       "id": "flow_containedcall_1204",
-      "description": "FlowInfo::checkContainedCall vs locked 12.0.4: exact conversion fwd/back, offcut warning, beyond-end/before-begin skips, CALLIND guard, extern resolved skip, erase-successor-skip quirk, post-conversion unreachable retention, getpc/mid simm32=0 goto rule zero false-positives (11/11 MATCH)",
+      "description": "FlowInfo::checkContainedCall vs locked 12.0.4: exact conversion fwd/back, offcut warning, beyond-end/before-begin skips, CALLIND guard, extern resolved skip, erase-successor-skip quirk, post-conversion unreachable retention, getpc/mid simm32=0 goto rule zero false-positives (11/11 MATCH) [STALE 2026-08-23: rust comparand needs adaptation to inject API, FLOW-FIXTURE-API-ADAPT-0001]",
       "runner": [
         "tools/run_flow_containedcall_oracle.sh"
       ],
@@ -3679,7 +3679,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "MATCH",
+      "evidence_status": "STALE",
       "cache": {
         "metadata": "tests/oracle/flow_containedcall_1204.metadata.json",
         "inputs": {
@@ -3903,6 +3903,37 @@
         "ruleaction::RuleSignNearMult",
         "ruleaction::RuleShiftBitops",
         "ruleaction::RuleShift2Mult"
+      ]
+    },
+    {
+      "id": "flow_inject_1204",
+      "description": "FlowInfo injection path vs locked 12.0.4: CALLOTHER xref arm auto-queue via real cpuid production path, seeded const-mask/operand-replace/label-branch/multi-op/block-split cases, InjectPayload::inject full template chain (3/3 MATCH)",
+      "runner": [
+        "tools/run_flow_inject_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/flow_inject_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/flow_inject_1204.cc",
+          "rust_fixture": "tests/oracle/flow_inject_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "FlowInfo::doInjection",
+        "FlowInfo::injectPcode",
+        "InjectPayload::inject"
+      ],
+      "rust_function_ids": [
+        "flow::do_injection",
+        "flow::inject_pcode",
+        "pcodeinject::InjectPayload::inject"
       ]
     }
   ]
