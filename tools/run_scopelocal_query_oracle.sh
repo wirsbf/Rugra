@@ -39,14 +39,14 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=297ba6cf7d1c29ebd2ba4f5b0cd835246518a6c6
-rugra_source_tree=dfe9e4a2ed03cf4cf7f56fb78abe4f5918e14f28
-rugra_source_src_tree=06e4e8ff6836a5c21acd8f09650c7f359c0c67ff
-rugra_source_varmap_blob=a54ab2fae8439814c4b1629d3b81a6f513900d2b
+rugra_source_commit=73955299b71a101596eb68fac3c293537b280558
+rugra_source_tree=924fc28bff10fb69a5865423108f352684a158f6
+rugra_source_src_tree=eb3e4847768140433ec9f6c418b5d66eede783e0
+rugra_source_varmap_blob=7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
-rugra_input_commit=297ba6cf7d1c29ebd2ba4f5b0cd835246518a6c6
+rugra_input_commit=73955299b71a101596eb68fac3c293537b280558
 rugra_input_blob=76d9343ea3add321aa4134856323663b36365807
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/scopelocal_query_1204.metadata.json"
@@ -102,7 +102,7 @@ for binding in \
   "$rugra_source_commit^{commit}:$rugra_source_commit" \
   "$rugra_source_commit^{tree}:$rugra_source_tree" \
   "$rugra_source_commit:src:$rugra_source_src_tree" \
-  "$rugra_source_commit:src/varmap.rs:$rugra_source_varmap_blob" \
+  "$rugra_source_commit:src/varmap.rs:7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2" \
   "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
   "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
   "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
