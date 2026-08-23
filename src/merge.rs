@@ -3250,15 +3250,25 @@ impl Merge {
             // plain-base identity.
             return false;
         };
-        let factory = factory
-            .read()
+        // Ghidra's getBase/getBaseNoChar (type.cc:3619-3660) are non-const —
+        // they may insert/canonicalize through findAdd — so the faithful
+        // Result twins need a write guard. A LowlevelError from the oracle
+        // path (e.g. an uninitialized alignment map, type.cc:3300-3302) is a
+        // throw in Ghidra; the merge walk cannot propagate it, so it surfaces
+        // as the explicit LowlevelError panic here.
+        let mut factory = factory
+            .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(base) = factory.get_base(1, TypeMetatype::Int) else {
-            return false;
-        };
-        let Some(nochar) = factory.get_base_no_char(1, TypeMetatype::Int) else {
-            return false;
-        };
+        let base = factory
+            .get_base_result(1, TypeMetatype::Int)
+            .unwrap_or_else(|message| {
+                panic!("LowlevelError (merge.cc:1001 getBase(1,TYPE_INT) gate): {message}")
+            });
+        let nochar = factory
+            .get_base_no_char_result(1, TypeMetatype::Int)
+            .unwrap_or_else(|message| {
+                panic!("LowlevelError (merge.cc:1001 getBaseNoChar(1,TYPE_INT) gate): {message}")
+            });
         !Arc::ptr_eq(&base, &nochar)
     }
 
@@ -4467,8 +4477,12 @@ mod tests {
         let mut arch = crate::arch::Architecture::new();
         let mut custom_factory = crate::type_system::typefactory::TypeFactory::new(8);
         custom_factory.clear();
-        custom_factory.set_core_type("signed_byte_custom", 1, TypeMetatype::Int, false);
-        custom_factory.set_core_type("ascii_glyph_custom", 1, TypeMetatype::Int, true);
+        custom_factory
+            .set_core_type_result("signed_byte_custom", 1, TypeMetatype::Int, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        custom_factory
+            .set_core_type_result("ascii_glyph_custom", 1, TypeMetatype::Int, true)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
         custom_factory.cache_core_types();
         let factory = std::sync::Arc::new(std::sync::RwLock::new(custom_factory));
         arch.set_types(factory);

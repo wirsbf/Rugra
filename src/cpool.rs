@@ -610,8 +610,16 @@ mod tests {
     use crate::type_system::datatype::TypeMetatype;
     use std::sync::RwLock;
 
+    // RUGRA-GLUE: test-only fixture registering a plain 4-byte INT core type
+    // via the faithful set_core_type_result twin. Ghidra test bootstrap has no
+    // counterpart (the oracle fixture registers core types through the
+    // architecture's TypeFactory directly); a conflicting registration is a
+    // LowlevelError in the oracle (type.cc:3178 findAdd throws), surfaced here
+    // as the same LowlevelError panic the pre-migration compat twin produced.
     fn fixture_type(factory: &mut TypeFactory, name: &str) -> Arc<Datatype> {
-        factory.set_core_type(name, 4, TypeMetatype::Int, false)
+        factory
+            .set_core_type_result(name, 4, TypeMetatype::Int, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     #[test]
