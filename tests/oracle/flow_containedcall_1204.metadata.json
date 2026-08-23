@@ -24,10 +24,11 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "4d9b05f08d0b8e47cdab5cc28b8c45c2ddcab427",
-    "base_tree": "617de92db063e8e347b677f21b8d925befbb0aa8",
-    "base_src_tree": "ffeb931b21714659197be1c69d095bd82fec2ca0",
-    "base_flow_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+    "base_commit": "d73ee600c6fe5ec5e83bae43b7f47df16e33cd71",
+    "base_tree": "23e3f85243764b808fef5b236379c75ff7a9ecf2",
+    "base_src_tree": "528279b08e9a0bdda6b272cc02a42d4812603c4b",
+    "base_flow_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+    "base_pcodeinject_blob": "329b4ea7f77f51f19f148536ee53449f02ecca2c",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
@@ -42,12 +43,19 @@
       "src",
       "sleigh_shim"
     ],
-    "overlay": {
-      "path": "src/flow.rs",
-      "sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
-      "policy": "The only live library-source input; hash-verify before replacing the pinned base flow.rs"
-    },
-    "archive_policy": "Immutable explicit dependency closure plus one verified flow.rs overlay; unrelated worktree files are excluded"
+    "overlays": [
+      {
+        "path": "src/flow.rs",
+        "sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
+        "policy": "Live overlay; hash-verify before replacing the pinned base flow.rs"
+      },
+      {
+        "path": "src/pcodeinject.rs",
+        "sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
+        "policy": "Live overlay; hash-verify before replacing the pinned base pcodeinject.rs. Added at FLOW-FIXTURE-API-ADAPT-0001: the injectwire integration changed flow.rs and pcodeinject.rs as a coherent pair, and a flow.rs-only overlay over a pre-injectwire base produced 6 snapshot lib build errors (InjectPayload::inject missing, PcodeOpRaw unsized, InjectContext tuple-vs-VarnodeRaw)."
+      }
+    ],
+    "archive_policy": "Immutable explicit dependency closure plus two verified overlays (flow.rs, pcodeinject.rs); unrelated worktree files are excluded"
   },
   "architecture": "x86:LE:64:default",
   "compiler_spec": {
@@ -310,6 +318,7 @@
     "cpp_fixture_sha256": "111c16cf805d82895096724a0845590a9bbbcaafa8a74561539bee5b697268ed",
     "rust_fixture_sha256": "0a3963900480074f333a7bc1bc732039ae2a387ea1027ce7aafcc5a734d51f39",
     "flow_overlay_sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
-    "runner_sha256": "04d53918cbed2aef823ce81bf2b42f36e4737a8182896e024da6c2ef9b489ff2"
+    "pcodeinject_overlay_sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
+    "runner_sha256": "35e7e5e9e80f9b3023b4b39120ffeb2cb2a093158cca2c0fbef1af8c16fa9c0d"
   }
 }

@@ -7,10 +7,11 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=4d9b05f08d0b8e47cdab5cc28b8c45c2ddcab427
-rugra_source_tree=617de92db063e8e347b677f21b8d925befbb0aa8
-rugra_source_src_tree=ffeb931b21714659197be1c69d095bd82fec2ca0
-rugra_source_flow_blob=7e66add578843d846376ceb57562ceebce0c2e88
+rugra_source_commit=d73ee600c6fe5ec5e83bae43b7f47df16e33cd71
+rugra_source_tree=23e3f85243764b808fef5b236379c75ff7a9ecf2
+rugra_source_src_tree=528279b08e9a0bdda6b272cc02a42d4812603c4b
+rugra_source_flow_blob=c76bd681b78b55e7855769e5e6d438df8c8c4cc2
+rugra_source_pcodeinject_blob=329b4ea7f77f51f19f148536ee53449f02ecca2c
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -20,6 +21,7 @@ metadata="$repo_root/tests/oracle/flow_containedcall_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/flow_containedcall_1204.cc"
 rust_fixture="$repo_root/tests/oracle/flow_containedcall_1204.rs"
 rust_overlay="$repo_root/src/flow.rs"
+pcodeinject_overlay="$repo_root/src/pcodeinject.rs"
 runner="$repo_root/tools/run_flow_containedcall_oracle.sh"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
 bfd_header="$bfd_include/bfd.h"
@@ -35,7 +37,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$rust_overlay" \
-  "$runner" "$bfd_header" "$bfd_library"; do
+  "$pcodeinject_overlay" "$runner" "$bfd_header" "$bfd_library"; do
   if [[ ! -f "$required" || -L "$required" ]]; then
     echo "required input is not a regular non-symlink file: $required" >&2
     exit 1
@@ -69,6 +71,7 @@ for binding in \
   "$rugra_source_commit^{tree}:$rugra_source_tree" \
   "$rugra_source_commit:src:$rugra_source_src_tree" \
   "$rugra_source_commit:src/flow.rs:$rugra_source_flow_blob" \
+  "$rugra_source_commit:src/pcodeinject.rs:$rugra_source_pcodeinject_blob" \
   "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
   "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
   "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
@@ -91,6 +94,7 @@ git -C "$repo_root" archive --format=tar \
   src sleigh_shim
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
 cp "$rust_overlay" "$snapshot_root/src/flow.rs"
+cp "$pcodeinject_overlay" "$snapshot_root/src/pcodeinject.rs"
 cp "$cpp_fixture" "$snapshot_root/tests/oracle/flow_containedcall_1204.cc"
 cp "$rust_fixture" "$snapshot_root/tests/oracle/flow_containedcall_1204.rs"
 cp "$metadata" "$snapshot_root/tests/oracle/flow_containedcall_1204.metadata.json"
@@ -102,10 +106,11 @@ done
 
 runner_sha=$(sha256sum "$runner" | awk '{print $1}')
 python3 -I -S - "$repo_root" "$snapshot_root" "$metadata" "$cpp_fixture" \
-  "$rust_fixture" "$rust_overlay" "$runner_sha" \
+  "$rust_fixture" "$rust_overlay" "$pcodeinject_overlay" "$runner_sha" \
   "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" "$oracle_language_tree" \
   "$oracle_makefile_blob" "$rugra_source_commit" "$rugra_source_tree" \
   "$rugra_source_src_tree" "$rugra_source_flow_blob" \
+  "$rugra_source_pcodeinject_blob" \
   "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
   "$rugra_source_build_rs_blob" "$spec_input_commit" \
   "$bfd_header" "$bfd_library" <<'PY'
@@ -117,11 +122,11 @@ import sys
 
 (
     repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw, overlay_raw,
-    runner_sha, oracle_commit, oracle_tag, cpp_tree,
+    pcodeinject_raw, runner_sha, oracle_commit, oracle_tag, cpp_tree,
     language_tree, makefile_blob, source_commit, source_tree, source_src_tree,
-    source_flow_blob, source_cargo_toml_blob, source_cargo_lock_blob,
-    source_build_rs_blob, spec_input_commit, bfd_header_raw,
-    bfd_library_raw,
+    source_flow_blob, source_pcodeinject_blob, source_cargo_toml_blob,
+    source_cargo_lock_blob, source_build_rs_blob, spec_input_commit,
+    bfd_header_raw, bfd_library_raw,
 ) = sys.argv[1:]
 repo = pathlib.Path(repo_raw).resolve()
 snapshot = pathlib.Path(snapshot_raw)
@@ -166,6 +171,7 @@ for label, actual, expected in (
     ("source tree", source["base_tree"], source_tree),
     ("source src tree", source["base_src_tree"], source_src_tree),
     ("source flow blob", source["base_flow_blob"], source_flow_blob),
+    ("source pcodeinject blob", source["base_pcodeinject_blob"], source_pcodeinject_blob),
     ("Cargo.toml blob", source["cargo_toml_blob"], source_cargo_toml_blob),
     ("Cargo.lock blob", source["cargo_lock_blob"], source_cargo_lock_blob),
     ("build.rs blob", source["build_rs_blob"], source_build_rs_blob),
@@ -176,14 +182,17 @@ for key, path in (
     ("cpp_fixture_sha256", pathlib.Path(cpp_raw)),
     ("rust_fixture_sha256", pathlib.Path(rust_raw)),
     ("flow_overlay_sha256", pathlib.Path(overlay_raw)),
+    ("pcodeinject_overlay_sha256", pathlib.Path(pcodeinject_raw)),
 ):
     require(key, sha(path.read_bytes()), comparand[key])
 require("runner sha", runner_sha, comparand["runner_sha256"])
-require("overlay path", source["overlay"]["path"], "src/flow.rs")
+overlays = {entry["path"]: entry for entry in source["overlays"]}
+require("overlay paths", set(overlays), {"src/flow.rs", "src/pcodeinject.rs"})
+require("flow overlay sha", sha(pathlib.Path(overlay_raw).read_bytes()), overlays["src/flow.rs"]["sha256"])
 require(
-    "overlay sha",
-    sha(pathlib.Path(overlay_raw).read_bytes()),
-    source["overlay"]["sha256"],
+    "pcodeinject overlay sha",
+    sha(pathlib.Path(pcodeinject_raw).read_bytes()),
+    overlays["src/pcodeinject.rs"]["sha256"],
 )
 
 assets = metadata["assets"]
