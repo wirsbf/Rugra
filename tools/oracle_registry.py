@@ -37,9 +37,11 @@ import argparse
 import contextlib
 import hashlib
 import io
+import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -49,6 +51,7 @@ REGISTRY_RELPATH = "tests/oracle/fixture_registry.json"
 SCHEMA_RELPATH = "tests/oracle/schema/fixture-v1.schema.json"
 LEDGER_RELPATH = "docs/alignment_audit/FUNCTION_LEDGER.json"
 MIGRATION_RELPATH = "docs/alignment_audit/FUNCTION_ID_MIGRATION.json"
+CONTINUITY_RELPATH = "docs/alignment_audit/FUNCTION_ID_CONTINUITY.json"
 METADATA_DIR = "tests/oracle"
 RUNNER_GLOB = "run_*_oracle.sh"
 RUNNER_DIR = "tools"
@@ -93,6 +96,11 @@ INPUT_HASH_PATHS = (
 EXIT_OK = 0
 EXIT_FINDINGS = 1
 EXIT_HARNESS = 2
+LOCKED_ORACLE_COMMIT = "e40ed13014025f82488b1f8f7bca566894ac376b"
+RUST_PROJECTION_FIELDS = (
+    "id", "path", "name", "line", "end_line", "module", "owner", "signature",
+    "is_test", "is_declaration",
+)
 
 
 class HarnessError(Exception):
@@ -347,8 +355,665 @@ def load_registry(root: str):
         raise HarnessError(f"registry is not valid JSON: {exc}") from exc
 
 
-def load_function_tables(root: str):
-    """Return (current IDs, live aliases, tombstone aliases, migration meta).
+def _git_environment() -> dict:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(name, None)
+    environment.update(
+        {"LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+    )
+    return environment
+
+
+def _registry_git(root: str, arguments: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_git_environment(),
+        )
+    except OSError as exc:
+        raise HarnessError(f"cannot execute git: {exc}") from exc
+    if result.returncode != 0:
+        raise HarnessError(
+            f"git {' '.join(arguments)} failed ({result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def _registry_git_optional(root: str, arguments: list[str]):
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_git_environment(),
+        )
+    except OSError as exc:
+        raise HarnessError(f"cannot execute git: {exc}") from exc
+    return result.stdout if result.returncode == 0 else None
+
+
+def _expect_git_object(root: str, revision: str, expected: str, label: str) -> None:
+    actual = _registry_git(root, ["rev-parse", revision]).strip()
+    if actual != expected:
+        raise HarnessError(f"continuity {label} mismatch: expected {expected}, got {actual}")
+
+
+def _git_path_blob(root: str, revision: str, relative: str) -> str:
+    output = _registry_git_optional(root, ["rev-parse", f"{revision}:{relative}"])
+    return output.strip() if output is not None else "0" * 40
+
+
+def _load_ledger_generator():
+    module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "generate_function_ledger.py")
+    if not os.path.isfile(module_path):
+        raise HarnessError("generate_function_ledger.py is missing for continuity validation")
+    module_dir = os.path.dirname(module_path)
+    inserted = module_dir not in sys.path
+    if inserted:
+        sys.path.insert(0, module_dir)
+    try:
+        spec = importlib.util.spec_from_file_location("_rugra_function_ledger", module_path)
+        if spec is None or spec.loader is None:
+            raise HarnessError("cannot load generate_function_ledger.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise HarnessError(f"cannot load function ledger scanner: {exc}") from exc
+    finally:
+        if inserted:
+            sys.path.remove(module_dir)
+
+
+def _rust_projection(records) -> list:
+    projection = [
+        {field: record.get(field) for field in RUST_PROJECTION_FIELDS}
+        for record in records
+    ]
+    projection.sort(key=lambda record: (
+        str(record.get("id")), str(record.get("path")),
+        int(record.get("line") or 0), str(record.get("signature")),
+    ))
+    return projection
+
+
+def _rust_projection_sha256(records) -> str:
+    encoded = json.dumps(
+        _rust_projection(records), sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _scan_current_rust(root: str, generator) -> list:
+    source_root = os.path.join(root, "src")
+    if not os.path.isdir(source_root):
+        raise HarnessError("src directory is missing for continuity validation")
+    records = []
+    for directory, subdirs, files in os.walk(source_root):
+        subdirs.sort()
+        for name in sorted(files):
+            if not name.endswith(".rs"):
+                continue
+            path = os.path.join(directory, name)
+            relative = os.path.relpath(path, root).replace(os.sep, "/")
+            records.extend(generator.collect_rust_identities(
+                relative, read_text(path), generator.module_from_relative(relative)
+            ))
+    try:
+        generator.assign_rust_locked_ids(records)
+    except RuntimeError as exc:
+        raise HarnessError(f"current Rust raw-ID collision: {exc}") from exc
+    return records
+
+
+def _scan_rust_blob(root: str, relative: str, blob: str, generator, cache: dict) -> dict:
+    if blob == "0" * 40:
+        return {}
+    key = (relative, blob)
+    if key in cache:
+        return cache[key]
+    source = _registry_git(root, ["cat-file", "blob", blob])
+    records = generator.collect_rust_identities(
+        relative, source, generator.module_from_relative(relative)
+    )
+    try:
+        generator.assign_rust_locked_ids(records)
+    except RuntimeError as exc:
+        raise HarnessError(f"continuity blob {relative}@{blob} has raw-ID collision: {exc}") from exc
+    code = generator.mask_non_code(source)
+    pairs = generator.rust_brace_pairs(code)
+    lines = source.splitlines()
+    indexed = {}
+    for record in records:
+        annotation_kind, annotation = generator.marker_above(
+            lines, int(record["line"]) - 1
+        )
+        record["_annotation"] = (
+            (annotation_kind, json.dumps(annotation, sort_keys=True, separators=(",", ":")))
+            if annotation else None
+        )
+        signature_end = generator.rust_signature_end(code, pairs, int(record["start"]))
+        body = " ".join(code[signature_end:int(record["end"])].split())
+        record["_masked_body"] = body if body and body != ";" else None
+        token = record.get("id")
+        if token in indexed:
+            raise HarnessError(f"continuity blob {relative}@{blob} repeats ID {token}")
+        indexed[token] = record
+    cache[key] = indexed
+    return indexed
+
+
+def _validate_record_fields(record: dict, row: dict, prefix: str, label: str) -> None:
+    fields = ("path", "module", "owner", "name", "signature")
+    for field in fields:
+        key = f"{prefix}_{field}" if prefix else field
+        if row.get(key) != record.get(field):
+            raise HarnessError(
+                f"continuity {label} {key} mismatch: expected {record.get(field)!r}, "
+                f"got {row.get(key)!r}"
+            )
+
+
+def _verify_continuity_git(
+    root: str, continuity: dict, migration: dict, ledger: dict
+) -> tuple[set, set, object]:
+    """Verify Git pins and return (baseline Rust IDs, current Rust IDs, scanner)."""
+
+    baseline = continuity["baseline"]
+    checkpoint = continuity["checkpoint"]
+    history = continuity["history"]
+    migration_target = migration.get("target")
+    if not isinstance(migration_target, dict):
+        raise HarnessError("continuity requires reconciled migration.target")
+    for field in ("commit", "commit_tree", "src_tree", "ledger_blob", "ledger_sha256"):
+        if baseline.get(field) != migration_target.get(field):
+            raise HarnessError(
+                f"continuity baseline.{field} does not equal migration target pin"
+            )
+
+    for block_name, block, pin_fields, sha_fields in (
+        ("baseline", baseline,
+         ("commit", "commit_tree", "src_tree", "ledger_blob",
+          "migration_blob_at_checkpoint"),
+         ("ledger_sha256", "rust_projection_sha256", "migration_sha256")),
+        ("checkpoint", checkpoint,
+         ("commit", "commit_tree", "src_tree"),
+         ("rust_projection_sha256",)),
+    ):
+        for field in pin_fields:
+            if not COMMIT_RE.fullmatch(str(block.get(field) or "")):
+                raise HarnessError(f"continuity {block_name}.{field} is not a 40-hex pin")
+        for field in sha_fields:
+            if not SHA256_RE.fullmatch(str(block.get(field) or "")):
+                raise HarnessError(f"continuity {block_name}.{field} is not a sha256 pin")
+        if (not isinstance(block.get("rust_function_records"), int)
+                or block["rust_function_records"] < 0):
+            raise HarnessError(
+                f"continuity {block_name}.rust_function_records must be a nonnegative integer"
+            )
+
+    _expect_git_object(root, f"{baseline['commit']}^{{commit}}", baseline["commit"],
+                       "baseline commit")
+    _expect_git_object(root, f"{baseline['commit']}^{{tree}}", baseline["commit_tree"],
+                       "baseline commit tree")
+    _expect_git_object(root, f"{baseline['commit']}:src", baseline["src_tree"],
+                       "baseline src tree")
+    _expect_git_object(
+        root, f"{baseline['commit']}:{LEDGER_RELPATH}", baseline["ledger_blob"],
+        "baseline ledger blob",
+    )
+    _expect_git_object(root, f"{checkpoint['commit']}^{{commit}}", checkpoint["commit"],
+                       "checkpoint commit")
+    _expect_git_object(root, f"{checkpoint['commit']}^{{tree}}", checkpoint["commit_tree"],
+                       "checkpoint commit tree")
+    _expect_git_object(root, f"{checkpoint['commit']}:src", checkpoint["src_tree"],
+                       "checkpoint src tree")
+    _expect_git_object(
+        root, f"{checkpoint['commit']}:{MIGRATION_RELPATH}",
+        baseline["migration_blob_at_checkpoint"], "baseline migration blob at checkpoint",
+    )
+
+    baseline_ledger_bytes = _registry_git(
+        root, ["show", f"{baseline['commit']}:{LEDGER_RELPATH}"]
+    ).encode("utf-8")
+    if hashlib.sha256(baseline_ledger_bytes).hexdigest() != baseline["ledger_sha256"]:
+        raise HarnessError("continuity baseline ledger sha256 mismatch")
+    try:
+        baseline_ledger = json.loads(baseline_ledger_bytes)
+    except json.JSONDecodeError as exc:
+        raise HarnessError(f"continuity baseline ledger JSON is malformed: {exc}") from exc
+    baseline_rust = baseline_ledger.get("rugra_functions")
+    if not isinstance(baseline_rust, list):
+        raise HarnessError("continuity baseline ledger rugra_functions is not an array")
+    if (len(baseline_rust) != baseline["rust_function_records"]
+            or _rust_projection_sha256(baseline_rust) != baseline["rust_projection_sha256"]):
+        raise HarnessError("continuity baseline Rust projection count/hash mismatch")
+    baseline_ids = {row.get("id") for row in baseline_rust if isinstance(row, dict)}
+    if len(baseline_ids) != len(baseline_rust) or None in baseline_ids:
+        raise HarnessError("continuity baseline ledger contains duplicate/malformed Rust IDs")
+
+    migration_path = os.path.join(root, MIGRATION_RELPATH)
+    migration_bytes = read_text(migration_path).encode("utf-8")
+    if hashlib.sha256(migration_bytes).hexdigest() != baseline["migration_sha256"]:
+        raise HarnessError("continuity worktree baseline migration sha256 mismatch")
+    migration_blob = _registry_git(root, ["hash-object", migration_path]).strip()
+    if migration_blob != baseline["migration_blob_at_checkpoint"]:
+        raise HarnessError("continuity worktree baseline migration blob mismatch")
+
+    if history.get("mode") != "first_parent":
+        raise HarnessError("continuity history.mode must be first_parent")
+    if (not isinstance(history.get("commit_count"), int)
+            or history["commit_count"] <= 0
+            or not COMMIT_RE.fullmatch(str(history.get("first_commit") or ""))
+            or not COMMIT_RE.fullmatch(str(history.get("last_commit") or ""))):
+        raise HarnessError("continuity history pins are malformed")
+    if history["last_commit"] != checkpoint["commit"]:
+        raise HarnessError("continuity history does not terminate at checkpoint")
+    commits = _registry_git(
+        root, ["rev-list", "--first-parent", "--reverse",
+               f"{baseline['commit']}..{checkpoint['commit']}"],
+    ).splitlines()
+    if (len(commits) != history["commit_count"] or not commits
+            or commits[0] != history["first_commit"]
+            or commits[-1] != history["last_commit"]):
+        raise HarnessError("continuity first-parent history count/endpoints mismatch")
+    previous = baseline["commit"]
+    for commit in commits:
+        parent = _registry_git(root, ["rev-parse", f"{commit}^1"]).strip()
+        if parent != previous:
+            raise HarnessError(
+                f"continuity first-parent discontinuity at {commit}: {parent} != {previous}"
+            )
+        previous = commit
+
+    for ancestor, descendant, label in (
+        (baseline["commit"], checkpoint["commit"], "baseline/checkpoint ancestry"),
+        (checkpoint["commit"], "HEAD", "checkpoint/HEAD ancestry"),
+    ):
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=root, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=_git_environment(),
+        )
+        if result.returncode != 0:
+            raise HarnessError(f"continuity {label} mismatch")
+    head_src = _registry_git(root, ["rev-parse", "HEAD:src"]).strip()
+    if head_src != checkpoint["src_tree"]:
+        raise HarnessError("continuity HEAD src tree differs from checkpoint")
+    dirty_src = _registry_git(
+        root, ["status", "--porcelain=v1", "--untracked-files=all", "--", "src"]
+    ).strip()
+    if dirty_src:
+        raise HarnessError(f"continuity current src worktree is dirty:\n{dirty_src}")
+
+    generator = _load_ledger_generator()
+    fresh_rust = _scan_current_rust(root, generator)
+    current_rust = ledger.get("rugra_functions")
+    if not isinstance(current_rust, list):
+        raise HarnessError("current ledger rugra_functions is not an array")
+    if _rust_projection(fresh_rust) != _rust_projection(current_rust):
+        raise HarnessError("continuity current ledger projection differs from fresh src scan")
+    if (len(fresh_rust) != checkpoint["rust_function_records"]
+            or _rust_projection_sha256(fresh_rust) != checkpoint["rust_projection_sha256"]):
+        raise HarnessError("continuity checkpoint Rust projection count/hash mismatch")
+    current_ids = {row.get("id") for row in fresh_rust}
+    if len(current_ids) != len(fresh_rust) or None in current_ids:
+        raise HarnessError("continuity current Rust projection contains duplicate/malformed IDs")
+    return baseline_ids, current_ids, generator
+
+
+def _load_and_validate_continuity(
+    root: str, ledger: dict, migration: dict, baseline_token_owner: dict,
+    *, path_override=None,
+):  # noqa: C901
+    # ``path_override`` is a private test seam; CLI callers always load the
+    # canonical repository path and every byte is still checked against pins.
+    path = path_override or os.path.join(root, CONTINUITY_RELPATH)
+    if not os.path.isfile(path):
+        return {}, {}, None
+    try:
+        continuity = load_json(path)
+    except json.JSONDecodeError as exc:
+        raise HarnessError(f"continuity table is not valid JSON: {exc}") from exc
+    if not isinstance(continuity, dict) or continuity.get("schema") != 1:
+        raise HarnessError("function continuity root must be schema 1 object")
+    if continuity.get("oracle_commit") != LOCKED_ORACLE_COMMIT:
+        raise HarnessError("function continuity oracle commit pin mismatch")
+    if (continuity.get("id_scheme") != migration.get("id_scheme")
+            or continuity.get("id_scheme") != ledger.get("id_scheme")):
+        raise HarnessError("function continuity id_scheme differs from migration/current ledger")
+    for field in ("baseline", "checkpoint", "history", "stats"):
+        if not isinstance(continuity.get(field), dict):
+            raise HarnessError(f"function continuity {field} must be an object")
+    for field in ("lineages", "introduced_live", "tombstones"):
+        if not isinstance(continuity.get(field), list):
+            raise HarnessError(f"function continuity {field} must be an array")
+
+    baseline_ids, current_ids, generator = _verify_continuity_git(
+        root, continuity, migration, ledger
+    )
+    ordered_history = _registry_git(
+        root, ["rev-list", "--first-parent", "--reverse",
+               f"{continuity['baseline']['commit']}..{continuity['checkpoint']['commit']}"],
+    ).splitlines()
+    history_commits = set(ordered_history)
+    commit_order = {commit: index for index, commit in enumerate(ordered_history)}
+    blob_cache = {}
+    owner_by_token = dict(baseline_token_owner)
+    final_owner = {}
+    live_map = {}
+    tombstone_map = {}
+
+    def class_owner(base_id):
+        return baseline_token_owner.get(base_id, f"continuity:{base_id}")
+
+    def claim(token, origin, role):
+        if not isinstance(token, str) or not RG_ID_RE.fullmatch(token):
+            raise HarnessError(f"continuity {role} token is not a scheme-2 Rust ID: {token!r}")
+        previous = owner_by_token.get(token)
+        if previous is not None and previous != origin:
+            raise HarnessError(
+                f"continuity token {token} belongs to multiple classes: {previous}, {origin}"
+            )
+        owner_by_token[token] = origin
+
+    introduced_by_base = {}
+    for row in continuity["introduced_live"]:
+        required = (
+            "base_id", "new_id", "introduced_at_commit", "path", "module", "owner",
+            "name", "signature", "parent_blob", "child_blob",
+        )
+        if not isinstance(row, dict) or any(not row.get(field) for field in required):
+            raise HarnessError("malformed continuity introduced_live row")
+        base_id = row["base_id"]
+        if (base_id in introduced_by_base or base_id in baseline_ids
+                or base_id in baseline_token_owner):
+            raise HarnessError(f"continuity introduced base is duplicate/historical: {base_id}")
+        if row["introduced_at_commit"] not in history_commits:
+            raise HarnessError(f"continuity introduced commit is outside history: {base_id}")
+        for field in ("introduced_at_commit", "parent_blob", "child_blob"):
+            if not COMMIT_RE.fullmatch(str(row[field])):
+                raise HarnessError(f"continuity introduced {base_id} has malformed {field}")
+        commit = row["introduced_at_commit"]
+        parent = _registry_git(root, ["rev-parse", f"{commit}^1"]).strip()
+        actual_parent_blob = _git_path_blob(root, parent, row["path"])
+        actual_child_blob = _git_path_blob(root, commit, row["path"])
+        if (actual_parent_blob != row["parent_blob"]
+                or actual_child_blob != row["child_blob"]):
+            raise HarnessError(f"continuity introduced {base_id} blob pin mismatch")
+        parent_records = _scan_rust_blob(
+            root, row["path"], row["parent_blob"], generator, blob_cache
+        )
+        child_records = _scan_rust_blob(
+            root, row["path"], row["child_blob"], generator, blob_cache
+        )
+        if base_id in parent_records or base_id not in child_records:
+            raise HarnessError(f"continuity introduced {base_id} is not newly added in its event")
+        _validate_record_fields(child_records[base_id], row, "", f"introduced {base_id}")
+        introduced_by_base[base_id] = row
+        claim(base_id, class_owner(base_id), "introduced base")
+
+    def validate_events(origin, aliases, events, expected_terminal, minimum_order=-1):
+        if len(aliases) != len(set(aliases)) or len(events) != len(aliases):
+            raise HarnessError(f"continuity alias/event length or uniqueness mismatch for {origin}")
+        expected_from = origin
+        previous_order = minimum_order
+        for index, event in enumerate(events):
+            required = (
+                "from_id", "to_id", "commit", "from_path", "to_path",
+                "from_module", "to_module", "from_owner", "to_owner",
+                "from_name", "to_name", "from_signature", "to_signature",
+                "parent_blob", "child_blob", "evidence",
+            )
+            if not isinstance(event, dict) or any(field not in event for field in required):
+                raise HarnessError(f"malformed continuity event {index} for {origin}")
+            if event["from_id"] != expected_from or aliases[index] != event["from_id"]:
+                raise HarnessError(f"non-contiguous continuity event {index} for {origin}")
+            if event["commit"] not in history_commits:
+                raise HarnessError(f"continuity event commit outside history for {origin}")
+            event_order = commit_order[event["commit"]]
+            if event_order <= previous_order:
+                raise HarnessError(f"continuity events are not strictly chronological for {origin}")
+            previous_order = event_order
+            for field in ("commit", "parent_blob", "child_blob"):
+                if not COMMIT_RE.fullmatch(str(event[field])):
+                    raise HarnessError(f"continuity event {index} has malformed {field}")
+            evidence = event["evidence"]
+            if (not isinstance(evidence, list) or not evidence
+                    or len(evidence) != len(set(evidence))):
+                raise HarnessError(f"continuity event {index} lacks unique evidence")
+            commit = event["commit"]
+            parent = _registry_git(root, ["rev-parse", f"{commit}^1"]).strip()
+            actual_parent_blob = _git_path_blob(root, parent, event["from_path"])
+            actual_child_blob = _git_path_blob(root, commit, event["to_path"])
+            if (actual_parent_blob != event["parent_blob"]
+                    or actual_child_blob != event["child_blob"]):
+                raise HarnessError(f"continuity event {index} blob pin mismatch for {origin}")
+            before = _scan_rust_blob(
+                root, event["from_path"], event["parent_blob"], generator, blob_cache
+            )
+            after = _scan_rust_blob(
+                root, event["to_path"], event["child_blob"], generator, blob_cache
+            )
+            if event["from_id"] not in before or event["to_id"] not in after:
+                raise HarnessError(f"continuity event {index} IDs absent from pinned blobs")
+            if event["to_id"] in before or event["from_id"] in after:
+                raise HarnessError(
+                    f"continuity event {index} is not a removed-to-new transition for {origin}"
+                )
+            _validate_record_fields(before[event["from_id"]], event, "from",
+                                    f"event {index} from")
+            _validate_record_fields(after[event["to_id"]], event, "to",
+                                    f"event {index} to")
+            if "parameter_binding_mut_only" in evidence:
+                required_auto = {
+                    "same_patch_hunk", "identical_nonempty_annotation",
+                    "parameter_binding_mut_only",
+                }
+                if set(evidence) != required_auto:
+                    raise HarnessError(f"continuity automatic evidence set drift for {origin}")
+                if any(event[f"from_{field}"] != event[f"to_{field}"]
+                       for field in ("path", "module", "owner", "name")):
+                    raise HarnessError(f"continuity automatic identity context drift for {origin}")
+                old_signature = event["from_signature"]
+                new_signature = event["to_signature"]
+                if (old_signature == new_signature
+                        or generator.rust_parameter_binding_mut_normalized_signature(old_signature)
+                        != generator.rust_parameter_binding_mut_normalized_signature(new_signature)):
+                    raise HarnessError(f"continuity non-mut signature change for {origin}")
+                hunks = generator._diff_hunks(
+                    generator.Path(root), parent, commit, event["from_path"], {}
+                )
+                computed = generator.continuity_transition_evidence(
+                    before[event["from_id"]], after[event["to_id"]], hunks
+                )
+                if set(computed) != required_auto:
+                    raise HarnessError(
+                        f"continuity automatic evidence does not reproduce from Git for {origin}"
+                    )
+            elif evidence[0] != "reviewed_successor_allowlist" or len(evidence) < 2:
+                raise HarnessError(f"continuity event lacks automatic or reviewed evidence: {origin}")
+            expected_from = event["to_id"]
+        if expected_from != expected_terminal:
+            raise HarnessError(f"continuity lineage for {origin} terminates at {expected_from}")
+        return previous_order
+
+    lineage_bases = set()
+    for row in continuity["lineages"]:
+        if not isinstance(row, dict):
+            raise HarnessError("continuity lineage must be an object")
+        base_id, new_id = row.get("base_id"), row.get("new_id")
+        aliases, events = row.get("aliases"), row.get("events")
+        origin_kind = row.get("origin_kind")
+        if (not isinstance(base_id, str) or not isinstance(new_id, str)
+                or not isinstance(aliases, list) or not isinstance(events, list)):
+            raise HarnessError("malformed continuity lineage")
+        if base_id in lineage_bases:
+            raise HarnessError(f"continuity contains duplicate lineage base {base_id}")
+        lineage_bases.add(base_id)
+        if ((origin_kind == "baseline" and base_id not in baseline_ids)
+                or (origin_kind == "introduced_live" and base_id not in introduced_by_base)
+                or origin_kind not in ("baseline", "introduced_live")):
+            raise HarnessError(f"continuity lineage origin kind/base mismatch for {base_id}")
+        if new_id not in current_ids:
+            raise HarnessError(f"continuity live terminal absent current ledger: {new_id}")
+        if base_id in current_ids:
+            raise HarnessError(f"continuity stale base remains in current ledger: {base_id}")
+        owner = class_owner(base_id)
+        previous_final = final_owner.get(new_id)
+        if previous_final is not None and previous_final != owner:
+            raise HarnessError(
+                f"continuity multiple classes converge on {new_id}: {previous_final}, {owner}"
+            )
+        if new_id in baseline_ids and new_id != base_id:
+            raise HarnessError(f"continuity terminal collides with baseline class: {new_id}")
+        if new_id in baseline_token_owner:
+            raise HarnessError(f"continuity terminal reuses a historical migration token: {new_id}")
+        minimum_order = (
+            commit_order[introduced_by_base[base_id]["introduced_at_commit"]]
+            if origin_kind == "introduced_live" else -1
+        )
+        validate_events(base_id, aliases, events, new_id, minimum_order)
+        claim(base_id, owner, "lineage base")
+        for alias_index, alias in enumerate(aliases):
+            if alias in current_ids:
+                raise HarnessError(f"continuity stale alias remains current: {alias}")
+            if (alias in baseline_token_owner
+                    and not (alias_index == 0 and alias == base_id)):
+                raise HarnessError(
+                    f"continuity intermediate alias reuses a historical migration token: {alias}"
+                )
+            claim(alias, owner, "lineage alias")
+            live_map[alias] = new_id
+        claim(new_id, owner, "lineage terminal")
+        final_owner[new_id] = owner
+        live_map[base_id] = new_id
+
+    for base_id, row in introduced_by_base.items():
+        terminal = live_map.get(base_id, base_id)
+        if row["new_id"] != terminal or terminal not in current_ids:
+            raise HarnessError(f"continuity introduced {base_id} terminal mismatch/absent")
+
+    tombstone_bases = set()
+    for row in continuity["tombstones"]:
+        required = (
+            "base_id", "aliases", "path", "module", "owner", "name", "signature",
+            "deleted_at_commit", "parent_blob", "child_blob", "reason", "events",
+        )
+        if not isinstance(row, dict) or any(field not in row for field in required):
+            raise HarnessError("malformed continuity tombstone")
+        base_id, aliases, events = row["base_id"], row["aliases"], row["events"]
+        if base_id in tombstone_bases or base_id in lineage_bases:
+            raise HarnessError(f"continuity duplicate live/tombstone base {base_id}")
+        tombstone_bases.add(base_id)
+        if base_id not in baseline_ids and base_id not in introduced_by_base:
+            raise HarnessError(f"continuity tombstone base has no known origin: {base_id}")
+        if (not isinstance(aliases, list) or not aliases
+                or not isinstance(events, list) or not row["reason"]):
+            raise HarnessError(f"malformed continuity tombstone {base_id}")
+        final_deleted = aliases[-1]
+        minimum_order = (
+            commit_order[introduced_by_base[base_id]["introduced_at_commit"]]
+            if base_id in introduced_by_base else -1
+        )
+        last_event_order = validate_events(
+            base_id, aliases[:len(events)], events, final_deleted, minimum_order
+        )
+        commit = row["deleted_at_commit"]
+        if commit not in history_commits:
+            raise HarnessError(f"continuity tombstone commit outside history: {base_id}")
+        if commit_order[commit] <= last_event_order:
+            raise HarnessError(f"continuity tombstone is not after its lineage: {base_id}")
+        parent = _registry_git(root, ["rev-parse", f"{commit}^1"]).strip()
+        if (_git_path_blob(root, parent, row["path"]) != row["parent_blob"]
+                or _git_path_blob(root, commit, row["path"]) != row["child_blob"]):
+            raise HarnessError(f"continuity tombstone blob pin mismatch: {base_id}")
+        before = _scan_rust_blob(
+            root, row["path"], row["parent_blob"], generator, blob_cache
+        )
+        after = _scan_rust_blob(
+            root, row["path"], row["child_blob"], generator, blob_cache
+        )
+        if final_deleted not in before or final_deleted in after:
+            raise HarnessError(f"continuity tombstone deletion proof failed: {base_id}")
+        _validate_record_fields(before[final_deleted], row, "", f"tombstone {base_id}")
+        owner = class_owner(base_id)
+        for token in [base_id, *aliases]:
+            if token in current_ids:
+                raise HarnessError(f"continuity tombstone token remains current: {token}")
+            if (token in baseline_token_owner
+                    and token != base_id):
+                raise HarnessError(
+                    f"continuity tombstone alias reuses a historical migration token: {token}"
+                )
+            claim(token, owner, "tombstone")
+            tombstone_map[token] = row
+
+    for base_id in baseline_ids:
+        if base_id in current_ids:
+            if base_id in live_map or base_id in tombstone_map:
+                raise HarnessError(f"continuity current baseline ID also has a terminal: {base_id}")
+        elif base_id not in live_map and base_id not in tombstone_map:
+            raise HarnessError(
+                f"continuity missing unique terminal/tombstone for old baseline ID {base_id}"
+            )
+
+    covered_current = set(baseline_ids).intersection(current_ids)
+    covered_current.update(final_owner)
+    covered_current.update(row["new_id"] for row in introduced_by_base.values())
+    if covered_current != current_ids:
+        raise HarnessError(
+            "continuity current Rust closure is incomplete/colliding: "
+            f"missing={sorted(current_ids-covered_current)[:3]} "
+            f"extra={sorted(covered_current-current_ids)[:3]}"
+        )
+
+    stats = continuity["stats"]
+    expected_stats = {
+        "baseline_records": len(baseline_ids),
+        "current_records": len(current_ids),
+        "introduced_live": len(continuity["introduced_live"]),
+        "lineages": len(continuity["lineages"]),
+        "events": sum(len(row.get("events", [])) for row in continuity["lineages"]),
+        "tombstones": len(continuity["tombstones"]),
+        "alias_tokens": sum(len(row.get("aliases", [])) for row in continuity["lineages"]),
+    }
+    for field, expected in expected_stats.items():
+        if stats.get(field) != expected:
+            raise HarnessError(
+                f"continuity stats.{field} mismatch: expected {expected}, got {stats.get(field)!r}"
+            )
+    for field in ("ambiguous", "collisions"):
+        if stats.get(field) != 0:
+            raise HarnessError(f"continuity stats.{field} must be zero")
+    reviewed_events = sum(
+        1 for row in continuity["lineages"] for event in row.get("events", [])
+        if event.get("evidence", [None])[0] == "reviewed_successor_allowlist"
+    )
+    if stats.get("reviewed_transitions") != reviewed_events:
+        raise HarnessError(
+            "continuity stats.reviewed_transitions mismatch: "
+            f"expected {reviewed_events}, got {stats.get('reviewed_transitions')!r}"
+        )
+    return live_map, tombstone_map, continuity
+
+
+def load_function_tables(root: str, *, _continuity_path=None):
+    """Return IDs, composed aliases, tombstones, migration, and continuity.
 
     Reconciled schema-2 migrations preserve the immutable legacy ``old_id``
     and every intermediate scheme-2 alias.  Tombstones deliberately do not
@@ -383,7 +1048,7 @@ def load_function_tables(root: str):
         for field in ("source", "target", "history", "stats"):
             if not isinstance(migration.get(field), dict):
                 raise HarnessError(f"reconciled function migration {field} must be an object")
-        if migration.get("oracle_commit") != "e40ed13014025f82488b1f8f7bca566894ac376b":
+        if migration.get("oracle_commit") != LOCKED_ORACLE_COMMIT:
             raise HarnessError("reconciled function migration oracle commit pin mismatch")
         pin_shapes = {
             "source": ("commit", "commit_tree", "src_tree", "ledger_blob", "migration_blob"),
@@ -409,6 +1074,8 @@ def load_function_tables(root: str):
             raise HarnessError("function ledger entries must be JSON objects")
         fid = fn.get("id")
         if isinstance(fid, str):
+            if fid in ids:
+                raise HarnessError(f"function ledger contains duplicate function id {fid}")
             ids.add(fid)
     old_to_new = {}
     owner_by_token = {}
@@ -461,10 +1128,6 @@ def load_function_tables(root: str):
                     f"function migration alias {alias} is an unrelated current-ledger id"
                 )
             claim_live(alias, new_id, old_id, "alias")
-        if schema == 2 and new_id not in ids:
-            raise HarnessError(
-                f"reconciled migration live target {new_id} is absent from current ledger"
-            )
         if schema == 2 and aliases:
             lineage = entry.get("lineage")
             if not isinstance(lineage, list) or len(lineage) != len(aliases):
@@ -541,7 +1204,56 @@ def load_function_tables(root: str):
                     f"reconciled migration stats.{field} mismatch: expected {expected}, "
                     f"got {stats.get(field)!r}"
                 )
-    return ids, old_to_new, tombstones, migration
+    continuity_live, continuity_tombstones, continuity = _load_and_validate_continuity(
+        root, ledger, migration, owner_by_token, path_override=_continuity_path
+    )
+    if continuity is None:
+        if schema == 2:
+            missing = sorted(
+                str(entry.get("new_id")) for entry in migration["entries"]
+                if entry.get("new_id") not in ids
+            )
+            if missing:
+                raise HarnessError(
+                    "reconciled migration live target is absent from current ledger and "
+                    f"no continuity table is present: {missing[0]}"
+                )
+        return ids, old_to_new, tombstones, migration, None
+
+    effective_live = {}
+    effective_tombstones = dict(tombstones)
+    for token, baseline_target in old_to_new.items():
+        if baseline_target in continuity_tombstones:
+            effective_tombstones[token] = continuity_tombstones[baseline_target]
+            continue
+        terminal = continuity_live.get(baseline_target, baseline_target)
+        if terminal not in ids:
+            raise HarnessError(
+                f"continuity composition leaves migration token {token} without live target: "
+                f"{baseline_target} -> {terminal}"
+            )
+        effective_live[token] = terminal
+    for token, terminal in continuity_live.items():
+        if token in effective_tombstones:
+            raise HarnessError(f"continuity token is both live and tombstoned: {token}")
+        previous = effective_live.get(token)
+        if previous is not None and previous != terminal:
+            raise HarnessError(
+                f"continuity composition is ambiguous for {token}: {previous}, {terminal}"
+            )
+        if terminal not in ids:
+            raise HarnessError(f"continuity terminal absent current ledger: {terminal}")
+        effective_live[token] = terminal
+    for token, row in continuity_tombstones.items():
+        if token in effective_live:
+            raise HarnessError(f"continuity token is both live and tombstoned: {token}")
+        effective_tombstones[token] = row
+    # Propagate a post-baseline tombstone through every immutable migration
+    # token that formerly resolved to its baseline final.
+    for token, baseline_target in old_to_new.items():
+        if baseline_target in continuity_tombstones:
+            effective_tombstones[token] = continuity_tombstones[baseline_target]
+    return ids, effective_live, effective_tombstones, migration, continuity
 
 
 def discover(root: str, registry) -> dict:
@@ -701,14 +1413,16 @@ def classify_function_ids(refs, ledger_ids, old_to_new, tombstones=None):
     return classes
 
 
-def rekey_gap_family(migration, ledger_ids) -> list:
+def rekey_gap_family(migration, ledger_ids, effective_live=None) -> list:
     """Migration live entries whose final target misses the current ledger."""
+    effective_live = effective_live or {}
     family = []
     for entry in migration.get("entries", []):
-        new_id = entry.get("new_id")
+        old_id = entry.get("old_id")
+        new_id = effective_live.get(old_id, entry.get("new_id"))
         if isinstance(new_id, str) and new_id not in ledger_ids:
             family.append({
-                "old_id": entry.get("old_id"),
+                "old_id": old_id,
                 "table_new_id": new_id,
                 "language": entry.get("language"),
                 "reason": entry.get("reason"),
@@ -905,7 +1619,7 @@ def residual_evidence(doc) -> list:
 
 def doctor(root: str) -> dict:
     registry = load_registry(root)
-    ledger_ids, old_to_new, tombstones, migration = load_function_tables(root)
+    ledger_ids, old_to_new, tombstones, migration, _continuity = load_function_tables(root)
     discovery = discover(root, registry)
     issues = []
 
@@ -1349,7 +2063,7 @@ def migration_status_exit_code(report: dict) -> int:
 
 def build_plan(root: str) -> dict:
     registry = load_registry(root)
-    ledger_ids, old_to_new, tombstones, migration = load_function_tables(root)
+    ledger_ids, old_to_new, tombstones, migration, continuity = load_function_tables(root)
     discovery = discover(root, registry)
     refs = collect_function_id_refs(root, discovery)
     classes = classify_function_ids(refs, ledger_ids, old_to_new, tombstones)
@@ -1413,7 +2127,7 @@ def build_plan(root: str) -> dict:
         })
     tombstoned.sort(key=lambda r: (r["file"], r["line"], r["column"], r["old_id"]))
 
-    family = rekey_gap_family(migration, ledger_ids)
+    family = rekey_gap_family(migration, ledger_ids, old_to_new)
     referenced = {ref["id"] for ref in classes["rekey_gap"]}
     family_out = []
     for entry in family:
@@ -1449,6 +2163,11 @@ def build_plan(root: str) -> dict:
     registry_sha = sha256_file(os.path.join(root, REGISTRY_RELPATH))
     ledger_sha = sha256_file(os.path.join(root, LEDGER_RELPATH))
     migration_sha = sha256_file(os.path.join(root, MIGRATION_RELPATH))
+    continuity_path = os.path.join(root, CONTINUITY_RELPATH)
+    continuity_input = (
+        {"path": CONTINUITY_RELPATH, "sha256": sha256_file(continuity_path)}
+        if continuity is not None else None
+    )
     return {
         "plan_version": 1,
         "todo": "ORACLE-REGISTRY-0001",
@@ -1457,6 +2176,7 @@ def build_plan(root: str) -> dict:
             "registry": {"path": REGISTRY_RELPATH, "sha256": registry_sha},
             "ledger": {"path": LEDGER_RELPATH, "sha256": ledger_sha},
             "migration": {"path": MIGRATION_RELPATH, "sha256": migration_sha},
+            "continuity": continuity_input,
             "migration_old_ledger_tree_commit": (migration or {}).get("old_ledger", {}).get("tree_commit"),
         },
         "summary": {
@@ -1521,6 +2241,11 @@ def render_plan_text(plan: dict) -> str:
     lines.append(f"registry: {inputs['registry']['path']} sha256={inputs['registry']['sha256']}")
     lines.append(f"ledger: {inputs['ledger']['path']} sha256={inputs['ledger']['sha256']}")
     lines.append(f"migration: {inputs['migration']['path']} sha256={inputs['migration']['sha256']}")
+    continuity = inputs.get("continuity")
+    if continuity:
+        lines.append(
+            f"continuity: {continuity['path']} sha256={continuity['sha256']}"
+        )
     tree = inputs.get("migration_old_ledger_tree_commit")
     if tree:
         lines.append(f"migration old-ledger tree commit: {tree}")

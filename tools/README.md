@@ -193,7 +193,8 @@ sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 
   不得泄漏 traceback。它不会重写 registry、metadata 或 migration table。
 - `plan [--check-determinism]`：生成确定性迁移计划——replacements 按
   (file:line:column) 断言式替换，manual_reselect/unmappable 禁止文本替换须按账本
-  重选；计划头部带 registry/ledger/migration 三文件 sha256 指纹，应用前须重生成；
+  重选；计划头部带 registry/ledger/migration 及可选 continuity 文件 sha256 指纹，
+  应用前须重生成；
   collateral_pins 列出 runner 编辑后须同 commit 重钉的 `comparand.runner_sha256`。
 
 ### Function-ID 历史重键（`FUNCTION-ID-MIGRATE-REKEY-0001`）
@@ -204,6 +205,8 @@ sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 
 ```bash
 python3 tools/generate_function_ledger.py --reconcile-migration
 python3 tools/generate_function_ledger.py --reconcile-migration --check
+python3 tools/generate_function_ledger.py --reconcile-continuity
+python3 tools/generate_function_ledger.py --reconcile-continuity --check
 ```
 
 该命令锁定 source `235b91bb552261fb3f94b7974926ef6db9b21515`
@@ -221,6 +224,19 @@ lineage、149 个 base/intermediate alias 与 47 个 tombstone，三条两跳链
 中间 token。tombstone 只产生 `TOMBSTONED_FUNCTION_ID`，永远不会自动映射到同名或现存
 wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstoned=0`、
 `rekey_gap_family=0`；剩余 21 处（14 个唯一值）GH placeholder 继续是 unmappable，不能猜。
+
+后续 raw scheme-2 变化写入独立、append-only 的
+`FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
+`36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba`（src tree
+`ae8f4a750f671d6b875dacba308877321540ed8d`），从 baseline target 连续重放 31 个
+first-parent commit。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
+差异严格限于参数 pattern 起始的 binding `mut`，同时必须独立复算同 patch hunk 与相同非空
+annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
+当前文件记录 2 条 Block lineage（旧 ID 分别解析到 raw 新 ID）与 1 个
+`introduced_live` helper。loader 先解析 baseline alias，再组合 continuity terminal；任一
+chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
+first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
+诊断，永不进入自动 replacement。
 
 metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`observation_scope`、
 `known_dependencies`、`residuals`、`known_residuals`、`uncovered_boundaries` 或

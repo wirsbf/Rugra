@@ -1,0 +1,127 @@
+{
+  "baseline": {
+    "commit": "8d129628c84eb87f4094b5012833b8970ff21ae9",
+    "commit_tree": "5d46f835125307cf7ff83d41274373ec8bb19f45",
+    "ledger_blob": "840bac842767797f62ddf598a6e93574be47d282",
+    "ledger_sha256": "9161d79d6ef7b707bf1416175b27735595e9e68a844b756acba32ca3025cfe46",
+    "migration_blob_at_checkpoint": "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171",
+    "migration_sha256": "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9",
+    "rust_function_records": 9639,
+    "rust_projection_sha256": "e39313e3a93e1c563a270f48506ca51dd631de863f89d026937ac6a056c21dc2",
+    "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
+  },
+  "checkpoint": {
+    "commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+    "commit_tree": "320c207975ee2d3157e4821c15336858fbb8bdd4",
+    "rust_function_records": 9640,
+    "rust_projection_sha256": "3484939c5185e59597fa66007ce6f042159d2f4593b7f538301f53d3b77a38cf",
+    "src_tree": "ae8f4a750f671d6b875dacba308877321540ed8d"
+  },
+  "history": {
+    "commit_count": 31,
+    "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
+    "last_commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+    "mode": "first_parent"
+  },
+  "id_scheme": {
+    "ghidra": "GH12-F = stable_id(prefix, locked_path, entry_kind, complete_qualified_signature[, preprocessor_guard_disambiguator])",
+    "rust": "RG-F = stable_id(prefix, module, owner_context, normalized_signature); owner_context renders trait impls as 'Type as Trait', macro_rules! template scopes as 'macro:NAME', nested functions as 'fn:<parent signature>'; name_ordinal and line numbers never participate",
+    "schema": 2
+  },
+  "introduced_live": [
+    {
+      "base_id": "RG-F-2646dcd008a8290bb207",
+      "child_blob": "f47a57fa6926b33f687bf5fceb5622a0fa63d354",
+      "introduced_at_commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+      "module": "block",
+      "name": "decrement_reciprocal_reverse_index",
+      "new_id": "RG-F-2646dcd008a8290bb207",
+      "owner": "free",
+      "parent_blob": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
+      "path": "src/block.rs",
+      "signature": "fn decrement_reciprocal_reverse_index( block: &mut dyn FlowBlock, incoming_half: bool, slot: usize, )"
+    }
+  ],
+  "lineages": [
+    {
+      "aliases": [
+        "RG-F-7622630fcd5425152c42"
+      ],
+      "base_id": "RG-F-7622630fcd5425152c42",
+      "events": [
+        {
+          "child_blob": "f47a57fa6926b33f687bf5fceb5622a0fa63d354",
+          "commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation",
+            "parameter_binding_mut_only"
+          ],
+          "from_id": "RG-F-7622630fcd5425152c42",
+          "from_module": "block",
+          "from_name": "half_delete_in_edge",
+          "from_owner": "impl:BlockBasic",
+          "from_path": "src/block.rs",
+          "from_signature": "fn half_delete_in_edge(&mut self, slot: usize)",
+          "parent_blob": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
+          "to_id": "RG-F-2e7d8eae51d63d1dcc39",
+          "to_module": "block",
+          "to_name": "half_delete_in_edge",
+          "to_owner": "impl:BlockBasic",
+          "to_path": "src/block.rs",
+          "to_signature": "fn half_delete_in_edge(&mut self, mut slot: usize)"
+        }
+      ],
+      "new_id": "RG-F-2e7d8eae51d63d1dcc39",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-c76e93f7b514cc307344"
+      ],
+      "base_id": "RG-F-c76e93f7b514cc307344",
+      "events": [
+        {
+          "child_blob": "f47a57fa6926b33f687bf5fceb5622a0fa63d354",
+          "commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation",
+            "parameter_binding_mut_only"
+          ],
+          "from_id": "RG-F-c76e93f7b514cc307344",
+          "from_module": "block",
+          "from_name": "half_delete_out_edge",
+          "from_owner": "impl:BlockBasic",
+          "from_path": "src/block.rs",
+          "from_signature": "fn half_delete_out_edge(&mut self, slot: usize)",
+          "parent_blob": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
+          "to_id": "RG-F-68db795ba78535d5e6e6",
+          "to_module": "block",
+          "to_name": "half_delete_out_edge",
+          "to_owner": "impl:BlockBasic",
+          "to_path": "src/block.rs",
+          "to_signature": "fn half_delete_out_edge(&mut self, mut slot: usize)"
+        }
+      ],
+      "new_id": "RG-F-68db795ba78535d5e6e6",
+      "origin_kind": "baseline"
+    }
+  ],
+  "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "schema": 1,
+  "semantics": "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). This separate post-baseline layer composes historical aliases to the raw checkpoint IDs. Automatic transitions require a unique 1-to-1, same path/module/owner/name pair whose only signature difference is a leading parameter binding mut, in the same patch hunk with the same non-empty annotation. Tombstones are diagnostic only; introduced_live rows are new checkpoint definitions, not fabricated historical origins.",
+  "stats": {
+    "alias_tokens": 2,
+    "ambiguous": 0,
+    "baseline_records": 9639,
+    "collisions": 0,
+    "current_records": 9640,
+    "events": 2,
+    "introduced_live": 1,
+    "lineages": 2,
+    "reviewed_transitions": 0,
+    "tombstones": 0
+  },
+  "tombstones": []
+}

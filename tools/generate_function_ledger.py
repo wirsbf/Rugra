@@ -22,7 +22,9 @@ Function IDs (id scheme 2) are position-independent and ordinal-free:
 separate operation: it replays the pinned first-parent Rust history from that
 immutable source table to the pinned current ledger.  Keeping these two
 operations separate prevents a later ledger refresh from silently replacing
-the migration's historical origin.
+the migration's historical origin.  ``--reconcile-continuity`` extends that
+immutable baseline through a later pinned source checkpoint without changing
+the raw scheme-2 hash or rewriting the baseline migration.
 """
 
 from __future__ import annotations
@@ -1131,6 +1133,33 @@ REKEY_LIVE_REKEY_LINEAGE_COUNT = 146
 REKEY_ALIAS_TOKEN_COUNT = 149
 REKEY_TOMBSTONE_COUNT = 47
 
+# Post-baseline scheme-2 continuity boundary.  This is intentionally separate
+# from FUNCTION_ID_MIGRATION.json: the latter remains the immutable scheme-1
+# origin closure, while this checkpoint records later raw scheme-2 ID changes.
+CONTINUITY_CHECKPOINT_COMMIT = "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba"
+CONTINUITY_CHECKPOINT_COMMIT_TREE = "320c207975ee2d3157e4821c15336858fbb8bdd4"
+CONTINUITY_CHECKPOINT_SRC_TREE = "ae8f4a750f671d6b875dacba308877321540ed8d"
+CONTINUITY_CHECKPOINT_PARENT = "61631f238f0e6db58aea9f6e308cba1c8af990aa"
+CONTINUITY_BASELINE_MIGRATION_BLOB = "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171"
+CONTINUITY_BASELINE_MIGRATION_SHA256 = (
+    "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9"
+)
+CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 31
+CONTINUITY_FIRST_COMMIT = "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb"
+CONTINUITY_BASELINE_RUST_RECORDS = 9_639
+CONTINUITY_CHECKPOINT_RUST_RECORDS = 9_640
+CONTINUITY_EXPECTED_TRANSITIONS = {
+    ("RG-F-7622630fcd5425152c42", "RG-F-2e7d8eae51d63d1dcc39"),
+    ("RG-F-c76e93f7b514cc307344", "RG-F-68db795ba78535d5e6e6"),
+}
+CONTINUITY_EXPECTED_INTRODUCED = {"RG-F-2646dcd008a8290bb207"}
+
+# Future non-mut-binding successors/deletions must be added here with exact
+# commit, ID, path, and blob pins.  Empty is meaningful: this checkpoint has
+# no reviewed exception and no deletion.
+CONTINUITY_REVIEWED_TRANSITIONS: tuple[dict[str, str], ...] = ()
+CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = ()
+
 
 def _reviewed_transition(
     legacy: str,
@@ -2000,6 +2029,764 @@ def _lineage_event(
         "parent_blob": parent_blob,
         "child_blob": child_blob,
         "evidence": evidence,
+    }
+
+
+# --- Post-baseline function-ID continuity ---------------------------------
+
+
+def rust_parameter_binding_mut_normalized_signature(signature: str) -> str:
+    """Remove only a leading, top-level Rust parameter binding ``mut``.
+
+    This canonical form is evidence for a continuity event; it is never fed
+    to :func:`stable_id`.  In particular, ``&mut T`` and ``*mut T`` stay byte
+    significant because their ``mut`` token is not the leading binding token.
+    """
+
+    match = re.search(r"\bfn\s+(?:r#)?[A-Za-z_][A-Za-z0-9_]*", signature)
+    if match is None:
+        return " ".join(signature.split())
+    angle_depth = 0
+    open_paren = None
+    for index in range(match.end(), len(signature)):
+        ch = signature[index]
+        if ch == "<":
+            angle_depth += 1
+        elif ch == ">" and angle_depth:
+            angle_depth -= 1
+        elif ch == "(" and angle_depth == 0:
+            open_paren = index
+            break
+    if open_paren is None:
+        return " ".join(signature.split())
+
+    depth = 0
+    close_paren = None
+    for index in range(open_paren, len(signature)):
+        ch = signature[index]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                close_paren = index
+                break
+    if close_paren is None:
+        return " ".join(signature.split())
+
+    inner = signature[open_paren + 1:close_paren]
+    parameters: list[str] = []
+    start = 0
+    depths = {"(": 0, "[": 0, "{": 0, "<": 0}
+    closer = {")": "(", "]": "[", "}": "{", ">": "<"}
+    for index, ch in enumerate(inner):
+        if ch in depths:
+            depths[ch] += 1
+        elif ch in closer and depths[closer[ch]]:
+            depths[closer[ch]] -= 1
+        elif ch == "," and not any(depths.values()):
+            parameters.append(inner[start:index])
+            start = index + 1
+    parameters.append(inner[start:])
+
+    normalized: list[str] = []
+    for parameter in parameters:
+        value = parameter.strip()
+        attribute_prefix = ""
+        # Parameter outer attributes precede the binding pattern.  Preserve
+        # them and only inspect the first token after every complete #[...].
+        while value.startswith("#["):
+            attr_depth = 0
+            attr_end = None
+            for index, ch in enumerate(value):
+                if ch == "[":
+                    attr_depth += 1
+                elif ch == "]":
+                    attr_depth -= 1
+                    if attr_depth == 0:
+                        attr_end = index + 1
+                        break
+            if attr_end is None:
+                break
+            attribute_prefix += value[:attr_end].strip() + " "
+            value = value[attr_end:].lstrip()
+        value = re.sub(r"^mut\b\s*", "", value, count=1)
+        normalized.append((attribute_prefix + value).strip())
+    rebuilt = (
+        signature[:open_paren]
+        + "("
+        + ", ".join(normalized)
+        + ")"
+        + signature[close_paren + 1:]
+    )
+    return " ".join(rebuilt.split())
+
+
+RUST_PROJECTION_FIELDS = (
+    "id", "path", "name", "line", "end_line", "module", "owner", "signature",
+    "is_test", "is_declaration",
+)
+
+
+def rust_identity_projection(records: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+    projection = [
+        {field: record.get(field) for field in RUST_PROJECTION_FIELDS}
+        for record in records
+    ]
+    projection.sort(
+        key=lambda record: (
+            str(record.get("id")), str(record.get("path")),
+            int(record.get("line") or 0), str(record.get("signature")),
+        )
+    )
+    return projection
+
+
+def rust_identity_projection_sha256(records: Iterable[dict[str, object]]) -> str:
+    encoded = json.dumps(
+        rust_identity_projection(records),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _scan_rust_revision(root: Path, revision: str) -> list[dict[str, object]]:
+    listing = _migration_git(
+        root, ["ls-tree", "-r", "--name-only", revision, "--", "src"]
+    ).splitlines()
+    records: list[dict[str, object]] = []
+    for relative in sorted(path for path in listing if path.endswith(".rs")):
+        source = _migration_git(root, ["show", f"{revision}:{relative}"])
+        records.extend(
+            collect_rust_identities(relative, source, module_from_relative(relative))
+        )
+    try:
+        assign_rust_locked_ids(records)
+    except RuntimeError as error:
+        raise MigrationHarnessError(f"{revision} Rust scan: {error}") from error
+    return records
+
+
+def _load_worktree_ledger(root: Path) -> dict[str, object]:
+    path = root / "docs/alignment_audit/FUNCTION_LEDGER.json"
+    if not path.is_file():
+        raise MigrationHarnessError("current ledger is missing from the worktree")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise MigrationHarnessError(f"current ledger JSON is malformed: {error}") from error
+    if not isinstance(document, dict) or not isinstance(document.get("rugra_functions"), list):
+        raise MigrationHarnessError("current ledger rugra_functions must be an array")
+    return document
+
+
+def _verify_locked_oracle_for_continuity(root: Path) -> None:
+    oracle_root = root / "ghidra"
+    oracle_head = _migration_git(oracle_root, ["rev-parse", "HEAD"]).strip()
+    if oracle_head != ORACLE_COMMIT:
+        raise MigrationHarnessError(
+            f"wrong Ghidra oracle: expected {ORACLE_COMMIT}, got {oracle_head}"
+        )
+    oracle_dirty = _migration_git(
+        oracle_root, ["status", "--porcelain", "--untracked-files=no"]
+    ).strip()
+    if oracle_dirty:
+        raise MigrationHarnessError(
+            f"locked Ghidra worktree has tracked changes:\n{oracle_dirty}"
+        )
+    cpp = oracle_root / "Ghidra/Features/Decompiler/src/decompile/cpp"
+    cc_count = len(list(cpp.glob("*.cc")))
+    if cc_count != 114:
+        raise MigrationHarnessError(
+            f"wrong Ghidra source closure: expected 114 .cc, got {cc_count}"
+        )
+
+
+def verify_continuity_boundary(
+    root: Path, *, verify_locked_oracle: bool = True
+) -> tuple[list[str], dict[str, object], dict[str, object], list[dict[str, object]]]:
+    """Verify the baseline, checkpoint, worktree ledger, and source projection."""
+
+    for revision, expected, label in (
+        (f"{REKEY_TARGET_COMMIT}^{{commit}}", REKEY_TARGET_COMMIT, "baseline commit"),
+        (f"{REKEY_TARGET_COMMIT}^{{tree}}", REKEY_TARGET_COMMIT_TREE, "baseline commit tree"),
+        (f"{REKEY_TARGET_COMMIT}:src", REKEY_TARGET_SRC_TREE, "baseline src tree"),
+        (
+            f"{REKEY_TARGET_COMMIT}:docs/alignment_audit/FUNCTION_LEDGER.json",
+            REKEY_TARGET_LEDGER_BLOB,
+            "baseline ledger blob",
+        ),
+        (
+            f"{CONTINUITY_CHECKPOINT_COMMIT}^{{commit}}",
+            CONTINUITY_CHECKPOINT_COMMIT,
+            "checkpoint commit",
+        ),
+        (
+            f"{CONTINUITY_CHECKPOINT_COMMIT}^{{tree}}",
+            CONTINUITY_CHECKPOINT_COMMIT_TREE,
+            "checkpoint commit tree",
+        ),
+        (
+            f"{CONTINUITY_CHECKPOINT_COMMIT}:src",
+            CONTINUITY_CHECKPOINT_SRC_TREE,
+            "checkpoint src tree",
+        ),
+        (
+            f"{CONTINUITY_CHECKPOINT_COMMIT}:docs/alignment_audit/FUNCTION_ID_MIGRATION.json",
+            CONTINUITY_BASELINE_MIGRATION_BLOB,
+            "baseline migration blob at checkpoint",
+        ),
+    ):
+        _expect_git_object(root, revision, expected, label)
+    _expect_git_object(
+        root, f"{CONTINUITY_CHECKPOINT_COMMIT}^1",
+        CONTINUITY_CHECKPOINT_PARENT, "checkpoint first parent",
+    )
+
+    for ancestor, descendant, label in (
+        (REKEY_TARGET_COMMIT, CONTINUITY_CHECKPOINT_COMMIT,
+         "baseline is not an ancestor of checkpoint"),
+        (CONTINUITY_CHECKPOINT_COMMIT, "HEAD",
+         "continuity checkpoint is not an ancestor of HEAD"),
+    ):
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_migration_git_environment(),
+        )
+        if result.returncode != 0:
+            raise MigrationHarnessError(label)
+
+    commits = _migration_git(
+        root,
+        ["rev-list", "--first-parent", "--reverse",
+         f"{REKEY_TARGET_COMMIT}..{CONTINUITY_CHECKPOINT_COMMIT}"],
+    ).splitlines()
+    if len(commits) != CONTINUITY_FIRST_PARENT_COMMIT_COUNT:
+        raise MigrationHarnessError(
+            "continuity first-parent history length mismatch: "
+            f"expected {CONTINUITY_FIRST_PARENT_COMMIT_COUNT}, got {len(commits)}"
+        )
+    if not commits or commits[0] != CONTINUITY_FIRST_COMMIT:
+        raise MigrationHarnessError(
+            f"continuity first commit mismatch: {commits[0] if commits else None}"
+        )
+    previous = REKEY_TARGET_COMMIT
+    for commit in commits:
+        first_parent = _migration_git(root, ["rev-parse", f"{commit}^1"]).strip()
+        if first_parent != previous:
+            raise MigrationHarnessError(
+                f"continuity first-parent discontinuity at {commit}: "
+                f"expected {previous}, got {first_parent}"
+            )
+        previous = commit
+    if previous != CONTINUITY_CHECKPOINT_COMMIT:
+        raise MigrationHarnessError(
+            f"continuity replay ended at {previous}, not {CONTINUITY_CHECKPOINT_COMMIT}"
+        )
+
+    head_src = _migration_git(root, ["rev-parse", "HEAD:src"]).strip()
+    if head_src != CONTINUITY_CHECKPOINT_SRC_TREE:
+        raise MigrationHarnessError(
+            f"HEAD src tree mismatch: expected {CONTINUITY_CHECKPOINT_SRC_TREE}, got {head_src}"
+        )
+    dirty_src = _migration_git(
+        root, ["status", "--porcelain=v1", "--untracked-files=all", "--", "src"]
+    ).strip()
+    if dirty_src:
+        raise MigrationHarnessError(f"checkpoint src worktree is dirty:\n{dirty_src}")
+
+    migration_path = root / "docs/alignment_audit/FUNCTION_ID_MIGRATION.json"
+    if not migration_path.is_file():
+        raise MigrationHarnessError("baseline migration is missing from the worktree")
+    migration_blob = _migration_git(root, ["hash-object", str(migration_path)]).strip()
+    migration_sha = sha256_file(migration_path)
+    if migration_blob != CONTINUITY_BASELINE_MIGRATION_BLOB:
+        raise MigrationHarnessError(
+            "worktree baseline migration blob mismatch: expected "
+            f"{CONTINUITY_BASELINE_MIGRATION_BLOB}, got {migration_blob}"
+        )
+    if migration_sha != CONTINUITY_BASELINE_MIGRATION_SHA256:
+        raise MigrationHarnessError(
+            "worktree baseline migration sha256 mismatch: expected "
+            f"{CONTINUITY_BASELINE_MIGRATION_SHA256}, got {migration_sha}"
+        )
+    try:
+        baseline_migration = json.loads(migration_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise MigrationHarnessError(f"baseline migration JSON is malformed: {error}") from error
+    if not isinstance(baseline_migration, dict) or baseline_migration.get("schema") != 2:
+        raise MigrationHarnessError("baseline migration must remain reconciled schema 2")
+    target = baseline_migration.get("target")
+    expected_target = {
+        "commit": REKEY_TARGET_COMMIT,
+        "commit_tree": REKEY_TARGET_COMMIT_TREE,
+        "src_tree": REKEY_TARGET_SRC_TREE,
+        "ledger_blob": REKEY_TARGET_LEDGER_BLOB,
+    }
+    if not isinstance(target, dict) or any(target.get(k) != v for k, v in expected_target.items()):
+        raise MigrationHarnessError("baseline migration target pins drifted")
+
+    baseline_ledger = _migration_json_from_git(
+        root, REKEY_TARGET_COMMIT, "docs/alignment_audit/FUNCTION_LEDGER.json"
+    )
+    current_ledger = _load_worktree_ledger(root)
+    baseline_rust = _scan_rust_revision(root, REKEY_TARGET_COMMIT)
+    pinned_baseline = list(baseline_ledger.get("rugra_functions", []))
+    if sorted(_identity_projection(row) for row in baseline_rust) != sorted(
+        _identity_projection(row) for row in pinned_baseline
+    ):
+        raise MigrationHarnessError("fresh baseline Rust scan does not reproduce pinned ledger")
+    if len(baseline_rust) != CONTINUITY_BASELINE_RUST_RECORDS:
+        raise MigrationHarnessError(
+            f"baseline Rust record count mismatch: {len(baseline_rust)}"
+        )
+    fresh_current = _fresh_target_rust(root, current_ledger)
+    if len(fresh_current) != CONTINUITY_CHECKPOINT_RUST_RECORDS:
+        raise MigrationHarnessError(
+            f"checkpoint Rust record count mismatch: {len(fresh_current)}"
+        )
+    if verify_locked_oracle:
+        _verify_locked_oracle_for_continuity(root)
+    return commits, baseline_ledger, current_ledger, fresh_current
+
+
+def continuity_transition_evidence(
+    old: dict[str, object],
+    new: dict[str, object],
+    hunks: list[tuple[int, int, int, int]],
+) -> list[str]:
+    old_signature = str(old.get("signature") or "")
+    new_signature = str(new.get("signature") or "")
+    if old_signature == new_signature:
+        return []
+    if (rust_parameter_binding_mut_normalized_signature(old_signature)
+            != rust_parameter_binding_mut_normalized_signature(new_signature)):
+        return []
+    strict = strict_transition_evidence(old, new, hunks)
+    # A post-baseline automatic transition is deliberately narrower than the
+    # original historical reconciler: both structural pins are mandatory.
+    if "same_patch_hunk" not in strict or "identical_nonempty_annotation" not in strict:
+        return []
+    return ["same_patch_hunk", "identical_nonempty_annotation", "parameter_binding_mut_only"]
+
+
+def _continuity_event(
+    old: dict[str, object],
+    new: dict[str, object],
+    commit: str,
+    parent_blob: str,
+    child_blob: str,
+    evidence: list[str],
+) -> dict[str, object]:
+    return {
+        "from_id": old["id"],
+        "to_id": new["id"],
+        "commit": commit,
+        "from_path": old["path"],
+        "to_path": new["path"],
+        "from_module": old["module"],
+        "to_module": new["module"],
+        "from_owner": old["owner"],
+        "to_owner": new["owner"],
+        "from_name": old["name"],
+        "to_name": new["name"],
+        "from_signature": old["signature"],
+        "to_signature": new["signature"],
+        "parent_blob": parent_blob,
+        "child_blob": child_blob,
+        "evidence": evidence,
+    }
+
+
+def _continuity_record_index(
+    rows: Iterable[tuple[dict[str, object], str]], label: str
+) -> dict[str, tuple[dict[str, object], str]]:
+    result: dict[str, tuple[dict[str, object], str]] = {}
+    for record, blob in rows:
+        token = str(record["id"])
+        if token in result:
+            raise MigrationHarnessError(f"{label} contains colliding raw ID {token}")
+        result[token] = (record, blob)
+    return result
+
+
+def function_id_continuity_document(
+    root: Path, *, verify_locked_oracle: bool = True
+) -> dict[str, object]:  # noqa: C901
+    """Reconcile raw scheme-2 IDs from the immutable baseline to checkpoint."""
+
+    commits, baseline_ledger, current_ledger, fresh_current = verify_continuity_boundary(
+        root, verify_locked_oracle=verify_locked_oracle
+    )
+    baseline_records = list(baseline_ledger["rugra_functions"])
+    current_ids = {str(record["id"]) for record in fresh_current}
+    baseline_ids = {str(record["id"]) for record in baseline_records}
+    if len(baseline_ids) != len(baseline_records):
+        raise MigrationHarnessError("baseline ledger contains duplicate Rust IDs")
+
+    states: dict[str, dict[str, object]] = {
+        token: {
+            "base_id": token,
+            "current_id": token,
+            "origin_kind": "baseline",
+            "events": [],
+            "status": "live",
+        }
+        for token in sorted(baseline_ids)
+    }
+    tracked = {token: token for token in sorted(baseline_ids)}
+    introduced: dict[str, dict[str, object]] = {}
+    tombstones: list[dict[str, object]] = []
+    text_cache: dict[str, str] = {}
+    scan_cache: dict[tuple[str, str], list[dict[str, object]]] = {}
+    hunk_cache: dict[tuple[str, str], list[tuple[int, int, int, int]]] = {}
+    reviewed_by_commit: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for rule in CONTINUITY_REVIEWED_TRANSITIONS:
+        reviewed_by_commit[rule["commit"]].append(rule)
+    reviewed_keys = [
+        (rule.get("base_id"), rule.get("from_id"), rule.get("commit"))
+        for rule in CONTINUITY_REVIEWED_TRANSITIONS
+    ]
+    if len(reviewed_keys) != len(set(reviewed_keys)):
+        raise MigrationHarnessError("reviewed continuity transition allowlist has duplicates")
+    tombstone_rows = [
+        ((rule.get("base_id"), rule.get("from_id"), rule.get("commit")), rule)
+        for rule in CONTINUITY_REVIEWED_TOMBSTONES
+    ]
+    if len(tombstone_rows) != len({key for key, _ in tombstone_rows}):
+        raise MigrationHarnessError("reviewed continuity tombstone allowlist has duplicates")
+    tombstone_by_key = dict(tombstone_rows)
+    used_reviewed: set[tuple[str, str, str]] = set()
+    used_tombstones: set[tuple[str, str, str]] = set()
+    historical_owner_by_token = {token: token for token in baseline_ids}
+
+    def claim_historical_token(token: str, base_id: str, role: str) -> None:
+        previous_owner = historical_owner_by_token.get(token)
+        if previous_owner is not None and previous_owner != base_id:
+            raise MigrationHarnessError(
+                f"continuity historical token collision for {token} ({role}): "
+                f"{previous_owner}, {base_id}"
+            )
+        historical_owner_by_token[token] = base_id
+
+    previous = REKEY_TARGET_COMMIT
+    for commit in commits:
+        changes = _rust_changes(root, previous, commit)
+        before_rows: list[tuple[dict[str, object], str]] = []
+        after_rows: list[tuple[dict[str, object], str]] = []
+        parent_blob_by_path: dict[str, str] = {}
+        child_blob_by_path: dict[str, str] = {}
+        for change in changes:
+            old_path, new_path = change["old_path"], change["new_path"]
+            old_blob, new_blob = change["old_blob"], change["new_blob"]
+            if old_path.endswith(".rs"):
+                parent_blob_by_path[old_path] = old_blob
+                before_rows.extend(
+                    (record, old_blob) for record in _scan_rekey_blob(
+                        root, old_path, old_blob, text_cache, scan_cache
+                    )
+                )
+            if new_path.endswith(".rs"):
+                child_blob_by_path[new_path] = new_blob
+                after_rows.extend(
+                    (record, new_blob) for record in _scan_rekey_blob(
+                        root, new_path, new_blob, text_cache, scan_cache
+                    )
+                )
+        before = _continuity_record_index(before_rows, f"{commit} parent")
+        after = _continuity_record_index(after_rows, f"{commit} child")
+        for token in sorted(set(before).intersection(after)):
+            old_record, new_record = before[token][0], after[token][0]
+            identity_fields = (
+                "path", "module", "owner", "name", "signature", "is_test",
+                "is_declaration",
+            )
+            if any(old_record.get(field) != new_record.get(field) for field in identity_fields):
+                raise MigrationHarnessError(
+                    f"same raw ID masks a changed identity at {commit}: {token}"
+                )
+        removed = {
+            token: before[token]
+            for token in sorted(set(tracked).intersection(before).difference(after))
+        }
+        newly_added = {
+            token: after[token]
+            for token in sorted(set(after).difference(before))
+        }
+        for token in newly_added:
+            if token in tracked and token not in removed:
+                raise MigrationHarnessError(
+                    f"new raw ID collides with an unchanged live function at {commit}: {token}"
+                )
+        claimed_targets: set[str] = set()
+        transitioned_sources: set[str] = set()
+
+        for rule in reviewed_by_commit.get(commit, []):
+            required = (
+                "base_id", "from_id", "to_id", "commit", "from_path", "to_path",
+                "parent_blob", "child_blob", "review",
+            )
+            if any(not rule.get(field) for field in required):
+                raise MigrationHarnessError(f"malformed reviewed continuity rule at {commit}")
+            source_token, target_token = rule["from_id"], rule["to_id"]
+            base_id = tracked.get(source_token)
+            if base_id != rule["base_id"] or source_token not in removed:
+                raise MigrationHarnessError(
+                    f"reviewed continuity source is not the unique live removal: {source_token}"
+                )
+            if target_token not in newly_added or target_token in claimed_targets:
+                raise MigrationHarnessError(
+                    f"reviewed continuity target is not a unique new function: {target_token}"
+                )
+            old_record, parent_blob = removed[source_token]
+            new_record, child_blob = newly_added[target_token]
+            pins = {
+                "from_path": old_record["path"], "to_path": new_record["path"],
+                "parent_blob": parent_blob, "child_blob": child_blob,
+            }
+            if any(str(rule[field]) != str(value) for field, value in pins.items()):
+                raise MigrationHarnessError(
+                    f"reviewed continuity path/blob pin mismatch for {source_token}"
+                )
+            event = _continuity_event(
+                old_record, new_record, commit, parent_blob, child_blob,
+                ["reviewed_successor_allowlist", str(rule["review"])],
+            )
+            states[base_id]["events"].append(event)
+            states[base_id]["current_id"] = target_token
+            del tracked[source_token]
+            tracked[target_token] = base_id
+            claim_historical_token(target_token, base_id, "reviewed target")
+            transitioned_sources.add(source_token)
+            claimed_targets.add(target_token)
+            used_reviewed.add((base_id, source_token, commit))
+
+        removed_groups: dict[tuple[object, ...], list[str]] = defaultdict(list)
+        added_groups: dict[tuple[object, ...], list[str]] = defaultdict(list)
+        for token, (record, _) in removed.items():
+            if token not in transitioned_sources:
+                removed_groups[(record["path"], record["module"], record["owner"], record["name"])].append(token)
+        for token, (record, _) in newly_added.items():
+            if token not in claimed_targets:
+                added_groups[(record["path"], record["module"], record["owner"], record["name"])].append(token)
+
+        for key in sorted(removed_groups, key=lambda value: tuple(str(part) for part in value)):
+            old_tokens = sorted(removed_groups[key])
+            new_tokens = sorted(added_groups.get(key, []))
+            if not new_tokens:
+                continue
+            if len(old_tokens) != 1 or len(new_tokens) != 1:
+                raise MigrationHarnessError(
+                    f"ambiguous continuity transition at {commit} for {key}: "
+                    f"removed={old_tokens} added={new_tokens}"
+                )
+            source_token, target_token = old_tokens[0], new_tokens[0]
+            old_record, parent_blob = removed[source_token]
+            new_record, child_blob = newly_added[target_token]
+            hunks = _diff_hunks(root, previous, commit, str(old_record["path"]), hunk_cache)
+            evidence = continuity_transition_evidence(old_record, new_record, hunks)
+            if not evidence:
+                continue
+            if target_token in tracked or target_token in claimed_targets:
+                raise MigrationHarnessError(
+                    f"continuity transition target collision at {commit}: {target_token}"
+                )
+            base_id = tracked[source_token]
+            states[base_id]["events"].append(
+                _continuity_event(
+                    old_record, new_record, commit, parent_blob, child_blob, evidence
+                )
+            )
+            states[base_id]["current_id"] = target_token
+            del tracked[source_token]
+            tracked[target_token] = base_id
+            claim_historical_token(target_token, base_id, "automatic target")
+            transitioned_sources.add(source_token)
+            claimed_targets.add(target_token)
+
+        for source_token in sorted(set(removed).difference(transitioned_sources)):
+            old_record, parent_blob = removed[source_token]
+            base_id = tracked[source_token]
+            rule_key = (base_id, source_token, commit)
+            rule = tombstone_by_key.get(rule_key)
+            if rule is None:
+                raise MigrationHarnessError(
+                    "unproved post-baseline removal requires an exact reviewed transition "
+                    f"or tombstone: {base_id} {source_token} at {commit} "
+                    f"({old_record['path']}::{old_record['name']})"
+                )
+            child_blob = child_blob_by_path.get(str(old_record["path"]))
+            required = ("parent_blob", "child_blob", "reason")
+            if (child_blob is None or any(not rule.get(field) for field in required)
+                    or rule["parent_blob"] != parent_blob or rule["child_blob"] != child_blob):
+                raise MigrationHarnessError(
+                    f"reviewed continuity tombstone blob pins mismatch for {base_id}"
+                )
+            aliases = [str(event["from_id"]) for event in states[base_id]["events"]]
+            if source_token not in aliases:
+                aliases.append(source_token)
+            tombstones.append({
+                "base_id": base_id,
+                "aliases": aliases,
+                "path": old_record["path"],
+                "module": old_record["module"],
+                "owner": old_record["owner"],
+                "name": old_record["name"],
+                "signature": old_record["signature"],
+                "deleted_at_commit": commit,
+                "parent_blob": parent_blob,
+                "child_blob": child_blob,
+                "reason": rule["reason"],
+                "events": list(states[base_id]["events"]),
+            })
+            states[base_id]["status"] = "tombstone"
+            states[base_id]["current_id"] = None
+            del tracked[source_token]
+            used_tombstones.add(rule_key)
+
+        for token in sorted(set(newly_added).difference(claimed_targets)):
+            if token in tracked or token in states:
+                raise MigrationHarnessError(
+                    f"introduced raw ID collides with an existing continuity class: {token}"
+                )
+            record, child_blob = newly_added[token]
+            row = {
+                "base_id": token,
+                "new_id": token,
+                "introduced_at_commit": commit,
+                "path": record["path"],
+                "module": record["module"],
+                "owner": record["owner"],
+                "name": record["name"],
+                "signature": record["signature"],
+                "parent_blob": parent_blob_by_path.get(str(record["path"]), "0" * 40),
+                "child_blob": child_blob,
+            }
+            introduced[token] = row
+            states[token] = {
+                "base_id": token,
+                "current_id": token,
+                "origin_kind": "introduced_live",
+                "events": [],
+                "status": "live",
+            }
+            tracked[token] = token
+            claim_historical_token(token, token, "introduced live")
+        previous = commit
+
+    expected_reviewed = {
+        (rule["base_id"], rule["from_id"], rule["commit"])
+        for rule in CONTINUITY_REVIEWED_TRANSITIONS
+    }
+    if used_reviewed != expected_reviewed:
+        raise MigrationHarnessError("reviewed continuity transition coverage mismatch")
+    if used_tombstones != set(tombstone_by_key):
+        raise MigrationHarnessError("reviewed continuity tombstone coverage mismatch")
+    if set(tracked) != current_ids:
+        raise MigrationHarnessError(
+            "continuity replay does not equal current ledger IDs: "
+            f"missing={sorted(current_ids-set(tracked))[:3]} "
+            f"extra={sorted(set(tracked)-current_ids)[:3]}"
+        )
+
+    lineages = []
+    for base_id in sorted(states):
+        state = states[base_id]
+        events = list(state["events"])
+        if state["status"] != "live" or not events:
+            continue
+        aliases = [str(event["from_id"]) for event in events]
+        lineages.append({
+            "base_id": base_id,
+            "new_id": state["current_id"],
+            "origin_kind": state["origin_kind"],
+            "aliases": aliases,
+            "events": events,
+        })
+    transitions = {
+        (str(row["base_id"]), str(row["new_id"])) for row in lineages
+    }
+    if transitions != CONTINUITY_EXPECTED_TRANSITIONS:
+        raise MigrationHarnessError(
+            f"unexpected checkpoint continuity transitions: {sorted(transitions)}"
+        )
+    live_introduced = {
+        token: row for token, row in introduced.items()
+        if states[token]["status"] == "live"
+    }
+    if set(live_introduced) != CONTINUITY_EXPECTED_INTRODUCED:
+        raise MigrationHarnessError(
+            f"unexpected introduced-live functions: {sorted(live_introduced)}"
+        )
+    if tombstones:
+        raise MigrationHarnessError("checkpoint unexpectedly contains continuity tombstones")
+    for token, row in live_introduced.items():
+        row["new_id"] = states[token]["current_id"]
+
+    baseline_bytes = _migration_git(
+        root, ["show", f"{REKEY_TARGET_COMMIT}:docs/alignment_audit/FUNCTION_LEDGER.json"]
+    ).encode("utf-8")
+    current_projection_sha = rust_identity_projection_sha256(fresh_current)
+    baseline_projection_sha = rust_identity_projection_sha256(baseline_records)
+    return {
+        "schema": 1,
+        "oracle_commit": ORACLE_COMMIT,
+        "id_scheme": ID_SCHEME,
+        "baseline": {
+            "commit": REKEY_TARGET_COMMIT,
+            "commit_tree": REKEY_TARGET_COMMIT_TREE,
+            "src_tree": REKEY_TARGET_SRC_TREE,
+            "ledger_blob": REKEY_TARGET_LEDGER_BLOB,
+            "ledger_sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+            "rust_projection_sha256": baseline_projection_sha,
+            "rust_function_records": len(baseline_records),
+            "migration_blob_at_checkpoint": CONTINUITY_BASELINE_MIGRATION_BLOB,
+            "migration_sha256": CONTINUITY_BASELINE_MIGRATION_SHA256,
+        },
+        "checkpoint": {
+            "commit": CONTINUITY_CHECKPOINT_COMMIT,
+            "commit_tree": CONTINUITY_CHECKPOINT_COMMIT_TREE,
+            "src_tree": CONTINUITY_CHECKPOINT_SRC_TREE,
+            "rust_projection_sha256": current_projection_sha,
+            "rust_function_records": len(fresh_current),
+        },
+        "history": {
+            "mode": "first_parent",
+            "commit_count": len(commits),
+            "first_commit": commits[0],
+            "last_commit": commits[-1],
+        },
+        "semantics": (
+            "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). "
+            "This separate post-baseline layer composes historical aliases to the raw "
+            "checkpoint IDs. Automatic transitions require a unique 1-to-1, same "
+            "path/module/owner/name pair whose only signature difference is a leading "
+            "parameter binding mut, in the same patch hunk with the same non-empty "
+            "annotation. Tombstones are diagnostic only; introduced_live rows are new "
+            "checkpoint definitions, not fabricated historical origins."
+        ),
+        "stats": {
+            "baseline_records": len(baseline_records),
+            "current_records": len(fresh_current),
+            "introduced_live": len(live_introduced),
+            "lineages": len(lineages),
+            "events": sum(len(row["events"]) for row in lineages),
+            "tombstones": len(tombstones),
+            "alias_tokens": sum(len(row["aliases"]) for row in lineages),
+            "reviewed_transitions": len(used_reviewed),
+            "ambiguous": 0,
+            "collisions": 0,
+        },
+        "lineages": lineages,
+        "introduced_live": [live_introduced[token] for token in sorted(live_introduced)],
+        "tombstones": sorted(tombstones, key=lambda row: str(row["base_id"])),
     }
 
 
@@ -2889,6 +3676,34 @@ fn after_macros() {}
     )
     assert selected and selected[:2] == (old_token, new_token)
 
+    # Post-baseline evidence canonicalizes binding modifiers only.  Pointer
+    # and reference mutability are part of the function type and stay intact.
+    mut_old = synthetic_record(old_token, "fn step(&mut self, slot: usize)")
+    mut_new = synthetic_record(new_token, "fn step(&mut self, mut slot: usize)")
+    assert rust_parameter_binding_mut_normalized_signature(mut_old["signature"]) == (
+        rust_parameter_binding_mut_normalized_signature(mut_new["signature"])
+    )
+    assert continuity_transition_evidence(mut_old, mut_new, [(10, 1, 10, 1)]) == [
+        "same_patch_hunk", "identical_nonempty_annotation", "parameter_binding_mut_only"
+    ]
+    for signature in (
+        "fn borrow(x: &mut T)",
+        "fn borrow(x: &'a mut T)",
+        "fn pointer(x: *mut T)",
+        "fn pattern(&mut x: &mut T)",
+    ):
+        assert rust_parameter_binding_mut_normalized_signature(signature) == signature
+    assert (
+        rust_parameter_binding_mut_normalized_signature("fn take(mut self, #[cfg(x)] mut y: T)")
+        == "fn take(self, #[cfg(x)] y: T)"
+    )
+    non_mut_new = synthetic_record(new_token, "fn step(&mut self, slot: u64)")
+    assert not continuity_transition_evidence(mut_old, non_mut_new, [(10, 1, 10, 1)])
+    no_annotation = dict(mut_new)
+    no_annotation["_annotation"] = None
+    assert not continuity_transition_evidence(mut_old, no_annotation, [(10, 1, 10, 1)])
+    assert not continuity_transition_evidence(mut_old, mut_new, [])
+
     # Owner-header drift, or a rename plus body rewrite, is not an automatic
     # successor merely because a nearby function appeared.
     owner_drift = synthetic_record(
@@ -3228,6 +4043,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="replay the separately pinned scheme-2 source history into the pinned "
         "target ledger; never replaces the --migrate origin",
     )
+    migration_mode.add_argument(
+        "--reconcile-continuity",
+        action="store_true",
+        help="compose post-baseline raw scheme-2 ID continuity through the pinned "
+        "source checkpoint; never rewrites FUNCTION_ID_MIGRATION.json",
+    )
     parser.add_argument(
         "--migrate-base",
         help="commit whose tree reproduces the existing ledger (default: auto-detect)",
@@ -3242,6 +4063,37 @@ def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parent.parent
     output_dir = args.output_dir.resolve() if args.output_dir else root / "docs/alignment_audit"
     try:
+        if args.reconcile_continuity:
+            try:
+                continuity = function_id_continuity_document(root)
+            except MigrationHarnessError:
+                raise
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                IndexError,
+                UnicodeError,
+                json.JSONDecodeError,
+            ) as error:
+                raise MigrationHarnessError(
+                    f"{type(error).__name__}: {error}"
+                ) from error
+            write_or_check(
+                output_dir / "FUNCTION_ID_CONTINUITY.json",
+                canonical_json(continuity),
+                args.check,
+            )
+            stats = continuity["stats"]
+            print(
+                "generate_function_ledger: reconciled continuity "
+                f"baseline={stats['baseline_records']} current={stats['current_records']} "
+                f"lineages={stats['lineages']} introduced={stats['introduced_live']} "
+                f"tombstones={stats['tombstones']}"
+            )
+            return 0
         if args.reconcile_migration:
             try:
                 migration = migration_reconciliation_document(root)
