@@ -13,6 +13,10 @@ doctor    Reverse-discover every tracked metadata/runner/comparand and run all
 schema    Validate tests/oracle/fixture_registry.json against
           tests/oracle/schema/fixture-v1.schema.json (target contract).
 lint      doctor + schema in one fail-closed pass (strict is the only mode).
+migration-status
+          Summarize every doctor/schema/pre-B2 blocker that prevents metadata
+          migration completion. Read-only and deterministic; exit 0 clean,
+          1 with blockers, 2 on harness-input error.
 plan      Emit the deterministic old->new function-id replacement plan for the
           registry fixtures, the runner-hardcoded GH12-F literals, and the
           metadata stable-function-id fields. Never mutates files.
@@ -29,7 +33,9 @@ two runs over the same tree are byte-identical.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -53,11 +59,26 @@ RG_ID_RE = re.compile(r"^RG-F-[0-9a-f]{20}$")
 GH_ID_RE = re.compile(r"^GH12-F-[0-9a-f]{20}$")
 FIXTURE_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]*[A-Z0-9]$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RUNNER_METADATA_RE = re.compile(r"tests/oracle/[A-Za-z0-9_.\-/]+\.metadata\.json")
 
 B2_STATUSES = ("MATCH", "MISMATCH", "NO_ORACLE", "UNTESTED")
 PRE_B2_STATUSES = ("PARTIAL_MATCH",)
-RESIDUAL_TOKENS = ("MISMATCH", "UNTESTED", "NO_ORACLE", "PARTIAL_MATCH", "PARTIAL")
+RESIDUAL_TOKENS = ("MISMATCH", "UNTESTED", "NO_ORACLE", "PARTIAL_MATCH",
+                   "PARTIAL", "MISSING")
+LEGACY_RESIDUAL_MARKERS = ("OUT_OF_SCOPE", "OUT_OF_DOMAIN", "PROGRESS_ONLY", "RECORDED")
+EMBEDDED_RESIDUAL_RE = re.compile(
+    r"(?<![A-Z0-9_])(" + "|".join(
+        re.escape(token)
+        for token in sorted(RESIDUAL_TOKENS + LEGACY_RESIDUAL_MARKERS,
+                            key=lambda item: (-len(item), item))
+    ) + r")(?![A-Z0-9_])"
+)
+COMMON_OUTPUT_PIN_KEYS = (
+    "expected_observation_sha256",
+    "expected_statement_stdout_sha256",
+    "expected_stdout_sha256",
+)
 
 INPUT_HASH_PATHS = (
     ("input_fingerprint",),
@@ -112,12 +133,55 @@ def dump_json_canonical(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, indent=1, ensure_ascii=True).encode("utf-8") + b"\n"
 
 
-def status_token(value):
-    """Reduce a status string like 'MISMATCH: reason...' to its state token."""
+def delimited_status_token(value, tokens):
+    """Parse an exact token with an optional non-empty delimited explanation."""
     if not isinstance(value, str):
         return None
-    token = value.split(":", 1)[0].strip()
-    return token or None
+    text = value.strip()
+    if "\n" in text or "\r" in text:
+        return None
+    for token in sorted(tokens, key=lambda item: (-len(item), item)):
+        if text == token:
+            return token
+        if not text.startswith(token):
+            continue
+        suffix = text[len(token):]
+        if suffix.startswith((":", "：")):
+            return token if suffix[1:].strip() else None
+        suffix = suffix.lstrip(" \t")
+        pairs = {"(": ")", "（": "）"}
+        if not suffix or suffix[0] not in pairs:
+            return None
+        opener = suffix[0]
+        closer = pairs[opener]
+        if not suffix.endswith(closer) or not suffix[1:-1].strip():
+            return None
+        depth = 0
+        for index, char in enumerate(suffix):
+            if char == opener:
+                depth += 1
+            elif char == closer:
+                depth -= 1
+                if depth < 0 or depth == 0 and index != len(suffix) - 1:
+                    return None
+        return token if depth == 0 else None
+    return None
+
+
+def status_token(value):
+    """Return a canonical B2/pre-B2 prefix, or None for an invalid value.
+
+    Legacy metadata uses ``MISMATCH: reason`` and ``NO_ORACLE (reason)``.
+    ASCII/full-width colons and parentheses are recognized, but arbitrary
+    whitespace prose is not: the delimiter remains mandatory so values such
+    as ``MATCHED`` or ``MATCH explanation`` cannot be mistaken for ``MATCH``.
+    """
+    return delimited_status_token(value, B2_STATUSES + PRE_B2_STATUSES)
+
+
+def residual_token(value):
+    """Return the leading residual state used by legacy evidence containers."""
+    return delimited_status_token(value, ("MATCH",) + RESIDUAL_TOKENS)
 
 
 def dig(obj, path):
@@ -171,15 +235,20 @@ class MiniSchemaValidator:
         seen = 0
         while isinstance(schema, dict) and "$ref" in schema:
             ref = schema["$ref"]
-            if not ref.startswith("#/"):
+            if not isinstance(ref, str) or not ref.startswith("#/"):
                 raise HarnessError(f"unsupported external $ref: {ref}")
             node = self.schema
-            for part in ref[2:].split("/"):
-                node = node[part]
+            try:
+                for part in ref[2:].split("/"):
+                    node = node[part]
+            except (KeyError, TypeError) as exc:
+                raise HarnessError(f"unresolved internal $ref: {ref}") from exc
             schema = node
             seen += 1
             if seen > 32:
                 raise HarnessError(f"cyclic $ref: {ref}")
+        if not isinstance(schema, dict):
+            raise HarnessError("schema nodes must be JSON objects")
         return schema
 
     def validate(self, instance, path: str = "$"):
@@ -290,22 +359,38 @@ def load_function_tables(root: str):
         migration = load_json(migration_path)
     except json.JSONDecodeError as exc:
         raise HarnessError(f"ledger/migration JSON error: {exc}") from exc
+    if not isinstance(ledger, dict) or not isinstance(migration, dict):
+        raise HarnessError("ledger and migration roots must be JSON objects")
+    for field in ("ghidra_functions", "rugra_functions"):
+        if not isinstance(ledger.get(field), list):
+            raise HarnessError(f"function ledger {field} must be an array")
+    for field in ("entries", "disambiguators"):
+        if not isinstance(migration.get(field), list):
+            raise HarnessError(f"function migration {field} must be an array")
     ids = set()
-    for fn in ledger.get("ghidra_functions", []) + ledger.get("rugra_functions", []):
+    for fn in ledger["ghidra_functions"] + ledger["rugra_functions"]:
+        if not isinstance(fn, dict):
+            raise HarnessError("function ledger entries must be JSON objects")
         fid = fn.get("id")
         if isinstance(fid, str):
             ids.add(fid)
     old_to_new = {}
-    for entry in migration.get("entries", []):
+    for entry in migration["entries"]:
+        if not isinstance(entry, dict):
+            raise HarnessError("function migration entries must be JSON objects")
         old_id, new_id = entry.get("old_id"), entry.get("new_id")
         if isinstance(old_id, str) and isinstance(new_id, str):
             if old_id in old_to_new and old_to_new[old_id] != new_id:
                 raise HarnessError(f"ambiguous migration mapping for {old_id}")
             old_to_new[old_id] = new_id
-    for entry in migration.get("disambiguators", []):
+    for entry in migration["disambiguators"]:
+        if not isinstance(entry, dict):
+            raise HarnessError("function migration disambiguators must be JSON objects")
         old_id, new_id = entry.get("old_id"), entry.get("new_id")
         if isinstance(old_id, str) and isinstance(new_id, str):
-            old_to_new.setdefault(old_id, new_id)
+            if old_id in old_to_new and old_to_new[old_id] != new_id:
+                raise HarnessError(f"ambiguous migration mapping for {old_id}")
+            old_to_new[old_id] = new_id
     return ids, old_to_new, migration
 
 
@@ -477,7 +562,12 @@ def rekey_gap_family(migration, ledger_ids) -> list:
 
 
 def metadata_status(doc):
-    """Return (token, location) for the metadata's declared overall status."""
+    """Return the metadata's valid and invalid declared overall statuses.
+
+    The fourth return value is a sorted ``(location, raw-value)`` list.  This
+    distinguishes a missing declaration from a present but invalid token, so a
+    typo cannot be silently downgraded to METADATA_STATUS_MISSING.
+    """
     locations = (
         ("overall_status", ("overall_status",)),
         ("status", ("status",)),
@@ -485,14 +575,21 @@ def metadata_status(doc):
         ("observation.overall_status", ("observation", "overall_status")),
     )
     found = []
+    invalid = []
     for label, path in locations:
-        token = status_token(dig(doc, path))
-        if token:
+        value = dig(doc, path)
+        if value is None:
+            continue
+        token = status_token(value)
+        if token is not None:
             found.append((token, label))
+        else:
+            invalid.append((label, value))
     if not found:
-        return None, None, []
+        location = invalid[0][0] if invalid else None
+        return None, location, [], sorted(invalid, key=lambda item: item[0])
     tokens = {t for t, _ in found}
-    return found[0][0], found[0][1], sorted(tokens)
+    return found[0][0], found[0][1], sorted(tokens), sorted(invalid, key=lambda item: item[0])
 
 
 def metadata_has_input_hash(doc) -> bool:
@@ -503,53 +600,139 @@ def metadata_has_input_hash(doc) -> bool:
     return False
 
 
-def iter_strings(obj):
-    if isinstance(obj, str):
-        yield obj
-    elif isinstance(obj, dict):
-        for key in sorted(obj):
-            yield from iter_strings(obj[key])
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from iter_strings(item)
-
-
 def metadata_has_expected_pin(doc) -> bool:
-    for key, value in iter_key_values(doc):
-        if key.startswith("expected") and "sha256" in key and isinstance(value, str) and value.strip():
+    """True when output expectations are common or explicitly paired.
+
+    Legacy fixtures use one common ``expected_stdout_sha256`` for the output
+    both sides must produce; this remains valid.  Once side-qualified output
+    keys are present, however, at least one Ghidra/Rugra pair is mandatory.
+    Paired pins may live at the top level or in a nested object such as
+    ``expected_results``.
+    """
+
+    def valid_hash(value):
+        return isinstance(value, str) and SHA256_RE.fullmatch(value) is not None
+
+    output_kinds = ("stdout", "output", "raw", "observation", "result")
+    side_declared = False
+    complete_pairs = 0
+    all_declared_pairs_valid = True
+
+    expected_results = doc.get("expected_results")
+    if isinstance(expected_results, dict):
+        for kind in output_kinds:
+            ghidra_key = f"ghidra_{kind}_sha256"
+            rugra_key = f"rugra_{kind}_sha256"
+            ghidra_present = ghidra_key in expected_results
+            rugra_present = rugra_key in expected_results
+            if ghidra_present or rugra_present:
+                side_declared = True
+                if (valid_hash(expected_results.get(ghidra_key))
+                        and valid_hash(expected_results.get(rugra_key))):
+                    complete_pairs += 1
+                else:
+                    all_declared_pairs_valid = False
+
+    paired_containers = [doc]
+    if isinstance(doc.get("comparand"), dict):
+        paired_containers.append(doc["comparand"])
+    for container in paired_containers:
+        for kind in output_kinds:
+            ghidra_key = f"expected_ghidra_{kind}_sha256"
+            rugra_key = f"expected_rugra_{kind}_sha256"
+            ghidra_present = ghidra_key in container
+            rugra_present = rugra_key in container
+            if ghidra_present or rugra_present:
+                side_declared = True
+                if valid_hash(container.get(ghidra_key)) and valid_hash(container.get(rugra_key)):
+                    complete_pairs += 1
+                else:
+                    all_declared_pairs_valid = False
+
+    if side_declared:
+        return complete_pairs > 0 and all_declared_pairs_valid
+
+    # The legacy common-output contract is top-level and deliberately exact:
+    # both executions must equal the same pinned bytes.  New spellings require
+    # an explicit tool change so an input/tool/raw-diff hash cannot masquerade
+    # as a two-sided output observation.
+    for key in COMMON_OUTPUT_PIN_KEYS:
+        if valid_hash(doc.get(key)):
             return True
     return False
-
-
-def iter_key_values(obj, prefix=""):
-    if isinstance(obj, dict):
-        for key in sorted(obj):
-            yield key, obj[key]
-            yield from iter_key_values(obj[key])
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from iter_key_values(item)
 
 
 def residual_evidence(doc) -> list:
     """Collect untested/mismatched residual evidence inside a metadata doc."""
     found = []
-    coverage = doc.get("coverage")
-    if isinstance(coverage, dict):
-        for key in sorted(coverage):
-            value = coverage[key]
-            token = status_token(value) if isinstance(value, str) else None
-            if token and (token in RESIDUAL_TOKENS or token in B2_STATUSES and token != "MATCH"):
+
+    def nonmatch_token(value):
+        token = residual_token(value)
+        return token if token is not None and token != "MATCH" else None
+
+    prose_keys = {
+        "cover", "covers", "description", "detail", "details", "note", "notes",
+        "observed", "projection", "reason", "scope", "summary",
+    }
+
+    def collect_status_map(path, value):
+        if isinstance(value, str):
+            tokens = sorted({match.group(1) for match in EMBEDDED_RESIDUAL_RE.finditer(value)})
+            for token in tokens:
+                found.append(f"{path}={token}")
+            return
+        if isinstance(value, list):
+            for index, entry in enumerate(value):
+                collect_status_map(f"{path}[{index}]", entry)
+            return
+        if not isinstance(value, dict):
+            return
+        if "status" in value:
+            raw_status = value.get("status")
+            token = nonmatch_token(raw_status)
+            if token is not None:
+                found.append(f"{path}={token}")
+            elif residual_token(raw_status) is None:
+                found.append(f"{path}=INVALID_STATUS")
+        for key in sorted(value):
+            if key == "status" or key.lower() in prose_keys:
+                continue
+            collect_status_map(f"{path}.{key}", value[key])
+
+    collect_status_map("coverage", doc.get("coverage"))
+    collect_status_map("observation_scope", doc.get("observation_scope"))
+    collect_status_map("known_dependencies", doc.get("known_dependencies"))
+
+    def collect_explicit(field, value):
+        """Collect a named residual container without treating MATCH as residual."""
+        if isinstance(value, str):
+            if not value.strip():
+                return
+            token = residual_token(value)
+            if token == "MATCH":
+                return
+            found.append(f"{field}={token}" if token else field)
+            return
+        if isinstance(value, list):
+            for index, entry in enumerate(value):
+                collect_explicit(f"{field}[{index}]", entry)
+            return
+        if isinstance(value, dict):
+            if "status" in value:
+                token = residual_token(value.get("status"))
                 if token != "MATCH":
-                    found.append(f"coverage.{key}={token}")
-    for field in ("known_residuals", "residuals", "uncovered_boundaries"):
-        value = doc.get(field)
-        if isinstance(value, list) and value:
-            found.append(f"{field}[{len(value)}]")
-        elif isinstance(value, str) and value.strip():
-            found.append(field)
-        elif isinstance(value, dict) and value:
-            found.append(f"{field}[{len(value)}]")
+                    found.append(f"{field}={token}" if token else f"{field}=INVALID_STATUS")
+                for key in sorted(value):
+                    if key != "status" and key.lower() not in prose_keys:
+                        collect_explicit(f"{field}.{key}", value[key])
+                return
+            if not value:
+                return
+            for key in sorted(value):
+                collect_explicit(f"{field}.{key}", value[key])
+
+    for field in ("known_residuals", "residuals", "uncovered_boundaries", "residual_union"):
+        collect_explicit(field, doc.get(field))
     observation = doc.get("observation")
     if isinstance(observation, dict):
         for field in ("untested", "mismatch"):
@@ -587,6 +770,28 @@ def doctor(root: str) -> dict:
         if len(seen_ids[fid]) > 1:
             add("DUPLICATE_FIXTURE_ID", REGISTRY_RELPATH, 0,
                 f"fixture id {fid!r} declared {len(seen_ids[fid])} times")
+
+    runner_owners = {}
+    metadata_owners = {}
+    for index, fixture in enumerate(fixtures):
+        if not isinstance(fixture, dict):
+            continue
+        owner = fixture.get("id") if isinstance(fixture.get("id"), str) else f"index:{index}"
+        for rel in fixture.get("runner", []) or []:
+            if isinstance(rel, str):
+                runner_owners.setdefault(rel, []).append(owner)
+        cache = fixture.get("cache") or {}
+        metadata = cache.get("metadata") if isinstance(cache, dict) else None
+        if isinstance(metadata, str):
+            metadata_owners.setdefault(metadata, []).append(owner)
+    for rel in sorted(runner_owners):
+        if len(runner_owners[rel]) > 1:
+            add("DUPLICATE_RUNNER_OWNER", REGISTRY_RELPATH, 0,
+                f"runner {rel!r} is owned by fixtures {runner_owners[rel]}")
+    for rel in sorted(metadata_owners):
+        if len(metadata_owners[rel]) > 1:
+            add("DUPLICATE_METADATA_OWNER", REGISTRY_RELPATH, 0,
+                f"metadata {rel!r} is owned by fixtures {metadata_owners[rel]}")
 
     # --- per-fixture structure and path existence -------------------------
     required_fixture_fields = ("id", "description", "runner", "timeout_seconds",
@@ -670,6 +875,9 @@ def doctor(root: str) -> dict:
             if not links:
                 add("RUNNER_METADATA_UNRESOLVED", runner, 0,
                     f"tracked by fixture {fixture.get('id')!r} but embeds no metadata path")
+            elif len(links) > 1:
+                add("RUNNER_METADATA_AMBIGUOUS", runner, 0,
+                    f"embeds multiple metadata paths {links}; expected only {expected!r}")
             elif expected not in links:
                 add("RUNNER_METADATA_MISMATCH", runner, 0,
                     f"embeds {links} but fixture {fixture.get('id')!r} tracks {expected!r}")
@@ -733,24 +941,28 @@ def doctor(root: str) -> dict:
             add("METADATA_INPUT_HASH_MISSING", rel, 0,
                 "no input hash pin (input_fingerprint/machine_input_sha256/input_sha256/input_manifest.sha256)")
 
-        token, location, tokens = metadata_status(doc)
-        if token is None:
+        token, location, tokens, invalid_statuses = metadata_status(doc)
+        if invalid_statuses:
+            rendered = ", ".join(f"{label}={value!r}" for label, value in invalid_statuses)
+            add("METADATA_STATUS_INVALID", rel, 0,
+                "declared status is not a canonical B2/pre-B2 token: " + rendered)
+        if token is None and not invalid_statuses:
             add("METADATA_STATUS_MISSING", rel, 0,
                 "no overall_status/status/evidence_status/observation.overall_status")
-        else:
+        if token is not None:
             if len(tokens) > 1:
                 add("STATUS_INTERNAL_CONFLICT", rel, 0,
                     f"metadata declares conflicting status tokens {tokens} at {location}")
             registry_status = status_by_fixture.get(rel)
             if registry_status is not None:
                 registry_token = status_token(registry_status)
-                if token != registry_token:
+                if registry_token is not None and token != registry_token:
                     add("STATUS_CONFLICT", rel, 0,
                         f"metadata {location}={token} contradicts registry evidence_status={registry_token}")
             if token == "MATCH":
                 pins = []
                 if not metadata_has_expected_pin(doc):
-                    pins.append("no expected*_sha256 output pin")
+                    pins.append("no paired Ghidra/Rugra output sha256 pins")
                 if not metadata_has_input_hash(doc):
                     pins.append("no input hash pin")
                 if not isinstance(doc.get("comparand"), dict):
@@ -820,7 +1032,16 @@ def schema_check(root: str) -> dict:
     schema_path = os.path.join(root, SCHEMA_RELPATH)
     if not os.path.isfile(schema_path):
         raise HarnessError(f"schema missing: {SCHEMA_RELPATH}")
-    schema_doc = load_json(schema_path)
+    try:
+        schema_doc = load_json(schema_path)
+    except json.JSONDecodeError as exc:
+        raise HarnessError(
+            f"schema is not valid JSON: {SCHEMA_RELPATH}:{exc.lineno}:{exc.colno}"
+        ) from exc
+    except OSError as exc:
+        raise HarnessError(f"schema is unreadable: {SCHEMA_RELPATH}: {exc.strerror}") from exc
+    if not isinstance(schema_doc, dict):
+        raise HarnessError("fixture-v1 schema root must be a JSON object")
     deviations = validate_registry_against_schema(registry, schema_doc)
     deviations.sort(key=lambda d: (d[0], d[1], d[2]))
     formatted = []
@@ -833,6 +1054,122 @@ def schema_check(root: str) -> dict:
             "detail": message,
         })
     return {"deviations": formatted, "count": len(formatted)}
+
+
+# ---------------------------------------------------------------------------
+# migration completion status
+# ---------------------------------------------------------------------------
+
+
+def migration_status_report(root: str) -> dict:
+    """Return deterministic blockers for completing the fixture-v1 migration."""
+    registry = load_registry(root)
+    discovery = discover(root, registry)
+    doctor_report = doctor(root)
+    schema_report = schema_check(root)
+    plan = build_plan(root)
+    blockers = []
+
+    def add(code, path, line, detail, source):
+        blockers.append({
+            "code": code,
+            "path": path,
+            "line": line,
+            "detail": detail,
+            "source": source,
+        })
+
+    for issue in doctor_report["issues"]:
+        add(issue["code"], issue["path"], issue["line"], issue["detail"], "doctor")
+
+    registry_status_counts = {}
+    specific_registry_status_paths = set()
+    fixtures = discovery["fixtures"]
+    for index, fixture in enumerate(fixtures):
+        if not isinstance(fixture, dict):
+            registry_status_counts["INVALID"] = registry_status_counts.get("INVALID", 0) + 1
+            continue
+        raw = fixture.get("evidence_status")
+        token = status_token(raw)
+        bucket = token or ("MISSING" if raw is None else "INVALID")
+        registry_status_counts[bucket] = registry_status_counts.get(bucket, 0) + 1
+        pointer = f"$.fixtures[{index}].evidence_status"
+        if token in PRE_B2_STATUSES:
+            specific_registry_status_paths.add(pointer)
+            add("REGISTRY_PRE_B2_STATUS", REGISTRY_RELPATH, 0,
+                f"{fixture.get('id') or '?'}: evidence_status={token} must migrate to a B2 state",
+                "migration")
+        elif raw is not None and token not in B2_STATUSES:
+            specific_registry_status_paths.add(pointer)
+            add("REGISTRY_STATUS_INVALID", REGISTRY_RELPATH, 0,
+                f"{fixture.get('id') or '?'}: evidence_status={raw!r} is not a canonical B2 state",
+                "migration")
+
+    metadata_status_counts = {}
+    for rel in discovery["disk_metadata"]:
+        try:
+            doc = load_json(os.path.join(root, rel))
+        except json.JSONDecodeError:
+            metadata_status_counts["INVALID"] = metadata_status_counts.get("INVALID", 0) + 1
+            continue
+        token, location, tokens, invalid = metadata_status(doc)
+        bucket = token or ("INVALID" if invalid else "MISSING")
+        metadata_status_counts[bucket] = metadata_status_counts.get(bucket, 0) + 1
+        pre_tokens = sorted(set(tokens).intersection(PRE_B2_STATUSES))
+        if pre_tokens:
+            add("METADATA_PRE_B2_STATUS", rel, 0,
+                f"{location or 'status'} declares pre-B2 state(s) {pre_tokens}", "migration")
+
+    for deviation in schema_report["deviations"]:
+        # A PRE_B2/invalid evidence status has a more actionable blocker above.
+        if (deviation["rule"] == "enum"
+                and deviation["json_pointer"] in specific_registry_status_paths):
+            continue
+        add("REGISTRY_SCHEMA_DEVIATION", deviation["path"], 0,
+            f"{deviation['json_pointer']} ({deviation['rule']}): {deviation['detail']}",
+            "schema")
+
+    plan_counts = {
+        "auto_replacements": plan["summary"]["auto_replacements"],
+        "manual_reselect": plan["summary"]["manual_reselect"],
+        "unmappable": plan["summary"]["unmappable"],
+        "rekey_gap_family_size": plan["summary"]["rekey_gap_family_size"],
+    }
+    plan_blocker_codes = {
+        "auto_replacements": "PLAN_AUTO_REPLACEMENTS_PENDING",
+        "manual_reselect": "PLAN_MANUAL_RESELECT_PENDING",
+        "unmappable": "PLAN_UNMAPPABLE_PENDING",
+        "rekey_gap_family_size": "PLAN_REKEY_GAP_FAMILY_PENDING",
+    }
+    for field in sorted(plan_counts):
+        count = plan_counts[field]
+        if count:
+            add(plan_blocker_codes[field], MIGRATION_RELPATH, 0,
+                f"migration plan {field}={count}", "plan")
+
+    blockers.sort(key=lambda item: (
+        item["code"], item["path"], item["line"], item["detail"], item["source"]
+    ))
+    blocker_codes = {}
+    for blocker in blockers:
+        code = blocker["code"]
+        blocker_codes[code] = blocker_codes.get(code, 0) + 1
+    return {
+        "blockers": blockers,
+        "stats": {
+            "blockers": len(blockers),
+            "blocker_codes": dict(sorted(blocker_codes.items())),
+            "registry_statuses": dict(sorted(registry_status_counts.items())),
+            "metadata_statuses": dict(sorted(metadata_status_counts.items())),
+            "doctor_issues": len(doctor_report["issues"]),
+            "schema_deviations": schema_report["count"],
+            "plan": plan_counts,
+        },
+    }
+
+
+def migration_status_exit_code(report: dict) -> int:
+    return EXIT_OK if not report["blockers"] else EXIT_FINDINGS
 
 
 # ---------------------------------------------------------------------------
@@ -1070,6 +1407,26 @@ def render_schema_text(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_migration_status_text(report: dict) -> str:
+    stats = report["stats"]
+    lines = [f"# oracle metadata migration status: {stats['blockers']} blocker(s)"]
+    lines.append("registry statuses: " + (", ".join(
+        f"{status}={count}" for status, count in stats["registry_statuses"].items()) or "none"))
+    lines.append("metadata statuses: " + (", ".join(
+        f"{status}={count}" for status, count in stats["metadata_statuses"].items()) or "none"))
+    lines.append("blocker codes: " + (", ".join(
+        f"{code}={count}" for code, count in stats["blocker_codes"].items()) or "none"))
+    lines.append(f"inputs: doctor_issues={stats['doctor_issues']} "
+                 f"schema_deviations={stats['schema_deviations']}")
+    lines.append("plan: " + ", ".join(
+        f"{field}={count}" for field, count in sorted(stats["plan"].items())))
+    lines.append("")
+    for blocker in report["blockers"]:
+        location = blocker["path"] if not blocker["line"] else f"{blocker['path']}:{blocker['line']}"
+        lines.append(f"[{blocker['code']}] {location}: {blocker['detail']}")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # self-test
 # ---------------------------------------------------------------------------
@@ -1097,7 +1454,6 @@ def synthetic_migration() -> dict:
         "schema": 1,
         "entries": [
             {"language": "rust", "old_id": RG_OLD, "new_id": RG_NEW, "reason": "rust_identity_rekey"},
-            {"language": "rust", "old_id": RG_GAP_OLD, "new_id": RG_GAP_NEW, "reason": "rust_identity_rekey"},
         ],
         "disambiguators": [],
         "old_ledger": {"tree_commit": "1" * 40},
@@ -1158,8 +1514,11 @@ def base_metadata(fixture_id: str, commit: str) -> dict:
             "rust_fixture_sha256": "2" * 64,
             "runner_sha256": "3" * 64,
         },
-        "expected_stdout_sha256": "4" * 64,
-        "overall_status": "MATCH",
+        "expected_results": {
+            "ghidra_stdout_sha256": "4" * 64,
+            "rugra_stdout_sha256": "4" * 64,
+        },
+        "overall_status": "MATCH (synthetic complete projection)",
         "coverage": {"case_one": "MATCH"},
     }
 
@@ -1223,26 +1582,146 @@ def self_test() -> int:
         schema_report = schema_check(root)
         expect("healthy baseline passes fixture-v1 schema", schema_report["count"] == 0,
                detail=json.dumps(schema_report["deviations"][:3]))
+        migration_report = migration_status_report(root)
+        expect("clean migration status has no blockers",
+               migration_status_exit_code(migration_report) == EXIT_OK,
+               detail=json.dumps(migration_report["blockers"][:3]))
 
         def codes(report):
             return {issue["code"] for issue in report["issues"]}
 
-        # 2. one-sided fake MATCH (no oracle-side output pin)
+        expect("status parser accepts only colon/parenthesis suffixes",
+               status_token("MISMATCH: detail") == "MISMATCH"
+               and status_token("UNTESTED：detail") == "UNTESTED"
+               and status_token("NO_ORACLE (detail)") == "NO_ORACLE"
+               and status_token("PARTIAL_MATCH（detail）") == "PARTIAL_MATCH"
+               and status_token("MATCH(foo") is None
+               and status_token("MATCH(foo)garbage") is None
+               and status_token("MATCH()") is None
+               and status_token("MATCH:") is None
+               and status_token("MATCH explanation") is None
+               and status_token("MATCHED") is None
+               and status_token("match") is None
+               and status_token("MATCH/MISMATCH") is None)
+
+        expect("common and nested paired output pins accepted",
+               metadata_has_expected_pin({"expected_stdout_sha256": "1" * 64})
+               and metadata_has_expected_pin({
+                   "expected_statement_stdout_sha256": "1" * 64,
+               })
+               and metadata_has_expected_pin({
+                   "expected_observation_sha256": "1" * 64,
+               })
+               and metadata_has_expected_pin({"expected_results": {
+                   "ghidra_stdout_sha256": "2" * 64,
+                   "rugra_stdout_sha256": "2" * 64,
+               }})
+               and metadata_has_expected_pin({"comparand": {
+                   "expected_ghidra_stdout_sha256": "2" * 64,
+                   "expected_rugra_stdout_sha256": "2" * 64,
+               }})
+               and not metadata_has_expected_pin({"expected_stdout_sha256": "short"})
+               and not metadata_has_expected_pin({
+                   "expected_raw_diff_sha256": "3" * 64,
+               })
+               and not metadata_has_expected_pin({
+                   "expected_not_actually_output_sha256": "3" * 64,
+               })
+               and not metadata_has_expected_pin({"expected_results": {
+                   "ghidra_stdout_sha256": "2" * 64,
+               }})
+               and not metadata_has_expected_pin({"expected_results": {
+                   "ghidra_stdout_sha256": "2" * 64,
+                   "rugra_stdout_sha256": "2" * 64,
+                   "ghidra_raw_sha256": "3" * 64,
+               }})
+               and not metadata_has_expected_pin({
+                   "expected_results": {
+                       "ghidra_stdout_sha256": "2" * 64,
+                       "rugra_stdout_sha256": "2" * 64,
+                   },
+                   "expected_ghidra_raw_sha256": "short",
+                   "expected_rugra_raw_sha256": "3" * 64,
+               }))
+
+        residual_probe = {
+            "coverage": {
+                "covered": {"status": "MATCH (complete)"},
+                "gap": {"status": "UNTESTED (branch)"},
+                "direct_progress": "PROGRESS_ONLY",
+                "group": {
+                    "status": "MATCH (parent projection)",
+                    "notes": "UNTESTED: prose is not a status declaration",
+                    "projection": "MISMATCH: prose is not a status declaration",
+                    "cases": [
+                        {"status": "MATCH"},
+                        {"status": "UNTESTED: nested child"},
+                    ],
+                },
+            },
+            "observation_scope": {"missing": "MISSING (production path)"},
+            "known_dependencies": {
+                "dep": {"status": "MISMATCH: state"},
+                "unknown": {"status": "OUT_OF_SCOPE"},
+                "progress": {"status": "PROGRESS_ONLY"},
+                "note": "plain dependency prose",
+            },
+            "residual_union": [
+                {
+                    "status": "MATCH",
+                    "detail": "closed parent",
+                    "children": [{"status": "UNTESTED: nested child"}],
+                },
+                {"status": "NO_ORACLE (undefined oracle path)", "detail": "open"},
+            ],
+        }
+        residual_probe_result = residual_evidence(residual_probe)
+        expect("nested residual containers keep only open evidence",
+               "coverage.gap=UNTESTED" in residual_probe_result
+               and "observation_scope.missing=MISSING" in residual_probe_result
+               and "known_dependencies.dep=MISMATCH" in residual_probe_result
+               and "known_dependencies.unknown=INVALID_STATUS" in residual_probe_result
+               and "known_dependencies.progress=INVALID_STATUS" in residual_probe_result
+               and "coverage.direct_progress=PROGRESS_ONLY" in residual_probe_result
+               and "coverage.group.cases[1]=UNTESTED" in residual_probe_result
+               and "residual_union[0].children[0]=UNTESTED" in residual_probe_result
+               and "residual_union[1]=NO_ORACLE" in residual_probe_result
+               and all("covered" not in item and item != "residual_union[0]=MATCH"
+                       and "known_dependencies.note" not in item
+                       and ".notes" not in item and ".projection" not in item
+                       for item in residual_probe_result),
+               detail=json.dumps(residual_probe_result))
+        mixed_scope = residual_evidence({
+            "observation_scope": "MATCH only for scalar output; codec error is UNTESTED",
+        })
+        plain_scope = residual_evidence({
+            "observation_scope": "scalar output and codec behavior are described here",
+        })
+        expect("mixed observation-scope prose exposes bounded residual tokens",
+               mixed_scope == ["observation_scope=UNTESTED"] and not plain_scope,
+               detail=json.dumps({"mixed": mixed_scope, "plain": plain_scope}))
+
+        # 2. one-sided fake MATCH (only the Ghidra output is pinned)
         def mutate(doc):
-            del doc["expected_stdout_sha256"]
+            del doc["expected_results"]["rugra_stdout_sha256"]
         rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"), mutate)
         report = doctor(root)
         expect("one-sided fake MATCH rejected", "SINGLE_SIDE_MATCH" in codes(report),
                detail=json.dumps(report["issues"][:3]))
         rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"),
-                     lambda doc: doc.update({"expected_stdout_sha256": "4" * 64}))
+                     lambda doc: doc["expected_results"].update(
+                         {"rugra_stdout_sha256": "4" * 64}))
 
-        # 2b. fake MATCH with admitted residuals
+        # 2b. nested coverage status with a parenthesized explanation
         def mutate_residuals(doc):
-            doc["coverage"]["case_two"] = "UNTESTED: branch not exercised"
+            doc["coverage"]["case_two"] = {
+                "status": "UNTESTED (branch not exercised)",
+                "detail": "synthetic residual",
+            }
         rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"), mutate_residuals)
         report = doctor(root)
-        expect("MATCH with unmatched residual rejected", "MATCH_WITH_UNMATCHED_RESIDUAL" in codes(report))
+        expect("MATCH with nested residual rejected",
+               "MATCH_WITH_UNMATCHED_RESIDUAL" in codes(report))
         rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"),
                      lambda doc: doc["coverage"].pop("case_two"))
 
@@ -1269,6 +1748,16 @@ def self_test() -> int:
         expect("duplicate fixture id rejected", "DUPLICATE_FIXTURE_ID" in codes(report))
         rewrite_json(os.path.join(root, REGISTRY_RELPATH), lambda doc: doc["fixtures"].pop())
 
+        # 5b. distinct fixture ids may not share one runner or metadata owner
+        shared = base_fixture("demo_b_1204", "tests/oracle/demo_a_1204.metadata.json",
+                              "tools/run_demo_a_oracle.sh")
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH),
+                     lambda doc: doc["fixtures"].append(shared))
+        report = doctor(root)
+        expect("duplicate runner and metadata ownership rejected",
+               {"DUPLICATE_RUNNER_OWNER", "DUPLICATE_METADATA_OWNER"} <= codes(report))
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH), lambda doc: doc["fixtures"].pop())
+
         # 6. duplicate metadata fixture_id
         with open(os.path.join(root, "tests/oracle/twin_1204.metadata.json"), "w",
                   encoding="utf-8") as handle:
@@ -1285,6 +1774,17 @@ def self_test() -> int:
         expect("status conflict rejected", "STATUS_CONFLICT" in codes(report))
         rewrite_json(os.path.join(root, REGISTRY_RELPATH),
                      lambda doc: doc["fixtures"][0].update({"evidence_status": "MATCH"}))
+
+        # 7b. a declared but invalid status is not reported as merely missing
+        rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"),
+                     lambda doc: doc.update({"overall_status": "MATCHED"}))
+        report = doctor(root)
+        found = codes(report)
+        expect("invalid metadata status rejected explicitly",
+               "METADATA_STATUS_INVALID" in found and "METADATA_STATUS_MISSING" not in found)
+        rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"),
+                     lambda doc: doc.update(
+                         {"overall_status": "MATCH (synthetic complete projection)"}))
 
         # 8. missing provenance
         def strip(doc):
@@ -1321,6 +1821,13 @@ def self_test() -> int:
                      lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_NEW]}))
 
         # 11. rekey-gap family id
+        rewrite_json(os.path.join(root, MIGRATION_RELPATH),
+                     lambda doc: doc["entries"].append({
+                         "language": "rust",
+                         "old_id": RG_GAP_OLD,
+                         "new_id": RG_GAP_NEW,
+                         "reason": "rust_identity_rekey",
+                     }))
         rewrite_json(os.path.join(root, REGISTRY_RELPATH),
                      lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_GAP_OLD]}))
         report = doctor(root)
@@ -1330,6 +1837,14 @@ def self_test() -> int:
                and plan["summary"]["manual_reselect"] == 1)
         rewrite_json(os.path.join(root, REGISTRY_RELPATH),
                      lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_NEW]}))
+        migration_report = migration_status_report(root)
+        expect("unreferenced rekey-gap family blocks migration completion",
+               migration_report["stats"]["plan"]["rekey_gap_family_size"] == 1
+               and "PLAN_REKEY_GAP_FAMILY_PENDING" in {
+                   blocker["code"] for blocker in migration_report["blockers"]
+               })
+        rewrite_json(os.path.join(root, MIGRATION_RELPATH),
+                     lambda doc: doc["entries"].pop())
 
         # 12. unmappable id
         rewrite_json(os.path.join(root, REGISTRY_RELPATH),
@@ -1355,6 +1870,49 @@ def self_test() -> int:
         json_a = dump_json_canonical(build_plan(root))
         json_b = dump_json_canonical(build_plan(root))
         expect("plan json deterministic (synthetic)", json_a == json_b)
+
+        # 15. migration status is deterministic and pre-B2 states are blockers
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH),
+                     lambda doc: doc["fixtures"][0].update(
+                         {"evidence_status": "PARTIAL_MATCH"}))
+        rewrite_json(os.path.join(root, "tests/oracle/demo_a_1204.metadata.json"),
+                     lambda doc: doc.update(
+                         {"overall_status": "PARTIAL_MATCH (coverage incomplete)"}))
+        migration_a = migration_status_report(root)
+        migration_b = migration_status_report(root)
+        migration_codes = {item["code"] for item in migration_a["blockers"]}
+        expect("dirty migration status rejects pre-B2 registry and metadata",
+               migration_status_exit_code(migration_a) == EXIT_FINDINGS
+               and {"REGISTRY_PRE_B2_STATUS", "METADATA_PRE_B2_STATUS"} <= migration_codes)
+        expect("migration status deterministic (synthetic)", migration_a == migration_b)
+        expect("migration status text deterministic (synthetic)",
+               render_migration_status_text(migration_a)
+               == render_migration_status_text(migration_b))
+
+        # 16. malformed schema is a stable harness error, never a traceback
+        schema_path = os.path.join(root, SCHEMA_RELPATH)
+        with open(schema_path, "rb") as handle:
+            schema_before = handle.read()
+        with open(schema_path, "w", encoding="utf-8") as handle:
+            handle.write("{\n")
+        captured_out = io.StringIO()
+        captured_err = io.StringIO()
+        with contextlib.redirect_stdout(captured_out), contextlib.redirect_stderr(captured_err):
+            malformed_rc = main(["--root", root, "migration-status", "--strict"])
+        with open(schema_path, "wb") as handle:
+            handle.write(schema_before)
+        expect("malformed schema exits as harness error without traceback",
+               malformed_rc == EXIT_HARNESS
+               and "harness input error" in captured_err.getvalue()
+               and "Traceback" not in captured_err.getvalue()
+               and not captured_out.getvalue(),
+               detail=json.dumps({"rc": malformed_rc, "stderr": captured_err.getvalue()}))
+        unresolved_ref_rejected = False
+        try:
+            list(MiniSchemaValidator({"$ref": "#/definitions/missing"}).validate({}))
+        except HarnessError:
+            unresolved_ref_rejected = True
+        expect("unresolved internal schema ref is a harness error", unresolved_ref_rejected)
 
     print()
     if failures:
@@ -1383,6 +1941,12 @@ def main(argv=None) -> int:
     lint_parser.add_argument("--json", action="store_true", help="emit machine JSON")
     lint_parser.add_argument("--strict", action="store_true",
                              help="fail-closed mode (the only mode; kept for gate compatibility)")
+
+    migration_parser = sub.add_parser(
+        "migration-status", help="summarize fail-closed metadata migration blockers")
+    migration_parser.add_argument("--json", action="store_true", help="emit machine JSON")
+    migration_parser.add_argument("--strict", action="store_true",
+                                  help="fail-closed mode (the only mode)")
 
     plan_parser = sub.add_parser("plan", help="emit deterministic migration plan")
     plan_parser.add_argument("--json", action="store_true", help="emit machine JSON")
@@ -1423,6 +1987,11 @@ def main(argv=None) -> int:
                 sys.stdout.write(render_schema_text(schema_report))
                 sys.stdout.write(f"# lint total findings: {total}\n")
             return EXIT_OK if total == 0 else EXIT_FINDINGS
+        if args.command == "migration-status":
+            report = migration_status_report(root)
+            sys.stdout.write(json.dumps(report, sort_keys=True, indent=1) + "\n"
+                             if args.json else render_migration_status_text(report))
+            return migration_status_exit_code(report)
         if args.command == "plan":
             plan = build_plan(root)
             text = render_plan_text(plan).encode("utf-8") if not args.json else dump_json_canonical(plan)
@@ -1449,6 +2018,14 @@ def main(argv=None) -> int:
             return EXIT_OK
     except HarnessError as exc:
         sys.stderr.write(f"{TOOL_NAME}: harness input error: {exc}\n")
+        return EXIT_HARNESS
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
+        # Malformed repository inputs must never leak a traceback or be
+        # confused with migration findings.  Specific loaders above provide
+        # repo-relative diagnostics; this is the final fail-closed boundary.
+        sys.stderr.write(
+            f"{TOOL_NAME}: harness input error: {type(exc).__name__}: {exc}\n"
+        )
         return EXIT_HARNESS
     return EXIT_HARNESS
 

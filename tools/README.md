@@ -164,7 +164,7 @@ bug A 不会缩到 bug B）/ `HARNESS_ERROR`（fail-closed）。签名取自 std
 中断后 `--resume <log|trace.json>` 在谓词身份（argv/exit/timeout/retries/可执行文件
 sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 旧 trace fail-closed 拒绝。
 
-## Oracle fixture registry 治理（2026-08-15，`ORACLE-REGISTRY-0001`）
+## Oracle fixture registry 治理（2026-08-23，`ORACLE-REGISTRY-HARDEN-0002`）
 
 `oracle_registry.py`（零依赖）提供 registry 目标契约与迁移工具链：
 
@@ -173,16 +173,44 @@ sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 
   （`RG-F-/GH12-F-` 20-hex pattern，显式拒绝 ordinal/placeholder）、`evidence_status`
   限定 B2 状态机、全路径 repo-relative。
 - `doctor`：反向发现磁盘全部 metadata/runner/comparand 并与 registry 交叉核对；
-  orphan、重复 ID、缺 provenance、状态冲突、stale/rekey-gap/unmappable function ID
-  全部 fail-closed（rc 0/1/2），输出 repo-relative、排序、无时间戳。
+  orphan、重复 ID、runner/metadata 多 owner 或多链接、缺 provenance、状态冲突、
+  stale/rekey-gap/unmappable function ID 全部 fail-closed（rc 0/1/2），输出
+  repo-relative、排序、无时间戳。metadata 状态只接受
+  B2 四态或迁移期 `PARTIAL_MATCH`，可后接 ASCII/全角冒号或成对、非空的括号说明
+  （括号前可有空白）；冒号后的说明也必须非空，整个字符串必须完整匹配；
+  任意空白 prose、大小写漂移及复合 token 都产生 `METADATA_STATUS_INVALID`，不会伪装成
+  “缺字段”。旧式顶层共享 pin 继续合法，但只白名单
+  `expected_stdout_sha256`、`expected_statement_stdout_sha256` 与
+  `expected_observation_sha256`；`raw_diff`、tool、runner、golden、input 或自造相似
+  key 都不算输出 pin。使用 side-qualified pin 时，则白名单路径内
+  Ghidra/Rugra 两侧都必须存在且为精确 64-hex，任一侧缺失仍是 `SINGLE_SIDE_MATCH`。
 - `schema`：内置 draft-07 子集校验器（不依赖 jsonschema）。
 - `lint [--strict]`：doctor + schema 合并检查（前向兼容 ENFORCE-0001）。
+- `migration-status [--strict] [--json]`：只读汇总 doctor、schema、registry/metadata
+  pre-B2 状态及 function-ID plan（包括未被 fixture 引用的 rekey family）的全部迁移
+  blocker；文本和 JSON 都按稳定键排序且不含主机时间。rc=0 表示 blocker 为零，rc=1
+  表示仍有 blocker，rc=2 表示 schema/ledger/migration 等工具输入损坏；坏 JSON/$ref
+  不得泄漏 traceback。它不会重写 registry、metadata 或 migration table。
 - `plan [--check-determinism]`：生成确定性迁移计划——replacements 按
   (file:line:column) 断言式替换，manual_reselect/unmappable 禁止文本替换须按账本
   重选；计划头部带 registry/ledger/migration 三文件 sha256 指纹，应用前须重生成；
   collateral_pins 列出 runner 编辑后须同 commit 重钉的 `comparand.runner_sha256`。
 
-当前基线：doctor 报 163 issue / 13 类码（迁移执行见 `ORACLE-METADATA-MIGRATE-0001`）。
+metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`observation_scope`、
+`known_dependencies`、`residuals`、`known_residuals`、`uncovered_boundaries` 或
+`residual_union[].status`；只有非 `MATCH` 状态或这些 residual 容器中的明确未覆盖记录
+才阻止顶层 `MATCH`。这些容器会递归检查 group/list；父级 `MATCH` 不会屏蔽子级
+`UNTESTED`，显式但未知的 `status` 会保守记为 `INVALID_STATUS`。推荐门禁顺序：
+
+```bash
+python3 -m py_compile tools/oracle_registry.py
+python3 tools/oracle_registry.py self-test
+python3 tools/oracle_registry.py plan --check-determinism
+python3 tools/oracle_registry.py migration-status --strict
+python3 tools/oracle_registry.py lint --strict
+```
+
+迁移执行见 `ORACLE-METADATA-MIGRATE-0001`；不要在文档写死会随 corpus 变化的 issue 数。
 
 ## 12.0.4 golden 重生（2026-08-15，`ORACLE-0002`）
 
