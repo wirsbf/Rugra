@@ -75,6 +75,19 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
   COREACTION-PORT-PROTOTYPEWARNINGS-0001(P2)
 - 复用既有 TODO 12 个（见报告 §5 末尾），不重开。
 
+### W-2026-08-22-ORCH 交付流水（root 维护；集成需复核 APPROVE + 白名单差分门禁）
+
+| ID | 状态 | 交付→集成 | 备注 |
+|---|---|---|---|
+| BLOCK-FINDIRREDUCIBLE-0001 | DONE | a494832→636daa1 | 机制C APPROVE，fixture 90 |
+| LANEDIVIDE-INFRA-0001 | DONE | 3fb7be7→a8bd8d0 | 机制C APPROVE，fixture 91 |
+| DATATYPE-TYPEORDER-RESIDUAL-0001 | DONE | c14dfa9→1180a72 | 机制C APPROVE（证据型） |
+| COMMENT-SORTER-ITERATORS-0001 | DONE | dc6eb2c→d7a9cae | root 验证，fixture 92 |
+| TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | REVIEW | 7163dec（wt/tmresid，11/11 MATCH residual=none） | 复核进行中 |
+| PRINTC-UNLINKED-REF-0001（printc 域） | REVIEW→门禁中 | b155b8a→fcc20d2 | E2E 差分跑批中；backfill 注入 117→45 行，残差两件归 varmap 域 |
+| TYPEFACTORY-LOCALTYPE-CACHE-0001 | REVIEW | f0a7829+9ee59ab（220/220 MATCH，原99字节保持） | 复核进行中；Cross-Review PENDING |
+| SCOPELOCAL-QUERY-0001 r2 | REVIEW | 3bea8db+31f4046（11/11 MATCH） | varmap 白名单，复核进行中；E2E 差分随 root 跑批 |
+
 来自 `docs/alignment_audit/CONDEXE_GAPS_2026-08-22.md`（27 函数对照：20 结构 MATCH 全 UNTESTED、
 1 MISSING（buildHeritageArray）、6 MISMATCH；**勘误 roadmap #19**：PathMeld 归因错误（condexe.cc 零引用）、
 forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只检测"已过时（现 1555 行）；
