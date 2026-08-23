@@ -1473,7 +1473,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "PARTIAL_MATCH",
+      "evidence_status": "MISMATCH",
       "cache": {
         "metadata": "tests/oracle/op_insert_1204.metadata.json",
         "inputs": {

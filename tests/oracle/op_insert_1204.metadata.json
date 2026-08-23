@@ -1,4 +1,5 @@
 {
+  "fixture_id": "OP-INSERT-0001",
   "oracle": {
     "tag": "Ghidra_12.0.4_build",
     "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
@@ -9,11 +10,35 @@
   "input": {
     "binary": "examples/curl",
     "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+    "repository_commit": "183d2a1b8b62b865b177ece7001dd18dd816f82d",
+    "repository_tree": "85636ac61b6ec5b4140b660fc8587f6eccb3d7ff",
+    "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+    "git_object_type": "blob",
+    "git_object_size": 162544,
     "function": "GetStr@0x36d0+74",
     "synthetic_block": "ten named ops exercising MULTIEQUAL, INDIRECT/iop, BRANCHIND, before/after/begin/end, uninsert/reinsert, and one COPY def-use pair"
   },
-  "cpp_fixture_sha256": "dc901ac51d55aa1c8f9a5d3814b4d845948f065c486bf4e164f4820a2df10830",
-  "rust_fixture_sha256": "1835fae0a24413c182ef9304bfebd0f4365b21ef6d3f4ff5c5f6090024d4fd7f",
+  "input_fingerprint": "sha256:c73d1915ae12593b591cd3e3dcaa541a7ae5c1391ed931714eee3e82bcfb7c0c",
+  "comparand": {
+    "runner_sha256": "326f3f0558f2dec00465eccb524f766730c750f98c5129542b9de7d78eb4313d",
+    "cpp_fixture_sha256": "dc901ac51d55aa1c8f9a5d3814b4d845948f065c486bf4e164f4820a2df10830",
+    "rust_fixture_sha256": "1835fae0a24413c182ef9304bfebd0f4365b21ef6d3f4ff5c5f6090024d4fd7f",
+    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  },
   "expected_stdout_sha256": "adff0e77d4e2b62678d75d04f0b7a7b3db7c5f64735415b4ca52e25625132e6e",
-  "status": "MATCH"
+  "covered_projection_status": "MATCH",
+  "residual_union": [
+    {
+      "todo_id": "OPBANK-0001",
+      "status": "MISMATCH",
+      "scope": "parentless compatibility plus nullable preallocated input slots, destroy lifecycle, and dead IOP state are outside the byte-matched inserted-block projection"
+    },
+    {
+      "todo_id": "SEQNUM-0001",
+      "status": "UNTESTED",
+      "scope": "remaining SeqNum ordering boundaries are not covered by this fixture"
+    }
+  ],
+  "status": "MISMATCH"
 }
