@@ -4520,16 +4520,23 @@ mod tests {
         let entry = scope.dynamic_entries[0].clone();
         let mut src = Varnode::new_constant(0x33333333, 4);
         src.set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
-        let mut dst = Varnode::new_constant(0x33333333, 4);
-        dst.copy_symbol_if_valid(&src);
+        // copy_symbol_if_valid is an associated function taking the
+        // destination as &Arc<RwLock<Varnode>> (varnode.rs:1131); the plain
+        // method form was removed with the cc:520 copySymbol tail port.
+        let dst = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+            0x33333333, 4,
+        )));
+        Varnode::copy_symbol_if_valid(&dst, &src);
         assert!(
-            dst.get_symbol_entry().is_some(),
+            dst.read().unwrap().get_symbol_entry().is_some(),
             "pipeline equate must propagate through copy_symbol_if_valid"
         );
         // Not-close destination constant must NOT receive the markup.
-        let mut dst2 = Varnode::new_constant(0x12345678, 4);
-        dst2.copy_symbol_if_valid(&src);
-        assert!(dst2.get_symbol_entry().is_none());
+        let dst2 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+            0x12345678, 4,
+        )));
+        Varnode::copy_symbol_if_valid(&dst2, &src);
+        assert!(dst2.read().unwrap().get_symbol_entry().is_none());
     }
 
     #[test]

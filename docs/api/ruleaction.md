@@ -199,9 +199,13 @@ Corresponds to Ghidra's `RuleShiftBitops` (ruleaction.cc:476-566, RULE-BEHAVIORA
   cc:525-536）的结果时，逐 bitop 输入检查 `getNZMask << sa & calc_mask(outsize)`，某侧可能非零位
   全被移走（cc:539-548）则：AND/MULT → 输入0 换 `#0`（结果必为 0）；ADD/XOR/OR → 输入0 换另一侧
   （该侧贡献为零，需 heritage-known，cc:549-564）。
-- 本模块新增 `pcode_left`/`pcode_right`（address.hh:505/514）与 `nz_mask_exact`（varnode.hh:231
-  `getNZMask` 的 oracle 精确语义：nzm 仅在构造函数设置 — 常量=值、其他=~0，从不被 refine；
-  `Varnode::get_nz_mask` 的 calc_mask 近似在 `sa >= size*8` 时会误判，故此 Rule 内联精确版本）。
+- 本模块新增 `pcode_left`/`pcode_right`（address.hh:505/514）。nzm 读取经
+  `Varnode::get_nzm()`/`get_nz_mask()`（varnode.hh:231，直接返回 `nzm` 字段）：字段由构造函数
+  初始化（varnode.cc:590-606：常量=offset、其他=~0），并由 `Funcdata::calcNZMask`
+  （funcdata_varnode.cc:856-927）前向精化——主管线中 `ActionNonzeroMask`（coreaction.cc:5507）
+  每轮先于规则池运行，故本 Rule 在主管线读到的是传播后的 nzm
+  （例：`(X + (W & 0x80)) << 7` 于 1 字节值因 AND 输出 nzm=0x80 而触发）。
+  曾内联的 `nz_mask_exact`（"nzm 仅构造函数写入"的错误前提）已随 REJECT 复核删除。
 
 ### `pub fn new() -> Self`
 
@@ -352,10 +356,11 @@ RULE-BEHAVIORAL-FIVE-0001 M5 修复：旧注册含 INT_RIGHT，会把 `V >> c` �
 - `mostsigbit_set(val)` — address.cc:735，最高有效位索引
 
 #### `Varnode::get_nz_mask()`（varnode.hh:231）
-非零掩码。oracle 事实：`nzm` **仅在构造函数设置**（varnode.cc:590-606：常量=offset、其他=~0），
-之后从不被 refine（锁定 cpp 全量 grep 验证）。Rugra 的近似实现（常量=值，其他=calc_mask(size)）
-在 `sa >= size*8` 时与 oracle 有偏差；RuleShiftBitops 内使用 `nz_mask_exact`（本模块）读取
-oracle 精确值。
+非零掩码，直接返回 `nzm` 字段（FUNCDATA-CALCNZM-0003）。字段由构造函数初始化
+（varnode.cc:590-606：常量=offset、其他=~0）并由 `Funcdata::calcNZMask`
+（funcdata_varnode.cc:856-927）前向精化（DFS `getNZMaskLocal` 赋输出 + MULTIEQUAL
+worklist）；主管线 `ActionNonzeroMask`（coreaction.cc:5507）每轮 mainloop 先于规则池运行。
+此前记录的"nzm 仅在构造函数设置、从不被 refine"是错误前提（独立复核证伪），已更正。
 
 #### `pub struct RuleSlessToLess`（ruleaction.cc:2548-2573）
 当两操作数的 NZMask 表明符号位为 0（均为已知非负）时，将 INT_SLESS→INT_LESS、INT_SLESSEQUAL→INT_LESSEQUAL。

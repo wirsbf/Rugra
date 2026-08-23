@@ -1509,24 +1509,21 @@ impl Varnode {
             == varnode_flags::INPUT
     }
 
-    // Ghidra: varnode.cc:578 Varnode::getNzMask
-    /// Get the mask of bits known to be zero (non-zero mask).
-    /// Faithful to Ghidra's `Varnode::getNZMask` (varnode.hh:231). In Ghidra
-    /// this field (`nzm`) is maintained by Heritage/Cover. Until Rugra wires
-    /// that, we return a conservative approximation:
-    ///   - constants: the constant value (bits that are zero)
-    ///   - others:    calc_mask(size) (assume all bits could be non-zero)
+    // Ghidra: varnode.hh:231 Varnode::getNZMask
+    /// Get the mask of bits within this Varnode that may be non-zero.
+    /// Faithful to `Varnode::getNZMask` (varnode.hh:231): the raw `nzm`
+    /// field. The field is initialized by the constructor (varnode.cc:590-606:
+    /// constants carry their offset, everything else ~0) and then refined
+    /// forward through the dataflow by `Funcdata::calcNZMask`
+    /// (funcdata_varnode.cc:856-927: DFS output assignment via
+    /// `PcodeOp::getNZMaskLocal` + MULTIEQUAL worklist propagation), which
+    /// `ActionNonzeroMask` (coreaction.cc:5507) runs before the rule pools
+    /// each mainloop round. Before `calcNZMask` runs, constants report their
+    /// offset and all other varnodes report ~0 (FUNCDATA-CALCNZM-0003:
+    /// previously this getter recomputed a calc_mask(size) approximation for
+    /// non-constants, diverging from the oracle's propagated field).
     pub fn get_nz_mask(&self) -> u64 {
-        if self.is_constant() {
-            self.get_offset()
-        } else {
-            let size = self.get_size();
-            if size >= 8 {
-                u64::MAX
-            } else {
-                (1u64 << (size * 8)) - 1
-            }
-        }
+        self.nzm
     }
 
     // Ghidra: varnode.cc:578 Varnode::hasNoDescend

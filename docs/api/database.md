@@ -319,3 +319,10 @@ Symbol and Database encode/decode round-trips. `cargo check --lib` is clean
   `catindex=1`、`get_category_size(equate)=2` 与 C++ 可观察状态一致（此前
   Rust 完全不入类别表）。`add_union_facet_symbol` 存在同样缺口（本租约
   equate 限定，登记为后续 TODO）。
+
+## 2026-08-23：test_add_equate_symbol_reaches_copy_symbol_if_valid 修复（master 测试态回归）
+
+- `Varnode::copy_symbol_if_valid` 已改为关联函数（入参 `&Arc<RwLock<Varnode>>`，
+  varnode.rs:1131），database.rs 该测试仍以方法形式调用导致 master `cargo test --lib`
+  无法编译（95df283 实测）。本 commit 将两处调用改为关联函数形式并按新签名用
+  `Arc<RwLock<Varnode>>` 构造目标常量，断言语义不变（equate 传播/不传播两分支）。

@@ -422,7 +422,7 @@ impl Rule for RuleZextEliminate {
         // cc:2518: newvn->copySymbolIfValid(vn2);
         {
             let src = vn2_arc.read().unwrap();
-            newvn.write().unwrap().copy_symbol_if_valid(&src);
+            crate::varnode::Varnode::copy_symbol_if_valid(&newvn, &src);
         }
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         // cc:2519-2520: replace the zexted input and the constant (in that order).
@@ -636,29 +636,10 @@ fn pcode_left(val: u64, sa: i32) -> u64 {
     }
 }
 
-// Ghidra: varnode.hh:231 Varnode::getNZMask
-/// Exact oracle semantics of `Varnode::getNZMask`: the `nzm` field is set
-/// only in the Varnode constructor (varnode.cc:590-606) — `offset` for
-/// constants, `~0` for every other varnode — and is never refined later
-/// (verified by grep across the locked cpp tree: the only writers are the
-/// constructor at varnode.cc:597/601/605). Varnode::get_nz_mask (varnode.rs)
-/// approximates the non-constant case with calc_mask(size), which breaks the
-/// RuleShiftBitops zero-detection for `sa >= size*8` on sub-8-byte varnodes
-/// (`~0 >> 40` is non-zero in Ghidra, `calc_mask(4) >> 40` is 0), so this
-/// Rule reads the constructor-exact value instead.
-fn nz_mask_exact(vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> u64 {
-    let vn = vn_arc.read().unwrap();
-    if vn.is_constant() {
-        vn.get_offset()
-    } else {
-        u64::MAX
-    }
-}
-
 /// Shifting away all non-zero bits of one side of a logical/arithmetic op:
 ///
-/// - `( V & 0xf000 ) << 4   =>   #0 << 4`
-/// - `( V + 0xf000 ) << 4   =>    V << 4`
+/// - `( V & 0xf000 ) << 20  =>  #0 << 20`
+/// - `( V + 0xf000 ) << 20  =>   V << 20`
 ///
 /// Faithful to Ghidra's `RuleShiftBitops` (ruleaction.cc:476-566). The
 /// dispatched op is a constant INT_LEFT/INT_RIGHT/SUBPIECE/INT_MULT
@@ -669,6 +650,16 @@ fn nz_mask_exact(vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varno
 /// (cc:539-548), then: AND/MULT make the result zero (replace input-0 with
 /// `#0`), while ADD/XOR/OR make the input a no-op (replace input-0 with the
 /// other bitop input, cc:549-564).
+///
+/// `getNZMask` reads the `nzm` field (varnode.hh:231), which is initialized
+/// by the Varnode constructor (varnode.cc:590-606: constants carry their
+/// offset, everything else ~0) and then refined forward through the
+/// dataflow by `Funcdata::calcNZMask` (funcdata_varnode.cc:856-927: DFS
+/// output assignment via PcodeOp::getNZMaskLocal + MULTIEQUAL worklist
+/// propagation). In the main pipeline `ActionNonzeroMask` (coreaction.cc:5507)
+/// runs `calcNZMask` each mainloop round before the rule pools, so this Rule
+/// observes propagated masks — e.g. `(X + (W & 0x80)) << 7` on 1-byte values
+/// fires because the AND output's nzm propagated to 0x80.
 pub struct RuleShiftBitops;
 
 impl RuleShiftBitops {
@@ -750,7 +741,11 @@ impl Rule for RuleShiftBitops {
             _ => return Ok(action_status::NO_CHANGE),
         }
         // cc:538-548: find the first bitop input whose possible non-zero bits
-        // all vanish after the shift (bounded by the output mask).
+        // all vanish after the shift (bounded by the output mask). getNZMask
+        // (varnode.hh:231) is the raw nzm field — constructor-initialized
+        // (varnode.cc:590-606) and refined by Funcdata::calcNZMask
+        // (funcdata_varnode.cc:856-927), which ActionNonzeroMask
+        // (coreaction.cc:5507) runs before the rule pools each mainloop.
         let mask = crate::space::calc_mask(outsize as i32);
         let mut swallowed: Option<usize> = None;
         for i in 0..bitop_inputs {
@@ -758,7 +753,7 @@ impl Rule for RuleShiftBitops {
                 Some(v) => v.clone(),
                 None => continue,
             };
-            let nzm = nz_mask_exact(&in_vn);
+            let nzm = in_vn.read().unwrap().get_nzm();
             let shifted = if leftshift {
                 pcode_left(nzm, sa)
             } else {
@@ -18949,43 +18944,55 @@ mod tests {
 
     #[test]
     fn test_or_collapse_constant_covers() {
-        // V (register, NZM=0xffffffff) | 0xff (size 1) → COPY (since all V bits covered by 0xff? No.
-        // NZM(V) for a size-1 register is 0xff. (0xff | 0xff)==0xff → collapse.
+        // V (1-byte input, calcNZMask assigns nzm = calc_mask(1) = 0xff,
+        // funcdata_varnode.cc:892) | 0xff → (0xff | 0xff) == 0xff → COPY(0xff).
+        // getNZMask now reads the propagated nzm field, so the test runs
+        // Funcdata::calc_nz_mask first, exactly like ActionNonzeroMask
+        // (coreaction.cc:5507) does before the rule pools.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let c = fd.vbank.create_constant(1, 0xff);
-        let op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_OR,
-        )));
-        {
-            let mut o = op.write().unwrap();
-            o.inrefs = vec![v, c];
-            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20));
-        }
+        let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x5000))));
+        fd.bblocks.add_block(block.clone());
+        let v = {
+            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+            fd.set_input_varnode(vn)
+        };
+        let c = fd.new_constant(1, 0xff);
+        let op = fd.new_op(2, Address::new(0x5000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_OR);
+        fd.op_set_input(&op, v, 0);
+        fd.op_set_input(&op, c, 1);
+        fd.new_unique_out(1, &op);
+        fd.op_insert_end(&op, &block);
+        fd.calc_nz_mask();
         let rule = RuleOrCollapse::new();
-        let result = rule.apply_op(&op, &mut fd).unwrap();
+        let result = rule.apply_op(&op.0, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
-        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_COPY);
     }
 
     #[test]
     fn test_or_collapse_partial_no_change() {
-        // V (size 1, NZM=0xff) | 0x0f → (0xff | 0x0f)=0xff != 0x0f → no change
+        // V (size 1, propagated nzm 0xff) | 0x0f → (0xff | 0x0f)=0xff != 0x0f
+        // → no change (ruleaction.cc:397).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let c = fd.vbank.create_constant(1, 0x0f);
-        let op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_OR,
-        )));
-        {
-            let mut o = op.write().unwrap();
-            o.inrefs = vec![v, c];
-            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20));
-        }
+        let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x5000))));
+        fd.bblocks.add_block(block.clone());
+        let v = {
+            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+            fd.set_input_varnode(vn)
+        };
+        let c = fd.new_constant(1, 0x0f);
+        let op = fd.new_op(2, Address::new(0x5000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_OR);
+        fd.op_set_input(&op, v, 0);
+        fd.op_set_input(&op, c, 1);
+        fd.new_unique_out(1, &op);
+        fd.op_insert_end(&op, &block);
+        fd.calc_nz_mask();
         let rule = RuleOrCollapse::new();
-        let result = rule.apply_op(&op, &mut fd).unwrap();
+        let result = rule.apply_op(&op.0, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
     }
 
