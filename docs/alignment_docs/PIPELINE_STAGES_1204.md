@@ -153,3 +153,32 @@ universal (ActionRestartGroup, onceperfunc, max=1)          ← pending restart 
    前缀算法失效。
 5. **等价门禁**:对每个快照点,随机抽样"全量跑" vs "缓存续跑",最终输出(含 stderr
    warning 与最终 IR)必须字节一致;接入 `check_determinism.py` 式双跑框架。
+
+### 5.1 阶段投影二分工具(`tools/stage_bisect.py`,RUGRA-GLUE,2026-08-23)
+
+消费 §3.1 原生观测机制(OPACTION_DEBUG 的 per-Action/per-Rule before/after 投影 +
+setBreakPoint 名字路径停/续)产出的两侧投影文件,定位**第一个分歧边界**并把缺陷
+归因到某 Action/Rule 的某一轮应用。工具不重排、不规范化、不消除顺序;只读投影,
+零管线语义影响。
+
+- **投影格式**:记录行 `<seq> <action_path> <before>|<after>`(`<seq>`=原生
+  `opactdbg_count`,`before|after`=`PcodeOp::printDebug` 原文,`\|` 转义);边界行
+  `@BEGIN/@END/@CONVERGED/@RESTART` 携带 `changes/tests/apply` 计数。restart 轮次
+  与各组 pass 由工具从边界流推导(@RESTART 重置、每路径 @BEGIN 计数),满足 §4
+  的"路径 + curstart + count 状态"登记要求。
+- **分歧分类与归因**:`AFTER_DIVERGENCE`(同 before 异 after → 缺陷在该轮 apply
+  内)/`BEFORE_DIVERGENCE`(缺陷更早,回退 last good boundary 收窄)/
+  `PATH`(遍历/派发顺序)/`SEQ`(序号漂移)/`STREAM_KIND`(事件不对齐)/
+  `BOUNDARY`(计数会计)/`LENGTH`(一侧提前终止)。
+- **Ghidra 侧收集**:`tools/stage_bisect_projection.cc` 骨架给出两条路线的命令
+  模板——Route A 用 `ADDITIONAL_FLAGS="-DOPACTION_DEBUG"` 重建 `decomp_dbg` 控制台
+  + `trace enable/trace address` + 后处理按已知遍历序归位路径(名字不唯一时会被
+  occurrence index 误导);Route B 用 libdecomp.a fixture harness 以
+  `setBreakPoint(break_start, path)` + perform 续跑逐段走树,路径无歧义。fixture
+  必须在 metadata 记录 `-DOPACTION_DEBUG` 构建标志,否则按 NO_ORACLE 处理。
+- **根集成流程**:双侧投影(同函数输入/同 arch/同 options)→
+  `python3 tools/stage_bisect.py <ghidra.proj> <rugra.proj> [--json]` → 按归因
+  定位到 Action 轮次;`--relax-unique` 仅作 triage 屏蔽 unique id,不得作为对齐
+  证据。自测:`python3 tools/stage_bisect.py --selftest`(合成投影 + 已知分歧点,
+  13 场景)。
+
