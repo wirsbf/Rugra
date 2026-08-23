@@ -1588,6 +1588,21 @@ pub struct LocalSymbol {
     /// Ghidra SymbolEntry::hash (database.hh:136): the dynamic storage hash
     /// (0 for static entries).
     pub hash: u64,
+    /// Ghidra Symbol::flags & Varnode::persist: set by `Scope::addMap`
+    /// when the mapping scope is global (database.cc:1131-1132) OR when a
+    /// non-global symbol maps inside the global scope's discovery range
+    /// (database.cc:1133-1142). Projected through
+    /// `SymbolEntry::getAllFlags` (database.hh:271).
+    pub persist: bool,
+    /// Ghidra Symbol::flags property bits folded in by `Scope::addMap`
+    /// (database.cc:1153): when a STATIC mapping with an EMPTY uselimit is
+    /// installed, `glb->symboltab->getProperty(entry.addr)` (the Database
+    /// flagbase — readonly/volatile ranges) is OR-ed into the SYMBOL's
+    /// flags, exactly once, at map-install time. A property range installed
+    /// later never contaminates an already-mapped symbol (the
+    /// qp_scope_symbol_victim construction-order case). Accumulates across
+    /// the symbol's mappings (`|=` per addMap, like the C++ flags word).
+    pub property_flags: u32,
 }
 
 impl LocalSymbol {
@@ -1616,6 +1631,8 @@ impl LocalSymbol {
             space: crate::space::AddressSpace::Stack,
             is_dynamic: false,
             hash: 0,
+            persist: false,
+            property_flags: 0,
         }
     }
 
@@ -2131,9 +2148,15 @@ impl ScopeLocal {
         if sym.namelock {
             flags |= varnode_flags::NAMELOCK;
         }
-        if self.is_global_scope {
+        // database.cc:1131-1132/1138-1139 — persist lands on the SYMBOL at
+        // addMap (global scope or global-discovery hit), projected through
+        // getAllFlags (database.hh:271) exactly as the oracle bit does.
+        if sym.persist {
             flags |= varnode_flags::PERSIST;
         }
+        // database.cc:1153 — the addMap property fold lands on the SYMBOL's
+        // flags (database.hh:271 getAllFlags = extraflags | symbol->flags).
+        flags |= sym.property_flags;
         flags
     }
 
@@ -2988,6 +3011,24 @@ impl ScopeLocal {
         start: u64,
         usepoint: Option<u64>,
     ) -> usize {
+        self.add_symbol_with_property(space, nm, ct, start, usepoint, &|_, _| 0)
+    }
+
+    // Ghidra: database.cc:1530 Scope::addSymbol (+ database.cc:1126 addMap)
+    /// `Scope::addSymbol` with the full `Scope::addMap` flag rules — the
+    /// static whole-map entry installs with `addrtied` and the Database
+    /// property bits at `start` folded into the symbol's flags when the
+    /// uselimit is empty (database.cc:1149-1153; `property` models
+    /// `glb->symboltab->getProperty`).
+    pub fn add_symbol_with_property(
+        &mut self,
+        space: crate::space::AddressSpace,
+        nm: &str,
+        ct: Option<Arc<Datatype>>,
+        start: u64,
+        usepoint: Option<u64>,
+        property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
+    ) -> usize {
         let idx = self.symbols.len();
         let mut sym = LocalSymbol::new(nm, start, 1, ct, symbol_category::NO_CATEGORY);
         sym.space = space;
@@ -3013,23 +3054,19 @@ impl ScopeLocal {
             None => Vec::new(),
             Some(up) => vec![(code_index, up, up)],
         };
-        self.add_map_entry(idx, space, start, size, 0, crate::varnode::varnode_flags::MAPPED, uselimit);
+        self.add_map_entry_with_property(
+            idx, space, start, size, 0, crate::varnode::varnode_flags::MAPPED, uselimit, property,
+        );
         idx
     }
 
     // Ghidra: database.cc:1843 ScopeInternal::addMapInternal
     /// Install one static SymbolEntry into the scope's maptable (the entry
-    /// log this module materializes per query). Faithful to
-    /// `addMapInternal` (database.cc:1843-1872) + the addMap flag logic
-    /// (database.cc:1149-1155): an EMPTY uselimit sets the Symbol's
-    /// `addrtied` flag before the sub-sort is frozen; the entry's subsort is
-    /// computed once, at insertion (rangemap.hh:238 calls `getSubsort()` on
-    /// the new record); the uselimit ranges are kept sorted by
-    /// `(space index, first)` — the `set<Range>` order of the oracle's
-    /// RangeList (address.hh:202-205) — with adjacent same-space ranges
-    /// merged the way `RangeList::insertRange` merges them. The wrap check
-    /// (database.cc:1855-1861) is the caller's duty
-    /// (`add_fake_input_symbol` keeps the exact LowlevelError text).
+    /// log this module materializes per query) without a Database property
+    /// lookup — the production form: the flagbase fold answers 0 (the
+    /// Database-unification gap DB-LOCALSCOPE-MAP-0001). See
+    /// [`ScopeLocal::add_map_entry_with_property`] for the full addMap
+    /// rule set.
     pub fn add_map_entry(
         &mut self,
         sym: usize,
@@ -3040,8 +3077,44 @@ impl ScopeLocal {
         extraflags: u32,
         uselimit: Vec<(i32, u64, u64)>,
     ) {
+        self.add_map_entry_with_property(
+            sym, space, start, size, offset, extraflags, uselimit, &|_, _| 0,
+        );
+    }
+
+    // Ghidra: database.cc:1843 ScopeInternal::addMapInternal (+ database.cc:1126
+    // Scope::addMap flag rules)
+    /// Install one static SymbolEntry with the FULL `Scope::addMap` flag
+    /// rules. Faithful to `addMapInternal` (database.cc:1843-1872) + the
+    /// addMap flag logic (database.cc:1149-1155): an EMPTY uselimit sets the
+    /// Symbol's `addrtied` flag AND folds the Database property bits at the
+    /// mapping address (`glb->symboltab->getProperty(entry.addr)`,
+    /// database.cc:1153 — modeled by `property`, the flagbase lookup)
+    /// into the SYMBOL's flags — BEFORE the sub-sort is frozen and the entry
+    /// is installed. The entry's subsort is computed once, at insertion
+    /// (rangemap.hh:238 calls `getSubsort()` on the new record; property
+    /// bits never feed `getSubsort`, database.cc:98-106 reads only
+    /// `addrtied`); the uselimit ranges are kept sorted by
+    /// `(space index, first)` — the `set<Range>` order of the oracle's
+    /// RangeList (address.hh:202-205) — with adjacent same-space ranges
+    /// merged the way `RangeList::insertRange` merges them. The wrap check
+    /// (database.cc:1855-1861) is the caller's duty
+    /// (`add_fake_input_symbol` keeps the exact LowlevelError text).
+    pub fn add_map_entry_with_property(
+        &mut self,
+        sym: usize,
+        space: crate::space::AddressSpace,
+        start: u64,
+        size: i32,
+        offset: i32,
+        extraflags: u32,
+        uselimit: Vec<(i32, u64, u64)>,
+        property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
+    ) {
         if uselimit.is_empty() {
             self.symbols[sym].addrtied = true; // database.cc:1149-1150
+            // database.cc:1153 — the flagbase property fold onto the symbol.
+            self.symbols[sym].property_flags |= property(space, start);
         }
         let mut ranges = uselimit;
         ranges.sort_unstable();
@@ -3081,17 +3154,69 @@ impl ScopeLocal {
     /// derived from the mirror fields (space/start/usepoint; a dynamic
     /// symbol takes NO static entry, database.cc:1874-1886). Production
     /// construction goes through `add_symbol`/`add_dynamic_symbol`.
+    /// Installs WITHOUT a flagbase property lookup (the addMap fold answers
+    /// 0 — see [`ScopeLocal::install_symbol_with_property`]).
     pub fn install_symbol(&mut self, sym: LocalSymbol) -> usize {
+        self.install_symbol_with_property(sym, &|_, _| 0)
+    }
+
+    // Ghidra: database.cc:1530 Scope::addSymbol (+ database.cc:1126 addMap)
+    /// Install a fully-formed LocalSymbol with the full `Scope::addMap`
+    /// flag rules: a static symbol with no usepoint gets `addrtied` set AND
+    /// the Database property bits at its mapping address folded into its
+    /// flags (database.cc:1149-1153 — `property` models
+    /// `glb->symboltab->getProperty`). A global SCOPE also sets persist
+    /// (database.cc:1131-1132). A dynamic symbol takes no static
+    /// entry and never folds (database.cc:1146-1147). See
+    /// [`ScopeLocal::install_symbol_addmap`] for the global-discovery
+    /// branch (database.cc:1133-1142).
+    pub fn install_symbol_with_property(
+        &mut self,
+        sym: LocalSymbol,
+        property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
+    ) -> usize {
+        self.install_symbol_addmap(sym, property, None)
+    }
+
+    // Ghidra: database.cc:1530 Scope::addSymbol (+ database.cc:1126
+    // Scope::addMap flag rules in full)
+    /// Install a fully-formed LocalSymbol with the COMPLETE `Scope::addMap`
+    /// rule set (database.cc:1126-1155):
+    /// - global scope: `symbol->flags |= persist` (database.cc:1131-1132);
+    /// - non-global scope whose mapping address is inside the GLOBAL
+    ///   scope's discovery range (`in_global_discovery`, modeling
+    ///   `glbScope->inScope(entry.addr,1,...)`, database.cc:1138): persist
+    ///   AND `entry.uselimit.clear()` (database.cc:1140) — the cleared
+    ///   uselimit then feeds the addrtied + fold branch;
+    /// - static map with EMPTY uselimit: `addrtied` + the flagbase property
+    ///   fold at the mapping address (database.cc:1149-1153).
+    pub fn install_symbol_addmap(
+        &mut self,
+        mut sym: LocalSymbol,
+        property: &dyn Fn(crate::space::AddressSpace, u64) -> u32,
+        in_global_discovery: Option<&dyn Fn(crate::space::AddressSpace, u64) -> bool>,
+    ) -> usize {
         let idx = self.symbols.len();
         let space = sym.space;
         let start = sym.start;
         let size = sym.size;
-        let usepoint = sym.usepoint;
+        let mut usepoint = sym.usepoint;
         let is_dynamic = sym.is_dynamic;
-        let mut sym = sym;
+        // database.cc:1131-1132 — global scope: persist.
+        if self.is_global_scope {
+            sym.persist = true;
+        } else if let Some(disc) = in_global_discovery {
+            // database.cc:1133-1142 — global-discovery hit: persist AND the
+            // uselimit clear (the entry stops being use-limited).
+            if disc(space, start) {
+                sym.persist = true;
+                usepoint = None;
+            }
+        }
         // Single-entry equivalence of the addMap flag rule
-        // (database.cc:1149-1150).
+        // (database.cc:1149-1150) on the (possibly cleared) usepoint.
         sym.addrtied = usepoint.is_none() && !is_dynamic;
+        sym.usepoint = usepoint;
         self.symbols.push(sym);
         self.insert_name_tree(idx);
         if !is_dynamic {
@@ -3100,7 +3225,7 @@ impl ScopeLocal {
                 None => Vec::new(),
                 Some(up) => vec![(code_index, up, up)],
             };
-            self.add_map_entry(
+            self.add_map_entry_with_property(
                 idx,
                 space,
                 start,
@@ -3108,6 +3233,7 @@ impl ScopeLocal {
                 0,
                 crate::varnode::varnode_flags::MAPPED,
                 uselimit,
+                property,
             );
         }
         idx
@@ -4313,6 +4439,69 @@ mod tests {
         );
         assert_eq!(out.final_scope, QueryFinalScope::None);
         assert_eq!(out.flags, varnode_flags::READONLY);
+    }
+
+    #[test]
+    fn test_add_map_property_fold_construction_order() {
+        use crate::varnode::varnode_flags;
+        // database.cc:1149-1153 — a static map with an EMPTY uselimit folds
+        // the Database property bits at the mapping address into the SYMBOL
+        // (visible through getAllFlags, database.hh:271); the fold runs at
+        // map-install time, so construction order decides.
+        let mut scope = ScopeLocal::new();
+        scope.space = crate::space::AddressSpace::Stack;
+        // Property-first: the readonly+volatile range covers 0x900-0x9ff.
+        let property = |space: crate::space::AddressSpace, off: u64| -> u32 {
+            if space == crate::space::AddressSpace::Stack && (0x900..=0x9ff).contains(&off) {
+                varnode_flags::READONLY | varnode_flags::VOLATIL
+            } else {
+                0
+            }
+        };
+        let folded = scope.install_symbol_with_property(
+            overlap_sym("folded", 0x900, 4, None),
+            &property,
+        );
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Stack, 0x900, 4, None, None, &property,
+        );
+        assert!(out.entry.is_some());
+        assert_eq!(
+            out.flags,
+            varnode_flags::MAPPED
+                | varnode_flags::ADDRTIED
+                | varnode_flags::READONLY
+                | varnode_flags::VOLATIL
+        );
+        // Victim order: property range installed AFTER the map — the symbol
+        // never folds, but the query-time property still answers for
+        // scope-only/property-only branches.
+        let victim = scope.install_symbol(overlap_sym("victim", 0x910, 4, None));
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Stack, 0x910, 4, None, None, &property,
+        );
+        assert!(out.entry.is_some());
+        assert_eq!(
+            out.flags,
+            varnode_flags::MAPPED | varnode_flags::ADDRTIED
+        );
+        assert_eq!(scope.symbols[victim].property_flags, 0);
+        assert_eq!(
+            scope.symbols[folded].property_flags,
+            varnode_flags::READONLY | varnode_flags::VOLATIL
+        );
+        // A usepoint-restricted map (non-empty uselimit) takes NEITHER
+        // addrtied NOR the fold (database.cc:1149-1154 guard).
+        scope.install_symbol_with_property(overlap_sym("limited", 0x920, 4, Some(0x5000)), &property);
+        let out = scope.query_properties_ex(
+            crate::space::AddressSpace::Stack, 0x920, 4, None, None, &property,
+        );
+        assert!(out.entry.is_none());
+        // The fold is per-mapping-START (entry.addr), not per-extent: a
+        // symbol starting OUTSIDE the range but overlapping into it folds
+        // nothing even though part of its storage is readonly.
+        scope.install_symbol_with_property(overlap_sym("tail", 0x8f8, 16, None), &property);
+        assert_eq!(scope.symbols.last().unwrap().property_flags, 0);
     }
 
     #[test]

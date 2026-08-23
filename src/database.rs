@@ -25,16 +25,36 @@ pub const ID_BASE: u64 = 0x4000_0000_0000_0000;
 
 /// Varnode-like properties of a Symbol. Faithful to the subset of
 /// `Varnode` flags used by Symbol (database.hh:182-184).
+/// Symbol property flags. Faithful to `Symbol::flags`
+/// (database.hh:183): Ghidra stores the VARNODE flag namespace directly on
+/// the Symbol — `Scope::addMap` writes `Varnode::persist` (database.cc:1132),
+/// `Varnode::addrtied` (database.cc:1150) and the flagbase bits
+/// (database.cc:1153) into `symbol->flags`, and
+/// `SymbolEntry::getAllFlags` (database.hh:271) ORs them with the entry's
+/// `extraflags` in ONE bit space. The legacy Rugra constants (TYPELOCK=1<<0
+/// …) were a private bit space that could never mix with the Varnode-space
+/// `extraflags`; they now alias the varnode bit values
+/// (varnode.hh:82-115) so the fold and getAllFlags projections match the
+/// oracle bit-for-bit (DB-LOCALSCOPE-MAP-0001).
 pub mod symbol_flags {
-    pub const TYPELOCK: u32 = 1 << 0;
-    pub const NAMELOCK: u32 = 1 << 1;
-    pub const READONLY: u32 = 1 << 2;
-    pub const EXTERNREF: u32 = 1 << 3;
-    pub const ADDRTIED: u32 = 1 << 4;
-    pub const PERSIST: u32 = 1 << 5;
-    pub const VOLATIL: u32 = 1 << 6;
-    pub const INDIRECTSTORAGE: u32 = 1 << 7;
-    pub const HIDDENRETPARM: u32 = 1 << 8;
+    /// varnode.hh:83 `typelock = 0x100`.
+    pub const TYPELOCK: u32 = 1 << 8;
+    /// varnode.hh:84 `namelock = 0x200`.
+    pub const NAMELOCK: u32 = 1 << 9;
+    /// varnode.hh:92 `readonly = 0x2000`.
+    pub const READONLY: u32 = 1 << 13;
+    /// varnode.hh:91 `externref = 0x1000`.
+    pub const EXTERNREF: u32 = 1 << 12;
+    /// varnode.hh:95 `addrtied = 0x8000`.
+    pub const ADDRTIED: u32 = 1 << 15;
+    /// varnode.hh:94 `persist = 0x4000`.
+    pub const PERSIST: u32 = 1 << 14;
+    /// varnode.hh:90 `volatil = 0x800`.
+    pub const VOLATIL: u32 = 1 << 11;
+    /// varnode.hh:109 `indirectstorage = 0x8000000`.
+    pub const INDIRECTSTORAGE: u32 = 1 << 27;
+    /// varnode.hh:110 `hiddenretparm = 0x10000000`.
+    pub const HIDDENRETPARM: u32 = 1 << 28;
 }
 
 /// Display-format (dispflag) properties for a Symbol. Faithful to the
@@ -1319,6 +1339,22 @@ impl UnionFacetSymbol {
     }
 }
 
+// RUGRA-GLUE: AddMapContext (Ghidra's Scope reads `glb->symboltab` through
+// its Architecture handle inside Scope::addMap — database.cc:1136/1153;
+// Rugra's Scope is Architecture-less, so the Database side passes the two
+// lookups in one context struct. `None` models a standalone scope.)
+/// The Database-side lookups `Scope::addMap` needs: the flagbase property
+/// at an address (`glb->symboltab->getProperty`, database.hh:946) and the
+/// global-scope discovery-range test (`glbScope->inScope(addr,1,addr)`,
+/// database.cc:1138).
+pub struct AddMapContext<'a> {
+    /// `Database::get_property(addr)` at addMap time — the readonly/volatile
+    /// fold bits (database.cc:1153).
+    pub property: Box<dyn Fn(Address) -> u32 + 'a>,
+    /// Is `addr` inside the global scope's discovery range? (database.cc:1138)
+    pub in_global_discovery: Box<dyn Fn(Address) -> bool + 'a>,
+}
+
 /// An in-memory implementation of the Scope interface. Faithful to `Scope`
 /// (database.hh:462) + `ScopeInternal` (database.hh:798).
 #[derive(Debug, Clone)]
@@ -2343,11 +2379,37 @@ impl Scope {
     // Ghidra: database.cc:2744 ScopeInternal::decode
     /// Decode this scope's contents from the children of a `<scope>` element
     /// (the `<scope>` element itself is opened by the caller). Faithful to
-    /// `ScopeInternal::decode` (database.cc:2744). Handles an optional
+    /// `ScopeInternal::decode` (database.cc:2744): handles an optional
     /// `<parent>` (skipped — applied by the Database), `<rangelist>` /
     /// `<rangeequalssymbols>`, and a `<symbollist>` of `<mapsym>`/`<hole>`/
-    /// `<collision>` children.
+    /// `<collision>` children. Standalone form: no Database side-channel —
+    /// `<hole>` properties are dropped and `<mapsym>` mappings install
+    /// without the addMap flag rules (see [`Scope::decode_with_ctx`] for the
+    /// Database-integrated form).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        self.decode_with_ctx(decoder, None, &[]);
+    }
+
+    // Ghidra: database.cc:2744 ScopeInternal::decode (Database-integrated)
+    /// Database-integrated decode. Faithful to the `glb->symboltab` touches
+    /// inside `ScopeInternal::decode` (database.cc:2744-2789):
+    /// - `<mapsym>` children go through `addMapSym` → `addMap(entry)`
+    ///   (database.cc:2772/1602) with the flagbase property lookup
+    ///   (`glb->symboltab->getProperty`, database.cc:1153) and the global
+    ///   discovery-range test (database.cc:1138) resolved against
+    ///   `global_ranges` (a snapshot of the global scope's ownership ranges
+    ///   as decoded so far).
+    /// - `<hole>` children apply `setPropertyRange(flags, range)` to the
+    ///   flagbase IMMEDIATELY (database.cc:2778-2779 → 2667-2687), in
+    ///   document order — a `<hole>` BEFORE a `<mapsym>` feeds that
+    ///   mapsym's property fold, one AFTER does not.
+    /// - `flags == 0` holes apply nothing (database.cc:2683).
+    pub fn decode_with_ctx(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        mut flagbase: Option<&mut PartMap>,
+        global_ranges: &[Range],
+    ) {
         loop {
             let sub_id = decoder.peek_element();
             if sub_id == 0 {
@@ -2386,12 +2448,29 @@ impl Scope {
                 let sym_name = decoder.element_name(sym_id).unwrap_or_default();
                 match sym_name.as_str() {
                     "mapsym" => {
-                        self.add_map_sym(decoder);
+                        // database.cc:2771-2772 — addMapSym with the live
+                        // flagbase + discovery ranges.
+                        let ctx = flagbase.as_deref_mut().map(|fb| AddMapContext {
+                            property: Box::new(move |addr: Address| fb.get_value(addr)),
+                            in_global_discovery: Box::new(move |addr: Address| {
+                                global_ranges.iter().any(|r| r.contains(addr))
+                            }),
+                        });
+                        self.add_map_sym(decoder, ctx.as_ref());
                     }
                     "hole" => {
-                        // Holes describe global memory properties; collect them
-                        // for the Database. In a standalone Scope we just skip.
-                        let (_rng, _flags) = Scope::decode_hole(decoder);
+                        // database.cc:2778-2779 — decodeHole forwards to the
+                        // Database's setPropertyRange (database.cc:2683-2685).
+                        let (rng, flags) = Scope::decode_hole(decoder);
+                        if let Some(fb) = flagbase.as_deref_mut() {
+                            if flags != 0 {
+                                fb.set_property_range(
+                                    flags,
+                                    rng.get_first_addr(),
+                                    rng.get_last_addr_open(),
+                                );
+                            }
+                        }
                     }
                     "collision" => {
                         let nm = Scope::decode_collision_name(decoder);
@@ -2459,12 +2538,15 @@ impl Scope {
 
     // Ghidra: database.cc:1564 Scope::addMapSym
     /// Parse a mapped Symbol from a `<mapsym>` element. Faithful to
-    /// `Scope::addMapSym` (database.cc:1564). The first child determines the
+    /// `Scope::addMapSym` (database.cc:1564): the first child determines the
     /// symbol kind (`<symbol>`, `<equatesymbol>`, `<function>`,
     /// `<functionshell>`, `<labelsym>`, `<externrefsymbol>`, `<facetsymbol>`);
-    /// subsequent `<addr>`/`<hash>` children define the SymbolEntry mappings.
+    /// subsequent `<addr>`/`<hash>` children define the SymbolEntry mappings,
+    /// each installed through `addMap(entry)` (database.cc:1602) — the
+    /// persist / global-discovery / addrtied + flagbase-property-fold rules
+    /// run per mapping via [`AddMapContext`] (`None` = standalone scope).
     /// Returns the new symbol id (0 = none created).
-    pub fn add_map_sym(&mut self, decoder: &mut dyn Decoder) -> u64 {
+    pub fn add_map_sym(&mut self, decoder: &mut dyn Decoder, ctx: Option<&AddMapContext>) -> u64 {
         let elem_id = decoder.open_element();
         // Consume any mapsym attributes (e.g. "type").
         loop {
@@ -2544,8 +2626,11 @@ impl Scope {
                 None => break,
             };
             let mut entry = SymbolEntry::new_static(
-                sym_arc,
-                0,
+                sym_arc.clone(),
+                // database.cc:1155/1147 — addMap installs the mapping with
+                // extraflags = Varnode::mapped (addMapInternal /
+                // addDynamicMapInternal), so getAllFlags carries the bit.
+                crate::varnode::varnode_flags::MAPPED,
                 Address::new(0),
                 0,
                 0,
@@ -2558,6 +2643,18 @@ impl Scope {
                 decoder.close_element(elem_id);
                 return 0;
             }
+            // database.cc:1602 — addMap(entry): the flag rules run per
+            // mapping, with the flagbase state AS OF THIS POINT in the
+            // symbollist walk (an earlier <hole> feeds the fold, a later
+            // one does not, database.cc:2768-2784 document order).
+            let mut uselimit = entry.get_use_limit().clone();
+            let static_addr = if entry.is_dynamic() {
+                None
+            } else {
+                Some(entry.get_addr())
+            };
+            self.apply_add_map_rules(&sym_arc, static_addr, &mut uselimit, ctx);
+            entry.set_use_limit(uselimit);
             if entry.is_dynamic() {
                 self.dynamic_entries.push(entry);
             } else {
@@ -2938,19 +3035,79 @@ impl Scope {
         (UnionFacetSymbol::new(self.unique_id, nm, field_num), id)
     }
 
+    // Ghidra: database.cc:1126 Scope::addMap (flag rules)
+    /// Apply `Scope::addMap`'s symbol-flag rules to one mapping.
+    /// Faithful to database.cc:1126-1155:
+    /// - `isGlobal()` scope: `symbol->flags |= Varnode::persist`
+    ///   (database.cc:1131-1132) — runs for BOTH static and dynamic maps.
+    /// - non-global scope with a static address (`addr = Some`) inside the
+    ///   GLOBAL scope's discovery range: persist is set AND
+    ///   `entry.uselimit.clear()` (database.cc:1133-1142) — the cleared
+    ///   uselimit then feeds the addrtied/fold branch below.
+    /// - static address with EMPTY uselimit: `symbol->flags |=
+    ///   Varnode::addrtied` (database.cc:1150) and the Database property
+    ///   fold `symbol->flags |= glb->symboltab->getProperty(entry.addr)`
+    ///   (database.cc:1153) — readonly/volatile ranges live in the flagbase
+    ///   and are OR-ed into the SYMBOL (not the entry) exactly once, at
+    ///   map-install time; a property range installed LATER never
+    ///   contaminates an already-mapped symbol. Dynamic maps
+    ///   (`addr = None`, database.cc:1146-1147 addDynamicMapInternal) never
+    ///   take addrtied or the fold.
+    /// - the join-address piece loop (database.cc:1156-1177) is out of this
+    ///   helper: Rugra's map-install callers never map join addresses.
+    ///
+    /// `ctx` carries the two `glb->symboltab` lookups the C++ scope reads
+    /// through its Architecture handle; `None` models a standalone scope
+    /// with no Database (both lookups answer false/0 — the no-fold
+    /// behaviour, recorded under DB-LOCALSCOPE-MAP-0001).
+    fn apply_add_map_rules(
+        &mut self,
+        sym_arc: &Arc<RwLock<Symbol>>,
+        addr: Option<Address>,
+        uselimit: &mut RangeList,
+        ctx: Option<&AddMapContext>,
+    ) {
+        if self.is_global() {
+            // database.cc:1131-1132.
+            sym_arc.write().unwrap().flags |= symbol_flags::PERSIST;
+        } else if let (Some(addr), Some(ctx)) = (addr, ctx) {
+            // database.cc:1133-1142 — global discovery range check on the
+            // (static) address (inScope(addr,1)); a hit clears the uselimit.
+            if (ctx.in_global_discovery)(addr) {
+                sym_arc.write().unwrap().flags |= symbol_flags::PERSIST;
+                *uselimit = RangeList::new();
+            }
+        }
+        let addr = match addr {
+            // database.cc:1146-1147 — dynamic maps take no addrtied/fold.
+            None => return,
+            Some(addr) => addr,
+        };
+        if !uselimit.empty() {
+            return;
+        }
+        // database.cc:1149-1153 — addrtied + the flagbase property fold.
+        let property = ctx.map(|c| (c.property)(addr)).unwrap_or(0);
+        let mut sym = sym_arc.write().unwrap();
+        sym.flags |= symbol_flags::ADDRTIED | property;
+    }
+
     // Ghidra: database.cc:1548 Scope::addMapPoint
     /// Create a new SymbolEntry that maps the whole Symbol to the given address.
-    /// Faithful to `Scope::addMapPoint` (database.cc:1548). The C++ form
-    /// constructs a `SymbolEntry(sym)`, restricts its use to `usepoint` if valid,
-    /// sets `entry.addr = addr`, then calls `addMap(entry)`. Rugra pushes a
-    /// whole-map static `SymbolEntry` directly. Does nothing if the symbol id is
-    /// not registered in this scope.
+    /// Faithful to `Scope::addMapPoint` (database.cc:1548): constructs the
+    /// whole-map `SymbolEntry`, restricts its use to `usepoint` if valid,
+    /// sets `entry.addr = addr`, then calls `addMap(entry)` — the addMap
+    /// flag rules (persist / global-discovery uselimit clear / addrtied +
+    /// flagbase property fold, database.cc:1126-1155) run through
+    /// [`AddMapContext`] (`None` = standalone scope, no Database). Does
+    /// nothing if the symbol id is not registered in this scope.
     pub fn add_map_point(
         &mut self,
         symbol_id: u64,
         addr: Address,
         usepoint: Address,
         size: i32,
+        ctx: Option<&AddMapContext>,
     ) {
         let sym_arc = match self.symbols.get(&symbol_id).cloned() {
             Some(a) => a,
@@ -2963,8 +3120,8 @@ impl Scope {
                 uselimit.insert_range(rng);
             }
         }
-        // database.cc:1555 — entry.addr = addr.
-        // database.cc:1556 — addMap(entry). whole-map entry at offset 0.
+        // database.cc:1555-1556 — entry.addr = addr; addMap(entry).
+        self.apply_add_map_rules(&sym_arc, Some(addr), &mut uselimit, ctx);
         sym_arc.write().unwrap().whole_count += 1;
         self.entries.push(SymbolEntry::new_static(
             sym_arc,
@@ -3212,7 +3369,11 @@ impl Scope {
                     s.check_size_type_lock();
                 }
                 // database.cc:2193 — addMapPoint(sym, addr, Address()) with new size.
-                self.add_map_point(symbol_id, saved_addr, Address::new(0), new_size);
+                // Ghidra's addMapPoint runs the addMap flag rules through
+                // glb; this Scope-internal caller has no Database handle, so
+                // the re-added map takes the no-fold path (residual under
+                // DB-LOCALSCOPE-MAP-0001: the Database unification gap).
+                self.add_map_point(symbol_id, saved_addr, Address::new(0), new_size, None);
                 return true;
             }
         }
@@ -3297,6 +3458,87 @@ impl Scope {
     }
 }
 
+/// A partition map: a default value plus a sorted map of split points,
+/// each carrying the value of the partition that STARTS at that point.
+/// Faithful to `partmap<Address,uint4>` (partmap.hh:50-73): the map from
+/// split points to value objects is `std::map<Address,uint4>` ordered by
+/// Address's natural (space, offset) ordering, and `getValue` returns the
+/// value of the LAST split point at-or-before the query point (or the
+/// default before the first split point).
+#[derive(Debug, Clone, Default)]
+pub struct PartMap {
+    /// Map from split points to partition values (partmap.hh:56
+    /// `maptype database`), ordered by `Address::operator<`
+    /// (address.hh:398: space order then offset).
+    pub database: BTreeMap<Address, u32>,
+    /// The value before the first split point (partmap.hh:57
+    /// `defaultvalue`); `Database` keeps it 0 (database.cc:2929).
+    pub defaultvalue: u32,
+}
+
+impl PartMap {
+    // Ghidra: partmap.hh:83 partmap::getValue
+    /// Look up the first split point at-or-before `pnt` and return its
+    /// value; the default if none. Faithful to `getValue` (partmap.hh:83-93:
+    /// `upper_bound` then step back; `database.begin()` guard returns the
+    /// default).
+    pub fn get_value(&self, pnt: Address) -> u32 {
+        match self.database.range(..=pnt).next_back() {
+            Some((_, v)) => *v,
+            None => self.defaultvalue,
+        }
+    }
+
+    // Ghidra: partmap.hh:119 partmap::split
+    /// Introduce (if not already present) a split point at `pnt` whose
+    /// partition value starts as a COPY of the preceding partition's value
+    /// (or the default if `pnt` precedes every split point). Faithful to
+    /// `split` (partmap.hh:119-134: `upper_bound`; exact match returns the
+    /// old ref; the new entry copies the previous value). Returns the new
+    /// partition's value for assignment.
+    pub fn split(&mut self, pnt: Address) -> &mut u32 {
+        if let Some((_, v)) = self.database.range(..pnt).next_back() {
+            let prev = *v;
+            self.database.entry(pnt).or_insert(prev)
+        } else {
+            let default = self.defaultvalue;
+            self.database.entry(pnt).or_insert(default)
+        }
+    }
+
+    // Ghidra: database.cc:3220 Database::setPropertyRange (partmap walk)
+    /// OR `flags` into every partition of `[first, last_open)` — the
+    /// split/bounds walk of `Database::setPropertyRange`
+    /// (database.cc:3220-3239): split at both bounds, then
+    /// `while(aiter != biter) (*aiter).second |= flags;` where
+    /// `aiter = begin(addr1)` is `lower_bound` (partmap.hh:70) and `biter`
+    /// is `begin(addr2)` (`end()` for an open last bound). Overlapping
+    /// property ranges ACCUMULATE on shared partitions.
+    pub fn set_property_range(&mut self, flags: u32, first: Address, last_open: Address) {
+        self.split(first);
+        self.split(last_open);
+        for (_key, value) in self.database.range_mut(first..last_open) {
+            *value |= flags;
+        }
+    }
+
+    // Ghidra: database.cc:3245 Database::clearPropertyRange (partmap walk)
+    /// AND `!flags` into every partition of `[first, last_open)` — the
+    /// split/bounds walk of `Database::clearPropertyRange`
+    /// (database.cc:3245-3265: `flags = ~flags;` then
+    /// `(*aiter).second &= flags;`). Only the listed bits clear, and only
+    /// inside the range; partitions shared with neighbouring ranges keep
+    /// their other bits.
+    pub fn clear_property_range(&mut self, flags: u32, first: Address, last_open: Address) {
+        self.split(first);
+        self.split(last_open);
+        let mask = !flags;
+        for (_key, value) in self.database.range_mut(first..last_open) {
+            *value &= mask;
+        }
+    }
+}
+
 /// A manager for symbol scopes for a whole executable. Faithful to `Database`
 /// (database.hh:916).
 #[derive(Debug, Clone)]
@@ -3308,8 +3550,12 @@ pub struct Database {
     pub global_scope_id: u64,
     /// Map from address to namespace scope id (ScopeResolve).
     pub resolvemap: Vec<(Range, u64)>,
-    /// Map of global properties over address ranges.
-    pub flagbase: Vec<(Range, u32)>,
+    /// Map of global properties over address ranges. Faithful to
+    /// `partmap<Address,uint4> flagbase` (database.hh:921): a split-point
+    /// partition map, NOT a list of independent ranges — overlapping
+    /// `setPropertyRange` calls OR into the shared partitions and
+    /// `clearPropertyRange` ANDs bits away within sub-ranges.
+    pub flagbase: PartMap,
     /// Next scope id to assign.
     pub next_scope_id: u64,
     /// True if scope ids are built from a hash of the scope name. Faithful to
@@ -3337,7 +3583,11 @@ impl Database {
             scopes,
             global_scope_id: 0,
             resolvemap: Vec::new(),
-            flagbase: Vec::new(),
+            // database.cc:2929 — flagbase.defaultValue()=0.
+            flagbase: PartMap {
+                database: BTreeMap::new(),
+                defaultvalue: 0,
+            },
             next_scope_id: 1,
             id_by_name,
         }
@@ -3479,34 +3729,49 @@ impl Database {
             .retain(|(r, sid)| !(*sid == scope_id && r.get_first() == rng.get_first() && r.get_last() == rng.get_last()));
     }
 
-    // Ghidra: database.cc:2924 Database::getProperty
-    /// Get boolean properties at the given address. Faithful to `getProperty`.
+    // Ghidra: database.hh:946 Database::getProperty
+    /// Get boolean properties at the given address. Faithful to
+    /// `getProperty` (database.hh:946: `flagbase.getValue(addr)` — the value
+    /// of the last split point at-or-before `addr`, default 0).
     pub fn get_property(&self, addr: Address) -> u32 {
-        let mut flags = 0u32;
-        for (rng, fl) in &self.flagbase {
-            if rng.contains(addr) {
-                flags |= fl;
-            }
-        }
-        flags
+        self.flagbase.get_value(addr)
     }
 
     // Ghidra: database.cc:3220 Database::setPropertyRange
     /// Set boolean properties over a given memory range. Faithful to
-    /// `setPropertyRange`.
+    /// `setPropertyRange` (database.cc:3220-3239):
+    /// - `addr1 = range.getFirstAddr()`, `addr2 = range.getLastAddrOpen()`
+    ///   (last+1; address.cc:265-279).
+    /// - `flagbase.split(addr1)`; if `addr2` is valid `flagbase.split(addr2)`
+    ///   and the update walk stops at the first split point at-or-after it,
+    ///   else the walk runs to `flagbase.end()` (database.cc:3229-3234).
+    /// - every partition between the two bounds gets `value |= flags`
+    ///   (database.cc:3236) — overlapping property ranges ACCUMULATE on the
+    ///   shared partitions, they do not overwrite each other.
+    ///
+    /// Rugra notes: `Range::get_last_addr_open` (address.cc:265 mirror) has
+    /// no `Address::m_maximal` sentinel for the "range runs to the space
+    /// top and no later space exists" case — `last.next()` is used as the
+    /// open end, which is equivalent for `getValue` queries; the residual
+    /// (a changepoint emitted at space-top+1 in `encode` for that corner)
+    /// is recorded under DB-LOCALSCOPE-MAP-0001.
     pub fn set_property_range(&mut self, flags: u32, range: Range) {
-        // Remove overlapping ranges of the same flags to avoid duplicates;
-        // Ghidra's partmap handles this via subdivision. We do a simple merge.
-        self.flagbase.push((range, flags));
+        let addr1 = range.get_first_addr();
+        let addr2 = range.get_last_addr_open();
+        self.flagbase.set_property_range(flags, addr1, addr2);
     }
 
     // Ghidra: database.cc:3245 Database::clearPropertyRange
     /// Clear boolean properties over a given memory range. Faithful to
-    /// `clearPropertyRange`.
+    /// `clearPropertyRange` (database.cc:3245-3265): the same split/bounds
+    /// walk as `setPropertyRange`, but each partition gets
+    /// `value &= ~flags` (database.cc:3260-3263) — only the non-zero bits of
+    /// `flags` are cleared, and only within `[addr1, addr2)`; partitions
+    /// shared with neighbouring ranges keep their other bits.
     pub fn clear_property_range(&mut self, flags: u32, range: Range) {
-        self.flagbase.retain(|(r, f)| {
-            !(*f == flags && r.get_first() == range.get_first() && r.get_last() == range.get_last())
-        });
+        let addr1 = range.get_first_addr();
+        let addr2 = range.get_last_addr_open();
+        self.flagbase.clear_property_range(flags, addr1, addr2);
     }
 
     // Ghidra: database.cc:3185 Database::mapScope
@@ -3541,15 +3806,13 @@ impl Database {
         if self.id_by_name {
             encoder.write_bool(&AttributeId::new("scopeidbyname", 64), true);
         }
-        // Property change-points.
-        for (rng, val) in &self.flagbase {
+        // Property change-points (database.cc:3278-3288): one element per
+        // flagbase SPLIT POINT, in split-point (Address) order, carrying the
+        // cumulative value of the partition that starts at that address.
+        for (addr, val) in &self.flagbase.database {
             let pc_elem = ElementId::new("property_changepoint", 78);
             encoder.open_element(&pc_elem);
-            encoder.write_unsigned_integer(
-                &AttributeId::new("space", 0),
-                rng.get_first().as_u64(),
-            );
-            encoder.write_unsigned_integer(&AttributeId::new("offset", 0), rng.get_first().as_u64());
+            encoder.write_unsigned_integer(&AttributeId::new("offset", 0), addr.as_u64());
             encoder.write_unsigned_integer(&AttributeId::new("val", 0), *val as u64);
             encoder.close_element(&pc_elem);
         }
@@ -3636,9 +3899,11 @@ impl Database {
                 }
             }
             decoder.close_element(sub_id);
-            if let Some(rng) = Range::new(Address::new(offset), Address::new(offset)) {
-                self.flagbase.push((rng, val));
-            }
+            // database.cc:3334 — flagbase.split(addr) = val: introduce the
+            // split point (copying the previous partition's value) then
+            // ASSIGN the decoded value, so the partition starting at `addr`
+            // holds exactly `val`.
+            *self.flagbase.split(Address::new(offset)) = val;
         }
         // Scopes.
         loop {
@@ -3680,11 +3945,25 @@ impl Database {
             };
             // Create or find the scope.
             self.find_create_scope(id, &name, parent_id);
-            if let Some(scope) = self.scopes.get_mut(&id) {
+            // database.cc:2744-2789 — the scope decodes against the LIVE
+            // Database state: <hole> children hit setPropertyRange and
+            // <mapsym> folds read getProperty at their document position.
+            // The global discovery snapshot is refreshed per scope so a
+            // previously decoded global <rangelist> is visible (the C++
+            // reads the live rangetree object at each addMap).
+            let global_ranges: Vec<Range> = self
+                .scopes
+                .get(&self.global_scope_id)
+                .map(|gs| gs.rangetree.ranges().to_vec())
+                .unwrap_or_default();
+            let Database {
+                scopes, flagbase, ..
+            } = self;
+            if let Some(scope) = scopes.get_mut(&id) {
                 if !display_name.is_empty() {
                     scope.display_name = display_name;
                 }
-                scope.decode(decoder);
+                scope.decode_with_ctx(decoder, Some(flagbase), &global_ranges);
             }
             decoder.close_element(sub_id);
         }
@@ -4049,6 +4328,184 @@ mod tests {
     }
 
     #[test]
+    fn test_partmap_flagbase_semantics() {
+        // database.cc:3220-3265 — the flagbase is a partition map: split
+        // points carry cumulative values; overlapping setPropertyRange calls
+        // ACCUMULATE on shared partitions (database.cc:3236 |=); a
+        // sub-range clearPropertyRange only ANDs away the listed bits
+        // inside [first, last_open) (database.cc:3261), leaving neighbours
+        // untouched.
+        let mut db = Database::new(false);
+        let ro = Range::new(Address::new(0x1000), Address::new(0x1fff)).unwrap();
+        let vol = Range::new(Address::new(0x1800), Address::new(0x27ff)).unwrap();
+        db.set_property_range(symbol_flags::READONLY, ro);
+        db.set_property_range(symbol_flags::VOLATIL, vol);
+        // ro-only partition: [0x1000,0x1800).
+        assert_eq!(db.get_property(Address::new(0x1000)), symbol_flags::READONLY);
+        assert_eq!(db.get_property(Address::new(0x17ff)), symbol_flags::READONLY);
+        // shared partition: [0x1800,0x2000) — both bits accumulate.
+        assert_eq!(
+            db.get_property(Address::new(0x1800)),
+            symbol_flags::READONLY | symbol_flags::VOLATIL
+        );
+        // vol-only partition: [0x2000,0x2800).
+        assert_eq!(db.get_property(Address::new(0x2000)), symbol_flags::VOLATIL);
+        assert_eq!(db.get_property(Address::new(0x27ff)), symbol_flags::VOLATIL);
+        // before / after everything: the default 0.
+        assert_eq!(db.get_property(Address::new(0x0fff)), 0);
+        assert_eq!(db.get_property(Address::new(0x2800)), 0);
+        // Sub-range clear of readonly inside the shared partition: the
+        // volatile bit survives, readonly stays outside [0x1900,0x1a00).
+        let hole = Range::new(Address::new(0x1900), Address::new(0x19ff)).unwrap();
+        db.clear_property_range(symbol_flags::READONLY, hole);
+        assert_eq!(db.get_property(Address::new(0x1950)), symbol_flags::VOLATIL);
+        assert_eq!(
+            db.get_property(Address::new(0x1850)),
+            symbol_flags::READONLY | symbol_flags::VOLATIL
+        );
+        assert_eq!(
+            db.get_property(Address::new(0x1a00)),
+            symbol_flags::READONLY | symbol_flags::VOLATIL
+        );
+    }
+
+    #[test]
+    fn test_partmap_split_value_copy() {
+        // partmap.hh:119-134 — a split point starts as a COPY of the
+        // preceding partition's value, so a later setPropertyRange below an
+        // existing boundary never bleeds into earlier partitions.
+        let mut pm = PartMap {
+            database: BTreeMap::new(),
+            defaultvalue: 0,
+        };
+        *pm.split(Address::new(0x100)) = 1;
+        *pm.split(Address::new(0x300)) = 2;
+        // The new split inherits value 1 (the partition [0x100,0x300)).
+        assert_eq!(*pm.split(Address::new(0x200)), 1);
+        assert_eq!(pm.get_value(Address::new(0x150)), 1);
+        assert_eq!(pm.get_value(Address::new(0x250)), 1);
+        assert_eq!(pm.get_value(Address::new(0x350)), 2);
+        assert_eq!(pm.get_value(Address::new(0x050)), 0);
+        // Re-splitting an existing point returns the SAME partition value.
+        assert_eq!(*pm.split(Address::new(0x300)), 2);
+    }
+
+    #[test]
+    fn test_add_map_point_property_fold() {
+        // database.cc:1126-1155 — addMap folds the flagbase property at the
+        // mapping address into the SYMBOL's flags when the uselimit is
+        // empty; a usepoint-restricted map never folds; the construction
+        // order decides (a later property range does not contaminate).
+        let mut scope = Scope::new(2, "func", 1); // non-global (parent != 0)
+        let sym = scope.add_symbol("folded", "int");
+        // Models the Database flagbase: the readonly/volatile range
+        // [0x4000,0x5000) exists BEFORE the first map; a SECOND range
+        // [0x6000,0x7000) is installed only later (setPropertyRange flips
+        // the flag) — only maps installed after their range exists fold.
+        let property_calls = std::cell::RefCell::new(0u32);
+        let second_range = std::cell::Cell::new(false);
+        let ctx = AddMapContext {
+            property: Box::new(|addr: Address| {
+                *property_calls.borrow_mut() += 1;
+                let mut bits = 0;
+                if (0x4000..0x5000).contains(&addr.as_u64()) {
+                    bits |= symbol_flags::READONLY | symbol_flags::VOLATIL;
+                }
+                if second_range.get() && (0x6000..0x7000).contains(&addr.as_u64()) {
+                    bits |= symbol_flags::READONLY;
+                }
+                bits
+            }),
+            in_global_discovery: Box::new(|_| false),
+        };
+        // Property-first construction: fold happens (empty uselimit).
+        scope.add_map_point(sym, Address::new(0x4500), Address::new(0), 4, Some(&ctx));
+        let s = scope.symbols.get(&sym).unwrap().read().unwrap();
+        assert!(s.flags & symbol_flags::ADDRTIED != 0);
+        assert!(s.flags & symbol_flags::READONLY != 0);
+        assert!(s.flags & symbol_flags::VOLATIL != 0);
+        assert!(s.flags & symbol_flags::PERSIST == 0); // non-global, no discovery hit
+        drop(s);
+        // Victim order: the victim is mapped at 0x6100 BEFORE the
+        // [0x6000,0x7000) readonly range is installed — never folds.
+        let victim = scope.add_symbol("victim", "int");
+        scope.add_map_point(victim, Address::new(0x6100), Address::new(0), 4, Some(&ctx));
+        let v = scope.symbols.get(&victim).unwrap().read().unwrap();
+        assert!(v.flags & symbol_flags::READONLY == 0);
+        assert!(v.flags & symbol_flags::VOLATIL == 0);
+        drop(v);
+        // Now the range exists: a fresh map at the same address folds.
+        second_range.set(true);
+        let late = scope.add_symbol("late", "int");
+        scope.add_map_point(late, Address::new(0x6100), Address::new(0), 4, Some(&ctx));
+        let lt = scope.symbols.get(&late).unwrap().read().unwrap();
+        assert!(lt.flags & symbol_flags::READONLY != 0);
+        drop(lt);
+        // A usepoint-restricted map (non-empty uselimit) skips BOTH addrtied
+        // and the fold (database.cc:1149-1154 guard).
+        let limited = scope.add_symbol("limited", "int");
+        scope.add_map_point(
+            limited,
+            Address::new(0x4500),
+            Address::new(0x9000),
+            4,
+            Some(&ctx),
+        );
+        let l = scope.symbols.get(&limited).unwrap().read().unwrap();
+        assert!(l.flags & symbol_flags::ADDRTIED == 0);
+        assert!(l.flags & symbol_flags::READONLY == 0);
+        // Property lookup only ran for the three unrestricted maps (the
+        // limited one returns before the lookup, database.cc:1149 guard).
+        assert_eq!(*property_calls.borrow(), 3);
+        // Persist branch: a GLOBAL scope symbol always takes persist
+        // (database.cc:1131-1132).
+        let mut global = Scope::new(0, "global", 0);
+        let gsym = global.add_symbol("g", "int");
+        global.add_map_point(gsym, Address::new(0x4500), Address::new(0), 4, Some(&ctx));
+        let g = global.symbols.get(&gsym).unwrap().read().unwrap();
+        assert!(g.flags & symbol_flags::PERSIST != 0);
+        assert!(g.flags & symbol_flags::READONLY != 0);
+        drop(g);
+    }
+
+    #[test]
+    fn test_global_discovery_uselimit_clear() {
+        // database.cc:1133-1142 — a non-global scope symbol mapped at an
+        // address inside the GLOBAL scope's discovery range gets persist
+        // AND its uselimit CLEARED, which then feeds the addrtied + fold
+        // branch (the decisive interaction).
+        let mut scope = Scope::new(2, "func", 1); // non-global
+        let sym = scope.add_symbol("disc", "int");
+        let ctx = AddMapContext {
+            property: Box::new(|addr: Address| {
+                if addr.as_u64() == 0x7f000000 {
+                    symbol_flags::READONLY
+                } else {
+                    0
+                }
+            }),
+            in_global_discovery: Box::new(|addr: Address| {
+                (0x7f000000..=0x7f00ffff).contains(&addr.as_u64())
+            }),
+        };
+        scope.add_map_point(
+            sym,
+            Address::new(0x7f000000),
+            Address::new(0x2000), // would restrict the uselimit...
+            4,
+            Some(&ctx),
+        );
+        let s = scope.symbols.get(&sym).unwrap().read().unwrap();
+        assert!(s.flags & symbol_flags::PERSIST != 0);
+        // ...but the discovery hit cleared it, so addrtied + fold ran.
+        assert!(s.flags & symbol_flags::ADDRTIED != 0);
+        assert!(s.flags & symbol_flags::READONLY != 0);
+        drop(s);
+        let entry = &scope.entries[0];
+        assert!(entry.get_use_limit().empty());
+    }
+
+    #[test]
     fn test_symbol_encode_decode_roundtrip() {
         use crate::marshal::{IdRegistry, TreeDecoder, TreeEncoder};
         let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
@@ -4328,7 +4785,7 @@ mod tests {
     #[test]
     fn test_scope_add_dynamic_symbol() {
         // database.cc:1690 — addDynamicSymbol creates a hashed SymbolEntry.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_dynamic_symbol(
             "dyn", "int", 4, Address::new(0x1234), 0xDEADBEEF,
         );
@@ -4348,7 +4805,7 @@ mod tests {
     #[test]
     fn test_scope_add_equate_symbol() {
         // database.cc:1712 — addEquateSymbol creates an equate + dynamic entry.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let (equ, id) = scope.add_equate_symbol(
             "MY_CONST", display_flags::FORCE_HEX, 0x42, Address::new(0x2000), 0xCAFE,
         );
@@ -4479,10 +4936,10 @@ mod tests {
         };
         // With a value attribute: the decoded value is registered on the
         // symbol identity.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let root = std::sync::Arc::new(std::sync::RwLock::new(build_mapsym(Some("66"))));
         let mut dec = TreeDecoder::new(root, registry.clone());
-        let id = scope.add_map_sym(&mut dec);
+        let id = scope.add_map_sym(&mut dec, None);
         assert_ne!(id, 0);
         let sym_arc = scope.symbols.get(&id).cloned().unwrap();
         assert_eq!(sym_arc.read().unwrap().category, SymbolCategory::Equate);
@@ -4496,7 +4953,7 @@ mod tests {
         let mut scope2 = Scope::new(2, "func2", 0);
         let root2 = std::sync::Arc::new(std::sync::RwLock::new(build_mapsym(None)));
         let mut dec2 = TreeDecoder::new(root2, registry);
-        let id2 = scope2.add_map_sym(&mut dec2);
+        let id2 = scope2.add_map_sym(&mut dec2, None);
         let sym_arc2 = scope2.symbols.get(&id2).cloned().unwrap();
         assert_eq!(
             crate::varnode::equate_symbol_registry::query_value(&sym_arc2),
@@ -4513,7 +4970,7 @@ mod tests {
         // in Varnode::copySymbolIfValid (varnode.cc:516) and the markup
         // propagates exactly where the C++ pipeline would propagate it.
         use crate::varnode::Varnode;
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let _ = scope.add_equate_symbol(
             "MY_CONST", 0, 0x33333333, Address::new(0x2000), 0xCAFE,
         );
@@ -4542,7 +4999,7 @@ mod tests {
     #[test]
     fn test_scope_add_union_facet_symbol() {
         // database.cc:1737 — addUnionFacetSymbol creates a union facet.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let (facet, id) = scope.add_union_facet_symbol(
             "u_facet", "union", 3, Address::new(0x3000), 0xBEEF,
         );
@@ -4556,9 +5013,9 @@ mod tests {
     #[test]
     fn test_scope_add_map_point() {
         // database.cc:1548 — addMapPoint maps a whole Symbol to an address.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_symbol("v", "int");
-        scope.add_map_point(id, Address::new(0x1000), Address::new(0x5000), 4);
+        scope.add_map_point(id, Address::new(0x1000), Address::new(0x5000), 4, None);
         let entry = scope.find_addr(Address::new(0x1000));
         assert!(entry.is_some());
         // Use-limit must be restricted to the usepoint.
@@ -4584,7 +5041,7 @@ mod tests {
     #[test]
     fn test_scope_clear_category() {
         // database.cc:2020 — clearCategory removes all symbols in a category.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let p1 = scope.add_symbol("p1", "int");
         let p2 = scope.add_symbol("p2", "int");
         let other = scope.add_symbol("other", "int");
@@ -4603,7 +5060,7 @@ mod tests {
     #[test]
     fn test_scope_clear_category_negative_clears_no_category() {
         // database.cc:2031-2038 — cat < 0 clears the no_category bucket.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let cat_id = scope.add_symbol("param", "int");
         let nocat_id = scope.add_symbol("local", "int");
         scope.set_category(cat_id, 0, 0);
@@ -4617,7 +5074,7 @@ mod tests {
     #[test]
     fn test_scope_remove_symbol_mappings() {
         // database.cc:2117 — removeSymbolMappings drops entries but keeps symbol.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
         assert_eq!(scope.entries.len(), 1);
         scope.remove_symbol_mappings(id);
@@ -4630,7 +5087,7 @@ mod tests {
     #[test]
     fn test_scope_retype_symbol_same_size() {
         // database.cc:2166 — retype with same size just updates type_name.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
         let ok = scope.retype_symbol(id, "uint", 4);
         assert!(ok);
@@ -4641,7 +5098,7 @@ mod tests {
     #[test]
     fn test_scope_retype_symbol_addr_tied_resize() {
         // database.cc:2177-2196 — retype with size change + 1 addr-tied map.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
         // Mark the symbol as address-tied (database.cc:2179 guard).
         scope.symbols.get(&id).unwrap().write().unwrap().flags |= symbol_flags::ADDRTIED;
@@ -4658,7 +5115,7 @@ mod tests {
     #[test]
     fn test_scope_get_category_symbol() {
         // database.cc:2814 — getCategorySymbol indexes a category vector.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let p1 = scope.add_symbol("p1", "int");
         let p2 = scope.add_symbol("p2", "int");
         scope.set_category(p1, 0, 0);
@@ -4673,7 +5130,7 @@ mod tests {
     #[test]
     fn test_scope_set_attribute_masked() {
         // database.cc:2200 — setAttribute masks bits and re-runs size-typelock.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_symbol("x", "int");
         // Set TYPELOCK | NAMELOCK | READONLY (all in the mask).
         scope.set_attribute_masked(
@@ -4689,7 +5146,7 @@ mod tests {
     #[test]
     fn test_scope_clear_unlocked_category() {
         // database.cc:2071 — clearUnlockedCategory removes unlocked symbols.
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         let unlocked = scope.add_symbol("u", "int");
         let locked = scope.add_symbol("l", "int");
         scope.set_category(unlocked, 0, 0);
@@ -4704,7 +5161,7 @@ mod tests {
     #[test]
     fn test_scope_adjust_caches_noop() {
         // database.cc:2111 — adjustCaches is a no-op in Rugra (single space).
-        let mut scope = Scope::new(1, "func", 0);
+        let mut scope = Scope::new(2, "func", 1); // non-global
         scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
         scope.adjust_caches();
         // State unchanged.

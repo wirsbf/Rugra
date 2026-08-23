@@ -3,12 +3,19 @@
 Rust symbol database corresponding to Ghidra's `database.hh` / `database.cc`.
 
 **Status:** L2. The 2026-08-11 locked audit rejects the prior L3 claim:
-Symbol flags use an incompatible bit namespace; `Scope::addMap`, rangemap/
-usepoint selection, specialized Symbol identity, and ScopeLocal-to-Funcdata
-property propagation are not equivalent. All public classes (`SymbolEntry`,
-`Symbol`, `FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `ExternRefSymbol`,
-`UnionFacetSymbol`, `Scope`, `Database`)
-are present, but API presence and Rust-only round trips are not parity evidence.
+rangemap/usepoint selection, specialized Symbol identity, and
+ScopeLocal-to-Funcdata property propagation are not equivalent.
+2026-08-23 (DB-LOCALSCOPE-MAP-0001): the flagbase is now a faithful
+`partmap<Address,uint4>` (`PartMap`), `Scope::addMap`'s flag rules
+(persist / global-discovery uselimit clear / addrtied + flagbase property
+fold, database.cc:1126-1155) run through `AddMapContext`, and
+`symbol_flags` alias the Varnode bit values (database.hh:183 stores the
+Varnode namespace on `Symbol::flags`); the threefold
+`db_localscope_map_1204` oracle fixture pins the projections. All public
+classes (`SymbolEntry`, `Symbol`, `FunctionSymbol`, `EquateSymbol`,
+`LabSymbol`, `ExternRefSymbol`, `UnionFacetSymbol`, `Scope`, `Database`)
+are present, but API presence and Rust-only round trips are not parity
+evidence.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/database.{hh,cc}`.
@@ -18,7 +25,7 @@ Ghidra reference:
 | Name | Description |
 |---|---|
 | `ID_BASE` | Base of internal Symbol IDs (0x10). |
-| `symbol_flags::*` | TYPELOCK, NAMELOCK, READONLY, EXTERNREF, ADDRTIED, PERSIST, VOLATIL, INDIRECTSTORAGE, HIDDENRETPARM. |
+| `symbol_flags::*` | TYPELOCK, NAMELOCK, READONLY, EXTERNREF, ADDRTIED, PERSIST, VOLATIL, INDIRECTSTORAGE, HIDDENRETPARM — aliasing the Varnode bit values (varnode.hh:82-115) so `Symbol::flags` mixes with `extraflags` in one space, like `getAllFlags` (database.hh:271). |
 | `display_flags::*` | FORCE_HEX/DEC/OCT/BIN/CHAR, SIZE_TYPELOCK, ISOLATE, MERGE_PROBLEMS, IS_THIS_PTR, FORMAT_MASK. |
 
 ## Enums
@@ -84,6 +91,12 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
 - `get_category_size(cat)`, `get_category_symbol(cat, ind)`,
   `set_category(id, cat, ind)`.
 - `add_dynamic_symbol(name, type_name, size, caddr, hash) -> u64`
+- `add_map_point(symbol_id, addr, usepoint, size, ctx)` (database.cc:1548) —
+  the whole-map static entry via `Scope::addMap`: persist for a global
+  scope, global-discovery persist + uselimit CLEAR, then addrtied + the
+  flagbase property fold at `addr` when the uselimit is empty
+  (`apply_add_map_rules`, database.cc:1126-1155). `ctx: Option<&AddMapContext>`
+  carries the Database lookups (`None` = standalone scope, no fold).
   (database.cc:1690) — dynamic hashed SymbolEntry.
 - `add_equate_symbol(name, format, value, addr, hash) -> (EquateSymbol, u64)`
   (database.cc:1712) — builds the symbol with `category = equate`
@@ -105,12 +118,26 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
     symbol + its `<addr>`/`<hash>` mappings).
   - `encode_recursive(encoder, only_global)` (database.cc:1371) — encodes this
     scope; the Database drives the recursive descent over its child ids.
-  - `decode(decoder)` (database.cc:2744) — reads `<parent>` (skipped, applied
-    by Database), `<rangelist>` / `<rangeequalssymbols>`, and a `<symbollist>`
-    of `<mapsym>`/`<hole>`/`<collision>` children.
-  - `add_map_sym(decoder)` (database.cc:1564) — parses one `<mapsym>`
-    (symbol header + `<addr>`/`<hash>` mappings) and inserts the symbol +
-    entries. For `<equatesymbol>` children the decode follows
+  - `decode(decoder)` (database.cc:2744) — standalone form: reads
+    `<parent>` (skipped, applied by Database), `<rangelist>` /
+    `<rangeequalssymbols>`, and a `<symbollist>` of
+    `<mapsym>`/`<hole>`/`<collision>` children; `<hole>` properties are
+    dropped and mappings install without the addMap flag rules (no
+    Database side-channel).
+  - `decode_with_ctx(decoder, flagbase, global_ranges)` (database.cc:2744,
+    Database-integrated) — `<mapsym>` children install through the addMap
+    rules with the LIVE flagbase property lookup + global discovery-range
+    snapshot; `<hole>` children apply `setPropertyRange` IMMEDIATELY
+    (database.cc:2778-2779 → 2683-2685) in document order — a `<hole>`
+    BEFORE a `<mapsym>` feeds that mapsym's fold, one AFTER does not.
+  - `add_map_sym(decoder, ctx)` (database.cc:1564) — parses one `<mapsym>`
+    (symbol header + `<addr>`/`<hash>` mappings) and installs each mapping
+    through `addMap(entry)` (database.cc:1602): the persist /
+    global-discovery / addrtied + flagbase fold rules
+    (`apply_add_map_rules`, database.cc:1126-1155) run per mapping with the
+    flagbase state as of that document position; the installed entry
+    carries `Varnode::mapped` extraflags (database.cc:1155/1147). For
+    `<equatesymbol>` children the decode follows
     `EquateSymbol::decode` (database.cc:670-683): the `<value>` child is read
     (Rust `val`-attribute convention; an attribute-less `<value>` yields the
     database.hh:306 default 0) and the symbol identity is registered in
@@ -118,7 +145,9 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
     (database.cc:1572-1573) whose object identity survives into
     `dynamic_cast<EquateSymbol*>`.
   - `decode_hole(decoder)` (database.cc:2667) — parses a `<hole>` element
-    into a (Range, flags) pair.
+    into a (Range, flags) pair (readonly/volatile bool attrs → the Varnode
+    bits); the decode_with_ctx form forwards non-zero pairs to
+    `PartMap::set_property_range` (database.cc:2683-2685).
   - `decode_collision_name(decoder)` (database.cc:2695) — parses a
     `<collision>` element's name.
   - `assign_default_names(base)` (database.cc:2850) — assigns default
@@ -133,8 +162,21 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
   `resolve_scope_mut(id)`, `find_create_scope(id, name, parent_id)`.
 - `delete_scope(id)`, `delete_sub_scopes(id)`.
 - `set_range(id, rlist)`, `add_range(id, range)`, `remove_range(id, range)`.
-- `get_property(addr)`, `set_property_range(flags, range)`,
-  `clear_property_range(flags, range)`.
+- `get_property(addr)` — `flagbase.getValue(addr)` (database.hh:946).
+- `set_property_range(flags, range)` — database.cc:3220-3239: split at
+  `getFirstAddr`/`getLastAddrOpen`, OR `flags` into every partition
+  `[addr1, addr2)` — overlapping property ranges ACCUMULATE on the shared
+  partitions.
+- `clear_property_range(flags, range)` — database.cc:3245-3265: same walk,
+  AND `!flags` into the partitions of the sub-range only.
+- `flagbase: PartMap` — the `partmap<Address,uint4>` mirror (partmap.hh:50):
+  `BTreeMap<Address, u32>` split points + a default value (0,
+  database.cc:2929); `get_value` (partmap.hh:83), `split` (partmap.hh:119),
+  `set_property_range`/`clear_property_range` (the database.cc walks).
+- `AddMapContext` — RUGRA-GLUE carrier for the two `glb->symboltab` lookups
+  `Scope::addMap` needs: the flagbase property at an address
+  (`getProperty`, database.cc:1153) and the global-scope discovery-range
+  test (`glbScope->inScope`, database.cc:1138).
 - `map_scope(qpoint, addr) -> u64`, `num_scopes()`.
 - XML encode/decode (database.cc:3270/3314):
   - `encode(encoder)` — `<db>` with optional `scopeidbyname` attribute,
@@ -156,7 +198,6 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
 
 ## L3 gaps
 - `ScopeInternal` name-tree (`SymbolNameTree`) for ordered name lookup.
-- `partmap<Address, uint4>` for the property flagbase (currently a Vec).
 - `rangemap<SymbolEntry>` / `rangemap<ScopeMapper>` for address-keyed lookup
   (currently linear search).
 - Full `Datatype` integration (type_name is currently a String placeholder).
