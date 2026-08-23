@@ -34,29 +34,60 @@ Find a type by name
 
 ### `pub fn get_base(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>>`
 
-Returns the canonical preferred core type for `(size, metatype)` when the
-ordered core cache contains one; otherwise returns the canonical unnamed
-atomic type from the structural tree. Core names are never inferred.
+Compat projection of `getBase` (type.cc:3631-3660): preferred core cache
+first, then the canonical unnamed atomic type from the structural tree.
+Core names are never inferred. The byte-faithful port — including the
+`size > max_basetype_size` array conversion (type.cc:3652-3657) and the
+"TypeFactory alignment map not initialized" LowlevelError of the raw
+constructor state — is `get_base_result`.
+
+### `pub fn get_base_result(&mut self, size: usize, metatype: TypeMetatype) -> Result<Arc<Datatype>, String>`
+
+The faithful `TypeFactory::getBase(int4,type_metatype)` port
+(type.cc:3631-3660): `typecache[size][m]` for `size < 9` and printable
+scalar metatypes, the dedicated 10/16-byte float slots, the
+`size > max_base_type_size` (=10, architecture.cc:1422) conversion into an
+unnamed array of the cached 1-byte unknown (element typedef-stripped,
+`TypeArray` ctor sizing `n * element.get_align_size()`), and the unnamed
+`TypeBase` `findAdd` canonicalization whose miss path raises the
+uninitialized-alignment-map LowlevelError.
 
 ### `pub fn get_base_no_char(&self, size: usize, metatype: TypeMetatype) -> Option<Arc<Datatype>>`
 
 Matches Ghidra `getBaseNoChar`: only `(1, Int)` can select the cached
 non-ASCII signed-byte type instead of the preferred printable ASCII type;
-all other requests delegate to `get_base`.
+all other requests delegate to `get_base`. The faithful twin delegating to
+`get_base_result` (LowlevelError propagation included) is
+`get_base_no_char_result`.
 
 ### `pub fn clear(&mut self)`
 
 Clears all factory-owned types and the preferred/nochar/character caches,
 while retaining size and alignment configuration.
 
+### `pub fn set_core_type_result(&mut self, name: &str, size: usize, metatype: TypeMetatype, chartp: bool) -> Result<Arc<Datatype>, String>`
+
+The faithful `TypeFactory::setCoreType` port (type.cc:3178-3195): `chartp`
+size 1 dispatches to `getTypeChar(name)`, `chartp` otherwise to
+`getTypeUnicode(name,size,meta)`, code to `getTypeCode(name)`, void to
+`getTypeVoid()`, everything else to the named `getBase` — each canonicalized
+through `findAdd`, whose LowlevelErrors surface as `Err` with no partial
+state. The final `ct->flags |= coretype` runs through `promote_core`:
+Ghidra ORs the flag onto the canonical object in place so every alias sees
+it; Rust's immutable `Arc` model instead replaces the promoted object in
+every factory-owned channel (`types`, `core_types`, `base_type_tree`,
+`base_cache`, `char_cache`, `type_nochar`, identical `typedefs`/
+`rel_pointers` values), making all factory-mediated observations identical.
+Flag visibility through an external stale Arc handle remains the
+TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001 residual (needs an
+interior-mutability rework of `Datatype`, separate lease).
+
 ### `pub fn set_core_type(&mut self, name: &str, size: usize, metatype: TypeMetatype, chartp: bool) -> Arc<Datatype>`
 
-Applies Ghidra's dispatch first, then registers those actual properties:
-one-byte character requests force `Int`; void forces the singleton name
-`void` and size 0; code forces size 1; other scalar/unicode requests retain
-the supplied name, size, and metatype. The resulting canonical `Arc` enters
-the ordered atomic tree. Preferred caches are refreshed separately by
-`cache_core_types`, as in Ghidra's architecture builders.
+Arc-returning compatibility wrapper (panics with the LowlevelError text on
+conflict) for the cpool/merge test callers written before the Result port;
+their files sit under other leases
+(TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001).
 
 ### `pub fn cache_core_types(&mut self)`
 
@@ -113,19 +144,33 @@ Get the number of types currently managed
 
 ### `pub fn clear_non_core(&mut self)`
 
-Clear all non-core types
+Faithful `clearNoncore` (type.cc:3266-3285): retains exactly the core-flagged
+entries of the name map, core set, ordered tree, and preferred cache —
+including in-place-promoted entries — and leaves the preferred-type caches
+otherwise untouched (every cached entry is core by construction).
+
+### Internal `find_add`
+
+The `TypeFactory::findAdd` port (type.cc:3412-3439): named candidates require
+a non-zero id (`"Datatype must have a valid id: {name}"`), a name+id hit with
+a differing `compareDependency` (sub-metatype or size, type.cc:227) raises
+`"Trying to alter definition of type: {name}"` while an equal definition
+returns the existing object, unnamed candidates probe the ordered tree
+structurally, and a miss inserts with the `"Shared type id: {id:x}"`
+(including `printRaw` fragments, type.cc:139/910/1204) conflict path. The
+alignment computation's `"TypeFactory alignment map not initialized"`
+LowlevelError is enforced on the `get_base_result` entry only — production
+Rugra factories do not yet thread the decoded alignment map
+(TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001).
 
 ### Internal `insert`
 
-Annotation anchor: `type.cc:3390 TypeFactory::insert`.
-
-This is a known `MISMATCH`, not completed coverage. Ghidra inserts into the
-structural `DatatypeSet tree`, rejects a duplicate comparator key with a
-`LowlevelError`, and adds non-zero-id types to the separate `nametree`
-cross-reference. Rugra currently overwrites one
-`BTreeMap<String, Arc<Datatype>>` entry by name. It therefore loses structural
-canonicalization, the `(name,id)` index, duplicate failure behavior, and
-multiple distinct unnamed/eponymous types.
+`type.cc:3390 TypeFactory::insert` projection for decode arms: atomic
+variants enter the ordered tree keyed by (sub-metatype, descending size, id)
+— `DatatypeCompare`, type.hh:306-310 — and the flat name map; container
+variants stay name-map-only because the flat key cannot express their
+component ordering (registered TYPE-0001 residual). The byte-faithful
+conflict path lives in `find_add`.
 
 
 
@@ -448,3 +493,83 @@ remain `UNTESTED` or covered by the existing `TYPE-0001` mismatch.
 Constructor/destructor propagation in
 `decodeTypeWithCodeFlags` is the separate serial follow-up
 `TYPEFACTORY-CODEFLAGS-DECODE-0001`.
+
+## 2026-08-23 TYPEFACTORY-LOCALTYPE-CACHE-0001 REWORK
+
+Independent review rejected the 99-record projection's global alignment;
+the six registered gaps are closed as follows against locked
+`type.cc`/`type.hh` (commit `e40ed130…376b`):
+
+- **Canonical `findAdd` core** (`type.cc:3412-3439`): named candidates need a
+  non-zero id; a `(name,id)` hit returning a `compareDependency`-equal
+  (sub-metatype + size, `type.cc:227-234`) existing object is the aliasing
+  point; differing definitions raise `"Trying to alter definition of
+  type: …"`; unnamed candidates probe the ordered tree structurally
+  (`DatatypeCompare`, type.hh:306-310: sub-metatype ascending, size
+  descending, id ascending); misses insert with the `"Shared type id: {id:x}"`
+  conflict message including the `printRaw` fragments (type.cc:139/910/1204).
+  The alignment-map LowlevelError (type.cc:3433-3436 via
+  `getPrimitiveAlignSize`/`getAlignment`) is enforced on the faithful
+  `getBase` port only (TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001).
+- **Promotion aliasing** (`type.cc:3194`): `set_core_type_result` promotes an
+  existing equal definition by replacing the immutable `Arc` in every
+  factory-owned channel (`promote_core`); all factory-mediated observations
+  (name/id/flags queries, cacheCoreTypes participation, clearNoncore
+  retention) match the oracle's in-place OR. Flag visibility through an
+  external stale handle stays TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001 (needs
+  the `Datatype` interior-mutability rework in datatype.rs — separate lease).
+- **Error paths**: conflicts, missing ids, shared ids, and the raw-constructor
+  alignment error now propagate as `Result::Err` with the oracle messages and
+  no partial state; the legacy `set_core_type` Arc wrapper remains for
+  leased test callers (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001).
+- **Core enums enter the tree**: `decode_enum` canonicalizes through
+  `find_add` (name map + ordered tree), so a core enum participates in
+  `cacheCoreTypes` — a size-1 signed enum wins `type_nochar`
+  (type.cc:3220-3222 runs before the `isEnumType` break) while the preferred
+  slot stays empty for it; enum signedness comes from the `enum_int`/
+  `enum_uint` metatype string (Rust's `TypeMetatype` collapses Ghidra's
+  TYPE_ENUM_INT/TYPE_ENUM_UINT).
+- **`getTypeChar(int4 s)`** (type.cc:3678-3687): cache lookup only;
+  every miss (and every `s >= 5`) raises
+  `"Request for unsupported character data-type"`. The creation paths are the
+  named ports `get_type_char_named`/`get_type_unicode_named`
+  (TypeChar type.hh:356 / TypeUnicode type.cc:862-867 with
+  `submeta_override`), `get_type_code_named` (type.cc:3707-3717), and
+  `get_type_enum_result` (type.cc:3967-3973 over the configured
+  `enumsize`/`enumtype`).
+- **Raw constructor** (`type.cc:3106-3119`): `TypeFactory::raw()` exposes the
+  pre-bootstrap state — zeroed sizes, no alignment map, no core types,
+  cleared caches; `get_type_void_result`/`get_type_code` now create on miss
+  exactly like type.cc:3575-3588/3692-3701.
+- **Large-base conversion** (type.cc:3652-3657): `get_base_result` converts
+  `size > max_base_type_size` (=10, architecture.cc:1422, now a factory
+  field) into an unnamed array of the cached 1-byte unknown, element
+  typedef-stripped, `TypeArray` ctor sizing `n * element.get_align_size()`,
+  canonicalized through `find_add`.
+- **`decodeCoreTypes`** (type.cc:4567-4577): full `clear()`, force-core
+  `decodeTypeNoRef` children (the char/utf arms now build through the
+  TypeChar/TypeUnicode constructor ports; the `metatype="void"` arm runs the
+  decoded-id `TypeVoid` through `findAdd` instead of returning the
+  singleton), then `cacheCoreTypes()` — skipped when a child raised, leaving
+  the partial state observable. The delegating enum/struct/union/code arms
+  now close their element (type.cc:4546) — previously the decoder stack
+  leaked the open element and subsequent siblings were dropped.
+- **`hashSize` fix**: the module-level `hash_size` now delegates to the
+  faithful XOR port `Datatype::hash_size` (type.cc:709-716) instead of the
+  invented `(id << 8) | sz` fold; `find_by_id` folds sizes correctly.
+- **`clearNoncore`** retains core-flagged entries directly (promoted entries
+  included) instead of rebuilding from the bootstrap core set.
+- **Tree keys** derive from `Datatype::get_submeta()` (constructor-assigned
+  sub-metatypes with `submeta_override`) instead of flag inference, fixing
+  TypeUnicode sizes other than 1/2/4 and the size-1 `getTypeUnicode` case.
+
+Remaining registered residuals: external stale-handle promotion visibility
+(TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001), legacy Arc wrapper callers
+(TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001), production alignment-map wiring
+(TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001), the general container tree /
+multi-id name map (TYPE-0001), `RwLock` poisoning (Rust glue, no Ghidra
+input), and the code-flags decode family
+(TYPEFACTORY-CODEFLAGS-DECODE-0001). Oracle evidence: the extended
+`tests/oracle/typefactory_local_cache_1204.{cc,rs,metadata.json}` fixture —
+see the runner `tools/run_typefactory_local_cache_oracle.sh` output in the
+task report for the record count and stdout SHA.
