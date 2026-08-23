@@ -860,7 +860,7 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-06-27（续 6）：op_flip_condition
 
-- `op_flip_condition(op)` — `Funcdata::opFlipCondition`（funcdata_op.cc）：翻转比较 op 的条件（INT_LESS↔INT_LESSEQUAL 等 via get_booleanflip），交换输入如需，清除 BOOLEAN_FLIP 标志。解锁 RuleCondNegate。
+- `op_flip_condition(op)` — `Funcdata::opFlipCondition`（funcdata.hh:489 逐字内联 `op->flipFlag(PcodeOp::boolean_flip)`）：仅 toggle CBRANCH 的 `boolean_flip` flag，不改 opcode。解锁 RuleCondNegate。**2026-08-23 勘误（GETSTR-ZERODIFF-A）**：旧实现对该 op 自身调 `get_booleanflip`（对 CBRANCH 返回 CPUI_MAX=74 哨兵，opcodes.cc:94-135）并赋值——RuleCondNegate 站点把 CBRANCH opcode 腐蚀为 74（IR dump 实证 GetStr SeqNum 14066:54 CBRANCH→MAX）。oracle 从不在此改 opcode（比较 opcode 改写是 opFlipInPlaceExecute 的职责，funcdata_op.cc:1280）。
 
 ### 2026-06-27（会话2）：CFG 重写原语（解锁 condexe）
 

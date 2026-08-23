@@ -4,6 +4,7 @@
 
 use crate::action::{Action, action_status, action_flags};
 use crate::funcdata::Funcdata;
+use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::error::Result;
 use std::collections::HashMap;
@@ -9739,20 +9740,17 @@ impl Action for ActionMapGlobals {
 /// + `opFlipInPlaceExecute`) and swaps the two arms. `data.clearDeadOps()`
 /// runs afterward.
 ///
-/// Rugra port: Rugra's composite blocks (BlockIf, …) use named fields rather
-/// than a child Vec and do not expose `FlowBlock::flipInPlaceTest/Execute` or
-/// `BlockGraph::swapBlocks`, so we cannot call those directly. We instead
-/// perform the *core* of the complement flip in-place using the existing op
-/// API: we run the p-code half of `opFlipInPlaceExecute` (funcdata_op.cc:1282)
-/// — i.e. negate the comparison op-code via `get_booleanflip` and, where the
-/// flip requires it, swap the comparison's two inputs — and then toggle the
-/// CBRANCH's `BOOLEAN_FLIP` flag (`flipInPlaceExecute` flips `fallthru_true`;
-/// in Rugra the equivalent of the CBRANCH sense flip is `BOOLEAN_FLIP`, used
-/// by printc — see printc.cc:542). `swapBlocks` is not needed: Rugra tags the
-/// then/else arms by block semantics rather than by child ordering, so a
-/// pure sense flip is a complete complement transformation. Ghidra always
-/// returns 0 (PreferComplement normalizes without reporting a change count to
-/// the pipeline), so we return `NO_CHANGE` regardless of how many flips ran.
+/// Rugra port: full faithful port of the block-tree half and the p-code
+/// half. `getSplitPoint` (block.hh:243 default NULL / BlockBasic this-if-
+/// sizeOut==2 / BlockCopy copy->getSplitPoint / BlockList last-child /
+/// BlockCondition this), `flipInPlaceTest` (block.cc:2368 BlockBasic via
+/// Funcdata::opFlipInPlaceTest, block.cc:2990 BlockCondition over both
+/// children's split points), `flipInPlaceExecute` (block.cc:2381 BlockBasic:
+/// flip fallthru_true + FlowBlock::negateCondition edge swap; block.cc:3007
+/// BlockCondition: AND<->OR + both children), `opFlipInPlaceExecute`
+/// (funcdata_op.cc:1280-1315, incl. the BOOL_NEGATE removal and
+/// replaceLessequal funcdata_op.cc:1029), and BlockIf arm swap
+/// (`swapBlocks(1,2)`).
 pub struct ActionPreferComplement {
     pub count: i32,
 }
@@ -9763,46 +9761,396 @@ impl ActionPreferComplement {
         Self { count: 0 }
     }
 
-    /// Faithful to the p-code half of `Funcdata::opFlipInPlaceExecute`
-    /// (funcdata_op.cc:1282-1315). Given a comparison op that feeds a CBRANCH
-    /// condition, mutate it in place to its boolean complement:
-    ///   - `INT_EQUAL`      ↔ `INT_NOTEQUAL`
-    ///   - `INT_LESS`       ↔ `INT_LESSEQUAL` (inputs swapped)
-    ///   - `INT_SLESS`      ↔ `INT_SLESSEQUAL` (inputs swapped)
-    ///   - `BOOL_NEGATE`    → removed (returned as a COPY that the caller
-    ///                        would propagate); here we simply leave it and
-    ///                        rely on the CBRANCH BOOLEAN_FLIP toggle.
-    /// Returns `true` if the op-code was flipped (the comparison is now its
-    /// complement), `false` if no complementing op-code exists for this
-    /// comparison (the CBRANCH sense flip still happens regardless).
-    // RUGRA-GLUE: Rugra helper factoring out comparison-complement flip logic inlined in ActionPreferComplement::apply (blockaction.cc:2140-2167)
-    fn flip_comparison(op_ref: &crate::op::PcodeOpRef) -> bool {
-        use crate::op::pcodeop_flags;
-        let opc_in = op_ref.0.read().unwrap().opcode;
-        let (opc_out, swap_inputs) = match opc_in {
-            OpCode::CPUI_INT_EQUAL => (OpCode::CPUI_INT_NOTEQUAL, false),
-            OpCode::CPUI_INT_NOTEQUAL => (OpCode::CPUI_INT_EQUAL, false),
-            OpCode::CPUI_INT_LESS => (OpCode::CPUI_INT_LESSEQUAL, true),
-            OpCode::CPUI_INT_LESSEQUAL => (OpCode::CPUI_INT_LESS, true),
-            OpCode::CPUI_INT_SLESS => (OpCode::CPUI_INT_SLESSEQUAL, true),
-            OpCode::CPUI_INT_SLESSEQUAL => (OpCode::CPUI_INT_SLESS, true),
-            // BOOL_NEGATE → COPY in Ghidra (the op is removed and its input
-            // propagated). We cannot safely remove it here without the
-            // full descendant rewrite, so we leave it and the CBRANCH
-            // BOOLEAN_FLIP toggle still negates the sense.
-            _ => return false,
-        };
-        // opSetOpcode (funcdata_op.cc:1306).
-        op_ref.0.write().unwrap().opcode = opc_out;
-        if swap_inputs {
-            // opSwapInput(op,0,1) (funcdata_op.cc:1308).
-            let mut o = op_ref.0.write().unwrap();
-            if o.inrefs.len() >= 2 {
-                o.inrefs.swap(0, 1);
+    // Ghidra: funcdata_op.cc:1221 Funcdata::opFlipInPlaceTest
+    /// P-code half of the flip test: recursively classify whether flipping
+    /// the boolean that reaches a CBRANCH would be normalized. 0 = flip
+    /// normalizes, 1 = flip does not affect normalization, 2 = flip would be
+    /// unnormalized (cannot flip). `fliplist` accumulates the ops that a
+    /// subsequent `op_flip_in_place_execute` would rewrite.
+    fn op_flip_in_place_test(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        fliplist: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
+    ) -> i32 {
+        let op_r = op.read().unwrap();
+        match op_r.opcode {
+            OpCode::CPUI_CBRANCH => {
+                let Some(vn) = op_r.inrefs.get(1).cloned() else { return 2 };
+                drop(op_r);
+                let vn_r = vn.read().unwrap();
+                match vn_r.lone_descend() {
+                    Some(d) if std::sync::Arc::ptr_eq(&d, op) => {}
+                    _ => return 2,
+                }
+                let Some(def) = vn_r.get_def() else { return 2 };
+                drop(vn_r);
+                Self::op_flip_in_place_test(&def, fliplist)
+            }
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_FLOAT_EQUAL => {
+                fliplist.push(op.clone());
+                1
+            }
+            OpCode::CPUI_BOOL_NEGATE
+            | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_NOTEQUAL => {
+                fliplist.push(op.clone());
+                0
+            }
+            OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESS => {
+                let in0_const = op_r
+                    .inrefs
+                    .first()
+                    .map(|v| v.read().unwrap().is_constant())
+                    .unwrap_or(false);
+                fliplist.push(op.clone());
+                if !in0_const { 1 } else { 0 }
+            }
+            OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_INT_LESSEQUAL => {
+                let in1_const = op_r
+                    .inrefs
+                    .get(1)
+                    .map(|v| v.read().unwrap().is_constant())
+                    .unwrap_or(false);
+                fliplist.push(op.clone());
+                if in1_const { 1 } else { 0 }
+            }
+            OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_AND => {
+                let in0 = op_r.inrefs.first().cloned();
+                drop(op_r);
+                let Some(vn0) = in0 else { return 2 };
+                let vn0_r = vn0.read().unwrap();
+                match vn0_r.lone_descend() {
+                    Some(d) if std::sync::Arc::ptr_eq(&d, op) => {}
+                    _ => return 2,
+                }
+                let Some(def0) = vn0_r.get_def() else { return 2 };
+                drop(vn0_r);
+                let subtest1 = Self::op_flip_in_place_test(&def0, fliplist);
+                if subtest1 == 2 {
+                    return 2;
+                }
+                let in1 = op.read().unwrap().inrefs.get(1).cloned();
+                let Some(vn1) = in1 else { return 2 };
+                let vn1_r = vn1.read().unwrap();
+                match vn1_r.lone_descend() {
+                    Some(d) if std::sync::Arc::ptr_eq(&d, op) => {}
+                    _ => return 2,
+                }
+                let Some(def1) = vn1_r.get_def() else { return 2 };
+                drop(vn1_r);
+                let subtest2 = Self::op_flip_in_place_test(&def1, fliplist);
+                if subtest2 == 2 {
+                    return 2;
+                }
+                fliplist.push(op.clone());
+                subtest1 // Front of AND/OR must be normalizing
+            }
+            _ => 2,
+        }
+    }
+
+    // Ghidra: funcdata_op.cc:1029 Funcdata::replaceLessequal
+    /// Rewrite `c <= V` (or signed) after an input swap into the equivalent
+    /// `<` with the constant adjusted by ∓1. Faithful to `replaceLessequal`
+    /// (funcdata_op.cc:1029-1063), including the signed/unsigned overflow
+    /// guards.
+    fn replace_lessequal(fd: &mut Funcdata, op: &crate::op::PcodeOpRef) -> bool {
+        let op_r = op.0.read().unwrap();
+        let (vn, diff, i): (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i64, usize) =
+            if op_r
+                .inrefs
+                .first()
+                .map(|v| v.read().unwrap().is_constant())
+                .unwrap_or(false)
+            {
+                (op_r.inrefs[0].clone(), -1, 0)
+            } else if op_r
+                .inrefs
+                .get(1)
+                .map(|v| v.read().unwrap().is_constant())
+                .unwrap_or(false)
+            {
+                (op_r.inrefs[1].clone(), 1, 1)
+            } else {
+                return false;
+            };
+        let vn_r = vn.read().unwrap();
+        let size = vn_r.get_size();
+        let val = crate::utils::bits::sign_extend(vn_r.get_offset(), size * 8);
+        drop(vn_r);
+        drop(op_r);
+        let is_signed = op.0.read().unwrap().opcode == OpCode::CPUI_INT_SLESSEQUAL;
+        if is_signed {
+            if val < 0 && val + diff > 0 {
+                return false;
+            }
+            if val > 0 && val + diff < 0 {
+                return false;
+            }
+            fd.op_set_opcode(op, OpCode::CPUI_INT_SLESS);
+        } else {
+            if diff == -1 && val == 0 {
+                return false;
+            }
+            if diff == 1 && val == -1 {
+                return false;
+            }
+            fd.op_set_opcode(op, OpCode::CPUI_INT_LESS);
+        }
+        let mask = crate::address::calc_mask(size);
+        let res = ((val + diff) as u64) & mask;
+        let newvn = fd.new_constant(size, res);
+        crate::varnode::Varnode::copy_symbol_if_valid(&newvn, &vn.read().unwrap());
+        fd.op_set_input(op, newvn, i);
+        true
+    }
+
+    // Ghidra: funcdata_op.cc:1280 Funcdata::opFlipInPlaceExecute
+    /// Perform op-code flips (in-place) to change a boolean value. For each
+    /// op in `fliplist`: BOOL_NEGATE is removed entirely (input propagated
+    /// to its lone descendant); BOOL_AND/BOOL_OR are exchanged; other
+    /// flippable comparisons get their opcode exchanged (and inputs swapped
+    /// + replaceLessequal where the flip demands it).
+    fn op_flip_in_place_execute(
+        fd: &mut Funcdata,
+        fliplist: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
+    ) {
+        for op in fliplist {
+            let opc = op.read().unwrap().opcode;
+            let mut reorder = false;
+            let flip_opc = crate::opcodes::get_booleanflip(opc, &mut reorder);
+            let op_ref = crate::op::PcodeOpRef(op.clone());
+            if flip_opc == OpCode::CPUI_COPY {
+                // We remove this (CPUI_BOOL_NEGATE) entirely
+                let vn = op.read().unwrap().inrefs[0].clone();
+                let out_vn = op.read().unwrap().output.clone();
+                let Some(out_vn) = out_vn else { continue };
+                // Must be a lone descendant
+                let Some(otherop) = out_vn.read().unwrap().lone_descend() else {
+                    continue;
+                };
+                let slot = otherop
+                    .read()
+                    .unwrap()
+                    .slot_of_input(&out_vn)
+                    .unwrap_or(0);
+                fd.op_set_input(&crate::op::PcodeOpRef(otherop), vn, slot);
+                fd.op_destroy(&op_ref);
+            } else if flip_opc == OpCode::CPUI_MAX {
+                if opc == OpCode::CPUI_BOOL_AND {
+                    fd.op_set_opcode(&op_ref, OpCode::CPUI_BOOL_OR);
+                } else if opc == OpCode::CPUI_BOOL_OR {
+                    fd.op_set_opcode(&op_ref, OpCode::CPUI_BOOL_AND);
+                }
+                // Unreachable other opcodes: op_flip_in_place_test only
+                // pushes flippable comparisons and BOOL_AND/OR.
+            } else {
+                fd.op_set_opcode(&op_ref, flip_opc);
+                if reorder {
+                    fd.op_swap_input(&op_ref, 0, 1);
+                    if flip_opc == OpCode::CPUI_INT_LESSEQUAL
+                        || flip_opc == OpCode::CPUI_INT_SLESSEQUAL
+                    {
+                        Self::replace_lessequal(fd, &op_ref);
+                    }
+                }
             }
         }
-        let _ = pcodeop_flags::BOOLEAN_FLIP; // referenced for documentation parity
+    }
+
+    // Ghidra: block.hh:243 FlowBlock::getSplitPoint dispatch
+    /// The deepest component block performing the conditional split.
+    /// Default NULL; BlockBasic returns itself when sizeOut()==2 (block.cc:2361);
+    /// BlockCopy delegates to its copy (block.hh:535); BlockList returns the
+    /// last child's split point (block.cc:2976); BlockCondition returns
+    /// itself (block.hh:631).
+    fn get_split_point(
+        block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
+        use crate::block::{FlowBlock, BlockBasic, BlockCondition, BlockCopy, BlockList};
+        let bl = block.read().unwrap();
+        if let Some(bb) = bl.as_any().downcast_ref::<BlockBasic>() {
+            if bb.size_out() == 2 {
+                return Some(block.clone());
+            }
+            return None;
+        }
+        if let Some(bc) = bl.as_any().downcast_ref::<BlockCopy>() {
+            let orig_basic = bc.original.clone();
+            drop(bl);
+            // The original is a BlockBasic; mirror BlockBasic::getSplitPoint.
+            let ob = orig_basic.read().unwrap();
+            if ob.size_out() == 2 {
+                drop(ob);
+                return Some(orig_basic as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+            }
+            return None;
+        }
+        if let Some(bls) = bl.as_any().downcast_ref::<BlockList>() {
+            let last = bls.children.last().cloned();
+            drop(bl);
+            return last.and_then(|child| Self::get_split_point(&child));
+        }
+        if bl.as_any().downcast_ref::<BlockCondition>().is_some() {
+            return Some(block.clone());
+        }
+        None
+    }
+
+    // Ghidra: block.cc:2368 BlockBasic::flipInPlaceTest / block.cc:2990 BlockCondition::flipInPlaceTest
+    /// Test normalizing the conditional branch in this block. 0 = the flip
+    /// would normalize the condition, 1 = flip does not affect normalization,
+    /// 2 = flip produces an unnormalized condition (refuse).
+    fn flip_in_place_test(
+        block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        fliplist: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
+    ) -> i32 {
+        use crate::block::{FlowBlock, BlockBasic, BlockCondition};
+        let bl = block.read().unwrap();
+        if let Some(cond) = bl.as_any().downcast_ref::<BlockCondition>() {
+            let first = cond.first.clone();
+            let second = cond.second.clone();
+            drop(bl);
+            let Some(split1) = Self::get_split_point(&first) else { return 2 };
+            let Some(split2) = Self::get_split_point(&second) else { return 2 };
+            let subtest1 = Self::flip_in_place_test(&split1, fliplist);
+            if subtest1 == 2 {
+                return 2;
+            }
+            let subtest2 = Self::flip_in_place_test(&split2, fliplist);
+            if subtest2 == 2 {
+                return 2;
+            }
+            subtest1
+        } else if let Some(bb) = bl.as_any().downcast_ref::<BlockBasic>() {
+            let Some(lastop) = bb.ops.last().cloned() else { return 2 };
+            drop(bl);
+            if lastop.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
+                return 2;
+            }
+            Self::op_flip_in_place_test(&lastop.0, fliplist)
+        } else {
+            2
+        }
+    }
+
+    // Ghidra: block.cc:2381 BlockBasic::flipInPlaceExecute / block.cc:3007 BlockCondition::flipInPlaceExecute
+    /// Execute the conditional flip on this block: BlockBasic flips the
+    /// `fallthru_true` op flag and swaps its outgoing edges; BlockCondition
+    /// exchanges AND<->OR and flips both children's split points.
+    fn flip_in_place_execute(
+        block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        use crate::block::{BlockBasic, BlockCondition};
+        let bl = block.read().unwrap();
+        if let Some(cond) = bl.as_any().downcast_ref::<BlockCondition>() {
+            let first = cond.first.clone();
+            let second = cond.second.clone();
+            drop(bl);
+            {
+                let mut c = block.write().unwrap();
+                if let Some(cm) = c.as_any_mut().downcast_mut::<BlockCondition>() {
+                    cm.op_type = match cm.op_type {
+                        crate::block::BoolOp::And => crate::block::BoolOp::Or,
+                        crate::block::BoolOp::Or => crate::block::BoolOp::And,
+                    };
+                }
+            }
+            if let Some(sp) = Self::get_split_point(&first) {
+                Self::flip_in_place_execute(&sp);
+            }
+            if let Some(sp) = Self::get_split_point(&second) {
+                Self::flip_in_place_execute(&sp);
+            }
+        } else if bl.as_any().downcast_ref::<BlockBasic>().is_some() {
+            drop(bl);
+            let mut bb = block.write().unwrap();
+            // BlockBasic::flipInPlaceExecute (block.cc:2381-2387): flip the
+            // fallthru_true flag on the CBRANCH, then FlowBlock::
+            // negateCondition's edge swap (via the trait's swap_edges).
+            if let Some(bbasic) = bb.as_any_mut().downcast_mut::<BlockBasic>() {
+                if let Some(lastop) = bbasic.ops.last().cloned() {
+                    lastop.0.write().unwrap().flags ^= crate::op::pcodeop_flags::FALLTHRU_TRUE;
+                }
+            }
+            bb.swap_edges();
+        }
+    }
+
+    // Ghidra: block.cc:3093 BlockIf::preferComplement
+    /// For a 3-child if/else whose split-point condition can be flipped in
+    /// place, flip the condition and swap the two arms.
+    fn prefer_complement(
+        if_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        fd: &mut Funcdata,
+    ) -> bool {
+        use crate::block::BlockIf;
+        // getSize()!=3 — Rugra BlockIf children: condition + if_body +
+        // else_body; three children iff there is an else arm.
+        let (condition, has_else) = {
+            let bl = if_arc.read().unwrap();
+            match bl.as_any().downcast_ref::<BlockIf>() {
+                Some(bif) => (bif.condition.clone(), bif.else_body.is_some()),
+                None => return false,
+            }
+        };
+        if !has_else {
+            return false;
+        }
+        let Some(split) = Self::get_split_point(&condition) else {
+            return false;
+        };
+        let mut fliplist = Vec::new();
+        if 0 != Self::flip_in_place_test(&split, &mut fliplist) {
+            return false;
+        }
+        Self::flip_in_place_execute(&split);
+        Self::op_flip_in_place_execute(fd, fliplist);
+        // swapBlocks(1,2): exchange the then/else arms.
+        let mut bl = if_arc.write().unwrap();
+        if let Some(bif) = bl.as_any_mut().downcast_mut::<BlockIf>() {
+            std::mem::swap(&mut bif.if_body, bif.else_body.as_mut().expect("checked above"));
+        }
         true
+    }
+
+    // RUGRA-GLUE: structure-tree children accessor (Ghidra BlockGraph::getBlock)
+    /// Children of a composite structured block, mirroring the per-class
+    /// child sets Ghidra exposes via BlockGraph::getBlock/getSize.
+    fn structure_children(
+        block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
+        use crate::block::{
+            BlockCondition, BlockDoWhile, BlockIf, BlockInfLoop, BlockList, BlockSwitch,
+            BlockWhileDo,
+        };
+        let bl = block.read().unwrap();
+        let mut out: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+        if let Some(bif) = bl.as_any().downcast_ref::<BlockIf>() {
+            out.push(bif.condition.clone());
+            out.push(bif.if_body.clone());
+            if let Some(eb) = &bif.else_body {
+                out.push(eb.clone());
+            }
+        } else if let Some(bc) = bl.as_any().downcast_ref::<BlockCondition>() {
+            out.push(bc.first.clone());
+            out.push(bc.second.clone());
+        } else if let Some(bls) = bl.as_any().downcast_ref::<BlockList>() {
+            out.extend(bls.children.iter().cloned());
+        } else if let Some(bwd) = bl.as_any().downcast_ref::<BlockWhileDo>() {
+            out.push(bwd.condition.clone());
+            out.push(bwd.body.clone());
+        } else if let Some(bdw) = bl.as_any().downcast_ref::<BlockDoWhile>() {
+            out.push(bdw.condition.clone());
+        } else if let Some(bil) = bl.as_any().downcast_ref::<BlockInfLoop>() {
+            out.push(bil.body.clone());
+        } else if let Some(bsw) = bl.as_any().downcast_ref::<BlockSwitch>() {
+            out.push(bsw.control.clone());
+            out.extend(bsw.cases.iter().cloned());
+            if let Some(dc) = &bsw.default_case {
+                out.push(dc.clone());
+            }
+        }
+        out
     }
 }
 
@@ -9810,92 +10158,28 @@ impl Action for ActionPreferComplement {
     // Ghidra: blockaction.cc:2140 ActionPreferComplement::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (blockaction.cc:2140-2167): BFS over the structure tree;
-        //   if (graph.getSize() == 0) return 0;
-        //   for each non copy/basic block call curbl->preferComplement(data).
-        // `preferComplement` only does real work on `BlockIf` (block.cc:3093):
-        // a 3-child if/else whose split-point CBRANCH can be flipped
-        // (flipInPlaceTest → flipInPlaceExecute + opFlipInPlaceExecute +
-        // swapBlocks), finishing with data.clearDeadOps().
-        //
-        // Rugra port: walk the structured blocks (skipping t_copy / t_basic,
-        // blockaction.cc:2157-2160). For each block whose ops terminate in a
-        // CBRANCH, perform the complement flip:
-        //   1. opFlipInPlaceExecute on the CBRANCH's condition-defining op
-        //      (flip_comparison above), and
-        //   2. flipInPlaceExecute on the CBRANCH itself — in Rugra this is
-        //      toggling the BOOLEAN_FLIP flag (the sense used by printc).
-        // We do NOT call swapBlocks: Rugra marks the if/else arms by block
-        // semantics rather than child ordering, so a pure sense flip is a
-        // complete complement (see block.cc:2382-2385 for the Ghidra
-        // fallthru_true analogue).
-        use crate::block::BlockType;
-        use crate::op::pcodeop_flags::BOOLEAN_FLIP;
-        // Empty structure → nothing to do (blockaction.cc:2145).
+        // children are enqueued skipping t_copy/t_basic; each visited block
+        // gets preferComplement(data). Only BlockIf with an else arm does
+        // real work (block.cc:3093); every other block type returns false.
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        for bl_arc in &fd.sblocks.blocks {
-            let bl_rg = bl_arc.read().unwrap();
-            let bt = bl_rg.get_type();
-            // Skip t_copy / t_basic — no preferComplement (blockaction.cc:2158).
-            if bt == BlockType::Copy || bt == BlockType::Basic {
-                continue;
+        let mut vec: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> =
+            fd.sblocks.blocks.clone();
+        let mut pos = 0usize;
+        while pos < vec.len() {
+            let curbl = vec[pos].clone();
+            pos += 1;
+            for childbl in Self::structure_children(&curbl) {
+                let bt = childbl.read().unwrap().get_type();
+                if bt == crate::block::BlockType::Copy || bt == crate::block::BlockType::Basic {
+                    continue;
+                }
+                vec.push(childbl);
             }
-            // Find the split-point CBRANCH (the condition that a real
-            // preferComplement would flip). BlockIf::get_ops surfaces the
-            // condition block's ops.
-            let cbranch = bl_rg
-                .get_ops()
-                .into_iter()
-                .find(|op_ref| op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
-            drop(bl_rg);
-            let Some(cbranch) = cbranch else { continue };
-
-            // flipInPlaceTest (block.cc:3103) gates the *comparison* flip on
-            // whether the CBRANCH condition can be normalized. We mirror the
-            // p-code test as a best-effort: if the boolean input (slot 1) has
-            // a single defining op that feeds only this CBRANCH, we flip that
-            // comparison in place. The test is best-effort because Rugra's
-            // varnode descend links are not always complete; when we cannot
-            // confirm the comparison is flippable we simply leave it alone.
-            // Either way the CBRANCH sense flip below is the core complement.
-            let cond_op = {
-                let cb_rg = cbranch.0.read().unwrap();
-                let bool_vn = cb_rg.get_in(1).cloned();
-                bool_vn.and_then(|vn| {
-                    let vn_rg = vn.read().unwrap();
-                    let lone = vn_rg.lone_descend();
-                    // Confirm the condition varnode feeds only this CBRANCH
-                    // (funcdata_op.cc:1230-1233); otherwise skip the
-                    // comparison flip but still do the CBRANCH sense flip.
-                    let is_lone = lone
-                        .map(|a| Arc::ptr_eq(&a, &cbranch.0))
-                        .unwrap_or(false);
-                    if is_lone { vn_rg.get_def() } else { None }
-                })
-            };
-            // If the condition has a defining comparison op, flip it in place
-            // (opFlipInPlaceExecute, funcdata_op.cc:1282). If there is no
-            // defining comparison (e.g. the boolean is a function result), we
-            // still flip the CBRANCH sense below.
-            let mut did_flip = false;
-            if let Some(def_arc) = cond_op {
-                // Only flip genuine comparisons; a BOOL_NEGATE chain is left
-                // alone (Ghidra would remove it, which we can't do safely
-                // without the full descendant rewrite).
-                let def_ref = crate::op::PcodeOpRef(def_arc);
-                did_flip = Self::flip_comparison(&def_ref);
+            if Self::prefer_complement(&curbl, fd) {
+                self.count += 1;
             }
-            // flipInPlaceExecute on the CBRANCH (block.cc:2384 flips
-            // fallthru_true; in Rugra the equivalent sense bit is
-            // BOOLEAN_FLIP, used by printc.cc:542). Toggle it unconditionally
-            // for this CBRANCH — this is the core complement flip.
-            {
-                let mut cb_w = cbranch.0.write().unwrap();
-                cb_w.flags ^= BOOLEAN_FLIP;
-            }
-            let _ = did_flip;
-            self.count += 1;
         }
         // Ghidra: data.clearDeadOps(); — Rugra clears dead ops via
         // PcodeOpBank::destroy_dead from the pipeline, not per-action.
@@ -11785,89 +12069,190 @@ mod tests {
     // These verify the apply() bodies actually perform their core transform
     // (not just the empty-fd NO_CHANGE stub path).
 
-    /// ActionPreferComplement must flip the CBRANCH's BOOLEAN_FLIP flag when
-    /// it finds a CBRANCH terminating a non-copy/non-basic structured block
-    /// (blockaction.cc:2140 / block.cc:3093).
+    /// ActionPreferComplement must follow blockaction.cc:2140/block.cc:3093:
+    /// only a 3-child BlockIf (with else arm) whose split-point condition
+    /// normalizes on flip (opFlipInPlaceTest == 0, i.e. the comparison is in
+    /// negated form like INT_NOTEQUAL) gets flipped: comparison op-code
+    /// exchanged, fallthru_true toggled, arms swapped. A 2-child if (no
+    /// else) and an already-normalized (INT_EQUAL) condition are refused.
     #[test]
-    fn test_prefercomplement_flips_boolean_flip() {
+    fn test_prefercomplement_flips_if_else_condition() {
         use crate::address::{Address, SeqNum};
         use crate::block::{BlockBasic, BlockIf};
-        use crate::op::pcodeop_flags::BOOLEAN_FLIP;
+        use crate::op::pcodeop_flags::{BOOLEAN_FLIP, FALLTHRU_TRUE};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+        type BlkArc = std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        let build_if = |else_some: bool, cond_opcode: OpCode| {
+            let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+            let cond_bb = std::sync::Arc::new(std::sync::RwLock::new(
+                BlockBasic::new(0, Address::new(0x1000)),
+            ));
+            // comparison op defining the CBRANCH condition, with proper
+            // def/descend wiring so loneDescend/getDef resolve.
+            let mut cmp = PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), cond_opcode);
+            let in0 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(8, Address::new(0x30))));
+            let in1 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(8, 5)));
+            let bool_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x10))));
+            cmp.inrefs = vec![in0.clone(), in1.clone()];
+            cmp.output = Some(bool_vn.clone());
+            let cmp_arc = std::sync::Arc::new(std::sync::RwLock::new(cmp));
+            let mut cb = PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_CBRANCH);
+            let addr_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8)));
+            cb.inrefs = vec![addr_vn, bool_vn.clone()];
+            let cb_arc = std::sync::Arc::new(std::sync::RwLock::new(cb));
+            // Wire SSA links: bool_vn defined by cmp, read only by CBRANCH.
+            bool_vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&cmp_arc));
+            bool_vn.write().unwrap().descend = vec![std::sync::Arc::downgrade(&cb_arc)];
+            cond_bb.write().unwrap().add_op(PcodeOpRef(cmp_arc.clone()));
+            cond_bb.write().unwrap().add_op(PcodeOpRef(cb_arc.clone()));
+            let if_body = std::sync::Arc::new(std::sync::RwLock::new(
+                BlockBasic::new(1, Address::new(0x1100)),
+            )) as BlkArc;
+            let else_body = std::sync::Arc::new(std::sync::RwLock::new(
+                BlockBasic::new(2, Address::new(0x1200)),
+            )) as BlkArc;
+            // getSplitPoint (block.cc:2361) requires the condition block to
+            // have two outgoing edges.
+            cond_bb.write().unwrap().outgoing = vec![
+                crate::block::BlockEdge { point: if_body.clone(), flags: 0, reverse_index: 0 },
+                crate::block::BlockEdge { point: else_body.clone(), flags: 0, reverse_index: 0 },
+            ];
+            let bif = BlockIf {
+                index: 3,
+                condition: cond_bb.clone(),
+                if_body: if_body.clone(),
+                else_body: else_some.then(|| else_body.clone()),
+                negated: false,
+                goto_target: None,
+                goto_type: crate::block::goto_type::GOTO_GOTO,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
+            };
+            let bif_arc =
+                std::sync::Arc::new(std::sync::RwLock::new(bif)) as BlkArc;
+            fd.sblocks.add_block(bif_arc.clone());
+            (fd, bif_arc, cmp_arc, cb_arc, if_body)
+        };
+
+        // Case 1: 3-child if/else with INT_NOTEQUAL condition → flipped.
+        let (mut fd, bif_arc, cmp_arc, cb_arc, if_body) = build_if(true, OpCode::CPUI_INT_NOTEQUAL);
+        let mut a = ActionPreferComplement::new();
+        let _ = a.apply(&mut fd).unwrap();
+        assert_eq!(a.count, 1, "3-child if/else with normalizing flip runs");
+        assert_eq!(
+            cmp_arc.read().unwrap().opcode,
+            OpCode::CPUI_INT_EQUAL,
+            "INT_NOTEQUAL must be exchanged to INT_EQUAL"
+        );
+        assert_ne!(
+            cb_arc.read().unwrap().flags & FALLTHRU_TRUE,
+            0,
+            "fallthru_true must be toggled"
+        );
+        assert_eq!(
+            cb_arc.read().unwrap().flags & BOOLEAN_FLIP,
+            0,
+            "boolean_flip is NOT touched by flipInPlaceExecute"
+        );
+        {
+            let bl = bif_arc.read().unwrap();
+            let bif = bl.as_any().downcast_ref::<BlockIf>().unwrap();
+            assert_eq!(
+                bif.if_body.read().unwrap().get_index(),
+                2,
+                "arms must be swapped (old else is now then)"
+            );
+            let eb = bif.else_body.as_ref().unwrap();
+            assert_eq!(eb.read().unwrap().get_index(), 1);
+        }
+
+        // Case 2: 2-child if (no else) → refused (block.cc:3096).
+        let (mut fd2, _, cmp_arc2, cb_arc2, _) = build_if(false, OpCode::CPUI_INT_NOTEQUAL);
+        let mut a2 = ActionPreferComplement::new();
+        let _ = a2.apply(&mut fd2).unwrap();
+        assert_eq!(a2.count, 0, "2-child if is refused");
+        assert_eq!(cmp_arc2.read().unwrap().opcode, OpCode::CPUI_INT_NOTEQUAL);
+
+        // Case 3: already-normalized INT_EQUAL → test returns 1, refused
+        // (block.cc:3103: `0 != flipInPlaceTest`).
+        let (mut fd3, _, cmp_arc3, _, _) = build_if(true, OpCode::CPUI_INT_EQUAL);
+        let mut a3 = ActionPreferComplement::new();
+        let _ = a3.apply(&mut fd3).unwrap();
+        assert_eq!(a3.count, 0, "non-normalizing flip is refused");
+        assert_eq!(cmp_arc3.read().unwrap().opcode, OpCode::CPUI_INT_EQUAL);
+    }
+
+    /// ActionPreferComplement::op_flip_in_place_execute must perform the
+    /// funcdata_op.cc:1280 transforms: comparison opcode exchange (INT_LESS →
+    /// INT_LESSEQUAL with swapped inputs), and BOOL_NEGATE removal with its
+    /// input propagated to the lone descendant.
+    #[test]
+    fn test_prefercomplement_flip_in_place_execute() {
+        use crate::address::{Address, SeqNum};
         use crate::op::{PcodeOp, PcodeOpRef};
         use crate::opcodes::OpCode;
         use crate::varnode::Varnode;
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
-        // Build a BlockIf whose condition sub-block ends in a CBRANCH.
-        let cond_bb = std::sync::Arc::new(std::sync::RwLock::new(
-            BlockBasic::new(0, Address::new(0x1000)),
-        ));
-        let if_body = std::sync::Arc::new(std::sync::RwLock::new(
-            BlockBasic::new(1, Address::new(0x1100)),
-        )) as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
-        let mut cb = PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_CBRANCH);
-        // CBRANCH needs an address (slot 0) + boolean input (slot 1).
-        let addr_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8)));
-        let bool_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x10))));
-        cb.inrefs = vec![addr_vn, bool_vn];
-        let cb_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb)));
-        cond_bb.write().unwrap().add_op(cb_ref.clone());
-        // BOOLEAN_FLIP starts clear.
-        assert_eq!(cb_ref.0.read().unwrap().flags & BOOLEAN_FLIP, 0);
-        // Wrap the condition in a BlockIf (a structured if-block — non-copy,
-        // non-basic — so PreferComplement visits it).
-        let bif = BlockIf {
-            index: 0,
-            condition: cond_bb.clone(),
-            if_body,
-            else_body: None,
-            negated: false,
-            goto_target: None,
-            goto_type: crate::block::goto_type::GOTO_GOTO,
-            incoming: Vec::new(),
-            outgoing: Vec::new(),
-            parent: None,
-            flags: 0,
-        };
-        let bif_arc = std::sync::Arc::new(std::sync::RwLock::new(bif));
-        fd.sblocks.add_block(bif_arc);
-        let mut a = ActionPreferComplement::new();
-        let _ = a.apply(&mut fd).unwrap();
-        // The CBRANCH's BOOLEAN_FLIP must now be set (the core complement flip).
-        assert_ne!(
-            cb_ref.0.read().unwrap().flags & BOOLEAN_FLIP,
-            0,
-            "BOOLEAN_FLIP must be toggled by prefercomplement"
+        // INT_LESS(v1, v2) in the flip list.
+        let v1 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x10))));
+        let v2 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x20))));
+        let mut op = PcodeOp::new(SeqNum::new(Address::new(0), 0), OpCode::CPUI_INT_LESS);
+        op.inrefs = vec![v1.clone(), v2.clone()];
+        let op_arc = std::sync::Arc::new(std::sync::RwLock::new(op));
+        ActionPreferComplement::op_flip_in_place_execute(&mut fd, vec![op_arc.clone()]);
+        {
+            let o = op_arc.read().unwrap();
+            assert_eq!(o.opcode, OpCode::CPUI_INT_LESSEQUAL, "INT_LESS → INT_LESSEQUAL");
+            assert!(
+                std::sync::Arc::ptr_eq(&o.inrefs[0], &v2) && std::sync::Arc::ptr_eq(&o.inrefs[1], &v1),
+                "inputs must be swapped"
+            );
+        }
+        // BOOL_NEGATE(x) feeding a lone CBRANCH: negate removed, CBRANCH
+        // rewired to x. Build through fd APIs so varnodes are bank-owned
+        // (opDestroy requires bank ownership).
+        let blk = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::block::BlockBasic::new(0, Address::new(0x1000)),
+        )) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        fd.bblocks.add_block(blk.clone());
+        // x must be a WRITTEN varnode (free varnodes may have at most one
+        // descendant, varnode.cc:333-336): define it as an INT_EQUAL output.
+        let xdef_ref = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&xdef_ref, OpCode::CPUI_INT_EQUAL);
+        let x = fd.new_unique_out(1, &xdef_ref);
+        let xc0 = fd.new_unique(8);
+        let xc1 = fd.new_constant(1, 1);
+        fd.op_set_input(&xdef_ref, xc0, 0);
+        fd.op_set_input(&xdef_ref, xc1, 1);
+        fd.op_insert_end(&xdef_ref, &blk);
+        let neg_ref = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&neg_ref, OpCode::CPUI_BOOL_NEGATE);
+        let neg_out = fd.new_unique_out(1, &neg_ref);
+        fd.op_set_input(&neg_ref, x.clone(), 0);
+        fd.op_insert_end(&neg_ref, &blk);
+        let cb_ref = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&cb_ref, OpCode::CPUI_CBRANCH);
+        let addr_vn = fd.new_constant(8, 0x1000);
+        fd.op_set_input(&cb_ref, addr_vn, 0);
+        fd.op_set_input(&cb_ref, neg_out.clone(), 1);
+        fd.op_insert_end(&cb_ref, &blk);
+        ActionPreferComplement::op_flip_in_place_execute(
+            &mut fd,
+            vec![neg_ref.0.clone()],
         );
-        assert_eq!(a.count, 1, "one candidate flipped");
-        // Re-running flips it back (idempotent toggle).
-        let mut a2 = ActionPreferComplement::new();
-        let _ = a2.apply(&mut fd).unwrap();
-        assert_eq!(cb_ref.0.read().unwrap().flags & BOOLEAN_FLIP, 0);
-    }
-
-    /// ActionPreferComplement's flip_comparison must negate INT_LESS →
-    /// INT_LESSEQUAL (the core opFlipInPlaceExecute transform).
-    #[test]
-    fn test_prefercomplement_flip_comparison() {
-        use crate::address::SeqNum;
-        use crate::op::{PcodeOp, PcodeOpRef};
-        use crate::opcodes::OpCode;
-        let mut op = PcodeOp::new(SeqNum::new(crate::address::Address::new(0), 0), OpCode::CPUI_INT_LESS);
-        op.inrefs = vec![
-            std::sync::Arc::new(std::sync::RwLock::new(crate::varnode::Varnode::new(4, crate::address::Address::new(0x10)))),
-            std::sync::Arc::new(std::sync::RwLock::new(crate::varnode::Varnode::new(4, crate::address::Address::new(0x20)))),
-        ];
-        let op_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(op)));
-        assert!(ActionPreferComplement::flip_comparison(&op_ref));
-        // INT_LESS → INT_LESSEQUAL with inputs swapped.
-        assert_eq!(op_ref.0.read().unwrap().opcode, OpCode::CPUI_INT_LESSEQUAL);
-        // Flip back: INT_LESSEQUAL → INT_LESS.
-        assert!(ActionPreferComplement::flip_comparison(&op_ref));
-        assert_eq!(op_ref.0.read().unwrap().opcode, OpCode::CPUI_INT_LESS);
-        // INT_EQUAL ↔ INT_NOTEQUAL.
-        op_ref.0.write().unwrap().opcode = OpCode::CPUI_INT_EQUAL;
-        assert!(ActionPreferComplement::flip_comparison(&op_ref));
-        assert_eq!(op_ref.0.read().unwrap().opcode, OpCode::CPUI_INT_NOTEQUAL);
+        assert!(neg_ref.0.read().unwrap().is_dead(), "BOOL_NEGATE destroyed");
+        assert!(
+            std::sync::Arc::ptr_eq(&cb_ref.0.read().unwrap().inrefs[1], &x),
+            "CBRANCH condition rewired to the negate's input"
+        );
     }
 
     /// ActionStructureTransform must detect a for-loop induction variable

@@ -3056,7 +3056,14 @@ impl PrintC {
                         // When negated=true (Triangle-reverse), negate the condition textually
                         self.emit.tag_line(0);
                         if if_data.negated {
-                            // Capture condition text and negate it
+                            // Capture condition text and negate it. For a
+                            // composite (BlockCondition) the negation is the
+                            // De Morgan distribution of Ghidra's
+                            // BlockCondition::negateCondition (block.cc:3023:
+                            // NOT to both sides + op AND<->OR) with each side
+                            // printed via opCbranch's negatetoken
+                            // (printc.cc:555-560): `!((A) || (B))` renders as
+                            // `(!A) && (!B)`.
                             let orig_emit = std::mem::replace(&mut self.emit,
                                 Box::new(crate::prettyprint::EmitNoMarkup::new()));
                             self.emit_block_condition(&if_data.condition);
@@ -3066,7 +3073,8 @@ impl PrintC {
                                     .map(|b| b.get_output()).unwrap_or_default()
                             };
                             let trimmed = cond_text.trim();
-                            let negated_cond = Self::negate_condition_text(trimmed)
+                            let negated_cond = Self::demorgan_negate_text(trimmed)
+                                .or_else(|| Self::negate_condition_text(trimmed))
                                 .unwrap_or_else(|| format!("!({})", trimmed));
                             self.emit.print(&format!("if ({})", negated_cond));
                         } else {
@@ -4550,6 +4558,57 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: textual mirror of BlockCondition::negateCondition
+    /// De Morgan-negate a composite condition `(A) && (B)` / `(A) || (B)`:
+    /// `!((A) || (B))` -> `(!A) && (!B)` (each side via negate_condition_text,
+    /// the negatetoken equivalent of printc.cc:555-560). Mirrors Ghidra
+    /// BlockCondition::negateCondition (block.cc:3023-3032: NOT distributed to
+    /// both sides, op AND<->OR) which runs in the structurer via
+    /// ruleBlockIfNoExit's negateCondition (blockaction.cc:1510-1512); Rugra
+    /// records the negation as BlockIf::negated and applies it at print time.
+    /// Returns None when the text is not a top-level two-clause composite.
+    fn demorgan_negate_text(text: &str) -> Option<String> {
+        // Scan for the top-level (depth 0) operator between the two
+        // parenthesized halves. Nested parens inside a side are skipped.
+        let bytes = text.as_bytes();
+        let mut depth: i32 = 0;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {
+                    if depth == 0 && i > 0 && bytes[i] == b' ' {
+                        for (op, dual) in [(" && ", " && "), (" || ", " || ")] {
+                            let _ = dual;
+                            if text[i..].starts_with(op) {
+                                let op_name = op;
+                                let dual_name = if op_name == " && " { " || " } else { " && " };
+                                let left = text[..i].trim();
+                                let right = text[i + op_name.len()..].trim();
+                                // RUGRA-GLUE: paren-stripping helper for the
+                                // textual De Morgan composition above (pure
+                                // string manipulation, no Ghidra counterpart).
+                                fn strip(s: &str) -> &str {
+                                    s.strip_prefix('(')
+                                        .and_then(|x| x.strip_suffix(')'))
+                                        .unwrap_or(s)
+                                }
+                                let neg_left = Self::negate_condition_text(strip(left))
+                                    .unwrap_or_else(|| format!("!({})", strip(left)));
+                                let neg_right = Self::negate_condition_text(strip(right))
+                                    .unwrap_or_else(|| format!("!({})", strip(right)));
+                                return Some(format!("({}){}({})", neg_left, dual_name, neg_right));
+                            }
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+
     // RUGRA-GLUE: try_fold_bool_comparison (no Ghidra counterpart found)
     /// Try to fold a BOOL_OR/BOOL_AND of two comparisons into a single comparison.
     /// E.g., `BOOL_OR(INT_EQUAL(A,B), INT_LESS(A,B))` → emits `A <= B`
@@ -5072,8 +5131,31 @@ impl PrintC {
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
+        use crate::block::{BlockCondition, BoolOp};
         use crate::opcodes::OpCode;
         let block = block_arc.read().unwrap();
+        // Ghidra emitBlockCondition (printc.cc:2836-2861): a BlockCondition
+        // composes `(block0) op (block1)` with the boolean op token; only
+        // the no_branch arm emits block0 alone. Mirror the composition for
+        // the RPN path (the legacy single-CBRANCH scan dropped the second
+        // clause of short-circuit diamonds).
+        if let Some(cond) = block.as_any().downcast_ref::<BlockCondition>() {
+            let first = cond.first.clone();
+            let second = cond.second.clone();
+            let op_str = match cond.op_type {
+                BoolOp::And => " && ",
+                BoolOp::Or => " || ",
+            };
+            drop(block);
+            self.emit.print("(");
+            self.emit_block_condition_rpn(&first);
+            self.emit.print(")");
+            self.emit.print(op_str);
+            self.emit.print("(");
+            self.emit_block_condition_rpn(&second);
+            self.emit.print(")");
+            return;
+        }
         let ops = block.get_ops();
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
