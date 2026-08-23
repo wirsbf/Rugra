@@ -3459,6 +3459,37 @@
         "jumptable::JumpBasic::calc_range",
         "jumptable::JumpBasic::mark_model"
       ]
+    },
+    {
+      "id": "typefactory_codeflags_decode_1204",
+      "description": "decodeTypeWithCodeFlags chain vs locked 12.0.4: empirically verified always-throw for nested pointer->code XML (decodeCode private, dead WORDSIZE loop), flag-indifference byte-for-byte over 4 combinations, cursor partial states, decodeStub/decodePrototype/resolveIncompleteTypedefs paths, verbatim 'Bad size for type' throws (89/89 MATCH)",
+      "runner": [
+        "tools/run_typefactory_codeflags_decode_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/typefactory_codeflags_decode_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/typefactory_codeflags_decode_1204.cc",
+          "rust_fixture": "tests/oracle/typefactory_codeflags_decode_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "TypeFactory::decodeTypeWithCodeFlags",
+        "TypeCode::decodeStub",
+        "TypeCode::decodePrototype"
+      ],
+      "rust_function_ids": [
+        "typefactory::TypeFactory::decode_type_with_code_flags",
+        "datatype::TypeCode::decode_stub",
+        "datatype::TypeCode::decode_prototype"
+      ]
     }
   ]
 }
