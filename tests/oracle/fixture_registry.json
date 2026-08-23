@@ -3176,6 +3176,39 @@
         "comment::CommentSorter::setup_header",
         "comment::CommentSorter::find_position"
       ]
+    },
+    {
+      "id": "rule_collapse_constants_1204",
+      "description": "RuleCollapseConstants full-opcode folding vs locked 12.0.4: integer truncation family, shifts incl. overlarge SRIGHT, PIECE/SUBPIECE, ZEXT/SEXT/2COMP/NEGATE/POPCOUNT/LZCOUNT, BOOL_*, compares/carries, 21 FLOAT_* (4/8 byte incl. FLOAT2FLOAT), error paths (div-zero/ternary/missing float format -> nocollapse), guards, true EquateSymbol propagation (11/11 MATCH)",
+      "runner": [
+        "tools/run_rule_collapse_constants_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/rule_collapse_constants_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/rule_collapse_constants_1204.cc",
+          "rust_fixture": "tests/oracle/rule_collapse_constants_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "RuleCollapseConstants::applyOp",
+        "PcodeOp::collapse",
+        "TypeOp::evaluateUnary",
+        "TypeOp::evaluateBinary"
+      ],
+      "rust_function_ids": [
+        "ruleaction::RuleCollapseConstants::apply_op",
+        "op::PcodeOp::collapse",
+        "typeop::evaluate_unary",
+        "typeop::evaluate_binary"
+      ]
     }
   ]
 }

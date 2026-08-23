@@ -86,7 +86,7 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | DONE | 7163dec→a5ceae7 | 机制C APPROVE，fixture 4→11 记录升 MATCH |
 | PRINTC-UNLINKED-REF-0001（printc 域） | DONE | b155b8a→fcc20d2 | 机制 B 门禁通过：E2E defects=0/numbering=0（skeleton 8679，注入组 117→45 行，glob_url 恢复丢失语句与 golden 同形）；68反编译/8超时=共享负载（前后自测一致），wave 收尾低负载复验；残差两件归 varmap 域（explicit 符号化 + 命名期类型前缀）；B2 fixture 待建 |
 | TYPEFACTORY-LOCALTYPE-CACHE-0001 | REVIEW | f0a7829+9ee59ab（220/220 MATCH，原99字节保持） | 复核进行中；Cross-Review PENDING |
-| RULE-PORT-COLLAPSECONSTANTS-0001 | REVIEW | e9a850d+6399c08（11/11 MATCH；E2E 骨架 1714→1710 全朝 Ghidra 收敛，双差分门禁 defects=0/numbering=0） | 白名单复核进行中 |
+| RULE-PORT-COLLAPSECONSTANTS-0001 | DONE | e9a850d+6399c08→b94e7f4+01aafa2 | 机制C APPROVE（72-live-opcode 独立验证、EquateSymbol 真符号公证、复核者重读全部引用行）；ruleaction:: 180/180；fixture 93；组合树 E2E 差分跑批中；残差=VARNODE-COPYSYMBOL-EQUATE/FLOAT-OPINT2FLOAT-SIGN/OPBEHAVIOR-SRIGHT-SIZEMASK |
 | JUMPTABLE-GUARDS-0001 | REVIEW | 07be5cb+2f84e7e（3/6 MATCH，3 MISMATCH 全归因租约外 RANGE-PULLBACK-SLESS/FUNCDATA-CALCNZM；jumptable:: 27/27） | 白名单复核进行中 |
 | SCOPELOCAL-QUERY-0001 r2 | REVIEW | 3bea8db+31f4046（11/11 MATCH） | varmap 白名单，复核进行中；E2E 差分随 root 跑批 |
 
