@@ -922,7 +922,7 @@ BlockGraph 新增：
 
 ### 2026-07-01：CBRANCH 出边 + 支配查询（解锁 RuleConditionalMove/Int2FloatCollapse/IgnoreNan）
 - `FlowBlock::dominates(other)`（block.cc:386-395）— 沿 immed_dom 链上溯判断支配。
-- `FlowBlock::get_true_out(cbranch)/get_false_out(cbranch)`（block.hh:299-300）— 按 BOOLEAN_FLIP 重映射 CBRANCH 真/假出边（Rugra out[0]=taken,out[1]=fallthru；flip 时翻转）。
+- `FlowBlock::get_true_out(cbranch)/get_false_out(cbranch)`（block.hh:299-300）— **2026-08-23 CONDEXE-TRUEOUT-0002 修正为纯位置语义**：`get_false_out()=out[0]`、`get_true_out()=out[1]`，与 Ghidra 逐字一致，**不读 BOOLEAN_FLIP**。Rugra 流构造（flow.rs:920-928，同 flow.cc:960-967）先压 fallthru 再压 branch，因此 out[0]=false 路径、out[1]=true 路径，与 Ghidra 布局相同；negateCondition（block.cc:2351）翻转 flip 同时交换两条出边以维持该不变量。BOOLEAN_FLIP 只在显式调用点消费（condexe.cc:612、expression.cc:227-230、ruleaction.cc:8981/9428、coreaction.cc:4538、double.cc:922）。`cbranch` 形参已废弃（纯位置实现忽略之），仅为带租约消费文件（ruleaction.rs）保持签名兼容，租约释放后应移除。
 - `FlowBlock::get_in_rev_index(slot)` trait 方法（block.hh:308）— 入边的反向索引。
 - `find_condition(bl1,edge1,bl2,edge2)` 自由函数（block.cc:839-858）— 返回支配两路径的 CBRANCH 块 + slot1。解锁 RuleInt2FloatCollapse 核心。
 

@@ -1543,16 +1543,18 @@ impl SplitVarnode {
 
     // Ghidra: double.cc:916 SplitVarnode::getTrueFalse
     /// For the given CBRANCH PcodeOp, pass back the true and false basic
-    /// blocks. (`getTrueFalse`, double.cc:916)
+    /// blocks. (`getTrueFalse`, double.cc:916-930)
     pub fn get_true_false(
         boolop: &OpArc,
         flip: bool,
     ) -> (Option<BlockArc>, Option<BlockArc>) {
         // double.cc:920-921: trueblock = parent->getTrueOut();
         //                    falseblock = parent->getFalseOut();
-        // Rugra's FlowBlock trait exposes get_true_out/get_false_out which, like
-        // Ghidra, read the CBRANCH's boolean-flip flag to pick the right out-edge.
-        // double.cc:922 then optionally swaps the pair based on `flip`.
+        // Both are purely positional (block.hh:299-300: out[1]/out[0],
+        // never reading BOOLEAN_FLIP). double.cc:922-928 then swaps the pair
+        // iff the CBRANCH's own isBooleanFlip() differs from the caller's
+        // `flip` request — the flip is consumed HERE, once, at the call site.
+        let boolop_flip = boolop.read().unwrap().is_boolean_flip();
         let parent = boolop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
         let parent = match parent {
             Some(p) => p,
@@ -1561,7 +1563,7 @@ impl SplitVarnode {
         let pg = parent.read().unwrap();
         let trueblock = pg.get_true_out(&PcodeOpRef(boolop.clone()));
         let falseblock = pg.get_false_out(&PcodeOpRef(boolop.clone()));
-        if flip {
+        if boolop_flip != flip {
             (falseblock, trueblock)
         } else {
             (trueblock, falseblock)

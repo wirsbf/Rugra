@@ -81,14 +81,25 @@ postb），并通过把读推入正确路径来保留 MULTIEQUAL 数据流。
 
 ## 已知限制
 
-1. **边顺序适配**：Rugra CBRANCH 出边为 `[branch_target, fallthru]`，Ghidra 为
-   `[falseOut, trueOut]`。`is_true_out_to` / `discover_path_is_true` 通过 `BOOLEAN_FLIP`
-   标志适配，但若 lift 阶段边顺序未来改变需同步调整。
+1. ~~**边顺序适配**~~ **已修复（2026-08-23，CONDEXE-TRUEOUT-0002）**：Rugra CBRANCH
+   出边实际为 `[fallthru, branch_target]`（flow.rs:920-928，同 flow.cc:960-967），
+   与 Ghidra `[falseOut, trueOut]` 布局相同，无需任何 flip 适配。
+   `is_true_out_to` 已删除（其 flip 重映射是多余翻转，`find_init_pre` 现内联
+   condexe.cc:72 的纯位置比较）；`discover_path_is_true` 改纯位置
+   getTrueOut/getFalseOut（condexe.cc:575-582）。BOOLEAN_FLIP 的合法消费点只剩
+   `discover_conditional_zero`（condexe.cc:612-613）与 `verify_same_condition`
+   的 matchflip 合成（expression.cc:227-230），各恰好一次。
 2. **heritageyes 近似**：Rugra 全局跑一次 heritage，buildHeritageArray 近似为
    所有空间已 heritage（匹配 Ghidra post-heritage 行为）。
 3. **真实二进制未触发**：curl/httpd 的函数恰好无 `if(a){}if(a){}` 或
    `cond ? val : 0` 谓词模式，故 apply 返回 NO_CHANGE（正确行为）。算法正确性由
    单元测试守护。
+
+**fixture 可观测胶水（RUGRA-GLUE，2026-08-23）**：`ConditionalExecution::fixture_find_init_pre`
+/ `fixture_verify`、`RuleOrPredicate::fixture_discover_path_is_true` —
+供 locked oracle fixture（tests/oracle/condexe_trueout_1204）在隔离状态下驱动
+私有阶段并观察 init2a_true / camethruposta_slot / zero_path_is_true；Ghidra 侧经
+`#define private public` 读取同一批私有成员。
 
 ## 2026-06-27（续）：RuleOrPredicate 完整移植（condexe.cc:509-712）
 
