@@ -6,6 +6,7 @@
  * production namespace -> FunctionSymbol -> Funcdata -> ScopeLocal chain:
  *
  *   Database::attachScope             database.cc:2946-2971
+ *   Database::findCreateScope         database.cc:3078-3087
  *   Scope::addFunction                database.cc:1615-1631
  *   FunctionSymbol::getFunction       database.cc:557-564
  *   Funcdata::Funcdata                funcdata.cc:34-82
@@ -140,6 +141,24 @@ void runGraphAndFailures(FixtureArchitecture &arch,vector<string> &events)
   Database *db = arch.symboltab;
   Scope *global = db->getGlobalScope();
   AddrSpace *ram = arch.getDefaultCodeSpace();
+
+  const uint8 factoryId = 0x12040002;
+  Scope *factoryScope = db->findCreateScope(
+      factoryId,"factory_ns",global);
+  Scope *factoryAgain = db->findCreateScope(
+      factoryId,"ignored_name",global);
+  std::cout
+      << "case=find_create_scope"
+      << "|id_matches=" << (factoryScope->getId() == factoryId)
+      << "|resolver_alias=" <<
+          (db->resolveScope(factoryId) == factoryScope)
+      << "|repeat_alias=" << (factoryAgain == factoryScope)
+      << "|name_preserved=" <<
+          (factoryAgain->getName() == "factory_ns")
+      << "|parent_id=" << factoryAgain->getParent()->getId()
+      << "|parent_child_alias=" <<
+          (global->resolveScope("factory_ns",false) == factoryScope)
+      << '\n';
 
   const uint8 namespaceId = 0x12040001;
   ProbeScope *nameSpace = new ProbeScope(

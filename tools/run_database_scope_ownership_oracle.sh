@@ -496,10 +496,13 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 expected = metadata["expected_results"]
+hash_drifts = []
 for key, path in paths.items():
     actual = sha(path)
     if expected[key] != actual:
-        raise SystemExit(f"registered {key} drifted: {actual}")
+        hash_drifts.append(f"{key}={actual}")
+if hash_drifts:
+    raise SystemExit("registered output hashes drifted: " + " ".join(hash_drifts))
 for key, actual in (
     ("ghidra_exit_code", int(sys.argv[7])),
     ("rugra_exit_code", int(sys.argv[8])),
@@ -537,6 +540,18 @@ for key in (
 ):
     if by_case["build_database"][key] != "1":
         raise SystemExit(f"build_database.{key} is not true")
+for side, case in (
+    ("Ghidra", by_case["find_create_scope"]),
+    ("Rugra", {record["case"]: record for record in rugra}["find_create_scope"]),
+):
+    for key in (
+        "id_matches", "resolver_alias", "repeat_alias", "name_preserved",
+        "parent_child_alias",
+    ):
+        if case[key] != "1":
+            raise SystemExit(f"{side} find_create_scope.{key} is not true")
+    if case["parent_id"] != "0":
+        raise SystemExit(f"{side} find_create_scope.parent_id is not global")
 for key in (
     "symbol_scope_alias", "function_cached_alias", "function_symbol_backref",
     "function_arch_alias", "local_resolver_alias", "local_parent_alias",
@@ -570,6 +585,15 @@ if any(constructor[key] != "0" for key in (
     "funcdata_local_scope_present",
 )):
     raise SystemExit("Rugra missing-capability constructor prestate drifted")
+missing = rugra_by_case["missing_capability"]
+if "explicit_scope_id_attach" in missing:
+    raise SystemExit("find_create_scope exists; explicit-id attach must not be reported missing")
+for key in (
+    "caller_owned_scope_identity_attach",
+    "caller_owned_scope_failure_contract",
+):
+    if missing.get(key) != "missing":
+        raise SystemExit(f"Rugra missing capability {key} drifted")
 if rugra_by_case["overall"]["status"] != "MISMATCH":
     raise SystemExit("Rugra overall status must remain MISMATCH")
 if paths["ghidra_stderr_sha256"].read_bytes() or paths["rugra_stderr_sha256"].read_bytes():
