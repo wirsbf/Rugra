@@ -14,10 +14,10 @@
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
   },
   "rugra_source": {
-    "base_commit": "3bea8db14db2542774c982d883b9a1e11c178a2f",
-    "base_tree": "04ae0a2fb22b6e510e2142d53f37904af8c8a2d8",
-    "base_src_tree": "0a240c9267b64859d49c53b7d58d9c45b0fe7a17",
-    "base_varmap_blob": "cad8528d5904091cdbf0ec0589ce6b3a4bf26faf",
+    "base_commit": "297ba6cf7d1c29ebd2ba4f5b0cd835246518a6c6",
+    "base_tree": "dfe9e4a2ed03cf4cf7f56fb78abe4f5918e14f28",
+    "base_src_tree": "06e4e8ff6836a5c21acd8f09650c7f359c0c67ff",
+    "base_varmap_blob": "481ae724704849880479e997968dcec69cd6c7fe0a5bd7121a58a5806e144f17",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
@@ -25,8 +25,8 @@
   "comparand": {
     "cpp_fixture_sha256": "b16dd2b026859863e83ef4b6b23b2421596f45fbab3f48fe83921215374054e5",
     "rust_fixture_sha256": "a025041ee6a74084943400d682ce4b698d6579f9554be690f7f929713da78c82",
-    "varmap_overlay_sha256": "9679d2432418c656b4a81b1e35091756a397e54d98f6d81eb3222af287baadf8",
-    "api_document_sha256": "5bfbf4ab7cc1b9afe3d4e3a55067964b796786b36bfba1290d32a8ee8de2e478",
+    "varmap_overlay_sha256": "481ae724704849880479e997968dcec69cd6c7fe0a5bd7121a58a5806e144f17",
+    "api_document_sha256": "37089dd4bfc578ac7071356ea82828826a16b4219e46578d6730b79b9a09f7b0",
     "runner_sha256": "ebbd446e3fdb67632920650e0ad204ec19afe378ce269d3fd49136d2448bbfb6"
   },
   "assets": {
