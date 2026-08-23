@@ -7,6 +7,8 @@
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/comment.{hh,cc}.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::address::Address;
 use crate::block::FlowBlock;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
@@ -31,7 +33,7 @@ pub mod comment_type {
 
 /// A comment attached to a specific function and code address. Faithful to
 /// `Comment` (comment.hh:43).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Comment {
     /// The properties associated with the comment.
     pub type_flags: u32,
@@ -43,8 +45,32 @@ pub struct Comment {
     pub addr: Address,
     /// The body of the comment.
     pub text: String,
-    /// True if this comment has already been emitted.
-    pub emitted: bool,
+    /// True if this comment has already been emitted. Interior-mutable to
+    /// mirror Ghidra's `mutable bool emitted` (comment.hh:50), which
+    /// `setEmitted` mutates through a const receiver (comment.hh:63) —
+    /// `PrintLanguage::emitLineComment` marks comments emitted while the
+    /// sorter walks them const (printlanguage.cc:648). `AtomicBool` (not
+    /// `Cell<bool>`) because `Funcdata` reaches a `Sync` bound through
+    /// `ffi.rs`'s `Mutex<Option<Funcdata>>` lazy_static global; `Relaxed`
+    /// orderings keep plain-bool semantics.
+    pub emitted: AtomicBool,
+}
+
+// RUGRA-GLUE: field-wise Clone for the AtomicBool `emitted` member (C++'s
+// implicit copy constructor copies the bool verbatim; AtomicBool has no
+// Clone impl, so the current flag value is re-loaded into the copy).
+impl Clone for Comment {
+    // RUGRA-GLUE: std::clone::Clone trait impl — Rust language structure.
+    fn clone(&self) -> Self {
+        Self {
+            type_flags: self.type_flags,
+            uniq: self.uniq,
+            funcaddr: self.funcaddr,
+            addr: self.addr,
+            text: self.text.clone(),
+            emitted: AtomicBool::new(self.emitted.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl Comment {
@@ -58,7 +84,7 @@ impl Comment {
             funcaddr: fad,
             addr: ad,
             text: txt.to_string(),
-            emitted: false,
+            emitted: AtomicBool::new(false),
         }
     }
 
@@ -71,20 +97,21 @@ impl Comment {
             funcaddr: Address::new(0),
             addr: Address::new(0),
             text: String::new(),
-            emitted: false,
+            emitted: AtomicBool::new(false),
         }
     }
 
-    // Ghidra: comment.cc:30 Comment::setEmitted
-    /// Mark that this comment has been emitted. Faithful to `setEmitted`.
-    pub fn set_emitted(&mut self, val: bool) {
-        self.emitted = val;
+    // Ghidra: comment.hh:63 Comment::setEmitted
+    /// Mark that this comment has been emitted. Faithful to `setEmitted`
+    /// (const method on a `mutable` field, comment.hh:50/63).
+    pub fn set_emitted(&self, val: bool) {
+        self.emitted.store(val, Ordering::Relaxed);
     }
 
     // Ghidra: comment.cc:30 Comment::isEmitted
     /// Return true if this comment is already emitted.
     pub fn is_emitted(&self) -> bool {
-        self.emitted
+        self.emitted.load(Ordering::Relaxed)
     }
 
     // Ghidra: comment.cc:30 Comment::getType
@@ -140,7 +167,7 @@ impl Comment {
     /// Decode the comment from a stream. Faithful to `Comment::decode`
     /// (comment.cc:57).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) -> Result<()> {
-        self.emitted = false;
+        self.emitted = AtomicBool::new(false);
         self.type_flags = 0;
         let comment_id = decoder.open_element();
         // Read type attribute.
@@ -685,7 +712,7 @@ impl CommentSorter {
 
         for comm in db.comments_for_function(fd_addr) {
             if self.find_position(&mut subsort, comm, fd)? {
-                let mut placed = comm.clone();
+                let placed = comm.clone();
                 placed.set_emitted(false);
                 self.comments.push(placed);
                 let idx = self.comments.len() - 1;
@@ -773,61 +800,6 @@ impl CommentSorter {
         let res = &self.comments[self.commmap[rank].1];
         self.start.set(rank + 1);
         res
-    }
-
-    // RUGRA-GLUE: legacy Vec snapshot for printc.rs consumers
-    // (emit_comment_block_tree / emit_comment_group) that predate the
-    // setup_block_bounds/setup_op_stop/has_next/get_next state machine.
-    // Drives the faithful machine (setupBlockList + setupOpList(NULL)) and
-    // drains it, so the returned Vec is exactly the comments the oracle would
-    // walk for that block. Migration to the direct protocol is tracked by
-    // COMMENT-SORTER-ITERATORS-0001's printc follow-up.
-    /// Snapshot of every comment placed in the given basic block, in
-    /// (order, pos) order.
-    pub fn setup_block_list(&self, block_index: u32) -> Vec<&Comment> {
-        self.setup_block_bounds(block_index as i32);
-        self.setup_op_stop(None);
-        let mut out = Vec::new();
-        while self.has_next() {
-            out.push(self.get_next());
-        }
-        out
-    }
-
-    // RUGRA-GLUE: legacy Vec snapshot for printc.rs's emit_comment_group
-    /// Snapshot of every comment in the given basic block at or before the
-    /// given op order landmark, in (order, pos) order.
-    pub fn setup_op_list(&self, block_index: u32, op_order: u32) -> Vec<&Comment> {
-        self.setup_block_bounds(block_index as i32);
-        let landmark = Subsort {
-            index: block_index as i32,
-            order: op_order,
-            pos: 0xffffffff,
-        };
-        self.opstop.set(self.upper_bound_rank(&landmark));
-        let mut out = Vec::new();
-        while self.has_next() {
-            out.push(self.get_next());
-        }
-        out
-    }
-
-    // RUGRA-GLUE: legacy header predicate for printc.rs's
-    /// emit_comment_func_header snapshot path.
-    /// Return true if any header comment (index == -1) is placed.
-    pub fn has_header_comments(&self) -> bool {
-        self.commmap.iter().any(|(k, _)| k.index == -1)
-    }
-
-    // RUGRA-GLUE: legacy header snapshot for printc.rs's
-    /// emit_comment_func_header (yields both header_basic and
-    /// header_unplaced subsorts; the consumers apply the type masks).
-    /// Iterate over all header comments (basic + unplaced).
-    pub fn header_comments(&self) -> impl Iterator<Item = &Comment> {
-        self.commmap
-            .iter()
-            .filter(|(k, _)| k.index == -1)
-            .map(|(_, idx)| &self.comments[*idx])
     }
 }
 
@@ -1168,11 +1140,18 @@ mod tests {
             .unwrap();
         // The header comment places at header_basic (index == -1); the
         // warning at 0x2000 has no ops to place against and
-        // displayUnplacedComments is false, so it is excised.
-        assert!(sorter.has_header_comments());
-        let headers: Vec<_> = sorter.header_comments().cloned().collect();
-        assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].get_text(), "Function header");
+        // displayUnplacedComments is false, so it is excised. The
+        // setupHeader(header_basic) window (comment.cc:394-404) walks only
+        // the (-1, header_basic, *) keys.
+        sorter.setup_header(header_type::HEADER_BASIC);
+        let mut headers = Vec::new();
+        while sorter.has_next() {
+            headers.push(sorter.get_next().get_text().to_string());
+        }
+        assert_eq!(headers, vec!["Function header"]);
+        // The header_unplaced window is empty (nothing was excised into it).
+        sorter.setup_header(header_type::HEADER_UNPLACED);
+        assert!(!sorter.has_next());
     }
 
     #[test]
@@ -1307,9 +1286,13 @@ mod tests {
     }
 
     #[test]
-    fn test_comment_sorter_legacy_glue_snapshots() {
-        // The Vec adapters must keep producing the exact pre-state-machine
-        // snapshots: full block drain and order<=landmark prefix.
+    fn test_comment_sorter_direct_protocol_walks() {
+        // The printc.rs consumers (emit_comment_block_tree /
+        // emit_comment_group) drive the state machine directly since the
+        // legacy Vec snapshots were removed: a block drain is
+        // setup_block_bounds + setup_op_stop(None) (the cc:3265-3266 form),
+        // and successive op landmarks narrow opstop while start persists
+        // (the cc:3234 interleaving protocol).
         let ram = ram_space();
         let fd_addr = Address::with_space(&ram, 0x1000);
         let mut fd = crate::funcdata::Funcdata::new("test", fd_addr, 16);
@@ -1319,11 +1302,11 @@ mod tests {
                 Address::with_space(&ram, 0x1000),
             )));
         fd.bblocks.add_block(bb0.clone());
-        let mut op_orders = Vec::new();
+        let mut ops = Vec::new();
         for off in [0x1000u64, 0x1005, 0x100a] {
             let op = fd.new_op(0, Address::with_space(&ram, off));
             fd.op_insert_end(&op, &bb0);
-            op_orders.push(op.0.read().unwrap().get_seq_num().order);
+            ops.push(op);
         }
         let mut db = CommentDatabaseInternal::new();
         let mut c = |ad: u64, txt: &str| {
@@ -1341,20 +1324,54 @@ mod tests {
         sorter
             .setup_function_list(0xffff_ffff, &fd, &db, false)
             .unwrap();
-        let drain: Vec<_> = sorter
-            .setup_block_list(0)
-            .into_iter()
-            .map(|c| c.get_text().to_string())
-            .collect();
+        // Full block drain: setup_block_bounds(0) + setup_op_stop(None).
+        sorter.setup_block_bounds(0);
+        sorter.setup_op_stop(None);
+        let mut drain = Vec::new();
+        while sorter.has_next() {
+            drain.push(sorter.get_next().get_text().to_string());
+        }
         assert_eq!(drain, vec!["a", "b", "d"]);
-        // Landmark prefix resets from the block start each call (legacy
-        // snapshot semantics preserved).
-        let up_to_second: Vec<_> = sorter
-            .setup_op_list(0, op_orders[1])
-            .into_iter()
-            .map(|c| c.get_text().to_string())
-            .collect();
-        assert_eq!(up_to_second, vec!["a", "b"]);
+        // Interleaved landmarks: setup_block_bounds resets start to the
+        // block window, then each op landmark emits only the comments at or
+        // before it (comment.cc:362-374, start persists across landmarks).
+        sorter.setup_block_bounds(0);
+        let mut seq = Vec::new();
+        for op in &ops {
+            sorter.setup_op_stop(Some(op));
+            while sorter.has_next() {
+                seq.push(sorter.get_next().get_text().to_string());
+            }
+        }
+        sorter.setup_op_stop(None);
+        while sorter.has_next() {
+            seq.push(format!("null:{}", sorter.get_next().get_text()));
+        }
+        assert_eq!(seq, vec!["a", "b", "d"]);
+    }
+
+    #[test]
+    fn test_comment_emitted_interior_mutability() {
+        // `mutable bool emitted` (comment.hh:50): setEmitted works through a
+        // shared reference, so the sorter's walk (const getNext) plus
+        // PrintLanguage::emitLineComment's comm->setEmitted(true)
+        // (printlanguage.cc:648) reproduce the oracle's shared-flag
+        // double-emission guard.
+        let mut comm = Comment::new(
+            comment_type::WARNING,
+            Address::new(0x1000),
+            Address::new(0x2000),
+            0,
+            "w",
+        );
+        let shared = &comm;
+        assert!(!shared.is_emitted());
+        shared.set_emitted(true);
+        assert!(shared.is_emitted());
+        shared.set_emitted(false);
+        assert!(!shared.is_emitted());
+        comm.set_emitted(true);
+        assert!(comm.is_emitted());
     }
 }
 
