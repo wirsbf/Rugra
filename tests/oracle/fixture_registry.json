@@ -3490,6 +3490,39 @@
         "datatype::TypeCode::decode_stub",
         "datatype::TypeCode::decode_prototype"
       ]
+    },
+    {
+      "id": "float_int2float_sign_1204",
+      "description": "INT2FLOAT sign_extend + FLOAT2FLOAT convertEncoding bit-level vs locked 12.0.4: negative inputs across widths, junk-bit discard, RNE boundaries (i64 MIN/MIN+1/MAX), widening/narrowing with -0/negative-NaN/Inf/subnormal normalize, RNE tie and tie+1, underflow zero, DBL_MAX wraparound carry (36/36 MATCH)",
+      "runner": [
+        "tools/run_float_int2float_sign_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/float_int2float_sign_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/float_int2float_sign_1204.cc",
+          "rust_fixture": "tests/oracle/float_int2float_sign_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "OpInt2Float::evaluate",
+        "OpFloat2Float::evaluate",
+        "convertEncoding",
+        "round_to_nearest_even"
+      ],
+      "rust_function_ids": [
+        "float_emulate::op_int2float",
+        "float_emulate::op_float2_float",
+        "float_emulate::convert_encoding",
+        "float_emulate::round_to_nearest_even"
+      ]
     }
   ]
 }
