@@ -831,6 +831,22 @@ impl Action for ActionRestructureVarnode {
                 // at the top of every restructureVarnode pass.
                 scope.symbols[idx].namelock = true;
                 scope.symbols[idx].typelock = true;
+                // The locked parameter symbol also type-locks its storage
+                // varnode: Ghidra's Varnode::setSymbolEntry (varnode.cc:418)
+                // sets Varnode::typelock from the Symbol flags and
+                // syncVarnodesWithSymbol (funcdata_varnode.cc:983-1002)
+                // flows the symbol's Datatype onto the varnode. Rugra's
+                // sync only walks the stack space, so apply the type to the
+                // register input directly here.
+                let input_vn =
+                    fd.find_varnode_input(dtype.get_size(), crate::address::Address::new(offset));
+                if let Some(vn_arc) = input_vn {
+                    let mut vn = vn_arc.write().unwrap();
+                    if !vn.is_type_lock() {
+                        vn.v_type = Some(dtype.clone());
+                        vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+                    }
+                }
             }
         }
         // Install the register-name lookup standing in for
@@ -3312,8 +3328,12 @@ impl ActionSetCasts {
             .map(|h| h.read().unwrap().v_type.get())
             .or_else(|| outvn.read().unwrap().v_type.clone())
             .unwrap_or_else(|| tokenct.clone());
-        // cc:2544: if tokenct == outHighType → no cast needed.
-        if Arc::ptr_eq(&tokenct, &out_high_type) {
+        // cc:2544: if (tokenct == outHighType) → no cast needed. Ghidra
+        // compares interned TypeFactory pointers (identical canonical types
+        // are the same object); Rugra's Datatypes are not interned, so the
+        // equivalent is structural equality of base types
+        // (metatype+size+name).
+        if tokenct.type_equal(&out_high_type) {
             return 0;
         }
         // cc:2559-2582: implied varnode handling (deferred — needs full
@@ -3647,6 +3667,26 @@ impl ActionInferTypes {
         ptr_size: usize,
     ) {
         use crate::type_system::datatype::TypeMetatype;
+        // Ghidra buildLocaltypes (coreaction.cc:5012-5034) FIRST seeds every
+        // varnode's temp with its LOCAL type (`ct = vn->getLocalType(...);
+        // vn->setTempType(ct)`): this is how type-locked inputs (locked
+        // parameter symbols) and previously inferred types enter the
+        // propagation. The per-op arms below then refine from op semantics,
+        // matching Ghidra's getLocalType consulting the defining op.
+        for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
+            {
+                let vn = vn_arc.read().unwrap();
+                if vn.is_annotation() {
+                    continue;
+                }
+                if !vn.is_written() && vn.has_no_descend() {
+                    continue;
+                }
+                if let Some(ct) = vn.v_type.clone() {
+                    temps.insert(vn_id(&vn), ct);
+                }
+            }
+        }
         // Walk all live ops and seed temp types from op semantics. Mirrors the
         // per-op local-type inference Ghidra folds into Varnode::getLocalType.
         for op_ref in &fd.obank.alivelist {
@@ -3720,7 +3760,23 @@ impl ActionInferTypes {
                         let av = addr_in.read().unwrap();
                         let _ = space_in;
                         let ov = out.read().unwrap();
-                        let pointed = int_types.sized(ov.get_size());
+                        // If the address varnode already carries a pointer
+                        // type (e.g. a type-locked parameter), the load
+                        // output takes the pointed-to type — Ghidra's
+                        // TypeOpLoad::propagateType (typeop.cc:487-505)
+                        // input1→output edge. Fall back to the size-based
+                        // scalar otherwise.
+                        let addr_ptr_pointed = av
+                            .v_type
+                            .as_ref()
+                            .and_then(|t| match t.as_ref() {
+                                crate::type_system::datatype::Datatype::Pointer(pt) => {
+                                    Some(pt.ptr_to.clone())
+                                }
+                                _ => None,
+                            });
+                        let pointed = addr_ptr_pointed
+                            .unwrap_or_else(|| int_types.sized(ov.get_size()));
                         temps
                             .entry(vn_id(&av))
                             .and_modify(|e| {
@@ -3964,14 +4020,18 @@ impl ActionInferTypes {
                 None
             }
 
-            // Comparisons: bool output, no input propagation.
+            // TypeOpEqual::propagateAcrossCompare (typeop.cc:961-989):
+            // comparisons propagate ACROSS THE INPUTS only (`if (inslot == -1
+            // || outslot == -1) return 0`) — a typed operand lends its type
+            // to the sibling (so `value != 0` types the constant char*);
+            // the boolean output never participates.
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_INT_LESS
             | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESSEQUAL
             | OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_FLOAT_EQUAL
             | OpCode::CPUI_FLOAT_NOTEQUAL | OpCode::CPUI_FLOAT_LESS
             | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                if outslot == -1 {
-                    Some(int_types.bool.clone())
+                if inslot >= 0 && outslot >= 0 {
+                    Some(alttype.clone())
                 } else {
                     None
                 }

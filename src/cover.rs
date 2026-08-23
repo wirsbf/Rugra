@@ -978,6 +978,15 @@ impl Cover {
 
         let mut path = Vec::new();
         let mut pos = 0usize;
+        // Termination guard mirroring Ghidra's cover-based recursion bound:
+        // Cover::addRefPoint/addRefRecurse (cover.cc:549-612) only extend
+        // EMPTY or uncovered regions — a second visit to an already-covered
+        // block returns without recursing, so implied-varnode chains can
+        // never cycle. Rugra's explicit worklist has no such containment
+        // signal, so an explicit visited set on the implied outputs is the
+        // equivalent cycle bound (without it, mutually-reading implied
+        // varnodes X->Y->X loop forever).
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut descendants = root_descendants.clone();
         loop {
             for op_arc in descendants {
@@ -991,7 +1000,10 @@ impl Cover {
                         output.read().unwrap().is_implied()
                     };
                     if is_implied {
-                        path.push(output);
+                        let key = std::sync::Arc::as_ptr(&output) as usize;
+                        if visited.insert(key) {
+                            path.push(output);
+                        }
                     }
                 }
             }

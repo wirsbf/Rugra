@@ -1,5 +1,8 @@
 # `type_system/datatype.rs` API Reference
 
+**2026-08-23 新增**: `Datatype::type_equal`——Ghidra interned TypeFactory 指针比较（如 castOutput 的 `tokenct == outHighType` coreaction.cc:2544）的 Rust 等价：Base 型按 (name,size,metatype) 结构比较，其余形状退回 Arc 同一性。
+
+
 **源代码路径**: `src/type_system/datatype.rs`
 **Ghidra 对应**: `type.hh` / `type.cc` (`Datatype` 类层次)
 **状态**: 🔧 **L2 / overall MISMATCH（2026-08-23 residual 矩阵补齐）**——datatype 层的 submeta、公开虚派发 compare/compareDependency、Pointer state/space、PointerRel、TypeCode varargs/model/param/return/dependency、Array/Union/三个 Partial 全矩阵、Struct offset/dependency、Spacebase identity、1-byte Unicode 和全部 24 个 submetatype 值均有 12.0.4 行为证据；生产 TypeFactory 仍有 6 个已钉住差异，另有两个 same-kind AddrSpace 身份表示差异（Ghidra 裸指针 vs Rust enum），TypeCode null-output 边界与 struct 递归环/incomplete 转移仍未测，绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` / `TYPEFACTORY-SUBMETA-RECLASS-0001` / `DATATYPE-TYPEORDER-RESIDUAL-0001`，不能升 L3。

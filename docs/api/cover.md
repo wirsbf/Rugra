@@ -1,5 +1,8 @@
 # `cover.rs` API Reference
 
+**2026-08-23 修复（GETSTR-ZERODIFF-D）**: `rebuild_from_root_snapshot` 的 implied 输出遍历加 visited 集合（Arc 指针键）。Ghidra 的等价遍历（Cover::addRefPoint/addRefRecurse cover.cc:549-612）靠 cover 覆盖遏制递归——只扩展空/未覆盖区域，二次访问直接返回，implied 链不可能成环；Rugra 显式 worklist 无该信号，互读 implied varnode（X→Y→X）无限循环（my_fwrite/next_url 在参数 typelock 扩大同型合并组后实测 timeout）。
+
+
 **状态**: 核心语义已对齐（two-piece 回绕 + 指针身份域）；Ghidra 12.0.4 对齐级别 L2（oracle fixture `COVER-TWOPIECE-RESIDUAL-0001` 全 13 case `MATCH`）
 **源代码路径**: `src/cover.rs`
 
