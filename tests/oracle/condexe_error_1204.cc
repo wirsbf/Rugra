@@ -28,6 +28,19 @@
 //             init CBRANCH boolean): trial() returns false, apply() returns
 //             0 normally, NO exception, and the Funcdata is untouched.
 //   state E3  Full pre-state preserved (COPY + CBRANCH still in the iblock).
+//   pre  E4  The unreachable-guard case proves its own precondition first:
+//             the same E1 diamond (which WOULD abort without the guard) gets
+//             fd.structureReset() — the floating b6 (sizeIn()==0) makes
+//             findSpanningTree collect two roots, so funcdata_block.cc:713-714
+//             sets blocks_unreachable through the production path — and the
+//             cached flag is echoed as unreach=1 before apply() runs.
+//   ret  E4  ActionConditionalExe::apply hits the condexe.cc:485-486 guard
+//             and returns 0 IMMEDIATELY: no ConditionalExecution is
+//             constructed (cc:487), no trial/execute runs, NO exception —
+//             the pre-guard diamond is a guaranteed E1 abort, so only the
+//             guard can produce this clean return.
+//   state E4  Zero mutation: full pre-state preserved (COPY + CBRANCH still
+//             in the iblock, reader untouched, 2-in/2-out).
 //
 // E1/E2 inputs double as the doReplacement death-loop regression: the
 // resolve chain has no silent-null path in the oracle (it either returns a
@@ -381,12 +394,42 @@ void runVerifyFailCase(FixtureArchitecture &architecture)
   printState("E3",fd,d);
 }
 
+// E4: the condexe.cc:485-486 unreachable-blocks guard. The diamond is the E1
+// shape (same correlate=true, reader_dom_ib=true data flow that aborts with
+// the illegal-op LowlevelError when the guard is absent), but before apply()
+// the fixture runs the production flag-set path: structureReset's
+// findSpanningTree collects every sizeIn()==0 block as a root (block.cc:1028),
+// so the floating b6 yields TWO roots and funcdata_block.cc:713-714 sets
+// blocks_unreachable. The pre-line echoes the cached flag so a fixture bug
+// that failed to set it cannot pass the gate vacuously (an unset flag would
+// reproduce the E1 abort, not a clean ret).
+void runUnreachableGuardCase(FixtureArchitecture &architecture)
+{
+  AddrSpace *ram = architecture.getSpace(3);
+  Scope *global = architecture.symboltab->getGlobalScope();
+  Funcdata fd("E4","E4",global,Address(ram,0x60000),(FunctionSymbol *)0,0x100);
+  fd.heritage.buildInfoList();
+  Diamond d(fd,true,true);
+  fd.structureReset();
+  cout << "pre|case=E4|unreach=" << (fd.hasUnreachableBlocks() ? 1 : 0) << '\n';
+  ActionConditionalExe action("");
+  try {
+    int4 r = action.apply(fd);
+    cout << "ret|case=E4|apply=" << r << "|msg=none\n";
+  }
+  catch(const LowlevelError &error) {
+    cout << "err|case=E4|kind=lowlevel|msg=" << error.explain << '\n';
+  }
+  printState("E4",fd,d);
+}
+
 void run(void)
 {
   FixtureArchitecture architecture;
   runErrorCase(architecture,"E1",true);	// illegal iblock op (condexe.cc:261)
   runErrorCase(architecture,"E2",false);	// could not find dominator (condexe.cc:303)
   runVerifyFailCase(architecture);	// verify failure -> trial false, no change
+  runUnreachableGuardCase(architecture);	// unreachable blocks -> guard return 0 (condexe.cc:485-486)
 }
 
 } // namespace

@@ -3,8 +3,10 @@
 # ConditionalExecution error channel: resolveIblockRead's illegal-op throw
 # (condexe.cc:261), getReplacementRead's dominator-chain throw
 # (condexe.cc:303), doReplacement's descendant-progress invariant
-# (condexe.cc:320-357), execute's error propagation (condexe.cc:457-476) and
-# ActionConditionalExe::apply's abort protocol (condexe.cc:478-503), driven
+# (condexe.cc:320-357), execute's error propagation (condexe.cc:457-476),
+# ActionConditionalExe::apply's abort protocol (condexe.cc:478-503) and its
+# unreachable-blocks early return (condexe.cc:485-486, flag set through the
+# production structureReset path, funcdata_block.cc:713-714), driven
 # end-to-end through apply() on synthetic diamonds whose reader data-flow is
 # unresolvable. Pin-base schema2, modeled on
 # tools/run_condexe_pullback_oracle.sh with these deltas: base is the
@@ -184,7 +186,7 @@ require("projection", metadata["projection_status"], "MATCH")
 require("overall", metadata["overall_status"], "UNTESTED")
 expected_matches = {
     "error_illegal_iblock_op", "error_missing_dominator",
-    "verify_failure_no_change",
+    "verify_failure_no_change", "unreachable_guard_early_return",
 }
 expected_residuals = {
     "execute_flow_split_boundary",
@@ -331,6 +333,7 @@ expected_order = [
     "err:E1", "state:E1",
     "err:E2", "state:E2",
     "ret:E3", "state:E3",
+    "pre:E4", "ret:E4", "state:E4",
 ]
 if observed_order != expected_order:
     raise SystemExit(f"observation order mismatch: {observed_order}")
@@ -339,4 +342,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha2
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'condexe_error_1204: covered_projection=3/3 projection_status=MATCH overall_status=UNTESTED residual=CFG-0001\n'
+printf 'condexe_error_1204: covered_projection=4/4 projection_status=MATCH overall_status=UNTESTED residual=CFG-0001\n'

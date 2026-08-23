@@ -4,10 +4,11 @@
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
 **状态**: 🔧 **L2（2026-08-23 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002）、
 pullbackOp storage/插入位置（CONDEXE-PULLBACK-0005，`condexe_pullback_1204`
-5/5 MATCH）与错误通道（CONDEXE-ERROR-0006，resolve 链 Result 化 + 逐字
-LowlevelError + doReplacement 死循环消灭，`condexe_error_1204` 3/3 MATCH）已对齐；
-`remove_from_flow_split` 映射相反且一支可越界（CFG-0001）、Action
-guard/count/stage 仍未对齐，故保持 L2。
+5/5 MATCH）、错误通道（CONDEXE-ERROR-0006，resolve 链 Result 化 + 逐字
+LowlevelError + doReplacement 死循环消灭）与 apply 的 unreachable-blocks
+前置返回（CONDEXE-UNREACHGUARD-0001，condexe.cc:485-486，`condexe_error_1204`
+4/4 MATCH）已对齐；`remove_from_flow_split` 映射相反且一支可越界（CFG-0001）、
+Action count/stage 统计仍未对齐，故保持 L2。
 
 ## 模块说明
 
@@ -185,16 +186,48 @@ newVarnodeOut 地址保留（condexe.cc:340-349）留待同一后续任务。
 
 **fixture**：`tests/oracle/condexe_error_1204`（.cc/.rs/.metadata.json）+
 `tools/run_condexe_error_oracle.sh`（pin-base schema2，base e6b4ec0 + 单
-src/condexe.rs overlay）。经 `ActionConditionalExe::apply` 全协议驱动三类错误：
+src/condexe.rs overlay）。经 `ActionConditionalExe::apply` 全协议驱动四类观察：
 E1 非法 iblock op（cc:261）、E2 断链 dominator（cc:303）、E3 verify 失败
-（条件不相关 → trial false → apply 正常返回 0、零状态变化）。E1/E2 双侧断言
+（条件不相关 → trial false → apply 正常返回 0、零状态变化）、E4
+unreachable-blocks 前置返回（CONDEXE-UNREACHGUARD-0001）。E1/E2 双侧断言
 逐字错误消息 + 中止点部分状态（逐块 op 存量、iblock 仍在图中 2in/2out、
 出错 op 存活、其后继读未动）；E1 输入同时是死循环回归（旧代码该输入死循环）。
-6/6 记录双侧字节一致。
+E4 用 E1 形状的 diamond 先跑 `structure_reset`（浮动 b6 无入边 →
+findSpanningTree 收集双根 → funcdata_block.cc:713-714 经**正规途径**置
+blocks_unreachable；pre 记录回显 unreach=1 防御 flag 未置位的空转通过），
+apply 触发 cc:485-486 守卫**立即**返回 0：零构造、零 trial、零状态变化、
+numhits 保持 0（cc:501 的 count 累加被短路）。负对照：去掉守卫的 Rust 在
+E4 复现 E1 中止（err kind=lowlevel），即守卫是唯一行为翻转点。
+9/9 记录双侧字节一致。
 
 **新增单元测试**：`test_apply_aborts_illegal_iblock_op`、
 `test_apply_aborts_missing_dominator`（逐字消息 + 部分状态 + 终止性）、
-`test_apply_verify_failure_no_change`。
+`test_apply_verify_failure_no_change`、
+`test_apply_unreachable_blocks_early_return`（CONDEXE-UNREACHGUARD-0001：
+flag 置位 → apply 立即返回 0、零状态变化）。
+
+## 2026-08-23（CONDEXE-UNREACHGUARD-0001）：apply 的 unreachable-blocks 前置返回
+
+condexeerr 复核发现 `ActionConditionalExe::apply` 缺 oracle condexe.cc:485-486
+的前置守卫。已接线：
+
+```rust
+if fd.has_unreachable_blocks() {
+    return Ok(action_status::NO_CHANGE);
+}
+```
+
+对齐要点（condexe.cc:478-503 逐行核对）：
+- **位置**：守卫是 apply 首条语句，先于 `ConditionalExecution` 构造（cc:487）
+  与 do-while 轮循环（cc:490）——只读 `Funcdata::hasUnreachableBlocks()`
+  （funcdata.hh:149，缓存位由 `structure_reset` 维护，
+  funcdata_block.cc:710/714），零状态变化。
+- **返回值**：oracle `return 0` ↔ `Ok(action_status::NO_CHANGE)`（=0），
+  与正常完成路径同值。
+- **计数器**：cc:501 的 `count += numhits` 被短路——numhits 保持 0，
+  Action::count 不更新（Rugra 侧本就无 count 状态，语义空变）。
+- **oracle 注释**："Conditional execution elimination logic may not work
+  with unreachable blocks"。
 
 ## 2026-06-27（续）：RuleOrPredicate 完整移植（condexe.cc:509-712）
 
@@ -226,12 +259,13 @@ condexe.cc 的第二部分，一个独立的 Rule，处理谓词构造：
 
 ## 测试
 
-`condexe::tests`（14 个）：action_name、correlation_constants、varnode_same_identity、
+`condexe::tests`（15 个）：action_name、correlation_constants、varnode_same_identity、
 apply_on_empty_fd、boolean_match_same_condition、trial_rejects_unrelated_conditions、
 rule_or_predicate_rejects_plain_input、rule_or_predicate_opcodes、compare_order_basic、
 rule_or_predicate_trait_name_and_opcodes、rule_or_predicate_trait_apply_no_form、
 apply_aborts_illegal_iblock_op、apply_aborts_missing_dominator、
-apply_verify_failure_no_change（后三个为 CONDEXE-ERROR-0006 错误通道回归）。
+apply_verify_failure_no_change（后三个为 CONDEXE-ERROR-0006 错误通道回归）、
+apply_unreachable_blocks_early_return（CONDEXE-UNREACHGUARD-0001 守卫回归）。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 
 ### 2026-07-01（管线改造）：ActionConditionalExe apply &self→&mut self

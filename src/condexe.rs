@@ -1575,6 +1575,9 @@ impl ActionConditionalExe {
 impl Action for ActionConditionalExe {
     // Ghidra: condexe.cc:478 ActionConditionalExe::apply
     /// Faithful to `ActionConditionalExe::apply` (condexe.cc:478-503):
+    ///   - unreachable-blocks guard FIRST: return 0 before anything is
+    ///     constructed or mutated (cc:485-486; the cached flag is maintained
+    ///     by structureReset, funcdata_block.cc:710/714)
     ///   - constructs ONE ConditionalExecution outside the loop (cc:487)
     ///   - do-while outer loop until no change (cc:490-500)
     ///   - for inner loop over ALL bblocks, NO break on hit (cc:492-499)
@@ -1587,6 +1590,16 @@ impl Action for ActionConditionalExe {
     /// Rust port propagates the same failure as `Err` from apply
     /// (ActionGroup::apply aborts on `?`, action.rs), never swallowing it.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // cc:485-486: "Conditional execution elimination logic may not work
+        // with unreachable blocks" — return 0 immediately. The early return
+        // precedes the ConditionalExecution construction (cc:487), so the
+        // Funcdata suffers ZERO mutation and `count += numhits` (cc:501) is
+        // skipped: on this path numhits stays 0 and Action::count is never
+        // touched. The flag is the cached blocks_unreachable bit maintained
+        // by structureReset (funcdata_block.cc:710/714, rootlist.size() > 1).
+        if fd.has_unreachable_blocks() {
+            return Ok(action_status::NO_CHANGE);
+        }
         let mut numhits = 0;
         loop {
             let mut changethisround = false;
@@ -1991,5 +2004,38 @@ mod tests {
             ops.iter().map(|o| o.0.read().unwrap().opcode.name().to_string()).collect()
         };
         assert_eq!(names, vec!["COPY", "CBRANCH"]);
+    }
+
+    /// E4 / CONDEXE-UNREACHGUARD-0001 (condexe.cc:485-486): with the cached
+    /// blocks_unreachable flag set — via the production structure_reset
+    /// path (the diamond's floating b6 has sizeIn()==0, so findSpanningTree
+    /// collects two roots and funcdata_block.cc:713-714 sets the flag) —
+    /// apply must return 0 IMMEDIATELY, before any ConditionalExecution
+    /// work: the E1-shape diamond (a guaranteed abort without the guard)
+    /// stays fully untouched. The oracle fixture pins this byte-for-byte
+    /// (tests/oracle/condexe_error_1204, record pre/ret/state E4).
+    #[test]
+    fn test_apply_unreachable_blocks_early_return() {
+        let mut fd = Funcdata::new("e4", crate::address::Address::new(0x60000), 0x100);
+        let (ib, vn_y, reader) = build_error_diamond(&mut fd, true);
+        // Production flag-set path: floating b6 -> two spanning-tree roots
+        // -> blocks_unreachable (funcdata_block.cc:713-714).
+        fd.structure_reset();
+        assert!(fd.has_unreachable_blocks(), "fixture must set the flag it tests");
+        let mut action = ActionConditionalExe::new();
+        let res = action.apply(&mut fd).expect("guard path must not abort");
+        assert_eq!(res, action_status::NO_CHANGE);
+        // Zero mutation: COPY + CBRANCH intact, vnY still read once, reader
+        // untouched — without the guard this exact input aborts with the
+        // E1 illegal-op LowlevelError (negative control, oracle gate).
+        let names: Vec<String> = {
+            let ops = ib.read().unwrap().get_ops();
+            ops.iter().map(|o| o.0.read().unwrap().opcode.name().to_string()).collect()
+        };
+        assert_eq!(names, vec!["COPY", "CBRANCH"]);
+        assert_eq!(ib.read().unwrap().size_in(), 2);
+        assert_eq!(ib.read().unwrap().size_out(), 2);
+        assert_eq!(vn_y.read().unwrap().descend_iter().count(), 1);
+        assert_eq!(reader.read().unwrap().get_ops().len(), 1);
     }
 }
