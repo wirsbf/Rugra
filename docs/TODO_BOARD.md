@@ -211,6 +211,8 @@ cleanup 池重复的 RuleTrivialArith）。26 项拟登记 TODO 详见报告 §5
 - **globstruct 分析回收（5 根因）**：RC-A shared-return/FlowOverride 整块缺失（决定性证据=direct-runner 纯核心同样吸收 tail call，golden 干净形态由 Java SharedReturnAnalyzer 提供）｜RC-B follow_flow 下界=入口 vs oracle 0（flow.rs:3063，5 函数受害，但需与 A 同修否则吸 PLT）｜RC-C opPtrsub 无 union/findTruncation/field_0x 回退（printc.rs:1338）｜RC-D 符号声明链（已登记域）｜RC-E blockaction 循环体丢失（direct-runner 对照证独立存在，需 A/B 后定位）。派发：RC-A+B 一个修复 Agent（wt/sharedret）；C/E 待其他分析回收后统一排。
 - **truncat 分析回收（6 根因）**：RC-A 与 globstruct 交叉验证一致（已给 sharedret 补 fail_thunk/PLT 规格）｜RC-B RETURN 槽位（42/42 裸 return）→ 派发 wt/retstr（含 RC-C 字符串/DAT_ 渲染）｜RC-D DWARF 聚合参数被拒 → 派发 wt/dwarfagg｜RC-E 规则非幂等 → 派发 wt/rulebisect（分析，覆盖 glob_set/range 去重）｜RC-F match_url 特有毁损待 RC-D 后重归因。
 - **myfwrite 分析回收（3 层根因，主因推翻初始假设）**：主因=RuleSplitLoad/RuleSplitStore 缺 getValueDatatype 门禁（subflow.cc:2970-2983/2910-2938/2244-2274；一条 mov 拆 44 字段 load，门禁模拟实证 45→16 行+全量 2467→2433 零回归）→ 派发 wt/splitgate｜次因=merge_addr_tied 全空间分组（oracle merge.cc:609-648 双门：仅 IPTR_PROCESSOR/SPACEBASE+addrtied 标志）→ 派发 wt/addrtied｜MERGE-MIXEDHIGH 部分成立（次要，等前两修后重triage）｜次生登记：unique 偏移碰撞、reassemble_via_piece 自环。
+- **myprog 分析回收**：myprogress/progressbarinit 差异主体是 RC-A 第三形态（吞 GetStr 函数体=扫过尾+jmp PLT 尾调用丢，已补 sharedret 规格）｜find_partial_field 原型修复已 stash（patch=/tmp/myprog_find_partial_field.patch，A/B 验证零回归），归 RC-C opPtrsub 派发时合并。
+- **派发 wt/recovered**：恢复组重triage（原 panic/未产出 11 函数在新基线的形态）。
 
 | 组 | owner | write-set | 目标函数（rugra vs golden 字符） |
 |---|---|---|---|
