@@ -245,3 +245,47 @@ addMap 属性折入符号 flags（database.cc:1153）与 Database flagbase 归
 DB-LOCALSCOPE-MAP-0001、生产 mapGlobals/linkSymbol 消费者不线程 parent/空间
 归 funcdata 轮（r1 REJECT 第 4 项）。
 
+
+## 动态符号化投影锁定（VARMAP-DYNAMICSYM-0001，2026-08-23）
+
+`PRINTC-UNLINKED-REF-0001` 的 varmap 域残差（explicit 未符号化 high 走
+buildDynamicSymbol）以 `tests/oracle/varmap_dynamicsym_1204` 三件套 +
+`tools/run_varmap_dynamicsym_oracle.sh` 锁定（pin-base schema2，base
+e9baabd，无源码 overlay——基线链路已忠实，fixture 是 B2 证据而非修复）：
+
+- **explicit 冲突 → 动态符号**（`explicit_conflict_dynamic`）：同存储、同
+  指令地址定义的两个 explicit high——第二个 `linkSymbol` 的
+  `queryProperties` 命中首符号的单点 uselimit，`handleSymbolConflict`
+  在 loc-set 走查中发现异 high，`buildDynamicSymbol`（funcdata_varnode.cc:
+  1283-1306）经 `DynamicHash::uniqueHash` 建动态 Symbol（database.cc:1690
+  `addDynamicSymbol`：$$undef 名 + 哈希映射 + 单地址 uselimit），namerec →
+  `buildDefaultName` vn 路径 → `ScopeInternal::buildVariableName` 局部分支
+  共享计数器命名（iVar3/uVar4）→ `renameSymbol`。12/12 记录双侧逐字节
+  MATCH。
+- **uselimit 门**（`separate_usepoints_two_statics`）：同存储不同 usepoint
+  → 两个静态符号，动态路径不触发。
+- **implied 拒绝**（`implied_conflict_rejected`）：implied 成员在
+  `hasName`（variable.cc:729-733）处被拒，linkSymbol 不运行——implied
+  语义零改动（与 varmap_unlinked_locals 基线一致）。
+- **input/addrtied 附着**（`illegal_input_attach`/`addrtied_attach_conflict`）：
+  handleSymbolConflict 的 isInput/isAddrTied 腿（cc:1000-1003）附着既有
+  条目，不建动态符号；栈分支经 cspec localrange 窗口命名 iStack_c0。
+- **spacebase 拒绝**（`spacebase_input_rejected`）：unaffected+spacebase
+  输入在 cc:737-745 被拒。
+
+**E2E 残差归因（fixture 排除 varmap 域缺口）**：curl 6 函数的
+`uVar_<unique偏移>` GLUE 兜底名（printc 注入组）不是 varmap 缺路径——
+explicit 代表所在 high 混入 implied 实例（如 my_get_token unique+0x23b00：
+15 实例含 3 implied），`hasName` 在 linkSymbol 之前拒绝。oracle 序
+markimplied(:5720) < mergetype(:5727) 在 Rugra 注册正确，但
+`ActionMergeRequired`/mergeOp 把同槽实例强并入一个 high 后，Rugra 的
+`check_implied_cover` 近似（静态聚合 cover）标出 mixed 而 Ghidra 的
+inflateTest cover 模型对已合并 high 整体判 explicit（Ghidra 中 mixed 态
+不可达——hasName 会 throw "Implied varnode has been merged"）。修复归
+merge/cover 域（`MERGE-MIXEDHIGH-0001`：merge.rs `inflate_test` /
+coreaction.rs `check_implied_cover`）。另有 `DYNAMICSYM-PROD-0001`
+（ActionDynamicSymbols stub：attemptDynamicMappingLate 未接）、
+`DYNAMICSYM-EQUATE-0001`（常量 equate 腿经 ActionNameVars 投影不可达）、
+`VNCREATE-PROPS-0001`（newVarnode 的 setVarnodeProperties scope-ownership
+查询：Rugra set_varnode_properties 查 flat symbol_table 而非
+ScopeLocal::queryProperties，创建期 mapped 位与 oracle 不同）。
