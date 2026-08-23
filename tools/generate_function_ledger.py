@@ -2622,6 +2622,11 @@ def function_id_continuity_document(
                     f"or tombstone: {base_id} {source_token} at {commit} "
                     f"({old_record['path']}::{old_record['name']})"
                 )
+            if states[base_id]["origin_kind"] != "baseline":
+                raise MigrationHarnessError(
+                    "continuity schema 1 cannot encode a post-baseline introduced origin "
+                    f"that is later tombstoned: {base_id}; require a reviewed schema extension"
+                )
             child_blob = child_blob_by_path.get(str(old_record["path"]))
             required = ("parent_blob", "child_blob", "reason")
             if (child_blob is None or any(not rule.get(field) for field in required)

@@ -236,7 +236,9 @@ annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也�
 `introduced_live` helper。loader 先解析 baseline alias，再组合 continuity terminal；任一
 chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
 first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
-诊断，永不进入自动 replacement。
+诊断，永不进入自动 replacement。schema 1 只允许 baseline origin 进入 tombstone；若某个
+`introduced_live` 在同一 replay 区间后续又被删除，生成器会 rc=2，必须先评审能保留其
+introduction proof 的 schema 扩展，不能静默丢掉 origin。
 
 metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`observation_scope`、
 `known_dependencies`、`residuals`、`known_residuals`、`uncovered_boundaries` 或
