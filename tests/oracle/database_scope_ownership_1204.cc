@@ -30,6 +30,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -37,6 +38,16 @@ namespace {
 using namespace ghidra;
 using std::string;
 using std::vector;
+
+/// Classify the actual production type supplied by the caller.  A future API
+/// or container value-type change alters this projection at compile time.
+template<typename T>
+const char *storageClass(void)
+{
+  typedef typename std::remove_reference<T>::type NoReference;
+  typedef typename std::remove_cv<NoReference>::type Plain;
+  return std::is_pointer<Plain>::value ? "pointer" : "value";
+}
 
 int4 childCount(const Scope *scope)
 {
@@ -159,7 +170,7 @@ void runGraphAndFailures(FixtureArchitecture &arch,vector<string> &events)
       << "|parent_child_key_resolves=" <<
           (global->resolveScope("factory_ns",false) != (Scope *)0)
       << "|parent_child_count=" << childCount(global)
-      << "|return_class=scope_pointer"
+      << "|return_class=" << storageClass<decltype(factoryScope)>()
       << "|resolver_return_alias=" <<
           (db->resolveScope(factoryId) == factoryScope)
       << "|repeat_return_alias=" << (factoryAgain == factoryScope)
@@ -167,8 +178,10 @@ void runGraphAndFailures(FixtureArchitecture &arch,vector<string> &events)
           (global->resolveScope("factory_ns",false) == factoryScope)
       << "|resolved_slot_stable=UNNEEDED"
       << "|parent_child_resolved_slot_alias=UNNEEDED"
-      << "|scope_storage_class=owned_pointer"
-      << "|parent_child_storage_class=scope_pointer"
+      << "|scope_storage_class=" <<
+          storageClass<ScopeMap::mapped_type>()
+      << "|parent_child_storage_class=" <<
+          storageClass<ScopeMap::mapped_type>()
       << "|next_scope_id_before=UNAVAILABLE"
       << "|next_scope_id_after_create=UNAVAILABLE"
       << "|next_scope_id_after_repeat=UNAVAILABLE"

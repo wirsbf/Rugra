@@ -45,15 +45,15 @@
     "api": "Architecture::buildDatabase; Database::{attachScope,findCreateScope,resolveScope,deleteScope}; Rugra Database::find_create_scope; Scope::{addFunction,removeSymbol,resolveScope}; FunctionSymbol::{getFunction,~FunctionSymbol}; Funcdata::{Funcdata,~Funcdata,getScopeLocal}; ScopeLocal::ScopeLocal; ScopeInternal::~ScopeInternal; Scope::~Scope",
     "error_injection": "A second non-global Scope with id 0x12040001 exercises duplicate-id RecovError after idmap.insert fails. A fresh Database receives a name-bearing root Scope to exercise invalid-global-name LowlevelError before global assignment. ProbeScope destructors distinguish callee-deleted from caller-owned incoming objects.",
     "destructor_probe": "The exit graph has one namespace FunctionSymbol/Funcdata/ScopeLocal plus an independent sentinel child. Architecture destruction deletes Database before prototype models/types/translator; Database deletes global; namespace ScopeInternal deletes its FunctionSymbol, which deletes Funcdata, which detaches/deletes ScopeLocal; only then Scope::~Scope deletes the sentinel. The sentinel queries its still-live parent by local name and records local_present=0.",
-    "rugra_projection": "The Rust executable calls the real Database::find_create_scope twice and observes its returned ids, exact resolved-slot equality after lookup, exact parent-child-resolved-slot equality, child count, stored name/parent, return/storage classes, and next_scope_id before/create/repeat state. It explicitly labels direct return-object aliases UNAVAILABLE because the production API returns u64. It separately constructs Architecture::new and Funcdata::new to observe their real empty ownership fields. It does not create ownership lookalikes or normalize the u64/value-owned/counter differences into the Ghidra graph.",
+    "rugra_projection": "The Rust executable calls the real Database::find_create_scope twice and observes its returned ids, exact resolved-slot equality after lookup, exact parent-child-resolved-slot equality, child count, stored name/parent, return/storage classes bound by compile-time helpers to the concrete production return/map/children types, and next_scope_id before/create/repeat state. It explicitly labels direct return-object aliases UNAVAILABLE because the production API returns u64. It separately constructs Architecture::new and Funcdata::new to observe their real empty ownership fields. It does not create ownership lookalikes or normalize the u64/value-owned/counter differences into the Ghidra graph.",
     "debug_macros": "OPACTION_DEBUG, CPUI_DEBUG, and CPUI_STATISTICS are absent.",
     "normalization": "No semantic difference is normalized. Raw addresses are fixed inputs; pointer addresses are deliberately replaced only by exact equality/null alias classes because allocation addresses are non-semantic. The find-create return/storage classes and Rugra-only next_scope_id mutation are emitted as explicit mismatches. Exception categories and text, map membership, parent/back-reference identities, child counts, and destructor event order remain observable. BfdArchitecture diagnostics are captured in an in-memory stream and both comparand stderr streams must be empty.",
     "random_seed": "none; construction, map traversal, failure paths, and output are deterministic"
   },
   "comparand": {
-    "cpp_fixture_sha256": "bdbf1c7bfed13c631e40332997e00bc50e0806e05048f40ee9d4dfebfae04265",
-    "rust_fixture_sha256": "240a9599518096032911b6a660d6946c9350aa4ee5c88b0912fbc3d21595b135",
-    "runner_sha256": "dac4719bc1a4aad00d9d21c53a506b15c375f3d1204e771c20ae748dc1ba0595"
+    "cpp_fixture_sha256": "9e7a4b0b1136a2f0a9d1ad2720c3853b4abf4aac3a755873cbda4542ecc4f4e6",
+    "rust_fixture_sha256": "c2340957771a944ac9dc6019368f459584d12b0ecaaf131930cb3a3c0710c9f6",
+    "runner_sha256": "64f30f19c6adff7e17ed043f09ef25802c8bbfd26577509003a13aca125885d2"
   },
   "assets": {
     "sla": {
@@ -168,14 +168,14 @@
         "input": "leave FixtureArchitecture scope and inspect externally owned destructor event vector"
       }
     ],
-    "sha256": "75b861b62b5628c454d52de6405aaff51b8916989856dc96b3e549901e01f1de"
+    "sha256": "df41de6480cae109612928f15f6f771eece73d0ba0102f38975814ca0c2fd27f"
   },
   "expected_results": {
-    "ghidra_stdout_sha256": "f27ff0cfe65b4764f295f93921bc779805bd50a24bcc323eb65ec302a02cc5e9",
+    "ghidra_stdout_sha256": "af6d8a371c83b4760fcdedfc6977253e3eb306dfffcd9646355ae77bf60797da",
     "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "02a2d3796f7c9e9f1434553a8ee0703b64c5ca04596dbad0ed9731d3bb73c789",
+    "rugra_stdout_sha256": "ec6999d16de2b03b859d7367f1cb98d4b1eb91f2ce98153406522082e9b9a561",
     "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "74fa2e324e86e1eaaa80cbaa4bb6c18faaa5afae20165af1ba908ce8757e21fd",
+    "raw_diff_sha256": "8af4b39f23382de4f0ef914f221d761aa1ac5cf7003f3a5730feaaa3258fb80a",
     "ghidra_exit_code": 0,
     "rugra_exit_code": 0,
     "diff_exit_code": 1,
@@ -213,8 +213,32 @@
     "find_create_scope_projection": {
       "status": "MISMATCH",
       "covered_projection_status": "MATCH",
+      "full": {
+        "status": "MISMATCH",
+        "reason": "Ghidra returns and owns Scope pointers without a scope-id allocator mutation; Rugra returns u64, stores Scope values and child ids, and advances next_scope_id."
+      },
+      "selected": {
+        "status": "MATCH",
+        "fields": [
+          "id_matches",
+          "resolver_key_present",
+          "repeat_key_same",
+          "name_preserved",
+          "parent_id",
+          "parent_child_key_resolves",
+          "parent_child_count"
+        ]
+      },
+      "multi_child_order": {
+        "status": "UNTESTED",
+        "reason": "Only one child is created, so this fixture cannot compare Ghidra's id-sorted Scope* map traversal with Rugra's insertion-order u64 vector. The output is neither sorted nor normalized to imply coverage.",
+        "residual_todo_ids": [
+          "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001",
+          "DB-LOCALSCOPE-MAP-0001"
+        ]
+      },
       "ghidra_oracle_observation": "MATCH selected scalar/key projection: findCreateScope creates id 0x12040002 under global, repeat lookup preserves the key/name/parent, and child count is one. Full output: the API returns Scope*, and resolveScope, repeat return, plus the parent child table all alias that exact return pointer; Database idmap and Scope children own Scope* identities; no Database scope-id allocator counter exists.",
-      "rugra_observation": "MATCH selected scalar/key projection: find_create_scope creates the same explicit id under parent 0, repeat lookup preserves the key/name/parent, and child count is one. Full output differs: the API returns u64, so direct return-object aliases are unavailable; post-lookup BTreeMap slot and child-id resolution equality are recorded separately and cannot prove Ghidra return identity. Database owns Scope values, Scope children are u64 ids, and creation advances public next_scope_id from 1 to 302252035.",
+      "rugra_observation": "MATCH selected scalar/key projection: find_create_scope creates the same explicit id under parent 0, repeat lookup preserves the key/name/parent, and child count is one. Full output differs: the API returns u64, so direct return-object aliases are unavailable; post-lookup BTreeMap slot and child-id resolution equality are recorded separately and cannot prove Ghidra return identity. Compile-time helpers instantiated on the production types classify the return, scope-map storage, and child storage as values, versus pointers on Ghidra. Creation advances public next_scope_id from 1 to 302252035.",
       "full_difference": "Return type, direct return alias availability, stored ownership/reference representation, and the Rugra-only next_scope_id mutation are observable differences, so the complete function case is MISMATCH despite the matching selected projection. Multi-child traversal order is separately UNTESTED.",
       "residual_todo_ids": [
         "DATABASE-0001",

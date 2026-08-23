@@ -11,8 +11,37 @@
 
 use rugra::address::Address;
 use rugra::arch::Architecture;
-use rugra::database::Database;
+use rugra::database::{Database, Scope};
 use rugra::funcdata::Funcdata;
+
+/// Compile-time category binding for the concrete production types consumed
+/// below. A return/container value-type change fails to compile until the
+/// observation contract is deliberately updated.
+trait StorageClass {
+    const CLASS: &'static str;
+}
+
+impl StorageClass for u64 {
+    const CLASS: &'static str = "value";
+}
+
+impl StorageClass for Scope {
+    const CLASS: &'static str = "value";
+}
+
+fn storage_class<T: StorageClass>(_: &T) -> &'static str {
+    T::CLASS
+}
+
+fn map_value_storage_class<K, V: StorageClass>(
+    _: &std::collections::BTreeMap<K, V>,
+) -> &'static str {
+    V::CLASS
+}
+
+fn vec_value_storage_class<T: StorageClass>(_: &Vec<T>) -> &'static str {
+    T::CLASS
+}
 
 fn main() {
     let mut database = Database::new(true);
@@ -50,8 +79,14 @@ fn main() {
         .get_global_scope()
         .map(|scope| scope.children.len())
         .unwrap_or(0);
+    let return_class = storage_class(&created_id);
+    let scope_storage_class = map_value_storage_class(&database.scopes);
+    let parent_child_storage_class = database
+        .get_global_scope()
+        .map(|scope| vec_value_storage_class(&scope.children))
+        .unwrap_or("UNAVAILABLE");
     println!(
-        "case=find_create_scope|id_matches={}|resolver_key_present={}|repeat_key_same={}|name_preserved={}|parent_id={}|parent_child_key_resolves={}|parent_child_count={}|return_class=u64|resolver_return_alias=UNAVAILABLE|repeat_return_alias=UNAVAILABLE|parent_child_return_alias=UNAVAILABLE|resolved_slot_stable={}|parent_child_resolved_slot_alias={}|scope_storage_class=BTreeMap_value|parent_child_storage_class=u64|next_scope_id_before={}|next_scope_id_after_create={}|next_scope_id_after_repeat={}",
+        "case=find_create_scope|id_matches={}|resolver_key_present={}|repeat_key_same={}|name_preserved={}|parent_id={}|parent_child_key_resolves={}|parent_child_count={}|return_class={}|resolver_return_alias=UNAVAILABLE|repeat_return_alias=UNAVAILABLE|parent_child_return_alias=UNAVAILABLE|resolved_slot_stable={}|parent_child_resolved_slot_alias={}|scope_storage_class={}|parent_child_storage_class={}|next_scope_id_before={}|next_scope_id_after_create={}|next_scope_id_after_repeat={}",
         u8::from(created_id == factory_id),
         u8::from(resolver_key_present),
         u8::from(created_id == repeated_id),
@@ -59,8 +94,11 @@ fn main() {
         repeated.parent_id,
         u8::from(parent_child_key_resolves),
         parent_child_count,
+        return_class,
         u8::from(created_ptr == repeated_ptr && resolved_slot_stable),
         u8::from(parent_child_resolved_slot_alias),
+        scope_storage_class,
+        parent_child_storage_class,
         next_scope_id_before,
         next_scope_id_after_create,
         next_scope_id_after_repeat,

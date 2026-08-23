@@ -277,6 +277,35 @@ for label, actual, expected in (
 require("architecture", metadata["architecture"], "x86:LE:64:default")
 require("compiler", metadata["compiler_spec"]["id"], "gcc")
 
+find_create = metadata["coverage"]["find_create_scope_projection"]
+require("find-create projection", find_create["status"], "MISMATCH")
+require("find-create full", find_create["full"]["status"], "MISMATCH")
+require("find-create selected", find_create["selected"]["status"], "MATCH")
+require(
+    "find-create selected fields",
+    find_create["selected"]["fields"],
+    [
+        "id_matches", "resolver_key_present", "repeat_key_same",
+        "name_preserved", "parent_id", "parent_child_key_resolves",
+        "parent_child_count",
+    ],
+)
+require(
+    "find-create multi-child order",
+    find_create["multi_child_order"]["status"],
+    "UNTESTED",
+)
+require(
+    "find-create residual ids",
+    find_create["residual_todo_ids"],
+    ["DATABASE-0001", "DB-LOCALSCOPE-MAP-0001"],
+)
+require(
+    "find-create multi-child residual ids",
+    find_create["multi_child_order"]["residual_todo_ids"],
+    ["DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001", "DB-LOCALSCOPE-MAP-0001"],
+)
+
 source = metadata["rugra_source"]
 for label, actual, expected in (
     ("source commit", source["commit"], source_commit),
@@ -492,6 +521,39 @@ paths = {
     "raw_diff_sha256": pathlib.Path(sys.argv[6]),
 }
 
+def require(label, actual, expected):
+    if actual != expected:
+        raise SystemExit(f"{label} mismatch: expected={expected!r} actual={actual!r}")
+
+find_create = metadata["coverage"]["find_create_scope_projection"]
+require("find-create projection", find_create["status"], "MISMATCH")
+require("find-create full", find_create["full"]["status"], "MISMATCH")
+require("find-create selected", find_create["selected"]["status"], "MATCH")
+require(
+    "find-create selected fields",
+    find_create["selected"]["fields"],
+    [
+        "id_matches", "resolver_key_present", "repeat_key_same",
+        "name_preserved", "parent_id", "parent_child_key_resolves",
+        "parent_child_count",
+    ],
+)
+require(
+    "find-create multi-child order",
+    find_create["multi_child_order"]["status"],
+    "UNTESTED",
+)
+require(
+    "find-create residual ids",
+    find_create["residual_todo_ids"],
+    ["DATABASE-0001", "DB-LOCALSCOPE-MAP-0001"],
+)
+require(
+    "find-create multi-child residual ids",
+    find_create["multi_child_order"]["residual_todo_ids"],
+    ["DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001", "DB-LOCALSCOPE-MAP-0001"],
+)
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -557,14 +619,14 @@ for side, case in (
 ghidra_find = by_case["find_create_scope"]
 rugra_find = {record["case"]: record for record in rugra}["find_create_scope"]
 for key, expected_value in (
-    ("return_class", "scope_pointer"),
+    ("return_class", "pointer"),
     ("resolver_return_alias", "1"),
     ("repeat_return_alias", "1"),
     ("parent_child_return_alias", "1"),
     ("resolved_slot_stable", "UNNEEDED"),
     ("parent_child_resolved_slot_alias", "UNNEEDED"),
-    ("scope_storage_class", "owned_pointer"),
-    ("parent_child_storage_class", "scope_pointer"),
+    ("scope_storage_class", "pointer"),
+    ("parent_child_storage_class", "pointer"),
     ("next_scope_id_before", "UNAVAILABLE"),
     ("next_scope_id_after_create", "UNAVAILABLE"),
     ("next_scope_id_after_repeat", "UNAVAILABLE"),
@@ -572,14 +634,14 @@ for key, expected_value in (
     if ghidra_find[key] != expected_value:
         raise SystemExit(f"Ghidra find_create_scope.{key} drifted")
 for key, expected_value in (
-    ("return_class", "u64"),
+    ("return_class", "value"),
     ("resolver_return_alias", "UNAVAILABLE"),
     ("repeat_return_alias", "UNAVAILABLE"),
     ("parent_child_return_alias", "UNAVAILABLE"),
     ("resolved_slot_stable", "1"),
     ("parent_child_resolved_slot_alias", "1"),
-    ("scope_storage_class", "BTreeMap_value"),
-    ("parent_child_storage_class", "u64"),
+    ("scope_storage_class", "value"),
+    ("parent_child_storage_class", "value"),
     ("next_scope_id_before", "1"),
     ("next_scope_id_after_create", "302252035"),
     ("next_scope_id_after_repeat", "302252035"),
