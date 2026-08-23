@@ -3667,7 +3667,7 @@ impl ActionInferTypes {
         ptr_size: usize,
     ) {
         use crate::type_system::datatype::TypeMetatype;
-        // Ghidra buildLocaltypes (coreaction.cc:5012-5034) FIRST seeds every
+        // Ghidra buildLocaltypes (coreaction.cc:5008-5034) FIRST seeds every
         // varnode's temp with its LOCAL type (`ct = vn->getLocalType(...);
         // vn->setTempType(ct)`): this is how type-locked inputs (locked
         // parameter symbols) and previously inferred types enter the

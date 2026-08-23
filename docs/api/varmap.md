@@ -311,3 +311,7 @@ coreaction.rs `check_implied_cover`）。另有 `DYNAMICSYM-PROD-0001`
 `VNCREATE-PROPS-0001`（newVarnode 的 setVarnodeProperties scope-ownership
 查询：Rugra set_varnode_properties 查 flat symbol_table 而非
 ScopeLocal::queryProperties，创建期 mapped 位与 oracle 不同）。
+
+## 引用行号勘误（2026-08-24，root，getstr 复核必改项）
+
+survivor-clear 注释引用 varmap.cc:1273 修正为 1259（`clearUnlockedCategory(-1)` 实际位置；1275 是 function_parameter 的另一调用）。

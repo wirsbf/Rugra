@@ -2321,7 +2321,7 @@ impl ScopeLocal {
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1256).
     pub fn restructure_varnode(&mut self, fd: &crate::funcdata::Funcdata) {
-        // Ghidra varmap.cc:1273 `clearUnlockedCategory(-1)` — NOT a blanket
+        // Ghidra varmap.cc:1259 `clearUnlockedCategory(-1)`（1275 为 function_parameter 另一调用） — NOT a blanket
         // clear: symbols with category >= 0 (function parameters, equates)
         // survive unconditionally (database.cc:2086 `if
         // (sym->getCategory() >= 0) continue;`); category<0 symbols survive
