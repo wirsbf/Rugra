@@ -219,6 +219,7 @@ expected_coverage = {
     "extractexpsig_intermediates", "rtne_direct_incl_wrap",
     "subnormal_normalize_intermediate", "hostfloat_denormal_ladder",
     "getencoding_ladder_nan_canonical", "int2float_36case_value_regression",
+    "trunc_integer_indefinite_mask",
 }
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict) or set(coverage) != expected_coverage:
@@ -349,4 +350,4 @@ print(f"covered_projection={len(ghidra_out.decode().splitlines())} lines byte-id
 PYVERDICT
 
 /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-/usr/bin/printf 'float_fmt_struct_1204: covered_projection=134/134 cases (135 lines incl. banner) projection_status=MATCH overall_status=MATCH residual=none\n'
+/usr/bin/printf 'float_fmt_struct_1204: covered_projection=153/153 cases (154 lines incl. banner) projection_status=MATCH overall_status=MATCH residual=none\n'
