@@ -23,61 +23,84 @@ impl RuleCollapseConstants {
 }
 
 impl Rule for RuleCollapseConstants {
-    // Ghidra: ruleaction.cc:3874 RuleCollapseConstants::applyOp
+    // Ghidra: ruleaction.cc:3854 RuleCollapseConstants::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        let mut op = op_arc.write().unwrap();
-
-        // 1. Check if all inputs are constants
-        if op.inrefs.is_empty() {
+        // cc:3860: if (!op->isCollapsible()) return 0; — expression must be
+        // collapsible (nocollapse flag, isAssignment, >=1 input, all inputs
+        // constant, output size <= sizeof(uintb)=8).
+        if !op_arc.read().unwrap().is_collapsible() {
             return Ok(action_status::NO_CHANGE);
         }
 
-        let mut vals = Vec::new();
-        for in_vn_arc in &op.inrefs {
-            let in_vn = in_vn_arc.read().unwrap();
-            if !in_vn.is_constant() {
+        // cc:3862-3870: try { newval = getConstant(op->collapse(markedInput)); }
+        //     catch(LowlevelError) { data.opMarkNoCollapse(op); return 0; }
+        // PcodeOp::collapse (op.cc:450-472) evaluates via the TypeOp bridge;
+        // None encodes the LowlevelError/EvaluationError throw (unimplemented
+        // behavior, divide-by-0, ternary/special eval type, missing float
+        // format) — all map to opMarkNoCollapse with the op left untouched.
+        let collapsed = {
+            let op = op_arc.read().unwrap();
+            op.collapse()
+        };
+        let (newval, marked_input) = match collapsed {
+            Some(pair) => pair,
+            None => {
+                fd.op_mark_no_collapse(&crate::op::PcodeOpRef(op_arc.clone()));
                 return Ok(action_status::NO_CHANGE);
             }
-            vals.push(in_vn.get_val());
-        }
-
-        // 2. Compute result
-        let res = match op.opcode {
-            OpCode::CPUI_INT_ADD => vals[0].wrapping_add(vals[1]),
-            OpCode::CPUI_INT_SUB => vals[0].wrapping_sub(vals[1]),
-            OpCode::CPUI_INT_MULT => vals[0].wrapping_mul(vals[1]),
-            OpCode::CPUI_INT_AND => vals[0] & vals[1],
-            OpCode::CPUI_INT_OR => vals[0] | vals[1],
-            OpCode::CPUI_INT_XOR => vals[0] ^ vals[1],
-            _ => return Ok(action_status::NO_CHANGE),
         };
 
-        // 3. Replace with COPY of the constant result
-        let size = op.output.as_ref().map(|v| v.read().unwrap().size).unwrap_or(4);
-        let res_vn = fd.vbank.create_constant(size, res);
+        // cc:3872: vn = data.newVarnode(op->getOut()->getSize(),newval);
+        // getConstant wraps the value in a constant-space Address; newVarnode
+        // creates the constant Varnode (TYPE_UNKNOWN base + assignHigh) —
+        // fd.new_constant is the Rugra equivalent path.
+        let size = op_arc
+            .read()
+            .unwrap()
+            .output
+            .as_ref()
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(4);
+        let vn = fd.new_constant(size, newval);
 
-        op.opcode = OpCode::CPUI_COPY;
-        op.inrefs = vec![res_vn];
+        // cc:3873-3875: if (markedInput) op->collapseConstantSymbol(vn);
+        // Must run BEFORE the inputs are unlinked so the original inputs'
+        // symbol entries are still visible (op.cc:503-540).
+        if marked_input {
+            let op = op_arc.read().unwrap();
+            op.collapse_constant_symbol(&vn);
+        }
+
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // cc:3876-3877: for(i=op->numInput()-1;i>0;--i) data.opRemoveInput(op,i);
+        let num = op_arc.read().unwrap().num_input();
+        for i in (1..num).rev() {
+            fd.op_remove_input(&op_ref, i);
+        }
+        // cc:3878: data.opSetInput(op,vn,0);
+        fd.op_set_input(&op_ref, vn, 0);
+        // cc:3879: data.opSetOpcode(op,CPUI_COPY);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
 
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:3872 RuleCollapseConstants
+    // Ghidra: ruleaction.hh:705 RuleCollapseConstants::RuleCollapseConstants
+    //   (name literal "collapseconstants")
     fn get_name(&self) -> &str {
-        "collapse_constants"
+        "collapseconstants"
     }
 
-    // Ghidra: ruleaction.cc:3872 RuleCollapseConstants
+    // Ghidra: action.cc:706 Rule::getOpList
+    /// RuleCollapseConstants does not override getOpList — it uses the base
+    /// class default (action.cc:706-713), which registers the rule for
+    /// every opcode (ruleaction.hh:710 "applies to all opcodes"). Ghidra
+    /// pushes 0..CPUI_MAX; the 12.0.4 opcode enum starts at CPUI_COPY=1
+    /// (opcodes.hh:37-38) and CPUI_MAX=74 is a sentinel never assigned to
+    /// a live PcodeOp, so the observable opcode set is 1..=73 — the same
+    /// shape as RulePropagateCopy (ruleaction.hh:723-731).
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![
-            OpCode::CPUI_INT_ADD,
-            OpCode::CPUI_INT_SUB,
-            OpCode::CPUI_INT_MULT,
-            OpCode::CPUI_INT_DIV,
-            OpCode::CPUI_INT_AND,
-            OpCode::CPUI_INT_OR,
-            OpCode::CPUI_INT_XOR,
-        ]
+        (1..74).filter_map(OpCode::from_i32).collect()
     }
 }
 
@@ -16568,6 +16591,350 @@ mod tests {
 
         let op_arc = Arc::new(RwLock::new(op));
         (op_arc, fd)
+    }
+
+    /// Helper for RuleCollapseConstants tests: build an op through the real
+    /// Funcdata path (new_op/op_set_opcode/op_set_input/new_unique_out) so
+    /// opcode-derived flags (unary/binary/nocollapse) are materialized the
+    /// same way Ghidra's PcodeOpBank does (op.cc:276-285).
+    fn make_collapsible_op(
+        fd: &mut Funcdata,
+        opcode: OpCode,
+        const_inputs: &[(u64, usize)],
+        out_size: usize,
+    ) -> crate::op::PcodeOpRef {
+        let op = fd.new_op(const_inputs.len(), Address::new(0x2000));
+        fd.op_set_opcode(&op, opcode);
+        for (slot, (val, sz)) in const_inputs.iter().enumerate() {
+            let c = fd.new_constant(*sz, *val);
+            fd.op_set_input(&op, c, slot);
+        }
+        fd.new_unique_out(out_size, &op);
+        op
+    }
+
+    /// Assert the op collapsed to COPY of `expected` (ruleaction.cc:3879-3881).
+    fn assert_collapsed(op: &crate::op::PcodeOpRef, expected: u64, size: usize) {
+        let guard = op.0.read().unwrap();
+        assert_eq!(guard.opcode, OpCode::CPUI_COPY, "expected COPY");
+        assert_eq!(guard.num_input(), 1, "exactly one input remains");
+        let in0 = guard.get_in(0).unwrap().read().unwrap();
+        assert!(in0.is_constant(), "input 0 must be the new constant");
+        assert_eq!(in0.get_offset(), expected, "collapsed value");
+        assert_eq!(in0.get_size(), size, "constant keeps output size");
+    }
+
+    #[test]
+    fn collapse_constants_oplist_is_all_opcodes() {
+        // action.cc:706-713 base Rule::getOpList pushes 0..CPUI_MAX(74).
+        // The live opcode range is 1..=73 with slot 45 unused
+        // (opcodes.hh:92 "Slot 45 is currently unused"), so the observable
+        // set is 72 opcodes — the same shape as RulePropagateCopy.
+        let rule = RuleCollapseConstants::new();
+        let ops = rule.get_opcodes();
+        assert_eq!(ops.len(), 72);
+        assert_eq!(ops[0], OpCode::CPUI_COPY);
+        assert_eq!(ops[71], OpCode::CPUI_LZCOUNT);
+        assert!(rule.get_opcodes().contains(&OpCode::CPUI_FLOAT_ADD));
+        assert!(rule.get_opcodes().contains(&OpCode::CPUI_INT_SDIV));
+    }
+
+    #[test]
+    fn collapse_constants_signed_div_rem_truncate_toward_zero() {
+        // opbehavior.cc:507-539: -100 sdiv 7 = -14, -100 srem 7 = -2
+        // (C truncated division), zero-extended back to sizeout.
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SDIV,
+            &[(0xFFFFFF9C, 4), (7, 4)], 4);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_collapsed(&op, 0xFFFFFFF2, 4); // -14
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SREM,
+            &[(0xFFFFFF9C, 4), (7, 4)], 4);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_collapsed(&op, 0xFFFFFFFE, 4); // -2
+    }
+
+    #[test]
+    fn collapse_constants_div_rem_zero_marks_nocollapse() {
+        // opbehavior.cc:502-503/521-522 throw EvaluationError (a LowlevelError)
+        // -> ruleaction.cc:3867-3870 opMarkNoCollapse + return 0, op untouched.
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        for opc in [OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SREM] {
+            let op = make_collapsible_op(&mut fd, opc, &[(5, 4), (0, 4)], 4);
+            assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+            let guard = op.0.read().unwrap();
+            assert_eq!(guard.opcode, opc, "op stays unchanged");
+            assert_eq!(guard.num_input(), 2);
+            assert!(!guard.is_collapsible(), "nocollapse flag set");
+        }
+    }
+
+    #[test]
+    fn collapse_constants_shifts_and_overlarge_sright() {
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_LEFT,
+            &[(0x12345678, 4), (5, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0x468ACF00, 4);
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_RIGHT,
+            &[(0xF1234567, 4), (4, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0x0F123456, 4);
+
+        // opbehavior.cc:462-467: negative arithmetic shift fills ones.
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SRIGHT,
+            &[(0xF1234567, 4), (4, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0xFF123456, 4);
+
+        // opbehavior.cc:457-459: in2 >= 8*sizeout and negative sign ->
+        // calc_mask(sizeout) (all ones).
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SRIGHT,
+            &[(0x80000000, 4), (33, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0xFFFFFFFF, 4);
+    }
+
+    #[test]
+    fn collapse_constants_piece_subpiece_sext_zext_unary_ints() {
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // opbehavior.cc:752-757: (hi<<((sizeout-sizein)*8))|lo
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_PIECE,
+            &[(0x1122, 2), (0x3344, 2)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0x11223344, 4);
+
+        // opbehavior.cc:759-766: byte offset in in2
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_SUBPIECE,
+            &[(0x1122334455667788, 8), (4, 1)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0x11223344, 4);
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_ZEXT,
+            &[(0x80, 1)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0x80, 4);
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SEXT,
+            &[(0x80, 1)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0xFFFFFF80, 4);
+
+        // opbehavior.cc:362-367 / 376-381
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_2COMP,
+            &[(1, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0xFFFFFFFF, 4);
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_NEGATE,
+            &[(0x0F0F0F0F, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 0xF0F0F0F0, 4);
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_POPCOUNT,
+            &[(0xFF00FF00, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 16, 4);
+
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_LZCOUNT,
+            &[(0x00010000, 4)], 4);
+        rule.apply_op(&op.0, &mut fd).unwrap();
+        assert_collapsed(&op, 15, 4);
+    }
+
+    #[test]
+    fn collapse_constants_bool_and_comparison_family() {
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let cases: &[(OpCode, &[(u64, usize)], u64)] = &[
+            (OpCode::CPUI_BOOL_NEGATE, &[(1, 1)], 0),
+            (OpCode::CPUI_BOOL_AND, &[(1, 1), (0, 1)], 0),
+            (OpCode::CPUI_BOOL_OR, &[(1, 1), (0, 1)], 1),
+            (OpCode::CPUI_BOOL_XOR, &[(1, 1), (1, 1)], 0),
+            (OpCode::CPUI_INT_EQUAL, &[(5, 4), (5, 4)], 1),
+            (OpCode::CPUI_INT_NOTEQUAL, &[(5, 4), (5, 4)], 0),
+            (OpCode::CPUI_INT_LESS, &[(3, 4), (9, 4)], 1),
+            (OpCode::CPUI_INT_LESSEQUAL, &[(9, 4), (9, 4)], 1),
+            // 0xFFFFFF80 is -128 signed: sless(−128, 1) = 1
+            (OpCode::CPUI_INT_SLESS, &[(0xFFFFFF80, 4), (1, 4)], 1),
+            (OpCode::CPUI_INT_SLESSEQUAL, &[(0xFFFFFF80, 4), (0xFFFFFF80, 4)], 1),
+            // opbehavior.cc:323-328: carry = in1 > wrapped sum
+            (OpCode::CPUI_INT_CARRY, &[(0xFFFFFFFF, 4), (1, 4)], 1),
+            // opbehavior.cc:330-344: scarry(0x7FFFFFFF, 1) = 1
+            (OpCode::CPUI_INT_SCARRY, &[(0x7FFFFFFF, 4), (1, 4)], 1),
+            // opbehavior.cc:346-360: sborrow(0x80000000, 1) = 1
+            (OpCode::CPUI_INT_SBORROW, &[(0x80000000, 4), (1, 4)], 1),
+        ];
+        for (opc, ins, expected) in cases {
+            let out_size = if matches!(opc, OpCode::CPUI_BOOL_NEGATE) { 1 } else { 1 };
+            let op = make_collapsible_op(&mut fd, *opc, ins, out_size);
+            assert_eq!(
+                rule.apply_op(&op.0, &mut fd).unwrap(),
+                action_status::CHANGE,
+                "{opc:?} must collapse"
+            );
+            assert_collapsed(&op, *expected, out_size);
+        }
+    }
+
+    #[test]
+    fn collapse_constants_float_family_4_and_8() {
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // 1.0f = 0x3F800000, 2.0f = 0x40000000, 3.0f = 0x40400000
+        let cases: &[(OpCode, &[(u64, usize)], usize, u64)] = &[
+            (OpCode::CPUI_FLOAT_ADD, &[(0x3F800000, 4), (0x40000000, 4)], 4, 0x40400000),
+            (OpCode::CPUI_FLOAT_SUB, &[(0x40400000, 4), (0x40000000, 4)], 4, 0x3F800000),
+            (OpCode::CPUI_FLOAT_MULT, &[(0x3F800000, 4), (0x40000000, 4)], 4, 0x40000000),
+            (OpCode::CPUI_FLOAT_DIV, &[(0x40400000, 4), (0x40000000, 4)], 4, 0x3FC00000),
+            (OpCode::CPUI_FLOAT_LESS, &[(0x3F800000, 4), (0x40000000, 4)], 1, 1),
+            (OpCode::CPUI_FLOAT_LESSEQUAL, &[(0x40000000, 4), (0x40000000, 4)], 1, 1),
+            (OpCode::CPUI_FLOAT_EQUAL, &[(0x3F800000, 4), (0x3F800000, 4)], 1, 1),
+            (OpCode::CPUI_FLOAT_NOTEQUAL, &[(0x3F800000, 4), (0x40000000, 4)], 1, 1),
+            (OpCode::CPUI_FLOAT_NAN, &[(0x7FC00000, 4)], 1, 1),
+            (OpCode::CPUI_FLOAT_NEG, &[(0x3F800000, 4)], 4, 0xBF800000),
+            (OpCode::CPUI_FLOAT_ABS, &[(0xBF800000, 4)], 4, 0x3F800000),
+            (OpCode::CPUI_FLOAT_SQRT, &[(0x40800000, 4)], 4, 0x40000000), // sqrt(4.0)=2.0
+            (OpCode::CPUI_FLOAT_CEIL, &[(0x40200000, 4)], 4, 0x40400000), // ceil(2.5)=3.0
+            (OpCode::CPUI_FLOAT_FLOOR, &[(0x40400000, 4)], 4, 0x40400000),
+            (OpCode::CPUI_FLOAT_ROUND, &[(0x40400000, 4)], 4, 0x40400000),
+            // 7 (4-byte int) -> 7.0f
+            (OpCode::CPUI_FLOAT_INT2FLOAT, &[(7, 4)], 4, 0x40E00000),
+            // 1.5f -> 1.5 double = 0x3FF8000000000000
+            (OpCode::CPUI_FLOAT_FLOAT2FLOAT, &[(0x3FC00000, 4)], 8, 0x3FF8000000000000),
+            // 2.75f trunc to int size 4 -> 2
+            (OpCode::CPUI_FLOAT_TRUNC, &[(0x40300000, 4)], 4, 2),
+            // double: 1.0 + 2.0 = 3.0 (0x4008000000000000)
+            (OpCode::CPUI_FLOAT_ADD, &[(0x3FF0000000000000, 8), (0x4000000000000000, 8)], 8, 0x4008000000000000),
+        ];
+        for (opc, ins, out_size, expected) in cases {
+            let op = make_collapsible_op(&mut fd, *opc, ins, *out_size);
+            assert_eq!(
+                rule.apply_op(&op.0, &mut fd).unwrap(),
+                action_status::CHANGE,
+                "{opc:?} must collapse"
+            );
+            assert_collapsed(&op, *expected, *out_size);
+        }
+    }
+
+    #[test]
+    fn collapse_constants_ternary_and_missing_float_format_nocollapse() {
+        // INSERT/EXTRACT are ternary WITHOUT a nocollapse opflag (typeop.cc
+        // 2531/2546), so isCollapsible passes but PcodeOp::collapse throws
+        // "Invalid constant collapse" (op.cc:468-471 default case) ->
+        // opMarkNoCollapse.
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INSERT,
+            &[(0xAB, 1), (0xCD, 1), (0, 1)], 2);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert!(!op.0.read().unwrap().is_collapsible(), "ternary -> nocollapse");
+
+        // FLOAT_TRUNC with a 2-byte input has no FloatFormat (float_format
+        // stand-in only exposes 4/8) — the C++ OpBehavior base throws
+        // LowlevelError -> opMarkNoCollapse.
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_FLOAT_TRUNC,
+            &[(0x3C00, 2)], 4);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert!(!op.0.read().unwrap().is_collapsible(), "no-format -> nocollapse");
+    }
+
+    #[test]
+    fn collapse_constants_guards_reject_early() {
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // Non-constant input (op.cc:121-122).
+        let op = fd.new_op(2, Address::new(0x2000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        let reg = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let reg = fd.set_input_varnode(reg);
+        fd.op_set_input(&op, reg, 0);
+        let c5 = fd.new_constant(4, 5);
+        fd.op_set_input(&op, c5, 1);
+        fd.new_unique_out(4, &op);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
+
+        // Ops carrying the nocollapse opflag (PTRSUB, typeop.cc:2303) never
+        // collapse even with all-constant inputs.
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_PTRSUB,
+            &[(0x1000, 4), (8, 4)], 4);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_PTRSUB);
+        assert_eq!(op.0.read().unwrap().num_input(), 2);
+
+        // Output larger than sizeof(uintb)=8 (op.cc:123-124).
+        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_ADD,
+            &[(1, 16), (2, 16)], 16);
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
+    }
+
+    #[test]
+    fn collapse_constants_symbol_propagation_via_marked_input() {
+        // ruleaction.cc:3863-3874: an input with a SymbolEntry sets
+        // markedInput; collapseConstantSymbol (op.cc:503-540) then attaches
+        // the symbol markup to the new output constant for the commutative
+        // family (INT_ADD picks in0, falling back to in1).
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = fd.new_op(2, Address::new(0x2000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        let c0 = fd.new_constant(4, 0x11111111);
+        let c1 = fd.new_constant(4, 0x22222222);
+        fd.op_set_input(&op, c0.clone(), 0);
+        fd.op_set_input(&op, c1.clone(), 1);
+        fd.new_unique_out(4, &op);
+
+        // Attach a SymbolEntry to input 0 (markedInput path).
+        let symbol = crate::database::Symbol::new(0, "EQ", "equ");
+        let entry = crate::database::SymbolEntry::new_dynamic(
+            std::sync::Arc::new(std::sync::RwLock::new(symbol)),
+            0, 1, 0, 4, Default::default(),
+        );
+        c0.write().unwrap().set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_collapsed(&op, 0x33333333, 4);
+        // The new constant inherits the symbol markup (varnode.rs
+        // copy_symbol_if_valid — conservative mapentry copy).
+        let guard = op.0.read().unwrap();
+        let in0 = guard.get_in(0).unwrap().read().unwrap();
+        assert!(in0.get_symbol_entry().is_some(), "symbol propagated to new constant");
+    }
+
+    #[test]
+    fn collapse_constants_subpiece_high_bytes_do_not_propagate() {
+        // op.cc:508-510: SUBPIECE symbol propagation requires offset 0
+        // (truncating low bytes); offset != 0 returns without copying.
+        let rule = RuleCollapseConstants::new();
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = fd.new_op(2, Address::new(0x2000));
+        fd.op_set_opcode(&op, OpCode::CPUI_SUBPIECE);
+        let c0 = fd.new_constant(8, 0x1122334455667788);
+        fd.op_set_input(&op, c0.clone(), 0);
+        let c4 = fd.new_constant(1, 4);
+        fd.op_set_input(&op, c4, 1);
+        fd.new_unique_out(4, &op);
+        let symbol = crate::database::Symbol::new(0, "EQ", "equ");
+        let entry = crate::database::SymbolEntry::new_dynamic(
+            std::sync::Arc::new(std::sync::RwLock::new(symbol)),
+            0, 1, 0, 8, Default::default(),
+        );
+        c0.write().unwrap().set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+
+        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_collapsed(&op, 0x11223344, 4);
+        let guard = op.0.read().unwrap();
+        let in0 = guard.get_in(0).unwrap().read().unwrap();
+        assert!(in0.get_symbol_entry().is_none(), "offset!=0 must not propagate");
     }
 
     #[test]

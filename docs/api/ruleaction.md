@@ -61,13 +61,34 @@ CFG/IR 变换仍按各自既有状态管理，不能由本项单独升级为 L3�
 
 ### `pub struct RuleCollapseConstants`
 
-Rule for collapsing constants in arithmetic operations
+Rule for collapsing constant expressions
 
-Corresponds to Ghidra's `RuleCollapseConstants`
+Corresponds to Ghidra's `RuleCollapseConstants` (ruleaction.hh:703-712,
+ruleaction.cc:3852-3882)
 
 ### `pub fn new() -> Self`
 
 *暂无代码注释*
+
+`impl Rule for RuleCollapseConstants` 关键行为（2026-08-23 对齐重写，租约
+RULE-PORT-COLLAPSECONSTANTS-0001）：
+
+- `get_opcodes()` 返回**全部** opcode（`(1..74).filter_map(OpCode::from_i32)`，
+  72 个 live 值，slot 45 未用）——Ghidra 该类不覆写 `getOpList`，经基类
+  （action.cc:706-713）注册到每个 opcode；与 `RulePropagateCopy` 同形。
+- `apply_op()` 忠实移植 ruleaction.cc:3854-3882：
+  1. `isCollapsible` 守卫（op.cc:115-125：nocollapse 标志 / isAssignment /
+     ≥1 输入 / 全常量 / 输出 ≤ 8 字节）；
+  2. `PcodeOp::collapse()`（op.rs，经 `typeop::evaluate_unary/binary` 桥）
+     折叠一切一元/二元常量 op，包括 INT_SDIV/SDIV/SREM/REM/LEFT/RIGHT/
+     SRIGHT/SUBPIECE/PIECE/BOOL_*/FLOAT_*/2COMP/NEGATE/POPCOUNT/LZCOUNT；
+     `None`（C++ LowlevelError/EvaluationError：除零、ternary/special 求值
+     型、缺浮点格式）→ `fd.op_mark_no_collapse` + 返回 NO_CHANGE
+     （cc:3867-3870 错误路径）；
+  3. `fd.new_constant(out_size, val)` 生成折叠常量（cc:3872 newVarnode）；
+     markedInput → `collapse_constant_symbol`（op.cc:503-540，须在解链前）；
+  4. 倒序 `op_remove_input` 到 slot 1、`op_set_input(vn,0)`、
+     `op_set_opcode(COPY)`（cc:3876-3879，经 Funcdata 记账路径）。
 
 ### `pub struct RuleTrivialBool`
 
