@@ -1063,18 +1063,40 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:510 Varnode::copySymbolIfValid
-    /// Copy symbol info from vn if it has an EquateSymbol that is value-close.
-    /// Faithful to `copySymbolIfValid` (varnode.cc:510-522).
+    /// Symbol information (if present) is copied from the given constant
+    /// Varnode into \b this, which also must be constant, but only if the two
+    /// constants are \e close in the sense of an equate. Faithful to
+    /// `copySymbolIfValid` (varnode.cc:510-522):
+    /// ```text
+    /// SymbolEntry *mapEntry = vn->getSymbolEntry();
+    /// if (mapEntry == (SymbolEntry *)0) return;
+    /// EquateSymbol *sym = dynamic_cast<EquateSymbol *>(mapEntry->getSymbol());
+    /// if (sym == (EquateSymbol *) 0) return;
+    /// if (sym->isValueClose(loc.getOffset(), size)) {
+    ///   copySymbol(vn);  // Propagate the markup into our new constant
+    /// }
+    /// ```
+    /// The `dynamic_cast<EquateSymbol*>` subtype test maps to
+    /// [`equate_symbol_registry::query_value`]: only symbols registered as
+    /// equates (the Rust stand-in for the C++ EquateSymbol subtype identity)
+    /// carry an equate value here.
     pub fn copy_symbol_if_valid(&mut self, vn: &Varnode) {
+        // cc:513-515: no SymbolEntry on the source varnode -> nothing to copy.
         let map_entry = match vn.get_symbol_entry() {
             Some(e) => e,
             None => return,
         };
-        // cc:516: check if symbol is EquateSymbol and value is close.
-        // Rugra's SymbolEntry doesn't distinguish EquateSymbol yet.
-        // Conservative: copy symbol if mapentry exists and both are constant.
-        if vn.is_constant() && self.is_constant() {
-            self.copy_symbol(vn);
+        // cc:516-518: dynamic_cast<EquateSymbol*>; a non-equate symbol is
+        // rejected outright (no markup propagation).
+        let symbol = map_entry.read().unwrap().get_symbol();
+        let value = match equate_symbol_registry::query_value(&symbol) {
+            Some(v) => v,
+            None => return,
+        };
+        // cc:519-521: propagate only when this constant (loc offset + size)
+        // is "close" to the equate value (database.cc:640 isValueClose).
+        if crate::database::EquateSymbol::is_value_close_value(value, self.get_offset(), self.size) {
+            self.copy_symbol(vn); // Propagate the markup into our new constant
         }
     }
 
@@ -3234,9 +3256,235 @@ pub fn find_contiguous_whole(vn1: &Varnode) -> Option<Arc<RwLock<Varnode>>> {
     None
 }
 
+// Ghidra: varnode.cc:510 Varnode::copySymbolIfValid / database.hh:302 EquateSymbol
+// RUGRA-GLUE: equate-symbol identity registry.
+/// In the C++ oracle, `EquateSymbol` is a `Symbol` subtype, so
+/// `dynamic_cast<EquateSymbol*>(mapEntry->getSymbol())` (varnode.cc:516)
+/// recovers both the equate-ness and the `uintb value` field
+/// (database.hh:302-308) from the polymorphic `Symbol*`. Rugra's
+/// `database::Symbol` (src/database.rs, outside the varnode lease) has no
+/// equate payload, and `SymbolEntry::symbol` is a concrete
+/// `Arc<RwLock<Symbol>>`, so subtype polymorphism is unavailable. This
+/// varnode-domain side table is the minimal stand-in: registering a value
+/// marks the symbol as an EquateSymbol (the dynamic_cast succeeding), and
+/// `query_value` returns the `EquateSymbol::value` a successful cast would
+/// expose. Entries are deliberately never removed: symbols are dropped by
+/// `Arc`, and clearing on Drop would re-attribute equate-ness to a new symbol
+/// allocated at a recycled address (ABA); the registry therefore mirrors the
+/// C++ object-lifetime semantics of "an EquateSymbol stays an EquateSymbol".
+/// Boundary: `database::Scope::add_equate_symbol` does not yet register its
+/// symbols (DATABASE-EQUATE-VALUE-REGISTRY residual); pipeline equates must
+/// wire that call before this registry sees main-pipeline traffic.
+pub mod equate_symbol_registry {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
+    use crate::database::Symbol;
+
+    // RUGRA-GLUE: once-cell accessor for the process-global registry map
+    // (pure Rust language structure; Ghidra has no counterpart).
+    fn table() -> &'static Mutex<HashMap<usize, u64>> {
+        static TABLE: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+        TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    // RUGRA-GLUE: registry key = symbol Arc allocation address (identity of
+    // the referenced Symbol object, mirroring the C++ pointer identity the
+    // dynamic_cast would operate on).
+    fn key_of(symbol: &Arc<RwLock<Symbol>>) -> usize {
+        Arc::as_ptr(symbol) as usize
+    }
+
+    // RUGRA-GLUE: register_equate_symbol_value (no Ghidra counterpart)
+    /// Record that `symbol` is an equate carrying `value` — the Rust
+    /// equivalent of the C++ `Symbol*` actually pointing at an
+    /// `EquateSymbol(value)` object for later `dynamic_cast`s.
+    pub fn register_value(symbol: &Arc<RwLock<Symbol>>, value: u64) {
+        table().lock().unwrap().insert(key_of(symbol), value);
+    }
+
+    // RUGRA-GLUE: query_equate_symbol_value (models dynamic_cast<EquateSymbol*>)
+    /// Return the equate value of `symbol`, or `None` when the symbol is not
+    /// an equate (the `dynamic_cast<EquateSymbol*>` yielding null,
+    /// varnode.cc:516-518).
+    pub fn query_value(symbol: &Arc<RwLock<Symbol>>) -> Option<u64> {
+        table().lock().unwrap().get(&key_of(symbol)).copied()
+    }
+}
+
+// Ghidra: database.cc:640 EquateSymbol::isValueClose
+impl crate::database::EquateSymbol {
+    /// An EquateSymbol should survive certain kinds of transforms during
+    /// decompilation, such as negation, twos-complementing, adding or
+    /// subtracting 1. Return `true` if the given value looks like a transform
+    /// of this type relative to the underlying value of this equate.
+    /// Faithful to `EquateSymbol::isValueClose` (database.cc:640-659):
+    /// ```text
+    /// if (value == op2Value) return true;
+    /// uintb mask = calc_mask(size);
+    /// uintb maskValue = value & mask;
+    /// if (maskValue != value) {          // '1' bits are getting masked off
+    ///   if (value != sign_extend(maskValue,size,sizeof(uintb)))
+    ///     return false;                  // only sign-extension may be masked
+    /// }
+    /// if (maskValue == (op2Value & mask)) return true;
+    /// if (maskValue == (~op2Value & mask)) return true;
+    /// if (maskValue == (-op2Value & mask)) return true;
+    /// if (maskValue == ((op2Value + 1) & mask)) return true;
+    /// if (maskValue == ((op2Value - 1) & mask)) return true;
+    /// return false;
+    /// ```
+    // Ghidra: database.cc:640 EquateSymbol::isValueClose
+    pub fn is_value_close(&self, op2_value: u64, size: usize) -> bool {
+        Self::is_value_close_value(self.value, op2_value, size)
+    }
+
+    // Ghidra: database.cc:640 EquateSymbol::isValueClose
+    /// Value-level form of [`EquateSymbol::is_value_close`], callable from
+    /// `Varnode::copy_symbol_if_valid` (varnode.cc:519) with just the
+    /// `EquateSymbol::value` recovered via `dynamic_cast`, without
+    /// reconstructing a full symbol object. Same algorithm, same branches.
+    pub fn is_value_close_value(value: u64, op2_value: u64, size: usize) -> bool {
+        // cc:642: exact equality always matches, regardless of masking.
+        if value == op2_value {
+            return true;
+        }
+        // cc:643-644: mask off everything beyond `size` bytes of precision.
+        let mask = crate::address::calc_mask(size);
+        let mask_value = value & mask;
+        // cc:645-649: if '1' bits are getting masked off, make sure only
+        // sign-extension is getting masked off.
+        if mask_value != value
+            && value != crate::rangeutil::sign_extend_size(mask_value, size, 8)
+        {
+            return false;
+        }
+        // cc:650-654: equal / bitwise-not / negated / plus-one / minus-one
+        // forms within the mask all count as "close". The C++ uintb
+        // arithmetic (-, +1, -1) wraps; so does the Rust u64 form.
+        if mask_value == (op2_value & mask) {
+            return true;
+        }
+        if mask_value == (!op2_value & mask) {
+            return true;
+        }
+        if mask_value == (op2_value.wrapping_neg() & mask) {
+            return true;
+        }
+        if mask_value == (op2_value.wrapping_add(1) & mask) {
+            return true;
+        }
+        if mask_value == (op2_value.wrapping_sub(1) & mask) {
+            return true;
+        }
+        // cc:655: nothing matched.
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_equate_is_value_close_table() {
+        // database.cc:640-659 branch table. These are Rugra-side regression
+        // checks; the locked 12.0.4 oracle gate is
+        // tests/oracle/varnode_copysymbol_1204 (VARNODE-COPYSYMBOL-EQUATE-0001).
+        use crate::database::EquateSymbol;
+        // cc:642 exact equality, any size.
+        assert!(EquateSymbol::is_value_close_value(0x11223344, 0x11223344, 4));
+        assert!(EquateSymbol::is_value_close_value(7, 7, 8));
+        // cc:645-649 masked-off bits that are pure sign-extension survive...
+        assert!(EquateSymbol::is_value_close_value(
+            0xFFFFFFFF_8899AABB,
+            0x8899AABB,
+            4
+        ));
+        // ...but masked-off '1' bits that are NOT sign-extension reject.
+        assert!(!EquateSymbol::is_value_close_value(
+            0x11223344_55667788,
+            0x55667788,
+            4
+        ));
+        // cc:650 mask-equal after truncation of op2Value.
+        assert!(EquateSymbol::is_value_close_value(0x55667788, 0x11223344_55667788, 4));
+        // cc:651 bitwise-not close.
+        assert!(EquateSymbol::is_value_close_value(0x0F0F, 0xF0F0, 2));
+        // cc:652 negation close (two's complement within mask).
+        assert!(EquateSymbol::is_value_close_value(0x0F0F, 0xF0F1, 2));
+        // cc:653 op2Value + 1 close.
+        assert!(EquateSymbol::is_value_close_value(0x0F0F, 0x0F0E, 2));
+        // cc:654 op2Value - 1 close.
+        assert!(EquateSymbol::is_value_close_value(0x0F0F, 0x0F10, 2));
+        // cc:655 nothing matches.
+        assert!(!EquateSymbol::is_value_close_value(0x1234, 0x5678, 2));
+        assert!(!EquateSymbol::is_value_close_value(0x10, 0x20, 8));
+        // Method form delegates with self.value (database.hh:307).
+        let equ = EquateSymbol::new(0, "EQ", 0, 0x0F0F);
+        assert!(equ.is_value_close(0xF0F0, 2));
+        assert!(!equ.is_value_close(0x5678, 2));
+    }
+
+    #[test]
+    fn test_copy_symbol_if_valid_equate_gating() {
+        // varnode.cc:510-522: the markup is copied only from an equate symbol
+        // whose value is close to this constant (loc offset + size).
+        use crate::address::RangeList;
+        use crate::database::{Symbol, SymbolEntry};
+
+        let attach = |vn: &mut Varnode, symbol: std::sync::Arc<RwLock<Symbol>>, size: i32| {
+            let entry = SymbolEntry::new_dynamic(
+                symbol.clone(),
+                varnode_flags::MAPPED,
+                1,
+                0,
+                size,
+                RangeList::default(),
+            );
+            vn.set_symbol_entry(std::sync::Arc::new(RwLock::new(entry)));
+            symbol
+        };
+        let equate_symbol = |value: u64| {
+            let symbol = std::sync::Arc::new(RwLock::new(Symbol::new(0, "FIXTURE_EQ", "equ")));
+            equate_symbol_registry::register_value(&symbol, value);
+            symbol
+        };
+
+        // cc:519-521 equate value equal to the destination constant: copy.
+        let mut src = Varnode::new_constant(0x33333333, 4);
+        let mut dst = Varnode::new_constant(0x33333333, 4);
+        attach(&mut src, equate_symbol(0x33333333), 4);
+        dst.copy_symbol_if_valid(&src);
+        assert!(dst.get_symbol_entry().is_some(), "close equate propagates");
+
+        // cc:519 not close: reject (VARNODE-COPYSYMBOL-EQUATE-0001 branch).
+        let mut src = Varnode::new_constant(0x12345678, 4);
+        let mut dst = Varnode::new_constant(0x33333333, 4);
+        attach(&mut src, equate_symbol(0x12345678), 4);
+        dst.copy_symbol_if_valid(&src);
+        assert!(dst.get_symbol_entry().is_none(), "not-close equate rejected");
+
+        // cc:516-518 non-equate symbol (dynamic_cast fails): reject.
+        let mut src = Varnode::new_constant(0x33333333, 4);
+        let mut dst = Varnode::new_constant(0x33333333, 4);
+        attach(&mut src, std::sync::Arc::new(RwLock::new(Symbol::new(0, "PLAIN", "unknown"))), 4);
+        dst.copy_symbol_if_valid(&src);
+        assert!(dst.get_symbol_entry().is_none(), "non-equate symbol rejected");
+
+        // cc:513-515 source without a mapentry: early return.
+        let src = Varnode::new_constant(0x33333333, 4);
+        let mut dst = Varnode::new_constant(0x33333333, 4);
+        dst.copy_symbol_if_valid(&src);
+        assert!(dst.get_symbol_entry().is_none(), "no mapentry -> no copy");
+
+        // cc:652 negate-close still propagates through copySymbolIfValid.
+        let mut src = Varnode::new_constant(0xF0F1, 2);
+        let mut dst = Varnode::new_constant(0x0F0F, 2);
+        attach(&mut src, equate_symbol(0x0F0F), 2);
+        dst.copy_symbol_if_valid(&src);
+        assert!(dst.get_symbol_entry().is_some(), "negate-close equate propagates");
+    }
 
     #[test]
     fn test_varnode_bank_creation() {
