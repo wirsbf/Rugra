@@ -853,3 +853,36 @@
 置位同方向。旧注释"does not track the coverdirty flag"系 585bdd7 遗留，
 已删除。
 <!-- annotation-pass: 2026-08-17 -->
+
+### 2026-08-23：copySymbolIfValid 忠实化 + isValueClose 移植（VARNODE-COPYSYMBOL-EQUATE-0001）
+
+- `Varnode::copy_symbol_if_valid(vn)`（varnode.cc:510-522）从保守近似
+  （「双方均 constant 即复制 mapentry」）改为逐行忠实移植：cc:513-515 无
+  SymbolEntry 早退；cc:516-518 `dynamic_cast<EquateSymbol*>` 失败即拒绝非
+  equate 符号；cc:519-521 仅当 `isValueClose(loc.offset, size)` 成立时
+  `copy_symbol(vn)` 传播 markup。旧的「双 constant」守卫为自创语义，删除。
+- `EquateSymbol::is_value_close(op2_value, size)` +
+  `EquateSymbol::is_value_close_value(value, op2_value, size)`（database.cc:640-659，
+  inherent impl 落在 varnode.rs——database.rs 不在本租约 write-set 内）：
+  cc:642 全宽相等；cc:643-644 `calc_mask(size)` 截断；cc:645-649 掩掉的
+  '1' 位仅允许符号扩展（`sign_extend(maskValue,size,8)`，Rust 对应
+  `rangeutil::sign_extend_size`）；cc:650-654 mask 内 相等/按位取反/取负/
+  +1/-1 五种 close 形式（uintb 环绕 = `wrapping_neg/add/sub`）；cc:655 全不
+  匹配返回 false。
+- `equate_symbol_registry::{register_value, query_value}`（RUGRA-GLUE）：
+  C++ 侧 EquateSymbol 是 Symbol 子类，`dynamic_cast` 从多态 `Symbol*` 同时
+  恢复 equate 身份与 `value` 字段；Rugra `database::Symbol` 无 equate 载荷
+  且 `SymbolEntry::symbol` 为具体 `Arc<RwLock<Symbol>>`，故 varnode 域内以
+  符号身份（Arc 指针）→ value 侧表最小建模。条目刻意不删除（镜像 C++
+  「EquateSymbol 终身是 EquateSymbol」的对象生命周期语义，避免地址复用
+  ABA 误判）。边界：`database::Scope::add_equate_symbol` 尚未注册其符号
+  （DATABASE-EQUATE-VALUE-REGISTRY 残差），主管线 equate 接线前该注册表
+  只有 fixture/显式 API 流量。
+- 行为影响：`RuleCollapseConstants` 折叠时非 equate mapentry 不再传播
+  （与 oracle 一致方向）；`ruleaction::tests::
+  collapse_constants_symbol_propagation_via_marked_input` 原断言保守行为，
+  需在其测试内改用 `equate_symbol_registry::register_value` 注册 equate
+  （ruleaction.rs 不在本租约，登记给 root）。oracle 行为门禁：
+  `tests/oracle/varnode_copysymbol_1204`（pin-base schema2，
+  `tools/run_varnode_copysymbol_oracle.sh`）。
+<!-- annotation-pass: 2026-08-23 -->
