@@ -7680,12 +7680,86 @@ impl Action for ActionExtraPopSetup {
     // Ghidra: coreaction.cc:1436 ActionExtraPopSetup::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionExtraPopSetup::apply (coreaction.cc:1436-1466).
-        // For each call with non-zero extraPop, create an INT_ADD op to
-        // adjust the stack pointer after the call. If extraPop is unknown,
-        // create an INDIRECT.
-        // Rugra doesn't track extraPop per-callspec yet, so this is a no-op
-        // (x86-64 SysV ABI doesn't use extraPop — callee cleans stack).
-        // The infrastructure is ready for when extraPop tracking is added.
+        // For each call whose prototype extraPop is non-zero, insert an op on
+        // the stack-pointer register: `RSP' = RSP + extrapop` (INT_ADD)
+        // placed AFTER the call when extrapop is known, or an INDIRECT on
+        // RSP placed BEFORE the call when unknown. This models the callee's
+        // `ret` popping the pushed return address — without it the SLEIGH
+        // call push (`RSP = RSP-8; [RSP] = retaddr`) leaves the stack
+        // pointer permanently 8 bytes off across every call, and the
+        // stack-relative STORE at the call site can never be rewritten to a
+        // stack-space COPY by RuleStoreVarnode (the ghost
+        // `*(long*)((long)uVar20-8) = 0x3710` class of residual stores).
+        //
+        // cc:1441-1444: stackspace==0 → return; sb = stackspace->getSpacebase(0)
+        // (coreaction.cc:5472: stackspace = conf->getStackSpace()). Rugra's
+        // equivalent stack-pointer record lives on the Architecture
+        // (stack_pointer_space/offset/size, x86-64 = register:0x20 size 8).
+        let Some(arch) = fd.get_arch().cloned() else {
+            return Ok(action_status::NO_CHANGE);
+        };
+        let sb_space = arch.stack_pointer_space;
+        let sb_offset = arch.stack_pointer_offset;
+        let sb_size = arch.stack_pointer_size;
+
+        let n = fd.num_calls();
+        for i in 0..n {
+            // cc:1447-1448: fc = data.getCallSpecs(i); skip when extraPop==0.
+            let (op_addr, extra_pop) = {
+                let Some(fc) = fd.get_call_specs(i) else { continue };
+                (fc.op_addr, fc.prototype.get_extra_pop())
+            };
+            if extra_pop == 0 {
+                continue; // Stack pointer is undisturbed
+            }
+            // Resolve the CALL/CALLIND op for this spec (Ghidra's FuncCallSpecs
+            // holds the PcodeOp*; Rugra's spec stores the call address, so
+            // look the op up by exact address among CALL/CALLIND ops).
+            let call_op = {
+                let mut found: Option<crate::op::PcodeOpRef> = None;
+                for op_ref in &fd.obank.alivelist {
+                    let op = op_ref.0.read().unwrap();
+                    if op.start.addr == op_addr
+                        && matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
+                    {
+                        found = Some(op_ref.clone());
+                        break;
+                    }
+                }
+                match found {
+                    Some(o) => o,
+                    None => continue,
+                }
+            };
+            // cc:1449-1451: op = newOp(2, call addr); out = newVarnodeOut(sb)
+            // — a REGISTER-space varnode at the stack-pointer address.
+            let op = fd.new_op(2, op_addr);
+            fd.new_varnode_out(sb_size, crate::address::Address::new(sb_offset), &op);
+            // cc:1452: in(0) = newVarnode(sb) — a FREE register-space varnode
+            // at the same address; heritage links it to the most recent RSP
+            // definition before the call.
+            let invn = fd
+                .vbank
+                .create_with_space(sb_size, sb_space, sb_offset);
+            fd.op_set_input(&op, invn, 0);
+            if extra_pop != crate::fspec::EXTRAPOP_UNKNOWN_FULL {
+                // cc:1453-1457: setEffectiveExtraPop (bookkeeping; Rugra's
+                // FuncCallSpecs has no effective_extrapop field yet — the
+                // value is only read back by FuncCallSpecs consumers that
+                // Rugra has not ported) + INT_ADD form inserted AFTER call.
+                fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+                let pop_c = fd.new_constant(sb_size, extra_pop as u64);
+                fd.op_set_input(&op, pop_c, 1);
+                fd.op_insert_after(&op, &call_op);
+            } else {
+                // cc:1459-1464: unknown extrapop → INDIRECT form inserted
+                // BEFORE the call, keyed by the iop-space reference.
+                fd.op_set_opcode(&op, OpCode::CPUI_INDIRECT);
+                let iop_vn = fd.new_varnode_iop(&call_op);
+                fd.op_set_input(&op, iop_vn, 1);
+                fd.op_insert_before(&op, &call_op);
+            }
+        }
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:679
