@@ -308,6 +308,39 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
             .unwrap_or(false)
     }
 
+    /// Is the i-th incoming edge part of the spanning tree? Faithful to
+    /// Ghidra's `FlowBlock::isTreeEdgeIn` (block.hh:329). Read by
+    /// `BlockGraph::findIrreducible` (block.cc:1179) to decide whether an
+    /// irreducible edge forces a spanning-tree rebuild.
+    // Ghidra: block.hh:329 FlowBlock::isTreeEdgeIn
+    fn is_tree_edge_in(&self, i: usize) -> bool {
+        self.get_in(i)
+            .map(|e| (e.flags & edge_flags::F_TREE_EDGE) != 0)
+            .unwrap_or(false)
+    }
+
+    /// Is the i-th incoming edge a back edge? Faithful to Ghidra's
+    /// `FlowBlock::isBackEdgeIn` (block.hh:330). Read by
+    /// `BlockGraph::findIrreducible` (block.cc:1158) to seed the reachunder
+    /// set of each loop head.
+    // Ghidra: block.hh:330 FlowBlock::isBackEdgeIn
+    fn is_back_edge_in(&self, i: usize) -> bool {
+        self.get_in(i)
+            .map(|e| (e.flags & edge_flags::F_BACK_EDGE) != 0)
+            .unwrap_or(false)
+    }
+
+    /// Is the i-th incoming edge an irreducible edge? Faithful to Ghidra's
+    /// `FlowBlock::isIrreducibleIn` (block.hh:333). The reachunder walk of
+    /// `BlockGraph::findIrreducible` (block.cc:1170) pretends already-marked
+    /// irreducible edges don't exist.
+    // Ghidra: block.hh:333 FlowBlock::isIrreducibleIn
+    fn is_irreducible_in(&self, i: usize) -> bool {
+        self.get_in(i)
+            .map(|e| (e.flags & edge_flags::F_IRREDUCIBLE_EDGE) != 0)
+            .unwrap_or(false)
+    }
+
     /// OR-set edge flags on the `slot`-th incoming edge. This is the mirrored
     /// half of Ghidra's `FlowBlock::setOutEdgeFlag` (block.cc:245 writes
     /// `bbout->intothis[reverse_index].label |= lab` in addition to the out
@@ -320,6 +353,22 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
             if slot < bb.incoming.len() { bb.incoming[slot].flags |= flag; }
         } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
             if slot < bg.incoming.len() { bg.incoming[slot].flags |= flag; }
+        }
+    }
+
+    /// Clear edge flags from the `slot`-th incoming edge. This is the mirrored
+    /// half of Ghidra's `FlowBlock::clearOutEdgeFlag` (block.cc:254 writes
+    /// `bbout->intothis[reverse_index].label &= ~lab` in addition to the out
+    /// edge), exposed so the mirrored clear can be applied from the target
+    /// side without holding both write locks at once. Consumed by
+    /// findIrreducible's cross/forward relabel (block.cc:1182).
+    // Ghidra: block.cc:254 FlowBlock::clearOutEdgeFlag (mirrored in-edge half)
+    fn clear_in_edge_flag(&mut self, slot: usize, flag: u32) {
+        let any = self.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            if slot < bb.incoming.len() { bb.incoming[slot].flags &= !flag; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            if slot < bg.incoming.len() { bg.incoming[slot].flags &= !flag; }
         }
     }
 
@@ -914,6 +963,25 @@ pub fn find_condition(
     Some((cond, slot1))
 }
 
+/// FIND(y) for findIrreducible's union structure: reads `y->copymap`
+/// (block.hh:123). findSpanningTree initializes every block's copymap to
+/// \b this (block.cc:1027/1122) and findIrreducible's collapse step
+/// (block.cc:1194) re-points reachunder members at the loop head, so the
+/// one-step read is the complete FIND (Ghidra keeps the map flat and reads
+/// the raw pointer directly at block.cc:1161/1173). The `Option` fallback
+/// to `y` itself is unreachable on the oracle path (copymap is always set
+/// for blocks in `list`).
+// RUGRA-GLUE: FIND(y) read of Ghidra FlowBlock::copymap (block.hh:123 raw
+// pointer dereference at block.cc:1161/1173; Rust Weak upgrade with
+// unreachable self fallback)
+fn find_copy_map(y: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+    y.read()
+        .unwrap()
+        .get_copy_map()
+        .and_then(|w| w.upgrade())
+        .unwrap_or_else(|| y.clone())
+}
+
 /// OR-set edge flags on the `i`-th outgoing edge of `cur` AND on the mirrored
 /// incoming edge of the target block. Faithful to the complete Ghidra
 /// `FlowBlock::setOutEdgeFlag` (block.cc:240-246): the label is applied to
@@ -946,6 +1014,43 @@ pub fn set_out_edge_flag_mirrored(
     } else {
         cur.write().unwrap().set_out_edge_flag(i, lab);
         target.write().unwrap().set_in_edge_flag(rev as usize, lab);
+    }
+}
+
+/// Clear edge flags from the `i`-th outgoing edge of `cur` AND from the
+/// mirrored incoming edge of the target block. Faithful to the complete
+/// Ghidra `FlowBlock::clearOutEdgeFlag` (block.cc:250-256): the label bits
+/// are removed from `outofthis[i]` and from
+/// `outofthis[i].point->intothis[reverse_index]`. Ghidra follows raw
+/// pointers; in Rugra the two halves live behind separate `RwLock`s, so a
+/// self-edge (loop to the same block) must clear both halves under ONE
+/// guard. Called by findIrreducible (block.cc:1182) when a non-tree edge is
+/// promoted to irreducible: the stale cross/forward classification is
+/// removed from both halves.
+// Ghidra: block.cc:250 FlowBlock::clearOutEdgeFlag
+pub fn clear_out_edge_flag_mirrored(
+    cur: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    i: usize,
+    lab: u32,
+) {
+    let (target, rev) = match cur.read().unwrap().get_out(i) {
+        Some(e) => (e.point.clone(), e.reverse_index),
+        None => return,
+    };
+    if Arc::ptr_eq(&target, cur) {
+        // Self-edge: both halves live on this block; one exclusive guard.
+        let mut g = cur.write().unwrap();
+        let any = g.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            if i < bb.outgoing.len() { bb.outgoing[i].flags &= !lab; }
+            if (rev as usize) < bb.incoming.len() { bb.incoming[rev as usize].flags &= !lab; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            if i < bg.outgoing.len() { bg.outgoing[i].flags &= !lab; }
+            if (rev as usize) < bg.incoming.len() { bg.incoming[rev as usize].flags &= !lab; }
+        }
+    } else {
+        cur.write().unwrap().clear_out_edge_flag(i, lab);
+        target.write().unwrap().clear_in_edge_flag(rev as usize, lab);
     }
 }
 
@@ -1853,6 +1958,179 @@ impl BlockGraph {
             .map(|slot| slot.expect("rpostorder fully assigned by DFS"))
             .collect();
         Ok(())
+    }
+
+    /// Clear a set of edge-label bits from BOTH halves (in and out edges) of
+    /// every component block. Faithful to `BlockGraph::clearEdgeFlags`
+    /// (block.cc:966-978): the mask parameter is complemented
+    /// (cc:969 `fl = ~fl`) and AND-ed into every `intothis[i].label` and
+    /// `outofthis[i].label` of every block in `list`, in list order.
+    /// Invoked by structureLoops' rebuild pass with the spanning-tree label
+    /// set (block.cc:2206, keeping f_irreducible intact) and by
+    /// findSpanningTree's pass start with all-ones (block.cc:1045, see
+    /// `clear_edge_flags_all`).
+    // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags
+    pub fn clear_edge_flags_mask(&mut self, fl: u32) {
+        let keep = !fl; // cc:969
+        for bl in &self.blocks {
+            let mut g = bl.write().unwrap();
+            let any = g.as_any_mut();
+            if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+                for e in bb.incoming.iter_mut() { e.flags &= keep; }
+                for e in bb.outgoing.iter_mut() { e.flags &= keep; }
+            } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+                for e in bg.incoming.iter_mut() { e.flags &= keep; }
+                for e in bg.outgoing.iter_mut() { e.flags &= keep; }
+            }
+        }
+    }
+
+    /// \brief Identify irreducible edges
+    ///
+    /// Faithful port of `BlockGraph::findIrreducible` (block.cc:1147-1199).
+    /// Assuming the spanning tree has been properly labeled using
+    /// `findSpanningTree`, test for and label irreducible edges (the test
+    /// ignores any edges already labeled as irreducible). Returns \b true if
+    /// the spanning tree needs to be rebuilt, because one of the tree edges
+    /// is irreducible. Original algorithm due to Tarjan.
+    ///
+    /// Walks `preorder` in REVERSE (cc:1152-1153 `xi = preorder.size()-1`
+    /// counting down), so every loop body is collapsed into its copymap
+    /// representative before the enclosing loop head is processed:
+    ///   - For each vertex x and each BACK edge into x (cc:1157-1158), the
+    ///     source's FIND(y) (= `y->copymap`, cc:1161) seeds the reachunder
+    ///     set and is marked (cc:1162). A self back edge (y == x) never
+    ///     contributes (cc:1160).
+    ///   - The reachunder BFS (cc:1164-1189) scans every in-edge of each set
+    ///     member t, skipping edges already labeled irreducible (cc:1170).
+    ///     For y' = FIND(y): if y' lies OUTSIDE x's preorder interval
+    ///     [visitcount, visitcount + numdesc) (cc:1174 — strictly before x,
+    ///     or at/after the subtree end), the edge is irreducible: the count
+    ///     accumulates (cc:1176), the label is set on y's out edge slot
+    ///     `t->getInRevIndex(i)` and its mirrored in half (cc:1177-1178),
+    ///     and a TREE edge forces needrebuild (cc:1179-1180) while a
+    ///     non-tree edge just drops its stale cross/forward classification
+    ///     (cc:1182). Otherwise an unmarked y' != x joins the set (cc:1184).
+    ///   - Finally the whole reachunder set collapses into x: marks are
+    ///     cleared and every member's copymap is re-pointed at x
+    ///     (cc:1191-1195) — the union step of the FIND structure that later
+    ///     vertices observe via `y->copymap` reads.
+    ///
+    /// `irreduciblecount` is an in/out accumulator (structureLoops
+    /// initializes it once before its rebuild loop, block.cc:2199).
+    ///
+    /// Ghidra dereferences `y->copymap` unconditionally; findSpanningTree
+    /// guarantees it is set (to \b this) for every block in `list`
+    /// (block.cc:1027/1122), so the Rust `Option` fallback to `y` itself is
+    /// unreachable on the oracle path.
+    // Ghidra: block.cc:1147 BlockGraph::findIrreducible
+    pub fn find_irreducible(
+        &self,
+        preorder: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+        irreduciblecount: &mut i32,
+    ) -> bool {
+        // cc:1150: the current reachunder set being built (each member also
+        // carries its mark).
+        let mut reachunder: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        let mut needrebuild = false;
+        let mut xi: i64 = preorder.len() as i64 - 1; // cc:1152
+        while xi >= 0 {
+            // cc:1153-1155: for each vertex in reverse pre-order.
+            let x = preorder[xi as usize].clone();
+            xi -= 1;
+            let sizein = x.read().unwrap().size_in();
+            for i in 0..sizein {
+                // cc:1157-1158: for each back-edge into x.
+                if !x.read().unwrap().is_back_edge_in(i) {
+                    continue;
+                }
+                let y = match x.read().unwrap().get_in(i) {
+                    Some(e) => e.point,
+                    None => continue,
+                };
+                if Arc::ptr_eq(&y, &x) {
+                    // cc:1160: the reachunder set does not include the loop
+                    // head (self back edge).
+                    continue;
+                }
+                // cc:1161-1162: add FIND(y) to reachunder and mark it.
+                let ymap = find_copy_map(&y);
+                reachunder.push(ymap.clone());
+                ymap.write().unwrap().set_mark();
+            }
+            let mut q = 0usize; // cc:1164
+            while q < reachunder.len() {
+                let t = reachunder[q].clone();
+                q += 1;
+                let sizein_t = t.read().unwrap().size_in();
+                for i in 0..sizein_t {
+                    // cc:1170: pretend irreducible edges don't exist.
+                    if t.read().unwrap().is_irreducible_in(i) {
+                        continue;
+                    }
+                    // cc:1172: for each forward, tree, or cross edge (all
+                    // back-edges into t have already been collapsed).
+                    let y = match t.read().unwrap().get_in(i) {
+                        Some(e) => e.point,
+                        None => continue,
+                    };
+                    let yprime = find_copy_map(&y); // cc:1173: y' = FIND(y)
+                    let (x_visitcount, x_numdesc, yprime_visitcount) = {
+                        let xg = x.read().unwrap();
+                        let yg = yprime.read().unwrap();
+                        (xg.get_visit_count(), xg.get_num_desc(), yg.get_visit_count())
+                    };
+                    if (x_visitcount > yprime_visitcount)
+                        || (x_visitcount + x_numdesc <= yprime_visitcount)
+                    {
+                        // cc:1174-1183: the original Tarjan algorithm
+                        // reports reducibility failure here — y' is outside
+                        // x's preorder interval, so the edge is
+                        // irreducible.
+                        *irreduciblecount += 1; // cc:1176
+                        let edgeout = t.read().unwrap().get_in_rev_index(i); // cc:1177
+                        if edgeout < 0 {
+                            // Unreachable for well-formed edges (addEdge
+                            // always fills reverse_index); Ghidra would
+                            // index out of bounds on a raw negative.
+                            continue;
+                        }
+                        set_out_edge_flag_mirrored(
+                            &y,
+                            edgeout as usize,
+                            edge_flags::F_IRREDUCIBLE_EDGE,
+                        ); // cc:1178
+                        if t.read().unwrap().is_tree_edge_in(i) {
+                            // cc:1179-1180: a tree edge that is irreducible
+                            // forces a spanning-tree rebuild.
+                            needrebuild = true;
+                        } else {
+                            // cc:1181-1182: otherwise pretend the edge was
+                            // already marked irreducible — drop the stale
+                            // cross/forward classification on both halves.
+                            clear_out_edge_flag_mirrored(
+                                &y,
+                                edgeout as usize,
+                                edge_flags::F_CROSS_EDGE | edge_flags::F_FORWARD_EDGE,
+                            );
+                        }
+                    } else if !(yprime.read().unwrap().is_mark()) && !Arc::ptr_eq(&yprime, &x) {
+                        // cc:1184-1187: y' is inside x's interval, not yet
+                        // in reachunder, and not x itself — add and mark.
+                        yprime.write().unwrap().set_mark();
+                        reachunder.push(yprime);
+                    }
+                }
+            }
+            // cc:1190-1196: collapse reachunder into a single node labeled
+            // as x (clear the mark, re-point copymap).
+            for s in &reachunder {
+                s.write().unwrap().clear_mark();
+                s.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&x)));
+            }
+            reachunder.clear();
+        }
+        needrebuild // cc:1198
     }
 
     /// Get the entry (start) block of this graph. Faithful to
@@ -2845,26 +3123,47 @@ impl BlockGraph {
         // Faithful to block.cc:2197-2215:
         //   do { findSpanningTree(preorder, rootlist);
         //        needrebuild = findIrreducible(preorder, irreduciblecount);
-        //        if (needrebuild) { clearEdgeFlags(...); preorder.clear();
-        //                           rootlist.clear(); } } while (needrebuild);
+        //        if (needrebuild) { clearEdgeFlags(spanning labels);
+        //                           preorder.clear(); rootlist.clear(); }
+        //        } while (needrebuild);
         //   if (irreduciblecount > 0) calcLoop();
         //
-        // findSpanningTree (the public 1:1 port) establishes the reverse
-        // post-order (reordering the component list, block.cc:1135
-        // `list = rpostorder`), relabels tree/forward/cross/back edges, and
-        // fills rootlist with every entry point — the inputs
-        // calcForwardDominator and Funcdata::structureReset consume.
+        // findSpanningTree establishes the reverse post-order (reordering
+        // the component list, block.cc:1135 `list = rpostorder`), relabels
+        // tree/forward/cross/back edges, and fills rootlist with every
+        // entry point — the inputs calcForwardDominator and
+        // Funcdata::structureReset consume. findIrreducible then labels the
+        // irreducible edges (the only f_irreducible writer); on needrebuild
+        // the spanning labels are cleared (f_irreducible kept, block.cc:2206)
+        // and the loop runs again — note findSpanningTree's own pass start
+        // wipes every label including f_irreducible (block.cc:1045), so each
+        // rebuild re-derives the classification over the RPO-reordered
+        // component list, which changes the next root scan order.
         //
-        // Registered gap: `findIrreducible` (block.cc:1147) and `calcLoop`
-        // (block.cc:2104) are not yet ported. The irreducible-rebuild loop
-        // only matters for irreducible CFGs (a tree edge found inside a
-        // reachunder set forces one rebuild), and calcLoop only labels
-        // f_loop_edge on irreducible graphs; for reducible control flow the
-        // oracle path is exactly findSpanningTree + return, which is what
-        // this port performs. Porting both is tracked with
-        // BLOCK-FINDIRREDUCIBLE-0001 (irreducible-CFG domain).
+        // Registered gap: `calcLoop` (block.cc:2104-2147) is still a no-op
+        // stub — on graphs where irreduciblecount > 0 the oracle
+        // additionally labels cycle-breaking f_loop_edge edges. The
+        // reducible path (irreduciblecount == 0, no rebuild) is complete.
         let mut preorder: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
-        self.find_spanning_tree(&mut preorder, rootlist)
+        let mut irreduciblecount: i32 = 0; // cc:2199: initialized once, accumulates
+        loop {
+            // cc:2201-2204
+            self.find_spanning_tree(&mut preorder, rootlist)?;
+            let needrebuild = self.find_irreducible(&preorder, &mut irreduciblecount);
+            if !needrebuild {
+                break;
+            }
+            // cc:2205-2209: clear the spanning tree (keep f_irreducible),
+            // then rebuild from an empty preorder/rootlist.
+            self.clear_edge_flags_mask(edge_flags::SPANNING_MASK);
+            preorder.clear();
+            rootlist.clear();
+        }
+        if irreduciblecount > 0 {
+            // cc:2211-2214: registered-gap stub (see doc above).
+            self.calc_loop();
+        }
+        Ok(())
     }
 
     /// Add a loop edge

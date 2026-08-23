@@ -556,18 +556,36 @@ RPO 常用于：
 
 ---
 
-### `pub fn structure_loops(&mut self) -> bool`
+### `pub fn structure_loops(&mut self, rootlist: &mut Vec<...>) -> anyhow::Result<()>`
 
-执行循环结构化。
+执行循环结构化（`BlockGraph::structureLoops`，block.cc:2194-2215）。
 
 #### 作用
-尝试把图中的循环组织成更接近高级控制流的结构。
+`do { findSpanningTree; findIrreducible; needrebuild 时清生成树 label 并重跑 } while(needrebuild)`，
+最后 `irreduciblecount > 0` 时调用 `calc_loop`。产出 RPO 成员列表、边分类与
+rootlist（含不可归约边标记）。
 
 #### 返回
-- 通常表示是否成功完成某种结构化步骤
+- `Ok(())`；`find_spanning_tree` 两遍后仍有 extraroots 时返回 LowlevelError 等价错误。
 
 #### 注意
-存在这个接口，并不意味着所有循环都已经能被稳定、正确、高质量地恢复成高级结构。
+`calc_loop` 仍为登记 stub（见 BLOCK-FINDIRREDUCIBLE-0001 残差）：不可归约图上
+oracle 还会经 calcLoop 补标 f_loop_edge。
+
+---
+
+### `pub fn find_irreducible(&self, preorder: &[...], irreduciblecount: &mut i32) -> bool`
+
+识别不可归约边（`BlockGraph::findIrreducible`，block.cc:1147-1199）。
+
+#### 作用
+反向前序遍历 `preorder`；对每个回边入点 x，用 FIND(y)=`copymap` 种子
+reachunder 集，BFS 中区间测试 `[visitcount, visitcount+numdesc)` 之外的 y'
+标记边为 `f_irreducible`（唯一写者），树边触发 needrebuild，非树边清除
+cross/forward 旧分类；末尾把集合坍缩为 x（清 mark、copymap 指向 x）。
+
+#### 返回
+- `needrebuild`：存在不可归约的树边时需要重建生成树（见下方暴力证据）。
 
 ---
 
@@ -582,7 +600,7 @@ RPO 常用于：
 
 ### `pub fn calc_loop(&mut self)`
 
-计算图中的循环。
+计算图中的循环（`BlockGraph::calcLoop`，block.cc:2104-2147）。
 
 #### 作用
 识别和组织 loop 相关结构，为后续：
@@ -592,6 +610,11 @@ RPO 常用于：
 - 更高级 loop 恢复
 
 提供基础。
+
+#### 注意
+当前为登记 stub（BLOCK-FINDIRREDUCIBLE-0001 残差，建议 TODO
+`BLOCK-CALCLOOP-0001`）：不可归约图上 oracle 会经 DFS 环检测调
+`addLoopEdge` 补标 f_loop_edge。
 
 ---
 
@@ -1080,11 +1103,12 @@ index 域并重过差分门禁，注释已注明）。
 ## 支配树重建域（block_domroot_1204，2026-08-19）
 
 **`BlockGraph::structure_loops(&mut rootlist)`** — `block.cc:2194-2215`
-`BlockGraph::structureLoops(vector<FlowBlock*> &rootlist)` 的可归约路径移植：
-经公共 `find_spanning_tree`（cc:1009-1136）产出 RPO + 边分类 + rootlist（含
-cc:1031-1035/1129-1133 orighead 尾交换）后返回。`findIrreducible`
-（cc:1147）与 `calcLoop`（cc:2104）未移植，登记
-`BLOCK-FINDIRREDUCIBLE-0001`；可归约 CFG 下与 oracle 路径逐语句等价。
+`BlockGraph::structureLoops(vector<FlowBlock*> &rootlist)` 的完整移植：
+`do { find_spanning_tree; find_irreducible; needrebuild 时
+clear_edge_flags_mask(SPANNING_MASK) + 清 preorder/rootlist 重跑 } while
+(needrebuild)`，`irreduciblecount > 0` 时调用 `calc_loop`（登记 stub，见
+下方 BLOCK-FINDIRREDUCIBLE-0001 节残差）。`findIrreducible`（cc:1147）已
+随本 wave 移植；`calcLoop`（cc:2104）为剩余残差。
 
 **`BlockGraph::calc_forward_dominator(&rootlist)`**（及预留
 `calc_forward_dominator_on`）— `block.cc:1954-2032`
@@ -1103,3 +1127,82 @@ oracle e40ed130 导出重建 libdecomp.a + 不可变 fd runner + fixture 哈希
 pin），四 case 双侧逐字节 MATCH（stdout_sha256=080948a5…）：A 尾部孤儿
 rootlist swap / B 入口回环 / C 多根 cross-merge VRoot 别名 / D 单根基线。
 复核：机制 C 独立 APPROVE（2026-08-19，含四类语义逐项）。
+
+## 不可归约边标记域（block_findirreducible_1204，2026-08-23）
+
+### 2026-08-23：BlockGraph::find_irreducible + structure_loops 完整重建环（BLOCK-FINDIRREDUCIBLE-0001）
+
+Ghidra `f_irreducible` 唯一写者的 1:1 移植：
+`BlockGraph::findIrreducible`（block.cc:1147-1199，Tarjan 可归约性测试），
+并把 `structure_loops` 从"仅可归约路径"升级为完整
+`structureLoops`（block.cc:2194-2215）重建环。
+
+**`BlockGraph::find_irreducible(&self, preorder, irreduciblecount) -> bool`**
+（block.cc:1147）逐语句对齐：
+- 反向前序遍历 `preorder`（cc:1152-1155 `xi` 自尾部递减）——每个循环体先于
+  包围它的循环头被坍缩；
+- 对每个 x 的**回边入**（cc:1157-1158 isBackEdgeIn）：源 y 的 `FIND(y)` =
+  `copymap` 一步读种子进 reachunder 集并置 mark（cc:1161-1162，无去重——
+  平行边会双重种子/双倍计数）；自环 y==x 跳过（cc:1160）；
+- reachunder BFS（cc:1164-1189）：跳过已标不可归约的入边（cc:1170）；
+  对 y' = FIND(y) 做区间测试——y' 落在 x 的前序区间
+  `[visitcount, visitcount+numdesc)` **之外**（cc:1174：严格在 x 之前，或
+  达/超过子树末端）即不可归约：`irreduciblecount` 累计（cc:1176，跨
+  structureLoops 重建累计）、y 的 `getInRevIndex(i)` 出边槽 + 镜像入边半边
+  OR-set `f_irreducible`（cc:1177-1178）、树边 → needrebuild（cc:1179-1180）、
+  非树边仅清 cross|forward 旧分类（cc:1182）；否则未标记且 ≠x 的 y' 入集
+  （cc:1184-1187）；
+- 末尾整集坍缩为 x：清 mark、成员 `copymap` 指向 x（cc:1191-1195）——
+  即 FIND 并查集的 union 步，后续顶点经 `y->copymap` 读到（cc:1161/1173）。
+
+**`BlockGraph::structure_loops`** 升级为完整 do-while：`find_spanning_tree`
+→ `find_irreducible` → needrebuild 时 `clear_edge_flags_mask(SPANNING_MASK)`
+（cc:2206，保 f_irreducible）+ 清 preorder/rootlist 重跑；收敛后
+`irreduciblecount > 0` 调 `calc_loop`（登记 stub，残差见下）。注意
+`find_spanning_tree` 每遍开头的 `clearEdgeFlags(~0)`（cc:1045）会把上一遍
+findIrreducible 标的 f_irreducible 也清掉——重建遍的收敛依赖 cc:1135
+`list = rpostorder` 重排改变下一遍根扫描顺序，与 oracle 一致。
+
+**支撑原语（本次新增，均为 trait 默认实现或自由函数）：**
+- `is_tree_edge_in(i)`（block.hh:329）/ `is_back_edge_in(i)`（block.hh:330）/
+  `is_irreducible_in(i)`（block.hh:333）— 入边半边谓词（get_in 读 flags，
+  与既有 `is_loop_in`/`is_irreducible_out` 同模式）。
+- `clear_in_edge_flag(slot, flag)` — clearOutEdgeFlag 的镜像入边半边
+  （block.cc:254）。
+- `clear_out_edge_flag_mirrored(cur, i, lab)`（自由函数，pub）— 完整
+  Ghidra clearOutEdgeFlag（block.cc:250-256）：自环边单锁双写，与
+  `set_out_edge_flag_mirrored` 对称。
+- `BlockGraph::clear_edge_flags_mask(fl)` — block.cc:966-978 的通用双半边
+  mask 清除（`clear_edge_flags_all` 即其 ~0 特例）。
+- `find_copy_map(y)`（RUGRA-GLUE）— FIND(y) 的 `copymap` Weak 升级读；
+  findSpanningTree 保证 list 内块恒有 copymap（cc:1027/1122），Option 回退
+  不可达。
+
+**needrebuild 分支可达性（重要发现）：** 对锁定 oracle 做穷举实验——全部
+4 节点有向图 2^16=65536 个（含自环）与全部 5 节点无自环有向图 2^20=1048576
+个，`findSpanningTree → findIrreducible` 后 **needrebuild=true 出现 0 次**
+（不可归约图分别为 24000/730112 个）。与区间套论证一致：新鲜一致生成树下，
+reachunder 成员恒在 x 的 DFS 子树内，其树父不可能既是 x 的真祖先又满足
+区间包含。该分支为防御性代码，fixture 投影记 UNTESTED（同 BLOCK-INDEX 对
+不可达分支的先例）。
+
+**残差（如实登记）：**
+- `calcLoop`（block.cc:2104-2147）未移植（`calc_loop` 空 stub，建议 TODO
+  `BLOCK-CALCLOOP-0001`）：不可归约图上 structureLoops 还会 DFS 环检测并
+  `addLoopEdge` 补标 f_loop_edge；Rugra 侧 structure_loops 已按 cc:2211-2214
+  调用点接线，stub 落地后即闭环。
+- `EDGEFLAG-BIT7-COLLISION-0001`（预存）：F_TREE_EDGE 与
+  F_DEFAULTSWITCH_EDGE 共享 bit 7。本域投影内 bit 7 只可能是 tree
+  （wipe-first 后无 default-switch 写者），与 block_index fixture 同一处理；
+  重分配需独立任务审计全部使用点。
+- 生产管线未消费：blockaction.rs 尚无 `BlockGraph::structure_loops` 调用点
+  （blockaction.cc 的 structureReset 路径），接线属后续任务。
+
+**对齐证据：** `tools/run_block_findirreducible_oracle.sh` 权威差分（锁定
+oracle e40ed130 导出重建 libdecomp.a + pinned base 296c128 + overlay
+src/block.rs/docs，pin-base schema2），7 case 双侧逐字节 MATCH
+（stdout_sha256=62c35679…）：可归约菱形零标记 / 自环头排除 / 经典双入口
+forward→i 提升 / 平行边双计数 / 嵌套不可归约 FIND 复用 + copymap 坍缩链 /
+多根 cross→i 提升 / structureLoops 端到端可归约驱动。投影含
+rebuild/cnt、preorder、rootlist、list、每块
+index/visitcount/numdesc/mark/copymap、出入边双侧 label 终态。
