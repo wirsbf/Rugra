@@ -3670,7 +3670,7 @@
     },
     {
       "id": "flow_containedcall_1204",
-      "description": "FlowInfo::checkContainedCall vs locked 12.0.4: exact conversion fwd/back, offcut warning, beyond-end/before-begin skips, CALLIND guard, extern resolved skip, erase-successor-skip quirk, post-conversion unreachable retention, getpc/mid simm32=0 goto rule zero false-positives (11/11 MATCH) [STALE 2026-08-23: rust comparand needs adaptation to inject API, FLOW-FIXTURE-API-ADAPT-0001]",
+      "description": "FlowInfo::checkContainedCall vs locked 12.0.4: exact conversion fwd/back, offcut warning, beyond-end/before-begin skips, CALLIND guard, extern resolved skip, erase-successor-skip quirk, post-conversion unreachable retention, getpc/mid simm32=0 goto rule zero false-positives (11/11 MATCH) (repinned 86a6bb9: base d73ee60 + pcodeinject double-overlay, 11/11 MATCH)",
       "runner": [
         "tools/run_flow_containedcall_oracle.sh"
       ],
@@ -3679,7 +3679,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "STALE",
+      "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/flow_containedcall_1204.metadata.json",
         "inputs": {
