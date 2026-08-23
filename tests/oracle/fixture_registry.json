@@ -3523,6 +3523,63 @@
         "float_emulate::convert_encoding",
         "float_emulate::round_to_nearest_even"
       ]
+    },
+    {
+      "id": "pool_purity_1204",
+      "description": "Rule pool registration purity vs locked 12.0.4: oppool1=134/oppool2=5/cleanup=15 sequences byte-identical across union-derive and decompile roots; forbidden Rugra-local rules absent (SextEliminate nonexistent, Equality dead-class archived unregistered, TrivialArith only at oppool1 index 10)",
+      "runner": [
+        "tools/run_pool_purity_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/pool_purity_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/pool_purity_1204.cc",
+          "rust_fixture": "tests/oracle/pool_purity_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionDatabase::universalAction pools"
+      ],
+      "rust_function_ids": [
+        "action::build_simplify_pool",
+        "action::build_cleanup_pool"
+      ]
+    },
+    {
+      "id": "varmap_dynamicsym_1204",
+      "description": "Dynamic symbolization chain vs locked 12.0.4: explicit conflict -> dynamic symbol with shared counter, uselimit gate, implied/input/addrtied attach legs, spacebase rejection (6/6 MATCH, zero source changes - chain verified pre-existing and faithful)",
+      "runner": [
+        "tools/run_varmap_dynamicsym_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/varmap_dynamicsym_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/varmap_dynamicsym_1204.cc",
+          "rust_fixture": "tests/oracle/varmap_dynamicsym_1204.rs"
+        }
+      },
+      "wave": "W-2026-08-22-ORCH",
+      "ghidra_function_ids": [
+        "ActionNameVars::apply",
+        "ScopeInternal::buildDynamicSymbol"
+      ],
+      "rust_function_ids": [
+        "varmap::add_dynamic_symbol",
+        "varmap::build_default_name"
+      ]
     }
   ]
 }
