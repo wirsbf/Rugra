@@ -468,10 +468,10 @@ pub struct GuardRecord {
 }
 
 impl GuardRecord {
-    // Ghidra: jumptable.cc:615 GuardRecord::GuardRecord
+    // Ghidra: jumptable.cc:613 GuardRecord::GuardRecord
     /// Construct from the CBRANCH, the read op, the path, the range, the
     /// restricted varnode and the unrolled flag. Faithful to the
-    /// `GuardRecord` constructor (jumptable.cc:615).
+    /// `GuardRecord` constructor (jumptable.cc:613-621).
     pub fn new(
         b_op: Arc<RwLock<PcodeOp>>,
         r_op: Arc<RwLock<PcodeOp>>,
@@ -529,41 +529,142 @@ impl GuardRecord {
         self.cbranch = None;
     }
 
-    // Ghidra: jumptable.cc:639 GuardRecord::valueMatch
+    // Ghidra: jumptable.cc:637 GuardRecord::valueMatch
     /// Determine if this guard applies to the given varnode. Returns:
     /// - 0: the two varnodes do not clearly hold the same value;
     /// - 1: they clearly hold the same value;
     /// - 2: they clearly hold the same value, pending no writes between
     ///   their defining ops.
-    /// Faithful to `valueMatch` (jumptable.cc:639). The deep LOAD/add
-    /// duplicate-calculus branch (returns 2) is partially implemented.
+    /// Faithful to `valueMatch` (jumptable.cc:637-680), including the
+    /// oneOffMatch duplicate-calculation check (returns 1) and the
+    /// LOAD-equivalence check (returns 2).
     pub fn value_match(
         &self,
         vn2: &Arc<RwLock<Varnode>>,
         base_vn2: &Option<Arc<RwLock<Varnode>>>,
         bits_preserved2: i32,
     ) -> i32 {
+        // cc:647: if (vn == vn2) return 1; -- same varnode, same value
         let Some(vn1) = &self.vn else {
             return 0;
         };
         if Arc::ptr_eq(vn1, vn2) {
             return 1;
         }
+        // cc:648-655: pick the loadOp pair. Same bits copied: compare base
+        // varnodes; different bits: compare the varnodes themselves.
+        let (load_op, load_op2): (Option<Arc<RwLock<PcodeOp>>>, Option<Arc<RwLock<PcodeOp>>>);
         if self.bits_preserved == bits_preserved2 {
+            // cc:650-651: if (baseVn == baseVn2) return 1;
             if let (Some(b1), Some(b2)) = (&self.base_vn, base_vn2) {
                 if Arc::ptr_eq(b1, b2) {
                     return 1;
                 }
             }
+            // cc:652-653: loadOp = baseVn->getDef(); loadOp2 = baseVn2->getDef();
+            load_op = self.base_vn.as_ref().and_then(|b| b.read().unwrap().get_def());
+            load_op2 = base_vn2.as_ref().and_then(|b| b.read().unwrap().get_def());
+        } else {
+            // cc:656-657: loadOp = vn->getDef(); loadOp2 = vn2->getDef();
+            load_op = vn1.read().unwrap().get_def();
+            load_op2 = vn2.read().unwrap().get_def();
         }
-        // Deeper oneOffMatch / LOAD-equivalence checks are L3 gaps requiring
-        // Varnode::def traversal; conservatively return 0.
-        let _ = vn2;
-        0
+        // cc:659-660: if (loadOp == 0) return 0; if (loadOp2 == 0) return 0;
+        let (Some(load_op), Some(load_op2)) = (load_op, load_op2) else {
+            return 0;
+        };
+        // cc:661-662: oneOffMatch == 1 -> simple duplicate calculation.
+        if one_off_match(&load_op, &load_op2) == 1 {
+            return 1;
+        }
+        // cc:663-664: both must be LOAD ops.
+        if load_op.read().unwrap().opcode != OpCode::CPUI_LOAD {
+            return 0;
+        }
+        if load_op2.read().unwrap().opcode != OpCode::CPUI_LOAD {
+            return 0;
+        }
+        // cc:665: spaceid (in(0)) offsets must match.
+        let off1 = load_op
+            .read()
+            .unwrap()
+            .get_in(0)
+            .map(|v| v.read().unwrap().get_offset());
+        let off2 = load_op2
+            .read()
+            .unwrap()
+            .get_in(0)
+            .map(|v| v.read().unwrap().get_offset());
+        let (Some(off1), Some(off2)) = (off1, off2) else {
+            return 0;
+        };
+        if off1 != off2 {
+            return 0;
+        }
+        // cc:666-668: ptr = loadOp->getIn(1); if (ptr == ptr2) return 2;
+        let ptr = load_op.read().unwrap().get_in(1).cloned();
+        let ptr2 = load_op2.read().unwrap().get_in(1).cloned();
+        let (Some(ptr), Some(ptr2)) = (ptr, ptr2) else {
+            return 0;
+        };
+        if Arc::ptr_eq(&ptr, &ptr2) {
+            return 2;
+        }
+        // cc:669-670: both pointers must be written.
+        if !ptr.read().unwrap().is_written() {
+            return 0;
+        }
+        if !ptr2.read().unwrap().is_written() {
+            return 0;
+        }
+        // cc:671-674: ptr must be INT_ADD(base, const).
+        let addop = ptr.read().unwrap().get_def();
+        let Some(addop) = addop else {
+            return 0;
+        };
+        if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+            return 0;
+        }
+        let constvn = addop.read().unwrap().get_in(1).cloned();
+        let Some(constvn) = constvn else {
+            return 0;
+        };
+        if !constvn.read().unwrap().is_constant() {
+            return 0;
+        }
+        // cc:675-678: ptr2 must be INT_ADD(base, const) too.
+        let addop2 = ptr2.read().unwrap().get_def();
+        let Some(addop2) = addop2 else {
+            return 0;
+        };
+        if addop2.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+            return 0;
+        }
+        let constvn2 = addop2.read().unwrap().get_in(1).cloned();
+        let Some(constvn2) = constvn2 else {
+            return 0;
+        };
+        if !constvn2.read().unwrap().is_constant() {
+            return 0;
+        }
+        // cc:679-680: same base varnode and same constant offset -> 2.
+        let base1 = addop.read().unwrap().get_in(0).cloned();
+        let base2 = addop2.read().unwrap().get_in(0).cloned();
+        let same_base = match (base1, base2) {
+            (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
+            _ => false,
+        };
+        if !same_base {
+            return 0;
+        }
+        if constvn.read().unwrap().get_offset() != constvn2.read().unwrap().get_offset() {
+            return 0;
+        }
+        2
     }
 }
 
-// Ghidra: jumptable.cc:721 GuardRecord::quasiCopy
+// Ghidra: jumptable.cc:719 GuardRecord::quasiCopy
 /// Compute the source of a quasi-COPY chain for the given varnode.
 ///
 /// A value is a quasi-copy if a sequence of pcode ops producing it always
@@ -571,11 +672,14 @@ impl GuardRecord {
 /// sequence may put other non-zero values in the upper bits. This computes the
 /// earliest ancestor varnode for which the given varnode can be viewed as a
 /// quasi-copy. Returns `(ancestor, bits_preserved)`.
-/// Faithful to `GuardRecord::quasiCopy` (jumptable.cc:721).
+/// Faithful to `GuardRecord::quasiCopy` (jumptable.cc:719-786).
 pub fn quasi_copy(vn: &Arc<RwLock<Varnode>>) -> (Option<Arc<RwLock<Varnode>>>, i32) {
     let mut bits_preserved = {
         let vn_rg = vn.read().unwrap();
-        mostsigbit_set(vn_rg.get_nz_mask()) + 1
+        // cc:722: mostsigbit_set(vn->getNZMask()) + 1 — Ghidra's getNZMask
+        // reads the nzm FIELD (varnode.hh:231); use the raw field accessor
+        // rather than the size-clamped approximation.
+        mostsigbit_set(vn_rg.get_nzm()) + 1
     };
     if bits_preserved == 0 {
         return (Some(vn.clone()), 0);
@@ -675,11 +779,11 @@ pub fn quasi_copy(vn: &Arc<RwLock<Varnode>>) -> (Option<Arc<RwLock<Varnode>>>, i
     (Some(cur_vn), bits_preserved)
 }
 
-// Ghidra: jumptable.cc:686 GuardRecord::oneOffMatch
+// Ghidra: jumptable.cc:684 GuardRecord::oneOffMatch
 /// Return 1 if the two given pcode ops produce exactly the same value, 0
 /// otherwise. Only one level of pcode-op calculation is considered and only
 /// for certain binary ops where the second parameter is a constant. Faithful
-/// to `GuardRecord::oneOffMatch` (jumptable.cc:686).
+/// to `GuardRecord::oneOffMatch` (jumptable.cc:684-704).
 pub fn one_off_match(op1: &Arc<RwLock<PcodeOp>>, op2: &Arc<RwLock<PcodeOp>>) -> i32 {
     let o1 = op1.read().unwrap();
     let o2 = op2.read().unwrap();
@@ -766,7 +870,9 @@ pub fn pull_back_through_op(
             return None;
         }
         if usenzmask {
-            let nz = res_arc.read().unwrap().get_nz_mask();
+            // cc:1077: nzrange.setNZMask(res->getNZMask(),...) — raw nzm
+            // field, not the size-clamped approximation.
+            let nz = res_arc.read().unwrap().get_nzm();
             if let Some(nzrange) = CircleRange::set_nz_mask(nz, in_size) {
                 rng.intersect(&nzrange);
             }
@@ -808,7 +914,8 @@ pub fn pull_back_through_op(
             // bytes that are known to be zero (via NZMask), keep the range
             // with a bigger mask (the nzmask intersection will trim it).
             if usenzmask && opc == OpCode::CPUI_SUBPIECE && val == 0 {
-                let nz = res_arc.read().unwrap().get_nz_mask();
+                // cc:1057: mostsigbit_set(res->getNZMask()) — raw nzm field.
+                let nz = res_arc.read().unwrap().get_nzm();
                 let msbset = mostsigbit_set(nz);
                 let msbset_bytes = (msbset + 8) / 8;
                 if out_size < msbset_bytes as usize {
@@ -822,7 +929,9 @@ pub fn pull_back_through_op(
             }
         }
         if usenzmask {
-            let nz = res_arc.read().unwrap().get_nz_mask();
+            // cc:1077: nzrange.setNZMask(res->getNZMask(),...) — raw nzm
+            // field, not the size-clamped approximation.
+            let nz = res_arc.read().unwrap().get_nzm();
             if let Some(nzrange) = CircleRange::set_nz_mask(nz, in_size) {
                 rng.intersect(&nzrange);
             }
@@ -1733,11 +1842,11 @@ impl JumpBasic {
         arr.iter().skip(1).all(|v| Arc::ptr_eq(v, first))
     }
 
-    // Ghidra: jumptable.cc:1324 JumpBasic::checkCommonCbranch
+    // Ghidra: jumptable.cc:1305 JumpBasic::checkCommonCbranch
     /// Check that all in-edges to `bl` come from blocks ending with CBRANCH
     /// with the same boolean-flip and out-slot. Collects the boolean input
     /// varnode (in(1)) from each CBRANCH into varArray. Faithful to
-    /// `checkCommonCbranch` (jumptable.cc:1324-1346).
+    /// `checkCommonCbranch` (jumptable.cc:1305-1327).
     pub fn check_common_cbranch(
         var_array: &mut Vec<Arc<RwLock<Varnode>>>,
         bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -1802,9 +1911,17 @@ impl JumpBasic {
             for desc in &descend_refs {
                 let d = desc.read().unwrap();
                 if d.opcode == OpCode::CPUI_MULTIEQUAL {
-                    // Check parent is bl (by Arc identity).
-                    // cc:2761: op->getParent() == this
-                    return Some(desc.clone());
+                    // cc:2761: op->getParent() == this — the MULTIEQUAL must
+                    // live in bl itself.
+                    let parent_is_bl = d
+                        .parent
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                        .map(|p| Arc::ptr_eq(&p, bl))
+                        .unwrap_or(false);
+                    if parent_is_bl {
+                        return Some(desc.clone());
+                    }
                 }
             }
             None
@@ -1820,26 +1937,27 @@ impl JumpBasic {
         Some(op.clone())
     }
 
-    // Ghidra: jumptable.cc:1357 JumpBasic::checkUnrolledGuard
+    // Ghidra: jumptable.cc:1338 JumpBasic::checkUnrolledGuard
     /// Check for a guard that has been unrolled across multiple blocks.
     /// A guard calculation can be duplicated across multiple blocks that all
     /// branch to the basic block performing the final BRANCHIND. This method
     /// looks for this situation and creates GuardRecords associated with the
-    /// unrolled guard. Faithful to `checkUnrolledGuard` (jumptable.cc:1357-1390).
+    /// unrolled guard. Faithful to `checkUnrolledGuard`
+    /// (jumptable.cc:1338-1370).
     pub fn check_unrolled_guard(
         &mut self,
         bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         max_pullback: i32,
         use_nzmask: bool,
     ) {
-        // cc:1360-1362: checkCommonCbranch.
+        // cc:1340-1342: checkCommonCbranch.
         let mut var_array: Vec<Arc<RwLock<Varnode>>> = Vec::new();
         if !Self::check_common_cbranch(&mut var_array, bl) { return; }
-        // cc:1363-1368: determine toswitchval + CircleRange.
+        // cc:1343-1347: determine toswitchval + CircleRange.
         let bl_r = bl.read().unwrap();
         let indpath = bl_r.get_in_rev_index(0);
         let mut toswitchval = indpath == 1;
-        // cc:1365: cbranch = getIn(0)->lastOp()
+        // cc:1345: cbranch = getIn(0)->lastOp()
         let cbranch = {
             let in0 = match bl_r.get_in(0) { Some(e) => e.point.clone(), None => return };
             let in0_r = in0.read().unwrap();
@@ -1848,70 +1966,66 @@ impl JumpBasic {
             };
             match bb.ops.last() { Some(op) => op.clone(), None => return }
         };
-        let cbranch_flip = (cbranch.0.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+        let cbranch_flip = cbranch.0.read().unwrap().is_boolean_flip();
         if cbranch_flip { toswitchval = !toswitchval; }
-        // cc:1368: CircleRange rng(toswitchval) — CircleRange(bool): true→{1}, false→{0}.
-        let mut rng = CircleRange::new(
-            if toswitchval { 1 } else { 0 },
-            if toswitchval { 2 } else { 1 },
-            1, // mask = 0xff (size=1 byte)
-            1, // step = 1
-        );
-        // cc:1369: indpathstore = getIn(0)->getFlipPath() ? 1-indpath : indpath.
+        // cc:1348: CircleRange rng(toswitchval) — CircleRange(bool):
+        // true→{1}, false→{0}, mask=0xff, step=1.
+        let mut rng = CircleRange::boolean(toswitchval);
+        // cc:1349: indpathstore = getIn(0)->getFlipPath() ? 1-indpath : indpath.
         let in0_block = match bl_r.get_in(0) { Some(e) => e.point.clone(), None => return };
         let flip_path = in0_block.read().unwrap().get_flip_path();
         let indpathstore = if flip_path { 1 - indpath } else { indpath };
         drop(bl_r);
-        // cc:1370-1389: pullback loop.
-        let mut read_op = cbranch.0.clone();
+        // cc:1350: readOp = cbranch. NOTE: Ghidra's inner
+        // `PcodeOp *readOp = vn->getDef();` (cc:1361) SHADOWS this outer
+        // variable, so every pushed GuardRecord carries readOp == cbranch;
+        // the def op is only used for the pullback within its iteration.
+        let read_op = cbranch.0.clone();
         for _j in 0..max_pullback {
-            // cc:1372-1380: create GuardRecord.
+            // cc:1352-1360: create GuardRecords. The constructor runs
+            // quasiCopy on the varnode (jumptable.cc:613-621), which is
+            // what populates baseVn/bitsPreserved.
             if Self::duplicate_varnodes(&var_array) {
-                self.selectguards.push(GuardRecord {
-                    cbranch: Some(cbranch.0.clone()),
-                    read_op: Some(read_op.clone()),
-                    indpath: indpathstore,
-                    range: rng.clone(),
-                    vn: Some(var_array[0].clone()),
-                    base_vn: None,
-                    bits_preserved: 0,
-                    unrolled: true,
-                });
+                self.selectguards.push(GuardRecord::new(
+                    cbranch.0.clone(),
+                    read_op.clone(),
+                    indpathstore,
+                    rng.clone(),
+                    var_array[0].clone(),
+                    true,
+                ));
             } else {
                 let multi_op = Self::find_multiequal(bl, &var_array);
                 if let Some(mop) = multi_op {
                     let out_vn = mop.read().unwrap().output.clone();
                     if let Some(out) = out_vn {
-                        self.selectguards.push(GuardRecord {
-                            cbranch: Some(cbranch.0.clone()),
-                            read_op: Some(read_op.clone()),
-                            indpath: indpathstore,
-                            range: rng.clone(),
-                            vn: Some(out),
-                            base_vn: None,
-                            bits_preserved: 0,
-                            unrolled: true,
-                        });
+                        self.selectguards.push(GuardRecord::new(
+                            cbranch.0.clone(),
+                            read_op.clone(),
+                            indpathstore,
+                            rng.clone(),
+                            out,
+                            true,
+                        ));
                     }
                 }
             }
-            // cc:1382-1383: vn = varArray[0]; if (!vn->isWritten()) break.
+            // cc:1362-1363: vn = varArray[0]; if (!vn->isWritten()) break.
             let vn = var_array[0].clone();
             if !vn.read().unwrap().is_written() { break; }
-            // cc:1384: readOp = vn->getDef().
+            // cc:1364: (inner) readOp = vn->getDef().
             let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                 Some(d) => d, None => break,
             };
-            // cc:1385: vn = rng.pullBack(readOp, &markup, usenzmask).
+            // cc:1365: vn = rng.pullBack(readOp, &markup, usenzmask).
             let new_vn = pull_back_through_op(&mut rng, &def_op, use_nzmask);
-            let new_vn = match new_vn { Some(v) => v, None => break };
-            // cc:1386: if (vn == null) break;
-            // cc:1387: if (rng.isEmpty()) break.
+            // cc:1366: if (vn == null) break;
+            let Some(new_vn) = new_vn else { break };
+            // cc:1367: if (rng.isEmpty()) break.
             if rng.is_empty() { break; }
-            // cc:1388: liftVerifyUnroll(varArray, readOp->getSlot(vn)).
+            // cc:1368: liftVerifyUnroll(varArray, readOp->getSlot(vn)).
             let slot = def_op.read().unwrap().slot_of_input(&new_vn).unwrap_or(0);
-            if !crate::block::BlockBasic::lift_verify_unroll(&mut var_array, slot) { break; }
-            read_op = def_op;
+            if !crate::block::BlockBasic::lift_verify_unroll(&mut var_array, slot as usize) { break; }
         }
     }
 
@@ -2095,10 +2209,10 @@ impl JumpBasic {
         self.jrange = Some(Box::new(jrange_owned));
     }
 
-    // Ghidra: jumptable.cc:1223 JumpBasic::findNormalized
+    // Ghidra: jumptable.cc:1204 JumpBasic::findNormalized
     /// Given the root block and starting path, run guard analysis and find
     /// the normalized switch variable. Faithful to `findNormalized`
-    /// (jumptable.cc:1223-1252).
+    /// (jumptable.cc:1204-1237).
     pub fn find_normalized(
         &mut self,
         fd: &crate::funcdata::Funcdata,
@@ -2699,143 +2813,198 @@ impl JumpModel for JumpBasic {
 }
 
 impl JumpBasic {
-    // Ghidra: jumptable.cc:1063 JumpBasic::analyzeGuards
+    // Ghidra: jumptable.cc:1046 JumpBasic::analyzeGuards
     /// Analyze CBRANCHs leading up to the given basic-block as a potential
-    /// switch guard. Faithful to `analyzeGuards` (jumptable.cc:1063).
+    /// switch guard. Faithful to `analyzeGuards` (jumptable.cc:1046-1112).
     ///
-    /// This implements the guard-walk loop structure and constructs
-    /// `GuardRecord`s for the boolean varnode; the `pullBack` expansion
-    /// through data-flow requires `CircleRange::pullBack` integration with
-    /// pcode ops, currently an L3 gap.
+    /// For each CBRANCH, range restrictions on the various variables which
+    /// allow control flow to pass through the CBRANCH to the switch are
+    /// analyzed. A GuardRecord is created for each of these restrictions.
+    /// `pathout` is an optional path (>= 0) from the basic-block to the
+    /// switch or -1.
     pub fn analyze_guards(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, pathout: i32) {
-        self.selectguards.clear();
+        // cc:1049-1052: maxbranch=2, maxpullback=2, usenzmask = !isPartial.
         let max_branch = 2i32;
-        let mut cur_pathout = pathout;
+        let max_pullback = 2i32;
+        let usenzmask = !self.jumptable.read().unwrap().is_partial();
+
+        // cc:1054: selectguards.clear()
+        self.selectguards.clear();
         let mut cur_bl = bl.clone();
+        let mut cur_pathout = pathout;
+
+        // cc:1056: for(i=0;i<maxbranch;++i)
         for i in 0..max_branch {
-            // Determine the (cbranch, indpath, prev_bl) triple for this
-            // iteration of the guard walk. Returns None to break the loop.
-            let triple: Option<(Option<Arc<RwLock<PcodeOp>>>, i32)> = if cur_pathout >= 0 {
-                let (next, ip) = {
+            // Ghidra declares prevbl/indpath here; both branches of the
+            // pathout/walk-back split must define them (cc:1057-1080).
+            let prevbl: Arc<RwLock<dyn FlowBlock + Send + Sync>>;
+            let indpath: i32;
+            // cc:1058: if ((pathout>=0)&&(bl->sizeOut()==2))
+            if cur_pathout >= 0 && cur_bl.read().unwrap().size_out() == 2 {
+                // cc:1059-1062: step through the pathout edge; the current
+                // block IS the CBRANCH holder (prevbl), bl becomes the block
+                // on the path to the switch, indpath = pathout, pathout=-1.
+                prevbl = cur_bl.clone();
+                let next = {
                     let bl_rg = cur_bl.read().unwrap();
-                    if bl_rg.size_out() == 2 {
-                        (bl_rg.get_out(cur_pathout as usize).map(|e| e.point), cur_pathout)
-                    } else {
-                        (None, cur_pathout)
-                    }
+                    bl_rg.get_out(cur_pathout as usize).map(|e| e.point)
                 };
+                let Some(next) = next else { break };
+                cur_bl = next;
+                indpath = cur_pathout;
                 cur_pathout = -1;
-                match next {
-                    Some(n) => {
-                        cur_bl = n;
-                        // The CBRANCH is the last op of the *previous* block,
-                        // which is the original cur_bl; but for the pathout
-                        // case the CBRANCH detection happens in the next loop
-                        // iteration. Return a placeholder here.
-                        Some((None, ip))
-                    }
-                    None => None,
-                }
             } else {
-                // Walk back to a block that can deviate.
-                let mut found: Option<(Option<Arc<RwLock<PcodeOp>>>, i32)> = None;
+                // cc:1064: pathout = -1; make sure not to use pathout next
+                // time around.
+                cur_pathout = -1;
+                // cc:1065-1075: walk back to a block that can deviate from
+                // the switch path. bl must have exactly 1 in-edge and its
+                // parent must have != 1 out-edge.
+                let mut walk_prev: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
                 loop {
                     let size_in = cur_bl.read().unwrap().size_in();
                     if size_in != 1 {
+                        // cc:1068-1070: multiple in-edges -> unrolled guard;
+                        // zero in-edges -> nothing more to analyze. Either
+                        // way analyzeGuards RETURNS.
+                        if size_in > 1 {
+                            self.check_unrolled_guard(&cur_bl, max_pullback, usenzmask);
+                        }
+                        return;
+                    }
+                    // Only 1 flow path to the switch
+                    let prev_edge = cur_bl.read().unwrap().get_in(0);
+                    let Some(prev_edge) = prev_edge else { return };
+                    let prev_bl_arc = prev_edge.point;
+                    // cc:1072: is it possible to deviate from switch path in
+                    // this block
+                    let prev_size_out = prev_bl_arc.read().unwrap().size_out();
+                    if prev_size_out != 1 {
+                        walk_prev = Some(prev_bl_arc);
                         break;
                     }
-                    let prev_edge = cur_bl.read().unwrap().get_in(0);
-                    let Some(prev_edge) = prev_edge else {
-                        break;
+                    // cc:1074: if not, back up to next block
+                    cur_bl = prev_bl_arc;
+                }
+                prevbl = walk_prev.unwrap();
+                // cc:1077: indpath = bl->getInRevIndex(0)
+                indpath = cur_bl.read().unwrap().get_in_rev_index(0);
+            }
+            // cc:1078-1080: cbranch = prevbl->lastOp(); must be a CBRANCH.
+            let cbranch: Option<Arc<RwLock<PcodeOp>>> = {
+                let prev_rg = prevbl.read().unwrap();
+                // BlockBasic::lastOp (inherent method; the FlowBlock trait
+                // default returns None for non-basic blocks).
+                let last = prev_rg
+                    .as_any()
+                    .downcast_ref::<BlockBasic>()
+                    .and_then(|bb| bb.last_op());
+                match last {
+                    Some(op) => {
+                        if op.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH {
+                            Some(op.0.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            };
+            let Some(cbranch) = cbranch else { break };
+            // cc:1082-1091: for i!=0, check that this CBRANCH isn't
+            // protecting some other switch: if the OTHER out-edge target
+            // ends with a BRANCHIND that is not this jumptable's indirect
+            // op, break.
+            if i != 0 {
+                let otherbl = {
+                    let prev_rg = prevbl.read().unwrap();
+                    prev_rg.get_out((1 - indpath) as usize).map(|e| e.point)
+                };
+                if let Some(otherbl) = otherbl {
+                    let otherop: Option<Arc<RwLock<PcodeOp>>> = {
+                        let other_rg = otherbl.read().unwrap();
+                        other_rg
+                            .as_any()
+                            .downcast_ref::<BlockBasic>()
+                            .and_then(|bb| bb.last_op())
+                            .map(|op| op.0.clone())
                     };
-                    let prev_bl = prev_edge.point;
-                    let prev_size_out = prev_bl.read().unwrap().size_out();
-                    if prev_size_out != 1 {
-                        // The reverse-index gives the path from prev_bl.
-                        let indpath = prev_edge.reverse_index;
-                        cur_pathout = -1;
-                        let last_op = {
-                            // Look for a CBRANCH at the end of prev_bl.
-                            let prev_rg = prev_bl.read().unwrap();
-                            if let Some(any) = prev_rg.as_any().downcast_ref::<BlockBasic>() {
-                                any.last_op()
-                            } else {
-                                None
+                    if let Some(otherop) = otherop {
+                        if otherop.read().unwrap().opcode == OpCode::CPUI_BRANCHIND {
+                            let indirect = self.jumptable.read().unwrap().get_indirect_op();
+                            let is_model_indirect = indirect
+                                .as_ref()
+                                .map(|ind| Arc::ptr_eq(ind, &otherop))
+                                .unwrap_or(false);
+                            if !is_model_indirect {
+                                break;
                             }
-                        };
-                        let cbranch: Option<Arc<RwLock<PcodeOp>>> = match last_op {
-                            Some(op) => {
-                                if op.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH {
-                                    Some(op.0.clone())
-                                } else {
-                                    None
-                                }
-                            }
-                            None => None,
-                        };
-                        cur_bl = prev_bl;
-                        found = Some((cbranch, indpath));
-                        break;
-                    } else {
-                        cur_bl = prev_bl;
+                        }
                     }
                 }
-                found
-            };
-
-            let Some((cbranch_opt, indpath)) = triple else {
-                break;
-            };
-            let Some(cbranch) = cbranch_opt else {
-                break;
-            };
+            }
+            // cc:1092-1095: toswitchval = (indpath == 1), flipped if the
+            // CBRANCH boolean sense is flipped.
             let mut toswitchval = indpath == 1;
-            let is_flip = {
-                let cb_rg = cbranch.read().unwrap();
-                (cb_rg.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0
-            };
-            if is_flip {
+            if cbranch.read().unwrap().is_boolean_flip() {
                 toswitchval = !toswitchval;
             }
-            let bool_vn = cbranch.read().unwrap().get_in(1).cloned();
+            // cc:1096: bl = prevbl (step up for the next iteration).
+            cur_bl = prevbl.clone();
+            // cc:1097: vn = cbranch->getIn(1)
+            let mut vn = cbranch.read().unwrap().get_in(1).cloned();
+            // cc:1098: CircleRange rng(toswitchval)
             let mut rng = CircleRange::boolean(toswitchval);
-            let usenzmask = !self.jumptable.read().unwrap().is_partial();
-            let max_pullback = 2i32;
-            let indpath_store = indpath;
-            let mut cur_vn = bool_vn.clone();
-            if let Some(vn) = bool_vn {
+            // cc:1100-1101: the boolean variable could conceivably be the
+            // switch variable. indpathstore = prevbl->getFlipPath() ?
+            // 1-indpath : indpath.
+            let indpathstore = if prevbl.read().unwrap().get_flip_path() {
+                1 - indpath
+            } else {
+                indpath
+            };
+            // cc:1102: push the first guard for the boolean varnode itself.
+            if let Some(v) = &vn {
                 self.selectguards.push(GuardRecord::new(
                     cbranch.clone(),
                     cbranch.clone(),
-                    indpath_store,
+                    indpathstore,
                     rng.clone(),
-                    vn,
+                    v.clone(),
                     false,
                 ));
             }
-            // pullBack expansion: walk back through the defining ops of the
-            // boolean varnode, restricting the range at each step. Faithful
-            // to the j=0..maxpullback loop in analyzeGuards (jumptable.cc:1119).
-            for _ in 0..max_pullback {
-                let Some(ref cv) = cur_vn else { break };
-                let def_op = cv.read().unwrap().get_def();
-                let Some(read_op) = def_op else { break };
+            // cc:1103-1111: pullback loop: walk back through the defining
+            // ops of the boolean varnode, restricting the range at each
+            // step; a GuardRecord is pushed for each surviving pullback.
+            for _j in 0..max_pullback {
+                // cc:1105: if (!vn->isWritten()) break;
+                let Some(cv) = vn.clone() else { break };
+                if !cv.read().unwrap().is_written() {
+                    break;
+                }
+                // cc:1106: readOp = vn->getDef()
+                let read_op = cv.read().unwrap().get_def();
+                let Some(read_op) = read_op else { break };
+                // cc:1107: vn = rng.pullBack(readOp,&markup,usenzmask)
                 let next = pull_back_through_op(&mut rng, &read_op, usenzmask);
+                // cc:1108: if (vn == (Varnode *)0) break;
                 let Some(next_vn) = next else { break };
+                // cc:1109: if (rng.isEmpty()) break;
                 if rng.is_empty() {
                     break;
                 }
+                // cc:1110: push guard for the pulled-back varnode.
                 self.selectguards.push(GuardRecord::new(
                     cbranch.clone(),
                     read_op,
-                    indpath_store,
+                    indpathstore,
                     rng.clone(),
                     next_vn.clone(),
                     false,
                 ));
-                cur_vn = Some(next_vn);
+                vn = Some(next_vn);
             }
-            let _ = i;
         }
     }
 }
@@ -4456,8 +4625,22 @@ mod tests {
         assert!(ancestor.is_some());
         // Should walk back through both COPYs to src.
         assert!(Arc::ptr_eq(&ancestor.unwrap(), &src));
-        // bits_preserved = mostsigbit_set(nz_mask) + 1 = 32 for a 4-byte reg.
+        // bits_preserved = mostsigbit_set(nzm) + 1. quasiCopy reads the raw
+        // nzm FIELD (varnode.hh:231), which calcNZMask maintains; fresh
+        // unique varnodes carry ~0 -> 64, a post-calcNZMask 4-byte register
+        // carries calc_mask(4)=0xffffffff -> 32. Set the analyzed state
+        // explicitly (mirrors funcdata_varnode.cc:889-892).
+        for vn in [&src, &mid, &out] {
+            vn.write().unwrap().set_nzm(0xffff_ffff);
+        }
+        let (ancestor, bits) = quasi_copy(&out);
+        assert!(Arc::ptr_eq(&ancestor.unwrap(), &src));
         assert_eq!(bits, 32);
+        // Fresh (pre-calcNZMask) state reads the stale ~0 field -> 64, the
+        // same value oracle Ghidra would see before Heritage runs.
+        let fresh = Arc::new(RwLock::new(Varnode::new_unique(3, 4)));
+        let (_, fresh_bits) = quasi_copy(&fresh);
+        assert_eq!(fresh_bits, 64);
     }
 
     #[test]
