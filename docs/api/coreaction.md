@@ -853,6 +853,10 @@ build_full_pipeline_actions()：返回已实现非 stub Action，按 Ghidra 顺�
 ### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
 action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。
 
+### 2026-08-23：ActionExtraPopSetup 真实实现（GETSTR-ZERODIFF-B 域）
+
+旧体为 no-op stub（注释"x86-64 SysV 不用 extrapop"——错误：cspec `<default_proto><prototype name="__stdcall" extrapop="8">` 即 x86-64 gcc 缺省）。忠实移植 coreaction.cc:1436-1466：对每个 extraPop!=0 的 callspec，在栈指针寄存器上插 op——已知 extrapop 插 `INT_ADD RSP'=RSP+extrapop` 于 CALL 之后，未知插 INDIRECT（iop 引用）于 CALL 之前；free 输入 varnode 在 RSP 地址由 heritage 连接到调用前最新 RSP 定义。该 op 建模被调方 `ret` 弹返回地址：没有它，SLEIGH call push（`RSP-=8; [RSP]=retaddr`）使每次调用后 RSP 永久偏 8 字节，调用点栈相对 STORE 无法被 RuleStoreVarnode 重写为栈空间 COPY（`*(long*)((long)uVar20-8)=0x3710` 幽灵 store 族的根因）。空间基址来自 Architecture stack_pointer_{space,offset,size}（=stackspace->getSpacebase(0)，coreaction.cc:5472+1444）。效果：curl 全量 skeleton diff 2615→2459，GetStr 幽灵 store 消除且 uStackX_0/uVar20 死声明随之消失。
+
 ### 2026-08-23：ActionPreferComplement 忠实移植（GETSTR-ZERODIFF-A 域）
 
 旧实现（"遍历 sblocks 对每个结构块 CBRANCH 无条件翻 BOOLEAN_FLIP + 比较 opcode"）无 oracle 对应物，且与结构化期 negateCondition 设置的 flag 叠加造成全局极性污染。忠实移植：
