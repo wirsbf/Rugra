@@ -98,6 +98,17 @@ trait FuncCallSpecsExt {
     /// address to cancel an indirect override (flow.cc:713).
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration representing Ghidra's setAddress(Address()) with Rugra's optional entry address.
     fn clear_entry_address(&mut self);
+    /// Flow-local adapter for `FuncCallSpecs::getFuncdata` (fspec.hh:1682
+    /// `Funcdata *getFuncdata(void) const`). Ghidra returns the callee's
+    /// resolved Funcdata (set by `queryCall` via `setFuncdata`,
+    /// fspec.cc:4924); Rugra's `query_call` is still a documented no-op
+    /// (CALLSPEC-0001) so no spec ever carries a resolved Funcdata and this
+    /// returns false. The `fd != 0 continue` guard in `checkContainedCall`
+    /// (flow.cc:1367-1368) therefore never fires in Rugra — observably
+    /// identical for every case where Ghidra's `queryCall` also fails to
+    /// resolve the target (internal/offcut targets are never symbol starts).
+    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 compatibility fallback because Rugra FuncCallSpecs has no resolved-Funcdata linkage.
+    fn has_funcdata(&self) -> bool;
 }
 
 impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
@@ -137,6 +148,13 @@ impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
     // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter encodes flow.cc's setAddress(Address()) as Option::None in Rugra.
     fn clear_entry_address(&mut self) {
         self.entry_addr = None;
+    }
+    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter because Rugra query_call (flow.cc:656) never resolves a Funcdata, mirroring a null FuncCallSpecs::funcdata pointer.
+    fn has_funcdata(&self) -> bool {
+        // TODO(CALLSPEC-0001): depends on Funcdata::query_function +
+        // FuncCallSpecs::set_funcdata storing real callee linkage. Until
+        // then every spec behaves like Ghidra's fd == (Funcdata *)0.
+        false
     }
 }
 
@@ -1803,6 +1821,181 @@ impl<'a> FlowInfo<'a> {
         self.injectlist.clear();
     }
 
+    /// Check if any of the calls this function makes are to already traced
+    /// data-flow. If so, we change the CALL to a BRANCH and issue a warning.
+    /// This situation is most likely due to a Position Indepent Code
+    /// construction. Faithful to `FlowInfo::checkContainedCall`
+    /// (flow.cc:1361-1405).
+    ///
+    /// For each remaining call spec (Ghidra's `qlst`, Rugra's
+    /// `fd.callspecs` in creation order):
+    ///   - skip when the callee resolved to a Funcdata (flow.cc:1367-1368);
+    ///   - skip when the op is not a direct CPUI_CALL (flow.cc:1369-1370);
+    ///   - find the greatest visited instruction at/below the call target;
+    ///     no such entry (flow.cc:1375) or an entry whose byte range ends at
+    ///     or before the target (flow.cc:1377-1378) skips the spec;
+    ///   - a target exactly at a visited instruction start is a PIC
+    ///     construction: emit the `Possible PIC construction` header warning,
+    ///     rewrite the op to CPUI_BRANCH, mark the target op and the op
+    ///     following the call as basic-block starts, restore the original
+    ///     code-ref input, and erase the call spec (flow.cc:1379-1398);
+    ///   - a target strictly inside a visited instruction only draws the
+    ///     `Call to offcut address within same function` warning
+    ///     (flow.cc:1400-1402).
+    // Ghidra: flow.cc:1361 FlowInfo::checkContainedCall
+    fn check_contained_call(&mut self) {
+        // flow.cc:1364-1365: for(iter=qlst.begin();iter!=qlst.end();++iter).
+        // Ghidra's qlst is the Funcdata-owned spec vector passed by
+        // reference; Rugra indexes fd.callspecs directly, so the list
+        // identity and traversal order are the same.
+        let mut iter = 0usize;
+        while iter != self.fd.callspecs.len() {
+            // flow.cc:1366-1370: fetch the spec's callee Funcdata state and
+            // call op before mutating anything below.
+            let (has_funcdata, call_op) = {
+                let fc = &self.fd.callspecs[iter];
+                (fc.has_funcdata(), fc.get_op(self.fd))
+            };
+            // flow.cc:1367-1368: `if (fd != (Funcdata *)0) continue;`.
+            if has_funcdata {
+                iter += 1;
+                continue;
+            }
+            // flow.cc:1369: `PcodeOp *op = fc->getOp();` — Ghidra's stored
+            // pointer is never null; Rugra resolves it from the alive list,
+            // which holds every flow-time op, so None is an invariant break.
+            let Some(op) = call_op else {
+                eprintln!(
+                    "[FLOW] {}: checkContainedCall: call spec {} op missing from bank",
+                    self.fd.name, iter
+                );
+                iter += 1;
+                continue;
+            };
+            // flow.cc:1370: `if (op->code() != CPUI_CALL) continue;` — the
+            // CURRENT opcode, so a CALLIND or an already-converted op skips.
+            if op.0.read().unwrap().opcode != OpCode::CPUI_CALL {
+                iter += 1;
+                continue;
+            }
+            // flow.cc:1372: `const Address &addr(fc->getEntryAddress());`.
+            // A CPUI_CALL always carries a direct target; Rugra models an
+            // invalid entry as None. An invalid Address sorts before every
+            // visited key, so Ghidra's upper_bound lands on begin() and the
+            // flow.cc:1375 guard continues — None maps to the same skip.
+            let Some(addr) = self.fd.callspecs[iter].entry_addr else {
+                iter += 1;
+                continue;
+            };
+            // flow.cc:1373-1378: `miter = visited.upper_bound(addr);`
+            // `if (miter == visited.begin()) continue; --miter;`
+            // `if (start + size <= addr) continue;` — the entry covering
+            // check reduces to the greatest visited key <= addr (BTreeMap
+            // range), matching Ghidra's upper_bound-then-decrement exactly.
+            let covering_start: Option<u64> = {
+                match self.visited.range(..=addr.as_u64()).next_back() {
+                    // flow.cc:1375: upper_bound == begin — nothing at/below addr.
+                    None => None,
+                    Some((&start, stat)) => {
+                        // flow.cc:1377-1378: the found instruction's bytes
+                        // end at or before addr — target is beyond it.
+                        if start + (stat.size as u64) <= addr.as_u64() {
+                            None
+                        } else {
+                            Some(start)
+                        }
+                    }
+                }
+            };
+            let Some(start) = covering_start else {
+                iter += 1;
+                continue;
+            };
+            if start == addr.as_u64() {
+                // flow.cc:1379-1398: exact visited instruction start — PIC.
+                // flow.cc:1380-1384: warningHeader("Possible PIC construction
+                // at <opaddr>: Changing call to branch"). Ghidra renders the
+                // op address with Address::printRaw; Rugra's legacy flow
+                // Address renders via Display (0x-hex, ADDRESS-0001).
+                let msg = format!(
+                    "Possible PIC construction at {}: Changing call to branch",
+                    op.0.read().unwrap().get_addr()
+                );
+                self.fd.warning_header(&msg);
+                // flow.cc:1385: data.opSetOpcode(op,CPUI_BRANCH).
+                self.fd.op_set_opcode(&op, OpCode::CPUI_BRANCH);
+                // flow.cc:1386-1388: make sure target of new goto starts a
+                // basic block (opMarkStartBasic = setFlag(startbasic),
+                // funcdata.hh:480).
+                match self.target(addr) {
+                    Some(targ) => {
+                        targ.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+                    }
+                    None => {
+                        // Ghidra's FlowInfo::target throws LowlevelError
+                        // (flow.cc:135) when no op is ultimately found; a
+                        // visited instruction start with a valid SeqNum
+                        // always resolves, so this is unreachable in practice.
+                        // Rugra logs instead of panicking (same policy as
+                        // delete_call_spec).
+                        eprintln!(
+                            "[FLOW] {}: checkContainedCall: target({:#x}) has no pcode",
+                            self.fd.name,
+                            addr.as_u64()
+                        );
+                    }
+                }
+                // flow.cc:1389-1393: make sure the following op starts a
+                // basic block. Ghidra advances the op's dead-list insert
+                // iterator; Rugra's alive list plays the dead list during
+                // flow (creation order == SeqNum order).
+                if let Some(next) = self.dead_list_next(&op) {
+                    next.0.write().unwrap().flags |= pcodeop_flags::STARTBASIC;
+                }
+                // flow.cc:1394-1395: data.opSetInput(op,data.newCodeRef(addr),0)
+                // — restore the original address as a code-ref annotation.
+                let code_ref = self.fd.new_code_ref(addr);
+                self.fd.op_set_input(&op, code_ref, 0);
+                // flow.cc:1396-1397: iter = qlst.erase(iter); delete fc;
+                self.fd.callspecs.remove(iter);
+                // flow.cc:1398: `if (iter == qlst.end()) break;`.
+                if iter == self.fd.callspecs.len() {
+                    break;
+                }
+                // The for-header `++iter` (flow.cc:1365) now advances past
+                // the successor of the erased spec: the call spec
+                // immediately following a converted one is NOT examined on
+                // this pass. This quirk is load-bearing oracle behavior and
+                // is deliberately reproduced (see fixture case `multi`).
+                iter += 1;
+            } else {
+                // flow.cc:1400-1402: target strictly inside a visited
+                // instruction — offcut warning only, no op changes.
+                let op_addr = op.0.read().unwrap().get_addr();
+                self.fd
+                    .warning("Call to offcut address within same function", op_addr);
+            }
+            // flow.cc:1365: for-header ++iter (fall-through of both arms).
+            iter += 1;
+        }
+    }
+
+    /// The op following `op` in the dead list (Ghidra: `++op->getInsertIter()`
+    /// against `obank.endDead()`, flow.cc:1390-1392). Rugra's alive list
+    /// holds the flow-time ops in creation order — the same ordering Ghidra's
+    /// dead list has during `generateOps` (SeqNum order).
+    // RUGRA-GLUE: dead-list walk over Rugra's alive list because PcodeOpBank
+    // has no separate dead-list iterators.
+    fn dead_list_next(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
+        let position = self
+            .fd
+            .obank
+            .alivelist
+            .iter()
+            .position(|o| std::sync::Arc::ptr_eq(&o.0, &op.0))?;
+        self.fd.obank.alivelist.get(position + 1).cloned()
+    }
+
     // ===================== Private target helpers =====================
 
     // Ghidra: flow.cc:88 FlowInfo::fallthruOp (private helper form)
@@ -2071,67 +2264,78 @@ impl<'a> FlowInfo<'a> {
         // Phase 2: jump-table recovery (flow.cc:796-821).
         // Collect BRANCHIND ops found during Phase 1, recover their jump
         // tables, and push newly discovered addresses to addrlist.
+        // Ghidra structure: do { while(!tablelist.empty()) {...}
+        // checkContainedCall(); checkMultistageJumptables(); ... }
+        // while(!tablelist.empty()) — the do-while body runs at least once,
+        // so checkContainedCall executes even with no indirect jumps.
         loop {
             // Collect all BRANCHIND ops currently alive.
             let branchinds: Vec<crate::op::PcodeOpRef> = self.collect_branchinds();
-            if branchinds.is_empty() {
-                break;
-            }
-
-            // Recover jump tables for each BRANCHIND.
-            let mut new_addresses: Vec<Address> = Vec::new();
-            for bi_ref in &branchinds {
-                // Check if already has a jump table.
-                let bi_addr = bi_ref.0.read().unwrap().get_addr().as_u64();
-                let already = self
-                    .fd
-                    .jump_tables
-                    .iter()
-                    .any(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr);
-                if already {
-                    // Use existing table entries.
-                    if let Some(jt_arc) = self
+            if !branchinds.is_empty() {
+                // Recover jump tables for each BRANCHIND.
+                let mut new_addresses: Vec<Address> = Vec::new();
+                for bi_ref in &branchinds {
+                    // Check if already has a jump table.
+                    let bi_addr = bi_ref.0.read().unwrap().get_addr().as_u64();
+                    let already = self
                         .fd
                         .jump_tables
                         .iter()
-                        .find(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr)
-                    {
-                        let jt = jt_arc.read().unwrap();
-                        for i in 0..jt.num_entries() {
-                            new_addresses.push(jt.get_address_by_index(i));
+                        .any(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr);
+                    if already {
+                        // Use existing table entries.
+                        if let Some(jt_arc) = self
+                            .fd
+                            .jump_tables
+                            .iter()
+                            .find(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr)
+                        {
+                            let jt = jt_arc.read().unwrap();
+                            for i in 0..jt.num_entries() {
+                                new_addresses.push(jt.get_address_by_index(i));
+                            }
                         }
+                        continue;
                     }
-                    continue;
+
+                    // Try recovery (jumptable.rs::try_recover).
+                    if let Some(jt) = crate::jumptable::try_recover(&bi_ref.0, self.fd) {
+                        let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(jt));
+                        let jt_copy = jt_arc.read().unwrap();
+                        for i in 0..jt_copy.num_entries() {
+                            new_addresses.push(jt_copy.get_address_by_index(i));
+                        }
+                        drop(jt_copy);
+                        self.fd.jump_tables.push(jt_arc);
+                    }
                 }
 
-                // Try recovery (jumptable.rs::try_recover).
-                if let Some(jt) = crate::jumptable::try_recover(&bi_ref.0, self.fd) {
-                    let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(jt));
-                    let jt_copy = jt_arc.read().unwrap();
-                    for i in 0..jt_copy.num_entries() {
-                        new_addresses.push(jt_copy.get_address_by_index(i));
-                    }
-                    drop(jt_copy);
-                    self.fd.jump_tables.push(jt_arc);
+                // Push newly discovered addresses and trace them (flow.cc:806-809).
+                // Ghidra passes the table's indirect op as the branch source;
+                // its address only feeds the out-of-bounds diagnostic.
+                let indirect_source = self
+                    .tablelist
+                    .first()
+                    .map(|op| op.0.read().unwrap().get_addr())
+                    .unwrap_or(Address::new(self.baddr));
+                for addr in &new_addresses {
+                    self.new_address(indirect_source, *addr);
+                }
+                while !self.addrlist.is_empty() {
+                    self.fallthru();
                 }
             }
 
-            // Push newly discovered addresses and trace them (flow.cc:806-809).
-            // Ghidra passes the table's indirect op as the branch source;
-            // its address only feeds the out-of-bounds diagnostic.
-            let indirect_source = self
-                .tablelist
-                .first()
-                .map(|op| op.0.read().unwrap().get_addr())
-                .unwrap_or(Address::new(self.baddr));
-            for addr in &new_addresses {
-                self.new_address(indirect_source, *addr);
-            }
-            while !self.addrlist.is_empty() {
-                self.fallthru();
-            }
+            // flow.cc:813: checkContainedCall(); — check for PIC
+            // constructions. Runs on every do-while pass, including a first
+            // pass with no jump tables.
+            self.check_contained_call();
+            // flow.cc:814: checkMultistageJumptables(); — not yet ported;
+            // Rugra approximates the tablelist refill below via a fresh
+            // BRANCHIND census (JUMPTABLE-MULTISTAGE gap, flow_audit.md).
 
-            // Check if any new BRANCHINDs appeared (multistage, flow.cc:814).
+            // Check if any new BRANCHINDs appeared (multistage, flow.cc:821
+            // while-condition `!tablelist.empty()`).
             let new_branchinds = self.collect_branchinds();
             if new_branchinds.len() <= branchinds.len() {
                 break; // No new indirect jumps → done.
