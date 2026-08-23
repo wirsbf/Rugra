@@ -85,7 +85,7 @@ analyze_extra_pop 死代码）。write-set/验收详见报告 §5，按 wave 认
 | COMMENT-SORTER-ITERATORS-0001 | DONE | dc6eb2c→d7a9cae | root 验证，fixture 92 |
 | TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001 | DONE | 7163dec→a5ceae7 | 机制C APPROVE，fixture 4→11 记录升 MATCH |
 | PRINTC-UNLINKED-REF-0001（printc 域） | DONE | b155b8a→fcc20d2 | 机制 B 门禁通过：E2E defects=0/numbering=0（skeleton 8679，注入组 117→45 行，glob_url 恢复丢失语句与 golden 同形）；68反编译/8超时=共享负载（前后自测一致），wave 收尾低负载复验；残差两件归 varmap 域（explicit 符号化 + 命名期类型前缀）；B2 fixture 待建 |
-| TYPEFACTORY-LOCALTYPE-CACHE-0001 | REVIEW | f0a7829+9ee59ab（220/220 MATCH，原99字节保持） | 复核进行中；Cross-Review PENDING |
+| TYPEFACTORY-LOCALTYPE-CACHE-0001 | DONE | f0a7829+9ee59ab→bda7dab | 机制C APPROVE（8 通道穷尽枚举、oracle 手重建验证前缀 sha、排序键逐值核对 24 submeta 表）；type_system:: 106/106；复核域外 3 项登记 TYPEFACTORY-DECODE-SIDENOTES-0001 |
 | RULE-PORT-COLLAPSECONSTANTS-0001 | DONE | e9a850d+6399c08→b94e7f4+01aafa2 | 机制C APPROVE（72-live-opcode 独立验证、EquateSymbol 真符号公证、复核者重读全部引用行）；ruleaction:: 180/180；fixture 93；组合树 E2E 门禁通过（defects=0/numbering=0，skeleton 8674）；残差=VARNODE-COPYSYMBOL-EQUATE/FLOAT-OPINT2FLOAT-SIGN/OPBEHAVIOR-SRIGHT-SIZEMASK |
 | JUMPTABLE-GUARDS-0001 | DONE | 07be5cb+2f84e7e→696916d | 机制C APPROVE（六改动逐项 PASS、3/6 MISMATCH 归因独立证实、readOp 遮蔽语义独立验证、复跑 exit0 27/27）；fixture 94；复核域外发现登记 JUMPTABLE-MARKMODEL-0001 |
 | SCOPELOCAL-QUERY-0001 r2 | REVIEW | 3bea8db+31f4046（11/11 MATCH） | varmap 白名单，复核进行中；E2E 差分随 root 跑批 |
@@ -119,6 +119,7 @@ httpd 门禁仍走线性扫描（examples/httpd_decompile.rs:261）。
 | `VARNODE-COPYSYMBOL-EQUATE-0001` | P2 | rulefound 交付发现：copy_symbol_if_valid 不区分 EquateSymbol/isValueClose（varnode.rs 保守近似） | `src/varnode.rs`、fixture | varmap/varnode 租约释放后 |
 | `FLOAT-OPINT2FLOAT-SIGN-0001` | P2 | rulefound 交付发现：float_emulate op_int2float 无符号 vs Ghidra sign_extend（float.cc:614） | `src/float_emulate.rs`、fixture | 无 |
 | `OPBEHAVIOR-SRIGHT-SIZEMASK-0001` | P3 | rulefound 交付发现：混合尺寸 SRIGHT mask 语义（SLEIGH 不产，不可观测） | `src/opbehavior.rs` | 排队 |
+| `TYPEFACTORY-DECODE-SIDENOTES-0001` | P3 | typefactory 复核域外发现：decodeEnum 重复值 warning 丢弃（oracle 经 ghidra_process 可见）；<void> 元素臂沿用 panic 版 get_type_void（clear 后遇 <void> 会 panic）；decode_basic size<0 静默归 0 vs oracle throw | `src/type_system/typefactory.rs`、`src/type_system/datatype.rs` | 排队 |
 | `JUMPTABLE-MARKMODEL-0001` | P2 | jtguards 复核域外发现：mark_model 用 get_read_op() 判 skip，oracle markModel（cc:1258-1264）用 getBranch() 判 null——已 clear 的 guard 在 Rugra 仍被 mark；另 value_match/check_unrolled_guard 内联注释行号漂移 | `src/jumptable.rs`、docs | 无 |
 | `RANGE-PULLBACK-SLESS-0001` | P1 | jtguards 交付发现：CircleRange::pull_back_binary 缺 CPUI_INT_SLESS/INT_SLESSEQUAL（rangeutil.cc:882-917），signed 比较守卫拉回失败→守卫记录缺失（jt_guards sc1/sc3 MISMATCH 的根因）；RANGE-0001 家族 | `src/rangeutil.rs`、docs/api/rangeutil.md、fixture | 无 |
 | `FUNCDATA-CALCNZM-0001` | P1 | jtguards 交付发现：calc_nz_mask 简化单遍，缺 unwritten 输入 nzm 初始化（funcdata_varnode.cc:889-893）与 DFS/worklist；主管线未调用（sc6 根因） | `src/funcdata.rs`、`src/heritage.rs`、docs | mergeclear 租约释放后认领 |

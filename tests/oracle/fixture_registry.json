@@ -2884,7 +2884,7 @@
     },
     {
       "id": "typefactory_local_cache_1204",
-      "description": "TypeFactory ordered core cache, preferred scalar/nochar identity, repeated cache, clear and reconstruction projection",
+      "description": "TypeFactory findAdd/promotion/decode paths vs locked 12.0.4: findAdd ordering + conflict exceptions, core promotion channel replacement, enum-into-tree + nochar arm order, char cache-miss throw, empty ctor, large-base array conversion, decodeCoreTypes forcecore, 24-submetatype table (220 records, 99-record prefix byte-preserved)",
       "runner": [
         "tools/run_typefactory_local_cache_oracle.sh"
       ],
@@ -2924,7 +2924,8 @@
           "RG-F-b7d1eee2a6ff8906356f",
           "RG-F-baab3859aa0f9749d49b"
         ]
-      }
+      },
+      "wave": "W-2026-08-22-ORCH (rework 220/220)"
     },
     {
       "id": "cpool_typed_record_1204",
