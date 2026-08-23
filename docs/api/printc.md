@@ -39,13 +39,27 @@ prototype remain separate residuals; the module remains L2.
     token 的表索引）；新增 `rpn_tok_binary(opc)`（printlanguage.cc:539-545
     negatetoken 翻转前奏 + printc.hh dispatch 映射）。
   - `dispatch_op_rpn` 二元臂：`rpn_push_op(tok)` 接管操作符发射（emitOp 在
-    printlanguage.cc:332-337 以 spacing=1 打印 ` op `，与旧直发文本逐字节一致），
-    操作数保持 `make_atom_for_vn` 叶子原子（in0-atom/op/in1-atom 顺序=printlanguage
-    .cc:551-552 的左先右后打印序）。**刻意不采用** pushVn/nodepend 队列：Rugra
-    的隐式操作数内联是 PRINT-RPN-0001 未完成域，队列化会全语料改写语句形态
-    （实测 numbering 0→16，my_get_token/glob_word/next_url/match_url 重复声明），
-    已回退；INT_ADD 结构体字段短路改走 pointer_member token 流
-    （`pushOp(->66)+base atom+field atom`，opPtrsub printc.cc:476-484 形态）。
+    printlanguage.cc:332-337 以 spacing=1 打印 ` op `，与旧直发文本逐字节一致）；
+    INT_ADD 结构体字段短路改走 pointer_member token 流
+    （`pushOp(->66)+pushVn(base)+field atom`，opPtrsub printc.cc:476-484 形态）。
+  - **2026-08-23 操作数全面接通 pushVn/nodepend**（`PRINTC-UNLINKED-REF-0001`
+    printc 域残差修复）：二元臂操作数由 `make_atom_for_vn` 叶子原子改为
+    `rpn_push_in`（in1-先-in0 后的 nodepend 记录，printlanguage.cc:551-552）；
+    一元臂、STORE 的 addr/value、CALL 参数、RETURN 值、CBRANCH 条件、PTRSUB
+    变址回退与 INT_ADD 字段短路 base 同步改造（直发文本的臂用
+    `rpn_push_in`+`rpn_recurse` 队列化排出，保持文本位置不变）。`rpn_recurse`
+    的 implied 分支由此对全部操作数位生效——implied 高变量在表达式位内联
+    def 表达式（printlanguage.cc:526-536），替代 GLUE 兜底独立命名
+    （`get_varnode_display_name_inner` 的 `uVar_<hex>`/`uVar20` fallback），
+    使 prettyprint `backfill_missing_locals` 不再为这些名字注入声明。
+    新增 `rpn_def_inline_reachable` 守卫（RUGRA-GLUE）：Ghidra 的
+    `TypeOp::push` 虚 dispatch 覆盖全部 opcode，Rugra `dispatch_op_rpn`
+    partial（PRINT-RPN-0001），对无发射臂/缺输入/已 dead 的 def op 回退
+    叶子原子，防止操作数文本被静默丢弃（MULTIEQUAL/INDIRECT 在 Ghidra
+    同样空发射，printc.hh:331-332，保守取叶子直到 dispatch 表补全）。
+    前序"队列化实测 numbering 0→16 已回退"的失败不复现：E2E
+    defects=0/numbering=0/Matched 116 全保持，Unique-GLUE 声明行 117→45，
+    含 GLUE 名函数 12→8（消除 GetStr/_start/glob_url/progressbarinit）。
   - `child_needs_parens` 重写为 parentheses() binary 分支的忠实移植
     （277/278/281/286 逐行；等优先级非 assoc 双侧都加括号=Ghidra 保守风格
     `(a - b) - c`；同 token 且 assoc 才免括号=`a + (b + c)`）；
@@ -231,7 +245,7 @@ printc.cc:2260/2518/2497）：
   - 扩展 `build_rpn_token_table`，新增 4 个 OpToken（字段逐项对齐 printc.cc:25/26/33/35）：`pointer_member`（`->`，binary prec 66 assoc）、`object_member`（`.`，binary prec 66 assoc）、`typecast`（`(`/`)` presurround prec 62）、`addressof`（`&` unary prefix prec 62）。
   - 在 `dispatch_op_rpn` 新增 `CPUI_PTRSUB` 分支：忠实移植 opPtrsub 的 struct/union（`[&]ptr->field`）、array（`*ptr`）、spacebase/无类型回退（`ptr->field_0x<hex>` / `ptr[off]`）四类发射形态；Rugra 无 TypePointerRel，`ptrel` 分支塌缩为 `ct = ptype->getPtrTo()`（与 legacy `op_ptrsub` 一致）。
   - 在 `dispatch_op_rpn` 新增 `CPUI_CAST` 分支：忠实移植 opTypeCast 的 array-decay `&in0` 短路与 `(type)in0` 主路径；`typecast` 是 presurround，RPN emit 机制自动产生 `(typename)operand`。
-- **隐式内联打通**：为让 PTRSUB/CAST（消费时一定是 implied）真正进入 dispatch，引入 `rpn_push_in(op_arc, op, slot, m)`——忠实 `PrintLanguage::pushVn`（printlanguage.cc:197）的 nodepend 记录语义。`COPY`/`LOAD`/`PTRSUB`/`CAST` 的操作数改为走 `rpn_push_in`，由 `rpn_recurse`（printlanguage.cc:514）按 implied 标志决定内联 def 或推叶子 atom。此前各 dispatch 分支直接 `make_atom_for_vn + rpn_push_atom`，等价于只走 `pushVnExplicit` 叶子路径，导致所有 implied def（含 PTRSUB/CAST）永不被内联。
+- **隐式内联打通**：为让 PTRSUB/CAST（消费时一定是 implied）真正进入 dispatch，引入 `rpn_push_in(op_arc, op, slot, m)`——忠实 `PrintLanguage::pushVn`（printlanguage.cc:197）的 nodepend 记录语义。`COPY`/`LOAD`/`PTRSUB`/`CAST` 的操作数改为走 `rpn_push_in`，由 `rpn_recurse`（printlanguage.cc:514）按 implied 标志决定内联 def 或推叶子 atom。此前各 dispatch 分支直接 `make_atom_for_vn + rpn_push_atom`，等价于只走 `pushVnExplicit` 叶子路径，导致所有 implied def（含 PTRSUB/CAST）永不被内联。**2026-08-23 扩展**：二元/一元算术、STORE、CALL、RETURN、CBRANCH、PTRSUB 变址回退与 INT_ADD 字段短路的全部操作数位同步接通（见上文 PRINTC-UNLINKED-REF-0001 节），implied 内联覆盖所有表达式位。
 - **当前生效限制（诚实声明）**：`CPUI_PTRSUB`/`CPUI_CAST` op 目前在 curl/httpd 中**不被产生**——Rugra 缺少 `RulePtrsub`（INT_ADD→PTRSUB 的创建规则，ruleaction.cc，仅移植了 `RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo` 这类消费现有 op 的规则），且 `ActionSetCasts::castInput` 的 PTRADD/PTRSUB pointer-fit 检查与 castOutput 延后（coreaction.rs:2893-2897 注释），故 CAST 创建对 curl 当前类型推断结果不触发（`cast_standard_full` 返回 None）。本 PR 的 dispatch 分支已就位且经过 Ghidra 行逐行核对，待上述底层 infra 补齐后即生效。
 - **效果（curl diff 门禁）**：skeleton diff 2880→2873（轻微改善，来自 implied 算术 def 现在内联），defects 0→0，numbering 0→0，1287/1287 单元测试通过。无回归。
 
