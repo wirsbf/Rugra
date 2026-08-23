@@ -61,6 +61,8 @@ public:
     insertSpace(new AddrSpace(this,this,IPTR_PROCESSOR,"join",false,8,1,6,
                               AddrSpace::hasphysical,0,0));
     insertSpace(new IopSpace(this,this,7));
+    insertSpace(new AddrSpace(this,this,IPTR_PROCESSOR,"tiny",false,1,1,8,
+                              AddrSpace::hasphysical,0,0));
     setDefaultCodeSpace(3);
     dummyRegister = { reg, 0, 8 };
   }
@@ -123,9 +125,12 @@ struct ModelState {
   int4 recoverCalls;
   int4 buildCalls;
   int4 sanityCalls;
+  int4 buildLoadsPresent;
+  int4 buildCountsPresent;
   vector<int4> observedLoadcounts;
   vector<string> events;
-  ModelState(void) : recoverCalls(0), buildCalls(0), sanityCalls(0) {}
+  ModelState(void) : recoverCalls(0), buildCalls(0), sanityCalls(0),
+                     buildLoadsPresent(-1), buildCountsPresent(-1) {}
 };
 
 class FixtureModel final : public JumpModel {
@@ -161,6 +166,8 @@ public:
   {
     state->buildCalls += 1;
     state->events.push_back("build");
+    state->buildLoadsPresent = (loads != (vector<LoadTable> *)0) ? 1 : 0;
+    state->buildCountsPresent = (loadcounts != (vector<int4> *)0) ? 1 : 0;
     addresses = buildTargets;
     if (loads != (vector<LoadTable> *)0)
       loads->insert(loads->end(),buildLoads.begin(),buildLoads.end());
@@ -198,23 +205,52 @@ public:
   }
 };
 
+enum ReachVariant {
+  reach_none,
+  reach_false,
+  reach_two_level,
+  reach_flip,
+  reach_nonzero,
+  reach_size_out,
+  reach_non_cbranch,
+  reach_nonconstant
+};
+
+enum LoadVariant {
+  load_default,
+  load_equal_three,
+  load_equal_sixteen,
+  load_equal_seventeen,
+  load_wrap,
+  load_multi_space
+};
+
 struct CaseConfig {
   const char *id;
   vector<uintb> targetOffsets;
-  bool unreachable;
+  ReachVariant reach;
   bool overrideMode;
   bool sanityResult;
   bool mutateDuringSanity;
   bool driveRecover;
-  bool equalAddressLoads;
+  bool collectLoads;
+  bool realModel;
+  LoadVariant loads;
 };
+
+static void appendAddress(ostringstream &s,const Address &address)
+{
+  AddrSpace *space = address.getSpace();
+  s << ((space == (AddrSpace *)0) ? -1 : space->getIndex()) << '@';
+  address.printRaw(s);
+}
 
 static string addressesText(const vector<Address> &addresses)
 {
   ostringstream s;
   for(size_t i=0;i<addresses.size();++i) {
     if (i != 0) s << ',';
-    addresses[i].printRaw(s);
+    appendAddress(s,addresses[i]);
   }
   return s.str();
 }
@@ -224,7 +260,7 @@ static string loadsText(const vector<LoadTable> &loads)
   ostringstream s;
   for(size_t i=0;i<loads.size();++i) {
     if (i != 0) s << ',';
-    loads[i].addr.printRaw(s);
+    appendAddress(s,loads[i].addr);
     s << '/' << loads[i].size << '/' << loads[i].num;
   }
   return s.str();
@@ -264,26 +300,108 @@ static string warningsText(const CommentDatabase *commentdb,const Address &funct
   return s.str();
 }
 
-static PcodeOp *buildIndirect(Funcdata &fd,AddrSpace *code,bool unreachable,uintb opOffset)
+static BlockBasic *addGuard(Funcdata &fd,BlockGraph &graph,AddrSpace *code,
+                            BlockBasic *parent,uintb opOffset,uintb condition,
+                            bool flip,bool twoEdges,bool cbranch,bool constant)
+{
+  BlockBasic *guard = graph.newBlockBasic(&fd);
+  BlockBasic *other = graph.newBlockBasic(&fd);
+  if (cbranch) {
+    PcodeOp *op = fd.newOp(2,Address(code,opOffset));
+    fd.opSetOpcode(op,CPUI_CBRANCH);
+    fd.opSetInput(op,fd.newConstant(8,opOffset+0x40),0);
+    fd.opSetInput(op,constant ? fd.newConstant(1,condition) : fd.newUnique(1),1);
+    if (flip)
+      op->flags |= PcodeOp::boolean_flip;
+    fd.opInsertEnd(op,guard);
+  }
+  else {
+    PcodeOp *op = fd.newOp(1,Address(code,opOffset));
+    fd.opSetOpcode(op,CPUI_COPY);
+    fd.opSetInput(op,fd.newConstant(1,condition),0);
+    fd.opInsertEnd(op,guard);
+  }
+  if (twoEdges)
+    graph.addEdge(guard,other); // out(0)
+  graph.addEdge(guard,parent);  // out(1), or the only edge
+  return guard;
+}
+
+static PcodeOp *buildIndirect(Funcdata &fd,AddrSpace *code,ReachVariant reach,uintb opOffset)
 {
   BlockGraph &graph = const_cast<BlockGraph &>(fd.getBasicBlocks());
   BlockBasic *switchBlock = graph.newBlockBasic(&fd);
-  if (unreachable) {
-    BlockBasic *guard = graph.newBlockBasic(&fd);
-    BlockBasic *other = graph.newBlockBasic(&fd);
-    PcodeOp *cbranch = fd.newOp(2,Address(code,opOffset-8));
-    fd.opSetOpcode(cbranch,CPUI_CBRANCH);
-    fd.opSetInput(cbranch,fd.newConstant(8,opOffset+0x40),0);
-    fd.opSetInput(cbranch,fd.newConstant(1,0),1);
-    fd.opInsertEnd(cbranch,guard);
-    graph.addEdge(guard,other);       // out(0): surviving false path
-    graph.addEdge(guard,switchBlock); // out(1): eliminated switch path
+  switch(reach) {
+  case reach_none:
+    break;
+  case reach_false:
+    addGuard(fd,graph,code,switchBlock,opOffset-8,0,false,true,true,true);
+    break;
+  case reach_two_level: {
+    BlockBasic *inner = addGuard(fd,graph,code,switchBlock,opOffset-8,1,
+                                 false,true,true,true);
+    addGuard(fd,graph,code,inner,opOffset-16,0,false,true,true,true);
+    break;
   }
+  case reach_flip:
+    addGuard(fd,graph,code,switchBlock,opOffset-8,1,true,true,true,true);
+    break;
+  case reach_nonzero:
+    addGuard(fd,graph,code,switchBlock,opOffset-8,1,false,true,true,true);
+    break;
+  case reach_size_out:
+    addGuard(fd,graph,code,switchBlock,opOffset-8,0,false,false,true,true);
+    break;
+  case reach_non_cbranch:
+    addGuard(fd,graph,code,switchBlock,opOffset-8,0,false,true,false,true);
+    break;
+  case reach_nonconstant:
+    addGuard(fd,graph,code,switchBlock,opOffset-8,0,false,true,true,false);
+    break;
+  }
+
   PcodeOp *indirect = fd.newOp(1,Address(code,opOffset));
   fd.opSetOpcode(indirect,CPUI_BRANCHIND);
-  fd.opSetInput(indirect,fd.newConstant(8,opOffset+0x20),0);
+  if (reach == reach_none)
+    fd.opSetInput(indirect,fd.newUnique(4),0);
+  else
+    fd.opSetInput(indirect,fd.newConstant(8,opOffset+0x20),0);
   fd.opInsertEnd(indirect,switchBlock);
   return indirect;
+}
+
+static vector<LoadTable> buildLoads(AddrSpace *code,AddrSpace *tiny,LoadVariant variant)
+{
+  vector<LoadTable> loads;
+  switch(variant) {
+  case load_default:
+    loads.push_back(LoadTable(Address(code,0x3004),4));
+    loads.push_back(LoadTable(Address(code,0x3000),4));
+    break;
+  case load_equal_three:
+    loads.push_back(LoadTable(Address(code,0x4000),8,2));
+    loads.push_back(LoadTable(Address(code,0x4000),4,3));
+    loads.push_back(LoadTable(Address(code,0x4010),8,1));
+    break;
+  case load_equal_sixteen:
+  case load_equal_seventeen: {
+    int4 count = (variant == load_equal_sixteen) ? 16 : 17;
+    for(int4 i=0;i<count;++i)
+      loads.push_back(LoadTable(Address(code,0x4000),(i & 1) ? 8 : 4));
+    break;
+  }
+  case load_wrap:
+    loads.push_back(LoadTable(Address(tiny,0xfc),4));
+    loads.push_back(LoadTable(Address(tiny,0),4));
+    break;
+  case load_multi_space:
+    loads.push_back(LoadTable(Address(tiny,0),4));
+    loads.push_back(LoadTable(Address(code,0x4000),4));
+    loads.push_back(LoadTable(Address(tiny,4),4));
+    loads.push_back(LoadTable(Address(code,0x4004),4));
+    break;
+  }
+  return loads;
 }
 
 static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
@@ -291,24 +409,16 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
   const uintb opOffset = 0x100000;
   architecture.commentdb->clear();
   AddrSpace *code = architecture.getSpace(3);
+  AddrSpace *tiny = architecture.getSpace(8);
   Scope *global = architecture.symboltab->getGlobalScope();
   Funcdata fd(config.id,config.id,global,Address(code,0x90000),
               (FunctionSymbol *)0,0x20000);
-  PcodeOp *indirect = buildIndirect(fd,code,config.unreachable,opOffset);
+  PcodeOp *indirect = buildIndirect(fd,code,config.reach,opOffset);
 
   vector<Address> targets;
   for(size_t i=0;i<config.targetOffsets.size();++i)
     targets.push_back(Address(code,config.targetOffsets[i]));
-  vector<LoadTable> initialLoads;
-  if (config.equalAddressLoads) {
-    initialLoads.push_back(LoadTable(Address(code,0x4000),8,2));
-    initialLoads.push_back(LoadTable(Address(code,0x4000),4,3));
-    initialLoads.push_back(LoadTable(Address(code,0x4010),8,1));
-  }
-  else {
-    initialLoads.push_back(LoadTable(Address(code,0x3004),4));
-    initialLoads.push_back(LoadTable(Address(code,0x3000),4));
-  }
+  vector<LoadTable> initialLoads = buildLoads(code,tiny,config.loads);
   vector<int4> loadcounts;
   loadcounts.push_back(1);
   loadcounts.push_back(2);
@@ -316,12 +426,14 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
   JumpTable table(&architecture);
   table.setIndirectOp(indirect);
   ModelState state;
-  table.jmodel = new FixtureModel(&table,config.overrideMode,
-                                  config.driveRecover && !config.overrideMode,config.sanityResult,
-                                  config.mutateDuringSanity,code,targets,initialLoads,&state);
+  if (!config.realModel)
+    table.jmodel = new FixtureModel(&table,config.overrideMode,
+                                    config.driveRecover && !config.overrideMode,
+                                    config.sanityResult,config.mutateDuringSanity,
+                                    code,targets,initialLoads,&state);
   table.addresstable = config.driveRecover ? vector<Address>() : targets;
   table.loadpoints = config.driveRecover ? vector<LoadTable>() : initialLoads;
-  table.collectloads = config.driveRecover;
+  table.collectloads = config.collectLoads;
 
   string kind = "success";
   string message = "none";
@@ -329,7 +441,8 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
   try {
     if (config.driveRecover) {
       table.recoverAddresses(&fd);
-      state.events.push_back("collapse");
+      if (config.collectLoads)
+        state.events.push_back("collapse");
     }
     else
       table.sanityCheck(&fd,&loadcounts);
@@ -356,10 +469,13 @@ static void runCase(FixtureArchitecture &architecture,const CaseConfig &config)
        << "|mode=" << mode
        << "|msg=" << message
        << "|partial=" << (table.partialTable ? 1 : 0)
-       << "|override=" << (table.jmodel->isOverride() ? 1 : 0)
+       << "|override=" << ((table.jmodel != (JumpModel *)0 && table.jmodel->isOverride()) ? 1 : 0)
+       << "|collect=" << (table.collectloads ? 1 : 0)
        << "|recover_calls=" << state.recoverCalls
        << "|build_calls=" << state.buildCalls
        << "|sanity_calls=" << state.sanityCalls
+       << "|build_loads=" << state.buildLoadsPresent
+       << "|build_counts=" << state.buildCountsPresent
        << "|events=" << eventsText(state.events)
        << "|addresses=" << addressesText(table.addresstable)
        << "|loads=" << loadsText(table.loadpoints)
@@ -373,16 +489,30 @@ static void run(void)
   FixtureArchitecture architecture;
   const uintb op = 0x100000;
   const CaseConfig cases[] = {
-    { "zero",       { 0 },                 false, false, true,  false, false, false },
-    { "near",       { op + 0x20 },         false, false, true,  false, false, false },
-    { "cutoff",     { op + 0xffff },       false, false, true,  false, false, false },
-    { "over",       { op + 0x10000 },      false, false, true,  false, false, false },
-    { "multi",      { 0, op + 0x20000 },   false, false, true,  false, false, false },
-    { "partial",    { 0 },                 true,  false, true,  false, false, false },
-    { "override",   { 0 },                 true,  true,  true,  false, true,  false },
-    { "success_truncate", { op + 0x10, op + 0x20 }, false, false, true, true, true, false },
-    { "model_reject", { op + 0x10, op + 0x20 }, false, false, false, true, true, false },
-    { "sort_equal_addr", { op + 0x10, op + 0x20 }, false, false, true, false, true, true },
+    { "zero",       { 0 },               reach_none, false, true,  false, false, false, false, load_default },
+    { "near",       { op + 0x20 },       reach_none, false, true,  false, false, false, false, load_default },
+    { "cutoff",     { op + 0xffff },     reach_none, false, true,  false, false, false, false, load_default },
+    { "over",       { op + 0x10000 },    reach_none, false, true,  false, false, false, false, load_default },
+    { "multi",      { 0, op + 0x20000 }, reach_none, false, true,  false, false, false, false, load_default },
+    { "partial",    { 0 }, reach_false,       false, true, false, false, false, false, load_default },
+    { "reach_two",  { 0 }, reach_two_level,   false, true, false, false, false, false, load_default },
+    { "reach_flip", { 0 }, reach_flip,        false, true, false, false, false, false, load_default },
+    { "reach_nonzero", { 0 }, reach_nonzero,  false, true, false, false, false, false, load_default },
+    { "reach_size_out", { 0 }, reach_size_out,false, true, false, false, false, false, load_default },
+    { "reach_non_cbranch", { 0 }, reach_non_cbranch,false,true,false,false,false,false,load_default },
+    { "reach_nonconstant", { 0 }, reach_nonconstant,false,true,false,false,false,false,load_default },
+    { "override",   { 0 }, reach_false, true, true, false, true, true, false, load_default },
+    { "recover_model_fail", {}, reach_none, false, true, false, true, true, true, load_default },
+    { "recover_table_zero", {}, reach_none, false, true, false, true, true, false, load_default },
+    { "recover_no_collect", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, false, false, load_default },
+    { "recover_thunk", { 0 }, reach_none, false, true, false, true, true, false, load_default },
+    { "success_truncate", { op + 0x10, op + 0x20 }, reach_none, false, true, true, true, true, false, load_default },
+    { "model_reject", { op + 0x10, op + 0x20 }, reach_none, false, false, true, true, true, false, load_default },
+    { "sort_equal_three", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_three },
+    { "sort_equal_sixteen", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_sixteen },
+    { "sort_equal_seventeen", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_seventeen },
+    { "wrap_one_byte", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_wrap },
+    { "multi_space", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_multi_space },
   };
   for(size_t i=0;i<sizeof(cases)/sizeof(cases[0]);++i)
     runCase(architecture,cases[i]);

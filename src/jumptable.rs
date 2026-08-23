@@ -108,6 +108,189 @@ impl LoadTable {
         Self { addr, size, num }
     }
 
+    // RUGRA-GLUE: reproduce the address-only std::sort implementation used by
+    // the locked GCC 16.2.1/libstdc++ oracle; C++ does not specify equivalent-key order
+    fn address_less(left: &LoadTable, right: &LoadTable) -> bool {
+        left.addr < right.addr
+    }
+
+    // RUGRA-GLUE: libstdc++ 16 bits/stl_algo.h __unguarded_linear_insert for
+    // the address-only LoadTable comparator used by jumptable.cc:87
+    fn libstdcxx_unguarded_linear_insert(table: &mut [LoadTable], mut last: usize) {
+        let value = table[last].clone();
+        loop {
+            let next = last - 1;
+            if !Self::address_less(&value, &table[next]) {
+                break;
+            }
+            table[last] = table[next].clone();
+            last = next;
+        }
+        table[last] = value;
+    }
+
+    // RUGRA-GLUE: libstdc++ 16 bits/stl_algo.h __insertion_sort for the
+    // address-only LoadTable comparator used by jumptable.cc:87
+    fn libstdcxx_insertion_sort(table: &mut [LoadTable], first: usize, last: usize) {
+        if first == last {
+            return;
+        }
+        for index in first + 1..last {
+            if Self::address_less(&table[index], &table[first]) {
+                let value = table[index].clone();
+                for source in (first..index).rev() {
+                    table[source + 1] = table[source].clone();
+                }
+                table[first] = value;
+            } else {
+                Self::libstdcxx_unguarded_linear_insert(table, index);
+            }
+        }
+    }
+
+    // RUGRA-GLUE: libstdc++ 16 bits/stl_heap.h __adjust_heap/__push_heap for
+    // the address-only LoadTable comparator used by jumptable.cc:87
+    fn libstdcxx_adjust_heap(
+        table: &mut [LoadTable],
+        first: usize,
+        mut hole: usize,
+        len: usize,
+        value: LoadTable,
+    ) {
+        let top = hole;
+        let mut second_child = hole;
+        while second_child < (len - 1) / 2 {
+            second_child = 2 * (second_child + 1);
+            if Self::address_less(
+                &table[first + second_child],
+                &table[first + second_child - 1],
+            ) {
+                second_child -= 1;
+            }
+            table[first + hole] = table[first + second_child].clone();
+            hole = second_child;
+        }
+        if len & 1 == 0 && second_child == (len - 2) / 2 {
+            second_child = 2 * (second_child + 1);
+            table[first + hole] = table[first + second_child - 1].clone();
+            hole = second_child - 1;
+        }
+        while hole > top {
+            let parent = (hole - 1) / 2;
+            if !Self::address_less(&table[first + parent], &value) {
+                break;
+            }
+            table[first + hole] = table[first + parent].clone();
+            hole = parent;
+        }
+        table[first + hole] = value;
+    }
+
+    // RUGRA-GLUE: libstdc++ 16 bits/stl_algo.h __partial_sort(first,last,last)
+    // and bits/stl_heap.h heap helpers used at introsort's depth limit
+    fn libstdcxx_heap_sort(table: &mut [LoadTable], first: usize, last: usize) {
+        let len = last - first;
+        if len < 2 {
+            return;
+        }
+
+        let mut parent = (len - 2) / 2;
+        loop {
+            let value = table[first + parent].clone();
+            Self::libstdcxx_adjust_heap(table, first, parent, len, value);
+            if parent == 0 {
+                break;
+            }
+            parent -= 1;
+        }
+
+        let mut heap_last = last;
+        while heap_last - first > 1 {
+            heap_last -= 1;
+            let value = table[heap_last].clone();
+            table[heap_last] = table[first].clone();
+            Self::libstdcxx_adjust_heap(
+                table,
+                first,
+                0,
+                heap_last - first,
+                value,
+            );
+        }
+    }
+
+    // RUGRA-GLUE: locked GCC 16.2.1 libstdc++ std::sort implementation for
+    // LoadTable's address-only operator<; exact equivalent-key order is B2-observable
+    fn sort_by_address_libstdcxx_16(table: &mut [LoadTable]) {
+        const INSERTION_SORT_THRESHOLD: usize = 16;
+        if table.is_empty() {
+            return;
+        }
+
+        let depth_limit =
+            (usize::BITS - 1 - table.len().leading_zeros()) as usize * 2;
+        let mut pending = vec![(0usize, table.len(), depth_limit)];
+        while let Some((mut first, last, mut depth)) = pending.pop() {
+            while last - first > INSERTION_SORT_THRESHOLD {
+                if depth == 0 {
+                    Self::libstdcxx_heap_sort(table, first, last);
+                    break;
+                }
+                depth -= 1;
+
+                let second = first + 1;
+                let middle = first + (last - first) / 2;
+                let end = last - 1;
+                if Self::address_less(&table[second], &table[middle]) {
+                    if Self::address_less(&table[middle], &table[end]) {
+                        table.swap(first, middle);
+                    } else if Self::address_less(&table[second], &table[end]) {
+                        table.swap(first, end);
+                    } else {
+                        table.swap(first, second);
+                    }
+                } else if Self::address_less(&table[second], &table[end]) {
+                    table.swap(first, second);
+                } else if Self::address_less(&table[middle], &table[end]) {
+                    table.swap(first, end);
+                } else {
+                    table.swap(first, middle);
+                }
+
+                let pivot = first;
+                let mut left = first + 1;
+                let mut right = last;
+                let cut = loop {
+                    while Self::address_less(&table[left], &table[pivot]) {
+                        left += 1;
+                    }
+                    right -= 1;
+                    while Self::address_less(&table[pivot], &table[right]) {
+                        right -= 1;
+                    }
+                    if left >= right {
+                        break left;
+                    }
+                    table.swap(left, right);
+                    left += 1;
+                };
+
+                // libstdc++ recurses on [cut,last), then iterates [first,cut).
+                pending.push((first, cut, depth));
+                first = cut;
+            }
+        }
+
+        if table.len() > INSERTION_SORT_THRESHOLD {
+            Self::libstdcxx_insertion_sort(table, 0, INSERTION_SORT_THRESHOLD);
+            for index in INSERTION_SORT_THRESHOLD..table.len() {
+                Self::libstdcxx_unguarded_linear_insert(table, index);
+            }
+        } else {
+            Self::libstdcxx_insertion_sort(table, 0, table.len());
+        }
+    }
+
     // Ghidra: jumptable.cc:60 LoadTable::collapseTable
     /// Sort the entries and collapse any contiguous sequences into a single
     /// `LoadTable` entry. Faithful to `LoadTable::collapseTable`
@@ -121,11 +304,11 @@ impl LoadTable {
         let mut is_sorted = true;
         let mut num = table[0].num;
         let size0 = table[0].size;
-        let mut next_addr = table[0].addr.as_u64().wrapping_add(size0 as u64);
+        let mut next_addr = table[0].addr.offset(i64::from(size0));
         for entry in table.iter().skip(1) {
-            if entry.addr.as_u64() == next_addr && entry.size == size0 {
+            if entry.addr == next_addr && entry.size == size0 {
                 num += entry.num;
-                next_addr = entry.addr.as_u64().wrapping_add(entry.size as u64);
+                next_addr = entry.addr.offset(i64::from(entry.size));
             } else {
                 is_sorted = false;
                 break;
@@ -139,28 +322,27 @@ impl LoadTable {
         }
 
         // jumptable.hh:59 LoadTable::operator< compares only the Address.
-        // Equal-address entries are equivalent regardless of size/num, just
-        // as they are for C++ std::sort's strict-weak-order comparator.
-        table.sort_unstable_by(|left, right| left.addr.cmp(&right.addr));
+        // Equivalent-key permutation affects the later size/adjacency scan,
+        // so reproduce the std::sort implementation used by the pinned oracle.
+        Self::sort_by_address_libstdcxx_16(table);
 
         let mut count = 1;
         let mut last = 0;
-        let mut next_addr = table[0].addr.as_u64()
-            .wrapping_add((table[0].size as u64) * (table[0].num as u64));
+        let mut next_addr = table[0]
+            .addr
+            .offset(i64::from(table[0].size) * i64::from(table[0].num));
         for i in 1..table.len() {
-            if table[i].addr.as_u64() == next_addr && table[i].size == table[last].size {
+            if table[i].addr == next_addr && table[i].size == table[last].size {
                 table[last].num += table[i].num;
                 next_addr = table[i]
                     .addr
-                    .as_u64()
-                    .wrapping_add((table[i].size as u64) * (table[i].num as u64));
-            } else if next_addr < table[i].addr.as_u64() || table[i].size != table[last].size {
+                    .offset(i64::from(table[i].size) * i64::from(table[i].num));
+            } else if next_addr < table[i].addr || table[i].size != table[last].size {
                 last += 1;
                 table[last] = table[i].clone();
                 next_addr = table[i]
                     .addr
-                    .as_u64()
-                    .wrapping_add((table[i].size as u64) * (table[i].num as u64));
+                    .offset(i64::from(table[i].size) * i64::from(table[i].num));
                 count += 1;
             }
         }
@@ -4596,6 +4778,7 @@ pub fn recover_jump_tables(fd: &mut crate::funcdata::Funcdata) -> usize {
 mod tests {
     use super::*;
     use crate::address::SeqNum;
+    use crate::space::{AddrSpace, SpaceType};
 
     #[test]
     fn test_load_table_single() {
@@ -4642,6 +4825,97 @@ mod tests {
                 LoadTable::new(Address::new(0x4000), 8, 2),
                 LoadTable::new(Address::new(0x4000), 4, 3),
                 LoadTable::new(Address::new(0x4010), 8, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_load_table_libstdcxx_equal_key_threshold_permutation() {
+        let mut below_threshold = (0..16)
+            .map(|identity| LoadTable::new(Address::new(0x4000), identity + 1, 1))
+            .collect::<Vec<_>>();
+        LoadTable::sort_by_address_libstdcxx_16(&mut below_threshold);
+        assert_eq!(
+            below_threshold
+                .iter()
+                .map(|entry| entry.size)
+                .collect::<Vec<_>>(),
+            (1..=16).collect::<Vec<_>>()
+        );
+
+        let mut above_threshold = (0..17)
+            .map(|identity| LoadTable::new(Address::new(0x4000), identity + 1, 1))
+            .collect::<Vec<_>>();
+        LoadTable::sort_by_address_libstdcxx_16(&mut above_threshold);
+        assert_eq!(
+            above_threshold
+                .iter()
+                .map(|entry| entry.size)
+                .collect::<Vec<_>>(),
+            vec![9, 17, 16, 15, 14, 13, 12, 11, 10, 1, 8, 7, 6, 5, 4, 3, 2]
+        );
+    }
+
+    #[test]
+    fn test_load_table_collapse_wraps_in_tagged_space() {
+        let tiny = AddrSpace::new_space(
+            SpaceType::Processor,
+            "tiny",
+            false,
+            1,
+            1,
+            8,
+            0,
+            0,
+            0,
+        );
+        let mut table = vec![
+            LoadTable::single(Address::with_space(&tiny, 0xfc), 4),
+            LoadTable::single(Address::with_space(&tiny, 0), 4),
+        ];
+        LoadTable::collapse_table(&mut table);
+        assert_eq!(
+            table,
+            vec![LoadTable::new(Address::with_space(&tiny, 0xfc), 4, 2)]
+        );
+    }
+
+    #[test]
+    fn test_load_table_collapse_orders_full_address_space_then_offset() {
+        let code = AddrSpace::new_space(
+            SpaceType::Processor,
+            "ram",
+            false,
+            8,
+            1,
+            3,
+            0,
+            0,
+            0,
+        );
+        let tiny = AddrSpace::new_space(
+            SpaceType::Processor,
+            "tiny",
+            false,
+            1,
+            1,
+            8,
+            0,
+            0,
+            0,
+        );
+        let mut table = vec![
+            LoadTable::single(Address::with_space(&tiny, 0), 4),
+            LoadTable::single(Address::with_space(&code, 0x4000), 4),
+            LoadTable::single(Address::with_space(&tiny, 4), 4),
+            LoadTable::single(Address::with_space(&code, 0x4004), 4),
+        ];
+        LoadTable::collapse_table(&mut table);
+        assert_eq!(
+            table,
+            vec![
+                LoadTable::new(Address::with_space(&code, 0x4000), 4, 2),
+                LoadTable::new(Address::with_space(&tiny, 0), 4, 2),
             ]
         );
     }

@@ -21,13 +21,28 @@ use rugra::varnode::Varnode;
 
 type BlockRef = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
 
-#[derive(Default)]
 struct ModelState {
     recover_calls: AtomicI32,
     build_calls: AtomicI32,
     sanity_calls: AtomicI32,
+    build_loads_present: AtomicI32,
+    build_counts_present: AtomicI32,
     observed_loadcounts: Mutex<Vec<i32>>,
     events: Mutex<Vec<&'static str>>,
+}
+
+impl Default for ModelState {
+    fn default() -> Self {
+        Self {
+            recover_calls: AtomicI32::new(0),
+            build_calls: AtomicI32::new(0),
+            sanity_calls: AtomicI32::new(0),
+            build_loads_present: AtomicI32::new(-1),
+            build_counts_present: AtomicI32::new(-1),
+            observed_loadcounts: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 struct FixtureModel {
@@ -75,6 +90,12 @@ impl JumpModel for FixtureModel {
         self.state.events.lock().unwrap().push("build");
         *addresstable = self.build_targets.clone();
 
+        self.state
+            .build_loads_present
+            .store(i32::from(loadpoints.is_some()), Ordering::Relaxed);
+        self.state
+            .build_counts_present
+            .store(i32::from(loadcounts.is_some()), Ordering::Relaxed);
         let count = if let Some(loadpoints) = loadpoints {
             loadpoints.extend(self.build_loads.iter().cloned());
             loadpoints.len() as i32
@@ -149,21 +170,50 @@ impl JumpModel for FixtureModel {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReachVariant {
+    None,
+    False,
+    TwoLevel,
+    Flip,
+    Nonzero,
+    SizeOut,
+    NonCbranch,
+    Nonconstant,
+}
+
+#[derive(Clone, Copy)]
+enum LoadVariant {
+    Default,
+    EqualThree,
+    EqualSixteen,
+    EqualSeventeen,
+    Wrap,
+    MultiSpace,
+}
+
 struct CaseConfig {
     id: &'static str,
     target_offsets: Vec<u64>,
-    unreachable: bool,
+    reach: ReachVariant,
     override_mode: bool,
     sanity_result: bool,
     mutate_during_sanity: bool,
     drive_recover: bool,
-    equal_address_loads: bool,
+    collect_loads: bool,
+    real_model: bool,
+    loads: LoadVariant,
+}
+
+fn address_text(address: &Address) -> String {
+    let index = address.get_space().map_or(-1, |space| space.get_index());
+    format!("{}@{}", index, address)
 }
 
 fn addresses_text(addresses: &[Address]) -> String {
     addresses
         .iter()
-        .map(ToString::to_string)
+        .map(address_text)
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -171,7 +221,7 @@ fn addresses_text(addresses: &[Address]) -> String {
 fn loads_text(loads: &[LoadTable]) -> String {
     loads
         .iter()
-        .map(|load| format!("{}/{}/{}", load.addr, load.size, load.num))
+        .map(|load| format!("{}/{}/{}", address_text(&load.addr), load.size, load.num))
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -188,37 +238,205 @@ fn events_text(events: &[&str]) -> String {
     events.join(">")
 }
 
+fn add_guard(
+    fd: &mut Funcdata,
+    code: &AddrSpace,
+    parent: &BlockRef,
+    op_offset: u64,
+    condition: u64,
+    flip: bool,
+    two_edges: bool,
+    cbranch: bool,
+    constant: bool,
+) -> BlockRef {
+    let guard: BlockRef = fd.create_new_block();
+    let other: BlockRef = fd.create_new_block();
+    if cbranch {
+        let op = fd.new_op(2, Address::with_space(code, op_offset));
+        fd.op_set_opcode(&op, OpCode::CPUI_CBRANCH);
+        let target = fd.new_constant(8, op_offset + 0x40);
+        let condition = if constant {
+            fd.new_constant(1, condition)
+        } else {
+            fd.new_unique(1)
+        };
+        fd.op_set_input(&op, target, 0);
+        fd.op_set_input(&op, condition, 1);
+        if flip {
+            op.0.write().unwrap().flags |= rugra::op::pcodeop_flags::BOOLEAN_FLIP;
+        }
+        fd.op_insert_end(&op, &guard);
+    } else {
+        let op = fd.new_op(1, Address::with_space(code, op_offset));
+        fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+        let input = fd.new_constant(1, condition);
+        fd.op_set_input(&op, input, 0);
+        fd.op_insert_end(&op, &guard);
+    }
+    if two_edges {
+        fd.bblocks.add_edge(guard.clone(), other);
+    }
+    fd.bblocks.add_edge(guard.clone(), parent.clone());
+    guard
+}
+
 fn build_indirect(
     fd: &mut Funcdata,
     code: &AddrSpace,
-    unreachable: bool,
+    reach: ReachVariant,
     op_offset: u64,
 ) -> rugra::op::PcodeOpRef {
     let switch_block: BlockRef = fd.create_new_block();
-    if unreachable {
-        let guard: BlockRef = fd.create_new_block();
-        let other: BlockRef = fd.create_new_block();
-        let cbranch = fd.new_op(2, Address::with_space(code, op_offset - 8));
-        fd.op_set_opcode(&cbranch, OpCode::CPUI_CBRANCH);
-        let target = fd.new_constant(8, op_offset + 0x40);
-        let condition = fd.new_constant(1, 0);
-        fd.op_set_input(&cbranch, target, 0);
-        fd.op_set_input(&cbranch, condition, 1);
-        fd.op_insert_end(&cbranch, &guard);
-        fd.bblocks.add_edge(guard.clone(), other);
-        fd.bblocks.add_edge(guard, switch_block.clone());
+    match reach {
+        ReachVariant::None => {}
+        ReachVariant::False => {
+            add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                0,
+                false,
+                true,
+                true,
+                true,
+            );
+        }
+        ReachVariant::TwoLevel => {
+            let inner = add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                1,
+                false,
+                true,
+                true,
+                true,
+            );
+            add_guard(fd, code, &inner, op_offset - 16, 0, false, true, true, true);
+        }
+        ReachVariant::Flip => {
+            add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                1,
+                true,
+                true,
+                true,
+                true,
+            );
+        }
+        ReachVariant::Nonzero => {
+            add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                1,
+                false,
+                true,
+                true,
+                true,
+            );
+        }
+        ReachVariant::SizeOut => {
+            add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                0,
+                false,
+                false,
+                true,
+                true,
+            );
+        }
+        ReachVariant::NonCbranch => {
+            add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                0,
+                false,
+                true,
+                false,
+                true,
+            );
+        }
+        ReachVariant::Nonconstant => {
+            add_guard(
+                fd,
+                code,
+                &switch_block,
+                op_offset - 8,
+                0,
+                false,
+                true,
+                true,
+                false,
+            );
+        }
     }
 
     let indirect = fd.new_op(1, Address::with_space(code, op_offset));
     fd.op_set_opcode(&indirect, OpCode::CPUI_BRANCHIND);
-    let destination = fd.new_constant(8, op_offset + 0x20);
+    let destination = if reach == ReachVariant::None {
+        fd.new_unique(4)
+    } else {
+        fd.new_constant(8, op_offset + 0x20)
+    };
     fd.op_set_input(&indirect, destination, 0);
     fd.op_insert_end(&indirect, &switch_block);
     indirect
 }
 
+fn build_loads(code: &AddrSpace, tiny: &AddrSpace, variant: LoadVariant) -> Vec<LoadTable> {
+    match variant {
+        LoadVariant::Default => vec![
+            LoadTable::single(Address::with_space(code, 0x3004), 4),
+            LoadTable::single(Address::with_space(code, 0x3000), 4),
+        ],
+        LoadVariant::EqualThree => vec![
+            LoadTable::new(Address::with_space(code, 0x4000), 8, 2),
+            LoadTable::new(Address::with_space(code, 0x4000), 4, 3),
+            LoadTable::new(Address::with_space(code, 0x4010), 8, 1),
+        ],
+        LoadVariant::EqualSixteen | LoadVariant::EqualSeventeen => {
+            let count = if matches!(variant, LoadVariant::EqualSixteen) {
+                16
+            } else {
+                17
+            };
+            (0..count)
+                .map(|index| {
+                    LoadTable::single(
+                        Address::with_space(code, 0x4000),
+                        if index & 1 == 0 { 4 } else { 8 },
+                    )
+                })
+                .collect()
+        }
+        LoadVariant::Wrap => vec![
+            LoadTable::single(Address::with_space(tiny, 0xfc), 4),
+            LoadTable::single(Address::with_space(tiny, 0), 4),
+        ],
+        LoadVariant::MultiSpace => vec![
+            LoadTable::single(Address::with_space(tiny, 0), 4),
+            LoadTable::single(Address::with_space(code, 0x4000), 4),
+            LoadTable::single(Address::with_space(tiny, 4), 4),
+            LoadTable::single(Address::with_space(code, 0x4004), 4),
+        ],
+    }
+}
+
 fn run_case(
     code: &AddrSpace,
+    tiny: &AddrSpace,
     architecture: &Arc<Architecture>,
     commentdb: &Arc<RwLock<CommentDatabaseInternal>>,
     config: CaseConfig,
@@ -227,40 +445,31 @@ fn run_case(
     commentdb.write().unwrap().clear();
     let mut fd = Funcdata::new(config.id, Address::with_space(code, 0x90000), 0x20000);
     fd.set_arch(architecture.clone());
-    let indirect = build_indirect(&mut fd, code, config.unreachable, OP_OFFSET);
+    let indirect = build_indirect(&mut fd, code, config.reach, OP_OFFSET);
 
     let targets = config
         .target_offsets
         .iter()
         .map(|offset| Address::with_space(code, *offset))
         .collect::<Vec<_>>();
-    let initial_loads = if config.equal_address_loads {
-        vec![
-            LoadTable::new(Address::with_space(code, 0x4000), 8, 2),
-            LoadTable::new(Address::with_space(code, 0x4000), 4, 3),
-            LoadTable::new(Address::with_space(code, 0x4010), 8, 1),
-        ]
-    } else {
-        vec![
-            LoadTable::single(Address::with_space(code, 0x3004), 4),
-            LoadTable::single(Address::with_space(code, 0x3000), 4),
-        ]
-    };
+    let initial_loads = build_loads(code, tiny, config.loads);
     let mut loadcounts = vec![1, 2];
 
     let mut table = JumpTable::new(Address::with_space(code, OP_OFFSET));
     table.set_indirect_op(indirect.0.clone());
     let state = Arc::new(ModelState::default());
-    table.jmodel = Some(Box::new(FixtureModel {
-        override_mode: config.override_mode,
-        transient_override: config.drive_recover && !config.override_mode,
-        sanity_result: config.sanity_result,
-        mutate_during_sanity: config.mutate_during_sanity,
-        reject_load_address: Address::with_space(code, 0x3008),
-        build_targets: targets.clone(),
-        build_loads: initial_loads.clone(),
-        state: state.clone(),
-    }));
+    if !config.real_model {
+        table.jmodel = Some(Box::new(FixtureModel {
+            override_mode: config.override_mode,
+            transient_override: config.drive_recover && !config.override_mode,
+            sanity_result: config.sanity_result,
+            mutate_during_sanity: config.mutate_during_sanity,
+            reject_load_address: Address::with_space(code, 0x3008),
+            build_targets: targets.clone(),
+            build_loads: initial_loads.clone(),
+            state: state.clone(),
+        }));
+    }
     table.addresstable = if config.drive_recover {
         Vec::new()
     } else {
@@ -271,14 +480,14 @@ fn run_case(
     } else {
         initial_loads
     };
-    table.collect_loads = config.drive_recover;
+    table.collect_loads = config.collect_loads;
 
     let result = if config.drive_recover {
         table.recover_addresses_classified(&fd)
     } else {
         table.sanity_check(&fd, Some(&mut loadcounts))
     };
-    if config.drive_recover && result.is_ok() {
+    if config.drive_recover && config.collect_loads && result.is_ok() {
         state.events.lock().unwrap().push("collapse");
     }
     let (kind, mode, message) = match result {
@@ -320,7 +529,7 @@ fn run_case(
     };
 
     println!(
-        "case|id={}|path={}|kind={}|mode={}|msg={}|partial={}|override={}|recover_calls={}|build_calls={}|sanity_calls={}|events={}|addresses={}|loads={}|loadcounts={}|warning={}",
+        "case|id={}|path={}|kind={}|mode={}|msg={}|partial={}|override={}|collect={}|recover_calls={}|build_calls={}|sanity_calls={}|build_loads={}|build_counts={}|events={}|addresses={}|loads={}|loadcounts={}|warning={}",
         config.id,
         if config.drive_recover { "recover" } else { "sanity" },
         kind,
@@ -328,9 +537,12 @@ fn run_case(
         message,
         i32::from(table.partial_table),
         i32::from(table.is_override()),
+        i32::from(table.collect_loads),
         state.recover_calls.load(Ordering::Relaxed),
         state.build_calls.load(Ordering::Relaxed),
         state.sanity_calls.load(Ordering::Relaxed),
+        state.build_loads_present.load(Ordering::Relaxed),
+        state.build_counts_present.load(Ordering::Relaxed),
         events_text(&events),
         addresses_text(&table.addresstable),
         loads_text(&table.loadpoints),
@@ -339,117 +551,333 @@ fn run_case(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+fn case(
+    id: &'static str,
+    target_offsets: Vec<u64>,
+    reach: ReachVariant,
+    override_mode: bool,
+    sanity_result: bool,
+    mutate_during_sanity: bool,
+    drive_recover: bool,
+    collect_loads: bool,
+    real_model: bool,
+    loads: LoadVariant,
+) -> CaseConfig {
+    CaseConfig {
+        id,
+        target_offsets,
+        reach,
+        override_mode,
+        sanity_result,
+        mutate_during_sanity,
+        drive_recover,
+        collect_loads,
+        real_model,
+        loads,
+    }
+}
+
 fn main() {
     let code = AddrSpace::new_space(SpaceType::Processor, "ram", false, 8, 1, 3, 0, 0, 0);
+    let tiny = AddrSpace::new_space(SpaceType::Processor, "tiny", false, 1, 1, 8, 0, 0, 0);
     let commentdb = Arc::new(RwLock::new(CommentDatabaseInternal::new()));
     let mut architecture = Architecture::new();
     architecture.commentdb = Some(commentdb.clone());
     let architecture = Arc::new(architecture);
     const OP: u64 = 0x100000;
     let cases = vec![
-        CaseConfig {
-            id: "zero",
-            target_offsets: vec![0],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: false,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "near",
-            target_offsets: vec![OP + 0x20],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: false,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "cutoff",
-            target_offsets: vec![OP + 0xffff],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: false,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "over",
-            target_offsets: vec![OP + 0x10000],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: false,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "multi",
-            target_offsets: vec![0, OP + 0x20000],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: false,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "partial",
-            target_offsets: vec![0],
-            unreachable: true,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: false,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "override",
-            target_offsets: vec![0],
-            unreachable: true,
-            override_mode: true,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: true,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "success_truncate",
-            target_offsets: vec![OP + 0x10, OP + 0x20],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: true,
-            drive_recover: true,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "model_reject",
-            target_offsets: vec![OP + 0x10, OP + 0x20],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: false,
-            mutate_during_sanity: true,
-            drive_recover: true,
-            equal_address_loads: false,
-        },
-        CaseConfig {
-            id: "sort_equal_addr",
-            target_offsets: vec![OP + 0x10, OP + 0x20],
-            unreachable: false,
-            override_mode: false,
-            sanity_result: true,
-            mutate_during_sanity: false,
-            drive_recover: true,
-            equal_address_loads: true,
-        },
+        case(
+            "zero",
+            vec![0],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "near",
+            vec![OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "cutoff",
+            vec![OP + 0xffff],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "over",
+            vec![OP + 0x10000],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "multi",
+            vec![0, OP + 0x20000],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "partial",
+            vec![0],
+            ReachVariant::False,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "reach_two",
+            vec![0],
+            ReachVariant::TwoLevel,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "reach_flip",
+            vec![0],
+            ReachVariant::Flip,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "reach_nonzero",
+            vec![0],
+            ReachVariant::Nonzero,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "reach_size_out",
+            vec![0],
+            ReachVariant::SizeOut,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "reach_non_cbranch",
+            vec![0],
+            ReachVariant::NonCbranch,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "reach_nonconstant",
+            vec![0],
+            ReachVariant::Nonconstant,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "override",
+            vec![0],
+            ReachVariant::False,
+            true,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "recover_model_fail",
+            vec![],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            true,
+            LoadVariant::Default,
+        ),
+        case(
+            "recover_table_zero",
+            vec![],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "recover_no_collect",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "recover_thunk",
+            vec![0],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "success_truncate",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            true,
+            true,
+            true,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "model_reject",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            false,
+            true,
+            true,
+            true,
+            false,
+            LoadVariant::Default,
+        ),
+        case(
+            "sort_equal_three",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::EqualThree,
+        ),
+        case(
+            "sort_equal_sixteen",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::EqualSixteen,
+        ),
+        case(
+            "sort_equal_seventeen",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::EqualSeventeen,
+        ),
+        case(
+            "wrap_one_byte",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::Wrap,
+        ),
+        case(
+            "multi_space",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::MultiSpace,
+        ),
     ];
 
     for config in cases {
-        run_case(&code, &architecture, &commentdb, config);
+        run_case(&code, &tiny, &architecture, &commentdb, config);
     }
 }

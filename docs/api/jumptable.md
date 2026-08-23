@@ -5,7 +5,7 @@
 PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
 model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 `NO_ORACLE`。
 
-## 2026-08-23：JUMPTABLE-THUNK-CLASSIFY-0001 — typed recovery failure
+## 2026-08-24：JUMPTABLE-THUNK-CLASSIFY-0001 — typed recovery failure
 
 - `JumpTableRecoveryError` 保留 Ghidra 的两个异常通道及原始文本：
   `Thunk { message: "Likely thunk" }` 对应 `JumptableThunkError`，
@@ -24,23 +24,52 @@ model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 
   `try_recover -> Option<JumpTable>` 暂作兼容适配；`try_recover` 已移除
   `catch_unwind`，panic 不再冒充普通恢复失败。
 - B2：`tests/oracle/jt_thunk_classify_1204.{cc,rs,metadata.json}` 与
-  `tools/run_jt_thunk_classify_oracle.sh` 在锁定 12.0.4 上逐字节对拍 10 个场景：
-  zero / near / `0xffff` / `0x10000` / multi / partial / override /
-  success truncate / model reject / equal-address load sort。`model_reject`
+  `tools/run_jt_thunk_classify_oracle.sh` 在锁定 12.0.4 上逐字节对拍 24 个场景：
+  zero / near / `0xffff` / `0x10000` / multi；isReachable 的单层 false、
+  两层 parent 更新、boolean flip、非零常量、`sizeOut != 2`、非 CBRANCH、
+  非常量；override；recoverModel fail / tableSize 0 / collectloads=false /
+  recover thunk；success truncate / model reject；同址 3/16/17 项排序边界；
+  1-byte 地址空间 wrap 与 multi-space 排序。`model_reject`
   真正经 `recoverAddresses` 驱动并观察 `recover>build>sanity` 后异常、未 collapse
   的 loadpoints；`success_truncate` 观察完整
   `recover>build>sanity>collapse`、表长 warning 及成功 collapse；所有 recover
-  case 输出内部 loadcounts。事件中的 `collapse` 在 `recoverAddresses` 成功返回
-  边界记录，并由返回后的 loadpoints 证明内部 collapse 已完成；异常路径既无该
-  marker，loadpoints 也保持未 collapse。该投影为 `MATCH`。
+  case 输出内部 loadcounts 和 build 时两个可选输出指针是否存在。事件中的
+  `collapse` 只在 `collectloads=true` 且 `recoverAddresses` 成功返回时记录，并由
+  返回后的 loadpoints 证明内部 collapse 已完成；异常与 collectloads=false 路径
+  均无 marker。锁定 C++ 输出已生成，当前 Rust source 也通过 31 个 focused
+  jumptable tests；但本 candidate 唯一获准的完整 runner 重试在 Cargo 成功后、
+  Rust fixture 链接前因旧 artifact selector 误匹配 25 个 dependency
+  `root-output` 而停止。cleanup 已删除该次 run-local target，修正后的 runner 未再
+  执行，因此当前 24-case projection 准确记为 `UNTESTED`，不得写作 `MATCH`。
 - `LoadTable::collapse_table` 的排序比较键只含 `addr`，对应
-  jumptable.hh:59 的 `return addr < op2.addr`；`size/num` 不作 tie-break。
-  Rust 不再为 `LoadTable` 派生 `Ord`，唯一排序消费者显式使用 address-only
-  comparator。equal-address fixture 以不同 size/num 固定此语义。
+  jumptable.hh:59 的 `return addr < op2.addr`；`size/num` 不作 tie-break。比较与
+  `nextaddr` 都保留完整 `Address`：先按 address-space index、再按 offset 排序，
+  地址加法经对应 space 的 `wrapOffset`。fixture 以 index 3/8 的混合地址及
+  1-byte space 的 `0xfc + 4 == 0` 固定这两项语义。
+- 锁定 oracle 使用 GCC 16.2.1/libstdc++。C++ 标准不规定等价键的 `std::sort`
+  排列，而 collapse 后续又读取 `size`，所以排列可见：16 项同址、size 4/8
+  交替时走 insertion-sort 边界；17 项时 introsort 的等价组排列会让一项被
+  collapse 丢弃。Rust 完整复现该锁定 libstdc++ 的 median/partition/introsort/
+  heap fallback/final insertion 路径，没有按元素数特判。runner 固定 g++、
+  libstdc++ 二进制及相关 STL headers 的 SHA-256。
+- 生产构造链审计：fresh `recoverAddresses` 中只有
+  `JumpBasic::buildAddresses -> EmulateFunction::executeLoad` 产生 load records，
+  两参数构造器令每项 `num=1`；同址异 size 仍可由 PathMeld 中不同宽度的 LOAD
+  产生。故 16/17 项反例保持生产前置条件（`num` 全为 1），不以任意私有 vector
+  冒充生产输入；`num>1` 仅在 collapse 或 decode/clone 后存在。
+- runner 从固定 base archive 加当前 comparand overlay 构造只读快照，记录运行前后
+  index/worktree/runtime-input/toolchain/oracle drift；Cargo 只调用一次，并使用
+  本次 `$oracle_tmp/cargo-target`。`root-output` 只在 build 目录深度 2 搜索，再以
+  直接父目录 basename `rugra-*` 过滤；native archive 与唯一 rlib 均限定在 fresh
+  target，不再读取共享 target 的 latest 产物。此 selector 修正已静态校验，但如上
+  所述尚无完整执行证据。
 - 剩余 `MISMATCH`（`JUMPTABLE-PIPELINE-0001`）：本租约禁止修改 flow/funcdata，
   因而生产调用闭包仍通过 bool/Option 兼容层丢失 typed mode；在生产
   `stageJumpTable` 消费 `JumpTableRecoveryError` 并分别返回 `FailThunk` / ordinary
   failure 前，不得将模块或 fixture overall 状态提升为 MATCH/L3。
+- 剩余 `MISMATCH`（`JUMPTABLE-SORT-TOOLCHAIN-0001`）：当前只证明锁定
+  GCC16/libstdc++ 的可观察等价组排列；其他合法 STL/toolchain 可能不同。生产若
+  需要跨 toolchain 等价，必须固定 oracle toolchain 或另行定义并双侧验证稳定契约。
 
 ## 2026-08-23：JUMPTABLE-GUARDS-0001 — analyzeGuards 完整移植 + valueMatch 补全 + checkUnrolledGuard 接线
 
@@ -124,8 +153,11 @@ A description of where and how data was loaded from memory
 - `single(addr, size) -> Self` — single-entry table.
 - `new(addr, size, num) -> Self` — full table.
 - `collapse_table(&mut Vec<LoadTable>)` — sort and merge contiguous entries
-  (jumptable.cc:60). The sort key is only `addr` (jumptable.hh:59); equal
-  addresses do not compare `size` or `num`.
+  (jumptable.cc:60). The sort key is the full `Address` only
+  (jumptable.hh:59); equal addresses do not compare `size` or `num`.
+  `nextaddr` uses address-space wrapping. Equivalent-key permutation mirrors
+  the fixture-pinned GCC 16.2.1 libstdc++ implementation; portability remains
+  `JUMPTABLE-SORT-TOOLCHAIN-0001`.
 
 ### `PcodeOpNode`
 A data-flow path edge (op + input slot).
