@@ -393,3 +393,26 @@ call 均保留为 CPUI_CALL + callspec）。
 `inline_sub_function` 实克隆仍 TODO（inlineFlow）；wrapOffset/JCurSpaceSize
 见 pcodeinject.md。测试：`cargo test --lib flow pcodeinject` 28 绿
 （subflow 既有崩溃与 base 6ee34dc 相同，非本租约）。
+
+### 2026-08-23（续）：`flow_inject_1204` oracle 门禁 MATCH
+
+`tools/run_flow_inject_oracle.sh`（pin-base schema 2，oracle 锁定 commit
+`e40ed130…`，Rugra 源 pin `835456b` + flow.rs/pcodeinject.rs 双 overlay）
+三 case 双侧 stdout 逐字节一致（sha256 `6effd232…`，stderr 空，diff 空）：
+
+- `inject_cpuid`：真实生产路径——x86-64 SLEIGH 对 `cpuid` 指令发射
+  CALLOTHER(44)，经公开 `UserOpManage::manualCallOtherFixup` 注册 fixup 后
+  `followFlow` 即可让 **xrefControlFlow CALLOTHER 臂（flow.cc:344-348）在双侧
+  自行排队并展开**（无需 fixture 种子）；81 op 流中 CALLOTHER(44) 被销毁、
+  注入 COPY 就位、其余 CALLOTHER(45+) 保留；
+- `inject_add`：种子路径（合成索引 2001，越过引擎 1756 项 userop 表），
+  INT_ADD 替换（const 掩码 + 操作数替换 + moveSequenceDead 落位）；
+- `inject_label`：带内部条件分支的 payload（label 相对解析
+  `labels[id]-calling_index`、注入后 xref 的 block 拆分、多 op move）。
+
+LOAD/STORE 空间引用常量按 containedcall fixture 同规则投影为 `spc:<name>`。
+覆盖率 6/9 MATCH；残差 `CALLSPEC-0001`（queryCall→copyFlowEffects 缺位，
+CALLFIXUP 触发不可达）与 `INJECT-0001`（inlineFlow 克隆）登记于
+`flow_inject_1204.metadata.json`。发现并登记：containedcall runner 的
+spec pin `34a3febf…` 在本仓库不可解析（本 fixture 改 pin 已核实的
+identical-asset commit `87aaef2`）。

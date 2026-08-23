@@ -102,3 +102,13 @@ FlowInfo 兼容视图（id 序首匹配）。旧 `register_payload`/`name_to_id`
 测试：pcodeinject::tests 16 全绿（copy/add/label-branch 三 snippet 的
 操作数替换、const 掩码、`<manual callotherfixup …")` 逐字 source、参数
 count/size 失败、无模板失败）。
+
+### 2026-08-23（续）：`flow_inject_1204` oracle 门禁 MATCH
+
+`InjectPayload::inject` 执行器与 `InjectContext` 真空间化随
+`tools/run_flow_inject_oracle.sh` 通过锁定 oracle 差分：cpuid（生产
+CALLOTHER 路径）、add（const 掩码/操作数替换）、label（label 相对分支）
+三 case 的注入后 op 序列（SeqNum addr/time、opcode、STARTBASIC、块归属、
+输入/输出 varnode token）双侧逐字节一致，含 moveSequenceDead 落位与
+被替换 CALLOTHER 的销毁。模块 L2（CALLFIXUP 触发与 dynamic payload 残差
+见 metadata）。
