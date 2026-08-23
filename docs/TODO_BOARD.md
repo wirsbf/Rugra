@@ -108,6 +108,14 @@ forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只�
 | `BLOCKBASIC-COVER-0001` | P2 | comment 审计新增：BlockBasic::contains 的 cover 边界投影形式化等价未证 | `src/block.rs`、fixture | 排队 |
 | `COMMENT-DB-EMITTED-0001` | P2 | comment 审计新增：setEmitted(false) 不回写 CommentDatabaseInternal（Ghidra mutable 直改库内对象） | `src/comment.rs`、`src/database_*.rs` | 排队 |
 | `COMMENT-SORTER-PRINTC-0001` | P2 | comment 审计新增：printc 消费端迁移到直接协议（消除 Vec 快照与 printc.rs:6651 警告） | `src/printc.rs`、`src/comment.rs` | printc 租约释放后认领 |
+
+来自 `docs/alignment_audit/FLOW_GAPS_2026-08-23.md`（40+ 函数对照；**勘误 ROADMAP 〇节**：可达性流追踪
+已移植并接线（flow.rs 2756 行），『线性扫描替代 L1』声明过时；truncateFlow/JunctionSplit 在锁定 oracle
+不存在，真实机制=Funcdata::truncatedFlow）。10 项 TODO 详见报告 §Wave（FLOW-ENTRY/ERRSEM/TRUNCATED/
+STAGEJT/SWITCHOVER/CONTAINEDCALL/OVERRIDE/INLINE/INJECT-WIRING/ROADMAP-STALE），最重链=
+truncatedFlow partial 克隆 → stageJumpTable 简化链（=JUMPTABLE-PIPELINE-0001 根因）→ 内联/注入共同地基；
+httpd 门禁仍走线性扫描（examples/httpd_decompile.rs:261）。
+
 | `VARNODE-COPYSYMBOL-EQUATE-0001` | P2 | rulefound 交付发现：copy_symbol_if_valid 不区分 EquateSymbol/isValueClose（varnode.rs 保守近似） | `src/varnode.rs`、fixture | varmap/varnode 租约释放后 |
 | `FLOAT-OPINT2FLOAT-SIGN-0001` | P2 | rulefound 交付发现：float_emulate op_int2float 无符号 vs Ghidra sign_extend（float.cc:614） | `src/float_emulate.rs`、fixture | 无 |
 | `OPBEHAVIOR-SRIGHT-SIZEMASK-0001` | P3 | rulefound 交付发现：混合尺寸 SRIGHT mask 语义（SLEIGH 不产，不可观测） | `src/opbehavior.rs` | 排队 |
