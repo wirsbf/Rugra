@@ -95223,10 +95223,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9c1b0bf6f51e30a77096"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9c1b0bf6f51e30a77096",
+      "lineage": [
+        {
+          "child_blob": "e6aa9b91438a4069b53978f4502f851292ac77d3",
+          "commit": "eb8ad57b5f472c182f25dd245460abdc3c9f33e6",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "build_simplify_pool -> build_oppool1"
+          ],
+          "from_id": "RG-F-9c1b0bf6f51e30a77096",
+          "from_path": "src/action.rs",
+          "parent_blob": "e3032afaf92f065314e6b59747658ebf761d9ebc",
+          "to_id": "RG-F-c2a760d91fd95478a016",
+          "to_path": "src/action.rs"
+        }
+      ],
+      "new_id": "RG-F-c2a760d91fd95478a016",
       "old_id": "RG-F-473f9d99b18f17fd9922",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -95253,10 +95271,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-a0b9aaf1d4e29189ddf4"
+      ],
       "language": "rust",
-      "new_id": "RG-F-a0b9aaf1d4e29189ddf4",
+      "lineage": [
+        {
+          "child_blob": "e6aa9b91438a4069b53978f4502f851292ac77d3",
+          "commit": "eb8ad57b5f472c182f25dd245460abdc3c9f33e6",
+          "evidence": [
+            "reviewed_same_name_allowlist",
+            "ActionDatabase::get_action_mut"
+          ],
+          "from_id": "RG-F-a0b9aaf1d4e29189ddf4",
+          "from_path": "src/action.rs",
+          "parent_blob": "e3032afaf92f065314e6b59747658ebf761d9ebc",
+          "to_id": "RG-F-afd2f193d11f7fded2d4",
+          "to_path": "src/action.rs"
+        }
+      ],
+      "new_id": "RG-F-afd2f193d11f7fded2d4",
       "old_id": "RG-F-a1792e61b73118f8c5eb",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -95601,16 +95637,51 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-fcbff0a6e1df3543c885"
+      ],
       "language": "rust",
-      "new_id": "RG-F-fcbff0a6e1df3543c885",
+      "lineage": [
+        {
+          "child_blob": "a4838de5c5c762f8723f692aaf289066fc97cf83",
+          "commit": "d1243926fedfb7deb5deba45495a8ea9def6f464",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-fcbff0a6e1df3543c885",
+          "from_path": "src/address.rs",
+          "parent_blob": "73fcb24dd7201ca62f9404be10fbb1832c17540b",
+          "to_id": "RG-F-10d2e26edaf24170a54f",
+          "to_path": "src/address.rs"
+        }
+      ],
+      "new_id": "RG-F-10d2e26edaf24170a54f",
       "old_id": "RG-F-3b0b45019894fb8677ef",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-bcdad3db256163f7e7e8"
+      ],
       "language": "rust",
-      "new_id": "RG-F-bcdad3db256163f7e7e8",
+      "lineage": [
+        {
+          "child_blob": "a4838de5c5c762f8723f692aaf289066fc97cf83",
+          "commit": "d1243926fedfb7deb5deba45495a8ea9def6f464",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-bcdad3db256163f7e7e8",
+          "from_path": "src/address.rs",
+          "parent_blob": "73fcb24dd7201ca62f9404be10fbb1832c17540b",
+          "to_id": "RG-F-4ffafa8b7488ca5628e9",
+          "to_path": "src/address.rs"
+        }
+      ],
+      "new_id": "RG-F-4ffafa8b7488ca5628e9",
       "old_id": "RG-F-cf505794f1a2f6ea36ff",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -97503,16 +97574,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-41692468a6c913fd1097"
+      ],
       "language": "rust",
-      "new_id": "RG-F-41692468a6c913fd1097",
+      "lineage": [
+        {
+          "child_blob": "8c64c5096aa224f89fcb4ba095466ae061907c6a",
+          "commit": "bed6ef5605767811fe641201d86da80fe9f96b9e",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-41692468a6c913fd1097",
+          "from_path": "src/block.rs",
+          "parent_blob": "22d9703942879774f8809ca5014b157736de9595",
+          "to_id": "RG-F-414c0e5d7303fb5c6a8f",
+          "to_path": "src/block.rs"
+        }
+      ],
+      "new_id": "RG-F-414c0e5d7303fb5c6a8f",
       "old_id": "RG-F-e009219d59a41c66d702",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9519db3ecfb8efc51181"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9519db3ecfb8efc51181",
+      "lineage": [
+        {
+          "child_blob": "8c64c5096aa224f89fcb4ba095466ae061907c6a",
+          "commit": "bed6ef5605767811fe641201d86da80fe9f96b9e",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-9519db3ecfb8efc51181",
+          "from_path": "src/block.rs",
+          "parent_blob": "22d9703942879774f8809ca5014b157736de9595",
+          "to_id": "RG-F-fc5aa4acc485429c81f2",
+          "to_path": "src/block.rs"
+        }
+      ],
+      "new_id": "RG-F-fc5aa4acc485429c81f2",
       "old_id": "RG-F-08c4fca833b63eba9e16",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -98224,12 +98331,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-545a2fa83e26f9e8716d",
-      "old_id": "RG-F-6fccfccb5487c98f7997",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-52933a391da9c0394ac0",
       "old_id": "RG-F-95873921bb8ad09ec262",
       "reason": "rust_identity_rekey"
@@ -98253,22 +98354,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-c22876a0559c9f73f4e0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-01c37763d9a53ef73ace",
-      "old_id": "RG-F-0f1afd435338b39ae1c4",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-c22876a0559c9f73f4e0",
+      "lineage": [
+        {
+          "child_blob": "4997e223e24bbdd9067b63a22f73571b0a9c997d",
+          "commit": "9825db126fb72f6d7652536f4516a6ea38c77da1",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-c22876a0559c9f73f4e0",
+          "from_path": "src/block.rs",
+          "parent_blob": "353f4829f3feb3032c9988afeeda12d9849f682c",
+          "to_id": "RG-F-341eb228fe61c7b54261",
+          "to_path": "src/block.rs"
+        }
+      ],
+      "new_id": "RG-F-341eb228fe61c7b54261",
       "old_id": "RG-F-ac459be5d3726d7dacbd",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-21b16f1865f30efa7124"
+      ],
       "language": "rust",
-      "new_id": "RG-F-21b16f1865f30efa7124",
+      "lineage": [
+        {
+          "child_blob": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
+          "commit": "c70d217b272b4431316920adbe93b8f4ed32587f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-21b16f1865f30efa7124",
+          "from_path": "src/block.rs",
+          "parent_blob": "10446fe1b2f8ab7144224764f6b0209b39740ee3",
+          "to_id": "RG-F-2b023be5e0da16a7d4f0",
+          "to_path": "src/block.rs"
+        }
+      ],
+      "new_id": "RG-F-2b023be5e0da16a7d4f0",
       "old_id": "RG-F-2817d3103a14eebe511c",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -99856,12 +99987,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-df80e19385aea19c30b5",
-      "old_id": "RG-F-d051f78879b4ecfbdffb",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-5618905c5ddbf5b94355",
       "old_id": "RG-F-313ee7f7ec3110f3f50e",
       "reason": "rust_identity_rekey"
@@ -100569,10 +100694,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-578ab75537da3f32852b"
+      ],
       "language": "rust",
-      "new_id": "RG-F-578ab75537da3f32852b",
+      "lineage": [
+        {
+          "child_blob": "8c9e357cc171f5b96d5a610383a80b7fded5a138",
+          "commit": "c5e685c55e775192dae7b26f0631f6ac8ff85df6",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-578ab75537da3f32852b",
+          "from_path": "src/comment.rs",
+          "parent_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+          "to_id": "RG-F-12bfcbb5de7fd489091a",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-12bfcbb5de7fd489091a",
       "old_id": "RG-F-cb212208df3bed5adf11",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -100611,34 +100753,121 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-df9b557772629c82c099"
+      ],
       "language": "rust",
-      "new_id": "RG-F-df9b557772629c82c099",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-df9b557772629c82c099",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-b33abe4fd5d67eb9525b",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-b33abe4fd5d67eb9525b",
       "old_id": "RG-F-fa1d3c5a7db2e8925d3f",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-a92f756efac285069b26"
+      ],
       "language": "rust",
-      "new_id": "RG-F-a92f756efac285069b26",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-a92f756efac285069b26",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-359e2a754e6da6fd74f5",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-359e2a754e6da6fd74f5",
       "old_id": "RG-F-0c5b694bcaed62d93920",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-4af38f584677830f2543"
+      ],
       "language": "rust",
-      "new_id": "RG-F-4af38f584677830f2543",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-4af38f584677830f2543",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-1a6d57d05e05fba6aec0",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-1a6d57d05e05fba6aec0",
       "old_id": "RG-F-efa73882d75ebd4196bf",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9d4636cae1a7a0a193b9"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9d4636cae1a7a0a193b9",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-9d4636cae1a7a0a193b9",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-a3b68deee4b532d02177",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-a3b68deee4b532d02177",
       "old_id": "RG-F-927efe9b46f00b887b59",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-3dd16fa3a69a0e14374d"
+      ],
       "language": "rust",
-      "new_id": "RG-F-3dd16fa3a69a0e14374d",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-3dd16fa3a69a0e14374d",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-308251fd63885b3f1321",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-308251fd63885b3f1321",
       "old_id": "RG-F-65993ff18e5138098bc8",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -100701,28 +100930,98 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-44cfd6e63414ff7df968"
+      ],
       "language": "rust",
-      "new_id": "RG-F-44cfd6e63414ff7df968",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-44cfd6e63414ff7df968",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-b5bb7e79737d5c567d68",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-b5bb7e79737d5c567d68",
       "old_id": "RG-F-de7be698ac2efe7e2844",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-b5089bee9ac9eb341fbb"
+      ],
       "language": "rust",
-      "new_id": "RG-F-b5089bee9ac9eb341fbb",
+      "lineage": [
+        {
+          "child_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "commit": "20cc7b29cac7ca155ff920d7767fbde132768a83",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b5089bee9ac9eb341fbb",
+          "from_path": "src/comment.rs",
+          "parent_blob": "6c72dbde3d8ac34f995a8e629dcda7af04a154b3",
+          "to_id": "RG-F-78211e726c37d60509dc",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-78211e726c37d60509dc",
       "old_id": "RG-F-bae94e97ea5754e3b7d1",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-0cbeb000de7c3f038653"
+      ],
       "language": "rust",
-      "new_id": "RG-F-0cbeb000de7c3f038653",
+      "lineage": [
+        {
+          "child_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+          "commit": "d7a9cae57df2f5d1bff332d59a4b7cea4564ee6f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-0cbeb000de7c3f038653",
+          "from_path": "src/comment.rs",
+          "parent_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "to_id": "RG-F-d85a151aa31c07abc1ab",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-d85a151aa31c07abc1ab",
       "old_id": "RG-F-bef88835ea896d254a5f",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-112887dcda57055a54f1"
+      ],
       "language": "rust",
-      "new_id": "RG-F-112887dcda57055a54f1",
+      "lineage": [
+        {
+          "child_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+          "commit": "d7a9cae57df2f5d1bff332d59a4b7cea4564ee6f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-112887dcda57055a54f1",
+          "from_path": "src/comment.rs",
+          "parent_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "to_id": "RG-F-592c8667ab107c269964",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-592c8667ab107c269964",
       "old_id": "RG-F-81eee1330e1df67e2ae9",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -100731,46 +101030,76 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-cccd76a562ce5f486737"
+      ],
       "language": "rust",
-      "new_id": "RG-F-cccd76a562ce5f486737",
+      "lineage": [
+        {
+          "child_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+          "commit": "d7a9cae57df2f5d1bff332d59a4b7cea4564ee6f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-cccd76a562ce5f486737",
+          "from_path": "src/comment.rs",
+          "parent_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "to_id": "RG-F-8a23eff845111311612e",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-8a23eff845111311612e",
       "old_id": "RG-F-d30abe359bf44d6db576",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-8bad8d846649c5038077"
+      ],
       "language": "rust",
-      "new_id": "RG-F-8bad8d846649c5038077",
+      "lineage": [
+        {
+          "child_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+          "commit": "d7a9cae57df2f5d1bff332d59a4b7cea4564ee6f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-8bad8d846649c5038077",
+          "from_path": "src/comment.rs",
+          "parent_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "to_id": "RG-F-5b7ac7b639488a541375",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-5b7ac7b639488a541375",
       "old_id": "RG-F-3d679b561410f4cfcf07",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-c5c4172cce2a81eb07d8"
+      ],
       "language": "rust",
-      "new_id": "RG-F-965ea4deca6789b2653a",
-      "old_id": "RG-F-a515040ca21e3a40b3bd",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-63f228446a519e0c8d80",
-      "old_id": "RG-F-e2e407c3cfa4cb808159",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-c5c4172cce2a81eb07d8",
+      "lineage": [
+        {
+          "child_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+          "commit": "d7a9cae57df2f5d1bff332d59a4b7cea4564ee6f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-c5c4172cce2a81eb07d8",
+          "from_path": "src/comment.rs",
+          "parent_blob": "0b47d85ecaed3fc582c3e251d79f0755e1434297",
+          "to_id": "RG-F-c21d3b53337ab73fc10d",
+          "to_path": "src/comment.rs"
+        }
+      ],
+      "new_id": "RG-F-c21d3b53337ab73fc10d",
       "old_id": "RG-F-51258d07befb54c42c6c",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-a679e28185a5cd97f9db",
-      "old_id": "RG-F-c594237c5aae750c1651",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-07a5cf7058ae8cf06026",
-      "old_id": "RG-F-e56c7a580c5fbf1735b5",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -100990,12 +101319,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-c1c6b7597b9723bcd50a",
-      "old_id": "RG-F-b56384676d5805afa616",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-379a03cf53149617cf1b",
       "old_id": "RG-F-b09864fbb44b3eab641e",
       "reason": "rust_identity_rekey"
@@ -101031,10 +101354,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-f852d4db99e71151f451"
+      ],
       "language": "rust",
-      "new_id": "RG-F-f852d4db99e71151f451",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-f852d4db99e71151f451",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-00bd3d21a40a0191ad06",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-00bd3d21a40a0191ad06",
       "old_id": "RG-F-b3414dcacbb378698672",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -101043,40 +101384,148 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-72f6c4207bb354eecea0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-72f6c4207bb354eecea0",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-72f6c4207bb354eecea0",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-622210b05bf3422899ae",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-622210b05bf3422899ae",
       "old_id": "RG-F-eb3f384536c6b487c503",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-046872ab3f24de80fd3f"
+      ],
       "language": "rust",
-      "new_id": "RG-F-046872ab3f24de80fd3f",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-046872ab3f24de80fd3f",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-4897f5ef6b32e3d4e7ea",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-4897f5ef6b32e3d4e7ea",
       "old_id": "RG-F-8a4f5cd727d14976b9fc",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5ca05b7eeb2bac4dfd3e"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5ca05b7eeb2bac4dfd3e",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5ca05b7eeb2bac4dfd3e",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-e7decee6a4e827d2db13",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-e7decee6a4e827d2db13",
       "old_id": "RG-F-667aa9feed0e7c0bfee9",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-81c2bdfc1d8e71e4f5d7"
+      ],
       "language": "rust",
-      "new_id": "RG-F-81c2bdfc1d8e71e4f5d7",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-81c2bdfc1d8e71e4f5d7",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-db80db0dcaf92f41f6b5",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-db80db0dcaf92f41f6b5",
       "old_id": "RG-F-1b7de97512e2fe76c612",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-8f9c316a509a8cbd051c"
+      ],
       "language": "rust",
-      "new_id": "RG-F-8f9c316a509a8cbd051c",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-8f9c316a509a8cbd051c",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-ee28df4bc074de477c5b",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-ee28df4bc074de477c5b",
       "old_id": "RG-F-aff546a3d5ef94d44690",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ccc3adcc713ee2dde1f8"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ccc3adcc713ee2dde1f8",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-ccc3adcc713ee2dde1f8",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-4da81ecdd5c242d3a151",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-4da81ecdd5c242d3a151",
       "old_id": "RG-F-7148ac90e5c4da37aa27",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -101085,10 +101534,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-f82fb02df41e6d546abd"
+      ],
       "language": "rust",
-      "new_id": "RG-F-f82fb02df41e6d546abd",
+      "lineage": [
+        {
+          "child_blob": "fced41af003ce25c9387c1af4721510d37d7294f",
+          "commit": "18948a3054fe9b841ede215ed48ffd0ec5654650",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-f82fb02df41e6d546abd",
+          "from_path": "src/condexe.rs",
+          "parent_blob": "b1bec547cfbcd0832ea43e12322186687d8ee989",
+          "to_id": "RG-F-96dbce1e913b0e97681c",
+          "to_path": "src/condexe.rs"
+        }
+      ],
+      "new_id": "RG-F-96dbce1e913b0e97681c",
       "old_id": "RG-F-f62c709081bd4a15638e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -102585,16 +103052,53 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ef107c38aba966cbf5a0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ef107c38aba966cbf5a0",
+      "lineage": [
+        {
+          "child_blob": "2322c9cec0dfbcb8e701eb9febd478f23ff6d8a9",
+          "commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation",
+            "identical_masked_body"
+          ],
+          "from_id": "RG-F-ef107c38aba966cbf5a0",
+          "from_path": "src/coreaction.rs",
+          "parent_blob": "efd04e9152f054d0f100fd9f15fdec3b50c5dc06",
+          "to_id": "RG-F-bd2c6d91c61287d03742",
+          "to_path": "src/coreaction.rs"
+        }
+      ],
+      "new_id": "RG-F-bd2c6d91c61287d03742",
       "old_id": "RG-F-6d63abc61219e4428cf3",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5a9c1a7a03737377ba7c"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5a9c1a7a03737377ba7c",
+      "lineage": [
+        {
+          "child_blob": "2322c9cec0dfbcb8e701eb9febd478f23ff6d8a9",
+          "commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5a9c1a7a03737377ba7c",
+          "from_path": "src/coreaction.rs",
+          "parent_blob": "efd04e9152f054d0f100fd9f15fdec3b50c5dc06",
+          "to_id": "RG-F-e12ebe054d5ef853c08e",
+          "to_path": "src/coreaction.rs"
+        }
+      ],
+      "new_id": "RG-F-e12ebe054d5ef853c08e",
       "old_id": "RG-F-f72f18cb6ad0ffc82869",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -103365,10 +103869,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-2b9ab4f29aabb9f38c29"
+      ],
       "language": "rust",
-      "new_id": "RG-F-2b9ab4f29aabb9f38c29",
+      "lineage": [
+        {
+          "child_blob": "80c4462300c62c5d7bd2cc4746a716af305b9930",
+          "commit": "83afc4eacdea63c51827fa3d07ed13396efdb11f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-2b9ab4f29aabb9f38c29",
+          "from_path": "src/coreaction.rs",
+          "parent_blob": "3ea470f2c03a33da2ab48edb7fe93d7a7467d7fc",
+          "to_id": "RG-F-236b75511296224fbf90",
+          "to_path": "src/coreaction.rs"
+        }
+      ],
+      "new_id": "RG-F-236b75511296224fbf90",
       "old_id": "RG-F-44c564a816a7c9cace37",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -103654,12 +104176,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-78de6b876155d5b7f967",
-      "old_id": "RG-F-0144832f561c7cd8e30f",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-66004bde38055aad5067",
       "old_id": "RG-F-83c09e43ad63227a911d",
       "reason": "rust_identity_rekey"
@@ -103728,12 +104244,6 @@
       "language": "rust",
       "new_id": "RG-F-a058d3bb47a7864a47c4",
       "old_id": "RG-F-220c3c5b0e6c7a7bb455",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-7bba63e94d32b61c1eec",
-      "old_id": "RG-F-f5f60231b4dcbaf7a838",
       "reason": "rust_identity_rekey"
     },
     {
@@ -103900,30 +104410,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-afd0a253ec7939ceb0d7",
-      "old_id": "RG-F-c6ceca66030b18e666d1",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-b89ca9c78de4d43b0641",
-      "old_id": "RG-F-2772e14a50d16aa73c41",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-8a03aee5400b8f1aec82",
-      "old_id": "RG-F-1291ed91ecdc95aa474f",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-828769ed1d87903b2f49",
-      "old_id": "RG-F-0036b1e6159131b90d5e",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-8667786aca5bd27bbc1f",
       "old_id": "RG-F-14921d9e52d1336ceb95",
       "reason": "rust_identity_rekey"
@@ -103968,18 +104454,6 @@
       "language": "rust",
       "new_id": "RG-F-5e753174b3edc52f0a51",
       "old_id": "RG-F-ca6236d8fb0556978361",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-ab960b0c66138f0a51af",
-      "old_id": "RG-F-44f5ea5f0b19361842c0",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-e1027492465f482180db",
-      "old_id": "RG-F-07f6d8c1c408863b8543",
       "reason": "rust_identity_rekey"
     },
     {
@@ -104169,22 +104643,76 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9b8bb1a4809cd7ca6b16"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9b8bb1a4809cd7ca6b16",
+      "lineage": [
+        {
+          "child_blob": "d6a5931fa2121df729c88f4fbffce3d6f1ab340d",
+          "commit": "032419b344e973682076bf5c21109b7f05fee192",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "Cover::order_of_op -> CoverEndpoint::from_op"
+          ],
+          "from_id": "RG-F-9b8bb1a4809cd7ca6b16",
+          "from_path": "src/cover.rs",
+          "parent_blob": "7b8a196e5ca4d9c97080a003cfb8ff34d78a41ec",
+          "to_id": "RG-F-ff1783edd76bcabdc140",
+          "to_path": "src/cover.rs"
+        }
+      ],
+      "new_id": "RG-F-ff1783edd76bcabdc140",
       "old_id": "RG-F-24df7359099d9878a582",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-2905e97388434fbc0d49"
+      ],
       "language": "rust",
-      "new_id": "RG-F-2905e97388434fbc0d49",
+      "lineage": [
+        {
+          "child_blob": "7b8a196e5ca4d9c97080a003cfb8ff34d78a41ec",
+          "commit": "ee29a32487702a8044d910202903e83a23996c9e",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-2905e97388434fbc0d49",
+          "from_path": "src/cover.rs",
+          "parent_blob": "73c9cda2a49494712d9d3713b551e0ed90b21117",
+          "to_id": "RG-F-8342ccdff7b67e4fe1dd",
+          "to_path": "src/cover.rs"
+        }
+      ],
+      "new_id": "RG-F-8342ccdff7b67e4fe1dd",
       "old_id": "RG-F-1aec1e8de44026630696",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-085965df0e844bf83018"
+      ],
       "language": "rust",
-      "new_id": "RG-F-085965df0e844bf83018",
+      "lineage": [
+        {
+          "child_blob": "7b8a196e5ca4d9c97080a003cfb8ff34d78a41ec",
+          "commit": "ee29a32487702a8044d910202903e83a23996c9e",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-085965df0e844bf83018",
+          "from_path": "src/cover.rs",
+          "parent_blob": "73c9cda2a49494712d9d3713b551e0ed90b21117",
+          "to_id": "RG-F-555e05bafa5eeb2fb029",
+          "to_path": "src/cover.rs"
+        }
+      ],
+      "new_id": "RG-F-555e05bafa5eeb2fb029",
       "old_id": "RG-F-83ff7535174bdcbf0393",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -104193,10 +104721,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-1511bb2ec219d9cf48b5"
+      ],
       "language": "rust",
-      "new_id": "RG-F-1511bb2ec219d9cf48b5",
+      "lineage": [
+        {
+          "child_blob": "7b8a196e5ca4d9c97080a003cfb8ff34d78a41ec",
+          "commit": "ee29a32487702a8044d910202903e83a23996c9e",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-1511bb2ec219d9cf48b5",
+          "from_path": "src/cover.rs",
+          "parent_blob": "73c9cda2a49494712d9d3713b551e0ed90b21117",
+          "to_id": "RG-F-8385045dd7e17ba2b355",
+          "to_path": "src/cover.rs"
+        }
+      ],
+      "new_id": "RG-F-8385045dd7e17ba2b355",
       "old_id": "RG-F-d9ac586fec3578f3c0ac",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -104487,10 +105033,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7da4c5e252b9986f0384"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7da4c5e252b9986f0384",
+      "lineage": [
+        {
+          "child_blob": "c12f9b5c6b2b0dcdcd329301075a4e0ded636466",
+          "commit": "973efbfa5d803655a537844e9fd22a8aa8b2974f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-7da4c5e252b9986f0384",
+          "from_path": "src/cpool.rs",
+          "parent_blob": "35b24266fec1b449e55f7ee4da1a0b869c36d352",
+          "to_id": "RG-F-52cb787a439a359f371e",
+          "to_path": "src/cpool.rs"
+        }
+      ],
+      "new_id": "RG-F-52cb787a439a359f371e",
       "old_id": "RG-F-3bd23005ab1e59bb7b93",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -104529,16 +105092,50 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-1e9b7219794cbcbfb440"
+      ],
       "language": "rust",
-      "new_id": "RG-F-1e9b7219794cbcbfb440",
+      "lineage": [
+        {
+          "child_blob": "c12f9b5c6b2b0dcdcd329301075a4e0ded636466",
+          "commit": "973efbfa5d803655a537844e9fd22a8aa8b2974f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-1e9b7219794cbcbfb440",
+          "from_path": "src/cpool.rs",
+          "parent_blob": "35b24266fec1b449e55f7ee4da1a0b869c36d352",
+          "to_id": "RG-F-4b4c1317f2b93a1bb76b",
+          "to_path": "src/cpool.rs"
+        }
+      ],
+      "new_id": "RG-F-4b4c1317f2b93a1bb76b",
       "old_id": "RG-F-dd49184afd18b43b0596",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-beaf3f5ae97b361b0049"
+      ],
       "language": "rust",
-      "new_id": "RG-F-beaf3f5ae97b361b0049",
+      "lineage": [
+        {
+          "child_blob": "c12f9b5c6b2b0dcdcd329301075a4e0ded636466",
+          "commit": "973efbfa5d803655a537844e9fd22a8aa8b2974f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-beaf3f5ae97b361b0049",
+          "from_path": "src/cpool.rs",
+          "parent_blob": "35b24266fec1b449e55f7ee4da1a0b869c36d352",
+          "to_id": "RG-F-4d70fde7243e60f6460e",
+          "to_path": "src/cpool.rs"
+        }
+      ],
+      "new_id": "RG-F-4d70fde7243e60f6460e",
       "old_id": "RG-F-34f936bfab7434f0d99c",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -105459,10 +106056,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-3b25e6a8ef15369ddcf0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-3b25e6a8ef15369ddcf0",
+      "lineage": [
+        {
+          "child_blob": "840e08ae133f285857b0b5ab2a19839976f96c0e",
+          "commit": "3f54642753ca671285885d9aacf8f8a10414018c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-3b25e6a8ef15369ddcf0",
+          "from_path": "src/database.rs",
+          "parent_blob": "1d12fe15afe2384336bc1503703d611a2b8a0e56",
+          "to_id": "RG-F-9caec4b072ee0ef82dfa",
+          "to_path": "src/database.rs"
+        }
+      ],
+      "new_id": "RG-F-9caec4b072ee0ef82dfa",
       "old_id": "RG-F-8cd66d117a1f72f8419f",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -105513,10 +106128,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-f8f1eca8577da7feda5d"
+      ],
       "language": "rust",
-      "new_id": "RG-F-f8f1eca8577da7feda5d",
+      "lineage": [
+        {
+          "child_blob": "840e08ae133f285857b0b5ab2a19839976f96c0e",
+          "commit": "3f54642753ca671285885d9aacf8f8a10414018c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-f8f1eca8577da7feda5d",
+          "from_path": "src/database.rs",
+          "parent_blob": "1d12fe15afe2384336bc1503703d611a2b8a0e56",
+          "to_id": "RG-F-0b695ac17923cb067aff",
+          "to_path": "src/database.rs"
+        }
+      ],
+      "new_id": "RG-F-0b695ac17923cb067aff",
       "old_id": "RG-F-7145c29db8336493b15c",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -106119,10 +106752,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-daa2cb85512f79ab68af"
+      ],
       "language": "rust",
-      "new_id": "RG-F-daa2cb85512f79ab68af",
+      "lineage": [
+        {
+          "child_blob": "307c4fadd09799a90272a7497c25652404dd059a",
+          "commit": "9b4f86a55414aafd7569d03bb53375154bd87d5f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-daa2cb85512f79ab68af",
+          "from_path": "src/debugproto.rs",
+          "parent_blob": "93a62e8b7a19c791b463fd893871144456bd6b99",
+          "to_id": "RG-F-74239dfea0f8af646ed6",
+          "to_path": "src/debugproto.rs"
+        }
+      ],
+      "new_id": "RG-F-74239dfea0f8af646ed6",
       "old_id": "RG-F-7124c10ce7676a88dde3",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -108603,10 +109253,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-689e4e9b067b29e04ca0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-689e4e9b067b29e04ca0",
+      "lineage": [
+        {
+          "child_blob": "d509af1f7f2434f7690bebd8d1ccd8f2cfd7ab39",
+          "commit": "2ee52c1e5c3faee89ac7479c833a14c1e4cc8d34",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-689e4e9b067b29e04ca0",
+          "from_path": "src/float_emulate.rs",
+          "parent_blob": "bf20980f62c190e3eeaa1737004134bdcbe64796",
+          "to_id": "RG-F-17f429e610f653c29c21",
+          "to_path": "src/float_emulate.rs"
+        }
+      ],
+      "new_id": "RG-F-17f429e610f653c29c21",
       "old_id": "RG-F-e84357560ccb9034f2c7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -108687,10 +109355,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-37b2fc012b69d593a966"
+      ],
       "language": "rust",
-      "new_id": "RG-F-37b2fc012b69d593a966",
+      "lineage": [
+        {
+          "child_blob": "f1524719466b53e0157fa579c47dc3c638ba0794",
+          "commit": "517e7c16bf695f33f9cb862536f59a3d92d3c891",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-37b2fc012b69d593a966",
+          "from_path": "src/float_emulate.rs",
+          "parent_blob": "0dca460c24e97fc157901318e6242bd6cb40fe66",
+          "to_id": "RG-F-b7b9e78224583ac0da16",
+          "to_path": "src/float_emulate.rs"
+        }
+      ],
+      "new_id": "RG-F-b7b9e78224583ac0da16",
       "old_id": "RG-F-162bc7dfb11cbbff6d30",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109071,10 +109756,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-c88801fa7d557c390ed0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-c88801fa7d557c390ed0",
+      "lineage": [
+        {
+          "child_blob": "a6be995f7a8a850f5d56a2fa46fbc5f875098355",
+          "commit": "e034f80ba06d9acff0952ee50be4be39c3f8580a",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-c88801fa7d557c390ed0",
+          "from_path": "src/flow.rs",
+          "parent_blob": "03f68055f8805e985ce21d131c5fe06c6ff7ce17",
+          "to_id": "RG-F-c481966376e1e0fc3c60",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-c481966376e1e0fc3c60",
       "old_id": "RG-F-7ed4deacb04928197504",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109137,16 +109840,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-47777a64ec25da396ef1"
+      ],
       "language": "rust",
-      "new_id": "RG-F-47777a64ec25da396ef1",
+      "lineage": [
+        {
+          "child_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-47777a64ec25da396ef1",
+          "from_path": "src/flow.rs",
+          "parent_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+          "to_id": "RG-F-925a9ce3498006273926",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-925a9ce3498006273926",
       "old_id": "RG-F-be336e46108963080d63",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-69f510fed1d3edcbd1cc"
+      ],
       "language": "rust",
-      "new_id": "RG-F-69f510fed1d3edcbd1cc",
+      "lineage": [
+        {
+          "child_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-69f510fed1d3edcbd1cc",
+          "from_path": "src/flow.rs",
+          "parent_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+          "to_id": "RG-F-3cdf5c243fbbfaa55a2b",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-3cdf5c243fbbfaa55a2b",
       "old_id": "RG-F-bc66064203b0bb8e0948",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109155,28 +109894,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-d1b051d6efc4efb564b2"
+      ],
       "language": "rust",
-      "new_id": "RG-F-d1b051d6efc4efb564b2",
+      "lineage": [
+        {
+          "child_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-d1b051d6efc4efb564b2",
+          "from_path": "src/flow.rs",
+          "parent_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+          "to_id": "RG-F-3798d74e12842b0a0642",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-3798d74e12842b0a0642",
       "old_id": "RG-F-947524dd9ca23b62f260",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-1ec0cade934c98eecb99"
+      ],
       "language": "rust",
-      "new_id": "RG-F-1ec0cade934c98eecb99",
+      "lineage": [
+        {
+          "child_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-1ec0cade934c98eecb99",
+          "from_path": "src/flow.rs",
+          "parent_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+          "to_id": "RG-F-cb00c2cb11876dcdca1c",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-cb00c2cb11876dcdca1c",
       "old_id": "RG-F-ba162a929aa9655747b0",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-3f721750f2a9d6acb761",
-      "old_id": "RG-F-f89ffb08d7df8a69b93f",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-60ba7907d4b5be14485c",
-      "old_id": "RG-F-3724985bbd4374850d46",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109221,10 +109984,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-2cd38d1f63a641d7538c"
+      ],
       "language": "rust",
-      "new_id": "RG-F-2cd38d1f63a641d7538c",
+      "lineage": [
+        {
+          "child_blob": "a6be995f7a8a850f5d56a2fa46fbc5f875098355",
+          "commit": "e034f80ba06d9acff0952ee50be4be39c3f8580a",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-2cd38d1f63a641d7538c",
+          "from_path": "src/flow.rs",
+          "parent_blob": "03f68055f8805e985ce21d131c5fe06c6ff7ce17",
+          "to_id": "RG-F-192eeae6e57a7bc95eea",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-192eeae6e57a7bc95eea",
       "old_id": "RG-F-acc9f4c3bcfcb314459d",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109245,27 +110026,33 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9d0315f864bb43e4f4c9"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9d0315f864bb43e4f4c9",
+      "lineage": [
+        {
+          "child_blob": "a6be995f7a8a850f5d56a2fa46fbc5f875098355",
+          "commit": "e034f80ba06d9acff0952ee50be4be39c3f8580a",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-9d0315f864bb43e4f4c9",
+          "from_path": "src/flow.rs",
+          "parent_blob": "03f68055f8805e985ce21d131c5fe06c6ff7ce17",
+          "to_id": "RG-F-d2bd6540907c34385c74",
+          "to_path": "src/flow.rs"
+        }
+      ],
+      "new_id": "RG-F-d2bd6540907c34385c74",
       "old_id": "RG-F-72879c7cedfaca1a48f0",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
       "new_id": "RG-F-c292ca37d2c29dfc9361",
       "old_id": "RG-F-8c7cdcedc1b00576d124",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-232322f83bab558eabb2",
-      "old_id": "RG-F-3864f2c13cdb9e6fdb97",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-811518e6a28c130e573b",
-      "old_id": "RG-F-82eb3b5be5e838caa58e",
       "reason": "rust_identity_rekey"
     },
     {
@@ -109599,10 +110386,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5e1ed34b24c126c8b07b"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5e1ed34b24c126c8b07b",
+      "lineage": [
+        {
+          "child_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "commit": "fb49998355cc4b8f70a93be849e43e378a130682",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5e1ed34b24c126c8b07b",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "dfc0bcf6491963340efd84d1b02d6724180bd896",
+          "to_id": "RG-F-9319305734946bab5997",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-9319305734946bab5997",
       "old_id": "RG-F-a5f07cb88188db758888",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109767,16 +110572,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-4a5cecef4b93ac919596"
+      ],
       "language": "rust",
-      "new_id": "RG-F-4a5cecef4b93ac919596",
+      "lineage": [
+        {
+          "child_blob": "6a4f2a05326e0174cf914ce1a20433a013de0aa7",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "reviewed_same_name_allowlist",
+            "FuncCallSpecs::characterize_as_output"
+          ],
+          "from_id": "RG-F-4a5cecef4b93ac919596",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "bd37797cf1ca8cc0e2c9a7c7aa6833d18900cfcc",
+          "to_id": "RG-F-360279f7e03f1c7fe438",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-360279f7e03f1c7fe438",
       "old_id": "RG-F-c642b079af3e97d8a10d",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7a2548c2349bb5f75bc3"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7a2548c2349bb5f75bc3",
+      "lineage": [
+        {
+          "child_blob": "6a4f2a05326e0174cf914ce1a20433a013de0aa7",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "reviewed_same_name_allowlist",
+            "FuncCallSpecs::characterize_as_input_param"
+          ],
+          "from_id": "RG-F-7a2548c2349bb5f75bc3",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "bd37797cf1ca8cc0e2c9a7c7aa6833d18900cfcc",
+          "to_id": "RG-F-3e61b4c85c446db8dc90",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-3e61b4c85c446db8dc90",
       "old_id": "RG-F-2efd70f01473014375c2",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109785,10 +110626,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-da09d8757211d48d7bf6"
+      ],
       "language": "rust",
-      "new_id": "RG-F-da09d8757211d48d7bf6",
+      "lineage": [
+        {
+          "child_blob": "6a4f2a05326e0174cf914ce1a20433a013de0aa7",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "reviewed_same_name_allowlist",
+            "FuncCallSpecs::has_effect"
+          ],
+          "from_id": "RG-F-da09d8757211d48d7bf6",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "bd37797cf1ca8cc0e2c9a7c7aa6833d18900cfcc",
+          "to_id": "RG-F-6fb4acf7c117efe31588",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-6fb4acf7c117efe31588",
       "old_id": "RG-F-52518230ca5f60ac71e5",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -109947,10 +110806,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-66472d2bb18979799afe"
+      ],
       "language": "rust",
-      "new_id": "RG-F-66472d2bb18979799afe",
+      "lineage": [
+        {
+          "child_blob": "bdac85c73a40b8d842d304b94bf7e08cda455b92",
+          "commit": "a4dcfdf2d1f4da9be40f90e1a59bbc11d26da6f3",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-66472d2bb18979799afe",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "6a4f2a05326e0174cf914ce1a20433a013de0aa7",
+          "to_id": "RG-F-2467653e5fc0af8747a3",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-2467653e5fc0af8747a3",
       "old_id": "RG-F-44007168462960a4295e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -110415,10 +111292,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ef736f19b1214177a877"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ef736f19b1214177a877",
+      "lineage": [
+        {
+          "child_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "commit": "281e32df9b581c12cf57ee7e9a4c93d8ea717a3c",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-ef736f19b1214177a877",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "to_id": "RG-F-fef6b361a9e8f6381971",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-fef6b361a9e8f6381971",
       "old_id": "RG-F-a7f329a38890dad3facc",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -110799,16 +111693,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5fc439c8aa70f4c4d775"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5fc439c8aa70f4c4d775",
+      "lineage": [
+        {
+          "child_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "commit": "281e32df9b581c12cf57ee7e9a4c93d8ea717a3c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5fc439c8aa70f4c4d775",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "to_id": "RG-F-b963ca1fc0328358033f",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-b963ca1fc0328358033f",
       "old_id": "RG-F-b26465c04e9159fb5f8e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-c812d802c51f7404b6a3"
+      ],
       "language": "rust",
-      "new_id": "RG-F-c812d802c51f7404b6a3",
+      "lineage": [
+        {
+          "child_blob": "6a4f2a05326e0174cf914ce1a20433a013de0aa7",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-c812d802c51f7404b6a3",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "bd37797cf1ca8cc0e2c9a7c7aa6833d18900cfcc",
+          "to_id": "RG-F-977b8ce8cf5d0aec7aab",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-977b8ce8cf5d0aec7aab",
       "old_id": "RG-F-f7359fe05328904c8114",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -110883,34 +111813,123 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-6b3555fd5f5befdf9baa"
+      ],
       "language": "rust",
-      "new_id": "RG-F-6b3555fd5f5befdf9baa",
+      "lineage": [
+        {
+          "child_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "commit": "281e32df9b581c12cf57ee7e9a4c93d8ea717a3c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-6b3555fd5f5befdf9baa",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "to_id": "RG-F-dbdd74f4ce95a91892db",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-dbdd74f4ce95a91892db",
       "old_id": "RG-F-f13ed82b59a84396adfe",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-0b1a7fde1bf579fee5ca"
+      ],
       "language": "rust",
-      "new_id": "RG-F-0b1a7fde1bf579fee5ca",
+      "lineage": [
+        {
+          "child_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "commit": "281e32df9b581c12cf57ee7e9a4c93d8ea717a3c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-0b1a7fde1bf579fee5ca",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "to_id": "RG-F-e6391f7976d6f029d4f2",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-e6391f7976d6f029d4f2",
       "old_id": "RG-F-367cab7440a30fae75c0",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5c50cf395dcbb9a75f72"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5c50cf395dcbb9a75f72",
+      "lineage": [
+        {
+          "child_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "commit": "281e32df9b581c12cf57ee7e9a4c93d8ea717a3c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5c50cf395dcbb9a75f72",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "to_id": "RG-F-99fbfa888d599f6ca3b0",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-99fbfa888d599f6ca3b0",
       "old_id": "RG-F-31b5446a3da6d0a0cd1e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9966404f28148dc7258f"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9966404f28148dc7258f",
+      "lineage": [
+        {
+          "child_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "commit": "281e32df9b581c12cf57ee7e9a4c93d8ea717a3c",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-9966404f28148dc7258f",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "34be01a8f22bcddf34a0c974ca54e55e393ff2e0",
+          "to_id": "RG-F-1ff4bda19ef246596da9",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-1ff4bda19ef246596da9",
       "old_id": "RG-F-a899e1ca67e9bd75d908",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9ea61c0f62e3e960e1d9"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9ea61c0f62e3e960e1d9",
+      "lineage": [
+        {
+          "child_blob": "6a4f2a05326e0174cf914ce1a20433a013de0aa7",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-9ea61c0f62e3e960e1d9",
+          "from_path": "src/fspec.rs",
+          "parent_blob": "bd37797cf1ca8cc0e2c9a7c7aa6833d18900cfcc",
+          "to_id": "RG-F-e6e70f3e49fd4045676d",
+          "to_path": "src/fspec.rs"
+        }
+      ],
+      "new_id": "RG-F-e6e70f3e49fd4045676d",
       "old_id": "RG-F-1483c22df83b6f9d5bb6",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -111567,10 +112586,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9bedda2097080cd15536"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9bedda2097080cd15536",
+      "lineage": [
+        {
+          "child_blob": "480f860452e438ffbe955216e6626c90431759ae",
+          "commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-9bedda2097080cd15536",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "bd6a6c7c7c124c770e57b79fa181155a8f871745",
+          "to_id": "RG-F-04f44a232e7a634ff9e2",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-04f44a232e7a634ff9e2",
       "old_id": "RG-F-64839808b90ea4e4c038",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -111699,10 +112736,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5055621257f3811d12ea"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5055621257f3811d12ea",
+      "lineage": [
+        {
+          "child_blob": "6066e53c36f237791d2c792a89545c3d12d7e110",
+          "commit": "7644a13102db003b98f50c67191337e5792fb4cf",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-5055621257f3811d12ea",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "155d2c6a7958224c3662682d815e9e1d2ba07a06",
+          "to_id": "RG-F-4027c78009584d7abc4e",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-4027c78009584d7abc4e",
       "old_id": "RG-F-ec0c1fb157b971f4d9ac",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -111831,10 +112885,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-40d1c5e39a43d42e3c83"
+      ],
       "language": "rust",
-      "new_id": "RG-F-40d1c5e39a43d42e3c83",
+      "lineage": [
+        {
+          "child_blob": "35bad37028c5fc434a3dae81d2b28a1bcd246ee3",
+          "commit": "38881244bcfa29668202c2a0eb1218c1fc27c6ff",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-40d1c5e39a43d42e3c83",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "d62635d4753a470c1e086bd04113cfdb284b8ac5",
+          "to_id": "RG-F-3d7acb8790056c3b0114",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-3d7acb8790056c3b0114",
       "old_id": "RG-F-496ba99acaa933f0e2ae",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -111879,10 +112950,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7375b37e6dc4d7c22e7b"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7375b37e6dc4d7c22e7b",
+      "lineage": [
+        {
+          "child_blob": "bd6a6c7c7c124c770e57b79fa181155a8f871745",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-7375b37e6dc4d7c22e7b",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "cc407e107184aef5acc53daaf3bc083ddd0186c4",
+          "to_id": "RG-F-c068bd638449200a222d",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-c068bd638449200a222d",
       "old_id": "RG-F-1db8942b3f36103f3ea7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -112059,10 +113148,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ebea94cb337464cef1c2"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ebea94cb337464cef1c2",
+      "lineage": [
+        {
+          "child_blob": "480f860452e438ffbe955216e6626c90431759ae",
+          "commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-ebea94cb337464cef1c2",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "bd6a6c7c7c124c770e57b79fa181155a8f871745",
+          "to_id": "RG-F-860cd02ce6ce28ff4192",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-860cd02ce6ce28ff4192",
       "old_id": "RG-F-97f2d88de80d5c29c476",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -112095,10 +113202,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-121f24bb73cbf4351508"
+      ],
       "language": "rust",
-      "new_id": "RG-F-121f24bb73cbf4351508",
+      "lineage": [
+        {
+          "child_blob": "480f860452e438ffbe955216e6626c90431759ae",
+          "commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-121f24bb73cbf4351508",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "bd6a6c7c7c124c770e57b79fa181155a8f871745",
+          "to_id": "RG-F-1f2c2545aaf1b10deb59",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-1f2c2545aaf1b10deb59",
       "old_id": "RG-F-a85e6390f1af87a9290c",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -112551,10 +113676,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5c17ec6005acfd16b56c"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5c17ec6005acfd16b56c",
+      "lineage": [
+        {
+          "child_blob": "af417cd95c70087f8b549f7e0971a16dc07d15f3",
+          "commit": "d5df4449c72ec17078ecc88a7dffb536b3741bad",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5c17ec6005acfd16b56c",
+          "from_path": "src/funcdata.rs",
+          "parent_blob": "c1faa43a595cf5baeb86184eb23d92b1684ba1ea",
+          "to_id": "RG-F-1bd554a12566cc37069f",
+          "to_path": "src/funcdata.rs"
+        }
+      ],
+      "new_id": "RG-F-1bd554a12566cc37069f",
       "old_id": "RG-F-43e3cf8dc178bb3fa48b",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114237,16 +115380,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-723b196fab1ee4e3dd71"
+      ],
       "language": "rust",
-      "new_id": "RG-F-723b196fab1ee4e3dd71",
+      "lineage": [
+        {
+          "child_blob": "d5e010d2ac4390ea41d74bfced402b658ae4f706",
+          "commit": "c30913076c0bc0033c0a688462030444c95fc264",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-723b196fab1ee4e3dd71",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "8db881a4e5e71a75923046ba46495a92fd03ee92",
+          "to_id": "RG-F-5be66959a615062d55ad",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-5be66959a615062d55ad",
       "old_id": "RG-F-d5cc05dbfbb1453cf44a",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-298537d8cd97ca77b5c1"
+      ],
       "language": "rust",
-      "new_id": "RG-F-298537d8cd97ca77b5c1",
+      "lineage": [
+        {
+          "child_blob": "d5e010d2ac4390ea41d74bfced402b658ae4f706",
+          "commit": "c30913076c0bc0033c0a688462030444c95fc264",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-298537d8cd97ca77b5c1",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "8db881a4e5e71a75923046ba46495a92fd03ee92",
+          "to_id": "RG-F-c5569b2aec77c0c9555d",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-c5569b2aec77c0c9555d",
       "old_id": "RG-F-a84459247a411929a0f0",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114279,10 +115458,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-b644fd82b2e3c91a2c49"
+      ],
       "language": "rust",
-      "new_id": "RG-F-b644fd82b2e3c91a2c49",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b644fd82b2e3c91a2c49",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-dd6eee893368eb64b68f",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-dd6eee893368eb64b68f",
       "old_id": "RG-F-9220134699349b718c82",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114429,22 +115626,87 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-0b5864715c610087017d"
+      ],
       "language": "rust",
-      "new_id": "RG-F-0b5864715c610087017d",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-0b5864715c610087017d",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-0a7fdd56710afac12750",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-0a7fdd56710afac12750",
       "old_id": "RG-F-d35129c6cc7d878ae17d",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-389647f282e45aec1d5e"
+      ],
       "language": "rust",
-      "new_id": "RG-F-389647f282e45aec1d5e",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-389647f282e45aec1d5e",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-937bd3caec5f634ef6c2",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-937bd3caec5f634ef6c2",
       "old_id": "RG-F-5a7d50c9a5f2adc869be",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-e0a3f482fe1920fdcfbd",
+        "RG-F-51c31f969d80b9e2d397"
+      ],
       "language": "rust",
-      "new_id": "RG-F-e0a3f482fe1920fdcfbd",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-e0a3f482fe1920fdcfbd",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-51c31f969d80b9e2d397",
+          "to_path": "src/heritage.rs"
+        },
+        {
+          "child_blob": "8db881a4e5e71a75923046ba46495a92fd03ee92",
+          "commit": "c96f6995c7d378075b2ca6d94df5f7da0a008e62",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-51c31f969d80b9e2d397",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "to_id": "RG-F-9dd89728b67c85ae178d",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-9dd89728b67c85ae178d",
       "old_id": "RG-F-2d786ec5c86965bc0302",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114465,16 +115727,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ea38acbd08840b54a14b"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ea38acbd08840b54a14b",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "reviewed_same_name_allowlist",
+            "Heritage::guard_calls"
+          ],
+          "from_id": "RG-F-ea38acbd08840b54a14b",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-7a1cd2752ad576a23195",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-7a1cd2752ad576a23195",
       "old_id": "RG-F-e4c1a4d9c31459eadc79",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-62677ad8d8248a7ab7c3",
-      "old_id": "RG-F-be571c7397c18d59d8e4",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114489,10 +115763,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-8430148b9f04e8ab4827"
+      ],
       "language": "rust",
-      "new_id": "RG-F-8430148b9f04e8ab4827",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-8430148b9f04e8ab4827",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-1807af94f26eafd851b0",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-1807af94f26eafd851b0",
       "old_id": "RG-F-c4d2ccd6c353ef0c08c1",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114537,46 +115829,119 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-1da54537438244ca4bc5"
+      ],
       "language": "rust",
-      "new_id": "RG-F-1da54537438244ca4bc5",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-1da54537438244ca4bc5",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-cfaf0f197761a7f17c09",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-cfaf0f197761a7f17c09",
       "old_id": "RG-F-13436b0297ee1fe9c39d",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-e16061278ddfc4c53651"
+      ],
       "language": "rust",
-      "new_id": "RG-F-e16061278ddfc4c53651",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-e16061278ddfc4c53651",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-f61e13108a9e3cebebcb",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-f61e13108a9e3cebebcb",
       "old_id": "RG-F-fce7e7600a2cabc26d00",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-d455fe78d2a78ea90124"
+      ],
       "language": "rust",
-      "new_id": "RG-F-d455fe78d2a78ea90124",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-d455fe78d2a78ea90124",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-44b090038d76766b21eb",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-44b090038d76766b21eb",
       "old_id": "RG-F-cf1dc23e7313746b3e54",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-3025153d01f1a4434950"
+      ],
       "language": "rust",
-      "new_id": "RG-F-00414dcba113eb1cf787",
-      "old_id": "RG-F-110e7cb3a979adc595e0",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-535aac7994cb2a0df898",
-      "old_id": "RG-F-5b9bee2c44266559a724",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-3025153d01f1a4434950",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-3025153d01f1a4434950",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-2dcebc8a9468dd81ab95",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-2dcebc8a9468dd81ab95",
       "old_id": "RG-F-ece5cbaba4d6bf82340b",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ca390a7344e35b66101d"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ca390a7344e35b66101d",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-ca390a7344e35b66101d",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-329699e95019dfb4a4be",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-329699e95019dfb4a4be",
       "old_id": "RG-F-6c99bfda83a2c782f2b3",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114615,10 +115980,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-0031302fdb2b5bf475ca"
+      ],
       "language": "rust",
-      "new_id": "RG-F-0031302fdb2b5bf475ca",
+      "lineage": [
+        {
+          "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-0031302fdb2b5bf475ca",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "to_id": "RG-F-abf77d064f1ec656081b",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-abf77d064f1ec656081b",
       "old_id": "RG-F-f705852d6f15071c22d6",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114627,10 +116009,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-3da2f6f6471c49ce34ab"
+      ],
       "language": "rust",
-      "new_id": "RG-F-3da2f6f6471c49ce34ab",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-3da2f6f6471c49ce34ab",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-be7521b7c3229136ee93",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-be7521b7c3229136ee93",
       "old_id": "RG-F-e73bd06c5170553485a7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114645,10 +116045,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-a5d263378602d295728e"
+      ],
       "language": "rust",
-      "new_id": "RG-F-a5d263378602d295728e",
+      "lineage": [
+        {
+          "child_blob": "8db881a4e5e71a75923046ba46495a92fd03ee92",
+          "commit": "c96f6995c7d378075b2ca6d94df5f7da0a008e62",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-a5d263378602d295728e",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+          "to_id": "RG-F-62f116b3c40d98edb200",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-62f116b3c40d98edb200",
       "old_id": "RG-F-19d53185bbd4eaa9939b",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114711,16 +116128,50 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-df2b7a0a67b6c9723d35"
+      ],
       "language": "rust",
-      "new_id": "RG-F-df2b7a0a67b6c9723d35",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-df2b7a0a67b6c9723d35",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-8b9d57adb3df403954ae",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-8b9d57adb3df403954ae",
       "old_id": "RG-F-958a0375f2138c78aeb7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-55c6c64c3ce95488559a"
+      ],
       "language": "rust",
-      "new_id": "RG-F-55c6c64c3ce95488559a",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-55c6c64c3ce95488559a",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-00303f7191bb10510285",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-00303f7191bb10510285",
       "old_id": "RG-F-edb3bfb261540e15bac7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -114730,21 +116181,33 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-58223aa5b23fb6ffa6b1",
-      "old_id": "RG-F-f2c70dc54daf5faaccad",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-ddd769ae9bab0339a252",
       "old_id": "RG-F-cb556719817c74bb5eb2",
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-4c4c91430969535cbe72"
+      ],
       "language": "rust",
-      "new_id": "RG-F-4c4c91430969535cbe72",
+      "lineage": [
+        {
+          "child_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+          "commit": "0618b1c2960d99a8b011b76bd470bfd7853d133a",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-4c4c91430969535cbe72",
+          "from_path": "src/heritage.rs",
+          "parent_blob": "ab84ce4e0c984313b99d33e39c1f479fb629654f",
+          "to_id": "RG-F-d34241209d0e67ea018f",
+          "to_path": "src/heritage.rs"
+        }
+      ],
+      "new_id": "RG-F-d34241209d0e67ea018f",
       "old_id": "RG-F-2339cfad4ecbf5791b5a",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -118047,10 +119510,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-bd8e3851074f425e41d2"
+      ],
       "language": "rust",
-      "new_id": "RG-F-bd8e3851074f425e41d2",
+      "lineage": [
+        {
+          "child_blob": "53f856f17c5c84268e76cd64e8f25b0766279b08",
+          "commit": "704699811626f01fc029f284e04e09815b06a39f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-bd8e3851074f425e41d2",
+          "from_path": "src/merge.rs",
+          "parent_blob": "9729b200810e7d92e5f3444419150d1c6defb7fa",
+          "to_id": "RG-F-d084af6d55490fcb2f03",
+          "to_path": "src/merge.rs"
+        }
+      ],
+      "new_id": "RG-F-d084af6d55490fcb2f03",
       "old_id": "RG-F-1b792e625e70870cab98",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -118102,12 +119583,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-0bb352245a43b1009d50",
-      "old_id": "RG-F-e8440bf2ca995df09185",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-bdfbafbea8a696a2925f",
       "old_id": "RG-F-8a0b481347aca39168b9",
       "reason": "rust_identity_rekey"
@@ -118137,10 +119612,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-6e4fe065a522eb9bbc94"
+      ],
       "language": "rust",
-      "new_id": "RG-F-6e4fe065a522eb9bbc94",
+      "lineage": [
+        {
+          "child_blob": "53f856f17c5c84268e76cd64e8f25b0766279b08",
+          "commit": "704699811626f01fc029f284e04e09815b06a39f",
+          "evidence": [
+            "reviewed_same_name_allowlist",
+            "Merge::merge_speculative_by_vn"
+          ],
+          "from_id": "RG-F-6e4fe065a522eb9bbc94",
+          "from_path": "src/merge.rs",
+          "parent_blob": "9729b200810e7d92e5f3444419150d1c6defb7fa",
+          "to_id": "RG-F-f23c84cf58035a9ebe14",
+          "to_path": "src/merge.rs"
+        }
+      ],
+      "new_id": "RG-F-f23c84cf58035a9ebe14",
       "old_id": "RG-F-0695ea49a55e99ff2807",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -118185,10 +119678,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-6e4a9e735162b38a02bf"
+      ],
       "language": "rust",
-      "new_id": "RG-F-6e4a9e735162b38a02bf",
+      "lineage": [
+        {
+          "child_blob": "f44ee9ac2e49597f99ab29027310bfb690a79ff6",
+          "commit": "543db17a4e84e0db08fe7d1c9b8e1506dcc438c1",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-6e4a9e735162b38a02bf",
+          "from_path": "src/merge.rs",
+          "parent_blob": "53f856f17c5c84268e76cd64e8f25b0766279b08",
+          "to_id": "RG-F-a868b14281504736e0b1",
+          "to_path": "src/merge.rs"
+        }
+      ],
+      "new_id": "RG-F-a868b14281504736e0b1",
       "old_id": "RG-F-03fde0a76fb3c87cfe07",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -118320,12 +119831,6 @@
       "language": "rust",
       "new_id": "RG-F-5cf088ee67b09c27078b",
       "old_id": "RG-F-734d46414327e07d5884",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-e0b261758e01fee35673",
-      "old_id": "RG-F-b864c8440d57e0be0aed",
       "reason": "rust_identity_rekey"
     },
     {
@@ -119727,16 +121232,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-58579508042dc730d1f4"
+      ],
       "language": "rust",
-      "new_id": "RG-F-58579508042dc730d1f4",
+      "lineage": [
+        {
+          "child_blob": "9054372e2bab6013a1e7bb1d402da475cd75e3c0",
+          "commit": "dcbe08f26326462679435120165ba7afa558c930",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-58579508042dc730d1f4",
+          "from_path": "src/op.rs",
+          "parent_blob": "4aec0a5fa1300d49f352a5c72f56ad32269910e9",
+          "to_id": "RG-F-a38ef30cc1b627f2ec74",
+          "to_path": "src/op.rs"
+        }
+      ],
+      "new_id": "RG-F-a38ef30cc1b627f2ec74",
       "old_id": "RG-F-ade72771f82d6fb0f3a0",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-71658e29a8ba17be36ec"
+      ],
       "language": "rust",
-      "new_id": "RG-F-71658e29a8ba17be36ec",
+      "lineage": [
+        {
+          "child_blob": "9054372e2bab6013a1e7bb1d402da475cd75e3c0",
+          "commit": "dcbe08f26326462679435120165ba7afa558c930",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-71658e29a8ba17be36ec",
+          "from_path": "src/op.rs",
+          "parent_blob": "4aec0a5fa1300d49f352a5c72f56ad32269910e9",
+          "to_id": "RG-F-e25e7df82144213951a6",
+          "to_path": "src/op.rs"
+        }
+      ],
+      "new_id": "RG-F-e25e7df82144213951a6",
       "old_id": "RG-F-afc84bd5f385577301a7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -119793,10 +121334,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-eba903e3e9cf0fe9fcfb"
+      ],
       "language": "rust",
-      "new_id": "RG-F-eba903e3e9cf0fe9fcfb",
+      "lineage": [
+        {
+          "child_blob": "1f8908d74c0e5b72e41a910e46313066d48ce919",
+          "commit": "e670e5d29b37d8cea5262a908a6d754c5570b2e9",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-eba903e3e9cf0fe9fcfb",
+          "from_path": "src/op.rs",
+          "parent_blob": "2fd2ae3d30fa8b5a1cce4b658823cae7d8a2b51e",
+          "to_id": "RG-F-1c3738568dab844607ba",
+          "to_path": "src/op.rs"
+        }
+      ],
+      "new_id": "RG-F-1c3738568dab844607ba",
       "old_id": "RG-F-becab9d9b4b838bef941",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -122301,10 +123860,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-da80cfd70be8ab214de7"
+      ],
       "language": "rust",
-      "new_id": "RG-F-da80cfd70be8ab214de7",
+      "lineage": [
+        {
+          "child_blob": "329b4ea7f77f51f19f148536ee53449f02ecca2c",
+          "commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-da80cfd70be8ab214de7",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "to_id": "RG-F-d7bc7dcb1841aaa38c68",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-d7bc7dcb1841aaa38c68",
       "old_id": "RG-F-b07d863fff3eeadf7edf",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -122325,22 +123901,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-009121975676b6735953"
+      ],
       "language": "rust",
-      "new_id": "RG-F-009121975676b6735953",
+      "lineage": [
+        {
+          "child_blob": "329b4ea7f77f51f19f148536ee53449f02ecca2c",
+          "commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation",
+            "identical_masked_body"
+          ],
+          "from_id": "RG-F-009121975676b6735953",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "to_id": "RG-F-cf70865e9629fa58adfb",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-cf70865e9629fa58adfb",
       "old_id": "RG-F-e6b6d2d2be44a61c476f",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5c299dbb7c1c21b280e3"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5c299dbb7c1c21b280e3",
+      "lineage": [
+        {
+          "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-5c299dbb7c1c21b280e3",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+          "to_id": "RG-F-f9909d01dc8a97a0cc23",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-f9909d01dc8a97a0cc23",
       "old_id": "RG-F-fcf8954c9b662d192687",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-df77030350cd56f16c06",
-      "old_id": "RG-F-9b3ba477324abf563e92",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -122349,40 +123955,100 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-8994a4fe7cb6e52375f8"
+      ],
       "language": "rust",
-      "new_id": "RG-F-79cd9be355b367b91bea",
-      "old_id": "RG-F-fb4e57eb1fc08da9b754",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-72bab767946d70c663c6",
-      "old_id": "RG-F-ea847040afb0a57a335f",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-8994a4fe7cb6e52375f8",
+      "lineage": [
+        {
+          "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-8994a4fe7cb6e52375f8",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+          "to_id": "RG-F-454bf0503c7fab6f25cc",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-454bf0503c7fab6f25cc",
       "old_id": "RG-F-738ec6553a9eab014b1c",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-d2afb2ae5cb7f25614a0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-d2afb2ae5cb7f25614a0",
+      "lineage": [
+        {
+          "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-d2afb2ae5cb7f25614a0",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+          "to_id": "RG-F-708882bdfc71b3a4f821",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-708882bdfc71b3a4f821",
       "old_id": "RG-F-e51bbe4d598f5da7a500",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-09535f84ae949eb65717"
+      ],
       "language": "rust",
-      "new_id": "RG-F-09535f84ae949eb65717",
+      "lineage": [
+        {
+          "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-09535f84ae949eb65717",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+          "to_id": "RG-F-adc6a63f8ac0f534094f",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-adc6a63f8ac0f534094f",
       "old_id": "RG-F-482bbdde503a8c30cf7a",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-29c83b2f3b46aa6f7e9f"
+      ],
       "language": "rust",
-      "new_id": "RG-F-29c83b2f3b46aa6f7e9f",
+      "lineage": [
+        {
+          "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+          "commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-29c83b2f3b46aa6f7e9f",
+          "from_path": "src/pcodeinject.rs",
+          "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+          "to_id": "RG-F-0d5537ea8d560da52327",
+          "to_path": "src/pcodeinject.rs"
+        }
+      ],
+      "new_id": "RG-F-0d5537ea8d560da52327",
       "old_id": "RG-F-146ffafb58dae16884c7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -122394,12 +124060,6 @@
       "language": "rust",
       "new_id": "RG-F-e7d35530e24fb064bfcb",
       "old_id": "RG-F-d3cf370c6cc369696802",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-52ccd48128e40d6f37b0",
-      "old_id": "RG-F-66eeea2a761b604a28ba",
       "reason": "rust_identity_rekey"
     },
     {
@@ -122418,24 +124078,6 @@
       "language": "rust",
       "new_id": "RG-F-0ef81ea73a76cf6f936b",
       "old_id": "RG-F-f66fc7f8b21273d3978b",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-5d67242db4fbc2603002",
-      "old_id": "RG-F-a22612c4dceb25126c6b",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-7edaa9a420184bde51c6",
-      "old_id": "RG-F-cb791532f7bd0a7f57c0",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-d9e5720a4033361bb683",
-      "old_id": "RG-F-3cca09c07784d1994f78",
       "reason": "rust_identity_rekey"
     },
     {
@@ -125085,10 +126727,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-73adae5df6d49b818459"
+      ],
       "language": "rust",
-      "new_id": "RG-F-73adae5df6d49b818459",
+      "lineage": [
+        {
+          "child_blob": "342d87e71e651f50a0fad27912841356b32854f2",
+          "commit": "34940227825405eabd5358c108fbbead2ddb8581",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "c_binary_op_str -> optoken::binary_token"
+          ],
+          "from_id": "RG-F-73adae5df6d49b818459",
+          "from_path": "src/printc.rs",
+          "parent_blob": "058e2633b021b1575015b55de6cf07252c33dc49",
+          "to_id": "RG-F-d5be9719af51f5bf1fdc",
+          "to_path": "src/printc.rs"
+        }
+      ],
+      "new_id": "RG-F-d5be9719af51f5bf1fdc",
       "old_id": "RG-F-439b1c3cd8210321d15e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -125175,10 +126835,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-94728288734f51ef6ff1"
+      ],
       "language": "rust",
-      "new_id": "RG-F-94728288734f51ef6ff1",
+      "lineage": [
+        {
+          "child_blob": "4083678bc7ef44a1435af7a9f0514140322cb934",
+          "commit": "ee71076f367f946123982d5d6cae2b2a8abb5025",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-94728288734f51ef6ff1",
+          "from_path": "src/printc.rs",
+          "parent_blob": "4edfc2954b4edd86e636e0822b3815236a202a8e",
+          "to_id": "RG-F-78e97aa49d62237a628a",
+          "to_path": "src/printc.rs"
+        }
+      ],
+      "new_id": "RG-F-78e97aa49d62237a628a",
       "old_id": "RG-F-99bbe219ec5552cacc55",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -125316,30 +126994,6 @@
       "language": "rust",
       "new_id": "RG-F-b7be4a35ed22dd4f5844",
       "old_id": "RG-F-6d0046c1cf119914e568",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-291fd9ff2aeafadcec76",
-      "old_id": "RG-F-ecc37431989bf168a937",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-27f74050a459dcc39ae2",
-      "old_id": "RG-F-9457bf91be8c7fd0b8c4",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-981f70767c5c8c5729cb",
-      "old_id": "RG-F-3d3c79e1fd7d70a102d4",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-afc5544707c4f91fee45",
-      "old_id": "RG-F-dcb5c56857185e0ff75c",
       "reason": "rust_identity_rekey"
     },
     {
@@ -125841,10 +127495,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-084ab8f40c63bedc48ed"
+      ],
       "language": "rust",
-      "new_id": "RG-F-084ab8f40c63bedc48ed",
+      "lineage": [
+        {
+          "child_blob": "d829259e925d6766349ab961bbc9a32adc146ca0",
+          "commit": "c5e685c55e775192dae7b26f0631f6ac8ff85df6",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-084ab8f40c63bedc48ed",
+          "from_path": "src/printc.rs",
+          "parent_blob": "32d66781626abe6b0a1962a13355d4d9fd8b354e",
+          "to_id": "RG-F-c106009401879a381294",
+          "to_path": "src/printc.rs"
+        }
+      ],
+      "new_id": "RG-F-c106009401879a381294",
       "old_id": "RG-F-4daca9888ada2d337fc7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -126160,12 +127832,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-98cadcff50035dc0db81",
-      "old_id": "RG-F-0b63894a79fa2310c9ce",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-fc6d06377dae266fc40c",
       "old_id": "RG-F-d7b387886fb44380921c",
       "reason": "rust_identity_rekey"
@@ -126267,10 +127933,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-88c23cb918aca4d60257"
+      ],
       "language": "rust",
-      "new_id": "RG-F-88c23cb918aca4d60257",
+      "lineage": [
+        {
+          "child_blob": "d6fdc2cf7ae57faf540fed33987a0ab0ea080d9d",
+          "commit": "521876782c39c900f92c63a591735a88b2b15a53",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-88c23cb918aca4d60257",
+          "from_path": "src/printlanguage.rs",
+          "parent_blob": "d7a26a6f725c8328bb0b85cd97dbf591aa594a2b",
+          "to_id": "RG-F-380be4efd64fbc29e996",
+          "to_path": "src/printlanguage.rs"
+        }
+      ],
+      "new_id": "RG-F-380be4efd64fbc29e996",
       "old_id": "RG-F-df7a810e125bf8e9dc00",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -126675,16 +128359,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-3c8e1df9334b3c78363a"
+      ],
       "language": "rust",
-      "new_id": "RG-F-3c8e1df9334b3c78363a",
+      "lineage": [
+        {
+          "child_blob": "73cacc266456febdbcbed7b6455a246ee831e669",
+          "commit": "8ec6bee8fce58231b4ff093290457497206aeab5",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "RangeRecord::first successor"
+          ],
+          "from_id": "RG-F-3c8e1df9334b3c78363a",
+          "from_path": "src/rangemap.rs",
+          "parent_blob": "abb9260b8c05e02346f7b614d8d13c3e690e180d",
+          "to_id": "RG-F-2b52235062c1427143fa",
+          "to_path": "src/rangemap.rs"
+        }
+      ],
+      "new_id": "RG-F-2b52235062c1427143fa",
       "old_id": "RG-F-61dfe59ce876d87bb8ad",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-32ca3afaf5f64455aa9e"
+      ],
       "language": "rust",
-      "new_id": "RG-F-32ca3afaf5f64455aa9e",
+      "lineage": [
+        {
+          "child_blob": "73cacc266456febdbcbed7b6455a246ee831e669",
+          "commit": "8ec6bee8fce58231b4ff093290457497206aeab5",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "RangeRecord::last successor"
+          ],
+          "from_id": "RG-F-32ca3afaf5f64455aa9e",
+          "from_path": "src/rangemap.rs",
+          "parent_blob": "abb9260b8c05e02346f7b614d8d13c3e690e180d",
+          "to_id": "RG-F-9a07be81379bfc511a61",
+          "to_path": "src/rangemap.rs"
+        }
+      ],
+      "new_id": "RG-F-9a07be81379bfc511a61",
       "old_id": "RG-F-ef3f516520136385508d",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -126717,10 +128437,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7cf087a6c9e2f7d05118"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7cf087a6c9e2f7d05118",
+      "lineage": [
+        {
+          "child_blob": "73cacc266456febdbcbed7b6455a246ee831e669",
+          "commit": "8ec6bee8fce58231b4ff093290457497206aeab5",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-7cf087a6c9e2f7d05118",
+          "from_path": "src/rangemap.rs",
+          "parent_blob": "abb9260b8c05e02346f7b614d8d13c3e690e180d",
+          "to_id": "RG-F-590b5b1616ff88564641",
+          "to_path": "src/rangemap.rs"
+        }
+      ],
+      "new_id": "RG-F-590b5b1616ff88564641",
       "old_id": "RG-F-0693346aa1e406e2e57e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -126741,10 +128478,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7d0c60ba2f2638804ab4"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7d0c60ba2f2638804ab4",
+      "lineage": [
+        {
+          "child_blob": "73cacc266456febdbcbed7b6455a246ee831e669",
+          "commit": "8ec6bee8fce58231b4ff093290457497206aeab5",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-7d0c60ba2f2638804ab4",
+          "from_path": "src/rangemap.rs",
+          "parent_blob": "abb9260b8c05e02346f7b614d8d13c3e690e180d",
+          "to_id": "RG-F-91386d5ad2c0d6fa7fb8",
+          "to_path": "src/rangemap.rs"
+        }
+      ],
+      "new_id": "RG-F-91386d5ad2c0d6fa7fb8",
       "old_id": "RG-F-19c1eba36cb4b4733143",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -127983,10 +129737,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-02440a061921346ab171"
+      ],
       "language": "rust",
-      "new_id": "RG-F-02440a061921346ab171",
+      "lineage": [
+        {
+          "child_blob": "5866d67a953405f09283921b7474fd394b9aab86",
+          "commit": "1cc588d2781771060f821087c1048f6962cfed0d",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-02440a061921346ab171",
+          "from_path": "src/ruleaction.rs",
+          "parent_blob": "e99bbd7cec6f59445150774fe6a1b66977f5102e",
+          "to_id": "RG-F-2ff0c0b1db0b04d9f173",
+          "to_path": "src/ruleaction.rs"
+        }
+      ],
+      "new_id": "RG-F-2ff0c0b1db0b04d9f173",
       "old_id": "RG-F-4c76f8a2300fb47931f8",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -128007,10 +129778,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-d4bc67e485fd6c0414ed"
+      ],
       "language": "rust",
-      "new_id": "RG-F-d4bc67e485fd6c0414ed",
+      "lineage": [
+        {
+          "child_blob": "76314cd20aef35c9f1ea8f43f5e7da216ae16979",
+          "commit": "a770ed10df7806bf03e34d798b3f3712a08ec2bd",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-d4bc67e485fd6c0414ed",
+          "from_path": "src/ruleaction.rs",
+          "parent_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+          "to_id": "RG-F-a4975d81a52ad28d1341",
+          "to_path": "src/ruleaction.rs"
+        }
+      ],
+      "new_id": "RG-F-a4975d81a52ad28d1341",
       "old_id": "RG-F-1859f0d8c45b5ef93d27",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -128022,30 +129810,6 @@
       "language": "rust",
       "new_id": "RG-F-a70f65050abf541ec7a0",
       "old_id": "RG-F-990330d756691eadae1d",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-1aeb4fa12758eb2b41f6",
-      "old_id": "RG-F-ab891945fe45a58b7be9",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-4b1c37948f6503fb22e4",
-      "old_id": "RG-F-fae83367c2e7db8035b6",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-2d887962c3671a23a057",
-      "old_id": "RG-F-1e978e7c99761b05d41c",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-396b06cb2c37b5ef8bc0",
-      "old_id": "RG-F-79f85567e39a8f3da854",
       "reason": "rust_identity_rekey"
     },
     {
@@ -128079,10 +129843,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-a5b84311422ad642a6af"
+      ],
       "language": "rust",
-      "new_id": "RG-F-a5b84311422ad642a6af",
+      "lineage": [
+        {
+          "child_blob": "76314cd20aef35c9f1ea8f43f5e7da216ae16979",
+          "commit": "a770ed10df7806bf03e34d798b3f3712a08ec2bd",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-a5b84311422ad642a6af",
+          "from_path": "src/ruleaction.rs",
+          "parent_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+          "to_id": "RG-F-54e1fd06697d149e306b",
+          "to_path": "src/ruleaction.rs"
+        }
+      ],
+      "new_id": "RG-F-54e1fd06697d149e306b",
       "old_id": "RG-F-8a38102cbba7ea4b8378",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -131481,22 +133263,73 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-f563af596e9d578d07ea"
+      ],
       "language": "rust",
-      "new_id": "RG-F-f563af596e9d578d07ea",
+      "lineage": [
+        {
+          "child_blob": "8c2391996946894a17fb5e96aa572b4b501fd6a0",
+          "commit": "3ff5f201e3c7a6800761307f8fe7b1c6c650db7b",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-f563af596e9d578d07ea",
+          "from_path": "src/ruleaction.rs",
+          "parent_blob": "70e96f6c0ff6ad0a9409693fd728ad1803b61825",
+          "to_id": "RG-F-7a6925073fe4541326c6",
+          "to_path": "src/ruleaction.rs"
+        }
+      ],
+      "new_id": "RG-F-7a6925073fe4541326c6",
       "old_id": "RG-F-add07d2d9163ab1ced57",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-49600f416c689d3a1eab"
+      ],
       "language": "rust",
-      "new_id": "RG-F-49600f416c689d3a1eab",
+      "lineage": [
+        {
+          "child_blob": "8c2391996946894a17fb5e96aa572b4b501fd6a0",
+          "commit": "3ff5f201e3c7a6800761307f8fe7b1c6c650db7b",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-49600f416c689d3a1eab",
+          "from_path": "src/ruleaction.rs",
+          "parent_blob": "70e96f6c0ff6ad0a9409693fd728ad1803b61825",
+          "to_id": "RG-F-4d0d4cb74854ceb249ef",
+          "to_path": "src/ruleaction.rs"
+        }
+      ],
+      "new_id": "RG-F-4d0d4cb74854ceb249ef",
       "old_id": "RG-F-89b3592848a9798a58bf",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-2f490377a759741ccad8"
+      ],
       "language": "rust",
-      "new_id": "RG-F-2f490377a759741ccad8",
+      "lineage": [
+        {
+          "child_blob": "8c2391996946894a17fb5e96aa572b4b501fd6a0",
+          "commit": "3ff5f201e3c7a6800761307f8fe7b1c6c650db7b",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-2f490377a759741ccad8",
+          "from_path": "src/ruleaction.rs",
+          "parent_blob": "70e96f6c0ff6ad0a9409693fd728ad1803b61825",
+          "to_id": "RG-F-c6eab0cc466fdf3ea5b7",
+          "to_path": "src/ruleaction.rs"
+        }
+      ],
+      "new_id": "RG-F-c6eab0cc466fdf3ea5b7",
       "old_id": "RG-F-335a2ce4d80eb5bec972",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -131850,12 +133683,6 @@
       "language": "rust",
       "new_id": "RG-F-0182ff5101f5a5401a64",
       "old_id": "RG-F-bd18f852b1e07fb318f5",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-64f3fe19484db472dc7e",
-      "old_id": "RG-F-b83de19c3204b2d095f3",
       "reason": "rust_identity_rekey"
     },
     {
@@ -134655,10 +136482,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ba56fafef9ad62f387e6"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ba56fafef9ad62f387e6",
+      "lineage": [
+        {
+          "child_blob": "985eaf6f4e9411631f1e4600bcef283e6758e7a1",
+          "commit": "121c429b8d03d30bfc5ec0fe5bf6f3fec3bcd128",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-ba56fafef9ad62f387e6",
+          "from_path": "src/subflow.rs",
+          "parent_blob": "289dcd70c04418d53a5da9a7d0d35a490d46179a",
+          "to_id": "RG-F-e69e8c2d96edc4d23946",
+          "to_path": "src/subflow.rs"
+        }
+      ],
+      "new_id": "RG-F-e69e8c2d96edc4d23946",
       "old_id": "RG-F-15eb2f3e4806e71640d1",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -135663,10 +137508,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7f40e9c100c7d35a405a"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7f40e9c100c7d35a405a",
+      "lineage": [
+        {
+          "child_blob": "77ff7a4be56d63d988c76c6888605de11a94880a",
+          "commit": "a5ceae7f87a628e0ab2b39b837cc44883a6e927a",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-7f40e9c100c7d35a405a",
+          "from_path": "src/transform.rs",
+          "parent_blob": "6fc67dedea8d378519148b9f7c9a875e2a8edc40",
+          "to_id": "RG-F-057c69e1baf02c4e1945",
+          "to_path": "src/transform.rs"
+        }
+      ],
+      "new_id": "RG-F-057c69e1baf02c4e1945",
       "old_id": "RG-F-44fd8ddc49d4aa312f3e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -136389,10 +138252,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-b02f069fb761a4b32d49"
+      ],
       "language": "rust",
-      "new_id": "RG-F-b02f069fb761a4b32d49",
+      "lineage": [
+        {
+          "child_blob": "9de2583d1bbb5edb4049279b91e83ca2a93e3b37",
+          "commit": "34fd254755441def6e17197cf2431f7fcf920c24",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b02f069fb761a4b32d49",
+          "from_path": "src/translate.rs",
+          "parent_blob": "775c647b79b4d2f933d887c28a2c8128241d292e",
+          "to_id": "RG-F-9a098b688783d27ec418",
+          "to_path": "src/translate.rs"
+        }
+      ],
+      "new_id": "RG-F-9a098b688783d27ec418",
       "old_id": "RG-F-dc242bd76e4e02901e56",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -136458,12 +138339,6 @@
       "language": "rust",
       "new_id": "RG-F-16277ca63c6c85ae8224",
       "old_id": "RG-F-119e23e561ebbc609649",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-295a58b7a7a62200fc52",
-      "old_id": "RG-F-a72bb5e89b3cb6c78685",
       "reason": "rust_identity_rekey"
     },
     {
@@ -136989,10 +138864,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-71244c87ec8db0ddfbc5"
+      ],
       "language": "rust",
-      "new_id": "RG-F-71244c87ec8db0ddfbc5",
+      "lineage": [
+        {
+          "child_blob": "1abf0bb062b1c57c336d38f3c5c2fafa5cba9aee",
+          "commit": "bd69479285c9ba28f9b6848c36b5a029f98fbe03",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-71244c87ec8db0ddfbc5",
+          "from_path": "src/type_system/datatype.rs",
+          "parent_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+          "to_id": "RG-F-01fbe32106d43cd584e2",
+          "to_path": "src/type_system/datatype.rs"
+        }
+      ],
+      "new_id": "RG-F-01fbe32106d43cd584e2",
       "old_id": "RG-F-633d050825b4648e93fd",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -137283,10 +139176,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-2470aaae18481285f758"
+      ],
       "language": "rust",
-      "new_id": "RG-F-2470aaae18481285f758",
+      "lineage": [
+        {
+          "child_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+          "commit": "5fb36f0225c6efe606b5e8b5213163d956e9f2f1",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-2470aaae18481285f758",
+          "from_path": "src/type_system/datatype.rs",
+          "parent_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
+          "to_id": "RG-F-07b26fbc4e137eef9434",
+          "to_path": "src/type_system/datatype.rs"
+        }
+      ],
+      "new_id": "RG-F-07b26fbc4e137eef9434",
       "old_id": "RG-F-f2012238bb102a8f087e",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -137409,22 +139320,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-8e8d5665d07de09957b7"
+      ],
       "language": "rust",
-      "new_id": "RG-F-8e8d5665d07de09957b7",
+      "lineage": [
+        {
+          "child_blob": "1abf0bb062b1c57c336d38f3c5c2fafa5cba9aee",
+          "commit": "bd69479285c9ba28f9b6848c36b5a029f98fbe03",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-8e8d5665d07de09957b7",
+          "from_path": "src/type_system/datatype.rs",
+          "parent_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+          "to_id": "RG-F-de031b436275089957b1",
+          "to_path": "src/type_system/datatype.rs"
+        }
+      ],
+      "new_id": "RG-F-de031b436275089957b1",
       "old_id": "RG-F-9bb1825df7509d5592f7",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-b9da0c6f6cf29fa47f71"
+      ],
       "language": "rust",
-      "new_id": "RG-F-b9da0c6f6cf29fa47f71",
+      "lineage": [
+        {
+          "child_blob": "1abf0bb062b1c57c336d38f3c5c2fafa5cba9aee",
+          "commit": "bd69479285c9ba28f9b6848c36b5a029f98fbe03",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b9da0c6f6cf29fa47f71",
+          "from_path": "src/type_system/datatype.rs",
+          "parent_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+          "to_id": "RG-F-66af10f197907cc4a4d5",
+          "to_path": "src/type_system/datatype.rs"
+        }
+      ],
+      "new_id": "RG-F-66af10f197907cc4a4d5",
       "old_id": "RG-F-b2be74e6290b68dd310c",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
-      "new_id": "RG-F-5fab4d997916a47717d6",
-      "old_id": "RG-F-b0e2c5a6cf989f5042de",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -138153,10 +140094,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-2920773f0bdceb44b136"
+      ],
       "language": "rust",
-      "new_id": "RG-F-2920773f0bdceb44b136",
+      "lineage": [
+        {
+          "child_blob": "c88b32efc575cea22055ee2adb4621e9be71d9f5",
+          "commit": "b255ac7d7061b1c3225b246f455ad03a030f6ce6",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-2920773f0bdceb44b136",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "200a7e0a5931939c5a1dd624bc76095d5da9d569",
+          "to_id": "RG-F-cdeb6124c28a46da0dfd",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-cdeb6124c28a46da0dfd",
       "old_id": "RG-F-67d8aab5b0ad404ec8f4",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -138321,10 +140279,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-d6481719aafe581b3116"
+      ],
       "language": "rust",
-      "new_id": "RG-F-d6481719aafe581b3116",
+      "lineage": [
+        {
+          "child_blob": "00d4ac38a06dc7ac49abf6d5b84b47aada564a36",
+          "commit": "253707fadb0735ec211289132792934d9ae48e05",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-d6481719aafe581b3116",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "c373c0e5f9e439a682ed6d4bb7be9f8b0d02af17",
+          "to_id": "RG-F-34abb3000842e55e6e09",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-34abb3000842e55e6e09",
       "old_id": "RG-F-baba94e08a0dbfc78133",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -138357,10 +140333,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-9934c588861c59d64f76"
+      ],
       "language": "rust",
-      "new_id": "RG-F-9934c588861c59d64f76",
+      "lineage": [
+        {
+          "child_blob": "c88b32efc575cea22055ee2adb4621e9be71d9f5",
+          "commit": "b255ac7d7061b1c3225b246f455ad03a030f6ce6",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-9934c588861c59d64f76",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "200a7e0a5931939c5a1dd624bc76095d5da9d569",
+          "to_id": "RG-F-d43d1eda60ad1d9aad6c",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-d43d1eda60ad1d9aad6c",
       "old_id": "RG-F-1a119d9861e4a3b8f15a",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -138369,22 +140363,75 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-4c4955a9ae5da956f8a7"
+      ],
       "language": "rust",
-      "new_id": "RG-F-4c4955a9ae5da956f8a7",
+      "lineage": [
+        {
+          "child_blob": "00d4ac38a06dc7ac49abf6d5b84b47aada564a36",
+          "commit": "253707fadb0735ec211289132792934d9ae48e05",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-4c4955a9ae5da956f8a7",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "c373c0e5f9e439a682ed6d4bb7be9f8b0d02af17",
+          "to_id": "RG-F-ea8bbb9cd295b244a81e",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-ea8bbb9cd295b244a81e",
       "old_id": "RG-F-6bf39db32d826ac7a609",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-0d974b12c723b8e02471"
+      ],
       "language": "rust",
-      "new_id": "RG-F-0d974b12c723b8e02471",
+      "lineage": [
+        {
+          "child_blob": "00d4ac38a06dc7ac49abf6d5b84b47aada564a36",
+          "commit": "253707fadb0735ec211289132792934d9ae48e05",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "default_alignment_map -> set_default_alignment_map"
+          ],
+          "from_id": "RG-F-0d974b12c723b8e02471",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "c373c0e5f9e439a682ed6d4bb7be9f8b0d02af17",
+          "to_id": "RG-F-2b387a75cbdd7e41a31c",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-2b387a75cbdd7e41a31c",
       "old_id": "RG-F-700e12a6872c24d82498",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-1e4a3ae3e1a4ef7080e4"
+      ],
       "language": "rust",
-      "new_id": "RG-F-1e4a3ae3e1a4ef7080e4",
+      "lineage": [
+        {
+          "child_blob": "00d4ac38a06dc7ac49abf6d5b84b47aada564a36",
+          "commit": "253707fadb0735ec211289132792934d9ae48e05",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-1e4a3ae3e1a4ef7080e4",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "c373c0e5f9e439a682ed6d4bb7be9f8b0d02af17",
+          "to_id": "RG-F-a82264be4600b87bb06d",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-a82264be4600b87bb06d",
       "old_id": "RG-F-df38d8ac286c7e5bbc05",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -138405,10 +140452,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-1dfde04c78a974c4272f"
+      ],
       "language": "rust",
-      "new_id": "RG-F-1dfde04c78a974c4272f",
+      "lineage": [
+        {
+          "child_blob": "c88b32efc575cea22055ee2adb4621e9be71d9f5",
+          "commit": "b255ac7d7061b1c3225b246f455ad03a030f6ce6",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-1dfde04c78a974c4272f",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "200a7e0a5931939c5a1dd624bc76095d5da9d569",
+          "to_id": "RG-F-fdaf2f74eae651584017",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-fdaf2f74eae651584017",
       "old_id": "RG-F-4572c0bcceb3fe6d6e22",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -138423,10 +140488,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-b778a7dbbeb8c41af722"
+      ],
       "language": "rust",
-      "new_id": "RG-F-b778a7dbbeb8c41af722",
+      "lineage": [
+        {
+          "child_blob": "d3010e85ee10ef0b37c0cc8ac225c213c995acb3",
+          "commit": "bd69479285c9ba28f9b6848c36b5a029f98fbe03",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b778a7dbbeb8c41af722",
+          "from_path": "src/type_system/typefactory.rs",
+          "parent_blob": "c7f80d486e3393b4722dc5654a082421046c8c09",
+          "to_id": "RG-F-97503b4f708b8e6f19a6",
+          "to_path": "src/type_system/typefactory.rs"
+        }
+      ],
+      "new_id": "RG-F-97503b4f708b8e6f19a6",
       "old_id": "RG-F-491b1570ee84c3281556",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -143805,10 +145888,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-55b8ec1f3814f094c8c8"
+      ],
       "language": "rust",
-      "new_id": "RG-F-55b8ec1f3814f094c8c8",
+      "lineage": [
+        {
+          "child_blob": "20b3f095aa2ae9b813e78281140c8a9304fec9fb",
+          "commit": "156fa7f8c56e39b2b58c1ee99cbce0fa6dcb67e1",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-55b8ec1f3814f094c8c8",
+          "from_path": "src/variable.rs",
+          "parent_blob": "bb2eebd2afe74672ceea6fc5f27eb20ecccffa52",
+          "to_id": "RG-F-c34a7a17089587530dfc",
+          "to_path": "src/variable.rs"
+        }
+      ],
+      "new_id": "RG-F-c34a7a17089587530dfc",
       "old_id": "RG-F-3ea142f55f1f034dca0b",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144057,10 +146158,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-ce7b0bbaaea72976b309"
+      ],
       "language": "rust",
-      "new_id": "RG-F-ce7b0bbaaea72976b309",
+      "lineage": [
+        {
+          "child_blob": "20b3f095aa2ae9b813e78281140c8a9304fec9fb",
+          "commit": "156fa7f8c56e39b2b58c1ee99cbce0fa6dcb67e1",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-ce7b0bbaaea72976b309",
+          "from_path": "src/variable.rs",
+          "parent_blob": "bb2eebd2afe74672ceea6fc5f27eb20ecccffa52",
+          "to_id": "RG-F-26920ee3780e1587da31",
+          "to_path": "src/variable.rs"
+        }
+      ],
+      "new_id": "RG-F-26920ee3780e1587da31",
       "old_id": "RG-F-035c78a32f75e069b903",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144525,10 +146644,41 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-6b9ba805054236326a28",
+        "RG-F-44db6dafc21ffaa88a58"
+      ],
       "language": "rust",
-      "new_id": "RG-F-6b9ba805054236326a28",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-6b9ba805054236326a28",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-44db6dafc21ffaa88a58",
+          "to_path": "src/varmap.rs"
+        },
+        {
+          "child_blob": "f68e8bc182d163566b308974ee025f8a4960c9a9",
+          "commit": "83a900efd41c9222c74b5e3be9d790fcbe86c645",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-44db6dafc21ffaa88a58",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "6c1d16a2918ec154ddc6c9289238d052eddc8269",
+          "to_id": "RG-F-8288d655a249bf90b408",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-8288d655a249bf90b408",
       "old_id": "RG-F-3c4065b2a0d827d950cc",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144615,10 +146765,27 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-463a4ace336d4ed0063d"
+      ],
       "language": "rust",
-      "new_id": "RG-F-463a4ace336d4ed0063d",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk"
+          ],
+          "from_id": "RG-F-463a4ace336d4ed0063d",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-2dcb7c5ed67cb3b8f58d",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-2dcb7c5ed67cb3b8f58d",
       "old_id": "RG-F-7ab5aecff18e12a94723",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144669,16 +146836,52 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-b7d7585e9abd9b7c4330"
+      ],
       "language": "rust",
-      "new_id": "RG-F-b7d7585e9abd9b7c4330",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b7d7585e9abd9b7c4330",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-d658ffdbd79870fbcad9",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-d658ffdbd79870fbcad9",
       "old_id": "RG-F-8fbd58615bcfad05fef6",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-7931d6e1c65f14923bd1"
+      ],
       "language": "rust",
-      "new_id": "RG-F-7931d6e1c65f14923bd1",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-7931d6e1c65f14923bd1",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-e168755a3d3ef1e682d7",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-e168755a3d3ef1e682d7",
       "old_id": "RG-F-20f12094ba20790bee07",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144723,10 +146926,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-bdd6d90c4f8a1626d53e"
+      ],
       "language": "rust",
-      "new_id": "RG-F-bdd6d90c4f8a1626d53e",
+      "lineage": [
+        {
+          "child_blob": "6a3b25bada255ea378fcfad185696d782042e80d",
+          "commit": "192e89407f5af7a419d1fe7bb30d119af8a231e0",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-bdd6d90c4f8a1626d53e",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "04d338db19b843b1a55684a5c7948185c68e9444",
+          "to_id": "RG-F-a3906c343a1ead368ad9",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-a3906c343a1ead368ad9",
       "old_id": "RG-F-8117a2b16ed05dc5a423",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144736,21 +146957,47 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-a73a582f615d89a9c4f3",
-      "old_id": "RG-F-c2362bc96e45d55b5ca3",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-89e016fe2736366562e6",
       "old_id": "RG-F-4a9590a741dca3e332a8",
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-215a8a7d6b0301477ae7",
+        "RG-F-b3c3908a02ebda4266bf"
+      ],
       "language": "rust",
-      "new_id": "RG-F-215a8a7d6b0301477ae7",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-215a8a7d6b0301477ae7",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-b3c3908a02ebda4266bf",
+          "to_path": "src/varmap.rs"
+        },
+        {
+          "child_blob": "f68e8bc182d163566b308974ee025f8a4960c9a9",
+          "commit": "83a900efd41c9222c74b5e3be9d790fcbe86c645",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-b3c3908a02ebda4266bf",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "6c1d16a2918ec154ddc6c9289238d052eddc8269",
+          "to_id": "RG-F-8b804510002f79772f48",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-8b804510002f79772f48",
       "old_id": "RG-F-aed699f2484f67f4d52d",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144759,16 +147006,51 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-5bd0028c7c3d5791008b"
+      ],
       "language": "rust",
-      "new_id": "RG-F-5bd0028c7c3d5791008b",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-5bd0028c7c3d5791008b",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-0025ad79c9e2d7bfb78d",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-0025ad79c9e2d7bfb78d",
       "old_id": "RG-F-f1212a8442bd572ded1b",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
+      "aliases": [
+        "RG-F-22dc580fbe3b47dd6e76"
+      ],
       "language": "rust",
-      "new_id": "RG-F-22dc580fbe3b47dd6e76",
+      "lineage": [
+        {
+          "child_blob": "6a3b25bada255ea378fcfad185696d782042e80d",
+          "commit": "192e89407f5af7a419d1fe7bb30d119af8a231e0",
+          "evidence": [
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-22dc580fbe3b47dd6e76",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "04d338db19b843b1a55684a5c7948185c68e9444",
+          "to_id": "RG-F-f9c630f7ac4f53c33368",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-f9c630f7ac4f53c33368",
       "old_id": "RG-F-c9eda5a640034c5ab1f2",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144777,10 +147059,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-8b0070d8738abfeb1178"
+      ],
       "language": "rust",
-      "new_id": "RG-F-8b0070d8738abfeb1178",
+      "lineage": [
+        {
+          "child_blob": "e7d0926bab377f2325e1f8aa6e22f826b19a2b48",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-8b0070d8738abfeb1178",
+          "from_path": "src/varmap.rs",
+          "parent_blob": "85b7bc6848d484d7493cfe134718a41ac62f5d5c",
+          "to_id": "RG-F-301d49948f2142968fdf",
+          "to_path": "src/varmap.rs"
+        }
+      ],
+      "new_id": "RG-F-301d49948f2142968fdf",
       "old_id": "RG-F-3a60acf206e393428d46",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -144927,10 +147227,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-19126ae1c4f800e1531b"
+      ],
       "language": "rust",
-      "new_id": "RG-F-19126ae1c4f800e1531b",
+      "lineage": [
+        {
+          "child_blob": "9c3db2d24d32d58690d73535a46af9158d60848e",
+          "commit": "38af1fd81973e29fb27071b18144f7b4db4ad428",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "unknown_datatype -> default_unknown_type"
+          ],
+          "from_id": "RG-F-19126ae1c4f800e1531b",
+          "from_path": "src/varnode.rs",
+          "parent_blob": "a5e0bf6645e5ed3aac94a3422c54d51667717bf8",
+          "to_id": "RG-F-39a5f83df9995b8bf34b",
+          "to_path": "src/varnode.rs"
+        }
+      ],
+      "new_id": "RG-F-39a5f83df9995b8bf34b",
       "old_id": "RG-F-a7a04409bf4b8d92ce15",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -145197,10 +147515,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-36cb30229138ce0e46f0"
+      ],
       "language": "rust",
-      "new_id": "RG-F-36cb30229138ce0e46f0",
+      "lineage": [
+        {
+          "child_blob": "5b4a422de99ef8cea9db8aae33de418722db357e",
+          "commit": "ee29a32487702a8044d910202903e83a23996c9e",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "update_cover -> update_cover_locked"
+          ],
+          "from_id": "RG-F-36cb30229138ce0e46f0",
+          "from_path": "src/varnode.rs",
+          "parent_blob": "54ff245d4c9f686f8f667535f2773c92c878fd8a",
+          "to_id": "RG-F-7f7a36379bbf2cb1f39f",
+          "to_path": "src/varnode.rs"
+        }
+      ],
+      "new_id": "RG-F-7f7a36379bbf2cb1f39f",
       "old_id": "RG-F-bf22c6ec4313930a2bb3",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -145509,10 +147845,28 @@
       "reason": "rust_identity_rekey"
     },
     {
+      "aliases": [
+        "RG-F-c84fc9638d1746a313a1"
+      ],
       "language": "rust",
-      "new_id": "RG-F-c84fc9638d1746a313a1",
+      "lineage": [
+        {
+          "child_blob": "5faf24172a2eac0cf036c90af03703789702101c",
+          "commit": "12bedc24564b6115157e8ee36c1f125d19047444",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation"
+          ],
+          "from_id": "RG-F-c84fc9638d1746a313a1",
+          "from_path": "src/varnode.rs",
+          "parent_blob": "d45b2be3b4f252b4cdc8a56af282457e3c6e9a04",
+          "to_id": "RG-F-3ef421a5143f0a209e3a",
+          "to_path": "src/varnode.rs"
+        }
+      ],
+      "new_id": "RG-F-3ef421a5143f0a209e3a",
       "old_id": "RG-F-caf191e9c6ea9d3f3ee8",
-      "reason": "rust_identity_rekey"
+      "reason": "rust_history_rekey"
     },
     {
       "language": "rust",
@@ -146200,12 +148554,6 @@
     },
     {
       "language": "rust",
-      "new_id": "RG-F-ffc8a907ea67daf0c0c5",
-      "old_id": "RG-F-f83ff911cc781b9fd152",
-      "reason": "rust_identity_rekey"
-    },
-    {
-      "language": "rust",
       "new_id": "RG-F-a88cc0a992b5b45e22e1",
       "old_id": "RG-F-e7d529e5f90df5f76295",
       "reason": "rust_identity_rekey"
@@ -146343,6 +148691,12 @@
       "reason": "rust_identity_rekey"
     }
   ],
+  "history": {
+    "commit_count": 332,
+    "first_commit": "ee29a32487702a8044d910202903e83a23996c9e",
+    "last_commit": "8d129628c84eb87f4094b5012833b8970ff21ae9",
+    "mode": "first_parent"
+  },
   "id_scheme": {
     "ghidra": "GH12-F = stable_id(prefix, locked_path, entry_kind, complete_qualified_signature[, preprocessor_guard_disambiguator])",
     "rust": "RG-F = stable_id(prefix, module, owner_context, normalized_signature); owner_context renders trait impls as 'Type as Trait', macro_rules! template scopes as 'macro:NAME', nested functions as 'fn:<parent signature>'; name_ordinal and line numbers never participate",
@@ -146354,31 +148708,1168 @@
     "tree_subject": "align: install locked marshal scope-zero ID tables"
   },
   "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "schema": 1,
-  "semantics": "Rust new IDs are computed on the verified old-ledger tree so old-to-new correlation is positional and exact; Ghidra new IDs recompute from the locked oracle. Every collision disambiguator is listed explicitly; ordinal- or line-derived tokens never participate.",
+  "schema": 2,
+  "semantics": "Each source origin is reconciled by deterministic first-parent history replay. Automatic transitions require a unique same-file/module/owner/name pair plus same-hunk, identical non-empty annotation, or identical masked-body evidence. Reviewed exceptions are pinned by IDs, commit and blobs. Tombstones are diagnostic and are never automatic replacement targets.",
+  "source": {
+    "commit": "235b91bb552261fb3f94b7974926ef6db9b21515",
+    "commit_tree": "6f49b977e46af96c0934114836d457f680caa057",
+    "ledger_blob": "4d06b6c71f84c6bc5f05489b809754fe2b263cbf",
+    "ledger_sha256": "4d52498bf53c98484206c045b30a0b556d310347a3f4bf6833e0ddb64e6c2a65",
+    "migration_blob": "4deb7ee4f17582c508f248b060cf13f7090b475b",
+    "migration_sha256": "5f4af48c6a1da6811b9b8b0301aeb3a7810fccbd4ed41ce8154be1b76d16f560",
+    "src_tree": "7a9746660c9c569edf1ea922618bcad2ac9860ae"
+  },
   "stats": {
+    "alias_tokens": 149,
     "ambiguous_old_ids": 0,
-    "changed": 24370,
+    "automatic_lineages": 132,
+    "automatic_transition_events": 135,
+    "class_tokens": 48889,
     "colliding_new_ids": 0,
-    "per_language": {
-      "ghidra": {
-        "changed_ghidra_ordinal_replaced_by_guard_disambiguator": 12,
-        "changed_ghidra_signature_rekey": 15799,
-        "stable_unchanged": 0,
-        "total": 15811
+    "live_rekey_lineages": 146,
+    "origin_entries": 24323,
+    "original_definitions": 24370,
+    "reviewed_same_name": 6,
+    "reviewed_successors": 8,
+    "source_rekey_gaps": 193,
+    "tombstones": 47,
+    "two_hop_lineages": 3
+  },
+  "target": {
+    "commit": "8d129628c84eb87f4094b5012833b8970ff21ae9",
+    "commit_tree": "5d46f835125307cf7ff83d41274373ec8bb19f45",
+    "ledger_blob": "840bac842767797f62ddf598a6e93574be47d282",
+    "ledger_sha256": "9161d79d6ef7b707bf1416175b27735595e9e68a844b756acba32ca3025cfe46",
+    "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
+  },
+  "tombstones": [
+    {
+      "aliases": [
+        "RG-F-828769ed1d87903b2f49"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "fe08e78049f24cf010172b393111281ac600262d",
+      "deleted_at_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
+      "deleted_id": "RG-F-828769ed1d87903b2f49",
+      "end_line": 11161,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 11149,
+      "module": "coreaction",
+      "name": "test_build_full_pipeline_actions_excludes_block_mutators_and_stubs",
+      "old_id": "RG-F-0036b1e6159131b90d5e",
+      "owner": "free",
+      "parent_blob": "f530972fe45a6510dd9ea432b236c7c1b74b5e48",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_build_full_pipeline_actions_excludes_block_mutators_and_stubs()"
+    },
+    {
+      "aliases": [
+        "RG-F-78de6b876155d5b7f967"
+      ],
+      "annotation": {
+        "reason": "Rugra helper factoring out comparison-complement flip logic inlined in ActionPreferComplement::apply (blockaction.cc:2140-2167)"
       },
-      "rust": {
-        "changed_rust_identity_rekey": 8559,
-        "stable_unchanged": 0,
-        "total": 8559
-      }
+      "annotation_kind": "glue",
+      "child_blob": "fc0530c894091bbf32b478f4add1b3c45dec095f",
+      "deleted_at_commit": "a9d68f779e7d6d47e4dd0b3da1569f9ce6c5fdc0",
+      "deleted_id": "RG-F-78de6b876155d5b7f967",
+      "end_line": 9806,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 9779,
+      "module": "coreaction",
+      "name": "flip_comparison",
+      "old_id": "RG-F-0144832f561c7cd8e30f",
+      "owner": "impl:ActionPreferComplement",
+      "parent_blob": "12ab9e25e5da4bfffafd3b3c37246c8dc1562e26",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn flip_comparison(op_ref: &crate::op::PcodeOpRef) -> bool"
     },
-    "reasons": {
-      "ghidra_ordinal_replaced_by_guard_disambiguator": 12,
-      "ghidra_signature_rekey": 15799,
-      "rust_identity_rekey": 8559
+    {
+      "aliases": [
+        "RG-F-e1027492465f482180db"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "fc0530c894091bbf32b478f4add1b3c45dec095f",
+      "deleted_at_commit": "a9d68f779e7d6d47e4dd0b3da1569f9ce6c5fdc0",
+      "deleted_id": "RG-F-e1027492465f482180db",
+      "end_line": 11871,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 11851,
+      "module": "coreaction",
+      "name": "test_prefercomplement_flip_comparison",
+      "old_id": "RG-F-07f6d8c1c408863b8543",
+      "owner": "free",
+      "parent_blob": "12ab9e25e5da4bfffafd3b3c37246c8dc1562e26",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_prefercomplement_flip_comparison()"
     },
-    "stable_unchanged": 0,
-    "total": 24370
-  }
+    {
+      "aliases": [
+        "RG-F-98cadcff50035dc0db81"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "c893bc80806527acffc2967733136306095cfc2f",
+      "deleted_at_commit": "df0da852bba0fe3f857199fbc5b416e004df8f1c",
+      "deleted_id": "RG-F-98cadcff50035dc0db81",
+      "end_line": 10436,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 10413,
+      "module": "printc",
+      "name": "test_compact_name_for",
+      "old_id": "RG-F-0b63894a79fa2310c9ce",
+      "owner": "free",
+      "parent_blob": "89b96ad0232bbebf591f2295497d929d3d4f91b5",
+      "path": "src/printc.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_compact_name_for()"
+    },
+    {
+      "aliases": [
+        "RG-F-01c37763d9a53ef73ace"
+      ],
+      "annotation": {
+        "reason": "Rugra DFS helper for calc_rpo (Ghidra uses findSpanningTree block.cc:1009)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "4997e223e24bbdd9067b63a22f73571b0a9c997d",
+      "deleted_at_commit": "9825db126fb72f6d7652536f4516a6ea38c77da1",
+      "deleted_id": "RG-F-01c37763d9a53ef73ace",
+      "end_line": 2454,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2429,
+      "module": "block",
+      "name": "dfs_visit",
+      "old_id": "RG-F-0f1afd435338b39ae1c4",
+      "owner": "impl:BlockGraph",
+      "parent_blob": "353f4829f3feb3032c9988afeeda12d9849f682c",
+      "path": "src/block.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn dfs_visit( &self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, visited: &mut std::collections::HashSet<i32>, post_order: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>, )"
+    },
+    {
+      "aliases": [
+        "RG-F-00414dcba113eb1cf787"
+      ],
+      "annotation": {
+        "file": "heritage.cc",
+        "label": "Heritage::guardCalls",
+        "line": 1444
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+      "deleted_at_commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+      "deleted_id": "RG-F-00414dcba113eb1cf787",
+      "end_line": 1947,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1936,
+      "module": "heritage",
+      "name": "guard_calls_range",
+      "old_id": "RG-F-110e7cb3a979adc595e0",
+      "owner": "impl:Heritage",
+      "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+      "path": "src/heritage.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn guard_calls_range( &mut self, fd: &mut Funcdata, fl: u32, addr: Address, size: i32, write: &mut Vec<Arc<RwLock<Varnode>>>, )"
+    },
+    {
+      "aliases": [
+        "RG-F-8a03aee5400b8f1aec82"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "fe08e78049f24cf010172b393111281ac600262d",
+      "deleted_at_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
+      "deleted_id": "RG-F-8a03aee5400b8f1aec82",
+      "end_line": 11146,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 11129,
+      "module": "coreaction",
+      "name": "test_build_full_pipeline_actions_has_new_actions",
+      "old_id": "RG-F-1291ed91ecdc95aa474f",
+      "owner": "free",
+      "parent_blob": "f530972fe45a6510dd9ea432b236c7c1b74b5e48",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_build_full_pipeline_actions_has_new_actions()"
+    },
+    {
+      "aliases": [
+        "RG-F-2d887962c3671a23a057"
+      ],
+      "annotation": {
+        "reason": "Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+      "deleted_at_commit": "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4",
+      "deleted_id": "RG-F-2d887962c3671a23a057",
+      "end_line": 415,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 413,
+      "module": "ruleaction",
+      "name": "get_name",
+      "old_id": "RG-F-1e978e7c99761b05d41c",
+      "owner": "impl:RuleSextEliminate as Rule",
+      "parent_blob": "281fff63ba7c57f4e6d13fe8887fefa0f665c170",
+      "path": "src/ruleaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn get_name(&self) -> &str"
+    },
+    {
+      "aliases": [
+        "RG-F-b89ca9c78de4d43b0641"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "fe08e78049f24cf010172b393111281ac600262d",
+      "deleted_at_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
+      "deleted_id": "RG-F-b89ca9c78de4d43b0641",
+      "end_line": 11124,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 11117,
+      "module": "coreaction",
+      "name": "test_build_full_pipeline_actions_unique_names",
+      "old_id": "RG-F-2772e14a50d16aa73c41",
+      "owner": "free",
+      "parent_blob": "f530972fe45a6510dd9ea432b236c7c1b74b5e48",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_build_full_pipeline_actions_unique_names()"
+    },
+    {
+      "aliases": [
+        "RG-F-60ba7907d4b5be14485c"
+      ],
+      "annotation": {
+        "reason": "Find the first alive op whose address matches. Mirrors the"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a6be995f7a8a850f5d56a2fa46fbc5f875098355",
+      "deleted_at_commit": "e034f80ba06d9acff0952ee50be4be39c3f8580a",
+      "deleted_id": "RG-F-60ba7907d4b5be14485c",
+      "end_line": 1702,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1695,
+      "module": "flow",
+      "name": "target_op_by_addr",
+      "old_id": "RG-F-3724985bbd4374850d46",
+      "owner": "impl:FlowInfo<'a>",
+      "parent_blob": "03f68055f8805e985ce21d131c5fe06c6ff7ce17",
+      "path": "src/flow.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn target_op_by_addr(&self, addr: Address) -> Option<crate::op::PcodeOpRef>"
+    },
+    {
+      "aliases": [
+        "RG-F-232322f83bab558eabb2"
+      ],
+      "annotation": {
+        "reason": "ANN-B; INJECT-0001 maps a Rust AddressSpace enum into the temporary numeric injection tuple where Ghidra carries an AddrSpace pointer."
+      },
+      "annotation_kind": "glue",
+      "child_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+      "deleted_at_commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+      "deleted_id": "RG-F-232322f83bab558eabb2",
+      "end_line": 2913,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2899,
+      "module": "flow",
+      "name": "address_space_as_u32",
+      "old_id": "RG-F-3864f2c13cdb9e6fdb97",
+      "owner": "free",
+      "parent_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+      "path": "src/flow.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn address_space_as_u32(space: crate::space::AddressSpace) -> u32"
+    },
+    {
+      "aliases": [
+        "RG-F-d9e5720a4033361bb683"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-d9e5720a4033361bb683",
+      "end_line": 366,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 361,
+      "module": "pcodeinject",
+      "name": "test_register_call_mechanism",
+      "old_id": "RG-F-3cca09c07784d1994f78",
+      "owner": "free",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_register_call_mechanism()"
+    },
+    {
+      "aliases": [
+        "RG-F-981f70767c5c8c5729cb"
+      ],
+      "annotation": {
+        "file": "database.cc",
+        "label": "ScopeInternal::assignDefaultNames (nametree order)",
+        "line": 2850
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "c893bc80806527acffc2967733136306095cfc2f",
+      "deleted_at_commit": "df0da852bba0fe3f857199fbc5b416e004df8f1c",
+      "deleted_id": "RG-F-981f70767c5c8c5729cb",
+      "end_line": 2907,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2873,
+      "module": "printc",
+      "name": "preallocate_register_compact_names",
+      "old_id": "RG-F-3d3c79e1fd7d70a102d4",
+      "owner": "impl:PrintC",
+      "parent_blob": "89b96ad0232bbebf591f2295497d929d3d4f91b5",
+      "path": "src/printc.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn preallocate_register_compact_names(&mut self, fd: &Funcdata)"
+    },
+    {
+      "aliases": [
+        "RG-F-ab960b0c66138f0a51af"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "fc0530c894091bbf32b478f4add1b3c45dec095f",
+      "deleted_at_commit": "a9d68f779e7d6d47e4dd0b3da1569f9ce6c5fdc0",
+      "deleted_id": "RG-F-ab960b0c66138f0a51af",
+      "end_line": 11846,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 11792,
+      "module": "coreaction",
+      "name": "test_prefercomplement_flips_boolean_flip",
+      "old_id": "RG-F-44f5ea5f0b19361842c0",
+      "owner": "free",
+      "parent_blob": "12ab9e25e5da4bfffafd3b3c37246c8dc1562e26",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_prefercomplement_flips_boolean_flip()"
+    },
+    {
+      "aliases": [
+        "RG-F-535aac7994cb2a0df898"
+      ],
+      "annotation": {
+        "reason": "ANN-F; explicit-space adapter for guardCalls because Rugra Address lacks space identity; removal is tracked by ADDRESS-0001/HERITAGE-0001."
+      },
+      "annotation_kind": "glue",
+      "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+      "deleted_at_commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+      "deleted_id": "RG-F-535aac7994cb2a0df898",
+      "end_line": 2087,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1953,
+      "module": "heritage",
+      "name": "guard_calls_range_with_space",
+      "old_id": "RG-F-5b9bee2c44266559a724",
+      "owner": "impl:Heritage",
+      "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+      "path": "src/heritage.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn guard_calls_range_with_space( &mut self, fd: &mut Funcdata, fl: u32, addr: Address, size: i32, write: &mut Vec<Arc<RwLock<Varnode>>>, space: crate::space::AddressSpace, )"
+    },
+    {
+      "aliases": [
+        "RG-F-52ccd48128e40d6f37b0"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-52ccd48128e40d6f37b0",
+      "end_line": 312,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 305,
+      "module": "pcodeinject",
+      "name": "test_pcode_inject_library",
+      "old_id": "RG-F-66eeea2a761b604a28ba",
+      "owner": "free",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_pcode_inject_library()"
+    },
+    {
+      "aliases": [
+        "RG-F-545a2fa83e26f9e8716d"
+      ],
+      "annotation": {
+        "reason": "Cooper-Harvey-Kennedy intersect helper for buildDomTree (algorithmic glue; not a direct Ghidra method)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "4997e223e24bbdd9067b63a22f73571b0a9c997d",
+      "deleted_at_commit": "9825db126fb72f6d7652536f4516a6ea38c77da1",
+      "deleted_id": "RG-F-545a2fa83e26f9e8716d",
+      "end_line": 2237,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2217,
+      "module": "block",
+      "name": "intersect",
+      "old_id": "RG-F-6fccfccb5487c98f7997",
+      "owner": "impl:BlockGraph",
+      "parent_blob": "353f4829f3feb3032c9988afeeda12d9849f682c",
+      "path": "src/block.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn intersect(&self, mut b1: i32, mut b2: i32, idom: &[i32], rpo: &[i32]) -> i32"
+    },
+    {
+      "aliases": [
+        "RG-F-396b06cb2c37b5ef8bc0"
+      ],
+      "annotation": {
+        "reason": "Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+      "deleted_at_commit": "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4",
+      "deleted_id": "RG-F-396b06cb2c37b5ef8bc0",
+      "end_line": 420,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 418,
+      "module": "ruleaction",
+      "name": "get_opcodes",
+      "old_id": "RG-F-79f85567e39a8f3da854",
+      "owner": "impl:RuleSextEliminate as Rule",
+      "parent_blob": "281fff63ba7c57f4e6d13fe8887fefa0f665c170",
+      "path": "src/ruleaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn get_opcodes(&self) -> Vec<OpCode>"
+    },
+    {
+      "aliases": [
+        "RG-F-811518e6a28c130e573b"
+      ],
+      "annotation": {
+        "reason": "a precise mapping from CALLOTHER index to user-op name"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+      "deleted_at_commit": "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9",
+      "deleted_id": "RG-F-811518e6a28c130e573b",
+      "end_line": 2944,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2927,
+      "module": "flow",
+      "name": "resolve_callother_payload_name",
+      "old_id": "RG-F-82eb3b5be5e838caa58e",
+      "owner": "free",
+      "parent_blob": "7e66add578843d846376ceb57562ceebce0c2e88",
+      "path": "src/flow.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn resolve_callother_payload_name( inject_lib: &crate::pcodeinject::PcodeInjectLibrary, _op: &crate::op::PcodeOpRef, ) -> Option<String>"
+    },
+    {
+      "aliases": [
+        "RG-F-27f74050a459dcc39ae2"
+      ],
+      "annotation": {
+        "reason": "rename_scope_symbol (no Ghidra counterpart found)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "25dd263009266ceaeb3ca3ead818b38303c243cd",
+      "deleted_at_commit": "192e89407f5af7a419d1fe7bb30d119af8a231e0",
+      "deleted_id": "RG-F-27f74050a459dcc39ae2",
+      "end_line": 2876,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2858,
+      "module": "printc",
+      "name": "rename_scope_symbol",
+      "old_id": "RG-F-9457bf91be8c7fd0b8c4",
+      "owner": "impl:PrintC",
+      "parent_blob": "037f1ef10e1eec0f46ced909c2882ffe1254646d",
+      "path": "src/printc.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn rename_scope_symbol(&mut self, sym: &crate::varmap::LocalSymbol) -> String"
+    },
+    {
+      "aliases": [
+        "RG-F-df77030350cd56f16c06"
+      ],
+      "annotation": {
+        "file": "pcodeinject.hh",
+        "label": "PcodeInjectLibrary::registerPayload",
+        "line": 187
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-df77030350cd56f16c06",
+      "end_line": 227,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 221,
+      "module": "pcodeinject",
+      "name": "register_payload",
+      "old_id": "RG-F-9b3ba477324abf563e92",
+      "owner": "impl:PcodeInjectLibrary",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn register_payload(&mut self, payload: InjectPayload) -> i32"
+    },
+    {
+      "aliases": [
+        "RG-F-5d67242db4fbc2603002"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-5d67242db4fbc2603002",
+      "end_line": 350,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 345,
+      "module": "pcodeinject",
+      "name": "test_register_call_fixup",
+      "old_id": "RG-F-a22612c4dceb25126c6b",
+      "owner": "free",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_register_call_fixup()"
+    },
+    {
+      "aliases": [
+        "RG-F-965ea4deca6789b2653a"
+      ],
+      "annotation": {
+        "reason": "legacy Vec snapshot for printc.rs consumers"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "8c9e357cc171f5b96d5a610383a80b7fded5a138",
+      "deleted_at_commit": "c5e685c55e775192dae7b26f0631f6ac8ff85df6",
+      "deleted_id": "RG-F-965ea4deca6789b2653a",
+      "end_line": 795,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 787,
+      "module": "comment",
+      "name": "setup_block_list",
+      "old_id": "RG-F-a515040ca21e3a40b3bd",
+      "owner": "impl:CommentSorter",
+      "parent_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+      "path": "src/comment.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn setup_block_list(&self, block_index: u32) -> Vec<&Comment>"
+    },
+    {
+      "aliases": [
+        "RG-F-295a58b7a7a62200fc52"
+      ],
+      "annotation": {
+        "reason": "Iterator-shaped adapter for Rugra's local trait stub; Ghidra"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "9de2583d1bbb5edb4049279b91e83ca2a93e3b37",
+      "deleted_at_commit": "34fd254755441def6e17197cf2431f7fcf920c24",
+      "deleted_id": "RG-F-295a58b7a7a62200fc52",
+      "end_line": 1923,
+      "is_declaration": true,
+      "is_test": false,
+      "line": 1923,
+      "module": "translate",
+      "name": "next_document",
+      "old_id": "RG-F-a72bb5e89b3cb6c78685",
+      "owner": "trait:DocumentStorage",
+      "parent_blob": "775c647b79b4d2f933d887c28a2c8128241d292e",
+      "path": "src/translate.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn next_document(&mut self) -> Option<String>"
+    },
+    {
+      "aliases": [
+        "RG-F-1aeb4fa12758eb2b41f6"
+      ],
+      "annotation": {
+        "reason": "Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+      "deleted_at_commit": "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4",
+      "deleted_id": "RG-F-1aeb4fa12758eb2b41f6",
+      "end_line": 383,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 381,
+      "module": "ruleaction",
+      "name": "new",
+      "old_id": "RG-F-ab891945fe45a58b7be9",
+      "owner": "impl:RuleSextEliminate",
+      "parent_blob": "281fff63ba7c57f4e6d13fe8887fefa0f665c170",
+      "path": "src/ruleaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn new() -> Self"
+    },
+    {
+      "aliases": [
+        "RG-F-5fab4d997916a47717d6"
+      ],
+      "annotation": {
+        "file": "fspec.hh",
+        "label": "FuncProto::getComparableFlags",
+        "line": 1618
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+      "deleted_at_commit": "5fb36f0225c6efe606b5e8b5213163d956e9f2f1",
+      "deleted_id": "RG-F-5fab4d997916a47717d6",
+      "end_line": 3397,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 3391,
+      "module": "type_system::datatype",
+      "name": "comparable_flags",
+      "old_id": "RG-F-b0e2c5a6cf989f5042de",
+      "owner": "free",
+      "parent_blob": "f766badaff4a4b2761edaa4e4ff0f138ba86679b",
+      "path": "src/type_system/datatype.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn comparable_flags(proto: &FuncProto) -> u32"
+    },
+    {
+      "aliases": [
+        "RG-F-c1c6b7597b9723bcd50a"
+      ],
+      "annotation": {
+        "file": "condexe.cc",
+        "label": "ConditionalExecution::isTrueOutTo",
+        "line": 432
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "4ac080386a5f185ec65ff65f30829276775e60e0",
+      "deleted_at_commit": "bed6ef5605767811fe641201d86da80fe9f96b9e",
+      "deleted_id": "RG-F-c1c6b7597b9723bcd50a",
+      "end_line": 251,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 234,
+      "module": "condexe",
+      "name": "is_true_out_to",
+      "old_id": "RG-F-b56384676d5805afa616",
+      "owner": "impl:ConditionalExecution<'a>",
+      "parent_blob": "dbe97f6ebb6ba821bf4021af7ae09736151bd535",
+      "path": "src/condexe.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn is_true_out_to( &self, src: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, dst: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, ) -> bool"
+    },
+    {
+      "aliases": [
+        "RG-F-64f3fe19484db472dc7e"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "76314cd20aef35c9f1ea8f43f5e7da216ae16979",
+      "deleted_at_commit": "a770ed10df7806bf03e34d798b3f3712a08ec2bd",
+      "deleted_id": "RG-F-64f3fe19484db472dc7e",
+      "end_line": 17064,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 17054,
+      "module": "ruleaction",
+      "name": "test_shift_by_nonzero_unchanged",
+      "old_id": "RG-F-b83de19c3204b2d095f3",
+      "owner": "free",
+      "parent_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+      "path": "src/ruleaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_shift_by_nonzero_unchanged()"
+    },
+    {
+      "aliases": [
+        "RG-F-e0b261758e01fee35673"
+      ],
+      "annotation": {
+        "file": "merge.hh",
+        "label": "Merge::registerName",
+        "line": 83
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "482d3d3bf3f13ce87898f7fb61267f1d2337f4fd",
+      "deleted_at_commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+      "deleted_id": "RG-F-e0b261758e01fee35673",
+      "end_line": 4051,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 4020,
+      "module": "merge",
+      "name": "register_name",
+      "old_id": "RG-F-b864c8440d57e0be0aed",
+      "owner": "free",
+      "parent_blob": "f44ee9ac2e49597f99ab29027310bfb690a79ff6",
+      "path": "src/merge.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn register_name(offset: u64, size: usize) -> Option<String>"
+    },
+    {
+      "aliases": [
+        "RG-F-62677ad8d8248a7ab7c3"
+      ],
+      "annotation": {
+        "file": "heritage.cc",
+        "label": "Heritage::guardReturns",
+        "line": 1653
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "f49d3f8f6066818262b4bc0c1f6f74f82db55325",
+      "deleted_at_commit": "126b56fdefde1e0820ef4126968473d679e1ddd8",
+      "deleted_id": "RG-F-62677ad8d8248a7ab7c3",
+      "end_line": 1265,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1223,
+      "module": "heritage",
+      "name": "guard_returns",
+      "old_id": "RG-F-be571c7397c18d59d8e4",
+      "owner": "impl:Heritage",
+      "parent_blob": "9e3afa32d92d803461ef5e950eef4eaa622250b8",
+      "path": "src/heritage.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn guard_returns(&mut self, fd: &mut Funcdata)"
+    },
+    {
+      "aliases": [
+        "RG-F-a73a582f615d89a9c4f3"
+      ],
+      "annotation": {
+        "file": "varmap.cc",
+        "label": "ScopeLocal::queryByAddr",
+        "line": 341
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "f68e8bc182d163566b308974ee025f8a4960c9a9",
+      "deleted_at_commit": "83a900efd41c9222c74b5e3be9d790fcbe86c645",
+      "deleted_id": "RG-F-a73a582f615d89a9c4f3",
+      "end_line": 1727,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1718,
+      "module": "varmap",
+      "name": "query_by_addr",
+      "old_id": "RG-F-c2362bc96e45d55b5ca3",
+      "owner": "impl:ScopeLocal",
+      "parent_blob": "6c1d16a2918ec154ddc6c9289238d052eddc8269",
+      "path": "src/varmap.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn query_by_addr(&self, offset: u64, size: i32) -> Option<(&LocalSymbol, i32)>"
+    },
+    {
+      "aliases": [
+        "RG-F-a679e28185a5cd97f9db"
+      ],
+      "annotation": {
+        "reason": "legacy header predicate for printc.rs's"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "8c9e357cc171f5b96d5a610383a80b7fded5a138",
+      "deleted_at_commit": "c5e685c55e775192dae7b26f0631f6ac8ff85df6",
+      "deleted_id": "RG-F-a679e28185a5cd97f9db",
+      "end_line": 820,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 818,
+      "module": "comment",
+      "name": "has_header_comments",
+      "old_id": "RG-F-c594237c5aae750c1651",
+      "owner": "impl:CommentSorter",
+      "parent_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+      "path": "src/comment.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn has_header_comments(&self) -> bool"
+    },
+    {
+      "aliases": [
+        "RG-F-afd0a253ec7939ceb0d7"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "fe08e78049f24cf010172b393111281ac600262d",
+      "deleted_at_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
+      "deleted_id": "RG-F-afd0a253ec7939ceb0d7",
+      "end_line": 11114,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 11082,
+      "module": "coreaction",
+      "name": "test_build_full_pipeline_actions_nonempty",
+      "old_id": "RG-F-c6ceca66030b18e666d1",
+      "owner": "free",
+      "parent_blob": "f530972fe45a6510dd9ea432b236c7c1b74b5e48",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_build_full_pipeline_actions_nonempty()"
+    },
+    {
+      "aliases": [
+        "RG-F-7edaa9a420184bde51c6"
+      ],
+      "annotation": {},
+      "annotation_kind": "missing",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-7edaa9a420184bde51c6",
+      "end_line": 358,
+      "is_declaration": false,
+      "is_test": true,
+      "line": 353,
+      "module": "pcodeinject",
+      "name": "test_register_call_other_fixup",
+      "old_id": "RG-F-cb791532f7bd0a7f57c0",
+      "owner": "free",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn test_register_call_other_fixup()"
+    },
+    {
+      "aliases": [
+        "RG-F-df80e19385aea19c30b5"
+      ],
+      "annotation": {
+        "file": "blockaction.hh",
+        "label": "LoopBody::findSpanningTree",
+        "line": 46
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "bdd3a48e5670b287ad5c6bd11d201f938183bf27",
+      "deleted_at_commit": "69ea4e048cb2185f0686b136b044217fc44fc88b",
+      "deleted_id": "RG-F-df80e19385aea19c30b5",
+      "end_line": 2537,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2379,
+      "module": "blockaction",
+      "name": "find_spanning_tree",
+      "old_id": "RG-F-d051f78879b4ecfbdffb",
+      "owner": "impl:CollapseStructure<'a>",
+      "parent_blob": "44bcf3462c5627c4584c46453ac844c5a87ce26f",
+      "path": "src/blockaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn find_spanning_tree(&mut self) -> Vec<i32>"
+    },
+    {
+      "aliases": [
+        "RG-F-afc5544707c4f91fee45"
+      ],
+      "annotation": {
+        "reason": "doc_variable_decls_from_funcdata (no Ghidra counterpart found)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "c893bc80806527acffc2967733136306095cfc2f",
+      "deleted_at_commit": "df0da852bba0fe3f857199fbc5b416e004df8f1c",
+      "deleted_id": "RG-F-afc5544707c4f91fee45",
+      "end_line": 3086,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2911,
+      "module": "printc",
+      "name": "doc_variable_decls_from_funcdata",
+      "old_id": "RG-F-dcb5c56857185e0ff75c",
+      "owner": "impl:PrintC",
+      "parent_blob": "89b96ad0232bbebf591f2295497d929d3d4f91b5",
+      "path": "src/printc.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata)"
+    },
+    {
+      "aliases": [
+        "RG-F-63f228446a519e0c8d80"
+      ],
+      "annotation": {
+        "reason": "legacy Vec snapshot for printc.rs's emit_comment_group"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "8c9e357cc171f5b96d5a610383a80b7fded5a138",
+      "deleted_at_commit": "c5e685c55e775192dae7b26f0631f6ac8ff85df6",
+      "deleted_id": "RG-F-63f228446a519e0c8d80",
+      "end_line": 813,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 800,
+      "module": "comment",
+      "name": "setup_op_list",
+      "old_id": "RG-F-e2e407c3cfa4cb808159",
+      "owner": "impl:CommentSorter",
+      "parent_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+      "path": "src/comment.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn setup_op_list(&self, block_index: u32, op_order: u32) -> Vec<&Comment>"
+    },
+    {
+      "aliases": [
+        "RG-F-07a5cf7058ae8cf06026"
+      ],
+      "annotation": {
+        "reason": "legacy header snapshot for printc.rs's"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "8c9e357cc171f5b96d5a610383a80b7fded5a138",
+      "deleted_at_commit": "c5e685c55e775192dae7b26f0631f6ac8ff85df6",
+      "deleted_id": "RG-F-07a5cf7058ae8cf06026",
+      "end_line": 831,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 826,
+      "module": "comment",
+      "name": "header_comments",
+      "old_id": "RG-F-e56c7a580c5fbf1735b5",
+      "owner": "impl:CommentSorter",
+      "parent_blob": "e64cdd650b506d3b7eb710cc6a5be84217fc29bc",
+      "path": "src/comment.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn header_comments(&self) -> impl Iterator<Item = &Comment>"
+    },
+    {
+      "aliases": [
+        "RG-F-0bb352245a43b1009d50"
+      ],
+      "annotation": {
+        "file": "merge.hh",
+        "label": "Merge::assignNames",
+        "line": 83
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "482d3d3bf3f13ce87898f7fb61267f1d2337f4fd",
+      "deleted_at_commit": "0e4c6f45f32cf8ddd48849d1895fb29f68db620b",
+      "deleted_id": "RG-F-0bb352245a43b1009d50",
+      "end_line": 1624,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1483,
+      "module": "merge",
+      "name": "assign_names",
+      "old_id": "RG-F-e8440bf2ca995df09185",
+      "owner": "impl:Merge",
+      "parent_blob": "f44ee9ac2e49597f99ab29027310bfb690a79ff6",
+      "path": "src/merge.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn assign_names(&mut self, fd: &mut Funcdata)"
+    },
+    {
+      "aliases": [
+        "RG-F-72bab767946d70c663c6"
+      ],
+      "annotation": {
+        "file": "pcodeinject.hh",
+        "label": "PcodeInjectLibrary::numPayloads",
+        "line": 187
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-72bab767946d70c663c6",
+      "end_line": 243,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 243,
+      "module": "pcodeinject",
+      "name": "num_payloads",
+      "old_id": "RG-F-ea847040afb0a57a335f",
+      "owner": "impl:PcodeInjectLibrary",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn num_payloads(&self) -> usize"
+    },
+    {
+      "aliases": [
+        "RG-F-291fd9ff2aeafadcec76"
+      ],
+      "annotation": {
+        "reason": "compact_name_for (no Ghidra counterpart found)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "c893bc80806527acffc2967733136306095cfc2f",
+      "deleted_at_commit": "df0da852bba0fe3f857199fbc5b416e004df8f1c",
+      "deleted_id": "RG-F-291fd9ff2aeafadcec76",
+      "end_line": 2862,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2815,
+      "module": "printc",
+      "name": "compact_name_for",
+      "old_id": "RG-F-ecc37431989bf168a937",
+      "owner": "impl:PrintC",
+      "parent_blob": "89b96ad0232bbebf591f2295497d929d3d4f91b5",
+      "path": "src/printc.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn compact_name_for(&mut self, raw: &str) -> Option<String>"
+    },
+    {
+      "aliases": [
+        "RG-F-58223aa5b23fb6ffa6b1"
+      ],
+      "annotation": {
+        "reason": "Borrow-safe adapter for the heritage.cc:2631-2642 MULTIEQUAL insertion slice; separates Funcdata banks before delegating below."
+      },
+      "annotation_kind": "glue",
+      "child_blob": "d5e010d2ac4390ea41d74bfced402b658ae4f706",
+      "deleted_at_commit": "c30913076c0bc0033c0a688462030444c95fc264",
+      "deleted_id": "RG-F-58223aa5b23fb6ffa6b1",
+      "end_line": 4201,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 4195,
+      "module": "heritage",
+      "name": "insert_multiequal",
+      "old_id": "RG-F-f2c70dc54daf5faaccad",
+      "owner": "impl:Heritage",
+      "parent_blob": "8db881a4e5e71a75923046ba46495a92fd03ee92",
+      "path": "src/heritage.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn insert_multiequal(&mut self, fd: &mut Funcdata, space: AddressSpace, addr: Address, block_idx: i32)"
+    },
+    {
+      "aliases": [
+        "RG-F-7bba63e94d32b61c1eec"
+      ],
+      "annotation": {
+        "reason": "Rugra pipeline builder; mirrors ActionDatabase::buildDefaultGroups (coreaction.cc:5419) but returns a Vec<Box<dyn Action>> for Rust ownership"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "fe08e78049f24cf010172b393111281ac600262d",
+      "deleted_at_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
+      "deleted_id": "RG-F-7bba63e94d32b61c1eec",
+      "end_line": 10378,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 10307,
+      "module": "coreaction",
+      "name": "build_full_pipeline_actions",
+      "old_id": "RG-F-f5f60231b4dcbaf7a838",
+      "owner": "free",
+      "parent_blob": "f530972fe45a6510dd9ea432b236c7c1b74b5e48",
+      "path": "src/coreaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn build_full_pipeline_actions() -> Vec<Box<dyn Action>>"
+    },
+    {
+      "aliases": [
+        "RG-F-ffc8a907ea67daf0c0c5"
+      ],
+      "annotation": {
+        "reason": "walk COPY chain collecting source Arcs. Ghidra's copyShadow"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a5e0bf6645e5ed3aac94a3422c54d51667717bf8",
+      "deleted_at_commit": "e87ebfc54444d5f043a321ea1a46e3c8004eff23",
+      "deleted_id": "RG-F-ffc8a907ea67daf0c0c5",
+      "end_line": 2911,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 2853,
+      "module": "varnode",
+      "name": "collect_copy_sources",
+      "old_id": "RG-F-f83ff911cc781b9fd152",
+      "owner": "free",
+      "parent_blob": "83ea51a717bca5fc2902168b276a1e2430d77fa0",
+      "path": "src/varnode.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn collect_copy_sources(vn: &Varnode) -> Vec<std::sync::Arc<std::sync::RwLock<Varnode>>>"
+    },
+    {
+      "aliases": [
+        "RG-F-3f721750f2a9d6acb761"
+      ],
+      "annotation": {
+        "reason": "Internal alias used by collect_edges for Ghidra's public"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a6be995f7a8a850f5d56a2fa46fbc5f875098355",
+      "deleted_at_commit": "e034f80ba06d9acff0952ee50be4be39c3f8580a",
+      "deleted_id": "RG-F-3f721750f2a9d6acb761",
+      "end_line": 1691,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 1689,
+      "module": "flow",
+      "name": "target_op_for_branch",
+      "old_id": "RG-F-f89ffb08d7df8a69b93f",
+      "owner": "impl:FlowInfo<'a>",
+      "parent_blob": "03f68055f8805e985ce21d131c5fe06c6ff7ce17",
+      "path": "src/flow.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn target_op_for_branch(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef>"
+    },
+    {
+      "aliases": [
+        "RG-F-4b1c37948f6503fb22e4"
+      ],
+      "annotation": {
+        "reason": "Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)"
+      },
+      "annotation_kind": "glue",
+      "child_blob": "a7aa5a746235893fc5b50707706c96c8b65b204e",
+      "deleted_at_commit": "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4",
+      "deleted_id": "RG-F-4b1c37948f6503fb22e4",
+      "end_line": 410,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 388,
+      "module": "ruleaction",
+      "name": "apply_op",
+      "old_id": "RG-F-fae83367c2e7db8035b6",
+      "owner": "impl:RuleSextEliminate as Rule",
+      "parent_blob": "281fff63ba7c57f4e6d13fe8887fefa0f665c170",
+      "path": "src/ruleaction.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32>"
+    },
+    {
+      "aliases": [
+        "RG-F-79cd9be355b367b91bea"
+      ],
+      "annotation": {
+        "file": "pcodeinject.hh",
+        "label": "PcodeInjectLibrary::getId",
+        "line": 187
+      },
+      "annotation_kind": "ghidra",
+      "child_blob": "12a635478146246da37b47cbe946b31441e4ea4d",
+      "deleted_at_commit": "7721b0d722cc8b507696f62922e978c0314fae3f",
+      "deleted_id": "RG-F-79cd9be355b367b91bea",
+      "end_line": 239,
+      "is_declaration": false,
+      "is_test": false,
+      "line": 237,
+      "module": "pcodeinject",
+      "name": "get_id",
+      "old_id": "RG-F-fb4e57eb1fc08da9b754",
+      "owner": "impl:PcodeInjectLibrary",
+      "parent_blob": "cec260cab5307ca7975259f308c6d8427877f488",
+      "path": "src/pcodeinject.rs",
+      "reason": "deleted_without_reviewed_successor",
+      "signature": "fn get_id(&self, name: &str) -> Option<i32>"
+    }
+  ]
 }

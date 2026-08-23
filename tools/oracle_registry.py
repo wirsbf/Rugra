@@ -8,8 +8,8 @@ Subcommands
 -----------
 doctor    Reverse-discover every tracked metadata/runner/comparand and run all
           fail-closed checks (orphans, duplicate ids, missing provenance,
-          status conflicts, stale function ids). Exit 0 clean, 1 findings,
-          2 harness-input error.
+          status conflicts, stale/tombstoned function ids). Exit 0 clean,
+          1 findings, 2 harness-input error.
 schema    Validate tests/oracle/fixture_registry.json against
           tests/oracle/schema/fixture-v1.schema.json (target contract).
 lint      doctor + schema in one fail-closed pass (strict is the only mode).
@@ -19,7 +19,8 @@ migration-status
           1 with blockers, 2 on harness-input error.
 plan      Emit the deterministic old->new function-id replacement plan for the
           registry fixtures, the runner-hardcoded GH12-F literals, and the
-          metadata stable-function-id fields. Never mutates files.
+          metadata stable-function-id fields. Tombstones are diagnostic-only
+          and never enter replacements. Never mutates files.
           --check-determinism renders the plan twice and verifies the outputs
           are byte-identical.
 self-test Build a synthetic fixture matrix in a throwaway directory and verify
@@ -347,7 +348,12 @@ def load_registry(root: str):
 
 
 def load_function_tables(root: str):
-    """Return (current_ledger_ids, old_to_new, migration_meta)."""
+    """Return (current IDs, live aliases, tombstone aliases, migration meta).
+
+    Reconciled schema-2 migrations preserve the immutable legacy ``old_id``
+    and every intermediate scheme-2 alias.  Tombstones deliberately do not
+    enter the replacement map: references to them get their own diagnostic.
+    """
     ledger_path = os.path.join(root, LEDGER_RELPATH)
     migration_path = os.path.join(root, MIGRATION_RELPATH)
     if not os.path.isfile(ledger_path):
@@ -367,6 +373,36 @@ def load_function_tables(root: str):
     for field in ("entries", "disambiguators"):
         if not isinstance(migration.get(field), list):
             raise HarnessError(f"function migration {field} must be an array")
+    schema = migration.get("schema")
+    if schema not in (1, 2):
+        raise HarnessError(f"function migration schema must be 1 or 2, got {schema!r}")
+    tombstone_rows = migration.get("tombstones", [])
+    if not isinstance(tombstone_rows, list):
+        raise HarnessError("function migration tombstones must be an array")
+    if schema == 2:
+        for field in ("source", "target", "history", "stats"):
+            if not isinstance(migration.get(field), dict):
+                raise HarnessError(f"reconciled function migration {field} must be an object")
+        if migration.get("oracle_commit") != "e40ed13014025f82488b1f8f7bca566894ac376b":
+            raise HarnessError("reconciled function migration oracle commit pin mismatch")
+        pin_shapes = {
+            "source": ("commit", "commit_tree", "src_tree", "ledger_blob", "migration_blob"),
+            "target": ("commit", "commit_tree", "src_tree", "ledger_blob"),
+        }
+        for block, fields in pin_shapes.items():
+            for field in fields:
+                if not COMMIT_RE.fullmatch(str(migration[block].get(field) or "")):
+                    raise HarnessError(f"reconciled migration {block}.{field} is not a 40-hex pin")
+            for field in ("ledger_sha256",) + (("migration_sha256",) if block == "source" else ()):
+                if not SHA256_RE.fullmatch(str(migration[block].get(field) or "")):
+                    raise HarnessError(f"reconciled migration {block}.{field} is not a sha256 pin")
+        history = migration["history"]
+        if (history.get("mode") != "first_parent"
+                or not isinstance(history.get("commit_count"), int)
+                or history.get("commit_count", 0) <= 0
+                or not COMMIT_RE.fullmatch(str(history.get("first_commit") or ""))
+                or not COMMIT_RE.fullmatch(str(history.get("last_commit") or ""))):
+            raise HarnessError("reconciled migration history pins are malformed")
     ids = set()
     for fn in ledger["ghidra_functions"] + ledger["rugra_functions"]:
         if not isinstance(fn, dict):
@@ -375,23 +411,137 @@ def load_function_tables(root: str):
         if isinstance(fid, str):
             ids.add(fid)
     old_to_new = {}
+    owner_by_token = {}
+    final_owner = {}
+
+    def claim_live(token, new_id, origin, role):
+        if not isinstance(token, str) or not isinstance(new_id, str):
+            raise HarnessError(f"function migration {role} tokens must be strings")
+        previous_owner = owner_by_token.get(token)
+        if previous_owner is not None and previous_owner != origin:
+            raise HarnessError(
+                f"function migration token {token} belongs to multiple origins: "
+                f"{previous_owner}, {origin}"
+            )
+        owner_by_token[token] = origin
+        if token in old_to_new and old_to_new[token] != new_id:
+            raise HarnessError(f"ambiguous migration mapping for {token}")
+        old_to_new[token] = new_id
+
     for entry in migration["entries"]:
         if not isinstance(entry, dict):
             raise HarnessError("function migration entries must be JSON objects")
         old_id, new_id = entry.get("old_id"), entry.get("new_id")
-        if isinstance(old_id, str) and isinstance(new_id, str):
-            if old_id in old_to_new and old_to_new[old_id] != new_id:
-                raise HarnessError(f"ambiguous migration mapping for {old_id}")
-            old_to_new[old_id] = new_id
+        if not isinstance(old_id, str) or not isinstance(new_id, str):
+            raise HarnessError("function migration entry old_id/new_id must be strings")
+        previous_final_owner = final_owner.get(new_id)
+        if previous_final_owner is not None and previous_final_owner != old_id:
+            raise HarnessError(
+                f"multiple migration origins converge on {new_id}: {previous_final_owner}, {old_id}"
+            )
+        final_owner[new_id] = old_id
+        previous_token_owner = owner_by_token.get(new_id)
+        if previous_token_owner is not None and previous_token_owner != old_id:
+            raise HarnessError(
+                f"function migration final token {new_id} also belongs to origin "
+                f"{previous_token_owner}"
+            )
+        owner_by_token[new_id] = old_id
+        claim_live(old_id, new_id, old_id, "entry")
+        aliases = entry.get("aliases", [])
+        if not isinstance(aliases, list):
+            raise HarnessError(f"function migration aliases for {old_id} must be an array")
+        if len(aliases) != len(set(aliases)):
+            raise HarnessError(f"function migration aliases for {old_id} contain duplicates")
+        for alias in aliases:
+            if alias == new_id:
+                raise HarnessError(f"function migration alias {alias} equals its final target")
+            if schema == 2 and alias in ids:
+                raise HarnessError(
+                    f"function migration alias {alias} is an unrelated current-ledger id"
+                )
+            claim_live(alias, new_id, old_id, "alias")
+        if schema == 2 and new_id not in ids:
+            raise HarnessError(
+                f"reconciled migration live target {new_id} is absent from current ledger"
+            )
+        if schema == 2 and aliases:
+            lineage = entry.get("lineage")
+            if not isinstance(lineage, list) or len(lineage) != len(aliases):
+                raise HarnessError(f"reconciled migration lineage/alias length mismatch for {old_id}")
+            expected_from = aliases[0]
+            for index, event in enumerate(lineage):
+                required = ("from_id", "to_id", "commit", "from_path", "to_path",
+                            "parent_blob", "child_blob", "evidence")
+                if not isinstance(event, dict) or any(field not in event for field in required):
+                    raise HarnessError(f"malformed lineage event {index} for {old_id}")
+                if event["from_id"] != expected_from or event["from_id"] != aliases[index]:
+                    raise HarnessError(f"non-contiguous lineage event {index} for {old_id}")
+                for field in ("commit", "parent_blob", "child_blob"):
+                    if not COMMIT_RE.fullmatch(str(event[field])):
+                        raise HarnessError(f"lineage event {index} for {old_id} has malformed {field}")
+                if not isinstance(event["evidence"], list) or not event["evidence"]:
+                    raise HarnessError(f"lineage event {index} for {old_id} lacks evidence")
+                expected_from = event["to_id"]
+            if expected_from != new_id:
+                raise HarnessError(f"lineage for {old_id} does not terminate at {new_id}")
+        elif schema == 2 and entry.get("lineage"):
+            raise HarnessError(f"reconciled migration {old_id} has lineage without aliases")
     for entry in migration["disambiguators"]:
         if not isinstance(entry, dict):
             raise HarnessError("function migration disambiguators must be JSON objects")
         old_id, new_id = entry.get("old_id"), entry.get("new_id")
-        if isinstance(old_id, str) and isinstance(new_id, str):
-            if old_id in old_to_new and old_to_new[old_id] != new_id:
-                raise HarnessError(f"ambiguous migration mapping for {old_id}")
-            old_to_new[old_id] = new_id
-    return ids, old_to_new, migration
+        if not isinstance(old_id, str) or not isinstance(new_id, str):
+            raise HarnessError("function migration disambiguator old_id/new_id must be strings")
+        claim_live(old_id, new_id, old_id, "disambiguator")
+
+    tombstones = {}
+    for row in tombstone_rows:
+        if not isinstance(row, dict):
+            raise HarnessError("function migration tombstones must be JSON objects")
+        origin = row.get("old_id")
+        aliases = row.get("aliases")
+        required = ("path", "module", "owner", "name", "signature",
+                    "deleted_at_commit", "parent_blob", "child_blob", "reason")
+        if (not isinstance(origin, str) or not isinstance(aliases, list) or not aliases
+                or any(not row.get(field) for field in required)):
+            raise HarnessError(f"malformed function migration tombstone {origin!r}")
+        if len(aliases) != len(set(aliases)):
+            raise HarnessError(f"tombstone {origin} contains duplicate aliases")
+        for field in ("deleted_at_commit", "parent_blob", "child_blob"):
+            if not COMMIT_RE.fullmatch(str(row[field])):
+                raise HarnessError(f"tombstone {origin} has malformed {field}")
+        for token in [origin, *aliases]:
+            if not isinstance(token, str):
+                raise HarnessError(f"tombstone {origin} alias is not a string")
+            if token in ids:
+                raise HarnessError(f"tombstoned function id {token} is still in current ledger")
+            previous_owner = owner_by_token.get(token)
+            if previous_owner is not None and previous_owner != origin:
+                raise HarnessError(
+                    f"function migration token {token} belongs to live/tombstone origins "
+                    f"{previous_owner}, {origin}"
+                )
+            if token in tombstones and tombstones[token].get("old_id") != origin:
+                raise HarnessError(f"tombstone alias {token} belongs to multiple origins")
+            owner_by_token[token] = origin
+            tombstones[token] = row
+    if schema == 2:
+        stats = migration["stats"]
+        live_alias_count = sum(len(entry.get("aliases", [])) for entry in migration["entries"])
+        expected_stats = {
+            "origin_entries": len(migration["entries"]),
+            "tombstones": len(tombstone_rows),
+            "alias_tokens": live_alias_count,
+            "original_definitions": len(migration["entries"]) + len(tombstone_rows),
+        }
+        for field, expected in expected_stats.items():
+            if stats.get(field) != expected:
+                raise HarnessError(
+                    f"reconciled migration stats.{field} mismatch: expected {expected}, "
+                    f"got {stats.get(field)!r}"
+                )
+    return ids, old_to_new, tombstones, migration
 
 
 def discover(root: str, registry) -> dict:
@@ -517,14 +667,25 @@ def collect_function_id_refs(root: str, discovery: dict):
     return refs
 
 
-def classify_function_ids(refs, ledger_ids, old_to_new):
+def classify_function_ids(refs, ledger_ids, old_to_new, tombstones=None):
     """Attach a classification to every reference; also return the family sets."""
-    classes = {"current": [], "stale_migratable": [], "rekey_gap": [], "unmappable": []}
+    tombstones = tombstones or {}
+    classes = {
+        "current": [],
+        "stale_migratable": [],
+        "tombstoned": [],
+        "rekey_gap": [],
+        "unmappable": [],
+    }
     for ref in refs:
         fid = ref["id"]
         if fid in ledger_ids:
             ref["class"] = "current"
             classes["current"].append(ref)
+        elif fid in tombstones:
+            ref["class"] = "tombstoned"
+            ref["tombstone"] = tombstones[fid]
+            classes["tombstoned"].append(ref)
         elif fid in old_to_new:
             new_id = old_to_new[fid]
             ref["new_id"] = new_id
@@ -541,7 +702,7 @@ def classify_function_ids(refs, ledger_ids, old_to_new):
 
 
 def rekey_gap_family(migration, ledger_ids) -> list:
-    """The bounded 22-row family: migration entries whose new_id misses the ledger."""
+    """Migration live entries whose final target misses the current ledger."""
     family = []
     for entry in migration.get("entries", []):
         new_id = entry.get("new_id")
@@ -744,7 +905,7 @@ def residual_evidence(doc) -> list:
 
 def doctor(root: str) -> dict:
     registry = load_registry(root)
-    ledger_ids, old_to_new, migration = load_function_tables(root)
+    ledger_ids, old_to_new, tombstones, migration = load_function_tables(root)
     discovery = discover(root, registry)
     issues = []
 
@@ -977,7 +1138,7 @@ def doctor(root: str) -> dict:
 
     # --- stale function ids --------------------------------------------------
     refs = collect_function_id_refs(root, discovery)
-    classes = classify_function_ids(refs, ledger_ids, old_to_new)
+    classes = classify_function_ids(refs, ledger_ids, old_to_new, tombstones)
     for ref in classes["stale_migratable"]:
         add("STALE_FUNCTION_ID", ref["file"], ref["line"],
             f"{ref['id']} is a pre-scheme-2 id; migration maps it to {ref['new_id']}")
@@ -985,6 +1146,12 @@ def doctor(root: str) -> dict:
         add("REKEY_GAP_FUNCTION_ID", ref["file"], ref["line"],
             f"{ref['id']} maps to {ref['new_id']} which is not in the current ledger "
             f"({REKEY_GAP_TODO})")
+    for ref in classes["tombstoned"]:
+        tombstone = ref["tombstone"]
+        add("TOMBSTONED_FUNCTION_ID", ref["file"], ref["line"],
+            f"{ref['id']} names deleted {tombstone['path']}::{tombstone['name']} at "
+            f"{tombstone['deleted_at_commit']}; tombstones are diagnostic and cannot "
+            "be replaced automatically")
     for ref in classes["unmappable"]:
         hint = f"; closure hint: {ref['hint']}" if ref.get("hint") else ""
         add("UNMAPPABLE_FUNCTION_ID", ref["file"], ref["line"],
@@ -1011,6 +1178,7 @@ def doctor(root: str) -> dict:
             "total": len(refs),
             "current": len(classes["current"]),
             "stale_migratable": len(classes["stale_migratable"]),
+            "tombstoned": len(classes["tombstoned"]),
             "rekey_gap": len(classes["rekey_gap"]),
             "unmappable": len(classes["unmappable"]),
         },
@@ -1132,12 +1300,14 @@ def migration_status_report(root: str) -> dict:
     plan_counts = {
         "auto_replacements": plan["summary"]["auto_replacements"],
         "manual_reselect": plan["summary"]["manual_reselect"],
+        "tombstoned": plan["summary"]["tombstoned"],
         "unmappable": plan["summary"]["unmappable"],
         "rekey_gap_family_size": plan["summary"]["rekey_gap_family_size"],
     }
     plan_blocker_codes = {
         "auto_replacements": "PLAN_AUTO_REPLACEMENTS_PENDING",
         "manual_reselect": "PLAN_MANUAL_RESELECT_PENDING",
+        "tombstoned": "PLAN_TOMBSTONED_PENDING",
         "unmappable": "PLAN_UNMAPPABLE_PENDING",
         "rekey_gap_family_size": "PLAN_REKEY_GAP_FAMILY_PENDING",
     }
@@ -1179,10 +1349,10 @@ def migration_status_exit_code(report: dict) -> int:
 
 def build_plan(root: str) -> dict:
     registry = load_registry(root)
-    ledger_ids, old_to_new, migration = load_function_tables(root)
+    ledger_ids, old_to_new, tombstones, migration = load_function_tables(root)
     discovery = discover(root, registry)
     refs = collect_function_id_refs(root, discovery)
-    classes = classify_function_ids(refs, ledger_ids, old_to_new)
+    classes = classify_function_ids(refs, ledger_ids, old_to_new, tombstones)
 
     replacements = []
     for ref in classes["stale_migratable"]:
@@ -1225,6 +1395,23 @@ def build_plan(root: str) -> dict:
             entry["closure_hint"] = ref["hint"]
         unmappable.append(entry)
     unmappable.sort(key=lambda r: (r["file"], r["line"], r["column"], r["old_id"]))
+
+    tombstoned = []
+    for ref in classes["tombstoned"]:
+        row = ref["tombstone"]
+        tombstoned.append({
+            "file": ref["file"],
+            "line": ref["line"],
+            "column": ref["column"],
+            "old_id": ref["id"],
+            "where": ref["where"],
+            "deleted_path": row["path"],
+            "deleted_name": row["name"],
+            "deleted_at_commit": row["deleted_at_commit"],
+            "reason": "function lineage is tombstoned; select a reviewed semantic successor "
+                      "or remove the stale evidence reference",
+        })
+    tombstoned.sort(key=lambda r: (r["file"], r["line"], r["column"], r["old_id"]))
 
     family = rekey_gap_family(migration, ledger_ids)
     referenced = {ref["id"] for ref in classes["rekey_gap"]}
@@ -1276,17 +1463,20 @@ def build_plan(root: str) -> dict:
             "auto_replacements": len(replacements),
             "manual_reselect": len(manual),
             "unmappable": len(unmappable),
+            "tombstoned": len(tombstoned),
             "rekey_gap_family_size": len(family_out),
             "collateral_pins": len(collateral),
         },
         "replacements": replacements,
         "manual_reselect": manual,
         "unmappable": unmappable,
+        "tombstoned": tombstoned,
         "rekey_gap_family": family_out,
         "collateral_pins": collateral,
         "apply_notes": [
             "Apply replacements exactly at file:line:column with the given old->new token.",
-            "manual_reselect and unmappable entries must NOT be text-replaced; pick the id from the current ledger first.",
+            "manual_reselect, tombstoned, and unmappable entries must NOT be text-replaced; "
+            "pick a reviewed live id from the current ledger or remove the stale reference.",
             "Editing a runner invalidates the metadata comparand.runner_sha256 pin and the runner's own immutable-fd snapshot hash; re-pin in the same commit.",
             "Editing metadata invalidates any hash pinning that metadata elsewhere (registry cache inputs are content-addressed at run time).",
             "fixture_registry.json is listed in its own global_paths cache closure; bump cache-aware consumers after the edit.",
@@ -1337,6 +1527,7 @@ def render_plan_text(plan: dict) -> str:
     summary = plan["summary"]
     lines.append(f"summary: auto={summary['auto_replacements']} "
                  f"manual={summary['manual_reselect']} "
+                 f"tombstoned={summary['tombstoned']} "
                  f"unmappable={summary['unmappable']} "
                  f"rekey_gap_family={summary['rekey_gap_family_size']} "
                  f"collateral_pins={summary['collateral_pins']}")
@@ -1351,6 +1542,14 @@ def render_plan_text(plan: dict) -> str:
         lines.append(f"{entry['file']}:{entry['line']}:{entry['column']}: {entry['old_id']} "
                      f"X-> {entry['table_new_id']} (table new_id not in ledger; {REKEY_GAP_TODO})"
                      f"  [{entry['where']}]")
+    lines.append("")
+    lines.append(f"## tombstoned ({summary['tombstoned']}) -- do NOT text-replace")
+    for entry in plan["tombstoned"]:
+        lines.append(
+            f"{entry['file']}:{entry['line']}:{entry['column']}: {entry['old_id']} "
+            f"deleted {entry['deleted_path']}::{entry['deleted_name']} at "
+            f"{entry['deleted_at_commit']}  [{entry['where']}]"
+        )
     lines.append("")
     lines.append(f"## unmappable ({summary['unmappable']}) -- derive id from ledger first")
     for entry in plan["unmappable"]:
@@ -1389,7 +1588,8 @@ def render_doctor_text(report: dict) -> str:
                  f"metadata_refs={stats['registry']['metadata_refs']}")
     refs = stats["function_id_refs"]
     lines.append(f"function-id refs: total={refs['total']} current={refs['current']} "
-                 f"stale_migratable={refs['stale_migratable']} rekey_gap={refs['rekey_gap']} "
+                 f"stale_migratable={refs['stale_migratable']} tombstoned={refs['tombstoned']} "
+                 f"rekey_gap={refs['rekey_gap']} "
                  f"unmappable={refs['unmappable']}")
     lines.append("issue codes: " + (", ".join(
         f"{code}={count}" for code, count in sorted(stats["issue_codes"].items())) or "none"))
@@ -1438,6 +1638,9 @@ RG_OLD = "RG-F-" + "c3" * 10
 RG_GAP_OLD = "RG-F-" + "d4" * 10
 RG_GAP_NEW = "RG-F-" + "e5" * 10
 RG_GHOST = "RG-F-" + "f6" * 10
+RG_ALIAS = "RG-F-" + "a7" * 10
+RG_DELETED_OLD = "RG-F-" + "b8" * 10
+RG_DELETED_ALIAS = "RG-F-" + "c9" * 10
 
 
 def synthetic_ledger() -> dict:
@@ -1456,6 +1659,7 @@ def synthetic_migration() -> dict:
             {"language": "rust", "old_id": RG_OLD, "new_id": RG_NEW, "reason": "rust_identity_rekey"},
         ],
         "disambiguators": [],
+        "tombstones": [],
         "old_ledger": {"tree_commit": "1" * 40},
     }
 
@@ -1820,6 +2024,54 @@ def self_test() -> int:
         rewrite_json(os.path.join(root, REGISTRY_RELPATH),
                      lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_NEW]}))
 
+        # 10b. a stale base/intermediate alias resolves directly to the final
+        # live ID; it never enters the rekey-gap family.
+        rewrite_json(os.path.join(root, MIGRATION_RELPATH),
+                     lambda doc: doc["entries"][0].update({"aliases": [RG_ALIAS]}))
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH),
+                     lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_ALIAS]}))
+        report = doctor(root)
+        plan = build_plan(root)
+        expect("intermediate alias resolves to final live id",
+               "STALE_FUNCTION_ID" in codes(report)
+               and plan["summary"]["auto_replacements"] == 1
+               and plan["replacements"][0]["new_id"] == RG_NEW
+               and plan["summary"]["rekey_gap_family_size"] == 0)
+        rewrite_json(os.path.join(root, MIGRATION_RELPATH),
+                     lambda doc: doc["entries"][0].pop("aliases"))
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH),
+                     lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_NEW]}))
+
+        # 10c. tombstones are diagnostics, never replacement candidates.
+        tombstone = {
+            "old_id": RG_DELETED_OLD,
+            "aliases": [RG_DELETED_ALIAS],
+            "path": "src/deleted.rs",
+            "module": "deleted",
+            "owner": "free",
+            "name": "gone",
+            "signature": "fn gone()",
+            "deleted_at_commit": "6" * 40,
+            "parent_blob": "7" * 40,
+            "child_blob": "8" * 40,
+            "reason": "deleted_without_reviewed_successor",
+        }
+        rewrite_json(os.path.join(root, MIGRATION_RELPATH),
+                     lambda doc: doc["tombstones"].append(tombstone))
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH),
+                     lambda doc: doc["fixtures"][0]["impact"].update(
+                         {"rust_function_ids": [RG_DELETED_ALIAS]}))
+        report = doctor(root)
+        plan = build_plan(root)
+        expect("referenced tombstone rejected without auto replacement",
+               "TOMBSTONED_FUNCTION_ID" in codes(report)
+               and plan["summary"]["tombstoned"] == 1
+               and plan["summary"]["auto_replacements"] == 0)
+        rewrite_json(os.path.join(root, MIGRATION_RELPATH),
+                     lambda doc: doc["tombstones"].pop())
+        rewrite_json(os.path.join(root, REGISTRY_RELPATH),
+                     lambda doc: doc["fixtures"][0]["impact"].update({"rust_function_ids": [RG_NEW]}))
+
         # 11. rekey-gap family id
         rewrite_json(os.path.join(root, MIGRATION_RELPATH),
                      lambda doc: doc["entries"].append({
@@ -2005,8 +2257,17 @@ def main(argv=None) -> int:
                     sys.stderr.write("determinism check: FAIL (two runs differ)\n")
                     return EXIT_FINDINGS
                 sys.stdout.write(text.decode("utf-8"))
-                sys.stdout.write(f"determinism: PASS (text sha256={sha256_bytes(text)}, "
-                                 f"json sha256={sha256_bytes(text_other)})\n")
+                determinism_line = (
+                    f"determinism: PASS (text sha256={sha256_bytes(text)}, "
+                    f"json sha256={sha256_bytes(text_other)})\n"
+                )
+                # JSON mode remains a single canonical JSON document; the
+                # human determinism receipt goes to stderr instead of making
+                # stdout unparsable via trailing prose.
+                if args.json:
+                    sys.stderr.write(determinism_line)
+                else:
+                    sys.stdout.write(determinism_line)
                 if args.output:
                     with open(args.output, "wb") as handle:
                         handle.write(text)

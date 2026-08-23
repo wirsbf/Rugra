@@ -17,11 +17,12 @@ Function IDs (id scheme 2) are position-independent and ordinal-free:
   nested functions by their parent signature.  ``name_ordinal`` is recorded
   as an observation for legacy consumers but never participates in the ID.
 
-``--migrate`` rewrites the ID space of an existing ledger into the new
-scheme and emits ``FUNCTION_ID_MIGRATION.json``.  Rust identities are
-recomputed on the very tree the old ledger was generated from (auto-detected
-and verified), so old-to-new correlation is exact; ambiguous or unmapped old
-IDs fail closed instead of being guessed.
+``--migrate`` performs the one-time scheme-1 to scheme-2 rewrite and emits
+``FUNCTION_ID_MIGRATION.json``.  ``--reconcile-migration`` is deliberately a
+separate operation: it replays the pinned first-parent Rust history from that
+immutable source table to the pinned current ledger.  Keeping these two
+operations separate prevents a later ledger refresh from silently replacing
+the migration's historical origin.
 """
 
 from __future__ import annotations
@@ -1102,6 +1103,194 @@ OLD_RUST_ID_PREFIX = "RG-F"
 ORDINAL_SUFFIX_RE = re.compile(r"-\d{2}$")
 
 
+class MigrationHarnessError(RuntimeError):
+    """A pinned migration input is unusable (CLI exit 2, never a traceback)."""
+
+
+# FUNCTION-ID-MIGRATE-REKEY-0001 immutable replay boundary.  These pins name
+# git objects rather than mutable paths.  The reconciler additionally checks
+# the current worktree's src tree and ledger bytes against the target objects.
+REKEY_SOURCE_COMMIT = "235b91bb552261fb3f94b7974926ef6db9b21515"
+REKEY_SOURCE_COMMIT_TREE = "6f49b977e46af96c0934114836d457f680caa057"
+REKEY_SOURCE_SRC_TREE = "7a9746660c9c569edf1ea922618bcad2ac9860ae"
+REKEY_SOURCE_LEDGER_BLOB = "4d06b6c71f84c6bc5f05489b809754fe2b263cbf"
+REKEY_TARGET_COMMIT = "8d129628c84eb87f4094b5012833b8970ff21ae9"
+REKEY_TARGET_COMMIT_TREE = "5d46f835125307cf7ff83d41274373ec8bb19f45"
+REKEY_TARGET_SRC_TREE = "004b20c8ed6da74cf6457a4386570bae4801bc78"
+REKEY_TARGET_LEDGER_BLOB = "840bac842767797f62ddf598a6e93574be47d282"
+REKEY_SOURCE_MIGRATION_BLOB = "4deb7ee4f17582c508f248b060cf13f7090b475b"
+REKEY_FIRST_PARENT_COMMIT_COUNT = 332
+REKEY_ORIGIN_COUNT = 24_370
+REKEY_LIVE_ORIGIN_COUNT = 24_323
+REKEY_GAP_COUNT = 193
+REKEY_AUTO_EVENT_COUNT = 135
+REKEY_AUTO_LINEAGE_COUNT = 132
+REKEY_REVIEWED_SAME_NAME_COUNT = 6
+REKEY_REVIEWED_SUCCESSOR_COUNT = 8
+REKEY_LIVE_REKEY_LINEAGE_COUNT = 146
+REKEY_ALIAS_TOKEN_COUNT = 149
+REKEY_TOMBSTONE_COUNT = 47
+
+
+def _reviewed_transition(
+    legacy: str,
+    source: str,
+    target: str,
+    commit: str,
+    kind: str,
+    label: str,
+    parent_blob_prefix: str,
+    child_blob_prefix: str,
+) -> dict[str, str]:
+    return {
+        "legacy_id": legacy,
+        "from_id": source,
+        "to_id": target,
+        "commit": commit,
+        "kind": kind,
+        "label": label,
+        "parent_blob_prefix": parent_blob_prefix,
+        "child_blob_prefix": child_blob_prefix,
+    }
+
+
+# These are evidence-bearing exceptions, not name-based heuristics.  Every
+# token, commit, record shape and full blob resolved from the named commit is
+# checked before a row is accepted.
+REKEY_REVIEWED_TRANSITIONS = (
+    _reviewed_transition(
+        "RG-F-a1792e61b73118f8c5eb", "RG-F-a0b9aaf1d4e29189ddf4",
+        "RG-F-afd2f193d11f7fded2d4", "eb8ad57b5f472c182f25dd245460abdc3c9f33e6",
+        "same_name", "ActionDatabase::get_action_mut", "e3032afa", "e6aa9b91",
+    ),
+    _reviewed_transition(
+        "RG-F-c642b079af3e97d8a10d", "RG-F-4a5cecef4b93ac919596",
+        "RG-F-360279f7e03f1c7fe438", "126b56fdefde1e0820ef4126968473d679e1ddd8",
+        "same_name", "FuncCallSpecs::characterize_as_output", "bd37797c", "6a4f2a05",
+    ),
+    _reviewed_transition(
+        "RG-F-2efd70f01473014375c2", "RG-F-7a2548c2349bb5f75bc3",
+        "RG-F-3e61b4c85c446db8dc90", "126b56fdefde1e0820ef4126968473d679e1ddd8",
+        "same_name", "FuncCallSpecs::characterize_as_input_param", "bd37797c", "6a4f2a05",
+    ),
+    _reviewed_transition(
+        "RG-F-52518230ca5f60ac71e5", "RG-F-da09d8757211d48d7bf6",
+        "RG-F-6fb4acf7c117efe31588", "126b56fdefde1e0820ef4126968473d679e1ddd8",
+        "same_name", "FuncCallSpecs::has_effect", "bd37797c", "6a4f2a05",
+    ),
+    _reviewed_transition(
+        "RG-F-e4c1a4d9c31459eadc79", "RG-F-ea38acbd08840b54a14b",
+        "RG-F-7a1cd2752ad576a23195", "126b56fdefde1e0820ef4126968473d679e1ddd8",
+        "same_name", "Heritage::guard_calls", "9e3afa32", "f49d3f8f",
+    ),
+    _reviewed_transition(
+        "RG-F-0695ea49a55e99ff2807", "RG-F-6e4fe065a522eb9bbc94",
+        "RG-F-f23c84cf58035a9ebe14", "704699811626f01fc029f284e04e09815b06a39f",
+        "same_name", "Merge::merge_speculative_by_vn", "9729b200", "53f856f1",
+    ),
+    _reviewed_transition(
+        "RG-F-24df7359099d9878a582", "RG-F-9b8bb1a4809cd7ca6b16",
+        "RG-F-ff1783edd76bcabdc140", "032419b344e973682076bf5c21109b7f05fee192",
+        "successor", "Cover::order_of_op -> CoverEndpoint::from_op", "7b8a196e", "d6a5931f",
+    ),
+    _reviewed_transition(
+        "RG-F-700e12a6872c24d82498", "RG-F-0d974b12c723b8e02471",
+        "RG-F-2b387a75cbdd7e41a31c", "253707fadb0735ec211289132792934d9ae48e05",
+        "successor", "default_alignment_map -> set_default_alignment_map", "c373c0e5", "00d4ac38",
+    ),
+    _reviewed_transition(
+        "RG-F-439b1c3cd8210321d15e", "RG-F-73adae5df6d49b818459",
+        "RG-F-d5be9719af51f5bf1fdc", "34940227825405eabd5358c108fbbead2ddb8581",
+        "successor", "c_binary_op_str -> optoken::binary_token", "058e2633", "342d87e7",
+    ),
+    _reviewed_transition(
+        "RG-F-a7a04409bf4b8d92ce15", "RG-F-19126ae1c4f800e1531b",
+        "RG-F-39a5f83df9995b8bf34b", "38af1fd81973e29fb27071b18144f7b4db4ad428",
+        "successor", "unknown_datatype -> default_unknown_type", "a5e0bf66", "9c3db2d2",
+    ),
+    _reviewed_transition(
+        "RG-F-473f9d99b18f17fd9922", "RG-F-9c1b0bf6f51e30a77096",
+        "RG-F-c2a760d91fd95478a016", "eb8ad57b5f472c182f25dd245460abdc3c9f33e6",
+        "successor", "build_simplify_pool -> build_oppool1", "e3032afa", "e6aa9b91",
+    ),
+    _reviewed_transition(
+        "RG-F-bf22c6ec4313930a2bb3", "RG-F-36cb30229138ce0e46f0",
+        "RG-F-7f7a36379bbf2cb1f39f", "ee29a32487702a8044d910202903e83a23996c9e",
+        "successor", "update_cover -> update_cover_locked", "54ff245d", "5b4a422d",
+    ),
+    _reviewed_transition(
+        "RG-F-61dfe59ce876d87bb8ad", "RG-F-3c8e1df9334b3c78363a",
+        "RG-F-2b52235062c1427143fa", "8ec6bee8fce58231b4ff093290457497206aeab5",
+        "successor", "RangeRecord::first successor", "abb9260b", "73cacc26",
+    ),
+    _reviewed_transition(
+        "RG-F-ef3f516520136385508d", "RG-F-32ca3afaf5f64455aa9e",
+        "RG-F-9a07be81379bfc511a61", "8ec6bee8fce58231b4ff093290457497206aeab5",
+        "successor", "RangeRecord::last successor", "abb9260b", "73cacc26",
+    ),
+)
+
+
+def _tombstone(legacy: str, base: str, commit: str, name: str) -> dict[str, str]:
+    return {
+        "legacy_id": f"RG-F-{legacy}",
+        "base_id": f"RG-F-{base}",
+        "commit": commit,
+        "name": name,
+    }
+
+
+REKEY_REVIEWED_TOMBSTONES = (
+    _tombstone("6fccfccb5487c98f7997", "545a2fa83e26f9e8716d", "9825db126fb72f6d7652536f4516a6ea38c77da1", "intersect"),
+    _tombstone("0f1afd435338b39ae1c4", "01c37763d9a53ef73ace", "9825db126fb72f6d7652536f4516a6ea38c77da1", "dfs_visit"),
+    _tombstone("d051f78879b4ecfbdffb", "df80e19385aea19c30b5", "69ea4e048cb2185f0686b136b044217fc44fc88b", "find_spanning_tree"),
+    _tombstone("a515040ca21e3a40b3bd", "965ea4deca6789b2653a", "c5e685c55e775192dae7b26f0631f6ac8ff85df6", "setup_block_list"),
+    _tombstone("e2e407c3cfa4cb808159", "63f228446a519e0c8d80", "c5e685c55e775192dae7b26f0631f6ac8ff85df6", "setup_op_list"),
+    _tombstone("c594237c5aae750c1651", "a679e28185a5cd97f9db", "c5e685c55e775192dae7b26f0631f6ac8ff85df6", "has_header_comments"),
+    _tombstone("e56c7a580c5fbf1735b5", "07a5cf7058ae8cf06026", "c5e685c55e775192dae7b26f0631f6ac8ff85df6", "header_comments"),
+    _tombstone("b56384676d5805afa616", "c1c6b7597b9723bcd50a", "bed6ef5605767811fe641201d86da80fe9f96b9e", "is_true_out_to"),
+    _tombstone("0144832f561c7cd8e30f", "78de6b876155d5b7f967", "a9d68f779e7d6d47e4dd0b3da1569f9ce6c5fdc0", "flip_comparison"),
+    _tombstone("44f5ea5f0b19361842c0", "ab960b0c66138f0a51af", "a9d68f779e7d6d47e4dd0b3da1569f9ce6c5fdc0", "test_prefercomplement_flips_boolean_flip"),
+    _tombstone("07f6d8c1c408863b8543", "e1027492465f482180db", "a9d68f779e7d6d47e4dd0b3da1569f9ce6c5fdc0", "test_prefercomplement_flip_comparison"),
+    _tombstone("f5f60231b4dcbaf7a838", "7bba63e94d32b61c1eec", "dd76d37866dcd2e4dc0a354323e0f016bb62fb35", "build_full_pipeline_actions"),
+    _tombstone("c6ceca66030b18e666d1", "afd0a253ec7939ceb0d7", "dd76d37866dcd2e4dc0a354323e0f016bb62fb35", "test_build_full_pipeline_actions_nonempty"),
+    _tombstone("2772e14a50d16aa73c41", "b89ca9c78de4d43b0641", "dd76d37866dcd2e4dc0a354323e0f016bb62fb35", "test_build_full_pipeline_actions_unique_names"),
+    _tombstone("1291ed91ecdc95aa474f", "8a03aee5400b8f1aec82", "dd76d37866dcd2e4dc0a354323e0f016bb62fb35", "test_build_full_pipeline_actions_has_new_actions"),
+    _tombstone("0036b1e6159131b90d5e", "828769ed1d87903b2f49", "dd76d37866dcd2e4dc0a354323e0f016bb62fb35", "test_build_full_pipeline_actions_excludes_block_mutators_and_stubs"),
+    _tombstone("f89ffb08d7df8a69b93f", "3f721750f2a9d6acb761", "e034f80ba06d9acff0952ee50be4be39c3f8580a", "target_op_for_branch"),
+    _tombstone("3724985bbd4374850d46", "60ba7907d4b5be14485c", "e034f80ba06d9acff0952ee50be4be39c3f8580a", "target_op_by_addr"),
+    _tombstone("3864f2c13cdb9e6fdb97", "232322f83bab558eabb2", "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9", "address_space_as_u32"),
+    _tombstone("82eb3b5be5e838caa58e", "811518e6a28c130e573b", "3ee30ba0de3e55eb8b8e2cdbe52153df136d8bf9", "resolve_callother_payload_name"),
+    _tombstone("be571c7397c18d59d8e4", "62677ad8d8248a7ab7c3", "126b56fdefde1e0820ef4126968473d679e1ddd8", "guard_returns"),
+    _tombstone("110e7cb3a979adc595e0", "00414dcba113eb1cf787", "126b56fdefde1e0820ef4126968473d679e1ddd8", "guard_calls_range"),
+    _tombstone("5b9bee2c44266559a724", "535aac7994cb2a0df898", "126b56fdefde1e0820ef4126968473d679e1ddd8", "guard_calls_range_with_space"),
+    _tombstone("f2c70dc54daf5faaccad", "58223aa5b23fb6ffa6b1", "c30913076c0bc0033c0a688462030444c95fc264", "insert_multiequal"),
+    _tombstone("e8440bf2ca995df09185", "0bb352245a43b1009d50", "0e4c6f45f32cf8ddd48849d1895fb29f68db620b", "assign_names"),
+    _tombstone("b864c8440d57e0be0aed", "e0b261758e01fee35673", "0e4c6f45f32cf8ddd48849d1895fb29f68db620b", "register_name"),
+    _tombstone("9b3ba477324abf563e92", "df77030350cd56f16c06", "7721b0d722cc8b507696f62922e978c0314fae3f", "register_payload"),
+    _tombstone("fb4e57eb1fc08da9b754", "79cd9be355b367b91bea", "7721b0d722cc8b507696f62922e978c0314fae3f", "get_id"),
+    _tombstone("ea847040afb0a57a335f", "72bab767946d70c663c6", "7721b0d722cc8b507696f62922e978c0314fae3f", "num_payloads"),
+    _tombstone("66eeea2a761b604a28ba", "52ccd48128e40d6f37b0", "7721b0d722cc8b507696f62922e978c0314fae3f", "test_pcode_inject_library"),
+    _tombstone("a22612c4dceb25126c6b", "5d67242db4fbc2603002", "7721b0d722cc8b507696f62922e978c0314fae3f", "test_register_call_fixup"),
+    _tombstone("cb791532f7bd0a7f57c0", "7edaa9a420184bde51c6", "7721b0d722cc8b507696f62922e978c0314fae3f", "test_register_call_other_fixup"),
+    _tombstone("3cca09c07784d1994f78", "d9e5720a4033361bb683", "7721b0d722cc8b507696f62922e978c0314fae3f", "test_register_call_mechanism"),
+    _tombstone("ecc37431989bf168a937", "291fd9ff2aeafadcec76", "df0da852bba0fe3f857199fbc5b416e004df8f1c", "compact_name_for"),
+    _tombstone("3d3c79e1fd7d70a102d4", "981f70767c5c8c5729cb", "df0da852bba0fe3f857199fbc5b416e004df8f1c", "preallocate_register_compact_names"),
+    _tombstone("dcb5c56857185e0ff75c", "afc5544707c4f91fee45", "df0da852bba0fe3f857199fbc5b416e004df8f1c", "doc_variable_decls_from_funcdata"),
+    _tombstone("0b63894a79fa2310c9ce", "98cadcff50035dc0db81", "df0da852bba0fe3f857199fbc5b416e004df8f1c", "test_compact_name_for"),
+    _tombstone("9457bf91be8c7fd0b8c4", "27f74050a459dcc39ae2", "192e89407f5af7a419d1fe7bb30d119af8a231e0", "rename_scope_symbol"),
+    _tombstone("ab891945fe45a58b7be9", "1aeb4fa12758eb2b41f6", "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4", "new"),
+    _tombstone("fae83367c2e7db8035b6", "4b1c37948f6503fb22e4", "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4", "apply_op"),
+    _tombstone("1e978e7c99761b05d41c", "2d887962c3671a23a057", "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4", "get_name"),
+    _tombstone("79f85567e39a8f3da854", "396b06cb2c37b5ef8bc0", "79a8faa198a23bc0a7c19e11dc360c66a63f1fd4", "get_opcodes"),
+    _tombstone("b83de19c3204b2d095f3", "64f3fe19484db472dc7e", "a770ed10df7806bf03e34d798b3f3712a08ec2bd", "test_shift_by_nonzero_unchanged"),
+    _tombstone("a72bb5e89b3cb6c78685", "295a58b7a7a62200fc52", "34fd254755441def6e17197cf2431f7fcf920c24", "next_document"),
+    _tombstone("b0e2c5a6cf989f5042de", "5fab4d997916a47717d6", "5fb36f0225c6efe606b5e8b5213163d956e9f2f1", "comparable_flags"),
+    _tombstone("c2362bc96e45d55b5ca3", "a73a582f615d89a9c4f3", "83a900efd41c9222c74b5e3be9d790fcbe86c645", "query_by_addr"),
+    _tombstone("f83ff911cc781b9fd152", "ffc8a907ea67daf0c0c5", "e87ebfc54444d5f043a321ea1a46e3c8004eff23", "collect_copy_sources"),
+)
+
+
 def old_rust_records_at_tree(root: Path, commit: str) -> list[dict[str, object]]:
     """Recompute legacy-scheme Rust IDs (path + name + ordinal) at a commit."""
 
@@ -1354,6 +1543,1015 @@ def migration_document(
         },
         "disambiguators": disambiguators,
         "entries": rows,
+    }
+
+
+# --- Migration reconciliation: pinned scheme-2 history replay --------------
+
+
+REKEY_HUNK_RE = re.compile(
+    r"^@@ -(?P<old>\d+)(?:,(?P<old_count>\d+))? "
+    r"\+(?P<new>\d+)(?:,(?P<new_count>\d+))? @@"
+)
+
+
+def _migration_git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(name, None)
+    environment.update(
+        {"LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+    )
+    return environment
+
+
+def _migration_git(root: Path, command: list[str]) -> str:
+    result = subprocess.run(
+        ["git", *command],
+        cwd=root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_migration_git_environment(),
+    )
+    if result.returncode != 0:
+        raise MigrationHarnessError(
+            f"command failed ({result.returncode}): git {' '.join(command)}\n{result.stderr}"
+        )
+    return result.stdout
+
+
+def _migration_json_from_git(root: Path, revision: str, relative: str) -> dict[str, object]:
+    try:
+        document = json.loads(_migration_git(root, ["show", f"{revision}:{relative}"]))
+    except json.JSONDecodeError as error:
+        raise MigrationHarnessError(
+            f"pinned JSON is malformed at {revision}:{relative}: {error}"
+        ) from error
+    if not isinstance(document, dict):
+        raise MigrationHarnessError(f"pinned JSON root is not an object: {revision}:{relative}")
+    return document
+
+
+def _expect_git_object(root: Path, revision: str, expected: str, label: str) -> str:
+    actual = _migration_git(root, ["rev-parse", revision]).strip()
+    if actual != expected:
+        raise MigrationHarnessError(f"{label} mismatch: expected {expected}, got {actual}")
+    return actual
+
+
+def verify_rekey_boundary(root: Path, *, verify_locked_oracle: bool = True) -> list[str]:
+    """Validate every immutable input before replaying or writing output."""
+
+    _expect_git_object(
+        root, f"{REKEY_SOURCE_COMMIT}^{{commit}}", REKEY_SOURCE_COMMIT, "source commit"
+    )
+    _expect_git_object(
+        root, f"{REKEY_SOURCE_COMMIT}^{{tree}}", REKEY_SOURCE_COMMIT_TREE,
+        "source commit tree",
+    )
+    _expect_git_object(
+        root, f"{REKEY_SOURCE_COMMIT}:src", REKEY_SOURCE_SRC_TREE, "source src tree"
+    )
+    _expect_git_object(
+        root,
+        f"{REKEY_SOURCE_COMMIT}:docs/alignment_audit/FUNCTION_LEDGER.json",
+        REKEY_SOURCE_LEDGER_BLOB,
+        "source ledger blob",
+    )
+    _expect_git_object(
+        root, f"{REKEY_TARGET_COMMIT}^{{commit}}", REKEY_TARGET_COMMIT, "target commit"
+    )
+    _expect_git_object(
+        root, f"{REKEY_TARGET_COMMIT}^{{tree}}", REKEY_TARGET_COMMIT_TREE,
+        "target commit tree",
+    )
+    _expect_git_object(
+        root, f"{REKEY_TARGET_COMMIT}:src", REKEY_TARGET_SRC_TREE, "target src tree"
+    )
+    _expect_git_object(
+        root,
+        f"{REKEY_TARGET_COMMIT}:docs/alignment_audit/FUNCTION_LEDGER.json",
+        REKEY_TARGET_LEDGER_BLOB,
+        "target ledger blob",
+    )
+    _expect_git_object(
+        root,
+        f"{REKEY_TARGET_COMMIT}:docs/alignment_audit/FUNCTION_ID_MIGRATION.json",
+        REKEY_SOURCE_MIGRATION_BLOB,
+        "source migration blob",
+    )
+
+    for ancestor, descendant, label in (
+        (REKEY_SOURCE_COMMIT, REKEY_TARGET_COMMIT, "source is not an ancestor of target"),
+        (REKEY_TARGET_COMMIT, "HEAD", "target is not an ancestor of HEAD"),
+    ):
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_migration_git_environment(),
+        )
+        if result.returncode != 0:
+            raise MigrationHarnessError(label)
+
+    commits = _migration_git(
+        root,
+        ["rev-list", "--first-parent", "--reverse", f"{REKEY_SOURCE_COMMIT}..{REKEY_TARGET_COMMIT}"],
+    ).splitlines()
+    if len(commits) != REKEY_FIRST_PARENT_COMMIT_COUNT:
+        raise MigrationHarnessError(
+            "first-parent history length mismatch: "
+            f"expected {REKEY_FIRST_PARENT_COMMIT_COUNT}, got {len(commits)}"
+        )
+    previous = REKEY_SOURCE_COMMIT
+    for commit in commits:
+        first_parent = _migration_git(root, ["rev-parse", f"{commit}^1"]).strip()
+        if first_parent != previous:
+            raise MigrationHarnessError(
+                f"first-parent discontinuity at {commit}: expected {previous}, got {first_parent}"
+            )
+        previous = commit
+    if previous != REKEY_TARGET_COMMIT:
+        raise MigrationHarnessError(
+            f"first-parent replay ended at {previous}, not {REKEY_TARGET_COMMIT}"
+        )
+
+    head_src = _migration_git(root, ["rev-parse", "HEAD:src"]).strip()
+    if head_src != REKEY_TARGET_SRC_TREE:
+        raise MigrationHarnessError(
+            f"HEAD src tree mismatch: expected {REKEY_TARGET_SRC_TREE}, got {head_src}"
+        )
+    dirty_src = _migration_git(
+        root, ["status", "--porcelain=v1", "--untracked-files=all", "--", "src"]
+    ).strip()
+    if dirty_src:
+        raise MigrationHarnessError(f"target src worktree is dirty:\n{dirty_src}")
+    ledger_path = root / "docs/alignment_audit/FUNCTION_LEDGER.json"
+    if not ledger_path.is_file():
+        raise MigrationHarnessError("target ledger is missing from the worktree")
+    ledger_blob = _migration_git(root, ["hash-object", str(ledger_path)]).strip()
+    if ledger_blob != REKEY_TARGET_LEDGER_BLOB:
+        raise MigrationHarnessError(
+            f"worktree ledger blob mismatch: expected {REKEY_TARGET_LEDGER_BLOB}, got {ledger_blob}"
+        )
+    if verify_locked_oracle:
+        oracle_root = root / "ghidra"
+        oracle_head = _migration_git(oracle_root, ["rev-parse", "HEAD"]).strip()
+        if oracle_head != ORACLE_COMMIT:
+            raise MigrationHarnessError(
+                f"wrong Ghidra oracle: expected {ORACLE_COMMIT}, got {oracle_head}"
+            )
+        oracle_dirty = _migration_git(
+            oracle_root, ["status", "--porcelain", "--untracked-files=no"]
+        ).strip()
+        if oracle_dirty:
+            raise MigrationHarnessError(
+                f"locked Ghidra worktree has tracked changes:\n{oracle_dirty}"
+            )
+        cpp = oracle_root / "Ghidra/Features/Decompiler/src/decompile/cpp"
+        cc_count = len(list(cpp.glob("*.cc")))
+        if cc_count != 114:
+            raise MigrationHarnessError(
+                f"wrong Ghidra source closure: expected 114 .cc, got {cc_count}"
+            )
+    return commits
+
+
+def _validate_rekey_source_tables(
+    source_ledger: dict[str, object],
+    target_ledger: dict[str, object],
+    source_migration: dict[str, object],
+) -> tuple[list[dict[str, object]], set[str], dict[str, dict[str, object]]]:
+    for label, ledger in (("source", source_ledger), ("target", target_ledger)):
+        # The pinned source is the pre-scheme-2 ledger by construction and
+        # therefore has no id_scheme block.  The target must carry scheme 2.
+        if ledger.get("schema") != 1:
+            raise MigrationHarnessError(f"{label} ledger schema mismatch")
+        if label == "target" and not isinstance(ledger.get("id_scheme"), dict):
+            raise MigrationHarnessError("target ledger id_scheme is missing")
+        for field in ("ghidra_functions", "rugra_functions"):
+            if not isinstance(ledger.get(field), list):
+                raise MigrationHarnessError(f"{label} ledger {field} is not an array")
+    if source_migration.get("schema") != 1:
+        raise MigrationHarnessError("source migration must be immutable schema 1")
+    for field in ("entries", "disambiguators"):
+        if not isinstance(source_migration.get(field), list):
+            raise MigrationHarnessError(f"source migration {field} is not an array")
+    entries = list(source_migration["entries"])
+    if len(entries) != REKEY_ORIGIN_COUNT:
+        raise MigrationHarnessError(
+            f"source migration origin count mismatch: expected {REKEY_ORIGIN_COUNT}, got {len(entries)}"
+        )
+    try:
+        source_stats = check_migration_rows(entries)
+    except RuntimeError as error:
+        raise MigrationHarnessError(str(error)) from error
+    if source_stats["total"] != REKEY_ORIGIN_COUNT:
+        raise MigrationHarnessError("source migration collision audit did not cover every origin")
+    old_ledger = source_migration.get("old_ledger")
+    if not isinstance(old_ledger, dict) or old_ledger.get("tree_commit") != REKEY_SOURCE_COMMIT:
+        raise MigrationHarnessError("source migration old-ledger commit pin mismatch")
+    if source_migration.get("oracle_commit") != ORACLE_COMMIT:
+        raise MigrationHarnessError("source migration oracle commit mismatch")
+    target_oracle = target_ledger.get("oracle")
+    if not isinstance(target_oracle, dict) or target_oracle.get("commit") != ORACLE_COMMIT:
+        raise MigrationHarnessError("target ledger oracle commit mismatch")
+
+    target_ids: set[str] = set()
+    for field in ("ghidra_functions", "rugra_functions"):
+        for record in target_ledger[field]:
+            if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+                raise MigrationHarnessError(f"target ledger contains a malformed {field} record")
+            fid = str(record["id"])
+            if fid in target_ids:
+                raise MigrationHarnessError(f"target ledger contains duplicate function id {fid}")
+            target_ids.add(fid)
+
+    source_rust_by_legacy: dict[str, dict[str, object]] = {}
+    for record in source_ledger["rugra_functions"]:
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            raise MigrationHarnessError("source ledger contains a malformed Rust record")
+        source_rust_by_legacy[str(record["id"])] = record
+    return entries, target_ids, source_rust_by_legacy
+
+
+def _identity_projection(record: dict[str, object]) -> tuple[object, ...]:
+    return tuple(
+        record.get(field)
+        for field in (
+            "id", "path", "name", "line", "end_line", "module", "owner", "signature",
+            "is_test", "is_declaration",
+        )
+    )
+
+
+def _fresh_target_rust(root: Path, target_ledger: dict[str, object]) -> list[dict[str, object]]:
+    fresh: list[dict[str, object]] = []
+    for path in sorted((root / "src").rglob("*.rs")):
+        relative = path.relative_to(root).as_posix()
+        text_value = path.read_text(encoding="utf-8")
+        fresh.extend(
+            collect_rust_identities(relative, text_value, module_from_relative(relative))
+        )
+    try:
+        assign_rust_locked_ids(fresh)
+    except RuntimeError as error:
+        raise MigrationHarnessError(str(error)) from error
+    pinned = list(target_ledger["rugra_functions"])
+    fresh_projection = sorted(_identity_projection(record) for record in fresh)
+    pinned_projection = sorted(_identity_projection(record) for record in pinned)
+    if fresh_projection != pinned_projection:
+        missing = sorted(set(pinned_projection) - set(fresh_projection))[:3]
+        extra = sorted(set(fresh_projection) - set(pinned_projection))[:3]
+        raise MigrationHarnessError(
+            "fresh Rust scan does not reproduce the pinned target ledger: "
+            f"pinned={len(pinned_projection)} fresh={len(fresh_projection)} "
+            f"missing={missing} extra={extra}"
+        )
+    return fresh
+
+
+def _blob_text(root: Path, blob: str, cache: dict[str, str]) -> str:
+    if blob == "0" * 40:
+        return ""
+    if blob not in cache:
+        cache[blob] = _migration_git(root, ["cat-file", "blob", blob])
+    return cache[blob]
+
+
+def _scan_rekey_blob(
+    root: Path,
+    relative: str,
+    blob: str,
+    text_cache: dict[str, str],
+    scan_cache: dict[tuple[str, str], list[dict[str, object]]],
+) -> list[dict[str, object]]:
+    if blob == "0" * 40 or not relative.endswith(".rs"):
+        return []
+    cache_key = (relative, blob)
+    if cache_key in scan_cache:
+        return scan_cache[cache_key]
+    source = _blob_text(root, blob, text_cache)
+    records = collect_rust_identities(relative, source, module_from_relative(relative))
+    try:
+        assign_rust_locked_ids(records)
+    except RuntimeError as error:
+        raise MigrationHarnessError(f"{relative}@{blob}: {error}") from error
+    code = mask_non_code(source)
+    pairs = rust_brace_pairs(code)
+    lines = source.splitlines()
+    for record in records:
+        annotation_kind, annotation = marker_above(lines, int(record["line"]) - 1)
+        record["_annotation"] = (
+            (annotation_kind, json.dumps(annotation, sort_keys=True, separators=(",", ":")))
+            if annotation
+            else None
+        )
+        signature_end = rust_signature_end(code, pairs, int(record["start"]))
+        body = " ".join(code[signature_end:int(record["end"])].split())
+        record["_masked_body"] = body if body and body != ";" else None
+        record["_annotation_kind"] = annotation_kind
+        record["_annotation_value"] = annotation
+    scan_cache[cache_key] = records
+    return records
+
+
+def _rust_changes(root: Path, parent: str, commit: str) -> list[dict[str, str]]:
+    raw = _migration_git(
+        root,
+        ["diff-tree", "--no-commit-id", "--raw", "-r", "--no-abbrev", "--no-renames",
+         parent, commit, "--", "src"],
+    )
+    changes: list[dict[str, str]] = []
+    for line in raw.splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        header = parts[0].split()
+        if len(header) != 5 or not header[0].startswith(":"):
+            raise MigrationHarnessError(f"cannot parse raw diff row at {commit}: {line}")
+        old_blob, new_blob, status = header[2], header[3], header[4]
+        if status.startswith(("R", "C")):
+            if len(parts) != 3:
+                raise MigrationHarnessError(f"cannot parse rename/copy row at {commit}: {line}")
+            old_path, new_path = parts[1], parts[2]
+        else:
+            if len(parts) != 2:
+                raise MigrationHarnessError(f"cannot parse diff path at {commit}: {line}")
+            old_path = new_path = parts[1]
+        if not old_path.endswith(".rs") and not new_path.endswith(".rs"):
+            continue
+        changes.append(
+            {
+                "old_path": old_path,
+                "new_path": new_path,
+                "old_blob": old_blob,
+                "new_blob": new_blob,
+                "status": status,
+            }
+        )
+    changes.sort(key=lambda item: (item["old_path"], item["new_path"], item["status"]))
+    return changes
+
+
+def _record_intersects_hunk(record: dict[str, object], start: int, count: int) -> bool:
+    if count == 0:
+        return int(record["line"]) <= start <= int(record["end_line"]) + 1
+    end = start + count - 1
+    return int(record["line"]) <= end and start <= int(record["end_line"])
+
+
+def _diff_hunks(
+    root: Path,
+    parent: str,
+    commit: str,
+    path: str,
+    cache: dict[tuple[str, str], list[tuple[int, int, int, int]]],
+) -> list[tuple[int, int, int, int]]:
+    key = (commit, path)
+    if key in cache:
+        return cache[key]
+    diff = _migration_git(
+        root, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
+               parent, commit, "--", path]
+    )
+    hunks: list[tuple[int, int, int, int]] = []
+    for line in diff.splitlines():
+        match = REKEY_HUNK_RE.match(line)
+        if match:
+            hunks.append(
+                (
+                    int(match.group("old")),
+                    int(match.group("old_count") or 1),
+                    int(match.group("new")),
+                    int(match.group("new_count") or 1),
+                )
+            )
+    cache[key] = hunks
+    return hunks
+
+
+def strict_transition_evidence(
+    old: dict[str, object],
+    new: dict[str, object],
+    hunks: list[tuple[int, int, int, int]],
+) -> list[str]:
+    evidence: list[str] = []
+    if any(
+        _record_intersects_hunk(old, old_start, old_count)
+        and _record_intersects_hunk(new, new_start, new_count)
+        for old_start, old_count, new_start, new_count in hunks
+    ):
+        evidence.append("same_patch_hunk")
+    if old.get("_annotation") and old.get("_annotation") == new.get("_annotation"):
+        evidence.append("identical_nonempty_annotation")
+    if old.get("_masked_body") and old.get("_masked_body") == new.get("_masked_body"):
+        evidence.append("identical_masked_body")
+    return evidence
+
+
+def select_unique_strict_transition(
+    commit: str,
+    key: tuple[object, ...],
+    old_tokens: list[str],
+    new_tokens: list[str],
+    before: dict[str, tuple[dict[str, object], str]],
+    after: dict[str, tuple[dict[str, object], str]],
+    hunks: list[tuple[int, int, int, int]],
+) -> tuple[str, str, list[str]] | None:
+    """Select one evidence-bearing 1->1 transition, or fail on ambiguity."""
+
+    if not new_tokens:
+        return None
+    if len(old_tokens) != 1 or len(new_tokens) != 1:
+        raise MigrationHarnessError(
+            f"ambiguous automatic transition at {commit} for {key}: "
+            f"removed={old_tokens} added={new_tokens}"
+        )
+    source_token, target_token = old_tokens[0], new_tokens[0]
+    evidence = strict_transition_evidence(
+        before[source_token][0], after[target_token][0], hunks
+    )
+    return (source_token, target_token, evidence) if evidence else None
+
+
+def _lineage_event(
+    old: dict[str, object],
+    new: dict[str, object],
+    commit: str,
+    parent_blob: str,
+    child_blob: str,
+    evidence: list[str],
+) -> dict[str, object]:
+    return {
+        "from_id": old["id"],
+        "to_id": new["id"],
+        "commit": commit,
+        "from_path": old["path"],
+        "to_path": new["path"],
+        "parent_blob": parent_blob,
+        "child_blob": child_blob,
+        "evidence": evidence,
+    }
+
+
+def validate_reviewed_transition(
+    rule: dict[str, str],
+    tracked: dict[str, str],
+    removed: dict[str, tuple[dict[str, object], str]],
+    newly_added: dict[str, tuple[dict[str, object], str]],
+    claimed_targets: set[str],
+) -> tuple[str, dict[str, object], str, dict[str, object], str]:
+    """Validate an exact reviewed transition; name-only lookup is forbidden."""
+
+    source_token, target_token = rule["from_id"], rule["to_id"]
+    legacy = tracked.get(source_token)
+    if legacy != rule["legacy_id"] or source_token not in removed:
+        raise MigrationHarnessError(
+            f"reviewed transition source is not the unique live removal at {rule['commit']}: "
+            f"{rule['legacy_id']} {source_token}"
+        )
+    # Requiring membership in newly_added rejects wrapper/deletion rows that
+    # attempt to point at a function which already existed before the commit.
+    if target_token not in newly_added:
+        raise MigrationHarnessError(
+            f"reviewed transition target is not newly added at {rule['commit']}: {target_token}"
+        )
+    if target_token in tracked or target_token in claimed_targets:
+        raise MigrationHarnessError(f"reviewed transition target collision: {target_token}")
+    old_record, parent_blob = removed[source_token]
+    new_record, child_blob = newly_added[target_token]
+    if not parent_blob.startswith(rule["parent_blob_prefix"]):
+        raise MigrationHarnessError(
+            f"reviewed parent blob mismatch for {source_token}: {parent_blob}"
+        )
+    if not child_blob.startswith(rule["child_blob_prefix"]):
+        raise MigrationHarnessError(
+            f"reviewed child blob mismatch for {target_token}: {child_blob}"
+        )
+    if rule["kind"] == "same_name":
+        old_key = (
+            old_record["path"], old_record["module"], old_record["owner"], old_record["name"]
+        )
+        new_key = (
+            new_record["path"], new_record["module"], new_record["owner"], new_record["name"]
+        )
+        if old_key != new_key:
+            raise MigrationHarnessError(
+                f"reviewed same-name record shape drift for {rule['label']}: {old_key} != {new_key}"
+            )
+    return legacy, old_record, parent_blob, new_record, child_blob
+
+
+def _tombstone_record(
+    state: dict[str, object],
+    old: dict[str, object],
+    commit: str,
+    parent_blob: str,
+    child_blob: str,
+) -> dict[str, object]:
+    aliases = [str(event["from_id"]) for event in state["lineage"]]
+    aliases.append(str(old["id"]))
+    aliases = list(dict.fromkeys(aliases))
+    result: dict[str, object] = {
+        "old_id": state["legacy_id"],
+        "aliases": aliases,
+        "deleted_id": old["id"],
+        "path": old["path"],
+        "module": old["module"],
+        "owner": old["owner"],
+        "name": old["name"],
+        "signature": old["signature"],
+        "line": old["line"],
+        "end_line": old["end_line"],
+        "is_test": old["is_test"],
+        "is_declaration": old["is_declaration"],
+        "annotation_kind": old["_annotation_kind"],
+        "annotation": old["_annotation_value"],
+        "deleted_at_commit": commit,
+        "parent_blob": parent_blob,
+        "child_blob": child_blob,
+        "reason": "deleted_without_reviewed_successor",
+    }
+    if state["lineage"]:
+        result["lineage"] = list(state["lineage"])
+    return result
+
+
+def _validate_reconciled_classes(
+    entries: list[dict[str, object]],
+    tombstones: list[dict[str, object]],
+    target_ids: set[str],
+    *,
+    expected_origin_count: int = REKEY_ORIGIN_COUNT,
+    expected_live_count: int = REKEY_LIVE_ORIGIN_COUNT,
+    expected_tombstone_count: int = REKEY_TOMBSTONE_COUNT,
+    expected_alias_count: int = REKEY_ALIAS_TOKEN_COUNT,
+) -> dict[str, int]:
+    if len(entries) != expected_live_count:
+        raise MigrationHarnessError(
+            f"live origin count mismatch: expected {expected_live_count}, got {len(entries)}"
+        )
+    if len(tombstones) != expected_tombstone_count:
+        raise MigrationHarnessError(
+            f"tombstone count mismatch: expected {expected_tombstone_count}, got {len(tombstones)}"
+        )
+    owner_by_token: dict[str, str] = {}
+    final_by_origin: dict[str, str] = {}
+    alias_count = 0
+
+    def claim(token: object, origin: str, role: str) -> None:
+        token_pattern = (
+            r"(?:RG-F-[0-9a-f]{20}|GH12-F-[0-9a-f]{20}(?:-\d{2})?)"
+            if "old_id" in role
+            else r"(?:RG-F|GH12-F)-[0-9a-f]{20}"
+        )
+        if not isinstance(token, str) or not re.fullmatch(token_pattern, token):
+            raise MigrationHarnessError(f"malformed {role} token in origin {origin}: {token!r}")
+        previous = owner_by_token.get(token)
+        if previous is not None and previous != origin:
+            raise MigrationHarnessError(
+                f"function token {token} belongs to two origin classes: {previous}, {origin}"
+            )
+        owner_by_token[token] = origin
+
+    for entry in entries:
+        origin = str(entry.get("old_id"))
+        target = str(entry.get("new_id"))
+        claim(origin, origin, "old_id")
+        claim(target, origin, "new_id")
+        if target not in target_ids:
+            raise MigrationHarnessError(f"live target {target} for {origin} is absent from target ledger")
+        if target in final_by_origin and final_by_origin[target] != origin:
+            raise MigrationHarnessError(
+                f"two origins converge on target {target}: {final_by_origin[target]}, {origin}"
+            )
+        final_by_origin[target] = origin
+        aliases = entry.get("aliases", [])
+        if not isinstance(aliases, list):
+            raise MigrationHarnessError(f"aliases for {origin} are not an array")
+        if len(aliases) != len(set(aliases)):
+            raise MigrationHarnessError(f"origin {origin} repeats an alias token")
+        for alias in aliases:
+            if alias == target:
+                raise MigrationHarnessError(f"alias {alias} equals its live final target for {origin}")
+            if alias in target_ids:
+                raise MigrationHarnessError(
+                    f"alias {alias} for {origin} is an unrelated current-ledger function id"
+                )
+            claim(alias, origin, "alias")
+            alias_count += 1
+
+    for tombstone in tombstones:
+        origin = str(tombstone.get("old_id"))
+        claim(origin, origin, "tombstone old_id")
+        aliases = tombstone.get("aliases")
+        required = (
+            "path", "module", "owner", "name", "signature", "deleted_at_commit",
+            "parent_blob", "child_blob", "reason",
+        )
+        if not isinstance(aliases, list) or not aliases or any(not tombstone.get(k) for k in required):
+            raise MigrationHarnessError(f"tombstone {origin} is missing aliases/commit/blob/signature metadata")
+        if len(aliases) != len(set(aliases)):
+            raise MigrationHarnessError(f"tombstone {origin} repeats an alias token")
+        for field in ("deleted_at_commit", "parent_blob", "child_blob"):
+            if not re.fullmatch(r"[0-9a-f]{40}", str(tombstone[field])):
+                raise MigrationHarnessError(f"tombstone {origin} has malformed {field}")
+        for alias in aliases:
+            if alias in target_ids:
+                raise MigrationHarnessError(
+                    f"tombstone alias {alias} for {origin} is still in the target ledger"
+                )
+            claim(alias, origin, "tombstone alias")
+
+    if len(entries) + len(tombstones) != expected_origin_count:
+        raise MigrationHarnessError("live/tombstone classes do not cover every source origin")
+    if alias_count != expected_alias_count:
+        raise MigrationHarnessError(
+            f"live alias token count mismatch: expected {expected_alias_count}, got {alias_count}"
+        )
+    return {
+        "origin_entries": len(entries),
+        "tombstones": len(tombstones),
+        "alias_tokens": alias_count,
+        "class_tokens": len(owner_by_token),
+    }
+
+
+def migration_reconciliation_document(root: Path) -> dict[str, object]:  # noqa: C901
+    commits = verify_rekey_boundary(root)
+    source_ledger = _migration_json_from_git(
+        root, REKEY_SOURCE_COMMIT, "docs/alignment_audit/FUNCTION_LEDGER.json"
+    )
+    target_ledger = _migration_json_from_git(
+        root, REKEY_TARGET_COMMIT, "docs/alignment_audit/FUNCTION_LEDGER.json"
+    )
+    source_migration = _migration_json_from_git(
+        root, REKEY_TARGET_COMMIT, "docs/alignment_audit/FUNCTION_ID_MIGRATION.json"
+    )
+    source_entries, target_ids, source_rust_by_legacy = _validate_rekey_source_tables(
+        source_ledger, target_ledger, source_migration
+    )
+    fresh_rust = _fresh_target_rust(root, target_ledger)
+    fresh_ids = {str(record["id"]) for record in fresh_rust}
+    pinned_rust_ids = {
+        str(record["id"]) for record in target_ledger["rugra_functions"]
+    }
+    if fresh_ids != pinned_rust_ids:
+        raise MigrationHarnessError("fresh target Rust ID set differs from the pinned ledger")
+
+    gap_rows = [entry for entry in source_entries if entry.get("new_id") not in target_ids]
+    if len(gap_rows) != REKEY_GAP_COUNT or any(entry.get("language") != "rust" for entry in gap_rows):
+        raise MigrationHarnessError(
+            f"source rekey gap mismatch: expected {REKEY_GAP_COUNT} Rust rows, got {len(gap_rows)}"
+        )
+    original_by_legacy = {str(entry["old_id"]): entry for entry in source_entries}
+    original_base_ids = {str(entry["new_id"]) for entry in source_entries}
+    if len(original_by_legacy) != len(source_entries) or len(original_base_ids) != len(source_entries):
+        raise MigrationHarnessError("source migration origin/base IDs are not one-to-one")
+
+    text_cache: dict[str, str] = {}
+    scan_cache: dict[tuple[str, str], list[dict[str, object]]] = {}
+    source_path_blobs: dict[str, str] = {}
+    source_records_by_id: dict[str, dict[str, object]] = {}
+    for row in gap_rows:
+        legacy = str(row["old_id"])
+        old_record = source_rust_by_legacy.get(legacy)
+        if old_record is None:
+            raise MigrationHarnessError(f"gap origin {legacy} is absent from source ledger")
+        path = str(old_record.get("path"))
+        if path not in source_path_blobs:
+            source_path_blobs[path] = _migration_git(
+                root, ["rev-parse", f"{REKEY_SOURCE_COMMIT}:{path}"]
+            ).strip()
+            for record in _scan_rekey_blob(
+                root, path, source_path_blobs[path], text_cache, scan_cache
+            ):
+                source_records_by_id[str(record["id"])] = record
+        base = str(row["new_id"])
+        base_record = source_records_by_id.get(base)
+        if base_record is None:
+            raise MigrationHarnessError(f"gap base {base} is absent from pinned source scan")
+        positional = (base_record["path"], base_record["line"], base_record["name"])
+        expected = (old_record.get("path"), old_record.get("line"), old_record.get("name"))
+        if positional != expected:
+            raise MigrationHarnessError(
+                f"source legacy/base positional proof failed for {legacy}: {expected} != {positional}"
+            )
+
+    states: dict[str, dict[str, object]] = {
+        str(row["old_id"]): {
+            "legacy_id": str(row["old_id"]),
+            "base_id": str(row["new_id"]),
+            "current_id": str(row["new_id"]),
+            "lineage": [],
+            "status": "live",
+        }
+        for row in gap_rows
+    }
+    tracked: dict[str, str] = {
+        str(row["new_id"]): str(row["old_id"]) for row in gap_rows
+    }
+    reviewed_by_commit: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for rule in REKEY_REVIEWED_TRANSITIONS:
+        reviewed_by_commit[rule["commit"]].append(rule)
+        source = original_by_legacy.get(rule["legacy_id"])
+        if source is None or source.get("new_id") != rule["from_id"]:
+            raise MigrationHarnessError(
+                f"reviewed transition source pin mismatch for {rule['legacy_id']}"
+            )
+        if rule["kind"] == "successor" and rule["to_id"] in original_base_ids:
+            raise MigrationHarnessError(
+                f"reviewed successor {rule['to_id']} already has a source migration predecessor"
+            )
+    tombstone_by_key = {
+        (rule["legacy_id"], rule["base_id"], rule["commit"]): rule
+        for rule in REKEY_REVIEWED_TOMBSTONES
+    }
+    if len(tombstone_by_key) != REKEY_TOMBSTONE_COUNT:
+        raise MigrationHarnessError("reviewed tombstone allowlist contains duplicate keys")
+
+    used_reviewed: set[tuple[str, str]] = set()
+    used_tombstones: set[tuple[str, str, str]] = set()
+    tombstones: list[dict[str, object]] = []
+    automatic_events = 0
+    automatic_origins: set[str] = set()
+    reviewed_counts: Counter[str] = Counter()
+    hunk_cache: dict[tuple[str, str], list[tuple[int, int, int, int]]] = {}
+
+    previous = REKEY_SOURCE_COMMIT
+    for commit in commits:
+        changes = _rust_changes(root, previous, commit)
+        before: dict[str, tuple[dict[str, object], str]] = {}
+        after: dict[str, tuple[dict[str, object], str]] = {}
+        child_blob_by_path: dict[str, str] = {}
+        for change in changes:
+            old_path, new_path = change["old_path"], change["new_path"]
+            old_blob, new_blob = change["old_blob"], change["new_blob"]
+            if old_path.endswith(".rs"):
+                for record in _scan_rekey_blob(root, old_path, old_blob, text_cache, scan_cache):
+                    before[str(record["id"])] = (record, old_blob)
+            if new_path.endswith(".rs"):
+                child_blob_by_path[new_path] = new_blob
+                for record in _scan_rekey_blob(root, new_path, new_blob, text_cache, scan_cache):
+                    after[str(record["id"])] = (record, new_blob)
+
+        removed = {
+            token: before[token]
+            for token in sorted(set(tracked).intersection(before).difference(after))
+        }
+        newly_added = {
+            token: after[token]
+            for token in sorted(set(after).difference(before))
+        }
+        claimed_targets: set[str] = set()
+
+        for rule in reviewed_by_commit.get(commit, []):
+            source_token, target_token = rule["from_id"], rule["to_id"]
+            legacy, old_record, parent_blob, new_record, child_blob = (
+                validate_reviewed_transition(
+                    rule, tracked, removed, newly_added, claimed_targets
+                )
+            )
+            event = _lineage_event(
+                old_record,
+                new_record,
+                commit,
+                parent_blob,
+                child_blob,
+                [f"reviewed_{rule['kind']}_allowlist", rule["label"]],
+            )
+            states[legacy]["lineage"].append(event)
+            states[legacy]["current_id"] = target_token
+            del tracked[source_token]
+            tracked[target_token] = legacy
+            removed.pop(source_token)
+            claimed_targets.add(target_token)
+            used_reviewed.add((rule["legacy_id"], commit))
+            reviewed_counts[rule["kind"]] += 1
+
+        removed_groups: dict[tuple[object, ...], list[str]] = defaultdict(list)
+        added_groups: dict[tuple[object, ...], list[str]] = defaultdict(list)
+        for token, (record, _) in removed.items():
+            key = (record["path"], record["module"], record["owner"], record["name"])
+            removed_groups[key].append(token)
+        for token, (record, _) in newly_added.items():
+            if token in claimed_targets:
+                continue
+            key = (record["path"], record["module"], record["owner"], record["name"])
+            added_groups[key].append(token)
+
+        transitioned: set[str] = set()
+        for key in sorted(removed_groups, key=lambda value: tuple(str(part) for part in value)):
+            old_tokens = sorted(removed_groups[key])
+            new_tokens = sorted(added_groups.get(key, []))
+            if not new_tokens:
+                continue
+            old_record_for_hunk = removed[old_tokens[0]][0]
+            hunks = _diff_hunks(
+                root, previous, commit, str(old_record_for_hunk["path"]), hunk_cache
+            )
+            selected = select_unique_strict_transition(
+                commit, key, old_tokens, new_tokens, removed, newly_added, hunks
+            )
+            if selected is None:
+                continue
+            source_token, target_token, evidence = selected
+            old_record, parent_blob = removed[source_token]
+            new_record, child_blob = newly_added[target_token]
+            legacy = tracked[source_token]
+            if target_token in tracked or target_token in claimed_targets:
+                raise MigrationHarnessError(
+                    f"automatic transition target collision at {commit}: {target_token}"
+                )
+            event = _lineage_event(
+                old_record, new_record, commit, parent_blob, child_blob, evidence
+            )
+            states[legacy]["lineage"].append(event)
+            states[legacy]["current_id"] = target_token
+            del tracked[source_token]
+            tracked[target_token] = legacy
+            claimed_targets.add(target_token)
+            transitioned.add(source_token)
+            automatic_events += 1
+            automatic_origins.add(legacy)
+
+        for source_token in sorted(set(removed).difference(transitioned)):
+            old_record, parent_blob = removed[source_token]
+            legacy = tracked[source_token]
+            key = (legacy, source_token, commit)
+            rule = tombstone_by_key.get(key)
+            if rule is None:
+                candidates = added_groups.get(
+                    (old_record["path"], old_record["module"], old_record["owner"], old_record["name"]),
+                    [],
+                )
+                raise MigrationHarnessError(
+                    f"unproved removal is neither reviewed transition nor tombstone at {commit}: "
+                    f"{legacy} {source_token} {old_record['path']}::{old_record['name']} "
+                    f"same-key-added={sorted(candidates)}"
+                )
+            if rule["name"] != old_record["name"]:
+                raise MigrationHarnessError(
+                    f"reviewed tombstone name drift for {legacy}: "
+                    f"expected {rule['name']}, got {old_record['name']}"
+                )
+            child_blob = child_blob_by_path.get(str(old_record["path"]))
+            if child_blob is None or not re.fullmatch(r"[0-9a-f]{40}", child_blob):
+                raise MigrationHarnessError(
+                    f"cannot resolve tombstone child blob for {legacy} at {commit}"
+                )
+            tombstones.append(
+                _tombstone_record(
+                    states[legacy], old_record, commit, parent_blob, child_blob
+                )
+            )
+            states[legacy]["current_id"] = None
+            states[legacy]["status"] = "tombstone"
+            del tracked[source_token]
+            used_tombstones.add(key)
+        previous = commit
+
+    expected_reviewed = {
+        (rule["legacy_id"], rule["commit"]) for rule in REKEY_REVIEWED_TRANSITIONS
+    }
+    if used_reviewed != expected_reviewed:
+        raise MigrationHarnessError(
+            f"reviewed transition coverage mismatch: missing={sorted(expected_reviewed-used_reviewed)} "
+            f"extra={sorted(used_reviewed-expected_reviewed)}"
+        )
+    if used_tombstones != set(tombstone_by_key):
+        raise MigrationHarnessError(
+            f"reviewed tombstone coverage mismatch: missing={sorted(set(tombstone_by_key)-used_tombstones)}"
+        )
+    if automatic_events != REKEY_AUTO_EVENT_COUNT or len(automatic_origins) != REKEY_AUTO_LINEAGE_COUNT:
+        raise MigrationHarnessError(
+            "automatic history replay count mismatch: "
+            f"events={automatic_events}/{REKEY_AUTO_EVENT_COUNT} "
+            f"origins={len(automatic_origins)}/{REKEY_AUTO_LINEAGE_COUNT}"
+        )
+    if reviewed_counts != Counter(
+        {"same_name": REKEY_REVIEWED_SAME_NAME_COUNT, "successor": REKEY_REVIEWED_SUCCESSOR_COUNT}
+    ):
+        raise MigrationHarnessError(f"reviewed transition counts mismatch: {dict(reviewed_counts)}")
+    live_rekey = [state for state in states.values() if state["status"] == "live"]
+    if len(live_rekey) != REKEY_LIVE_REKEY_LINEAGE_COUNT or len(tracked) != len(live_rekey):
+        raise MigrationHarnessError(
+            f"live rekey lineage mismatch: states={len(live_rekey)} tracked={len(tracked)}"
+        )
+    two_hop = sorted(
+        state["legacy_id"] for state in live_rekey if len(state["lineage"]) == 2
+    )
+    expected_two_hop = sorted(
+        (
+            "RG-F-2d786ec5c86965bc0302",
+            "RG-F-3c4065b2a0d827d950cc",
+            "RG-F-aed699f2484f67f4d52d",
+        )
+    )
+    if two_hop != expected_two_hop or any(len(state["lineage"]) not in (1, 2) for state in live_rekey):
+        raise MigrationHarnessError(f"two-hop lineage set mismatch: {two_hop}")
+    for token, legacy in tracked.items():
+        if token not in target_ids or states[legacy]["current_id"] != token:
+            raise MigrationHarnessError(f"live replay target is absent/inconsistent: {legacy} -> {token}")
+
+    live_rows: list[dict[str, object]] = []
+    for source in source_entries:
+        legacy = str(source["old_id"])
+        state = states.get(legacy)
+        if state is not None and state["status"] == "tombstone":
+            continue
+        if state is None:
+            live_rows.append(dict(source))
+            continue
+        lineage = list(state["lineage"])
+        aliases = [str(event["from_id"]) for event in lineage]
+        live_rows.append(
+            {
+                "old_id": legacy,
+                "new_id": state["current_id"],
+                "language": "rust",
+                "reason": "rust_history_rekey",
+                "aliases": aliases,
+                "lineage": lineage,
+            }
+        )
+    tombstones.sort(key=lambda item: str(item["old_id"]))
+    class_stats = _validate_reconciled_classes(live_rows, tombstones, target_ids)
+
+    source_ledger_bytes = _migration_git(
+        root, ["show", f"{REKEY_SOURCE_COMMIT}:docs/alignment_audit/FUNCTION_LEDGER.json"]
+    ).encode("utf-8")
+    target_ledger_bytes = _migration_git(
+        root, ["show", f"{REKEY_TARGET_COMMIT}:docs/alignment_audit/FUNCTION_LEDGER.json"]
+    ).encode("utf-8")
+    source_migration_bytes = _migration_git(
+        root, ["show", f"{REKEY_TARGET_COMMIT}:docs/alignment_audit/FUNCTION_ID_MIGRATION.json"]
+    ).encode("utf-8")
+    return {
+        "schema": 2,
+        "oracle_commit": ORACLE_COMMIT,
+        "id_scheme": source_migration["id_scheme"],
+        "old_ledger": {
+            "path": "docs/alignment_audit/FUNCTION_LEDGER.json",
+            "tree_commit": REKEY_SOURCE_COMMIT,
+            "tree_subject": _migration_git(
+                root, ["show", "-s", "--format=%s", REKEY_SOURCE_COMMIT]
+            ).strip(),
+        },
+        "source": {
+            "commit": REKEY_SOURCE_COMMIT,
+            "commit_tree": REKEY_SOURCE_COMMIT_TREE,
+            "src_tree": REKEY_SOURCE_SRC_TREE,
+            "ledger_blob": REKEY_SOURCE_LEDGER_BLOB,
+            "ledger_sha256": hashlib.sha256(source_ledger_bytes).hexdigest(),
+            "migration_blob": REKEY_SOURCE_MIGRATION_BLOB,
+            "migration_sha256": hashlib.sha256(source_migration_bytes).hexdigest(),
+        },
+        "target": {
+            "commit": REKEY_TARGET_COMMIT,
+            "commit_tree": REKEY_TARGET_COMMIT_TREE,
+            "src_tree": REKEY_TARGET_SRC_TREE,
+            "ledger_blob": REKEY_TARGET_LEDGER_BLOB,
+            "ledger_sha256": hashlib.sha256(target_ledger_bytes).hexdigest(),
+        },
+        "history": {
+            "mode": "first_parent",
+            "commit_count": len(commits),
+            "first_commit": commits[0],
+            "last_commit": commits[-1],
+        },
+        "semantics": (
+            "Each source origin is reconciled by deterministic first-parent history replay. "
+            "Automatic transitions require a unique same-file/module/owner/name pair plus "
+            "same-hunk, identical non-empty annotation, or identical masked-body evidence. "
+            "Reviewed exceptions are pinned by IDs, commit and blobs. Tombstones are diagnostic "
+            "and are never automatic replacement targets."
+        ),
+        "stats": {
+            **class_stats,
+            "original_definitions": REKEY_ORIGIN_COUNT,
+            "source_rekey_gaps": len(gap_rows),
+            "live_rekey_lineages": len(live_rekey),
+            "automatic_transition_events": automatic_events,
+            "automatic_lineages": len(automatic_origins),
+            "reviewed_same_name": reviewed_counts["same_name"],
+            "reviewed_successors": reviewed_counts["successor"],
+            "two_hop_lineages": len(two_hop),
+            "ambiguous_old_ids": 0,
+            "colliding_new_ids": 0,
+        },
+        "disambiguators": list(source_migration["disambiguators"]),
+        "entries": live_rows,
+        "tombstones": tombstones,
     }
 
 
@@ -1651,6 +2849,353 @@ fn after_macros() {}
     else:
         raise AssertionError("colliding new ids must fail closed")
 
+    # --- reconciled migration lineage and failure matrix ------------------
+    def synthetic_record(fid: str, signature: str, *, owner: str = "impl:Demo",
+                         name: str = "step", line: int = 10,
+                         body: str | None = "{ value }") -> dict[str, object]:
+        return {
+            "id": fid,
+            "path": "src/demo.rs",
+            "module": "demo",
+            "owner": owner,
+            "name": name,
+            "signature": signature,
+            "line": line,
+            "end_line": line + 2,
+            "is_test": False,
+            "is_declaration": False,
+            "_annotation": ("ghidra", '{"file":"x.cc","line":1}'),
+            "_annotation_kind": "ghidra",
+            "_annotation_value": {"file": "x.cc", "line": 1},
+            "_masked_body": body,
+        }
+
+    old_token = "RG-F-" + "10" * 10
+    new_token = "RG-F-" + "11" * 10
+    old_record = synthetic_record(old_token, "fn step(&self, x: u8)")
+    new_record = synthetic_record(new_token, "fn step(&self, x: u16)")
+    evidence = strict_transition_evidence(old_record, new_record, [(10, 1, 10, 1)])
+    assert evidence == [
+        "same_patch_hunk", "identical_nonempty_annotation", "identical_masked_body"
+    ], "one-hop signature change must retain all deterministic evidence"
+    selected = select_unique_strict_transition(
+        "a" * 40,
+        ("src/demo.rs", "demo", "impl:Demo", "step"),
+        [old_token],
+        [new_token],
+        {old_token: (old_record, "1" * 40)},
+        {new_token: (new_record, "2" * 40)},
+        [(10, 1, 10, 1)],
+    )
+    assert selected and selected[:2] == (old_token, new_token)
+
+    # Owner-header drift, or a rename plus body rewrite, is not an automatic
+    # successor merely because a nearby function appeared.
+    owner_drift = synthetic_record(
+        "RG-F-" + "12" * 10, "fn step(&self, x: u16)", owner="impl:Demo as Trait"
+    )
+    renamed = synthetic_record(
+        "RG-F-" + "13" * 10, "fn replacement(&self)", name="replacement", body="{ other }"
+    )
+    assert (old_record["owner"], old_record["name"]) != (owner_drift["owner"], owner_drift["name"])
+    assert (old_record["owner"], old_record["name"]) != (renamed["owner"], renamed["name"])
+    no_proof = dict(new_record)
+    no_proof["_annotation"] = None
+    no_proof["_masked_body"] = "{ rewritten }"
+    assert not strict_transition_evidence(old_record, no_proof, [])
+
+    reviewed_target = "RG-F-" + "16" * 10
+    moved_record = synthetic_record(
+        reviewed_target, "fn replacement()", owner="free", name="replacement"
+    )
+    moved_record["path"] = "src/replacement.rs"
+    moved_record["module"] = "replacement"
+    reviewed_rule = {
+        "legacy_id": "RG-F-" + "17" * 10,
+        "from_id": old_token,
+        "to_id": reviewed_target,
+        "commit": "6" * 40,
+        "kind": "successor",
+        "label": "reviewed rename and move",
+        "parent_blob_prefix": "1" * 8,
+        "child_blob_prefix": "2" * 8,
+    }
+    validated = validate_reviewed_transition(
+        reviewed_rule,
+        {old_token: reviewed_rule["legacy_id"]},
+        {old_token: (old_record, "1" * 40)},
+        {reviewed_target: (moved_record, "2" * 40)},
+        set(),
+    )
+    assert validated[0] == reviewed_rule["legacy_id"], "explicit rename+move must use exact pins"
+    try:
+        validate_reviewed_transition(
+            reviewed_rule,
+            {old_token: reviewed_rule["legacy_id"]},
+            {old_token: (old_record, "1" * 40)},
+            {},  # target existed before the commit, so it is not newly added
+            set(),
+        )
+    except MigrationHarnessError as error:
+        assert "not newly added" in str(error)
+    else:
+        raise AssertionError("wrapper/deletion -> existing function must be rejected")
+    wrong_blob_rule = dict(reviewed_rule)
+    wrong_blob_rule["child_blob_prefix"] = "9" * 8
+    try:
+        validate_reviewed_transition(
+            wrong_blob_rule,
+            {old_token: reviewed_rule["legacy_id"]},
+            {old_token: (old_record, "1" * 40)},
+            {reviewed_target: (moved_record, "2" * 40)},
+            set(),
+        )
+    except MigrationHarnessError as error:
+        assert "child blob mismatch" in str(error)
+    else:
+        raise AssertionError("reviewed transition blob drift must fail closed")
+
+    # 1->2, 2->1, and overload candidate sets are ambiguous even when one
+    # candidate happens to have matching body/annotation evidence.
+    other_old = "RG-F-" + "14" * 10
+    other_new = "RG-F-" + "15" * 10
+    before = {
+        old_token: (old_record, "1" * 40),
+        other_old: (synthetic_record(other_old, "fn step(&self, x: u32)"), "1" * 40),
+    }
+    after = {
+        new_token: (new_record, "2" * 40),
+        other_new: (synthetic_record(other_new, "fn step(&self, x: u64)"), "2" * 40),
+    }
+    for old_ids, new_ids in (
+        ([old_token], [new_token, other_new]),
+        ([old_token, other_old], [new_token]),
+        ([old_token, other_old], [new_token, other_new]),
+    ):
+        try:
+            select_unique_strict_transition(
+                "b" * 40, ("src/demo.rs", "demo", "impl:Demo", "step"),
+                old_ids, new_ids, before, after, [(10, 2, 10, 2)],
+            )
+        except MigrationHarnessError as error:
+            assert "ambiguous automatic transition" in str(error)
+        else:
+            raise AssertionError("ambiguous transition cardinality must fail closed")
+
+    def live_row(old: str, new: str, aliases: list[str]) -> dict[str, object]:
+        return {"old_id": old, "new_id": new, "aliases": aliases}
+
+    def dead_row(old: str, aliases: list[str]) -> dict[str, object]:
+        return {
+            "old_id": old,
+            "aliases": aliases,
+            "path": "src/deleted.rs",
+            "module": "deleted",
+            "owner": "free",
+            "name": "gone",
+            "signature": "fn gone()",
+            "deleted_at_commit": "3" * 40,
+            "parent_blob": "4" * 40,
+            "child_blob": "5" * 40,
+            "reason": "deleted_without_reviewed_successor",
+        }
+
+    legacy_live = "RG-F-" + "20" * 10
+    final_live = "RG-F-" + "21" * 10
+    base_live = "RG-F-" + "22" * 10
+    middle_live = "RG-F-" + "23" * 10
+    legacy_dead = "RG-F-" + "30" * 10
+    base_dead = "RG-F-" + "31" * 10
+    healthy_stats = _validate_reconciled_classes(
+        [live_row(legacy_live, final_live, [base_live, middle_live])],
+        [dead_row(legacy_dead, [base_dead])],
+        {final_live},
+        expected_origin_count=2,
+        expected_live_count=1,
+        expected_tombstone_count=1,
+        expected_alias_count=2,
+    )
+    assert healthy_stats["alias_tokens"] == 2, "two-hop compression must retain intermediate alias"
+
+    def expect_rekey_failure(label: str, thunk) -> None:
+        try:
+            thunk()
+        except MigrationHarnessError:
+            return
+        raise AssertionError(f"{label} must fail closed")
+
+    # Duplicate aliases across origin classes and 2->1 final convergence.
+    second_old = "RG-F-" + "40" * 10
+    second_final = "RG-F-" + "41" * 10
+    expect_rekey_failure(
+        "duplicate alias across classes",
+        lambda: _validate_reconciled_classes(
+            [
+                live_row(legacy_live, final_live, [base_live]),
+                live_row(second_old, second_final, [base_live]),
+            ], [], {final_live, second_final}, expected_origin_count=2,
+            expected_live_count=2, expected_tombstone_count=0, expected_alias_count=2,
+        ),
+    )
+    expect_rekey_failure(
+        "two origins converging on one final",
+        lambda: _validate_reconciled_classes(
+            [live_row(legacy_live, final_live, []), live_row(second_old, final_live, [])],
+            [], {final_live}, expected_origin_count=2, expected_live_count=2,
+            expected_tombstone_count=0, expected_alias_count=0,
+        ),
+    )
+    expect_rekey_failure(
+        "alias equals unrelated current id",
+        lambda: _validate_reconciled_classes(
+            [live_row(legacy_live, final_live, [second_final])], [],
+            {final_live, second_final}, expected_origin_count=1, expected_live_count=1,
+            expected_tombstone_count=0, expected_alias_count=1,
+        ),
+    )
+    expect_rekey_failure(
+        "live target absent ledger",
+        lambda: _validate_reconciled_classes(
+            [live_row(legacy_live, final_live, [])], [], set(),
+            expected_origin_count=1, expected_live_count=1,
+            expected_tombstone_count=0, expected_alias_count=0,
+        ),
+    )
+    malformed_tombstone = dead_row(legacy_dead, [base_dead])
+    del malformed_tombstone["parent_blob"]
+    expect_rekey_failure(
+        "tombstone missing commit/blob/signature",
+        lambda: _validate_reconciled_classes(
+            [], [malformed_tombstone], set(), expected_origin_count=1,
+            expected_live_count=0, expected_tombstone_count=1, expected_alias_count=0,
+        ),
+    )
+    # A lineage that transitions and is later deleted retains both its base
+    # and intermediate tokens in the tombstone class.
+    intermediate_dead = dead_row(legacy_dead, [base_dead, middle_live])
+    _validate_reconciled_classes(
+        [], [intermediate_dead], set(), expected_origin_count=1,
+        expected_live_count=0, expected_tombstone_count=1, expected_alias_count=0,
+    )
+
+    # Pinned git boundary: commit/tree/blob mismatches, unrelated history,
+    # dirty src and dirty ledger are harness errors (the CLI maps these to 2).
+    pin_names = (
+        "REKEY_SOURCE_COMMIT", "REKEY_SOURCE_COMMIT_TREE", "REKEY_SOURCE_SRC_TREE",
+        "REKEY_SOURCE_LEDGER_BLOB", "REKEY_TARGET_COMMIT", "REKEY_TARGET_COMMIT_TREE",
+        "REKEY_TARGET_SRC_TREE", "REKEY_TARGET_LEDGER_BLOB",
+        "REKEY_SOURCE_MIGRATION_BLOB", "REKEY_FIRST_PARENT_COMMIT_COUNT",
+    )
+    saved_pins = {name: globals()[name] for name in pin_names}
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        command_output(["git", "init", "-q", "."], repo)
+        command_output(["git", "config", "user.email", "self-test@rugra"], repo)
+        command_output(["git", "config", "user.name", "rugra self-test"], repo)
+        (repo / "src").mkdir()
+        (repo / "docs/alignment_audit").mkdir(parents=True)
+        source_text = "fn source() {}\n"
+        target_text = "fn source(x: u8) {}\n"
+        ledger_path = repo / "docs/alignment_audit/FUNCTION_LEDGER.json"
+        migration_path = repo / "docs/alignment_audit/FUNCTION_ID_MIGRATION.json"
+        bad_json_path = repo / "docs/alignment_audit/bad.json"
+        (repo / "src/main.rs").write_text(source_text, encoding="utf-8")
+        ledger_path.write_text("{}\n", encoding="utf-8")
+        command_output(["git", "add", "src/main.rs", "docs/alignment_audit/FUNCTION_LEDGER.json"], repo)
+        command_output(["git", "commit", "-qm", "source"], repo)
+        source_commit = command_output(["git", "rev-parse", "HEAD"], repo).strip()
+        (repo / "src/main.rs").write_text(target_text, encoding="utf-8")
+        ledger_path.write_text('{"target":true}\n', encoding="utf-8")
+        migration_path.write_text('{"source":true}\n', encoding="utf-8")
+        bad_json_path.write_text("{broken\n", encoding="utf-8")
+        command_output(
+            ["git", "add", "src/main.rs", "docs/alignment_audit/FUNCTION_LEDGER.json",
+             "docs/alignment_audit/FUNCTION_ID_MIGRATION.json",
+             "docs/alignment_audit/bad.json"], repo,
+        )
+        command_output(["git", "commit", "-qm", "target"], repo)
+        target_commit = command_output(["git", "rev-parse", "HEAD"], repo).strip()
+        synthetic_pins = {
+            "REKEY_SOURCE_COMMIT": source_commit,
+            "REKEY_SOURCE_COMMIT_TREE": command_output(
+                ["git", "rev-parse", f"{source_commit}^{{tree}}"], repo
+            ).strip(),
+            "REKEY_SOURCE_SRC_TREE": command_output(
+                ["git", "rev-parse", f"{source_commit}:src"], repo
+            ).strip(),
+            "REKEY_SOURCE_LEDGER_BLOB": command_output(
+                ["git", "rev-parse", f"{source_commit}:docs/alignment_audit/FUNCTION_LEDGER.json"], repo
+            ).strip(),
+            "REKEY_TARGET_COMMIT": target_commit,
+            "REKEY_TARGET_COMMIT_TREE": command_output(
+                ["git", "rev-parse", f"{target_commit}^{{tree}}"], repo
+            ).strip(),
+            "REKEY_TARGET_SRC_TREE": command_output(
+                ["git", "rev-parse", f"{target_commit}:src"], repo
+            ).strip(),
+            "REKEY_TARGET_LEDGER_BLOB": command_output(
+                ["git", "rev-parse", f"{target_commit}:docs/alignment_audit/FUNCTION_LEDGER.json"], repo
+            ).strip(),
+            "REKEY_SOURCE_MIGRATION_BLOB": command_output(
+                ["git", "rev-parse", f"{target_commit}:docs/alignment_audit/FUNCTION_ID_MIGRATION.json"], repo
+            ).strip(),
+            "REKEY_FIRST_PARENT_COMMIT_COUNT": 1,
+        }
+        try:
+            globals().update(synthetic_pins)
+            assert verify_rekey_boundary(repo, verify_locked_oracle=False) == [target_commit]
+            expect_rekey_failure(
+                "malformed pinned JSON",
+                lambda: _migration_json_from_git(
+                    repo, target_commit, "docs/alignment_audit/bad.json"
+                ),
+            )
+
+            (repo / "src/main.rs").write_text(target_text + "// dirty\n", encoding="utf-8")
+            expect_rekey_failure(
+                "dirty target src", lambda: verify_rekey_boundary(repo, verify_locked_oracle=False)
+            )
+            (repo / "src/main.rs").write_text(target_text, encoding="utf-8")
+
+            globals()["REKEY_TARGET_SRC_TREE"] = "0" * 40
+            expect_rekey_failure(
+                "target src tree mismatch",
+                lambda: verify_rekey_boundary(repo, verify_locked_oracle=False),
+            )
+            globals()["REKEY_TARGET_SRC_TREE"] = synthetic_pins["REKEY_TARGET_SRC_TREE"]
+
+            ledger_path.write_text('{"dirty":true}\n', encoding="utf-8")
+            expect_rekey_failure(
+                "target ledger mismatch",
+                lambda: verify_rekey_boundary(repo, verify_locked_oracle=False),
+            )
+            ledger_path.write_text('{"target":true}\n', encoding="utf-8")
+
+            expect_rekey_failure(
+                "object pin mismatch",
+                lambda: _expect_git_object(repo, "HEAD^{commit}", "0" * 40, "test commit"),
+            )
+
+            unrelated = command_output(
+                ["git", "commit-tree", synthetic_pins["REKEY_TARGET_COMMIT_TREE"], "-m", "unrelated"],
+                repo,
+            ).strip()
+            globals()["REKEY_SOURCE_COMMIT"] = unrelated
+            globals()["REKEY_SOURCE_COMMIT_TREE"] = synthetic_pins["REKEY_TARGET_COMMIT_TREE"]
+            globals()["REKEY_SOURCE_SRC_TREE"] = synthetic_pins["REKEY_TARGET_SRC_TREE"]
+            globals()["REKEY_SOURCE_LEDGER_BLOB"] = synthetic_pins["REKEY_TARGET_LEDGER_BLOB"]
+            expect_rekey_failure(
+                "source not ancestor",
+                lambda: verify_rekey_boundary(repo, verify_locked_oracle=False),
+            )
+        finally:
+            globals().update(saved_pins)
+
+    expect_rekey_failure(
+        "malformed migration schema",
+        lambda: _validate_rekey_source_tables({}, {}, {}),
+    )
+
     lines = ["// Ghidra: x.cc:7 A::f", "fn f() {}"]
     record = scan_rust_functions("\n".join(lines))[0]
     kind, marker = marker_above(lines, record.start_line)
@@ -1670,11 +3215,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument(
+    migration_mode = parser.add_mutually_exclusive_group()
+    migration_mode.add_argument(
         "--migrate",
         action="store_true",
         help="rewrite the existing ledger's ID space into scheme 2 and emit "
         "FUNCTION_ID_MIGRATION.json",
+    )
+    migration_mode.add_argument(
+        "--reconcile-migration",
+        action="store_true",
+        help="replay the separately pinned scheme-2 source history into the pinned "
+        "target ledger; never replaces the --migrate origin",
     )
     parser.add_argument(
         "--migrate-base",
@@ -1690,6 +3242,37 @@ def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parent.parent
     output_dir = args.output_dir.resolve() if args.output_dir else root / "docs/alignment_audit"
     try:
+        if args.reconcile_migration:
+            try:
+                migration = migration_reconciliation_document(root)
+            except MigrationHarnessError:
+                raise
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                IndexError,
+                UnicodeError,
+                json.JSONDecodeError,
+            ) as error:
+                raise MigrationHarnessError(
+                    f"{type(error).__name__}: {error}"
+                ) from error
+            write_or_check(
+                output_dir / "FUNCTION_ID_MIGRATION.json",
+                canonical_json(migration),
+                args.check,
+            )
+            stats = migration["stats"]
+            print(
+                "generate_function_ledger: reconciled migration "
+                f"origins={stats['origin_entries']} tombstones={stats['tombstones']} "
+                f"lineages={stats['live_rekey_lineages']} aliases={stats['alias_tokens']} "
+                f"auto_events={stats['automatic_transition_events']}"
+            )
+            return 0
         if args.migrate:
             ledger_path = root / "docs/alignment_audit/FUNCTION_LEDGER.json"
             migration = migration_document(root, ledger_path, output_dir, args.migrate_base)
@@ -1721,6 +3304,9 @@ def main(argv: list[str]) -> int:
         }
         for path, content in outputs.items():
             write_or_check(path, content, args.check)
+    except MigrationHarnessError as error:
+        print(f"generate_function_ledger: migration harness input error: {error}", file=sys.stderr)
+        return 2
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
         print(f"generate_function_ledger: {error}", file=sys.stderr)
         return 1

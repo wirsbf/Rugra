@@ -196,6 +196,32 @@ sha256/环境/输入指纹）逐字段匹配后热启动 memo 续跑；schema 1 
   重选；计划头部带 registry/ledger/migration 三文件 sha256 指纹，应用前须重生成；
   collateral_pins 列出 runner 编辑后须同 commit 重钉的 `comparand.runner_sha256`。
 
+### Function-ID 历史重键（`FUNCTION-ID-MIGRATE-REKEY-0001`）
+
+`generate_function_ledger.py --migrate` 只保留为一次性的 scheme-1→scheme-2 原点生成器；
+不得用它覆盖已有迁移来源。后续账本演进使用独立命令：
+
+```bash
+python3 tools/generate_function_ledger.py --reconcile-migration
+python3 tools/generate_function_ledger.py --reconcile-migration --check
+```
+
+该命令锁定 source `235b91bb552261fb3f94b7974926ef6db9b21515`
+（src tree `7a9746660c9c569edf1ea922618bcad2ac9860ae`）与 target
+`8d129628c84eb87f4094b5012833b8970ff21ae9`
+（src tree `004b20c8ed6da74cf6457a4386570bae4801bc78`），逐个重放 332 个
+first-parent commit。自动 transition 必须是同文件、完整 module/owner/name 唯一 1→1，
+并至少具有同 patch hunk、相同非空 annotation 或相同 masked body 之一；其余仅允许使用
+带 legacy/base/final/commit/blob 精确 pin 的 6 个同名人工例外与 8 个跨名 successor。
+任一 1→2、2→1、碰撞、脏 src、tree/blob/ledger 漂移、非祖先关系或坏 schema 均 rc=2，
+不写半成品且不泄漏 traceback。
+
+schema-2 `FUNCTION_ID_MIGRATION.json` 保留 24,323 个 live origin、146 条 live rekey
+lineage、149 个 base/intermediate alias 与 47 个 tombstone，三条两跳链不会被压平丢失
+中间 token。tombstone 只产生 `TOMBSTONED_FUNCTION_ID`，永远不会自动映射到同名或现存
+wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstoned=0`、
+`rekey_gap_family=0`；剩余 21 处（14 个唯一值）GH placeholder 继续是 unmappable，不能猜。
+
 metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`observation_scope`、
 `known_dependencies`、`residuals`、`known_residuals`、`uncovered_boundaries` 或
 `residual_union[].status`；只有非 `MATCH` 状态或这些 residual 容器中的明确未覆盖记录
@@ -204,6 +230,7 @@ metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`obs
 
 ```bash
 python3 -m py_compile tools/oracle_registry.py
+python3 tools/generate_function_ledger.py --self-test
 python3 tools/oracle_registry.py self-test
 python3 tools/oracle_registry.py plan --check-determinism
 python3 tools/oracle_registry.py migration-status --strict
