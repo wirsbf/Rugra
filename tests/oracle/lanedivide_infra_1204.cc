@@ -26,7 +26,6 @@ struct GraphProjection {
   vector<Varnode *> vars;
   map<Varnode *,int4> varIndex;
   set<Varnode *> spaceidConstants;	///< Constants naming a space for a LOAD/STORE (pointer encoded in the oracle)
-  set<Varnode *> iopAnnotations;	///< Annotation varnodes at slot 1 of INDIRECTs (classification normalized, see metadata)
 
   explicit GraphProjection(BlockBasic *block)
   {
@@ -38,8 +37,6 @@ struct GraphProjection {
       PcodeOp *op = *iter;
       if ((op->code() == CPUI_STORE || op->code() == CPUI_LOAD) && op->numInput() > 0)
         spaceidConstants.insert(op->getIn(0));
-      if (op->code() == CPUI_INDIRECT && op->numInput() > 1)
-        iopAnnotations.insert(op->getIn(1));
       touch(op->getOut());
       for(int4 slot=0;slot<op->numInput();++slot)
         touch(op->getIn(slot));
@@ -100,7 +97,7 @@ struct GraphProjection {
       out << 'v' << i << ":c" << vn->getCreateIndex()
           << "/s" << vn->getSize()
           << "/";
-      if (vn->getSpace()->getType() == IPTR_IOP || iopAnnotations.find(vn) != iopAnnotations.end())
+      if (vn->getSpace()->getType() == IPTR_IOP)
         out << "si/k0";
       else
         out << "sp" << vn->getSpace()->getIndex()

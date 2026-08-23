@@ -24,9 +24,6 @@ struct GraphProjection {
     /// Constants naming a space for a LOAD/STORE (SpaceId encoded in Rugra,
     /// AddrSpace pointer in the oracle; observed as the resolved index).
     spaceid_constants: std::collections::HashSet<usize>,
-    /// Annotation varnodes at slot 1 of INDIRECTs (classification normalized,
-    /// see metadata TRANSFORM-CONSTANT-IOP-SPACE-0001).
-    iop_annotations: std::collections::HashSet<usize>,
 }
 
 impl GraphProjection {
@@ -43,7 +40,6 @@ impl GraphProjection {
             vars: Vec::new(),
             var_index: HashMap::new(),
             spaceid_constants: std::collections::HashSet::new(),
-            iop_annotations: std::collections::HashSet::new(),
         };
         for op_index in 0..result.ops.len() {
             let (output, inputs, opcode) = {
@@ -54,11 +50,6 @@ impl GraphProjection {
                 result
                     .spaceid_constants
                     .insert(Arc::as_ptr(&inputs[0]) as usize);
-            }
-            if opcode == OpCode::CPUI_INDIRECT && inputs.len() > 1 {
-                result
-                    .iop_annotations
-                    .insert(Arc::as_ptr(&inputs[1]) as usize);
             }
             result.touch(output);
             for input in inputs {
@@ -144,12 +135,12 @@ impl GraphProjection {
                 varnode.get_size(),
             )
             .unwrap();
-            if matches!(space, AddressSpace::Iop) || self.iop_annotations.contains(&varnode_ptr) {
+            if matches!(space, AddressSpace::Iop) {
                 output.push_str("si/k0");
             } else {
                 write!(output, "sp{}/k{}", space.space_id(), u8::from(varnode.is_constant())).unwrap();
             }
-            if varnode.is_constant() && !self.iop_annotations.contains(&varnode_ptr) {
+            if varnode.is_constant() {
                 if self.spaceid_constants.contains(&varnode_ptr) {
                     write!(
                         output,

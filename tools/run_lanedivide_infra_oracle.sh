@@ -13,6 +13,7 @@ rugra_source_src_tree=dc37d7228cd6fef14762bce19d7cb24a654fcd81
 rugra_source_subflow_blob=7afa4d6ca2c1a428c6bcd324767684b016b2f46f
 rugra_source_arch_blob=cd3fd77747d6377e14f2e672956ddfbc9ff17877
 rugra_source_funcdata_blob=9bfdcb7839c65c55c58dfde4c98b271f21975f7c
+rugra_source_transform_blob=77ff7a4be56d63d988c76c6888605de11a94880a
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -25,6 +26,7 @@ rust_fixture="$repo_root/tests/oracle/lanedivide_infra_1204.rs"
 subflow_overlay="$repo_root/src/subflow.rs"
 arch_overlay="$repo_root/src/arch.rs"
 funcdata_overlay="$repo_root/src/funcdata.rs"
+transform_overlay="$repo_root/src/transform.rs"
 runner="$repo_root/tools/run_lanedivide_infra_oracle.sh"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
 bfd_header="$bfd_include/bfd.h"
@@ -40,7 +42,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$subflow_overlay" \
-  "$arch_overlay" "$funcdata_overlay" \
+  "$arch_overlay" "$funcdata_overlay" "$transform_overlay" \
   "$runner" "$bfd_header" "$bfd_library"; do
   if [[ ! -f "$required" || -L "$required" ]]; then
     echo "required input is not a regular non-symlink file: $required" >&2
@@ -77,6 +79,7 @@ for binding in \
   "$rugra_source_commit:src/subflow.rs:$rugra_source_subflow_blob" \
   "$rugra_source_commit:src/arch.rs:$rugra_source_arch_blob" \
   "$rugra_source_commit:src/funcdata.rs:$rugra_source_funcdata_blob" \
+  "$rugra_source_commit:src/transform.rs:$rugra_source_transform_blob" \
   "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
   "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
   "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
@@ -110,6 +113,7 @@ tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
 cp "$subflow_overlay" "$snapshot_root/src/subflow.rs"
 cp "$arch_overlay" "$snapshot_root/src/arch.rs"
 cp "$funcdata_overlay" "$snapshot_root/src/funcdata.rs"
+cp "$transform_overlay" "$snapshot_root/src/transform.rs"
 cp "$cpp_fixture" "$snapshot_root/tests/oracle/lanedivide_infra_1204.cc"
 cp "$rust_fixture" "$snapshot_root/tests/oracle/lanedivide_infra_1204.rs"
 cp "$metadata" "$snapshot_root/tests/oracle/lanedivide_infra_1204.metadata.json"
@@ -124,12 +128,12 @@ done
 runner_sha=$(sha256sum "$runner" | awk '{print $1}')
 python3 -I -S - "$repo_root" "$snapshot_root" "$metadata" "$cpp_fixture" \
   "$rust_fixture" "$subflow_overlay" "$arch_overlay" "$funcdata_overlay" \
-  "$runner_sha" "$input_blob_size" \
+  "$transform_overlay" "$runner_sha" "$input_blob_size" \
   "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" "$oracle_language_tree" \
   "$oracle_makefile_blob" "$rugra_source_commit" "$rugra_source_tree" \
   "$rugra_source_src_tree" \
   "$rugra_source_subflow_blob" "$rugra_source_arch_blob" \
-  "$rugra_source_funcdata_blob" \
+  "$rugra_source_funcdata_blob" "$rugra_source_transform_blob" \
   "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
   "$rugra_source_build_rs_blob" "$rugra_input_commit" "$rugra_input_blob" \
   "$bfd_header" "$bfd_library" <<'PY'
@@ -141,10 +145,11 @@ import sys
 
 (
     repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw, subflow_raw,
-    arch_raw, funcdata_raw,
+    arch_raw, funcdata_raw, transform_raw,
     runner_sha, binary_size, oracle_commit, oracle_tag, cpp_tree,
     language_tree, makefile_blob, source_commit, source_tree, source_src_tree,
     source_subflow_blob, source_arch_blob, source_funcdata_blob,
+    source_transform_blob,
     source_cargo_toml_blob, source_cargo_lock_blob,
     source_build_rs_blob, input_commit, input_blob, bfd_header_raw,
     bfd_library_raw,
@@ -194,6 +199,7 @@ for label, actual, expected in (
     ("source subflow blob", source["base_subflow_blob"], source_subflow_blob),
     ("source arch blob", source["base_arch_blob"], source_arch_blob),
     ("source funcdata blob", source["base_funcdata_blob"], source_funcdata_blob),
+    ("source transform blob", source["base_transform_blob"], source_transform_blob),
     ("Cargo.toml blob", source["cargo_toml_blob"], source_cargo_toml_blob),
     ("Cargo.lock blob", source["cargo_lock_blob"], source_cargo_lock_blob),
     ("build.rs blob", source["build_rs_blob"], source_build_rs_blob),
@@ -206,6 +212,7 @@ for key, path in (
     ("subflow_overlay_sha256", pathlib.Path(subflow_raw)),
     ("arch_overlay_sha256", pathlib.Path(arch_raw)),
     ("funcdata_overlay_sha256", pathlib.Path(funcdata_raw)),
+    ("transform_overlay_sha256", pathlib.Path(transform_raw)),
 ):
     require(key, sha(path.read_bytes()), comparand[key])
 require("runner sha", runner_sha, comparand["runner_sha256"])
@@ -214,6 +221,7 @@ for key, relative in (
     ("subflow_overlay_sha256", "src/subflow.rs"),
     ("arch_overlay_sha256", "src/arch.rs"),
     ("funcdata_overlay_sha256", "src/funcdata.rs"),
+    ("transform_overlay_sha256", "src/transform.rs"),
 ):
     require(f"overlay table {relative}", overlay_paths[relative], comparand[key])
 
@@ -255,22 +263,21 @@ canonical = json.dumps(
     fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
-require("projection", metadata["projection_status"], "UNTESTED")
-require("overall", metadata["overall_status"], "UNTESTED")
+require("projection", metadata["projection_status"], "MATCH")
+require("overall", metadata["overall_status"], "MATCH")
 expected_matches = {
     "arch_laned_lookup_minimum_identity", "laned_map_lifecycle_ordering",
     "piece_split_apply_projection", "multiequal_split_apply_projection",
     "failure_zero_mutation",
     "subpiece_terminator_path", "store_load_lane_split",
-    "shift_zext_lane_split",
+    "shift_zext_lane_split", "indirect_lane_split",
     "restricted_window_trace", "typelock_reject_path",
 }
-expected_mismatch = "indirect_lane_split"
 expected_oracle_ub = "oracle_ub_lane_index_below_skip"
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict):
     raise SystemExit("coverage must be an object")
-require("coverage keys", set(coverage), expected_matches | {expected_mismatch, expected_oracle_ub})
+require("coverage keys", set(coverage), expected_matches | {expected_oracle_ub})
 valid_statuses = {"MATCH", "MISMATCH", "NO_ORACLE", "UNTESTED"}
 coverage_residual_ids = set()
 observed_statuses = set()
@@ -303,21 +310,11 @@ for key, record in coverage.items():
 for key in expected_matches:
     require(f"coverage.{key}.status", coverage[key]["status"], "MATCH")
 require(
-    "coverage indirect mismatch status",
-    coverage[expected_mismatch]["status"],
-    "MISMATCH",
-)
-require(
-    "coverage indirect residual binding",
-    coverage[expected_mismatch]["residual_todo_ids"],
-    ["TRANSFORM-CONSTANT-IOP-SPACE-0001"],
-)
-require(
     "coverage oracle_ub status",
     coverage[expected_oracle_ub]["status"],
     "NO_ORACLE",
 )
-require("coverage status set", observed_statuses, {"MATCH", "MISMATCH", "NO_ORACLE"})
+require("coverage status set", observed_statuses, {"MATCH", "NO_ORACLE"})
 require(
     "projection/coverage consistency",
     metadata["projection_status"],
@@ -332,12 +329,14 @@ require(
 # LANEDIVIDE-INFRA-RESIDUAL-0001: five of the six residual branches resolved to
 # MATCH against the locked oracle; subflow.cc:3942 remains NO_ORACLE (undefined
 # behavior in the oracle itself, no defined observation exists).
-# TRANSFORM-CONSTANT-IOP-SPACE-0001: the indirect branch matches through the
-# LaneDivide layer but TransformVar::createReplacement's constant_iop arm
-# (transform.rs:445-450, stale "no iop space" fallback vs transform.cc:211-215)
-# materializes the annotation as a const-space constant instead of an iop-space
-# varnode; transform.rs is outside this lease, so the branch stays MISMATCH and
-# holds the fixture below MATCH.
+# TRANSFORM-CONSTANT-IOP-SPACE-0001: RESOLVED. TransformVar::createReplacement's
+# constant_iop arm (transform.rs) now resolves the affecting op from the
+# placeholder value (offset-based getOpFromConst mirroring op.hh:249 /
+# transform.cc:213) and re-materializes the annotation via
+# Funcdata::new_varnode_iop (transform.cc:211-215). The fixture projections were
+# de-normalized: INDIRECT slot-1 annotations are byte-compared through their
+# true iop-space classification (si/k0) on both sides, with only the raw
+# pointer offset omitted, so a const-space regression now fails the byte gate.
 require(
     "overall/coverage consistency",
     metadata["overall_status"],
@@ -354,26 +353,16 @@ require("coverage/top-level residual union", coverage_residual_ids, set(top_resi
 require(
     "top-level residual ids",
     set(top_residual_ids),
-    {"LANEDIVIDE-INFRA-RESIDUAL-0001", "TRANSFORM-CONSTANT-IOP-SPACE-0001"},
+    {"LANEDIVIDE-INFRA-RESIDUAL-0001"},
 )
 residual = metadata["residual_union"]
 require(
     "residual TODO ids",
     {branch["todo_id"] for branch in residual},
-    {"LANEDIVIDE-INFRA-RESIDUAL-0001", "TRANSFORM-CONSTANT-IOP-SPACE-0001"},
+    {"LANEDIVIDE-INFRA-RESIDUAL-0001"},
 )
 residual_by_id = {branch["todo_id"]: branch for branch in residual}
 require("residual ub status", residual_by_id["LANEDIVIDE-INFRA-RESIDUAL-0001"]["status"], "NO_ORACLE")
-require(
-    "residual iop status",
-    residual_by_id["TRANSFORM-CONSTANT-IOP-SPACE-0001"]["status"],
-    "MISMATCH",
-)
-require(
-    "residual branch union",
-    {branch["todo_id"] for branch in residual},
-    {"LANEDIVIDE-INFRA-RESIDUAL-0001", "TRANSFORM-CONSTANT-IOP-SPACE-0001"},
-)
 for branch in residual:
     if not branch.get("detail"):
         raise SystemExit(f"residual {branch['todo_id']} has no detail")
@@ -459,4 +448,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha2
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'lanedivide_infra_1204: covered_projection=10/12 projection_status=UNTESTED overall_status=UNTESTED residual=LANEDIVIDE-INFRA-RESIDUAL-0001 (oracle_ub NO_ORACLE)+TRANSFORM-CONSTANT-IOP-SPACE-0001 (indirect iop materialization MISMATCH)\n'
+printf 'lanedivide_infra_1204: covered_projection=11/12 projection_status=MATCH overall_status=MATCH residual=LANEDIVIDE-INFRA-RESIDUAL-0001 (oracle_ub NO_ORACLE)\n'
