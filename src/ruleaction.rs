@@ -370,55 +370,9 @@ impl Rule for RuleZextEliminate {
     }
 }
 
-/// Rule for eliminating redundant sign-extensions
-///
-/// Corresponds to Ghidra's `RuleSextEliminate`.
-/// Collapses `INT_SEXT(x)` to `COPY(x)` when input and output sizes match.
-pub struct RuleSextEliminate;
-
-impl RuleSextEliminate {
-    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Rule for RuleSextEliminate {
-    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        let mut op = op_arc.write().unwrap();
-        if op.opcode != OpCode::CPUI_INT_SEXT {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let in_vn_arc = &op.inrefs[0];
-        let out_vn_arc = match &op.output {
-            Some(vn) => vn,
-            None => return Ok(action_status::NO_CHANGE),
-        };
-
-        let in_size = in_vn_arc.read().unwrap().size;
-        let out_size = out_vn_arc.read().unwrap().size;
-
-        if in_size == out_size {
-            // sext to same size is just a COPY
-            op.opcode = OpCode::CPUI_COPY;
-            return Ok(action_status::CHANGE);
-        }
-
-        Ok(action_status::NO_CHANGE)
-    }
-
-    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
-    fn get_name(&self) -> &str {
-        "sext_eliminate"
-    }
-
-    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
-    fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_SEXT]
-    }
-}
+// PIPE-POOL-LOCAL-RULES-0001: RuleSextEliminate deleted. The locked 12.0.4
+// oracle (e40ed130) contains no class of this name anywhere in its source
+// tree; it was a Rugra invention registered in oppool1 (铁律 1.4 violation).
 
 /// Rule for collapsing same-input binary ops.
 ///
@@ -3021,6 +2975,18 @@ impl Rule for RuleTestSign {
 /// Faithful to Ghidra's `RuleEquality` (ruleaction.cc:619-643). If both inputs
 /// to an INT_EQUAL/INT_NOTEQUAL are provably the same value, the comparison
 /// collapses to a COPY of a constant (1 for EQUAL, 0 for NOTEQUAL).
+///
+/// ORACLE DEAD CODE, ARCHIVE ONLY (PIPE-POOL-LOCAL-RULES-0001): the locked
+/// 12.0.4 tree defines this class (ruleaction.hh:243-250) and compiles its
+/// methods (ruleaction.cc:624/631) but never instantiates it — no
+/// `new RuleEquality` anywhere, and no pool registration in
+/// coreaction.cc's buildUniversalAction. Rugra keeps the 1:1 port of the
+/// class body (with its unit tests) as unregistered archive code, matching
+/// the oracle's own dead-code state. Literal-body note: the oracle's
+/// applyOp reads `op->code()` AFTER `opSetOpcode(op,CPUI_COPY)`
+/// (ruleaction.cc:638/640), so its constant expression always evaluates 0;
+/// this port captures the opcode before mutation (documented intent).
+/// Unobservable in the oracle precisely because the class is dead.
 pub struct RuleEquality;
 
 impl RuleEquality {
@@ -7471,7 +7437,9 @@ impl Rule for RuleThreeWayCompare {
     }
 
     // Ghidra: ruleaction.cc:10126 RuleThreeWayCompare
-    fn get_name(&self) -> &str { "three_way_compare" }
+    // Oracle diagnostic name is the truncated "threewaycomp" (ruleaction.hh:1504
+    // Rule(g, 0, "threewaycomp")); fixed by PIPE-POOL-LOCAL-RULES-0001 fixture.
+    fn get_name(&self) -> &str { "threewaycomp" }
     // Ghidra: ruleaction.cc:10137 RuleThreeWayCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
