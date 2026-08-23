@@ -90,9 +90,13 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
   (database.cc:628), registers `value` on the symbol identity via
   `varnode::equate_symbol_registry::register_value` (the Rust stand-in for the
   C++ EquateSymbol subtype payload that `dynamic_cast<EquateSymbol*>`
-  (varnode.cc:516) would read), then pushes the 1-byte dynamic entry
-  (database.cc:1722). Main-pipeline equates therefore reach
-  `Varnode::copy_symbol_if_valid` with their value.
+  (varnode.cc:516) would read), runs the addSymbolInternal category-table
+  registration (cc:1827-1836 via private
+  `add_symbol_internal_category`, `catindex = list.size()` append), then
+  pushes the 1-byte dynamic entry (database.cc:1722). Main-pipeline equates
+  therefore reach `Varnode::copy_symbol_if_valid` with their value, and
+  `get_category_size(equate)`/`get_category_symbol(equate, ind)` observe the
+  same table state as the C++ scope.
 - `clear()`, `clear_unlocked()`.
 - `attach_child(id)`, `detach_child(id)`, `num_symbols()`.
 - XML encode/decode (database.cc:2616/2744):
@@ -303,3 +307,15 @@ Symbol and Database encode/decode round-trips. `cargo check --lib` is clean
   XML 解码注册/copy_symbol_if_valid 通路 4 项）；oracle 行为门禁
   `tests/oracle/database_equatereg_1204`（pin-base schema2，
   `tools/run_database_equatereg_oracle.sh`）。
+
+## 2026-08-23（补充）：addSymbolInternal 类别表注册接入 add_equate_symbol
+
+- `Scope::add_symbol_internal_category`（私有，database.cc:1810
+  `ScopeInternal::addSymbolInternal` 的类别块 cc:1827-1836）：`category >= 0`
+  时按 cc:1828-1829 将外层类别向量扩张到该类别；`category > 0` 时
+  `catindex = list.size()`（cc:1831-1832），类别 0 沿用符号现有 catindex 槽；
+  cc:1833-1835 以 NULL 槽填充后放置 Weak 引用。
+- `add_equate_symbol` 在 cc:1718 对应位置调用之：同值重复的第二个 equate
+  `catindex=1`、`get_category_size(equate)=2` 与 C++ 可观察状态一致（此前
+  Rust 完全不入类别表）。`add_union_facet_symbol` 存在同样缺口（本租约
+  equate 限定，登记为后续 TODO）。
