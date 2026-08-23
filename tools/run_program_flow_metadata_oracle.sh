@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 fixture_dir="$repo_root/tests/oracle/program_flow_metadata_1204"
-metadata="$fixture_dir/fixture.metadata.json"
+metadata="$repo_root/tests/oracle/program_flow_metadata_1204.metadata.json"
 assembly="$fixture_dir/program_flow_metadata_1204.S"
 ghidra_script="$fixture_dir/ProgramFlowMetadata1204.java"
 
@@ -12,11 +12,10 @@ oracle_tag=Ghidra_12.0.4_build
 ghidra_version=12.0.4
 release_asset=ghidra_12.0.4_PUBLIC_20260303.zip
 release_sha256=c3b458661d69e26e203d739c0c82d143cc8a4a29d9e571f099c2cf4bda62a120
+release_page_url="https://github.com/NationalSecurityAgency/ghidra/releases/tag/$oracle_tag"
 release_url="https://github.com/NationalSecurityAgency/ghidra/releases/download/$oracle_tag/$release_asset"
 cache_root=${RUGRA_PROGRAM_FLOW_GHIDRA_CACHE:-/tmp/rugra-program-flow-ghidra-1204}
 release_zip="$cache_root/$release_asset"
-dist_root="$cache_root/ghidra_12.0.4_PUBLIC"
-headless="$dist_root/support/analyzeHeadless"
 update_expected=0
 
 if [[ ${1:-} == --update-expected ]]; then
@@ -56,39 +55,6 @@ for required in curl sha256sum unzip as ld readelf python3; do
   command -v "$required" >/dev/null 2>&1 || die "missing required tool: $required"
 done
 
-mkdir -p "$cache_root"
-if [[ ! -f "$release_zip" ]]; then
-  partial="$release_zip.partial"
-  curl -fL --retry 5 --retry-all-errors --continue-at - \
-    -o "$partial" "$release_url"
-  actual_partial_sha=$(sha256sum "$partial" | cut -d' ' -f1)
-  [[ "$actual_partial_sha" == "$release_sha256" ]] || \
-    die "official release SHA-256=$actual_partial_sha; expected $release_sha256"
-  mv "$partial" "$release_zip"
-fi
-actual_release_sha=$(sha256sum "$release_zip" | cut -d' ' -f1)
-[[ "$actual_release_sha" == "$release_sha256" ]] || \
-  die "official release SHA-256=$actual_release_sha; expected $release_sha256"
-
-zip_roots=$(unzip -Z1 "$release_zip" | sed 's,/.*,,g' | sort -u)
-[[ "$zip_roots" == ghidra_12.0.4_PUBLIC ]] || \
-  die "release archive root is not exactly ghidra_12.0.4_PUBLIC: $zip_roots"
-if [[ ! -x "$headless" ]]; then
-  unzip -q -o "$release_zip" -d "$cache_root"
-fi
-[[ -x "$headless" ]] || die "analyzeHeadless missing after verified release extraction"
-application_properties="$dist_root/Ghidra/application.properties"
-[[ -f "$application_properties" ]] || die "application.properties missing"
-actual_version=$(sed -n 's/^application\.version=//p' "$application_properties" | tr -d '[:space:]')
-actual_release_name=$(sed -n 's/^application\.release\.name=//p' "$application_properties" | tr -d '[:space:]')
-[[ "$actual_version" == "$ghidra_version" ]] || \
-  die "distribution version=$actual_version; expected $ghidra_version"
-[[ "$actual_release_name" == PUBLIC ]] || \
-  die "distribution release name=$actual_release_name; expected PUBLIC"
-if rg -q '12\.1' "$application_properties"; then
-  die "12.1.x marker found in locked 12.0.4 application.properties"
-fi
-
 runtime_tmp_root=${RUGRA_PROGRAM_FLOW_RUNTIME_TMP:-/var/tmp}
 [[ -d "$runtime_tmp_root" && -w "$runtime_tmp_root" ]] || \
   die "runtime temp root is not writable: $runtime_tmp_root"
@@ -104,6 +70,57 @@ cleanup() {
   esac
 }
 trap cleanup EXIT HUP INT TERM
+
+mkdir -p "$cache_root"
+[[ -d "$cache_root" && ! -L "$cache_root" ]] || \
+  die "release cache root must be a real directory: $cache_root"
+if [[ -L "$release_zip" || ( -e "$release_zip" && ! -f "$release_zip" ) ]]; then
+  die "cached release must be a regular non-symlink file: $release_zip"
+fi
+if [[ ! -e "$release_zip" ]]; then
+  download="$fixture_tmp/$release_asset.download"
+  curl -fL --retry 5 --retry-all-errors -o "$download" "$release_url"
+  actual_partial_sha=$(sha256sum "$download" | cut -d' ' -f1)
+  [[ "$actual_partial_sha" == "$release_sha256" ]] || \
+    die "official release SHA-256=$actual_partial_sha; expected $release_sha256"
+  mv "$download" "$release_zip"
+fi
+actual_release_sha=$(sha256sum "$release_zip" | cut -d' ' -f1)
+if [[ "$actual_release_sha" != "$release_sha256" ]]; then
+  mv "$release_zip" "$fixture_tmp/$release_asset.invalid"
+  die "official release SHA-256=$actual_release_sha; expected $release_sha256; invalid cache entry removed"
+fi
+unexpected_cache=$(find "$cache_root" -mindepth 1 -maxdepth 1 \
+  ! -name "$release_asset" -printf '%f\n' | sort)
+[[ -z "$unexpected_cache" ]] || \
+  die "release cache must contain only the verified zip; unexpected: $unexpected_cache"
+
+zip_roots=$(unzip -Z1 "$release_zip" | sed 's,/.*,,g' | sort -u)
+[[ "$zip_roots" == ghidra_12.0.4_PUBLIC ]] || \
+  die "release archive root is not exactly ghidra_12.0.4_PUBLIC: $zip_roots"
+release_unpack="$fixture_tmp/official-release"
+mkdir -p "$release_unpack"
+unzip -q "$release_zip" -d "$release_unpack"
+post_extract_release_sha=$(sha256sum "$release_zip" | cut -d' ' -f1)
+[[ "$post_extract_release_sha" == "$release_sha256" ]] || \
+  die "official release changed while extracting: $post_extract_release_sha"
+dist_root="$release_unpack/ghidra_12.0.4_PUBLIC"
+headless="$dist_root/support/analyzeHeadless"
+[[ -x "$headless" ]] || die "analyzeHeadless missing after verified release extraction"
+application_properties="$dist_root/Ghidra/application.properties"
+[[ -f "$application_properties" ]] || die "application.properties missing"
+actual_version=$(sed -n 's/^application\.version=//p' "$application_properties" | tr -d '[:space:]')
+actual_release_name=$(sed -n 's/^application\.release\.name=//p' "$application_properties" | tr -d '[:space:]')
+actual_revision=$(sed -n 's/^application\.revision\.ghidra=//p' "$application_properties" | tr -d '[:space:]')
+[[ "$actual_version" == "$ghidra_version" ]] || \
+  die "distribution version=$actual_version; expected $ghidra_version"
+[[ "$actual_release_name" == PUBLIC ]] || \
+  die "distribution release name=$actual_release_name; expected PUBLIC"
+[[ "$actual_revision" == "$oracle_commit" ]] || \
+  die "distribution Ghidra revision=$actual_revision; expected $oracle_commit"
+if rg -q '12\.1' "$application_properties"; then
+  die "12.1.x marker found in locked 12.0.4 application.properties"
+fi
 
 as --64 -o "$fixture_tmp/program_flow_metadata_1204.o" "$assembly"
 ld -m elf_x86_64 -nostdlib -static --build-id=none -e _start \
@@ -132,7 +149,8 @@ canonicalize() {
   python3 -I -S - "$raw" "$output" "$lane" "$metadata" \
     "$release_asset" "$release_url" "$release_sha256" "$oracle_tag" \
     "$oracle_commit" "$ghidra_version" "$assembly_sha" "$object_sha" \
-    "$elf_sha" "$assembler_version" "$linker_version" "$elf_header" <<'PY'
+    "$elf_sha" "$assembler_version" "$linker_version" "$elf_header" \
+    "$actual_release_name" "$actual_revision" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -155,6 +173,8 @@ import sys
     assembler,
     linker,
     elf_header,
+    application_release_name,
+    application_revision_ghidra,
 ) = sys.argv[1:]
 
 raw = json.loads(pathlib.Path(raw_name).read_text(encoding="utf-8"))
@@ -175,6 +195,9 @@ provenance = {
         "asset": release_asset,
         "url": release_url,
         "sha256": release_sha256,
+        "version": ghidra_version,
+        "release_name": application_release_name,
+        "revision_ghidra": application_revision_ghidra,
     },
     "input": {
         "assembly_sha256": assembly_sha256,
@@ -259,7 +282,10 @@ if [[ $update_expected -eq 0 ]]; then
     "$repo_root/tools/run_program_flow_metadata_oracle.sh" \
     "$fixture_dir/expected/direct_only.json" \
     "$fixture_dir/expected/conditional_enabled.json" "$elf_sha" "$object_sha" \
-    "$assembler_version" "$linker_version" <<'PY'
+    "$assembler_version" "$linker_version" "$release_page_url" \
+    "$release_asset" "$release_url" "$release_sha256" "$oracle_tag" \
+    "$oracle_commit" "$ghidra_version" "$actual_release_name" \
+    "$actual_revision" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -276,8 +302,85 @@ import sys
     object_sha,
     assembler,
     linker,
+    release_page_url,
+    release_asset,
+    release_url,
+    release_sha256,
+    oracle_tag,
+    oracle_commit,
+    ghidra_version,
+    application_release_name,
+    application_revision_ghidra,
 ) = sys.argv[1:]
 metadata = json.loads(pathlib.Path(metadata_name).read_text(encoding="utf-8"))
+
+def check_fields(path, actual_value, expected_value):
+    if isinstance(expected_value, dict):
+        if not isinstance(actual_value, dict):
+            raise SystemExit(f"metadata {path} is not an object")
+        if set(actual_value) != set(expected_value):
+            raise SystemExit(
+                f"metadata {path} field set mismatch: "
+                f"actual={sorted(actual_value)} expected={sorted(expected_value)}"
+            )
+        for key, value in expected_value.items():
+            check_fields(f"{path}.{key}", actual_value[key], value)
+        return
+    if isinstance(expected_value, list):
+        if not isinstance(actual_value, list) or len(actual_value) != len(expected_value):
+            raise SystemExit(f"metadata {path} list shape mismatch")
+        for index, value in enumerate(expected_value):
+            check_fields(f"{path}[{index}]", actual_value[index], value)
+        return
+    if actual_value != expected_value:
+        raise SystemExit(
+            f"metadata {path}={actual_value!r}; expected {expected_value!r}"
+        )
+
+check_fields("oracle", metadata.get("oracle"), {
+    "tag": oracle_tag,
+    "commit": oracle_commit,
+    "version": ghidra_version,
+})
+check_fields("architecture", metadata.get("architecture"), "x86:LE:64:default")
+check_fields("compiler_spec", metadata.get("compiler_spec"), "gcc")
+check_fields("analysis_options", metadata.get("analysis_options"), {
+    "baseline_disabled": [
+        "Non-Returning Functions - Known",
+        "Shared Return Calls",
+    ],
+    "manual_order": [
+        "Non-Returning Functions - Known",
+        "Shared Return Calls",
+    ],
+    "known_no_return": {"Create Analysis Bookmarks": True},
+    "shared_return_common": {"Assume Contiguous Functions Only": True},
+    "lanes": {
+        "direct_only": {"Allow Conditional Jumps": False},
+        "conditional_enabled": {"Allow Conditional Jumps": True},
+    },
+})
+check_fields("official_release", metadata.get("official_release"), {
+    "repository": "NationalSecurityAgency/ghidra",
+    "release_url": release_page_url,
+    "asset": release_asset,
+    "asset_url": release_url,
+    "asset_sha256": release_sha256,
+    "application_version": ghidra_version,
+    "application_release_name": application_release_name,
+    "application_revision_ghidra": application_revision_ghidra,
+    "digest_source": "GitHub release expanded-assets response",
+})
+check_fields(
+    "observation.overall_status",
+    metadata.get("observation", {}).get("overall_status"),
+    "UNTESTED",
+)
+check_fields(
+    "observation.covered_projection_status",
+    metadata.get("observation", {}).get("covered_projection_status"),
+    "ORACLE_CAPTURED",
+)
 
 def digest(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -321,6 +424,6 @@ PY
 fi
 
 echo "PROGRAM-FLOW-METADATA-FIXTURE-0001: OK"
-echo "oracle=$oracle_tag@$oracle_commit version=$actual_version asset_sha256=$actual_release_sha"
+echo "oracle=$oracle_tag@$oracle_commit version=$actual_version revision=$actual_revision asset_sha256=$actual_release_sha"
 echo "elf_sha256=$elf_sha object_sha256=$object_sha"
 echo "lanes=direct_only,conditional_enabled repeats=2 overall_status=UNTESTED covered_projection=ORACLE_CAPTURED"

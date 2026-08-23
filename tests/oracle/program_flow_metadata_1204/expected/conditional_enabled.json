@@ -24735,7 +24735,10 @@
       "tag": "Ghidra_12.0.4_build",
       "asset": "ghidra_12.0.4_PUBLIC_20260303.zip",
       "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.0.4_build/ghidra_12.0.4_PUBLIC_20260303.zip",
-      "sha256": "c3b458661d69e26e203d739c0c82d143cc8a4a29d9e571f099c2cf4bda62a120"
+      "sha256": "c3b458661d69e26e203d739c0c82d143cc8a4a29d9e571f099c2cf4bda62a120",
+      "version": "12.0.4",
+      "release_name": "PUBLIC",
+      "revision_ghidra": "e40ed13014025f82488b1f8f7bca566894ac376b"
     },
     "input": {
       "assembly_sha256": "bb7aa0b1573f01f77b8533978b156812f38d52efd11446083383eac5e86d5809",

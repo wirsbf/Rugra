@@ -37,13 +37,16 @@ tools/run_program_flow_metadata_oracle.sh
 ```
 
 The runner downloads the official GitHub release into a task-specific `/tmp`
-cache if needed, verifies its pinned SHA-256, checks the application version,
-builds the ELF in a temporary directory, executes every lane twice, and diffs
-the result against the checked-in oracle captures.  No release archive,
-extracted distribution, object, ELF, or project database is tracked.
+cache if needed.  That persistent cache is required to contain only the
+SHA-256-verified zip.  Every invocation extracts a fresh distribution beneath
+its own `/var/tmp` directory, checks the application version, release name and
+`application.revision.ghidra`, builds the ELF there, executes every lane twice,
+and diffs the result against the checked-in oracle captures.  No release
+archive, extracted distribution, object, ELF, or project database is tracked.
 
 This fixture is deliberately `UNTESTED` globally until Rugra has the Program
 metadata ingress and live Java-override consumer needed for a bilateral
 comparison.  The captured analyzer-native projection is an exact oracle; the
 API-seeded pointer/external, discontiguous-body, multi-flow-reference and
-call-fixup lanes remain explicit residuals in `fixture.metadata.json`.
+call-fixup lanes remain explicit residuals in the standard top-level
+`tests/oracle/program_flow_metadata_1204.metadata.json` record.

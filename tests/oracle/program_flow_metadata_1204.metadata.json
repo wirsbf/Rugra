@@ -38,6 +38,9 @@
     "asset": "ghidra_12.0.4_PUBLIC_20260303.zip",
     "asset_url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.0.4_build/ghidra_12.0.4_PUBLIC_20260303.zip",
     "asset_sha256": "c3b458661d69e26e203d739c0c82d143cc8a4a29d9e571f099c2cf4bda62a120",
+    "application_version": "12.0.4",
+    "application_release_name": "PUBLIC",
+    "application_revision_ghidra": "e40ed13014025f82488b1f8f7bca566894ac376b",
     "digest_source": "GitHub release expanded-assets response"
   },
   "input": {
@@ -63,9 +66,9 @@
   "comparand_sha256": {
     "assembly": "bb7aa0b1573f01f77b8533978b156812f38d52efd11446083383eac5e86d5809",
     "ghidra_script": "e012b6ea5de534aa18117cdbe59bf330a6f915ea357823e189ac7f300366e0f5",
-    "runner": "1fd317c5db7023ced65d201355ffc5533f03294e836642442eb70bc69a3091ab",
-    "direct_only_expected": "971bb6ad2f170051ae0ea08ee91fec55ce88137d2474560a42a80d62964dade8",
-    "conditional_enabled_expected": "ddf67cdd061035d55ea29059a8ce48d07191226f429f51f9ad75e0196cfb4878"
+    "runner": "7c4dd33c41ae1053676a70561b29dc92050d53457a2f6b8d94f9049cc144db21",
+    "direct_only_expected": "a00d8c724d80f8a63fb86de2da4ac71e3946d815352a50a08279c59fe440d1c8",
+    "conditional_enabled_expected": "2dfec81f1f7c16b83323047c2d88e4e75dbfae2aa5bef1e3164bf2f9c5efa0cb"
   },
   "observation": {
     "producer": "official Ghidra analyzeHeadless Java Program database and analyzer APIs",
@@ -74,7 +77,7 @@
       "post_target_analyzers",
       "analysis_queue_settled"
     ],
-    "ordering": "function names are fixture order; body ranges/instructions and event batches preserve native forward order; references include both untouched native order and an explicit canonical sorted projection",
+    "ordering": "function names are fixture order; body ranges/instructions and the linear event record stream preserve native forward order; references include both untouched native order and an explicit canonical sorted projection",
     "normalization": "addresses retain space and offset; packed p-code is byte exact; event records preserve one total delivery order while nondeterministic asynchronous dispatch-batch boundaries are omitted; event affected-object identity is mapped to deterministic first-seen ordinals",
     "overall_status": "UNTESTED",
     "covered_projection_status": "ORACLE_CAPTURED",
@@ -98,8 +101,8 @@
     ]
   },
   "expected": {
-    "direct_only_sha256": "971bb6ad2f170051ae0ea08ee91fec55ce88137d2474560a42a80d62964dade8",
-    "conditional_enabled_sha256": "ddf67cdd061035d55ea29059a8ce48d07191226f429f51f9ad75e0196cfb4878",
+    "direct_only_sha256": "a00d8c724d80f8a63fb86de2da4ac71e3946d815352a50a08279c59fe440d1c8",
+    "conditional_enabled_sha256": "2dfec81f1f7c16b83323047c2d88e4e75dbfae2aa5bef1e3164bf2f9c5efa0cb",
     "generated_elf_sha256": "a3689ec938741cc293e3948dab215c8f5d40a5a4502a8b22aad1a1b290443ec7",
     "generated_object_sha256": "f0970c9ec1fe385a308feaffc8e997f77cb68d44c53a2c7539bbbecf45961ffc",
     "assembler": "GNU assembler (GNU Binutils) 2.47",
