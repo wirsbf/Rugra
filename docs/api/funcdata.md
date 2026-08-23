@@ -1334,9 +1334,18 @@ docs/api/block.md 同节）；机制 C 独立复核 APPROVE。残差：死 jumpt
 `get_indirect_op()==None` 输入域 UNTESTED（Ghidra 无条件解引用=null 即 UB，
 Rugra 防御性视为 alive，生产不可达已注释）。
 
-## laned-map 生命周期（2026-08-22 WIP，LANEDIVIDE-INFRA-0001）
+## laned-map 生命周期（LANEDIVIDE-INFRA-0001）
 
-- `check_for_laned_register` / `set_laned_reg_generated` / `lane_accesses` /
-  `clear_laned_access_map` — Funcdata 侧 typed ordered lanedMap 生命周期
-  （funcdata.hh `lanedMap` 镜像），含 map 排序 `PartialOrd/Ord`。
-  WIP：oracle 对拍 pending（见 lanedivide_infra_1204 fixture）。
+- `check_for_laned_register`（funcdata_varnode.cc:298-309 镜像）/
+  `set_laned_reg_generated`（funcdata.hh:155，minLanedSize=1000000 哨兵）/
+  `lane_accesses`（beginLaneAccess/endLaneAccess 镜像）/
+  `clear_laned_access_map`（funcdata.hh:399）—— Funcdata 侧 typed ordered
+  lanedMap 生命周期，键序为 `VarnodeData::operator<`（pcoderaw.hh:67：space
+  index → offset → size 降序）。四个 `newUnique`/`newUniqueOut`/
+  `newVarnode`/`newVarnodeOut` call site（funcdata_varnode.cc:90/112/136/159）
+  均接 `s >= minLanedSize` 门;`clear()`（funcdata.cc:93）重置 minLanedSize 但
+  不清 lanedMap（与 oracle 一致）。
+- 对拍：`tools/run_lanedivide_infra_oracle.sh` MATCH（miss/hit、排序、
+  setLanedRegGenerated 抑制、clear 保留 + gate 重置、clearLanedAccessMap
+  逐字节一致）；残差 LANEDIVIDE-INFRA-RESIDUAL-0001（见
+  tests/oracle/lanedivide_infra_1204.metadata.json）。

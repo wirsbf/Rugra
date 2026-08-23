@@ -664,7 +664,9 @@ impl Funcdata {
     ///   return vn;
     /// The localmap queryProperties half (:161-166) is a registered gap
     /// (Rugra's symbol_table is consulted via set_varnode_properties at
-    /// other call sites); the laned-register half is likewise a gap.
+    /// other call sites). The laned-register half records against the
+    /// address's address space, which `getLanedRegister` matches by size
+    /// only (architecture.cc:290-306).
     pub fn new_varnode(&mut self, size: usize, addr: crate::address::Address) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create(size, addr);
         // cc:157: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
@@ -1359,8 +1361,6 @@ impl Funcdata {
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
     ///   return vn;
-    /// (Rugra has no laned-register support; the checkForLanedRegister half
-    /// is a registered gap.)
     pub fn new_unique_out(&mut self, s: usize, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         // cc:134-135 creates the written form directly. Mutating a free
         // Varnode after insertion would change both BTreeSet keys in-place.
@@ -1452,8 +1452,6 @@ impl Funcdata {
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
     ///   return vn;
-    /// (Rugra has no laned-register support; the checkForLanedRegister half
-    /// is a registered gap.)
     pub fn new_unique(&mut self, s: usize) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create_unique(s);
         // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
