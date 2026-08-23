@@ -5,6 +5,34 @@
 PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
 model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 `NO_ORACLE`。
 
+## 2026-08-23：JUMPTABLE-THUNK-CLASSIFY-0001 — typed recovery failure
+
+- `JumpTableRecoveryError` 保留 Ghidra 的两个异常通道及原始文本：
+  `Thunk { message: "Likely thunk" }` 对应 `JumptableThunkError`，
+  `Lowlevel { message }` 对应普通 `LowlevelError`；`recovery_mode()` 只把前者
+  映射为 `FailThunk`，后者映射为 `FailNormal`，不再把所有恢复失败归成 thunk。
+- `JumpTable::sanity_check` 严格按 jumptable.cc:2295-2329 排序：override
+  立即成功返回；保存原表长；不可达只置 `partial_table`；仅在地址表恰有一个
+  target 时检查 `target == 0` 或 `abs(target - indirect.address) > 0xffff`；随后
+  才调用 model sanity；model 返回 false 时抛带精确地址文本的 `Lowlevel`；只有
+  model sanity 成功后才比较表长并发出 truncation warning。故 `0xffff` 不抛，
+  `0x10000` 抛，多 target（即使含 0 或远地址）不走 table-level thunk 判定。
+- `recover_addresses_classified` 对齐 jumptable.cc:2623-2649：直接把
+  `build_addresses` 的输出写入成员 `addresstable/loadpoints`，异常前的部分突变
+  保持可见；`collect_loads` 只在 sanity 成功后执行 `collapse_table`，失败路径
+  保留未折叠 loadpoints。`recover_addresses -> bool` 与
+  `try_recover -> Option<JumpTable>` 暂作兼容适配；`try_recover` 已移除
+  `catch_unwind`，panic 不再冒充普通恢复失败。
+- B2：`tests/oracle/jt_thunk_classify_1204.{cc,rs,metadata.json}` 与
+  `tools/run_jt_thunk_classify_oracle.sh` 在锁定 12.0.4 上逐字节对拍 8 个场景：
+  zero / near / `0xffff` / `0x10000` / multi / partial / override / model reject，
+  同时观察异常类别与文本、recovery mode、model 调用次数、错误前 addresses、
+  loadpoints/loadcounts 和 partial flag。该投影为 `MATCH`。
+- 剩余 `MISMATCH`（`JUMPTABLE-PIPELINE-0001`）：本租约禁止修改 flow/funcdata，
+  因而生产调用闭包仍通过 bool/Option 兼容层丢失 typed mode；在生产
+  `stageJumpTable` 消费 `JumpTableRecoveryError` 并分别返回 `FailThunk` / ordinary
+  failure 前，不得将模块或 fixture overall 状态提升为 MATCH/L3。
+
 ## 2026-08-23：JUMPTABLE-GUARDS-0001 — analyzeGuards 完整移植 + valueMatch 补全 + checkUnrolledGuard 接线
 
 - `analyze_guards(bl, pathout)`（jumptable.cc:1046-1112）：完整重写。
@@ -63,6 +91,13 @@ Recovery status of a `JumpTable` — faithful to `JumpTable::RecoveryMode`
 (jumptable.hh:544).
 - `Success = 0`, `FailNormal = 1`, `FailThunk = 2`, `FailReturn = 3`,
   `FailCallother = 4`.
+
+### `JumpTableRecoveryError`
+
+Typed equivalent of Ghidra's two exception catches around jump-table
+recovery. `Thunk { message }` and `Lowlevel { message }` retain the exact
+`explain` string. `message()` borrows it and `recovery_mode()` returns
+`FailThunk` or `FailNormal` respectively.
 
 ## Structs
 
@@ -218,7 +253,12 @@ A map from values to control-flow targets within a function
 `set_last_as_default`, `set_default_block`, `set_load_collect`,
 `set_folded_default`, `has_folded_default`, `get_label_by_index`,
 `add_block_to_switch`, `save_model`, `restore_saved_model`,
-`clear_saved_model`, `clear`.
+`clear_saved_model`, `clear`, `sanity_check`,
+`recover_addresses_classified`, `recover_addresses`.
+
+`try_recover_classified(indop, fd)` is the typed free-function entry point.
+The legacy `try_recover(indop, fd)` converts typed failure to `None` without
+catching panics.
 
 ### `IndexPair`
 Block-position / address-index pair (jumptable.hh:553).

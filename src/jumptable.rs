@@ -38,6 +38,48 @@ pub enum RecoveryMode {
     FailCallother = 4,
 }
 
+/// Typed failure from jump-table address recovery.
+///
+/// Ghidra distinguishes [`JumptableThunkError`](jumptable.hh:39) from the
+/// ordinary `LowlevelError` channel. Keeping that distinction here lets the
+/// caller map only the former to [`RecoveryMode::FailThunk`], while retaining
+/// the exact explanatory text carried by either exception.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JumpTableRecoveryError {
+    /// Ghidra `JumptableThunkError` (currently emitted as `"Likely thunk"`).
+    Thunk { message: String },
+    /// Ghidra `LowlevelError` raised during model/address sanity checking.
+    Lowlevel { message: String },
+}
+
+impl JumpTableRecoveryError {
+    // RUGRA-GLUE: Rust typed-exception discriminator; Ghidra stageJumpTable uses distinct catch clauses (funcdata_block.cc:539-544)
+    /// Map this exception channel to Ghidra's recovery status enum.
+    pub fn recovery_mode(&self) -> RecoveryMode {
+        match self {
+            Self::Thunk { .. } => RecoveryMode::FailThunk,
+            Self::Lowlevel { .. } => RecoveryMode::FailNormal,
+        }
+    }
+
+    // RUGRA-GLUE: Rust accessor for the explanatory string carried by Ghidra LowlevelError/JumptableThunkError
+    /// Return the exact explanatory text carried by the error.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Thunk { message } | Self::Lowlevel { message } => message,
+        }
+    }
+}
+
+impl std::fmt::Display for JumpTableRecoveryError {
+    // RUGRA-GLUE: Rust Display trait for Ghidra's exception explain string
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for JumpTableRecoveryError {}
+
 /// A description of where and how data was loaded from memory.
 ///
 /// This is a generic table description, giving the starting address of the
@@ -4037,66 +4079,202 @@ impl JumpTable {
         false
     }
 
-    // Ghidra: jumptable.cc:2645 JumpTable::recoverAddresses
-    /// Build the explicit address table from the recovered model. Faithful to
-    /// `JumpTable::recoverAddresses` (jumptable.cc:2645).
-    ///
-    /// Returns `true` on success. On failure (no model or zero entries) the
-    /// address table is left empty and `false` is returned instead of throwing
-    /// (Rugra cannot throw `LowlevelError`, so callers skip the table).
-    pub fn recover_addresses(&mut self, fd: &crate::funcdata::Funcdata) -> bool {
-        if !self.recover_model(fd, MAX_JUMPTABLE_SIZE) {
-            return false;
-        }
-        // The model must report a non-zero size before we build addresses.
-        let table_size = self.jmodel.as_ref().map_or(0, |m| m.get_table_size());
-        if table_size == 0 {
-            return false;
-        }
-        let indop = match &self.indirect {
-            Some(o) => o.clone(),
-            None => return false,
+    // Ghidra: jumptable.cc:2354 JumpTable::isReachable
+    /// Check the two immediately preceding guard levels for a collapsed
+    /// `if (false)` that makes `indop` unreachable.
+    fn is_reachable(indop: &Arc<RwLock<PcodeOp>>) -> bool {
+        let Some(mut parent) = indop
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+        else {
+            return true;
         };
-        let mut addrs: Vec<Address> = Vec::new();
-        let mut loadpoints: Vec<LoadTable> = Vec::new();
-        // build_addresses needs an immutable model ref; sanity_check needs a
-        // mutable one. We split the borrows so the checker is satisfied.
-        if self.collect_loads {
-            let mut loadcounts: Vec<i32> = Vec::new();
-            {
-                let m = self.jmodel.as_ref().unwrap();
-                m.build_addresses(
-                    fd,
-                    &indop,
-                    &mut addrs,
-                    Some(&mut loadpoints),
-                    Some(&mut loadcounts),
-                );
+
+        for _ in 0..2 {
+            let Some(predecessor) = ({
+                let parent_read = parent.read().unwrap();
+                if parent_read.size_in() != 1 {
+                    return true;
+                }
+                parent_read.get_in(0).map(|edge| edge.point)
+            }) else {
+                return true;
+            };
+
+            let cbranch = {
+                let predecessor_read = predecessor.read().unwrap();
+                if predecessor_read.size_out() != 2 {
+                    continue;
+                }
+                predecessor_read.get_ops().last().cloned()
+            };
+            let Some(cbranch) = cbranch else {
+                continue;
+            };
+            let (is_cbranch, bool_vn, is_boolean_flip) = {
+                let op_read = cbranch.0.read().unwrap();
+                (
+                    op_read.opcode == OpCode::CPUI_CBRANCH,
+                    op_read.get_in(1).cloned(),
+                    op_read.is_boolean_flip(),
+                )
+            };
+            if !is_cbranch {
+                continue;
             }
-            {
-                let m = self.jmodel.as_mut().unwrap();
-                let _ = m.sanity_check(
-                    fd,
-                    &indop,
-                    &mut addrs,
-                    &mut loadpoints,
-                    Some(&mut loadcounts),
-                );
+            let Some(bool_vn) = bool_vn else {
+                continue;
+            };
+            let (is_constant, offset) = {
+                let vn_read = bool_vn.read().unwrap();
+                (vn_read.is_constant(), vn_read.get_offset())
+            };
+            if !is_constant {
+                continue;
             }
-            LoadTable::collapse_table(&mut loadpoints);
-        } else {
-            {
-                let m = self.jmodel.as_ref().unwrap();
-                m.build_addresses(fd, &indop, &mut addrs, None, None);
+
+            let mut true_slot = if is_boolean_flip { 0 } else { 1 };
+            if offset == 0 {
+                true_slot = 1 - true_slot;
             }
+            let surviving_target = predecessor
+                .read()
+                .unwrap()
+                .get_out(true_slot)
+                .map(|edge| edge.point);
+            if surviving_target
+                .as_ref()
+                .is_some_and(|target| !Arc::ptr_eq(target, &parent))
             {
-                let m = self.jmodel.as_mut().unwrap();
-                let _ = m.sanity_check(fd, &indop, &mut addrs, &mut loadpoints, None);
+                return false;
+            }
+            parent = predecessor;
+        }
+        true
+    }
+
+    // Ghidra: jumptable.cc:2295 JumpTable::sanityCheck
+    /// Apply the table-level thunk/reachability checks, then delegate to the
+    /// recovered model's address sanity check.
+    ///
+    /// The ordering is observable: an override returns before reachability;
+    /// an unreachable non-override sets `partial_table` before a possible
+    /// thunk exception; model mutations remain visible if its `false` return
+    /// is converted into `LowlevelError`.
+    pub fn sanity_check(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        loadcounts: Option<&mut Vec<i32>>,
+    ) -> Result<(), JumpTableRecoveryError> {
+        let Some(model) = self.jmodel.as_ref() else {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: format!("Jumptable at {} did not pass sanity check.", self.opaddress),
+            });
+        };
+        if model.is_override() {
+            return Ok(());
+        }
+
+        let original_size = self.addresstable.len();
+        let Some(indop) = self.indirect.clone() else {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: format!("Jumptable at {} did not pass sanity check.", self.opaddress),
+            });
+        };
+
+        if !Self::is_reachable(&indop) {
+            self.partial_table = true;
+        }
+        if self.addresstable.len() == 1 {
+            let target = self.addresstable[0].as_u64();
+            let op_offset = indop.read().unwrap().get_addr().as_u64();
+            if target == 0 || target.abs_diff(op_offset) > 0xffff {
+                return Err(JumpTableRecoveryError::Thunk {
+                    message: "Likely thunk".to_string(),
+                });
             }
         }
-        self.addresstable = addrs;
-        self.loadpoints = loadpoints;
-        !self.addresstable.is_empty()
+
+        let passed = self.jmodel.as_mut().unwrap().sanity_check(
+            fd,
+            &indop,
+            &mut self.addresstable,
+            &mut self.loadpoints,
+            loadcounts,
+        );
+        if !passed {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: format!("Jumptable at {} did not pass sanity check.", self.opaddress),
+            });
+        }
+        if original_size != self.addresstable.len() {
+            fd.warning("Sanity check requires truncation of jumptable", self.opaddress);
+        }
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:2623 JumpTable::recoverAddresses
+    /// Recover the model and raw address table while retaining Ghidra's typed
+    /// exception channel and all mutations performed before an error.
+    pub fn recover_addresses_classified(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Result<(), JumpTableRecoveryError> {
+        if !self.recover_model(fd, MAX_JUMPTABLE_SIZE) {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: format!(
+                    "Could not recover jumptable at {}. Too many branches",
+                    self.opaddress
+                ),
+            });
+        }
+        if self.jmodel.as_ref().map_or(0, |model| model.get_table_size()) == 0 {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: format!("Jumptable with 0 entries at {}", self.opaddress),
+            });
+        }
+        let Some(indop) = self.indirect.clone() else {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: format!(
+                    "Could not recover jumptable at {}. Too many branches",
+                    self.opaddress
+                ),
+            });
+        };
+
+        if self.collect_loads {
+            let mut loadcounts = Vec::new();
+            self.jmodel.as_ref().unwrap().build_addresses(
+                fd,
+                &indop,
+                &mut self.addresstable,
+                Some(&mut self.loadpoints),
+                Some(&mut loadcounts),
+            );
+            self.sanity_check(fd, Some(&mut loadcounts))?;
+            LoadTable::collapse_table(&mut self.loadpoints);
+        } else {
+            self.jmodel.as_ref().unwrap().build_addresses(
+                fd,
+                &indop,
+                &mut self.addresstable,
+                None,
+                None,
+            );
+            self.sanity_check(fd, None)?;
+        }
+        Ok(())
+    }
+
+    // RUGRA-GLUE: bool compatibility adapter for callers not yet migrated to JumpTableRecoveryError
+    /// Compatibility adapter for legacy Rugra callers. New code should use
+    /// [`recover_addresses_classified`](Self::recover_addresses_classified)
+    /// so thunk and ordinary low-level failures remain distinguishable.
+    pub fn recover_addresses(&mut self, fd: &crate::funcdata::Funcdata) -> bool {
+        self.recover_addresses_classified(fd).is_ok()
     }
 }
 
@@ -4323,7 +4501,21 @@ impl Default for EmulateFunction {
     }
 }
 
-// RUGRA-GLUE: Rust entry point wiring JumpTable recovery; Ghidra does this inline in Funcdata::recoverJumpTable (funcdata_block.cc:640)
+// RUGRA-GLUE: Rust typed entry point wiring JumpTable recovery; Ghidra does this inline in Funcdata::stageJumpTable (funcdata_block.cc:491)
+/// Attempt to recover a single [`JumpTable`] while preserving the typed
+/// Ghidra exception channel.
+pub fn try_recover_classified(
+    indop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    fd: &crate::funcdata::Funcdata,
+) -> Result<JumpTable, JumpTableRecoveryError> {
+    let op_addr = indop.read().unwrap().get_addr();
+    let mut jt = JumpTable::new(op_addr);
+    jt.set_indirect_op(indop.clone());
+    jt.recover_addresses_classified(fd)?;
+    Ok(jt)
+}
+
+// RUGRA-GLUE: Option compatibility adapter for flow/funcdata callers not yet migrated to typed stageJumpTable recovery
 /// Attempt to recover a single [`JumpTable`] for the BRANCHIND op `indop`.
 ///
 /// This is the Rust analogue of Ghidra's
@@ -4333,28 +4525,15 @@ impl Default for EmulateFunction {
 /// jumptable simplification. Returns a populated `JumpTable` on success, or
 /// `None` if no model could be recovered.
 ///
-/// Because Rugra's emulator / guard analysis is incomplete, recovery may
-/// legitimately fail (or panic) on many real switches; such failures are
-/// caught here and yield `None`, so the caller can simply skip the op.
+/// This compatibility wrapper collapses the typed error to `None`; it does
+/// not catch panics or misclassify internal failures as ordinary recovery
+/// failures. Call [`try_recover_classified`] wherever the recovery mode is
+/// observable.
 pub fn try_recover(
     indop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     fd: &crate::funcdata::Funcdata,
 ) -> Option<JumpTable> {
-    let op_addr = indop.read().unwrap().get_addr();
-    let mut jt = JumpTable::new(op_addr);
-    jt.set_indirect_op(indop.clone());
-
-    // Mirror Ghidra's try/catch around recoverAddresses: any LowlevelError
-    // (or Rust panic from incomplete emulation) is treated as a normal
-    // recovery failure and skipped.
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        jt.recover_addresses(fd)
-    }));
-    match res {
-        Ok(true) => Some(jt),
-        Ok(false) => None,
-        Err(_) => None,
-    }
+    try_recover_classified(indop, fd).ok()
 }
 
 // RUGRA-GLUE: Rust per-BRANCHIND loop; Ghidra drives this from flow tracing (flow.cc/subflow.cc), not jumptable.cc

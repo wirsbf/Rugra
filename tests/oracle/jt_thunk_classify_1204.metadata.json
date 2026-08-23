@@ -1,0 +1,208 @@
+{
+  "schema_version": 2,
+  "fixture_id": "JT-THUNK-CLASSIFY-1204",
+  "status_note": "The eight targeted JumpTable::sanityCheck/recoverAddresses projections are byte-identical MATCH against locked Ghidra 12.0.4, including exact exception text and the complete address/load/loadcount/partial state at each catch point. Fixture overall remains MISMATCH under JUMPTABLE-PIPELINE-0001 because the production Rugra flow/funcdata stage still consumes the legacy bool/Option adapter instead of the typed recovery result, so FailThunk is not yet propagated through the real stageJumpTable closure.",
+  "decisive_semantics": {
+    "reference_output_parameters": "sanityCheck receives vector<int4>* loadcounts and passes the same object by reference to JumpModel::sanityCheck; addresstable, loadpoints and partialTable are JumpTable members mutated in place and remain observable when JumptableThunkError/LowlevelError unwinds. Rugra passes Option<&mut Vec<i32>> and the member Vecs directly, returns JumpTableRecoveryError::{Thunk,Lowlevel} with the exact explain text, and deliberately does not roll back model mutations on Err.",
+    "loop_bounds_traversal_order": "sanityCheck order is override return -> snapshot size -> isReachable -> single-entry thunk check -> model sanity -> successful-size warning. isReachable examines at most two predecessor levels (i=0,1), requiring exactly one in-edge and a two-way constant CBRANCH guard. recoverAddresses performs recoverModel/getTableSize/buildAddresses/sanityCheck in that order and only then collapses collected loads; the fixture's reject path proves collapse is skipped on error.",
+    "counter_accumulator_lifecycle": "The saved table size is captured after the override early return and before reachability/thunk/model checks, and is consulted only after model sanity succeeds. The absolute target/op offset difference is computed once for a single entry and compared strictly greater than 0xffff. Fixture recover/build/sanity counters start at zero per case and increment at their exact call sites; override records recover=1/build=1/sanity=0, while thunk cases never increment model sanity.",
+    "sorting_comparison_keys": "The table-level thunk discriminator is keyed first by addresstable.size()==1, then target offset==0 or the unsigned absolute offset difference from indirect->getAddr() > 0xffff; address-space identity and target ordering do not participate. Multi-entry tables bypass this discriminator even when entry 0 is zero/far. LoadTable::collapseTable, reached only after successful sanity, sorts by Address then size and merges contiguous same-size entries; 0x3000 and 0x3004 therefore become 0x3000/4/2 only in the override success case."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_block.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh"
+    ]
+  },
+  "architecture": "fixture-synthetic:LE:64:default (8-byte ram, wordsize=1, no loader)",
+  "compiler_spec": {
+    "id": "fixture",
+    "prototype": "empty-input-output"
+  },
+  "analysis_options": {
+    "collect_loads": "override case only",
+    "guard_depth": 2,
+    "max_jumptable_size": 1024,
+    "op_address": "0x00100000",
+    "initial_loadpoints": [
+      "0x00003004/4/1",
+      "0x00003000/4/1"
+    ],
+    "initial_loadcounts": [1, 2]
+  },
+  "rugra_source": {
+    "base_commit": "8d3a5561f259420d00ec3ecb54e766b206f89331",
+    "base_tree": "c8ee095912b9d56b80c38d72f0bea447ebc998c4",
+    "base_src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
+    "base_jumptable_blob": "64c824f03f41040696c9c6242f05e83a23e1ef55",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [
+      {
+        "path": "src/jumptable.rs",
+        "policy": "primary file under test; raw SHA-256 pinned by comparand.jumptable_overlay_sha256"
+      }
+    ]
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "c06f038dcf45eed555d02a0db3d6f136dec3e0b17411d0e1af2db2b2653537bd",
+    "rust_fixture_sha256": "34749d59f923932e1cfc9671858dbedc2ddacd16f6cac55839ed60abe9b4e9aa",
+    "jumptable_overlay_sha256": "180155e28087067efcbb3bf7e3b70b7819732da7b57922f4d5e0a7636699e347",
+    "runner_sha256": "4ea7ea6c3f502cbe35090039a5295480288d5920d9cc22e250b24e61757afd71"
+  },
+  "input_manifest": {
+    "cases": [
+      {
+        "id": "zero",
+        "path": "sanity",
+        "targets": ["0x00000000"],
+        "unreachable": false,
+        "override": false,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "near",
+        "path": "sanity",
+        "targets": ["0x00100020"],
+        "unreachable": false,
+        "override": false,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "cutoff",
+        "path": "sanity",
+        "targets": ["0x0010ffff"],
+        "unreachable": false,
+        "override": false,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "over",
+        "path": "sanity",
+        "targets": ["0x00110000"],
+        "unreachable": false,
+        "override": false,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "multi",
+        "path": "sanity",
+        "targets": ["0x00000000", "0x00120000"],
+        "unreachable": false,
+        "override": false,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "partial",
+        "path": "sanity",
+        "targets": ["0x00000000"],
+        "unreachable": true,
+        "override": false,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "override",
+        "path": "recover",
+        "targets": ["0x00000000"],
+        "unreachable": true,
+        "override": true,
+        "model_sanity": true,
+        "model_mutates_before_reject": false
+      },
+      {
+        "id": "model_reject",
+        "path": "sanity",
+        "targets": ["0x00100010", "0x00100020"],
+        "unreachable": false,
+        "override": false,
+        "model_sanity": false,
+        "model_mutates_before_reject": true
+      }
+    ],
+    "sha256": "83dfcae7c7d84ab497dd4cf3a5b961513270bde8ee3a86b5a08aa1bfe582d69c"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "43a973be448d0d0243cac9c61410beb4a85add264818c852b0fdac297a7542e8",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "43a973be448d0d0243cac9c61410beb4a85add264818c852b0fdac297a7542e8",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "coverage": {
+    "single_target_boundary": {
+      "status": "MATCH",
+      "covers": "zero throws typed thunk with exact 'Likely thunk'; near succeeds; a difference exactly 0xffff succeeds; 0x10000 throws typed thunk; model sanity is skipped on both thunk cases.",
+      "residual_todo_ids": []
+    },
+    "multi_target_bypass": {
+      "status": "MATCH",
+      "covers": "A two-target table containing zero and a target 0x20000 away bypasses the table-level thunk discriminator and reaches model sanity once.",
+      "residual_todo_ids": []
+    },
+    "partial_before_thunk": {
+      "status": "MATCH",
+      "covers": "A collapsed constant-false predecessor marks partialTable before the zero single target throws, and the partial mutation remains visible at the thunk catch point.",
+      "residual_todo_ids": []
+    },
+    "override_short_circuit_and_collapse": {
+      "status": "MATCH",
+      "covers": "recoverAddresses reuses the override model, builds a zero target, sanityCheck returns before reachability/thunk/model sanity, partial stays false, and successful collect-loads processing collapses 0x3000/0x3004 into one two-entry LoadTable.",
+      "residual_todo_ids": []
+    },
+    "lowlevel_partial_mutation": {
+      "status": "MATCH",
+      "covers": "Model sanity truncates two addresses to one, appends load 0x3008 and loadcount 7, then returns false; ordinary LowlevelError text is exact, all mutations survive, and loadpoints remain uncollapsed.",
+      "residual_todo_ids": []
+    },
+    "production_typed_stage_consumption": {
+      "status": "MISMATCH",
+      "covers": "Ghidra Funcdata::stageJumpTable catches JumptableThunkError separately and returns fail_thunk; Rugra production callers still consume recover_addresses/try_recover through bool/Option compatibility adapters, so the typed recovery mode is lost before the production stage.",
+      "residual_todo_ids": ["JUMPTABLE-PIPELINE-0001"]
+    }
+  },
+  "known_diffs": [],
+  "residuals": [
+    {
+      "todo_id": "JUMPTABLE-PIPELINE-0001",
+      "status": "MISMATCH",
+      "detail": "The typed classifier and direct recoverAddresses projection match, but this task's write-set excludes flow/funcdata; production must still migrate to try_recover_classified/recover_addresses_classified and preserve FailThunk separately from FailNormal.",
+      "branches": [
+        {
+          "id": "typed_result_not_consumed_by_production",
+          "status": "MISMATCH",
+          "detail": "Legacy bool/Option compatibility collapses both JumpTableRecoveryError variants, whereas locked stageJumpTable has distinct JumptableThunkError and LowlevelError catch clauses."
+        }
+      ]
+    }
+  ],
+  "projection_status": "MATCH",
+  "overall_status": "MISMATCH"
+}
