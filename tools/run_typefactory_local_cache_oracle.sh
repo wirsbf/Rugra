@@ -5,10 +5,10 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
-rugra_base_commit=8012627083360e0111506dc70d891552383a8c65
-rugra_base_tree=e94f9ee28049d6b26db645f74f0157a376116bf8
-rugra_typefactory_base_blob=17a87bc991ab68004bb3f6311aee0534271672d7
-rugra_datatype_base_blob=f766badaff4a4b2761edaa4e4ff0f138ba86679b
+rugra_base_commit=296c128ad54c8e3a18114ef065b1d6fbb22ed2d5
+rugra_base_tree=9fb4593727541a45eaa6231f6296a79d2d5254f9
+rugra_typefactory_base_blob=200a7e0a5931939c5a1dd624bc76095d5da9d569
+rugra_datatype_base_blob=03980bc2f8b7fabb4af486018c2a68a85f763dc0
 ghidra_root="$repo_root/ghidra"
 cpp_root="$ghidra_root/Ghidra/Features/Decompiler/src/decompile/cpp"
 metadata="$repo_root/tests/oracle/typefactory_local_cache_1204.metadata.json"

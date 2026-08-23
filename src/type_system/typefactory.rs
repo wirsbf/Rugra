@@ -630,7 +630,7 @@ impl TypeFactory {
         }
         let arc = Arc::new(candidate);
         tree.insert(tree_key, arc.clone());
-        drop(tree);
+        // The tree borrow ends here; the name cross-reference follows.
         // type.cc:3404-3405: nametree gets named (id != 0) entries.
         if !name.is_empty() {
             self.types.insert(name, arc.clone());
@@ -1109,7 +1109,6 @@ impl TypeFactory {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         tree.insert(tree_key, dt.clone());
-        drop(tree);
         self.types.insert("void".to_string(), dt.clone());
         self.base_cache
             .get_mut()
