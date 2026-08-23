@@ -10965,10 +10965,23 @@ impl PrintC {
             Datatype::Union(u) => &u.fields,
             _ => return None,
         };
+        // TypeStruct::getFieldIter (type.cc:1580-1596) selects the field with
+        // HALF-OPEN containment `F <= off < F + S` (strict upper bound
+        // `(curfield.offset + curfield.type->getSize()) > off`); then
+        // TypeStruct::findTruncation (type.cc:1624-1636) rejects when the
+        // requested piece spans past the field (`noff + sz > size`). The
+        // previous single test `off + sz <= F + S` used an INCLUSIVE upper
+        // bound, so a sz=0 lookup at an exact field boundary (e.g. offset
+        // 0x18 = first byte of `width`) wrongly matched the PREVIOUS field
+        // (`point` occupying [0x10,0x18)) — the boundary belongs to the next
+        // field. Mirror the oracle's two-step contract exactly.
         for f in fields {
             let f_size = f.type_ptr.get_size();
-            if off >= f.offset && off + sz <= f.offset + f_size {
-                return Some((f.name.clone(), f.offset, f.type_ptr.clone()));
+            if off >= f.offset && off < f.offset + f_size {
+                if off + sz <= f.offset + f_size {
+                    return Some((f.name.clone(), f.offset, f.type_ptr.clone()));
+                }
+                return None; // Piece spans more than one field (findTruncation fails)
             }
         }
         None

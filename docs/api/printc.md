@@ -1225,3 +1225,32 @@ comment.rs 删除）迁移到 oracle 的迭代器状态机直接驱动：
 oracle fixture `comment_sorter_iterators_1204` Rust 侧 38 行 stdout sha256
 `072c03b2…` 与 pin 逐字节一致（注册 runner 的 `comment_rs_sha256` 门随
 comment.rs 编辑失效，需主仓重登记）。
+
+### 2026-08-23：W-MYPROG-0001 — `find_partial_field` 半开区间字段定位（getFieldIter 契约）
+
+`find_partial_field`（printc.rs:10961，printc.cc:1966-1985 STRUCT/UNION
+findTruncation 臂 + opCptrsub 字段名臂 printc.cc:991-1010 的共用查找）原先用
+单条闭上界测试 `off + sz <= f.offset + f_size`。sz=0 的 PTRSUB 字段名查询在
+**字段精确边界**上会命中**前一个**字段：ProgressData{total@0,prev@8,
+point@0x10,width@0x18} 的 PTRSUB(bar,0x18) 打出 `bar->point`（point 占
+[0x10,0x18)，闭上界把 0x18 判给 point），golden 应为 `bar->width`
+（progressbarinit 0x49de/0x49f0 两个 store 位点）。
+
+修正为 oracle 两步契约：
+
+- **选字段**：`TypeStruct::getFieldIter`（type.cc:1580-1596）二分查找的包含
+  判据是半开区间 `F <= off < F + S`——严格上界
+  `(curfield.offset + curfield.type->getSize()) > off`（type.cc:1592-1593）。
+- **跨字段拒绝**：`TypeStruct::findTruncation`（type.cc:1624-1636）在选中
+  字段内 `noff + sz > size` 时整体失败（返回 null，**不**尝试下一字段），
+  消费端（printc.cc:993-1001 / 2030-2041）落 `field_0x<off>` /
+  `._off_size_` 合成名。
+
+Rugra 侧等价：先半开包含选字段，再 span 检查失败即 `return None`（不再继续
+迭代），None 的两个消费端 fallback 与 oracle 同名同形。行为变化仅限
+"sz=0 且 off 恰为字段边界"（原先错配前字段）与"sz>0 跨字段"（原先可命中
+偏小字段，现在按 oracle 拒绝→合成名）。验收（d73ee60 树 A/B）：
+progressbarinit 两处 PTRSUB 链头 `bar->point`→`bar->width`；全量
+defects=0/numbering=0/skeleton 2406 不变；printc:: 9/9 绿。同函数残留的
+8 层 PTRSUB 链/`.total`（RuleStructOffset0 offset-0 硬编码 + 类型传播
+STOP_TYPE_PROPAGATION 未消费）是上游域缺口，见 TODO 登记。
