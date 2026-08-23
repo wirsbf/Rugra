@@ -1427,6 +1427,37 @@ impl FlowBlock for BlockBasic {
             // single-threaded per-Funcdata pipeline that is the self-loop
             // case (out-edge back to this very block), whose in-list we can
             // fix directly under our own &mut borrow.
+            let pending: Vec<(usize, i32)> = self
+                .outgoing
+                .iter()
+                .enumerate()
+                .map(|(slot, edge)| (slot, edge.reverse_index))
+                .collect();
+            for (slot, rev) in pending {
+                if rev < 0 {
+                    continue;
+                }
+                let mut handled = false;
+                {
+                    let target = self.outgoing[slot].point.clone();
+                    let tried = target.try_write();
+                    if let Ok(mut target_guard) = tried {
+                        handled = true;
+                        if let Some(bb) =
+                            target_guard.as_any_mut().downcast_mut::<BlockBasic>()
+                        {
+                            if let Some(in_edge) = bb.incoming.get_mut(rev as usize) {
+                                in_edge.reverse_index = slot as i32;
+                            }
+                        }
+                    }
+                }
+                if !handled {
+                    if let Some(in_edge) = self.incoming.get_mut(rev as usize) {
+                        in_edge.reverse_index = slot as i32;
+                    }
+                }
+            }
             // cc:232: flags ^= f_flip_path
             self.flags ^= block_flags::FLIP_PATH;
         }
