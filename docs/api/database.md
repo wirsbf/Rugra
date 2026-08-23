@@ -60,7 +60,9 @@ XML encode/decode, faithful to the per-subclass methods in database.cc:
 - `FunctionSymbol`: `encode`/`decode` (database.cc:566/580) — `<functionshell>`
   with header, entry `<addr>`, and consume-size.
 - `EquateSymbol`: `encode`/`decode` (database.cc:659/670) — `<equatesymbol>`
-  with header and a `<value>` child carrying the constant.
+  with header and a `<value>` child carrying the constant. `new` sets
+  `category = equate` (database.cc:628) and `dispflags |= format`
+  (cc:630) on the wrapped base Symbol, like the C++ constructor.
 - `LabSymbol`: `encode`/`decode` (database.cc:751/759) — `<labelsym>` with
   header and the labelled `<addr>`.
 - `ExternRefSymbol`: `encode`/`decode` (database.cc:796/805) —
@@ -81,6 +83,16 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
   `find_by_name(name)`, `is_name_used(name)`.
 - `get_category_size(cat)`, `get_category_symbol(cat, ind)`,
   `set_category(id, cat, ind)`.
+- `add_dynamic_symbol(name, type_name, size, caddr, hash) -> u64`
+  (database.cc:1690) — dynamic hashed SymbolEntry.
+- `add_equate_symbol(name, format, value, addr, hash) -> (EquateSymbol, u64)`
+  (database.cc:1712) — builds the symbol with `category = equate`
+  (database.cc:628), registers `value` on the symbol identity via
+  `varnode::equate_symbol_registry::register_value` (the Rust stand-in for the
+  C++ EquateSymbol subtype payload that `dynamic_cast<EquateSymbol*>`
+  (varnode.cc:516) would read), then pushes the 1-byte dynamic entry
+  (database.cc:1722). Main-pipeline equates therefore reach
+  `Varnode::copy_symbol_if_valid` with their value.
 - `clear()`, `clear_unlocked()`.
 - `attach_child(id)`, `detach_child(id)`, `num_symbols()`.
 - XML encode/decode (database.cc:2616/2744):
@@ -94,7 +106,13 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
     of `<mapsym>`/`<hole>`/`<collision>` children.
   - `add_map_sym(decoder)` (database.cc:1564) — parses one `<mapsym>`
     (symbol header + `<addr>`/`<hash>` mappings) and inserts the symbol +
-    entries.
+    entries. For `<equatesymbol>` children the decode follows
+    `EquateSymbol::decode` (database.cc:670-683): the `<value>` child is read
+    (Rust `val`-attribute convention; an attribute-less `<value>` yields the
+    database.hh:306 default 0) and the symbol identity is registered in
+    `equate_symbol_registry` — mirroring the C++ `new EquateSymbol(owner)`
+    (database.cc:1572-1573) whose object identity survives into
+    `dynamic_cast<EquateSymbol*>`.
   - `decode_hole(decoder)` (database.cc:2667) — parses a `<hole>` element
     into a (Range, flags) pair.
   - `decode_collision_name(decoder)` (database.cc:2695) — parses a
@@ -254,3 +272,34 @@ Each ported function carries a `// Ghidra: database.cc:<line> <func>` comment
 Tests: 26 database tests pass (`cargo test --lib database::`), including the
 Symbol and Database encode/decode round-trips. `cargo check --lib` is clean
 (0 database.rs warnings/errors).
+
+## 2026-08-23：equate 值注册表接线（DATABASE-EQUATE-VALUE-REGISTRY-0001）
+
+- `EquateSymbol::new`（database.cc:624-631）补齐 cc:628
+  `category = equate`：此前包装的 base `Symbol` 一直停留在 `NoCategory`，
+  与 C++ 构造器状态不一致（varnodeeq 交付发现的残差）。
+- `Scope::add_equate_symbol`（database.cc:1712-1724）：注册侧 base
+  `Symbol` 现在设 `category = Equate`（cc:628），并在注册 `Arc` 身份上调用
+  `varnode::equate_symbol_registry::register_value(&sym_arc, value)` ——
+  C++ 中被注册对象本身就是携带 `uintb value` 的 EquateSymbol，
+  `dynamic_cast<EquateSymbol*>`（varnode.cc:516）从同一对象身份读出
+  payload；Rust 无子类型化，注册表条目即该 subtype payload 的替身，因此
+  主管线（database::Scope 侧创建/解码的 equate）从此携带 value 到达
+  `Varnode::copy_symbol_if_valid`。
+- `Scope::add_map_sym`（database.cc:1564-1606）`<equatesymbol>` 腿：此前
+  `<value>` 子元素被 `close_element_skipping` 整体跳过，解码出的 equate 既
+  无值也无 equate 身份。现按 `EquateSymbol::decode`（database.cc:670-683）
+  读取 `<value>`（Rust 编码侧 `val` 属性约定；无属性时取 database.hh:306
+  解码构造器默认 0），并对该 `Arc` 注册 equate 身份，镜像 cc:1572-1573
+  `new EquateSymbol(owner)` 的对象身份语义。真实 Ghidra XML 以元素文本
+  （ATTRIB_CONTENT，`<value>66</value>`）携带值，Decoder trait 目前不暴露
+  文本内容——属性化形式已覆盖 Rust 编码回环，文本形式登记为残差
+  （需 marshal.rs ATTRIB_CONTENT 访问器，不在本租约 write-set）。
+- 残差（如实登记）：`Funcdata::build_dynamic_symbol` 常量 equate 腿
+  （funcdata.rs / funcdata_varnode.cc:1301）走 varmap ScopeLocal 模型，
+  不经 `database::Scope::add_equate_symbol`，也不构造 varnode 级
+  mapentry——funcdata.rs/varmap.rs 不在本租约 write-set，未接线。
+- 验证：`cargo test --lib database` 59 绿（新增同值重复/跨 scope 隔离/
+  XML 解码注册/copy_symbol_if_valid 通路 4 项）；oracle 行为门禁
+  `tests/oracle/database_equatereg_1204`（pin-base schema2，
+  `tools/run_database_equatereg_oracle.sh`）。

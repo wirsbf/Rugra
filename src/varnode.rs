@@ -3272,9 +3272,10 @@ pub fn find_contiguous_whole(vn1: &Varnode) -> Option<Arc<RwLock<Varnode>>> {
 /// `Arc`, and clearing on Drop would re-attribute equate-ness to a new symbol
 /// allocated at a recycled address (ABA); the registry therefore mirrors the
 /// C++ object-lifetime semantics of "an EquateSymbol stays an EquateSymbol".
-/// Boundary: `database::Scope::add_equate_symbol` does not yet register its
-/// symbols (DATABASE-EQUATE-VALUE-REGISTRY residual); pipeline equates must
-/// wire that call before this registry sees main-pipeline traffic.
+/// Wiring: `database::Scope::add_equate_symbol` and the `<equatesymbol>` leg
+/// of `database::Scope::add_map_sym` register their symbols here
+/// (DATABASE-EQUATE-VALUE-REGISTRY-0001), so main-pipeline equates reach
+/// `copy_symbol_if_valid` with their value.
 pub mod equate_symbol_registry {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock, RwLock};

@@ -875,9 +875,11 @@
   且 `SymbolEntry::symbol` 为具体 `Arc<RwLock<Symbol>>`，故 varnode 域内以
   符号身份（Arc 指针）→ value 侧表最小建模。条目刻意不删除（镜像 C++
   「EquateSymbol 终身是 EquateSymbol」的对象生命周期语义，避免地址复用
-  ABA 误判）。边界：`database::Scope::add_equate_symbol` 尚未注册其符号
-  （DATABASE-EQUATE-VALUE-REGISTRY 残差），主管线 equate 接线前该注册表
-  只有 fixture/显式 API 流量。
+  ABA 误判）。接线（DATABASE-EQUATE-VALUE-REGISTRY-0001）：
+  `database::Scope::add_equate_symbol` 与 `add_map_sym` 的
+  `<equatesymbol>` 腿已在本体注册符号，主管线 equate（database::Scope 侧）
+  携带 value 到达 `copy_symbol_if_valid`；varmap/funcdata 侧的
+  `buildDynamicSymbol` 常量腿仍走 varmap 模型（见 database.md 变更日志残差）。
 - 行为影响：`RuleCollapseConstants` 折叠时非 equate mapentry 不再传播
   （与 oracle 一致方向）；`ruleaction::tests::
   collapse_constants_symbol_propagation_via_marked_input` 原断言保守行为，
