@@ -134,7 +134,7 @@ TypeFactory/instruction registry/symbol scope 也不是同构对象。该输入�
   不能归入 typed stage 的 `JUMPTABLE-PIPELINE-0001`，且本租约不扩
   EmulateFunction 接口修复它。
 - 上述 PIPELINE/EMULFN 为 locked-source audit 已知差异，SORT 为跨 toolchain
-  contract residual；它们都不是当前未执行 Rust 的 24-case fixture 观察结果。
+  contract residual；它们都不是 24-case fixture 的双侧观察结果（已执行部分的观察面见上文 2026-08-25 记录）。
 
 ## 2026-08-23：JUMPTABLE-GUARDS-0001 — analyzeGuards 完整移植 + valueMatch 补全 + checkUnrolledGuard 接线
 
