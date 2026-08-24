@@ -108,15 +108,15 @@
     "option_splitdatatypes_apply": "options.cc:999-1022 (toggle semantics 1012-1020; no Rugra counterpart — REGISTERED GAP)"
   },
   "rugra_candidate": {
-    "commit": "PENDING_PRODUCTION_COMMIT",
-    "tree": "PENDING_PRODUCTION_TREE",
+    "commit": "516abce3bf747c6890d42f0451ba7108e8e999cf",
+    "tree": "cca1ae621940265aae33395a434a8513a34d2677",
     "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
     "critical_git_blobs": {
-      "src/subflow.rs": "PENDING_SUBFLOW_BLOB",
-      "src/type_system/datatype.rs": "PENDING_DATATYPE_BLOB",
-      "Cargo.toml": "PENDING_CARGO_TOML_BLOB",
-      "Cargo.lock": "PENDING_CARGO_LOCK_BLOB",
-      "build.rs": "PENDING_BUILD_RS_BLOB"
+      "src/subflow.rs": "73226c089b941c9025aedf39b4d65e6af170403f",
+      "src/type_system/datatype.rs": "ac18e9e3b80943fb0398abd7f3ca343dfa6631cd",
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
     }
   },
   "comparand": {
@@ -125,7 +125,7 @@
     "rust_fixture_sha256": "b3761a72a3a98251f3fa93952710b89297f2c1e286198f229e442d0d36012aeb",
     "runner_sha256": "5e84e87c29ad6538258e8d96bf2575958e284b8d3ae601f2f7aba0a0e0f8c771",
     "subflow_rs_sha256": "9d6b1a95671c3280f28931ce4d8778f26036ba7ae2a4d2df6ee539656401a964",
-    "subflow_doc_sha256": "b4f4adbf91963f4bfc5be9898ac61dfe7cce7a4a643f633c722939fa501e239a",
+    "subflow_doc_sha256": "9648637cd9b7709cadc2c56daa780a167718e68e55b1341793ed7fadc2055168",
     "datatype_rs_sha256": "668d9ad5c36bfc34f0c72bc6a467e3f50887fbb75490cc3ba7e9ed5f6571cc4c",
     "datatype_doc_sha256": "216e4453c81e99553f444742fa831aa1cc48b4adfc4543567435180b8338292d",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
