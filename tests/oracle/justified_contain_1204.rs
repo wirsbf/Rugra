@@ -4,16 +4,22 @@
 //  - Address::justifiedContain (address.cc:131-141) polarity: EITHER side
 //    poking out independently returns -1 (equal-start-bigger, low overlap
 //    flush at entry end, superset, high poke). The spaceless helper
-//    rugra::fspec::justified_contain_range selects the branch by its
-//    force_left flag: view=start rows call force_left=true (the
-//    `op2.offset - offset` arithmetic, = Ghidra LE forceleft=false /
-//    forceleft=true / BE forceleft=true), view=end rows call
-//    force_left=false (the `off1 - off2` arithmetic, = Ghidra BE
+//    rugra::fspec::justified_contain_range selects the branch by the
+//    space endianness and force_left exactly like Ghidra's
+//    `base->isBigEndian() && !forceleft` (address.cc:138; re-pinned by
+//    FSPEC-JUSTIFIED-ENDIAN-0002): view=start rows call
+//    force_left=false on a little-endian space (the `op2.offset -
+//    offset` arithmetic, = Ghidra LE forceleft=false / forceleft=true /
+//    BE forceleft=true), view=end rows call force_left=false on a
+//    big-endian space (the `off1 - off2` arithmetic, = Ghidra BE
 //    forceleft=false). The C++ side additionally pins LE(false) ==
 //    LE(true) == BE(true) internally.
 //  - ParamEntry::justifiedContain (fspec.cc:248-283) alignment==0 path
-//    through a force-left exclusion entry (start-distance) and an
-//    unflagged entry (end-distance, = BE), including -1 polarity.
+//    through a force-left exclusion entry (start-distance). The be=1
+//    rows (Ghidra's BE-unflagged entry, end-distance) call the helper
+//    with an explicit big-endian space: the transitional enum
+//    AddressSpace cannot stage a BE ParamEntry (ADDRESS-0001), and an
+//    unflagged Ram entry now correctly returns the LE start distance.
 //  - ParamListStandard::characterizeAsParam (fspec.cc:682-719) over a
 //    single 4-byte exclusion force-left entry: contains_justified(2),
 //    contains_unjustified(1), contained_by(3), no_containment(0), with
@@ -76,12 +82,15 @@ fn main() {
     println!("case=address_justified_contain");
     for g in GEOMS.iter() {
         // view=start: op2.offset - offset arithmetic (Ghidra LE any
-        // forceleft, BE forceleft=true).
-        let start = justified_contain_range(g.base, g.esz, g.qoff, g.qsz, true);
+        // forceleft, BE forceleft=true). Re-pinned by
+        // FSPEC-JUSTIFIED-ENDIAN-0002: force_left=false on a
+        // little-endian space — the real defect route.
+        let start = justified_contain_range(g.base, g.esz, g.qoff, g.qsz, false, false);
         println!("  jc base=0x{:x} esz={} qoff=0x{:x} qsz={} view=start off={}",
                  g.base, g.esz, g.qoff, g.qsz, start);
-        // view=end: off1 - off2 arithmetic (Ghidra BE forceleft=false).
-        let end = justified_contain_range(g.base, g.esz, g.qoff, g.qsz, false);
+        // view=end: off1 - off2 arithmetic (Ghidra BE forceleft=false):
+        // force_left=false on a big-endian space.
+        let end = justified_contain_range(g.base, g.esz, g.qoff, g.qsz, false, true);
         println!("  jc base=0x{:x} esz={} qoff=0x{:x} qsz={} view=end off={}",
                  g.base, g.esz, g.qoff, g.qsz, end);
     }
@@ -111,8 +120,11 @@ fn main() {
             let off = le.justified_contain(Address::new(qoff), qsz);
             println!("  pe be=0 qoff=0x{:x} qsz={} off={}", qoff, qsz, off);
         }
-        // Unflagged exclusion entry: end-distance branch (= Ghidra BE).
-        let be = make_entry(1, AddressSpace::Ram, 0x100, 8, 1, 0, 0);
+        // BE-unflagged rows (end-distance branch): the transitional enum
+        // AddressSpace cannot stage a big-endian ParamEntry, so these
+        // rows pin the wrapper's forwarded arithmetic (fspec.cc:267 ->
+        // Address::justifiedContain BE forceleft=false) through the
+        // spaceless helper with an explicit BE space (ADDRESS-0001).
         let bec: [(u64, i32); 6] = [
             (0x100, 8),   // exact
             (0x100, 4),   // sub-range at the low end -> off1 - off2 = 4
@@ -122,7 +134,7 @@ fn main() {
             (0x0FE, 8),   // low overlap ending flush at entry end -> -1
         ];
         for &(qoff, qsz) in bec.iter() {
-            let off = be.justified_contain(Address::new(qoff), qsz);
+            let off = justified_contain_range(0x100, 8, qoff, qsz, false, true);
             println!("  pe be=1 qoff=0x{:x} qsz={} off={}", qoff, qsz, off);
         }
     }

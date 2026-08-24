@@ -1,0 +1,162 @@
+{
+ "schema": 2,
+ "fixture_id": "FSPEC-ENDIAN-RESOLVER-1204",
+ "stable_function_closure": [
+  "ghidra::Address::justifiedContain(int4, const Address &, int4, bool) const address.cc:131",
+  "ghidra::ParamEntry::justifiedContain(const Address &, int4) const fspec.cc:248",
+  "ghidra::ParamListStandard::characterizeAsParam(const Address &, int4) const fspec.cc:682",
+  "ghidra::ParamListStandard::populateResolver() fspec.cc:1191",
+  "ghidra::Heritage::guardCallOverlappingInput(...) truncate call heritage.cc:1221",
+  "rugra::fspec::justified_contain_range src/fspec.rs (RUGRA-GLUE mirror of address.cc:131-141)",
+  "rugra::fspec::ParamEntry::justified_contain src/fspec.rs (fspec.cc:248-283)",
+  "rugra::fspec::ParamListStandard::characterize_as_param src/fspec.rs (fspec.cc:682-719)",
+  "rugra::heritage::guard_call_overlapping_input truncate_amount src/heritage.rs (heritage.cc:1210-1235)"
+ ],
+ "overall_status": "UNTESTED",
+ "status_detail": "The four-case covered projection byte-matches Ghidra 12.0.4: the LE/BE x forceleft branch matrix (address.cc:138 branch key = space endianness, not forceleft), the unflagged LE ParamEntry ==0 wrapper route, the heritage.cc:1221 truncate SUBPIECE constant, and the characterizeAsParam resolver gating for extent-out queries. Overall remains UNTESTED because the BE-space ParamEntry wrapper, join-piece resolver windows, the space-mismatch base branch and find_entry's ungated scan are not exercised.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "d32a0051cd99adf1d8feb4e1f92410cdff07aa35",
+  "rugra_base_tree": "f7bfeaf5aad8adfd7476b9e212c82f0bb79f6251",
+  "cpp_fixture_sha256": "c081a97aedd410ce41716af8ca877f7d356fa429165e7742129c45475013c62c",
+  "rust_fixture_sha256": "52bd13893aa7aaf1790fa26601c6b7e400616bbb558dd7f2dd044af6f4783285",
+  "fspec_rs_sha256": "ba7723dda0e9a1bb8f7a40348d26a9f0602a495e700ca0f4b7fda6030d5ccaa1",
+  "fspec_doc_sha256": "9c458d20c9bdd3fa1626b1bee3bec1dbcb9817d74b71bd8c5bae9ab584371fe8",
+  "runner_sha256": "ab58a3000a2c60b35d0f42450bdc0b58d4a9fb3aa9acba918f2df8b1f42d479f",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "835522c953918f6b736dd250fed109c6e11f699e498a75a2f7afe0624b418d79",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-endian-resolver-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
+  }
+ },
+ "architecture": {
+  "id": "synthetic-le-be-fspec-endian-resolver-fixture",
+  "endianness": "little and big (paired processor spaces)",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3 (little-endian), ram_be=4 (big-endian); byte addressed, wordsize 1",
+  "space_construction": "FixtureTranslate/AddrSpace inserts ConstantSpace, OtherSpace, UniqueSpace and two IPTR_PROCESSOR AddrSpaces (ram LE index 3, ram_be BE index 4) with AddrSpace::hasphysical; the LE/BE pair is the decisive endianness control for Address::justifiedContain branch selection (address.cc:138)"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "no cspec decode; staged ParamEntry resources (case2: one unflagged LE exclusion 8B@0x100 min1; case4: two unflagged LE exclusion entries 4B@0x100 min1 and 8B@0x200 min1 in a ParamListStandard)",
+  "calling_convention": "hand-built ParamEntry/ParamListStandard via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters); populateResolver/finalize_after_decode complete the case-4 model"
+ },
+ "analysis_options": {
+  "api": "Direct production Address::justifiedContain, ParamEntry::justifiedContain (alignment==0 path) and ParamListStandard::characterizeAsParam calls on both sides; no Action, Rule, PrintC or Funcdata pipeline",
+  "model_state": "case1: raw Address pairs in ram/ram_be over 7 (base, esz, qoff, qsz) geometries x 4 (forceleft, endian) combinations; case2: one unflagged LE exclusion entry 8B@0x100; case3: heritage.cc:1221 call shape over 5 (addr, size, toff, tsz) geometries in both spaces; case4: ParamListStandard with two unflagged LE exclusion entries (4B@0x100, 8B@0x200), populateResolver",
+  "normalization": "None. Raw int4 distances, truncate amounts and classification codes (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3) are printed verbatim; the C++ side additionally exits non-zero if LE(false) != LE(true) != BE(true) branch consistency fails",
+  "debug_macros": "none on either side",
+  "random_seed": "none; construction and queries are deterministic",
+  "error_injection": "none; all queries stay on valid inputs"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture, compiler_spec, analysis_options, cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "le_forceleft_routing",
+    "setup": "Address::justifiedContain over 7 geometries (exact, low sub-range, size-1 high byte, mid sub-range, size-1 low/high bytes of a 4B entry, equal-start-bigger violation) x the full (forceleft in {0,1}) x (space in {ram LE, ram_be BE}) matrix",
+    "queries": "28 rows: jc base/esz/qoff/qsz fl be off",
+    "expect": "the branch key is base->isBigEndian() && !forceleft (address.cc:138): LE rows print the start distance op2.offset - offset for BOTH forceleft values (the FSPEC-JUSTIFIED-ENDIAN-0002 route), BE+forceleft=1 rows the start distance, only BE+forceleft=0 rows the end distance off1 - off2; the violation geometry returns -1 on every branch"
+   },
+   {
+    "id": "param_entry_le_unflagged",
+    "setup": "ParamEntry::justifiedContain alignment==0 path over an UNFLAGGED little-endian exclusion entry (8B@0x100, minsize 1)",
+    "queries": "exact, low sub-range, unjustified sub-range, flush-high sub-range, size-1 sub-range, equal-start-bigger, low overlap inside, high poke",
+    "expect": "the wrapper forwards forceleft=(flags & force_left_justify)=0 and the entry space endianness drives the address.cc:138 branch: LE returns the start distance, so the low sub-range is justified (off=0, the ==0 determination fixed by ENDIAN-0002) and the flush-high sub-range is 6, not 0"
+   },
+   {
+    "id": "truncate_subpiece",
+    "setup": "the heritage.cc:1221 call shape addr.justifiedContain(size, truncAddr, vData.size, false) over 5 geometries (heritage range with contained parameter, plus one poke-out violation), in both the LE and BE space",
+    "queries": "10 rows: tr spc addr size toff tsz amt",
+    "expect": "LE rows print the start distance truncAddr - addr (the SUBPIECE constant src/heritage.rs guard_call_overlapping_input now produces); BE rows the end distance (addr+size-1) - (truncAddr+vData.size-1); the violation returns -1 in both spaces"
+   },
+   {
+    "id": "characterize_resolver_gate",
+    "setup": "ParamListStandard with two unflagged LE exclusion entries (4B@0x100, 8B@0x200), populateResolver/finalize_after_decode",
+    "queries": "12 rows: start between extents (overlap nothing / cover E2), start above every extent, start below E1 covering it, exact E2, unjustified inside E2, equal-start poke, start below E2 covering exactly, start between above E1, start below everything, start below covering both, start inside E2 poking high",
+    "expect": "fspec.cc:682-719 resolver gating: phase 1 visits only entries whose registered extent contains the query start; the containedBy scan runs only when some registered extent starts above the query start (cc:708 iterpair.first != resolver->end()) and covers entries whose registered start falls in (offset, offset+size-1]; a query start above every extent skips the containedBy scan entirely -> no_containment"
+   }
+  ],
+  "case_order": [
+   "le_forceleft_routing",
+   "param_entry_le_unflagged",
+   "truncate_subpiece",
+   "characterize_resolver_gate"
+  ],
+  "sha256": "7e82526487a1166cbbe60e1a44a3d2c9ad2e70e21b25b50f863c320e8e95f133"
+ },
+ "observation_schema": {
+  "format": "63 fixed-order UTF-8 lines with final newline: one envelope, four case headers, then 28 jc rows (7 geometries x 4 forceleft/endian combinations), 8 pe rows, 10 tr rows (5 geometries x 2 spaces) and 12 ch rows",
+  "branches": "jc rows pin the address.cc:138 branch key: (be=0,fl=0/1) and (be=1,fl=1) print the start distance op2.offset - offset; only (be=1,fl=0) prints the end distance off1 - off2; the C++ harness verifies LE(false)==LE(true)==BE(true) internally and exits non-zero on violation",
+  "wrapper": "pe rows print the raw alignment==0 wrapper distance over an unflagged LE entry (start distance; ==0 iff the query starts at the entry base)",
+  "truncate": "tr rows print the heritage.cc:1221 SUBPIECE constant; LE rows count from the range start, BE rows from the range end",
+  "classification": "ch rows print the numeric characterizeAsParam code (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3); extent-out queries pin the resolver gate (phase-2 containedBy scan skipped entirely when no registered extent starts above the query start)"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "Address::justifiedContain returns int4 by value (-1 or the endian-aware distance); ParamEntry::justifiedContain forwards forceleft=(flags & force_left_justify) with the entry space endianness; characterizeAsParam consumes the justifiedContain sign (==0 justified, >0 unjustified) and the exclusion containedBy before no_containment",
+  "loop_bounds_traversal_order": "characterizeAsParam phase 1 walks the per-space resolver interval containing loc.getOffset() (resolverMap[space->getIndex()], populateResolver fspec.cc:1191-1216 registers entry extents and join piece extents), phase 2 only when iterpair.first != resolver->end() (cc:708) scans entries starting inside (loc.getOffset(), loc.getOffset()+size-1] via find_end",
+  "counters_and_accumulators": "resContains/resContainedBy are two booleans accumulated during phase 1 only, never reset; no numeric counters",
+  "sort_and_comparison_keys": "containment decision keys are op2.offset < offset and off2 > off1 (uintb, independent); the branch key is base->isBigEndian() && !forceleft; the resolver gate key is the existence of a registered extent start above the query start (the rangemap refinement splits at every registered start, so an interval exists above the query interval iff a higher start exists); classification tie order is justified before unjustified before contained_by before no_containment (fspec.cc:697-714 return ladder)"
+ },
+ "coverage": {
+  "le_be_forceleft_matrix": "MATCH (28/28 rows: LE returns the start distance for both forceleft values; only BE+forceleft=0 returns the end distance; violation -1 on all branches)",
+  "param_entry_le_unflagged_wrapper": "MATCH (8/8 rows: unflagged LE entry ==0 iff query starts at the base; flush-high sub-range returns 6, not 0)",
+  "truncate_subpiece_constant": "MATCH (10/10 rows: LE start-distance / BE end-distance SUBPIECE constants incl. the -1 poke-out)",
+  "characterize_resolver_gate": "MATCH (12/12 rows incl. extent-out queries below/between/above all extents and the gate-closed above-all case)",
+  "be_param_entry_wrapper": "UNTESTED (proposed residual: the transitional enum AddressSpace cannot stage a big-endian ParamEntry, so the wrapper's BE route is unreachable in the Rust model; the BE arithmetic is pinned at helper level (jc be=1 fl=0 rows) - ADDRESS-0001 transitional)",
+  "join_resolver_window": "UNTESTED (proposed residual: characterize_as_param's piece-based windows for join entries are structurally present (registered_extents) but no join entries are staged)",
+  "space_mismatch_base_branch": "UNTESTED (proposed residual: Address::justifiedContain's base != op2.base early -1 is caller-side in the spaceless helper - ADDRESS-0001 transitional)",
+  "find_entry_resolver_gate": "UNTESTED (proposed residual: ParamListStandard::find_entry keeps the ungated linear scan with the plain-space filter (join entries not piece-windowed); out of the ENDIAN-0002/RESOLVER-GATE-0003 lease)"
+ },
+ "residuals": [
+  {
+   "todo_id": "ADDRESS-0001",
+   "status": "UNTESTED",
+   "detail": "BE-space ParamEntry wrapper + space-mismatch -1 branch (address.cc:132): the enum AddressSpace model is little-endian-only; helper-level BE arithmetic is pinned (jc be=1 rows)."
+  },
+  {
+   "todo_id": "FSPEC-RESOLVER-JOIN-WINDOW-0004",
+   "status": "UNTESTED",
+   "detail": "Join-entry resolver windows (populateResolver registers per-piece ranges) are structurally present via registered_extents but unexercised; needs a join-record fixture once the join-space manager is modeled."
+  },
+  {
+   "todo_id": "FSPEC-FINDENTRY-GATE-0005",
+   "status": "UNTESTED",
+   "detail": "find_entry (fspec.cc:661-680) still uses the ungated linear scan with the plain-space filter (join entries never piece-windowed); needs the same resolver-window treatment as characterize_as_param."
+  }
+ ],
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "rugra_build": "Archive the pinned base, overlay the owned fspec source, verify the complete Cargo.lock registry closure, then let /usr/bin/cargo --locked --offline select and checksum the current Linux target's cached packages under the global build lock.",
+  "expected_stdout_lines": 63,
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "c37d39fe5e9c324e1e5ed85992b3583a9500258c8f2b5bb11e4ef1bfde307509"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "2d59318a74856ddd801fa439f55d6513e960e473543c07bb452cd7ad214de6ee",
+  "rugra_stdout_sha256": "2d59318a74856ddd801fa439f55d6513e960e473543c07bb452cd7ad214de6ee"
+ }
+}

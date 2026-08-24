@@ -1,14 +1,16 @@
 #!/usr/bin/env -S -i PATH=/usr/bin:/bin /usr/bin/bash
 set -euo pipefail
 
-# JUSTIFIED-CONTAIN-1204 oracle runner (pin-base schema2): rebuilds the
+# FSPEC-ENDIAN-RESOLVER-1204 oracle runner (pin-base schema2): rebuilds the
 # locked Ghidra 12.0.4 decompiler and the pinned Rugra base plus the
 # candidate src/fspec.rs overlay in an isolated snapshot, runs both
 # fixtures byte-for-byte, and verifies every comparand hash in the
-# metadata. Covered projection: Address::justifiedContain one-sided
-# violation polarity + branch arithmetic (LE/BE, forceleft), the
-# ParamEntry alignment==0 wrapper, and the characterizeAsParam three-way
-# classification (FSPEC-JUSTIFIED-CONTAIN-0001).
+# metadata. Covered projection: Address::justifiedContain LE/BE x
+# forceleft branch matrix (address.cc:138 base->isBigEndian() branch
+# key), the unflagged LE ParamEntry ==0 wrapper route, the
+# heritage.cc:1221 truncate SUBPIECE constant, and the
+# characterizeAsParam resolver gating for extent-out queries
+# (FSPEC-JUSTIFIED-ENDIAN-0002 + FSPEC-CHARACTERIZE-RESOLVER-GATE-0003).
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -21,7 +23,7 @@ if [[ -z "$runner_source" || ! -f "$runner_source" || -L "$runner_source" ]]; th
   exit 1
 fi
 repo_root=$(builtin cd "$(/usr/bin/dirname "$runner_source")/.." && builtin pwd -P)
-runner="$repo_root/tools/run_justified_contain_oracle.sh"
+runner="$repo_root/tools/run_fspec_endian_resolver_oracle.sh"
 if [[ "$runner_source" != "$runner" ]]; then
   echo "runner fd resolved outside the expected repository path" >&2
   exit 1
@@ -54,12 +56,12 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=7b1da21a3a874598423a4b6b941eb2209545fc15
-rugra_base_tree=9b825d99ad55d7b41e5e509beb2c266497d4645e
+rugra_base_commit=d32a0051cd99adf1d8feb4e1f92410cdff07aa35
+rugra_base_tree=f7bfeaf5aad8adfd7476b9e212c82f0bb79f6251
 ghidra_root="$repo_root/ghidra"
-metadata="$repo_root/tests/oracle/justified_contain_1204.metadata.json"
-cpp_fixture="$repo_root/tests/oracle/justified_contain_1204.cc"
-rust_fixture="$repo_root/tests/oracle/justified_contain_1204.rs"
+metadata="$repo_root/tests/oracle/fspec_endian_resolver_1204.metadata.json"
+cpp_fixture="$repo_root/tests/oracle/fspec_endian_resolver_1204.cc"
+rust_fixture="$repo_root/tests/oracle/fspec_endian_resolver_1204.rs"
 fspec_rs="$repo_root/src/fspec.rs"
 fspec_doc="$repo_root/docs/api/fspec.md"
 registry_cache="$user_home/.cargo/registry/cache"
@@ -136,9 +138,9 @@ host_cargo=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_cargo_bin" --version)
 host_platform=$(/usr/bin/uname -srm)
 
-oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-justified-contain-1204.XXXXXX)
+oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-fspec-endian-resolver-1204.XXXXXX)
 cleanup() {
-  if [[ "$oracle_tmp" != /tmp/rugra-justified-contain-1204.?????? ]]; then
+  if [[ "$oracle_tmp" != /tmp/rugra-fspec-endian-resolver-1204.?????? ]]; then
     echo "refusing to remove unexpected temporary path: $oracle_tmp" >&2
     return 1
   fi
@@ -202,9 +204,9 @@ cargo_home = pathlib.Path(cargo_home_raw)
 registry_cache = pathlib.Path(registry_cache_raw)
 
 expected_paths = {
-    pathlib.Path(metadata_raw): repo / "tests/oracle/justified_contain_1204.metadata.json",
-    pathlib.Path(cpp_raw): repo / "tests/oracle/justified_contain_1204.cc",
-    pathlib.Path(rust_raw): repo / "tests/oracle/justified_contain_1204.rs",
+    pathlib.Path(metadata_raw): repo / "tests/oracle/fspec_endian_resolver_1204.metadata.json",
+    pathlib.Path(cpp_raw): repo / "tests/oracle/fspec_endian_resolver_1204.cc",
+    pathlib.Path(rust_raw): repo / "tests/oracle/fspec_endian_resolver_1204.rs",
     pathlib.Path(fspec_raw): repo / "src/fspec.rs",
     pathlib.Path(fspec_doc_raw): repo / "docs/api/fspec.md",
 }
@@ -260,7 +262,6 @@ def live_file(relative):
 
 overlay_files = {
     pathlib.Path("src/fspec.rs"),
-    pathlib.Path("src/heritage.rs"),
 }
 crate_files = [
     pathlib.Path("Cargo.toml"),
@@ -273,7 +274,7 @@ crate_files = [
 ] + base_source_files("src") + base_source_files("sleigh_shim")
 crate_files = sorted(set(crate_files), key=lambda item: item.as_posix())
 crate_hasher = hashlib.sha256()
-crate_hasher.update(b"rugra-justified-contain-base-overlay-v1\0")
+crate_hasher.update(b"rugra-fspec-endian-resolver-base-overlay-v1\0")
 crate_hasher.update(rugra_base_commit.encode())
 crate_bytes = {}
 for relative in crate_files:
@@ -289,11 +290,11 @@ for relative in crate_files:
     crate_hasher.update(data)
 
 special_paths = [
-    pathlib.Path("tests/oracle/justified_contain_1204.cc"),
-    pathlib.Path("tests/oracle/justified_contain_1204.rs"),
-    pathlib.Path("tests/oracle/justified_contain_1204.metadata.json"),
+    pathlib.Path("tests/oracle/fspec_endian_resolver_1204.cc"),
+    pathlib.Path("tests/oracle/fspec_endian_resolver_1204.rs"),
+    pathlib.Path("tests/oracle/fspec_endian_resolver_1204.metadata.json"),
     pathlib.Path("docs/api/fspec.md"),
-    pathlib.Path("tools/run_justified_contain_oracle.sh"),
+    pathlib.Path("tools/run_fspec_endian_resolver_oracle.sh"),
 ]
 special = {}
 for relative in special_paths:
@@ -311,7 +312,7 @@ require("live runner/FD hash", sha(live_file(special_paths[-1])), runner_snapsho
 metadata = json.loads(special[special_paths[2].as_posix()].decode("utf-8"))
 reject_pending(metadata)
 require("metadata schema", metadata["schema"], 2)
-require("fixture id", metadata["fixture_id"], "JUSTIFIED-CONTAIN-1204")
+require("fixture id", metadata["fixture_id"], "FSPEC-ENDIAN-RESOLVER-1204")
 require("overall status", metadata["overall_status"], "UNTESTED")
 oracle = metadata["oracle"]
 for label, actual, expected in (
@@ -339,7 +340,7 @@ observed_hashes = {
 require(
     "crate snapshot scheme",
     comparand["rust_crate_tree_hash_scheme"],
-    "sha256 of rugra-justified-contain-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "sha256 of rugra-fspec-endian-resolver-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
 )
 for key, actual in observed_hashes.items():
     require(key, actual, comparand[key])
@@ -376,12 +377,14 @@ require("covered projection status", metadata["covered_projection_status"], "MAT
 
 coverage = metadata["coverage"]
 for required_key, required_prefix in (
-    ("address_justified_contain", "MATCH"),
-    ("param_entry_justified_contain", "MATCH"),
-    ("characterize_projection", "MATCH"),
+    ("le_be_forceleft_matrix", "MATCH"),
+    ("param_entry_le_unflagged_wrapper", "MATCH"),
+    ("truncate_subpiece_constant", "MATCH"),
+    ("characterize_resolver_gate", "MATCH"),
+    ("be_param_entry_wrapper", "UNTESTED"),
+    ("join_resolver_window", "UNTESTED"),
     ("space_mismatch_base_branch", "UNTESTED"),
-    ("le_forceleft_false_flag_routing", "UNTESTED"),
-    ("characterize_resolver_foreign_start", "UNTESTED"),
+    ("find_entry_resolver_gate", "UNTESTED"),
 ):
     if required_key not in coverage:
         raise SystemExit(f"coverage table missing {required_key}")
@@ -416,7 +419,7 @@ for block in package_blocks:
 require("locked registry package count", len(registry_packages), metadata["build"]["registry_packages"])
 
 registry_hasher = hashlib.sha256()
-registry_hasher.update(b"rugra-justified-contain-registry-lock-v1\0")
+registry_hasher.update(b"rugra-fspec-endian-resolver-registry-lock-v1\0")
 for name, version, checksum in registry_packages:
     record = f"{name}\0{version}\0{checksum}".encode()
     registry_hasher.update(len(record).to_bytes(8, "big"))
@@ -433,9 +436,9 @@ require(
 # make a Linux oracle depend on irrelevant cache population.
 PY
 
-snapshot_metadata="$snapshot_root/tests/oracle/justified_contain_1204.metadata.json"
-snapshot_cpp="$snapshot_root/tests/oracle/justified_contain_1204.cc"
-snapshot_rust="$snapshot_root/tests/oracle/justified_contain_1204.rs"
+snapshot_metadata="$snapshot_root/tests/oracle/fspec_endian_resolver_1204.metadata.json"
+snapshot_cpp="$snapshot_root/tests/oracle/fspec_endian_resolver_1204.cc"
+snapshot_rust="$snapshot_root/tests/oracle/fspec_endian_resolver_1204.rs"
 
 oracle_archive="$oracle_tmp/ghidra-cpp.tar"
 /usr/bin/mkdir -p "$oracle_tmp/source"
@@ -463,7 +466,7 @@ if [[ ! -f "$oracle_cpp/libdecomp.a" || -L "$oracle_cpp/libdecomp.a" ]]; then
   exit 1
 fi
 
-cpp_binary="$oracle_tmp/justified_contain_1204_cpp"
+cpp_binary="$oracle_tmp/fspec_endian_resolver_1204_cpp"
 if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_cxx_bin" -std=c++11 -O2 -Wall -Wno-sign-compare -m64 \
     -I"$oracle_cpp" "$snapshot_cpp" "$oracle_cpp/libdecomp.cc" \
@@ -498,11 +501,11 @@ fi
 
 if $ghidra_only; then
   /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-  echo "justified_contain_1204: GHIDRA_LOCKED_OUTPUT_OK covered=MATCH overall=UNTESTED stdout_sha256=$actual_stdout_sha"
+  echo "fspec_endian_resolver_1204: GHIDRA_LOCKED_OUTPUT_OK covered=MATCH overall=UNTESTED stdout_sha256=$actual_stdout_sha"
   exit 0
 fi
 
-fixture_target=/tmp/rugra-target-fspec-writer/justified-contain
+fixture_target=/tmp/rugra-target-fspec-writer/fspec-endian-resolver
 /usr/bin/mkdir -p "$fixture_target"
 for cargo_config in \
   "$snapshot_root/.cargo/config" "$snapshot_root/.cargo/config.toml" \
@@ -535,7 +538,7 @@ if [[ -L "$native_archive" || ! -f "$native_archive" ]]; then
 fi
 native_dir=$(/usr/bin/dirname "$native_archive")
 
-rust_binary="$oracle_tmp/justified_contain_1204_rust"
+rust_binary="$oracle_tmp/fspec_endian_resolver_1204_rust"
 if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --edition=2021 -O \
     -L "dependency=$fixture_target/debug/deps" -L "native=$native_dir" \
@@ -605,7 +608,7 @@ lines = ghidra.decode("utf-8").splitlines()
 if len(lines) != metadata["build"]["expected_stdout_lines"]:
     raise SystemExit(f"expected {metadata['build']['expected_stdout_lines']} fixture lines, found {len(lines)}")
 if lines[0] != (
-    "schema=1|fixture=JUSTIFIED-CONTAIN-1204|"
+    "schema=1|fixture=FSPEC-ENDIAN-RESOLVER-1204|"
     "oracle=e40ed13014025f82488b1f8f7bca566894ac376b"
 ):
     raise SystemExit("fixture envelope mismatch")
@@ -621,4 +624,4 @@ if ! /usr/bin/cmp -s "$oracle_tmp/owned.before" "$oracle_tmp/owned.after"; then
   exit 1
 fi
 
-echo "justified_contain_1204: OK covered=MATCH overall=UNTESTED ghidra=$actual_stdout_sha"
+echo "fspec_endian_resolver_1204: OK covered=MATCH overall=UNTESTED ghidra=$actual_stdout_sha"

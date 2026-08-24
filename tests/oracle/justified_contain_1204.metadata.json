@@ -10,7 +10,7 @@
   "rugra::fspec::ParamListStandard::characterize_as_param src/fspec.rs (fspec.cc:682-719)"
  ],
  "overall_status": "UNTESTED",
- "status_detail": "The three-case covered projection byte-matches Ghidra 12.0.4's Address::justifiedContain one-sided-violation polarity and branch arithmetic (LE/BE x forceleft over 17 geometries including 1/4/8/cross-4 size boundaries), the ParamEntry alignment==0 wrapper, and the characterizeAsParam three-way classification. Overall remains UNTESTED because the space-mismatch base check, the little-endian forceleft=false flag routing, and resolver-gated foreign-start characterize queries are not exercised.",
+ "status_detail": "The three-case covered projection byte-matches Ghidra 12.0.4's Address::justifiedContain one-sided-violation polarity and branch arithmetic (LE/BE x forceleft over 17 geometries including 1/4/8/cross-4 size boundaries), the ParamEntry alignment==0 wrapper, and the characterizeAsParam three-way classification. Re-pinned after FSPEC-JUSTIFIED-ENDIAN-0002 threaded the space endianness through justified_contain_range: view=start rows now exercise force_left=false on a little-endian space (the defect route), and the be=1 rows pin the BE arithmetic through the helper because the transitional enum AddressSpace cannot stage a BE ParamEntry. Overall remains UNTESTED because the space-mismatch base check and resolver-gated foreign-start characterize queries are not exercised by this fixture (both are covered by the successor fixture fspec_endian_resolver_1204).",
  "oracle": {
   "repository": "NationalSecurityAgency/ghidra",
   "tag": "Ghidra_12.0.4_build",
@@ -22,14 +22,14 @@
   "rugra_base_commit": "7b1da21a3a874598423a4b6b941eb2209545fc15",
   "rugra_base_tree": "9b825d99ad55d7b41e5e509beb2c266497d4645e",
   "cpp_fixture_sha256": "7237da8a23543e661b294c8a95e1e7e411182cb76f6c385bef32ae3822572203",
-  "rust_fixture_sha256": "04887f3372074719c8d59537cfd2d5faf00b53647a53ca2c4d8337fedfeb3bc7",
-  "fspec_rs_sha256": "fa8a40f065e9bd55382e178b37eb424a66e3e86886ade0def1d625a92e3919e5",
-  "fspec_doc_sha256": "aa5d920a9732359404394a5083809e63a78f2be1bf5eb0ce235aec82f7023db8",
-  "runner_sha256": "86e9d90e314b0852c5bfe4f000ade8d7a81e5b5ff16d39506d35e1e734e59954",
+  "rust_fixture_sha256": "ed87dce8dea12b1d6431370c6fce5198b5c4df18a62ee2137822c581ef306b98",
+  "fspec_rs_sha256": "ba7723dda0e9a1bb8f7a40348d26a9f0602a495e700ca0f4b7fda6030d5ccaa1",
+  "fspec_doc_sha256": "9c458d20c9bdd3fa1626b1bee3bec1dbcb9817d74b71bd8c5bae9ab584371fe8",
+  "runner_sha256": "19e6d0b0327a93d3150afc2fb160701c77d51b1ab6d2835b6d8e074d79d18c10",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "544b8241db7d85b82bf64ea4456b0170f2d7b26f96ece675a76b5ca4961d4abe",
+  "rust_crate_tree_sha256": "c67f621012c03eeeafca05e185ed9b25c85855772c24410ed0db9d73de6291f3",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-justified-contain-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "host": {
    "cxx": "g++ (GCC) 16.2.1 20260810",
@@ -99,7 +99,7 @@
  "observation_schema": {
   "format": "63 fixed-order UTF-8 lines with final newline: one envelope, three case headers, then 34 jc rows (17 geometries x view=start/end), 17 pe rows (11 LE-flagged + 6 BE-unflagged) and 8 ch rows",
   "polarity": "jc/pe off values expose the independent one-sided -1 checks (address.cc:133/137) versus the branch arithmetic for contained ranges",
-  "branches": "view=start pins the op2.offset - offset arithmetic (Ghidra LE forceleft=false/true and BE forceleft=true; Rust force_left=true); view=end pins off1 - off2 (Ghidra BE forceleft=false; Rust force_left=false); the C++ harness additionally verifies LE(false)==LE(true)==BE(true) internally and exits non-zero on violation",
+  "branches": "jc/pe off values expose the independent one-sided -1 checks (address.cc:133/137) versus the branch arithmetic for contained ranges; view=start pins the op2.offset - offset arithmetic (Ghidra LE forceleft=false/true and BE forceleft=true; Rust force_left=false with a little-endian space — re-pinned by FSPEC-JUSTIFIED-ENDIAN-0002); view=end pins off1 - off2 (Ghidra BE forceleft=false; Rust force_left=false with a big-endian space); the be=1 pe rows pin the same BE arithmetic via the helper (the enum-space model cannot stage a BE ParamEntry); the C++ harness additionally verifies LE(false)==LE(true)==BE(true) internally and exits non-zero on violation",
   "classification": "ch rows print the numeric characterizeAsParam code (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3); equal-start pokes demonstrate the FSPEC-JUSTIFIED-CONTAIN-0001 fix (off=-1 -> contained_by)"
  },
  "decisive_semantics": {
@@ -113,8 +113,8 @@
   "param_entry_justified_contain": "MATCH",
   "characterize_projection": "MATCH",
   "space_mismatch_base_branch": "UNTESTED (proposed residual: Address::justifiedContain's base != op2.base early -1 is caller-side in Rugra; the spaceless helper cannot express it - ADDRESS-0001 transitional)",
-  "le_forceleft_false_flag_routing": "UNTESTED (proposed residual: on little-endian spaces Ghidra returns the start-distance even with forceleft=false, while the spaceless helper picks the end-distance branch for force_left=false; affects heritage truncate_amount and unflagged LE entries' ==0 checks - needs endianness threading through callers incl. src/heritage.rs)",
-  "characterize_resolver_foreign_start": "UNTESTED (proposed residual: queries whose start offset lies outside every same-space entry extent hit Ghidra's resolver gating (second loop skipped when find(loc)==end) but Rugra's linear scan still applies the exclusion containedBy check - divergent for those geometries)"
+  "le_forceleft_false_flag_routing": "UNTESTED at wrapper/heritage level by this fixture (helper-level arithmetic pinned by the re-pinned view=start rows: force_left=false + little-endian space returns the start distance; the wrapper/heritage routing is covered by the successor fixture tests/oracle/fspec_endian_resolver_1204 — FSPEC-JUSTIFIED-ENDIAN-0002)",
+  "characterize_resolver_foreign_start": "UNTESTED by this fixture (queries keep loc inside the entry extent; extent-out resolver gating is covered by the successor fixture tests/oracle/fspec_endian_resolver_1204 — FSPEC-CHARACTERIZE-RESOLVER-GATE-0003)"
  },
  "residuals": [
   {
@@ -124,13 +124,13 @@
   },
   {
    "todo_id": "FSPEC-JUSTIFIED-ENDIAN-0002",
-   "status": "UNTESTED",
-   "detail": "Little-endian forceleft=false flag routing: Ghidra returns op2.offset - offset on LE regardless of forceleft; the spaceless helper returns off1 - off2 for force_left=false. Fix requires threading space endianness into the helper and its callers (src/heritage.rs:2268 truncate_amount, transfer_locked_output_param, join-piece walk, unflagged LE entries)."
+   "status": "RESOLVED-BY-SUCCESSOR",
+   "detail": "Fixed in src/fspec.rs/heritage.rs (space endianness threaded through justified_contain_range); behavior covered by tests/oracle/fspec_endian_resolver_1204 (MATCH). Kept as UNTESTED-prefix coverage entry per this fixture's own projection."
   },
   {
    "todo_id": "FSPEC-CHARACTERIZE-RESOLVER-GATE-0003",
-   "status": "UNTESTED",
-   "detail": "characterizeAsParam resolver gating for foreign-start queries (loc outside every same-space entry extent) skips Ghidra's containedBy pass entirely; Rugra's linear scan does not replicate that gate."
+   "status": "RESOLVED-BY-SUCCESSOR",
+   "detail": "Fixed in src/fspec.rs characterize_as_param (gated two-phase resolver windows); behavior covered by tests/oracle/fspec_endian_resolver_1204 (MATCH). Kept as UNTESTED-prefix coverage entry per this fixture's own projection."
   }
  ],
  "build": {
