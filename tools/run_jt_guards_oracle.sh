@@ -22,9 +22,11 @@ cpp_fixture="$repo_root/tests/oracle/jt_guards_1204.cc"
 rust_fixture="$repo_root/tests/oracle/jt_guards_1204.rs"
 rust_overlay="$repo_root/src/jumptable.rs"
 runner="$repo_root/tools/run_jt_guards_oracle.sh"
-bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
+bfd_root=/tmp/rugra-ghidra-bfd-2.38
+bfd_include="$bfd_root/usr/include"
 bfd_header="$bfd_include/bfd.h"
-bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_library="$bfd_root/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+bfd_rpath="$bfd_root/usr/lib/x86_64-linux-gnu"
 
 oracle_tmp=$(mktemp -d /tmp/rugra-jt-guards-1204.XXXXXX)
 cleanup() {
@@ -337,7 +339,7 @@ g++ -std=c++11 -O2 -Wall -Wno-sign-compare \
   "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
   "$oracle_cpp/inject_sleigh.cc" "$oracle_cpp/bfd_arch.cc" \
   "$oracle_cpp/loadimage_bfd.cc" "$oracle_cpp/libdecomp.a" \
-  "$bfd_library" -lz -o "$oracle_tmp/jt_guards_1204_cpp"
+  "$bfd_library" -Wl,-rpath,"$bfd_rpath" -lz -o "$oracle_tmp/jt_guards_1204_cpp"
 
 CARGO_TARGET_DIR="$oracle_tmp/cargo-target" \
   cargo build --offline --locked --quiet --manifest-path "$snapshot_root/Cargo.toml" --lib
