@@ -175,7 +175,13 @@ fn scenario_range_guard(lab: &mut Lab) {
     let jt = Arc::new(RwLock::new(JumpTable::new(Address::new(0))));
     jt.write().unwrap().set_indirect_op(bi_s.clone());
     let mut basic = JumpBasic::new(jt.clone());
-    let ok = basic.recover_model(&lab.fd, &bi_s, 0, 500);
+    // recover_model now returns Result<bool, JumpTableRecoveryError> (the
+    // LowlevelError channel Ghidra raises as an exception). In these scenarios
+    // the channel must stay silent; a raised error mirrors the C++ uncaught
+    // LowlevelError abort, so propagate it loudly instead of printing ok=0.
+    let ok = basic
+        .recover_model(&lab.fd, &bi_s, 0, 500)
+        .expect("sc1 recover_model error channel must stay silent");
 
     let mut s = String::new();
     let _ = write!(s, "sc1_range_guard|ok={}", i32::from(ok));
@@ -269,7 +275,10 @@ fn scenario_mark_model_skip(lab: &mut Lab) {
     let jt = Arc::new(RwLock::new(JumpTable::new(Address::new(0))));
     jt.write().unwrap().set_indirect_op(bi_s.clone());
     let mut basic = JumpBasic::new(jt.clone());
-    let ok = basic.recover_model(&lab.fd, &bi_s, 0, 500);
+    // Same Result adaptation as sc1: the error channel must stay silent.
+    let ok = basic
+        .recover_model(&lab.fd, &bi_s, 0, 500)
+        .expect("sc3 recover_model error channel must stay silent");
 
     let mut s = String::new();
     let _ = write!(s, "sc3_markmodel_skip|ok={}", i32::from(ok));

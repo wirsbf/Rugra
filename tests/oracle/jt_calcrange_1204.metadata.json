@@ -33,9 +33,9 @@
   },
   "comparand": {
     "cpp_fixture_sha256": "4b7fdc55866bd5b8ebc58a45fa78c61a12e1a7ae32de751ad3e40fd4e99268be",
-    "rust_fixture_sha256": "2f151220a57f55ecda968c1f6ed87d415debb91b6d3dd768a5aabea5db3b93bf",
-    "jumptable_overlay_sha256": "7452b6863bdbcefd16cd18125b09df93bc8eeb9ae126aa30ae21daa408216df6",
-    "runner_sha256": "47e23e4aac56a30a0b6b03c28b16d6b00e1fca69d5e35fe40905a2bfc3f2098d"
+    "rust_fixture_sha256": "e4c01e7325970056c5a2f69b82018969fcaed34b27a5fa08f6a438a46c7d8b26",
+    "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
+    "runner_sha256": "495bd35297bdfef26db6bcf650ed5997112cf5dde586fd19fedecf9f907051c8"
   },
   "assets": {
     "sla": {
