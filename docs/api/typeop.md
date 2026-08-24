@@ -9,6 +9,25 @@ Type operations for P-code
 
 Corresponds to Ghidra's `typeop.hh`
 
+## 2026-08-24：LOAD/STORE 解引用宽度门槛（TYPE-PTRWIDTH-PTRSUB-0001）
+
+`TypeOpLoad::propagate_type` 与 `TypeOpStore::propagate_type` 的
+pointer→value 方向现在把目标 Varnode 的真实字节宽度传给
+`propagate_from_pointer`。对固定长度 pointee，只有 pointee size 与访问宽度完全相等
+时才传播，并返回原 pointee `Arc`；因此 `ProgressData(32B)*` 不再把 16B/4B STORE
+错误标成整个 `ProgressData`，32B exact STORE 仍保留类型身份。
+
+双侧 fixture `tests/oracle/type_ptrwidth_1204.{cc,rs,metadata.json}` 直接执行锁定
+Ghidra 12.0.4 `TypeOpLoad/Store::propagateType` 与 Rugra 同一组 LOAD/STORE
+宽度、别名和身份观察，runner 为 `tools/run_type_ptrwidth_oracle.sh`。该 covered
+projection 为 `MATCH`。
+
+状态仍为 **PARTIAL_MATCH**：Ghidra 在 size mismatch 时还允许 plain enum 的
+`TypePartialEnum` 与 `TypePointerRel` parent 上的 enum exact-piece。该路径必须由拥有
+canonical registry 的 `TypeFactory::getExactPiece` 构造；当前 TypeOp trait 没有 factory
+参数，所以 Rugra 暂时 fail-closed，记为 `TYPEFACTORY-EXACTPIECE-0001`，未用本地
+`Arc::new` 伪造对象身份。
+
 ## 2026-08-11：`TypeOpFloatInt2Float::preferredZextSize`
 
 `TypeOpFloatInt2Float::preferred_zext_size` 对应锁定 oracle

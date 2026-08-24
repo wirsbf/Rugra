@@ -644,7 +644,8 @@ impl TypeOp for TypeOpLoad {
             Some(propagate_to_pointer(alt_type))
         } else {
             // input -> output : unwrap pointer to its pointee (propagateFromPointer)
-            propagate_from_pointer(alt_type)
+            let dereference_size = attached_varnode_size(op, outslot)?;
+            propagate_from_pointer(alt_type, dereference_size)
         }
     }
 }
@@ -735,7 +736,8 @@ impl TypeOp for TypeOpStore {
             Some(propagate_to_pointer(alt_type))
         } else {
             // pointer -> value : unwrap pointer to its pointee (propagateFromPointer)
-            propagate_from_pointer(alt_type)
+            let dereference_size = attached_varnode_size(op, outslot)?;
+            propagate_from_pointer(alt_type, dereference_size)
         }
     }
 }
@@ -771,13 +773,36 @@ fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
 
 /// Unwrap a pointer data-type to its pointee (used by LOAD/STORE input->output
 /// propagation). Mirrors Ghidra's `TypeOp::propagateFromPointer`
-/// (typeop.cc:206-228): returns the pointee if `alt_type` is a pointer,
-/// otherwise `None`.
+/// (typeop.cc:206-228). Fixed-size pointees propagate only when their size is
+/// exactly the dereference width. Enum/relative-pointer mismatch handling
+/// requires the owning `TypeFactory::getExactPiece` and deliberately remains
+/// fail-closed here instead of constructing a non-canonical replacement.
 // Ghidra: typeop.cc:206 TypeOp::propagateFromPointer
-fn propagate_from_pointer(alt_type: &Arc<Datatype>) -> Option<Arc<Datatype>> {
-    match alt_type.as_ref() {
-        Datatype::Pointer(ptr) => Some(ptr.ptr_to.clone()),
-        _ => None,
+pub fn propagate_from_pointer(
+    alt_type: &Arc<Datatype>,
+    dereference_size: usize,
+) -> Option<Arc<Datatype>> {
+    let pointer = match alt_type.as_ref() {
+        Datatype::Pointer(pointer) => pointer,
+        _ => return None,
+    };
+    let pointee = &pointer.ptr_to;
+    if pointee.is_variable_length() {
+        return None;
+    }
+    if pointee.get_size() == dereference_size {
+        return Some(pointee.clone());
+    }
+    None
+}
+
+// RUGRA-GLUE: Rust slot-to-Varnode adapter for Ghidra's invn/outvn propagateType parameters.
+fn attached_varnode_size(op: &PcodeOp, slot: i32) -> Option<usize> {
+    if slot < 0 {
+        op.get_out().map(|varnode| varnode.read().unwrap().get_size())
+    } else {
+        op.get_in(slot as usize)
+            .map(|varnode| varnode.read().unwrap().get_size())
     }
 }
 
@@ -2797,7 +2822,7 @@ mod tests {
     use super::*;
     use crate::address::{Address, SeqNum};
     use crate::type_system::TypeBase;
-    use crate::type_system::datatype::TypePointer;
+    use crate::type_system::datatype::{TypeField, TypePointer, TypeStruct};
     use crate::varnode::Varnode;
     use std::sync::{Arc, RwLock};
 
@@ -2814,6 +2839,23 @@ mod tests {
 
     fn int_t() -> Arc<Datatype> {
         Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)))
+    }
+
+    fn progress_data_t() -> Arc<Datatype> {
+        let long_t = Arc::new(Datatype::Base(TypeBase::new(
+            "long".into(),
+            8,
+            TypeMetatype::Int,
+        )));
+        Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("ProgressData".into(), 32, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "total".into(), offset: 0, type_ptr: long_t.clone() },
+                TypeField { name: "prev".into(), offset: 8, type_ptr: long_t.clone() },
+                TypeField { name: "point".into(), offset: 16, type_ptr: long_t },
+                TypeField { name: "width".into(), offset: 24, type_ptr: int_t() },
+            ],
+        }))
     }
 
     /// Compare two `Option<Arc<Datatype>>` by Arc identity (same allocation).
@@ -2889,7 +2931,8 @@ mod tests {
     #[test]
     fn load_propagate_wraps_and_unwraps_pointer() {
         // LOAD: output(value) -> input(pointer) wraps the value as a pointer.
-        let op = pcodeop(OpCode::CPUI_LOAD);
+        let mut op = pcodeop(OpCode::CPUI_LOAD);
+        op.output = Some(typed_vn(4, 0x20, None));
         let t = int_t();
         let wrapped = TypeOpLoad.propagate_type(&t, &op, -1, 1).expect("wraps");
         assert_eq!(wrapped.get_metatype(), TypeMetatype::Pointer);
@@ -2902,6 +2945,56 @@ mod tests {
         assert!(same_arc(TypeOpLoad.propagate_type(&ptr_t, &op, 1, -1), &t));
         // The space-constant edge (slot 0) never propagates.
         assert!(TypeOpLoad.propagate_type(&t, &op, 0, -1).is_none());
+    }
+
+    #[test]
+    fn pointer_dereference_propagation_is_width_gated() {
+        let progress = progress_data_t();
+        let progress_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("ProgressData *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: progress.clone(),
+            wordsize: 1,
+        }));
+
+        assert!(propagate_from_pointer(&progress_ptr, 16).is_none());
+        assert!(propagate_from_pointer(&progress_ptr, 4).is_none());
+        assert!(same_arc(propagate_from_pointer(&progress_ptr, 32), &progress));
+
+        let int = int_t();
+        let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int.clone(),
+            wordsize: 1,
+        }));
+        assert!(same_arc(propagate_from_pointer(&int_ptr, 4), &int));
+    }
+
+    #[test]
+    fn store_pointer_to_value_uses_value_varnode_width() {
+        let progress = progress_data_t();
+        let progress_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("ProgressData *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: progress.clone(),
+            wordsize: 1,
+        }));
+        for width in [16, 4] {
+            let mut op = pcodeop(OpCode::CPUI_STORE);
+            op.inrefs.push(typed_vn(8, 0, None));
+            op.inrefs.push(typed_vn(8, 0x100, None));
+            op.inrefs.push(typed_vn(width, 0x200, None));
+            assert!(TypeOpStore
+                .propagate_type(&progress_ptr, &op, 1, 2)
+                .is_none());
+        }
+
+        let mut exact = pcodeop(OpCode::CPUI_STORE);
+        exact.inrefs.push(typed_vn(8, 0, None));
+        exact.inrefs.push(typed_vn(8, 0x100, None));
+        exact.inrefs.push(typed_vn(32, 0x200, None));
+        assert!(same_arc(
+            TypeOpStore.propagate_type(&progress_ptr, &exact, 1, 2),
+            &progress
+        ));
     }
 
     #[test]

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TYPE-PTRWIDTH-PTRSUB-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "source": "typeop.cc:206-228 TypeOp::propagateFromPointer; typeop.cc:487-500 TypeOpLoad::propagateType; typeop.cc:557-570 TypeOpStore::propagateType"
+  },
+  "architecture": "Synthetic datatype fixture; 8-byte pointer storage and wordsize 1",
+  "compiler_spec": "None: direct decompiler datatype API with no lifted machine code",
+  "analysis_options": {
+    "factory": "null; all covered pointer-to-value cases return before the enum-only factory path",
+    "normalization": "None; fixed-order UTF-8 text is compared byte-for-byte",
+    "random_seed": "none",
+    "error_injection": "none"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of sorted compact JSON over architecture, compiler_spec, analysis_options, and cases",
+    "sha256": "a3deaadd74caa86404918004962b3efff41c9a6810e9df960ae4b7d9eb4341f9",
+    "cases": [
+      ["LOAD", "ProgressData32*", 16, "null"],
+      ["LOAD", "ProgressData32*", 4, "null"],
+      ["LOAD", "ProgressData32*", 32, "same pointee identity"],
+      ["STORE", "ProgressData32*", 16, "null"],
+      ["STORE", "ProgressData32*", 4, "null"],
+      ["STORE", "ProgressData32*", 32, "same pointee identity"],
+      ["LOAD", "int4*", 4, "same pointee identity"],
+      ["source", "ProgressData32*", "same source type alias"]
+    ]
+  },
+  "observation_schema": {
+    "return": "null versus non-null",
+    "identity": "Non-null exact-size results must be the original pointee object",
+    "order": "Declared case order",
+    "mutation": "No input object is mutated by these cases"
+  },
+  "comparand": {
+    "rust_base_commit": "8c223a9623d6833319564776c35c5d4c50b17b95",
+    "rust_base_blobs": {
+      "src/typeop.rs": "754391522125b69d12f73bdf301598c773afca38"
+    },
+    "overlay_sha256": {
+      "src/typeop.rs": "f74a7875a251aa419455ee5c84e542ecd582a181a4bb2731c795ac13fbbbfef3",
+      "tests/oracle/type_ptrwidth_1204.cc": "7910a2923a2a297f37c8086675c5f6c10a53d465ca7a622543d73ef3094ea3c8",
+      "tests/oracle/type_ptrwidth_1204.rs": "d2d498d53131d61f185442e095e1adffc0f983cb9f1c4f4085e68211f0d4f5b6"
+    }
+  },
+  "expected_stdout_sha256": "83af3368f31d21f1817e491f822f8f00043de55acc5a33a35c0f710fafbb65ec",
+  "expected_exit_code": 0,
+  "coverage": {
+    "load_fixed_struct_pointee_size_mismatch_16_4": "MATCH",
+    "load_fixed_struct_pointee_exact_size_identity": "MATCH",
+    "store_fixed_struct_pointee_size_mismatch_16_4": "MATCH",
+    "store_fixed_struct_pointee_exact_size_identity": "MATCH",
+    "load_fixed_scalar_pointee_exact_size_identity": "MATCH",
+    "source_varnode_type_alias": "MATCH",
+    "variable_length_pointee": "UNTESTED",
+    "plain_enum_partial_piece": "MISMATCH: TYPEFACTORY-EXACTPIECE-0001; Rugra deliberately returns None until the owning TypeFactory is available",
+    "relative_pointer_enum_exact_piece": "MISMATCH: TYPEFACTORY-EXACTPIECE-0001; current propagation API has no owning TypeFactory",
+    "load_store_spacebase_source_guard": "UNTESTED",
+    "load_store_value_to_pointer_width_wordsize": "UNTESTED: deferred to the pointer construction slice; fresh non-canonical Arc remains a known mismatch",
+    "action_infer_types_width_driver": "MISMATCH: baseline coreaction driver still bypasses TypeOpLoad/Store and propagates pointees without the width gate; deferred until a bilateral production Action fixture is available",
+    "action_infer_types_iteration_and_writeback": "MISMATCH: DFS order/path marks and factory canonical pointer identity remain outside this atomic slice",
+    "ptrsub_downchain_stop_and_traversal": "UNTESTED: deferred to the next atomic commit"
+  },
+  "overall_status": "MISMATCH",
+  "covered_projection_status": "MATCH: the declared LOAD/STORE pointer-to-value fixed-width and identity observations compare byte-for-byte"
+}
