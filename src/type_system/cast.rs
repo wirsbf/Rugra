@@ -69,6 +69,22 @@ impl CastStrategyC {
         Self { promote_size }
     }
 
+    // RUGRA-GLUE: get_promote_size (Ghidra reads the protected field directly)
+    /// Size of the `int` data-type (size that integers get promoted to).
+    ///
+    /// Ghidra `CastStrategy::promoteSize` (cast.hh:57) is a protected field
+    /// assigned once in `CastStrategy::setTypeFactory`
+    /// (`promoteSize = tlst->getSizeOfInt()`, cast.cc:27); every consumer
+    /// (cast.cc:86/182/284) is a strategy member function reading the field
+    /// directly, so Ghidra has no accessor. Rugra's ported consumer
+    /// `CastStrategyC::isExtensionCastImplied` (cast.cc:284) lives on
+    /// `PrintC` (printc.rs `is_extension_cast_implied`), and the field is
+    /// private to this module — cross-module reads need this accessor.
+    /// Pure Rust visibility glue: no behavior of its own.
+    pub fn get_promote_size(&self) -> usize {
+        self.promote_size
+    }
+
     // RUGRA-GLUE: is_char_type (no Ghidra counterpart found)
     /// Check if the type is a character type
     fn is_char_type(&self, dt: &Datatype) -> bool {
@@ -463,5 +479,18 @@ mod tests {
         // signed input → zext is NOT a cast
         let int2 = Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int));
         assert!(!s.is_zext_cast(&uint4, &int2));
+    }
+
+    // Ghidra: cast.hh:57 / cast.cc:27 — promoteSize is assigned once from
+    // tlst->getSizeOfInt() and read by strategy members (cast.cc:86/182/284).
+    // printc.rs's is_extension_cast_implied (the cast.cc:284 consumer) reads
+    // it through this accessor; pin the accessor to the constructor value so
+    // the PrintC::new(4) construction and the comparison stay wired to the
+    // same field (PRINTC-PTRCONST-DAT-SYMBOL-0001 M4).
+    #[test]
+    fn test_get_promote_size_matches_constructor() {
+        assert_eq!(CastStrategyC::new(4).get_promote_size(), 4);
+        assert_eq!(CastStrategyC::new(8).get_promote_size(), 8);
+        assert_eq!(CastStrategyC::new(2).get_promote_size(), 2);
     }
 }

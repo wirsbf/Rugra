@@ -38,6 +38,17 @@ Corresponds to Ghidra's `CastStrategyC` class.
 
 *暂无代码注释*
 
+### `pub fn get_promote_size(&self) -> usize`
+
+Size of the `int` data-type (size that integers get promoted to). Ghidra
+`CastStrategy::promoteSize`（cast.hh:57）为保护字段，在
+`CastStrategy::setTypeFactory` 中一次性赋值（`promoteSize = tlst->getSizeOfInt()`，
+cast.cc:27）；Ghidra 侧消费者（cast.cc:86/182/284）均为 strategy 成员函数直接读字段，
+故无访问器。Rugra 的 cast.cc:284 消费者 `is_extension_cast_implied` 落在
+printc.rs（`PrintC` impl），字段私有故跨模块读取需要本访问器——纯 Rust 可见性胶水，
+无自身行为（PRINTC-PTRCONST-DAT-SYMBOL-0001 M4，2026-08-25）。
+钉住测试：`test_get_promote_size_matches_constructor`。
+
 ### `pub fn base_type_for(size: usize, meta: TypeMetatype) -> Arc<Datatype>`
 
 Build a base integer/unsigned type for a given size and metatype.

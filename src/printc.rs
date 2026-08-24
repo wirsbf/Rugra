@@ -12068,15 +12068,14 @@ impl PrintC {
                 let other_vn = other.read().unwrap();
                 // cast.cc:281-285: constant bigger than promotion size -> not implied.
                 // The promotion size is CastStrategyC's `promoteSize`
-                // (`promoteSize = tlst->getSizeOfInt()`, cast.cc:27) — 4 on
-                // every locked corpus (x86/x64 `int`), matching the
-                // strategy this printer constructs (`CastStrategyC::new(4)`).
-                // M4 residual (PRINTC-PTRCONST-DAT-SYMBOL-0001): the field is
-                // private with no accessor (src/type_system/cast.rs out of
-                // this task's write-set); routing this comparison through
-                // `self.cast_strategy` needs a `get_promote_size()` there.
+                // (`promoteSize = tlst->getSizeOfInt()`, cast.cc:27), read
+                // from the strategy this printer constructs
+                // (`CastStrategyC::new(4)` — 4 on every locked corpus,
+                // x86/x64 `int`). M4 (PRINTC-PTRCONST-DAT-SYMBOL-0001)
+                // done: routed through `get_promote_size()` instead of a
+                // literal.
                 if other_vn.is_constant() {
-                    if other_vn.get_size() > 4 { // promote_size (cast.cc:27)
+                    if other_vn.get_size() > self.cast_strategy.get_promote_size() { // cast.cc:284 promoteSize
                         return false;
                     }
                 } else if !other_vn.is_explicit() {

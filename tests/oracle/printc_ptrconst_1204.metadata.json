@@ -105,9 +105,9 @@
       "detail": "the L-prefix (printc.cc:1543-1545, charsize>1 non-opaque) and CALLOTHER display_string entry (printc.cc:701-714) are ported but not fixture-covered; add wchar2/wchar4 cases when a typed-constant consumer exists"
     },
     "m4_promote_size_accessor": {
-      "status": "MISMATCH",
+      "status": "RESOLVED",
       "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
-      "detail": "is_extension_cast_implied still compares against the literal 4 with a documented residual: CastStrategyC::promote_size (cast.rs:63) is private with no accessor and src/type_system/cast.rs is outside this task's write-set; behavior is identical on every locked corpus (x86/x64 int == 4)"
+      "detail": "resolved 2026-08-25 (agent/cast-promotesize): CastStrategyC gained get_promote_size() (src/type_system/cast.rs, Rust visibility glue for the protected cast.hh:57 promoteSize field) and printc.rs is_extension_cast_implied now routes the cast.cc:284 comparison through it instead of the literal 4; behavior identical on every locked corpus (x86/x64 int == 4). This fixture does not exercise is_extension_cast_implied (it was never covered here); the accessor is pinned by type_system::cast::tests::test_get_promote_size_matches_constructor"
     },
     "address_form": {
       "status": "MISMATCH",
@@ -117,7 +117,7 @@
   },
   "host_compiler": "g++ (GCC) 16.2.1 20260810",
   "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-  "printc_rs_sha256": "1d495060f81526202bd167bab8379af24cb27a6345ffa6acf004fc26c008d163",
+  "printc_rs_sha256": "81163278fcc80dc55314b290f6ec83467327aec988ac9017af18ce02ccb76f9b",
   "cpp_fixture_sha256": "07ac7dc8f11e6d38fc6fc74cbaa8df346b93dbc6cc1074b0cb2e28d7acaaaf20",
   "rust_fixture_sha256": "d833f4babc0ee6db10b24d93a61d2c8d3d1775567a294e66f49ed4dc75b49723",
   "expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
