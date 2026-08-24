@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 9639
-  (7965 production + 1674 test)
-- Exact definition-start mappings: 3586
-- Body-line references requiring audit: 353
+- Rugra functions: 9726
+  (8024 production + 1702 test)
+- Exact definition-start mappings: 3608
+- Body-line references requiring audit: 351
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -32,7 +32,7 @@ records complete same-input/same-output evidence.
 | `architecture.hh` | 9 | 0 | 0 | 9 |
 | `bfd_arch.cc` | 11 | 0 | 0 | 11 |
 | `bfd_arch.hh` | 1 | 0 | 0 | 1 |
-| `block.cc` | 204 | 100 | 3 | 101 |
+| `block.cc` | 204 | 103 | 3 | 98 |
 | `block.hh` | 171 | 67 | 0 | 104 |
 | `blockaction.cc` | 83 | 30 | 1 | 52 |
 | `blockaction.hh` | 29 | 1 | 0 | 28 |
@@ -85,14 +85,14 @@ records complete same-input/same-output evidence.
 | `filemanage.hh` | 1 | 0 | 0 | 1 |
 | `float.cc` | 36 | 34 | 0 | 2 |
 | `float.hh` | 1 | 1 | 0 | 0 |
-| `flow.cc` | 46 | 44 | 0 | 2 |
+| `flow.cc` | 46 | 46 | 0 | 0 |
 | `flow.hh` | 16 | 15 | 0 | 1 |
 | `fspec.cc` | 243 | 149 | 0 | 94 |
-| `fspec.hh` | 271 | 64 | 0 | 207 |
+| `fspec.hh` | 271 | 68 | 0 | 203 |
 | `funcdata.cc` | 43 | 25 | 0 | 18 |
 | `funcdata.hh` | 136 | 26 | 0 | 110 |
 | `funcdata_block.cc` | 34 | 2 | 23 | 9 |
-| `funcdata_op.cc` | 49 | 31 | 4 | 14 |
+| `funcdata_op.cc` | 49 | 32 | 4 | 13 |
 | `funcdata_varnode.cc` | 60 | 57 | 0 | 3 |
 | `ghidra_arch.cc` | 43 | 0 | 0 | 43 |
 | `ghidra_arch.hh` | 10 | 0 | 0 | 10 |
@@ -132,7 +132,7 @@ records complete same-input/same-output evidence.
 | `marshal.hh` | 33 | 3 | 0 | 30 |
 | `memstate.cc` | 29 | 27 | 0 | 2 |
 | `memstate.hh` | 10 | 4 | 0 | 6 |
-| `merge.cc` | 48 | 39 | 0 | 9 |
+| `merge.cc` | 48 | 40 | 0 | 8 |
 | `merge.hh` | 6 | 1 | 0 | 5 |
 | `modelrules.cc` | 92 | 76 | 0 | 16 |
 | `modelrules.hh` | 38 | 32 | 0 | 6 |
@@ -173,8 +173,8 @@ records complete same-input/same-output evidence.
 | `rangeutil.hh` | 39 | 25 | 0 | 14 |
 | `raw_arch.cc` | 11 | 0 | 0 | 11 |
 | `raw_arch.hh` | 1 | 0 | 0 | 1 |
-| `ruleaction.cc` | 340 | 91 | 133 | 116 |
-| `ruleaction.hh` | 272 | 12 | 0 | 260 |
+| `ruleaction.cc` | 340 | 93 | 132 | 115 |
+| `ruleaction.hh` | 272 | 13 | 0 | 259 |
 | `rulecompile.cc` | 58 | 0 | 0 | 58 |
 | `rulecompile.hh` | 22 | 0 | 0 | 22 |
 | `semantics.cc` | 54 | 3 | 0 | 51 |
@@ -216,8 +216,8 @@ records complete same-input/same-output evidence.
 | `transform.hh` | 29 | 4 | 0 | 25 |
 | `translate.cc` | 42 | 16 | 0 | 26 |
 | `translate.hh` | 36 | 17 | 0 | 19 |
-| `type.cc` | 235 | 163 | 0 | 72 |
-| `type.hh` | 132 | 28 | 0 | 104 |
+| `type.cc` | 235 | 170 | 0 | 65 |
+| `type.hh` | 132 | 29 | 0 | 103 |
 | `typegrp_ghidra.cc` | 1 | 0 | 0 | 1 |
 | `typegrp_ghidra.hh` | 2 | 0 | 0 | 2 |
 | `typeop.cc` | 210 | 51 | 0 | 159 |

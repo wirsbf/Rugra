@@ -11,16 +11,16 @@
     "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
   },
   "checkpoint": {
-    "commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
-    "commit_tree": "320c207975ee2d3157e4821c15336858fbb8bdd4",
-    "rust_function_records": 9640,
-    "rust_projection_sha256": "3484939c5185e59597fa66007ce6f042159d2f4593b7f538301f53d3b77a38cf",
-    "src_tree": "ae8f4a750f671d6b875dacba308877321540ed8d"
+    "commit": "92fd927feb39c3ba6bed8735d530186271b9d49f",
+    "commit_tree": "d447eb3c2ebb1f43899e76f5411cf8f1a7a0b4d5",
+    "rust_function_records": 9726,
+    "rust_projection_sha256": "d68a155b271d6003897e4042e0208df1ca7a9a2da04696bb2000905580cb8bd2",
+    "src_tree": "af8f7a9318d6f9b6429c840a0eeac611c508f539"
   },
   "history": {
-    "commit_count": 31,
+    "commit_count": 85,
     "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
-    "last_commit": "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba",
+    "last_commit": "92fd927feb39c3ba6bed8735d530186271b9d49f",
     "mode": "first_parent"
   },
   "id_scheme": {
@@ -29,6 +29,174 @@
     "schema": 2
   },
   "introduced_live": [
+    {
+      "base_id": "RG-F-00572f8089ee0282e3c8",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "merge_range_must",
+      "new_id": "RG-F-00572f8089ee0282e3c8",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn merge_range_must(&mut self, range: &AddrTiedLocRange) -> Result<()>"
+    },
+    {
+      "base_id": "RG-F-008926b22d962c23a872",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "group_with_arcs",
+      "new_id": "RG-F-008926b22d962c23a872",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn group_with_arcs(high: &Arc<RwLock<HighVariable>>, offset: i32, other: &Arc<RwLock<HighVariable>>) -> Result<()>"
+    },
+    {
+      "base_id": "RG-F-00dab665b85c27184c35",
+      "child_blob": "5f8dbeb93c233836b195418d007da8291f4483e5",
+      "introduced_at_commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+      "module": "funcdata",
+      "name": "truncated_flow",
+      "new_id": "RG-F-00dab665b85c27184c35",
+      "owner": "impl:Funcdata",
+      "parent_blob": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
+      "path": "src/funcdata.rs",
+      "signature": "fn truncated_flow( &mut self, source: &Funcdata, flow_state: &crate::flow::TruncatedFlowState, ) -> crate::error::Result<()>"
+    },
+    {
+      "base_id": "RG-F-0380ee661ebfe004db50",
+      "child_blob": "93b94c83a3c33fc218170cc559c266fbf4ab4f22",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::typefactory",
+      "name": "get_exact_piece",
+      "new_id": "RG-F-0380ee661ebfe004db50",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn get_exact_piece( &mut self, ct: Arc<Datatype>, offset: i64, size: usize, ) -> Option<Arc<Datatype>>"
+    },
+    {
+      "base_id": "RG-F-065555eea9ebf23bec7b",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_decode_union_empty_and_nonempty_completion_state",
+      "new_id": "RG-F-065555eea9ebf23bec7b",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_decode_union_empty_and_nonempty_completion_state()"
+    },
+    {
+      "base_id": "RG-F-0cecf0aca3dd73da1a6a",
+      "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+      "introduced_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "module": "funcdata",
+      "name": "get_call_specs_owner",
+      "new_id": "RG-F-0cecf0aca3dd73da1a6a",
+      "owner": "impl:Funcdata",
+      "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+      "path": "src/funcdata.rs",
+      "signature": "fn get_call_specs_owner( &self, i: usize, ) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>>"
+    },
+    {
+      "base_id": "RG-F-0dc1ec134f52889b4c7f",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "attach_group_piece",
+      "new_id": "RG-F-0dc1ec134f52889b4c7f",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn attach_group_piece(high: &Arc<RwLock<HighVariable>>, offset: i32, group: &Arc<RwLock<VariableGroup>>) -> Result<Arc<RwLock<VariablePiece>>>"
+    },
+    {
+      "base_id": "RG-F-1575e8b8dd6563a8cb24",
+      "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "introduced_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "module": "type_system::typefactory",
+      "name": "test_array_virtual_stripping_and_partial_canonicalization",
+      "new_id": "RG-F-1575e8b8dd6563a8cb24",
+      "owner": "free",
+      "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_array_virtual_stripping_and_partial_canonicalization()"
+    },
+    {
+      "base_id": "RG-F-181d5bf28272c632dc3e",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "set_union_fields_sized",
+      "new_id": "RG-F-181d5bf28272c632dc3e",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn set_union_fields_sized( &mut self, name: &str, fields: Vec<TypeField>, new_size: usize, new_align: usize, ) -> Option<Arc<Datatype>>"
+    },
+    {
+      "base_id": "RG-F-1858875b41476176edc8",
+      "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+      "introduced_at_commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+      "module": "flow",
+      "name": "finish_truncated_flow",
+      "new_id": "RG-F-1858875b41476176edc8",
+      "owner": "impl:FlowInfo<'a>",
+      "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+      "path": "src/flow.rs",
+      "signature": "fn finish_truncated_flow( fd: &'a mut Funcdata, state: &TruncatedFlowState, ) -> crate::error::Result<()>"
+    },
+    {
+      "base_id": "RG-F-19cbcfb43b2ad638307e",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "is_addr_tied_merge_space",
+      "new_id": "RG-F-19cbcfb43b2ad638307e",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn is_addr_tied_merge_space(space: AddressSpace) -> bool"
+    },
+    {
+      "base_id": "RG-F-1b285a9f7036553830fd",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "default",
+      "new_id": "RG-F-1b285a9f7036553830fd",
+      "owner": "impl:ParamListOutput as Default",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn default() -> Self"
+    },
+    {
+      "base_id": "RG-F-202372b8209f4c235b2d",
+      "child_blob": "93b94c83a3c33fc218170cc559c266fbf4ab4f22",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::typefactory",
+      "name": "test_get_exact_piece_walk_order_partial_results_and_identity",
+      "new_id": "RG-F-202372b8209f4c235b2d",
+      "owner": "free",
+      "parent_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_get_exact_piece_walk_order_partial_results_and_identity()"
+    },
+    {
+      "base_id": "RG-F-24758d9c4cdfb2c0f18b",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "possible_param",
+      "new_id": "RG-F-24758d9c4cdfb2c0f18b",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool"
+    },
     {
       "base_id": "RG-F-2646dcd008a8290bb207",
       "child_blob": "f47a57fa6926b33f687bf5fceb5622a0fa63d354",
@@ -40,9 +208,1294 @@
       "parent_blob": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
       "path": "src/block.rs",
       "signature": "fn decrement_reciprocal_reverse_index( block: &mut dyn FlowBlock, incoming_half: bool, slot: usize, )"
+    },
+    {
+      "base_id": "RG-F-29dc4b50b4e765955d48",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "which_trial_in_space",
+      "new_id": "RG-F-29dc4b50b4e765955d48",
+      "owner": "impl:ParamActive",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn which_trial_in_space(&self, space: AddressSpace, addr: Address, sz: i32) -> i32"
+    },
+    {
+      "base_id": "RG-F-31d6967fc8ada4cb91eb",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "test_ephemeral_pointer_rel_inherits_parent_geometry_and_identity",
+      "new_id": "RG-F-31d6967fc8ada4cb91eb",
+      "owner": "free",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_ephemeral_pointer_rel_inherits_parent_geometry_and_identity()"
+    },
+    {
+      "base_id": "RG-F-377d2765e85223c4a653",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "get_entry",
+      "new_id": "RG-F-377d2765e85223c4a653",
+      "owner": "impl:ParamListStandardOut",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn get_entry(&self) -> &[ParamEntry]"
+    },
+    {
+      "base_id": "RG-F-37fe618e1633b505056f",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "test_series_c_named_pointer_dependency_rejects_redefinition",
+      "new_id": "RG-F-37fe618e1633b505056f",
+      "owner": "free",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_series_c_named_pointer_dependency_rejects_redefinition()"
+    },
+    {
+      "base_id": "RG-F-3ab3e7c341eff7a06dc3",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "standard_out",
+      "new_id": "RG-F-3ab3e7c341eff7a06dc3",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn standard_out(&self) -> &ParamListStandardOut"
+    },
+    {
+      "base_id": "RG-F-3b710a409ce34f951cbd",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "register",
+      "new_id": "RG-F-3b710a409ce34f951cbd",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn register() -> Self"
+    },
+    {
+      "base_id": "RG-F-3e4ee50c3bbc358ad164",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "get_entry",
+      "new_id": "RG-F-3e4ee50c3bbc358ad164",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn get_entry(&self) -> &[ParamEntry]"
+    },
+    {
+      "base_id": "RG-F-3ea726c76a58c7dd4800",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "get_type_pointer_result",
+      "new_id": "RG-F-3ea726c76a58c7dd4800",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn get_type_pointer_result( &mut self, size: usize, ptr_to: Arc<Datatype>, wordsize: usize, enforce_alignment: bool, ) -> Result<Arc<Datatype>, String>"
+    },
+    {
+      "base_id": "RG-F-456463060527a73a63e7",
+      "child_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+      "introduced_at_commit": "577e54bb32aa0ff6c167f5b3bff5a71807439a0a",
+      "module": "typeop",
+      "name": "attached_varnode_size",
+      "new_id": "RG-F-456463060527a73a63e7",
+      "owner": "free",
+      "parent_blob": "754391522125b69d12f73bdf301598c773afca38",
+      "path": "src/typeop.rs",
+      "signature": "fn attached_varnode_size(op: &PcodeOp, slot: i32) -> Option<usize>"
+    },
+    {
+      "base_id": "RG-F-47b0abacb8c8d893905d",
+      "child_blob": "b35472566480e742d5703e33dd9ff1fade7ca4bb",
+      "introduced_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "module": "varnode",
+      "name": "get_call_spec",
+      "new_id": "RG-F-47b0abacb8c8d893905d",
+      "owner": "impl:Varnode",
+      "parent_blob": "0f0ff16f3a23d9d72b1798dfd76583b64b7c957d",
+      "path": "src/varnode.rs",
+      "signature": "fn get_call_spec(&self) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>>"
+    },
+    {
+      "base_id": "RG-F-4a7726c0d1b089f59ff8",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "get_type",
+      "new_id": "RG-F-4a7726c0d1b089f59ff8",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn get_type(&self) -> ParamListKind"
+    },
+    {
+      "base_id": "RG-F-4d0d944ef8c3713a9359",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "is_auto_killed_by_call",
+      "new_id": "RG-F-4d0d944ef8c3713a9359",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn is_auto_killed_by_call(&self) -> bool"
+    },
+    {
+      "base_id": "RG-F-5840c92b94183fda5078",
+      "child_blob": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::datatype",
+      "name": "test_partial_struct_later_failed_descent_overwrites_previous_type",
+      "new_id": "RG-F-5840c92b94183fda5078",
+      "owner": "free",
+      "parent_blob": "ca02901105d85e8a377465781b28aaeb627223c7",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn test_partial_struct_later_failed_descent_overwrites_previous_type()"
+    },
+    {
+      "base_id": "RG-F-5954ddef465e441c7f32",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "get_flags",
+      "new_id": "RG-F-5954ddef465e441c7f32",
+      "owner": "impl:ParamTrial",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn get_flags(&self) -> u32"
+    },
+    {
+      "base_id": "RG-F-6140eb4da25391919c18",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "get_biggest_contained_param",
+      "new_id": "RG-F-6140eb4da25391919c18",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn get_biggest_contained_param( &self, space: AddressSpace, offset: u64, size: i32, ) -> Option<(AddressSpace, u64, i32)>"
+    },
+    {
+      "base_id": "RG-F-61659f5a98e9b24e0927",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "output_entries",
+      "new_id": "RG-F-61659f5a98e9b24e0927",
+      "owner": "impl:ProtoModelFull",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn output_entries(&self) -> &[ParamEntry]"
+    },
+    {
+      "base_id": "RG-F-617d45c1dd4eaca81c67",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "setup_default_sizes",
+      "new_id": "RG-F-617d45c1dd4eaca81c67",
+      "owner": "free",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn setup_default_sizes(factory: &mut TypeFactory)"
+    },
+    {
+      "base_id": "RG-F-6801c1cf2e5e395a80ca",
+      "child_blob": "07385d1c6a52358981daf89320f840063f07a533",
+      "introduced_at_commit": "0d2252dd631677ef221d8266f1267090fecd45da",
+      "module": "block",
+      "name": "set_initial_range",
+      "new_id": "RG-F-6801c1cf2e5e395a80ca",
+      "owner": "impl:BlockBasic",
+      "parent_blob": "f47a57fa6926b33f687bf5fceb5622a0fa63d354",
+      "path": "src/block.rs",
+      "signature": "fn set_initial_range(&mut self, beg: Address, end: Address)"
+    },
+    {
+      "base_id": "RG-F-6afebac8a424ec5586a0",
+      "child_blob": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::datatype",
+      "name": "test_struct_subtype_uses_oracle_binary_midpoint_for_overlap",
+      "new_id": "RG-F-6afebac8a424ec5586a0",
+      "owner": "free",
+      "parent_blob": "ca02901105d85e8a377465781b28aaeb627223c7",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn test_struct_subtype_uses_oracle_binary_midpoint_for_overlap()"
+    },
+    {
+      "base_id": "RG-F-6e0463d70306112395a2",
+      "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "introduced_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "module": "type_system::typefactory",
+      "name": "get_array_result",
+      "new_id": "RG-F-6e0463d70306112395a2",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn get_array_result( &mut self, array_of: Arc<Datatype>, num_elements: usize, ) -> Result<Arc<Datatype>, String>"
+    },
+    {
+      "base_id": "RG-F-6f7f59e3cda2fc6eb79b",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "try_merge_addr_tied",
+      "new_id": "RG-F-6f7f59e3cda2fc6eb79b",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn try_merge_addr_tied(&mut self, fd: &mut Funcdata) -> Result<()>"
+    },
+    {
+      "base_id": "RG-F-75a7ceddf65ab6560bc3",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "get_space",
+      "new_id": "RG-F-75a7ceddf65ab6560bc3",
+      "owner": "impl:ParamTrial",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn get_space(&self) -> AddressSpace"
+    },
+    {
+      "base_id": "RG-F-7643d54c86c72af40d4d",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "merge_addr_tied_inner",
+      "new_id": "RG-F-7643d54c86c72af40d4d",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn merge_addr_tied_inner(&mut self, fd: &mut Funcdata) -> Result<()>"
+    },
+    {
+      "base_id": "RG-F-7909a29462b00fbbdb9c",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "is_auto_killed_by_call",
+      "new_id": "RG-F-7909a29462b00fbbdb9c",
+      "owner": "impl:ParamListStandardOut",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn is_auto_killed_by_call(&self) -> bool"
+    },
+    {
+      "base_id": "RG-F-7cb6625ae84bc31cae67",
+      "child_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::datatype",
+      "name": "new",
+      "new_id": "RG-F-7cb6625ae84bc31cae67",
+      "owner": "impl:TypeCode",
+      "parent_blob": "77986400b588a7a14f34674c341d5dd45ab0197d",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn new() -> Self"
+    },
+    {
+      "base_id": "RG-F-7d949a2dc82972bb9f60",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "test_pointer_factory_fails_before_layout_setup_without_tree_leak",
+      "new_id": "RG-F-7d949a2dc82972bb9f60",
+      "owner": "free",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_pointer_factory_fails_before_layout_setup_without_tree_leak()"
+    },
+    {
+      "base_id": "RG-F-7f4499a24e9d5f6e00f6",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "merge_required_result",
+      "new_id": "RG-F-7f4499a24e9d5f6e00f6",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn merge_required_result( &mut self, high1: &Arc<RwLock<HighVariable>>, high2: &Arc<RwLock<HighVariable>>, ) -> Result<bool>"
+    },
+    {
+      "base_id": "RG-F-82ed5ecaeb15a4ea56b7",
+      "child_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::datatype",
+      "name": "primitive_layout",
+      "new_id": "RG-F-82ed5ecaeb15a4ea56b7",
+      "owner": "free",
+      "parent_blob": "77986400b588a7a14f34674c341d5dd45ab0197d",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn primitive_layout(size: usize) -> (usize, usize)"
+    },
+    {
+      "base_id": "RG-F-84749c9d1107aad23889",
+      "child_blob": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::datatype",
+      "name": "test_union_uses_base_subtype_and_arc_dispatch_preserves_identity",
+      "new_id": "RG-F-84749c9d1107aad23889",
+      "owner": "free",
+      "parent_blob": "ca02901105d85e8a377465781b28aaeb627223c7",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn test_union_uses_base_subtype_and_arc_dispatch_preserves_identity()"
+    },
+    {
+      "base_id": "RG-F-856104de7b4b35b3b196",
+      "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+      "introduced_at_commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+      "module": "flow",
+      "name": "truncated_state",
+      "new_id": "RG-F-856104de7b4b35b3b196",
+      "owner": "impl:FlowInfo<'a>",
+      "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+      "path": "src/flow.rs",
+      "signature": "fn truncated_state(&self) -> TruncatedFlowState"
+    },
+    {
+      "base_id": "RG-F-85ce0eb54798067006cd",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "standard_out_mut",
+      "new_id": "RG-F-85ce0eb54798067006cd",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn standard_out_mut(&mut self) -> &mut ParamListStandardOut"
+    },
+    {
+      "base_id": "RG-F-8d0f69692399436cc2b0",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_define_replace_refuses_stale_tree_slot",
+      "new_id": "RG-F-8d0f69692399436cc2b0",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_define_replace_refuses_stale_tree_slot()"
+    },
+    {
+      "base_id": "RG-F-8eb776b3fa088a50b624",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "fillin_map",
+      "new_id": "RG-F-8eb776b3fa088a50b624",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn fillin_map(&self, active: &mut ParamActive)"
+    },
+    {
+      "base_id": "RG-F-90f2e325176921f26d08",
+      "child_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::datatype",
+      "name": "get_display_name",
+      "new_id": "RG-F-90f2e325176921f26d08",
+      "owner": "impl:Datatype",
+      "parent_blob": "77986400b588a7a14f34674c341d5dd45ab0197d",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn get_display_name(&self) -> &str"
+    },
+    {
+      "base_id": "RG-F-91b8fbbf0b62f18f97f6",
+      "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "introduced_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "module": "type_system::typefactory",
+      "name": "type_tree_key",
+      "new_id": "RG-F-91b8fbbf0b62f18f97f6",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn type_tree_key(datatype: &Datatype) -> TypeTreeKey"
+    },
+    {
+      "base_id": "RG-F-91c0b321491c2cf648d3",
+      "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "introduced_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "module": "type_system::typefactory",
+      "name": "test_array_stride_identity_and_singleton_resolution",
+      "new_id": "RG-F-91c0b321491c2cf648d3",
+      "owner": "free",
+      "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_array_stride_identity_and_singleton_resolution()"
+    },
+    {
+      "base_id": "RG-F-922b6bc020ee1c31087b",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "test_proto_model_full_builds_output_specific_paramlist",
+      "new_id": "RG-F-922b6bc020ee1c31087b",
+      "owner": "free",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn test_proto_model_full_builds_output_specific_paramlist()"
+    },
+    {
+      "base_id": "RG-F-9382f4598eb174593d93",
+      "child_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+      "introduced_at_commit": "805cf887d96b97f85a4b979bf408145e87a22a45",
+      "module": "fspec",
+      "name": "test_param_active_tagged_space_and_spaceless_fail_closed",
+      "new_id": "RG-F-9382f4598eb174593d93",
+      "owner": "free",
+      "parent_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "path": "src/fspec.rs",
+      "signature": "fn test_param_active_tagged_space_and_spaceless_fail_closed()"
+    },
+    {
+      "base_id": "RG-F-987c0c4685c579ad3ef3",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "possible_output_param",
+      "new_id": "RG-F-987c0c4685c579ad3ef3",
+      "owner": "impl:ProtoModelFull",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn possible_output_param( &self, space: AddressSpace, offset: u64, size: i32, ) -> bool"
+    },
+    {
+      "base_id": "RG-F-9e25ba491c2ebdd3f0f0",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_named_factory_fast_paths_validate_concrete_identity",
+      "new_id": "RG-F-9e25ba491c2ebdd3f0f0",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_named_factory_fast_paths_validate_concrete_identity()"
+    },
+    {
+      "base_id": "RG-F-9e36c0fb5daa89f6e75b",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "assign_map",
+      "new_id": "RG-F-9e36c0fb5daa89f6e75b",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn assign_map( &self, proto: &PrototypePieces, type_factory: &crate::type_system::TypeFactory, result: &mut Vec<ParameterPieces>, ) -> Result<(), String>"
+    },
+    {
+      "base_id": "RG-F-9f1935e81471cf88494a",
+      "child_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+      "introduced_at_commit": "805cf887d96b97f85a4b979bf408145e87a22a45",
+      "module": "fspec",
+      "name": "space_from_tagged_address",
+      "new_id": "RG-F-9f1935e81471cf88494a",
+      "owner": "impl:ParamActive",
+      "parent_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "path": "src/fspec.rs",
+      "signature": "fn space_from_tagged_address(addr: Address) -> Option<AddressSpace>"
+    },
+    {
+      "base_id": "RG-F-a43b43b4851399cb487b",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "test_pointer_canonical_key_geometry_and_virtual_stripping",
+      "new_id": "RG-F-a43b43b4851399cb487b",
+      "owner": "free",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_pointer_canonical_key_geometry_and_virtual_stripping()"
+    },
+    {
+      "base_id": "RG-F-a6bd125935c53df33d0a",
+      "child_blob": "b01176babb67aa227a2a00ed1ac402221dac2449",
+      "introduced_at_commit": "5261aaa7829dfbc882feab4f75c79a49a3dd3fbc",
+      "module": "ruleaction",
+      "name": "test_identity_el_public_opcode_and_name_contract",
+      "new_id": "RG-F-a6bd125935c53df33d0a",
+      "owner": "free",
+      "parent_blob": "76314cd20aef35c9f1ea8f43f5e7da216ae16979",
+      "path": "src/ruleaction.rs",
+      "signature": "fn test_identity_el_public_opcode_and_name_contract()"
+    },
+    {
+      "base_id": "RG-F-a7b190a9cc6699355ab8",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_clear_paths_drop_incomplete_typedef_queue_before_recreate",
+      "new_id": "RG-F-a7b190a9cc6699355ab8",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_clear_paths_drop_incomplete_typedef_queue_before_recreate()"
+    },
+    {
+      "base_id": "RG-F-ac385b3896fbc69af1ad",
+      "child_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::datatype",
+      "name": "base_record",
+      "new_id": "RG-F-ac385b3896fbc69af1ad",
+      "owner": "impl:Datatype",
+      "parent_blob": "77986400b588a7a14f34674c341d5dd45ab0197d",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn base_record(&self) -> &TypeBase"
+    },
+    {
+      "base_id": "RG-F-af1e44fa513e12f2bb5a",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_struct_union_definition_rekeys_factory_channels",
+      "new_id": "RG-F-af1e44fa513e12f2bb5a",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_struct_union_definition_rekeys_factory_channels()"
+    },
+    {
+      "base_id": "RG-F-b3aaa93c05ec91982298",
+      "child_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::datatype",
+      "name": "base_record_mut",
+      "new_id": "RG-F-b3aaa93c05ec91982298",
+      "owner": "impl:Datatype",
+      "parent_blob": "77986400b588a7a14f34674c341d5dd45ab0197d",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn base_record_mut(&mut self) -> &mut TypeBase"
+    },
+    {
+      "base_id": "RG-F-b445c51b636b8d0099bb",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "register_trial_in_space",
+      "new_id": "RG-F-b445c51b636b8d0099bb",
+      "owner": "impl:ParamActive",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn register_trial_in_space(&mut self, space: AddressSpace, addr: Address, sz: i32)"
+    },
+    {
+      "base_id": "RG-F-b992a7f938634f6aee23",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "get_type_pointer_rel_ephemeral",
+      "new_id": "RG-F-b992a7f938634f6aee23",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn get_type_pointer_rel_ephemeral( &mut self, parent_pointer: Arc<Datatype>, ptr_to: Arc<Datatype>, offset: i64, ) -> Arc<Datatype>"
+    },
+    {
+      "base_id": "RG-F-bdc84c53fafd339065cc",
+      "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "introduced_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "module": "type_system::typefactory",
+      "name": "test_array_decode_canonicalization_and_nonpositive_count_errors",
+      "new_id": "RG-F-bdc84c53fafd339065cc",
+      "owner": "free",
+      "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_array_decode_canonicalization_and_nonpositive_count_errors()"
+    },
+    {
+      "base_id": "RG-F-bfe8d60ff5c1ca111f37",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "decode",
+      "new_id": "RG-F-bfe8d60ff5c1ca111f37",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn decode( &mut self, decoder: &mut dyn crate::marshal::Decoder, effectlist: &mut Vec<EffectRecord>, normalstack: bool, register_resolver: &dyn Fn(&str) -> Option<VarnodeData>, ) -> Result<(), String>"
+    },
+    {
+      "base_id": "RG-F-c004a34a7e50854e247c",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "get_type_pointer_named",
+      "new_id": "RG-F-c004a34a7e50854e247c",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn get_type_pointer_named( &mut self, size: usize, ptr_to: Arc<Datatype>, wordsize: usize, name: &str, ) -> Arc<Datatype>"
+    },
+    {
+      "base_id": "RG-F-c02df23a1a402a7a4d59",
+      "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+      "introduced_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "module": "funcdata",
+      "name": "add_call_specs_owner",
+      "new_id": "RG-F-c02df23a1a402a7a4d59",
+      "owner": "impl:Funcdata",
+      "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+      "path": "src/funcdata.rs",
+      "signature": "fn add_call_specs_owner(&mut self, fc: Arc<RwLock<crate::fspec::FuncCallSpecs>>) -> usize"
+    },
+    {
+      "base_id": "RG-F-c155aba255b133d73969",
+      "child_blob": "b35472566480e742d5703e33dd9ff1fade7ca4bb",
+      "introduced_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "module": "varnode",
+      "name": "bind_call_spec",
+      "new_id": "RG-F-c155aba255b133d73969",
+      "owner": "impl:Varnode",
+      "parent_blob": "0f0ff16f3a23d9d72b1798dfd76583b64b7c957d",
+      "path": "src/varnode.rs",
+      "signature": "fn bind_call_spec(&mut self, call_spec: &Arc<RwLock<crate::fspec::FuncCallSpecs>>)"
+    },
+    {
+      "base_id": "RG-F-c24d81aefca155bcc5ed",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "addr_tied_location_ranges",
+      "new_id": "RG-F-c24d81aefca155bcc5ed",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn addr_tied_location_ranges(fd: &Funcdata) -> Vec<AddrTiedLocRange>"
+    },
+    {
+      "base_id": "RG-F-c414e1f8cd6e0c6c3004",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "range_last_offset",
+      "new_id": "RG-F-c414e1f8cd6e0c6c3004",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn range_last_offset(range: &AddrTiedLocRange) -> u64"
+    },
+    {
+      "base_id": "RG-F-c58bd5e5d630cc315643",
+      "child_blob": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+      "introduced_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "module": "fspec",
+      "name": "new_for_op",
+      "new_id": "RG-F-c58bd5e5d630cc315643",
+      "owner": "impl:FuncCallSpecs",
+      "parent_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+      "path": "src/fspec.rs",
+      "signature": "fn new_for_op(op: &crate::op::PcodeOpRef, prototype: FuncProto) -> Self"
+    },
+    {
+      "base_id": "RG-F-cba1ca033fe56fb95dc4",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "derive_output_map",
+      "new_id": "RG-F-cba1ca033fe56fb95dc4",
+      "owner": "impl:ProtoModelFull",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn derive_output_map(&self, active: &mut ParamActive)"
+    },
+    {
+      "base_id": "RG-F-d3d09a0ed811a54e22ce",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "test_pointer_decode_returns_existing_canonical_object",
+      "new_id": "RG-F-d3d09a0ed811a54e22ce",
+      "owner": "free",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_pointer_decode_returns_existing_canonical_object()"
+    },
+    {
+      "base_id": "RG-F-d84d923a6982ef17c93e",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_set_fields_uses_assign_field_offsets_padded_size",
+      "new_id": "RG-F-d84d923a6982ef17c93e",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_set_fields_uses_assign_field_offsets_padded_size()"
+    },
+    {
+      "base_id": "RG-F-d8ffb7a35df5c67c2d49",
+      "child_blob": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::datatype",
+      "name": "get_sub_type_arc",
+      "new_id": "RG-F-d8ffb7a35df5c67c2d49",
+      "owner": "impl:Datatype",
+      "parent_blob": "ca02901105d85e8a377465781b28aaeb627223c7",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn get_sub_type_arc( datatype: &Arc<Datatype>, off: i64, ) -> (Option<Arc<Datatype>>, i64)"
+    },
+    {
+      "base_id": "RG-F-dec293bcd6b0000c8d1f",
+      "child_blob": "ca02901105d85e8a377465781b28aaeb627223c7",
+      "introduced_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "module": "type_system::datatype",
+      "name": "get_stripped_arc",
+      "new_id": "RG-F-dec293bcd6b0000c8d1f",
+      "owner": "impl:Datatype",
+      "parent_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn get_stripped_arc(datatype: &Arc<Datatype>) -> Option<Arc<Datatype>>"
+    },
+    {
+      "base_id": "RG-F-dfc91dc60e9bcaeea46d",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "standard",
+      "new_id": "RG-F-dfc91dc60e9bcaeea46d",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn standard() -> Self"
+    },
+    {
+      "base_id": "RG-F-e2ae768e78b0f9d2407f",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "new_in_space",
+      "new_id": "RG-F-e2ae768e78b0f9d2407f",
+      "owner": "impl:ParamTrial",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn new_in_space(space: AddressSpace, addr: Address, sz: i32, sl: i32) -> Self"
+    },
+    {
+      "base_id": "RG-F-e6e93636b838c329c329",
+      "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+      "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+      "module": "fspec",
+      "name": "characterize_as_param",
+      "new_id": "RG-F-e6e93636b838c329c329",
+      "owner": "impl:ParamListOutput",
+      "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+      "path": "src/fspec.rs",
+      "signature": "fn characterize_as_param( &self, space: AddressSpace, offset: u64, size: i32, ) -> i32"
+    },
+    {
+      "base_id": "RG-F-e6f7a196c2cd7dc7d374",
+      "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+      "introduced_at_commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+      "module": "type_system::typefactory",
+      "name": "get_type_pointer_default",
+      "new_id": "RG-F-e6f7a196c2cd7dc7d374",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn get_type_pointer_default(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype>"
+    },
+    {
+      "base_id": "RG-F-f03bae6585682e8447b8",
+      "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+      "introduced_at_commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+      "module": "flow",
+      "name": "from_truncated_state",
+      "new_id": "RG-F-f03bae6585682e8447b8",
+      "owner": "impl:FlowInfo<'a>",
+      "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+      "path": "src/flow.rs",
+      "signature": "fn from_truncated_state(fd: &'a mut Funcdata, state: &TruncatedFlowState) -> Self"
+    },
+    {
+      "base_id": "RG-F-f0cecbc341fcb11177b2",
+      "child_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+      "introduced_at_commit": "577e54bb32aa0ff6c167f5b3bff5a71807439a0a",
+      "module": "typeop",
+      "name": "progress_data_t",
+      "new_id": "RG-F-f0cecbc341fcb11177b2",
+      "owner": "free",
+      "parent_blob": "754391522125b69d12f73bdf301598c773afca38",
+      "path": "src/typeop.rs",
+      "signature": "fn progress_data_t() -> Arc<Datatype>"
+    },
+    {
+      "base_id": "RG-F-f2b3b16ba32af9e3e34d",
+      "child_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+      "introduced_at_commit": "577e54bb32aa0ff6c167f5b3bff5a71807439a0a",
+      "module": "typeop",
+      "name": "store_pointer_to_value_uses_value_varnode_width",
+      "new_id": "RG-F-f2b3b16ba32af9e3e34d",
+      "owner": "free",
+      "parent_blob": "754391522125b69d12f73bdf301598c773afca38",
+      "path": "src/typeop.rs",
+      "signature": "fn store_pointer_to_value_uses_value_varnode_width()"
+    },
+    {
+      "base_id": "RG-F-f6ec13ccf523ead15526",
+      "child_blob": "365be16020196337d386eb215f0b280ece383847",
+      "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+      "module": "merge",
+      "name": "required_high",
+      "new_id": "RG-F-f6ec13ccf523ead15526",
+      "owner": "impl:Merge",
+      "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+      "path": "src/merge.rs",
+      "signature": "fn required_high(vn: &Arc<RwLock<Varnode>>) -> Result<Arc<RwLock<HighVariable>>>"
+    },
+    {
+      "base_id": "RG-F-f8305f268aaa07bf8676",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_dependent_order_visits_typedef_target_before_alias",
+      "new_id": "RG-F-f8305f268aaa07bf8676",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_dependent_order_visits_typedef_target_before_alias()"
+    },
+    {
+      "base_id": "RG-F-fabd6ed370dadf216dfc",
+      "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+      "module": "type_system::typefactory",
+      "name": "test_public_field_setters_surface_registry_replacement_errors",
+      "new_id": "RG-F-fabd6ed370dadf216dfc",
+      "owner": "free",
+      "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+      "path": "src/type_system/typefactory.rs",
+      "signature": "fn test_public_field_setters_surface_registry_replacement_errors()"
+    },
+    {
+      "base_id": "RG-F-fc9614ae62a5ca22047d",
+      "child_blob": "1dd8e20179e169cd354864f6bac696238ce36069",
+      "introduced_at_commit": "6e5099c8a0c8be80b5b418ce27aee626d33f998c",
+      "module": "typeop",
+      "name": "load_value_to_pointer_checks_output_source_spacebase",
+      "new_id": "RG-F-fc9614ae62a5ca22047d",
+      "owner": "free",
+      "parent_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+      "path": "src/typeop.rs",
+      "signature": "fn load_value_to_pointer_checks_output_source_spacebase()"
+    },
+    {
+      "base_id": "RG-F-fdc56656082534066c8d",
+      "child_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+      "introduced_at_commit": "577e54bb32aa0ff6c167f5b3bff5a71807439a0a",
+      "module": "typeop",
+      "name": "pointer_dereference_propagation_is_width_gated",
+      "new_id": "RG-F-fdc56656082534066c8d",
+      "owner": "free",
+      "parent_blob": "754391522125b69d12f73bdf301598c773afca38",
+      "path": "src/typeop.rs",
+      "signature": "fn pointer_dereference_propagation_is_width_gated()"
+    },
+    {
+      "base_id": "RG-F-ff741eec389f6e2c6e18",
+      "child_blob": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+      "introduced_at_commit": "651045a737ac9f74f7c97d4188b701d253018808",
+      "module": "type_system::datatype",
+      "name": "struct_get_lower_bound_field",
+      "new_id": "RG-F-ff741eec389f6e2c6e18",
+      "owner": "free",
+      "parent_blob": "ca02901105d85e8a377465781b28aaeb627223c7",
+      "path": "src/type_system/datatype.rs",
+      "signature": "fn struct_get_lower_bound_field(s: &TypeStruct, off: i64) -> Option<usize>"
     }
   ],
   "lineages": [
+    {
+      "aliases": [
+        "RG-F-09d0ffc3ccbb554e789c"
+      ],
+      "base_id": "RG-F-09d0ffc3ccbb554e789c",
+      "events": [
+        {
+          "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+          "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "fallthru: shared-return override consumption (Result returns) (33793c1)"
+          ],
+          "from_id": "RG-F-09d0ffc3ccbb554e789c",
+          "from_module": "flow",
+          "from_name": "fallthru",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn fallthru(&mut self)",
+          "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+          "to_id": "RG-F-cd924c7bc3e50d8e6a9b",
+          "to_module": "flow",
+          "to_name": "fallthru",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn fallthru(&mut self) -> crate::error::Result<()>"
+        }
+      ],
+      "new_id": "RG-F-cd924c7bc3e50d8e6a9b",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-1b1d42d39302829f8e72"
+      ],
+      "base_id": "RG-F-1b1d42d39302829f8e72",
+      "events": [
+        {
+          "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+          "commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation",
+            "parameter_binding_mut_only"
+          ],
+          "from_id": "RG-F-1b1d42d39302829f8e72",
+          "from_module": "type_system::typefactory",
+          "from_name": "find_add",
+          "from_owner": "impl:TypeFactory",
+          "from_path": "src/type_system/typefactory.rs",
+          "from_signature": "fn find_add( &mut self, candidate: Datatype, enforce_alignment: bool, ) -> Result<Arc<Datatype>, String>",
+          "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+          "to_id": "RG-F-dc54176d68b572318a13",
+          "to_module": "type_system::typefactory",
+          "to_name": "find_add",
+          "to_owner": "impl:TypeFactory",
+          "to_path": "src/type_system/typefactory.rs",
+          "to_signature": "fn find_add( &mut self, mut candidate: Datatype, enforce_alignment: bool, ) -> Result<Arc<Datatype>, String>"
+        }
+      ],
+      "new_id": "RG-F-dc54176d68b572318a13",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-29f1bd831bde716de5c4"
+      ],
+      "base_id": "RG-F-29f1bd831bde716de5c4",
+      "events": [
+        {
+          "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+          "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "finish_process_instruction: shared-return override consumption (Result returns) (33793c1)"
+          ],
+          "from_id": "RG-F-29f1bd831bde716de5c4",
+          "from_module": "flow",
+          "from_name": "finish_process_instruction",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn finish_process_instruction( &mut self, addr: Address, step: usize, num_ops_before: usize, start_basic: &mut bool, ) -> bool",
+          "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+          "to_id": "RG-F-813b027ebcd5353c4236",
+          "to_module": "flow",
+          "to_name": "finish_process_instruction",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn finish_process_instruction( &mut self, addr: Address, step: usize, num_ops_before: usize, start_basic: &mut bool, flowoverride: crate::override_rs::FlowOverride, ) -> crate::error::Result<bool>"
+        }
+      ],
+      "new_id": "RG-F-813b027ebcd5353c4236",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-2c988c04aca0f061a836"
+      ],
+      "base_id": "RG-F-2c988c04aca0f061a836",
+      "events": [
+        {
+          "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+          "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "build_callother_op: flow truncation error channel (Result returns) (3be7b24)"
+          ],
+          "from_id": "RG-F-2c988c04aca0f061a836",
+          "from_module": "flow",
+          "from_name": "build_callother_op",
+          "from_owner": "free",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn build_callother_op( fd: &mut Funcdata, addr: Address, ) -> crate::op::PcodeOpRef",
+          "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "to_id": "RG-F-8ba6690d9b3d452c451e",
+          "to_module": "flow",
+          "to_name": "build_callother_op",
+          "to_owner": "free",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn build_callother_op(fd: &mut Funcdata, addr: Address) -> crate::op::PcodeOpRef"
+        }
+      ],
+      "new_id": "RG-F-8ba6690d9b3d452c451e",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-420b7f1781eaae99bb0c"
+      ],
+      "base_id": "RG-F-420b7f1781eaae99bb0c",
+      "events": [
+        {
+          "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+          "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "split_basic: flow truncation error channel (Result returns) (3be7b24)"
+          ],
+          "from_id": "RG-F-420b7f1781eaae99bb0c",
+          "from_module": "flow",
+          "from_name": "split_basic",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn split_basic(&mut self)",
+          "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "to_id": "RG-F-da6d2d3c6a3a39b28deb",
+          "to_module": "flow",
+          "to_name": "split_basic",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn split_basic(&mut self) -> crate::error::Result<()>"
+        }
+      ],
+      "new_id": "RG-F-da6d2d3c6a3a39b28deb",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-56aa5a2cb39adcdaa0e7"
+      ],
+      "base_id": "RG-F-56aa5a2cb39adcdaa0e7",
+      "events": [
+        {
+          "child_blob": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "find_call_op: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-56aa5a2cb39adcdaa0e7",
+          "from_module": "fspec",
+          "from_name": "find_call_op",
+          "from_owner": "impl:FuncCallSpecs",
+          "from_path": "src/fspec.rs",
+          "from_signature": "fn find_call_op(&self, fd: &crate::funcdata::Funcdata) -> Option<crate::op::PcodeOpRef>",
+          "parent_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+          "to_id": "RG-F-665caf5de788197a7ddb",
+          "to_module": "fspec",
+          "to_name": "find_call_op",
+          "to_owner": "impl:FuncCallSpecs",
+          "to_path": "src/fspec.rs",
+          "to_signature": "fn find_call_op(&self, _fd: &crate::funcdata::Funcdata) -> Option<crate::op::PcodeOpRef>"
+        }
+      ],
+      "new_id": "RG-F-665caf5de788197a7ddb",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-5833ec87d885664efa5f"
+      ],
+      "base_id": "RG-F-5833ec87d885664efa5f",
+      "events": [
+        {
+          "child_blob": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "score_parameter: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-5833ec87d885664efa5f",
+          "from_module": "unionresolve",
+          "from_name": "score_parameter",
+          "from_owner": "impl:ScoreUnionFields<'t>",
+          "from_path": "src/unionresolve.rs",
+          "from_signature": "fn score_parameter( ct: &Datatype, fd: &crate::funcdata::Funcdata, call_op: &PcodeOp, param_slot: i32, ) -> i32",
+          "parent_blob": "cffe8789412f9984882e1fc52b3a20bda46e8b2b",
+          "to_id": "RG-F-85943640e89de9a361c8",
+          "to_module": "unionresolve",
+          "to_name": "score_parameter",
+          "to_owner": "impl:ScoreUnionFields<'t>",
+          "to_path": "src/unionresolve.rs",
+          "to_signature": "fn score_parameter( ct: &Datatype, fd: &crate::funcdata::Funcdata, call_op: &PcodeOpRef, param_slot: i32, ) -> i32"
+        }
+      ],
+      "new_id": "RG-F-85943640e89de9a361c8",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-5923eb2467cb55ffa55f"
+      ],
+      "base_id": "RG-F-5923eb2467cb55ffa55f",
+      "events": [
+        {
+          "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "new_varnode_call_specs: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-5923eb2467cb55ffa55f",
+          "from_module": "funcdata",
+          "from_name": "new_varnode_call_specs",
+          "from_owner": "impl:Funcdata",
+          "from_path": "src/funcdata.rs",
+          "from_signature": "fn new_varnode_call_specs( &mut self, fc_index: usize, ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>",
+          "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+          "to_id": "RG-F-7f644254abac1693b1ff",
+          "to_module": "funcdata",
+          "to_name": "new_varnode_call_specs",
+          "to_owner": "impl:Funcdata",
+          "to_path": "src/funcdata.rs",
+          "to_signature": "fn new_varnode_call_specs( &mut self, fc: &Arc<RwLock<crate::fspec::FuncCallSpecs>>, ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>"
+        }
+      ],
+      "new_id": "RG-F-7f644254abac1693b1ff",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-681b63f29b27de3a4123"
+      ],
+      "base_id": "RG-F-681b63f29b27de3a4123",
+      "events": [
+        {
+          "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+          "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "generate_blocks: flow truncation error channel (Result returns) (3be7b24)"
+          ],
+          "from_id": "RG-F-681b63f29b27de3a4123",
+          "from_module": "flow",
+          "from_name": "generate_blocks",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn generate_blocks(&mut self)",
+          "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "to_id": "RG-F-b0bd0fd9650c8dc041d9",
+          "to_module": "flow",
+          "to_name": "generate_blocks",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn generate_blocks(&mut self) -> crate::error::Result<()>"
+        }
+      ],
+      "new_id": "RG-F-b0bd0fd9650c8dc041d9",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-6875a1df88043187e59d"
+      ],
+      "base_id": "RG-F-6875a1df88043187e59d",
+      "events": [
+        {
+          "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "get_call_specs_of_op: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-6875a1df88043187e59d",
+          "from_module": "funcdata",
+          "from_name": "get_call_specs_of_op",
+          "from_owner": "impl:Funcdata",
+          "from_path": "src/funcdata.rs",
+          "from_signature": "fn get_call_specs_of_op( &self, op: &crate::op::PcodeOpRef, ) -> Option<&crate::fspec::FuncCallSpecs>",
+          "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+          "to_id": "RG-F-aeed1ce92fc04c5aaf17",
+          "to_module": "funcdata",
+          "to_name": "get_call_specs_of_op",
+          "to_owner": "impl:Funcdata",
+          "to_path": "src/funcdata.rs",
+          "to_signature": "fn get_call_specs_of_op( &self, op: &crate::op::PcodeOpRef, ) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>>"
+        }
+      ],
+      "new_id": "RG-F-aeed1ce92fc04c5aaf17",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-72110be65453cf3d1587"
+      ],
+      "base_id": "RG-F-72110be65453cf3d1587",
+      "events": [
+        {
+          "child_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+          "commit": "0d2252dd631677ef221d8266f1267090fecd45da",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "set_block_range: block-range bounds u64 to Address (0d2252d)"
+          ],
+          "from_id": "RG-F-72110be65453cf3d1587",
+          "from_module": "flow",
+          "from_name": "set_block_range",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn set_block_range(block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, start: u64, stop: u64)",
+          "parent_blob": "a51548151141f22102a5d5440332a795b31bb289",
+          "to_id": "RG-F-49837dd5483eee6ce607",
+          "to_module": "flow",
+          "to_name": "set_block_range",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn set_block_range( block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, start: Address, stop: Address, )"
+        }
+      ],
+      "new_id": "RG-F-49837dd5483eee6ce607",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-7472347f6d20c447c6ef"
+      ],
+      "base_id": "RG-F-7472347f6d20c447c6ef",
+      "events": [
+        {
+          "child_blob": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "clone_for_op: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-7472347f6d20c447c6ef",
+          "from_module": "fspec",
+          "from_name": "clone_for_op",
+          "from_owner": "impl:FuncCallSpecs",
+          "from_path": "src/fspec.rs",
+          "from_signature": "fn clone_for_op(&self, new_op_addr: Address) -> FuncCallSpecs",
+          "parent_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+          "to_id": "RG-F-4eb112e335ddc8f1c3b5",
+          "to_module": "fspec",
+          "to_name": "clone_for_op",
+          "to_owner": "impl:FuncCallSpecs",
+          "to_path": "src/fspec.rs",
+          "to_signature": "fn clone_for_op(&self, new_op: &crate::op::PcodeOpRef) -> FuncCallSpecs"
+        }
+      ],
+      "new_id": "RG-F-4eb112e335ddc8f1c3b5",
+      "origin_kind": "baseline"
+    },
     {
       "aliases": [
         "RG-F-7622630fcd5425152c42"
@@ -77,6 +1530,223 @@
     },
     {
       "aliases": [
+        "RG-F-7d56bab7c0eede6b219e"
+      ],
+      "base_id": "RG-F-7d56bab7c0eede6b219e",
+      "events": [
+        {
+          "child_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+          "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "override_flow: shared-return override consumption (Result returns) (33793c1)"
+          ],
+          "from_id": "RG-F-7d56bab7c0eede6b219e",
+          "from_module": "funcdata",
+          "from_name": "override_flow",
+          "from_owner": "impl:Funcdata",
+          "from_path": "src/funcdata.rs",
+          "from_signature": "fn override_flow(&mut self, addr: crate::address::Address, flow_type: crate::override_rs::FlowOverride)",
+          "parent_blob": "5f8dbeb93c233836b195418d007da8291f4483e5",
+          "to_id": "RG-F-493eb3dfad4a42d40802",
+          "to_module": "funcdata",
+          "to_name": "override_flow",
+          "to_owner": "impl:Funcdata",
+          "to_path": "src/funcdata.rs",
+          "to_signature": "fn override_flow( &mut self, addr: crate::address::Address, flow_type: crate::override_rs::FlowOverride, ) -> crate::error::Result<()>"
+        }
+      ],
+      "new_id": "RG-F-493eb3dfad4a42d40802",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-89d1a3bc65108b92a474"
+      ],
+      "base_id": "RG-F-89d1a3bc65108b92a474",
+      "events": [
+        {
+          "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "get_call_specs: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-89d1a3bc65108b92a474",
+          "from_module": "funcdata",
+          "from_name": "get_call_specs",
+          "from_owner": "impl:Funcdata",
+          "from_path": "src/funcdata.rs",
+          "from_signature": "fn get_call_specs(&self, i: usize) -> Option<&crate::fspec::FuncCallSpecs>",
+          "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+          "to_id": "RG-F-02aff009ce146122520e",
+          "to_module": "funcdata",
+          "to_name": "get_call_specs",
+          "to_owner": "impl:Funcdata",
+          "to_path": "src/funcdata.rs",
+          "to_signature": "fn get_call_specs( &self, i: usize, ) -> Option<std::sync::RwLockReadGuard<'_, crate::fspec::FuncCallSpecs>>"
+        }
+      ],
+      "new_id": "RG-F-02aff009ce146122520e",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-9a532c938b1d72c03c1d"
+      ],
+      "base_id": "RG-F-9a532c938b1d72c03c1d",
+      "events": [
+        {
+          "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+          "commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "order_recurse: typefactory layout-preserving definitions (594ed4f)"
+          ],
+          "from_id": "RG-F-9a532c938b1d72c03c1d",
+          "from_module": "type_system::typefactory",
+          "from_name": "order_recurse",
+          "from_owner": "impl:TypeFactory",
+          "from_path": "src/type_system/typefactory.rs",
+          "from_signature": "fn order_recurse( deporder: &mut Vec<Arc<Datatype>>, mark: &mut std::collections::HashSet<usize>, ct: &Arc<Datatype>, )",
+          "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+          "to_id": "RG-F-1692e4d449f0e322a223",
+          "to_module": "type_system::typefactory",
+          "to_name": "order_recurse",
+          "to_owner": "impl:TypeFactory",
+          "to_path": "src/type_system/typefactory.rs",
+          "to_signature": "fn order_recurse( &self, deporder: &mut Vec<Arc<Datatype>>, mark: &mut std::collections::HashSet<usize>, ct: &Arc<Datatype>, )"
+        }
+      ],
+      "new_id": "RG-F-1692e4d449f0e322a223",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-9f45a266fb8458156812"
+      ],
+      "base_id": "RG-F-9f45a266fb8458156812",
+      "events": [
+        {
+          "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+          "commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "decode: fspec paramlist output dispatch expansion (87f9309)"
+          ],
+          "from_id": "RG-F-9f45a266fb8458156812",
+          "from_module": "fspec",
+          "from_name": "decode",
+          "from_owner": "impl:ParamListStandardOut",
+          "from_path": "src/fspec.rs",
+          "from_signature": "fn decode( &mut self, _decoder: &mut dyn crate::marshal::Decoder, _effectlist: &mut Vec<EffectRecord>, _normalstack: bool, ) -> Result<(), String>",
+          "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "to_id": "RG-F-8da24b5ec162432b2e21",
+          "to_module": "fspec",
+          "to_name": "decode",
+          "to_owner": "impl:ParamListStandardOut",
+          "to_path": "src/fspec.rs",
+          "to_signature": "fn decode( &mut self, decoder: &mut dyn crate::marshal::Decoder, effectlist: &mut Vec<EffectRecord>, normalstack: bool, register_resolver: &dyn Fn(&str) -> Option<VarnodeData>, ) -> Result<(), String>"
+        }
+      ],
+      "new_id": "RG-F-8da24b5ec162432b2e21",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-b1c59d7c1ce83f3fc877"
+      ],
+      "base_id": "RG-F-b1c59d7c1ce83f3fc877",
+      "events": [
+        {
+          "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "get_call_specs_mut: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-b1c59d7c1ce83f3fc877",
+          "from_module": "funcdata",
+          "from_name": "get_call_specs_mut",
+          "from_owner": "impl:Funcdata",
+          "from_path": "src/funcdata.rs",
+          "from_signature": "fn get_call_specs_mut(&mut self, i: usize) -> Option<&mut crate::fspec::FuncCallSpecs>",
+          "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+          "to_id": "RG-F-bdbeb8a17dfc1773937a",
+          "to_module": "funcdata",
+          "to_name": "get_call_specs_mut",
+          "to_owner": "impl:Funcdata",
+          "to_path": "src/funcdata.rs",
+          "to_signature": "fn get_call_specs_mut( &self, i: usize, ) -> Option<std::sync::RwLockWriteGuard<'_, crate::fspec::FuncCallSpecs>>"
+        }
+      ],
+      "new_id": "RG-F-bdbeb8a17dfc1773937a",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-b5ab805b4b3320aeb1fa"
+      ],
+      "base_id": "RG-F-b5ab805b4b3320aeb1fa",
+      "events": [
+        {
+          "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+          "commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "resolve_incomplete_typedefs: typefactory layout-preserving definitions (594ed4f)"
+          ],
+          "from_id": "RG-F-b5ab805b4b3320aeb1fa",
+          "from_module": "type_system::typefactory",
+          "from_name": "resolve_incomplete_typedefs",
+          "from_owner": "impl:TypeFactory",
+          "from_path": "src/type_system/typefactory.rs",
+          "from_signature": "fn resolve_incomplete_typedefs(&mut self)",
+          "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+          "to_id": "RG-F-32dc11b88842073b5fec",
+          "to_module": "type_system::typefactory",
+          "to_name": "resolve_incomplete_typedefs",
+          "to_owner": "impl:TypeFactory",
+          "to_path": "src/type_system/typefactory.rs",
+          "to_signature": "fn resolve_incomplete_typedefs(&mut self) -> Result<(), String>"
+        }
+      ],
+      "new_id": "RG-F-32dc11b88842073b5fec",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-c292ca37d2c29dfc9361"
+      ],
+      "base_id": "RG-F-c292ca37d2c29dfc9361",
+      "events": [
+        {
+          "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+          "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "follow_flow: flow truncation error channel (Result returns) (3be7b24)"
+          ],
+          "from_id": "RG-F-c292ca37d2c29dfc9361",
+          "from_module": "flow",
+          "from_name": "follow_flow",
+          "from_owner": "free",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn follow_flow(fd: &mut Funcdata, lifter: &mut SleighLifter, entry: Address, eaddr: u64)",
+          "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+          "to_id": "RG-F-ff7130f442132a11fd55",
+          "to_module": "flow",
+          "to_name": "follow_flow",
+          "to_owner": "free",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn follow_flow( fd: &mut Funcdata, lifter: &mut SleighLifter, entry: Address, eaddr: u64, ) -> crate::error::Result<()>"
+        }
+      ],
+      "new_id": "RG-F-ff7130f442132a11fd55",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
         "RG-F-c76e93f7b514cc307344"
       ],
       "base_id": "RG-F-c76e93f7b514cc307344",
@@ -106,22 +1776,397 @@
       ],
       "new_id": "RG-F-68db795ba78535d5e6e6",
       "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-c9811edb9fb50bdcbb02"
+      ],
+      "base_id": "RG-F-c9811edb9fb50bdcbb02",
+      "events": [
+        {
+          "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+          "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "generate_ops: shared-return override consumption (Result returns) (33793c1)"
+          ],
+          "from_id": "RG-F-c9811edb9fb50bdcbb02",
+          "from_module": "flow",
+          "from_name": "generate_ops",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn generate_ops(&mut self, entry: Address)",
+          "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+          "to_id": "RG-F-3e640a9b136c4a824063",
+          "to_module": "flow",
+          "to_name": "generate_ops",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn generate_ops(&mut self, entry: Address) -> crate::error::Result<()>"
+        }
+      ],
+      "new_id": "RG-F-3e640a9b136c4a824063",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-cb1453367426bab70b42"
+      ],
+      "base_id": "RG-F-cb1453367426bab70b42",
+      "events": [
+        {
+          "child_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+          "commit": "805cf887d96b97f85a4b979bf408145e87a22a45",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "register_trial: register_trial returns bool for tagged spaces (805cf88)"
+          ],
+          "from_id": "RG-F-cb1453367426bab70b42",
+          "from_module": "fspec",
+          "from_name": "register_trial",
+          "from_owner": "impl:ParamActive",
+          "from_path": "src/fspec.rs",
+          "from_signature": "fn register_trial(&mut self, addr: Address, sz: i32)",
+          "parent_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+          "to_id": "RG-F-14308901657e8b225fe7",
+          "to_module": "fspec",
+          "to_name": "register_trial",
+          "to_owner": "impl:ParamActive",
+          "to_path": "src/fspec.rs",
+          "to_signature": "fn register_trial(&mut self, addr: Address, sz: i32) -> bool"
+        }
+      ],
+      "new_id": "RG-F-14308901657e8b225fe7",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-cf9c7ee152384ba37e38"
+      ],
+      "base_id": "RG-F-cf9c7ee152384ba37e38",
+      "events": [
+        {
+          "child_blob": "f7722f4fb73c31cfbf562222f5767e11864f2ab5",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "find_callspec_for_op: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-cf9c7ee152384ba37e38",
+          "from_module": "flow",
+          "from_name": "find_callspec_for_op",
+          "from_owner": "free",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn find_callspec_for_op(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Option<usize>",
+          "parent_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+          "to_id": "RG-F-873b743824356fbc98b7",
+          "to_module": "flow",
+          "to_name": "find_callspec_for_op",
+          "to_owner": "free",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn find_callspec_for_op( fd: &Funcdata, op: &crate::op::PcodeOpRef, ) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>>"
+        }
+      ],
+      "new_id": "RG-F-873b743824356fbc98b7",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-d21d7ad7d37f851c09ed"
+      ],
+      "base_id": "RG-F-d21d7ad7d37f851c09ed",
+      "events": [
+        {
+          "child_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+          "commit": "577e54bb32aa0ff6c167f5b3bff5a71807439a0a",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "propagate_from_pointer: pointee propagation gated by dereference width (577e54b)"
+          ],
+          "from_id": "RG-F-d21d7ad7d37f851c09ed",
+          "from_module": "typeop",
+          "from_name": "propagate_from_pointer",
+          "from_owner": "free",
+          "from_path": "src/typeop.rs",
+          "from_signature": "fn propagate_from_pointer(alt_type: &Arc<Datatype>) -> Option<Arc<Datatype>>",
+          "parent_blob": "754391522125b69d12f73bdf301598c773afca38",
+          "to_id": "RG-F-73c5c36f5fc7758afb22",
+          "to_module": "typeop",
+          "to_name": "propagate_from_pointer",
+          "to_owner": "free",
+          "to_path": "src/typeop.rs",
+          "to_signature": "fn propagate_from_pointer( alt_type: &Arc<Datatype>, dereference_size: usize, ) -> Option<Arc<Datatype>>"
+        }
+      ],
+      "new_id": "RG-F-73c5c36f5fc7758afb22",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-e4e3f26824bc65a83baf"
+      ],
+      "base_id": "RG-F-e4e3f26824bc65a83baf",
+      "events": [
+        {
+          "child_blob": "f7722f4fb73c31cfbf562222f5767e11864f2ab5",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "delete_call_spec: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-e4e3f26824bc65a83baf",
+          "from_module": "flow",
+          "from_name": "delete_call_spec",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn delete_call_spec(&mut self, fc_idx: usize)",
+          "parent_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+          "to_id": "RG-F-150fcf46b07d4de67214",
+          "to_module": "flow",
+          "to_name": "delete_call_spec",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn delete_call_spec(&mut self, fc: Arc<RwLock<crate::fspec::FuncCallSpecs>>)"
+        }
+      ],
+      "new_id": "RG-F-150fcf46b07d4de67214",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-e74efd0e7cd7b12c51d9"
+      ],
+      "base_id": "RG-F-e74efd0e7cd7b12c51d9",
+      "events": [
+        {
+          "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+          "commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "possible_param: fspec paramlist output dispatch expansion (87f9309)"
+          ],
+          "from_id": "RG-F-e74efd0e7cd7b12c51d9",
+          "from_module": "fspec",
+          "from_name": "possible_param",
+          "from_owner": "impl:ParamListStandardOut",
+          "from_path": "src/fspec.rs",
+          "from_signature": "fn possible_param(&self, loc: Address, size: i32) -> bool",
+          "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+          "to_id": "RG-F-165d45a203c4b7b0a40d",
+          "to_module": "fspec",
+          "to_name": "possible_param",
+          "to_owner": "impl:ParamListStandardOut",
+          "to_path": "src/fspec.rs",
+          "to_signature": "fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool"
+        }
+      ],
+      "new_id": "RG-F-165d45a203c4b7b0a40d",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-e7ba51c17a135fa5e918"
+      ],
+      "base_id": "RG-F-e7ba51c17a135fa5e918",
+      "events": [
+        {
+          "child_blob": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "score_return_type: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-e7ba51c17a135fa5e918",
+          "from_module": "unionresolve",
+          "from_name": "score_return_type",
+          "from_owner": "impl:ScoreUnionFields<'t>",
+          "from_path": "src/unionresolve.rs",
+          "from_signature": "fn score_return_type(ct: &Datatype, fd: &crate::funcdata::Funcdata, call_op: &PcodeOp) -> i32",
+          "parent_blob": "cffe8789412f9984882e1fc52b3a20bda46e8b2b",
+          "to_id": "RG-F-746a8b9fa443b0ba04a6",
+          "to_module": "unionresolve",
+          "to_name": "score_return_type",
+          "to_owner": "impl:ScoreUnionFields<'t>",
+          "to_path": "src/unionresolve.rs",
+          "to_signature": "fn score_return_type( ct: &Datatype, fd: &crate::funcdata::Funcdata, call_op: &PcodeOpRef, ) -> i32"
+        }
+      ],
+      "new_id": "RG-F-746a8b9fa443b0ba04a6",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-ec2d50c00923e0d5796d"
+      ],
+      "base_id": "RG-F-ec2d50c00923e0d5796d",
+      "events": [
+        {
+          "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+          "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "compare_callspecs: callspec identity lifecycle (Arc owner handles) (cad41c2)"
+          ],
+          "from_id": "RG-F-ec2d50c00923e0d5796d",
+          "from_module": "funcdata",
+          "from_name": "compare_callspecs",
+          "from_owner": "impl:Funcdata",
+          "from_path": "src/funcdata.rs",
+          "from_signature": "fn compare_callspecs(&self, a: &crate::fspec::FuncCallSpecs, b: &crate::fspec::FuncCallSpecs) -> bool",
+          "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+          "to_id": "RG-F-0706966789d474fb68e6",
+          "to_module": "funcdata",
+          "to_name": "compare_callspecs",
+          "to_owner": "impl:Funcdata",
+          "to_path": "src/funcdata.rs",
+          "to_signature": "fn compare_callspecs( &self, a: &crate::fspec::FuncCallSpecs, b: &crate::fspec::FuncCallSpecs, ) -> bool"
+        }
+      ],
+      "new_id": "RG-F-0706966789d474fb68e6",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-f828f9d8a2f59aebb57b"
+      ],
+      "base_id": "RG-F-f828f9d8a2f59aebb57b",
+      "events": [
+        {
+          "child_blob": "365be16020196337d386eb215f0b280ece383847",
+          "commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "merge_test_must: merge_test_must returns Result under address-tied gates (e9a0b7a)"
+          ],
+          "from_id": "RG-F-f828f9d8a2f59aebb57b",
+          "from_module": "merge",
+          "from_name": "merge_test_must",
+          "from_owner": "impl:Merge",
+          "from_path": "src/merge.rs",
+          "from_signature": "fn merge_test_must(vn: &Varnode) -> bool",
+          "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+          "to_id": "RG-F-9e79ed98d1092ec72737",
+          "to_module": "merge",
+          "to_name": "merge_test_must",
+          "to_owner": "impl:Merge",
+          "to_path": "src/merge.rs",
+          "to_signature": "fn merge_test_must(vn: &Varnode) -> Result<()>"
+        }
+      ],
+      "new_id": "RG-F-9e79ed98d1092ec72737",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-fd655d6b3856412c7d46"
+      ],
+      "base_id": "RG-F-fd655d6b3856412c7d46",
+      "events": [
+        {
+          "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+          "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "process_instruction: shared-return override consumption (Result returns) (33793c1)"
+          ],
+          "from_id": "RG-F-fd655d6b3856412c7d46",
+          "from_module": "flow",
+          "from_name": "process_instruction",
+          "from_owner": "impl:FlowInfo<'a>",
+          "from_path": "src/flow.rs",
+          "from_signature": "fn process_instruction(&mut self, addr: Address, start_basic: &mut bool) -> bool",
+          "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+          "to_id": "RG-F-e45cf642507c156f4831",
+          "to_module": "flow",
+          "to_name": "process_instruction",
+          "to_owner": "impl:FlowInfo<'a>",
+          "to_path": "src/flow.rs",
+          "to_signature": "fn process_instruction( &mut self, addr: Address, start_basic: &mut bool, ) -> crate::error::Result<bool>"
+        }
+      ],
+      "new_id": "RG-F-e45cf642507c156f4831",
+      "origin_kind": "baseline"
     }
   ],
   "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
   "schema": 1,
   "semantics": "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). This separate post-baseline layer composes historical aliases to the raw checkpoint IDs. Automatic transitions require a unique 1-to-1, same path/module/owner/name pair whose only signature difference is a leading parameter binding mut, in the same patch hunk with the same non-empty annotation. Tombstones are diagnostic only; introduced_live rows are new checkpoint definitions, not fabricated historical origins.",
   "stats": {
-    "alias_tokens": 2,
+    "alias_tokens": 31,
     "ambiguous": 0,
     "baseline_records": 9639,
     "collisions": 0,
-    "current_records": 9640,
-    "events": 2,
-    "introduced_live": 1,
-    "lineages": 2,
-    "reviewed_transitions": 0,
-    "tombstones": 0
+    "current_records": 9726,
+    "events": 31,
+    "introduced_live": 91,
+    "lineages": 31,
+    "reviewed_transitions": 28,
+    "tombstones": 4
   },
-  "tombstones": []
+  "tombstones": [
+    {
+      "aliases": [
+        "RG-F-002a9ec13d8e062540b9"
+      ],
+      "base_id": "RG-F-002a9ec13d8e062540b9",
+      "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+      "deleted_at_commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+      "events": [],
+      "module": "type_system::typefactory",
+      "name": "array_element_matches",
+      "owner": "impl:TypeFactory",
+      "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+      "path": "src/type_system/typefactory.rs",
+      "reason": "superseded by canonical type-tree keys; no successor (874e81f)",
+      "signature": "fn array_element_matches(candidate: &Datatype, existing: &Arc<Datatype>) -> bool"
+    },
+    {
+      "aliases": [
+        "RG-F-5ec71c480ba4438dca3a"
+      ],
+      "base_id": "RG-F-5ec71c480ba4438dca3a",
+      "child_blob": "b44b6b2204becc01234d3dab8415899d83c7f777",
+      "deleted_at_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+      "events": [],
+      "module": "coreaction",
+      "name": "ptr_to",
+      "owner": "free",
+      "parent_blob": "ae2cf089a3f644385d8a64ce213f7f1b0b88103a",
+      "path": "src/coreaction.rs",
+      "reason": "removed by access-width gating; no successor (92daed3)",
+      "signature": "fn ptr_to<'a>( ct: &'a crate::type_system::datatype::Datatype, ) -> Option<&'a std::sync::Arc<crate::type_system::datatype::Datatype>>"
+    },
+    {
+      "aliases": [
+        "RG-F-bd9141cd6ae9f5a4ddad"
+      ],
+      "base_id": "RG-F-bd9141cd6ae9f5a4ddad",
+      "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+      "deleted_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "events": [],
+      "module": "funcdata",
+      "name": "block_index_for_op_addr",
+      "owner": "impl:Funcdata",
+      "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+      "path": "src/funcdata.rs",
+      "reason": "replaced by owner-handle call-spec lookup; no successor (cad41c2)",
+      "signature": "fn block_index_for_op_addr(&self, op_addr: Address) -> i32"
+    },
+    {
+      "aliases": [
+        "RG-F-e43c2d78ba8a0472a781"
+      ],
+      "base_id": "RG-F-e43c2d78ba8a0472a781",
+      "child_blob": "81f6344ef0bdecaba1c994c1b0cdfb9a53b5de1a",
+      "deleted_at_commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+      "events": [],
+      "module": "ruleaction",
+      "name": "find_call_spec_by_addr",
+      "owner": "impl:RulePiecePathology",
+      "parent_blob": "b01176babb67aa227a2a00ed1ac402221dac2449",
+      "path": "src/ruleaction.rs",
+      "reason": "replaced by owner-handle call-spec lookup; no successor (cad41c2)",
+      "signature": "fn find_call_spec_by_addr(fd: &Funcdata, addr_u64: u64) -> Option<usize>"
+    }
+  ]
 }

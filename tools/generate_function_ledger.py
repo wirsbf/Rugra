@@ -1136,29 +1136,471 @@ REKEY_TOMBSTONE_COUNT = 47
 # Post-baseline scheme-2 continuity boundary.  This is intentionally separate
 # from FUNCTION_ID_MIGRATION.json: the latter remains the immutable scheme-1
 # origin closure, while this checkpoint records later raw scheme-2 ID changes.
-CONTINUITY_CHECKPOINT_COMMIT = "36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba"
-CONTINUITY_CHECKPOINT_COMMIT_TREE = "320c207975ee2d3157e4821c15336858fbb8bdd4"
-CONTINUITY_CHECKPOINT_SRC_TREE = "ae8f4a750f671d6b875dacba308877321540ed8d"
-CONTINUITY_CHECKPOINT_PARENT = "61631f238f0e6db58aea9f6e308cba1c8af990aa"
+CONTINUITY_CHECKPOINT_COMMIT = "92fd927feb39c3ba6bed8735d530186271b9d49f"
+CONTINUITY_CHECKPOINT_COMMIT_TREE = "d447eb3c2ebb1f43899e76f5411cf8f1a7a0b4d5"
+CONTINUITY_CHECKPOINT_SRC_TREE = "af8f7a9318d6f9b6429c840a0eeac611c508f539"
+CONTINUITY_CHECKPOINT_PARENT = "482f955bcdcf039edc47cbefd928c01d184a1192"
 CONTINUITY_BASELINE_MIGRATION_BLOB = "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171"
 CONTINUITY_BASELINE_MIGRATION_SHA256 = (
     "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9"
 )
-CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 31
+CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 85
 CONTINUITY_FIRST_COMMIT = "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb"
 CONTINUITY_BASELINE_RUST_RECORDS = 9_639
-CONTINUITY_CHECKPOINT_RUST_RECORDS = 9_640
+CONTINUITY_CHECKPOINT_RUST_RECORDS = 9_726
 CONTINUITY_EXPECTED_TRANSITIONS = {
+    ("RG-F-09d0ffc3ccbb554e789c", "RG-F-cd924c7bc3e50d8e6a9b"),
+    ("RG-F-1b1d42d39302829f8e72", "RG-F-dc54176d68b572318a13"),
+    ("RG-F-29f1bd831bde716de5c4", "RG-F-813b027ebcd5353c4236"),
+    ("RG-F-2c988c04aca0f061a836", "RG-F-8ba6690d9b3d452c451e"),
+    ("RG-F-420b7f1781eaae99bb0c", "RG-F-da6d2d3c6a3a39b28deb"),
+    ("RG-F-56aa5a2cb39adcdaa0e7", "RG-F-665caf5de788197a7ddb"),
+    ("RG-F-5833ec87d885664efa5f", "RG-F-85943640e89de9a361c8"),
+    ("RG-F-5923eb2467cb55ffa55f", "RG-F-7f644254abac1693b1ff"),
+    ("RG-F-681b63f29b27de3a4123", "RG-F-b0bd0fd9650c8dc041d9"),
+    ("RG-F-6875a1df88043187e59d", "RG-F-aeed1ce92fc04c5aaf17"),
+    ("RG-F-72110be65453cf3d1587", "RG-F-49837dd5483eee6ce607"),
+    ("RG-F-7472347f6d20c447c6ef", "RG-F-4eb112e335ddc8f1c3b5"),
     ("RG-F-7622630fcd5425152c42", "RG-F-2e7d8eae51d63d1dcc39"),
+    ("RG-F-7d56bab7c0eede6b219e", "RG-F-493eb3dfad4a42d40802"),
+    ("RG-F-89d1a3bc65108b92a474", "RG-F-02aff009ce146122520e"),
+    ("RG-F-9a532c938b1d72c03c1d", "RG-F-1692e4d449f0e322a223"),
+    ("RG-F-9f45a266fb8458156812", "RG-F-8da24b5ec162432b2e21"),
+    ("RG-F-b1c59d7c1ce83f3fc877", "RG-F-bdbeb8a17dfc1773937a"),
+    ("RG-F-b5ab805b4b3320aeb1fa", "RG-F-32dc11b88842073b5fec"),
+    ("RG-F-c292ca37d2c29dfc9361", "RG-F-ff7130f442132a11fd55"),
     ("RG-F-c76e93f7b514cc307344", "RG-F-68db795ba78535d5e6e6"),
+    ("RG-F-c9811edb9fb50bdcbb02", "RG-F-3e640a9b136c4a824063"),
+    ("RG-F-cb1453367426bab70b42", "RG-F-14308901657e8b225fe7"),
+    ("RG-F-cf9c7ee152384ba37e38", "RG-F-873b743824356fbc98b7"),
+    ("RG-F-d21d7ad7d37f851c09ed", "RG-F-73c5c36f5fc7758afb22"),
+    ("RG-F-e4e3f26824bc65a83baf", "RG-F-150fcf46b07d4de67214"),
+    ("RG-F-e74efd0e7cd7b12c51d9", "RG-F-165d45a203c4b7b0a40d"),
+    ("RG-F-e7ba51c17a135fa5e918", "RG-F-746a8b9fa443b0ba04a6"),
+    ("RG-F-ec2d50c00923e0d5796d", "RG-F-0706966789d474fb68e6"),
+    ("RG-F-f828f9d8a2f59aebb57b", "RG-F-9e79ed98d1092ec72737"),
+    ("RG-F-fd655d6b3856412c7d46", "RG-F-e45cf642507c156f4831"),
 }
-CONTINUITY_EXPECTED_INTRODUCED = {"RG-F-2646dcd008a8290bb207"}
+CONTINUITY_EXPECTED_TOMBSTONES = {
+    ("RG-F-002a9ec13d8e062540b9", "RG-F-002a9ec13d8e062540b9",
+     "874e81f7b9877b519c8ab55b57cbac24de0918f0"),
+    ("RG-F-5ec71c480ba4438dca3a", "RG-F-5ec71c480ba4438dca3a",
+     "92daed300bcce3c4d855b311cf9667ba21eb475a"),
+    ("RG-F-bd9141cd6ae9f5a4ddad", "RG-F-bd9141cd6ae9f5a4ddad",
+     "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db"),
+    ("RG-F-e43c2d78ba8a0472a781", "RG-F-e43c2d78ba8a0472a781",
+     "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db"),
+}
+CONTINUITY_EXPECTED_INTRODUCED = {
+    "RG-F-00572f8089ee0282e3c8", "RG-F-008926b22d962c23a872",
+    "RG-F-00dab665b85c27184c35", "RG-F-0380ee661ebfe004db50",
+    "RG-F-065555eea9ebf23bec7b", "RG-F-0cecf0aca3dd73da1a6a",
+    "RG-F-0dc1ec134f52889b4c7f", "RG-F-1575e8b8dd6563a8cb24",
+    "RG-F-181d5bf28272c632dc3e", "RG-F-1858875b41476176edc8",
+    "RG-F-19cbcfb43b2ad638307e", "RG-F-1b285a9f7036553830fd",
+    "RG-F-202372b8209f4c235b2d", "RG-F-24758d9c4cdfb2c0f18b",
+    "RG-F-2646dcd008a8290bb207", "RG-F-29dc4b50b4e765955d48",
+    "RG-F-31d6967fc8ada4cb91eb", "RG-F-377d2765e85223c4a653",
+    "RG-F-37fe618e1633b505056f", "RG-F-3ab3e7c341eff7a06dc3",
+    "RG-F-3b710a409ce34f951cbd", "RG-F-3e4ee50c3bbc358ad164",
+    "RG-F-3ea726c76a58c7dd4800", "RG-F-456463060527a73a63e7",
+    "RG-F-47b0abacb8c8d893905d", "RG-F-4a7726c0d1b089f59ff8",
+    "RG-F-4d0d944ef8c3713a9359", "RG-F-5840c92b94183fda5078",
+    "RG-F-5954ddef465e441c7f32", "RG-F-6140eb4da25391919c18",
+    "RG-F-61659f5a98e9b24e0927", "RG-F-617d45c1dd4eaca81c67",
+    "RG-F-6801c1cf2e5e395a80ca", "RG-F-6afebac8a424ec5586a0",
+    "RG-F-6e0463d70306112395a2", "RG-F-6f7f59e3cda2fc6eb79b",
+    "RG-F-75a7ceddf65ab6560bc3", "RG-F-7643d54c86c72af40d4d",
+    "RG-F-7909a29462b00fbbdb9c", "RG-F-7cb6625ae84bc31cae67",
+    "RG-F-7d949a2dc82972bb9f60", "RG-F-7f4499a24e9d5f6e00f6",
+    "RG-F-82ed5ecaeb15a4ea56b7", "RG-F-84749c9d1107aad23889",
+    "RG-F-856104de7b4b35b3b196", "RG-F-85ce0eb54798067006cd",
+    "RG-F-8d0f69692399436cc2b0", "RG-F-8eb776b3fa088a50b624",
+    "RG-F-90f2e325176921f26d08", "RG-F-91b8fbbf0b62f18f97f6",
+    "RG-F-91c0b321491c2cf648d3", "RG-F-922b6bc020ee1c31087b",
+    "RG-F-9382f4598eb174593d93", "RG-F-987c0c4685c579ad3ef3",
+    "RG-F-9e25ba491c2ebdd3f0f0", "RG-F-9e36c0fb5daa89f6e75b",
+    "RG-F-9f1935e81471cf88494a", "RG-F-a43b43b4851399cb487b",
+    "RG-F-a6bd125935c53df33d0a", "RG-F-a7b190a9cc6699355ab8",
+    "RG-F-ac385b3896fbc69af1ad", "RG-F-af1e44fa513e12f2bb5a",
+    "RG-F-b3aaa93c05ec91982298", "RG-F-b445c51b636b8d0099bb",
+    "RG-F-b992a7f938634f6aee23", "RG-F-bdc84c53fafd339065cc",
+    "RG-F-bfe8d60ff5c1ca111f37", "RG-F-c004a34a7e50854e247c",
+    "RG-F-c02df23a1a402a7a4d59", "RG-F-c155aba255b133d73969",
+    "RG-F-c24d81aefca155bcc5ed", "RG-F-c414e1f8cd6e0c6c3004",
+    "RG-F-c58bd5e5d630cc315643", "RG-F-cba1ca033fe56fb95dc4",
+    "RG-F-d3d09a0ed811a54e22ce", "RG-F-d84d923a6982ef17c93e",
+    "RG-F-d8ffb7a35df5c67c2d49", "RG-F-dec293bcd6b0000c8d1f",
+    "RG-F-dfc91dc60e9bcaeea46d", "RG-F-e2ae768e78b0f9d2407f",
+    "RG-F-e6e93636b838c329c329", "RG-F-e6f7a196c2cd7dc7d374",
+    "RG-F-f03bae6585682e8447b8", "RG-F-f0cecbc341fcb11177b2",
+    "RG-F-f2b3b16ba32af9e3e34d", "RG-F-f6ec13ccf523ead15526",
+    "RG-F-f8305f268aaa07bf8676", "RG-F-fabd6ed370dadf216dfc",
+    "RG-F-fc9614ae62a5ca22047d", "RG-F-fdc56656082534066c8d",
+    "RG-F-ff741eec389f6e2c6e18",
+}
 
-# Future non-mut-binding successors/deletions must be added here with exact
-# commit, ID, path, and blob pins.  Empty is meaningful: this checkpoint has
-# no reviewed exception and no deletion.
-CONTINUITY_REVIEWED_TRANSITIONS: tuple[dict[str, str], ...] = ()
-CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = ()
+# Non-mut-binding successors must be added here with exact commit, ID, path,
+# and blob pins; every rule fires exactly once and the replay refuses any
+# removal that no rule proves.  Deletions get reviewed tombstone rules; a
+# class introduced and deleted entirely inside the window (never pinned in
+# any ledger) is retired by an ephemeral rule instead, because schema 1
+# cannot encode an introduced-then-deleted origin.
+CONTINUITY_REVIEWED_TRANSITIONS: tuple[dict[str, str], ...] = (
+    {
+        "base_id": "RG-F-72110be65453cf3d1587",
+        "from_id": "RG-F-72110be65453cf3d1587",
+        "to_id": "RG-F-49837dd5483eee6ce607",
+        "commit": "0d2252dd631677ef221d8266f1267090fecd45da",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "a51548151141f22102a5d5440332a795b31bb289",
+        "child_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+        "review": "set_block_range: block-range bounds u64 to Address (0d2252d)",
+    },
+    {
+        "base_id": "RG-F-09d0ffc3ccbb554e789c",
+        "from_id": "RG-F-09d0ffc3ccbb554e789c",
+        "to_id": "RG-F-cd924c7bc3e50d8e6a9b",
+        "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+        "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+        "review": "fallthru: shared-return override consumption (Result returns) (33793c1)",
+    },
+    {
+        "base_id": "RG-F-29f1bd831bde716de5c4",
+        "from_id": "RG-F-29f1bd831bde716de5c4",
+        "to_id": "RG-F-813b027ebcd5353c4236",
+        "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+        "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+        "review": "finish_process_instruction: shared-return override consumption "
+                  "(Result returns) (33793c1)",
+    },
+    {
+        "base_id": "RG-F-c9811edb9fb50bdcbb02",
+        "from_id": "RG-F-c9811edb9fb50bdcbb02",
+        "to_id": "RG-F-3e640a9b136c4a824063",
+        "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+        "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+        "review": "generate_ops: shared-return override consumption (Result returns) (33793c1)",
+    },
+    {
+        "base_id": "RG-F-7d56bab7c0eede6b219e",
+        "from_id": "RG-F-7d56bab7c0eede6b219e",
+        "to_id": "RG-F-493eb3dfad4a42d40802",
+        "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "5f8dbeb93c233836b195418d007da8291f4483e5",
+        "child_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "review": "override_flow: shared-return override consumption (Result returns) (33793c1)",
+    },
+    {
+        "base_id": "RG-F-fd655d6b3856412c7d46",
+        "from_id": "RG-F-fd655d6b3856412c7d46",
+        "to_id": "RG-F-e45cf642507c156f4831",
+        "commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "8907ccac7517b1044b0921bffcecc1344b4eab11",
+        "child_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+        "review": "process_instruction: shared-return override consumption "
+                  "(Result returns) (33793c1)",
+    },
+    {
+        "base_id": "RG-F-2c988c04aca0f061a836",
+        "from_id": "RG-F-2c988c04aca0f061a836",
+        "to_id": "RG-F-8ba6690d9b3d452c451e",
+        "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+        "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+        "review": "build_callother_op: flow truncation error channel (Result returns) (3be7b24)",
+    },
+    {
+        "base_id": "RG-F-c292ca37d2c29dfc9361",
+        "from_id": "RG-F-c292ca37d2c29dfc9361",
+        "to_id": "RG-F-ff7130f442132a11fd55",
+        "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+        "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+        "review": "follow_flow: flow truncation error channel (Result returns) (3be7b24)",
+    },
+    {
+        "base_id": "RG-F-681b63f29b27de3a4123",
+        "from_id": "RG-F-681b63f29b27de3a4123",
+        "to_id": "RG-F-b0bd0fd9650c8dc041d9",
+        "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+        "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+        "review": "generate_blocks: flow truncation error channel (Result returns) (3be7b24)",
+    },
+    {
+        "base_id": "RG-F-420b7f1781eaae99bb0c",
+        "from_id": "RG-F-420b7f1781eaae99bb0c",
+        "to_id": "RG-F-da6d2d3c6a3a39b28deb",
+        "commit": "3be7b24cf66fdea133cbbb748ba771586d420b5d",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
+        "child_blob": "a51548151141f22102a5d5440332a795b31bb289",
+        "review": "split_basic: flow truncation error channel (Result returns) (3be7b24)",
+    },
+    {
+        "base_id": "RG-F-d21d7ad7d37f851c09ed",
+        "from_id": "RG-F-d21d7ad7d37f851c09ed",
+        "to_id": "RG-F-73c5c36f5fc7758afb22",
+        "commit": "577e54bb32aa0ff6c167f5b3bff5a71807439a0a",
+        "from_path": "src/typeop.rs",
+        "to_path": "src/typeop.rs",
+        "parent_blob": "754391522125b69d12f73bdf301598c773afca38",
+        "child_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
+        "review": "propagate_from_pointer: pointee propagation gated by dereference width (577e54b)",
+    },
+    {
+        "base_id": "RG-F-9a532c938b1d72c03c1d",
+        "from_id": "RG-F-9a532c938b1d72c03c1d",
+        "to_id": "RG-F-1692e4d449f0e322a223",
+        "commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+        "from_path": "src/type_system/typefactory.rs",
+        "to_path": "src/type_system/typefactory.rs",
+        "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+        "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+        "review": "order_recurse: typefactory layout-preserving definitions (594ed4f)",
+    },
+    {
+        "base_id": "RG-F-b5ab805b4b3320aeb1fa",
+        "from_id": "RG-F-b5ab805b4b3320aeb1fa",
+        "to_id": "RG-F-32dc11b88842073b5fec",
+        "commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
+        "from_path": "src/type_system/typefactory.rs",
+        "to_path": "src/type_system/typefactory.rs",
+        "parent_blob": "3f1abd38c977843feb98f9cac30d6bf0779a9ac8",
+        "child_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+        "review": "resolve_incomplete_typedefs: typefactory layout-preserving definitions (594ed4f)",
+    },
+    {
+        "base_id": "RG-F-cb1453367426bab70b42",
+        "from_id": "RG-F-cb1453367426bab70b42",
+        "to_id": "RG-F-14308901657e8b225fe7",
+        "commit": "805cf887d96b97f85a4b979bf408145e87a22a45",
+        "from_path": "src/fspec.rs",
+        "to_path": "src/fspec.rs",
+        "parent_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+        "child_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+        "review": "register_trial: register_trial returns bool for tagged spaces (805cf88)",
+    },
+    {
+        "base_id": "RG-F-9f45a266fb8458156812",
+        "from_id": "RG-F-9f45a266fb8458156812",
+        "to_id": "RG-F-8da24b5ec162432b2e21",
+        "commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+        "from_path": "src/fspec.rs",
+        "to_path": "src/fspec.rs",
+        "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+        "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+        "review": "decode: fspec paramlist output dispatch expansion (87f9309)",
+    },
+    {
+        "base_id": "RG-F-e74efd0e7cd7b12c51d9",
+        "from_id": "RG-F-e74efd0e7cd7b12c51d9",
+        "to_id": "RG-F-165d45a203c4b7b0a40d",
+        "commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
+        "from_path": "src/fspec.rs",
+        "to_path": "src/fspec.rs",
+        "parent_blob": "2abd23b88562e6aa23712d78c9edd7a3ac3ffa63",
+        "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
+        "review": "possible_param: fspec paramlist output dispatch expansion (87f9309)",
+    },
+    {
+        "base_id": "RG-F-7472347f6d20c447c6ef",
+        "from_id": "RG-F-7472347f6d20c447c6ef",
+        "to_id": "RG-F-4eb112e335ddc8f1c3b5",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/fspec.rs",
+        "to_path": "src/fspec.rs",
+        "parent_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+        "child_blob": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+        "review": "clone_for_op: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-ec2d50c00923e0d5796d",
+        "from_id": "RG-F-ec2d50c00923e0d5796d",
+        "to_id": "RG-F-0706966789d474fb68e6",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "review": "compare_callspecs: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-e4e3f26824bc65a83baf",
+        "from_id": "RG-F-e4e3f26824bc65a83baf",
+        "to_id": "RG-F-150fcf46b07d4de67214",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+        "child_blob": "f7722f4fb73c31cfbf562222f5767e11864f2ab5",
+        "review": "delete_call_spec: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-56aa5a2cb39adcdaa0e7",
+        "from_id": "RG-F-56aa5a2cb39adcdaa0e7",
+        "to_id": "RG-F-665caf5de788197a7ddb",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/fspec.rs",
+        "to_path": "src/fspec.rs",
+        "parent_blob": "0d186b599d149430849b0c4e8b3a2453746690cd",
+        "child_blob": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+        "review": "find_call_op: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-cf9c7ee152384ba37e38",
+        "from_id": "RG-F-cf9c7ee152384ba37e38",
+        "to_id": "RG-F-873b743824356fbc98b7",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/flow.rs",
+        "to_path": "src/flow.rs",
+        "parent_blob": "6d8cd933d880d5c104ae30410e82538087282e1d",
+        "child_blob": "f7722f4fb73c31cfbf562222f5767e11864f2ab5",
+        "review": "find_callspec_for_op: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-89d1a3bc65108b92a474",
+        "from_id": "RG-F-89d1a3bc65108b92a474",
+        "to_id": "RG-F-02aff009ce146122520e",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "review": "get_call_specs: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-b1c59d7c1ce83f3fc877",
+        "from_id": "RG-F-b1c59d7c1ce83f3fc877",
+        "to_id": "RG-F-bdbeb8a17dfc1773937a",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "review": "get_call_specs_mut: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-6875a1df88043187e59d",
+        "from_id": "RG-F-6875a1df88043187e59d",
+        "to_id": "RG-F-aeed1ce92fc04c5aaf17",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "review": "get_call_specs_of_op: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-5923eb2467cb55ffa55f",
+        "from_id": "RG-F-5923eb2467cb55ffa55f",
+        "to_id": "RG-F-7f644254abac1693b1ff",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "review": "new_varnode_call_specs: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-5833ec87d885664efa5f",
+        "from_id": "RG-F-5833ec87d885664efa5f",
+        "to_id": "RG-F-85943640e89de9a361c8",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/unionresolve.rs",
+        "to_path": "src/unionresolve.rs",
+        "parent_blob": "cffe8789412f9984882e1fc52b3a20bda46e8b2b",
+        "child_blob": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
+        "review": "score_parameter: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-e7ba51c17a135fa5e918",
+        "from_id": "RG-F-e7ba51c17a135fa5e918",
+        "to_id": "RG-F-746a8b9fa443b0ba04a6",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "from_path": "src/unionresolve.rs",
+        "to_path": "src/unionresolve.rs",
+        "parent_blob": "cffe8789412f9984882e1fc52b3a20bda46e8b2b",
+        "child_blob": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
+        "review": "score_return_type: callspec identity lifecycle (Arc owner handles) (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-f828f9d8a2f59aebb57b",
+        "from_id": "RG-F-f828f9d8a2f59aebb57b",
+        "to_id": "RG-F-9e79ed98d1092ec72737",
+        "commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
+        "from_path": "src/merge.rs",
+        "to_path": "src/merge.rs",
+        "parent_blob": "3c69834d53507811ff1d34c5fdd40086c65f3ab4",
+        "child_blob": "365be16020196337d386eb215f0b280ece383847",
+        "review": "merge_test_must: merge_test_must returns Result under address-tied gates (e9a0b7a)",
+    },
+)
+CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = (
+    {
+        "base_id": "RG-F-5ec71c480ba4438dca3a",
+        "from_id": "RG-F-5ec71c480ba4438dca3a",
+        "commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+        "parent_blob": "ae2cf089a3f644385d8a64ce213f7f1b0b88103a",
+        "child_blob": "b44b6b2204becc01234d3dab8415899d83c7f777",
+        "reason": "removed by access-width gating; no successor (92daed3)",
+    },
+    {
+        "base_id": "RG-F-002a9ec13d8e062540b9",
+        "from_id": "RG-F-002a9ec13d8e062540b9",
+        "commit": "874e81f7b9877b519c8ab55b57cbac24de0918f0",
+        "parent_blob": "4fef0e1b7cbaf0ac1508b64cb5e7e0966748a588",
+        "child_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+        "reason": "superseded by canonical type-tree keys; no successor (874e81f)",
+    },
+    {
+        "base_id": "RG-F-bd9141cd6ae9f5a4ddad",
+        "from_id": "RG-F-bd9141cd6ae9f5a4ddad",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "parent_blob": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
+        "child_blob": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "reason": "replaced by owner-handle call-spec lookup; no successor (cad41c2)",
+    },
+    {
+        "base_id": "RG-F-e43c2d78ba8a0472a781",
+        "from_id": "RG-F-e43c2d78ba8a0472a781",
+        "commit": "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db",
+        "parent_blob": "b01176babb67aa227a2a00ed1ac402221dac2449",
+        "child_blob": "81f6344ef0bdecaba1c994c1b0cdfb9a53b5de1a",
+        "reason": "replaced by owner-handle call-spec lookup; no successor (cad41c2)",
+    },
+)
+CONTINUITY_REVIEWED_EPHEMERAL: tuple[dict[str, str], ...] = (
+    {
+        "base_id": "RG-F-763fefee4ab8d71f0289",
+        "from_id": "RG-F-763fefee4ab8d71f0289",
+        "commit": "23ef9c90a66be480f91ded91fa7e1e180faa57ce",
+        "parent_blob": "f2e73aa6795f35c93f8bceb6e2290a43c427b357",
+        "child_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
+    },
+)
 
 
 def _reviewed_transition(
@@ -2463,8 +2905,16 @@ def function_id_continuity_document(
     if len(tombstone_rows) != len({key for key, _ in tombstone_rows}):
         raise MigrationHarnessError("reviewed continuity tombstone allowlist has duplicates")
     tombstone_by_key = dict(tombstone_rows)
+    ephemeral_rows = [
+        ((rule.get("base_id"), rule.get("from_id"), rule.get("commit")), rule)
+        for rule in CONTINUITY_REVIEWED_EPHEMERAL
+    ]
+    if len(ephemeral_rows) != len({key for key, _ in ephemeral_rows}):
+        raise MigrationHarnessError("reviewed continuity ephemeral allowlist has duplicates")
+    ephemeral_by_key = dict(ephemeral_rows)
     used_reviewed: set[tuple[str, str, str]] = set()
     used_tombstones: set[tuple[str, str, str]] = set()
+    used_ephemeral: set[tuple[str, str, str]] = set()
     historical_owner_by_token = {token: token for token in baseline_ids}
 
     def claim_historical_token(token: str, base_id: str, role: str) -> None:
@@ -2616,6 +3066,32 @@ def function_id_continuity_document(
             base_id = tracked[source_token]
             rule_key = (base_id, source_token, commit)
             rule = tombstone_by_key.get(rule_key)
+            ephemeral_rule = ephemeral_by_key.get(rule_key)
+            if rule is None and ephemeral_rule is not None:
+                # Schema 1 cannot encode a class introduced and deleted entirely
+                # inside the window (its introduced_live terminal must be current
+                # while its tombstone origin must predate the checkpoint).  Such a
+                # class was never pinned in any ledger, so the exact reviewed
+                # allowlist retires it from the replay instead of emitting a row.
+                if states[base_id]["origin_kind"] != "introduced_live":
+                    raise MigrationHarnessError(
+                        "reviewed continuity ephemeral rule must target an "
+                        f"introduced-live class: {base_id}"
+                    )
+                child_blob = child_blob_by_path.get(str(old_record["path"]))
+                required = ("parent_blob", "child_blob")
+                if (child_blob is None
+                        or any(not ephemeral_rule.get(field) for field in required)
+                        or ephemeral_rule["parent_blob"] != parent_blob
+                        or ephemeral_rule["child_blob"] != child_blob):
+                    raise MigrationHarnessError(
+                        f"reviewed continuity ephemeral blob pins mismatch for {base_id}"
+                    )
+                del states[base_id]
+                introduced.pop(base_id, None)
+                del tracked[source_token]
+                used_ephemeral.add(rule_key)
+                continue
             if rule is None:
                 raise MigrationHarnessError(
                     "unproved post-baseline removal requires an exact reviewed transition "
@@ -2694,6 +3170,12 @@ def function_id_continuity_document(
         raise MigrationHarnessError("reviewed continuity transition coverage mismatch")
     if used_tombstones != set(tombstone_by_key):
         raise MigrationHarnessError("reviewed continuity tombstone coverage mismatch")
+    if used_ephemeral != set(ephemeral_by_key):
+        raise MigrationHarnessError(
+            "reviewed continuity ephemeral coverage mismatch: "
+            f"missing={sorted(set(ephemeral_by_key)-used_ephemeral)} "
+            f"extra={sorted(used_ephemeral-set(ephemeral_by_key))}"
+        )
     if set(tracked) != current_ids:
         raise MigrationHarnessError(
             "continuity replay does not equal current ledger IDs: "
@@ -2730,8 +3212,14 @@ def function_id_continuity_document(
         raise MigrationHarnessError(
             f"unexpected introduced-live functions: {sorted(live_introduced)}"
         )
-    if tombstones:
-        raise MigrationHarnessError("checkpoint unexpectedly contains continuity tombstones")
+    tombstone_keys = {
+        (str(row["base_id"]), str(row["aliases"][-1]), str(row["deleted_at_commit"]))
+        for row in tombstones
+    }
+    if tombstone_keys != CONTINUITY_EXPECTED_TOMBSTONES:
+        raise MigrationHarnessError(
+            f"unexpected checkpoint continuity tombstones: {sorted(tombstone_keys)}"
+        )
     for token, row in live_introduced.items():
         row["new_id"] = states[token]["current_id"]
 
