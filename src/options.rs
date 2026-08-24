@@ -44,6 +44,10 @@ pub trait ArchOption: Send + Sync {
     // RUGRA-GLUE: name (Rust trait returns a constant; C++ has protected field).
     fn name(&self) -> &str;
     // Ghidra: options.hh:92 ArchOption::apply
+    /// Apply the option. Returns the confirmation message; a message
+    /// starting with `"LowlevelError: "` represents the exception Ghidra
+    /// throws out of `apply` (the C++ signature has no error channel, the
+    /// exception propagates through `OptionDatabase::set`).
     fn apply(&self, arch: &mut Architecture, p1: &str, p2: &str, p3: &str) -> String;
 }
 
@@ -829,33 +833,103 @@ impl ArchOption for OptionNamespaceStrategy {
 // ===========================================================================
 // options.cc:999 OptionSplitDatatypes::apply
 // ===========================================================================
-/// Configure which sub-fields of a split-type get recombined. Faithful to
-/// `OptionSplitDatatypes::apply` (options.cc:999-1022).
+/// Control which data-type assignments are split into multiple
+/// COPY/LOAD/STORE operations. Faithful to `OptionSplitDatatypes::apply`
+/// (options.cc:999-1022): the three parameters are OR-ed as configuration
+/// bits (first parameter assigns, the rest OR in), and the "splitcopy" /
+/// "splitpointer" action groups are toggled from the resulting bits.
 pub struct OptionSplitDatatypes;
 impl ArchOption for OptionSplitDatatypes {
     // Ghidra: options.hh:343 OptionSplitDatatypes::OptionSplitDatatypes
     fn name(&self) -> &str {
-        "splitdatatypes"
+        "splitdatatype"
     }
     // Ghidra: options.cc:999 OptionSplitDatatypes::apply
-    fn apply(&self, arch: &mut Architecture, p1: &str, p2: &str, _p3: &str) -> String {
-        // p1 is "float", "pointer", "both", "none"
-        let mut new_config = arch.split_datatype_config;
-        match p1 {
-            "none" => new_config = 0,
-            "both" | "all" => {
-                new_config = split_datatype_option::OPTION_FLOAT
-                    | split_datatype_option::OPTION_POINTER;
+    fn apply(&self, arch: &mut Architecture, p1: &str, p2: &str, p3: &str) -> String {
+        // Ghidra: options.cc:1002 `uint4 oldConfig = glb->split_datatype_config;`
+        let old_config = arch.split_datatype_config;
+        // Ghidra: options.cc:1003 `glb->split_datatype_config = getOptionBit(p1);`
+        // An unknown p1 token throws LowlevelError BEFORE the assignment, so
+        // the configuration keeps its previous value.
+        let mut new_config = match get_option_bit(p1) {
+            Ok(bit) => bit,
+            Err(msg) => return format!("LowlevelError: {msg}"),
+        };
+        // Ghidra: options.cc:1004-1005 `|= getOptionBit(p2); |= getOptionBit(p3);`
+        // An unknown later token throws AFTER the earlier assignment took
+        // effect: Ghidra leaves split_datatype_config at the partial value
+        // and never reaches the toggleAction calls.
+        for param in [p2, p3] {
+            match get_option_bit(param) {
+                Ok(bit) => new_config |= bit,
+                Err(msg) => {
+                    arch.split_datatype_config = new_config;
+                    return format!("LowlevelError: {msg}");
+                }
             }
-            "float" => new_config |= split_datatype_option::OPTION_FLOAT,
-            "pointer" => new_config |= split_datatype_option::OPTION_POINTER,
-            _ => return format!("Bad splitdatatypes parameter: {p1}"),
-        }
-        if !p2.is_empty() && p2 != "noforce" {
-            // RUGRA-GLUE: no per-call force flag stored; recorded via config.
         }
         arch.split_datatype_config = new_config;
-        format!("Split datatype config = 0x{new_config:x}")
+        // Ghidra: options.cc:1007-1016 — toggle the "splitcopy"/"splitpointer"
+        // action groups on the current root Action.
+        let (splitcopy_on, splitpointer_on) = split_action_toggles(arch.split_datatype_config);
+        // RUGRA-GLUE: Ghidra calls
+        //   glb->allacts.toggleAction(glb->allacts.getCurrentName(),
+        //                             "splitcopy",  splitcopy_on);
+        //   glb->allacts.toggleAction(glb->allacts.getCurrentName(),
+        //                             "splitpointer", splitpointer_on);
+        // (options.cc:1008-1015, ActionDatabase::toggleAction action.cc:1036-1053).
+        // Architecture does not own an allacts field yet, so the exact
+        // on/off pair is computed here; once allacts lands on Architecture,
+        // forward these two booleans to its toggle_action.
+        let _ = (splitcopy_on, splitpointer_on);
+        // Ghidra: options.cc:1017-1019
+        if old_config == arch.split_datatype_config {
+            "Split data-type configuration unchanged".to_string()
+        } else {
+            "Split data-type configuration set".to_string()
+        }
+    }
+}
+
+// Ghidra: options.cc:982 OptionSplitDatatypes::getOptionBit
+/// Translate an option string to a configuration bit. Faithful to
+/// `OptionSplitDatatypes::getOptionBit` (options.cc:982-990): "" -> 0,
+/// "struct" -> 1, "array" -> 2, "pointer" -> 4; any other token is a
+/// LowlevelError("Unknown data-type split option: <val>"), surfaced here as
+/// `Err` carrying the same message text.
+pub fn get_option_bit(val: &str) -> Result<u32, String> {
+    use crate::arch::split_datatype as split_datatype_option;
+    if val.is_empty() {
+        return Ok(0);
+    }
+    if val == "struct" {
+        return Ok(split_datatype_option::OPTION_STRUCT);
+    }
+    if val == "array" {
+        return Ok(split_datatype_option::OPTION_ARRAY);
+    }
+    if val == "pointer" {
+        return Ok(split_datatype_option::OPTION_POINTER);
+    }
+    Err(format!("Unknown data-type split option: {val}"))
+}
+
+// RUGRA-GLUE: decomposition of the two toggleAction group switches that
+// OptionSplitDatatypes::apply performs (options.cc:1007-1016). Rugra's
+// Architecture does not yet own an ActionDatabase (allacts), so the
+// (splitcopy, splitpointer) on/off pair that Ghidra passes to
+// ActionDatabase::toggleAction (action.cc:1036-1053) — which adds/removes
+// the group from the current root's ActionGroupList and re-clones the root —
+// is computed as a pure function of the configuration bits. Wiring point:
+// once Architecture grows its allacts field, apply() should forward this
+// pair to allacts.toggle_action(get_current_name(), ...) directly.
+pub fn split_action_toggles(config: u32) -> (bool, bool) {
+    use crate::arch::split_datatype as split_datatype_option;
+    if config & (split_datatype_option::OPTION_STRUCT | split_datatype_option::OPTION_ARRAY) == 0 {
+        (false, false)
+    } else {
+        let pointers = config & split_datatype_option::OPTION_POINTER != 0;
+        (true, pointers)
     }
 }
 
@@ -908,25 +982,10 @@ impl ArchOption for OptionNanIgnore {
 // Local helpers (no Ghidra counterpart - pure Rust glue)
 // ===========================================================================
 
-/// Bit values used by `OptionAliasBlock` and `OptionSplitDatatypes`. These
-/// mirror Ghidra's internal enum values but are not exposed by name in
-/// `options.cc`, so they live here as `// RUGRA-GLUE`.
-///
-/// Ghidra's `OptionAliasBlock` accepts symbolic tokens ("struct", "array",
-/// ...) which it maps to numeric bits (lines 916-925). Rugra replicates the
-/// mapping in `alias_block_flag` below; the underlying numeric values are
-/// faithful to the C++ order (1, 2, 4, ...).
-pub mod split_datatype_option {
-    // RUGRA-GLUE: bit constants used by OptionSplitDatatypes. Ghidra's
-    // values are archesive-private (datatypespace/options).
-    pub const OPTION_FLOAT: u32 = 1;
-    pub const OPTION_POINTER: u32 = 2;
-}
-
-// Ghidra: options.cc:982 getOptionBit
+// Ghidra: options.cc:913 OptionAliasBlock::apply
 /// Translate a symbolic alias-block token into its bit value. Faithful to
 /// the inline bit mapping performed in `OptionAliasBlock::apply`
-/// (options.cc:982-995).
+/// (options.cc:913-928).
 pub fn alias_block_flag(name: &str) -> Option<i32> {
     // RUGRA-GLUE: Ghidra hashes these to enum values; we mirror the bit
     // layout in src/arch.rs (alias_block_level).
@@ -949,16 +1008,6 @@ pub fn alias_block_flag(name: &str) -> Option<i32> {
         "all" => Some(0xFFFF_FFFFu32 as i32),
         "none" => Some(0),
         _ => None,
-    }
-}
-
-/// Same lookup as `alias_block_flag` but applied to split-datatype tokens.
-// Ghidra: options.cc:982 getOptionBit (split-datatype variant)
-pub fn get_split_datatype_bit(name: &str) -> u32 {
-    match name {
-        "float" => split_datatype_option::OPTION_FLOAT,
-        "pointer" => split_datatype_option::OPTION_POINTER,
-        _ => 0,
     }
 }
 
@@ -1038,20 +1087,17 @@ fn parse_uint_any_base_u64(s: &str) -> Option<u64> {
 // RUGRA-GLUE: ElementId constants. Ghidra uses a runtime ElementId registry
 // (`element.cc`) with names registered in `options.cc` lines 23-63. Rugra
 // defines the numeric IDs as plain constants because the Decoder trait keys
-// off integer IDs (src/marshal.rs:389).
+// off integer IDs (src/marshal.rs:389); the values mirror the locked
+// options.cc registrations (also present in the marshal.rs name table).
 pub mod elem_ids {
-    // Ghidra: options.cc:23 ELEM_OPTIONSBODY
-    pub const ELEM_OPTIONSBODY: u32 = 174;
-    // Ghidra: options.cc:24 ELEM_OPTIONSHEAD
-    pub const ELEM_OPTIONSHEAD: u32 = 175;
-    // Ghidra: options.cc:25 ELEM_OPTIONSListItem
-    pub const ELEM_OPTIONSLIST: u32 = 176;
-    // Ghidra: options.cc:26 ELEM_PARAM1
-    pub const ELEM_PARAM1: u32 = 177;
-    // Ghidra: options.cc:27 ELEM_PARAM2
-    pub const ELEM_PARAM2: u32 = 178;
-    // Ghidra: options.cc:28 ELEM_PARAM3
-    pub const ELEM_PARAM3: u32 = 179;
+    // Ghidra: options.cc:50 ELEM_OPTIONSLIST
+    pub const ELEM_OPTIONSLIST: u32 = 201;
+    // Ghidra: options.cc:51 ELEM_PARAM1
+    pub const ELEM_PARAM1: u32 = 202;
+    // Ghidra: options.cc:52 ELEM_PARAM2
+    pub const ELEM_PARAM2: u32 = 203;
+    // Ghidra: options.cc:53 ELEM_PARAM3
+    pub const ELEM_PARAM3: u32 = 204;
 }
 
 // ===========================================================================
@@ -1256,17 +1302,20 @@ impl OptionDatabase {
         let mut p3 = String::new();
         // Ghidra: options.cc:166 `uint4 subId = decoder.openElement();`
         let sub_id = decoder.open_element();
-        // Ghidra: options.cc:167-180 - linear scan of PARAM1/PARAM2/PARAM3.
+        // Ghidra: options.cc:167-180 - linear scan of PARAM1/PARAM2/PARAM3;
+        //   each readString(ATTRIB_CONTENT) reads the param element's text
+        //   content (marshal.cc:390-396).
+        let content_attrib = crate::marshal::AttributeId::new("XMLcontent", 1);
         if sub_id == elem_ids::ELEM_PARAM1 {
-            p1 = decoder.read_string();
+            p1 = decoder.read_string_attr(&content_attrib);
             decoder.close_element(sub_id);
             let sub2 = decoder.open_element();
             if sub2 == elem_ids::ELEM_PARAM2 {
-                p2 = decoder.read_string();
+                p2 = decoder.read_string_attr(&content_attrib);
                 decoder.close_element(sub2);
                 let sub3 = decoder.open_element();
                 if sub3 == elem_ids::ELEM_PARAM3 {
-                    p3 = decoder.read_string();
+                    p3 = decoder.read_string_attr(&content_attrib);
                     decoder.close_element(sub3);
                 } else if sub3 != 0 {
                     decoder.close_element(sub3);
@@ -1277,14 +1326,21 @@ impl OptionDatabase {
         } else if sub_id == 0 {
             // Ghidra: options.cc:181 `p1 = decoder.readString(ATTRIB_CONTENT);`
             // No children: the outer element's text content is p1.
-            p1 = decoder.read_string();
+            p1 = decoder.read_string_attr(&content_attrib);
         } else {
             decoder.close_element(sub_id);
         }
         // Ghidra: options.cc:183 `decoder.closeElement(elemId);`
         decoder.close_element(elem_id);
-        // Ghidra: options.cc:184 `set(elemId,p1,p2,p3);`
-        self.set(arch, &opt_name, &p1, &p2, &p3);
+        // Ghidra: options.cc:184 `set(elemId,p1,p2,p3);` — a LowlevelError
+        // thrown by the option's apply propagates out of decodeOne; options
+        // surface thrown errors as message text prefixed "LowlevelError: ",
+        // which is propagated as Err here.
+        if let Some(msg) = self.set(arch, &opt_name, &p1, &p2, &p3) {
+            if msg.starts_with("LowlevelError: ") {
+                return Err(msg);
+            }
+        }
         Ok(())
     }
 
@@ -1386,7 +1442,7 @@ mod tests {
             "aliasblock",
             "maxinstruction",
             "namespacestrategy",
-            "splitdatatypes",
+            "splitdatatype",
             "nanignore",
         ] {
             assert!(db.has_option(n), "missing option {n}");
@@ -1508,16 +1564,41 @@ mod tests {
 
     #[test]
     fn test_option_split_datatypes() {
+        use crate::arch::split_datatype as bits;
         let mut arch = make_arch();
         let mut db = OptionDatabase::new();
-        arch.split_datatype_config = 0;
-        db.try_set(&mut arch, "splitdatatypes", "both", "", "").unwrap();
-        assert_eq!(
-            arch.split_datatype_config,
-            split_datatype_option::OPTION_FLOAT | split_datatype_option::OPTION_POINTER
-        );
-        db.try_set(&mut arch, "splitdatatypes", "none", "", "").unwrap();
+        // Default is struct|array|pointer (architecture.cc:1430-1431).
+        assert_eq!(arch.split_datatype_config, 7);
+        // Empty params reset the configuration to 0 (options.cc:1003-1005).
+        let msg = db.try_set(&mut arch, "splitdatatype", "", "", "").unwrap();
         assert_eq!(arch.split_datatype_config, 0);
+        assert_eq!(msg, "Split data-type configuration set");
+        // struct alone: splitcopy group on, splitpointer off.
+        db.try_set(&mut arch, "splitdatatype", "struct", "", "").unwrap();
+        assert_eq!(arch.split_datatype_config, bits::OPTION_STRUCT);
+        assert_eq!(split_action_toggles(arch.split_datatype_config), (true, false));
+        // Repeating the same configuration returns "unchanged" (options.cc:1017-1019).
+        let msg = db.try_set(&mut arch, "splitdatatype", "struct", "", "").unwrap();
+        assert_eq!(msg, "Split data-type configuration unchanged");
+        // Three params OR together, first one assigns.
+        db.try_set(&mut arch, "splitdatatype", "array", "pointer", "struct").unwrap();
+        assert_eq!(arch.split_datatype_config, 7);
+        assert_eq!(split_action_toggles(arch.split_datatype_config), (true, true));
+        // Pointer alone leaves both groups off (options.cc:1007-1009).
+        db.try_set(&mut arch, "splitdatatype", "pointer", "", "").unwrap();
+        assert_eq!(arch.split_datatype_config, bits::OPTION_POINTER);
+        assert_eq!(split_action_toggles(arch.split_datatype_config), (false, false));
+        // Old 11.x token "float" is rejected as an unknown option token.
+        let msg = db.try_set(&mut arch, "splitdatatype", "float", "", "").unwrap();
+        assert_eq!(msg, "LowlevelError: Unknown data-type split option: float");
+        assert_eq!(arch.split_datatype_config, bits::OPTION_POINTER);
+        // A bad p2 token throws after p1's assignment took effect
+        // (options.cc:1003-1004 evaluation order).
+        let msg = db.try_set(&mut arch, "splitdatatype", "struct", "bogus", "").unwrap();
+        assert_eq!(msg, "LowlevelError: Unknown data-type split option: bogus");
+        assert_eq!(arch.split_datatype_config, bits::OPTION_STRUCT);
+        // The 11.x plural name is no longer registered (options.hh:343).
+        assert!(db.try_set(&mut arch, "splitdatatypes", "struct", "", "").is_err());
     }
 
     #[test]
@@ -1625,9 +1706,18 @@ mod tests {
     }
 
     #[test]
-    fn test_get_split_datatype_bit() {
-        assert_eq!(get_split_datatype_bit("float"), split_datatype_option::OPTION_FLOAT);
-        assert_eq!(get_split_datatype_bit("pointer"), split_datatype_option::OPTION_POINTER);
-        assert_eq!(get_split_datatype_bit("unknown"), 0);
+    fn test_get_option_bit() {
+        assert_eq!(get_option_bit(""), Ok(0));
+        assert_eq!(get_option_bit("struct"), Ok(1));
+        assert_eq!(get_option_bit("array"), Ok(2));
+        assert_eq!(get_option_bit("pointer"), Ok(4));
+        assert_eq!(
+            get_option_bit("float"),
+            Err("Unknown data-type split option: float".to_string())
+        );
+        assert_eq!(
+            get_option_bit("bogus"),
+            Err("Unknown data-type split option: bogus".to_string())
+        );
     }
 }

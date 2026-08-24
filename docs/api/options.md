@@ -29,11 +29,19 @@ Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/options.{
 - `alias_block_flag(name) -> Option<i32>` — Rugra symbolic token → bit mask.
   This accepts tokens and combinations not present in Ghidra's four-level
   `none/struct/array/all` model (`OPTIONS-0001`).
-- `get_split_datatype_bit(name) -> u32` — float/pointer → split-datatype bit.
-
-## Module `split_datatype_option`
-- `OPTION_FLOAT: u32 = 1`, `OPTION_POINTER: u32 = 2`. `// RUGRA-GLUE` bit
-  constants used by `OptionSplitDatatypes::apply` (options.cc:999).
+- `get_option_bit(val) -> Result<u32, String>` — translate a split-datatype
+  option token to its configuration bit, faithful to
+  `OptionSplitDatatypes::getOptionBit` (options.cc:982-990): `""`→0,
+  `"struct"`→1, `"array"`→2, `"pointer"`→4; any other token is
+  `LowlevelError("Unknown data-type split option: <val>")`, carried as `Err`
+  with the same message text.
+- `split_action_toggles(config) -> (bool, bool)` — the (splitcopy,
+  splitpointer) on/off pair that `OptionSplitDatatypes::apply` passes to
+  `ActionDatabase::toggleAction` (options.cc:1007-1016): both off unless the
+  struct or array bit is set; otherwise splitcopy on and splitpointer =
+  pointer bit. `// RUGRA-GLUE` decomposition — `Architecture` has no `allacts`
+  field yet, so the pair is computed rather than applied to a root Action's
+  `ActionGroupList`; the wiring point is documented in the source.
 
 ## Module `elem_ids`
 `<optionslist>` XML element ids. Rugra currently holds private `u32` values;
@@ -79,7 +87,7 @@ trait resolves element ids to names.
 | `maxinstruction` | `max_instructions` | Set max instructions/function |
 | `aliasblock` | `alias_block_level` | Set alias blocking (none/struct/array/.../all) |
 | `nanignore` | `nan_ignore_all`/`nan_ignore_compare` | Set NaN ignore mode (all/none/compare/input) |
-| `splitdatatypes` | `split_datatype_config` | Set datatype split config (none/float/pointer/both) |
+| `splitdatatype` | `split_datatype_config` | OR struct(1)/array(2)/pointer(4) bits from up to 3 params; toggles splitcopy/splitpointer groups (options.cc:999-1022) |
 | `defaultprototype` | `defaultfp_name` | Set default proto model via `set_default_model` |
 | `protoeval` | `evalfp_current_name` | Set prototype eval model ("default" resets) |
 | `ignoreunimplemented` | `flowoptions & IGNORE_UNIMPLEMENTED` | Toggle flow flag |
@@ -124,8 +132,18 @@ not parity evidence.
 - `OptionExtraPop` parses its parameter but cannot store it —
   `ProtoModelEntry` has no `extrapop` field.
 - PrintLanguage / ActionDatabase / ContextCache / function-lookup hooks.
-- `nullprinting` and `splitdatatype` names differ from Rugra's registered
-  spellings; the option element IDs and registration set/order differ.
-- Invalid toggles, numeric bounds, alias levels, split-datatype parameters,
-  NaN rule toggles, and `decode_one` error propagation differ from Ghidra.
+- `nullprinting` name differs from Rugra's registered spelling; the option
+  element IDs and registration set/order differ elsewhere (`OPTIONS-0001`).
+- Invalid toggles, numeric bounds, alias levels, NaN rule toggles, and
+  `decode_one` error propagation differ from Ghidra (`OPTIONS-0001`).
+- `OptionSplitDatatypes` (fixed 2026-08-24, `OPTIONS-SPLITDATATYPE-SEMANTICS-0001`):
+  bit semantics struct/array/pointer (1/2/4), singular option name, p1-assign
+  p2/p3-OR evaluation order, partial-mutation-on-error, return messages, and
+  the toggleAction decision logic are ported and oracle-verified via
+  `tests/oracle/options_splitdatatype_1204.*`; residual wiring: the
+  (splitcopy, splitpointer) pair is computed by `split_action_toggles`
+  instead of being applied to a root Action's `ActionGroupList` because
+  `Architecture` has no `allacts` field yet, and `LowlevelError` on unknown
+  tokens is carried as the returned message string rather than a thrown
+  error (`ArchOption::apply` returns `String`).
 <!-- annotation-pass: 2026-08-11 (ANN-A, mapping comments only) -->
