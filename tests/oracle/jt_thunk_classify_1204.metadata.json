@@ -1,17 +1,17 @@
 {
   "schema_version": 3,
   "fixture_id": "JT-THUNK-CLASSIFY-1204",
-  "status_note": "Re-pin in progress after JUMPTABLE-PIPELINE-0001 seg1 (73b5ef2) replaced src/jumptable.rs and extended docs/api/jumptable.md: comparand re-pinned (overlay 3ebf680c..., api document 78fb3c4e..., adapted fixture double, runner focused-test expectation 31->35, filtered total unchanged 1537). The previous successful validation of the 31-test pin is preserved in git history (dd16526). This runner (sha256 dce12d50b0f7dd3f15a5f20443486b7030cce2adcacd6cac643e1b1e84b864f3) has not yet executed; the 24-case bilateral expectation stays prospective until the recorded run confirms the byte-identical projection. Overall remains MISMATCH for three registered reasons: JUMPTABLE-PIPELINE-0001 (production flow/funcdata consumption of the typed result awaits segment 2), JUMPTABLE-SORT-TOOLCHAIN-0001 (cross-STL equivalent-key portability), and JUMPTABLE-EMULFN-0001 (fixture-level channel now typed; production EmulateFunction loader bridge verified by segment 1 within its fixture scope). Strict whole-compiler-spec input identity is still not claimed because Rugra output parameter lists remain input-style under FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001; the 24 cases do not consume that dispatch.",
+  "status_note": "Re-pinned runner executed end-to-end at captured candidate commit d9171ef107031ef5e21dea980319fe6e9982311f: locked C++ comparand built from oracle commit e40ed13014025f82488b1f8f7bca566894ac376b (cpp tree and Makefile blob pinned, 79-member libdecomp.a verified against the independently expanded Makefile manifest), current Rust comparand built from the captured candidate blobs (post-JUMPTABLE-PIPELINE-0001-seg1 src/jumptable.rs 3ebf680c..., docs/api/jumptable.md 78fb3c4e..., adapted Result-signature fixture double) over the pinned base archive 8d3a556 with Cargo.lock-authenticated vendored sources (35 focused jumptable tests and the filtered doc_sync run passed; filtered total unchanged at 1537), linked by direct rustc against the exact run-local rlib/native archive, and both comparands executed all 24 cases with byte-identical stdout (sha256 c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0), empty stderr and exit 0, revalidated after the run against immutable snapshot, oracle source, toolchain, Git identity and blob readback. The 24-case projection is therefore MATCH as observed, pending independent review; the success evidence bundle is retained under the staging root as jt-thunk-classify-evidence-d9171ef107031ef5e21dea980319fe6e9982311f. Two earlier attempts of this same runner completed the full bilateral build and 24-case comparison byte-identically but were rejected by the post-run HEAD-drift check because concurrent integration waves committed f1abcc1 and d9171ef/346a89c during the evidence window (failure logs preserved as rugra-jt-thunk-run-failure.1d7aKu.log and .vtmjYs.log); neither touched this fixture's owned paths. Overall remains MISMATCH for three registered reasons: JUMPTABLE-PIPELINE-0001 (production flow/funcdata consumption of the typed result awaits segment 2), JUMPTABLE-SORT-TOOLCHAIN-0001 (cross-STL equivalent-key portability), and JUMPTABLE-EMULFN-0001 (fixture-level channel now typed; production consumption verified only within fixture scope). Strict whole-compiler-spec input identity is still not claimed because Rugra output parameter lists remain input-style under FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001; the 24 cases do not consume that dispatch.",
   "latest_validation": {
-    "status": "UNTESTED",
+    "status": "PASS",
     "attempted_runner_sha256": "dce12d50b0f7dd3f15a5f20443486b7030cce2adcacd6cac643e1b1e84b864f3",
     "cargo_result": "35 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out",
-    "runner_exit_code": null,
-    "failure_stage": "not yet executed; re-pin required after JUMPTABLE-PIPELINE-0001 seg1 (73b5ef2) changed src/jumptable.rs (4fe0f3c722905618610dfa2d957df894ab1bc1ae88dd0ac77a7065891eb575b7 -> 3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9 sha256) and docs/api/jumptable.md (5b87732c64f88d5fde577125ab1c8e7973700efd171df008cfd14dc322704708 -> 78fb3c4e33a2b35d01d431249ca95dd48df2354c304c60af904b5a844eae8553 sha256), which invalidated the pinned comparand before the runner could run; the fixture double also needed the JumpModel recover_model/build_addresses Result signature adaptation",
+    "runner_exit_code": 0,
+    "failure_stage": null,
     "failure_text": null,
-    "run_local_artifacts_retained": false,
+    "run_local_artifacts_retained": true,
     "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, pre/post snapshot/oracle/toolchain readback, relocation of the immutable staging root from the usrquota-exhausted /tmp tmpfs to the pinned task-owned home directory /home/wirs/.cache/a3-jtthunk-tmp (also exported as TMPDIR to every compiler invocation), pinned tar.umask=0022 archive member modes, admission of exactly the Cargo 1.97 registry CACHEDIR.TAG marker, post-execution metadata state acceptance keyed to this exact runner hash, and retention of a compact success evidence bundle under the staging root; focused cargo expectation re-pinned 31->35 jumptable tests after seg1 added test_recover_model_no_parent_fail_closed and test_jump_table_recover_model_selection_chain plus emulator channel tests (filtered total unchanged at 1537)",
-    "current_runner_executed": false
+    "current_runner_executed": true
   },
   "candidate_evidence": {
     "capture_policy": "one captured HEAD commit/tree with all six owned paths clean; their tree and stage-0 index mode/OID agree, each owned worktree path is independently read once through O_NOFOLLOW for pre/post mode/content readback, and captured commit blobs are the cross-file atomic comparand; unrelated worktree paths are outside this gate",
@@ -675,67 +675,67 @@
   },
   "expected_results_provenance": {
     "ghidra": "OBSERVED_LOCKED_CPP_24_CASE_OUTPUT",
-    "rugra": "PROSPECTIVE_CURRENT_CANDIDATE_EXPECTATION_NOT_YET_EXECUTED",
-    "diff": "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED"
+    "rugra": "OBSERVED_CURRENT_CANDIDATE_24_CASE_OUTPUT",
+    "diff": "OBSERVED_ZERO_DIFF_24_CASE_BILATERAL"
   },
   "coverage": {
     "single_target_boundary": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed 24-case bilateral run observed the zero, near, 0xffff and 0x10000 single-target thunk boundary byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "multi_target_bypass": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the two-target bypass of the single-target thunk check byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "is_reachable_guard_matrix": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed one-level false, two-level parent update, BOOLEAN_FLIP, nonzero polarity, sizeOut!=2, last-op non-CBRANCH and nonconstant-condition guards byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "override_short_circuit": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the override short-circuit before reachability and success-only collapse byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "recover_preconditions_and_collect_gate": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed recoverModel failure, tableSize zero and collectloads=false gates byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "recover_thunk_and_model_reject": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed recover-driven thunk classification and model rejection with pre-error mutations byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "successful_truncation_warning_order": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed successful truncation, warning emission order and post-sanity collapse byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "equal_address_pinned_toolchain_order": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the 3/16/17-entry address-only equal-key cases byte-identically, including the pinned GCC16 std::sort threshold permutation; heap fallback remains outside the retained cases and stays covered by the portability residual.",
       "residual_todo_ids": []
     },
     "address_space_wrap_and_order": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the 1-byte-space wrap and full space-index/offset ordering byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "production_load_input_invariant": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the fresh-producer num=1 invariant and loadcounts lifecycle byte-identically on both comparands.",
       "residual_todo_ids": []
     },
@@ -823,6 +823,6 @@
       ]
     }
   ],
-  "projection_status": "UNTESTED",
+  "projection_status": "MATCH",
   "overall_status": "MISMATCH"
 }
