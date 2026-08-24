@@ -422,10 +422,13 @@ SeqNum 空间化（随 varnode 消费方迁移）。
   `encode_attributes`/`encode_attributes_with_size`（space.cc:143/156）→ close；
   null base 不写属性（m_maximal 哨兵在 C++ 解引用 `~0` 伪指针为 UB，Rust 同样不写）。
 - `SpaceAddress::decode(decoder, registry)` / `decode_with_size`（address.cc:205/226 经
-  pcoderaw.cc:107-130 `VarnodeData::decodeFromAttributes`）：属性游标找 `space` →
+  pcoderaw.cc:33 `VarnodeData::decodeFromAttributes`；S1 修正：该函数定义在 :33，
+  rewind :44、重走 :45）：属性游标找 `space` →
   registry 按名解析（`XmlDecode::readSpace`/marshal.cc:400-409 语义，未知名
   `Err("Unknown address space name: X")`）→ `rewind_attributes` → 空间的
-  `decode_attributes`（space.cc:169）重走属性取 offset（缺 offset
+  `decode_attributes(decoder, registry, size)`（space.cc:169；2026-08-24 起签名带
+  registry，Join piece 解码需 `getManager()->getSpaceByName`，MARSHAL-XML-TEXT-0001）
+  重走属性取 offset（缺 offset
   `Err("Address is missing offset")`）；`name`（寄存器形）依赖 Translate register 表
   （SPACE-0001 残差）显式报错；无 `space` 属性的 `<addr/>` 得 invalid 地址（C++ 的
   offset 未初始化在 Rust 规范化为 0）。
@@ -433,3 +436,5 @@ SeqNum 空间化（随 varnode 消费方迁移）。
 Oracle 证据：与 space.md 同一条目——`tests/oracle/fspec_space_identity_1204.{cc,rs}` +
 `tools/run_fspec_space_identity_oracle.sh`（5 case 逐字节 MATCH，encode/decode case 覆盖
 fspec invalid/valid-entry 投影、ram 自往返、按名 resolve、未知名与空 `<addr/>` 路径）。
+2026-08-24 起 Join 编解码另见 `tests/oracle/marshal_packed_join_1204.*`
+（MARSHAL-XML-TEXT-0001）。

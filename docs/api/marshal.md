@@ -86,6 +86,9 @@ Write structured data (marshal.hh). Methods:
 - `write_bool(attrib_id, val)`, `write_signed_integer(attrib_id, val)`,
   `write_unsigned_integer(attrib_id, val)`, `write_string(attrib_id, val)`,
   `write_string_indexed(attrib_id, index, val)`.
+- `write_space(attrib_id, spc)`（marshal.hh:368 纯虚；XML/树形态写空间名，
+  marshal.cc:569；packed 形态写特殊空间类型字节或空间 index，
+  marshal.cc:1193）。
 
 ### `Decoder`
 Read structured data (marshal.hh:99). Methods:
@@ -93,6 +96,15 @@ Read structured data (marshal.hh:99). Methods:
   `open_element_matching(elem_id) -> u32`, `close_element(id)`,
   `close_element_skipping(id)`.
 - `next_attribute_id() -> u32`, `rewind_attributes()`.
+- `get_indexed_attribute_id(attrib_id) -> u32`（marshal.hh:165；XML 侧按
+  属性名十进制后缀重释为 `base_id+(val-1)`，marshal.cc:243；packed 侧恒返回
+  ATTRIB_UNKNOWN，marshal.cc:825）。
+- `read_space(spc_manager) -> Result<AddrSpace, String>`（XML 按名解析，
+  未知名 `Unknown address space name: <nm>`，marshal.cc:400；packed 按
+  index/特殊码解析，index 空 `Unknown address space index`、非 STACK/JOIN
+  特殊码 `Cannot marshal special address space`、非空间属性
+  `Expecting space attribute`，marshal.cc:997-1031。Ghidra 的 decoder 在构造时
+  持有 `const AddrSpaceManager*`，Rust 按调用传参——同一对象）。
 - `read_bool()`, `read_bool_attr(attrib_id)`, `read_signed_integer()`,
   `read_signed_integer_attr(attrib_id)`, `read_unsigned_integer()`,
   `read_unsigned_integer_attr(attrib_id)`, `read_string()`,
@@ -118,9 +130,11 @@ XmlDecode).
 ## L3 gaps
 - Actual XML text serialization (writing the DOM back out as XML bytes) —
   ingestion is now covered (see MARSHAL-XML-TEXT-0001 below).
-- `readSpace`/`writeSpace`/`readOpcode`/`writeOpcode` (require AddressSpace/
-  OpCode integration).
+- `readOpcode`/`writeOpcode` (require OpCode integration);
+  `readSpace`/`writeSpace` landed 2026-08-24 (see the packed/join section).
 - `readSignedIntegerExpectString`.
+- `TreeEncoder::write_space` 的 ATTRIB_CONTENT 文本值形态（marshal.cc:572-579）
+  对树编码器不可达（树按名存属性，与 `write_string` 的处理一致）。
 
 ## MARSHAL-ID-0001 oracle status
 
@@ -206,3 +220,41 @@ close/open error behavior remain registered residuals.
 八进制、最长合法前缀、无数字→0=流失败初值、溢出饱和），四个函数标注
 改为 `// Ghidra: marshal.cc:<line> XmlDecode::read…`（原 RUGRA-GLUE 注释
 不实）。新增单元测试 `test_cpp_stream_integer_bases`。
+
+# 2026-08-24：packed 特殊空间编解码 + Join piece 编解码（MARSHAL-XML-TEXT-0001）
+
+R5 复核登记的两项残差就此落地（fixture
+`tests/oracle/marshal_packed_join_1204.*`）：
+
+## `PackedEncode::write_space`（marshal.cc:1193-1218）
+属性头后按 `spc->getType()` 分派：FSPEC→`(TYPECODE_SPECIALSPACE<<4)|2`（0x62）、
+IOP→0x63、JOIN→0x61；SPACEBASE 且 `isFormalStackSpace()`→0x60（STACK），否则
+0x64（SPACEBASE，二级寄存器偏移空间）；其余走默认臂
+`writeInteger(TYPECODE_ADDRESSSPACE<<4, spc->getIndex())`。
+
+## `PackedDecode::read_space`（marshal.cc:997-1031）
+- TYPECODE_ADDRESSSPACE：变长整数=index → `getSpace(index)`，空槽
+  `DecoderError("Unknown address space index")`。
+- TYPECODE_SPECIALSPACE：length 字段=特殊码——仅 STACK（`getStackSpace`）与
+  JOIN（`getJoinSpace`）可解，其余（含 fspec=2/iop=3/spacebase=4）
+  `DecoderError("Cannot marshal special address space")`（编码侧写、解码侧拒的
+  非对称是 Ghidra 原文语义）。
+- 其他类型：跳过剩余数据后 `DecoderError("Expecting space attribute")`。
+
+## `TreeEncoder`（XmlEncode 形态）
+- `write_string_indexed` 修正为 `{base}{index+1}`（marshal.cc:559-567 的 1-based
+  无分隔符形态；原 `{base}_{index}` 为自创）。
+- `write_space` = `write_string(name)`（marshal.cc:580）。
+- `get_indexed_attribute_id`（marshal.cc:243-260）：游标越界/前缀不匹配→
+  ATTRIB_UNKNOWN；十进制后缀解析 `base_id+(val-1)`；无数字
+  `LowlevelError("Bad indexed attribute: " + nm)` panic。
+- `read_space`（marshal.cc:400-409）：当前属性值按名 `get_space_by_name`，
+  未知名 `Err("Unknown address space name: {nm}")`。
+
+## 残差登记（fixture metadata coverage）
+1. join piece 的寄存器名形态（无 `:`，space.cc:566-569 走
+   `getTrans()->getRegister`）：register 表属 SPACE-0001，Rust 显式
+   `Err("register-name join piece requires the Translate register table")`。
+2. 未知名 piece 空间：C++ 赋 null 后靠 `JoinRecord::operator<` 的 size 先比较
+   （translate.cc:172-191）不触空解引用而"成功"；Rust 非可选空间句柄在
+   查名点 `Err("Unknown address space name: {nm}")` 拒绝。

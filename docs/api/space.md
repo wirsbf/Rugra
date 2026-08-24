@@ -493,3 +493,41 @@ resolve + 未知名/空 `<addr/>` 拒绝路径、Range 跨空间 contains/overla
 never-decode 守卫）。残留（coverage 表 UNTESTED）：PackedEncode::writeSpace 特殊空间字节
 与 PackedDecode readSpace 拒绝（MARSHAL-XML-TEXT-0001）、IopSpace::printRaw
 （SPACE-IOP-PRINTRAW-0001）、varnode/funcdata 消费侧迁移（本 TODO 切片2）。
+
+### 2026-08-24：MARSHAL-XML-TEXT-0001（Ghidra space.cc:502-531/539-588 JoinSpace piece 编解码）
+
+R5 复核登记的两项残差落地（fixture `tests/oracle/marshal_packed_join_1204.*`）：
+
+- `AddrSpace::encode_attributes` / `encode_attributes_with_size` 的 Join 分支不再
+  panic：`encode_attributes_join`（space.cc:502-519）= `getManager()->findJoin(offset)`
+  （"Record must already exist" 契约；unlinked → `LowlevelError("Unlinked join
+  address")` panic）→ `writeSpace(ATTRIB_SPACE, this)`（经 Encoder 虚分派，
+  XML 写名/packed 写 0x61 特殊字节）→ 每片（最显著在前）写
+  `writeStringIndexed(ATTRIB_PIECE, i, "{name}:0x{off:x}:{size}")`（hex 操纵子
+  印 offset、dec 还原印 size）→ piece 数 > MAX_PIECES(=64, space.hh:233) 抛
+  "Exceeded maximum pieces in one join address" → 单片 join 追加
+  ATTRIB_LOGICALSIZE=unified.size。3-arg 形态忽略 size 直接委托（space.cc:527-531）。
+- 基类路径与 fspec valid-entry 路径的 `writeString(space名)` 全部换成
+  `encoder.write_space(...)`（space.cc:146 / fspec.cc:2130 的 writeSpace 虚调用；
+  Iop 两形态仍写字面量 "iop" 字符串，op.hh:49-50 原文如此）。
+- `AddrSpace::decode_attributes(decoder, spc_manager, &mut size)` 新增
+  `spc_manager: &SpaceRegistry` 参数（Ghidra 的空间经 `getManager()`（space.hh:118）
+  自持 manager；Rust 空间只带 join 表反链，故按调用显式传同一对象）。Join 分支
+  `decode_attributes_join`（space.cc:539-588）：属性 id 游标循环——ATTRIB_LOGICALSIZE
+  (id 92)→`readUnsignedInteger` 存 logicalsize；ATTRIB_UNKNOWN→
+  `getIndexedAttributeId(ATTRIB_PIECE)` 重释（XML 名后缀 1-based；packed 恒
+  UNKNOWN 因 header 已带 94+i）；id < 94 跳过；pos = id-94，pos > 64 跳过（不读
+  值）；pieces 按 pos 增长就位（洞留零片）；片串无 `:` = 寄存器名形态（SPACE-0001
+  残差，显式 Err）；一 `:` 恰好 = `{空间名}:{offset}:{size}`，缺第二个 `:` 抛
+  "join address piece attribute is malformed"，数字经 `cpp_stream_unsigned`
+  流式自动进制；末尾 `findAddJoin(pieces, logicalsize)`（dedup 命中返回原
+  unified offset）+ size 出参=unified.size。
+- `attrib_logicalsize()/attrib_piece()`（space.cc:24/30 锁定 id 92/94）与
+  `MAX_PIECES = 64`（space.hh:233）新增。
+
+Oracle 证据：`tests/oracle/marshal_packed_join_1204.{cc,rs}` +
+`tools/run_marshal_packed_join_oracle.sh`（锁定 12.0.4，packed 特殊空间字节/
+readSpace 拒绝路径/packed+XML 双形态 join 往返/边界（unlinked、malformed、
+超限 piece、dedup、float 扩展 logicalsize）逐字节 MATCH）。残留（coverage 表
+UNTESTED）：寄存器名 piece 形态（SPACE-0001）、未知名 piece 空间的 C++ null-space
+UB-邻接行为（Rust 在查名点拒绝）。

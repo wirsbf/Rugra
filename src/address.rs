@@ -1288,8 +1288,8 @@ impl SpaceAddress {
         size: &mut u32,
     ) -> Result<SpaceAddress, String> {
         let elem_id = decoder.open_element();
-        // VarnodeData::decodeFromAttributes (pcoderaw.cc:107): space starts
-        // null, size starts 0.
+        // VarnodeData::decodeFromAttributes (pcoderaw.cc:33; rewind :44,
+        // re-walk :45): space starts null, size starts 0.
         let mut space: Option<AddrSpace> = None;
         let mut offset: u64 = 0;
         loop {
@@ -1308,7 +1308,7 @@ impl SpaceAddress {
                     // decoder.rewindAttributes();
                     decoder.rewind_attributes();
                     // offset = space->decodeAttributes(decoder,size);
-                    offset = spc.decode_attributes(decoder, size)?;
+                    offset = spc.decode_attributes(decoder, registry, size)?;
                     space = Some(spc);
                     break;
                 }

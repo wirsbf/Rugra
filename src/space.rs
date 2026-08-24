@@ -1064,6 +1064,22 @@ pub fn attrib_offset() -> crate::marshal::AttributeId {
 pub fn attrib_size() -> crate::marshal::AttributeId {
     crate::marshal::AttributeId::new("size", 19)
 }
+// Ghidra: space.cc:24 ATTRIB_LOGICALSIZE
+/// Marshaling attribute "logicalsize" (locked id 92) — the logical size of
+/// a single-piece join (float extension).
+pub fn attrib_logicalsize() -> crate::marshal::AttributeId {
+    crate::marshal::AttributeId::new("logicalsize", 92)
+}
+// Ghidra: space.cc:30 ATTRIB_PIECE
+/// Marshaling attribute "piece" (locked id 94; indexed slots 94+ hold the
+/// join pieces, most significant first).
+pub fn attrib_piece() -> crate::marshal::AttributeId {
+    crate::marshal::AttributeId::new("piece", 94)
+}
+
+// Ghidra: space.hh:233 JoinSpace::MAX_PIECES
+/// Maximum number of pieces that can be marshaled in one join address.
+pub const MAX_PIECES: usize = 64;
 
 // RUGRA-GLUE: SpaceVarnodeData (Ghidra's VarnodeData in translate.hh carries
 // an `AddrSpace *`; the legacy enum-based `VarnodeData` above cannot express
@@ -1680,10 +1696,13 @@ impl AddrSpace {
     /// offset's call spec — an invalid entry address writes only the
     /// literal "fspec", a valid one writes the ENTRY space name and ENTRY
     /// offset (fspec.cc:2124-2136), i.e. the encoded form never carries the
-    /// fspec offset itself. `writeSpace` reduces to writing the space name
-    /// string in the XML/tree encoding (XmlEncode::writeSpace,
-    /// marshal.cc). The JoinSpace override (space.cc:502) is not ported
-    /// here and fails loudly (MARSHAL-XML-TEXT-0001 residual).
+    /// fspec offset itself; the JoinSpace override writes the join space
+    /// plus one indexed ATTRIB_PIECE per piece and ATTRIB_LOGICALSIZE for a
+    /// single-piece join (space.cc:502-519).
+    /// `writeSpace` is virtual on the encoder (marshal.hh:368): the XML/tree
+    /// form renders the space name string (XmlEncode::writeSpace,
+    /// marshal.cc:569), the packed form the special-space byte or index
+    /// (PackedEncode::writeSpace, marshal.cc:1193).
     pub fn encode_attributes(
         &self,
         encoder: &mut dyn crate::marshal::Encoder,
@@ -1700,13 +1719,15 @@ impl AddrSpace {
                 self.encode_attributes_fspec(encoder, offset, None);
                 return;
             }
-            SpaceType::Join => panic!(
-                "JoinSpace::encodeAttributes piece encoding is not ported (MARSHAL-XML-TEXT-0001)"
-            ),
+            // Ghidra: space.cc:502 JoinSpace::encodeAttributes override.
+            SpaceType::Join => {
+                self.encode_attributes_join(encoder, offset);
+                return;
+            }
             _ => {}
         }
         // encoder.writeSpace(ATTRIB_SPACE,this);
-        encoder.write_string(&attrib_space(), &self.get_name());
+        encoder.write_space(&attrib_space(), self);
         // encoder.writeUnsignedInteger(ATTRIB_OFFSET, offset);
         encoder.write_unsigned_integer(&attrib_offset(), offset);
     }
@@ -1717,7 +1738,8 @@ impl AddrSpace {
     /// [`AddrSpace::encode_attributes`] plus ATTRIB_SIZE on the base path;
     /// the IopSpace override still writes only "iop" (op.hh:50) and the
     /// FspecSpace override adds the size only on the valid-entry path
-    /// (fspec.cc:2138-2151).
+    /// (fspec.cc:2138-2151); the JoinSpace override ignores the size
+    /// entirely and delegates to the 2-argument form (space.cc:527-531).
     pub fn encode_attributes_with_size(
         &self,
         encoder: &mut dyn crate::marshal::Encoder,
@@ -1735,12 +1757,15 @@ impl AddrSpace {
                 self.encode_attributes_fspec(encoder, offset, Some(size));
                 return;
             }
-            SpaceType::Join => panic!(
-                "JoinSpace::encodeAttributes piece encoding is not ported (MARSHAL-XML-TEXT-0001)"
-            ),
+            // Ghidra: space.cc:527 JoinSpace::encodeAttributes(3-arg) —
+            // encodeAttributes(encoder,offset); // Ignore size
+            SpaceType::Join => {
+                self.encode_attributes_join(encoder, offset);
+                return;
+            }
             _ => {}
         }
-        encoder.write_string(&attrib_space(), &self.get_name());
+        encoder.write_space(&attrib_space(), self);
         encoder.write_unsigned_integer(&attrib_offset(), offset);
         encoder.write_signed_integer(&attrib_size(), size as i64);
     }
@@ -1775,7 +1800,7 @@ impl AddrSpace {
             Some((spc, entry_off)) => {
                 // AddrSpace *id = fc->getEntryAddress().getSpace();
                 // encoder.writeSpace(ATTRIB_SPACE, id);
-                encoder.write_string(&attrib_space(), &spc.get_name());
+                encoder.write_space(&attrib_space(), &spc);
                 // encoder.writeUnsignedInteger(ATTRIB_OFFSET,
                 //   fc->getEntryAddress().getOffset());
                 encoder.write_unsigned_integer(&attrib_offset(), entry_off);
@@ -1787,24 +1812,82 @@ impl AddrSpace {
         }
     }
 
+    // Ghidra: space.cc:502 JoinSpace::encodeAttributes (both arities)
+    /// The join-space specialization shared by both encode arities (the
+    /// 3-arg form ignores its size, space.cc:527-531). Faithful to
+    /// `JoinSpace::encodeAttributes` (space.cc:502-519): the offset must
+    /// resolve to an existing JoinRecord through the manager
+    /// (`getManager()->findJoin(offset)` — the "Record must already exist"
+    /// contract; an unlinked offset is the `findJoin` LowlevelError
+    /// "Unlinked join address", translate.cc:761), then
+    /// `writeSpace(ATTRIB_SPACE, this)` names the join space itself, each
+    /// piece (most significant first) becomes an indexed ATTRIB_PIECE
+    /// string `{space-name}:0x{offset:x}:{size}` (the ostringstream `hex`
+    /// manipulator for the offset, `dec` restored for the size), a record
+    /// with more than MAX_PIECES pieces throws
+    /// LowlevelError("Exceeded maximum pieces in one join address"), and a
+    /// single-piece join (float extension) appends ATTRIB_LOGICALSIZE
+    /// holding the unified size.
+    fn encode_attributes_join(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        offset: u64,
+    ) {
+        // JoinRecord *rec = getManager()->findJoin(offset);
+        let tables = self.get_manager_join_tables();
+        let tables = tables.unwrap_or_else(|| panic!("Unlinked join address"));
+        let tables_ref = tables.borrow();
+        let rec = tables_ref.find_join(offset);
+        // encoder.writeSpace(ATTRIB_SPACE, this);
+        encoder.write_space(&attrib_space(), self);
+        let num = rec.num_pieces();
+        if num > MAX_PIECES {
+            panic!("Exceeded maximum pieces in one join address");
+        }
+        for i in 0..num {
+            // const VarnodeData &vdata( rec->getPiece(i) );
+            // ostringstream t; t << vdata.space->getName() << ":0x";
+            // t << hex << vdata.offset << ':' << dec << vdata.size;
+            let vdata = rec.get_piece(i);
+            let t = format!(
+                "{}:0x{:x}:{}",
+                vdata.space.get_name(),
+                vdata.offset,
+                vdata.size
+            );
+            // encoder.writeStringIndexed(ATTRIB_PIECE, i, t.str());
+            encoder.write_string_indexed(&attrib_piece(), i as u32, &t);
+        }
+        if num == 1 {
+            // encoder.writeUnsignedInteger(ATTRIB_LOGICALSIZE,
+            //   rec->getUnified().size);
+            encoder.write_unsigned_integer(
+                &attrib_logicalsize(),
+                rec.get_unified().size as u64,
+            );
+        }
+    }
+
     // Ghidra: space.cc:169 AddrSpace::decodeAttributes
     /// Recover an offset (and possibly a size) from the attributes of an
     /// open element describing an address in this space. Faithful to
     /// `decodeAttributes` (space.cc:169-189): walk every attribute, take
     /// ATTRIB_OFFSET / ATTRIB_SIZE by name, skip the rest, and throw
     /// `LowlevelError("Address is missing offset")` (an `Err` here) when no
-    /// offset attribute was seen. The JoinSpace override
-    /// (space.cc:539) is not ported and fails loudly
-    /// (MARSHAL-XML-TEXT-0001 residual).
+    /// offset attribute was seen. The JoinSpace override (space.cc:539)
+    /// rebuilds a JoinRecord from the ATTRIB_PIECE attributes. Ghidra's
+    /// virtual reads the manager off the space itself (`getManager()`,
+    /// space.hh:118); Rust spaces carry only the join-table backlink, so
+    /// the manager is the explicit `spc_manager` parameter — the same
+    /// object Ghidra's space would hold.
     pub fn decode_attributes(
         &self,
         decoder: &mut dyn crate::marshal::Decoder,
+        spc_manager: &SpaceRegistry,
         size: &mut u32,
     ) -> Result<u64, String> {
         if self.get_type() == SpaceType::Join {
-            panic!(
-                "JoinSpace::decodeAttributes piece decoding is not ported (MARSHAL-XML-TEXT-0001)"
-            );
+            return self.decode_attributes_join(decoder, spc_manager, size);
         }
         let mut offset: u64 = 0;
         let mut found_offset = false;
@@ -1831,6 +1914,133 @@ impl AddrSpace {
             return Err("Address is missing offset".to_string());
         }
         Ok(offset)
+    }
+
+    // Ghidra: space.cc:539 JoinSpace::decodeAttributes
+    /// The join-space specialization: pieces arrive as a sequence of
+    /// indexed ATTRIB_PIECE attributes ("piece1" is the most significant
+    /// piece; the XML decoder reinterprets the name suffix through
+    /// `getIndexedAttributeId`, marshal.cc:243, while the packed decoder
+    /// already carries the indexed id in its header). Faithful to
+    /// `JoinSpace::decodeAttributes` (space.cc:539-588):
+    /// ATTRIB_LOGICALSIZE supplies the float-extension logical size; an
+    /// attribute below the ATTRIB_PIECE id, or a piece position beyond
+    /// MAX_PIECES, is skipped without reading; pieces are placed by index
+    /// into a grow-on-demand vector (a hole leaves a zero piece); a piece
+    /// string with no `:` is a REGISTER name (`getTrans()->getRegister`,
+    /// space.cc:566-569); otherwise the form is
+    /// `{space-name}:{offset}:{size}` with one `:` exactly — a missing
+    /// second `:` throws `LowlevelError("join address piece attribute is
+    /// malformed")` — and the numbers parse with the stream auto-base
+    /// (`unsetf(ios::dec|ios::hex|ios::oct)`). The pieces finally go
+    /// through `getManager()->findAddJoin` (translate.cc:671), whose
+    /// dedup returns the original unified offset for an exact re-decode;
+    /// the size out-param receives the unified size.
+    ///
+    /// Two Ghidra forms fail deterministically here instead of the C++
+    /// undefined behavior: a register-name piece needs the Translate
+    /// register table (SPACE-0001 residual), and an unknown piece space
+    /// name would leave a null `VarnodeData.space` that only survives the
+    /// C++ join-record ordering because `operator<` compares unified sizes
+    /// first (translate.cc:172-191) — Rust's non-optional space handle
+    /// rejects it at the lookup point.
+    fn decode_attributes_join(
+        &self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        spc_manager: &SpaceRegistry,
+        size: &mut u32,
+    ) -> Result<u64, String> {
+        let tables = self.get_manager_join_tables();
+        let tables = tables.unwrap_or_else(|| panic!("Unlinked join address"));
+        // vector<VarnodeData> pieces;
+        let mut pieces: Vec<SpaceVarnodeData> = Vec::new();
+        let mut logicalsize: u32 = 0;
+        loop {
+            // uint4 attribId = decoder.getNextAttributeId();
+            let mut attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            if attrib_id == attrib_logicalsize().id {
+                // logicalsize = decoder.readUnsignedInteger();
+                logicalsize = decoder.read_unsigned_integer() as u32;
+                continue;
+            } else if attrib_id == crate::marshal::ATTRIB_UNKNOWN {
+                // attribId = decoder.getIndexedAttributeId(ATTRIB_PIECE);
+                attrib_id = decoder.get_indexed_attribute_id(&attrib_piece());
+            }
+            // if (attribId < ATTRIB_PIECE.getId()) continue;
+            if attrib_id < attrib_piece().id {
+                continue;
+            }
+            // int4 pos = (int4)(attribId - ATTRIB_PIECE.getId());
+            let pos = (attrib_id - attrib_piece().id) as usize;
+            // if (pos > MAX_PIECES) continue;
+            if pos > MAX_PIECES {
+                continue;
+            }
+            // while(pieces.size() <= pos) pieces.emplace_back();
+            while pieces.len() <= pos {
+                pieces.push(SpaceVarnodeData {
+                    space: self.clone(),
+                    offset: 0,
+                    size: 0,
+                });
+            }
+            // string attrVal = decoder.readString();
+            let attr_val = decoder.read_string();
+            // string::size_type offpos = attrVal.find(':');
+            match attr_val.find(':') {
+                None => {
+                    // Register-name piece form: the C++ resolves it through
+                    // getTrans()->getRegister (space.cc:566-569); the
+                    // register table is the SPACE-0001 residual, so the
+                    // form is rejected loudly rather than mis-decoded.
+                    return Err(
+                        "register-name join piece requires the Translate register table"
+                            .to_string(),
+                    );
+                }
+                Some(offpos) => {
+                    // string::size_type szpos = attrVal.find(':',offpos+1);
+                    let szpos = attr_val[offpos + 1..].find(':').map(|i| i + offpos + 1);
+                    let Some(szpos) = szpos else {
+                        return Err(
+                            "join address piece attribute is malformed".to_string()
+                        );
+                    };
+                    // string spcname = attrVal.substr(0,offpos);
+                    let spcname = &attr_val[..offpos];
+                    // vdat.space = getManager()->getSpaceByName(spcname);
+                    let Some(spc) = spc_manager.get_space_by_name(spcname) else {
+                        return Err(format!(
+                            "Unknown address space name: {}",
+                            spcname
+                        ));
+                    };
+                    pieces[pos].space = spc;
+                    // istringstream s1(attrVal.substr(offpos+1,szpos));
+                    // s1.unsetf(ios::dec|ios::hex|ios::oct); s1 >> vdat.offset;
+                    pieces[pos].offset = crate::marshal::cpp_stream_unsigned(
+                        &attr_val[offpos + 1..szpos],
+                    );
+                    // istringstream s2(attrVal.substr(szpos+1)); ...
+                    // s2 >> vdat.size;
+                    pieces[pos].size = crate::marshal::cpp_stream_unsigned(
+                        &attr_val[szpos + 1..],
+                    ) as u32 as i32;
+                }
+            }
+            // sizesum += vdat.size;  (accumulator unused beyond the loop)
+        }
+        // JoinRecord *rec = getManager()->findAddJoin(pieces,logicalsize);
+        let offset = tables.borrow_mut().find_add_join(&pieces, logicalsize, self);
+        let tables_ref = tables.borrow();
+        let rec = tables_ref.find_join(offset);
+        // size = rec->getUnified().size;
+        *size = rec.get_unified().size as u32;
+        // return rec->getUnified().offset;
+        Ok(rec.get_unified().offset)
     }
 
     // RUGRA-GLUE: set_contain (Ghidra's derived decode bodies write the

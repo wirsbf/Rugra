@@ -2136,6 +2136,15 @@ pub trait Encoder {
     // RUGRA-GLUE: write_string_indexed (no Ghidra counterpart found)
     /// Write an indexed string attribute.
     fn write_string_indexed(&mut self, attrib_id: &AttributeId, index: u32, val: &str);
+    // Ghidra: marshal.hh:368 Encoder::writeSpace (pure virtual)
+    /// Write an address space reference into the encoding. Each `Encoder`
+    /// specialization renders the space its own way: the XML/tree form
+    /// writes the space NAME string (`XmlEncode::writeSpace`,
+    /// marshal.cc:569-581), while the packed form writes a special-space
+    /// type byte or the space index (`PackedEncode::writeSpace`,
+    /// marshal.cc:1193-1218). Rust passes the registry handle
+    /// `crate::space::AddrSpace` where Ghidra passes `const AddrSpace *`.
+    fn write_space(&mut self, attrib_id: &AttributeId, spc: &crate::space::AddrSpace);
 }
 
 /// A class for reading structured data from a stream. Faithful to `Decoder`
@@ -2182,6 +2191,31 @@ pub trait Decoder {
     // RUGRA-GLUE: rewind_attributes (no Ghidra counterpart found)
     /// Reset attribute traversal. Faithful to `rewindAttributes`.
     fn rewind_attributes(&mut self);
+
+    // Ghidra: marshal.hh:165 Decoder::getIndexedAttributeId (pure virtual)
+    /// Assuming the previous `next_attribute_id` returned `ATTRIB_UNKNOWN`,
+    /// reinterpret the current attribute as an indexed form of `attrib_id`.
+    /// The XML decoder reinterprets the decimal suffix of the attribute name
+    /// (`XmlDecode::getIndexedAttributeId`, marshal.cc:243-260); the packed
+    /// decoder never needs to reinterpret and returns `ATTRIB_UNKNOWN`
+    /// (`PackedDecode::getIndexedAttributeId`, marshal.cc:825-829).
+    fn get_indexed_attribute_id(&mut self, attrib_id: &AttributeId) -> u32;
+
+    // Ghidra: marshal.hh:151-156 region Decoder::readSpace (pure virtual)
+    /// Read the current attribute as an address space reference. Each
+    /// `Decoder` resolves the space its own way: the XML/tree form looks
+    /// the space NAME up in the manager (`XmlDecode::readSpace`,
+    /// marshal.cc:400-409), while the packed form reads the space index or
+    /// special-space code (`PackedDecode::readSpace`, marshal.cc:997-1031).
+    /// Ghidra's decoders hold `const AddrSpaceManager *spcManager` from the
+    /// constructor (marshal.hh:101-103); Rust decoders stay manager-less, so
+    /// the manager is passed per call — the same object Ghidra would hold.
+    /// Unknown names/indices and rejected special codes return
+    /// `Err` with Ghidra's exact `DecoderError` message.
+    fn read_space(
+        &mut self,
+        spc_manager: &crate::space::SpaceRegistry,
+    ) -> Result<crate::space::AddrSpace, String>;
 
     // RUGRA-GLUE: read_bool (no Ghidra counterpart found)
     /// Read the current attribute as a boolean.
@@ -2306,12 +2340,27 @@ impl Encoder for TreeEncoder {
         }
     }
 
-    // RUGRA-GLUE: write_string_indexed (no Ghidra counterpart found)
+    // Ghidra: marshal.cc:559 XmlEncode::writeStringIndexed
+    /// Write an indexed string attribute. Faithful to `XmlEncode::
+    /// writeStringIndexed` (marshal.cc:559-567): the attribute NAME carries
+    /// the 1-based index directly appended to the base name (e.g. "piece1",
+    /// "piece2"), with no separator.
     fn write_string_indexed(&mut self, attrib_id: &AttributeId, index: u32, val: &str) {
-        let nm = format!("{}_{}", attrib_id.name, index);
+        let nm = format!("{}{}", attrib_id.name, index + 1);
         if let Some(cur) = self.stack.last() {
             cur.write().unwrap().add_attribute(&nm, val);
         }
+    }
+
+    // Ghidra: marshal.cc:569 XmlEncode::writeSpace
+    /// Write the space as its NAME attribute value. Faithful to
+    /// `XmlEncode::writeSpace` (marshal.cc:569-581): the plain-attribute
+    /// path is `a_v(outStream, attribId.getName(), spc->getName())`; the
+    /// `ATTRIB_CONTENT` text-value form is unreachable for the tree encoder,
+    /// which stores attributes by name (its `write_string` handles content
+    /// storage the same way).
+    fn write_space(&mut self, attrib_id: &AttributeId, spc: &crate::space::AddrSpace) {
+        self.write_string(attrib_id, &spc.get_name());
     }
 }
 
@@ -2363,8 +2412,11 @@ fn cpp_stream_magnitude(value: &str) -> (bool, u64) {
 }
 
 // Ghidra: marshal.cc:353 XmlDecode::readUnsignedInteger (stream extraction)
-/// Unsigned variant of the iostream-style integer parse.
-fn cpp_stream_unsigned(value: &str) -> u64 {
+/// Unsigned variant of the iostream-style integer parse. Also the piece
+/// numeric parse of `JoinSpace::decodeAttributes` (space.cc:576-581 uses
+/// the same `unsetf(ios::dec|ios::hex|ios::oct)` extraction), so it is
+/// shared crate-wide.
+pub(crate) fn cpp_stream_unsigned(value: &str) -> u64 {
     let (negative, magnitude) = cpp_stream_magnitude(value);
     if negative {
         magnitude.wrapping_neg()
@@ -2519,6 +2571,69 @@ impl Decoder for TreeDecoder {
         }
     }
 
+    // Ghidra: marshal.cc:243 XmlDecode::getIndexedAttributeId
+    /// Reinterpret the current attribute as an indexed form of `attrib_id`.
+    /// Faithful to `XmlDecode::getIndexedAttributeId` (marshal.cc:243-260):
+    /// out-of-range cursor or a name without the base-name prefix yields
+    /// `ATTRIB_UNKNOWN`; otherwise the decimal suffix (starting at 1) is
+    /// decoded and `attrib_id.id + (val-1)` returned, with Ghidra's
+    /// `LowlevelError("Bad indexed attribute: " + nm)` panic when no digits
+    /// were consumed.
+    fn get_indexed_attribute_id(&mut self, attrib_id: &AttributeId) -> u32 {
+        let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
+            return ATTRIB_UNKNOWN;
+        };
+        let rg = elem.read().unwrap();
+        if attr_idx == 0 || attr_idx - 1 >= rg.get_num_attributes() {
+            return ATTRIB_UNKNOWN;
+        }
+        // const string &attribName(el->getAttributeName(attributeIndex));
+        let attrib_name = rg.get_attribute_name(attr_idx - 1);
+        // Does the name start with desired attribute base name?
+        let Some(suffix) = attrib_name.strip_prefix(attrib_id.name.as_str()) else {
+            return ATTRIB_UNKNOWN;
+        };
+        // istringstream s(attribName.substr(base)); s >> dec >> val;
+        // Decode the longest decimal digit prefix (stream extraction).
+        let digits: String = suffix.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let val: u32 = if digits.is_empty() {
+            0
+        } else {
+            digits.parse().unwrap_or(0)
+        };
+        if val == 0 {
+            panic!("Bad indexed attribute: {}", attrib_id.name);
+        }
+        attrib_id.id + (val - 1)
+    }
+
+    // Ghidra: marshal.cc:400 XmlDecode::readSpace
+    /// Read the current attribute's value as a space NAME and resolve it
+    /// through the manager. Faithful to `XmlDecode::readSpace`
+    /// (marshal.cc:400-409): the value at the attribute cursor is looked up
+    /// with `getSpaceByName`, an unknown name throwing
+    /// `DecoderError("Unknown address space name: " + nm)`.
+    fn read_space(
+        &mut self,
+        spc_manager: &crate::space::SpaceRegistry,
+    ) -> Result<crate::space::AddrSpace, String> {
+        let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
+            return Err("Unknown address space name: ".to_string());
+        };
+        let rg = elem.read().unwrap();
+        if attr_idx == 0 || attr_idx - 1 >= rg.get_num_attributes() {
+            // Ghidra reads getAttributeValue(attributeIndex) at cursor -1;
+            // an unpositioned cursor is caller error (out-of-range index
+            // would be UB in C++); mapped to the unknown-name rejection.
+            return Err("Unknown address space name: ".to_string());
+        }
+        let nm = rg.get_attribute_value_at(attr_idx - 1).to_string();
+        match spc_manager.get_space_by_name(&nm) {
+            Some(spc) => Ok(spc),
+            None => Err(format!("Unknown address space name: {}", nm)),
+        }
+    }
+
     // RUGRA-GLUE: attribute_name (no Ghidra counterpart found)
     fn attribute_name(&self, id: u32) -> Option<String> {
         self.registry
@@ -2670,6 +2785,12 @@ pub mod packed_format {
     pub const TYPECODE_ADDRESSSPACE: u8 = 5;
     pub const TYPECODE_SPECIALSPACE: u8 = 6;
     pub const TYPECODE_STRING: u8 = 7;
+    // Ghidra: marshal.hh:499-503 PackedFormat special-space codes
+    pub const SPECIALSPACE_STACK: u32 = 0;
+    pub const SPECIALSPACE_JOIN: u32 = 1;
+    pub const SPECIALSPACE_FSPEC: u32 = 2;
+    pub const SPECIALSPACE_IOP: u32 = 3;
+    pub const SPECIALSPACE_SPACEBASE: u32 = 4;
 }
 
 /// A byte-based encoder for the packed binary format. Faithful to
@@ -2814,6 +2935,46 @@ impl Encoder for PackedEncode {
         self.write_header(ATTRIBUTE, attrib_id.id + index);
         self.write_integer(TYPECODE_STRING << TYPECODE_SHIFT, val.len() as u64);
         self.out.extend_from_slice(val.as_bytes());
+    }
+
+    // Ghidra: marshal.cc:1193 PackedEncode::writeSpace
+    /// Write an address space reference. Faithful to `PackedEncode::
+    /// writeSpace` (marshal.cc:1193-1218): after the attribute header, the
+    /// fspec/iop/join types emit a single TYPECODE_SPECIALSPACE type byte
+    /// carrying the special code in the length field (fspec=2, iop=3,
+    /// join=1); a spacebase emits the STACK code (0) when it is the formal
+    /// stack space, otherwise the SPACEBASE code (4); every other type
+    /// falls to the default arm, an ADDRESSSPACE-typed integer holding the
+    /// space index.
+    fn write_space(&mut self, attrib_id: &AttributeId, spc: &crate::space::AddrSpace) {
+        use crate::space::SpaceType;
+        use packed_format::*;
+        self.write_header(ATTRIBUTE, attrib_id.id);
+        let special =
+            (TYPECODE_SPECIALSPACE as u32) << TYPECODE_SHIFT;
+        match spc.get_type() {
+            SpaceType::Fspec => {
+                self.out.push((special | SPECIALSPACE_FSPEC) as u8);
+            }
+            SpaceType::Iop => {
+                self.out.push((special | SPECIALSPACE_IOP) as u8);
+            }
+            SpaceType::Join => {
+                self.out.push((special | SPECIALSPACE_JOIN) as u8);
+            }
+            SpaceType::SpaceBase => {
+                if spc.is_formal_stackspace() {
+                    self.out.push((special | SPECIALSPACE_STACK) as u8);
+                } else {
+                    // A secondary register offset space
+                    self.out.push((special | SPECIALSPACE_SPACEBASE) as u8);
+                }
+            }
+            _ => {
+                let spc_id = spc.get_index() as u64;
+                self.write_integer(TYPECODE_ADDRESSSPACE << TYPECODE_SHIFT, spc_id);
+            }
+        }
     }
 }
 
@@ -3103,6 +3264,88 @@ impl Decoder for PackedDecode {
         if let Some((_, start, _)) = self.stack.last_mut() {
             self.pos = *start;
         }
+    }
+
+    // Ghidra: marshal.cc:825 PackedDecode::getIndexedAttributeId
+    /// The packed format encodes indexed attribute ids directly in the
+    /// attribute header, so no reinterpretation is ever needed:
+    /// `PackedDecode::getIndexedAttributeId` (marshal.cc:825-829)
+    /// unconditionally returns `ATTRIB_UNKNOWN.getId()`.
+    fn get_indexed_attribute_id(&mut self, _attrib_id: &AttributeId) -> u32 {
+        ATTRIB_UNKNOWN
+    }
+
+    // Ghidra: marshal.cc:997 PackedDecode::readSpace
+    /// Read the current attribute as an address space reference. Faithful
+    /// to `PackedDecode::readSpace` (marshal.cc:997-1031): an
+    /// ADDRESSSPACE-typed attribute carries the space index, resolved
+    /// through `AddrSpaceManager::getSpace` with
+    /// `DecoderError("Unknown address space index")` when the slot is
+    /// empty; a SPECIALSPACE-typed attribute carries the special code in
+    /// the type byte's length field — only STACK and JOIN are accepted
+    /// (resolved via `getStackSpace`/`getJoinSpace`), every other code
+    /// throwing `DecoderError("Cannot marshal special address space")`;
+    /// any other attribute type throws
+    /// `DecoderError("Expecting space attribute")` after skipping its data
+    /// (the `skipAttributeRemaining` tail, marshal.cc:1025).
+    fn read_space(
+        &mut self,
+        spc_manager: &crate::space::SpaceRegistry,
+    ) -> Result<crate::space::AddrSpace, String> {
+        use crate::space::AddrSpace;
+        use packed_format::*;
+        // uint1 typeByte = getNextByte(curPos); — the type byte was already
+        // consumed by next_attribute_id and staged in pending_type.
+        let Some(type_byte) = self.pending_type.take() else {
+            return Err("Expecting space attribute".to_string());
+        };
+        let type_code = Self::type_code(type_byte);
+        let spc: AddrSpace;
+        if type_code == TYPECODE_ADDRESSSPACE {
+            // res = readInteger(readLengthCode(typeByte));
+            let len = self.pending_int_len.take().unwrap_or(0);
+            let res = self.read_integer(len) as usize;
+            // spc = spcManager->getSpace(res);
+            let Some(found) = spc_manager.get_space(res) else {
+                return Err("Unknown address space index".to_string());
+            };
+            spc = found;
+        } else if type_code == TYPECODE_SPECIALSPACE {
+            // uint4 specialCode = readLengthCode(typeByte);
+            let special_code = Self::length_code(type_byte) as u32;
+            if special_code == SPECIALSPACE_STACK {
+                spc = spc_manager.get_stack_space().ok_or_else(|| {
+                    "Cannot marshal special address space".to_string()
+                })?;
+            } else if special_code == SPECIALSPACE_JOIN {
+                spc = spc_manager.get_join_space().ok_or_else(|| {
+                    "Cannot marshal special address space".to_string()
+                })?;
+            } else {
+                return Err("Cannot marshal special address space".to_string());
+            }
+        } else {
+            // skipAttributeRemaining(typeByte) — the header and type byte
+            // are consumed; skip the remaining data bytes of the attribute.
+            match type_code {
+                TYPECODE_STRING => {
+                    if let Some(len) = self.pending_string_len.take() {
+                        for _ in 0..len {
+                            let _ = self.read_byte();
+                        }
+                    }
+                }
+                TYPECODE_BOOLEAN => {}
+                _ => {
+                    let len = self.pending_int_len.take().unwrap_or(0);
+                    for _ in 0..len {
+                        let _ = self.read_byte();
+                    }
+                }
+            }
+            return Err("Expecting space attribute".to_string());
+        }
+        Ok(spc)
     }
 
     // Ghidra: marshal.cc:831 PackedDecode::readBool
