@@ -1019,19 +1019,26 @@ fn window_in_range(ranges: &[(u64, u64)], offset: u64, size: u64) -> bool {
 /// inclusive `Vec<(first, last)>`: treating high-bit-set offsets as coming
 /// *before* clear-high-bit offsets, return the last/latest contiguous range.
 /// Ghidra probes `upper_bound(Range(spaceid, midway, midway))` with
-/// `midway = getHighest()/2`; a range precedes that key iff
-/// `first < midway || (first == midway && last <= midway)` (set<Range> orders
-/// by (first,last)). If no "positive" range exists, the second probe
-/// `upper_bound((highest,highest))` lands on `end()` and `--iter` yields the
-/// final range in unsigned order — the biggest negative range.
+/// `midway = getHighest()/2`; `Range::operator<` compares **only
+/// (spaceIndex, first)** — `last` is never part of the key (address.hh:202-205)
+/// — so upper_bound returns the first range with `first > midway` and `--iter`
+/// lands on the LAST range with `first <= midway`, including one whose
+/// `first == midway` with an arbitrary `last` (it is equivalent to the
+/// (midway,midway) probe key under the first-only ordering). If no such
+/// "positive" range exists, the second probe `upper_bound((highest,highest))`
+/// lands on `end()` and `--iter` yields the final range in unsigned order —
+/// the biggest negative range. (The Vec carries no space — every window range
+/// is a stack range, cf. `param_range_in_range`; a future cspec declaring
+/// non-stack `<localrange>` ranges must add a space tag or filter at the
+/// bridge.)
 fn get_last_signed_range(ranges: &[(u64, u64)]) -> Option<(u64, u64)> {
     if ranges.is_empty() {
         return None;
     }
     let midway = u64::MAX / 2; // spaceid->getHighest() / 2 for the stack space
-    let pos = ranges.partition_point(|&(first, last)| {
-        first < midway || (first == midway && last <= midway)
-    });
+    // First index with first > midway — the first-only ordering key of
+    // address.hh:202-205 (same predicate shape as `window_in_range`).
+    let pos = ranges.partition_point(|&(first, _)| first <= midway);
     if pos > 0 {
         return Some(ranges[pos - 1]);
     }
@@ -2549,9 +2556,15 @@ impl ScopeLocal {
     /// (varmap.cc:432-460): the stack growth direction comes from the
     /// prototype (varmap.cc:435 — Rugra threads `fd` because the scope owns
     /// no Funcdata handle, an ownership seam), the parameter-offset window
-    /// resets (varmap.cc:436-437 — a no-op on the fresh per-pass scope of
-    /// Rugra's restructure pipeline), and the symboltab range tree becomes
-    /// the UNION of the prototype's localRange and paramRange
+    /// resets (varmap.cc:436-437 — equivalent to Ghidra's call sites ONLY on
+    /// the FIRST pass / after `Funcdata::clear` (funcdata.cc:70/96/836);
+    /// Ghidra does NOT re-run resetLocalWindow across RULE_REPEATAPPLY
+    /// restarts (action.cc:539-570), so from the 2nd pass on it keeps the
+    /// markNotMapped-narrowed window and the cross-pass accumulated
+    /// min/maxParamOffset — Rugra's fresh-per-pass scope (coreaction.rs)
+    /// re-installs the full window each pass; registered as
+    /// VARMAP-CROSSPASS-PERSISTENCE-0001), and the symboltab range tree
+    /// becomes the UNION of the prototype's localRange and paramRange
     /// (varmap.cc:441-458) — for the default negative-growth 8-byte stack
     /// `[u64::MAX-999999, u64::MAX] ∪ [0, 511]`, the sign-extended
     /// negative-offset half where heritage puts locals. Rugra previously
@@ -2716,8 +2729,11 @@ impl ScopeLocal {
 
         // resetLocalWindow (varmap.cc:432-460) — the Funcdata lifecycle calls
         // it right after scope construction (funcdata.cc:70); Rugra's
-        // restructure_varnode owns a fresh ScopeLocal per pass
-        // (coreaction.rs), so installing here is the same lifecycle point.
+        // restructure_varnode owns a fresh ScopeLocal per pass (coreaction.rs),
+        // which matches that lifecycle point on the FIRST pass / after a
+        // clear — from the 2nd RULE_REPEATAPPLY pass on, Ghidra keeps the
+        // narrowed window and accumulated min/max while Rugra reinstalls the
+        // full window (VARMAP-CROSSPASS-PERSISTENCE-0001).
         self.reset_local_window(fd);
 
         // Build the MapState with a default unknown base type (1 byte),
@@ -4570,6 +4586,39 @@ mod tests {
     }
 
     // --- ScopeLocal.restructure via adjust_fit (varmap.cc:1294, 587) ---
+
+    #[test]
+    fn test_get_last_signed_range_midway_corner() {
+        // R8 cross-review corner: `Range::operator<` compares only
+        // (spaceIndex, first) — never `last` (address.hh:202-205) — so
+        // getLastSignedRange's upper_bound((midway,midway)) probe treats a
+        // range with first == midway and last > midway as EQUIVALENT to the
+        // probe key: upper_bound steps past it and --iter selects it. A
+        // predicate that excluded it (ordering by (first,last)) would pick
+        // the previous positive range and misplace initialize()'s endpoint.
+        let midway = u64::MAX / 2;
+        let ranges = [
+            (0x100u64, 0x200u64),
+            (midway, 0x8000000000000100),
+            (0xfffffffffff0bdc0, u64::MAX),
+        ];
+        assert_eq!(
+            get_last_signed_range(&ranges),
+            Some((midway, 0x8000000000000100))
+        );
+        // Default-domain invariants: pure positive windows take the last
+        // positive range; pure negative windows (the default local window)
+        // take the last range in unsigned order; empty returns None.
+        assert_eq!(
+            get_last_signed_range(&[(0, 0x1ff), (0xfffffffffff0bdc0, u64::MAX)]),
+            Some((0, 0x1ff))
+        );
+        assert_eq!(
+            get_last_signed_range(&[(0xfffffffffff0bdc0, u64::MAX)]),
+            Some((0xfffffffffff0bdc0, u64::MAX))
+        );
+        assert_eq!(get_last_signed_range(&[]), None);
+    }
 
     #[test]
     fn test_restructure_two_disjoint_ranges() {
