@@ -698,3 +698,41 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
   just=false 的 NULL 形态、join piece 访问与位置序、跨空间 join 的
   per-piece 空间守卫、find/characterize 对照）。`fspec_phase0_1204` 的
   12 行 findEntry 投影在新窗口语义下逐行不变（已复核），无需重钉。
+
+### 2026-08-24：possible_param join 可达 + assumed_extension 空间守卫（FSPEC-POSSIBLEPARAM-JOIN-0006，A46 残差 3）
+
+- `ParamListStandardOut::possible_param`（cc:1765-1774）：删除调用方级
+  `get_space() != space` 过滤（Ghidra 原文遍历**全部** entry，无空间过滤、
+  无 resolver 窗口、无 minSize 门），逐 entry 改走
+  `justified_contain_in_space(loc, size, space)`：
+  - **join entry 可达**（旧过滤把 spaceid=join 空间的 entry 结构性排除）：
+    join walk 逐 piece 空间守卫（address.cc:133），`0x104/4` 返回 offset
+    4，`>= 0` 即 true（对比 `find_entry(just=true)` 的 `== 0` 门——
+    possibleParam 接受未对齐包含）；
+  - 普通 entry 的空间拒绝只发生在 `justifiedContain` 内部
+    （cc:269 对齐路由 / address.cc:133 exclusion 路由），
+    异空间数值巧合 offset 不再假命中；
+  - 无 minSize 门：小于 entry minsize 但数值包含的查询仍 true。
+- `ParamEntry::assumed_extension`（cc:366-394）签名增补
+  `query_space: AddressSpace`（`addr` 在 Ghidra 原文携带空间）：
+  cc:377 的 `justifiedContain(addr,sz)!=0` 调用改走 space-aware 形态——
+  异空间查询在数值上 justified 的 offset 也返回 `CPUI_COPY`
+  （旧 spaceless 形态会误报 ZEXT/SEXT/PIECE 并写入 res）。join entry 在
+  cc:376 已提前返回 COPY，不达该调用。容器回写两种形态不变
+  （alignment!=0 整对齐 cc:383-388 / exclusion 整 entry cc:378-382），
+  flag 优先级 zext→inttype→sext（cc:389-393）。
+- `ParamListStandard::assumed_extension`（cc:1426-1437）签名随之增补
+  `space: AddressSpace` 透传（list 级 minSize 跳过 cc:1431 不变）。
+- 单测 4 个：`test_param_list_standard_out_possible_param_join_and_space`、
+  `test_param_list_standard_out_possible_param_aligned_foreign_space`、
+  `test_assumed_extension_space_join_and_minsize_gates`、
+  `test_assumed_extension_exclusion_container_and_flags`。
+- 双侧 fixture：`tests/oracle/fspec_possibleparam_1204.{cc,rs,metadata.json}` +
+  `tools/run_fspec_possibleparam_oracle.sh`（四 case 34 观察行：普通 entry
+  的 `>=0` 接受与双空间守卫路由、join 可达性与 poke-out、跨空间 join 的
+  offset-4 接受、assumed_extension 的异空间 COPY/join 守卫/sz 门/
+  minSize 跳过/双容器/flag 优先级）。
+- 残差：BE 空间行仍 UNTESTED（ADDRESS-0001 过渡 enum 小端限定）；
+  spaceless `justified_contain` 的其余调用方（`unjustified_container`
+  cc:1411、`ParamListStandard::fillin_map` cc:1382-1410 两处 trial 查询）
+  不在本租约内，保持过渡形态。

@@ -4412,8 +4412,22 @@ impl ParamEntry {
     // Ghidra: fspec.cc:366 ParamEntry::assumedExtension
     /// Calculate the type of extension to expect for the given logical
     /// value. Returns CPUI_COPY if no extensions are assumed. Faithful to
-    /// `assumedExtension` (fspec.cc:366-394).
-    pub fn assumed_extension(&self, addr: Address, sz: i32, res: &mut VarnodeData) -> FspecOpCode {
+    /// `assumedExtension` (fspec.cc:366-394). `query_space` is the query
+    /// address's space (Ghidra reads it from the `const Address &addr`;
+    /// the legacy spaceless `Address` needs it alongside — see
+    /// `find_entry`): the cc:377 `justifiedContain(addr,sz)` call is
+    /// space-aware (alignment==0 route via `Address::justifiedContain`
+    /// address.cc:133; alignment!=0 route via fspec.cc:269), so a
+    /// foreign-space query with a numerically coincident offset returns
+    /// CPUI_COPY (FSPEC-POSSIBLEPARAM-JOIN-0006; join entries never reach
+    /// the call — cc:376 returns CPUI_COPY first).
+    pub fn assumed_extension(
+        &self,
+        addr: Address,
+        sz: i32,
+        query_space: AddressSpace,
+        res: &mut VarnodeData,
+    ) -> FspecOpCode {
         if self.flags
             & (param_entry_flags::SMALLSIZE_ZEXT
                 | param_entry_flags::SMALLSIZE_SEXT
@@ -4428,7 +4442,11 @@ impl ParamEntry {
             return FspecOpCode::CPUI_COPY;
         }
         if self.join.is_some() { return FspecOpCode::CPUI_COPY; }
-        if self.justified_contain(addr, sz) != 0 { return FspecOpCode::CPUI_COPY; }
+        // Ghidra: fspec.cc:377 if (justifiedContain(addr,sz)!=0) — the
+        // addr carries its space, so both space guards apply.
+        if self.justified_contain_in_space(addr, sz, query_space) != 0 {
+            return FspecOpCode::CPUI_COPY;
+        }
         if self.alignment == 0 {
             res.space = self.space;
             res.offset = self.address_base;
@@ -5572,13 +5590,20 @@ pub fn characterize_as_param(
     /// `assumedExtension` (fspec.cc:1426-1437): iterates ALL entries with
     /// no space filter — per-entry `assumedExtension` rejects other-space
     /// queries itself (fspec.cc:366-394 via `justifiedContain`).
-    pub fn assumed_extension(&self, addr: Address, size: i32, res: &mut VarnodeData) -> FspecOpCode {
+    /// `space` is the query address's space (see `find_entry`).
+    pub fn assumed_extension(
+        &self,
+        space: AddressSpace,
+        addr: Address,
+        size: i32,
+        res: &mut VarnodeData,
+    ) -> FspecOpCode {
         // Ghidra: if ((*iter).getMinSize() > size) continue;
         //         OpCode ext = (*iter).assumedExtension(addr,size,res);
         //         if (ext != CPUI_COPY) return ext;
         for cur in &self.entry {
             if cur.get_min_size() > size { continue; }
-            let ext = cur.assumed_extension(addr, size, res);
+            let ext = cur.assumed_extension(addr, size, space, res);
             if ext != FspecOpCode::CPUI_COPY { return ext; }
         }
         FspecOpCode::CPUI_COPY
@@ -6090,14 +6115,22 @@ impl ParamListStandardOut {
 
     // Ghidra: fspec.cc:1765 ParamListStandardOut::possibleParam
     /// Is the given storage a possible return-value location? Faithful to
-    /// `possibleParam` (fspec.cc:1765-1774): returns `true` if any entry
-    /// `justifiedContain`s the range. Differs from `ParamListStandard`'s
-    /// override (which uses `find_entry`) because output entries are
-    /// evaluated per-class, not by exact match.
+    /// `possibleParam` (fspec.cc:1765-1774): iterates ALL entries with NO
+    /// caller-level space filter and NO resolver window — join entries
+    /// ARE reachable, and space rejection happens only inside
+    /// `justifiedContain` (per-piece address.cc:133 for joins, cc:269 /
+    /// address.cc:133 for plain entries). `space` is the query address's
+    /// space (Ghidra reads it from the `const Address &loc`; the legacy
+    /// spaceless `Address` needs it alongside — see `find_entry`).
+    /// Differs from `ParamListStandard`'s override (which uses
+    /// `find_entry`) because output entries are evaluated per-class, not
+    /// by exact match (FSPEC-POSSIBLEPARAM-JOIN-0006).
     pub fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool {
         for cur in self.base.get_entry() {
-            if cur.get_space() != space { continue; }
-            if cur.justified_contain(loc, size) >= 0 { return true; }
+            // Ghidra: fspec.cc:1770 if ((*iter).justifiedContain(loc,size)
+            // >= 0) return true; — the loc carries its space, so the
+            // per-entry space guards apply; no minSize gate exists here.
+            if cur.justified_contain_in_space(loc, size, space) >= 0 { return true; }
         }
         false
     }
@@ -8000,6 +8033,212 @@ mod tests {
         // whose space has no entries never matches, even at a valid offset.
         assert!(!m.possible_param(AddressSpace::Register, Address::new(0x1000), 8));
         assert!(!m.possible_param(AddressSpace::Stack, Address::new(0x1000), 8));
+    }
+
+    // ---- FSPEC-POSSIBLEPARAM-JOIN-0006 unit coverage ----
+
+    // Ghidra: fspec.cc:1765 ParamListStandardOut::possibleParam
+    /// cc:1765-1774 has NO caller-level space filter and no minSize gate:
+    /// entries are visited in list order, join entries ARE reachable
+    /// through the per-piece join walk, and space rejection happens only
+    /// inside justifiedContain (address.cc:133 per piece / fspec.cc:269).
+    #[test]
+    fn test_param_list_standard_out_possible_param_join_and_space() {
+        let mut out = ParamListStandardOut::new();
+        // e0: join reg:0x104 (high) + reg:0x100 (low), pieces MS first.
+        out.base.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Join);
+            e.set_base(0);
+            e.set_sizes(8, 4);
+            e.set_alignment(0);
+            e.set_join_pieces(vec![
+                VarnodeData { space: AddressSpace::Register, offset: 0x104, size: 4 },
+                VarnodeData { space: AddressSpace::Register, offset: 0x100, size: 4 },
+            ]);
+            e
+        });
+        // e1: plain register [0x200,0x207] min 4, exclusion (alignment 0).
+        out.base.entry_mut().push({
+            let mut e = ParamEntry::new(1);
+            *e.flags_mut() = param_entry_flags::FORCE_LEFT_JUSTIFY;
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Register);
+            e.set_base(0x200);
+            e.set_sizes(8, 4);
+            e.set_alignment(0);
+            e
+        });
+        out.base.set_num_group(2);
+        // Join entry reachable: low piece justifies the reg query (>= 0).
+        assert!(out.possible_param(AddressSpace::Register, Address::new(0x100), 4));
+        // Join walk returns 4 (>= 0) for the high piece -> still true:
+        // possibleParam accepts ANY non-negative containment, unlike
+        // findEntry's just=true == 0 gate.
+        assert!(out.possible_param(AddressSpace::Register, Address::new(0x104), 4));
+        // Join walk -1 (0x100/8 pokes out of both pieces) -> falls to e1,
+        // which does not contain it either -> false.
+        assert!(!out.possible_param(AddressSpace::Register, Address::new(0x100), 8));
+        // Plain entry hit.
+        assert!(out.possible_param(AddressSpace::Register, Address::new(0x200), 4));
+        // No minSize gate in cc:1765-1774: a 1-byte query at e1 is still
+        // contained (force-left justified offset 0) even though minsize 4.
+        assert!(out.possible_param(AddressSpace::Register, Address::new(0x200), 1));
+        // Foreign-space query at a numerically coincident offset: the
+        // per-piece address.cc:133 guard (join) and the entry-space guard
+        // (plain, alignment==0 route) reject it.
+        assert!(!out.possible_param(AddressSpace::Stack, Address::new(0x200), 4));
+        assert!(!out.possible_param(AddressSpace::Stack, Address::new(0x100), 4));
+    }
+
+    // Ghidra: fspec.cc:1765 ParamListStandardOut::possibleParam
+    /// The alignment != 0 foreign-space route (fspec.cc:269) through
+    /// possibleParam: an out-of-resolver caller reaches it directly
+    /// because possibleParam iterates the raw entry list.
+    #[test]
+    fn test_param_list_standard_out_possible_param_aligned_foreign_space() {
+        let mut out = ParamListStandardOut::new();
+        // e0: register [0x1000,0x101F] min 4, alignment 8 (16 bytes, 2 slots).
+        out.base.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Register);
+            e.set_base(0x1000);
+            e.set_sizes(16, 4);
+            e.set_alignment(8);
+            e
+        });
+        out.base.set_num_group(1);
+        assert!(out.possible_param(AddressSpace::Register, Address::new(0x1000), 8));
+        // A stack query at the same numeric offset hits the cc:269
+        // spaceid != addr.getSpace() guard -> -1 -> false.
+        assert!(!out.possible_param(AddressSpace::Stack, Address::new(0x1000), 8));
+        // Out of extent -> false.
+        assert!(!out.possible_param(AddressSpace::Register, Address::new(0x9000), 8));
+    }
+
+    // Ghidra: fspec.cc:366 ParamEntry::assumedExtension +
+    //          fspec.cc:1426 ParamListStandard::assumedExtension
+    /// The cc:377 justifiedContain call is space-aware: a foreign-space
+    /// query at a numerically justified offset returns CPUI_COPY instead
+    /// of an extension, join entries return CPUI_COPY at cc:376 before
+    /// the containment check, and the list-level minSize gate skips
+    /// oversized-entry queries.
+    #[test]
+    fn test_assumed_extension_space_join_and_minsize_gates() {
+        let mut m = ParamListStandard::new();
+        // e0: register [0x100,0x11F] min 1 alignment 8, smallsize zext:
+        // a 2-byte value justified at a slot boundary extends.
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            *e.flags_mut() = param_entry_flags::SMALLSIZE_ZEXT;
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Register);
+            e.set_base(0x100);
+            e.set_sizes(32, 1);
+            e.set_alignment(8);
+            e
+        });
+        // e1: join entry (would justify a 2-byte query on its low piece)
+        // with smallsize sext — cc:376 returns CPUI_COPY before the walk.
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(1);
+            *e.flags_mut() = param_entry_flags::SMALLSIZE_SEXT;
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Join);
+            e.set_base(0);
+            e.set_sizes(8, 2);
+            e.set_alignment(0);
+            e.set_join_pieces(vec![
+                VarnodeData { space: AddressSpace::Register, offset: 0x204, size: 4 },
+                VarnodeData { space: AddressSpace::Register, offset: 0x200, size: 4 },
+            ]);
+            e
+        });
+        m.set_num_group(2);
+        let mut res = VarnodeData { space: AddressSpace::Ram, offset: 0xDEAD, size: 0x77 };
+        // Justified small value in the entry's own space -> ZEXT with the
+        // whole-alignment container (cc:383-388).
+        let ext = m.assumed_extension(
+            AddressSpace::Register, Address::new(0x100), 2, &mut res,
+        );
+        assert_eq!(ext, FspecOpCode::CPUI_INT_ZEXT);
+        assert_eq!(res.space, AddressSpace::Register);
+        assert_eq!(res.offset, 0x100);
+        assert_eq!(res.size, 8);
+        // Foreign-space query at the SAME numeric offset: the cc:269
+        // space guard makes justifiedContain -1 -> CPUI_COPY, no res write
+        // (the sentinel container passes through untouched).
+        let mut res2 = VarnodeData { space: AddressSpace::Ram, offset: 0xDEAD, size: 0x77 };
+        assert_eq!(
+            m.assumed_extension(AddressSpace::Stack, Address::new(0x100), 2, &mut res2),
+            FspecOpCode::CPUI_COPY,
+        );
+        assert_eq!(res2, VarnodeData { space: AddressSpace::Ram, offset: 0xDEAD, size: 0x77 });
+        // e0's sz >= alignment gate (cc:370-372): 8 bytes -> falls through
+        // to e1 (join) -> cc:376 CPUI_COPY.
+        assert_eq!(
+            m.assumed_extension(AddressSpace::Register, Address::new(0x100), 8, &mut res2),
+            FspecOpCode::CPUI_COPY,
+        );
+        // A 2-byte query justified on e1's low piece still COPYs: joins
+        // never extend (cc:376), even with smallsize flags set.
+        assert_eq!(
+            m.assumed_extension(AddressSpace::Register, Address::new(0x200), 2, &mut res2),
+            FspecOpCode::CPUI_COPY,
+        );
+    }
+
+    // Ghidra: fspec.cc:366 ParamEntry::assumedExtension
+    /// The exclusion (alignment == 0) container pass-back (cc:378-382)
+    /// and the smallsize_inttype / sext flag order (cc:389-393).
+    #[test]
+    fn test_assumed_extension_exclusion_container_and_flags() {
+        let mut m = ParamListStandard::new();
+        // e0: ram [0x2000,0x200F] min 2, exclusion, smallsize inttype.
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            *e.flags_mut() = param_entry_flags::SMALLSIZE_INTTYPE;
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Ram);
+            e.set_base(0x2000);
+            e.set_sizes(16, 2);
+            e.set_alignment(0);
+            e
+        });
+        m.set_num_group(1);
+        let mut res = VarnodeData { space: AddressSpace::Ram, offset: 0xDEAD, size: 0x77 };
+        assert_eq!(
+            m.assumed_extension(AddressSpace::Ram, Address::new(0x2000), 4, &mut res),
+            FspecOpCode::CPUI_PIECE,
+        );
+        assert_eq!(res.space, AddressSpace::Ram);
+        assert_eq!(res.offset, 0x2000);
+        assert_eq!(res.size, 16);
+        // smallsize sext falls through zext/inttype (cc:393).
+        let mut e = ParamEntry::new(0);
+        *e.flags_mut() = param_entry_flags::SMALLSIZE_SEXT;
+        e.set_type_class(TypeClass::General);
+        e.set_space(AddressSpace::Ram);
+        e.set_base(0x2000);
+        e.set_sizes(16, 2);
+        e.set_alignment(0);
+        let mut res2 = VarnodeData { space: AddressSpace::Ram, offset: 0xDEAD, size: 0x77 };
+        // A justified query at the entry's LSB (containment offset 0)
+        // extends; the container is the whole exclusion entry (cc:378-382).
+        assert_eq!(
+            e.assumed_extension(Address::new(0x2000), 4, AddressSpace::Ram, &mut res2),
+            FspecOpCode::CPUI_INT_SEXT,
+        );
+        assert_eq!(res2, VarnodeData { space: AddressSpace::Ram, offset: 0x2000, size: 16 });
+        // Unjustified (containment offset 1 != 0) -> CPUI_COPY (cc:377),
+        // container untouched.
+        assert_eq!(
+            e.assumed_extension(Address::new(0x2001), 2, AddressSpace::Ram, &mut res2),
+            FspecOpCode::CPUI_COPY,
+        );
+        assert_eq!(res2, VarnodeData { space: AddressSpace::Ram, offset: 0x2000, size: 16 });
     }
 
     // ---- FSPEC-TRIALCMP-0003 unit coverage ----

@@ -1,0 +1,159 @@
+{
+ "schema": 2,
+ "fixture_id": "FSPEC-POSSIBLEPARAM-1204",
+ "stable_function_closure": [
+  "ghidra::ParamListStandardOut::possibleParam(const Address &,int4) const fspec.cc:1765",
+  "ghidra::ParamListStandard::assumedExtension(const Address &,int4,VarnodeData &) const fspec.cc:1426",
+  "ghidra::ParamEntry::assumedExtension(const Address &,int4,VarnodeData &) const fspec.cc:366",
+  "ghidra::ParamEntry::justifiedContain(const Address &,int4) const fspec.cc:248",
+  "ghidra::Address::justifiedContain(int4,const Address &,int4,bool) const address.cc:131",
+  "rugra::fspec::ParamListStandardOut::possible_param src/fspec.rs (fspec.cc:1765-1774, space threaded explicitly)",
+  "rugra::fspec::ParamListStandard::assumed_extension src/fspec.rs (fspec.cc:1426-1437, space threaded explicitly)",
+  "rugra::fspec::ParamEntry::assumed_extension src/fspec.rs (fspec.cc:366-394 with the space-aware cc:377 gate)",
+  "rugra::fspec::ParamEntry::justified_contain_in_space src/fspec.rs (fspec.cc:248-283 with the address.cc:133/cc:269 space guards)"
+ ],
+ "overall_status": "UNTESTED",
+ "status_detail": "The four-case covered projection byte-matches Ghidra 12.0.4: possibleParam's raw entry-list iteration (>= 0 acceptance, no minSize gate, join entries reachable through the per-piece join walk, cross-space ram query offset 4 accepted) and assumedExtension's space-aware cc:377 gate (foreign-space numerically-justified query -> CPUI_COPY), cc:376 join guard, sz gates, list minSize skip, both container shapes and the cc:389-393 flag precedence. Overall remains UNTESTED because big-endian space rows are unreachable (the transitional enum AddressSpace is little-endian only, ADDRESS-0001) and the remaining spaceless justified_contain callers (unjustified_container cc:1411, ParamListStandard::fillin_map cc:1382-1410) are outside this fixture's closure.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "b8c70e804fe33dbb9137bced7ce7b164646d2c03",
+  "rugra_base_tree": "a7176a65cb2f9dc39eb1979cc8a4db7a93443032",
+  "cpp_fixture_sha256": "90d5541f23edbc832110c0ce3c276569fe385307376538466e14154c4c5015be",
+  "rust_fixture_sha256": "bafab149df2aba5e2f9288fca71ce5cf2ad264ac42196facfeb0f9af34b902d5",
+  "fspec_rs_sha256": "ed218325863b756c5a16b31af79727ad1b47bb7445a684dcd085e83d6dbf3d2c",
+  "fspec_doc_sha256": "26a10c52f3ad9e7d773caad62499d54efc306eee41ddf63138cc851529678e58",
+  "runner_sha256": "494c9ac1fedf7e80402522eb1a7991cfa4b8fbfca61c4000304efd8985595497",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "8ab6e4b285d08b06de673946bed850b01ec3437aab91a2c841968642f8c2ed67",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-possibleparam-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
+  }
+ },
+ "architecture": {
+  "id": "synthetic-le-fspec-possibleparam-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "constant=0, other=1, unique=2, ram=3, register=4, stack=5, join=6; byte addressed, wordsize 1, all little-endian",
+  "space_construction": "FixtureTranslate/AddrSpace inserts ConstantSpace, OtherSpace, UniqueSpace and three IPTR_PROCESSOR AddrSpaces (ram index 3, register index 4, stack index 5) with AddrSpace::hasphysical; JoinSpace index 6 is constructed for the join ParamEntry spaceids"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "no cspec decode; staged ParamEntry resources (plain_out_entries: reg [0x200,0x207] min4 exclusion force-left + reg [0x1000,0x100F] min4 align8 + ram [0x2000,0x200F] min2 exclusion force-left; join_out_entries: join reg:0x104+reg:0x100 min4 plus plain reg [0x200,0x207] min4; cross_space_join: join ram:0x200+reg:0x200 min4; assumed_extension: reg [0x100,0x11F] min2 align8 smallsize-zext + join reg:0x204+reg:0x200 min2 smallsize-sext + ram [0x2000,0x200F] min2 exclusion smallsize-inttype + reg [0x3000,0x3007] min2 exclusion smallsize-sext + reg [0x4000,0x4007] min2 exclusion zext|inttype + reg [0x5000,0x5007] min2 exclusion inttype|sext)",
+  "calling_convention": "hand-built ParamEntry/ParamListStandardOut/JoinRecord via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters + set_join_pieces); populateResolver is intentionally NOT called — possibleParam and assumedExtension never touch the resolver"
+ },
+ "analysis_options": {
+  "api": "Direct production ParamListStandardOut::possibleParam and ParamListStandard::assumedExtension calls on both sides; no Action, Rule, PrintC or Funcdata pipeline",
+  "model_state": "case1: three plain output entries, 10 (space,offset,size) queries; case2: join + overlapping plain entry, 6 queries; case3: cross-space join, 5 queries; case4: six entries (aligned zext / join sext / ram inttype / sext / zext|inttype / inttype|sext), 13 queries",
+  "normalization": "None. possibleParam rows print true/false verbatim; assumedExtension rows print get_opname (COPY/INT_ZEXT/INT_SEXT/PIECE — no CPUI_ prefix on either side) and, for non-COPY rows only, the res container as space:0xoffset/size",
+  "debug_macros": "none on either side",
+  "random_seed": "none; construction and queries are deterministic",
+  "error_injection": "none; all queries stay on valid inputs"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture, compiler_spec, analysis_options, cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "sha256": "aad531a749c15329c96c64688def01459f91410bbfbde89e1ceba243222a47d4",
+  "case_order": [
+   "plain_out_entries",
+   "join_out_entries",
+   "cross_space_join",
+   "assumed_extension"
+  ],
+  "cases": [
+   {
+    "id": "plain_out_entries",
+    "setup": "ParamListStandardOut with three plain entries (reg [0x200,0x207] min4 exclusion force-left, reg [0x1000,0x100F] min4 alignment 8, ram [0x2000,0x200F] min2 exclusion force-left), NO populateResolver",
+    "queries": "10 rows: pp spc/off/sz -> true|false",
+    "expect": "fspec.cc:1765-1774 iterates the raw entry list with no minSize gate and accepts any justifiedContain >= 0: unjustified sub-ranges (reg 0x202/2, reg 0x1002/4) and sub-minsize queries (ram 0x2000/1, reg 0x200/1) return true; out-of-extent (reg 0x208/4) and foreign-space queries at numerically coincident offsets return false through the in-justifiedContain space guards (fspec.cc:269 for the aligned entry, address.cc:133 for exclusions), and unique has no entry at all"
+   },
+   {
+    "id": "join_out_entries",
+    "setup": "join ParamEntry (pieces MS-first reg:0x104 high + reg:0x100 low, min4) followed by plain reg [0x200,0x207] min4 exclusion force-left, NO populateResolver",
+    "queries": "6 rows: pp spc/off/sz -> true|false",
+    "expect": "join entries ARE reachable: reg 0x100/4 hits the low piece (join walk offset 0) and reg 0x104/4 hits the high piece (walk offset 4 >= 0 — possibleParam accepts any non-negative containment, unlike findEntry just=true == 0); reg 0x100/8 (walk -1, pokes out of both pieces against the plain entry too) and reg 0x102/4 (pokes out) return false; the plain entry hit returns true; a stack query is rejected by the per-piece address.cc:133 guard"
+   },
+   {
+    "id": "cross_space_join",
+    "setup": "join ParamEntry with pieces in DIFFERENT spaces (MS-first ram:0x200 high + reg:0x200 low, min4), NO populateResolver",
+    "queries": "5 rows: pp spc/off/sz -> true|false",
+    "expect": "the reg query hits the low piece (offset 0 -> true); the ram query walks the foreign low piece (address.cc:133 -1, +4 skip) into the containing high piece (cur=0) and returns offset 4 >= 0 -> true; reg 0x204 is outside both pieces; reg 0x200/8 pokes out of the low piece with the high piece foreign -> -1 -> false; a stack query meets only foreign pieces -> false"
+   },
+   {
+    "id": "assumed_extension",
+    "setup": "ParamListStandard with six entries: reg [0x100,0x11F] min2 alignment 8 smallsize-zext; join reg:0x204+reg:0x200 min2 smallsize-sext; ram [0x2000,0x200F] min2 exclusion smallsize-inttype; reg [0x3000,0x3007] min2 exclusion smallsize-sext; reg [0x4000,0x4007] min2 exclusion zext|inttype; reg [0x5000,0x5007] min2 exclusion inttype|sext",
+    "queries": "13 rows: ae spc/off/sz -> opcode (+ res space:0xoffset/size for non-COPY)",
+    "expect": "fspec.cc:366-394 with the list wrapper cc:1426-1437: justified small values extend with the whole-alignment container (reg 0x100/2 and 0x108/2 -> INT_ZEXT res register:0x100/8 and 0x108/8); the exclusion entry passes back the whole entry (ram 0x2000/4 -> PIECE res ram:0x2000/16); the cc:377 justifiedContain call is SPACE-AWARE — a stack query at a numerically justified offset returns COPY (fspec.cc:269 route), a stack query on the exclusion entry returns COPY (address.cc:133 route); unjustified offsets (0x102/2, ram 0x2002/4) return COPY; the sz gates return COPY (reg 0x100/8 sz>=alignment); the list minSize skip (cc:1431) returns COPY for reg 0x100/1; the join entry returns COPY at cc:376 even though its low piece justifies reg 0x200/2; flag precedence zext > inttype > sext (0x4000/2 -> INT_ZEXT, 0x5000/2 -> PIECE, 0x3000/2 -> INT_SEXT res register:0x3000/8)"
+   }
+  ]
+ },
+ "observation_schema": {
+  "format": "39 fixed-order UTF-8 lines with final newline: one envelope, four case headers, then 10 pp rows, 6 pp rows, 5 pp rows and 13 ae rows",
+  "branches": "pp rows print possibleParam's true/false; ae rows print get_opname and, for non-COPY only, the res container (space:0xoffset/size) — res is never read on the COPY paths (Ghidra leaves it unwritten)",
+  "classification": "opcodes COPY/INT_ZEXT/INT_SEXT/PIECE (get_opname prints without the CPUI_ prefix on both sides)"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "possibleParam returns bool, no state mutation; assumedExtension writes res (VarnodeData&) ONLY after passing the cc:377 != 0 gate — COPY paths leave res untouched on both sides; the list wrapper returns the first non-COPY entry's opcode",
+  "loop_bounds_traversal_order": "possibleParam (cc:1769) and assumedExtension (cc:1430) both iterate entry.begin()..entry.end() in list order with no space/minSize prefilter (only the cc:1431 getMinSize() > size skip inside assumedExtension's loop); the join walk (cc:253) runs pieces from least significant (numPieces()-1) to most",
+  "counters_and_accumulators": "the join walk accumulator res (cc:252) adds vdata.size only for pieces the query does not contain (cur < 0, including the address.cc:133 foreign-space -1) and returns res + cur on the first containing piece; assumedExtension's alignAdjust (cc:385) is computed per call from (addr.getOffset() - addressbase) % alignment",
+  "sort_and_comparison_keys": "possibleParam's acceptance key is justifiedContain >= 0 (NOT == 0 — unjustified containment qualifies); assumedExtension's gate is justifiedContain == 0 exactly; space equality keys are per-piece address.cc:133 (joins), fspec.cc:269 (alignment!=0) and address.cc:133 via the entry Address (alignment==0); the smallsize flag precedence is zext (cc:389) then inttype (cc:391) then sext (cc:393)"
+ },
+ "coverage": {
+  "plain_space_guards": "MATCH (10/10 rows: >= 0 acceptance incl. two unjustified rows, no-minSize rows, both foreign-space guard routes at numerically coincident offsets, out-of-extent and no-entry negatives)",
+  "join_reachability": "MATCH (6/6 rows: join true at offsets 0 and 4, walk -1 poke-out rows, plain-entry hit, stack rejection)",
+  "cross_space_join": "MATCH (5/5 rows incl. the ram query's offset-4 acceptance and the foreign-piece skip accumulator)",
+  "assumed_extension_gates": "MATCH (10 gate rows: aligned zext containers 0x100/8 and 0x108/8, exclusion PIECE container, foreign-space COPY on both routes, unjustified COPY, sz>=alignment, list minSize skip, cc:376 join guard)",
+  "extension_flag_precedence": "MATCH (3/3 rows: sext-only -> INT_SEXT, zext|inttype -> INT_ZEXT, inttype|sext -> PIECE)",
+  "be_space_rows": "UNTESTED (proposed residual: the transitional enum AddressSpace cannot stage big-endian pieces/spaces; ADDRESS-0001)",
+  "remaining_spaceless_callers": "UNTESTED (proposed residual: unjustified_container cc:1411 and ParamListStandard::fillin_map cc:1382-1410 still call the spaceless justified_contain; outside this fix's lease)"
+ },
+ "residuals": [
+  {
+   "todo_id": "FSPEC-POSSIBLEPARAM-JOIN-0006",
+   "status": "RESOLVED-BY-FIXTURE",
+   "detail": "Both A46 residual-3 call sites are space-aware and oracle-pinned: ParamListStandardOut::possible_param iterates all entries through justified_contain_in_space (join entries reachable, >= 0 acceptance), ParamEntry::assumed_extension threads query_space into the cc:377 gate (foreign-space numerically-justified query -> CPUI_COPY)."
+  },
+  {
+   "todo_id": "ADDRESS-0001",
+   "status": "UNTESTED",
+   "detail": "BE-space rows: the enum AddressSpace model is little-endian-only, so big-endian justification arithmetic (address.cc:138 off1-off2 branch) stays unreachable through these callers."
+  },
+  {
+   "todo_id": "FSPEC-SPACELESS-REMAINDER",
+   "status": "UNTESTED",
+   "detail": "Remaining spaceless justified_contain callers after this fix: ParamListStandard::unjustified_container (cc:1411, fspec.rs call at the unjustified_container body) and ParamListStandard::fillin_map's two trial queries (cc:1382-1410). Need their own space-threading + fixture (root to register)."
+  }
+ ],
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "rugra_build": "Archive the pinned base, overlay the owned fspec source, verify the complete Cargo.lock registry closure, then let /usr/bin/cargo --locked --offline select and checksum the current Linux target's cached packages under the global build lock.",
+  "expected_stdout_lines": 39,
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "1d44aba57a80d1a0fba702117b36b221795f2f142a93b81361fd86c192cf4e92"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "ab31ac3712c925450543d408eb4118efdb16b855db8e51d3be8b27c46716f306",
+  "rugra_stdout_sha256": "ab31ac3712c925450543d408eb4118efdb16b855db8e51d3be8b27c46716f306"
+ }
+}
