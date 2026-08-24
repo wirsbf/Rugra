@@ -448,3 +448,48 @@ overlaybase、spacebase contain 解析、readSpace 未知名错误、bad default
 EXTERNAL-block import 的 `void free(void *__ptr)` halt_baddata 声明段）在
 `examples/curl_decompile.rs`，由 124 语料端到端差分验证（EXTERNAL-stub 计数变化），不属本
 fixture 范围。
+
+### 2026-08-24：TYPEOP-FSPEC-SPACE-0001 切片1（Ghidra fspec.cc:2107-2171 / op.cc:24 / translate.cc:373 / space.cc:143-189）
+
+fspec 空间接通为**真实 registry 空间**（此前 D0 只能以 Iop 地址 + typed Weak 暂存对象身份），
+带完整的 print/encode/decode/lookup 行为与 C++ 指针解引用的 Rust 对应物：
+
+- `FSPEC_SPACE_NAME`（"fspec"，fspec.cc:2107 `FspecSpace::NAME`）与 `IOP_SPACE_NAME`
+  （"iop"，op.cc:24 `IopSpace::NAME`）保留名常量；`insert_space` 的 Fspec 分支
+  （translate.cc:373-379）改用常量并**在校验前**接线 `fspec_table` 管理器回链（与 JoinSpace
+  的 `manager_join_tables` 同一注入点语义，Ghidra 构造器自带 manager）。
+- `FspecEntry` / `FspecEntryTable`（RUGRA-GLUE）：Ghidra 的 fspec offset **就是**
+  `FuncCallSpecs *`（fspec.hh:344-346），printRaw/encodeAttributes 直接解引用
+  （fspec.cc:2125）。Rust 以 registry 侧 offset→(name(fspec.hh:1647),
+  entryaddress(fspec.hh:1648)) 侧表等价替代，经 `AddrSpaceInner.fspec_table` Weak 回链
+  被空间读取。注册口 `SpaceRegistry::register_fspec_entry(offset, name, entry)`；未注册
+  offset 的解引用在 C++ 是野指针 UB，Rust 按 unlinked-join 先例确定性 panic
+  （"Unresolved fspec address"）。切片2 将把注册挪到 Funcdata callspec bank。
+- `AddrSpace::encode_attributes` / `encode_attributes_with_size`（space.cc:143/156 基类）：
+  基类写 space 名 + offset(+size)；IopSpace 覆盖只写 "iop" 丢 offset（op.hh:49-50）；
+  FspecSpace 覆盖投影穿过 callspec（fspec.cc:2124-2151）——invalid entry 只写字面
+  "fspec"（无 offset/size），valid entry 写**entry** 空间名 + entry offset(+size)，
+  即编码形态永不携带 fspec offset 本身。JoinSpace piece 编组未移植（MARSHAL-XML-TEXT-0001，
+  显式 panic 不静默错码）。
+- `AddrSpace::decode_attributes(decoder, &mut size)`（space.cc:169-189）：按名取
+  offset/size、跳过其余属性，缺 offset 返回 `Err("Address is missing offset")`；
+  JoinSpace piece 解码未移植（MARSHAL-XML-TEXT-0001，显式 panic）。
+- `print_raw` Fspec 分支（fspec.cc:2153-2164）：name 非空直印 name；否则
+  "func_" + entry 空间自身 printRaw（invalid entry → `Address::printRaw` 的
+  "invalid_addr"，address.hh:305-311）。
+- `AddrSpace::decode` 四个 never-decode 守卫按 C++ 覆盖 panic：Constant
+  （space.cc:380）、Fspec（fspec.cc:2166 "Should never decode fspec space from
+  stream"）、Iop（op.cc:61）、Join（space.cc:646）。
+- `attrib_space()/attrib_offset()/attrib_size()`（marshal.cc:1247/1243/1246 锁定 id
+  20/16/19 的运行时具名 AttributeId；RUGRA-GLUE 模式同 translate.rs/pcodeparse.rs）。
+
+Oracle 证据：`tests/oracle/fspec_space_identity_1204.{cc,rs}` +
+`tools/run_fspec_space_identity_oracle.sh`（锁定 12.0.4，5 case 逐字节 MATCH：注册/查找/
+shortcut 'f'/重复与错型拒绝（含 Ghidra insertSpace 抛出前替换 fspecspace 缓存槽的真实
+行为）、同 offset CONST/STACK/FSPEC/IOP/JOIN 判别（==/</map 序/overlap/containedBy/
+wraparound）、4 种 printRaw 形态、encode 投影（invalid→`space="fspec"` 且 decode 抛
+"Address is missing offset"；valid→entry 空间+offset 且 decode 结果≠原地址）+ 按名
+resolve + 未知名/空 `<addr/>` 拒绝路径、Range 跨空间 contains/overlapJoin、fspec/iop
+never-decode 守卫）。残留（coverage 表 UNTESTED）：PackedEncode::writeSpace 特殊空间字节
+与 PackedDecode readSpace 拒绝（MARSHAL-XML-TEXT-0001）、IopSpace::printRaw
+（SPACE-IOP-PRINTRAW-0001）、varnode/funcdata 消费侧迁移（本 TODO 切片2）。

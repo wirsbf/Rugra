@@ -405,6 +405,31 @@ Encode to string format (comma-separated ranges)
 Oracle 证据：`tests/oracle/address_space_handle_1204.{cc,rs}` + 
 `tools/run_address_space_handle_oracle.sh`（锁定 12.0.4 oracle，7 case 逐字节 MATCH，含
 getLastAddrOpen 末空间 quirk 与 wrap/justified/跨空间排序/RangeProperties 错误路径）。
-未移植残留：`Address::read`/`encode`/`decode`（绑 MARSHAL-XML-TEXT-0001）、`renormalize` 与
+未移植残留（2026-08-24 更新：`SpaceAddress::encode/decode` 已随 TYPEOP-FSPEC-SPACE-0001
+切片1以 tree/XML 属性编解码形态落地，见下节）：`Address::read`（绑 MARSHAL-XML-TEXT-0001）、`renormalize` 与
 join-record/`resolveConstant` 统一（JoinDB 未入 SpaceRegistry，留给 resolver/join 后继原子）、
 SeqNum 空间化（随 varnode 消费方迁移）。
+
+### 2026-08-24：TYPEOP-FSPEC-SPACE-0001 切片1（Ghidra address.cc:25/205/226 + address.hh:469-486 + pcoderaw.cc:107-130）
+
+`SpaceAddress` 补齐编解码面（此前的 encode/decode 残差由本切片以 tree/XML 属性编解码
+形态落地；`Address::read` 仍留 MARSHAL-XML-TEXT-0001）：
+
+- `elem_addr()`（address.cc:25 `ELEM_ADDR = ElementId("addr",11)`）：`<addr>` 元素 id
+  构造器（RUGRA-GLUE 模式同 pcodeparse.rs 的重复声明）。
+- `SpaceAddress::encode(encoder)` / `encode_with_size(encoder, size)`
+  （address.hh:469-486）：open `<addr>` → 非空 base 委托空间的
+  `encode_attributes`/`encode_attributes_with_size`（space.cc:143/156）→ close；
+  null base 不写属性（m_maximal 哨兵在 C++ 解引用 `~0` 伪指针为 UB，Rust 同样不写）。
+- `SpaceAddress::decode(decoder, registry)` / `decode_with_size`（address.cc:205/226 经
+  pcoderaw.cc:107-130 `VarnodeData::decodeFromAttributes`）：属性游标找 `space` →
+  registry 按名解析（`XmlDecode::readSpace`/marshal.cc:400-409 语义，未知名
+  `Err("Unknown address space name: X")`）→ `rewind_attributes` → 空间的
+  `decode_attributes`（space.cc:169）重走属性取 offset（缺 offset
+  `Err("Address is missing offset")`）；`name`（寄存器形）依赖 Translate register 表
+  （SPACE-0001 残差）显式报错；无 `space` 属性的 `<addr/>` 得 invalid 地址（C++ 的
+  offset 未初始化在 Rust 规范化为 0）。
+
+Oracle 证据：与 space.md 同一条目——`tests/oracle/fspec_space_identity_1204.{cc,rs}` +
+`tools/run_fspec_space_identity_oracle.sh`（5 case 逐字节 MATCH，encode/decode case 覆盖
+fspec invalid/valid-entry 投影、ram 自往返、按名 resolve、未知名与空 `<addr/>` 路径）。

@@ -670,6 +670,60 @@ pub mod manager_join {
     }
 }
 
+// RUGRA-GLUE: fspec_space — Ghidra's FspecSpace stores a `FuncCallSpecs *`
+// as the address OFFSET (fspec.hh:344-346: "the offset is the actual value
+// of the pointer"); printRaw/encodeAttributes dereference that pointer
+// (fspec.cc:2125 `FuncCallSpecs *fc = (FuncCallSpecs *)(uintp)offset`). Rust
+// cannot dereference a raw integer, so the registry keeps the same
+// offset→object association in a side table — the exact twin of the
+// `manager_join_tables` backlink that stands in for
+// `getManager()->findJoin` (space.cc:593). The table carries only the two
+// fields the Ghidra methods read: `name` (fspec.hh:1647) and `entryaddress`
+// (fspec.hh:1648). TYPEOP-FSPEC-SPACE-0001 slice 2 re-homes the
+// registration at the Funcdata callspec bank; until then the fixture (and
+// only the fixture) registers entries through
+// [`SpaceRegistry::register_fspec_entry`].
+/// The per-offset view of a FuncCallSpecs as seen by the fspec space.
+#[derive(Debug, Clone)]
+pub struct FspecEntry {
+    // Ghidra: fspec.hh:1647 FuncCallSpecs::name
+    /// Identifier (function name) associated with the call prototype.
+    pub name: String,
+    // Ghidra: fspec.hh:1648 FuncCallSpecs::entryaddress
+    /// First executing address of the callee; `None` is the invalid
+    /// (null-base) `Address` of the C++ default constructor.
+    pub entry: Option<(AddrSpace, u64)>,
+}
+
+// RUGRA-GLUE: FspecEntryTable (Ghidra needs no table — the C++ offset IS a
+// dereferenceable pointer; this Vec-backed map is the Rust stand-in.)
+/// Registry-side offset→entry map backing fspec-space dereferences.
+#[derive(Debug, Default)]
+pub struct FspecEntryTable {
+    entries: std::collections::BTreeMap<u64, FspecEntry>,
+}
+
+impl FspecEntryTable {
+    // RUGRA-GLUE: resolve (Ghidra dereferences `(FuncCallSpecs *)(uintp)offset`.)
+    /// The entry stored for `offset`, if any.
+    pub fn resolve(&self, offset: u64) -> Option<&FspecEntry> {
+        self.entries.get(&offset)
+    }
+
+    // RUGRA-GLUE: register (Ghidra registers implicitly by allocating the
+    // FuncCallSpecs on the heap whose address becomes the offset.)
+    /// Associate `offset` with a call-spec view.
+    pub fn register(&mut self, offset: u64, name: &str, entry: Option<(AddrSpace, u64)>) {
+        self.entries.insert(
+            offset,
+            FspecEntry {
+                name: name.to_string(),
+                entry,
+            },
+        );
+    }
+}
+
 /// Join space (for combining multiple spaces)
 ///
 /// Corresponds to Ghidra's `JoinSpace` in space.hh
@@ -949,6 +1003,12 @@ pub const OTHER_SPACE_INDEX: i32 = 1;
 pub const UNIQUE_SPACE_NAME: &str = "unique";
 // Ghidra: space.cc:418 UniqueSpace::SIZE
 pub const UNIQUE_SPACE_SIZE: u32 = 4;
+// Ghidra: fspec.cc:2107 FspecSpace::NAME
+/// Reserved name for the \b fspec space (fspec.cc:2107).
+pub const FSPEC_SPACE_NAME: &str = "fspec";
+// Ghidra: op.cc:24 IopSpace::NAME
+/// Reserved name for the \b iop space (op.cc:24).
+pub const IOP_SPACE_NAME: &str = "iop";
 // RUGRA-GLUE: reserved EXTERNAL space-name constant (Ghidra declares it on
 // the platform side — Java `AddressSpace.EXTERNAL_SPACE` =
 // `new GenericAddressSpace("EXTERNAL", 32, TYPE_EXTERNAL, 0)`,
@@ -981,6 +1041,28 @@ pub fn calc_mask(size: i32) -> u64 {
         0xffffffffffffffff,
     ];
     UINTBMASKS[if (size as u32) < 8 { size as usize } else { 8 }]
+}
+
+// RUGRA-GLUE: attrib_space/attrib_offset/attrib_size — Ghidra declares the
+// marshal attribute ids once in marshal.cc's global table (ATTRIB_SPACE
+// marshal.cc:1247, ATTRIB_OFFSET marshal.cc:1243, ATTRIB_SIZE
+// marshal.cc:1246); Rust has no global constructor table, so the locked
+// ids are minted through these per-call constructors (the same pattern as
+// translate.rs's ATTRIB_SPACE and pcodeparse.rs's elem_addr).
+// Ghidra: marshal.cc:1247 ATTRIB_SPACE
+/// Marshaling attribute "space" (locked id 20).
+pub fn attrib_space() -> crate::marshal::AttributeId {
+    crate::marshal::AttributeId::new("space", 20)
+}
+// Ghidra: marshal.cc:1243 ATTRIB_OFFSET
+/// Marshaling attribute "offset" (locked id 16).
+pub fn attrib_offset() -> crate::marshal::AttributeId {
+    crate::marshal::AttributeId::new("offset", 16)
+}
+// Ghidra: marshal.cc:1246 ATTRIB_SIZE
+/// Marshaling attribute "size" (locked id 19).
+pub fn attrib_size() -> crate::marshal::AttributeId {
+    crate::marshal::AttributeId::new("size", 19)
 }
 
 // RUGRA-GLUE: SpaceVarnodeData (Ghidra's VarnodeData in translate.hh carries
@@ -1062,6 +1144,14 @@ struct AddrSpaceInner {
     refcount: i32,
     /// Spacebase-subclass state; `None` for non-IPTR_SPACEBASE spaces.
     spacebase: Option<SpacebaseState>,
+    // Ghidra: space.hh:118 AddrSpace::manage (manager backlink, fspec half).
+    /// Weak link to the owning manager's fspec-entry table, wired when the
+    /// registry inserts this space (Rugra's constructors take no manager, so
+    /// `insertSpace` is the association point). Only the fspec space reads
+    /// it — `FspecSpace::printRaw`/`encodeAttributes` dereference the offset
+    /// as a `FuncCallSpecs *` (fspec.cc:2125/2130/2145/2155); `None` on
+    /// every other kind and on an fspec space that was never registered.
+    fspec_table: Option<Weak<RefCell<FspecEntryTable>>>,
     // Ghidra: space.hh:118 AddrSpace::manage (manager backlink, join half).
     /// Weak link to the owning manager's join-record tables, wired when the
     /// registry inserts this space (Rugra's constructors take no manager, so
@@ -1120,6 +1210,7 @@ impl AddrSpace {
             refcount: 0,
             spacebase: None,
             manager_join_tables: None,
+            fspec_table: None,
         };
         if big_end {
             inner.flags |= space_flags::BIG_ENDIAN;
@@ -1310,6 +1401,7 @@ impl AddrSpace {
             deadcode_delay: dl,
             refcount: 0,
             manager_join_tables: None,
+            fspec_table: None,
             spacebase: Some(SpacebaseState {
                 contain: Some(base.clone()),
                 has_base_register: false,
@@ -1366,6 +1458,7 @@ impl AddrSpace {
             deadcode_delay: base.get_deadcode_delay(),
             refcount: 0,
             manager_join_tables: None,
+            fspec_table: None,
             spacebase: Some(SpacebaseState {
                 contain: Some(base.clone()),
                 has_base_register: false,
@@ -1424,6 +1517,7 @@ impl AddrSpace {
             deadcode_delay: 0,
             refcount: 0,
             manager_join_tables: None,
+            fspec_table: None,
             spacebase: None,
         };
         AddrSpace(Rc::new(RefCell::new(inner)))
@@ -1559,11 +1653,184 @@ impl AddrSpace {
     /// close it. The `<space_base>` and `<space_overlay>` variants are
     /// handled by [`SpaceRegistry::decode_space`]
     /// (translate.cc:126/661) because they read extra space-reference
-    /// attributes through the manager.
+    /// attributes through the manager. The four never-decoded special
+    /// spaces throw exactly like their C++ overrides: ConstantSpace
+    /// (space.cc:380), FspecSpace (fspec.cc:2166), IopSpace (op.cc:61) and
+    /// JoinSpace (space.cc:646) — mapped to the deterministic panics this
+    /// file uses for LowlevelError.
     pub fn decode(&self, decoder: &mut dyn crate::marshal::Decoder) {
+        match self.get_type() {
+            SpaceType::Constant => panic!("Should never decode the constant space"),
+            SpaceType::Fspec => panic!("Should never decode fspec space from stream"),
+            SpaceType::Iop => panic!("Should never decode iop space from stream"),
+            SpaceType::Join => panic!("Should never decode join space"),
+            _ => {}
+        }
         let elem_id = decoder.open_element();
         self.decode_basic_attributes(decoder);
         decoder.close_element(elem_id);
+    }
+
+    // Ghidra: space.cc:143 AddrSpace::encodeAttributes
+    /// Write the main attributes for an address within this space.
+    /// Faithful to the virtual dispatch in space.cc: the base form writes
+    /// ATTRIB_SPACE + ATTRIB_OFFSET (space.cc:146-147); the IopSpace
+    /// override writes only the literal space name "iop", dropping the
+    /// offset (op.hh:49); the FspecSpace override projects through the
+    /// offset's call spec — an invalid entry address writes only the
+    /// literal "fspec", a valid one writes the ENTRY space name and ENTRY
+    /// offset (fspec.cc:2124-2136), i.e. the encoded form never carries the
+    /// fspec offset itself. `writeSpace` reduces to writing the space name
+    /// string in the XML/tree encoding (XmlEncode::writeSpace,
+    /// marshal.cc). The JoinSpace override (space.cc:502) is not ported
+    /// here and fails loudly (MARSHAL-XML-TEXT-0001 residual).
+    pub fn encode_attributes(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        offset: u64,
+    ) {
+        match self.get_type() {
+            // Ghidra: op.hh:49 IopSpace::encodeAttributes override.
+            SpaceType::Iop => {
+                encoder.write_string(&attrib_space(), IOP_SPACE_NAME);
+                return;
+            }
+            // Ghidra: fspec.cc:2124 FspecSpace::encodeAttributes override.
+            SpaceType::Fspec => {
+                self.encode_attributes_fspec(encoder, offset, None);
+                return;
+            }
+            SpaceType::Join => panic!(
+                "JoinSpace::encodeAttributes piece encoding is not ported (MARSHAL-XML-TEXT-0001)"
+            ),
+            _ => {}
+        }
+        // encoder.writeSpace(ATTRIB_SPACE,this);
+        encoder.write_string(&attrib_space(), &self.get_name());
+        // encoder.writeUnsignedInteger(ATTRIB_OFFSET, offset);
+        encoder.write_unsigned_integer(&attrib_offset(), offset);
+    }
+
+    // Ghidra: space.cc:156 AddrSpace::encodeAttributes (3-arg)
+    /// Write the main attributes of an address and a size. Faithful to the
+    /// 3-argument virtual form (space.cc:156-162): identical dispatch to
+    /// [`AddrSpace::encode_attributes`] plus ATTRIB_SIZE on the base path;
+    /// the IopSpace override still writes only "iop" (op.hh:50) and the
+    /// FspecSpace override adds the size only on the valid-entry path
+    /// (fspec.cc:2138-2151).
+    pub fn encode_attributes_with_size(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        offset: u64,
+        size: i32,
+    ) {
+        match self.get_type() {
+            // Ghidra: op.hh:50 IopSpace::encodeAttributes(3-arg) override.
+            SpaceType::Iop => {
+                encoder.write_string(&attrib_space(), IOP_SPACE_NAME);
+                return;
+            }
+            // Ghidra: fspec.cc:2138 FspecSpace::encodeAttributes(3-arg).
+            SpaceType::Fspec => {
+                self.encode_attributes_fspec(encoder, offset, Some(size));
+                return;
+            }
+            SpaceType::Join => panic!(
+                "JoinSpace::encodeAttributes piece encoding is not ported (MARSHAL-XML-TEXT-0001)"
+            ),
+            _ => {}
+        }
+        encoder.write_string(&attrib_space(), &self.get_name());
+        encoder.write_unsigned_integer(&attrib_offset(), offset);
+        encoder.write_signed_integer(&attrib_size(), size as i64);
+    }
+
+    // Ghidra: fspec.cc:2124 FspecSpace::encodeAttributes /
+    //   fspec.cc:2138 FspecSpace::encodeAttributes(3-arg)
+    /// The fspec-space specialization shared by both encode arities:
+    /// `FuncCallSpecs *fc = (FuncCallSpecs *)(uintp)offset` — an invalid
+    /// entry address writes only the literal "fspec" (no offset, no size);
+    /// a valid entry writes the entry space name, entry offset, and (3-arg
+    /// form only) the size. An offset with no registered entry would be a
+    /// wild-pointer dereference in C++ (undefined); Rust fails
+    /// deterministically, the same policy as the unlinked-join panic.
+    fn encode_attributes_fspec(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        offset: u64,
+        size: Option<i32>,
+    ) {
+        let tables = self
+            .get_fspec_table()
+            .unwrap_or_else(|| panic!("Unresolved fspec address"));
+        let fc = tables
+            .borrow()
+            .resolve(offset)
+            .cloned()
+            .unwrap_or_else(|| panic!("Unresolved fspec address"));
+        match fc.entry {
+            // if (fc->getEntryAddress().isInvalid())
+            //   encoder.writeString(ATTRIB_SPACE, "fspec");
+            None => encoder.write_string(&attrib_space(), FSPEC_SPACE_NAME),
+            Some((spc, entry_off)) => {
+                // AddrSpace *id = fc->getEntryAddress().getSpace();
+                // encoder.writeSpace(ATTRIB_SPACE, id);
+                encoder.write_string(&attrib_space(), &spc.get_name());
+                // encoder.writeUnsignedInteger(ATTRIB_OFFSET,
+                //   fc->getEntryAddress().getOffset());
+                encoder.write_unsigned_integer(&attrib_offset(), entry_off);
+                if let Some(sz) = size {
+                    // encoder.writeSignedInteger(ATTRIB_SIZE, size);
+                    encoder.write_signed_integer(&attrib_size(), sz as i64);
+                }
+            }
+        }
+    }
+
+    // Ghidra: space.cc:169 AddrSpace::decodeAttributes
+    /// Recover an offset (and possibly a size) from the attributes of an
+    /// open element describing an address in this space. Faithful to
+    /// `decodeAttributes` (space.cc:169-189): walk every attribute, take
+    /// ATTRIB_OFFSET / ATTRIB_SIZE by name, skip the rest, and throw
+    /// `LowlevelError("Address is missing offset")` (an `Err` here) when no
+    /// offset attribute was seen. The JoinSpace override
+    /// (space.cc:539) is not ported and fails loudly
+    /// (MARSHAL-XML-TEXT-0001 residual).
+    pub fn decode_attributes(
+        &self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        size: &mut u32,
+    ) -> Result<u64, String> {
+        if self.get_type() == SpaceType::Join {
+            panic!(
+                "JoinSpace::decodeAttributes piece decoding is not ported (MARSHAL-XML-TEXT-0001)"
+            );
+        }
+        let mut offset: u64 = 0;
+        let mut found_offset = false;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("offset") => {
+                    found_offset = true;
+                    offset = decoder.read_unsigned_integer();
+                }
+                Some("size") => {
+                    *size = decoder.read_signed_integer() as i32 as u32;
+                }
+                _ => {
+                    // Skip the unknown attribute's value.
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if !found_offset {
+            return Err("Address is missing offset".to_string());
+        }
+        Ok(offset)
     }
 
     // RUGRA-GLUE: set_contain (Ghidra's derived decode bodies write the
@@ -1682,6 +1949,21 @@ impl AddrSpace {
     /// Wire the owning registry's join-record tables into this space.
     pub fn set_manager_join_tables(&self, tables: &Rc<RefCell<manager_join::JoinRecordTables>>) {
         self.0.borrow_mut().manager_join_tables = Some(Rc::downgrade(tables));
+    }
+
+    // RUGRA-GLUE: set_fspec_table — same association point as
+    /// `set_manager_join_tables` above, for the fspec half of the
+    /// `AddrSpace::manage` backlink (`FspecSpace::printRaw`/
+    /// `encodeAttributes` dereference the offset pointer, fspec.cc:2125).
+    /// Wire the owning registry's fspec-entry table into this space.
+    pub fn set_fspec_table(&self, tables: &Rc<RefCell<FspecEntryTable>>) {
+        self.0.borrow_mut().fspec_table = Some(Rc::downgrade(tables));
+    }
+
+    // RUGRA-GLUE: get_fspec_table — the read side of the fspec half.
+    /// `None` for spaces that were never inserted into a registry.
+    fn get_fspec_table(&self) -> Option<Rc<RefCell<FspecEntryTable>>> {
+        self.0.borrow().fspec_table.as_ref().and_then(|w| w.upgrade())
     }
 
     // RUGRA-GLUE: get_manager_join_tables — the read side of the
@@ -2045,6 +2327,7 @@ impl AddrSpace {
             //   OtherSpace::printRaw overrides (unpadded hex).
             SpaceType::Constant => return format!("0x{:x}", offset),
             SpaceType::Join => return self.print_raw_join(offset),
+            SpaceType::Fspec => return self.print_raw_fspec(offset),
             SpaceType::Iop => {
                 // Ghidra: op.cc:41 IopSpace::printRaw override — RESIDUAL
                 // SPACE-IOP-PRINTRAW-0001: both terminal renders (the
@@ -2085,6 +2368,37 @@ impl AddrSpace {
             if cut != 0 {
                 out.push_str(&format!("+{}", cut));
             }
+        }
+        out
+    }
+
+    // Ghidra: fspec.cc:2153 FspecSpace::printRaw
+    /// The fspec-space specialization: `FuncCallSpecs *fc =
+    /// (FuncCallSpecs *)(uintp)offset` — a non-empty name prints directly,
+    /// otherwise `func_` is followed by the entry address's own `printRaw`
+    /// (an invalid entry prints `invalid_addr` through
+    /// `Address::printRaw`, address.hh:305-311). An offset with no
+    /// registered entry would be a wild-pointer dereference in C++
+    /// (undefined); Rust fails deterministically, the same policy as the
+    /// unlinked-join panic.
+    fn print_raw_fspec(&self, offset: u64) -> String {
+        let tables = self
+            .get_fspec_table()
+            .unwrap_or_else(|| panic!("Unresolved fspec address"));
+        let fc = tables
+            .borrow()
+            .resolve(offset)
+            .cloned()
+            .unwrap_or_else(|| panic!("Unresolved fspec address"));
+        // if (fc->getName().size() != 0) s << fc->getName();
+        if !fc.name.is_empty() {
+            return fc.name;
+        }
+        // s << "func_"; fc->getEntryAddress().printRaw(s);
+        let mut out = String::from("func_");
+        match fc.entry {
+            Some((spc, entry_off)) => out.push_str(&spc.print_raw(entry_off)),
+            None => out.push_str("invalid_addr"),
         }
         out
     }
@@ -2253,6 +2567,13 @@ pub struct SpaceRegistry {
     /// handle alone. Shared (not a plain field) precisely because the
     /// spaces hold weak links into it.
     join_tables: Rc<RefCell<manager_join::JoinRecordTables>>,
+    // RUGRA-GLUE: fspec_tables (the fspec half of Ghidra's
+    // `AddrSpace::manage` backlink: C++ fspec offsets ARE FuncCallSpecs
+    // pointers that printRaw/encodeAttributes dereference, fspec.cc:2125;
+    // Rust resolves them through this shared table instead.)
+    /// The offset→call-spec view table, shared with the registered fspec
+    /// space via the `fspec_table` weak backlink.
+    fspec_table: Rc<RefCell<FspecEntryTable>>,
 }
 
 impl SpaceRegistry {
@@ -2294,12 +2615,19 @@ impl SpaceRegistry {
                 self.uniq_space = Some(spc.clone());
             }
             SpaceType::Fspec => {
-                if spc.get_name() != "fspec" {
+                if spc.get_name() != FSPEC_SPACE_NAME {
                     name_type_mismatch = true;
                 }
                 if self.fspec_space.is_some() {
                     duplicate_name = true;
                 }
+                // Wire the manager backlink (Ghidra's FspecSpace receives its
+                // AddrSpaceManager in the constructor, fspec.cc:2116; Rugra
+                // constructors take no manager, so insertSpace is the
+                // association point). Wired before validation so an insert
+                // that throws still leaves the space pointing at this
+                // manager, like a Ghidra-constructed space.
+                spc.set_fspec_table(&self.fspec_table);
                 self.fspec_space = Some(spc.clone());
             }
             SpaceType::Join => {
@@ -2480,6 +2808,26 @@ impl SpaceRegistry {
     /// Get the internal callspec space (translate.hh:466-468).
     pub fn get_fspec_space(&self) -> Option<AddrSpace> {
         self.fspec_space.clone()
+    }
+
+    // RUGRA-GLUE: register_fspec_entry — Ghidra needs no registration: a
+    /// C++ fspec offset IS a live `FuncCallSpecs *` whose members
+    /// printRaw/encodeAttributes read (fspec.cc:2125). The Rust registry
+    /// mirrors that dereference through its fspec-entry table; TYPEOP-FSPEC-
+    /// SPACE-0001 slice 2 moves the calls to the Funcdata callspec bank.
+    /// Associate an fspec-space `offset` with the call-spec view
+    /// (name + entry address) the C++ dereference would observe.
+    pub fn register_fspec_entry(
+        &mut self,
+        offset: u64,
+        name: &str,
+        entry: Option<(&AddrSpace, u64)>,
+    ) {
+        self.fspec_table.borrow_mut().register(
+            offset,
+            name,
+            entry.map(|(spc, off)| (spc.clone(), off)),
+        );
     }
 
     // Ghidra: translate.hh:258 AddrSpaceManager::getJoinSpace

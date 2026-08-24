@@ -10,12 +10,20 @@
 //! - [`Range`] - An address range (first, last)
 //! - [`RangeList`] - A collection of non-overlapping address ranges
 
-use crate::space::{AddrSpace, SpaceRegistry, SpaceType};
+use crate::space::{attrib_offset, attrib_space, AddrSpace, SpaceRegistry, SpaceType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
+
+// Ghidra: address.cc:25 ELEM_ADDR
+/// Marshaling element `<addr>` (locked id 11, address.cc:25). Ghidra
+/// declares this file-scope `ElementId` once; Rust mints it through a
+/// constructor per call, the same pattern as pcodeparse.rs's duplicate.
+pub fn elem_addr() -> crate::marshal::ElementId {
+    crate::marshal::ElementId::new("addr", 11)
+}
 
 /// Memory address type (legacy offset carrier with an optional space tag)
 ///
@@ -1219,6 +1227,111 @@ impl SpaceAddress {
         match &self.base {
             SpaceBase::Space(spc) => spc,
             _ => panic!("Address::{} on an invalid or extremal address", what),
+        }
+    }
+
+    // Ghidra: address.hh:469 Address::encode
+    /// Save an `<addr>` element corresponding to this address: open the
+    /// element, and for a non-null base let the space's `encodeAttributes`
+    /// (space.cc:143) write the attributes, exactly like address.hh:469-474.
+    /// A null base writes no attributes; the `m_maximal` sentinel (whose C++
+    /// form would dereference the `~0` pseudo-pointer) also writes none.
+    pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
+        encoder.open_element(&elem_addr());
+        if let Some(spc) = self.get_space() {
+            spc.encode_attributes(encoder, self.offset);
+        }
+        encoder.close_element(&elem_addr());
+    }
+
+    // Ghidra: address.hh:481 Address::encode (with size)
+    /// Save an `<addr>` element with an extra `size` attribute
+    /// (address.hh:481-486), routing through the space's 3-argument
+    /// `encodeAttributes` (space.cc:156).
+    pub fn encode_with_size(&self, encoder: &mut dyn crate::marshal::Encoder, size: i32) {
+        encoder.open_element(&elem_addr());
+        if let Some(spc) = self.get_space() {
+            spc.encode_attributes_with_size(encoder, self.offset, size);
+        }
+        encoder.close_element(&elem_addr());
+    }
+
+    // Ghidra: address.cc:205 Address::decode
+    /// Decode an address from an open element. Faithful to the C++ route
+    /// (`Address::decode` → `VarnodeData::decode` → `decodeFromAttributes`,
+    /// address.cc:205-212/pcoderaw.cc:100-130): the attribute walk looks for
+    /// `space`; once seen the value resolves through the registry by name
+    /// (XmlDecode::readSpace's `getSpaceByName`, marshal.cc:401-409 — an
+    /// unknown name is `DecoderError("Unknown address space name: <nm>")`,
+    /// an `Err` here), the attributes are rewound, and the space's
+    /// `decodeAttributes` (space.cc:169) re-walks them for the offset
+    /// (`LowlevelError("Address is missing offset")` as an `Err`). A
+    /// `name` attribute (register form) needs the Translate register table
+    /// and fails explicitly. An element with no `space` attribute yields the
+    /// invalid address (Ghidra leaves the null base; Rust also normalizes
+    /// the never-written offset to 0).
+    pub fn decode(
+        decoder: &mut dyn crate::marshal::Decoder,
+        registry: &SpaceRegistry,
+    ) -> Result<SpaceAddress, String> {
+        let mut size = 0u32;
+        SpaceAddress::decode_with_size(decoder, registry, &mut size)
+    }
+
+    // Ghidra: address.cc:226 Address::decode (with size)
+    /// Decode an address and size from an open element
+    /// (address.cc:226-234): identical to [`SpaceAddress::decode`] with the
+    /// recovered size written through `size`.
+    pub fn decode_with_size(
+        decoder: &mut dyn crate::marshal::Decoder,
+        registry: &SpaceRegistry,
+        size: &mut u32,
+    ) -> Result<SpaceAddress, String> {
+        let elem_id = decoder.open_element();
+        // VarnodeData::decodeFromAttributes (pcoderaw.cc:107): space starts
+        // null, size starts 0.
+        let mut space: Option<AddrSpace> = None;
+        let mut offset: u64 = 0;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break; // Its possible to have no attributes in an <addr/> tag
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("space") => {
+                    // space = decoder.readSpace(); — name lookup via the
+                    // manager (marshal.cc:401-409).
+                    let nm = decoder.read_string();
+                    let Some(spc) = registry.get_space_by_name(&nm) else {
+                        return Err(format!("Unknown address space name: {}", nm));
+                    };
+                    // decoder.rewindAttributes();
+                    decoder.rewind_attributes();
+                    // offset = space->decodeAttributes(decoder,size);
+                    offset = spc.decode_attributes(decoder, size)?;
+                    space = Some(spc);
+                    break;
+                }
+                Some("name") => {
+                    // ATTRIB_NAME resolves through
+                    // Translate::getRegister (pcoderaw.cc:122-127); the
+                    // register table is a SPACE-0001 residual.
+                    return Err(
+                        "register-name address decode requires the Translate register table"
+                            .to_string(),
+                    );
+                }
+                _ => {
+                    // Unmatched attributes are skipped without reading
+                    // their values (the C++ loop only advances the cursor).
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        decoder.close_element(elem_id);
+        match space {
+            Some(spc) => Ok(SpaceAddress::new(spc, offset)),
+            None => Ok(SpaceAddress::invalid()),
         }
     }
 }
