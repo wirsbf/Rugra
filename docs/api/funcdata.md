@@ -1616,3 +1616,14 @@ use-limited 资格 / mapScope / 父链符号可见性）。
 oracle，六 case 逐字节 MATCH：stack 窗口 in/out flags、persist band
 in/out + 非回溯、creation possibleout 双半边、unique 控制位、
 free 第二 opSetInput 异常前状态与错误文本）；`cargo check --lib` 绿。
+
+### 2026-08-25：PRINTC-SWITCH-EMIT-0001 — test_switch_case_structuring 断言恢复
+
+A10 把本测试的断言 3→1 绑定到 printc 租约（try_rule_switch 经
+identify_internal 安装 BlockSwitch 后，emit 层把 case 体路由进 DEAD
+守卫被吞）。printc 侧修复落地后恢复：`switch(`（无空格，oracle 字节）
++ `case 0:`/`case 1:` 标签 + 体 return 计数 ==2；case 体注入改为
+Ghidra post-ActionReturnRecovery 形态（RETURN in(0)=间接槽 占位、
+in(1)=RAX，coreaction.cc:1836）。值折叠（`return uVar0;` vs oracle
+`return 10;`）属 implied/ActionReturnRecovery 域，登记于 fixture
+metadata out_of_scope_gaps。

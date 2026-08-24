@@ -12379,22 +12379,26 @@ mod tests {
 
         // Case 0 block (Block 1): return 10
         // RAX = COPY(10)
-        // RETURN(RAX)
+        // RETURN(indirect, RAX) — Ghidra's post-ActionReturnRecovery shape
+        // (coreaction.cc:1836 buildReturnOutput keeps in(0), the return
+        // indirect reference, and attaches the value as in(1)).
         let mut op3 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
         op3.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
         op3.add_input(VarnodeRaw::new(AddressSpace::Const, 10, 8));
 
         let mut op4 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        op4.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x0, 8));
         op4.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
 
         // Case 1 block (Block 2): return 20
         // RAX = COPY(20)
-        // RETURN(RAX)
+        // RETURN(indirect, RAX)
         let mut op5 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
         op5.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
         op5.add_input(VarnodeRaw::new(AddressSpace::Const, 20, 8));
 
         let mut op6 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        op6.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x0, 8));
         op6.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
 
         fd.inject_raw_ops(&[op1, op2, op3, op4, op5, op6]);
@@ -12432,18 +12436,25 @@ mod tests {
         let emitted_code = printer.take_emit().into_any().downcast::<EmitNoMarkup>().unwrap().get_output();
         println!("Emitted code:\n{}", emitted_code);
 
-        // Assert code structure
-        assert!(emitted_code.contains("switch ("));
-        // TODO PRINTC-SWITCH-EMIT-0001: with try_rule_switch now installing
-        // the BlockSwitch (BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001, Ghidra
-        // newBlockSwitch block.cc:1904-1919 consuming dispatch AND cases),
-        // printc's emit_structured_switch emits the first case's label into
-        // a swapped-out capture buffer and drops it ("case 0:" missing,
-        // "case 1:" present, case bodies empty). Structural asserts above
-        // pass; the label/body emission gap is registered to the printc
-        // lease — re-enable these asserts when it lands.
-        // assert!(emitted_code.contains("case 0:"));
-        // assert!(emitted_code.contains("case 1:"));
+        // Assert code structure. NOTE: `switch(` with NO space — the oracle's
+        // opBranchind (printc.cc:586-587) emits tagOp("switch") directly
+        // followed by openParen, matching the golden's `switch((int)x ...)`.
+        assert!(emitted_code.contains("switch("));
+        // PRINTC-SWITCH-EMIT-0001 restored: emit_structured_switch now emits
+        // case bodies via the FlowBlock::emit-style dispatch
+        // (emit_switch_case_body, printc.cc:3339-3341 bl2->emit(this)),
+        // bypassing the DEAD guard that A10's identify_internal sets on the
+        // absorbed case blocks — labels and bodies both survive.
+        assert!(emitted_code.contains("case 0:"));
+        assert!(emitted_code.contains("case 1:"));
+        // Case body integrity: both cases' RETURN statements must land inside
+        // the switch (the bodies are no longer swallowed by the DEAD guard).
+        // NOTE: the value itself prints as `return uVar0;` — the in(1)
+        // return-value COPY is not yet implied-inlined into the return
+        // (Ghidra oracle folds it to `return 10;` via ActionReturnRecovery +
+        // implied vars); that folding gap is registered separately and is
+        // orthogonal to the switch emission timing fixed here.
+        assert_eq!(emitted_code.matches("return").count(), 2);
     }
 
     #[test]

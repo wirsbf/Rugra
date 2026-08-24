@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "fixture_id": "PRINTC-SWITCH-EMIT-0001",
+  "stable_function_id": "GH12-F-printc-switch-emit",
+  "stable_function_closure": [
+    "ghidra::PrintC::emitBlockSwitch printc.cc:3313",
+    "ghidra::PrintC::emitSwitchCase printc.cc:3129",
+    "ghidra::PrintC::opBranchind printc.cc:582",
+    "ghidra::PrintC::emitStatement printc.cc:2285",
+    "ghidra::PrintC::emitGotoStatement printc.cc:2303",
+    "ghidra::PrintC::pushConstant printc.cc:1744",
+    "ghidra::PrintC::push_integer printc.cc:1288",
+    "ghidra::PrintLanguage::pushUnnamedLocation printlanguage.cc:221",
+    "ghidra::BlockSwitch::grabCaseBasic block.cc:3524",
+    "ghidra::BlockSwitch::addCase block.cc:3495",
+    "ghidra::BlockGraph::newBlockSwitch block.cc:1904",
+    "ghidra::JumpTable::numIndicesByBlock jumptable.cc:2440",
+    "ghidra::JumpTable::getIndexByBlock jumptable.cc:2486",
+    "ghidra::JumpTable::block2Position jumptable.cc:2337"
+  ],
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{printc.cc:3129-3158,3313-3353,582-591,1288-1368,1744-1810,printc.hh,block.cc:3485-3644,1900-1938,jumptable.cc:2337-2560,jumptable.hh}"
+  },
+  "rugra_base_commit": "7c5eff1c4c346cf95c00b5034b0903ecf09a15e6",
+  "rugra_base_tree": "24d2963b7ed17bb12ae9e0ed1d5cfee8c5e57c60",
+  "architecture": "language-independent PrintC structured-block emission (emitBlockSwitch on a hand-built production-shape BlockSwitch: BlockBasic originals + edges, BlockCopy mirrors via newBlockCopy/copymap/replaceUsingMap as buildCopy block.cc:1925-1938, JumpTable label/block2addr tables, grabCaseBasic+identifyInternal+addBlock as newBlockSwitch block.cc:1904-1919); no Funcdata, no Architecture",
+  "compiler_spec": "none: the switch variable and return values are Constant-space varnodes with an int4 Datatype attached via new HighVariable (Rugra: v_type), so both sides render them through their constant paths",
+  "analysis_options": {
+    "entrypoint": "PrintC::emitBlockSwitch driven directly per case (Rugra: emit_block_graph on a graph whose sole top-level block is the BlockSwitch, dispatching to emit_structured_switch); no Action pipeline runs",
+    "prestate": "per case: fresh head BlockBasic ending in BRANCHIND(const switch var 3, int4), case BlockBasics with 2-input RETURN(const value) bodies, edges head->case in label order, one optional f_defaultswitch_edge, one optional case->exit edge (isexit=true)",
+    "observation": "two layers per case: (statement) every line normalized to switch(E) / verbatim case-label and default lines / body-statement kind (break/return/assign/other) with indentation preserved; (raw) full hex of the EmitNoMarkup byte stream"
+  },
+  "input": "PRINTC-SWITCH-EMIT-0001 cases=two_case_return[labels={0},{1} returns=10,20],single_case_default[labels={5},{6-default} returns=60,7],multi_label_first[labels={2,3},{9} returns=10,20],break_exit_form[labels={0},{1},{2} case0-empty-isexit returns=-,30,40];switchvar=const:3:int4;emit=EmitNoMarkup;layer=statement+raw",
+  "input_fingerprint": "sha256:3b166f043a9b762ed45f1b5fc6da7196e9eafcdce2c7cc15d7a009e5a23ae447",
+  "input_manifest": {
+    "canonicalization": "sha256 over the canonical input description above",
+    "cases": [
+      "two_case_return: labels {0},{1} with RETURN-terminated bodies — label/body order, isexit=false (no breaks)",
+      "single_case_default: label {5} + default edge — KEYWORD_DEFAULT rendering (cc:3140-3145); the default edge carries a table entry because the default arm calls getLabel(casenum,0) unconditionally",
+      "multi_label_first: first case block reached by two table entries (labels {2,3}) — consecutive `case 2:`/`case 3:` lines before the shared body (the PRINTC-SWITCH-EMIT-0001 timing-defect detector)",
+      "break_exit_form: case 0 empty with an edge to the formal exit (isexit=true, not last) — the explicit `break;` of cc:3342-3345 between later cases"
+    ]
+  },
+  "observation_schema": {
+    "format": "per case: '<name>=' followed by the summarized line stream (statement mode) or the hex of the raw byte stream (--raw mode)",
+    "normalization": "switch header elided to switch(E) (the control expression is fixture data, not an observable of the emission path); case/default label lines verbatim; body statements reduced to kind with indentation preserved"
+  },
+  "comparand_sha256": {
+    "cpp_fixture_sha256": "e5728abe4c0be2ca2dacd55426cb79eea00981a5153d0cd085a2112681195c20",
+    "rust_fixture_sha256": "e8f69bfc20bbbea611029c6f1f29d63dee8ab43b5e4b734a8ed16e3d776fa64f",
+    "runner_sha256": "2addde2a97085daa9fa5a8b761097b291310452b797477aadc69ca9ae622a8e0",
+    "rugra_printc": "2acd43b1bd69e3b045c3402134f3d132f799042ca8360ef8a61cb5f7700d4653",
+    "rugra_prettyprint": "c6eaa43fa0d5120db1d390fb569fea69e675d66b36f1179c8bf58d6469c0a681",
+    "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
+    "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
+    "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+    "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+    "ghidra_jumptable_cc": "e65ec07f1b0db5c73256c7ef3a4bbb2627ac168dc4f2ba74f9a0c1ec53d32b5c",
+    "ghidra_jumptable_hh": "7cf30fb8c3c6557a2796a5859f45ea4ec6550bf9357490dfd1d6332f4afb670b",
+    "ghidra_op_cc": "38ac521423d01b295b3020d9e4ee73da34197c6ae5c4b369022a64ada7680b4c",
+    "ghidra_op_hh": "8723d7548edf6a643bc8a6891c64ea6e7dbfb137d0d48d8c4ac868d8fe2f3a6d",
+    "ghidra_typeop_cc": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
+    "ghidra_typeop_hh": "abbc9432b150636063b06a0ace54518a6e6d883604e0f45e446a5293c33de931"
+  },
+  "cpp_fixture_sha256": "e5728abe4c0be2ca2dacd55426cb79eea00981a5153d0cd085a2112681195c20",
+  "rust_fixture_sha256": "e8f69bfc20bbbea611029c6f1f29d63dee8ab43b5e4b734a8ed16e3d776fa64f",
+  "host": {
+    "cxx": "g++ (GCC) 16.2.1 20260810",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "bfd_root": "/tmp/rugra-ghidra-bfd-2.38"
+  },
+  "expected_statement_stdout_sha256": "590545ac7967c648e7b143540449bf76258be7d5596e8b292851cf06d7a494ec",
+  "expected_ghidra_raw_sha256": "6e46461cf99e42ca838004c7fca50dcbb001225607372ac9ee61fb4ce6594ad1",
+  "expected_rugra_raw_sha256": "6e46461cf99e42ca838004c7fca50dcbb001225607372ac9ee61fb4ce6594ad1",
+  "expected_exit_code": 0,
+  "observation": {
+    "overall_status": "MATCH",
+    "label_emission": "MATCH: per-label tagLine + `case` + spaces(1) + pushConstant + `:` (cc:3146-3157) — label order, multi-label grouping (multi_label_first's consecutive `case 2:`/`case 3:`), and default rendering all byte-identical",
+    "body_emission_timing": "MATCH: bl2->emit(this) at cc:3339-3341 — the first case's label precedes its body and every body lands inside the switch (the A10 regression: DEAD-guarded emit_block_structured swallowed the absorbed case blocks; fixed by emit_switch_case_body dispatching per FlowBlock::emit with no dead guard)",
+    "break_placement": "MATCH: cc:3342-3345 isExit(i)&&i!=last — break_exit_form's case 0 gets `break;`, RETURN-terminated cases and the last label do not",
+    "layout": "MATCH: openBrace(same_line) ` {` (cc:3329, printc.cc:1593), startIndent/stopIndent per case (cc:3333/3348), labels at switch-body indent, statements +1 level, closing tagLine+`}` (cc:3350-3351); `switch(` with NO space per opBranchind tagOp+openParen (cc:586-587, matches the golden's `switch((int)pCVar10 ...)`)",
+    "constant_format": "MATCH: push_integer's val<=10 decimal boundary (printc.cc:1332) — `return 10;` vs `0x14`/`0x1e`/`0x28`/`0x3c` all identical (format_constant_value's boundary widened from <=9 to <=10 as part of this fix)"
+  },
+  "residual_diffs": [],
+  "out_of_scope_gaps": [
+    {
+      "summary": "production try_rule_switch case labels are out-edge indices (case_values.push(vec![j])), never jumptable-recovered labels, and default_case is always None (checkSwitchSkips TODO) — the fixture bypasses try_rule_switch by hand-building the BlockSwitch, so these structurer/jumptable-recovery gaps do not surface here",
+      "evidence": "blockaction.rs try_rule_switch (cc:1711/1714-1721 region)"
+    },
+    {
+      "summary": "implied/return-value folding in the full pipeline: doc_function-level emission still prints `uVar0 = 10; return uVar0;` where the oracle folds to `return 10;` (ActionReturnRecovery + implied varnolds) — outside the emission-layer scope of this fixture (funcdata test asserts structure, not the fold)",
+      "evidence": "funcdata::tests::test_switch_case_structuring emitted text"
+    }
+  ],
+  "unit_tests": "cargo test --lib test_switch_case_structuring (labels + body integrity asserts restored); broader lib suite re-run in the task report"
+}

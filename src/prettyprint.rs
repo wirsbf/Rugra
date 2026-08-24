@@ -362,6 +362,18 @@ impl EmitNoMarkup {
         self.output = Self::post_process_output(&self.output);
     }
 
+    // RUGRA-GLUE: switch-statement prefix predicate for the legacy text
+    // passes. The oracle's opBranchind (printc.cc:586-587) emits `switch` +
+    // `(` with NO separating space (golden `switch((int)x ...)`), while
+    /// older passes matched only the `switch ` form — after PRINTC-SWITCH-
+    /// EMIT-0001 aligned the header bytes, remove_orphan_case_labels treated
+    /// every case label of a `switch(...)` as an orphan and stripped the
+    /// switch. `switch` is a C keyword, so `switch(` can never be an
+    /// identifier — accepting both prefixes is word-safe.
+    fn is_switch_stmt_prefix(t: &str) -> bool {
+        t.starts_with("switch ") || t.starts_with("switch(")
+    }
+
     // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcessOutput
     pub fn post_process_output(input: &str) -> String {
         // Ghidra's EmitMarkup (prettyprint.cc) does ZERO post-processing.
@@ -1047,7 +1059,7 @@ impl EmitNoMarkup {
                     // Switch case label — end dead zone (reachable via case fallthrough)
                     dead_after_return = false;
                     alive.push(line.clone());
-                } else if t.starts_with("while (") || t.starts_with("do ") || t.starts_with("for (") || t.starts_with("switch (") {
+                } else if t.starts_with("while (") || t.starts_with("do ") || t.starts_with("for (") || Self::is_switch_stmt_prefix(t) {
                     // Control-flow structures (loops/switches) are not dead code even
                     // after a return — they may be reachable via fallthrough or represent
                     // structured control flow that the emit traversal placed after a return.
@@ -1444,7 +1456,7 @@ impl EmitNoMarkup {
                             for prev in pass17.iter().rev().take(20) {
                                 let pt = prev.trim();
                                 if pt.starts_with("while ") || pt.starts_with("do ")
-                                    || pt.starts_with("for ") || pt.starts_with("switch ")
+                                    || pt.starts_with("for ") || Self::is_switch_stmt_prefix(pt)
                                     || pt.contains("} while (")
                                 {
                                     has_loop_ctx = true;
@@ -2049,7 +2061,7 @@ impl EmitNoMarkup {
             let t = line.trim();
 
             // Check if this line opens a switch body
-            let opens_switch = t.starts_with("switch ") && t.ends_with('{');
+            let opens_switch = Self::is_switch_stmt_prefix(t) && t.ends_with('{');
 
             // Count braces on this line (excluding those in char literals like '\x7d')
             // Simple heuristic: count { and } outside of single-quoted chars.
@@ -2354,7 +2366,7 @@ impl EmitNoMarkup {
                 let is_loop_hdr = t.starts_with("while ")
                     || t.starts_with("for ")
                     || t.starts_with("do ")
-                    || t.starts_with("switch ")
+                    || Self::is_switch_stmt_prefix(t)
                     || t.contains("} while (");
                 brace_depth += 1;
                 if is_loop_hdr {
@@ -3128,7 +3140,7 @@ impl EmitNoMarkup {
             // When we find an opening keyword at an indent level <= target (one level up)
             if ind < target_indent {
                 if t.starts_with("while (") || t.starts_with("do {")
-                    || t.starts_with("for (") || t.starts_with("switch (")
+                    || t.starts_with("for (") || Self::is_switch_stmt_prefix(t)
                     || t.contains("} while (")
                 {
                     return true;

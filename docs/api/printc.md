@@ -1291,3 +1291,59 @@ match_url(3)——全部为 `__stack_chk_fail`/`exit` 类 noreturn 调用点，
 显式装 cover（`block.hh:462` setInitialRange private+friend）。已按合法状态
 构造修复（`8d59b77`，`set_initial_range` pub 化一行 + fixture 同构装 cover，
 38/38 逐字节，BLOCK-STOPADDR-FIXTURE-REGRESSION-0001 关闭）。
+
+### 2026-08-25（续）：PRINTC-SWITCH-EMIT-0001 — emitBlockSwitch case 发射对齐
+
+A10 集成（try_rule_switch 经 identify_internal 安装 BlockSwitch，
+finalize_structure 把被吸收的 case 块标 DEAD）后暴露的发射层缺陷：
+`emit_structured_switch` 把 case 体路由进 `emit_block_structured` 的
+DEAD 守卫——case 块恰好带着 DEAD+CASE_BODY 标志，体被整块吞掉，随后
+legacy 空移除后处理把整个 switch 剥成 `switch(...) {}` 空壳（funcdata
+测试 `case 0:`/`case 1:` 断言因此绑定本 TODO）。
+
+**①（case 体直接 dispatch，printc.cc:3339-3341）**：新增
+`emit_switch_case_body`（RUGRA-GLUE，对应 `FlowBlock::emit` block.hh:221
+的虚分派）——按块类型分派到各 `emit_structured_*`，跳过 DEAD 守卫并
+把 case 块标记进 `emitted` 防 doc_function 不可达清扫重放。这正是
+oracle 的语义：`bl2->emit(this)` 从不带 consumed/dead 检查，BlockSwitch
+组件是其 case 块的唯一发射者。
+
+**②（oracle 布局字节，printc.cc:3329/3333/3348/3350-3351 +
+prettyprint.hh:555-556）**：`openBrace(OPEN_CURLY, same_line)`（printc.cc:1593
+option_brace_switch 默认 same_line）= 空格 + `{` 无换行；每 case
+`startIndent`/`stopIndent`（Rugra `bump_indent`/`drop_indent`），
+`beginBlock`/`endBlock` 在 EmitNoMarkup 是 no-op——**不再**给 case 体包
+大括号；标签落在 switch 体缩进层、语句 +1 层；收尾 `tagLine` + `}`。
+
+**③（`switch(` 无空格，printc.cc:586-587）**：opBranchind 是
+`tagOp(KEYWORD_SWITCH)` 紧跟 `openParen`——无分隔空格，golden 的
+`switch((int)pCVar10 - 0x23U & 0xff)` 佐证。Rugra 原先打印 `switch (`
+（带空格）——修正为 `switch` + `(` 两段。配套：prettyprint 后处理 5 处
+`switch `/`switch (` 前缀启发式统一走 `is_switch_stmt_prefix`（两种形态，
+`switch` 是 C 关键字不可能是标识符调用，词法安全）——否则
+`remove_orphan_case_labels` 会把无空格形态的全部 case 标签当孤儿剥掉。
+
+**④（case 值格式，printc.cc:1744 pushConstant + 1288 push_integer）**：
+标签值改走 `push_integer`（char-print 类型走 CHAR 格式；int 按符号翻转
++ `val<=10` 十进制 / mostNaturalBase 十六进制）；RPN 常量 helper
+`format_constant_value` 的十进制边界同步 9→10（cc:1332）。**⑤（break
+语义，printc.cc:3342-3345）**：`isExit(i) && i != numCaseBlocks-1` →
+RETURN 终止的 case（可证不流向出口块）不打 break，其余 case 打 break，
+最后一个标签（含尾随 default）从不打。
+
+**双侧 oracle fixture `tests/oracle/printc_switch_emit_1204.{cc,rs}`**
+（runner `tools/run_printc_switch_emit_oracle.sh`，三件套重钉齐备）：C++
+侧手工搭生产形态 BlockSwitch（BlockBasic 原件 + 边、newBlockCopy/
+copymap/replaceUsingMap 复刻 buildCopy block.cc:1925-1938、JumpTable
+label/block2addr 表、grabCaseBasic+identifyInternal+addBlock 复刻
+newBlockSwitch block.cc:1904-1919），驱动真 `emitBlockSwitch`；Rust 侧
+手工搭同形 BlockSwitch 走 `emit_block_graph`。四 case：two_case_return /
+single_case_default（default 边带表项——default 臂无条件 getLabel）/
+multi_label_first（首 case 双标签连续行，时序缺陷检测器）/ break_exit_form
+（空体 isexit case 的显式 break）。**双层 MATCH**：statement 层（switch(E)
+归一 + 标签逐字 + 体归类）与 raw hex 层逐字节一致（双侧 raw sha256 同为
+`6e46461c…`）。范围外缺口登记于 metadata `out_of_scope_gaps`：生产
+try_rule_switch 的 case 标签是出边索引（非 jumptable 恢复标签）且
+default 恒 None；doc_function 全管线中 `uVar0 = 10; return uVar0;` 未折叠
+为 `return 10;`（ActionReturnRecovery + implied 层）。funcdata
+`test_switch_case_structuring` 断言恢复（case 标签 ×2 + 体 return 计数）。

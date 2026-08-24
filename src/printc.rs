@@ -271,10 +271,11 @@ fn sanitize_c_ident(name: &str) -> String {
 
 // RUGRA-GLUE: format_constant_value (RPN path helper; approximates
 // printc.cc:1946 pushConstant constant formatting). Renders a u64 offset as
-// a C integer literal: small values decimal, large values hex with a decimal
+// a C integer literal: small values decimal (push_integer's `val<=10`
+// decimal boundary, printc.cc:1332), large values hex with a decimal
 // comment, all-ones as -1.
 fn format_constant_value(val: u64) -> String {
-    if val <= 9 {
+    if val <= 10 {
         format!("{}", val)
     } else if val >= 0x8000_0000_0000_0000 {
         // Likely negative: show as signed.
@@ -3597,7 +3598,7 @@ impl PrintC {
     }
 
 
-    // RUGRA-GLUE: emit_structured_switch (no Ghidra counterpart found)
+    // Ghidra: printc.cc:3313 PrintC::emitBlockSwitch
     fn emit_structured_switch(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -3619,7 +3620,14 @@ impl PrintC {
                     // never does this — it normalizes the type upstream via the
                     // FuncProto/typelock. Emit the bare expression to match Ghidra.
                     self.emit.tag_line(0);
-                    self.emit.print("switch (");
+                    // cc:3325-3327 setMod(only_branch|comma_separate) +
+                    // switchhead->emit(this) → opBranchind (printc.cc:582-591):
+                    //   emit->tagOp(KEYWORD_SWITCH,...)  → "switch"
+                    //   int4 id = emit->openParen(...)   → "("   (NO space — the
+                    //   golden's `switch((int)x ...)` byte form)
+                    //   pushVn(in0); recurse(); closeParen
+                    self.emit.print("switch");
+                    self.emit.print("(");
                     if let Some(ref idx_vn_arc) = switch_data.index_varnode {
                         let idx_vn = idx_vn_arc.read().unwrap();
                         let key = (idx_vn.get_space(), idx_vn.get_offset());
@@ -3692,13 +3700,50 @@ impl PrintC {
                             }
                         }
                     }
+                    // cc:3327: closeParen of opBranchind (printc.cc:590).
                     self.emit.print(")");
 
-                    // Switch body block
-                    self.emit.begin_block();
+                    // cc:3329: emit->openBrace(OPEN_CURLY,option_brace_switch);
+                    // option_brace_switch = Emit::same_line (printc.cc:1593) —
+                    // spaces(1) then the brace with NO newline: the line break
+                    // before each case label comes from emitSwitchCase's own
+                    // tagLine (cc:3142/3150). Rugra's begin_block would emit
+                    // " {\n" AND bump the indent level — both diverge from the
+                    // oracle's startIndent-per-case layout.
+                    self.emit.print(" {");
 
-                    // Print each case block
+                    // cc:3137: ct = switchbl->getSwitchType() — the data-type
+                    // of the switch variable. Ghidra (block.cc:3596-3600) reads
+                    // the high type of the BRANCHIND's input varnode; Rugra's
+                    // BlockSwitch carries the index varnode, so read its type.
+                    // Drives pushConstant's rendering (printc.cc:1744-1810):
+                    // char-print types render as character literals, ints via
+                    // push_integer (decimal <= 10, else mostNaturalBase).
+                    let (switch_ct, switch_sz, switch_signed) =
+                        if let Some(ref idx_vn_arc) = switch_data.index_varnode {
+                            let vn = idx_vn_arc.read().unwrap();
+                            let sz = vn.get_size().max(1);
+                            match vn.v_type.as_ref() {
+                                Some(ct) => {
+                                    let signed = ct.get_metatype()
+                                        == crate::type_system::TypeMetatype::Int;
+                                    (Some(ct.clone()), ct.get_size().max(1), signed)
+                                }
+                                None => (None, sz, false),
+                            }
+                        } else {
+                            (None, 8, false)
+                        };
+                    let is_char_print = switch_ct.as_ref().map_or(false, |ct| {
+                        matches!(ct.get_metatype(),
+                            crate::type_system::TypeMetatype::Int
+                            | crate::type_system::TypeMetatype::Uint)
+                            && ct.get_name() == "char"
+                    });
+
+                    // cc:3331-3349: emit one label group + body per case block.
                     let mut emitted_case_values: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                    let has_default = switch_data.default_case.is_some();
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
                         let case_idx = std::sync::Arc::as_ptr(case_block) as *const () as usize;
                         let body_already_emitted = emitted.contains(&case_idx);
@@ -3707,72 +3752,122 @@ impl PrintC {
                         // the same constant produce duplicate cases in one switch).
                         let has_new_value = values.iter().any(|v| !emitted_case_values.contains(v));
                         if !has_new_value { continue; }
+                        // cc:3146-3157: for(i<num) { val=getLabel; tagLine;
+                        //   print("case"); spaces(1); pushConstant; print(":") }
                         for val in values {
                             if !emitted_case_values.insert(*val) { continue; }
                             self.emit.tag_line(0);
-                            // Format case value: char literal for printable ASCII, else numeric
-                            let case_label = if *val >= 0x20 && *val <= 0x7e {
-                                let ch = *val as u8 as char;
-                                // Escape brace/paren chars to avoid confusing post-process brace counters
-                                if matches!(ch, '}' | '{' | ')' | '(' | '\'' | '\\' | '"') || ch == '\0' {
-                                    format!("case '\\x{:x}':", *val as u8)
-                                } else {
-                                    format!("case '{}':", ch)
-                                }
-                            } else if *val >= 256 {
-                                format!("case 0x{:x}:", val)
+                            self.emit.print("case ");
+                            if is_char_print {
+                                self.push_integer(*val, switch_sz, switch_signed,
+                                    display_format::CHAR);
                             } else {
-                                format!("case {}:", val)
-                            };
-                            self.emit.print(&case_label);
+                                self.push_integer(*val, switch_sz, switch_signed,
+                                    display_format::DEFAULT);
+                            }
+                            self.emit.print(":");
                         }
 
-                        self.emit.begin_block();
+                        // cc:3333: int4 id = emit->startIndent();
+                        self.emit.bump_indent();
                         if !body_already_emitted {
+                            // cc:3339-3341: bl2->emit(this) — direct type
+                            // dispatch with no dead/consumed guard (see
+                            // emit_switch_case_body). seen_return is scoped:
+                            // a prior case's RETURN must not suppress this
+                            // case's body.
                             let saved_seen_return = self.seen_return;
                             self.seen_return = false;
-                            self.emit_block_structured(case_block, graph, emitted);
+                            self.emit_switch_case_body(case_block, graph, emitted);
                             self.seen_return = saved_seen_return;
                         }
 
-                        // If it doesn't end with a return, print break;
-                        let is_terminal = {
+                        // cc:3342-3345: isExit(i)&&(i!=numCaseBlocks-1) →
+                        // tagLine + break. isExit(i) (block.hh:791) is the
+                        // per-case "flows to the exit block" flag; Rugra's
+                        // BlockSwitch does not track per-case exits, so a
+                        // RETURN-terminated case (provably not flowing to the
+                        // exit block) suppresses the break, every other case
+                        // is treated as exiting. The last label (including a
+                        // trailing default) never gets a break — falling out
+                        // of the closing brace is legal and matches Ghidra.
+                        let ends_with_return = {
                             let cb = case_block.read().unwrap();
                             (cb.get_flags() & crate::block::block_flags::RETURN_TERMINAL) != 0
+                                || cb.get_ops().last().map_or(false, |o| {
+                                    o.0.read().unwrap().opcode == OpCode::CPUI_RETURN
+                                })
                         };
-                        if !is_terminal {
+                        let is_last_label =
+                            !has_default && idx + 1 == switch_data.cases.len();
+                        if !ends_with_return && !is_last_label {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
                         }
-                        self.emit.end_block();
+                        // cc:3348: emit->stopIndent(id);
+                        self.emit.drop_indent();
                     }
 
-                    // Print default case
+                    // cc:3140-3145: the default case (part of caseblocks in
+                    // Ghidra, tagged isdefault; Rugra stores it separately and
+                    // emits it after the regular cases). As the final label it
+                    // never takes a break (cc:3342 i != numCaseBlocks-1).
                     if let Some(ref def_block) = switch_data.default_case {
                         let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
-                        if emitted.contains(&def_idx) {
-                            // Skip default if extracted
-                        } else {
-                        self.emit.tag_line(0);
-                        self.emit.print("default:");
-                        self.emit.begin_block();
-                        self.emit_block_structured(def_block, graph, emitted);
-                        let is_terminal = {
-                            let cb = def_block.read().unwrap();
-                            (cb.get_flags() & crate::block::block_flags::RETURN_TERMINAL) != 0
-                        };
-                        if !is_terminal {
+                        if !emitted.contains(&def_idx) {
                             self.emit.tag_line(0);
-                            self.emit.print("break;");
-                        }
-                        self.emit.end_block();
+                            self.emit.print("default:");
+                            self.emit.bump_indent();
+                            let saved_seen_return = self.seen_return;
+                            self.seen_return = false;
+                            self.emit_switch_case_body(def_block, graph, emitted);
+                            self.seen_return = saved_seen_return;
+                            self.emit.drop_indent();
                         }
                     }
 
-                    self.emit.end_block();
+                    // cc:3350-3351: emit->tagLine(); emit->print(CLOSE_CURLY);
+                    self.emit.tag_line(0);
+                    self.emit.print("}");
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
+    }
+
+    // RUGRA-GLUE: emit_switch_case_body — dispatch shim for FlowBlock::emit
+    // (block.hh:221). printc.cc:3339-3341 emitBlockSwitch emits a case body
+    // via bl2->emit(this): a virtual dispatch on getType() with NO consumed/
+    // dead-block guard — the BlockSwitch component owns its case blocks and
+    // is their sole emitter. Rugra's emit_block_structured carries a DEAD-flag
+    // guard for flat-graph hygiene, but the structurer's identify_internal
+    // absorbs the case blocks into the BlockSwitch AND flags them
+    // DEAD+CASE_BODY (finalize_structure removes them from the top-level
+    // list while the switch keeps the Arcs), so routing case bodies through
+    // that guard dropped them entirely (PRINTC-SWITCH-EMIT-0001 root cause:
+    // empty case bodies, after which the legacy empty-case post-process pass
+    // strips the whole switch). This shim performs the same type dispatch as
+    // emit_block_structured's match, minus the DEAD guard, and marks the
+    // block emitted so doc_function's unreachable-block sweep does not replay
+    // the body.
+    fn emit_switch_case_body(
+        &mut self,
+        case_block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+    ) {
+        use crate::block::BlockType;
+        let case_idx = std::sync::Arc::as_ptr(case_block) as *const () as usize;
+        emitted.insert(case_idx);
+        match case_block.read().unwrap().get_type() {
+            BlockType::If => self.emit_structured_if(case_block, graph, emitted),
+            BlockType::WhileDo => self.emit_structured_whiledo(case_block, graph, emitted),
+            BlockType::DoWhile => self.emit_structured_dowhile(case_block, graph, emitted),
+            BlockType::InfLoop => self.emit_structured_infloop(case_block, graph, emitted),
+            BlockType::List => self.emit_structured_list(case_block, graph, emitted),
+            BlockType::Condition => self.emit_structured_condition(case_block, graph, emitted),
+            BlockType::Switch => self.emit_structured_switch(case_block, graph, emitted),
+            _ => self.emit_structured_basic(case_block, graph, emitted),
+        }
     }
 
 

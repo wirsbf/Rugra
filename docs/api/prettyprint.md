@@ -366,3 +366,15 @@ PRINTC-UNLINKED-REF-0001 域）保持可编译，是任务要求的 backfill 保
 （保留 PRINTC-UNLINKED-REF-0001 兜底语义）；锁定 12.0.4 golden 差分
 numbering 3→**0**、defects 0 不变、Matched 123 不降；11.3.2 回归 golden
 同 0/0。诊断期临时插桩（RUGRA_DUMP_PRE_POSTPROCESS 等五处）已全部移除。
+
+### 2026-08-25：PRINTC-SWITCH-EMIT-0001 配套 — switch 语句前缀谓词
+
+`is_switch_stmt_prefix`（RUGRA-GLUE）：oracle 的 opBranchind
+（printc.cc:586-587）发射无空格的 `switch(`（golden `switch((int)x…)`
+佐证），而 legacy 文本后处理的 5 处前缀检查只认 `switch `/`switch (`
+形态——printc 对齐该字节后，`remove_orphan_case_labels` 会把
+`switch(...)` 的全部 case 标签当孤儿剥掉。谓词统一接受两种前缀；
+`switch` 是 C 关键字，`switch(` 不可能是标识符调用，词法安全。改动点：
+remove_orphan_case_labels（2052）、tenth-pass 死区豁免（1050）、
+pass17 循环上下文（1447）、brace_depth 循环头判定（2357）、
+scan_up_for_loop_header（3131）；2491 原本就双形态。
