@@ -7,13 +7,13 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=a52d3e3e5e5c0e77b257f6815d47762c7d243412
-rugra_source_tree=98d045a5ed602f567125ed8b3b72607106780459
-rugra_source_src_tree=dc37d7228cd6fef14762bce19d7cb24a654fcd81
-rugra_source_subflow_blob=7afa4d6ca2c1a428c6bcd324767684b016b2f46f
+rugra_source_commit=4599b5011c87129e3e6bb83a63f9cff6b0d00118
+rugra_source_tree=fa73b6d748ef3b47b61d5bc4a5710ce55805d780
+rugra_source_src_tree=af8f7a9318d6f9b6429c840a0eeac611c508f539
+rugra_source_subflow_blob=e42479af547350de04a1eb368263bd9b8c689c1a
 rugra_source_arch_blob=cd3fd77747d6377e14f2e672956ddfbc9ff17877
-rugra_source_funcdata_blob=9bfdcb7839c65c55c58dfde4c98b271f21975f7c
-rugra_source_transform_blob=77ff7a4be56d63d988c76c6888605de11a94880a
+rugra_source_funcdata_blob=f4f0308e571b0ca56af88ab627a6eab2aebb6c7a
+rugra_source_transform_blob=e7f01bec34cc5e21bd4d1c0a9fb5ba149754e810
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -30,7 +30,7 @@ transform_overlay="$repo_root/src/transform.rs"
 runner="$repo_root/tools/run_lanedivide_infra_oracle.sh"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
 bfd_header="$bfd_include/bfd.h"
-bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
 
 oracle_tmp=$(mktemp -d /tmp/rugra-lanedivide-infra-1204.XXXXXX)
 cleanup() {
@@ -385,7 +385,8 @@ nice -n 10 g++ -std=c++11 -O2 -Wall -Wno-sign-compare \
   "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
   "$oracle_cpp/inject_sleigh.cc" "$oracle_cpp/bfd_arch.cc" \
   "$oracle_cpp/loadimage_bfd.cc" "$oracle_cpp/libdecomp.a" \
-  "$bfd_library" -lz -o "$oracle_tmp/lanedivide_infra_1204_cpp"
+  "$bfd_library" -lz -Wl,-rpath,"$(dirname "$bfd_library")" \
+  -o "$oracle_tmp/lanedivide_infra_1204_cpp"
 
 CARGO_TARGET_DIR="$oracle_tmp/cargo-target" \
   nice -n 10 cargo build --offline --locked --quiet \
