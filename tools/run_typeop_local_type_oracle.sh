@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # TYPEOP-LOCALTYPE-DISPATCH-0001 locked Ghidra 12.0.4/Rugra bilateral
-# runner. The Rust side is built from an immutable Rugra base plus the full
-# hash-verified D0 callspec source overlay closure, never from the live crate.
+# runner. The Rust side is built from the frozen D1 production commit
+# (8b8b541, TypeOpCall::get_input_local port) via a complete git archive,
+# never from the live crate; no source overlays are applied.
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -48,6 +49,18 @@ if [[ ! -d "$cache_parent" || -L "$cache_parent" ]]; then
   exit 1
 fi
 cache_root="$cache_parent/rugra-typeop-localtype-1204"
+# Task TYPEOP-LOCALTYPE-DISPATCH-0001 D1 dedicated Cargo dirs: every Cargo
+# invocation below is serialized on the shared build flock and uses these
+# isolated, pre-created directories (never /tmp or a shared target).
+cargo_target=/home/wirs/.cache/a1-typeop-target
+cargo_tmp=/home/wirs/.cache/a1-typeop-tmp
+/usr/bin/mkdir -p "$cargo_target" "$cargo_tmp"
+for cargo_dir in "$cargo_target" "$cargo_tmp"; do
+  if [[ ! -d "$cargo_dir" || -L "$cargo_dir" ]]; then
+    echo "dedicated Cargo directory is not a regular directory: $cargo_dir" >&2
+    exit 1
+  fi
+done
 /usr/bin/mkdir -p "$cache_root/tmp" "$cache_root/target"
 run_root=$(/usr/bin/mktemp -d "$cache_root/run.XXXXXX")
 cleanup() {
@@ -82,21 +95,21 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=92daed300bcce3c4d855b311cf9667ba21eb475a
-rugra_base_tree=6aea6d3b5b1421170d1bdc5a766c9568483a66af
-rugra_base_src_tree=367bb531746f630fe4de5fddc0365c2c2f27eeda
+rugra_base_commit=8b8b541993d61f971fddac53e439aa50a1028db3
+rugra_base_tree=932f401c05dac390ced18f389f33057265ec7ecd
+rugra_base_src_tree=8540c9803b5711ca848d13bce57cc37441ba0513
 rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 rugra_binary_blob=76d9343ea3add321aa4134856323663b36365807
-rugra_expected_records=169
-rugra_expected_bytes=6482
-rugra_expected_stdout_sha256=9feab929960053743a36c08782093737a1121c891758d9eb93b11410b5a109d9
+rugra_expected_records=167
+rugra_expected_bytes=6367
+rugra_expected_stdout_sha256=742c532e72f7653ccbfb24b1ec4708c732195dc95a16468978888b919df136f1
 rugra_expected_stderr_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 bilateral_expected_diff_exit_code=1
-bilateral_expected_diff_records=248
-bilateral_expected_diff_bytes=9829
-bilateral_expected_diff_sha256=50b629ee1626284da920265b22713d53eefb670d5bf56389f6e4a0148040d135
+bilateral_expected_diff_records=12
+bilateral_expected_diff_bytes=348
+bilateral_expected_diff_sha256=bd841375a824e5e517c90a871b209b889a5038c862ade863c7b05d643d555487
 ghidra_root="$repo_root/ghidra"
 metadata_live="$repo_root/tests/oracle/typeop_local_type_1204.metadata.json"
 cpp_fixture_live="$repo_root/tests/oracle/typeop_local_type_1204.cc"
@@ -105,17 +118,9 @@ bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
 bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
 bfd_library_dir=$(/usr/bin/dirname "$bfd_library")
 
-overlay_paths=(
-  src/coreaction.rs
-  src/flow.rs
-  src/fspec.rs
-  src/funcdata.rs
-  src/heritage.rs
-  src/ruleaction.rs
-  src/signature.rs
-  src/unionresolve.rs
-  src/varnode.rs
-)
+# D1 snapshot model: the frozen production commit already carries the
+# TypeOpCall::get_input_local port, so the overlay table is empty.
+overlay_paths=()
 archive_paths=(
   Cargo.toml
   Cargo.lock
@@ -273,7 +278,7 @@ require("binary blob", comparand["binary_blob"], binary_blob)
 require(
     "snapshot model",
     comparand["snapshot_model"],
-    "immutable complete D0 crate snapshot: locked base source tree plus nine hash-verified callspec overlays",
+    "immutable complete D1 crate snapshot: git archive of the frozen production commit 8b8b541 with TypeOpCall::get_input_local; no source overlays",
 )
 require(
     "archive paths",
@@ -399,8 +404,8 @@ fi
 
 if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock \
   /usr/bin/env -i PATH="$clean_path" HOME="$user_home" LC_ALL=C \
-  CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$cache_root/target" \
-  TMPDIR="$cache_root/tmp" "$host_cargo_bin" build --offline --locked --quiet \
+  CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$cargo_target" \
+  TMPDIR="$cargo_tmp" "$host_cargo_bin" build --offline --locked --quiet \
   --manifest-path "$snapshot_root/Cargo.toml" --lib \
   >"$run_root/cargo.stdout" 2>"$run_root/cargo.stderr"; then
   /usr/bin/cat "$run_root/cargo.stdout" >&2
@@ -408,10 +413,10 @@ if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock \
   exit 1
 fi
 if ! /usr/bin/env -i PATH="$clean_path" HOME="$user_home" LC_ALL=C \
-  TMPDIR="$cache_root/tmp" "$host_rustc_bin" --edition=2021 -C opt-level=0 \
+  TMPDIR="$cargo_tmp" "$host_rustc_bin" --edition=2021 -C opt-level=0 \
   "$snapshot_root/tests/oracle/typeop_local_type_1204.rs" \
-  --extern rugra="$cache_root/target/debug/librugra.rlib" \
-  -L dependency="$cache_root/target/debug/deps" \
+  --extern rugra="$cargo_target/debug/librugra.rlib" \
+  -L dependency="$cargo_target/debug/deps" \
   -o "$run_root/typeop_local_type_1204_rust" \
   >"$run_root/rustc.stdout" 2>"$run_root/rustc.stderr"; then
   /usr/bin/cat "$run_root/rustc.stdout" >&2
