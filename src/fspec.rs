@@ -4307,6 +4307,54 @@ impl ParamEntry {
         (start_off % self.alignment as u64) as i32
     }
 
+    // Ghidra: fspec.cc:248 ParamEntry::justifiedContain
+    /// Space-aware form of `justified_contain`: the query range's space is
+    /// known (the resolver-window callers `find_entry` and
+    /// `characterize_as_param` hold it, standing in for the space carried by
+    /// Ghidra's `const Address &addr`), so every space guard of the Ghidra
+    /// original is enforced exactly:
+    /// - join walk (fspec.cc:253-261): a piece in another space than the
+    ///   query hits `Address::justifiedContain`'s `base != op2.base` -1
+    ///   (address.cc:133) and only accumulates its size into the skip
+    ///   counter — the cross-space numeric-coincidence divergence pinned by
+    ///   the FSPEC-FINDENTRY-GATE-0005 fixture (R13 finding B);
+    /// - plain alignment==0 (fspec.cc:264-267): the entry-space Address's
+    ///   address.cc:133 guard;
+    /// - plain alignment!=0 (fspec.cc:269): the explicit
+    ///   `if (spaceid != addr.getSpace()) return -1;`.
+    /// Callers without a query space keep the transitional spaceless
+    /// `justified_contain` (ADDRESS-0001).
+    pub fn justified_contain_in_space(&self, addr: Address, sz: i32, query_space: AddressSpace) -> i32 {
+        if let Some(j) = &self.join {
+            // Ghidra: fspec.cc:253 for(i=numPieces()-1;i>=0;--i) — move
+            // from least significant to most (pieces are stored most
+            // significant first, translate.hh JoinRecord).
+            let mut res = 0i32;
+            for vdata in j.pieces.iter().rev() {
+                // Ghidra: fspec.cc:255 vdata.getAddr().justifiedContain(
+                // vdata.size, addr, sz, false) — address.cc:133: a piece in
+                // another space than the query is never contained; its size
+                // is only skipped.
+                let cur = if vdata.space != query_space {
+                    -1
+                } else {
+                    justified_contain_range(
+                        vdata.offset, vdata.size, addr.as_u64(), sz, false,
+                        vdata.space.is_big_endian(),
+                    )
+                };
+                if cur < 0 { res += vdata.size; } else { return res + cur; }
+            }
+            return -1;
+        }
+        // Ghidra: address.cc:133 (alignment==0 route via the entry-space
+        // Address) / fspec.cc:269 (alignment!=0 route): a foreign-space
+        // query is never contained. After this guard the delegated numeric
+        // bodies are the exact cc:264-282 arithmetic.
+        if self.space != query_space { return -1; }
+        self.justified_contain(addr, sz)
+    }
+
     // Ghidra: fspec.cc:295 ParamEntry::getContainer
     /// Calculate the containing memory range. Pass back the VarnodeData of
     /// the parameter that would contain the given range. Faithful to
@@ -4876,36 +4924,43 @@ impl ParamListStandard {
     // Ghidra: fspec.cc:661 ParamListStandard::findEntry
     /// Find the (first) entry containing the given memory range. Faithful
     /// to `findEntry` (fspec.cc:661-680). Ghidra resolves through the
-    /// per-space `resolverMap`: `resolverMap[loc.getSpace()->getIndex()]`
-    /// visits only entries whose space is the query address's space
-    /// (`populateResolver`, fspec.cc:1191-1216, registers each entry in its
-    /// own space's resolver), so register/stack entries hit normally and
-    /// entries of other spaces are never consulted. Rugra's linear scan
-    /// compares the query space with the entry space
-    /// (`e.get_space() != space`), following the explicit-space pattern of
-    /// `characterize_as_param`/`get_biggest_contained_param` (cc:682/cc:1375)
-    /// because the legacy `Address` is spaceless (ADDRESS-0001 transitional).
-    /// `space == None` marks a query whose space is structurally unavailable
-    /// (legacy spaceless trial address); the scan then degrades to
-    /// offset-only matching with no space restriction until trials carry
-    /// spaces.
-    ///
-    /// The dedicated `rangemap`-based `ParamEntryResolver`
-    /// (fspec.hh:597) is unported; the ordered linear scan visits the same
-    /// entry set per space.
-    pub fn find_entry(&self, space: Option<AddressSpace>, loc: Address, size: i32, just: bool) -> Option<usize> {
-        // TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
-        // rangemap (fspec.hh:597).
+    /// per-space `resolverMap` and visits ONLY the `resolver->find(
+    /// loc.getOffset())` window (rangemap.hh:332): the entries with a
+    /// registered extent (the entry range, or a join piece range, per
+    /// populateResolver fspec.cc:1191-1216) that numerically contains the
+    /// query start offset in the query's space. The find window is the
+    /// single refined subinterval containing the start, so its records
+    /// share one `last` key and iterate in `position` order (rangemap.hh
+    /// AddrRange::operator<, sorted (last, subsort)) — and `position`
+    /// follows the entry-list registration order — so the ordered list scan
+    /// below visits exactly the window entries in exactly Ghidra's order.
+    /// Consequences pinned by the FSPEC-FINDENTRY-GATE-0005 fixture:
+    /// - an extent-out query returns `None` even with `just == false`
+    ///   (the window is empty before the minSize/justified checks run);
+    /// - join entries ARE reachable: their per-piece registration puts
+    ///   them in the piece spaces' windows, and the `justifiedContain`
+    ///   check runs per piece against the query's space
+    ///   (`justified_contain_in_space`, fspec.cc:248-283 with the
+    ///   address.cc:133 per-piece space guard).
+    /// Spaces with no registered extent behave like Ghidra's null
+    /// `resolverMap[index]` (return `None`), matching the explicit-space
+    /// pattern of `characterize_as_param` (cc:682) because the legacy
+    /// `Address` is spaceless (ADDRESS-0001 transitional).
+    pub fn find_entry(&self, space: AddressSpace, loc: Address, size: i32, just: bool) -> Option<usize> {
         for (i, e) in self.entry.iter().enumerate() {
-            // Ghidra resolverMap gate: only entries in the query's space.
-            if let Some(spc) = space {
-                if e.get_space() != spc { continue; }
-            }
-            // Ghidra: if (testEntry->getMinSize() > size) continue;
+            // Ghidra: fspec.cc:671 res = resolver->find(loc.getOffset());
+            // — only entries whose registered extent in the query's space
+            // contains the query start offset enter the window.
+            let contains_start = registered_extents(e, space)
+                .iter()
+                .any(|&(a, b)| loc.as_u64() >= a && loc.as_u64() <= b);
+            if !contains_start { continue; }
+            // Ghidra: fspec.cc:675 if (testEntry->getMinSize() > size)
+            // continue;
             if e.get_min_size() > size { continue; }
-            // Ghidra: if (!just || testEntry->justifiedContain(loc,size)==0)
-            //           return testEntry;
-            if !just || e.justified_contain(loc, size) == 0 { return Some(i); }
+            // Ghidra: fspec.cc:676 if (!just ||
+            // testEntry->justifiedContain(loc,size)==0) return testEntry;
+            if !just || e.justified_contain_in_space(loc, size, space) == 0 { return Some(i); }
         }
         None
     }
@@ -4943,7 +4998,12 @@ pub fn characterize_as_param(
             .iter()
             .any(|&(a, b)| offset >= a && offset <= b);
         if !contains_start { continue; }
-        let off = e.justified_contain(loc, size);
+        // Ghidra: fspec.cc:697 int4 off = testEntry->justifiedContain(
+        // loc, size); — the query's space rides on `loc`, so the space
+        // guards of fspec.cc:248-283 (per-piece address.cc:133 for joins,
+        // cc:269 for aligned entries) apply; Rugra threads `space`
+        // explicitly (justified_contain_in_space).
+        let off = e.justified_contain_in_space(loc, size, space);
         if off == 0 { return containment::CONTAINS_JUSTIFIED; }
         else if off > 0 { res_contains = true; }
         // cc:702: a join entry's spaceid is the join space, never the
@@ -5141,7 +5201,7 @@ pub fn characterize_as_param(
                 (t.get_space(), t.get_address(), t.get_size())
             };
             // Ghidra: const ParamEntry *entrySlot = findEntry(paramtrial.getAddress(), paramtrial.getSize(), true);
-            let entry_slot = self.find_entry(Some(space), addr, size, true);
+            let entry_slot = self.find_entry(space, addr, size, true);
             if entry_slot.is_none() {
                 active.get_trial_mut(i).mark_no_use();
                 continue;
@@ -5424,8 +5484,8 @@ pub fn characterize_as_param(
     /// space (Ghidra reads it from the `const Address &` parameters; the
     /// legacy spaceless `Address` needs it alongside — see `find_entry`).
     pub fn check_join(&self, space: AddressSpace, hi_addr: Address, hi_size: i32, lo_addr: Address, lo_size: i32) -> bool {
-        let entry_hi = match self.find_entry(Some(space), hi_addr, hi_size, true) { Some(e) => e, None => return false };
-        let entry_lo = match self.find_entry(Some(space), lo_addr, lo_size, true) { Some(e) => e, None => return false };
+        let entry_hi = match self.find_entry(space, hi_addr, hi_size, true) { Some(e) => e, None => return false };
+        let entry_lo = match self.find_entry(space, lo_addr, lo_size, true) { Some(e) => e, None => return false };
         if self.entry[entry_hi].get_group() == self.entry[entry_lo].get_group() {
             if self.entry[entry_hi].is_exclusion() || self.entry[entry_lo].is_exclusion() { return false; }
             if !is_contiguous(hi_addr, hi_size, lo_addr, lo_size) { return false; }
@@ -5436,8 +5496,11 @@ pub fn characterize_as_param(
         let size_sum = hi_size + lo_size;
         for cur in &self.entry {
             if cur.get_size() < size_sum { continue; }
-            if cur.justified_contain(lo_addr, lo_size) != 0 { continue; }
-            if cur.justified_contain(hi_addr, hi_size) != lo_size { continue; }
+            // Ghidra: cc:133 rides on the hi/lo Addresses; the space-aware
+            // form keeps a foreign-space join piece from matching
+            // numerically (see justified_contain_in_space).
+            if cur.justified_contain_in_space(lo_addr, lo_size, space) != 0 { continue; }
+            if cur.justified_contain_in_space(hi_addr, hi_size, space) != lo_size { continue; }
             return true;
         }
         false
@@ -5450,14 +5513,14 @@ pub fn characterize_as_param(
     pub fn check_split(&self, space: AddressSpace, loc: Address, size: i32, split_point: i32) -> bool {
         let loc2 = Address::new(loc.as_u64() + split_point as u64);
         let size2 = size - split_point;
-        if self.find_entry(Some(space), loc, split_point, true).is_none() { return false; }
-        if self.find_entry(Some(space), loc2, size2, true).is_none() { return false; }
+        if self.find_entry(space, loc, split_point, true).is_none() { return false; }
+        if self.find_entry(space, loc2, size2, true).is_none() { return false; }
         true
     }
 
     // Ghidra: fspec.cc:1354 ParamListStandard::possibleParam
     pub fn possible_param(&self, space: AddressSpace, loc: Address, size: i32) -> bool {
-        self.find_entry(Some(space), loc, size, true).is_some()
+        self.find_entry(space, loc, size, true).is_some()
     }
 
     // Ghidra: fspec.cc:1360 ParamListStandard::possibleParamWithSlot
@@ -5467,7 +5530,7 @@ pub fn characterize_as_param(
     pub fn possible_param_with_slot(
         &self, space: AddressSpace, loc: Address, size: i32, slot: &mut i32, slot_size: &mut i32,
     ) -> bool {
-        let entry_num = match self.find_entry(Some(space), loc, size, true) { Some(e) => e, None => return false };
+        let entry_num = match self.find_entry(space, loc, size, true) { Some(e) => e, None => return false };
         let entry = &self.entry[entry_num];
         *slot = entry.get_slot(loc, 0);
         if entry.is_exclusion() {
@@ -5995,13 +6058,18 @@ impl ParamListStandardOut {
             };
             active.get_trial_mut(i).clear_entry();
             if !t_active { continue; }
-            let entry = self.base.find_entry(Some(t_space), t_addr, t_size, false);
+            let entry = self.base.find_entry(t_space, t_addr, t_size, false);
             if entry.is_none() {
                 active.get_trial_mut(i).mark_no_use();
                 continue;
             }
             let entry_idx = entry.unwrap();
-            let res = self.base.get_entry()[entry_idx].justified_contain(t_addr, t_size);
+            // Ghidra: int4 res = entry->justifiedContain(trial.getAddress(),
+            // trial.getSize()); — the trial Address carries its space, so a
+            // join entry returned by findEntry is walked per piece against
+            // the trial's space (space-aware form).
+            let res = self.base.get_entry()[entry_idx]
+                .justified_contain_in_space(t_addr, t_size, t_space);
             let rem_or_ind = {
                 let t = active.get_trial(i);
                 t.is_rem_formed() || t.is_ind_create_formed()
@@ -7826,6 +7894,80 @@ mod tests {
             m.characterize_as_param(AddressSpace::Register, 0x101, 4),
             containment::NO_CONTAINMENT
         );
+    }
+
+    // FSPEC-FINDENTRY-GATE-0005 projection: findEntry (fspec.cc:661-680)
+    // visits only the resolver find window — entries whose registered
+    // extent contains the query start in the query's space — so an
+    // extent-out query returns None even with just=false, and join
+    // entries are reachable through their piece registration. Rust-side
+    // regression for the fspec_findentry_1204 oracle fixture (the
+    // fixture is the authority; this pins the same rows in-tree).
+    #[test]
+    fn test_find_entry_resolver_window_gate() {
+        let mut m = ParamListStandard::new();
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            e.set_space(AddressSpace::Register);
+            e.set_base(0x100);
+            e.set_sizes(8, 1);
+            e.set_alignment(0);
+            *e.flags_mut() |= param_entry_flags::FORCE_LEFT_JUSTIFY;
+            e
+        });
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(1);
+            e.set_space(AddressSpace::Register);
+            e.set_base(0x200);
+            e.set_sizes(8, 4);
+            e.set_alignment(0);
+            *e.flags_mut() |= param_entry_flags::FORCE_LEFT_JUSTIFY;
+            e
+        });
+        m.set_num_group(2);
+        m.populate_resolver();
+        // In-window hits.
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x100), 8, true), Some(0));
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x102), 4, false), Some(0));
+        // Extent-out queries: window empty -> None even with just=false.
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x110), 4, false), None);
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x300), 8, false), None);
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0xFF), 4, false), None);
+        // In e1's window but below minSize -> None.
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x200), 2, false), None);
+        // Foreign space / no resolver -> None.
+        assert_eq!(m.find_entry(AddressSpace::Ram, Address::new(0x100), 8, false), None);
+        assert_eq!(m.find_entry(AddressSpace::Unique, Address::new(0x100), 8, false), None);
+    }
+
+    // FSPEC-RESOLVER-JOIN-WINDOW-0004 projection: a join entry reached
+    // through its per-piece registration, including the cross-space
+    // per-piece space guard of the join walk (address.cc:133).
+    #[test]
+    fn test_find_entry_join_piece_window() {
+        let mut m = ParamListStandard::new();
+        let mut j = ParamEntry::new(0);
+        j.set_space(AddressSpace::Join);
+        j.set_base(0);
+        j.set_sizes(8, 4);
+        j.set_alignment(0);
+        // Pieces MOST significant first: ram:0x200 high, reg:0x200 low.
+        j.set_join_pieces(vec![
+            VarnodeData { space: AddressSpace::Ram, offset: 0x200, size: 4 },
+            VarnodeData { space: AddressSpace::Register, offset: 0x200, size: 4 },
+        ]);
+        m.entry_mut().push(j);
+        m.set_num_group(1);
+        m.populate_resolver();
+        // The low piece justifies a reg query -> the join entry itself.
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x200), 4, true), Some(0));
+        // The ram query hits the high piece numerically, but the foreign
+        // low piece contributes address.cc:133 -1 -> offset 4 != 0.
+        assert_eq!(m.find_entry(AddressSpace::Ram, Address::new(0x200), 4, true), None);
+        // just=false returns the join from either piece's window.
+        assert_eq!(m.find_entry(AddressSpace::Ram, Address::new(0x200), 4, false), Some(0));
+        // Outside both piece extents -> None.
+        assert_eq!(m.find_entry(AddressSpace::Register, Address::new(0x204), 4, false), None);
     }
 
     #[test]

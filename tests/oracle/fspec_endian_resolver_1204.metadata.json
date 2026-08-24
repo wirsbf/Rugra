@@ -26,13 +26,13 @@
   "rugra_base_tree": "f7bfeaf5aad8adfd7476b9e212c82f0bb79f6251",
   "cpp_fixture_sha256": "c081a97aedd410ce41716af8ca877f7d356fa429165e7742129c45475013c62c",
   "rust_fixture_sha256": "52bd13893aa7aaf1790fa26601c6b7e400616bbb558dd7f2dd044af6f4783285",
-  "fspec_rs_sha256": "ba7723dda0e9a1bb8f7a40348d26a9f0602a495e700ca0f4b7fda6030d5ccaa1",
-  "fspec_doc_sha256": "9c458d20c9bdd3fa1626b1bee3bec1dbcb9817d74b71bd8c5bae9ab584371fe8",
+  "fspec_rs_sha256": "28ce5d81d0ce23a692e5271aeba4c97ce2f516aa7f400df71cf20f5e10d6d3c6",
+  "fspec_doc_sha256": "0a0fffff36ee7e6ec7a67483c91ee5c3db695617ac969c264e06acd3b45ebe5c",
   "runner_sha256": "ab58a3000a2c60b35d0f42450bdc0b58d4a9fb3aa9acba918f2df8b1f42d479f",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "835522c953918f6b736dd250fed109c6e11f699e498a75a2f7afe0624b418d79",
+  "rust_crate_tree_sha256": "d66e98088035f6a61c83278c1de7ef891a181e0f0dedccc6221a565640828f81",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-endian-resolver-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "host": {
    "cxx": "g++ (GCC) 16.2.1 20260810",
@@ -125,9 +125,9 @@
   "truncate_subpiece_constant": "MATCH (10/10 rows: LE start-distance / BE end-distance SUBPIECE constants incl. the -1 poke-out)",
   "characterize_resolver_gate": "MATCH (12/12 rows incl. extent-out queries below/between/above all extents and the gate-closed above-all case)",
   "be_param_entry_wrapper": "UNTESTED (proposed residual: the transitional enum AddressSpace cannot stage a big-endian ParamEntry, so the wrapper's BE route is unreachable in the Rust model; the BE arithmetic is pinned at helper level (jc be=1 fl=0 rows) - ADDRESS-0001 transitional)",
-  "join_resolver_window": "UNTESTED (proposed residual: characterize_as_param's piece-based windows for join entries are structurally present (registered_extents) but no join entries are staged)",
+  "join_resolver_window": "UNTESTED in this fixture's own projection (superseded: the successor fixture tests/oracle/fspec_findentry_1204 stages join entries through per-piece resolver windows for both find_entry and characterize_as_param)",
   "space_mismatch_base_branch": "UNTESTED (proposed residual: Address::justifiedContain's base != op2.base early -1 is caller-side in the spaceless helper - ADDRESS-0001 transitional)",
-  "find_entry_resolver_gate": "UNTESTED (proposed residual: ParamListStandard::find_entry keeps the ungated linear scan with the plain-space filter (join entries not piece-windowed); out of the ENDIAN-0002/RESOLVER-GATE-0003 lease)"
+  "find_entry_resolver_gate": "UNTESTED in this fixture's own projection (superseded: the successor fixture tests/oracle/fspec_findentry_1204 pins the find-window gating and join piece access, 29 rows MATCH)"
  },
  "residuals": [
   {
@@ -137,13 +137,13 @@
   },
   {
    "todo_id": "FSPEC-RESOLVER-JOIN-WINDOW-0004",
-   "status": "UNTESTED",
-   "detail": "Join-entry resolver windows (populateResolver registers per-piece ranges) are structurally present via registered_extents but unexercised; needs a join-record fixture once the join-space manager is modeled."
+   "status": "RESOLVED-BY-SUCCESSOR",
+   "detail": "Join-entry resolver windows are exercised end to end by the successor fixture tests/oracle/fspec_findentry_1204 (populateResolver per-piece registration driving both find_entry and characterize_as_param windows, incl. the cross-space per-piece address.cc:133 -1); this fixture's own models stage no join entries."
   },
   {
    "todo_id": "FSPEC-FINDENTRY-GATE-0005",
-   "status": "UNTESTED",
-   "detail": "find_entry (fspec.cc:661-680) still uses the ungated linear scan with the plain-space filter (join entries never piece-windowed); needs the same resolver-window treatment as characterize_as_param."
+   "status": "RESOLVED-BY-SUCCESSOR",
+   "detail": "find_entry now replicates the fspec.cc:661-680 resolver find-window gating and join piece access; pinned by the successor fixture tests/oracle/fspec_findentry_1204 (29 oracle rows MATCH)."
   }
  ],
  "build": {

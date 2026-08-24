@@ -299,7 +299,7 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 **ParamEntry**（参数存储资源条目：寄存器集合 / 栈槽范围 / join）—— 30+ 方法：
 - 资源查询：`get_group`/`get_all_groups`/`get_size`/`get_min_size`/`get_align`/`get_type`/`get_space`/`get_base`/`get_join_pieces`（fspec.hh:126-148）
 - 状态谓词：`is_exclusion`/`is_reverse_stack`/`is_grouped`/`is_overlap`/`is_first_in_class`/`is_param_check_high`/`is_param_check_low`（fspec.hh:134-153）
-- 包含/相交：`contained_by`(cc:199)/`intersects`(cc:214)/`justified_contain`(cc:248)/`get_container`(cc:295)/`contains`(cc:335)/`subsumes_definition`(cc:184)/`group_overlap`(cc:157)
+- 包含/相交：`contained_by`(cc:199)/`intersects`(cc:214)/`justified_contain`(cc:248)/`justified_contain_in_space`(cc:248 带查询空间的完整空间守卫形态)/`get_container`(cc:295)/`contains`(cc:335)/`subsumes_definition`(cc:184)/`group_overlap`(cc:157)
 - 解析：`find_entry_by_storage`(cc:60)/`resolve_first`(cc:76)/`resolve_join`(cc:94)/`resolve_overlap`(cc:122)/`order_within_group`(cc:583)
 - 地址分配：`get_slot`(cc:407)/`get_addr_by_slot` 3-arg(cc:434)/`get_addr_by_slot_just` 4-arg(cc:450)
 - 扩展：`assumed_extension`(cc:366) 返回 CPUI_COPY/INT_ZEXT/INT_SEXT/PIECE
@@ -325,7 +325,10 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 **ParamTrial 扩展**：+`entry_index: Option<usize>` 字段（替代 Ghidra `const ParamEntry*` 指针，fspec.hh:230）+ `set_entry(entry_index, off)`/`clear_entry`/`get_entry_index` 访问器 + `op_less(entries, a, b)`（`operator<` 1:1 移植，cc:1893-1914）。`ParamActive::sort_trials`（hh:316）按 `op_less` 模型槽序（group → entry 序 → exclusion offset / reverseStack 地址 → size）排序试验，见 2026-08-23 节。
 
 **ALIGNMENT_ROADMAP 记录的未移植依赖**（每个 TODO 均有记录）：
-- `ParamEntryResolver` rangemap（fspec.hh:597）—— `find_entry` 用线性扫描替代
+- `ParamEntryResolver` rangemap 数据结构本体（fspec.hh:597）—— `find_entry`/
+  `characterize_as_param`/`get_biggest_contained_param` 以 `registered_extents`
+  窗口化线性扫描等价复刻（见 2026-08-25 节；`add_resolver_range` 仍是
+  API-parity no-op stub）
 - `AddrSpaceManager::findJoin`（space.cc）—— `resolve_join`/`set_join_pieces` 由调用方提供 pieces
 - 生产 `.cspec` 文本到 `Element` DOM 的解析器尚缺；本模块现可通过既有
   `TreeDecoder` 消费结构化 DOM，真实文本 ingestion 仍在本模块之外
@@ -657,3 +660,41 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
   同 commit 重钉（Rust 侧 view=start 行改走 `force_left=false`+LE 的真实
   缺陷路由，be=1 行改 helper 显式端序直调——enum 空间无法 staging BE
   ParamEntry，ADDRESS-0001 过渡声明）。
+
+### 2026-08-25：findEntry 的 resolver find-窗口门控 + join piece 访问（FSPEC-FINDENTRY-GATE-0005）
+
+- **`ParamListStandard::find_entry(space, loc, size, just)`**（cc:661-680）：
+  无限定的逐 entry 线性扫描 + `e.get_space() != space` 平面过滤被
+  `characterize_as_param` 同款 **resolver find-窗口**取代——只访问
+  `registered_extents(e, space)`（populateResolver fspec.cc:1191-1216 的
+  per-space 注册：普通 entry 自身 extent / join 逐 piece extent）数值上
+  包含 query 起点的 entry。find 窗口 = 起点所在的唯一细化子区间
+  （rangemap.hh:332 `find(point)`），窗口内 record 共享同一 `last` 键、按
+  `position` 子序排列（AddrRange::operator<），而 position 按 entry 列表
+  注册序递增——**有序列表扫描 = 恰好按 Ghidra 顺序访问恰好的窗口集**。
+  可观测后果（fixture 钉住）：`just=false` 下 extent-out query（低于/介于/
+  高于该空间全部 extent）返回 `None`（旧实现会返回首个同空间 entry）；
+  窗口内 minSize 门控不再被窗口外的更早 entry 抢先。
+- **join entry 可达**：旧实现的 `get_space() != space` 过滤把 join entry
+  （spaceid=join 空间）结构性排除；新窗口按 piece 空间注册访问，findEntry
+  可以返回 join entry（cc:1201-1207 逐 piece `addResolverRange`）。
+- **`ParamEntry::justified_contain_in_space(addr, sz, query_space)`**
+  （cc:248-283 的完整空间守卫形态，resolver 窗口调用方
+  `find_entry`/`characterize_as_param` 使用；R13 复核发现 B 的修复）：
+  - join walk（cc:253-261，从最低有效 piece 起）：异空间 piece 走
+    address.cc:133 `base != op2.base` → -1，仅向跳过累加器贡献自身 size
+    ——跨空间 join 的数值巧合不再误报 ≥0；
+  - alignment==0（cc:264-267）：entry 空间 Address 的 cc:133 守卫；
+  - alignment!=0（cc:269）：显式 `spaceid != addr.getSpace()` 守卫。
+  无查询空间的过渡调用方保留 spaceless `justified_contain`
+  （ADDRESS-0001）。
+- `characterize_as_param` phase-1 的 `justifiedContain` 调用切换到
+  space-aware 形态（`loc` 在 Ghidra 原文携带空间）；7 个 `find_entry`
+  调用点（build_trial_map/check_join×2/check_split×2/possible_param/
+  possible_param_with_slot/fillin_map）签名去 `Option`（Ghidra 的
+  `loc.getSpace()` 恒存在，与 characterize 的显式空间形态一致）。
+- 双侧 fixture：`tests/oracle/fspec_findentry_1204.{cc,rs,metadata.json}` +
+  `tools/run_fspec_findentry_oracle.sh`（四 case 29 行：窗口内外几何、
+  just=false 的 NULL 形态、join piece 访问与位置序、跨空间 join 的
+  per-piece 空间守卫、find/characterize 对照）。`fspec_phase0_1204` 的
+  12 行 findEntry 投影在新窗口语义下逐行不变（已复核），无需重钉。

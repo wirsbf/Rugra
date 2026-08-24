@@ -1,0 +1,159 @@
+{
+ "schema": 2,
+ "fixture_id": "FSPEC-FINDENTRY-1204",
+ "stable_function_closure": [
+  "ghidra::ParamListStandard::findEntry(const Address &,int4,bool) const fspec.cc:661",
+  "ghidra::ParamEntry::justifiedContain(const Address &,int4) const fspec.cc:248",
+  "ghidra::ParamListStandard::characterizeAsParam(const Address &,int4) const fspec.cc:682",
+  "ghidra::ParamListStandard::populateResolver() fspec.cc:1191",
+  "ghidra::ParamListStandard::addResolverRange(...) fspec.cc:1174",
+  "rugra::fspec::ParamListStandard::find_entry src/fspec.rs (fspec.cc:661-680)",
+  "rugra::fspec::ParamEntry::justified_contain_in_space src/fspec.rs (fspec.cc:248-283 with the address.cc:133/cc:269 space guards)",
+  "rugra::fspec::ParamEntry::justified_contain src/fspec.rs (spaceless transitional form, fspec.cc:248-283)",
+  "rugra::fspec::ParamListStandard::characterize_as_param src/fspec.rs (fspec.cc:682-719)"
+ ],
+ "overall_status": "UNTESTED",
+ "status_detail": "The four-case covered projection byte-matches Ghidra 12.0.4: the findEntry resolver-window gating (extent-out queries return NULL even with just=false; minSize runs inside the window), join entries reached through per-piece registration (both just forms, piece-vs-entry position order), the cross-space per-piece space guard of the join walk (address.cc:133), and the find/characterize shared-window contrast. Overall remains UNTESTED because big-endian space rows, the alignment!=0 foreign-space guard through non-resolver callers, and offset wrap-around geometries are not exercised (ADDRESS-0001 transitional enum spaces are little-endian only).",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "3f07f9657b32c662654b52794e07384a5c7ba80f",
+  "rugra_base_tree": "9621e5acd794aa7a32a26bdc7074870d8725ef00",
+  "cpp_fixture_sha256": "141f9668a4069fd0cef7f9efaf91e0cb7408174ed8e25b2a8dc5feed05f20859",
+  "rust_fixture_sha256": "8262a86c66acea833e8194cef4658a6ef9978eca5d7e98fae14092437d596102",
+  "fspec_rs_sha256": "28ce5d81d0ce23a692e5271aeba4c97ce2f516aa7f400df71cf20f5e10d6d3c6",
+  "fspec_doc_sha256": "0a0fffff36ee7e6ec7a67483c91ee5c3db695617ac969c264e06acd3b45ebe5c",
+  "runner_sha256": "bda845f4bfe6c59f7490ee7c8fbfc35fee64bd310ef0257d308b7478ac8e593a",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "e339d02322385b43d1853d33e4ccafe7460fb3b3fe20fe734995ee0ee85794a0",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-findentry-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
+  }
+ },
+ "architecture": {
+  "id": "synthetic-le-fspec-findentry-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "constant=0, other=1, unique=2, ram=3, register=4, stack=5 (declared but unused), join=6; byte addressed, wordsize 1, all little-endian",
+  "space_construction": "FixtureTranslate/AddrSpace inserts ConstantSpace, OtherSpace, UniqueSpace and two IPTR_PROCESSOR AddrSpaces (ram index 3, register index 4) with AddrSpace::hasphysical; JoinSpace index 6 is constructed for the join ParamEntry spaceids (its own resolver window is never queried)"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "no cspec decode; staged ParamEntry resources (case1: five plain force-left exclusion entries reg [0x100,0x107] min1 / reg [0x200,0x207] min4 / ram [0x2000,0x200F] min8 / reg [0x108,0x10F] min1 / reg [0x104,0x10F] min1; case2+4: join reg:0x104+reg:0x100 (4B each) min4 plus plain reg [0x100,0x107] min8; case3: cross-space join ram:0x200+reg:0x200 min4)",
+  "calling_convention": "hand-built ParamEntry/ParamListStandard/JoinRecord via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters + set_join_pieces); populateResolver completes each model"
+ },
+ "analysis_options": {
+  "api": "Direct production ParamListStandard::findEntry and characterizeAsParam calls on both sides; no Action, Rule, PrintC or Funcdata pipeline",
+  "model_state": "case1: ParamListStandard with five plain entries, 14 (space,offset,size,just) queries; case2: join + overlapping plain entry, 6 queries; case3: cross-space join, 4 queries; case4: the case-2 model, 5 queries observed through BOTH findEntry(loc,size,true) and characterizeAsParam",
+  "normalization": "None. Entry ordinals (position in the entry list) or null, and raw characterizeAsParam classification codes (0..3), are printed verbatim",
+  "debug_macros": "none on either side",
+  "random_seed": "none; construction and queries are deterministic",
+  "error_injection": "none; all queries stay on valid inputs"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture, compiler_spec, analysis_options, cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "find_window_gate",
+    "setup": "ParamListStandard with five plain force-left exclusion entries (reg [0x100,0x107] min1, reg [0x200,0x207] min4, ram [0x2000,0x200F] min8, reg [0x108,0x10F] min1, reg [0x104,0x10F] min1), populateResolver",
+    "queries": "14 rows: fe spc/off/sz/just -> entry ordinal or null",
+    "expect": "fspec.cc:661-680 visits only the resolver->find(loc.getOffset()) window: extent-out queries (below/between/above every same-space extent, or in a foreign/unresolved space) return null EVEN with just=false; the in-window minSize gate returns null rather than falling through to an out-of-window earlier entry; the in-window overlap query at 0x104 returns e0 under just=false (position order = entry list order) and e4 under just=true"
+   },
+   {
+    "id": "join_piece_access",
+    "setup": "join ParamEntry (pieces MS-first reg:0x104 high + reg:0x100 low, min4) followed by plain reg [0x100,0x107] min8, populateResolver",
+    "queries": "6 rows: fe spc/off/sz/just -> entry ordinal or null",
+    "expect": "populateResolver fspec.cc:1191-1216 registers the join entry per piece in the piece space, so findEntry returns the join entry: just=false hits at 0x100/0x104 return e0 (the join), just=true returns e0 only when the join walk (fspec.cc:253-261, least significant piece first) yields offset 0 (0x100/4), while 0x100/8 (join walk -1, plain justified) returns e1 and 0x104/4 (offset 4) and 0x102/4 (poke-out) return null"
+   },
+   {
+    "id": "cross_space_join",
+    "setup": "join ParamEntry with pieces in DIFFERENT spaces (MS-first ram:0x200 high + reg:0x200 low, min4), populateResolver",
+    "queries": "4 rows: fe spc/off/sz/just -> entry ordinal or null",
+    "expect": "the reg query hits the low piece (justified offset 0 -> e0); the ram query hits the high piece numerically but the foreign low piece takes address.cc:133 base != op2.base -1 so the walk returns offset 4 != 0 -> null with just=true; just=false returns e0 from either piece window; 0x204 is outside both piece extents -> null"
+   },
+   {
+    "id": "find_vs_characterize",
+    "setup": "the join_piece_access model queried through both findEntry(loc,size,true) and characterizeAsParam",
+    "queries": "5 rows: fc spc/off/sz fe=<ordinal|null> ch=<code>",
+    "expect": "the shared phase-1 resolver window ties a justified find hit to contains_justified (0x100/4 -> e0 + ch=2; 0x100/8 -> e1 + ch=2), an in-window unjustified start to contains_unjustified with a null find (0x104/4), an above-all-extents start to the closed gate (0x110 -> null + ch=0) and a below-all start with failing containedBy (0xFC/8 -> null + ch=0)"
+   }
+  ],
+  "case_order": [
+   "find_window_gate",
+   "join_piece_access",
+   "cross_space_join",
+   "find_vs_characterize"
+  ],
+  "sha256": "b6c65999ef2678906d8d0f0744820565637f0fa42c4cfa4f8bfa86fde923d6e3"
+ },
+ "observation_schema": {
+  "format": "34 fixed-order UTF-8 lines with final newline: one envelope, four case headers, then 14 fe rows, 6 fe rows, 4 fe rows and 5 fc rows",
+  "branches": "fe rows print the entry ordinal (position in the entry list) or null; ordinals are stable because both sides stage the same entry list in the same order",
+  "classification": "fc rows print the findEntry(loc,size,true) ordinal/null and the raw characterizeAsParam code (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3)"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "findEntry returns a const ParamEntry* (Rugra: entry-list ordinal, Some/None); justifiedContain returns int4 (-1 or the endian-aware distance); characterizeAsParam consumes the justifiedContain sign and the exclusion containedBy; no callee mutates model state",
+  "loop_bounds_traversal_order": "findEntry walks ONLY the resolver->find(loc.getOffset()) window (the single refined subinterval containing the query start): its records share one last key and iterate in position order, and populateResolver assigns positions in entry-list order (join entries per piece, MS piece first), so Rugra's ordered entry-list scan visits exactly the window in exactly Ghidra's order; the minSize check (cc:675) precedes the just check (cc:676)",
+  "counters_and_accumulators": "the join walk accumulator res (fspec.cc:252) adds vdata.size only for pieces the query does NOT contain (cur < 0, including the address.cc:133 foreign-space -1) and returns res + cur on the first containing piece; findEntry itself has no accumulator",
+  "sort_and_comparison_keys": "the window membership key is numeric extent containment of the query start in the query's space (registered per entry or per join piece); the just=true acceptance key is justifiedContain == 0 with per-piece/entry space equality; the find-window boundary is the refinement's nearest boundary above the query start (shared by every record covering the start)"
+ },
+ "coverage": {
+  "find_window_gate": "MATCH (14/14 rows: extent-out just=false NULLs below/between/above, minSize-in-window NULL, position-order overlap, ram/unique cross-space and no-resolver NULLs)",
+  "join_piece_access": "MATCH (6/6 rows: join returned via piece windows in both just forms; join walk offsets 0/4/-1 discriminated; piece-vs-entry position order)",
+  "cross_space_join": "MATCH (4/4 rows incl. the address.cc:133 foreign-piece -1 making the ram just=true query return offset 4 -> null)",
+  "find_vs_characterize": "MATCH (5/5 rows tying justified find hits to contains_justified and out-of-window starts to no_containment)",
+  "be_space_rows": "UNTESTED (proposed residual: the transitional enum AddressSpace cannot stage big-endian pieces/spaces, so BE join-walk and BE window rows are unreachable; ADDRESS-0001)",
+  "aligned_entry_foreign_space": "UNTESTED (proposed residual: the cc:269 alignment!=0 space guard is present in justified_contain_in_space but is structurally unreachable through the resolver windows, which only admit plain entries of the query's own space)",
+  "spaceless_wrapper_callers": "UNTESTED (proposed residual: legacy callers of the spaceless justified_contain that do not hold a query space (assumed_extension cc:366, ParamListStandardOut::possible_param join access cc:1765) keep ADDRESS-0001 transitional behavior)"
+ },
+ "residuals": [
+  {
+   "todo_id": "ADDRESS-0001",
+   "status": "UNTESTED",
+   "detail": "BE-space rows and the spaceless wrapper's remaining callers (assumed_extension, ParamListStandardOut::possible_param join access): the enum AddressSpace model is little-endian-only and those callers have no query space in hand."
+  },
+  {
+   "todo_id": "FSPEC-RESOLVER-JOIN-WINDOW-0004",
+   "status": "RESOLVED-BY-FIXTURE",
+   "detail": "Join-entry resolver windows are now exercised end to end: populateResolver per-piece registration drives both find_entry windows (join_piece_access, cross_space_join cases) and characterize_as_param phase-1/phase-2 windows (find_vs_characterize case, join in phase-1 window with containedBy structurally false via the space guard), including the per-piece address.cc:133 foreign-space -1 (R13 finding B)."
+  },
+  {
+   "todo_id": "FSPEC-FINDENTRY-GATE-0005",
+   "status": "RESOLVED-BY-FIXTURE",
+   "detail": "find_entry now replicates the fspec.cc:661-680 resolver find-window gating (extent containment of the query start in the query's space, minSize inside the window, space-aware justifiedContain) and reaches join entries; 29 oracle rows MATCH."
+  }
+ ],
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "rugra_build": "Archive the pinned base, overlay the owned fspec source, verify the complete Cargo.lock registry closure, then let /usr/bin/cargo --locked --offline select and checksum the current Linux target's cached packages under the global build lock.",
+  "expected_stdout_lines": 34,
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "66a6f70b776e1f591ed71c0d1c12de5c0a2512c3a9313a49fd6c3d9f3e1e16ee"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "440d81cd7b277f37efdcf9d48fe5e0d44c2145f7b7daa5433f9290e675ba7b5c",
+  "rugra_stdout_sha256": "440d81cd7b277f37efdcf9d48fe5e0d44c2145f7b7daa5433f9290e675ba7b5c"
+ }
+}
