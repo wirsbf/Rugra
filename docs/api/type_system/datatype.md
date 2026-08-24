@@ -61,20 +61,36 @@ headless/数据组织路径产出 `uVar` 家族；Rugra 选择对齐后者（E2E
 此前缺失，导致 varmap 骨架被迫简化。
 
 ### `pub fn get_alignment(&self) -> usize`
-对应 `Datatype::getAlignment` (type.hh:241)。基类型对齐由 size 经
-Ghidra 默认 `size_alignment_map` (type.cc:4649) 派生：
+对应 `Datatype::getAlignment` (type.hh:241)。`TypeBase` 独立保存
+`alignment`；factory 插入、decode 以及 struct/union 定义路径均写入该字段。
+仅旧的、未经过 factory 的直接构造器使用默认 alignment map 兼容回退：
 `{0:1, 1:1, 2:2, 3:2, 4:4, 5:4, 6:4, 7:4, 8+:8}`。
 
 ### `pub fn get_align_size(&self) -> usize`
-对应 `Datatype::getAlignSize` (type.hh:240) +
-`TypeFactory::getPrimitiveAlignSize` (type.cc:3312)。
-即 `calc_align_size(size, alignment)`。
+对应 `Datatype::getAlignSize` (type.hh:240)。`TypeBase` 独立保存
+`alignSize`；primitive `findAdd` 按 `getPrimitiveAlignSize(size)` 写入，
+struct/union 定义按 `calcAlignSize(size, alignment)` 写入，array decode
+保留总宽度。旧的直接构造器仍以 `calc_align_size(size, alignment)` 回退。
+
+### 2026-08-24：TypeBase layout / display-name 生命周期（series A）
+
+`TypeBase` 新增独立的 `display_name`、`alignment` 与 `align_size`，对应
+Ghidra `Datatype` 基类字段。`decodeBasic` 读取 `label`/`alignment`，缺省
+display name 回退到 lookup name；struct/union encoder 输出真实 alignment。
+`TypeCode::new` 对应 `Datatype(1,1,TYPE_CODE)`：构造和无 alignment 属性的
+decode 均保留 `alignment=1`、`alignSize=1`，并从 incomplete 状态开始。
+当前 scoped 状态保持 **L2 / MISMATCH**：factory 内部 replacement 会让旧的
+`Arc<Datatype>` 句柄与依赖它的 array/pointer/partial/typedef/incomplete/cache
+继续看到旧对象，绑定 `TYPEFACTORY-ARC-IDENTITY-0001`。最终 series D 的
+锁定 12.0.4 bilateral fixture 才会给这组字段可观察状态；在此之前为
+`UNTESTED`，不能升 L3。
 
 ### `pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64)`
 对应 `Datatype::getSubType` (type.hh:247, type.cc:174)。
 返回包含 `off` 的一级组件类型及组件内偏移。
 - Struct: `TypeStruct::getSubType` (type.cc:1640) 经 `getFieldIter`
-- Union: 字段均从 offset 0 起
+- Union: locked `TypeUnion` 没有 override（type.hh:554 注释掉声明），所以
+  走基类并返回 `(None, 原 off)`；`getExactPiece` 在 descent 前单独处理 union
 - Array: `TypeArray::getSubType` (type.cc:1234)，`newoff = off % elem.alignSize`
 - 其他: 返回 `(None, off)`
 

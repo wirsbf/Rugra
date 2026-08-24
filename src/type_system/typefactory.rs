@@ -208,7 +208,10 @@ impl TypeFactory {
     /// Core-unknown loop parameterized by registration flavor.
     fn init_core_types_flavor(&mut self, flavor: CoreTypeFlavor) {
         // Void type
-        let void_type = Arc::new(Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void)));
+        let mut void_base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
+        void_base.alignment = 1;
+        void_base.align_size = 0;
+        let void_type = Arc::new(Datatype::Void(void_base));
         self.add_core_type(void_type);
 
         // Boolean type
@@ -588,7 +591,7 @@ impl TypeFactory {
     /// exactly.
     fn find_add(
         &mut self,
-        candidate: Datatype,
+        mut candidate: Datatype,
         enforce_alignment: bool,
     ) -> Result<Arc<Datatype>, String> {
         let name = candidate.get_name().to_string();
@@ -630,12 +633,24 @@ impl TypeFactory {
                 }
             }
         }
-        // type.cc:3432-3438: alignment computation on the clone. Rugra's
-        // TypeBase has no alignment field (datatype.rs registered gap); the
-        // observable LowlevelError on an uninitialized map is preserved for
-        // the enforcing entry points.
-        if enforce_alignment && self.align_map.is_empty() {
-            return Err("TypeFactory alignment map not initialized".to_string());
+        // type.cc:3432-3436 computes both stored layout fields before insert.
+        if candidate.base_record_mut().alignment < 0 {
+            let (alignment, align_size) = if self.align_map.is_empty() {
+                if enforce_alignment {
+                    return Err("TypeFactory alignment map not initialized".to_string());
+                }
+                // Legacy non-enforcing callers run before architecture
+                // wiring; use the locked default map for the same two-step
+                // layout calculation rather than discarding layout state.
+                primitive_layout(candidate.get_size())
+            } else {
+                let align_size = self.get_primitive_align_size(candidate.get_size() as u32)?;
+                let alignment = self.get_alignment(align_size as u32)?;
+                (alignment as usize, align_size as usize)
+            };
+            let base = candidate.base_record_mut();
+            base.alignment = alignment as i32;
+            base.align_size = align_size;
         }
         let tree_key = (candidate_submeta, Reverse(candidate_size), candidate_id);
         let mut tree = self
@@ -783,17 +798,17 @@ impl TypeFactory {
         array_type
     }
 
-    // Ghidra: type.cc:3850 TypeFactory::createStruct
+    // Ghidra: type.cc:3914 TypeFactory::getTypeStruct
     /// Create a new structure type
     pub fn create_struct(&mut self, name: &str) -> Arc<Datatype> {
-        // Note: Ghidra allows multiple structs with same name in different scopes,
-        // but for now we use a global flat namespace for the factory.
-        let st_type = Arc::new(Datatype::Struct(TypeStruct {
-            base: TypeBase::new(name.to_string(), 0, TypeMetatype::Struct),
+        let mut base = TypeBase::new(name.to_string(), 0, TypeMetatype::Struct);
+        base.id = Datatype::hash_name(name);
+        base.flags |= type_flags::TYPE_INCOMPLETE;
+        self.find_add(Datatype::Struct(TypeStruct {
+            base,
             fields: Vec::new(),
-        }));
-        self.types.insert(name.to_string(), st_type.clone());
-        st_type
+        }), false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:3479 TypeFactory::setFields
@@ -823,45 +838,41 @@ impl TypeFactory {
     /// (e.g. an XML-decoded unrounded struct type — Ghidra's grammar
     /// `newSize` is 8 for a size-5/align-4 field type so the flag stays
     /// clear, while the derived size 5 would match the field's full size).
-    /// Relies on `get_align_size`/`get_alignment` (Rugra derives alignment
-    /// from size via the default map — the registered datatype.rs gap).
+    /// Relies on the alignment/alignSize retained on each field Datatype;
+    /// legacy direct constructors use the documented default-map fallback.
     pub fn set_fields(&mut self, name: &str, fields: Vec<TypeField>) -> Option<Arc<Datatype>> {
-        if let Some(dt) = self.types.get_mut(name) {
-            if let Datatype::Struct(ref mut st) = Arc::make_mut(dt) {
-                st.fields = fields;
-                // Calculate size based on last field
-                let mut max_size = 0;
-                for field in &st.fields {
-                    let field_end = field.offset + field.type_ptr.get_size();
-                    if field_end > max_size {
-                        max_size = field_end;
-                    }
-                }
-                st.base.size = max_size;
-                // Ghidra: type.cc:1569-1571 TypeStruct::setFields:
-                //   if (field.size() == 1) {
-                //     if (field[0].type->getSize() == size)
-                //       flags |= needs_resolution;
-                //   }
-                // `size` is the caller-supplied newSize; for the grammar path
-                // (this function's only production caller, grammar.rs
-                // new_struct) it equals calcAlignSize(field.getAlignSize(),
-                // newAlign) with newAlign = max(1, field.getAlignment()).
-                if st.fields.len() == 1 {
-                    let field = &st.fields[0];
-                    let new_align = field.type_ptr.get_alignment().max(1);
-                    let ghidra_new_size = crate::type_system::datatype::calc_align_size(
-                        field.type_ptr.get_align_size(),
-                        new_align,
-                    );
-                    if field.type_ptr.get_size() == ghidra_new_size {
-                        st.base.flags |= type_flags::NEEDS_RESOLUTION;
-                    }
-                }
-                return Some(dt.clone());
-            }
+        let dt = self.types.get(name)?.clone();
+        if !dt.is_incomplete() {
+            return None;
         }
-        None
+        let defined = self.define_replace(&dt, |defined| {
+            let st = match defined {
+                Datatype::Struct(structure) => structure,
+                _ => return Err("setFields target is not a TypeStruct".to_string()),
+            };
+            st.fields = fields;
+            let mut unpadded_size = 0;
+            let mut new_align = 1;
+            for field in &st.fields {
+                unpadded_size =
+                    unpadded_size.max(field.offset + field.type_ptr.get_align_size());
+                new_align = new_align.max(field.type_ptr.get_alignment());
+            }
+            st.base.size = calc_align_size(unpadded_size, new_align);
+            st.base.alignment = new_align as i32;
+            st.base.align_size = calc_align_size(st.base.size, new_align);
+            if st.fields.len() == 1 {
+                let field = &st.fields[0];
+                let field_align = field.type_ptr.get_alignment().max(1);
+                let ghidra_new_size = calc_align_size(field.type_ptr.get_align_size(), field_align);
+                if field.type_ptr.get_size() == ghidra_new_size {
+                    st.base.flags |= type_flags::NEEDS_RESOLUTION;
+                }
+            }
+            st.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            Ok(())
+        });
+        Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
     }
 
     // Ghidra: type.cc:3479 TypeFactory::setFields (explicit newSize/newAlign arm)
@@ -885,12 +896,12 @@ impl TypeFactory {
     /// there the derived and explicit conditions coincide for offset-0
     /// fields with `alignSize == size`).
     ///
-    /// Divergences kept out of scope (Rugra registry has no structural tree):
-    /// the `isIncomplete` guard, `tree.erase/insert`, and the
-    /// `flags & (opaque_string | variable_length | type_incomplete)` merge.
-    /// `new_align` is accepted for signature parity; Rugra's `TypeBase` does
-    /// not yet store an alignment field (Ghidra's `alignment = newAlign;
-    /// alignSize = calcAlignSize(size, alignment)` tail).
+    /// The immutable-Arc replacement updates the registered tree/name slots,
+    /// but existing dependent/external Arcs remain stale under
+    /// TYPEFACTORY-ARC-IDENTITY-0001; masked flag propagation is performed by
+    /// decode/typedef completion callers that supply those flags.
+    /// `new_align` is retained on the Datatype base and drives `alignSize`,
+    /// matching Ghidra's `TypeStruct::setFields` tail.
     pub fn set_fields_sized(
         &mut self,
         name: &str,
@@ -898,25 +909,26 @@ impl TypeFactory {
         new_size: usize,
         new_align: usize,
     ) -> Option<Arc<Datatype>> {
-        let _ = new_align; // no alignment field on TypeBase yet
-        if let Some(dt) = self.types.get_mut(name) {
-            if let Datatype::Struct(ref mut st) = Arc::make_mut(dt) {
-                st.fields = fields;
-                st.base.size = new_size;
-                // Ghidra: type.cc:1569-1571 TypeStruct::setFields:
-                //   if (field.size() == 1) {
-                //     if (field[0].type->getSize() == size)
-                //       flags |= needs_resolution;
-                //   }
-                // `size` is the explicitly provided newSize; the field's
-                // offset is not part of the condition.
-                if st.fields.len() == 1 && st.fields[0].type_ptr.get_size() == st.base.size {
-                    st.base.flags |= type_flags::NEEDS_RESOLUTION;
-                }
-                return Some(dt.clone());
-            }
+        let dt = self.types.get(name)?.clone();
+        if !dt.is_incomplete() {
+            return None;
         }
-        None
+        let defined = self.define_replace(&dt, |defined| {
+            let st = match defined {
+                Datatype::Struct(structure) => structure,
+                _ => return Err("setFields target is not a TypeStruct".to_string()),
+            };
+            st.fields = fields;
+            st.base.size = new_size;
+            st.base.alignment = new_align as i32;
+            st.base.align_size = calc_align_size(new_size, new_align);
+            if st.fields.len() == 1 && st.fields[0].type_ptr.get_size() == st.base.size {
+                st.base.flags |= type_flags::NEEDS_RESOLUTION;
+            }
+            st.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            Ok(())
+        });
+        Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
     }
 
     // RUGRA-GLUE: Ghidra exposes no numTypes method; this counts the union of
@@ -962,13 +974,13 @@ impl TypeFactory {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         for ct in tree.values() {
-            Self::order_recurse(deporder, &mut visited, ct);
+            self.order_recurse(deporder, &mut visited, ct);
         }
         drop(tree);
         // Add non-atomic named roots. Pointer/aggregate global structural
         // ordering remains part of the module-level TypeFactory L2 gap.
         for ct in self.types.values() {
-            Self::order_recurse(deporder, &mut visited, ct);
+            self.order_recurse(deporder, &mut visited, ct);
         }
     }
 
@@ -978,6 +990,7 @@ impl TypeFactory {
     /// `ct->typedefImm` first (Rugra: typedef target), then each
     /// `ct->getDepend(i)` for `i in 0..numDepend()`, then pushes `ct`.
     fn order_recurse(
+        &self,
         deporder: &mut Vec<Arc<Datatype>>,
         mark: &mut std::collections::HashSet<usize>,
         ct: &Arc<Datatype>,
@@ -988,11 +1001,14 @@ impl TypeFactory {
         if !mark.insert(key) {
             return; // Already inserted before
         }
+        if let Some(target) = self.typedefs.get(ct.get_name()) {
+            self.order_recurse(deporder, mark, target);
+        }
         // numDepend()/getDepend(i) — dispatch by variant (type.hh:261-630).
         // Pointer->ptrto, Array->arrayof, Struct/Union->field[i].type,
         // Code->proto return type. Base/Void/Enum/Spacebase: 0 depends.
         for dep in Self::depends_of(ct) {
-            Self::order_recurse(deporder, mark, &dep);
+            self.order_recurse(deporder, mark, &dep);
         }
         deporder.push(ct.clone());
     }
@@ -1078,6 +1094,7 @@ impl TypeFactory {
         self.clear_cache();
         self.rel_pointers.clear();
         self.typedefs.clear();
+        self.incomplete_typedefs.clear();
     }
 
     // Ghidra: type.cc:3266 TypeFactory::clearNoncore
@@ -1087,8 +1104,9 @@ impl TypeFactory {
     /// whose object carries the core flag — INCLUDING entries that were
     /// promoted in place by `setCoreType` — while the preferred-type caches
     /// are left untouched (every cached entry is core by construction).
-    /// `warnings`/`incompleteTypedef` have no Rugra counterpart; the relative
-    /// pointer/typedef side registries are glue and follow their objects.
+    /// Rugra has no warning registry; the relative-pointer/typedef side
+    /// registries follow their objects and the incomplete-typedef queue is
+    /// cleared exactly like Ghidra's `incompleteTypedef` list.
     pub fn clear_non_core(&mut self) {
         // Ghidra scans the core flag on the tree entries; the promoted objects
         // carry it after promote_core replaced every channel.
@@ -1104,6 +1122,7 @@ impl TypeFactory {
             .retain(|_, datatype| datatype.is_coretype());
         self.rel_pointers.clear();
         self.typedefs.clear();
+        self.incomplete_typedefs.clear();
     }
 
     // ---------------------------------------------------------------
@@ -1132,6 +1151,8 @@ impl TypeFactory {
         }
         // TypeVoid ctor (type.hh:389): name "void", size 0, coretype flag.
         let mut base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
+        base.alignment = 1;
+        base.align_size = 0;
         base.id = Datatype::hash_name("void");
         base.flags |= type_flags::CORETYPE;
         let dt = Arc::new(Datatype::Void(base));
@@ -1248,41 +1269,81 @@ impl TypeFactory {
     /// `TypeUnion()` constructor (type.hh:551) sets `type_incomplete |
     /// needs_resolution`; Rugra mirrors both flags.
     pub fn get_type_union(&mut self, name: &str) -> Arc<Datatype> {
-        if let Some(existing) = self.find_by_name(name) {
-            return existing;
-        }
         let mut base = TypeBase::new(name.to_string(), 0, TypeMetatype::Union);
+        base.id = Datatype::hash_name(name);
         base.flags |= type_flags::TYPE_INCOMPLETE | type_flags::NEEDS_RESOLUTION;
-        let dt = Arc::new(Datatype::Union(TypeUnion {
+        self.find_add(Datatype::Union(TypeUnion {
             base,
             fields: Vec::new(),
-        }));
-        self.types.insert(name.to_string(), dt.clone());
-        dt
+        }), false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
-    // Ghidra: type.cc:3850 TypeFactory::setUnionFields
+    // Ghidra: type.cc:3493 TypeFactory::setFields(TypeUnion*)
     /// Set the fields of an existing union, recomputing its size as the max
     /// field size (union members overlap at offset 0). Mirrors the union
     /// behaviour of `TypeUnion::setFields` used by `TypeFactory::setFields`.
     pub fn set_union_fields(&mut self, name: &str, fields: Vec<TypeField>) -> Option<Arc<Datatype>> {
-        if let Some(dt) = self.types.get_mut(name) {
-            if let Datatype::Union(ref mut u) = Arc::make_mut(dt) {
-                u.fields = fields;
-                let mut max_size = 0;
-                for f in &u.fields {
-                    let sz = f.type_ptr.get_size();
-                    if sz > max_size {
-                        max_size = sz;
-                    }
-                }
-                u.base.size = max_size;
-                // Fields are now defined: clear the incomplete flag.
-                u.base.flags &= !type_flags::TYPE_INCOMPLETE;
-                return Some(dt.clone());
-            }
+        let dt = self.types.get(name)?.clone();
+        if !dt.is_incomplete() {
+            return None;
         }
-        None
+        let defined = self.define_replace(&dt, |defined| {
+            let union = match defined {
+                Datatype::Union(union) => union,
+                _ => return Err("setFields target is not a TypeUnion".to_string()),
+            };
+            union.fields = fields;
+            let max_size = union
+                .fields
+                .iter()
+                .map(|field| field.type_ptr.get_size())
+                .max()
+                .unwrap_or(0);
+            let new_align = union
+                .fields
+                .iter()
+                .map(|field| field.type_ptr.get_alignment())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            union.base.size = max_size;
+            union.base.alignment = new_align as i32;
+            union.base.align_size = calc_align_size(max_size, new_align);
+            union.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            Ok(())
+        });
+        Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
+    }
+
+    // Ghidra: type.cc:3493 TypeFactory::setFields(TypeUnion*)
+    /// Define a union with the caller-supplied final size and alignment.
+    /// This is the explicit counterpart to [`Self::set_fields_sized`] and
+    /// preserves layout values decoded from compiler/debug type metadata.
+    pub fn set_union_fields_sized(
+        &mut self,
+        name: &str,
+        fields: Vec<TypeField>,
+        new_size: usize,
+        new_align: usize,
+    ) -> Option<Arc<Datatype>> {
+        let dt = self.types.get(name)?.clone();
+        if !dt.is_incomplete() {
+            return None;
+        }
+        let defined = self.define_replace(&dt, |defined| {
+            let union = match defined {
+                Datatype::Union(union) => union,
+                _ => return Err("setFields target is not a TypeUnion".to_string()),
+            };
+            union.fields = fields;
+            union.base.size = new_size;
+            union.base.alignment = new_align as i32;
+            union.base.align_size = calc_align_size(new_size, new_align);
+            union.base.flags &= !type_flags::TYPE_INCOMPLETE;
+            Ok(())
+        });
+        Some(defined.unwrap_or_else(|message| panic!("LowlevelError: {message}")))
     }
 
     // Ghidra: type.cc:3967 TypeFactory::getTypeEnum
@@ -1373,9 +1434,10 @@ impl TypeFactory {
                 return existing.clone();
             }
         }
-        let base = TypeBase::new(String::new(), 1, TypeMetatype::Code);
+        let mut code = TypeCode::new();
+        code.base.flags &= !type_flags::TYPE_INCOMPLETE;
         // tmp.markComplete() (type.cc:3699): considered complete.
-        let candidate = Datatype::Code(TypeCode { base, proto: None });
+        let candidate = Datatype::Code(code);
         let tree_key = (Self::submeta_of(&candidate), Reverse(1), 0);
         let mut tree = self
             .base_type_tree
@@ -1398,10 +1460,13 @@ impl TypeFactory {
         if nm.is_empty() {
             return Ok(self.get_type_code());
         }
-        let mut base = TypeBase::new(nm.to_string(), 1, TypeMetatype::Code);
-        base.id = Datatype::hash_name(nm);
+        let mut code = TypeCode::new();
+        code.base.name = nm.to_string();
+        code.base.display_name = nm.to_string();
+        code.base.id = Datatype::hash_name(nm);
+        code.base.flags &= !type_flags::TYPE_INCOMPLETE;
         // tmp.markComplete() (type.cc:3715).
-        self.find_add(Datatype::Code(TypeCode { base, proto: None }), false)
+        self.find_add(Datatype::Code(code), false)
     }
 
     // Ghidra: type.cc:4002 TypeFactory::getTypeCode(PrototypePieces)
@@ -1445,10 +1510,12 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&name) {
             return existing;
         }
-        let mut base = TypeBase::new(name.clone(), 1, TypeMetatype::Code);
+        let mut code = TypeCode::new();
+        code.base.name = name.clone();
+        code.base.display_name = name.clone();
         // Ghidra: tc.markComplete() clears type_incomplete.
-        base.flags |= type_flags::VARLENGTH;
-        let mut code = TypeCode { base, proto: None };
+        code.base.flags &= !type_flags::TYPE_INCOMPLETE;
+        code.base.flags |= type_flags::VARLENGTH;
         code.set_prototype_pieces(proto);
         let dt = Arc::new(Datatype::Code(code));
         self.types.insert(name, dt.clone());
@@ -1889,14 +1956,23 @@ impl TypeFactory {
     /// `typedefs` table so that `get_typedef_target` can walk it.
     pub fn get_typedef(&mut self, name: &str, ct: Arc<Datatype>) -> Arc<Datatype> {
         if let Some(existing) = self.find_by_name(name) {
+            let same_target = self
+                .typedefs
+                .get(name)
+                .is_some_and(|target| Arc::ptr_eq(target, &ct));
+            if !same_target {
+                panic!("LowlevelError: Trying to create typedef of existing type: {name}");
+            }
             return existing;
         }
-        // Clone the underlying type but with the new name; the canonical
-        // name is the typedef name.
-        let mut base = TypeBase::new(name.to_string(), ct.get_size(), ct.get_metatype());
-        // Typedefs inherit flags from the aliased type EXCEPT coretype.
-        base.flags = ct.get_flags() & !type_flags::CORETYPE;
-        base.flags |= type_flags::HAS_STRIPPED;
+        // Ghidra clones every Datatype base field (including exact layout),
+        // then changes only name/displayName/id, clears coretype, and stores
+        // typedefImm. A normal typedef does NOT acquire has_stripped.
+        let mut base = ct.base_record().clone();
+        base.name = name.to_string();
+        base.display_name = name.to_string();
+        base.id = Datatype::hash_name(name);
+        base.flags &= !type_flags::CORETYPE;
         let aliased = ct.clone();
         let dt = match ct.as_ref() {
             Datatype::Void(_) => Datatype::Void(base),
@@ -1954,9 +2030,10 @@ impl TypeFactory {
                 stripped: pu.stripped.clone(),
             }),
         };
-        let dt = Arc::new(dt);
+        let dt = self
+            .find_add(dt, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
         self.typedefs.insert(name.to_string(), aliased);
-        self.types.insert(name.to_string(), dt.clone());
         // Ghidra: type.cc:3837-3838 getTypedef:
         //   if (res->isIncomplete()) incompleteTypedef.push_back(res);
         // The clone inherits the referenced type's type_incomplete flag;
@@ -2958,6 +3035,11 @@ impl TypeFactory {
                     name = format!("{} *", ptrto.get_name());
                 }
                 let mut base = TypeBase::new(name, basic.size, TypeMetatype::Pointer);
+                if !basic.display_name.is_empty() {
+                    base.display_name = basic.display_name.clone();
+                }
+                base.alignment = basic.alignment;
+                base.align_size = basic.size;
                 base.id = basic.id;
                 base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
                 // type.cc:1027 TypePointer::decode calls calcSubmeta() —
@@ -3005,6 +3087,11 @@ impl TypeFactory {
                     name = format!("{}[{}]", array_of.get_name(), num_elements);
                 }
                 let mut base = TypeBase::new(name, basic.size, TypeMetatype::Array);
+                base.display_name = basic.display_name;
+                // TypeArray::decode overwrites decoded alignment with the
+                // element alignment and keeps alignSize equal to total size.
+                base.alignment = array_of.get_alignment() as i32;
+                base.align_size = basic.size;
                 base.id = basic.id;
                 base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
                 // Ghidra: type.cc:1341-1342 TypeArray::decode:
@@ -3069,6 +3156,8 @@ impl TypeFactory {
                 // an absent id raises "Datatype must have a valid id: void".
                 let id = Datatype::decode_void_id(decoder);
                 let mut base = TypeBase::new("void".to_string(), 0, TypeMetatype::Void);
+                base.alignment = 1;
+                base.align_size = 0;
                 base.id = id;
                 base.flags |= type_flags::CORETYPE;
                 let ct = self.find_add(Datatype::Void(base), false)?;
@@ -3108,7 +3197,10 @@ impl TypeFactory {
                     // re-specializes submeta by the decoded metatype
                     // (type.cc:818).
                     let mut base = TypeBase::new_char(basic.name.clone(), basic.metatype);
+                    base.display_name = basic.display_name.clone();
                     base.size = basic.size;
+                    base.alignment = basic.alignment;
+                    base.align_size = basic.size;
                     base.id = basic.id;
                     base.flags |= basic.flags | core_bit;
                     Datatype::Base(base)
@@ -3119,11 +3211,17 @@ impl TypeFactory {
                     // regardless of size (type.cc:858).
                     let mut base =
                         TypeBase::new_unicode(basic.name.clone(), basic.size, basic.metatype);
+                    base.display_name = basic.display_name.clone();
+                    base.alignment = basic.alignment;
+                    base.align_size = basic.size;
                     base.id = basic.id;
                     base.flags |= basic.flags | core_bit;
                     Datatype::Base(base)
                 } else {
                     let mut base = TypeBase::new(basic.name.clone(), basic.size, basic.metatype);
+                    base.display_name = basic.display_name.clone();
+                    base.alignment = basic.alignment;
+                    base.align_size = basic.size;
                     base.id = basic.id;
                     base.flags = basic.flags | core_bit;
                     Datatype::Base(base)
@@ -3230,6 +3328,9 @@ impl TypeFactory {
             decoder.close_element(child_id);
         }
         let mut base = TypeBase::new(basic.name.clone(), basic.size, meta);
+        base.display_name = basic.display_name.clone();
+        base.alignment = basic.alignment;
+        base.align_size = basic.size;
         base.id = basic.id;
         base.flags = basic.flags
             | type_flags::ENUMTYPE
@@ -3249,20 +3350,29 @@ impl TypeFactory {
         forcecore: bool,
     ) -> Result<Arc<Datatype>, String> {
         let basic = Datatype::decode_basic(decoder)?;
-        // Create a stub (empty fields) to allow recursive references.
+        // Create a registered stub (empty fields) to allow recursive
+        // references while the children are decoded.
         let stub_name = basic.name.clone();
-        if self.find_by_name(&stub_name).is_none() {
-            let mut stub_base = TypeBase::new(stub_name.clone(), basic.size, TypeMetatype::Struct);
+        let ct = if let Some(existing) = self.find_by_name(&stub_name) {
+            if existing.get_metatype() != TypeMetatype::Struct {
+                return Err(format!("Trying to redefine type: {stub_name}"));
+            }
+            existing
+        } else {
+            let mut stub_base =
+                TypeBase::new(stub_name.clone(), basic.size, TypeMetatype::Struct);
+            stub_base.display_name = basic.display_name.clone();
+            stub_base.alignment = basic.alignment;
+            stub_base.align_size = basic.size;
             stub_base.id = basic.id;
             stub_base.flags = basic.flags
                 | type_flags::TYPE_INCOMPLETE
                 | if forcecore { type_flags::CORETYPE } else { 0 };
-            let stub = Arc::new(Datatype::Struct(TypeStruct {
+            self.find_add(Datatype::Struct(TypeStruct {
                 base: stub_base,
                 fields: Vec::new(),
-            }));
-            self.insert(stub);
-        }
+            }), false)?
+        };
         // Decode fields. Per-field this mirrors, in order:
         //  - `TypeField::TypeField(Decoder&,TypeFactory&)` (type.cc:768-794):
         //    decode attributes, then `decodeType`, then the name-empty and
@@ -3274,6 +3384,7 @@ impl TypeFactory {
         // decodeFields loop state (type.cc:1835-1837).
         let mut last_off: i64 = -1;
         let mut calc_size: i64 = 0;
+        let mut calc_align: usize = 1;
         while decoder.peek_element() != 0 {
             let child_id = decoder.open_element();
             let attrs = TypeField::decode_field_attributes(decoder);
@@ -3318,9 +3429,7 @@ impl TypeFactory {
                     attrs.name, basic.name
                 ));
             }
-            // type.cc:1867-1869 (calcAlign accumulation) feeds only the
-            // `alignment`/`alignSize` tail, which Rugra's TypeBase does not
-            // store (registered datatype.rs gap).
+            calc_align = calc_align.max(field_type.get_alignment());
             let ident = if attrs.ident < 0 {
                 attrs.offset
             } else {
@@ -3335,6 +3444,13 @@ impl TypeFactory {
         }
         // Replace the stub with the fully-defined struct.
         let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Struct);
+        base.display_name = basic.display_name.clone();
+        base.alignment = if basic.alignment < 1 {
+            calc_align as i32
+        } else {
+            basic.alignment
+        };
+        base.align_size = calc_align_size(basic.size, base.alignment as usize);
         base.id = basic.id;
         base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
         // decodeFields tail (type.cc:1871-1874) on the scratch:
@@ -3369,9 +3485,45 @@ impl TypeFactory {
         if fields.len() == 1 && fields[0].type_ptr.get_size() == basic.size {
             base.flags |= type_flags::NEEDS_RESOLUTION;
         }
-        let dt = Arc::new(Datatype::Struct(TypeStruct { base, fields }));
-        self.insert(dt.clone());
-        Ok(dt)
+        let scratch = Datatype::Struct(TypeStruct { base, fields });
+        let result = if !ct.is_incomplete() {
+            if ct.compare_dependency(&scratch) != 0 {
+                return Err(format!("Redefinition of structure: {}", basic.name));
+            }
+            ct
+        } else {
+            let Datatype::Struct(scratch_struct) = scratch else {
+                unreachable!();
+            };
+            let fields = scratch_struct.fields;
+            let new_size = scratch_struct.base.size;
+            let new_alignment = scratch_struct.base.alignment;
+            let flags = scratch_struct.base.flags;
+            self.define_replace(&ct, |defined| {
+                let structure = match defined {
+                    Datatype::Struct(structure) => structure,
+                    _ => return Err("setFields target is not a TypeStruct".to_string()),
+                };
+                structure.fields = fields;
+                structure.base.size = new_size;
+                structure.base.alignment = new_alignment;
+                structure.base.align_size =
+                    calc_align_size(new_size, new_alignment as usize);
+                if structure.fields.len() == 1
+                    && structure.fields[0].type_ptr.get_size() == new_size
+                {
+                    structure.base.flags |= type_flags::NEEDS_RESOLUTION;
+                }
+                structure.base.flags &= !type_flags::TYPE_INCOMPLETE;
+                structure.base.flags |= flags
+                    & (type_flags::OPAQUE_STRUCT
+                        | type_flags::VARLENGTH
+                        | type_flags::TYPE_INCOMPLETE);
+                Ok(())
+            })?
+        };
+        self.resolve_incomplete_typedefs()?;
+        Ok(result)
     }
 
     // Ghidra: type.cc:4368 TypeFactory::decodeUnion
@@ -3384,7 +3536,30 @@ impl TypeFactory {
         forcecore: bool,
     ) -> Result<Arc<Datatype>, String> {
         let basic = Datatype::decode_basic(decoder)?;
+        let stub_name = basic.name.clone();
+        let ct = if let Some(existing) = self.find_by_name(&stub_name) {
+            if existing.get_metatype() != TypeMetatype::Union {
+                return Err(format!("Trying to redefine type: {stub_name}"));
+            }
+            existing
+        } else {
+            let mut stub_base =
+                TypeBase::new(stub_name, basic.size, TypeMetatype::Union);
+            stub_base.display_name = basic.display_name.clone();
+            stub_base.alignment = basic.alignment;
+            stub_base.align_size = basic.size;
+            stub_base.id = basic.id;
+            stub_base.flags = basic.flags
+                | type_flags::TYPE_INCOMPLETE
+                | type_flags::NEEDS_RESOLUTION
+                | if forcecore { type_flags::CORETYPE } else { 0 };
+            self.find_add(Datatype::Union(TypeUnion {
+                base: stub_base,
+                fields: Vec::new(),
+            }), false)?
+        };
         let mut fields: Vec<TypeField> = Vec::new();
+        let mut calc_align: usize = 1;
         while decoder.peek_element() != 0 {
             let child_id = decoder.open_element();
             let attrs = TypeField::decode_field_attributes(decoder);
@@ -3395,6 +3570,13 @@ impl TypeFactory {
                 return Err("offset attribute invalid for <field> tag".to_string());
             }
             let field_type = self.decode_type(decoder)?;
+            if attrs.offset as usize + field_type.get_size() > basic.size {
+                return Err(format!(
+                    "Field {} does not fit in union {}",
+                    attrs.name, basic.name
+                ));
+            }
+            calc_align = calc_align.max(field_type.get_alignment());
             fields.push(TypeField {
                 name: attrs.name,
                 offset: attrs.offset as usize,
@@ -3405,11 +3587,52 @@ impl TypeFactory {
             }
         }
         let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Union);
+        base.display_name = basic.display_name.clone();
+        base.alignment = if basic.alignment < 1 {
+            calc_align as i32
+        } else {
+            basic.alignment
+        };
+        base.align_size = calc_align_size(basic.size, base.alignment as usize);
         base.id = basic.id;
-        base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
-        let dt = Arc::new(Datatype::Union(TypeUnion { base, fields }));
-        self.insert(dt.clone());
-        Ok(dt)
+        base.flags = basic.flags
+            | type_flags::TYPE_INCOMPLETE
+            | type_flags::NEEDS_RESOLUTION
+            | if forcecore { type_flags::CORETYPE } else { 0 };
+        if !fields.is_empty() {
+            base.flags &= !type_flags::TYPE_INCOMPLETE;
+        }
+        let scratch = Datatype::Union(TypeUnion { base, fields });
+        let result = if !ct.is_incomplete() {
+            if ct.compare_dependency(&scratch) != 0 {
+                return Err(format!("Redefinition of union: {}", basic.name));
+            }
+            ct
+        } else {
+            let Datatype::Union(scratch_union) = scratch else {
+                unreachable!();
+            };
+            let fields = scratch_union.fields;
+            let new_size = scratch_union.base.size;
+            let new_alignment = scratch_union.base.alignment;
+            let flags = scratch_union.base.flags;
+            self.define_replace(&ct, |defined| {
+                let union = match defined {
+                    Datatype::Union(union) => union,
+                    _ => return Err("setFields target is not a TypeUnion".to_string()),
+                };
+                union.fields = fields;
+                union.base.size = new_size;
+                union.base.alignment = new_alignment;
+                union.base.align_size = calc_align_size(new_size, new_alignment as usize);
+                union.base.flags &= !type_flags::TYPE_INCOMPLETE;
+                union.base.flags |=
+                    flags & (type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
+                Ok(())
+            })?
+        };
+        self.resolve_incomplete_typedefs()?;
+        Ok(result)
     }
 
     // Ghidra: type.cc:4401 TypeFactory::decodeCode
@@ -3463,19 +3686,16 @@ impl TypeFactory {
         // Scratch TypeCode mirroring Ghidra's stack-local `tc` (TypeCode ctor:
         // type.cc:2757-2763). decode_code_stub already OR-composed the ctor's
         // type_incomplete and the peek's variable_length into basic.flags.
-        let mut tc = TypeCode {
-            base: TypeBase {
-                name: basic.name.clone(),
-                size: basic.size,
-                metatype: TypeMetatype::Code,
-                id: basic.id,
-                flags: basic.flags,
-                submeta_override: None,
-                pointer_space: None,
-                pointer_rel: None,
-            },
-            proto: None,
-        };
+        let mut tc = TypeCode::new();
+        tc.base.name = basic.name.clone();
+        tc.base.display_name = basic.display_name.clone();
+        tc.base.size = basic.size;
+        if basic.alignment >= 0 {
+            tc.base.alignment = basic.alignment;
+        }
+        tc.base.align_size = basic.size;
+        tc.base.id = basic.id;
+        tc.base.flags |= basic.flags;
         // Ghidra: Datatype *ct = findByIdLocal(tc.name,tc.id);
         //        if (ct == 0) ct = findAdd(tc);   // Create stub to allow recursive definitions
         //        else if (ct->getMetatype() != TYPE_CODE)
@@ -3506,7 +3726,7 @@ impl TypeFactory {
             self.set_prototype_define(&ct, tc.proto.as_deref(), tc.base.flags)?
         };
         // Ghidra: resolveIncompleteTypedefs();
-        self.resolve_incomplete_typedefs();
+        self.resolve_incomplete_typedefs()?;
         // Ghidra: return ct;
         Ok(result)
     }
@@ -3552,27 +3772,95 @@ impl TypeFactory {
     /// Rugra clones the candidate, applies the mutation, and replaces both
     /// owning channels (ordered tree slot + name map) with the updated
     /// `Arc`, which preserves every factory-mediated observation
-    /// (re-lookup by name/id, repeated decode identity). Stale external
-    /// handles diverge — the registered
-    /// TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001 immutable-Arc residual.
+    /// (re-lookup by name/id, repeated decode identity). This does not update
+    /// Arcs already captured by arrays, pointers, partial types, typedef and
+    /// incomplete-type side tables, caches, or external callers. Those stale
+    /// dependency channels are the registered
+    /// TYPEFACTORY-ARC-IDENTITY-0001 immutable-Arc residual.
     fn define_replace(
         &mut self,
         ct: &Arc<Datatype>,
         mutate: impl FnOnce(&mut Datatype) -> Result<(), String>,
     ) -> Result<Arc<Datatype>, String> {
+        let old_tree_key = (
+            Self::submeta_of(ct),
+            Reverse(ct.get_size()),
+            ct.get_id(),
+        );
+        let old_name = ct.get_name().to_string();
+
+        // Ghidra's erase operates on the exact object pointer. Refuse to
+        // perform a replacement unless both factory channels still name this
+        // precise Arc; silently overwriting a stale/colliding slot would lose
+        // an unrelated canonical Datatype.
+        {
+            let tree = self
+                .base_type_tree
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match tree.get(&old_tree_key) {
+                Some(registered) if Arc::ptr_eq(registered, ct) => {}
+                _ => {
+                    return Err(
+                        "Datatype definition is not registered under its current tree key"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        if !old_name.is_empty()
+            && !self
+                .types
+                .get(&old_name)
+                .is_some_and(|registered| Arc::ptr_eq(registered, ct))
+        {
+            return Err(
+                "Datatype definition is not registered under its current name".to_string(),
+            );
+        }
+
         let mut defined = (**ct).clone();
         mutate(&mut defined)?;
         let arc = Arc::new(defined);
-        // The ordered-tree key (submeta, Reverse(size), id) is unchanged by
-        // the flag/field/prototype updates these wrappers apply, so
-        // re-registration is a slot replace — Ghidra's erase+insert round-trip
-        // under an identical DatatypeCompare key.
-        let tree_key = (Self::submeta_of(&arc), Reverse(arc.get_size()), arc.get_id());
-        self.base_type_tree
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(tree_key, arc.clone());
+        let tree_key = (
+            Self::submeta_of(&arc),
+            Reverse(arc.get_size()),
+            arc.get_id(),
+        );
         let name = arc.get_name().to_string();
+
+        {
+            let tree = self
+                .base_type_tree
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(registered) = tree.get(&tree_key) {
+                let same_old_slot = tree_key == old_tree_key && Arc::ptr_eq(registered, ct);
+                if !same_old_slot {
+                    return Err("Datatype definition collides with an existing tree key".to_string());
+                }
+            }
+        }
+        if !name.is_empty() {
+            if let Some(registered) = self.types.get(&name) {
+                let same_old_slot = name == old_name && Arc::ptr_eq(registered, ct);
+                if !same_old_slot {
+                    return Err(
+                        "Datatype definition collides with an existing name".to_string(),
+                    );
+                }
+            }
+        }
+
+        let tree = self
+            .base_type_tree
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tree.remove(&old_tree_key);
+        tree.insert(tree_key, arc.clone());
+        if !old_name.is_empty() && old_name != name {
+            self.types.remove(&old_name);
+        }
         if !name.is_empty() {
             self.types.insert(name, arc.clone());
         }
@@ -3589,7 +3877,7 @@ impl TypeFactory {
     /// via the union wrapper (type.cc:3500-3511 — merge without
     /// `opaque_string`), code entries via the factory `setPrototype`, and
     /// finished entries are removed (Ghidra's `list::erase(iter)` advance).
-    pub fn resolve_incomplete_typedefs(&mut self) {
+    pub fn resolve_incomplete_typedefs(&mut self) -> Result<(), String> {
         let mut index = 0;
         while index < self.incomplete_typedefs.len() {
             let dt = self.incomplete_typedefs[index].clone();
@@ -3612,8 +3900,10 @@ impl TypeFactory {
                     //                   defedStruct->flags);
                     let fields = defed_struct.fields.clone();
                     let new_size = defed_struct.base.size;
+                    let new_alignment = defed_struct.base.alignment;
+                    let new_align_size = defed_struct.base.align_size;
                     let flags = defed_struct.base.flags;
-                    let _ = self.define_replace(&dt, |defined| {
+                    self.define_replace(&dt, |defined| {
                         let st = match defined {
                             Datatype::Struct(st) => st,
                             _ => {
@@ -3624,20 +3914,24 @@ impl TypeFactory {
                         };
                         st.fields = fields;
                         st.base.size = new_size;
+                        st.base.alignment = new_alignment;
+                        st.base.align_size = new_align_size;
                         st.base.flags &= !type_flags::TYPE_INCOMPLETE;
                         st.base.flags |= flags
                             & (type_flags::OPAQUE_STRUCT
                                 | type_flags::VARLENGTH
                                 | type_flags::TYPE_INCOMPLETE);
                         Ok(())
-                    });
+                    })?;
                     self.incomplete_typedefs.remove(index);
                 }
                 (Datatype::Union(_), Datatype::Union(defed_union)) => {
                     let fields = defed_union.fields.clone();
                     let new_size = defed_union.base.size;
+                    let new_alignment = defed_union.base.alignment;
+                    let new_align_size = defed_union.base.align_size;
                     let flags = defed_union.base.flags;
-                    let _ = self.define_replace(&dt, |defined| {
+                    self.define_replace(&dt, |defined| {
                         let un = match defined {
                             Datatype::Union(un) => un,
                             _ => {
@@ -3646,25 +3940,28 @@ impl TypeFactory {
                         };
                         un.fields = fields;
                         un.base.size = new_size;
+                        un.base.alignment = new_alignment;
+                        un.base.align_size = new_align_size;
                         un.base.flags &= !type_flags::TYPE_INCOMPLETE;
                         un.base.flags |= flags
                             & (type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
                         Ok(())
-                    });
+                    })?;
                     self.incomplete_typedefs.remove(index);
                 }
                 (Datatype::Code(_), Datatype::Code(defed_code)) => {
                     // Ghidra: setPrototype(defedCode->proto, prevCode, defedCode->flags);
-                    let _ = self.set_prototype_define(
+                    self.set_prototype_define(
                         &dt,
                         defed_code.proto.as_deref(),
                         defed_code.base.flags,
-                    );
+                    )?;
                     self.incomplete_typedefs.remove(index);
                 }
                 _ => index += 1,
             }
         }
+        Ok(())
     }
 
     // Ghidra: type.cc:4193 TypeFactory::decodeTypeWithCodeFlags
@@ -3742,6 +4039,9 @@ impl TypeFactory {
         // either — the decodeCode call above throws first on every real
         // stream).
         let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Pointer);
+        base.display_name = basic.display_name.clone();
+        base.alignment = basic.alignment;
+        base.align_size = basic.size;
         base.id = basic.id;
         base.flags = basic.flags;
         let candidate =
@@ -3976,6 +4276,8 @@ mod tests {
         assert_eq!(ct.get_metatype(), TypeMetatype::Code);
         assert_eq!(ct.get_flags() & type_flags::TYPE_INCOMPLETE, 0);
         assert_eq!(ct.get_flags() & type_flags::VARLENGTH, 0);
+        assert_eq!(ct.get_alignment(), 1);
+        assert_eq!(ct.get_align_size(), 1);
         assert!(matches!(ct.as_ref(), Datatype::Code(c) if c.proto.is_none()));
 
         // Re-decode dedups to the same canonical object.
@@ -4141,6 +4443,309 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_union_empty_and_nonempty_completion_state() {
+        let mut factory = TypeFactory::new(8);
+        for (name, size) in [("EmptyUnionZero", "0"), ("EmptyUnionSized", "8")] {
+            let decoded = factory
+                .decode_type(&mut decoder_for_type(xml_elem(
+                    "type",
+                    &[("metatype", "union"), ("name", name), ("size", size)],
+                )))
+                .expect("empty union decode");
+            assert!(decoded.is_incomplete(), "{name} was completed without fields");
+        }
+
+        let field = xml_elem_with_children(
+            "field",
+            &[("name", "value"), ("offset", "0")],
+            vec![xml_elem("type", &[("metatype", "int"), ("size", "4")])],
+        );
+        let decoded = factory
+            .decode_type(&mut decoder_for_type(xml_elem_with_children(
+                "type",
+                &[("metatype", "union"), ("name", "FilledUnion"), ("size", "4")],
+                vec![field],
+            )))
+            .expect("nonempty union decode");
+        assert!(!decoded.is_incomplete());
+        assert_eq!(decoded.get_size(), 4);
+    }
+
+    #[test]
+    fn test_set_fields_uses_assign_field_offsets_padded_size() {
+        let mut factory = TypeFactory::new(8);
+        let mut field_base = TypeBase::new("odd3".to_string(), 3, TypeMetatype::Uint);
+        field_base.alignment = 2;
+        field_base.align_size = 4;
+        let odd_field = Arc::new(Datatype::Base(field_base));
+        factory.create_struct("PaddedStruct");
+        let defined = factory
+            .set_fields(
+                "PaddedStruct",
+                vec![TypeField {
+                    name: "value".to_string(),
+                    offset: 0,
+                    type_ptr: odd_field,
+                }],
+            )
+            .expect("define padded struct");
+        assert_eq!(defined.get_size(), 4);
+        assert_eq!(defined.get_alignment(), 2);
+        assert_eq!(defined.get_align_size(), 4);
+        assert!(!defined.needs_resolution());
+    }
+
+    #[test]
+    fn test_struct_union_definition_rekeys_factory_channels() {
+        let mut factory = TypeFactory::new(8);
+        let int_type = factory.find_by_name("int").expect("int core type");
+
+        let old_struct = factory.create_struct("LayoutStruct");
+        let old_struct_key = (
+            TypeFactory::submeta_of(&old_struct),
+            Reverse(old_struct.get_size()),
+            old_struct.get_id(),
+        );
+        let new_struct = factory
+            .set_fields_sized(
+                "LayoutStruct",
+                vec![TypeField {
+                    name: "value".to_string(),
+                    offset: 0,
+                    type_ptr: int_type.clone(),
+                }],
+                12,
+                8,
+            )
+            .expect("define struct");
+        let new_struct_key = (
+            TypeFactory::submeta_of(&new_struct),
+            Reverse(new_struct.get_size()),
+            new_struct.get_id(),
+        );
+        assert!(!Arc::ptr_eq(&old_struct, &new_struct));
+        assert!(Arc::ptr_eq(
+            &new_struct,
+            &factory.find_by_name("LayoutStruct").expect("struct lookup")
+        ));
+        assert!(!factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .contains_key(&old_struct_key));
+        assert!(factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .get(&new_struct_key)
+            .is_some_and(|registered| Arc::ptr_eq(registered, &new_struct)));
+        assert_eq!(new_struct.get_size(), 12);
+        assert_eq!(new_struct.get_alignment(), 8);
+        assert_eq!(new_struct.get_align_size(), 16);
+        assert!(!new_struct.is_incomplete());
+
+        let old_union = factory.get_type_union("LayoutUnion");
+        let old_union_key = (
+            TypeFactory::submeta_of(&old_union),
+            Reverse(old_union.get_size()),
+            old_union.get_id(),
+        );
+        let new_union = factory
+            .set_union_fields_sized(
+                "LayoutUnion",
+                vec![TypeField {
+                    name: "value".to_string(),
+                    offset: 0,
+                    type_ptr: int_type,
+                }],
+                9,
+                4,
+            )
+            .expect("define union");
+        let new_union_key = (
+            TypeFactory::submeta_of(&new_union),
+            Reverse(new_union.get_size()),
+            new_union.get_id(),
+        );
+        assert!(!Arc::ptr_eq(&old_union, &new_union));
+        assert!(Arc::ptr_eq(
+            &new_union,
+            &factory.find_by_name("LayoutUnion").expect("union lookup")
+        ));
+        assert!(!factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .contains_key(&old_union_key));
+        assert!(factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .get(&new_union_key)
+            .is_some_and(|registered| Arc::ptr_eq(registered, &new_union)));
+        assert_eq!(new_union.get_size(), 9);
+        assert_eq!(new_union.get_alignment(), 4);
+        assert_eq!(new_union.get_align_size(), 12);
+        assert!(!new_union.is_incomplete());
+    }
+
+    #[test]
+    fn test_define_replace_refuses_stale_tree_slot() {
+        let mut factory = TypeFactory::new(8);
+        let structure = factory.create_struct("StaleSlot");
+        let key = (
+            TypeFactory::submeta_of(&structure),
+            Reverse(structure.get_size()),
+            structure.get_id(),
+        );
+        let unrelated = Arc::new((*structure).clone());
+        factory
+            .base_type_tree
+            .get_mut()
+            .unwrap()
+            .insert(key, unrelated);
+
+        let result = factory.define_replace(&structure, |_| Ok(()));
+        assert_eq!(
+            result.unwrap_err(),
+            "Datatype definition is not registered under its current tree key"
+        );
+        assert!(Arc::ptr_eq(
+            &structure,
+            &factory.find_by_name("StaleSlot").expect("name slot unchanged")
+        ));
+    }
+
+    #[test]
+    fn test_public_field_setters_surface_registry_replacement_errors() {
+        for (name, is_union, explicit_layout) in [
+            ("StructDerived", false, false),
+            ("StructSized", false, true),
+            ("UnionDerived", true, false),
+            ("UnionSized", true, true),
+        ] {
+            let mut factory = TypeFactory::new(8);
+            let stub = if is_union {
+                factory.get_type_union(name)
+            } else {
+                factory.create_struct(name)
+            };
+            let key = (
+                TypeFactory::submeta_of(&stub),
+                Reverse(stub.get_size()),
+                stub.get_id(),
+            );
+            factory
+                .base_type_tree
+                .get_mut()
+                .unwrap()
+                .insert(key, Arc::new((*stub).clone()));
+
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if is_union && explicit_layout {
+                    factory.set_union_fields_sized(name, Vec::new(), 8, 4);
+                } else if is_union {
+                    factory.set_union_fields(name, Vec::new());
+                } else if explicit_layout {
+                    factory.set_fields_sized(name, Vec::new(), 8, 4);
+                } else {
+                    factory.set_fields(name, Vec::new());
+                }
+            }));
+            assert!(panicked.is_err(), "{name} swallowed the replacement error");
+            assert!(Arc::ptr_eq(
+                &stub,
+                &factory.find_by_name(name).expect("name slot unchanged")
+            ));
+        }
+    }
+
+    #[test]
+    fn test_named_factory_fast_paths_validate_concrete_identity() {
+        let mut factory = TypeFactory::new(8);
+        let int_type = factory.find_by_name("int").expect("int core type");
+        let uint_type = factory.find_by_name("uint").expect("uint core type");
+        let alias = factory.get_typedef("WordAlias", int_type.clone());
+        let repeat = factory.get_typedef("WordAlias", int_type.clone());
+        assert!(Arc::ptr_eq(&alias, &repeat));
+        assert!(Arc::ptr_eq(
+            factory
+                .get_typedef_target("WordAlias")
+                .expect("typedef target"),
+            &int_type
+        ));
+
+        let conflicting_target = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.get_typedef("WordAlias", uint_type);
+        }));
+        assert!(conflicting_target.is_err());
+        assert!(Arc::ptr_eq(
+            &alias,
+            &factory.find_by_name("WordAlias").expect("alias unchanged")
+        ));
+
+        let structure = factory.create_struct("AggregateCollision");
+        let conflicting_union = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.get_type_union("AggregateCollision");
+        }));
+        assert!(conflicting_union.is_err());
+        assert!(Arc::ptr_eq(
+            &structure,
+            &factory
+                .find_by_name("AggregateCollision")
+                .expect("struct unchanged")
+        ));
+    }
+
+    #[test]
+    fn test_dependent_order_visits_typedef_target_before_alias() {
+        let mut factory = TypeFactory::new(8);
+        let target = factory
+            .get_base_named(4, TypeMetatype::Uint, "AA")
+            .expect("named target");
+        let alias = factory.get_typedef("C", target.clone());
+        let mut ordered = Vec::new();
+        factory.dependent_order(&mut ordered);
+        let target_index = ordered
+            .iter()
+            .position(|datatype| Arc::ptr_eq(datatype, &target))
+            .expect("target in dependency order");
+        let alias_index = ordered
+            .iter()
+            .position(|datatype| Arc::ptr_eq(datatype, &alias))
+            .expect("alias in dependency order");
+        assert!(target_index < alias_index);
+    }
+
+    #[test]
+    fn test_clear_paths_drop_incomplete_typedef_queue_before_recreate() {
+        for clear_all in [true, false] {
+            let mut factory = TypeFactory::new(8);
+            let incomplete = factory.create_struct("PendingStruct");
+            let _alias = factory.get_typedef("PendingAlias", incomplete);
+            assert_eq!(factory.incomplete_typedefs.len(), 1);
+
+            if clear_all {
+                factory.clear();
+            } else {
+                factory.clear_non_core();
+            }
+            assert!(factory.incomplete_typedefs.is_empty());
+            assert!(factory.find_by_name("PendingStruct").is_none());
+            assert!(factory.find_by_name("PendingAlias").is_none());
+
+            let recreated = factory.create_struct("PendingStruct");
+            let defined = factory
+                .set_fields_sized("PendingStruct", Vec::new(), 8, 4)
+                .expect("define recreated struct");
+            assert!(!Arc::ptr_eq(&recreated, &defined));
+            assert_eq!(defined.get_size(), 8);
+            assert_eq!(defined.get_alignment(), 4);
+            assert!(factory.resolve_incomplete_typedefs().is_ok());
+        }
+    }
+
+    #[test]
     fn test_get_type_enum_and_values() {
         // type.cc:3967 / 3532 — enum with ENUMTYPE flag; setEnumValues fills map.
         let mut factory = TypeFactory::new(8);
@@ -4163,6 +4768,8 @@ mod tests {
         let c = factory.get_type_code();
         assert_eq!(c.get_metatype(), TypeMetatype::Code);
         assert_eq!(c.get_size(), 1);
+        assert_eq!(c.get_alignment(), 1);
+        assert_eq!(c.get_align_size(), 1);
         let c2 = factory.get_type_code();
         assert!(Arc::ptr_eq(&c, &c2));
     }
@@ -4245,13 +4852,13 @@ mod tests {
 
     #[test]
     fn test_get_typedef_and_target() {
-        // type.cc:3818 — typedef aliases a base; HAS_STRIPPED set; not coretype.
+        // type.cc:3818 — ordinary typedefImm does not set HAS_STRIPPED.
         let mut factory = TypeFactory::new(8);
         let int_t = factory.find_by_name("int").unwrap();
         let td = factory.get_typedef("Word", int_t.clone());
         assert_eq!(td.get_name(), "Word");
         assert_eq!(td.get_size(), 4);
-        assert!((td.get_flags() & type_flags::HAS_STRIPPED) != 0);
+        assert_eq!(td.get_flags() & type_flags::HAS_STRIPPED, 0);
         assert!(!td.is_coretype());
         // target lookup returns the aliased type.
         let target = factory.get_typedef_target("Word").unwrap();

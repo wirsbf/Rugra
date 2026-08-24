@@ -2,7 +2,11 @@
 
 ## 文档状态
 
-- **状态**: L2（2026-08-11 锁定审计）。当前单名称 map 不等价于 Ghidra 结构主树 + `(name,id)` 树；canonical findAdd、递归 stub 身份、exact-piece、hashSize 和严格 codec 未闭合。
+- **状态**: L2。当前单名称 map 与 immutable `Arc<Datatype>` 不等价于
+  Ghidra 结构主树 + `(name,id)` 树和原位对象突变；exact-piece series
+  尚未完成。layout/rekey 的 scoped A 片只保证 factory 当前 tree/name 槽
+  一致，旧句柄及 factory-owned dependencies 仍绑定
+  `TYPEFACTORY-ARC-IDENTITY-0001`，不能升 L3。
 
 
 **源代码路径**: `src/type_system/typefactory.rs`
@@ -81,7 +85,9 @@ merge.rs). Delete when that runner re-pins to a post-migration commit.
 ### `pub fn clear(&mut self)`
 
 Clears all factory-owned types and the preferred/nochar/character caches,
-while retaining size and alignment configuration.
+while retaining size and alignment configuration. The pending incomplete-
+typedef queue is cleared before a same-name type can be recreated, matching
+`TypeFactory::clear` (type.cc:3251-3263).
 
 ### `pub fn set_core_type_result(&mut self, name: &str, size: usize, metatype: TypeMetatype, chartp: bool) -> Result<Arc<Datatype>, String>`
 
@@ -133,7 +139,8 @@ element data-type").
 
 ### `pub fn create_struct(&mut self, name: &str) -> Arc<Datatype>`
 
-Create a new structure type
+构造带 `hashName(name)` id、独立 display name 和 `type_incomplete` 的
+registered struct stub，对应 `getTypeStruct` (type.cc:3914)。
 
 ### `pub fn set_fields(&mut self, name: &str, fields: Vec<TypeField>) -> Option<Arc<Datatype>>`
 
@@ -145,6 +152,9 @@ function's only production caller) the arm recomputes
 `calc_align_size(field.get_align_size(), field.get_alignment().max(1))`
 (`TypeStruct::assignFieldOffsets`, type.cc:1971-1993) and ORs
 `needs_resolution` in when the single field's full `get_size()` equals it.
+The stored structure `size` is that alignment-rounded `newSize`, not the raw
+maximum `offset + field.get_size()`; a size-3/alignment-2 field therefore
+produces a 4-byte structure.
 Comparing against the derived `max(offset + get_size())` instead would
 over-fire for a field type whose `alignSize > size` (an XML-decoded
 unrounded struct: Ghidra newSize 8 vs field size 5 keeps the flag clear) —
@@ -157,8 +167,8 @@ Explicit-newSize twin of `TypeFactory::setFields` (type.cc:3479-3490 /
 unconditionally and evaluates the single-field needs_resolution arm against
 that EXPLICIT size. This is the only form under which the "single field
 does not fill" and "offset not examined" matrix cells are reachable.
-`new_align` is accepted for signature parity (Rugra `TypeBase` has no
-alignment field yet).
+`new_align` 写入 `TypeBase.alignment`，并以
+`calc_align_size(new_size, new_align)` 写入 `align_size`。
 
 ### `pub fn num_types(&self) -> usize`
 
@@ -169,7 +179,8 @@ Get the number of types currently managed
 Faithful `clearNoncore` (type.cc:3266-3285): retains exactly the core-flagged
 entries of the name map, core set, ordered tree, and preferred cache —
 including in-place-promoted entries — and leaves the preferred-type caches
-otherwise untouched (every cached entry is core by construction).
+otherwise untouched (every cached entry is core by construction). It also
+clears the incomplete-typedef queue, as `clearNoncore` does at type.cc:3284.
 
 ### Internal `find_add`
 
@@ -179,11 +190,48 @@ a differing `compareDependency` (sub-metatype or size, type.cc:227) raises
 `"Trying to alter definition of type: {name}"` while an equal definition
 returns the existing object, unnamed candidates probe the ordered tree
 structurally, and a miss inserts with the `"Shared type id: {id:x}"`
-(including `printRaw` fragments, type.cc:139/910/1204) conflict path. The
-alignment computation's `"TypeFactory alignment map not initialized"`
+(including `printRaw` fragments, type.cc:139/910/1204) conflict path. Miss
+时先把 `getPrimitiveAlignSize(size)` 和随后
+`getAlignment(alignSize)` 写入候选 `TypeBase`，再注册。alignment map 的
+`"TypeFactory alignment map not initialized"`
 LowlevelError is enforced on the `get_base_result` entry only — production
 Rugra factories do not yet thread the decoded alignment map
 (TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001).
+
+### 2026-08-24：layout / definition replacement（series A）
+
+- `create_struct` / `get_type_union` 先以非零 hash id 注册 incomplete stub。
+- `decode_union` 从 `TypeUnion` ctor 的 incomplete 状态开始：空字段定义
+  （包括 size 0）保持 incomplete，至少一个字段才 `markComplete`。
+- generic/named/decoded `TypeCode` 均从 locked ctor 的 1-byte size、
+  alignment 1、alignSize 1 出发；无显式 alignment 的 decode 不退化为
+  primitive fallback 或 `-1`。
+- `set_fields(_sized)`、`set_union_fields(_sized)` 与 struct/union decode
+  写入 size、alignment、alignSize 并清 incomplete；definition mutation
+  先要求 old tree/name 槽精确 `Arc::ptr_eq`，再拒绝任何无关 new-key 或
+  new-name occupant，最后执行 old-key erase → new-key insert → name-map
+  同步。不存在静默覆盖或旧 tree stub 遗留；四个 public setter 将
+  replacement `Err` 显式提升为与 Ghidra `LowlevelError` 对应的 panic，
+  不再以 `.ok()` 静默折叠为 `None`。
+- Rust 不能像 Ghidra 一样原位修改同一对象：返回的新 Arc 与 factory
+  relookup 相同，但调用者先前保存的 Arc，以及已捕获该 Arc 的 array、
+  pointer、partial type、typedef/incomplete side table 和 cache 不会自动
+  更新。这是稳定残差 `TYPEFACTORY-ARC-IDENTITY-0001`。
+- `get_typedef` 先经 `find_add` 同时注册主 tree/name 槽，成功后才写
+  typedef 与 incomplete side tables；`resolve_incomplete_typedefs` 将
+  replacement 错误作为 `Result::Err` 传播，只有成功后才移除 pending 项。
+  已有同名 typedef 只有在 side table 的 target 与输入 `Arc` 精确
+  `ptr_eq` 时才复用；普通同名类型或不同 target 会抛出冲突。`clear` 与
+  `clear_non_core` 均先清空 pending queue，因此清理后的同名重建不会被
+  旧 typedef 项二次 resolve。
+- `order_recurse` 在 concrete dependencies 之前先沿 typedef side table
+  递归 target，保持 `typedefImm` 的 locked 顺序，即使 alias 的 tree/hash
+  顺序早于 target，也总是 target 先进入 `dependent_order` 输出。
+
+A 的单元测试只验证 Rust registry invariant，行为状态仍为 `UNTESTED`；
+锁定 Ghidra 12.0.4 的同输入 fixture 在不可分割 series D 落地，并以
+fail-closed allowlist 将 pre/post identity 差异记为 `MISMATCH`。A-D 全栈
+完成前本片不得单独集成或声明 MATCH。
 
 ### Internal `insert`
 

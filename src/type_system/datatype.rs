@@ -342,7 +342,16 @@ pub struct PointerRelState {
 #[derive(Debug, Clone)]
 pub struct TypeBase {
     pub name: String,
+    /// Name rendered in decompiler output. Ghidra stores this independently
+    /// from the lookup name and initializes it to the same value.
+    pub display_name: String,
     pub size: usize,
+    /// Byte alignment stored by Ghidra's Datatype base. `-1` means the
+    /// factory has not assigned primitive layout yet.
+    pub alignment: i32,
+    /// `size` rounded up to a multiple of `alignment`. Before factory
+    /// insertion this retains the constructor's raw `size`, as in Ghidra.
+    pub align_size: usize,
     pub metatype: TypeMetatype,
     pub id: u64,
     pub flags: u32,
@@ -357,9 +366,13 @@ pub struct TypeBase {
 impl TypeBase {
     // Ghidra: type.hh:332 TypeBase::new
     pub fn new(name: String, size: usize, metatype: TypeMetatype) -> Self {
+        let display_name = name.clone();
         Self {
             name,
+            display_name,
             size,
+            alignment: -1,
+            align_size: size,
             metatype,
             id: 0,
             flags: 0,
@@ -533,6 +546,41 @@ pub enum Datatype {
 
 impl Datatype {
 
+    // RUGRA-GLUE: Rust enum projection of Ghidra's common Datatype base fields.
+    pub(crate) fn base_record(&self) -> &TypeBase {
+        match self {
+            Datatype::Void(base) | Datatype::Base(base) => base,
+            Datatype::Pointer(pointer) => &pointer.base,
+            Datatype::Array(array) => &array.base,
+            Datatype::Struct(structure) => &structure.base,
+            Datatype::Enum(enumeration) => &enumeration.base,
+            Datatype::Union(union) => &union.base,
+            Datatype::Code(code) => &code.base,
+            Datatype::Spacebase(spacebase) => &spacebase.base,
+            Datatype::PartialStruct(partial) => &partial.base,
+            Datatype::PartialEnum(partial) => &partial.base,
+            Datatype::PartialUnion(partial) => &partial.base,
+        }
+    }
+
+    // RUGRA-GLUE: Mutable Rust enum projection used by TypeFactory, which is
+    // a `friend class` mutating Datatype layout fields in Ghidra (type.hh:187).
+    pub(crate) fn base_record_mut(&mut self) -> &mut TypeBase {
+        match self {
+            Datatype::Void(base) | Datatype::Base(base) => base,
+            Datatype::Pointer(pointer) => &mut pointer.base,
+            Datatype::Array(array) => &mut array.base,
+            Datatype::Struct(structure) => &mut structure.base,
+            Datatype::Enum(enumeration) => &mut enumeration.base,
+            Datatype::Union(union) => &mut union.base,
+            Datatype::Code(code) => &mut code.base,
+            Datatype::Spacebase(spacebase) => &mut spacebase.base,
+            Datatype::PartialStruct(partial) => &mut partial.base,
+            Datatype::PartialEnum(partial) => &mut partial.base,
+            Datatype::PartialUnion(partial) => &mut partial.base,
+        }
+    }
+
     // RUGRA-GLUE: type_equal (no Ghidra counterpart found)
     /// Structural equality standing in for Ghidra's interned TypeFactory
     /// pointer comparison (`tokenct == outHighType`, coreaction.cc:2544):
@@ -567,6 +615,12 @@ impl Datatype {
             Datatype::PartialEnum(pe) => &pe.base.name,
             Datatype::PartialUnion(pu) => &pu.base.name,
         }
+    }
+
+    // Ghidra: type.hh:243 Datatype::getDisplayName
+    /// Get the name used when rendering this data type.
+    pub fn get_display_name(&self) -> &str {
+        &self.base_record().display_name
     }
 
     // Ghidra: type.hh:165 Datatype::getSize
@@ -732,11 +786,24 @@ impl Datatype {
     /// default `size_alignment_map` (type.cc:4649):
     ///   size→align: {0:1, 1:1, 2:2, 3:2, 4:4, 5:4, 6:4, 7:4, 8+:8}
     /// For arrays, alignment = element alignment (type.cc:1340).
-    /// For structs/unions, alignment is the max of field alignments
-    /// (type.cc setFields), but since Rugra does not store alignment on
-    /// the type, we derive it from size for those as a faithful fallback.
+    /// Struct/union and decoded explicit alignment are retained in TypeBase;
+    /// the fallback is only for legacy direct constructors not interned by a
+    /// factory.
     pub fn get_alignment(&self) -> usize {
-        primitive_alignment(self.get_size())
+        let base = self.base_record();
+        if base.alignment >= 0 {
+            return base.alignment as usize;
+        }
+        match self {
+            // TypeArray(int4,Datatype*) passes the element alignment to the
+            // Datatype constructor (type.hh:937).  The array's total byte
+            // size can therefore have a different primitive alignment.
+            Datatype::Array(array) => array.array_of.get_alignment(),
+            // Both partial-container constructors pin alignment to one
+            // (type.cc:2330 and type.cc:2424).
+            Datatype::PartialStruct(_) | Datatype::PartialUnion(_) => 1,
+            _ => primitive_layout(self.get_size()).0,
+        }
     }
 
     // Ghidra: type.hh:165 Datatype::getAlignSize
@@ -748,6 +815,10 @@ impl Datatype {
     /// (type.cc:536); for base types it equals `getPrimitiveAlignSize(size)`.
     /// We compute it uniformly as `size` rounded up to `get_alignment()`.
     pub fn get_align_size(&self) -> usize {
+        let base = self.base_record();
+        if base.alignment >= 0 {
+            return base.align_size;
+        }
         let sz = self.get_size();
         let align = self.get_alignment();
         calc_align_size(sz, align)
@@ -1467,9 +1538,11 @@ impl Datatype {
     /// Returns the parsed `(name, size, metatype, id, flags)` tuple.
     pub fn decode_basic(decoder: &mut dyn Decoder) -> Result<DecodeBasicResult, String> {
         let mut size: i64 = -1;
+        let mut alignment: i32 = -1;
         let mut metatype = TypeMetatype::Void;
         let mut id: u64 = 0;
         let mut name = String::new();
+        let mut display_name = String::new();
         let mut flags: u32 = 0;
         loop {
             let attrib_id = decoder.next_attribute_id();
@@ -1494,7 +1567,7 @@ impl Datatype {
                     }
                 }
                 Some("alignment") => {
-                    let _ = decoder.read_signed_integer(); // alignment stored separately
+                    alignment = decoder.read_signed_integer() as i32;
                 }
                 Some("opaquestring") => {
                     if decoder.read_bool() {
@@ -1508,7 +1581,7 @@ impl Datatype {
                     }
                 }
                 Some("label") => {
-                    let _ = decoder.read_string(); // displayName not stored
+                    display_name = decoder.read_string();
                 }
                 Some("incomplete") => {
                     if decoder.read_bool() {
@@ -1537,7 +1610,18 @@ impl Datatype {
         if (flags & type_flags::VARLENGTH) != 0 {
             id = Datatype::hash_size(id, size as i32);
         }
-        Ok(DecodeBasicResult { name, size: size_u, metatype, id, flags })
+        if display_name.is_empty() {
+            display_name = name.clone();
+        }
+        Ok(DecodeBasicResult {
+            name,
+            display_name,
+            size: size_u,
+            alignment,
+            metatype,
+            id,
+            flags,
+        })
     }
 
     // Ghidra: type.hh:165 Datatype::markComplete (inline)
@@ -2116,12 +2200,16 @@ pub fn test_for_array_slack(dt: &Datatype, off: i64) -> bool {
 /// `decodeBasic` (type.cc:623-683) performs on the Datatype base. Callers
 /// apply these to whatever `TypeBase` they are constructing. A missing or
 /// negative `size` is an error (`Bad size for type`), never a `0` here.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DecodeBasicResult {
     /// Parsed `name` attribute (empty if absent).
     pub name: String,
+    /// Parsed `label` attribute, defaulting to `name` when absent.
+    pub display_name: String,
     /// Parsed `size` attribute (callers only reach construction with >= 0).
     pub size: usize,
+    /// Explicit `alignment` attribute, or -1 when absent.
+    pub alignment: i32,
     /// Parsed `metatype` attribute (Void if absent).
     pub metatype: TypeMetatype,
     /// Parsed `id` attribute (hashed from `name` if absent, see type.cc:675).
@@ -2143,6 +2231,16 @@ pub fn primitive_alignment(size: usize) -> usize {
         4..=7 => 4,
         _ => 8,
     }
+}
+
+// Ghidra: type.cc:3312 TypeFactory::getPrimitiveAlignSize
+/// Default-map layout assigned by `TypeFactory::findAdd`: first round the
+/// raw size using `alignMap[size]`, then query alignment again using that
+/// aligned size (type.cc:3433-3435).
+pub fn primitive_layout(size: usize) -> (usize, usize) {
+    let initial_alignment = primitive_alignment(size);
+    let align_size = calc_align_size(size, initial_alignment);
+    (primitive_alignment(align_size), align_size)
 }
 
 // Ghidra: type.hh:165 Datatype::structGetFieldIter
@@ -2975,10 +3073,7 @@ impl TypeStruct {
             return;
         }
         encoder.open_element(&elem::type_());
-        // Ghidra passes `alignment` for structs. Rugra's TypeBase has no
-        // alignment field; pass -1 to skip the attribute (matches the
-        // non-composite default and is the documented gap).
-        as_datatype.encode_basic(struct_ty.base.metatype, -1, encoder);
+        as_datatype.encode_basic(struct_ty.base.metatype, struct_ty.base.alignment, encoder);
         for field in &struct_ty.fields {
             field.encode(encoder);
         }
@@ -3033,7 +3128,7 @@ impl TypeStruct {
                 ));
             }
             let _ = cur_size; // size validation surfaced via warning above
-            let cur_align = 1usize; // Rugra TypeBase has no alignment field; default 1
+            let cur_align = cur.type_ptr.get_alignment();
             if cur_align > calc_align {
                 calc_align = cur_align;
             }
@@ -3451,9 +3546,7 @@ impl TypeUnion {
             return;
         }
         encoder.open_element(&elem::type_());
-        // Ghidra passes `alignment` for unions. Rugra's TypeBase has no
-        // alignment field; pass -1 to skip (documented gap).
-        as_datatype.encode_basic(union_ty.base.metatype, -1, encoder);
+        as_datatype.encode_basic(union_ty.base.metatype, union_ty.base.alignment, encoder);
         for field in &union_ty.fields {
             field.encode(encoder);
         }
@@ -3472,6 +3565,18 @@ pub struct TypeCode {
 }
 
 impl TypeCode {
+    // Ghidra: type.cc:2757 TypeCode::TypeCode
+    /// Construct the incomplete generic code type. Ghidra's base constructor
+    /// is `Datatype(1,1,TYPE_CODE)`, so both alignment and aligned size start
+    /// at one before `decodeBasic` applies any explicit attributes.
+    pub fn new() -> Self {
+        let mut base = TypeBase::new(String::new(), 1, TypeMetatype::Code);
+        base.alignment = 1;
+        base.align_size = 1;
+        base.flags |= type_flags::TYPE_INCOMPLETE;
+        Self { base, proto: None }
+    }
+
     // Ghidra: type.cc:2713 TypeCode::setPrototype(tfact, sig, voidtype)
     /// Establish a function-pointer prototype on this code type from raw
     /// prototype pieces. Faithful to `TypeCode::setPrototype`
@@ -4054,6 +4159,8 @@ impl TypePartialStruct {
             "Parent of partial struct is not a structure or array"
         );
         let mut base = TypeBase::new(String::new(), size, TypeMetatype::PartialStruct);
+        base.alignment = 1;
+        base.align_size = size;
         base.flags |= type_flags::HAS_STRIPPED;
         Self { base, container, offset, stripped }
     }
@@ -4300,6 +4407,8 @@ impl TypePartialUnion {
         stripped: Option<Arc<Datatype>>,
     ) -> Self {
         let mut base = TypeBase::new(String::new(), size, TypeMetatype::PartialUnion);
+        base.alignment = 1;
+        base.align_size = size;
         base.flags |= type_flags::NEEDS_RESOLUTION | type_flags::HAS_STRIPPED;
         Self { base, container, offset, stripped }
     }
@@ -4587,9 +4696,10 @@ mod tests {
         let int_dt = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
         assert_eq!(int_dt.get_alignment(), 4);
         assert_eq!(int_dt.get_align_size(), 4);
-        // a 3-byte value → align 2 → alignSize 4
+        // findAdd first rounds 3 bytes with alignMap[3]=2 to alignSize 4,
+        // then stores alignment=alignMap[4]=4 (type.cc:3433-3435).
         let odd_dt = Datatype::Base(TypeBase::new("odd".into(), 3, TypeMetatype::Int));
-        assert_eq!(odd_dt.get_alignment(), 2);
+        assert_eq!(odd_dt.get_alignment(), 4);
         assert_eq!(odd_dt.get_align_size(), 4);
     }
 
