@@ -1398,7 +1398,7 @@ require("Cargo dependency vendor", cargo_vendor, {
     "archive_authentication": "each selected .crate is opened once with O_NOFOLLOW and accepted only when its bytes equal the exact Cargo.lock checksum; duplicate name/version records are forbidden",
     "extraction_policy": "safe in-memory extraction accepts only regular members under the exact name-version prefix, rejects duplicate/traversal/link/device members, writes a Cargo directory-source checksum file, then snapshot pre/post binds every vendor byte and mode",
     "cargo_config": "captured snapshot .cargo/config.toml replaces crates-io with the run-local vendor directory and forces offline mode",
-    "cargo_home": "empty run-local CARGO_HOME; live home config, index, credentials and unpacked sources are not consumed",
+    "cargo_home": "run-local CARGO_HOME; live home config, index, credentials and unpacked sources are not consumed. Cargo 1.97 unconditionally stamps a registry/CACHEDIR.TAG marker (sha256 6d9d1d216e0f83abc5e5662ca62c92b4f23009466b54fa27321a69acdb778bb2) even for fully offline directory-source builds; the runner admits exactly that marker and no other registry/git/config/credential state",
 })
 
 manifest = metadata["input_manifest"]
@@ -1610,14 +1610,37 @@ if [[ "$cargo_status" -ne 0 ]]; then
   /usr/bin/cat "$oracle_tmp/cargo.stdout" "$oracle_tmp/cargo.stderr" >&2
   exit "$cargo_status"
 fi
-if [[ -e "$cargo_home/registry" || -L "$cargo_home/registry" || \
-      -e "$cargo_home/git" || -L "$cargo_home/git" || \
+cargo_registry_tag_sha=6d9d1d216e0f83abc5e5662ca62c92b4f23009466b54fa27321a69acdb778bb2
+if [[ -e "$cargo_home/git" || -L "$cargo_home/git" || \
       -e "$cargo_home/config" || -L "$cargo_home/config" || \
       -e "$cargo_home/config.toml" || -L "$cargo_home/config.toml" || \
       -e "$cargo_home/credentials" || -L "$cargo_home/credentials" || \
       -e "$cargo_home/credentials.toml" || -L "$cargo_home/credentials.toml" ]]; then
   echo "offline vendored Cargo unexpectedly consulted/created external-source state" >&2
   exit 1
+fi
+# Cargo 1.97 unconditionally stamps an empty registry/ cache-directory tag
+# into CARGO_HOME even for a fully offline directory-source build. Admit the
+# bare marker and nothing else: any index/cache/src payload stays forbidden.
+if [[ -e "$cargo_home/registry" && ! -d "$cargo_home/registry" ]] || \
+   [[ -L "$cargo_home/registry" ]]; then
+  echo "run-local Cargo registry is not a real directory" >&2
+  exit 1
+fi
+if [[ -d "$cargo_home/registry" ]]; then
+  registry_children=$(/usr/bin/find "$cargo_home/registry" -mindepth 1 -maxdepth 1 -printf '%f\n' | /usr/bin/sort)
+  if [[ "$registry_children" != CACHEDIR.TAG ]]; then
+    echo "offline vendored Cargo wrote unexpected registry state" >&2
+    /usr/bin/printf '%s\n' "$registry_children" >&2
+    exit 1
+  fi
+  if [[ ! -f "$cargo_home/registry/CACHEDIR.TAG" || \
+        -L "$cargo_home/registry/CACHEDIR.TAG" ]] || \
+     [[ "$(/usr/bin/sha256sum "$cargo_home/registry/CACHEDIR.TAG" | /usr/bin/awk '{print $1}')" != \
+        "$cargo_registry_tag_sha" ]]; then
+    echo "run-local Cargo registry cache tag is not the pinned marker" >&2
+    exit 1
+  fi
 fi
 focused_results="$oracle_tmp/focused-results.txt"
 if ! /usr/bin/grep '^test result:' "$oracle_tmp/cargo.stdout" >"$focused_results"; then

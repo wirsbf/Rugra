@@ -90,27 +90,93 @@
     "python_sha256": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c",
     "gcc_specs_sha256": "c0ab03f7de3cd1a5d70e16bd0a11a71048d782fbc03dd974fa4bba6ce2ef5257",
     "compiler_subprograms": {
-      "cc1": {"path":"/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1","sha256":"49a325fc4c6c5aa5a8f9ea8c828e37f3900a757c6be48d997ff4af0b51ee8315"},
-      "cc1plus": {"path":"/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus","sha256":"0026a9e66550c7f470558dfbe99f861073294e601d62b7b74eeb50fdebb09bef"},
-      "collect2": {"path":"/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2","sha256":"6a575bbac80e335d20fc2ca631798899956cbbef882d6c3b83f8b13d01865155"},
-      "ld": {"path":"/usr/bin/ld","sha256":"4d83828f709f0eade25bcae2f4a2508c47db2f01b58daaca5c1c4cefce897847"},
-      "as": {"path":"/usr/bin/as","sha256":"3dfdf6007545ea36176c350eef201d1ece55c347a182697bb5f9bac815a1f34b"},
-      "ranlib": {"path":"/usr/bin/ranlib","sha256":"1359d302a8d12aa2c86bf3f26047360c050ec95b0584ce084ec40bbaf9c98613"}
+      "cc1": {
+        "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1",
+        "sha256": "49a325fc4c6c5aa5a8f9ea8c828e37f3900a757c6be48d997ff4af0b51ee8315"
+      },
+      "cc1plus": {
+        "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus",
+        "sha256": "0026a9e66550c7f470558dfbe99f861073294e601d62b7b74eeb50fdebb09bef"
+      },
+      "collect2": {
+        "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2",
+        "sha256": "6a575bbac80e335d20fc2ca631798899956cbbef882d6c3b83f8b13d01865155"
+      },
+      "ld": {
+        "path": "/usr/bin/ld",
+        "sha256": "4d83828f709f0eade25bcae2f4a2508c47db2f01b58daaca5c1c4cefce897847"
+      },
+      "as": {
+        "path": "/usr/bin/as",
+        "sha256": "3dfdf6007545ea36176c350eef201d1ece55c347a182697bb5f9bac815a1f34b"
+      },
+      "ranlib": {
+        "path": "/usr/bin/ranlib",
+        "sha256": "1359d302a8d12aa2c86bf3f26047360c050ec95b0584ce084ec40bbaf9c98613"
+      }
     },
     "build_helpers": {
       "shell_link": "/bin/sh",
-      "shell": {"path":"/usr/bin/bash","sha256":"575e03ac834b739349a4484de481abcd06a6f7193cefc795260a32a1943f20a5"},
-      "uname": {"path":"/usr/bin/uname","sha256":"fbb43fff8c84e68aa921b43cbf8a20b20a3521c46b35311d8d1ba38d02df60a8","expected":["Linux","x86_64"]},
-      "sed": {"path":"/usr/bin/sed","sha256":"c16be69e87ba0f9c5f364e3d25060d872629e26ba9db8681ad962f4485f6f31a"},
-      "mkdir": {"path":"/usr/bin/mkdir","sha256":"71b43dbb72e6ec1a509205a1ea948504cbbb76619967edc9b496798a2c600342"},
-      "rm": {"path":"/usr/bin/rm","sha256":"d5b182ba415bf4571cb6712c96dcee160dcb317c86814879a3fda36ef46ec36b"}
+      "shell": {
+        "path": "/usr/bin/bash",
+        "sha256": "575e03ac834b739349a4484de481abcd06a6f7193cefc795260a32a1943f20a5"
+      },
+      "uname": {
+        "path": "/usr/bin/uname",
+        "sha256": "fbb43fff8c84e68aa921b43cbf8a20b20a3521c46b35311d8d1ba38d02df60a8",
+        "expected": [
+          "Linux",
+          "x86_64"
+        ]
+      },
+      "sed": {
+        "path": "/usr/bin/sed",
+        "sha256": "c16be69e87ba0f9c5f364e3d25060d872629e26ba9db8681ad962f4485f6f31a"
+      },
+      "mkdir": {
+        "path": "/usr/bin/mkdir",
+        "sha256": "71b43dbb72e6ec1a509205a1ea948504cbbb76619967edc9b496798a2c600342"
+      },
+      "rm": {
+        "path": "/usr/bin/rm",
+        "sha256": "d5b182ba415bf4571cb6712c96dcee160dcb317c86814879a3fda36ef46ec36b"
+      }
     },
     "rust_semantic_engine": {
-      "librustc_driver": {"path":"/usr/lib/librustc_driver-afe033052732caf2.so","sha256":"f1df5f9bd04b8cc36bb836364cce82f92129d4f49540939dd27294a85138de3d"},
-      "llvm": {"path":"/usr/lib/libLLVM.so.22.1","sha256":"06662e11c1faa7b4cb199e03c9ef681b74655ad4274473273b41dfc754a6f16f"}
+      "librustc_driver": {
+        "path": "/usr/lib/librustc_driver-afe033052732caf2.so",
+        "sha256": "f1df5f9bd04b8cc36bb836364cce82f92129d4f49540939dd27294a85138de3d"
+      },
+      "llvm": {
+        "path": "/usr/lib/libLLVM.so.22.1",
+        "sha256": "06662e11c1faa7b4cb199e03c9ef681b74655ad4274473273b41dfc754a6f16f"
+      }
     },
     "dynamic_runtime_closure": {
-      "roots": ["/usr/bin/g++","/usr/bin/gcc","/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1","/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus","/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2","/usr/bin/ld","/usr/bin/as","/usr/bin/ranlib","/usr/bin/ar","/usr/bin/make","/usr/bin/cargo","/usr/bin/rustc","/usr/bin/python3.14","/usr/bin/git","/usr/bin/flock","/usr/bin/setsid","/usr/bin/env","/usr/bin/bash","/usr/bin/uname","/usr/bin/sed","/usr/bin/mkdir","/usr/bin/rm"],
+      "roots": [
+        "/usr/bin/g++",
+        "/usr/bin/gcc",
+        "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1",
+        "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus",
+        "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2",
+        "/usr/bin/ld",
+        "/usr/bin/as",
+        "/usr/bin/ranlib",
+        "/usr/bin/ar",
+        "/usr/bin/make",
+        "/usr/bin/cargo",
+        "/usr/bin/rustc",
+        "/usr/bin/python3.14",
+        "/usr/bin/git",
+        "/usr/bin/flock",
+        "/usr/bin/setsid",
+        "/usr/bin/env",
+        "/usr/bin/bash",
+        "/usr/bin/uname",
+        "/usr/bin/sed",
+        "/usr/bin/mkdir",
+        "/usr/bin/rm"
+      ],
       "ldd_path": "/usr/bin/ldd",
       "ldd_sha256": "94f332c23cf00596d0387d6f54693664f9a53334d65953b2ff308057cc8530b1",
       "ld_so_cache_path": "/etc/ld.so.cache",
@@ -120,12 +186,42 @@
       "manifest_algorithm": "sort canonical resolved paths as bytes; hash u64be(path_len), path bytes, sha256(file bytes)"
     },
     "semantic_trees": {
-      "rust_target_libdir": {"path":"/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib","sha256":"9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f","entry_count":62,"regular_bytes":156584595},
-      "gcc_16_root": {"path":"/usr/lib/gcc/x86_64-pc-linux-gnu/16","sha256":"006e26ecb4de682155c8cc653f72d02b907027a51192cf6324273e153726ca82","entry_count":838,"regular_bytes":188527599},
-      "libstdcxx_include_root": {"path":"/usr/include/c++/16","sha256":"ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d108667571de511d","entry_count":887,"regular_bytes":14780438},
-      "system_include_root": {"path":"/usr/include","sha256":"8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a","entry_count":33253,"regular_bytes":334881035},
-      "local_include_root": {"path":"/usr/local/include","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","entry_count":0,"regular_bytes":0},
-      "python_stdlib_root": {"path":"/usr/lib/python3.14","sha256":"141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376","entry_count":12553,"regular_bytes":265048061}
+      "rust_target_libdir": {
+        "path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib",
+        "sha256": "9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f",
+        "entry_count": 62,
+        "regular_bytes": 156584595
+      },
+      "gcc_16_root": {
+        "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16",
+        "sha256": "006e26ecb4de682155c8cc653f72d02b907027a51192cf6324273e153726ca82",
+        "entry_count": 838,
+        "regular_bytes": 188527599
+      },
+      "libstdcxx_include_root": {
+        "path": "/usr/include/c++/16",
+        "sha256": "ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d108667571de511d",
+        "entry_count": 887,
+        "regular_bytes": 14780438
+      },
+      "system_include_root": {
+        "path": "/usr/include",
+        "sha256": "8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a",
+        "entry_count": 33253,
+        "regular_bytes": 334881035
+      },
+      "local_include_root": {
+        "path": "/usr/local/include",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "entry_count": 0,
+        "regular_bytes": 0
+      },
+      "python_stdlib_root": {
+        "path": "/usr/lib/python3.14",
+        "sha256": "141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376",
+        "entry_count": 12553,
+        "regular_bytes": 265048061
+      }
     },
     "zlib_link_inputs": {
       "link_path": "/usr/lib/libz.so",
@@ -137,22 +233,63 @@
       "cargo_policy": "LIBZ_SYS_STATIC=1 makes libz-sys build the Cargo.lock-authenticated bundled zlib and bypass pkg-config; the pinned system zlib remains the explicit C++ and direct-rustc link input and is preloaded at fixture execution"
     },
     "system_link_inputs": {
-      "Scrt1.o": {"path":"/usr/lib/Scrt1.o","sha256":"98d76691c6d97233c9e1a062f32ea2d7a89f047632156d1bf7b811727fb19921"},
-      "crti.o": {"path":"/usr/lib/crti.o","sha256":"caf7f0c99019735e97e9bfabf52c376e86e1ef92d1b53a63c36a5bc2688e8fcc"},
-      "crtn.o": {"path":"/usr/lib/crtn.o","sha256":"71236f0a232a3686adf2319f3ae172831e8fd8166b9f0764ed184bc4df11be3c"},
-      "libc.so": {"path":"/usr/lib/libc.so","sha256":"362665345c2d0149815700776a1e3e1a7fff45ab16f32352dbe224c55d12c964"},
-      "libc_nonshared.a": {"path":"/usr/lib/libc_nonshared.a","sha256":"de2e822b005fc8ab5a2e6c99ad5067ff9e548f495f9e54c6a027506125507430"},
-      "libm.so": {"path":"/usr/lib/libm.so","sha256":"258e8802b225f70a439bbe23d6ecd468a33ce8875a02a52846a7bb5d21ff34c3"},
-      "libmvec.so.1": {"path":"/usr/lib/libmvec.so.1","sha256":"c807927adfba7c54714a232b348c9afef8b0ad91799eae3a353f1911734b6834"},
-      "libpthread.a": {"path":"/usr/lib/libpthread.a","sha256":"f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"},
-      "libdl.a": {"path":"/usr/lib/libdl.a","sha256":"f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"},
-      "librt.a": {"path":"/usr/lib/librt.a","sha256":"f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"},
-      "libutil.a": {"path":"/usr/lib/libutil.a","sha256":"f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"}
+      "Scrt1.o": {
+        "path": "/usr/lib/Scrt1.o",
+        "sha256": "98d76691c6d97233c9e1a062f32ea2d7a89f047632156d1bf7b811727fb19921"
+      },
+      "crti.o": {
+        "path": "/usr/lib/crti.o",
+        "sha256": "caf7f0c99019735e97e9bfabf52c376e86e1ef92d1b53a63c36a5bc2688e8fcc"
+      },
+      "crtn.o": {
+        "path": "/usr/lib/crtn.o",
+        "sha256": "71236f0a232a3686adf2319f3ae172831e8fd8166b9f0764ed184bc4df11be3c"
+      },
+      "libc.so": {
+        "path": "/usr/lib/libc.so",
+        "sha256": "362665345c2d0149815700776a1e3e1a7fff45ab16f32352dbe224c55d12c964"
+      },
+      "libc_nonshared.a": {
+        "path": "/usr/lib/libc_nonshared.a",
+        "sha256": "de2e822b005fc8ab5a2e6c99ad5067ff9e548f495f9e54c6a027506125507430"
+      },
+      "libm.so": {
+        "path": "/usr/lib/libm.so",
+        "sha256": "258e8802b225f70a439bbe23d6ecd468a33ce8875a02a52846a7bb5d21ff34c3"
+      },
+      "libmvec.so.1": {
+        "path": "/usr/lib/libmvec.so.1",
+        "sha256": "c807927adfba7c54714a232b348c9afef8b0ad91799eae3a353f1911734b6834"
+      },
+      "libpthread.a": {
+        "path": "/usr/lib/libpthread.a",
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      },
+      "libdl.a": {
+        "path": "/usr/lib/libdl.a",
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      },
+      "librt.a": {
+        "path": "/usr/lib/librt.a",
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      },
+      "libutil.a": {
+        "path": "/usr/lib/libutil.a",
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      }
     },
     "ghidra_libdecomp_contract": {
-      "manifest_make_overrides": {"DEPNAMES":"","EXTRA":""},
-      "archive_build_overrides": {"EXTRA":""},
-      "archive_default_dependency_outputs": ["com_dbg/depend","com_opt/depend"],
+      "manifest_make_overrides": {
+        "DEPNAMES": "",
+        "EXTRA": ""
+      },
+      "archive_build_overrides": {
+        "EXTRA": ""
+      },
+      "archive_default_dependency_outputs": [
+        "com_dbg/depend",
+        "com_opt/depend"
+      ],
       "member_count": 79,
       "object_path_manifest_sha256": "70393006a3c0d91392e73734abb204f8cfc8a76b37e7038ab41657b122dbcb86",
       "member_order_manifest_sha256": "019a03e343985e9883f06178c0601c9a819e9b83dae28f2ba12bcae4249acb97",
@@ -168,7 +305,7 @@
     "archive_authentication": "each selected .crate is opened once with O_NOFOLLOW and accepted only when its bytes equal the exact Cargo.lock checksum; duplicate name/version records are forbidden",
     "extraction_policy": "safe in-memory extraction accepts only regular members under the exact name-version prefix, rejects duplicate/traversal/link/device members, writes a Cargo directory-source checksum file, then snapshot pre/post binds every vendor byte and mode",
     "cargo_config": "captured snapshot .cargo/config.toml replaces crates-io with the run-local vendor directory and forces offline mode",
-    "cargo_home": "empty run-local CARGO_HOME; live home config, index, credentials and unpacked sources are not consumed"
+    "cargo_home": "run-local CARGO_HOME; live home config, index, credentials and unpacked sources are not consumed. Cargo 1.97 unconditionally stamps a registry/CACHEDIR.TAG marker (sha256 6d9d1d216e0f83abc5e5662ca62c92b4f23009466b54fa27321a69acdb778bb2) even for fully offline directory-source builds; the runner admits exactly that marker and no other registry/git/config/credential state"
   },
   "architecture": "fixture-synthetic:LE:64:default ram(index=3,addrsize=8,wordsize=1) + tiny(index=8,addrsize=1,wordsize=1), stack pointer register:0/8, max_basetype_size=16, no loader; the 24-case projection does not consume TypeFactory, instruction registry or symbol scope",
   "compiler_spec": {
@@ -185,17 +322,35 @@
     "cargo_jobs": 2,
     "cargo_incremental": false,
     "cargo_target_linker": "/usr/bin/gcc via CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
-    "direct_sanity_initial_loadcounts": [1, 2],
+    "direct_sanity_initial_loadcounts": [
+      1,
+      2
+    ],
     "recover_initial_loadcounts": [],
     "collect_loads": "true for all recover cases except recover_no_collect",
     "fresh_producer_invariant": "EmulateFunction::executeLoad constructs every pre-collapse LoadTable with num=1; equal-address different-size records are reachable because distinct LOAD ops in PathMeld may resolve to the same effective address.",
     "load_variants": {
-      "default": ["ram:0x3004/4/1", "ram:0x3000/4/1"],
-      "equal_three_constructor_projection": ["ram:0x4000/8/2", "ram:0x4000/4/3", "ram:0x4010/8/1"],
+      "default": [
+        "ram:0x3004/4/1",
+        "ram:0x3000/4/1"
+      ],
+      "equal_three_constructor_projection": [
+        "ram:0x4000/8/2",
+        "ram:0x4000/4/3",
+        "ram:0x4010/8/1"
+      ],
       "equal_sixteen_producer_shape": "16 same-address records, alternating size 4/8, num fixed at 1",
       "equal_seventeen_producer_shape": "17 same-address records, alternating size 4/8, num fixed at 1",
-      "one_byte_wrap": ["tiny:0xfc/4/1", "tiny:0x00/4/1"],
-      "multi_space": ["tiny:0x00/4/1", "ram:0x4000/4/1", "tiny:0x04/4/1", "ram:0x4004/4/1"]
+      "one_byte_wrap": [
+        "tiny:0xfc/4/1",
+        "tiny:0x00/4/1"
+      ],
+      "multi_space": [
+        "tiny:0x00/4/1",
+        "ram:0x4000/4/1",
+        "tiny:0x04/4/1",
+        "ram:0x4004/4/1"
+      ]
     }
   },
   "rugra_source": {
@@ -232,34 +387,279 @@
     "rust_fixture_sha256": "73aab1818cda1cc46c336569c7299fee43ef25612ce7f5d3f3b35b7f30e5467e",
     "jumptable_overlay_sha256": "4fe0f3c722905618610dfa2d957df894ab1bc1ae88dd0ac77a7065891eb575b7",
     "api_document_sha256": "5b87732c64f88d5fde577125ab1c8e7973700efd171df008cfd14dc322704708",
-    "runner_sha256": "ad5d6c480aef4b0324663b5cf6c8867a79b0d7834555c1cfe8c7ac088b5dff8b"
+    "runner_sha256": "1a07b63e9952bda3a669206f22f2b4055b4c7b9e192a21948c8ad73c36bfc802"
   },
   "input_manifest": {
     "cases": [
-      {"id":"zero","path":"sanity","targets":["0"],"reach":"none","override":false,"collect":false,"model":"fixture"},
-      {"id":"near","path":"sanity","targets":["op+0x20"],"reach":"none","override":false,"collect":false,"model":"fixture"},
-      {"id":"cutoff","path":"sanity","targets":["op+0xffff"],"reach":"none","override":false,"collect":false,"model":"fixture"},
-      {"id":"over","path":"sanity","targets":["op+0x10000"],"reach":"none","override":false,"collect":false,"model":"fixture"},
-      {"id":"multi","path":"sanity","targets":["0","op+0x20000"],"reach":"none","override":false,"collect":false,"model":"fixture"},
-      {"id":"partial","path":"sanity","targets":["0"],"reach":"constant-zero-false","override":false,"collect":false,"model":"fixture"},
-      {"id":"reach_two","path":"sanity","targets":["0"],"reach":"two-level-inner-survives-outer-false","override":false,"collect":false,"model":"fixture"},
-      {"id":"reach_flip","path":"sanity","targets":["0"],"reach":"boolean-flip-nonzero-false","override":false,"collect":false,"model":"fixture"},
-      {"id":"reach_nonzero","path":"sanity","targets":["0"],"reach":"constant-nonzero-survives","override":false,"collect":false,"model":"fixture"},
-      {"id":"reach_size_out","path":"sanity","targets":["0"],"reach":"predecessor-sizeOut-1","override":false,"collect":false,"model":"fixture"},
-      {"id":"reach_non_cbranch","path":"sanity","targets":["0"],"reach":"last-op-COPY","override":false,"collect":false,"model":"fixture"},
-      {"id":"reach_nonconstant","path":"sanity","targets":["0"],"reach":"CBRANCH-free-condition","override":false,"collect":false,"model":"fixture"},
-      {"id":"override","path":"recover","targets":["0"],"reach":"constant-zero-false","override":true,"collect":true,"model":"fixture"},
-      {"id":"recover_model_fail","path":"recover","targets":[],"reach":"none","override":false,"collect":true,"model":"real-unbounded-32-bit-no-out-edge"},
-      {"id":"recover_table_zero","path":"recover","targets":[],"reach":"none","override":false,"collect":true,"model":"fixture-zero-size"},
-      {"id":"recover_no_collect","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":false,"model":"fixture"},
-      {"id":"recover_thunk","path":"recover","targets":["0"],"reach":"none","override":false,"collect":true,"model":"fixture"},
-      {"id":"success_truncate","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-mutate-success"},
-      {"id":"model_reject","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-mutate-reject"},
-      {"id":"sort_equal_three","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-equal-three"},
-      {"id":"sort_equal_sixteen","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-production-shape-16"},
-      {"id":"sort_equal_seventeen","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-production-shape-17"},
-      {"id":"wrap_one_byte","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-wrap"},
-      {"id":"multi_space","path":"recover","targets":["op+0x10","op+0x20"],"reach":"none","override":false,"collect":true,"model":"fixture-multi-space"}
+      {
+        "id": "zero",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "near",
+        "path": "sanity",
+        "targets": [
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "cutoff",
+        "path": "sanity",
+        "targets": [
+          "op+0xffff"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "over",
+        "path": "sanity",
+        "targets": [
+          "op+0x10000"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "multi",
+        "path": "sanity",
+        "targets": [
+          "0",
+          "op+0x20000"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "partial",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "constant-zero-false",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "reach_two",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "two-level-inner-survives-outer-false",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "reach_flip",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "boolean-flip-nonzero-false",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "reach_nonzero",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "constant-nonzero-survives",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "reach_size_out",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "predecessor-sizeOut-1",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "reach_non_cbranch",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "last-op-COPY",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "reach_nonconstant",
+        "path": "sanity",
+        "targets": [
+          "0"
+        ],
+        "reach": "CBRANCH-free-condition",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "override",
+        "path": "recover",
+        "targets": [
+          "0"
+        ],
+        "reach": "constant-zero-false",
+        "override": true,
+        "collect": true,
+        "model": "fixture"
+      },
+      {
+        "id": "recover_model_fail",
+        "path": "recover",
+        "targets": [],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "real-unbounded-32-bit-no-out-edge"
+      },
+      {
+        "id": "recover_table_zero",
+        "path": "recover",
+        "targets": [],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-zero-size"
+      },
+      {
+        "id": "recover_no_collect",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": false,
+        "model": "fixture"
+      },
+      {
+        "id": "recover_thunk",
+        "path": "recover",
+        "targets": [
+          "0"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture"
+      },
+      {
+        "id": "success_truncate",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-mutate-success"
+      },
+      {
+        "id": "model_reject",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-mutate-reject"
+      },
+      {
+        "id": "sort_equal_three",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-equal-three"
+      },
+      {
+        "id": "sort_equal_sixteen",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-production-shape-16"
+      },
+      {
+        "id": "sort_equal_seventeen",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-production-shape-17"
+      },
+      {
+        "id": "wrap_one_byte",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-wrap"
+      },
+      {
+        "id": "multi_space",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-multi-space"
+      }
     ],
     "sha256": "231ed5f30b6802dc799a7f54239af47bea019f68ee8824cd0cfca7981c45fffb"
   },
@@ -279,19 +679,90 @@
     "diff": "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED"
   },
   "coverage": {
-    "single_target_boundary": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies zero, near, 0xffff and 0x10000 behavior, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "multi_target_bypass": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies the two-target bypass, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "is_reachable_guard_matrix": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies one-level false, two-level parent update, BOOLEAN_FLIP, nonzero polarity and the three continue guards, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "override_short_circuit": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies override short-circuit and success-only collapse, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "recover_preconditions_and_collect_gate": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies recoverModel failure, tableSize zero and collectloads=false, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "recover_thunk_and_model_reject": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies recover-driven thunk and model rejection with pre-error mutation, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "successful_truncation_warning_order": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The expanded fixture specifies successful truncation, warning order and collapse, but it has not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "equal_address_pinned_toolchain_order": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"The locked C++ output and focused Rust tests exercise the 3/16/17-entry address-only GCC16 threshold cases, but the current-candidate fixture runner has not reached its Rust differential and retained bilateral evidence does not exercise heap fallback.","residual_todo_ids":[]},
-    "address_space_wrap_and_order": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"Focused Rust tests cover 1-byte wrap and full-space ordering, and the C++ fixture output is pinned; the corrected current-candidate fixture runner has not reached its Rust differential.","residual_todo_ids":[]},
-    "production_load_input_invariant": {"status":"UNTESTED","evidence_kind":"FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION","covers":"Source audit establishes the intended fresh-producer num=1 precondition, but the producer-shaped fixture cases have not executed against the current Rust candidate.","residual_todo_ids":[]},
-    "production_typed_stage_consumption": {"status":"MISMATCH","evidence_kind":"LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE","covers":"Ghidra stageJumpTable catches JumptableThunkError separately and passes one RecoveryMode domain into truncateIndirectJump; Rugra production flow/funcdata consumes bool/Option and casts the enum into a conflicting legacy u8 domain.","residual_todo_ids":["JUMPTABLE-PIPELINE-0001"]},
-    "sort_toolchain_portability": {"status":"MISMATCH","evidence_kind":"PINNED_ORACLE_CONTRACT_WITH_CROSS_TOOLCHAIN_PORTABILITY_GAP","covers":"The implementation targets pinned GCC16 libstdc++ equal-key order, but another conforming std::sort implementation may permute equivalent LoadTable entries differently; this is not a 24-case current-Rust observation.","residual_todo_ids":["JUMPTABLE-SORT-TOOLCHAIN-0001"]},
-    "emulate_function_lowlevel_channel": {"status":"MISMATCH","evidence_kind":"LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE","covers":"When collection is enabled, Ghidra records a resolved LOAD address before reading its payload; executeCurrentOp DataUnavailError, start/ordinary MULTIEQUAL, non-MULTIEQUAL bad start, BRANCH and BRANCHIND have precise state/error semantics. Rust lacks the loader callback and lastOp predecessor state and converts emulate_path failure to target zero.","residual_todo_ids":["JUMPTABLE-EMULFN-0001"]}
+    "single_target_boundary": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies zero, near, 0xffff and 0x10000 behavior, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "multi_target_bypass": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies the two-target bypass, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "is_reachable_guard_matrix": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies one-level false, two-level parent update, BOOLEAN_FLIP, nonzero polarity and the three continue guards, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "override_short_circuit": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies override short-circuit and success-only collapse, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "recover_preconditions_and_collect_gate": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies recoverModel failure, tableSize zero and collectloads=false, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "recover_thunk_and_model_reject": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies recover-driven thunk and model rejection with pre-error mutation, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "successful_truncation_warning_order": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The expanded fixture specifies successful truncation, warning order and collapse, but it has not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "equal_address_pinned_toolchain_order": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "The locked C++ output and focused Rust tests exercise the 3/16/17-entry address-only GCC16 threshold cases, but the current-candidate fixture runner has not reached its Rust differential and retained bilateral evidence does not exercise heap fallback.",
+      "residual_todo_ids": []
+    },
+    "address_space_wrap_and_order": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "Focused Rust tests cover 1-byte wrap and full-space ordering, and the C++ fixture output is pinned; the corrected current-candidate fixture runner has not reached its Rust differential.",
+      "residual_todo_ids": []
+    },
+    "production_load_input_invariant": {
+      "status": "UNTESTED",
+      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
+      "covers": "Source audit establishes the intended fresh-producer num=1 precondition, but the producer-shaped fixture cases have not executed against the current Rust candidate.",
+      "residual_todo_ids": []
+    },
+    "production_typed_stage_consumption": {
+      "status": "MISMATCH",
+      "evidence_kind": "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE",
+      "covers": "Ghidra stageJumpTable catches JumptableThunkError separately and passes one RecoveryMode domain into truncateIndirectJump; Rugra production flow/funcdata consumes bool/Option and casts the enum into a conflicting legacy u8 domain.",
+      "residual_todo_ids": [
+        "JUMPTABLE-PIPELINE-0001"
+      ]
+    },
+    "sort_toolchain_portability": {
+      "status": "MISMATCH",
+      "evidence_kind": "PINNED_ORACLE_CONTRACT_WITH_CROSS_TOOLCHAIN_PORTABILITY_GAP",
+      "covers": "The implementation targets pinned GCC16 libstdc++ equal-key order, but another conforming std::sort implementation may permute equivalent LoadTable entries differently; this is not a 24-case current-Rust observation.",
+      "residual_todo_ids": [
+        "JUMPTABLE-SORT-TOOLCHAIN-0001"
+      ]
+    },
+    "emulate_function_lowlevel_channel": {
+      "status": "MISMATCH",
+      "evidence_kind": "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE",
+      "covers": "When collection is enabled, Ghidra records a resolved LOAD address before reading its payload; executeCurrentOp DataUnavailError, start/ordinary MULTIEQUAL, non-MULTIEQUAL bad start, BRANCH and BRANCHIND have precise state/error semantics. Rust lacks the loader callback and lastOp predecessor state and converts emulate_path failure to target zero.",
+      "residual_todo_ids": [
+        "JUMPTABLE-EMULFN-0001"
+      ]
+    }
   },
   "known_diffs": [],
   "residuals": [
@@ -300,8 +771,16 @@
       "status": "MISMATCH",
       "detail": "This write-set excludes flow/funcdata, so production must consume recover_addresses_classified/try_recover_classified, preserve FailThunk separately from FailNormal, and pass the same RecoveryMode domain into truncation instead of casting into the conflicting legacy byte protocol.",
       "branches": [
-        {"id":"typed_result_not_consumed_by_production","status":"MISMATCH","detail":"Legacy bool/Option adapters collapse both JumpTableRecoveryError variants, unlike locked stageJumpTable's distinct catch clauses."},
-        {"id":"recovery_mode_discriminant_domain","status":"MISMATCH","detail":"Locked and Rust RecoveryMode use success/normal/thunk/return/callother = 0/1/2/3/4, but flow.rs passes a direct enum cast to a legacy byte API that interprets 0/1/2/other as thunk/callother/return/default. Current FailNormal=1 therefore takes the no-return callother path instead of locked normal/default handling."}
+        {
+          "id": "typed_result_not_consumed_by_production",
+          "status": "MISMATCH",
+          "detail": "Legacy bool/Option adapters collapse both JumpTableRecoveryError variants, unlike locked stageJumpTable's distinct catch clauses."
+        },
+        {
+          "id": "recovery_mode_discriminant_domain",
+          "status": "MISMATCH",
+          "detail": "Locked and Rust RecoveryMode use success/normal/thunk/return/callother = 0/1/2/3/4, but flow.rs passes a direct enum cast to a legacy byte API that interprets 0/1/2/other as thunk/callother/return/default. Current FailNormal=1 therefore takes the no-return callother path instead of locked normal/default handling."
+        }
       ]
     },
     {
@@ -309,7 +788,11 @@
       "status": "MISMATCH",
       "detail": "LoadTable::operator< intentionally has no tie-break and the C++ standard leaves equivalent-key std::sort order unspecified. Rust targets the pinned GCC16 implementation; the current Rust 24-case projection and heap fallback remain untested, and no contract covers every supported STL/toolchain.",
       "branches": [
-        {"id":"non_libstdcxx16_equal_key_permutation","status":"MISMATCH","detail":"A different standard-library sort may change the later size-sensitive collapse result; portability requires pinning the production C++ oracle toolchain or defining and validating an implementation-independent contract."}
+        {
+          "id": "non_libstdcxx16_equal_key_permutation",
+          "status": "MISMATCH",
+          "detail": "A different standard-library sort may change the later size-sensitive collapse result; portability requires pinning the production C++ oracle toolchain or defining and validating an implementation-independent contract."
+        }
       ]
     },
     {
@@ -317,10 +800,26 @@
       "status": "MISMATCH",
       "detail": "Rust EmulateFunction has no LoadImage callback/error channel or lastOp predecessor state: get_varnode_value falls back to zero, execute_op returns false for unsupported special operations, emulate_path returns None, and JumpBasic::build_addresses silently emits target zero. Locked Ghidra conditionally records a successfully resolved LOAD address before reading its payload, converts DataUnavailError raised during executeCurrentOp to a precise LowlevelError at that op, dispatches ordinary MULTIEQUAL from lastOp's predecessor, and preserves distinct start-MULTIEQUAL, non-MULTIEQUAL-not-in-PathMeld, BRANCH and BRANCHIND errors. Its final result-varnode read remains outside the DataUnavail catch.",
       "branches": [
-        {"id":"load_callback_data_unavailable","status":"MISMATCH","detail":"Missing loader callback prevents byte/endianness-accurate LOAD. With collection enabled, locked executeLoad first resolves the address input, then appends its record before the payload read. Payload DataUnavail during loop executeCurrentOp is translated while that record remains visible; address-input resolution failure occurs before append."},
-        {"id":"multiequal_lastop_selection","status":"MISMATCH","detail":"Locked ordinary MULTIEQUAL selects the input whose incoming block matches lastOp's parent and throws `Could not execute MULTIEQUAL` if none matches; Rust neither updates lastOp on fallthrough nor performs this predecessor selection."},
-        {"id":"control_flow_lowlevel_errors","status":"MISMATCH","detail":"Locked unresolved start-MULTIEQUAL, a non-MULTIEQUAL start op absent from PathMeld, BRANCH and BRANCHIND paths retain distinct exact Lowlevel errors and fallthrough timing; Rust collapses unsupported dispatch to false/None."},
-        {"id":"emulation_failure_silently_zeroed","status":"MISMATCH","detail":"For supported non-null start inputs where locked emulation throws a Lowlevel error, Rust build_addresses converts emulate_path None into address zero instead of unwinding while preserving the exact pre-error address/load/loadcount prefix."}
+        {
+          "id": "load_callback_data_unavailable",
+          "status": "MISMATCH",
+          "detail": "Missing loader callback prevents byte/endianness-accurate LOAD. With collection enabled, locked executeLoad first resolves the address input, then appends its record before the payload read. Payload DataUnavail during loop executeCurrentOp is translated while that record remains visible; address-input resolution failure occurs before append."
+        },
+        {
+          "id": "multiequal_lastop_selection",
+          "status": "MISMATCH",
+          "detail": "Locked ordinary MULTIEQUAL selects the input whose incoming block matches lastOp's parent and throws `Could not execute MULTIEQUAL` if none matches; Rust neither updates lastOp on fallthrough nor performs this predecessor selection."
+        },
+        {
+          "id": "control_flow_lowlevel_errors",
+          "status": "MISMATCH",
+          "detail": "Locked unresolved start-MULTIEQUAL, a non-MULTIEQUAL start op absent from PathMeld, BRANCH and BRANCHIND paths retain distinct exact Lowlevel errors and fallthrough timing; Rust collapses unsupported dispatch to false/None."
+        },
+        {
+          "id": "emulation_failure_silently_zeroed",
+          "status": "MISMATCH",
+          "detail": "For supported non-null start inputs where locked emulation throws a Lowlevel error, Rust build_addresses converts emulate_path None into address zero instead of unwinding while preserving the exact pre-error address/load/loadcount prefix."
+        }
       ]
     }
   ],
