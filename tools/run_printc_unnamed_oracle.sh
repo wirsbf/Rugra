@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
-# PRINTC-UNLINKED-REF-FAMILY slice C oracle runner (A35 audit section 5).
+# PRINTC-UNLINKED-REF-FAMILY slices C+B1 oracle runner (A35 audit section 5).
 #
 # Rebuilds the locked Ghidra 12.0.4 decompiler from the pinned oracle
 # commit, links the C++ fixture against the binutils-2.38 BFD environment,
-# rebuilds the Rugra crate from the pinned base commit (base-only, no src
-# overlays — slice C adds fixtures only), compiles both fixtures, runs them,
-# and classifies every stdout line:
+# rebuilds the Rugra crate from the pinned base commit with the slice B1
+# overlay (the live src/printc.rs — the unnamed-location fallback address
+# source unified to the high's name representative,
+# printlanguage.cc:244), compiles both fixtures, runs them, and classifies
+# every stdout line:
 #
 #   - a line pair that byte-matches is COVERED;
 #   - a line pair that differs is only acceptable when it is REGISTERED in
 #     metadata["registered_divergence_lines"] with BOTH side's exact text
 #     and sha256 — the gap evidence this fixture exists to pin (the printc
-#     unnamed-location fallback family and the default-unknown typechar);
+#     unnamed-location token form and the default-unknown typechar);
 #   - any unregistered divergence, envelope/order/line-count drift, or a
 #     STALE registration whose sides now byte-match (a fix landed — re-pin
-#     the fixture and shrink the registered table) fails the run.
+#     the fixture and shrink the registered table) fails the run.  A
+#     registration whose recorded side text no longer reproduces (drift)
+#     fails the run the same way — that is the B1 acceptance signal:
+#     slice B1 re-pinned line 31 after the multi_instance site=b label
+#     collapsed onto the representative address.
 #
 # The observation surface is never narrowed to go green.
 #
@@ -31,9 +37,9 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=73b5ef26453372a2b562051f113f9b299bcebeef
-rugra_base_tree=a60d56655fe369049ab14bde073e648a3d098bfc
-rugra_base_src_tree=c3e27bdf42241283c5c073b51095059e0ae8857f
+rugra_base_commit=9bdd5e35665f63820a5ebb9d160c68579fc55203
+rugra_base_tree=002651a1ccbb5e5fc5a57c3a29d49c79db95554d
+rugra_base_src_tree=5ac2e45f40b5543f66e1c6ef1780c23a451a4767
 
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/printc_unnamed_1204.metadata.json"
@@ -151,6 +157,10 @@ git -C "$repo_root" archive --format=tar "$rugra_base_commit" \
   benches/decompile_bench.rs tests/oracle/decompress_1204.rs \
   tests/oracle/funcproto_lock_1204.rs | \
   tar -xf - -C "$rugra_snapshot"
+# Slice B1 overlay: the live src/printc.rs replaces the base version in the
+# snapshot (the comparand under test).  The python pre-flight pins its exact
+# sha256 through metadata["comparand"]["overlays"].
+cp -- "$repo_root/src/printc.rs" "$rugra_snapshot/src/printc.rs"
 mkdir -p "$rugra_snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile" \
   "$rugra_snapshot/sleigh_specs" "$rugra_snapshot/tests/oracle" \
   "$rugra_snapshot/examples"
@@ -227,7 +237,25 @@ require("Rugra base src tree", comparand["rugra_base_src_tree"], base_src_tree)
 require("C++ fixture hash", sha(pathlib.Path(cpp_raw).read_bytes()), comparand["cpp_fixture_sha256"])
 require("Rust fixture hash", sha(pathlib.Path(rust_raw).read_bytes()), comparand["rust_fixture_sha256"])
 require("runner hash", runner_sha, comparand["runner_sha256"])
-require("overlays must stay empty for slice C", comparand["overlays"], [])
+overlays = comparand["overlays"]
+if not (
+    isinstance(overlays, list)
+    and len(overlays) == 1
+    and isinstance(overlays[0], dict)
+    and overlays[0].get("path") == "src/printc.rs"
+    and isinstance(overlays[0].get("sha256"), str)
+    and len(overlays[0]["sha256"]) == 64
+):
+    raise SystemExit(f"slice B1 must overlay exactly src/printc.rs: {overlays!r}")
+overlay_live = repo / "src/printc.rs"
+if overlay_live.is_symlink() or not overlay_live.is_file():
+    raise SystemExit("overlay input must be a regular non-symlink file: src/printc.rs")
+require("overlay live sha256", sha(overlay_live.read_bytes()), overlays[0]["sha256"])
+require(
+    "overlay snapshot sha256",
+    sha((rugra / "src/printc.rs").read_bytes()),
+    overlays[0]["sha256"],
+)
 
 raw_paths = subprocess.check_output([
     "git", "-C", str(repo), "ls-tree", "-r", "-z", "--name-only",
@@ -241,7 +269,7 @@ paths = sorted(
     key=lambda path: path.as_posix(),
 )
 hasher = hashlib.sha256()
-hasher.update(b"rugra-printc-unnamed-checkpoint-crate-v1\0")
+hasher.update(b"rugra-printc-unnamed-base-overlay-b1-v1\0")
 hasher.update(base_commit.encode())
 for relative in paths:
     source = rugra / relative
@@ -256,7 +284,7 @@ for relative in paths:
 require(
     "crate hash scheme",
     comparand["rust_crate_tree_hash_scheme"],
-    "sha256 of rugra-printc-unnamed-checkpoint-crate-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit (base-only build, no src overlays: slice C adds no src change)",
+    "sha256 of rugra-printc-unnamed-base-overlay-b1-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit with src/printc.rs overlaid from the live tree (slice B1: unnamed-location fallback address source unified to the high name representative, printlanguage.cc:244)",
 )
 require("checkpoint crate hash", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 
@@ -470,4 +498,4 @@ fi
 printf '%s\n' "$gate_summary"
 covered_part=${gate_summary%% *}
 covered_part=${covered_part#covered=}
-echo "printc_unnamed_1204: covered_projection=MATCH($covered_part) overall=MISMATCH slice=PRINTC-UNLINKED-REF-FAMILY/C"
+echo "printc_unnamed_1204: covered_projection=MATCH($covered_part) overall=MISMATCH slice=PRINTC-UNLINKED-REF-FAMILY/C+B1"

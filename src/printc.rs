@@ -1258,18 +1258,21 @@ impl PrintC {
         // shares the exact name-resolution behaviour of the legacy path.
         let mut name = self.get_varnode_display_name(vn);
         if name.is_empty() {
-            // pushUnnamedLocation fallback (printlanguage.cc:244).
+            // pushUnnamedLocation fallback (printlanguage.cc:244): the
+            // address source is the high's name representative, so all
+            // instances of one HighVariable collapse to a single label
+            // (PRINTC-UNLINKED-REF-FAMILY slice B1).
             name = match vn.get_space() {
-                AddressSpace::Register => format!("uVar{:x}", vn.get_offset()),
+                AddressSpace::Register => format!("uVar{:x}", Self::unnamed_location_offset(vn)),
                 AddressSpace::Stack => {
-                    let off = vn.get_offset();
+                    let off = Self::unnamed_location_offset(vn);
                     if off >= 0x8000_0000_0000_0000 {
                         format!("local_{:x}", (!off).wrapping_add(1))
                     } else {
                         format!("param_stack_{:x}", off)
                     }
                 }
-                _ => format!("vn_{:x}", vn.get_offset()),
+                _ => format!("vn_{:x}", Self::unnamed_location_offset(vn)),
             };
         }
         self.mark_varnode_used(name.clone(), vn);
@@ -4350,6 +4353,49 @@ impl PrintC {
         // print-time renumbering path in the oracle.
         self.get_varnode_display_name_inner(vn)
     }
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
+    /// Address source for every print-time unnamed-location fallback label
+    /// (PRINTC-UNLINKED-REF-FAMILY slice B1). Ghidra's pushSymbolDetail has
+    /// exactly one sym==null arm: it calls
+    /// `pushUnnamedLocation(high->getNameRepresentative()->getAddr(),vn,op)`
+    /// (printlanguage.cc:244), so PrintC::pushUnnamedLocation
+    /// (printc.cc:1938-1945) prints the space name + printRaw of the HIGH
+    /// NAME REPRESENTATIVE's address — one label per HighVariable no matter
+    /// how many instances it holds, and the same label at every site that
+    /// prints any instance of it. Rugra's fallback label forms
+    /// (`uVar_`/`uVar` + hex, plus the `local_`/`param_stack_`/`vn_` ladder
+    /// arms) differ from the oracle form and are unified separately (slice
+    /// A); this helper unifies only the ADDRESS SOURCE: it returns the name
+    /// representative's offset (HighVariable::getNameRepresentative,
+    /// variable.cc:492-511 — cached scan of the instance vector under
+    /// compareName scoring, variable.cc:456-488) whenever the varnode
+    /// carries a HighVariable with at least one instance.
+    ///
+    /// No-high degradation: Ghidra never reaches the sym==null arm without
+    /// a high at print time (every explicit print-time varnode is
+    /// high-covered after set_high_level), so a varnode with no HighVariable
+    /// (or an instance-empty high) is a Rugra-only shape; the conservative
+    /// fallback keeps the instance's own offset. For Stack/Ram addrtied
+    /// varnodes the representative offset equals the instance offset by
+    /// construction (a HighVariable never merges two addrtied instances at
+    /// different addresses; compareName prefers addrtied members), so
+    /// redirecting those ladder arms through this helper is observably a
+    /// no-op and is done for uniformity with the single Ghidra path.
+    ///
+    /// Slice B1 does not change WHICH (space, offset) keys the inline
+    /// candidacy maps (def_map / inline_candidates / value_def_map): those
+    /// are keyed on the current instance, matching the per-instance inlining
+    /// decision; only the emitted label's address source moves to the
+    /// representative.
+    fn unnamed_location_offset(vn: &Varnode) -> u64 {
+        if let Some(high_arc) = vn.high.as_ref() {
+            if let Some(rep_arc) = high_arc.read().unwrap().get_name_representative() {
+                return rep_arc.read().unwrap().get_offset();
+            }
+        }
+        vn.get_offset()
+    }
+
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
@@ -4384,7 +4430,11 @@ impl PrintC {
                         return pname.clone();
                     } else {
                         let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
-                        return format!("{}_{:x}", prefix, vn.get_offset());
+                        // Unnamed-location fallback address = the high's
+                        // name representative (printlanguage.cc:244), so
+                        // instances of one HighVariable share one label
+                        // (PRINTC-UNLINKED-REF-FAMILY slice B1).
+                        return format!("{}_{:x}", prefix, Self::unnamed_location_offset(vn));
                     }
                 }
                 let effective_type = Self::vn_type_if_meaningful(vn)
@@ -4400,10 +4450,12 @@ impl PrintC {
                 if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                     return pname.clone();
                 }
-                format!("uVar{:x}", vn.get_offset())
+                // Unnamed-location fallback address = the high's name
+                // representative (printlanguage.cc:244), not this instance.
+                format!("uVar{:x}", Self::unnamed_location_offset(vn))
             }
             AddressSpace::Stack => {
-                let off = vn.get_offset();
+                let off = Self::unnamed_location_offset(vn);
                 if off >= 0x8000_0000_0000_0000 {
                     format!("local_{:x}", (!off).wrapping_add(1))
                 } else {
@@ -4411,11 +4463,14 @@ impl PrintC {
                 }
             }
             AddressSpace::Unique => {
+                // Inline candidacy stays keyed on the current instance
+                // (space, offset); only the label's address source moves to
+                // the representative.
                 let key = (AddressSpace::Unique, vn.get_offset());
                 if self.inline_candidates.contains_key(&key) {
                     return String::new();
                 }
-                format!("uVar_{:x}", vn.get_offset())
+                format!("uVar_{:x}", Self::unnamed_location_offset(vn))
             }
             _ => String::new(),
         }
@@ -5356,10 +5411,14 @@ impl PrintC {
                 return;
             }
             _ => {
-                // Fallback: emit as variable name (don't inline unknown ops)
+                // Fallback: emit as variable name (don't inline unknown ops).
+                // Unnamed-location fallback address = the high's name
+                // representative (printlanguage.cc:244), so all instances of
+                // one HighVariable print the same label
+                // (PRINTC-UNLINKED-REF-FAMILY slice B1).
                 if let Some(ref out_arc) = def_op.output {
                     let out_vn = out_arc.read().unwrap();
-                    let name = format!("uVar_{:x}", out_vn.get_offset());
+                    let name = format!("uVar_{:x}", Self::unnamed_location_offset(&out_vn));
                     self.mark_varnode_used(name.clone(), &out_vn);
                     if !self.discovery_pass {
                         self.emit.tag_variable(&name, 0);
@@ -8327,7 +8386,10 @@ impl PrintLanguage for PrintC {
                 }
             }
             AddressSpace::Stack => {
-                let off = vn.get_offset();
+                // Unnamed-location fallback address = the high's name
+                // representative (printlanguage.cc:244); for addrtied
+                // stack instances this equals the instance offset.
+                let off = Self::unnamed_location_offset(vn);
                 if off >= 0x8000_0000_0000_0000 {
                     // Negative offset (local variable)
                     format!("local_{:x}", (!off).wrapping_add(1))
@@ -8360,15 +8422,23 @@ impl PrintLanguage for PrintC {
                         return;
                     }
                 }
-                format!("uVar_{:x}", vn.get_offset())
+                // Unnamed-location fallback address = the high's name
+                // representative (printlanguage.cc:244): every instance of
+                // one HighVariable prints the same label
+                // (PRINTC-UNLINKED-REF-FAMILY slice B1). Inline candidacy
+                // above stays keyed on the current instance.
+                format!("uVar_{:x}", Self::unnamed_location_offset(vn))
             }
             AddressSpace::Ram => {
                 // Symbol/string lookups are handled at Priority 0 above.
                 // If we reach here, it's an unresolved RAM address.
-                format!("DAT_{:08x}", vn.get_offset())
+                // Representative offset == instance offset for addrtied
+                // RAM varnodes (no observable change; uniform address
+                // source per printlanguage.cc:244).
+                format!("DAT_{:08x}", Self::unnamed_location_offset(vn))
             }
             _ => {
-                format!("v_{}_{:x}", vn.get_size(), vn.get_offset())
+                format!("v_{}_{:x}", vn.get_size(), Self::unnamed_location_offset(vn))
             }
         };
 
@@ -12336,6 +12406,62 @@ mod tests {
         let fd = Funcdata::new("test_func", Address::new(0x1000), 0x100);
 
         printer.doc_function(&fd);
+    }
+
+    #[test]
+    fn test_unnamed_fallback_collapses_to_name_representative() {
+        // PRINTC-UNLINKED-REF-FAMILY slice B1 Rust-side regression (the
+        // oracle-side truth is pinned by tests/oracle/printc_unnamed_1204,
+        // case multi_instance_unnamed). printlanguage.cc:244 keys the
+        // unnamed-location fallback on the high's NAME REPRESENTATIVE
+        // address, so both instances of one merged high must print the
+        // SAME uVar_ label instead of fragmenting into per-instance
+        // offsets (rep=10000000: the earlier-written instance wins under
+        // compareName, variable.cc:456-488).
+        let emit = Box::new(EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+
+        let mut fd = Funcdata::new("b1_collapse", Address::new(0x36d0), 0);
+        let mut make_temp = |fd: &mut Funcdata, value: u64, pc: u64| {
+            let op = fd.new_op(1, Address::new(pc));
+            fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+            let input = fd.new_constant(4, value);
+            fd.op_set_input(&op, input, 0);
+            fd.new_unique_out(4, &op)
+        };
+        let ta = make_temp(&mut fd, 5, 0x10b0);
+        let tb = make_temp(&mut fd, 6, 0x10c0);
+        fd.set_high_level();
+        let ha = ta.read().unwrap().high.clone().expect("high assigned");
+        let hb = tb.read().unwrap().high.clone().expect("high assigned");
+        {
+            let mut b_guard = hb.write().unwrap();
+            ha.write().unwrap().merge(&mut b_guard, None, false);
+        }
+        // merge_internal leaves the consumed instances' vn.high pointers on
+        // the consumed high; re-point them the way vn->setHigh does inside
+        // mergeInternal (variable.cc:640-653), as the oracle fixture does.
+        let instances: Vec<std::sync::Arc<std::sync::RwLock<Varnode>>> =
+            ha.read().unwrap().instances.clone();
+        for inst in instances {
+            inst.write().unwrap().high = Some(ha.clone());
+        }
+
+        let name_a = printer.get_varnode_display_name(&ta.read().unwrap());
+        let name_b = printer.get_varnode_display_name(&tb.read().unwrap());
+        // Both sites collapse onto the representative's offset (10000000),
+        // and site b no longer carries its own instance offset (10000008).
+        assert_eq!(name_a, "uVar_10000000");
+        assert_eq!(name_b, "uVar_10000000");
+
+        // Degradation: without a high there is no representative; the
+        // fallback keeps the instance's own offset (Rugra-only shape,
+        // Ghidra never prints an explicit varnode without a high).
+        let orphan_op = fd.new_op(1, Address::new(0x10d0));
+        let orphan = fd.new_unique_out(4, &orphan_op);
+        let name_orphan = printer.get_varnode_display_name(&orphan.read().unwrap());
+        assert_ne!(name_orphan, name_a);
+        assert!(name_orphan.starts_with("uVar_"));
     }
 
     #[test]

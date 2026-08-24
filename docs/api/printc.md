@@ -332,6 +332,14 @@ printc.cc:2260/2518/2497）：
 - **快照字段**：`string_manager`/`symboltab`（doc_function 从 `fd.arch` 克隆，cpool/userops 同款）；`spaceman`（`glb->resolveConstant` 的 AddrSpaceManager，Architecture 尚无所有者 SPACE-0001——生产 None 走默认路径，fixture/driver 经 `set_space_manager` 注入）。
 - **双侧 fixture**（`tests/oracle/printc_ptrconst_1204.*` + `tools/run_printc_ptrconst_oracle.sh`）：14 渲染记录 + 5 read 计数——合法 ASCII×2（正缓存零重读）、0xAD 非法×2（负缓存零重读，hugehelp 0x7180/0x99a8/0xc1d8 的 print 侧规则）、>2048 截断（2048 字符 + TRUNCATED 标记的 2098 字符记录逐字节一致）、非只读（manager 零查询）、null、子串、上下文分辨（0x40@0x5000/0x5008 经真 AddressResolver）、`&DAT_00002100` 与 `&ram0x00002100`。manager 为声明式 GhidraStringManager/Java 契约（与 stringmanager_core_1204 同款子类）；输出 sha256 `315a0901…3585` 双侧一致。
 
+### PRINTC-UNLINKED-REF-FAMILY B1——未符号化 varnode 兜底地址源统一到 high 的 name representative（2026-08-25）
+
+- **Ghidra 语义**（printlanguage.cc:238-262 `PrintLanguage::pushSymbolDetail`）：sym==null 唯一臂调 `pushUnnamedLocation(high->getNameRepresentative()->getAddr(), vn, op)`（:244）——兜底标签的地址是 **high 名字代表的地址**（`HighVariable::getNameRepresentative`，variable.cc:492-511，compareName 评分 variable.cc:456-488：namelock > unaffected > persist > input > addrtied > protoPartial > 非 internal 空间 > written > 更早 def），不是当前实例的 offset。`PrintC::pushUnnamedLocation`（printc.cc:1938-1945）打印该地址的空間名 + printRaw。推论：**一个 HighVariable 无论持有多少实例、在多少站点被打印，都只产生一个标签**。`emitExpression` 的两侧输出臂（printc.cc:2475/2482）与 `pushVnExplicit`（printlanguage.cc:229）都汇入该单一路径。
+- **Rugra 缺陷**（A35 审计类 (a)②）：三条空间阶梯（`get_varnode_display_name_inner` 尾部、`make_atom_for_vn` RPN 原子 fallback、`push_varnode` Priority 2 阶梯）+ `emit_inline_expr` 的 `_ =>` 臂 + raw-register 名转换臂，全部以 `vn.get_offset()`（当前实例）为地址源——同一 high 的 N 个实例碎片化为 N 个 `uVar_<offset>` 标签（A35 §1 的 my_get_line/next_url/glob_word 交换标签即其 E2E 放大面）。
+- **B1 修复**：新增 `PrintC::unnamed_location_offset(vn)`（单一地址源 helper，`// Ghidra: printlanguage.cc:238`）：有 high 且有实例 → `get_name_representative().get_offset()`；否则保守退回实例自身 offset（Ghidra 打印期不会遇到无 high 的显式 varnode，纯 Rugra 形态）。上述全部兜底标签臂改经该 helper 取地址；标签形式（`uVar_`/`uVar` + hex、`local_`/`param_stack_`、`vn_`、`DAT_`）**不变**（形式统一属切片 A）。Stack/Ram addrtied 臂经 helper 后观测等价（HighVariable 从不合并不同地址的两个 addrtied 实例，且 compareName 偏好 addrtied 成员 → 代表地址 == 实例地址），走 helper 仅为与 Ghidra 单一路径同构。
+- **不改变 inline 判定键**：`inline_candidates`/`value_def_map`/`def_map` 仍按当前实例 `(space, offset)` 键控（内联决策是逐实例的），只有发射标签的地址源移到代表。
+- **验收**（`tests/oracle/printc_unnamed_1204` + `tools/run_printc_unnamed_oracle.sh`，基线重钉到 9bdd5e3 + `src/printc.rs` overlay）：`multi_instance_unnamed` site=b 行从 `uVar_10000008`（第二实例自身 offset）塌缩为 `uVar_10000000`（代表地址，与 site=a 同标签）——registered 表第 31 行重钉，碎片化轴闭合；行 7/23/30/31 的 `uVar_` 形式差异与行 2/3 的 typechar 差异保留（分别属切片 A 与类型系统域）。Rust 侧回归 `test_unnamed_fallback_collapses_to_name_representative`（合并双实例 high → 双站点同标签；无 high 孤儿 → 退回实例 offset）。
+
 ---
 
 ## 设计边界
