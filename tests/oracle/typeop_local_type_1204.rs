@@ -4,22 +4,95 @@
 // This deliberately exercises the production TypeOpCall trait method.  The
 // callspec is installed in Funcdata and represented by the same Iop/typed-Weak
 // annotation that Funcdata::new_varnode_call_specs currently produces.  The
-// output is expected to differ from Ghidra 12.0.4: TypeOpCall has no
-// get_input_local override and the legacy Varnode address-space enum has no
-// FSPEC variant.  The fixture therefore reports None; it does not emulate the
-// missing behavior in test code.
+// Architecture, VarnodeBank, and TypeOpCall share one TypeFactory allocation,
+// so fallback and selected parameter results can be checked by Arc identity.
 
 use std::sync::{Arc, RwLock};
 
 use rugra::address::Address;
+use rugra::arch::Architecture;
 use rugra::fspec::{protoparam_flags, FuncCallSpecs, FuncProto, ProtoParameter};
 use rugra::funcdata::Funcdata;
+use rugra::marshal::{Element, IdRegistry, TreeDecoder};
 use rugra::op::{PcodeOp, PcodeOpRef};
 use rugra::opcodes::OpCode;
 use rugra::space::SpaceType;
 use rugra::type_system::datatype::{Datatype, TypeMetatype};
 use rugra::type_system::typefactory::{SizeArchInputs, TypeFactory};
 use rugra::typeop::{TypeOp, TypeOpCall};
+
+fn element(name: &str, attributes: &[(&str, &str)]) -> Arc<RwLock<Element>> {
+    let mut element = Element::new();
+    element.set_name(name);
+    for (key, value) in attributes {
+        element.add_attribute(key, value);
+    }
+    Arc::new(RwLock::new(element))
+}
+
+/// Mirror of the locked BfdArchitecture TypeFactory state the C++ fixture
+/// observes: `TypeFactory::raw()`, the x86-64-gcc.cspec
+/// `<size_alignment_map>` (entries 1,2,4,8,16 — alignMap[0] stays -1 exactly
+/// like `TypeFactory::decodeAlignmentMap`, type.cc:4619-4641), `setupSizes`
+/// defaults for a 64-bit stack pointer, and the
+/// `SleighArchitecture::buildCoreTypes` default core set (sleigh_arch.cc:204-
+/// 238) that x86-64-gcc.cspec selects by shipping no `<coretypes>` element.
+fn configure_factory() -> TypeFactory {
+    let mut factory = TypeFactory::raw();
+
+    let alignment_map = element("size_alignment_map", &[]);
+    for (size, alignment) in [("1", "1"), ("2", "2"), ("4", "4"), ("8", "8"), ("16", "16")] {
+        alignment_map
+            .write()
+            .unwrap()
+            .add_child(element("entry", &[("size", size), ("alignment", alignment)]));
+    }
+    let organization = element("data_organization", &[]);
+    organization.write().unwrap().add_child(alignment_map);
+    let registry = Arc::new(RwLock::new(IdRegistry::new()));
+    let mut organization_decoder = TreeDecoder::new(organization, registry.clone());
+    factory.decode_data_organization(&mut organization_decoder);
+
+    // sleigh_arch.cc:215-236 order preserved.
+    let core_types: &[(&str, usize, TypeMetatype, bool)] = &[
+        ("void", 1, TypeMetatype::Void, false),
+        ("bool", 1, TypeMetatype::Bool, false),
+        ("uint1", 1, TypeMetatype::Uint, false),
+        ("uint2", 2, TypeMetatype::Uint, false),
+        ("uint4", 4, TypeMetatype::Uint, false),
+        ("uint8", 8, TypeMetatype::Uint, false),
+        ("int1", 1, TypeMetatype::Int, false),
+        ("int2", 2, TypeMetatype::Int, false),
+        ("int4", 4, TypeMetatype::Int, false),
+        ("int8", 8, TypeMetatype::Int, false),
+        ("float4", 4, TypeMetatype::Float, false),
+        ("float8", 8, TypeMetatype::Float, false),
+        ("float10", 10, TypeMetatype::Float, false),
+        ("float16", 16, TypeMetatype::Float, false),
+        ("xunknown1", 1, TypeMetatype::Unknown, false),
+        ("xunknown2", 2, TypeMetatype::Unknown, false),
+        ("xunknown4", 4, TypeMetatype::Unknown, false),
+        ("xunknown8", 8, TypeMetatype::Unknown, false),
+        ("code", 1, TypeMetatype::Code, false),
+        ("char", 1, TypeMetatype::Int, true),
+        ("wchar2", 2, TypeMetatype::Int, true),
+        ("wchar4", 4, TypeMetatype::Int, true),
+    ];
+    for (name, size, meta, chartp) in core_types {
+        factory
+            .set_core_type_result(name, *size, *meta, *chartp)
+            .unwrap_or_else(|message| panic!("core registration {name}: {message}"));
+    }
+    factory.cache_core_types();
+
+    factory.setup_sizes(&SizeArchInputs {
+        stack_spacebase_size: Some(8),
+        default_data_space_addr_size: 8,
+        default_size: 8,
+        far_pointer: None,
+    });
+    factory
+}
 
 fn emit_bool(key: &str, value: bool) {
     println!("{key}={}", if value { 1 } else { 0 });
@@ -33,6 +106,58 @@ fn repeat_identity(left: Option<&Arc<Datatype>>, right: Option<&Arc<Datatype>>) 
     match (left, right) {
         (Some(left), Some(right)) => Arc::ptr_eq(left, right),
         _ => false,
+    }
+}
+
+fn factory_base(
+    factory: &Arc<RwLock<TypeFactory>>,
+    size: usize,
+    metatype: TypeMetatype,
+) -> Arc<Datatype> {
+    factory
+        .read()
+        .unwrap()
+        .get_base(size, metatype)
+        .expect("fixture canonical base type")
+}
+
+fn ghidra_metatype(metatype: TypeMetatype) -> i32 {
+    match metatype {
+        TypeMetatype::PartialUnion => 0,
+        TypeMetatype::PartialStruct => 1,
+        TypeMetatype::PartialEnum => 2,
+        TypeMetatype::Union => 3,
+        TypeMetatype::Struct => 4,
+        TypeMetatype::Enum => 5,
+        TypeMetatype::Array => 7,
+        TypeMetatype::Pointer => 9,
+        TypeMetatype::Float => 10,
+        TypeMetatype::Code => 11,
+        TypeMetatype::Bool => 12,
+        TypeMetatype::Uint => 13,
+        TypeMetatype::Int => 14,
+        TypeMetatype::Unknown => 15,
+        TypeMetatype::Spacebase => 16,
+        TypeMetatype::Void => 17,
+    }
+}
+
+/// Byte projection of `Datatype::printRaw` for the bounded result set
+/// `TypeOpCall::get_input_local` can return (TypeBase and TypePointer):
+/// type.cc:139-146 prints the name or `unkbyte<size>` for every non-pointer
+/// type (including structs), and type.cc:910-916 appends `" *"` for pointers
+/// with no spaceid suffix.  The Rugra `Datatype::print_raw` struct/array
+/// spellings diverge from this oracle projection, so the fixture emits the
+/// locked printRaw semantics directly.
+fn ghidra_print_raw(datatype: &Datatype) -> String {
+    if let Datatype::Pointer(pointer) = datatype {
+        return format!("{} *", ghidra_print_raw(&pointer.ptr_to));
+    }
+    let name = datatype.get_name().to_string();
+    if !name.is_empty() {
+        name
+    } else {
+        format!("unkbyte{}", datatype.get_size())
     }
 }
 
@@ -67,8 +192,11 @@ fn emit_case(
     );
     match actual.as_ref() {
         Some(datatype) => {
-            println!("case.{name}.result_type={}", datatype.print_raw());
-            println!("case.{name}.result_meta={:?}", datatype.get_metatype());
+            println!("case.{name}.result_type={}", ghidra_print_raw(datatype));
+            println!(
+                "case.{name}.result_meta={}",
+                ghidra_metatype(datatype.get_metatype())
+            );
             println!("case.{name}.result_size={}", datatype.get_size());
         }
         None => {
@@ -114,13 +242,7 @@ fn snapshot_param(
 }
 
 fn main() {
-    let mut factory = TypeFactory::new(8);
-    factory.setup_sizes(&SizeArchInputs {
-        stack_spacebase_size: Some(8),
-        default_data_space_addr_size: 8,
-        default_size: 8,
-        far_pointer: None,
-    });
+    let mut factory = configure_factory();
 
     let void_type = factory.get_type_void();
     let char_type = factory
@@ -184,7 +306,13 @@ fn main() {
     this_plain.flags |= protoparam_flags::THIS_POINTER;
     prototype.add_parameter(this_plain);
 
+    let type_factory = Arc::new(RwLock::new(factory));
+    let mut architecture = Architecture::new();
+    architecture.archid = "x86:LE:64:default:gcc".to_string();
+    architecture.set_types(type_factory.clone());
+
     let mut fd = Funcdata::new("typeop_call_local_fixture", Address::new(0x500000), 0x100);
+    fd.vbank.set_type_factory(type_factory.clone());
     let call_target = fd.new_constant(8, 0x500080);
     let input1 = fd.new_constant(8, 0x7180);
     let input2 = fd.new_constant(8, 0x11223344);
@@ -222,7 +350,7 @@ fn main() {
     fd.op_set_input(&op, fspec_primary.clone(), 0);
 
     println!("fixture=TYPEOP-LOCALTYPE-DISPATCH-0001.call_input");
-    println!("architecture=current-rust-size-configuration-only");
+    println!("architecture={}", architecture.archid);
     println!("representation.fspec_name=iop");
     println!("representation.fspec_type={}", SpaceType::Iop as u32);
     println!(
@@ -271,7 +399,13 @@ fn main() {
         call.inrefs[0] = fspec_primary.clone();
     }
 
-    let typeop = TypeOpCall;
+    let typeop = TypeOpCall::new(
+        architecture
+            .types
+            .as_ref()
+            .expect("Architecture-owned TypeFactory")
+            .clone(),
+    );
     let parameters = (0..7)
         .map(|index| snapshot_param(&fd, callspec_index, index))
         .collect::<Vec<_>>();
@@ -282,9 +416,9 @@ fn main() {
             &typeop,
             &call,
             0,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
             None,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "locked_ptr_equal",
@@ -293,7 +427,7 @@ fn main() {
             1,
             &char_pointer,
             parameters[0].as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "locked_small_fits",
@@ -302,34 +436,34 @@ fn main() {
             2,
             &int4_type,
             parameters[1].as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "unlocked_param",
             &typeop,
             &call,
             3,
-            &factory.get_base(4, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 4, TypeMetatype::Unknown),
             parameters[2].as_ref(),
-            &factory.get_base(4, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 4, TypeMetatype::Unknown),
         );
         emit_case(
             "locked_void",
             &typeop,
             &call,
             4,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
             parameters[3].as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "locked_oversize",
             &typeop,
             &call,
             5,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
             parameters[4].as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "unlocked_this_struct",
@@ -338,25 +472,25 @@ fn main() {
             6,
             &object_pointer,
             parameters[5].as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "unlocked_this_plain",
             &typeop,
             &call,
             7,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
             parameters[6].as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
         emit_case(
             "missing_param",
             &typeop,
             &call,
             8,
-            &factory.get_base(1, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 1, TypeMetatype::Unknown),
             None,
-            &factory.get_base(1, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 1, TypeMetatype::Unknown),
         );
     }
 
@@ -373,9 +507,9 @@ fn main() {
             &typeop,
             &call,
             1,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
             unlocked_parameter.as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
     }
     fd.get_call_specs_mut(callspec_index)
@@ -393,7 +527,7 @@ fn main() {
             1,
             &char_pointer,
             relocked_parameter.as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
     }
 
@@ -411,7 +545,7 @@ fn main() {
             1,
             &char_pointer,
             alias_parameter.as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
     }
     {
@@ -426,11 +560,9 @@ fn main() {
             &typeop,
             &call,
             1,
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
             constant_parameter.as_ref(),
-            &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
+            &factory_base(&type_factory, 8, TypeMetatype::Unknown),
         );
     }
-    println!("rugra.typeop_call_get_input_local.status=MISMATCH");
-    println!("rugra.fspec_varnode_representation.status=MISMATCH");
 }

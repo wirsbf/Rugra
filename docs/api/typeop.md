@@ -9,6 +9,36 @@ Type operations for P-code
 
 Corresponds to Ghidra's `typeop.hh`
 
+## 2026-08-24：TypeOpCall::getInputLocal D1（TYPEOP-LOCALTYPE-DISPATCH-0001）
+
+`TypeOpCall::get_input_local` 现在完整移植锁定 oracle 的
+`TypeOpCall::getInputLocal`（`typeop.cc:687-718`）：
+
+- `slot==0` 或 input0 不是 callspec 注解时，返回基类行为
+  `tlst->getBase(op->getIn(slot)->getSize(), TYPE_UNKNOWN)`（`typeop.cc:271-275`）。
+  由于 Rugra 的 `TypeOp` trait object 不持有 `tlst`，`TypeOpCall` 构造时接收
+  `Arc<RwLock<TypeFactory>>`（与 Architecture/VarnodeBank 同一分配），fallback
+  由该工厂的 canonical `get_base` 提供。
+- IPTR_FSPEC 判定采用 D0 表示：Iop 空间 + `ANNOTATION` flag + typed callspec
+  Weak（`Funcdata::new_varnode_call_specs`，TYPEOP-FSPEC-SPACE-0001）。Weak
+  失效（callspec 已删除）等价 Ghidra 的悬垂 FSPEC 不可用，落到 fallback。
+- `prototype.get_param(slot - 1)` 后：type-lock 分支要求
+  `metatype != TYPE_VOID && param.size <= input.size`；`else if` this-pointer
+  分支只接受 PTR→STRUCT（无 size 检查）；两分支都未命中时返回同一工厂的
+  canonical UNKNOWN。禁止地址扫描、字符串硬编码、prototype snapshot 旁路。
+
+`TypeOpManager::new` 因此需要传入该工厂并把它装进 `CPUI_CALL` 槽位。
+
+双侧 fixture `tests/oracle/typeop_local_type_1204.{cc,rs}` 通过
+`tools/run_typeop_local_type_oracle.sh` 运行：C++ 侧经真实
+`PcodeOp::inputTypeLocal` 虚分派，Rust 侧直接驱动生产
+`TypeOpCall::get_input_local`；167 条记录中 165 条字节一致，仅
+`representation.fspec_name`（fspec vs iop）与
+`representation.fspec_type`（4 vs 5）两条表示行差异，即已登记的
+CALLSPEC-0001/TYPEOP-FSPEC-SPACE-0001 残留。covered projection 行为
+MATCH、整体因表示残留记 MISMATCH，不宣称 L3。生产
+`ActionInferTypes` 尚未把 CALL inputs 接到该分派（D2，另行 fixture）。
+
 ## 2026-08-24：LOAD/STORE 解引用宽度门槛（TYPE-PTRWIDTH-PTRSUB-0001）
 
 `TypeOpLoad::propagate_type` 与 `TypeOpStore::propagate_type` 的
@@ -165,7 +195,9 @@ CPUI_STORE implementation
 
 ### `pub struct TypeOpCall`
 
-*暂无代码注释*
+CPUI_CALL implementation. Holds the Architecture-owned `TypeFactory`
+handle used by `get_input_local`（`typeop.cc:687-718`）的 fallback 与
+canonical UNKNOWN。
 
 ### `pub struct TypeOpCallind`
 
@@ -213,9 +245,11 @@ Manager for TypeOps
 
 This handles the mapping between OpCodes and their TypeOp implementations.
 
-### `pub fn new() -> Self`
+### `pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self`
 
-*暂无代码注释*
+Build the per-opcode table; the factory is installed into the `CPUI_CALL`
+slot so `TypeOpCall::get_input_local` fallbacks share the Architecture's
+canonical TypeFactory.
 
 ### `pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp>`
 

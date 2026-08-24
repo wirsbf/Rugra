@@ -7,11 +7,12 @@ use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::printc::PrintC;
 use crate::printlanguage::PrintLanguage;
+use crate::space::AddressSpace;
+use crate::type_system::typefactory::TypeFactory;
 use crate::type_system::{Datatype, TypeMetatype};
 // use crate::varnode::Varnode;
-// use std::sync::{Arc, RwLock};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 // Forward declarations/Stubs for related modules
 pub mod stubs {
@@ -1249,7 +1250,17 @@ impl TypeOp for TypeOpBranchind {
     }
 }
 
-pub struct TypeOpCall;
+pub struct TypeOpCall {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpCall {
+    // Ghidra: typeop.cc:660 TypeOpCall::TypeOpCall
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpCall {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -1275,6 +1286,75 @@ impl TypeOp for TypeOpCall {
     // Ghidra: typeop.hh:319 TypeOpCall::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_call(op);
+    }
+
+    // Ghidra: typeop.cc:687 TypeOpCall::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        // Shared base lookup: `TypeOp::getInputLocal` (typeop.cc:271-275) is
+        // `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)` — always the
+        // same Architecture TypeFactory the constructor received.
+        let input_size = op.get_in(slot)?.read().unwrap().get_size();
+        let fallback = || {
+            self.type_factory
+                .read()
+                .unwrap()
+                .get_base(input_size, TypeMetatype::Unknown)
+        };
+
+        // Ghidra gate: `(slot==0)||(vn->getSpace()->getType()!=IPTR_FSPEC)`
+        // (typeop.cc:695). Rugra has no dedicated fspace yet: the D0
+        // representation of an IPTR_FSPEC annotation is an Iop-space
+        // ANNOTATION varnode carrying the typed callspec Weak
+        // (Funcdata::new_varnode_call_specs / Funcdata::get_call_specs_of_op,
+        // TYPEOP-FSPEC-SPACE-0001).
+        if slot == 0 {
+            return fallback();
+        }
+        let callspec = {
+            let input0 = op.get_in(0)?.read().unwrap();
+            if input0.get_space() != AddressSpace::Iop || !input0.is_annotation() {
+                None
+            } else {
+                // Ghidra: FuncCallSpecs::getFspecFromConst(vn->getAddr())
+                // (fspec.hh:1733) — typed Weak upgrade in Rugra.
+                input0.get_call_spec()
+            }
+        };
+        let Some(callspec) = callspec else {
+            return fallback();
+        };
+
+        // Get types of call input parameters.
+        // It's false to assume that the parameter symbol corresponds to the
+        // varnode in the same slot, but this is easiest until we get giant
+        // sized parameters working properly (typeop.cc:700-702).
+        let selected_type = {
+            let callspec = callspec.read().unwrap();
+            callspec
+                .prototype
+                .get_param(slot - 1)
+                .and_then(|parameter| {
+                    if parameter.is_type_locked() {
+                        let ct = &parameter.data_type;
+                        // parameter may not match varnode (typeop.cc:707)
+                        if ct.get_metatype() != TypeMetatype::Void && ct.get_size() <= input_size
+                        {
+                            return Some(ct.clone());
+                        }
+                    } else if parameter.is_this_pointer() {
+                        // Known "this" pointer is effectively typelocked even
+                        // if the prototype as a whole isn't (typeop.cc:710-714)
+                        let ct = &parameter.data_type;
+                        if let Datatype::Pointer(pointer) = ct.as_ref() {
+                            if pointer.ptr_to.get_metatype() == TypeMetatype::Struct {
+                                return Some(ct.clone());
+                            }
+                        }
+                    }
+                    None
+                })
+        };
+        selected_type.or_else(fallback)
     }
 }
 
@@ -2522,7 +2602,7 @@ impl TypeOpManager {
     //   `TypeOp::registerInstructions(inst, tlst, trans)` (typeop.cc:24),
     //   which allocates and registers one TypeOp subclass per op-code into the
     //   `inst` vector. Rugra stores them in `Self::ops` keyed by OpCode.
-    pub fn new() -> Self {
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
         let mut ops: Vec<Option<Box<dyn TypeOp>>> = Vec::new();
         ops.resize_with(256, || None); // Large enough for all opcodes
 
@@ -2602,7 +2682,7 @@ impl TypeOpManager {
         ops[OpCode::CPUI_BRANCH as usize] = Some(Box::new(TypeOpBranch));
         ops[OpCode::CPUI_CBRANCH as usize] = Some(Box::new(TypeOpCbranch));
         ops[OpCode::CPUI_BRANCHIND as usize] = Some(Box::new(TypeOpBranchind));
-        ops[OpCode::CPUI_CALL as usize] = Some(Box::new(TypeOpCall));
+        ops[OpCode::CPUI_CALL as usize] = Some(Box::new(TypeOpCall::new(type_factory)));
         ops[OpCode::CPUI_CALLIND as usize] = Some(Box::new(TypeOpCallind));
         ops[OpCode::CPUI_RETURN as usize] = Some(Box::new(TypeOpReturn));
 
