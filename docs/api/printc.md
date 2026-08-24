@@ -1286,8 +1286,8 @@ main(1)/myprogress(1)/my_get_line(1)/helpf(1)/file2string(1)/parseconfig(1)/
 getparameter(1)/glob_word(2)/glob_set(2)/glob_range(1)/next_url(1)/
 match_url(3)——全部为 `__stack_chk_fail`/`exit` 类 noreturn 调用点，
 语句级发射接通后应逐条出现（这是正向变化；差分门禁全量判定留给 root）。
-附注：`comment_sorter_iterators_1204` fixture 在 0d2252d（`get_stop_addr`
-回退从"末 op 地址"改为 `initial_range`）后 Rust 侧回归失配（内部地址
-注释落入 header_unplaced）——预存在问题，非本租约，建议 root 重登记
-（fixture 手工块无 initial_range，需 pub 化 `set_initial_range` 或恢复
-无 range 时的末 op 回退）。
+附注（已解决）：`comment_sorter_iterators_1204` 的失配根因是 fixture 构造了
+非法状态（未安装 cover）——Ghidra 的 C++ fixture 经 `setBasicBlockRange`
+显式装 cover（`block.hh:462` setInitialRange private+friend）。已按合法状态
+构造修复（`8d59b77`，`set_initial_range` pub 化一行 + fixture 同构装 cover，
+38/38 逐字节，BLOCK-STOPADDR-FIXTURE-REGRESSION-0001 关闭）。
