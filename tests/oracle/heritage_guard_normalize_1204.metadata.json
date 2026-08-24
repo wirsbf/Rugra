@@ -1,0 +1,257 @@
+{
+  "schema": 2,
+  "fixture_id": "HERITAGE-GUARD-NORMALIZE-0001",
+  "stable_function_id": "GH12-F-a4d8ea08f2f1b7c29e66",
+  "stable_function_closure": [
+    "GH12-F-e4a1e67ab24b1918a687 ghidra::Heritage::guard heritage.cc:1156",
+    "GH12-F-c78e7a85c71c62c8819d ghidra::Heritage::guardReturns heritage.cc:1652",
+    "GH12-F-1f22b96b2ea2fc5d9b4a ghidra::Heritage::guardReturnsOverlapping heritage.cc:1609",
+    "GH12-F-0d8023c0ce2f7884bd06 ghidra::Heritage::normalizeWriteSize heritage.cc:416",
+    "GH12-F-e15176a478988a0933d7 ghidra::Heritage::callOpIndirectEffect heritage.cc:358",
+    "GH12-F-a9029c941c30de8f2b55 ghidra::Heritage::normalizeReadSize heritage.cc:382",
+    "GH12-F-bb5806f2e04b0e5a4f2a ghidra::Heritage::guardCalls heritage.cc:1443",
+    "GH12-F-f8359d9fd0b17ae07cc4 ghidra::Heritage::guardStores heritage.cc:1538",
+    "GH12-F-d9c66459e8156c3b73e2 ghidra::Heritage::guardLoads heritage.cc:1570",
+    "GH12-F-63c6db0bfb5fc6ec3448 ghidra::Heritage::guardInput heritage.cc:1952",
+    "GH12-F-291975c946523e298b07 ghidra::Scope::queryProperties database.cc:1263",
+    "GH12-F-a96809031bd79be7ba7c ghidra::Funcdata::newVarnode funcdata_varnode.cc:148",
+    "GH12-F-30d21fd7f5f70a97c812 ghidra::Heritage::renameRecurse heritage.cc:2479"
+  ],
+  "overall_status": "MISMATCH: five of six projections byte-match locked Ghidra 12.0.4 through the canonical Funcdata::opHeritage boundary — the RETURN trial/input channel (live multi-RETURN + halt exclusion), the persist return-copy suffix (halt points included, persist flags through newVarnode tails and rename promotion), both normalizeWriteSize piece branches (CALL indirect-creation and SUBPIECE), and the guard retry/pass boundary (new-range guard fires once, old range inert, addrForce via fl=addrtied). The guardReturnsOverlapping projection is a REGISTERED MISMATCH: Rugra fspec.rs justified_contain_range returns justified for low-side partial overlaps where Address::justifiedContain (address.cc:131-141) returns -1, so contained_by never reaches Heritage::guardReturnsOverlapping. Whole-module behavior remains MISMATCH: loadGuard COPY insertion, indexed/ValueSet ranges, joins, revisit markers and exception transport are outside this slice.",
+  "covered_projection_status": "MATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{heritage.cc:1156-1200,1609-1693,416-507,358-370,2479-2530,database.cc:1263-1281,funcdata_varnode.cc:104-165,fspec.cc:682-719,op.hh:165-175}"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+  "compiler_spec": "synthetic prototype fixtures: guardnorm_ret8 output=register:0x0:8, guardnorm_ret4hi output=register:0x4:4, guardnorm_call empty (no effect records); extrapop=0, no symbols, high-level disabled; whole-ram persist property band [0x1000,0x2000]",
+  "analysis_options": {
+    "entrypoint": "Fresh Funcdata per case. Cases 1/2/4/5 run one canonical Funcdata::opHeritage call after structureLoops/calcForwardDominator/buildInfoList; case 3 likewise with the persist property band installed on Architecture::symboltab; case 6 runs three opHeritage calls (stack delay=1). Case 1/2 additionally install the function model via FuncProto::setModel and Funcdata::initActiveOutput. Cases 4/6 push a FuncCallSpecs bound to the exact CALL op. No Action tree or C emission.",
+    "prestate": "All observed PcodeOps are created with production newOp/opSetOpcode, fully inserted into named BlockBasic objects through opInsertEnd before order observation, and connected through opSetInput/opSetOutput/newUniqueOut. Free reads are distinct bank objects with one descendant. Halt RETURNs are marked via Funcdata::opMarkHalt (missing / badinstruction).",
+    "observation": "Seven fixed-order lines (envelope + six cases). Each case records pass/heritagePass, the function output trial projection (offset:size:slot:killedbycall in registration order), per-RETURN input counts and last-input descriptors, the op immediately preceding selected RETURNs with return_copy/halt/indirect_creation/indirect_store flag booleans, INDIRECT census per pass, and the complete integrated block/op/slot order with first-seen alias ids, storage, class, defining opcode, activeHeritage/addrForce/writeMask/persist booleans.",
+    "normalization": "Only raw object addresses are replaced by deterministic first-seen aN ids, preserving all equality/alias relations. Unique-space offsets are omitted (implementation allocation identity); size, class, flags, definitions and order remain. Raw flag words are not compared (implementation bit layouts differ); the semantic booleans are. No block, op, slot or trial order is sorted or removed."
+  },
+  "input_fingerprint": "sha256:f497393650e815b3d2c98291a6525a55d4f6ff0980c99f7fda3c8900da6d8b75",
+  "input_manifest": {
+    "schema": "rugra-heritage-guard-norm-input-v1",
+    "canonicalization": "SHA-256 over the entire input_manifest object encoded as UTF-8 by json.dumps with sort_keys=true, separators=(',',':'), ensure_ascii=false; no floats",
+    "oracle": {
+      "tag": "Ghidra_12.0.4_build",
+      "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+      "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+      "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+      "source_root": "Ghidra/Features/Decompiler/src/decompile/cpp",
+      "relevant_source_blobs": {
+        "database.cc": "c6529baea5667369341b52113283ae9ae9eea8c0",
+        "funcdata_op.cc": "14ee7313ed5386ebd6496c5395fcbe61891ad237",
+        "funcdata_varnode.cc": "fdaf94603a85356afc57d4f74e545c76c968fd6c",
+        "fspec.cc": "d87eb2f9233c7820582cd9747d434900d7cf7e87",
+        "fspec.hh": "6d1615b44923b1f2781a05641db79ee3bbdd907d",
+        "heritage.cc": "0f73153c06dd3fb69ad0521724d9029be865cc1f",
+        "heritage.hh": "804c96a5258f1b2c12a3666f528defc587ce6447",
+        "op.hh": "7e516fdf57185c74ea4efac8d9d3b324f259ade8",
+        "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2"
+      }
+    },
+    "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+    "compiler_spec": "synthetic prototype fixtures: guardnorm_ret8 output=register:0x0:8, guardnorm_ret4hi output=register:0x4:4, guardnorm_call empty (no effect records); extrapop=0, no symbols, high-level disabled; whole-ram persist property band [0x1000,0x2000]",
+    "analysis_options": {
+      "entrypoint": "Fresh Funcdata per case. Cases 1/2/4/5 run one canonical Funcdata::opHeritage call after structureLoops/calcForwardDominator/buildInfoList; case 3 likewise with the persist property band installed on Architecture::symboltab; case 6 runs three opHeritage calls (stack delay=1). Case 1/2 additionally install the function model via FuncProto::setModel and Funcdata::initActiveOutput. Cases 4/6 push a FuncCallSpecs bound to the exact CALL op. No Action tree or C emission.",
+      "prestate": "All observed PcodeOps are created with production newOp/opSetOpcode, fully inserted into named BlockBasic objects through opInsertEnd before order observation, and connected through opSetInput/opSetOutput/newUniqueOut. Free reads are distinct bank objects with one descendant. Halt RETURNs are marked via Funcdata::opMarkHalt (missing / badinstruction).",
+      "observation": "Seven fixed-order lines (envelope + six cases). Each case records pass/heritagePass, the function output trial projection (offset:size:slot:killedbycall in registration order), per-RETURN input counts and last-input descriptors, the op immediately preceding selected RETURNs with return_copy/halt/indirect_creation/indirect_store flag booleans, INDIRECT census per pass, and the complete integrated block/op/slot order with first-seen alias ids, storage, class, defining opcode, activeHeritage/addrForce/writeMask/persist booleans.",
+      "normalization": "Only raw object addresses are replaced by deterministic first-seen aN ids, preserving all equality/alias relations. Unique-space offsets are omitted (implementation allocation identity); size, class, flags, definitions and order remain. Raw flag words are not compared (implementation bit layouts differ); the semantic booleans are. No block, op, slot or trial order is sorted or removed."
+    },
+    "cases": [
+      {
+        "id": "guard_returns_trial_register",
+        "funcdata": "name=guard_returns_trial_register, ram base=0x6100, size=0x20, fresh bank/CFG/Heritage, funcp model=guardnorm_ret8, initActiveOutput",
+        "blocks_in_order": [
+          "b0",
+          "b1",
+          "b2"
+        ],
+        "edges_in_order": [
+          "b0->b1",
+          "b0->b2"
+        ],
+        "ops_creation_order": [
+          "read@ram:0x6100 INT_OR declared_inputs=2; s0=fresh free register:0x0:8; s1=constant:8:0x21; out=unique:8; inserted b0",
+          "ret0@ram:0x6101 RETURN declared_inputs=1; s0=constant:8:0x6100; inserted b0",
+          "rhalt@ram:0x6102 RETURN declared_inputs=1; s0=constant:8:0x6101; inserted b1; opMarkHalt(missing)",
+          "ret2@ram:0x6103 RETURN declared_inputs=1; s0=constant:8:0x6102; inserted b2"
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call"
+      },
+      {
+        "id": "guard_returns_overlapping_subpiece",
+        "funcdata": "name=guard_returns_overlapping_subpiece, ram base=0x6200, size=0x20, fresh bank/CFG/Heritage, funcp model=guardnorm_ret4hi, initActiveOutput",
+        "blocks_in_order": [
+          "b0",
+          "b1"
+        ],
+        "edges_in_order": [
+          "b0->b1"
+        ],
+        "ops_creation_order": [
+          "read@ram:0x6200 INT_ADD declared_inputs=2; s0=fresh free register:0x0:8; s1=constant:8:0x22; out=unique:8; inserted b0",
+          "ret0@ram:0x6201 RETURN declared_inputs=1; s0=constant:8:0x6200; inserted b0",
+          "rhalt@ram:0x6202 RETURN declared_inputs=1; s0=constant:8:0x6201; inserted b1; opMarkHalt(badinstruction)"
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call"
+      },
+      {
+        "id": "persist_return_copy_suffix",
+        "funcdata": "name=persist_return_copy_suffix, ram base=0x6300, size=0x20, fresh bank/CFG/Heritage, no active output, whole-ram persist property band [0x1000,0x2000] on Architecture::symboltab",
+        "blocks_in_order": [
+          "b0",
+          "b1"
+        ],
+        "edges_in_order": [
+          "b0->b1"
+        ],
+        "ops_creation_order": [
+          "read@ram:0x6300 INT_OR declared_inputs=2; s0=fresh free ram:0x1000:8; s1=constant:8:0x23; out=unique:8; inserted b0",
+          "ret0@ram:0x6301 RETURN declared_inputs=1; s0=constant:8:0x6300; inserted b0",
+          "rhalt@ram:0x6302 RETURN declared_inputs=1; s0=constant:8:0x6301; inserted b1; opMarkHalt(missing)"
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call"
+      },
+      {
+        "id": "normalize_write_call_piece",
+        "funcdata": "name=normalize_write_call_piece, ram base=0x6400, size=0x20, fresh bank/CFG/Heritage, one CALL with guardnorm_call spec",
+        "blocks_in_order": [
+          "b0"
+        ],
+        "edges_in_order": [],
+        "ops_creation_order": [
+          "call@ram:0x6400 CALL declared_inputs=1; s0=constant:8:0x4000; out=register:0x12:2; inserted b0; FuncCallSpecs pushed",
+          "read@ram:0x6401 INT_OR declared_inputs=2; s0=fresh free register:0x10:4; s1=constant:8:0x24; out=unique:8; inserted b0",
+          "ret0@ram:0x6402 RETURN declared_inputs=1; s0=constant:8:0x6400; inserted b0"
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call"
+      },
+      {
+        "id": "normalize_write_subpiece_piece",
+        "funcdata": "name=normalize_write_subpiece_piece, ram base=0x6500, size=0x20, fresh bank/CFG/Heritage",
+        "blocks_in_order": [
+          "b0"
+        ],
+        "edges_in_order": [],
+        "ops_creation_order": [
+          "w@ram:0x6500 INT_SUB declared_inputs=2; s0=constant:8:0x31; s1=constant:8:0x32; out=register:0x22:2; inserted b0",
+          "read@ram:0x6501 INT_OR declared_inputs=2; s0=fresh free register:0x20:4; s1=constant:8:0x25; out=unique:8; inserted b0",
+          "ret0@ram:0x6502 RETURN declared_inputs=1; s0=constant:8:0x6500; inserted b0"
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "one Funcdata::opHeritage call"
+      },
+      {
+        "id": "guard_retry_pass_boundary",
+        "funcdata": "name=guard_retry_pass_boundary, ram base=0x6600, size=0x20, fresh bank/CFG/Heritage, one CALL with guardnorm_call spec, stack range 0x20:8",
+        "blocks_in_order": [
+          "b0"
+        ],
+        "edges_in_order": [],
+        "ops_creation_order": [
+          "call@ram:0x6600 CALL declared_inputs=1; s0=constant:8:0x4000; inserted b0; FuncCallSpecs pushed",
+          "read@ram:0x6601 INT_OR declared_inputs=2; s0=fresh free stack:0x20:8; s1=constant:8:0x26; out=unique:8; inserted b0",
+          "ret0@ram:0x6602 RETURN declared_inputs=1; s0=constant:8:0x6600; inserted b0"
+        ],
+        "preparation": "structureLoops; calcForwardDominator; Heritage::buildInfoList",
+        "entrypoint": "three Funcdata::opHeritage calls (pass 0 register-only, pass 1 stack guard fires, pass 2 old range inert)"
+      }
+    ],
+    "fixtures": {
+      "tests/oracle/heritage_guard_normalize_1204.cc": {
+        "git_blob_oid": "3550acdae3a6ee1586d694d77f700c1539e257dc",
+        "sha256": "b2e889e33e780e7b474949ec08055c369dbfb12ca0e80558643cae09f9ac0156"
+      },
+      "tests/oracle/heritage_guard_normalize_1204.rs": {
+        "git_blob_oid": "df9ace37e288eb2e3dddf8ac20d2b494ba32ef6e",
+        "sha256": "46ac68b0db5624aefab0d587279ff40c02fee2c877015ab217d4c1d1142617a9"
+      }
+    },
+    "rugra": {
+      "repository_commit": "8da9295397ed9c92a9fd3f3bc549ca594fad531b",
+      "repository_tree": "44251c341cea606f02f5a44ce97e5e5023842d7c",
+      "repository_src_tree": "1d67b1038e76d65d7ce0adcde5756c6a89b15d1c",
+      "tracked_crate_tree_hash_scheme": "sha256 of rugra-heritage-guard-norm-checkpoint-crate-v2 plus sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at repository_commit",
+      "tracked_crate_tree_sha256": "e92757f2d6c278b7eb5e9ab6f9fa80f267442c5e9ada7c55c9def522ed553fe3",
+      "critical_source_blobs": {
+        "src/block.rs": "07385d1c6a52358981daf89320f840063f07a533",
+        "src/database.rs": "840e08ae133f285857b0b5ab2a19839976f96c0e",
+        "src/funcdata.rs": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "src/fspec.rs": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+        "src/heritage.rs": "7d70103535356701e6d32b1faee4037f76b5e0c6",
+        "src/op.rs": "3198215f593f49ffcd6a97ae7945493209228882",
+        "src/varnode.rs": "b35472566480e742d5703e33dd9ff1fade7ca4bb"
+      }
+    }
+  },
+  "observation_schema": {
+    "format": "One envelope plus six fixed-order UTF-8 case lines, final newline",
+    "op_order": "block creation order, then live op-list order; output then input slots ascending; op flag booleans rc/halt/ic/is",
+    "varnode_state": "first-seen alias id; storage/size; C/A/I/W/F class; defining opcode; act/force/wmask/persist booleans",
+    "trials": "function active-output trials in registration order: offset:size:slot:killedbycall",
+    "mutation": "RETURN input counts and last-input identity; op preceding each RETURN; INDIRECT census per pass; heritagePass per space; original write wmask and PIECE-linked read inputs"
+  },
+  "comparand": {
+    "rugra_base_commit": "8da9295397ed9c92a9fd3f3bc549ca594fad531b",
+    "rugra_base_tree": "44251c341cea606f02f5a44ce97e5e5023842d7c",
+    "rugra_base_src_tree": "1d67b1038e76d65d7ce0adcde5756c6a89b15d1c",
+    "cpp_fixture_sha256": "b2e889e33e780e7b474949ec08055c369dbfb12ca0e80558643cae09f9ac0156",
+    "rust_fixture_sha256": "46ac68b0db5624aefab0d587279ff40c02fee2c877015ab217d4c1d1142617a9",
+    "runner_sha256": "f2a7afc820ef259f8abbcb48b656d44dbc3448e655038c4ff36f5ed6d62a5d0f",
+    "heritage_rs_sha256": "ab741f0f0c1e9f2787a29e1a03026b798c36631c3233830e4d2b4673666bf61e",
+    "funcdata_rs_sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+    "fspec_rs_sha256": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+    "database_rs_sha256": "f3a37a8b6f4a097f073c3a39a80be2d41bf7041f856aa698c50c5bf59acb3cf9",
+    "varnode_rs_sha256": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9",
+    "op_rs_sha256": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
+    "block_rs_sha256": "73cd55452e8e4f6c89b8ee188351951290aa389d8692d376f02f684c237cd7f5",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-guard-norm-checkpoint-crate-v2 plus sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at repository_commit",
+    "rust_crate_tree_sha256": "e92757f2d6c278b7eb5e9ab6f9fa80f267442c5e9ada7c55c9def522ed553fe3",
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "cxx_target": "x86_64-pc-linux-gnu",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "platform": "Linux x86_64"
+    }
+  },
+  "build": {
+    "oracle": "Runner exports the decompiler/cpp subtree from the locked commit, rebuilds libdecomp.a privately, links the C++ fixture there.",
+    "comparand": "Runner exports the tracked crate inputs from pinned Rugra commit 8da9295, verifies the full crate tree hash, overlays only the frozen Rust fixture, serializes cargo build --offline --locked --lib with /tmp/rugra-cargo-build.lock, uses CARGO_TARGET_DIR=/tmp/rugra-target-heritage-guard-norm (symlink to ~/.cache/rugra-target-heritage-guard-norm).",
+    "private_observer": "Funcdata prefix layout shim reaches Heritage and qlst only; fixture sets the C++-ctor ScopeLocal default window on the Rust side (install_default_local_scope) so guard queryProperties sees the same input state."
+  },
+  "expected_stdout": {
+    "ghidra_stdout_sha256": "61ec9041954ea1911eada18548c43c70916bc41dcb3353039454c26df80b85be",
+    "rugra_stdout_sha256": "79be3c823ecad75d1391b44024fd8970ad24e806a0ca6675606dd016c34d80b2"
+  },
+  "expected_stdout_lines": 7,
+  "registered_divergence_lines": {
+    "case=guard_returns_overlapping_subpiece|": {
+      "ghidra_line_sha256": "1049284a0445f673569f3e98a7e40b7b57ab364048172cb17341291b1aa8b291",
+      "rugra_line_sha256": "148537cca734289293ebc33fcc5d5b2f4d0d650e21e492207ec6f7a0a3761607",
+      "reason": "fspec.rs justified_contain_range -1 polarity diverges from Address::justifiedContain (address.cc:131-141): partial overlap from the low side reads as justified containment, so FuncProto::characterize_as_output returns contains_* instead of contained_by and Heritage::guardReturnsOverlapping is unreachable in Rust; registered as FSPEC-JUSTIFIED-CONTAIN (fspec.rs lease), dual-pinned here so the upstream fix flips this to MATCH."
+    }
+  },
+  "coverage": {
+    "guard_returns_trial_register": "MATCH: whole-range output trial registered once at slot1 killedbycall; both live RETURNs take the fresh full-range input; missing-halt RETURN takes nothing; promoted input class I",
+    "persist_return_copy_suffix": "MATCH: return-copy COPY (rc=1, addrForce out, persist in/out via newVarnode tails and rename promotion) precedes BOTH RETURNs including the missing-halt point",
+    "normalize_write_call_piece": "MATCH: CALL partial write -> INDIRECT-creation piece (ic=1) at R10:2 + PIECE mid out R10:4 + whole-range unknown-effect INDIRECT from guardCalls; original R12:2 write-masked",
+    "normalize_write_subpiece_piece": "MATCH: SUBPIECE piece from full-range free read, PIECE replaces the write-list entry, original R22:2 write-masked, reader links to the PIECE output",
+    "guard_retry_pass_boundary": "MATCH: pass0 register-only (ind=0), pass1 stack guard fires once (ind=1) with fl=addrtied addrForce output, pass2 old-range inert (ind=1), heritagePass(stack)=1, pass counter 3",
+    "guard_returns_overlapping_subpiece": "MISMATCH (registered, dual-pinned): Ghidra contained_by -> SUBPIECE #4 truncation and trial at R4:4; Rugra contains path -> whole-range trial at R0:8 and input promotion. Root cause fspec.rs justified_contain_range polarity vs address.cc:131-141; fix belongs to the fspec.rs lease (FSPEC-JUSTIFIED-CONTAIN); heritage-side guardReturnsOverlapping implementation is complete and flips to MATCH once characterized correctly.",
+    "guard_fl_addrtied_holdind": "UNTESTED: fl=addrtied holdind addrForce is observed transitively in guard_retry_pass_boundary (force1 on the unknown-effect output); a direct symbol-driven addrtied/typelock projection needs ScopeLocal symbol population (varmap family)",
+    "guard_fl_scope_symbol_flags": "UNTESTED: smallest-containing-symbol flag branch of queryProperties needs ScopeLocal symbols (varmap family lease)",
+    "remaining_heritage_closure": "UNTESTED: loadGuard COPY insertion + ValueSet refinement (indexed slice), discoverIndexedStackPointers wiring on the driver, processJoins, removeRevisitedMarkers return-COPY revisit forms, BE-space pieceaddr selection, guardStores container-space STOREs, multi-descendant LowlevelError transport"
+  }
+}
