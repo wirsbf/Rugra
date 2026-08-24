@@ -1,0 +1,531 @@
+#!/usr/bin/env -S -i PATH=/usr/bin:/bin /usr/bin/bash
+set -euo pipefail
+
+# TYPEOP-LOCALBASE-DEFAULTS-0001 locked Ghidra 12.0.4/Rugra bilateral
+# runner. The Rust side is built from the frozen production commit
+# (bfba4b4, TypeOp base-class local defaults + TypeOpCall opflags) via a
+# complete git archive, never from the live crate; no source overlays are
+# applied.
+
+runner_fd_path="/proc/$$/fd/3"
+if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
+  exec 3<"${BASH_SOURCE[0]}"
+  exec /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/bash "$runner_fd_path" "$@"
+fi
+runner_source=$(/usr/bin/readlink -f "$runner_fd_path")
+if [[ -z "$runner_source" || ! -f "$runner_source" || -L "$runner_source" ]]; then
+  echo "immutable runner fd does not resolve to a regular file" >&2
+  exit 1
+fi
+repo_root=$(builtin cd "$(/usr/bin/dirname "$runner_source")/.." && builtin pwd -P)
+runner="$repo_root/tools/run_typeop_localbase_defaults_oracle.sh"
+if [[ "$runner_source" != "$runner" ]]; then
+  echo "runner fd resolved outside the expected repository path" >&2
+  exit 1
+fi
+runner_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
+runner_mode=$(/usr/bin/stat -Lc '%a' "$runner_fd_path")
+if [[ "$runner_mode" != 755 ]]; then
+  echo "immutable runner mode mismatch: expected=755 actual=$runner_mode" >&2
+  exit 1
+fi
+
+validate_only=0
+if [[ $# -eq 1 && "$1" == "--validate-only" ]]; then
+  validate_only=1
+elif [[ $# -ne 0 ]]; then
+  echo "usage: $0 [--validate-only]" >&2
+  exit 2
+fi
+
+clean_path=/usr/bin:/bin
+user_home=$(/usr/bin/getent passwd "$(/usr/bin/id -u)" | /usr/bin/awk -F: 'NR == 1 { print $6 }')
+if [[ -z "$user_home" || ! -d "$user_home" ]]; then
+  echo "could not resolve current user home" >&2
+  exit 1
+fi
+cache_parent="$user_home/.cache"
+if [[ ! -d "$cache_parent" || -L "$cache_parent" ]]; then
+  echo "cache parent is not a real directory: $cache_parent" >&2
+  exit 1
+fi
+cache_root="$cache_parent/rugra-typeop-localbase-1204"
+# Task TYPEOP-LOCALBASE-DEFAULTS-0001 dedicated Cargo dirs: every Cargo
+# invocation below is serialized on the shared build flock and uses these
+# isolated, pre-created directories (never /tmp or a shared target).
+cargo_target=/home/wirs/.cache/a15-localbase-target
+cargo_tmp=/home/wirs/.cache/a15-localbase-tmp
+/usr/bin/mkdir -p "$cargo_target" "$cargo_tmp"
+for cargo_dir in "$cargo_target" "$cargo_tmp"; do
+  if [[ ! -d "$cargo_dir" || -L "$cargo_dir" ]]; then
+    echo "dedicated Cargo directory is not a regular directory: $cargo_dir" >&2
+    exit 1
+  fi
+done
+/usr/bin/mkdir -p "$cache_root/tmp" "$cache_root/target"
+run_root=$(/usr/bin/mktemp -d "$cache_root/run.XXXXXX")
+cleanup() {
+  case "$run_root" in
+    "$cache_root"/run.??????) /usr/bin/rm -rf -- "$run_root" ;;
+    *) echo "refusing unsafe cleanup target: $run_root" >&2 ;;
+  esac
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
+host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
+host_ar_bin=$(/usr/bin/readlink -f /usr/bin/ar)
+host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
+host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
+host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
+host_cargo_bin=$(/usr/bin/readlink -f /usr/bin/cargo)
+host_rustc_bin=$(/usr/bin/readlink -f /usr/bin/rustc)
+for tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
+  "$host_make_bin" "$host_python_bin" "$host_git_bin" \
+  "$host_cargo_bin" "$host_rustc_bin"; do
+  if [[ ! -x "$tool" ]]; then
+    echo "required tool is not executable: $tool" >&2
+    exit 1
+  fi
+done
+
+oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
+oracle_tag=Ghidra_12.0.4_build
+oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
+oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
+rugra_base_commit=bfba4b4a5ca04579c38b3121a402314f8f89a2b3
+rugra_base_tree=aa425b45ffad0a3aa48bbd505c81f12d6a080285
+rugra_base_src_tree=afe38eb5b09cbd20c6654ffb04c19359be39aeba
+rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
+rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
+rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
+rugra_binary_blob=76d9343ea3add321aa4134856323663b36365807
+rugra_expected_records=102
+rugra_expected_bytes=3578
+rugra_expected_stdout_sha256=00ad71d623b8b532dbe4c4d93337625a88ba0fbfbed95eafc9bad03eda4a2c69
+rugra_expected_stderr_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+bilateral_expected_diff_exit_code=1
+bilateral_expected_diff_records=50
+bilateral_expected_diff_bytes=1615
+bilateral_expected_diff_sha256=189015822bf2e7b0eb9a1e74d5d677b2733bb3ccdad7f3eb4a014ea659fe2eec
+ghidra_root="$repo_root/ghidra"
+metadata_live="$repo_root/tests/oracle/typeop_localbase_defaults_1204.metadata.json"
+cpp_fixture_live="$repo_root/tests/oracle/typeop_localbase_defaults_1204.cc"
+rust_fixture_live="$repo_root/tests/oracle/typeop_localbase_defaults_1204.rs"
+bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
+bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_library_dir=$(/usr/bin/dirname "$bfd_library")
+
+# Snapshot model: the frozen production commit already carries the
+# TYPEOP-LOCALBASE-DEFAULTS-0001 src changes, so the overlay table is empty.
+overlay_paths=()
+archive_paths=(
+  Cargo.toml
+  Cargo.lock
+  build.rs
+  README.md
+  benches/decompile_bench.rs
+  tests/oracle/decompress_1204.rs
+  tests/oracle/funcproto_lock_1204.rs
+  examples/curl
+  sleigh_specs
+  src
+  sleigh_shim
+)
+
+for required in "$metadata_live" "$cpp_fixture_live" "$rust_fixture_live" \
+  "$bfd_include/bfd.h" "$bfd_library"; do
+  if [[ ! -f "$required" || -L "$required" ]]; then
+    echo "required input is not a regular non-symlink file: $required" >&2
+    exit 1
+  fi
+done
+for relative in "${overlay_paths[@]}"; do
+  required="$repo_root/$relative"
+  if [[ ! -f "$required" || -L "$required" ]]; then
+    echo "source overlay is not a regular non-symlink file: $required" >&2
+    exit 1
+  fi
+done
+
+actual_commit=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" rev-parse HEAD)
+tag_commit=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" rev-parse "refs/tags/$oracle_tag^{commit}")
+actual_cpp_tree=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" rev-parse \
+  "$oracle_commit:Ghidra/Features/Decompiler/src/decompile/cpp")
+actual_makefile_blob=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" rev-parse \
+  "$oracle_commit:Ghidra/Features/Decompiler/src/decompile/cpp/Makefile")
+if [[ "$actual_commit" != "$oracle_commit" || "$tag_commit" != "$oracle_commit" || \
+      "$actual_cpp_tree" != "$oracle_cpp_tree" || \
+      "$actual_makefile_blob" != "$oracle_makefile_blob" ]]; then
+  echo "locked Ghidra oracle identity mismatch" >&2
+  exit 1
+fi
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" diff --quiet -- \
+  Ghidra/Features/Decompiler/src/decompile/cpp; then
+  echo "locked Ghidra source is dirty" >&2
+  exit 1
+fi
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" diff --cached --quiet -- \
+  Ghidra/Features/Decompiler/src/decompile/cpp; then
+  echo "locked Ghidra source has staged changes" >&2
+  exit 1
+fi
+
+if [[ "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}^{commit}")" != "$rugra_base_commit" || \
+      "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}^{tree}")" != "$rugra_base_tree" || \
+      "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}:src")" != "$rugra_base_src_tree" || \
+      "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}:Cargo.toml")" != "$rugra_cargo_toml_blob" || \
+      "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}:Cargo.lock")" != "$rugra_cargo_lock_blob" || \
+      "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}:build.rs")" != "$rugra_build_rs_blob" || \
+      "$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+      "$host_git_bin" -C "$repo_root" rev-parse "${rugra_base_commit}:examples/curl")" != "$rugra_binary_blob" ]]; then
+  echo "pinned Rugra base identity mismatch" >&2
+  exit 1
+fi
+
+snapshot_root="$run_root/workspace"
+/usr/bin/mkdir -p "$snapshot_root/tests/oracle"
+/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$repo_root" archive --format=tar \
+  --output="$run_root/rugra-base.tar" "$rugra_base_commit" \
+  "${archive_paths[@]}"
+/usr/bin/tar -xf "$run_root/rugra-base.tar" -C "$snapshot_root"
+for relative in "${overlay_paths[@]}"; do
+  /usr/bin/cp "$repo_root/$relative" "$snapshot_root/$relative"
+done
+/usr/bin/cp "$cpp_fixture_live" "$snapshot_root/tests/oracle/typeop_localbase_defaults_1204.cc"
+/usr/bin/cp "$rust_fixture_live" "$snapshot_root/tests/oracle/typeop_localbase_defaults_1204.rs"
+/usr/bin/cp "$metadata_live" "$snapshot_root/tests/oracle/typeop_localbase_defaults_1204.metadata.json"
+if [[ -e "$snapshot_root/ghidra" || -L "$snapshot_root/ghidra" ]]; then
+  echo "snapshot unexpectedly already contains a ghidra path" >&2
+  exit 1
+fi
+/usr/bin/ln -s "$ghidra_root" "$snapshot_root/ghidra"
+
+verify_owned_inputs() {
+  /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S \
+    - "$repo_root" "$snapshot_root" "$metadata_live" "$cpp_fixture_live" \
+    "$rust_fixture_live" "$runner_sha" "$oracle_commit" "$oracle_tag" \
+    "$oracle_cpp_tree" "$oracle_makefile_blob" "$rugra_base_commit" \
+    "$rugra_base_tree" "$rugra_base_src_tree" "$rugra_cargo_toml_blob" \
+    "$rugra_cargo_lock_blob" "$rugra_build_rs_blob" "$rugra_binary_blob" \
+    "$rugra_expected_records" "$rugra_expected_bytes" \
+    "$rugra_expected_stdout_sha256" "$rugra_expected_stderr_sha256" \
+    "$bilateral_expected_diff_exit_code" "$bilateral_expected_diff_records" \
+    "$bilateral_expected_diff_bytes" "$bilateral_expected_diff_sha256" \
+    "$bfd_include/bfd.h" "$bfd_library" "${overlay_paths[@]}" <<'PY'
+import hashlib
+import json
+import pathlib
+import subprocess
+import sys
+
+(
+    repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw, runner_sha,
+    oracle_commit, oracle_tag, cpp_tree, makefile_blob, base_commit,
+    base_tree, base_src_tree, cargo_toml_blob, cargo_lock_blob, build_rs_blob,
+    binary_blob, rugra_records, rugra_bytes, rugra_stdout_sha,
+    rugra_stderr_sha, bilateral_diff_exit_code, bilateral_diff_records,
+    bilateral_diff_bytes, bilateral_diff_sha, bfd_header_raw, bfd_library_raw,
+    *overlay_paths,
+) = sys.argv[1:]
+repo = pathlib.Path(repo_raw).resolve()
+snapshot = pathlib.Path(snapshot_raw).resolve()
+metadata = json.loads(pathlib.Path(metadata_raw).read_text(encoding="utf-8"))
+
+def sha(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+def require(label, actual, expected):
+    if actual != expected:
+        raise SystemExit(f"{label} mismatch: expected={expected!r} actual={actual!r}")
+
+require("metadata schema", metadata["schema_version"], 1)
+require("fixture id", metadata["fixture_id"], "TYPEOP-LOCALBASE-DEFAULTS-0001")
+require("overall status", metadata["overall_status"], "MISMATCH")
+require("oracle capture status", metadata["covered_projection"]["oracle_capture"]["status"], "ORACLE_CAPTURED")
+require("Rugra execution status", metadata["covered_projection"]["rugra_execution"]["status"], "EXECUTED")
+require("bilateral status", metadata["covered_projection"]["bilateral_comparison"]["status"], "MISMATCH")
+require("Rugra build status", metadata["build"]["rugra_build_status"], "EXECUTED")
+require("Cargo invocation evidence", metadata["build"]["cargo_invoked"], True)
+require("oracle commit", metadata["oracle"]["commit"], oracle_commit)
+require("oracle tag", metadata["oracle"]["tag"], oracle_tag)
+require("oracle C++ tree", metadata["oracle"]["decompiler_cpp_tree"], cpp_tree)
+require("oracle Makefile blob", metadata["oracle"]["decompiler_makefile_blob"], makefile_blob)
+
+comparand = metadata["comparand"]
+require("base commit", comparand["rugra_base_commit"], base_commit)
+require("base tree", comparand["rugra_base_tree"], base_tree)
+require("base src tree", comparand["rugra_base_src_tree"], base_src_tree)
+require("Cargo.toml blob", comparand["cargo_toml_blob"], cargo_toml_blob)
+require("Cargo.lock blob", comparand["cargo_lock_blob"], cargo_lock_blob)
+require("build.rs blob", comparand["build_rs_blob"], build_rs_blob)
+require("binary blob", comparand["binary_blob"], binary_blob)
+require(
+    "snapshot model",
+    comparand["snapshot_model"],
+    "immutable complete crate snapshot: git archive of the frozen production commit bfba4b4 with the TypeOp base-class local defaults, local_type_factory hook, and TypeOpCall opflags; no source overlays",
+)
+require(
+    "archive paths",
+    comparand["archive_paths"],
+    [
+        "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
+        "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
+        "tests/oracle/funcproto_lock_1204.rs", "examples/curl",
+        "sleigh_specs", "src", "sleigh_shim",
+    ],
+)
+overlays = {record["path"]: record for record in comparand["overlays"]}
+require("overlay paths", set(overlays), set(overlay_paths))
+for relative in overlay_paths:
+    expected = overlays[relative]["sha256"]
+    require(f"{relative} live sha", sha(repo / relative), expected)
+    require(f"{relative} snapshot sha", sha(snapshot / relative), expected)
+for relative, expected in comparand["base_source_sha256"].items():
+    require(f"{relative} snapshot base sha", sha(snapshot / relative), expected)
+
+build_link = comparand["snapshot_build_link"]
+require("snapshot build link path", build_link["path"], "ghidra")
+link = snapshot / build_link["path"]
+if not link.is_symlink():
+    raise SystemExit("snapshot ghidra build path is not a symlink")
+require("snapshot ghidra link target", link.resolve(), (repo / "ghidra").resolve())
+
+require("C++ fixture hash", sha(cpp_raw), comparand["cpp_fixture_sha256"])
+require("Rust fixture hash", sha(rust_raw), comparand["rust_fixture_sha256"])
+require("runner hash", runner_sha, comparand["runner_sha256"])
+
+paired = metadata["paired_expected"]
+require("paired Ghidra status", paired["ghidra"]["status"], "ORACLE_CAPTURED")
+require("paired Ghidra runs", paired["ghidra"]["deterministic_runs"], metadata["locked_capture"]["deterministic_runs"])
+require("paired Ghidra records", paired["ghidra"]["records"], metadata["locked_capture"]["records"])
+require("paired Ghidra bytes", paired["ghidra"]["bytes"], metadata["locked_capture"]["bytes"])
+require("paired Ghidra stdout", paired["ghidra"]["stdout_sha256"], metadata["locked_capture"]["stdout_sha256"])
+require("paired Ghidra stderr", paired["ghidra"]["stderr_sha256"], metadata["locked_capture"]["stderr_sha256"])
+require("paired Rugra status", paired["rugra"]["status"], "EXECUTED")
+require("paired Rugra runs", paired["rugra"]["deterministic_runs"], 2)
+require("paired Rugra records", paired["rugra"]["records"], int(rugra_records))
+require("paired Rugra bytes", paired["rugra"]["bytes"], int(rugra_bytes))
+require("paired Rugra stdout", paired["rugra"]["stdout_sha256"], rugra_stdout_sha)
+require("paired Rugra stderr", paired["rugra"]["stderr_sha256"], rugra_stderr_sha)
+require("bilateral expected status", paired["bilateral"]["status"], "MISMATCH")
+require("bilateral diff exit code", paired["bilateral"]["diff_exit_code"], int(bilateral_diff_exit_code))
+require("bilateral diff records", paired["bilateral"]["records"], int(bilateral_diff_records))
+require("bilateral diff bytes", paired["bilateral"]["bytes"], int(bilateral_diff_bytes))
+require("bilateral diff hash", paired["bilateral"]["diff_sha256"], bilateral_diff_sha)
+
+asset_paths = {
+    "sla_sha256": snapshot / "sleigh_specs/x86-64.sla",
+    "pspec_sha256": snapshot / "sleigh_specs/x86-64.pspec",
+    "cspec_sha256": snapshot / "sleigh_specs/x86-64-gcc.cspec",
+    "ldefs_sha256": snapshot / "sleigh_specs/x86.ldefs",
+    "binary_sha256": snapshot / "examples/curl",
+    "bfd_header_sha256": pathlib.Path(bfd_header_raw),
+    "bfd_library_sha256": pathlib.Path(bfd_library_raw),
+}
+for key, path in asset_paths.items():
+    require(key, sha(path), metadata["assets"][key])
+
+host = metadata["host_tools"]
+require("host cxx", subprocess.check_output(["/usr/bin/g++", "--version"], text=True).splitlines()[0], host["cxx"])
+require("host cxx target", subprocess.check_output(["/usr/bin/g++", "-dumpmachine"], text=True).strip(), host["cxx_target"])
+require("host cc", subprocess.check_output(["/usr/bin/gcc", "--version"], text=True).splitlines()[0], host["cc"])
+require("host cc target", subprocess.check_output(["/usr/bin/gcc", "-dumpmachine"], text=True).strip(), host["cc_target"])
+require("host ar", subprocess.check_output(["/usr/bin/ar", "--version"], text=True).splitlines()[0], host["ar"])
+require("host make", subprocess.check_output(["/usr/bin/make", "--version"], text=True).splitlines()[0], host["make"])
+require("host python", subprocess.check_output(["/usr/bin/python3", "--version"], text=True).strip(), host["python"])
+require("host git", subprocess.check_output(["/usr/bin/git", "--version"], text=True).strip(), host["git"])
+require("host cargo", subprocess.check_output(["/usr/bin/cargo", "--version"], text=True).strip(), host["cargo"])
+require("host rustc", subprocess.check_output(["/usr/bin/rustc", "--version"], text=True).strip(), host["rustc"])
+for key, path in {
+    "cargo": "/usr/bin/cargo",
+    "rustc": "/usr/bin/rustc",
+}.items():
+    require(f"host {key} binary", sha(path), host["tool_binary_sha256"][key])
+PY
+}
+
+verify_owned_inputs
+if [[ "$validate_only" -eq 1 ]]; then
+  echo "typeop_localbase_defaults_1204 metadata/source lock validation passed"
+  exit 0
+fi
+
+/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" archive "$oracle_commit" \
+  Ghidra/Features/Decompiler/src/decompile/cpp | \
+  /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -xf - -C "$run_root"
+oracle_cpp="$run_root/Ghidra/Features/Decompiler/src/decompile/cpp"
+spec_root="$snapshot_root/sleigh_specs"
+binary="$snapshot_root/examples/curl"
+
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$cache_root/tmp" \
+  "$host_make_bin" --no-print-directory -C "$oracle_cpp" -j4 \
+  "CXX=$host_cxx_bin -std=c++11" "EXTRA=" libdecomp.a \
+  >"$run_root/make.stdout" 2>"$run_root/make.stderr"; then
+  /usr/bin/cat "$run_root/make.stdout" >&2
+  /usr/bin/cat "$run_root/make.stderr" >&2
+  exit 1
+fi
+standard_archive="$oracle_cpp/libdecomp.a"
+if [[ ! -f "$standard_archive" || -L "$standard_archive" ]]; then
+  echo "locked Makefile did not produce a regular libdecomp.a" >&2
+  exit 1
+fi
+
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$cache_root/tmp" \
+  "$host_cxx_bin" -std=c++11 -O2 -Wall -Wno-sign-compare -m64 \
+  -I"$bfd_include" -I"$oracle_cpp" \
+  "$snapshot_root/tests/oracle/typeop_localbase_defaults_1204.cc" \
+  "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
+  "$oracle_cpp/inject_sleigh.cc" "$oracle_cpp/bfd_arch.cc" \
+  "$oracle_cpp/loadimage_bfd.cc" "$standard_archive" \
+  "$bfd_library" -lz -o "$run_root/typeop_localbase_defaults_1204_cpp" \
+  >"$run_root/cxx.stdout" 2>"$run_root/cxx.stderr"; then
+  /usr/bin/cat "$run_root/cxx.stdout" >&2
+  /usr/bin/cat "$run_root/cxx.stderr" >&2
+  exit 1
+fi
+
+if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock \
+  /usr/bin/env -i PATH="$clean_path" HOME="$user_home" LC_ALL=C \
+  CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$cargo_target" \
+  TMPDIR="$cargo_tmp" "$host_cargo_bin" build --offline --locked --quiet \
+  --manifest-path "$snapshot_root/Cargo.toml" --lib \
+  >"$run_root/cargo.stdout" 2>"$run_root/cargo.stderr"; then
+  /usr/bin/cat "$run_root/cargo.stdout" >&2
+  /usr/bin/cat "$run_root/cargo.stderr" >&2
+  exit 1
+fi
+if ! /usr/bin/env -i PATH="$clean_path" HOME="$user_home" LC_ALL=C \
+  TMPDIR="$cargo_tmp" "$host_rustc_bin" --edition=2021 -C opt-level=0 \
+  "$snapshot_root/tests/oracle/typeop_localbase_defaults_1204.rs" \
+  --extern rugra="$cargo_target/debug/librugra.rlib" \
+  -L dependency="$cargo_target/debug/deps" \
+  -o "$run_root/typeop_localbase_defaults_1204_rust" \
+  >"$run_root/rustc.stdout" 2>"$run_root/rustc.stderr"; then
+  /usr/bin/cat "$run_root/rustc.stdout" >&2
+  /usr/bin/cat "$run_root/rustc.stderr" >&2
+  exit 1
+fi
+
+for run in 1 2; do
+  /usr/bin/env -i PATH="$clean_path" LC_ALL=C LD_LIBRARY_PATH="$bfd_library_dir" \
+    "$run_root/typeop_localbase_defaults_1204_cpp" "$spec_root" "$binary" \
+    >"$run_root/ghidra.$run.stdout" 2>"$run_root/ghidra.$run.stderr"
+  /usr/bin/env -i PATH="$clean_path" LC_ALL=C \
+    "$run_root/typeop_localbase_defaults_1204_rust" \
+    >"$run_root/rugra.$run.stdout" 2>"$run_root/rugra.$run.stderr"
+done
+if ! /usr/bin/cmp -s "$run_root/ghidra.1.stdout" "$run_root/ghidra.2.stdout" || \
+   ! /usr/bin/cmp -s "$run_root/ghidra.1.stderr" "$run_root/ghidra.2.stderr"; then
+  echo "locked Ghidra repeated runs diverged" >&2
+  exit 1
+fi
+if ! /usr/bin/cmp -s "$run_root/rugra.1.stdout" "$run_root/rugra.2.stdout" || \
+   ! /usr/bin/cmp -s "$run_root/rugra.1.stderr" "$run_root/rugra.2.stderr"; then
+  echo "locked Rugra repeated runs diverged" >&2
+  exit 1
+fi
+
+set +e
+/usr/bin/diff -u --label ghidra --label rugra \
+  "$run_root/ghidra.1.stdout" "$run_root/rugra.1.stdout" \
+  >"$run_root/bilateral.diff"
+diff_rc=$?
+set -e
+if [[ "$diff_rc" -gt 1 ]]; then
+  echo "bilateral diff command failed with status $diff_rc" >&2
+  exit 1
+fi
+if [[ "$diff_rc" -ne 0 ]]; then
+  /usr/bin/cat "$run_root/bilateral.diff" >&2
+fi
+
+/usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S \
+  - "$metadata_live" "$run_root/ghidra.1.stdout" \
+  "$run_root/ghidra.1.stderr" "$run_root/rugra.1.stdout" \
+  "$run_root/rugra.1.stderr" "$run_root/bilateral.diff" "$diff_rc" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+ghidra_stdout = pathlib.Path(sys.argv[2]).read_bytes()
+ghidra_stderr = pathlib.Path(sys.argv[3]).read_bytes()
+rugra_stdout = pathlib.Path(sys.argv[4]).read_bytes()
+rugra_stderr = pathlib.Path(sys.argv[5]).read_bytes()
+raw_diff = pathlib.Path(sys.argv[6]).read_bytes()
+diff_rc = int(sys.argv[7])
+capture = metadata["locked_capture"]
+paired = metadata["paired_expected"]
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+def require(label, actual, expected):
+    if actual != expected:
+        raise SystemExit(f"{label} mismatch: expected={expected!r} actual={actual!r}")
+
+if not ghidra_stdout.endswith(b"\n") or not rugra_stdout.endswith(b"\n"):
+    raise SystemExit("bilateral stdout lacks a final newline")
+require("oracle records", len(ghidra_stdout.decode("utf-8").splitlines()), capture["records"])
+require("oracle bytes", len(ghidra_stdout), capture["bytes"])
+require("oracle stdout hash", sha(ghidra_stdout), capture["stdout_sha256"])
+require("oracle stderr hash", sha(ghidra_stderr), capture["stderr_sha256"])
+require("Rugra records", len(rugra_stdout.decode("utf-8").splitlines()), paired["rugra"]["records"])
+require("Rugra bytes", len(rugra_stdout), paired["rugra"]["bytes"])
+require("Rugra stdout hash", sha(rugra_stdout), paired["rugra"]["stdout_sha256"])
+require("Rugra stderr hash", sha(rugra_stderr), paired["rugra"]["stderr_sha256"])
+require("bilateral diff status", diff_rc, paired["bilateral"]["diff_exit_code"])
+require("bilateral diff records", len(raw_diff.decode("utf-8").splitlines()), paired["bilateral"]["records"])
+require("bilateral diff bytes", len(raw_diff), paired["bilateral"]["bytes"])
+require("bilateral diff hash", sha(raw_diff), paired["bilateral"]["diff_sha256"])
+if ghidra_stderr:
+    raise SystemExit("locked oracle unexpectedly wrote stderr")
+if rugra_stderr:
+    raise SystemExit("Rugra fixture unexpectedly wrote stderr")
+
+status = "MATCH" if diff_rc == 0 else "MISMATCH"
+require("bilateral result status", status, paired["bilateral"]["status"])
+print(
+    f"oracle_records={len(ghidra_stdout.decode('utf-8').splitlines())} "
+    f"oracle_bytes={len(ghidra_stdout)} "
+    f"oracle_stdout_sha256={sha(ghidra_stdout)}"
+)
+print(f"oracle_stderr_sha256={sha(ghidra_stderr)}")
+print(
+    f"rugra_records={len(rugra_stdout.decode('utf-8').splitlines())} "
+    f"rugra_bytes={len(rugra_stdout)} "
+    f"rugra_stdout_sha256={sha(rugra_stdout)}"
+)
+print(f"rugra_stderr_sha256={sha(rugra_stderr)}")
+print(
+    f"bilateral_diff_records={len(raw_diff.decode('utf-8').splitlines())} "
+    f"bilateral_diff_bytes={len(raw_diff)} "
+    f"bilateral_diff_sha256={sha(raw_diff)} bilateral_status={status}"
+)
+print(
+    "typeop_localbase_defaults_1204: oracle_status=ORACLE_CAPTURED "
+    f"rugra_status=EXECUTED bilateral_status={status} overall_status=MISMATCH"
+)
+PY
+
+verify_owned_inputs

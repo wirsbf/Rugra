@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TYPEOP-LOCALBASE-DEFAULTS-0001",
+  "title": "TypeOp base-class getOutputLocal/getInputLocal defaults, TypeOpFunc metatype derivation, and TypeOpCall constructor opflags",
+  "overall_status": "MISMATCH",
+  "status_note": "Production commit bfba4b4 aligns the TypeOp trait local-type defaults with the Ghidra base class (getBase(size,TYPE_UNKNOWN), typeop.cc:261-275) through the shared base_local_type helper plus the local_type_factory provider hook, injects the factory into the four no-override opcodes (BRANCH/BRANCHIND/SEGMENTOP/CAST), and sets TypeOpCall::get_flags to the typeop.cc:663 opflags. The locked Ghidra 12.0.4 oracle and the frozen Rugra snapshot were each executed twice with deterministic stdout/stderr. Ghidra produced 102 records / 3560 bytes; Rugra produced 102 records / 3578 bytes. The covered projection (flags.call 8 lines, BRANCH/BRANCHIND/SEGMENTOP/CAST base defaults including the 3-byte unkbyte3 findAdd path, CALL no-FSPEC input/output through the TypeOp base defaults, and the CALL locked-parameter D1 regression) is byte-identical. The byte comparison is MISMATCH with 50 diff records / 1615 bytes: exactly 16 differing lines, all inside the four ZEXT/SEXT cases, where the oracle derives getBase(size,metain/metaout) (uint1/uint4/char/int4) while the current Rugra macro override returns the opposite varnode's v_type (xunknown4/xunknown1, sizes swapped) — the registered PRINTC-CAST-OPNAME-0001 M1 macro gap this fixture deliberately exposes as bilateral oracle evidence. Overall remains MISMATCH and this evidence cannot support L3.",
+  "covered_projection": {
+    "status": "MISMATCH",
+    "name": "TypeOp base defaults and TypeOpCall opflags through the real dispatch tables",
+    "oracle_capture": {
+      "status": "ORACLE_CAPTURED",
+      "note": "The unmodified Architecture-owned TypeOp instances are reached through PcodeOp::inputTypeLocal/outputTypeLocal; TypeOpCall::getFlags is read off a directly constructed instance."
+    },
+    "rugra_source_observation": {
+      "status": "MATCH",
+      "note": "src/typeop.rs base_local_type (typeop.cc:264/:274), TypeOp::local_type_factory provider (base tlst field, typeop.cc:233-242), trait defaults get_output_local/get_input_local (typeop.cc:261-275), TypeOpCall::get_flags (typeop.cc:663 opflags 0x20020814), and factory injection into TypeOpBranch/Branchind/Segment/Cast (typeop.cc:583/:646/:2209/:2390 constructor signatures)."
+    },
+    "rugra_execution": {
+      "status": "EXECUTED",
+      "note": "The complete frozen crate snapshot (git archive of bfba4b4) was built with pinned Cargo/rustc and the Rust fixture executed twice identically through the production TypeOpManager dispatch table: 102 records, 3578 stdout bytes, empty stderr."
+    },
+    "bilateral_comparison": {
+      "status": "MISMATCH",
+      "note": "The locked Ghidra and Rugra stdout streams were byte-diffed with exit code 1; the only differing lines are the 16 ZEXT/SEXT result/meta/size/meta_identity lines inside the four metatype-derivation cases (PRINTC-CAST-OPNAME-0001 M1). All flags lines, all base-default cases, both CALL no-FSPEC cases, and the CALL locked-parameter case are byte-identical."
+    }
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "typeop_cc_blob": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
+    "typeop_hh_blob": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
+    "op_hh_blob": "7e516fdf57185c74ea4efac8d9d3b324f259ade8",
+    "typeop_cc_sha256": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
+    "typeop_hh_sha256": "abbc9432b150636063b06a0ace54518a6e6d883604e0f45e446a5293c33de931",
+    "op_hh_sha256": "8723d7548edf6a643bc8a6891c64ea6e7dbfb137d0d48d8c4ac868d8fe2f3a6d",
+    "entrypoints": [
+      "TypeOp::getOutputLocal(const PcodeOp *) const (typeop.cc:261-265)",
+      "TypeOp::getInputLocal(const PcodeOp *,int4) const (typeop.cc:271-275)",
+      "TypeOpCall::TypeOpCall ctor opflags (typeop.cc:660-665, flags line :663)",
+      "PcodeOp::outputTypeLocal/inputTypeLocal virtual dispatch (op.hh:250-252)"
+    ]
+  },
+  "architecture": "x86:LE:64:default:gcc",
+  "compiler_spec": "x86-64-gcc.cspec",
+  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata, one op per opcode under observation, and the Architecture-owned TypeFactory/TypeOp table",
+  "comparand": {
+    "rugra_base_commit": "bfba4b4a5ca04579c38b3121a402314f8f89a2b3",
+    "rugra_base_tree": "aa425b45ffad0a3aa48bbd505c81f12d6a080285",
+    "rugra_base_src_tree": "afe38eb5b09cbd20c6654ffb04c19359be39aeba",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "binary_blob": "76d9343ea3add321aa4134856323663b36365807",
+    "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit bfba4b4 with the TypeOp base-class local defaults, local_type_factory hook, and TypeOpCall opflags; no source overlays",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "examples/curl",
+      "sleigh_specs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [],
+    "base_source_sha256": {
+      "src/typeop.rs": "470f7d8793250226af3bbc20d5f617e58af89106f3a47a56e5984c43a1d0c148",
+      "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+      "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+      "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9",
+      "src/op.rs": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
+      "src/space.rs": "61496b8357ac532b1d97596b0e33a607eaf6de09b69914d0c44851677cc1f2ec"
+    },
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
+      "purpose": "build.rs C++ shim header discovery; the executable oracle is built from the separately archived locked commit"
+    },
+    "cpp_fixture_sha256": "370c4c80c17a4988bb6f056c4b5bb1bc14b04e1f056145c4813e5fac1131860f",
+    "rust_fixture_sha256": "1d80f0a81687ec2bc78c4f40c054eda408bb081097e7ca662081fdb377e8be24",
+    "runner_sha256": "53fd0eb89c3afda8fa391ac910041f3ae2d540d3fe953731736efa3ca21b3d3c"
+  },
+  "assets": {
+    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  },
+  "host_tools": {
+    "cxx": "g++ (GCC) 16.2.1 20260810",
+    "cxx_target": "x86_64-pc-linux-gnu",
+    "cc": "gcc (GCC) 16.2.1 20260810",
+    "cc_target": "x86_64-pc-linux-gnu",
+    "ar": "GNU ar (GNU Binutils) 2.47",
+    "make": "GNU Make 4.4.1",
+    "python": "Python 3.14.7",
+    "git": "git version 2.55.0",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "tool_binary_sha256": {
+      "cxx": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9",
+      "cc": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+      "ar": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4",
+      "make": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40",
+      "python": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c",
+      "git": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad",
+      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+    }
+  },
+  "build": {
+    "oracle_language": "C++11",
+    "make_target": "libdecomp.a",
+    "make_jobs": 4,
+    "fixture_flags": [
+      "-std=c++11",
+      "-O2",
+      "-Wall",
+      "-Wno-sign-compare",
+      "-m64"
+    ],
+    "rugra_build_status": "EXECUTED",
+    "cargo_invoked": true
+  },
+  "input_model": {
+    "opcode_observations": [
+      "CPUI_BRANCH: 1 coderef input, base default on input slot 0",
+      "CPUI_BRANCHIND: 1 constant input (4 bytes), base default on input slot 0",
+      "CPUI_SEGMENTOP: 3 inputs (spaceid 4B, offset 3B non-standard, base 8B) + 3-byte output, base defaults on input slot 1 and the output",
+      "CPUI_CAST: 1 constant input (4 bytes) + 4-byte output, base defaults on both sides",
+      "CPUI_INT_ZEXT: 1-byte constant input + 4-byte output, TypeOpFunc metain=TYPE_UINT/metaout=TYPE_UINT derivation",
+      "CPUI_INT_SEXT: 1-byte constant input + 4-byte output, TypeOpFunc metain=TYPE_INT/metaout=TYPE_INT derivation",
+      "CPUI_CALL (no FSPEC): 1 coderef input + 8-byte output, TypeOpCall explicit fallbacks resolve through the TypeOp base defaults (typeop.cc:696/:729)",
+      "CPUI_CALL (locked parameter): FSPEC annotation input + one 8-byte input with a typelocked char* parameter (D1 regression)"
+    ],
+    "representation": {
+      "ghidra": "Every observation goes through PcodeOp::inputTypeLocal/outputTypeLocal virtual dispatch on Architecture-owned TypeOp instances; TypeOpCall::getFlags is read from a directly constructed instance with the Architecture TypeFactory.",
+      "rugra": "Every observation goes through the production TypeOpManager table constructed with the same TypeFactory allocation the fixture Architecture uses; flags are read off the registered CPUI_CALL entry.",
+      "varnote": "Rust new_varnode fixtures use the legacy spaceless Address representation for output varnodes; the base defaults read only the varnode size, and both sides report operand_size explicitly."
+    }
+  },
+  "oracle_expected": {
+    "branch_input0": "xunknown1 base fallback on the 1-byte coderef",
+    "branchind_input0": "xunknown4 base fallback",
+    "segment_input1_size3": "unkbyte3 — TypeFactory::getBase findAdd path for a non-core size",
+    "segment_output_size3": "unkbyte3 output base fallback",
+    "cast_input0": "xunknown4 base fallback",
+    "cast_output": "xunknown4 base fallback",
+    "zext_input0": "uint1 via TypeOpFunc metain=TYPE_UINT (meta_identity=1, base_identity=0)",
+    "zext_output": "uint4 via metaout=TYPE_UINT",
+    "sext_input0": "char — getBase(1,TYPE_INT) resolves the char-based int1 core type (meta=14, meta_identity=1)",
+    "sext_output": "int4 via metaout=TYPE_INT",
+    "call_input0_nofspec": "xunknown1 — TypeOpCall slot-0 fallback through the TypeOp base default",
+    "call_output_nofspec": "xunknown8 — TypeOpCall output fallback through the TypeOp base default",
+    "call_input1_locked": "char * locked parameter type (param_identity=1, base_identity=0)",
+    "flags_call": "0x20020814 decimal 537004052 = special|call|has_callspec|coderef|nocollapse, commutative clear"
+  },
+  "rugra_source_observation": {
+    "typeop_default": "src/typeop.rs base_local_type + TypeOp::local_type_factory provider (typeop.cc:233-242/:264/:274); trait defaults now return getBase(size,TYPE_UNKNOWN) when the impl holds the factory",
+    "factory_injection": "TypeOpBranch/Branchind/Segment/Cast hold Arc<RwLock<TypeFactory>> mirroring the Ghidra constructor signatures (typeop.cc:583/:646/:2209/:2390); TypeOpManager::new installs the factory into BRANCH/BRANCHIND/SEGMENTOP/CAST/CALL slots",
+    "typeop_call_flags": "src/typeop.rs:1363 TypeOpCall::get_flags returns the typeop.cc:663 opflags bit combination (0x20020814), bit-identical to op::opcode_flags(CPUI_CALL)",
+    "typeop_call_input": "src/typeop.rs:1393 TypeOpCall::get_input_local fallback now shares base_local_type; guard order unchanged",
+    "macro_family_residual": "binary_op!/unary_op!/functional_*_op! overrides still read the opposite varnode's v_type instead of getBase(size,metain/metaout); the four ZEXT/SEXT cases expose this bilaterally (Rust returns xunknown4/xunknown1 with sizes swapped) and bind to PRINTC-CAST-OPNAME-0001 M1, whose oracle evidence these lines now constitute",
+    "observed_execution": "Both deterministic Rugra runs reproduced the oracle byte-for-byte on all flags lines, all BRANCH/BRANCHIND/SEGMENTOP/CAST base-default lines (including unkbyte3), both CALL no-FSPEC cases, and the CALL locked-parameter case (param_identity=1, char * spelling after the Pointer projection fix)."
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "Ghidra base defaults are const methods reading only op->getOut()/getIn(slot) sizes and returning the canonical TypeFactory-owned Datatype* (repeated calls preserve pointer identity, verified by repeat_identity on both sides). TypeOpCall::getFlags returns the constructor opflags field (typeop.hh:72). Rugra returns canonical Arc clones from the same factory allocation via the local_type_factory provider; flags are a pure bit combination of op::pcodeop_flags constants.",
+    "loop_bounds_and_order": "No loops anywhere in the observed functions: the defaults are single expressions, the ZEXT/SEXT derivation is a single getBase(size,meta) per side, and TypeOpCall::getInputLocal keeps its fixed guard order (slot 0 / non-annotation fallback, param slot-1, locked branch before this-pointer branch).",
+    "counters_and_accumulators": "No counters. The only size source is the queried varnode itself (output: getOut()->getSize(); input: getIn(slot)->getSize()); the fixture pins 1/3/4/8-byte operands including the non-core 3-byte findAdd path.",
+    "sort_and_comparison_keys": "No sorting. Decisive keys: the (size, TYPE_UNKNOWN) canonical intern for the defaults, (size, TYPE_UINT/TYPE_INT) for the TypeOpFunc derivation (meta_identity), the opflags bit set for CALL, and canonical pointer/Arc identity for every result and repeat observation."
+  },
+  "coverage": {
+    "oracle_cases": 14,
+    "oracle_records": 102,
+    "observations": [
+      "TypeOpCall opflags hex/decimal plus five per-bit lines and commutative clear",
+      "BRANCH coderef input base default",
+      "BRANCHIND constant input base default",
+      "SEGMENTOP non-standard 3-byte input and output base defaults (unkbyte3 findAdd path)",
+      "CAST input and output base defaults",
+      "ZEXT input/output metain/metaout=UINT derivation with meta vs unknown identity discrimination",
+      "SEXT input/output metain/metaout=INT derivation, including getBase(1,TYPE_INT) resolving the char core type",
+      "CALL slot 0 without FSPEC through the TypeOpCall slot-0 fallback",
+      "CALL output without FSPEC through the TypeOpCall output fallback (new trait default path)",
+      "CALL locked parameter returning char* with param identity (D1 regression)",
+      "canonical result, base/meta, and repeat pointer identities on both sides"
+    ],
+    "untested": [
+      "CBRANCH/CALLIND/RETURN/CPOOLREF/NEW/CALLOTHER get*Local overrides (Ghidra has them, Rugra ports not yet written; their Rust impls intentionally hold no factory)",
+      "TypeOpCall::getOutputLocal output-locked branch (typeop.cc:731-735; the no-FSPEC/unlocked path is covered here, the locked path needs a callspec fixture — D2 slice)",
+      "selectJavaOperators metatype retuning (typeop.cc:114-137)",
+      "s > max_basetype_size array-of-unkbyte path in TypeFactory::getBase"
+    ]
+  },
+  "locked_capture": {
+    "deterministic_runs": 2,
+    "records": 102,
+    "bytes": 3560,
+    "stdout_sha256": "2d4f220a4acbe74ec780a03e3555f4eff4976bec4138389a30ad6320cc954046",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "paired_expected": {
+    "ghidra": {
+      "status": "ORACLE_CAPTURED",
+      "deterministic_runs": 2,
+      "records": 102,
+      "bytes": 3560,
+      "stdout_sha256": "2d4f220a4acbe74ec780a03e3555f4eff4976bec4138389a30ad6320cc954046",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "rugra": {
+      "status": "EXECUTED",
+      "deterministic_runs": 2,
+      "records": 102,
+      "bytes": 3578,
+      "stdout_sha256": "00ad71d623b8b532dbe4c4d93337625a88ba0fbfbed95eafc9bad03eda4a2c69",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "bilateral": {
+      "status": "MISMATCH",
+      "diff_exit_code": 1,
+      "records": 50,
+      "bytes": 1615,
+      "diff_sha256": "189015822bf2e7b0eb9a1e74d5d677b2733bb3ccdad7f3eb4a014ea659fe2eec",
+      "differing_lines": [
+        "case.zext_input0.result_type=uint1 vs xunknown4; .result_meta=13 vs 15; .result_size=1 vs 4; .meta_identity=1 vs 0",
+        "case.zext_output.result_type=uint4 vs xunknown1; .result_meta=13 vs 15; .result_size=4 vs 1; .meta_identity=1 vs 0",
+        "case.sext_input0.result_type=char vs xunknown4; .result_meta=14 vs 15; .result_size=1 vs 4; .meta_identity=1 vs 0",
+        "case.sext_output.result_type=int4 vs xunknown1; .result_meta=14 vs 15; .result_size=4 vs 1; .meta_identity=1 vs 0"
+      ]
+    }
+  },
+  "residuals": [
+    {
+      "id": "PRINTC-CAST-OPNAME-0001",
+      "status": "MISMATCH",
+      "note": "M1 macro gap kept open by design: the binary/unary/functional macro overrides read the opposite varnode's v_type instead of getBase(size,metain/metaout). The 16 differing ZEXT/SEXT lines are the bilateral oracle evidence for M1; after M1 ports the metatype tables these lines must re-pin to MATCH."
+    },
+    {
+      "id": "TYPEOP-LOCALBASE-DEFAULTS-0001",
+      "status": "MATCH",
+      "note": "Both R3 review gaps closed and bilaterally verified: trait defaults now perform the Ghidra base-class getBase(size,TYPE_UNKNOWN) lookup through the shared helper and factory provider hook, and TypeOpCall::get_flags returns the typeop.cc:663 opflags. CBRANCH/CALLIND/RETURN/CPOOLREF/NEW/CALLOTHER overrides and the CALL output-locked branch remain unported (kept as None / no factory, no false alignment)."
+    }
+  ]
+}
