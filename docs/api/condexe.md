@@ -1,5 +1,56 @@
 # `condexe.rs` API Reference
 
+## 2026-08-24（CONDEXE-SUCCESS-STATE-0001）：成功通道对齐（per-space heritage / live 遍历 / numhits→count / RETURN 空间保持）
+
+Action 侧四处缺陷修复（condexe.cc:478-503 + cc:23-37 + cc:392 + cc:343）：
+
+1. **per-space buildHeritageArray（cc:23-37）**：原实现硬编码 `vec![true; 4]`
+   （"所有空间已 heritage"近似）。现按 oracle 逐语句移植：
+   `resize(numSpaces,false)` 起全 false，逐空间 `is_heritaged()` 过滤
+   （cc:33，先于 numHeritagePasses 查询，oracle 的 non-heritaged throw
+   不可达）+ `numHeritagePasses(spc) > 0` 置位（cc:34 =
+   `pass - info->delay`，heritage.cc:2779-2788，经 `fd.heritage`
+   直读——funcdata.hh:237 内联委派）。空间枚举 =
+   `Heritage::build_info_list` 的固定 enum 表（heritage.rs:660，
+   Rugra 对 `glb->numSpaces()` 的现行替身；Overlay/Other 在
+   AddrSpaceManager 可从 Funcdata 到达前不可枚举，SPACE-0001），
+   索引为表内位置（`AddrSpace::getIndex` 替身）。
+2. **cc:392 真实接线**：`test_removability` 的无后继 Varnode 门
+   `heritageyes[vn->getSpace()->getIndex()]` 原被忽略恒真；现缺
+   heritage pass 的空间返回 false（拒绝移动）。列表外空间（Overlay/
+   Other）读作 not heritaged。
+3. **live BlockGraph 遍历（cc:487-500）**：原实现每轮快照 block 列表 +
+   `sin==2&&sout==2&&is_cb` 预过滤 + 每轮重建 ConditionalExecution。
+   现按 oracle：apply 全程**一个** ConditionalExecution（buildHeritageArray
+   每 apply 恰缓存一次，cc:487），`bblocks.getSize()/getBlock(i)` 每次
+   迭代**活读**（cc:488 引用语义）——execute 折叠后 iblock 被移除、列表
+   左移，紧跟其后的块本轮被跳过（游标已过）、下一轮才重试；预过滤删除
+   （所有检查在 trial/verify 内，cc:494）。
+4. **numhits→Action count（cc:496/501）**：`ActionConditionalExe` 增加
+   `count: i32` 字段，apply 末 `self.count += numhits`（统计专用，返回值
+   仍 0），经 `take_count_delta` 外化（action.rs perform 收割，与
+   coreaction.rs multicse/restructure_varnote 同模式）。Err 上抛路径
+   跳过累加，同 oracle throw。
+5. **space-preserving RETURN 替换（cc:343）**：doReplacement RETURN 腿的
+   COPY 输出原用 `new_varnode_out`（pin Register 空间，丢失原空间）；
+   现与 pullbackOp 共用 `new_varnode_out_with_space`（funcdata_varnode.cc:
+   104-127 逐语句：createDef→setOutput→assignHigh→laned→properties），
+   保留 RETURN 存储地址**与其地址空间**（unique/register 等）。
+
+**fixture**：`tests/oracle/condexe_success_state_1204`（.cc/.rs/.metadata.json）
++ `tools/run_condexe_success_state_oracle.sh`（pin-base schema2）。12 记录：
+S1p0..p3 逐空间数组（ram/register/unique pass1 翻转、stack delay=1 pass2
+翻转）、S2 三钻石链（iblock 创建序 3/4/5 连续——活索引遍历 A 折叠后 B 被
+跳过、round 2 在 C 之后补折，`multi` 记录按新 MULTIEQUAL 输出 unique 偏移
+排序的父块序 b8,b18,b13 判别快照实现（快照给 b8,b13,b18）、count=3、
+reciprocal pre→post 重连）、S3 RETURN 腿（ret_in1==copy_out==unique:0x2000:4、
+copy_in0=const:0x5、posta_ops=COPY,RETURN）、S4p0/p1 cc:392 门（pass=0
+拒绝 count=0、pass=1 放行 count=1）。负对照：旧 heritageyes 恒真实现在
+S4p0 给 count=1、旧 new_varnode_out 在 S3 给 register:0x2000。
+
+新增 fixture 胶水：`ConditionalExecution::fixture_heritage_array` /
+`fixture_heritage_space_names`。
+
 ## 2026-08-24：RuleOrPredicate 名对齐锁定 oracle 构造器字符串
 
 `RuleOrPredicate::get_name` → `orpredicate`（condexe.hh:189 ctor 精确名，
@@ -8,13 +59,13 @@
 
 **源代码路径**: `src/condexe.rs`
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
-**状态**: 🔧 **L2（2026-08-23 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002）、
+**状态**: 🔧 **L2（2026-08-24 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002）、
 pullbackOp storage/插入位置（CONDEXE-PULLBACK-0005，`condexe_pullback_1204`
-5/5 MATCH）、错误通道（CONDEXE-ERROR-0006，resolve 链 Result 化 + 逐字
-LowlevelError + doReplacement 死循环消灭）与 apply 的 unreachable-blocks
-前置返回（CONDEXE-UNREACHGUARD-0001，condexe.cc:485-486，`condexe_error_1204`
-4/4 MATCH）已对齐；`remove_from_flow_split` 映射相反且一支可越界（CFG-0001）、
-Action count/stage 统计仍未对齐，故保持 L2。
+5/5 MATCH）、错误通道（CONDEXE-ERROR-0006 + CONDEXE-UNREACHGUARD-0001，
+`condexe_error_1204` 4/4 MATCH）、成功通道（CONDEXE-SUCCESS-STATE-0001，
+`condexe_success_state_1204` 6/6 MATCH：per-space heritage、live 遍历、
+numhits→count、RETURN 空间保持、reciprocal edge）已对齐；RuleOrPredicate
+端到端差分与 directsplit 变体仍留待后续任务，故保持 L2。
 
 ## 模块说明
 
@@ -101,8 +152,10 @@ postb），并通过把读推入正确路径来保留 MULTIEQUAL 数据流。
    getTrueOut/getFalseOut（condexe.cc:575-582）。BOOLEAN_FLIP 的合法消费点只剩
    `discover_conditional_zero`（condexe.cc:612-613）与 `verify_same_condition`
    的 matchflip 合成（expression.cc:227-230），各恰好一次。
-2. **heritageyes 近似**：Rugra 全局跑一次 heritage，buildHeritageArray 近似为
-   所有空间已 heritage（匹配 Ghidra post-heritage 行为）。
+2. ~~**heritageyes 近似**~~ **已修复（2026-08-24，CONDEXE-SUCCESS-STATE-0001）**：
+   buildHeritageArray 现为逐空间真实数组（cc:23-37），cc:392 门真实接线；
+   空间枚举在 AddrSpaceManager 可从 Funcdata 到达前使用 Heritage 固定表
+   （SPACE-0001 前 Overlay/Other 不可枚举，读作 not heritaged）。
 3. **真实二进制未触发**：curl/httpd 的函数恰好无 `if(a){}if(a){}` 或
    `cond ? val : 0` 谓词模式，故 apply 返回 NO_CHANGE（正确行为）。算法正确性由
    单元测试守护。

@@ -106,23 +106,95 @@ pub struct ConditionalExecution<'a> {
     replacement: std::collections::HashMap<i32, Arc<RwLock<Varnode>>>,
     /// Outputs of ops pulled back from iblock for (current) Varnode.
     pullback: Vec<Option<Arc<RwLock<Varnode>>>>,
-    /// Whether heritage has been performed per address space (approximated:
-    /// always true, since Rugra runs heritage before this action).
+    /// Boolean array indexed by address space indicating whether the space
+    /// is heritaged (condexe.hh:105; filled by build_heritage_array).
     heritageyes: Vec<bool>,
     /// Cached correlation result from verify_same_condition.
     matchflip: bool,
 }
 
+// Ghidra: condexe.cc:28-30 glb->numSpaces()/glb->getSpace(i) enumeration
+/// Rugra's per-space enumeration standing in for the architecture's
+/// `baselist` walk in `buildHeritageArray` (condexe.cc:29-30): the same
+/// fixed AddressSpace list `Heritage::buildInfoList` walks (heritage.rs:660,
+/// heritage.cc:2664-2672). Ghidra's `glb->getSpace(i)` reads the
+/// architecture-owned AddrSpaceManager, which is not yet reachable from a
+/// Rugra Funcdata (SPACE-0001); Overlay/Other(id) dynamic spaces are not
+/// enumerable through it and index lookup treats them as not heritaged.
+const CONDEXE_SPACE_LIST: [crate::space::AddressSpace; 7] = [
+    crate::space::AddressSpace::Ram,
+    crate::space::AddressSpace::Register,
+    crate::space::AddressSpace::Unique,
+    crate::space::AddressSpace::Const,
+    crate::space::AddressSpace::Stack,
+    crate::space::AddressSpace::Join,
+    crate::space::AddressSpace::Iop,
+];
+
+// Ghidra: space.hh:332 AddrSpace::getIndex
+/// Index of a space within [`CONDEXE_SPACE_LIST`] — Rugra's stand-in for
+/// `AddrSpace::getIndex()` (the slot position in the architecture baselist)
+/// as consumed by the `heritageyes[index]` reads (condexe.cc:35/392).
+/// `None` for spaces outside the enumerable list (Overlay/Other).
+fn condexe_space_index(spc: &crate::space::AddressSpace) -> Option<usize> {
+    Some(match spc {
+        crate::space::AddressSpace::Ram => 0,
+        crate::space::AddressSpace::Register => 1,
+        crate::space::AddressSpace::Unique => 2,
+        crate::space::AddressSpace::Const => 3,
+        crate::space::AddressSpace::Stack => 4,
+        crate::space::AddressSpace::Join => 5,
+        crate::space::AddressSpace::Iop => 6,
+        _ => return None,
+    })
+}
+
 impl<'a> ConditionalExecution<'a> {
-    // Ghidra: condexe.cc:432 ConditionalExecution::new
+    // Ghidra: condexe.cc:23 ConditionalExecution::buildHeritageArray
+    /// `buildHeritageArray` (condexe.cc:23-37): calculate the boolean array
+    /// of all address spaces that have had a heritage pass run, used by
+    /// `testRemovability` (cc:392) to test if all the links out of the
+    /// iblock have been calculated. Faithful order of operations:
+    ///   - `heritageyes.clear(); resize(glb->numSpaces(), false)` (cc:26-28)
+    ///   - per space `i`: null hole skip (cc:31), `index = spc->getIndex()`
+    ///     (cc:32), `!spc->isHeritaged()` skip (cc:33),
+    ///     `fd->numHeritagePasses(spc) > 0 -> heritageyes[index] = true`
+    ///     (cc:34-35)
+    /// A space that is not heritaged is skipped BEFORE numHeritagePasses is
+    /// consulted, so `Heritage::numHeritagePasses`'s non-heritaged throw
+    /// (heritage.cc:2786-2787) is unreachable from this caller, exactly as
+    /// in the oracle.
+    fn build_heritage_array(fd: &Funcdata) -> Vec<bool> {
+        // cc:26-28: clear + resize(numSpaces, false) — every slot starts
+        // false; only an actual heritage pass flips it true.
+        let mut heritageyes = vec![false; CONDEXE_SPACE_LIST.len()];
+        for spc in &CONDEXE_SPACE_LIST {
+            // cc:33: `if (!spc->isHeritaged()) continue;`
+            if !spc.is_heritaged() {
+                continue;
+            }
+            // cc:34: `fd->numHeritagePasses(spc)` — funcdata.hh:237 inline
+            // delegation to `Heritage::numHeritagePasses(spc)`
+            // (heritage.cc:2779-2788: `return pass - info->delay`), read
+            // through Rugra's Heritage directly (the Funcdata wrapper
+            // predates the per-space parameter).
+            if fd.heritage.num_heritage_passes(*spc) > 0 {
+                heritageyes[condexe_space_index(spc).unwrap()] = true; // cc:35
+            }
+        }
+        heritageyes
+    }
+
+    // Ghidra: condexe.cc:432 ConditionalExecution::ConditionalExecution
     /// Constructor. Faithful to `ConditionalExecution::ConditionalExecution`
-    /// (condexe.cc:432-437).
+    /// (condexe.cc:432-437): `fd = f; buildHeritageArray();` — the heritage
+    /// array is cached ONCE per ConditionalExecution object (i.e. once per
+    /// ActionConditionalExe::apply, cc:487), reflecting the heritage pass
+    /// count at that moment, not per trial/round.
     pub fn new(fd: &'a mut Funcdata) -> Self {
-        // buildHeritageArray: Rugra runs heritage once globally; we assume all
-        // heritaged spaces are "done". The array is consulted only to decide
-        // whether a no-descendent Varnode can be moved; conservatively treat
-        // every space as heritaged (matches Ghidra post-heritage behaviour).
-        let nspaces = 4;
+        // cc:436: buildHeritageArray() — cache an array depending on the
+        // particular heritage pass.
+        let heritageyes = Self::build_heritage_array(fd);
         Self {
             fd,
             cbranch: None,
@@ -137,7 +209,7 @@ impl<'a> ConditionalExecution<'a> {
             postb_block: None,
             replacement: std::collections::HashMap::new(),
             pullback: Vec::new(),
-            heritageyes: vec![true; nspaces],
+            heritageyes,
             matchflip: false,
         }
     }
@@ -382,13 +454,18 @@ impl<'a> ConditionalExecution<'a> {
                 hasnodescend = false;
             }
             if hasnodescend {
-                // No descendants: allowed only if heritage performed for space.
-                // We treat all spaces as heritaged (see buildHeritageArray note).
-                let _ = &self.heritageyes;
-                true
-            } else {
-                true
+                // cc:392: a Varnode with no descendants can only be moved
+                // if heritage is performed for its space:
+                // `if (hasnodescend && (!heritageyes[vn->getSpace()->getIndex()])) return false;`
+                // Spaces outside the enumerable list (Overlay/Other, see
+                // CONDEXE_SPACE_LIST) read as not heritaged.
+                let space = out.read().unwrap().get_space();
+                match condexe_space_index(&space) {
+                    Some(i) if self.heritageyes[i] => {}
+                    _ => return false,
+                }
             }
+            true
         }
     }
 
@@ -498,7 +575,7 @@ impl<'a> ConditionalExecution<'a> {
             let r = orig_out.read().unwrap();
             (r.get_size(), r.get_space(), r.get_offset())
         };
-        let new_out = self.pullback_new_varnode_out(out_size, out_space, out_offset, &new_op);
+        let new_out = self.new_varnode_out_with_space(out_size, out_space, out_offset, &new_op);
         // cc:183: fd->opSetOpcode(newOp, op->code())
         self.fd.op_set_opcode(&new_op, opcode);
         // cc:184: fd->opSetInput(newOp, invn, 0)
@@ -519,20 +596,20 @@ impl<'a> ConditionalExecution<'a> {
     }
 
     // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
-    /// pullbackOp's `fd->newVarnodeOut(origOutVn->getSize(),
-    /// origOutVn->getAddr(), newOp)` leg (condexe.cc:182), preserving the
-    /// original output's storage address INCLUDING its address space
-    /// (register or unique). `Funcdata::new_varnode_out` (funcdata.rs) pins
-    /// AddressSpace::Register because Rugra's split Address model does not
-    /// carry a space; the exact newVarnodeOut leg
-    /// (funcdata_varnode.cc:104-127) is replicated here against the true
-    /// space:
+    /// Space-preserving `Funcdata::newVarnodeOut` (funcdata_varnode.cc:104-127)
+    /// for the two condexe call sites that must keep the original output's
+    /// storage address INCLUDING its address space: pullbackOp's duplicate
+    /// output (condexe.cc:182) and the RETURN-holding COPY's output
+    /// (condexe.cc:343, "Preserve the CPUI_RETURN storage address").
+    /// `Funcdata::new_varnode_out` (funcdata.rs) pins AddressSpace::Register
+    /// because Rugra's split Address model does not carry a space; the exact
+    /// newVarnodeOut leg is replicated here against the true space:
     ///   Varnode *vn = vbank.createDef(s,m,ct,op);
     ///   op->setOutput(vn);
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s,m);
     ///   <queryProperties / setSymbolProperties / setFlags leg>
-    fn pullback_new_varnode_out(
+    fn new_varnode_out_with_space(
         &mut self,
         size: usize,
         space: crate::space::AddressSpace,
@@ -783,15 +860,21 @@ impl<'a> ConditionalExecution<'a> {
                     let retvn = readop.read().unwrap().get_in(1).cloned()
                         .ok_or_else(|| structural("doReplacement RETURN without input 1 (condexe.cc:340 dereferences getIn(1))"))?;
                     let pc = readop.read().unwrap().get_addr();
-                    let (size, retvn_addr) = {
+                    let (size, retvn_space, retvn_offset) = {
                         let r = retvn.read().unwrap();
-                        (r.get_size(), r.loc)
+                        (r.get_size(), r.get_space(), r.get_offset())
                     };
                     let newcopy = self.fd.new_op(1, pc);
                     self.fd.op_set_opcode(&newcopy, OpCode::CPUI_COPY);
-                    // cc:343: outvn = newVarnodeOut(retvn->getSize(),
-                    //   retvn->getAddr(), newcopyop) — preserve RETURN storage addr.
-                    let outvn = self.fd.new_varnode_out(size, retvn_addr, &newcopy);
+                    // cc:343: outvn = fd->newVarnodeOut(retvn->getSize(),
+                    //   retvn->getAddr(), newcopyop) — preserve the
+                    // CPUI_RETURN storage address INCLUDING its address
+                    // space (funcdata_varnode.cc:104-127 exact leg, shared
+                    // with pullbackOp's cc:182 call; Rugra's
+                    // Funcdata::new_varnode_out pins the Register space
+                    // because its Address lacks a space).
+                    let outvn =
+                        self.new_varnode_out_with_space(size, retvn_space, retvn_offset, &newcopy);
                     // cc:344: opSetInput(readop, outvn, 1) — RETURN input[1] =
                     // COPY output (NOT retvn!); this is what removes vn from
                     // the RETURN's descendants.
@@ -946,6 +1029,28 @@ impl<'a> ConditionalExecution<'a> {
         readop: PcodeOpRef,
     ) -> bool {
         Self::test_op_read(&vn, &readop.0, &ib)
+    }
+
+    // RUGRA-GLUE: fixture observability for CONDEXE-SUCCESS-STATE-0001; the
+    // locked Ghidra fixture constructs ConditionalExecution directly (the
+    // constructor is public, condexe.hh:124) and reads `heritageyes` through
+    // #define private public (tests/oracle/condexe_success_state_1204.cc).
+    /// Run `buildHeritageArray` in isolation and return the per-space array
+    /// in CONDEXE_SPACE_LIST order (Ram, Register, Unique, Const, Stack,
+    /// Join, Iop). Mirrors condexe.cc:23-37 driven directly.
+    #[doc(hidden)]
+    pub fn fixture_heritage_array(fd: &Funcdata) -> Vec<bool> {
+        Self::build_heritage_array(fd)
+    }
+
+    // RUGRA-GLUE: fixture observability (see fixture_heritage_array).
+    /// The space labels for [`Self::fixture_heritage_array`]'s slots, so the
+    /// external fixture can project `name=value` pairs instead of raw
+    /// indices (Rugra's CONDEXE_SPACE_LIST order need not match the oracle
+    /// architecture's baselist order).
+    #[doc(hidden)]
+    pub fn fixture_heritage_space_names() -> Vec<&'static str> {
+        vec!["ram", "register", "unique", "const", "stack", "join", "iop"]
     }
 }
 
@@ -1565,11 +1670,20 @@ impl Rule for RuleOrPredicate {
 
 /// Search for and remove various forms of redundant CBRANCH operations.
 /// Faithful to Ghidra's `ActionConditionalExe` (condexe.hh:133).
-pub struct ActionConditionalExe;
+pub struct ActionConditionalExe {
+    /// Externalized Ghidra protected `Action::count` accumulator: the oracle
+    /// does `count += numhits` at condexe.cc:501 and returns 0; Rugra's
+    /// Action trait keeps the control-flow return (0) separate from the
+    /// statistics, harvesting this field through `take_count_delta` in
+    /// `Action::perform` (action.rs).
+    count: i32,
+}
 
 impl ActionConditionalExe {
-    // Ghidra: condexe.hh:133 ActionConditionalExe::new
-    pub fn new() -> Self { Self }
+    // Ghidra: condexe.hh:133 ActionConditionalExe::ActionConditionalExe
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
 }
 
 impl Action for ActionConditionalExe {
@@ -1578,17 +1692,29 @@ impl Action for ActionConditionalExe {
     ///   - unreachable-blocks guard FIRST: return 0 before anything is
     ///     constructed or mutated (cc:485-486; the cached flag is maintained
     ///     by structureReset, funcdata_block.cc:710/714)
-    ///   - constructs ONE ConditionalExecution outside the loop (cc:487)
-    ///   - do-while outer loop until no change (cc:490-500)
-    ///   - for inner loop over ALL bblocks, NO break on hit (cc:492-499)
-    ///   - returns 0 (count is statistics only, cc:502)
+    ///   - constructs ONE ConditionalExecution outside the loop (cc:487),
+    ///     so buildHeritageArray's cache is computed once per apply
+    ///   - `const BlockGraph &bblocks(data.getBasicBlocks())` (cc:488) is a
+    ///     LIVE reference: the do-while round loop (cc:490-500) re-reads
+    ///     `bblocks.getSize()` and `bblocks.getBlock(i)` from the live graph
+    ///     on EVERY iteration. execute() removes the folded iblock
+    ///     (removeFromFlowSplit -> BlockGraph::removeBlock), the list shifts
+    ///     left, and the block right after a removed iblock is SKIPPED for
+    ///     the remainder of that round (index i already passed it) — it is
+    ///     only re-tried on the next do-while round. No snapshot is taken.
+    ///   - for inner loop over ALL bblocks, NO break on hit (cc:492-499);
+    ///     every candidate check (2in/2out/CBRANCH) happens inside
+    ///     trial()/verify(), apply adds no pre-filter
+    ///   - `count += numhits` only after the round loop completes (cc:501);
+    ///     returns 0 (count is statistics only, cc:502)
     /// Error protocol (CONDEXE-ERROR-0006): in the oracle a LowlevelError
     /// thrown inside condexe.execute() (condexe.cc:261/303 via doReplacement,
     /// funcdata_block.cc:885 via removeFromFlowSplit) unwinds straight out of
     /// apply — the action never returns, the surrounding decompiler pipeline
     /// aborts this function, and the Funcdata keeps its partial state. The
     /// Rust port propagates the same failure as `Err` from apply
-    /// (ActionGroup::apply aborts on `?`, action.rs), never swallowing it.
+    /// (ActionGroup::apply aborts on `?`, action.rs), never swallowing it;
+    /// the throw also skips `count += numhits` exactly like the oracle.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // cc:485-486: "Conditional execution elimination logic may not work
         // with unreachable blocks" — return 0 immediately. The early return
@@ -1601,42 +1727,60 @@ impl Action for ActionConditionalExe {
             return Ok(action_status::NO_CHANGE);
         }
         let mut numhits = 0;
+        // cc:487: ONE ConditionalExecution for the whole apply (single
+        // buildHeritageArray cache, see ConditionalExecution::new).
+        let mut condexe = ConditionalExecution::new(fd);
+        // cc:490-500: do { changethisround=false; for(i=0;i<bblocks.getSize();++i)
+        //   ... } while(changethisround); — both getSize() and getBlock(i)
+        // are live reads through the cc:488 reference.
         loop {
             let mut changethisround = false;
-            // Snapshot the block list BEFORE constructing condexe (which
-            // borrows fd). Arc clones are cheap. Ghidra cc:487 constructs
-            // condexe once per function; Rugra constructs per pass due to
-            // borrow rules — equivalent since buildHeritageArray reads
-            // stable fd state.
-            let block_snap: Vec<_> = (0..fd.bblocks.get_size())
-                .filter_map(|i| fd.bblocks.get_block(i))
-                .collect();
-            let mut condexe = ConditionalExecution::new(fd);
-            for bb in &block_snap {
-                let (sin, sout, is_cb) = {
-                    let r = bb.read().unwrap();
-                    let ops = r.get_ops();
-                    let is_cb = ops.last().map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH).unwrap_or(false);
-                    (r.size_in(), r.size_out(), is_cb)
-                };
-                if sin == 2 && sout == 2 && is_cb {
-                    if condexe.trial(bb.clone()) {
-                        // cc:495: condexe.execute() — an exception unwinds out
-                        // of apply in the oracle; here the Err propagates.
+            let mut i = 0usize;
+            loop {
+                if i >= condexe.fd.bblocks.get_size() {
+                    break;
+                }
+                let bb = condexe.fd.bblocks.get_block(i);
+                if let Some(bb) = bb {
+                    // cc:494: condexe.trial(bb) — the (BlockBasic*) cast is
+                    // unchecked in the oracle; bblocks only ever holds
+                    // BlockBasics, and Rugra's get_block returns None only
+                    // for an out-of-range index, which the bound above
+                    // already excludes.
+                    if condexe.trial(bb) {
+                        // cc:495: condexe.execute() — an exception unwinds
+                        // out of apply in the oracle; here the Err
+                        // propagates.
                         condexe.execute()?;
-                        numhits += 1;
-                        changethisround = true;
+                        numhits += 1; // cc:496
+                        changethisround = true; // cc:497
                     }
                 }
+                i += 1;
             }
-            if !changethisround { break; }
+            // cc:500: } while(changethisround);
+            if !changethisround {
+                break;
+            }
         }
-        let _ = numhits;
+        // cc:501: count += numhits — Number of changes; statistics only,
+        // externalized through take_count_delta. cc:502: return 0.
+        self.count += numhits;
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (condexe.cc:501 `count += numhits`) into the Rust ActionState
+    // accumulator, harvested by Action::perform (action.rs) exactly like
+    // coreaction.rs's multicse/restructure_varnote (coreaction.cc:873/2282).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
+
     // Ghidra: condexe.hh:133 ActionConditionalExe::getName
-    fn get_name(&self) -> &str { "conditionalexe" }
+    fn get_name(&self) -> &str {
+        "conditionalexe"
+    }
 }
 
 #[cfg(test)]
