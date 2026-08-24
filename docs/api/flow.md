@@ -305,8 +305,10 @@ jumptable 内循环之后）、`setPossibleUnreachable` 的设置点 `inlineSubF
 
 - **`check_contained_call`**（flow.cc:1361-1405）：逐 spec 扫描 `fd.callspecs`
   （= Ghidra Funcdata 持有、FlowInfo 以引用持有的 `qlst`）：
-  - callee 已解析为 Funcdata → 跳过（flow.cc:1367-1368；Rugra `has_funcdata`
-    适配器因 `query_call` 尚未接线恒为 false，CALLSPEC-0001）；
+  - callee 已解析为 Funcdata → 跳过（flow.cc:1367-1368；2026-08-25 起
+    `query_call` 经 `fd.symbol_table` 解析并以 FlowInfo 侧 `resolved_funcdata`
+    集合（按 spec 的 `op_addr` 键控）承载该判定，见下方
+    `FLOW-TAILCALL-OVERTRACE-0001` 节）；
   - 非 `CPUI_CALL`（按 op 当前 opcode）→ 跳过（flow.cc:1369-1370）；
   - visited 覆盖判定用 `BTreeMap::range(..=addr).next_back()` 精确复刻
     `upper_bound` + 前移一步：无 ≤addr 的表项（flow.cc:1375）或
@@ -392,8 +394,11 @@ call 均保留为 CPUI_CALL + callspec）。
   锁定的 x86-64 SLEIGH 声明无 userop，双侧都无法用真实指令发射 CALLOTHER；
   C++ fixture 直写私有 injectlist，Rust fixture 经此钩子镜像。
 
-残差：`query_call` 仍为 no-op（CALLSPEC-0001：copyFlowEffects/set_funcdata
-缺位，CALLFIXUP 经真实 flow 触发不可达，只能 CALLOTHER 路径）；
+残差（2026-08-25 更新）：`query_call` 已实现 queryFunction 解析切片
+（`fd.symbol_table` + `set_funcdata` + `resolved_funcdata` 集合，见
+`FLOW-TAILCALL-OVERTRACE-0001` 节），但 `copyFlowEffects` 的 inline/noreturn
+旗标拷贝仍无数据源（FLOW-NORETURN-DATA-0001：CALLFIXUP 经真实 flow 触发
+仍不可达，只能 CALLOTHER 路径）；
 `inline_sub_function` 实克隆仍 TODO（inlineFlow）；wrapOffset/JCurSpaceSize
 见 pcodeinject.md。测试：`cargo test --lib flow pcodeinject` 28 绿
 （subflow 既有崩溃与 base 6ee34dc 相同，非本租约）。
@@ -420,6 +425,64 @@ CALLFIXUP 触发不可达）与 `INJECT-0001`（inlineFlow 克隆）登记于
 `flow_inject_1204.metadata.json`。发现并登记：containedcall runner 的
 spec pin `34a3febf…` 在本仓库不可解析（本 fixture 改 pin 已核实的
 identical-asset commit `87aaef2`）。
+
+## 2026-08-25：`FLOW-TAILCALL-OVERTRACE-0001` queryCall 解析与 PIC 误发
+
+锁定 oracle 为 Ghidra 12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`。
+完整读取 `FlowInfo::queryCall`（flow.cc:656-672）、`checkContainedCall`
+（flow.cc:1361-1405）、`checkForFlowModification`（flow.cc:636-651）、
+`Funcdata::followFlow` 的全程无函数体边界语义（funcdata.cc:161-163 以
+space 全域 baddr/eaddr 调用）后修复 curl `glob_word` 5 处
+`Possible PIC construction` 误发（golden 0 处）：
+
+**根因**（双侧行号）：Ghidra flow **没有函数体边界**——尾跳（curl 中
+`0x4b4c jmp glob_range`/`0x4b7b jmp glob_set`）被忠实跟进被调函数体，
+`visited` 因此含被调者入口与函数体，这是正确行为；Ghidra 不误发的机制是
+`setupCallSpecs` → `queryCall`（flow.cc:660 `queryFunction(entry)` → 662
+`setFuncdata`）解析出 callee Funcdata，使 `checkContainedCall` 的
+`fd != 0 continue`（flow.cc:1367-1368）跳过这些调用。Rugra 的
+`query_call`（flow.rs）此前是 CALLSPEC-0001 no-op、扩展 trait
+`has_funcdata` 恒 false，该守卫从不触发——尾跳污染进 visited 的合法调用
+（`call glob_word` 递归 ×3、override 转换出的 CALL ×2）全部误判为 PIC，
+CALL→BRANCH、callspec 被删，引发 10 级指针链与返回地址常量 store。
+
+**修复**（仅 src/flow.rs）：
+
+- `query_call` 实现 queryFunction 切片：`fd.symbol_table`（驱动侧
+  CALLSPEC-DRIVER-0001 确立的 queryFunction 前端等价物，与 `link_call_specs`
+  同一边界）命中即 `set_funcdata(name, entry)`（fspec.cc:4949-4960 可观察
+  切片：入口 + 显示名）；
+- FlowInfo 新增 `resolved_funcdata: BTreeSet<u64>`（按 spec `op_addr` 键控）
+  承载"已解析"观察，`check_contained_call` 以集合成员测试实现
+  flow.cc:1367-1368 守卫（RUGRA-GLUE：Rugra FuncCallSpecs 无 per-spec
+  callee Funcdata 存储，fspec 侧缺口；集合仅在 query_call 写入、
+  同一 FlowInfo 生命周期内消费，与 Ghidra spec 内指针同寿）；
+- 扩展 trait `is_inline`/`is_no_return` 从硬编码 false 改为委托
+  `FuncProto::is_inline()`/`is_no_return()`（fspec.hh:1348/1349）；
+  删除死掉的 `has_funcdata` 适配器。
+
+**残差**（FLOW-NORETURN-DATA-0001，登记于 fixture metadata）：Ghidra 的
+"Non-Returning Functions - Known" 分析器按名字把 `exit` 类函数标 no-return，
+`copyFlowEffects` 拷贝后 `checkForFlowModification`（flow.cc:641-647）插
+artificialHalt 截断 fall-through；Rugra 前端尚无该数据源，函数体以
+`call exit` 结尾时仍会顺序流进下一函数体（curl glob_word 344 vs golden
+323 字节的过度追踪来源）。flow.rs 侧 is_no_return 委托已就位，等驱动侧
+喂数即生效。`copyFlowEffects` 的 inline 旗标拷贝同属该数据缺口。
+
+**双侧 fixture**：`tests/oracle/flow_tailcall_overtrace_1204.{cc,rs}` +
+`tools/run_flow_tailcall_overtrace_oracle.sh`（bfd 头/库 sha 锁定同
+containedcall）。case `tailjmp_symbol`（A 条件尾跳进 B + B 递归 call A +
+A 直接 call B，双侧经真实 ELF 符号解析）锁定 fd 守卫跳过：2 spec 存活、
+0 警告、被调体作为 caller 的块/ops 可见（visited 污染本身是忠实行为）；
+case `tailjmp_offcut_control`（call 到已访问非符号内部起点）锁定
+CALL→BRANCH + `pic:6` 转换仍会触发。双侧 61 行 stdout 逐字节一致
+（`expected_stdout_sha256 f9153a94…`）；对 pre-fix 树该 fixture 判
+MISMATCH（calls=1 + pic:15 误发），证明其锁定本修复。
+
+**语料验证**（真 A/B：同树 ba910ed ± 本 patch，全量 curl 124 函数）：
+`Possible PIC` 5→0；`glob_word` skeleton diff 176→144；全量 skeleton
+2409→2377；defects 2→2（helpf/file2string.part.0 不变）、numbering 1→1
+（match_url 预存在）——零新增缺陷。
 ## 2026-08-23：`FLOW-TRUNCATED-0001` FlowInfo 克隆与 raw-op 生命周期
 
 新增 `TruncatedFlowState`，作为 Rust 借用边界上的值快照；它保存锁定

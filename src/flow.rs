@@ -56,21 +56,21 @@ pub mod flow_flags {
 /// inline/noreturn/inject_id state, while Rugra's does not store them.
 ///
 /// Because this alignment task is constrained to `src/flow.rs`, the accessors
-/// are provided here as an extension trait. `is_inline`/`is_no_return`/
-/// `get_inject_id` return conservative defaults (`false`/`false`/`-1`) until
-/// the underlying storage is added to `FuncCallSpecs` (tracked as
-/// RUGRA-GLUE). The remaining accessors (`get_op`, `get_name`,
-/// `set_paramshift`, `cancel_inject_id`, `set_address`) delegate to the
-/// existing public fields/methods where possible.
+/// are provided here as an extension trait. `is_inline`/`is_no_return`
+/// delegate to the nested `FuncProto`'s flag bits (fspec.hh:1348/1349,
+/// populated by `FlowInfo::queryCall`'s `copyFlowEffects` in Ghidra;
+/// Rugra's front-end does not feed per-callee protos at flow time yet —
+/// FLOW-NORETURN-DATA-0001), `get_inject_id` returns the no-injection
+/// sentinel until the id is stored. The remaining accessors (`get_op`,
+/// `get_name`, `set_paramshift`, `cancel_inject_id`, `set_address`)
+/// delegate to the existing public fields/methods.
 trait FuncCallSpecsExt {
-    /// Flow-local adapter for `FuncCallSpecs::isInline` (fspec.hh). Rugra's
-    /// `FuncCallSpecs` does not yet store the inline flag, so this returns
-    /// false. Inline-driven injection (`check_for_flow_modification`) is a
-    /// unavailable until the flag is wired in (`CALLSPEC-0001`).
+    /// Flow-local adapter for `FuncCallSpecs::isInline` (fspec.hh), reading
+    /// the nested FuncProto's `is_inline` flag bit (fspec.hh:1348).
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::isInline directly and has no flow-local interface.
     fn is_inline(&self) -> bool;
-    /// Flow-local adapter for `FuncCallSpecs::isNoReturn` (fspec.hh), with the same
-    /// caveat as `is_inline`.
+    /// Flow-local adapter for `FuncCallSpecs::isNoReturn` (fspec.hh), reading
+    /// the nested FuncProto's `no_return` flag bit (fspec.hh:1349).
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::isNoReturn directly and has no flow-local interface.
     fn is_no_return(&self) -> bool;
     /// Flow-local adapter for `FuncCallSpecs::getInjectId` (fspec.hh). Returns -1
@@ -97,29 +97,18 @@ trait FuncCallSpecsExt {
     /// address to cancel an indirect override (flow.cc:713).
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration representing Ghidra's setAddress(Address()) with Rugra's optional entry address.
     fn clear_entry_address(&mut self);
-    /// Flow-local adapter for `FuncCallSpecs::getFuncdata` (fspec.hh:1682
-    /// `Funcdata *getFuncdata(void) const`). Ghidra returns the callee's
-    /// resolved Funcdata (set by `queryCall` via `setFuncdata`,
-    /// fspec.cc:4924); Rugra's `query_call` is still a documented no-op
-    /// (CALLSPEC-0001) so no spec ever carries a resolved Funcdata and this
-    /// returns false. The `fd != 0 continue` guard in `checkContainedCall`
-    /// (flow.cc:1367-1368) therefore never fires in Rugra — observably
-    /// identical for every case where Ghidra's `queryCall` also fails to
-    /// resolve the target (internal/offcut targets are never symbol starts).
-    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 compatibility fallback because Rugra FuncCallSpecs has no resolved-Funcdata linkage.
-    fn has_funcdata(&self) -> bool;
 }
 
 impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
-    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra inline-state field.
+    // RUGRA-GLUE: ANN-B; delegates to the nested FuncProto flag bit (fspec.hh:1348).
     fn is_inline(&self) -> bool {
-        // TODO(CALLSPEC-0001): depends on FuncCallSpecs storing an inline flag.
-        false
+        self.prototype.is_inline()
     }
-    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra no-return-state field.
+    // RUGRA-GLUE: ANN-B; delegates to the nested FuncProto flag bit
+    // (fspec.hh:1349); nothing populates it at flow time until
+    // FLOW-NORETURN-DATA-0001 feeds per-callee flow effects.
     fn is_no_return(&self) -> bool {
-        // TODO(CALLSPEC-0001): depends on FuncCallSpecs storing a noreturn flag.
-        false
+        self.prototype.is_no_return()
     }
     // RUGRA-GLUE: ANN-B; INJECT-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra injection-id field.
     fn get_inject_id(&self) -> i32 {
@@ -147,13 +136,6 @@ impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
     // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter encodes flow.cc's setAddress(Address()) as Option::None in Rugra.
     fn clear_entry_address(&mut self) {
         self.entry_addr = None;
-    }
-    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter because Rugra query_call (flow.cc:656) never resolves a Funcdata, mirroring a null FuncCallSpecs::funcdata pointer.
-    fn has_funcdata(&self) -> bool {
-        // TODO(CALLSPEC-0001): depends on Funcdata::query_function +
-        // FuncCallSpecs::set_funcdata storing real callee linkage. Until
-        // then every spec behaves like Ghidra's fd == (Funcdata *)0.
-        false
     }
 }
 
@@ -343,6 +325,21 @@ pub struct FlowInfo<'a> {
     /// constructed, exactly like Ghidra's `Override::hasFlowOverride()`
     /// query in both FlowInfo constructors.
     flowoverride_present: bool,
+    /// Call-site op addresses whose `queryCall` (flow.cc:660) resolved a
+    /// callee, keyed by the spec's `op_addr` (the CALL instruction address,
+    /// one spec per call op).
+    ///
+    /// RUGRA-GLUE: Ghidra stores the resolved callee as a `Funcdata *` on
+    /// each FuncCallSpecs (`fspecs.setFuncdata`, flow.cc:662), and
+    /// `checkContainedCall` reads it via `fc->getFuncdata()` (flow.cc:1367).
+    /// Rugra's `FuncCallSpecs` has no per-spec callee-Funcdata storage
+    /// (fspec.rs gap), so this FlowInfo-side set carries the same
+    /// "resolved" observation for the flow-time consumers
+    /// (`check_contained_call`). Like Ghidra's spec-owned pointer, the set
+    /// is written only by `query_call` during spec setup and read only
+    /// within the same FlowInfo lifetime; entries for later-erased specs
+    /// are inert.
+    resolved_funcdata: std::collections::BTreeSet<u64>,
 }
 
 impl<'a> FlowInfo<'a> {
@@ -369,6 +366,7 @@ impl<'a> FlowInfo<'a> {
             inline_recursion: std::collections::BTreeSet::new(),
             inline_base: std::collections::BTreeSet::new(),
             flowoverride_present,
+            resolved_funcdata: std::collections::BTreeSet::new(),
         }
     }
 
@@ -405,6 +403,7 @@ impl<'a> FlowInfo<'a> {
             inline_recursion,
             inline_base,
             flowoverride_present,
+            resolved_funcdata: std::collections::BTreeSet::new(),
         }
     }
 
@@ -1258,31 +1257,62 @@ impl<'a> FlowInfo<'a> {
 
     /// If there is an explicit target address for the given call site,
     /// attempt to look up the function and adjust information in the
-    /// FuncCallSpecs call site object. This is the entry-address guard slice
-    /// corresponding to `FlowInfo::queryCall` (flow.cc:656-672); symbol query,
-    /// setFuncdata, and copyFlowEffects remain `CALLSPEC-0001`.
+    /// FuncCallSpecs call site object. Faithful to `FlowInfo::queryCall`
+    /// (flow.cc:656-672).
     ///
     /// Ghidra calls `data.getScopeLocal()->getParent()->queryFunction(addr)`
-    /// to resolve the callee's Funcdata, then `fspecs.setFuncdata` and
-    /// `fspecs.copyFlowEffects`. Rugra has no symbol-table query wired to
-    /// FuncCallSpecs yet, so the body is a documented RUGRA-GLUE no-op until
-    /// `Funcdata::query_function` + `set_funcdata` are integrated.
+    /// to resolve the callee's Funcdata; on a hit it runs
+    /// `fspecs.setFuncdata(otherfunc)` (entry + display name) and, when the
+    /// spec's model is not yet locked or the callee is inline, copies the
+    /// callee's flow effects (`copyFlowEffects`, which carries the
+    /// inline/no-return flags). The resolved callee is what makes
+    /// `checkContainedCall`'s `fd != 0 continue` guard (flow.cc:1367-1368)
+    /// skip calls whose entry was also traced by tail-jump flow — without
+    /// it, every such legitimate call is misreported as a PIC construction.
+    ///
+    /// Rugra's front-end equivalent of `queryFunction` is the driver-seeded
+    /// symbol table (`fd.symbol_table`, the same boundary the driver's
+    /// CALLSPEC-DRIVER-0001 `link_call_specs` uses post-flow): a symbol at
+    /// the entry address resolves the callee, `set_funcdata` copies the
+    /// entry/display-name pair (fspec.cc:4949-4960 observable slice), and
+    /// the resolution is recorded in `resolved_funcdata` for
+    /// `check_contained_call`. `copyFlowEffects`'s inline/no-return flag
+    /// copy remains a data gap: Rugra has no per-callee FuncProto at flow
+    /// time (Ghidra's platform marks `exit`-class functions no-return via
+    /// the name-driven "Non-Returning Functions - Known" analyzer; the
+    /// Rugra driver does not feed that yet — see
+    /// FLOW-NORETURN-DATA-0001).
     // Ghidra: flow.cc:656 FlowInfo::queryCall
     fn query_call(&mut self, fc_idx: usize) {
         // flow.cc:659: `if (!fspecs.getEntryAddress().isInvalid())`.
         let entry = self.fd.get_call_specs(fc_idx).and_then(|fc| fc.entry_addr);
-        let entry = match entry {
+        let entry_addr = match entry {
             Some(a) => a,
             None => return, // Not a direct call (flow.cc:659 guard fails).
         };
-        // flow.cc:660: query the function at the entry address. RUGRA-GLUE:
-        // Funcdata has no query_function/scope linkage yet. We record the
-        // entry address on the spec (already present) and rely on
-        // ActionFuncLink to fill in the callee later.
-        let _ = entry;
-        // TODO(CALLSPEC-0001): depends on Funcdata::query_function + FuncCallSpecs::set_funcdata
-        // + FuncCallSpecs::copy_flow_effects integration. See flow_audit.md
-        // item 4. Until then, callers must resolve callees via ActionFuncLink.
+        // flow.cc:660: `queryFunction(entry)` — the symbol-table lookup.
+        let Some(callee_name) = self.fd.symbol_table.get(&entry_addr.as_u64()).cloned() else {
+            return; // No function at this entry: nothing to resolve.
+        };
+        // flow.cc:662: `fspecs.setFuncdata(otherfunc)` — associate the
+        // callee's entry address and display name with the callsite.
+        if let Some(mut fc) = self.fd.get_call_specs_mut(fc_idx) {
+            fc.set_funcdata(&callee_name, entry_addr);
+        }
+        // Record the resolution for check_contained_call's flow.cc:1367
+        // `fd != 0 continue` guard (RUGRA-GLUE: FlowInfo-side set stands in
+        // for the per-spec Funcdata pointer Rugra's FuncCallSpecs lacks).
+        if let Some(op_addr) = self
+            .fd
+            .get_call_specs(fc_idx)
+            .map(|fc| fc.op_addr.as_u64())
+        {
+            self.resolved_funcdata.insert(op_addr);
+        }
+        // flow.cc:663-669: `if (!fspecs.hasModel() || ...) copyFlowEffects`.
+        // TODO(FLOW-NORETURN-DATA-0001): depends on a per-callee FuncProto
+        // (inline/no-return flags) being available at flow time. Until the
+        // front-end feeds it, noreturn calls keep falling through.
     }
 
     /// Set up the identity/lifecycle slice of the FuncCallSpecs object for a
@@ -2030,12 +2060,18 @@ impl<'a> FlowInfo<'a> {
         while iter != self.fd.callspecs.len() {
             // flow.cc:1366-1370: fetch the spec's callee Funcdata state and
             // call op before mutating anything below.
-            let (has_funcdata, call_op) = {
+            let (resolved, call_op) = {
                 let fc = self.fd.callspecs[iter].read().unwrap();
-                (fc.has_funcdata(), fc.get_op(self.fd))
+                // flow.cc:1367-1368: `Funcdata *fd = fc->getFuncdata();
+                // if (fd != (Funcdata *)0) continue;` — queryCall's resolved
+                // callee (flow.cc:662 setFuncdata). Rugra observes it via
+                // the FlowInfo-side `resolved_funcdata` set keyed by this
+                // spec's op address (see `query_call`).
+                let resolved = self.resolved_funcdata.contains(&fc.op_addr.as_u64());
+                (resolved, fc.get_op(self.fd))
             };
             // flow.cc:1367-1368: `if (fd != (Funcdata *)0) continue;`.
-            if has_funcdata {
+            if resolved {
                 iter += 1;
                 continue;
             }
