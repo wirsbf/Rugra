@@ -853,6 +853,189 @@ unsafe extern "C" {
     fn prctl(option: i32, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> i32;
 }
 
+/// AnalyzeHeadless image base of the locked 12.0.4 golden run for this PIE
+/// (the same rebase convention as GOLDEN_CORPUS_LEDGER above: golden/ledger
+/// Ghidra addresses are this driver's base-0 addresses + 0x100000).
+const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
+
+// RUGRA-GLUE: default data label format of the platform analyzers: "DAT_" +
+// 8-hex-digit of the image-based address (golden witnesses: DAT_00107180 for
+// base-0 0x7180, DAT_00117020 for base-0 0x17020, DAT_001061d9 for base-0
+// 0x61d9). The decompiler core never mints DAT symbols itself — Ghidra's
+// labels come from the platform analyzers via <symboltable> (B3 audit §1.2;
+// database.cc:957-958 stackContainer leaves the entry NULL for unmapped
+// data), so this driver-side name stands in for that platform layer.
+// Pointer-typed referenced data takes the PTR_DAT_ prefix instead (golden
+// :1678 `&PTR_DAT_00117020`); that typing belongs to the (a1) SymbolEntry
+// layer and is intentionally not modeled by this name-only proxy.
+fn synthetic_dat_name(base0_addr: u64) -> String {
+    format!("DAT_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + base0_addr)
+}
+
+// Ghidra: stringmanage.cc:347 StringManager::getCodepoint
+/// charsize==1 (UTF-8) specialization of `StringManager::getCodepoint`
+/// (stringmanage.cc:347-410): the `(val&0x80)==0` ASCII fast path, the
+/// `(val&0xe0)==0xc0` / `(val&0xf0)==0xe0` / `(val&0xf8)==0xf0` prefix
+/// chains with mandatory `0x80..0xBF` continuation bytes, the fall-through
+/// `return -1` for anything else (stringmanage.cc:391 — bare continuation
+/// bytes such as the 0xAD soft hyphen inside the 0x7180/0x99a8/0xc1d8
+/// hugehelp aliases land here), and the closing surrogate/0x10FFFF range
+/// checks. Returns `(codepoint, bytes consumed)`; `(-1, _)` marks an
+/// invalid encoding. Bounds-checked continuations are result-equivalent to
+/// the oracle for NUL-terminated slices: a prefix byte directly before the
+/// NUL always fails its first continuation check against the NUL byte.
+fn get_codepoint_utf8(buf: &[u8], i: usize) -> (i64, usize) {
+    let continuation = |j: usize| -> Option<i64> {
+        buf.get(j)
+            .map(|&b| b as i64)
+            .filter(|b| (b & 0xc0) == 0x80)
+    };
+    let val = buf[i] as i64;
+    let (codepoint, sk) = if (val & 0x80) == 0 {
+        (val, 1)
+    } else if (val & 0xe0) == 0xc0 {
+        match continuation(i + 1) {
+            Some(val2) => (((val & 0x1f) << 6) | (val2 & 0x3f), 2),
+            None => (-1, 2),
+        }
+    } else if (val & 0xf0) == 0xe0 {
+        match (continuation(i + 1), continuation(i + 2)) {
+            (Some(val2), Some(val3)) => (
+                ((val & 0xf) << 12) | ((val2 & 0x3f) << 6) | (val3 & 0x3f),
+                3,
+            ),
+            _ => (-1, 3),
+        }
+    } else if (val & 0xf8) == 0xf0 {
+        match (
+            continuation(i + 1),
+            continuation(i + 2),
+            continuation(i + 3),
+        ) {
+            (Some(val2), Some(val3), Some(val4)) => (
+                ((val & 7) << 18)
+                    | ((val2 & 0x3f) << 12)
+                    | ((val3 & 0x3f) << 6)
+                    | (val4 & 0x3f),
+                4,
+            ),
+            _ => (-1, 4),
+        }
+    } else {
+        // stringmanage.cc:391 fall-through: bare continuation (0x80..0xBF)
+        // or 0xF8..0xFF lead byte is not a valid UTF-8 encoding start.
+        (-1, 1)
+    };
+    if codepoint >= 0xd800 && (codepoint > 0x10ffff || codepoint <= 0xdfff) {
+        return (-1, sk);
+    }
+    (codepoint, sk)
+}
+
+// Ghidra: stringmanage.cc:324 StringManager::checkCharacters
+/// Driver-side string admission gate mirroring the locked oracle's negative
+/// string path: `StringManagerUnicode::getStringData` (stringmanage.cc:427)
+/// calls `StringManager::checkCharacters` (stringmanage.cc:324-339), whose
+/// codepoint walk returns -1 on any invalid encoding, leaving the cached
+/// buffer empty so `StringManager::isString` (stringmanage.cc:166) is false —
+/// which is what keeps `RulePtrsubCharConstant` from folding the PTRSUB
+/// (ruleaction.cc:7375) and what golden expresses as `&DAT_00107180` for the
+/// 0x7180-class hugehelp aliases (B3 audit §2.2 B4 / B4 §6). Runs without a
+/// NUL terminator inside the loaded section are rejected the same way the
+/// oracle's loadFill run-off (DataUnavailError, stringmanage.cc:463-465)
+/// leaves the negative cache in place. The slice must include the trailing
+/// NUL byte.
+fn check_characters_utf8(bytes_with_terminator: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < bytes_with_terminator.len() {
+        let (codepoint, skip) = get_codepoint_utf8(bytes_with_terminator, i);
+        if codepoint < 0 {
+            return false;
+        }
+        if codepoint == 0 {
+            return true;
+        }
+        i += skip;
+    }
+    false
+}
+
+// RUGRA-GLUE: driver .rodata string pre-scan (examples-only stand-in for the
+// platform string analyzer's data; the production isString path is the
+// src-side StringManager lease, B4). Admission keeps the driver's previous
+// extraction shape (first byte printable/whitespace, then the NUL-terminated
+// run) and adds the oracle codepoint validity gate above, so strings with
+// invalid UTF-8 no longer enter the table: without this, the later Rule
+// folding would invert golden's `&DAT_*` classification (B3 前置警告).
+fn scan_rodata_strings(rodata: &[u8], base_vaddr: u64) -> HashMap<u64, String> {
+    let mut string_table = HashMap::new();
+    let mut i = 0;
+    while i < rodata.len() {
+        let first = rodata[i];
+        if first.is_ascii_graphic()
+            || first == b' '
+            || first == b'\n'
+            || first == b'\t'
+            || first == b'\r'
+        {
+            let str_start = i;
+            while i < rodata.len() && rodata[i] != 0 {
+                i += 1;
+            }
+            let str_len = i - str_start;
+            let va = base_vaddr + str_start as u64;
+            // NUL-terminated runs only, and only with a valid codepoint
+            // sequence (check_characters_utf8 includes the trailing NUL).
+            if str_len >= 1
+                && i < rodata.len()
+                && check_characters_utf8(&rodata[str_start..i + 1])
+            {
+                let s = String::from_utf8_lossy(&rodata[str_start..str_start + str_len]);
+                if s.chars().all(|c| c.is_ascii() || c == '\u{FFFD}') {
+                    // Replace lossy replacement chars for clean display
+                    let clean: String = s.chars().filter(|c| c.is_ascii()).collect();
+                    if !clean.is_empty() {
+                        string_table.insert(va, clean);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    string_table
+}
+
+// RUGRA-GLUE: driver-side synthetic .rodata DAT labels — the decompiler core
+// has no counterpart (see synthetic_dat_name above). Segment-(a1) interface
+// reservation (B3-COREACTION-CONSTANTPTR-0001 §a0): this map is the driver
+// half of the Program-DB entry layer. When Funcdata grows the
+// query_container channel (audit C1/C2), these entries populate the global
+// scope's SymbolEntries (addr + per-byte proxy size 1 + golden-aligned name)
+// so `ActionConstantPtr::isPointer`'s queryContainer(needexacthit=true) can
+// hit the 0x7180-class aliases. Until that wiring lands this map has NO
+// consumer by design (zero E2E delta); it deliberately does not feed the
+// legacy symbol_entries name proxy, because printc's pushConstant resolves
+// symbol_table before string_table and would otherwise rename raw .rodata
+// constants ahead of the Action-side gating that segment (b) ports.
+fn scan_rodata_dat_entries(
+    rodata: &[u8],
+    base_vaddr: u64,
+    symbol_table: &HashMap<u64, String>,
+) -> BTreeMap<u64, String> {
+    let mut entries = BTreeMap::new();
+    // Same manageable-section cap as the .data/.bss synthetic loop below.
+    if rodata.len() as u64 > 0x10000 {
+        return entries;
+    }
+    for off in 0..rodata.len() as u64 {
+        let addr = base_vaddr + off;
+        if !symbol_table.contains_key(&addr) {
+            entries.insert(addr, synthetic_dat_name(addr));
+        }
+    }
+    entries
+}
+
 // RUGRA-GLUE: hidden driver modes exercise process isolation without changing normal curl output.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -2411,6 +2594,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     let mut elf_function_symbols: HashMap<u64, (String, usize)> = HashMap::new();
     let mut symbol_table: HashMap<u64, String> = HashMap::new();
     let mut string_table: HashMap<u64, String> = HashMap::new();
+    // .rodata synthetic DAT labels reserved for the segment-(a1)
+    // query_container channel (see scan_rodata_dat_entries); deliberately
+    // NOT routed into symbol_entries in this slice.
+    let mut rodata_dat_entries: BTreeMap<u64, String> = BTreeMap::new();
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
 
     {
@@ -2530,7 +2717,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // String table from .rodata
+        // String table from .rodata, gated by the oracle's codepoint
+        // validity chain (check_characters_utf8 above): invalid-UTF-8 runs
+        // (0x7180/0x99a8/0xc1d8 hugehelp aliases) stay out so later Rule
+        // folding cannot invert golden's `&DAT_*` classification.
         for header in elf.section_headers.iter() {
             if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
                 if name == ".rodata" {
@@ -2538,35 +2728,24 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     let end = std::cmp::min(start + header.sh_size as usize, buffer.len());
                     let rodata = &buffer[start..end];
                     let base_vaddr = header.sh_addr;
-                    let mut i = 0;
-                    while i < rodata.len() {
-                        if rodata[i].is_ascii_graphic()
-                            || rodata[i] == b' '
-                            || rodata[i] == b'\n'
-                            || rodata[i] == b'\t'
-                            || rodata[i] == b'\r'
-                        {
-                            let str_start = i;
-                            while i < rodata.len() && rodata[i] != 0 {
-                                i += 1;
-                            }
-                            let str_len = i - str_start;
-                            let va = base_vaddr + str_start as u64;
-                            if str_len >= 1 {
-                                let s = String::from_utf8_lossy(
-                                    &rodata[str_start..str_start + str_len],
-                                );
-                                if s.chars().all(|c| c.is_ascii() || c == '\u{FFFD}') {
-                                    // Replace lossy replacement chars for clean display
-                                    let clean: String =
-                                        s.chars().filter(|c| c.is_ascii()).collect();
-                                    if !clean.is_empty() {
-                                        string_table.insert(va, clean);
-                                    }
-                                }
-                            }
-                        }
-                        i += 1;
+                    string_table = scan_rodata_strings(rodata, base_vaddr);
+                    // Segment-(a0) Program-DB layer: synthetic .rodata DAT
+                    // labels reserved for the (a1) query_container wiring.
+                    rodata_dat_entries =
+                        scan_rodata_dat_entries(rodata, base_vaddr, &symbol_table);
+                    eprintln!(
+                        "[PREPASS] .rodata DAT labels (B3 a0, reserved for query_container): {} entries [0x{:x}..0x{:x}]",
+                        rodata_dat_entries.len(),
+                        rodata_dat_entries.keys().next().copied().unwrap_or(0),
+                        rodata_dat_entries.keys().next_back().copied().unwrap_or(0)
+                    );
+                    for witness in [0x7180u64, 0x99a8, 0xc1d8, 0xea40, 0x11270, 0x13ad0] {
+                        eprintln!(
+                            "[PREPASS]   hugehelp witness 0x{:x}: dat={} string={}",
+                            witness,
+                            rodata_dat_entries.contains_key(&witness),
+                            string_table.contains_key(&witness)
+                        );
                     }
                     break;
                 }
@@ -3056,4 +3235,107 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod constantptr_driver_a0_tests {
+    use super::*;
+
+    /// Loads the locked curl fixture's .rodata (section bytes + base-0 vaddr).
+    fn curl_rodata() -> (Vec<u8>, u64) {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/curl");
+        let data = std::fs::read(path).expect("examples/curl fixture readable");
+        let elf = match goblin::Object::parse(&data).expect("curl parses as ELF") {
+            goblin::Object::Elf(elf) => elf,
+            _ => panic!("curl fixture is not an ELF object"),
+        };
+        for header in elf.section_headers.iter() {
+            if elf.shdr_strtab.get_at(header.sh_name) == Some(".rodata") {
+                let start = header.sh_offset as usize;
+                let end = (start + header.sh_size as usize).min(data.len());
+                return (data[start..end].to_vec(), header.sh_addr);
+            }
+        }
+        panic!("curl fixture has no .rodata section");
+    }
+
+    #[test]
+    fn codepoint_gate_matches_oracle_prefix_chain() {
+        // ASCII run with terminator (stringmanage.cc:329-336 happy path).
+        assert!(check_characters_utf8(b"abc\0"));
+        // Bare 0xAD continuation byte: fall-through return -1
+        // (stringmanage.cc:391) — the hugehelp alias shape.
+        assert!(!check_characters_utf8(b"opera\xad\ntion\0"));
+        assert!(!check_characters_utf8(b"\x80lead\0"));
+        // Valid multi-byte UTF-8 (e0/f0 prefix chains).
+        assert!(check_characters_utf8(b"\xc3\xa9\0"));
+        assert!(check_characters_utf8(b"\xf0\x9f\x98\x80\0"));
+        // Truncated sequences (prefix at the end, NUL is not a continuation).
+        assert!(!check_characters_utf8(b"\xc3\0"));
+        assert!(!check_characters_utf8(b"\xf0\x9f\x98\0"));
+        // Surrogate range and >0x10FFFF rejections (stringmanage.cc:392-397).
+        assert!(!check_characters_utf8(b"\xed\xa0\x80\0"));
+        assert!(!check_characters_utf8(b"\xf4\x90\x80\x80\0"));
+        // Lead bytes outside every prefix chain.
+        assert!(!check_characters_utf8(b"\xf8\x80\x80\x80\0"));
+        // No terminator inside the section: DataUnavailError analog
+        // (stringmanage.cc:463-465) leaves the negative cache.
+        assert!(!check_characters_utf8(b"abc"));
+        // Oracle quirk kept faithful: C0 80 is an overlong NUL — the
+        // (val&0xe0)==0xc0 branch (stringmanage.cc:363-366) has no overlong
+        // rejection, so it decodes to codepoint 0 and terminates the run.
+        assert!(check_characters_utf8(b"\xc0\x80\0"));
+    }
+
+    #[test]
+    fn six_hugehelp_addresses_classify_like_golden() {
+        let (rodata, base_vaddr) = curl_rodata();
+        let strings = scan_rodata_strings(&rodata, base_vaddr);
+        // Fixture ELF symbols: only _IO_stdin_used sits inside .rodata.
+        let mut fixture_symbols: HashMap<u64, String> = HashMap::new();
+        fixture_symbols.insert(0x6000, "_IO_stdin_used".to_string());
+        let dats = scan_rodata_dat_entries(&rodata, base_vaddr, &fixture_symbols);
+        // Golden classification (B3 audit §1.2): the first three aliases
+        // carry 0xAD bytes -> isString false -> `&DAT_*`; the last three are
+        // pure ASCII -> string literals after Rule folding.
+        for &rejected in &[0x7180u64, 0x99a8, 0xc1d8] {
+            assert!(
+                !strings.contains_key(&rejected),
+                "0x{rejected:x} must be rejected by the UTF-8 gate"
+            );
+        }
+        for &accepted in &[0xea40u64, 0x11270, 0x13ad0] {
+            assert!(
+                strings.contains_key(&accepted),
+                "0x{accepted:x} must stay a valid string"
+            );
+        }
+        // All six addresses get synthetic DAT labels for the (a1) channel.
+        for &witness in &[0x7180u64, 0x99a8, 0xc1d8, 0xea40, 0x11270, 0x13ad0] {
+            assert!(
+                dats.contains_key(&witness),
+                "0x{witness:x} must carry a .rodata DAT label"
+            );
+        }
+        // Gate footprint on this fixture: the pre-gate driver admitted 136
+        // strings; exactly the five invalid-UTF-8 runs drop (the three
+        // hugehelp aliases plus 0x7094 and 0x149d4), nothing is added.
+        for &also_rejected in &[0x7094u64, 0x149d4] {
+            assert!(!strings.contains_key(&also_rejected));
+        }
+        assert_eq!(strings.len(), 131);
+        // .rodata spans 0x6000..0x14a60; the only interior ELF symbol is
+        // _IO_stdin_used@0x6000, so every other byte offset gets a DAT label.
+        assert_eq!(dats.len(), 0xea60 - 1);
+        assert!(!dats.contains_key(&0x6000));
+        assert_eq!(dats[&0x7180], "DAT_00107180");
+    }
+
+    #[test]
+    fn dat_names_match_golden_width() {
+        assert_eq!(synthetic_dat_name(0x7180), "DAT_00107180");
+        assert_eq!(synthetic_dat_name(0x61d9), "DAT_001061d9");
+        assert_eq!(synthetic_dat_name(0x17020), "DAT_00117020");
+        assert_eq!(synthetic_dat_name(0x175c0), "DAT_001175c0");
+    }
 }
