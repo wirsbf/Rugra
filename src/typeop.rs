@@ -3247,12 +3247,13 @@ mod tests {
     #[test]
     fn default_trait_methods_are_none() {
         // Ops without overrides use the trait defaults.
+        let branch = TypeOpBranch::new(Arc::new(RwLock::new(TypeFactory::raw())));
         let op = pcodeop(OpCode::CPUI_BRANCH);
-        assert!(TypeOpBranch.get_output_token(&op).is_none());
-        assert!(TypeOpBranch.get_input_cast(&op, 0).is_none());
-        assert!(TypeOpBranch.get_output_metatype().is_none());
+        assert!(branch.get_output_token(&op).is_none());
+        assert!(branch.get_input_cast(&op, 0).is_none());
+        assert!(branch.get_output_metatype().is_none());
         let t = int_t();
-        assert!(TypeOpBranch.propagate_type(&t, &op, -1, 0).is_none());
+        assert!(branch.propagate_type(&t, &op, -1, 0).is_none());
     }
 
     #[test]

@@ -335,3 +335,8 @@ TypeOp trait +get_output_token/get_input_cast/propagate_type/get_output_metatype
 关键 op 实现：COPY（透明传播）、LOAD/STORE（指针↔值）、MULTIEQUAL/INDIRECT（透明）、INT_ADD（指针传播）、6 个比较 op（bool 输出+跨 input 传播）。+propagate_to_pointer/from_pointer 辅助。8 新测试。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- opcode-correct: 1783180039.060287 -->
+
+### 2026-08-25 测试修复
+
+- `default_trait_methods_are_none` 测试改用 `TypeOpBranch::new(TypeFactory::raw())` 构造实例（TYPEOP-LOCALBASE-DEFAULTS-0001 的 TypeOpBranch 带工厂字段后，原 unit-struct 用法触发 E0423，阻塞全仓 cargo test --lib）。行为语义不变（token/cast/metatype/propagate 默认值均不触工厂）。
+
