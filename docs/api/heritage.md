@@ -965,3 +965,53 @@ block_domroot_1204 权威 runner MATCH + 机制 C 复核 APPROVE（2026-08-19）
   恢复 oracle 的 false 分支。源码审计已确认该缺口，但没有同输入双侧 fixture，
   所以证据状态为 `UNTESTED`，绑定 `CALLSPEC-0001`；本 D0 不把它虚升为行为
   `MATCH`，也不在 identity/lifecycle 租约内扩写 Heritage 算法。
+
+## HERITAGE-GUARD-NORMALIZE-0001 — guard/return 归一化切片（2026-08-24）
+
+`Heritage::guard` 的 addIndirects 半边（heritage.cc:1188-1198）与
+normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
+
+- **`guard_query_properties`**（database.cc:1263 `Scope::queryProperties`，
+  guard cc:1191 空 usepoint 调用形态）：最小包含符号 → getAllFlags
+  （mapped|addrtied(无 usepoint)|typelock|namelock|nolocalalias）；在
+  local_range 内 → mapped|addrtied；否则 → Architecture::symboltab 的
+  flagbase（persist 等属性带）。残余：Ghidra 的 stackContainer 会继续走到
+  父（global）scope，Rugra ScopeLocal 无父链，global 符号不可见（管线内
+  stack/register 路径不依赖）；`fd.scope` 为空时属性查询走 arch flagbase。
+- **`guard_range`**：fl 改为真实查询（原硬编码 0）；调用顺序
+  guardCalls → **guardReturns**（新接入）→ `high_ptr_possible` 门控
+  guardStores/guardLoads（cc:1194，原无条件调用）；write 表项由
+  `normalize_write_size` 的返回值替换（cc:1180 `*iter = vn =`，原丢弃）。
+- **`guard_returns`**（heritage.cc:1652-1692，新移植）：activeoutput 半边 ——
+  `characterize_as_output` 分 contained_by（→ guardReturnsOverlapping）、
+  其余 containment（registerTrial + 每个 live 非 halt RETURN 追加全范围新
+  input，cc:1663-1673）；persist 半边 —— 每个 **live RETURN（含 halt，
+  cc:1678-1680 无 halt 检查）** 前插 return-copy COPY（out addrForce+
+  activeHeritage，op 带 `PcodeOp::return_copy`，cc:1681-1690）。coreaction
+  侧 ANN-F 默认模型输出 seed（coreaction.rs）不在本租约内，待 PARAM-BIND
+  家族收敛时统一去重。
+- **`guard_returns_overlapping`**（heritage.cc:1609-1638，新移植）：
+  `get_biggest_contained_output` → 截断 trial 注册（BE 偏移从高位重算，
+  cc:1620-1622）+ 每个 live 非 halt RETURN 前 SUBPIECE(#offset) 截断
+  （cc:1628-1636），常量 4 字节（cc:1632）。
+- **`normalize_write_size`**（heritage.cc:416-494，完全重写）：most/least
+  两片 CALL 分支（`call_op_indirect_effect` 真 → `new_indirect_creation`；
+  假 → 全范围 free read 的 SUBPIECE，常量宽度 = `space.addr_size()`）；
+  midvn PIECE(vn, leastvn)（BE 输出地址取 vn 原地址，cc:472-475）；bigout
+  PIECE(mostvn, midvn)（插在 midvn def 之后，cc:489）；原 vn `set_write_mask`
+  （cc:493）；返回 bigout。旧实现的三处结构性错误（不回写替换、PIECE 用
+  全范围新建 free varnode 当输入、new_op(3) 元数）全部消除。
+- **`call_op_indirect_effect`**（heritage.cc:358-370，极性修复）：
+  CALL/CALLIND → `get_call_specs_of_op` exact owner + `has_effect_translate
+  != Unaffected`（无 spec → true）；**CALLOTHER/NEW → false**（原恒 true，
+  两分支极性均错）。D0 时登记的 `CALLSPEC-0001` UNTESTED 缺口就此闭合并由
+  heritage_guard_normalize_1204 双侧 fixture 提供证据。
+- RETURN 遍历顺序 = `obank.returnlist` 创建序（Ghidra `beginOp(CPUI_RETURN)`
+  的插入序镜像）；halt 判定 = `HALT|BADINSTRUCTION|UNIMPLEMENTED|NORETURN|
+  MISSING`（op.hh:171）。
+- fixture：`tests/oracle/heritage_guard_normalize_1204.{cc,rs}` +
+  `tools/run_heritage_guard_normalize_oracle.sh`（锁定 oracle e40ed130 双侧
+  执行、字节级 stdout diff）。covered projections = MATCH（六 case）；
+  模块整体仍 MISMATCH：loadGuard COPY 插入、indexed/ValueSet、join、
+  removeRevisitedMarkers COPY 形态等未做切片按 TODO 登记（load/join/indexed
+  归 HERITAGE-CALLGUARD/PROCESSJOINS 家族）。

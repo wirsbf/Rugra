@@ -1560,8 +1560,222 @@ impl Heritage {
     }
 
 
+    // Ghidra: heritage.cc:1609 Heritage::guardReturnsOverlapping
+    /// Guard data-flow at RETURN ops where the heritaged range properly
+    /// contains the potential return storage. Faithful 1:1 port of
+    /// `guardReturnsOverlapping` (heritage.cc:1609-1638): the biggest
+    /// contained output storage of the function's own prototype is looked
+    /// up, a trial is registered at the truncated address (BE offsets are
+    /// re-derived from the range tail, cc:1620-1622), and every live
+    /// non-halt RETURN gets a SUBPIECE that truncates a fresh full-range
+    /// free read down to the return storage, inserted before the RETURN as
+    /// its new last input (cc:1623-1637).
+    pub fn guard_returns_overlapping(
+        &mut self,
+        fd: &mut Funcdata,
+        space: AddressSpace,
+        addr: Address,
+        size: i32,
+    ) {
+        // cc:1615: if (!fd->getFuncProto().getBiggestContainedOutput(...)) return
+        let Some((v_space, v_offset, v_size)) =
+            fd.get_func_proto()
+                .get_biggest_contained_output(space, addr.as_u64(), size)
+        else {
+            return;
+        };
+        let trunc_addr = Address::new(v_offset);
+        // cc:1618-1619: active = fd->getActiveOutput();
+        // active->registerTrial(truncAddr, vData.size)
+        if let Some(active) = fd.active_output.as_mut() {
+            active.register_trial_in_space(v_space, trunc_addr, v_size);
+        }
+        // cc:1620: offset = vData.offset - addr.getOffset() — number of
+        // least significant bytes to truncate.
+        let mut offset = v_offset.wrapping_sub(addr.as_u64()) as i64;
+        // cc:1621-1622: BE re-derives from the most significant side.
+        if v_space.is_big_endian() {
+            offset = (size as i64 - v_size as i64) - offset;
+        }
+        // cc:1623-1637: every live non-halt RETURN, in op-list order
+        // (fd->beginOp(CPUI_RETURN) .. endOp — creation order).
+        let return_ops: Vec<PcodeOpRef> = fd.obank.returnlist.clone();
+        for op in return_ops {
+            let (dead, halt) = {
+                let r = op.0.read().unwrap();
+                (
+                    (r.flags & crate::op::pcodeop_flags::DEAD) != 0,
+                    (r.flags
+                        & (crate::op::pcodeop_flags::HALT
+                            | crate::op::pcodeop_flags::BADINSTRUCTION
+                            | crate::op::pcodeop_flags::UNIMPLEMENTED
+                            | crate::op::pcodeop_flags::NORETURN
+                            | crate::op::pcodeop_flags::MISSING))
+                        != 0,
+                )
+            };
+            if dead {
+                continue; // cc:1626
+            }
+            if halt {
+                continue; // cc:1627: special halt points cannot take return values
+            }
+            let (op_addr, num_input) = {
+                let r = op.0.read().unwrap();
+                (r.get_addr(), r.num_input())
+            };
+            // cc:1628: invn = fd->newVarnode(size, addr)
+            let invn = fd
+                .vbank
+                .create_with_space(size as usize, space, addr.as_u64());
+            // cc:1629-1632: SUBPIECE(invn, offset)
+            let sub_op = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+            fd.op_set_input(&sub_op, invn.clone(), 0);
+            // cc:1632: newConstant(4, offset)
+            let off_const = fd.new_constant(4, offset as u64);
+            fd.op_set_input(&sub_op, off_const, 1);
+            // cc:1633: opInsertBefore(subOp, op)
+            fd.op_insert_before(&sub_op, &op);
+            // cc:1634: retVal = fd->newVarnodeOut(vData.size, truncAddr, subOp)
+            let ret_val = fd.vbank.create_def_with_space(
+                v_size as usize,
+                v_space,
+                trunc_addr.as_u64(),
+                &sub_op.0,
+            );
+            sub_op.0.write().unwrap().output = Some(ret_val.clone());
+            fd.set_varnode_properties(&ret_val);
+            // cc:1635: invn->setActiveHeritage()
+            invn.write().unwrap().set_active_heritage();
+            // cc:1636: opInsertInput(op, retVal, op->numInput())
+            fd.op_insert_input(&op, ret_val, num_input);
+        }
+    }
+
+    // Ghidra: heritage.cc:1652 Heritage::guardReturns
+    /// Guard global data-flow at RETURN ops in preparation for renaming.
+    /// Faithful 1:1 port of `guardReturns` (heritage.cc:1652-1692):
+    ///   (1) If the function's own output recovery is active
+    ///       (`fd->getActiveOutput()`): the range is characterized against
+    ///       the function prototype; `contained_by` routes to
+    ///       `guardReturnsOverlapping` (SUBPIECE truncation), any other
+    ///       containment registers a whole-range trial and appends a fresh
+    ///       full-range free read as the RETURN's last input
+    ///       (cc:1660-1674). Dead and halt RETURNs never take a value.
+    ///   (2) If the range carries `Varnode::persist` (fl bit): every live
+    ///       RETURN gets a return-copy — a COPY whose output is
+    ///       address-forced and marked `PcodeOp::return_copy`, reading a
+    ///       fresh full-range free read (cc:1676-1691). This second pass
+    ///       deliberately does NOT skip halt RETURNs (only dead ones),
+    ///       matching cc:1680.
+    /// Ghidra's unused `write` parameter is omitted here.
+    pub fn guard_returns(
+        &mut self,
+        fd: &mut Funcdata,
+        fl: u32,
+        space: AddressSpace,
+        addr: Address,
+        size: i32,
+    ) {
+        // cc:1658-1675: output-trial half, only when active output exists.
+        if fd.active_output.is_some() {
+            // cc:1660: outputCharacter = fd->getFuncProto().characterizeAsOutput(addr, size)
+            let output_character =
+                fd.get_func_proto()
+                    .characterize_as_output(space, addr.as_u64(), size);
+            if output_character == crate::fspec::containment::CONTAINED_BY {
+                // cc:1661-1662
+                self.guard_returns_overlapping(fd, space, addr, size);
+            } else if output_character != crate::fspec::containment::NO_CONTAINMENT {
+                // cc:1664: active->registerTrial(addr, size)
+                if let Some(active) = fd.active_output.as_mut() {
+                    active.register_trial_in_space(space, addr, size);
+                }
+                let return_ops: Vec<PcodeOpRef> = fd.obank.returnlist.clone();
+                for op in return_ops {
+                    let (dead, halt, num_input) = {
+                        let r = op.0.read().unwrap();
+                        (
+                            (r.flags & crate::op::pcodeop_flags::DEAD) != 0,
+                            (r.flags
+                                & (crate::op::pcodeop_flags::HALT
+                                    | crate::op::pcodeop_flags::BADINSTRUCTION
+                                    | crate::op::pcodeop_flags::UNIMPLEMENTED
+                                    | crate::op::pcodeop_flags::NORETURN
+                                    | crate::op::pcodeop_flags::MISSING))
+                                != 0,
+                            r.num_input(),
+                        )
+                    };
+                    if dead {
+                        continue; // cc:1668
+                    }
+                    if halt {
+                        continue; // cc:1669
+                    }
+                    // cc:1670-1672: invn = newVarnode(size,addr);
+                    // setActiveHeritage; opInsertInput(op, invn, numInput())
+                    let invn = fd
+                        .vbank
+                        .create_with_space(size as usize, space, addr.as_u64());
+                    invn.write().unwrap().set_active_heritage();
+                    fd.op_insert_input(&op, invn, num_input);
+                }
+            }
+        }
+        // cc:1676: if ((fl & Varnode::persist)==0) return
+        if (fl & crate::varnode::varnode_flags::PERSIST) == 0 {
+            return;
+        }
+        // cc:1677-1691: return-copy suffix on every live RETURN (halt
+        // RETURNs included — only the dead check at cc:1680 applies).
+        let return_ops: Vec<PcodeOpRef> = fd.obank.returnlist.clone();
+        for op in return_ops {
+            let (dead, op_addr) = {
+                let r = op.0.read().unwrap();
+                ((r.flags & crate::op::pcodeop_flags::DEAD) != 0, r.get_addr())
+            };
+            if dead {
+                continue; // cc:1680
+            }
+            // cc:1681: copyop = fd->newOp(1, op->getAddr())
+            let copyop = fd.new_op(1, op_addr);
+            // cc:1682: vn = fd->newVarnodeOut(size, addr, copyop)
+            let vn = fd.vbank.create_def_with_space(
+                size as usize,
+                space,
+                addr.as_u64(),
+                &copyop.0,
+            );
+            copyop.0.write().unwrap().output = Some(vn.clone());
+            fd.set_varnode_properties(&vn);
+            // cc:1683-1684: vn->setAddrForce(); vn->setActiveHeritage()
+            vn.write().unwrap().set_addr_force();
+            vn.write().unwrap().set_active_heritage();
+            // cc:1685: opSetOpcode(copyop, CPUI_COPY)
+            fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
+            // cc:1686: fd->markReturnCopy(copyop) — funcdata.hh inline:
+            // op->setFlag(PcodeOp::return_copy)
+            copyop
+                .0
+                .write()
+                .unwrap()
+                .flags |= crate::op::pcodeop_flags::RETURN_COPY;
+            // cc:1687-1689: invn = newVarnode(size,addr);
+            // setActiveHeritage; opSetInput(copyop, invn, 0)
+            let invn = fd
+                .vbank
+                .create_with_space(size as usize, space, addr.as_u64());
+            invn.write().unwrap().set_active_heritage();
+            fd.op_set_input(&copyop, invn, 0);
+            // cc:1690: opInsertBefore(copyop, op)
+            fd.op_insert_before(&copyop, &op);
+        }
+    }
+
     // Ghidra: heritage.cc:383 Heritage::normalizeReadSize
-    /// Normalize a read varnode whose size < range size: create a SUBPIECE
+    /// Normalize a read varnode whose size is < range size: create a SUBPIECE
     /// that extracts the full-size varnode, leaving the original as output.
     /// Faithful to `normalizeReadSize` (heritage.cc:383-401).
     pub fn normalize_read_size(
@@ -1604,89 +1818,225 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:417 Heritage::normalizeWriteSize
-    /// Normalize a write varnode whose size < range size: create PIECE ops
-    /// to fill the missing pieces, then SUBPIECE to extract the written part.
-    /// Faithful to `normalizeWriteSize` (heritage.cc:417-507).
-    /// This is a complex method (~90 lines in Ghidra). Rugra implements the
-    /// common case (single overlap, no CALL indirect) and falls back to
-    /// setActiveHeritage without normalization for complex cases.
+    /// Normalize a write varnode whose size < range size. Faithful 1:1 port
+    /// of `normalizeWriteSize` (heritage.cc:416-494):
+    ///   (1) mostsigsize piece (cc:428-448): if the defining op is a CALL
+    ///       whose `callOpIndirectEffect` on the piece fires, the piece is
+    ///       an INDIRECT creation; otherwise a SUBPIECE of a new full-range
+    ///       free read (`big`).
+    ///   (2) overlap piece (cc:449-468): same CALL split for the low part.
+    ///   (3) midvn (cc:470-482): `overlap != 0` PIECEs the original vn
+    ///       (most significant) with leastvn (least significant); else the
+    ///       original vn.
+    ///   (4) bigout (cc:483-492): `mostsigsize != 0` PIECEs mostvn with
+    ///       midvn; else midvn.
+    ///   (5) the original vn is write-masked (cc:493) and the final
+    ///       full-range Varnode is returned (cc:494) so `guard` can replace
+    ///       the write-list entry (`*iter = vn =`, cc:1180).
+    /// Big-endian `pieceaddr` selection mirrors cc:429-433/451-454 via the
+    /// range space's endianness (Rugra Address is offset-only).
     pub fn normalize_write_size(
         &self,
         fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
+        space: AddressSpace,
         addr: Address,
         size: i32,
-    ) {
-        let vn_size = vn.read().unwrap().get_size() as i64;
-        let overlap = vn.read().unwrap().loc.as_u64().saturating_sub(addr.as_u64()) as i64;
+    ) -> Arc<RwLock<Varnode>> {
+        let (vn_size, vn_loc) = {
+            let r = vn.read().unwrap();
+            (r.get_size() as i64, r.loc.as_u64())
+        };
+        let big_endian = space.is_big_endian();
+        let addr_size = space.addr_size();
+        // cc:425: op = vn->getDef() — a write varnode always has a definer.
+        let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(d) => d,
+            None => return vn.clone(),
+        };
+        let def_is_call = def_op.read().unwrap().is_call();
+        // cc:426: overlap = vn->overlap(addr, size)
+        let overlap = vn_loc.saturating_sub(addr.as_u64()) as i64;
+        // cc:427: mostsigsize = size - (overlap + vn->getSize())
         let mostsigsize = size as i64 - (overlap + vn_size);
-        let vn_space = vn.read().unwrap().address_space;
 
-        // cc:429-448: create "most significant" piece if needed.
-        if mostsigsize > 0 {
-            let piece_addr = addr.as_u64().wrapping_add((overlap + vn_size) as u64);
-            let piece_vn = fd.vbank.create_with_space(mostsigsize as usize, vn_space, piece_addr);
-            piece_vn.write().unwrap().set_active_heritage();
-            let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            if let Some(def_op) = def_op {
+        // cc:428-448: most significant piece.
+        let mut mostvn: Option<Arc<RwLock<Varnode>>> = None;
+        if mostsigsize != 0 {
+            // cc:429-433: BE keeps the piece at the range start; LE moves it
+            // past the original write.
+            let piece_addr = if big_endian {
+                addr
+            } else {
+                Address::new(addr.as_u64().wrapping_add((overlap + vn_size) as u64))
+            };
+            if def_is_call
+                && self.call_op_indirect_effect(
+                    fd,
+                    space,
+                    piece_addr,
+                    mostsigsize as i32,
+                    &def_op,
+                )
+            {
+                // cc:435: newIndirectCreation — don't create a new big read
+                // if the write is from a CALL with an effect on the piece.
+                let newop = fd.new_indirect_creation_in_space(
+                    &PcodeOpRef(def_op.clone()),
+                    space,
+                    piece_addr.as_u64(),
+                    mostsigsize as usize,
+                    false,
+                );
+                mostvn = newop.0.read().unwrap().output.as_ref().cloned();
+            } else {
+                // cc:439-446: SUBPIECE of a new full-range free read.
+                // Creation order mirrors the oracle: newOp, mostvn
+                // (newVarnodeOut), big (newVarnode), then wiring.
                 let op_addr = def_op.read().unwrap().get_addr();
                 let newop = fd.new_op(2, op_addr);
-                let _out_vn = fd.new_varnode_out(mostsigsize as usize, Address::new(piece_addr), &newop);
+                let most_out = fd.vbank.create_def_with_space(
+                    mostsigsize as usize,
+                    space,
+                    piece_addr.as_u64(),
+                    &newop.0,
+                );
+                newop.0.write().unwrap().output = Some(most_out.clone());
+                fd.set_varnode_properties(&most_out);
+                let big = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+                big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
-                fd.op_set_input(&newop, piece_vn, 0);
-                let off_const = fd.new_constant(8, (overlap + vn_size) as u64);
+                fd.op_set_input(&newop, big, 0);
+                // cc:445: newConstant(addr.getAddrSize(), overlap+vn->getSize())
+                let off_const = fd.new_constant(addr_size, (overlap + vn_size) as u64);
                 fd.op_set_input(&newop, off_const, 1);
-                fd.op_insert_before(&newop, &PcodeOpRef(def_op));
+                fd.op_insert_before(&newop, &PcodeOpRef(def_op.clone()));
+                mostvn = Some(most_out);
             }
         }
 
-        // cc:450-479: create "least significant" piece if needed.
-        if overlap > 0 {
-            let piece_vn = fd.vbank.create_with_space(overlap as usize, vn_space, addr.as_u64());
-            piece_vn.write().unwrap().set_active_heritage();
-            let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            if let Some(def_op) = def_op {
+        // cc:449-468: least significant (overlap) piece.
+        let mut leastvn: Option<Arc<RwLock<Varnode>>> = None;
+        if overlap != 0 {
+            // cc:451-454: BE moves the piece above the range tail; LE keeps
+            // it at the range start.
+            let piece_addr = if big_endian {
+                Address::new(addr.as_u64().wrapping_add((size as i64 - overlap) as u64))
+            } else {
+                addr
+            };
+            if def_is_call
+                && self.call_op_indirect_effect(fd, space, piece_addr, overlap as i32, &def_op)
+            {
+                // cc:456: unless the CALL definitely has no effect on the
+                // piece, take it from an INDIRECT creation.
+                let newop = fd.new_indirect_creation_in_space(
+                    &PcodeOpRef(def_op.clone()),
+                    space,
+                    piece_addr.as_u64(),
+                    overlap as usize,
+                    false,
+                );
+                leastvn = newop.0.read().unwrap().output.as_ref().cloned();
+            } else {
+                // cc:460-467: SUBPIECE of a new full-range free read with
+                // truncation constant 0.
                 let op_addr = def_op.read().unwrap().get_addr();
                 let newop = fd.new_op(2, op_addr);
-                let _out_vn = fd.new_varnode_out(overlap as usize, addr, &newop);
+                let least_out =
+                    fd.vbank
+                        .create_def_with_space(overlap as usize, space, piece_addr.as_u64(), &newop.0);
+                newop.0.write().unwrap().output = Some(least_out.clone());
+                fd.set_varnode_properties(&least_out);
+                let big = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+                big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
-                fd.op_set_input(&newop, piece_vn, 0);
-                let off_const = fd.new_constant(8, 0u64);
+                fd.op_set_input(&newop, big, 0);
+                // cc:466: newConstant(addr.getAddrSize(), 0)
+                let off_const = fd.new_constant(addr_size, 0u64);
                 fd.op_set_input(&newop, off_const, 1);
-                fd.op_insert_before(&newop, &PcodeOpRef(def_op));
+                fd.op_insert_before(&newop, &PcodeOpRef(def_op.clone()));
+                leastvn = Some(least_out);
             }
         }
 
-        // cc:480-506: create the PIECE op that joins the pieces.
-        let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-        if let Some(def_op) = def_op {
+        // cc:470-482: midvn — PIECE the original write over the low piece.
+        let midvn: Arc<RwLock<Varnode>> = if overlap != 0 {
             let op_addr = def_op.read().unwrap().get_addr();
-            let newop = fd.new_op(3, op_addr);
+            let newop = fd.new_op(2, op_addr);
+            // cc:472-475: BE output address is the original vn's; LE is the
+            // range start.
+            let mid_addr = if big_endian {
+                Address::new(vn_loc)
+            } else {
+                addr
+            };
+            let mid_out =
+                fd.vbank
+                    .create_def_with_space((overlap + vn_size) as usize, space, mid_addr.as_u64(), &newop.0);
+            newop.0.write().unwrap().output = Some(mid_out.clone());
+            fd.set_varnode_properties(&mid_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
-            let most_addr = addr.as_u64().wrapping_add((overlap + vn_size) as u64);
-            let most_vn = fd.vbank.create_with_space(size as usize, vn_space, most_addr);
-            let least_vn = fd.vbank.create_with_space(size as usize, vn_space, addr.as_u64());
-            fd.op_set_input(&newop, most_vn, 0);
-            fd.op_set_input(&newop, least_vn, 1);
-            let full_vn = fd.new_varnode_out(size as usize, addr, &newop);
-            full_vn.write().unwrap().set_active_heritage();
-            fd.op_insert_before(&newop, &PcodeOpRef(def_op));
-        }
+            // cc:477-478: vn is the most significant input.
+            fd.op_set_input(&newop, vn.clone(), 0);
+            fd.op_set_input(&newop, leastvn.clone().expect("overlap!=0 implies leastvn"), 1);
+            fd.op_insert_after(&newop, &PcodeOpRef(def_op.clone()));
+            mid_out
+        } else {
+            vn.clone()
+        };
+
+        // cc:483-492: bigout — PIECE the high piece over midvn.
+        let bigout: Arc<RwLock<Varnode>> = if mostsigsize != 0 {
+            let op_addr = def_op.read().unwrap().get_addr();
+            let newop = fd.new_op(2, op_addr);
+            let big_out =
+                fd.vbank
+                    .create_def_with_space(size as usize, space, addr.as_u64(), &newop.0);
+            newop.0.write().unwrap().output = Some(big_out.clone());
+            fd.set_varnode_properties(&big_out);
+            fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
+            fd.op_set_input(&newop, mostvn.clone().expect("mostsigsize!=0 implies mostvn"), 0);
+            fd.op_set_input(&newop, midvn.clone(), 1);
+            // cc:489: opInsertAfter(newop, midvn->getDef())
+            let mid_def = midvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            if let Some(mid_def) = mid_def {
+                fd.op_insert_after(&newop, &PcodeOpRef(mid_def));
+            } else {
+                fd.op_insert_after(&newop, &PcodeOpRef(def_op.clone()));
+            }
+            big_out
+        } else {
+            midvn.clone()
+        };
+
+        // cc:493: the original small write is write-masked so the driver
+        // never re-collects it (cc:2706).
+        vn.write().unwrap().set_write_mask();
+        // cc:494: return bigout — guard replaces the write-list entry.
+        bigout
     }
 
     // Ghidra: heritage.cc:1157 Heritage::guard
     /// Guard a specific address range for heritage. Faithful to
-    /// `Heritage::guard` (heritage.cc:1157-1200):
+    /// `Heritage::guard` (heritage.cc:1156-1199):
     ///   (1) For each read varnode: verify single descendent, normalizeReadSize,
     ///       setActiveHeritage.
-    ///   (2) For each write varnode: normalizeWriteSize, setActiveHeritage.
-    ///   (3) If addIndirects: queryProperties + guardCalls/Returns/Stores/Loads.
+    ///   (2) For each write varnode: normalizeWriteSize (the write-list entry
+    ///       is replaced by the returned full-range Varnode, cc:1180),
+    ///       setActiveHeritage.
+    ///   (3) If addIndirects: queryProperties sets fl, then
+    ///       guardCalls/guardReturns, and — gated on
+    ///       `fd->getArch()->highPtrPossible(addr,size)` (cc:1194) —
+    ///       guardStores/guardLoads.
     ///
-    /// Steps 1/2 require the read/write lists from collect() (cc:308).
-    /// Rugra does not yet have collect(), so this method is called with
-    /// empty lists by guard_all. The setActiveHeritage on all free varnodes
-    /// is done separately by rename_direct's marker loop. When collect() is
-    /// implemented, this method will receive real read/write lists.
+    /// The read/write lists come from `collect` via `place_multiequals`
+    /// (cc:2629). The `fl` query is `fd->getScopeLocal()->queryProperties`
+    /// with an empty usepoint (cc:1191), modeled by
+    /// [`Heritage::guard_query_properties`]. Ghidra throws
+    /// LowlevelError("Free varnode with multiple reads") at cc:1171; Rugra
+    /// keeps the file-wide stderr convention (no exception channel on the
+    /// driver) and logs instead.
     pub fn guard_range(
         &mut self,
         fd: &mut Funcdata,
@@ -1729,28 +2079,134 @@ impl Heritage {
         for vn_arc in write.iter_mut() {
             let vn_size = vn_arc.read().unwrap().get_size() as i32;
             if vn_size < size {
-                // Ghidra cc:1181: normalizeWriteSize(vn, addr, size)
-                self.normalize_write_size(fd, vn_arc, addr, size);
+                // Ghidra cc:1180: *iter = vn = normalizeWriteSize(vn, addr, size)
+                // — the entry is replaced by the returned full-range Varnode.
+                let new_vn = self.normalize_write_size(fd, vn_arc, space, addr, size);
+                *vn_arc = new_vn;
             }
             vn_arc.write().unwrap().set_active_heritage();
         }
-        // Ghidra cc:1189-1199: addIndirects half — queryProperties sets
-        // `fl` from ScopeLocal range properties; Rugra has no ScopeLocal on
-        // this path yet, so fl=0 (no addrtied, no persist), which only
-        // suppresses the ADDRFORCE mark and the return-COPY suffix.
+        // Ghidra cc:1188-1198: addIndirects half.
         if add_indirects {
-            let fl: u32 = 0;
-            // cc:1192: fd->getScopeLocal()->queryProperties(addr,size,Address(),fl)
-            // cc:1193: guardCalls(fl,addr,size,write)
+            // cc:1189-1191: fl = 0;
+            // fd->getScopeLocal()->queryProperties(addr,size,Address(),fl)
+            let fl = Heritage::guard_query_properties(fd, space, addr, size);
+            // cc:1192: guardCalls(fl,addr,size,write)
             self.guard_calls(fd, fl, space, addr, size, write);
-            // cc:1194: guardReturns(fl,addr,size,write)
-            // Not wired: needs FuncProto::activeoutput on the function's own
-            // prototype (Ghidra fspec.hh:1656) and Funcdata::activeoutput
-            // linkage; residual registered against the PARAM-BIND family.
-            // cc:1195-1197: if highPtrPossible: guardStores/guardLoads.
-            self.guard_stores_range(fd, space, addr, size, write);
-            self.guard_loads_range(fd, fl, space, addr, size, write);
+            // cc:1193: guardReturns(fl,addr,size,write)
+            self.guard_returns(fd, fl, space, addr, size);
+            // cc:1194-1197: if (fd->getArch()->highPtrPossible(addr,size)) {
+            //   guardStores(addr,size,write); guardLoads(fl,addr,size,write); }
+            // fd.get_arch() is None only on synthetic arch-less Funcdata
+            // (tests); the oracle always dereferences the Architecture.
+            let high_ptr_possible = fd
+                .get_arch()
+                .map(|a| a.high_ptr_possible(addr, size))
+                .unwrap_or(true);
+            if high_ptr_possible {
+                self.guard_stores_range(fd, space, addr, size, write);
+                self.guard_loads_range(fd, fl, space, addr, size, write);
+            }
         }
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties
+    /// Boolean properties of a memory range for the guard() addIndirects
+    /// half, faithful to `Scope::queryProperties(addr,size,usepoint,fl)`
+    /// (database.cc:1263-1281) as called from `Heritage::guard` with an
+    /// empty usepoint (heritage.cc:1191) on `fd->getScopeLocal()`:
+    ///   (1) smallest SymbolEntry CONTAINING the whole range (stackContainer
+    ///       -> ScopeInternal::findContainer) -> `entry->getAllFlags()`;
+    ///   (2) else if the range is in the scope's range tree -> `mapped |
+    ///       addrtied` (+persist for a global scope; ScopeLocal never is) |
+    ///       getProperty(addr);
+    ///   (3) else -> getProperty(addr).
+    /// Residuals: Ghidra continues the stackContainer walk into the parent
+    /// (global) scope; Rugra's ScopeLocal has no parent linkage, so a
+    /// global symbol containing the range is not visible here (fixtures
+    /// and the stack/register pipeline never rely on it). The
+    /// `getProperty` flagbase fallback reads Architecture::symboltab when
+    /// present; an arch-less Funcdata gets 0.
+    // RUGRA-GLUE: static scope-local projection of the oracle's
+    // fd->getScopeLocal()->queryProperties call; Funcdata owns ScopeLocal
+    // by value (varmap.rs), not through the Database scope graph.
+    pub fn guard_query_properties(
+        fd: &Funcdata,
+        space: AddressSpace,
+        addr: Address,
+        size: i32,
+    ) -> u32 {
+        use crate::varnode::varnode_flags;
+        if size <= 0 {
+            return 0;
+        }
+        if let Some(scope) = &fd.scope {
+            let offset = addr.as_u64();
+            let last = offset + size as u64 - 1;
+            // (1) smallest containing non-dynamic symbol covering the WHOLE
+            // range; ties broken by the entry subsort (usepoint-free first),
+            // matching the multiset pick of stackContainer's findContainer.
+            let mut best: Option<(&crate::varmap::LocalSymbol, (u8, u64))> = None;
+            for sym in scope.symbols.iter().filter(|s| !s.is_dynamic) {
+                if sym.space != space || sym.size <= 0 {
+                    continue;
+                }
+                let sym_last = sym.start + sym.size as u64 - 1;
+                if sym.start <= offset && last <= sym_last {
+                    // database.cc:97 getSubsort: (0,0) for address-tied
+                    // storage (usepoint == None), else (1, usepoint).
+                    let subsort = match sym.usepoint {
+                        None => (0u8, 0u64),
+                        Some(u) => (1u8, u),
+                    };
+                    if best.map(|(_, b)| subsort < b).unwrap_or(true) {
+                        best = Some((sym, subsort));
+                    }
+                }
+            }
+            if let Some((sym, _)) = best {
+                // SymbolEntry::getAllFlags as computed by
+                // sync_varnodes_with_symbols cc:954: mapped | addrtied when
+                // the mapping carries no usepoint | typelock | namelock |
+                // nolocalalias.
+                let mut f = varnode_flags::MAPPED;
+                if sym.usepoint.is_none() {
+                    f |= varnode_flags::ADDRTIED;
+                }
+                if sym.typelock {
+                    f |= varnode_flags::TYPELOCK;
+                }
+                if sym.namelock {
+                    f |= varnode_flags::NAMELOCK;
+                }
+                if sym.unaliased {
+                    f |= varnode_flags::NOLOCALALIAS;
+                }
+                return f;
+            }
+            // (2) in-scope discovery range -> mapped | addrtied (the local
+            // scope is never global, database.cc:1273's persist is skipped).
+            let in_scope = scope
+                .local_range
+                .iter()
+                .any(|&(first, range_last)| first <= offset && last <= range_last);
+            if in_scope {
+                let mut f = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
+                if let Some(a) = fd.get_arch() {
+                    if let Some(db) = a.symboltab.as_ref() {
+                        f |= db.read().unwrap().get_property(addr);
+                    }
+                }
+                return f;
+            }
+        }
+        // (3) global property flagbase.
+        if let Some(a) = fd.get_arch() {
+            if let Some(db) = a.symboltab.as_ref() {
+                return db.read().unwrap().get_property(addr);
+            }
+        }
+        0
     }
 
     // Ghidra: heritage.cc:219 Heritage::guardAll (Rugra analogue)
@@ -3458,28 +3914,41 @@ impl Heritage {
         // concatenation above.
     }
 
-    // Ghidra: heritage.cc:359 Heritage::callOpIndirectEffect
-    /// Determine if the address range is affected by a call op.
-    /// Corresponds to `callOpIndirectEffect` (heritage.cc:359-380), but the
-    /// exact-owner-to-effect consumer remains `CALLSPEC-0001`/UNTESTED.
+    // Ghidra: heritage.cc:358 Heritage::callOpIndirectEffect
+    /// Determine if the address range is affected by the given \e call p-code
+    /// op. Faithful 1:1 port of `callOpIndirectEffect`
+    /// (heritage.cc:358-370):
+    ///   - CALL/CALLIND: look up the exact FuncCallSpecs owner of the op
+    ///     (no spec -> assume indirect effect, cc:364) and return
+    ///     `hasEffectTranslate(addr,size) != unaffected`;
+    ///   - any other op reaching here (CALLOTHER/NEW, cc:367-369): assumed
+    ///     to have no effect on -fd- variables except its own output, i.e.
+    ///     \b false.
+    /// The former version returned \b true for every branch (conservative
+    /// pre-D0 stub); this port restores the oracle polarity so
+    /// `normalizeWriteSize` picks INDIRECT creation vs SUBPIECE correctly.
     pub fn call_op_indirect_effect(
         &self,
         fd: &Funcdata,
+        space: AddressSpace,
         addr: Address,
         size: i32,
         op: &Arc<RwLock<PcodeOp>>,
     ) -> bool {
         let opc = op.read().unwrap().opcode;
         if opc != OpCode::CPUI_CALL && opc != OpCode::CPUI_CALLIND {
-            return true; // Non-call ops always considered as having effect
+            // cc:367-369: CALLOTHER/NEW — assume no effect except op->getOut().
+            return false;
         }
-        // cc:362-376: check FuncCallSpecs for effect on this range. D0 now has
-        // exact per-op owner lookup and has_effect_translate, but deliberately
-        // does not wire this upper consumer without its paired fixture
-        // (CALLSPEC-0001). Preserve the pre-D0 conservative result; this is not
-        // claimed equivalent for unaffected calls or CALLOTHER/NEW.
-        let _ = (fd, addr, size);
-        true
+        // cc:362-364: fc = fd->getCallSpecs(op); null -> assume indirect.
+        match fd.get_call_specs_of_op(&PcodeOpRef(op.clone())) {
+            None => true,
+            // cc:365: return (fc->hasEffectTranslate(addr,size) != unaffected)
+            Some(fc) => {
+                fc.read().unwrap().has_effect_translate(space, addr.as_u64(), size)
+                    != crate::fspec::EffectType::Unaffected
+            }
+        }
     }
 
     // Ghidra: heritage.cc:1705 Heritage::buildRefinement
