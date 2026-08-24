@@ -2,11 +2,14 @@
 
 Faithful port of Ghidra's `grammar.hh` / `grammar.cc` (3338 lines).
 
-**Status:** ✅ **L3（2026-07-22 完整对齐）**. Complete GrammarToken + GrammarLexer
-+ TypeModifier/TypeDeclarator + TypeSpecifiers/Enumerator + the CParse parser
-framework (mergeSpecDec / addSpecifier / mergePointer / newArray / newFunc /
-runParse / parseStream) + entry functions parse_type / parse_to_separator /
-parse_machaddr / parse_varnode / parse_op. 32 unit tests.
+**Status:** 🔧 **L2 / overall MISMATCH**. GrammarToken + GrammarLexer +
+TypeModifier/TypeDeclarator + TypeSpecifiers/Enumerator + the CParse parser
+framework and entry functions are present. Series C routes PointerModifier
+through TypeFactory's canonical unnamed pointer tree, but Rugra still lacks
+the `Architecture *glb` channel needed to observe a non-unit default-space
+wordsize, and this changed projection remains `NO_ORACLE` until the series-D
+bilateral fixture. Existing recursive-descent/bison gaps below also preclude
+L3.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/grammar.{hh,cc}`.
@@ -115,7 +118,14 @@ Document type requested from the parser (grammar.hh:217): `Declaration`,
   `newArray`, `newFunc`, …) is ported 1:1.
 - Pointer/Array/Function modifier `modType` virtuals (grammar.cc:2403/2412/2465)
   are folded into the free function `mod_type`, which consults Rugra's
-  `TypeFactory` (`get_ptr` / `get_array` / `get_type_code`).
+  `TypeFactory` (`get_type_pointer_default` / `get_array` /
+  `get_type_code`). PointerModifier no longer uses the legacy pointee-name
+  cache: distinct anonymous array bases retain distinct pointer identities,
+  and repeat construction aliases the direct canonical pointer. The wrapper
+  uses the factory's default address size and Rugra's currently modelled
+  default wordsize 1; until Architecture wires `setupSizes`, only its layout
+  calculation uses TypeFactory's registered compatibility fallback.
+  Arbitrary architecture wordsize remains `TYPE-0001`.
 - 2026-08-23 (TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001): the in-file tests
   that build base types for `mod_type` now use the faithful
   `get_base_result` twin; on the `TypeFactory::new` bootstrap the cached
@@ -129,6 +139,8 @@ Document type requested from the parser (grammar.hh:217): `Declaration`,
 ## L3 gaps
 - Full bison grammar table from `grammar.y` (only the recursive-descent subset
   used by the entry points is ported).
+- PointerModifier's exact default-data-space wordsize is unavailable without
+  threading the Architecture handle into the Rust grammar/type-factory edge.
 - `TypeFactory` integration for struct/union/enum construction (`newStruct` /
   `newUnion` / `newEnum` from grammar.cc:2779/2818/2881) — these need a live
   `Architecture` reference and are deferred.

@@ -1131,7 +1131,7 @@ pub fn mod_type(
     types: &mut crate::type_system::typefactory::TypeFactory,
 ) -> Option<Arc<Datatype>> {
     match modifier {
-        TypeModifier::Pointer { .. } => Some(types.get_ptr(base)),
+        TypeModifier::Pointer { .. } => Some(types.get_type_pointer_default(base)),
         TypeModifier::Array { array_size, .. } => {
             Some(types.get_array(base, (*array_size).max(0) as usize))
         }
@@ -3193,13 +3193,55 @@ mod tests {
         // Dispatched via the `mod_type` helper that implements all three
         // virtuals; the pointer branch is exercised here.
         let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
+        tf.setup_sizes(&crate::type_system::typefactory::SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
         let base = tf
             .get_base_result(4, crate::type_system::datatype::TypeMetatype::Int)
             .unwrap();
         let decl = TypeDeclarator::new();
         let ptr_mod = TypeModifier::Pointer { flags: 0 };
-        let res = mod_type(&ptr_mod, base, &decl, &mut tf).expect("ptr");
+        let res = mod_type(&ptr_mod, base.clone(), &decl, &mut tf).expect("ptr");
+        let direct = tf.get_type_pointer_default(base.clone());
+        let repeated = mod_type(&ptr_mod, base.clone(), &decl, &mut tf).expect("repeat ptr");
+        assert!(std::sync::Arc::ptr_eq(&res, &direct));
+        assert!(std::sync::Arc::ptr_eq(&res, &repeated));
         assert_eq!(res.get_metatype(), crate::type_system::datatype::TypeMetatype::Pointer);
+        assert!(res.get_name().is_empty());
+        assert!(matches!(
+            res.as_ref(),
+            crate::type_system::datatype::Datatype::Pointer(pointer)
+                if pointer.base.size == 8
+                    && pointer.wordsize == 1
+                    && std::sync::Arc::ptr_eq(&pointer.ptr_to, &base)
+        ));
+
+        let uint = tf
+            .get_base_result(4, crate::type_system::datatype::TypeMetatype::Uint)
+            .unwrap();
+        let int_array = tf.get_array(base, 2);
+        let uint_array = tf.get_array(uint, 2);
+        let int_array_pointer =
+            mod_type(&ptr_mod, int_array.clone(), &decl, &mut tf).expect("int array pointer");
+        let uint_array_pointer =
+            mod_type(&ptr_mod, uint_array.clone(), &decl, &mut tf).expect("uint array pointer");
+        assert!(!std::sync::Arc::ptr_eq(
+            &int_array_pointer,
+            &uint_array_pointer
+        ));
+        assert!(matches!(
+            int_array_pointer.as_ref(),
+            crate::type_system::datatype::Datatype::Pointer(pointer)
+                if std::sync::Arc::ptr_eq(&pointer.ptr_to, &int_array)
+        ));
+        assert!(matches!(
+            uint_array_pointer.as_ref(),
+            crate::type_system::datatype::Datatype::Pointer(pointer)
+                if std::sync::Arc::ptr_eq(&pointer.ptr_to, &uint_array)
+        ));
     }
 
     #[test]

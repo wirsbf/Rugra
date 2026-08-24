@@ -5,7 +5,7 @@
 
 **源代码路径**: `src/type_system/datatype.rs`
 **Ghidra 对应**: `type.hh` / `type.cc` (`Datatype` 类层次)
-**状态**: 🔧 **L2 / overall MISMATCH（2026-08-23 residual 矩阵补齐）**——datatype 层的 submeta、公开虚派发 compare/compareDependency、Pointer state/space、PointerRel、TypeCode varargs/model/param/return/dependency、Array/Union/三个 Partial 全矩阵、Struct offset/dependency、Spacebase identity、1-byte Unicode 和全部 24 个 submetatype 值均有 12.0.4 行为证据；生产 TypeFactory 仍有 6 个已钉住差异，另有两个 same-kind AddrSpace 身份表示差异（Ghidra 裸指针 vs Rust enum），TypeCode null-output 边界与 struct 递归环/incomplete 转移仍未测，绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` / `TYPEFACTORY-SUBMETA-RECLASS-0001` / `DATATYPE-TYPEORDER-RESIDUAL-0001`，不能升 L3。
+**状态**: 🔧 **L2 / overall MISMATCH（2026-08-23 residual 矩阵补齐）**——datatype 层的 submeta、公开虚派发 compare/compareDependency、Pointer state/space、PointerRel、TypeCode varargs/model/param/return/dependency、Array/Union/三个 Partial 全矩阵、Struct offset/dependency、Spacebase identity、1-byte Unicode 和全部 24 个 submetatype 值均有 12.0.4 行为证据。历史 TypeFactory 的 6 个差异中，5 个 pointer-factory 字节已由 series B/C 改写但尚无新 oracle；1-byte Unicode 仍为 MISMATCH。当前 pointer space 仍有对象身份表示差异，Pointer XML decode 还会丢弃 `<space>`，TypeCode null-output 边界与 struct 递归环/incomplete 转移仍未测，绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` / `TYPEFACTORY-SUBMETA-RECLASS-0001` / `DATATYPE-TYPEORDER-RESIDUAL-0001`，不能升 L3。
 
 ## 模块说明
 
@@ -93,8 +93,9 @@ decode 均保留 `alignment=1`、`alignSize=1`，并从 incomplete 状态开始�
 `Datatype::get_stripped_arc` 是 Rust 所有权胶水，保留 concrete virtual
 `getStripped` 返回对象的 `Arc` 身份。普通 typedef 只有 `typedefImm`，不会因此
 获得 stripped 形态；从 PartialStruct/PartialEnum/PartialUnion 克隆出的 typedef
-保留 concrete subclass 的 `HAS_STRIPPED` 与 stripped 指针。PointerRel 分支只暴露
-既有状态，ephemeral 构造生命周期由后续 series C 覆盖。
+保留 concrete subclass 的 `HAS_STRIPPED` 与 stripped 指针。PointerRel 分支暴露
+相同状态；series C 的 TypeFactory ephemeral overload 现在写入 canonical stripped
+pointer、parent/offset 与 `SUB_PTRREL_UNK`，其 bilateral 行为证据仍留到 series D。
 
 `TypePartialEnum::new` 现在复现 `TypeEnum(sz, TYPE_PARTIALENUM)` 的两层状态：
 stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
@@ -189,11 +190,12 @@ x86:LE:64:default/gcc、固定 curl/spec Git 输入和隔离 Rugra 基线 overla
   的 `SUB_UINT_CHAR` 由 `ProbeChar` 复刻 `TypeChar::decode`（type.cc:818）的 submeta
   写入；`SUB_PTRREL_UNK` 由 `ProbeRel` 暴露 protected `markEphemeral` 构造。
 
-6 个已解释残差全部在 `typefactory.rs`（本任务无写租约）：显式非默认普通 Pointer 被误置
-`IS_PTRREL`；ephemeral relative pointer 缺 `HAS_STRIPPED`，从而 unknown target 仍为
-SUB_PTRREL(5) 而非 SUB_PTRREL_UNK(7)；factory array pointer 缺 pointer-to-array；factory
-pointer 缺 coretype 继承；factory 1-byte Unicode 仍退化成 SUB_INT_PLAIN(17)。分别绑定 `TYPEFACTORY-POINTER-CANONICAL-0001` 与
-`TYPEFACTORY-SUBMETA-RECLASS-0001`，故 projection=MATCH、overall=MISMATCH，模块保持 L2。
+旧 `datatype_type_order_1204` 证据中的 5 个 pointer-factory 差异（普通 pointer
+误置 `IS_PTRREL`、ephemeral state、`SUB_PTRREL_UNK`、pointer-to-array、coretype
+继承）已由 series B/C 的 constructor + canonical factory 闭包改写；因此旧 fixture
+只能保留为历史证据，不能证明当前 pointer 字节 MATCH。factory 1-byte Unicode
+仍退化成 SUB_INT_PLAIN(17)，绑定 `TYPEFACTORY-SUBMETA-RECLASS-0001`；pointer
+新投影在 series D bilateral fixture 前保持 `NO_ORACLE`。模块整体仍为 MISMATCH/L2。
 metadata 为 schema 2，逐项 coverage 使用结构化 `status/covers/residual_todo_ids`；TypeCode
 null-output 边界（`ProtoStoreInternal` 总是初始化输出槽，公开构造不可达，fspec.cc:3306）
 与 struct 递归环/incomplete 转移保持 `UNTESTED`，绑定 `DATATYPE-TYPEORDER-RESIDUAL-0001`。

@@ -7,8 +7,11 @@
   尚未完成。layout/rekey 的 scoped A 片只保证 factory 当前 tree/name 槽
   一致，旧句柄及 factory-owned dependencies 仍绑定
   `TYPEFACTORY-ARC-IDENTITY-0001`。series B 只闭合 array/partial/virtual
-  stripped 的 registry 投影；series-B 的 B2 投影在 series D 前为
-  `NO_ORACLE`，模块整体仍为 **MISMATCH / L2**，不能升 L3。
+  stripped 的 registry 投影；series C 增加 Pointer/PointerRel canonical
+  key、ephemeral parent geometry 与 grammar 默认指针闭包。A-C 的 B2
+  投影在 series D 前均为 `NO_ORACLE`；`calcTruncate` attachment、完整
+  Architecture/AddrSpace wiring 与 immutable Arc identity 仍是 residual，
+  模块整体为 **MISMATCH / L2**，不能升 L3。
 
 
 **源代码路径**: `src/type_system/typefactory.rs`
@@ -127,16 +130,40 @@ rules.
 
 ### `pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype>`
 
-Get or create a pointer type to the given base type. Applies the
-`TypePointer::calcSubmeta` needs_resolution inheritance arm
-(type.cc:1051-1052): a pointer to a resolution-needing non-pointer pointee
-inherits `needs_resolution` (see 2026-08-18 section below).
+Compatibility name for `get_type_pointer_default`; it no longer synthesizes
+or deduplicates through a pointee-name string. The default-space wrapper calls
+the same unnamed structural pointer factory as grammar's PointerModifier.
+
+### `pub fn get_type_pointer(size, ptr_to, wordsize) -> Arc<Datatype>`
+
+Runs one concrete virtual `getStripped` step, constructs `TypePointer`, and
+canonicalizes by submeta, pointee identity, wordsize, optional-space presence,
+projected Rust enum `space_id`, descending size, then id (`type.cc:954-967`,
+`3867-3875`). This projection is not equivalent to Ghidra's `AddrSpace*`
+object-identity gate followed by architecture `getIndex()` ordering. Ordinary
+typedefs remain pointees; Partial and ephemeral PointerRel values use their
+stripped object. `get_type_pointer_default` supplies Rugra's current default
+geometry for the grammar caller. Because Rugra's production Architecture still
+records `types->setupSizes()` as a no-op (`CSPEC-TYPEORG-STATE-0001`), this Rust
+glue uses the same structural key with the registered primitive-layout fallback;
+the explicit `get_type_pointer` API remains fail-closed on an empty align map.
+
+`get_type_pointer_named(size, ptr_to, wordsize, name)` is the named overload
+at `type.cc:3885`: it sets both names and `hashName(name)` before the same
+concrete comparator/tree insertion.
+
+### `pub fn get_type_pointer_rel_ephemeral(parent_pointer, ptr_to, offset)`
+
+Implements the unnamed overload at `type.cc:4016-4023`: size, wordsize and
+container come from the parent pointer; `markEphemeral` installs the canonical
+plain pointer and sets `HAS_STRIPPED` (plus `SUB_PTRREL_UNK` for an unknown
+pointee); the relative pointer is interned by pointee/offset/parent/wordsize.
 
 ### `pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype>`
 
 Get or create an unnamed canonical array type. `getTypeArray` first invokes
 the element's concrete virtual `getStripped`; ordinary typedefs do not strip,
-while partial subclasses (and later series C's ephemeral PointerRel) do. The
+while partial subclasses and ephemeral PointerRel do. The
 inline `TypeArray` ctor (type.hh:937-944) uses
 `num_elements * element.getAlignSize()`, inherits element alignment, stores
 total `alignSize`, and sets `needs_resolution` for one element. Repeated calls
@@ -268,30 +295,60 @@ fail-closed allowlist 将 pre/post identity 差异记为 `MISMATCH`。A-D 全栈
   UintPartialEnum；parent 由配置驱动的 `get_type_enum_result` 构造，避免
   legacy 4-byte/signed enum getter 污染判别输入。
 
-本片另有一个反向 scope test：same-name/id/size 的 Pointer 与 PointerRel
-即使 concrete dependency 不同，仍固定保持 series-A 的 submeta/size 结果。
-这不是 Ghidra MATCH（locked oracle 会走虚 comparator 并拒绝），而是防止 B
-在 C 落地前意外吞入 pointer 行为；差异归
-`TYPEFACTORY-POINTER-CANONICAL-0001`。
+B 的 Rust 判别测试覆盖上述状态与 identity。Pointer/PointerRel 反向 scope
+test 在 B 固定了当时的已知 MISMATCH，随后由 series C 的 concrete comparator
+与 tree key 转为拒绝 same-name/id redefinition；getExactPiece descent、负
+offset/zero size 和最终 bilateral fixture 仍留给 D。series-B B2 投影保持
+`NO_ORACLE`，B 不能单独集成或声明 MATCH。匿名 array 对 PrintC base token
+的下游影响仍在 `TYPE-0001` 闭包内，最终 series D 的 E2E 必须显式观察。
 
-B 的 Rust 判别测试覆盖上述状态与 identity；ephemeral PointerRel 的构造、
-pointer tree key、getExactPiece descent、负 offset/zero size 和最终 bilateral
-fixture 分别留给 C/D。另一个直接下游约束是 legacy `get_ptr` 仍以 pointee
-name 合成 key：不同匿名 arrays 都会形成 `" *"`，grammar PointerModifier 在
-series C 迁到 canonical `get_type_pointer` 前可能错误合并。该 caller/tree
-缺口归 `TYPEFACTORY-POINTER-CANONICAL-0001`。series-B B2 投影保持
-`NO_ORACLE`，模块 overall status 保持 `MISMATCH`；B 不能单独集成或声明
-MATCH。匿名 array 对 PrintC base token 的下游影响仍在 `TYPE-0001` 闭包内，
-最终 series D 的 E2E 必须显式观察。
+### 2026-08-24：pointer canonicalization（series C）
+
+- `TypeTreeKey` 对普通 Pointer 按 submeta、pointee `Arc`、wordsize、optional-space
+  presence、投影后的 Rust enum `space_id`、descending size、id 排序；该投影不等价于
+  Ghidra `AddrSpace*` 对象身份与 architecture `getIndex()`。PointerRel 按 submeta、
+  pointee、offset、parent `Arc`、wordsize、descending size、id 排序。Named
+  `find_add` 同样调用 concrete `compare_dependency`，direct `insert` collision
+  保持 `Shared type id` fail-closed 且不改变完整 key set。
+- `get_type_pointer` 只进行一次 virtual stripping，构造匿名 `TypePointer`
+  后进入同一 structural tree。不同匿名 array pointee 不再因旧合成名 `" *"`
+  合并；`grammar::PointerModifier::modType` 已迁到 default-geometry canonical
+  wrapper，并由两个同宽、不同 element 的匿名 array 判别测试固定身份。
+- default wrapper 与普通 pointer decode 在 Architecture 尚未接通
+  `setupSizes` 时只对 layout 使用既有 compatibility fallback；二者仍进入同一
+  pointer structural tree。显式 `get_type_pointer` 对 raw factory 保持
+  `TypeFactory alignment map not initialized`，且失败前后 key set 不变。
+- named overload 写入相同 name/displayName 与 `hashName(name)` id；同名同定义
+  复用，dependency 不同走 `Trying to alter definition`。普通 pointer decode
+  保留匿名输入，不再合成 pointee 名，并通过 `find_add` 使重复 decode 返回
+  既有 canonical `Arc`，而不是在 direct `insert` 上冲突。但 Rust decode 当前
+  读取后丢弃 Pointer XML 的 `<space>` 属性；locked Ghidra `TypePointer::decode`
+  (`type.cc:1022-1024`) 将 `readSpace()` 保存到 pointer state，因此该字段仍是
+  确定性 MISMATCH。
+- `get_type_pointer_rel_ephemeral` 从 parent pointer 读取 size/wordsize/container，
+  先 canonicalize stripped plain pointer，再写入 `IS_PTRREL|HAS_STRIPPED`、
+  parent/offset/stripped；unknown pointee 使用 `SUB_PTRREL_UNK`。重复输入保留
+  同一 `Arc`，parent/offset/pointee/wordsize 任一不同均不合并。
+- `resize_pointer` 只剥 concrete `HAS_STRIPPED`，不再通过 typedef name side
+  table 错剥普通 typedef；新宽度和原 wordsize 进入 pointer tree。raw factory
+  的空 alignment map 在插入前返回 oracle 的 LowlevelError，且无 key 泄漏。
+
+Series C 仍是 `NO_ORACLE / MISMATCH`，不能独立集成或解除整个 stable ID：
+`TypePointer::calcTruncate` 的 attached subcomponent 尚未表示（`TYPE-0001`）；
+TypeFactory 没有 Ghidra `Architecture *glb`，default-wordsize 与具体 AddrSpace
+registry、production `setupSizes` state 仍是 architecture wiring residual；flat
+`(name)` map 与 immutable Arc
+差异也分别受 `TYPE-0001`、`TYPEFACTORY-ARC-IDENTITY-0001` 约束。最终 series
+D bilateral fixture 与 E2E 之前，不得把 Rust tests 解释为 MATCH。
 
 ### Internal `insert`
 
 `type.cc:3390 TypeFactory::insert` projection for decode arms: atomic,
-TypeArray, and the three Partial variants enter the ordered tree using the
-series-B dependency key; named values also enter the flat name map. Other
-container variants remain under TYPE-0001. The byte-faithful conflict path
-lives in `find_add`; a direct `insert` collision raises the same Shared-type-id
-LowlevelError channel instead of silently retaining the previous occupant.
+Pointer/PointerRel, TypeArray, and the three Partial variants enter the ordered
+tree using their concrete dependency key; named values also enter the flat
+name map. Other container variants remain under TYPE-0001. A direct `insert`
+collision raises the same Shared-type-id LowlevelError channel instead of
+silently retaining the previous occupant.
 
 
 
@@ -299,7 +356,7 @@ LowlevelError channel instead of silently retaining the previous occupant.
 - 按 (size, metatype) 查 core_types（int→int/int2/int8, uint→uint/uint2/uint8, float→float/double），未命中则现场创建 Base type。
 
 ### 2026-07-01（续）：补全 14 个 TypeFactory 工厂方法
-get_type_void/char/unicode、get_type_union+set_union_fields、get_type_enum+set_enum_values、get_type_code、get_type_pointer_rel、get_typedef、resize_pointer、find_by_id/find_by_id_local、concretize/deconcretize、hash_size。+rel_pointers/typedefs 侧表字段。18 新测试。
+get_type_void/char/unicode、get_type_union+set_union_fields、get_type_enum+set_enum_values、get_type_code、legacy `get_type_pointer_rel` side-table glue、get_typedef、resize_pointer、find_by_id/find_by_id_local、concretize/deconcretize、hash_size。+rel_pointers/typedefs 侧表字段。18 新测试。锁定 type.cc:4016 的 parent-pointer overload 由上面的 series-C `get_type_pointer_rel_ephemeral` 取代该历史胶水。
 <!-- annotation-pass: 2026-07-04 -->
 
 **2026-07-22 (printc batch 2)**: +3 TypeFactory methods to support
@@ -532,16 +589,18 @@ producer):
   consumed the element and every decoded array errored "Bad size for array
   of type".
 
-Scope notes: calcSubmeta's SUB_PTR/SUB_PTR_STRUCT reclassification and the
-ctors' `flags = ptrto->getInheritable()` (coretype inheritance, type.hh:413)
-are not yet modelled (no sub_metatype field on `TypePointer`); only the
-needs_resolution arm is mirrored. `set_fields`'s stored `st.base.size` stays
-the derived `max(offset + get_size())` (can differ from Ghidra's
+Scope notes: the pointer constructor now records calcSubmeta, inheritable
+flags, array/relative state and the concrete factory key. The attached
+`truncate` pointer built by `calcTruncate` is still not represented, and the
+enum AddressSpace projection cannot preserve a Ghidra registry object's raw
+identity. `set_fields`'s stored `st.base.size` stays the derived
+`max(offset + get_size())` (can differ from Ghidra's
 align-rounded grammar newSize for trailing padding; plumbing the explicit
 size from the grammar caller is a registered follow-up in grammar.rs's
 domain).
 
-Oracle evidence: `tests/oracle/typefactory_needsres_1204.{cc,rs,metadata.json}`
+Historical pre-series-C oracle evidence:
+`tests/oracle/typefactory_needsres_1204.{cc,rs,metadata.json}`
 + `tools/run_typefactory_needsres_oracle.sh` — 27 records
 (set/grammar/dec/arr.factory/ptr/union.setfields + grammar.regressions
 [overfire + nested], ptr.ordering [stub-time pointer never inherits; cached
@@ -549,7 +608,9 @@ pointer stays clear; differently-sized new pointer inherits],
 dec.acceptance [overlap throw-out ×2, empty size-8 and size-0 incomplete
 residue], dec.err [order/fit/void/name-empty/name+void-precedence verbatim
 error texts]), real locked-12.0.4 oracle vs Rugra byte-identical
-(`records=27 … MATCH`), expected stdout sha256 locked in metadata. E2E curl
+(`records=27 … MATCH`), expected stdout sha256 locked in metadata. Series C
+changes the pointer factory bytes, so this older fixture cannot upgrade the
+new projection above from `NO_ORACLE`. Its historical E2E curl
 output byte-identical to the pre-change baseline (diff 0 lines;
 differential gates defects=0/numbering=0 on both
 `tests/golden/ghidra_curl.c` and `result/ghidra_curl_12.0.4.c`), confirming

@@ -13,10 +13,18 @@ use crate::marshal::{Encoder, Decoder};
 use crate::type_system::datatype::*;
 
 /// Lexicographic projection of the concrete dependency keys covered by this
-/// slice: atomic types, arrays, and partial container types. Pointer-specific
-/// identity remains on the registered pointer-tree residual until its own
-/// foundation slice.
-type TypeTreeKey = (u8, usize, i64, Reverse<usize>, u64);
+/// series: atomic, pointer, array, and partial-container types.
+type TypeTreeKey = (
+    u8,
+    usize,
+    i64,
+    usize,
+    usize,
+    u8,
+    u8,
+    Reverse<usize>,
+    u64,
+);
 
 /// Managed container for all Datatype objects
 pub struct TypeFactory {
@@ -27,8 +35,8 @@ pub struct TypeFactory {
     core_types: BTreeMap<String, Arc<Datatype>>,
 
     /// Structural registry for factory-owned types. The key preserves the
-    /// concrete array/partial dependency identity before descending size and
-    /// id, matching the covered `DatatypeCompare` branches.
+    /// concrete pointer/array/partial dependency identity before descending
+    /// size and id, matching the covered `DatatypeCompare` branches.
     base_type_tree: RwLock<BTreeMap<TypeTreeKey, Arc<Datatype>>>,
 
     /// Fast preferred-core lookup corresponding to Ghidra's `typecache`.
@@ -330,27 +338,49 @@ impl TypeFactory {
     }
 
     // RUGRA-GLUE: Tuple projection of DatatypeCompare::operator()
-    // (type.hh:306) for the array and partial dependency variants covered by
-    // this slice. Other variants retain the pre-existing base key until their
-    // concrete registry slice is implemented.
+    // (type.hh:308) and the covered concrete compareDependency functions.
     fn type_tree_key(datatype: &Datatype) -> TypeTreeKey {
-        let (dependency, offset) = match datatype {
-            Datatype::Array(array) => (Arc::as_ptr(&array.array_of) as usize, 0),
+        let (dependency, offset, parent, wordsize, space_rank, space_id) = match datatype {
+            Datatype::Pointer(pointer) => {
+                let dependency = Arc::as_ptr(&pointer.ptr_to) as usize;
+                if (pointer.base.flags & type_flags::IS_PTRREL) != 0 {
+                    let (offset, parent) = pointer
+                        .base
+                        .pointer_rel
+                        .as_ref()
+                        .map(|state| (state.offset, Arc::as_ptr(&state.parent) as usize))
+                        .unwrap_or((0, 0));
+                    (dependency, offset, parent, pointer.wordsize, 0, 0)
+                } else {
+                    let (space_rank, space_id) = match pointer.base.pointer_space {
+                        Some(space) => (0, space.space_id()),
+                        None => (1, 0),
+                    };
+                    (dependency, 0, 0, pointer.wordsize, space_rank, space_id)
+                }
+            }
+            Datatype::Array(array) => {
+                (Arc::as_ptr(&array.array_of) as usize, 0, 0, 0, 0, 0)
+            }
             Datatype::PartialStruct(partial) => {
-                (Arc::as_ptr(&partial.container) as usize, partial.offset)
+                (Arc::as_ptr(&partial.container) as usize, partial.offset, 0, 0, 0, 0)
             }
             Datatype::PartialEnum(partial) => {
-                (Arc::as_ptr(&partial.parent) as usize, partial.offset)
+                (Arc::as_ptr(&partial.parent) as usize, partial.offset, 0, 0, 0, 0)
             }
             Datatype::PartialUnion(partial) => {
-                (Arc::as_ptr(&partial.container) as usize, partial.offset)
+                (Arc::as_ptr(&partial.container) as usize, partial.offset, 0, 0, 0, 0)
             }
-            _ => (0, 0),
+            _ => (0, 0, 0, 0, 0, 0),
         };
         (
             Self::submeta_of(datatype),
             dependency,
             offset,
+            parent,
+            wordsize,
+            space_rank,
+            space_id,
             Reverse(datatype.get_size()),
             datatype.get_id(),
         )
@@ -403,7 +433,17 @@ impl TypeFactory {
         // Ghidra constructs an unnamed TypeBase and canonicalizes it through
         // findAdd when no preferred core entry exists. Its structural key is
         // the plain base sub-metatype, descending size, then id zero.
-        let tree_key = (Self::base_submeta(m), 0, 0, Reverse(size), 0);
+        let tree_key = (
+            Self::base_submeta(m),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Reverse(size),
+            0,
+        );
         let tree = self
             .base_type_tree
             .read()
@@ -606,13 +646,13 @@ impl TypeFactory {
             }
             if let Some(existing) = self.types.get(&name) {
                 if existing.get_id() == candidate_id {
-                    // Series B exposes concrete dependency identity only for
-                    // arrays and partial container types. Keep the series-A
-                    // submeta/size projection for every other variant until
-                    // its own registry slice is installed (notably pointers
-                    // in series C).
+                    // Use the concrete virtual compareDependency projection
+                    // for every dependency-bearing variant covered by the
+                    // structural registry. Other variants retain the
+                    // series-A submeta/size projection under TYPE-0001.
                     let dependency_mismatch = match (existing.as_ref(), &candidate) {
-                        (Datatype::Array(_), Datatype::Array(_))
+                        (Datatype::Pointer(_), Datatype::Pointer(_))
+                        | (Datatype::Array(_), Datatype::Array(_))
                         | (Datatype::PartialStruct(_), Datatype::PartialStruct(_))
                         | (Datatype::PartialEnum(_), Datatype::PartialEnum(_))
                         | (Datatype::PartialUnion(_), Datatype::PartialUnion(_)) => {
@@ -725,12 +765,11 @@ impl TypeFactory {
     /// changes no resolved type — it makes the printc.cc:1962 TYPE_PTR waiver
     /// load-bearing, exactly as in Ghidra.
     ///
-    /// NOTE (scope): calcSubmeta's submeta reclassification
-    /// (SUB_PTR/SUB_PTR_STRUCT) and the `pointer_to_array` flag are not yet
-    /// modelled on Rugra's `TypePointer` (no sub_metatype field); only the
-    /// needs_resolution arm — the setting this factory's matrix owns — is
-    /// mirrored here. The constructors' `flags = ptrto->getInheritable()`
-    /// (type.hh:413, coretype inheritance) is likewise not yet mirrored.
+    /// This compatibility helper is used only by the legacy side-table
+    /// relative-pointer API below. Canonical `TypePointer::new` now performs
+    /// the complete calcSubmeta/coretype transition; this helper preserves the
+    /// older manually-constructed object's needs-resolution bit until that
+    /// legacy API is retired.
     fn pointer_inherit_needs_resolution(ptr_to: &Datatype) -> u32 {
         if ptr_to.needs_resolution() && ptr_to.get_metatype() != TypeMetatype::Pointer {
             type_flags::NEEDS_RESOLUTION
@@ -739,24 +778,21 @@ impl TypeFactory {
         }
     }
 
-    // Ghidra: type.cc:3850 TypeFactory::getPtr
-    /// Get or create a pointer type to the given base type
+    // RUGRA-GLUE: compatibility name for the default-space pointer factory;
+    // Ghidra callers invoke TypeFactory::getTypePointer directly.
+    /// Get or create a canonical pointer using Rugra's default-space geometry.
     pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype> {
-        let name = format!("{} *", ptr_to.get_name());
-        if let Some(existing) = self.find_by_name(&name) {
-            return existing;
-        }
+        self.get_type_pointer_default(ptr_to)
+    }
 
-        let mut base = TypeBase::new(name.clone(), self.ptr_size, TypeMetatype::Pointer);
-        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance.
-        base.flags |= Self::pointer_inherit_needs_resolution(&ptr_to);
-        let ptr_type = Arc::new(Datatype::Pointer(TypePointer {
-            base,
-            ptr_to,
-            wordsize: 1,
-        }));
-        self.types.insert(name, ptr_type.clone());
-        ptr_type
+    // RUGRA-GLUE: PointerModifier receives Architecture in Ghidra, while the
+    // Rust parser owns only TypeFactory. `ptr_size` is the default data-space
+    // address size supplied when this factory is constructed; Rugra's current
+    // AddressSpace enum models the production default word size as one.
+    /// Construct the canonical pointer used by grammar's default-space path.
+    pub fn get_type_pointer_default(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype> {
+        self.get_type_pointer_result(self.ptr_size, ptr_to, 1, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // RUGRA-GLUE: Result-returning Rust twin of getTypeArray so getBase can
@@ -1675,15 +1711,11 @@ impl TypeFactory {
         dt
     }
 
-    // Ghidra: type.cc:4016 TypeFactory::getTypePointerRel
-    /// Find/create a relative pointer that points at a known byte offset
-    /// within a containing data-type. Faithful to
-    /// `TypeFactory::getTypePointerRel(TypePointer*, Datatype*, int4)`
-    /// (type.cc:4016-4023). Ghidra's `TypePointerRel` (type.hh:647) is a
-    /// `TypePointer` subclass carrying a `parent` container and an `offset`,
-    /// marked with `is_ptrrel`. Rugra models this with the `IS_PTRREL` flag
-    /// on a `Datatype::Pointer` plus the parent/offset stored out-of-line in
-    /// a side table on the factory (`rel_pointers`), keyed by pointer name.
+    // RUGRA-GLUE: legacy named relative-pointer convenience. It predates the
+    // parent-pointer overload below and keeps the historical side-table API;
+    // Ghidra's formal overload at type.cc:4036 also requires size, wordsize,
+    // and name, so this three-argument signature has no direct counterpart.
+    /// Find/create the legacy named relative pointer used by older callers.
     pub fn get_type_pointer_rel(
         &mut self,
         ptr_to: Arc<Datatype>,
@@ -1710,45 +1742,80 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:4016 TypeFactory::getTypePointerRel(TypePointer*,Datatype*,int4)
+    /// Create the unnamed ephemeral relative-pointer overload. Pointer width,
+    /// word size, and parent container are taken from `parent_pointer`; the
+    /// stripped plain pointer is canonicalized before the relative pointer is
+    /// interned.
+    pub fn get_type_pointer_rel_ephemeral(
+        &mut self,
+        parent_pointer: Arc<Datatype>,
+        ptr_to: Arc<Datatype>,
+        offset: i64,
+    ) -> Arc<Datatype> {
+        let (size, wordsize, parent) = match parent_pointer.as_ref() {
+            Datatype::Pointer(pointer) => {
+                (pointer.base.size, pointer.wordsize, pointer.ptr_to.clone())
+            }
+            _ => panic!("getTypePointerRel parent must be a pointer"),
+        };
+        let stripped = self.get_type_pointer(size, ptr_to.clone(), wordsize);
+        let mut relative = TypePointer::new_relative(size, ptr_to, wordsize, parent, offset);
+        relative.mark_ephemeral(stripped);
+        self.find_add(Datatype::Pointer(relative), true)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
+    }
+
+    // RUGRA-GLUE: Result-returning Rust twin of getTypePointer so callers
+    // that already expose LowlevelError can preserve that channel.
+    fn get_type_pointer_result(
+        &mut self,
+        size: usize,
+        ptr_to: Arc<Datatype>,
+        wordsize: usize,
+        enforce_alignment: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let ptr_to = Datatype::get_stripped_arc(&ptr_to).unwrap_or(ptr_to);
+        // TypePointer::calcTruncate's attached subcomponent is still the
+        // TYPE-0001 structural residual; the ordinary registry path below is
+        // exact for factories without an alternate pointer size.
+        self.find_add(
+            Datatype::Pointer(TypePointer::new(size, ptr_to, wordsize)),
+            enforce_alignment,
+        )
+    }
+
+    // Ghidra: type.cc:3885 TypeFactory::getTypePointer(s,pt,ws,n)
+    /// Construct the named pointer overload, including display name and the
+    /// hash-derived id used by the name tree.
+    pub fn get_type_pointer_named(
+        &mut self,
+        size: usize,
+        ptr_to: Arc<Datatype>,
+        wordsize: usize,
+        name: &str,
+    ) -> Arc<Datatype> {
+        let ptr_to = Datatype::get_stripped_arc(&ptr_to).unwrap_or(ptr_to);
+        let mut pointer = TypePointer::new(size, ptr_to, wordsize);
+        pointer.base.name = name.to_string();
+        pointer.base.display_name = name.to_string();
+        pointer.base.id = Datatype::hash_name(name);
+        self.find_add(Datatype::Pointer(pointer), true)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
+    }
+
     // Ghidra: type.cc:3867 TypeFactory::getTypePointer(s,pt,ws)
     /// Find/create a pointer of the given `size` to `ptr_to` with `wordsize`,
-    /// mirroring Ghidra's `TypeFactory::getTypePointer(int4 sz, Datatype *pt,
-    /// uint4 ws)` (type.cc:3867-3883). The simpler `get_ptr` (which derives
-    /// size from `ptr_size` and assumes `wordsize = 1`) is the hot path; this
-    /// overload exists for callers (notably `TypePointerRel::downChain`,
-    /// type.cc:2667) that must match an explicit pointer width and word size.
+    /// after one virtual `getStripped` step, then canonicalize it through the
+    /// factory's pointer dependency key.
     pub fn get_type_pointer(
         &mut self,
         size: usize,
         ptr_to: Arc<Datatype>,
         wordsize: usize,
     ) -> Arc<Datatype> {
-        // If the requested size matches the default and wordsize is 1, the
-        // cheap `get_ptr` lookup covers us (and dedups by name).
-        if size == self.ptr_size && wordsize == 1 {
-            return self.get_ptr(ptr_to);
-        }
-        let name = format!("{} *", ptr_to.get_name());
-        if let Some(existing) = self.find_by_name(&name) {
-            // An existing entry under the default name may have a different
-            // size/wordsize; trust the caller's explicit request by building
-            // a fresh entry only when the cached one does not match.
-            if existing.get_size() == size {
-                return existing;
-            }
-        }
-        let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Pointer);
-        base.flags |= type_flags::IS_PTRREL; // mark as non-core
-        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance
-        // (TypeFactory::getTypePointer builds via the TypePointer ctor).
-        base.flags |= Self::pointer_inherit_needs_resolution(&ptr_to);
-        let dt = Arc::new(Datatype::Pointer(TypePointer {
-            base,
-            ptr_to,
-            wordsize,
-        }));
-        self.types.insert(name, dt.clone());
-        dt
+        self.get_type_pointer_result(size, ptr_to, wordsize, true)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:2656 TypePointerRel::downChain
@@ -2046,42 +2113,19 @@ impl TypeFactory {
 
     // Ghidra: type.cc:4071 TypeFactory::resizePointer
     /// Build a new pointer to `ptr`'s pointee with a different size,
-    /// preserving the wordsize. Faithful to
-    /// `TypeFactory::resizePointer` (type.cc:4071-4079). Ghidra strips the
-    /// pointee's typedef layer before re-pointing; we do the same via the
-    /// factory's typedef table.
+    /// preserving the wordsize. Only a concrete virtual `getStripped` result
+    /// is substituted; ordinary typedefs remain the pointee.
     pub fn resize_pointer(&mut self, ptr: &Datatype, new_size: usize) -> Arc<Datatype> {
         let (ptr_to, wordsize) = match ptr {
             Datatype::Pointer(p) => (p.ptr_to.clone(), p.wordsize),
-            _ => return self.find_by_name("void").unwrap(),
+            _ => panic!("resizePointer requires a pointer"),
         };
-        // Strip a typedef layer on the pointee, mirroring Ghidra's
-        // `pt->getStripped()` (type.cc:4075-4076).
-        let pointee = if let Some(target) = self.typedefs.get(ptr_to.get_name()) {
-            target.clone()
-        } else {
-            ptr_to
-        };
-        // A pointer name is size-independent in Ghidra's tree (sized via the
-        // cached entry); to honour the requested size we key the cache by the
-        // (name, size) pair so distinct sizes do not collide.
-        let name = format!("{} *", pointee.get_name());
-        let cache_key = format!("{}#{}/{}", name, new_size, wordsize);
-        if let Some(existing) = self.find_by_name(&cache_key) {
-            return existing;
-        }
-        let mut base = TypeBase::new(cache_key.clone(), new_size, TypeMetatype::Pointer);
-        // type.cc:1051-1052 calcSubmeta needs_resolution inheritance
-        // (TypeFactory::resizePointer builds `TypePointer tmp(newSize,pt,
-        // wordsize)` via the ctor, type.cc:4077).
-        base.flags |= Self::pointer_inherit_needs_resolution(&pointee);
-        let dt = Arc::new(Datatype::Pointer(TypePointer {
-            base,
-            ptr_to: pointee,
-            wordsize,
-        }));
-        self.types.insert(cache_key, dt.clone());
-        dt
+        let ptr_to = Datatype::get_stripped_arc(&ptr_to).unwrap_or(ptr_to);
+        self.find_add(
+            Datatype::Pointer(TypePointer::new(new_size, ptr_to, wordsize)),
+            true,
+        )
+        .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:3326 TypeFactory::findByIdLocal
@@ -3018,28 +3062,32 @@ impl TypeFactory {
                 let wordsize = TypePointer::decode_pointer_attributes(decoder, &basic);
                 // Child pointed-to type:
                 let ptrto = self.decode_type(decoder)?;
-                let mut name = basic.name.clone();
-                if name.is_empty() {
-                    name = format!("{} *", ptrto.get_name());
-                }
-                let mut base = TypeBase::new(name, basic.size, TypeMetatype::Pointer);
-                if !basic.display_name.is_empty() {
-                    base.display_name = basic.display_name.clone();
-                }
+                let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Pointer);
+                base.display_name = basic.display_name.clone();
                 base.alignment = basic.alignment;
                 base.align_size = basic.size;
                 base.id = basic.id;
                 base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
-                // type.cc:1027 TypePointer::decode calls calcSubmeta() —
-                // mirror its needs_resolution inheritance arm
-                // (type.cc:1051-1052) on the freshly decoded pointer.
-                base.flags |= Self::pointer_inherit_needs_resolution(&ptrto);
-                let dt = Arc::new(Datatype::Pointer(TypePointer {
+                let mut pointer = TypePointer {
                     base,
-                    ptr_to: ptrto,
+                    ptr_to: ptrto.clone(),
                     wordsize,
-                }));
-                self.insert(dt.clone());
+                };
+                pointer.calc_submeta();
+                if basic.name.is_empty() {
+                    pointer.base.flags |= ptrto.get_inheritable();
+                }
+                // The locked path canonicalizes the decoded stack candidate
+                // through findAdd; a repeated decode returns the existing
+                // factory object instead of colliding in insert.
+                // Rugra's production Architecture currently records
+                // `types->setupSizes()` as an executed no-op
+                // (CSPEC-TYPEORG-STATE-0001). Keep decode on findAdd's
+                // compatibility layout channel until that state is wired;
+                // structural pointer identity and collision semantics are
+                // still canonical. The explicit get_type_pointer API above
+                // remains the fail-closed locked-oracle channel.
+                let dt = self.find_add(Datatype::Pointer(pointer), false)?;
                 if elem_id != 0 {
                     decoder.close_element(elem_id);
                 }
@@ -4045,15 +4093,15 @@ impl TypeFactory {
     // Ghidra: type.cc:3390 TypeFactory::insert
     /// Internal method for finally inserting a new Datatype pointer.
     /// Faithful to the oracle's dual registration (type.cc:3390-3406) for the
-    /// atomic, array, and partial variants covered by this slice. The name
-    /// cross-reference only receives named entries; other container variants
-    /// remain on the registered TYPE-0001 residual.
+    /// atomic, pointer, array, and partial variants covered by this series.
+    /// The name cross-reference only receives named entries; other container
+    /// variants remain on the registered TYPE-0001 residual.
     fn insert(&mut self, dt: Arc<Datatype>) {
         let name = dt.get_name().to_string();
         let structurally_keyed = matches!(
             dt.as_ref(),
             Datatype::Void(_) | Datatype::Base(_) | Datatype::Enum(_)
-                | Datatype::Code(_) | Datatype::Array(_)
+                | Datatype::Code(_) | Datatype::Pointer(_) | Datatype::Array(_)
                 | Datatype::PartialStruct(_) | Datatype::PartialEnum(_)
                 | Datatype::PartialUnion(_)
         );
@@ -4194,6 +4242,15 @@ mod tests {
         decoder
     }
 
+    fn setup_default_sizes(factory: &mut TypeFactory) {
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+    }
+
     // Ghidra: type.cc:4193 TypeFactory::decodeTypeWithCodeFlags (regression
     // net for the TYPEFACTORY-CODEFLAGS-DECODE-0001 oracle fixture)
     #[test]
@@ -4330,14 +4387,545 @@ mod tests {
     #[test]
     fn test_pointer_deduplication() {
         let mut factory = TypeFactory::new(8);
+        assert!(factory.align_map.is_empty());
         let int_type = factory.find_by_name("int").unwrap();
 
         let ptr1 = factory.get_ptr(int_type.clone());
         let ptr2 = factory.get_ptr(int_type.clone());
 
         assert_eq!(Arc::as_ptr(&ptr1), Arc::as_ptr(&ptr2));
-        assert_eq!(ptr1.get_name(), "int *");
+        assert!(ptr1.get_name().is_empty());
         assert_eq!(ptr1.get_size(), 8);
+        assert_eq!((ptr1.get_alignment(), ptr1.get_align_size()), (8, 8));
+    }
+
+    #[test]
+    fn test_pointer_canonical_key_geometry_and_virtual_stripping() {
+        let mut factory = TypeFactory::new(8);
+        let partial_parent = factory.create_struct("PointerPartialParent");
+        setup_default_sizes(&mut factory);
+        let int_type = factory.find_by_name("int").expect("int core type");
+        let uint_type = factory.find_by_name("uint").expect("uint core type");
+
+        let plain = factory.get_type_pointer(8, int_type.clone(), 1);
+        let repeated = factory.get_type_pointer(8, int_type.clone(), 1);
+        let different_wordsize = factory.get_type_pointer(8, int_type.clone(), 2);
+        let different_size = factory.get_type_pointer(4, int_type.clone(), 1);
+        let different_target = factory.get_type_pointer(8, uint_type.clone(), 1);
+        let duplicate_int = Arc::new((*int_type).clone());
+        let different_identity = factory.get_type_pointer(8, duplicate_int.clone(), 1);
+        assert!(Arc::ptr_eq(&plain, &repeated));
+        assert!(!Arc::ptr_eq(&plain, &different_wordsize));
+        assert!(!Arc::ptr_eq(&plain, &different_size));
+        assert!(!Arc::ptr_eq(&plain, &different_target));
+        assert!(!Arc::ptr_eq(&plain, &different_identity));
+        assert_ne!(plain.compare_dependency(&different_identity), 0);
+        assert!(plain.get_name().is_empty());
+        assert!(plain.is_coretype());
+        assert_eq!(plain.get_flags() & type_flags::IS_PTRREL, 0);
+        let plain_pointer = match plain.as_ref() {
+            Datatype::Pointer(pointer) => pointer,
+            _ => panic!("expected pointer"),
+        };
+        let plain_key = TypeFactory::type_tree_key(&plain);
+        assert_eq!(plain_key.0, plain.get_submeta() as i32 as u8);
+        assert_eq!(plain_key.1, Arc::as_ptr(&plain_pointer.ptr_to) as usize);
+        assert_eq!((plain_key.2, plain_key.3), (0, 0));
+        assert_eq!(plain_key.4, 1);
+        assert_eq!((plain_key.5, plain_key.6), (1, 0));
+        assert_eq!(plain_key.7, Reverse(8));
+        assert_eq!(plain_key.8, 0);
+        assert!(plain_key < TypeFactory::type_tree_key(&different_wordsize));
+        assert!(plain_key < TypeFactory::type_tree_key(&different_size));
+
+        let named = factory.get_type_pointer_named(
+            8,
+            int_type.clone(),
+            1,
+            "CanonicalNamedPointer",
+        );
+        let named_repeat = factory.get_type_pointer_named(
+            8,
+            int_type.clone(),
+            1,
+            "CanonicalNamedPointer",
+        );
+        assert!(Arc::ptr_eq(&named, &named_repeat));
+        assert_eq!(named.get_name(), "CanonicalNamedPointer");
+        assert_eq!(named.get_display_name(), "CanonicalNamedPointer");
+        assert_eq!(named.get_id(), Datatype::hash_name("CanonicalNamedPointer"));
+        let named_key = TypeFactory::type_tree_key(&named);
+        assert_eq!(
+            (
+                named_key.0,
+                named_key.1,
+                named_key.2,
+                named_key.3,
+                named_key.4,
+                named_key.5,
+                named_key.6,
+                named_key.7,
+            ),
+            (
+                plain_key.0,
+                plain_key.1,
+                plain_key.2,
+                plain_key.3,
+                plain_key.4,
+                plain_key.5,
+                plain_key.6,
+                plain_key.7,
+            )
+        );
+        assert_eq!(named_key.8, Datatype::hash_name("CanonicalNamedPointer"));
+        assert!(plain_key < named_key);
+        let named_keys_before = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for (size, target, wordsize) in [
+            (8, uint_type.clone(), 1),
+            (8, int_type.clone(), 2),
+            (4, int_type.clone(), 1),
+        ] {
+            let named_conflict =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    factory.get_type_pointer_named(
+                        size,
+                        target,
+                        wordsize,
+                        "CanonicalNamedPointer",
+                    );
+                }));
+            let payload = named_conflict.expect_err("named dependency conflict");
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .expect("string panic payload");
+            assert_eq!(
+                message,
+                "LowlevelError: Trying to alter definition of type: CanonicalNamedPointer"
+            );
+        }
+        assert!(Arc::ptr_eq(
+            &named,
+            &factory
+                .find_by_name("CanonicalNamedPointer")
+                .expect("named pointer survives conflict")
+        ));
+        assert_eq!(
+            factory
+                .base_type_tree
+                .read()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            named_keys_before
+        );
+
+        let int_array = factory.get_array(int_type.clone(), 2);
+        let uint_array = factory.get_array(uint_type, 2);
+        let int_array_pointer = factory.get_type_pointer(8, int_array.clone(), 1);
+        let uint_array_pointer = factory.get_type_pointer(8, uint_array.clone(), 1);
+        assert!(!Arc::ptr_eq(&int_array_pointer, &uint_array_pointer));
+        assert!(int_array_pointer.is_pointer_to_array());
+        assert!(matches!(
+            int_array_pointer.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &int_array)
+        ));
+        assert!(matches!(
+            uint_array_pointer.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &uint_array)
+        ));
+        let singleton_array = factory.get_array(int_type.clone(), 1);
+        let singleton_pointer = factory.get_type_pointer(8, singleton_array, 1);
+        assert!(singleton_pointer.is_pointer_to_array());
+        assert!(singleton_pointer.needs_resolution());
+
+        let incomplete_pointer =
+            factory.get_type_pointer(8, partial_parent.clone(), 1);
+        assert_eq!(incomplete_pointer.get_submeta(), SubMetatype::PtrStruct);
+
+        let ordinary_alias = factory.get_typedef("PointerScalarAlias", int_type.clone());
+        let alias_pointer = factory.get_type_pointer(8, ordinary_alias.clone(), 1);
+        assert!(matches!(
+            alias_pointer.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &ordinary_alias)
+        ));
+
+        let partial = factory.get_type_partial_struct(partial_parent, 0, 2);
+        let partial_stripped =
+            Datatype::get_stripped_arc(&partial).expect("partial stripped fallback");
+        let partial_alias = factory.get_typedef("PointerPartialAlias", partial.clone());
+        let partial_pointer = factory.get_type_pointer(8, partial, 1);
+        let partial_alias_pointer = factory.get_type_pointer(8, partial_alias, 1);
+        assert!(matches!(
+            partial_pointer.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &partial_stripped)
+        ));
+        assert!(Arc::ptr_eq(&partial_pointer, &partial_alias_pointer));
+
+        let ram_pointer = factory
+            .find_add(
+                Datatype::Pointer(TypePointer::new_with_space(
+                    int_type.clone(),
+                    AddressSpace::Ram,
+                )),
+                true,
+            )
+            .expect("RAM pointer");
+        let register_pointer = factory
+            .find_add(
+                Datatype::Pointer(TypePointer::new_with_space(
+                    int_type,
+                    AddressSpace::Register,
+                )),
+                true,
+            )
+            .expect("register pointer");
+        assert!(!Arc::ptr_eq(&plain, &ram_pointer));
+        assert!(!Arc::ptr_eq(&ram_pointer, &register_pointer));
+        let ram_key = TypeFactory::type_tree_key(&ram_pointer);
+        let register_key = TypeFactory::type_tree_key(&register_pointer);
+        assert_eq!((ram_key.5, ram_key.6), (0, AddressSpace::Ram.space_id()));
+        assert!(ram_key < plain_key);
+        assert!(ram_key < register_key);
+
+        let keys_before_collision = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let duplicate = Arc::new((*ram_pointer).clone());
+        let collision = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.insert(duplicate);
+        }));
+        assert!(collision.is_err());
+        let keys_after_collision = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(keys_after_collision, keys_before_collision);
+    }
+
+    #[test]
+    fn test_ephemeral_pointer_rel_inherits_parent_geometry_and_identity() {
+        let mut factory = TypeFactory::new(8);
+        let parent = factory.create_struct("EphemeralParent");
+        let other_parent = factory.create_struct("OtherEphemeralParent");
+        setup_default_sizes(&mut factory);
+        let int_type = factory.find_by_name("int").expect("int core type");
+        let uint_type = factory.find_by_name("uint").expect("uint core type");
+        let unknown = factory
+            .find_by_name("undefined1")
+            .expect("one-byte unknown core type");
+
+        let parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let relative = factory.get_type_pointer_rel_ephemeral(
+            parent_pointer.clone(),
+            int_type.clone(),
+            4,
+        );
+        let repeated = factory.get_type_pointer_rel_ephemeral(
+            parent_pointer,
+            int_type.clone(),
+            4,
+        );
+        assert!(Arc::ptr_eq(&relative, &repeated));
+        assert!(relative.get_name().is_empty());
+        assert_eq!(
+            relative.get_flags() & (type_flags::IS_PTRREL | type_flags::HAS_STRIPPED),
+            type_flags::IS_PTRREL | type_flags::HAS_STRIPPED
+        );
+        let relative_pointer = match relative.as_ref() {
+            Datatype::Pointer(pointer) => pointer,
+            _ => panic!("expected relative pointer"),
+        };
+        let state = relative_pointer
+            .base
+            .pointer_rel
+            .as_ref()
+            .expect("relative state");
+        assert_eq!(relative_pointer.base.size, 8);
+        assert_eq!(relative_pointer.wordsize, 2);
+        assert!(Arc::ptr_eq(&relative_pointer.ptr_to, &int_type));
+        assert!(Arc::ptr_eq(&state.parent, &parent));
+        assert_eq!(state.offset, 4);
+        let stripped = state.stripped.as_ref().expect("ephemeral stripped pointer");
+        let canonical_plain = factory.get_type_pointer(8, int_type.clone(), 2);
+        assert!(Arc::ptr_eq(stripped, &canonical_plain));
+        let relative_key = TypeFactory::type_tree_key(&relative);
+        assert_eq!(relative_key.0, SubMetatype::PtrRel as i32 as u8);
+        assert_eq!(relative_key.1, Arc::as_ptr(&int_type) as usize);
+        assert_eq!(relative_key.2, 4);
+        assert_eq!(relative_key.3, Arc::as_ptr(&parent) as usize);
+        assert_eq!(relative_key.4, 2);
+        assert_eq!((relative_key.5, relative_key.6), (0, 0));
+        assert_eq!(relative_key.7, Reverse(8));
+        assert_eq!(relative_key.8, 0);
+
+        let other_parent_pointer = factory.get_type_pointer(8, other_parent, 2);
+        let different_parent = factory.get_type_pointer_rel_ephemeral(
+            other_parent_pointer,
+            int_type.clone(),
+            4,
+        );
+        let target_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let different_target = factory.get_type_pointer_rel_ephemeral(
+            target_parent_pointer,
+            uint_type,
+            4,
+        );
+        let offset_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let different_offset = factory.get_type_pointer_rel_ephemeral(
+            offset_parent_pointer,
+            int_type.clone(),
+            8,
+        );
+        let negative_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let negative_offset = factory.get_type_pointer_rel_ephemeral(
+            negative_parent_pointer,
+            int_type.clone(),
+            -4,
+        );
+        let negative_repeat_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let negative_repeat = factory.get_type_pointer_rel_ephemeral(
+            negative_repeat_parent_pointer,
+            int_type.clone(),
+            -4,
+        );
+        let narrow_parent_pointer = factory.get_type_pointer(4, parent.clone(), 1);
+        let different_geometry = factory.get_type_pointer_rel_ephemeral(
+            narrow_parent_pointer,
+            int_type.clone(),
+            4,
+        );
+        let wide_word_parent_pointer = factory.get_type_pointer(8, parent.clone(), 4);
+        let different_wordsize = factory.get_type_pointer_rel_ephemeral(
+            wide_word_parent_pointer,
+            int_type.clone(),
+            4,
+        );
+        assert!(!Arc::ptr_eq(&relative, &different_parent));
+        assert!(!Arc::ptr_eq(&relative, &different_target));
+        assert!(!Arc::ptr_eq(&relative, &different_offset));
+        assert!(!Arc::ptr_eq(&relative, &negative_offset));
+        assert!(Arc::ptr_eq(&negative_offset, &negative_repeat));
+        assert!(!Arc::ptr_eq(&relative, &different_geometry));
+        assert!(!Arc::ptr_eq(&relative, &different_wordsize));
+        assert_eq!(TypeFactory::type_tree_key(&negative_offset).2, -4);
+        assert!(TypeFactory::type_tree_key(&negative_offset) < relative_key);
+        assert!(matches!(
+            different_geometry.as_ref(),
+            Datatype::Pointer(pointer) if pointer.base.size == 4 && pointer.wordsize == 1
+        ));
+        assert!(matches!(
+            different_wordsize.as_ref(),
+            Datatype::Pointer(pointer) if pointer.base.size == 8 && pointer.wordsize == 4
+        ));
+
+        let formal = Datatype::Pointer(TypePointer::new_relative(
+            8,
+            int_type.clone(),
+            2,
+            parent.clone(),
+            4,
+        ));
+        assert_eq!(formal.get_flags() & type_flags::HAS_STRIPPED, 0);
+        assert_eq!(TypeFactory::type_tree_key(&formal), relative_key);
+
+        let parent_clone = Arc::new((*parent).clone());
+        let parent_clone_pointer = factory.get_type_pointer(8, parent_clone, 2);
+        let different_parent_identity = factory.get_type_pointer_rel_ephemeral(
+            parent_clone_pointer,
+            int_type.clone(),
+            4,
+        );
+        let target_clone = Arc::new((*int_type).clone());
+        let target_clone_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let different_target_identity = factory.get_type_pointer_rel_ephemeral(
+            target_clone_parent_pointer,
+            target_clone,
+            4,
+        );
+        assert_ne!(relative.compare_dependency(&different_parent_identity), 0);
+        assert_ne!(relative.compare_dependency(&different_target_identity), 0);
+
+        let ordinary_alias = factory.get_typedef("RelativeScalarAlias", int_type.clone());
+        let alias_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let alias_relative = factory.get_type_pointer_rel_ephemeral(
+            alias_parent_pointer,
+            ordinary_alias.clone(),
+            4,
+        );
+        let alias_pointer = match alias_relative.as_ref() {
+            Datatype::Pointer(pointer) => pointer,
+            _ => panic!("expected relative pointer"),
+        };
+        assert!(Arc::ptr_eq(&alias_pointer.ptr_to, &ordinary_alias));
+        let alias_stripped = alias_pointer
+            .get_stripped_pointer()
+            .expect("ephemeral relative pointer stripped target");
+        assert!(matches!(
+            alias_stripped.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &ordinary_alias)
+        ));
+        assert!(!Arc::ptr_eq(alias_stripped, &alias_relative));
+
+        let partial_target = factory.get_type_partial_struct(parent.clone(), 0, 2);
+        let partial_stripped =
+            Datatype::get_stripped_arc(&partial_target).expect("partial stripped target");
+        let partial_parent_pointer = factory.get_type_pointer(8, parent.clone(), 2);
+        let partial_relative = factory.get_type_pointer_rel_ephemeral(
+            partial_parent_pointer,
+            partial_target.clone(),
+            4,
+        );
+        let partial_pointer = match partial_relative.as_ref() {
+            Datatype::Pointer(pointer) => pointer,
+            _ => panic!("expected relative pointer"),
+        };
+        assert!(Arc::ptr_eq(&partial_pointer.ptr_to, &partial_target));
+        assert!(matches!(
+            partial_pointer.get_stripped_pointer().map(|value| value.as_ref()),
+            Some(Datatype::Pointer(pointer)) if Arc::ptr_eq(&pointer.ptr_to, &partial_stripped)
+        ));
+
+        let unknown_parent_pointer = factory.get_type_pointer(8, parent, 2);
+        let unknown_relative =
+            factory.get_type_pointer_rel_ephemeral(unknown_parent_pointer, unknown, 4);
+        assert_eq!(unknown_relative.get_submeta(), SubMetatype::PtrRelUnknown);
+        assert_eq!(
+            TypeFactory::type_tree_key(&unknown_relative).0,
+            SubMetatype::PtrRelUnknown as i32 as u8
+        );
+        assert!(relative_key < TypeFactory::type_tree_key(&unknown_relative));
+
+        let pointer_to_relative = factory.get_type_pointer(8, relative.clone(), 1);
+        assert!(matches!(
+            pointer_to_relative.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, stripped)
+        ));
+
+        let nonpointer_parent = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.get_type_pointer_rel_ephemeral(int_type, relative, 0);
+        }));
+        assert!(nonpointer_parent.is_err());
+    }
+
+    #[test]
+    fn test_pointer_factory_fails_before_layout_setup_without_tree_leak() {
+        let mut factory = TypeFactory::raw();
+        let scalar = Arc::new(Datatype::Base(TypeBase::new(
+            "raw_scalar".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let keys_before = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            factory
+                .get_type_pointer_result(8, scalar.clone(), 1, true)
+                .unwrap_err(),
+            "TypeFactory alignment map not initialized"
+        );
+        let public_failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.get_type_pointer(8, scalar.clone(), 1);
+        }));
+        let named_failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.get_type_pointer_named(8, scalar, 1, "RawNamedPointer");
+        }));
+        assert!(public_failure.is_err());
+        assert!(named_failure.is_err());
+        assert!(factory.find_by_name("RawNamedPointer").is_none());
+        let keys_after = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(keys_after, keys_before);
+    }
+
+    #[test]
+    fn test_pointer_decode_returns_existing_canonical_object() {
+        let mut factory = TypeFactory::new(8);
+        assert!(factory.align_map.is_empty());
+        let pointer_xml = || {
+            xml_elem_with_children(
+                "type",
+                &[("metatype", "ptr"), ("size", "8"), ("wordsize", "2")],
+                vec![xml_elem(
+                    "type",
+                    &[
+                        ("metatype", "uint"),
+                        ("name", "DecodePointerTarget"),
+                        ("size", "4"),
+                    ],
+                )],
+            )
+        };
+        let decoded = factory
+            .decode_type(&mut decoder_for_type(pointer_xml()))
+            .expect("first pointer decode");
+        let keys_after_first = factory.base_type_tree.read().unwrap().len();
+        let repeated = factory
+            .decode_type(&mut decoder_for_type(pointer_xml()))
+            .expect("repeated pointer decode");
+        assert_eq!(factory.base_type_tree.read().unwrap().len(), keys_after_first);
+        assert!(Arc::ptr_eq(&decoded, &repeated));
+        assert!(decoded.get_name().is_empty());
+        assert!(decoded.get_display_name().is_empty());
+        assert_eq!(decoded.get_id(), 0);
+        assert_eq!((decoded.get_alignment(), decoded.get_align_size()), (8, 8));
+        assert!(matches!(
+            decoded.as_ref(),
+            Datatype::Pointer(pointer)
+                if pointer.wordsize == 2
+                    && pointer.ptr_to.get_name() == "DecodePointerTarget"
+        ));
+        let decoded_target = match decoded.as_ref() {
+            Datatype::Pointer(pointer) => pointer.ptr_to.clone(),
+            _ => panic!("expected pointer"),
+        };
+        let direct = factory.get_type_pointer(8, decoded_target, 2);
+        assert!(Arc::ptr_eq(&decoded, &direct));
+        let different_geometry_xml = xml_elem_with_children(
+            "type",
+            &[("metatype", "ptr"), ("size", "4")],
+            vec![xml_elem(
+                "type",
+                &[
+                    ("metatype", "uint"),
+                    ("name", "DecodePointerTarget"),
+                    ("size", "4"),
+                ],
+            )],
+        );
+        let different_geometry = factory
+            .decode_type(&mut decoder_for_type(different_geometry_xml))
+            .expect("different pointer decode geometry");
+        assert!(!Arc::ptr_eq(&decoded, &different_geometry));
+        assert!(matches!(
+            different_geometry.as_ref(),
+            Datatype::Pointer(pointer) if pointer.base.size == 4 && pointer.wordsize == 1
+        ));
     }
 
     #[test]
@@ -4559,7 +5147,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(keys_after_invalid, keys_before_invalid);
         assert!(!keys_after_invalid.iter().any(|key| {
-            key.0 == SubMetatype::Array as i32 as u8 && key.3 == Reverse(0)
+            key.0 == SubMetatype::Array as i32 as u8 && key.7 == Reverse(0)
         }));
     }
 
@@ -4614,8 +5202,10 @@ mod tests {
         assert_eq!(partial_key.0, SubMetatype::PartialStruct as i32 as u8);
         assert_eq!(partial_key.1, Arc::as_ptr(&parent) as usize);
         assert_eq!(partial_key.2, 0);
-        assert_eq!(partial_key.3, Reverse(2));
-        assert_eq!(partial_key.4, 0);
+        assert_eq!((partial_key.3, partial_key.4), (0, 0));
+        assert_eq!((partial_key.5, partial_key.6), (0, 0));
+        assert_eq!(partial_key.7, Reverse(2));
+        assert_eq!(partial_key.8, 0);
 
         let different_offset = factory.get_type_partial_struct(
             match partial.as_ref() {
@@ -4708,8 +5298,10 @@ mod tests {
         assert_eq!(union_key.0, SubMetatype::PartialUnion as i32 as u8);
         assert_eq!(union_key.1, Arc::as_ptr(&union_parent) as usize);
         assert_eq!(union_key.2, 0);
-        assert_eq!(union_key.3, Reverse(2));
-        assert_eq!(union_key.4, 0);
+        assert_eq!((union_key.3, union_key.4), (0, 0));
+        assert_eq!((union_key.5, union_key.6), (0, 0));
+        assert_eq!(union_key.7, Reverse(2));
+        assert_eq!(union_key.8, 0);
         let union_stripped =
             Datatype::get_stripped_arc(&partial_union).expect("partial union stripped form");
         let union_alias = factory.get_typedef("PartialUnionAlias", partial_union.clone());
@@ -4775,8 +5367,10 @@ mod tests {
         assert_eq!(enum_key.0, SubMetatype::UintPartialEnum as i32 as u8);
         assert_eq!(enum_key.1, Arc::as_ptr(&enum_parent) as usize);
         assert_eq!(enum_key.2, 0);
-        assert_eq!(enum_key.3, Reverse(2));
-        assert_eq!(enum_key.4, 0);
+        assert_eq!((enum_key.3, enum_key.4), (0, 0));
+        assert_eq!((enum_key.5, enum_key.6), (0, 0));
+        assert_eq!(enum_key.7, Reverse(2));
+        assert_eq!(enum_key.8, 0);
         match partial_enum.as_ref() {
             Datatype::PartialEnum(partial) => {
                 assert_eq!(partial.base.metatype, TypeMetatype::Uint);
@@ -5126,7 +5720,7 @@ mod tests {
     }
 
     #[test]
-    fn test_series_b_named_scope_preserves_non_b_pointer_projection() {
+    fn test_series_c_named_pointer_dependency_rejects_redefinition() {
         let mut factory = TypeFactory::new(8);
         let int_type = factory.find_by_name("int").expect("int core type");
         let uint_type = factory.find_by_name("uint").expect("uint core type");
@@ -5143,10 +5737,14 @@ mod tests {
             .expect("register scoped pointer");
         let different_target = pointer_candidate(uint_type);
         assert_ne!(first.compare_dependency(&different_target), 0);
-        let scoped_repeat = factory
-            .find_add(different_target, false)
-            .expect("series-B scope keeps the series-A pointer projection");
-        assert!(Arc::ptr_eq(&first, &scoped_repeat));
+        assert_eq!(
+            factory.find_add(different_target, false).unwrap_err(),
+            "Trying to alter definition of type: ScopedPointer"
+        );
+        let scoped_survivor = factory
+            .find_by_name("ScopedPointer")
+            .expect("original scoped pointer survives");
+        assert!(Arc::ptr_eq(&first, &scoped_survivor));
         assert!(matches!(
             first.as_ref(),
             Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &int_type)
@@ -5177,10 +5775,10 @@ mod tests {
             .expect("register scoped relative pointer");
         let different_relative = relative_candidate(parent_b, 12);
         assert_ne!(relative.compare_dependency(&different_relative), 0);
-        let relative_repeat = factory
-            .find_add(different_relative, false)
-            .expect("series-B scope keeps the series-A relative-pointer projection");
-        assert!(Arc::ptr_eq(&relative, &relative_repeat));
+        assert_eq!(
+            factory.find_add(different_relative, false).unwrap_err(),
+            "Trying to alter definition of type: ScopedRelativePointer"
+        );
         assert!(matches!(
             relative.as_ref(),
             Datatype::Pointer(pointer)
@@ -5189,11 +5787,6 @@ mod tests {
                     Some(state) if Arc::ptr_eq(&state.parent, &parent_a) && state.offset == 4
                 )
         ));
-
-        // This assertion intentionally locks only the series boundary. The
-        // locked oracle's concrete Pointer/PointerRel comparator rejects both
-        // pairs above; series C owns that migration under
-        // TYPEFACTORY-POINTER-CANONICAL-0001.
     }
 
     #[test]
@@ -5275,7 +5868,9 @@ mod tests {
 
     #[test]
     fn test_get_type_pointer_rel() {
-        // type.cc:4016 — relative pointer into a parent at an offset.
+        // Legacy side-table glue retained for older Rugra callers. The locked
+        // type.cc:4016 parent-pointer overload is exercised by
+        // test_ephemeral_pointer_rel_inherits_parent_geometry_and_identity.
         let mut factory = TypeFactory::new(8);
         let int_t = factory.find_by_name("int").unwrap();
         let struct_t = factory.create_struct("S");
@@ -5340,6 +5935,7 @@ mod tests {
         let mut off: i64 = 0;
         let mut par: Option<Arc<Datatype>> = None;
         let mut par_off: i64 = 0;
+        setup_default_sizes(&mut factory);
         let result = factory.down_chain(
             &rp_ptr, &outer, 4, &mut off, &mut par, &mut par_off, false,
         );
@@ -5368,11 +5964,70 @@ mod tests {
     fn test_resize_pointer() {
         // type.cc:4071 — same pointee, new size, preserves wordsize.
         let mut factory = TypeFactory::new(8);
+        let partial_parent = factory.create_struct("ResizePartialParent");
+        setup_default_sizes(&mut factory);
         let int_t = factory.find_by_name("int").unwrap();
-        let ptr8 = factory.get_ptr(int_t);
+        let ordinary_alias = factory.get_typedef("ResizeScalarAlias", int_t.clone());
+        let ptr8 = factory.get_type_pointer(8, ordinary_alias.clone(), 2);
         let ptr4 = factory.resize_pointer(&ptr8, 4);
         assert_eq!(ptr4.get_size(), 4);
         assert_eq!(ptr4.get_metatype(), TypeMetatype::Pointer);
+        assert!(matches!(
+            ptr4.as_ref(),
+            Datatype::Pointer(pointer)
+                if pointer.wordsize == 2 && Arc::ptr_eq(&pointer.ptr_to, &ordinary_alias)
+        ));
+        let ptr4_repeat = factory.resize_pointer(&ptr8, 4);
+        assert!(Arc::ptr_eq(&ptr4, &ptr4_repeat));
+        let ptr4_direct = factory.get_type_pointer(4, ordinary_alias.clone(), 2);
+        assert!(Arc::ptr_eq(&ptr4, &ptr4_direct));
+        assert!(ptr4.get_name().is_empty());
+        assert!(ptr4.get_display_name().is_empty());
+        assert_eq!(ptr4.get_id(), 0);
+
+        let space_source = Datatype::Pointer(TypePointer::new_with_space(
+            ordinary_alias.clone(),
+            AddressSpace::Ram,
+        ));
+        let resized_space = factory.resize_pointer(&space_source, 4);
+        let direct_wordsize_one = factory.get_type_pointer(4, ordinary_alias.clone(), 1);
+        assert!(Arc::ptr_eq(&resized_space, &direct_wordsize_one));
+        assert!(matches!(
+            resized_space.as_ref(),
+            Datatype::Pointer(pointer)
+                if pointer.base.pointer_space.is_none()
+                    && (pointer.base.flags & type_flags::IS_PTRREL) == 0
+        ));
+
+        let relative_source = Datatype::Pointer(TypePointer::new_relative(
+            8,
+            ordinary_alias.clone(),
+            2,
+            int_t.clone(),
+            4,
+        ));
+        let resized_relative = factory.resize_pointer(&relative_source, 4);
+        assert!(Arc::ptr_eq(&resized_relative, &ptr4_direct));
+        assert!(matches!(
+            resized_relative.as_ref(),
+            Datatype::Pointer(pointer)
+                if pointer.base.pointer_rel.is_none()
+                    && (pointer.base.flags & type_flags::IS_PTRREL) == 0
+        ));
+
+        let partial = factory.get_type_partial_struct(partial_parent, 0, 2);
+        let stripped = Datatype::get_stripped_arc(&partial).expect("partial stripped fallback");
+        let partial_source = Datatype::Pointer(TypePointer::new(8, partial, 2));
+        let partial_resized = factory.resize_pointer(&partial_source, 4);
+        assert!(matches!(
+            partial_resized.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &stripped)
+        ));
+
+        let nonpointer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.resize_pointer(int_t.as_ref(), 4);
+        }));
+        assert!(nonpointer.is_err());
     }
 
     #[test]
