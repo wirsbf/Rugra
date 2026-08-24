@@ -27,9 +27,9 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=7867b00f5be662c12dae2f7040630d1e9783701a
-rugra_source_tree=be5f2c5512bf41c514307f288e88128cea70c2b2
-rugra_source_src_tree=860d94c228aafadaf4ca2b6a37478d793346f7ef
+rugra_source_commit=dcead226b33d3541fb5426693cdde9b380656026
+rugra_source_tree=d4ef825b510df5e74ec506857e28fd16e472ae8a
+rugra_source_src_tree=038823b07b7801304593f850f32d0217903fba28
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/heritage_guard_normalize_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/heritage_guard_normalize_1204.cc"
@@ -392,6 +392,7 @@ if not metadata["overall_status"].startswith("MISMATCH:"):
 coverage = metadata["coverage"]
 for key in (
     "guard_returns_trial_register",
+    "guard_returns_overlapping_subpiece",
     "persist_return_copy_suffix",
     "normalize_write_call_piece",
     "normalize_write_subpiece_piece",
@@ -399,17 +400,13 @@ for key in (
 ):
     if not coverage[key].startswith("MATCH"):
         raise SystemExit(f"covered projection {key} must remain MATCH")
-registered = ("guard_returns_overlapping_subpiece",)
-for key in registered:
-    if not coverage[key].startswith("MISMATCH"):
-        raise SystemExit(f"registered divergence {key} must remain MISMATCH")
 for key in ("guard_fl_addrtied_holdind", "guard_fl_scope_symbol_flags"):
     if not coverage[key].startswith("UNTESTED"):
         raise SystemExit(f"residual {key} must remain UNTESTED")
 if not coverage["remaining_heritage_closure"].startswith("UNTESTED"):
     raise SystemExit("remaining_heritage_closure must remain UNTESTED")
 for key, status in coverage.items():
-    if status.startswith("MISMATCH") and key not in registered:
+    if status.startswith("MISMATCH"):
         raise SystemExit(f"unregistered divergence in {key}")
 PY
 
@@ -436,10 +433,12 @@ if [[ -s "$oracle_tmp/ghidra.stderr" || -s "$oracle_tmp/rugra.stderr" ]]; then
   /usr/bin/cat "$oracle_tmp/ghidra.stderr" "$oracle_tmp/rugra.stderr" >&2
   exit 1
 fi
-# Per-case gate: every line must byte-match EXCEPT the registered
-# guard_returns_overlapping_subpiece divergence (fspec.rs
-# justified_contain_range polarity, address.cc:131-141), whose exact bytes
-# are dual-pinned per side so the upstream fix must flip it to MATCH.
+# Per-case gate: every line must byte-match the locked Ghidra oracle
+# output. The former guard_returns_overlapping_subpiece divergence
+# (fspec.rs justified_contain_range -1 polarity vs Address::justifiedContain,
+# address.cc:131-141) was dual-pinned per side; the polarity fix merged
+# into the re-pinned commit flips it to MATCH, so any divergence is now
+# unregistered.
 /usr/bin/python3 -I -S - "$metadata" "$oracle_tmp/ghidra.stdout" "$oracle_tmp/rugra.stdout" <<'PY'
 import hashlib, json, pathlib, sys
 metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -459,26 +458,19 @@ if len(glines) != len(prefixes) or len(rlines) != len(prefixes):
 for gl, rl, prefix in zip(glines, rlines, prefixes):
     if not gl.startswith(prefix) or not rl.startswith(prefix):
         raise SystemExit(f"stdout case order mismatch at {prefix}")
-registered = metadata["registered_divergence_lines"]
 for index, (gl, rl) in enumerate(zip(glines, rlines)):
-    if gl == rl:
-        continue
-    if prefixes[index] != "case=guard_returns_overlapping_subpiece|":
-        raise SystemExit(f"unregistered divergence on line {index + 1}: {prefixes[index]}")
-    entry = registered["case=guard_returns_overlapping_subpiece|"]
-    if hashlib.sha256(gl.encode()).hexdigest() != entry["ghidra_line_sha256"]:
-        raise SystemExit("registered divergence ghidra line drifted")
-    if hashlib.sha256(rl.encode()).hexdigest() != entry["rugra_line_sha256"]:
-        raise SystemExit("registered divergence rugra line drifted")
-    print(f"registered MISMATCH {prefixes[index]} {entry['reason']}")
+    if gl != rl:
+        raise SystemExit(f"divergence on line {index + 1}: {prefixes[index]}")
 expected = metadata["expected_stdout"]
-if hashlib.sha256("\n".join(glines).encode() + b"\n").hexdigest() != expected["ghidra_stdout_sha256"]:
-    raise SystemExit("ghidra stdout hash mismatch")
-if hashlib.sha256("\n".join(rlines).encode() + b"\n").hexdigest() != expected["rugra_stdout_sha256"]:
-    raise SystemExit("rugra stdout hash mismatch")
+ghidra_sha = hashlib.sha256("\n".join(glines).encode() + b"\n").hexdigest()
+if ghidra_sha != expected["ghidra_stdout_sha256"]:
+    raise SystemExit(f"ghidra stdout hash mismatch: expected={expected['ghidra_stdout_sha256']} actual={ghidra_sha}")
+rugra_sha = hashlib.sha256("\n".join(rlines).encode() + b"\n").hexdigest()
+if rugra_sha != expected["rugra_stdout_sha256"]:
+    raise SystemExit(f"rugra stdout hash mismatch: expected={expected['rugra_stdout_sha256']} actual={rugra_sha}")
 PY
 
 /usr/bin/sha256sum "${owned[@]}" >"$oracle_tmp/owned.after"
 /usr/bin/diff -u "$oracle_tmp/owned.before" "$oracle_tmp/owned.after"
 /usr/bin/cat "$oracle_tmp/ghidra.stdout"
-echo "heritage_guard_normalize_1204: covered_projection=MATCH(5) registered_mismatch=1 overall=MISMATCH cases=6"
+echo "heritage_guard_normalize_1204: covered_projection=MATCH(6) registered_mismatch=0 overall=MISMATCH cases=6"
