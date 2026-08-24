@@ -659,6 +659,50 @@
       }
     },
     {
+      "id": "block_halfdelete_revidx_1204",
+      "description": "FlowBlock halfDeleteInEdge/halfDeleteOutEdge ordered half-edge slides, reciprocal reverse-index updates, labels, self/parallel/bidirectional edges, and PHI-slot identity",
+      "runner": [
+        "tools/run_block_halfdelete_revidx_oracle.sh"
+      ],
+      "timeout_seconds": 2400,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/block_halfdelete_revidx_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/block_halfdelete_revidx_1204.cc",
+          "rust_fixture": "tests/oracle/block_halfdelete_revidx_1204.rs",
+          "api_doc": "docs/api/block.md"
+        },
+        "tools": {
+          "runner": "tools/run_block_halfdelete_revidx_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs",
+          "docs/api/block.md",
+          "tests/oracle/block_halfdelete_revidx_1204.*",
+          "tools/run_block_halfdelete_revidx_oracle.sh"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-02180bf3bc24adf7607b",
+          "GH12-F-87c9a5900b5ff9dbb9d1",
+          "GH12-F-a79a5ed692922aac2e11",
+          "GH12-F-a00ad0d88b1cd779d056"
+        ],
+        "rust_function_ids": [
+          "RG-F-39b2a4984c69a6b76ce8",
+          "RG-F-2646dcd008a8290bb207",
+          "RG-F-2e7d8eae51d63d1dcc39",
+          "RG-F-68db795ba78535d5e6e6"
+        ]
+      }
+    },
+    {
       "id": "varmap_naming_1204",
       "description": "Authoritative default-naming state mutation: SymbolNameTree walk, shared int4 base, category/catindex, nameDedup, makeNameUnique sequencing, buildVariableName flag branches",
       "runner": [
@@ -823,6 +867,199 @@
           "docs/api/heritage.md",
           "tests/oracle/heritage_ownership_1204.*",
           "tools/run_heritage_ownership_oracle.sh"
+        ]
+      }
+    },
+    {
+      "id": "heritage_free_ssa_1204",
+      "description": "Heritage free-varnode SSA promotion, rename recursion, INDIRECT simultaneous selection, loop-PHI reverse-slot wiring, and declared exception-state mismatches",
+      "runner": [
+        "tools/run_heritage_free_ssa_oracle.sh"
+      ],
+      "timeout_seconds": 2400,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/heritage_free_ssa_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/heritage_free_ssa_1204.cc",
+          "rust_fixture": "tests/oracle/heritage_free_ssa_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_heritage_free_ssa_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/heritage.rs",
+          "src/funcdata.rs",
+          "src/varnode.rs",
+          "src/op.rs",
+          "src/block.rs",
+          "tests/oracle/heritage_free_ssa_1204.*",
+          "tools/run_heritage_free_ssa_oracle.sh"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-18fa37122dd00da59412",
+          "GH12-F-d4a2475107e818f1412c",
+          "GH12-F-7da47c79af2f9ec5d392",
+          "GH12-F-96ecf8b90e2ecb42b147",
+          "GH12-F-fb4e4d165fa4fe336897",
+          "GH12-F-312e54443d22adf08654",
+          "GH12-F-e749ca8c9e7c3a30b1a2",
+          "GH12-F-db31e0c0fdc59706563a",
+          "GH12-F-1903513545adb23a522a",
+          "GH12-F-04e4a7fe8cd549e26cb7",
+          "GH12-F-0137050c7d4e7b97dea4"
+        ],
+        "rust_function_ids": [
+          "RG-F-00303f7191bb10510285",
+          "RG-F-1779251870f9de2cae3a",
+          "RG-F-2cb8218aafadf4ef495a",
+          "RG-F-32d0747bb1c3c9c1c584",
+          "RG-F-3d75e8fa19d4a99c7495",
+          "RG-F-5274d94ef0d1dd1a0ea1",
+          "RG-F-62f116b3c40d98edb200",
+          "RG-F-8b9d57adb3df403954ae",
+          "RG-F-936f43a71808694146ef",
+          "RG-F-0cc1be38233214e30889",
+          "RG-F-b85de13d75a33863f3cb",
+          "RG-F-d34241209d0e67ea018f",
+          "RG-F-f1fd35e4a23d107e1067"
+        ]
+      }
+    },
+    {
+      "id": "program_flow_metadata_1204",
+      "description": "Official Ghidra Java Program flow/no-return/shared-return metadata capture across pre-target, post-target, and analysis-queue-settled stages",
+      "runner": [
+        "tools/run_program_flow_metadata_oracle.sh"
+      ],
+      "timeout_seconds": 1200,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/program_flow_metadata_1204.metadata.json",
+        "inputs": {
+          "ghidra_script": "tests/oracle/program_flow_metadata_1204/ProgramFlowMetadata1204.java",
+          "assembly_fixture": "tests/oracle/program_flow_metadata_1204/program_flow_metadata_1204.S",
+          "direct_expected": "tests/oracle/program_flow_metadata_1204/expected/direct_only.json",
+          "conditional_expected": "tests/oracle/program_flow_metadata_1204/expected/conditional_enabled.json"
+        },
+        "tools": {
+          "runner": "tools/run_program_flow_metadata_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tests/oracle/program_flow_metadata_1204/**",
+          "tests/oracle/program_flow_metadata_1204.metadata.json",
+          "tools/run_program_flow_metadata_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
+      "id": "address_phase2_closure_1204",
+      "description": "Address-space-aware PcodeOpBank lifecycle, SeqNum ordering, FlowInfo block generation, BlockBasic range cover, and tagged RAM/stack/overlay divergence",
+      "runner": [
+        "tools/run_address_phase2_closure_oracle.sh"
+      ],
+      "timeout_seconds": 2400,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/address_phase2_closure_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/address_phase2_closure_1204.cc",
+          "rust_fixture": "tests/oracle/address_phase2_closure_1204.rs",
+          "sla": "sleigh_specs/x86-64.sla",
+          "processor_spec": "sleigh_specs/x86-64.pspec",
+          "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+          "language_definitions": "sleigh_specs/x86.ldefs"
+        },
+        "tools": {
+          "runner": "tools/run_address_phase2_closure_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/address.rs",
+          "src/op.rs",
+          "src/flow.rs",
+          "src/block.rs",
+          "src/space.rs",
+          "src/disasm/sleigh_lift.rs",
+          "src/funcdata.rs",
+          "sleigh_shim/**",
+          "sleigh_specs/**",
+          "tests/oracle/address_phase2_closure_1204.*",
+          "tools/run_address_phase2_closure_oracle.sh"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-f495c00c2c515f5724ab",
+          "GH12-F-b6be24f2ac6e3d3842b7",
+          "GH12-F-965ff9d3908dcbef0fd2",
+          "GH12-F-509d8dac4c8ecb350cc8",
+          "GH12-F-2a968d82286bca9cfb74",
+          "GH12-F-ec6788d6a598fa1ca727",
+          "GH12-F-cf86b4707ac989cb320d",
+          "GH12-F-6eb8aa363f96e26c2dbd",
+          "GH12-F-9cfa66dbc7414fbbc131",
+          "GH12-F-63d4fedd198ddf9bd3dc",
+          "GH12-F-0857d20fa39484d425f1",
+          "GH12-F-41d505a932f9aed720ad",
+          "GH12-F-085d210dd52f0abac240",
+          "GH12-F-f2da9ae7713daa1ebde2",
+          "GH12-F-ba9ea7971d899aa22e69",
+          "GH12-F-a1d975fa03e158464c37",
+          "GH12-F-b4060ac06b8ee80a3c8d",
+          "GH12-F-9ba83988f004324e69a6",
+          "GH12-F-b4a972d2d89e0f9e8979",
+          "GH12-F-3efb7c91d9cd753e75ec",
+          "GH12-F-dfad49538bfd7a86c74d",
+          "GH12-F-9af55d890adad3977d4e",
+          "GH12-F-9633f06a4f5f647fc394",
+          "GH12-F-4fbf46df6d71b0c2e77c",
+          "GH12-F-2f63ce68bfaf74078789"
+        ],
+        "rust_function_ids": [
+          "RG-F-89227516a1225e317c08",
+          "RG-F-c9811edb9fb50bdcbb02",
+          "RG-F-b0bd0fd9650c8dc041d9",
+          "RG-F-da6d2d3c6a3a39b28deb",
+          "RG-F-77aaf770444c014b112f",
+          "RG-F-d2f7db9f478090f2af6b",
+          "RG-F-0ba5e0d4c3198c3b049b",
+          "RG-F-a97532919b39aba316cd",
+          "RG-F-5c7eb9d24262e256a38f",
+          "RG-F-fbd36a732ff926d41038",
+          "RG-F-ff97177f2a4e97b8cf89",
+          "RG-F-dafbe7138312bc2053a0",
+          "RG-F-7ab218b1f6f14c126deb",
+          "RG-F-49837dd5483eee6ce607",
+          "RG-F-6801c1cf2e5e395a80ca",
+          "RG-F-313b425ed0b17d723696",
+          "RG-F-7fb088720dff570d9881",
+          "RG-F-040bc103305f7e16ffe1",
+          "RG-F-df41a3d2928e4cedd112",
+          "RG-F-cd7631caeae203d8e42e",
+          "RG-F-192eeae6e57a7bc95eea",
+          "RG-F-bf776643b19f8ad576d7",
+          "RG-F-6ce592140c3477defcf6",
+          "RG-F-222f084dc0f2a5e93122",
+          "RG-F-fd655d6b3856412c7d46",
+          "RG-F-29f1bd831bde716de5c4"
         ]
       }
     },
@@ -3371,7 +3608,7 @@
     },
     {
       "id": "fspec_phase0_1204",
-      "description": "fspec Phase-0 vs locked 12.0.4: cross-space entry lookup (register/stack hits, const/unique/ram cross misses, minsize gate), filter-free container/extension, ParamTrial five-level comparator ladder, 12/4 split boundary address + flags inheritance, split_trial slot renumbering (6/6 MATCH)",
+      "description": "fspec Phase-0 locked 12.0.4 differential: cross-space lookup, filter-free container/extension, ParamTrial comparator ordering, split boundary/flags, and split-trial slot rebuild; covered projection 6/6 MATCH, overall UNTESTED",
       "runner": [
         "tools/run_fspec_phase0_oracle.sh"
       ],
@@ -3380,27 +3617,257 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "MATCH",
+      "evidence_status": "UNTESTED",
       "cache": {
         "metadata": "tests/oracle/fspec_phase0_1204.metadata.json",
         "inputs": {
+          "api_doc": "docs/api/fspec.md",
           "cpp_fixture": "tests/oracle/fspec_phase0_1204.cc",
           "rust_fixture": "tests/oracle/fspec_phase0_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_fspec_phase0_oracle.sh"
         }
       },
-      "wave": "W-2026-08-22-ORCH",
-      "ghidra_function_ids": [
-        "ParamListStandard::findEntry",
-        "ProtoModel::unjustifiedContainer",
-        "ParamTrial::operator<",
-        "ParamListStandard::splitTrial"
+      "impact": {
+        "paths": [
+          "docs/api/fspec.md",
+          "src/fspec.rs",
+          "tests/oracle/fspec_phase0_1204.*",
+          "tools/run_fspec_phase0_oracle.sh"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-b2bff05dfee60137701c",
+          "GH12-F-863482e6972c91b0d42e",
+          "GH12-F-1c3a763a842b593cf5c3",
+          "GH12-F-e58eb59384e30cb287a1",
+          "GH12-F-a099559c511dd787f0ca",
+          "GH12-F-19a1599ade2ed2d771ac",
+          "GH12-F-c3567cea1ed400eb7413",
+          "GH12-F-b1a276a6a091136a35fa",
+          "GH12-F-fbe53bfcc3cfa93582f8",
+          "GH12-F-3d580c688bd58f757114"
+        ],
+        "rust_function_ids": [
+          "RG-F-b963ca1fc0328358033f",
+          "RG-F-1ff4bda19ef246596da9",
+          "RG-F-8dd367f8f6d2e6b25a9f",
+          "RG-F-51aa66bc4efbef5ce41c",
+          "RG-F-0a1551737cd9101b3256",
+          "RG-F-33f07999a854f4afd973",
+          "RG-F-537717303254612cf76f",
+          "RG-F-fef6b361a9e8f6381971",
+          "RG-F-9f1935e81471cf88494a",
+          "RG-F-14308901657e8b225fe7",
+          "RG-F-b445c51b636b8d0099bb",
+          "RG-F-7b3942289f40f7f5655f"
+        ]
+      }
+    },
+    {
+      "id": "fspec_paramlist_output_1204",
+      "description": "Production ParamListStandardOut decode/dispatch and output-trial mutation vs locked 12.0.4; paired outputs preserve the join_dual_class ModelRule divergence (overall MISMATCH); run with --no-cache until external BFD provenance is closed",
+      "runner": [
+        "tools/run_fspec_paramlist_output_oracle.sh"
       ],
-      "rust_function_ids": [
-        "fspec::find_entry",
-        "fspec::unjustified_container",
-        "fspec::ParamTrial::op_less",
-        "fspec::split_trial"
-      ]
+      "timeout_seconds": 2400,
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/fspec_paramlist_output_1204.metadata.json",
+        "inputs": {
+          "api_doc": "docs/api/fspec.md",
+          "binary": "examples/curl",
+          "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+          "cpp_fixture": "tests/oracle/fspec_paramlist_output_1204.cc",
+          "language_definitions": "sleigh_specs/x86.ldefs",
+          "processor_spec": "sleigh_specs/x86-64.pspec",
+          "rust_fixture": "tests/oracle/fspec_paramlist_output_1204.rs",
+          "sla": "sleigh_specs/x86-64.sla"
+        },
+        "tools": {
+          "runner": "tools/run_fspec_paramlist_output_oracle.sh"
+        },
+        "comparands": {
+          "sleigh_shim": "sleigh_shim"
+        }
+      },
+      "impact": {
+        "paths": [
+          "docs/api/fspec.md",
+          "examples/curl",
+          "sleigh_shim/**",
+          "sleigh_specs/x86-64-gcc.cspec",
+          "sleigh_specs/x86-64.pspec",
+          "sleigh_specs/x86-64.sla",
+          "sleigh_specs/x86.ldefs",
+          "src/fspec.rs",
+          "tests/oracle/fspec_paramlist_output_1204.*",
+          "tools/run_fspec_paramlist_output_oracle.sh"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-0dd1e0ac41180832f685",
+          "GH12-F-c3567cea1ed400eb7413",
+          "GH12-F-edb947b74618d34a603f",
+          "GH12-F-ff7381ff18beac1bef7d",
+          "GH12-F-0809d70ef8845a413c99",
+          "GH12-F-19ec31ee568d55230202",
+          "GH12-F-af6b79bd69c355acd430",
+          "GH12-F-d228ba888f28cde4b7d8",
+          "GH12-F-ba151aebe1d592c2f13c",
+          "GH12-F-e91552803fdf0ed0b26d",
+          "GH12-F-c82f18b5a601d9bb7409",
+          "GH12-F-452627ab5311c84e46c8"
+        ],
+        "rust_function_ids": [
+          "RG-F-e2ae768e78b0f9d2407f",
+          "RG-F-f04406088247341ddb09",
+          "RG-F-9f1935e81471cf88494a",
+          "RG-F-14308901657e8b225fe7",
+          "RG-F-b445c51b636b8d0099bb",
+          "RG-F-906d05c5305c7111d801",
+          "RG-F-29dc4b50b4e765955d48",
+          "RG-F-abd234dc93f9affbeef5",
+          "RG-F-7270c458a0bfc7ada4e8",
+          "RG-F-d8069a368d3cde54f438",
+          "RG-F-890197e3c61e8d298db1",
+          "RG-F-165d45a203c4b7b0a40d",
+          "RG-F-8da24b5ec162432b2e21",
+          "RG-F-58e5a8b2d544465ae841",
+          "RG-F-cba1ca033fe56fb95dc4",
+          "RG-F-987c0c4685c579ad3ef3",
+          "RG-F-61659f5a98e9b24e0927"
+        ]
+      }
+    },
+    {
+      "id": "truncated_flow_1204",
+      "description": "Funcdata truncated-flow 17-record differential: dead-list cloning, callspec/FSPEC and jump-table rebinding, FlowInfo block construction, tagged BlockBasic range preservation, and exception-prefix state; covered projection MATCH, overall MISMATCH from registered residuals",
+      "runner": [
+        "tools/run_truncated_flow_oracle.sh"
+      ],
+      "timeout_seconds": 2400,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/truncated_flow_1204.metadata.json",
+        "inputs": {
+          "block_doc": "docs/api/block.md",
+          "block_overlay": "src/block.rs",
+          "cpp_fixture": "tests/oracle/truncated_flow_1204.cc",
+          "flow_doc": "docs/api/flow.md",
+          "flow_overlay": "src/flow.rs",
+          "funcdata_doc": "docs/api/funcdata.md",
+          "funcdata_overlay": "src/funcdata.rs",
+          "op_doc": "docs/api/op.md",
+          "op_overlay": "src/op.rs",
+          "rust_fixture": "tests/oracle/truncated_flow_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_truncated_flow_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "docs/api/block.md",
+          "docs/api/flow.md",
+          "docs/api/funcdata.md",
+          "docs/api/op.md",
+          "src/block.rs",
+          "src/flow.rs",
+          "src/funcdata.rs",
+          "src/op.rs",
+          "tests/oracle/truncated_flow_1204.*",
+          "tools/run_truncated_flow_oracle.sh"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-9e1a435a7c7c67b16689",
+          "GH12-F-dd99ec608e56169e801b",
+          "GH12-F-29f6437cbf8dff26162c",
+          "GH12-F-89186a662510a9de0a74",
+          "GH12-F-965ff9d3908dcbef0fd2",
+          "GH12-F-509d8dac4c8ecb350cc8",
+          "GH12-F-b4060ac06b8ee80a3c8d",
+          "GH12-F-41d505a932f9aed720ad",
+          "GH12-F-63d4fedd198ddf9bd3dc",
+          "GH12-F-0857d20fa39484d425f1",
+          "GH12-F-b5ce521d40217d4a34be",
+          "GH12-F-c43866df58aca071f78b",
+          "GH12-F-d28ae64e29eba8ccb72e"
+        ],
+        "rust_function_ids": [
+          "RG-F-00dab665b85c27184c35",
+          "RG-F-d6aa0b5d2e3794d0ea95",
+          "RG-F-48b0edf16170e2f82b66",
+          "RG-F-f03bae6585682e8447b8",
+          "RG-F-856104de7b4b35b3b196",
+          "RG-F-1858875b41476176edc8",
+          "RG-F-b0bd0fd9650c8dc041d9",
+          "RG-F-da6d2d3c6a3a39b28deb",
+          "RG-F-49837dd5483eee6ce607",
+          "RG-F-6801c1cf2e5e395a80ca",
+          "RG-F-313b425ed0b17d723696",
+          "RG-F-7fb088720dff570d9881",
+          "RG-F-ab60213725b52b64b866"
+        ]
+      }
+    },
+    {
+      "id": "rule_identityel_opcodeset_1204",
+      "description": "Locked Ghidra 12.0.4 RuleIdentityEl six-op registration/dispatch, identity mutation, ordered fixed-point ActionPool execution, counters, raw name, and production getSubRule lookup; covered projection 20/20 MATCH, overall MISMATCH because Rust ActionPool lacks production get_sub_rule",
+      "runner": [
+        "tools/run_rule_identityel_opcodeset_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/rule_identityel_opcodeset_1204.metadata.json",
+        "inputs": {
+          "build_script": "build.rs",
+          "cargo_lock": "Cargo.lock",
+          "cargo_manifest": "Cargo.toml",
+          "cpp_fixture": "tests/oracle/rule_identityel_opcodeset_1204.cc",
+          "ruleaction_overlay": "src/ruleaction.rs",
+          "rust_fixture": "tests/oracle/rule_identityel_opcodeset_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_rule_identityel_opcodeset_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/action.rs",
+          "src/ruleaction.rs",
+          "tests/oracle/rule_identityel_opcodeset_1204.*",
+          "tools/run_rule_identityel_opcodeset_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-ecb07ecfbc33e6ed366d",
+          "RG-F-467294cab471bb278fab",
+          "RG-F-55f56565eab9d1b6717f",
+          "RG-F-fbda3ddb5c65f5fe70e2",
+          "RG-F-3743348e6eff4befb201",
+          "RG-F-6f4859390b5a5e828d0e",
+          "RG-F-8396dedf8e63be4edb37",
+          "RG-F-237602e66fb48f6b3b24"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-40e03d4d8f41e03d5489",
+          "GH12-F-1add6d83f34639d5a560",
+          "GH12-F-1268285ea6adb1bbf7f9",
+          "GH12-F-4aa8b5f62d10461d81c6",
+          "GH12-F-c64356b5d9aa5f42212f",
+          "GH12-F-7e7374c3af089a8ad5fe",
+          "GH12-F-cf14ec3010af7b0b902b",
+          "GH12-F-ddfbe3dc13f061e00b29"
+        ]
+      }
     },
     {
       "id": "varnode_copysymbol_1204",
@@ -3694,6 +4161,131 @@
       "rust_function_ids": [
         "flow::check_contained_call"
       ]
+    },
+    {
+      "id": "database_scope_ownership_1204",
+      "description": "Architecture-owned Database/Scope/FunctionSymbol/Funcdata/ScopeLocal graph, find-create identity and storage classes, attach failure ownership, and destructor cascade versus Rugra value/id ownership; run with --no-cache until external BFD provenance is closed",
+      "runner": [
+        "tools/run_database_scope_ownership_oracle.sh"
+      ],
+      "timeout_seconds": 2400,
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/database_scope_ownership_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/database_scope_ownership_1204.cc",
+          "rust_fixture": "tests/oracle/database_scope_ownership_1204.rs",
+          "sla": "sleigh_specs/x86-64.sla",
+          "processor_spec": "sleigh_specs/x86-64.pspec",
+          "compiler_spec": "sleigh_specs/x86-64-gcc.cspec",
+          "language_definitions": "sleigh_specs/x86.ldefs"
+        },
+        "tools": {
+          "runner": "tools/run_database_scope_ownership_oracle.sh"
+        },
+        "comparands": {
+          "rugra_sleigh_shim": "sleigh_shim"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/address.rs",
+          "src/arch.rs",
+          "src/database.rs",
+          "src/funcdata.rs",
+          "src/fspec.rs",
+          "src/varmap.rs",
+          "docs/api/address.md",
+          "docs/api/arch.md",
+          "docs/api/database.md",
+          "docs/api/funcdata.md",
+          "docs/api/fspec.md",
+          "docs/api/varmap.md",
+          "sleigh_shim/**",
+          "sleigh_specs/**",
+          "examples/curl",
+          "tests/oracle/database_scope_ownership_1204.*",
+          "tools/run_database_scope_ownership_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-8f481aab0e3bfb394239",
+          "RG-F-ee103d7163f3372ee367",
+          "RG-F-e1819732dd9228753a85",
+          "RG-F-29500a4a392209c2c935",
+          "RG-F-ee70a65701a48e2395ef",
+          "RG-F-35724b869d45f22d6036",
+          "RG-F-9528e2f83c9d963f459e",
+          "RG-F-bc7158e386b22783efb5",
+          "RG-F-70df40f6c458faf1b9b0",
+          "RG-F-be586e0206a87f8aa61b",
+          "RG-F-c623a7c05b2a9310d183"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-743ad311cec2d1ef530b",
+          "GH12-F-c52751627c9c2a673f39",
+          "GH12-F-aa3f577694175eccd4f7",
+          "GH12-F-05ed3ac8b785db50afc6",
+          "GH12-F-626ac31645c7ee746625",
+          "GH12-F-fcd8186f5721e1c46a99",
+          "GH12-F-fd78251edfec0e48050f",
+          "GH12-F-36198fc661743b92b1c2",
+          "GH12-F-31d0ed39e4b7139bedaf",
+          "GH12-F-6a41f46250c2efa4fb38",
+          "GH12-F-84ffb6eba79e14ca3115",
+          "GH12-F-a6940c54d2e185e56781",
+          "GH12-F-e876c83a93f794a34638",
+          "GH12-F-de4dccf79cf75b74c7e3",
+          "GH12-F-53814b2ae7096bd7d41b",
+          "GH12-F-46e71a41dc7f64b2d92b",
+          "GH12-F-80406984c0cc7d8c4e22",
+          "GH12-F-37572b69033961a287ea",
+          "GH12-F-6a37599b35d1346d79d9",
+          "GH12-F-2c8868a3848dea2a7915",
+          "GH12-F-df6ae06ef78ff045e581",
+          "GH12-F-65c4d500794d73589623",
+          "GH12-F-05f26594a56177ad86f5",
+          "GH12-F-af9eaea8dfa1d979537e",
+          "GH12-F-d7a1a425d66ad7a257b4",
+          "GH12-F-4fbc71b9096eddd7da87",
+          "GH12-F-c4c500a66686bd52ba07",
+          "GH12-F-3e4b70002867d13c58df",
+          "GH12-F-1057e052072df802de05",
+          "GH12-F-b2a1d8f9d11d6a13442b",
+          "GH12-F-720017e3f9b8f87369fb",
+          "GH12-F-a24078c89f59661bac7f",
+          "GH12-F-e9e01f2c139860122743",
+          "GH12-F-cbe9498c1a5d27adb250",
+          "GH12-F-82481e8edfa81f8cd40a",
+          "GH12-F-1231e1c022dad685d9db",
+          "GH12-F-5a0500346bdd8387f323",
+          "GH12-F-f9b7a332cd5aaacd207d",
+          "GH12-F-50e6f983500c02b36ad4",
+          "GH12-F-e35750a0670134878093",
+          "GH12-F-dc38078c10322e81be8e",
+          "GH12-F-2a6f55228a2d38d1f1c6",
+          "GH12-F-41b07f9b8a8c00c09c3e",
+          "GH12-F-09e6c2f07ae98a585d00",
+          "GH12-F-e21e74e8742b2042914a",
+          "GH12-F-fcc8d3812917705714f1",
+          "GH12-F-4c2b5f3474b7c50fe180",
+          "GH12-F-55d7a21e376d275d7a8e",
+          "GH12-F-74a0a45b15af73db013f",
+          "GH12-F-e7ac29f65dcc5bb7f7a6",
+          "GH12-F-f655a6b008f89c9003a4",
+          "GH12-F-4518a65edc14efe0f333",
+          "GH12-F-f8c960f82f49b19cfbb4",
+          "GH12-F-1e01e3bbd20ee9bd8a00",
+          "GH12-F-4fa9526fee57a6ab1de7",
+          "GH12-F-3f7858bd6313c4ef25c8",
+          "GH12-F-369587930a65fc95d2a4",
+          "GH12-F-97726a179811e39238d0",
+          "GH12-F-0123410d56a0dfb995b8",
+          "GH12-F-1bf543826dc6a185c283",
+          "GH12-F-422efce873a284fce408",
+          "GH12-F-c1829f1b788499028142",
+          "GH12-F-27b65599a6ec885a71b6"
+        ]
+      }
     },
     {
       "id": "database_equatereg_1204",
