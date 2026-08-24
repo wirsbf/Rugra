@@ -1,12 +1,37 @@
 # stringmanage.rs — String management API
 
-Faithful port of Ghidra's `stringmanage.hh` / `stringmanage.cc` (477 lines).
+Faithful port of Ghidra's `stringmanage.hh` / `stringmanage.cc` (477 lines)
+plus the `GhidraStringManager` contract from `string_ghidra.{hh,cc}`.
 
-**Status:** L1 → L2. Complete UTF8/UTF16/UTF32 decoding + StringManager +
-StringManagerUnicode with LoadImage integration. L3 gap: XML encode/decode +
-Datatype-based charsize inference.
+**Status:** L2.5（manager 核心）. Complete UTF8/UTF16/UTF32 decoding +
+Architecture-owned StringManager with positive/negative caching, the native
+`StringManagerUnicode` reader (2048-byte search clamp) and the declared
+GhidraStringManager/Java-contract reader (unbounded detection, 2048-char
+return truncation). Locked bilaterally by
+`tests/oracle/stringmanager_core_1204.*` (STRINGMANAGER-CORE-JAVACONTRACT-0001,
+oracle 12.0.4 `e40ed13014`). L3 gap: consumer wiring (ruleaction/printc/
+funcdata/driver — TYPEOP-LOCALTYPE-DISPATCH-0001 D3) and XML space-name
+restore in encode/decode.
 
-Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/stringmanage.{hh,cc}`.
+Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/stringmanage.{hh,cc}`,
+`string_ghidra.{hh,cc}`, `sleigh_arch.cc:247-251`, `ghidra_arch.cc:365-369`.
+
+## Declared detection contract (JAVA CONTRACT)
+
+Ghidra has two concrete managers, both `maximumChars=2048`:
+
+- `StringManagerUnicode`（standalone/SLEIGH，sleigh_arch.cc:250）自读 loadimage，
+  终止符搜索在 `maximumChars` 字节处封顶（stringmanage.cc:452-457）——NUL 超过
+  字节 2048 的字符串一律负结果。
+- `GhidraStringManager`（GUI/service，ghidra_arch.cc:368）把检测交给 Java 侧
+  （`ELEM_COMMAND_GETSTRINGDATA`，ghidra_arch.cc:780-810）：**检测不设 2048 界**
+  （字符集合法 + NUL 终止），`maximumChars=2048` 只截断返回的字节并设置 `isTrunc`。
+
+正典 golden（`tests/golden/ghidra_curl_1204.c` hugehelp：NUL 在 3354–10329 字节
+处的字符串以 2048 字符 `/* TRUNCATED STRING LITERAL */` 字面量出现）证明 oracle 走
+`GhidraStringManager` 契约。Rugra 生产 manager（`new_ghidra_contract`，
+`Architecture::build_string_manager` 安装）按此契约实现并显式声明；native
+2048 界行为由 `new_unicode` 保留并由同一双侧 fixture 锁定。
 
 ## Structs
 
@@ -15,39 +40,54 @@ String data stored by StringManager (stringmanage.hh:43).
 - Fields: `is_truncated: bool`, `byte_data: Vec<u8>`.
 
 ### `StringManager`
-Storage for decoding and storing strings (stringmanage.hh:40).
-- `new(max)`, `clear()`, `is_string(addr)`, `get_string_data(addr)`,
-  `insert_string_data(addr, data)`, `num_strings()`, `get_maximum_chars()`.
-
-### `StringManagerUnicode`
-Implementation understanding terminated unicode strings (stringmanage.hh:86).
-- `new(loader, max)`.
-- `get_string_data(addr, charsize, bigend) -> Vec<u8>` — reads from load image,
-  validates, caches (stringmanage.cc:427).
-- `is_string(addr, charsize, bigend) -> bool`.
+Storage for decoding and storing strings (stringmanage.hh:40). Cache keyed by
+the **complete `Address` (space+offset)**（stringmanage.hh:48），正/负结果同样缓存：
+query 先在 map 占坑（stringmanage.cc:437），opaque/DataUnavailError/无终止符/编码
+非法全部留下空条目 —— 同地址二次询问零 image 读取。
+- `new(max)` — base manager（无 reader：仅缓存查询，Ghidra 抽象基类的等价物）。
+- `new_unicode(loader, max)` — 1:1 native `StringManagerUnicode` reader
+  （stringmanage.cc:414；sleigh_arch.cc:250 安装形态；2048 字节搜索界）。
+- `new_ghidra_contract(loader, max)` — 生产 manager，声明的 GhidraStringManager/
+  Java 契约（string_ghidra.cc:19；ghidra_arch.cc:368 安装形态）。
+- `clear()`, `get_maximum_chars()`, `num_strings()`, `has_entry(addr)`,
+  `insert_string_data(addr, data)`.
+- `is_string(addr)` — legacy 单参桥（stringmanage.cc:166），charType 投影为 1 字节
+  非 opaque 字符；带 reader 时执行真实 image 读取（含负缓存）。
+- `is_string_typed(addr, charsize, opaque)` — typed 形态。
+- `get_string_data(addr, charsize, opaque, &mut is_trunc) -> Vec<u8>` — 虚
+  `getStringData` 契约（stringmanage.hh:61-69）：缓存命中直返；未命中先占坑再读。
+- `register_internal_string_data(addr, buf, charsize) -> u64` — 内部字符串注册
+  （stringmanage.cc:185-199），键为常量空间 hash 地址。
+- `calc_internal_hash(addr, buf) -> u64`（stringmanage.cc:95-105，CRC32 init
+  `0x7b7c66a9` ^ offset<<32）。
+- `encode(encoder)`（stringmanage.cc:203）/ `decode(decoder)`（stringmanage.cc:231）。
 
 ## Free functions (UTF helpers)
 - `write_utf8(out, codepoint)` — encode codepoint as UTF8 (stringmanage.cc:124).
 - `read_utf16(buf, bigend) -> i32` — read UTF16 element (stringmanage.cc:297).
 - `get_codepoint(buf, charsize, bigend) -> (i32, i32)` — extract next codepoint
-  + bytes consumed (stringmanage.cc:347). Supports UTF8/UTF16/UTF32 + surrogates.
+  + bytes consumed (stringmanage.cc:347). 非法前缀（0xAD 等，无 c0/e0/f0 前缀）
+  返回 -1 —— hugehelp 0x7180/0x99a8/0xc1d8 负缓存判定基础（stringmanage.cc:390-391）。
 - `check_characters(buf, charsize, bigend) -> i32` — count chars or -1
   (stringmanage.cc:324).
 - `has_char_terminator(buf, charsize) -> bool` — check for null terminator
   (stringmanage.cc:277).
-- `write_unicode(out, buf, charsize, bigend, max) -> bool` — translate to UTF8
-  (stringmanage.cc:36).
+- `write_unicode(out, buf, charsize, bigend, max) -> bool` — translate to UTF8,
+  count 在 max 处截断（stringmanage.cc:36）。
 - `assign_string_data(data, buf, charsize, num_chars, bigend, max)` — populate
-  StringData (stringmanage.cc:66).
+  StringData（stringmanage.cc:66）：`charsize==1 && numChars<max` 原样整块拷贝
+  （含终止符所在 32 字节块），否则翻译/截断 + 显式补 NUL，
+  `isTruncated = (numChars >= max)`。
+
+## Architecture wiring（见 docs/api/arch.md）
+
+`Architecture::build_string_manager`（architecture.hh:308 / architecture.cc:1401
+语义）在 `init` 中安装 `new_ghidra_contract(loader, 2048)` 单例；loader 先于其安装
+（Ghidra init 顺序）。
 
 ## L3 gaps
-- XML encode/decode (`<stringmanage>`/`<string>`/`<bytes>` elements).
-- Datatype-based charsize inference (currently passed explicitly).
-- `registerInternalStringData` with hash-based constant address.
-
-## 2026-06-27（续）：XML encode/decode
-
-**StringManager 新增方法**：
-- `encode(encoder)`（stringmanage.cc:203）：编码 `<stringmanage>` + `<string>` 子元素（addr + bytes + trunc + hex 内容）。
-- `decode(decoder)`（stringmanage.cc:230）：解码恢复字符串缓存。
-<!-- annotation-pass: 2026-07-04 -->
+- 消费侧接线：ruleaction.cc:7375 守卫 / printc.cc:1537 打印 / funcdata 内部串 /
+  driver string_table 退役（TYPEOP-LOCALTYPE-DISPATCH-0001 D3 及其 print 子任务）。
+- XML encode/decode 的 space-name 恢复（当前 encode 记录 offset+tag id，decode
+  恢复为 spaceless 形态；Ghidra 用 `<addr space=...>`）。
+<!-- annotation-pass: 2026-08-24 -->

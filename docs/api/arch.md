@@ -400,3 +400,25 @@ ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后�
   arch/min/ordered sizes/跨空间记录身份/size-12 miss 逐字节一致）；残差
   LANEDIVIDE-INFRA-RESIDUAL-0001（fixture 未覆盖分支见
   tests/oracle/lanedivide_infra_1204.metadata.json）。
+
+## string manager 构建（STRINGMANAGER-CORE-JAVACONTRACT-0001）
+
+- `Architecture::build_string_manager`（architecture.hh:308 /
+  architecture.cc:1401 语义；ghidra_arch.cc:365-369 安装形态）：安装
+  Architecture 持有的 `Arc<RwLock<StringManager>>` 单例，`maximumChars=2048`。
+  生产 manager 是**声明的 GhidraStringManager/Java 契约**实现
+  （`StringManager::new_ghidra_contract`）：检测 = 字符集合法 + NUL 终止、
+  **不设 2048 搜索界**；2048 只截断返回字节并设 `isTruncated`（golden
+  `tests/golden/ghidra_curl_1204.c` 证明 oracle 走此路径）。native 1:1
+  `StringManagerUnicode`（2048 字节搜索界，sleigh_arch.cc:247-251）保留于
+  `StringManager::new_unicode` 供 native 对拍。
+- `Architecture::init` 在 Ghidra ordering（buildLoader 先于 buildStringManager）
+  位置调用 `build_string_manager`；loader 未安装时降级为 cache-only 基座
+  manager。`set_string_manager` 保留为测试/driver 注入口。
+- 对拍：`tools/run_stringmanager_core_oracle.sh` MATCH（锁定 12.0.4 oracle，
+  双侧 18 条记录逐字节一致：0xAD 负缓存、ASCII 正缓存整块 byteData、>2048
+  native 负 vs 契约截断+isTrunc、负缓存二次询问零 image 读取、rule+print
+  双消费者共享缓存、DataUnavail/无终止符/opaque、内部串 CRC hash）。
+- 残差：消费侧（ruleaction:7375 / printc:1537 / funcdata 内部串 / driver
+  string_table 退役）为 TYPEOP-LOCALTYPE-DISPATCH-0001 D3 接线。
+<!-- annotation-pass: 2026-08-24 -->

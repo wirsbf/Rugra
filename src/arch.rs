@@ -315,8 +315,11 @@ pub trait ArchitectureBuilder: Send + Sync {
     // RUGRA-GLUE: build_comment_db (no Ghidra counterpart found)
     /// Build the comment database. Faithful to `buildCommentDB`.
     fn build_comment_db(&mut self) -> Result<(), String>;
-    // RUGRA-GLUE: build_string_manager (no Ghidra counterpart found)
-    /// Build the string manager. Faithful to `buildStringManager`.
+    // Ghidra: architecture.hh:308 Architecture::buildStringManager
+    /// Build the string manager. Faithful to the virtual factory hook
+    /// `buildStringManager` (architecture.hh:308; invoked from
+    /// `Architecture::init`, architecture.cc:1401). Concrete overrides:
+    /// sleigh_arch.cc:247-251 and ghidra_arch.cc:365-369.
     fn build_string_manager(&mut self) -> Result<(), String>;
     // RUGRA-GLUE: build_constant_pool (no Ghidra counterpart found)
     /// Build the constant pool. Faithful to `buildConstantPool`.
@@ -2203,11 +2206,14 @@ impl Architecture {
         //   buildAction(store)
         //   postSpecFile()
         //
-        // In Rugra, sub-components are set externally via set_* methods.
+        // In Rugra, sub-components are set externally via set_* methods,
+        // with buildStringManager now wired for real (architecture.cc:1401
+        // ordering: the loader, installed by buildLoader, precedes it).
         // This method verifies that essential components are present.
         if self.archid.is_empty() {
             return Err("Architecture ID not set".to_string());
         }
+        self.build_string_manager();
         Ok(())
     }
 
@@ -2261,10 +2267,44 @@ impl Architecture {
         self.commentdb = Some(db);
     }
 
-    // RUGRA-GLUE: set_string_manager (no Ghidra counterpart found)
-    /// Set the string manager. Replaces `buildStringManager`.
+    // RUGRA-GLUE: set_string_manager (test/driver injection point; Ghidra
+    // only assigns `stringManager` from its own buildStringManager factory,
+    // architecture.cc:1401 — Rugra keeps the external setter for pre-seeded
+    // test managers and until the driver pipeline owns the loader lifecycle)
+    /// Set the string manager. Replaces `buildStringManager` injection.
     pub fn set_string_manager(&mut self, sm: std::sync::Arc<std::sync::RwLock<crate::stringmanage::StringManager>>) {
         self.string_manager = Some(sm);
+    }
+
+    // Ghidra: architecture.hh:308 Architecture::buildStringManager
+    /// Build the Architecture-owned string manager singleton. Faithful to
+    /// the virtual factory hook (architecture.hh:308) invoked from
+    /// `Architecture::init` (architecture.cc:1401) and overridden at
+    /// ghidra_arch.cc:365-369 as `stringManager = new GhidraStringManager(this,2048)`.
+    ///
+    /// Declared detection contract (JAVA CONTRACT, B4): Rugra's production
+    /// manager implements the `GhidraStringManager`/Java behavior — charset
+    /// validity plus NUL termination with **no 2048 search bound**, with
+    /// `maximumChars=2048` truncating only the returned bytes and setting
+    /// `isTruncated` (the golden corpus `tests/golden/ghidra_curl_1204.c`
+    /// proves the oracle walked this path). The 1:1 native
+    /// `StringManagerUnicode` (sleigh_arch.cc:247-251, 2048-byte search
+    /// clamp) remains available via
+    /// [`crate::stringmanage::StringManager::new_unicode`]. The manager
+    /// reads through this Architecture's `loader` (the LoadImage channel,
+    /// loadimage.hh:80), so the loader must be attached first — matching
+    /// Ghidra's init order (buildLoader precedes buildStringManager,
+    /// architecture.cc:1390-1401). With no loader the manager degrades to
+    /// cache-only queries.
+    pub fn build_string_manager(&mut self) {
+        let manager = match &self.loader {
+            Some(loader) => crate::stringmanage::StringManager::new_ghidra_contract(
+                loader.clone(),
+                2048,
+            ),
+            None => crate::stringmanage::StringManager::new(2048),
+        };
+        self.string_manager = Some(std::sync::Arc::new(std::sync::RwLock::new(manager)));
     }
 
     // RUGRA-GLUE: set_cpool (no Ghidra counterpart found)
