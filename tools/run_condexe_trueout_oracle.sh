@@ -6,6 +6,11 @@
 # no loader binary, no SLEIGH assets (the fixture uses a synthetic
 # FixtureArchitecture and an empty spec-path startDecompilerLibrary), and
 # four hash-pinned source overlays (condexe/block/double_precis/blockaction).
+# Repinned 2026-08-25 after A47 integration (e956e963 condexe success channel
+# + 8b8dc90b block / 4495eb60 double_precis / cddcefd8 blockaction co-changes)
+# made the old minimal overlay set uncompilable against base 63ab17e6: the
+# base is now the integration-era HEAD 10dac8e1, where all four overlay
+# files are byte-identical to base content (hash-verified no-op overlays).
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -13,13 +18,13 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=63ab17e6e708263ad9dee9825f0a7635c5998495
-rugra_source_tree=b2009c52b30318cdbaf442cbfbf79d43e9b6db62
-rugra_source_src_tree=8eafb6615cd80a69b191d84337fa33b713a3734d
-rugra_condexe_blob=4ac080386a5f185ec65ff65f30829276775e60e0
-rugra_block_blob=10446fe1b2f8ab7144224764f6b0209b39740ee3
-rugra_double_precis_blob=80a82de9b2e16872177748299aa8dd325e8ccb64
-rugra_blockaction_blob=96f0d7823c0b02e499413039e302a27c4ede0b70
+rugra_source_commit=10dac8e1d237763855e7d8c68c1bb89dfedbd82b
+rugra_source_tree=f819bdcf35ca262ab8a896b33063e2993fee6f6b
+rugra_source_src_tree=d1153332bc3ae2f138c3a19e13f9721ed697f738
+rugra_condexe_blob=5cde46e8aa9a67d5c19e80566aeead7cbbda72db
+rugra_block_blob=10c0da4840eced04ed54701fe73c7bf355d0d738
+rugra_double_precis_blob=9d4ffe1a072d45accd3e7eb87e3d9942d43d054c
+rugra_blockaction_blob=76c7fd80219848d352c7ee156e2cbfa5a90ad221
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5

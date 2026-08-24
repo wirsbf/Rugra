@@ -136,7 +136,7 @@
  "comparand": {
   "cpp_fixture_sha256": "00bf5a5c2ab6a1a61a6ff824c6e58d1818b3f4866105579d6d71d046b14f9321",
   "rust_fixture_sha256": "18c0ca7d5112f418efa23c3cc0e07ae3b0bd67ea62612e1c1c482d46b3ef831c",
-  "condexe_overlay_sha256": "c9a926ed1ff15d20a0e56c457c0abe0db94e79b4753a9ddeeb3469d848d7d8e7",
+  "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
   "runner_sha256": "9c3d69ef4ccb99c0827f26ec7bd84e197abe03211052572b7c8d488ec679689b"
  },
  "expected_results": {

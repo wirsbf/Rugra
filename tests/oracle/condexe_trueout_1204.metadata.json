@@ -24,13 +24,13 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "63ab17e6e708263ad9dee9825f0a7635c5998495",
-    "base_tree": "b2009c52b30318cdbaf442cbfbf79d43e9b6db62",
-    "base_src_tree": "8eafb6615cd80a69b191d84337fa33b713a3734d",
-    "base_condexe_blob": "4ac080386a5f185ec65ff65f30829276775e60e0",
-    "base_block_blob": "10446fe1b2f8ab7144224764f6b0209b39740ee3",
-    "base_double_precis_blob": "80a82de9b2e16872177748299aa8dd325e8ccb64",
-    "base_blockaction_blob": "96f0d7823c0b02e499413039e302a27c4ede0b70",
+    "base_commit": "10dac8e1d237763855e7d8c68c1bb89dfedbd82b",
+    "base_tree": "f819bdcf35ca262ab8a896b33063e2993fee6f6b",
+    "base_src_tree": "d1153332bc3ae2f138c3a19e13f9721ed697f738",
+    "base_condexe_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
+    "base_block_blob": "10c0da4840eced04ed54701fe73c7bf355d0d738",
+    "base_double_precis_blob": "9d4ffe1a072d45accd3e7eb87e3d9942d43d054c",
+    "base_blockaction_blob": "76c7fd80219848d352c7ee156e2cbfa5a90ad221",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
@@ -233,11 +233,11 @@
   "comparand": {
     "cpp_fixture_sha256": "068dc2933c4f5e7f1d362410214619f2409f71c1a15ff80e02dddfc453fadf11",
     "rust_fixture_sha256": "c7430c23b66951304119caff24a413ffa4442266ba88c7eccd890516190499f6",
-    "condexe_overlay_sha256": "57188ae632b7ef48255045280dcbb6a331b71fc5ce9d9ba5f5feb32b429e4556",
-    "block_overlay_sha256": "3ef77481f60b23bb3f706511961eba698e711475b594a06b7c6f454d493b4e53",
-    "double_precis_overlay_sha256": "769fe403d3f069652ec83bce9f3b4b5616352d144719c5832aba85836f6336aa",
-    "blockaction_overlay_sha256": "3696d24b157235d1130d13484acef160cc853c11e41eb0ab778dec71a9b70d49",
-    "runner_sha256": "ecb93a96609053b5b1715eb8addea832cb2c1789ef2eddd0d0bd89517c68d30e"
+    "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
+    "block_overlay_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82",
+    "double_precis_overlay_sha256": "48c71587eb22e8cc652e65a725d5601c911a5a23d1d3a30d4d064a5b71ed295e",
+    "blockaction_overlay_sha256": "5b149fab0291bb6ef4c57768a5fc072f2c515b0af872a26c1765c8582c8e97b1",
+    "runner_sha256": "02bbf2b7825f029210df4755218f4819659e311db031c01171a6252b47511541"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "44f6e9da1abec8d18171c54b7b806ffa3945a57f6da3f668098dd86451d9f57f",
