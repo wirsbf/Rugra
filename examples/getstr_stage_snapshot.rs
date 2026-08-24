@@ -649,11 +649,15 @@ fn build_funcdata(input: &FunctionInput) -> Result<Funcdata, Box<dyn Error>> {
     lifter
         .configure_x86_64(&input.image, input.image_base)
         .expect("configure GetStr SLEIGH translator");
-    rugra::flow::follow_flow(
+    // GetStr has no known no-return callees (no canary/exit paths), so the
+    // callee table is intentionally empty; this keeps the call site on the
+    // FLOW-NORETURN-DATA-0001 entry without pulling the curl_decompile mirror.
+    rugra::flow::follow_flow_with_callee_protos(
         &mut fd,
         &mut lifter,
         Address::new(input.address),
         u64::MAX,
+        &std::collections::BTreeMap::new(),
     );
     Ok(fd)
 }
