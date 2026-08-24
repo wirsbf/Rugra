@@ -130,7 +130,9 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 **已实现（✅ L3，Rugra coreaction.rs 中已有）：**
 `ActionStart`, `ActionHeritage`, `ActionInferParams`, `ActionCopyPropagate`,
 `ActionDeadCode`, `ActionMergeType`, `ActionTypeInfer`, `ActionCallParams`,
-`ActionConstantPtr`, `ActionCse`, `ActionSimplify`
+`ActionCse`, `ActionSimplify`
+
+> **2026-08-24 更正**：`ActionConstantPtr` 从 L3 撤下——B3 审计（`docs/alignment_docs/HUGEHELP_CONSTANTPTR_AUDIT_2026-08-24.md`）证实 Rust `coreaction.rs:615-666` 的 apply 是臆造实现（扫 LOAD/STORE 打 READONLY flag、恒返 NO_CHANGE），与 Ghidra `coreaction.cc:1167-1217` 判定链（常量空间迭代→selectInferSpace→isPointer→queryContainer→spacebaseConstant 建 PTRSUB）零对应，属铁律 1.4 违反；降为 🔧 L2，待 `B3-COREACTION-CONSTANTPTR-0001` 三段修复后重评。
 
 **真实缺失（📋 L1）— 按 Ghidra coreaction.cc 行号 + 依赖标注：**
 

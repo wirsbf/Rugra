@@ -24,6 +24,7 @@
 | `BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001` | P0 | IN_PROGRESS | a10@wt-blockstruct-goto | `src/blockaction.rs`, docs, `tests/oracle/blockstruct_goto_cascade_1204.*`, runner | B6 最大扇出簇 68 处；白名单模块，集成前 Cross-Review；2026-08-24 |
 | `FLOW-JUMPTABLE-GETPARAM-0001` | P0 | DIAGNOSIS | a11（只读） | 无写；报告 /tmp/rugra-reports/A11-GETPARAM-JUMPTABLE-DIAG.md | B6 Top1 `getparameter.constprop.0`；修复租约待 a3 释放 jumptable.rs；2026-08-24 |
 | `REGISTRY-CONTINUITY-W1-0001` | P0 | IN_PROGRESS | a12@wt-registry-w1 | `tools/oracle_registry.py`, `docs/alignment_audit/{FUNCTION_ID_CONTINUITY.json,FUNCTION_LEDGER.json,DEPENDENCY_DAG.json,FUNCTION_MAP.generated.md}` | B8 方案步骤2+3：checkpoint 前滚 9640→9726 + 三件套再生；fixture_registry 落库仍由 root 串行；2026-08-24 |
+| `B3-COREACTION-CONSTANTPTR-0001` | P0 | BLOCKED（三段串行） | 段(a)待 a2 释放；段(b)待 D2 释放 coreaction | 段(a) `src/{funcdata,database}.rs` + `examples/curl_decompile.rs`（.rodata DAT 条目 + query 通道接线）；段(b) `src/coreaction.rs` 重写 Action 主体 + `src/funcdata.rs` 修 spacebase_constant；六常量 fixture/runner | 审计=HUGEHELP_CONSTANTPTR_AUDIT_2026-08-24；验收=六常量 oracle fixture MATCH + hugehelp 六行字节对齐；机制 B 白名单需 Differential 块；前置警告=先修 string UTF-8 判定再放行 Rule 折叠（driver string_table 现保留 0xAD 串，反转风险）；2026-08-24 |
 | `PRINTC-CAST-OPNAME-LEAK-0001` | P1 | QUEUED | 待 B4 审计后发射 | `src/printc.rs`, docs, fixture | 与下行串行（同租约）；2026-08-24 |
 | `PRINTC-PTRCONST-DAT-SYMBOL-0001` | P1 | QUEUED | 待 B4 审计后发射 | `src/{printc,stringmanage}.rs`, docs, fixture | 与上行串行；2026-08-24 |
 
