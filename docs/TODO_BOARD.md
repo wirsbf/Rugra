@@ -6,6 +6,7 @@
 
 > 目标：hugehelp/progressbarinit/my_fwrite 严格字节一致 + 函数体差距驱动的根因修复 + TODO 清算。
 > root 串行集成；所有 writer 走隔离 worktree + `/tmp/rugra-cargo-build.lock` + 专属 CARGO_TARGET_DIR；本节 root 维护，worker 禁改。
+> **集成纪律（2026-08-25 事故教训：A4 运行中 root 集成了同文件 ACTIONPOOL，致池克隆语义重叠需 rebase 弥合）**：root cherry-pick 任何候选前，必须先核对候选 write-set 与**所有在跑 Agent 租约**零重叠；有重叠 → 排队等租约释放。构建/测试命令一律包 `timeout 600`（A13 死锁占锁 43 分钟事故）。
 > 审计产出已归档 docs/alignment_docs/：GATE_HEALTH / PTRSUB_DOWNCHAIN / STOP_WIRING / D2_BUILDLOCALTYPES_DESIGN / FRESH_BASELINE_TRIAGE / CONTINUITY_DIRTY_FILES_AUDIT（均 *_2026-08-24.md）。
 
 ### 本 wave 认领租约
