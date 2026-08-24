@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 9726
-  (8024 production + 1702 test)
-- Exact definition-start mappings: 3608
-- Body-line references requiring audit: 351
+- Rugra functions: 9787
+  (8081 production + 1706 test)
+- Exact definition-start mappings: 3627
+- Body-line references requiring audit: 349
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -22,10 +22,10 @@ records complete same-input/same-output evidence.
 
 | File | Definitions | Exact marker | Body-line marker | Unmapped |
 |---|---:|---:|---:|---:|
-| `action.cc` | 72 | 14 | 0 | 58 |
-| `action.hh` | 30 | 4 | 0 | 26 |
-| `address.cc` | 43 | 31 | 0 | 12 |
-| `address.hh` | 56 | 41 | 0 | 15 |
+| `action.cc` | 72 | 18 | 0 | 54 |
+| `action.hh` | 30 | 8 | 0 | 22 |
+| `address.cc` | 43 | 32 | 0 | 11 |
+| `address.hh` | 56 | 43 | 0 | 13 |
 | `analyzesigs.cc` | 8 | 0 | 0 | 8 |
 | `analyzesigs.hh` | 2 | 0 | 0 | 2 |
 | `architecture.cc` | 68 | 19 | 1 | 48 |
@@ -118,7 +118,7 @@ records complete same-input/same-output evidence.
 | `inject_sleigh.hh` | 7 | 0 | 0 | 7 |
 | `interface.cc` | 31 | 0 | 0 | 31 |
 | `interface.hh` | 26 | 0 | 0 | 26 |
-| `jumptable.cc` | 132 | 17 | 63 | 52 |
+| `jumptable.cc` | 132 | 21 | 61 | 50 |
 | `jumptable.hh` | 79 | 42 | 2 | 35 |
 | `libdecomp.cc` | 4 | 0 | 0 | 4 |
 | `loadimage.cc` | 7 | 5 | 0 | 2 |
@@ -201,7 +201,7 @@ records complete same-input/same-output evidence.
 | `slghscan.cc` | 48 | 0 | 0 | 48 |
 | `slghsymbol.cc` | 171 | 1 | 0 | 170 |
 | `slghsymbol.hh` | 173 | 0 | 0 | 173 |
-| `space.cc` | 33 | 26 | 0 | 7 |
+| `space.cc` | 33 | 28 | 0 | 5 |
 | `space.hh` | 40 | 36 | 0 | 4 |
 | `string_ghidra.cc` | 3 | 0 | 0 | 3 |
 | `stringmanage.cc` | 17 | 6 | 0 | 11 |
@@ -220,7 +220,7 @@ records complete same-input/same-output evidence.
 | `type.hh` | 132 | 29 | 0 | 103 |
 | `typegrp_ghidra.cc` | 1 | 0 | 0 | 1 |
 | `typegrp_ghidra.hh` | 2 | 0 | 0 | 2 |
-| `typeop.cc` | 210 | 51 | 0 | 159 |
+| `typeop.cc` | 210 | 53 | 0 | 157 |
 | `typeop.hh` | 102 | 23 | 0 | 79 |
 | `unify.cc` | 142 | 133 | 0 | 9 |
 | `unify.hh` | 163 | 148 | 0 | 15 |

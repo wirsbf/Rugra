@@ -936,10 +936,10 @@
       "value": "1"
     },
     {
-      "id": "PROTO-b3608f726a306dd2949d",
+      "id": "PROTO-a7b66db7dbfb1539f91b",
       "kind": "const",
       "language": "rust",
-      "line": 31,
+      "line": 32,
       "name": "ARITHMETIC_OP",
       "path": "src/typeop.rs",
       "value": "1 << 3"
@@ -3087,10 +3087,10 @@
       "value": "1"
     },
     {
-      "id": "PROTO-8bb5bb9b4755bfb75290",
+      "id": "PROTO-8fb704e6a049ae6eee8e",
       "kind": "const",
       "language": "rust",
-      "line": 912,
+      "line": 966,
       "name": "BIG_ENDIAN",
       "path": "src/space.rs",
       "value": "1"
@@ -3240,10 +3240,10 @@
       "value": "1"
     },
     {
-      "id": "PROTO-6661002704f05a2e2867",
+      "id": "PROTO-59a10006d287e0a49d6b",
       "kind": "const",
       "language": "rust",
-      "line": 45,
+      "line": 57,
       "name": "BREAK_ACTION",
       "path": "src/action.rs",
       "value": "4"
@@ -3258,10 +3258,10 @@
       "value": "2"
     },
     {
-      "id": "PROTO-f65fe150cc8a9f29d572",
+      "id": "PROTO-4dedec73b13ac7b07f3e",
       "kind": "const",
       "language": "rust",
-      "line": 43,
+      "line": 55,
       "name": "BREAK_START",
       "path": "src/action.rs",
       "value": "1"
@@ -3528,10 +3528,10 @@
       "value": "259"
     },
     {
-      "id": "PROTO-96b750f2708920bff7ff",
+      "id": "PROTO-29379f8290c5d34f4e6d",
       "kind": "const",
       "language": "rust",
-      "line": 1309,
+      "line": 1514,
       "name": "CHANGE",
       "path": "src/action.rs",
       "value": "1"
@@ -3834,10 +3834,10 @@
       "value": "1 << 1"
     },
     {
-      "id": "PROTO-fd47cbfbcc6aacbba3d3",
+      "id": "PROTO-b52d0363a09b0b44e046",
       "kind": "const",
       "language": "rust",
-      "line": 943,
+      "line": 997,
       "name": "CONSTANT_SPACE_INDEX",
       "path": "src/space.rs",
       "value": "0"
@@ -4950,10 +4950,10 @@
       "value": "4"
     },
     {
-      "id": "PROTO-29cdf3548993ab5021b0",
+      "id": "PROTO-d468a4b83a0dd5f58406",
       "kind": "const",
       "language": "rust",
-      "line": 916,
+      "line": 970,
       "name": "DOES_DEADCODE",
       "path": "src/space.rs",
       "value": "4"
@@ -8811,10 +8811,10 @@
       "value": "0x800"
     },
     {
-      "id": "PROTO-7a5a4fef65aa631ea834",
+      "id": "PROTO-0bea00562654e6a8508c",
       "kind": "const",
       "language": "rust",
-      "line": 914,
+      "line": 1118,
       "name": "FIRSTPASS",
       "path": "src/action.rs",
       "value": "&[ ]"
@@ -8865,10 +8865,10 @@
       "value": "0x80000"
     },
     {
-      "id": "PROTO-632b5eb27658d92f0269",
+      "id": "PROTO-48c8454b59d921818144",
       "kind": "const",
       "language": "rust",
-      "line": 33,
+      "line": 34,
       "name": "FLOATINGPOINT_OP",
       "path": "src/typeop.rs",
       "value": "1 << 5"
@@ -9000,10 +9000,10 @@
       "value": "8"
     },
     {
-      "id": "PROTO-894bd2e8e2c44f298bff",
+      "id": "PROTO-cc7198d8b4bb83241ba2",
       "kind": "const",
       "language": "rust",
-      "line": 922,
+      "line": 976,
       "name": "FORMAL_STACKSPACE",
       "path": "src/space.rs",
       "value": "0x20"
@@ -9495,10 +9495,10 @@
       "value": "0xBADBEEF"
     },
     {
-      "id": "PROTO-a46ecfd8528acd84f5b8",
+      "id": "PROTO-132a0f71668eb0bcb024",
       "kind": "const",
       "language": "rust",
-      "line": 930,
+      "line": 984,
       "name": "HASPHYSICAL",
       "path": "src/space.rs",
       "value": "0x200"
@@ -9513,10 +9513,10 @@
       "value": "1 << 29"
     },
     {
-      "id": "PROTO-f59b1291f9aae1a082fc",
+      "id": "PROTO-7d5a04810b0d8f9e7e76",
       "kind": "const",
       "language": "rust",
-      "line": 934,
+      "line": 988,
       "name": "HAS_NEARPOINTERS",
       "path": "src/space.rs",
       "value": "0x800"
@@ -9594,10 +9594,10 @@
       "value": "1"
     },
     {
-      "id": "PROTO-05d6f7f6ebcd183f29aa",
+      "id": "PROTO-b0d3514a2885d9b8cab0",
       "kind": "const",
       "language": "rust",
-      "line": 914,
+      "line": 968,
       "name": "HERITAGED",
       "path": "src/space.rs",
       "value": "2"
@@ -10098,19 +10098,19 @@
       "value": "1 << 31"
     },
     {
-      "id": "PROTO-f26dab61222f65baeedf",
+      "id": "PROTO-296d5a602481788683aa",
       "kind": "const",
       "language": "rust",
-      "line": 28,
+      "line": 29,
       "name": "INHERITS_SIGN",
       "path": "src/typeop.rs",
       "value": "1 << 0"
     },
     {
-      "id": "PROTO-968ee181ea567f1a9511",
+      "id": "PROTO-9dfe319fef8f441ac5ea",
       "kind": "const",
       "language": "rust",
-      "line": 29,
+      "line": 30,
       "name": "INHERITS_SIGN_ZERO",
       "path": "src/typeop.rs",
       "value": "1 << 1"
@@ -10177,6 +10177,15 @@
       "name": "INSERT",
       "path": "src/varnode.rs",
       "value": "1 << 5"
+    },
+    {
+      "id": "PROTO-88dd49112bfd3cb80026",
+      "kind": "const",
+      "language": "rust",
+      "line": 225,
+      "name": "INSERTION_SORT_THRESHOLD",
+      "path": "src/jumptable.rs",
+      "value": "16"
     },
     {
       "id": "PROTO-bab1054cdafbafb63af9",
@@ -10422,10 +10431,10 @@
       "value": "337"
     },
     {
-      "id": "PROTO-6636b3827944cd77576c",
+      "id": "PROTO-6e1902b008445686956c",
       "kind": "const",
       "language": "rust",
-      "line": 932,
+      "line": 986,
       "name": "IS_OTHERSPACE",
       "path": "src/space.rs",
       "value": "0x400"
@@ -10638,10 +10647,10 @@
       "value": "0x200"
     },
     {
-      "id": "PROTO-7fc06e7514d2d8a02758",
+      "id": "PROTO-f15ed197330998e3bdb6",
       "kind": "const",
       "language": "rust",
-      "line": 32,
+      "line": 33,
       "name": "LOGICAL_OP",
       "path": "src/typeop.rs",
       "value": "1 << 4"
@@ -10818,10 +10827,10 @@
       "value": "0x20"
     },
     {
-      "id": "PROTO-bc48763895a053909ba1",
+      "id": "PROTO-795e9498812e14742d5c",
       "kind": "const",
       "language": "rust",
-      "line": 442,
+      "line": 669,
       "name": "MARK_FLAG",
       "path": "src/jumptable.rs",
       "value": "1"
@@ -10863,10 +10872,10 @@
       "value": "10"
     },
     {
-      "id": "PROTO-6d5a330d0ccdc767af3e",
+      "id": "PROTO-3c87861738a6d610124f",
       "kind": "const",
       "language": "rust",
-      "line": 4106,
+      "line": 4469,
       "name": "MAX_JUMPTABLE_SIZE",
       "path": "src/jumptable.rs",
       "value": "1024"
@@ -11259,10 +11268,10 @@
       "value": "-1"
     },
     {
-      "id": "PROTO-d1f98a02a0e83ad165d3",
+      "id": "PROTO-22f8b5b318fb58e8703b",
       "kind": "const",
       "language": "rust",
-      "line": 1308,
+      "line": 1513,
       "name": "NO_CHANGE",
       "path": "src/action.rs",
       "value": "0"
@@ -12807,10 +12816,10 @@
       "value": "287"
     },
     {
-      "id": "PROTO-12d3a7c12abfa4b66bb3",
+      "id": "PROTO-2100ea0c9ff15748b897",
       "kind": "const",
       "language": "rust",
-      "line": 947,
+      "line": 1001,
       "name": "OTHER_SPACE_INDEX",
       "path": "src/space.rs",
       "value": "1"
@@ -12861,19 +12870,19 @@
       "value": "0x400"
     },
     {
-      "id": "PROTO-16ba87d85b158063eb48",
+      "id": "PROTO-176a18b81f428de7682d",
       "kind": "const",
       "language": "rust",
-      "line": 924,
+      "line": 978,
       "name": "OVERLAY",
       "path": "src/space.rs",
       "value": "0x40"
     },
     {
-      "id": "PROTO-951c0a26fb41bd6c5dbe",
+      "id": "PROTO-bfe6ac8a70b33bb758cc",
       "kind": "const",
       "language": "rust",
-      "line": 926,
+      "line": 980,
       "name": "OVERLAYBASE",
       "path": "src/space.rs",
       "value": "0x80"
@@ -13185,10 +13194,10 @@
       "value": "1 << 4"
     },
     {
-      "id": "PROTO-a6630cca8409cacc9a7d",
+      "id": "PROTO-feb5ac443bd8afe552c5",
       "kind": "const",
       "language": "rust",
-      "line": 918,
+      "line": 972,
       "name": "PROGRAMSPECIFIC",
       "path": "src/space.rs",
       "value": "8"
@@ -13347,10 +13356,10 @@
       "value": "0x4000"
     },
     {
-      "id": "PROTO-37fe306a33f7ecd48bf3",
+      "id": "PROTO-a7e02812a63026d72baf",
       "kind": "const",
       "language": "rust",
-      "line": 912,
+      "line": 1116,
       "name": "REGISTER",
       "path": "src/action.rs",
       "value": "&[ , , ]"
@@ -13392,10 +13401,10 @@
       "value": "0x40"
     },
     {
-      "id": "PROTO-fbafa94cf0728809075c",
+      "id": "PROTO-e3487eb0645cb9c050aa",
       "kind": "const",
       "language": "rust",
-      "line": 1310,
+      "line": 1515,
       "name": "RESTART",
       "path": "src/action.rs",
       "value": "2"
@@ -13482,10 +13491,10 @@
       "value": "0x100000"
     },
     {
-      "id": "PROTO-931d93b3215ac4881590",
+      "id": "PROTO-95e95fc07f6a06de1269",
       "kind": "const",
       "language": "rust",
-      "line": 920,
+      "line": 974,
       "name": "REVERSE_JUSTIFICATION",
       "path": "src/space.rs",
       "value": "16"
@@ -13545,55 +13554,55 @@
       "value": "crate::space::AddressSpace::Register"
     },
     {
-      "id": "PROTO-1b4420b02db1ecac180a",
+      "id": "PROTO-538a30efab9ebe3aef44",
       "kind": "const",
       "language": "rust",
-      "line": 24,
+      "line": 36,
       "name": "RULE_DEBUG",
       "path": "src/action.rs",
       "value": "32"
     },
     {
-      "id": "PROTO-4b3ef4b68d16d058e1a2",
+      "id": "PROTO-c3e0b8c7dbdfd5498866",
       "kind": "const",
       "language": "rust",
-      "line": 20,
+      "line": 32,
       "name": "RULE_ONCEPERFUNC",
       "path": "src/action.rs",
       "value": "8"
     },
     {
-      "id": "PROTO-847faeec07c3ce70d59f",
+      "id": "PROTO-fc8766f1205ae820ea92",
       "kind": "const",
       "language": "rust",
-      "line": 22,
+      "line": 34,
       "name": "RULE_ONEACTPERFUNC",
       "path": "src/action.rs",
       "value": "16"
     },
     {
-      "id": "PROTO-d02e555571be22f333db",
+      "id": "PROTO-b6a39ff0df6a36472f9a",
       "kind": "const",
       "language": "rust",
-      "line": 18,
+      "line": 30,
       "name": "RULE_REPEATAPPLY",
       "path": "src/action.rs",
       "value": "4"
     },
     {
-      "id": "PROTO-468db4149530e72d3d12",
+      "id": "PROTO-fcc665482aec2c5af565",
       "kind": "const",
       "language": "rust",
-      "line": 28,
+      "line": 40,
       "name": "RULE_WARNINGS_GIVEN",
       "path": "src/action.rs",
       "value": "128"
     },
     {
-      "id": "PROTO-8326a8321b872a36055b",
+      "id": "PROTO-bb8dafb5cf59d045cdde",
       "kind": "const",
       "language": "rust",
-      "line": 26,
+      "line": 38,
       "name": "RULE_WARNINGS_ON",
       "path": "src/action.rs",
       "value": "64"
@@ -13698,10 +13707,10 @@
       "value": "0x3b"
     },
     {
-      "id": "PROTO-85980106a6cd55c721f6",
+      "id": "PROTO-940e4b12e3c450f93a19",
       "kind": "const",
       "language": "rust",
-      "line": 30,
+      "line": 31,
       "name": "SHIFT_OP",
       "path": "src/typeop.rs",
       "value": "1 << 2"
@@ -14319,55 +14328,55 @@
       "value": "1 << 12"
     },
     {
-      "id": "PROTO-8b6ff2980c1d683b1a65",
+      "id": "PROTO-74f679b958f938d6cc7a",
       "kind": "const",
       "language": "rust",
-      "line": 38,
+      "line": 50,
       "name": "STATUS_ACTIONBREAK",
       "path": "src/action.rs",
       "value": "32"
     },
     {
-      "id": "PROTO-77b0e41eaa9c86739da4",
+      "id": "PROTO-a33d769301fa59845524",
       "kind": "const",
       "language": "rust",
-      "line": 34,
+      "line": 46,
       "name": "STATUS_BREAKSTARTHIT",
       "path": "src/action.rs",
       "value": "2"
     },
     {
-      "id": "PROTO-561ed14be436128c7670",
+      "id": "PROTO-a733acdd5e51081f6361",
       "kind": "const",
       "language": "rust",
-      "line": 37,
+      "line": 49,
       "name": "STATUS_END",
       "path": "src/action.rs",
       "value": "16"
     },
     {
-      "id": "PROTO-07e1750d5ad48b1029da",
+      "id": "PROTO-46427fec97e8c5f326b4",
       "kind": "const",
       "language": "rust",
-      "line": 36,
+      "line": 48,
       "name": "STATUS_MID",
       "path": "src/action.rs",
       "value": "8"
     },
     {
-      "id": "PROTO-6605b94b61ca9019ad05",
+      "id": "PROTO-04d5e42f1ef2d9f1c680",
       "kind": "const",
       "language": "rust",
-      "line": 35,
+      "line": 47,
       "name": "STATUS_REPEAT",
       "path": "src/action.rs",
       "value": "4"
     },
     {
-      "id": "PROTO-16a96952330dafe8ba28",
+      "id": "PROTO-4a84e9b24bb098276024",
       "kind": "const",
       "language": "rust",
-      "line": 33,
+      "line": 45,
       "name": "STATUS_START",
       "path": "src/action.rs",
       "value": "1"
@@ -14850,19 +14859,19 @@
       "value": "256"
     },
     {
-      "id": "PROTO-3068af9ba840a1913925",
+      "id": "PROTO-6491a8e6119847eae84c",
       "kind": "const",
       "language": "rust",
-      "line": 46,
+      "line": 58,
       "name": "TMPBREAK_ACTION",
       "path": "src/action.rs",
       "value": "8"
     },
     {
-      "id": "PROTO-26811f6129589f9d5e9f",
+      "id": "PROTO-39c39380477fbb06f878",
       "kind": "const",
       "language": "rust",
-      "line": 44,
+      "line": 56,
       "name": "TMPBREAK_START",
       "path": "src/action.rs",
       "value": "2"
@@ -14922,10 +14931,10 @@
       "value": "0x400"
     },
     {
-      "id": "PROTO-1c4882d87c365357b59b",
+      "id": "PROTO-b15baa5ebfdb1e5d6a4f",
       "kind": "const",
       "language": "rust",
-      "line": 928,
+      "line": 982,
       "name": "TRUNCATED",
       "path": "src/space.rs",
       "value": "0x100"
@@ -15633,10 +15642,10 @@
       "value": "8"
     },
     {
-      "id": "PROTO-4e83f96e4989d80e54cd",
+      "id": "PROTO-0a9eabf29e2aff45452b",
       "kind": "const",
       "language": "rust",
-      "line": 951,
+      "line": 1005,
       "name": "UNIQUE_SPACE_SIZE",
       "path": "src/space.rs",
       "value": "4"
