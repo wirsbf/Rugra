@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "fixture_id": "VARNODE-LOCALTYPE-RESOLUTION-0001",
+  "title": "Varnode::getLocalType full port: typelock early return, def outputTypeLocal seed, stop_type_propagation early return with blockup, descend insertion-order typeOrder-min merge with first-encountered tie survival, and the NULL local type LowlevelError channel",
+  "overall_status": "MATCH",
+  "status_note": "Production commit 8c26662 ports Varnode::getLocalType (varnode.cc:900-936) in full, replacing the v_type-clone stub, plus the op.hh:251-252 outputTypeLocal/inputTypeLocal dispatch table and the varnode addl_flags STOP_UP_PROPAGATION=0x800/HAS_IMPLIED_FIELD=0x1000 constants with stops/set/clear accessors. The locked Ghidra 12.0.4 oracle and the frozen Rugra snapshot were each executed twice with deterministic stdout/stderr. Both sides produced 62 records / 2194 bytes with identical sha256 and empty stderr; the bilateral byte diff is empty (exit 0). All eleven cases match: def_only (int4 via TypeOpPtrsub::getOutputLocal getBase(4,TYPE_INT)), def_stop (STOP early return: blockup=1, uint reader never consulted, int4 kept), def_nostop (uint4 replaces int4 via SUB_UINT_PLAIN < SUB_INT_PLAIN), readers_min in both insertion orders (uint4 regardless of order), ptr_pointee_replace (int4* strictly smaller than char* through the TypePointer::compare pointee descent, type.cc:951), tie_structs_ab / tie_structs_ba (two distinct empty structures have TypeStruct::compare == 0 at level 10, type.cc:1742-1780; the first-encountered struct survives both orderings), path_beats_int (char* SUB_PTR beats int8 SUB_INT_PLAIN), typelock_union (locked union returned directly, def and reader never consulted), null_local_type (LowlevelError \"NULL local type\" observed as an in-fixture caught record with blockup staying false).",
+  "covered_projection": {
+    "status": "MATCH",
+    "name": "Varnode::getLocalType algorithm through the real PcodeOp/Varnode structures and the Architecture TypeFactory",
+    "oracle_capture": {
+      "status": "ORACLE_CAPTURED",
+      "note": "Every observation calls Varnode::getLocalType(blockup) directly on Funcdata-built varnodes (newVarnode/setInputVarnode/opSetInput/opSetOutput/newVarnodeCallSpecs) inside a real BfdArchitecture x86:LE:64:default:gcc with the Architecture-owned TypeFactory and TypeOp table."
+    },
+    "rugra_source_observation": {
+      "status": "MATCH",
+      "note": "src/varnode.rs get_local_type (varnode.cc:900-936) with the local dispatch table op_output_type_local/op_input_type_local (op.hh:251-252 forwarders over the complete Ghidra override set: PTRADD/PTRSUB INT, ctor metas, shift slot-1 getBaseNoChar, CBRANCH/CALLIND/INDIRECT code pointers, INSERT/EXTRACT slot-0, CPOOLREF inputs, CALL input delegated to the R3-approved D1 TypeOpCall::get_input_local, CALL output 720-735 in full), local_meta_pair ctor table, addl_flags STOP_UP_PROPAGATION/HAS_IMPLIED_FIELD and stops/set/clear accessors."
+    },
+    "rugra_execution": {
+      "status": "EXECUTED",
+      "note": "The complete frozen crate snapshot (git archive of 8c26662) was built with pinned Cargo/rustc and the Rust fixture executed twice identically through the production Varnode::get_local_type: 62 records, 2194 stdout bytes, empty stderr."
+    },
+    "bilateral_comparison": {
+      "status": "MATCH",
+      "note": "The locked Ghidra and Rugra stdout streams were byte-diffed with exit code 0: all 62 lines identical, including the two blockup=1 lines (def_stop), both tie orderings, the caught NULL local type error record, and every canonical identity bit."
+    }
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "varnode_cc_blob": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
+    "typeop_cc_blob": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
+    "type_cc_blob": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
+    "varnode_cc_sha256": "c2a47cff2473a39e616b434106e0d8df25564512c2ed27d1cc6299d6ac4a2a60",
+    "typeop_cc_sha256": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
+    "type_cc_sha256": "e339d89b86b9eb50ca8e7dedb882524b578683d7f995623af513e8ed28ed5405",
+    "entrypoints": [
+      "Datatype *Varnode::getLocalType(bool &blockup) const (varnode.cc:900-936)",
+      "PcodeOp::outputTypeLocal/inputTypeLocal virtual dispatch (op.hh:250-252)",
+      "TypeOpPtrsub::getOutputLocal getBase(size,TYPE_INT) (typeop.cc:2308-2318)",
+      "TypeOpCall::getInputLocal locked params (typeop.cc:687-718)",
+      "Varnode::updateType(ct,true,false) lock path (varnode.cc:474-489)",
+      "PcodeOp::setStopTypePropagation/stopsTypePropagation (op.hh:215-216)"
+    ]
+  },
+  "architecture": "x86:LE:64:default:gcc",
+  "compiler_spec": "x86-64-gcc.cspec",
+  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata with PTRSUB/CALL/INT_LESS/INT_SLESS reader graphs and the Architecture-owned TypeFactory/TypeOp table",
+  "comparand": {
+    "rugra_base_commit": "8c26662b742dac535cffdba98d9e970f90d29545",
+    "rugra_base_tree": "6861795b811ac519edee7bf35f79481c39f0000e",
+    "rugra_base_src_tree": "fbe806f04e70238c1f2235a0ff70be0bad3edf1c",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "binary_blob": "76d9343ea3add321aa4134856323663b36365807",
+    "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit 8c26662 with the Varnode::getLocalType full port, STOP early-return, and the localType dispatch table; no source overlays",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "examples/curl",
+      "sleigh_specs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [],
+    "base_source_sha256": {
+      "src/varnode.rs": "c18ae1d6a317763339e2d43c5ae9f75c5657c21807a9af0474d644fdb1092ce8",
+      "src/typeop.rs": "1268c712901eb98a9794882f97edf11a3f8ab483f0efc9c52143c8eb67647a94",
+      "src/type_system/datatype.rs": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
+      "src/type_system/typefactory.rs": "27975d9f8fee16a8c91b4753c1cad6afa2d86f9adf774dacc5acc9d9d8734383",
+      "src/fspec.rs": "fa8a40f065e9bd55382e178b37eb424a66e3e86886ade0def1d625a92e3919e5",
+      "src/funcdata.rs": "bc927bcaee2b51fde4c1db9903a73c7f2ded90ee35f81ccd86940a9c4dd391cb",
+      "src/op.rs": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
+      "src/space.rs": "61496b8357ac532b1d97596b0e33a607eaf6de09b69914d0c44851677cc1f2ec",
+      "src/address.rs": "84543b7c0fbe2431365b140901cbcb59b795329a92fbfe75ce86094cb3bdd657"
+    },
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
+      "purpose": "build.rs C++ shim header discovery; the executable oracle is built from the separately archived locked commit"
+    },
+    "cpp_fixture_sha256": "2877b90ead758b324d1d6dff5f01f60ffa3bed3c8c051e0b53fb26014086a204",
+    "rust_fixture_sha256": "75f8fd71726d53af5d06d26526cf52719d1f4e7586ded0dee8fe6d43c6dc41fc",
+    "runner_sha256": "db5073988635b06a32a8570a5928a5af69861490a056a4b3cbd7a5f99aa31c35"
+  },
+  "assets": {
+    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  },
+  "host_tools": {
+    "cxx": "g++ (GCC) 16.2.1 20260810",
+    "cxx_target": "x86_64-pc-linux-gnu",
+    "cc": "gcc (GCC) 16.2.1 20260810",
+    "cc_target": "x86_64-pc-linux-gnu",
+    "ar": "GNU ar (GNU Binutils) 2.47",
+    "make": "GNU Make 4.4.1",
+    "python": "Python 3.14.7",
+    "git": "git version 2.55.0",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "tool_binary_sha256": {
+      "cxx": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c692b2c4668bc9",
+      "cc": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+      "ar": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4",
+      "make": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40",
+      "python": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c",
+      "git": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad",
+      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+    }
+  },
+  "build": {
+    "oracle_language": "C++11",
+    "make_target": "libdecomp.a",
+    "make_jobs": 4,
+    "fixture_flags": [
+      "-std=c++11",
+      "-O2",
+      "-Wall",
+      "-Wno-sign-compare",
+      "-m64"
+    ],
+    "rugra_build_status": "EXECUTED",
+    "cargo_invoked": true
+  },
+  "input_model": {
+    "opcode_observations": [
+      "CPUI_PTRSUB def (8B pointer input + 4B constant offset -> 4B output): def_only, def_stop, def_nostop, typelock_union",
+      "CPUI_INT_LESS readers (metain TYPE_UINT, typeop.cc:924 ctor) at slot 0: def_stop, def_nostop, readers_min both orderings, typelock_union",
+      "CPUI_INT_SLESS readers (metain TYPE_INT, typeop.cc:975 ctor): readers_min both orderings, path_beats_int",
+      "CPUI_CALL readers with fspec annotations and locked param-0 types (char*/int4*/structA/structB): ptr_pointee_replace, tie_structs_ab, tie_structs_ba, path_beats_int",
+      "free varnode with no def and no readers: null_local_type"
+    ],
+    "representation": {
+      "ghidra": "Every observation calls Varnode::getLocalType(blockup) on Funcdata-built varnodes; the def-side STOP flag is set through PcodeOp::setStopTypePropagation (op.hh:216); CALL locked params are installed through FuncCallSpecs::setParam + newVarnodeCallSpecs; the union lock uses Varnode::updateType(ct,true,false) (varnode.cc:474-489).",
+      "rugra": "Every observation calls the production Varnode::get_local_type(block_up, type_factory) on Funcdata-built varnodes (set_input_varnode for the multi-reader input varnodes, op_set_input in insertion order); the STOP flag is written directly into op.addlflags (STOP_TYPE_PROPAGATION=0x40, matching op.rs where no dedicated setter exists yet); CALL locked params go through FuncCallSpecs::new_for_op + fd.add_call_specs + fd.new_varnode_call_specs (the D0 typed-Weak representation, TYPEOP-FSPEC-SPACE-0001); the union lock uses update_type_lock(ct,true,false).",
+      "varnote": "Rust new_varnode fixtures use the legacy spaceless Address representation; getLocalType reads only sizes, metatypes and factory canonical identity, and both sides report result projections explicitly. The multi-reader varnodes are function inputs on both sides because a free varnode may hold at most one descendant (varnode.cc:334-336)."
+    }
+  },
+  "oracle_expected": {
+    "def_only": "int4 — TypeOpPtrsub::getOutputLocal getBase(4,TYPE_INT) with no descendants to consult; blockup=0; canonical int4 identity and repeat identity",
+    "def_stop": "int4 with blockup=1 — the def's stop_type_propagation returns ct straight from outputTypeLocal; the INT_LESS reader's uint4 never replaces it (uint_not_consulted=1)",
+    "def_nostop": "uint4 — descendants compete and SUB_UINT_PLAIN(16) < SUB_INT_PLAIN(17) replaces the def's int4; blockup=0",
+    "readers_min_uint_first": "uint4 from [INT_LESS, INT_SLESS] insertion order",
+    "readers_min_int_first": "uint4 from the reversed [INT_SLESS, INT_LESS] insertion order — the typeOrder minimum is insertion-order independent for distinct submetas",
+    "ptr_pointee_replace": "int4 * replaces the first-seen char * — TypePointer::compare descends into the pointee (type.cc:951): int4 SUB_INT_PLAIN(17) < char SUB_INT_CHAR(19), so int4* is strictly smaller (pointee_descent=1)",
+    "tie_structs_ab": "structA — two distinct empty structures compare 0 at level 10 (type.cc:1742-1780), a genuine tie; the first-encountered struct survives (structa_identity=1, tie_typeorder=1)",
+    "tie_structs_ba": "structB survives the reversed tie ordering (structb_identity=1)",
+    "path_beats_int": "char * beats int8 — SUB_PTR(6) < SUB_INT_PLAIN(17)",
+    "typelock_union": "unionU returned directly from the lock (varnode.cc:906-907) — the PTRSUB def and INT_LESS reader are never consulted; blockup stays 0",
+    "null_local_type": "caught LowlevelError with explain \"NULL local type\" (varnode.cc:933-934); blockup stays 0"
+  },
+  "rugra_source_observation": {
+    "get_local_type": "src/varnode.rs get_local_type ports varnode.cc:900-936 line by line: typelock early return (cc:906-907), def outputTypeLocal seed (cc:910-911), stops_type_propagation early return setting block_up and skipping all readers (cc:912-914), descend_iter insertion-order walk with first-match slot identity (cc:921-924), strictly-smaller typeOrder replacement with first-encountered tie survival (cc:926-931), and the anyhow Err(\"NULL local type\") channel (cc:933-934)",
+    "dispatch_table": "src/varnode.rs op_output_type_local/op_input_type_local (op.hh:251-252 forwarders) with local_meta_pair covering the complete Ghidra override set; the null-newct-with-non-null-ct corner (Ghidra null-this UB at cc:929) is defensively skipped with an in-body comment",
+    "flags_and_accessors": "addl_flags STOP_UP_PROPAGATION=0x800 / HAS_IMPLIED_FIELD=0x1000 (varnode.hh:131-132) with stops_up_propagation/set_stop_up_propagation/clear_stop_up_propagation (varnode.hh:267/333/334); 0x800 in the main varnode_flags stays volatil (varnode.hh:93)",
+    "observed_execution": "Both deterministic Rugra runs reproduced the oracle byte-for-byte on all 62 lines, including both tie orderings, the STOP early return, and the caught error record."
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "blockup is a reference out-parameter that getLocalType only ever sets to true (cc:913) and never clears; the caller initializes it to false per varnode (coreaction.cc:5020). The return Datatype* is the factory-canonical object (repeat calls preserve pointer identity, verified by repeat_identity); a type-locked varnode returns its locked type without touching blockup; the all-null path throws LowlevelError(\"NULL local type\") (cc:934), observed as an in-fixture caught record on both sides.",
+    "loop_bounds_and_order": "The descendant walk is the raw std::list addDescend insertion order (cc:921) — no sorting, no skipping; the slot is op->getSlot(this), the first inrefs pointer-identity match (op.hh:166). The fixture pins both insertion orders for the uint/int competition and both orderings of the struct tie, proving order sensitivity is exactly first-encountered survival on ties.",
+    "counters_and_accumulators": "No counters. The accumulator ct starts as def->outputTypeLocal() (cc:911) or null and is replaced only when 0 > newct->typeOrder(*ct) (cc:929) — strictly smaller wins: submeta ascending, size descending (type.cc:212-218), with TypePointer::compare pointee descent (type.cc:951) and TypeStruct::compare field tables (type.cc:1742-1780).",
+    "sort_and_comparison_keys": "typeOrder = pointer-equality shortcut 0, else compare(op,10): submeta ascending (SUB_PARTIALUNION=0 .. SUB_VOID=23, type.hh:103-128), then size descending. Ties keep the incumbent; the def's type is the incumbent for every descendant comparison."
+  },
+  "coverage": {
+    "oracle_cases": 11,
+    "oracle_records": 62,
+    "observations": [
+      "def-side seed with no readers (PTRSUB -> int4)",
+      "stop_type_propagation early return: blockup set, readers skipped, def type kept (int4 vs never-consulted uint4)",
+      "same graph without STOP: descendant uint4 replaces int4",
+      "typeOrder minimum over descendants in both insertion orders (uint4 both ways)",
+      "strictly-smaller replacement through the TypePointer pointee descent (char* -> int4*)",
+      "genuine typeOrder tie (two empty structs) keeping the first-encountered type in both orderings",
+      "pointer (path) type beating an integer type in the merge",
+      "type-locked union returned directly with def and readers never consulted",
+      "NULL local type LowlevelError channel with blockup untouched",
+      "canonical factory identity and repeat identity observations"
+    ],
+    "untested": [
+      "CALLIND parameter slots and TypeOpReturn parameter slots of the dispatch table (need parent->Funcdata; both fall to the Ghidra fc==null/bb==null base-default paths, which the fixture does not reach)",
+      "CALLOTHER userop-metadata local types (TypeFactory has no arch backlink) and CPOOLREF record paths (no cpool infrastructure) — both fall to base defaults",
+      "selectJavaOperators metatype retuning (typeop.cc:114-137)",
+      "buildLocaltypes wiring (coreaction.cc:5008-5037) — the STOP task's write-set, including the set_stop_up_propagation consumer wiring"
+    ]
+  },
+  "locked_capture": {
+    "deterministic_runs": 2,
+    "records": 62,
+    "bytes": 2194,
+    "stdout_sha256": "b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "paired_expected": {
+    "ghidra": {
+      "status": "ORACLE_CAPTURED",
+      "deterministic_runs": 2,
+      "records": 62,
+      "bytes": 2194,
+      "stdout_sha256": "b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "rugra": {
+      "status": "EXECUTED",
+      "deterministic_runs": 2,
+      "records": 62,
+      "bytes": 2194,
+      "stdout_sha256": "b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "bilateral": {
+      "status": "MATCH",
+      "diff_exit_code": 0,
+      "records": 0,
+      "bytes": 0,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "differing_lines": []
+    }
+  },
+  "residuals": [
+    {
+      "id": "VARNODE-LOCALTYPE-RESOLUTION-0001",
+      "status": "MATCH",
+      "note": "getLocalType (varnode.cc:900-936) fully ported and bilaterally byte-identical on 62 records across 11 cases. The function itself has zero callers in the pipeline yet; module stays below L3 until the coreaction STOP wiring (buildLocaltypes W3 / propagateTypeEdge W4) consumes it."
+    },
+    {
+      "id": "PRINTC-CAST-OPNAME-0001",
+      "status": "MISMATCH",
+      "note": "M1 macro gap unchanged and out of this write-set: the binary/unary/functional macro overrides in src/typeop.rs still read the opposite varnode's v_type instead of getBase(size,metain/metaout). This fixture bypasses them through the varnode.rs dispatch table; after M1 lands, root may consolidate the two tables and re-pin."
+    },
+    {
+      "id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+      "status": "PARTIAL_INTEGRATED",
+      "note": "The varnode.rs dispatch table now carries the CALL output-locked branch (typeop.cc:720-735) which no typeop.rs impl provides; CALLIND param slots / RETURN param slots / CALLOTHER userop metadata / CPOOLREF records remain unported special paths (all converge to the base default on the states the fixture reaches)."
+    }
+  ]
+}
