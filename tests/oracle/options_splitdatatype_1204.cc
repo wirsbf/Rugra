@@ -108,14 +108,11 @@ void emitXmlCase(Architecture *glb,const string &name,const string &xmlText)
     emitGroups(glb,prefix);
   }
   catch(const LowlevelError &err) {
+    // ParseError derives from LowlevelError (error.hh:95), so this handler
+    // covers every error the decode path can raise.
     emitConfig(glb,prefix);
     emitGroups(glb,prefix);
     cout << prefix << ".error=LowlevelError: " << err.explain << '\n';
-  }
-  catch(const ParseError &err) {
-    emitConfig(glb,prefix);
-    emitGroups(glb,prefix);
-    cout << prefix << ".error=ParseError: " << err.explain << '\n';
   }
   delete doc;
 }

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "fixture_id": "OPTIONS-SPLITDATATYPE-SEMANTICS-0001",
+  "title": "OptionSplitDatatypes 12.0.4 semantics: struct/array/pointer bit mapping, p1-assign/p2|p3-OR evaluation order, splitcopy/splitpointer group toggles, set/unchanged messages, error rejection, and <optionslist> XML decode",
+  "overall_status": "MATCH",
+  "status_note": "Commit c3d12a2 (OPTIONS-SPLITDATATYPE-SEMANTICS-0001) replaces the pre-12.0 semantics in src/options.rs (float=1/pointer=2 bits, none/both/all tokens, plural name splitdatatypes, ignored p3, no group toggles, no XML param reading, invented elem_ids 174-179) with the locked 12.0.4 behavior: OPTION_STRUCT=1/OPTION_ARRAY=2/OPTION_POINTER=4 (options.hh:336-341, reusing crate::arch::split_datatype), singular option name splitdatatype (options.hh:343, ElementId id 270 at options.cc:57), getOptionBit rejection text (options.cc:982-990), p1-assign + p2/p3-OR order with partial mutation before a later bad token throws and no toggle on throw (options.cc:1002-1016), set/unchanged messages (options.cc:1017-1020), decodeOne readString(ATTRIB_CONTENT) param reads (options.cc:167-181, mirrored by read_string_attr(AttributeId::new(\"XMLcontent\",1))), error propagation out of decode, and the real elem_ids 201-204 (options.cc:50-53). The locked Ghidra 12.0.4 oracle and the frozen Rugra snapshot (complete git archive of c3d12a2, no overlays) were each executed twice with deterministic stdout/stderr: both sides produced 61 records / 2199 bytes with identical sha256 9ac77cabaa92c1b16c4b059f256f6ea63a9213b9c54a28fda84fb3f70799458f and empty stderr; the bilateral byte diff is empty. Residual wiring (registered, outside this fixture's claim): the (splitcopy, splitpointer) on/off pair is computed by split_action_toggles rather than applied to a live ActionDatabase group list because Architecture has no allacts field yet (the Rust fixture carries the same group-membership state with the exact toggleAction transition rules, and every observation matches the oracle's live allacts.getGroup(allacts.getCurrentName()) membership), and LowlevelError on unknown tokens is surfaced as message text prefixed 'LowlevelError: ' instead of a thrown exception.",
+  "decisive_semantics": {
+    "reference_output_parameters": "Ghidra apply mutates glb->split_datatype_config through the Architecture pointer and mutates the current root's ActionGroupList through allacts.toggleAction(getCurrentName(), \"splitcopy\"/\"splitpointer\", on) (action.cc:1036-1053: addToGroup/removeFromGroup then clone+registerAction, updating currentact when grp==currentactname). Rugra apply mutates arch.split_datatype_config identically; the group mutation receiver (Architecture.allacts) does not exist yet, so the identical on/off pair is computed via split_action_toggles and the fixture observes the same membership transitions.",
+    "loop_bounds_traversal_order": "No loops inside apply; the decisive order is: read oldConfig -> config=bit(p1) -> config|=bit(p2) -> config|=bit(p3) -> toggle branch -> message comparison. A bad p1 throws before any assignment; a bad p2/p3 throws after earlier assignments took effect (partial mutation, no toggleAction). decodeOne scans sub-elements linearly PARAM1->PARAM2->PARAM3, each opened only if the previous matched; with no children p1 comes from the outer element's ATTRIB_CONTENT text.",
+    "counter_accumulator_lifecycle": "The configuration is a uint4 bit accumulator: the first parameter assigns the base value (empty string = 0), subsequent parameters OR in; it is never accumulated onto the previous configuration value. The old-configuration snapshot for the unchanged/set message is taken once at entry.",
+    "sorting_comparison_keys": "The toggle branch key is (config & (option_struct|option_array)) == 0 -> both groups off; else splitcopy on and splitpointer = (config & option_pointer) != 0. The message key is oldConfig == config string equality. getOptionBit compares tokens with exact string equality in the order empty/struct/array/pointer, anything else throwing LowlevelError('Unknown data-type split option: '+val). XML dispatch keys the option by the splitdatatype ElementId (270); param elements by ids 202-204."
+  },
+  "covered_projection": {
+    "status": "MATCH",
+    "name": "OptionSplitDatatypes bits/name/messages/errors/toggles and the <optionslist> XML decode path",
+    "oracle_capture": {
+      "status": "ORACLE_CAPTURED",
+      "note": "BfdArchitecture x86:LE:64:default:gcc initialized from the locked tree; getOptionBit called statically; apply called on a directly constructed OptionSplitDatatypes against the live Architecture; XML decoded through the Architecture-owned OptionDatabase over xml_tree-parsed <optionslist> documents; group membership read from allacts.getGroup(allacts.getCurrentName()) (exactly what toggleAction mutates)."
+    },
+    "rugra_source_observation": {
+      "status": "MATCH",
+      "note": "src/options.rs get_option_bit (options.cc:982), OptionSplitDatatypes::apply (options.cc:999), split_action_toggles (decision decomposition of options.cc:1007-1016), OptionDatabase::decode_one ATTRIB_CONTENT param reads (options.cc:167-181) and error propagation, and elem_ids 201-204 (options.cc:50-53); default config 7 from Architecture::reset_defaults_internal (architecture.cc:1430-1431, src/arch.rs)."
+    },
+    "rugra_execution": {
+      "status": "EXECUTED",
+      "note": "The complete frozen crate snapshot (git archive of c3d12a2) was built with pinned Cargo/rustc and the Rust fixture executed twice identically: 61 records, 2199 stdout bytes, empty stderr."
+    },
+    "bilateral_comparison": {
+      "status": "MATCH",
+      "note": "Locked Ghidra and Rugra stdout streams are byte-identical (diff exit code 0, empty diff): default config 7 and decompile group membership, all six token mappings and both rejection messages, all nine apply cases (including bad_p1 leaving config 7 and groups intact, bad_p2_partial leaving config 0 with stale group membership proving no toggle on throw, all3_repeat returning 'unchanged'), and all four XML cases (param1/param2 order -> config 5, bad token propagating out of decode with state untouched, no-children ATTRIB_CONTENT -> config 2 with splitpointer off, param3 -> config 7)."
+    }
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "options_cc_blob": "e0778433e1c2df7ef310026d346dceac9de5a399",
+    "options_hh_blob": "7a7f713b84f26f393d135fba673566e732c3afaa",
+    "options_cc_sha256": "cbad80eb18bbeb8906b83ec1773ba76ab29e6257c2b999bacac12106dd984461",
+    "options_hh_sha256": "5027808ed2e79e3390f726376c79b1e1f6f55cfbd080b51d62f12cb7073d79f6",
+    "entrypoints": [
+      "uint4 OptionSplitDatatypes::getOptionBit(const string &) (options.cc:982-990)",
+      "string OptionSplitDatatypes::apply(Architecture *,const string &,const string &,const string &) const (options.cc:999-1022)",
+      "Action *ActionDatabase::toggleAction(const string &,const string &,bool) (action.cc:1036-1053)",
+      "void OptionDatabase::decodeOne(Decoder &) (options.cc:163-190)",
+      "Architecture::resetDefaultsInternal default split_datatype_config (architecture.cc:1430-1431)"
+    ]
+  },
+  "architecture": "x86:LE:64:default:gcc",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec"
+  },
+  "analysis_options": "BfdArchitecture target=default; no option overrides; the fixture itself applies splitdatatype options (direct apply and <optionslist> decode); observations read split_datatype_config, allacts group membership of the current root, and the returned/thrown messages",
+  "rugra_source": {
+    "base_commit": "c3d12a20639a9e578c26dd6a416cc654310b8d96",
+    "base_tree": "6f0976d073f6158102ccbfc403c59fdcf11ed059",
+    "base_src_tree": "727e29f0027a02c7efaad7a06cfb949f3c3b786b",
+    "base_options_blob": "b8734eb52066baf8a30f8e81846f9df3d3855932",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit c3d12a2 carrying the OptionSplitDatatypes 12.0.4 semantics port; no source overlays",
+    "overlays": []
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "98bd8e99b221336f684e563385abdf9b4297ae88bd7d48f4e47fd0f8b274c8d3",
+    "rust_fixture_sha256": "d5436f369202d440dafc0f7fde4e6fd84f04d6a9de21fde9f51d02fd19c4a471",
+    "runner_sha256": "55c346909a9868eb819b285a192aa86906da60556fcc07ab895b106cf98d50e5"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    }
+  },
+  "input_model": {
+    "ghidra": "BfdArchitecture over the pinned curl binary with the locked x86-64 sleigh/pspec/cspec; OptionSplitDatatypes exercised through direct apply calls and through <optionslist> XML documents parsed by xml_tree and decoded by the Architecture-owned OptionDatabase (XmlDecode).",
+    "rugra": "Architecture::new (reset_defaults_internal default config 7) with archid pinned to the locked x86:LE:64:default:gcc; OptionDatabase::new registry; direct OptionSplitDatatypes::apply calls and OptionDatabase::decode over TreeDecoder trees whose param text values mirror the locked XML content onto the XMLcontent attribute (the ATTRIB_CONTENT encoding the packed wire format uses); group membership carried by the fixture with the exact toggleAction transition rules (initial decompile membership, recomputed only by successful applies)."
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "9ac77cabaa92c1b16c4b059f256f6ea63a9213b9c54a28fda84fb3f70799458f",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "9ac77cabaa92c1b16c4b059f256f6ea63a9213b9c54a28fda84fb3f70799458f",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "ghidra_exit_code_round2": 0,
+    "rugra_exit_code": 0,
+    "rugra_exit_code_round2": 0,
+    "diff_exit_code": 0,
+    "records": 61,
+    "bytes": 2199
+  },
+  "residuals": [
+    {
+      "todo_id": "OPTIONS-SPLITDATATYPE-WIRING-0002",
+      "status": "UNTESTED",
+      "detail": "Architecture has no allacts (ActionDatabase) field yet, so apply() cannot perform the real toggleAction group mutation; the identical (splitcopy, splitpointer) decision is computed by split_action_toggles and the bilateral fixture observes the same membership transitions. Wiring point: add allacts to Architecture (action.rs ActionDatabase with toggle_action, action.cc:1036-1053) and forward the pair from OptionSplitDatatypes::apply. Interface consumers: subflow.rs SplitDatatype::new (subflow.cc:2706-2707, R15 review scope) should read split_structures/splitArrays from arch.split_datatype_config bits OPTION_STRUCT/OPTION_ARRAY once Architecture is threaded through.",
+      "evidence": "apply.bad_p2_partial observes the no-toggle-on-throw timing on the oracle side via live group membership; the Rust fixture models the receiver with identical transitions."
+    },
+    {
+      "todo_id": "OPTIONS-ERROR-CHANNEL-0003",
+      "status": "UNTESTED",
+      "detail": "ArchOption::apply returns String (no error channel), so the LowlevelError Ghidra throws on unknown splitdatatype tokens is surfaced as message text prefixed 'LowlevelError: '; OptionDatabase::decode_one propagates such messages as Err, matching the C++ exception escaping decodeOne. A trait-level Result migration would remove the string-prefix convention.",
+      "evidence": "bit.float/bogus, apply.bad_p1/bad_p2_partial/float_token, and xml.bad_token records are byte-identical on both sides."
+    }
+  ]
+}
