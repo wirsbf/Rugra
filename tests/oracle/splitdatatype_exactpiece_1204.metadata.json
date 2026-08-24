@@ -87,21 +87,21 @@
     "splitdatatype_ctor": "subflow.cc:2701-2709"
   },
   "rugra_candidate": {
-    "commit": "PENDING_PRODUCTION_COMMIT",
-    "tree": "PENDING_PRODUCTION_TREE",
+    "commit": "a5552de053d36bd2c397e61b78e4eb1e0421fc54",
+    "tree": "62b3b39ac0def77bbd6d44de0efe879cb9e4f4f0",
     "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
     "critical_git_blobs": {
-      "src/subflow.rs": "PENDING_SUBFLOW_BLOB",
-      "Cargo.toml": "PENDING_CARGO_TOML_BLOB",
-      "Cargo.lock": "PENDING_CARGO_LOCK_BLOB",
-      "build.rs": "PENDING_BUILD_RS_BLOB"
+      "src/subflow.rs": "cae7b73c4da887e634cd5fde6dff16b0343d1933",
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
     }
   },
   "comparand": {
     "mode": "fresh git archive of the locked Ghidra cpp tree and the frozen rugra_candidate commit; standalone fixtures compiled against each archive",
     "cpp_fixture_sha256": "0317b156cddffeb5e052199ffca8eea14f0bd6bc1a86bd8de09b6ec90b0fbbed",
     "rust_fixture_sha256": "4a6c16b24da24da5cece33e518a6df7813ed570251c19f28c7d8bd265a4b461e",
-    "runner_sha256": "74a4fbb7a04c8a19920a408d91b3c4129fb45847d9ec33c5c5a174ab3e4d8284",
+    "runner_sha256": "8b5729142d3a4d39f4f63ca694fa8acee0e2fcb428125be7f774fe1bb3bb612c",
     "subflow_rs_sha256": "982ee065f7971994592bf570e55ef06c3455294cd2502856850a2e1b18246f97",
     "subflow_doc_sha256": "b4f4adbf91963f4bfc5be9898ac61dfe7cce7a4a643f633c722939fa501e239a",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",

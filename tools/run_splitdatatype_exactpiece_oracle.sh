@@ -65,7 +65,7 @@ expected_cargo_sha=131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9
 expected_rustc_sha=060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618
 expected_cxx_sha=f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9
 expected_cargo_vv_sha=62d278ffb732aa9b6ac09108cbcea47dd24d6221c5c63f6d942784ca419cb9fc
-expected_rustc_vv_sha=3b56b3021e5f91088c797c1d6ba31cc6e4a2170670446d47f881b91407e66768
+expected_rustc_vv_sha=3b56b3021e5f91088c797c1d6ba31cc6e4a2170670446d47f883b91407e66768
 expected_cxx_v_sha=ddba3d014b73deb2a8869cad4ab507e29a48630c8cd280adf2559e0e10891d23
 for tool in "$host_cxx" "$host_make" "$host_git" "$host_python" \
   "$host_cargo" "$host_rustc" "$host_tar" /usr/bin/flock; do
