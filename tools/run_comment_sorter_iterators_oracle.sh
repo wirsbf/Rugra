@@ -25,14 +25,13 @@ if [[ -z "$resolved_user_home" || ! -d "$resolved_user_home" ]]; then
   exit 1
 fi
 
-clean_path=/usr/bin:/bin
-rust_toolchain=nightly-x86_64-unknown-linux-gnu
+clean_path=/usr/bin:/usr/sbin:/bin
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=c5e685c55e775192dae7b26f0631f6ac8ff85df6
-rugra_base_src_tree=5be4bc9e61bce817ea61c341c0dcbc28bd61daa4
+rugra_base_commit=8d59b7730472bde2147e9fdf28a494221c2f26c4
+rugra_base_src_tree=593f652fa402b30eb3258b2b15b4a7c5a6ab0209
 rugra_base_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_base_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_base_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -43,8 +42,8 @@ host_ar_bin=$(/usr/bin/readlink -f /usr/bin/ar)
 host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
-host_cargo_bin="$resolved_user_home/.rustup/toolchains/$rust_toolchain/bin/cargo"
-host_rustc_bin="$resolved_user_home/.rustup/toolchains/$rust_toolchain/bin/rustc"
+host_cargo_bin=$(command -v cargo)
+host_rustc_bin=$(command -v rustc)
 for required_tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
   "$host_make_bin" "$host_python_bin" "$host_git_bin" \
   "$host_cargo_bin" "$host_rustc_bin"; do
@@ -68,7 +67,7 @@ for candidate in \
   tests/oracle/comment_sorter_iterators_1204.metadata.json \
   tests/oracle/comment_sorter_iterators_1204.cc \
   tests/oracle/comment_sorter_iterators_1204.rs \
-  src/comment.rs Cargo.toml Cargo.lock build.rs; do
+  src/comment.rs src/block.rs Cargo.toml Cargo.lock build.rs; do
   source_path="$repo_root/$candidate"
   if [[ ! -f "$source_path" || -L "$source_path" ]]; then
     echo "candidate must be a regular non-symlink file: $candidate" >&2
@@ -80,6 +79,7 @@ metadata="$oracle_tmp/candidate/comment_sorter_iterators_1204.metadata.json"
 cpp_fixture="$oracle_tmp/candidate/comment_sorter_iterators_1204.cc"
 rust_fixture="$oracle_tmp/candidate/comment_sorter_iterators_1204.rs"
 comment_source="$oracle_tmp/candidate/comment.rs"
+block_source="$oracle_tmp/candidate/block.rs"
 
 actual_commit=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
   "$host_git_bin" -C "$ghidra_root" rev-parse HEAD)
@@ -136,6 +136,7 @@ fi
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs | \
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C /usr/bin/tar -x -C "$oracle_tmp/rugra"
 /usr/bin/cp -- "$comment_source" "$oracle_tmp/rugra/src/comment.rs"
+cp -- "$block_source" "$oracle_tmp/rugra/src/block.rs"
 /usr/bin/mkdir -p "$oracle_tmp/rugra/ghidra/Ghidra/Features/Decompiler/src/decompile"
 /usr/bin/ln -s "$oracle_tmp/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp" \
   "$oracle_tmp/rugra/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
@@ -143,6 +144,7 @@ oracle_cpp="$oracle_tmp/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
 
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S - \
   "$metadata" "$cpp_fixture" "$rust_fixture" "$comment_source" \
+  "$block_source" \
   "$runner_fd_path" "$runner_snapshot_sha" "$oracle_commit" "$oracle_tag" \
   "$cpp_tree" "$makefile_blob" "$rugra_base_commit" "$base_src_tree" \
   "$base_cargo_toml_blob" "$base_cargo_lock_blob" "$base_build_rs_blob" \
@@ -156,7 +158,7 @@ import subprocess
 import sys
 
 (
-    metadata_name, cpp_name, rust_name, source_name, runner_name,
+    metadata_name, cpp_name, rust_name, source_name, block_name, runner_name,
     runner_snapshot_sha, oracle_commit, oracle_tag, cpp_tree, makefile_blob,
     rugra_base_commit, base_src_tree, base_cargo_toml_blob,
     base_cargo_lock_blob, base_build_rs_blob, cargo_toml_name,
@@ -213,6 +215,7 @@ paths = {
     "cpp_fixture_sha256": pathlib.Path(cpp_name),
     "rust_fixture_sha256": pathlib.Path(rust_name),
     "comment_rs_sha256": pathlib.Path(source_name),
+    "block_rs_sha256": pathlib.Path(block_name),
     "runner_sha256": pathlib.Path(runner_name),
     "cargo_toml_sha256": pathlib.Path(cargo_toml_name),
     "cargo_lock_sha256": pathlib.Path(cargo_lock_name),
@@ -254,8 +257,7 @@ jobs=$(/usr/bin/getconf _NPROCESSORS_ONLN 2>/dev/null || /usr/bin/printf '1')
   -o "$oracle_tmp/comment_sorter_cpp"
 
 fixture_target="$oracle_tmp/cargo-target"
-/usr/bin/env -i HOME="$resolved_user_home" RUSTUP_HOME="$resolved_user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+/usr/bin/env -i HOME="$resolved_user_home" PATH="$clean_path" LC_ALL=C.UTF-8 \
   CARGO_HOME="$resolved_user_home/.cargo" CARGO_TARGET_DIR="$fixture_target" \
   CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" \
   AR="$host_ar_bin" RUSTC="$host_rustc_bin" RUSTFLAGS=-Awarnings \
@@ -269,8 +271,7 @@ if [[ ! -f "$rugra_rlib" || ! -f "$native_archive" ]]; then
   exit 1
 fi
 native_dir=$(/usr/bin/dirname "$native_archive")
-/usr/bin/env -i HOME="$resolved_user_home" RUSTUP_HOME="$resolved_user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+/usr/bin/env -i HOME="$resolved_user_home" PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --edition=2021 -O -Awarnings \
   -L "dependency=$fixture_target/debug/deps" \
   -L "native=$native_dir" --extern "rugra=$rugra_rlib" \

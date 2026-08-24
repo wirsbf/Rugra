@@ -170,7 +170,9 @@ and exact address-space identity remain with `ADDRESS-0001` and
   使 `emit_line_comment` 后的 `set_emitted(true)`（printlanguage.cc:648）
   可经共享引用在排序器行走中落地。
 - **Oracle 证据**：`tools/run_comment_sorter_iterators_oracle.sh`
-  （pin-base 296c128 + src/comment.rs overlay，schema-2 metadata）——
+  （pin-base 8d59b77 + src/comment.rs、src/block.rs overlay，schema-2
+  metadata；2026-08-25 BLOCK-STOPADDR-FIXTURE-REGRESSION-0001 重钉后双侧
+  在本机重跑通过：锁定 Ghidra 12.0.4 (e40ed130) 归档重建 + 宿主工具链）——
   锁定 Ghidra 12.0.4 (e40ed130) 与 Rugra 的 38 行交错消费投影
   **byte-identical**：header basic/unplaced 两轮、三个块的
   setupBlockList→setupOpList(op…)→setupOpList(NULL) 交错行走、
@@ -178,10 +180,12 @@ and exact address-space identity remain with `ADDRESS-0001` and
   注释照常放置（证明 setup 不过滤）、displayUnplaced=false 切除、
   死 op 错误文本、无 op 函数 (0,0) 放置。
 - **残差（绑定 `COMMENT-SORTER-ITERATORS-0001`）**：
-  1. `BlockBasic::contains` 用 `[start_addr, 末 op 地址]` 投影 Ghidra 的
-     cover RangeList（Rugra 无块 cover 系统，block.hh:476）；fixture 两侧
-     把块范围钉到相同边界，管线中块 cover 终值 == 末指令地址，故等价，
-     但形式化等价未证。
+  1. `BlockBasic::contains` 用 `[start_addr, set_initial_range 端点]` 投影
+     Ghidra 的 cover RangeList（Rugra 无块 cover 系统，block.hh:476）；
+     fixture 两侧把块范围钉到相同边界（C++ `setBasicBlockRange` /
+     Rugra `set_initial_range`），管线中块 cover 终值 == 末指令地址，故
+     等价，但形式化等价未证；无 range 存量块的 `start_addr` 回退与
+     Ghidra invalid-`Address()` 语义的差异归 `BLOCKBASIC-COVER-0001`。
   2. CommentSorter 持有 Comment 克隆而非数据库指针：setupFunctionList 的
      `setEmitted(false)` 与消费端发射后的 `set_emitted(true)` 都只改
      排序器副本，不回写 CommentDatabaseInternal（Ghidra 经
