@@ -1,0 +1,71 @@
+{
+  "schema_version": 2,
+  "fixture_id": "MERGE-FORCEMERGE-PANIC-0001",
+  "stable_function_closure": [
+    "ghidra::ActionDatabase::universalAction coreaction.cc:5462",
+    "ghidra::ActionGroup::apply action.cc:506",
+    "ghidra::Action::perform action.cc:298",
+    "ghidra::ActionAssignHigh::apply coreaction.hh:346",
+    "ghidra::ActionMergeRequired::apply coreaction.hh:370",
+    "ghidra::ActionMarkExplicit::apply coreaction.cc:3237",
+    "ghidra::ActionMarkImplied::apply coreaction.cc:3416",
+    "ghidra::ActionMergeType::apply coreaction.hh:414",
+    "ghidra::Merge::mergeAddrTied merge.cc:609",
+    "ghidra::Merge::mergeRangeMust merge.cc:301",
+    "ghidra::Merge::mergeTestMust merge.cc:241",
+    "ghidra::Merge::mergeByDatatype merge.cc:359"
+  ],
+  "overall_status": "MISMATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc:5717-5727, coreaction.hh:370,414, coreaction.cc:3237,3416, merge.cc:241-317,359-401,609-648, action.cc:298-362,506-527}",
+    "signature": "int4 ActionMergeType::apply(Funcdata &data); void Merge::mergeAddrTied(void); void Merge::mergeRangeMust(VarnodeLocSet::const_iterator,VarnodeLocSet::const_iterator); void Merge::mergeTestMust(Varnode *vn); void Merge::mergeByDatatype(VarnodeLocSet::const_iterator,VarnodeLocSet::const_iterator)"
+  },
+  "rugra_source": {
+    "base_commit": "8dc17e4453d4f14a26318de92d6a8120f6e0bceb",
+    "base_tree": "b6206fbd14a5542d69d4432336b205d202214fd4",
+    "base_src_tree": "d146e6d16a84c1d8084fe6fd9485a37284ab15eb",
+    "base_coreaction_blob": "dffd02708768be2044b298d33e425505fac8c9c4"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "9844a0d4fb8ff29212957a45e008d2f836bb6a32d7913eee6a85f49637a82a29",
+    "rust_fixture_sha256": "5efe5eb10688ff302c36348b3635e2a5357e8009b7ef094ace15eead0c474d93",
+    "runner_sha256": "3e92540e85b21bb1c06790cdb486699126b163193d95884155ac421646a9f926"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase, base=register:0x0:8), join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
+  "analysis_options": {
+    "entrypoint": "Oracle side builds the raw universal Action tree through ActionDatabase::universalAction and derives an unfiltered clone via the public group API (setGroup(\"all\") + setCurrent(\"all\")); Rust side drives the identical child sequence of build_default_pipeline (the construction behind ActionDatabase::set_default_actions). Both sides perform the merge-group children assignhigh..mergetype in tree order through the exact Action::perform / ActionRestartGroup::perform_child boundary, catching the exception/panic channel per child (LowlevelError catch vs catch_unwind).",
+    "prestate": "One BlockBasic b0 with three ops in SeqNum order: r0 a1=COPY(const4:5) with a1 a 4-byte stack:0x100 output created through the production newVarnodeOut path (funcdata_varnode.cc:104) with the queryProperties addrtied|mapped tail cleared (mirroring the raw-bank Rust creation path); r1 s1=SUBPIECE(const8:0x11223344, const1:0) with s1 a second 4-byte stack:0x100 output on the same path with the tail cleared; r2 t2=INT_ADD(s1, const4:7) with t2 a unique-space output. All three carry the int4 base Datatype. At mergerequired the exact-location cluster {a1,s1} is ungated (no addrtied member), so the one and only mergeAddrTied pass skips it; highs stay singletons. After markimplied marks s1 implied, the fixture installs addrtied|mapped on a1 (the arrival timing ActionDynamicSymbols setSymbolProperties produces in the real regression, visible as Varnode::mapped in the panic dump), then drives mergeadjacent and mergetype.",
+    "observation": "17 fixed-order UTF-8 lines: envelope, seq (11 merge-group child names), pre projection (per-varnode in/wr/ex/im/at/hi for a1,s1,t2), 10 act lines (name, perform return res, exception channel exc) with the install=addrtied:mapped:a1 line emitted between markindirectonly and mergeadjacent on both sides, post projection, verdict. The decisive contract is act=mergetype|res=0|exc=none plus verdict=PIPELINE-OK on both sides.",
+    "normalization": "No normalization; both sides print the same projection of the same observation fields. The negative control (Rugra ActionMergeType reverted to the legacy merge_all) flips act=mergetype to exc=Cannot force merge of range and verdict to PIPELINE-THREW, proving the fixture discriminates the regression."
+  },
+  "input_manifest": {
+    "inputs": [
+      "case=merge_forcepanic: ram base=0x6000 size=0x20, one block b0, ops r0/r1/r2 in SeqNum order, stack:0x100 exact-location cluster {a1 COPY-output, s1 SUBPIECE-output}, both created with the property tail cleared, int4 types, addrtied|mapped installed on a1 after markimplied, children assignhigh..mergetype driven in tree order with per-child exception channel observation"
+    ],
+    "sha256": "5bddd7cb1e74c0e2fc4441692ca8507a48fec0aac2df024bb4f80f557032e740"
+  },
+  "expected_stdout": {
+    "ghidra_stdout_sha256": "81361f47f771792ea62bc1232da27525e3a59faeef971bfda043a6571de2bce5",
+    "rugra_stdout_sha256": "5ef4eb456baf97e6e6d0a5d83d49af237e3590c7b5173155ab4714006aea7ff6"
+  },
+  "registered_divergence_lines": {
+    "act=markimplied|res=1|exc=none": {
+      "rugra_line_sha256": "f114e3ef7c5ebf0f87a8bde97d8c5b48d306d108c4ea02dea4de4e22cdb2b585",
+      "reason": "count bridge: Ghidra ActionMarkImplied::apply increments the inherited Action::count per marking (coreaction.cc:3426/3431) and Action::perform returns count=1, while Rugra's ActionMarkImplied::apply always returns NO_CHANGE so perform reports res=0; the implied classification itself (s1 im=1) matches",
+      "todo_id": "COREACTION-MARKIMPLIED-COUNT-0001"
+    }
+  },
+  "coverage": {
+    "mergetype_survives_implied_addrtied": "MATCH: act=mergetype|res=0|exc=none and verdict=PIPELINE-OK on both sides; the implied member of the late-gated address-tied exact-location cluster never reaches Merge::mergeTestMust because mergetype runs mergeByDatatype only (coreaction.hh:414)",
+    "single_mergerequired_pass": "MATCH: the only mergeAddrTied pass (act=mergerequired, before the install line) skips the ungated cluster; post shows s1 hi=1 (never force-merged) on both sides",
+    "markimplied_implied_classification": "MATCH: s1 ex=0,im=1,at=0 in the post projection on both sides",
+    "markimplied_count_bridge": "MISMATCH: registered divergence line (COREACTION-MARKIMPLIED-COUNT-0001)",
+    "merge_all_monolith_retired_from_pipeline": "MATCH: negative control verified — reverting ActionMergeType::apply to merge_all flips act=mergetype to exc=Cannot force merge of range and verdict to PIPELINE-THREW (the panic of the E2E regression)",
+    "base_explicit_numinstances_rule": "UNTESTED: Ghidra baseExplicit returns -1 (explicit) for any member of a multi-instance HighVariable (coreaction.cc:3022-3023) before the addrtied rule; Rugra base_explicit (src/coreaction.rs) lacks this rule. This fixture's ungated shape keeps highs single-instance at markexplicit so the path is not exercised; registered as COREACTION-BASEEXPLICIT-NUMINST-0001 for root dispatch"
+  }
+}
