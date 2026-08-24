@@ -9,6 +9,42 @@ Type operations for P-code
 
 Corresponds to Ghidra's `typeop.hh`
 
+## 2026-08-24：TypeOp 基类 local 默认与 TypeOpCall opflags（TYPEOP-LOCALBASE-DEFAULTS-0001）
+
+修复 R3 复核发现的两个预存缺口（R3-D1-REVIEW §7 建议②③）：
+
+- **trait 默认 `get_output_local`/`get_input_local` 不再返回 `None`**，而是对齐
+  Ghidra 基类 `TypeOp::getOutputLocal/getInputLocal`（`typeop.cc:261-275`）：
+  `tlst->getBase(op->getOut()/getIn(slot)->getSize(), TYPE_UNKNOWN)`。共享
+  helper `base_local_type(factory, size)` 承载该 base 查找（typeop.cc:264/:274），
+  工厂经新 trait 钩子 `local_type_factory()`（RUGRA-GLUE：Ghidra 基类 `tlst` 字段
+  的 provider；宏生成的无状态 unit struct 返回 `None`，与"尚未接入 Architecture
+  工厂"的实现状态一致）。
+- `TypeOpCall::get_flags` 由 `0` 改为 `typeop.cc:663` 构造函数的
+  `opflags = special|call|has_callspec|coderef|nocollapse`（0x20020814），逐位使用
+  `op::pcodeop_flags` 常量，与 `op::opcode_flags(CPUI_CALL)` 同值。
+- `TypeOpCall::get_input_local` 的 fallback 闭包改用共享 `base_local_type`（行为
+  不变，同一工厂同一 `get_base(size, Unknown)`）。
+- `TypeOpBranch`/`TypeOpBranchind`/`TypeOpSegment`/`TypeOpCast`（Ghidra 侧无
+  `get*Local` 覆写的四个 opcode，typeop.hh:253-263/:849-860/:804-811）改为持有
+  构造注入的 `Arc<RwLock<TypeFactory>>`（对齐 Ghidra 构造签名
+  `TypeOpXxx(TypeFactory *t)`，typeop.cc:583/:646/:2209/:2390），覆写
+  `local_type_factory`，使基类默认在分派表中可用。Ghidra 侧有覆写而 Rust 尚未
+  移植的 opcode（CBRANCH/CALLIND/RETURN/CPOOLREF/NEW/CALLOTHER）保持无工厂，
+  其 local 默认仍为 `None`（不伪对齐）。
+- 已有覆写（TypeOpCall::get_input_local、宏族 binary/unary/functional 的
+  `v_type` 读取、COPY/LOAD/STORE 等）行为不变。宏族
+  `getBase(size, metain/metaout)`（ZEXT=UINT/SEXT=INT，typeop.cc:1116/:1142）
+  的移植属 PRINTC-CAST-OPNAME-0001 M1，本切片不触碰。
+
+双侧 fixture `tests/oracle/typeop_localbase_defaults_1204.{cc,rs,metadata.json}` +
+`tools/run_typeop_localbase_defaults_oracle.sh`：C++ 经真实
+`PcodeOp::input/outputTypeLocal` 虚分派，Rust 经生产 `TypeOpManager` 分派表；
+覆盖 BRANCH/BRANCHIND/SEGMENTOP/CAST 基类默认（含 3 字节非标准 size 边界）、
+ZEXT/UINT 与 SEXT/INT 判别（oracle 侧记录 TypeOpFunc metain/metaout 推导；Rust
+宏覆写残差如实呈现为差异行）、CALL 无 fspec 时经基类默认的 input/output、CALL
+锁定参数（D1 不回归）、`flags.call` 逐位。
+
 ## 2026-08-24：TypeOpCall::getInputLocal D1（TYPEOP-LOCALTYPE-DISPATCH-0001）
 
 `TypeOpCall::get_input_local` 现在完整移植锁定 oracle 的
@@ -145,6 +181,12 @@ Core trait representing a P-code operation type
 
 Corresponds to Ghidra's `TypeOp` class
 
+新钩子 `local_type_factory()`（RUGRA-GLUE）：Ghidra 基类 `tlst` 字段
+（typeop.cc:233-242）的 provider，默认 `None`；持有构造注入工厂的 impl
+（TypeOpCall/TypeOpBranch/TypeOpBranchind/TypeOpSegment/TypeOpCast）覆写它。
+默认 `get_output_local`/`get_input_local` 经共享 `base_local_type` 返回
+`getBase(size, TYPE_UNKNOWN)`（typeop.cc:261-275），无工厂时 `None`。
+
 ### `pub struct TypeOpBinary`
 
 Base behavior for binary operations
@@ -183,7 +225,8 @@ CPUI_STORE implementation
 
 ### `pub struct TypeOpBranch`
 
-*暂无代码注释*
+Ghidra `TypeOpBranch(TypeFactory *t)`（typeop.cc:583）；无 `get*Local` 覆写，
+基类默认经 `local_type_factory` 提供的工厂解析。
 
 ### `pub struct TypeOpCbranch`
 
@@ -191,13 +234,15 @@ CPUI_STORE implementation
 
 ### `pub struct TypeOpBranchind`
 
-*暂无代码注释*
+Ghidra `TypeOpBranchind(TypeFactory *t)`（typeop.cc:646）；无 `get*Local` 覆写，
+基类默认经 `local_type_factory` 提供的工厂解析。
 
 ### `pub struct TypeOpCall`
 
 CPUI_CALL implementation. Holds the Architecture-owned `TypeFactory`
 handle used by `get_input_local`（`typeop.cc:687-718`）的 fallback 与
-canonical UNKNOWN。
+canonical UNKNOWN；`get_flags` 返回 `typeop.cc:663` 的
+`special|call|has_callspec|coderef|nocollapse`（0x20020814）。
 
 ### `pub struct TypeOpCallind`
 
@@ -225,7 +270,9 @@ canonical UNKNOWN。
 
 ### `pub struct TypeOpSegment`
 
-*暂无代码注释*
+Ghidra `TypeOpSegment(TypeFactory *t)`（typeop.cc:2390）；`get*Local` 覆写在
+Ghidra 已注释掉（typeop.hh:852-853），基类默认经 `local_type_factory` 提供的
+工厂解析。
 
 ### `pub struct TypeOpCpoolref`
 
@@ -247,9 +294,11 @@ This handles the mapping between OpCodes and their TypeOp implementations.
 
 ### `pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self`
 
-Build the per-opcode table; the factory is installed into the `CPUI_CALL`
-slot so `TypeOpCall::get_input_local` fallbacks share the Architecture's
-canonical TypeFactory.
+Build the per-opcode table; the factory is installed into the `CPUI_CALL`,
+`CPUI_BRANCH`, `CPUI_BRANCHIND`, `CPUI_SEGMENTOP`, and `CPUI_CAST` slots so
+the base-default `get_output_local`/`get_input_local` and the
+`TypeOpCall::get_input_local` fallbacks share the Architecture's canonical
+TypeFactory.
 
 ### `pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp>`
 

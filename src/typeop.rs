@@ -69,6 +69,23 @@ fn as_printc_mut(lng: &mut dyn PrintLanguage) -> Option<&mut PrintC> {
     any_ref.downcast_mut::<PrintC>()
 }
 
+/// Shared canonical base lookup behind the `TypeOp` base-class local-type
+/// defaults: `tlst->getBase(size,TYPE_UNKNOWN)` (typeop.cc:264 for the
+/// output, typeop.cc:274 for the input). `tlst` is the TypeFactory every
+/// TypeOp constructor receives (typeop.cc:233-242); `getBase` returns the
+/// canonical interned base type, or null when no base type of that
+/// size/metatype exists (Rugra: `None`).
+// Ghidra: typeop.cc:264 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
+fn base_local_type(
+    type_factory: &Arc<RwLock<TypeFactory>>,
+    size: usize,
+) -> Option<Arc<Datatype>> {
+    type_factory
+        .read()
+        .unwrap()
+        .get_base(size, TypeMetatype::Unknown)
+}
+
 /// Core trait representing a P-code operation type
 ///
 /// Corresponds to Ghidra's `TypeOp` class
@@ -115,16 +132,44 @@ pub trait TypeOp {
     }
 
     // Metadata methods
-    /// Get the minimal (or suggested) data-type of an output to this op-code
-    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal
-    fn get_output_local(&self, _op: &PcodeOp) -> Option<Arc<Datatype>> {
+    /// The TypeFactory this op's TypeOp object was constructed with — the
+    /// Ghidra base-class `tlst` field (typeop.cc:233-242). Every Ghidra
+    /// TypeOp subclass constructor takes `TypeFactory *t` and stores it on
+    /// the base; Rugra trait objects for the macro-generated opcodes are
+    /// stateless unit structs, so the factory is exposed as this provider
+    /// hook instead. `None` leaves the local-type defaults below without a
+    /// factory to query (mirroring an op whose Rugra impl has not yet been
+    /// wired to its Architecture TypeFactory).
+    // RUGRA-GLUE: base-class `tlst` field access as a trait provider hook;
+    //   impls that hold the constructor-injected factory override it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
         None
     }
 
+    /// Get the minimal (or suggested) data-type of an output to this op-code
+    ///
+    /// Default type lookup: `tlst->getBase(op->getOut()->getSize(),TYPE_UNKNOWN)`
+    /// — the result depends only on the op-code class and the size of the
+    /// output. Subclasses with a specific metatype (TypeOpBinary/Unary/Func
+    /// `metaout`) or call-specific logic override this.
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (default at typeop.cc:261)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size)
+    }
+
     /// Get the minimal (or suggested) data-type of an input to this op-code
-    // Ghidra: typeop.hh:152 TypeOp::getInputLocal
-    fn get_input_local(&self, _op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-        None
+    ///
+    /// Default type lookup: `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)`
+    /// — the result depends only on the op-code class and the size of the
+    /// input. Subclasses with a specific metatype (TypeOpBinary/Unary/Func
+    /// `metain`) or call-specific logic override this.
+    // Ghidra: typeop.hh:152 TypeOp::getInputLocal (default at typeop.cc:271)
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        base_local_type(type_factory, size)
     }
 
     /// Find the data-type of the output that would be assigned by a compiler.
@@ -1174,7 +1219,21 @@ functional_unary_op!(TypeOpPopcount, CPUI_POPCOUNT, "POPCOUNT", 0, "popcount");
 functional_unary_op!(TypeOpLzcount, CPUI_LZCOUNT, "LZCOUNT", 0, "lzcount");
 
 // Control Flow Operations
-pub struct TypeOpBranch;
+/// Ghidra's `TypeOpBranch` takes the Architecture TypeFactory in its
+/// constructor (typeop.cc:583) and never overrides `getOutputLocal`/
+/// `getInputLocal`, so both fall through to the TypeOp base defaults
+/// (`getBase(size,TYPE_UNKNOWN)`, typeop.cc:261-275).
+pub struct TypeOpBranch {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpBranch {
+    // Ghidra: typeop.cc:583 TypeOpBranch::TypeOpBranch
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpBranch {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -1187,6 +1246,12 @@ impl TypeOp for TypeOpBranch {
     // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); BRANCH has
+    //   no get*Local override in Ghidra (typeop.hh:253-263), so the trait
+    //   defaults below resolve through this factory.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
     // Ghidra: typeop.cc:590 TypeOpBranch::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -1226,7 +1291,20 @@ impl TypeOp for TypeOpCbranch {
     }
 }
 
-pub struct TypeOpBranchind;
+/// Ghidra's `TypeOpBranchind` takes the Architecture TypeFactory in its
+/// constructor (typeop.cc:646) and never overrides `getOutputLocal`/
+/// `getInputLocal` (base defaults, typeop.cc:261-275).
+pub struct TypeOpBranchind {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpBranchind {
+    // Ghidra: typeop.cc:646 TypeOpBranchind::TypeOpBranchind
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpBranchind {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -1239,6 +1317,11 @@ impl TypeOp for TypeOpBranchind {
     // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242);
+    //   BRANCHIND has no get*Local override in Ghidra.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
     // Ghidra: typeop.cc:653 TypeOpBranchind::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -1270,9 +1353,19 @@ impl TypeOp for TypeOpCall {
     fn get_name(&self) -> &str {
         "CALL"
     }
-    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    // Ghidra: typeop.hh:72 TypeOp::getFlags (the `opflags` field assigned in
+    // the TypeOpCall constructor, typeop.cc:663:
+    // `opflags = (PcodeOp::special|PcodeOp::call|PcodeOp::has_callspec|
+    //              PcodeOp::coderef|PcodeOp::nocollapse)`).
+    // Bit values mirror op.hh:73-104 (special=0x20000, call=0x4,
+    // has_callspec=0x20000000, coderef=0x800, nocollapse=0x10; total
+    // 0x20020814), identical to crate::op::opcode_flags(CPUI_CALL).
     fn get_flags(&self) -> u32 {
-        0
+        crate::op::pcodeop_flags::SPECIAL
+            | crate::op::pcodeop_flags::CALL
+            | crate::op::pcodeop_flags::HAS_CALLSPEC
+            | crate::op::pcodeop_flags::CODEREF
+            | crate::op::pcodeop_flags::NOCOLLAPSE
     }
     // Ghidra: typeop.cc:667 TypeOpCall::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -1288,18 +1381,21 @@ impl TypeOp for TypeOpCall {
         lng.op_call(op);
     }
 
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242). TypeOpCall
+    //   holds the constructor-injected Architecture TypeFactory, so the
+    //   trait-local defaults (get_output_local) and the fallback below share
+    //   exactly the factory Ghidra's TypeOp base would have used.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
+
     // Ghidra: typeop.cc:687 TypeOpCall::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         // Shared base lookup: `TypeOp::getInputLocal` (typeop.cc:271-275) is
         // `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)` — always the
         // same Architecture TypeFactory the constructor received.
         let input_size = op.get_in(slot)?.read().unwrap().get_size();
-        let fallback = || {
-            self.type_factory
-                .read()
-                .unwrap()
-                .get_base(input_size, TypeMetatype::Unknown)
-        };
+        let fallback = || base_local_type(&self.type_factory, input_size);
 
         // Ghidra gate: `(slot==0)||(vn->getSpace()->getType()!=IPTR_FSPEC)`
         // (typeop.cc:695). Rugra has no dedicated fspace yet: the D0
@@ -1704,7 +1800,22 @@ impl TypeOp for TypeOpIndirect {
     }
 }
 
-pub struct TypeOpSegment;
+/// Ghidra's `TypeOpSegment` takes the Architecture TypeFactory in its
+/// constructor (typeop.cc:2390). Its `getInputLocal`/`getOutputLocal`
+/// overrides are commented out in Ghidra (typeop.hh:852-853), so both use
+/// the TypeOp base defaults (`getBase(size,TYPE_UNKNOWN)`,
+/// typeop.cc:261-275).
+pub struct TypeOpSegment {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpSegment {
+    // Ghidra: typeop.cc:2390 TypeOpSegment::TypeOpSegment
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpSegment {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -1717,6 +1828,12 @@ impl TypeOp for TypeOpSegment {
     // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242);
+    //   SEGMENTOP has no live get*Local override in Ghidra
+    //   (typeop.hh:852-853 commented out).
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
     // Ghidra: typeop.cc:2397 TypeOpSegment::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -1952,10 +2069,19 @@ fn callother_userop_name(_op: &PcodeOp, _index: i32) -> Option<String> {
 ///   `opflags = unary | special | nocollapse`,
 ///   `behave = new OpBehavior(CPUI_CAST, false, true)` (dummy).
 /// `push` forwards to `PrintLanguage::opCast`; `printRaw` prints
-/// `out = (cast) in0`. No type requirements, so `getOutputLocal`/
-/// `getInputLocal`/`propagateType`/`getOutputToken`/`getInputCast` all use the
-/// `TypeOp` defaults (None).
-pub struct TypeOpCast;
+/// `out = (cast) in0`. No type requirements ("We don't care what types are
+/// cast", typeop.hh:807-808), so `getOutputLocal`/`getInputLocal` use the
+/// `TypeOp` base defaults `getBase(size,TYPE_UNKNOWN)` (typeop.cc:261-275).
+pub struct TypeOpCast {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpCast {
+    // Ghidra: typeop.cc:2209 TypeOpCast::TypeOpCast
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
 
 impl TypeOp for TypeOpCast {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
@@ -1971,6 +2097,11 @@ impl TypeOp for TypeOpCast {
     // TypeOpCast sets no addlflags, so this is 0 — matches TypeOpCopy/Return.
     fn get_flags(&self) -> u32 {
         0
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); CAST has no
+    //   get*Local override in Ghidra (typeop.hh:804-811).
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
 
     // Ghidra: typeop.hh:809 TypeOpCast::push  -> lng->opCast(op)
@@ -2679,10 +2810,11 @@ impl TypeOpManager {
         ops[OpCode::CPUI_LZCOUNT as usize] = Some(Box::new(TypeOpLzcount));
 
         // Control Flow
-        ops[OpCode::CPUI_BRANCH as usize] = Some(Box::new(TypeOpBranch));
+        ops[OpCode::CPUI_BRANCH as usize] = Some(Box::new(TypeOpBranch::new(type_factory.clone())));
         ops[OpCode::CPUI_CBRANCH as usize] = Some(Box::new(TypeOpCbranch));
-        ops[OpCode::CPUI_BRANCHIND as usize] = Some(Box::new(TypeOpBranchind));
-        ops[OpCode::CPUI_CALL as usize] = Some(Box::new(TypeOpCall::new(type_factory)));
+        ops[OpCode::CPUI_BRANCHIND as usize] =
+            Some(Box::new(TypeOpBranchind::new(type_factory.clone())));
+        ops[OpCode::CPUI_CALL as usize] = Some(Box::new(TypeOpCall::new(type_factory.clone())));
         ops[OpCode::CPUI_CALLIND as usize] = Some(Box::new(TypeOpCallind));
         ops[OpCode::CPUI_RETURN as usize] = Some(Box::new(TypeOpReturn));
 
@@ -2691,11 +2823,12 @@ impl TypeOpManager {
         ops[OpCode::CPUI_PTRSUB as usize] = Some(Box::new(TypeOpPtrsub));
         ops[OpCode::CPUI_MULTIEQUAL as usize] = Some(Box::new(TypeOpMulti));
         ops[OpCode::CPUI_INDIRECT as usize] = Some(Box::new(TypeOpIndirect));
-        ops[OpCode::CPUI_SEGMENTOP as usize] = Some(Box::new(TypeOpSegment));
+        ops[OpCode::CPUI_SEGMENTOP as usize] =
+            Some(Box::new(TypeOpSegment::new(type_factory.clone())));
         ops[OpCode::CPUI_CPOOLREF as usize] = Some(Box::new(TypeOpCpoolref));
         ops[OpCode::CPUI_NEW as usize] = Some(Box::new(TypeOpNew));
         ops[OpCode::CPUI_CALLOTHER as usize] = Some(Box::new(TypeOpCallother));
-        ops[OpCode::CPUI_CAST as usize] = Some(Box::new(TypeOpCast));
+        ops[OpCode::CPUI_CAST as usize] = Some(Box::new(TypeOpCast::new(type_factory.clone())));
         ops[OpCode::CPUI_INSERT as usize] = Some(Box::new(TypeOpInsert));
         ops[OpCode::CPUI_EXTRACT as usize] = Some(Box::new(TypeOpExtract));
 
