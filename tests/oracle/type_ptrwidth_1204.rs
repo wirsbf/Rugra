@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use rugra::type_system::datatype::{Datatype, TypeMetatype, TypePointer};
-use rugra::type_system::TypeBase;
-use rugra::typeop::{TypeOp, TypeOpLoad, TypeOpStore};
 use rugra::address::{Address, SeqNum};
 use rugra::op::PcodeOp;
 use rugra::opcodes::OpCode;
+use rugra::type_system::datatype::{Datatype, TypeMetatype, TypePointer};
+use rugra::type_system::TypeBase;
+use rugra::typeop::{TypeOp, TypeOpLoad, TypeOpStore};
 use rugra::varnode::Varnode;
 use std::sync::RwLock;
 
@@ -38,19 +38,47 @@ fn main() {
     };
     let progress_source = make_vn(8, 0x100, progress_ptr.clone());
     let int4_source = make_vn(8, 0x108, int4_ptr.clone());
-    let value16 = make_vn(16, 0x200, Arc::new(Datatype::Base(TypeBase::new(
-        "value16".into(), 16, TypeMetatype::Unknown,
-    ))));
-    let value4 = make_vn(4, 0x210, Arc::new(Datatype::Base(TypeBase::new(
-        "value4".into(), 4, TypeMetatype::Unknown,
-    ))));
-    let value32 = make_vn(32, 0x220, Arc::new(Datatype::Base(TypeBase::new(
-        "value32".into(), 32, TypeMetatype::Unknown,
-    ))));
+    let value16 = make_vn(
+        16,
+        0x200,
+        Arc::new(Datatype::Base(TypeBase::new(
+            "value16".into(),
+            16,
+            TypeMetatype::Unknown,
+        ))),
+    );
+    let value4 = make_vn(
+        4,
+        0x210,
+        Arc::new(Datatype::Base(TypeBase::new(
+            "value4".into(),
+            4,
+            TypeMetatype::Unknown,
+        ))),
+    );
+    let value32 = make_vn(
+        32,
+        0x220,
+        Arc::new(Datatype::Base(TypeBase::new(
+            "value32".into(),
+            32,
+            TypeMetatype::Unknown,
+        ))),
+    );
+    let value16_type = value16.read().unwrap().v_type.clone().unwrap();
+    let value4_type = value4.read().unwrap().v_type.clone().unwrap();
+    let value32_type = value32.read().unwrap().v_type.clone().unwrap();
+    let space_constant = make_vn(
+        8,
+        0,
+        Arc::new(Datatype::Base(TypeBase::new(
+            "space".into(),
+            8,
+            TypeMetatype::Unknown,
+        ))),
+    );
     let mut load = PcodeOp::new(SeqNum::new(Address::new(0), 0), OpCode::CPUI_LOAD);
-    load.inrefs.push(make_vn(8, 0, Arc::new(Datatype::Base(TypeBase::new(
-        "space".into(), 8, TypeMetatype::Unknown,
-    )))));
+    load.inrefs.push(space_constant.clone());
     load.inrefs.push(progress_source.clone());
     let mut load_result = |target: &Arc<RwLock<Varnode>>| {
         load.output = Some(target.clone());
@@ -63,18 +91,28 @@ fn main() {
     load.output = Some(value4.clone());
     let load_int4 = TypeOpLoad.propagate_type(&int4_ptr, &load, 1, -1);
 
-    let store_result = |target: Arc<RwLock<Varnode>>| {
-        let mut store = PcodeOp::new(SeqNum::new(Address::new(0), 0), OpCode::CPUI_STORE);
-        store.inrefs.push(make_vn(8, 0, Arc::new(Datatype::Base(TypeBase::new(
-            "space".into(), 8, TypeMetatype::Unknown,
-        )))));
+    let store_result = |target: Arc<RwLock<Varnode>>, time| {
+        let mut store = PcodeOp::new(SeqNum::new(Address::new(0), time), OpCode::CPUI_STORE);
+        store.inrefs.push(space_constant.clone());
         store.inrefs.push(progress_source.clone());
         store.inrefs.push(target);
-        TypeOpStore.propagate_type(&progress_ptr, &store, 1, 2)
+        let result = TypeOpStore.propagate_type(&progress_ptr, &store, 1, 2);
+        (result, store)
     };
-    let store16 = store_result(value16.clone());
-    let store4 = store_result(value4.clone());
-    let store32 = store_result(value32.clone());
+    let (store16, store16_op) = store_result(value16.clone(), 1);
+    let (store4, store4_op) = store_result(value4.clone(), 2);
+    let (store32, store32_op) = store_result(value32.clone(), 3);
+
+    let mut spacebase_load = PcodeOp::new(SeqNum::new(Address::new(0), 4), OpCode::CPUI_LOAD);
+    spacebase_load.inrefs.push(space_constant.clone());
+    spacebase_load.inrefs.push(int4_source.clone());
+    let spacebase_output = make_vn(4, 0x230, int4_type.clone());
+    spacebase_output
+        .write()
+        .unwrap()
+        .set_flags(rugra::varnode::varnode_flags::SPACEBASE);
+    spacebase_load.output = Some(spacebase_output);
+    let load_spacebase = TypeOpLoad.propagate_type(&int4_type, &spacebase_load, -1, 1);
 
     println!("fixture=TYPE-PTRWIDTH-PTRSUB-0001");
     println!("load_struct32_deref16_null={}", load16.is_none() as u8);
@@ -107,5 +145,50 @@ fn main() {
             .v_type
             .as_ref()
             .is_some_and(|datatype| Arc::ptr_eq(datatype, &progress_ptr)) as u8
+    );
+    println!(
+        "load_args_attached={}",
+        (Arc::ptr_eq(&load.inrefs[1], &int4_source)
+            && load
+                .output
+                .as_ref()
+                .is_some_and(|output| Arc::ptr_eq(output, &value4))) as u8
+    );
+    println!(
+        "store_args_attached={}",
+        (Arc::ptr_eq(&store16_op.inrefs[1], &progress_source)
+            && Arc::ptr_eq(&store16_op.inrefs[2], &value16)) as u8
+    );
+    println!(
+        "load_spacebase_source_null={}",
+        load_spacebase.is_none() as u8
+    );
+    println!(
+        "target_types_unchanged={}",
+        (value16
+            .read()
+            .unwrap()
+            .v_type
+            .as_ref()
+            .is_some_and(|datatype| Arc::ptr_eq(datatype, &value16_type))
+            && value4
+                .read()
+                .unwrap()
+                .v_type
+                .as_ref()
+                .is_some_and(|datatype| Arc::ptr_eq(datatype, &value4_type))
+            && value32
+                .read()
+                .unwrap()
+                .v_type
+                .as_ref()
+                .is_some_and(|datatype| Arc::ptr_eq(datatype, &value32_type))) as u8
+    );
+    println!(
+        "shared_space_alias={}",
+        (Arc::ptr_eq(&load.inrefs[0], &space_constant)
+            && Arc::ptr_eq(&store16_op.inrefs[0], &space_constant)
+            && Arc::ptr_eq(&store4_op.inrefs[0], &space_constant)
+            && Arc::ptr_eq(&store32_op.inrefs[0], &space_constant)) as u8
     );
 }

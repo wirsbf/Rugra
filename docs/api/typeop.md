@@ -19,14 +19,25 @@ pointer→value 方向现在把目标 Varnode 的真实字节宽度传给
 
 双侧 fixture `tests/oracle/type_ptrwidth_1204.{cc,rs,metadata.json}` 直接执行锁定
 Ghidra 12.0.4 `TypeOpLoad/Store::propagateType` 与 Rugra 同一组 LOAD/STORE
-宽度、别名和身份观察，runner 为 `tools/run_type_ptrwidth_oracle.sh`。该 covered
-projection 为 `MATCH`。
+宽度、别名和身份观察；两侧都构造真实 PcodeOp，并把已挂接的 input/output Varnode
+作为传播参数，避免用 standalone Varnode 代替生产别名图。runner 为
+`tools/run_type_ptrwidth_oracle.sh`。修订后的 fixture 已通过锁定源码树的 C++
+syntax-only 门禁，但 isolated whole-archive link 尚未绑定 BFD 依赖闭包，因此当前
+covered projection 保守记为 `NO_ORACLE`，不得沿用旧 standalone fixture 的 MATCH。
 
-状态仍为 **PARTIAL_MATCH**：Ghidra 在 size mismatch 时还允许 plain enum 的
+状态仍为 **MISMATCH**：Ghidra 在 size mismatch 时还允许 plain enum 的
 `TypePartialEnum` 与 `TypePointerRel` parent 上的 enum exact-piece。该路径必须由拥有
 canonical registry 的 `TypeFactory::getExactPiece` 构造；当前 TypeOp trait 没有 factory
 参数，所以 Rugra 暂时 fail-closed，记为 `TYPEFACTORY-EXACTPIECE-0001`，未用本地
 `Arc::new` 伪造对象身份。
+
+LOAD/STORE 的 spacebase 守卫按 oracle 的显式传播源 `invn` 判断；尤其 LOAD
+value→pointer 方向检查 output，而不是把 `outslot` 当作 input 下标。Rust 回归测试已覆盖
+这个槽位选择，双侧 fixture 尚未覆盖 spacebase，metadata 因此仍记为 `UNTESTED`。
+runner 会重算输入 manifest，分别钉住两侧 stdout，并从锁定 commit 的源码 archive
+重建 `libdecomp.a`，避免复用 Ghidra checkout 中未追踪的历史产物；Rust comparand 使用
+本次 Cargo 构建的确定性顶层 `librugra.rlib`。isolated whole-archive link 的 pinned
+BFD header/library/dependency closure 尚未闭合，绑定 `ORACLE-RUNNER-HERMETIC-0001`。
 
 ## 2026-08-11：`TypeOpFloatInt2Float::preferredZextSize`
 

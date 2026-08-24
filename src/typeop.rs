@@ -631,13 +631,13 @@ impl TypeOp for TypeOpLoad {
             return None; // Don't propagate along the space-constant edge
         }
         // Spacebase pointers do not propagate.
-        let src_slot = if inslot == -1 { outslot } else { inslot };
-        if src_slot >= 0 {
-            if let Some(vn) = op.get_in(src_slot as usize) {
-                if vn.read().unwrap().is_spacebase() {
-                    return None;
-                }
-            }
+        let source = if inslot < 0 {
+            op.get_out()
+        } else {
+            op.get_in(inslot as usize)
+        };
+        if source.is_some_and(|vn| vn.read().unwrap().is_spacebase()) {
+            return None;
         }
         if inslot == -1 {
             // output -> input : wrap value type as a pointer (propagateToPointer)
@@ -723,13 +723,13 @@ impl TypeOp for TypeOpStore {
             return None; // Don't propagate along the space-constant edge
         }
         // Spacebase pointers do not propagate.
-        let src_slot = if inslot == -1 { outslot } else { inslot };
-        if src_slot >= 0 {
-            if let Some(vn) = op.get_in(src_slot as usize) {
-                if vn.read().unwrap().is_spacebase() {
-                    return None;
-                }
-            }
+        let source = if inslot < 0 {
+            op.get_out()
+        } else {
+            op.get_in(inslot as usize)
+        };
+        if source.is_some_and(|vn| vn.read().unwrap().is_spacebase()) {
+            return None;
         }
         if inslot == 2 {
             // value -> pointer : wrap value type as a pointer (propagateToPointer)
@@ -2823,7 +2823,7 @@ mod tests {
     use crate::address::{Address, SeqNum};
     use crate::type_system::TypeBase;
     use crate::type_system::datatype::{TypeField, TypePointer, TypeStruct};
-    use crate::varnode::Varnode;
+    use crate::varnode::{varnode_flags, Varnode};
     use std::sync::{Arc, RwLock};
 
     /// Build a typed varnode with the given data-type.
@@ -2945,6 +2945,20 @@ mod tests {
         assert!(same_arc(TypeOpLoad.propagate_type(&ptr_t, &op, 1, -1), &t));
         // The space-constant edge (slot 0) never propagates.
         assert!(TypeOpLoad.propagate_type(&t, &op, 0, -1).is_none());
+    }
+
+    #[test]
+    fn load_value_to_pointer_checks_output_source_spacebase() {
+        let mut op = pcodeop(OpCode::CPUI_LOAD);
+        let output = typed_vn(4, 0x20, None);
+        output.write().unwrap().set_flags(varnode_flags::SPACEBASE);
+        op.output = Some(output);
+        op.inrefs.push(typed_vn(8, 0, None));
+        op.inrefs.push(typed_vn(8, 0x30, None));
+
+        assert!(TypeOpLoad
+            .propagate_type(&int_t(), &op, -1, 1)
+            .is_none());
     }
 
     #[test]

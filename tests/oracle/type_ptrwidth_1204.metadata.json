@@ -18,7 +18,7 @@
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of sorted compact JSON over architecture, compiler_spec, analysis_options, and cases",
-    "sha256": "a3deaadd74caa86404918004962b3efff41c9a6810e9df960ae4b7d9eb4341f9",
+    "sha256": "c1a59b1a8c3eab6db5510c4521d1e632d3c0646e42af8da1405b28fd7fbbba46",
     "cases": [
       ["LOAD", "ProgressData32*", 16, "null"],
       ["LOAD", "ProgressData32*", 4, "null"],
@@ -27,44 +27,85 @@
       ["STORE", "ProgressData32*", 4, "null"],
       ["STORE", "ProgressData32*", 32, "same pointee identity"],
       ["LOAD", "int4*", 4, "same pointee identity"],
-      ["source", "ProgressData32*", "same source type alias"]
+      ["source", "ProgressData32*", "same source type alias"],
+      ["LOAD", "attached op", "invn=input1; outvn=output"],
+      ["STORE", "attached op", "invn=input1; outvn=input2"],
+      ["LOAD", "output source SPACEBASE", "null before pointer construction"],
+      ["mutation", "value16/value4/value32", "datatype identity unchanged"],
+      ["order/alias", "space operand slot 0", "same Varnode across LOAD/STORE cases"]
     ]
   },
   "observation_schema": {
     "return": "null versus non-null",
     "identity": "Non-null exact-size results must be the original pointee object",
     "order": "Declared case order",
-    "mutation": "No input object is mutated by these cases"
+    "mutation": "LOAD output and STORE value slots are assigned before each call; datatype objects are not mutated",
+    "alias_topology": "Each call receives the exact Varnodes attached to the observed PcodeOp slots"
   },
   "comparand": {
     "rust_base_commit": "8c223a9623d6833319564776c35c5d4c50b17b95",
     "rust_base_blobs": {
       "src/typeop.rs": "754391522125b69d12f73bdf301598c773afca38"
     },
+    "runner_sha256": "45e74d4c82cac67e70186efb96e507abc4a5650435aff2e55b8177be01aa063d",
     "overlay_sha256": {
-      "src/typeop.rs": "f74a7875a251aa419455ee5c84e542ecd582a181a4bb2731c795ac13fbbbfef3",
-      "tests/oracle/type_ptrwidth_1204.cc": "7910a2923a2a297f37c8086675c5f6c10a53d465ca7a622543d73ef3094ea3c8",
-      "tests/oracle/type_ptrwidth_1204.rs": "d2d498d53131d61f185442e095e1adffc0f983cb9f1c4f4085e68211f0d4f5b6"
+      "src/typeop.rs": "b371f499326d4b92487c2ee7b1b471c996434ad89c776a61e7b459a3d90d9628",
+      "tests/oracle/type_ptrwidth_1204.cc": "774d50666ad703286d36173518d97cede518a38d5fa8e9824d5878de4884d38c",
+      "tests/oracle/type_ptrwidth_1204.rs": "168bce8eb903687938c151de4bef31d1edfe5f89e797e35516aa99ad5f89cbd4"
     }
   },
-  "expected_stdout_sha256": "83af3368f31d21f1817e491f822f8f00043de55acc5a33a35c0f710fafbb65ec",
+  "expected_stdout_sha256": {
+    "ghidra": "b14875ba9bf85df456526d7db64f8a42b02a389e15c57c7fae8d2ec1a54f14ef",
+    "rugra": "b14875ba9bf85df456526d7db64f8a42b02a389e15c57c7fae8d2ec1a54f14ef"
+  },
+  "expected_stdout_status": "UNTESTED: derived from the declared boolean observations; the revised attached-PcodeOp fixture has not completed a bilateral run",
   "expected_exit_code": 0,
   "coverage": {
-    "load_fixed_struct_pointee_size_mismatch_16_4": "MATCH",
-    "load_fixed_struct_pointee_exact_size_identity": "MATCH",
-    "store_fixed_struct_pointee_size_mismatch_16_4": "MATCH",
-    "store_fixed_struct_pointee_exact_size_identity": "MATCH",
-    "load_fixed_scalar_pointee_exact_size_identity": "MATCH",
-    "source_varnode_type_alias": "MATCH",
+    "load_fixed_struct_pointee_size_mismatch_16_4": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "load_fixed_struct_pointee_exact_size_identity": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "store_fixed_struct_pointee_size_mismatch_16_4": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "store_fixed_struct_pointee_exact_size_identity": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "load_fixed_scalar_pointee_exact_size_identity": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "source_varnode_type_alias": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "propagation_argument_alias_topology": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "shared_space_operand_alias_and_slot_order": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "mapped_function_input_mutation": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "load_spacebase_output_source_guard": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
     "variable_length_pointee": "UNTESTED",
     "plain_enum_partial_piece": "MISMATCH: TYPEFACTORY-EXACTPIECE-0001; Rugra deliberately returns None until the owning TypeFactory is available",
     "relative_pointer_enum_exact_piece": "MISMATCH: TYPEFACTORY-EXACTPIECE-0001; current propagation API has no owning TypeFactory",
-    "load_store_spacebase_source_guard": "UNTESTED",
+    "load_nonspace_source_with_spacebase_destination": "UNTESTED: the fixture has no owning TypeFactory or real space constant for the non-guarded value-to-pointer path",
+    "store_spacebase_source_guard": "UNTESTED",
+    "explicit_detached_invn_outvn_arguments": "MISMATCH: Rugra's current TypeOp trait derives invn/outvn from PcodeOp slots and cannot represent a deliberately detached argument graph",
     "load_store_value_to_pointer_width_wordsize": "UNTESTED: deferred to the pointer construction slice; fresh non-canonical Arc remains a known mismatch",
     "action_infer_types_width_driver": "MISMATCH: baseline coreaction driver still bypasses TypeOpLoad/Store and propagates pointees without the width gate; deferred until a bilateral production Action fixture is available",
     "action_infer_types_iteration_and_writeback": "MISMATCH: DFS order/path marks and factory canonical pointer identity remain outside this atomic slice",
-    "ptrsub_downchain_stop_and_traversal": "UNTESTED: deferred to the next atomic commit"
+    "ptrsub_downchain_stop_and_traversal": "UNTESTED: deferred to the next atomic commit",
+    "runner_bfd_link_provenance": "MISMATCH: ORACLE-RUNNER-HERMETIC-0001; isolated whole-archive link does not yet pin and link the BFD dependency closure"
   },
   "overall_status": "MISMATCH",
-  "covered_projection_status": "MATCH: the declared LOAD/STORE pointer-to-value fixed-width and identity observations compare byte-for-byte"
+  "covered_projection_status": "NO_ORACLE: the revised attached-PcodeOp fixture passed locked-tree syntax checking but failed before a bilateral execution",
+  "execution_evidence": [
+    {
+      "runner": "tools/run_type_ptrwidth_oracle.sh",
+      "result": "NO_ORACLE",
+      "stage": "isolated oracle build",
+      "exit_code": 2,
+      "error": "g++ temporary assembly exhausted the /tmp quota before the runner used a private home-backed TMPDIR"
+    },
+    {
+      "runner": "tools/run_type_ptrwidth_oracle.sh",
+      "result": "NO_ORACLE",
+      "stage": "C++ fixture compile",
+      "exit_code": 1,
+      "error": "typeop.hh only forward-declared PcodeOp; the revised fixture had not yet included op.hh"
+    },
+    {
+      "runner": "captured e40ed130 tree syntax and link preflight",
+      "result": "NO_ORACLE",
+      "stage": "C++ fixture link",
+      "exit_code": 1,
+      "error": "whole-archive pulled loadimage_bfd.o but the command had no pinned BFD dependency closure; bfd_* symbols were unresolved"
+    }
+  ]
 }
