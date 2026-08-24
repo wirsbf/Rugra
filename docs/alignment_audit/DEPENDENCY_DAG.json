@@ -2990,6 +2990,10 @@
     },
     {
       "from": "jumptable",
+      "to": "space"
+    },
+    {
+      "from": "jumptable",
       "to": "varnode"
     },
     {
@@ -3730,11 +3734,19 @@
     },
     {
       "from": "typeop",
+      "to": "space"
+    },
+    {
+      "from": "typeop",
       "to": "type_system"
     },
     {
       "from": "typeop",
       "to": "type_system::datatype"
+    },
+    {
+      "from": "typeop",
+      "to": "type_system::typefactory"
     },
     {
       "from": "typeop",
@@ -4893,6 +4905,7 @@
     "JUMPTABLE-OVERRIDE-0001",
     "JUMPTABLE-PIPELINE-0001",
     "JUMPTABLE-SELECTION-0001",
+    "JUMPTABLE-SORT-TOOLCHAIN-0001",
     "JUMPTABLE-TABLEAPI-0001",
     "JUMPTABLE-THUNK-CLASSIFY-0001",
     "LANEDIVIDE-EVIDENCE-STATUS-REPAIR-0001",
@@ -5037,6 +5050,7 @@
     "RANGEMAP-COMMON-REFINEMENT-0001",
     "REDUCE-0001",
     "REGISTRY-CONTINUITY-W1-0001",
+    "REGISTRY-CONTINUITY-W2-0001",
     "RULE-ADDUNSIGNED-TYPEPRECOND-0001",
     "RULE-COLLECTTERMS-0001",
     "RULE-GAPS-2026-08-22",
@@ -5109,7 +5123,9 @@
     "TYPEFACTORY-SUBMETA-RECLASS-0001",
     "TYPEFACTORY-UNDEFNAME-0001",
     "TYPEFIELD-IDENT-REPRESENTATION-0001",
+    "TYPEOP-FSPEC-CONSUMER-0002",
     "TYPEOP-FSPEC-SPACE-0001",
+    "TYPEOP-LOCALBASE-DEFAULTS-0001",
     "TYPEOP-LOCALTYPE-DISPATCH-0001",
     "TYPEOP-PROPAGATE-BYPASS-0001",
     "TYPEUNION-CACHE-READSIDE-0001",
