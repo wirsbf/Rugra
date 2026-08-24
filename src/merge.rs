@@ -5,13 +5,29 @@
 
 use crate::cover::{Cover, CoverBlock};
 use crate::funcdata::Funcdata;
-use crate::space::AddressSpace;
+use crate::space::{AddressSpace, SpaceType, SPACEID_OTHER};
 use crate::type_system::{Datatype, TypeBase, TypeMetatype};
-use crate::variable::{high_flags, HighVariable};
+use crate::variable::{
+    high_flags, high_internal_flags, HighVariable, VariableGroup, VariablePiece,
+};
 use crate::varnode::{Varnode, varnode_flags};
+use anyhow::{anyhow, Result};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+
+/// One `(space, offset, size)` sub-range from Ghidra's `overlapLoc` bounds.
+/// Members retain `VarnodeLocSet` order: input, then written definitions in
+/// `SeqNum` order. `first_flags` intentionally records only the first member,
+/// matching `overlapLoc`'s one `getFlags()` read per exact-location sub-range.
+#[derive(Debug)]
+struct AddrTiedLocRange {
+    space: AddressSpace,
+    offset: u64,
+    size: usize,
+    first_flags: u32,
+    members: Vec<Arc<RwLock<Varnode>>>,
+}
 
 /// Cached pairwise Cover-intersection results used by MergeType.
 ///
@@ -892,78 +908,326 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:609 Merge::mergeAddrTied
-    /// Merge varnodes that are tied to the same address+size.
-    ///
-    /// This is the primary merge pass: varnodes at the same location
-    /// and with the same size are different SSA versions of the same
-    /// logical variable and should share a HighVariable.
+    /// Force the address-tied exact-location ranges in every maximal
+    /// overlapping processor/spacebase cluster, then record the relative
+    /// offsets of mixed-size ranges in a shared `VariableGroup`.
     pub fn merge_addr_tied(&mut self, fd: &mut Funcdata) {
-        use std::collections::BTreeMap;
+        self.try_merge_addr_tied(fd)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
 
+    // RUGRA-GLUE: Result-bearing Rust exception channel for the C++
+    // LowlevelError exits from mergeRangeMust/groupWith. The legacy Action
+    // boundary above still adapts Err to panic until Action supports Result.
+    pub fn try_merge_addr_tied(&mut self, fd: &mut Funcdata) -> Result<()> {
         self.attach(fd);
 
-        let mut groups: BTreeMap<(crate::address::Address, usize), Vec<Arc<RwLock<Varnode>>>> =
-            BTreeMap::new();
+        let result = self.merge_addr_tied_inner(fd);
+        self.detach(fd);
+        result
+    }
 
-        {
-            for vn_ref in &fd.vbank.loc_tree {
-                let vn_arc = vn_ref.0.clone();
-                let (addr, size, live) = {
-                    let vn = vn_arc.read().unwrap();
-                    let live = vn.is_input()
-                        || self.live_set.contains(&(std::sync::Arc::as_ptr(&vn_arc) as usize));
-                    (vn.loc, vn.size, live)
-                };
-                if !live {
-                    continue;
+    // Ghidra: merge.cc:609 Merge::mergeAddrTied
+    /// Result-bearing body, invoked with the persistent merge channels
+    /// attached by `try_merge_addr_tied`.
+    fn merge_addr_tied_inner(&mut self, fd: &mut Funcdata) -> Result<()> {
+        let ranges = Self::addr_tied_location_ranges(fd);
+        let mut cluster_start = 0usize;
+        while cluster_start < ranges.len() {
+            let cluster_space = ranges[cluster_start].space;
+            let mut cluster_end = cluster_start + 1;
+            let mut max_offset = Self::range_last_offset(&ranges[cluster_start]);
+            while cluster_end < ranges.len() {
+                let next = &ranges[cluster_end];
+                if next.space != cluster_space || next.offset > max_offset {
+                    break;
                 }
-                groups.entry((addr, size)).or_default().push(vn_arc);
+                max_offset = max_offset.max(Self::range_last_offset(next));
+                cluster_end += 1;
             }
-        }
 
-        for group in groups.values() {
-            if group.len() < 2 {
+            let flags = ranges[cluster_start..cluster_end]
+                .iter()
+                .fold(0u32, |acc, range| acc | range.first_flags);
+            if flags & varnode_flags::ADDRTIED != 0 {
+                let members: Vec<Arc<RwLock<Varnode>>> = ranges[cluster_start..cluster_end]
+                    .iter()
+                    .flat_map(|range| range.members.iter().cloned())
+                    .collect();
+                self.unify_address(fd, &members);
+                for range in &ranges[cluster_start..cluster_end] {
+                    self.merge_range_must(range)?;
+                }
+                if cluster_end - cluster_start > 1 {
+                    let base_offset = ranges[cluster_start].offset;
+                    let base_high = Self::required_high(&ranges[cluster_start].members[0])?;
+                    for range in &ranges[cluster_start + 1..cluster_end] {
+                        let high = Self::required_high(&range.members[0])?;
+                        let offset = range.offset.wrapping_sub(base_offset) as i32;
+                        Self::group_with_arcs(&high, offset, &base_high)?;
+                    }
+                }
+            }
+            cluster_start = cluster_end;
+        }
+        Ok(())
+    }
+
+    // RUGRA-GLUE: Rust's Varnode stores the legacy AddressSpace enum instead
+    // of an AddrSpace handle. Map only variants whose locked constructor type
+    // is recoverable; unknown Other ids fail closed rather than being guessed.
+    fn is_addr_tied_merge_space(space: AddressSpace) -> bool {
+        let space_type = match space {
+            AddressSpace::Ram | AddressSpace::Register | AddressSpace::Overlay => {
+                Some(SpaceType::Processor)
+            }
+            AddressSpace::Stack => Some(SpaceType::SpaceBase),
+            AddressSpace::Const => Some(SpaceType::Constant),
+            AddressSpace::Unique => Some(SpaceType::Internal),
+            AddressSpace::Iop => Some(SpaceType::Iop),
+            AddressSpace::Join => Some(SpaceType::Join),
+            // OtherSpace::INDEX is 1 and both locked constructors use
+            // IPTR_PROCESSOR (space.cc:390-404). Other ids lack a retained
+            // AddrSpace::getType channel in the legacy enum representation.
+            AddressSpace::Other(SPACEID_OTHER) => Some(SpaceType::Processor),
+            AddressSpace::Other(_) => None,
+        };
+        matches!(space_type, Some(SpaceType::Processor | SpaceType::SpaceBase))
+    }
+
+    // Ghidra: varnode.cc:1791 VarnodeBank::overlapLoc
+    /// Project `VarnodeLocSet` into the exact-location subranges consumed by
+    /// `overlapLoc`. Every non-free bank member participates; member order
+    /// remains the location-set order.
+    fn addr_tied_location_ranges(fd: &Funcdata) -> Vec<AddrTiedLocRange> {
+        let mut ranges: Vec<AddrTiedLocRange> = Vec::new();
+        for loc_ref in &fd.vbank.loc_tree {
+            let member = loc_ref.0.clone();
+            let (space, offset, size, flags, eligible) = {
+                let vn = member.read().unwrap();
+                (vn.address_space, vn.loc.as_u64(), vn.size, vn.flags,
+                 !vn.is_free() && Self::is_addr_tied_merge_space(vn.address_space))
+            };
+            if !eligible {
                 continue;
             }
-            // Ghidra merge.cc:631-632: unifyAddress(startiter, bounds[max]) —
-            // snip any cover intersections BEFORE the forced merge, inserting
-            // COPY trims (recorded in copy_trims for process_copy_trims).
-            self.unify_address(fd, group);
-            // Forced merge: merge all varnodes in the group pairwise.
-            // Ghidra uses mergeRangeMust (merge.cc:301), which calls
-            // mergeTestMust(vn) per varnode (hasCover && !isImplied) then
-            // merge(high, false). Rugra gates with merge_test_must, then
-            // merge_force (cover already resolved by unify_address).
-            for i in 0..group.len() {
-                for j in i + 1..group.len() {
-                    let vn1_arc = group[i].clone();
-                    let vn2_arc = group[j].clone();
-
-                    // mergeTestMust gate (merge.cc:308,313): both must have
-                    // cover and not be implied, else skip (Ghidra throws;
-                    // Rugra logs and skips).
-                    let must_ok = {
-                        let v1 = vn1_arc.read().unwrap();
-                        let v2 = vn2_arc.read().unwrap();
-                        Self::merge_test_must(&v1) && Self::merge_test_must(&v2)
-                    };
-                    if !must_ok {
-                        continue;
-                    }
-                    let can_merge = {
-                        let v1 = vn1_arc.read().unwrap();
-                        let v2 = vn2_arc.read().unwrap();
-                        self.merge_test(&v1, &v2)
-                    };
-
-                    if can_merge {
-                        self.merge_force(vn1_arc, vn2_arc);
-                    }
+            if let Some(last) = ranges.last_mut() {
+                if last.space == space && last.offset == offset && last.size == size {
+                    last.members.push(member);
+                    continue;
                 }
             }
+            ranges.push(AddrTiedLocRange {
+                space,
+                offset,
+                size,
+                first_flags: flags,
+                members: vec![member],
+            });
         }
+        ranges
+    }
 
-        self.detach(fd);
+    // RUGRA-GLUE: inclusive maxOff arithmetic from VarnodeBank::overlapLoc
+    // (varnode.cc:1789/1808) on the Rust exact-location range projection.
+    fn range_last_offset(range: &AddrTiedLocRange) -> u64 {
+        range.offset.wrapping_add(range.size.wrapping_sub(1) as u64)
+    }
+
+    // RUGRA-GLUE: Rust Option adapter for Ghidra Varnode::getHigh(), whose
+    // mergeAddrTied caller runs after Funcdata::setHighLevel.
+    fn required_high(vn: &Arc<RwLock<Varnode>>) -> Result<Arc<RwLock<HighVariable>>> {
+        vn.read().unwrap().high.clone()
+            .ok_or_else(|| anyhow!("Requesting non-existent high-level"))
+    }
+
+    // Ghidra: merge.cc:301 Merge::mergeRangeMust
+    /// Merge one exact `(space, offset, size)` range in location-set order.
+    fn merge_range_must(&mut self, range: &AddrTiedLocRange) -> Result<()> {
+        let first = &range.members[0];
+        Self::merge_test_must(&first.read().unwrap())?;
+        let high = Self::required_high(first)?;
+        for member in range.members.iter().skip(1) {
+            let candidate = Self::required_high(member)?;
+            if Arc::ptr_eq(&high, &candidate) {
+                continue;
+            }
+            Self::merge_test_must(&member.read().unwrap())?;
+            if !self.merge_required_result(&high, &candidate)? {
+                return Err(anyhow!("Forced merge caused intersection"));
+            }
+        }
+        Ok(())
+    }
+
+    // RUGRA-GLUE: Result-bearing specialization of Merge::merge for the
+    // non-speculative mergeRangeMust caller. HighVariable::mergeInternal can
+    // throw after speculative merge classes have been formed; keep that exit
+    // ordered after the cached cover-intersection test, as in merge.cc:1569
+    // followed by variable.cc:647-650.
+    fn merge_required_result(
+        &mut self,
+        high1: &Arc<RwLock<HighVariable>>,
+        high2: &Arc<RwLock<HighVariable>>,
+    ) -> Result<bool> {
+        if Arc::ptr_eq(high1, high2) {
+            return Ok(true);
+        }
+        if self.type_test_cache.intersection(high1, high2) {
+            return Ok(false);
+        }
+        self.type_test_cache.move_intersect_tests(high1, high2);
+        let neither_grouped = high1.read().unwrap().piece.is_none()
+            && high2.read().unwrap().piece.is_none();
+        if neither_grouped {
+            // variable.cc:631-650 mergeInternal mutates the survivor before
+            // testing numMergeClasses and throwing. Preserve those partial
+            // mutations on the Result path instead of preflighting the error.
+            let inherited_symbol = {
+                let second = high2.read().unwrap();
+                if second.highflags & high_internal_flags::SYMBOLDIRTY == 0 {
+                    second.symbol.clone().map(|symbol| (symbol, second.symbol_offset))
+                } else {
+                    None
+                }
+            };
+            let invalid_merge_classes = {
+                let mut first = high1.write().unwrap();
+                first.highflags |= high_internal_flags::FLAGSDIRTY
+                    | high_internal_flags::NAMEREPDIRTY
+                    | high_internal_flags::TYPEDIRTY;
+                if let Some((symbol, symbol_offset)) = inherited_symbol {
+                    first.symbol = Some(symbol);
+                    first.symbol_offset = symbol_offset;
+                    first.highflags &= !high_internal_flags::SYMBOLDIRTY;
+                }
+                let second = high2.read().unwrap();
+                first.num_merge_classes != 1 || second.num_merge_classes != 1
+            };
+            if invalid_merge_classes {
+                return Err(anyhow!(
+                    "Making a non-speculative merge after speculative merges have occurred"
+                ));
+            }
+        }
+        Ok(self.merge_highs(high1, high2, false))
+    }
+
+    // RUGRA-GLUE: allocate VariablePiece with the Arc/Weak ownership used by
+    // Rust; Ghidra's VariablePiece ctor uses raw owning/back pointers.
+    fn attach_group_piece(high: &Arc<RwLock<HighVariable>>, offset: i32,
+                          group: &Arc<RwLock<VariableGroup>>) -> Result<Arc<RwLock<VariablePiece>>> {
+        let size = high.read().unwrap().instances.first()
+            .map(|vn| vn.read().unwrap().size as i32).unwrap_or(0);
+        let duplicate = group.read().unwrap().pieces.iter().any(|piece| {
+            let piece = piece.read().unwrap();
+            piece.group_offset == offset && piece.size == size
+        });
+        if duplicate {
+            return Err(anyhow!("Duplicate VariablePiece"));
+        }
+        let piece = Arc::new(RwLock::new(VariablePiece::new(
+            Arc::downgrade(high), offset, size, Some(group.clone()))));
+        group.write().unwrap().add_piece(piece.clone());
+        high.write().unwrap().piece = Some(piece.clone());
+        Ok(piece)
+    }
+
+    // Ghidra: variable.cc:571 HighVariable::groupWith
+    /// Arc-aware form of `HighVariable::groupWith`, including all four group
+    /// ownership cases and the `(offset,size)` duplicate exception.
+    fn group_with_arcs(high: &Arc<RwLock<HighVariable>>, offset: i32,
+                       other: &Arc<RwLock<HighVariable>>) -> Result<()> {
+        let high_piece = high.read().unwrap().piece.clone();
+        let other_piece = other.read().unwrap().piece.clone();
+        match (high_piece, other_piece) {
+            (None, None) => {
+                let group = Arc::new(RwLock::new(VariableGroup::new()));
+                let other_piece = Self::attach_group_piece(other, 0, &group)?;
+                Self::attach_group_piece(high, offset, &group)?;
+                VariablePiece::mark_intersection_dirty_read(&other_piece);
+            }
+            (None, Some(other_piece)) => {
+                let (other_offset, group) = {
+                    let piece = other_piece.read().unwrap();
+                    (piece.group_offset, piece.group.clone()
+                        .ok_or_else(|| anyhow!("VariablePiece has no VariableGroup"))?)
+                };
+                let other_clean = other.read().unwrap().highflags
+                    & high_internal_flags::INTERSECTDIRTY == 0;
+                if other_clean {
+                    VariablePiece::mark_intersection_dirty_read(&other_piece);
+                }
+                high.write().unwrap().highflags |= high_internal_flags::INTERSECTDIRTY
+                    | high_internal_flags::EXTENDCOVERDIRTY;
+                Self::attach_group_piece(high, offset + other_offset, &group)?;
+            }
+            (Some(high_piece), None) => {
+                let (high_offset, group) = {
+                    let piece = high_piece.read().unwrap();
+                    (piece.group_offset, piece.group.clone()
+                        .ok_or_else(|| anyhow!("VariablePiece has no VariableGroup"))?)
+                };
+                let mut other_offset = high_offset - offset;
+                if other_offset < 0 {
+                    group.write().unwrap().adjust_offsets(-other_offset);
+                    other_offset = 0;
+                }
+                let high_clean = high.read().unwrap().highflags
+                    & high_internal_flags::INTERSECTDIRTY == 0;
+                if high_clean {
+                    VariablePiece::mark_intersection_dirty_read(&high_piece);
+                }
+                other.write().unwrap().highflags |= high_internal_flags::INTERSECTDIRTY
+                    | high_internal_flags::EXTENDCOVERDIRTY;
+                Self::attach_group_piece(other, other_offset, &group)?;
+            }
+            (Some(high_piece), Some(other_piece)) => {
+                let (high_offset, high_group) = {
+                    let piece = high_piece.read().unwrap();
+                    (piece.group_offset, piece.group.clone()
+                        .ok_or_else(|| anyhow!("VariablePiece has no VariableGroup"))?)
+                };
+                let (other_offset, other_group) = {
+                    let piece = other_piece.read().unwrap();
+                    (piece.group_offset, piece.group.clone()
+                        .ok_or_else(|| anyhow!("VariablePiece has no VariableGroup"))?)
+                };
+                let offset_diff = other_offset + offset - high_offset;
+                if offset_diff != 0 {
+                    high_group.write().unwrap().adjust_offsets(offset_diff);
+                }
+                if Arc::ptr_eq(&high_group, &other_group) {
+                    VariablePiece::mark_intersection_dirty_read(&other_piece);
+                    return Ok(());
+                }
+                let moving = high_group.read().unwrap().pieces.clone();
+                let mut existing_keys: std::collections::BTreeSet<(i32, i32)> = other_group
+                    .read().unwrap().pieces.iter().map(|piece| {
+                        let piece = piece.read().unwrap();
+                        (piece.group_offset, piece.size)
+                    }).collect();
+                for piece in moving {
+                    let key = {
+                        let piece = piece.read().unwrap();
+                        (piece.group_offset, piece.size)
+                    };
+                    // variable.cc:179-182 transferGroup removes from the
+                    // source and rewires the piece's group pointer before
+                    // addPiece detects a duplicate and throws. Preserve this
+                    // partial mutation and the transfer iteration order.
+                    high_group.write().unwrap().remove_piece(&piece);
+                    piece.write().unwrap().group = Some(other_group.clone());
+                    if existing_keys.contains(&key) {
+                        return Err(anyhow!("Duplicate VariablePiece"));
+                    }
+                    other_group.write().unwrap().add_piece(piece);
+                    existing_keys.insert(key);
+                }
+                VariablePiece::mark_intersection_dirty_read(&other_piece);
+            }
+        }
+        Ok(())
     }
 
     // Ghidra: merge.hh:83 Merge::ensureAllHaveHigh
@@ -1415,11 +1679,13 @@ impl Merge {
 
     // Ghidra: merge.cc:241 Merge::mergeTestMust
     /// Test if a Varnode that MUST be merged CAN be merged. Faithful to
-    /// `Merge::mergeTestMust` (merge.cc:241-247). Returns true if the Varnode
-    /// has a cover and is not implied (eligible for forced merge); false
-    /// otherwise. Ghidra throws on failure; Rugra returns false (caller logs).
-    fn merge_test_must(vn: &Varnode) -> bool {
-        vn.has_cover() && !vn.is_implied()
+    /// `Merge::mergeTestMust` (merge.cc:241-247). Ghidra throws rather than
+    /// silently omitting an impossible forced merge.
+    fn merge_test_must(vn: &Varnode) -> Result<()> {
+        if vn.has_cover() && !vn.is_implied() {
+            return Ok(());
+        }
+        Err(anyhow!("Cannot force merge of range"))
     }
 
     // Ghidra: merge.cc:1657 Merge::mergeTest

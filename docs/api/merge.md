@@ -60,7 +60,8 @@ and free Varnodes without a HighVariable name, forcing printc into the
 
 Perform the full merging + naming pipeline. Phase order:
 1. `live_varnode_set` → cache authoritative live varnodes
-2. `merge_addr_tied` → group same-loc varnodes
+2. `merge_addr_tied` → force exact-location runs inside maximal overlapping
+   processor/spacebase clusters and form offset-aware `VariableGroup`s
 3. `ensure_all_have_high` → singleton HighVariables for EVERY Varnode in
    `loc_tree` lacking one (faithful to `Funcdata::setHighLevel`,
    funcdata_varnode.cc:595 — no live_set filter)
@@ -109,11 +110,64 @@ authoritative check in ActionMarkImplied::checkImpliedCover.
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 
-Merge varnodes that are tied to the same address+size.
+Locked `Merge::mergeAddrTied`（`merge.cc:609-648`）入口。它按
+`VarnodeLocSet` 的 location 顺序扫描，整空间只接受
+`IPTR_PROCESSOR`/`IPTR_SPACEBASE`；每个地址段用
+`VarnodeBank::overlapLoc`（`varnode.cc:1791-1820`）形成最大传递重叠簇，
+并且每个精确 `(space,offset,size)` run 只读取第一个成员的 raw flags。
+簇含 `ADDRTIED` 时先对整个重叠簇 `unifyAddress`，再按
+input → written `SeqNum` 顺序以首个 High 为 survivor 强制合并每个精确
+run，最后把不同 offset/size 的 High 以相对首地址的 offset 放入同一
+`VariableGroup`。这不是简单的 `(Address,size)` 哈希分组。
 
-This is the primary merge pass: varnodes at the same location
-and with the same size are different SSA versions of the same
-logical variable and should share a HighVariable.
+`try_merge_addr_tied` 是 Result-bearing Rust 内核，保留当前覆盖路径上 locked
+`mergeRangeMust`/`groupWith` 的错误文本，包括
+`Cannot force merge of range`、`Forced merge caused intersection`、
+`Duplicate VariablePiece` 和 speculative merge-class 错误。现有
+`merge_addr_tied -> ()` Action 边界只能把 Err 转成 panic，异常类别仍与
+C++ `LowlevelError` 不同，因此 production 边界明确为 **MISMATCH**，不得用
+相同文本冒充完整异常通道 MATCH。
+
+地址空间仍有一个表示层缺口：`Ram/Register/Overlay` 可确定为 PROCESSOR，
+`Stack` 可确定为 SPACEBASE，locked `OtherSpace::INDEX == 1` 可确定为
+PROCESSOR；`AddressSpace::Other(non-1)` 已丢失真实 `AddrSpace::getType()`，
+实现选择 fail-closed。自定义 processor 或 spacebase（locked
+`translate.cc:47-60` 允许任意 index 的多个 SpacebaseSpace）因而是源码已证明的
+**MISMATCH**。
+
+`tests/oracle/merge_addrtied_gates_1204.*` 使用真实双侧
+`Funcdata/VarnodeBank/PcodeOp/HighVariable/VariablePiece/VariableGroup`
+生产结构和 production `mergeAddrTied` 入口，投影 raw flags、输入/写入身份、
+最大重叠簇、High 成员顺序、piece offset/size、group size/身份及 canonical
+projected 成员、异常文本。C++ observer 从 tracked nodes 重建成员后按
+`(offset,size)` 排序，而 Rust observer 读取实际 `group.pieces`；0/4/10 又恰按
+升序插入，因此相等只证明该 projected order，不证明真实容器 comparator/迭代
+顺序。门禁只决定性覆盖 register/ram/locked OTHER@index1/stack 进入，以及
+unique/join 跳过；Overlay、Iop/Fspec、Const 等其余 variant 仍 **UNTESTED**。
+其余覆盖包括首成员
+ADDRTIED gate、mixed input/written 实例及其当前观察顺序、传递重叠及 0/4/10
+mixed-size grouping、implied forced error。由于 input 恰在 written 之前创建，
+且 written 的 `SeqNum` 与创建顺序同向，该 fixture 尚不能区分真正的
+input→written→SeqNum comparator 与 creation-index 排序，故这一排序规则仍为
+**UNTESTED**。此外未覆盖 duplicate piece、forced intersection、
+neither-grouped speculative merge-class error 及 pre-existing piece group。
+若已有一侧 grouped，旧 `merge_highs` 路径仍会在
+`numMergeClasses != 1` 时记录后继续，而 locked Ghidra 会在 dirty
+flags/symbol 与 piece-transfer 突变后抛 `LowlevelError`；这是源码已证明的
+**MISMATCH**，并非单纯 fixture 缺口。若两侧都 grouped，旧路径仍是
+debug-assert/release-false，同属 required-merge closure **MISMATCH**。
+implied error 的 MATCH 也只限投影出的 payload、Varnode/High/group/topology；
+High cover/type/nameRep/symbolOffset、Varnode mergegroup/cover/type/addlflags、
+piece intersection/cover、group symbolOffset、Merge cache/copyTrims 与精确 op 边
+仍未形成全状态闭包，记为 **UNTESTED**。该 error case 也在任何成功 exact-run
+merge 之前即遇 IMPLIED，因而没有证明先发生部分突变后再抛错的 traversal timing。
+传递重叠 case 证明了扩展与 `next.offset == maxOff + 1` 排除，但没有
+`next.offset == maxOff` 输入，故 inclusive `<=` 边界仍 **UNTESTED**。
+另一个刻意不合成的状态是 `opUninsert` 后的
+dead-op/non-free written output：locked `mergeAddrTied` 本身确实没有 alive
+过滤，但 `BlockVarnode::set` 会解引用已清空的 defining-op parent，说明它不在
+该 Action 的合法调用前提内；Rust 同样不应在 merge 层自创 live_set 门。
+因此只有列出的投影可判 MATCH，函数整体保持 MISMATCH/L2。
 
 ### `pub fn merge_test(&self, v1: &Varnode, v2: &Varnode) -> bool`
 
@@ -209,12 +263,14 @@ INDIRECT 本身（:871-877）并重合并，失败打 `[MERGE]` stderr 日志（
 ### `merge_highs` 的 (Some,Some) piece 臂（私有）
 
 对齐说明：oracle variable.cc:699-711 对 speculative 抛 LowlevelError（经
-`Merge::merge` 调用者不可达——mergeTestAdjacent merge.cc:208-209 拒绝双
-piece 候选；buildDominantCopy 直调传新分配、无 piece 的 unique），非
-speculative 走 `piece->mergeGroups` + 成对 `mergeInternal` +
-`markIntersectionDirty`。Rugra 无任何 piece 生产路径（`group_partials` 为
-忠实 no-op），该臂以 `debug_assert!` 钉住两条 oracle 契约，release 保留
-保守跳过（return false）。
+`Merge::merge` 的常见 speculative 调用由 mergeTestAdjacent
+（merge.cc:208-209）拒绝双 piece 候选；buildDominantCopy 直调传新分配、
+无 piece 的 unique。非 speculative 则应走 `piece->mergeGroups` + 成对
+`mergeInternal` + `markIntersectionDirty`。`merge_addr_tied` 现在会真实生产
+piece/group，因此旧注释所称“全局不可达”已不成立：后续 required merge
+若同时收到两个 grouped High，当前 `debug_assert!`/release `false` 仍与
+oracle 不同，作为独立调用闭包缺口保持 **MISMATCH**，不在本切片窄投影的
+MATCH 范围内。
 
 ### `wire_unique_high`（私有，RUGRA-GLUE）
 

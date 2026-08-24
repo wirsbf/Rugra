@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "task_id": "MERGE-ADDRTIED-GATES-0001",
+  "function": "ghidra::Merge::mergeAddrTied(void)",
+  "overall_status": "MISMATCH",
+  "status_scope": "Only the explicitly observed 8-line projection is MATCH; the mapped function and its production caller closure remain MISMATCH.",
+  "oracle": {
+    "product": "Ghidra",
+    "version": "12.0.4",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "source_blobs": {
+      "merge.cc": "c4168200555766c989af1e995e8e8723e9a2c492",
+      "merge.hh": "4ff5c248020e96c23701301f2f049e56e2273924",
+      "space.cc": "dbaa2e775f32e63abb60c1c0b31457967ee52db7",
+      "space.hh": "bc88fcd6c589d585490a395a69ec4755a37b0610",
+      "variable.cc": "36ff25468cb20f227f1ebde57c2bc8fbe4e8d078",
+      "variable.hh": "5e833b633aa81b169a27273aba587906704e5a91",
+      "varnode.cc": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
+      "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2"
+    }
+  },
+  "rugra": {
+    "base_commit": "8c223a9623d6833319564776c35c5d4c50b17b95",
+    "base_tree": "2ae9d23f127c7be597f793218e5fdee1eb4d0db2",
+    "overlay": [
+      "src/merge.rs"
+    ],
+    "base_blobs": {
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "README.md": "97198a893828d15c44f12e66960652b96c3e1b87",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+      "src/merge.rs": "3c69834d53507811ff1d34c5fdd40086c65f3ab4"
+    }
+  },
+  "architecture": {
+    "name": "FixtureArchitecture",
+    "endianness": "little",
+    "address_size_bytes": 8,
+    "addressable_unit_bytes": 1,
+    "default_code_space": "ram@index3",
+    "spaces": [
+      "const@index0:IPTR_CONSTANT",
+      "OTHER@index1:IPTR_PROCESSOR",
+      "unique@index2:IPTR_INTERNAL",
+      "ram@index3:IPTR_PROCESSOR",
+      "register@index4:IPTR_PROCESSOR",
+      "stack@index5:IPTR_SPACEBASE",
+      "join@index6:IPTR_JOIN",
+      "iop@index7:IPTR_IOP"
+    ],
+    "translator": "FixtureTranslate with no decoded instructions or named registers",
+    "rust_space_projection": "AddressSpace variants use the same fixed indices; Other(1) is the locked OtherSpace projection"
+  },
+  "compiler_spec": {
+    "prototype_model": "fixture",
+    "extrapop": 0,
+    "input": [],
+    "output": [],
+    "scope": "empty ScopeInternal under Database global scope",
+    "core_types": [
+      "xunknown1",
+      "xunknown2",
+      "xunknown4",
+      "xunknown8"
+    ]
+  },
+  "analysis_options": {
+    "high_level_assignment": "Funcdata::setHighLevel / Funcdata::set_high_level once before observation",
+    "ghidra_entry": "fd.getMerge().mergeAddrTied()",
+    "rugra_entry": "Merge::merge_addr_tied(&mut fd) production () entry, observed through catch_unwind",
+    "normalization": "Temporary High/VariableGroup identities are canonicalized to the lexicographically smallest tracked-node label. The C++ observer reconstructs tracked group members and sorts them by (offset,size), while the Rust observer emits the actual group.pieces iteration; because this fixture inserts 0/4/10 in ascending order, equality proves only the projected order, not the native container comparator/order. Rust panic payload and C++ LowlevelError::explain are projected as error text, while the channel-kind difference remains a declared MISMATCH.",
+    "random_seed": "none",
+    "error_injection": "none; implied Varnode is a real production flag state",
+    "stdout_locale": "C"
+  },
+  "input_manifest": {
+    "algorithm": "sha256(canonical JSON of descriptor; sorted keys; UTF-8; separators comma/colon)",
+    "sha256": "a368fd6dad0254470c59bcf0cbffd9deb306fac1b722ee644c76deb9fe222bba",
+    "descriptor": {
+      "common": {
+        "block": "one real BlockBasic index 0",
+        "op": "each written node is the output of a real CPUI_COPY in creation/SeqNum order",
+        "op_input": "same-size constant whose value is the 1-based written-op ordinal",
+        "preparation": "setHighLevel after the complete graph is built",
+        "projection": [
+          "raw Varnode flags and input/written/implied identity",
+          "space index and runtime spacetype projection",
+          "bank Varnode plus alive/dead op counts",
+          "HighVariable identity, instance order, highflags, numMergeClasses, symbol presence",
+          "VariablePiece offset/size, VariableGroup size/canonical identity/member order",
+          "exception payload and all pairwise High identity relations"
+        ]
+      },
+      "cases": [
+        {
+          "name": "space_type_gate",
+          "function_base": "0x8100",
+          "nodes_in_creation_order": [
+            "R0 register 0x20 size4 ADDRTIED written",
+            "R1 register 0x20 size4 written",
+            "M0 ram 0x120 size4 ADDRTIED written",
+            "M1 ram 0x120 size4 written",
+            "O0 OTHER 0x220 size4 ADDRTIED written",
+            "O1 OTHER 0x220 size4 written",
+            "S0 stack 0x320 size4 ADDRTIED written",
+            "S1 stack 0x320 size4 written",
+            "U0 unique 0x420 size4 ADDRTIED written",
+            "U1 unique 0x420 size4 written",
+            "J0 join 0x520 size4 ADDRTIED written",
+            "J1 join 0x520 size4 written"
+          ]
+        },
+        {
+          "name": "addrtied_first_member_gate",
+          "function_base": "0x8200",
+          "nodes_in_creation_order": [
+            "N0 register 0x40 size4 written",
+            "N1 register 0x40 size4 written",
+            "L0 register 0x50 size4 written",
+            "L1 register 0x50 size4 ADDRTIED written"
+          ],
+          "decisive_semantics": "Locked varnode.cc:1798 reads flags from the first member and :1800 jumps to endLoc for that exact run; :1813 ORs only the next run first member and :1815 jumps again. Thus late-only L1 ADDRTIED does not trigger a merge."
+        },
+        {
+          "name": "transitive_overlap_group",
+          "function_base": "0x8300",
+          "nodes_in_creation_order": [
+            "AI register 0x100 size8 ADDRTIED input",
+            "A0 register 0x100 size8 written",
+            "A1 register 0x100 size8 written",
+            "B0 register 0x104 size8 written",
+            "B1 register 0x104 size8 written",
+            "C0 register 0x10a size2 written",
+            "C1 register 0x10a size2 written",
+            "D0 register 0x10c size2 written",
+            "D1 register 0x10c size2 written"
+          ],
+          "expected_cluster": "A[0x100,0x107] overlaps B[0x104,0x10b], extending max through C[0x10a,0x10b]; D starts at 0x10c and is excluded",
+          "expected_group": "offset/size pieces 0/8, 4/8, 10/2; group size 12; AI is exact-run survivor with order AI,A0,A1"
+        },
+        {
+          "name": "forced_implied_error",
+          "function_base": "0x8400",
+          "nodes_in_creation_order": [
+            "I0 register 0x180 size4 ADDRTIED written",
+            "I1 register 0x180 size4 IMPLIED written"
+          ],
+          "expected_payload": "Cannot force merge of range"
+        }
+      ]
+    }
+  },
+  "coverage": {
+    "covered_projection": "MATCH",
+    "listed_space_type_gates_register_ram_other1_stack_unique_join": "MATCH",
+    "remaining_space_variants_overlay_iop_fspec_const": "UNTESTED",
+    "first_member_addrtied_gate": "MATCH",
+    "mixed_input_written_presence_and_observed_order": "MATCH",
+    "input_before_written_comparator_precedence": "UNTESTED",
+    "written_seqnum_vs_creation_order": "UNTESTED",
+    "transitive_overlap_and_exclusive_next_start_boundary": "MATCH",
+    "inclusive_next_start_at_current_max_boundary": "UNTESTED",
+    "mixed_size_group_offsets_size_and_projected_order": "MATCH",
+    "variable_group_piece_set_iteration_order": "UNTESTED",
+    "implied_error_payload_and_projected_prethrow_state_without_prior_merge": "MATCH",
+    "merge_range_partial_mutation_and_traversal_timing": "UNTESTED",
+    "implied_error_full_state_closure": "UNTESTED",
+    "production_exception_channel": "MISMATCH",
+    "custom_processor_or_spacebase_other_non1": "MISMATCH_SOURCE_PROVEN",
+    "preexisting_piece_group_cases": "UNTESTED",
+    "forced_cover_intersection": "UNTESTED",
+    "neither_grouped_speculative_merge_class_error": "UNTESTED",
+    "grouped_speculative_merge_class_error": "MISMATCH_SOURCE_PROVEN",
+    "dead_written_unparented_bank_state": "UNTESTED_CALLER_PRECONDITION"
+  },
+  "residuals": [
+    {
+      "id": "MERGE-ADDRTIED-ERROR-CHANNEL-0001",
+      "status": "MISMATCH",
+      "detail": "Rugra's public production entry returns () and adapts the Result-bearing core to panic; locked Ghidra throws LowlevelError. Identical payload text is not identical exception-channel behavior."
+    },
+    {
+      "id": "MERGE-ADDRSPACE-RUNTIME-TYPE-0001",
+      "status": "MISMATCH_SOURCE_PROVEN",
+      "detail": "AddressSpace::Other(non-1) has lost AddrSpace::getType. The implementation fails closed, so a custom IPTR_PROCESSOR or IPTR_SPACEBASE space represented by Other(non-1) is skipped. Locked translate.cc:47-60 permits multiple SpacebaseSpace instances with arbitrary indices, so the SPACEBASE half is not limited to the fixed stack projection."
+    },
+    {
+      "id": "MERGE-GROUPED-REQUIRED-CLOSURE-0001",
+      "status": "MISMATCH",
+      "detail": "mergeAddrTied now creates real pieces. A later required merge with two grouped HighVariables still hits the pre-existing debug_assert/release-false arm instead of variable.cc:699-711 mergeGroups behavior. With exactly one side grouped, merge_highs reaches variable.rs merge_internal, whose existing numMergeClasses branch logs and continues instead of throwing after the locked dirty-flag/symbol and piece-transfer mutations at variable.cc:631-650. Both grouped closure and one-group merge-class error semantics are source-proven mismatches."
+    },
+    {
+      "id": "MERGE-ADDRTIED-ERROR-BRANCHES-0001",
+      "status": "UNTESTED",
+      "detail": "Forced cover intersection, pre-existing group ownership cases, duplicate-piece partial mutation, and the neither-grouped speculative merge-class branch lack bilateral production fixtures. The Result core contains explicit handling but no MATCH claim is made; grouped speculative merge classes are separately recorded as a source-proven mismatch."
+    },
+    {
+      "id": "MERGE-ADDRTIED-ORDER-DISAMBIGUATION-0001",
+      "status": "UNTESTED",
+      "detail": "The transitive fixture observes an input followed by written instances, but creates them in that same order and assigns written SeqNums in creation order. It therefore does not distinguish VarnodeCompareLocDef input precedence or written SeqNum ordering from creation-index ordering."
+    },
+    {
+      "id": "MERGE-ADDRTIED-PROJECTION-CLOSURE-0001",
+      "status": "UNTESTED",
+      "detail": "The C++ observer canonicalizes group identity and reconstructs/sorts tracked pieces by (offset,size), so the bilateral 0/4/10 output proves offsets, size, membership, and that projected order but not native VariableGroup pieceSet comparator/iteration order. The error case begins with only I0/I1 and encounters IMPLIED before any successful exact-run merge, so mergeRangeMust partial-mutation/traversal timing after an earlier merge is untested. Its projection covers the emitted payload plus observed Varnode/High/group/topology fields, but does not close High cover/type/nameRep/symbolOffset, Varnode mergegroup/cover/type/addlflags, piece intersection/cover, group symbolOffset, Merge caches/copyTrims, or exact op-edge mutation."
+    },
+    {
+      "id": "MERGE-ADDRTIED-BOUNDARY-SPACE-COVERAGE-0001",
+      "status": "UNTESTED",
+      "detail": "The transitive case proves overlap extension and exclusion when the next run begins one byte after the inclusive max, but has no run beginning exactly at the current max, so <= versus < remains unseparated. Space gating is bilateral only for register, ram, locked OTHER@index1, stack, unique, and join; Overlay, Iop/Fspec, and Const variants are not claimed."
+    },
+    {
+      "id": "MERGE-ADDRTIED-CALLER-CLOSURE-0001",
+      "status": "MISMATCH",
+      "detail": "The surrounding Action chain still constructs local Merge values and cannot propagate Result/LowlevelError through the production caller boundary under this slice's write lease."
+    },
+    {
+      "id": "MERGE-ADDRTIED-DEAD-WRITTEN-PRECONDITION-0001",
+      "status": "UNTESTED_CALLER_PRECONDITION",
+      "detail": "Locked mergeAddrTied has no alive/live_set gate, but opUninsert leaves a written output whose defining op has null parent; unifyAddress immediately feeds it to BlockVarnode::set, which dereferences getParent. The legal merge-stage fixture therefore does not synthesize this unparented intermediate state. The Rust projection deliberately does not add a merge-layer live_set filter."
+    }
+  ],
+  "comparand": {
+    "cpp_fixture_sha256": "eed61b32786569585301cac981f0dc2013a8d313eaa8ea6dcf2df2247d1c1e5d",
+    "rust_fixture_sha256": "7307b5fa40ef44a4ddc478a8840563780552c138b030654673e29da221decbb5",
+    "merge_rs_sha256": "524cee88deef602c38e687929d54a41e810e1030a0a0db3e19645b55bf47105c",
+    "runner_sha256": "2d3b2f056190c4e5bc0905cf996f4e20846156bab924620c323de45deb25ad17",
+    "expected_ghidra_stdout_sha256": "de554f5d39ea9b44c17413a1e83187a60ed5aa24f0a3dcafd337151742a31d38",
+    "expected_rugra_stdout_sha256": "de554f5d39ea9b44c17413a1e83187a60ed5aa24f0a3dcafd337151742a31d38",
+    "expected_lines_per_side": 8
+  },
+  "toolchain": {
+    "paths": {
+      "ar": "/usr/bin/ar",
+      "cargo": "/usr/bin/cargo",
+      "cc": "/usr/bin/gcc",
+      "cxx": "/usr/bin/g++",
+      "git": "/usr/bin/git",
+      "make": "/usr/bin/make",
+      "python": "/usr/bin/python3",
+      "rustc": "/usr/bin/rustc"
+    },
+    "versions": {
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)"
+    },
+    "ghidra_build": "make -j4 CXX='/usr/bin/g++ -std=c++11' EXTRA= libdecomp.a with home-backed TMPDIR",
+    "cpp_fixture": "g++ -std=c++11 -O2 -Wall -Wno-sign-compare plus locked libdecomp.a and -lz with home-backed TMPDIR",
+    "rugra_build": "CARGO_INCREMENTAL=0 cargo build --offline --locked --quiet --lib under /tmp/rugra-cargo-build.lock with a home-backed isolated target and TMPDIR",
+    "rust_fixture": "rustc --edition=2021 -O linked to isolated librugra.rlib and librugra_sleigh.a with home-backed TMPDIR"
+  }
+}
