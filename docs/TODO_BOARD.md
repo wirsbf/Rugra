@@ -12,7 +12,8 @@
 
 | ID | P | 状态 | owner | 精确 write-set | 备注 / 证据 |
 |---|---|---|---|---|---|
-| `TYPEOP-LOCALTYPE-DISPATCH-0001`(D1) | P0 | REVIEW（候选 `8b8b541`+`9c79d96`；R3 复核中） | a1@wt-typeop-localtype-d1 + R3 | `src/typeop.rs`, `docs/api/typeop.md`, `tests/oracle/typeop_local_type_1204.*`, runner | 审 WIP 发现并修 3 处缺陷（fspec 空间门/bootstrap/printRaw）；双侧 167 records 行为 13/13 字节一致，唯二表示行差异绑 `TYPEOP-FSPEC-SPACE-0001`（a8 在修）；D2 排 A2 释放 coreaction 后；typeop.rs 租约已释放；2026-08-25 |
+| `TYPEOP-LOCALTYPE-DISPATCH-0001`(D1) | P0 | INTEGRATED（R3 独立 APPROVE 四类语义 4/4；候选 `8b8b541`+`9c79d96`→main `e3e0053`+`e24cdf1`） | a1@wt-typeop-localtype-d1 + R3 + root | `src/typeop.rs`, `docs/api/typeop.md`, `tests/oracle/typeop_local_type_1204.*`, runner | 双侧 167 records 行为 13/13 字节一致；唯二表示行差异绑 `TYPEOP-FSPEC-SPACE-0001`（a8 在修）；条目整体维持 MISMATCH；D2 排 A2 释放 coreaction 后；报告=/tmp/rugra-reports/R3-D1-REVIEW.md；2026-08-25 |
+| `TYPEOP-LOCALBASE-DEFAULTS-0001` | P1 | BLOCKED（并入簇C/D2 链） | 待 D2 | `src/typeop.rs`（trait 默认 `get_input_local→None` 应抽共享 base 查找对齐 Ghidra 基类 getBase；`TypeOpCall::get_flags` 返回 0 vs typeop.cc:663） | R3 复核发现的两个预存缺口；后续 opcode 移植复用；2026-08-25 |
 | `TYPEFACTORY-EXACTPIECE-CALLERS-0001` | P0 | IN_PROGRESS | a2@wt-myfwrite-splitdatatype | `src/{variable,database,funcdata,ruleaction}.rs` + coreaction 单点, docs, `tests/oracle/exactpiece_callers_1204.*`, runner | 同上；2026-08-24 |
 | `JUMPTABLE-THUNK-CLASSIFY-0001` | P0 | REVIEW（候选 `cb9e054`） | a3@wt-jt-thunk-classify + R2 复核中 | `src/jumptable.rs`, docs, fixture/runner | rework 5 提交（runner/metadata only，双侧零差异故 src 零改动）；24-case 双侧字节一致（stdout sha `c4cc2b35…`，10 双侧组 MATCH、3 审计组 MISMATCH 诚实保留，overall=MISMATCH）；5 条前任 REJECT 理由全闭合；证据 bundle=`/home/wirs/.cache/a3-jtthunk-tmp/jt-thunk-classify-evidence-cb9e0542…/`；残差绑 `JUMPTABLE-PIPELINE/SORT-TOOLCHAIN/EMULFN-0001`；2026-08-24 |
 | `ACTION-EXECUTOR-BREAKPOOL-0001` | P0 | REWORK_IN_PROGRESS | a4@wt-action-break-pool | `src/action.rs`, docs, fixture/runner | Group direct-apply 修正 + 完整重跑；2026-08-24 |
