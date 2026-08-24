@@ -1,7 +1,34 @@
 # `tracedag.rs` API Reference
 
-**状态**: 骨架（已禁用）
+**状态**: 已重写核对（2026-08-24 BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001，per-loop 驱动）
 **源代码路径**: `src/tracedag.rs`
+
+## 2026-08-24 重写（BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001）
+
+修复 5 处对 oracle 的决定性偏差（全部是 likely-goto 过度标记/错误选择的根因）：
+
+1. **select_bad_edge siblingedge 方向反**：cc:621 "A bigger sibling edge is less likely
+   to be the bad edge"——max 扫描保留 **更小** siblingedge（旧代码保留更大的，破坏
+   if/else 钻石合并边 → CBRANCH 孤儿化 → 裸条件语句）。
+2. **BadEdgeScore::distance 简化**：改用 markPath + BranchPoint::distance 公共祖先
+   步数（cc:509-536；旧 `|depth_a - depth_b|`）。
+3. **openBranch 无出边分支把 parent 移出 active**：terminal trace 必须**留在
+   active**（cc:670 "Do NOT remove from active list"、cc:844-851 返回
+   parent->activeiter），否则其 BranchPoint 永不退休 → 卡死 → 连环选 bad edge。
+4. **removeTrace 删除路径不 shift pathout**：cc:673-686 删除路径要把上方 trace 的
+   pathout 及其 derived BranchPoint 的 pathout 下移一格（否则 pathout!=0 的兄弟
+   永不触发 checkRetirement）。Rust 侧以 `deleted` tombstone + paths 数组真实删除实现。
+5. **push_branches 迭代位置**：恢复 retireBranch/openBranch 返回位置的续跑语义
+   （cc:1000-1011；活跃列表用 slot 数组模拟 std::list：remove 挖洞不回填、push
+   追加、迭代跳洞）。另删除自创 `graph.get_size() < 10` 跳过。
+
+新增 per-loop API：`TraceDAG::new/add_root/set_finish_block/initialize/push_branches`
+全部 pub，`update_loop_body`（blockaction.rs）按 cc:1227-1245 直接构造（root=looptop
+单根、finish=loopbottom、先 setExitMarks 后 trace、emitLikelyEdges 追加、后
+clearExitMarks）。`generate_likely_gotos` 仅保留全图 DAG 分支（cc:1233-1239）。
+
+验证：tests/oracle/blockstruct_goto_cascade_1204 双侧 fixture（6 case 全部终止、
+case 1-5 零伪 goto 标记、goto 目标/gotoout 位与 oracle 一致）。
 
 ## 模块说明
 

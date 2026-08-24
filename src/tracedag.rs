@@ -8,6 +8,26 @@
 //! active traces from the function roots, pushes them forward, and when a
 //! node can't be opened (not all in-edges traced), selects the worst edge
 //! (via BadEdgeScore) to mark as an unstructured goto.
+//!
+//! BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001 rewrite: the previous port deviated
+//! from the oracle at five decisive points, all of which inflated the number
+//! of likely-goto edges (the parseconfig.constprop.0 over-marking cascade):
+//!   1. selectBadEdge siblingedge comparison was INVERTED (blockaction.cc:621
+//!      "A bigger sibling edge is less likely to be the bad edge" — the max
+//!      scan must keep the SMALLER siblingedge; the old code kept the bigger).
+//!   2. BadEdgeScore::distance used |depth_a - depth_b| instead of the
+//!      BranchPoint::distance common-ancestor walk (blockaction.cc:509-536).
+//!   3. openBranch's no-paths case removed the parent trace from the active
+//!      list; Ghidra keeps terminal traces ACTIVE until their BranchPoint
+//!      retires ("Do NOT remove from active list", blockaction.cc:670, and
+//!      openBranch cc:844-851 returns parent->activeiter).
+//!   4. removeTrace's remove-path did not delete the trace from the parent's
+//!      paths vector nor shift the pathouts above it (cc:673-686), so
+//!      checkRetirement's `pathout != 0` / `!isActive()` guards were blocked
+//!      forever → the trace got stuck → extra selectBadEdge rounds.
+//!   5. push_branches always restarted at position 0; Ghidra resumes at the
+//!      iterator returned by retireBranch/openBranch (cc:1000-1011).
+//! Also removed the invented `graph.get_size() < 10` skip (no oracle gate).
 
 use crate::block::BlockGraph;
 use std::sync::Arc;
@@ -21,38 +41,66 @@ pub struct FloatingEdge {
     pub bottom: i32,
 }
 
-/// A branch point in the trace DAG. Corresponds to a FlowBlock node that has
-/// multiple outgoing edges being traced.
+// Ghidra: blockaction.cc:555 TraceDAG::BranchPoint
+/// A node in the control-flow graph with multiple outgoing edges in the DAG.
+/// `top_block_idx == -1` encodes Ghidra's virtual root BranchPoint
+/// (`top == (FlowBlock *)0`).
 struct BranchPoint {
-    /// Parent BranchPoint index (None for root).
+    /// Parent BranchPoint index (None for the virtual root).
     parent: Option<usize>,
-    /// Depth from root.
+    /// Depth of BranchPoints from the root.
     depth: usize,
-    /// Index of the path out of the parent BranchPoint that leads to this.
+    /// Index (of the out edge from the parent) of the path along which this lies.
     pathout: usize,
-    /// Mark flag for path-finding (markPath/distance).
+    /// Toggle-able mark used by markPath/distance (blockaction.cc:509-517).
     ismark: bool,
-    /// The FlowBlock (by graph index) at this branch point.
+    /// The FlowBlock (graph index) at this branch point (-1 = virtual root).
     top_block_idx: i32,
-    /// Indices into BlockTrace vec for paths out of this branch point.
+    /// BlockTrace indices for each path out of this BranchPoint.
     paths: Vec<usize>,
 }
 
-/// A single traced path out of a BranchPoint.
+// Ghidra: blockaction.cc:586 TraceDAG::BlockTrace
+/// A trace of a single path out of a BranchPoint.
 struct BlockTrace {
-    /// Index of parent BranchPoint.
+    /// Parent BranchPoint for which this is a path.
     top_bp: usize,
-    /// Path index within the BranchPoint.
+    /// Index of the out-edge path (relative to the parent BranchPoint).
     pathout: usize,
-    /// Current FlowBlock being traced (graph index).
+    /// Current node being traversed (-1 = null, e.g. virtual root bottom).
     bottom_block_idx: i32,
-    /// Next FlowBlock to push into (graph index).
+    /// Next node this trace will try to push into (-1 = null).
     dest_block_idx: i32,
-    /// Number of edges lumped together.
+    /// If >1, the edge to dest is "virtual", lumping multiple edges.
     edgelump: i32,
-    /// Flags: f_active, f_terminal.
+    /// f_active (blockaction.hh:125): this trace is active.
     active: bool,
+    /// f_terminal: all paths from this point exit.
     terminal: bool,
+    /// BranchPoint this trace derived (opened into), if any
+    /// (blockaction.hh:135 derivedbp; needed by removeTrace's pathout shift).
+    derived_bp: Option<usize>,
+    /// Tombstone for traces deleted by remove_trace (Ghidra `delete trace`).
+    deleted: bool,
+    /// Position in `active_slots` (Ghidra `activeiter`). Invalid when !active.
+    slot: usize,
+}
+
+// Ghidra: blockaction.hh:146 TraceDAG::BadEdgeScore
+/// Record for scoring a BlockTrace for suitability as an unstructured branch
+/// (all fields owned, mirroring the value-style C++ struct).
+struct BadEdgeScore {
+    /// Putative exit block for the BlockTrace (cc:148 exitproto).
+    exitproto: i32,
+    /// The active BlockTrace being considered (cc:149).
+    trace: usize,
+    /// Minimum distance crossed by this and any other trace sharing the
+    /// same exit block; -1 = not yet computed (cc:150).
+    distance: i32,
+    /// 1 if the destination has no exit, 0 otherwise (cc:151).
+    terminal: i32,
+    /// Number of active traces with the same BranchPoint and exit (cc:152).
+    siblingedge: i32,
 }
 
 /// TraceDAG: the main tracer.
@@ -60,29 +108,37 @@ pub struct TraceDAG<'a> {
     graph: &'a BlockGraph,
     branch_points: Vec<BranchPoint>,
     traces: Vec<BlockTrace>,
-    /// Indices of active traces.
-    active_list: Vec<usize>,
+    /// std::list<BlockTrace*> emulation: slot order == list order; None = a
+    /// removed hole (Ghidra erase keeps the relative order of the rest, and
+    /// push_back appends at the end). Holes are never reused so stored slot
+    /// indices stay valid across removals.
+    active_slots: Vec<Option<usize>>,
+    /// Number of active BlockTrace objects (Ghidra `activecount`).
+    active_count: usize,
     /// Roots (entry blocks).
     roots: Vec<i32>,
     /// The likely goto edges discovered.
     pub likely_goto: Vec<FloatingEdge>,
-    /// Visit-count tracking: block_idx → count of traced in-edges.
-    /// Faithful to Ghidra's FlowBlock::visitcount (block.hh:125), only
-    /// incremented by remove_trace (matching removeTrace blockaction.cc:661).
+    /// Visit-count tracking: block_idx → count. Faithful to Ghidra's
+    /// FlowBlock::visitcount (block.hh:125), only incremented by
+    /// remove_trace (matching removeTrace blockaction.cc:661) and read by
+    /// check_open (cc:824). Ghidra resets it via clearVisitCount (cc:940);
+    /// the per-instance map makes that implicit.
     visit_count: HashMap<i32, i32>,
-    /// Finish block: if set, only the root trace can open it (Ghidra
-    /// finishblock, blockaction.cc:822-823). Used by per-loop TraceDAG.
+    /// Finish block: only the root trace can open it (Ghidra finishblock,
+    /// blockaction.cc:822-823).
     finish_block_idx: Option<i32>,
 }
 
 impl<'a> TraceDAG<'a> {
-    // RUGRA-GLUE: new (no Ghidra counterpart found)
+    // RUGRA-GLUE: new (constructor; Ghidra TraceDAG::TraceDAG blockaction.cc:951)
     pub fn new(graph: &'a BlockGraph) -> Self {
         Self {
             graph,
             branch_points: Vec::new(),
             traces: Vec::new(),
-            active_list: Vec::new(),
+            active_slots: Vec::new(),
+            active_count: 0,
             roots: Vec::new(),
             likely_goto: Vec::new(),
             visit_count: HashMap::new(),
@@ -90,13 +146,12 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
-    // RUGRA-GLUE: add_root (no Ghidra counterpart found)
+    // RUGRA-GLUE: add_root (blockaction.hh:177 TraceDAG::addRoot)
     pub fn add_root(&mut self, root_idx: i32) {
         self.roots.push(root_idx);
     }
 
-    // RUGRA-GLUE: size_out (no Ghidra counterpart found)
-    /// Get the size_out of a block by graph index.
+    // RUGRA-GLUE: size_out (block accessor via graph index)
     fn size_out(&self, idx: i32) -> usize {
         if let Some(b) = self.graph.get_block(idx as usize) {
             b.read().unwrap().size_out()
@@ -105,8 +160,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
-    // RUGRA-GLUE: get_out (no Ghidra counterpart found)
-    /// Get out-edge target block index.
+    // RUGRA-GLUE: get_out (block accessor via graph index)
     fn get_out(&self, idx: i32, slot: usize) -> Option<i32> {
         if let Some(b) = self.graph.get_block(idx as usize) {
             let r = b.read().unwrap();
@@ -116,8 +170,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
-    // RUGRA-GLUE: size_in (no Ghidra counterpart found)
-    /// Get size_in of a block.
+    // RUGRA-GLUE: size_in (block accessor via graph index)
     fn size_in(&self, idx: i32) -> usize {
         if let Some(b) = self.graph.get_block(idx as usize) {
             b.read().unwrap().size_in()
@@ -126,13 +179,9 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
-    // RUGRA-GLUE: is_loop_dag_out (no Ghidra counterpart found)
+    // Ghidra: block.hh:342 FlowBlock::isLoopDAGOut
     /// Is the i-th out-edge of `idx` a loop-DAG edge (traceable)?
-    /// Faithful to Ghidra `FlowBlock::isLoopDAGOut` (block.hh:342):
-    ///   `(outofthis[i].label & (f_irreducible|f_back_edge|f_loop_exit_edge|f_goto_edge))==0`
-    /// An edge is traceable only if it is none of: irreducible, back-edge,
-    /// loop-exit-edge, or goto-edge. Back/loop-exit exclusion is what prevents
-    /// tracing into cycles, so termination follows structurally.
+    /// `(label & (f_irreducible|f_back_edge|f_loop_exit_edge|f_goto_edge))==0`.
     fn is_loop_dag_out(&self, idx: i32, slot: usize) -> bool {
         if let Some(b) = self.graph.get_block(idx as usize) {
             let r = b.read().unwrap();
@@ -145,9 +194,7 @@ impl<'a> TraceDAG<'a> {
     }
 
     // Ghidra: block.hh:345 FlowBlock::isLoopDAGIn
-    /// Is the i-th in-edge of `idx` a loop-DAG edge?
-    /// Faithful to Ghidra `FlowBlock::isLoopDAGIn` (block.hh:345): same
-    /// four-flag mask as isLoopDAGOut.
+    /// Is the i-th in-edge of `idx` a loop-DAG edge? Same four-flag mask.
     fn is_loop_dag_in(&self, idx: i32, slot: usize) -> bool {
         if let Some(b) = self.graph.get_block(idx as usize) {
             let r = b.read().unwrap();
@@ -159,17 +206,15 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
-    // Ghidra: blockaction.cc:822 TraceDAG::finishblock
-    /// Set the finish block. Faithful to Ghidra TraceDAG::finishblock
-    /// (blockaction.cc:822). Only the root trace can open the finish block.
+    // Ghidra: blockaction.hh:180 TraceDAG::setFinishBlock
     pub fn set_finish_block(&mut self, idx: i32) {
         self.finish_block_idx = Some(idx);
     }
 
-    // RUGRA-GLUE: initialize (no Ghidra counterpart found)
-    /// Initialize: create root BranchPoint and traces for each root.
+    // Ghidra: blockaction.cc:967 TraceDAG::initialize
+    /// Create the initial (virtual) BranchPoint and a BlockTrace per root.
     pub fn initialize(&mut self) {
-        // Root BranchPoint (virtual, no real block)
+        // Root BranchPoint (virtual, top == null → top_block_idx == -1).
         self.branch_points.push(BranchPoint {
             parent: None,
             depth: 0,
@@ -181,57 +226,107 @@ impl<'a> TraceDAG<'a> {
         let root_bp = 0;
         let roots = self.roots.clone();
         for &root_blk in &roots {
+            // BlockTrace(rootBranch, rootBranch->paths.size(), rootlist[i])
+            // — virtual root trace: bottom == null (cc:603-613).
             let trace_idx = self.traces.len();
             self.traces.push(BlockTrace {
                 top_bp: root_bp,
                 pathout: self.branch_points[root_bp].paths.len(),
-                bottom_block_idx: -1, // virtual root has no bottom
+                bottom_block_idx: -1,
                 dest_block_idx: root_blk,
                 edgelump: 1,
                 active: false,
                 terminal: false,
+                derived_bp: None,
+                deleted: false,
+                slot: 0,
             });
             self.branch_points[root_bp].paths.push(trace_idx);
             self.insert_active(trace_idx);
         }
     }
 
-    // RUGRA-GLUE: insert_active (no Ghidra counterpart found)
+    // Ghidra: blockaction.cc:509 TraceDAG::BranchPoint::markPath
+    /// Toggle ismark on this BranchPoint and every ancestor up to the root.
+    /// markPath is called twice (mark, then un-mark) around distance walks.
+    fn mark_path(&mut self, bp: usize) {
+        let mut cur = Some(bp);
+        while let Some(i) = cur {
+            self.branch_points[i].ismark = !self.branch_points[i].ismark;
+            cur = self.branch_points[i].parent;
+        }
+    }
+
+    // Ghidra: blockaction.cc:524 TraceDAG::BranchPoint::distance
+    /// Distance = edges up to the common ancestor plus edges down to op2,
+    /// assuming this->'s path to the root is currently marked. If no common
+    /// ancestor is marked, `depth + op2->depth + 1` (cc:535).
+    fn bp_distance(&self, a: usize, b: usize) -> i32 {
+        let mut cur = Some(b);
+        while let Some(i) = cur {
+            if self.branch_points[i].ismark {
+                return (self.branch_points[a].depth as i32 - self.branch_points[i].depth as i32)
+                    + (self.branch_points[b].depth as i32 - self.branch_points[i].depth as i32);
+            }
+            cur = self.branch_points[i].parent;
+        }
+        self.branch_points[a].depth as i32 + self.branch_points[b].depth as i32 + 1
+    }
+
+    // Ghidra: blockaction.cc:786 TraceDAG::insertActive
     fn insert_active(&mut self, trace_idx: usize) {
-        self.active_list.push(trace_idx);
+        self.active_slots.push(Some(trace_idx));
+        self.traces[trace_idx].slot = self.active_slots.len() - 1;
         self.traces[trace_idx].active = true;
+        self.active_count += 1;
     }
 
-    // RUGRA-GLUE: remove_active (no Ghidra counterpart found)
+    // Ghidra: blockaction.cc:798 TraceDAG::removeActive
     fn remove_active(&mut self, trace_idx: usize) {
-        self.active_list.retain(|&i| i != trace_idx);
+        self.active_slots[self.traces[trace_idx].slot] = None;
         self.traces[trace_idx].active = false;
+        self.active_count -= 1;
     }
 
-    // RUGRA-GLUE: check_open (no Ghidra counterpart found)
-    /// Check if a trace can push into its dest node.
-    /// Faithful to `TraceDAG::checkOpen` (blockaction.cc:810-833).
-    /// A node is openable when the number of traced loop-DAG in-edges
-    /// (edgelump + visit_count) >= total loop-DAG in-edges.
+    // RUGRA-GLUE: begin_slot (std::list activetrace.begin() equivalent)
+    /// First occupied slot, or None for an empty list.
+    fn begin_slot(&self) -> Option<usize> {
+        self.active_slots.iter().position(|s| s.is_some())
+    }
+
+    // RUGRA-GLUE: next_slot (std::list iterator++ equivalent)
+    /// Next occupied slot strictly after `s`, scanning to the end of the
+    /// list; None when the iterator would reach end().
+    fn next_slot(&self, s: usize) -> Option<usize> {
+        (s + 1..self.active_slots.len()).find(|&i| self.active_slots[i].is_some())
+    }
+
+    // Ghidra: blockaction.cc:810 TraceDAG::checkOpen
+    /// Verify the given BlockTrace can push into its destnode. A node can be
+    /// opened only if all incoming loop-DAG edges have been traced (or
+    /// removed as gotos: visitcount).
     fn check_open(&self, trace_idx: usize) -> bool {
         let trace = &self.traces[trace_idx];
         if trace.terminal {
-            return false;
+            return false; // cc:813: already been opened
         }
         let bp = &self.branch_points[trace.top_bp];
-        let is_root = bp.depth == 0;
-        if is_root && trace.bottom_block_idx < 0 {
-            return true; // Artificial root (blockaction.cc:817)
+        let mut isroot = false;
+        if bp.depth == 0 {
+            if trace.bottom_block_idx < 0 {
+                return true; // cc:816-818: artificial root always opens
+            }
+            isroot = true;
         }
         let dest = trace.dest_block_idx;
         if dest < 0 {
             return false;
         }
-        // finishblock guard (blockaction.cc:822-823): only root can open it.
-        if !is_root && self.finish_block_idx == Some(dest) {
+        // cc:822-823: designated exit — only the root can open it.
+        if !isroot && self.finish_block_idx == Some(dest) {
             return false;
         }
-        // Count loop-DAG in-edges of dest (blockaction.cc:826-831).
+        // cc:824-832: count loop-DAG in-edges; all must be <= ignored count.
         let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
         let ignore = trace.edgelump + vc;
         let sin = self.size_in(dest);
@@ -247,17 +342,21 @@ impl<'a> TraceDAG<'a> {
         true
     }
 
-    // RUGRA-GLUE: check_retirement (no Ghidra counterpart found)
-    /// Check if a BranchPoint can be retired (all paths terminal or to same exit).
+    // Ghidra: blockaction.cc:866 TraceDAG::checkRetirement
+    /// Check whether this trace's BranchPoint can retire: only the first
+    /// sibling (pathout==0) checks; all paths must be active; terminal paths
+    /// are skipped; non-terminal destnodes must all be equal (that node is
+    /// returned as the exit block). Root BranchPoint: all paths must be
+    /// active AND terminal; returns Some(-1) (Ghidra leaves exitblock unset).
     fn check_retirement(&self, trace_idx: usize) -> Option<i32> {
         let trace = &self.traces[trace_idx];
         if trace.pathout != 0 {
-            return None;
+            return None; // cc:869: only the first sibling checks
         }
         let bp_idx = trace.top_bp;
         let bp = &self.branch_points[bp_idx];
         if bp.depth == 0 {
-            // Root: all paths must be terminal
+            // cc:871-878: special conditions for the root branch point.
             for &pidx in &bp.paths {
                 if !self.traces[pidx].active || !self.traces[pidx].terminal {
                     return None;
@@ -265,7 +364,7 @@ impl<'a> TraceDAG<'a> {
             }
             return Some(-1);
         }
-        // Non-root: all paths terminal or to same exit block
+        // cc:879-889: non-root — all paths terminal or to the same exit node.
         let mut exit_block: i32 = -1;
         for &pidx in &bp.paths {
             let pt = &self.traces[pidx];
@@ -286,11 +385,15 @@ impl<'a> TraceDAG<'a> {
         Some(exit_block)
     }
 
-    // RUGRA-GLUE: open_branch (no Ghidra counterpart found)
-    /// Open a branch: create new BranchPoint at dest node with sub-traces.
-    /// Faithful to Ghidra `BranchPoint::createTraces` (blockaction.cc:499-507)
-    /// + `openBranch` (blockaction.cc:839-858).
-    fn open_branch(&mut self, trace_idx: usize) {
+    // Ghidra: blockaction.cc:839 TraceDAG::openBranch
+    /// Given that a trace can be opened into its destnode, create a new
+    /// BranchPoint there (with sub-traces per loop-DAG out edge,
+    /// BranchPoint::createTraces cc:499-507). Returns the slot the caller
+    /// must resume from:
+    ///   - no new paths: the PARENT stays active and terminal (cc:844-851
+    ///     returns parent->activeiter — "Do NOT remove from active list");
+    ///   - otherwise the first child's slot (cc:857).
+    fn open_branch(&mut self, trace_idx: usize) -> Option<usize> {
         let dest = self.traces[trace_idx].dest_block_idx;
         let top_bp = self.traces[trace_idx].top_bp;
         let parent_depth = self.branch_points[top_bp].depth;
@@ -306,12 +409,12 @@ impl<'a> TraceDAG<'a> {
             paths: Vec::new(),
         });
 
-        // createTraces (blockaction.cc:499-507): create sub-traces for each
-        // out-edge that is a loop-DAG edge (isLoopDAGOut). Skip non-DAG edges.
+        // createTraces (cc:499-507): one BlockTrace per loop-DAG out edge.
         let size_out = self.size_out(dest);
         for eo in 0..size_out {
-            // Ghidra: if (!top->isLoopDAGOut(i)) continue;
-            if !self.is_loop_dag_out(dest, eo) { continue; }
+            if !self.is_loop_dag_out(dest, eo) {
+                continue;
+            }
             if let Some(target) = self.get_out(dest, eo) {
                 let new_trace_idx = self.traces.len();
                 self.traces.push(BlockTrace {
@@ -322,39 +425,52 @@ impl<'a> TraceDAG<'a> {
                     edgelump: 1,
                     active: false,
                     terminal: false,
+                    derived_bp: None,
+                    deleted: false,
+                    slot: 0,
                 });
                 self.branch_points[new_bp_idx].paths.push(new_trace_idx);
             }
         }
 
         if self.branch_points[new_bp_idx].paths.is_empty() {
-            // No sub-traces: mark parent trace as terminal
-            self.remove_active(trace_idx);
+            // cc:844-851: no new traces — return immediately to the parent
+            // trace, marking it terminal but KEEPING it in the active list
+            // (its BranchPoint retires later via checkRetirement, which
+            // skips terminal-but-active paths).
+            self.traces[trace_idx].derived_bp = None; // delete newbranch
             self.traces[trace_idx].terminal = true;
             self.traces[trace_idx].bottom_block_idx = -1;
             self.traces[trace_idx].dest_block_idx = -1;
             self.traces[trace_idx].edgelump = 0;
-        } else {
-            // Deactivate parent, activate children
-            self.remove_active(trace_idx);
-            for &pidx in &self.branch_points[new_bp_idx].paths.clone() {
-                self.insert_active(pidx);
-            }
+            return Some(self.traces[trace_idx].slot); // parent->activeiter
         }
+        // cc:853-857: deactivate parent, activate children.
+        self.traces[trace_idx].derived_bp = Some(new_bp_idx);
+        self.remove_active(trace_idx);
+        let first = self.branch_points[new_bp_idx].paths[0];
+        let child_paths = self.branch_points[new_bp_idx].paths.clone();
+        for pidx in child_paths {
+            self.insert_active(pidx);
+        }
+        Some(self.traces[first].slot)
     }
 
-    // RUGRA-GLUE: retire_branch (no Ghidra counterpart found)
-    /// Retire a BranchPoint: update parent trace.
-    fn retire_branch(&mut self, bp_idx: usize, exit_block: i32) {
-        let parent_trace_idx;
-        let edgeout_bl;
-        let edgelump_sum;
+    // Ghidra: blockaction.cc:900 TraceDAG::retireBranch
+    /// Retire a BranchPoint: remove all its child traces from the active
+    /// list and update the parent trace (bottom/destnode/edgelump, or
+    /// terminal when all children were terminal), then re-activate it.
+    /// Returns the slot to resume from (root → begin; else parent's slot).
+    fn retire_branch(&mut self, bp_idx: usize, exit_block: i32) -> Option<usize> {
+        let parent_trace_idx: Option<usize>;
+        let edgeout_bl: i32;
+        let edgelump_sum: i32;
 
         {
             let bp = &self.branch_points[bp_idx];
-            parent_trace_idx = bp.parent.map(|p| {
-                self.branch_points[p].paths[bp.pathout]
-            });
+            // Non-root BranchPoints are always constructed from a parent
+            // trace (cc:565-574), so `bp->parent` is only null for the root.
+            parent_trace_idx = bp.parent.map(|p| self.branch_points[p].paths[bp.pathout]);
             let mut sum = 0i32;
             let mut ebl: i32 = -1;
             let paths = bp.paths.clone();
@@ -369,45 +485,50 @@ impl<'a> TraceDAG<'a> {
             }
             edgelump_sum = sum;
             edgeout_bl = ebl;
-            // Remove all child traces from active
             for &pidx in &paths {
                 self.remove_active(pidx);
             }
         }
 
         if bp_idx == 0 {
-            return; // Root
+            // cc:915-916: root — this is all there is to do.
+            return self.begin_slot();
         }
 
         if let Some(pti) = parent_trace_idx {
+            let pt = &mut self.traces[pti];
+            pt.derived_bp = None; // cc:920: derived branchpoint is gone
             if edgeout_bl < 0 {
-                self.traces[pti].terminal = true;
-                self.traces[pti].bottom_block_idx = -1;
-                self.traces[pti].dest_block_idx = -1;
-                self.traces[pti].edgelump = 0;
+                // cc:921-926: all traces were terminal.
+                pt.terminal = true;
+                pt.bottom_block_idx = -1;
+                pt.dest_block_idx = -1;
+                pt.edgelump = 0;
             } else {
-                self.traces[pti].bottom_block_idx = edgeout_bl;
-                self.traces[pti].dest_block_idx = exit_block;
-                self.traces[pti].edgelump = edgelump_sum;
+                // cc:927-931
+                pt.bottom_block_idx = edgeout_bl;
+                pt.dest_block_idx = exit_block;
+                pt.edgelump = edgelump_sum;
             }
-            self.insert_active(pti);
+            self.insert_active(pti); // cc:932
+            return Some(self.traces[pti].slot);
         }
+        self.begin_slot()
     }
 
-    // RUGRA-GLUE: remove_trace (no Ghidra counterpart found)
-    /// Remove a trace (mark its edge as goto).
+    // Ghidra: blockaction.cc:656 TraceDAG::removeTrace
+    /// Add the trace's edge to likelygoto, bump the destnode visitcount, and
+    /// either mark the trace terminal (it moved past its root branch — it
+    /// STAYS ACTIVE, cc:665-672) or delete the path from its BranchPoint,
+    /// shifting every trace above it down one slot (cc:673-686).
     fn remove_trace(&mut self, trace_idx: usize) {
         let bottom = self.traces[trace_idx].bottom_block_idx;
         let dest = self.traces[trace_idx].dest_block_idx;
         let edgelump = self.traces[trace_idx].edgelump;
 
-        // Record as likely goto
-        if bottom >= 0 && dest >= 0 {
-            self.likely_goto.push(FloatingEdge { top: bottom, bottom: dest });
-        }
-
-        // Update visit count: ignore this edge (mark as goto so the dest
-        // node can be opened later without this edge being traced).
+        // cc:660: Create goto record.
+        self.likely_goto.push(FloatingEdge { top: bottom, bottom: dest });
+        // cc:661: Ignore edge(s) when deciding whether destnode can open.
         if dest >= 0 {
             *self.visit_count.entry(dest).or_insert(0) += edgelump;
         }
@@ -415,8 +536,9 @@ impl<'a> TraceDAG<'a> {
         let top_bp = self.traces[trace_idx].top_bp;
         let bp_top = self.branch_points[top_bp].top_block_idx;
 
-        if bottom != bp_top && bottom >= 0 {
-            // Trace has moved past root branch — treat as terminal
+        if bottom != bp_top {
+            // cc:665-672: trace has moved past the root branch — terminal,
+            // do NOT remove from the active list.
             self.traces[trace_idx].terminal = true;
             self.traces[trace_idx].bottom_block_idx = -1;
             self.traces[trace_idx].dest_block_idx = -1;
@@ -424,121 +546,172 @@ impl<'a> TraceDAG<'a> {
             return;
         }
 
-        // Remove from active
+        // cc:673-686: remove the path from the BranchPoint; the root branch
+        // will be marked as a goto.
         self.remove_active(trace_idx);
-        self.traces[trace_idx].terminal = true;
+        let pathout = self.traces[trace_idx].pathout;
+        let size = self.branch_points[top_bp].paths.len();
+        for i in (pathout + 1)..size {
+            // Move every trace above this pathout down one slot.
+            let movedtrace = self.branch_points[top_bp].paths[i];
+            self.traces[movedtrace].pathout -= 1;
+            if let Some(dbp) = self.traces[movedtrace].derived_bp {
+                self.branch_points[dbp].pathout -= 1;
+            }
+            self.branch_points[top_bp].paths[i - 1] = movedtrace;
+        }
+        self.branch_points[top_bp].paths.pop();
+        self.traces[trace_idx].deleted = true; // delete trace
     }
 
-    // RUGRA-GLUE: select_bad_edge (no Ghidra counterpart found)
-    /// Select the worst edge to mark as goto using BadEdgeScore.
-    /// Scores: siblingedge (shared BranchPoint), terminal (dest has no out),
-    /// distance (between branch points), depth. The highest score = most likely bad edge.
-    fn select_bad_edge(&self) -> usize {
-        struct Score {
-            trace_idx: usize,
-            exit_block: i32,
-            distance: i32,    // -1 = not yet computed
-            siblingedge: i32,
-            terminal: i32,    // 1 if dest has size_out==0
-            bp_depth: usize,
+    // Ghidra: blockaction.cc:617 TraceDAG::BadEdgeScore::compareFinal
+    /// compareFinal(this, op2) == true ⇔ `this` is LESS likely to be the bad
+    /// edge than op2 (blockaction.cc:616). Order: bigger siblingedge → less
+    /// likely bad; terminal=0 → less likely bad; smaller distance → less
+    /// likely bad; smaller depth → less likely bad.
+    fn cmp_final_less_likely_bad(&self, a: &BadEdgeScore, b: &BadEdgeScore) -> bool {
+        if a.siblingedge != b.siblingedge {
+            // cc:621: a bigger sibling edge is less likely to be the bad edge
+            return b.siblingedge < a.siblingedge;
         }
+        if a.terminal != b.terminal {
+            return a.terminal < b.terminal;
+        }
+        if a.distance != b.distance {
+            return a.distance < b.distance;
+        }
+        return self.branch_points[self.traces[a.trace].top_bp].depth
+            < self.branch_points[self.traces[b.trace].top_bp].depth;
+    }
 
-        let mut scores: Vec<Score> = Vec::new();
-        for &idx in &self.active_list {
+    // Ghidra: blockaction.cc:694 TraceDAG::processExitConflict
+    /// For each trace in [start, end): mark its BranchPoint's path to the
+    /// root (markPath), then against every other trace in the group count a
+    /// sibling edge when both come from the same BranchPoint and take the
+    /// minimum BranchPoint::distance; finally un-mark (markPath toggles).
+    fn process_exit_conflict(&mut self, list: &mut [BadEdgeScore], start: usize, end: usize) {
+        for a in start..end {
+            let startbp = self.traces[list[a].trace].top_bp;
+            self.mark_path(startbp); // cc:705: mark path to root
+            for b in (a + 1)..end {
+                let iterbp = self.traces[list[b].trace].top_bp;
+                if startbp == iterbp {
+                    // cc:707-710: edge coming from the same BranchPoint.
+                    list[a].siblingedge += 1;
+                    list[b].siblingedge += 1;
+                }
+                let dist = self.bp_distance(startbp, iterbp); // cc:711
+                // cc:713-717: distance is symmetric — update both minimums.
+                if list[a].distance == -1 || list[a].distance > dist {
+                    list[a].distance = dist;
+                }
+                if list[b].distance == -1 || list[b].distance > dist {
+                    list[b].distance = dist;
+                }
+            }
+            self.mark_path(startbp); // cc:720: unmark the path
+        }
+    }
+
+    // Ghidra: blockaction.cc:730 TraceDAG::selectBadEdge
+    /// Score every active non-terminal non-virtual trace (BadEdgeScore),
+    /// sort by (exitproto index, branchpoint top index, pathout) for grouping
+    /// (operator< cc:635-651), run processExitConflict per same-exit group,
+    /// then scan for the trace MOST likely to be the bad edge
+    /// (cc:772-782: maxiter advances whenever compareFinal(maxiter, iter)).
+    fn select_bad_edge(&mut self) -> usize {
+        let mut badedgelist: Vec<BadEdgeScore> = Vec::new();
+        for &s in &self.active_slots {
+            let idx = match s {
+                Some(i) => i,
+                None => continue,
+            };
             let trace = &self.traces[idx];
-            if trace.terminal { continue; }
+            if trace.terminal {
+                continue; // cc:736
+            }
             let bp = &self.branch_points[trace.top_bp];
-            // Skip virtual edges (root, no real bottom)
-            if bp.depth == 0 && trace.bottom_block_idx < 0 { continue; }
+            // cc:737-738: never remove virtual edges (root bp with no bottom).
+            if bp.top_block_idx < 0 && trace.bottom_block_idx < 0 {
+                continue;
+            }
             let dest = trace.dest_block_idx;
-            scores.push(Score {
-                trace_idx: idx,
-                exit_block: dest,
+            badedgelist.push(BadEdgeScore {
+                trace: idx,
+                exitproto: dest,
                 distance: -1,
                 siblingedge: 0,
-                terminal: if dest >= 0 && self.size_out(dest) == 0 { 1 } else { 0 },
-                bp_depth: bp.depth,
+                terminal: if self.size_out(dest) == 0 { 1 } else { 0 },
             });
         }
 
-        if scores.is_empty() {
-            return self.active_list[0];
+        if badedgelist.is_empty() {
+            // Unreachable under the oracle invariants (a stuck trace set
+            // always contains a non-terminal non-virtual trace: virtual root
+            // edges always pass checkOpen cc:816-818, and all-terminal
+            // BranchPoints retire first). Deref guard mirrors list::begin().
+            return self.active_slots.iter().find_map(|s| *s).unwrap_or(usize::MAX);
         }
 
-        // Sort by exit_block to find conflicts (same dest)
-        scores.sort_by_key(|s| s.exit_block);
+        // cc:747: badedgelist.sort() — operator< groups by exit block, then
+        // branch point, then path index. Rust sort_by is stable; the
+        // comparator below is a total order on the same three keys.
+        badedgelist.sort_by(|x, y| {
+            let xi = x.exitproto;
+            let yi = y.exitproto;
+            if xi != yi {
+                return xi.cmp(&yi);
+            }
+            let xbp = self.branch_points[self.traces[x.trace].top_bp].top_block_idx;
+            let ybp = self.branch_points[self.traces[y.trace].top_bp].top_block_idx;
+            if xbp != ybp {
+                return xbp.cmp(&ybp);
+            }
+            self.traces[x.trace].pathout.cmp(&self.traces[y.trace].pathout)
+        });
 
-        // Process conflicts: traces to the same exit block
-        let mut i = 0;
-        while i < scores.len() {
-            let mut j = i + 1;
-            while j < scores.len() && scores[j].exit_block == scores[i].exit_block {
-                j += 1;
+        // cc:749-770: find runs of traces to the same exit node and run
+        // processExitConflict (cc:694-724) on each run of length > 1.
+        let mut start = 0usize;
+        while start < badedgelist.len() {
+            let mut iter = start + 1;
+            while iter < badedgelist.len()
+                && badedgelist[iter].exitproto == badedgelist[start].exitproto
+            {
+                iter += 1;
             }
-            if j - i > 1 {
-                // Conflict: multiple traces to same exit. Compute distance/sibling.
-                for a in i..j {
-                    for b in (a+1)..j {
-                        let bp_a = self.traces[scores[a].trace_idx].top_bp;
-                        let bp_b = self.traces[scores[b].trace_idx].top_bp;
-                        if bp_a == bp_b {
-                            scores[a].siblingedge += 1;
-                            scores[b].siblingedge += 1;
-                        }
-                        // Simplified distance: depth difference
-                        let dist = (self.branch_points[bp_a].depth as i32 -
-                                    self.branch_points[bp_b].depth as i32).abs();
-                        if scores[a].distance == -1 || scores[a].distance > dist {
-                            scores[a].distance = dist;
-                        }
-                        if scores[b].distance == -1 || scores[b].distance > dist {
-                            scores[b].distance = dist;
-                        }
-                    }
-                }
+            if iter - start > 1 {
+                self.process_exit_conflict(&mut badedgelist, start, iter);
             }
-            i = j;
+            start = iter;
         }
 
-        // Select max: higher siblingedge > higher terminal > higher distance > higher depth
-        // (compareFinal: op2 is "less likely bad" if it has smaller siblingedge,
-        //  or smaller terminal, or smaller distance, or smaller depth)
-        let mut best = 0;
-        for k in 1..scores.len() {
-            let s = &scores[k];
-            let b = &scores[best];
-            // s is MORE likely bad than best if:
-            let is_more_likely = if s.siblingedge != b.siblingedge {
-                s.siblingedge > b.siblingedge
-            } else if s.terminal != b.terminal {
-                s.terminal > b.terminal
-            } else if s.distance != b.distance {
-                s.distance > b.distance
-            } else {
-                s.bp_depth > b.bp_depth
-            };
-            if is_more_likely {
-                best = k;
+        // cc:772-782: linear max — maxiter starts at begin() and advances to
+        // iter whenever compareFinal(maxiter, iter) (maxiter less likely bad).
+        let mut maxiter = 0usize;
+        for k in 1..badedgelist.len() {
+            if self.cmp_final_less_likely_bad(&badedgelist[maxiter], &badedgelist[k]) {
+                maxiter = k;
             }
         }
-
-        scores[best].trace_idx
+        badedgelist[maxiter].trace
     }
 
-    // RUGRA-GLUE: push_branches (no Ghidra counterpart found)
+    // Ghidra: blockaction.cc:983 TraceDAG::pushBranches
     /// Main algorithm: push traces forward, marking bad edges as goto.
     pub fn push_branches(&mut self) {
-        let mut missed = 0;
-        let mut pos = 0usize;
+        let mut missed: usize = 0;
+        let mut current: Option<usize> = self.begin_slot();
         // DIAGNOSTIC: hard ceiling to surface any non-termination cleanly.
         // Ghidra's trace is structurally terminating (back/loop-exit edges
-        // excluded by isLoopDAGOut/In, plus the missed>=active_count bad-edge
-        // fallback removes one trace per pass). If this ceiling ever fires
-        // it indicates a flag-computation bug, not a missing guard.
+        // are excluded by isLoopDAGOut/In, plus the missed>=activecount
+        // bad-edge fallback removes one trace per pass). If this ceiling
+        // ever fires it indicates a flag-computation bug, not a missing
+        // guard.
         let mut iter_guard = 0u64;
         let iter_cap = 5000u64;
 
-        while !self.active_list.is_empty() {
+        while self.active_count > 0 {
             iter_guard += 1;
             if iter_guard > iter_cap {
                 eprintln!(
@@ -546,56 +719,60 @@ impl<'a> TraceDAG<'a> {
                     iter_cap,
                     self.graph.get_size()
                 );
-                // Dump active traces for diagnosis
-                for &ai in &self.active_list {
-                    let t = &self.traces[ai];
-                    let dest = t.dest_block_idx;
-                    let sin = if dest >= 0 { self.size_in(dest) } else { 0 };
-                    let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
-                    let mut loopdag_in = 0;
-                    for s in 0..sin {
-                        if self.is_loop_dag_in(dest, s) { loopdag_in += 1; }
+                for &s in &self.active_slots {
+                    if let Some(ai) = s {
+                        let t = &self.traces[ai];
+                        let dest = t.dest_block_idx;
+                        let sin = if dest >= 0 { self.size_in(dest) } else { 0 };
+                        let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
+                        let mut loopdag_in = 0;
+                        for s2 in 0..sin {
+                            if self.is_loop_dag_in(dest, s2) {
+                                loopdag_in += 1;
+                            }
+                        }
+                        let bp = &self.branch_points[t.top_bp];
+                        eprintln!(
+                            "[TRACEDAG]   trace#{} dest={} active={} terminal={} edgelump={} vc={} loopDAG_in={} total_in={} bp_depth={}",
+                            ai, dest, t.active, t.terminal, t.edgelump, vc, loopdag_in, sin, bp.depth
+                        );
                     }
-                    let bp = &self.branch_points[t.top_bp];
-                    eprintln!(
-                        "[TRACEDAG]   trace#{} dest={} active={} terminal={} edgelump={} vc={} loopDAG_in={} total_in={} bp_depth={}",
-                        ai, dest, t.active, t.terminal, t.edgelump, vc, loopdag_in, sin, bp.depth
-                    );
                 }
                 break;
             }
-            if pos >= self.active_list.len() {
-                pos = 0;
+            // cc:991-992: wrap to begin when the iterator reached end().
+            if current.is_none() {
+                current = self.begin_slot();
             }
-            let active_count = self.active_list.len();
-            if missed >= active_count {
-                // Can't push any trace — select a bad edge
+            let curtrace = match current.and_then(|s| self.active_slots[s]) {
+                Some(t) => t,
+                None => continue, // unreachable when active_count > 0
+            };
+            if missed >= self.active_count {
+                // cc:994-999: could not push any trace further — pick an
+                // edge to be unstructured and restart from the beginning.
                 let bad = self.select_bad_edge();
                 self.remove_trace(bad);
+                current = self.begin_slot();
                 missed = 0;
-                pos = 0;
-                continue;
-            }
-
-            let trace_idx = self.active_list[pos];
-
-            if let Some(exit_block) = self.check_retirement(trace_idx) {
-                let bp_idx = self.traces[trace_idx].top_bp;
-                self.retire_branch(bp_idx, exit_block);
+            } else if let Some(exit_block) = self.check_retirement(curtrace) {
+                // cc:1000-1003: resume at the iterator returned by retireBranch.
+                let bp_idx = self.traces[curtrace].top_bp;
+                current = self.retire_branch(bp_idx, exit_block);
                 missed = 0;
-                pos = 0;
-            } else if self.check_open(trace_idx) {
-                self.open_branch(trace_idx);
+            } else if self.check_open(curtrace) {
+                // cc:1004-1007: resume at the iterator returned by openBranch.
+                current = self.open_branch(curtrace);
                 missed = 0;
-                pos = 0;
             } else {
+                // cc:1008-1011
                 missed += 1;
-                pos += 1;
+                current = self.next_slot(current.unwrap());
             }
         }
     }
 
-    // RUGRA-GLUE: run (no Ghidra counterpart found)
+    // RUGRA-GLUE: run (initialize + pushBranches driver)
     /// Run the full TraceDAG: initialize, push branches, return likely goto edges.
     pub fn run(mut self) -> Vec<FloatingEdge> {
         self.initialize();
@@ -604,20 +781,22 @@ impl<'a> TraceDAG<'a> {
     }
 }
 
-// RUGRA-GLUE: generate_likely_gotos (no Ghidra counterpart found)
-/// Generate likely goto edges for a function's control-flow graph.
-/// Returns a list of (source_block_idx, dest_block_idx) edges that should be
-/// marked as unstructured goto to allow structured recovery.
+// RUGRA-GLUE: generate_likely_gotos (Ghidra CollapseStructure::updateLoopBody
+// whole-DAG branch, blockaction.cc:1233-1239: roots = every sizeIn==0 block).
+/// Generate likely goto edges for a function's control-flow graph (no loop
+/// restriction). Returns (source, dest) edges to consider as unstructured.
 pub fn generate_likely_gotos(graph: &BlockGraph) -> Vec<FloatingEdge> {
-    // Skip small/simple functions — they don't need goto edge marking.
-    if graph.get_size() < 10 { return Vec::new(); }
-
-    // Find root blocks (size_in == 0)
+    // Find root blocks (size_in == 0). No size gate: the oracle traces any
+    // graph (the previous `< 10` skip was invented, no oracle counterpart).
     let roots: Vec<i32> = (0..graph.get_size())
         .filter_map(|i| {
             graph.get_block(i).and_then(|b| {
                 let r = b.read().unwrap();
-                if r.size_in() == 0 { Some(r.get_index()) } else { None }
+                if r.size_in() == 0 {
+                    Some(r.get_index())
+                } else {
+                    None
+                }
             })
         })
         .collect();

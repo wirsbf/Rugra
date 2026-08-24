@@ -5,6 +5,13 @@
 
 ## 文档状态
 
+**2026-08-24（BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001 连带）**: `test_switch_case_structuring`
+断言更新：try_rule_switch 现按 newBlockSwitch（block.cc:1904-1919）真正安装 BlockSwitch
+（消费 dispatch+cases），sblocks 顶层只剩 Switch（3→1）；case 标签打印断言
+（"case 0:"/"case 1:"）暂注释并绑定 TODO PRINTC-SWITCH-EMIT-0001（printc
+emit_structured_switch 首例标签落入被换出的 capture buffer）。无生产 API 变化。
+
+
 - **状态**: 已核对（当前有效）
 - **可信度**: 高
 - **文档用途**: 说明当前 Rugra 中 `Funcdata` 这一“函数级分析容器”的角色、边界与主要公开接口
