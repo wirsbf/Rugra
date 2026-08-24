@@ -582,3 +582,30 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
   `tools/run_callspec_noreturn_oracle.sh`（六 case 投影：default_ctor、
   explicit_set_idempotent、copy_flow_effects、full_copy_and_clone、
   void_no_inference、decode_encode_channel）。
+
+### 2026-08-24：justified_contain_range 极性修复（FSPEC-JUSTIFIED-CONTAIN-0001）
+
+- **`justified_contain_range(base, sz2, addr, sz, force_left)`** 谓词重写为
+  `Address::justifiedContain`（address.cc:131-141）的逐字语义：**任一侧独立
+  越界即 -1**——`if addr < base { return -1 }`（cc:133 `op2.offset < offset`）
+  与 `if end_addr > this_end { return -1 }`（cc:137 `off2 > off1`），两个
+  检查相互独立。旧实现的成对条件（`addr < base && end_addr < this_end` /
+  `addr > base && end_addr > this_end`）漏判三类几何：等始越顶
+  （`view=start` 返回 0 = 假 justified）、低侧重叠止于 entry 尾（`view=end`
+  返回 0）、双端溢出（落入 u64 回绕减法，dev 构建直接 panic 于
+  `this_end - end_addr`）。
+- **投影后果**：`characterize_as_param`（fspec.cc:682-719）对 range⊃entry 的
+  query 曾错判 `contains_justified`（off=0），修复后走 `containedBy` →
+  `contained_by`（fspec.cc:707），`guardReturnsOverlapping` 的触发前提在
+  Rust 侧可达。
+- **分支算术维持**：`force_left=true` → `op2.offset - offset`（start 距离），
+  `force_left=false` → `off1 - off2`（end 距离 = Ghidra BE+!forceleft）。
+  已知未对齐面：小端空间 + forceleft=false 时 Ghidra 返回 start 距离，而
+  spaceless helper 取 flag 直接选分支——LE 调用方传 `false` 会得到 end 距离
+  （heritage truncate_amount 与 LE 无 flag entry 的 `==0` 判定受影响）。修
+  复需把空间端序穿进 helper 签名（含 heritage.rs 调用点），超出本租约，
+  待登记 TODO 后另行处理。
+- 双侧 fixture：`tests/oracle/justified_contain_1204.{cc,rs,metadata.json}` +
+  `tools/run_justified_contain_oracle.sh`（三 case 投影：LE/BE×forceleft 的
+  17 几何极性+分支算术矩阵（含 1/4/8/cross-4 尺寸边界）、ParamEntry
+  alignment==0 包装、characterizeAsParam 三分类；63 行双侧逐字节 MATCH）。

@@ -1,0 +1,149 @@
+{
+ "schema": 2,
+ "fixture_id": "JUSTIFIED-CONTAIN-1204",
+ "stable_function_closure": [
+  "ghidra::Address::justifiedContain(int4, const Address &, int4, bool) const address.cc:131",
+  "ghidra::ParamEntry::justifiedContain(const Address &, int4) const fspec.cc:248",
+  "ghidra::ParamListStandard::characterizeAsParam(const Address &, int4) const fspec.cc:682",
+  "rugra::fspec::justified_contain_range src/fspec.rs (RUGRA-GLUE mirror of address.cc:131-141)",
+  "rugra::fspec::ParamEntry::justified_contain src/fspec.rs (fspec.cc:248-283)",
+  "rugra::fspec::ParamListStandard::characterize_as_param src/fspec.rs (fspec.cc:682-719)"
+ ],
+ "overall_status": "UNTESTED",
+ "status_detail": "The three-case covered projection byte-matches Ghidra 12.0.4's Address::justifiedContain one-sided-violation polarity and branch arithmetic (LE/BE x forceleft over 17 geometries including 1/4/8/cross-4 size boundaries), the ParamEntry alignment==0 wrapper, and the characterizeAsParam three-way classification. Overall remains UNTESTED because the space-mismatch base check, the little-endian forceleft=false flag routing, and resolver-gated foreign-start characterize queries are not exercised.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "7b1da21a3a874598423a4b6b941eb2209545fc15",
+  "rugra_base_tree": "9b825d99ad55d7b41e5e509beb2c266497d4645e",
+  "cpp_fixture_sha256": "7237da8a23543e661b294c8a95e1e7e411182cb76f6c385bef32ae3822572203",
+  "rust_fixture_sha256": "04887f3372074719c8d59537cfd2d5faf00b53647a53ca2c4d8337fedfeb3bc7",
+  "fspec_rs_sha256": "fa8a40f065e9bd55382e178b37eb424a66e3e86886ade0def1d625a92e3919e5",
+  "fspec_doc_sha256": "aa5d920a9732359404394a5083809e63a78f2be1bf5eb0ce235aec82f7023db8",
+  "runner_sha256": "86e9d90e314b0852c5bfe4f000ade8d7a81e5b5ff16d39506d35e1e734e59954",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "544b8241db7d85b82bf64ea4456b0170f2d7b26f96ece675a76b5ca4961d4abe",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-justified-contain-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
+  }
+ },
+ "architecture": {
+  "id": "synthetic-le-be-justified-contain-fixture",
+  "endianness": "little and big (paired processor spaces)",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3 (little-endian), ram_be=4 (big-endian); byte addressed, wordsize 1",
+  "space_construction": "FixtureTranslate/AddrSpace inserts ConstantSpace, OtherSpace, UniqueSpace and two IPTR_PROCESSOR AddrSpaces (ram LE index 3, ram_be BE index 4) with AddrSpace::hasphysical; the LE/BE pair is the decisive endianness control for Address::justifiedContain branch selection"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "no cspec decode; staged ParamEntry resources (case2: LE force-left exclusion 8B min1 and BE unflagged exclusion 8B min1; case3: single LE force-left exclusion 4B min1 in a ParamListStandard)",
+  "calling_convention": "hand-built ParamEntry/ParamListStandard via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters); populateResolver/finalize_after_decode complete the case-3 model"
+ },
+ "analysis_options": {
+  "api": "Direct production Address::justifiedContain, ParamEntry::justifiedContain (alignment==0 path) and ParamListStandard::characterizeAsParam calls on both sides; no Action, Rule, PrintC or Funcdata pipeline",
+  "model_state": "case1: raw Address pairs in ram/ram_be over 17 (base, esz, qoff, qsz) geometries; case2: two standalone 8-byte exclusion entries at 0x100 (LE force_left_justify, BE unflagged); case3: ParamListStandard with one 4-byte exclusion force-left entry at 0x100 minsize 1, numgroup 1",
+  "normalization": "None. Raw int4 offsets and classification codes (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3) are printed verbatim; the C++ side additionally exits non-zero if LE(false) != LE(true) != BE(true) branch consistency fails",
+  "debug_macros": "none on either side",
+  "random_seed": "none; construction and queries are deterministic",
+  "error_injection": "none; all queries stay on valid inputs"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture, compiler_spec, analysis_options, cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "address_justified_contain",
+    "setup": "17 fixed geometries over entries 8B@0x1000, 4B@0x2000, 1B@0x3000; per geometry two rows",
+    "queries": "exact and sub-range size boundaries (1, 4, 8, cross-4); one-sided violations: equal-start-bigger (0x1000/12), low overlap flush at entry end (0xFFE/10), strict superset (0xFFC/16), high poke (0x1004/8), low overlap ending inside (0xFFE/6), cross-4 superset/high-poke over the 4-byte entry, size-1 entry equal-start-bigger and superset",
+    "expect": "every one-sided violation returns -1 on both branch views (address.cc:133/137 are independent checks); sub-ranges return the branch arithmetic (view=start: op2.offset-offset, view=end: off1-off2)"
+   },
+   {
+    "id": "param_entry_justified_contain",
+    "setup": "ParamEntry::justifiedContain alignment==0 path over an LE force-left exclusion entry and a BE unflagged exclusion entry (both 8B@0x100, minsize 1)",
+    "queries": "LE: exact, justified/unjustified sub-ranges, flush sub-range, size-1 sub-range, equal-start-bigger, low overlap inside, superset, high poke, fully above, fully below; BE: exact, low sub-range, flush sub-range, size-1, equal-start-bigger, low overlap flush at entry end",
+    "expect": "the wrapper forwards to Address::justifiedContain with forceleft=(flags & force_left_justify): LE-flagged and BE-unflagged entries pin both branch arithmetics through the real entry path; all one-sided violations stay -1"
+   },
+   {
+    "id": "characterize_projection",
+    "setup": "ParamListStandard with one LE 4-byte exclusion force-left entry at 0x100 (minsize 1, numgroup 1), populateResolver/finalize_after_decode",
+    "queries": "query starts kept inside the entry extent (resolver find(loc) gating): exact (0x100/4), size-1 justified (0x100/1), unjustified sub-ranges (0x102/2, 0x103/1), equal-start pokes (0x100/6, 0x100/8), high pokes (0x102/4, 0x101/4)",
+    "expect": "three-way classification chain (fspec.cc:697-714): off==0 -> contains_justified(2), off>0 -> contains_unjustified(1), off<0 + exclusion containedBy -> contained_by(3), else no_containment(0); the equal-start pokes exercise the FSPEC-JUSTIFIED-CONTAIN-0001 fix (off=-1 -> contained_by, previously misclassified contains_justified)"
+   }
+  ],
+  "case_order": [
+   "address_justified_contain",
+   "param_entry_justified_contain",
+   "characterize_projection"
+  ],
+  "sha256": "2914aa632dea884b5db16b0fe47d8ecc1c674c1348aa1913f4c04686942134cd"
+ },
+ "observation_schema": {
+  "format": "63 fixed-order UTF-8 lines with final newline: one envelope, three case headers, then 34 jc rows (17 geometries x view=start/end), 17 pe rows (11 LE-flagged + 6 BE-unflagged) and 8 ch rows",
+  "polarity": "jc/pe off values expose the independent one-sided -1 checks (address.cc:133/137) versus the branch arithmetic for contained ranges",
+  "branches": "view=start pins the op2.offset - offset arithmetic (Ghidra LE forceleft=false/true and BE forceleft=true; Rust force_left=true); view=end pins off1 - off2 (Ghidra BE forceleft=false; Rust force_left=false); the C++ harness additionally verifies LE(false)==LE(true)==BE(true) internally and exits non-zero on violation",
+  "classification": "ch rows print the numeric characterizeAsParam code (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3); equal-start pokes demonstrate the FSPEC-JUSTIFIED-CONTAIN-0001 fix (off=-1 -> contained_by)"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "Address::justifiedContain returns int4 by value (-1 or the endian-aware offset); ParamEntry::justifiedContain forwards to it with forceleft=(flags & force_left_justify) on the alignment==0 path; characterizeAsParam consumes the sign (==0 justified, >0 unjustified) and falls to the exclusion containedBy check before no_containment",
+  "loop_bounds_traversal_order": "characterizeAsParam walks the per-space resolver ranges containing loc.getOffset() (resolverMap[space->getIndex()], populateResolver fspec.cc:1191-1216), then exclusion entries starting inside the query range only if the first find() is non-end; fixture queries keep loc inside the entry extent so both loops observe the single entry",
+  "counters_and_accumulators": "none; all three functions are pure queries over immutable model state",
+  "sort_and_comparison_keys": "containment decision keys are the raw offset comparisons op2.offset < offset and off2 > off1 (uintb, independent), plus containedBy's addressbase < addr and entryoff <= rangeoff; classification tie order is justified (off==0) before unjustified (off>0) before contained_by before no_containment per the fspec.cc:697-714 return ladder"
+ },
+ "coverage": {
+  "address_justified_contain": "MATCH",
+  "param_entry_justified_contain": "MATCH",
+  "characterize_projection": "MATCH",
+  "space_mismatch_base_branch": "UNTESTED (proposed residual: Address::justifiedContain's base != op2.base early -1 is caller-side in Rugra; the spaceless helper cannot express it - ADDRESS-0001 transitional)",
+  "le_forceleft_false_flag_routing": "UNTESTED (proposed residual: on little-endian spaces Ghidra returns the start-distance even with forceleft=false, while the spaceless helper picks the end-distance branch for force_left=false; affects heritage truncate_amount and unflagged LE entries' ==0 checks - needs endianness threading through callers incl. src/heritage.rs)",
+  "characterize_resolver_foreign_start": "UNTESTED (proposed residual: queries whose start offset lies outside every same-space entry extent hit Ghidra's resolver gating (second loop skipped when find(loc)==end) but Rugra's linear scan still applies the exclusion containedBy check - divergent for those geometries)"
+ },
+ "residuals": [
+  {
+   "todo_id": "ADDRESS-0001",
+   "status": "UNTESTED",
+   "detail": "Space-mismatch -1 branch (address.cc:132 base != op2.base) is structurally caller-side in Rugra's spaceless helper; covered when Address carries space identity."
+  },
+  {
+   "todo_id": "FSPEC-JUSTIFIED-ENDIAN-0002",
+   "status": "UNTESTED",
+   "detail": "Little-endian forceleft=false flag routing: Ghidra returns op2.offset - offset on LE regardless of forceleft; the spaceless helper returns off1 - off2 for force_left=false. Fix requires threading space endianness into the helper and its callers (src/heritage.rs:2268 truncate_amount, transfer_locked_output_param, join-piece walk, unflagged LE entries)."
+  },
+  {
+   "todo_id": "FSPEC-CHARACTERIZE-RESOLVER-GATE-0003",
+   "status": "UNTESTED",
+   "detail": "characterizeAsParam resolver gating for foreign-start queries (loc outside every same-space entry extent) skips Ghidra's containedBy pass entirely; Rugra's linear scan does not replicate that gate."
+  }
+ ],
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "rugra_build": "Archive the pinned base, overlay the owned fspec source, verify the complete Cargo.lock registry closure, then let /usr/bin/cargo --locked --offline select and checksum the current Linux target's cached packages under the global build lock.",
+  "expected_stdout_lines": 63,
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "e911ac84e098da4520d504452cd7415019e293c7d5eb834bded34e5603179711"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "6526dab345487593f826d25efcb76c37973471a0013d8a4a45754a6ac1fb3f73",
+  "rugra_stdout_sha256": "6526dab345487593f826d25efcb76c37973471a0013d8a4a45754a6ac1fb3f73"
+ }
+}

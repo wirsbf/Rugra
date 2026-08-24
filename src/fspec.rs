@@ -4514,15 +4514,26 @@ impl ParamEntry {
 }
 
 // RUGRA-GLUE: justified_contain_range (free helper — mirrors Ghidra's
-// inline `Address::justifiedContain` used by `ParamEntry::justifiedContain`
-// and its join-piece walk). Public because heritage's call-guard helpers
-// (guardCallOverlappingInput, guardOutputOverlapStack) call the same
-// `Address::justifiedContain` math on caller-perspective addresses.
+// inline `Address::justifiedContain` (address.cc:131-141) used by
+// `ParamEntry::justifiedContain` and its join-piece walk. Public because
+// heritage's call-guard helpers (guardCallOverlappingInput,
+// guardOutputOverlapStack) call the same `Address::justifiedContain` math
+// on caller-perspective addresses. The `base != op2.base` guard of the
+// Ghidra original lives with the callers (this helper takes spaceless raw
+// offsets); `force_left=true` selects the `op2.offset - offset` branch,
+// `force_left=false` the big-endian `off1 - off2` branch.
 pub fn justified_contain_range(base: u64, sz2: i32, addr: u64, sz: i32, force_left: bool) -> i32 {
-    let end_addr = addr.wrapping_add(sz as u64).wrapping_sub(1);
+    // Ghidra: address.cc:133 if (op2.offset < offset) return -1;
+    // Either side poking out independently excludes containment (the two
+    // checks are NOT a paired both-bounds-violated condition).
+    if addr < base { return -1; }
+    // Ghidra: address.cc:135-137 off1 = offset + (sz-1); off2 =
+    // op2.offset + (sz2-1); if (off2 > off1) return -1;
     let this_end = base.wrapping_add(sz2 as u64).wrapping_sub(1);
-    if addr < base && end_addr < this_end { return -1; }
-    if addr > base && end_addr > this_end { return -1; }
+    let end_addr = addr.wrapping_add(sz as u64).wrapping_sub(1);
+    if end_addr > this_end { return -1; }
+    // Ghidra: address.cc:138-140 if (isBigEndian() && !forceleft)
+    // return off1 - off2; return op2.offset - offset;
     if force_left { (addr - base) as i32 } else { (this_end - end_addr) as i32 }
 }
 
@@ -7617,6 +7628,99 @@ mod tests {
         assert_eq!(e.justified_contain(Address::new(0x206), 2), 0);
         // Out of range
         assert_eq!(e.justified_contain(Address::new(0x300), 4), -1);
+    }
+
+    // FSPEC-JUSTIFIED-CONTAIN-0001: address.cc:131-141
+    // Address::justifiedContain returns -1 when EITHER side pokes out
+    // independently (`if (op2.offset < offset) return -1;` then
+    // `if (off2 > off1) return -1;`). The legacy paired-violation predicate
+    // (both bounds out together) let equal-start-bigger queries and
+    // low-side overlaps ending flush at the entry end fall through to the
+    // offset arithmetic, returning 0 (false justified) or wrapped values.
+    #[test]
+    fn test_justified_contain_range_one_sided_violations() {
+        // entry [0x1000,0x1007] (base 0x1000, size 8).
+        // Equal start, query pokes out high: [0x1000,0x100B] — Ghidra
+        // off2 > off1 -> -1 (was 0 in the start-distance branch).
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 12, true), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 12, false), -1);
+        // Low-side partial overlap ending flush at the entry end:
+        // [0xFFE,0x1007] — op2.offset < offset -> -1 (was 0 in the
+        // end-distance branch: this_end - end_addr == 0).
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 10, true), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 10, false), -1);
+        // Strict superset query [0xFFC,0x100B]: -1 (was a wrapped value).
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFC, 16, true), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFC, 16, false), -1);
+        // High-side partial overlap from inside: [0x1004,0x100B] -> -1.
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1004, 8, true), -1);
+        // Low-side partial overlap ending inside: [0xFFE,0x1003] -> -1
+        // (already rejected by the legacy paired condition; pinned).
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 6, false), -1);
+        // Size-1 entry [0x2000,0x2000]: equal-start-bigger -> -1.
+        assert_eq!(justified_contain_range(0x2000, 1, 0x2000, 2, true), -1);
+        assert_eq!(justified_contain_range(0x2000, 1, 0x2000, 2, false), -1);
+        // Contained geometries keep the branch arithmetic (address.cc:138-140):
+        // start view = op2.offset - offset, end view = off1 - off2.
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 8, true), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 8, false), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1002, 4, true), 2);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1002, 4, false), 2);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, true), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, false), 4);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1003, 1, true), 3);
+    }
+
+    // FSPEC-JUSTIFIED-CONTAIN-0001 projection: characterizeAsParam
+    // (fspec.cc:682-719) over a 4-byte force-left exclusion entry. A query
+    // starting at the entry base but poking out (range superset of entry)
+    // must classify contained_by (justifiedContain -> -1, then the
+    // exclusion containedBy check), never contains_justified.
+    #[test]
+    fn test_characterize_as_param_range_superset_entry() {
+        let mut m = ParamListStandard::new();
+        let mut e = ParamEntry::new(0);
+        e.set_space(AddressSpace::Register);
+        e.set_base(0x100);
+        e.set_sizes(4, 1);
+        e.set_alignment(0); // exclusion
+        *e.flags_mut() |= param_entry_flags::FORCE_LEFT_JUSTIFY;
+        let mut effects = Vec::new();
+        m.parse_pentry(0, true, false, false, &mut effects, e).unwrap();
+        m.finalize_after_decode(0);
+        // Exact and justified sub-ranges.
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x100, 4),
+            containment::CONTAINS_JUSTIFIED
+        );
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x100, 1),
+            containment::CONTAINS_JUSTIFIED
+        );
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x102, 2),
+            containment::CONTAINS_UNJUSTIFIED
+        );
+        // Range supersets of the entry -> contained_by (was
+        // contains_justified under the paired-violation predicate).
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x100, 6),
+            containment::CONTAINED_BY
+        );
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x100, 8),
+            containment::CONTAINED_BY
+        );
+        // High-side pokes with the entry not inside the query ->
+        // no_containment.
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x102, 4),
+            containment::NO_CONTAINMENT
+        );
+        assert_eq!(
+            m.characterize_as_param(AddressSpace::Register, 0x101, 4),
+            containment::NO_CONTAINMENT
+        );
     }
 
     #[test]
