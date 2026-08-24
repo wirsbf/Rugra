@@ -34,12 +34,24 @@ if [[ $# -ne 0 ]]; then
 fi
 
 clean_path=/usr/bin:/bin
-rust_toolchain=nightly-x86_64-unknown-linux-gnu
+rust_toolchain=system-x86_64-unknown-linux-gnu
 user_home=$(/usr/bin/getent passwd "$(/usr/bin/id -u)" | /usr/bin/awk -F: 'NR == 1 { print $6 }')
 if [[ -z "$user_home" || ! -d "$user_home" ]]; then
   echo "could not resolve current user home" >&2
   exit 1
 fi
+# Task USEROP-LOCALTYPE-METADATA-0001 dedicated Cargo dirs: every Cargo
+# invocation below is serialized on the shared build flock and uses these
+# isolated, pre-created directories (never /tmp or a shared target).
+cargo_target=/home/wirs/.cache/a48-userop-target
+cargo_tmp=/home/wirs/.cache/a48-userop-tmp
+/usr/bin/mkdir -p "$cargo_target" "$cargo_tmp"
+for cargo_dir in "$cargo_target" "$cargo_tmp"; do
+  if [[ ! -d "$cargo_dir" || -L "$cargo_dir" ]]; then
+    echo "dedicated Cargo directory is not a regular directory: $cargo_dir" >&2
+    exit 1
+  fi
+done
 
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
 host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
@@ -47,8 +59,8 @@ host_ar_bin=$(/usr/bin/readlink -f /usr/bin/ar)
 host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
-host_cargo_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/cargo"
-host_rustc_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/rustc"
+host_cargo_bin=$(/usr/bin/readlink -f /usr/bin/cargo)
+host_rustc_bin=$(/usr/bin/readlink -f /usr/bin/rustc)
 for tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" "$host_make_bin" \
   "$host_python_bin" "$host_git_bin" "$host_cargo_bin" "$host_rustc_bin"; do
   if [[ ! -x "$tool" ]]; then
@@ -69,7 +81,8 @@ cpp_fixture_live="$repo_root/tests/oracle/userop_localtype_metadata_1204.cc"
 rust_fixture_live="$repo_root/tests/oracle/userop_localtype_metadata_1204.rs"
 userop_source_live="$repo_root/src/userop.rs"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
-bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_library_dir=$(/usr/bin/dirname "$bfd_library")
 registry_cache="$user_home/.cargo/registry/cache"
 
 for required in "$metadata_live" "$cpp_fixture_live" "$rust_fixture_live" \
@@ -398,7 +411,7 @@ if [[ ! -f "$standard_archive" || -L "$standard_archive" ]]; then
   exit 1
 fi
 
-fixture_target="$oracle_tmp/cargo-target"
+fixture_target="$cargo_target"
 for cargo_config in \
   "$snapshot_root/.cargo/config" "$snapshot_root/.cargo/config.toml" \
   "$oracle_tmp/.cargo/config" "$oracle_tmp/.cargo/config.toml" \
@@ -409,15 +422,15 @@ for cargo_config in \
     exit 1
   fi
 done
-if ! (
-  builtin cd "$snapshot_root"
-  /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-    RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock \
+  /usr/bin/env -i HOME="$user_home" PATH="$clean_path" LC_ALL=C.UTF-8 \
+    TMPDIR="$cargo_tmp" CARGO_INCREMENTAL=0 \
     CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$fixture_target" \
     CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" \
     AR="$host_ar_bin" RUSTC="$host_rustc_bin" \
-    "$host_cargo_bin" build --quiet --locked --offline --lib
-) >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
+    "$host_cargo_bin" build --quiet --locked --offline --lib \
+    --manifest-path "$snapshot_root/Cargo.toml" \
+  >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
   /usr/bin/cat "$oracle_tmp/cargo.stdout" >&2
   /usr/bin/cat "$oracle_tmp/cargo.stderr" >&2
   exit 1
@@ -452,8 +465,8 @@ if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_cxx_bin" \
 fi
 
 rust_fixture="$fixture_root/userop_localtype_metadata_1204.rs"
-if ! /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+if ! /usr/bin/env -i HOME="$user_home" PATH="$clean_path" LC_ALL=C.UTF-8 \
+  TMPDIR="$cargo_tmp" \
   "$host_rustc_bin" --edition=2021 -O \
   -L "dependency=$fixture_target/debug/deps" -L "native=$native_dir" \
   --extern "rugra=$rugra_rlib" \
@@ -465,7 +478,7 @@ if ! /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
   exit 1
 fi
 
-/usr/bin/env -i PATH="$clean_path" LC_ALL=C \
+/usr/bin/env -i PATH="$clean_path" LC_ALL=C LD_LIBRARY_PATH="$bfd_library_dir" \
   "$oracle_tmp/userop_localtype_metadata_1204_cpp" "$spec_root" "$binary" \
   >"$oracle_tmp/ghidra.stdout" 2>"$oracle_tmp/ghidra.stderr"
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C \

@@ -30,7 +30,7 @@
     "cpp_fixture_sha256": "6b140065af9e0357b0ea6cf49931d96d2969bbbc52ded53b5cce7bb096a27c9e",
     "rust_fixture_sha256": "fcce61fdfb0feac03ae11a5561fb8f0a69f9b4bf4bfa6f0192312cacce6aaf35",
     "userop_rs_sha256": "0d434b311b303b7c6db0f7971bc7a32962e6122c07c4790b46bec4e704489396",
-    "runner_sha256": "9b59a4d55263a783120c9844500f25ed287ae5bc94b31ddd33f2cfb5f73ac11c",
+    "runner_sha256": "5a93441518bddb12ba6ba7d28b6bf98b7b731240a03e1188f850478c7d607002",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
@@ -45,17 +45,17 @@
     "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   },
   "host_tools": {
-    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cxx_target": "x86_64-linux-gnu",
-    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cc_target": "x86_64-linux-gnu",
-    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
-    "make": "GNU Make 4.3",
-    "python": "Python 3.10.12",
-    "git": "git version 2.34.1",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
+    "cxx": "g++ (GCC) 16.2.1 20260810",
+    "cxx_target": "x86_64-pc-linux-gnu",
+    "cc": "gcc (GCC) 16.2.1 20260810",
+    "cc_target": "x86_64-pc-linux-gnu",
+    "ar": "GNU ar (GNU Binutils) 2.47",
+    "make": "GNU Make 4.4.1",
+    "python": "Python 3.14.7",
+    "git": "git version 2.55.0",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+    "rust_toolchain": "system-x86_64-unknown-linux-gnu"
   },
   "build": {
     "registry_packages": 164
