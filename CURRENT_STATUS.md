@@ -4,6 +4,23 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，本 wave 已落地 23 个原子提交**
 
+## 关键指标增量（2026-08-25，W-2026-08-24-TRIFUNC-GAP wave 进行中）
+
+> 本节为 wave 期间增量快照；上节 2026-08-21 数据为 wave 前基线。任务明细见 `docs/TODO_BOARD.md` 活跃 wave 段，
+> 过程证据链见 `docs/alignment_docs/WAVE_STATUS_2026-08-25*.md` 与 `docs/alignment_audit/REVIEW_*` 系列。
+
+| 维度 | wave 前（f7b3c31） | 当前 | 说明 |
+|---|---|---|---|
+| curl 差分 skeleton | 2409 | **2012**（noreturn 全链后干净树测量；master 另有 merge-panic 三函数修复在途，合测后为正式值） | flow 尾调用修复 −32 → varmap 窗口交互 +28 → noreturn 全链 −393 |
+| defects / numbering | 2 / 1 | **0 / 0**（同上测量） | file2string 全 MATCH；helpf 缺陷清除 |
+| wave 集成数 | — | **33 项实现 + 8 项独立复核批准 + 2 项 REJECT→返修→APPROVE 闭环** | 全部带双侧 oracle fixture 或差分门禁 |
+| 逐字节全 MATCH 函数 | 4/75 真实内部 | file2string.part.0 新增（143→0） | my_get_line 160→83、glob_word 144→81、helpf 137→86 持续收敛 |
+| merge-panic 回归 | 0 | 3 函数（my_get_line/helpf/file2string）worker panic @merge.rs:916 | 修复中（A36）；1958/0/1 的中间测量因此无效 |
+| cargo test --lib | 可用 | 可用（E0423 已修 `b55ef7f`） | 3 个预存失败在板（comment/funcdata×2） |
+
+**wave 机制运行数据**：≥10 并发子 Agent 持续维持（峰值 14）；独立复核 13 轮（R1-R13，含 2 次 REJECT 均抓到 fixture 抓不住的真缺陷）；
+三函数根因链全部进入实现/集成态（hugehelp 四环节、progressbarinit 双方案、my_fwrite exact-piece→SPLITDATATYPE）。
+
 ## 关键指标（2026-08-21，HEAD `5dc86ba`）
 
 | 指标 | 当前 | 核实方式 |
