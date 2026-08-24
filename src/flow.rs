@@ -53,26 +53,19 @@ pub mod flow_flags {
 /// `flow.cc` call-spec maintenance methods rely on but that Rugra's
 /// `FuncCallSpecs` does not yet model. The audit (flow_audit.md item 2)
 /// flags this as a "FuncCallSpecs gap": Ghidra's `FuncCallSpecs` carries
-/// inline/noreturn/inject_id state, while Rugra's does not store them.
+/// inject_id state, while Rugra's does not store it.
 ///
-/// Because this alignment task is constrained to `src/flow.rs`, the accessors
-/// are provided here as an extension trait. `is_inline`/`is_no_return`
-/// delegate to the nested `FuncProto`'s flag bits (fspec.hh:1348/1349,
-/// populated by `FlowInfo::queryCall`'s `copyFlowEffects` in Ghidra;
-/// Rugra's front-end does not feed per-callee protos at flow time yet —
-/// FLOW-NORETURN-DATA-0001), `get_inject_id` returns the no-injection
-/// sentinel until the id is stored. The remaining accessors (`get_op`,
-/// `get_name`, `set_paramshift`, `cancel_inject_id`, `set_address`)
-/// delegate to the existing public fields/methods.
+/// The flag accessors Ghidra inherits from `FuncProto` (`is_inline`,
+/// `is_no_return`, `set_no_return`, `copy_flow_effects`) now live on
+/// `FuncCallSpecs` itself (fspec.rs delegated surface, fspec.hh:1645
+/// inheritance), populated by `FlowInfo::query_call`'s `copy_flow_effects`
+/// (flow.cc:664) from the flow-visible per-callee prototype table. This
+/// extension trait covers the remaining flow-local adapters:
+/// `get_inject_id` returns the no-injection sentinel until the id is stored
+/// (INJECT-0001); `get_op`, `get_name`, `set_paramshift`,
+/// `cancel_inject_id`, `clear_entry_address` delegate to the existing
+/// public fields/methods.
 trait FuncCallSpecsExt {
-    /// Flow-local adapter for `FuncCallSpecs::isInline` (fspec.hh), reading
-    /// the nested FuncProto's `is_inline` flag bit (fspec.hh:1348).
-    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::isInline directly and has no flow-local interface.
-    fn is_inline(&self) -> bool;
-    /// Flow-local adapter for `FuncCallSpecs::isNoReturn` (fspec.hh), reading
-    /// the nested FuncProto's `no_return` flag bit (fspec.hh:1349).
-    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::isNoReturn directly and has no flow-local interface.
-    fn is_no_return(&self) -> bool;
     /// Flow-local adapter for `FuncCallSpecs::getInjectId` (fspec.hh). Returns -1
     /// (Ghidra's "no injection" sentinel) until the id is stored.
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::getInjectId directly and has no flow-local interface.
@@ -100,16 +93,6 @@ trait FuncCallSpecsExt {
 }
 
 impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
-    // RUGRA-GLUE: ANN-B; delegates to the nested FuncProto flag bit (fspec.hh:1348).
-    fn is_inline(&self) -> bool {
-        self.prototype.is_inline()
-    }
-    // RUGRA-GLUE: ANN-B; delegates to the nested FuncProto flag bit
-    // (fspec.hh:1349); nothing populates it at flow time until
-    // FLOW-NORETURN-DATA-0001 feeds per-callee flow effects.
-    fn is_no_return(&self) -> bool {
-        self.prototype.is_no_return()
-    }
     // RUGRA-GLUE: ANN-B; INJECT-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra injection-id field.
     fn get_inject_id(&self) -> i32 {
         // TODO(INJECT-0001): depends on FuncCallSpecs storing an inject id. -1 = none.
@@ -255,6 +238,10 @@ pub struct TruncatedFlowState {
     pub(crate) flags: u32,
     pub(crate) inline_head: Option<u64>,
     pub(crate) inline_base: std::collections::BTreeSet<u64>,
+    /// Per-callee prototypes visible to `query_call` in the clone (see
+    /// [`FlowInfo::callee_func_protos`]); Ghidra's clone shares the symbol
+    /// database, so the table rides along.
+    pub(crate) callee_func_protos: std::collections::BTreeMap<u64, crate::fspec::FuncProto>,
 }
 
 /// Reachability-based flow tracker corresponding to `FlowInfo`
@@ -340,6 +327,23 @@ pub struct FlowInfo<'a> {
     /// within the same FlowInfo lifetime; entries for later-erased specs
     /// are inert.
     resolved_funcdata: std::collections::BTreeSet<u64>,
+    /// The `FuncProto` of every callee `query_call` can resolve, keyed by
+    /// the callee's entry address — the `funcp` observable of the
+    /// `Funcdata` that Ghidra's
+    /// `data.getScopeLocal()->getParent()->queryFunction(addr)`
+    /// (flow.cc:660) returns. `query_call` reads it to drive
+    /// `copy_flow_effects` (flow.cc:663-664); an absent entry means the
+    /// callee carries no known flow effects, exactly like a Ghidra
+    /// queryFunction miss on the funcp channel.
+    ///
+    /// RUGRA-GLUE: Ghidra holds the callee protos inside the symbol
+    /// database's Funcdata objects (marked by the "Non-Returning Functions -
+    /// Known" analyzer et al.); Rugra has no per-callee Funcdata at flow
+    /// time, so the driver feeds the table through
+    /// [`follow_flow_with_callee_protos`] (FLOW-NORETURN-DATA-0001 owns the
+    /// production data source). The table is carried into truncated-flow
+    /// clones like Ghidra's shared database.
+    callee_func_protos: std::collections::BTreeMap<u64, crate::fspec::FuncProto>,
 }
 
 impl<'a> FlowInfo<'a> {
@@ -367,6 +371,7 @@ impl<'a> FlowInfo<'a> {
             inline_base: std::collections::BTreeSet::new(),
             flowoverride_present,
             resolved_funcdata: std::collections::BTreeSet::new(),
+            callee_func_protos: std::collections::BTreeMap::new(),
         }
     }
 
@@ -404,6 +409,10 @@ impl<'a> FlowInfo<'a> {
             inline_base,
             flowoverride_present,
             resolved_funcdata: std::collections::BTreeSet::new(),
+            // The truncated clone sees the same queryFunction source as the
+            // original flow (Ghidra's symbol database is shared); the table
+            // travels through TruncatedFlowState for the same visibility.
+            callee_func_protos: state.callee_func_protos.clone(),
         }
     }
 
@@ -421,6 +430,7 @@ impl<'a> FlowInfo<'a> {
             flags: self.flags,
             inline_head: self.inline_head,
             inline_base: self.inline_base.clone(),
+            callee_func_protos: self.callee_func_protos.clone(),
         }
     }
 
@@ -692,57 +702,79 @@ impl<'a> FlowInfo<'a> {
     }
 
     /// Treat an indirect jump (BRANCHIND) whose jumptable could not be
-    /// recovered as a CALLIND or RETURN instead. The opcode/halt slice
-    /// corresponds to `truncateIndirectJump` (flow.cc:727-769). For
-    /// `fail_return` the BRANCHIND becomes a RETURN; otherwise Rust currently
-    /// makes a CALLIND and an artificial halt but does not establish the
-    /// associated callspec or internal no-parameter prototype. Those consumers
-    /// remain `CALLSPEC-0001`/UNTESTED.
+    /// recovered as a CALLIND or RETURN instead. Faithful to
+    /// `FlowInfo::truncateIndirectJump` (flow.cc:727-769).
     ///
-    /// Rugra notes: `setup_callind_specs` now exists, but this callsite is not
-    /// wired to it. The JumpTable::RecoveryMode enum is not yet modelled, so
-    /// callers pass the canonical fail modes via the `fail_mode` byte
-    /// (0 = fail_thunk, 1 = fail_callother, 2 = fail_return, 3 = default).
+    /// For `fail_return` the BRANCHIND becomes a RETURN. Otherwise it
+    /// becomes a CALLIND with a callspec from `setup_callind_specs`
+    /// (flow.cc:736); the `fail_callother` path marks that callspec
+    /// no-return (`fc->setNoReturn(true)`, flow.cc:747) and the default
+    /// path marks it a bad jump table. An artificial halt of the
+    /// mode-determined type is inserted right after the op. The
+    /// `fail_callother` no-params internal prototype
+    /// (`fc->setInternal(glb->defaultfp, void)` + input/output locks,
+    /// flow.cc:757-763) remains CALLSPEC-0001 (needs the architecture
+    /// default model plumbing), and `setBadJumpTable` (flow.cc:754) has no
+    /// FuncCallSpecs field yet (CALLSPEC-0001).
     // Ghidra: flow.cc:727 FlowInfo::truncateIndirectJump
-    pub fn truncate_indirect_jump(&mut self, op: &crate::op::PcodeOpRef, fail_mode: u8) {
+    pub fn truncate_indirect_jump(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        mode: crate::jumptable::RecoveryMode,
+    ) {
         let addr = {
             let o = op.0.read().unwrap();
             o.get_addr()
         };
-        if fail_mode == 2 {
-            // JumpTable::fail_return: turn the jump into a RETURN.
+        if let crate::jumptable::RecoveryMode::FailReturn = mode {
+            // flow.cc:730-732: turn the jump into a RETURN.
             self.fd.op_set_opcode(op, OpCode::CPUI_RETURN);
-            eprintln!(
-                "[FLOW] {}: Treating indirect jump at {:#x} as return",
-                self.fd.name,
-                addr.as_u64()
-            );
+            // flow.cc:732: data.warning("Treating indirect jump as return").
+            self.fd.warning("Treating indirect jump as return", addr);
             return;
         }
-        // Otherwise turn the jump into a CALLIND.
+        // flow.cc:735: turn the jump into a CALLIND.
         self.fd.op_set_opcode(op, OpCode::CPUI_CALLIND);
-        // Ghidra: setupCallindSpecs(op, NULL); (flow.cc:736). The exact helper
-        // now exists, but this consumer does not call it, and ActionFuncLink's
-        // fallback only scans CALL (not CALLIND). Preserve the legacy
-        // diagnostic bytes until this CALLSPEC-0001/UNTESTED branch has a
-        // bilateral fixture; its wording is not the current premise.
-        eprintln!(
-            "[FLOW] {}: NOTE setupCallindSpecs at {:#x} deferred to ActionFuncLink",
-            self.fd.name,
-            addr.as_u64()
-        );
-        let (return_type, _no_params, warn_msg) = match fail_mode {
-            0 => (0u32, false, None),                                      // fail_thunk
-            1 => (pcodeop_flags::NORETURN, true, Some("Does not return")), // fail_callother
-            _ => (0u32, false, Some("Treating indirect jump as call")),    // default
+        // flow.cc:736: setupCallindSpecs(op, NULL) — establish the callspec
+        // (identity, query_call, flow-modification check).
+        self.setup_callind_specs(op, None);
+        // flow.cc:737: `FuncCallSpecs *fc = data.getCallSpecs(op)`.
+        let fc_owner = find_callspec_for_op(self.fd, op);
+        let (return_type, no_params) = match mode {
+            // flow.cc:741-743: fail_thunk — plain call, fall-through halt.
+            crate::jumptable::RecoveryMode::FailThunk => (0u32, false),
+            crate::jumptable::RecoveryMode::FailCallother => {
+                // flow.cc:745-749: the address was formed by CALLOTHER — the
+                // truncated call never returns.
+                if let Some(fc) = fc_owner.as_ref() {
+                    // flow.cc:747: fc->setNoReturn(true).
+                    fc.write().unwrap().set_no_return(true);
+                }
+                // flow.cc:748: data.warning("Does not return", op->getAddr()).
+                self.fd.warning("Does not return", addr);
+                (pcodeop_flags::NORETURN, true)
+            }
+            // flow.cc:751-755: default (fail_normal) — consider using a
+            // special name for the switch variable.
+            // TODO(CALLSPEC-0001): fc->setBadJumpTable(true) — FuncCallSpecs
+            // has no badjumptable field.
+            _ => {
+                // flow.cc:755: data.warning("Treating indirect jump as call").
+                self.fd.warning("Treating indirect jump as call", addr);
+                (0u32, false)
+            }
         };
-        if let Some(msg) = warn_msg {
-            eprintln!("[FLOW] {}: {} at {:#x}", self.fd.name, msg, addr.as_u64());
+        if no_params {
+            // flow.cc:757-763: if (!fc->hasModel()) { fc->setInternal(
+            // glb->defaultfp, void); setInputLock(true); setOutputLock(true); }
+            // TODO(CALLSPEC-0001): needs the architecture default model and
+            // void-type plumbing on the callspec.
         }
-        // Ghidra: if (noParams) { fc->setInternal(...) } — FuncCallSpecs gap.
-        // Create an artificial return (flow.cc:766-767) right after the op.
+        // flow.cc:765-767: create an artificial return right after the op
+        // (data.opDeadInsertAfter — the funcdata.hh:460 dead-list wrapper,
+        // mirroring the halt in checkForFlowModification).
         let truncop = self.artificial_halt(addr, return_type);
-        self.fd.op_insert_after(&truncop, op);
+        self.fd.obank.insert_after_dead(&truncop, op);
     }
 
     /// Recover jumptables for the current set of BRANCHIND ops using existing
@@ -786,10 +818,11 @@ impl<'a> FlowInfo<'a> {
                 None => {
                     // Could not recover the jumptable (flow.cc:1443-1445).
                     if !self.is_flow_for_inline() {
-                        // Treat the indirect jump as a call/return. Rugra
-                        // maps RecoveryMode → fail_mode byte expected by
-                        // truncate_indirect_jump (FailNormal=1 → default).
-                        self.truncate_indirect_jump(op, mode as u8);
+                        // Treat the indirect jump as a call/return. The mode
+                        // flows straight through to truncate_indirect_jump,
+                        // exactly like flow.cc:1445 passes the JumpTable
+                        // RecoveryMode to truncateIndirectJump.
+                        self.truncate_indirect_jump(op, mode);
                     }
                 }
                 Some(jt) => {
@@ -1245,7 +1278,14 @@ impl<'a> FlowInfo<'a> {
             // flow.cc:642-644: insert an artificial halt after the call.
             let addr = op_ref.0.read().unwrap().get_addr();
             let haltop = self.artificial_halt(addr, pcodeop_flags::NORETURN);
-            self.fd.op_insert_after(&haltop, &op_ref);
+            // flow.cc:643: data.opDeadInsertAfter(haltop, op) — the thin
+            // funcdata.hh:460 wrapper over obank.insertAfterDead. The halt
+            // must stay in the dead list right after the CALL so
+            // xref_control_flow's next iteration (Ghidra's `--oiter`,
+            // flow.cc:337) processes it as the instruction's flow
+            // terminator; the alive-list opInsertAfter would pull it out of
+            // the dead list and the fall-through would be queued anyway.
+            self.fd.obank.insert_after_dead(&haltop, &op_ref);
             if !is_inline {
                 // flow.cc:645-646: warning only when not inline.
                 self.fd.warning("Subroutine does not return", addr);
@@ -1276,12 +1316,12 @@ impl<'a> FlowInfo<'a> {
     /// the entry address resolves the callee, `set_funcdata` copies the
     /// entry/display-name pair (fspec.cc:4949-4960 observable slice), and
     /// the resolution is recorded in `resolved_funcdata` for
-    /// `check_contained_call`. `copyFlowEffects`'s inline/no-return flag
-    /// copy remains a data gap: Rugra has no per-callee FuncProto at flow
-    /// time (Ghidra's platform marks `exit`-class functions no-return via
-    /// the name-driven "Non-Returning Functions - Known" analyzer; the
-    /// Rugra driver does not feed that yet — see
-    /// FLOW-NORETURN-DATA-0001).
+    /// `check_contained_call`. The callee's `FuncProto` for
+    /// `copy_flow_effects` comes from the flow-visible
+    /// [`FlowInfo::callee_func_protos`] table — the `funcp` slice of the
+    /// Funcdata `queryFunction` returns on the Ghidra side; its production
+    /// data source (the driver-side known-noreturn name list) is
+    /// FLOW-NORETURN-DATA-0001.
     // Ghidra: flow.cc:656 FlowInfo::queryCall
     fn query_call(&mut self, fc_idx: usize) {
         // flow.cc:659: `if (!fspecs.getEntryAddress().isInvalid())`.
@@ -1294,11 +1334,11 @@ impl<'a> FlowInfo<'a> {
         let Some(callee_name) = self.fd.symbol_table.get(&entry_addr.as_u64()).cloned() else {
             return; // No function at this entry: nothing to resolve.
         };
-        // flow.cc:662: `fspecs.setFuncdata(otherfunc)` — associate the
-        // callee's entry address and display name with the callsite.
-        if let Some(mut fc) = self.fd.get_call_specs_mut(fc_idx) {
-            fc.set_funcdata(&callee_name, entry_addr);
-        }
+        // flow.cc:660: `otherfunc->getFuncProto()` — the resolved callee's
+        // prototype, taken out before the mutable spec borrow below. An
+        // absent entry means queryFunction returned no funcp observable
+        // (the callee carries no known flow effects).
+        let callee_proto = self.callee_func_protos.get(&entry_addr.as_u64()).cloned();
         // Record the resolution for check_contained_call's flow.cc:1367
         // `fd != 0 continue` guard (RUGRA-GLUE: FlowInfo-side set stands in
         // for the per-spec Funcdata pointer Rugra's FuncCallSpecs lacks).
@@ -1309,10 +1349,23 @@ impl<'a> FlowInfo<'a> {
         {
             self.resolved_funcdata.insert(op_addr);
         }
-        // flow.cc:663-669: `if (!fspecs.hasModel() || ...) copyFlowEffects`.
-        // TODO(FLOW-NORETURN-DATA-0001): depends on a per-callee FuncProto
-        // (inline/no-return flags) being available at flow time. Until the
-        // front-end feeds it, noreturn calls keep falling through.
+        if let Some(mut fc) = self.fd.get_call_specs_mut(fc_idx) {
+            // flow.cc:662: `fspecs.setFuncdata(otherfunc)` — associate the
+            // callee's entry address and display name with the callsite.
+            fc.set_funcdata(&callee_name, entry_addr);
+            if let Some(proto) = callee_proto.as_ref() {
+                // flow.cc:663: `if (!fspecs.hasModel() || otherfunc->
+                // getFuncProto().isInline())` — take the callee's flow
+                // effects unless the callsite prototype was already
+                // overridden with a full model (an inline callee always
+                // forces the copy).
+                if !fc.has_model() || proto.is_inline() {
+                    // flow.cc:664: `fspecs.copyFlowEffects(...)` — one-way
+                    // is_inline|no_return flag overwrite onto the callsite.
+                    fc.copy_flow_effects(proto);
+                }
+            }
+        }
     }
 
     /// Set up the identity/lifecycle slice of the FuncCallSpecs object for a
@@ -1554,11 +1607,12 @@ impl<'a> FlowInfo<'a> {
         retaddr: &mut Option<Address>,
     ) -> bool {
         // flow.cc:1136: if the inlined function is not noreturn, we need a
-        // fallthrough op and a distinct return address.
-        // RUGRA-GLUE: FuncProto::is_no_return is not yet modelled; we
-        // conservatively assume the function may return and enforce the
-        // return-address restrictions.
-        let inline_noreturn = false; // TODO: inlinefd.funcp.is_no_return()
+        // fallthrough op and a distinct return address. The callee's
+        // no-return state is read off its FuncProto exactly as Ghidra reads
+        // `inlinefd->getFuncProto().isNoReturn()`; the bit reaches the callee
+        // proto through the driver-side known-noreturn data source
+        // (FLOW-NORETURN-DATA-0001).
+        let inline_noreturn = inlinefd.get_func_proto().is_no_return();
         if !inline_noreturn {
             // flow.cc:1137-1141: find the op after the call; if none, warn.
             let next_op = self.fallthru_op(op);
@@ -1592,7 +1646,6 @@ impl<'a> FlowInfo<'a> {
             }
             *retaddr = Some(ra);
         }
-        let _ = inlinefd;
         true
     }
 
@@ -3255,8 +3308,27 @@ pub fn follow_flow(
     entry: Address,
     eaddr: u64,
 ) -> crate::error::Result<()> {
+    follow_flow_with_callee_protos(fd, lifter, entry, eaddr, &std::collections::BTreeMap::new())
+}
+
+/// [`follow_flow`] with the per-callee prototype table that stands in for
+/// the `funcp` slice of the Funcdata objects Ghidra's `queryFunction`
+/// (flow.cc:660) resolves from the symbol database. Entries keyed by callee
+/// entry address feed `FlowInfo::query_call`'s `copy_flow_effects`
+/// (flow.cc:663-664); an empty table leaves every call site's
+/// inline/no-return flags untouched (the production data source — the
+/// driver-side known-noreturn name list — is FLOW-NORETURN-DATA-0001).
+// RUGRA-GLUE: Ghidra reaches the callee prototypes through the shared symbol database; Rugra's Funcdata owns no per-callee Funcdata at flow time, so the driver hands the table to the flow entry point.
+pub fn follow_flow_with_callee_protos(
+    fd: &mut Funcdata,
+    lifter: &mut SleighLifter,
+    entry: Address,
+    eaddr: u64,
+    callee_protos: &std::collections::BTreeMap<u64, crate::fspec::FuncProto>,
+) -> crate::error::Result<()> {
     let baddr = entry.as_u64();
     let mut flow = FlowInfo::new(fd, lifter, baddr, eaddr);
+    flow.callee_func_protos = callee_protos.clone();
     flow.generate_ops(entry)?;
     // funcdata_op.cc:776: generateBlocks is responsible for the official
     // entry identity/flag, ordered edge replay, and synthetic entry creation.

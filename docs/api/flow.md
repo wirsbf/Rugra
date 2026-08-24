@@ -601,3 +601,65 @@ curl 小范围 A/B 的生产收益是：`hugehelp` callspec/puts `5 -> 6`，
   消费者，并不关闭 codec 差异。既有地址空间和 FlowInfo 残差也不升级。上文历史
   `pointer_identity/address_lookup` 差异由本地基修正，但不使旧 fixture 的完整
   对象投影自动成为 MATCH。
+
+### 2026-08-25：CALLSPEC-NORETURN-WIRE-0001 段(b) flow 侧 noreturn/inline 接线
+
+四个接线点（仅 src/flow.rs，oracle 全文核对 flow.cc:636-772）：
+
+- **query_call 的 copyFlowEffects**（flow.cc:660-664 完整形态）：queryFunction
+  （`fd.symbol_table`）→ `set_funcdata`（flow.cc:662）→
+  `if (!fc.has_model() || callee_proto.is_inline()) fc.copy_flow_effects(proto)`
+  （flow.cc:663-664，one-way 旗标覆写）。callee `FuncProto` 来自新 FlowInfo 字段
+  `callee_func_protos: BTreeMap<u64, FuncProto>`（按 callee 入口地址键控）——
+  Ghidra 侧该数据在符号库 Funcdata.funcp 里（"Non-Returning Functions - Known"
+  分析器生产）；Rugra 流时无 per-callee Funcdata，驱动侧经
+  `follow_flow_with_callee_protos`（`follow_flow` 以空表委托）喂数，
+  生产数据源归 FLOW-NORETURN-DATA-0001。表经 `TruncatedFlowState` 随克隆传递
+  （Ghidra 的克隆共享同一符号库）。
+- **check_for_flow_modification 的 halt 插入改为 dead-list**：原实现误用
+  `fd.op_insert_after`（funcdata_op.cc:373 的 alive `opInsertAfter`），halt 被
+  mark_alive 拉出 deadlist，xref 的 `--oiter`（flow.cc:337）取不到它，指令尾
+  fall-through 判定仍看到 CALL → fall-through 照常入队，noreturn 截流失效。
+  改为 `fd.obank.insert_after_dead`（funcdata.hh:460 `opDeadInsertAfter` 薄包装
+  的逐行镜像）；`truncate_indirect_jump` 的 artificialHalt 同改（flow.cc:767）。
+  该缺陷由双侧 fixture case 1 锁定（Ghidra 删除 addr=5 的 RET ops，Rugra 修复前
+  仍过度追踪）。
+- **truncate_indirect_jump 重塑为 Ghidra 原形**：参数从自创 `fail_mode: u8`
+  重编码改回 `jumptable::RecoveryMode`（消除 `FailNormal as u8 = 1` 误落
+  fail_callother 臂的映射 bug）；四臂与 flow.cc:730-756 一致；先
+  `setup_callind_specs(op, None)`（flow.cc:736）建立 callspec，fail_callother 臂
+  `fc.set_no_return(true)`（flow.cc:747）+ "Does not return" warning
+  （flow.cc:748）；三条 warning 从 eprintln! 改 `fd.warning`（commentdb，与
+  Ghidra data.warning 同通道）。残差：noParams 臂 setInternal/defaultfp
+  （flow.cc:757-762）与 setBadJumpTable（flow.cc:754）仍归 CALLSPEC-0001。
+- **恒 false stub 清理**：扩展 trait `is_inline`/`is_no_return` 删除（fspec.rs
+  继承面已提供同名 inherent 委托，原实现已被遮蔽为死代码），过时 RUGRA-GLUE
+  注释一并修正；`test_hard_inline_restrictions` 的
+  `let inline_noreturn = false; // TODO` 改为
+  `inlinefd.get_func_proto().is_no_return()`（flow.cc:1136，无内部 caller，
+  生产不可达）。
+
+`check_for_flow_modification` 通路确认激活：`xref_control_flow_at` CALL/CALLIND 臂
+→ `setup_call_specs`/`setup_callind_specs` → `query_call` +
+`check_for_flow_modification`（flow.cc:336-342），halt 落在 call 索引处由下一轮
+迭代处理（Ghidra `--oiter`）。
+
+**双侧 fixture**：`tests/oracle/noreturn_wire_b_1204.{cc,rs,metadata.json}` +
+`tools/run_noreturn_wire_b_oracle.sh`（锁定 oracle 身份 + Rugra base 快照 +
+src/flow.rs overlay 三件套钉扎）。5 case 双侧 41 行 stdout 逐字节一致
+（`expected ghidra_stdout_sha256 ebf3c910…`）：noreturn callee → spec 位传播 +
+halt 0x1000000 插入 + "Subroutine does not return" + 下游 RET 指令不再访问；
+inline 自调用 → inline 位传播 + injectlist 入队 + 自递归拒绝
+"Could not inline here"（spec 存活，避开未移植的 inlineFlow 克隆机）；
+plain callee → 全 0 无 halt 无 warning；truncate fail_callother → CALLIND 改写 +
+callspec noret=1 + "Does not return" + noreturn halt；copy_flow_effects 单向
+覆写生命周期四阶段。C++ 侧 callee 旗标经
+`queryFunction(name)->getFuncProto().setNoReturn/setInline` 直接置位（分析器生产
+通道的 fixture 等价物）；truncate/copy case 经显式模板实例化窃取私有成员
+（C++11 [temp.explicit]/12）直接驱动 `FlowInfo::truncateIndirectJump`。
+
+**生产影响**：生产路径无任何 callee proto 喂入（表恒空）且
+`truncate_indirect_jump` 在 curl 语料 0 次触发（旧诊断 eprintln 0 命中），curl
+E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
+（Ghidra CALLIND spec 名按地址派生 vs Rugra 继承 caller funcp 名，既有
+`setup_call_specs` 构造 quirk）在 fixture 中显式不投影并在 metadata 登记。

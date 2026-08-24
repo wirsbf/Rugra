@@ -1,0 +1,143 @@
+{
+  "schema_version": 2,
+  "fixture_id": "NORETURN-WIRE-B-1204",
+  "stable_function_id": "GH12-F-flow-noreturn-wiring",
+  "status_note": "Flow-side no-return/inline wiring projection for CALLSPEC-NORETURN-WIRE-0001 slice (b): queryCall's queryFunction->setFuncdata->copyFlowEffects order with the !hasModel()||isInline() gate (flow.cc:660-664), checkForFlowModification's noreturn halt + warning (flow.cc:636-652), truncateIndirectJump's fail_callother setNoReturn(true) (flow.cc:747) with the mode now passed as the JumpTable RecoveryMode itself, and the copyFlowEffects one-way overwrite lifecycle. Byte-matches the locked oracle on all five cases with empty stderr on both sides.",
+  "decisive_semantics": {
+    "reference_output_parameters": "queryCall mutates the caller-owned FuncCallSpecs in place through the C++ reference and reads the callee FuncProto through otherfunc->getFuncProto() (a const path into the symbol database); truncateIndirectJump mutates the callspec returned by data.getCallSpecs(op) and passes the artificial halt to data.opDeadInsertAfter as an out-parameter-style insertion; Rugra mirrors both as in-place &mut FuncCallSpecs / dead-list insertion with no divergence in shared state.",
+    "loop_bounds_traversal_order": "xref_control_flow walks the dead list forward so the halt inserted at the CALL index is xref'd on the next iteration (Ghidra --oiter at flow.cc:337); generateOps runs the addrlist fallthru loop, then hasInject()->injectPcode, then the jumptable do-while (flow.cc:785-817); specs and ops are projected in insertion / SeqNum order on both sides.",
+    "counter_accumulator_lifecycle": "no counters; the per-callee flags are a pure bit pair whose lifecycle is queryCall's gated one-way copyFlowEffects overwrite (clear-then-OR, fspec.cc:3806-3812) followed by checkForFlowModification's read; the artificial halt's halt-nibble is a pure flag OR.",
+    "sorting_comparison_keys": "no sorts; the comparisons exercised are hasModel() (null model check, the flow.cc:663 gate), isInline() (the flow.cc:663 OR-arm), isNoReturn() (flow.cc:641), and the fail-mode equality arms of truncateIndirectJump (flow.cc:730/741/745) - all modeled as direct enum/bool equality on both sides."
+  },
+  "oracle": {
+    "project": "Ghidra 12.0.4",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{flow.cc,flow.hh,fspec.cc,fspec.hh,op.cc,op.hh,funcdata_op.cc,pcodeop.cc}",
+    "signature": "void FlowInfo::queryCall(FuncCallSpecs &fspecs); bool FlowInfo::checkForFlowModification(FuncCallSpecs &fspecs); void FlowInfo::truncateIndirectJump(PcodeOp *op,JumpTable::RecoveryMode mode); bool FlowInfo::setupCallindSpecs(PcodeOp *op,FuncCallSpecs *fc); void FuncProto::copyFlowEffects(const FuncProto &op2); void FuncCallSpecs::setFuncdata(Funcdata *f)"
+  },
+  "rugra_source": {
+    "base_commit": "7b1da21a3a874598423a4b6b941eb2209545fc15",
+    "base_tree": "9b825d99ad55d7b41e5e509beb2c266497d4645e",
+    "base_src_tree": "39ec7ab3fe815fab106266b7033f7fcadbf01074",
+    "base_blobs": {
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+    },
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": {
+      "src/flow.rs": "e21371fef02252a19d0e5ff1b76159cb292df00e489ec38a523d47662f799957"
+    },
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the repository's locked ghidra worktree (satisfies build.rs's sleigh_shim source check)",
+      "note": "symlink only; the Rust fixture resolves sleigh_specs from the run cwd (repo root)"
+    },
+    "archive_policy": "git archive of the pinned base commit plus the src/flow.rs overlay; the fixture is compiled directly with rustc against the freshly built librugra.rlib"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "4523108e9b51b42797dee541d72fd41dbac2345ca3ebab63b13490d8ce98f9d1",
+    "rust_fixture_sha256": "b148ce820bd3c90209868128c0693131528618d64de53e60fd5227ea40aa3c1e",
+    "runner_sha256": "fb44f61a638caa7cbc99f15bfbd5c4586a062102695398553237f09e3503daa0"
+  },
+  "architecture": "x86:LE:64:default (locked fixture binary: gcc -fno-pie naked-function probes; SLEIGH x86-64 via sleigh_specs on both sides)",
+  "compiler_spec": {
+    "id": "gcc",
+    "note": "fixture binary built with g++ -std=c++11 -fno-pie -no-pie; both sides decode the same .text bytes"
+  },
+  "analysis_options": {
+    "driver": "C++: BfdArchitecture(binary,'default') + init + readLoaderSymbols('::'), callee FuncProto flags set directly (setNoReturn/setInline, the analyzer-side producer), Funcdata::followFlow over the whole code space; Rust: SleighLifter x86-64 + driver-seeded symbol_table + follow_flow_with_callee_protos callee table; truncate/copy cases drive FlowInfo/FuncCallSpecs directly",
+    "access_observer": "test-only explicit template instantiation stealing Funcdata::{obank,bblocks,qlst} for the hand-constructed FlowInfo (C++11 [temp.explicit]/12); no header redefinition, no ABI change",
+    "random_seed": "none: deterministic flow, specs iterated in insertion order on both sides",
+    "error_injection": "none: all probes are well-formed x86-64 code",
+    "diagnostics": "both sides must exit 0 with byte-empty stderr",
+    "normalization": "address projections reduced to base-relative deltas (Rugra legacy spaceless Address); opcode ids and halt flag nibble values verified bit-identical (op.hh:96-101 vs pcodeop_flags)"
+  },
+  "input_manifest": {
+    "cases": [
+      "wireb_noret_user: queryCall (flow.cc:656-672) resolves the callee via queryFunction, and the !hasModel() gate (flow.cc:663) runs copyFlowEffects (flow.cc:664) so the callspec inherits the callee's no_return bit; checkForFlowModification (flow.cc:636-652) then dead-inserts an artificial PcodeOp::noreturn halt right after the CALL (halt nibble 0x1200000) and emits the non-inline 'Subroutine does not return' warning",
+      "wireb_inline_user: the callee (the function itself) is marked isInline, so queryCall's isInline() gate forces copyFlowEffects of the inline bit; checkForFlowModification queues the injectlist entry; injectPcode -> inlineSubFunction (flow.cc:1242) refuses the self-recursion ('Could not inline here', flow.cc:1256-1258) so the spec survives with inline=1 and the CALL op stays - the inline bit propagation without the unported inlineFlow clone machine",
+      "wireb_plain_user: an unmarked callee resolves through queryFunction but copyFlowEffects propagates clear bits - spec stays noret=0 inline=0, no halt, no warning (the channel does not invent bits)",
+      "truncate_fail_callother: hand-driven FlowInfo::truncateIndirectJump(op, JumpTable::fail_callother) (flow.cc:727-769) - BRANCHIND becomes CALLIND, setupCallindSpecs (flow.cc:736) establishes the spec, flow.cc:747 sets setNoReturn(true) on it, the 'Does not return' warning (flow.cc:748) fires, and a noreturn artificial halt is dead-inserted after the op (flow.cc:765-767)",
+      "copy_flow_effects_oneway: FuncCallSpecs lifecycle through the inherited FuncProto surface - set both bits, copyFlowEffects from a clean proto clears both (one-way clear-then-OR, fspec.cc:3806-3812), from {inline,noret} restores both, from {inline} alone yields {1,0}"
+    ],
+    "sha256": "953a6358cdc4b0c5436245c6e9e31ce83fdd902d96e6bdb3cf38de9ba0755204"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "ebf3c9109917102e72c67033488621b9de90ea9b85c2dc692ecd6c660d81ec67",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "ebf3c9109917102e72c67033488621b9de90ea9b85c2dc692ecd6c660d81ec67",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MATCH",
+  "coverage": {
+    "wireb_noret_user": {
+      "status": "MATCH",
+      "covers": "queryCall queryFunction->setFuncdata->copyFlowEffects order (flow.cc:660-664) with the !hasModel() gate; checkForFlowModification's artificialHalt(NORETURN) + opDeadInsertAfter + non-inline warning (flow.cc:641-646)",
+      "residual_todo_ids": []
+    },
+    "wireb_inline_user": {
+      "status": "MATCH",
+      "covers": "queryCall's otherfunc->getFuncProto().isInline() OR-arm (flow.cc:663); checkForFlowModification's injectlist queueing (flow.cc:639-640); injectPcode's inlineSubFunction self-recursion refusal (flow.cc:1253-1258)",
+      "residual_todo_ids": []
+    },
+    "wireb_plain_user": {
+      "status": "MATCH",
+      "covers": "queryCall resolution of an unmarked callee; copyFlowEffects propagating clear bits; no halt / no warning when neither flag is set",
+      "residual_todo_ids": []
+    },
+    "truncate_fail_callother": {
+      "status": "MATCH",
+      "covers": "truncateIndirectJump fail_callother arm (flow.cc:745-750): CALLIND rewrite, setupCallindSpecs-established spec, setNoReturn(true), 'Does not return' warning, noreturn artificial halt; the recovery-loop mode now flows as the JumpTable::RecoveryMode itself (flow.cc:1445), fixing the old FailNormal-as-u8 mislanding in the fail_callother arm",
+      "residual_todo_ids": []
+    },
+    "copy_flow_effects_oneway": {
+      "status": "MATCH",
+      "covers": "FuncProto::copyFlowEffects one-way clear-then-OR subset overwrite (fspec.cc:3806-3812) through the FuncCallSpecs inherited surface (fspec.hh:1645), driven on a fresh callspec like the flow paths do",
+      "residual_todo_ids": []
+    }
+  },
+  "residual_todo_ids": [],
+  "out_of_scope_observations": [
+    {
+      "id": "truncate-noparams-setinternal",
+      "note": "truncateIndirectJump's noParams arm (flow.cc:757-762) binds glb->defaultfp via setInternal plus input/output locks; Rugra keeps that arm as CALLSPEC-0001 (needs architecture default-model plumbing on the callspec), so hasModel is not projected for the truncate case. Owned by CALLSPEC-0001."
+    },
+    {
+      "id": "truncate-badjumptable-flag",
+      "note": "the default arm's fc->setBadJumpTable(true) (flow.cc:754) has no FuncCallSpecs field in Rugra yet; the fail_callother case projected here does not touch it. Owned by CALLSPEC-0001."
+    },
+    {
+      "id": "injectid-copy-gap",
+      "note": "copyFlowEffects also copies the injectid (fspec.cc:3811); Rugra has no injection-id storage (INJECT-0001 stub), invisible here because the fixture callees carry no call-fixups. Owned by INJECT-0001."
+    },
+    {
+      "id": "production-data-source",
+      "note": "the fixture feeds the per-callee FuncProto table through follow_flow_with_callee_protos, the channel standing in for Ghidra's symbol-database Funcdata funcp; the production data source (driver-side known-noreturn name list) is FLOW-NORETURN-DATA-0001. Until it lands, every production callee proto is absent and query_call copies nothing (curl output unchanged)."
+    },
+    {
+      "id": "inlineflow-clone-machine",
+      "note": "a successfully inlinable callee would exercise Funcdata::inlineFlow (funcdata.cc), which Rugra has not ported (inline_sub_function returns false at the clone TODO); the self-recursion case observes the bit propagation without reaching that machine. Owned by the inlineFlow roadmap item."
+    },
+    {
+      "id": "callsind-spec-name-quirk",
+      "note": "a Ghidra CALLIND spec's getName() is address-derived (fspec.cc ctor), while Rugra's setup_callind_specs seeds the spec's prototype from the caller's own funcp (carrying the caller function name) - a pre-existing setup_call_specs construction quirk documented at the callsite; name is not projected for the truncate case. Owned by CALLSPEC-0001."
+    }
+  ]
+}
