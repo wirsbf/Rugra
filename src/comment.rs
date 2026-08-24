@@ -1225,6 +1225,22 @@ mod tests {
         };
         let bb0: std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>> = mk_block(&mut fd, 0x1000);
         let bb1: std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>> = mk_block(&mut fd, 0x1009);
+        // Install the instruction covers the way the C++ oracle construction
+        // does (Funcdata::setBasicBlockRange, funcdata.hh:556): a manually
+        // built block without a cover is an incomplete state — Ghidra's
+        // BlockBasic::contains/getStop read only the cover (block.hh:476,
+        // block.cc:2328), with no last-op fallback.
+        for (bb, beg, end) in [( &bb0, 0x1000u64, 0x100au64), (&bb1, 0x1009, 0x100e)] {
+            bb.write()
+                .unwrap()
+                .as_any_mut()
+                .downcast_mut::<crate::block::BlockBasic>()
+                .expect("basic block")
+                .set_initial_range(
+                    Address::with_space(&ram, beg),
+                    Address::with_space(&ram, end),
+                );
+        }
         // bb0: ops at 0x1000, 0x100a (range [0x1000, 0x100a]).
         let op_a = fd.new_op(0, Address::with_space(&ram, 0x1000));
         fd.op_insert_end(&op_a, &bb0);
@@ -1302,6 +1318,19 @@ mod tests {
                 Address::with_space(&ram, 0x1000),
             )));
         fd.bblocks.add_block(bb0.clone());
+        // Legal cover [0x1000, 0x100a] as pinned by Funcdata::setBasicBlockRange
+        // in the C++ oracle construction (funcdata.hh:556): all three comments
+        // sit at exact op addresses, so the backupOp path would place them
+        // identically, but the contains path is the one under test.
+        bb0.write()
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("basic block")
+            .set_initial_range(
+                Address::with_space(&ram, 0x1000),
+                Address::with_space(&ram, 0x100a),
+            );
         let mut ops = Vec::new();
         for off in [0x1000u64, 0x1005, 0x100a] {
             let op = fd.new_op(0, Address::with_space(&ram, off));

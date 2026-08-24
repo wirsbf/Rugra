@@ -61,14 +61,31 @@ fn main() {
         graph.add_block(bb.clone());
         bb
     };
-    // Rugra has no block cover: block ranges project as
-    // [start_addr, last-op addr]; the C++ side pins setBasicBlockRange to the
-    // same bounds.
+    // Install each block's instruction cover the same way the C++ fixture
+    // does through Funcdata::setBasicBlockRange (funcdata.hh:556 ->
+    // BlockBasic::setInitialRange, block.cc:2625): same ranges, same position
+    // in the construction order (blocks -> ranges -> edges -> spanning tree
+    // -> ops). A manually built block without a cover is an incomplete state:
+    // Ghidra's contains/getStop read only the cover (block.hh:476,
+    // block.cc:2328-2335), with no last-op fallback.
+    let set_range = |bb: &BlockRef, beg: u64, end: u64| {
+        bb.write()
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<BlockBasic>()
+            .expect("basic block")
+            .set_initial_range(addr(beg), addr(end));
+    };
     let bb_a = mk_block(&mut graph, 0x1000);
     let bb_b = mk_block(&mut graph, 0x1009);
     let bb_c = mk_block(&mut graph, 0x1012);
     let bb_d = mk_block(&mut graph, 0x2000);
     let bb_e = mk_block(&mut graph, 0x3000);
+    set_range(&bb_a, 0x1000, 0x100a);
+    set_range(&bb_b, 0x1009, 0x100e);
+    set_range(&bb_c, 0x1012, 0x1012);
+    set_range(&bb_d, 0x2000, 0x2005);
+    set_range(&bb_e, 0x3000, 0x3010);
     graph.add_edge(bb_a.clone(), bb_b.clone());
     graph.add_edge(bb_b.clone(), bb_c.clone());
     graph.add_edge(bb_c.clone(), bb_d.clone());
@@ -185,6 +202,14 @@ fn main() {
         let mut graph3 = BlockGraph::new();
         let bb_f: BlockRef = Arc::new(RwLock::new(BlockBasic::new(0, addr(0x5000))));
         graph3.add_block(bb_f.clone());
+        // Degenerate cover [0x5000, 0x5000], matching the C++ fixture's
+        // fd3.setBasicBlockRange(bb_f, 0x5000, 0x5000).
+        bb_f.write()
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<BlockBasic>()
+            .expect("basic block")
+            .set_initial_range(addr(0x5000), addr(0x5000));
         let mut db3 = CommentDatabaseInternal::new();
         db3.add_comment(comment_type::WARNING, addr(0x5000), addr(0x5500), "noops-walk");
         let mut sorter4 = CommentSorter::new();

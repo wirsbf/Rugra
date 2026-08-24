@@ -1226,8 +1226,16 @@ impl BlockBasic {
     /// `[beg, end]`.  Ghidra takes the address space from `beg` and only the
     /// offset from `end`; preserving that detail prevents a later scalar
     /// reconstruction from dropping the space identity.
+    ///
+    /// Visibility: Ghidra keeps `setInitialRange` private with
+    /// `friend class Funcdata` (block.hh:462/467), so the public construction
+    /// path is the `Funcdata` inline `setBasicBlockRange(bb, beg, end)`
+    /// (funcdata.hh:556) that just delegates here.  Rugra exposes this method
+    /// as `pub` so out-of-crate oracle fixtures can build the same legal
+    /// block state (the locked C++ fixture reaches the private member via
+    /// `#define private public` and calls `fd.setBasicBlockRange`).
     // Ghidra: block.cc:2625 BlockBasic::setInitialRange
-    pub(crate) fn set_initial_range(&mut self, beg: Address, end: Address) {
+    pub fn set_initial_range(&mut self, beg: Address, end: Address) {
         let covered_end = match beg.get_space() {
             Some(space) => Address::with_space(&space, end.as_u64()),
             None => Address::new(end.as_u64()),

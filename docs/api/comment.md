@@ -107,8 +107,14 @@ ranks into that order (`len` == `end()`), stored in `Cell`s because Ghidra's
 eight-way placement ladder (header-at-entry, PcodeOpTree lower-bound
 containment, previous-op `0xffffffff` tail, migrated backupOp, op-less
 `(0,0)`, `displayUnplaced` salvage, excised drop, dead-op error);
-`BlockBasic::contains` is projected from `[start_addr, last-op addr]`
-because Rugra has no block cover RangeList (block.hh:476 residual).
+`BlockBasic::contains` is projected from `[start_addr,
+initial_range stop]` (`set_initial_range`, block.cc:2625) because Rugra has
+no block cover RangeList (block.hh:476 residual). Since 0d2252d removed the
+last-op fallback in `get_stop_addr`, manually constructed blocks must
+install the cover explicitly — the same legal state the C++ fixture builds
+via `Funcdata::setBasicBlockRange` (funcdata.hh:556); Ghidra has no last-op
+fallback anywhere in `getStop` (block.cc:2328-2335 returns an invalid
+`Address()` on an empty cover, residual BLOCKBASIC-COVER-0001).
 
 ## Codec evidence and residual
 

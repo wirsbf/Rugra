@@ -311,13 +311,24 @@ raw ops / PcodeOp
 `Address`，因此不会丢失 address-space 身份。与 Ghidra `setInitialRange`
 一样，结束端取 `beg` 的空间和 `end` 的 offset。
 
+`set_initial_range` 本体是 `pub`（原为 `pub(crate)`，BLOCK-STOPADDR-
+FIXTURE-REGRESSION-0001 放宽）。Ghidra 侧 `setInitialRange` 为 private +
+`friend class Funcdata`（block.hh:462/467），公开构造路径是
+`Funcdata::setBasicBlockRange(bb, beg, end)`（funcdata.hh:556，内联转发）。
+Rugra 直接在 `BlockBasic` 上暴露 `pub`，使 crate 外的 oracle fixture
+能构造同等的合法块状态（锁定 C++ fixture 经 `#define private public`
+走 `fd.setBasicBlockRange`）。生产语义不变；无 range 时的回退仍见下条。
+
 ### `pub fn get_stop_addr(&self) -> Address`
 
 返回初始指令覆盖范围的最后一个地址，对应 `BlockBasic::getStop`
 (`block.cc:2328-2335`)。这个值来自 `set_initial_range` 记录的结束端，
 不再用块内最后一条 op 的地址近似。尚未安装初始范围的存量
 Rust 块仍回退到构造时的 `start_addr`；Ghidra 原生构造器不接受
-这个兼容参数。
+这个兼容参数（Ghidra 在 cover 为空时返回 invalid `Address()`，
+该差异归 `BLOCKBASIC-COVER-0001`；Ghidra 没有任何“末条 op 地址”
+回退，因此 0d2252d 移除旧近似是对的，手工构造块必须显式安装
+cover 才是合法状态）。
 
 本轮只闭合 `setInitialRange` 建立的单范围。`copyRange`/`mergeRange`、
 多不相连范围下的 `contains`/`getEntryAddr`与 RangeList marshal 仍归
