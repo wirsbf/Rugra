@@ -9,6 +9,50 @@ consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍�
 （`BILATERAL_24_CASE_BYTE_IDENTICAL`，covered projection=MATCH，
 R2 独立复核 APPROVE）。
 
+## 2026-08-24：JUMPTABLE-PIPELINE-0001 段1 — 模型选择链 / find_normalized 委托 / EMULFN
+
+- **模型选择链（`JUMPTABLE-SELECTION-0001` 关闭）**：`JumpTable::recover_model`
+  逐字对齐 jumptable.cc:2254-2285 —— override 重跑（matchsize=0）→ 输入 def 为
+  CALLOTHER 时尝试 `JumpAssisted`（matchsize=`addresstable.len()`）→ `JumpBasic`
+  → `JumpBasic2`（`initialize_start` 接住 Basic 失败的 pathMeld）。旧的
+  Basic→Trivial 回退已删除（Ghidra 的 recoverModel 链里没有 Trivial）。
+  返回值改为 `Result<bool, JumpTableRecoveryError>`：`Err` = Ghidra 的
+  LowlevelError 从 recoverModel 穿透（不尝试下一模型），`Ok(false)` = 模型拒绝。
+- **`JumpBasic::recover_model` 委托 `find_normalized`**（cc:1427 调用形态）：
+  `find_normalized(fd, indop.parent, -1, matchsize, maxtablesize)`；readonly
+  单入口救援（cc:1212-1231）经 loader `load_value` 真读 LoadImage，
+  `DataUnavailError` 按 Ghidra 语义沿 `Lowlevel` 通道上抛。
+  **调用契约**（段2 stageJumpTable 落地前的显式假设）：`indop.parent` 必须存在
+  且 def 链经 "jumptable" 策略简化——缺块环境 fail-closed 返回 `Ok(false)`，
+  不再静默走无守卫 smallest-normal（Ghidra 在该环境是空指针崩溃，从不运行）。
+- **`EmulateFunction` 全重写（`JUMPTABLE-EMULFN-0001` 关闭）**：持 `fd` →
+  Architecture → loader 桥；`get_varnode_value` fallback 真调
+  `getLoadImageValue`（8 字节读 + mask，emulateutil.cc:47），未读过的非 constant
+  varnode 缺 loader 时走 typed `DataUnavail`，禁止静默归零；`last_op` 前驱 +
+  `execute_multiequal` 按 lastOp 块选入边（emulateutil.cc:100-105）；dispatch
+  逐字对齐 `Emulate::executeCurrentOp`（LOAD/STORE/BRANCH/CBRANCH/BRANCHIND/
+  RETURN/CALL*/CALLOTHER/MULTIEQUAL/INDIRECT/SEGMENTOP/CPOOLREF/NEW/unary/binary）；
+  `emulate_path` 捕获 DataUnavail 转
+  `"Could not emulate address calculation at <addr>"`（cc:246-250），BRANCH/
+  BRANCHIND/MULTIEQUAL 的 LowlevelError 原文穿透。
+- **`JumpModel::recover_model`/`build_addresses` trait 签名改为返回
+  `Result`**：`build_addresses` 的 emulate 失败 `?` 传播（`None => 0` 入表已删）；
+  `JumpTable::recover_addresses_classified` 的 maxtablesize 改读
+  `Architecture::max_jumptable_size`（cc:2626 经 glb->max_jumptable_size）。
+- **`JumpTable::set_override`**（cc:2466-2478）新增：override-first 分支的挂接点。
+- **`find_smallest_normal` 原地更新 jrange**（cc:1186-1189 语义）：经
+  `JumpValues::as_range_base_mut` 基视图改写，`JumpValuesRangeDefault` 的
+  extra 机制不再被 take/重装箱抹掉（Basic2 路径的前提）。
+- **`JumpAssisted::recover_model` 形状判定对齐**（cc:2095-2110）：去掉发明的
+  COPY 链回溯，直接 def==CALLOTHER、numInput>=3、userop 类型==jumpassist、
+  其余输入全常量；`JumpAssistOp` 载荷未移植，保守 fail-closed。
+- **`JumpBasic::sanity_check` loadFill 语义**（cc:1588-1598）：diff>0xffff 的
+  目标先经 loader `load_fill(4)` 验证，可读则继续（旧实现无条件截断 = INVENTED）。
+- B2：`tests/oracle/jtpipeline_s1_1204.{cc,rs,metadata.json}` +
+  `tools/run_jtpipeline_s1_1204_oracle.sh`（真实双侧执行，8/8 观察行逐字节
+  一致，stderr 双空）。模块 projection 保持 `MISMATCH`：stageJumpTable
+  partial 环境 / generate_ops 接线为段2/3（`JUMPTABLE-PIPELINE-0001`）。
+
 ## 2026-08-24：JUMPTABLE-THUNK-CLASSIFY-0001 — typed recovery failure
 
 - `JumpTableRecoveryError` 保留 Ghidra 的两个异常通道及原始文本：

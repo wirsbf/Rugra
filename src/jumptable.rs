@@ -1213,6 +1213,14 @@ pub trait JumpValues: Send + Sync {
     /// 返回其克隆,否则 None。JumpBasic::find_smallest_normal 用它把 jrange
     /// 从 trait object 取出当 JumpValuesRange 改(基本模型一定是 Range)。
     fn clone_boxed_any_range(&self) -> Option<JumpValuesRange>;
+
+    // RUGRA-GLUE: mut borrow of the JumpValuesRange base — Ghidra 的
+    /// `findSmallestNormal` 直接在既有 `jrange` 对象上调继承的
+    /// `setRange/setStartVn/setStartOp`(jumptable.cc:1171-1192),
+    /// 对 `JumpValuesRangeDefault` 同样作用于同一对象的基类字段
+    /// (C++ 继承=同一对象)。Rust trait object 无继承,用这个辅助方法
+    /// 取 `&mut JumpValuesRange` 基视图,保持动态类型不被替换。
+    fn as_range_base_mut(&mut self) -> &mut JumpValuesRange;
 }
 
 /// A single-entry switch variable that can take a range of values.
@@ -1360,6 +1368,11 @@ impl JumpValues for JumpValuesRange {
     // RUGRA-GLUE: trait object downcast helper
     fn clone_boxed_any_range(&self) -> Option<JumpValuesRange> {
         Some(self.clone())
+    }
+
+    // RUGRA-GLUE: 见 JumpValues::as_range_base_mut — 具体类型即基类本身。
+    fn as_range_base_mut(&mut self) -> &mut JumpValuesRange {
+        self
     }
 }
 
@@ -1532,6 +1545,11 @@ impl JumpValues for JumpValuesRangeDefault {
     fn clone_boxed_any_range(&self) -> Option<JumpValuesRange> {
         None
     }
+
+    // RUGRA-GLUE: 见 JumpValues::as_range_base_mut — C++ 继承字段在 `base`。
+    fn as_range_base_mut(&mut self) -> &mut JumpValuesRange {
+        &mut self.base
+    }
 }
 
 /// Switch-variable normalization restrictions. Faithful to the private fields
@@ -1572,17 +1590,28 @@ pub trait JumpModel: Send + Sync {
     // Ghidra: jumptable.hh:260 JumpModel::recoverModel (pure virtual)
     /// Attempt to recover details of the model, given a specific BRANCHIND.
     /// Returns true on success. Faithful to `recoverModel`.
+    ///
+    /// Ghidra 的 recoverModel 可以抛 `LowlevelError`(如 findNormalized 的
+    /// readonly 救援读 LoadImage 失败);Rust 用 `Err(JumpTableRecoveryError)`
+    /// 承载同一通道,语义 = 异常穿透 recoverModel 到 stageJumpTable 的
+    /// `catch(LowlevelError)`(funcdata_block.cc:543),**不是**"尝试下一个
+    /// 模型"(返回 Ok(false) 才是)。
     fn recover_model(
         &mut self,
         fd: &crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         maxtablesize: u32,
-    ) -> bool;
+    ) -> Result<bool, JumpTableRecoveryError>;
 
     // Ghidra: jumptable.hh:271 JumpModel::buildAddresses (pure virtual)
     /// Construct the explicit list of target addresses (the Address Table)
     /// from this model. Faithful to `buildAddresses`.
+    ///
+    /// Ghidra 的 buildAddresses 经 `EmulateFunction::emulatePath` 可抛
+    /// `LowlevelError`(jumptable.cc:216-254);Rust 用
+    /// `Err(JumpTableRecoveryError)` 承载,禁止静默归零入表
+    /// (JUMPTABLE-EMULFN-0001)。
     fn build_addresses(
         &self,
         fd: &crate::funcdata::Funcdata,
@@ -1590,7 +1619,7 @@ pub trait JumpModel: Send + Sync {
         addresstable: &mut Vec<Address>,
         loadpoints: Option<&mut Vec<LoadTable>>,
         loadcounts: Option<&mut Vec<i32>>,
-    );
+    ) -> Result<(), JumpTableRecoveryError>;
 
     // Ghidra: jumptable.hh:281 JumpModel::findUnnormalized (pure virtual)
     /// Recover the unnormalized switch variable. Faithful to `findUnnormalized`.
@@ -1686,7 +1715,7 @@ impl JumpModel for JumpModelTrivial {
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         _maxtablesize: u32,
-    ) -> bool {
+    ) -> Result<bool, JumpTableRecoveryError> {
         // Faithful to JumpModelTrivial::recoverModel (jumptable.cc:391).
         // The number of out-edges of the BRANCHIND's parent block is the size.
         let n_out = {
@@ -1704,7 +1733,7 @@ impl JumpModel for JumpModelTrivial {
             }
         };
         self.size = n_out as u32;
-        (self.size != 0) && (self.size <= matchsize)
+        Ok((self.size != 0) && (self.size <= matchsize))
     }
 
     // Ghidra: jumptable.cc:398 JumpModelTrivial::buildAddresses
@@ -1715,7 +1744,7 @@ impl JumpModel for JumpModelTrivial {
         addresstable: &mut Vec<Address>,
         _loadpoints: Option<&mut Vec<LoadTable>>,
         _loadcounts: Option<&mut Vec<i32>>,
-    ) {
+    ) -> Result<(), JumpTableRecoveryError> {
         // Faithful to JumpModelTrivial::buildAddresses (jumptable.cc:398).
         addresstable.clear();
         let op_rg = indop.read().unwrap();
@@ -1729,6 +1758,7 @@ impl JumpModel for JumpModelTrivial {
                 }
             }
         }
+        Ok(())
     }
 
     // Ghidra: jumptable.hh:359 JumpModelTrivial::findUnnormalized
@@ -2419,23 +2449,33 @@ impl JumpBasic {
     /// Find the putative switch variable with the smallest range of values
     /// reaching the switch. Faithful to `findSmallestNormal`
     /// (jumptable.cc:1182).
+    ///
+    /// Ghidra 在**既有** `jrange` 对象上原地调用继承的
+    /// `setRange/setStartVn/setStartOp`(cc:1186-1187,1188-1189);
+    /// `JumpBasic2` 调用本函数时 jrange 已是 `JumpValuesRangeDefault`
+    /// (cc:1698-1702 先装好),C++ 继承保证原地更新只改基类字段、
+    /// 保留 Default 的 extravalue/extravn/extraop。Rugra 用
+    /// [`JumpValues::as_range_base_mut`] 实现同一语义(旧实现 take 后
+    /// 重装箱会把 Default 替换成普通 Range = INVENTED)。
     pub fn find_smallest_normal(&mut self, matchsize: u32) {
         let mut rng = CircleRange::empty();
         self.varnode_index = 0;
         if self.path_meld.num_common_varnode() == 0 {
             return;
         }
+        // Ghidra cc:1185-1187: jrange 由 recoverModel 先行分配(cc:1425 或
+        // Basic2 的 cc:1698);此处必须存在,否则是调用契约破坏。
         let first_vn = self.path_meld.get_varnode(0);
         self.calc_range(&first_vn, &mut rng);
-        // Ghidra: jrange 是 JumpValues*;这里一定是 JumpValuesRange(基本模型)。
-        // take 出来或新建一个默认的 JumpValuesRange。
-        let mut jrange_owned: JumpValuesRange = match self.jrange.take() {
-            Some(b) => b.clone_boxed_any_range().unwrap_or_default(),
-            None => JumpValuesRange::default(),
-        };
-        jrange_owned.set_range(rng.clone());
-        jrange_owned.set_start_vn(first_vn.clone());
-        jrange_owned.startop = Some(self.path_meld.get_op(0));
+        {
+            let Some(jrange) = self.jrange.as_mut() else {
+                return;
+            };
+            let jbase = jrange.as_range_base_mut();
+            jbase.set_range(rng.clone());
+            jbase.set_start_vn(first_vn.clone());
+            jbase.startop = Some(self.path_meld.get_op(0));
+        }
         let mut maxsize = rng.get_size();
         for i in 1..self.path_meld.num_common_varnode() {
             if maxsize == matchsize as u64 {
@@ -2451,19 +2491,29 @@ impl JumpBasic {
                 if accept {
                     self.varnode_index = i as i32;
                     maxsize = sz;
-                    jrange_owned.set_range(rng.clone());
-                    jrange_owned.set_start_vn(vn.clone());
-                    jrange_owned.startop = self.path_meld.get_earliest_op(i);
+                    let startop = self.path_meld.get_earliest_op(i);
+                    let Some(jrange) = self.jrange.as_mut() else {
+                        return;
+                    };
+                    let jbase = jrange.as_range_base_mut();
+                    jbase.set_range(rng.clone());
+                    jbase.set_start_vn(vn.clone());
+                    jbase.startop = startop;
                 }
             }
         }
-        self.jrange = Some(Box::new(jrange_owned));
     }
 
     // Ghidra: jumptable.cc:1204 JumpBasic::findNormalized
     /// Given the root block and starting path, run guard analysis and find
     /// the normalized switch variable. Faithful to `findNormalized`
     /// (jumptable.cc:1204-1237).
+    ///
+    /// Returns `Err` only where Ghidra throws: the readonly single-branch
+    /// rescue (cc:1225-1226) reads the LoadImage via `MemoryImage::getValue`,
+    /// whose `DataUnavailError` derives from `LowlevelError` (loadimage.hh:31)
+    /// and propagates out of `recoverModel` to `stageJumpTable`'s
+    /// `catch(LowlevelError)` (funcdata_block.cc:543).
     pub fn find_normalized(
         &mut self,
         fd: &crate::funcdata::Funcdata,
@@ -2471,26 +2521,55 @@ impl JumpBasic {
         pathout: i32,
         matchsize: u32,
         maxtablesize: u32,
-    ) {
-        // Ghidra cc:1228: analyzeGuards(rootbl, pathout)
+    ) -> Result<(), JumpTableRecoveryError> {
+        // Ghidra cc:1209: analyzeGuards(rootbl, pathout)
         self.analyze_guards(rootbl, pathout);
-        // Ghidra cc:1229: findSmallestNormal(matchsize)
+        // Ghidra cc:1210: findSmallestNormal(matchsize)
         self.find_smallest_normal(matchsize);
-        // Ghidra cc:1230-1251: readonly variable check for single-branch tables.
-        // Only applies when size > maxtablesize AND numCommonVarnode==1.
+        // Ghidra cc:1211-1232: readonly variable rescue for single-branch
+        // tables. Only applies when size > maxtablesize AND
+        // numCommonVarnode==1.
         let sz = self.jrange.as_ref().map_or(0, |j| j.get_size());
         if sz > maxtablesize as u64 && self.path_meld.num_common_varnode() == 1 {
             let vn = self.path_meld.get_varnode(0);
             if vn.read().unwrap().is_read_only() {
-                // Ghidra cc:1244-1250: read value from MemoryImage.
-                // Rugra lacks MemoryImage + loader wiring; this readonly
-                // rescue is a documented gap (TODO: wire LoadImage).
-                // For now, set a single-value range as best-effort.
-                let vn_size = vn.read().unwrap().get_size();
-                let _ = vn_size;
-                let _ = fd;
+                // Ghidra cc:1225-1226:
+                //   MemoryImage mem(vn->getSpace(),4,16,glb->loader);
+                //   uintb val = mem.getValue(vn->getOffset(),vn->getSize());
+                // MemoryImage::getValue reads exactly `size` bytes honoring
+                // the space endianness; Rugra 的单空间模型是小端,等价于
+                // loader 的 load_value(精确 size 字节,小端拼装)。
+                let (vn_offset, vn_size) = {
+                    let v = vn.read().unwrap();
+                    (v.get_offset(), v.get_size())
+                };
+                let loader = fd
+                    .get_arch()
+                    .and_then(|a| a.loader.clone());
+                let Some(loader) = loader else {
+                    return Err(JumpTableRecoveryError::Lowlevel {
+                        message: "Data-unavailable error: no LoadImage attached to Architecture"
+                            .to_string(),
+                    });
+                };
+                let val = loader
+                    .load_value(crate::address::Address::new(vn_offset), vn_size)
+                    .map_err(|crate::loadimage::DataUnavailError(m)| {
+                        JumpTableRecoveryError::Lowlevel { message: m }
+                    })?;
+                // Ghidra cc:1227-1230: varnodeIndex=0; jrange->setRange(
+                //   CircleRange(val,vn->getSize())); setStartVn(vn);
+                //   setStartOp(pathMeld.getOp(0));
+                self.varnode_index = 0;
+                if let Some(jrange) = self.jrange.as_mut() {
+                    let jbase = jrange.as_range_base_mut();
+                    jbase.set_range(CircleRange::single(val, vn_size));
+                    jbase.set_start_vn(vn.clone());
+                    jbase.startop = Some(self.path_meld.get_op(0));
+                }
             }
         }
+        Ok(())
     }
 
     // Ghidra: jumptable.cc:1239 JumpBasic::markFoldableGuards
@@ -2687,37 +2766,56 @@ impl JumpModel for JumpBasic {
     }
 
     // Ghidra: jumptable.cc:1418 JumpBasic::recoverModel
+    /// 调用形态契约(JUMPTABLE-PIPELINE-0001 段1 显式化,Ghidra 侧不变式):
+    ///
+    /// Ghidra 中本函数只在 `Funcdata::stageJumpTable`(funcdata_block.cc:491-547)
+    /// 建好的 **partial 克隆** 上运行:该 partial 已经
+    ///   (a) `truncatedFlow` + `partialflow.generateBlocks()` 生成基本块
+    ///       (funcdata_op.cc:839)——因此 `indop->getParent()` 恒非空;
+    ///   (b) 跑过 "jumptable" 策略组简化(funcdata_block.cc:501-508,
+    ///       含 heritage/SSA 与常量折叠)——因此 BRANCHIND 输入的 def 链
+    ///       完整,`isprune` 的 def-less 剪枝只会发生在真正的 switch 变量
+    ///       读上,而不是 raw pcode 的跨指令寄存器读上。
+    ///
+    /// Rugra 在段2(funcdata/fspec/coreaction 的 stageJumpTable)落地前,
+    /// 调用方若在未生成块的 raw Funcdata 上调用本函数(`indop.parent == None`,
+    /// 对应 flow.generate_ops 阶段),本函数**fail-closed** 返回
+    /// `Ok(false)`(Ghidra 在此环境会空指针崩溃,从不运行),不再静默走
+    /// 无守卫的 findSmallestNormal 产生错误的巨型 range。
     fn recover_model(
         &mut self,
         fd: &crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         maxtablesize: u32,
-    ) -> bool {
-        // Faithful to JumpBasic::recoverModel (jumptable.cc:1437).
+    ) -> Result<bool, JumpTableRecoveryError> {
+        // Ghidra cc:1425: jrange = new JumpValuesRange()
         self.jrange = Some(Box::new(JumpValuesRange::default()));
+        // Ghidra cc:1426: findDeterminingVarnodes(indop, 0)
         self.find_determining_varnodes(indop.clone(), 0);
-        // findNormalized requires analyzeGuards (CFG traversal). We provide a
-        // direct call here; the guard analysis is implemented below.
+        // Ghidra cc:1427:
+        //   findNormalized(fd, indop->getParent(), -1, matchsize, maxtablesize)
+        // parent 必须存在(见上契约);缺块环境 fail-closed。
         let parent_bl = {
             let op_rg = indop.read().unwrap();
             op_rg.parent.as_ref().and_then(|p| p.upgrade())
         };
-        if let Some(bl) = parent_bl {
-            self.analyze_guards(&bl, -1);
-        }
-        self.find_smallest_normal(matchsize);
-        let _ = fd;
-        let size_ok = self
+        let Some(bl) = parent_bl else {
+            return Ok(false);
+        };
+        self.find_normalized(fd, &bl, -1, matchsize, maxtablesize)?;
+        // Ghidra cc:1428-1429: if (jrange->getSize() > maxtablesize) return false
+        if self
             .jrange
             .as_ref()
-            .map_or(false, |j| j.get_size() <= maxtablesize as u64);
-        if size_ok {
-            self.mark_foldable_guards();
-            true
-        } else {
-            false
+            .map_or(0, |j| j.get_size())
+            > maxtablesize as u64
+        {
+            return Ok(false);
         }
+        // Ghidra cc:1430: markFoldableGuards()
+        self.mark_foldable_guards();
+        Ok(true)
     }
 
     // Ghidra: jumptable.cc:1434 JumpBasic::buildAddresses
@@ -2726,23 +2824,23 @@ impl JumpModel for JumpBasic {
         fd: &crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
         addresstable: &mut Vec<Address>,
-        loadpoints: Option<&mut Vec<LoadTable>>,
+        mut loadpoints: Option<&mut Vec<LoadTable>>,
         loadcounts: Option<&mut Vec<i32>>,
-    ) {
-        // Faithful to JumpBasic::buildAddresses (jumptable.cc:1453).
+    ) -> Result<(), JumpTableRecoveryError> {
+        // Faithful to JumpBasic::buildAddresses (jumptable.cc:1434-1460).
+        // Ghidra cc:1438: addresstable.clear()
         addresstable.clear();
         let Some(jrange) = &self.jrange else {
-            return;
+            return Ok(());
         };
-        let mut emul = EmulateFunction::new();
-        // Set up LOAD collection.
-        let mut lp_vec: Vec<LoadTable> = Vec::new();
+        // Ghidra cc:1440-1441: EmulateFunction emul(fd); emul.setLoadCollect(loadpoints)
+        let mut emul = EmulateFunction::new(fd);
         let collect_loads = loadpoints.is_some();
         if collect_loads {
             emul.set_load_collect(Some(Vec::new()));
         }
 
-        // Function-pointer alignment mask (jumptable.cc:1465-1469).
+        // Function-pointer alignment mask (jumptable.cc:1443-1447).
         //   uintb mask = ~0;
         //   int4 bit = fd->getArch()->funcptr_align;
         //   if (bit != 0) mask = (mask >> bit) << bit;
@@ -2758,7 +2856,8 @@ impl JumpModel for JumpBasic {
             u64::MAX
         };
 
-        // Address space + wordSize for AddrSpace::addressToByte (jumptable.cc:1475).
+        // Address space + wordSize for AddrSpace::addressToByte (jumptable.cc:1448,1453).
+        //   AddrSpace *spc = indop->getAddr().getSpace();
         //   addr = AddrSpace::addressToByte(addr, spc->getWordSize());
         // Rugra's Address is currently single-space (no AddrSpace field), and
         // the code space has wordSize==1, so addressToByte(addr, 1) == addr
@@ -2781,30 +2880,38 @@ impl JumpModel for JumpBasic {
                 let val = iter.get_value();
                 let start_op = iter.get_start_op();
                 let start_vn = iter.get_start_varnode();
-                let addr = if let (Some(startop), Some(startvn)) = (start_op, start_vn) {
-                    match emul.emulate_path(val, &self.path_meld, &startop, &startvn) {
-                        Some(a) => {
-                            // addressToByte (no-op when word_size==1) then mask
-                            let byte_addr = a.wrapping_mul(word_size);
-                            byte_addr & mask
-                        }
-                        None => 0,
+                // Ghidra cc:1452: emulatePath 抛 LowlevelError 时整个表构建
+                // 终止(向上传播);禁止静默填 0(JUMPTABLE-EMULFN-0001)。
+                let addr = match (start_op, start_vn) {
+                    (Some(startop), Some(startvn)) => {
+                        let a = emul.emulate_path(val, &self.path_meld, &startop, &startvn)?;
+                        // addressToByte (no-op when word_size==1) then mask
+                        let byte_addr = a.wrapping_mul(word_size);
+                        byte_addr & mask
                     }
-                } else {
-                    0
+                    // Ghidra 侧 startop/startvn 非空是 jrange 构造不变式;
+                    // 空指针走不到 emulatePath。Rust Option 在此等价于
+                    // 不变式破坏,显式报错而非归零。
+                    _ => {
+                        return Err(JumpTableRecoveryError::Lowlevel {
+                            message: "Bad jumptable emulation".to_string(),
+                        })
+                    }
                 };
                 addresstable.push(Address::new(addr));
                 if collect_loads {
-                    // Ghidra: loadcounts->push_back(loadpoints->size()) — the
-                    // cumulative count after this iteration. Rugra drains the
-                    // per-iteration collects into lp_vec, so the cumulative
-                    // count is lp_vec.len() + (current emul.loadpoints len).
-                    let n = lp_vec.len()
+                    // Ghidra cc:1456-1457: loadcounts->push_back(loadpoints->size())
+                    // — the cumulative count after this iteration. Rugra drains
+                    // the per-iteration collects into the out vector, so the
+                    // cumulative count is out.len() + (current emul len).
+                    let n = loadpoints.as_deref().map_or(0, |v| v.len())
                         + emul.loadpoints.as_ref().map_or(0, |lp| lp.len());
                     local_loadcounts.push(n as i32);
                     // Drain the collected loadpoints into the output.
                     if let Some(emul_lp) = emul.loadpoints.as_mut() {
-                        lp_vec.append(emul_lp);
+                        if let Some(out_lp) = loadpoints.as_deref_mut() {
+                            out_lp.append(emul_lp);
+                        }
                     }
                 }
                 if !iter.next() {
@@ -2815,10 +2922,8 @@ impl JumpModel for JumpBasic {
         if let Some(lc) = loadcounts {
             *lc = local_loadcounts;
         }
-        if let Some(out_lp) = loadpoints {
-            *out_lp = lp_vec;
-        }
         let _ = indop;
+        Ok(())
     }
 
     // Ghidra: jumptable.cc:1462 JumpBasic::findUnnormalized
@@ -2995,19 +3100,20 @@ impl JumpModel for JumpBasic {
         change
     }
 
-    // Ghidra: jumptable.cc:1594 JumpBasic::sanityCheck
+    // Ghidra: jumptable.cc:1572 JumpBasic::sanityCheck
     fn sanity_check(
         &mut self,
-        _fd: &crate::funcdata::Funcdata,
+        fd: &crate::funcdata::Funcdata,
         _indop: &Arc<RwLock<PcodeOp>>,
         addresstable: &mut Vec<Address>,
         loadpoints: &mut Vec<LoadTable>,
         loadcounts: Option<&mut Vec<i32>>,
     ) -> bool {
-        // Faithful to JumpBasic::sanityCheck (jumptable.cc:1594).
+        // Faithful to JumpBasic::sanityCheck (jumptable.cc:1572-1611)。
         if addresstable.is_empty() {
             return true;
         }
+        let loader = fd.get_arch().and_then(|a| a.loader.clone());
         let mut i = 0usize;
         let first = addresstable[0].as_u64();
         if first != 0 {
@@ -3022,9 +3128,19 @@ impl JumpModel for JumpBasic {
                     first - addresstable[j].as_u64()
                 };
                 if diff > 0xffff {
-                    // Without a LoadImage we cannot verify the address; stop.
-                    i = j;
-                    break;
+                    // Ghidra cc:1588-1598: 距离超 0xffff 的目标不立即截断,
+                    // 先 loadFill 4 字节验证地址在镜像里可读;DataUnavailError
+                    // 才 break。旧实现缺 loader 桥时无条件截断 = INVENTED。
+                    let dataavail = match &loader {
+                        Some(l) => l
+                            .load_fill(4, addresstable[j])
+                            .is_ok(),
+                        None => false,
+                    };
+                    if !dataavail {
+                        i = j;
+                        break;
+                    }
                 }
                 i = j + 1;
             }
@@ -3406,23 +3522,23 @@ impl JumpModel for JumpBasic2 {
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         maxtablesize: u32,
-    ) -> bool {
+    ) -> Result<bool, JumpTableRecoveryError> {
         let joinvn = match &self.extra_vn {
             Some(v) => v.clone(),
-            None => return false,
+            None => return Ok(false),
         };
         if !joinvn.read().unwrap().is_written() {
-            return false;
+            return Ok(false);
         }
         let multiop = joinvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
         let multiop = match multiop {
             Some(op) => op,
-            None => return false,
+            None => return Ok(false),
         };
         {
             let m = multiop.read().unwrap();
             if m.opcode != OpCode::CPUI_MULTIEQUAL || m.inrefs.len() != 2 {
-                return false;
+                return Ok(false);
             }
         }
         let mut found_path: i32 = -1;
@@ -3443,19 +3559,19 @@ impl JumpModel for JumpBasic2 {
             }
         }
         if found_path < 0 {
-            return false;
+            return Ok(false);
         }
         let path = found_path as usize;
         let one_minus_path = 1 - path;
         // Ghidra cc:1718: BlockBasic *rootbl = multiop->getParent()->getIn(1-path)
         let multiop_parent = multiop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-        let Some(multiop_parent) = multiop_parent else { return false; };
+        let Some(multiop_parent) = multiop_parent else { return Ok(false); };
         let (rootbl, pathout) = {
             let p = multiop_parent.read().unwrap();
             let edge = p.get_in(one_minus_path);
             match edge {
                 Some(e) => (e.point.clone(), e.reverse_index as i32),
-                None => return false,
+                None => return Ok(false),
             }
         };
         // Ghidra cc:1720-1724: jrange = new JumpValuesRangeDefault();
@@ -3469,14 +3585,14 @@ impl JumpModel for JumpBasic2 {
         self.base.jrange = Some(Box::new(jdef));
         self.extra_vn = Some(joinvn.clone());
         self.base.find_determining_varnodes(multiop.clone(), one_minus_path as i32);
-        self.base.find_normalized(fd, &rootbl, pathout, matchsize, maxtablesize);
+        self.base.find_normalized(fd, &rootbl, pathout, matchsize, maxtablesize)?;
         let jrange_size = self.base.jrange.as_ref().map(|r| r.get_size()).unwrap_or(0);
         if jrange_size > maxtablesize as u64 {
-            return false;
+            return Ok(false);
         }
         self.base.path_meld.append(&self.orig_path_meld);
         self.base.varnode_index += self.orig_path_meld.num_common_varnode() as i32;
-        true
+        Ok(true)
     }
 
     // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::buildAddresses)
@@ -3487,8 +3603,8 @@ impl JumpModel for JumpBasic2 {
         addresstable: &mut Vec<Address>,
         loadpoints: Option<&mut Vec<LoadTable>>,
         loadcounts: Option<&mut Vec<i32>>,
-    ) {
-        self.base.build_addresses(fd, indop, addresstable, loadpoints, loadcounts);
+    ) -> Result<(), JumpTableRecoveryError> {
+        self.base.build_addresses(fd, indop, addresstable, loadpoints, loadcounts)
     }
 
     // Ghidra: jumptable.cc:1755 JumpBasic2::findUnnormalized
@@ -3649,19 +3765,19 @@ impl JumpModel for JumpBasicOverride {
         indop: &Arc<RwLock<PcodeOp>>,
         _matchsize: u32,
         _maxtablesize: u32,
-    ) -> bool {
+    ) -> Result<bool, JumpTableRecoveryError> {
         if self.hash != 0 {
             let indop_in = indop.read().unwrap().get_in(0).cloned();
             if let Some(trialvn) = indop_in {
                 let slot = self.trial_norm(fd, &trialvn, 0);
                 if slot >= 0 {
                     self.is_trivial = false;
-                    return true;
+                    return Ok(true);
                 }
             }
         }
         self.setup_trivial();
-        true
+        Ok(true)
     }
 
     // Ghidra: jumptable.cc:2002 JumpBasicOverride::buildAddresses
@@ -3672,9 +3788,10 @@ impl JumpModel for JumpBasicOverride {
         addresstable: &mut Vec<Address>,
         _loadpoints: Option<&mut Vec<LoadTable>>,
         _loadcounts: Option<&mut Vec<i32>>,
-    ) {
+    ) -> Result<(), JumpTableRecoveryError> {
         addresstable.clear();
         addresstable.extend(self.addrtable.iter().cloned());
+        Ok(())
     }
 
     // Ghidra: jumptable.hh:484 JumpBasicOverride (inherits JumpBasic::findUnnormalized)
@@ -3806,35 +3923,89 @@ impl JumpModel for JumpAssisted {
     // Ghidra: jumptable.hh:513 JumpAssisted::getTableSize
     fn get_table_size(&self) -> usize { self.size_indices as usize }
 
-    // Ghidra: jumptable.cc:2113 JumpAssisted::recoverModel
+    // Ghidra: jumptable.cc:2091 JumpAssisted::recoverModel
+    /// 前置形状判定逐字对齐 cc:2091-2129:
+    ///   `addrVn = indop->getIn(0)` 未写 → false;
+    ///   `assistOp = addrVn->getDef()` 非 CALLOTHER → false;
+    ///   `assistOp->numInput() < 3` → false;
+    ///   `userops.getOp(in(0)->getOffset())` 类型非 jumpassist → false。
+    /// 之后 Ghidra 读 `JumpAssistOp` 子类的 getCalcSize/getIndex2Addr 载荷
+    /// (cc:2111-2122);Rugra 的 `UserPcodeOp` 尚未携带 JumpAssistOp 载荷,
+    /// 该步保守 fail-closed 返回 `Ok(false)`(保守降级:形状判定与 Ghidra
+    /// 同序,载荷步骤留待 userop.rs 补齐后启用;TODO JUMPTABLE-PIPELINE-0001)。
     fn recover_model(
         &mut self,
-        _fd: &crate::funcdata::Funcdata,
+        fd: &crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
         _matchsize: u32,
         _maxtablesize: u32,
-    ) -> bool {
+    ) -> Result<bool, JumpTableRecoveryError> {
         self.indop = Some(indop.clone());
-        let in0 = indop.read().unwrap().get_in(0).cloned();
-        let Some(mut cur_vn) = in0 else { return false; };
-        for _ in 0..32 {
-            let def = cur_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            let Some(def_op) = def else { break; };
-            let code = def_op.read().unwrap().opcode;
-            if code == OpCode::CPUI_CALLOTHER {
-                self.assist_op = Some(def_op);
-                eprintln!("[JUMPTABLE] WARN: JumpAssisted found CALLOTHER but JumpAssistOp userop not ported");
-                return false;
-            }
-            if code == OpCode::CPUI_COPY {
-                let next = def_op.read().unwrap().get_in(0).cloned();
-                let Some(next) = next else { break; };
-                cur_vn = next;
-                continue;
-            }
-            break;
+        // Ghidra cc:2095-2100: addrVn must be written, its def a CALLOTHER.
+        let addr_vn = indop.read().unwrap().get_in(0).cloned();
+        let Some(addr_vn) = addr_vn else { return Ok(false); };
+        if !addr_vn.read().unwrap().is_written() {
+            return Ok(false);
         }
-        false
+        let assist_op = addr_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let Some(assist_op) = assist_op else { return Ok(false); };
+        {
+            let a = assist_op.read().unwrap();
+            if a.opcode != OpCode::CPUI_CALLOTHER {
+                return Ok(false);
+            }
+            // Ghidra cc:2100: if (assistOp->numInput() < 3) return false;
+            if a.num_input() < 3 {
+                return Ok(false);
+            }
+        }
+        self.assist_op = Some(assist_op.clone());
+        // Ghidra cc:2101-2105: index = assistOp->getIn(0)->getOffset();
+        //   tmpOp = fd->getArch()->userops.getOp(index);
+        //   if (tmpOp->getType() != UserPcodeOp::jumpassist) return false;
+        let index = assist_op
+            .read()
+            .unwrap()
+            .get_in(0)
+            .map(|v| v.read().unwrap().get_offset())
+            .unwrap_or(0) as i32;
+        let userop_jumpassist = fd
+            .get_arch()
+            .and_then(|a| a.userops.clone())
+            .and_then(|u| {
+                u.read()
+                    .unwrap()
+                    .get_op(index)
+                    .map(|op| op.get_type() == crate::userop::UserOpType::JumpAssist)
+                    .or_else(|| {
+                        // Ghidra 的 getOp 假定 CALLOTHER id 恒登记;Rugra 的
+                        // 注册表可能缺项,缺项视作非 jumpassist(与类型判定
+                        // 失败同路,不 panic)。
+                        Some(false)
+                    })
+            })
+            .unwrap_or(false);
+        if !userop_jumpassist {
+            return Ok(false);
+        }
+        // Ghidra cc:2107: switchvn = assistOp->getIn(1)(在类型判定通过后)。
+        self.switchvn = assist_op.read().unwrap().get_in(1).cloned();
+        // Ghidra cc:2107-2110: 其余输入必须全为常量。
+        {
+            let a = assist_op.read().unwrap();
+            for i in 2..a.num_input() {
+                match a.get_in(i) {
+                    Some(v) if v.read().unwrap().is_constant() => {}
+                    _ => return Ok(false),
+                }
+            }
+        }
+        // Ghidra cc:2111-2122: JumpAssistOp 载荷(getCalcSize 脚本或首参数
+        // 为 sizeIndices)未移植 — 保守 fail-closed(见函数头注释)。
+        eprintln!(
+            "[JUMPTABLE] WARN: JumpAssisted userop is jumpassist-typed but JumpAssistOp payload (calc/addr scripts) not ported"
+        );
+        Ok(false)
     }
 
     // Ghidra: jumptable.cc:2153 JumpAssisted::buildAddresses
@@ -3845,10 +4016,11 @@ impl JumpModel for JumpAssisted {
         addresstable: &mut Vec<Address>,
         _loadpoints: Option<&mut Vec<LoadTable>>,
         _loadcounts: Option<&mut Vec<i32>>,
-    ) {
+    ) -> Result<(), JumpTableRecoveryError> {
         addresstable.clear();
-        if self.assist_op.is_none() { return; }
+        if self.assist_op.is_none() { return Ok(()); }
         eprintln!("[JUMPTABLE] WARN: JumpAssisted::build_addresses cannot emulate without JumpAssistOp");
+        Ok(())
     }
 
     // Ghidra: jumptable.hh:510 JumpAssisted (findUnnormalized — no-op, switchvar is direct)
@@ -4108,6 +4280,23 @@ impl JumpTable {
         };
     }
 
+    // Ghidra: jumptable.cc:2466 JumpTable::setOverride
+    /// Install a manual override model: discard any existing model, build a
+    /// `JumpBasicOverride` and fill in the fixed address table, normalized
+    /// switch marker and starting value. Faithful to `setOverride`
+    /// (jumptable.cc:2466-2478)。
+    pub fn set_override(&mut self, addrtable: &[Address], naddr: Address, h: u64, sv: u64) {
+        // Ghidra cc:2469-2470: if (jmodel != 0) delete jmodel;
+        self.jmodel = None;
+        let mut over = JumpBasicOverride::new(Arc::new(RwLock::new(JumpTable::new(
+            self.opaddress,
+        ))));
+        over.set_addresses(addrtable);
+        over.set_norm(naddr, h);
+        over.set_starting_value(sv);
+        self.jmodel = Some(Box::new(over));
+    }
+
     // Ghidra: jumptable.hh:606 JumpTable::getAddressByIndex
     /// Get the i-th address table entry.
     pub fn get_address_by_index(&self, i: usize) -> Address {
@@ -4207,33 +4396,39 @@ impl JumpTable {
         self.partial_table = false;
     }
 
-    // Ghidra: jumptable.cc:2276 JumpTable::recoverModel
+    // Ghidra: jumptable.cc:2254 JumpTable::recoverModel
     /// Recover a model for the switch. Faithful to `JumpTable::recoverModel`
-    /// (jumptable.cc:2276).
+    /// (jumptable.cc:2254-2285, JUMPTABLE-SELECTION-0001)。
     ///
-    /// Ghidra tries (in order): an override model, `JumpAssisted` (if the
-    /// switch var is produced by a CALLOTHER), `JumpBasic`, then `JumpBasic2`.
-    /// Rugra currently only implements `JumpBasic` and `JumpModelTrivial`, so
-    /// we mirror the sequence with the available models. Returns `true` if any
-    /// model recovered successfully.
+    /// Ghidra 的模型尝试顺序(逐字):
+    ///   1. 已挂模型是 override → 直接重跑(matchsize=0)并返回;
+    ///   2. `indirect->getIn(0)` 已写且 def 是 CALLOTHER → 尝试
+    ///      `JumpAssisted`(matchsize=addresstable.size());
+    ///   3. `JumpBasic`(matchsize=addresstable.size());
+    ///   4. `JumpBasic2`,`initializeStart(jbasic->getPathMeld())` 接住
+    ///      Basic 失败时的 pathMeld,再试一次;
+    ///   全部失败 → jmodel = None。
+    /// **`JumpModelTrivial` 不在 Ghidra 的 recoverModel 选择链里**
+    /// (它只经 matchModel 的恢复路径产生);旧实现的 Basic→Trivial
+    /// 回退是 INVENTED,已删除。
     ///
-    /// The BRANCHIND op must already be linked via [`set_indirect_op`].
+    /// 返回值语义:`Err` = Ghidra 的 LowlevelError 从 recoverModel 穿透
+    /// (不尝试下一个模型),`Ok(false)` = 模型自身拒绝。
     pub fn recover_model(
         &mut self,
         fd: &crate::funcdata::Funcdata,
         maxtablesize: u32,
-    ) -> bool {
-        // If an override model is already attached, just re-run it.
+    ) -> Result<bool, JumpTableRecoveryError> {
+        // Ghidra cc:2257-2263: 已有 override 模型 → 重跑(matchsize=0)。
         if let Some(m) = self.jmodel.as_mut() {
             if m.is_override() {
-                let indop = match &self.indirect {
-                    Some(o) => o.clone(),
-                    None => return false,
+                let Some(indop) = self.indirect.clone() else {
+                    return Ok(false);
                 };
                 return m.recover_model(fd, &indop, 0, maxtablesize);
             }
         }
-        // Otherwise discard any stale model (Ghidra: delete jmodel).
+        // Ghidra cc:2262: 否则丢弃旧模型(delete jmodel)。
         self.jmodel = None;
 
         // The models hold an `Arc<RwLock<JumpTable>>` back-reference to their
@@ -4242,26 +4437,52 @@ impl JumpTable {
         // only dereference this parent Arc during fold-in stages (foldInGuards)
         // which we do not run here, so a stand-in Arc is safe during recovery.
         let dummy_arc = std::sync::Arc::new(std::sync::RwLock::new(JumpTable::new(self.opaddress)));
-        let indop = match &self.indirect {
-            Some(o) => o.clone(),
-            None => return false,
+        let Some(indop) = self.indirect.clone() else {
+            return Ok(false);
         };
         let matchsize = self.addresstable.len() as u32;
 
-        // JumpBasic first (Ghidra's primary model).
-        let mut jbasic = JumpBasic::new(dummy_arc.clone());
-        if jbasic.recover_model(fd, &indop, matchsize, maxtablesize) {
-            self.jmodel = Some(Box::new(jbasic));
-            return true;
+        // Ghidra cc:2264-2272: 输入已写且 def 是 CALLOTHER → JumpAssisted。
+        let in0_written_callother = {
+            let indop_rg = indop.read().unwrap();
+            indop_rg
+                .get_in(0)
+                .and_then(|vn| {
+                    let v = vn.read().unwrap();
+                    if !v.is_written() {
+                        return None;
+                    }
+                    v.def.as_ref().and_then(|w| w.upgrade())
+                })
+                .map(|def_op| def_op.read().unwrap().opcode == OpCode::CPUI_CALLOTHER)
+                .unwrap_or(false)
+        };
+        if in0_written_callother {
+            let mut jassisted = JumpAssisted::new(dummy_arc.clone());
+            if jassisted
+                .recover_model(fd, &indop, matchsize, maxtablesize)?
+            {
+                self.jmodel = Some(Box::new(jassisted));
+                return Ok(true);
+            }
         }
-        // Fall back to the trivial model (number of out-edges == table size).
-        let mut jtriv = JumpModelTrivial::new(dummy_arc);
-        if jtriv.recover_model(fd, &indop, matchsize, maxtablesize) {
-            self.jmodel = Some(Box::new(jtriv));
-            return true;
+
+        // Ghidra cc:2274-2277: JumpBasic。
+        let mut jbasic = JumpBasic::new(dummy_arc.clone());
+        if jbasic.recover_model(fd, &indop, matchsize, maxtablesize)? {
+            self.jmodel = Some(Box::new(jbasic));
+            return Ok(true);
+        }
+        // Ghidra cc:2278-2282: JumpBasic2,initializeStart 接住 Basic 的
+        // pathMeld 后再试;失败则 jmodel = None。
+        let mut jbasic2 = JumpBasic2::new(dummy_arc);
+        jbasic2.initialize_start(jbasic.get_path_meld());
+        if jbasic2.recover_model(fd, &indop, matchsize, maxtablesize)? {
+            self.jmodel = Some(Box::new(jbasic2));
+            return Ok(true);
         }
         self.jmodel = None;
-        false
+        Ok(false)
     }
 
     // Ghidra: jumptable.cc:2354 JumpTable::isReachable
@@ -4404,11 +4625,22 @@ impl JumpTable {
     // Ghidra: jumptable.cc:2623 JumpTable::recoverAddresses
     /// Recover the model and raw address table while retaining Ghidra's typed
     /// exception channel and all mutations performed before an error.
+    ///
+    /// Ghidra 的 maxtablesize 来自 `glb->max_jumptable_size`
+    /// (cc:2626 经 recoverModel 的调用点 cc:2259/2270/2276/2281);
+    /// Rugra 从 `Architecture::max_jumptable_size` 读取,无 Architecture
+    /// 时退回默认 1024(architecture.cc:1433)。
     pub fn recover_addresses_classified(
         &mut self,
         fd: &crate::funcdata::Funcdata,
     ) -> Result<(), JumpTableRecoveryError> {
-        if !self.recover_model(fd, MAX_JUMPTABLE_SIZE) {
+        let maxtablesize = fd
+            .get_arch()
+            .map_or(MAX_JUMPTABLE_SIZE, |a| a.max_jumptable_size);
+        // Ghidra cc:2626: recoverModel(fd); jmodel==0 → LowlevelError。
+        // recoverModel 内部的 LowlevelError(如 readonly 救援读 LoadImage
+        // 失败)在 Ghidra 直接穿透 recoverAddresses,Rust 用 `?` 同语义。
+        if !self.recover_model(fd, maxtablesize)? {
             return Err(JumpTableRecoveryError::Lowlevel {
                 message: format!(
                     "Could not recover jumptable at {}. Too many branches",
@@ -4416,6 +4648,7 @@ impl JumpTable {
                 ),
             });
         }
+        // Ghidra cc:2632-2635: getTableSize()==0 → LowlevelError。
         if self.jmodel.as_ref().map_or(0, |model| model.get_table_size()) == 0 {
             return Err(JumpTableRecoveryError::Lowlevel {
                 message: format!("Jumptable with 0 entries at {}", self.opaddress),
@@ -4430,6 +4663,8 @@ impl JumpTable {
             });
         };
 
+        // Ghidra cc:2639-2648: collectloads 分支带 loadcounts 并做
+        // LoadTable::collapseTable;两个分支都过 sanityCheck。
         if self.collect_loads {
             let mut loadcounts = Vec::new();
             self.jmodel.as_ref().unwrap().build_addresses(
@@ -4438,7 +4673,7 @@ impl JumpTable {
                 &mut self.addresstable,
                 Some(&mut self.loadpoints),
                 Some(&mut loadcounts),
-            );
+            )?;
             self.sanity_check(fd, Some(&mut loadcounts))?;
             LoadTable::collapse_table(&mut self.loadpoints);
         } else {
@@ -4448,7 +4683,7 @@ impl JumpTable {
                 &mut self.addresstable,
                 None,
                 None,
-            );
+            )?;
             self.sanity_check(fd, None)?;
         }
         Ok(())
@@ -4468,32 +4703,73 @@ impl JumpTable {
 /// the `max_jumptable_size` field of `Architecture` (architecture.cc:1433, default 1024).
 pub const MAX_JUMPTABLE_SIZE: u32 = 1024;
 
+/// Emulation failure discriminating Ghidra's two exception families inside
+/// `EmulateFunction`.
+///
+/// `DataUnavailError`(loadimage.hh:31,`LowlevelError` 的子类)在
+/// `emulatePath`(jumptable.cc:246-250)被**就地捕获**并转成带地址的新
+/// `LowlevelError`;其余 `LowlevelError`(BRANCH/BRANCHIND/MULTIEQUAL/
+/// 未实现指令)不被捕获、原样穿透。保留这个区分是错误通道对齐的关键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmulateFailure {
+    /// Ghidra `DataUnavailError` raised by `LoadImage::loadFill`.
+    DataUnavail(String),
+    /// Ghidra `LowlevelError` (branch/segment/multiequal/unimplemented ops).
+    Lowlevel(String),
+}
+
+impl EmulateFailure {
+    // RUGRA-GLUE: Rust conversion into the typed stageJumpTable channel;
+    // Ghidra 靠 DataUnavailError 继承 LowlevelError 落进同一 catch。
+    fn into_recovery_error(self) -> JumpTableRecoveryError {
+        match self {
+            Self::DataUnavail(m) | Self::Lowlevel(m) => {
+                JumpTableRecoveryError::Lowlevel { message: m }
+            }
+        }
+    }
+}
+
 /// A light-weight emulator to calculate switch targets from switch variables.
 ///
 /// We assume we only have to store memory state for individual Varnodes and
 /// that dynamic LOADs are resolved from the LoadImage. BRANCH and CBRANCH
 /// emulation will fail; there can only be one execution path, although there
 /// can be multiple data-flow paths. Faithful to `EmulateFunction`
-/// (jumptable.hh:110).
+/// (jumptable.hh:110 / jumptable.cc:113-254 + 基类 `EmulatePcodeOp`
+/// emulateutil.hh/cc)。
 ///
-/// NOTE: The full emulator requires `EmulatePcodeOp` infrastructure (per-opcode
-/// `executeX` dispatch) which lives in [`crate::emulate`]. This struct holds
-/// the varnode-value map and provides the value get/set interface. The
-/// `emulate_path` driver is an L3 gap until `Varnode::def` traversal lands.
-pub struct EmulateFunction {
-    /// Light-weight memory state based on varnodes (keyed by Arc pointer id).
+/// JUMPTABLE-EMULFN-0001:`fd` 持有 Architecture → loader 桥
+/// (`getLoadImageValue` 真读 LoadImage,不再静默归零);`last_op` 前驱
+/// 供 MULTIEQUAL 求值;BRANCH/BRANCHIND/CBRANCH-taken 走 Ghidra 的
+/// LowlevelError 通道。
+pub struct EmulateFunction<'fd> {
+    /// The function being emulated (Ghidra `EmulateFunction::fd`); the base
+    /// class holds `Architecture *glb` = `fd->getArch()` (jumptable.cc:160-165).
+    fd: &'fd crate::funcdata::Funcdata,
+    /// Light-weight memory state based on varnodes (keyed by Arc pointer id,
+    /// mirroring `map<Varnode*,uintb> varnodeMap`).
     varnode_map: std::collections::HashMap<usize, u64>,
-    /// The collected LOAD records, if any.
+    /// The set of collected LOAD records, if any (`loadpoints`).
     pub loadpoints: Option<Vec<LoadTable>>,
+    /// Last PcodeOp executed (`EmulatePcodeOp::lastOp`), maintained by
+    /// `fallthru_op` and consumed by `execute_multiequal`.
+    last_op: Option<Arc<RwLock<PcodeOp>>>,
+    /// Current PcodeOp being executed (`EmulatePcodeOp::currentOp`).
+    current_op: Option<Arc<RwLock<PcodeOp>>>,
 }
 
-impl EmulateFunction {
-    // Ghidra: jumptable.cc:162 EmulateFunction::EmulateFunction
-    /// Construct a fresh emulator.
-    pub fn new() -> Self {
+impl<'fd> EmulateFunction<'fd> {
+    // Ghidra: jumptable.cc:160 EmulateFunction::EmulateFunction
+    /// Construct a fresh emulator bound to `fd` (base ctor takes
+    /// `f->getArch()` for the LoadImage bridge).
+    pub fn new(fd: &'fd crate::funcdata::Funcdata) -> Self {
         Self {
+            fd,
             varnode_map: std::collections::HashMap::new(),
             loadpoints: None,
+            last_op: None,
+            current_op: None,
         }
     }
 
@@ -4503,114 +4779,400 @@ impl EmulateFunction {
         self.loadpoints = val;
     }
 
-    // Ghidra: jumptable.cc:181 EmulateFunction::getVarnodeValue
-    /// Get the value of a varnode in the syntax tree. Faithful to
-    /// `getVarnodeValue` (jumptable.cc:181).
-    pub fn get_varnode_value(&self, vn: &Arc<RwLock<Varnode>>) -> u64 {
-        let vn_rg = vn.read().unwrap();
-        if vn_rg.is_constant() {
-            return vn_rg.get_offset();
-        }
-        let key = Arc::as_ptr(vn) as *const () as usize;
-        if let Some(v) = self.varnode_map.get(&key) {
-            return *v;
-        }
-        // Fall back to LoadImage value — not available without a loader; 0.
-        0
+    // Ghidra: emulateutil.cc:47 EmulatePcodeOp::getLoadImageValue
+    /// Pull a value from the load-image given a specific address.
+    ///
+    /// Faithful to `getLoadImageValue` (emulateutil.cc:47-61):
+    /// `loadimage->loadFill(&res, sizeof(uintb), Address(spc,off))` 先读
+    /// 8 字节,host 小端 + 空间小端 → 无字节交换,再
+    /// `res &= calc_mask(sz)`。`loadFill` 失败抛 `DataUnavailError`
+    /// (本实现返回 `Err(EmulateFailure::DataUnavail)`)。
+    ///
+    /// Rugra 单空间模型的 `spc` 参数保留为文档位:地址无 space 字段
+    /// (P1 architectural item),x86-64 代码/ram 空间均小端。
+    fn get_load_image_value(
+        &self,
+        _spc: crate::space::AddressSpace,
+        off: u64,
+        sz: usize,
+    ) -> Result<u64, EmulateFailure> {
+        let loader = self.fd.get_arch().and_then(|a| a.loader.clone());
+        let Some(loader) = loader else {
+            // Ghidra 的 glb->loader 在真实 Architecture 里非空;缺 loader
+            // 是环境错误,按 DataUnavail 通道上报而非归零。
+            return Err(EmulateFailure::DataUnavail(
+                "Data-unavailable error: no LoadImage attached to Architecture".to_string(),
+            ));
+        };
+        let bytes = loader
+            .load_fill(8, Address::new(off))
+            .map_err(|crate::loadimage::DataUnavailError(m)| EmulateFailure::DataUnavail(m))?;
+        let mut res = 0u64;
+        for (i, &b) in bytes.iter().enumerate().take(8) {
+            res |= (b as u64) << (i * 8); // little-endian host + little-endian space
+    }
+        Ok(res & calc_mask(sz))
     }
 
-    // Ghidra: jumptable.cc:196 EmulateFunction::setVarnodeValue
+    // Ghidra: jumptable.cc:179 EmulateFunction::getVarnodeValue
+    /// Get the value of a Varnode which is in a syntax tree: constant →
+    /// offset; seen before → cached map value; else read the LoadImage
+    /// (`getLoadImageValue`)。失败沿 DataUnavail 通道上抛,禁止静默归零。
+    pub fn get_varnode_value(
+        &self,
+        vn: &Arc<RwLock<Varnode>>,
+    ) -> Result<u64, EmulateFailure> {
+        let vn_rg = vn.read().unwrap();
+        if vn_rg.is_constant() {
+            return Ok(vn_rg.get_offset());
+        }
+        drop(vn_rg);
+        let key = Arc::as_ptr(vn) as *const () as usize;
+        if let Some(v) = self.varnode_map.get(&key) {
+            return Ok(*v); // We have seen this varnode before
+        }
+        // Ghidra cc:191: return getLoadImageValue(vn->getSpace(), off, size)
+        let (spc, off, size) = {
+            let v = vn.read().unwrap();
+            (v.get_space(), v.get_offset(), v.get_size())
+        };
+        self.get_load_image_value(spc, off, size)
+    }
+
+    // Ghidra: jumptable.cc:194 EmulateFunction::setVarnodeValue
     /// Set the value of a varnode in the syntax tree. Faithful to
-    /// `setVarnodeValue` (jumptable.cc:196).
+    /// `setVarnodeValue` (jumptable.cc:194).
     pub fn set_varnode_value(&mut self, vn: &Arc<RwLock<Varnode>>, val: u64) {
         let key = Arc::as_ptr(vn) as *const () as usize;
         self.varnode_map.insert(key, val);
     }
 
-    // RUGRA-GLUE: Rust emulation dispatch combining Emulate::executeOp + executeLoad/executeBranchind (emulate.hh, not jumptable.cc); single-fn dispatch
-    /// Execute a single pcode op, storing its result. Returns false if the op
-    /// cannot be evaluated (e.g. LOAD without a loader, or unsupported opcode).
-    /// Faithful to `EmulatePcodeOp::executeCurrentOp` for the subset of opcodes
-    /// that appear in jumptable address calculations.
-    fn execute_op(&mut self, op: &Arc<RwLock<PcodeOp>>) -> bool {
-        let (opc, n_in, out_size) = {
-            let op_rg = op.read().unwrap();
-            (
-                op_rg.opcode,
-                op_rg.num_input(),
-                op_rg.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(0),
-            )
-        };
-        // Gather input values.
-        let op_rg = op.read().unwrap();
-        let in_vals: Vec<u64> = (0..n_in)
-            .map(|s| {
-                op_rg.get_in(s).map(|v| self.get_varnode_value(v)).unwrap_or(0)
-            })
-            .collect();
-        let in_size = op_rg
-            .get_in(0)
-            .map(|v| v.read().unwrap().get_size())
-            .unwrap_or(0);
-        let out_arc = op_rg.get_out().cloned();
-        drop(op_rg);
-
-        let Some(out_vn) = out_arc else {
-            return false;
-        };
-
-        let result = match n_in {
-            1 => crate::opbehavior::evaluate_unary(opc, out_size, in_size, in_vals[0]),
-            2 => {
-                let in1_size = in_size;
-                crate::opbehavior::evaluate_binary(opc, out_size, in1_size, in_vals[0], in_vals[1])
-            }
-            3 => crate::opbehavior::evaluate_ternary(
-                opc,
-                out_size,
-                in_size,
-                in_vals[0],
-                in_vals[1],
-                in_vals[2],
-            ),
-            _ => None,
-        };
-
-        match result {
-            Some(r) => {
-                self.set_varnode_value(&out_vn, r);
-                // If this is a LOAD, record the loadpoint.
-                if opc == OpCode::CPUI_LOAD {
-                    if let Some(lp) = &mut self.loadpoints {
-                        // The address comes from input(1); approximate with the value.
-                        lp.push(LoadTable::single(Address::new(in_vals[1]), out_size as i32));
-                    }
-                }
-                true
-            }
-            None => false,
+    // Ghidra: jumptable.cc:200 EmulateFunction::fallthruOp
+    /// Fall-thru semantics: keep track of lastOp for MULTIEQUAL; the outer
+    /// loop controls execution flow.
+    fn fallthru_op(&mut self) {
+        if let Some(cur) = &self.current_op {
+            self.last_op = Some(cur.clone());
         }
     }
 
-    // Ghidra: jumptable.cc:218 EmulateFunction::emulatePath
-    /// Execute from a given starting point and value to the common end-point of
-    /// the path set. Flow the given value through all paths in the path
+    // Ghidra: emulateutil.hh:132 EmulatePcodeOp::setCurrentOp
+    /// Establish the current PcodeOp being emulated (and its behavior).
+    fn set_current_op(&mut self, op: Arc<RwLock<PcodeOp>>) {
+        self.current_op = Some(op);
+    }
+
+    // Ghidra: emulateutil.cc:60 EmulatePcodeOp::executeUnary
+    fn execute_unary_op(&mut self) -> Result<(), EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let (opc, out_size, in0_size, in0, out) = {
+            let o = op.read().unwrap();
+            (
+                o.opcode,
+                o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                o.get_in(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                o.get_in(0).cloned(),
+                o.get_out().cloned(),
+            )
+        };
+        let in1 = match in0 {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        let out_vn = out.ok_or_else(|| {
+            EmulateFailure::Lowlevel("Unary emulation unimplemented for op".into())
+        })?;
+        let val = crate::opbehavior::evaluate_unary(opc, out_size, in0_size, in1).ok_or_else(
+            || {
+                // Ghidra opbehavior.cc:118:
+                // "Unary emulation unimplemented for " + name
+                EmulateFailure::Lowlevel(
+                    "Unary emulation unimplemented for opcode".to_string(),
+                )
+            },
+        )?;
+        self.set_varnode_value(&out_vn, val);
+        Ok(())
+    }
+
+    // Ghidra: emulateutil.cc:66 EmulatePcodeOp::executeBinary
+    fn execute_binary_op(&mut self) -> Result<(), EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let (opc, out_size, in_size, in0, in1, out) = {
+            let o = op.read().unwrap();
+            (
+                o.opcode,
+                o.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                o.get_in(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                o.get_in(0).cloned(),
+                o.get_in(1).cloned(),
+                o.get_out().cloned(),
+            )
+        };
+        let v1 = match in0 {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        let v2 = match in1 {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        let out_vn = out.ok_or_else(|| {
+            EmulateFailure::Lowlevel("Binary emulation unimplemented for op".into())
+        })?;
+        let val =
+            crate::opbehavior::evaluate_binary(opc, out_size, in_size, v1, v2).ok_or_else(
+                || {
+                    // Ghidra opbehavior.cc:130:
+                    // "Binary emulation unimplemented for " + name
+                    EmulateFailure::Lowlevel(
+                        "Binary emulation unimplemented for opcode".to_string(),
+                    )
+                },
+            )?;
+        self.set_varnode_value(&out_vn, val);
+        Ok(())
+    }
+
+    // Ghidra: emulateutil.cc:81 EmulatePcodeOp::executeLoad
+    /// Standard LOAD behavior: address from input(1), space from the
+    /// space-id constant in input(0), value from the LoadImage.
+    fn execute_load_base(&mut self) -> Result<(), EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let (in0, in1, out) = {
+            let o = op.read().unwrap();
+            (o.get_in(0).cloned(), o.get_in(1).cloned(), o.get_out().cloned())
+        };
+        let mut off = match in1 {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        let spc = in0.map(|v| get_space_from_const_vn(&v)).unwrap_or(crate::space::AddressSpace::Ram);
+        // AddrSpace::addressToByte(off, spc->getWordSize())
+        off = off.wrapping_mul(spc.word_size() as u64);
+        let out_vn = out.ok_or_else(|| {
+            EmulateFailure::Lowlevel("Unary emulation unimplemented for op".into())
+        })?;
+        let sz = out_vn.read().unwrap().get_size();
+        let res = self.get_load_image_value(spc, off, sz)?;
+        self.set_varnode_value(&out_vn, res);
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:113 EmulateFunction::executeLoad
+    /// LOAD: record the LoadTable first (when collecting), then the base
+    /// LoadImage evaluation.
+    fn execute_load(&mut self) -> Result<(), EmulateFailure> {
+        if self.loadpoints.is_some() {
+            let op = self.current_op.clone().unwrap();
+            let (in0, in1, out) = {
+                let o = op.read().unwrap();
+                (o.get_in(0).cloned(), o.get_in(1).cloned(), o.get_out().cloned())
+            };
+            let off = match in1 {
+                Some(v) => self.get_varnode_value(&v)?,
+                None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+            };
+            let spc =
+                in0.map(|v| get_space_from_const_vn(&v)).unwrap_or(crate::space::AddressSpace::Ram);
+            let off = off.wrapping_mul(spc.word_size() as u64);
+            let sz = out.map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            if let Some(lp) = &mut self.loadpoints {
+                lp.push(LoadTable::single(Address::new(off), sz as i32));
+            }
+        }
+        self.execute_load_base()
+    }
+
+    // Ghidra: jumptable.cc:126 EmulateFunction::executeBranch
+    fn execute_branch(&mut self) -> Result<(), EmulateFailure> {
+        Err(EmulateFailure::Lowlevel(
+            "Branch encountered emulating jumptable calculation".to_string(),
+        ))
+    }
+
+    // Ghidra: jumptable.cc:132 EmulateFunction::executeBranchind
+    fn execute_branchind(&mut self) -> Result<(), EmulateFailure> {
+        Err(EmulateFailure::Lowlevel(
+            "Indirect branch encountered emulating jumptable calculation".to_string(),
+        ))
+    }
+
+    // Ghidra: emulateutil.cc:107 EmulatePcodeOp::executeCbranch
+    fn execute_cbranch(&mut self) -> Result<bool, EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let (in1, flip) = {
+            let o = op.read().unwrap();
+            (o.get_in(1).cloned(), o.is_boolean_flip())
+        };
+        let cond = match in1 {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        // ((cond != 0) != currentOp->isBooleanFlip())
+        Ok((cond != 0) != flip)
+    }
+
+    // Ghidra: emulateutil.cc:100 EmulatePcodeOp::executeMultiequal
+    /// MULTIEQUAL: pick the incoming edge matching `last_op`'s block.
+    fn execute_multiequal(&mut self) -> Result<(), EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let last_op = self.last_op.clone();
+        let Some(last_op) = last_op else {
+            // Ghidra cc:104-105 dereferences lastOp unconditionally
+            // (`lastOp->getParent()`);未执行过任何 op 就遇到 MULTIEQUAL
+            // 在 Ghidra 是空指针崩溃,这里按 Lowlevel 通道显式报错。
+            return Err(EmulateFailure::Lowlevel(
+                "Could not execute MULTIEQUAL".to_string(),
+            ));
+        };
+        let bl = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+        let last_bl = last_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+        let (Some(bl), Some(last_bl)) = (bl, last_bl) else {
+            return Err(EmulateFailure::Lowlevel(
+                "Could not execute MULTIEQUAL".to_string(),
+            ));
+        };
+        let mut found: Option<usize> = None;
+        {
+            let bl_rg = bl.read().unwrap();
+            for i in 0..bl_rg.size_in() {
+                if let Some(e) = bl_rg.get_in(i) {
+                    if Arc::ptr_eq(&e.point, &last_bl) {
+                        found = Some(i);
+                        break;
+                    }
+                }
+            }
+        }
+        let Some(i) = found else {
+            return Err(EmulateFailure::Lowlevel(
+                "Could not execute MULTIEQUAL".to_string(),
+            ));
+        };
+        let (in_i, out) = {
+            let o = op.read().unwrap();
+            (o.get_in(i).cloned(), o.get_out().cloned())
+        };
+        let val = match in_i {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        if let Some(out_vn) = out {
+            self.set_varnode_value(&out_vn, val);
+        }
+        Ok(())
+    }
+
+    // Ghidra: emulateutil.cc:117 EmulatePcodeOp::executeIndirect
+    fn execute_indirect(&mut self) -> Result<(), EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let (in0, out) = {
+            let o = op.read().unwrap();
+            (o.get_in(0).cloned(), o.get_out().cloned())
+        };
+        let val = match in0 {
+            Some(v) => self.get_varnode_value(&v)?,
+            None => return Err(EmulateFailure::Lowlevel("Bad jumptable emulation".into())),
+        };
+        if let Some(out_vn) = out {
+            self.set_varnode_value(&out_vn, val);
+        }
+        Ok(())
+    }
+
+    // Ghidra: emulateutil.cc:123 EmulatePcodeOp::executeSegmentOp
+    fn execute_segmentop(&mut self) -> Result<(), EmulateFailure> {
+        // Ghidra: segdef == 0 → "Segment operand missing definition"。
+        // Rugra 未移植 SegmentOp 注册表(userops segment 句柄),统一走
+        // 同一 Lowlevel 通道(保守降级,TODO JUMPTABLE-PIPELINE-0001)。
+        Err(EmulateFailure::Lowlevel(
+            "Segment operand missing definition".to_string(),
+        ))
+    }
+
+    // Ghidra: emulate.cc:143 Emulate::executeCurrentOp
+    /// Execute a single pcode op via the faithful dispatch table.
+    fn execute_current_op(&mut self) -> Result<(), EmulateFailure> {
+        let op = self.current_op.clone().unwrap();
+        let (opc, n_in) = {
+            let o = op.read().unwrap();
+            (o.opcode, o.num_input())
+        };
+        match opc {
+            OpCode::CPUI_LOAD => {
+                self.execute_load()?;
+                self.fallthru_op();
+            }
+            OpCode::CPUI_STORE => {
+                // emulateutil.cc:73 executeStore: nowhere to store (no-op)
+                self.fallthru_op();
+            }
+            OpCode::CPUI_BRANCH => {
+                self.execute_branch()?;
+            }
+            OpCode::CPUI_CBRANCH => {
+                if self.execute_cbranch()? {
+                    self.execute_branch()?;
+                } else {
+                    self.fallthru_op();
+                }
+            }
+            OpCode::CPUI_BRANCHIND | OpCode::CPUI_RETURN => {
+                // RETURN dispatches to executeBranchind (emulate.cc:181-183)
+                self.execute_branchind()?;
+            }
+            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_CALLOTHER => {
+                // jumptable.cc:138-157: ignore calls, fall through
+                self.fallthru_op();
+            }
+            OpCode::CPUI_MULTIEQUAL => {
+                self.execute_multiequal()?;
+                self.fallthru_op();
+            }
+            OpCode::CPUI_INDIRECT => {
+                self.execute_indirect()?;
+                self.fallthru_op();
+            }
+            OpCode::CPUI_SEGMENTOP => {
+                self.execute_segmentop()?;
+                self.fallthru_op();
+            }
+            OpCode::CPUI_CPOOLREF | OpCode::CPUI_NEW => {
+                // emulateutil.cc:127-133: ignore
+                self.fallthru_op();
+            }
+            _ => {
+                // OpBehavior::isUnary() ⇔ 1 输入(与 Ghidra 行为注册表一致)
+                if n_in == 1 {
+                    self.execute_unary_op()?;
+                } else {
+                    self.execute_binary_op()?;
+                }
+                self.fallthru_op();
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:216 EmulateFunction::emulatePath
+    /// Execute from a given starting point and value to the common end-point
+    /// of the path set. Flow the given value through all paths in the path
     /// container to produce the single output value. Faithful to `emulatePath`
-    /// (jumptable.cc:218).
+    /// (jumptable.cc:216-254)。
     ///
-    /// Returns the calculated value at the common end-point (the BRANCHIND
-    /// input), or None if emulation failed.
+    /// 错误通道(jumptable.cc:243-250):`DataUnavailError` 被捕获并转成
+    /// `"Could not emulate address calculation at <addr>"`;其余 LowlevelError
+    /// 原样穿透。归零静默继续已删除(JUMPTABLE-EMULFN-0001)。
     pub fn emulate_path(
         &mut self,
         val: u64,
         path_meld: &PathMeld,
         startop: &Arc<RwLock<PcodeOp>>,
         startvn: &Arc<RwLock<Varnode>>,
-    ) -> Option<u64> {
-        if path_meld.num_ops() == 0 {
-            return None;
-        }
-        // Find the startop index in the pathMeld.
+    ) -> Result<u64, JumpTableRecoveryError> {
+        let conv = |f: EmulateFailure| f.into_recovery_error();
+        // Ghidra cc:219-221: find startop's index i in pathMeld.
         let mut i = path_meld.num_ops();
         for idx in 0..path_meld.num_ops() {
             if Arc::ptr_eq(&path_meld.get_op(idx), startop) {
@@ -4618,71 +5180,94 @@ impl EmulateFunction {
                 break;
             }
         }
-        if i == path_meld.num_ops() {
-            return None; // startop not found
-        }
-
-        // Handle MULTIEQUAL start: if startvn is one of the inputs, use the
-        // output as the new startvn (as if COPY from old startvn).
+        // Ghidra cc:222-234: MULTIEQUAL start handling.
         let mut cur_startvn = startvn.clone();
         let mut cur_i = i;
-        let is_multiequal = path_meld.get_op(i).read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL;
-        if is_multiequal {
+        if path_meld.get_op(i).read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL {
             let me_op = path_meld.get_op(i);
             let me_rg = me_op.read().unwrap();
-            let mut found_j = None;
+            let mut found_j = me_rg.num_input();
             for j in 0..me_rg.num_input() {
                 if let Some(v) = me_rg.get_in(j) {
-                    if Arc::ptr_eq(v, &cur_startvn.clone()) {
-                        found_j = Some(j);
+                    if Arc::ptr_eq(v, &cur_startvn) {
+                        found_j = j;
                         break;
                     }
                 }
             }
-            drop(me_rg);
-            match found_j {
-                Some(_) if i > 0 => {
-                    // Use the MULTIEQUAL output as the new startvn.
-                    let out = path_meld.get_op(i).read().unwrap().get_out().cloned();
-                    if let Some(o) = out {
-                        cur_startvn = o;
-                        cur_i = i - 1;
-                    } else {
-                        return None;
-                    }
-                }
-                _ => return None,
+            // Ghidra cc:228-229: if ((j == numInput())||(i==0)) throw
+            //   LowlevelError("Cannot start jumptable emulation with
+            //   unresolved MULTIEQUAL");
+            if found_j == me_rg.num_input() || i == 0 {
+                return Err(JumpTableRecoveryError::Lowlevel {
+                    message: "Cannot start jumptable emulation with unresolved MULTIEQUAL"
+                        .to_string(),
+                });
+            }
+            // startvn = startop->getOut(); i -= 1;
+            if let Some(o) = me_rg.get_out().cloned() {
+                cur_startvn = o;
+                cur_i = i - 1;
+            } else {
+                return Err(JumpTableRecoveryError::Lowlevel {
+                    message: "Cannot start jumptable emulation with unresolved MULTIEQUAL"
+                        .to_string(),
+                });
             }
         }
-
-        // Set the starting value (if not constant).
+        // Ghidra cc:235-236: if (i==pathMeld.numOps()) throw LowlevelError
+        //   ("Bad jumptable emulation");
+        if i == path_meld.num_ops() {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: "Bad jumptable emulation".to_string(),
+            });
+        }
+        // Ghidra cc:237-238: if (!startvn->isConstant())
+        //   setVarnodeValue(startvn,val);
         if !cur_startvn.read().unwrap().is_constant() {
             self.set_varnode_value(&cur_startvn, val);
         }
-
-        // Execute ops from cur_i down to 0 (BRANCHIND is op 0).
+        // Ghidra cc:239-251: execute ops from i down to 1 (op 0 is the
+        // BRANCHIND itself); DataUnavailError → "Could not emulate address
+        // calculation at <addr>".
         while cur_i > 0 {
             let curop = path_meld.get_op(cur_i);
-            if !self.execute_op(&curop) {
-                return None;
-            }
             cur_i -= 1;
+            let curop_addr = curop.read().unwrap().get_addr();
+            self.set_current_op(curop);
+            if let Err(err) = self.execute_current_op() {
+                return Err(match err {
+                    EmulateFailure::DataUnavail(_) => JumpTableRecoveryError::Lowlevel {
+                        message: format!(
+                            "Could not emulate address calculation at {}",
+                            curop_addr
+                        ),
+                    },
+                    other => conv(other),
+                });
+            }
         }
-
-        // The result is the value of op(0)->getIn(0) (the BRANCHIND target).
+        // Ghidra cc:252-253: return getVarnodeValue(pathMeld.getOp(0)->getIn(0))
         let first_op = path_meld.get_op(0);
         let in0 = first_op.read().unwrap().get_in(0).cloned();
         match in0 {
-            Some(vn) => Some(self.get_varnode_value(&vn)),
-            None => None,
+            Some(vn) => self.get_varnode_value(&vn).map_err(conv),
+            None => Err(JumpTableRecoveryError::Lowlevel {
+                message: "Bad jumptable emulation".to_string(),
+            }),
         }
     }
 }
 
-impl Default for EmulateFunction {
-    // RUGRA-GLUE: Rust Default trait impl for EmulateFunction; Ghidra uses explicit constructor (jumptable.cc:162)
-    fn default() -> Self {
-        Self::new()
+// RUGRA-GLUE: wraps Varnode::getSpaceFromConst (varnode.hh:426, not in
+// jumptable.cc); LOAD 的 space-id 常量解码,与 constseq.rs/double_precis.rs
+// 的同名 helper 同语义(常量的 offset 即 SpaceId)。
+fn get_space_from_const_vn(vn: &Arc<RwLock<Varnode>>) -> crate::space::AddressSpace {
+    let r = vn.read().unwrap();
+    if r.is_constant() {
+        crate::space::AddressSpace::from_id(r.get_offset() as crate::space::SpaceId)
+    } else {
+        r.get_space()
     }
 }
 
@@ -5012,19 +5597,39 @@ mod tests {
 
     #[test]
     fn test_emulate_function_varnode_map() {
+        use crate::funcdata::Funcdata;
         use crate::varnode::Varnode;
-        let mut emul = EmulateFunction::new();
+        let fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let mut emul = EmulateFunction::new(&fd);
         let vn = Arc::new(RwLock::new(Varnode::new_unique(0, 4)));
         emul.set_varnode_value(&vn, 0xdeadbeef);
-        assert_eq!(emul.get_varnode_value(&vn), 0xdeadbeef);
+        assert_eq!(emul.get_varnode_value(&vn), Ok(0xdeadbeef));
     }
 
     #[test]
     fn test_emulate_function_constant() {
+        use crate::funcdata::Funcdata;
         use crate::varnode::Varnode;
-        let emul = EmulateFunction::new();
+        let fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let emul = EmulateFunction::new(&fd);
         let vn = Arc::new(RwLock::new(Varnode::new_constant(42, 4)));
-        assert_eq!(emul.get_varnode_value(&vn), 42);
+        assert_eq!(emul.get_varnode_value(&vn), Ok(42));
+    }
+
+    #[test]
+    fn test_emulate_function_loader_fallback_typed_error() {
+        // JUMPTABLE-EMULFN-0001: an unseen non-constant varnode must hit the
+        // LoadImage channel; without a loader this is a typed DataUnavail
+        // error, never a silent 0 (Ghidra cc:191 getLoadImageValue).
+        use crate::funcdata::Funcdata;
+        use crate::varnode::Varnode;
+        let fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let emul = EmulateFunction::new(&fd);
+        let vn = Arc::new(RwLock::new(Varnode::new_unique(5, 4)));
+        match emul.get_varnode_value(&vn) {
+            Err(EmulateFailure::DataUnavail(_)) => {}
+            other => panic!("expected DataUnavail, got {:?}", other),
+        }
     }
 
     #[test]
@@ -5223,10 +5828,11 @@ mod tests {
             PcodeOpNode { op: add_op_arc.clone(), slot: 0 },
         ]);
 
-        let mut emul = EmulateFunction::new();
+        let fd = crate::funcdata::Funcdata::new("test", Address::new(0x1000), 16);
+        let mut emul = EmulateFunction::new(&fd);
         // startop = the ADD op (op index 1 in the path), startvn = switchvn.
         let result = emul.emulate_path(5, &pm, &add_op_arc, &switchvn);
-        assert_eq!(result, Some(0x1005));
+        assert_eq!(result, Ok(0x1005));
     }
 
     #[test]
@@ -5263,9 +5869,106 @@ mod tests {
             PcodeOpNode { op: copy_op_arc.clone(), slot: 0 },
         ]);
 
-        let mut emul = EmulateFunction::new();
+        let fd = crate::funcdata::Funcdata::new("test", Address::new(0x1000), 16);
+        let mut emul = EmulateFunction::new(&fd);
         let result = emul.emulate_path(42, &pm, &copy_op_arc, &switchvn);
-        assert_eq!(result, Some(42));
+        assert_eq!(result, Ok(42));
+    }
+
+    #[test]
+    fn test_emulate_path_branch_typed_error() {
+        // JUMPTABLE-EMULFN-0001: BRANCH inside the path meld must surface the
+        // exact Ghidra LowlevelError ("Branch encountered emulating jumptable
+        // calculation", jumptable.cc:129), never a silent value.
+        use crate::address::SeqNum;
+        use crate::varnode::{Varnode, varnode_flags};
+        let fd = crate::funcdata::Funcdata::new("test", Address::new(0x1000), 16);
+        let switchvn = Arc::new(RwLock::new(Varnode::new_unique(0, 4)));
+        let branch_out = Arc::new(RwLock::new({
+            let mut v = Varnode::new_unique(1, 4);
+            v.flags |= varnode_flags::WRITTEN;
+            v
+        }));
+        let mut br_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BRANCH,
+        );
+        br_op.inrefs.push(switchvn.clone());
+        br_op.output = Some(branch_out.clone());
+        let br_op_arc = Arc::new(RwLock::new(br_op));
+        branch_out.write().unwrap().def = Some(std::sync::Arc::downgrade(&br_op_arc));
+
+        let mut bi_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 0),
+            OpCode::CPUI_BRANCHIND,
+        );
+        bi_op.inrefs.push(branch_out.clone());
+        let bi_op_arc = Arc::new(RwLock::new(bi_op));
+
+        let mut pm = PathMeld::default();
+        pm.set_path(&[
+            PcodeOpNode { op: bi_op_arc.clone(), slot: 0 },
+            PcodeOpNode { op: br_op_arc.clone(), slot: 0 },
+        ]);
+
+        let mut emul = EmulateFunction::new(&fd);
+        let result = emul.emulate_path(1, &pm, &br_op_arc, &switchvn);
+        match result {
+            Err(JumpTableRecoveryError::Lowlevel { message }) => {
+                assert_eq!(message, "Branch encountered emulating jumptable calculation");
+            }
+            other => panic!("expected branch LowlevelError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_recover_model_no_parent_fail_closed() {
+        // JUMPTABLE-PIPELINE-0001 段1契约:stageJumpTable 未建 partial(无
+        // 基本块)时,BRANCHIND 无 parent 块 → JumpBasic::recover_model 必须
+        // fail-closed 返回 Ok(false),不得静默走无守卫的 smallest-normal。
+        use crate::address::SeqNum;
+        use crate::funcdata::Funcdata;
+        use crate::varnode::Varnode;
+        let fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let indop = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BRANCHIND,
+        )));
+        // 无 def 的寄存器读(等价 Ghidra raw pcode 的跨指令读)。
+        let raw_read = Arc::new(RwLock::new(Varnode::new_register(0, 8)));
+        indop.write().unwrap().inrefs.push(raw_read);
+
+        let dummy = Arc::new(RwLock::new(JumpTable::new(Address::new(0x1000))));
+        let mut jbasic = JumpBasic::new(dummy);
+        assert_eq!(jbasic.recover_model(&fd, &indop, 0, 1024), Ok(false));
+    }
+
+    #[test]
+    fn test_jump_table_recover_model_selection_chain() {
+        // JUMPTABLE-SELECTION-0001: 选择链 = override → Assisted → Basic →
+        // Basic2,Trivial 不在链里;全失败时 jmodel=None 且 recover_model
+        // 返回 Ok(false)(Ghidra cc:2283-2284)。
+        use crate::address::SeqNum;
+        use crate::funcdata::Funcdata;
+        use crate::varnode::Varnode;
+        let fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let indop = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BRANCHIND,
+        )));
+        let raw_read = Arc::new(RwLock::new(Varnode::new_register(0, 8)));
+        indop.write().unwrap().inrefs.push(raw_read);
+
+        let mut jt = JumpTable::new(Address::new(0x1000));
+        jt.set_indirect_op(indop.clone());
+        assert_eq!(jt.recover_model(&fd, 1024), Ok(false));
+        assert!(jt.jmodel.is_none());
+
+        // override 挂接后:重跑 override 模型并成功(setAddresses 固定表)。
+        jt.set_override(&[Address::new(0x2000), Address::new(0x2100)], Address::new(0), 0, 0);
+        assert_eq!(jt.recover_model(&fd, 1024), Ok(true));
+        assert!(jt.jmodel.as_ref().map_or(false, |m| m.is_override()));
+        assert_eq!(jt.jmodel.as_ref().unwrap().get_table_size(), 2);
     }
 
     #[test]

@@ -267,21 +267,43 @@ impl CircleRange {
     // Ghidra: rangeutil.cc:179 CircleRange::next
     /// Advance an integer within the range. Returns false when reaching the end.
     pub fn next(&self, val: &mut u64) -> bool {
-        *val = (*val + self.step) & self.mask;
+        // Ghidra rangeutil.cc:181: `val = (val + step) & mask;` — C++ uintb
+        // 回绕;Rust 必须 wrapping_add,否则满幅 range 上 panic。
+        *val = val.wrapping_add(self.step) & self.mask;
         *val != self.right
     }
 
     // Ghidra: rangeutil.cc:256 CircleRange::getSize
     /// Get the size of this range (number of elements).
+    ///
+    /// 逐字移植 rangeutil.cc:263-273(含 overflow "lie by one" 分支):
+    /// ```text
+    /// if (left < right) val = (right-left)/step;
+    /// else { val = (mask-(left-right)+step)/step;
+    ///        if (val == 0) { val = mask; if (step>1) { val/=step; val+=1; } } }
+    /// ```
+    /// 8 字节满幅 domain 时 (mask+step)/step 回绕为 0,走 lie 分支返回
+    /// `mask`(Ghidra 注释: "We lie by one, which shouldn't matter for our
+    /// jumptable application")— jumptable 的 size>maxtablesize 拒绝依赖它。
     pub fn get_size(&self) -> u64 {
         if self.isempty { return 0; }
-        if self.step == 1 {
-            if self.left == self.right { return self.mask + 1; } // Full
-            self.right.wrapping_sub(self.left) & self.mask
+        if self.left < self.right {
+            (self.right - self.left) / self.step
         } else {
-            // With stride, size = (right - left) / step
-            let raw = self.right.wrapping_sub(self.left) & self.mask;
-            raw / self.step
+            let mut val = self
+                .mask
+                .wrapping_sub(self.left.wrapping_sub(self.right))
+                .wrapping_add(self.step)
+                / self.step;
+            if val == 0 {
+                // 溢出:全部 uintb 值都在范围内。
+                val = self.mask;
+                if self.step > 1 {
+                    val = val / self.step;
+                    val += 1;
+                }
+            }
+            val
         }
     }
 
