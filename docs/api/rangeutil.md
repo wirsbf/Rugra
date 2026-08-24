@@ -18,7 +18,8 @@
 - `contains_val(val)` — 包含检查
 - `intersect(op2)` / `union(op2)` — 集合操作
 - `next(val)` — 范围内迭代（`val.wrapping_add(step) & mask`，2026-08-24 对齐
-  C++ uintb 回绕，rangeutil.cc:181）
+  C++ uintb 回绕；getNext 仅内联定义于 rangeutil.hh:82，2026-08-25 R12 建议 A
+  修正 src 注释引用行 cc:179→hh:82）
 - `get_size()` — 范围大小（2026-08-24 逐字移植 rangeutil.cc:263-273 含 overflow
   "lie by one" 分支：`val=(mask-(left-right)+step)/step`，结果为 0 时返回
   `mask`（step>1 再 `mask/step+1`）；8 字节满幅 domain 依赖 uintb 回绕，

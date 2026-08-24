@@ -264,11 +264,11 @@ impl CircleRange {
         1
     }
 
-    // Ghidra: rangeutil.cc:179 CircleRange::next
+    // Ghidra: rangeutil.hh:82 CircleRange::getNext
     /// Advance an integer within the range. Returns false when reaching the end.
     pub fn next(&self, val: &mut u64) -> bool {
-        // Ghidra rangeutil.cc:181: `val = (val + step) & mask;` — C++ uintb
-        // 回绕;Rust 必须 wrapping_add,否则满幅 range 上 panic。
+        // Ghidra rangeutil.hh:82 内联实现: `val = (val + step) & mask;` —
+        // C++ uintb 回绕;Rust 必须 wrapping_add,否则满幅 range 上 panic。
         *val = val.wrapping_add(self.step) & self.mask;
         *val != self.right
     }
