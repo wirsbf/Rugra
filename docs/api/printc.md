@@ -1235,3 +1235,59 @@ comment.rs 删除）迁移到 oracle 的迭代器状态机直接驱动：
 oracle fixture `comment_sorter_iterators_1204` Rust 侧 38 行 stdout sha256
 `072c03b2…` 与 pin 逐字节一致（注册 runner 的 `comment_rs_sha256` 门随
 comment.rs 编辑失效，需主仓重登记）。
+
+### 2026-08-25：PRINTC-WARNING-COMMENT-0001 — 语句级 WARNING 注释发射接线
+
+上一节登记的已知缺口（"Rugra 的语句行走不跑 per-op `emitCommentGroup`
+链"）由本变更关闭：golden 16 条 `/* WARNING: Subroutine does not return */`
+（flow.cc:646 → funcdata.cc:119 入库 commentdb）此前忠实存储但从不打印。
+
+**①（emitBlockBasic 注释协议接线，printc.cc:2684/2712/2717/2742）**：
+`emit_block_basic_rpn`（rpn_enabled 默认 true，E2E 实际路径）与
+`emit_block_ops`（legacy 路径）都补上 oracle 的四步协议：
+
+- 块首 `commsorter.setupBlockList(bb)`（cc:2684）→ `setup_block_bounds`
+  （`ops_block_index` RUGRA-GLUE helper 从 ops 的 `parent` 推导 BlockBasic
+  index——与 `findPosition`/`setupOpList`（comment.cc:295/370）的
+  `op->getParent()->getIndex()` 同键）；
+- 每条打印语句前 `emitCommentGroup(inst)`（cc:2712/2717，instr 掩码
+  user2|warning 在此放行 noreturn 警告）——RETURN 语句同样接入
+  （`emit_block_ops` 的 RETURN 特例分支）；
+- 块尾 `emitCommentGroup(NULL)`（cc:2742，opstop=stop 排空剩余）。
+  二次发射由 `Comment::emitted` 标记防护（`emit_comment_block_tree` 与
+  本路径互斥安全）。
+
+**②（emit_line_comment 绝对缩进字节，printlanguage.cc:597 +
+prettyprint.hh:557）**：oracle `EmitNoMarkup::tagLine(int4)` 写 **无条件
+endl + 恰好 `indent` 个空格**（列覆盖，非当前层级）；Rugra
+`EmitNoMarkup::tag_line` 忽略覆盖参数且在行首抑制换行。`emit_line_comment`
+内经 `as_any_mut().downcast_mut::<EmitNoMarkup>` 直接复刻 oracle 字节
+（`\n` + `indent` 空格），其他 emitter 走 trait 调用。文本内 `\n` 分支
+（cc:616-617 `tagLine()` 无参，当前层级）字节等价保持不变。
+
+**③（fixture 可见性 glue）**：`setup_function_comments(fd)`（cc:2650 步骤
+从 doc_function 内联块重构为方法，doc_function 调用它——生产行为不变）
+与 `setup_block_comment_list(index)`（cc:2684 步骤）提供 pub 可见性
+（Ghidra 经 protected `docFunction`/`emitBlockBasic` 内部执行；Rust 无
+protected，oracle fixture `printc_warning_1204` 经它们驱动生产代码）。
+
+**双侧 oracle fixture `tests/oracle/printc_warning_1204.{cc,rs}`**（runner
+`tools/run_printc_warning_oracle.sh`，重钉三件套齐备）：三 case 覆盖
+clean（零注释零字节）/ noreturn（`Funcdata::warning` 生产通道，62 字节
+endl+20 空格+注释）/ multi（`warningHeader` 头注释 + 两块两调用点警告，
+202 字节含头注释后的空行）。C++ 侧 FixturePrintC 换装裸 EmitNoMarkup
+隔离未移植的 EmitPrettyPrint fill 状态。双侧 stdout sha256 相同
+`0d639688…`，9 行逐字节 MATCH。Rust 侧块用 start_addr=首 op 地址构造
+（`initial_range` 仅生产 followFlow 设置），fixture 注释全部落在块首 op
+地址——与 C++ `setBasicBlockRange` 同界。
+
+**E2E 预期（root 合流批验证）**：golden 16 条 noreturn 警告分布于
+main(1)/myprogress(1)/my_get_line(1)/helpf(1)/file2string(1)/parseconfig(1)/
+getparameter(1)/glob_word(2)/glob_set(2)/glob_range(1)/next_url(1)/
+match_url(3)——全部为 `__stack_chk_fail`/`exit` 类 noreturn 调用点，
+语句级发射接通后应逐条出现（这是正向变化；差分门禁全量判定留给 root）。
+附注：`comment_sorter_iterators_1204` fixture 在 0d2252d（`get_stop_addr`
+回退从"末 op 地址"改为 `initial_range`）后 Rust 侧回归失配（内部地址
+注释落入 header_unplaced）——预存在问题，非本租约，建议 root 重登记
+（fixture 手工块无 initial_range，需 pub 化 `set_initial_range` 或恢复
+无 range 时的末 op 回退）。

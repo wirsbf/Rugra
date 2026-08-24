@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "fixture_id": "PRINTC-WARNING-COMMENT-0001",
+  "projection_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "status_note": "The 9-line covered projection byte-matches Ghidra 12.0.4's PrintC warning-comment emission path: docFunction:2650 setupFunctionList through the arch commentdb, emitCommentFuncHeader's header_basic drain with the C-style delimiters and the trailing extralinebreak line, emitBlockBasic's per-block setupBlockList window + per-statement emitCommentGroup landmarks + the NULL tail drain, and emitLineComment's absolute indent override (endl + exactly `indent` spaces, EmitNoMarkup::tagLine(int4) prettyprint.hh:557). Overall remains MISMATCH for the pipeline-level integration: the full curl E2E confirmation of the 16 '/* WARNING: Subroutine does not return */' statements is left to the root merge batch, and Rugra's doc_function still collapses the header/signature separator to a single line break (EmitNoMarkup newline-suppression convention, documented at the cc:2653 call site).",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "rugra_base_commit": "9d0674c887aae01213490adb356933bef2853278",
+  "rugra_source": {
+    "base_src_tree": "9f18ac00a84cff5bbdb1d018a6d4f54e69a8d334",
+    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "rust_overlay": "Archive Rugra base 9d0674c887aae01213490adb356933bef2853278 and overlay only the owned src/printc.rs candidate before the isolated offline build",
+    "base_commit": "9d0674c887aae01213490adb356933bef2853278"
+  },
+  "architecture": {
+    "id": "synthetic-le64-printc-warning-fixture",
+    "endianness": "little",
+    "pointer_size": 8,
+    "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5; byte addressed",
+    "emitter": "C++ side swaps PrintC's default EmitPrettyPrint (printlanguage.cc:69) for a bare EmitNoMarkup inside the fixture subclass, matching the Rust comparand's emitter class so the bytes isolate the printc comment protocol from the unported pretty-printer fill"
+  },
+  "compiler_spec": {
+    "id": "fixture",
+    "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+    "calling_convention": "empty input/output records; no effects, symbols, or injections"
+  },
+  "analysis_options": {
+    "api": "Direct production PrintC protocol steps (setup_function_comments / emit_comment_func_header / setup_block_comment_list / emit_comment_group) over Funcdata::warning and Funcdata::warningHeader databases; no Action or Rule pipeline",
+    "funcdata": "Three synthetic Funcdata runs (clean, noreturn, multi); BlockBasic graphs whose reverse-post-order indexes come from the production BlockGraph::findSpanningTree port on both sides; ops created and inserted in one fixed mirrored order (creation order fixes SeqNum::uniq and the order field, insertion order fixes the BlockBasic order ladder)",
+    "ir": "Ops carry addresses only; no Varnodes, inputs, or outputs. C++ block ranges use Funcdata::setBasicBlockRange with end == the last op's address; Rugra blocks carry start_addr == first-op address (initial_range is only set by the production followFlow path), so every fixture comment sits at its block's first-op address where both contains() projections agree",
+    "normalization": "None. The emitted projection is the raw EmitNoMarkup byte stream per case (len + <<< >>> delimited body); no ID, order, or state normalization",
+    "random_seed": "none; construction and walks are deterministic",
+    "error_injection": "none"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+    "cases": [
+      {
+        "id": "clean_function",
+        "setup": "Funcdata fad=0x8000, one BlockBasic [0x8000,0x8004] with ops X@0x8000 Y@0x8004, empty comment database (arch commentdb installed, no warning calls)",
+        "protocol": "setup_function_comments; emit_comment_func_header; per block: setup_block_comment_list + one emit_comment_group landmark per op + emit_comment_group(None)",
+        "expect": "zero emitted bytes (no header comment, no statement comments, no tail)"
+      },
+      {
+        "id": "noreturn_warning",
+        "setup": "Funcdata fad=0x9000, blocks bb0 [0x9000,0x9006] ops P Q, bb1 [0x9008,0x900a] ops call@0x9008 S@0x900a, edge bb0->bb1; Funcdata::warning(\"Subroutine does not return\", call->getAddr()) through the arch commentdb channel (flow.cc:646 -> funcdata.cc:119)",
+        "protocol": "same as clean",
+        "expect": "comment positioned at (bb1, call order); the header window is empty (warning is instr-level); the first landmark of bb1 emits endl + exactly 20 spaces (line_commentindent override) + '/* WARNING: Subroutine does not return */'; bb0 and the tail drain nothing"
+      },
+      {
+        "id": "multi_warning",
+        "setup": "Funcdata fad=0xa000, blocks bb0 [0xa000,0xa006] ops A B, bb1 [0xa008,0xa00a] ops call1@0xa008 S, bb2 [0xa00c,0xa00e] ops call2@0xa00c F, chain edges; Funcdata::warningHeader(\"Unknown calling convention -- yet parameter storage is locked\") + Funcdata::warning at call1 and call2 addresses (distinct addresses survive addCommentNoDuplicate)",
+        "protocol": "same as clean, blocks in address order",
+        "expect": "header_basic drain emits endl + 0 spaces + '/* WARNING: Unknown calling convention -- yet parameter storage is locked */' then the extralinebreak endl; each call block's first landmark emits endl + 20 spaces + '/* WARNING: Subroutine does not return */'"
+      }
+    ],
+    "sha256": "8db913dada6d30ff85edefe1901ce9838930a459c3f046ce79b37c63c423f3aa"
+  },
+  "observation_schema": {
+    "format": "9 fixed-order UTF-8 lines with final newline: one banner, then one case=...|len=N|emit=<<<...>>> record per case (the emission body may span lines; >>> terminates it)",
+    "placement_decisions": "clean discriminates the empty-database no-op; noreturn discriminates findPosition's op-lower-bound placement at the call op and the instr_comment_type mask (the warning does NOT appear in the header window); multi discriminates the header_basic placement of warningheader@fad plus two distinct-address no-duplicate warnings at their call blocks",
+    "emission_bytes": "the exact '/* ' + text + ' */' delimiter form, the absolute indent override (20 spaces for instr comments, 0 for the header), the unconditional endl of EmitNoMarkup::tagLine(indent) (including the blank line between the header comment and the first instr comment produced by the extralinebreak tagLine + the comment's leading endl), and the 62/202-byte lengths"
+  },
+  "decisive_semantics": {
+    "reference_output_parameters": "Funcdata::warning/warningHeader write through the shared glb->commentdb / arch.commentdb reference (not a copy); setup_function_comments reads that same database; emit_comment_group marks each drained Comment emitted=true in the sorter state",
+    "loop_bounds_traversal_order": "docFunction:2650 walks the database range for the function entry address in (addr, uniq) order; the statement loop walks bb->beginOp() insertion order; emitCommentFuncHeader drains setupHeader(header_basic) then header_unplaced only under option_unplaced (false here)",
+    "counter_accumulator_lifecycle": "Subsort.pos starts at 0 once per setupFunctionList and increments only for placed comments; line_commentindent (20) substitutes for every negative indent; extralinebreak starts false and latches on the first header emission",
+    "sorting_comparison_keys": "Subsort orders by signed int4 index (-1 header keys before block indexes), then uint4 order, then uint4 pos; setupBlockList bounds [lower_bound((bl,0,0)), upper_bound((bl,MAX,MAX))]; setupOpList upper_bound((bl,op order,MAX)); the instr/head type masks (user2|warning / header|warningheader) gate only at consumption"
+  },
+  "coverage": {
+    "clean_function": "MATCH",
+    "noreturn_warning": "MATCH",
+    "multi_warning": "MATCH"
+  },
+  "residual_todo_ids": [
+    "PRINTC-WARNING-COMMENT-0001"
+  ],
+  "comparand": {
+    "cpp_fixture_sha256": "f1fe46c5e15eb5a4f76e2c5afc95e9a660a17523dadb4aaf7bdfaed854ae0d12",
+    "rust_fixture_sha256": "59799d8be29be3982e63d6197c77de1f23ab3e88cd8feb46c2799f16068f82c5",
+    "printc_rs_sha256": "7d372482a98b78d30f0d31b39355b1c8480e492e327eba9a4142137d6310d02a",
+    "runner_sha256": "8ea96191b8af7b4517fbb29e0a943c6d2c695bfa16ad718300d7774e723c4afd",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "expected_ghidra_stdout_sha256": "0d63968829e9cbe3dd7ee2b96502c1a477b51990950bd91a21c776782f25d8c8",
+    "expected_rugra_stdout_sha256": "0d63968829e9cbe3dd7ee2b96502c1a477b51990950bd91a21c776782f25d8c8",
+    "host_cxx": "g++ (GCC) 16.2.1 20260810",
+    "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)"
+  },
+  "build": {
+    "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a (no BFD/SLEIGH assets needed)",
+    "expected_stdout_lines": 9
+  }
+}

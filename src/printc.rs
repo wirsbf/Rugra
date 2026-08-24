@@ -2499,6 +2499,24 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: derive the BlockBasic index for the cc:2684
+    // setupBlockList(bb) call from the ops themselves. Ghidra's
+    // emitBlockBasic receives the BlockBasic directly; Rugra's rpn/legacy
+    // statement loops only hold the op slice. CommentSorter::findPosition
+    // and setupOpList both key on op->getParent()->getIndex()
+    /// (comment.cc:295/370), so the first op's parent yields the exact
+    /// window key the sorter placed comments under.
+    fn ops_block_index(ops: &[crate::op::PcodeOpRef]) -> Option<i32> {
+        ops.first().and_then(|o| {
+            o.0.read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .map(|p| p.read().unwrap().get_index())
+        })
+    }
+
     // Ghidra: printc.cc:2678 PrintC::emitBlockBasic
     /// Walk a basic block's ops and emit each printable op as an RPN statement.
     /// `suppress_branch` is the Rust transport for Ghidra's `no_branch` print
@@ -2511,11 +2529,23 @@ impl PrintC {
     /// (no PcodeOp Clone exists). The rpn dispatchers read-lock input varnode
     /// DEFS, which are distinct ops (an op never defines its own input), so no
     /// re-entrant deadlock on this arc.
+    ///
+    /// Comment protocol (printc.cc:2684/2712/2717/2742):
+    /// `commsorter.setupBlockList(bb)` opens the block's comment window, each
+    /// printed statement is preceded by `emitCommentGroup(inst)` (the line
+    /// comments positioned at/before that op, e.g. the noreturn
+    /// "WARNING: Subroutine does not return" of flow.cc:646), and the loop
+    /// closes with `emitCommentGroup(NULL)` for the block's tail comments.
     pub fn emit_block_basic_rpn(
         &mut self,
         ops: &[crate::op::PcodeOpRef],
         suppress_branch: bool,
     ) {
+        // printc.cc:2684: commsorter.setupBlockList(bb);
+        let block_index = Self::ops_block_index(ops);
+        if let Some(index) = block_index {
+            self.comment_sorter.setup_block_bounds(index);
+        }
         for op_ref in ops {
             let op_guard = op_ref.0.read().unwrap();
             // Rugra's dead ops stay in the block's op list (Ghidra unlinks
@@ -2554,10 +2584,20 @@ impl PrintC {
                     continue;
                 }
             }
-            // printc.cc:2716-2719: tagLine before each statement.
+            // printc.cc:2712/2717: emitCommentGroup(inst); — drain the
+            // comments the sorter positioned at/before this statement's op
+            // (instr_comment_type = user2|warning, so the noreturn warning
+            // lands here on its own indented line before the statement).
+            self.emit_comment_group(Some(op_ref));
+            // printc.cc:2713/2718: emit->tagLine();
             self.emit.tag_line(0);
             // printc.cc:2720: emitStatement(inst);
             self.emit_statement_rpn(&op_ref.0, &op_guard);
+        }
+        // printc.cc:2742: emitCommentGroup((const PcodeOp *)0); — any
+        // remaining comments in this basic block (opstop = stop).
+        if block_index.is_some() {
+            self.emit_comment_group(None);
         }
     }
 
@@ -2624,6 +2664,10 @@ impl PrintC {
     ///
     /// Skips: COPY ops (folded via copy_map), terminal branches (when skip_terminal),
     /// dead flag outputs (not referenced by any other op), and post-return dead code.
+    ///
+    /// Comment protocol mirrors emitBlockBasic (printc.cc:2684/2712/2717/
+    /// 2742): setupBlockList window, emitCommentGroup(inst) before each
+    /// printed statement, emitCommentGroup(NULL) for the block tail.
     fn emit_block_ops(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, skip_terminal: bool) {
         // Route to RPN path if enabled
         if self.rpn_enabled {
@@ -2636,6 +2680,14 @@ impl PrintC {
 
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
+
+        // printc.cc:2684: commsorter.setupBlockList(bb); — open this block's
+        // comment window (same op-parent-derived index the sorter placed
+        // comments under; see ops_block_index).
+        let block_index = Self::ops_block_index(&ops);
+        if let Some(index) = block_index {
+            self.comment_sorter.setup_block_bounds(index);
+        }
 
         // Clear block-local register defs — each block starts fresh
         self.block_local_reg_defs.clear();
@@ -2683,6 +2735,9 @@ impl PrintC {
                 continue;
             }
             if op.opcode == OpCode::CPUI_RETURN {
+                // printc.cc:2712/2717: emitCommentGroup(inst); — RETURN is a
+                // printed statement and drains its positioned comments first.
+                self.emit_comment_group(Some(op_ref));
                 self.doc_statement(&op);
                 self.seen_return = true;
                 continue;
@@ -2789,7 +2844,17 @@ impl PrintC {
                 }
             }
 
+            // printc.cc:2712/2717: emitCommentGroup(inst); — comments
+            // positioned at/before this statement's op go on their own line
+            // (indent = line_commentindent = 20) ahead of the statement.
+            self.emit_comment_group(Some(op_ref));
             self.doc_statement(&op);
+        }
+
+        // printc.cc:2742: emitCommentGroup((const PcodeOp *)0); — any
+        // remaining comments in this basic block.
+        if block_index.is_some() {
+            self.emit_comment_group(None);
         }
     }
 
@@ -6922,7 +6987,7 @@ impl PrintLanguage for PrintC {
             self.emit.print("");
         }
 
-        // Ghidra: printc.cc:2650-2653 docFunction's comment setup and header
+        // Ghidra: printc.cc:2650 docFunction's comment setup and header
         // emission (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ②). Call order is
         // verbatim from the oracle:
         //   2650  commsorter.setupFunctionList(instr_comment_type|head_comment_type,
@@ -6937,23 +7002,7 @@ impl PrintLanguage for PrintC {
         // Without an Architecture/commentdb (legacy callers) the sorter stays
         // empty and emit_comment_func_header emits nothing, exactly as
         // Ghidra would for an empty comment database.
-        if let Some(db) = fd.arch.as_ref().and_then(|a| a.commentdb.clone()) {
-            let db_read = db.read().unwrap();
-            // Ghidra's setupFunctionList throws LowlevelError on a dead op
-            // (comment.cc:289/303) and aborts the print; `doc_function` has
-            // no error channel (PrintLanguage trait returns ()), so the
-            // failure is logged and the partially-placed sorter stands —
-            // the same log-and-continue projection used by the print layer's
-            // other LowlevelError sites (e.g. emit_type_definition).
-            if let Err(err) = self.comment_sorter.setup_function_list(
-                self.instr_comment_type | self.head_comment_type,
-                fd,
-                &db_read,
-                self.option_unplaced,
-            ) {
-                eprintln!("[DECOMP] comment sorter setup failed: {err}");
-            }
-        }
+        self.setup_function_comments(fd);
         // cc:2651: emit->beginFunction(fd);
         self.emit.begin_function();
         // cc:2652: emitCommentFuncHeader(fd);
@@ -7073,8 +7122,28 @@ impl PrintLanguage for PrintC {
         } else {
             indent
         };
-        // cc:597: emit->tagLine(indent);
-        self.emit.tag_line(indent);
+        // cc:597: emit->tagLine(indent); — the oracle's EmitNoMarkup::
+        // tagLine(int4) (prettyprint.hh:557) writes endl + EXACTLY `indent`
+        // spaces: the line-comment indent is an absolute column override,
+        // NOT the current indent level, and the endl is unconditional.
+        // Rugra's EmitNoMarkup::tag_line ignores the override argument
+        // (it prints the current level) and suppresses a newline at line
+        // start, so reproduce the oracle bytes here directly. Other
+        // emitters keep the trait call.
+        let emitted_absolute_indent = if let Some(eno) = self
+            .emit
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitNoMarkup>())
+        {
+            eno.print("\n");
+            eno.print(&" ".repeat(indent.max(0) as usize));
+            true
+        } else {
+            false
+        };
+        if !emitted_absolute_indent {
+            self.emit.tag_line(indent);
+        }
         // cc:598-602: startComment + the opening delimiter. Markup calls are
         // no-ops for the plain-text emitter; only the delimiter prints.
         // cc:601: emit->tagComment(commentstart, comment_color, spc, off);
@@ -9897,6 +9966,45 @@ impl PrintC {
             };
             self.emit_goto_statement(target_addr, bt);
         }
+    }
+
+    // Ghidra: printc.cc:2650 PrintC::docFunction comment setup
+    /// Load the function's comments into the sorter. Faithful to the
+    /// `commsorter.setupFunctionList(instr_comment_type|head_comment_type,
+    /// fd, *fd->getArch()->commentdb, option_unplaced)` step of
+    /// `docFunction` (printc.cc:2650), factored out of doc_function so the
+    /// printc_warning oracle fixture drives the same production channel.
+    ///
+    /// Ghidra's setupFunctionList throws LowlevelError on a dead op
+    /// (comment.cc:289/303) and aborts the print; callers here have no error
+    /// channel, so the failure is logged and the partially-placed sorter
+    /// stands — the same log-and-continue projection used by the print
+    /// layer's other LowlevelError sites.
+    // RUGRA-GLUE: pub visibility for the fixture (Ghidra performs this
+    // inside protected docFunction; Rust has no protected)
+    pub fn setup_function_comments(&mut self, fd: &Funcdata) {
+        if let Some(db) = fd.arch.as_ref().and_then(|a| a.commentdb.clone()) {
+            let db_read = db.read().unwrap();
+            if let Err(err) = self.comment_sorter.setup_function_list(
+                self.instr_comment_type | self.head_comment_type,
+                fd,
+                &db_read,
+                self.option_unplaced,
+            ) {
+                eprintln!("[DECOMP] comment sorter setup failed: {err}");
+            }
+        }
+    }
+
+    // Ghidra: printc.cc:2684 PrintC::emitBlockBasic setupBlockList
+    /// Open a basic block's comment window (`commsorter.setupBlockList(bl)`,
+    /// printc.cc:2684 / comment.cc:379-390). Exposed for the
+    /// printc_warning oracle fixture, which drives the emitBlockBasic
+    /// comment protocol step sequence directly.
+    // RUGRA-GLUE: pub visibility for the fixture (Ghidra performs this
+    // inside protected emitBlockBasic; Rust has no protected)
+    pub fn setup_block_comment_list(&mut self, block_index: i32) {
+        self.comment_sorter.setup_block_bounds(block_index);
     }
 
     // Ghidra: printc.cc:3231 PrintC::emitCommentGroup
