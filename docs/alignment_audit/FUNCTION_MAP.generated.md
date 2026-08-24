@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 9862
-  (8133 production + 1729 test)
-- Exact definition-start mappings: 3651
-- Body-line references requiring audit: 352
+- Rugra functions: 9925
+  (8196 production + 1729 test)
+- Exact definition-start mappings: 3681
+- Body-line references requiring audit: 353
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -22,8 +22,8 @@ records complete same-input/same-output evidence.
 
 | File | Definitions | Exact marker | Body-line marker | Unmapped |
 |---|---:|---:|---:|---:|
-| `action.cc` | 72 | 18 | 0 | 54 |
-| `action.hh` | 30 | 8 | 0 | 22 |
+| `action.cc` | 72 | 44 | 0 | 28 |
+| `action.hh` | 30 | 12 | 0 | 18 |
 | `address.cc` | 43 | 32 | 0 | 11 |
 | `address.hh` | 56 | 43 | 0 | 13 |
 | `analyzesigs.cc` | 8 | 0 | 0 | 8 |

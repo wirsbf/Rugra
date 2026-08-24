@@ -3528,10 +3528,10 @@
       "value": "259"
     },
     {
-      "id": "PROTO-29379f8290c5d34f4e6d",
+      "id": "PROTO-c6b90cf9bbde97871dfe",
       "kind": "const",
       "language": "rust",
-      "line": 1514,
+      "line": 2223,
       "name": "CHANGE",
       "path": "src/action.rs",
       "value": "1"
@@ -8811,10 +8811,10 @@
       "value": "0x800"
     },
     {
-      "id": "PROTO-0bea00562654e6a8508c",
+      "id": "PROTO-18826be84aa54c79f6ae",
       "kind": "const",
       "language": "rust",
-      "line": 1118,
+      "line": 1816,
       "name": "FIRSTPASS",
       "path": "src/action.rs",
       "value": "&[ ]"
@@ -11268,10 +11268,10 @@
       "value": "-1"
     },
     {
-      "id": "PROTO-22f8b5b318fb58e8703b",
+      "id": "PROTO-354e2cf42c8c103e521f",
       "kind": "const",
       "language": "rust",
-      "line": 1513,
+      "line": 2222,
       "name": "NO_CHANGE",
       "path": "src/action.rs",
       "value": "0"
@@ -13356,10 +13356,10 @@
       "value": "0x4000"
     },
     {
-      "id": "PROTO-a7e02812a63026d72baf",
+      "id": "PROTO-c2f4eb8d547781bfcda8",
       "kind": "const",
       "language": "rust",
-      "line": 1116,
+      "line": 1814,
       "name": "REGISTER",
       "path": "src/action.rs",
       "value": "&[ , , ]"
@@ -13401,10 +13401,10 @@
       "value": "0x40"
     },
     {
-      "id": "PROTO-e3487eb0645cb9c050aa",
+      "id": "PROTO-1fff45343a35bc716e88",
       "kind": "const",
       "language": "rust",
-      "line": 1515,
+      "line": 2224,
       "name": "RESTART",
       "path": "src/action.rs",
       "value": "2"
@@ -13561,6 +13561,15 @@
       "name": "RULE_DEBUG",
       "path": "src/action.rs",
       "value": "32"
+    },
+    {
+      "id": "PROTO-003e3bbcd560bbddae2b",
+      "kind": "const",
+      "language": "rust",
+      "line": 64,
+      "name": "RULE_DEBUG",
+      "path": "src/action.rs",
+      "value": "2"
     },
     {
       "id": "PROTO-c3e0b8c7dbdfd5498866",
@@ -15237,6 +15246,15 @@
       "value": "11"
     },
     {
+      "id": "PROTO-116723ec51459864592d",
+      "kind": "const",
+      "language": "rust",
+      "line": 63,
+      "name": "TYPE_DISABLE",
+      "path": "src/action.rs",
+      "value": "1"
+    },
+    {
       "id": "PROTO-88a9277e77e12b574404",
       "kind": "constant_assignment",
       "language": "cpp",
@@ -16018,6 +16036,24 @@
       "name": "WARNINGHEADER",
       "path": "src/comment.rs",
       "value": "32"
+    },
+    {
+      "id": "PROTO-529df6c059c2b884c904",
+      "kind": "const",
+      "language": "rust",
+      "line": 66,
+      "name": "WARNINGS_GIVEN",
+      "path": "src/action.rs",
+      "value": "8"
+    },
+    {
+      "id": "PROTO-41e719c7630b1adc74df",
+      "kind": "const",
+      "language": "rust",
+      "line": 65,
+      "name": "WARNINGS_ON",
+      "path": "src/action.rs",
+      "value": "4"
     },
     {
       "id": "PROTO-d4c1480a17a038582b5b",
