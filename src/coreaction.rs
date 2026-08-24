@@ -551,7 +551,8 @@ impl Action for ActionDeadCode {
 
         let call_specs = fd.callspecs.clone();
         for call_spec in &call_specs {
-            Self::mark_consumed_parameters(fd, call_spec, &mut worklist);
+            let call_spec = call_spec.read().unwrap();
+            Self::mark_consumed_parameters(fd, &call_spec, &mut worklist);
         }
 
         while !worklist.is_empty() {
@@ -2810,14 +2811,14 @@ impl Action for ActionPrototypeWarnings {
                     "Cannot assign parameter location for function {callee}: Prototype may be inaccurate"
                 );
                 // coreaction.cc:4922: data.warning(s.str(),fc->getEntryAddress());
-                fd.warning(&s, call_entry_address(fc));
+                fd.warning(&s, call_entry_address(&fc));
             }
             if proto_has_output_errors(&fc.prototype) {
                 let s = format!(
                     "Cannot assign location of return value for function {callee}: Return value may be inaccurate"
                 );
                 // coreaction.cc:4932: data.warning(s.str(),fc->getEntryAddress());
-                fd.warning(&s, call_entry_address(fc));
+                fd.warning(&s, call_entry_address(&fc));
             }
         }
         // coreaction.cc:4935: return 0; (no IR mutation).
@@ -3724,11 +3725,21 @@ impl ActionInferTypes {
                 // default; nothing is seeded when the spec is absent or the
                 // output is not locked.
                 OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
-                    if let Some(out) = op.get_out() {
+                    let out = op.get_out().cloned();
+                    // `get_call_specs_of_op` snapshots input(0) through the
+                    // same op lock. Release this traversal guard first:
+                    // recursive std::sync::RwLock reads are not guaranteed
+                    // when another thread is waiting to write.
+                    drop(op);
+                    if let Some(out) = out {
                         let seed = fd
                             .get_call_specs_of_op(&crate::op::PcodeOpRef(op_ref.0.clone()))
-                            .filter(|fc| fc.prototype.output_type_locked)
-                            .map(|fc| fc.prototype.return_type.clone())
+                            .and_then(|fc| {
+                                let fc = fc.read().unwrap();
+                                fc.prototype
+                                    .output_type_locked
+                                    .then(|| fc.prototype.return_type.clone())
+                            })
                             .filter(|ct| {
                                 use crate::type_system::datatype::TypeMetatype;
                                 ct.get_metatype() != TypeMetatype::Void
@@ -4748,14 +4759,15 @@ impl Action for ActionNameVars {
         > = std::collections::HashMap::new();
         if !fd.callspecs.is_empty() {
             for fc in &fd.callspecs {
-                if !fc.is_input_locked() { continue; }
+                let fc = fc.read().unwrap();
+                if !fc.is_input_locked() {
+                    continue;
+                }
                 let num_param = fc.prototype.num_params();
-                // Find the call op for this callspec.
-                let call_op = fd.obank.alivelist.iter()
-                    .find(|r| r.0.read().unwrap().start.addr == fc.op_addr
-                        && r.0.read().unwrap().opcode == OpCode::CPUI_CALL)
-                    .cloned();
-                let call_op = match call_op { Some(o) => o, None => continue };
+                let call_op = match fc.find_call_op(fd) {
+                    Some(op) => op,
+                    None => continue,
+                };
                 let op_r = call_op.0.read().unwrap();
                 let max_param = num_param.min(op_r.num_input().saturating_sub(1));
                 for j in 0..max_param {
@@ -5964,10 +5976,14 @@ impl Action for ActionActiveParam {
             };
             // Ghidra line 1742-1743: checkInputTrialUse if !fullyChecked.
             if !fully_checked_before {
-                if let (Some(op_ref), Some(fc)) = (&op_ref, fd.get_call_specs_mut(i)) {
-                    let replace_slots = fc.check_input_trial_use(
-                        op_ref, has_active_output, &aliascheck, maxancestor,
-                    );
+                let replace_slots = if let (Some(op_ref), Some(mut fc)) =
+                    (&op_ref, fd.get_call_specs_mut(i))
+                {
+                    fc.check_input_trial_use(op_ref, has_active_output, &aliascheck, maxancestor)
+                } else {
+                    Vec::new()
+                };
+                if let Some(op_ref) = &op_ref {
                     for (slot, vn_size) in replace_slots {
                         let zero_vn = fd.new_constant(vn_size as usize, 0);
                         fd.op_set_input(op_ref, zero_vn, slot as usize);
@@ -5977,7 +5993,7 @@ impl Action for ActionActiveParam {
             // Ghidra line 1744: finishPass.
             // Ghidra line 1745-1748: maxPass check.
             let (pass_exceeded, fully_checked_after) = match fd.get_call_specs_mut(i) {
-                Some(fc) => {
+                Some(mut fc) => {
                     if let Some(active) = fc.active_input.as_mut() {
                         active.finish_pass();
                         let exceeded = active.get_num_passes() > active.get_max_pass();
@@ -5993,16 +6009,21 @@ impl Action for ActionActiveParam {
             }
             // Ghidra line 1749-1757: finalize if trimmable && fullyChecked.
             if trimmable && fully_checked_after {
-                let needs_final = fd.get_call_specs(i)
-                    .and_then(|fc| fc.active_input.as_ref())
-                    .map(|a| a.needs_final_check())
+                let needs_final = fd
+                    .get_call_specs(i)
+                    .map(|fc| {
+                        fc.active_input
+                            .as_ref()
+                            .map(|a| a.needs_final_check())
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false);
                 if needs_final {
-                    if let (Some(op_ref), Some(fc)) = (&op_ref, fd.get_call_specs_mut(i)) {
+                    if let (Some(op_ref), Some(mut fc)) = (&op_ref, fd.get_call_specs_mut(i)) {
                         fc.final_input_check(op_ref);
                     }
                 }
-                if let Some(fc) = fd.get_call_specs_mut(i) {
+                if let Some(mut fc) = fd.get_call_specs_mut(i) {
                     fc.resolve_model();
                     fc.derive_input_map();
                     let _params = fc.build_input_from_trials();
@@ -6041,23 +6062,12 @@ impl Action for ActionActiveReturn {
             // 1. checkOutputTrialUse: mark trials based on whether the call op
             //    has an output varnode (if it does, the return is active).
             let has_output = {
-                let mut found = false;
-                if let Some(fc) = fd.get_call_specs(i) {
-                    let call_addr = fc.op_addr;
-                    for op_ref in &fd.obank.alivelist {
-                        let op_rg = op_ref.0.read().unwrap();
-                        if (op_rg.opcode == crate::opcodes::OpCode::CPUI_CALL
-                            || op_rg.opcode == crate::opcodes::OpCode::CPUI_CALLIND)
-                            && op_rg.get_addr() == call_addr
-                        {
-                            found = op_rg.output.is_some();
-                            break;
-                        }
-                    }
-                }
-                found
+                fd.get_call_specs(i)
+                    .and_then(|fc| fc.find_call_op(fd))
+                    .map(|op| op.0.read().unwrap().output.is_some())
+                    .unwrap_or(false)
             };
-            if let Some(fc) = fd.get_call_specs_mut(i) {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 if let Some(active) = fc.active_output.as_mut() {
                     for j in 0..active.get_num_trials() {
                         if !active.get_trial(j).is_checked() {
@@ -6071,11 +6081,11 @@ impl Action for ActionActiveReturn {
                 }
             }
             // 2. deriveOutputMap
-            if let Some(fc) = fd.get_call_specs_mut(i) {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 fc.derive_output_map();
             }
             // 3. buildOutputFromTrials + 4. clearActiveOutput
-            if let Some(fc) = fd.get_call_specs_mut(i) {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 fc.clear_active_output();
             }
             change += 1;
@@ -6130,7 +6140,7 @@ impl Action for ActionDefaultParams {
         };
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs_mut(i) {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 // cc:2318: if (!fc->hasModel()) — the single Ghidra model
                 // field maps to the FuncProto full model that hasEffect/
                 // effect_iter consult.
@@ -6503,13 +6513,15 @@ fn get_block_ops(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Vec<crate::op::Pc
     Vec::new()
 }
 
-/// FuncLink: link function calls. Faithful to `ActionFuncLink`
-/// (coreaction.cc).
+/// FuncLink: partially link function calls, corresponding to `ActionFuncLink`
+/// (coreaction.cc). Unmodeled prototype/stack-placeholder/output-extension
+/// consumers remain `CALLSPEC-0001`.
 ///
-/// For each call: funcLinkInput (set up input param linkage via ParamActive
-/// trials, handle stack-relative params with opStackLoad) + funcLinkOutput
-/// (remove unexpected outputs, create output at return address for locked
-/// prototypes, mark bool returns).
+/// Ghidra's full helpers set up ParamActive trials, stack-relative opStackLoad,
+/// unexpected-output removal, locked return storage, and calculated-bool
+/// marking. Rugra's covered slice handles register/basic output cases; stack
+/// placeholders, stack outputs, extensions, and bool marking remain
+/// `CALLSPEC-0001`.
 pub struct ActionFuncLink;
 impl ActionFuncLink {
     // Ghidra: coreaction.hh:697 ActionFuncLink (constructor mirror)
@@ -6517,50 +6529,62 @@ impl ActionFuncLink {
 
     // Ghidra: flow.hh:129 FlowInfo::setupCallSpecs
     /// Build FuncCallSpecs for every CALL op that lacks one.
-    /// Faithful to FlowInfo::setupCallSpecs (flow.cc:680-695): for each CALL
-    /// op, create a FuncCallSpecs initialized from the call's target address
-    /// (inrefs[0]), and store it in fd.callspecs. Rugra has no separate
-    /// FlowInfo stage, so this runs as the first step of ActionFuncLink.
+    /// This Action-local identity fallback corresponds to the owner/annotation
+    /// portion of FlowInfo::setupCallSpecs (flow.cc:680-695): it creates a
+    /// stable FuncCallSpecs owner initialized from input(0) and stores it in
+    /// fd.callspecs. Normal lifted flow already runs
+    /// `FlowInfo::setup_call_specs`; override/query consumers remain
+    /// `CALLSPEC-0001`.
     fn setup_call_specs(&self, fd: &mut Funcdata) -> usize {
         use crate::space::AddressSpace;
-        // Collect CALL op addresses that already have a callspec.
-        let existing: std::collections::HashSet<u64> =
-            fd.callspecs.iter().map(|fc| fc.op_addr.as_u64()).collect();
         // Scan alive CALL ops for new ones.
-        let mut new_specs: Vec<(u64, u64)> = Vec::new(); // (op_addr, target_addr)
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            if op.opcode != OpCode::CPUI_CALL || op.is_dead() {
+        let mut new_specs: Vec<(crate::op::PcodeOpRef, u64)> = Vec::new();
+        let alive = fd.obank.alivelist.clone();
+        for op_ref in &alive {
+            let (is_direct_alive, op_addr, target) = {
+                let op = op_ref.0.read().unwrap();
+                let target = op.get_in(0).map(|target| {
+                    let target = target.read().unwrap();
+                    (target.get_space(), target.get_offset())
+                });
+                (
+                    op.opcode == OpCode::CPUI_CALL && !op.is_dead(),
+                    op.get_addr(),
+                    target,
+                )
+            };
+            if !is_direct_alive {
                 continue;
             }
-            let op_addr = op.get_seq_num().get_addr().as_u64();
-            if existing.contains(&op_addr) {
+            if fd.get_call_specs_of_op(op_ref).is_some() {
                 continue;
             }
             // inrefs[0] is the target address (Ram space constant).
-            if let Some(target_vn) = op.get_in(0) {
-                let tv = target_vn.read().unwrap();
-                let target_addr = if tv.get_space() == AddressSpace::Ram {
-                    tv.get_offset()
+            if let Some((target_space, target_offset)) = target {
+                let target_addr = if target_space == AddressSpace::Ram {
+                    target_offset
                 } else {
                     0
                 };
                 if std::env::var("RUGRA_DEBUG_CALLS").is_ok() {
-                    eprintln!("[CALL] op=0x{:x} target=0x{:x} space={:?}", op_addr, target_addr, tv.get_space());
+                    eprintln!(
+                        "[CALL] op=0x{:x} target=0x{:x} space={:?}",
+                        op_addr.as_u64(),
+                        target_addr,
+                        target_space
+                    );
                 }
-                new_specs.push((op_addr, target_addr));
+                new_specs.push((op_ref.clone(), target_addr));
             }
         }
         let n_new = new_specs.len();
-        for (op_addr, target_addr) in new_specs {
+        for (op_ref, target_addr) in new_specs {
             use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
-            // Faithful to Ghidra: when the callee is known (has a symbol/
-            // Funcdata with a locked FuncProto), the call site inherits the
-            // callee's locked return type. Rugra has no database type info,
-            // so known_return_type() encodes the libc/known-function return
-            // metatype. For unknown callees, the prototype stays unlocked
-            // (return_type=Void, not locked) and active-output trial recovery
-            // decides the return value.
+            // Partial ActionFuncLink fallback: Rugra has no database type
+            // linkage, so known_return_type() approximates the locked return
+            // type for libc/known functions. Unknown callees stay unlocked and
+            // active-output trial recovery decides the return value. Full
+            // prototype inheritance remains CALLSPEC-0001.
             let callee_name = fd.symbol_table.get(&target_addr).cloned();
             let ret = known_return_type(callee_name.as_deref());
             let (return_type, output_locked): (Arc<Datatype>, bool) = match ret {
@@ -6594,19 +6618,20 @@ impl ActionFuncLink {
             };
             let mut proto = crate::fspec::FuncProto::new(String::new(), return_type);
             proto.set_output_lock(output_locked);
-            let mut fc = crate::fspec::FuncCallSpecs::new(
-                crate::address::Address::new(op_addr),
-                proto,
-            );
-            fc.entry_addr = Some(crate::address::Address::new(target_addr));
+            let mut fc = crate::fspec::FuncCallSpecs::new_for_op(&op_ref, proto);
             fc.proto_model = Some(crate::type_system::protomodel::ProtoModel::default_x86_64());
-            fd.add_call_specs(fc);
+            let owner = Arc::new(std::sync::RwLock::new(fc));
+            let annotation = fd.new_varnode_call_specs(&owner);
+            fd.op_set_input(&op_ref, annotation, 0);
+            fd.add_call_specs_owner(owner);
         }
         n_new
     }
 
-    /// Set up input parameter recovery for a sub-function call. Faithful to
-    /// `ActionFuncLink::funcLinkInput` (coreaction.cc:1474-1513).
+    /// Set up the modeled input-parameter recovery slice for a sub-function
+    /// call, corresponding to `ActionFuncLink::funcLinkInput`
+    /// (coreaction.cc:1474-1513). The stack-placeholder path remains
+    /// `CALLSPEC-0001`.
     ///
     /// If the prototype is unlocked (or varargs), initialize the active-input
     /// ParamActive so ActionActiveParam can gather trials. If locked, register
@@ -6647,11 +6672,13 @@ impl ActionFuncLink {
         // Unknown: caller (apply) sets fc.init_active_input() for trial recovery.
     }
 
-    /// Set up return-value recovery for a sub-function call. Faithful to
-    /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1521-1572).
+    /// Set up the modeled return-value recovery slice for a sub-function call,
+    /// corresponding to `ActionFuncLink::funcLinkOutput`
+    /// (coreaction.cc:1521-1572). Stack-output and extension paths remain
+    /// `CALLSPEC-0001`.
     ///
     /// Decide whether the CALL produces an output (return-value) varnode.
-    /// Faithful 1:1 port:
+    /// Covered control-flow slice:
     /// 1. If the CALL already has an output varnode, remove it (the return
     ///    value is re-decided here).
     /// 2. If the output prototype is LOCKED:
@@ -6673,15 +6700,13 @@ impl ActionFuncLink {
                 fd.op_unset_output(op);
             }
         }
-        let fc = match fd.get_call_specs(fc_idx) {
-            Some(fc) => fc,
+        let (output_locked, return_type) = match fd.get_call_specs(fc_idx) {
+            Some(fc) => (fc.is_output_locked(), fc.prototype.return_type.clone()),
             None => return,
         };
-        let output_locked = fc.is_output_locked();
-        let return_type = fc.prototype.return_type.clone();
         // (3) Unlocked → active-output trial recovery (coreaction.cc:1572).
         if !output_locked {
-            if let Some(fc_mut) = fd.get_call_specs_mut(fc_idx) {
+            if let Some(mut fc_mut) = fd.get_call_specs_mut(fc_idx) {
                 fc_mut.init_active_output();
             }
             return;
@@ -6695,7 +6720,7 @@ impl ActionFuncLink {
         }
         // Non-void locked return: build the output varnode.
         // RAX = register offset 0x0 (x86_lift.rs encoding), size = return type
-        // size (8 for pointer/long on x86-64). Faithful to
+        // size (8 for pointer/long on x86-64), corresponding to
         // coreaction.cc:1551 newVarnodeOut(sz, addr, callop).
         let sz = return_type.get_size().max(1);
         fd.new_varnode_out(sz, crate::address::Address::new(0x0), op);
@@ -6704,9 +6729,10 @@ impl ActionFuncLink {
 impl Action for ActionFuncLink {
     // Ghidra: coreaction.cc:1575 ActionFuncLink::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586) +
-        // FlowInfo::setupCallSpecs (flow.cc:680). Rugra has no separate FlowInfo
-        // stage, so we build FuncCallSpecs here (one per CALL op) before linking.
+        // Partial correspondence to ActionFuncLink::apply
+        // (coreaction.cc:1575-1586). Normal flow has already run
+        // FlowInfo::setupCallSpecs (flow.cc:680); retain the CALLSPEC-0001
+        // fallback only for alive calls built outside FlowInfo.
         let n_new = self.setup_call_specs(fd);
         // Collect (callspec_index, op_ref) pairs so we can pass the CALL op to
         // funcLinkInput/funcLinkOutput without double-borrowing fd.
@@ -6715,41 +6741,35 @@ impl Action for ActionFuncLink {
         let mut pairs: Vec<(usize, crate::op::PcodeOpRef)> = Vec::new();
         for i in 0..n_calls {
             if let Some(fc) = fd.get_call_specs(i) {
-                let target_op_addr = fc.op_addr.as_u64();
-                for op_ref in &fd.obank.alivelist {
-                    let op = op_ref.0.read().unwrap();
-                    if op.opcode == OpCode::CPUI_CALL
-                        && !op.is_dead()
-                        && op.get_seq_num().get_addr().as_u64() == target_op_addr
-                    {
-                        pairs.push((i, op_ref.clone()));
-                        break;
-                    }
+                if let Some(op_ref) = fc.find_call_op(fd) {
+                    pairs.push((i, op_ref));
                 }
             }
         }
         for (idx, op_ref) in pairs {
-            let callee_name = fd.get_call_specs(idx)
-                .and_then(|fc| fc.entry_addr.as_ref())
-                .and_then(|a| symbol_table.get(&a.as_u64()))
-                .map(|s| s.clone());
+            let callee_name = fd
+                .get_call_specs(idx)
+                .and_then(|fc| fc.entry_addr)
+                .and_then(|a| symbol_table.get(&a.as_u64()).cloned());
             let known = known_param_types(callee_name.as_deref()).is_some()
                 || (is_known_function(callee_name.as_deref())
                     && known_param_count(callee_name.as_deref()) > 0);
             Self::func_link_input(fd, &op_ref, callee_name.as_deref());
             Self::func_link_output(fd, idx, &op_ref);
             if !known {
-                if let Some(fc) = fd.get_call_specs_mut(idx) {
+                if let Some(mut fc) = fd.get_call_specs_mut(idx) {
                     fc.init_active_input();
                     // Register trials for each CALL input that's a possible
                     // input parameter. In Ghidra, this happens during
                     // Heritage::guardCalls (heritage.cc:1496-1504) which runs
                     // per-address-range during SSA heritage. Rugra centralizes
                     // it here because Heritage::guard_calls is a stub.
-                    // Faithful to the guardCalls trial registration logic:
+                    // Corresponds to the covered guardCalls trial-registration
+                    // slice; the full consumer remains CALLSPEC-0001:
                     //   if (fc->isInputActive() && tryregister) {
                     //     if (characterizeAsInputParam == contains_justified)
                     //       active->registerTrial(transAddr, size);
+                    let model = fc.proto_model.clone();
                     if let Some(active) = fc.active_input.as_mut() {
                         let inputs: Vec<(u64, i32, crate::space::AddressSpace)> = {
                             let op = op_ref.0.read().unwrap();
@@ -6765,7 +6785,6 @@ impl Action for ActionFuncLink {
                                 }
                             }).collect()
                         };
-                        let model = fc.proto_model.clone();
                         for (offset, size, space) in inputs {
                             let addr = crate::address::Address::new(offset);
                             // Check ProtoModel: only register if this address
@@ -6793,8 +6812,9 @@ impl Action for ActionFuncLink {
     fn get_name(&self) -> &str { "funclink" }
 }
 
-/// FuncLinkOutOnly: link only outgoing function calls. Faithful to
-/// `ActionFuncLinkOutOnly` (coreaction.cc:1588-1595).
+/// FuncLinkOutOnly: run the modeled outgoing-link slice corresponding to
+/// `ActionFuncLinkOutOnly` (coreaction.cc:1588-1595). It delegates to the
+/// partial `func_link_output`; its remaining paths are `CALLSPEC-0001`.
 ///
 /// Only calls funcLinkOutput for each call (input linking already done).
 pub struct ActionFuncLinkOutOnly;
@@ -6805,21 +6825,15 @@ impl ActionFuncLinkOutOnly {
 impl Action for ActionFuncLinkOutOnly {
     // Ghidra: coreaction.cc:1588 ActionFuncLinkOutOnly::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionFuncLinkOutOnly::apply (coreaction.cc:1588-1595).
+        // Partial correspondence to ActionFuncLinkOutOnly::apply
+        // (coreaction.cc:1588-1595); func_link_output carries the
+        // CALLSPEC-0001 remainder.
         let n_calls = fd.num_calls();
         let mut pairs: Vec<(usize, crate::op::PcodeOpRef)> = Vec::new();
         for i in 0..n_calls {
             if let Some(fc) = fd.get_call_specs(i) {
-                let target_op_addr = fc.op_addr.as_u64();
-                for op_ref in &fd.obank.alivelist {
-                    let op = op_ref.0.read().unwrap();
-                    if op.opcode == OpCode::CPUI_CALL
-                        && !op.is_dead()
-                        && op.get_seq_num().get_addr().as_u64() == target_op_addr
-                    {
-                        pairs.push((i, op_ref.clone()));
-                        break;
-                    }
+                if let Some(op_ref) = fc.find_call_op(fd) {
+                    pairs.push((i, op_ref));
                 }
             }
         }
@@ -6834,8 +6848,9 @@ impl Action for ActionFuncLinkOutOnly {
     fn get_name(&self) -> &str { "funclink_outonly" }
 }
 
-/// Deindirect: resolve indirect calls. Faithful to `ActionDeindirect`
-/// (coreaction.cc).
+/// Deindirect: partially resolve indirect calls, corresponding to
+/// `ActionDeindirect` (coreaction.cc). External-reference and typed-prototype
+/// paths remain `CALLSPEC-0001`.
 pub struct ActionDeindirect { pub count: i32 }
 impl ActionDeindirect {
     // Ghidra: coreaction.hh:206 ActionDeindirect (constructor mirror)
@@ -6844,7 +6859,8 @@ impl ActionDeindirect {
 impl Action for ActionDeindirect {
     // Ghidra: coreaction.cc:1219 ActionDeindirect::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionDeindirect::apply (coreaction.cc:1219-1280).
+        // Partial correspondence to ActionDeindirect::apply
+        // (coreaction.cc:1219-1280).
         // For each CALLIND call site, trace the indirect target through COPY
         // chains; if the resolved target is a constant address that names a
         // known function (in the symbol table / external_prototypes), resolve
@@ -6862,21 +6878,15 @@ impl Action for ActionDeindirect {
         let n_calls = fd.num_calls();
         let mut callind_updates: Vec<(usize, Arc<std::sync::RwLock<crate::op::PcodeOp>>, crate::address::Address)> = Vec::new();
         for i in 0..n_calls {
-            let fc_addr = match fd.get_call_specs(i).map(|fc| fc.op_addr) {
-                Some(a) => a,
+            let call_op = match fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) {
+                Some(op) => op,
                 None => continue,
             };
-            // Find the CALLIND op at this callspec's address.
-            let mut found: Option<(Arc<std::sync::RwLock<crate::op::PcodeOp>>, Option<crate::address::Address>)> = None;
-            for op_ref in &fd.obank.alivelist {
-                let op_rg = op_ref.0.read().unwrap();
-                if op_rg.opcode == OpCode::CPUI_CALLIND && op_rg.get_addr() == fc_addr {
-                    // Trace input(0) through COPY chains to the resolved target.
-                    let resolved = Self::trace_indirect_target(&op_ref.0);
-                    found = Some((op_ref.0.clone(), resolved));
-                    break;
-                }
-            }
+            let is_callind = call_op.0.read().unwrap().opcode == OpCode::CPUI_CALLIND;
+            let found = is_callind.then(|| {
+                let resolved = Self::trace_indirect_target(&call_op.0);
+                (call_op.0.clone(), resolved)
+            });
             if let Some((op_arc, resolved)) = found {
                 if let Some(target_addr) = resolved {
                     // Ghidra: queryFunction(codeaddr) — does a function exist at
@@ -6892,10 +6902,15 @@ impl Action for ActionDeindirect {
         }
         // Apply updates: set entry_addr on the callspec, convert CALLIND->CALL.
         for (i, op_arc, target_addr) in callind_updates {
-            if let Some(fc) = fd.get_call_specs_mut(i) {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 fc.entry_addr = Some(target_addr);
             }
             let op_ref = crate::op::PcodeOpRef(op_arc);
+            let owner = fd
+                .get_call_specs_owner(i)
+                .expect("callspec owner disappeared during deindirect");
+            let annotation = fd.new_varnode_call_specs(&owner);
+            fd.op_set_input(&op_ref, annotation, 0);
             fd.op_set_opcode(&op_ref, OpCode::CPUI_CALL);
             change_count += 1;
         }
@@ -7135,7 +7150,13 @@ impl StackSolver {
 
     // Ghidra: coreaction.cc:147 StackSolver::build
     /// Build the equation system from the function's stack-pointer varnodes.
-    /// Faithful to `StackSolver::build` (coreaction.cc:147-252).
+    /// The covered equation/solve core corresponds to `StackSolver::build`
+    /// (coreaction.cc:147-252). The initial-input error channel is
+    /// `PIPE-STALL-SHAPE-0001`/UNTESTED and differs today (Ghidra throws
+    /// `LowlevelError`, while Rust logs and returns). The INDIRECT branch also
+    /// guesses rhs=4 instead of consuming a known callspec extrapop. Neither
+    /// branch is claimed by the D0 projection; the callspec branch remains
+    /// `CALLSPEC-0001`/UNTESTED.
     ///
     /// Collects all instances of the spacebase varnode, then for each
     /// instance examines its defining op:
@@ -7259,8 +7280,10 @@ impl StackSolver {
                     }
                     self.companion[i] = var2;
                     // cc:206-217: if INDIRECT is due to a CALL, try to get
-                    // extrapop from the callspec. Rugra doesn't yet wire
-                    // callspecs here, so we always fall through to the guess.
+                    // extrapop from the callspec. Exact per-op callspec
+                    // identity is now available, but FuncCallSpecs still lacks
+                    // effective_extrapop and this StackSolver consumer remains
+                    // unwired under CALLSPEC-0001, so retain the old guess.
                     // cc:219-220: guess, rhs = 4.
                     self.guess.push(StackEqn { var1: i as i32, var2, rhs: 4 });
                 }
@@ -7364,13 +7387,14 @@ impl StackSolver {
 
 // Ghidra: coreaction.cc:261 ActionStackPtrFlow::analyzeExtraPop
 /// Calculate stack-pointer change across undetermined sub-functions.
-/// Faithful to `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:261-318).
-/// Uses StackSolver to build and solve the equation system for the stack
-/// pointer, then writes the recovered extrapop values back to the callspecs.
+/// Structurally corresponds to `ActionStackPtrFlow::analyzeExtraPop`
+/// (coreaction.cc:261-318). It uses StackSolver to build and solve the equation
+/// system for the stack pointer, but currently only counts solved changes.
 ///
-/// **Status**: structural skeleton. The actual write-back to callspecs
-/// requires FuncCallSpecs integration (Rugra's callspec layer is L1). The
-/// StackSolver build+solve is fully ported; the callspec update is a TODO.
+/// **Status**: structural skeleton. D0 supplies exact callspec identity, but
+/// effective_extrapop storage and this solver's mutating write-back are still
+/// absent under `CALLSPEC-0001`. StackSolver's equation/solve core is present,
+/// but its known-extrapop INDIRECT branch and this consumer are incomplete.
 pub fn analyze_extra_pop(
     data: &crate::funcdata::Funcdata,
     stackspace_spacebase: crate::address::Address,
@@ -7382,14 +7406,15 @@ pub fn analyze_extra_pop(
     solver.solve();
     let mut numchange = 0;
     // Ghidra cc:303-316: walk solutions, for each INDIRECT-companion varnode
-    // with a valid solution, set the callspec's extrapop. Rugra's callspec
-    // integration is L1; count the changes but don't write back yet.
+    // with a valid solution, set the callspec's extrapop. Exact owner lookup is
+    // available, but effective_extrapop/write-back is CALLSPEC-0001; count the
+    // changes without mutating the owner.
     for i in 0..solver.get_num_variables() {
         let sol = solver.get_solution(i);
         let comp = solver.get_companion(i);
         if sol != StackSolver::UNSOLVED && comp >= 0 {
-            // Would write: fc->setExtraPop(sol) on the callspec for
-            // vnlist[i]'s INDIRECT op. TODO(callspecs).
+            // Would write: fc->setEffectiveExtraPop(sol-sol2) on the exact
+            // callspec for vnlist[i]'s INDIRECT op. CALLSPEC-0001.
             numchange += 1;
         }
     }
@@ -7796,8 +7821,9 @@ impl Action for ActionInternalStorage {
     fn get_name(&self) -> &str { "internalstorage" }
 }
 
-/// ExtraPop setup. Faithful to `ActionExtraPopSetup`
-/// (coreaction.cc).
+/// ExtraPop setup corresponding to the modeled portion of
+/// `ActionExtraPopSetup` (coreaction.cc). Effective-extrapop callspec storage
+/// remains `CALLSPEC-0001`.
 pub struct ActionExtraPopSetup;
 impl ActionExtraPopSetup {
     // Ghidra: coreaction.hh:676 ActionExtraPopSetup (constructor mirror)
@@ -7806,7 +7832,8 @@ impl ActionExtraPopSetup {
 impl Action for ActionExtraPopSetup {
     // Ghidra: coreaction.cc:1436 ActionExtraPopSetup::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionExtraPopSetup::apply (coreaction.cc:1436-1466).
+        // Partial correspondence to ActionExtraPopSetup::apply
+        // (coreaction.cc:1436-1466).
         // For each call whose prototype extraPop is non-zero, insert an op on
         // the stack-pointer register: `RSP' = RSP + extrapop` (INT_ADD)
         // placed AFTER the call when extrapop is known, or an INDIRECT on
@@ -7832,32 +7859,20 @@ impl Action for ActionExtraPopSetup {
         let n = fd.num_calls();
         for i in 0..n {
             // cc:1447-1448: fc = data.getCallSpecs(i); skip when extraPop==0.
-            let (op_addr, extra_pop) = {
-                let Some(fc) = fd.get_call_specs(i) else { continue };
-                (fc.op_addr, fc.prototype.get_extra_pop())
+            let (call_op, extra_pop) = {
+                let Some(fc) = fd.get_call_specs(i) else {
+                    continue;
+                };
+                (fc.find_call_op(fd), fc.prototype.get_extra_pop())
             };
             if extra_pop == 0 {
                 continue; // Stack pointer is undisturbed
             }
-            // Resolve the CALL/CALLIND op for this spec (Ghidra's FuncCallSpecs
-            // holds the PcodeOp*; Rugra's spec stores the call address, so
-            // look the op up by exact address among CALL/CALLIND ops).
-            let call_op = {
-                let mut found: Option<crate::op::PcodeOpRef> = None;
-                for op_ref in &fd.obank.alivelist {
-                    let op = op_ref.0.read().unwrap();
-                    if op.start.addr == op_addr
-                        && matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
-                    {
-                        found = Some(op_ref.clone());
-                        break;
-                    }
-                }
-                match found {
-                    Some(o) => o,
-                    None => continue,
-                }
+            let call_op = match call_op {
+                Some(op) => op,
+                None => continue,
             };
+            let op_addr = call_op.0.read().unwrap().get_addr();
             // cc:1449-1451: op = newOp(2, call addr); out = newVarnodeOut(sb)
             // — a REGISTER-space varnode at the stack-pointer address.
             let op = fd.new_op(2, op_addr);
@@ -11358,13 +11373,16 @@ mod tests {
             crate::address::Address::new(0x2100),
             crate::fspec::FuncProto::new(String::new(), long_type.clone()),
         );
-        fd.callspecs.push(locked_fc);
-        fd.callspecs.push(unlocked_fc);
+        fd.callspecs
+            .push(std::sync::Arc::new(std::sync::RwLock::new(locked_fc)));
+        fd.callspecs
+            .push(std::sync::Arc::new(std::sync::RwLock::new(unlocked_fc)));
 
         let mut action = ActionDefaultParams::new();
         assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
 
-        let locked = &fd.callspecs[0].prototype;
+        let locked_fc = fd.callspecs[0].read().unwrap();
+        let locked = &locked_fc.prototype;
         assert!(locked.has_model());
         assert!(locked.is_model_locked());
         // setInternal must NOT have run: the locked return type survives.
@@ -11373,7 +11391,8 @@ mod tests {
             crate::type_system::datatype::Datatype::Base(_)
         ));
         assert_eq!(locked.get_model_name(), "test_default");
-        let unlocked = &fd.callspecs[1].prototype;
+        let unlocked_fc = fd.callspecs[1].read().unwrap();
+        let unlocked = &unlocked_fc.prototype;
         assert!(unlocked.has_model());
         // The unlocked branch DID run setInternal: void default output.
         assert!(matches!(
@@ -11552,12 +11571,8 @@ mod tests {
         let void_t = std::sync::Arc::new(crate::type_system::Datatype::Void(
             crate::type_system::datatype::TypeBase::new("void".into(), 0, crate::type_system::TypeMetatype::Void)));
         let proto = FuncProto::new("callee".into(), void_t);
-        let mut fc = FuncCallSpecs::new(Address::new(0x2000), proto);
-        fc.entry_addr = Some(Address::new(0x9000)); // unknown callee (not in libc table)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
-        fd.add_call_specs(fc);
-        assert_eq!(fd.num_calls(), 1);
-        // Add a CALL op at 0x2000 so funcLink can find it.
+        // Add a CALL op at 0x2000 and bind the callspec to this exact owner.
         let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
             crate::varnode::Varnode::new_constant(0x9000, 8)));
         let mut call_op = crate::op::PcodeOp::new(
@@ -11571,13 +11586,21 @@ mod tests {
         let stack_arg = fd.vbank.create_with_space(8, crate::space::AddressSpace::Stack, 0x18);
         call_op.inrefs = vec![target_vn, register_arg, stack_arg];
         let op_arc = std::sync::Arc::new(std::sync::RwLock::new(call_op));
-        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc));
+        let op_ref = crate::op::PcodeOpRef(op_arc);
+        fd.obank.alivelist.push(op_ref.clone());
+        let fc = FuncCallSpecs::new_for_op(&op_ref, proto);
+        let owner = std::sync::Arc::new(std::sync::RwLock::new(fc));
+        let annotation = fd.new_varnode_call_specs(&owner);
+        fd.op_set_input(&op_ref, annotation, 0);
+        fd.add_call_specs_owner(owner);
+        assert_eq!(fd.num_calls(), 1);
         // Before: no active input.
         assert!(fd.get_call_specs(0).unwrap().active_input.is_none());
         let mut a = ActionFuncLink::new();
         a.apply(&mut fd).unwrap();
         // After: unknown callee → active_input initialized for trial recovery.
-        let active = fd.get_call_specs(0).unwrap().active_input.as_ref().unwrap();
+        let callspec = fd.get_call_specs(0).unwrap();
+        let active = callspec.active_input.as_ref().unwrap();
         assert_eq!(active.get_num_trials(), 2);
         assert_eq!(
             active.get_trial(0).get_space(),

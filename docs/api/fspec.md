@@ -519,3 +519,28 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
 - `FuncProto::has_matching_model(&Arc<ProtoModelFull>)`——逐字移植
   fspec.hh:1391 内联 `(model == op2)` 指针相等，供 ActionPrototypeTypes
   绑定守卫（coreaction.cc:4617）与 ActionDefaultParams（cc:2325）消费。
+
+### 2026-08-24：CALLSPEC-IDENTITY-D0 exact call-op identity
+
+- `FuncCallSpecs` 现在保存 `op: Weak<RwLock<PcodeOp>>`，精确对应 Ghidra 的
+  非拥有 `PcodeOp *`；类型不再派生 `Clone`，避免通过普通值复制悄悄复制一个
+  身份对象。`find_call_op` 只升级该 `Weak`，不再按 `op_addr` 扫描 alive op。
+- `new_for_op(&PcodeOpRef, FuncProto)` 绑定 exact op。直接 CALL 在 setup 用 FSPEC
+  annotation 替换 input(0) 之前捕获目标；若克隆的 input(0) 已携带 typed FSPEC
+  handle，则从原 callspec 恢复 entry。裸 Iop constant 即使 offset 相同也不被
+  当作 callspec。CALLIND 初建时不臆造 entry。
+- `clone_for_op(&PcodeOpRef)` 显式创建新的 callspec 身份并绑定新 op，复制当前已
+  建模的 prototype/entry/stack offset；`active_input` 与 `active_output` 由新构造器
+  重置。这个专用 clone 是 truncated-flow 生命周期操作，不等同于 `Clone` trait。
+- callspec → op 和 CALL input annotation → callspec 均为 `Weak`；
+  `Funcdata::callspecs: Vec<Arc<RwLock<FuncCallSpecs>>>` 是权威的持久强 owner。
+  短生命周期的局部/返回 `Arc` handle 不会成为反向边，因此没有强引用环。
+- D0 的行为门禁是 `callspec_identity_lifecycle_1204`，但总体判定保持
+  `MISMATCH`：专用 `IPTR_FSPEC` 尚未实现，当前仍用 `AddressSpace::Iop`
+  （`TYPEOP-FSPEC-SPACE-0001`）；本阶段不接 TypeOp getter、PrintC、
+  StringManager，也不消除其它既有 FuncCallSpecs 字段残差。
+- 旧 `deindirect` helper 没有生产调用者，且 hook 仍只接收裸
+  `&mut FuncCallSpecs`，无法把 `new_varnode_call_specs` 所需的 stable `Arc` owner
+  传给 typed annotation。owner/rebind seam、override flag 与 callee prototype
+  分支均为 `CALLSPEC-0001` 的 `UNTESTED` consumer residual；D0 只更正“annotation
+  API 未实现”的过时前提，不宣称该 helper 行为已接通。

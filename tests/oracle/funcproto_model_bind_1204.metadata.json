@@ -15,35 +15,132 @@
   "input_fingerprints": {
     "x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
     "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "curl": "pinned from locked base examples/curl"
+    "curl": "pinned from locked base examples/curl",
+    "bfd.h": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "libbfd-2.38-system.so": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   },
   "comparand": {
-    "rugra_base_commit": "ee71076f367f946123982d5d6cae2b2a8abb5025",
-    "rugra_base_tree": "6bdb0954413f9fcb5091e7a73599a2249f58f9f5",
-    "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
-    "overlay_paths": [
-      "src/funcdata.rs",
-      "src/fspec.rs",
-      "src/coreaction.rs",
-      "docs/api/funcdata.md",
-      "docs/api/fspec.md",
-      "docs/api/coreaction.md",
-      "examples/curl_decompile.rs",
-      "tests/oracle/funcproto_model_bind_1204.cc",
-      "tests/oracle/funcproto_model_bind_1204.rs",
-      "tests/oracle/funcproto_model_bind_1204.metadata.json",
-      "tools/run_funcproto_model_bind_oracle.sh"
+    "rugra_base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+    "rugra_base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+    "rugra_base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+    "rugra_base_sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
+    "rugra_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "rugra_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "rugra_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "rugra_readme_blob": "97198a893828d15c44f12e66960652b96c3e1b87",
+    "rugra_bench_blob": "774d71f38a85a0ef777aaeb5be658f212bc254d2",
+    "rugra_decompress_example_blob": "0f080362908a89815777b64e3ce83c90e19e074c",
+    "rugra_funcproto_lock_example_blob": "2676a485769ad4d0f376012a185be80dc2dfd1bf",
+    "snapshot_model": "git archive locked base tree plus complete nine-file D0 source closure",
+    "build_tmp_policy": "ignore ambient TMPDIR after immutable env re-exec; create a private mode-0700 build-tmp below the user-cache run root and pass it explicitly to make, Cargo, g++, and rustc",
+    "base_archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
     ],
+    "cargo_manifest_target_audit": "archive README.md, the explicit decompile_bench target, both explicit tests/oracle examples, the complete src tree for lib/bin targets, and sleigh_shim for build.rs; do not materialize examples/ or top-level tests/*.rs auto-discovery roots",
+    "runtime_closure": {
+      "cpp_bfd_library": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "cpp_ld_library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu",
+      "cpp_environment": [
+        "PATH=/usr/bin:/bin",
+        "LC_ALL=C",
+        "LD_LIBRARY_PATH=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu"
+      ],
+      "rust_environment": [
+        "PATH=/usr/bin:/bin",
+        "LC_ALL=C"
+      ],
+      "process_gate": "capture each runtime exit code and stderr; reject any nonzero exit or nonempty stderr with the captured diagnostics"
+    },
+    "manifest_closure_files": {
+      "README.md": {
+        "git_blob_oid": "97198a893828d15c44f12e66960652b96c3e1b87",
+        "sha256": "982834e841730ee7dc44e2740774e517d8ffc55deb9069e5a424a21c9a16155a"
+      },
+      "benches/decompile_bench.rs": {
+        "git_blob_oid": "774d71f38a85a0ef777aaeb5be658f212bc254d2",
+        "sha256": "66868d6c9ae470625d46896f24dd6d9da7d3c00e52a850b17e42736727f0a66a"
+      },
+      "tests/oracle/decompress_1204.rs": {
+        "git_blob_oid": "0f080362908a89815777b64e3ce83c90e19e074c",
+        "sha256": "7eca5ca75a1dc23a9a72d02ae542852a4ed3c79656a3dbf6bd966ae864747c80"
+      },
+      "tests/oracle/funcproto_lock_1204.rs": {
+        "git_blob_oid": "2676a485769ad4d0f376012a185be80dc2dfd1bf",
+        "sha256": "094fb3cfe277fc3b395c5f0cb0df18bee27f269306bc3deff8a2fc7584bbdc2f"
+      }
+    },
+    "overlay_paths": [
+      "src/coreaction.rs",
+      "src/flow.rs",
+      "src/fspec.rs",
+      "src/funcdata.rs",
+      "src/heritage.rs",
+      "src/ruleaction.rs",
+      "src/signature.rs",
+      "src/unionresolve.rs",
+      "src/varnode.rs"
+    ],
+    "overlays": {
+      "src/coreaction.rs": {
+        "git_blob_oid": "4260581a5c7bb0e3ec983069f84273c9c5e6d15b",
+        "sha256": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f"
+      },
+      "src/flow.rs": {
+        "git_blob_oid": "f7722f4fb73c31cfbf562222f5767e11864f2ab5",
+        "sha256": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7"
+      },
+      "src/fspec.rs": {
+        "git_blob_oid": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
+        "sha256": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1"
+      },
+      "src/funcdata.rs": {
+        "git_blob_oid": "f4f0308e571b0ca56af88ab627a6eab2aebb6c7a",
+        "sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416"
+      },
+      "src/heritage.rs": {
+        "git_blob_oid": "94730ba339462aabed58e22d45748196acae1095",
+        "sha256": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30"
+      },
+      "src/ruleaction.rs": {
+        "git_blob_oid": "81f6344ef0bdecaba1c994c1b0cdfb9a53b5de1a",
+        "sha256": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59"
+      },
+      "src/signature.rs": {
+        "git_blob_oid": "3cc191efa1744141c827d549d428281e3e29edd3",
+        "sha256": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9"
+      },
+      "src/unionresolve.rs": {
+        "git_blob_oid": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
+        "sha256": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd"
+      },
+      "src/varnode.rs": {
+        "git_blob_oid": "b35472566480e742d5703e33dd9ff1fade7ca4bb",
+        "sha256": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
+      }
+    },
     "cpp_fixture_sha256": "de5139b1a2a978cf25e65a74188356e2d448e7d5aa1db132787efbe50b6143b8",
     "rust_fixture_sha256": "bf3983a98809174e756968386a03eb117b00329a3f36c7a93c0f8c8308aa7264",
-    "funcdata_rs_sha256": "3d42ea81a6a87ba46ca4e53f29295acaa780903fb64a9cf13ab8930bd2f7a9e5",
-    "fspec_rs_sha256": "796ae0142c157ed1bf939da2b902c26c1bd3df6ffdbddc99c2e6677c079f7cfd",
-    "coreaction_rs_sha256": "39089bd73aebefbadbb553917cbe9168966f330a52aefdfadb38b3e11b72de38",
-    "funcdata_doc_sha256": "169af3876f83adefd098b47ea60a4b1644e04c963d3781b5db54851632d50cef",
-    "fspec_doc_sha256": "a8fdefdad8e6e664be5970dbeb903e9cd53ec60101a46e1a96c9a5320009ca1d",
-    "coreaction_doc_sha256": "93dd7ef9233d604dc1ffb4ce7d5ba8aef2b54532a5d297c9f48a1d317eadf854",
-    "example_sha256": "88286ef0f37cac2792907a0106269f262cc59c78155165057175af0d049834ab",
-    "runner_sha256": "1fc067fc1e80dd3cf8d52dbf06a07683b9433bc45ba3104191f36347b980cd03",
+    "runner_sha256": "c70b628339a365c7ebb69644eb031959416ca3af4c3a600d5eb466f1810c7929",
+    "cpp_fixture_identity": {
+      "git_blob_oid": "ab769afbf57c4c7df491c7a94d83b6ce642a29b9",
+      "sha256": "de5139b1a2a978cf25e65a74188356e2d448e7d5aa1db132787efbe50b6143b8"
+    },
+    "rust_fixture_identity": {
+      "git_blob_oid": "340bc54889dec25ec4c7092a03bfec65fe328c64",
+      "sha256": "bf3983a98809174e756968386a03eb117b00329a3f36c7a93c0f8c8308aa7264"
+    },
+    "runner_identity": {
+      "git_blob_oid": "017b10e6ed7fdb04d49a35f613d1bb3399bed78e",
+      "sha256": "c70b628339a365c7ebb69644eb031959416ca3af4c3a600d5eb466f1810c7929"
+    },
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
@@ -51,17 +148,27 @@
     "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
   },
   "host_tools": {
-    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cxx_target": "x86_64-linux-gnu",
-    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cc_target": "x86_64-linux-gnu",
-    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
-    "make": "GNU Make 4.3",
-    "python": "Python 3.10.12",
-    "git": "git version 2.34.1",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
+    "paths": {
+      "cxx": "/usr/bin/g++",
+      "cc": "/usr/bin/gcc",
+      "ar": "/usr/bin/ar",
+      "make": "/usr/bin/make",
+      "python": "/usr/bin/python3.14",
+      "git": "/usr/bin/git",
+      "rustc": "/usr/bin/rustc",
+      "cargo": "/usr/bin/cargo"
+    },
+    "cxx": "g++ (GCC) 16.2.1 20260810",
+    "cxx_target": "x86_64-pc-linux-gnu",
+    "cc": "gcc (GCC) 16.2.1 20260810",
+    "cc_target": "x86_64-pc-linux-gnu",
+    "ar": "GNU ar (GNU Binutils) 2.47",
+    "make": "GNU Make 4.4.1",
+    "python": "Python 3.14.7",
+    "git": "git version 2.55.0",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+    "rust_toolchain_policy": "system /usr/bin cargo and rustc; no rustup indirection"
   },
   "build": {
     "registry_packages": 164
@@ -127,6 +234,6 @@
     "records": 22,
     "bytes": 460,
     "stdout_sha256": "7c7be18ed21a903efbbbe1daff0fa69b7d02bafc8df92cd0f968ab4a0dede8a3",
-    "note": "re-pinned after the rework probes (PRINTFLAG x4 + CALLSPEC_REBIND) at base ee71076"
+    "note": "locked output projection retained byte-for-byte while source provenance advances to base 92daed3 plus the complete nine-file D0 callspec closure"
   }
 }

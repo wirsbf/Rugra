@@ -1181,3 +1181,23 @@ pool repeat 尚未闭合，全部继续绑定 `RULE-ADDUNSIGNED-TYPEPRECOND-0001
 ## equate 门控连带测试修正（2026-08-23，root）
 
 `collapse_constants_symbol_propagation_via_marked_input` 随 VARNODE-COPYSYMBOL-EQUATE-0001 忠实化更新：测试侧注册 equate 值须与 **collapse 后输出** value-close（0x33333333），注册原始输入值（0x11111111）会被 isValueClose 正确拒绝——这是 oracle 语义而非回归。
+
+## CALLSPEC-IDENTITY-D0 RulePiecePathology 接线（2026-08-24）
+
+`RulePiecePathology::find_call_spec_for_op` 现在先用
+`Funcdata::get_call_specs_of_op` 解析 exact owner，再用 `Arc::ptr_eq` 恢复 qlst
+索引；已删除 `op_addr`/数值地址回退。因此同一机器地址上的不同 CALL 不会共享
+bytes-consumed 状态，裸 offset 相同但无 typed FSPEC handle 的 constant 不能仅凭
+该整数命中；若 op 本身已精确绑定，仍可走 oracle 的 exact-op fallback。规则先在
+read guard 内快照可更新条件，再释放 guard 后取得 write guard
+修改 `input_consume`，保持 Ghidra 的槽遍历与计数时机，同时避免 Rust 锁重入。
+
+该接线只覆盖 callspec identity/guard 生命周期，RuleAction 整体仍为
+`MISMATCH`。Rugra 继续以 `AddressSpace::Iop` 暂代专用 `IPTR_FSPEC`
+（`TYPEOP-FSPEC-SPACE-0001`），且本阶段不接 TypeOp getter、PrintC、
+StringManager 或其它既有 Rule/callspec 残差。
+
+`RuleLoadVarnode::apply_op` 的 spacebase-placeholder 尾部仍未调用
+`FuncCallSpecs::resolveSpacebaseRelative`。D0 已解除 exact owner lookup 前置件，
+但该方法与状态突变尚未建模、也未由双侧 fixture 执行，因此保持 `UNTESTED` 并
+绑定 `CALLSPEC-0001`；不能再把残差描述成“callspec 尚不存在”。

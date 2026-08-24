@@ -4,7 +4,7 @@
 //! are defined (prototypes) and how call sites are handled (call specs).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, Weak};
 use crate::address::Address;
 use crate::space::{AddressSpace, SpaceType};
 use crate::type_system::datatype::Datatype;
@@ -1679,8 +1679,12 @@ impl FuncProto {
 /// Specification for a specific function call site
 ///
 /// Corresponds to Ghidra's `FuncCallSpecs` class.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FuncCallSpecs {
+    /// Non-owning identity link to the exact CALL/CALLIND operation. Ghidra
+    /// stores a raw `PcodeOp *`; Weak preserves that lifecycle without an
+    /// Arc cycle through the operation's input Varnodes.
+    pub op: Weak<RwLock<crate::op::PcodeOp>>,
     /// The address of the call instruction
     pub op_addr: Address,
     /// The destination address of the call (if known)
@@ -1728,6 +1732,7 @@ impl FuncCallSpecs {
     /// Create a new call specification
     pub fn new(op_addr: Address, prototype: FuncProto) -> Self {
         Self {
+            op: Weak::new(),
             op_addr,
             entry_addr: None,
             prototype,
@@ -1739,6 +1744,44 @@ impl FuncCallSpecs {
             input_consume: Vec::new(),
             stack_placeholder_slot: -1,
         }
+    }
+
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs
+    /// Construct a call specification bound to the exact CALL/CALLIND op.
+    /// For a direct CALL, capture input(0) before setup replaces it with the
+    /// FSPEC annotation. A cloned FSPEC input resolves through its typed
+    /// handle to the original call target, matching Ghidra's constructor.
+    pub fn new_for_op(op: &crate::op::PcodeOpRef, prototype: FuncProto) -> Self {
+        use crate::opcodes::OpCode;
+        let (op_addr, direct_target) = {
+            let call = op.0.read().unwrap();
+            let target = if call.opcode == OpCode::CPUI_CALL {
+                call.get_in(0).cloned()
+            } else {
+                None
+            };
+            (call.get_addr(), target)
+        };
+        // Release the op lock before following the Varnode -> callspec Weak
+        // edge. Other consumers follow callspec -> op, so this snapshot keeps
+        // the lock order acyclic even though the ownership graph already is.
+        let entry_addr = direct_target.and_then(|input| {
+            let (previous, space, offset) = {
+                let input = input.read().unwrap();
+                (input.get_call_spec(), input.get_space(), input.get_offset())
+            };
+            if let Some(previous) = previous {
+                previous.read().unwrap().entry_addr
+            } else if space == AddressSpace::Iop {
+                None
+            } else {
+                Some(Address::new(offset))
+            }
+        });
+        let mut result = Self::new(op_addr, prototype);
+        result.op = Arc::downgrade(&op.0);
+        result.entry_addr = entry_addr;
+        result
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::getSpacebaseOffset
@@ -2014,21 +2057,12 @@ impl FuncCallSpecs {
         false
     }
 
-    // Ghidra: fspec.hh FuncCallSpecs::getOp (via op_addr lookup)
-    /// Find the CALL/CALLIND PcodeOp for this call spec by matching op_addr
-    /// against the function's alive op list. Ghidra's FuncCallSpecs stores a
-    /// direct `PcodeOp *op` pointer; Rugra looks it up by address.
-    pub fn find_call_op(&self, fd: &crate::funcdata::Funcdata) -> Option<crate::op::PcodeOpRef> {
-        use crate::opcodes::OpCode;
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if (op_rg.opcode == OpCode::CPUI_CALL || op_rg.opcode == OpCode::CPUI_CALLIND)
-                && op_rg.get_addr() == self.op_addr
-            {
-                return Some(op_ref.clone());
-            }
-        }
-        None
+    // Ghidra: fspec.hh:1681 FuncCallSpecs::getOp
+    /// Upgrade the exact non-owning CALL/CALLIND identity stored by this
+    /// call specification. The Funcdata argument is retained for source API
+    /// compatibility but is deliberately not used for an address scan.
+    pub fn find_call_op(&self, _fd: &crate::funcdata::Funcdata) -> Option<crate::op::PcodeOpRef> {
+        self.op.upgrade().map(crate::op::PcodeOpRef)
     }
 
     // Ghidra: fspec.cc:5564 FuncCallSpecs::finalInputCheck
@@ -2687,11 +2721,11 @@ impl FuncCallSpecs {
 
     // Ghidra: fspec.cc:5443 FuncCallSpecs::deindirect
     /// Resolve an indirect CALL/CALLIND to a direct CALL on `newfd`.
-    /// Faithful 1:1 port of `deindirect` (fspec.cc:5443-5472). Updates this
-    /// spec's entry address and display name from the resolved Funcdata,
-    /// rewrites the CALL input to a fresh call-spec varnode, flips the
-    /// opcode to `CPUI_CALL`, records an indirect override, and then tries
-    /// to merge the existing prototype with the callee's:
+    /// Partially corresponds to `deindirect` (fspec.cc:5443-5472). The mapped
+    /// flow updates this spec's entry address and display name from the
+    /// resolved Funcdata, rewrites the CALL input, flips the opcode to
+    /// `CPUI_CALL`, records an indirect override, and then tries to merge the
+    /// existing prototype with the callee's:
     ///   - if the callee is `NoReturn` or `Inline`, skip the merge and
     ///     request a restart;
     ///   - else if we are an override call-site, leave the prototype as-is;
@@ -2700,11 +2734,12 @@ impl FuncCallSpecs {
     ///
     /// Returns `true` when a restart is pending (Ghidra's
     /// `data.setRestartPending(true)`), `false` when the prototype was
-    /// updated in place. Rugra cannot yet allocate the call-spec varnode
-    /// (`Funcdata::newVarnodeCallSpecs` is unported) or look up the
-    /// callee's `FuncProto` flags (`isNoReturn`/`isInline`); those steps
-    /// are exposed as caller-supplied hooks so the control flow stays
-    /// faithful.
+    /// updated in place. D0 can allocate a typed call-spec annotation only
+    /// from the stable `Arc` owner, while this legacy hook still receives a
+    /// bare `&mut FuncCallSpecs`; the owner/rebind seam and the callee
+    /// `FuncProto` flags (`isNoReturn`/`isInline`) therefore remain unwired
+    /// under `CALLSPEC-0001`. This method has no production caller and is not
+    /// claimed by the identity/lifecycle projection.
     pub fn deindirect(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
@@ -2738,7 +2773,8 @@ impl FuncCallSpecs {
             // Ghidra: if (isOverride()) return;  // Don't use discovered prototype.
             // Rugra's FuncCallSpecs does not yet track the override flag;
             // we proceed to late_restriction unconditionally.
-            // TODO(ALIGNMENT_ROADMAP): wire FuncCallSpecs::isOverride.
+            // TODO(CALLSPEC-0001): wire FuncCallSpecs::isOverride together
+            // with the stable-owner deindirect/rebind seam.
             let outcome = late_restriction(self, newfd);
             match outcome {
                 DeindirectOutcome::Committed => {
@@ -2852,16 +2888,24 @@ impl FuncCallSpecs {
     }
 
     // Ghidra: fspec.cc:4964 FuncCallSpecs::clone
-    /// Produce a shallow clone of this call spec, rebound to a new call op
-    /// address. Faithful 1:1 port of `clone` (fspec.cc:4964-4977). Copies the
-    /// bound Funcdata (via `entry_addr`), effective extrapop (not modelled),
-    /// stackoffset, paramshift (not modelled), and the full `FuncProto`
-    /// portion (`prototype`). The active-input/output containers are
-    /// intentionally reset to their `new()` defaults, matching Ghidra's
-    /// "we are skipping activeinput, activeoutput" comment.
-    pub fn clone_for_op(&self, new_op_addr: Address) -> FuncCallSpecs {
+    /// Produce the covered identity/lifecycle clone slice, rebound to a new
+    /// call op. This corresponds to `clone` (fspec.cc:4964-4977): it allocates
+    /// a distinct owner, rebinds the exact op identity, copies the modeled
+    /// entry/stackoffset/`FuncProto`, and resets active-input/output state.
+    /// Funcdata/name plus effective extrapop, paramshift, and isbadjumptable
+    /// remain unmodeled `CALLSPEC-0001` fields, so this is not the complete
+    /// 1:1 clone contract.
+    pub fn clone_for_op(&self, new_op: &crate::op::PcodeOpRef) -> FuncCallSpecs {
+        // Do not re-resolve the cloned input(0) while holding `self`'s read
+        // guard.  The cloned FSPEC annotation still points at `self`, and a
+        // recursive std::sync::RwLock read is not guaranteed when a writer is
+        // waiting.  Ghidra's clone has the source object directly available,
+        // so snapshot its entry and clone fields from that identity instead.
+        let new_op_addr = new_op.0.read().unwrap().get_addr();
         let mut res = FuncCallSpecs::new(new_op_addr, self.prototype.clone());
-        // Ghidra: res->setFuncdata(fd);
+        res.op = Arc::downgrade(&new_op.0);
+        // Ghidra: constructor recovers the old entry, then setFuncdata(fd)
+        // refreshes it only when fd is non-null.
         res.entry_addr = self.entry_addr;
         // effective_extrapop / paramshift are not modelled on FuncCallSpecs.
         res.stackoffset = self.stackoffset;

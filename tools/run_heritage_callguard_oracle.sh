@@ -1,11 +1,15 @@
-#!/usr/bin/env -S -i PATH=/usr/bin:/bin /usr/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
+  requested_tmpdir=${TMPDIR:-}
   exec 3<"${BASH_SOURCE[0]}"
-  exec /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/bash "$runner_fd_path" "$@"
+  exec /usr/bin/env -i PATH=/usr/bin:/bin \
+    RUGRA_HERITAGE_CALLGUARD_TMPDIR="$requested_tmpdir" \
+    /usr/bin/bash "$runner_fd_path" "$@"
 fi
+requested_tmpdir=${RUGRA_HERITAGE_CALLGUARD_TMPDIR:-}
 runner_source=$(/usr/bin/readlink -f "$runner_fd_path")
 if [[ -z "$runner_source" || ! -f "$runner_source" || -L "$runner_source" ]]; then
   echo "immutable runner fd does not resolve to a regular file" >&2
@@ -20,12 +24,19 @@ fi
 runner_snapshot_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
 
 ghidra_only=false
-if [[ ${1:-} == "--ghidra-only" ]]; then
-  ghidra_only=true
-  shift
-fi
+validate_only=false
+case ${1:-} in
+  --ghidra-only)
+    ghidra_only=true
+    shift
+    ;;
+  --validate-only)
+    validate_only=true
+    shift
+    ;;
+esac
 if [[ $# -ne 0 ]]; then
-  echo "usage: $runner [--ghidra-only]" >&2
+  echo "usage: $runner [--ghidra-only|--validate-only]" >&2
   exit 2
 fi
 
@@ -35,14 +46,36 @@ if [[ -z "$user_home" || ! -d "$user_home" ]]; then
   exit 1
 fi
 
+if [[ -z "$requested_tmpdir" ]]; then
+  requested_tmpdir="$user_home/.cache/rugra-heritage-callguard-1204/tmp"
+  /usr/bin/mkdir -p -m 700 "$requested_tmpdir"
+fi
+if [[ "$requested_tmpdir" != /* || ! -d "$requested_tmpdir" || \
+      -L "$requested_tmpdir" || ! -O "$requested_tmpdir" || \
+      ! -w "$requested_tmpdir" || ! -x "$requested_tmpdir" ]]; then
+  echo "TMPDIR must be an absolute, owned, writable, non-symlink directory" >&2
+  exit 1
+fi
+resolved_tmpdir=$(/usr/bin/readlink -f -- "$requested_tmpdir")
+if [[ -z "$resolved_tmpdir" || "$resolved_tmpdir" != "$requested_tmpdir" ]]; then
+  echo "TMPDIR must be canonical and contain no symlink components" >&2
+  exit 1
+fi
+tmpdir_mode=$(/usr/bin/stat -c '%a' -- "$requested_tmpdir")
+if (( (8#$tmpdir_mode & 0022) != 0 )); then
+  echo "TMPDIR must not be writable by group or other users" >&2
+  exit 1
+fi
+runner_tmpdir="$resolved_tmpdir"
+
 clean_path=/usr/bin:/bin
-rust_toolchain=nightly-x86_64-unknown-linux-gnu
+rust_toolchain=system
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=6597db0afc5b8ca234d65ba6ac29ce328daa62f5
-rugra_base_tree=a83ff098d35e4efd6d4e32c50cccbbbeb27f8295
+rugra_base_commit=92daed300bcce3c4d855b311cf9667ba21eb475a
+rugra_base_tree=6aea6d3b5b1421170d1bdc5a766c9568483a66af
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/heritage_callguard_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/heritage_callguard_1204.cc"
@@ -50,6 +83,12 @@ rust_fixture="$repo_root/tests/oracle/heritage_callguard_1204.rs"
 heritage_rs="$repo_root/src/heritage.rs"
 funcdata_rs="$repo_root/src/funcdata.rs"
 fspec_rs="$repo_root/src/fspec.rs"
+coreaction_rs="$repo_root/src/coreaction.rs"
+flow_rs="$repo_root/src/flow.rs"
+ruleaction_rs="$repo_root/src/ruleaction.rs"
+signature_rs="$repo_root/src/signature.rs"
+unionresolve_rs="$repo_root/src/unionresolve.rs"
+varnode_rs="$repo_root/src/varnode.rs"
 heritage_doc="$repo_root/docs/api/heritage.md"
 funcdata_doc="$repo_root/docs/api/funcdata.md"
 fspec_doc="$repo_root/docs/api/fspec.md"
@@ -62,8 +101,8 @@ host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
 host_timeout_bin=$(/usr/bin/readlink -f /usr/bin/timeout)
-host_cargo_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/cargo"
-host_rustc_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/rustc"
+host_cargo_bin=$(/usr/bin/readlink -f /usr/bin/cargo)
+host_rustc_bin=$(/usr/bin/readlink -f /usr/bin/rustc)
 for required_tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
   "$host_make_bin" "$host_python_bin" "$host_git_bin" "$host_timeout_bin" \
   "$host_cargo_bin" "$host_rustc_bin"; do
@@ -73,7 +112,9 @@ for required_tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
   fi
 done
 for required_file in "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$heritage_rs" "$funcdata_rs" "$fspec_rs" \
+  "$coreaction_rs" "$flow_rs" "$fspec_rs" "$funcdata_rs" \
+  "$heritage_rs" "$ruleaction_rs" "$signature_rs" "$unionresolve_rs" \
+  "$varnode_rs" \
   "$heritage_doc" "$funcdata_doc" "$fspec_doc" \
   "$runner"; do
   if [[ ! -f "$required_file" || -L "$required_file" ]]; then
@@ -131,9 +172,9 @@ host_cargo=$(/usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" 
   "$host_cargo_bin" --version)
 host_platform=$(/usr/bin/uname -srm)
 
-oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-heritage-callguard-1204.XXXXXX)
+oracle_tmp=$(/usr/bin/mktemp -d "$runner_tmpdir/rugra-heritage-callguard-1204.XXXXXX")
 cleanup() {
-  if [[ "$oracle_tmp" != /tmp/rugra-heritage-callguard-1204.?????? ]]; then
+  if [[ "$oracle_tmp" != "$runner_tmpdir"/rugra-heritage-callguard-1204.?????? ]]; then
     echo "refusing to remove unexpected temporary path: $oracle_tmp" >&2
     return 1
   fi
@@ -153,9 +194,15 @@ trap 'exit 143' TERM
 snapshot_root="$oracle_tmp/workspace"
 cargo_home="$oracle_tmp/cargo-home"
 owned_files=(
-  "$heritage_rs"
-  "$funcdata_rs"
+  "$coreaction_rs"
+  "$flow_rs"
   "$fspec_rs"
+  "$funcdata_rs"
+  "$heritage_rs"
+  "$ruleaction_rs"
+  "$signature_rs"
+  "$unionresolve_rs"
+  "$varnode_rs"
   "$heritage_doc"
   "$funcdata_doc"
   "$fspec_doc"
@@ -169,14 +216,17 @@ owned_files=(
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
   "$host_python_bin" -I -S - "$repo_root" "$snapshot_root" "$cargo_home" \
   "$registry_cache" "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$heritage_rs" "$funcdata_rs" "$fspec_rs" \
+  "$coreaction_rs" "$flow_rs" "$fspec_rs" "$funcdata_rs" \
+  "$heritage_rs" "$ruleaction_rs" "$signature_rs" "$unionresolve_rs" \
+  "$varnode_rs" \
   "$heritage_doc" "$funcdata_doc" "$fspec_doc" \
   "$runner_fd_path" "$runner_snapshot_sha" \
   "$oracle_tag" "$oracle_commit" "$oracle_cpp_tree" "$oracle_makefile_blob" \
   "$rugra_base_commit" "$rugra_base_tree" "$host_cxx" "$host_cxx_target" \
   "$host_rustc" "$host_cargo" "$host_platform" "$host_cxx_bin" \
   "$host_cc_bin" "$host_ar_bin" "$host_make_bin" "$host_python_bin" \
-  "$host_git_bin" "$host_cargo_bin" "$host_rustc_bin" "$rust_toolchain" <<'PY'
+  "$host_git_bin" "$host_cargo_bin" "$host_rustc_bin" "$rust_toolchain" \
+  "$validate_only" <<'PY'
 import hashlib
 import io
 import json
@@ -188,14 +238,16 @@ import tarfile
 
 (
     repo_raw, snapshot_raw, cargo_home_raw, registry_cache_raw,
-    metadata_raw, cpp_raw, rust_raw, heritage_raw, funcdata_raw,
-    fspec_raw, heritage_doc_raw, funcdata_doc_raw, fspec_doc_raw,
+    metadata_raw, cpp_raw, rust_raw, coreaction_raw, flow_raw, fspec_raw,
+    funcdata_raw, heritage_raw, ruleaction_raw, signature_raw,
+    unionresolve_raw, varnode_raw, heritage_doc_raw, funcdata_doc_raw,
+    fspec_doc_raw,
     runner_fd_raw, runner_snapshot_sha, oracle_tag, oracle_commit,
     cpp_tree, makefile_blob, rugra_base_commit, rugra_base_tree,
     host_cxx, host_cxx_target, host_rustc, host_cargo, host_platform,
     host_cxx_bin, host_cc_bin, host_ar_bin, host_make_bin,
     host_python_bin, host_git_bin, host_cargo_bin, host_rustc_bin,
-    rust_toolchain,
+    rust_toolchain, validate_only_raw,
 ) = sys.argv[1:]
 
 repo = pathlib.Path(repo_raw).resolve()
@@ -208,9 +260,15 @@ expected_paths = {
     pathlib.Path(metadata_raw): repo / "tests/oracle/heritage_callguard_1204.metadata.json",
     pathlib.Path(cpp_raw): repo / "tests/oracle/heritage_callguard_1204.cc",
     pathlib.Path(rust_raw): repo / "tests/oracle/heritage_callguard_1204.rs",
-    pathlib.Path(heritage_raw): repo / "src/heritage.rs",
-    pathlib.Path(funcdata_raw): repo / "src/funcdata.rs",
+    pathlib.Path(coreaction_raw): repo / "src/coreaction.rs",
+    pathlib.Path(flow_raw): repo / "src/flow.rs",
     pathlib.Path(fspec_raw): repo / "src/fspec.rs",
+    pathlib.Path(funcdata_raw): repo / "src/funcdata.rs",
+    pathlib.Path(heritage_raw): repo / "src/heritage.rs",
+    pathlib.Path(ruleaction_raw): repo / "src/ruleaction.rs",
+    pathlib.Path(signature_raw): repo / "src/signature.rs",
+    pathlib.Path(unionresolve_raw): repo / "src/unionresolve.rs",
+    pathlib.Path(varnode_raw): repo / "src/varnode.rs",
     pathlib.Path(heritage_doc_raw): repo / "docs/api/heritage.md",
     pathlib.Path(funcdata_doc_raw): repo / "docs/api/funcdata.md",
     pathlib.Path(fspec_doc_raw): repo / "docs/api/fspec.md",
@@ -266,9 +324,15 @@ def live_file(relative):
     return source.read_bytes()
 
 overlay_files = {
-    pathlib.Path("src/heritage.rs"),
-    pathlib.Path("src/funcdata.rs"),
+    pathlib.Path("src/coreaction.rs"),
+    pathlib.Path("src/flow.rs"),
     pathlib.Path("src/fspec.rs"),
+    pathlib.Path("src/funcdata.rs"),
+    pathlib.Path("src/heritage.rs"),
+    pathlib.Path("src/ruleaction.rs"),
+    pathlib.Path("src/signature.rs"),
+    pathlib.Path("src/unionresolve.rs"),
+    pathlib.Path("src/varnode.rs"),
 }
 crate_files = [
     pathlib.Path("Cargo.toml"),
@@ -281,7 +345,7 @@ crate_files = [
 ] + base_source_files("src") + base_source_files("sleigh_shim")
 crate_files = sorted(set(crate_files), key=lambda item: item.as_posix())
 crate_hasher = hashlib.sha256()
-crate_hasher.update(b"rugra-heritage-callguard-base-overlay-v1\0")
+crate_hasher.update(b"rugra-heritage-callguard-d0-overlay-v2\0")
 crate_hasher.update(rugra_base_commit.encode())
 crate_bytes = {}
 for relative in crate_files:
@@ -338,9 +402,15 @@ comparand = metadata["comparand"]
 observed_hashes = {
     "cpp_fixture_sha256": sha(special[special_paths[0].as_posix()]),
     "rust_fixture_sha256": sha(special[special_paths[1].as_posix()]),
-    "heritage_rs_sha256": sha(crate_bytes["src/heritage.rs"]),
-    "funcdata_rs_sha256": sha(crate_bytes["src/funcdata.rs"]),
+    "coreaction_rs_sha256": sha(crate_bytes["src/coreaction.rs"]),
+    "flow_rs_sha256": sha(crate_bytes["src/flow.rs"]),
     "fspec_rs_sha256": sha(crate_bytes["src/fspec.rs"]),
+    "funcdata_rs_sha256": sha(crate_bytes["src/funcdata.rs"]),
+    "heritage_rs_sha256": sha(crate_bytes["src/heritage.rs"]),
+    "ruleaction_rs_sha256": sha(crate_bytes["src/ruleaction.rs"]),
+    "signature_rs_sha256": sha(crate_bytes["src/signature.rs"]),
+    "unionresolve_rs_sha256": sha(crate_bytes["src/unionresolve.rs"]),
+    "varnode_rs_sha256": sha(crate_bytes["src/varnode.rs"]),
     "heritage_doc_sha256": sha(special[special_paths[3].as_posix()]),
     "funcdata_doc_sha256": sha(special[special_paths[4].as_posix()]),
     "fspec_doc_sha256": sha(special[special_paths[5].as_posix()]),
@@ -353,7 +423,7 @@ observed_hashes = {
 require(
     "crate snapshot scheme",
     comparand["rust_crate_tree_hash_scheme"],
-    "sha256 of rugra-heritage-callguard-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "sha256 of rugra-heritage-callguard-d0-overlay-v2 plus base commit and sorted length-prefixed paths and contents",
 )
 for key, actual in observed_hashes.items():
     require(key, actual, comparand[key])
@@ -447,6 +517,11 @@ require(
     metadata["build"]["registry_lock_closure_sha256"],
 )
 
+if validate_only_raw == "true":
+    raise SystemExit(0)
+if validate_only_raw != "false":
+    raise SystemExit(f"invalid validate-only flag: {validate_only_raw!r}")
+
 vendor_root = snapshot / "vendor"
 vendor_root.mkdir()
 for name, version, checksum in registry_packages:
@@ -525,6 +600,11 @@ cargo_home.mkdir()
 )
 PY
 
+if $validate_only; then
+  echo "heritage_callguard_1204 metadata/source lock validation passed"
+  exit 0
+fi
+
 snapshot_metadata="$snapshot_root/tests/oracle/heritage_callguard_1204.metadata.json"
 snapshot_cpp="$snapshot_root/tests/oracle/heritage_callguard_1204.cc"
 snapshot_rust="$snapshot_root/tests/oracle/heritage_callguard_1204.rs"
@@ -547,7 +627,7 @@ snapshot_decompiler="$snapshot_root/ghidra/Ghidra/Features/Decompiler/src/decomp
 /usr/bin/ln -s "$oracle_cpp" "$snapshot_decompiler/cpp"
 
 jobs=$(/usr/bin/getconf _NPROCESSORS_ONLN 2>/dev/null || /usr/bin/printf '1')
-if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C \
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$requested_tmpdir" \
   "$host_make_bin" --silent -C "$oracle_cpp" -j "$jobs" \
     CXX="$host_cxx_bin -std=c++11" CC="$host_cc_bin" AR="$host_ar_bin" \
     EXTRA= libdecomp.a >"$oracle_tmp/make.stdout" 2>"$oracle_tmp/make.stderr"; then
@@ -561,7 +641,7 @@ if [[ ! -f "$oracle_cpp/libdecomp.a" || -L "$oracle_cpp/libdecomp.a" ]]; then
 fi
 
 cpp_binary="$oracle_tmp/heritage_callguard_1204_cpp"
-if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C \
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$requested_tmpdir" \
   "$host_cxx_bin" -std=c++11 -O2 -Wall -Wno-sign-compare -m64 \
     -I"$oracle_cpp" "$snapshot_cpp" "$oracle_cpp/libdecomp.cc" \
     "$oracle_cpp/sleigh_arch.cc" "$oracle_cpp/inject_sleigh.cc" \
@@ -614,6 +694,7 @@ if ! (
   builtin cd "$snapshot_root"
   /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
     RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+    TMPDIR="$requested_tmpdir" \
     CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$fixture_target" \
     CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" \
     AR="$host_ar_bin" RUSTC="$host_rustc_bin" \
@@ -643,6 +724,7 @@ native_dir=$(/usr/bin/dirname "$native_archive")
 rust_binary="$oracle_tmp/heritage_callguard_1204_rust"
 if ! /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
   RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+  TMPDIR="$requested_tmpdir" \
   "$host_rustc_bin" --edition=2021 -O \
     -L "dependency=$fixture_target/debug/deps" -L "native=$native_dir" \
     --extern "rugra=$rugra_rlib" -l static=rugra_sleigh -l dylib=z \
@@ -774,16 +856,26 @@ require(
 for label, relative, key in (
     ("C++ fixture", "tests/oracle/heritage_callguard_1204.cc", "cpp_fixture_sha256"),
     ("Rust fixture", "tests/oracle/heritage_callguard_1204.rs", "rust_fixture_sha256"),
-    ("heritage implementation", "src/heritage.rs", "heritage_rs_sha256"),
-    ("funcdata implementation", "src/funcdata.rs", "funcdata_rs_sha256"),
+    ("coreaction implementation", "src/coreaction.rs", "coreaction_rs_sha256"),
+    ("flow implementation", "src/flow.rs", "flow_rs_sha256"),
     ("fspec implementation", "src/fspec.rs", "fspec_rs_sha256"),
+    ("funcdata implementation", "src/funcdata.rs", "funcdata_rs_sha256"),
+    ("heritage implementation", "src/heritage.rs", "heritage_rs_sha256"),
+    ("ruleaction implementation", "src/ruleaction.rs", "ruleaction_rs_sha256"),
+    ("signature implementation", "src/signature.rs", "signature_rs_sha256"),
+    ("unionresolve implementation", "src/unionresolve.rs", "unionresolve_rs_sha256"),
+    ("varnode implementation", "src/varnode.rs", "varnode_rs_sha256"),
     ("heritage API document", "docs/api/heritage.md", "heritage_doc_sha256"),
     ("funcdata API document", "docs/api/funcdata.md", "funcdata_doc_sha256"),
     ("fspec API document", "docs/api/fspec.md", "fspec_doc_sha256"),
 ):
     require(label, sha((repo / relative).read_bytes()), comparand[key])
 
-overlay_files = {"src/heritage.rs", "src/funcdata.rs", "src/fspec.rs"}
+overlay_files = {
+    "src/coreaction.rs", "src/flow.rs", "src/fspec.rs", "src/funcdata.rs",
+    "src/heritage.rs", "src/ruleaction.rs", "src/signature.rs",
+    "src/unionresolve.rs", "src/varnode.rs",
+}
 relative_files = [pathlib.Path(path) for path in (
     "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
     "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
@@ -798,7 +890,7 @@ for directory in ("src", "sleigh_shim"):
         pathlib.Path(item.decode()) for item in raw.split(b"\0") if item
     )
 hasher = hashlib.sha256()
-hasher.update(b"rugra-heritage-callguard-base-overlay-v1\0")
+hasher.update(b"rugra-heritage-callguard-d0-overlay-v2\0")
 hasher.update(rugra_base_commit.encode())
 for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
     if relative.as_posix() in overlay_files:

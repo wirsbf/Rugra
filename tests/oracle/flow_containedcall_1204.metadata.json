@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "fixture_id": "FLOW-CONTAINEDCALL-0001",
-  "status_note": "All eleven coverage projections across eleven probe functions match the locked Ghidra 12.0.4 oracle byte-for-byte (234 stdout lines), including the erase-successor-skip quirk and the retained unreachable block after conversion. The consumed-input chain (possible_unreachable set only by inlineSubFunction, consumed by generateBlocks->removeUnreachableBlocks) is out of scope for this lease and recorded under out_of_scope_observations.",
+  "status_note": "All eleven behavioral projections across eleven probe functions match the locked Ghidra 12.0.4 oracle byte-for-byte (234 stdout lines), including the erase-successor-skip quirk and the retained unreachable block after conversion. Overall remains MISMATCH because the observation deliberately maps Ghidra's IPTR_FSPEC annotation and Rugra's Iop annotation to one callspec token. Rugra's direct-call entry address is only a legacy PrintC compatibility shadow, an invalid entry falls back to a pointer diagnostic, and neither numeric payload is identity; only the typed non-owning Weak carries identity. This fixture therefore does not prove exact callspec identity, numeric-codec equivalence, or address-space/type semantics (TYPEOP-FSPEC-SPACE-0001). Replay identity is the exact ordered bytes, sizes, boundaries, and relative layout of all thirteen containedcall_* symbols under an explicit -fcf-protection=branch flag; the historical whole-linked-.text hash included unrelated Ghidra/CRT code and is retained only as provenance. The consumed-input chain (possible_unreachable set only by inlineSubFunction, consumed by generateBlocks->removeUnreachableBlocks) is out of scope for this lease and recorded under out_of_scope_observations.",
   "decisive_semantics": {
     "reference_output_parameters": "qlst is Funcdata-owned and passed by reference into FlowInfo (Rugra: fd.callspecs); visited is read-only; data.warningHeader/warning write shared commentdb state; opSetOpcode/opMarkStartBasic/opSetInput/newCodeRef mutate shared PcodeOps and their input varnodes - all observed through spec lists, warning comments, op opcode/flag/input projections and the block graph.",
     "loop_bounds_traversal_order": "for(iter=qlst.begin();iter!=qlst.end();++iter) over spec creation order; visited.upper_bound(addr) then one decrement equals BTreeMap range(..=addr).next_back(); the dead-list ++oiter successor lookup walks the SeqNum-ordered bank; after erase the for-header ++iter skips the erased spec's successor (locked by case multi).",
@@ -24,14 +24,14 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "d73ee600c6fe5ec5e83bae43b7f47df16e33cd71",
-    "base_tree": "23e3f85243764b808fef5b236379c75ff7a9ecf2",
-    "base_src_tree": "528279b08e9a0bdda6b272cc02a42d4812603c4b",
-    "base_flow_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
-    "base_pcodeinject_blob": "329b4ea7f77f51f19f148536ee53449f02ecca2c",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+    "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+    "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+    "base_blobs": {
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+    },
     "archive_paths": [
       "Cargo.toml",
       "Cargo.lock",
@@ -43,19 +43,22 @@
       "src",
       "sleigh_shim"
     ],
-    "overlays": [
-      {
-        "path": "src/flow.rs",
-        "sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
-        "policy": "Live overlay; hash-verify before replacing the pinned base flow.rs"
-      },
-      {
-        "path": "src/pcodeinject.rs",
-        "sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
-        "policy": "Live overlay; hash-verify before replacing the pinned base pcodeinject.rs. Added at FLOW-FIXTURE-API-ADAPT-0001: the injectwire integration changed flow.rs and pcodeinject.rs as a coherent pair, and a flow.rs-only overlay over a pre-injectwire base produced 6 snapshot lib build errors (InjectPayload::inject missing, PcodeOpRaw unsized, InjectContext tuple-vs-VarnodeRaw)."
-      }
-    ],
-    "archive_policy": "Immutable explicit dependency closure plus two verified overlays (flow.rs, pcodeinject.rs); unrelated worktree files are excluded"
+    "overlays": {
+      "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+      "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+      "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+      "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+      "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+      "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+      "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+      "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+      "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
+    },
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the identity-checked locked oracle checkout"
+    },
+    "archive_policy": "The runner archives the exact 92daed3 dependency closure, then hash-verifies and applies all nine source files in the D0 callspec identity change as one coherent overlay set; unrelated live files are excluded."
   },
   "architecture": "x86:LE:64:default",
   "compiler_spec": {
@@ -74,14 +77,14 @@
       "FuncCallSpecs::getOp/getEntryAddress/getFuncdata"
     ],
     "funcdata": "Eleven BfdArchitecture shells, one per probe, over the fixture-binary .text compiled from the probes in this fixture's .cc (g++ -O0 -fno-pie -no-pie); each shell follows flow from the probe symbol over the full default code space",
-    "probe_construction": "naked noinline C functions; every probe body is pure asm so the emitted bytes are exactly the designed instruction stream; endbr64 (4 bytes, -fcf-protection) precedes each body, shifting deltas by +4 on both sides identically",
+    "probe_construction": "naked noinline C functions; every probe body is pure asm so the emitted bytes are exactly the designed instruction stream; the runner explicitly passes -fcf-protection=branch so endbr64 (4 bytes) precedes each body on every host, shifting deltas by +4 on both sides identically",
     "sleigh_spec_rule": "the shared x86-64 .sla compiles CALL with zero displacement (target == next instruction) to goto (ia.sinc:2953 'When is a Call a Jump' rule), so getpc/mid never create a call spec; every checkContainedCall-exercising probe uses non-zero displacement internal targets",
     "case_matrix": "exact visited-start hit forward and backward, offcut mid-instruction target, target beyond last visited instruction end, target below every visited key, CALLIND opcode guard, callee-Funcdata resolved external symbol, two-call erase-successor skip",
     "random_seed": "none",
     "error_injection": "none; all guards are structural",
     "debug_macros": "__TERMINAL__ only; OPACTION_DEBUG, CPUI_DEBUG and TYPEPROP_DEBUG absent",
     "diagnostics": "BfdArchitecture initialization diagnostics captured privately into an ostringstream and excluded from the target API observation; both sides' stderr is required empty",
-    "normalization": "Three projections normalize proven non-semantic encodings identically on both sides: (1) the PIC warning's embedded call address is printed via Address::printRaw (ram:000...) on Ghidra and 0x-hex Display on Rugra's legacy spaceless Address (ADDRESS-0001) - both sides parse it back to a base-relative delta; (2) the call-spec annotation varnode lives in Ghidra's Fspec space (offset = heap pointer) and Rugra's Iop space (offset = spec index) - projected to the single token 'callspec'; (3) LOAD/STORE input(0) space-reference constants are heap pointers on Ghidra (run-varying) and stable SPACEID_* indices on Rugra - projected to the referenced space name. No op order, aliasing, control flow or state is dropped."
+    "normalization": "Three projections normalize proven non-semantic encodings identically on both sides: (1) the PIC warning's embedded call address is printed via Address::printRaw (ram:000...) on Ghidra and 0x-hex Display on Rugra's legacy spaceless Address (ADDRESS-0001) - both sides parse it back to a base-relative delta; (2) the call-spec annotation varnode lives in Ghidra's Fspec space (offset = heap pointer), while Rugra's Iop annotation carries a typed, non-owning Weak handle to the Funcdata-owned Arc. A direct-call entry address is retained only as a legacy PrintC compatibility shadow and an invalid entry falls back to a pointer diagnostic; neither numeric payload is identity. Both spaces are projected to the single token 'callspec'. This fixture proves only that space/encoding projection, not callspec identity, and never treats the numeric Iop payload as identity evidence; the space and numeric codec both remain MISMATCH under TYPEOP-FSPEC-SPACE-0001. (3) LOAD/STORE input(0) space-reference constants are heap pointers on Ghidra (run-varying) and stable SPACEID_* indices on Rugra - projected to the referenced space name. No op order, aliasing, control flow or state is dropped."
   },
   "assets": {
     "sla": {
@@ -114,15 +117,16 @@
     },
     "bfd": {
       "package_version": "2.38-4ubuntu2.12",
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "capture_header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
       "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+      "capture_library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+      "replay_resolution_policy": "Resolve RUGRA_BFD_INCLUDE/RUGRA_BFD_LIBRARY or the known /tmp and system candidates by the locked hashes; add the selected library directory to LD_LIBRARY_PATH before executing the oracle. Paths are not identity."
     }
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,probes,cases}, sort_keys=True, separators=(',',':'))",
-    "sha256": "0ba6ce1ae5601f9e59b6b3af250d8a6a9cae7dbedd498572b521fcdfc4736631",
+    "sha256": "aee9930088fbba58ddcad0198a1f757bb4931049dfbcffb00daa13b1a29f1fe7",
     "probes": [
       "containedcall_getpc",
       "containedcall_mid",
@@ -221,10 +225,34 @@
       "containedcall_extern"
     ]
   },
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "machine_input_sha256": {
-    "fixture_text": "6ae5db85e351c594b8787bf6a0842df89075313200746457ccdb5f104d6703c5"
+  "capture_toolchain": {
+    "gxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)"
+  },
+  "replay_toolchain_policy": "The host compiler version may differ, but -fcf-protection=branch is mandatory and the exact ordered bytes, sizes, boundaries, and relative layout of all thirteen containedcall_* symbols must match machine_input.records.",
+  "machine_input": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps(records, sort_keys=True, separators=(',',':'), ensure_ascii=False), where records are all and only the thirteen containedcall_* ELF symbols in increasing address order and each record is {name,relative_address,size,bytes_hex}; relative_address is measured from containedcall_getpc and adjacent symbol boundaries must be contiguous.",
+    "sha256": "12139d9e4635b3c1e9ff4e2c8a542423b9756c1875a1d0621a2c114eb8b1d4d1",
+    "records": [
+      {"name": "containedcall_getpc", "relative_address": 0, "size": 14, "bytes_hex": "f30f1efae80000000058c3900f0b"},
+      {"name": "containedcall_mid", "relative_address": 14, "size": 16, "bytes_hex": "f30f1efa90e8000000009090c3900f0b"},
+      {"name": "containedcall_fwd", "relative_address": 30, "size": 22, "bytes_hex": "f30f1efa85ff7409e8040000009090909090c3900f0b"},
+      {"name": "containedcall_offcut", "relative_address": 52, "size": 21, "bytes_hex": "f30f1efa85ff7406e802000000c38b4000c3900f0b"},
+      {"name": "containedcall_beyond", "relative_address": 73, "size": 21, "bytes_hex": "f30f1efa85ff7406e804000000c3c21000c3900f0b"},
+      {"name": "containedcall_multi", "relative_address": 94, "size": 20, "bytes_hex": "f30f1efae806000000e8010000009090c3900f0b"},
+      {"name": "containedcall_back", "relative_address": 114, "size": 21, "bytes_hex": "f30f1efa85ff7402eb025bc3e8f9ffffffc3900f0b"},
+      {"name": "containedcall_afterc", "relative_address": 135, "size": 25, "bytes_hex": "f30f1efa85ff7402eb0259c3e8f9ffffff85f674f5c3900f0b"},
+      {"name": "containedcall_pad", "relative_address": 160, "size": 39, "bytes_hex": "f30f1efacccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc900f0b"},
+      {"name": "containedcall_before", "relative_address": 199, "size": 13, "bytes_hex": "f30f1efae8ebffffffc3900f0b"},
+      {"name": "containedcall_callind", "relative_address": 212, "size": 10, "bytes_hex": "f30f1efaffd0c3900f0b"},
+      {"name": "containedcall_helper", "relative_address": 222, "size": 8, "bytes_hex": "f30f1efac3900f0b"},
+      {"name": "containedcall_extern", "relative_address": 230, "size": 13, "bytes_hex": "f30f1efae8efffffffc3900f0b"}
+    ],
+    "legacy_whole_linked_text": {
+      "sha256": "6ae5db85e351c594b8787bf6a0842df89075313200746457ccdb5f104d6703c5",
+      "status": "HISTORICAL_NON_REPRODUCIBLE",
+      "note": "Historical hash of the Ubuntu 11.4-linked executable's entire .text, including unrelated Ghidra engine and CRT code. It is retained for provenance only and is not a fixture-identity comparand."
+    }
   },
   "expected_results": {
     "ghidra_stdout_sha256": "929de3dcdc478e164b0681c4c6908340058a896e1b6855bbdb354cf101f4b198",
@@ -291,11 +319,16 @@
       "status": "MATCH",
       "covers": "all cases: checkContainedCall executes on the first do-while pass even with zero BRANCHIND ops (flow.cc:813), matching the Ghidra do-while shape; conversions are observable in the same run as the flow trace.",
       "residual_todo_ids": []
+    },
+    "callspec_space_representation": {
+      "status": "MISMATCH",
+      "covers": "The output projection intentionally maps Ghidra IPTR_FSPEC and Rugra Iop annotations to one callspec token. Rugra's typed non-owning Weak is the sole identity carrier; its direct-call entry compatibility shadow and invalid-entry pointer diagnostic are not identity. The projection proves neither exact FuncCallSpecs/PcodeOp identity nor numeric-codec equivalence, and it does not establish equivalent address-space/type semantics; both space and numeric codec remain MISMATCH.",
+      "residual_todo_ids": ["TYPEOP-FSPEC-SPACE-0001"]
     }
   },
   "projection_status": "MATCH",
-  "overall_status": "MATCH",
-  "residual_todo_ids": [],
+  "overall_status": "MISMATCH",
+  "residual_todo_ids": ["TYPEOP-FSPEC-SPACE-0001"],
   "out_of_scope_observations": [
     {
       "id": "FLOW-CONTAINEDCALL-CONSUME-0001",
@@ -316,9 +349,7 @@
   ],
   "comparand": {
     "cpp_fixture_sha256": "111c16cf805d82895096724a0845590a9bbbcaafa8a74561539bee5b697268ed",
-    "rust_fixture_sha256": "0a3963900480074f333a7bc1bc732039ae2a387ea1027ce7aafcc5a734d51f39",
-    "flow_overlay_sha256": "da5d7551087db264c5e70269ff53e273bdc9ac528f9552ad425eaf94554af9c4",
-    "pcodeinject_overlay_sha256": "b0778d640ffd374b9dd07de138f575b542aed49b5f17c9f4ec1f53ef01716a8f",
-    "runner_sha256": "35e7e5e9e80f9b3023b4b39120ffeb2cb2a093158cca2c0fbef1af8c16fa9c0d"
+    "rust_fixture_sha256": "3df55dd3613b19d956a380d6306b6f6ca533a0b7af1d95f14f78dc82e558b092",
+    "runner_sha256": "074657f82a976d8084256d84009fe3408bd7d344416ccc09f718e86c449ff162"
   }
 }

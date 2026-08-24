@@ -946,3 +946,22 @@ trial 大小、注册时机、callspec 遍历顺序与既有分支均未改变�
 （对应 heritage.cc:2676-2677 增广支配树重建），调用点为
 `Funcdata::structure_reset` 尾部（funcdata_block.cc:730）。对齐证据：
 block_domroot_1204 权威 runner MATCH + 机制 C 复核 APPROVE（2026-08-19）。
+
+## CALLSPEC-IDENTITY-D0 guard/placeholder owner 接线（2026-08-24）
+
+- callspec 现由 `Arc<RwLock<FuncCallSpecs>>` 稳定拥有；active-input/output trial
+  查询在 read guard 内产生布尔快照，注册则使用独立 write guard，不把内部引用
+  带出锁域，也不改变既有 callspec 顺序、trial 大小或注册时机。
+- `clear_stack_placeholders` 克隆的是 owner `Arc` 列表，而不是把 qlst 按值
+  `take` 出再放回。每个 callspec 通过自身的 exact op `Weak` 找 CALL/CALLIND，
+  随后在同一 owner 上执行 `abort_spacebase_relative`；相同指令地址的两个 op
+  不会互相冒充，且操作期间 qlst/annotation 的身份保持稳定。
+- 这是 D0 所有权适配，不批准 Heritage 其余分支。总体仍为 `MISMATCH`：
+  `AddressSpace::Iop` 暂代专用 `IPTR_FSPEC`
+  （`TYPEOP-FSPEC-SPACE-0001`），TypeOp getter、PrintC、StringManager 与既有
+  heritage/callspec 残差均未接通，模块状态不提升。
+- `call_op_indirect_effect` 仍未消费已经可用的 exact owner 与
+  `has_effect_translate`：CALL/CALLIND 继续保守返回 true，CALLOTHER/NEW 也尚未
+  恢复 oracle 的 false 分支。源码审计已确认该缺口，但没有同输入双侧 fixture，
+  所以证据状态为 `UNTESTED`，绑定 `CALLSPEC-0001`；本 D0 不把它虚升为行为
+  `MATCH`，也不在 identity/lifecycle 租约内扩写 Heritage 算法。

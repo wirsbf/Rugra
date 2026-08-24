@@ -1,0 +1,288 @@
+{
+  "schema_version": 2,
+  "fixture_id": "CALLSPEC-IDENTITY-LIFECYCLE-D0-0001",
+  "status_note": "The controlled identity projection is byte-for-byte MATCH against locked Ghidra 12.0.4: same-machine-address CALLs resolve by exact PcodeOp/FuncCallSpecs identity; qlst sorting preserves owner identity and annotation binding; successful exact deletion removes only the selected owner and does not redirect a shifted survivor; an ordinary constant with the same numeric payload as a live typed annotation but no typed handle is rejected; both live and expired typed FSPEC annotations are rejected by the IOP-to-PcodeOp decoder; and truncatedFlow creates a new owner/op/annotation identity while resetting active parameter state. The absent-target deletion branch is not part of that MATCH: it remains UNTESTED under CALLSPEC-0001, while source audit records Ghidra's LowlevelError versus Rust's panic. Rugra's direct-call entry address is only a legacy PrintC compatibility shadow, while an invalid entry falls back to a pointer diagnostic; neither numeric payload is identity, which comes only from the typed non-owning Weak. Overall status remains MISMATCH because Rugra still uses AddressSpace::Iop rather than Ghidra's dedicated IPTR_FSPEC/FspecSpace and its space and numeric codec both differ (TYPEOP-FSPEC-SPACE-0001); the pre-existing raw-Arc Iop decoder lifecycle remains OPBANK-0001/UNTESTED; StackSolver's initial-input error/warning channel remains PIPE-STALL-SHAPE-0001/UNTESTED; and this D0 fixture intentionally does not claim the complete unmodelled FuncCallSpecs field surface.",
+  "decisive_semantics": {
+    "reference_output_parameters": "Funcdata qlst is the authoritative persistent lifetime owner in the observed model; transient Arc handles may exist while an operation is in progress. Ghidra stores raw FuncCallSpecs pointers and raw reverse links; Rugra stores Arc owners and Weak reverse links. Every lookup, sort, delete, and clone observation checks exact allocation identity without substituting call address or vector index. After C++ deletion the stale FSPEC value is compared only with live qlst owners and is never dereferenced; the corresponding Rust Weak must fail to upgrade once transient handles are released.",
+    "loop_bounds_traversal_order": "getCallSpecs fallback and delete scan qlst from begin to end; sort consumes the complete three-entry qlst; truncatedFlow visits source qlst from index 0 through size and appends one new target owner. The fixture fixes initial qlst order [2,1,0], sorted order [0,1,2], and post-delete order [0,2].",
+    "counter_accumulator_lifecycle": "The identity CALLs receive bank-wide SeqNum times 0,1,2. Per-block insertion assigns orders 8388610 and 16777218 in block 0 and resets to 8388610 in block 1. Deletion decrements only qlst ownership count from 3 to 2. The clone source has three raw ops, one callspec, and one active input/output trial; the target gets one new callspec and resets both active containers to zero trials.",
+    "sorting_comparison_keys": "Funcdata::compareCallspecs compares exactly parent block index first and SeqNum.order second. The locked keys are [0:8388610,0:16777218,1:8388610]. No machine address, SeqNum time, qlst index, allocation address, or extra tie-break participates."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/fspec.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/fspec.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/flow.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/op.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/varnode.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/varnode.hh"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+    "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+    "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [
+      {
+        "path": "src/coreaction.rs",
+        "sha256": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/flow.rs",
+        "sha256": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/fspec.rs",
+        "sha256": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/funcdata.rs",
+        "sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/heritage.rs",
+        "sha256": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/ruleaction.rs",
+        "sha256": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/signature.rs",
+        "sha256": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/subflow.rs",
+        "sha256": "bc826b803c954935fd1a7d1565781659929ec2da302a3c1de2c84d35e4a055c9",
+        "policy": "Hash-verified live D0 consumer-residual annotation overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/unionresolve.rs",
+        "sha256": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/varnode.rs",
+        "sha256": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9",
+        "policy": "Hash-verified live D0 migration overlay copied onto the immutable base snapshot."
+      }
+    ],
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
+      "purpose": "build.rs C++ shim header discovery; the executable oracle is still built from the separately archived locked commit"
+    },
+    "archive_policy": "Immutable explicit base dependency closure plus ten hash-verified D0 source overlays and one checked ghidra_root build symlink; unrelated worktree and central-document changes are excluded."
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "apis": [
+      "Funcdata::getCallSpecs(const PcodeOp *) (funcdata.cc:484-497)",
+      "Funcdata::compareCallspecs/sortCallSpecs (funcdata.cc:504-520)",
+      "Funcdata::deleteCallSpecs (funcdata.cc:524-537)",
+      "Funcdata::newVarnodeCallSpecs (funcdata_varnode.cc:205-214)",
+      "FuncCallSpecs constructor/clone (fspec.cc:4924-4977)",
+      "Funcdata::truncatedFlow callspec leg (funcdata_op.cc:792-815)",
+      "FlowInfo::setupCallSpecs/setupCallindSpecs construction order (flow.cc:680-723)"
+    ],
+    "construction": "Direct synthetic p-code construction inside four noinline ELF functions; no instruction decode or Actions. Three direct CALLs share exactly one machine Address while holding distinct PcodeOp times and FuncCallSpecs objects. Two calls are inserted into block index 0 and one into block index 1. A separate three-op partial-flow source drives the callspec clone/rebind leg.",
+    "projection": "Allocation addresses are never printed. Identity is reduced to stable fixture labels, exact pointer/Arc equality, qlst owner membership, Weak upgrade state, and exact SeqNum equality. Ghidra's stale post-delete FSPEC value is never dereferenced.",
+    "random_seed": null
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "87aaef2262c85f4e6ffba488881fa4c1c8c2930f",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "bfd": {
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "input_manifest": {
+    "construction": {
+      "same_machine_address_call_count": 3,
+      "call_seqnum_times": [0, 1, 2],
+      "initial_qlst_labels": [2, 1, 0],
+      "sort_block_indices": [0, 0, 1],
+      "sort_seqnum_orders": [8388610, 16777218, 8388610],
+      "sorted_qlst_labels": [0, 1, 2],
+      "deleted_label": 1,
+      "post_delete_labels": [0, 2],
+      "raw_constant_uses_live_annotation_numeric_payload": true,
+      "real_iop_round_trip_exact": true,
+      "typed_fspec_iop_decoder_rejected": true,
+      "expired_typed_binding_persists": true,
+      "expired_typed_owner_live": false,
+      "expired_typed_fspec_iop_decoder_rejected": true,
+      "clone_source_raw_op_count": 3,
+      "clone_source_active_trials": [1, 1],
+      "clone_target_active_trials": [0, 0]
+    },
+    "cases": [
+      "same_address_exact_identity",
+      "dominance_sort_owner_stability",
+      "raw_constant_same_bits_rejected",
+      "real_iop_exact_and_typed_fspec_rejected_by_iop_decoder",
+      "expired_typed_fspec_rejected_by_iop_decoder",
+      "exact_delete_and_shifted_survivor",
+      "truncated_clone_rebind_and_active_reset"
+    ],
+    "sha256": "d46ebea4c04cfcccac46bad04242822d65dc3f0e76891eeda62237a8bf3955e9"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "9c505d0e4c53713136840a85f0ead30460d8e7b19a53836deefc8a010e7b7d48",
+    "rust_fixture_sha256": "6d21a9476febb8e660937761d638a1dd835b17799ef7d35c45d373202beef219",
+    "runner_sha256": "126a92f9e361ea11bcbe8b2145b7b6b975d7c0cce14f8398e94c1b3e7a0504cc"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "6137a39596af3e03a658d92519fb037d5f1db660dcee50a476653cb2dccf1ac8",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "6137a39596af3e03a658d92519fb037d5f1db660dcee50a476653cb2dccf1ac8",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "machine_input_sha256": {
+    "fixture_text": "624680bcc29bdd09b66004583421ae234810c2ea47264dd4d4299edc0f986888"
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "coverage": {
+    "same_machine_address_exact_identity": {
+      "status": "MATCH",
+      "covers": "funcdata.cc:484-497: three CALLs with one machine Address resolve to their exact distinct callspec through the typed FSPEC annotation; exact PcodeOp fallback remains the only non-FSPEC path.",
+      "residual_todo_ids": []
+    },
+    "stable_owner_dominance_sort": {
+      "status": "MATCH",
+      "covers": "funcdata.cc:504-520: qlst changes from [2,1,0] to [0,1,2] using only (parent index, SeqNum.order), while every owner and annotation retains exact identity.",
+      "residual_todo_ids": []
+    },
+    "exact_delete_weak_lifecycle": {
+      "status": "MATCH",
+      "covers": "funcdata.cc:524-537: deleting call 1 produces [0,2], the removed annotation has no live qlst owner (and Rugra's Weak expires), while the shifted call 2 owner and exact lookup remain unchanged.",
+      "residual_todo_ids": []
+    },
+    "delete_absent_failure_channel": {
+      "status": "UNTESTED",
+      "covers": "FlowInfo::deleteCallSpec absent-target behavior is not exercised by this fixture. Source audit shows Ghidra raises LowlevelError while Rust currently panics; successful-delete identity remains MATCH, but this failure channel is neither covered nor equivalent.",
+      "residual_todo_ids": ["CALLSPEC-0001"]
+    },
+    "raw_constant_same_bits_rejection": {
+      "status": "MATCH",
+      "covers": "funcdata.cc:484-497: a normal constant whose numeric payload equals the live typed annotation payload has no typed handle, is not IPTR_FSPEC, and does not match the distinct fake PcodeOp in the fallback scan.",
+      "residual_todo_ids": []
+    },
+    "typed_fspec_iop_decoder_guard": {
+      "status": "MATCH",
+      "covers": "op.hh:249 under the oracle IPTR_IOP space guard: a genuine Iop annotation round-trips to the exact live PcodeOp, while Ghidra's IPTR_FSPEC annotation never enters PcodeOp::getOpFromConst. After owner deletion, both fixtures observe that the annotation remains typed/bound while no owner is live; Rugra additionally proves its Weak field stays Some while upgrade returns None. The shared temporary Iop representation rejects that expired binding before numeric decoding. This MATCH is only the kind guard and valid round-trip, not arbitrary numeric input safety.",
+      "residual_todo_ids": []
+    },
+    "plain_iop_raw_arc_lifecycle": {
+      "status": "UNTESTED",
+      "covers": "The existing plain-Iop decoder reconstructs Arc from the numeric pointer to mirror Ghidra's raw PcodeOp pointer codec. D0 also rejects numeric zero before Arc reconstruction, corresponding to Ghidra's null pointer, but that branch is not executed bilaterally here. Zero/null, other invalid or foreign values, and prematurely released raw values remain UNTESTED; the wider Rust ownership/soundness gap stays OPBANK-0001.",
+      "residual_todo_ids": ["OPBANK-0001"]
+    },
+    "truncated_clone_identity_and_active_reset": {
+      "status": "MATCH",
+      "covers": "funcdata_op.cc:803-815 and fspec.cc:4964-4977: the clone receives a new callspec, new exact op and new annotation, preserves SeqNum/entry/stackoffset, leaves source links untouched, and skips active input/output state and their trials.",
+      "residual_todo_ids": []
+    },
+    "consumer_closure_identity_unlocked_behavior_unwired": {
+      "status": "UNTESTED",
+      "covers": "D0 unlocks exact owner lookup but does not execute or prove the upper consumers: FlowInfo::truncateIndirectJump/xrefInlinedBranch callspec-setup consumers; SubvariableFlow::tryCallPull/tryCallReturnPush guards, patches, and their legacy observable diagnostics; Heritage::callOpIndirectEffect effect dispatch; StackSolver/analyzeExtraPop's initial-input LowlevelError/warning channel plus effective-extrapop read/writeback; RuleLoadVarnode's resolveSpacebaseRelative tail; Funcdata::checkCallDoubleUse per-input trial and alternate-path logic; or the legacy FuncCallSpecs::deindirect owner/rebind hook. Source audit confirms their old 'lookup unavailable' premise is obsolete; behavior remains outside this identity/lifecycle fixture and is not promoted to MATCH.",
+      "residual_todo_ids": ["CALLSPEC-0001", "PIPE-STALL-SHAPE-0001"]
+    },
+    "dedicated_fspec_space_and_typeop_getter": {
+      "status": "MISMATCH",
+      "covers": "Ghidra uses IPTR_FSPEC/FspecSpace and FuncCallSpecs::getFspecFromConst. D0 intentionally retains AddressSpace::Iop plus a typed non-owning Weak; direct-call entry addresses are only a legacy PrintC compatibility shadow and invalid entries use a pointer diagnostic fallback, so neither numeric payload is identity. The dedicated space, numeric codec, TypeOp getter, PrintC callspec decoding, and StringManager remain unwired or mismatched.",
+      "residual_todo_ids": ["TYPEOP-FSPEC-SPACE-0001"]
+    },
+    "complete_callspec_field_surface": {
+      "status": "MISMATCH",
+      "covers": "The identity slice observes entry address, stackoffset, active flags and trial reset. Remaining unmodelled FuncCallSpecs fields and unrelated call-analysis branches are outside this D0 fixture.",
+      "residual_todo_ids": ["CALLSPEC-0001"]
+    }
+  },
+  "residual_todo_ids": [
+    "TYPEOP-FSPEC-SPACE-0001",
+    "CALLSPEC-0001",
+    "OPBANK-0001",
+    "PIPE-STALL-SHAPE-0001"
+  ],
+  "out_of_scope_observations": [
+    {
+      "id": "D0-NO-CONSUMER-WIRING",
+      "note": "This fixture does not exercise or prove TypeOp getter, PrintC, StringManager, prototype override, FlowInfo truncate/xref callspec setup, injection, SubvariableFlow call pull/push, Heritage indirect-effect dispatch, StackSolver initial-input error/warning or effective-extrapop writeback, RuleLoadVarnode spacebase resolution, or deindirect consumer behavior. Production consumers are migrated only far enough to preserve exact callspec identity; their remaining callspec behavior stays UNTESTED under CALLSPEC-0001, while the StackSolver error channel is PIPE-STALL-SHAPE-0001/UNTESTED; none is promoted by this fixture."
+    },
+    {
+      "id": "DELETE-DANGLING-FSPEC-PROJECTION",
+      "note": "Ghidra deleteCallSpecs frees the raw callspec but does not rewrite the CALL input in isolation. The fixture tests live qlst membership without dereferencing that stale value; production removes the associated CALL as part of the enclosing lifecycle."
+    }
+  ]
+}

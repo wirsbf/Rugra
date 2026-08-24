@@ -147,3 +147,18 @@ inheritance).
   skeleton (which had an incorrect `[u32; 2]` hashword and a non-existent
   `SignatureDB` class) with a 2302-line port covering every Ghidra type and
   function in scope.
+
+## 2026-08-24: CALLSPEC-IDENTITY-D0 guard adaptation
+
+`simple_signature` still emits call-target addresses in qlst order, but
+`Funcdata::get_call_specs` now returns an `RwLockReadGuard`. The implementation
+copies the `Option<Address>` while that guard is live and releases it before
+encoding, instead of returning a reference into a callspec that is owned by an
+`Arc<RwLock<_>>`. This is a borrow/lifecycle adaptation only: encoding order and
+address filtering are unchanged.
+
+Signature status is not promoted. D0 remains `MISMATCH` because Rugra's typed
+handle is still carried in temporary `AddressSpace::Iop`, not dedicated
+`IPTR_FSPEC` (`TYPEOP-FSPEC-SPACE-0001`), and this phase intentionally does not
+wire TypeOp getter, PrintC, StringManager, or close other callspec/signature
+residuals.

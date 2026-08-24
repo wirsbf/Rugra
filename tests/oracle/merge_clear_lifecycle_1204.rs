@@ -24,8 +24,8 @@ use std::sync::{Arc, RwLock};
 
 use rugra::address::Address;
 use rugra::block::{BlockBasic, FlowBlock};
-use rugra::funcdata::{Funcdata, LanedStorage, funcdata_flags};
 use rugra::fspec::{FuncCallSpecs, FuncProto, ParamActive};
+use rugra::funcdata::{funcdata_flags, Funcdata, LanedStorage};
 use rugra::jumptable::{JumpBasicOverride, JumpTable};
 use rugra::opcodes::OpCode;
 use rugra::space::AddressSpace;
@@ -46,7 +46,11 @@ fn bit_str(name: &str, value: bool) -> String {
     format!("{}:{}", name, if value { 1 } else { 0 })
 }
 
-fn make_block(fd: &mut Funcdata, index: i32, base: u64) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+fn make_block(
+    fd: &mut Funcdata,
+    index: i32,
+    base: u64,
+) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
     let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
         Arc::new(RwLock::new(BlockBasic::new(index, Address::new(base))));
     fd.bblocks.add_block(block.clone());
@@ -92,8 +96,8 @@ fn main() {
     let cdead = fd.new_constant(8, 0xdeadbeef);
     fd.op_insert_input(&callop, cdead, 0);
     fd.op_insert_end(&callop, &b1);
-    let spec = FuncCallSpecs::new(Address::new(0x7002), FuncProto::new(String::new(), ct4.clone()));
-    fd.callspecs.push(spec);
+    let spec = FuncCallSpecs::new_for_op(&callop, FuncProto::new(String::new(), ct4.clone()));
+    fd.add_call_specs(spec);
 
     fd.set_high_level();
 
@@ -101,8 +105,11 @@ fn main() {
     // (testcache: the C++ side populates via production
     // HighIntersectTest::intersection which caches BOTH HighEdge directions)
     fd.merge_state.fixture_deposit_test_cache(2);
-    fd.merge_state
-        .fixture_deposit_channels(vec![op1.clone()], vec![op2.clone()], vec![callop.clone()]);
+    fd.merge_state.fixture_deposit_channels(
+        vec![op1.clone()],
+        vec![op2.clone()],
+        vec![callop.clone()],
+    );
 
     // --- jump tables: one override (kept) + one plain (dropped)
     let jt1 = Arc::new(RwLock::new(JumpTable::new(Address::new(0x7100))));
@@ -152,8 +159,7 @@ fn main() {
     fd.active_output = Some(ParamActive::new(false));
     fd.funcp.return_bytes_consumed = 7;
     let edge = ResolveEdge::new(&ct4, &op1.0.read().unwrap(), 0);
-    fd.union_map
-        .insert(edge, ResolvedUnion::new(ct4.clone()));
+    fd.union_map.insert(edge, ResolvedUnion::new(ct4.clone()));
     fd.heritage.pass = 3;
     fd.heritage.maxdepth = 5;
 

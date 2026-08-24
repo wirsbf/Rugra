@@ -52,7 +52,8 @@
 - `Varnode::isPtrFlow()` — 缺失，RuleSubvarSubpiece/Zext 保守 default false
 - `Varnode::isZeroExtended(size)` — 缺失，INT_DIV/INT_REM 用 getNZMask 近似
 - `Funcdata::opSetAllInput` — 缺失，extension_patch 用逐槽 op_set_input+op_remove_input 模拟
-- `FuncCallSpecs` per-op 查询 — 缺失，CALL trim/push 推迟
+- `FuncCallSpecs` per-op exact lookup — 已具备；CALL trim/push 的 active/locked/
+  varargs guards 与 patch/addPush consumer 尚未接，`CALLSPEC-0001`/`UNTESTED`
 - `RulePtrFlow`(5624, ruleaction.cc:9177) — 未移植（重：trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch 构造）
 
 ## 测试
@@ -189,3 +190,13 @@ zext/indirect/restricted-window/typelock 分支；NO_ORACLE：subflow.cc:3942
   即崩）；`create_replacement` constant_iop 臂 `None` 时按 `newVarnodeIop(NULL)`
   语义（funcdata_varnode.cc:176-184）直接物化 offset 0 的 iop 空间注记
   varnode。非零 offset 的解码路径逐字节不变。
+
+## 2026-08-24：CALLSPEC-IDENTITY-D0 consumer residual
+
+`Funcdata::get_call_specs_of_op` 已提供 typed annotation + exact PcodeOp identity
+lookup，因此旧文案“per-op callspec lookup 不存在”不再成立。这个 D0 只交付
+identity/lifecycle：`try_call_pull` 仍未执行 oracle 的 input-active/
+input-locked/varargs guards 与 `ParameterPatch`，`try_call_return_push` 也仍未执行
+output-locked/output-active guards 与 `addPush`。两者继续保守返回 false；源码审计
+确认它们尚未等价，但没有同输入双侧 fixture，证据状态为 `UNTESTED`，统一绑定
+已登记的 `CALLSPEC-0001`，不计入 D0 的 identity `MATCH` 投影。

@@ -64,8 +64,10 @@
 //!   - `Funcdata::op_set_all_input` is not present; the `doReplacement`
 //!     extension_patch case that calls it is emulated with per-slot
 //!     `op_set_input` + `op_remove_input`.
-//!   - Per-op `FuncCallSpecs` lookup (`fd->getCallSpecs(op)`) is not available;
-//!     `try_call_pull`/`try_call_return_push` conservatively skip and log it.
+//!   - Per-op `FuncCallSpecs` identity lookup now exists through
+//!     `Funcdata::get_call_specs_of_op`, but this identity-only D0 does not wire
+//!     the `try_call_pull` / `try_call_return_push` guard-and-patch consumers.
+//!     They retain the pre-D0 conservative skip under `CALLSPEC-0001`.
 //!   - `PcodeOp::get_halt_type` (`try_return_pull`) is not available; the
 //!     artificial-halt guard is conservatively skipped and logged.
 //!   - `copy_symbol_if_valid`, `Address::is_big_endian`, and Architecture
@@ -676,14 +678,15 @@ impl SubvariableFlow {
 
     // Ghidra: subflow.cc:208 SubvariableFlow::tryCallPull
     /// Determine if the given subgraph variable can act as a parameter to the
-    /// given CALL op. Faithful to `SubvariableFlow::tryCallPull`
-    /// (subflow.cc:208-228).
+    /// given CALL op. Corresponds to `SubvariableFlow::tryCallPull`
+    /// (subflow.cc:208-228), but the callspec consumer is incomplete under
+    /// `CALLSPEC-0001`.
     ///
-    /// NOTE: Ghidra looks up `fd->getCallSpecs(op)`. Rugra's `Funcdata` does
-    /// not expose a per-op call-spec lookup (callspecs are indexed, not keyed
-    /// by op). Without it we cannot reproduce the input-locked/input-active
-    /// checks, so we conservatively return false (do not trim call params) and
-    /// log the gap. This preserves correctness — it only disables a transform.
+    /// `Funcdata::get_call_specs_of_op` now supplies the exact per-op owner,
+    /// but the input-active/input-locked/varargs consumer and its patch
+    /// projection have not yet received a paired oracle fixture. Under
+    /// `CALLSPEC-0001`, this identity-only D0 retains the conservative false
+    /// result and does not claim the Ghidra transform.
     fn try_call_pull(&mut self, op: &Arc<RwLock<PcodeOp>>, rvn: usize, slot: i32) -> bool {
         if slot == 0 {
             return false;
@@ -698,9 +701,13 @@ impl SubvariableFlow {
                 return false;
             }
         }
-        // FuncCallSpecs* fc = fd->getCallSpecs(op); — not available per-op.
-        // Conservative: do not trim. (Logged at module top.)
+        // CALLSPEC-0001: exact per-op lookup is available, but the
+        // input-active/input-locked/varargs guard and ParameterPatch consumer
+        // remain outside this identity-only D0.
         let _ = op;
+        // Preserve the legacy diagnostic bytes until this UNTESTED branch has
+        // a bilateral fixture. The wording is not the current premise: exact
+        // lookup exists, while the CALLSPEC-0001 consumer remains unwired.
         eprintln!("[subflow] tryCallPull: per-op FuncCallSpecs lookup unavailable; skipping trim");
         false
     }
@@ -794,8 +801,9 @@ impl SubvariableFlow {
 
     // Ghidra: subflow.cc:293 SubvariableFlow::tryCallReturnPush
     /// Determine if the given subgraph variable can act as a created value for
-    /// the given INDIRECT op. Faithful to `SubvariableFlow::tryCallReturnPush`
-    /// (subflow.cc:293-310).
+    /// the given INDIRECT op. Corresponds to
+    /// `SubvariableFlow::tryCallReturnPush` (subflow.cc:293-310), but the
+    /// callspec consumer is incomplete under `CALLSPEC-0001`.
     fn try_call_return_push(&mut self, op: &Arc<RwLock<PcodeOp>>, rvn: usize) -> bool {
         if !self.aggressive {
             let (consume, mask) = {
@@ -814,10 +822,13 @@ impl SubvariableFlow {
         if self.bitsize < 8 {
             return false; // Make sure logical value is at least a byte
         }
-        // FuncCallSpecs* fc = fd->getCallSpecs(op); — not available per-op.
-        // Without it the isOutputLocked/isOutputActive guards cannot run, so we
-        // conservatively refuse the push. (Logged at module top.)
+        // CALLSPEC-0001: exact per-op lookup is available, but the
+        // output-locked/output-active guard and addPush consumer remain
+        // outside this identity-only D0.
         let _ = op;
+        // Preserve the legacy diagnostic bytes until this UNTESTED branch has
+        // a bilateral fixture. The wording is not the current premise: exact
+        // lookup exists, while the CALLSPEC-0001 consumer remains unwired.
         eprintln!("[subflow] tryCallReturnPush: per-op FuncCallSpecs lookup unavailable; skipping push");
         false
     }

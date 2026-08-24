@@ -918,3 +918,24 @@
   `updateType()`（建议 VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001）；
   ruleaction.rs:10588 RuleAddUnsigned 调用点走字段半未执行 high 簿记
   （建议 RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001）。
+
+### 2026-08-24：CALLSPEC-IDENTITY-D0 typed FSPEC handle
+
+- `Varnode` 新增 `call_spec: Option<Weak<RwLock<FuncCallSpecs>>>`，并通过
+  `bind_call_spec` / `get_call_spec` 写入和升级。它是 Ghidra
+  `IPTR_FSPEC` 地址中裸 `FuncCallSpecs *` 的 Rust 非拥有对应物；权威持久强所有权
+  在 `Funcdata::callspecs`，CALL 输入不会延长 callspec 生命周期，也不会和
+  callspec → op 的反向边形成 `Arc` 环。
+- `Funcdata::new_varnode_call_specs` 创建 annotation 时同时写入 typed `Weak`。
+  direct call 的 Iop 数值 payload 目前保留 entry offset，作为尚未消费 typed
+  callspec 的 legacy PrintC 兼容 shadow；entry 缺失时才回退为 owner pointer 诊断值。
+  查找绝不从任一整数反解身份，因此一个数值 payload 相同、但没有 typed handle 的
+  普通 constant 不能解析成 callspec。该 numeric codec 与 Iop space 都仍是
+  `TYPEOP-FSPEC-SPACE-0001` 的 `MISMATCH`，不能当作 oracle identity 证据。
+- `clone_varnode` 会复制这个 `Weak`，对应 Ghidra 克隆 annotation 地址时暂时复制
+  同一裸指针；`truncated_flow` 随后必须创建新的 callspec owner，并把新 CALL 的
+  input(0) 重绑到新 owner，不能让克隆长期指回源函数。
+- D0 整体仍为 `MISMATCH`：Rugra 暂用 `AddressSpace::Iop`，尚无专用
+  `IPTR_FSPEC`，numeric payload 也不是 Ghidra 的 raw `FuncCallSpecs *` codec
+  （`TYPEOP-FSPEC-SPACE-0001`）；本阶段不接 TypeOp getter、PrintC typed callspec
+  consumer 或 StringManager。其余既有 Varnode 残差与模块级状态不提升。

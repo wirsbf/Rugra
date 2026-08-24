@@ -116,3 +116,19 @@ helpers replace repeated C++ casts and raw-pointer borrows with Rust enum
 downcasts or `Arc` ownership. No behavior changed and no status was promoted.
 
 <!-- annotation-pass: 2026-08-11 ANN-I; provenance-only -->
+
+## 2026-08-24: CALLSPEC-IDENTITY-D0 scoring lookup
+
+- `score_parameter` and `score_return_type` now receive a `PcodeOpRef` and
+  resolve the call site through `Funcdata::get_call_specs_of_op`. The returned
+  stable owner is read under a short `RwLock` guard before the locked parameter
+  or return type is scored.
+- The former `fc.op_addr == call_op.get_addr()` scan is gone. Two distinct call
+  ops at the same machine address cannot share a prototype, and a raw constant
+  with a matching numeric offset cannot impersonate a typed FSPEC annotation;
+  an already-bound op can still resolve through the oracle's exact-op fallback.
+- This is only the D0 identity/guard adaptation. The module remains L2 and the
+  overall verdict remains `MISMATCH`: Rugra still uses `AddressSpace::Iop`
+  instead of dedicated `IPTR_FSPEC` (`TYPEOP-FSPEC-SPACE-0001`), does not wire
+  the TypeOp getter/PrintC/StringManager path in this phase, and retains the
+  other scoring gaps listed above.

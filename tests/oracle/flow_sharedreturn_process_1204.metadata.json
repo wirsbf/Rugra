@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "fixture_id": "FLOW-SHAREDRETURN-0001",
-  "status_note": "The locked native consumer and Rugra have the same selected numeric/op-identity observations for exact-site lookup, in-place primary-op identity and SeqNum, CALL_RETURN insertion order/constant, target suppression, callspec target, and out-of-bounds state for hugehelp/progressbarinit plus the ordinary-jump negative lane. Overall remains MISMATCH: Ghidra inputs/ops carry the default RAM AddrSpace while Rugra's production fixture/driver still use Address::new null-space addresses (ADDRESS-PHASE2-CLOSURE-0001); Ghidra FuncCallSpecs retains the exact PcodeOp pointer while Rugra can only resolve by address/index (CALLSPEC-0001); and the public direct override_flow(addr, NONE) branch returns Ok in Rust but throws in Ghidra, although processInstruction guards this production path. The standalone producer is an explicitly bounded unique-ELF-owner direct-known-entry projection, not the full Java SharedReturnAnalysisCmd.",
+  "status_note": "The locked native consumer and Rugra have the same selected numeric/op-identity observations for exact-site lookup, in-place primary-op identity and SeqNum, CALL_RETURN insertion order/constant, target suppression, exact FuncCallSpecs-to-primary-PcodeOp identity, callspec target, and out-of-bounds state for hugehelp/progressbarinit plus the ordinary-jump negative lane. Overall remains MISMATCH: Ghidra inputs/ops carry the default RAM AddrSpace while Rugra's production fixture/driver still use Address::new null-space addresses (ADDRESS-PHASE2-CLOSURE-0001); and the public direct override_flow(addr, NONE) branch returns Ok in Rust but throws in Ghidra, although processInstruction guards this production path. The standalone producer is an explicitly bounded unique-ELF-owner direct-known-entry projection, not the full Java SharedReturnAnalysisCmd.",
   "decisive_semantics": {
-    "reference_output_parameters": "FlowInfo and Funcdata share one mutable Override/PcodeOpBank/qlst state. overrideFlow mutates the selected primary PcodeOp in place, preserving object identity and SeqNum, and allocates one RETURN after it. Ghidra FuncCallSpecs::op is a shared PcodeOp pointer; Rugra's address/index lookup is recorded as a non-equivalent representation instead of normalized away. Ghidra fixture Addresses carry the default RAM AddrSpace, while Rugra Address::new carries a null base; this input/state difference is also printed and retained.",
+    "reference_output_parameters": "FlowInfo and Funcdata share one mutable Override/PcodeOpBank/qlst state. overrideFlow mutates the selected primary PcodeOp in place, preserving object identity and SeqNum, and allocates one RETURN after it. Ghidra FuncCallSpecs::op is a shared PcodeOp pointer; Rugra's Weak link upgrades to the exact Arc allocation and is compared by Arc::ptr_eq after the spec guard is released. Ghidra fixture Addresses carry the default RAM AddrSpace, while Rugra Address::new carries a null base; this input/state difference is also printed and retained.",
     "loop_bounds_traversal_order": "FlowInfo caches hasFlowOverride at construction, queries the exact instruction address before lift, applies overrideFlow after lift and before xref, and xref walks the new dead-list suffix in insertion order. findPrimaryBranch walks beginOp(addr)..endOp(addr) in SeqNum order. The standalone subset scans sorted half-open ELF bodies and iced instruction boundaries, accepting only direct unconditional near jumps to known entries.",
     "counter_accumulator_lifecycle": "insn_count increments once per processInstruction after the maximum check; the dead-list boundary is captured before lift. CALL_RETURN's new RETURN receives the next immutable per-address time, is moved directly after the primary op, and has a one-byte constant zero input. Producer records are accumulated once per owner then globally deduplicated by (function_entry, instruction_address).",
-    "sorting_comparison_keys": "Native op selection is PcodeOpTree SeqNum (address,time) order and dead-list order is not sorted for comparison. Standalone functions and output records use numeric (entry,address) BTree ordering; same-entry aliases must have the same extent, overlapping bodies fail visibly, and raw callspec representation differences are preserved in the diff."
+    "sorting_comparison_keys": "Native op selection is PcodeOpTree SeqNum (address,time) order and dead-list order is not sorted for comparison. Standalone functions and output records use numeric (entry,address) BTree ordering; same-entry aliases must have the same extent and overlapping bodies fail visibly. Exact callspec identity matches without normalization; the retained raw diff contains only RAM-space versus null-space case headers."
   },
   "oracle": {
     "project": "Ghidra",
@@ -44,24 +44,31 @@
     }
   },
   "rugra_source": {
-    "base_commit": "8c223a9623d6833319564776c35c5d4c50b17b95",
-    "base_tree": "2ae9d23f127c7be597f793218e5fdee1eb4d0db2",
-    "base_src_tree": "94ccaf0713b0bfa12a3c88e9e5e140c9749d98fc",
+    "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+    "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+    "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
     "base_blobs": {
-      "src/flow.rs": "8907ccac7517b1044b0921bffcecc1344b4eab11",
-      "src/funcdata.rs": "5f8dbeb93c233836b195418d007da8291f4483e5",
-      "src/override_rs.rs": "9db475d7e51f1e53013cb69afc4ad616514d4f8d",
       "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
       "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
       "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
     },
     "overlays": {
-      "src/flow.rs": "b339db0851f9877909e300a799b4459e60d7b6899b417100591150cc9e0de8f4",
-      "src/funcdata.rs": "06c2a744cd1f6c031738a3d14523298238c7da380038fdd8ed61caeb98705180",
-      "src/override_rs.rs": "12e6ec2a661e1b8dedb82037b7cb833669a448a4bc9a825eb8e745cd8e5ed7ef",
-      "examples/curl_decompile.rs": "736263b99fc651ff68ccbb4005c2ed47c5e7faf8e9e6a87342349d063ef8ec50"
+      "examples/curl_decompile.rs": "0a2f2c3307af21e387324eaf5c9e5607178667bd7e7f22ccdd8282bd9829db37",
+      "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+      "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+      "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+      "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+      "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+      "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+      "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+      "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+      "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
     },
-    "archive_policy": "The runner archives the exact base commit dependency closure, then hash-verifies and applies only the four listed overlays plus the dedicated fixture/metadata/runner."
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the identity-checked locked oracle checkout"
+    },
+    "archive_policy": "The runner archives the exact 92daed3 dependency closure, then hash-verifies and applies all nine source files in the D0 callspec identity change plus the Arc-compatible live curl_decompile consumer as one coherent overlay set; unrelated live files are excluded."
   },
   "architecture": "x86:LE:64:default",
   "compiler_spec": {
@@ -87,7 +94,7 @@
   },
   "assets": {
     "binary": {
-      "source_ref": "8c223a9623d6833319564776c35c5d4c50b17b95:examples/curl",
+      "source_ref": "92daed300bcce3c4d855b311cf9667ba21eb475a:examples/curl",
       "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
       "git_object_size": 161728,
       "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
@@ -161,23 +168,23 @@
       ["0x4a60", "0x4b7b"],
       ["0x4ff0", "0x50fa"]
     ],
-    "sha256": "8176cb408567138c55461a7f5c94ff7e28311f15cff6d440e6a7d323c8268440"
+    "sha256": "a83db882f98accbd0dae934f75dd7b52cec867f9d78d78f3da1dfa7607c60791"
   },
   "comparand_sha256": {
     "cpp_fixture": "5ccb4917105ae1444f8220d08742a462bc6c1855e472874415515d1d97073fee",
-    "rust_fixture": "558327d64ca71ed16715278af602b1a0cb7c9dabc348676d3e0da1d84846ec66",
+    "rust_fixture": "a302200f85c533c2b09512c19b3420dc1248acff117c0e9770331e6113cc5149",
     "program_flow_metadata": "adf5311c6979d14eb66acd91a05351fb65bb2f9448a2cd3f848279954c415cc5",
     "ghidra_curl_golden": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
     "compare_ghidra": "3877d4c8580122f3755de7452378ab1ebdf09e6c1039ede4fb34e5bcfc349f1d",
-    "runner": "c52b8161d503faed8d977daded2b85a2f00d7032dbf0922eab13bfb600f8aef8"
+    "runner": "862139e2ae4fe18e5c38685aad162b8b1ccc0d8495940f78175ec37c21d6ecf6"
   },
   "machine_input_sha256": {
     "curl_text": "287c95bed17616bd6e71c393fa61b28ae14e5671f1a7fac8a93137eda9e159d4"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "552e4dba33626ec497023e0da34f46ecaea1831b9f472ff7addb0154445d135e",
-    "rugra_stdout_sha256": "57ea80267fc4db207dce4c5f032fa987854d9d508afe784dae5afef2e78cbc37",
-    "raw_diff_sha256": "ef17ec0abd166619c5846213f303865ff61461bfd857498012cc728af4633461",
+    "rugra_stdout_sha256": "33714258b64039689e05cd8f142e22f289d99403b781c43425b6f7b9b508c439",
+    "raw_diff_sha256": "558e6e3a6e966ec824bde943ac30bf363e5a53a332b91fa23f1de87c6adcc76a",
     "raw_diff_exit_code": 1,
     "normalized_diff_exit_code": 1,
     "e2e": {
@@ -218,9 +225,9 @@
       "residual_todo_ids": ["ADDRESS-PHASE2-CLOSURE-0001", "FLOW-SHAREDRETURN-0001"]
     },
     "callspec_primary_identity": {
-      "status": "MISMATCH",
-      "covers": "Ghidra proves FuncCallSpecs::getOp()==primary by pointer identity; Rugra only proves get_call_specs_of_op resolves a record whose op_addr equals the primary address. The runner requires this raw representation diff.",
-      "residual_todo_ids": ["CALLSPEC-0001"]
+      "status": "MATCH",
+      "covers": "Both sides prove FuncCallSpecs::getOp()==primary by exact allocation identity. Rugra upgrades the non-owning Weak op edge under a short spec guard and compares the resulting Arc to the primary PcodeOp with Arc::ptr_eq; no address/index normalization is used.",
+      "residual_todo_ids": []
     },
     "standalone_unique_owner_producer": {
       "status": "UNTESTED",
@@ -240,7 +247,6 @@
   },
   "residual_todo_ids": [
     "ADDRESS-PHASE2-CLOSURE-0001",
-    "CALLSPEC-0001",
     "FLOW-SHAREDRETURN-0001"
   ]
 }

@@ -2096,9 +2096,11 @@ pub fn simple_signature(fd: &Arc<RwLock<Funcdata>>, encoder: &mut dyn Encoder) {
     // signature.cc:1119-1129: emit call targets.
     let numcalls = fd.read().unwrap().num_calls();
     for i in 0..numcalls {
-        let entry_addr = fd.read().unwrap().get_call_specs(i)
-            .and_then(|fc| fc.entry_addr.as_ref())
-            .cloned();
+        let entry_addr = fd
+            .read()
+            .unwrap()
+            .get_call_specs(i)
+            .and_then(|fc| fc.entry_addr);
         if let Some(addr) = entry_addr {
             // Ghidra checks !addr.isInvalid(); Rugra uses the Option presence.
             if !addr.is_null() {

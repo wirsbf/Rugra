@@ -10,16 +10,18 @@
     "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
   },
-  "rugra_base_commit": "2f9725ffc9733a9eba08e878a6466ce28b54d451",
-  "rugra_base_tree": "96c169e69f68e45603e3e48be621338ac66b4b51",
-  "rugra_base_src_tree": "1fb9e4fa6c609fc1f54a3fc38ed3a39379768963",
-  "rugra_base_funcdata_blob": "af417cd95c70087f8b549f7e0971a16dc07d15f3",
-  "rugra_base_merge_blob": "cc0b8de5ad59f3395effa2af064111783348d727",
+  "rugra_base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+  "rugra_base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+  "rugra_base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+  "rugra_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "rugra_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "rugra_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "rugra_base_merge_blob": "365be16020196337d386eb215f0b280ece383847",
   "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; xunknown{1,2,4,8} core types; one LanedRegister(4,0xa)",
   "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
   "analysis_options": {
     "entrypoint": "single lifecycle event: Funcdata::clear (funcdata.cc:84-112) driven directly on the constructed Funcdata; no Action pipeline run",
-    "premise": "state deposited through production APIs where they exist (newOp/newVarnodeOut/setHighLevel/HighIntersectTest::intersection/StackAffectingOps::populate/FuncCallSpecs ctor/addSymbol/setAttribute/LanedRegister registration) and through direct member writes where the production producer is not ported (copyTrims/protoPartial deposits, heritage pass/maxdepth, flag bits, counters)",
+    "premise": "state deposited through production APIs where they exist (newOp/newVarnodeOut/setHighLevel/HighIntersectTest::intersection/StackAffectingOps::populate/exact FuncCallSpecs::new_for_op + add_call_specs Arc qlst owner/addSymbol/setAttribute/LanedRegister registration) and through direct member writes where the production producer is not ported (copyTrims/protoPartial deposits, heritage pass/maxdepth, flag bits, counters)",
     "normalization": "none; stdout is byte-diffed and both stderr streams must be empty"
   },
   "input_manifest": {
@@ -27,11 +29,11 @@
     "cases": [
       "case lifecycle: one Funcdata 'lifecycle' at ram:0x7000 size 0x100 over a synthetic 64-bit LE architecture (spaces: const=0,other=1,unique=2,ram=3,register=4,stack=5,join=6,iop=7; one LanedRegister(4,0xa))",
       "graph: b0->b1; b0: op1 reg:0x10 vnP = COPY const 0x11; b1: op2 reg:0x20 vnQ = COPY const 0x22; b1: callop = CALL const 0xdeadbeef",
-      "persistent domains deposited before clear: setHighLevel; testCache via HighIntersectTest::intersection(vnP,vnQ) caching both HighEdge directions; copyTrims=[op1]; protoPartial=[op2]; stackAffectingOps populated via StackAffectingOps::populate picking up the CALL through qlst; callspecs=[FuncCallSpecs(callop)]; jumpvec=[override JumpTable(ram:0x7100,JumperBasicOverride,maxaddsub=7,collectloads=true), plain JumpTable(ram:0x7200)]; localmap symbols [unlocked_a, locked_b(typelock+namelock)] with minParamOffset=0x40 maxParamOffset=0x80; flags |= {highlevel_on,blocks_generated,processing_started,typerecovery_start,typerecovery_on,double_precis_on,restart_pending} + preserved {blocks_unreachable,processing_complete,jumptablerecovery_dont}; clean_up_index=3 high_level_index=7 cast_phase_index=5; setLanedRegGenerated(); lanedMap manual entry reg:0x30/4; activeoutput=ParamActive(false); funcp.returnBytesConsumed=7; unionMap one ResolveEdge(int4,op1,slot 0); heritage pass=3 maxdepth=5",
+      "persistent domains deposited before clear: setHighLevel; testCache via HighIntersectTest::intersection(vnP,vnQ) caching both HighEdge directions; copyTrims=[op1]; protoPartial=[op2]; stackAffectingOps populated via StackAffectingOps::populate picking up the CALL through qlst; callspecs=[one exact PcodeOpRef-bound FuncCallSpecs Arc owner added through add_call_specs, with the original raw CALL target preserved like the C++ fixture]; jumpvec=[override JumpTable(ram:0x7100,JumperBasicOverride,maxaddsub=7,collectloads=true), plain JumpTable(ram:0x7200)]; localmap symbols [unlocked_a, locked_b(typelock+namelock)] with minParamOffset=0x40 maxParamOffset=0x80; flags |= {highlevel_on,blocks_generated,processing_started,typerecovery_start,typerecovery_on,double_precis_on,restart_pending} + preserved {blocks_unreachable,processing_complete,jumptablerecovery_dont}; clean_up_index=3 high_level_index=7 cast_phase_index=5; setLanedRegGenerated(); lanedMap manual entry reg:0x30/4; activeoutput=ParamActive(false); funcp.returnBytesConsumed=7; unionMap one ResolveEdge(int4,op1,slot 0); heritage pass=3 maxdepth=5",
       "event: fd.clear() (funcdata.cc:84-112)",
       "observation: 6 stdout lines (core before, localmap before, funcproto before, core after, localmap after, funcproto after); after-stage localmap and funcproto lines are the registered MISMATCH domains"
     ],
-    "sha256": "790dea27dcf8d0ffafb3d009663ec2a8a348d86b760cef0fae8a4ff426e89434"
+    "sha256": "4f148fd2cd8656debeb0bde8d893732abc177de02c0a4058a2b34476c2d48edf"
   },
   "decisive_semantics": {
     "references_and_outputs": "MATCH for every projected reference domain: override JumpTable handle stays dereferenceable after clear with permanent maxaddsub/collectloads intact; locked symbol handle queried by name survives on the Ghidra side; banks hand out fresh uniqid/create_index bases (obank uniqid=0, vbank create_index=0); Merge channels hold no dangling producer state after clear",
@@ -72,27 +74,73 @@
   ],
   "comparand": {
     "cpp_fixture_sha256": "f8a9f11e5c36bf9dabe31727d44a62c0bdde2fe038d446ffd55bb552bfe8364c",
-    "rust_fixture_sha256": "93603921a4038576e9d95a08cdb6e66e8f657d1bcf966495b365b96d8eed6c07",
-    "funcdata_rs_sha256": "324ad3c091fa0fe33bdda39241aeaa9ccffa6fcb794187c526258cdf2ff1fe51",
-    "merge_rs_sha256": "9db4f5676dcd44f0cbfe6689f17b211427535ee2d4eab0721ab9ffdd37e59f95",
+    "rust_fixture_sha256": "7786e6213f276ee0280bd65b4ac15b62adc9ec54b076b4d6af8d8d6b174b978d",
+    "d0_overlay_sha256": {
+      "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+      "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+      "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+      "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+      "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+      "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+      "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+      "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+      "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
+    },
+    "base_merge_rs_sha256": "524cee88deef602c38e687929d54a41e810e1030a0a0db3e19645b55bf47105c",
     "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
     "expected_ghidra_stdout_sha256": "a5f5d4497696cf3333503136c56a7f6145913d38f0fa1943cb6c1aad7f76b3b8",
     "expected_rugra_stdout_sha256": "b0e99fb4be2f785830bc514dcb14c10a8fd3e63db641aca64dadfe921ffe362b",
-    "runner_sha256": "9503f829d4f47396efb656b4451231afc6dc7153267a118ae71e3ecdd12ecd1d",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+    "runner_sha256": "9031c2e5a22976c146b9b1209c902700429e36522be4f72877f99ec2999ab54a",
+    "host_cxx": "g++ (GCC) 16.2.1 20260810",
+    "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+    "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+    "host_cxx_path": "/usr/bin/g++",
+    "host_cargo_path": "/usr/bin/cargo",
+    "host_rustc_path": "/usr/bin/rustc",
     "host_make_path": "/usr/bin/make",
     "host_git_path": "/usr/bin/git",
-    "host_python_path": "/usr/bin/python3.10"
+    "host_python_path": "/usr/bin/python3.14"
   },
   "build": {
     "registry_packages": 164,
-    "overlay_note": "src/funcdata.rs and src/merge.rs are the two live source overlays (this lease's write-set); every other source is archived from 2f9725f, whose funcdata.rs/merge.rs blobs are pinned above for provenance"
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "src",
+      "sleigh_shim",
+      "benches",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs"
+    ],
+    "d0_overlay_paths": [
+      "src/coreaction.rs",
+      "src/flow.rs",
+      "src/fspec.rs",
+      "src/funcdata.rs",
+      "src/heritage.rs",
+      "src/ruleaction.rs",
+      "src/signature.rs",
+      "src/unionresolve.rs",
+      "src/varnode.rs"
+    ],
+    "tmpdir_policy": {
+      "caller_variable": "TMPDIR",
+      "default_relative_to_home": ".cache/rugra-merge-clear-lifecycle-1204/tmp",
+      "resolved_root_constraint": "strict_descendant_of_passwd_home",
+      "leaf_symlink_allowed": false,
+      "creation_order": "canonicalize_and_validate_before_mkdir_then_revalidate",
+      "required_access": "directory,writable,searchable",
+      "explicit_build_commands": [
+        "make",
+        "g++",
+        "cargo",
+        "rustc"
+      ]
+    },
+    "overlay_note": "The immutable 92daed3 crate archive receives the complete nine-file D0 callspec identity closure. src/merge.rs remains the hash-verified base file; no unrelated live worktree source is admitted."
   }
 }

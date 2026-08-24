@@ -19,16 +19,18 @@ use std::sync::Arc;
 
 use rugra::address::Address;
 use rugra::block::{BlockBasic, FlowBlock};
-use rugra::fspec::{EffectRecord, EffectType, FuncCallSpecs, ParamEntry, ProtoModelFull};
+use rugra::fspec::{
+    EffectRecord, EffectType, FuncCallSpecs, ParamEntry, ParamListOutput, ProtoModelFull,
+};
 use rugra::funcdata::Funcdata;
-use rugra::op::PcodeOp;
+use rugra::op::PcodeOpRef;
 use rugra::opcodes::OpCode;
 use rugra::space::AddressSpace;
 use rugra::varnode::Varnode;
 
 type BlockRef = Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>;
 type VnRef = Arc<std::sync::RwLock<Varnode>>;
-type OpRef = Arc<std::sync::RwLock<PcodeOp>>;
+type OpRef = PcodeOpRef;
 
 fn effect_name(effect: EffectType) -> &'static str {
     match effect {
@@ -100,18 +102,31 @@ fn make_callguard_model() -> Arc<ProtoModelFull> {
     let mut model = ProtoModelFull::new(Some(AddressSpace::Stack), 8);
     model.name = "callguard".to_string();
     model.extrapop = 0;
-    model
-        .input
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x30, 8, 1, 0));
-    model
-        .input
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x38, 8, 1, 1));
-    model
-        .output
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x0, 8, 1, 0));
+    model.input.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x30,
+        8,
+        1,
+        0,
+    ));
+    model.input.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x38,
+        8,
+        1,
+        1,
+    ));
+    let output_base = match &mut model.output {
+        ParamListOutput::Standard(list) => &mut list.base,
+        ParamListOutput::Register(list) => &mut list.base.base,
+    };
+    output_base.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x0,
+        8,
+        1,
+        0,
+    ));
     model.effectlist = vec![
         EffectRecord::new(AddressSpace::Register, 0x0, 8, EffectType::KilledByCall),
         EffectRecord::new(AddressSpace::Register, 0x288, 8, EffectType::ReturnAddress),
@@ -126,14 +141,24 @@ fn make_unaffected_model() -> Arc<ProtoModelFull> {
     let mut model = ProtoModelFull::new(Some(AddressSpace::Stack), 8);
     model.name = "callguard_unaffected".to_string();
     model.extrapop = 0;
-    model
-        .input
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x30, 8, 1, 0));
-    model
-        .output
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x0, 8, 1, 0));
+    model.input.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x30,
+        8,
+        1,
+        0,
+    ));
+    let output_base = match &mut model.output {
+        ParamListOutput::Standard(list) => &mut list.base,
+        ParamListOutput::Register(list) => &mut list.base.base,
+    };
+    output_base.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x0,
+        8,
+        1,
+        0,
+    ));
     model.effectlist = vec![EffectRecord::new(
         AddressSpace::Register,
         0x0,
@@ -181,18 +206,15 @@ impl Graph {
         self.next_offset += 1;
         let op = self.fd.new_op(inputs, pc);
         self.fd.op_set_opcode(&op, opcode);
-        let op_ref: OpRef = op.0.clone();
-        self.ops.push((op_ref.clone(), name));
-        op_ref
+        self.ops.push((op.clone(), name));
+        op
     }
 
     fn make_call(&mut self, name: &'static str, block: &BlockRef) -> OpRef {
         let op = self.make_op(name, OpCode::CPUI_CALL, 1);
         let target = self.fd.new_constant(8, 0x4000);
-        self.fd
-            .op_set_input(&rugra::op::PcodeOpRef(op.clone()), target, 0);
-        self.fd
-            .op_insert_end(&rugra::op::PcodeOpRef(op.clone()), block);
+        self.fd.op_set_input(&op, target, 0);
+        self.fd.op_insert_end(&op, block);
         op
     }
 
@@ -203,23 +225,19 @@ impl Graph {
     // the model branch — the same effective state.
     fn add_spec(&mut self, call_op: &OpRef, model: Arc<ProtoModelFull>) -> usize {
         // flow.cc:1202 mirrors: the Funcdata's own prototype is the base and
-        // the callspec's op address is the CALL instruction address.
-        let op_addr = call_op.read().unwrap().get_addr();
+        // the callspec is bound to this exact CALL operation.
         let proto = self.fd.funcp.clone();
-        let mut fc = FuncCallSpecs::new(op_addr, proto);
+        let mut fc = FuncCallSpecs::new_for_op(call_op, proto);
         fc.prototype.set_model(Some(model));
-        self.fd.callspecs.push(fc);
-        self.fd.callspecs.len() - 1
+        self.fd.add_call_specs(fc)
     }
 
     fn set_input(&mut self, op: &OpRef, vn: &VnRef, slot: usize) {
-        self.fd
-            .op_set_input(&rugra::op::PcodeOpRef(op.clone()), vn.clone(), slot);
+        self.fd.op_set_input(op, vn.clone(), slot);
     }
 
     fn insert_end(&mut self, op: &OpRef, block: &BlockRef) {
-        self.fd
-            .op_insert_end(&rugra::op::PcodeOpRef(op.clone()), block);
+        self.fd.op_insert_end(op, block);
     }
 
     fn seed_register_range(&mut self, offset: u64, size: i32, block: &BlockRef) {
@@ -231,14 +249,13 @@ impl Graph {
                 .fd
                 .vbank
                 .create_with_space(size as usize, AddressSpace::Register, offset);
-            self.fd
-                .op_set_output(&rugra::op::PcodeOpRef(def.clone()), vn);
+            self.fd.op_set_output(&def, vn);
             self.insert_end(&def, block);
         } else {
-            let freevn = self
-                .fd
-                .vbank
-                .create_with_space(size as usize, AddressSpace::Register, offset);
+            let freevn =
+                self.fd
+                    .vbank
+                    .create_with_space(size as usize, AddressSpace::Register, offset);
             let reader = self.make_op("reader", OpCode::CPUI_INT_OR, 2);
             self.set_input(&reader, &freevn, 0);
             let c = self.fd.new_constant(1, 1);
@@ -256,14 +273,13 @@ impl Graph {
                 .fd
                 .vbank
                 .create_with_space(size as usize, AddressSpace::Stack, offset);
-            self.fd
-                .op_set_output(&rugra::op::PcodeOpRef(def.clone()), vn);
+            self.fd.op_set_output(&def, vn);
             self.insert_end(&def, block);
         } else {
-            let freevn = self
-                .fd
-                .vbank
-                .create_with_space(size as usize, AddressSpace::Stack, offset);
+            let freevn =
+                self.fd
+                    .vbank
+                    .create_with_space(size as usize, AddressSpace::Stack, offset);
             let reader = self.make_op("reader", OpCode::CPUI_INT_OR, 2);
             self.set_input(&reader, &freevn, 0);
             let c = self.fd.new_constant(1, 1);
@@ -279,12 +295,12 @@ impl Graph {
         self.fd.heritage.build_info_list();
     }
 
-    fn op_alias_name(&self, op: &Option<rugra::op::PcodeOpRef>) -> &str {
+    fn op_alias_name(&self, op: &Option<PcodeOpRef>) -> &str {
         match op {
             None => "none",
             Some(target) => {
                 for (candidate, name) in &self.ops {
-                    if Arc::ptr_eq(candidate, &target.0) {
+                    if Arc::ptr_eq(&candidate.0, &target.0) {
                         return name;
                     }
                 }
@@ -360,39 +376,55 @@ impl Graph {
             }
             out.push_str(&format!("fc{i}"));
             out.push_str(":tin=[");
-            if let Some(active) = &fc.active_input {
-                for j in 0..active.get_num_trials() {
-                    if j != 0 {
-                        out.push(',');
-                    }
-                    let trial = active.get_trial(j);
-                    out.push_str(&format!(
-                        "{}{}/{}",
-                        space_name,
-                        format!("{:x}", trial.get_address().as_u64()),
-                        trial.get_size()
-                    ));
-                }
-            }
-            out.push_str("]");
-            out.push_str(":tout=[");
-            if let Some(active) = &fc.active_output {
-                for j in 0..active.get_num_trials() {
-                    if j != 0 {
-                        out.push(',');
-                    }
-                    let trial = active.get_trial(j);
-                    out.push_str(&format!(
-                        "{}{}/{}",
-                        space_name,
-                        format!("{:x}", trial.get_address().as_u64()),
-                        trial.get_size()
-                    ));
-                }
-            }
-            out.push_str("]");
-            let callin = fc
-                .find_call_op(&self.fd)
+            let (input_projection, output_projection, call_op) = {
+                let fc = fc.read().unwrap();
+                let input_projection = fc
+                    .active_input
+                    .as_ref()
+                    .map(|active| {
+                        (0..active.get_num_trials())
+                            .map(|j| {
+                                let trial = active.get_trial(j);
+                                format!(
+                                    "{}{}/{}",
+                                    space_name,
+                                    format!("{:x}", trial.get_address().as_u64()),
+                                    trial.get_size()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                let output_projection = fc
+                    .active_output
+                    .as_ref()
+                    .map(|active| {
+                        (0..active.get_num_trials())
+                            .map(|j| {
+                                let trial = active.get_trial(j);
+                                format!(
+                                    "{}{}/{}",
+                                    space_name,
+                                    format!("{:x}", trial.get_address().as_u64()),
+                                    trial.get_size()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                (
+                    input_projection,
+                    output_projection,
+                    fc.find_call_op(&self.fd),
+                )
+            };
+            out.push_str(&input_projection);
+            out.push_str("]:tout=[");
+            out.push_str(&output_projection);
+            out.push(']');
+            let callin = call_op
                 .map(|op| op.0.read().unwrap().num_input())
                 .unwrap_or(0);
             out.push_str(&format!(":callin={callin}"));
@@ -401,11 +433,14 @@ impl Graph {
 }
 
 // The ten ABI-shaped ranges (GetStr decimal 0/48/56/512/514/518/519/522/523/648).
-const RANGES_OFFSET: [u64; 10] = [0x0, 0x30, 0x38, 0x200, 0x202, 0x206, 0x207, 0x20a, 0x20b, 0x288];
+const RANGES_OFFSET: [u64; 10] = [
+    0x0, 0x30, 0x38, 0x200, 0x202, 0x206, 0x207, 0x20a, 0x20b, 0x288,
+];
 const RANGES_SIZE: [i32; 10] = [8, 8, 8, 1, 1, 1, 1, 1, 1, 8];
 
 fn main() {
-    let envelope = "schema=1|fixture=HERITAGE-CALLGUARD-0001|oracle=e40ed13014025f82488b1f8f7bca566894ac376b";
+    let envelope =
+        "schema=1|fixture=HERITAGE-CALLGUARD-0001|oracle=e40ed13014025f82488b1f8f7bca566894ac376b";
     println!("{envelope}");
 
     // case=model_state
@@ -439,7 +474,11 @@ fn main() {
             out.push_str(&format!(
                 "{:x}/{}",
                 RANGES_OFFSET[i],
-                effect_name(model.has_effect(AddressSpace::Register, RANGES_OFFSET[i], RANGES_SIZE[i]))
+                effect_name(model.has_effect(
+                    AddressSpace::Register,
+                    RANGES_OFFSET[i],
+                    RANGES_SIZE[i]
+                ))
             ));
         }
         out.push_str(&format!(
@@ -533,8 +572,11 @@ fn main() {
         g.seed_register_range(0x200, 1, &b0);
         let call1 = g.make_call("call1", &b1);
         g.add_spec(&call1, model);
-        g.fd.callspecs[0].init_active_input();
-        g.fd.callspecs[0].init_active_output();
+        {
+            let mut fc = g.fd.callspecs[0].write().unwrap();
+            fc.init_active_input();
+            fc.init_active_output();
+        }
         g.prepare_structure();
         g.fd.op_heritage();
         let mut out = String::new();
@@ -559,7 +601,7 @@ fn main() {
         g.add_spec(&call2, model);
         // cc:1461-1462: fc0 has the resolved stack offset; fc1 keeps
         // offset_unknown (tryregister == false).
-        g.fd.callspecs[0].stackoffset = 0x10;
+        g.fd.callspecs[0].write().unwrap().stackoffset = 0x10;
         g.prepare_structure();
         g.fd.op_heritage();
         let mut out1 = String::new();

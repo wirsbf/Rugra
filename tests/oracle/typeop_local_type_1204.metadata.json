@@ -3,7 +3,7 @@
   "fixture_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
   "title": "TypeOpCall::getInputLocal callspec, slot, lock, size, this-pointer, and FSPEC dispatch",
   "overall_status": "MISMATCH",
-  "status_note": "The locked Ghidra 12.0.4 oracle is captured twice with identical bytes. The pinned Rugra source is already a source-level MISMATCH: TypeOpCall does not override get_input_local, so the trait default returns None, and production callspec annotations use legacy AddressSpace::Iop rather than an FSPEC Varnode. Rust execution and the bilateral byte comparison intentionally remain UNTESTED in this oracle-only phase; no Cargo command was run and this evidence cannot support MATCH or L3.",
+  "status_note": "The locked Ghidra 12.0.4 oracle and frozen Rugra D0 fixture were each executed twice with deterministic stdout/stderr. Ghidra produced 167 records / 6369 bytes; Rugra produced 169 records / 6482 bytes. The byte comparison is MISMATCH with 248 diff records / 9829 bytes (SHA-256 50b629ee1626284da920265b22713d53eefb670d5bf56389f6e4a0148040d135): TypeOpCall still inherits the None-returning default and callspec annotations still use AddressSpace::Iop plus a typed Weak rather than FSPEC. Overall remains MISMATCH/L2 and this evidence cannot support L3.",
   "covered_projection": {
     "status": "MISMATCH",
     "name": "CPUI_CALL input-local type selection with one real callspec and canonical TypeFactory identities",
@@ -13,15 +13,15 @@
     },
     "rugra_source_observation": {
       "status": "MISMATCH",
-      "note": "TypeOpCall inherits the TypeOp default None result for every input slot and has no Funcdata/Architecture context through which to resolve the Iop/index callspec annotation."
+      "note": "TypeOpCall inherits the TypeOp default None result for every input slot and has no Funcdata/Architecture context through which to resolve the exact Iop/typed-Weak callspec annotation."
     },
     "rugra_execution": {
-      "status": "UNTESTED",
-      "note": "The Rust comparand source is pinned but was not compiled or run under this task's no-Cargo constraint."
+      "status": "EXECUTED",
+      "note": "The complete frozen D0 crate was built with pinned Cargo/rustc and the Rust fixture executed twice identically: 169 records, 6482 stdout bytes, empty stderr."
     },
     "bilateral_comparison": {
-      "status": "UNTESTED",
-      "note": "No Rust stdout/stderr capture exists yet, so no byte-level bilateral result is claimed."
+      "status": "MISMATCH",
+      "note": "The locked Ghidra and Rugra stdout streams were byte-diffed with exit code 1 and diff SHA-256 50b629ee1626284da920265b22713d53eefb670d5bf56389f6e4a0148040d135."
     }
   },
   "oracle": {
@@ -44,28 +44,89 @@
   },
   "architecture": "x86:LE:64:default:gcc",
   "compiler_spec": "x86-64-gcc.cspec",
-  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata, one real FuncCallSpecs backed by its Internal ProtoStore, and the Architecture-owned TypeFactory/TypeOp table",
+  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata, one exact CALL PcodeOpRef constructed before its stable FuncCallSpecs owner, and the Architecture-owned TypeFactory/TypeOp table",
   "comparand": {
-    "rugra_base_commit": "33793c130fed5a7d0ecb858293dfcfd7bc23b88e",
-    "rugra_base_tree": "c8b9cd78dc930a00e4ad51d542f7df5d92e7d8dd",
-    "snapshot_model": "locked Ghidra archive plus locked Rugra assets; Rust fixture pinned but not compiled",
-    "source_blobs": {
-      "src/typeop.rs": "754391522125b69d12f73bdf301598c773afca38",
-      "src/funcdata.rs": "6607bf4acdc7a2b54a47623d473a999f6996d42e",
-      "src/space.rs": "d3ea6840982f4361845f672862fab3267626ed9d",
-      "src/fspec.rs": "0d186b599d149430849b0c4e8b3a2453746690cd",
-      "src/op.rs": "3198215f593f49ffcd6a97ae7945493209228882"
-    },
-    "source_sha256": {
-      "src/typeop.rs": "967908d4e3e5c43ba4a9a94b302d3dee55dac455b889dd2f58c8afa7e29ec0ea",
-      "src/funcdata.rs": "06c2a744cd1f6c031738a3d14523298238c7da380038fdd8ed61caeb98705180",
+    "rugra_base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+    "rugra_base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+    "rugra_base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "binary_blob": "76d9343ea3add321aa4134856323663b36365807",
+    "snapshot_model": "immutable complete D0 crate snapshot: locked base source tree plus nine hash-verified callspec overlays",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "examples/curl",
+      "sleigh_specs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [
+      {
+        "path": "src/coreaction.rs",
+        "sha256": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/flow.rs",
+        "sha256": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/fspec.rs",
+        "sha256": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/funcdata.rs",
+        "sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/heritage.rs",
+        "sha256": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/ruleaction.rs",
+        "sha256": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/signature.rs",
+        "sha256": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/unionresolve.rs",
+        "sha256": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      },
+      {
+        "path": "src/varnode.rs",
+        "sha256": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9",
+        "policy": "Hash-verified live D0 callspec migration overlay copied onto the immutable base snapshot."
+      }
+    ],
+    "base_source_sha256": {
+      "src/typeop.rs": "b371f499326d4b92487c2ee7b1b471c996434ad89c776a61e7b459a3d90d9628",
       "src/space.rs": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
-      "src/fspec.rs": "122050e69065acf2e87f3e8701da4215aae73bc804612734a436da69880acb52",
       "src/op.rs": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5"
     },
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
+      "purpose": "build.rs C++ shim header discovery; the executable oracle is built from the separately archived locked commit"
+    },
     "cpp_fixture_sha256": "c3aea5cda34a0a639d835d98a7cb79d4e804793bda13dada5b39b8c03d057591",
-    "rust_fixture_sha256": "2d119bd7aefb23dfee729b62d996f6236153abf1388a43bbcc686aa51d751bc1",
-    "runner_sha256": "d3a3ff74e75c675660b6405cc008fdf24c770c26c4f39ad404f72493c557c462"
+    "rust_fixture_sha256": "08dbb55fcc61881cc7b69a3c29b81974bf7f0d368e22f13bdf519ba9d7fc8dd3",
+    "runner_sha256": "711fb6a182f4bafd00f71b7d1b5a776b57dee7ef2b7b8e5bfd5ce0077f554225"
   },
   "assets": {
     "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
@@ -85,13 +146,17 @@
     "make": "GNU Make 4.4.1",
     "python": "Python 3.14.7",
     "git": "git version 2.55.0",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
     "tool_binary_sha256": {
       "cxx": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9",
       "cc": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
       "ar": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4",
       "make": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40",
       "python": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c",
-      "git": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad"
+      "git": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad",
+      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
     }
   },
   "build": {
@@ -105,8 +170,8 @@
       "-Wno-sign-compare",
       "-m64"
     ],
-    "rugra_build_status": "UNTESTED",
-    "cargo_invoked": false
+    "rugra_build_status": "EXECUTED",
+    "cargo_invoked": true
   },
   "input_model": {
     "call_inputs": {
@@ -126,6 +191,8 @@
     },
     "callspec": {
       "object_count": 1,
+      "exact_bound_call_op_count": 1,
+      "raw_constant_fake_op_count": 1,
       "parameter_count": 7,
       "parameter_order": [
         "locked_ptr",
@@ -140,12 +207,12 @@
         "locked_ptr TYPE_LOCKED cleared",
         "locked_ptr TYPE_LOCKED restored",
         "input0 replaced with a distinct alias Varnode encoding the same callspec",
-        "input0 replaced with a Const-space Varnode carrying the same numeric offset"
+        "input0 replaced with a Const-space Varnode carrying the same numeric payload as the live typed annotation but no typed handle"
       ]
     },
     "representation": {
       "ghidra": "two distinct IPTR_FSPEC Varnodes carry the same raw FuncCallSpecs pointer; a Const-space Varnode carries the identical integer offset",
-      "rugra": "two distinct legacy AddressSpace::Iop Varnodes carry the same callspec-vector index; a Const-space Varnode carries that same index",
+      "rugra": "the exact CALL PcodeOpRef is constructed first, FuncCallSpecs::new_for_op binds it, Funcdata owns one stable Arc, and two distinct AddressSpace::Iop annotations carry typed Weak handles. A direct call's numeric payload is only a legacy PrintC compatibility shadow of entry_addr; a missing entry uses a pointer-shaped diagnostic. A distinct fake CALL uses a Const-space Varnode with identical numeric bits but no typed handle and is rejected; neither numeric form participates in identity.",
       "projected_storage_note": "Parameter storage offsets and order match. Rust ProtoParameter uses the legacy spaceless Address adapter rather than Ghidra's register AddrSpace, but getInputLocal does not read parameter storage; full Architecture-state equivalence remains UNTESTED."
     }
   },
@@ -165,18 +232,19 @@
     "constant_same_offset": "canonical xunknown8 fallback because the space is not IPTR_FSPEC"
   },
   "rugra_source_observation": {
-    "typeop_default": "src/typeop.rs:123-127 returns None",
-    "typeop_call": "src/typeop.rs:1227-1254 has no get_input_local override",
-    "callspec_lookup": "src/funcdata.rs:1320-1341 resolves legacy Iop/index when Funcdata is available",
-    "callspec_varnode": "src/funcdata.rs:8216-8228 emits legacy AddressSpace::Iop plus vector index",
+    "typeop_default": "src/typeop.rs:125-127 returns None",
+    "typeop_call": "src/typeop.rs:1252-1280 has no get_input_local override",
+    "callspec_constructor": "src/fspec.rs:1754-1785 binds an exact CALL/CALLIND PcodeOpRef and captures the direct target before annotation replacement",
+    "callspec_lookup": "src/funcdata.rs:1322-1360 resolves an owned typed Weak only when its reverse op is exact, then falls back to exact op identity without decoding integer bits",
+    "callspec_varnode": "src/funcdata.rs:8266-8290 emits AddressSpace::Iop plus a typed Weak to the stable Arc owner; its non-identity numeric payload is entry_addr for direct-call PrintC compatibility or a pointer-shaped diagnostic when entry_addr is absent",
     "space_split": "src/space.rs:49-68 legacy AddressSpace has no Fspec variant, while SpaceType::Fspec exists at 888-903 but is not the Varnode representation",
-    "expected_if_executed": "Each direct TypeOpCall::get_input_local observation returns None; this expectation is source evidence, not a locked runtime capture."
+    "observed_execution": "Each direct TypeOpCall::get_input_local observation returned None in both deterministic Rugra runs; the exact owner/alias roundtrips succeeded and the raw same-bits fake was rejected."
   },
   "decisive_semantics": {
-    "references_and_outputs": "Ghidra decodes the exact FuncCallSpecs pointer from input0 and returns canonical TypeFactory-owned Datatype pointers. Two FSPEC Varnodes alias the same callspec and repeated calls preserve pointer identity. Rugra's callspec object aliases correctly through Funcdata, but TypeOpCall cannot reach it and returns None.",
+    "references_and_outputs": "Ghidra decodes the exact FuncCallSpecs pointer from input0 and returns canonical TypeFactory-owned Datatype pointers. Two FSPEC Varnodes alias the same callspec and repeated calls preserve pointer identity. Rugra's Funcdata owns one stable Arc, both annotations carry typed Weak handles to that exact allocation, and lookup uses Arc::ptr_eq plus exact reverse-op identity; entry-address/pointer diagnostic bits are compatibility shadows only. TypeOpCall still cannot reach the owner and returns None.",
     "loop_bounds_and_order": "There is no container scan inside getInputLocal. The ordered guards are slot==0 or non-FSPEC, param=slot-1, parameter present, locked branch before this-pointer branch, non-void and size<=input-size, then pointer-to-struct. Fixture cases run in a fixed order and include slot 0, the final existing parameter, and the first missing parameter.",
     "counters_and_accumulators": "The only index adjustment is slot-1 exactly once after the FSPEC guard. Lock state is cleared once and restored once on the same parameter object before alias and non-FSPEC probes; no per-case callspec copies are made.",
-    "sort_and_comparison_keys": "No sorting occurs. Decisive comparisons are address-space type equality with IPTR_FSPEC, parameter type-lock and this-pointer flags, metatype equality/inequality, datatype size <= input Varnode size, and canonical pointer identity in the observations. Numeric offset equality alone must not resolve the Const-space mimic."
+    "sort_and_comparison_keys": "No sorting occurs. Decisive comparisons are address-space type equality with IPTR_FSPEC, parameter type-lock and this-pointer flags, metatype equality/inequality, datatype size <= input Varnode size, canonical datatype pointer identity, exact Arc owner identity, and exact PcodeOp identity. Numeric-bit equality alone cannot resolve the distinct Const-space fake."
   },
   "coverage": {
     "oracle_cases": 13,
@@ -197,8 +265,6 @@
       "canonical result, parameter, fallback, and repeat pointer identities"
     ],
     "untested": [
-      "Rust fixture compilation and runtime stdout/stderr",
-      "bilateral byte comparison",
       "production TypeOp dispatch carrying Funcdata/Architecture/TypeFactory context",
       "legacy-to-registry address-space migration for Varnode",
       "full ActionInferTypes CALL-input caller closure",
@@ -215,13 +281,26 @@
   "paired_expected": {
     "ghidra": {
       "status": "ORACLE_CAPTURED",
+      "deterministic_runs": 2,
+      "records": 167,
+      "bytes": 6369,
       "stdout_sha256": "73e035f54b94a355425dac550e880114ea394974e115b1abe67f445b0d6518c7",
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "rugra": {
-      "status": "UNTESTED",
-      "stdout_sha256": null,
-      "stderr_sha256": null
+      "status": "EXECUTED",
+      "deterministic_runs": 2,
+      "records": 169,
+      "bytes": 6482,
+      "stdout_sha256": "9feab929960053743a36c08782093737a1121c891758d9eb93b11410b5a109d9",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "bilateral": {
+      "status": "MISMATCH",
+      "diff_exit_code": 1,
+      "records": 248,
+      "bytes": 9829,
+      "diff_sha256": "50b629ee1626284da920265b22713d53eefb670d5bf56389f6e4a0148040d135"
     }
   },
   "residuals": [
@@ -233,7 +312,7 @@
     {
       "id": "CALLSPEC-0001",
       "status": "MISMATCH",
-      "note": "Varnode still uses legacy Iop/index for callspec annotations rather than the Architecture-owned FSPEC address-space identity and raw callspec reference observed by Ghidra."
+      "note": "D0 replaces vector-index decoding with a stable Arc owner, typed Weak annotation, and exact op lookup. A direct entry address remains as a legacy PrintC compatibility shadow (or a pointer diagnostic when missing), but numeric bits never establish identity. Varnode still uses AddressSpace::Iop rather than the Architecture-owned FSPEC space+pointer codec observed by Ghidra."
     },
     {
       "id": "PRINT-TYPED-CONSTANT-CLOSURE-0001",

@@ -864,7 +864,16 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-08-23：get_call_specs_of_op
 
-- `get_call_specs_of_op(op) -> Option<&FuncCallSpecs>` — `Funcdata::getCallSpecs(const PcodeOp*)`（funcdata.cc:484-497）移植：in(0) fspec/注释 varnode 快路径（Rugra 的 Iop 空间：索引键=flow 创建形态，入口地址键=driver relink 形态），回退按调用地址线性扫描（Rugra FuncCallSpecs 存 op_addr 而非 PcodeOp*）。供 ActionInferTypes CALL 输出类型种子（TypeOpCall::getOutputLocal typeop.cc:720-734）等消费。
+- `get_call_specs_of_op(op) -> Option<Arc<RwLock<FuncCallSpecs>>>` — 对应
+  `Funcdata::getCallSpecs(const PcodeOp*)`（funcdata.cc:484-497）。快路径从 input(0)
+  annotation 的 typed `Weak` 升级 owner，并同时验证 owner 仍属于本 Funcdata 且
+  callspec 的反向 `Weak` 以 `Arc::ptr_eq` 精确指回传入 op；回退只线性比较 exact op
+  identity。当前 direct-call Iop 的数值 payload 暂时保留 entry offset，供尚未改为
+  typed callspec consumer 的 legacy PrintC 使用；entry 缺失时才退化为 owner pointer
+  诊断值。两者都不是 vector index 或 lookup 身份，typed `Weak` 才是唯一身份来源。
+  这层兼容 shadow 不等价于 Ghidra 的 `IPTR_FSPEC` pointer codec，仍由
+  `TYPEOP-FSPEC-SPACE-0001` 记为 `MISMATCH`。本 API 供 ActionInferTypes CALL 输出类型种子
+  （TypeOpCall::getOutputLocal typeop.cc:720-734）等消费。
 
 ### 2026-06-27（会话2）：CFG 重写原语（解锁 condexe）
 
@@ -1463,10 +1472,12 @@ flags。`inject_raw_ops_single` 也改为通过 `new_op` 生成 dead raw op，�
 SeqNum tree 的不同顺序、`uniqId`、op flags/space/order、FSPEC 重绑及 stale
 Varnode 删除、jump-table clone/reset/identity/skip，以及 nonempty、missing-table
 与 missing-entry 三条异常（含 Oracle 抛出前允许的 raw clone/JT 前缀和错误后的完整
-op/varnode/callspec/jump-table/block/flag 状态）。全函数 B2 仍为 `MISMATCH`：Rust callspec 没有
-Ghidra 的直接 `PcodeOp *` 身份，缺少 effective-extrapop/paramshift/bad-jumptable
-字段；无 synthetic annotation 且同地址多 CALL 的输入会保守报错。注入分支及
-完整 FlowInfo 私有状态克隆仍为 `UNTESTED`，不得据此宣称 L3。
+op/varnode/callspec/jump-table/block/flag 状态）。该节最初记录的“Rust callspec 没有
+Ghidra 的直接 `PcodeOp *` 身份”是 D0 之前的历史结论；当前实现以 exact op `Weak`
+重绑，并由 typed annotation 或 `Arc::ptr_eq` fallback 区分同地址多 CALL，这一身份切片
+已为 `MATCH`。全函数 B2 仍为 `MISMATCH`：effective-extrapop/paramshift/
+bad-jumptable 等字段不完整，专用 FSPEC space/numeric codec 仍不同；注入分支及完整
+FlowInfo 私有状态克隆仍为 `UNTESTED`，不得据此宣称 L3。
 
 ## 2026-08-24：FLOW-SHAREDRETURN-0001 — `override_flow`
 
@@ -1496,6 +1507,48 @@ primary 而抛 `Could not apply flowoverride`，Rust 当前直接返回 `Ok(())`
 `processInstruction` 两侧都只在 override 非 NONE 时调用，所以不影响本切片的
 shared-return 路径，但 public function 仍不能称为逐分支相同。完整行为保持
 `MISMATCH`：Ghidra 地址带 RAM space，Rust 当前
-`Address::new` 为 null-base（`ADDRESS-PHASE2-CLOSURE-0001`）；Ghidra callspec 的
-`PcodeOp *` 身份在 Rugra 数据结构中也仍缺失，fixture 将其记作
-`CALLSPEC-0001 MISMATCH`，没有用 `op_addr` 相等冒充指针身份。
+`Address::new` 为 null-base（`ADDRESS-PHASE2-CLOSURE-0001`）。本节初始 fixture
+曾将 callspec 的 `PcodeOp *` 身份缺口记为 `CALLSPEC-0001 MISMATCH`；下述 D0 已以
+双向 typed `Weak` 和 `Arc::ptr_eq` 关闭这一身份切片，当前 shared-return fixture 对该
+字段为 `MATCH`。这不消除地址域或 `FLOW-SHAREDRETURN-0001` 的整体残差。
+
+### 2026-08-24：CALLSPEC-IDENTITY-D0 stable owner 与生命周期
+
+- `Funcdata::callspecs` 从按值的 `Vec<FuncCallSpecs>` 改为
+  `Vec<Arc<RwLock<FuncCallSpecs>>>`，是 callspec 分配的权威持久强 owner；调用方
+  可持有短生命周期的 `Arc` handle，但所有反向边仍为 `Weak`。
+  `get_call_specs` / `get_call_specs_mut` 返回读写 guard；
+  `get_call_specs_owner` / `add_call_specs_owner` 只克隆或移动同一个 `Arc` 身份。
+- `get_call_specs_of_op` 的快路径要求 input(0) 同时是 Iop annotation、携带 typed
+  `Weak`、该 owner 仍属于当前 vector，并且 callspec 的反向 `Weak` 精确指回传入
+  op。回退也只比较升级后的 op `Arc::ptr_eq`；不再比较 `op_addr`，也不从 raw
+  constant 的数值 offset 解码 owner。
+- `get_op_from_const` 是相反的 IOP→PcodeOp decoder。Ghidra 由独立的
+  `IPTR_IOP`/`IPTR_FSPEC` space 保证 FSPEC 永不进入它；Rugra 共用 Iop 的过渡期
+  必须先检查 `Varnode.call_spec.is_some()`（即使 `Weak` 已过期也拒绝），再解释
+  numeric op pointer。专用 fixture 的 `iop_guard` case 双侧都观察到 genuine Iop
+  精确 round-trip，而 live/expired typed FSPEC 都不被解析为 PcodeOp；space 终态仍由
+  `TYPEOP-FSPEC-SPACE-0001` 跟踪。普通 Iop 仍沿用 Ghidra raw-pointer codec；Rust
+  `Arc::from_raw` 的任意 safe-input/lifecycle soundness 是本轮未改的
+  `OPBANK-0001` 残差，不能由该 kind-discriminant 投影升级为 `MATCH`。
+- `sort_call_specs` 只按 Ghidra 的 `(parent block index, SeqNum.order)` 两键排序，
+  排序时移动 `Arc`，不 clone/reallocate/rebind callspec；`delete_call_specs` 只删除
+  exact op 对应 owner，vector 位移不会改变幸存 owner 身份；`clear_call_specs`
+  只清 strong-owner vector。删除或清空后，在调用方释放临时 `Arc` 后，annotation
+  与 spec 的所有反向 `Weak` 都会失效。
+- `new_varnode_call_specs` 把 owner 的 typed `Weak` 绑定到 annotation；direct call 的
+  Iop 数值 payload 仅作为 legacy PrintC 的 entry-offset 兼容 shadow，entry 缺失时才
+  使用 owner pointer 诊断值。数值 payload 不参与 identity，也不等价于 Ghidra 的
+  `FuncCallSpecs *` codec；`clone_varnode` 暂时复制 typed `Weak`；
+  `truncated_flow` 按源 qlst 顺序通过 source callspec 的 exact op `Weak` 与完整
+  `SeqNum` 找新 op，创建不同的新 `Arc`，并把克隆 input(0) 从旧 owner 重绑到新
+  owner。源/目标 callspec 与 op 身份彼此隔离，active trial 状态由专用 clone 重置。
+- `check_call_double_use` 的 owner 查找也改为 exact identity，而非同地址匹配；其
+  per-input trial 映射与 alternate-path 判定仍是 `CALLSPEC-0001`/`UNTESTED`，本 fixture
+  不把完整 consumer 算法升为 `MATCH`。D0 锁定 oracle fixture/metadata/runner 为
+  `callspec_identity_lifecycle_1204`；总体仍
+  `MISMATCH`，因为 `AddressSpace::Iop` 只是专用 `IPTR_FSPEC` 的临时替代，numeric
+  codec 也只是 consumer-compatibility shadow（`TYPEOP-FSPEC-SPACE-0001`）；且 TypeOp
+  getter、PrintC typed callspec consumer、StringManager 和其它
+  callspec 字段残差均不在本阶段范围。上文“`PcodeOp *` 身份仍缺失”的历史结论
+  已由本 D0 身份地基取代，但该历史 fixture 自身的其它 MISMATCH 不随之升级。

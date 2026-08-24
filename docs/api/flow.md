@@ -108,8 +108,10 @@ not yet wired into main.rs; existing linear scan still active).
   `check_multistage_jumptables` 保留迭代结构但不推送新 op。
 - **Funcdata::linkJumpTable**：未移植，`xref_inlined_branch` 用 `find_jump_table`
   近似。
-- **FuncCallSpecs 管线**：`setupCallSpecs`/`setupCallindSpecs` 需要 FuncCallSpecs，
-  推迟到 ActionFuncLink；`xref_inlined_branch` 的 CALL/CALLIND 分支为 no-op。
+- **FuncCallSpecs 管线**：`FlowInfo::setup_call_specs`/`setup_callind_specs` 的 stable
+  owner、typed annotation 与 exact op identity 生命周期已接通；override/prototype/query
+  及 `truncate_indirect_jump`/`xref_inlined_branch` 对这些 helper 的调用 consumer 仍为
+  `CALLSPEC-0001`/`UNTESTED`。
 - **opMarkStartInstruction**：`fillin_branch_stubs` 直接设置 STARTMARK；正常指令由
   `process_instruction` 设置。`opMarkStartBasic` 不再推迟给 block builder：work-list
   目标边界必须在 `new_address`、`set_fallthru_bound`、`fallthru` 和
@@ -379,10 +381,11 @@ call 均保留为 CPUI_CALL + callspec）。
   calladdr=entry；doInjection(fc)；paramshift≠0 → `qlst.back()`（= callspecs
   末位）set_paramshift。
 - **`inject_pcode`**（flow.cc:1327-1355）：自足签名 `(&mut self)`；逐槽
-  nullify；CALLOTHER→injectUserOp；CALL/CALLIND→callspec（按 op 地址匹配，
-  `getFspecFromConst` 残差）→ isInline → injectId≥0：injectSubFunction+
+  nullify；CALLOTHER→injectUserOp；CALL/CALLIND→callspec（typed annotation / exact
+  PcodeOp owner lookup）→ isInline → injectId≥0：injectSubFunction+
   `Function: <name> replaced with injection: <fixup>` warningHeader+
-  deleteCallSpec（Rugra callspec 无名，warning 以 entry 地址拼写，残差）；
+  deleteCallSpec（inline/query/name/error-channel consumer 仍为 `CALLSPEC-0001`；
+  Rugra callspec 无名时 warning 以 entry 地址拼写）；
   否则 inlineSubFunction+`Inlined function`+deleteCallSpec；收尾
   injectlist.clear()。
 - **`fixture_queue_inject`**（RUGRA-GLUE，snapshot() 同类 fixture 观察 API）：
@@ -504,9 +507,34 @@ curl 小范围 A/B 的生产收益是：`hugehelp` callspec/puts `5 -> 6`，
   fixture 与当前 driver 的 `Address::new` 是 null-base；地址空间属于输入和对象
   状态，因此 `site_space=ram` 对 `site_space=null` 由
   `ADDRESS-PHASE2-CLOSURE-0001` 跟踪；
-- Ghidra `FuncCallSpecs` 保存真实 `PcodeOp *`，而 Rugra 目前只能按地址/index
-  查回 callspec；raw diff 保留 `pointer_identity` 对 `address_lookup`
-  （`CALLSPEC-0001`）。
+- callspec identity 切片现在由 annotation 的 typed `Weak` 找回 qlst 中同一个 owner，
+  再以 callspec → exact op 的 `Weak` 和 `Arc::ptr_eq` 核对 CALL；raw diff 的
+  `pointer_identity/callspec_same_op` 已为 `MATCH`。这只关闭身份切片，完整 fixture
+  仍受上述地址域差异及 `FLOW-SHAREDRETURN-0001` 约束。
 
 仅数值地址、primary object/SeqNum、dead-list 顺序与流状态的选择性投影相同；不得
 据此宣称完整 FlowInfo、地址域或 Program producer 已 MATCH。
+
+### 2026-08-24：CALLSPEC-IDENTITY-D0 setup/delete identity
+
+- direct `setup_call_specs` 先以 exact `PcodeOpRef` 构造 callspec，建立稳定
+  `Arc<RwLock<_>>` owner，再把携带 typed `Weak` 的 FSPEC annotation 安装到
+  CALL input(0)，最后把同一个 owner 放入 qlst。构造器因此能在替换 input(0)
+  前捕获原始直接目标；不会用 vector index 或指令地址重建身份。
+- indirect setup 同样保存 callspec → exact CALLIND 的 `Weak`；只有 override
+  确实把它转成 direct CALL 时才用 typed FSPEC annotation 替换 input(0)。
+  deindirect 及后续流处理都保留同一个 owner。
+- injection/contained-flow 删除现在携带 owner `Arc` 并以 `Arc::ptr_eq` 在 qlst
+  中定位；vector 位移不会误删相邻 callspec。成功删除路径的身份与突变相同；找不到
+  owner 时，Ghidra 抛 `LowlevelError("Misplaced callspec")`，Rust 当前是同文本
+  `panic!`，专用 fixture 未覆盖该错误分支，因此它仍是 `CALLSPEC-0001` 的
+  `MISMATCH/UNTESTED`，不能宣称异常通道相同。所有 lookup 统一走 typed annotation
+  快路径或 callspec → exact op 回退，不再按 `op_addr`。
+- 下游读取通过短生命周期 read/write guard 或字段快照完成，避免 guard 跨越
+  Funcdata 突变。`callspec_identity_lifecycle_1204` 覆盖 D0 身份投影；模块仍为
+  `MISMATCH`：`AddressSpace::Iop` 暂代 `IPTR_FSPEC`
+  （`TYPEOP-FSPEC-SPACE-0001`），本阶段不接 TypeOp getter、PrintC typed
+  callspec consumer、StringManager；entry-offset shadow 仅保住 legacy PrintC
+  消费者，并不关闭 codec 差异。既有地址空间和 FlowInfo 残差也不升级。上文历史
+  `pointer_identity/address_lookup` 差异由本地基修正，但不使旧 fixture 的完整
+  对象投影自动成为 MATCH。

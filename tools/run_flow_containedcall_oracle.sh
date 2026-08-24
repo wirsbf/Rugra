@@ -7,39 +7,86 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=d73ee600c6fe5ec5e83bae43b7f47df16e33cd71
-rugra_source_tree=23e3f85243764b808fef5b236379c75ff7a9ecf2
-rugra_source_src_tree=528279b08e9a0bdda6b272cc02a42d4812603c4b
-rugra_source_flow_blob=c76bd681b78b55e7855769e5e6d438df8c8c4cc2
-rugra_source_pcodeinject_blob=329b4ea7f77f51f19f148536ee53449f02ecca2c
-rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
-rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
-rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
+rugra_base_commit=92daed300bcce3c4d855b311cf9667ba21eb475a
+rugra_base_tree=6aea6d3b5b1421170d1bdc5a766c9568483a66af
+rugra_base_src_tree=367bb531746f630fe4de5fddc0365c2c2f27eeda
+rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
+rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
+rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 spec_input_commit=87aaef2262c85f4e6ffba488881fa4c1c8c2930f
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/flow_containedcall_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/flow_containedcall_1204.cc"
 rust_fixture="$repo_root/tests/oracle/flow_containedcall_1204.rs"
-rust_overlay="$repo_root/src/flow.rs"
-pcodeinject_overlay="$repo_root/src/pcodeinject.rs"
 runner="$repo_root/tools/run_flow_containedcall_oracle.sh"
-bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
-bfd_header="$bfd_include/bfd.h"
-bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_header_sha256=c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702
+bfd_library_sha256=f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e
 
-oracle_tmp=$(mktemp -d /tmp/rugra-flow-containedcall-1204.XXXXXX)
+overlay_paths=(
+  src/coreaction.rs
+  src/flow.rs
+  src/fspec.rs
+  src/funcdata.rs
+  src/heritage.rs
+  src/ruleaction.rs
+  src/signature.rs
+  src/unionresolve.rs
+  src/varnode.rs
+)
+
+run_cache=${RUGRA_FLOW_CONTAINEDCALL_RUN_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/rugra-flow-containedcall-1204}
+cargo_target=${RUGRA_FLOW_CONTAINEDCALL_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/rugra-flow-containedcall-target}
+cargo_tmp=${RUGRA_FLOW_CONTAINEDCALL_TMP_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/rugra-flow-containedcall-tmp}
+mkdir -p "$run_cache" "$cargo_target" "$cargo_tmp"
+oracle_tmp=$(mktemp -d "$run_cache/run.XXXXXX")
 cleanup() {
   case "$oracle_tmp" in
-    /tmp/rugra-flow-containedcall-1204.??????) rm -rf -- "$oracle_tmp" ;;
+    "$run_cache"/run.??????) rm -rf -- "$oracle_tmp" ;;
     *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2 ;;
   esac
 }
 trap cleanup EXIT HUP INT TERM
 
-for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$rust_overlay" \
-  "$pcodeinject_overlay" "$runner" "$bfd_header" "$bfd_library"; do
+bfd_include=${RUGRA_BFD_INCLUDE:-}
+if [[ -z "$bfd_include" ]]; then
+  for candidate in /tmp/rugra-ghidra-bfd-2.38/usr/include /usr/include; do
+    if [[ -f "$candidate/bfd.h" ]] && \
+        [[ "$(sha256sum "$candidate/bfd.h" | awk '{print $1}')" == "$bfd_header_sha256" ]]; then
+      bfd_include=$candidate
+      break
+    fi
+  done
+fi
+bfd_library=${RUGRA_BFD_LIBRARY:-}
+if [[ -z "$bfd_library" ]]; then
+  for candidate in \
+      /tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so \
+      /usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so; do
+    if [[ -f "$candidate" ]] && \
+        [[ "$(sha256sum "$candidate" | awk '{print $1}')" == "$bfd_library_sha256" ]]; then
+      bfd_library=$candidate
+      break
+    fi
+  done
+fi
+if [[ -z "$bfd_include" || ! -f "$bfd_include/bfd.h" || \
+      -z "$bfd_library" || ! -f "$bfd_library" ]]; then
+  echo "binutils 2.38 BFD development files are unavailable" >&2
+  exit 1
+fi
+bfd_header="$bfd_include/bfd.h"
+
+for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$runner" \
+  "$bfd_header" "$bfd_library"; do
   if [[ ! -f "$required" || -L "$required" ]]; then
     echo "required input is not a regular non-symlink file: $required" >&2
+    exit 1
+  fi
+done
+for relative in "${overlay_paths[@]}"; do
+  required="$repo_root/$relative"
+  if [[ ! -f "$required" || -L "$required" ]]; then
+    echo "source overlay is not a regular non-symlink file: $required" >&2
     exit 1
   fi
 done
@@ -65,36 +112,35 @@ if ! git -C "$ghidra_root" diff --quiet -- \
   echo "locked Ghidra decompiler/x86 source is dirty" >&2
   exit 1
 fi
+if ! git -C "$ghidra_root" diff --cached --quiet -- \
+    Ghidra/Features/Decompiler/src/decompile/cpp \
+    Ghidra/Processors/x86/data/languages; then
+  echo "locked Ghidra source has staged changes" >&2
+  exit 1
+fi
 
-for binding in \
-  "$rugra_source_commit^{commit}:$rugra_source_commit" \
-  "$rugra_source_commit^{tree}:$rugra_source_tree" \
-  "$rugra_source_commit:src:$rugra_source_src_tree" \
-  "$rugra_source_commit:src/flow.rs:$rugra_source_flow_blob" \
-  "$rugra_source_commit:src/pcodeinject.rs:$rugra_source_pcodeinject_blob" \
-  "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
-  "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
-  "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
-  expression=${binding%:*}
-  expected=${binding##*:}
-  actual=$(git -C "$repo_root" rev-parse "$expression")
-  if [[ "$actual" != "$expected" ]]; then
-    echo "pinned Rugra source identity mismatch: $expression" >&2
-    exit 1
-  fi
-done
+if [[ "$(git -C "$repo_root" rev-parse "${rugra_base_commit}^{commit}")" != "$rugra_base_commit" || \
+      "$(git -C "$repo_root" rev-parse "${rugra_base_commit}^{tree}")" != "$rugra_base_tree" || \
+      "$(git -C "$repo_root" rev-parse "${rugra_base_commit}:src")" != "$rugra_base_src_tree" || \
+      "$(git -C "$repo_root" rev-parse "${rugra_base_commit}:Cargo.toml")" != "$rugra_cargo_toml_blob" || \
+      "$(git -C "$repo_root" rev-parse "${rugra_base_commit}:Cargo.lock")" != "$rugra_cargo_lock_blob" || \
+      "$(git -C "$repo_root" rev-parse "${rugra_base_commit}:build.rs")" != "$rugra_build_rs_blob" ]]; then
+  echo "pinned Rugra base identity mismatch" >&2
+  exit 1
+fi
 
 snapshot_root="$oracle_tmp/workspace"
 mkdir -p "$snapshot_root" "$snapshot_root/tests/oracle" \
   "$snapshot_root/tools" "$snapshot_root/sleigh_specs"
 git -C "$repo_root" archive --format=tar \
-  --output="$oracle_tmp/rugra-source.tar" "$rugra_source_commit" \
+  --output="$oracle_tmp/rugra-source.tar" "$rugra_base_commit" \
   Cargo.toml Cargo.lock build.rs README.md benches/decompile_bench.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
   src sleigh_shim
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
-cp "$rust_overlay" "$snapshot_root/src/flow.rs"
-cp "$pcodeinject_overlay" "$snapshot_root/src/pcodeinject.rs"
+for relative in "${overlay_paths[@]}"; do
+  cp "$repo_root/$relative" "$snapshot_root/$relative"
+done
 cp "$cpp_fixture" "$snapshot_root/tests/oracle/flow_containedcall_1204.cc"
 cp "$rust_fixture" "$snapshot_root/tests/oracle/flow_containedcall_1204.rs"
 cp "$metadata" "$snapshot_root/tests/oracle/flow_containedcall_1204.metadata.json"
@@ -103,17 +149,20 @@ for asset in sleigh_specs/x86-64.sla sleigh_specs/x86-64.pspec \
   sleigh_specs/x86-64-gcc.cspec sleigh_specs/x86.ldefs; do
   git -C "$repo_root" cat-file blob "$spec_input_commit:$asset" >"$snapshot_root/$asset"
 done
+if [[ -e "$snapshot_root/ghidra" || -L "$snapshot_root/ghidra" ]]; then
+  echo "snapshot unexpectedly already contains a ghidra path" >&2
+  exit 1
+fi
+ln -s "$ghidra_root" "$snapshot_root/ghidra"
 
 runner_sha=$(sha256sum "$runner" | awk '{print $1}')
 python3 -I -S - "$repo_root" "$snapshot_root" "$metadata" "$cpp_fixture" \
-  "$rust_fixture" "$rust_overlay" "$pcodeinject_overlay" "$runner_sha" \
+  "$rust_fixture" "$runner_sha" \
   "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" "$oracle_language_tree" \
-  "$oracle_makefile_blob" "$rugra_source_commit" "$rugra_source_tree" \
-  "$rugra_source_src_tree" "$rugra_source_flow_blob" \
-  "$rugra_source_pcodeinject_blob" \
-  "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
-  "$rugra_source_build_rs_blob" "$spec_input_commit" \
-  "$bfd_header" "$bfd_library" <<'PY'
+  "$oracle_makefile_blob" "$rugra_base_commit" "$rugra_base_tree" \
+  "$rugra_base_src_tree" "$rugra_cargo_toml_blob" \
+  "$rugra_cargo_lock_blob" "$rugra_build_rs_blob" "$spec_input_commit" \
+  "$bfd_header" "$bfd_library" "${overlay_paths[@]}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -121,12 +170,11 @@ import subprocess
 import sys
 
 (
-    repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw, overlay_raw,
-    pcodeinject_raw, runner_sha, oracle_commit, oracle_tag, cpp_tree,
-    language_tree, makefile_blob, source_commit, source_tree, source_src_tree,
-    source_flow_blob, source_pcodeinject_blob, source_cargo_toml_blob,
-    source_cargo_lock_blob, source_build_rs_blob, spec_input_commit,
-    bfd_header_raw, bfd_library_raw,
+    repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw, runner_sha,
+    oracle_commit, oracle_tag, cpp_tree, language_tree, makefile_blob,
+    base_commit, base_tree, base_src_tree, cargo_toml_blob, cargo_lock_blob,
+    build_rs_blob, spec_input_commit, bfd_header_raw, bfd_library_raw,
+    *overlay_paths,
 ) = sys.argv[1:]
 repo = pathlib.Path(repo_raw).resolve()
 snapshot = pathlib.Path(snapshot_raw)
@@ -167,33 +215,33 @@ require("architecture", metadata["architecture"], "x86:LE:64:default")
 require("compiler id", metadata["compiler_spec"]["id"], "gcc")
 source = metadata["rugra_source"]
 for label, actual, expected in (
-    ("source commit", source["base_commit"], source_commit),
-    ("source tree", source["base_tree"], source_tree),
-    ("source src tree", source["base_src_tree"], source_src_tree),
-    ("source flow blob", source["base_flow_blob"], source_flow_blob),
-    ("source pcodeinject blob", source["base_pcodeinject_blob"], source_pcodeinject_blob),
-    ("Cargo.toml blob", source["cargo_toml_blob"], source_cargo_toml_blob),
-    ("Cargo.lock blob", source["cargo_lock_blob"], source_cargo_lock_blob),
-    ("build.rs blob", source["build_rs_blob"], source_build_rs_blob),
+    ("base commit", source["base_commit"], base_commit),
+    ("base tree", source["base_tree"], base_tree),
+    ("base src tree", source["base_src_tree"], base_src_tree),
+    ("Cargo.toml blob", source["base_blobs"]["Cargo.toml"], cargo_toml_blob),
+    ("Cargo.lock blob", source["base_blobs"]["Cargo.lock"], cargo_lock_blob),
+    ("build.rs blob", source["base_blobs"]["build.rs"], build_rs_blob),
 ):
     require(label, actual, expected)
 comparand = metadata["comparand"]
 for key, path in (
     ("cpp_fixture_sha256", pathlib.Path(cpp_raw)),
     ("rust_fixture_sha256", pathlib.Path(rust_raw)),
-    ("flow_overlay_sha256", pathlib.Path(overlay_raw)),
-    ("pcodeinject_overlay_sha256", pathlib.Path(pcodeinject_raw)),
 ):
     require(key, sha(path.read_bytes()), comparand[key])
 require("runner sha", runner_sha, comparand["runner_sha256"])
-overlays = {entry["path"]: entry for entry in source["overlays"]}
-require("overlay paths", set(overlays), {"src/flow.rs", "src/pcodeinject.rs"})
-require("flow overlay sha", sha(pathlib.Path(overlay_raw).read_bytes()), overlays["src/flow.rs"]["sha256"])
-require(
-    "pcodeinject overlay sha",
-    sha(pathlib.Path(pcodeinject_raw).read_bytes()),
-    overlays["src/pcodeinject.rs"]["sha256"],
-)
+overlays = source["overlays"]
+require("overlay paths", set(overlays), set(overlay_paths))
+for relative in overlay_paths:
+    expected = overlays[relative]
+    require(f"{relative} live sha", sha((repo / relative).read_bytes()), expected)
+    require(f"{relative} snapshot sha", sha((snapshot / relative).read_bytes()), expected)
+build_link = source["snapshot_build_link"]
+require("snapshot build link path", build_link["path"], "ghidra")
+ghidra_link = snapshot / build_link["path"]
+if not ghidra_link.is_symlink():
+    raise SystemExit("snapshot ghidra build path is not a symlink")
+require("snapshot ghidra link target", ghidra_link.resolve(), (repo / "ghidra").resolve())
 
 assets = metadata["assets"]
 for key, relative in (
@@ -227,8 +275,66 @@ canonical = json.dumps(
     fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
 ).encode("utf-8")
 require("manifest sha", sha(canonical), manifest["sha256"])
+
+capture_toolchain = metadata.get("capture_toolchain")
+require("capture toolchain fields", set(capture_toolchain or {}), {"gxx", "rustc"})
+if any(not isinstance(value, str) or not value for value in capture_toolchain.values()):
+    raise SystemExit("capture_toolchain values must be non-empty strings")
+if not isinstance(metadata.get("replay_toolchain_policy"), str) or not metadata["replay_toolchain_policy"]:
+    raise SystemExit("replay_toolchain_policy must be a non-empty string")
+
+machine = metadata.get("machine_input")
+require(
+    "machine input fields",
+    set(machine or {}),
+    {"canonicalization", "sha256", "records", "legacy_whole_linked_text"},
+)
+if not isinstance(machine["canonicalization"], str) or not machine["canonicalization"]:
+    raise SystemExit("machine_input.canonicalization must be non-empty")
+expected_symbol_order = [
+    "containedcall_getpc", "containedcall_mid", "containedcall_fwd",
+    "containedcall_offcut", "containedcall_beyond", "containedcall_multi",
+    "containedcall_back", "containedcall_afterc", "containedcall_pad",
+    "containedcall_before", "containedcall_callind", "containedcall_helper",
+    "containedcall_extern",
+]
+records = machine["records"]
+if not isinstance(records, list) or len(records) != len(expected_symbol_order):
+    raise SystemExit("machine_input.records must contain exactly thirteen symbols")
+previous_end = 0
+for index, record in enumerate(records):
+    require(
+        f"machine record {index} fields",
+        set(record),
+        {"name", "relative_address", "size", "bytes_hex"},
+    )
+    require(f"machine record {index} name", record["name"], expected_symbol_order[index])
+    require(f"machine record {index} boundary", record["relative_address"], previous_end)
+    if not isinstance(record["size"], int) or record["size"] <= 0:
+        raise SystemExit(f"machine record {index} has invalid size")
+    try:
+        machine_bytes = bytes.fromhex(record["bytes_hex"])
+    except (TypeError, ValueError) as error:
+        raise SystemExit(f"machine record {index} has invalid bytes_hex: {error}")
+    require(f"machine record {index} byte length", len(machine_bytes), record["size"])
+    require(f"machine record {index} canonical hex", machine_bytes.hex(), record["bytes_hex"])
+    previous_end += record["size"]
+machine_canonical = json.dumps(
+    records, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+).encode("utf-8")
+require("machine input canonical sha", sha(machine_canonical), machine["sha256"])
+legacy = machine["legacy_whole_linked_text"]
+require("legacy linked text fields", set(legacy), {"sha256", "status", "note"})
+require("legacy linked text status", legacy["status"], "HISTORICAL_NON_REPRODUCIBLE")
+require(
+    "legacy linked text sha",
+    legacy["sha256"],
+    "6ae5db85e351c594b8787bf6a0842df89075313200746457ccdb5f104d6703c5",
+)
+if not isinstance(legacy["note"], str) or not legacy["note"]:
+    raise SystemExit("legacy linked text note must be non-empty")
 require("projection", metadata["projection_status"], "MATCH")
-require("overall", metadata["overall_status"], "MATCH")
+require("overall", metadata["overall_status"], "MISMATCH")
 expected_matches = {
     "goto_spec_parity", "exact_match_conversion_fwd", "offcut_warning",
     "beyond_end_skip", "erase_successor_skip_quirk",
@@ -236,7 +342,7 @@ expected_matches = {
     "before_begin_skip", "callind_opcode_guard", "funcdata_resolved_skip",
     "generateops_do_while_wiring",
 }
-expected_residuals = set()
+expected_residuals = {"callspec_space_representation"}
 coverage = metadata.get("coverage")
 if not isinstance(coverage, dict):
     raise SystemExit("coverage must be an object")
@@ -272,7 +378,9 @@ for key, record in coverage.items():
     coverage_residual_ids.update(residual_ids)
 for key in expected_matches:
     require(f"coverage.{key}.status", coverage[key]["status"], "MATCH")
-require("coverage status set", observed_statuses, {"MATCH"})
+for key in expected_residuals:
+    require(f"coverage.{key}.status", coverage[key]["status"], "MISMATCH")
+require("coverage status set", observed_statuses, {"MATCH", "MISMATCH"})
 require(
     "projection/coverage consistency",
     metadata["projection_status"],
@@ -281,7 +389,7 @@ require(
 require(
     "overall/coverage consistency",
     metadata["overall_status"],
-    "UNTESTED" if any(record["status"] == "UNTESTED" for record in coverage.values()) else "MATCH",
+    "MISMATCH",
 )
 top_residual_ids = metadata.get("residual_todo_ids")
 if not isinstance(top_residual_ids, list):
@@ -291,7 +399,7 @@ if any(not isinstance(item, str) or not item for item in top_residual_ids):
 if len(top_residual_ids) != len(set(top_residual_ids)):
     raise SystemExit("top-level residual_todo_ids contains duplicates")
 require("coverage/top-level residual union", coverage_residual_ids, set(top_residual_ids))
-require("top-level residual ids", set(top_residual_ids), set())
+require("top-level residual ids", set(top_residual_ids), {"TYPEOP-FSPEC-SPACE-0001"})
 if "residual_union" in metadata:
     raise SystemExit("resolved fixture must not carry a residual_union block")
 observations = metadata.get("out_of_scope_observations")
@@ -305,19 +413,24 @@ for observation in observations:
         raise SystemExit("out_of_scope_observations entries must be non-empty")
 PY
 
+if [[ ${RUGRA_FLOW_CONTAINEDCALL_VALIDATE_ONLY:-0} == 1 ]]; then
+  echo "flow_containedcall_1204 metadata/source lock validation passed"
+  exit 0
+fi
+
 git -C "$ghidra_root" archive --format=tar \
   --output="$oracle_tmp/ghidra-cpp.tar" "$oracle_commit" \
   Ghidra/Features/Decompiler/src/decompile/cpp
 mkdir -p "$oracle_tmp/source"
 tar -xf "$oracle_tmp/ghidra-cpp.tar" -C "$oracle_tmp/source"
 oracle_cpp="$oracle_tmp/source/Ghidra/Features/Decompiler/src/decompile/cpp"
-# build.rs requires the locked Ghidra SLEIGH source tree inside the snapshot.
-mkdir -p "$snapshot_root/ghidra/Ghidra/Features/Decompiler/src/decompile"
-ln -s "$oracle_cpp" "$snapshot_root/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
 
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
-make --silent -C "$oracle_cpp" -j "$jobs" CXX="g++ -std=c++11" EXTRA= libdecomp.a
-g++ -std=c++11 -O0 -fno-pie -no-pie -Wl,--build-id=none \
+TMPDIR="$cargo_tmp" make --silent -C "$oracle_cpp" -j "$jobs" \
+  CXX="g++ -std=c++11" EXTRA= libdecomp.a
+TMPDIR="$cargo_tmp" g++ -std=c++11 -O0 -fno-pie -no-pie \
+  -fcf-protection=branch \
+  -Wl,--build-id=none \
   -I"$bfd_include" -I"$oracle_cpp" \
   "$snapshot_root/tests/oracle/flow_containedcall_1204.cc" \
   "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
@@ -325,18 +438,38 @@ g++ -std=c++11 -O0 -fno-pie -no-pie -Wl,--build-id=none \
   "$oracle_cpp/loadimage_bfd.cc" "$oracle_cpp/libdecomp.a" \
   "$bfd_library" -lz -o "$oracle_tmp/flow_containedcall_cpp"
 
-CARGO_TARGET_DIR="$oracle_tmp/cargo-target" \
-  cargo build --offline --locked --quiet --manifest-path "$snapshot_root/Cargo.toml" --lib
-rustc --edition=2021 -O "$snapshot_root/tests/oracle/flow_containedcall_1204.rs" \
-  --extern rugra="$oracle_tmp/cargo-target/debug/librugra.rlib" \
-  -L "dependency=$oracle_tmp/cargo-target/debug/deps" \
+if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock env \
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$cargo_target" TMPDIR="$cargo_tmp" \
+    cargo build --offline --locked --quiet \
+    --manifest-path "$snapshot_root/Cargo.toml" --lib; then
+  exit 1
+fi
+TMPDIR="$cargo_tmp" rustc --edition=2021 -O \
+  "$snapshot_root/tests/oracle/flow_containedcall_1204.rs" \
+  --extern rugra="$cargo_target/debug/librugra.rlib" \
+  -L "dependency=$cargo_target/debug/deps" \
   -o "$oracle_tmp/flow_containedcall_rust"
 
+bfd_runtime=$(dirname "$bfd_library")
+if [[ -n ${LD_LIBRARY_PATH:-} ]]; then
+  bfd_runtime="$bfd_runtime:$LD_LIBRARY_PATH"
+fi
 set +e
-"$oracle_tmp/flow_containedcall_cpp" \
+LD_LIBRARY_PATH="$bfd_runtime" "$oracle_tmp/flow_containedcall_cpp" \
   "$snapshot_root/sleigh_specs" "$oracle_tmp/flow_containedcall_cpp" \
   >"$oracle_tmp/ghidra.stdout" 2>"$oracle_tmp/ghidra.stderr"
 ghidra_status=$?
+set -e
+if [[ "$ghidra_status" -ne 0 ]]; then
+  echo "Ghidra contained-call oracle failed with exit code $ghidra_status" >&2
+  cat "$oracle_tmp/ghidra.stderr" >&2
+  exit "$ghidra_status"
+fi
+if [[ -s "$oracle_tmp/ghidra.stderr" ]]; then
+  echo "Ghidra contained-call oracle produced unexpected stderr" >&2
+  cat "$oracle_tmp/ghidra.stderr" >&2
+  exit 1
+fi
 objcopy --dump-section .text="$oracle_tmp/fixture.text" \
   "$oracle_tmp/flow_containedcall_cpp"
 text_base=$(readelf -WS "$oracle_tmp/flow_containedcall_cpp" | \
@@ -352,10 +485,23 @@ for probe in getpc mid fwd offcut beyond multi back afterc before callind extern
   fi
   probe_args+=("$probe_addr" "$probe_size")
 done
+set +e
 "$oracle_tmp/flow_containedcall_rust" \
   "$oracle_tmp/fixture.text" "$text_base" "${probe_args[@]}" \
   >"$oracle_tmp/rugra.stdout" 2>"$oracle_tmp/rugra.stderr"
 rugra_status=$?
+set -e
+if [[ "$rugra_status" -ne 0 ]]; then
+  echo "Rugra contained-call fixture failed with exit code $rugra_status" >&2
+  cat "$oracle_tmp/rugra.stderr" >&2
+  exit "$rugra_status"
+fi
+if [[ -s "$oracle_tmp/rugra.stderr" ]]; then
+  echo "Rugra contained-call fixture produced unexpected stderr" >&2
+  cat "$oracle_tmp/rugra.stderr" >&2
+  exit 1
+fi
+set +e
 diff -u --label ghidra --label rugra \
   "$oracle_tmp/ghidra.stdout" "$oracle_tmp/rugra.stdout" >"$oracle_tmp/raw.diff"
 diff_status=$?
@@ -363,11 +509,14 @@ set -e
 
 python3 -I -S - "$metadata" "$oracle_tmp/ghidra.stdout" "$oracle_tmp/ghidra.stderr" \
   "$oracle_tmp/rugra.stdout" "$oracle_tmp/rugra.stderr" \
-  "$oracle_tmp/raw.diff" "$oracle_tmp/fixture.text" "$ghidra_status" "$rugra_status" \
+  "$oracle_tmp/raw.diff" "$oracle_tmp/fixture.text" \
+  "$oracle_tmp/flow_containedcall_cpp" "$ghidra_status" "$rugra_status" \
   "$diff_status" <<'PY'
 import hashlib
 import json
 import pathlib
+import re
+import subprocess
 import sys
 
 metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -384,17 +533,93 @@ for key, path in paths.items():
     if actual != expected:
         raise SystemExit(f"{key} mismatch: expected={expected} actual={actual}")
 for key, actual in (
-    ("ghidra_exit_code", int(sys.argv[8])),
-    ("rugra_exit_code", int(sys.argv[9])),
-    ("diff_exit_code", int(sys.argv[10])),
+    ("ghidra_exit_code", int(sys.argv[9])),
+    ("rugra_exit_code", int(sys.argv[10])),
+    ("diff_exit_code", int(sys.argv[11])),
 ):
     if actual != metadata["expected_results"][key]:
         raise SystemExit(f"{key} mismatch")
-machine_input = {
-    "fixture_text": hashlib.sha256(pathlib.Path(sys.argv[7]).read_bytes()).hexdigest(),
-}
-if metadata["machine_input_sha256"] != machine_input:
-    raise SystemExit(f"machine input mismatch: {machine_input}")
+
+text_path = pathlib.Path(sys.argv[7])
+binary_path = pathlib.Path(sys.argv[8])
+text_data = text_path.read_bytes()
+readelf_output = subprocess.check_output(
+    ["readelf", "-WS", str(binary_path)], text=True
+)
+text_lines = [line for line in readelf_output.splitlines() if re.search(r"\]\s+\.text\s", line)]
+if len(text_lines) != 1:
+    raise SystemExit(f"expected exactly one .text section, got {text_lines!r}")
+section_match = re.search(
+    r"\.text\s+PROGBITS\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s",
+    text_lines[0],
+)
+if section_match is None:
+    raise SystemExit(f"cannot parse .text section: {text_lines[0]!r}")
+text_base = int(section_match.group(1), 16)
+text_size = int(section_match.group(2), 16)
+if len(text_data) != text_size:
+    raise SystemExit(
+        f"dumped .text size mismatch: section={text_size} bytes={len(text_data)}"
+    )
+
+nm_output = subprocess.check_output(
+    ["nm", "-n", "-S", "--defined-only", str(binary_path)], text=True
+)
+symbols = []
+for line in nm_output.splitlines():
+    fields = line.split()
+    if len(fields) != 4 or not fields[3].startswith("containedcall_"):
+        continue
+    if fields[2] != "T":
+        raise SystemExit(f"contained-call symbol is not global text: {line!r}")
+    symbols.append((fields[3], int(fields[0], 16), int(fields[1], 16)))
+
+expected_records = metadata["machine_input"]["records"]
+expected_names = [record["name"] for record in expected_records]
+actual_names = [name for name, _, _ in symbols]
+if actual_names != expected_names:
+    raise SystemExit(
+        f"contained-call symbol set/order mismatch: expected={expected_names} actual={actual_names}"
+    )
+origin = symbols[0][1]
+previous_end = origin
+actual_records = []
+for index, (name, address, size) in enumerate(symbols):
+    if address != previous_end:
+        raise SystemExit(
+            f"contained-call relative layout gap/overlap at {name}: "
+            f"expected_address={previous_end:#x} actual_address={address:#x}"
+        )
+    start = address - text_base
+    stop = start + size
+    if start < 0 or stop > len(text_data):
+        raise SystemExit(
+            f"contained-call symbol boundary outside .text: {name} [{start},{stop})"
+        )
+    record = {
+        "name": name,
+        "relative_address": address - origin,
+        "size": size,
+        "bytes_hex": text_data[start:stop].hex(),
+    }
+    if record != expected_records[index]:
+        raise SystemExit(
+            f"contained-call machine record mismatch for {name}: "
+            f"expected={expected_records[index]!r} actual={record!r}"
+        )
+    actual_records.append(record)
+    previous_end = stop + text_base
+machine_canonical = json.dumps(
+    actual_records, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+).encode("utf-8")
+machine_sha = hashlib.sha256(machine_canonical).hexdigest()
+if machine_sha != metadata["machine_input"]["sha256"]:
+    whole_text_sha = hashlib.sha256(text_data).hexdigest()
+    raise SystemExit(
+        f"contained-call canonical machine input mismatch: expected="
+        f"{metadata['machine_input']['sha256']} actual={machine_sha} "
+        f"noncomparand_whole_text={whole_text_sha}"
+    )
 records = paths["ghidra_stdout_sha256"].read_text(encoding="utf-8").splitlines()
 case_names = [
     record.split("=", 1)[1] for record in records if record.startswith("case=")
@@ -411,4 +636,4 @@ if paths["ghidra_stderr_sha256"].stat().st_size != 0 or paths["rugra_stderr_sha2
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'flow_containedcall_1204: covered_projection=11/11 projection_status=MATCH overall_status=MATCH residual=none\n'
+printf 'flow_containedcall_1204: covered_projection=11/11 projection_status=MATCH overall_status=MISMATCH residual=TYPEOP-FSPEC-SPACE-0001\n'

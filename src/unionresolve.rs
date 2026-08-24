@@ -18,7 +18,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::op::PcodeOp;
+use crate::op::{PcodeOp, PcodeOpRef};
 use crate::opcodes::OpCode;
 use crate::type_system::datatype::{Datatype, TypeField, TypeMetatype, TypeUnion};
 use crate::type_system::TypeFactory;
@@ -649,17 +649,17 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a trial data-type against a call parameter. Faithful to
     /// `scoreParameter` (unionresolve.cc:184-197).
     fn score_parameter(
-        ct: &Datatype, fd: &crate::funcdata::Funcdata,
-        call_op: &PcodeOp, param_slot: i32,
+        ct: &Datatype,
+        fd: &crate::funcdata::Funcdata,
+        call_op: &PcodeOpRef,
+        param_slot: i32,
     ) -> i32 {
-        for fc in fd.callspecs.iter() {
-            if fc.op_addr == call_op.get_addr() {
-                if fc.is_input_locked() && (fc.prototype.num_params() as i32) > param_slot {
-                    if let Some(param) = fc.prototype.get_param(param_slot as usize) {
-                        return Self::score_locked_type(ct, param.data_type.as_ref());
-                    }
+        if let Some(fc) = fd.get_call_specs_of_op(call_op) {
+            let fc = fc.read().unwrap();
+            if fc.is_input_locked() && (fc.prototype.num_params() as i32) > param_slot {
+                if let Some(param) = fc.prototype.get_param(param_slot as usize) {
+                    return Self::score_locked_type(ct, param.data_type.as_ref());
                 }
-                break;
             }
         }
         let meta = ct.get_metatype();
@@ -671,13 +671,15 @@ impl<'t> ScoreUnionFields<'t> {
     // Ghidra: unionresolve.cc:204 ScoreUnionFields::scoreReturnType
     /// Score a trial data-type against a CALL's return type. Faithful to
     /// `scoreReturnType` (unionresolve.cc:204-217).
-    fn score_return_type(ct: &Datatype, fd: &crate::funcdata::Funcdata, call_op: &PcodeOp) -> i32 {
-        for fc in fd.callspecs.iter() {
-            if fc.op_addr == call_op.get_addr() {
-                if fc.is_output_locked() {
-                    return Self::score_locked_type(ct, fc.prototype.return_type.as_ref());
-                }
-                break;
+    fn score_return_type(
+        ct: &Datatype,
+        fd: &crate::funcdata::Funcdata,
+        call_op: &PcodeOpRef,
+    ) -> i32 {
+        if let Some(fc) = fd.get_call_specs_of_op(call_op) {
+            let fc = fc.read().unwrap();
+            if fc.is_output_locked() {
+                return Self::score_locked_type(ct, fc.prototype.return_type.as_ref());
             }
         }
         let meta = ct.get_metatype();

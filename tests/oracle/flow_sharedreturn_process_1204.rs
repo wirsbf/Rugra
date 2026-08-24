@@ -227,7 +227,7 @@ struct PipelineObservation {
     dead_adjacent: bool,
     same_block: bool,
     callspec: bool,
-    lookup_resolves_primary: bool,
+    callspec_same_op: bool,
     spec_target: bool,
     raw_target_visited: bool,
     out_of_bounds: bool,
@@ -345,19 +345,22 @@ fn observe_pipeline(
         _ => false,
     };
 
-    let spec = if wanted == OpCode::CPUI_CALL {
+    let spec_owner = if wanted == OpCode::CPUI_CALL {
         fd.get_call_specs_of_op(&primary)
     } else {
         None
     };
-    let callspec = spec.is_some();
-    // Ghidra stores FuncCallSpecs::op as a PcodeOp pointer. Rugra does not:
-    // this query resolves by index/address and therefore cannot prove shared
-    // PcodeOp identity. Keep the weaker lookup observation visibly distinct.
-    let lookup_resolves_primary = spec.is_some_and(|value| {
-        value.op_addr == primary.0.read().expect("callspec op read lock").get_addr()
+    let callspec = spec_owner.is_some();
+    // Snapshot the non-owning callspec -> op edge under a short guard, then
+    // compare the upgraded Arc with the exact primary PcodeOp allocation.
+    let (bound_op, spec_entry) = spec_owner.map_or((None, None), |owner| {
+        let spec = owner.read().expect("callspec read lock");
+        (spec.op.upgrade(), spec.entry_addr)
     });
-    let spec_target = spec.is_some_and(|value| value.entry_addr == Some(Address::new(raw_target)));
+    let callspec_same_op = bound_op
+        .as_ref()
+        .is_some_and(|bound| Arc::ptr_eq(bound, &primary.0));
+    let spec_target = spec_entry == Some(Address::new(raw_target));
 
     Ok(PipelineObservation {
         map_present: fd.localoverride.has_flow_override(),
@@ -371,7 +374,7 @@ fn observe_pipeline(
         dead_adjacent,
         same_block,
         callspec,
-        lookup_resolves_primary,
+        callspec_same_op,
         spec_target,
         raw_target_visited,
         out_of_bounds,
@@ -405,8 +408,8 @@ fn print_observation(probe: Probe, direct: &DirectObservation, pipeline: &Pipeli
     );
     let callspec_binding = if pipeline.callspec {
         format!(
-            "callspec_binding=address_lookup lookup_resolves_primary={}",
-            usize::from(pipeline.lookup_resolves_primary)
+            "callspec_binding=pointer_identity callspec_same_op={}",
+            usize::from(pipeline.callspec_same_op)
         )
     } else {
         "callspec_binding=none binding_resolves=0".to_string()

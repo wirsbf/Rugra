@@ -143,6 +143,10 @@ pub struct Varnode {
     pub v_type: Option<Arc<Datatype>>,
     /// Ops that read this varnode
     pub descend: Vec<Weak<RwLock<PcodeOp>>>,
+    /// Typed, non-owning counterpart of the pointer encoded by Ghidra in an
+    /// IPTR_FSPEC annotation address.  The Funcdata call-spec list owns the
+    /// allocation; a CALL input must never keep it alive after deletion.
+    pub call_spec: Option<Weak<RwLock<crate::fspec::FuncCallSpecs>>>,
     /// Owning Rust allocation, when this Varnode was allocated by VarnodeBank.
     self_ref: Weak<RwLock<Varnode>>,
     /// Range of P-code ops where this varnode is "alive"
@@ -194,11 +198,23 @@ impl Varnode {
             // glb->types->getBase(size,TYPE_UNKNOWN), funcdata_varnode.cc:154).
             v_type: Some(default_unknown_type(None, size)),
             descend: Vec::new(),
+            call_spec: None,
             self_ref: Weak::new(),
             cover: None,
             consumed: u64::MAX,
             nzm,
         }
+    }
+
+    // RUGRA-GLUE: Rust cannot safely encode a FuncCallSpecs pointer in an
+    // address integer, so the FSPEC annotation carries a typed Weak handle.
+    pub fn bind_call_spec(&mut self, call_spec: &Arc<RwLock<crate::fspec::FuncCallSpecs>>) {
+        self.call_spec = Some(Arc::downgrade(call_spec));
+    }
+
+    // RUGRA-GLUE: Typed recovery of Ghidra's FuncCallSpecs::getFspecFromConst.
+    pub fn get_call_spec(&self) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>> {
+        self.call_spec.as_ref().and_then(Weak::upgrade)
     }
 
     // Ghidra: varnode.cc:578 Varnode::getAddr

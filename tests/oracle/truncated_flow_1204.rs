@@ -92,7 +92,7 @@ fn flow_state(fd: &mut Funcdata, max_instructions: Option<u64>) -> rugra::flow::
     flow.truncated_state()
 }
 
-fn build_success_source(name: &str, source_addr: u64, callee_addr: u64) -> (Funcdata, usize) {
+fn build_success_source(name: &str, source_addr: u64, callee_addr: u64) -> Funcdata {
     let mut source = Funcdata::new(name, Address::new(source_addr), 1);
 
     let call = source.new_op(1, Address::new(source_addr));
@@ -100,13 +100,18 @@ fn build_success_source(name: &str, source_addr: u64, callee_addr: u64) -> (Func
     let code_ref = source.new_code_ref(Address::new(callee_addr));
     source.op_set_input(&call, code_ref, 0);
     call.0.write().expect("call write lock").flags |= pcodeop_flags::STARTMARK;
-    let mut callspec = FuncCallSpecs::new(Address::new(source_addr), source.funcp.clone());
-    callspec.entry_addr = Some(Address::new(callee_addr));
-    callspec.set_spacebase_offset(0x1234);
-    let annotation = source.new_varnode_call_specs(0);
+    let callspec = Arc::new(RwLock::new(FuncCallSpecs::new_for_op(
+        &call,
+        source.funcp.clone(),
+    )));
+    {
+        let mut callspec = callspec.write().expect("callspec write lock");
+        callspec.entry_addr = Some(Address::new(callee_addr));
+        callspec.set_spacebase_offset(0x1234);
+    }
+    let annotation = source.new_varnode_call_specs(&callspec);
     source.op_set_input(&call, annotation, 0);
-    source.callspecs.push(callspec);
-    let oldspec_address = &source.callspecs[0] as *const FuncCallSpecs as usize;
+    source.add_call_specs_owner(callspec);
 
     let copy = source.new_op(1, Address::new(source_addr));
     source.op_set_opcode(&copy, OpCode::CPUI_COPY);
@@ -133,7 +138,7 @@ fn build_success_source(name: &str, source_addr: u64, callee_addr: u64) -> (Func
     let linked = Arc::new(RwLock::new(JumpTable::new(Address::new(source_addr))));
     configure_table(&linked, Some(&copy), source_addr);
     source.jump_tables.push(linked);
-    (source, oldspec_address)
+    source
 }
 
 fn build_range_source(name: &str, source_addr: u64, code_space: &AddrSpace) -> Funcdata {
@@ -235,7 +240,7 @@ fn print_table(table: &Arc<RwLock<JumpTable>>, base: u64) {
     );
 }
 
-fn print_success(source: &Funcdata, target: &Funcdata, oldspec_address: usize) {
+fn print_success(source: &Funcdata, target: &Funcdata) {
     println!("case=success");
     println!(
         "source dead_times={} uniq={}",
@@ -264,15 +269,25 @@ fn print_success(source: &Funcdata, target: &Funcdata, oldspec_address: usize) {
         );
     }
 
-    let newspec = &target.callspecs[0];
-    let callop = newspec
-        .find_call_op(target)
-        .expect("target callspec must resolve its call op");
-    let call = callop.0.read().expect("call read lock");
-    let fspec_self = call.get_in(0).is_some_and(|input| {
-        let input = input.read().expect("callspec input read lock");
-        input.get_space() == AddressSpace::Iop && input.is_annotation() && input.get_offset() == 0
-    });
+    let newspec = target.callspecs[0].clone();
+    let callop = {
+        let newspec = newspec.read().expect("target callspec read lock");
+        newspec
+            .find_call_op(target)
+            .expect("target callspec must resolve its call op")
+    };
+    let (call_time, fspec_self) = {
+        let call = callop.0.read().expect("call read lock");
+        let fspec_self = call.get_in(0).is_some_and(|input| {
+            let input = input.read().expect("callspec input read lock");
+            input.get_space() == AddressSpace::Iop
+                && input.is_annotation()
+                && input
+                    .get_call_spec()
+                    .is_some_and(|owner| Arc::ptr_eq(&owner, &newspec))
+        });
+        (call.get_time(), fspec_self)
+    };
     let fspec_varnodes = target
         .vbank
         .loc_tree
@@ -282,20 +297,26 @@ fn print_success(source: &Funcdata, target: &Funcdata, oldspec_address: usize) {
             value.get_space() == AddressSpace::Iop && value.is_annotation()
         })
         .count();
-    let entry = newspec.entry_addr.expect("direct callspec entry").as_u64();
+    let (entry, stackoffset, extrapop) = {
+        let newspec = newspec.read().expect("target callspec read lock");
+        (
+            newspec.entry_addr.expect("direct callspec entry").as_u64(),
+            newspec.get_spacebase_offset(),
+            newspec.prototype.get_extra_pop(),
+        )
+    };
     println!(
         "callspecs={} new={} op_time={} fspec_self={} varnodes={} fspec_varnodes={} entry_delta={} stackoffset={} extrapop={}",
         target.callspecs.len(),
-        usize::from(newspec as *const FuncCallSpecs as usize != oldspec_address),
-        call.get_time(),
+        usize::from(!Arc::ptr_eq(&source.callspecs[0], &newspec)),
+        call_time,
         usize::from(fspec_self),
         target.vbank.num_varnodes(),
         fspec_varnodes,
         entry as i64 - source.baseaddr.as_u64() as i64,
-        newspec.get_spacebase_offset(),
-        newspec.prototype.get_extra_pop(),
+        stackoffset,
+        extrapop,
     );
-    drop(call);
 
     println!("jumptables={}", target.jump_tables.len());
     print_table(&target.jump_tables[0], source.baseaddr.as_u64());
@@ -363,12 +384,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let range_source_addr = parse_address(&args[9])?;
     let range_target_addr = parse_address(&args[10])?;
 
-    let (mut source, oldspec_address) =
-        build_success_source("truncated_flow_source", source_addr, callee_addr);
+    let mut source = build_success_source("truncated_flow_source", source_addr, callee_addr);
     let state = flow_state(&mut source, Some(77));
     let mut target = Funcdata::new("truncated_flow_target", Address::new(target_addr), 1);
     target.truncated_flow(&source, &state)?;
-    print_success(&source, &target, oldspec_address);
+    print_success(&source, &target);
 
     let code_space = AddrSpace::new_space(
         SpaceType::Processor,

@@ -14114,23 +14114,28 @@ impl RulePiecePathology {
                         if let (Some(out), Some(idx)) =
                             (out_vn.as_ref(), Self::find_call_spec_for_op(fd, &dop))
                         {
-                            let fc = fd.get_call_specs(idx);
-                            if let Some(fc) = fc {
-                                if !fc.is_input_active() && !fc.is_input_locked() {
-                                    let n_in = dop.read().unwrap().num_input();
-                                    for i in 1..n_in {
-                                        let same = dop
-                                            .read().unwrap()
-                                            .get_in(i)
-                                            .map(|v| std::sync::Arc::ptr_eq(v, out))
-                                            .unwrap_or(false);
-                                        if same {
-                                            if fd.get_call_specs_mut(idx)
-                                                .map(|fc| fc.set_input_bytes_consumed(i, bytes_consumed))
-                                                .unwrap_or(false)
-                                            {
-                                                count += 1;
-                                            }
+                            let may_update = fd
+                                .get_call_specs(idx)
+                                .map(|fc| !fc.is_input_active() && !fc.is_input_locked())
+                                .unwrap_or(false);
+                            if may_update {
+                                let n_in = dop.read().unwrap().num_input();
+                                for i in 1..n_in {
+                                    let same = dop
+                                        .read()
+                                        .unwrap()
+                                        .get_in(i)
+                                        .map(|v| std::sync::Arc::ptr_eq(v, out))
+                                        .unwrap_or(false);
+                                    if same {
+                                        if fd
+                                            .get_call_specs_mut(idx)
+                                            .map(|mut fc| {
+                                                fc.set_input_bytes_consumed(i, bytes_consumed)
+                                            })
+                                            .unwrap_or(false)
+                                        {
+                                            count += 1;
                                         }
                                     }
                                 }
@@ -14155,28 +14160,19 @@ impl RulePiecePathology {
         count
     }
 
-    /// Look up the FuncCallSpecs index whose `op_addr` matches the given op's
-    /// address. Faithful to Ghidra's `Funcdata::getCallSpecs(PcodeOp*)`, which
-    /// in C++ is a direct pointer/index lookup; Rugra stores callspecs by the
-    /// CALL op's base address, so we match on that.
+    /// Look up the FuncCallSpecs index bound to the exact PcodeOp identity.
+    /// Ghidra first decodes a typed FSPEC annotation and otherwise compares
+    /// `fc->getOp() == op`; neither path compares instruction addresses.
     // Ghidra: funcdata.cc:484 Funcdata::getCallSpecs
     fn find_call_spec_for_op(
         fd: &Funcdata,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<usize> {
-        let addr = op.read().unwrap().get_seq_num().get_addr();
-        Self::find_call_spec_by_addr(fd, addr.as_u64())
-    }
-
-    /// Look up the FuncCallSpecs index whose `op_addr` matches `addr_u64`.
-    // RUGRA-GLUE: helper for Funcdata::getCallSpecs (funcdata.cc:484)
-    fn find_call_spec_by_addr(fd: &Funcdata, addr_u64: u64) -> Option<usize> {
-        for (i, fc) in fd.callspecs.iter().enumerate() {
-            if fc.op_addr.as_u64() == addr_u64 {
-                return Some(i);
-            }
-        }
-        None
+        let op_ref = crate::op::PcodeOpRef(op.clone());
+        let owner = fd.get_call_specs_of_op(&op_ref)?;
+        fd.callspecs
+            .iter()
+            .position(|candidate| std::sync::Arc::ptr_eq(candidate, &owner))
     }
 }
 
@@ -15158,7 +15154,9 @@ impl RuleLoadVarnode {
 impl Rule for RuleLoadVarnode {
     // Ghidra: ruleaction.cc:4277 RuleLoadVarnode::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleLoadVarnode::applyOp (ruleaction.cc:4277-4305).
+        // Partially corresponds to RuleLoadVarnode::applyOp
+        // (ruleaction.cc:4277-4305); the callspec tail remains
+        // CALLSPEC-0001.
         // checkSpacebase(data.getArch(),op,offoff)
         let glb = fd.get_arch().map(std::sync::Arc::as_ref);
         let mut offoff: u64 = 0;
@@ -15192,9 +15190,10 @@ impl Rule for RuleLoadVarnode {
         fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
 
         // The spacebase-placeholder / call-resolve tail (ruleaction.cc:4294-4303)
-        // requires FuncCallSpecs / resolveSpacebaseRelative, which Rugra does
-        // not yet model. The core LOAD→COPY transform is complete.
-        // TODO(callspecs): port resolveSpacebaseRelative once call specs exist.
+        // can now identify the exact callspec, but
+        // FuncCallSpecs::resolveSpacebaseRelative is still absent. The core
+        // LOAD→COPY transform is complete; the exact-owner tail remains
+        // CALLSPEC-0001 and is not claimed by this identity-only D0.
         Ok(action_status::CHANGE)
     }
 

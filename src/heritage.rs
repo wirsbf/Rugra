@@ -1419,13 +1419,18 @@ impl Heritage {
                         // already exists.
                         let already_trial = fd
                             .get_call_specs(i)
-                            .and_then(|fc| fc.active_output.as_ref())
-                            .map(|active| {
-                                active.which_trial_in_space(space, Address::new(off), size) >= 0
+                            .map(|fc| {
+                                fc.active_output
+                                    .as_ref()
+                                    .map(|active| {
+                                        active.which_trial_in_space(space, Address::new(off), size)
+                                            >= 0
+                                    })
+                                    .unwrap_or(true)
                             })
                             .unwrap_or(true);
                         if !already_trial {
-                            if let Some(fc) = fd.get_call_specs_mut(i) {
+                            if let Some(mut fc) = fd.get_call_specs_mut(i) {
                                 if let Some(active) = &mut fc.active_output {
                                     active.register_trial_in_space(
                                         space,
@@ -1474,13 +1479,17 @@ impl Heritage {
                     // varnode as the call's last input.
                     let already_trial = fd
                         .get_call_specs(i)
-                        .and_then(|fc| fc.active_input.as_ref())
-                        .map(|active| {
-                            active.which_trial_in_space(space, Address::new(off), size) >= 0
+                        .map(|fc| {
+                            fc.active_input
+                                .as_ref()
+                                .map(|active| {
+                                    active.which_trial_in_space(space, Address::new(off), size) >= 0
+                                })
+                                .unwrap_or(true)
                         })
                         .unwrap_or(true);
                     if !already_trial {
-                        if let Some(fc) = fd.get_call_specs_mut(i) {
+                        if let Some(mut fc) = fd.get_call_specs_mut(i) {
                             if let Some(active) = &mut fc.active_input {
                                 active.register_trial_in_space(
                                     space,
@@ -2245,8 +2254,12 @@ impl Heritage {
         // cc:1220: if (active->whichTrial(truncAddr, size) < 0)
         let already_trial = fd
             .get_call_specs(fc_idx)
-            .and_then(|fc| fc.active_input.as_ref())
-            .map(|active| active.which_trial_in_space(space, trunc_addr, size) >= 0)
+            .map(|fc| {
+                fc.active_input
+                    .as_ref()
+                    .map(|active| active.which_trial_in_space(space, trunc_addr, size) >= 0)
+                    .unwrap_or(true)
+            })
             .unwrap_or(true);
         if already_trial {
             return;
@@ -2282,7 +2295,7 @@ impl Heritage {
         // cc:1230: opInsertBefore(subpieceOp, op)
         fd.op_insert_before(&subpiece_op, &call_op);
         // cc:1231: active->registerTrial(truncAddr, vData.size)
-        if let Some(fc) = fd.get_call_specs_mut(fc_idx) {
+        if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
             if let Some(active) = &mut fc.active_input {
                 active.register_trial_in_space(space, trunc_addr, v_size);
             }
@@ -2429,8 +2442,12 @@ impl Heritage {
         // cc:1304: if (active->whichTrial(truncAddr, size) >= 0) return false
         let already_trial = fd
             .get_call_specs(fc_idx)
-            .and_then(|fc| fc.active_output.as_ref())
-            .map(|active| active.which_trial_in_space(space, trunc_addr, size) >= 0)
+            .map(|fc| {
+                fc.active_output
+                    .as_ref()
+                    .map(|active| active.which_trial_in_space(space, trunc_addr, size) >= 0)
+                    .unwrap_or(true)
+            })
             .unwrap_or(true);
         if already_trial {
             return false;
@@ -2444,7 +2461,7 @@ impl Heritage {
             fd, &call_op, space, addr, size, trunc_addr, v_size, write,
         );
         // cc:1307: active->registerTrial(truncAddr, vData.size)
-        if let Some(fc) = fd.get_call_specs_mut(fc_idx) {
+        if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
             if let Some(active) = &mut fc.active_output {
                 active.register_trial_in_space(space, trunc_addr, v_size);
             }
@@ -2965,26 +2982,25 @@ impl Heritage {
     pub fn clear_stack_placeholders(&mut self, fd: &mut Funcdata, info_space: AddressSpace) {
         // cc:2051-2054: for each call, abortSpacebaseRelative.
         let num_calls = fd.num_calls();
-        // Snapshot call op addresses first to avoid borrow conflicts.
-        let call_addrs: Vec<crate::address::Address> = (0..num_calls)
-            .map(|i| fd.callspecs[i].op_addr)
-            .collect();
-        // Take callspecs out to avoid double-mutable-borrow.
-        let mut callspecs = std::mem::take(&mut fd.callspecs);
-        for (i, call_addr) in call_addrs.iter().enumerate() {
-            let call_op = fd.obank.alivelist.iter()
-                .find(|op_ref| {
-                    let op = op_ref.0.read().unwrap();
-                    op.start.addr == *call_addr
-                        && (op.opcode == crate::opcodes::OpCode::CPUI_CALL
-                            || op.opcode == crate::opcodes::OpCode::CPUI_CALLIND)
-                })
-                .cloned();
+        // Clone only the stable Arc handles.  This keeps exact PcodeOp
+        // identity available while `abortSpacebaseRelative` mutates Funcdata;
+        // no address lookup or by-value callspec move is involved.
+        let callspecs = fd.callspecs.clone();
+        debug_assert_eq!(num_calls, callspecs.len());
+        for callspec in callspecs {
+            let call_op = callspec
+                .read()
+                .unwrap()
+                .op
+                .upgrade()
+                .map(crate::op::PcodeOpRef);
             if let Some(op_ref) = call_op {
-                callspecs[i].abort_spacebase_relative(&mut *fd, &op_ref);
+                callspec
+                    .write()
+                    .unwrap()
+                    .abort_spacebase_relative(fd, &op_ref);
             }
         }
-        fd.callspecs = callspecs;
         // cc:2055: info->hasCallPlaceholders = false
         let idx = self.infolist.iter().position(|i| i.space == info_space);
         if let Some(i) = idx {
@@ -3444,7 +3460,8 @@ impl Heritage {
 
     // Ghidra: heritage.cc:359 Heritage::callOpIndirectEffect
     /// Determine if the address range is affected by a call op.
-    /// Faithful to `callOpIndirectEffect` (heritage.cc:359-380).
+    /// Corresponds to `callOpIndirectEffect` (heritage.cc:359-380), but the
+    /// exact-owner-to-effect consumer remains `CALLSPEC-0001`/UNTESTED.
     pub fn call_op_indirect_effect(
         &self,
         fd: &Funcdata,
@@ -3456,8 +3473,11 @@ impl Heritage {
         if opc != OpCode::CPUI_CALL && opc != OpCode::CPUI_CALLIND {
             return true; // Non-call ops always considered as having effect
         }
-        // cc:362-376: check FuncCallSpecs for effect on this range
-        // Rugra lacks FuncCallSpecs integration; conservatively return true.
+        // cc:362-376: check FuncCallSpecs for effect on this range. D0 now has
+        // exact per-op owner lookup and has_effect_translate, but deliberately
+        // does not wire this upper consumer without its paired fixture
+        // (CALLSPEC-0001). Preserve the pre-D0 conservative result; this is not
+        // claimed equivalent for unaffected calls or CALLOTHER/NEW.
         let _ = (fd, addr, size);
         true
     }

@@ -2,14 +2,14 @@
 // Ghidra TypeOpCall::getInputLocal fixture.
 //
 // This deliberately exercises the production TypeOpCall trait method.  The
-// callspec is installed in Funcdata and represented by the same Iop/index
+// callspec is installed in Funcdata and represented by the same Iop/typed-Weak
 // annotation that Funcdata::new_varnode_call_specs currently produces.  The
 // output is expected to differ from Ghidra 12.0.4: TypeOpCall has no
 // get_input_local override and the legacy Varnode address-space enum has no
 // FSPEC variant.  The fixture therefore reports None; it does not emulate the
 // missing behavior in test code.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use rugra::address::Address;
 use rugra::fspec::{protoparam_flags, FuncCallSpecs, FuncProto, ProtoParameter};
@@ -95,11 +95,22 @@ fn emit_case(
     );
 }
 
-fn callspec_identity(fd: &Funcdata, index: usize, op: &PcodeOpRef) -> bool {
-    match (fd.get_call_specs(index), fd.get_call_specs_of_op(op)) {
-        (Some(expected), Some(actual)) => std::ptr::eq(expected, actual),
-        _ => false,
-    }
+fn callspec_identity(
+    fd: &Funcdata,
+    expected: &Arc<RwLock<FuncCallSpecs>>,
+    op: &PcodeOpRef,
+) -> bool {
+    fd.get_call_specs_of_op(op)
+        .is_some_and(|actual| Arc::ptr_eq(expected, &actual))
+}
+
+fn snapshot_param(
+    fd: &Funcdata,
+    callspec_index: usize,
+    parameter_index: usize,
+) -> Option<ProtoParameter> {
+    fd.get_call_specs(callspec_index)
+        .and_then(|callspec| callspec.prototype.get_param(parameter_index).cloned())
 }
 
 fn main() {
@@ -174,10 +185,7 @@ fn main() {
     prototype.add_parameter(this_plain);
 
     let mut fd = Funcdata::new("typeop_call_local_fixture", Address::new(0x500000), 0x100);
-    let callspec_index = fd.add_call_specs(FuncCallSpecs::new(Address::new(0x500010), prototype));
-    let fspec_primary = fd.new_varnode_call_specs(callspec_index);
-    let fspec_alias = fd.new_varnode_call_specs(callspec_index);
-    let constant_mimic = fd.new_constant(std::mem::size_of::<usize>(), callspec_index as u64);
+    let call_target = fd.new_constant(8, 0x500080);
     let input1 = fd.new_constant(8, 0x7180);
     let input2 = fd.new_constant(8, 0x11223344);
     let input3 = fd.new_constant(4, 0x55667788);
@@ -189,7 +197,7 @@ fn main() {
 
     let op = fd.new_op(9, Address::new(0x500010));
     fd.op_set_opcode(&op, OpCode::CPUI_CALL);
-    fd.op_set_input(&op, fspec_primary.clone(), 0);
+    fd.op_set_input(&op, call_target, 0);
     fd.op_set_input(&op, input1, 1);
     fd.op_set_input(&op, input2, 2);
     fd.op_set_input(&op, input3, 3);
@@ -198,6 +206,20 @@ fn main() {
     fd.op_set_input(&op, input6, 6);
     fd.op_set_input(&op, input7, 7);
     fd.op_set_input(&op, input8, 8);
+
+    let callspec_index = fd.add_call_specs(FuncCallSpecs::new_for_op(&op, prototype));
+    let callspec_owner = fd
+        .get_call_specs_owner(callspec_index)
+        .expect("fixture callspec owner");
+    let fspec_primary = fd.new_varnode_call_specs(&callspec_owner);
+    let fspec_alias = fd.new_varnode_call_specs(&callspec_owner);
+    let callspec_bits = fspec_primary.read().unwrap().get_offset();
+    let constant_mimic = fd.new_constant(std::mem::size_of::<usize>(), callspec_bits);
+    let constant_mimic_has_no_handle = constant_mimic.read().unwrap().get_call_spec().is_none();
+    let constant_mimic_op = fd.new_op(1, Address::new(0x500010));
+    fd.op_set_opcode(&constant_mimic_op, OpCode::CPUI_CALL);
+    fd.op_set_input(&constant_mimic_op, constant_mimic.clone(), 0);
+    fd.op_set_input(&op, fspec_primary.clone(), 0);
 
     println!("fixture=TYPEOP-LOCALTYPE-DISPATCH-0001.call_input");
     println!("architecture=current-rust-size-configuration-only");
@@ -209,7 +231,7 @@ fn main() {
     );
     emit_bool(
         "representation.primary_roundtrip",
-        callspec_identity(&fd, callspec_index, &op),
+        callspec_identity(&fd, &callspec_owner, &op),
     );
     {
         let mut call = op.0.write().unwrap();
@@ -217,32 +239,44 @@ fn main() {
     }
     emit_bool(
         "representation.alias_roundtrip",
-        callspec_identity(&fd, callspec_index, &op),
+        callspec_identity(&fd, &callspec_owner, &op),
     );
     emit_bool(
         "representation.alias_distinct_varnode",
         !Arc::ptr_eq(&fspec_primary, &fspec_alias),
     );
+    let (primary_space, primary_offset) = {
+        let primary = fspec_primary.read().unwrap();
+        (primary.get_space(), primary.get_offset())
+    };
+    let (alias_space, alias_offset) = {
+        let alias = fspec_alias.read().unwrap();
+        (alias.get_space(), alias.get_offset())
+    };
+    let constant_offset = constant_mimic.read().unwrap().get_offset();
     emit_bool(
         "representation.alias_same_address",
-        fspec_primary.read().unwrap().get_space() == fspec_alias.read().unwrap().get_space()
-            && fspec_primary.read().unwrap().get_offset()
-                == fspec_alias.read().unwrap().get_offset(),
+        primary_space == alias_space && primary_offset == alias_offset,
     );
     emit_bool(
         "representation.constant_same_offset",
-        constant_mimic.read().unwrap().get_offset() == fspec_primary.read().unwrap().get_offset(),
+        constant_offset == primary_offset,
     );
-    emit_bool("representation.constant_not_fspec", true);
+    emit_bool(
+        "representation.constant_not_fspec",
+        constant_mimic_has_no_handle && fd.get_call_specs_of_op(&constant_mimic_op).is_none(),
+    );
     {
         let mut call = op.0.write().unwrap();
         call.inrefs[0] = fspec_primary.clone();
     }
 
     let typeop = TypeOpCall;
+    let parameters = (0..7)
+        .map(|index| snapshot_param(&fd, callspec_index, index))
+        .collect::<Vec<_>>();
     {
         let call = op.0.read().unwrap();
-        let callspec = fd.get_call_specs(callspec_index).unwrap();
         emit_case(
             "slot0_target",
             &typeop,
@@ -258,7 +292,7 @@ fn main() {
             &call,
             1,
             &char_pointer,
-            callspec.prototype.get_param(0),
+            parameters[0].as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -267,7 +301,7 @@ fn main() {
             &call,
             2,
             &int4_type,
-            callspec.prototype.get_param(1),
+            parameters[1].as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -276,7 +310,7 @@ fn main() {
             &call,
             3,
             &factory.get_base(4, TypeMetatype::Unknown).unwrap(),
-            callspec.prototype.get_param(2),
+            parameters[2].as_ref(),
             &factory.get_base(4, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -285,7 +319,7 @@ fn main() {
             &call,
             4,
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
-            callspec.prototype.get_param(3),
+            parameters[3].as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -294,7 +328,7 @@ fn main() {
             &call,
             5,
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
-            callspec.prototype.get_param(4),
+            parameters[4].as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -303,7 +337,7 @@ fn main() {
             &call,
             6,
             &object_pointer,
-            callspec.prototype.get_param(5),
+            parameters[5].as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -312,7 +346,7 @@ fn main() {
             &call,
             7,
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
-            callspec.prototype.get_param(6),
+            parameters[6].as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
         emit_case(
@@ -331,16 +365,16 @@ fn main() {
         .prototype
         .parameters[0]
         .flags &= !protoparam_flags::TYPE_LOCKED;
+    let unlocked_parameter = snapshot_param(&fd, callspec_index, 0);
     {
         let call = op.0.read().unwrap();
-        let callspec = fd.get_call_specs(callspec_index).unwrap();
         emit_case(
             "locked_ptr_after_unlock",
             &typeop,
             &call,
             1,
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
-            callspec.prototype.get_param(0),
+            unlocked_parameter.as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
     }
@@ -349,16 +383,16 @@ fn main() {
         .prototype
         .parameters[0]
         .flags |= protoparam_flags::TYPE_LOCKED;
+    let relocked_parameter = snapshot_param(&fd, callspec_index, 0);
     {
         let call = op.0.read().unwrap();
-        let callspec = fd.get_call_specs(callspec_index).unwrap();
         emit_case(
             "locked_ptr_after_relock",
             &typeop,
             &call,
             1,
             &char_pointer,
-            callspec.prototype.get_param(0),
+            relocked_parameter.as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
     }
@@ -367,16 +401,16 @@ fn main() {
         let mut call = op.0.write().unwrap();
         call.inrefs[0] = fspec_alias;
     }
+    let alias_parameter = snapshot_param(&fd, callspec_index, 0);
     {
         let call = op.0.read().unwrap();
-        let callspec = fd.get_call_specs(callspec_index).unwrap();
         emit_case(
             "fspec_alias",
             &typeop,
             &call,
             1,
             &char_pointer,
-            callspec.prototype.get_param(0),
+            alias_parameter.as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
     }
@@ -384,16 +418,16 @@ fn main() {
         let mut call = op.0.write().unwrap();
         call.inrefs[0] = constant_mimic;
     }
+    let constant_parameter = snapshot_param(&fd, callspec_index, 0);
     {
         let call = op.0.read().unwrap();
-        let callspec = fd.get_call_specs(callspec_index).unwrap();
         emit_case(
             "constant_same_offset",
             &typeop,
             &call,
             1,
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
-            callspec.prototype.get_param(0),
+            constant_parameter.as_ref(),
             &factory.get_base(8, TypeMetatype::Unknown).unwrap(),
         );
     }

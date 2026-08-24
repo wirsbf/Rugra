@@ -22,9 +22,11 @@ use rugra::action::Action;
 use rugra::address::Address;
 use rugra::block::{BlockBasic, FlowBlock};
 use rugra::coreaction::ActionHeritage;
-use rugra::fspec::{EffectRecord, EffectType, FuncCallSpecs, ParamEntry, ProtoModelFull};
+use rugra::fspec::{
+    EffectRecord, EffectType, FuncCallSpecs, ParamEntry, ParamListOutput, ProtoModelFull,
+};
 use rugra::funcdata::Funcdata;
-use rugra::op::PcodeOp;
+use rugra::op::{PcodeOp, PcodeOpRef};
 use rugra::opcodes::OpCode;
 use rugra::space::AddressSpace;
 use rugra::varnode::Varnode;
@@ -146,18 +148,31 @@ fn make_callguard_model() -> Arc<ProtoModelFull> {
     let mut model = ProtoModelFull::new(Some(AddressSpace::Stack), 8);
     model.name = "callguard".to_string();
     model.extrapop = 0;
-    model
-        .input
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x30, 8, 1, 0));
-    model
-        .input
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x38, 8, 1, 1));
-    model
-        .output
-        .entry_mut()
-        .push(ParamEntry::from_storage(AddressSpace::Register, 0x0, 8, 1, 0));
+    model.input.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x30,
+        8,
+        1,
+        0,
+    ));
+    model.input.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x38,
+        8,
+        1,
+        1,
+    ));
+    let output_base = match &mut model.output {
+        ParamListOutput::Standard(output) => &mut output.base,
+        ParamListOutput::Register(output) => &mut output.base.base,
+    };
+    output_base.entry_mut().push(ParamEntry::from_storage(
+        AddressSpace::Register,
+        0x0,
+        8,
+        1,
+        0,
+    ));
     model.effectlist = vec![
         EffectRecord::new(AddressSpace::Register, 0x0, 8, EffectType::KilledByCall),
         EffectRecord::new(AddressSpace::Register, 0x288, 8, EffectType::ReturnAddress),
@@ -225,11 +240,11 @@ impl Graph {
     // FuncProto has no store, and its characterization goes straight to
     // the model branch — the same effective state.
     fn add_spec(&mut self, call_op: &OpRef, model: Arc<ProtoModelFull>) {
-        let op_addr = call_op.read().unwrap().get_addr();
         let proto = self.fd.funcp.clone();
-        let mut fc = FuncCallSpecs::new(op_addr, proto);
+        let call_op = PcodeOpRef(call_op.clone());
+        let mut fc = FuncCallSpecs::new_for_op(&call_op, proto);
         fc.prototype.set_model(Some(model));
-        self.fd.callspecs.push(fc);
+        self.fd.add_call_specs(fc);
     }
 
     fn set_input(&mut self, op: &OpRef, vn: &VnRef, slot: usize) {
@@ -255,10 +270,10 @@ impl Graph {
                 .op_set_output(&rugra::op::PcodeOpRef(def.clone()), vn);
             self.insert_end(&def, block);
         } else {
-            let freevn = self
-                .fd
-                .vbank
-                .create_with_space(size as usize, AddressSpace::Register, offset);
+            let freevn =
+                self.fd
+                    .vbank
+                    .create_with_space(size as usize, AddressSpace::Register, offset);
             let reader = self.make_op("reader", OpCode::CPUI_INT_OR, 2);
             self.set_input(&reader, &freevn, 0);
             let c = self.fd.new_constant(1, 1);
@@ -280,10 +295,10 @@ impl Graph {
                 .op_set_output(&rugra::op::PcodeOpRef(def.clone()), vn);
             self.insert_end(&def, block);
         } else {
-            let freevn = self
-                .fd
-                .vbank
-                .create_with_space(size as usize, AddressSpace::Stack, offset);
+            let freevn =
+                self.fd
+                    .vbank
+                    .create_with_space(size as usize, AddressSpace::Stack, offset);
             let reader = self.make_op("reader", OpCode::CPUI_INT_OR, 2);
             self.set_input(&reader, &freevn, 0);
             let c = self.fd.new_constant(1, 1);
@@ -369,7 +384,9 @@ impl Graph {
 }
 
 // The ten ABI-shaped ranges (GetStr decimal 0/48/56/512/514/518/519/522/523/648).
-const RANGES_OFFSET: [u64; 10] = [0x0, 0x30, 0x38, 0x200, 0x202, 0x206, 0x207, 0x20a, 0x20b, 0x288];
+const RANGES_OFFSET: [u64; 10] = [
+    0x0, 0x30, 0x38, 0x200, 0x202, 0x206, 0x207, 0x20a, 0x20b, 0x288,
+];
 const RANGES_SIZE: [i32; 10] = [8, 8, 8, 1, 1, 1, 1, 1, 1, 8];
 
 // Build the canonical GetStr form: b0 holds the ten seeded ranges, call1
@@ -425,7 +442,11 @@ fn main() {
             out.push_str(&format!(
                 "{:x}/{}",
                 RANGES_OFFSET[i],
-                effect_name(model.has_effect(AddressSpace::Register, RANGES_OFFSET[i], RANGES_SIZE[i]))
+                effect_name(model.has_effect(
+                    AddressSpace::Register,
+                    RANGES_OFFSET[i],
+                    RANGES_SIZE[i]
+                ))
             ));
         }
         out.push_str(&format!(
@@ -553,7 +574,10 @@ fn main() {
         g.add_spec(&call2, model);
         // cc:1461-1462: fc0 has the resolved stack offset; fc1 keeps
         // offset_unknown (tryregister == false).
-        g.fd.callspecs[0].stackoffset = 0x10;
+        {
+            let mut fc = g.fd.callspecs[0].write().unwrap();
+            fc.stackoffset = 0x10;
+        }
         g.prepare_structure();
         g.fd.op_heritage();
         let mut pass1 = String::new();

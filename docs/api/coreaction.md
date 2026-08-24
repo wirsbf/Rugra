@@ -696,16 +696,20 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 3 单元测试：空 Funcdata、get_name、trace_indirect_target 常量解析。705/705 测试，curl 24/24 + httpd 29/29。
 
-### 2026-06-27（会话3 G5 接入）：ActionFuncLink/FuncLinkOutOnly apply() 完整移植
+### 2026-06-27（历史声明，2026-08-24 D0 审计已撤回“完整移植”）：ActionFuncLink/FuncLinkOutOnly apply()
+
+本节记录当时的阶段性判断，不再代表当前状态。实际实现只覆盖 register/basic output
+路径；stack placeholder、stack output、extension、calculated-bool 与完整 prototype
+consumer 仍为 `CALLSPEC-0001`/`UNTESTED`，以本文件 2026-08-24 D0 节为准。
 
 - ActionFuncLink::apply（coreaction.cc:1575-1586）：遍历 callspecs，func_link_input + func_link_output
 - func_link_input（1474-1513）：unlocked→init_active_input；locked→注册 trial
 - func_link_output（1521-1572）：unlocked→init_active_output；locked→需 newVarnodeOut（暂缓）
 - ActionFuncLinkOutOnly::apply（1588-1595）：只 func_link_output
 
-### 2026-06-30：func_link_output 完整移植 void 门控 + known_return_type 表
+### 2026-06-30（历史声明，2026-08-24 D0 审计已撤回“完整移植”）：func_link_output void 门控 + known_return_type 表
 
-- `func_link_output(fc_idx, op)` 完整 1:1 移植 coreaction.cc:1521-1572：① 已有 output → op_unset_output；② locked + Void → 无 output；③ locked + 非 void → new_varnode_out(sz, RAX)；④ unlocked → init_active_output。
+- 当时把 `func_link_output(fc_idx, op)` 的四个 basic 分支称为“完整 1:1”；该结论现已撤回。已覆盖：①已有 output → op_unset_output；② locked + Void → 无 output；③ locked + 非 void → new_varnode_out(sz, RAX)；④ unlocked → init_active_output。未覆盖的 stack-output、extension 与 calculated-bool 分支继续绑定 `CALLSPEC-0001`。
 - `known_return_type(name) -> Option<KnownReturn{Void,Pointer,Int(sz)}>`：编码 libc/已知函数返回类型（忠实于 Ghidra 从数据库 FuncProto 锁定 callee 原型的机制）。`ensure_callspecs` 按此设置锁定 return-type。
 - `FuncProto.output_type_locked` + `set_output_lock` 真实置位 + `is_output_locked` 委托（见 fspec.md）。
 - 效果：curl 17→19（void-CALL 赋值 bug 消除）。剩余 5 个失败为 Gap B/C + 一个预存 func_link_input 参数丢失 bug（main 的 `curl_easy_setopt(,` 缺 arg0，非本改动引入）。
@@ -722,9 +726,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - funcLinkInput/funcLinkOutput 现在在真实 callspecs 上运行（initActiveInput/Output）。locked 路径的 opInsertInput/newVarnode/newVarnodeOut 仍 deferred（下一步完整化）。
 - 基础已就绪，无回归：780/780 测试，curl 24/24。
 
-### 2026-06-29（完整移植）：funcLinkInput/funcLinkOutput 完整 op-insert + 移除 ActionCallParams
+### 2026-06-29（历史声明，2026-08-24 D0 审计已撤回“完整对齐”）：funcLinkInput/funcLinkOutput op-insert + 移除 ActionCallParams
 
-完整对齐 Ghidra 的 CALL 参数/返回值建立链（不再简化）：
+本节的“完整对齐/不再简化”结论不再有效；以下仅是当时已接通的 basic register
+路径记录。完整 consumer 的剩余分支见 `CALLSPEC-0001`：
 - **lifter 精简**（x86_lift.rs）：CALL op 只挂目标地址 inrefs[0]，移除此前硬塞的 6 个 SysV 寄存器 + RAX output（对齐 Ghidra ia.sinc）。
 - **funcLinkInput**（coreaction.rs，对齐 coreaction.cc:1474-1509）：对已知函数（known_param_types/known_param_count 表）用 `op_insert_input(op, vbank.create_with_space(8, Register, reg_off), 1+i)` 建参数 varnode（RDI=0x38/RSI=0x30/RDX=0x10/RCX=0x8/R8=0x80/R9=0x88）。未知函数走 initActiveInput（trial 恢复）。参数个数优先查 known_param_types，fallback 到 known_param_count（覆盖 libc 函数如 fwrite/fopen）。
 - **funcLinkOutput**（对齐 coreaction.cc:1521-1572）：用 `new_varnode_out(8, RAX@0x0, op)` 建返回值 output。
@@ -889,7 +894,7 @@ action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个
 
 ### 2026-08-23：CALL 输出类型 + 平台参数符号（GETSTR-ZERODIFF-C/E 域）
 
-① `ActionInferTypes::build_localtypes` 新增 CALL/CALLIND 臂，移植 `TypeOpCall::getOutputLocal`（typeop.cc:720-734）：callspec 输出类型锁定时以被调方返回类型为 CALL 输出 varnode 的种子类型（锁定 libc `char *strdup(...)` → char*；VOID 回退缺省）。配套新增 `Funcdata::get_call_specs_of_op`（funcdata.cc:484-497 的移植：in(0) 注释 varnode 快路径 + 按调用地址线性扫描回退）。效果：GetStr `lVar1`→`pcVar1`（命名经类型前缀链自动跟随）。② `ActionRestructureVarnode::apply` 构造 ScopeLocal 时从 input-locked FuncProto 播种 function_parameter 符号（Ghidra 平台侧等价：Program DB 的函数符号带 DWARF 参数符号，经 decompile.cc <localdb> 进入解编译器；Rugra 的新建 ScopeLocal 为空故在此播种），符号带 namelock+typelock。③ `ScopeLocal::restructure_varnode` 开头的全清改为 `clearUnlockedCategory(-1)` 忠实移植（varmap.cc:1273 + database.cc:2086-2096：category>=0 符号无条件存活；category<0 仅 typelock 存活、未锁名重置 $$undef；其余删除——旧实现全清抹掉了平台参数符号）。效果：GetStr `in_RSI`/`in_RDI` 死声明消失，体内引用以参数名 `value`/`string` 输出。curl 全量 defects=0/numbering=0，skeleton 2459→2439。
+① `ActionInferTypes::build_localtypes` 新增 CALL/CALLIND 臂，移植 `TypeOpCall::getOutputLocal`（typeop.cc:720-734）：callspec 输出类型锁定时以被调方返回类型为 CALL 输出 varnode 的种子类型（锁定 libc `char *strdup(...)` → char*；VOID 回退缺省）。配套新增 `Funcdata::get_call_specs_of_op`（funcdata.cc:484-497）：in(0) typed annotation 快路径验证当前 owner 与 exact op，回退也只比较 callspec 反向 `Weak` 升级后的 `PcodeOp` identity，不再按调用地址扫描。效果：GetStr `lVar1`→`pcVar1`（命名经类型前缀链自动跟随）。② `ActionRestructureVarnode::apply` 构造 ScopeLocal 时从 input-locked FuncProto 播种 function_parameter 符号（Ghidra 平台侧等价：Program DB 的函数符号带 DWARF 参数符号，经 decompile.cc <localdb> 进入解编译器；Rugra 的新建 ScopeLocal 为空故在此播种），符号带 namelock+typelock。③ `ScopeLocal::restructure_varnode` 开头的全清改为 `clearUnlockedCategory(-1)` 忠实移植（varmap.cc:1273 + database.cc:2086-2096：category>=0 符号无条件存活；category<0 仅 typelock 存活、未锁名重置 $$undef；其余删除——旧实现全清抹掉了平台参数符号）。效果：GetStr `in_RSI`/`in_RDI` 死声明消失，体内引用以参数名 `value`/`string` 输出。curl 全量 defects=0/numbering=0，skeleton 2459→2439。
 
 ### 2026-08-23：ActionExtraPopSetup 真实实现（GETSTR-ZERODIFF-B 域）
 
@@ -1329,3 +1334,33 @@ buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
 `Address` 不会被 fail-closed 拒绝，也不恢复旧有的 Register 推断。此改动
 只修复 caller 的空间传递；对应 action 中既有的模型硬编码与未完成恢复分支
 仍按原登记残差保留。
+
+## CALLSPEC-IDENTITY-D0 下游接线（2026-08-24）
+
+- `ActionFuncLink::setup_call_specs` 以 exact `PcodeOpRef` 去重并创建稳定 owner，
+  将 typed FSPEC annotation 绑定到同一 owner；`ActionDeindirect` 在 CALLIND
+  确认直接目标后也先安装该 annotation，再改成 CALL。两处都不再用
+  `op_addr`/vector index 充当身份。
+- 正常 lifting 已由 `FlowInfo::setup_call_specs` 建立 callspec；
+  `ActionFuncLink::setup_call_specs` 只为绕过 FlowInfo 而手工构造的 alive CALL
+  保留兼容 fallback。该 fallback 不是第二套 FlowInfo，也不把未覆盖的 consumer
+  闭包升为 `MATCH`，继续绑定 `CALLSPEC-0001`。
+- `ActionFuncLink`、`ActionFuncLinkOutOnly`、`ActionNameVars`、
+  `ActionActiveReturn`、`ActionExtraPopSetup`、`ActionInferTypes` 等调用点通过
+  callspec 的 exact op `Weak` 或 `Funcdata::get_call_specs_of_op` 取回同一个
+  owner。DeadCode、active trial、warning 与原型处理用短 read/write guard；需要
+  随后修改 Funcdata 时先复制 entry/type/model/slot 等值并释放 guard，避免锁借用
+  改变 Action 的遍历顺序或 mutation 时机。
+- 这些变化只接通身份和 Rust guard 生命周期，未改变各 Action 已登记的模型、
+  trial、callfixup 或类型推导残差。D0 总体仍为 `MISMATCH`：专用
+  `IPTR_FSPEC` 缺失，`AddressSpace::Iop` 临时代用由
+  `TYPEOP-FSPEC-SPACE-0001` 跟踪；TypeOp getter、PrintC、StringManager 不在
+  本阶段 write-set，主管线 Action 及模块状态均不据此升级。
+- `StackSolver::build` / `analyze_extra_pop` 的旧注释已更正：exact per-op
+  callspec lookup 已存在；真正未完成的是 `effective_extrapop` 字段、从 Iop
+  source op 到 owner 的消费、known-extrapop 时把真实 rhs 写入 equation（当前仍固定
+  guess 4），以及 solver 的 mutating write-back。初始 stack-pointer 非 input 时的
+  错误通道也未对齐：Ghidra 抛 `LowlevelError` 并由 caller 写 warningHeader，Rust 仅写
+  stderr 后返回；该非 callspec 分支绑定 `PIPE-STALL-SHAPE-0001`。上述分支均未做
+  双侧执行，状态为 `UNTESTED`；callspec 分支继续绑定 `CALLSPEC-0001`，不属于 D0
+  identity `MATCH`。

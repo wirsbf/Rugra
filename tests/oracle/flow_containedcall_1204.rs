@@ -10,8 +10,8 @@
 
 use rugra::address::Address;
 use rugra::block::{block_flags, FlowBlock};
-use rugra::comment::CommentDatabaseInternal;
 use rugra::comment::comment_type;
+use rugra::comment::CommentDatabaseInternal;
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::flow::follow_flow;
 use rugra::fspec::FuncCallSpecs;
@@ -123,8 +123,10 @@ fn input0_token(op: &rugra::op::PcodeOp, base: u64) -> String {
     let varnode = input.read().expect("varnode read lock");
     match varnode.get_space() {
         // Ghidra stores the call-spec annotation in the Fspec space
-        // (IPTR_FSPEC); Rugra's callspec varnodes live in the Iop space.
-        // Both are pointer/index temporaries, projected to one token.
+        // (IPTR_FSPEC). Rugra's pointer-shaped Iop annotation carries a typed,
+        // non-owning Weak handle to the Funcdata-owned Arc; this fixture only
+        // projects the two space encodings to one token and does not claim an
+        // identity proof from either the token or numeric offset.
         AddressSpace::Iop => "callspec".to_string(),
         AddressSpace::Const => {
             if op.opcode == rugra::opcodes::OpCode::CPUI_LOAD
@@ -179,15 +181,14 @@ fn observe(
     println!("calls={}", fd.num_calls());
     for i in 0..fd.num_calls() {
         if let Some(fc) = fd.get_call_specs(i) {
-            println!("{}", spec_line(i, fc, base));
+            println!("{}", spec_line(i, &fc, base));
         }
     }
 
     {
         let db_ref = db.read().expect("commentdb read lock");
-        let comments: Vec<&rugra::comment::Comment> = db_ref
-            .comments_for_function(Address::new(base))
-            .collect();
+        let comments: Vec<&rugra::comment::Comment> =
+            db_ref.comments_for_function(Address::new(base)).collect();
         for (index, comment) in comments.iter().enumerate() {
             let ty = comment.get_type();
             let type_token = if (ty & comment_type::WARNINGHEADER) != 0 {
@@ -268,7 +269,11 @@ fn observe(
             index,
             blk,
             op.get_opcode() as i32,
-            if (op.flags & pcodeop_flags::STARTBASIC) != 0 { 1 } else { 0 },
+            if (op.flags & pcodeop_flags::STARTBASIC) != 0 {
+                1
+            } else {
+                0
+            },
             input0_token(&op, base)
         );
     }
@@ -282,7 +287,9 @@ fn observe(
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().collect::<Vec<_>>();
     if args.len() != 25 {
-        return Err("usage: flow_containedcall_1204 TEXT TEXT_BASE ADDR0 SIZE0 ... ADDR10 SIZE10".into());
+        return Err(
+            "usage: flow_containedcall_1204 TEXT TEXT_BASE ADDR0 SIZE0 ... ADDR10 SIZE10".into(),
+        );
     }
 
     let image = fs::read(&args[1])?;

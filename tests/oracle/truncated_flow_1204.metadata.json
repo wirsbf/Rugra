@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
   "fixture_id": "FLOW-TRUNCATED-0001",
-  "status_note": "The controlled clone projection is byte-for-byte MATCH against locked Ghidra 12.0.4: raw dead-list versus SeqNum-tree order, exact uniqId, callspec/FSPEC rebinding and stale-varnode deletion, linked/unlinked jump-table copy/reset/deep identity, per-op dead-to-alive block insertion, complete Address-space-preserving initial block range with a non-final maximum stop, and all three requested exceptions including missing-entry lifecycle state and mutation before the missing-table throw. The whole mapped function remains MISMATCH because Rugra cannot represent every FuncCallSpecs field/direct op pointer or nullable PcodeOp input, while FlowInfo private-state, injection, and BlockBasic multi-range copy/merge/marshal branches are not exhaustively driven.",
+  "status_note": "The controlled clone projection is byte-for-byte MATCH against locked Ghidra 12.0.4: raw dead-list versus SeqNum-tree order, exact uniqId, exact Arc callspec ownership with typed-Weak FSPEC rebinding and stale-varnode deletion, linked/unlinked jump-table copy/reset/deep identity, per-op dead-to-alive block insertion, complete Address-space-preserving initial block range with a non-final maximum stop, and all three requested exceptions including missing-entry lifecycle state and mutation before the missing-table throw. The whole mapped function remains MISMATCH because Rugra still uses Iop rather than a dedicated FSPEC space, does not represent every FuncCallSpecs field or nullable PcodeOp input, and does not exhaustively drive FlowInfo private-state, injection, or BlockBasic multi-range copy/merge/marshal branches.",
   "decisive_semantics": {
-    "reference_output_parameters": "Funcdata::truncatedFlow mutates the target Funcdata through its op/varnode/callspec/jump-table/block banks while reading the source Funcdata and FlowInfo by pointer; cloned callspecs, FSPEC annotations, indirect-op links and JumpModel owners must point into the target, not alias source objects. BlockBasic::setInitialRange copies complete Address endpoints into target-owned range state, retaining the source address-space identity. The fixture observes source/target identity separation, the target mutation retained before the missing-jumptable exception, and the raw clone retained without any block lifecycle mutation before the missing-entry exception.",
+    "reference_output_parameters": "Funcdata::truncatedFlow mutates the target Funcdata through its op/varnode/callspec/jump-table/block banks while reading the source Funcdata and FlowInfo by pointer; cloned callspec Arc owners, their exact op Weak links, typed-Weak FSPEC annotations, indirect-op links and JumpModel owners must point into the target, not alias source objects. BlockBasic::setInitialRange copies complete Address endpoints into target-owned range state, retaining the source address-space identity. The fixture observes source/target identity separation, the target mutation retained before the missing-jumptable exception, and the raw clone retained without any block lifecycle mutation before the missing-entry exception.",
     "loop_bounds_traversal_order": "Raw ops traverse source obank.beginDead()..endDead() in linked-list order [time 1,0,2], independently of the SeqNum-sorted optree [0,1,2]; callspecs and jump tables traverse their source vectors from index 0 to size, unlinked tables are skipped without reordering later linked tables, and splitBasic consumes each dead op in the same [1,0,2] order. The range probe separately consumes machine-address deltas [0,64,32] and scans every non-start op, so the final op cannot masquerade as the per-block maximum.",
     "counter_accumulator_lifecycle": "PcodeOpBank uniqId is one bank-wide next-time counter: cloning explicit times may advance it, then truncatedFlow unconditionally overwrites it with the source value 4. Block SeqNum.order is assigned per insertion from ordbefore=2 and 0x1000000 midpoint increments; callspec and jump-table target vectors append exactly once per accepted source entry and preserve successful prefixes on a later throw. A missing first STARTBASIC retains cloned order 0 and never starts the block-order accumulator.",
     "sorting_comparison_keys": "PcodeOpTree ordering uses SeqNum Address then immutable time, dead/alive lists use insertion/list order, callspec and jump-table lookup use exact call/indirect-op SeqNum identity, and block order follows dead-list traversal rather than the tree. Block stop accumulation uses Address::operator< (space identity/order before offset), not naked offsets. The success case gives all cloned ops one address so time and list order cannot be conflated; the range case uses non-monotonic offsets [0,64,32] in one explicit code space."
@@ -34,13 +34,9 @@
     ]
   },
   "rugra_source": {
-    "base_commit": "4c4808d12dfabeecd7043c49da852adf9a10e68f",
-    "base_tree": "71ed04342212855062188a1ed1dff27c1ebf4892",
-    "base_src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
-    "base_block_blob": "b2ffde0323304a21d8a08011be95c84ef3fe289f",
-    "base_funcdata_blob": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
-    "base_flow_blob": "c76bd681b78b55e7855769e5e6d438df8c8c4cc2",
-    "base_op_blob": "1f8908d74c0e5b72e41a910e46313066d48ce919",
+    "base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+    "base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+    "base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
@@ -57,27 +53,56 @@
     ],
     "overlays": [
       {
-        "path": "src/block.rs",
-        "sha256": "73cd55452e8e4f6c89b8ee188351951290aa389d8692d376f02f684c237cd7f5",
-        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
-      },
-      {
-        "path": "src/funcdata.rs",
-        "sha256": "e76cf04650b84b0b66c1fe946db19847adfc4b9eaf7f64e5e9483535c08d8694",
-        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
+        "path": "src/coreaction.rs",
+        "sha256": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
       },
       {
         "path": "src/flow.rs",
-        "sha256": "3066ab1b511873551fc3f7d6cbd8d4d6a5435ff8536be7e669f95b7862a4f2ad",
-        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
+        "sha256": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
       },
       {
-        "path": "src/op.rs",
-        "sha256": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
-        "policy": "Live write-set overlay; hash-verified before replacing the pinned base file."
+        "path": "src/fspec.rs",
+        "sha256": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
+      },
+      {
+        "path": "src/funcdata.rs",
+        "sha256": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
+      },
+      {
+        "path": "src/heritage.rs",
+        "sha256": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
+      },
+      {
+        "path": "src/ruleaction.rs",
+        "sha256": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
+      },
+      {
+        "path": "src/signature.rs",
+        "sha256": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
+      },
+      {
+        "path": "src/unionresolve.rs",
+        "sha256": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
+      },
+      {
+        "path": "src/varnode.rs",
+        "sha256": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9",
+        "policy": "D0 callspec identity closure overlay; live and copied bytes are hash-verified."
       }
     ],
-    "archive_policy": "Immutable explicit dependency closure plus four verified live source overlays; unrelated worktree files are excluded."
+    "snapshot_build_link": {
+      "path": "ghidra",
+      "target_policy": "Symlink to the already identity-checked locked oracle checkout so build.rs resolves the C++ shim headers."
+    },
+    "archive_policy": "Immutable 92daed3 crate closure plus every hash-verified D0 callspec identity source overlay; unrelated worktree files are excluded."
   },
   "architecture": "x86:LE:64:default",
   "compiler_spec": {
@@ -90,11 +115,13 @@
       "Funcdata::truncatedFlow (funcdata_op.cc:792-839)",
       "Funcdata::cloneOp (funcdata_op.cc:616-628)",
       "Funcdata::cloneVarnode (funcdata_varnode.cc:252-267)",
+      "Funcdata::getCallSpecs (funcdata.cc:484-497)",
+      "Funcdata::newVarnodeCallSpecs (funcdata_varnode.cc:205-214)",
       "FlowInfo cloning constructor (flow.cc:52-76)",
       "FlowInfo::generateBlocks/splitBasic (flow.cc:824-845/983-1017)",
       "Funcdata::setBasicBlockRange (funcdata.hh:556)",
       "BlockBasic::getStart/getStop/setInitialRange (block.cc:2319-2335/2625-2631)",
-      "FuncCallSpecs::clone (fspec.cc:4964-4977)",
+      "FuncCallSpecs constructor/clone (fspec.cc:4924-4959/4964-4977)",
       "JumpTable partial copy constructor (jumptable.cc:2401-2425)",
       "PcodeOpBank::insertAfterDead (op.cc:1039-1048)"
     ],
@@ -163,20 +190,12 @@
       "missing_linked_jumptable_after_successful_prefix",
       "missing_entry_marker"
     ],
-    "sha256": "f0d9d93971fe9f0252ba7facbefc07203f9ec2ceefcf89aefa5cc67aca238970"
+    "sha256": "ebf5d563682bac63296f87f2ef5fa0a28e47bfd0f6ab0e3253894c0328ba71c3"
   },
   "comparand": {
     "cpp_fixture_sha256": "17520d2f107170efbf100724b306daf0b05477fb9f7f4b439a2c7691c480482f",
-    "rust_fixture_sha256": "ba4137c6bbc62ea8cb2ac2eb35182a0cf6417bc2ad725f687739f65541a657d8",
-    "block_overlay_sha256": "73cd55452e8e4f6c89b8ee188351951290aa389d8692d376f02f684c237cd7f5",
-    "funcdata_overlay_sha256": "e76cf04650b84b0b66c1fe946db19847adfc4b9eaf7f64e5e9483535c08d8694",
-    "flow_overlay_sha256": "3066ab1b511873551fc3f7d6cbd8d4d6a5435ff8536be7e669f95b7862a4f2ad",
-    "op_overlay_sha256": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
-    "block_doc_sha256": "784d74b3f5232ec096e3deb044646fafeff9b6b883b2f684f418ffc8e6359991",
-    "funcdata_doc_sha256": "134d5c86a1ca1380f70792719b8236ecffb451c72b211161bee8e8d4bf353e72",
-    "flow_doc_sha256": "ce201a79c094ccbedbc383d2fb8ce895b0c646ede2e39a03d6b1ab47096c812e",
-    "op_doc_sha256": "195be72ee44707fd01edcd07ab360c664e502e654b5b877eede85bbfba785f90",
-    "runner_sha256": "20a9f64fb00dcced25cb6c5943a6d5f20c48a7ef560e54b96748177d7abb9e4a"
+    "rust_fixture_sha256": "60129dff2df2a5c092126a2ae588d36d606b87431d5dfc49f6887729c2a91406",
+    "runner_sha256": "d2c421aaff24376884e1b6d3e4cb68cfd18d766f214389c8dfac41ae6ebe85a3"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "dc4db0ffb72828228969a0c0e1558db809f4c93f8efcd979a4b03c6f67dda8b5",
@@ -201,13 +220,13 @@
     },
     "callspec_fspec_rebind_projection": {
       "status": "MATCH",
-      "covers": "funcdata_op.cc:803-815: qlst order, new callspec identity, exact call SeqNum, target FSPEC self binding, stale cloned FSPEC Varnode deletion, target entry, stackoffset and prototype extrapop.",
+      "covers": "funcdata_op.cc:803-815: qlst order, distinct stable Arc owner, exact cloned call Weak identity, target annotation typed-Weak self binding, stale cloned annotation deletion, target entry, stackoffset and prototype extrapop.",
       "residual_todo_ids": []
     },
     "callspec_complete_identity_and_fields": {
       "status": "MISMATCH",
-      "covers": "Rugra FuncCallSpecs stores an op address rather than Ghidra's direct PcodeOp pointer and lacks effective_extrapop, paramshift and isbadjumptable. Annotation-free multiple calls at one address therefore conservatively error instead of guessing identity.",
-      "residual_todo_ids": ["CALLSPEC-0001"]
+      "covers": "Exact callspec/op identity and owner lifecycle are represented by Arc/Weak and covered here. Rugra still uses Iop rather than Ghidra's dedicated FSPEC space and lacks effective_extrapop, paramshift and isbadjumptable fields.",
+      "residual_todo_ids": ["CALLSPEC-0001", "TYPEOP-FSPEC-SPACE-0001"]
     },
     "jumptable_partial_copy_skip_and_identity": {
       "status": "MATCH",
@@ -267,6 +286,7 @@
   },
   "residual_todo_ids": [
     "CALLSPEC-0001",
+    "TYPEOP-FSPEC-SPACE-0001",
     "BLOCKBASIC-COVER-0001",
     "FLOW-TRUNCATED-0001",
     "INJECT-0001",

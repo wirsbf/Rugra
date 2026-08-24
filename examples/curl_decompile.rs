@@ -628,9 +628,9 @@ fn libc_import_signature(name: &str) -> Option<(&'static str, &'static str)> {
 
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
-// signature proto on the call site, (3) rebuild the CALL op's fspec
-// annotation varnode keyed by the entry address. Unresolved targets are left
-// exactly as flow produced them (unknown). Returns (named, locked
+// signature proto on the call site, (3) refresh the CALL op's typed fspec
+// annotation against the same stable callspec owner. Unresolved targets are
+// left exactly as flow produced them (unknown). Returns (named, locked
 // signatures, relinked call ops).
 fn link_call_specs(
     fd: &mut rugra::funcdata::Funcdata,
@@ -638,32 +638,36 @@ fn link_call_specs(
     storage: &rugra::debugproto::X86_64GccStorage,
     fn_name: &str,
 ) -> (usize, usize, usize) {
-    // (op_addr, entry_addr) for every spec flow produced with a direct target.
-    let targets: Vec<(u64, u64)> = fd
+    // Keep the stable owner with each direct target. Multiple CALLs may share
+    // one machine address, so an address lookup is not an identity lookup.
+    let targets: Vec<_> = fd
         .callspecs
         .iter()
-        .filter_map(|fc| fc.entry_addr.map(|entry| (fc.op_addr.as_u64(), entry.as_u64())))
+        .filter_map(|owner| {
+            let spec = owner.read().unwrap();
+            spec.entry_addr
+                .map(|entry| (owner.clone(), spec.op_addr.as_u64(), entry.as_u64()))
+        })
         .collect();
     let mut named = 0usize;
     let mut signatures = 0usize;
-    for (op_addr, entry) in targets {
+    for (owner, op_addr, entry) in targets {
         // flow.cc:660: queryFunction(entry) -> the PLT thunk's symbol name.
         let Some(name) = fd.symbol_table.get(&entry).cloned() else {
             continue; // Unknown target: stays unknown (no queryCall hit).
         };
         // flow.cc:662: fspecs.setFuncdata(otherfunc) — entry + display name.
-        if let Some(fc) = fd.callspecs.iter_mut().find(|fc| fc.op_addr.as_u64() == op_addr) {
-            fc.set_funcdata(&name, rugra::address::Address::new(entry));
-            named += 1;
-        }
+        owner
+            .write()
+            .unwrap()
+            .set_funcdata(&name, rugra::address::Address::new(entry));
+        named += 1;
         // coreaction.cc:2327: fc->copy(otherfunc->getFuncProto()) — the
         // platform side's locked libc signature for the imported callee.
         match libc_signatures.locked_proto(&name, storage) {
             Ok(Some(proto)) => {
-                if let Some(fc) = fd.callspecs.iter_mut().find(|fc| fc.op_addr.as_u64() == op_addr) {
-                    fc.prototype = proto;
-                    signatures += 1;
-                }
+                owner.write().unwrap().prototype = proto;
+                signatures += 1;
             }
             Ok(None) => {}
             Err(error) => eprintln!(
@@ -673,46 +677,35 @@ fn link_call_specs(
         }
     }
     // flow.cc:685 / fspec.cc:5450: opSetInput(op, newVarnodeCallSpecs(fc)).
-    // Ghidra's fspec varnode is a pointer to the FuncCallSpecs and printc's
-    // opCall resolves the callee name through it (printc.cc:589-612
-    // fc->getName()); Rugra's printc resolves the name from the fspec
-    // varnode's offset via the symbol table, so the entry-keyed offset is the
-    // observable equivalent. Same Iop annotation varnode shape flow created,
-    // re-keyed from the spec index to the entry address.
+    // Ghidra's fspec varnode is a pointer to the FuncCallSpecs. D0 preserves
+    // that exact owner identity through a typed Weak carried by the temporary
+    // Iop annotation; TypeOp/PrintC consumption remains a separate residual.
     let relinked = relink_call_spec_targets(fd);
     (named, signatures, relinked)
 }
 
-// RUGRA-GLUE: rebuilds each direct CALL's fspec annotation varnode with the
-// entry address as its offset (Funcdata::newVarnodeCallSpecs encodes the
-// callspec vector index instead, which no consumer can resolve back to a
-// symbol). Space/size/annotation flag match the varnode flow created.
+// RUGRA-GLUE: refresh each direct CALL's fspec annotation from its stable
+// callspec owner. The driver temporarily retains the entry-address offset for
+// its legacy PrintC bridge, but identity is exclusively the typed Weak handle;
+// a raw constant with the same bits cannot resolve a callspec.
 fn relink_call_spec_targets(fd: &mut rugra::funcdata::Funcdata) -> usize {
     use rugra::space::AddressSpace;
     use rugra::varnode::varnode_flags;
-    let specs: Vec<(u64, u64)> = fd
+    let specs: Vec<_> = fd
         .callspecs
         .iter()
-        .filter_map(|fc| fc.entry_addr.map(|entry| (fc.op_addr.as_u64(), entry.as_u64())))
+        .filter_map(|owner| {
+            owner
+                .read()
+                .unwrap()
+                .entry_addr
+                .map(|entry| (owner.clone(), entry.as_u64()))
+        })
         .collect();
     let mut relinked = 0usize;
-    for (op_addr, entry) in specs {
-        // Find the CALL op first (clone the Arc out of the borrow), then
-        // mutate fd for the varnode rebuild and input swap.
-        let mut call_op = None;
-        for op_ref in fd.obank.alivelist.iter() {
-            let matches = {
-                let op = op_ref.0.read().unwrap();
-                op.opcode == rugra::opcodes::OpCode::CPUI_CALL
-                    && !op.is_dead()
-                    && op.get_seq_num().get_addr().as_u64() == op_addr
-            };
-            if matches {
-                call_op = Some(op_ref.0.clone());
-                break;
-            }
-        }
-        let Some(op_arc) = call_op else {
+    for (owner, entry) in specs {
+        let op_arc = owner.read().unwrap().op.upgrade();
+        let Some(op_arc) = op_arc else {
             continue;
         };
         let vn = fd.vbank.create_with_space(
@@ -720,7 +713,11 @@ fn relink_call_spec_targets(fd: &mut rugra::funcdata::Funcdata) -> usize {
             AddressSpace::Iop,
             entry,
         );
-        vn.write().unwrap().set_flags(varnode_flags::ANNOTATION);
+        {
+            let mut annotation = vn.write().unwrap();
+            annotation.set_flags(varnode_flags::ANNOTATION);
+            annotation.bind_call_spec(&owner);
+        }
         let _ = fd.assign_high(&vn);
         let op_ref = rugra::op::PcodeOpRef(op_arc);
         fd.op_set_input(&op_ref, vn, 0);

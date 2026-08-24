@@ -157,67 +157,24 @@ fn varnode_values(fd: &Funcdata, ids: &SnapshotIds) -> Vec<Value> {
         .enumerate()
         .map(|(index, varnode_ref)| {
             let varnode = varnode_ref.read().expect("Varnode read lock");
+            let address_space = varnode.address_space;
+            let raw_offset = varnode.loc.as_u64();
             let defining_op = varnode
                 .def
                 .as_ref()
                 .and_then(std::sync::Weak::upgrade)
                 .map(|op| ids.op_id(&op));
-            let uses = varnode
+            let descend_ops = varnode
                 .descend
                 .iter()
                 .filter_map(std::sync::Weak::upgrade)
-                .map(|op| ids.op_id(&op))
                 .collect::<Vec<_>>();
-            let is_space_reference = varnode.is_constant()
-                && varnode
-                    .descend
-                    .iter()
-                    .filter_map(std::sync::Weak::upgrade)
-                    .any(|op| {
-                        let op = op.read().expect("PcodeOp space-input read lock");
-                        matches!(
-                            op.opcode,
-                            rugra::opcodes::OpCode::CPUI_LOAD | rugra::opcodes::OpCode::CPUI_STORE
-                        ) && op
-                            .inrefs
-                            .first()
-                            .is_some_and(|input| Arc::ptr_eq(input, varnode_ref))
-                    });
-            let space_reference = is_space_reference.then_some(varnode.loc.as_u64());
-            let fspec_reference = (varnode.address_space == rugra::space::AddressSpace::Iop)
-                .then(|| {
-                    varnode.descend.iter().filter_map(std::sync::Weak::upgrade).find_map(|op| {
-                        let op = op.read().expect("PcodeOp call-spec read lock");
-                        let is_call_target = op.opcode == rugra::opcodes::OpCode::CPUI_CALL
-                            && op.inrefs.first().is_some_and(|input| Arc::ptr_eq(input, varnode_ref));
-                        is_call_target.then_some(varnode.loc.as_u64() as usize)
-                    })
-                })
-                .flatten()
-                .and_then(|index| fd.callspecs.get(index))
-                .and_then(|call_spec| call_spec.entry_addr)
-                .map(|address| address.as_u64());
-            let iop_reference = (varnode.address_space == rugra::space::AddressSpace::Iop
-                && fspec_reference.is_none())
-                .then(|| {
-                    ids.op_ids
-                        .get(&(varnode.loc.as_u64() as usize))
-                        .copied()
-                        .expect("Iop varnode does not reference a live PcodeOp")
-                });
-            let normalized_offset = space_reference
-                .or(fspec_reference)
-                .or(iop_reference)
-                .unwrap_or_else(|| varnode.loc.as_u64());
-            let pointer_ref_kind = if space_reference.is_some() {
-                Some("space")
-            } else if fspec_reference.is_some() {
-                Some("fspec")
-            } else if iop_reference.is_some() {
-                Some("iop")
-            } else {
-                None
-            };
+            let has_call_spec_binding = varnode.call_spec.is_some();
+            let typed_call_spec = varnode.get_call_spec();
+            let is_constant = varnode.is_constant();
+            let size = varnode.size;
+            let flags = varnode.flags;
+            let create_index = varnode.create_index;
             let data_type = varnode.v_type.as_ref().map(|data_type| {
                 json!({
                     "name": data_type.get_name(),
@@ -225,16 +182,94 @@ fn varnode_values(fd: &Funcdata, ids: &SnapshotIds) -> Vec<Value> {
                     "metatype": metatype2string(data_type.get_metatype()),
                 })
             });
+            drop(varnode);
+
+            let uses = descend_ops
+                .iter()
+                .map(|op| ids.op_id(op))
+                .collect::<Vec<_>>();
+            let is_space_reference = is_constant
+                && descend_ops.iter().any(|op| {
+                    let op = op.read().expect("PcodeOp space-input read lock");
+                    matches!(
+                        op.opcode,
+                        rugra::opcodes::OpCode::CPUI_LOAD | rugra::opcodes::OpCode::CPUI_STORE
+                    ) && op
+                        .inrefs
+                        .first()
+                        .is_some_and(|input| Arc::ptr_eq(input, varnode_ref))
+                });
+            let space_reference = is_space_reference.then_some(raw_offset);
+            let call_target = (address_space == rugra::space::AddressSpace::Iop)
+                .then(|| {
+                    descend_ops.iter().find_map(|op| {
+                        let operation = op.read().expect("PcodeOp call-spec read lock");
+                        let is_target = operation.opcode == rugra::opcodes::OpCode::CPUI_CALL
+                            && operation
+                                .inrefs
+                                .first()
+                                .is_some_and(|input| Arc::ptr_eq(input, varnode_ref));
+                        is_target.then(|| op.clone())
+                    })
+                })
+                .flatten();
+            let typed_call_spec = call_target.as_ref().and(typed_call_spec);
+            let fspec_owner = typed_call_spec.filter(|owner| {
+                let owned = fd
+                    .callspecs
+                    .iter()
+                    .any(|candidate| Arc::ptr_eq(candidate, owner));
+                let same_op = call_target.as_ref().is_some_and(|target| {
+                    owner
+                        .read()
+                        .expect("FuncCallSpecs read lock")
+                        .op
+                        .upgrade()
+                        .is_some_and(|bound| Arc::ptr_eq(&bound, target))
+                });
+                owned && same_op
+            });
+            let fspec_reference = fspec_owner
+                .as_ref()
+                .and_then(|owner| owner.read().expect("FuncCallSpecs read lock").entry_addr)
+                .map(|address| address.as_u64());
+            // A CALL input(0) that fails exact typed-owner validation is an
+            // unresolved callspec annotation, never a numeric PcodeOp key.
+            // Ordinary Iop annotations may still resolve through the op-id
+            // map, but a stale key is represented explicitly instead of
+            // panicking.
+            let iop_reference = (address_space == rugra::space::AddressSpace::Iop
+                && !has_call_spec_binding
+                && call_target.is_none())
+            .then(|| ids.op_ids.get(&(raw_offset as usize)).copied())
+            .flatten();
+            let normalized_offset = space_reference
+                .or(fspec_reference)
+                .or(iop_reference)
+                .unwrap_or(raw_offset);
+            let pointer_ref_kind = if space_reference.is_some() {
+                Some("space")
+            } else if fspec_owner.is_some() {
+                Some("fspec")
+            } else if iop_reference.is_some() {
+                Some("iop")
+            } else if has_call_spec_binding || call_target.is_some() {
+                Some("fspec_unresolved")
+            } else if address_space == rugra::space::AddressSpace::Iop {
+                Some("iop_unresolved")
+            } else {
+                None
+            };
             json!({
                 "id": index,
-                "space": varnode.address_space.space_id(),
-                "space_name": varnode.address_space.name(),
+                "space": address_space.space_id(),
+                "space_name": address_space.name(),
                 "offset": normalized_offset,
                 "space_ref_index": space_reference,
                 "pointer_ref_kind": pointer_ref_kind,
-                "size": varnode.size,
-                "flags": varnode.flags,
-                "create_index": varnode.create_index,
+                "size": size,
+                "flags": flags,
+                "create_index": create_index,
                 "def": defining_op,
                 "uses": uses,
                 "type": data_type,

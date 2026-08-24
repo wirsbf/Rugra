@@ -7,13 +7,9 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=4c4808d12dfabeecd7043c49da852adf9a10e68f
-rugra_source_tree=71ed04342212855062188a1ed1dff27c1ebf4892
-rugra_source_src_tree=004b20c8ed6da74cf6457a4386570bae4801bc78
-rugra_source_block_blob=b2ffde0323304a21d8a08011be95c84ef3fe289f
-rugra_source_funcdata_blob=9800c38b1c1bb37d9c2c28841151e0ad2bf9c148
-rugra_source_flow_blob=c76bd681b78b55e7855769e5e6d438df8c8c4cc2
-rugra_source_op_blob=1f8908d74c0e5b72e41a910e46313066d48ce919
+rugra_source_commit=92daed300bcce3c4d855b311cf9667ba21eb475a
+rugra_source_tree=6aea6d3b5b1421170d1bdc5a766c9568483a66af
+rugra_source_src_tree=367bb531746f630fe4de5fddc0365c2c2f27eeda
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -25,30 +21,43 @@ ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/truncated_flow_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/truncated_flow_1204.cc"
 rust_fixture="$repo_root/tests/oracle/truncated_flow_1204.rs"
-block_overlay="$repo_root/src/block.rs"
-funcdata_overlay="$repo_root/src/funcdata.rs"
-flow_overlay="$repo_root/src/flow.rs"
-op_overlay="$repo_root/src/op.rs"
-block_doc="$repo_root/docs/api/block.md"
-funcdata_doc="$repo_root/docs/api/funcdata.md"
-flow_doc="$repo_root/docs/api/flow.md"
-op_doc="$repo_root/docs/api/op.md"
 runner="$repo_root/tools/run_truncated_flow_oracle.sh"
 
-oracle_tmp=$(mktemp -d /tmp/rugra-truncated-flow-1204.XXXXXX)
+overlay_paths=(
+  src/coreaction.rs
+  src/flow.rs
+  src/fspec.rs
+  src/funcdata.rs
+  src/heritage.rs
+  src/ruleaction.rs
+  src/signature.rs
+  src/unionresolve.rs
+  src/varnode.rs
+)
+
+cache_root=${RUGRA_TRUNCATED_FLOW_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/rugra-truncated-flow-1204}
+cargo_target_dir=${CARGO_TARGET_DIR:-$cache_root/target}
+cargo_tmp_dir=${TMPDIR:-$cache_root/tmp}
+mkdir -p "$cache_root" "$cargo_target_dir" "$cargo_tmp_dir"
+oracle_tmp=$(mktemp -d "$cache_root/run.XXXXXX")
 cleanup() {
   case "$oracle_tmp" in
-    /tmp/rugra-truncated-flow-1204.??????) rm -rf -- "$oracle_tmp" ;;
+    "$cache_root"/run.??????) rm -rf -- "$oracle_tmp" ;;
     *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2 ;;
   esac
 }
 trap cleanup EXIT HUP INT TERM
 
-for required in "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$block_overlay" "$funcdata_overlay" "$flow_overlay" "$op_overlay" \
-  "$block_doc" "$funcdata_doc" "$flow_doc" "$op_doc" "$runner"; do
+for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$runner"; do
   if [[ ! -f "$required" || -L "$required" ]]; then
     echo "required input is not a regular non-symlink file: $required" >&2
+    exit 1
+  fi
+done
+for relative in "${overlay_paths[@]}"; do
+  required="$repo_root/$relative"
+  if [[ ! -f "$required" || -L "$required" ]]; then
+    echo "source overlay is not a regular non-symlink file: $required" >&2
     exit 1
   fi
 done
@@ -85,10 +94,6 @@ for binding in \
   "$rugra_source_commit^{commit}:$rugra_source_commit" \
   "$rugra_source_commit^{tree}:$rugra_source_tree" \
   "$rugra_source_commit:src:$rugra_source_src_tree" \
-  "$rugra_source_commit:src/block.rs:$rugra_source_block_blob" \
-  "$rugra_source_commit:src/funcdata.rs:$rugra_source_funcdata_blob" \
-  "$rugra_source_commit:src/flow.rs:$rugra_source_flow_blob" \
-  "$rugra_source_commit:src/op.rs:$rugra_source_op_blob" \
   "$rugra_source_commit:Cargo.toml:$rugra_source_cargo_toml_blob" \
   "$rugra_source_commit:Cargo.lock:$rugra_source_cargo_lock_blob" \
   "$rugra_source_commit:build.rs:$rugra_source_build_rs_blob"; do
@@ -143,10 +148,9 @@ git -C "$repo_root" archive --format=tar \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
   src sleigh_shim
 tar -xf "$oracle_tmp/rugra-source.tar" -C "$snapshot_root"
-cp "$block_overlay" "$snapshot_root/src/block.rs"
-cp "$funcdata_overlay" "$snapshot_root/src/funcdata.rs"
-cp "$flow_overlay" "$snapshot_root/src/flow.rs"
-cp "$op_overlay" "$snapshot_root/src/op.rs"
+for relative in "${overlay_paths[@]}"; do
+  cp "$repo_root/$relative" "$snapshot_root/$relative"
+done
 cp "$cpp_fixture" "$snapshot_root/tests/oracle/truncated_flow_1204.cc"
 cp "$rust_fixture" "$snapshot_root/tests/oracle/truncated_flow_1204.rs"
 cp "$metadata" "$snapshot_root/tests/oracle/truncated_flow_1204.metadata.json"
@@ -156,18 +160,20 @@ for asset in sleigh_specs/x86-64.sla sleigh_specs/x86-64.pspec \
   git -C "$repo_root" cat-file blob "$spec_input_commit:$asset" \
     >"$snapshot_root/$asset"
 done
+if [[ -e "$snapshot_root/ghidra" || -L "$snapshot_root/ghidra" ]]; then
+  echo "snapshot unexpectedly already contains a ghidra path" >&2
+  exit 1
+fi
+ln -s "$ghidra_root" "$snapshot_root/ghidra"
 
 runner_sha=$(sha256sum "$runner" | awk '{print $1}')
 python3 -I -S - "$repo_root" "$snapshot_root" "$metadata" "$cpp_fixture" \
-  "$rust_fixture" "$block_overlay" "$funcdata_overlay" "$flow_overlay" "$op_overlay" \
-  "$block_doc" "$funcdata_doc" "$flow_doc" "$op_doc" "$runner_sha" \
+  "$rust_fixture" "$runner_sha" \
   "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" "$oracle_language_tree" \
   "$oracle_makefile_blob" "$rugra_source_commit" "$rugra_source_tree" \
-  "$rugra_source_src_tree" "$rugra_source_block_blob" "$rugra_source_funcdata_blob" \
-  "$rugra_source_flow_blob" "$rugra_source_op_blob" \
-  "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
+  "$rugra_source_src_tree" "$rugra_source_cargo_toml_blob" "$rugra_source_cargo_lock_blob" \
   "$rugra_source_build_rs_blob" "$spec_input_commit" \
-  "$bfd_include/bfd.h" "$bfd_library" <<'PY'
+  "$bfd_include/bfd.h" "$bfd_library" "${overlay_paths[@]}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -176,15 +182,14 @@ import sys
 
 (
     repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw,
-    block_raw, funcdata_raw, flow_raw, op_raw, block_doc_raw, funcdata_doc_raw,
-    flow_doc_raw, op_doc_raw, runner_sha, oracle_commit, oracle_tag, cpp_tree,
+    runner_sha, oracle_commit, oracle_tag, cpp_tree,
     language_tree, makefile_blob, source_commit, source_tree,
-    source_src_tree, source_block_blob, source_funcdata_blob, source_flow_blob, source_op_blob,
-    source_cargo_toml_blob, source_cargo_lock_blob, source_build_rs_blob,
-    spec_input_commit, bfd_header_raw, bfd_library_raw,
+    source_src_tree, source_cargo_toml_blob, source_cargo_lock_blob,
+    source_build_rs_blob, spec_input_commit, bfd_header_raw, bfd_library_raw,
+    *overlay_paths,
 ) = sys.argv[1:]
 repo = pathlib.Path(repo_raw).resolve()
-snapshot = pathlib.Path(snapshot_raw)
+snapshot = pathlib.Path(snapshot_raw).resolve()
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -231,10 +236,6 @@ for label, actual, expected in (
     ("source commit", source["base_commit"], source_commit),
     ("source tree", source["base_tree"], source_tree),
     ("source src tree", source["base_src_tree"], source_src_tree),
-    ("source block blob", source["base_block_blob"], source_block_blob),
-    ("source funcdata blob", source["base_funcdata_blob"], source_funcdata_blob),
-    ("source flow blob", source["base_flow_blob"], source_flow_blob),
-    ("source op blob", source["base_op_blob"], source_op_blob),
     ("Cargo.toml blob", source["cargo_toml_blob"], source_cargo_toml_blob),
     ("Cargo.lock blob", source["cargo_lock_blob"], source_cargo_lock_blob),
     ("build.rs blob", source["build_rs_blob"], source_build_rs_blob),
@@ -242,34 +243,21 @@ for label, actual, expected in (
     require(label, actual, expected)
 
 comparand = metadata["comparand"]
-comparands = {
-    "cpp_fixture_sha256": pathlib.Path(cpp_raw),
-    "rust_fixture_sha256": pathlib.Path(rust_raw),
-    "block_overlay_sha256": pathlib.Path(block_raw),
-    "funcdata_overlay_sha256": pathlib.Path(funcdata_raw),
-    "flow_overlay_sha256": pathlib.Path(flow_raw),
-    "op_overlay_sha256": pathlib.Path(op_raw),
-    "block_doc_sha256": pathlib.Path(block_doc_raw),
-    "funcdata_doc_sha256": pathlib.Path(funcdata_doc_raw),
-    "flow_doc_sha256": pathlib.Path(flow_doc_raw),
-    "op_doc_sha256": pathlib.Path(op_doc_raw),
-}
-for key, path in comparands.items():
-    require(key, sha(path.read_bytes()), comparand[key])
+require("C++ fixture sha", sha(pathlib.Path(cpp_raw).read_bytes()), comparand["cpp_fixture_sha256"])
+require("Rust fixture sha", sha(pathlib.Path(rust_raw).read_bytes()), comparand["rust_fixture_sha256"])
 require("runner sha", runner_sha, comparand["runner_sha256"])
 overlays = {entry["path"]: entry for entry in source["overlays"]}
-require(
-    "overlay paths",
-    set(overlays),
-    {"src/block.rs", "src/funcdata.rs", "src/flow.rs", "src/op.rs"},
-)
-for relative, path in (
-    ("src/block.rs", pathlib.Path(block_raw)),
-    ("src/funcdata.rs", pathlib.Path(funcdata_raw)),
-    ("src/flow.rs", pathlib.Path(flow_raw)),
-    ("src/op.rs", pathlib.Path(op_raw)),
-):
-    require(f"{relative} overlay sha", sha(path.read_bytes()), overlays[relative]["sha256"])
+require("overlay paths", set(overlays), set(overlay_paths))
+for relative in overlay_paths:
+    expected = overlays[relative]["sha256"]
+    require(f"{relative} live sha", sha((repo / relative).read_bytes()), expected)
+    require(f"{relative} snapshot sha", sha((snapshot / relative).read_bytes()), expected)
+build_link = source["snapshot_build_link"]
+require("snapshot build link path", build_link["path"], "ghidra")
+ghidra_link = snapshot / build_link["path"]
+if not ghidra_link.is_symlink():
+    raise SystemExit("snapshot ghidra build path is not a symlink")
+require("snapshot ghidra link target", ghidra_link.resolve(), (repo / "ghidra").resolve())
 
 assets = metadata["assets"]
 for key, relative in (
@@ -364,22 +352,25 @@ for observation in observations:
         raise SystemExit("out_of_scope_observations entries must be non-empty")
 PY
 
+if [[ ${RUGRA_TRUNCATED_FLOW_VALIDATE_ONLY:-0} == 1 ]]; then
+  echo "truncated_flow_1204 metadata/source lock validation passed"
+  exit 0
+fi
+
 git -C "$ghidra_root" archive --format=tar \
   --output="$oracle_tmp/ghidra-cpp.tar" "$oracle_commit" \
   Ghidra/Features/Decompiler/src/decompile/cpp
 mkdir -p "$oracle_tmp/source"
 tar -xf "$oracle_tmp/ghidra-cpp.tar" -C "$oracle_tmp/source"
 oracle_cpp="$oracle_tmp/source/Ghidra/Features/Decompiler/src/decompile/cpp"
-mkdir -p "$snapshot_root/ghidra/Ghidra/Features/Decompiler/src/decompile"
-ln -s "$oracle_cpp" "$snapshot_root/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
 
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
-if ! make --silent -C "$oracle_cpp" -j "$jobs" CXX="g++ -std=c++11" \
+if ! TMPDIR="$cargo_tmp_dir" make --silent -C "$oracle_cpp" -j "$jobs" CXX="g++ -std=c++11" \
     EXTRA= libdecomp.a >"$oracle_tmp/make.stdout" 2>"$oracle_tmp/make.stderr"; then
   cat "$oracle_tmp/make.stdout" "$oracle_tmp/make.stderr" >&2
   exit 1
 fi
-g++ -std=c++11 -O0 -fno-pie -no-pie -Wl,--build-id=none \
+TMPDIR="$cargo_tmp_dir" g++ -std=c++11 -O0 -fno-pie -no-pie -Wl,--build-id=none \
   -I"$bfd_include" -I"$oracle_cpp" \
   "$snapshot_root/tests/oracle/truncated_flow_1204.cc" \
   "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
@@ -387,16 +378,18 @@ g++ -std=c++11 -O0 -fno-pie -no-pie -Wl,--build-id=none \
   "$oracle_cpp/loadimage_bfd.cc" "$oracle_cpp/libdecomp.a" \
   "$bfd_library" -lz -o "$oracle_tmp/truncated_flow_cpp"
 
-if ! flock /tmp/rugra-cargo-build.lock -c \
-    "CARGO_TARGET_DIR=/tmp/rugra-target-flow-blockrange cargo build --offline --locked --quiet --manifest-path '$snapshot_root/Cargo.toml' --lib" \
+if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock env \
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$cargo_target_dir" \
+    TMPDIR="$cargo_tmp_dir" cargo build --offline --locked --quiet \
+    --manifest-path "$snapshot_root/Cargo.toml" --lib \
     >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
   cat "$oracle_tmp/cargo.stdout" "$oracle_tmp/cargo.stderr" >&2
   exit 1
 fi
-rustc --edition=2021 -C opt-level=0 \
+TMPDIR="$cargo_tmp_dir" rustc --edition=2021 -C opt-level=0 \
   "$snapshot_root/tests/oracle/truncated_flow_1204.rs" \
-  --extern rugra=/tmp/rugra-target-flow-blockrange/debug/librugra.rlib \
-  -L dependency=/tmp/rugra-target-flow-blockrange/debug/deps \
+  --extern rugra="$cargo_target_dir/debug/librugra.rlib" \
+  -L dependency="$cargo_target_dir/debug/deps" \
   -o "$oracle_tmp/truncated_flow_rust"
 
 symbol_args=()

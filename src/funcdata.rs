@@ -496,7 +496,7 @@ pub struct Funcdata {
     pub symbol_entry_cache: HashMap<usize, std::sync::Arc<RwLock<crate::database::SymbolEntry>>>,
     /// Function call specifications, one per call site. Corresponds to
     /// Ghidra's `Funcdata::breefcall` vector.
-    pub callspecs: Vec<crate::fspec::FuncCallSpecs>,
+    pub callspecs: Vec<Arc<RwLock<crate::fspec::FuncCallSpecs>>>,
     /// Active output parameter recovery. Faithful to
     /// `Funcdata::activeoutput` (funcdata.hh). Set by ActionFuncLinkOutOnly;
     /// used by ActionReturnRecovery to determine which RETURN varnodes
@@ -1303,8 +1303,11 @@ impl Funcdata {
     // Ghidra: funcdata.cc:484 Funcdata::getCallSpecs
     /// Get call specs by index. Faithful to `Funcdata::getCallSpecs`
     /// (funcdata.hh).
-    pub fn get_call_specs(&self, i: usize) -> Option<&crate::fspec::FuncCallSpecs> {
-        self.callspecs.get(i)
+    pub fn get_call_specs(
+        &self,
+        i: usize,
+    ) -> Option<std::sync::RwLockReadGuard<'_, crate::fspec::FuncCallSpecs>> {
+        self.callspecs.get(i).map(|fc| fc.read().unwrap())
     }
 
     // Ghidra: funcdata.cc:484 Funcdata::getCallSpecs(const PcodeOp *op) const
@@ -1312,45 +1315,79 @@ impl Funcdata {
     /// Faithful to `Funcdata::getCallSpecs(op)` (funcdata.cc:484-497):
     /// fast path resolves the op's in(0) fspec constant back to the
     /// FuncCallSpecs; the fallback linearly scans the call list for the
-    /// spec whose op matches. Rugra's in(0) annotation varnode is Iop-space
-    /// (index-keyed when flow created it, entry-keyed after the driver
-    /// relink), so both key forms resolve on the fast path; the fallback
-    /// matches by call-sequence address (Rugra's FuncCallSpecs stores
-    /// op_addr instead of the PcodeOp pointer).
+    /// spec whose op matches. Until a dedicated FSPEC address space exists,
+    /// Rugra's annotation remains in Iop space but carries a typed Weak
+    /// handle. A raw constant with the same numeric offset is never decoded
+    /// as a spec.
     pub fn get_call_specs_of_op(
         &self,
         op: &crate::op::PcodeOpRef,
-    ) -> Option<&crate::fspec::FuncCallSpecs> {
+    ) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>> {
         let in0 = op.0.read().unwrap().inrefs.first().cloned()?;
-        let (space, offset) = {
+        let (space, is_annotation, typed) = {
             let vn = in0.read().unwrap();
-            let spc = vn.address_space.clone();
-            (spc, vn.loc.as_u64())
+            (vn.address_space, vn.is_annotation(), vn.get_call_spec())
         };
-        if space == crate::space::AddressSpace::Iop {
-            // Index-keyed fspec annotation (flow's new_varnode_call_specs).
-            if let Some(fc) = self.callspecs.get(offset as usize) {
-                return Some(fc);
+        if space == crate::space::AddressSpace::Iop && is_annotation {
+            if let Some(fc) = typed {
+                let owned = self.callspecs.iter().any(|item| Arc::ptr_eq(item, &fc));
+                let same_op = fc
+                    .read()
+                    .unwrap()
+                    .op
+                    .upgrade()
+                    .map(|bound| Arc::ptr_eq(&bound, &op.0))
+                    .unwrap_or(false);
+                if owned && same_op {
+                    return Some(fc);
+                }
             }
-            // Entry-keyed relink (driver): fall through to the address scan.
         }
-        let op_addr = op.0.read().unwrap().get_addr();
+        // Ghidra's fallback compares `fc->getOp() == op`, never addresses or
+        // the integer offset of a non-FSPEC constant.
         self.callspecs
             .iter()
-            .find(|fc| fc.op_addr == op_addr)
+            .find(|fc| {
+                fc.read()
+                    .unwrap()
+                    .op
+                    .upgrade()
+                    .map(|bound| Arc::ptr_eq(&bound, &op.0))
+                    .unwrap_or(false)
+            })
+            .cloned()
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::getCallSpecsMut
     /// Get mutable call specs by index.
-    pub fn get_call_specs_mut(&mut self, i: usize) -> Option<&mut crate::fspec::FuncCallSpecs> {
-        self.callspecs.get_mut(i)
+    pub fn get_call_specs_mut(
+        &self,
+        i: usize,
+    ) -> Option<std::sync::RwLockWriteGuard<'_, crate::fspec::FuncCallSpecs>> {
+        self.callspecs.get(i).map(|fc| fc.write().unwrap())
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::addCallSpecs
     /// Add a new call specification. Returns the index.
     pub fn add_call_specs(&mut self, fc: crate::fspec::FuncCallSpecs) -> usize {
+        self.callspecs.push(Arc::new(RwLock::new(fc)));
+        self.callspecs.len() - 1
+    }
+
+    // RUGRA-GLUE: Preserve Ghidra's setup order when an annotation must be
+    // installed before the stable owner is inserted into qlst.
+    pub fn add_call_specs_owner(&mut self, fc: Arc<RwLock<crate::fspec::FuncCallSpecs>>) -> usize {
         self.callspecs.push(fc);
         self.callspecs.len() - 1
+    }
+
+    // RUGRA-GLUE: Borrow-safe access to the stable owner handle used when
+    // constructing a typed FSPEC annotation.
+    pub fn get_call_specs_owner(
+        &self,
+        i: usize,
+    ) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>> {
+        self.callspecs.get(i).cloned()
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::getFuncProto
@@ -3365,26 +3402,34 @@ impl Funcdata {
         vn
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::getOpFromConst
+    // Ghidra: op.hh:249 PcodeOp::getOpFromConst
     /// Resolve an iop-space constant varnode back to the PcodeOp it references.
-    /// Faithful to `PcodeOp::getOpFromConst` (op.hh:249). Ghidra reinterprets
-    /// the offset as an op pointer; Rugra reinterprets it back to the
-    /// `Arc<RwLock<PcodeOp>>`.
+    /// Models the kind-discrimination slice corresponding to
+    /// `PcodeOp::getOpFromConst` (op.hh:249). Ghidra's dedicated IPTR_IOP space
+    /// excludes IPTR_FSPEC before pointer decoding. Rugra temporarily shares
+    /// `AddressSpace::Iop`, so a typed callspec binding (including an expired
+    /// Weak) must be rejected before interpreting the numeric compatibility
+    /// shadow as an op pointer. The remaining raw-Arc decoder is the
+    /// pre-existing `OPBANK-0001` lifecycle/soundness residual; D0 narrows its
+    /// input kind but does not claim the complete Ghidra codec contract.
     pub fn get_op_from_const(&self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::op::PcodeOpRef> {
-        let v = vn.read().unwrap();
-        if v.get_space() != crate::space::AddressSpace::Iop {
+        let ptr_addr = {
+            let v = vn.read().unwrap();
+            if v.get_space() != crate::space::AddressSpace::Iop || v.call_spec.is_some() {
+                return None;
+            }
+            v.get_offset() as usize
+        };
+        if ptr_addr == 0 {
             return None;
         }
-        let ptr_addr = v.get_offset() as usize;
-        // Reconstruct the Arc from the raw pointer. This is safe as long as
-        // the original Arc is still alive (which it is — the op bank holds it).
         let raw = ptr_addr as *const std::sync::RwLock<crate::op::PcodeOp>;
-        // SAFETY: the pointer was obtained from Arc::as_ptr on an op that is
-        // still in the obank. We rebuild the Arc via ManuallyDrop-free clone.
+        // SAFETY: legacy Iop producers encode this pointer with
+        // `Arc::as_ptr`. Keeping that owner alive across all consumers is the
+        // pre-existing OPBANK-0001 contract; typed FSPEC annotations are
+        // excluded above even after their Weak expires.
         unsafe {
             let arc = std::sync::Arc::from_raw(raw);
-            // Clone to bump refcount, then forget the reconstructed one so we
-            // don't double-free.
             let cloned = std::sync::Arc::clone(&arc);
             std::mem::forget(arc);
             Some(crate::op::PcodeOpRef(cloned))
@@ -7230,8 +7275,8 @@ impl Funcdata {
     /// Delete all call specifications. Faithful to
     /// `Funcdata::clearCallSpecs` (funcdata.cc:464-473). In C++ each
     /// `FuncCallSpecs*` is heap-allocated and freed individually before the
-    /// vector is cleared; in Rust the Vec owns its elements, so clearing the
-    /// Vec drops them.
+    /// vector is cleared; in Rust clearing the strong Arc-owner vector drops
+    /// every allocation after the op/varnode banks have already been cleared.
     pub fn clear_call_specs(&mut self) {
         self.callspecs.clear();
     }
@@ -7240,18 +7285,36 @@ impl Funcdata {
     /// Compare two call specs by their position in the block dominance order.
     /// Faithful to `Funcdata::compareCallspecs` (funcdata.cc:504-512). First
     /// key is the basic-block index of the call op; ties are broken by the
-    /// op's sequence-number order. Rugra keys FuncCallSpecs by `op_addr`
-    /// (the call op's address) rather than an op pointer, so the block index
-    /// is looked up via the op bank's dead/alive lists.
-    pub fn compare_callspecs(&self, a: &crate::fspec::FuncCallSpecs, b: &crate::fspec::FuncCallSpecs) -> bool {
-        let ind1 = self.block_index_for_op_addr(a.op_addr);
-        let ind2 = self.block_index_for_op_addr(b.op_addr);
+    /// op's sequence-number order. Both keys are read through the exact Weak
+    /// PcodeOp link stored by each FuncCallSpecs.
+    pub fn compare_callspecs(
+        &self,
+        a: &crate::fspec::FuncCallSpecs,
+        b: &crate::fspec::FuncCallSpecs,
+    ) -> bool {
+        let sort_key = |spec: &crate::fspec::FuncCallSpecs| {
+            let op = spec
+                .op
+                .upgrade()
+                .expect("callspec lost its PcodeOp before sorting");
+            let (parent, order) = {
+                let op = op.read().unwrap();
+                let parent = op
+                    .parent
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .expect("callspec PcodeOp has no parent before sorting");
+                (parent, op.get_seq_num().get_order())
+            };
+            let block_index = parent.read().unwrap().get_index();
+            (block_index, order)
+        };
+        let (ind1, order1) = sort_key(a);
+        let (ind2, order2) = sort_key(b);
         if ind1 != ind2 {
             return ind1 < ind2;
         }
-        // Tie-break on SeqNum order. Rugra doesn't store the SeqNum on
-        // FuncCallSpecs, so fall back to op-address ordering within a block.
-        a.op_addr.as_u64() < b.op_addr.as_u64()
+        order1 < order2
     }
 
     // Ghidra: funcdata.cc:516 Funcdata::sortCallSpecs
@@ -7259,37 +7322,50 @@ impl Funcdata {
     /// evaluated first. Faithful to `Funcdata::sortCallSpecs`
     /// (funcdata.cc:516-520). Order affects parameter analysis.
     pub fn sort_call_specs(&mut self) {
-        // Borrow split: sort_by needs &self for compare_callspecs while the
-        // Vec is mutated. Snapshot the comparison keys (block index, op-addr
-        // order, original index) first, sort, then rebuild the Vec in the new
-        // order by moving each element exactly once out of a Option-slot buffer.
-        let mut keyed: Vec<(i32, u64, usize)> = self
+        // Snapshot only the two oracle comparison keys, then move each stable
+        // Arc owner into its sorted position. No content clone or identity
+        // rebinding occurs.
+        let mut keyed: Vec<(i32, u32, Arc<RwLock<crate::fspec::FuncCallSpecs>>)> = self
             .callspecs
-            .iter()
-            .enumerate()
-            .map(|(i, fc)| (self.block_index_for_op_addr(fc.op_addr), fc.op_addr.as_u64(), i))
+            .drain(..)
+            .map(|fc| {
+                let op = {
+                    let spec = fc.read().unwrap();
+                    spec.op
+                        .upgrade()
+                        .expect("callspec lost its PcodeOp before sorting")
+                };
+                let (parent, order) = {
+                    let op = op.read().unwrap();
+                    let parent = op
+                        .parent
+                        .as_ref()
+                        .and_then(Weak::upgrade)
+                        .expect("callspec PcodeOp has no parent before sorting");
+                    (parent, op.get_seq_num().get_order())
+                };
+                let block_index = parent.read().unwrap().get_index();
+                (block_index, order, fc)
+            })
             .collect();
-        keyed.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-        let new_order: Vec<usize> = keyed.iter().map(|k| k.2).collect();
-        // Move ownership out, wrap each in Option so we can take() by index.
-        let mut buf: Vec<Option<crate::fspec::FuncCallSpecs>> =
-            std::mem::take(&mut self.callspecs).into_iter().map(Some).collect();
-        let mut result: Vec<crate::fspec::FuncCallSpecs> = Vec::with_capacity(buf.len());
-        for &src in &new_order {
-            result.push(buf[src].take().expect("sort permutation visited an index twice"));
-        }
-        self.callspecs = result;
+        keyed.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        self.callspecs = keyed.into_iter().map(|(_, _, fc)| fc).collect();
     }
 
     // Ghidra: funcdata.cc:524 Funcdata::deleteCallSpecs
     /// Remove the call specification matching the given call op. Faithful to
     /// `Funcdata::deleteCallSpecs` (funcdata.cc:524-537). Used internally when
-    /// a CALL is removed (e.g. because it is unreachable). Rugra keys specs by
-    /// op address, so the match is on the op's address.
+    /// a CALL is removed (e.g. because it is unreachable). The first spec
+    /// whose Weak link upgrades to the exact op allocation is removed.
     pub fn delete_call_specs(&mut self, op: &PcodeOpRef) {
-        let op_addr = op.0.read().unwrap().get_addr();
-        let target = op_addr.as_u64();
-        if let Some(pos) = self.callspecs.iter().position(|fc| fc.op_addr.as_u64() == target) {
+        if let Some(pos) = self.callspecs.iter().position(|fc| {
+            fc.read()
+                .unwrap()
+                .op
+                .upgrade()
+                .map(|bound| Arc::ptr_eq(&bound, &op.0))
+                .unwrap_or(false)
+        }) {
             self.callspecs.remove(pos);
         }
     }
@@ -8006,27 +8082,6 @@ impl Funcdata {
     // Rust API surface to the ported code).
     // =========================================================================
 
-    /// Look up the index of the basic block containing the op at `op_addr`.
-    /// Returns `i32::MAX` if not found so the spec sorts to the end.
-    /// (Adapts Ghidra's `op->getParent()->getIndex()` to Rugra's flat block
-    /// list.)
-    // RUGRA-GLUE: Rugra call specs retain only an Address, so this scans the
-    // CFG; Ghidra retains PcodeOp pointers and reads their parent inline.
-    fn block_index_for_op_addr(&self, op_addr: Address) -> i32 {
-        let target = op_addr.as_u64();
-        for (i, blk_arc) in self.bblocks.blocks.iter().enumerate() {
-            let blk_rg = blk_arc.read().unwrap();
-            if let Some(bb) = blk_rg.as_any().downcast_ref::<BlockBasic>() {
-                for op in bb.get_ops() {
-                    if op.0.read().unwrap().get_addr().as_u64() == target {
-                        return i as i32;
-                    }
-                }
-            }
-        }
-        i32::MAX
-    }
-
     /// Find `parent`'s slot in `child`'s incoming list (Ghidra
     /// `FlowBlock::getInIndex`). Returns `None` if not present.
     // Ghidra: block.cc:579 FlowBlock::getInIndex
@@ -8202,28 +8257,43 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:205 Funcdata::newVarnodeCallSpecs
-    /// Encode a FuncCallSpecs pointer as a fspace annotation Varnode. Faithful
-    /// to `Funcdata::newVarnodeCallSpecs` (funcdata_varnode.cc:205-214):
+    /// Model the identity and lifetime portion of Ghidra's fspace annotation
+    /// Varnode from `Funcdata::newVarnodeCallSpecs`
+    /// (funcdata_varnode.cc:205-214):
     ///   Datatype *ct = glb->types->getBase(sizeof(fc), TYPE_UNKNOWN);
     ///   AddrSpace *cspc = glb->getFspecSpace();
     ///   Varnode *vn = vbank.create(sizeof(fc), Address(cspc,(uintb)(uintp)fc), ct);
     ///   assignHigh(vn);
     ///   return vn;
     /// The Varnode is the first input to a CPUI_CALL op and accelerates lookup
-    /// of the associated call specification. Rugra has no fspace address space;
-    /// we encode the callspec's index in the callspecs vector as the offset of
-    /// a synthetic Iop-adjacent annotation Varnode.
+    /// of the associated call specification. Rugra still lacks a dedicated
+    /// fspace address space, so D0 uses Iop. Until PrintC consumes the typed
+    /// handle, a direct call retains its entry address as the legacy numeric
+    /// payload; an invalid entry falls back to a pointer-shaped diagnostic.
+    /// Neither value participates in identity: lookup is exclusively through
+    /// the typed Weak bound to the same stable Arc allocation. This deliberate
+    /// representation mismatch is tracked by TYPEOP-FSPEC-SPACE-0001.
     pub fn new_varnode_call_specs(
         &mut self,
-        fc_index: usize,
+        fc: &Arc<RwLock<crate::fspec::FuncCallSpecs>>,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let sz = std::mem::size_of::<usize>();
+        let compatibility_offset = fc
+            .read()
+            .unwrap()
+            .entry_addr
+            .map(|entry| entry.as_u64())
+            .unwrap_or_else(|| Arc::as_ptr(fc) as usize as u64);
         let vn = self.vbank.create_with_space(
             sz,
             crate::space::AddressSpace::Iop,
-            fc_index as u64,
+            compatibility_offset,
         );
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        {
+            let mut annotation = vn.write().unwrap();
+            annotation.set_flags(crate::varnode::varnode_flags::ANNOTATION);
+            annotation.bind_call_spec(fc);
+        }
         let _ = self.assign_high(&vn);
         vn
     }
@@ -8267,7 +8337,7 @@ impl Funcdata {
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         use crate::varnode::varnode_flags as vf;
-        let (size, space, offset, vflags, v_type) = {
+        let (size, space, offset, vflags, v_type, call_spec) = {
             let r = vn.read().unwrap();
             (
                 r.size,
@@ -8275,6 +8345,7 @@ impl Funcdata {
                 r.loc.as_u64(),
                 r.flags,
                 r.v_type.clone(),
+                r.call_spec.clone(),
             )
         };
         let newvn = self.vbank.create_with_space(size, space, offset);
@@ -8295,6 +8366,7 @@ impl Funcdata {
             // the same shared Datatype identity, in addition to the complete
             // Address (space + offset), before applying the restricted flags.
             cloned.v_type = v_type;
+            cloned.call_spec = call_spec;
             cloned.set_flags(vflags & keep_mask);
         }
         newvn
@@ -9121,8 +9193,10 @@ impl Funcdata {
     // Ghidra: funcdata_varnode.cc:1756 Funcdata::checkCallDoubleUse
     /// Test for legitimate double use of a parameter trial: the trial is a
     /// putative input to `opmatch`, but also traces into a second CALL `op`.
-    /// Faithful to `Funcdata::checkCallDoubleUse`
-    /// (funcdata_varnode.cc:1756-1794). The Ghidra original:
+    /// The exact-owner lookup slice corresponds to
+    /// `Funcdata::checkCallDoubleUse` (funcdata_varnode.cc:1756-1794), while
+    /// per-input trial lookup and alternate-path validation remain
+    /// `CALLSPEC-0001`/UNTESTED. The Ghidra original:
     ///   j = op->getSlot(vn);
     ///   if (j <= 0) return false;             // flows to indirect-call var
     ///   fc = getCallSpecs(op); matchfc = getCallSpecs(opmatch);
@@ -9163,23 +9237,23 @@ impl Funcdata {
         use crate::opcodes::OpCode as OC;
         // cc:1759: j = op->getSlot(vn); if (j<=0) return false.
         let j = self.op_get_slot(op, vn);
-        if j <= 0 { return false; }
-        // cc:1761-1762: fc / matchfc lookup by op address.
-        let op_addr = op.0.read().unwrap().get_addr().as_u64();
-        let match_addr = opmatch.0.read().unwrap().get_addr().as_u64();
-        let fc_idx = self.callspecs.iter().position(|c| c.op_addr.as_u64() == op_addr);
-        let matchfc_idx = self.callspecs.iter().position(|c| c.op_addr.as_u64() == match_addr);
+        if j <= 0 {
+            return false;
+        }
+        // cc:1761-1762: resolve both specifications by exact PcodeOp identity.
+        let fc = self.get_call_specs_of_op(op);
+        let matchfc = self.get_call_specs_of_op(opmatch);
         // cc:1763-1781: same-call double-use test.
         let op_code = op.0.read().unwrap().opcode;
         let match_code = opmatch.0.read().unwrap().opcode;
         if op_code == match_code {
             let is_direct = match_code == OC::CPUI_CALL;
-            let same_target = match (fc_idx, matchfc_idx) {
-                (Some(fi), Some(mi)) => {
-                    let fc = &self.callspecs[fi];
-                    let mfc = &self.callspecs[mi];
+            let same_target = match (&fc, &matchfc) {
+                (Some(fc), Some(mfc)) => {
                     if is_direct {
-                        fc.entry_addr.is_some() && fc.entry_addr == mfc.entry_addr
+                        let entry = fc.read().unwrap().entry_addr;
+                        let match_entry = mfc.read().unwrap().entry_addr;
+                        entry.is_some() && entry == match_entry
                     } else {
                         // CALLIND: compare the indirect-call varnode (in(0)).
                         let a = op.0.read().unwrap().get_in(0).cloned();
@@ -9215,10 +9289,11 @@ impl Funcdata {
             }
         }
         // cc:1783-1793: input-active path.
-        if let Some(fi) = fc_idx {
-            if self.callspecs[fi].is_input_active() {
+        if let Some(fc) = fc {
+            let fc = fc.read().unwrap();
+            if fc.is_input_active() {
                 // cc:1784: curtrial = fc->getActiveInput()->getTrialForInputVarnode(j).
-                if let Some(active) = self.callspecs[fi].get_active_input() {
+                if let Some(active) = fc.get_active_input() {
                     // Rugra's ParamActive lacks getTrialForInputVarnode; we
                     // approximate by indexing trials by slot (trial index is
                     // slot-1 since slot 0 is the call target).
@@ -9362,55 +9437,21 @@ impl Funcdata {
         // is greater than every cloned SeqNum time.
         self.obank.set_uniqid(source.obank.get_uniqid());
 
-        // cc:803-814: clone qlst in vector order.  Ghidra stores a direct
-        // PcodeOp pointer in FuncCallSpecs.  Rugra's synthetic FSPEC varnode
-        // carries the qlst index, which is the exact identity bridge for raw
-        // flow.  The address fallback is accepted only when it is unique.
-        for (source_index, oldspec) in source.callspecs.iter().enumerate() {
-            let annotated: Vec<_> = source
-                .obank
-                .deadlist
-                .iter()
-                .filter(|candidate| {
-                    let op = candidate.0.read().unwrap();
-                    if !matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
-                        return false;
-                    }
-                    let Some(input) = op.get_in(0) else {
-                        return false;
-                    };
-                    let input = input.read().unwrap();
-                    input.get_space() == AddressSpace::Iop
-                        && input.is_annotation()
-                        && input.get_offset() == source_index as u64
-                })
-                .cloned()
-                .collect();
-            let source_call = if annotated.len() == 1 {
-                annotated[0].clone()
-            } else if annotated.is_empty() {
-                let by_address: Vec<_> = source
-                    .obank
-                    .deadlist
-                    .iter()
-                    .filter(|candidate| {
-                        let op = candidate.0.read().unwrap();
-                        matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
-                            && op.get_addr() == oldspec.op_addr
-                    })
-                    .cloned()
-                    .collect();
-                if by_address.len() != 1 {
-                    return Err(crate::error::Error::Lowlevel(
+        // cc:803-814: clone qlst in vector order. Each source FuncCallSpecs
+        // upgrades its exact Weak PcodeOp link; the cloned FSPEC input still
+        // carries a typed Weak to the old owner until it is replaced below.
+        for oldspec in &source.callspecs {
+            let source_call = oldspec
+                .read()
+                .unwrap()
+                .op
+                .upgrade()
+                .map(crate::op::PcodeOpRef)
+                .ok_or_else(|| {
+                    crate::error::Error::Lowlevel(
                         "Could not trace callspec across partial clone".to_string(),
-                    ));
-                }
-                by_address[0].clone()
-            } else {
-                return Err(crate::error::Error::Lowlevel(
-                    "Could not trace callspec across partial clone".to_string(),
-                ));
-            };
+                    )
+                })?;
 
             let source_seq = *source_call.0.read().unwrap().get_seq_num();
             let newop = self.obank.find_op(&source_seq).ok_or_else(|| {
@@ -9418,21 +9459,27 @@ impl Funcdata {
                     "Could not trace callspec across partial clone".to_string(),
                 )
             })?;
-            let newspec = oldspec.clone_for_op(newop.0.read().unwrap().get_addr());
+            let newspec = oldspec.read().unwrap().clone_for_op(&newop);
+            let new_owner = Arc::new(RwLock::new(newspec));
 
             let old_input = newop.0.read().unwrap().get_in(0).cloned();
             if let Some(invn0) = old_input {
                 let is_fspec = {
                     let input = invn0.read().unwrap();
-                    input.get_space() == AddressSpace::Iop && input.is_annotation()
+                    input.get_space() == AddressSpace::Iop
+                        && input.is_annotation()
+                        && input
+                            .get_call_spec()
+                            .map(|bound| Arc::ptr_eq(&bound, oldspec))
+                            .unwrap_or(false)
                 };
                 if is_fspec {
-                    let newvn0 = self.new_varnode_call_specs(self.callspecs.len());
+                    let newvn0 = self.new_varnode_call_specs(&new_owner);
                     self.op_set_input(&newop, newvn0, 0);
                     self.delete_varnode(&invn0)?;
                 }
             }
-            self.callspecs.push(newspec);
+            self.callspecs.push(new_owner);
         }
 
         // cc:816-828: preserve source jumpvec order, but truncate unlinked

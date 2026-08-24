@@ -77,10 +77,9 @@ trait FuncCallSpecsExt {
     /// (Ghidra's "no injection" sentinel) until the id is stored.
     // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::getInjectId directly and has no flow-local interface.
     fn get_inject_id(&self) -> i32;
-    /// Flow-local adapter for `FuncCallSpecs::getOp` (fspec.hh): the call op backing
-    /// this spec. Rugra stores `op_addr` and resolves the op against the raw
-    /// dead list during flow, with an alive-list fallback after block creation.
-    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration for resolving a call op from Rugra's stored address instead of Ghidra's direct PcodeOp pointer.
+    /// Flow-local adapter for `FuncCallSpecs::getOp` (fspec.hh): the exact,
+    /// non-owning call-op identity bound when the spec is constructed.
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration upgrades the Weak counterpart of Ghidra's direct PcodeOp pointer.
     fn get_op(&self, fd: &Funcdata) -> Option<crate::op::PcodeOpRef>;
     /// Flow-local adapter for `FuncCallSpecs::getName` (fspec.hh): the callee name.
     /// Delegates to `FuncProto::get_name`.
@@ -127,19 +126,9 @@ impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
         // TODO(INJECT-0001): depends on FuncCallSpecs storing an inject id. -1 = none.
         -1
     }
-    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter resolves Rugra's stored op address because Ghidra FuncCallSpecs keeps a direct PcodeOp pointer.
+    // RUGRA-GLUE: ANN-B; Rust upgrades the Weak counterpart of Ghidra's direct PcodeOp pointer.
     fn get_op(&self, fd: &Funcdata) -> Option<crate::op::PcodeOpRef> {
-        let is_matching_call = |op_ref: &&crate::op::PcodeOpRef| {
-            let op = op_ref.0.read().unwrap();
-            matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
-                && op.get_addr() == self.op_addr
-        };
-        fd.obank
-            .deadlist
-            .iter()
-            .find(is_matching_call)
-            .cloned()
-            .or_else(|| self.find_call_op(fd))
+        self.find_call_op(fd)
     }
     // RUGRA-GLUE: ANN-B; Rust adapter reads the nested FuncProto field because Rugra FuncCallSpecs does not inherit Ghidra's name accessor.
     fn get_name(&self) -> &str {
@@ -704,15 +693,17 @@ impl<'a> FlowInfo<'a> {
     }
 
     /// Treat an indirect jump (BRANCHIND) whose jumptable could not be
-    /// recovered as a CALLIND or RETURN instead. Faithful to
-    /// `truncateIndirectJump` (flow.cc:727-769). For `fail_return` the
-    /// BRANCHIND becomes a RETURN; otherwise it becomes a CALLIND with an
-    /// associated FuncCallSpecs and an artificial halt after it.
+    /// recovered as a CALLIND or RETURN instead. The opcode/halt slice
+    /// corresponds to `truncateIndirectJump` (flow.cc:727-769). For
+    /// `fail_return` the BRANCHIND becomes a RETURN; otherwise Rust currently
+    /// makes a CALLIND and an artificial halt but does not establish the
+    /// associated callspec or internal no-parameter prototype. Those consumers
+    /// remain `CALLSPEC-0001`/UNTESTED.
     ///
-    /// Rugra notes: full FuncCallSpecs setup (`setupCallindSpecs`) and the
-    /// JumpTable::RecoveryMode enum are not yet modelled — callers pass the
-    /// canonical fail modes via the `fail_mode` byte (0 = fail_thunk,
-    /// 1 = fail_callother, 2 = fail_return, 3 = default).
+    /// Rugra notes: `setup_callind_specs` now exists, but this callsite is not
+    /// wired to it. The JumpTable::RecoveryMode enum is not yet modelled, so
+    /// callers pass the canonical fail modes via the `fail_mode` byte
+    /// (0 = fail_thunk, 1 = fail_callother, 2 = fail_return, 3 = default).
     // Ghidra: flow.cc:727 FlowInfo::truncateIndirectJump
     pub fn truncate_indirect_jump(&mut self, op: &crate::op::PcodeOpRef, fail_mode: u8) {
         let addr = {
@@ -731,9 +722,11 @@ impl<'a> FlowInfo<'a> {
         }
         // Otherwise turn the jump into a CALLIND.
         self.fd.op_set_opcode(op, OpCode::CPUI_CALLIND);
-        // Ghidra: setupCallindSpecs(op, NULL); (flow.cc:736) — FuncCallSpecs
-        // plumbing is not yet ported; Rugra's ActionFuncLink does this
-        // post-hoc. We log it so the gap is visible.
+        // Ghidra: setupCallindSpecs(op, NULL); (flow.cc:736). The exact helper
+        // now exists, but this consumer does not call it, and ActionFuncLink's
+        // fallback only scans CALL (not CALLIND). Preserve the legacy
+        // diagnostic bytes until this CALLSPEC-0001/UNTESTED branch has a
+        // bilateral fixture; its wording is not the current premise.
         eprintln!(
             "[FLOW] {}: NOTE setupCallindSpecs at {:#x} deferred to ActionFuncLink",
             self.fd.name,
@@ -870,8 +863,9 @@ impl<'a> FlowInfo<'a> {
     }
 
     /// If the given injected op is a CALL, CALLIND, or BRANCHIND, add
-    /// references to it in the other flow tables. Faithful to
-    /// `FlowInfo::xrefInlinedBranch` (flow.cc:1053-1065).
+    /// references to it in the other flow tables. The BRANCHIND table slice
+    /// corresponds to `FlowInfo::xrefInlinedBranch` (flow.cc:1053-1065); the
+    /// CALL/CALLIND setup consumers remain `CALLSPEC-0001`/UNTESTED.
     ///
     /// For BRANCHIND, Ghidra calls `data.linkJumpTable(op)` and, if that
     /// returns NULL, pushes the op onto `tablelist` so it will be recovered
@@ -887,12 +881,12 @@ impl<'a> FlowInfo<'a> {
         let code = op.0.read().unwrap().opcode;
         match code {
             OpCode::CPUI_CALL => {
-                // RUGRA-GLUE: setupCallSpecs needs FuncCallSpecs; deferred to
-                // ActionFuncLink (flow.cc:1057). No-op here.
+                // flow.cc:1057 calls setupCallSpecs. The exact helper exists,
+                // but this xref consumer remains unwired under CALLSPEC-0001.
             }
             OpCode::CPUI_CALLIND => {
-                // RUGRA-GLUE: setupCallindSpecs needs FuncCallSpecs; deferred
-                // to ActionFuncLink (flow.cc:1059). No-op here.
+                // flow.cc:1059 calls setupCallindSpecs. The exact helper exists,
+                // but this xref consumer remains unwired under CALLSPEC-0001.
             }
             OpCode::CPUI_BRANCHIND => {
                 // data.linkJumpTable(op) — flow.cc:1061. Rugra's equivalent is
@@ -1217,13 +1211,15 @@ impl<'a> FlowInfo<'a> {
 
     // ===================== FuncCallSpecs maintenance =====================
     // These mirror Ghidra's call-spec lifecycle methods (flow.cc:636-723,
-    // 1306-1318). Ghidra's FlowInfo owns `qlst` (vector<FuncCallSpecs *>);
-    // Rugra's Funcdata owns `callspecs: Vec<FuncCallSpecs>`, so the Rust
-    // ports index into `self.fd.callspecs` instead of a separate qlst.
+    // 1306-1318). Ghidra's Funcdata `qlst` owns stable heap allocations;
+    // Rugra's `Vec<Arc<RwLock<FuncCallSpecs>>>` is the corresponding strong
+    // owner container, while every reverse identity edge is Weak.
 
     /// Check for modifications to flow at a call site given the recovered
-    /// FuncCallSpecs. Faithful to `FlowInfo::checkForFlowModification`
-    /// (flow.cc:636-651). Returns true if the sub-function never returns.
+    /// FuncCallSpecs. This models the identity wiring and flow-editing shape of
+    /// `FlowInfo::checkForFlowModification` (flow.cc:636-651), but inline and
+    /// no-return state propagation remains `CALLSPEC-0001`. Returns true only
+    /// when the currently modeled state marks the sub-function non-returning.
     ///
     /// If the call site is inline, its op is pushed onto `injectlist` so
     /// `inject_pcode` will expand it later (flow.cc:639-640). If it never
@@ -1232,7 +1228,7 @@ impl<'a> FlowInfo<'a> {
     // Ghidra: flow.cc:636 FlowInfo::checkForFlowModification
     fn check_for_flow_modification(&mut self, fc_idx: usize) -> bool {
         let (is_inline, is_no_return, op_ref) = {
-            let fc = match self.fd.callspecs.get(fc_idx) {
+            let fc = match self.fd.get_call_specs(fc_idx) {
                 Some(f) => f,
                 None => return false,
             };
@@ -1262,8 +1258,9 @@ impl<'a> FlowInfo<'a> {
 
     /// If there is an explicit target address for the given call site,
     /// attempt to look up the function and adjust information in the
-    /// FuncCallSpecs call site object. Faithful to `FlowInfo::queryCall`
-    /// (flow.cc:656-672).
+    /// FuncCallSpecs call site object. This is the entry-address guard slice
+    /// corresponding to `FlowInfo::queryCall` (flow.cc:656-672); symbol query,
+    /// setFuncdata, and copyFlowEffects remain `CALLSPEC-0001`.
     ///
     /// Ghidra calls `data.getScopeLocal()->getParent()->queryFunction(addr)`
     /// to resolve the callee's Funcdata, then `fspecs.setFuncdata` and
@@ -1273,7 +1270,7 @@ impl<'a> FlowInfo<'a> {
     // Ghidra: flow.cc:656 FlowInfo::queryCall
     fn query_call(&mut self, fc_idx: usize) {
         // flow.cc:659: `if (!fspecs.getEntryAddress().isInvalid())`.
-        let entry = self.fd.callspecs.get(fc_idx).and_then(|fc| fc.entry_addr);
+        let entry = self.fd.get_call_specs(fc_idx).and_then(|fc| fc.entry_addr);
         let entry = match entry {
             Some(a) => a,
             None => return, // Not a direct call (flow.cc:659 guard fails).
@@ -1288,9 +1285,10 @@ impl<'a> FlowInfo<'a> {
         // item 4. Until then, callers must resolve callees via ActionFuncLink.
     }
 
-    /// Set up the FuncCallSpecs object for a new CALL call site. Faithful to
-    /// `FlowInfo::setupCallSpecs` (flow.cc:680-695). Returns true if the
-    /// sub-function never returns.
+    /// Set up the identity/lifecycle slice of the FuncCallSpecs object for a
+    /// new CALL call site. Corresponds to `FlowInfo::setupCallSpecs`
+    /// (flow.cc:680-695); the remaining consumer work is `CALLSPEC-0001`.
+    /// Returns true if the modeled flow checks discover a non-returning call.
     ///
     /// Ghidra allocates a new `FuncCallSpecs(op)`, rewrites input(0) to a
     /// call-specs varnode, appends to qlst, applies any prototype override,
@@ -1304,34 +1302,31 @@ impl<'a> FlowInfo<'a> {
     fn setup_call_specs(&mut self, op: &crate::op::PcodeOpRef, inject_fc: Option<usize>) -> bool {
         // flow.cc:683-684: new FuncCallSpecs(op) captures the direct target
         // before input(0) is replaced with the call-spec annotation.
-        let (op_addr, entry_addr) = {
-            let op_read = op.0.read().unwrap();
-            let entry_addr = op_read
-                .inrefs
-                .first()
-                .map(|input| Address::new(input.read().unwrap().get_offset()));
-            (op_read.get_addr(), entry_addr)
-        };
         // Rugra's FuncCallSpecs::new requires a FuncProto; use the Funcdata's
         // own prototype as the starting point (Ghidra's ctor clones a default).
         let proto = self.fd.funcp.clone();
-        let mut fc = crate::fspec::FuncCallSpecs::new(op_addr, proto);
-        fc.entry_addr = entry_addr;
-        let new_idx = self.fd.callspecs.len();
-        self.fd.callspecs.push(fc);
+        let fc = crate::fspec::FuncCallSpecs::new_for_op(op, proto);
+        let new_owner = Arc::new(RwLock::new(fc));
         // flow.cc:685: data.opSetInput(op, data.newVarnodeCallSpecs(res), 0).
-        let call_spec_vn = self.fd.new_varnode_call_specs(new_idx);
+        let call_spec_vn = self.fd.new_varnode_call_specs(&new_owner);
         self.fd.op_set_input(op, call_spec_vn, 0);
+        // flow.cc:686: qlst.push_back(res), after the FSPEC annotation is
+        // installed. The local Arc keeps the allocation alive until then.
+        let new_idx = self.fd.add_call_specs_owner(new_owner);
         // flow.cc:688: data.getOverride().applyPrototype(data, *res).
         // TODO(CALLSPEC-0001): depends on Override::applyPrototype integration.
         self.query_call(new_idx);
         // flow.cc:690-693: injection cycle check.
         if let Some(fc_inject_idx) = inject_fc {
-            let same = self.fd.callspecs.get(fc_inject_idx).map(|f| f.entry_addr)
-                == self.fd.callspecs.get(new_idx).map(|f| f.entry_addr);
+            let inject_entry = self
+                .fd
+                .get_call_specs(fc_inject_idx)
+                .and_then(|f| f.entry_addr);
+            let new_entry = self.fd.get_call_specs(new_idx).and_then(|f| f.entry_addr);
+            let same = inject_entry == new_entry;
             if same {
                 // flow.cc:692: don't allow recursion.
-                if let Some(new_fc) = self.fd.callspecs.get_mut(new_idx) {
+                if let Some(mut new_fc) = self.fd.get_call_specs_mut(new_idx) {
                     new_fc.cancel_inject_id();
                 }
             }
@@ -1340,80 +1335,92 @@ impl<'a> FlowInfo<'a> {
         self.check_for_flow_modification(new_idx)
     }
 
-    /// Set up the FuncCallSpecs object for a new indirect (CALLIND) call
-    /// site. Faithful to `FlowInfo::setupCallindSpecs` (flow.cc:704-723).
-    /// Returns true if the sub-function never returns.
+    /// Set up the identity/lifecycle slice of the FuncCallSpecs object for a
+    /// new indirect (CALLIND) call site. Corresponds to
+    /// `FlowInfo::setupCallindSpecs` (flow.cc:704-723); override/prototype/query
+    /// consumers remain `CALLSPEC-0001`. Returns true if the modeled flow
+    /// checks discover a non-returning call.
     ///
-    /// Mirrors `setup_call_specs` but: applies an indirect override first,
-    /// cancels an indirect override when the inject-fc entry matches, and if
-    /// an override resolves the call to a direct address, rewrites the
-    /// CALLIND op to CALL (flow.cc:717-721).
+    /// Ghidra's sequence applies an indirect override first, performs the
+    /// injection-cycle cancellation, applies a prototype/query, and rewrites
+    /// a resolved CALLIND to CALL (flow.cc:711-721). Rugra currently preserves
+    /// the owner/identity order and modeled cancellation/direct rewrite while
+    /// override, prototype, and query consumers remain `CALLSPEC-0001`.
     // Ghidra: flow.cc:704 FlowInfo::setupCallindSpecs
     fn setup_callind_specs(
         &mut self,
         op: &crate::op::PcodeOpRef,
         inject_fc: Option<usize>,
     ) -> bool {
-        let op_addr = op.0.read().unwrap().get_addr();
         let proto = self.fd.funcp.clone();
-        let fc = crate::fspec::FuncCallSpecs::new(op_addr, proto);
-        let new_idx = self.fd.callspecs.len();
-        self.fd.callspecs.push(fc);
+        let fc = crate::fspec::FuncCallSpecs::new_for_op(op, proto);
+        let new_idx = self.fd.add_call_specs(fc);
         // flow.cc:711: data.getOverride().applyIndirect(data, *res).
-        // TODO: depends on Override::applyIndirect integration.
+        // TODO(CALLSPEC-0001): depends on Override::applyIndirect integration.
         // flow.cc:712-713: cancel an indirect override if it matches the
         // injecting fc's entry address.
         if let Some(fc_inject_idx) = inject_fc {
-            let same = self.fd.callspecs.get(fc_inject_idx).map(|f| f.entry_addr)
-                == self.fd.callspecs.get(new_idx).map(|f| f.entry_addr);
+            let inject_entry = self
+                .fd
+                .get_call_specs(fc_inject_idx)
+                .and_then(|f| f.entry_addr);
+            let new_entry = self.fd.get_call_specs(new_idx).and_then(|f| f.entry_addr);
+            let same = inject_entry == new_entry;
             if same {
                 // flow.cc:713: setAddress(Address()); clears the entry.
-                if let Some(new_fc) = self.fd.callspecs.get_mut(new_idx) {
+                if let Some(mut new_fc) = self.fd.get_call_specs_mut(new_idx) {
                     new_fc.clear_entry_address();
                 }
             }
         }
         // flow.cc:714: applyPrototype.
-        // TODO: depends on Override::applyPrototype integration.
+        // TODO(CALLSPEC-0001): depends on Override::applyPrototype integration.
         self.query_call(new_idx);
         // flow.cc:717-721: if overridden to a direct call, rewrite CALLIND→CALL.
         let direct = self
             .fd
-            .callspecs
-            .get(new_idx)
+            .get_call_specs(new_idx)
             .map(|f| f.entry_addr.is_some())
             .unwrap_or(false);
         if direct {
             // flow.cc:719: data.opSetOpcode(op, CPUI_CALL).
             self.fd.op_set_opcode(op, OpCode::CPUI_CALL);
             // flow.cc:720: data.opSetInput(op, data.newVarnodeCallSpecs(res), 0).
-            // TODO: depends on Funcdata::new_varnode_call_specs.
+            let owner = self
+                .fd
+                .get_call_specs_owner(new_idx)
+                .expect("newly inserted callspec owner");
+            let annotation = self.fd.new_varnode_call_specs(&owner);
+            self.fd.op_set_input(op, annotation, 0);
         }
         // flow.cc:722.
         self.check_for_flow_modification(new_idx)
     }
 
-    /// Remove the given call site from the list for this function. Faithful
-    /// to `FlowInfo::deleteCallSpec` (flow.cc:1306-1318).
+    /// Remove the given call site from the list for this function. The covered
+    /// exact-owner success path corresponds to `FlowInfo::deleteCallSpec`
+    /// (flow.cc:1306-1318); the absent-owner error channel remains
+    /// `CALLSPEC-0001`/UNTESTED because Rust currently panics instead of
+    /// throwing `LowlevelError`.
     ///
     /// Ghidra scans `qlst` for the pointer, throws `LowlevelError` if absent,
-    /// then `delete`s and erases. Rugra works by index (no pointer identity)
-    /// because `callspecs` owns the specs by value.
+    /// then `delete`s and erases. Rugra locates the same allocation with
+    /// `Arc::ptr_eq`; a vector shift cannot retarget the identity.
     // Ghidra: flow.cc:1306 FlowInfo::deleteCallSpec
-    fn delete_call_spec(&mut self, fc_idx: usize) {
-        if fc_idx >= self.fd.callspecs.len() {
-            // flow.cc:1313-1314: throw LowlevelError("Misplaced callspec").
-            // Rugra logs the mismatch instead of panicking.
-            eprintln!(
-                "[FLOW] {}: delete_call_spec: index {} out of range (len {})",
-                self.fd.name,
-                fc_idx,
-                self.fd.callspecs.len()
-            );
-            return;
-        }
+    fn delete_call_spec(&mut self, fc: Arc<RwLock<crate::fspec::FuncCallSpecs>>) {
+        let Some(index) = self
+            .fd
+            .callspecs
+            .iter()
+            .position(|owned| Arc::ptr_eq(owned, &fc))
+        else {
+            panic!("Misplaced callspec");
+        };
         // flow.cc:1316-1317: delete fc; qlst.erase(...).
-        self.fd.callspecs.remove(fc_idx);
+        self.fd.callspecs.remove(index);
+        // Consume the lookup handle too, so no strong owner survives this
+        // call merely because Rust needed it to express pointer identity.
+        drop(fc);
     }
 
     // ===================== Inline cloning (flow.cc:1043-1153) =====================
@@ -1789,7 +1796,7 @@ impl<'a> FlowInfo<'a> {
     pub fn inline_sub_function(&mut self, fc_idx: usize) -> bool {
         // flow.cc:1245-1246: need the callee Funcdata.
         let (entry_addr, op_ref) = {
-            let fc = match self.fd.callspecs.get(fc_idx) {
+            let fc = match self.fd.get_call_specs(fc_idx) {
                 Some(f) => f,
                 None => return false,
             };
@@ -1853,7 +1860,7 @@ impl<'a> FlowInfo<'a> {
     ) -> bool {
         // flow.cc:1287-1294: build the context from the callspec.
         let (op_ref, call_addr) = {
-            let fc = match self.fd.callspecs.get(fc_idx) {
+            let fc = match self.fd.get_call_specs(fc_idx) {
                 Some(f) => f,
                 None => return false,
             };
@@ -1878,7 +1885,8 @@ impl<'a> FlowInfo<'a> {
         // last in the list.
         let paramshift = payload.get_paramshift();
         if paramshift != 0 {
-            if let Some(last) = self.fd.callspecs.last_mut() {
+            if let Some(last) = self.fd.callspecs.last() {
+                let mut last = last.write().unwrap();
                 last.set_paramshift(paramshift);
             }
         }
@@ -1899,9 +1907,9 @@ impl<'a> FlowInfo<'a> {
     ///       - else -> `inlineSubFunction` + warningHeader + `deleteCallSpec`
     ///         (flow.cc:1347-1351)
     ///
-    /// Rugra has no `getFspecFromConst` pointer encoding in CALL input(0),
-    /// so the callspec is matched by the call op's address
-    /// (`find_callspec_for_op`); payload resolution goes through the
+    /// Rugra's temporary Iop annotation carries a typed Weak counterpart of
+    /// `getFspecFromConst`; the fallback compares exact PcodeOp identity.
+    /// Payload resolution goes through the
     /// architecture's `PcodeInjectLibrary` exactly like Ghidra's
     /// `glb->pcodeinjectlib`.
     // Ghidra: flow.cc:1327 FlowInfo::injectPcode
@@ -1919,12 +1927,20 @@ impl<'a> FlowInfo<'a> {
             } else {
                 // flow.cc:1337-1338: CPUI_CALL or CPUI_CALLIND — resolve the
                 // callspec from input(0)'s constant.
-                let fc_idx = match find_callspec_for_op(self.fd, &op) {
-                    Some(i) => i,
+                let fc_owner = match find_callspec_for_op(self.fd, &op) {
+                    Some(fc) => fc,
                     None => continue, // No matching callspec; nothing to do.
                 };
+                let Some(fc_idx) = self
+                    .fd
+                    .callspecs
+                    .iter()
+                    .position(|owned| Arc::ptr_eq(owned, &fc_owner))
+                else {
+                    continue;
+                };
                 let (is_inline, inject_id) = {
-                    let fc = &self.fd.callspecs[fc_idx];
+                    let fc = fc_owner.read().unwrap();
                     (fc.is_inline(), fc.get_inject_id())
                 };
                 // flow.cc:1339: if (!fc->isInline()) — nothing to do.
@@ -1957,7 +1973,9 @@ impl<'a> FlowInfo<'a> {
                         // RUGRA-GLUE: Rugra's FuncCallSpecs carries no name
                         // (Ghidra `fc->getName()`); the callspecs here are
                         // created during flow and unnamed until ActionFuncLink.
-                        let fc_name = self.fd.callspecs[fc_idx]
+                        let fc_name = fc_owner
+                            .read()
+                            .unwrap()
                             .entry_addr
                             .map(|a| format!("sub_{:x}", a.as_u64()))
                             .unwrap_or_default();
@@ -1965,14 +1983,14 @@ impl<'a> FlowInfo<'a> {
                             "Function: {} replaced with injection: {}",
                             fc_name, fixup_name
                         ));
-                        self.delete_call_spec(fc_idx);
+                        self.delete_call_spec(fc_owner);
                     }
                 } else {
                     // flow.cc:1347-1350: inlineSubFunction + warningHeader
                     // ("Inlined function: <name>") + deleteCallSpec.
                     if self.inline_sub_function(fc_idx) {
                         self.fd.warning_header("Inlined function");
-                        self.delete_call_spec(fc_idx);
+                        self.delete_call_spec(fc_owner);
                     }
                 }
             }
@@ -2013,7 +2031,7 @@ impl<'a> FlowInfo<'a> {
             // flow.cc:1366-1370: fetch the spec's callee Funcdata state and
             // call op before mutating anything below.
             let (has_funcdata, call_op) = {
-                let fc = &self.fd.callspecs[iter];
+                let fc = self.fd.callspecs[iter].read().unwrap();
                 (fc.has_funcdata(), fc.get_op(self.fd))
             };
             // flow.cc:1367-1368: `if (fd != (Funcdata *)0) continue;`.
@@ -2022,8 +2040,8 @@ impl<'a> FlowInfo<'a> {
                 continue;
             }
             // flow.cc:1369: `PcodeOp *op = fc->getOp();` — Ghidra's stored
-            // pointer is never null; Rugra resolves it from the alive list,
-            // which holds every flow-time op, so None is an invariant break.
+            // pointer is never null; Rugra upgrades the exact Weak PcodeOp
+            // identity, so None is an invariant break.
             let Some(op) = call_op else {
                 eprintln!(
                     "[FLOW] {}: checkContainedCall: call spec {} op missing from bank",
@@ -2043,7 +2061,8 @@ impl<'a> FlowInfo<'a> {
             // invalid entry as None. An invalid Address sorts before every
             // visited key, so Ghidra's upper_bound lands on begin() and the
             // flow.cc:1375 guard continues — None maps to the same skip.
-            let Some(addr) = self.fd.callspecs[iter].entry_addr else {
+            let entry_addr = self.fd.callspecs[iter].read().unwrap().entry_addr;
+            let Some(addr) = entry_addr else {
                 iter += 1;
                 continue;
             };
@@ -3213,20 +3232,15 @@ pub fn follow_flow(
 // Ghidra flow.cc call paths. They are file-local to flow.rs because this
 // alignment task is constrained to editing src/flow.rs.
 
-/// Find the index in `fd.callspecs` whose call op matches the given op.
-/// Ghidra resolves the callspec from a constant in input(0)
-/// (`FuncCallSpecs::getFspecFromConst`, flow.cc:1338); Rugra has no such
-/// constant-via-pointer scheme, so we match by the call op's address
-/// against each spec's `op_addr` (faithful to `FuncCallSpecs::find_call_op`).
-// RUGRA-GLUE: ANN-B; CALLSPEC-0001 linear-scan fallback because Rugra does not encode FuncCallSpecs pointer identity in CALL input(0).
-fn find_callspec_for_op(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Option<usize> {
-    let op_addr = op.0.read().unwrap().get_addr();
-    for (i, fc) in fd.callspecs.iter().enumerate() {
-        if fc.op_addr == op_addr {
-            return Some(i);
-        }
-    }
-    None
+/// Resolve the stable callspec owner for an exact call op. The typed Weak on
+/// input(0) is the fast path; Funcdata's fallback compares the bound PcodeOp
+/// allocation, never an address or vector index.
+// RUGRA-GLUE: ANN-B; Rust Arc owner form of FuncCallSpecs::getFspecFromConst plus exact PcodeOp fallback.
+fn find_callspec_for_op(
+    fd: &Funcdata,
+    op: &crate::op::PcodeOpRef,
+) -> Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>> {
+    fd.get_call_specs_of_op(op)
 }
 
 #[cfg(test)]
