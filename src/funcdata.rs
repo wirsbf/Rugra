@@ -1158,6 +1158,103 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata_varnode.cc:1207 Funcdata::linkSymbolReference
+    // (scope->queryContainer call site) + coreaction.cc:1151
+    // (data.getScopeLocal()->getParent()->queryContainer call site)
+    /// The Funcdata query channel into the faithful `Database`/`Scope`
+    /// symbol graph: the equivalent of
+    /// `data.getScopeLocal()->getParent()->queryContainer(rampoint, 1,
+    /// Address())`. Rugra's Funcdata carries no per-function database.rs
+    /// local Scope (`scope` is the varmap `ScopeLocal` model), and a
+    /// function-local Scope's parent is the global Scope, so the query
+    /// point is `Database`'s global scope — exactly the scope Ghidra's
+    /// `linkSymbolReference` reaches through the ram spacebase's
+    /// `TypeSpacebase::getMap()`. Returns `None` when no Architecture or
+    /// `symboltab` is attached (legacy/test Funcdata) — callers then fall
+    /// back to the `symbol_table` name proxy.
+    pub fn query_container_parent_scope(
+        &self,
+        addr: crate::address::Address,
+        size: i32,
+        usepoint: crate::address::Address,
+    ) -> Option<crate::database::QueryContainerHit> {
+        let symboltab = self.arch.as_ref()?.symboltab.clone()?;
+        let db = symboltab.read().unwrap();
+        let qpoint = db.global_scope_id;
+        db.query_container(qpoint, addr, size, usepoint)
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties (Funcdata consumer:
+    // funcdata_varnode.cc:31 setVarnodeProperties call site form)
+    /// The `queryProperties` arm of the query channel: the smallest
+    /// containing Symbol relative to the global scope, plus the boolean
+    /// properties of the memory range (readonly/volatile via the Database
+    /// flagbase). The flags fold mirrors database.cc:1269-1280.
+    pub fn query_properties_parent_scope(
+        &self,
+        addr: crate::address::Address,
+        size: i32,
+        usepoint: crate::address::Address,
+    ) -> Option<(Option<crate::database::QueryContainerHit>, u32)> {
+        let symboltab = self.arch.as_ref()?.symboltab.clone()?;
+        let db = symboltab.read().unwrap();
+        let qpoint = db.global_scope_id;
+        Some(db.query_properties(qpoint, addr, size, usepoint))
+    }
+
+    // Ghidra: database.cc:1796 Scope::isReadOnly (ruleaction.cc:7372
+    // consumer form: scope->isReadOnly(symaddr, 1, op->getAddr()))
+    /// Read-only test through the query channel. This is the form
+    /// `RulePtrsubCharConstant` and `PrintC::pushPtrCharConstant` use; it
+    /// answers from Symbol flags AND the Database property ranges (the
+    /// readonly channel `Database::set_property_range` feeds), replacing the
+    /// `string_table`-membership proxy. `None` when no channel is attached.
+    pub fn is_scope_read_only(
+        &self,
+        addr: crate::address::Address,
+        size: i32,
+        usepoint: crate::address::Address,
+    ) -> Option<bool> {
+        let symboltab = self.arch.as_ref()?.symboltab.clone()?;
+        let db = symboltab.read().unwrap();
+        let qpoint = db.global_scope_id;
+        Some(db.is_read_only(qpoint, addr, size, usepoint))
+    }
+
+    // Ghidra: database.cc:1198 Scope::queryByName (funcdata_varnode.cc:320
+    /// Funcdata::findHigh consumer form)
+    /// Name lookup through the query channel, walking the scope chain from
+    /// the global scope. `None` when no channel is attached.
+    pub fn query_name_parent_scope(&self, nm: &str) -> Option<Vec<crate::database::QueryNameHit>> {
+        let symboltab = self.arch.as_ref()?.symboltab.clone()?;
+        let db = symboltab.read().unwrap();
+        let qpoint = db.global_scope_id;
+        Some(db.query_by_name(qpoint, nm))
+    }
+
+    // Ghidra: database.cc:3220 Database::setPropertyRange (producer side of
+    /// the readonly/volatile property channel; the loader→symboltab
+    /// registration path is Architecture::fillinReadOnlyFromLoader
+    /// (architecture.cc:1371-1383) / decodeReadOnly (architecture.cc:864-874))
+    /// Register boolean properties over a memory range on the Architecture's
+    /// symbol table — the Funcdata-reachable producer that makes readonly
+    /// ranges (e.g. `.rodata`) consumable through
+    /// [`Funcdata::query_properties_parent_scope`] /
+    /// [`Funcdata::is_scope_read_only`]. `flags` takes `varnode_flags`
+    /// bits (READONLY/VOLATIL/…); partitions accumulate (`|=`, per
+    /// database.cc:3236). Returns `false` when no channel is attached.
+    pub fn set_symbol_property_range(
+        &self,
+        flags: u32,
+        range: crate::address::Range,
+    ) -> bool {
+        let Some(symboltab) = self.arch.as_ref().and_then(|a| a.symboltab.clone()) else {
+            return false;
+        };
+        symboltab.write().unwrap().set_property_range(flags, range);
+        true
+    }
+
     // Ghidra: funcdata_varnode.cc:1193 Funcdata::linkSymbolReference
     pub fn link_symbol_reference(
         &mut self,
@@ -1178,7 +1275,25 @@ impl Funcdata {
         // Rugra: the offset encodes the stack/global address directly.
         let vn_offset = vn.read().unwrap().get_offset();
         // cc:1207: entry = scope->queryContainer(addr, 1, Address())
-        // Rugra: look up in symbol_table (which maps address → name).
+        // The real query channel first: the ram spacebase's map is the
+        // global Scope, so this is the parent-scope container query
+        // (B3-COREACTION-CONSTANTPTR-0001 query channel).
+        if let Some(hit) = self.query_container_parent_scope(
+            crate::address::Address::new(vn_offset),
+            1,
+            // cc:1207 — the empty usepoint `Address()`.
+            crate::address::Address::new(0),
+        ) {
+            // cc:1209-1211: off = (addr - entry->getAddr()) + entry->getOffset();
+            // vn->setSymbolReference(entry, off);
+            let _off = (vn_offset.wrapping_sub(hit.entry_addr.as_u64())) as i32
+                + hit.entry_offset;
+            return Some(hit.symbol_name);
+        }
+        // Transitional fallback (driver data source not yet switched to the
+        // Database symbol graph): the `symbol_table` name proxy, mapping
+        // address → name. Queries that miss the real channel keep the
+        // pre-channel behavior byte-for-byte.
         let sym_name = self.symbol_table.get(&vn_offset).cloned();
         if let Some(ref name) = sym_name {
             // cc:1210-1211: vn->setSymbolReference(entry, off)

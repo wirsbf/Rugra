@@ -15,6 +15,7 @@
 
 use crate::address::{Address, Range, RangeList};
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
+use crate::type_system::datatype::{Datatype, TypeMetatype};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock, Weak};
 
@@ -3115,9 +3116,12 @@ impl Scope {
         // database.cc:1555-1556 — entry.addr = addr; addMap(entry).
         self.apply_add_map_rules(&sym_arc, Some(addr), &mut uselimit, ctx);
         sym_arc.write().unwrap().whole_count += 1;
+        // database.cc:1148-1149 — addMapInternal(symbol, Varnode::mapped,
+        // ...): the whole-map entry carries `mapped` as its extraflags
+        // (visible through `SymbolEntry::getAllFlags`).
         self.entries.push(SymbolEntry::new_static(
             sym_arc,
-            0,
+            crate::varnode::varnode_flags::MAPPED,
             addr,
             0,
             size,
@@ -3556,6 +3560,112 @@ pub struct Database {
     pub id_by_name: bool,
 }
 
+/// Observable projection of a `queryContainer`/`queryProperties` hit — the
+/// currency of the Funcdata query channel (B3-COREACTION-CONSTANTPTR-0001).
+/// Ghidra returns the scope-owned `SymbolEntry*` directly; Rugra's scopes
+/// live behind `Arc<RwLock<Database>>`, so a query hands back this by-value
+/// summary of the same observables. It carries everything the production
+/// consumers read off the entry:
+/// - `ActionConstantPtr::isPointer` (coreaction.cc:1151-1163): the
+///   `needexacthit` test `entry->getAddr() != rampoint` (via `entry_addr`)
+///   and the char-array middle exception `getType()->getMetatype() ==
+///   TYPE_ARRAY` + `((TypeArray *)type)->getBase()->isCharPrint()` (via
+///   `type_metatype` + `base_is_char_print`).
+/// - `Funcdata::linkSymbolReference` (funcdata_varnode.cc:1207-1211): the
+///   entry start (`entry_addr`), the entry-relative offset
+///   (`entry_offset`), and the symbol name for the symbol reference.
+/// - `Funcdata::spacebaseConstant` (funcdata.cc:363): `entry->getAddr()`
+///   for the `extra` computation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryContainerHit {
+    /// Id of the scope whose entry answered (innermost wins; the C++
+    /// `SymbolEntry*` carries its owning scope implicitly).
+    pub scope_id: u64,
+    /// Name of the answering scope (observability for scope traversal
+    /// order; Ghidra has no such field on the entry).
+    pub scope_name: String,
+    /// `entry->getAddr()` — starting address of the storage.
+    pub entry_addr: Address,
+    /// `entry->getSize()`.
+    pub entry_size: i32,
+    /// `entry->getOffset()` — offset of this entry into the whole Symbol.
+    pub entry_offset: i32,
+    /// `entry->getSymbol()->getId()`.
+    pub symbol_id: u64,
+    /// `entry->getSymbol()->getName()`.
+    pub symbol_name: String,
+    /// `entry->getAllFlags()` (database.hh:271: `extraflags | symbol flags`).
+    pub all_flags: u32,
+    /// `entry->getSymbol()->getType()->getMetatype()` (Unknown when the
+    /// Symbol has no resolved Datatype yet).
+    pub type_metatype: TypeMetatype,
+    /// For a TYPE_ARRAY Symbol: `((TypeArray *)type)->getBase()->isCharPrint()`
+    /// (coreaction.cc:1156-1159). False for every other metatype.
+    pub base_is_char_print: bool,
+}
+
+/// Observable projection of one `queryByName` match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryNameHit {
+    /// Id of the scope holding the matching Symbol.
+    pub scope_id: u64,
+    /// Name of that scope.
+    pub scope_name: String,
+    /// `Symbol::getId()`.
+    pub symbol_id: u64,
+    /// `Symbol::getName()`.
+    pub symbol_name: String,
+}
+
+// Ghidra: database.hh:900 ScopeResolve (rangemap<ScopeMapper>) insert
+/// Insert `(rng, scope_id)` into the resolvemap with Ghidra rangemap
+/// overlap-split semantics (`ScopeResolve::insert`, the `rangemap<ScopeMapper>`
+/// insert behind `Database::fillResolve`, database.cc:2917): the inserted
+/// range takes over its overlap from every current owner, and each owner
+/// keeps its disjoint left/right remainders. Partitions stay disjoint, so a
+/// containing-address lookup (`mapScope`) has at most one answer.
+fn resolve_insert_split(map: &mut Vec<(Range, u64)>, sid: u64, rng: Range) {
+    let first = rng.get_first();
+    let last = rng.get_last();
+    let first_off = first.as_u64();
+    let last_off = last.as_u64();
+    let mut out: Vec<(Range, u64)> = Vec::with_capacity(map.len() + 2);
+    let mut inserted = false;
+    for (r, owner) in map.iter() {
+        let rf = r.get_first();
+        let rl = r.get_last();
+        if rl.as_u64() < first_off || rf.as_u64() > last_off {
+            // Disjoint — keep whole.
+            out.push((r.clone(), *owner));
+            continue;
+        }
+        // Overlap — the new range owns the intersection.
+        if rf.as_u64() < first_off {
+            if let Some(left) =
+                Range::new(rf, Address::new(first_off.wrapping_sub(1)))
+            {
+                out.push((left, *owner));
+            }
+        }
+        if !inserted {
+            out.push((rng.clone(), sid));
+            inserted = true;
+        }
+        if rl.as_u64() > last_off {
+            if let Some(right) =
+                Range::new(Address::new(last_off.wrapping_add(1)), rl)
+            {
+                out.push((right, *owner));
+            }
+        }
+    }
+    if !inserted {
+        out.push((rng, sid));
+    }
+    out.sort_by_key(|(r, _)| r.get_first());
+    *map = out;
+}
+
 impl Default for Database {
     // Ghidra: database.cc:2924 Database::default
     fn default() -> Self {
@@ -3700,25 +3810,134 @@ impl Database {
         }
     }
 
+    // Ghidra: database.hh:742 Scope::addSymbol(nm,ct,addr,usepoint) (Database-level entry)
+    /// Add a Symbol with a resolved Datatype and map it to a whole-map
+    /// static entry, applying the live `addMap` flag rules — the
+    /// production-path installer for the query channel's fixture/driver
+    /// population. Faithful to the C++ `addSymbol` → `addSymbolInternal` →
+    /// `addMapPoint` → `addMap` chain (database.cc:1548/:1126-1155): the
+    /// entry takes `Varnode::mapped` extraflags, the symbol takes
+    /// `persist` (global-scope or global-discovery branch), `addrtied`, and
+    /// the flagbase property fold at the mapping address. The
+    /// [`AddMapContext`] lookups are wired to the LIVE Database state
+    /// exactly as `Database::decode` wires them.
+    pub fn add_symbol_mapped(
+        &mut self,
+        scope_id: u64,
+        nm: &str,
+        dtype: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+        addr: Address,
+        size: i32,
+    ) -> Option<u64> {
+        // The ctx reads the global scope's discovery ranges and the
+        // flagbase (the same live-state wiring as Database::decode).
+        let global_ranges: Vec<Range> = self
+            .scopes
+            .get(&self.global_scope_id)
+            .map(|s| s.rangetree.ranges().to_vec())
+            .unwrap_or_default();
+        let Database {
+            scopes, flagbase, ..
+        } = self;
+        let scope = scopes.get_mut(&scope_id)?;
+        let id = scope.add_symbol(nm, "");
+        if let Some(dt) = dtype {
+            if let Some(sym) = scope.symbols.get(&id) {
+                sym.write().unwrap().set_dtype(dt);
+            }
+        }
+        let ctx = AddMapContext {
+            property: Box::new(|a: Address| flagbase.get_value(a)),
+            in_global_discovery: Box::new(move |a: Address| {
+                global_ranges.iter().any(|r| r.contains(a))
+            }),
+        };
+        // database.cc:1555 — the C++ convenience passes the invalid
+        // usepoint (empty uselimit → addrtied + fold branch).
+        scope.add_map_point(id, addr, Address::new(0), size, Some(&ctx));
+        Some(id)
+    }
+
     // Ghidra: database.cc:3050 Database::addRange
     /// Add an address range to the ownership of a Scope. Faithful to
-    /// `addRange`.
+    /// `addRange` (database.cc:3050-3061):
+    /// `clearResolve(scope)` — erase this scope's resolvemap entries —
+    /// then `scope->addRange(...)`, then `fillResolve(scope)` — re-insert
+    /// every owned range into the resolvemap with rangemap split semantics
+    /// (an inserted range takes over its overlap; neighbouring entries are
+    /// trimmed to the remainder).
     pub fn add_range(&mut self, scope_id: u64, rng: Range) {
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
             scope.rangetree.insert_range(rng);
-            self.resolvemap.push((rng, scope_id));
+        } else {
+            return;
+        }
+        // database.cc:3057-3059 — clearResolve + fillResolve. Both bail
+        // early for the global scope (database.cc:2873/:2901-2903: the
+        // global scope never enters the resolvemap) and for functional
+        // scopes (fd != 0); Rugra scopes carry no Funcdata binding, so the
+        // functional-scope guard is vacuous (documented residual).
+        if scope_id == self.global_scope_id {
+            return;
+        }
+        self.clear_resolve(scope_id);
+        self.fill_resolve(scope_id);
+    }
+
+    // Ghidra: database.cc:2871 Database::clearResolve
+    /// Erase this namespace Scope's ranges from the resolvemap. Faithful to
+    /// `clearResolve` (database.cc:2871-2890): for each owned range, find
+    /// the resolvemap partition starting at its first address and erase it
+    /// if this scope owns it. The global scope bails early.
+    fn clear_resolve(&mut self, scope_id: u64) {
+        let first_addrs: Vec<Address> = self
+            .scopes
+            .get(&scope_id)
+            .map(|s| s.rangetree.ranges().iter().map(|r| r.get_first()).collect())
+            .unwrap_or_default();
+        for first in first_addrs {
+            if let Some(pos) = self
+                .resolvemap
+                .iter()
+                .position(|(r, sid)| r.get_first() == first && *sid == scope_id)
+            {
+                self.resolvemap.remove(pos);
+            }
+        }
+    }
+
+    // Ghidra: database.cc:2897 Database::fillResolve
+    /// Insert every range this namespace Scope owns into the resolvemap.
+    /// Faithful to `fillResolve` (database.cc:2897-2908) — each insert goes
+    /// through the rangemap `ScopeResolve::insert` overlap-split semantics
+    /// (database.hh:900): the new range takes over its overlap from any
+    /// current owner; the owner keeps disjoint remainders.
+    fn fill_resolve(&mut self, scope_id: u64) {
+        let ranges: Vec<Range> = self
+            .scopes
+            .get(&scope_id)
+            .map(|s| s.rangetree.ranges().to_vec())
+            .unwrap_or_default();
+        for rng in ranges {
+            resolve_insert_split(&mut self.resolvemap, scope_id, rng);
         }
     }
 
     // Ghidra: database.cc:3064 Database::removeRange
     /// Remove an address range from the ownership of a Scope. Faithful to
-    /// `removeRange`.
+    /// `removeRange` (database.cc:3064-3077): `clearResolve(scope)`,
+    /// `scope->removeRange(...)`, then `fillResolve(scope)` re-inserts the
+    /// remaining ranges.
     pub fn remove_range(&mut self, scope_id: u64, rng: Range) {
+        if scope_id != self.global_scope_id {
+            self.clear_resolve(scope_id);
+        }
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
             scope.rangetree.remove_range(rng);
         }
-        self.resolvemap
-            .retain(|(r, sid)| !(*sid == scope_id && r.get_first() == rng.get_first() && r.get_last() == rng.get_last()));
+        if scope_id != self.global_scope_id {
+            self.fill_resolve(scope_id);
+        }
     }
 
     // Ghidra: database.hh:946 Database::getProperty
@@ -3768,15 +3987,182 @@ impl Database {
 
     // Ghidra: database.cc:3185 Database::mapScope
     /// Map a query point to the owning namespace Scope. Faithful to
-    /// `mapScope` (database.hh:944).
-    pub fn map_scope(&self, _qpoint: u64, addr: Address) -> u64 {
-        // Find the namespace scope owning the address. Fall back to global.
+    /// `mapScope` (database.hh:944 / database.cc:3185-3196): with an empty
+    /// resolvemap the query starts at `qpoint` itself; otherwise the
+    /// partition containing `addr` answers, and a miss falls back to
+    /// `qpoint` (NOT the global scope — database.cc:3195).
+    pub fn map_scope(&self, qpoint: u64, addr: Address) -> u64 {
+        if self.resolvemap.is_empty() {
+            // database.cc:3187-3188 — no namespace scopes.
+            return qpoint;
+        }
+        // Partitions are disjoint (split-on-insert), so the first
+        // containing entry is THE containing entry.
         for (rng, sid) in &self.resolvemap {
             if rng.contains(addr) {
                 return *sid;
             }
         }
-        self.global_scope_id
+        qpoint
+    }
+
+    // Ghidra: database.cc:1246 Scope::queryContainer (Database-level entry)
+    /// Build the ordered ancestor stack of scopes starting at `scope_id`
+    /// (`scope_stack[0]` = innermost, then parents up to the global scope).
+    /// This is the Rugra equivalent of following `Scope::getParent()` links
+    /// (database.cc:1251 `stackContainer(basescope, NULL, ...)`): Rugra's
+    /// Scopes are owned by the `Database` and carry no parent pointer, so
+    /// the chain is materialized here. A cycle guard stops at a repeated id.
+    pub fn ancestor_stack(&self, scope_id: u64) -> Vec<&Scope> {
+        let mut stack = Vec::new();
+        let mut cur = scope_id;
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(scope) = self.scopes.get(&cur) {
+            if !seen.insert(cur) {
+                break; // parent-cycle guard; impossible in a well-formed db
+            }
+            stack.push(scope);
+            if cur == self.global_scope_id {
+                break;
+            }
+            cur = scope.parent_id;
+        }
+        stack
+    }
+
+    // Ghidra: database.hh:271 SymbolEntry::getAllFlags (hit projection)
+    /// Project a `(scope_idx, entry_idx)` pair from the static `Scope`
+    /// query helpers into the observable [`QueryContainerHit`] summary
+    /// (entry observables per `database.hh:224 Symbol::getType` and
+    /// `database.hh:271 SymbolEntry::getAllFlags`).
+    fn container_hit(
+        &self,
+        stack: &[&Scope],
+        scope_idx: usize,
+        entry_idx: usize,
+    ) -> Option<QueryContainerHit> {
+        let scope = *stack.get(scope_idx)?;
+        let entry = scope.entries.get(entry_idx)?;
+        let sym = entry.symbol.read().unwrap();
+        // coreaction.cc:1153-1159 — the char-array middle exception reads
+        // `entry->getSymbol()->getType()->getMetatype() == TYPE_ARRAY` and,
+        // for arrays, `((TypeArray *)type)->getBase()->isCharPrint()`.
+        let (type_metatype, base_is_char_print) = match sym.dtype.as_deref() {
+            Some(Datatype::Array(arr)) => (TypeMetatype::Array, arr.array_of.is_char_print()),
+            Some(other) => (other.get_metatype(), false),
+            None => (TypeMetatype::Unknown, false),
+        };
+        Some(QueryContainerHit {
+            scope_id: scope.unique_id,
+            scope_name: scope.name.clone(),
+            entry_addr: entry.addr,
+            entry_size: entry.size,
+            entry_offset: entry.offset,
+            symbol_id: sym.symbol_id,
+            symbol_name: sym.name.clone(),
+            all_flags: entry.get_all_flags(),
+            type_metatype,
+            base_is_char_print,
+        })
+    }
+
+    // Ghidra: database.cc:1246-1253 Scope::queryContainer
+    /// Within a sub-scope or containing Scope of `qpoint_scope_id`, find the
+    /// smallest SymbolEntry that contains the given range and is valid at
+    /// `usepoint`. Faithful to `Scope::queryContainer` (database.cc:1246):
+    /// `mapScope(this, addr, usepoint)` picks the base scope (the
+    /// `qpoint_scope_id` argument plays `this`), then `stackContainer`
+    /// walks the parent chain. Returns the observable hit summary, or `None`
+    /// (scope discovery without a symbol, or no owner at all, both yield a
+    /// NULL `SymbolEntry*` in the C++).
+    pub fn query_container(
+        &self,
+        qpoint_scope_id: u64,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+    ) -> Option<QueryContainerHit> {
+        // database.cc:1250 — const Scope *basescope = mapScope(this, ...).
+        let base = self.map_scope(qpoint_scope_id, addr);
+        let stack = self.ancestor_stack(base);
+        // database.cc:1251 — stackContainer(basescope, NULL, ...).
+        let (scope_idx, entry_idx) = Scope::query_container(&stack, addr, size, usepoint)?;
+        self.container_hit(&stack, scope_idx, entry_idx)
+    }
+
+    // Ghidra: database.cc:1263-1281 Scope::queryProperties
+    /// Search for the smallest containing Symbol relative to
+    /// `qpoint_scope_id`, and regardless of whether one is found, also look
+    /// up the boolean properties of the memory range. Faithful to
+    /// `Scope::queryProperties` (database.cc:1263): the entry branch returns
+    /// `entry->getAllFlags()`, the scope-only branch returns
+    /// `mapped|addrtied(|persist)` OR the Database property at `addr`, and
+    /// the no-owner branch returns just the property (database.cc:1269-1280)
+    /// — `flag_lookup` is wired to [`Database::get_property`] directly since
+    /// the Database owns the flagbase.
+    pub fn query_properties(
+        &self,
+        qpoint_scope_id: u64,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+    ) -> (Option<QueryContainerHit>, u32) {
+        // database.cc:1267 — mapScope(this, addr, usepoint).
+        let base = self.map_scope(qpoint_scope_id, addr);
+        let stack = self.ancestor_stack(base);
+        let (hit, flags) =
+            Scope::query_properties(&stack, addr, size, usepoint, |a| self.get_property(a));
+        match hit {
+            Some((scope_idx, entry_idx)) => (self.container_hit(&stack, scope_idx, entry_idx), flags),
+            None => (None, flags),
+        }
+    }
+
+    // Ghidra: database.cc:1796-1805 Scope::isReadOnly
+    /// Is the given memory range marked as read-only, relative to
+    /// `qpoint_scope_id`? Faithful to `Scope::isReadOnly` (database.cc:1796):
+    /// `queryProperties(addr, size, usepoint, flags)` then test
+    /// `flags & Varnode::readonly` — the consumer form used by
+    /// `RulePtrsubCharConstant::applyOp` (ruleaction.cc:7372) and
+    /// `PrintC::pushPtrCharConstant` (printc.cc:1709).
+    pub fn is_read_only(
+        &self,
+        qpoint_scope_id: u64,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+    ) -> bool {
+        let (_, flags) = self.query_properties(qpoint_scope_id, addr, size, usepoint);
+        (flags & symbol_flags::READONLY) != 0
+    }
+
+    // Ghidra: database.cc:1198-1206 Scope::queryByName
+    /// Starting from `qpoint_scope_id`, look for Symbols with the given
+    /// name, recursing into parents until a scope has matches. Faithful to
+    /// `Scope::queryByName` (database.cc:1198). Returns one record per
+    /// matching Symbol in the first scope that has any (empty = no match
+    /// anywhere on the chain).
+    pub fn query_by_name(&self, qpoint_scope_id: u64, nm: &str) -> Vec<QueryNameHit> {
+        let stack = self.ancestor_stack(qpoint_scope_id);
+        let ids = Scope::query_by_name(&stack, nm);
+        let mut out = Vec::new();
+        for sid in ids {
+            for scope in &stack {
+                if let Some(sym) = scope.symbols.get(&sid) {
+                    let sym = sym.read().unwrap();
+                    if sym.name == nm {
+                        out.push(QueryNameHit {
+                            scope_id: scope.unique_id,
+                            scope_name: scope.name.clone(),
+                            symbol_id: sid,
+                            symbol_name: sym.name.clone(),
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+        out
     }
 
     // Ghidra: database.cc:2924 Database::numScopes

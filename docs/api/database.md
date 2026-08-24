@@ -374,3 +374,47 @@ Symbol and Database encode/decode round-trips. `cargo check --lib` is clean
 ## 测试签名适配（2026-08-23，root）
 
 equate-pipeline 测试随 VARNODE-COPYSYMBOL-HIGHBRANCH-0001 的关联函数签名（copy_symbol_if_valid(&Arc, &Varnode)）适配调用点，修复 opswitch 复核发现的 master lib-test 编译失败（生产代码零改动）。
+
+## 2026-08-25：Database 级 query 通道入口 + resolvemap 分裂语义（B3-COREACTION-CONSTANTPTR-0001 a1）
+
+- `Database::ancestor_stack(scope_id)`（database.cc:1251 的 `getParent()` 链
+  物化）：从 `scope_id` 沿 `parent_id` 上溯到 global 的有序 `Vec<&Scope>`
+  （`[0]` 最内层），带 parent 环护栏。这是静态 `Scope::query_*` 家族
+  （`stack_container` 等）所需的「祖先栈」约定构造器——此前无生产调用方。
+- `QueryContainerHit`：`queryContainer`/`queryProperties` 命中的可观察投影
+  （scope_id/name、entry_addr/size/offset、symbol_id/name、`getAllFlags`、
+  `type_metatype`、`base_is_char_print`）。携带 ActionConstantPtr::isPointer
+  （coreaction.cc:1151-1163）消费的全部字段：needexacthit 判据
+  `entry->getAddr() != rampoint`（经 `entry_addr`）与 char-array 中部例外
+  `TYPE_ARRAY + base->isCharPrint()`（经 `type_metatype`+`base_is_char_print`）。
+- `Database::query_container(qpoint,addr,size,usepoint)`（database.cc:1246
+  Database 级入口）：`map_scope(qpoint,addr)` 定位 base scope →
+  `ancestor_stack` → 静态 `Scope::query_container` → 命中投影。
+- `Database::query_properties(qpoint,...)`（database.cc:1263）：同一栈上的
+  静态 `Scope::query_properties`，`flag_lookup` 直接接本库 `get_property`
+  （flagbase）；三分支（entry getAllFlags / scope-only mapped|addrtied|persist|prop
+  / property-only）不变。
+- `Database::is_read_only(qpoint,...)`（database.cc:1796 `Scope::isReadOnly`）：
+  `query_properties` 后测 `readonly` 位——ruleaction.cc:7372 /
+  printc.cc:1709 的消费形态。
+- `Database::query_by_name(qpoint,nm) -> Vec<QueryNameHit>`（database.cc:1198）。
+- `Database::add_symbol_mapped(scope_id,nm,dtype,addr,size)`
+  （database.hh:742 `Scope::addSymbol(nm,ct,addr,usepoint)` 的库级入口）：
+  `AddMapContext` 接 LIVE flagbase + global 发现范围（与 `Database::decode`
+  同一接线），走既有 `add_map_point`/`apply_add_map_rules` 完整 addMap 折叠
+  （persist/addrtied/属性折入 symbol flags）。
+- `add_map_point` 修正：整映射 entry 的 extraflags 从 0 改为
+  `Varnode::mapped`（database.cc:1148-1149 `addMapInternal(symbol,
+  Varnode::mapped,...)`），`getAllFlags` 现在包含 mapped 位。
+- `add_range`/`remove_range` 重写为 `clearResolve`+`fillResolve` 语义
+  （database.cc:3050-3077/:2871/:2897）：global scope 不入 resolvemap
+  （cc:2873/:2901 早退；Rugra scope 无 fd 绑定，functional-scope 守卫为空，
+  已注释）；namespace range 以 `resolve_insert_split`（ScopeResolve
+  rangemap insert 的重叠分裂语义，database.hh:900）写入，新 range 接管与
+  现有 owner 的重叠区，旧 owner 保留不相交余量。
+- `map_scope` 修正回退语义：空 resolvemap 与未命中均回退 **qpoint**
+  （database.cc:3188/:3195），不再是 global_scope_id。
+- 验证：双侧 fixture `tests/oracle/cptr_query_channel_1204`（runner
+  `tools/run_cptr_query_channel_oracle.sh`，oracle 12.0.4 真实执行）；
+  `cargo test` 因 master 既有的 typeop.rs 测试目标编译错误在本分支同样
+  不可用（本租约外），`cargo check --lib` 绿。

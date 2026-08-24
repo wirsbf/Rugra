@@ -1552,3 +1552,32 @@ shared-return 路径，但 public function 仍不能称为逐分支相同。完�
   getter、PrintC typed callspec consumer、StringManager 和其它
   callspec 字段残差均不在本阶段范围。上文“`PcodeOp *` 身份仍缺失”的历史结论
   已由本 D0 身份地基取代，但该历史 fixture 自身的其它 MISMATCH 不随之升级。
+
+## 2026-08-25：Funcdata 符号查询通道接通 database.rs（B3-COREACTION-CONSTANTPTR-0001 a1）
+
+Funcdata 现在可经 `arch.symboltab` 走忠实 `Database`/`Scope` 查询图，替代
+`symbol_table: HashMap<u64,String>` 名称代理（C2 差异）：
+
+- `query_container_parent_scope(addr,size,usepoint)`：
+  `data.getScopeLocal()->getParent()->queryContainer(rampoint,1,Address())`
+  （coreaction.cc:1151 / funcdata_varnode.cc:1207）的等价物。Rugra 的
+  Funcdata 无 database.rs 局部 scope（`scope` 字段是 varmap ScopeLocal 模型），
+  函数局部 scope 的父即 global scope，故查询点取 global——C++ fixture 在
+  oracle 侧实测验证 `getParent() == getGlobalScope()`（setup 记录的
+  `parent_is_global=1`）。返回 `QueryContainerHit`（needexacthit 判据与
+  char-array 中部例外字段可表达）。无通道时 `None`。
+- `query_properties_parent_scope`（database.cc:1263 消费形态）、
+  `is_scope_read_only`（database.cc:1796 / ruleaction.cc:7372 形态，
+  替代 RulePtrsubCharConstant 的 `string_table` 成员代理入口）、
+  `query_name_parent_scope`（database.cc:1198）。
+- `set_symbol_property_range(flags,range)`：属性 range 的 Funcdata 侧生产者
+  （`Architecture::fillinReadOnlyFromLoader`/`decodeReadOnly`
+  architecture.cc:1371/:864 的 loader→symboltab 注册通道形态）；readonly
+  range 经 `query_properties` 的 `get_property` 被消费端读回。
+- `link_symbol_reference` 改为真通道优先：PTRSUB 常量先走
+  `query_container_parent_scope`（cc:1207-1211 的 entry 起点/offset/符号名），
+  未接通道或查询未命中时回退 `symbol_table` 名称代理（driver 数据源未切换
+  前保持既有输出逐字节不变——本片预期零 E2E 变化；段(a0) 给 driver 加
+  .rodata DAT 条目、段(b) 重写 ActionConstantPtr 后代理退役）。
+- 验证：`tests/oracle/cptr_query_channel_1204` 双侧 fixture（真实 Ghidra
+  12.0.4 oracle）；`cargo check --lib` 绿。
