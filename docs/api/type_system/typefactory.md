@@ -160,6 +160,57 @@ container come from the parent pointer; `markEphemeral` installs the canonical
 plain pointer and sets `HAS_STRIPPED` (plus `SUB_PTRREL_UNK` for an unknown
 pointee); the relative pointer is interned by pointee/offset/parent/wordsize.
 
+### `pub fn down_chain_virtual(ptr, off, par, par_off, allow_array_wrap) -> Option<Arc<Datatype>>`
+
+Reproduces the C++ virtual call `pointer->downChain(off,par,parOff,
+allowArrayWrap,typegrp)` (virtual declaration `type.hh:429`, `TypePointerRel`
+override `type.hh:681`, production caller `TypeOpIntAdd::propagateAddIn2Out`
+`typeop.cc:1241`). Dispatch is by pointer kind exactly as the C++ vtable:
+a pointer carrying `pointer_rel` state (the canonical `TypePointerRel`
+representation installed by `get_type_pointer_rel_ephemeral`) or a legacy
+named `is_ptrrel` side-table entry routes to the relative override `down_chain`
+(`type.cc:2656-2672`); every other pointer routes to the private plain
+`down_chain_pointer` (`type.cc:1084-1121`). Non-pointer inputs yield `None`
+(the virtual call is ill-typed in C++).
+
+`off` is the in/out offset (`int8 &off`, renormalized by `getSubType` and the
+wrap branch), while `par`/`par_off` are the caller-shared container
+accumulators that survive across a `propagateAddIn2Out` do-while chain. The
+plain override writes `par = this` (`type.cc:1111`) and its wrap-to-zero early
+return yields the descended pointer itself (`type.cc:1098`), so both preserve
+the input `Arc` identity without re-interning. The relative override converts
+the offset to parent-relative coordinates `relOff = (off + offset) &
+calc_mask(size)`, rejects `relOff` outside the parent, returns the freshly
+interned parent pointer on the recover-parent path (`relOff == 0 && offset !=
+0`) without touching the accumulators, and otherwise recurses into the plain
+override on that parent pointer, returning its result directly, `None`
+included (`type.cc:2671`).
+
+### 2026-08-24：downChain 虚分派地基（TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001）
+
+为 `progressbarinit` PTRSUB 根因修复（B1）铺路的 TypeFactory 切片：
+
+- **`down_chain_virtual` 新增**：按 `pointer_rel` 状态/legacy `is_ptrrel`
+  侧表路由 rel/plain 两版 downChain，替代 C++ 虚分派；双侧 fixture
+  `typefactory_downchain_virtual_1204` 锁定 26-record 投影（字段命中、
+  非字段/空洞偏移、`off==0`/`off==size` 边界、负编码 wrap、enum 分支、
+  多层 array/链式调用、rel 输入再传播、plain/rel 路由判别）。
+- **rel 版两处 oracle 偏差修正**（typefactory.rs `down_chain`）：
+  `relOff==0 && offset!=0` 恢复父容器分支不再写 `par/par_off`
+  （type.cc:2669-2670 无此写入）；尾部递归直接返回 plain 结果（可为
+  `None`），删除旧 `result.or(Some(orig_pointer))` fallback
+  （type.cc:2671）。旧行为会把"命中父容器内非字段偏移"错误地退回父
+  指针而不是 `NULL`，并污染容器累加器。
+- **plain 版 `this` 语义修正**（`down_chain_pointer`）：`par = this` 与
+  wrap-to-zero `return this` 均返回被下降指针本身的 `Arc`（type.cc:1098/
+  1111），不再无条件 `get_type_pointer` 重 intern 一个 plain 指针——这同
+  时修掉 rel 延迟路径（type.cc:2660-2662 经 `TypePointerRel` 对象调用
+  plain 版）中 `par` 丢失 rel 身份的偏差，并消除对工厂的多余写入。
+- **签名**：`down_chain` 首参由 `&TypePointer` 改为 `&Arc<Datatype>`
+  （被下降指针本身，即 C++ `this`），`down_chain_pointer` 同理保持私有。
+  两者当前仍无 production caller（B1 的 coreaction/typeop 接线是后续
+  租约任务），唯一调用方是 `down_chain_virtual`、单元测试与双侧 fixture。
+
 ### `pub fn get_exact_piece(&mut self, ct, offset, size) -> Option<Arc<Datatype>>`
 
 Implements `TypeFactory::getExactPiece` (`type.cc:4090-4117`) in its original

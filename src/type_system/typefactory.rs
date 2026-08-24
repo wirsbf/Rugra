@@ -1868,26 +1868,76 @@ impl TypeFactory {
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
+    // Ghidra: type.hh:429 TypePointer::downChain (virtual call site)
+    /// Virtual `downChain` dispatch entry, reproducing the C++ virtual call
+    /// `pointer->downChain(off,par,parOff,allowArrayWrap,typegrp)` (virtual
+    /// declaration type.hh:429, `TypePointerRel` override type.hh:681; the
+    /// production caller is `TypeOpIntAdd::propagateAddIn2Out`,
+    /// typeop.cc:1241).
+    ///
+    /// A pointer carrying `pointer_rel` state — the canonical Rust
+    /// representation of Ghidra's `TypePointerRel`, installed by
+    /// [`Self::get_type_pointer_rel_ephemeral`] — dispatches to the relative
+    /// override [`Self::down_chain`]. A pointer flagged with the legacy named
+    /// `is_ptrrel` side-table entry (see [`Self::get_type_pointer_rel`])
+    /// dispatches there too: Ghidra's single `TypePointerRel` class routes
+    /// both representations through the same override. Every other pointer
+    /// dispatches to the plain [`Self::down_chain_pointer`]. A non-pointer
+    /// input has no Ghidra counterpart (the virtual call is ill-typed in C++)
+    /// and yields `None`.
+    pub fn down_chain_virtual(
+        &mut self,
+        ptr: &Arc<Datatype>,
+        off: &mut i64,
+        par: &mut Option<Arc<Datatype>>,
+        par_off: &mut i64,
+        allow_array_wrap: bool,
+    ) -> Option<Arc<Datatype>> {
+        let pointer = match ptr.as_ref() {
+            Datatype::Pointer(pointer) => pointer.clone(),
+            _ => return None,
+        };
+        if let Some(state) = &pointer.base.pointer_rel {
+            let parent = state.parent.clone();
+            let offset = state.offset;
+            return self.down_chain(ptr, &parent, offset, off, par, par_off, allow_array_wrap);
+        }
+        if (pointer.base.flags & type_flags::IS_PTRREL) != 0 {
+            // RUGRA-GLUE: legacy named relative pointers keep parent/offset
+            // only in the factory side table; the dispatcher consults it so
+            // both Rust representations of TypePointerRel take the override.
+            if let Some(relative) = self.rel_pointers.get(&pointer.base.name) {
+                let parent = relative.parent.clone();
+                let offset = relative.offset;
+                return self.down_chain(ptr, &parent, offset, off, par, par_off, allow_array_wrap);
+            }
+        }
+        self.down_chain_pointer(ptr, off, par, par_off, allow_array_wrap)
+    }
+
     // Ghidra: type.cc:2656 TypePointerRel::downChain
     /// Find a sub-type pointer given an offset into this relative pointer.
     /// Faithful to `TypePointerRel::downChain` (type.cc:2656-2672).
     ///
     /// If the offset lands inside `ptrto` and `ptrto` is a struct/array,
-    /// defer to the plain `TypePointer::downChain` (reproduced inline below).
-    /// Otherwise convert the offset to be relative to the parent container:
+    /// defer to the plain `TypePointer::downChain` *on this same pointer*
+    /// (type.cc:2660-2662), so the deferred `par = this` bookkeeping
+    /// (type.cc:1111) observes the relative pointer itself. Otherwise convert
+    /// the offset to be relative to the parent container:
     /// `relOff = (off + offset) & calc_mask(size)`. If `relOff` is out of the
     /// parent's range, return `None`. Otherwise build a pointer to the parent
-    /// and recurse via the plain-pointer downChain.
+    /// and recurse via the plain-pointer downChain, returning its result
+    /// directly, `None` included (type.cc:2671).
     ///
-    /// `ptr` is the relative pointer; `parent`/`offset` come from the side
-    /// table; `allow_array_wrap` matches Ghidra's `allowArrayWrap`. `off` is
-    /// the in/out offset (updated in place). On success returns `(component,
-    /// new_par, new_par_off)` where `component` is the pointer to drill into,
-    /// `new_par` is the container pointer, and `new_par_off` is the offset
-    /// into the container.
+    /// `orig` is the relative pointer being descended; `parent`/`offset` are
+    /// its container state (normally extracted by
+    /// [`Self::down_chain_virtual`]); `allow_array_wrap` matches Ghidra's
+    /// `allowArrayWrap`. `off` is the in/out offset (updated in place);
+    /// `par`/`par_off` are the caller-shared container accumulators, written
+    /// only by the deferred/plain recursion.
     pub fn down_chain(
         &mut self,
-        ptr: &TypePointer,
+        orig: &Arc<Datatype>,
         parent: &Arc<Datatype>,
         offset: i64,
         off: &mut i64,
@@ -1895,14 +1945,18 @@ impl TypeFactory {
         par_off: &mut i64,
         allow_array_wrap: bool,
     ) -> Option<Arc<Datatype>> {
+        let ptr = match orig.as_ref() {
+            Datatype::Pointer(pointer) => pointer.clone(),
+            _ => return None,
+        };
         let ptrto_meta = ptr.ptr_to.get_metatype();
         let ptrto_size = ptr.ptr_to.get_size() as i64;
         // If the offset is inside ptrto and ptrto is a container, defer to the
-        // plain TypePointer::downChain (type.cc:2660-2662).
+        // plain TypePointer::downChain on this same pointer (type.cc:2660-2662).
         if *off >= 0 && *off < ptrto_size
             && (ptrto_meta == TypeMetatype::Struct || ptrto_meta == TypeMetatype::Array)
         {
-            return self.down_chain_pointer(ptr, off, par, par_off, allow_array_wrap);
+            return self.down_chain_pointer(orig, off, par, par_off, allow_array_wrap);
         }
         // Convert off to be relative to the parent container.
         let mask = crate::address::calc_mask(ptr.base.size) as i64;
@@ -1916,23 +1970,15 @@ impl TypeFactory {
         *off = rel_off;
         // Recovering the start of the parent is still downchaining, even
         // though the parent may be the container (type.cc:2669-2670): return
-        // the pointer to the parent and do not drill down to a field at 0.
+        // the pointer to the parent without drilling down to the field at
+        // offset 0 and without touching the container accumulators.
         if rel_off == 0 && offset != 0 {
-            *par = Some(orig_pointer.clone());
-            *par_off = rel_off;
             return Some(orig_pointer);
         }
         // Recurse via the plain-pointer downChain on the freshly built parent
-        // pointer (type.cc:2671). This walks into the parent's sub-type at
-        // rel_off.
-        let orig_as_ptr = match orig_pointer.as_ref() {
-            Datatype::Pointer(p) => p.clone(),
-            // Should not happen: get_type_pointer always builds a Pointer.
-            _ => return Some(orig_pointer),
-        };
-        let result =
-            self.down_chain_pointer(&orig_as_ptr, off, par, par_off, allow_array_wrap);
-        result.or(Some(orig_pointer))
+        // pointer and return its result directly, `None` included
+        // (type.cc:2671). This walks into the parent's sub-type at rel_off.
+        self.down_chain_pointer(&orig_pointer, off, par, par_off, allow_array_wrap)
     }
 
     // Ghidra: type.cc:1084 TypePointer::downChain
@@ -1940,18 +1986,25 @@ impl TypeFactory {
     /// relative-pointer override above can recurse into it. Faithful to the
     /// wrapping / enum / array / struct dispatch.
     ///
-    /// Returns `Some(pointer_to_component)` with `off` updated to the
-    /// component-relative offset, `par` set to the container pointer (when
-    /// ptrto is an array or struct), and `par_off` set to the offset into the
-    /// container.
+    /// `orig` is the pointer being descended (the C++ `this`): the wrap-to-zero
+    /// early return yields it unchanged (type.cc:1098) and the container
+    /// bookkeeping writes it into `par` (type.cc:1111), so identity is
+    /// preserved without re-interning the pointer. Returns
+    /// `Some(pointer_to_component)` with `off` updated in place, `par` set to
+    /// the descended pointer (when ptrto is an array or struct), and `par_off`
+    /// set to the offset into the container.
     fn down_chain_pointer(
         &mut self,
-        ptr: &TypePointer,
+        orig: &Arc<Datatype>,
         off: &mut i64,
         par: &mut Option<Arc<Datatype>>,
         par_off: &mut i64,
         allow_array_wrap: bool,
     ) -> Option<Arc<Datatype>> {
+        let ptr = match orig.as_ref() {
+            Datatype::Pointer(pointer) => pointer.clone(),
+            _ => return None,
+        };
         let ptrto = &ptr.ptr_to;
         let ptrto_size = ptrto.get_align_size() as i64;
         // Check if we are wrapping (type.cc:1088-1100).
@@ -1969,11 +2022,9 @@ impl TypeFactory {
                 }
                 *off = sign_off;
                 if *off == 0 {
-                    // Wrapped back to zero: consider this going down one level.
-                    // Return a pointer to `this` (the original ptrto).
-                    return Some(
-                        self.get_type_pointer(ptr.base.size, ptrto.clone(), ptr.wordsize),
-                    );
+                    // Wrapped back to zero: consider this going down one level
+                    // and return this pointer itself unchanged (type.cc:1098).
+                    return Some(orig.clone());
                 }
             }
         }
@@ -1988,11 +2039,9 @@ impl TypeFactory {
         }
         let meta = ptrto.get_metatype();
         let is_array = meta == TypeMetatype::Array;
-        // Build the pointer-to-`this` for the container bookkeeping (Ghidra
-        // sets `par = this`).
-        let this_pointer = self.get_type_pointer(ptr.base.size, ptrto.clone(), ptr.wordsize);
         if is_array || meta == TypeMetatype::Struct {
-            *par = Some(this_pointer.clone());
+            // par = this (type.cc:1111): the descended pointer itself.
+            *par = Some(orig.clone());
             *par_off = *off;
         }
         // pt = ptrto->getSubType(off, &off).
@@ -5976,10 +6025,6 @@ mod tests {
         ];
         let outer = factory.set_fields("Outer", outer_fields).expect("Outer exists");
         let rp = factory.get_type_pointer_rel(int_t.clone(), outer.clone(), 4);
-        let rp_ptr = match rp.as_ref() {
-            Datatype::Pointer(p) => p.clone(),
-            _ => panic!("expected a Pointer"),
-        };
         // off=0 lands inside ptrto (int, size 4) but ptrto is neither struct
         // nor array, so we fall through to the parent-relative path.
         let mut off: i64 = 0;
@@ -5987,12 +6032,138 @@ mod tests {
         let mut par_off: i64 = 0;
         setup_default_sizes(&mut factory);
         let result = factory.down_chain(
-            &rp_ptr, &outer, 4, &mut off, &mut par, &mut par_off, false,
+            &rp, &outer, 4, &mut off, &mut par, &mut par_off, false,
         );
         // We expect a non-None result (drilled into the parent at rel_off=4).
         assert!(result.is_some(), "down_chain should produce a component pointer");
         // `par` should be populated (the pointer to Outer).
         assert!(par.is_some());
+    }
+
+    #[test]
+    fn test_down_chain_virtual_dispatch_routing() {
+        // type.hh:429/681 — the virtual downChain call dispatches by pointer
+        // kind: plain pointers take TypePointer::downChain (par = this,
+        // wrap-to-zero returns this), while pointer_rel inputs take the
+        // TypePointerRel override (parent-relative conversion, untouched
+        // accumulators on the recover-parent path, type.cc:2669-2671).
+        let mut factory = TypeFactory::new(8);
+        let alignment_map = xml_elem("size_alignment_map", &[]);
+        for (size, alignment) in [("1", "1"), ("2", "2"), ("4", "4"), ("8", "8")] {
+            alignment_map.write().unwrap().add_child(xml_elem(
+                "entry",
+                &[("size", size), ("alignment", alignment)],
+            ));
+        }
+        let organization =
+            xml_elem_with_children("data_organization", &[], vec![alignment_map]);
+        let mut organization_decoder = TreeDecoder::new(
+            organization,
+            std::sync::Arc::new(RwLock::new(IdRegistry::new())),
+        );
+        factory.decode_data_organization(&mut organization_decoder);
+        setup_default_sizes(&mut factory);
+        let int_t = factory.find_by_name("int").unwrap();
+        let _ = factory.create_struct("Inner");
+        let inner = factory
+            .set_fields(
+                "Inner",
+                vec![
+                    TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() },
+                    TypeField { name: "b".into(), offset: 4, type_ptr: int_t.clone() },
+                ],
+            )
+            .expect("Inner exists");
+        let _ = factory.create_struct("Progress");
+        let progress = factory
+            .set_fields(
+                "Progress",
+                vec![
+                    TypeField { name: "first".into(), offset: 0, type_ptr: int_t.clone() },
+                    TypeField { name: "inner".into(), offset: 8, type_ptr: inner.clone() },
+                ],
+            )
+            .expect("Progress exists");
+        let pd_ptr = factory.get_type_pointer(8, progress.clone(), 1);
+
+        // Plain routing: struct field hit sets par to the descended pointer
+        // itself (type.cc:1111 `par = this`) and renormalizes off to 0.
+        let mut off: i64 = 8;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = 0;
+        let result =
+            factory.down_chain_virtual(&pd_ptr, &mut off, &mut par, &mut par_off, false);
+        assert!(result.is_some(), "plain field hit yields a component pointer");
+        assert!(Arc::ptr_eq(par.as_ref().expect("par set"), &pd_ptr));
+        assert_eq!(par_off, 8);
+        assert_eq!(off, 0);
+
+        // Plain routing: wrap-to-zero returns this pointer unchanged
+        // (type.cc:1098) without touching the accumulators.
+        let mut off: i64 = 16;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = -999;
+        let result =
+            factory.down_chain_virtual(&pd_ptr, &mut off, &mut par, &mut par_off, true);
+        assert!(Arc::ptr_eq(&result.expect("wrap-to-zero returns this"), &pd_ptr));
+        assert!(par.is_none(), "wrap-to-zero leaves par untouched");
+        assert_eq!(par_off, -999);
+        assert_eq!(off, 0);
+
+        // Rel routing (recover-parent, type.cc:2669-2670): the parent pointer
+        // is returned and the accumulators stay untouched.
+        let rel_inner = factory.get_type_pointer_rel_ephemeral(
+            pd_ptr.clone(),
+            inner.clone(),
+            8,
+        );
+        let mut off: i64 = -8;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = -999;
+        let result =
+            factory.down_chain_virtual(&rel_inner, &mut off, &mut par, &mut par_off, false);
+        assert!(Arc::ptr_eq(&result.expect("recover-parent returns parent pointer"), &pd_ptr));
+        assert!(par.is_none(), "recover-parent leaves par untouched");
+        assert_eq!(par_off, -999);
+        assert_eq!(off, 0);
+
+        // Rel routing (deferral, type.cc:2660-2662): off lands inside the
+        // struct ptrto, so the plain override runs on the relative pointer
+        // itself and `par = this` observes the relative pointer.
+        let mut off: i64 = 4;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = -999;
+        let result =
+            factory.down_chain_virtual(&rel_inner, &mut off, &mut par, &mut par_off, false);
+        assert!(result.is_some(), "deferral drills into the Inner field");
+        assert!(Arc::ptr_eq(par.as_ref().expect("par set"), &rel_inner));
+        assert_eq!(par_off, 4);
+        assert_eq!(off, 0);
+
+        // Routing discrimination: the same scalar ptrto yields None through
+        // the plain path (base getSubType) but a field pointer through the
+        // relative path.
+        let int_ptr = factory.get_type_pointer(8, int_t.clone(), 1);
+        let rel_first = factory.get_type_pointer_rel_ephemeral(
+            pd_ptr.clone(),
+            int_t.clone(),
+            0,
+        );
+        let mut off: i64 = 0;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = -999;
+        assert!(factory
+            .down_chain_virtual(&int_ptr, &mut off, &mut par, &mut par_off, false)
+            .is_none());
+        assert!(par.is_none());
+        let mut off: i64 = 0;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = -999;
+        let result =
+            factory.down_chain_virtual(&rel_first, &mut off, &mut par, &mut par_off, false);
+        assert!(result.is_some(), "rel routing reaches the parent container");
+        assert!(Arc::ptr_eq(par.as_ref().expect("par set"), &pd_ptr));
+        assert_eq!(off, 0);
     }
 
     #[test]
