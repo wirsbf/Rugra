@@ -6,6 +6,11 @@ set -euo pipefail
 umask 077
 
 clean_path=/usr/bin:/bin
+# Immutable staging root. /tmp is a usrquota tmpfs whose per-user quota is
+# exhausted by concurrent agents' runs on this machine, so all run-local
+# evidence, build trees and compiler temporaries live under this pinned
+# task-owned directory instead (validated before any use).
+oracle_tmp_root=/home/wirs/.cache/a3-jtthunk-tmp
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
   if [[ -L "${BASH_SOURCE[0]}" || ! -f "${BASH_SOURCE[0]}" ]]; then
@@ -24,9 +29,25 @@ if [[ -z "$runner_source" || ! -f "$runner_source" ]]; then
   exit 1
 fi
 
+validate_oracle_tmp_root() {
+  if [[ "$oracle_tmp_root" == /tmp* ]]; then
+    echo "staging root must not be the quota-capped /tmp tmpfs" >&2
+    return 1
+  fi
+  if [[ ! -d "$oracle_tmp_root" || -L "$oracle_tmp_root" ]]; then
+    echo "staging root is not a real directory: $oracle_tmp_root" >&2
+    return 1
+  fi
+  if [[ "$(/usr/bin/stat -c '%U:%a' "$oracle_tmp_root")" != "$(id -un):700" ]]; then
+    echo "staging root must be user-owned with mode 700: $oracle_tmp_root" >&2
+    return 1
+  fi
+}
+validate_oracle_tmp_root
+
 remove_oracle_tmp() {
   case "$oracle_tmp" in
-    /tmp/rugra-jt-thunk-1204.??????) ;;
+    "$oracle_tmp_root"/rugra-jt-thunk-1204.??????) ;;
     *)
       echo "refusing unsafe temporary cleanup target: $oracle_tmp" >&2
       return 1
@@ -57,7 +78,8 @@ cleanup() {
   trap '' HUP INT QUIT TERM
   set +e
   if [[ "$status" -ne 0 ]]; then
-    failure_log=$(/usr/bin/mktemp /tmp/rugra-jt-thunk-run-failure.XXXXXX.log)
+    failure_log=$(/usr/bin/mktemp \
+      "$oracle_tmp_root/rugra-jt-thunk-run-failure.XXXXXX.log")
     if [[ -n "$failure_log" ]]; then
       {
         printf 'runner_exit=%s\n' "$status"
@@ -95,7 +117,7 @@ if [[ ${1:-} == --captured-evidence-stage ]]; then
   candidate_tree=$5
   candidate_blob_oids=("${@:6}")
   set --
-  if [[ "$oracle_tmp" != /tmp/rugra-jt-thunk-1204.?????? || \
+  if [[ "$oracle_tmp" != "$oracle_tmp_root"/rugra-jt-thunk-1204.?????? || \
         ! -d "$oracle_tmp" || -L "$oracle_tmp" ]]; then
     echo "invalid captured-evidence temporary directory" >&2
     exit 1
@@ -463,7 +485,7 @@ if ! $captured_stage; then
   trap 'forward_or_defer_signal INT' INT
   trap 'forward_or_defer_signal QUIT' QUIT
   trap 'forward_or_defer_signal TERM' TERM
-  oracle_tmp=$(/usr/bin/mktemp -d /tmp/rugra-jt-thunk-1204.XXXXXX)
+  oracle_tmp=$(/usr/bin/mktemp -d "$oracle_tmp_root/rugra-jt-thunk-1204.XXXXXX")
   if [[ -n "$pending_signal" ]]; then
     signal_exit_status "$pending_signal"
     exit "$requested_exit_status"
@@ -1488,10 +1510,10 @@ print(f"libdecomp-manifest {expected_count} {expected_object_hash} {expected_mem
 PY
 /usr/bin/chmod 0444 "$libdecomp_expected_objects" "$libdecomp_expected_members"
 
-if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$make_path" --silent \
-  -C "$oracle_cpp" -j 16 CXX="$cxx_path -std=c++11" CC="$cc_path" \
-  AR="$ar_path" EXTRA= libdecomp.a >"$oracle_tmp/make.stdout" \
-  2>"$oracle_tmp/make.stderr"; then
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$oracle_tmp_root" \
+    "$make_path" --silent -C "$oracle_cpp" -j 16 CXX="$cxx_path -std=c++11" CC="$cc_path" \
+    AR="$ar_path" EXTRA= libdecomp.a >"$oracle_tmp/make.stdout" \
+    2>"$oracle_tmp/make.stderr"; then
   /usr/bin/cat "$oracle_tmp/make.stdout" "$oracle_tmp/make.stderr" >&2
   exit 1
 fi
@@ -1538,8 +1560,9 @@ PY
 verify_libdecomp_archive
 /usr/bin/sha256sum "$oracle_cpp/libdecomp.a" \
   >"$oracle_tmp/libdecomp.before-link"
-if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$cxx_path" \
-  -std=c++11 -O2 -Wall -Wno-sign-compare -I"$oracle_cpp" \
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$oracle_tmp_root" \
+    "$cxx_path" \
+    -std=c++11 -O2 -Wall -Wno-sign-compare -I"$oracle_cpp" \
   "$cpp_fixture" "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
   "$oracle_cpp/inject_sleigh.cc" "$oracle_cpp/libdecomp.a" -lz \
   -o "$oracle_tmp/jt_thunk_classify_1204_cpp" >"$oracle_tmp/cxx.stdout" \
@@ -1571,7 +1594,7 @@ for config_name in config config.toml credentials credentials.toml; do
   fi
 done
 
-cargo_command="/usr/bin/env -i PATH='$clean_path' LC_ALL=C.UTF-8 CARGO_HOME='$cargo_home' CARGO_TARGET_DIR='$cargo_target' CARGO_NET_OFFLINE=true CARGO_INCREMENTAL=0 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER='$cc_path' LIBZ_SYS_STATIC=1 CXX='$cxx_path' CC='$cc_path' AR='$ar_path' RUSTC='$rustc_path' '$cargo_path' test --offline --locked --jobs 2 --lib --test doc_sync 'jumptable::tests::'"
+cargo_command="/usr/bin/env -i PATH='$clean_path' LC_ALL=C.UTF-8 TMPDIR='$oracle_tmp_root' CARGO_HOME='$cargo_home' CARGO_TARGET_DIR='$cargo_target' CARGO_NET_OFFLINE=true CARGO_INCREMENTAL=0 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER='$cc_path' LIBZ_SYS_STATIC=1 CXX='$cxx_path' CC='$cc_path' AR='$ar_path' RUSTC='$rustc_path' '$cargo_path' test --offline --locked --jobs 2 --lib --test doc_sync 'jumptable::tests::'"
 cargo_status=0
 (
   builtin cd "$snapshot"
@@ -1724,8 +1747,9 @@ artifact_input_state >"$oracle_tmp/direct-rustc-inputs.before"
 native_sha=$(/usr/bin/awk 'NR == 1 { print $1 }' "$oracle_tmp/cargo-artifacts.before")
 rlib_sha=$(/usr/bin/awk 'NR == 2 { print $1 }' "$oracle_tmp/cargo-artifacts.before")
 
-if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$rustc_path" \
-  --edition=2021 -O -C "linker=$cc_path" \
+if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$oracle_tmp_root" \
+    "$rustc_path" \
+    --edition=2021 -O -C "linker=$cc_path" \
   -L "dependency=$cargo_target/debug/deps" -L "native=$native_output" \
   --extern "rugra=$rugra_rlib" -l static=rugra_sleigh -l dylib=z \
   -l dylib=stdc++ -l dylib=m "$rust_fixture" \

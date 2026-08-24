@@ -10,7 +10,7 @@
     "failure_stage": "post-Cargo artifact binding, before direct rustc fixture link and before the 24-case differential",
     "failure_text": "expected one run-local Rugra root-output, found 25",
     "run_local_artifacts_retained": false,
-    "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, and pre/post snapshot/oracle/toolchain readback",
+    "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, pre/post snapshot/oracle/toolchain readback, and relocation of the immutable staging root from the usrquota-exhausted /tmp tmpfs to the pinned task-owned home directory /home/wirs/.cache/a3-jtthunk-tmp (also exported as TMPDIR to every compiler invocation)",
     "current_runner_executed": false
   },
   "candidate_evidence": {
@@ -232,7 +232,7 @@
     "rust_fixture_sha256": "73aab1818cda1cc46c336569c7299fee43ef25612ce7f5d3f3b35b7f30e5467e",
     "jumptable_overlay_sha256": "4fe0f3c722905618610dfa2d957df894ab1bc1ae88dd0ac77a7065891eb575b7",
     "api_document_sha256": "5b87732c64f88d5fde577125ab1c8e7973700efd171df008cfd14dc322704708",
-    "runner_sha256": "9d562f8ebf4286e0adddfc098fedcb99b825631a774cbc781fa9f3efdb019694"
+    "runner_sha256": "f5c7ee0a471ff50b319351088c250d9584fed4192ab7fe5dc6636e387e1b6251"
   },
   "input_manifest": {
     "cases": [
