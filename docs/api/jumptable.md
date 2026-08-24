@@ -5,8 +5,9 @@
 PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
 model selection（`JUMPTABLE-SELECTION-0001`）与 SwitchNorm/production
 consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍为 L2，
-本专项 overall 为 `MISMATCH`，扩展 24-case 的 current-Rust coverage 为
-`UNTESTED`。
+本专项 overall 为 `MISMATCH`；24-case 双侧已于 2026-08-25 执行
+（`BILATERAL_24_CASE_BYTE_IDENTICAL`，covered projection=MATCH，
+R2 独立复核 APPROVE）。
 
 ## 2026-08-24：JUMPTABLE-THUNK-CLASSIFY-0001 — typed recovery failure
 
@@ -41,19 +42,20 @@ consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍�
   `collapse` 只在 `collectloads=true` 且 `recoverAddresses` 成功返回时记录，并由
   返回后的 loadpoints 证明内部 collapse 已完成；异常与 collectloads=false 路径
   均无 marker。锁定 C++ 输出已生成，当前 Rust source 也通过 31 个 focused
-  jumptable tests；但尚无一次运行把当前 Rust candidate 链入扩展后的 24-case
-  fixture。此前 runner 在 Cargo 成功后、Rust fixture 链接前因 artifact selector
-  误匹配 25 个 dependency `root-output` 而停止，cleanup 随后删除 run-local target。
-  因此上述所有 24-case behavior coverage 当前均为 `UNTESTED`，不得写作 `MATCH`。
+  jumptable tests。历史 runner 曾在 Cargo 成功后、Rust fixture 链接前因
+  artifact selector 误匹配 25 个 dependency `root-output` 而停止（已修复为
+  depth-2 + `rugra-*` 过滤 + 唯一性断言）。2026-08-25 起 24-case 双侧真实
+  执行：stdout 逐字节一致（sha `c4cc2b35…`）、raw.diff 为空、双侧 stderr 空，
+  10 个双侧覆盖组 `MATCH`（R2 独立复核含一次完整重跑复现）。
 - 双侧现都经 production XML decoder 建立并选中
   `<prototype name="fixture" extrapop="0"><input/><output/></prototype>`，Rust
   fixture 同时把 `max_basetype_size=16`、stack pointer `register:0/8` 钉到
   C++ synthetic Architecture 的值。仍不能把整个 compiler-spec/Architecture
   全局状态称作同输入：Rugra 的 `ProtoModelFull.output` 仍是输入型
   `ParamListStandard`，而 locked Ghidra 使用 `ParamListStandardOut`
-  （`FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001`）；两侧未被本 24-case 消费的
-  TypeFactory/instruction registry/symbol scope 也不是同构对象。该输入表示债务与
-  current-Rust 尚未执行共同阻止 fixture 投影升级为 `MATCH`。
+（`FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001`）；两侧未被本 24-case 消费的
+TypeFactory/instruction registry/symbol scope 也不是同构对象。该输入表示债务
+（非执行缺失）限制 fixture 投影不得升级为整函数 MATCH。
 - `LoadTable::collapse_table` 的排序比较键只含 `addr`，对应
   jumptable.hh:59 的 `return addr < op2.addr`；`size/num` 不作 tie-break。比较与
   `nextaddr` 都保留完整 `Address`：先按 address-space index、再按 offset 排序，
@@ -115,8 +117,8 @@ consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍�
   消费 typed error，并向 truncate 传递同一 `RecoveryMode` 域前，不得将模块或
   fixture overall 状态提升为 MATCH/L3。
 - 剩余 `MISMATCH`（`JUMPTABLE-SORT-TOOLCHAIN-0001`）：当前只证明锁定
-  GCC16/libstdc++ 的预期可观察等价组排列；当前 Rust 24-case 尚未
-  执行，heap fallback 也未有双侧证据，且其他合法 STL/toolchain 可能不同。生产若
+  GCC16/libstdc++ 的预期可观察等价组排列；24-case 已双侧执行且字节一致，但
+  heap fallback 分支仍未入 fixture，且其他合法 STL/toolchain 可能不同。生产若
   需要跨 toolchain 等价，必须固定 oracle toolchain 或另行定义并双侧验证稳定契约。
 - 剩余 `MISMATCH`（`JUMPTABLE-EMULFN-0001`）：locked
   `EmulateFunction::executeLoad` 在成功求出 LOAD 地址后，仅当 `loadpoints`
