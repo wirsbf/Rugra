@@ -232,10 +232,12 @@ fn emit_output_case(
     );
 }
 
-/// ZEXT/SEXT metatype-derivation observation. The locked oracle derives the
-/// local type as getBase(size, metain/metaout) with UINT (ZEXT) / INT (SEXT);
-/// the current Rugra macro override reads the opposite varnode's v_type, so
-/// an untyped fixture op surfaces the PRINTC-CAST-OPNAME-0001 M1 residual.
+/// ZEXT/SEXT metatype-derivation observation. Both sides derive the local
+/// type as getBase(size, metain/metaout) with UINT (ZEXT) / INT (SEXT)
+/// (typeop.cc:1115/:1141 constructors driving TypeOpFunc::get*Local at
+/// typeop.cc:365/:371); the fixture pins the post-PRINTC-CAST-OPNAME-0001-M1
+/// state where the Rugra macro family resolves through the constructor-
+/// registered metatype pair instead of echoing the opposite varnode's v_type.
 fn emit_metatype_case(
     name: &str,
     typeop: &dyn TypeOp,

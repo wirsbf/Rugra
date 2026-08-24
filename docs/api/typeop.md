@@ -9,6 +9,64 @@ Type operations for P-code
 
 Corresponds to Ghidra's `typeop.hh`
 
+## 2026-08-24：宏族 metatype local 默认（PRINTC-CAST-OPNAME-0001 M1）
+
+宏族（`binary_op!`/`unary_op!`/`functional_unary_op!`/`functional_binary_op!`/
+`compare_op_common!`）的 `get_output_local`/`get_input_local` 不再回读对侧
+varnode 的 `v_type`（语义颠倒：旧实现 output 读 in(0)、input 读 out），改为
+Ghidra `TypeOpBinary/TypeOpUnary/TypeOpFunc::get*Local` 的
+`tlst->getBase(size, meta)`（typeop.cc:323/:329/:345/:351/:365/:371），meta 取
+各 TypeOp 子类构造器注册的 `(metaout, metain)`（构造签名
+`TypeOpXxx(t,opc,name,mout,min)`，typeop.hh:211/:227/:244）：
+
+- **每个宏调用点带构造行注释与 metatype 对**，全部取自锁定 oracle 构造器
+  逐行核对：ZEXT=UINT/UINT（typeop.cc:1115）、SEXT=INT/INT（:1141）、
+  SUBPIECE=UNKNOWN/UNKNOWN（:2116）、INT_ADD=INT/INT（:1167）、比较族
+  BOOL/INT（Equal/NotEqual/Sless/SlessEqual，:924/:988/:1015/:1041）或
+  BOOL/UINT（Less/LessEqual，:1067/:1091）、INT_CARRY=BOOL/UINT（:1332）、
+  SCARRY/SBORROW=BOOL/INT（:1348/:1364）、NEGATE=UINT/UINT（:1394）、
+  2COMP=INT/INT（:1380）、AND/OR/XOR=UINT/UINT、DIV/REM=UINT/UINT、
+  ADD/SUB/MULT/SDIV/SREM/LEFT/SRIGHT=INT/INT、RIGHT=UINT/UINT、
+  BOOL_XOR/AND/OR/NEGATE=BOOL/BOOL、FLOAT_*=FLOAT/FLOAT（比较族
+  BOOL/FLOAT）、NAN=BOOL/FLOAT（:1775）、TRUNC=INT/FLOAT（:1912）、
+  INT2FLOAT=FLOAT/INT（:1839）、PIECE=UNKNOWN/UNKNOWN（:2037）、
+  POPCOUNT/LZCOUNT=INT/UNKNOWN（:2558/:2565）。
+- **宏生成的 struct 现持有构造注入的 `Arc<RwLock<TypeFactory>>`**（`new()`
+  构造器，对齐 Ghidra 每个子类构造器接收 `TypeFactory *t` 存入基类 `tlst`
+  字段，typeop.cc:233-242），覆写 `local_type_factory()`。
+- **共享 `base_local_type(factory, size, meta)` 增加 meta 参数**；trait 默认与
+  `TypeOpCall` fallback 显式传 `TypeMetatype::Unknown`，canonical fallback
+  语义不变（typeop.cc:261-275）。
+- **三个 shift op 转手写 impl**：Ghidra `TypeOpIntLeft/IntRight/IntSright`
+  覆写 `getInputLocal`（typeop.cc:1509/:1536/:1600）——slot 1（移位数）返回
+  `getBaseNoChar(size, TYPE_INT)`（size-1 INT 得 nochar 基类型，type.cc
+  `getBaseNoChar`；Rust 对应 `TypeFactory::get_base_no_char`），其余槽位走
+  TypeOpBinary 默认。宏无法表达该覆写，保留宏形式即简化实现。
+- **`TypeOpInsert`/`TypeOpExtract` 转工厂 + 覆写移植**：INSERT ctor 为
+  UNKNOWN/INT（typeop.cc:2528，旧注释误记 INT/INT 已纠正），EXTRACT 为
+  INT/INT（:2543）；二者 `getInputLocal` 覆写（:2535/:2550）：slot 0 保持
+  `getBase(size, TYPE_UNKNOWN)`。
+- **`TypeOpIntAdd` 手写 impl 的 local 默认改 getBase(size, INT)**（继承
+  TypeOpBinary，typeop.cc:1167 构造对），不再回读对侧 v_type。
+- **`TypeOpCopy` 删除回读式覆写**：Ghidra TypeOpCopy 无 `get*Local` 覆写
+  （typeop.hh:253-263），改持有工厂、走 trait 基类默认。
+- `TypeOpManager::new` 对上述全部 opcode 注入工厂（与 CALL/BRANCH 等现有
+  注入同一分配）。
+- **未触碰**（Ghidra 有各自语义、非宏族，另行任务）：TypeOpLoad（指针解引用
+  语义）、TypeOpPtradd（getBase(size,TYPE_INT)，typeop.cc:2233-2240——属
+  TYPE-PTRWIDTH-PTRSUB-0001 簇）、TypeOpPtrsub、TypeOpStore、CBRANCH/
+  CALLIND/RETURN/CPOOLREF/NEW/CALLOTHER 的 get*Local 覆写。shift 三品的
+  `push` 仍走 `op_binary`（Ghidra 是 `opIntLeft/opIntRight/opIntSright`，
+  print 侧 emitter 缺口已注释登记，print-language 移植另行任务）。
+
+双侧 fixture `tests/oracle/typeop_localbase_defaults_1204` 的 ZEXT/SEXT 16 行
+差异（oracle `getBase(size,metain/metaout)` 得 uint1/uint4/char/int4 vs 旧宏
+回读 xunknown4/xunknown1、size 互换）为本切片双侧 oracle 证据；修复后重钉
+comparand 至本 commit，bilateral 翻 MATCH。打印侧三发射臂（printc.rs
+opIntZext/opIntSext/opSubpiece）与 cast.rs 三谓词不在本切片 write-set，行为
+不变——泄漏的打印侧根因（M2 varnode get_local_type 空壳、M3 coreaction
+build_localtypes v_type 播种）另行切片。
+
 ## 2026-08-24：TypeOp 基类 local 默认与 TypeOpCall opflags（TYPEOP-LOCALBASE-DEFAULTS-0001）
 
 修复 R3 复核发现的两个预存缺口（R3-D1-REVIEW §7 建议②③）：
@@ -32,10 +90,9 @@ Corresponds to Ghidra's `typeop.hh`
   `local_type_factory`，使基类默认在分派表中可用。Ghidra 侧有覆写而 Rust 尚未
   移植的 opcode（CBRANCH/CALLIND/RETURN/CPOOLREF/NEW/CALLOTHER）保持无工厂，
   其 local 默认仍为 `None`（不伪对齐）。
-- 已有覆写（TypeOpCall::get_input_local、宏族 binary/unary/functional 的
-  `v_type` 读取、COPY/LOAD/STORE 等）行为不变。宏族
-  `getBase(size, metain/metaout)`（ZEXT=UINT/SEXT=INT，typeop.cc:1116/:1142）
-  的移植属 PRINTC-CAST-OPNAME-0001 M1，本切片不触碰。
+- 已有覆写（TypeOpCall::get_input_local 等）行为不变；宏族
+  `v_type` 读取在 PRINTC-CAST-OPNAME-0001 M1（见上节）已改为
+  `getBase(size, metain/metaout)`（ZEXT=UINT/SEXT=INT，typeop.cc:1115/:1141）。
 
 双侧 fixture `tests/oracle/typeop_localbase_defaults_1204.{cc,rs,metadata.json}` +
 `tools/run_typeop_localbase_defaults_oracle.sh`：C++ 经真实
@@ -181,11 +238,14 @@ Core trait representing a P-code operation type
 
 Corresponds to Ghidra's `TypeOp` class
 
-新钩子 `local_type_factory()`（RUGRA-GLUE）：Ghidra 基类 `tlst` 字段
+钩子 `local_type_factory()`（RUGRA-GLUE）：Ghidra 基类 `tlst` 字段
 （typeop.cc:233-242）的 provider，默认 `None`；持有构造注入工厂的 impl
-（TypeOpCall/TypeOpBranch/TypeOpBranchind/TypeOpSegment/TypeOpCast）覆写它。
+（TypeOpCall/TypeOpBranch/TypeOpBranchind/TypeOpSegment/TypeOpCast 及 M1 后的
+全部宏族/比较族/shift/INSERT/EXTRACT/INT_ADD/COPY struct）覆写它。
 默认 `get_output_local`/`get_input_local` 经共享 `base_local_type` 返回
-`getBase(size, TYPE_UNKNOWN)`（typeop.cc:261-275），无工厂时 `None`。
+`getBase(size, TYPE_UNKNOWN)`（typeop.cc:261-275），无工厂时 `None`。宏族覆写
+按构造器注册的 `(metaout, metain)` 走 `getBase(size, meta)`
+（typeop.cc:323/:329/:345/:351/:365/:371，PRINTC-CAST-OPNAME-0001 M1）。
 
 ### `pub struct TypeOpBinary`
 
@@ -197,23 +257,15 @@ Base behavior for unary operations
 
 ### `pub struct $struct_name`
 
-*暂无代码注释*
-
-### `pub struct $struct_name`
-
-*暂无代码注释*
-
-### `pub struct $struct_name`
-
-*暂无代码注释*
-
-### `pub struct $struct_name`
-
-*暂无代码注释*
+宏族（binary/unary/functional_unary/functional_binary/compare_*）生成的
+struct：持有构造注入的 `Arc<RwLock<TypeFactory>>`（`new()`），`get*Local` 按
+构造器注册 metatype 的 `getBase(size, meta)`（注册点逐 opcode 附
+`// Ghidra: typeop.cc:<ctor行>` 注释）。
 
 ### `pub struct TypeOpCopy`
 
-CPUI_COPY implementation
+CPUI_COPY implementation. 无 `get*Local` 覆写（typeop.hh:253-263），持工厂走
+trait 基类默认（PRINTC-CAST-OPNAME-0001 M1 起不再回读对侧 v_type）。
 
 ### `pub struct TypeOpLoad`
 
@@ -294,10 +346,12 @@ This handles the mapping between OpCodes and their TypeOp implementations.
 
 ### `pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self`
 
-Build the per-opcode table; the factory is installed into the `CPUI_CALL`,
-`CPUI_BRANCH`, `CPUI_BRANCHIND`, `CPUI_SEGMENTOP`, and `CPUI_CAST` slots so
-the base-default `get_output_local`/`get_input_local` and the
-`TypeOpCall::get_input_local` fallbacks share the Architecture's canonical
+Build the per-opcode table; the factory is injected into every factory-backed
+slot — `CPUI_CALL`, `CPUI_BRANCH`, `CPUI_BRANCHIND`, `CPUI_SEGMENTOP`,
+`CPUI_CAST`, and (PRINTC-CAST-OPNAME-0001 M1) the full macro/compare family,
+the three shift ops, `CPUI_INSERT`, `CPUI_EXTRACT`, `CPUI_INT_ADD`, and
+`CPUI_COPY` — so the base-default and metatype
+`get_output_local`/`get_input_local` paths share the Architecture's canonical
 TypeFactory.
 
 ### `pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp>`

@@ -69,21 +69,21 @@ fn as_printc_mut(lng: &mut dyn PrintLanguage) -> Option<&mut PrintC> {
     any_ref.downcast_mut::<PrintC>()
 }
 
-/// Shared canonical base lookup behind the `TypeOp` base-class local-type
-/// defaults: `tlst->getBase(size,TYPE_UNKNOWN)` (typeop.cc:264 for the
-/// output, typeop.cc:274 for the input). `tlst` is the TypeFactory every
-/// TypeOp constructor receives (typeop.cc:233-242); `getBase` returns the
-/// canonical interned base type, or null when no base type of that
-/// size/metatype exists (Rugra: `None`).
+/// Shared canonical base lookup behind every `get*Local` implementation in
+/// this file: `tlst->getBase(size, meta)` (typeop.cc:264/274 for the TypeOp
+/// base-class `TYPE_UNKNOWN` defaults; typeop.cc:323/329 TypeOpBinary,
+/// typeop.cc:345/351 TypeOpUnary and typeop.cc:365/371 TypeOpFunc use the same
+/// shape with the metatype their subclass constructors register). `tlst` is
+/// the TypeFactory every TypeOp constructor receives (typeop.cc:233-242);
+/// `getBase` returns the canonical interned base type, or null when no base
+/// type of that size/metatype exists (Rugra: `None`).
 // Ghidra: typeop.cc:264 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
 fn base_local_type(
     type_factory: &Arc<RwLock<TypeFactory>>,
     size: usize,
+    metatype: TypeMetatype,
 ) -> Option<Arc<Datatype>> {
-    type_factory
-        .read()
-        .unwrap()
-        .get_base(size, TypeMetatype::Unknown)
+    type_factory.read().unwrap().get_base(size, metatype)
 }
 
 /// Core trait representing a P-code operation type
@@ -148,28 +148,26 @@ pub trait TypeOp {
 
     /// Get the minimal (or suggested) data-type of an output to this op-code
     ///
-    /// Default type lookup: `tlst->getBase(op->getOut()->getSize(),TYPE_UNKNOWN)`
-    /// — the result depends only on the op-code class and the size of the
-    /// output. Subclasses with a specific metatype (TypeOpBinary/Unary/Func
-    /// `metaout`) or call-specific logic override this.
+    /// Canonical fallback: `tlst->getBase(op->getOut()->getSize(),
+    /// TYPE_UNKNOWN)` (typeop.cc:261-268) — the base-class default subclasses
+    /// with a specific metatype (TypeOpBinary/Unary/Func `metaout`) or
+    /// call-specific logic override.
     // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (default at typeop.cc:261)
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         let type_factory = self.local_type_factory()?;
         let size = op.get_out()?.read().unwrap().get_size();
-        base_local_type(type_factory, size)
+        base_local_type(type_factory, size, TypeMetatype::Unknown)
     }
 
     /// Get the minimal (or suggested) data-type of an input to this op-code
     ///
-    /// Default type lookup: `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)`
-    /// — the result depends only on the op-code class and the size of the
-    /// input. Subclasses with a specific metatype (TypeOpBinary/Unary/Func
-    /// `metain`) or call-specific logic override this.
+    /// Canonical fallback: `tlst->getBase(op->getIn(slot)->getSize(),
+    /// TYPE_UNKNOWN)` (typeop.cc:271-275).
     // Ghidra: typeop.hh:152 TypeOp::getInputLocal (default at typeop.cc:271)
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let type_factory = self.local_type_factory()?;
         let size = op.get_in(slot)?.read().unwrap().get_size();
-        base_local_type(type_factory, size)
+        base_local_type(type_factory, size, TypeMetatype::Unknown)
     }
 
     /// Find the data-type of the output that would be assigned by a compiler.
@@ -313,9 +311,28 @@ impl TypeOp for TypeOpUnary {
 
 // --- Concrete Opcode Implementations ---
 
+/// Generate a TypeOpBinary subclass. `$metaout`/`$metain` are the
+/// `type_metatype` pair the corresponding Ghidra constructor registers
+/// (`TypeOpBinary(t,opc,name,mout,min)`, typeop.hh:211); they drive
+/// `getBase(size, meta)` for the local-type defaults exactly as
+/// TypeOpBinary::getOutputLocal/getInputLocal do.
 macro_rules! binary_op {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
-        pub struct $struct_name;
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
+     $metaout:ident, $metain:ident) => {
+        pub struct $struct_name {
+            type_factory: Arc<RwLock<TypeFactory>>,
+        }
+
+        impl $struct_name {
+            // RUGRA-GLUE: stores the base-class `tlst` field every Ghidra
+            //   TypeOp subclass constructor receives (typeop.cc:233-242); the
+            //   per-subclass constructor line is cited at the registration
+            //   site in TypeOpManager::new.
+            pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+                Self { type_factory }
+            }
+        }
+
         impl TypeOp for $struct_name {
             // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
@@ -350,21 +367,49 @@ macro_rules! binary_op {
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_binary(op);
             }
+            // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+            //   constructor-registered metaout below resolves through it.
+            fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+                Some(&self.type_factory)
+            }
             // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-                op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_out()?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metaout)
             }
             // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal
-            fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-                op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
+            fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_in(slot)?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metain)
             }
         }
     };
 }
 
+/// Generate a TypeOpUnary subclass. `$metaout`/`$metain` are the
+/// `type_metatype` pair the corresponding Ghidra constructor registers
+/// (`TypeOpUnary(t,opc,name,mout,min)`, typeop.hh:227); they drive
+/// `getBase(size, meta)` for the local-type defaults exactly as
+/// TypeOpUnary::getOutputLocal/getInputLocal do.
 macro_rules! unary_op {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
-        pub struct $struct_name;
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
+     $metaout:ident, $metain:ident) => {
+        pub struct $struct_name {
+            type_factory: Arc<RwLock<TypeFactory>>,
+        }
+
+        impl $struct_name {
+            // RUGRA-GLUE: stores the base-class `tlst` field every Ghidra
+            //   TypeOp subclass constructor receives (typeop.cc:233-242); the
+            //   per-subclass constructor line is cited at the registration
+            //   site in TypeOpManager::new.
+            pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+                Self { type_factory }
+            }
+        }
+
         impl TypeOp for $struct_name {
             // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
@@ -395,21 +440,49 @@ macro_rules! unary_op {
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_unary(op);
             }
+            // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+            //   constructor-registered metaout below resolves through it.
+            fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+                Some(&self.type_factory)
+            }
             // Ghidra: typeop.cc:345 TypeOpUnary::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-                op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_out()?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metaout)
             }
             // Ghidra: typeop.cc:351 TypeOpUnary::getInputLocal
-            fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-                op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
+            fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_in(slot)?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metain)
             }
         }
     };
 }
 
+/// Generate a TypeOpFunc subclass. `$metaout`/`$metain` are the
+/// `type_metatype` pair the corresponding Ghidra constructor registers
+/// (`TypeOpFunc(t,opc,name,mout,min)`, typeop.hh:244); they drive
+/// `getBase(size, meta)` for the local-type defaults exactly as
+/// TypeOpFunc::getOutputLocal/getInputLocal do.
 macro_rules! functional_unary_op {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr) => {
-        pub struct $struct_name;
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr,
+     $metaout:ident, $metain:ident) => {
+        pub struct $struct_name {
+            type_factory: Arc<RwLock<TypeFactory>>,
+        }
+
+        impl $struct_name {
+            // RUGRA-GLUE: stores the base-class `tlst` field every Ghidra
+            //   TypeOp subclass constructor receives (typeop.cc:233-242); the
+            //   per-subclass constructor line is cited at the registration
+            //   site in TypeOpManager::new.
+            pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+                Self { type_factory }
+            }
+        }
+
         impl TypeOp for $struct_name {
             // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
@@ -440,21 +513,49 @@ macro_rules! functional_unary_op {
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_unary(op);
             }
+            // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+            //   constructor-registered metaout below resolves through it.
+            fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+                Some(&self.type_factory)
+            }
             // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-                op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_out()?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metaout)
             }
             // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
-            fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-                op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
+            fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_in(slot)?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metain)
             }
         }
     };
 }
 
+/// Generate a TypeOpFunc subclass (binary input shape). `$metaout`/`$metain`
+/// are the `type_metatype` pair the corresponding Ghidra constructor registers
+/// (`TypeOpFunc(t,opc,name,mout,min)`, typeop.hh:244); they drive
+/// `getBase(size, meta)` for the local-type defaults exactly as
+/// TypeOpFunc::getOutputLocal/getInputLocal do.
 macro_rules! functional_binary_op {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr) => {
-        pub struct $struct_name;
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr,
+     $metaout:ident, $metain:ident) => {
+        pub struct $struct_name {
+            type_factory: Arc<RwLock<TypeFactory>>,
+        }
+
+        impl $struct_name {
+            // RUGRA-GLUE: stores the base-class `tlst` field every Ghidra
+            //   TypeOp subclass constructor receives (typeop.cc:233-242); the
+            //   per-subclass constructor line is cited at the registration
+            //   site in TypeOpManager::new.
+            pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+                Self { type_factory }
+            }
+        }
+
         impl TypeOp for $struct_name {
             // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
@@ -489,20 +590,41 @@ macro_rules! functional_binary_op {
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_binary(op);
             }
+            // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+            //   constructor-registered metaout below resolves through it.
+            fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+                Some(&self.type_factory)
+            }
             // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-                op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_out()?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metaout)
             }
             // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
-            fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-                op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
+            fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+                let type_factory = self.local_type_factory()?;
+                let size = op.get_in(slot)?.read().unwrap().get_size();
+                base_local_type(type_factory, size, TypeMetatype::$metain)
             }
         }
     };
 }
 
-/// CPUI_COPY implementation
-pub struct TypeOpCopy;
+/// CPUI_COPY implementation. Ghidra's TypeOpCopy never overrides
+/// getOutputLocal/getInputLocal (typeop.hh:253-263), so both resolve through
+/// the TypeOp base defaults `getBase(size, TYPE_UNKNOWN)` (typeop.cc:261-275).
+pub struct TypeOpCopy {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpCopy {
+    // Ghidra: typeop.cc:390 TypeOpCopy::TypeOpCopy
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpCopy {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -535,16 +657,11 @@ impl TypeOp for TypeOpCopy {
         lng.op_copy(op);
     }
 
-    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Copy does not override)
-    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_in(0)
-            .and_then(|vn| vn.read().unwrap().v_type.clone())
-    }
-
-    // Ghidra: typeop.hh:152 TypeOp::getInputLocal (base; Copy does not override)
-    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-        op.get_out()
-            .and_then(|vn| vn.read().unwrap().v_type.clone())
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); COPY has no
+    //   get*Local override in Ghidra, so the trait defaults below resolve
+    //   through this factory.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
 
     /// The output token of a COPY is just the high type of its input.
@@ -855,115 +972,373 @@ fn attached_varnode_size(op: &PcodeOp, slot: i32) -> Option<usize> {
 // Arithmetic Operations
 // NOTE: TypeOpIntAdd has a hand-written impl below (it needs a custom
 // get_output_token and propagate_type).
+// Ghidra: typeop.cc:1318 TypeOpIntSub::TypeOpIntSub — TypeOpBinary("-",TYPE_INT,TYPE_INT)
 binary_op!(
     TypeOpIntSub,
     CPUI_INT_SUB,
     "INT_SUB",
     typeop_flags::ARITHMETIC_OP,
-    "-"
+    "-",
+    Int,
+    Int
 );
+// Ghidra: typeop.cc:1617 TypeOpIntMult::TypeOpIntMult — TypeOpBinary("*",TYPE_INT,TYPE_INT)
 binary_op!(
     TypeOpIntMult,
     CPUI_INT_MULT,
     "INT_MULT",
     typeop_flags::ARITHMETIC_OP,
-    "*"
+    "*",
+    Int,
+    Int
 );
+// Ghidra: typeop.cc:1631 TypeOpIntDiv::TypeOpIntDiv — TypeOpBinary("/",TYPE_UINT,TYPE_UINT)
 binary_op!(
     TypeOpIntDiv,
     CPUI_INT_DIV,
     "INT_DIV",
     typeop_flags::ARITHMETIC_OP,
-    "/"
+    "/",
+    Uint,
+    Uint
 );
+// Ghidra: typeop.cc:1651 TypeOpIntSdiv::TypeOpIntSdiv — TypeOpBinary("/",TYPE_INT,TYPE_INT)
 binary_op!(
     TypeOpIntSdiv,
     CPUI_INT_SDIV,
     "INT_SDIV",
     typeop_flags::ARITHMETIC_OP,
-    "s/"
+    "s/",
+    Int,
+    Int
 );
+// Ghidra: typeop.cc:1671 TypeOpIntRem::TypeOpIntRem — TypeOpBinary("%",TYPE_UINT,TYPE_UINT)
 binary_op!(
     TypeOpIntRem,
     CPUI_INT_REM,
     "INT_REM",
     typeop_flags::ARITHMETIC_OP,
-    "%"
+    "%",
+    Uint,
+    Uint
 );
+// Ghidra: typeop.cc:1691 TypeOpIntSrem::TypeOpIntSrem — TypeOpBinary("%",TYPE_INT,TYPE_INT)
 binary_op!(
     TypeOpIntSrem,
     CPUI_INT_SREM,
     "INT_SREM",
     typeop_flags::ARITHMETIC_OP,
-    "s%"
+    "s%",
+    Int,
+    Int
 );
+// Ghidra: typeop.cc:1380 TypeOpInt2Comp::TypeOpInt2Comp — TypeOpUnary("-",TYPE_INT,TYPE_INT)
 unary_op!(
     TypeOpIntNeg,
     CPUI_INT_2COMP,
     "INT_2COMP",
     typeop_flags::ARITHMETIC_OP,
-    "-"
+    "-",
+    Int,
+    Int
 );
-functional_binary_op!(TypeOpIntCarry, CPUI_INT_CARRY, "INT_CARRY", 0, "carry");
-functional_binary_op!(TypeOpIntScarry, CPUI_INT_SCARRY, "INT_SCARRY", 0, "scarry");
+// Ghidra: typeop.cc:1332 TypeOpIntCarry::TypeOpIntCarry — TypeOpFunc("CARRY",TYPE_BOOL,TYPE_UINT)
+functional_binary_op!(
+    TypeOpIntCarry,
+    CPUI_INT_CARRY,
+    "INT_CARRY",
+    0,
+    "carry",
+    Bool,
+    Uint
+);
+// Ghidra: typeop.cc:1348 TypeOpIntScarry::TypeOpIntScarry — TypeOpFunc("SCARRY",TYPE_BOOL,TYPE_INT)
+functional_binary_op!(
+    TypeOpIntScarry,
+    CPUI_INT_SCARRY,
+    "INT_SCARRY",
+    0,
+    "scarry",
+    Bool,
+    Int
+);
+// Ghidra: typeop.cc:1364 TypeOpIntSborrow::TypeOpIntSborrow — TypeOpFunc("SBORROW",TYPE_BOOL,TYPE_INT)
 functional_binary_op!(
     TypeOpIntSborrow,
     CPUI_INT_SBORROW,
     "INT_SBORROW",
     0,
-    "sborrow"
+    "sborrow",
+    Bool,
+    Int
 );
 
 // Bitwise Operations
+// Ghidra: typeop.cc:1441 TypeOpIntAnd::TypeOpIntAnd — TypeOpBinary("&",TYPE_UINT,TYPE_UINT)
 binary_op!(
     TypeOpIntAnd,
     CPUI_INT_AND,
     "INT_AND",
     typeop_flags::LOGICAL_OP,
-    "&"
+    "&",
+    Uint,
+    Uint
 );
+// Ghidra: typeop.cc:1474 TypeOpIntOr::TypeOpIntOr — TypeOpBinary("|",TYPE_UINT,TYPE_UINT)
 binary_op!(
     TypeOpIntOr,
     CPUI_INT_OR,
     "INT_OR",
     typeop_flags::LOGICAL_OP,
-    "|"
+    "|",
+    Uint,
+    Uint
 );
+// Ghidra: typeop.cc:1408 TypeOpIntXor::TypeOpIntXor — TypeOpBinary("^",TYPE_UINT,TYPE_UINT)
 binary_op!(
     TypeOpIntXor,
     CPUI_INT_XOR,
     "INT_XOR",
     typeop_flags::LOGICAL_OP,
-    "^"
+    "^",
+    Uint,
+    Uint
 );
+// Ghidra: typeop.cc:1394 TypeOpIntNegate::TypeOpIntNegate — TypeOpUnary("~",TYPE_UINT,TYPE_UINT)
 unary_op!(
     TypeOpIntNot,
     CPUI_INT_NEGATE,
     "INT_NEGATE",
     typeop_flags::LOGICAL_OP,
-    "~"
+    "~",
+    Uint,
+    Uint
 );
-binary_op!(
-    TypeOpIntLeft,
-    CPUI_INT_LEFT,
-    "INT_LEFT",
-    typeop_flags::SHIFT_OP,
-    "<<"
-);
-binary_op!(
-    TypeOpIntRight,
-    CPUI_INT_RIGHT,
-    "INT_RIGHT",
-    typeop_flags::SHIFT_OP,
-    ">>"
-);
-binary_op!(
-    TypeOpIntSright,
-    CPUI_INT_SRIGHT,
-    "INT_SRIGHT",
-    typeop_flags::SHIFT_OP,
-    "s>>"
-);
+// Shift Operations — hand-written instead of `binary_op!` because Ghidra's
+// TypeOpIntLeft/TypeOpIntRight/TypeOpIntSright override getInputLocal
+// (typeop.cc:1509/:1536/:1600): slot 1 (the shift amount) must come back as
+// getBaseNoChar(size, TYPE_INT) — the size-1 no-char int — while every other
+// slot uses the TypeOpBinary default getBase(size, metain).
+// ---------------------------------------------------------------------------
+// Ghidra: typeop.cc:1502 TypeOpIntLeft::TypeOpIntLeft — TypeOpBinary("<<",TYPE_INT,TYPE_INT)
+pub struct TypeOpIntLeft {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpIntLeft {
+    // RUGRA-GLUE: stores the base-class `tlst` field the Ghidra constructor
+    //   receives (typeop.cc:1502).
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
+impl TypeOp for TypeOpIntLeft {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_INT_LEFT
+    }
+    // Ghidra: typeop.hh:70 TypeOp::getName
+    fn get_name(&self) -> &str {
+        "INT_LEFT"
+    }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    fn get_flags(&self) -> u32 {
+        typeop_flags::SHIFT_OP
+    }
+    // Ghidra: typeop.cc:335 TypeOpBinary::printRaw (IntLeft inherits)
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in1 = op
+            .get_in(1)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = {} << {}", out, in0, in1)
+    }
+    // Ghidra: typeop.hh:529 TypeOpIntLeft::push -> lng->opIntLeft(op). Rugra's
+    //   PrintLanguage does not yet expose opIntLeft (print-side emitter gap,
+    //   PRINTC-CAST-OPNAME follow-up); op_binary preserves the previous
+    //   routing until that emitter is ported.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        lng.op_binary(op);
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242).
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
+    // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (IntLeft inherits)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
+    }
+    // Ghidra: typeop.cc:1509 TypeOpIntLeft::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        if slot == 1 {
+            let size = op.get_in(slot)?.read().unwrap().get_size();
+            return type_factory
+                .read()
+                .unwrap()
+                .get_base_no_char(size, TypeMetatype::Int);
+        }
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
+    }
+}
+
+// Ghidra: typeop.cc:1527 TypeOpIntRight::TypeOpIntRight — TypeOpBinary(">>",TYPE_UINT,TYPE_UINT)
+pub struct TypeOpIntRight {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpIntRight {
+    // RUGRA-GLUE: stores the base-class `tlst` field the Ghidra constructor
+    //   receives (typeop.cc:1527).
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
+impl TypeOp for TypeOpIntRight {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_INT_RIGHT
+    }
+    // Ghidra: typeop.hh:70 TypeOp::getName
+    fn get_name(&self) -> &str {
+        "INT_RIGHT"
+    }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    fn get_flags(&self) -> u32 {
+        typeop_flags::SHIFT_OP
+    }
+    // Ghidra: typeop.cc:335 TypeOpBinary::printRaw (IntRight inherits)
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in1 = op
+            .get_in(1)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = {} >> {}", out, in0, in1)
+    }
+    // Ghidra: typeop.hh:538 TypeOpIntRight::push -> lng->opIntRight(op). Rugra
+    //   has no opIntRight emitter yet (print-side gap, see IntLeft note);
+    //   op_binary preserves the previous routing.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        lng.op_binary(op);
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242).
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
+    // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (IntRight inherits)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Uint)
+    }
+    // Ghidra: typeop.cc:1536 TypeOpIntRight::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        if slot == 1 {
+            let size = op.get_in(slot)?.read().unwrap().get_size();
+            return type_factory
+                .read()
+                .unwrap()
+                .get_base_no_char(size, TypeMetatype::Int);
+        }
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Uint)
+    }
+}
+
+// Ghidra: typeop.cc:1567 TypeOpIntSright::TypeOpIntSright — TypeOpBinary(">>",TYPE_INT,TYPE_INT)
+pub struct TypeOpIntSright {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpIntSright {
+    // RUGRA-GLUE: stores the base-class `tlst` field the Ghidra constructor
+    //   receives (typeop.cc:1567).
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
+impl TypeOp for TypeOpIntSright {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_INT_SRIGHT
+    }
+    // Ghidra: typeop.hh:70 TypeOp::getName
+    fn get_name(&self) -> &str {
+        "INT_SRIGHT"
+    }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    fn get_flags(&self) -> u32 {
+        typeop_flags::SHIFT_OP
+    }
+    // Ghidra: typeop.cc:1572 TypeOpIntSright::printRaw
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in1 = op
+            .get_in(1)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = {} s>> {}", out, in0, in1)
+    }
+    // Ghidra: typeop.hh:548 TypeOpIntSright::push -> lng->opIntSright(op).
+    //   Rugra has no opIntSright emitter yet (print-side gap, see IntLeft
+    //   note); op_binary preserves the previous routing.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        lng.op_binary(op);
+    }
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242).
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
+    // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (IntSright inherits)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
+    }
+    // Ghidra: typeop.cc:1600 TypeOpIntSright::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        if slot == 1 {
+            let size = op.get_in(slot)?.read().unwrap().get_size();
+            return type_factory
+                .read()
+                .unwrap()
+                .get_base_no_char(size, TypeMetatype::Int);
+        }
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
+    }
+}
 
 // Comparison Operations
 // NOTE: The six comparison ops (Equal, NotEqual, Less, LessEqual, Sless,
@@ -971,120 +1346,177 @@ binary_op!(
 // a propagate_type that flows across the two input operands.
 
 // Extension Operations
+// Ghidra: typeop.cc:1115 TypeOpIntZext::TypeOpIntZext — TypeOpFunc("ZEXT",TYPE_UINT,TYPE_UINT)
 functional_unary_op!(
     TypeOpIntZext,
     CPUI_INT_ZEXT,
     "INT_ZEXT",
     typeop_flags::INHERITS_SIGN_ZERO,
-    "zext"
+    "zext",
+    Uint,
+    Uint
 );
+// Ghidra: typeop.cc:1141 TypeOpIntSext::TypeOpIntSext — TypeOpFunc("SEXT",TYPE_INT,TYPE_INT)
 functional_unary_op!(
     TypeOpIntSext,
     CPUI_INT_SEXT,
     "INT_SEXT",
     typeop_flags::INHERITS_SIGN,
-    "sext"
+    "sext",
+    Int,
+    Int
 );
-functional_unary_op!(TypeOpTrunc, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece");
+// Ghidra: typeop.cc:2116 TypeOpSubpiece::TypeOpSubpiece — TypeOpFunc("SUB",TYPE_UNKNOWN,TYPE_UNKNOWN)
+functional_unary_op!(
+    TypeOpTrunc,
+    CPUI_SUBPIECE,
+    "SUBPIECE",
+    0,
+    "subpiece",
+    Unknown,
+    Unknown
+);
 
 // Floating Point Operations
+// Ghidra: typeop.cc:1783 TypeOpFloatAdd::TypeOpFloatAdd — TypeOpBinary("+",TYPE_FLOAT,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatAdd,
     CPUI_FLOAT_ADD,
     "FLOAT_ADD",
     typeop_flags::FLOATINGPOINT_OP,
-    "f+"
+    "f+",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1807 TypeOpFloatSub::TypeOpFloatSub — TypeOpBinary("-",TYPE_FLOAT,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatSub,
     CPUI_FLOAT_SUB,
     "FLOAT_SUB",
     typeop_flags::FLOATINGPOINT_OP,
-    "f-"
+    "f-",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1799 TypeOpFloatMult::TypeOpFloatMult — TypeOpBinary("*",TYPE_FLOAT,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatMult,
     CPUI_FLOAT_MULT,
     "FLOAT_MULT",
     typeop_flags::FLOATINGPOINT_OP,
-    "f*"
+    "f*",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1791 TypeOpFloatDiv::TypeOpFloatDiv — TypeOpBinary("/",TYPE_FLOAT,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatDiv,
     CPUI_FLOAT_DIV,
     "FLOAT_DIV",
     typeop_flags::FLOATINGPOINT_OP,
-    "f/"
+    "f/",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1815 TypeOpFloatNeg::TypeOpFloatNeg — TypeOpUnary("-",TYPE_FLOAT,TYPE_FLOAT)
 unary_op!(
     TypeOpFloatNeg,
     CPUI_FLOAT_NEG,
     "FLOAT_NEG",
     typeop_flags::FLOATINGPOINT_OP,
-    "f-"
+    "f-",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1823 TypeOpFloatAbs::TypeOpFloatAbs — TypeOpFunc("ABS",TYPE_FLOAT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatAbs,
     CPUI_FLOAT_ABS,
     "FLOAT_ABS",
     typeop_flags::FLOATINGPOINT_OP,
-    "fabs"
+    "fabs",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1831 TypeOpFloatSqrt::TypeOpFloatSqrt — TypeOpFunc("SQRT",TYPE_FLOAT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatSqrt,
     CPUI_FLOAT_SQRT,
     "FLOAT_SQRT",
     typeop_flags::FLOATINGPOINT_OP,
-    "fsqrt"
+    "fsqrt",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1743 TypeOpFloatEqual::TypeOpFloatEqual — TypeOpBinary("==",TYPE_BOOL,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatEqual,
     CPUI_FLOAT_EQUAL,
     "FLOAT_EQUAL",
     typeop_flags::FLOATINGPOINT_OP,
-    "f=="
+    "f==",
+    Bool,
+    Float
 );
+// Ghidra: typeop.cc:1751 TypeOpFloatNotEqual::TypeOpFloatNotEqual — TypeOpBinary("!=",TYPE_BOOL,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatNotEqual,
     CPUI_FLOAT_NOTEQUAL,
     "FLOAT_NOTEQUAL",
     typeop_flags::FLOATINGPOINT_OP,
-    "f!="
+    "f!=",
+    Bool,
+    Float
 );
+// Ghidra: typeop.cc:1759 TypeOpFloatLess::TypeOpFloatLess — TypeOpBinary("<",TYPE_BOOL,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatLess,
     CPUI_FLOAT_LESS,
     "FLOAT_LESS",
     typeop_flags::FLOATINGPOINT_OP,
-    "f<"
+    "f<",
+    Bool,
+    Float
 );
+// Ghidra: typeop.cc:1767 TypeOpFloatLessEqual::TypeOpFloatLessEqual — TypeOpBinary("<=",TYPE_BOOL,TYPE_FLOAT)
 binary_op!(
     TypeOpFloatLessEqual,
     CPUI_FLOAT_LESSEQUAL,
     "FLOAT_LESSEQUAL",
     typeop_flags::FLOATINGPOINT_OP,
-    "f<="
+    "f<=",
+    Bool,
+    Float
 );
+// Ghidra: typeop.cc:1775 TypeOpFloatNan::TypeOpFloatNan — TypeOpFunc("NAN",TYPE_BOOL,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatNan,
     CPUI_FLOAT_NAN,
     "FLOAT_NAN",
     typeop_flags::FLOATINGPOINT_OP,
-    "isnan"
+    "isnan",
+    Bool,
+    Float
 );
+// Ghidra: typeop.cc:1904 TypeOpFloatFloat2Float::TypeOpFloatFloat2Float — TypeOpFunc("FLOAT2FLOAT",TYPE_FLOAT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatFloat2Float,
     CPUI_FLOAT_FLOAT2FLOAT,
     "FLOAT_FLOAT2FLOAT",
     typeop_flags::FLOATINGPOINT_OP,
-    "f2f"
+    "f2f",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1839 TypeOpFloatInt2Float::TypeOpFloatInt2Float — TypeOpFunc("INT2FLOAT",TYPE_FLOAT,TYPE_INT)
 functional_unary_op!(
     TypeOpFloatInt2Float,
     CPUI_FLOAT_INT2FLOAT,
     "FLOAT_INT2FLOAT",
     typeop_flags::FLOATINGPOINT_OP,
-    "i2f"
+    "i2f",
+    Float,
+    Int
 );
 
 impl TypeOpFloatInt2Float {
@@ -1101,44 +1533,70 @@ impl TypeOpFloatInt2Float {
     }
 }
 
+// Ghidra: typeop.cc:1912 TypeOpFloatTrunc::TypeOpFloatTrunc — TypeOpFunc("TRUNC",TYPE_INT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatTrunc,
     CPUI_FLOAT_TRUNC,
     "FLOAT_TRUNC",
     typeop_flags::FLOATINGPOINT_OP,
-    "ftrunc"
+    "ftrunc",
+    Int,
+    Float
 );
+// Ghidra: typeop.cc:1920 TypeOpFloatCeil::TypeOpFloatCeil — TypeOpFunc("CEIL",TYPE_FLOAT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatCeil,
     CPUI_FLOAT_CEIL,
     "FLOAT_CEIL",
     typeop_flags::FLOATINGPOINT_OP,
-    "fceil"
+    "fceil",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1928 TypeOpFloatFloor::TypeOpFloatFloor — TypeOpFunc("FLOOR",TYPE_FLOAT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatFloor,
     CPUI_FLOAT_FLOOR,
     "FLOAT_FLOOR",
     typeop_flags::FLOATINGPOINT_OP,
-    "ffloor"
+    "ffloor",
+    Float,
+    Float
 );
+// Ghidra: typeop.cc:1936 TypeOpFloatRound::TypeOpFloatRound — TypeOpFunc("ROUND",TYPE_FLOAT,TYPE_FLOAT)
 functional_unary_op!(
     TypeOpFloatRound,
     CPUI_FLOAT_ROUND,
     "FLOAT_ROUND",
     typeop_flags::FLOATINGPOINT_OP,
-    "fround"
+    "fround",
+    Float,
+    Float
 );
 
 // Boolean Operations
-binary_op!(TypeOpBoolAnd, CPUI_BOOL_AND, "BOOL_AND", 0, "&&");
-binary_op!(TypeOpBoolOr, CPUI_BOOL_OR, "BOOL_OR", 0, "||");
-binary_op!(TypeOpBoolXor, CPUI_BOOL_XOR, "BOOL_XOR", 0, "^^");
-unary_op!(TypeOpBoolNot, CPUI_BOOL_NEGATE, "BOOL_NEGATE", 0, "!");
+// Ghidra: typeop.cc:1727 TypeOpBoolAnd::TypeOpBoolAnd — TypeOpBinary("&&",TYPE_BOOL,TYPE_BOOL)
+binary_op!(TypeOpBoolAnd, CPUI_BOOL_AND, "BOOL_AND", 0, "&&", Bool, Bool);
+// Ghidra: typeop.cc:1735 TypeOpBoolOr::TypeOpBoolOr — TypeOpBinary("||",TYPE_BOOL,TYPE_BOOL)
+binary_op!(TypeOpBoolOr, CPUI_BOOL_OR, "BOOL_OR", 0, "||", Bool, Bool);
+// Ghidra: typeop.cc:1719 TypeOpBoolXor::TypeOpBoolXor — TypeOpBinary("^^",TYPE_BOOL,TYPE_BOOL)
+binary_op!(TypeOpBoolXor, CPUI_BOOL_XOR, "BOOL_XOR", 0, "^^", Bool, Bool);
+// Ghidra: typeop.cc:1711 TypeOpBoolNegate::TypeOpBoolNegate — TypeOpUnary("!",TYPE_BOOL,TYPE_BOOL)
+unary_op!(
+    TypeOpBoolNot,
+    CPUI_BOOL_NEGATE,
+    "BOOL_NEGATE",
+    0,
+    "!",
+    Bool,
+    Bool
+);
 
 // Special Operations
-functional_binary_op!(TypeOpPiece, CPUI_PIECE, "PIECE", 0, "concat");
-functional_binary_op!(TypeOpSubpiece, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece");
+// Ghidra: typeop.cc:2037 TypeOpPiece::TypeOpPiece — TypeOpFunc("CONCAT",TYPE_UNKNOWN,TYPE_UNKNOWN)
+functional_binary_op!(TypeOpPiece, CPUI_PIECE, "PIECE", 0, "concat", Unknown, Unknown);
+// Ghidra: typeop.cc:2116 TypeOpSubpiece::TypeOpSubpiece — TypeOpFunc("SUB",TYPE_UNKNOWN,TYPE_UNKNOWN)
+functional_binary_op!(TypeOpSubpiece, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece", Unknown, Unknown);
 
 impl TypeOpPiece {
     /// Compute the byte offset into an assumed composite data-type for an
@@ -1215,8 +1673,10 @@ impl TypeOpSubpiece {
     }
 }
 
-functional_unary_op!(TypeOpPopcount, CPUI_POPCOUNT, "POPCOUNT", 0, "popcount");
-functional_unary_op!(TypeOpLzcount, CPUI_LZCOUNT, "LZCOUNT", 0, "lzcount");
+// Ghidra: typeop.cc:2558 TypeOpPopcount::TypeOpPopcount — TypeOpFunc("POPCOUNT",TYPE_INT,TYPE_UNKNOWN)
+functional_unary_op!(TypeOpPopcount, CPUI_POPCOUNT, "POPCOUNT", 0, "popcount", Int, Unknown);
+// Ghidra: typeop.cc:2565 TypeOpLzcount::TypeOpLzcount — TypeOpFunc("LZCOUNT",TYPE_INT,TYPE_UNKNOWN)
+functional_unary_op!(TypeOpLzcount, CPUI_LZCOUNT, "LZCOUNT", 0, "lzcount", Int, Unknown);
 
 // Control Flow Operations
 /// Ghidra's `TypeOpBranch` takes the Architecture TypeFactory in its
@@ -1395,7 +1855,7 @@ impl TypeOp for TypeOpCall {
         // `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)` — always the
         // same Architecture TypeFactory the constructor received.
         let input_size = op.get_in(slot)?.read().unwrap().get_size();
-        let fallback = || base_local_type(&self.type_factory, input_size);
+        let fallback = || base_local_type(&self.type_factory, input_size, TypeMetatype::Unknown);
 
         // Ghidra gate: `(slot==0)||(vn->getSpace()->getType()!=IPTR_FSPEC)`
         // (typeop.cc:695). Rugra has no dedicated fspace yet: the D0
@@ -2151,13 +2611,22 @@ impl TypeOp for TypeOpCast {
 
 /// CPUI_INSERT type operator.
 ///
-/// Faithful to `TypeOpInsert` (typeop.hh:886-891 / typeop.cc:2519-2541).
-/// Ghidra constructor: `TypeOpFunc(t, CPUI_INSERT, "INSERT", TYPE_INT, TYPE_INT)`
-/// with `opflags = binary`. `push` forwards to `PrintLanguage::opInsertOp`,
-/// overridden by `PrintC::op_insert`. The remaining accessors reproduce the
-/// `functional_binary_op!` body (Rugra has not yet ported Ghidra's
-//  `TypeOpInsert::getInputLocal` override at typeop.cc:2535).
-pub struct TypeOpInsert;
+/// Faithful to `TypeOpInsert` (typeop.hh:886-891 / typeop.cc:2528-2541).
+/// Ghidra constructor: `TypeOpFunc(t, CPUI_INSERT, "INSERT", TYPE_UNKNOWN, TYPE_INT)`
+/// with `opflags = ternary`. `push` forwards to `PrintLanguage::opInsertOp`,
+/// overridden by `PrintC::op_insert`. `getInputLocal` overrides the TypeOpFunc
+/// default: slot 0 is the value being inserted into, whose local type stays
+/// `getBase(size, TYPE_UNKNOWN)`.
+pub struct TypeOpInsert {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpInsert {
+    // Ghidra: typeop.cc:2528 TypeOpInsert::TypeOpInsert — TypeOpFunc("INSERT",TYPE_UNKNOWN,TYPE_INT)
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
 
 impl TypeOp for TypeOpInsert {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
@@ -2202,15 +2671,26 @@ impl TypeOp for TypeOpInsert {
             None => lng.op_binary(op),
         }
     }
-    // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
-    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_in(0)
-            .and_then(|v| v.read().unwrap().v_type.clone())
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   constructor-registered metaout/metain below resolve through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
-    // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
-    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-        op.get_out()
-            .and_then(|v| v.read().unwrap().v_type.clone())
+    // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal (INSERT inherits,
+    //   metaout=TYPE_UNKNOWN)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Unknown)
+    }
+    // Ghidra: typeop.cc:2535 TypeOpInsert::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        if slot == 0 {
+            return base_local_type(type_factory, size, TypeMetatype::Unknown);
+        }
+        base_local_type(type_factory, size, TypeMetatype::Int)
     }
 }
 
@@ -2219,10 +2699,18 @@ impl TypeOp for TypeOpInsert {
 /// Faithful to `TypeOpExtract` (typeop.hh:894-899 / typeop.cc:2543-2556).
 /// Ghidra constructor: `TypeOpFunc(t, CPUI_EXTRACT, "EXTRACT", TYPE_INT, TYPE_INT)`
 /// with `opflags = ternary`. `push` forwards to `PrintLanguage::opExtractOp`,
-/// overridden by `PrintC::op_extract`. The remaining accessors reproduce the
-/// `functional_binary_op!` body (Rugra has not yet ported Ghidra's
-//  `TypeOpExtract::getInputLocal` override at typeop.cc:2550).
-pub struct TypeOpExtract;
+/// overridden by `PrintC::op_extract`. `getInputLocal` overrides the TypeOpFunc
+/// default: slot 0's local type stays `getBase(size, TYPE_UNKNOWN)`.
+pub struct TypeOpExtract {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpExtract {
+    // Ghidra: typeop.cc:2543 TypeOpExtract::TypeOpExtract — TypeOpFunc("EXTRACT",TYPE_INT,TYPE_INT)
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
 
 impl TypeOp for TypeOpExtract {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
@@ -2267,15 +2755,26 @@ impl TypeOp for TypeOpExtract {
             None => lng.op_binary(op),
         }
     }
-    // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
-    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_in(0)
-            .and_then(|v| v.read().unwrap().v_type.clone())
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   constructor-registered metaout/metain below resolve through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
-    // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
-    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-        op.get_out()
-            .and_then(|v| v.read().unwrap().v_type.clone())
+    // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal (EXTRACT inherits,
+    //   metaout=TYPE_INT)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
+    }
+    // Ghidra: typeop.cc:2550 TypeOpExtract::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        if slot == 0 {
+            return base_local_type(type_factory, size, TypeMetatype::Unknown);
+        }
+        base_local_type(type_factory, size, TypeMetatype::Int)
     }
 }
 
@@ -2288,10 +2787,12 @@ impl TypeOp for TypeOpExtract {
 // ---------------------------------------------------------------------------
 
 /// Shared body emitted by `compare_op_impl!` / `signed_compare_op_impl!`:
-/// matches the fields the `binary_op!` macro sets (opcode/name/flags/print/push
-/// + the transparent input<->output get_output_local/get_input_local).
+/// matches the fields the `binary_op!` macro sets (opcode/name/flags/print/push)
+/// plus the TypeOpBinary local-type defaults with the constructor-registered
+/// metatype pair (every comparison ctor is `TypeOpBinary(sym,TYPE_BOOL,metain)`).
 macro_rules! compare_op_common {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
+     $metain:ident) => {
         // Ghidra: typeop.hh:71 TypeOp::getOpcode
         fn get_opcode(&self) -> OpCode {
             OpCode::$opcode
@@ -2324,19 +2825,22 @@ macro_rules! compare_op_common {
         fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
             lng.op_binary(op);
         }
+        // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+        //   constructor-registered metaout/metain below resolve through it.
+        fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+            Some(&self.type_factory)
+        }
         // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (metaout=TYPE_BOOL)
         fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-            // Comparisons produce a bool of the output's size.
-            Some(Arc::new(Datatype::Base(crate::type_system::TypeBase::new(
-                "bool".to_string(),
-                op.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(1),
-                TypeMetatype::Bool,
-            ))))
+            let type_factory = self.local_type_factory()?;
+            let size = op.get_out()?.read().unwrap().get_size();
+            base_local_type(type_factory, size, TypeMetatype::Bool)
         }
         // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal
         fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-            op.get_in(slot)
-                .and_then(|vn| vn.read().unwrap().v_type.clone())
+            let type_factory = self.local_type_factory()?;
+            let size = op.get_in(slot)?.read().unwrap().get_size();
+            base_local_type(type_factory, size, TypeMetatype::$metain)
         }
     };
 }
@@ -2346,10 +2850,24 @@ macro_rules! compare_op_common {
 /// `TypeOpEqual::propagateAcrossCompare` (typeop.cc:963-986). The result
 /// metatype is Bool.
 macro_rules! compare_op_impl {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
-        pub struct $struct_name;
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
+     $metain:ident) => {
+        pub struct $struct_name {
+            type_factory: Arc<RwLock<TypeFactory>>,
+        }
+
+        impl $struct_name {
+            // RUGRA-GLUE: stores the base-class `tlst` field every Ghidra
+            //   TypeOp subclass constructor receives (typeop.cc:233-242); the
+            //   per-subclass constructor line is cited at the registration
+            //   site below.
+            pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+                Self { type_factory }
+            }
+        }
+
         impl TypeOp for $struct_name {
-            compare_op_common!($struct_name, $opcode, $name, $flags, $symbol);
+            compare_op_common!($struct_name, $opcode, $name, $flags, $symbol, $metain);
 
             /// A comparison's output is boolean.
             // RUGRA-GLUE: exposes the per-subclass `metaout` field
@@ -2411,10 +2929,24 @@ macro_rules! compare_op_impl {
 /// across their inputs, matching Ghidra's `TypeOpIntSless::propagateType`
 /// (typeop.cc:1033-1039).
 macro_rules! signed_compare_op_impl {
-    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
-        pub struct $struct_name;
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr,
+     $metain:ident) => {
+        pub struct $struct_name {
+            type_factory: Arc<RwLock<TypeFactory>>,
+        }
+
+        impl $struct_name {
+            // RUGRA-GLUE: stores the base-class `tlst` field every Ghidra
+            //   TypeOp subclass constructor receives (typeop.cc:233-242); the
+            //   per-subclass constructor line is cited at the registration
+            //   site below.
+            pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+                Self { type_factory }
+            }
+        }
+
         impl TypeOp for $struct_name {
-            compare_op_common!($struct_name, $opcode, $name, $flags, $symbol);
+            compare_op_common!($struct_name, $opcode, $name, $flags, $symbol, $metain);
 
             /// A signed comparison's output is boolean.
             // RUGRA-GLUE: exposes the per-subclass `metaout` field
@@ -2447,35 +2979,45 @@ macro_rules! signed_compare_op_impl {
     };
 }
 
-compare_op_impl!(TypeOpIntEqual, CPUI_INT_EQUAL, "INT_EQUAL", 0, "==");
+// Ghidra: typeop.cc:924 TypeOpEqual::TypeOpEqual — TypeOpBinary("==",TYPE_BOOL,TYPE_INT)
+compare_op_impl!(TypeOpIntEqual, CPUI_INT_EQUAL, "INT_EQUAL", 0, "==", Int);
+// Ghidra: typeop.cc:988 TypeOpNotEqual::TypeOpNotEqual — TypeOpBinary("!=",TYPE_BOOL,TYPE_INT)
 compare_op_impl!(
     TypeOpIntNotEqual,
     CPUI_INT_NOTEQUAL,
     "INT_NOTEQUAL",
     0,
-    "!="
+    "!=",
+    Int
 );
-compare_op_impl!(TypeOpIntLess, CPUI_INT_LESS, "INT_LESS", 0, "<");
+// Ghidra: typeop.cc:1067 TypeOpIntLess::TypeOpIntLess — TypeOpBinary("<",TYPE_BOOL,TYPE_UINT)
+compare_op_impl!(TypeOpIntLess, CPUI_INT_LESS, "INT_LESS", 0, "<", Uint);
+// Ghidra: typeop.cc:1091 TypeOpIntLessEqual::TypeOpIntLessEqual — TypeOpBinary("<=",TYPE_BOOL,TYPE_UINT)
 compare_op_impl!(
     TypeOpIntLessEqual,
     CPUI_INT_LESSEQUAL,
     "INT_LESSEQUAL",
     0,
-    "<="
+    "<=",
+    Uint
 );
+// Ghidra: typeop.cc:1015 TypeOpIntSless::TypeOpIntSless — TypeOpBinary("<",TYPE_BOOL,TYPE_INT)
 signed_compare_op_impl!(
     TypeOpIntSless,
     CPUI_INT_SLESS,
     "INT_SLESS",
     typeop_flags::INHERITS_SIGN,
-    "s<"
+    "s<",
+    Int
 );
+// Ghidra: typeop.cc:1041 TypeOpIntSlessEqual::TypeOpIntSlessEqual — TypeOpBinary("<=",TYPE_BOOL,TYPE_INT)
 signed_compare_op_impl!(
     TypeOpIntSlessEqual,
     CPUI_INT_SLESSEQUAL,
     "INT_SLESSEQUAL",
     typeop_flags::INHERITS_SIGN,
-    "s<="
+    "s<=",
+    Int
 );
 
 /// CPUI_INT_ADD with custom get_output_token and propagate_type.
@@ -2484,8 +3026,20 @@ signed_compare_op_impl!(
 /// type). `propagate_type` lets a pointer flow input->output (and back) when
 /// the other addend is a constant, and otherwise flows int/uint types when
 /// adding a constant; it never flows pointer types output->input.
-/// Faithful to `TypeOpIntAdd` (typeop.cc:1167-1201).
-pub struct TypeOpIntAdd;
+/// Faithful to `TypeOpIntAdd` (typeop.cc:1167-1201). The local-type defaults
+/// inherit TypeOpBinary with the constructor pair (TYPE_INT,TYPE_INT)
+/// (typeop.cc:1167).
+pub struct TypeOpIntAdd {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpIntAdd {
+    // Ghidra: typeop.cc:1167 TypeOpIntAdd::TypeOpIntAdd — TypeOpBinary("+",TYPE_INT,TYPE_INT)
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+}
+
 impl TypeOp for TypeOpIntAdd {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -2519,15 +3073,22 @@ impl TypeOp for TypeOpIntAdd {
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_binary(op);
     }
-    // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (inherited)
-    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_in(0)
-            .and_then(|v| v.read().unwrap().v_type.clone())
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242); the
+    //   constructor-registered metaout/metain below resolve through it.
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
     }
-    // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal (inherited)
-    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-        op.get_out()
-            .and_then(|v| v.read().unwrap().v_type.clone())
+    // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (inherited, TYPE_INT)
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_out()?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
+    }
+    // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal (inherited, TYPE_INT)
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        let type_factory = self.local_type_factory()?;
+        let size = op.get_in(slot)?.read().unwrap().get_size();
+        base_local_type(type_factory, size, TypeMetatype::Int)
     }
 
     /// The output token of an ADD follows the arithmetic typing rule, i.e. the
@@ -2738,76 +3299,78 @@ impl TypeOpManager {
         ops.resize_with(256, || None); // Large enough for all opcodes
 
         // Register initial ops
-        ops[OpCode::CPUI_COPY as usize] = Some(Box::new(TypeOpCopy));
+        ops[OpCode::CPUI_COPY as usize] = Some(Box::new(TypeOpCopy::new(type_factory.clone())));
         ops[OpCode::CPUI_LOAD as usize] = Some(Box::new(TypeOpLoad));
         ops[OpCode::CPUI_STORE as usize] = Some(Box::new(TypeOpStore));
 
         // Arithmetic
-        ops[OpCode::CPUI_INT_ADD as usize] = Some(Box::new(TypeOpIntAdd));
-        ops[OpCode::CPUI_INT_SUB as usize] = Some(Box::new(TypeOpIntSub));
-        ops[OpCode::CPUI_INT_MULT as usize] = Some(Box::new(TypeOpIntMult));
-        ops[OpCode::CPUI_INT_DIV as usize] = Some(Box::new(TypeOpIntDiv));
-        ops[OpCode::CPUI_INT_SDIV as usize] = Some(Box::new(TypeOpIntSdiv));
-        ops[OpCode::CPUI_INT_REM as usize] = Some(Box::new(TypeOpIntRem));
-        ops[OpCode::CPUI_INT_SREM as usize] = Some(Box::new(TypeOpIntSrem));
-        ops[OpCode::CPUI_INT_2COMP as usize] = Some(Box::new(TypeOpIntNeg));
-        ops[OpCode::CPUI_INT_CARRY as usize] = Some(Box::new(TypeOpIntCarry));
-        ops[OpCode::CPUI_INT_SCARRY as usize] = Some(Box::new(TypeOpIntScarry));
-        ops[OpCode::CPUI_INT_SBORROW as usize] = Some(Box::new(TypeOpIntSborrow));
+        ops[OpCode::CPUI_INT_ADD as usize] = Some(Box::new(TypeOpIntAdd::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SUB as usize] = Some(Box::new(TypeOpIntSub::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_MULT as usize] = Some(Box::new(TypeOpIntMult::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_DIV as usize] = Some(Box::new(TypeOpIntDiv::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SDIV as usize] = Some(Box::new(TypeOpIntSdiv::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_REM as usize] = Some(Box::new(TypeOpIntRem::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SREM as usize] = Some(Box::new(TypeOpIntSrem::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_2COMP as usize] = Some(Box::new(TypeOpIntNeg::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_CARRY as usize] = Some(Box::new(TypeOpIntCarry::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SCARRY as usize] = Some(Box::new(TypeOpIntScarry::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SBORROW as usize] = Some(Box::new(TypeOpIntSborrow::new(type_factory.clone())));
 
         // Bitwise
-        ops[OpCode::CPUI_INT_AND as usize] = Some(Box::new(TypeOpIntAnd));
-        ops[OpCode::CPUI_INT_OR as usize] = Some(Box::new(TypeOpIntOr));
-        ops[OpCode::CPUI_INT_XOR as usize] = Some(Box::new(TypeOpIntXor));
-        ops[OpCode::CPUI_INT_NEGATE as usize] = Some(Box::new(TypeOpIntNot));
-        ops[OpCode::CPUI_INT_LEFT as usize] = Some(Box::new(TypeOpIntLeft));
-        ops[OpCode::CPUI_INT_RIGHT as usize] = Some(Box::new(TypeOpIntRight));
-        ops[OpCode::CPUI_INT_SRIGHT as usize] = Some(Box::new(TypeOpIntSright));
+        ops[OpCode::CPUI_INT_AND as usize] = Some(Box::new(TypeOpIntAnd::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_OR as usize] = Some(Box::new(TypeOpIntOr::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_XOR as usize] = Some(Box::new(TypeOpIntXor::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_NEGATE as usize] = Some(Box::new(TypeOpIntNot::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_LEFT as usize] = Some(Box::new(TypeOpIntLeft::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_RIGHT as usize] = Some(Box::new(TypeOpIntRight::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SRIGHT as usize] = Some(Box::new(TypeOpIntSright::new(type_factory.clone())));
 
         // Comparison
-        ops[OpCode::CPUI_INT_EQUAL as usize] = Some(Box::new(TypeOpIntEqual));
-        ops[OpCode::CPUI_INT_NOTEQUAL as usize] = Some(Box::new(TypeOpIntNotEqual));
-        ops[OpCode::CPUI_INT_LESS as usize] = Some(Box::new(TypeOpIntLess));
-        ops[OpCode::CPUI_INT_SLESS as usize] = Some(Box::new(TypeOpIntSless));
-        ops[OpCode::CPUI_INT_LESSEQUAL as usize] = Some(Box::new(TypeOpIntLessEqual));
-        ops[OpCode::CPUI_INT_SLESSEQUAL as usize] = Some(Box::new(TypeOpIntSlessEqual));
+        ops[OpCode::CPUI_INT_EQUAL as usize] = Some(Box::new(TypeOpIntEqual::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_NOTEQUAL as usize] = Some(Box::new(TypeOpIntNotEqual::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_LESS as usize] = Some(Box::new(TypeOpIntLess::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SLESS as usize] = Some(Box::new(TypeOpIntSless::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_LESSEQUAL as usize] = Some(Box::new(TypeOpIntLessEqual::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SLESSEQUAL as usize] = Some(Box::new(TypeOpIntSlessEqual::new(type_factory.clone())));
 
         // Extension
-        ops[OpCode::CPUI_INT_ZEXT as usize] = Some(Box::new(TypeOpIntZext));
-        ops[OpCode::CPUI_INT_SEXT as usize] = Some(Box::new(TypeOpIntSext));
-        ops[OpCode::CPUI_SUBPIECE as usize] = Some(Box::new(TypeOpTrunc));
+        ops[OpCode::CPUI_INT_ZEXT as usize] = Some(Box::new(TypeOpIntZext::new(type_factory.clone())));
+        ops[OpCode::CPUI_INT_SEXT as usize] = Some(Box::new(TypeOpIntSext::new(type_factory.clone())));
+        ops[OpCode::CPUI_SUBPIECE as usize] = Some(Box::new(TypeOpTrunc::new(type_factory.clone())));
 
         // Floating Point
-        ops[OpCode::CPUI_FLOAT_ADD as usize] = Some(Box::new(TypeOpFloatAdd));
-        ops[OpCode::CPUI_FLOAT_SUB as usize] = Some(Box::new(TypeOpFloatSub));
-        ops[OpCode::CPUI_FLOAT_MULT as usize] = Some(Box::new(TypeOpFloatMult));
-        ops[OpCode::CPUI_FLOAT_DIV as usize] = Some(Box::new(TypeOpFloatDiv));
-        ops[OpCode::CPUI_FLOAT_NEG as usize] = Some(Box::new(TypeOpFloatNeg));
-        ops[OpCode::CPUI_FLOAT_ABS as usize] = Some(Box::new(TypeOpFloatAbs));
-        ops[OpCode::CPUI_FLOAT_SQRT as usize] = Some(Box::new(TypeOpFloatSqrt));
-        ops[OpCode::CPUI_FLOAT_EQUAL as usize] = Some(Box::new(TypeOpFloatEqual));
-        ops[OpCode::CPUI_FLOAT_NOTEQUAL as usize] = Some(Box::new(TypeOpFloatNotEqual));
-        ops[OpCode::CPUI_FLOAT_LESS as usize] = Some(Box::new(TypeOpFloatLess));
-        ops[OpCode::CPUI_FLOAT_LESSEQUAL as usize] = Some(Box::new(TypeOpFloatLessEqual));
-        ops[OpCode::CPUI_FLOAT_NAN as usize] = Some(Box::new(TypeOpFloatNan));
-        ops[OpCode::CPUI_FLOAT_FLOAT2FLOAT as usize] = Some(Box::new(TypeOpFloatFloat2Float));
-        ops[OpCode::CPUI_FLOAT_INT2FLOAT as usize] = Some(Box::new(TypeOpFloatInt2Float));
-        ops[OpCode::CPUI_FLOAT_TRUNC as usize] = Some(Box::new(TypeOpFloatTrunc));
-        ops[OpCode::CPUI_FLOAT_CEIL as usize] = Some(Box::new(TypeOpFloatCeil));
-        ops[OpCode::CPUI_FLOAT_FLOOR as usize] = Some(Box::new(TypeOpFloatFloor));
-        ops[OpCode::CPUI_FLOAT_ROUND as usize] = Some(Box::new(TypeOpFloatRound));
+        ops[OpCode::CPUI_FLOAT_ADD as usize] = Some(Box::new(TypeOpFloatAdd::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_SUB as usize] = Some(Box::new(TypeOpFloatSub::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_MULT as usize] = Some(Box::new(TypeOpFloatMult::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_DIV as usize] = Some(Box::new(TypeOpFloatDiv::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_NEG as usize] = Some(Box::new(TypeOpFloatNeg::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_ABS as usize] = Some(Box::new(TypeOpFloatAbs::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_SQRT as usize] = Some(Box::new(TypeOpFloatSqrt::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_EQUAL as usize] = Some(Box::new(TypeOpFloatEqual::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_NOTEQUAL as usize] = Some(Box::new(TypeOpFloatNotEqual::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_LESS as usize] = Some(Box::new(TypeOpFloatLess::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_LESSEQUAL as usize] = Some(Box::new(TypeOpFloatLessEqual::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_NAN as usize] = Some(Box::new(TypeOpFloatNan::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_FLOAT2FLOAT as usize] =
+            Some(Box::new(TypeOpFloatFloat2Float::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_INT2FLOAT as usize] =
+            Some(Box::new(TypeOpFloatInt2Float::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_TRUNC as usize] = Some(Box::new(TypeOpFloatTrunc::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_CEIL as usize] = Some(Box::new(TypeOpFloatCeil::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_FLOOR as usize] = Some(Box::new(TypeOpFloatFloor::new(type_factory.clone())));
+        ops[OpCode::CPUI_FLOAT_ROUND as usize] = Some(Box::new(TypeOpFloatRound::new(type_factory.clone())));
 
         // Boolean
-        ops[OpCode::CPUI_BOOL_AND as usize] = Some(Box::new(TypeOpBoolAnd));
-        ops[OpCode::CPUI_BOOL_OR as usize] = Some(Box::new(TypeOpBoolOr));
-        ops[OpCode::CPUI_BOOL_XOR as usize] = Some(Box::new(TypeOpBoolXor));
-        ops[OpCode::CPUI_BOOL_NEGATE as usize] = Some(Box::new(TypeOpBoolNot));
+        ops[OpCode::CPUI_BOOL_AND as usize] = Some(Box::new(TypeOpBoolAnd::new(type_factory.clone())));
+        ops[OpCode::CPUI_BOOL_OR as usize] = Some(Box::new(TypeOpBoolOr::new(type_factory.clone())));
+        ops[OpCode::CPUI_BOOL_XOR as usize] = Some(Box::new(TypeOpBoolXor::new(type_factory.clone())));
+        ops[OpCode::CPUI_BOOL_NEGATE as usize] = Some(Box::new(TypeOpBoolNot::new(type_factory.clone())));
 
         // Special
-        ops[OpCode::CPUI_PIECE as usize] = Some(Box::new(TypeOpPiece));
-        ops[OpCode::CPUI_SUBPIECE as usize] = Some(Box::new(TypeOpSubpiece));
-        ops[OpCode::CPUI_POPCOUNT as usize] = Some(Box::new(TypeOpPopcount));
-        ops[OpCode::CPUI_LZCOUNT as usize] = Some(Box::new(TypeOpLzcount));
+        ops[OpCode::CPUI_PIECE as usize] = Some(Box::new(TypeOpPiece::new(type_factory.clone())));
+        ops[OpCode::CPUI_SUBPIECE as usize] = Some(Box::new(TypeOpSubpiece::new(type_factory.clone())));
+        ops[OpCode::CPUI_POPCOUNT as usize] = Some(Box::new(TypeOpPopcount::new(type_factory.clone())));
+        ops[OpCode::CPUI_LZCOUNT as usize] = Some(Box::new(TypeOpLzcount::new(type_factory.clone())));
 
         // Control Flow
         ops[OpCode::CPUI_BRANCH as usize] = Some(Box::new(TypeOpBranch::new(type_factory.clone())));
@@ -2829,8 +3392,8 @@ impl TypeOpManager {
         ops[OpCode::CPUI_NEW as usize] = Some(Box::new(TypeOpNew));
         ops[OpCode::CPUI_CALLOTHER as usize] = Some(Box::new(TypeOpCallother));
         ops[OpCode::CPUI_CAST as usize] = Some(Box::new(TypeOpCast::new(type_factory.clone())));
-        ops[OpCode::CPUI_INSERT as usize] = Some(Box::new(TypeOpInsert));
-        ops[OpCode::CPUI_EXTRACT as usize] = Some(Box::new(TypeOpExtract));
+        ops[OpCode::CPUI_INSERT as usize] = Some(Box::new(TypeOpInsert::new(type_factory.clone())));
+        ops[OpCode::CPUI_EXTRACT as usize] = Some(Box::new(TypeOpExtract::new(type_factory.clone())));
 
         Self { ops }
     }
@@ -3079,15 +3642,22 @@ mod tests {
         }
     }
 
+    /// Bare TypeFactory shared by tests that exercise factory-backed
+    /// local-type defaults.
+    fn raw_factory() -> Arc<RwLock<TypeFactory>> {
+        Arc::new(RwLock::new(TypeFactory::raw()))
+    }
+
     #[test]
     fn copy_propagate_type_is_transparent() {
         // COPY propagates input<->output (one slot is -1).
         let op = pcodeop(OpCode::CPUI_COPY);
         let t = int_t();
+        let copy = TypeOpCopy::new(raw_factory());
         // input slot 0 -> output returns the same Arc.
-        assert!(same_arc(TypeOpCopy.propagate_type(&t, &op, 0, -1), &t));
+        assert!(same_arc(copy.propagate_type(&t, &op, 0, -1), &t));
         // input<->input is blocked (both slots >= 0).
-        assert!(TypeOpCopy.propagate_type(&t, &op, 0, 1).is_none());
+        assert!(copy.propagate_type(&t, &op, 0, 1).is_none());
     }
 
     #[test]
@@ -3095,8 +3665,9 @@ mod tests {
         let mut op = pcodeop(OpCode::CPUI_COPY);
         let t = int_t();
         op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        let copy = TypeOpCopy::new(raw_factory());
         // The token is the input varnode's high type (Arc identity).
-        assert!(same_arc(TypeOpCopy.get_output_token(&op), &t));
+        assert!(same_arc(copy.get_output_token(&op), &t));
     }
 
     #[test]
@@ -3104,30 +3675,26 @@ mod tests {
         // INT_EQUAL propagates a type across its two inputs, never to output.
         let op = pcodeop(OpCode::CPUI_INT_EQUAL);
         let t = int_t();
-        assert!(same_arc(
-            TypeOpIntEqual.propagate_type(&t, &op, 0, 1),
-            &t
-        ));
+        let equal = TypeOpIntEqual::new(raw_factory());
+        assert!(same_arc(equal.propagate_type(&t, &op, 0, 1), &t));
         // To/from the output is blocked.
-        assert!(TypeOpIntEqual.propagate_type(&t, &op, -1, 0).is_none());
+        assert!(equal.propagate_type(&t, &op, -1, 0).is_none());
     }
 
     #[test]
     fn signed_compare_only_propagates_int() {
         let op = pcodeop(OpCode::CPUI_INT_SLESS);
+        let sless = TypeOpIntSless::new(raw_factory());
         // uint does NOT propagate through a signed compare.
         let uint_t = Arc::new(Datatype::Base(TypeBase::new(
             "uint".into(),
             4,
             TypeMetatype::Uint,
         )));
-        assert!(TypeOpIntSless.propagate_type(&uint_t, &op, 0, 1).is_none());
+        assert!(sless.propagate_type(&uint_t, &op, 0, 1).is_none());
         // int does.
         let t = int_t();
-        assert!(same_arc(
-            TypeOpIntSless.propagate_type(&t, &op, 0, 1),
-            &t
-        ));
+        assert!(same_arc(sless.propagate_type(&t, &op, 0, 1), &t));
     }
 
     #[test]
@@ -3136,9 +3703,10 @@ mod tests {
         let t = int_t();
         op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
         op.inrefs.push(typed_vn(4, 0x20, None));
-        assert_eq!(TypeOpIntLess.get_output_metatype(), Some(TypeMetatype::Bool));
+        let less = TypeOpIntLess::new(raw_factory());
+        assert_eq!(less.get_output_metatype(), Some(TypeMetatype::Bool));
         // Casting slot 1 should target the other operand's type (in[0]).
-        assert!(same_arc(TypeOpIntLess.get_input_cast(&op, 1), &t));
+        assert!(same_arc(less.get_input_cast(&op, 1), &t));
     }
 
     #[test]
@@ -3235,13 +3803,11 @@ mod tests {
             ptr_to: int_t(),
             wordsize: 1,
         }));
+        let add = TypeOpIntAdd::new(raw_factory());
         // pointer input 0 -> output propagates.
-        assert!(same_arc(
-            TypeOpIntAdd.propagate_type(&ptr_t, &op, 0, -1),
-            &ptr_t
-        ));
+        assert!(same_arc(add.propagate_type(&ptr_t, &op, 0, -1), &ptr_t));
         // pointer output -> input is blocked.
-        assert!(TypeOpIntAdd.propagate_type(&ptr_t, &op, -1, 0).is_none());
+        assert!(add.propagate_type(&ptr_t, &op, -1, 0).is_none());
     }
 
     #[test]
@@ -3267,5 +3833,80 @@ mod tests {
                 "input size {input}"
             );
         }
+    }
+
+    /// Regression guard for PRINTC-CAST-OPNAME-0001 M1: every macro-family
+    /// opcode derives its local types from the constructor-registered
+    /// metatype pair via `getBase(size, meta)` (typeop.cc:323/329/345/351/
+    /// 365/371), never from the opposite varnode's v_type.
+    #[test]
+    fn local_defaults_follow_constructor_metatypes() {
+        let factory = raw_factory();
+        let mut zext = pcodeop(OpCode::CPUI_INT_ZEXT);
+        zext.inrefs.push(typed_vn(1, 0x10, None));
+        zext.output = Some(typed_vn(4, 0x20, None));
+        let zext_op = TypeOpIntZext::new(factory.clone());
+        // ZEXT ctor: TypeOpFunc("ZEXT",TYPE_UINT,TYPE_UINT) — typeop.cc:1116.
+        assert_eq!(zext_op.get_output_local(&zext).unwrap().get_metatype(), TypeMetatype::Uint);
+        assert_eq!(zext_op.get_output_local(&zext).unwrap().get_size(), 4);
+        assert_eq!(zext_op.get_input_local(&zext, 0).unwrap().get_metatype(), TypeMetatype::Uint);
+        assert_eq!(zext_op.get_input_local(&zext, 0).unwrap().get_size(), 1);
+
+        let mut sext = pcodeop(OpCode::CPUI_INT_SEXT);
+        sext.inrefs.push(typed_vn(1, 0x10, None));
+        sext.output = Some(typed_vn(4, 0x20, None));
+        let sext_op = TypeOpIntSext::new(factory.clone());
+        // SEXT ctor: TypeOpFunc("SEXT",TYPE_INT,TYPE_INT) — typeop.cc:1141.
+        assert_eq!(sext_op.get_output_local(&sext).unwrap().get_metatype(), TypeMetatype::Int);
+        assert_eq!(sext_op.get_input_local(&sext, 0).unwrap().get_metatype(), TypeMetatype::Int);
+
+        let mut sub = pcodeop(OpCode::CPUI_SUBPIECE);
+        sub.inrefs.push(typed_vn(8, 0x10, None));
+        sub.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 0))));
+        sub.output = Some(typed_vn(4, 0x20, None));
+        let sub_op = TypeOpTrunc::new(factory.clone());
+        // SUBPIECE ctor: TypeOpFunc("SUB",TYPE_UNKNOWN,TYPE_UNKNOWN) —
+        // typeop.cc:2116. Both sides stay UNKNOWN (cast decision is the
+        // printer's isSubpieceCast predicate, not a metatype).
+        assert_eq!(sub_op.get_output_local(&sub).unwrap().get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(sub_op.get_input_local(&sub, 0).unwrap().get_metatype(), TypeMetatype::Unknown);
+
+        // Repeat lookups must return the factory-canonical Arc (identity).
+        let a = zext_op.get_output_local(&zext).unwrap();
+        let b = zext_op.get_output_local(&zext).unwrap();
+        assert!(Arc::ptr_eq(&a, &b));
+
+        let mut shift = pcodeop(OpCode::CPUI_INT_LEFT);
+        shift.inrefs.push(typed_vn(4, 0x10, None));
+        shift.inrefs.push(typed_vn(4, 0x20, None));
+        shift.output = Some(typed_vn(4, 0x30, None));
+        let left_op = TypeOpIntLeft::new(factory.clone());
+        // INT_LEFT ctor: TypeOpBinary("<<",TYPE_INT,TYPE_INT) — typeop.cc:1502;
+        // getInputLocal override: slot 1 (shift amount) is getBaseNoChar(size,
+        // TYPE_INT) — typeop.cc:1509.
+        assert_eq!(left_op.get_output_local(&shift).unwrap().get_metatype(), TypeMetatype::Int);
+        assert_eq!(left_op.get_input_local(&shift, 0).unwrap().get_metatype(), TypeMetatype::Int);
+        assert_eq!(left_op.get_input_local(&shift, 1).unwrap().get_metatype(), TypeMetatype::Int);
+
+        let mut cmp = pcodeop(OpCode::CPUI_INT_LESS);
+        cmp.inrefs.push(typed_vn(4, 0x10, None));
+        cmp.inrefs.push(typed_vn(4, 0x20, None));
+        cmp.output = Some(typed_vn(1, 0x30, None));
+        let less_op = TypeOpIntLess::new(factory.clone());
+        // INT_LESS ctor: TypeOpBinary("<",TYPE_BOOL,TYPE_UINT) — typeop.cc:1067.
+        assert_eq!(less_op.get_output_local(&cmp).unwrap().get_metatype(), TypeMetatype::Bool);
+        assert_eq!(less_op.get_input_local(&cmp, 0).unwrap().get_metatype(), TypeMetatype::Uint);
+
+        let mut insert = pcodeop(OpCode::CPUI_INSERT);
+        insert.inrefs.push(typed_vn(4, 0x10, None));
+        insert.inrefs.push(typed_vn(4, 0x20, None));
+        insert.inrefs.push(typed_vn(1, 0x30, None));
+        insert.output = Some(typed_vn(4, 0x40, None));
+        let insert_op = TypeOpInsert::new(factory.clone());
+        // INSERT ctor: TypeOpFunc("INSERT",TYPE_UNKNOWN,TYPE_INT) —
+        // typeop.cc:2528; getInputLocal keeps slot 0 UNKNOWN (typeop.cc:2535).
+        assert_eq!(insert_op.get_output_local(&insert).unwrap().get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(insert_op.get_input_local(&insert, 0).unwrap().get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(insert_op.get_input_local(&insert, 1).unwrap().get_metatype(), TypeMetatype::Int);
     }
 }
