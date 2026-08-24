@@ -18,7 +18,7 @@
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of sorted compact JSON over architecture, compiler_spec, analysis_options, and cases",
-    "sha256": "c1a59b1a8c3eab6db5510c4521d1e632d3c0646e42af8da1405b28fd7fbbba46",
+    "sha256": "3819e5f2631c1c293b9d5c1112159df715b2ed1c857a8268def16532470bb91a",
     "cases": [
       ["LOAD", "ProgressData32*", 16, "null"],
       ["LOAD", "ProgressData32*", 4, "null"],
@@ -28,8 +28,8 @@
       ["STORE", "ProgressData32*", 32, "same pointee identity"],
       ["LOAD", "int4*", 4, "same pointee identity"],
       ["source", "ProgressData32*", "same source type alias"],
-      ["LOAD", "attached op", "invn=input1; outvn=output"],
-      ["STORE", "attached op", "invn=input1; outvn=input2"],
+      ["LOAD slot graph", "C++ opcode=null; Rust opcode=CPUI_LOAD", "invn=input1; outvn=output; no production def/descend builder"],
+      ["STORE slot graph", "C++ opcode=null; Rust opcode=CPUI_STORE", "invn=input1; outvn=input2; no production def/descend builder"],
       ["LOAD", "output source SPACEBASE", "null before pointer construction"],
       ["mutation", "value16/value4/value32", "datatype identity unchanged"],
       ["order/alias", "space operand slot 0", "same Varnode across LOAD/STORE cases"]
@@ -40,7 +40,7 @@
     "identity": "Non-null exact-size results must be the original pointee object",
     "order": "Declared case order",
     "mutation": "LOAD output and STORE value slots are assigned before each call; datatype objects are not mutated",
-    "alias_topology": "Each call receives the exact Varnodes attached to the observed PcodeOp slots"
+    "alias_topology": "Slot references are attached, but the C++ PcodeOp has no opcode and neither side uses the production def/descend builder"
   },
   "comparand": {
     "rust_base_commit": "8c223a9623d6833319564776c35c5d4c50b17b95",
@@ -67,7 +67,7 @@
     "store_fixed_struct_pointee_exact_size_identity": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
     "load_fixed_scalar_pointee_exact_size_identity": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
     "source_varnode_type_alias": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
-    "propagation_argument_alias_topology": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
+    "propagation_argument_alias_topology": "NO_ORACLE: C++ has a null opcode and setter-only slot links while Rust has an opcode; neither fixture builds the production def/descend graph",
     "shared_space_operand_alias_and_slot_order": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
     "mapped_function_input_mutation": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
     "load_spacebase_output_source_guard": "NO_ORACLE: revised attached-PcodeOp fixture did not complete",
@@ -77,11 +77,12 @@
     "load_nonspace_source_with_spacebase_destination": "UNTESTED: the fixture has no owning TypeFactory or real space constant for the non-guarded value-to-pointer path",
     "store_spacebase_source_guard": "UNTESTED",
     "explicit_detached_invn_outvn_arguments": "MISMATCH: Rugra's current TypeOp trait derives invn/outvn from PcodeOp slots and cannot represent a deliberately detached argument graph",
-    "load_store_value_to_pointer_width_wordsize": "UNTESTED: deferred to the pointer construction slice; fresh non-canonical Arc remains a known mismatch",
-    "action_infer_types_width_driver": "MISMATCH: baseline coreaction driver still bypasses TypeOpLoad/Store and propagates pointees without the width gate; deferred until a bilateral production Action fixture is available",
+    "load_store_value_to_pointer_width_wordsize": "MISMATCH: oracle uses target outvn pointer width, address-space wordsize, and TypeFactory canonical identity; Rugra uses alt_type width, wordsize 1, and a fresh Arc",
+    "action_infer_types_width_driver": "MISMATCH: coreaction.rs:3994-4020 bypasses TypeOpLoad/Store and propagates pointees without the width gate; deferred until a bilateral production Action fixture is available",
     "action_infer_types_iteration_and_writeback": "MISMATCH: DFS order/path marks and factory canonical pointer identity remain outside this atomic slice",
     "ptrsub_downchain_stop_and_traversal": "UNTESTED: deferred to the next atomic commit",
-    "runner_bfd_link_provenance": "MISMATCH: ORACLE-RUNNER-HERMETIC-0001; isolated whole-archive link does not yet pin and link the BFD dependency closure"
+    "runner_bfd_link_provenance": "NO_ORACLE: ORACLE-RUNNER-HERMETIC-0001; isolated whole-archive link did not pin and link the BFD dependency closure, so no bilateral execution occurred",
+    "runner_rust_comparand_provenance": "NO_ORACLE: ORACLE-RUNNER-HERMETIC-0001; declared base commit/blob are not verified or rebuilt as a snapshot, and the runner builds the live tree into a shared target"
   },
   "overall_status": "MISMATCH",
   "covered_projection_status": "NO_ORACLE: the revised attached-PcodeOp fixture passed locked-tree syntax checking but failed before a bilateral execution",

@@ -17,10 +17,12 @@ pointer→value 方向现在把目标 Varnode 的真实字节宽度传给
 时才传播，并返回原 pointee `Arc`；因此 `ProgressData(32B)*` 不再把 16B/4B STORE
 错误标成整个 `ProgressData`，32B exact STORE 仍保留类型身份。
 
-双侧 fixture `tests/oracle/type_ptrwidth_1204.{cc,rs,metadata.json}` 直接执行锁定
-Ghidra 12.0.4 `TypeOpLoad/Store::propagateType` 与 Rugra 同一组 LOAD/STORE
-宽度、别名和身份观察；两侧都构造真实 PcodeOp，并把已挂接的 input/output Varnode
-作为传播参数，避免用 standalone Varnode 代替生产别名图。runner 为
+prospective 双侧 fixture `tests/oracle/type_ptrwidth_1204.{cc,rs,metadata.json}` 计划直接调用
+锁定 Ghidra 12.0.4 `TypeOpLoad/Store::propagateType` 与 Rugra 对应函数，比较同一组
+LOAD/STORE 宽度、别名和身份观察。当前 prospective fixture 只把 Varnode 单向挂到 PcodeOp 槽位：
+C++ PcodeOp 的 opcode 仍为 null，且未建立 output→def/input→descend；Rust PcodeOp
+带 CPUI_LOAD/STORE opcode，但也没有走生产 builder。因此它不是同一份生产 IR/别名图。
+runner 为
 `tools/run_type_ptrwidth_oracle.sh`。修订后的 fixture 已通过锁定源码树的 C++
 syntax-only 门禁，但 isolated whole-archive link 尚未绑定 BFD 依赖闭包，因此当前
 covered projection 保守记为 `NO_ORACLE`，不得沿用旧 standalone fixture 的 MATCH。
@@ -33,11 +35,21 @@ canonical registry 的 `TypeFactory::getExactPiece` 构造；当前 TypeOp trait
 
 LOAD/STORE 的 spacebase 守卫按 oracle 的显式传播源 `invn` 判断；尤其 LOAD
 value→pointer 方向检查 output，而不是把 `outslot` 当作 input 下标。Rust 回归测试已覆盖
-这个槽位选择，双侧 fixture 尚未覆盖 spacebase，metadata 因此仍记为 `UNTESTED`。
+这个槽位选择，两侧 prospective fixture 也已有 spacebase case；但双侧执行尚未完成，
+metadata 因此记为 `NO_ORACLE`，不宣称 MATCH。
+
+value→pointer 方向仍为 **MISMATCH**：oracle 使用目标 `outvn` 的 pointer storage width、
+地址空间 wordsize 和 `TypeFactory` canonical identity；当前 Rust 使用 `alt_type` 宽度、
+固定 wordsize 1，并新建 `Arc`。
+
 runner 会重算输入 manifest，分别钉住两侧 stdout，并从锁定 commit 的源码 archive
-重建 `libdecomp.a`，避免复用 Ghidra checkout 中未追踪的历史产物；Rust comparand 使用
-本次 Cargo 构建的确定性顶层 `librugra.rlib`。isolated whole-archive link 的 pinned
-BFD header/library/dependency closure 尚未闭合，绑定 `ORACLE-RUNNER-HERMETIC-0001`。
+重建 `libdecomp.a`，避免复用 Ghidra checkout 中未追踪的历史产物。但 isolated
+whole-archive link 的 pinned BFD header/library/dependency closure 尚未闭合；Rust 侧
+声明的 base commit/blob 也未被重建为快照，仍直接构建 live tree 到 shared target。
+两项 harness 缺口都记为 `NO_ORACLE`，绑定 `ORACLE-RUNNER-HERMETIC-0001`。
+
+生产 `ActionInferTypes` 仍在 `coreaction.rs:3994-4020` 自行分派 LOAD/STORE，绕过这里的
+TypeOp 宽度门槛；该生产闭包保持 `MISMATCH`，本切片不会改变 progressbarinit 输出。
 
 ## 2026-08-11：`TypeOpFloatInt2Float::preferredZextSize`
 
