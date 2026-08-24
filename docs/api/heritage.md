@@ -1084,3 +1084,45 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   在符号域交付前保持 UNTESTED。
 - **R9-F3（流程）**：TODO_BOARD/ALIGNMENT_ROADMAP 同步由 root 在集成时
   完成（本租约禁改两文件）。
+
+## `pub fn guard_output_overlap_stack`（HERITAGE-GUARD-SUBPIECE-CONST-0001，2026-08-25）
+
+- **Ghidra**: `Heritage::guardOutputOverlapStack`（heritage.cc:1322-1375）。
+  栈区间包含 call 返回值存储时，前/后残段经 SUBPIECE+INDIRECT 穿过调用
+  并用 PIECE 重组（cc:1331-1351 前段、cc:1352-1372 后段）。
+- **SUBPIECE 截断常量（本修复核心）**：
+  - 前件 cc:1336 `addr.justifiedContain(size, addr, sizeFront, false)` —
+    op2 == addr，containment 平凡成立；`Address::justifiedContain`
+    （address.cc:131-141）按**区间空间的端序**路由距离：LE 取 start 距离
+    （恒 0），BE 取 end 距离（size - sizeFront）。
+  - 后件 cc:1358 `addr.justifiedContain(size, addrBack, sizeBack, false)`，
+    addrBack = retAddr + retSize — LE 真值 = **sizeFront + retSize**（不是
+    0），BE 真值 = size - sizeFront - retSize - sizeBack = 0。
+  - 修复前两处均硬编码 0（后件把前件的 LE 值误复制，LE 下 SUBPIECE 取错
+    字节段）；现在两处改调 6 参 `justified_contain_range`（src/fspec.rs），
+    端序取 `AddressSpace::Stack.is_big_endian()`（当前全 LE 过渡模型下为
+    false，与 cc:138 路由键同源）。
+- **同函数修复的另外三处（R13 复核发现 A 的同族预存缺陷，均有 cc 行背书）**：
+  1. **cc:1329-1330 自死锁**：`call_op.read()...unwrap_or_else(|| fd.new_varnode_out(...))`
+     在读锁存续中对同一 call op 取写锁；call 无输出时（cc:1330 分支）必然
+     挂死。改为先绑定 `existing_out` 再分支（该路径此前从未被真实执行）。
+  2. **cc:1327/1349-1350/1371 insertPoint 链**：两个 PIECE concat 都应插在
+     **游标** insertPoint 之后（前件后游标推进为 concatFront）；旧代码两处
+     都插在 call 后，前后段并存时后件 concat 错位到前件 concat 之前。
+  3. **cc:1340/1362 opSetOutput 完整接线**：`fd->opSetOutput(subPiece,
+     indOp->getIn(0))` 要求 vbank setDef + setVarnodeProperties
+     （funcdata_op.cc:70-83）；旧代码裸写 output 字段，SUBPIECE 的输出
+     varnode 永不成为 written（INDIRECT 的 in[0] 一直保持 free 读语义）。
+- **双侧 fixture**: `tests/oracle/heritage_subpiece_const_1204.{cc,rs}` +
+  `tools/run_heritage_subpiece_const_oracle.sh`（pin-base schema2，
+  base=3f07f96）。五个触发几何（front+back ×2 含 call 预存输出分支、
+  back-only、front-only）驱动真实函数，投影 block 内 op 序、SUBPIECE
+  常量、PIECE slot、write 表项；case2 钉 cc:1336/cc:1358 调用形态的
+  LE/BE 双路由算术。covered=MATCH（47 行双侧字节一致，
+  ghidra_stdout_sha256=rugra_stdout_sha256）；overall=UNTESTED（BE 栈
+  空间在过渡枚举模型下不可 stage、guardCalls→tryOutputStackGuard 生产
+  入口未驱动、负 sf/sb 生产不可达分支未覆盖）。
+- **before 证据**：预修复代码 geom0 即死锁（超时无输出）；仅解锁死锁
+  （保留旧常量/旧插入/旧接线）时差异行：back 常量 c4(0) vs oracle
+  c4(8/6/4/12)、前后 concat 顺序颠倒、SUBPIECE 输出与 INDIRECT in0
+  状态 F vs W。

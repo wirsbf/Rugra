@@ -1,0 +1,142 @@
+{
+ "schema": 2,
+ "fixture_id": "HERITAGE-SUBPIECE-CONST-1204",
+ "stable_function_closure": [
+  "ghidra::Heritage::guardOutputOverlapStack(PcodeOp*, const Address&, int4, const Address&, int4, vector<Varnode*>&) heritage.cc:1322",
+  "ghidra::Address::justifiedContain(int4, const Address&, int4, bool) const address.cc:131",
+  "ghidra::Funcdata::opSetOutput(PcodeOp*, Varnode*) funcdata_op.cc:70",
+  "ghidra::Funcdata::newIndirectOp(PcodeOp*, const Address&, int4, uint4) funcdata_op.cc:681",
+  "rugra::heritage::Heritage::guard_output_overlap_stack src/heritage.rs (heritage.cc:1322-1375)",
+  "rugra::fspec::justified_contain_range src/fspec.rs (RUGRA-GLUE mirror of address.cc:131-141)",
+  "rugra::funcdata::Funcdata::op_set_output src/funcdata.rs (funcdata_op.cc:70-83)",
+  "rugra::funcdata::Funcdata::new_indirect_op src/funcdata.rs (funcdata_op.cc:681-700)"
+ ],
+ "overall_status": "UNTESTED",
+ "status_detail": "The two-case covered projection byte-matches Ghidra 12.0.4: the real guardOutputOverlapStack over all five trigger geometries (front+back incl. the cc:1329 pre-existing-output branch, back-only, front-only) projecting op order, both SUBPIECE truncate constants, PIECE slots and the write entry, plus the cc:1336/cc:1358 call shapes in both endian routings. Overall remains UNTESTED because the BE-space guard routing cannot be staged through the transitional enum AddressSpace model (helper-level BE arithmetic is pinned in case 2), the guardCalls->tryOutputStackGuard production entry is not driven (the cc:1407-1430 output-contains branch is a declared conservative-false residual), and negative sizeFront/sizeBack geometries are unreachable from getBiggestContainedOutput containment.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "3f07f9657b32c662654b52794e07384a5c7ba80f",
+  "rugra_base_tree": "9621e5acd794aa7a32a26bdc7074870d8725ef00",
+  "cpp_fixture_sha256": "0a7e10030eab73c3b4d6309788cb89d7373356b03640ed5bf08ca79bf58020bc",
+  "rust_fixture_sha256": "0545f298a6b00d5781587be7453437087305a4d34bebe8d9262b32bf77c406e5",
+  "heritage_rs_sha256": "6f8ed308aef77f3df896a0749c13214b8162fe6d94abdcae1ee665edb40a080b",
+  "heritage_doc_sha256": "94b195eca7b298ca2e1f1085a133f012ca639e7d37ebe9d29d4c616087b29956",
+  "runner_sha256": "c2acf9ac29ff0db49f30be53beb04f9ff152265f7b191895bd6eaebdce9c5f89",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "fe7b537e9a2a47161c772933765bb8bf1f20b4b102cf491c5f267f34ab2329ee",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-subpiece-const-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
+  }
+ },
+ "architecture": {
+  "id": "synthetic-le-heritage-subpiece-guard-fixture",
+  "endianness": "little (stack/ram/register); a big-endian processor space ram_be exists for the case-2 arithmetic rows only",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3 (LE), register=4 (LE), stack=5 (spacebase over ram, LE, base register R0:8 grows negative), ram_be=6 (BE, case-2 only), iop=7; byte addressed, wordsize 1",
+  "space_construction": "FixtureTranslate/AddrSpace inserts ConstantSpace, OtherSpace, UniqueSpace, three IPTR_PROCESSOR AddrSpaces and a SpacebaseSpace with an addSpacebasePointer register-space pointer; FixtureArchitecture registers core types, TypeOp instructions and a decoded default ProtoModel (Funcdata's ctor routes FuncProto::setScope -> setModel(defaultfp), fspec.cc:3879-3884, before ScopeLocal::resetLocalWindow)"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "default model <prototype name=subpieceguard extrapop=0 strategy=standard> with two register inputs (RSI 0x30, RDI 0x38) and one register output (RAX 0x0); entries are inert for the direct guardOutputOverlapStack drive",
+  "calling_convention": "no FuncCallSpecs staged; guardOutputOverlapStack is driven directly on a one-CALL Funcdata (cc:1329 both getOut()==null and pre-existing-output branches)"
+ },
+ "analysis_options": {
+  "api": "Direct production Heritage::guardOutputOverlapStack and Address::justifiedContain calls on both sides; no Action, Rule, PrintC or pipeline pass",
+  "model_state": "per geometry: one Funcdata (name sg, ram base 0x60x0, size 0x20), one basic block, one CALL op with an 8-byte constant target 0x4000; case 1 drives the guard and projects the block; case 2 evaluates the cc:1336/cc:1358 call shapes in both endiannesses",
+  "normalization": "None. Op lines print the numeric opcode (CALL=7, INDIRECT=61, PIECE=62, SUBPIECE=63; Ghidra's get_opname(CPUI_INDIRECT) prints DELAY_SLOT while Rugra's name() prints INDIRECT, so numbers are the shared stable code), varnode descriptors are <hexoff>:<size>:<I|W|F>{ah} with constants c<size>(<value>) and the iop annotation as IOP; the varnode SPACE letter is deliberately not printed (Rugra's transitional new_varnode_out register-space output vs Ghidra's range-space output is a registered projected-away divergence that cannot affect the constants, order or sizes)",
+  "debug_macros": "none on either side",
+  "random_seed": "none; construction is deterministic",
+  "error_injection": "none; all geometries are valid containments"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture, compiler_spec, analysis_options, cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "stack_guard_full",
+    "setup": "production guardOutputOverlapStack (heritage.cc:1322-1375) driven directly per geometry: addr/ret in the LE stack space; geometries (addr,size,ret,retsz) = (0x1000,16,0x1004,4), (0x2000,8,0x2002,4), (0x3000,8,0x3000,4), (0x4000,12,0x4002,10), (0x5000,16,0x5008,4 with the call output pre-created so cc:1329's getOut()!=null branch runs)",
+    "queries": "per geometry: one gs line (addr,size,ret,retsz,sf,sb), one op line per block op in insertion order (opcode number, input descriptors incl. the SUBPIECE constant value, output descriptor) and the write-list entry",
+    "expect": "LE constants: front SUBPIECE c4(0) (cc:1336, op2==addr), back SUBPIECE c4(sizeFront+retSize) = c4(8)/c4(6)/c4(4)/c4(12) (cc:1358, addrBack=ret+retsz); block op order [subF, subB, indF, indB, CALL, concatF, concatB] (cc:1327 insertPoint chain: back concat AFTER front concat); SUBPIECE outputs and INDIRECT in[0]s are W (cc:1340/cc:1362 opSetOutput def wiring); final write varnode carries ah (cc:1373)"
+   },
+   {
+    "id": "front_back_constant",
+    "setup": "the exact cc:1336/cc:1358 call shapes addr.justifiedContain(size, addr, sf, false) and addr.justifiedContain(size, addrBack, sb, false) over the same five geometries in both a little-endian and a big-endian processor space",
+    "queries": "5 rows: sp geom le front/back be front/back",
+    "expect": "address.cc:138-141 branch key base->isBigEndian() && !forceleft: LE rows print front=0 / back=sizeFront+retSize (8/6/4/12/12), BE rows print front=size-sizeFront (12/6/8/10/8) / back=size-sizeFront-retSize-sizeBack = 0"
+   }
+  ],
+  "case_order": [
+   "stack_guard_full",
+   "front_back_constant"
+  ],
+  "sha256": "24e112ab3404be305c8bc1db804837fd923a7c7bbf28e5e3a8bfc601822ab7a1"
+ },
+ "observation_schema": {
+  "format": "47 fixed-order UTF-8 lines with final newline: one envelope, two case headers, five geometry groups (gs + 7/7/4/4/7 op lines + write) and 5 sp rows",
+  "op_lines": "numeric opcode + input descriptors (constants print their value: c4(8) is the decisive back-piece constant) + output descriptor; state chars I/W/F pin the cc:1340/cc:1362 def wiring, op order pins the cc:1327/1349-1350/1371 insertPoint chain",
+  "constant_rows": "sp rows pin the endian-routed cc:1336/cc:1358 arithmetic in both routings"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "guardOutputOverlapStack mutates the Funcdata (creates newInput/SUBPIECE/INDIRECT/PICECE/newVarnodeOut varnodes and ops, sets the call output when absent) and appends the final vnCollect to the write vector (cc:1374); Address::justifiedContain is a pure int4 return",
+  "loop_bounds_traversal_order": "no loops inside the function; the op-order observation pins the opInsertBefore/opInsertAfter insertion sequence (newIndirectOp inserts before the call, then the SUBPIECE before the call, concats after the running cc:1327 insertPoint which advances to concatFront at cc:1350)",
+  "counters_and_accumulators": "sizeFront = retAddr - addr and sizeBack = size - retSize - sizeFront computed once up front (cc:1325-1326); no counters",
+  "sort_and_comparison_keys": "justifiedContain decision keys op2.offset < offset and off2 > off1 are trivially satisfied (exact containments); the distance branch key is the range space's endianness with forceleft=false (address.cc:138)"
+ },
+ "coverage": {
+  "stack_guard_full": "MATCH (all five geometries: op order, both SUBPIECE constants incl. the decisive back values 8/6/4/12, PIECE slot layout, output states, write entry byte-identical)",
+  "front_back_constant": "MATCH (5/5 rows in both endian routings)",
+  "be_space_guard_staging": "UNTESTED (proposed residual: the transitional enum AddressSpace cannot stage a big-endian stack space, so the full-function BE routing (front size-sizeFront / back 0) is unreachable in the Rust model; the BE arithmetic is pinned at helper level in the sp be rows - ADDRESS-0001 transitional)",
+  "production_entry_wiring": "UNTESTED (proposed residual: the guardCalls -> tryOutputStackGuard production entry is not driven; Rugra's try_output_stack_guard conservatively returns false for the cc:1407-1430 output-contains branch, a declared RUGRA-GAP)",
+  "negative_piece_geometry": "UNTESTED (proposed residual: sizeFront<0 or sizeBack<0 is unreachable from getBiggestContainedOutput containment, which guarantees sf,sb >= 0; Ghidra guards with != 0, Rugra with > 0 - reachable-state equivalent)"
+ },
+ "residuals": [
+  {
+   "todo_id": "ADDRESS-0001",
+   "status": "UNTESTED",
+   "detail": "BE-space full-function guard routing: the enum AddressSpace model is little-endian-only; helper-level BE arithmetic pinned (sp be rows)."
+  },
+  {
+   "todo_id": "HERITAGE-GUARD-SUBPIECE-CONST-0001",
+   "status": "MATCH",
+   "detail": "Covered projection (LE full-function + both-endian arithmetic) MATCH; the fix replaced both hardcoded SUBPIECE constants with the endian-routed justified_contain_range values, restored the cc:1327 insertPoint concat chain, routed cc:1340/cc:1362 through op_set_output and unblocked the cc:1329 read-lock self-deadlock."
+  },
+  {
+   "todo_id": "HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS",
+   "status": "UNTESTED",
+   "detail": "The cc:1407-1430 output-contains branch of tryOutputStackGuard (truncate the call output down to the range, cc:1420 fourth justifiedContain call site) remains a declared conservative-false residual; needs the locked output storage model."
+  }
+ ],
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "rugra_build": "Archive the pinned base, overlay the owned heritage source, verify the complete Cargo.lock registry closure, then let /usr/bin/cargo --locked --offline select and checksum the current Linux target's cached packages under the global build lock.",
+  "expected_stdout_lines": 47,
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "59efafe2b06300dddefa513234a9a1fdd014f79577615513ff8902c8a90483e6"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_results": {
+  "exit_code": 0,
+  "ghidra_stdout_sha256": "3071fd7b99790b0b1af5dccfb8aa2536b6cfd37247c2e9065e0c9eed117b900f",
+  "rugra_stdout_sha256": "3071fd7b99790b0b1af5dccfb8aa2536b6cfd37247c2e9065e0c9eed117b900f"
+ }
+}

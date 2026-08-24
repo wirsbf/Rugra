@@ -3328,7 +3328,11 @@ impl Heritage {
     // Ghidra: heritage.cc:1323 Heritage::guardOutputOverlapStack
     /// Guard a stack range that contains the return value storage.
     /// Faithful to `guardOutputOverlapStack` (heritage.cc:1323-1376).
-    /// Creates INDIRECT pieces for front/back + PIECE concat.
+    /// Creates INDIRECT pieces for front/back + PIECE concat. The SUBPIECE
+    /// truncate constants come from the endian-routed
+    /// `Address::justifiedContain` calls (cc:1336/cc:1358 via
+    /// `justified_contain_range`), and both PIECE concats insert after the
+    /// running cc:1327 insert point (HERITAGE-GUARD-SUBPIECE-CONST-0001).
     pub fn guard_output_overlap_stack(
         &mut self,
         fd: &mut Funcdata,
@@ -3343,9 +3347,19 @@ impl Heritage {
         let size_back = size - ret_size - size_front;
         let op_addr = call_op.read().unwrap().get_addr();
 
-        // cc:1329: vnCollect = callOp->getOut() or newVarnodeOut
-        let mut vn_collect = call_op.read().unwrap().output.as_ref().cloned()
+        // cc:1329: vnCollect = callOp->getOut() or newVarnodeOut. The read
+        // guard must be released (binding into a `let`) before
+        // new_varnode_out takes the write lock on the same call op — the
+        // previous one-expression unwrap_or_else self-deadlocked when the
+        // call had no output.
+        let existing_out = call_op.read().unwrap().output.as_ref().cloned();
+        let mut vn_collect = existing_out
             .unwrap_or_else(|| fd.new_varnode_out(ret_size as usize, ret_addr, &PcodeOpRef(call_op.clone())));
+        // cc:1327: insertPoint = callOp — both PIECE concats insert after the
+        // RUNNING insert point, not always after the call: cc:1349-1350
+        // advances it to concatFront, so with both pieces present the back
+        // concat lands after the front concat (cc:1371).
+        let mut insert_point = PcodeOpRef(call_op.clone());
 
         // cc:1332-1352: front piece
         if size_front > 0 {
@@ -3353,15 +3367,37 @@ impl Heritage {
             new_input.write().unwrap().set_active_heritage();
             let sub_piece = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
-            let off_const = fd.new_constant(4, 0u64);
+            // cc:1336: truncateAmount = addr.justifiedContain(size, addr,
+            // sizeFront, false) — op2 == addr so the containment is
+            // trivially exact and the guards never fire; address.cc:138-141
+            // then routes on the range space's endianness: LE returns the
+            // start distance 0, BE the end distance size - sizeFront. The
+            // guarded range lives in the stack space, whose endianness is
+            // the routing input (HERITAGE-GUARD-SUBPIECE-CONST-0001).
+            let truncate_front = crate::fspec::justified_contain_range(
+                addr.as_u64(),
+                size,
+                addr.as_u64(),
+                size_front,
+                false,
+                AddressSpace::Stack.is_big_endian(),
+            );
+            let off_const = fd.new_constant(4, truncate_front as u64);
             fd.op_set_input(&sub_piece, new_input, 0);
             fd.op_set_input(&sub_piece, off_const, 1);
             let ind_front = fd.new_indirect_op(
                 &PcodeOpRef(call_op.clone()), AddressSpace::Stack,
                 addr.as_u64(), size_front as usize, 0,
             );
-            // cc:1341: opSetOutput(subPiece, indOpFront->getIn(0))
-            sub_piece.0.write().unwrap().output = ind_front.0.read().unwrap().get_in(0).cloned();
+            // cc:1340: fd->opSetOutput(subPiece, indOpFront->getIn(0)) — the
+            // INDIRECT's free in[0] varnode becomes the SUBPIECE's written
+            // output. Must go through op_set_output for the full def wiring
+            // (funcdata_op.cc:70-83: vbank setDef + setVarnodeProperties),
+            // not a bare output field write that leaves the varnode free.
+            let ind_front_in0 = ind_front.0.read().unwrap().get_in(0).cloned();
+            if let Some(vn) = ind_front_in0 {
+                fd.op_set_output(&sub_piece, vn);
+            }
             fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
             let new_front = ind_front.0.read().unwrap().output.as_ref().cloned()
                 .unwrap_or_else(|| fd.new_unique(size_front as usize));
@@ -3372,7 +3408,10 @@ impl Heritage {
             fd.op_set_input(&concat, new_front, 1);
             fd.op_set_input(&concat, vn_collect.clone(), 0);
             vn_collect = fd.new_varnode_out((size_front + ret_size) as usize, addr, &concat);
-            fd.op_insert_after(&concat, &PcodeOpRef(call_op.clone()));
+            // cc:1349-1350: opInsertAfter(concatFront, insertPoint);
+            // insertPoint = concatFront;
+            fd.op_insert_after(&concat, &insert_point);
+            insert_point = concat;
         }
 
         // cc:1353-1373: back piece
@@ -3382,14 +3421,35 @@ impl Heritage {
             new_input.write().unwrap().set_active_heritage();
             let sub_piece = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
-            let off_const = fd.new_constant(4, 0u64);
+            // cc:1358: truncateAmount = addr.justifiedContain(size, addrBack,
+            // sizeBack, false) with addrBack = retAddr + retSize — the LE
+            // start distance is sizeFront + retSize (NOT 0), the BE end
+            // distance is size - sizeFront - retSize - sizeBack = 0
+            // (address.cc:138-141). HERITAGE-GUARD-SUBPIECE-CONST-0001: this
+            // constant was wrongly hardcoded to the FRONT piece's LE value 0,
+            // so SUBPIECE(whole, 0) extracted the front bytes instead of the
+            // back piece.
+            let truncate_back = crate::fspec::justified_contain_range(
+                addr.as_u64(),
+                size,
+                addr_back.as_u64(),
+                size_back,
+                false,
+                AddressSpace::Stack.is_big_endian(),
+            );
+            let off_const = fd.new_constant(4, truncate_back as u64);
             fd.op_set_input(&sub_piece, new_input, 0);
             fd.op_set_input(&sub_piece, off_const, 1);
             let ind_back = fd.new_indirect_op(
                 &PcodeOpRef(call_op.clone()), AddressSpace::Stack,
                 addr_back.as_u64(), size_back as usize, 0,
             );
-            sub_piece.0.write().unwrap().output = ind_back.0.read().unwrap().get_in(0).cloned();
+            // cc:1362: fd->opSetOutput(subPiece, indOpBack->getIn(0)) — same
+            // full def wiring as the front piece (funcdata_op.cc:70-83).
+            let ind_back_in0 = ind_back.0.read().unwrap().get_in(0).cloned();
+            if let Some(vn) = ind_back_in0 {
+                fd.op_set_output(&sub_piece, vn);
+            }
             fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
             let new_back = ind_back.0.read().unwrap().output.as_ref().cloned()
                 .unwrap_or_else(|| fd.new_unique(size_back as usize));
@@ -3399,7 +3459,9 @@ impl Heritage {
             fd.op_set_input(&concat, new_back, 0);
             fd.op_set_input(&concat, vn_collect.clone(), 1);
             vn_collect = fd.new_varnode_out(size as usize, addr, &concat);
-            fd.op_insert_after(&concat, &PcodeOpRef(call_op.clone()));
+            // cc:1371: opInsertAfter(concatBack, insertPoint) — after the
+            // front concat when one exists, else right after the call.
+            fd.op_insert_after(&concat, &insert_point);
         }
 
         // cc:1374-1375
