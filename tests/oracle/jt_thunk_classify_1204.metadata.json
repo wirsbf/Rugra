@@ -10,7 +10,7 @@
     "failure_stage": "post-Cargo artifact binding, before direct rustc fixture link and before the 24-case differential",
     "failure_text": "expected one run-local Rugra root-output, found 25",
     "run_local_artifacts_retained": false,
-    "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, pre/post snapshot/oracle/toolchain readback, and relocation of the immutable staging root from the usrquota-exhausted /tmp tmpfs to the pinned task-owned home directory /home/wirs/.cache/a3-jtthunk-tmp (also exported as TMPDIR to every compiler invocation)",
+    "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, pre/post snapshot/oracle/toolchain readback, relocation of the immutable staging root from the usrquota-exhausted /tmp tmpfs to the pinned task-owned home directory /home/wirs/.cache/a3-jtthunk-tmp (also exported as TMPDIR to every compiler invocation), and pinned tar.umask=0022 so both source archives carry exactly the Git tree member modes (644/755) instead of the invoking shell's umask-dependent modes (archive pins recomputed accordingly)",
     "current_runner_executed": false
   },
   "candidate_evidence": {
@@ -39,7 +39,7 @@
     "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
     "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "decompiler_cpp_archive_sha256": "af395e99858451acebc2746c3bab6a9142454ab91ce1bf8d2ddbe257986b2a0e",
+    "decompiler_cpp_archive_sha256": "503b60e0fcde80c38abfeb8161fe37d5d83ded16bc9783b53ddd759c053389e4",
     "source_files": [
       "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.cc",
       "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.hh",
@@ -206,7 +206,7 @@
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "base_archive_sha256": "b310d8a9012a785b040a83357a5645e880d09c99f3a09baa40d6df54f6ddc20f",
+    "base_archive_sha256": "8751c496049f739e279963365409b299fb0c697d3575bc7bd0c4e150e2d6bc3f",
     "archive_paths": [
       "Cargo.toml",
       "Cargo.lock",
@@ -232,7 +232,7 @@
     "rust_fixture_sha256": "73aab1818cda1cc46c336569c7299fee43ef25612ce7f5d3f3b35b7f30e5467e",
     "jumptable_overlay_sha256": "4fe0f3c722905618610dfa2d957df894ab1bc1ae88dd0ac77a7065891eb575b7",
     "api_document_sha256": "5b87732c64f88d5fde577125ab1c8e7973700efd171df008cfd14dc322704708",
-    "runner_sha256": "f5c7ee0a471ff50b319351088c250d9584fed4192ab7fe5dc6636e387e1b6251"
+    "runner_sha256": "ad5d6c480aef4b0324663b5cf6c8867a79b0d7834555c1cfe8c7ac088b5dff8b"
   },
   "input_manifest": {
     "cases": [

@@ -154,7 +154,7 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-oracle_cpp_archive_sha=af395e99858451acebc2746c3bab6a9142454ab91ce1bf8d2ddbe257986b2a0e
+oracle_cpp_archive_sha=503b60e0fcde80c38abfeb8161fe37d5d83ded16bc9783b53ddd759c053389e4
 rugra_source_commit=8d3a5561f259420d00ec3ecb54e766b206f89331
 rugra_source_tree=c8ee095912b9d56b80c38d72f0bea447ebc998c4
 rugra_source_src_tree=004b20c8ed6da74cf6457a4386570bae4801bc78
@@ -162,7 +162,7 @@ rugra_jumptable_blob=64c824f03f41040696c9c6242f05e83a23e1ef55
 rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
-rugra_base_archive_sha=b310d8a9012a785b040a83357a5645e880d09c99f3a09baa40d6df54f6ddc20f
+rugra_base_archive_sha=8751c496049f739e279963365409b299fb0c697d3575bc7bd0c4e150e2d6bc3f
 
 cxx_path=/usr/bin/g++
 cxx_version='g++ (GCC) 16.2.1 20260810'
@@ -907,7 +907,11 @@ cargo_archive_cache="$task_user_home/.cargo/registry/cache"
   "$snapshot/tools" "$oracle_source" "$cargo_home"
 
 base_archive="$oracle_tmp/rugra-source.tar"
-git_clean -C "$repo_root" archive --format=tar --output="$base_archive" \
+# tar.umask is pinned so archive member modes are exactly the Git tree modes
+# (100644 -> 644, 100755 -> 755) regardless of the invoking shell's umask;
+# materialization then verifies the extraction against the tree itself.
+git_clean -c tar.umask=0022 -C "$repo_root" archive --format=tar \
+  --output="$base_archive" \
   "$rugra_source_commit" Cargo.toml Cargo.lock build.rs README.md \
   benches/decompile_bench.rs tests/doc_sync.rs \
   tests/oracle/decompress_1204.rs tests/oracle/funcproto_lock_1204.rs \
@@ -1054,7 +1058,8 @@ print(f"cargo-vendor {actual_manifest} {len(records)}")
 PY
 
 oracle_archive="$oracle_tmp/ghidra-cpp.tar"
-git_clean -C "$ghidra_root" archive --format=tar --output="$oracle_archive" \
+git_clean -c tar.umask=0022 -C "$ghidra_root" archive --format=tar \
+  --output="$oracle_archive" \
   "$oracle_commit" Ghidra/Features/Decompiler/src/decompile/cpp
 if [[ "$(/usr/bin/sha256sum "$oracle_archive" | /usr/bin/awk '{print $1}')" != \
       "$oracle_cpp_archive_sha" ]]; then
