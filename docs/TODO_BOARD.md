@@ -17,7 +17,7 @@
 | `JUMPTABLE-THUNK-CLASSIFY-0001` | P0 | REWORK_IN_PROGRESS | a3@wt-jt-thunk-classify | `src/jumptable.rs`, docs, fixture/runner | 闭合 5 项 REJECT 理由 + 全量 24-case 重跑；2026-08-24 |
 | `ACTION-EXECUTOR-BREAKPOOL-0001` | P0 | REWORK_IN_PROGRESS | a4@wt-action-break-pool | `src/action.rs`, docs, fixture/runner | Group direct-apply 修正 + 完整重跑；2026-08-24 |
 | `LANEDIVIDE-EVIDENCE-STATUS-REPAIR-0001` | P0 | IN_PROGRESS | a5@wt-lanedivide-repin | `tests/oracle/lanedivide_infra_1204.metadata.json`, `tools/run_lanedivide_infra_oracle.sh` | 真实重跑后保守迁移 B2；2026-08-24 |
-| `GATE-WORKTREE-ROOTMISMATCH-0001` | P0 | IN_PROGRESS | a6@wt-gate-rootmismatch | `.zcode/align_gate.py`, `tools/check_gate_health.py`, CI yml, HOOK_GUIDE | 跨根 toplevel 重锚定 + fail-closed；审计=GATE_HEALTH_AUDIT_2026-08-24；2026-08-24 |
+| `GATE-WORKTREE-ROOTMISMATCH-0001` | P0 | INTEGRATED（main `bc2fd2f`） | a6@wt-gate-rootmismatch + root | `.zcode/align_gate.py`, `tools/check_gate_health.py`, CI yml, HOOK_GUIDE | 候选=`d49ccf5`；跨根 toplevel 重锚定 + fail-closed + self-test 4 跨根用例；root 集成后主仓复验 self-test/gate-health/crossroot-payload 三绿；审计=GATE_HEALTH_AUDIT_2026-08-24；2026-08-24 |
 | `TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001` | P0 | IN_PROGRESS | a7@wt-tf-downchain | `src/type_system/typefactory.rs`, docs, `tests/oracle/typefactory_downchain_virtual_1204.*`, runner | B1 方案切片1（地基，无 production caller）；2026-08-24 |
 | `TYPEOP-FSPEC-SPACE-0001`(切片1) | P0 | IN_PROGRESS | a8@wt-fspec-space | `src/{space,address}.rs`, docs, `tests/oracle/fspec_space_identity_1204.*`, runner | 消费侧切片2 待 varnode/funcdata 释放；2026-08-24 |
 | `FLOW-TAILCALL-OVERTRACE-0001` | P0 | IN_PROGRESS | a9@wt-flow-overtrace | `src/flow.rs`, docs, `tests/oracle/flow_tailcall_overtrace_1204.*`, runner | B6 Top2 `glob_word` visited 污染；2026-08-24 |
