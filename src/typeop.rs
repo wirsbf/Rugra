@@ -170,6 +170,28 @@ pub trait TypeOp {
         base_local_type(type_factory, size, TypeMetatype::Unknown)
     }
 
+    /// Funcdata-carrying form of `getInputLocal`. In Ghidra every
+    /// `PcodeOp::inputTypeLocal` caller can also reach the owning function
+    /// via `op->getParent()->getFuncdata()` (op.hh:252 inlines straight to
+    /// `opcode->getInputLocal(this,slot)`, but the Funcdata is one hop away
+    /// for the TypeOp virtuals that need it). Rugra `PcodeOp` holds no
+    /// parent-to-Funcdata chain, so the Funcdata is threaded through this
+    /// entry instead. `TypeOpCallind::getInputLocal` is currently the only
+    /// override that consumes it (`getCallSpecs(op)`, typeop.cc:757); every
+    /// other subclass observes the identical behaviour by falling through
+    /// to the fd-less form above.
+    // Ghidra: typeop.hh:152 TypeOp::getInputLocal (via op.hh:252 PcodeOp::inputTypeLocal)
+    fn get_input_local_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        let _ = fd;
+        let op = op.0.read().unwrap();
+        self.get_input_local(&op, slot)
+    }
+
     /// Find the data-type of the output that would be assigned by a compiler.
     ///
     /// Corresponds to Ghidra's `TypeOp::getOutputToken(op, castStrategy)`.
@@ -1914,7 +1936,90 @@ impl TypeOp for TypeOpCall {
     }
 }
 
-pub struct TypeOpCallind;
+pub struct TypeOpCallind {
+    type_factory: Arc<RwLock<TypeFactory>>,
+}
+
+impl TypeOpCallind {
+    // Ghidra: typeop.cc:738 TypeOpCallind::TypeOpCallind
+    pub fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self {
+        Self { type_factory }
+    }
+
+    /// Shared body of `TypeOpCallind::getInputLocal` (typeop.cc:745-774).
+    /// `fc` is the resolved call specification (`op->getParent()->
+    /// getFuncdata()->getCallSpecs(op)`, typeop.cc:757); `None` mirrors
+    /// Ghidra's `fc == 0` fall-through to the base lookup.
+    // Ghidra: typeop.cc:745 TypeOpCallind::getInputLocal
+    fn callind_input_local(
+        &self,
+        op: &PcodeOp,
+        slot: usize,
+        fc: Option<Arc<RwLock<crate::fspec::FuncCallSpecs>>>,
+    ) -> Option<Arc<Datatype>> {
+        // Shared base lookup: `TypeOp::getInputLocal` (typeop.cc:271-275) is
+        // `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)` — always
+        // the Architecture TypeFactory the constructor received.
+        let input_size = op.get_in(slot)?.read().unwrap().get_size();
+        let fallback = || base_local_type(&self.type_factory, input_size);
+
+        if slot == 0 {
+            // First parameter is code pointer (typeop.cc:752-756):
+            // td = tlst->getTypeCode();
+            // spc = op->getAddr().getSpace();
+            // return tlst->getTypePointer(in0.size, td, spc->getWordSize());
+            // getTypeCode/getTypePointer mutate the factory cache, so a write
+            // guard replaces the read guard for this branch. A spaceless op
+            // address (Rugra legacy Address) has no wordsize to read; the
+            // locked oracles run code spaces with wordsize 1, so 1 is the
+            // faithful default.
+            let mut factory = self.type_factory.write().unwrap();
+            let code_type = factory.get_type_code();
+            let in0_size = op.get_in(0)?.read().unwrap().get_size();
+            let wordsize = op
+                .get_addr()
+                .get_space()
+                .map(|spc| spc.get_word_size() as usize)
+                .unwrap_or(1);
+            return Some(factory.get_type_pointer(in0_size, code_type, wordsize));
+        }
+
+        let selected_type = {
+            let Some(fc) = fc else {
+                // fc == 0 -> TypeOp::getInputLocal(op,slot) (typeop.cc:758-759)
+                return fallback();
+            };
+            let callspec = fc.read().unwrap();
+            callspec
+                .prototype
+                .get_param(slot - 1)
+                .and_then(|parameter| {
+                    if parameter.is_type_locked() {
+                        let ct = &parameter.data_type;
+                        // CALLIND asymmetry: only the VOID guard — there is
+                        // no `ct->getSize() <= op->getIn(slot)->getSize()`
+                        // check here, unlike TypeOpCall (typeop.cc:764 vs
+                        // CALL's :707).
+                        if ct.get_metatype() != TypeMetatype::Void {
+                            return Some(ct.clone());
+                        }
+                    } else if parameter.is_this_pointer() {
+                        // this-pointer branch identical to CALL
+                        // (typeop.cc:767-771 vs :710-714)
+                        let ct = &parameter.data_type;
+                        if let Datatype::Pointer(pointer) = ct.as_ref() {
+                            if pointer.ptr_to.get_metatype() == TypeMetatype::Struct {
+                                return Some(ct.clone());
+                            }
+                        }
+                    }
+                    None
+                })
+        };
+        selected_type.or_else(fallback)
+    }
+}
+
 impl TypeOp for TypeOpCallind {
     // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
@@ -1924,9 +2029,16 @@ impl TypeOp for TypeOpCallind {
     fn get_name(&self) -> &str {
         "CALLIND"
     }
-    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    // Ghidra: typeop.hh:72 TypeOp::getFlags (the `opflags` field assigned in
+    // the TypeOpCallind constructor, typeop.cc:741:
+    // `opflags = PcodeOp::special|PcodeOp::call|PcodeOp::has_callspec|
+    //              PcodeOp::nocollapse`), mirroring
+    // crate::op::opcode_flags(CPUI_CALLIND).
     fn get_flags(&self) -> u32 {
-        0
+        crate::op::pcodeop_flags::SPECIAL
+            | crate::op::pcodeop_flags::CALL
+            | crate::op::pcodeop_flags::HAS_CALLSPEC
+            | crate::op::pcodeop_flags::NOCOLLAPSE
     }
     // Ghidra: typeop.cc:791 TypeOpCallind::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
@@ -1935,6 +2047,38 @@ impl TypeOp for TypeOpCallind {
             .map(|v| format!("{}", v.read().unwrap()))
             .unwrap_or_else(|| "_".to_string());
         format!("call [{}]", in0)
+    }
+
+    // RUGRA-GLUE: base-class `tlst` provider (typeop.cc:233-242).
+    fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>> {
+        Some(&self.type_factory)
+    }
+
+    // Ghidra: typeop.cc:745 TypeOpCallind::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        // Slot 0 (code pointer) needs no Funcdata. For slot >= 1 Ghidra
+        // resolves the callspec through op->getParent()->getFuncdata()->
+        // getCallSpecs(op); a bare &PcodeOp carries no such chain in Rugra,
+        // so the fd-less form observes the fc==0 default path. Use
+        // get_input_local_in_fd for the full callspec resolution.
+        self.callind_input_local(op, slot, None)
+    }
+
+    // Ghidra: typeop.cc:745 TypeOpCallind::getInputLocal (callspec branch at :757)
+    fn get_input_local_in_fd(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Option<Arc<Datatype>> {
+        // fc = op->getParent()->getFuncdata()->getCallSpecs(op)
+        // (typeop.cc:757). Resolved before taking the op read guard below:
+        // get_call_specs_of_op snapshots input(0) through its own op lock,
+        // and recursive std::sync::RwLock reads are not guaranteed when a
+        // writer is waiting.
+        let fc = fd.get_call_specs_of_op(op);
+        let op = op.0.read().unwrap();
+        self.callind_input_local(&op, slot, fc)
     }
 
     // Ghidra: typeop.hh:329 TypeOpCallind::push -> lng->opCallind(op)
@@ -3378,7 +3522,8 @@ impl TypeOpManager {
         ops[OpCode::CPUI_BRANCHIND as usize] =
             Some(Box::new(TypeOpBranchind::new(type_factory.clone())));
         ops[OpCode::CPUI_CALL as usize] = Some(Box::new(TypeOpCall::new(type_factory.clone())));
-        ops[OpCode::CPUI_CALLIND as usize] = Some(Box::new(TypeOpCallind));
+        ops[OpCode::CPUI_CALLIND as usize] =
+            Some(Box::new(TypeOpCallind::new(type_factory.clone())));
         ops[OpCode::CPUI_RETURN as usize] = Some(Box::new(TypeOpReturn));
 
         // Pointer/SSA/Other

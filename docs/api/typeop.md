@@ -66,6 +66,33 @@ comparand 至本 commit，bilateral 翻 MATCH。打印侧三发射臂（printc.r
 opIntZext/opIntSext/opSubpiece）与 cast.rs 三谓词不在本切片 write-set，行为
 不变——泄漏的打印侧根因（M2 varnode get_local_type 空壳、M3 coreaction
 build_localtypes v_type 播种）另行切片。
+## 2026-08-24：TypeOpCallind::getInputLocal + Funcdata 上下文入口（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
+
+- **`TypeOpCallind::get_input_local` 完整移植 `TypeOpCallind::getInputLocal`
+  （`typeop.cc:745-774`）**，与 CALL 有意保留三处不对称（fixture 必测判别面）：
+  - `slot==0` 返回 code pointer：`tlst->getTypeCode()` + `tlst->getTypePointer(
+    in0.size, td, op.addr.space.wordsize)`（typeop.cc:752-756； getTypeCode/
+    getTypePointer 需工厂写锁）。Rugra 无 `op->getParent()->getFuncdata()` 链，
+    空间经 `op.get_addr().get_space()` 读取，spaceless 旧式 Address 回退
+    wordsize 1（锁定 oracle 的 code space wordsize 均为 1）。
+  - callspec 来源不同：走 `getCallSpecs(op)`（typeop.cc:757）而非 CALL 的
+    fspec 常量解码——Rugra 由 `fd.get_call_specs_of_op(op_ref)` 承载（op
+    identity 扫描，非地址扫描）。
+  - 锁定参数检查**只有 VOID 拒绝，没有 `size <= in(slot).size` 检查**
+    （typeop.cc:764 vs CALL 的 :707）；this-pointer 分支同 CALL（:767-771）。
+- **新增 trait 方法 `get_input_local_in_fd(op: &PcodeOpRef, slot, fd)`**（默认
+  转发 fd-less `get_input_local`）：Ghidra 的虚调用点
+  `PcodeOp::inputTypeLocal`（op.hh:252）天然可达宿主 Funcdata，Rust `PcodeOp`
+  无父链，故 Funcdata 经此入口穿参。目前仅 TypeOpCallind 消费（getCallSpecs）。
+  `TypeOpCallind::get_input_local`（fd-less）实现 slot0 + fc==0 缺省路径；
+  slot≥1 的完整 callspec 解析走 `get_input_local_in_fd`。
+- `TypeOpCallind` 改为持有构造注入的 `Arc<RwLock<TypeFactory>>`（对齐
+  `TypeOpCallind(TypeFactory *t)`，typeop.cc:738），覆写 `local_type_factory`；
+  `get_flags` 补 `typeop.cc:741` 的 `special|call|has_callspec|nocollapse`；
+  `TypeOpManager` 注册处传入工厂。
+- 双侧 fixture `tests/oracle/infertypes_callinput_local_1204`（CALLIND 的
+  C5/C5S0 case：8B 锁定参数播到 4B 实参、slot0 code pointer、CALLIND
+  callspec 查询路径），双侧字节一致（见 coreaction.md D2 条目）。
 
 ## 2026-08-24：TypeOp 基类 local 默认与 TypeOpCall opflags（TYPEOP-LOCALBASE-DEFAULTS-0001）
 
@@ -298,7 +325,14 @@ canonical UNKNOWN；`get_flags` 返回 `typeop.cc:663` 的
 
 ### `pub struct TypeOpCallind`
 
-*暂无代码注释*
+CPUI_CALLIND implementation. Holds the Architecture-owned `TypeFactory`
+handle（对齐 `TypeOpCallind(TypeFactory *t)`，typeop.cc:738）。`get_input_local`
+（fd-less）实现 slot0 code pointer 与 fc==0 缺省；`get_input_local_in_fd` 为
+`TypeOpCallind::getInputLocal`（typeop.cc:745-774）的完整移植——callspec 经
+`fd.get_call_specs_of_op`（= `getCallSpecs(op)`，typeop.cc:757）、锁定参数仅
+VOID 拒绝（无 CALL 的 size 检查，:764 vs :707）、this-pointer 同 CALL
+（:767-771）。`get_flags` 返回 `typeop.cc:741` 的
+`special|call|has_callspec|nocollapse`。
 
 ### `pub struct TypeOpReturn`
 
@@ -353,6 +387,11 @@ the three shift ops, `CPUI_INSERT`, `CPUI_EXTRACT`, `CPUI_INT_ADD`, and
 `CPUI_COPY` — so the base-default and metatype
 `get_output_local`/`get_input_local` paths share the Architecture's canonical
 TypeFactory.
+Build the per-opcode table; the factory is installed into the `CPUI_CALL`,
+`CPUI_CALLIND`, `CPUI_BRANCH`, `CPUI_BRANCHIND`, `CPUI_SEGMENTOP`, and
+`CPUI_CAST` slots so the base-default `get_output_local`/`get_input_local`
+and the `TypeOpCall`/`TypeOpCallind` `get_input_local` fallbacks share the
+Architecture's canonical TypeFactory.
 
 ### `pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp>`
 

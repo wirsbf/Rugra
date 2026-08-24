@@ -3639,6 +3639,32 @@ fn vn_id(vn: &crate::varnode::Varnode) -> u64 {
         ^ (vn.create_index as u64).wrapping_mul(0xD1B54A32D192ED03)
 }
 
+/// TypeOrder-min merge for one varnode's temp type: keep the strictly more
+/// specific candidate, ties keep the incumbent (first seeded). This is the
+/// descendant competition loop of `Varnode::getLocalType`
+/// (varnode.cc:926-931):
+/// `if (ct == (Datatype *)0) ct = newct; else { if (0>newct->typeOrder(*ct)) ct = newct; }`
+/// — replacement only on strictly negative typeOrder, so the first-seeded
+/// type survives an ordering tie.
+// Ghidra: varnode.cc:900 Varnode::getLocalType (typeOrder-min competition at :926-931)
+fn merge_min_type_order(
+    temps: &mut TempTypes,
+    id: u64,
+    ct: std::sync::Arc<crate::type_system::datatype::Datatype>,
+) {
+    use std::collections::hash_map::Entry;
+    match temps.entry(id) {
+        Entry::Occupied(mut entry) => {
+            if ct.type_order(entry.get()) < 0 {
+                entry.insert(ct);
+            }
+        }
+        Entry::Vacant(entry) => {
+            entry.insert(ct);
+        }
+    }
+}
+
 /// Build a pointer type to `base` with the architecture pointer size, using a
 /// fresh factory-free TypePointer. Faithful to `TypeFactory::getTypePointer`.
 // RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh)
@@ -3668,6 +3694,7 @@ impl ActionInferTypes {
         ptr_size: usize,
     ) {
         use crate::type_system::datatype::TypeMetatype;
+        use crate::typeop::TypeOp as _;
         // Ghidra buildLocaltypes (coreaction.cc:5008-5034) FIRST seeds every
         // varnode's temp with its LOCAL type (`ct = vn->getLocalType(...);
         // vn->setTempType(ct)`): this is how type-locked inputs (locked
@@ -3730,14 +3757,32 @@ impl ActionInferTypes {
                         temps.insert(vn_id(&ov), int_types.bool.clone());
                     }
                 }
-                // TypeOpCall::getOutputLocal (typeop.cc:720-734): a CALL
-                // whose callspec output is type-locked seeds the CALL output
+                // TypeOpCall::getOutputLocal (typeop.cc:720-734) /
+                // TypeOpCallind::getOutputLocal (typeop.cc:776-789): a call
+                // whose callspec output is type-locked seeds the call output
                 // varnode with the callee's return type (e.g. locked libc
                 // `char *strdup(...)` → char*). VOID falls back to the
                 // default; nothing is seeded when the spec is absent or the
                 // output is not locked.
+                //
+                // D2 (TYPEOP-LOCALTYPE-DISPATCH-0001): every seed from this
+                // arm — output and inputs — merges through
+                // `merge_min_type_order`, the descendant competition of
+                // `Varnode::getLocalType` (varnode.cc:926-931), replacing
+                // only on strictly-more-specific typeOrder. Input seeding
+                // goes through the TypeOp local dispatch (no inlined
+                // parameter-lock logic here): CALL via
+                // `TypeOpCall::get_input_local` (typeop.cc:687, fspec
+                // annotation on in0), CALLIND via
+                // `TypeOpCallind::get_input_local_in_fd` (typeop.cc:745,
+                // callspec via getCallSpecs(op), slot 0 = code pointer).
+                // Both fall back to the canonical UNKNOWN base of the
+                // Architecture TypeFactory (typeop.cc:271-275) — the INT/UINT
+                // `IntTypes` fallback must never replace it.
                 OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
                     let out = op.get_out().cloned();
+                    let opcode = op.opcode;
+                    let num_input = op.num_input();
                     // `get_call_specs_of_op` snapshots input(0) through the
                     // same op lock. Release this traversal guard first:
                     // recursive std::sync::RwLock reads are not guaranteed
@@ -3757,8 +3802,57 @@ impl ActionInferTypes {
                                 ct.get_metatype() != TypeMetatype::Void
                             });
                         if let Some(ct) = seed {
-                            let ov = out.read().unwrap();
-                            temps.insert(vn_id(&ov), ct);
+                            merge_min_type_order(temps, vn_id(&out.read().unwrap()), ct);
+                        }
+                    }
+                    // Input local dispatch (varnode.cc:921-924 descendant
+                    // visits mapped onto the op-centric walk). The loop
+                    // covers every input slot whose varnode is not an
+                    // annotation: CALL slot 0 is the fspec constant
+                    // (buildLocaltypes skips it via `vn->isAnnotation()`,
+                    // coreaction.cc:5018), while CALLIND slot 0 is the real
+                    // code-pointer varnode whose descendant seed is exactly
+                    // `TypeOpCallind::getInputLocal(op,0)` (typeop.cc:752-756).
+                    let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
+                    let Some(type_factory) = type_factory else {
+                        continue;
+                    };
+                    for slot in 0..num_input {
+                        let input_vn = op_ref
+                            .0
+                            .read()
+                            .unwrap()
+                            .get_in(slot)
+                            .cloned();
+                        let Some(input_vn) = input_vn else { continue };
+                        if input_vn.read().unwrap().is_annotation() {
+                            continue;
+                        }
+                        let ct = match opcode {
+                            OpCode::CPUI_CALL => {
+                                // TypeOpCall::getInputLocal (typeop.cc:687):
+                                // the guard is released before any callspec
+                                // path — this method resolves the spec from
+                                // the in0 annotation's typed Weak, never
+                                // re-entering the op lock.
+                                let op = op_ref.0.read().unwrap();
+                                crate::typeop::TypeOpCall::new(type_factory.clone())
+                                    .get_input_local(&op, slot)
+                            }
+                            OpCode::CPUI_CALLIND => {
+                                // TypeOpCallind::getInputLocal (typeop.cc:745):
+                                // called without holding the op guard —
+                                // get_input_local_in_fd resolves
+                                // `getCallSpecs(op)` through
+                                // fd.get_call_specs_of_op, which takes its
+                                // own op read lock.
+                                crate::typeop::TypeOpCallind::new(type_factory.clone())
+                                    .get_input_local_in_fd(op_ref, slot, fd)
+                            }
+                            _ => None,
+                        };
+                        if let Some(ct) = ct {
+                            merge_min_type_order(temps, vn_id(&input_vn.read().unwrap()), ct);
                         }
                     }
                 }

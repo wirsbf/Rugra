@@ -1,5 +1,38 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
+
+`build_localtypes` 的 `CPUI_CALL | CPUI_CALLIND` 臂在保留 output 播种之外新增
+**input 播种循环**，全部经 TypeOp local dispatch（`TypeOpCall::get_input_local` /
+`TypeOpCallind::get_input_local_in_fd`），禁止内联参数锁语义：
+
+- **循环范围**：遍历 op 的每个输入 slot，跳过 annotation 输入（CALL slot0 的
+  fspec 常量——buildLocaltypes 的 `vn->isAnnotation()` 过滤，coreaction.cc:5018；
+  CALLIND slot0 是真实 code-pointer varnode，照常参与，其种子恰为
+  `TypeOpCallind::getInputLocal(op,0)`，typeop.cc:752-756）。
+- **merge 语义 = typeOrder-min**：新 helper `merge_min_type_order`
+  （varnode.cc:926-931 的 descendant 竞争）：`ct.type_order(incumbent) < 0`
+  才替换，平局保留先播者。output 臂同次统一改用该 helper（原为 `insert`
+  覆盖式）。
+- **fallback = canonical UNKNOWN**：dispatch 的 fallback 由 Architecture
+  TypeFactory 出 `getBase(size, TYPE_UNKNOWN)`（typeop.cc:271-275），未锁参数
+  的实参以 UNKNOWN 参与 typeOrder 竞争，`IntTypes::sized` 的 INT/UINT 兜底
+  不再触达该路径（case8 判别）。
+- **锁语义分派**：CALL 的 type-lock（nonvoid + `param.size <= in.size`，
+  typeop.cc:705-708）/ this-pointer（PTR→STRUCT）与 CALLIND 的不对称（仅
+  VOID、无 size 检查，typeop.cc:762-765）全部住在 typeop.rs 覆写内。
+
+双侧 fixture `tests/oracle/infertypes_callinput_local_1204.{cc,rs,metadata.json}`
++ `tools/run_infertypes_callinput_local_oracle.sh`：8-case 矩阵（locked 播种、
+size 拒绝、this-ptr、VOID、CALLIND 无 size 检查、多 use typeOrder-min、
+stop-up→UNTESTED 注记、未锁 fallback）+ locked output 臂 + 直分派探针 +
+pass1/pass2 演化，观察面为 writeBack 后 v_type + descend/block 序 + callspec
+identity 投影。锁定 oracle 与 Rugra 双侧 stdout **字节一致**
+（bilateral diff exit 0）。结论限定为 "CALL-input 播种路径 MATCH"：stop-up
+三层链（case7）`UNTESTED` 绑 `VARNODE-STOPUP-FLAGS-0001`；op 中心 vs varnode
+中心的结构差异、其余臂（差异表 #7-10）、exact-piece 分支、NULL local type
+异常仍绑 `ACTION-INFERTYPES-DISPATCH-0001` / `VARNODE-LOCALTYPE-RESOLUTION-0001`。
+
 ## 2026-08-24：ActionInferTypes 的 LOAD/STORE 解引用宽度门禁
 
 `ActionInferTypes` 的 production driver 原先在 `propagate_type` 内直接把
