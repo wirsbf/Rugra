@@ -15,8 +15,8 @@
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
   },
   "comparand": {
-    "rugra_base_commit": "4c4808d12dfabeecd7043c49da852adf9a10e68f",
-    "rugra_base_tree": "71ed04342212855062188a1ed1dff27c1ebf4892",
+    "rugra_base_commit": "c37044b8420f80a73ffa16fed6941f760c5b02ba",
+    "rugra_base_tree": "1c5f8f5c41dc269dd16dba83b3fa49b3134e6b38",
     "overlay_paths": [
       "src/fspec.rs",
       "docs/api/fspec.md",
@@ -26,13 +26,13 @@
       "tools/run_fspec_paramlist_output_oracle.sh"
     ],
     "overlay_sha256": {
-      "src/fspec.rs": "122050e69065acf2e87f3e8701da4215aae73bc804612734a436da69880acb52",
-      "docs/api/fspec.md": "2ce94349af11315698c87013a4c32a137f33ef986a0c84c6140560f1cc1197d4",
+      "src/fspec.rs": "28ce5d81d0ce23a692e5271aeba4c97ce2f516aa7f400df71cf20f5e10d6d3c6",
+      "docs/api/fspec.md": "0a0fffff36ee7e6ec7a67483c91ee5c3db695617ac969c264e06acd3b45ebe5c",
       "tests/oracle/fspec_paramlist_output_1204.cc": "eb621f8dd608af8b47a7fb55d65373db1bd3b02ac528f2ff91ad063e8bdffb17",
       "tests/oracle/fspec_paramlist_output_1204.rs": "eeed8845b4dde721472530a6b50e26672603b062f85f2cb617b4aac53a65eaa7",
-      "tools/run_fspec_paramlist_output_oracle.sh": "14cf3a154622e36b693c53e794132edd61feb8e34d8ab4397bf98a7dcc426000"
+      "tools/run_fspec_paramlist_output_oracle.sh": "549ad79e15a37eaf7b9ef0ff3ca2b6281690464aacd68e7a006632ce18b17f60"
     },
-    "crate_closure_sha256": "f3a9776f851e8958365155f34b835fc66939cfa4f31cb587baa6217986ac47ca",
+    "crate_closure_sha256": "dd245b78c0e6747710a7159f100d47c8f491ddeabad2b241dc2cd52f672fcedd",
     "crate_closure_hash_scheme": "SHA-256 over sorted Cargo.toml, Cargo.lock, build.rs, src/**/*.rs, and sleigh_shim regular files in the pinned base-plus-overlay snapshot; each path and content is unsigned-64-bit big-endian length-prefixed.",
     "host": {
       "cxx": "g++ (GCC) 16.2.1 20260810",
@@ -404,7 +404,7 @@
   },
   "build": {
     "ghidra": "Archive the locked decompiler C++ subtree, rebuild libdecomp.a, compile the fixture with libdecomp/sleigh/bfd loader sources and the pinned BFD shared object, then run against the pinned specs and curl binary.",
-    "rugra": "Archive the pinned Rugra base, overlay only the six owned paths, attach the locked Ghidra C++ tree for build.rs, cargo build --lib --locked --offline under /tmp/rugra-target-fspec-writer/fspec-paramlist-output with the global Cargo flock, then compile the Rust fixture with /usr/bin/rustc.",
+    "rugra": "Archive the pinned Rugra base, overlay only the six owned paths, attach the locked Ghidra C++ tree for build.rs, cargo build --lib --locked --offline under /home/wirs/.cache/a55-fspecpin-target/fspec-paramlist-output with the global Cargo flock, then compile the Rust fixture with /usr/bin/rustc.",
     "runner_mode": "0755 immutable-FD self-read; owned inputs are hashed before/after and the live runner is compared with its open descriptor"
   }
 }

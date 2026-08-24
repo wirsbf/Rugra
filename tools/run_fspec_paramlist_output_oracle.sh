@@ -360,7 +360,7 @@ if $ghidra_only; then
   exit 0
 fi
 
-fixture_target=/tmp/rugra-target-fspec-writer/fspec-paramlist-output
+fixture_target=/home/wirs/.cache/a55-fspecpin-target/fspec-paramlist-output
 /usr/bin/mkdir -p "$fixture_target"
 if ! /usr/bin/flock /tmp/rugra-cargo-build.lock -c \
   "CARGO_HOME='$user_home/.cargo' CARGO_TARGET_DIR='$fixture_target' CARGO_NET_OFFLINE=true CXX='$host_cxx' CC='$host_cc' AR='$host_ar' RUSTC='$host_rustc' '$host_cargo' build --manifest-path '$snapshot/Cargo.toml' --lib --locked --offline --quiet" \

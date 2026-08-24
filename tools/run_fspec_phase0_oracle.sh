@@ -53,8 +53,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=4c4808d12dfabeecd7043c49da852adf9a10e68f
-rugra_base_tree=71ed04342212855062188a1ed1dff27c1ebf4892
+rugra_base_commit=c37044b8420f80a73ffa16fed6941f760c5b02ba
+rugra_base_tree=1c5f8f5c41dc269dd16dba83b3fa49b3134e6b38
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/fspec_phase0_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/fspec_phase0_1204.cc"
@@ -503,7 +503,7 @@ if $ghidra_only; then
   exit 0
 fi
 
-fixture_target=/tmp/rugra-target-fspec-writer/fspec-phase0
+fixture_target=/home/wirs/.cache/a55-fspecpin-target/fspec-phase0
 /usr/bin/mkdir -p "$fixture_target"
 for cargo_config in \
   "$snapshot_root/.cargo/config" "$snapshot_root/.cargo/config.toml" \

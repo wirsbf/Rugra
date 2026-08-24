@@ -22,17 +22,17 @@
   "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
  },
  "comparand": {
-  "rugra_base_commit": "4c4808d12dfabeecd7043c49da852adf9a10e68f",
-  "rugra_base_tree": "71ed04342212855062188a1ed1dff27c1ebf4892",
+  "rugra_base_commit": "c37044b8420f80a73ffa16fed6941f760c5b02ba",
+  "rugra_base_tree": "1c5f8f5c41dc269dd16dba83b3fa49b3134e6b38",
   "cpp_fixture_sha256": "50f7452e97fb7cc82f41495fc6a64f7d69c6b062a794f6994aa571c4a544cb90",
   "rust_fixture_sha256": "3abfe05df0a6dd90af4fd872158b0f547314d082b3c05aba4fc2f629258ded4a",
-  "fspec_rs_sha256": "122050e69065acf2e87f3e8701da4215aae73bc804612734a436da69880acb52",
-  "fspec_doc_sha256": "2ce94349af11315698c87013a4c32a137f33ef986a0c84c6140560f1cc1197d4",
-  "runner_sha256": "7e3e2053b3e8ee56df3f195d2d2c9ac17d1a8a099d63c73919111a59475ae191",
+  "fspec_rs_sha256": "28ce5d81d0ce23a692e5271aeba4c97ce2f516aa7f400df71cf20f5e10d6d3c6",
+  "fspec_doc_sha256": "0a0fffff36ee7e6ec7a67483c91ee5c3db695617ac969c264e06acd3b45ebe5c",
+  "runner_sha256": "1b98d96121df6054aa0a6294792fe50e6c03fbdab2bab7404bf9680cc519d61f",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-  "rust_crate_tree_sha256": "68eea84683fbea6a5408a60761e12d0dd0d67344bacc1e17931c88b054961a70",
+  "rust_crate_tree_sha256": "97fc6c75f6cd80a2089f30d97e2b05f6abafd50c73f1c7b1420676cfa23b0779",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-fspec-phase0-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
   "host": {
    "cxx": "g++ (GCC) 16.2.1 20260810",
