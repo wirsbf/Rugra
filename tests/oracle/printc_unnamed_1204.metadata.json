@@ -1,0 +1,194 @@
+{
+  "schema": 2,
+  "fixture_id": "PRINTC-UNLINKED-REF-FAMILY",
+  "slice": "C",
+  "stable_function_id": "GH12-F-9d41c2b7a8e6f013a75c",
+  "stable_function_closure": [
+    "ghidra::PrintLanguage::pushSymbolDetail printlanguage.cc:238",
+    "ghidra::PrintC::pushUnnamedLocation printc.cc:1938",
+    "ghidra::PrintC::emitStatement printc.cc:2285",
+    "ghidra::PrintC::emitExpression printc.cc:2468",
+    "ghidra::ActionNameVars::apply coreaction.cc:2978",
+    "ghidra::ActionNameVars::linkSymbols coreaction.cc:2930",
+    "ghidra::HighVariable::hasName variable.cc:718",
+    "ghidra::HighVariable::getNameRepresentative variable.cc:484",
+    "ghidra::HighVariable::compareName variable.cc:456",
+    "ghidra::HighVariable::merge variable.cc:675",
+    "ghidra::Funcdata::linkSymbol funcdata_varnode.cc:1156",
+    "ghidra::Scope::buildDefaultName database.cc:1756",
+    "ghidra::ScopeLocal::buildVariableName varmap.cc:548",
+    "ghidra::ScopeInternal::buildVariableName database.cc:2434",
+    "ghidra::VarnodeBank::createUnique varnode.cc:1264",
+    "ghidra::VarnodeBank::clear varnode.cc:1234"
+  ],
+  "overall_status": "MISMATCH: 29/35 lines byte-match the locked 12.0.4 oracle; the 6 registered divergences are exactly the gap evidence slice C exists to pin. (1) Four stage=print lines pin A35 root-cause class (a): a symbol-less explicit unique-space high fed straight to PrintC::emitStatement prints 'unique' + printRaw of the HIGH NAME REPRESENTATIVE's address on the oracle (printlanguage.cc:244-246 -> printc.cc:1938-1945) but 'uVar_' + hex of the CURRENT INSTANCE offset on Rugra (printc.rs get_varnode_display_name_inner Unique arm / push_varnode Unique arm) — both the token form and the address source differ, and the multi_instance_unnamed site=b line (unique0x10000000 vs uVar_10000008) proves the fragmentation axis: one merged high prints one label at both sites on the oracle and two different labels on Rugra. (2) Two stage=branch stack lines pin the default-unknown typechar (Ghidra xunknown8 -> 'x' vs Rugra undefined8 -> 'u' printNameBase) — type-system domain, distinct from the printc fallback family, registered here so the branch mechanics (X marker, padded-hex addrtied fallthrough form 0000000000000020) are still observed byte-exactly apart from that one character. The symbolization reach five-tuples all MATCH (helpf & 2 shape, match_url != '#' shape: has_high=1/has_name=1/link=1/sym=iVar1; implied refusal: has_high=1/has_name=0/link=0/sym=none), the representative projection (stage=rep rep=10000000) MATCHES, and every uniqid-order projection MATCHES byte-for-byte (offset,size,SeqNum,opcode over 14 unique varnodes) — the creation-order baseline is pinned and any future executor-order drift will surface there first. B1 fixes must flip lines 7/23/30/31; slice A additionally flips their token form to uniq<printRaw>; the typechar lines 2/3 belong to the type-system domain (default unknown Datatype spelling), not to printc.",
+  "covered_projection_status": "MATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{printlanguage.cc:238-257,printc.cc:1938-1945,2285-2293,2468-2495,coreaction.cc:2930-3002,variable.cc:456-507,675-712,718-747,funcdata_varnode.cc:1156-1186,database.cc:1756-1786,2434-2518,varmap.cc:548-577,varnode.cc:1234-1271,op.cc:941-965}"
+  },
+  "architecture": "locked BfdArchitecture over examples/curl (blob 76d9343ea3add321aa4134856323663b36365807): x86:LE:64:default:gcc, SLEIGH specs from sleigh_specs/{x86-64.sla,x86-64.pspec,x86-64-gcc.cspec,x86.ldefs}; unique-space ANALYSIS base 0x10000000 (translate.hh:307 UniqueLayout::ANALYSIS, mirrored by varnode.rs:30); Rugra comparand: synthetic flat Funcdata('GetStr', 0x36d0, 0) with ActionRestructureVarnode-installed ScopeLocal whose register catalog mirrors the SLEIGH GPR offsets (RCX=0x8:8) and whose local window mirrors the observed locked-oracle window [0xfffffffffff0bdc1, 0xffffffffffffffff]",
+  "compiler_spec": "Ghidra side: the real x86-64-gcc cspec through the BfdArchitecture 'default' model (GetStr FuncProto localRange covers the negative stack band only in the observed state — stack_local_pos falls through to the base addrtied branch); Rugra side: the same window installed on the ActionRestructureVarnode scope",
+  "analysis_options": {
+    "entrypoint": "Per case, the production chain the E2E pipeline runs at the ActionNameVars boundary: candidates constructed through newOp/newConstant/newUniqueOut/newVarnode + opSetInput/opSetOutput (readers give SSA use edges), then setHighLevel, then ActionNameVars::perform/apply (the symbolizing cases), then PrintC::emitStatement on the defining op for the print face. The symbol-less cases (symbolless_unique_direct, multi_instance_unnamed) deliberately skip ActionNameVars; multi_instance merges two written unique temps' highs through the production HighVariable::merge (variable.cc:675)",
+    "prestate": "Ghidra: fresh fd.clear() per case on the BFD-resolved GetStr Funcdata (obank/vbank reset, localmap window from resetLocalWindow, minLanedSize from arch). Rugra: fresh Funcdata per case, ActionRestructureVarnode bootstrap, same op/const/unique creation order (identical SeqNum times 0..3 and unique offsets 0x10000000..0x1000000c per case)",
+    "observation": "35 fixed-order UTF-8 lines: envelope + per-case stage=branch (finished symbol name + flag-derived branch label), stage=reach (has_high, pre-chain hasName gate verdict, post-chain link outcome, final symbol display name), stage=rep (merged high's name-representative offset), stage=print (normalized defining-statement text: outer whitespace stripped, inner runs collapsed), stage=uniqid (every Unique-space varnode in offset order with offset/size/def-op SeqNum time/opcode)",
+    "normalization": "Only statement transport whitespace is normalized (strip ends, collapse inner runs) identically on both sides; no order, flag, name, label or projection normalization; the branch label is derived from the case's construction flags, not from the produced name"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options and cases",
+    "cases": [
+      "stack_local_neg: written+read stack varnode at 0xffffffffffffff48 size 8 with Varnode::addrtied, default type — the ScopeLocal Stack branch (varmap.cc:548-577), -0xb8 negates to a positive start so no X/Y marker",
+      "stack_local_pos: written+read stack varnode at 0x20 size 8 with addrtied — outside the observed locked-oracle window, falls through to ScopeInternal's base addrtied branch (database.cc:2494-2500): <tb>Stack + 16-digit padded hex",
+      "zero_flag_counter: written+read register temp at 0x40 size 4 typed int, no extra flags — the counter branch <tb>Var<index++> (database.cc:2501-2517); the case's unique reader output consumes index 1 first (unique space walks before register), so the register names as iVar2 on both sides",
+      "unaff_retaddr_input: unaffected illegal register input at 0x18 carrying Varnode::return_address — the unaffected branch's unaff_retaddr spelling (database.cc:2441-2443); the persist branch itself needs a pre-existing global symbol (linkSymbol routes persist storage to the global scope) and is not locally observable",
+      "irregular_input: register input at RCX (0x8:8) typed int without directwrite — the irregular-input branch in_<regname> (database.cc:2467-2474)",
+      "symbolless_unique_direct: written+read unique temp (COPY of 5) with high assigned and NO ActionNameVars — pushSymbolDetail's sym==0 arm drives pushUnnamedLocation (printlanguage.cc:244-246): 'unique' + printRaw of the representative address",
+      "helpf_and2_shape: INT_AND(const 6, const 2) written+read unique temp typed int plus a separate COPY(5) print-face temp, full ActionNameVars chain — the & 2 predicate shape behind helpf's swapped label",
+      "match_url_hash_shape: INT_NOTEQUAL(const 0x23, const 0x23) shape temp plus a COPY(5) face temp, full chain — the while (X != '#') shape behind match_url's swapped label",
+      "implied_temp_refusal: written+read unique temp flagged implied — hasName refuses implied members (variable.cc:729-733), no symbol survives to print so the print face exercises the unnamed-location arm on a refused temp",
+      "explicit_register_control: written+read register temp at 0x40 size 4 typed int, full chain — the strlen-result/myprogress-counter positive control: symbolized AND printed through the linked symbol on both sides (iVar2 = 5;)",
+      "multi_instance_unnamed: two written+read unique temps whose highs merge through the production HighVariable::merge (variable.cc:675); compareName prefers the earlier-written instance (variable.cc:490-493) so the oracle prints the SAME representative label at both defining statements while Rugra prints each instance's own offset — the fragmentation axis (a)-2 behind the my_get_line/next_url/glob_word multi-label families"
+    ],
+    "sha256": "f7dd96e269dc063367e2326d5019e6780592d4f6d99d6895c13ae9074e59650e"
+  },
+  "observation_schema": {
+    "format": "Thirty-five fixed-order UTF-8 lines with final newline: one envelope plus per-case stage records in construction order (branch: 5 lines; print/uniqid: symbolless 1+2; reach/print/uniqid: helpf 3+4, match 3+4, implied 2+2, explicit 2+1; rep/print x2/uniqid: multi 1+2+4)",
+    "branch_projection": "finished symbol display name through the high's symbol link + the flag-derived branch label {stack-form, stack-form-X, counter, unaff, in_}",
+    "reach_five_tuple": "has_high / pre-chain hasName gate verdict / post-chain link outcome / final symbol display name (the print-time lhs token is the separate stage=print record)",
+    "print_face": "the defining statement emitted through PrintC::emitStatement with the production scope push, transport-normalized",
+    "uniqid_projection": "every Unique-space bank varnode in offset order: offset (hex), size, def-op SeqNum time, opcode name"
+  },
+  "registered_divergence_lines": {
+    "2": {
+      "ghidra": "case=stack_local_neg|stage=branch|name=xStack_b8|branch=stack-form",
+      "ghidra_sha256": "749a1f86f091101e8535aecd8a52b396edd21fe97ea7a659028e0cf760168adc",
+      "rugra": "case=stack_local_neg|stage=branch|name=uStack_b8|branch=stack-form",
+      "rugra_sha256": "ea256a3676f165e16afc00e2c6b584cf7e5bab056936409e3fa6132bc9e8d64e",
+      "domain": "type-system default unknown Datatype spelling: Ghidra getBase(8,TYPE_UNKNOWN)='xunknown8' printNameBase 'x' vs Rugra 'undefined8' printNameBase 'u'; branch mechanics (Stack_-form, negated positive start, no X) match apart from the one character"
+    },
+    "3": {
+      "ghidra": "case=stack_local_pos|stage=branch|name=xStack0000000000000020|branch=stack-form-X",
+      "ghidra_sha256": "d540d07a44d9cef8504f8e491abdca92a281df3b8d4ff7e440679ae7b437e8a0",
+      "rugra": "case=stack_local_pos|stage=branch|name=uStack0000000000000020|branch=stack-form-X",
+      "rugra_sha256": "44fbb6a9c87f91b1f7a2631a84316b9368c74cefee11dd889a36c3708f218b6f",
+      "domain": "same typechar delta as line 2; the fallthrough-to-base-addrtied-branch behavior and the 16-digit padded hex form match"
+    },
+    "7": {
+      "ghidra": "case=symbolless_unique_direct|stage=print|site=a|text=unique0x10000000 = 5;",
+      "ghidra_sha256": "fa280f7c9456d5f00218fd040f64d66e9c73a0acd18ab3d7f58443dcebc339f1",
+      "rugra": "case=symbolless_unique_direct|stage=print|site=a|text=uVar_10000000 = 5;",
+      "rugra_sha256": "431d042224296cd2916684fe08de6acd4469882de4804f57ad0eb84b76c6f088",
+      "domain": "A35 class (a): printc unnamed-location fallback — token form ('unique'+printRaw '0x10000000' vs 'uVar_'+hex '10000000') and address source (name representative vs current instance); acceptance baseline for B1/A"
+    },
+    "23": {
+      "ghidra": "case=implied_temp_refusal|stage=print|site=a|text=unique0x10000000 = 7;",
+      "ghidra_sha256": "09561a10232fb4952f89c398d50484716be369fabe30d4ed9a93d3c769a7c24f",
+      "rugra": "case=implied_temp_refusal|stage=print|site=a|text=uVar_10000000 = 7;",
+      "rugra_sha256": "c19500eb1f244aed35cbce7ff23f94697462da38e76cde5e8328b8c64879a621",
+      "domain": "A35 class (a) on a hasName-refused (implied) temp: the reach tuple MATCHES (refused on both sides) but the print fallback still diverges; acceptance baseline for B1/A"
+    },
+    "30": {
+      "ghidra": "case=multi_instance_unnamed|stage=print|site=a|text=unique0x10000000 = 5;",
+      "ghidra_sha256": "42ee1124ceb4ce70c848d2d7e57b56cd9e7c857bfb4502dc18d8e86c1e869b4e",
+      "rugra": "case=multi_instance_unnamed|stage=print|site=a|text=uVar_10000000 = 5;",
+      "rugra_sha256": "ec42c98ce37b1368a0667770fb323adf56a3b2f9b4b438e2ca2b143c09718a21",
+      "domain": "A35 class (a) on the merged high's first site; the stage=rep line (rep=10000000) MATCHES — both sides compute the same representative, only the print path consults it on the oracle side"
+    },
+    "31": {
+      "ghidra": "case=multi_instance_unnamed|stage=print|site=b|text=unique0x10000000 = 6;",
+      "ghidra_sha256": "50917a2e943cb0f4de44eadc2cdef1b601d0af5f81d604e4f6e2ec2305ced087",
+      "rugra": "case=multi_instance_unnamed|stage=print|site=b|text=uVar_10000008 = 6;",
+      "rugra_sha256": "a603c83ac7585cfb06290d4cf0649e28f2372d18ba33b20bf4c79c63a4d1ee27",
+      "domain": "A35 class (a)-2 fragmentation pin: same single merged high, oracle prints the SAME representative label at both sites (unique0x10000000 twice) while Rugra prints the second instance's own offset (uVar_10000008) — the multi-label amplification behind my_get_line/next_url/glob_word; acceptance baseline for B1"
+    }
+  },
+  "comparand": {
+    "rugra_base_commit": "73b5ef26453372a2b562051f113f9b299bcebeef",
+    "rugra_base_tree": "a60d56655fe369049ab14bde073e648a3d098bfc",
+    "rugra_base_src_tree": "c3e27bdf42241283c5c073b51095059e0ae8857f",
+    "cpp_fixture_sha256": "3ecd95885e78385dcd46f0c9a9d76e430f5b698a4271bb5173a141b69e038f56",
+    "rust_fixture_sha256": "1869788b10ebae68a2abde2a8865ab8b82e52540b859d5675e7657caf6ab7d83",
+    "runner_sha256": "5314964b83e194cdd574b7dd49e1c3021bd3f17c4149526aa7c72fa0349030e8",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-unnamed-checkpoint-crate-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit (base-only build, no src overlays: slice C adds no src change)",
+    "rust_crate_tree_sha256": "03394f7b9db74cdcac24ec207928b6fbf4a08096183d45c1438df63dfee5325f",
+    "overlays": [],
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "cxx_target": "x86_64-pc-linux-gnu",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "platform": "Linux 7.1.8-arch1-3 x86_64"
+    }
+  },
+  "build": {
+    "oracle": "Runner exports the decompiler/cpp subtree from the locked commit, rebuilds libdecomp.a privately, links the C++ fixture against /tmp/rugra-ghidra-bfd-2.38 (binutils 2.38 headers + libbfd-2.38-system.so, rpath baked in) exactly like printc_symbol_decl_1204, runs with sleigh_specs + examples/curl materialized from the pinned base commit blobs",
+    "comparand": "Runner exports the tracked crate inputs from the pinned Rugra commit 73b5ef2 (base-only, no overlays) into the stable workspace ~/.cache/rugra-printc-unnamed-workspace (wiped and re-extracted from the pinned commit every run so content stays immutable while Cargo fingerprints stay warm — the package id includes the manifest path, so a per-run mktemp path would force a full rebuild each time), serializes cargo build --offline --locked --lib through /tmp/rugra-cargo-build.lock with CARGO_TARGET_DIR=/tmp/rugra-target-printc-unnamed (symlink to ~/.cache/rugra-target-printc-unnamed), compiles the fixture with rustc -O --extern rugra; the runner self-serializes through /tmp/rugra-printc-unnamed-runner.lock",
+    "assets": {
+      "binary": {
+        "git_blob": "76d9343ea3add321aa4134856323663b36365807",
+        "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
+      },
+      "sla": {
+        "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+        "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+      },
+      "processor_spec": {
+        "git_blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+        "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+      },
+      "compiler_spec": {
+        "git_blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+        "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+      },
+      "language_definitions": {
+        "git_blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+        "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+      },
+      "bfd": {
+        "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+        "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+        "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+        "library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+      }
+    }
+  },
+  "expected_stdout": {
+    "lines": 35,
+    "ghidra_stdout_sha256": "c2f6ffe2f823f45fd86d4a3eb11bbc5fcdedf0978bb794290d4172fd06f03516",
+    "rugra_stdout_sha256": "7da480c0ba62fd3c5f2bf69537e00c204c337fa25113608a6731ece9cfe13fd5"
+  },
+  "expected_exit_code": 0,
+  "case_order": [
+    "stack_local_neg",
+    "stack_local_pos",
+    "zero_flag_counter",
+    "unaff_retaddr_input",
+    "irregular_input",
+    "symbolless_unique_direct",
+    "helpf_and2_shape",
+    "match_url_hash_shape",
+    "implied_temp_refusal",
+    "explicit_register_control",
+    "multi_instance_unnamed"
+  ],
+  "coverage": {
+    "branch_projection_counter": "MATCH: zero_flag_counter names iVar2 on both sides — the shared base counter consumed by the case's unique reader first (unique space walks before register on both banks), then the register temp's counter name",
+    "branch_projection_unaff": "MATCH: the unaffected illegal input with the return_address bit names unaff_retaddr on both sides (database.cc:2441-2443)",
+    "branch_projection_in": "MATCH: the RCX irregular input names in_RCX on both sides through the translate/scope register catalog",
+    "reach_helpf_and2": "MATCH: has_high=1 has_name=1 link=1 sym=iVar1 — the & 2 predicate shape symbolizes through the full ActionNameVars chain on both sides",
+    "reach_match_url_hash": "MATCH: has_high=1 has_name=1 link=1 sym=iVar1 — the != '#' shape symbolizes identically",
+    "reach_implied_refusal": "MATCH: has_high=1 has_name=0 link=0 sym=none — the hasName gate refuses implied members on both sides (variable.cc:729-733)",
+    "reach_explicit_register": "MATCH: has_high=1 has_name=1 link=1 sym=iVar2 plus the print face 'iVar2 = 5;' — the positive control where symbolization reaches print on both sides",
+    "print_face_symbolized": "MATCH: helpf/match/explicit print faces ('iVar3 = 5;', 'iVar2 = 5;') byte-match — when the high carries a linked symbol both print paths agree",
+    "rep_projection": "MATCH: the merged high's name representative offset (10000000) agrees on both sides (compareName prefers the earlier-written instance, variable.cc:490-493)",
+    "uniqid_projection": "MATCH: all 14 unique-space (offset,size,SeqNum,opcode) rows byte-match across every case — the creation-order baseline is pinned; any future executor-order drift surfaces here one stage before the C text diff",
+    "branch_projection_stack_neg": "MISMATCH(registered line 2): form and marker mechanics match; the typechar differs (x vs u default unknown spelling) — type-system domain",
+    "branch_projection_stack_pos": "MISMATCH(registered line 3): padded-hex fallthrough form matches; same typechar delta — type-system domain",
+    "print_face_unnamed_fallback": "MISMATCH(registered lines 7/23/30/31): the A35 class-(a) printc fallback pins — token form and address source (representative vs instance); acceptance baseline for B1/A"
+  }
+}
