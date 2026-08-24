@@ -568,6 +568,27 @@ pub struct PrintC {
     /// snapshots the map instead — same (parent,op-time,slot)-keyed lookups.
     union_resolutions:
         std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
+    /// Borrowed shared StringManager (Ghidra `glb->stringManager`,
+    /// architecture.hh:203). Cached from `fd.arch.string_manager` at the
+    /// start of `doc_function` — the B4 shared-model consumer form: the
+    /// rule side (ruleaction.cc:7375) and the print side (printc.cc:1537)
+    /// query the SAME Architecture-owned object, so the negative cache
+    /// survives across phases. Read by `print_character_constant`
+    /// (printc.cc:1534-1553). `None` for legacy callers that construct a
+    /// Funcdata without an Architecture.
+    string_manager: Option<Arc<RwLock<crate::stringmanage::StringManager>>>,
+    /// Borrowed symbol table (Ghidra `glb->symboltab`). Cached from
+    /// `fd.arch.symboltab` at doc_function start. Read by the global-scope
+    /// read-only check of `push_ptr_char_constant` (printc.cc:1709) and the
+    /// function query of `push_ptr_code_constant` (printc.cc:1736).
+    symboltab: Option<Arc<RwLock<crate::database::Database>>>,
+    /// Borrowed address-space manager used for constant resolution (Ghidra
+    /// reaches `glb->resolveConstant` == `AddrSpaceManager::resolveConstant`,
+    /// translate.cc:628-641, through the Architecture). Rugra's Architecture
+    /// does not own an AddrSpaceManager yet (SPACE-0001), so production
+    /// resolves through the default no-resolver path and fixtures/drivers
+    /// inject one via [`Self::set_space_manager`].
+    spaceman: Option<Arc<RwLock<crate::translate::AddrSpaceManager>>>,
 
     // ===========================================================================
     // RPN engine state (printlanguage.hh:280-290 - PrintLanguage members).
@@ -683,6 +704,9 @@ impl PrintC {
             comment_sorter: crate::comment::CommentSorter::new(),
             cpool: None,
             userops: None,
+            string_manager: None,
+            symboltab: None,
+            spaceman: None,
             revpol: Vec::new(),
             nodepend: Vec::new(),
             rpn_pending: 0,
@@ -707,6 +731,20 @@ impl PrintC {
     /// like `EmitNoMarkup`.
     pub fn take_emit(self) -> Box<dyn Emit> {
         self.emit
+    }
+
+    // RUGRA-GLUE: set_space_manager (test/driver injection point; Ghidra's
+    /// PrintLanguage reaches the AddrSpaceManager through its permanent
+    /// `glb` pointer — Architecture IS an AddrSpaceManager in the C++
+    /// hierarchy — while Rugra's `Architecture` does not own one yet
+    /// (SPACE-0001). Mirrors `Architecture::set_string_manager`
+    /// (arch.rs) as the documented injection seam.)
+    /// Install the address-space manager consulted by
+    /// `push_ptr_char_constant`'s constant resolution (printc.cc:1707,
+    /// `glb->resolveConstant`). Without one, the default no-resolver path
+    /// (translate.cc:637-641) resolves in the ram data space.
+    pub fn set_space_manager(&mut self, sm: Arc<RwLock<crate::translate::AddrSpaceManager>>) {
+        self.spaceman = Some(sm);
     }
 
     // ===========================================================================
@@ -6075,6 +6113,15 @@ impl PrintLanguage for PrintC {
         // `None` when the Funcdata has no Architecture (legacy callers).
         self.cpool = fd.arch.as_ref().and_then(|a| a.cpool.clone());
         self.userops = fd.arch.as_ref().and_then(|a| a.userops.clone());
+        // Snapshot the shared StringManager (glb->stringManager,
+        // architecture.hh:203) and the symbol table (glb->symboltab) the
+        // same way — read by `push_ptr_char_constant` /
+        // `print_character_constant` (printc.cc:1698/1537/1709). `spaceman`
+        // (glb->resolveConstant's AddrSpaceManager) has no Architecture
+        // owner yet (SPACE-0001) and keeps whatever a driver installed via
+        // `set_space_manager`.
+        self.string_manager = fd.arch.as_ref().and_then(|a| a.string_manager.clone());
+        self.symboltab = fd.arch.as_ref().and_then(|a| a.symboltab.clone());
         // Snapshot the union-resolution cache for the walk's findResolve and
         // findTruncation consults (see field doc).
         self.snapshot_union_resolutions(fd);
@@ -8932,10 +8979,109 @@ impl PrintC {
                             self.push_varnode(&in0.read().unwrap(), Some(op));
                         }
                     }
+                } else if meta == TypeMetatype::Spacebase {
+                    // printc.cc:1057-1097: TYPE_SPACEBASE arm. The offset
+                    // constant resolves to a global symbol (`&DAT_xxx`), a
+                    // partial symbol, or an unnamed location.
+                    // HighVariable *high = op->getIn(1)->getHigh();
+                    // Symbol *symbol = high->getSymbol(); (1058-1059)
+                    // HighVariable::getSymbol resolves through the member
+                    // varnode's SymbolEntry (variable.cc:419-432 updateSymbol),
+                    // so the Rust form consults the high's symbol field and
+                    // falls back to the in(1) mapentry.
+                    let (symbol, sym_off) = match op.get_in(1) {
+                        None => (None, -1),
+                        Some(a) => {
+                            let in1_vn = a.read().unwrap();
+                            let sym = in1_vn
+                                .get_high()
+                                .and_then(|h| h.read().unwrap().get_symbol())
+                                .or_else(|| {
+                                    in1_vn
+                                        .get_symbol_entry()
+                                        .map(|e| e.read().unwrap().get_symbol())
+                                });
+                            let off = in1_vn
+                                .get_high()
+                                .map(|h| h.read().unwrap().get_symbol_offset())
+                                .unwrap_or(-1);
+                            (sym, off)
+                        }
+                    };
+                    let mut valueon_arm = valueon;
+                    let mut arrayvalue = false;
+                    if let Some(sym_arc) = &symbol {
+                        // ct = symbol->getType(); (1062)
+                        let sym_type = sym_arc.read().unwrap().get_type();
+                        if let Some(symt) = &sym_type {
+                            let m = symt.get_metatype();
+                            // The '&' is dropped if the output type is an
+                            // array (1064-1067); code symbols never print
+                            // '&' (1068-1069).
+                            if m == TypeMetatype::Array {
+                                arrayvalue = valueon_arm;
+                                valueon_arm = true;
+                            } else if m == TypeMetatype::Code {
+                                valueon_arm = true;
+                            }
+                        }
+                    }
+                    // 1071-1077: EMIT &name / name[0]. The subscript token is
+                    // a post-surround: the `[0]` renders AFTER the symbol
+                    // atom (pushOp(&subscript) + push_integer(0,4,...) at
+                    // 1075-1077/1095-1096 wrap the pushed symbol).
+                    if !valueon_arm {
+                        self.emit.print("&"); // pushOp(&addressof,op)
+                    }
+                    if let Some(sym_arc) = &symbol {
+                        let sym = sym_arc.read().unwrap();
+                        // 1084-1093: off = high->getSymbolOffset();
+                        //   off==0 -> pushSymbol; else pushPartialSymbol
+                        //   (allowCast=false at this call site, printc.cc:1092).
+                        if sym_off == 0 {
+                            let name = sym.get_display_name().to_string();
+                            drop(sym);
+                            self.push_symbol(&name, false, true, false, false);
+                        } else {
+                            let sym_type = sym.get_type().map(|t| t.as_ref().clone());
+                            let name = sym.get_display_name().to_string();
+                            drop(sym);
+                            self.push_partial_symbol(
+                                &name,
+                                sym_off as i64,
+                                0,
+                                sym_type.as_ref(),
+                                None,
+                                false,
+                                false,
+                            );
+                        }
+                    } else {
+                        // 1078-1082: TypeSpacebase *sb = (TypeSpacebase *)ct;
+                        //   Address addr = sb->getAddress(in1const,
+                        //   in0->getSize(), op->getAddr());
+                        //   pushUnnamedLocation(addr,(Varnode *)0,op);
+                        let sb_space = match ct.as_ref() {
+                            Datatype::Spacebase(sb) => sb.spaceid,
+                            _ => None,
+                        };
+                        let addr = match ct.as_ref() {
+                            Datatype::Spacebase(sb) => {
+                                sb.get_address(in1const, ct.get_size() as i32, op.start.addr)
+                            }
+                            _ => crate::address::Address::new(in1const),
+                        };
+                        let spc = sb_space.unwrap_or(AddressSpace::Ram);
+                        self.push_unnamed_location(spc, addr.as_u64());
+                    }
+                    if arrayvalue {
+                        // push_integer(0,4,false,syntax,...) inside the
+                        // subscript surround (1095-1096): `name[0]`.
+                        self.emit.print("[0]");
+                    }
                 } else {
-                    // Spacebase or other structured pointer: emit the fallback
-                    // field name (Ghidra's spacebase arm resolves a symbol or
-                    // unnamed location; Rugra lacks that machinery, P0-3).
+                    // Non-spacebase structured pointer (partial-struct etc.):
+                    // keep the pre-port default-field rendering.
                     if let Some(in0) = op.get_in(0) {
                         self.push_varnode(&in0.read().unwrap(), Some(op));
                     }
@@ -9087,9 +9233,295 @@ impl PrintC {
         self.emit.print(if val != 0 { "true" } else { "false" });
     }
 
-    // Ghidra: printc.cc:900 PrintC::pushPtrCharConstant
-    pub fn push_ptr_char_constant(&mut self, _val: u64, _vn: &Varnode) {
-        self.emit.print("\"<str>\"");
+    // Ghidra: printc.cc:1698 PrintC::pushPtrCharConstant
+    /// Check if the constant pointer refers to character data that can be
+    /// emitted as a quoted string; if so push the string, if not return
+    /// false to indicate a token was not pushed. Faithful port of
+    /// `pushPtrCharConstant` (printc.cc:1698-1719).
+    ///
+    /// Chain: val==0 reject (1701); `glb->resolveConstant` in the default
+    /// data space with the consuming op's address as the resolution point
+    /// (1702-1707); `symboltab->getGlobalScope()->isReadOnly(stringaddr,1,
+    /// Address())` (1709-1710, database.cc:1796-1801); `printCharacterConstant`
+    /// on the pointer's base type (1713-1715); `pushAtom(const_color)` of the
+    /// rendered literal (1717).
+    ///
+    /// Alignment evidence:
+    /// - 引用/输出参数: `ct`/`vn`/`op` are read-only references; the shared
+    ///   StringManager is consulted through the doc_function snapshot so the
+    ///   negative cache is shared with the rule-side consumer
+    ///   (ruleaction.cc:7375); `fullEncoding` is written then discarded by
+    ///   this caller (printc.cc:1707).
+    /// - 循环边界/遍历顺序: no loops in this function; the string read loop
+    ///   lives in the manager (stringmanage.cc:449-463, 32-byte forward
+    ///   chunks) and the escape loop in `escapeCharacterData`
+    ///   (printlanguage.cc:504-509, forward until NUL/-1).
+    /// - 计数器/累加器: none here; `isTrunc` is a manager-side out bool
+    ///   (stringmanage.cc:433/439/473).
+    /// - 排序/比较键: pointer metatype + `isCharPrint()` base selects this
+    ///   arm (printc.cc:1781-1783); the resolved `Address` keys the cache.
+    ///
+    /// Rugra adaptation: the RPN `pushAtom` renders textually as a direct
+    /// `emit.print` of the built literal (the direct-emit equivalent used by
+    /// every push* port in this file). The transitional spaceless
+    /// `Address::new(offset)` is the resolved data-space form (the same key
+    /// form the rule-side consumer uses, ruleaction.rs `Address::new(
+    /// symaddr)`), so the spaceless result is NOT the Ghidra-invalid form —
+    /// the printc.cc:1708 `stringaddr.isInvalid()` arm has no Rust
+    /// representation yet (a failing AddressResolver cannot be expressed;
+    /// SPACE-0001 residual).
+    pub fn push_ptr_char_constant(
+        &mut self,
+        val: u64,
+        ct: &Datatype,
+        _vn: Option<&Varnode>,
+        op: Option<&PcodeOp>,
+    ) -> bool {
+        // printc.cc:1701: if (val==0) return false;
+        if val == 0 {
+            return false;
+        }
+        // printc.cc:1702-1706: spc = glb->getDefaultDataSpace(); point =
+        // op ? op->getAddr() : Address() (invalid).
+        let point = op
+            .map(|o| o.start.addr)
+            .unwrap_or_else(|| crate::address::Address::new(0));
+        // printc.cc:1707: Address stringaddr = glb->resolveConstant(spc,val,
+        //   ct->getSize(),point,fullEncoding);
+        let mut full_encoding = 0u64;
+        let stringaddr = self.resolve_constant_in_default_data_space(
+            val,
+            ct.get_size() as i32,
+            point,
+            &mut full_encoding,
+        );
+        // printc.cc:1708: if (stringaddr.isInvalid()) return false;
+        // (vacuous on the Rust paths — see doc comment: the spaceless form
+        // IS the resolved data-space address, and a failing AddressResolver
+        // has no Rust representation yet, SPACE-0001 residual.)
+        // printc.cc:1709-1710: global-scope read-only check.
+        if !self.global_scope_is_read_only(stringaddr) {
+            return false; // Check that string location is readonly
+        }
+        // printc.cc:1712-1715: ostringstream str; subct = ct->getPtrTo();
+        //   if (!printCharacterConstant(str,stringaddr,subct)) return false;
+        let subct = match ct {
+            Datatype::Pointer(p) => p.ptr_to.clone(),
+            _ => return false,
+        };
+        let mut str = String::new();
+        if !self.print_character_constant(&mut str, stringaddr, &subct) {
+            return false; // Can we get a nice ASCII string
+        }
+        // printc.cc:1717: pushAtom(Atom(str.str(),vartoken,
+        //   EmitMarkup::const_color,op,vn)); — direct-emit form.
+        self.emit.print(&str);
+        true
+    }
+
+    // Ghidra: printc.cc:1730 PrintC::pushPtrCodeConstant
+    /// Attempt to push a function name representing a constant pointer.
+    /// Faithful port of `pushPtrCodeConstant` (printc.cc:1730-1742): resolve
+    /// in the default CODE space (word-size byte conversion first,
+    /// printc.cc:1735), query the global scope for a function there
+    /// (1736), and push the function's display name (1738).
+    ///
+    /// Rugra adaptation: Rugra's printer holds no Funcdata objects, so the
+    /// display name comes from the `symbol_table` snapshot (populated by
+    /// the driver with function display names) keyed by the queried entry
+    /// address — `Scope::query_function_addr` returns the entry address
+    /// (database.cc:1287-1301 `queryFunction`).
+    pub fn push_ptr_code_constant(
+        &mut self,
+        val: u64,
+        _ct: &Datatype,
+        _vn: Option<&Varnode>,
+        _op: Option<&PcodeOp>,
+    ) -> bool {
+        // printc.cc:1733: AddrSpace *spc = glb->getDefaultCodeSpace();
+        let spc = self
+            .spaceman
+            .as_ref()
+            .and_then(|sm| sm.read().unwrap().get_default_code_space())
+            .unwrap_or(AddressSpace::Ram);
+        // printc.cc:1735: val = AddrSpace::addressToByte(val,spc->getWordSize());
+        let word_size = spc.word_size().max(1) as u64;
+        let val = if word_size == 1 { val } else { val / word_size };
+        // printc.cc:1736: fd = symboltab->getGlobalScope()->queryFunction(
+        //   Address(spc,val));
+        let fd_entry = self.query_global_function(crate::address::Address::new(val));
+        // printc.cc:1737-1741: if (fd) { pushAtom(fd->getDisplayName(),
+        //   functoken); return true; } return false;
+        if let Some(name) = fd_entry.and_then(|a| self.symbol_table.get(&a.as_u64()).cloned()) {
+            self.emit.print(&name);
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: printc.cc:1534 PrintC::printCharacterConstant
+    /// Print a quoted (unicode) string at the given address. Faithful port
+    /// of `printCharacterConstant` (printc.cc:1534-1553): retrieve the UTF8
+    /// form from the shared StringManager (1537-1541), empty -> false; the
+    /// wide-character `L` prefix for charsize>1 non-opaque bases
+    /// (`doEmitWideCharPrefix()`, printc.cc:1504-1507, 1543-1545); the
+    /// escaped body (`escapeCharacterData`, printlanguage.cc:498-511, with
+    /// charsize fixed at 1); the `/* TRUNCATED STRING LITERAL */` marker
+    /// when the manager truncated the return (1548-1549).
+    pub fn print_character_constant(
+        &self,
+        out: &mut String,
+        addr: crate::address::Address,
+        char_type: &Datatype,
+    ) -> bool {
+        // printc.cc:1537: StringManager *manager = glb->stringManager;
+        let Some(manager) = &self.string_manager else {
+            return false; // No manager installed: no string data (legacy callers).
+        };
+        // printc.cc:1540-1541: bool isTrunc = false;
+        //   const vector<uint1> &buffer(manager->getStringData(addr,
+        //   charType, isTrunc));
+        let charsize = char_type.get_size() as i32;
+        let opaque = (char_type.get_flags()
+            & crate::type_system::datatype::type_flags::OPAQUE_STRUCT)
+            != 0; // charType->isOpaqueString() (type.hh)
+        let mut is_trunc = false;
+        let buffer = manager
+            .read()
+            .unwrap()
+            .get_string_data(addr, charsize, opaque, &mut is_trunc);
+        // printc.cc:1542-1543: if (buffer.empty()) return false;
+        if buffer.is_empty() {
+            return false;
+        }
+        // printc.cc:1544-1545: if (doEmitWideCharPrefix() &&
+        //   charType->getSize() > 1 && !charType->isOpaqueString()) s << 'L';
+        // (doEmitWideCharPrefix() is unconditionally true for C,
+        // printc.cc:1504-1507.)
+        if charsize > 1 && !opaque {
+            out.push('L');
+        }
+        // printc.cc:1546-1547: s << '"';
+        //   escapeCharacterData(s,buffer.data(),buffer.size(),1,
+        //   glb->translate->isBigEndian());
+        out.push('"');
+        let bigend = self.translate_is_big_endian();
+        self.escape_character_data(out, &buffer, 1, bigend);
+        // printc.cc:1548-1551: the truncation marker.
+        if is_trunc {
+            out.push_str("...\" /* TRUNCATED STRING LITERAL */");
+        } else {
+            out.push('"');
+        }
+        true
+    }
+
+    // Ghidra: printlanguage.cc:498 PrintLanguage::escapeCharacterData
+    /// Emit a byte buffer to the stream as unicode characters: characters
+    /// are emitted until a terminator character (or an illegal encoding)
+    /// stops the loop or `count` bytes are consumed. Faithful port of
+    /// `escapeCharacterData` (printlanguage.cc:498-511) using
+    /// `PrintC::printUnicode` (printc.cc:1426) for each codepoint.
+    /// Returns true if a terminator was reached.
+    ///
+    /// (The free function `printlanguage::escape_character_data` is the
+    /// legacy non-Ghidra char-escaper kept for the legacy emit path; this
+    /// method is the faithful 1:1 port the string-literal path uses.)
+    fn escape_character_data(&self, s: &mut String, buf: &[u8], charsize: i32, bigend: bool) -> bool {
+        let mut i = 0usize;
+        let mut codepoint = 0i32;
+        while i < buf.len() {
+            let (cp, skip) = crate::stringmanage::get_codepoint(&buf[i..], charsize, bigend);
+            codepoint = cp;
+            if codepoint == 0 || codepoint == -1 {
+                break;
+            }
+            self.print_unicode(s, codepoint);
+            i += skip as usize;
+        }
+        codepoint == 0
+    }
+
+    // Ghidra: printc.cc:1702+1707 (getDefaultDataSpace + AddrSpaceManager::resolveConstant)
+    /// Resolve a pointer constant into the default data space. With an
+    /// injected AddrSpaceManager ([`Self::set_space_manager`]) this is the
+    /// full `resolveConstant` (translate.cc:628-641) including any
+    /// registered `AddressResolver` (context-sensitive resolution keyed on
+    /// the consuming op's address); otherwise the default no-resolver path
+    /// applies: `fullEncoding = val`, `addressToByte` (ram wordsize 1),
+    /// `wrapOffset` (identity on the 64-bit space) — i.e. `Address::new(val)`.
+    fn resolve_constant_in_default_data_space(
+        &self,
+        val: u64,
+        sz: i32,
+        point: crate::address::Address,
+        full_encoding: &mut u64,
+    ) -> crate::address::Address {
+        if let Some(sm) = &self.spaceman {
+            let mut mgr = sm.write().unwrap();
+            let spc = mgr
+                .get_default_data_space()
+                .unwrap_or(AddressSpace::Ram);
+            return mgr.resolve_constant(spc, val, sz, point, full_encoding);
+        }
+        // translate.cc:637-641 default path (wordsize 1, no wrap on the
+        // transitional 64-bit ram space).
+        *full_encoding = val;
+        crate::address::Address::new(val)
+    }
+
+    // Ghidra: database.cc:1796 Scope::isReadOnly (as called from printc.cc:1709)
+    /// Global-scope read-only check: `queryProperties(addr,1,usepoint,
+    /// flags)` then `flags & Varnode::readonly`. Faithful to
+    /// `Scope::isReadOnly` (database.cc:1796-1801) driven through the
+    /// symboltab snapshot: symbol-entry flags take precedence
+    /// (database.cc:1269-1270), else the scope flags OR the flagbase
+    /// property (`Database::getProperty`, database.hh:946). The usepoint is
+    /// the invalid `Address()` of printc.cc:1709 (empty use-limit matches
+    /// any code address, database.cc:114 `inUse`).
+    fn global_scope_is_read_only(&self, addr: crate::address::Address) -> bool {
+        let Some(db_arc) = &self.symboltab else {
+            return false; // No symboltab: cannot establish readonly.
+        };
+        let db = db_arc.read().unwrap();
+        let Some(scope) = db.get_global_scope() else {
+            return false;
+        };
+        let stack: [&crate::database::Scope; 1] = [scope];
+        let (_, flags) = crate::database::Scope::query_properties(
+            &stack,
+            addr,
+            1,
+            crate::address::Address::new(0), // the invalid usepoint of printc.cc:1709
+            |a| db.get_property(a),
+        );
+        (flags & crate::varnode::varnode_flags::READONLY) != 0
+    }
+
+    // Ghidra: database.cc:1287 Scope::queryFunction (as called from printc.cc:1736)
+    /// Query the global scope for a function starting at `addr`, returning
+    /// its entry address (the Rust `query_function_addr` form of
+    /// `queryFunction`, which passes back the Funcdata).
+    fn query_global_function(&self, addr: crate::address::Address) -> Option<crate::address::Address> {
+        let db_arc = self.symboltab.as_ref()?;
+        let db = db_arc.read().unwrap();
+        let scope = db.get_global_scope()?;
+        let stack: [&crate::database::Scope; 1] = [scope];
+        crate::database::Scope::query_function_addr(&stack, addr)
+    }
+
+    // RUGRA-GLUE: translate_is_big_endian (Ghidra reads
+    /// `glb->translate->isBigEndian()` at printc.cc:1547; the transitional
+    /// Rugra Architecture/AddrSpaceManager has no Translate-level endianness
+    /// flag, so the default data space's endianness stands in — little-endian
+    /// ram on every locked corpus — until SPACE-0001/ADDRESS-0001 land a
+    /// real Translate.)
+    fn translate_is_big_endian(&self) -> bool {
+        self.spaceman
+            .as_ref()
+            .and_then(|sm| sm.read().unwrap().get_default_data_space())
+            .map(|s| s.is_big_endian())
+            .unwrap_or(false)
     }
 
     // Ghidra: printc.cc:920 PrintC::pushEquate
@@ -10709,7 +11141,13 @@ impl PrintC {
     ///   default cast.
     /// - Counter: default cast path pushes `typecast` op + pushType, then
     ///   pushMod/setMod(force_hex)/push_integer/popMod (printc.cc:1807-1815).
-    pub fn push_constant_typed(&mut self, val: u64, ct: &Datatype) {
+    pub fn push_constant_typed(
+        &mut self,
+        val: u64,
+        ct: &Datatype,
+        vn: Option<&Varnode>,
+        op: Option<&PcodeOp>,
+    ) {
         let mt = ct.get_metatype();
         let sz = ct.get_size();
         match mt {
@@ -10752,13 +11190,29 @@ impl PrintC {
                 self.emit.print("/* void constant */");
             }
             TypeMetatype::Pointer => {
-                // printc.cc:1776-1790.
+                // printc.cc:1775-1790 (TYPE_PTR/TYPE_PTRREL arm).
                 if self.option_null && val == 0 {
+                    // pushAtom(Atom(nullToken,vartoken,var_color,op,vn));
                     self.emit.print("NULL");
                     return;
                 }
-                // pushPtrCharConstant / pushPtrCodeConstant full resolution
-                // is a P0-5 TODO; fall through to the default cast path.
+                // subtype = ((TypePointer *)ct)->getPtrTo(); (1781)
+                if let Datatype::Pointer(p) = ct {
+                    // if (subtype->isCharPrint()) { (1782)
+                    if p.ptr_to.is_char_print() {
+                        // if (pushPtrCharConstant(val,ct,vn,op)) return; (1783-1784)
+                        if self.push_ptr_char_constant(val, ct, vn, op) {
+                            return;
+                        }
+                    } else if p.ptr_to.get_metatype() == TypeMetatype::Code {
+                        // else if (subtype->getMetatype()==TYPE_CODE) {
+                        //   if (pushPtrCodeConstant(val,ct,vn,op)) return; (1786-1788)
+                        if self.push_ptr_code_constant(val, ct, vn, op) {
+                            return;
+                        }
+                    }
+                }
+                // break; -> default cast (printc.cc:1790 + 1806-1815).
                 self.emit_default_cast_constant(val, ct);
             }
             TypeMetatype::Float => {
@@ -10817,16 +11271,30 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1938 PrintC::pushUnnamedLocation
-    /// Emit a name for an address with no symbol, of the form
-    /// `spacename+offset` (e.g. `register20`). Faithful port of
-    /// `PrintC::pushUnnamedLocation` (printc.cc:1938-1945).
-    ///
-    /// Alignment evidence:
-    /// - Output: `s << space->getName(); addr.printRaw(s);` then
-    ///   pushAtom(vartoken, var_color). printRaw emits `0x`+zero-padded hex;
-    ///   Rugra uses the lowercase space name + hex offset.
+    /// Emit a name for an address with no symbol. Faithful port of
+    /// `PrintC::pushUnnamedLocation` (printc.cc:1938-1945):
+    /// `s << space->getName(); addr.printRaw(s);` then the var-color atom.
+    /// `printRaw` is `AddrSpace::printRaw` (space.cc:206-218): `0x` plus the
+    /// zero-padded hex of `byteToAddress(offset,wordsize)`, with the width
+    /// trimmed to 4/6 bytes for an 8-byte space when the high bytes are zero.
     pub fn push_unnamed_location(&mut self, space: AddressSpace, offset: u64) {
-        let name = format!("{}{:x}", Self::space_name(space), offset);
+        let mut sz = space.addr_size() as i32; // getAddrSize()
+        if sz > 4 {
+            if (offset >> 32) == 0 {
+                sz = 4; // Don't print a bunch of zeroes at front of address
+            } else if (offset >> 48) == 0 {
+                sz = 6;
+            }
+        }
+        // byteToAddress(offset, wordsize) = offset * wordsize (space.hh).
+        let wordsize = space.word_size().max(1) as u64;
+        let scaled = if wordsize > 1 { offset * wordsize } else { offset };
+        let name = format!(
+            "{}0x{:0width$x}",
+            Self::space_name(space),
+            scaled,
+            width = (2 * sz) as usize
+        );
         self.emit.tag_variable(&name, 0);
     }
 
@@ -10839,23 +11307,44 @@ impl PrintC {
     /// Ghidra walks `ct = sym->getType()` collecting PartialSymbolEntry:
     ///   - TYPE_STRUCT/UNION -> findTruncation field, `.field`
     ///   - TYPE_ARRAY -> getSubEntry element, `[N]`
+    ///   - other metatype + allowCast -> the SUBPIECE-style cast arm
+    ///     (`vn->getHigh()->getType()` + `isSubpieceCastEndian`, printc.cc:
+    ///     2018-2029) rendering `(outtype)sym...` via the finalcast prefix
+    ///     (2044-2047)
     ///   - no good subtype -> synthetic unnamedField(off,sz), `.field_off_sz`
     /// then pushes operators in reverse and entries front-to-back so
     /// parentheses come out right (printc.cc:1949-2064).
     ///
-    /// Rugra adaptation: no findTruncation/getSubEntry/RPN stack, so this
-    /// renders the equivalent text directly, handling Struct (`.field` for
-    /// the matching offset), Array (`[off/elsize]`), and the synthetic
-    /// fallback. The SUBPIECE-style cast (printc.cc:2018-2029) is a TODO hook.
+    /// Rugra adaptation: no findTruncation/RPN stack, so this renders the
+    /// equivalent text directly, handling Struct (`.field` for the matching
+    /// offset), Array (`[off/elsize]`), the allowCast SUBPIECE-cast arm, and
+    /// the synthetic fallback. `outtype`/`out_space_bigend` carry the
+    /// `vn->getHigh()->getType()` and space endianness the cast arm needs
+    /// (`sym->getFirstWholeMap()->getAddr().getSpace()` is not reachable —
+    /// Rugra's transitional `Address` has no space — so the caller passes
+    /// the consuming varnode's space endianness, Ghidra's own null-space
+    /// fallback at printc.cc:2021-2022).
     ///
     /// Alignment evidence:
-    /// - Sort key: Struct offset lookup -> Array element index -> synthetic
-    ///   name (cascade at printc.cc:1966-2041).
+    /// - Sort key: Struct offset lookup -> Array element index -> allowCast
+    ///   SUBPIECE predicate -> synthetic name (cascade printc.cc:1966-2041).
     /// - Loop/order: bottom-up stack then front-to-back emission preserved
-    ///   textually as left-to-right `sym.field[idx]...` building.
-    pub fn push_partial_symbol(&mut self, sym_name: &str, mut off: i64,
-                               mut sz: i64, ct: Option<&Datatype>) {
+    ///   textually as left-to-right `sym.field[idx]...` building; the
+    ///   finalcast type prefix is emitted before the whole entry chain
+    ///   (printc.cc:2044-2050).
+    pub fn push_partial_symbol(
+        &mut self,
+        sym_name: &str,
+        mut off: i64,
+        mut sz: i64,
+        ct: Option<&Datatype>,
+        outtype: Option<&Datatype>,
+        out_space_bigend: bool,
+        allow_cast: bool,
+    ) {
         let mut entries: Vec<String> = Vec::new();
+        // printc.cc:1955: Datatype *finalcast = (Datatype *)0;
+        let mut finalcast: Option<String> = None;
         // Walk the type tree via Arc clones so field/array descent (which
         // returns Arc<Datatype>) composes with the entry-point borrow.
         let mut current: Option<Arc<Datatype>> = ct.map(|d| Arc::new(d.clone()));
@@ -10865,7 +11354,9 @@ impl PrintC {
         let mut depth = 0;
         while depth < 16 {
             depth += 1;
-            let Some(dt) = current else { break; };
+            // Arc bump instead of a move: the allowCast arm reassigns
+            // `current` below while `dt` stays live for the synthetic block.
+            let Some(dt) = current.clone() else { break; };
             // printc.cc:1960-1964: off==0 and sz covers whole type -> done.
             // The needsResolution rejection is waived for TYPE_PTR pointers
             // (`(!ct->needsResolution() || ct->getMetatype()==TYPE_PTR)`,
@@ -10876,6 +11367,7 @@ impl PrintC {
                 break;
             }
             let metatype = dt.get_metatype();
+            let mut succeeded = false;
             if metatype == TypeMetatype::Struct || metatype == TypeMetatype::Union {
                 // printc.cc:1966-1985 / 2001-2016: findTruncation field.
                 if let Some((field_name, field_off, field_type)) =
@@ -10894,18 +11386,43 @@ impl PrintC {
                     current = Some(element_type);
                     continue;
                 }
+            } else if allow_cast {
+                // printc.cc:2018-2029: the SUBPIECE-style cast arm.
+                // Datatype *outtype = vn->getHigh()->getType();
+                if let Some(outtype) = outtype {
+                    // castStrategy->isSubpieceCastEndian(outtype,ct,off,
+                    //   spc->isBigEndian()) — cast.rs:141 is the 1:1 port of
+                    // cast.cc:436-455.
+                    if self
+                        .cast_strategy
+                        .is_subpiece_cast_endian(outtype, &dt, off as u32, out_space_bigend)
+                    {
+                        // Treat truncation as SUBPIECE style cast (2024-2027).
+                        finalcast = Some(outtype.get_name().to_string());
+                        current = None;
+                        succeeded = true;
+                    }
+                }
             }
-            // printc.cc:2030-2041: synthetic entry, then ct=nullptr. The
-            // atom text is `PrintLanguage::unnamedField(off,size)`
-            // (printlanguage.cc:719-727): `s << '_' << off << '_' << size << '_'`.
-            if sz == 0 {
-                sz = dt.get_size() as i64 - off;
+            if !succeeded {
+                // printc.cc:2030-2041: synthetic entry, then ct=nullptr. The
+                // atom text is `PrintLanguage::unnamedField(off,size)`
+                // (printlanguage.cc:719-727): `s << '_' << off << '_' << size << '_'`.
+                if sz == 0 {
+                    sz = dt.get_size() as i64 - off;
+                }
+                entries.push(format!("._{}_{}_", off, sz));
+                break;
             }
-            entries.push(format!("._{}_{}_", off, sz));
-            break;
         }
-        // printc.cc:2044-2047: SUBPIECE-style cast is a TODO hook (Rugra has
-        // no isSubpieceCastEndian); skipping == option_nocasts behaviour.
+        // printc.cc:2044-2047: final cast prefix
+        //   `if ((finalcast != 0)&&(!option_nocasts)) { pushOp(&typecast);
+        //    pushType(finalcast); }`.
+        if let Some(ft) = &finalcast {
+            if !self.option_nocasts {
+                self.emit.print(&format!("({})", ft));
+            }
+        }
         // printc.cc:2049-2051: pushSymbol(sym) then entries front-to-back.
         self.emit.tag_variable(sym_name, 0);
         for e in &entries {
@@ -11199,12 +11716,34 @@ impl PrintC {
                                 let sym_type = sym.get_type().map(|t| t.as_ref().clone());
                                 let name = sym.get_display_name().to_string();
                                 drop(sym);
+                                // printc.cc:859: pushPartialSymbol(sym,byteOff,
+                                //   sz,op->getOut(),op,slot,TRUE) — the cast
+                                // arm's outtype is the OUT varnode's
+                                // HighVariable type (printc.cc:2019), with the
+                                // out space's endianness (the null-space
+                                // fallback of printc.cc:2021-2022).
+                                let (outtype, out_space_bigend) = {
+                                    let out_vn = op.get_out().map(|a| a.read().unwrap());
+                                    match out_vn {
+                                        Some(o) => (
+                                            o.get_high().map(|h| {
+                                                let t = h.read().unwrap().get_type();
+                                                t.as_ref().clone()
+                                            }),
+                                            o.get_space().is_big_endian(),
+                                        ),
+                                        None => (None, false),
+                                    }
+                                };
                                 drop(vn);
                                 self.push_partial_symbol(
                                     &name,
                                     byte_off,
                                     sz as i64,
                                     sym_type.as_ref(),
+                                    outtype.as_ref(),
+                                    out_space_bigend,
+                                    true,
                                 );
                                 return;
                             }
@@ -11527,9 +12066,17 @@ impl PrintC {
                 let slot = match slot { Some(s) => s, None => return false };
                 let other = match read_op.get_in(1 - slot) { Some(a) => a, None => return false };
                 let other_vn = other.read().unwrap();
-                // cast.cc:281-285: constant bigger than promotion size -> not implied
+                // cast.cc:281-285: constant bigger than promotion size -> not implied.
+                // The promotion size is CastStrategyC's `promoteSize`
+                // (`promoteSize = tlst->getSizeOfInt()`, cast.cc:27) — 4 on
+                // every locked corpus (x86/x64 `int`), matching the
+                // strategy this printer constructs (`CastStrategyC::new(4)`).
+                // M4 residual (PRINTC-PTRCONST-DAT-SYMBOL-0001): the field is
+                // private with no accessor (src/type_system/cast.rs out of
+                // this task's write-set); routing this comparison through
+                // `self.cast_strategy` needs a `get_promote_size()` there.
                 if other_vn.is_constant() {
-                    if other_vn.get_size() > 4 { // promote_size = 4 (x86/x64 int)
+                    if other_vn.get_size() > 4 { // promote_size (cast.cc:27)
                         return false;
                     }
                 } else if !other_vn.is_explicit() {
