@@ -711,6 +711,26 @@ pub fn is_known_no_return(symbol_name: &str) -> bool {
         .contains(&strip_leading_underscores(symbol_name))
 }
 
+// RUGRA-GLUE: Java-side analyzer makeNoReturnFunction
+// (NoReturnFunctionAnalyzer.java:121-180, the functionAt.setNoReturn(true)
+// calls at :144/:168) with no decompiler-C++ counterpart; the driver's
+// program-database equivalent for the function being decompiled.
+/// Pre-flow function-attribute half of FLOW-NORETURN-DATA-0001: set
+/// `no_return` on the decompiled function's own FuncProto when its primary
+/// symbol name matches the Known list — the analyzer's
+/// `functionAt.setNoReturn(true)` DB attribute, which flow-time queryCall
+/// reads via copyFlowEffects (flow.cc:663-664) for callers' call sites.
+/// Idempotent: re-marking keeps the bit, and a non-matching name never
+/// clears it (the analyzer never unsets the flag on non-matches). Returns
+/// whether the function was marked (for the [PREPASS] log).
+pub fn mark_known_no_return_function(fd: &mut Funcdata, symbol_name: &str) -> bool {
+    if !is_known_no_return(symbol_name) {
+        return false;
+    }
+    fd.funcp.set_no_return(true);
+    true
+}
+
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
 // signature proto on the call site, (3) refresh the CALL op's typed fspec
@@ -1878,20 +1898,39 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     target.name, import_name, error
                 ),
             }
-            // FLOW-NORETURN-DATA-0001: the analyzer's `functionAt.setNoReturn
-            // (true)` on the (thunk/external) function itself — the flag the
-            // program database carries on the callee's own FuncProto,
-            // independent of any locked signature. Callers consume it via
-            // queryCall's copyFlowEffects once the flow-time channel
-            // (CALLSPEC-NORETURN-WIRE-0001 segment (b)) lands.
-            if is_known_no_return(&import_name) {
-                fd.funcp.set_no_return(true);
-                eprintln!(
-                    "[PREPASS] {} marked known no-return ({} matches Non-Returning Functions - Known)",
-                    target.name, import_name
-                );
-            }
         }
+    }
+    // FLOW-NORETURN-DATA-0001, pre-flow function-attribute half (merge
+    // adjudication, root c1598da follow-up): Ghidra's "Non-Returning
+    // Functions - Known" analyzer marks the matched function's own DB
+    // attribute BEFORE any decompilation runs — `functionAt.setNoReturn
+    // (true)` on the (defined or thunk/external) function itself — and the
+    // flow-time queryCall then reads that callee attribute and copies it
+    // onto callers' call sites (flow.cc:663-664 copyFlowEffects, consumed
+    // by checkForFlowModification's artificialHalt; CALLSPEC-NORETURN-WIRE
+    // -0001 segment (b) on Rugra's side). This general marking subsumes the
+    // former PLT-thunk-only half: any decompiled function whose primary
+    // symbol matches the Known list carries the bit. Placement notes: (1)
+    // AFTER the DWARF/PLT prototype overlays, because those replace
+    // fd.funcp wholesale and would wipe an earlier bit; (2) applies
+    // whether or not a locked signature was installed — the analyzer bit is
+    // independent of the prototype model; (3) NOT gated by
+    // RUGRA_DISABLE_CALLSPEC_LINK — the analyzer is a pre-decompile
+    // platform pass, distinct from the callspec-link A/B gate; (4)
+    // idempotent with the post-flow callsite marking in link_call_specs:
+    // that sets the call-site proto's bit (queryCall's copy position),
+    // this sets the function's own proto bit (the analyzer's DB attribute)
+    // — two different objects, both faithful.
+    let target_symbol_name = fd
+        .symbol_table
+        .get(&target.vaddr)
+        .cloned()
+        .unwrap_or_else(|| target.name.clone());
+    if mark_known_no_return_function(&mut fd, &target_symbol_name) {
+        eprintln!(
+            "[PREPASS] {} marked known no-return ({} matches Non-Returning Functions - Known)",
+            target.name, target_symbol_name
+        );
     }
     fd.external_prototypes = proto_db;
     // Seed the DWARF global types: each address constant referencing a
@@ -3581,5 +3620,38 @@ mod flow_noreturn_data_tests {
             assert!(!name.ends_with('*'), "{name} must not be a wildcard entry");
             assert_eq!(name, name.trim(), "{name} must be pre-trimmed");
         }
+    }
+
+    /// Pre-flow function-attribute marking (merge adjudication slice): a
+    /// GENERAL callee — a locally defined function, not a PLT thunk — gets
+    /// its own FuncProto's no_return bit set before flow runs, mirroring
+    /// the analyzer's functionAt.setNoReturn(true) on the function itself.
+    #[test]
+    fn preflow_marking_sets_function_attribute_for_general_callee() {
+        // A defined .text function named panic (no PLT/import involved).
+        let mut fd = Funcdata::new("panic", Address::new(0x12000), 64);
+        assert!(!fd.funcp.is_no_return());
+        assert!(mark_known_no_return_function(&mut fd, "panic"));
+        assert!(fd.funcp.is_no_return());
+        // Underscored general callee form (glibc convention).
+        let mut fd2 = Funcdata::new("__stack_chk_fail", Address::new(0x12100), 32);
+        assert!(mark_known_no_return_function(&mut fd2, "__stack_chk_fail"));
+        assert!(fd2.funcp.is_no_return());
+    }
+
+    /// Non-members are left untouched, and the marking never clears an
+    /// existing bit (the analyzer only ever sets the flag on matches).
+    #[test]
+    fn preflow_marking_is_idempotent_and_never_clears() {
+        let mut fd = Funcdata::new("glob_word", Address::new(0x12200), 128);
+        // Non-member: no marking, bit stays clear.
+        assert!(!mark_known_no_return_function(&mut fd, "glob_word"));
+        assert!(!fd.funcp.is_no_return());
+        // Member: marked; re-mark (idempotent) keeps it; a later non-member
+        // pass on the same fd never unsets (analyzer has no clear path).
+        assert!(mark_known_no_return_function(&mut fd, "exit"));
+        assert!(mark_known_no_return_function(&mut fd, "exit"));
+        assert!(!mark_known_no_return_function(&mut fd, "glob_word"));
+        assert!(fd.funcp.is_no_return());
     }
 }
