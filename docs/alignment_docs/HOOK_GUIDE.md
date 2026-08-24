@@ -103,6 +103,31 @@ ZCode CLI 的项目级 hook 配置在 **`<project>/.zcode/config.json`** (不是
 - 若 PostToolUse hook 未生效 (旧 session), agent 可手动
   `python .zcode/record_receipt.py coreaction.cc 4886 4960` 补回执。
 
+## 跨根编辑语义（GATE-WORKTREE-ROOTMISMATCH-0001）
+
+hook 根（由脚本自身位置推导的 ROOT）与被编辑文件所在仓不一致时（典型形态：协调者
+会话的项目目录=主仓，派生的子 Agent 在 worktree 中编辑 `src/*.rs`，主仓 hook 收到
+worktree 文件路径），gate **不再静默放行**，按以下顺序处理：
+
+1. 用被编辑文件所在目录解析 `git rev-parse --show-toplevel`（清洗
+   `GIT_DIR`/`GIT_WORK_TREE` 等劫持变量，清洗清单与
+   `tools/check_gate_health.py` 的 GATE-WORKTREE-GITDIR-0001 一致）；
+2. 若文件相对该 toplevel 是 `src/*.rs`，则以该 toplevel 作为 gate root：
+   回执文件、session 起始戳、ghidra 路径全部改锚定到该 toplevel（worktree 的
+   `ghidra` 是 symlink，`resolve()` 归一化后与 worktree 本地 hook 行为一致），
+   照常按该仓自己的回执判定 allow/deny —— 跨根时门禁**正确工作**，而非一律拒绝；
+3. 仍无法解析出任何 repo root 且路径形态可疑（含 `/src/` 组件且以 `.rs` 结尾）
+   → **fail-closed**：deny 并输出
+   “hook 根与文件根不一致且无法解析 toplevel”，提示改在文件所属仓的会话中编辑；
+4. 跨根的非 src 文件（如别的仓的 docs）照旧不 gate；`ZCODE_ALIGN_GATE=0` 逃生阀
+   与既有日志行为不变；文件就在 hook ROOT 下的主流程行为不变。
+
+`.zcode/align_gate.log` 中的 `CROSS-ROOT rebase ...`（成功重锚定）与
+`DENY cross-root-unresolved ...`（fail-closed）条目即该分支的运行痕迹。
+`--self-test` 内含跨根用例（`TemporaryDirectory` + 临时 git 仓模拟 worktree 布局，
+不触碰真实 worktree），CI 的 `--self-test` 步骤随之覆盖；
+`tools/check_gate_health.py` 对 rebase/fail-closed 分支做静态断言。
+
 ## 哪些 fn 会被 gate
 
 `align_gate.py` 对**受编辑影响的 src/*.rs fn**, 找其 Ghidra 对应位置:

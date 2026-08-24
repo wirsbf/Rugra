@@ -76,6 +76,30 @@ def main() -> int:
     if not scanner.is_file():
         failures.append("missing shared Rust function scanner")
 
+    # GATE-WORKTREE-ROOTMISMATCH-0001: cross-root edits (hook root != edited
+    # file's root, e.g. a main-repo hook dispatching for a worktree file) must
+    # be re-gated against the file's own git toplevel, and suspicious
+    # /src/*.rs paths resolving to no root must fail closed — never silently
+    # allowed. Static assertions keep those branches from regressing.
+    gate_script = ROOT / ".zcode/align_gate.py"
+    try:
+        gate_text = gate_script.read_text(encoding="utf-8")
+    except OSError as exc:
+        failures.append(f"cannot read .zcode/align_gate.py: {exc}")
+    else:
+        for required in (
+            "rev-parse",                       # toplevel rebase lookup
+            "--show-toplevel",
+            "GATE-WORKTREE-ROOTMISMATCH-0001", # tracked defect marker
+            "_rebase_gate_paths",              # receipts/session re-anchor
+            "fail-closed",                     # unresolved-root deny branch
+            "_self_test_cross_root",           # runtime self-test coverage
+        ):
+            if required not in gate_text:
+                failures.append(
+                    f"align_gate.py lost cross-root gate handling: {required}"
+                )
+
     pre_commit = hook_text.get(".githooks/pre-commit", "")
     for command in (
         "tools/check_gate_health.py",

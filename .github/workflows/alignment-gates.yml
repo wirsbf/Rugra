@@ -37,6 +37,8 @@ jobs:
         run: |
           python3 tools/rust_fn_scanner.py
           python3 tools/check_ghidra_annotations.py --self-test
+          # --self-test also covers GATE-WORKTREE-ROOTMISMATCH-0001
+          # cross-root gating (temp git repos simulate worktree layouts).
           python3 .zcode/align_gate.py --self-test
           python3 tools/check_ghidra_annotations.py --all
 

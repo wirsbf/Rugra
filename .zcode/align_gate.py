@@ -29,6 +29,15 @@ Bypass rules (do NOT block):
   - first-time creation of a fn whose annotation is being added in THIS edit
   - ZCODE_ALIGN_GATE=0 in env (escape hatch, log it)
 
+Cross-root edits (GATE-WORKTREE-ROOTMISMATCH-0001): when the edited file lives
+outside the hook's ROOT (e.g. a main-repo hook dispatching for a worktree
+file), the gate re-resolves the file's own `git rev-parse --show-toplevel`
+(GIT_* hijack vars scrubbed, same list as tools/check_gate_health.py) and, for
+`toplevel/src/*.rs` files, re-anchors receipts/session/ghidra paths onto that
+toplevel so the edit is gated by the file's own repo state. Paths that look
+like gated Rust source ('/src/' + '.rs') but resolve to NO git root are denied
+(fail-closed) instead of silently allowed.
+
 Receipt freshness: a receipt for ghidra file F counts if its read timestamp is
 >= the mtime-stamp of the receipt entry recording the *previous* successful
 gate for that (rs_fn, F) pair — i.e. "re-read after each edit cycle". Concretely
@@ -40,10 +49,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]          # .../rugra
 sys.path.insert(0, str(ROOT / "tools"))
@@ -352,6 +362,122 @@ def _gate_key(file_rel: str, affected_fn: dict, gfile: str) -> str:
 
 
 # ----------------------------------------------------------------------------
+# Cross-root dispatch (GATE-WORKTREE-ROOTMISMATCH-0001)
+# ----------------------------------------------------------------------------
+def _scrubbed_git_env() -> dict[str, str]:
+    """GATE-WORKTREE-GITDIR-0001 (same scrub list as tools/check_gate_health.py):
+    git exports GIT_DIR/GIT_WORK_TREE (and friends) when hooks run from linked
+    worktrees; those env vars would override per-cwd repo discovery and hijack
+    the toplevel query below, so strip them for every git subprocess."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+        )
+    }
+
+
+def _nearest_existing_dir(start: Path) -> Path | None:
+    """First existing ancestor directory of ``start`` (the file being written
+    may not exist yet, and neither may its parent)."""
+    probe = start
+    while not probe.is_dir():
+        if probe.parent == probe:
+            return None
+        probe = probe.parent
+    return probe
+
+
+def _git_toplevel(file_path: Path) -> Path | None:
+    """Resolve the git toplevel governing ``file_path`` (works from inside
+    linked worktrees too: --show-toplevel returns the worktree root)."""
+    probe = _nearest_existing_dir(file_path.parent)
+    if probe is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(probe),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_scrubbed_git_env(),
+            timeout=10,
+        )
+    except Exception:
+        return None
+    top = result.stdout.strip() if result.returncode == 0 else ""
+    return Path(top) if top else None
+
+
+def _rebase_onto_file_root(file_path: Path) -> tuple[Path, str] | None:
+    """GATE-WORKTREE-ROOTMISMATCH-0001: when the edited file lives outside the
+    hook's ROOT (main-repo hook / worktree file), re-anchor gating onto the
+    file's own git toplevel. Returns (toplevel, file_rel) when the file is
+    ``<toplevel>/src/*.rs``, else None (not gated content for any root)."""
+    toplevel = _git_toplevel(file_path)
+    if toplevel is None:
+        return None
+    try:
+        rel = str(file_path.resolve().relative_to(toplevel.resolve())).replace("\\", "/")
+    except Exception:
+        return None
+    if rel.startswith("src/") and rel.endswith(".rs"):
+        return (toplevel, rel)
+    return None
+
+
+def _is_suspicious_external_src(file_rel: str) -> bool:
+    """A path that looks like gated Rust source (a '/src/' component plus a
+    '.rs' suffix) that no resolvable git root claims. Receipts cannot be
+    located for it, so it must fail closed rather than pass silently."""
+    return f"/{file_rel}".count("/src/") > 0 and file_rel.endswith(".rs")
+
+
+def _rebase_gate_paths(gate_root: Path) -> None:
+    """GATE-WORKTREE-ROOTMISMATCH-0001: anchor the gate's state files onto the
+    edited file's repo root. Receipts and the session-start marker are
+    gitignored per-worktree session state, so they must be read/written in the
+    file's own repo. Only invoked on the cross-root path; the same-root flow
+    keeps the module-level anchors derived from the script's own location."""
+    global SRC, GHIDRA_CPP, RECEIPTS, SESSION_START
+    SRC = gate_root / "src"
+    GHIDRA_CPP = (
+        gate_root
+        / "ghidra"
+        / "Ghidra"
+        / "Features"
+        / "Decompiler"
+        / "src"
+        / "decompile"
+        / "cpp"
+    )
+    RECEIPTS = gate_root / ".alignment_receipts.json"
+    SESSION_START = gate_root / ".alignment_session_start"
+
+
+def _cross_root_deny_reason(file_path_str: str) -> str:
+    return (
+        "BLOCKED by align_gate (GATE-WORKTREE-ROOTMISMATCH-0001): "
+        "hook 根与文件根不一致且无法解析 toplevel — the hook's root "
+        f"{ROOT} does not contain '{file_path_str}', no git toplevel could be "
+        "resolved from the file's directory, and the path looks like gated "
+        "Rust source ('/src/' + '.rs'), so read-receipts cannot be located "
+        "for it (fail-closed). Fix: edit via a session whose project dir is "
+        "the file's own repo/worktree (its .zcode hooks gate it there), or "
+        "record a receipt in that repo first. ZCODE_ALIGN_GATE=0 remains the "
+        "documented escape hatch for registered gate repairs."
+    )
+
+
+# ----------------------------------------------------------------------------
 # SessionStart handling
 # ----------------------------------------------------------------------------
 def handle_session_start() -> int:
@@ -406,6 +532,97 @@ def emit_decision(allow: bool, reason: str) -> int:
         sys.stderr.write(reason + "\n")
         return 2
     return 0
+
+
+def _run_script(script: Path, payload: dict) -> subprocess.CompletedProcess:
+    """Run the gate end-to-end as a real hook subprocess (stdin JSON), with
+    GIT_* hijack vars scrubbed and the ZCODE_ALIGN_GATE hatch force-disabled so
+    the caller's environment cannot skew the self-test."""
+    env = {
+        key: value
+        for key, value in _scrubbed_git_env().items()
+        if key != "ZCODE_ALIGN_GATE"
+    }
+    return subprocess.run(
+        [sys.executable, str(script)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+        timeout=60,
+    )
+
+
+def _self_test_cross_root(script: Path) -> None:
+    """GATE-WORKTREE-ROOTMISMATCH-0001: a hook whose ROOT differs from the
+    edited file's repo must gate correctly instead of silently allowing.
+    Simulated with throwaway temp git repos; real worktrees are never
+    touched."""
+    def edit_payload(target: Path, old: str, new: str) -> dict:
+        return {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(target),
+                "old_string": old,
+                "new_string": new,
+            },
+        }
+
+    with TemporaryDirectory(prefix="align_gate_xroot_") as tmp:
+        base = Path(tmp)
+
+        # (1) cross-root src/*.rs in its own temp git repo, no receipts ->
+        #     standard BLOCKED deny naming the annotated Ghidra file.
+        repo = base / "wt" / "repo"
+        (repo / "src").mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+            env=_scrubbed_git_env(),
+        )
+        sample = repo / "src" / "sample.rs"
+        sample.write_text(
+            "// Ghidra: action.cc:100 target_fn\n"
+            "fn target_fn() { let _ = 1; }\n",
+            encoding="utf-8",
+        )
+        result = _run_script(script, edit_payload(sample, "fn target_fn", "fn renamed"))
+        assert result.returncode == 2, (result.returncode, result.stdout, result.stderr)
+        combined = result.stdout + result.stderr
+        assert "action.cc" in combined, combined
+
+        # (2) same file with fresh receipts in ITS repo -> allowed (exit 0).
+        (repo / ".alignment_session_start").write_text(
+            str(time.time() - 60), encoding="utf-8"
+        )
+        (repo / ".alignment_receipts.json").write_text(
+            json.dumps(
+                {"reads": {"action.cc": {"ts": time.time(), "ranges": [[100, 100]]}},
+                 "gated_edits": {}}
+            ),
+            encoding="utf-8",
+        )
+        result = _run_script(script, edit_payload(sample, "fn target_fn", "fn renamed"))
+        assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+
+        # (3) suspicious /src/*.rs path inside NO git repo -> fail-closed deny.
+        orphan = base / "orphan" / "src" / "orphan.rs"
+        orphan.parent.mkdir(parents=True)
+        orphan.write_text("fn lone() {}\n", encoding="utf-8")
+        result = _run_script(script, edit_payload(orphan, "fn lone", "fn alone"))
+        assert result.returncode == 2, (result.returncode, result.stdout, result.stderr)
+        combined = result.stdout + result.stderr
+        assert "toplevel" in combined, combined
+
+        # (4) cross-root NON-src file in the temp repo -> not gated (exit 0).
+        note = repo / "docs" / "note.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("note\n", encoding="utf-8")
+        result = _run_script(script, edit_payload(note, "note", "notes"))
+        assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
 
 
 def run_self_test() -> None:
@@ -472,6 +689,11 @@ fn repeated_b() { shared_call(); }
     identity["fn_line"] = 999
     assert _gate_key("src/sample.rs", identity, "action.cc") == before_move
 
+    assert _is_suspicious_external_src("/tmp/wt/src/a.rs")
+    assert not _is_suspicious_external_src("/tmp/wt/docs/a.rs")
+    assert not _is_suspicious_external_src("/tmp/wt/src.rs")
+    _self_test_cross_root(Path(__file__).resolve())
+
 
 def main() -> int:
     args = sys.argv[1:]
@@ -489,8 +711,10 @@ def main() -> int:
     file_path = Path(file_path_str)
     try:
         file_rel = str(file_path.relative_to(ROOT)).replace("\\", "/")
+        cross_root = False
     except Exception:
         file_rel = file_path_str.replace("\\", "/")
+        cross_root = True
 
     if ENV_OFF:
         log(f"SKIP (ZCODE_ALIGN_GATE=0) tool={tool} file={file_rel}")
@@ -498,7 +722,28 @@ def main() -> int:
 
     # Only care about src/*.rs
     if not (file_rel.startswith("src/") and file_rel.endswith(".rs")):
-        return 0
+        if not cross_root:
+            return 0
+        # GATE-WORKTREE-ROOTMISMATCH-0001: hook ROOT != edited file's root
+        # (main-repo hook dispatching for a worktree file). The pre-fix code
+        # reached this `return 0` for absolute worktree paths and silently
+        # allowed the edit (fail-open, see B7 audit §7). Instead: re-anchor
+        # onto the file's own git toplevel and gate there; deny (fail-closed)
+        # when a suspicious /src/*.rs path resolves to no root at all.
+        if not file_path.is_absolute():
+            return 0
+        rebased = _rebase_onto_file_root(file_path)
+        if rebased is None:
+            if _is_suspicious_external_src(file_rel):
+                log(f"DENY cross-root-unresolved tool={tool} file={file_rel}")
+                return emit_decision(False, _cross_root_deny_reason(file_path_str))
+            return 0
+        gate_root, file_rel = rebased
+        _rebase_gate_paths(gate_root)
+        log(
+            f"CROSS-ROOT rebase tool={tool} hook_root={ROOT} "
+            f"gate_root={gate_root} file={file_rel}"
+        )
 
     touch_session_start()
     sess_ts = session_start_ts()
