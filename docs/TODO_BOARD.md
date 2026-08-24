@@ -2,7 +2,32 @@
 
 本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
 
-## 活跃 wave：`W-2026-08-23-PARALLEL-FOUNDATION`（进行中，隔离分支并行）
+## 活跃 wave：`W-2026-08-24-TRIFUNC-GAP`（进行中；基线 = fresh `f7b3c31` artifact，三函数严格 0/3）
+
+> 目标：hugehelp/progressbarinit/my_fwrite 严格字节一致 + 函数体差距驱动的根因修复 + TODO 清算。
+> root 串行集成；所有 writer 走隔离 worktree + `/tmp/rugra-cargo-build.lock` + 专属 CARGO_TARGET_DIR；本节 root 维护，worker 禁改。
+> 审计产出已归档 docs/alignment_docs/：GATE_HEALTH / PTRSUB_DOWNCHAIN / STOP_WIRING / D2_BUILDLOCALTYPES_DESIGN / FRESH_BASELINE_TRIAGE / CONTINUITY_DIRTY_FILES_AUDIT（均 *_2026-08-24.md）。
+
+### 本 wave 认领租约
+
+| ID | P | 状态 | owner | 精确 write-set | 备注 / 证据 |
+|---|---|---|---|---|---|
+| `TYPEOP-LOCALTYPE-DISPATCH-0001`(D1) | P0 | IN_PROGRESS | a1@wt-typeop-localtype-d1 | `src/typeop.rs`, `docs/api/typeop.md`, `tests/oracle/typeop_local_type_1204.*`, runner | 审前人 WIP diff 后续作；2026-08-24 |
+| `TYPEFACTORY-EXACTPIECE-CALLERS-0001` | P0 | IN_PROGRESS | a2@wt-myfwrite-splitdatatype | `src/{variable,database,funcdata,ruleaction}.rs` + coreaction 单点, docs, `tests/oracle/exactpiece_callers_1204.*`, runner | 同上；2026-08-24 |
+| `JUMPTABLE-THUNK-CLASSIFY-0001` | P0 | REWORK_IN_PROGRESS | a3@wt-jt-thunk-classify | `src/jumptable.rs`, docs, fixture/runner | 闭合 5 项 REJECT 理由 + 全量 24-case 重跑；2026-08-24 |
+| `ACTION-EXECUTOR-BREAKPOOL-0001` | P0 | REWORK_IN_PROGRESS | a4@wt-action-break-pool | `src/action.rs`, docs, fixture/runner | Group direct-apply 修正 + 完整重跑；2026-08-24 |
+| `LANEDIVIDE-EVIDENCE-STATUS-REPAIR-0001` | P0 | IN_PROGRESS | a5@wt-lanedivide-repin | `tests/oracle/lanedivide_infra_1204.metadata.json`, `tools/run_lanedivide_infra_oracle.sh` | 真实重跑后保守迁移 B2；2026-08-24 |
+| `GATE-WORKTREE-ROOTMISMATCH-0001` | P0 | IN_PROGRESS | a6@wt-gate-rootmismatch | `.zcode/align_gate.py`, `tools/check_gate_health.py`, CI yml, HOOK_GUIDE | 跨根 toplevel 重锚定 + fail-closed；审计=GATE_HEALTH_AUDIT_2026-08-24；2026-08-24 |
+| `TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001` | P0 | IN_PROGRESS | a7@wt-tf-downchain | `src/type_system/typefactory.rs`, docs, `tests/oracle/typefactory_downchain_virtual_1204.*`, runner | B1 方案切片1（地基，无 production caller）；2026-08-24 |
+| `TYPEOP-FSPEC-SPACE-0001`(切片1) | P0 | IN_PROGRESS | a8@wt-fspec-space | `src/{space,address}.rs`, docs, `tests/oracle/fspec_space_identity_1204.*`, runner | 消费侧切片2 待 varnode/funcdata 释放；2026-08-24 |
+| `FLOW-TAILCALL-OVERTRACE-0001` | P0 | IN_PROGRESS | a9@wt-flow-overtrace | `src/flow.rs`, docs, `tests/oracle/flow_tailcall_overtrace_1204.*`, runner | B6 Top2 `glob_word` visited 污染；2026-08-24 |
+| `BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001` | P0 | IN_PROGRESS | a10@wt-blockstruct-goto | `src/blockaction.rs`, docs, `tests/oracle/blockstruct_goto_cascade_1204.*`, runner | B6 最大扇出簇 68 处；白名单模块，集成前 Cross-Review；2026-08-24 |
+| `FLOW-JUMPTABLE-GETPARAM-0001` | P0 | DIAGNOSIS | a11（只读） | 无写；报告 /tmp/rugra-reports/A11-GETPARAM-JUMPTABLE-DIAG.md | B6 Top1 `getparameter.constprop.0`；修复租约待 a3 释放 jumptable.rs；2026-08-24 |
+| `REGISTRY-CONTINUITY-W1-0001` | P0 | IN_PROGRESS | a12@wt-registry-w1 | `tools/oracle_registry.py`, `docs/alignment_audit/{FUNCTION_ID_CONTINUITY.json,FUNCTION_LEDGER.json,DEPENDENCY_DAG.json,FUNCTION_MAP.generated.md}` | B8 方案步骤2+3：checkpoint 前滚 9640→9726 + 三件套再生；fixture_registry 落库仍由 root 串行；2026-08-24 |
+| `PRINTC-CAST-OPNAME-LEAK-0001` | P1 | QUEUED | 待 B4 审计后发射 | `src/printc.rs`, docs, fixture | 与下行串行（同租约）；2026-08-24 |
+| `PRINTC-PTRCONST-DAT-SYMBOL-0001` | P1 | QUEUED | 待 B4 审计后发射 | `src/{printc,stringmanage}.rs`, docs, fixture | 与上行串行；2026-08-24 |
+
+## 历史 wave：`W-2026-08-23-PARALLEL-FOUNDATION`（未完租约由 W-2026-08-24-TRIFUNC-GAP 接管续跑；保留认领记录）
 
 > 2026-08-23 证据基线三批已原子提交，停止继续扩张同一加固批。当前 17-thread runtime
 > 动态保持至少 10 个后台子 Agent：互斥 `/tmp` 算法 worktree writer、fixture writer 与独立只读 reviewer 并行，其余线程
