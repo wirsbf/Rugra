@@ -24,6 +24,7 @@ impl NamingScope {
     fn new(_name: &str, local_ranges: &[(u64, u64)]) -> Self {
         let mut scope = ScopeLocal::new();
         scope.local_range = local_ranges.to_vec();
+        scope.proto_local_range = local_ranges.to_vec();
         NamingScope { scope }
     }
 
@@ -52,7 +53,7 @@ impl NamingScope {
     fn add(&mut self, nm: &str, ct: Arc<Datatype>, offset: u64, has_usepoint: bool,
            cat: i32, catidx: i32) {
         let usepoint = if has_usepoint { Some(0x1000) } else { None };
-        let idx = self.scope.add_symbol(nm, Some(ct), offset, usepoint);
+        let idx = self.scope.add_symbol(AddressSpace::Stack, nm, Some(ct), offset, usepoint);
         if cat >= 0 {
             self.scope.set_category(idx, cat, catidx);
         }

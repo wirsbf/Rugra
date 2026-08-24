@@ -36,13 +36,13 @@ if [[ -z "$user_home" || ! -d "$user_home" ]]; then
 fi
 
 clean_path=/usr/bin:/bin
-rust_toolchain=nightly-x86_64-unknown-linux-gnu
+rust_toolchain=system
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=7644a13102db003b98f50c67191337e5792fb4cf
-rugra_base_tree=d7be158a7b2b0b923007543fdfb7a1df4d0ca1cf
+rugra_base_commit=4fcfc1bc5f72ea2491320ab0bb5d03735eebb5c8
+rugra_base_tree=7983ee9291900870415d6818851b9d2dad668a5f
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/varmap_unlinked_locals_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/varmap_unlinked_locals_1204.cc"
@@ -59,8 +59,8 @@ host_ar_bin=$(/usr/bin/readlink -f /usr/bin/ar)
 host_make_bin=$(/usr/bin/readlink -f /usr/bin/make)
 host_python_bin=$(/usr/bin/readlink -f /usr/bin/python3)
 host_git_bin=$(/usr/bin/readlink -f /usr/bin/git)
-host_cargo_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/cargo"
-host_rustc_bin="$user_home/.rustup/toolchains/$rust_toolchain/bin/rustc"
+host_cargo_bin="/usr/bin/cargo"
+host_rustc_bin="/usr/bin/rustc"
 for required_tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
   "$host_make_bin" "$host_python_bin" "$host_git_bin" \
   "$host_cargo_bin" "$host_rustc_bin"; do
@@ -118,11 +118,9 @@ host_cxx=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_cxx_bin" --version | /usr/bin/head -1)
 host_cxx_target=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C \
   "$host_cxx_bin" -dumpmachine)
-host_rustc=$(/usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+host_rustc=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --version)
-host_cargo=$(/usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+host_cargo=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_cargo_bin" --version)
 host_platform=$(/usr/bin/uname -srm)
 
@@ -593,8 +591,7 @@ for cargo_config in \
 done
 if ! (
   builtin cd "$snapshot_root"
-  /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-    RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+  /usr/bin/env -i HOME="$user_home" PATH="$clean_path" LC_ALL=C.UTF-8 \
     CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$fixture_target" \
     CARGO_NET_OFFLINE=true CXX="$host_cxx_bin" CC="$host_cc_bin" \
     AR="$host_ar_bin" RUSTC="$host_rustc_bin" \
@@ -622,8 +619,7 @@ fi
 native_dir=$(/usr/bin/dirname "$native_archive")
 
 rust_binary="$oracle_tmp/varmap_unlinked_locals_1204_rust"
-if ! /usr/bin/env -i HOME="$user_home" RUSTUP_HOME="$user_home/.rustup" \
-  RUSTUP_TOOLCHAIN="$rust_toolchain" PATH="$clean_path" LC_ALL=C.UTF-8 \
+if ! /usr/bin/env -i HOME="$user_home" PATH="$clean_path" LC_ALL=C.UTF-8 \
   "$host_rustc_bin" --edition=2021 -O \
     -L "dependency=$fixture_target/debug/deps" -L "native=$native_dir" \
     --extern "rugra=$rugra_rlib" -l static=rugra_sleigh -l dylib=z \

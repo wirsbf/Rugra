@@ -66,6 +66,10 @@ impl CaseFunc {
         // Same single high-address local window as the .cc fixture's
         // localrange XML: [0xffffffffffffff00, 0xffffffffffffffff].
         scope.local_range = vec![(0xffffffffffffff00u64, 0xffffffffffffffffu64)];
+        // The prototype's own local window (varmap.cc:555 consults
+        // fd->getFuncProto().getLocalRange(), not the union tree) is the
+        // same single range, mirroring the .cc fixture's XML decode path.
+        scope.proto_local_range = vec![(0xffffffffffffff00u64, 0xffffffffffffffffu64)];
         // Same register catalog as the .cc FixtureTranslate.
         scope.register_names = [
             (0x100u64, 8i32, "SREG1"),
