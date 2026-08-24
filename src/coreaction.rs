@@ -3642,18 +3642,6 @@ fn make_ptr(
     }))
 }
 
-/// Resolve the pointed-to type of a (possibly pointer) type, or None.
-// RUGRA-GLUE: helper mirroring TypePointer::getPtrTo (type.hh)
-fn ptr_to<'a>(
-    ct: &'a crate::type_system::datatype::Datatype,
-) -> Option<&'a std::sync::Arc<crate::type_system::datatype::Datatype>> {
-    use crate::type_system::datatype::Datatype;
-    match ct {
-        Datatype::Pointer(p) => Some(&p.ptr_to),
-        _ => None,
-    }
-}
-
 impl ActionInferTypes {
     // Ghidra: coreaction.cc:5008 ActionInferTypes::buildLocaltypes
     /// Faithful to `ActionInferTypes::buildLocaltypes` (coreaction.cc:5008-5037).
@@ -3996,9 +3984,13 @@ impl ActionInferTypes {
             OpCode::CPUI_LOAD => {
                 if inslot == 1 && outslot == -1 {
                     // pointer → dereferenced type
-                    if let Some(pt) = ptr_to(alttype) {
-                        return Some(pt.clone());
-                    }
+                    let dereference_size = op
+                        .get_out()
+                        .map(|target| target.read().unwrap().get_size())?;
+                    return crate::typeop::propagate_from_pointer(
+                        alttype,
+                        dereference_size,
+                    );
                 }
                 if inslot == -1 && outslot == 1 {
                     // output type → address becomes pointer to it
@@ -4010,9 +4002,13 @@ impl ActionInferTypes {
             // STORE: address (slot 1) ↔ stored value (slot 2).
             OpCode::CPUI_STORE => {
                 if inslot == 1 && outslot == 2 {
-                    if let Some(pt) = ptr_to(alttype) {
-                        return Some(pt.clone());
-                    }
+                    let dereference_size = op
+                        .get_in(2)
+                        .map(|target| target.read().unwrap().get_size())?;
+                    return crate::typeop::propagate_from_pointer(
+                        alttype,
+                        dereference_size,
+                    );
                 }
                 if inslot == 2 && outslot == 1 {
                     return Some(make_ptr(alttype.clone(), ptr_size));

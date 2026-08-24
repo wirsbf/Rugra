@@ -1,5 +1,35 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-24：ActionInferTypes 的 LOAD/STORE 解引用宽度门禁
+
+`ActionInferTypes` 的 production driver 原先在 `propagate_type` 内直接把
+pointer pointee 克隆到 LOAD output 或 STORE value，绕过了
+`TypeOp::propagateFromPointer` 的访问宽度条件。现在两个 pointer→value 分支都以
+真实 target Varnode 的大小调用 `typeop::propagate_from_pointer`：固定长 pointee
+只有在 `pointee.size == target.size` 时传播；因此 `ProgressData(32) *` 经 4-byte
+或 16-byte LOAD/STORE 不再把完整 32-byte 结构类型写入 target，32-byte 精确访问仍
+保留原 pointee 对象身份。value→pointer、PTRSUB、STOP_TYPE_PROPAGATION、DFS 顺序和
+7-pass 上限均未改动。
+
+锁定 fixture `action_infertypes_ptrwidth_1204` 使用真实 `Funcdata`、同一
+`BlockBasic`、production op bank/def-use API 和一个共享的 `INPUT|TYPELOCK`
+`ProgressData *`，按 `L16,L4,L32,S16,S4,S32` 顺序构造六个独立 target，并运行
+`ActionInferTypes` 两轮。宽度决策、target 类型身份、source/slot alias、block 与
+descendant 顺序、def/descend 图、named flags、成功返回和第二轮稳定性投影为
+`MATCH`；异常注入与异常阶段仍为 `UNTESTED`。
+
+完整状态仍为 **MISMATCH**，不能据此升级模块：Ghidra `getBase(16/32,
+TYPE_UNKNOWN)` 按 `max_basetype_size=10` 产生 unknown-byte array，而 Rugra 当前
+`TypeFactory::get_base` 兼容入口仍产生 flat UNKNOWN（`TYPE-UNKNOWN-0001`）；
+`build_localtypes` 的手写
+LOAD/STORE arms、value→pointer 的 factory/wordsize/target pointer width、DFS/mark
+遍历、Action reset、STOP flag 消费和 PTRSUB downChain/PointerRel 均绑定
+`ACTION-INFERTYPES-DISPATCH-0001`，enum/PointerRel canonical exact-piece 绑定
+`TYPEFACTORY-EXACTPIECE-0001`，Ghidra/Rugra 的 `TypeField::ident` 表示差异绑定
+`TYPEFIELD-IDENT-REPRESENTATION-0001`；它们都在本切片分母之外。fixture 保留双方 raw
+metatype 差异并只对上述 width projection 做字段级比较，metadata 的
+`overall_status` 固定为 `MISMATCH`。
+
 ## 2026-08-17：`build_full_pipeline_actions` 移除 ActionSetCasts（HERITAGE-FLAGFREE-SSA-0001）
 
 - **Ghidra 结构事实（复核 coreaction.cc:5462-5738 全文）**：
