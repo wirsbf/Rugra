@@ -1,5 +1,29 @@
 # `subflow.rs` API Reference
 
+## 2026-08-25：SUBFLOW-ROOTPOINTER-PORT-0001 — RootPointer 家族 + 两段回溯移植
+
+`SplitDatatype::RootPointer` 四方法 1:1 落地：`back_up_pointer`
+（cc:2098-2134，PTRSUB/INT_ADD/PTRADD/COPY 单跳回溯 + impliedBase 门 +
+`addressToByteInt` 字节换算）、`find`（cc:2144-2176，PARTIALSTRUCT/ARRAY
+valueType 剥离 → implied 数组匹配 → `ptrTo != valueType` 双检 → 3 跳
+addrTied/loneDescend 回溯环）、`duplicate_to_temp`（cc:2183-2189，
+`build_copy_temp` + ptrType retype）、`free_pointer_chain`（cc:2195-2203，
+逐级销毁无读者的指针计算 op，in(0) 先取后 destroy）。`build_pointers`
+（cc:2616-2672）1:1：per-piece 从根指针按类型下降重建 PTRADD（元素步长
+索引 + TYPE_INT retype）/PTRSUB 链，strip-array 指针经 canonical
+`get_type_pointer` 构造；`build_in_constants`（cc:2474-2488）常量直建。
+`split_load` 补 COPY-follow（cc:2761-2771：loneDescend 是 STORE 则让位
+RuleSplitStore、是 COPY 则跟随其输出，piece LOAD 插到 COPY 前，双
+destroy）；`split_store` 补 LOAD 值回溯（cc:2813-2832：单读者 LOAD 经
+`get_value_datatype` 重导值类型，compat 失败时清 pieces 去掉 LOAD 重试）
++ addrTied 根 `duplicateToTemp`（cc:2874-2875）+ 双 `freePointerChain`
+（cc:2892-2896）。双侧 fixture 扩到 31 记录（新增 flat_array_pointer/
+progress8_twohop/addrtied_root/load_feed/load_feed_retry/copy_follow 六
+例，全部 byte-identical；`flat_array_pointer_apply` UNTESTED 翻 MATCH）。
+残留结构缺口收窄为 buildInSubpieces/buildOutVarnodes/buildOutConcats 的
+原始 op-DAG 形状（地址放置输出、protoPartial PIECE 栈、
+generateConstants 折叠；投影仍以有效语义对拍）。
+
 ## 2026-08-25（R15 返修）：M-1/M-2 — getComponent hole 语义重钉
 
 R15 独立复核 REJECT 的两项阻断已修：`Datatype::get_hole_size` 基类 fallback
@@ -99,9 +123,11 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 - `SplitDatatype::new` — 从 Architecture 读取 `split_datatype_config` 与工厂 (subflow.cc:2701-2709)
 - `SplitDatatype::get_value_datatype(op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938)
 - `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
+- `SplitDatatype::build_in_constants` / `build_pointers` — 常量直建 / 根指针 PTRADD·PTRSUB 链重建 (subflow.cc:2474-2488/2616-2672)
 - `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)
+- `RootPointer::find` / `duplicate_to_temp` / `free_pointer_chain`（+私有 `back_up_pointer`）— LOAD/STORE 根指针定位/复制/释放 (subflow.cc:2098-2203)
 - `test_copy_constraints` — COPY 约束（函数输入/同地址 addrTied/LOAD 单读者）(subflow.cc:2370-2384)
-- 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` — arithmetic sanity (subflow.cc:2673-2696, typeop.hh:140)
+- 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` / `load_store_space` — arithmetic sanity / LOAD·STORE 空间常量解码 (subflow.cc:2673-2696, typeop.hh:140, varnode.hh:426)
 
 ### `RuleSubfloatConvert` (subflow.cc:3489, 5633)
 浮点子精度转换——Rule struct 存在，TransformManager.apply 待补（依赖 transform.rs 基础设施）。
@@ -113,12 +139,12 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 - `FuncCallSpecs` per-op exact lookup — 已具备；CALL trim/push 的 active/locked/
   varargs guards 与 patch/addPush consumer 尚未接，`CALLSPEC-0001`/`UNTESTED`
 - `RulePtrFlow`(5624, ruleaction.cc:9177) — 未移植（重：trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch 构造）
-- Split 族（2026-08-25 起）：`RootPointer::find` 多跳回溯/`backUpPointer`、addrTied
-  `duplicateToTemp`、`freePointerChain`、splitStore 的 LOAD 值回溯
-  （subflow.cc:2817-2830）、splitLoad 的 COPY-follow（cc:2761-2769）、
-  `buildInConstants`（常量直建,Rugra 用 SUBPIECE）、buildPointers 的
-  PTRSUB/PTRADD 形状（Rugra 用 INT_ADD,语义地址等价——双侧 fixture 以
-  有效偏移+尺寸投影对拍）
+- Split 族（2026-08-25 SUBFLOW-ROOTPOINTER-PORT-0001 起）：RootPointer 四方法与
+  buildPointers/buildInConstants、splitStore LOAD 值回溯、splitLoad COPY-follow
+  已 1:1 移植；残留：`buildInSubpieces`（地址放置输出 + generateConstants
+  折叠，Rugra 用 SUBPIECE stand-in）、`buildOutVarnodes`/`buildOutConcats`
+  （protoPartial PIECE 栈，Rugra 用 unique 输出 + PIECE 栈 stand-in，已带
+  oracle 的 hasNoDescend 早退门）——投影以有效偏移+尺寸对拍
 
 ## 测试
 29 单元测试：SubvariableFlow 扫描+替换主流程、terminal/extension/boolean/compare patch、sext 路径、每条 Rule 的 pattern 触发 + guard（mask-too-big/consume-mismatch/no-constant/wrong-size/big-flag/zero-mask）。

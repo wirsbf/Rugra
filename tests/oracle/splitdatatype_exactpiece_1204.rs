@@ -102,12 +102,18 @@ fn shape(dt: &Dt) -> String {
 }
 
 /// Resolve the byte offset of `vn` relative to the case's root pointer
-/// varnode, following PTRSUB/INT_ADD/PTRADD constant chains.
+/// varnode, following PTRSUB/INT_ADD/PTRADD constant chains. COPYs are
+/// transparent for offset purposes (they carry no offset), so the chain also
+/// walks through the duplicateToTemp COPY root.
 fn resolve_offset(vn: &Vn, root: &Vn) -> Option<i64> {
     if Arc::ptr_eq(vn, root) {
         return Some(0);
     }
     let def = vn.read().unwrap().get_def()?;
+    if def.read().unwrap().opcode == OpCode::CPUI_COPY {
+        let base = def.read().unwrap().get_in(0).cloned()?;
+        return resolve_offset(&base, root);
+    }
     let (opc, base, off_vn, sz_vn) = {
         let d = def.read().unwrap();
         (
@@ -875,6 +881,232 @@ fn main() {
         let stab = second_round(&mut fd);
         global_second_round_changes += stab;
         println!("apply|case=array_const_store|ret={ret}|stores={list}|stab={stab}");
+    }
+
+    // apply: flat_array_pointer_store (uint4[6]* window over a constant —
+    // RootPointer::find rejects the implied-array valueType mismatch,
+    // subflow.cc:2161-2163: ptrTo=uint4[6] != element uint4 with impliedBase
+    // set -> return false, zero ops added, original STORE kept)
+    {
+        let ptr = make_ptr(&mut fd, &mut unique_counter, &ptr_array);
+        let value = fd.vbank.create_constant(8, 0x1122334455667788);
+        let store = make_store(&mut fd, &mut unique_counter, &ptr, &value, &block);
+        let before = count_ops(&fd);
+        let ret = split_store_rule.apply_op(&store.0, &mut fd).unwrap();
+        let added = count_ops(&fd) - before;
+        println!(
+            "apply|case=flat_array_pointer_store|ret={ret}|ops_added={added}|orig_kept={}",
+            op_alive(&fd, &store.0) as u8
+        );
+    }
+    // apply: progress8_twohop_store (2-hop PTRSUB(PTRSUB(root,8),4) chain ->
+    // find backs up twice, baseOffset=12; freePointerChain destroys both
+    // PTRSUBs after the rewrite)
+    {
+        let root = make_ptr(&mut fd, &mut unique_counter, &ptr_progress);
+        let mid = make_ptrsub(&mut fd, &mut unique_counter, &root, 8, &block);
+        mid.write().unwrap().update_type(ptr_progress.clone());
+        let field_ptr = make_ptrsub(&mut fd, &mut unique_counter, &mid, 4, &block);
+        field_ptr.write().unwrap().update_type(ptr_progress.clone());
+        let value = make_value(&mut fd, &mut unique_counter, 8);
+        let store = make_store(&mut fd, &mut unique_counter, &field_ptr, &value, &block);
+        let ret = split_store_rule.apply_op(&store.0, &mut fd).unwrap();
+        let mut stores: Vec<(i64, usize)> = Vec::new();
+        for op in fd.obank.alivelist.iter() {
+            let o = op.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_STORE {
+                continue;
+            }
+            let ptr_in = o.get_in(1).cloned().unwrap();
+            if let Some(off) = resolve_offset(&ptr_in, &root) {
+                stores.push((off, o.get_in(2).unwrap().read().unwrap().get_size()));
+            }
+        }
+        stores.sort();
+        let list = stores
+            .iter()
+            .map(|(o, s)| format!("{o}:{s}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let stab = second_round(&mut fd);
+        global_second_round_changes += stab;
+        println!("apply|case=progress8_twohop_store|ret={ret}|stores={list}|stab={stab}");
+    }
+    // apply: addrtied_root_store (addr-tied ram-space root pointer ->
+    // duplicateToTemp COPIes it into a unique temp before buildPointers,
+    // subflow.cc:2874-2875; the projection resolves through that COPY)
+    {
+        use rugra::varnode::varnode_flags;
+        let g = fd.vbank.create_with_space(8, AddressSpace::Ram, 0x7100);
+        // addr-tied mapped global; the input flag mirrors the
+        // heritage-provided read (free varnodes reject multiple
+        // descendants, varnode.cc:334-337)
+        g.write().unwrap().set_flags(
+            varnode_flags::ADDRTIED | varnode_flags::INSERT | varnode_flags::INPUT,
+        );
+        g.write().unwrap().update_type(ptr_progress.clone());
+        let value = make_value(&mut fd, &mut unique_counter, 16);
+        let store = make_store(&mut fd, &mut unique_counter, &g, &value, &block);
+        let ret = split_store_rule.apply_op(&store.0, &mut fd).unwrap();
+        let mut stores: Vec<(i64, usize)> = Vec::new();
+        for op in fd.obank.alivelist.iter() {
+            let o = op.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_STORE {
+                continue;
+            }
+            let ptr_in = o.get_in(1).cloned().unwrap();
+            if let Some(off) = resolve_offset(&ptr_in, &g) {
+                stores.push((off, o.get_in(2).unwrap().read().unwrap().get_size()));
+            }
+        }
+        stores.sort();
+        let list = stores
+            .iter()
+            .map(|(o, s)| format!("{o}:{s}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let stab = second_round(&mut fd);
+        global_second_round_changes += stab;
+        println!("apply|case=addrtied_root_store|ret={ret}|stores={list}|stab={stab}");
+    }
+    // apply: load_feed_store (STORE(LOAD) memcpy-style — splitStore LOAD-value
+    // trace subflow.cc:2815-2820 re-derives the value type from the feeding
+    // LOAD and rewrites per-piece LOADs off the load root, destroying the
+    // original LOAD, cc:2892-2894)
+    {
+        let lptr = make_ptr(&mut fd, &mut unique_counter, &ptr_progress);
+        let load = fd.new_op(2, Address::new(0x5000 + 0x10 * unique_counter));
+        fd.op_set_opcode(&load, OpCode::CPUI_LOAD);
+        let lout = fd.new_unique_out(16, &load);
+        let space_vn = fd.new_varnode_space(AddressSpace::Ram);
+        fd.op_set_input(&load, space_vn, 0);
+        fd.op_set_input(&load, lptr.clone(), 1);
+        fd.op_insert_end(&load, &block);
+        unique_counter += 1;
+        let sptr = make_ptr(&mut fd, &mut unique_counter, &ptr_progress);
+        let store = make_store(&mut fd, &mut unique_counter, &sptr, &lout, &block);
+        let ret = split_store_rule.apply_op(&store.0, &mut fd).unwrap();
+        let mut stores: Vec<(i64, usize)> = Vec::new();
+        for op in fd.obank.alivelist.iter() {
+            let o = op.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_STORE {
+                continue;
+            }
+            let ptr_in = o.get_in(1).cloned().unwrap();
+            if let Some(off) = resolve_offset(&ptr_in, &sptr) {
+                stores.push((off, o.get_in(2).unwrap().read().unwrap().get_size()));
+            }
+        }
+        stores.sort();
+        let list = stores
+            .iter()
+            .map(|(o, s)| format!("{o}:{s}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let stab = second_round(&mut fd);
+        global_second_round_changes += stab;
+        println!(
+            "apply|case=load_feed_store|ret={ret}|stores={list}|orig_load_gone={}|stab={stab}",
+            (!op_alive(&fd, &load.0)) as u8
+        );
+    }
+    // apply: load_feed_retry_store (LOAD type fails compat — uint8 element
+    // array vs uint4 struct fields, cc:2363-2364 scalar descent null — the
+    // retry without the LOAD (cc:2825-2832) uses the value's undefined type
+    // and splits via SUBPIECEs; the original LOAD is kept because loadOp is
+    // cleared by the retry)
+    {
+        let ptr_uint8 = factory_arc.write().unwrap().get_type_pointer(8, uint8.clone(), 1);
+        let lptr = make_ptr(&mut fd, &mut unique_counter, &ptr_uint8);
+        let load = fd.new_op(2, Address::new(0x5400 + 0x10 * unique_counter));
+        fd.op_set_opcode(&load, OpCode::CPUI_LOAD);
+        let lout = fd.new_unique_out(16, &load);
+        let space_vn = fd.new_varnode_space(AddressSpace::Ram);
+        fd.op_set_input(&load, space_vn, 0);
+        fd.op_set_input(&load, lptr, 1);
+        fd.op_insert_end(&load, &block);
+        unique_counter += 1;
+        let sptr = make_ptr(&mut fd, &mut unique_counter, &ptr_progress);
+        let store = make_store(&mut fd, &mut unique_counter, &sptr, &lout, &block);
+        let ret = split_store_rule.apply_op(&store.0, &mut fd).unwrap();
+        let mut stores: Vec<(i64, usize)> = Vec::new();
+        for op in fd.obank.alivelist.iter() {
+            let o = op.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_STORE {
+                continue;
+            }
+            let ptr_in = o.get_in(1).cloned().unwrap();
+            if let Some(off) = resolve_offset(&ptr_in, &sptr) {
+                stores.push((off, o.get_in(2).unwrap().read().unwrap().get_size()));
+            }
+        }
+        stores.sort();
+        let list = stores
+            .iter()
+            .map(|(o, s)| format!("{o}:{s}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let stab = second_round(&mut fd);
+        global_second_round_changes += stab;
+        println!(
+            "apply|case=load_feed_retry_store|ret={ret}|stores={list}|orig_load_kept={}|stab={stab}",
+            op_alive(&fd, &load.0) as u8
+        );
+    }
+    // applyload: copy_follow_load (LOAD output with a lone COPY descendant —
+    // splitLoad follows the COPY (cc:2761-2771), splits the COPY's output,
+    // inserts the piece LOADs before the COPY, and destroys both the COPY and
+    // the original LOAD, cc:2795-2797)
+    {
+        let ptr = make_ptr(&mut fd, &mut unique_counter, &ptr_progress);
+        let load = fd.new_op(2, Address::new(0x5800 + 0x10 * unique_counter));
+        fd.op_set_opcode(&load, OpCode::CPUI_LOAD);
+        let load_out = fd.new_unique_out(16, &load);
+        let space_vn = fd.new_varnode_space(AddressSpace::Ram);
+        fd.op_set_input(&load, space_vn, 0);
+        fd.op_set_input(&load, ptr.clone(), 1);
+        fd.op_insert_end(&load, &block);
+        unique_counter += 1;
+        let copy = fd.new_op(1, Address::new(0x5900 + 0x10 * unique_counter));
+        fd.op_set_opcode(&copy, OpCode::CPUI_COPY);
+        let out2 = fd.new_unique_out(16, &copy);
+        fd.op_set_input(&copy, load_out, 0);
+        fd.op_set_output(&copy, out2.clone());
+        fd.op_insert_end(&copy, &block);
+        unique_counter += 1;
+        // keep out2 live so the reassembly concatenation is required
+        let tail = fd.new_op(1, Address::new(0x5a00 + 0x10 * unique_counter));
+        fd.op_set_opcode(&tail, OpCode::CPUI_COPY);
+        let _tail_out = fd.new_unique_out(16, &tail);
+        fd.op_set_input(&tail, out2, 0);
+        fd.op_insert_end(&tail, &block);
+        unique_counter += 1;
+        let ret = split_load_rule.apply_op(&load.0, &mut fd).unwrap();
+        let mut loads: Vec<(i64, usize)> = Vec::new();
+        for op in fd.obank.alivelist.iter() {
+            let o = op.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_LOAD {
+                continue;
+            }
+            let Some(out_vn) = o.get_out().cloned() else { continue };
+            let ptr_in = o.get_in(1).cloned().unwrap();
+            if let Some(off) = resolve_offset(&ptr_in, &ptr) {
+                loads.push((off, out_vn.read().unwrap().get_size()));
+            }
+        }
+        loads.sort();
+        let list = loads
+            .iter()
+            .map(|(o, s)| format!("{o}:{s}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let stab = second_round(&mut fd);
+        global_second_round_changes += stab;
+        println!(
+            "applyload|case=copy_follow_load|ret={ret}|loads={list}|orig_gone={}|copy_gone={}|stab={stab}",
+            (!op_alive(&fd, &load.0)) as u8,
+            (!op_alive(&fd, &copy.0)) as u8
+        );
     }
 
     println!("stab|global_changes={global_second_round_changes}");

@@ -4657,11 +4657,15 @@ impl Rule for RuleSplitFlow {
 /// Architecture-owned factory, and the piece decomposition runs through
 /// `categorizeDatatype` + `testDatatypeCompatibility` (subflow.cc:2237-2386).
 ///
-/// Remaining structural gaps (see module docs): the split rewrites still
-/// approximate Ghidra's `RootPointer::find`/`buildPointers` with the direct
-/// `in(1)` pointer (single-hop), and the splitStore LOAD-value trace
-/// (subflow.cc:2817-2830) and splitLoad COPY-follow (subflow.cc:2761-2769)
-/// are not ported.
+/// The `RootPointer` family (find/backUpPointer/duplicateToTemp/
+/// freePointerChain, subflow.cc:2098-2203), `buildPointers`
+/// (subflow.cc:2616-2672), `buildInConstants` (subflow.cc:2474-2488), the
+/// splitStore LOAD-value trace (subflow.cc:2812-2835) and the splitLoad
+/// COPY-follow (subflow.cc:2761-2771) are ported 1:1 as of
+/// SUBFLOW-ROOTPOINTER-PORT-0001. Remaining structural gap (see module
+/// docs): the `buildInSubpieces`/`buildOutVarnodes`/`buildOutConcats` raw
+/// op-DAG shapes (address-placed outputs, protoPartial PIECE stacks,
+/// generateConstants folding) keep the stand-in forms.
 pub struct SplitDatatype<'a> {
     /// The containing function. Faithful to `data`.
     pub data: &'a mut Funcdata,
@@ -4693,19 +4697,18 @@ pub struct Component {
 
 /// A helper describing the pointer being passed to a LOAD or STORE. Faithful
 /// to Ghidra's `SplitDatatype::RootPointer` (subflow.hh:271-283).
-///
-/// Rugra's pointer-data-type machinery is partial, so this is a structural
-/// port: the fields mirror Ghidra but the `find`/`back_up_pointer` traversal
-/// is not wired (logged). Kept so the SplitDatatype API surface is complete.
 #[derive(Debug, Clone)]
 pub struct RootPointer {
-    /// LOAD or STORE op.
+    /// LOAD or STORE op. Faithful to `loadStore`.
     pub load_store: Option<Arc<RwLock<PcodeOp>>>,
-    /// Direct pointer input for LOAD or STORE.
+    /// Base pointer data-type of LOAD or STORE. Faithful to `ptrType`.
+    pub ptr_type: Option<Arc<crate::type_system::Datatype>>,
+    /// Direct pointer input for LOAD or STORE. Faithful to `firstPointer`.
     pub first_pointer: Option<Arc<RwLock<Varnode>>>,
-    /// The root pointer.
+    /// The root pointer. Faithful to `pointer`.
     pub pointer: Option<Arc<RwLock<Varnode>>>,
-    /// Offset of the LOAD or STORE relative to root pointer.
+    /// Offset of the LOAD or STORE relative to root pointer. Faithful to
+    /// `baseOffset`.
     pub base_offset: i32,
 }
 
@@ -4715,9 +4718,225 @@ impl RootPointer {
     pub fn new() -> Self {
         Self {
             load_store: None,
+            ptr_type: None,
             first_pointer: None,
             pointer: None,
             base_offset: 0,
+        }
+    }
+
+    // Ghidra: subflow.cc:2098 SplitDatatype::RootPointer::backUpPointer
+    /// Follow the flow of `pointer` back through an INT_ADD, PTRSUB, PTRADD,
+    /// or COPY from another pointer to a structure/array (or, for PTRADD/COPY
+    /// only, to an implied array with the given base type), updating
+    /// `pointer`, `base_offset`, and `ptr_type`. Faithful to
+    /// `RootPointer::backUpPointer` (subflow.cc:2098-2134).
+    ///
+    /// An untyped input varnode maps to Ghidra's `undefined` bank type
+    /// (funcdata_varnode.cc:69/88) whose metatype is not TYPE_PTR, so the
+    /// `None` read-facing result rejects exactly like the oracle's non-ptr
+    /// metatype check (cc:2119-2120).
+    fn back_up_pointer(&mut self, implied_base: Option<&Arc<crate::type_system::Datatype>>) -> bool {
+        use crate::type_system::{Datatype, TypeMetatype};
+
+        let pointer = match &self.pointer {
+            Some(pointer) => pointer.clone(),
+            None => return false,
+        };
+        if !pointer.read().unwrap().is_written() {
+            return false;
+        }
+        let add_op = pointer.read().unwrap().get_def().unwrap();
+        let opc = add_op.read().unwrap().opcode;
+        let mut off: i32;
+        if opc == OpCode::CPUI_PTRSUB
+            || opc == OpCode::CPUI_INT_ADD
+            || opc == OpCode::CPUI_PTRADD
+        {
+            let cvn = add_op.read().unwrap().get_in(1).cloned().unwrap();
+            if !cvn.read().unwrap().is_constant() {
+                return false;
+            }
+            off = cvn.read().unwrap().get_offset() as i32;
+        } else if opc == OpCode::CPUI_COPY {
+            off = 0;
+        } else {
+            return false;
+        }
+        let tmp_pointer = add_op.read().unwrap().get_in(0).cloned().unwrap();
+        let ct = {
+            let add_guard = add_op.read().unwrap();
+            tmp_pointer
+                .read()
+                .unwrap()
+                .get_type_read_facing_op(&add_guard, 0)
+        };
+        let ct = match ct {
+            Some(ct) => ct,
+            None => return false, // untyped == undefinedN, not TYPE_PTR (cc:2119)
+        };
+        let (parent, wordsize) = match ct.as_ref() {
+            Datatype::Pointer(pointer) => {
+                (pointer.ptr_to.clone(), pointer.wordsize)
+            }
+            _ => return false, // ct->getMetatype() != TYPE_PTR (cc:2119-2120)
+        };
+        let meta = parent.get_metatype();
+        if meta != TypeMetatype::Struct && meta != TypeMetatype::Array {
+            let parent_is_implied = implied_base
+                .map(|base| Arc::ptr_eq(base, &parent))
+                .unwrap_or(false);
+            if (opc != OpCode::CPUI_PTRADD && opc != OpCode::CPUI_COPY)
+                || !parent_is_implied
+            {
+                return false;
+            }
+        }
+        self.ptr_type = Some(ct);
+        if opc == OpCode::CPUI_PTRADD {
+            let scale = add_op
+                .read()
+                .unwrap()
+                .get_in(2)
+                .cloned()
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_offset() as i32;
+            off = off.wrapping_mul(scale);
+        }
+        off = crate::space::AddrSpace::address_to_byte_int(off as i64, wordsize as u32) as i32;
+        self.base_offset = self.base_offset.wrapping_add(off);
+        self.pointer = Some(tmp_pointer);
+        true
+    }
+
+    // Ghidra: subflow.cc:2144 SplitDatatype::RootPointer::find
+    /// Locate the root pointer for the underlying LOAD or STORE. Faithful to
+    /// `RootPointer::find` (subflow.cc:2144-2176): strip TYPE_PARTIALSTRUCT to
+    /// the containing struct/array and, for an array value-type, allow an
+    /// implied array (pointer to element) as a match; require the immediate
+    /// `in(1)` pointer (or, after one `back_up_pointer` hop, its base) to
+    /// point at the value-type; then back up through at most 3 hops of
+    /// nested struct/array pointers that have a lone descendant, accumulating
+    /// the offset in `base_offset`.
+    pub fn find(
+        &mut self,
+        op: &Arc<RwLock<PcodeOp>>,
+        value_type: &Arc<crate::type_system::Datatype>,
+    ) -> bool {
+        use crate::type_system::{Datatype, TypeMetatype};
+
+        let mut value_type = value_type.clone();
+        let mut implied_base: Option<Arc<crate::type_system::Datatype>> = None;
+        // Strip off partial to get containing struct or array (cc:2148-2149).
+        if value_type.get_metatype() == TypeMetatype::PartialStruct {
+            if let Datatype::PartialStruct(partial) = value_type.as_ref() {
+                value_type = partial.container.clone();
+            }
+        }
+        // Array data-types allow an implied array match (cc:2150-2153).
+        if value_type.get_metatype() == TypeMetatype::Array {
+            if let Datatype::Array(array) = value_type.as_ref() {
+                value_type = array.array_of.clone();
+            }
+            implied_base = Some(value_type.clone());
+        }
+        self.load_store = Some(op.clone());
+        self.base_offset = 0;
+        let pointer = op.read().unwrap().get_in(1).cloned().unwrap();
+        self.first_pointer = Some(pointer.clone());
+        self.pointer = Some(pointer.clone());
+        let ct = {
+            let op_guard = op.read().unwrap();
+            pointer.read().unwrap().get_type_read_facing_op(&op_guard, 1)
+        };
+        let ct = match ct {
+            Some(ct) => ct,
+            None => return false,
+        };
+        let ptr_to = match ct.as_ref() {
+            Datatype::Pointer(pointer) => pointer.ptr_to.clone(),
+            _ => return false, // ct->getMetatype() != TYPE_PTR (cc:2158-2159)
+        };
+        self.ptr_type = Some(ct);
+        if !Arc::ptr_eq(&ptr_to, &value_type) {
+            if implied_base.is_some() {
+                return false;
+            }
+            if !self.back_up_pointer(implied_base.as_ref()) {
+                return false;
+            }
+            let ptr_to = match self.ptr_type.as_ref().unwrap().as_ref() {
+                Datatype::Pointer(pointer) => pointer.ptr_to.clone(),
+                _ => return false,
+            };
+            if !Arc::ptr_eq(&ptr_to, &value_type) {
+                return false;
+            }
+        }
+        // Back up to pointers to containing structures or arrays (cc:2170-2174).
+        for _ in 0..3 {
+            let pointer = self.pointer.as_ref().unwrap().clone();
+            let (addr_tied, lone) = {
+                let guard = pointer.read().unwrap();
+                (guard.is_addr_tied(), guard.lone_descend().is_none())
+            };
+            if addr_tied || lone {
+                break;
+            }
+            if !self.back_up_pointer(implied_base.as_ref()) {
+                break;
+            }
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:2183 SplitDatatype::RootPointer::duplicateToTemp
+    /// COPY the root pointer varnode into a temporary register, making it the
+    /// new root so it cannot be modified by subsequent STOREs. Faithful to
+    /// `RootPointer::duplicateToTemp` (subflow.cc:2183-2189) including the
+    /// `newRoot->updateType(ptrType)` retype.
+    pub fn duplicate_to_temp(&mut self, data: &mut Funcdata, follow_op: &PcodeOpRef) {
+        let pointer = self.pointer.as_ref().unwrap().clone();
+        let new_root = data.build_copy_temp(&pointer, follow_op);
+        new_root
+            .write()
+            .unwrap()
+            .update_type(self.ptr_type.as_ref().unwrap().clone());
+        self.pointer = Some(new_root);
+    }
+
+    // Ghidra: subflow.cc:2195 SplitDatatype::RootPointer::freePointerChain
+    /// If the first pointer varnode is no longer used, recursively remove the
+    /// op producing it (INT_ADD or PTRSUB) until the root pointer is reached
+    /// or a varnode still in use is encountered. Faithful to
+    /// `RootPointer::freePointerChain` (subflow.cc:2195-2203). The in(0)
+    /// successor is read before `op_destroy` nulls the dead op's inputs.
+    pub fn free_pointer_chain(&mut self, data: &mut Funcdata) {
+        loop {
+            let first = match &self.first_pointer {
+                Some(first) => first.clone(),
+                None => break,
+            };
+            let pointer = match &self.pointer {
+                Some(pointer) => pointer.clone(),
+                None => break,
+            };
+            if Arc::ptr_eq(&first, &pointer) {
+                break;
+            }
+            let (addr_tied, no_descend) = {
+                let guard = first.read().unwrap();
+                (guard.is_addr_tied(), guard.has_no_descend())
+            };
+            if addr_tied || !no_descend {
+                break;
+            }
+            let tmp_op = first.read().unwrap().get_def().unwrap();
+            let next = tmp_op.read().unwrap().get_in(0).cloned().unwrap();
+            self.first_pointer = Some(next);
+            data.op_destroy(&PcodeOpRef(tmp_op));
         }
     }
 }
@@ -5219,20 +5438,176 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
+    // Ghidra: subflow.cc:2474 SplitDatatype::buildInConstants
+    /// Build split constant input varnodes, extracting the constant value
+    /// from the given root constant based on the input offsets in
+    /// `data_type_pieces`. Faithful to `SplitDatatype::buildInConstants`
+    /// (subflow.cc:2474-2488), including the big-endian offset mirror and the
+    /// `outVn->updateType(dt)` retype.
+    fn build_in_constants(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        in_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+        big_endian: bool,
+    ) {
+        let (base_val, root_size) = {
+            let guard = root_vn.read().unwrap();
+            (guard.get_offset(), guard.get_size())
+        };
+        for piece in &self.data_type_pieces {
+            let dt = piece.in_type.clone();
+            let mut off = piece.offset;
+            if big_endian {
+                off = root_size as i32 - off - dt.get_size() as i32;
+            }
+            let val = (base_val >> ((8 * off) as u64)) & calc_mask(dt.get_size());
+            let out_vn = self.data.new_constant(dt.get_size(), val);
+            out_vn.write().unwrap().update_type(dt);
+            in_varnodes.push(out_vn);
+        }
+    }
+
+    // Ghidra: subflow.cc:2616 SplitDatatype::buildPointers
+    /// Build a series of PTRSUB/PTRADD ops at different offsets, given a root
+    /// pointer. Faithful to `SplitDatatype::buildPointers`
+    /// (subflow.cc:2616-2672): per piece, descend the pointed-to type at
+    /// `base_offset + piece offset`; offsets outside the current type (or
+    /// array element strides) emit PTRADD with an element-size scaled index
+    /// (the index varnode retyped TYPE_INT), interior struct offsets emit
+    /// PTRSUB; the chain is repeated while the enclosing type is larger than
+    /// the match type, and every intermediate pointer is retyped through the
+    /// canonical strip-array pointer construction.
+    fn build_pointers(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        ptr_type: &Arc<crate::type_system::Datatype>,
+        base_offset: i32,
+        follow_op: &PcodeOpRef,
+        ptr_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+        is_input: bool,
+    ) {
+        use crate::type_system::{Datatype, TypeMetatype};
+
+        let (ptr_wordsize, base_type) = match ptr_type.as_ref() {
+            Datatype::Pointer(pointer) => (pointer.wordsize, pointer.ptr_to.clone()),
+            _ => return,
+        };
+        let ptr_type_size = ptr_type.get_size();
+        for i in 0..self.data_type_pieces.len() {
+            let piece = self.data_type_pieces[i].clone();
+            let match_type = if is_input {
+                piece.in_type.clone()
+            } else {
+                piece.out_type.clone()
+            };
+            let mut cur_off: i64 = base_offset as i64 + piece.offset as i64;
+            let mut tmp_type = base_type.clone();
+            let mut in_ptr = root_vn.clone();
+            loop {
+                let tmp_size = tmp_type.get_size() as i64;
+                let (new_type, new_off): (Arc<Datatype>, i64);
+                if cur_off < 0 || cur_off >= tmp_size {
+                    // An offset not within the data-type indicates an array.
+                    let mut next_off = cur_off % tmp_size;
+                    if next_off < 0 {
+                        next_off += tmp_size;
+                    }
+                    new_type = tmp_type.clone();
+                    new_off = next_off;
+                } else {
+                    let (sub, off) = Datatype::get_sub_type_arc(&tmp_type, cur_off);
+                    match sub {
+                        // Null is only returned for a hole in a structure;
+                        // use the precomputed match data-type (cc:2636-2640).
+                        Some(sub) => {
+                            new_type = sub;
+                            new_off = off;
+                        }
+                        None => {
+                            new_type = match_type.clone();
+                            new_off = 0;
+                        }
+                    }
+                }
+                let is_array_step =
+                    Arc::ptr_eq(&tmp_type, &new_type) || tmp_type.get_metatype() == TypeMetatype::Array;
+                let follow_addr = follow_op.0.read().unwrap().get_addr();
+                let in_ptr_size = in_ptr.read().unwrap().get_size();
+                let new_op = self.data.new_op(if is_array_step { 3 } else { 2 }, follow_addr);
+                if is_array_step {
+                    let elem_size = new_type.get_size() as i64;
+                    let final_offset = (cur_off - new_off) / elem_size;
+                    let sz = crate::space::AddrSpace::byte_to_address_int(elem_size, ptr_wordsize as u32);
+                    self.data.op_set_opcode(&new_op, OpCode::CPUI_PTRADD);
+                    self.data.op_set_input(&new_op, in_ptr.clone(), 0);
+                    let index_vn = self.data.new_constant(in_ptr_size, final_offset as u64);
+                    self.data.op_set_input(&new_op, index_vn.clone(), 1);
+                    let scale_vn = self.data.new_constant(in_ptr_size, sz as u64);
+                    self.data.op_set_input(&new_op, scale_vn, 2);
+                    if let Some(types) = self.types.as_ref() {
+                        let index_type = types
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get_base_result(in_ptr_size, TypeMetatype::Int)
+                            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+                        index_vn.write().unwrap().update_type(index_type);
+                    }
+                } else {
+                    let final_offset =
+                        crate::space::AddrSpace::byte_to_address_int(cur_off - new_off, ptr_wordsize as u32);
+                    self.data.op_set_opcode(&new_op, OpCode::CPUI_PTRSUB);
+                    self.data.op_set_input(&new_op, in_ptr.clone(), 0);
+                    let off_vn = self.data.new_constant(in_ptr_size, final_offset as u64);
+                    self.data.op_set_input(&new_op, off_vn, 1);
+                }
+                let new_in_ptr = self.data.new_unique_out(in_ptr_size, &new_op);
+                // types->getTypePointerStripArray(ptrType->getSize(), newType,
+                // ptrType->getWordSize()) (cc:2664) — the canonical factory
+                // pointer after the hasStripped + first-array-level strip
+                // (type.cc:3849-3860), expressed through the existing
+                // canonical get_type_pointer entry.
+                if let Some(types) = self.types.as_ref() {
+                    let mut stripped =
+                        Datatype::get_stripped_arc(&new_type).unwrap_or_else(|| new_type.clone());
+                    if let Datatype::Array(array) = stripped.as_ref() {
+                        stripped = array.array_of.clone();
+                    }
+                    let tmp_ptr = types
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_type_pointer(ptr_type_size, stripped, ptr_wordsize);
+                    new_in_ptr.write().unwrap().update_type(tmp_ptr);
+                }
+                self.data.op_insert_before(&new_op, follow_op);
+                in_ptr = new_in_ptr;
+                tmp_type = new_type;
+                cur_off = new_off;
+                if tmp_type.get_size() <= match_type.get_size() {
+                    break;
+                }
+            }
+            ptr_varnodes.push(in_ptr);
+        }
+    }
+
     // Ghidra: subflow.cc:2756 SplitDatatype::splitLoad
     /// Split a LOAD operation. Faithful to `SplitDatatype::splitLoad`
-    /// (subflow.cc:2756-2800): the input data-type `in_type` (recovered by
-    /// `RuleSplitLoad` via `getValueDatatype`) is tested against the output
-    /// data-type through `testDatatypeCompatibility`; on success each
-    /// component gets a new LOAD at (pointer + component offset) whose result
-    /// is PIECE'd back into the original output, and the original LOAD is
-    /// destroyed.
+    /// (subflow.cc:2756-2800): the COPY-follow first checks the LOAD output's
+    /// lone descendant — a STORE defers to `RuleSplitStore`, a COPY is
+    /// followed so the split output is the COPY's output — then the value
+    /// data-type is tested against the output data-type, the root pointer is
+    /// located via `RootPointer::find`, per-piece pointers are rebuilt from
+    /// the root via `build_pointers` (inserted before the LOAD), per-piece
+    /// LOADs are inserted before the insert point (the followed COPY when
+    /// present), and the original COPY/LOAD are destroyed with the unused
+    /// pointer calculation chain freed via `free_pointer_chain`.
     ///
-    /// The COPY-follow (cc:2761-2769, splitting through a lone COPY
-    /// descendant) and the multi-hop `RootPointer::find` root back-up are not
-    /// ported (see module docs): the piece pointers are built from the direct
-    /// `in(1)` pointer, which is exactly the root the oracle reaches when the
-    /// pointer input has no INT_ADD/PTRSUB chain.
+    /// Output reassembly keeps the registered `buildOutVarnodes`/
+    /// `buildOutConcats` stand-in (unique-space outputs + PIECE stack into
+    /// the followed output), gated on the output having a descendant exactly
+    /// like the oracle's `buildOutConcats` early return (cc:2551-2552); the
+    /// raw op-DAG divergence of that stack is the remaining
+    /// `rewrite_op_shape` gap.
     ///
     /// Returns `true` if the split was performed. Returns `false` if the value
     /// is not a composite type that should be split, or the pointer cannot
@@ -5243,14 +5618,25 @@ impl<'a> SplitDatatype<'a> {
         in_type: &Arc<crate::type_system::Datatype>,
     ) -> Result<bool> {
         self.is_load_store = true;
-        let (space_vn, ptr_vn, out_vn, op_addr) = {
-            let o = load_op.read().unwrap();
-            (
-                o.get_in(0).cloned().unwrap(),
-                o.get_in(1).cloned().unwrap(),
-                o.get_out().cloned().unwrap(),
-                o.get_addr(),
-            )
+        let out_vn_initial = load_op.read().unwrap().get_out().cloned().unwrap();
+        // COPY-follow (cc:2761-2769): split the outputs of a lone COPY
+        // descendant as well.
+        let mut copy_op: Option<Arc<RwLock<PcodeOp>>> = None;
+        if !out_vn_initial.read().unwrap().is_addr_tied() {
+            copy_op = out_vn_initial.read().unwrap().lone_descend();
+        }
+        if let Some(cp) = &copy_op {
+            let opc = cp.read().unwrap().opcode;
+            if opc == OpCode::CPUI_STORE {
+                return Ok(false); // Handled by RuleSplitStore (cc:2766)
+            }
+            if opc != OpCode::CPUI_COPY {
+                copy_op = None;
+            }
+        }
+        let out_vn = match &copy_op {
+            Some(cp) => cp.read().unwrap().get_out().cloned().unwrap(),
+            None => out_vn_initial,
         };
         let out_size = out_vn.read().unwrap().get_size();
         let out_type = out_vn
@@ -5266,63 +5652,74 @@ impl<'a> SplitDatatype<'a> {
             return Ok(false);
         }
         if is_arithmetic_input(&out_vn) {
-            return Ok(false); // Sanity check on output (cc:2774)
+            return Ok(false); // Sanity check on output (cc:2774-2776)
         }
-        let pieces: Vec<(i32, i32)> = self
-            .data_type_pieces
-            .iter()
-            .map(|c| (c.offset, c.in_type.get_size() as i32))
-            .collect();
-        if pieces.len() < 2 {
-            return Ok(false); // Nothing to split
+        let mut root = RootPointer::new();
+        if !root.find(load_op, in_type) {
+            return Ok(false);
         }
-        // Per-component LOADs at (pointer + component offset). The piece
-        // offsets are window-relative (the window start is what in(1)
-        // addresses), mirroring buildPointers' (baseOffset + offset)
-        // addressing with the root reached at in(1).
-        let mut load_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(pieces.len());
-        for p in &pieces {
-            let off = p.0 as u64;
-            let comp_ptr = if off == 0 {
-                ptr_vn.clone()
-            } else {
-                let add_op = self.data.new_op(2, op_addr);
-                self.data.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
-                let add_out = self.data.new_unique_out(ptr_vn.read().unwrap().get_size(), &add_op);
-                let off_const = self.data.new_constant(8, off);
-                self.data.op_set_input(&add_op, ptr_vn.clone(), 0);
-                self.data.op_set_input(&add_op, off_const, 1);
-                self.data.op_insert_before(&add_op, &crate::op::PcodeOpRef(load_op.clone()));
-                add_out
-            };
+        let insert_point = match &copy_op {
+            Some(cp) => PcodeOpRef(cp.clone()),
+            None => PcodeOpRef(load_op.clone()),
+        };
+        let mut ptr_varnodes: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        // buildPointers is anchored at the LOAD (cc:2783), even when the new
+        // LOADs are inserted before the followed COPY (cc:2788/2793).
+        self.build_pointers(
+            root.pointer.as_ref().unwrap(),
+            root.ptr_type.as_ref().unwrap(),
+            root.base_offset,
+            &PcodeOpRef(load_op.clone()),
+            &mut ptr_varnodes,
+            true,
+        );
+        let spc = load_store_space(load_op, 0);
+        let op_addr = insert_point.0.read().unwrap().get_addr();
+        let mut load_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(ptr_varnodes.len());
+        for (i, ptr) in ptr_varnodes.iter().enumerate() {
             let new_load = self.data.new_op(2, op_addr);
             self.data.op_set_opcode(&new_load, OpCode::CPUI_LOAD);
-            let load_out = self.data.new_unique_out(p.1 as usize, &new_load);
-            self.data.op_set_input(&new_load, space_vn.clone(), 0);
-            self.data.op_set_input(&new_load, comp_ptr, 1);
-            self.data.op_insert_before(&new_load, &crate::op::PcodeOpRef(load_op.clone()));
+            let space_vn = self.data.new_varnode_space(spc);
+            self.data.op_set_input(&new_load, space_vn, 0);
+            self.data.op_set_input(&new_load, ptr.clone(), 1);
+            let load_out = self
+                .data
+                .new_unique_out(self.data_type_pieces[i].out_type.get_size(), &new_load);
+            self.data.op_insert_before(&new_load, &insert_point);
             load_out_vns.push(load_out);
         }
-        // Reassemble the output via PIECE chain (most-significant first).
-        reassemble_via_piece(self.data, &load_out_vns, &out_vn, op_addr, &crate::op::PcodeOpRef(load_op.clone()));
-        self.data.op_destroy(&crate::op::PcodeOpRef(load_op.clone()));
+        // buildOutConcats stand-in (cc:2785 + 2551-2552): no concatenation is
+        // produced when the output is unused.
+        if !out_vn.read().unwrap().has_no_descend() {
+            reassemble_via_piece(self.data, &load_out_vns, &out_vn, op_addr, &insert_point);
+        }
+        if let Some(cp) = &copy_op {
+            self.data.op_destroy(&PcodeOpRef(cp.clone()));
+        }
+        self.data.op_destroy(&PcodeOpRef(load_op.clone()));
+        root.free_pointer_chain(self.data);
         Ok(true)
     }
 
     // Ghidra: subflow.cc:2808 SplitDatatype::splitStore
     /// Split a STORE operation. Faithful to `SplitDatatype::splitStore`
-    /// (subflow.cc:2808-2898): the STORE-side data-type `out_type` (recovered
-    /// by `RuleSplitStore` via `getValueDatatype`) is tested against the
-    /// stored value's data-type through `testDatatypeCompatibility` with the
-    /// value's constant bit; on success the original STORE object is
-    /// preserved (so INDIRECT references stay valid) and converted into the
-    /// first of the smaller STOREs, with the remaining components emitted as
-    /// subsequent STOREs at (pointer + component offset).
+    /// (subflow.cc:2808-2898): the LOAD-value trace re-derives the stored
+    /// value's data-type from a feeding LOAD (whose output feeds only this
+    /// STORE) via `get_value_datatype`, retrying the compatibility test
+    /// without the LOAD when the first test fails (cc:2812-2835); both roots
+    /// are located via `RootPointer::find` (cc:2840-2848); the value pieces
+    /// come from split constants, per-piece LOADs rebuilt off the LOAD root,
+    /// or SUBPIECEs of the value; an addr-tied store root is duplicated to a
+    /// temp via `duplicate_to_temp` before the piece pointers are rebuilt
+    /// (cc:2873-2876); the original STORE object is preserved (so INDIRECT
+    /// references stay valid) and converted into the first of the smaller
+    /// STOREs (cc:2879-2890); the feeding LOAD is destroyed and both unused
+    /// pointer chains are freed (cc:2892-2896).
     ///
-    /// The LOAD-value trace (cc:2817-2830, re-deriving the value type from a
-    /// feeding LOAD and retrying without it) and the multi-hop
-    /// `RootPointer::find` root back-up / addrTied `duplicateToTemp` are not
-    /// ported (see module docs).
+    /// The non-constant non-LOAD value path keeps the `buildInSubpieces`
+    /// stand-in (SUBPIECE extraction off a unique temp, without the oracle's
+    /// address-placed outputs and `generateConstants` folding); that raw
+    /// op-DAG divergence is the remaining `rewrite_op_shape` gap.
     ///
     /// Returns `true` if the split was performed. Returns `false` if the value
     /// is not a composite type that should be split, or the pointer cannot
@@ -5333,72 +5730,181 @@ impl<'a> SplitDatatype<'a> {
         out_type: &Arc<crate::type_system::Datatype>,
     ) -> Result<bool> {
         self.is_load_store = true;
-        let (space_vn, ptr_vn, value_vn, op_addr) = {
-            let o = store_op.read().unwrap();
-            (
-                o.get_in(0).cloned().unwrap(),
-                o.get_in(1).cloned().unwrap(),
-                o.get_in(2).cloned().unwrap(),
-                o.get_addr(),
-            )
-        };
-        let value_size = value_vn.read().unwrap().get_size();
-        let in_constant = value_vn.read().unwrap().is_constant();
-        let in_type = value_vn
-            .read()
-            .unwrap()
-            .get_type_read_facing()
-            .or_else(|| self.unknown_of(value_size));
-        let in_type = match in_type {
+        let in_vn = store_op.read().unwrap().get_in(2).cloned().unwrap();
+        let store_space = load_store_space(store_op, 0);
+        // LOAD-value trace (cc:2813-2820): a LOAD feeding only this STORE
+        // re-derives the value data-type from the LOAD's pointer.
+        let mut load_op: Option<Arc<RwLock<PcodeOp>>> = None;
+        let mut in_type: Option<Arc<crate::type_system::Datatype>> = None;
+        {
+            let in_r = in_vn.read().unwrap();
+            if in_r.is_written() {
+                if let Some(def) = in_r.get_def() {
+                    if def.read().unwrap().opcode == OpCode::CPUI_LOAD
+                        && in_r
+                            .lone_descend()
+                            .map(|d| Arc::ptr_eq(&d, store_op))
+                            .unwrap_or(false)
+                    {
+                        load_op = Some(def);
+                    }
+                }
+            }
+        }
+        if let Some(lo) = &load_op {
+            let size = in_vn.read().unwrap().get_size();
+            if let Some(types) = self.types.as_ref() {
+                in_type = SplitDatatype::get_value_datatype(lo, size, types);
+            }
+            if in_type.is_none() {
+                load_op = None;
+            }
+        }
+        if in_type.is_none() {
+            let read_facing = {
+                let store_guard = store_op.read().unwrap();
+                in_vn
+                    .read()
+                    .unwrap()
+                    .get_type_read_facing_op(&store_guard, 2)
+            };
+            in_type = read_facing.or_else(|| self.unknown_of(in_vn.read().unwrap().get_size()));
+        }
+        let in_constant = in_vn.read().unwrap().is_constant();
+        let mut in_type = match in_type {
             Some(t) => t,
             None => return Ok(false),
         };
         if !self.test_datatype_compatibility(&in_type, out_type, in_constant) {
+            if load_op.is_some() {
+                // If not compatible while considering the LOAD, check again,
+                // but without the LOAD (cc:2825-2832).
+                load_op = None;
+                let read_facing = {
+                    let store_guard = store_op.read().unwrap();
+                    in_vn
+                        .read()
+                        .unwrap()
+                        .get_type_read_facing_op(&store_guard, 2)
+                };
+                let retry_type =
+                    read_facing.or_else(|| self.unknown_of(in_vn.read().unwrap().get_size()));
+                let Some(retry_type) = retry_type else {
+                    return Ok(false);
+                };
+                self.data_type_pieces.clear(); // cc:2829
+                if !self.test_datatype_compatibility(&retry_type, out_type, in_constant) {
+                    return Ok(false);
+                }
+                in_type = retry_type;
+            } else {
+                return Ok(false);
+            }
+        }
+        if is_arithmetic_output(&in_vn) {
+            return Ok(false); // Sanity check (cc:2837)
+        }
+        let mut store_root = RootPointer::new();
+        if !store_root.find(store_op, out_type) {
             return Ok(false);
         }
-        if is_arithmetic_output(&value_vn) {
-            return Ok(false); // Sanity check (cc:2835)
+        let mut load_root = RootPointer::new();
+        if let Some(lo) = &load_op {
+            if !load_root.find(lo, &in_type) {
+                return Ok(false);
+            }
         }
-        let pieces: Vec<(i32, i32)> = self
-            .data_type_pieces
-            .iter()
-            .map(|c| (c.offset, c.in_type.get_size() as i32))
-            .collect();
-        if pieces.len() < 2 {
-            return Ok(false); // Nothing to split
+        // Value pieces (cc:2851-2871).
+        let mut in_varnodes: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        if in_constant {
+            self.build_in_constants(&in_vn, &mut in_varnodes, store_space.is_big_endian());
+        } else if let Some(lo) = load_op.clone() {
+            let mut load_ptrs: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+            self.build_pointers(
+                load_root.pointer.as_ref().unwrap(),
+                load_root.ptr_type.as_ref().unwrap(),
+                load_root.base_offset,
+                &PcodeOpRef(lo.clone()),
+                &mut load_ptrs,
+                true,
+            );
+            let load_space = load_store_space(&lo, 0);
+            let lo_ref = PcodeOpRef(lo.clone());
+            let lo_addr = lo_ref.0.read().unwrap().get_addr();
+            for i in 0..load_ptrs.len() {
+                let dt = self.data_type_pieces[i].in_type.clone();
+                let new_load = self.data.new_op(2, lo_addr);
+                self.data.op_set_opcode(&new_load, OpCode::CPUI_LOAD);
+                let space_vn = self.data.new_varnode_space(load_space);
+                self.data.op_set_input(&new_load, space_vn, 0);
+                self.data.op_set_input(&new_load, load_ptrs[i].clone(), 1);
+                let vn = self.data.new_unique_out(dt.get_size(), &new_load);
+                vn.write().unwrap().update_type(dt);
+                self.data.op_insert_before(&new_load, &lo_ref);
+                in_varnodes.push(vn);
+            }
+        } else {
+            // buildInSubpieces stand-in (registered gap: the oracle places the
+            // piece outputs at rootVn+off addresses and folds extended
+            // precision constants via generateConstants).
+            let store_ref = PcodeOpRef(store_op.clone());
+            let addr = store_ref.0.read().unwrap().get_addr();
+            for piece in self.data_type_pieces.clone() {
+                let v = subpiece_value(
+                    self.data,
+                    &in_vn,
+                    piece.offset,
+                    piece.in_type.get_size() as i32,
+                    addr,
+                    &store_ref,
+                );
+                in_varnodes.push(v);
+            }
         }
-        let store_ref = crate::op::PcodeOpRef(store_op.clone());
+        // Store pointers (cc:2873-2876): an addr-tied root must be duplicated
+        // into a temp so subsequent STOREs cannot modify it.
+        let store_ref = PcodeOpRef(store_op.clone());
+        let mut store_ptrs: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        if store_root
+            .pointer
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap()
+            .is_addr_tied()
+        {
+            store_root.duplicate_to_temp(self.data, &store_ref);
+        }
+        self.build_pointers(
+            store_root.pointer.as_ref().unwrap(),
+            store_root.ptr_type.as_ref().unwrap(),
+            store_root.base_offset,
+            &store_ref,
+            &mut store_ptrs,
+            false,
+        );
         // Preserve the original STORE object (so INDIRECT references stay
         // valid) but convert it into the first of the smaller STOREs
-        // (Ghidra subflow.cc:2879-2880). Piece pointers are window-relative:
-        // in(1) addresses the window start, mirroring buildPointers'
-        // (baseOffset + offset) addressing with the root at in(1).
-        let first_off = pieces[0].0 as u64;
-        let first_ptr = if first_off == 0 {
-            ptr_vn.clone()
-        } else {
-            add_pointer(self.data, &ptr_vn, first_off, op_addr, &store_ref)
-        };
-        let first_value = subpiece_value(self.data, &value_vn, pieces[0].0, pieces[0].1, op_addr, &store_ref);
-        self.data.op_set_input(&store_ref, first_ptr, 1);
-        self.data.op_set_input(&store_ref, first_value, 2);
+        // (cc:2879-2880).
+        self.data.op_set_input(&store_ref, store_ptrs[0].clone(), 1);
+        self.data.op_set_input(&store_ref, in_varnodes[0].clone(), 2);
         let mut last_store = store_ref.clone();
-        for p in &pieces[1..] {
-            let off = p.0 as u64;
-            let comp_ptr = if off == 0 {
-                ptr_vn.clone()
-            } else {
-                add_pointer(self.data, &ptr_vn, off, op_addr, &last_store)
-            };
-            let comp_value = subpiece_value(self.data, &value_vn, p.0, p.1, op_addr, &last_store);
-            let new_store = self.data.new_op(3, op_addr);
+        let store_addr = store_ref.0.read().unwrap().get_addr();
+        for i in 1..store_ptrs.len() {
+            let new_store = self.data.new_op(3, store_addr);
             self.data.op_set_opcode(&new_store, OpCode::CPUI_STORE);
-            self.data.op_set_input(&new_store, space_vn.clone(), 0);
-            self.data.op_set_input(&new_store, comp_ptr, 1);
-            self.data.op_set_input(&new_store, comp_value, 2);
+            let space_vn = self.data.new_varnode_space(store_space);
+            self.data.op_set_input(&new_store, space_vn, 0);
+            self.data.op_set_input(&new_store, store_ptrs[i].clone(), 1);
+            self.data.op_set_input(&new_store, in_varnodes[i].clone(), 2);
             self.data.op_insert_after(&new_store, &last_store);
             last_store = new_store;
         }
+        if let Some(lo) = load_op {
+            self.data.op_destroy(&PcodeOpRef(lo));
+            load_root.free_pointer_chain(self.data);
+        }
+        store_root.free_pointer_chain(self.data);
         Ok(true)
     }
 
@@ -5500,24 +6006,18 @@ fn is_arithmetic_output(vn: &Arc<RwLock<Varnode>>) -> bool {
     }
 }
 
-// Ghidra: subflow.hh:271 RootPointer::addPointer
-/// Build a `pointer + offset` INT_ADD op, inserted before `before`, returning
-/// the new pointer Varnode.
-fn add_pointer(
-    fd: &mut Funcdata,
-    ptr_vn: &Arc<RwLock<Varnode>>,
-    off: u64,
-    addr: Address,
-    before: &crate::op::PcodeOpRef,
-) -> Arc<RwLock<Varnode>> {
-    let add_op = fd.new_op(2, addr);
-    fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
-    let add_out = fd.new_unique_out(ptr_vn.read().unwrap().get_size(), &add_op);
-    let off_const = fd.new_constant(8, off);
-    fd.op_set_input(&add_op, ptr_vn.clone(), 0);
-    fd.op_set_input(&add_op, off_const, 1);
-    fd.op_insert_before(&add_op, before);
-    add_out
+// Ghidra: varnode.hh:426 Varnode::getSpaceFromConst
+/// Decode the AddrSpace encoded in a constant space varnode — the LOAD/STORE
+/// `in(0)` space input — faithful to the inline
+/// `Varnode::getSpaceFromConst` used at subflow.cc:2786/2850/2857.
+fn load_store_space(op: &Arc<RwLock<PcodeOp>>, slot: usize) -> AddressSpace {
+    let vn = op.read().unwrap().get_in(slot).cloned().unwrap();
+    let guard = vn.read().unwrap();
+    if guard.is_constant() {
+        AddressSpace::from_id(guard.get_offset() as crate::space::SpaceId)
+    } else {
+        guard.get_space()
+    }
 }
 
 // Ghidra: subflow.hh:271 RootPointer::subpieceValue

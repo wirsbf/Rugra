@@ -214,7 +214,9 @@ std::string shape(const Datatype *ct)
 }
 
 // Resolve the byte offset of `vn` relative to the case's root pointer
-// varnode, following PTRSUB/INT_ADD/PTRADD constant chains.
+// varnode, following PTRSUB/INT_ADD/PTRADD constant chains. COPYs are
+// transparent for offset purposes (they carry no offset), so the chain also
+// walks through the duplicateToTemp COPY root.
 int64_t resolveOffset(const Varnode *vn, const Varnode *root, bool &ok)
 {
   if (vn == root) {
@@ -227,6 +229,9 @@ int64_t resolveOffset(const Varnode *vn, const Varnode *root, bool &ok)
   }
   const PcodeOp *def = vn->getDef();
   OpCode opc = def->code();
+  if (opc == CPUI_COPY) {
+    return resolveOffset(def->getIn(0), root, ok);
+  }
   if (opc != CPUI_PTRSUB && opc != CPUI_INT_ADD && opc != CPUI_PTRADD) {
     ok = false;
     return 0;
@@ -845,6 +850,226 @@ int main() {
     global_second_round_changes += stab;
     std::cout << "apply|case=array_const_store|ret=" << ret
               << "|stores=" << list.str()
+              << "|stab=" << stab << '\n';
+  }
+
+  AddrSpace *ram = architecture.getSpaceByName("ram");
+  TypePointer *ptr_uint8 = types->getTypePointer(8, uint8, 1);
+  // apply: flat_array_pointer_store (uint4[6]* window over a constant —
+  // RootPointer::find rejects the implied-array valueType mismatch,
+  // subflow.cc:2161-2163: ptrTo=uint4[6] != element uint4 with impliedBase
+  // set -> return false, zero ops added, original STORE kept)
+  {
+    Varnode *ptr = make_ptr(ptr_array);
+    Varnode *value = fd.newConstant(8, 0x1122334455667788);
+    PcodeOp *store = make_store(ptr, value);
+    int64_t before = count_ops();
+    int4 ret = split_store_rule.applyOp(store, fd);
+    int64_t added = count_ops() - before;
+    std::cout << "apply|case=flat_array_pointer_store|ret=" << ret
+              << "|ops_added=" << added << "|orig_kept=" << (op_alive(store) ? 1 : 0)
+              << '\n';
+  }
+  // apply: progress8_twohop_store (2-hop PTRSUB(PTRSUB(root,8),4) chain ->
+  // find backs up twice, baseOffset=12; freePointerChain destroys both
+  // PTRSUBs after the rewrite)
+  {
+    Varnode *root = make_ptr(ptr_progress);
+    Varnode *mid = make_ptrsub(root, 8);
+    mid->updateType(ptr_progress);
+    Varnode *field_ptr = make_ptrsub(mid, 4);
+    field_ptr->updateType(ptr_progress);
+    Varnode *value = make_value(8);
+    PcodeOp *store = make_store(field_ptr, value);
+    int4 ret = split_store_rule.applyOp(store, fd);
+    std::vector<std::pair<int64_t, int4>> stores;
+    for (auto it = fd.beginOpAlive(); it != fd.endOpAlive(); ++it) {
+      PcodeOp *op = *it;
+      if (op->code() != CPUI_STORE)
+        continue;
+      bool ok = false;
+      int64_t off = resolveOffset(op->getIn(1), root, ok);
+      if (ok)
+        stores.push_back(std::make_pair(off, op->getIn(2)->getSize()));
+    }
+    std::sort(stores.begin(), stores.end());
+    std::ostringstream list;
+    for (size_t i = 0; i < stores.size(); ++i) {
+      if (i != 0)
+        list << ',';
+      list << stores[i].first << ':' << stores[i].second;
+    }
+    int4 stab = second_round();
+    global_second_round_changes += stab;
+    std::cout << "apply|case=progress8_twohop_store|ret=" << ret
+              << "|stores=" << list.str() << "|stab=" << stab << '\n';
+  }
+  // apply: addrtied_root_store (addr-tied ram-space root pointer ->
+  // duplicateToTemp COPIes it into a unique temp before buildPointers,
+  // subflow.cc:2874-2875; the projection resolves through that COPY)
+  {
+    Varnode *g = fd.newVarnode(8, Address(ram, 0x7100));
+    // addr-tied mapped global; the input flag mirrors the heritage-provided
+    // read (free varnodes reject multiple descendants, varnode.cc:334-337)
+    g->setFlags(Varnode::addrtied | Varnode::insert | Varnode::input);
+    g->updateType(ptr_progress);
+    Varnode *value = make_value(16);
+    PcodeOp *store = make_store(g, value);
+    int4 ret = split_store_rule.applyOp(store, fd);
+    std::vector<std::pair<int64_t, int4>> stores;
+    for (auto it = fd.beginOpAlive(); it != fd.endOpAlive(); ++it) {
+      PcodeOp *op = *it;
+      if (op->code() != CPUI_STORE)
+        continue;
+      bool ok = false;
+      int64_t off = resolveOffset(op->getIn(1), g, ok);
+      if (ok)
+        stores.push_back(std::make_pair(off, op->getIn(2)->getSize()));
+    }
+    std::sort(stores.begin(), stores.end());
+    std::ostringstream list;
+    for (size_t i = 0; i < stores.size(); ++i) {
+      if (i != 0)
+        list << ',';
+      list << stores[i].first << ':' << stores[i].second;
+    }
+    int4 stab = second_round();
+    global_second_round_changes += stab;
+    std::cout << "apply|case=addrtied_root_store|ret=" << ret
+              << "|stores=" << list.str() << "|stab=" << stab << '\n';
+  }
+  // apply: load_feed_store (STORE(LOAD) memcpy-style — splitStore LOAD-value
+  // trace subflow.cc:2815-2820 re-derives the value type from the feeding
+  // LOAD and rewrites per-piece LOADs off the load root, destroying the
+  // original LOAD, cc:2892-2894)
+  {
+    Varnode *lptr = make_ptr(ptr_progress);
+    PcodeOp *load = fd.newOp(2, Address(code, 0x5000 + 0x10 * unique_counter));
+    fd.opSetOpcode(load, CPUI_LOAD);
+    Varnode *lout = fd.newVarnodeOut(16, Address(unique, 0x6000 + 0x10 * unique_counter), load);
+    fd.opSetInput(load, fd.newVarnodeSpace(ram), 0);
+    fd.opSetInput(load, lptr, 1);
+    fd.opInsertEnd(load, block);
+    ++unique_counter;
+    Varnode *sptr = make_ptr(ptr_progress);
+    PcodeOp *store = make_store(sptr, lout);
+    int4 ret = split_store_rule.applyOp(store, fd);
+    std::vector<std::pair<int64_t, int4>> stores;
+    for (auto it = fd.beginOpAlive(); it != fd.endOpAlive(); ++it) {
+      PcodeOp *op = *it;
+      if (op->code() != CPUI_STORE)
+        continue;
+      bool ok = false;
+      int64_t off = resolveOffset(op->getIn(1), sptr, ok);
+      if (ok)
+        stores.push_back(std::make_pair(off, op->getIn(2)->getSize()));
+    }
+    std::sort(stores.begin(), stores.end());
+    std::ostringstream list;
+    for (size_t i = 0; i < stores.size(); ++i) {
+      if (i != 0)
+        list << ',';
+      list << stores[i].first << ':' << stores[i].second;
+    }
+    int4 stab = second_round();
+    global_second_round_changes += stab;
+    std::cout << "apply|case=load_feed_store|ret=" << ret
+              << "|stores=" << list.str()
+              << "|orig_load_gone=" << (op_alive(load) ? 0 : 1)
+              << "|stab=" << stab << '\n';
+  }
+  // apply: load_feed_retry_store (LOAD type fails compat — uint8 element
+  // array vs uint4 struct fields, cc:2363-2364 scalar descent null — the
+  // retry without the LOAD (cc:2825-2832) uses the value's undefined type
+  // and splits via SUBPIECEs; the original LOAD is kept because loadOp is
+  // cleared by the retry)
+  {
+    Varnode *lptr = make_ptr(ptr_uint8);
+    PcodeOp *load = fd.newOp(2, Address(code, 0x5400 + 0x10 * unique_counter));
+    fd.opSetOpcode(load, CPUI_LOAD);
+    Varnode *lout = fd.newVarnodeOut(16, Address(unique, 0x6400 + 0x10 * unique_counter), load);
+    fd.opSetInput(load, fd.newVarnodeSpace(ram), 0);
+    fd.opSetInput(load, lptr, 1);
+    fd.opInsertEnd(load, block);
+    ++unique_counter;
+    Varnode *sptr = make_ptr(ptr_progress);
+    PcodeOp *store = make_store(sptr, lout);
+    int4 ret = split_store_rule.applyOp(store, fd);
+    std::vector<std::pair<int64_t, int4>> stores;
+    for (auto it = fd.beginOpAlive(); it != fd.endOpAlive(); ++it) {
+      PcodeOp *op = *it;
+      if (op->code() != CPUI_STORE)
+        continue;
+      bool ok = false;
+      int64_t off = resolveOffset(op->getIn(1), sptr, ok);
+      if (ok)
+        stores.push_back(std::make_pair(off, op->getIn(2)->getSize()));
+    }
+    std::sort(stores.begin(), stores.end());
+    std::ostringstream list;
+    for (size_t i = 0; i < stores.size(); ++i) {
+      if (i != 0)
+        list << ',';
+      list << stores[i].first << ':' << stores[i].second;
+    }
+    int4 stab = second_round();
+    global_second_round_changes += stab;
+    std::cout << "apply|case=load_feed_retry_store|ret=" << ret
+              << "|stores=" << list.str()
+              << "|orig_load_kept=" << (op_alive(load) ? 1 : 0)
+              << "|stab=" << stab << '\n';
+  }
+  // applyload: copy_follow_load (LOAD output with a lone COPY descendant —
+  // splitLoad follows the COPY (cc:2761-2771), splits the COPY's output,
+  // inserts the piece LOADs before the COPY, and destroys both the COPY and
+  // the original LOAD, cc:2795-2797)
+  {
+    Varnode *ptr = make_ptr(ptr_progress);
+    PcodeOp *load = fd.newOp(2, Address(code, 0x5800 + 0x10 * unique_counter));
+    fd.opSetOpcode(load, CPUI_LOAD);
+    Varnode *load_out = fd.newVarnodeOut(16, Address(unique, 0x6800 + 0x10 * unique_counter), load);
+    fd.opSetInput(load, fd.newVarnodeSpace(ram), 0);
+    fd.opSetInput(load, ptr, 1);
+    fd.opInsertEnd(load, block);
+    ++unique_counter;
+    PcodeOp *copy = fd.newOp(1, Address(code, 0x5900 + 0x10 * unique_counter));
+    fd.opSetOpcode(copy, CPUI_COPY);
+    Varnode *out2 = fd.newVarnodeOut(16, Address(unique, 0x6900 + 0x10 * unique_counter), copy);
+    fd.opSetInput(copy, load_out, 0);
+    fd.opSetOutput(copy, out2);
+    fd.opInsertEnd(copy, block);
+    ++unique_counter;
+    // keep out2 live so the reassembly concatenation is required
+    PcodeOp *tail = fd.newOp(1, Address(code, 0x5a00 + 0x10 * unique_counter));
+    fd.opSetOpcode(tail, CPUI_COPY);
+    fd.newVarnodeOut(16, Address(unique, 0x6a00 + 0x10 * unique_counter), tail);
+    fd.opSetInput(tail, out2, 0);
+    fd.opInsertEnd(tail, block);
+    ++unique_counter;
+    int4 ret = split_load_rule.applyOp(load, fd);
+    std::vector<std::pair<int64_t, int4>> loads;
+    for (auto it = fd.beginOpAlive(); it != fd.endOpAlive(); ++it) {
+      PcodeOp *op = *it;
+      if (op->code() != CPUI_LOAD)
+        continue;
+      bool ok = false;
+      int64_t off = resolveOffset(op->getIn(1), ptr, ok);
+      if (ok)
+        loads.push_back(std::make_pair(off, op->getOut()->getSize()));
+    }
+    std::sort(loads.begin(), loads.end());
+    std::ostringstream list;
+    for (size_t i = 0; i < loads.size(); ++i) {
+      if (i != 0)
+        list << ',';
+      list << loads[i].first << ':' << loads[i].second;
+    }
+    int4 stab = second_round();
+    global_second_round_changes += stab;
+    std::cout << "applyload|case=copy_follow_load|ret=" << ret
+              << "|loads=" << list.str()
+              << "|orig_gone=" << (op_alive(load) ? 0 : 1)
+              << "|copy_gone=" << (op_alive(copy) ? 0 : 1)
               << "|stab=" << stab << '\n';
   }
 
