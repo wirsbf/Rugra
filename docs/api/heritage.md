@@ -839,6 +839,13 @@ provenance，不改变 guard 行为或对齐状态。
   `try_output_stack_guard` 改为 per-callspec 签名（fc + caller/callee 双地址），
   `guard_output_overlap` 用 `new_indirect_creation_in_space`（cc:1253 真正用
   creation 而非 indirect op）。
+- `guard_call_overlapping_input` 的 truncate_amount（cc:1221
+  `addr.justifiedContain(size, truncAddr, vData.size, false)`，
+  2026-08-24 FSPEC-JUSTIFIED-ENDIAN-0002）：`justified_contain_range` 增加第 6
+  参空间端序后，此调用点传 heritage 空间 `space.is_big_endian()`——LE 空间
+  forceleft=false 返回 start 距离 `truncAddr - addr`（address.cc:141），SUBPIECE
+  常量不再误取 BE 的 end 距离。双侧投影见
+  `tests/oracle/fspec_endian_resolver_1204`（truncate_subpiece case）。
 - `guard_stores_range`/`guard_loads_range` 忠实化：STORE 空间匹配（range space
   或其 container + usesSpacebasePtr，cc:1551-1552）、`indirect_store` flag 由
   调用方传入、fl/addrtied 早退（cc:1576）。

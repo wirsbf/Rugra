@@ -605,7 +605,55 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
   （heritage truncate_amount 与 LE 无 flag entry 的 `==0` 判定受影响）。修
   复需把空间端序穿进 helper 签名（含 heritage.rs 调用点），超出本租约，
   待登记 TODO 后另行处理。
+  （当日后续：已由 FSPEC-JUSTIFIED-ENDIAN-0002 修复，见下方条目。）
 - 双侧 fixture：`tests/oracle/justified_contain_1204.{cc,rs,metadata.json}` +
   `tools/run_justified_contain_oracle.sh`（三 case 投影：LE/BE×forceleft 的
   17 几何极性+分支算术矩阵（含 1/4/8/cross-4 尺寸边界）、ParamEntry
   alignment==0 包装、characterizeAsParam 三分类；63 行双侧逐字节 MATCH）。
+
+### 2026-08-24：空间端序穿签名 + characterizeAsParam resolver 门控（FSPEC-JUSTIFIED-ENDIAN-0002 / FSPEC-CHARACTERIZE-RESOLVER-GATE-0003）
+
+- **`justified_contain_range(base, sz2, addr, sz, force_left, space_is_big_endian)`**
+  增加第 6 参空间端序，分支条件重写为 Ghidra 原文的
+  `base->isBigEndian() && !forceleft`（address.cc:138）：仅
+  **BE 空间 + forceleft=false** 返回 end 距离 `off1 - off2`，其余组合（含
+  **LE 空间任意 forceleft**）返回 start 距离 `op2.offset - offset`
+  （address.cc:141）。旧实现把 `!force_left` 直接当 BE 路由，LE 调用方
+  （heritage truncate_amount、无 flag LE entry 的 `==0` 判定）拿到错误的
+  end 距离。
+- **调用点端序来源**（Ghidra 均为 `base->isBigEndian()`，即地址所在空间）：
+  - `ParamEntry::justified_contain` alignment==0 路径传
+    `self.space.is_big_endian()`（cc:266-267 构造 `Address entry(spaceid,…)`）；
+    join-piece walk 传各 piece 自己的 `vdata.space.is_big_endian()`（cc:255）。
+    过渡期 enum `AddressSpace::is_big_endian` 恒 LE（space.rs 默认），即生产
+    闭包全部走 start 距离；BE ParamEntry 空间在 enum 模型下不可表达
+    （ADDRESS-0001 残差）。
+  - `transfer_locked_output_param` 四处（cc:5073/5075/5082/5084）只观察
+    `>= 0`（containment），距离不可观测，传 LE 默认并注释声明。
+  - `heritage.rs guard_call_overlapping_input` 的 truncate_amount（cc:1221）
+    传 heritage 空间 `space.is_big_endian()` —— LE 下 SUBPIECE 常量 =
+    `truncAddr - addr`（start 距离），不再是 end 距离。
+- **`characterize_as_param` 重构为 Ghidra 的 resolver 门控两段扫描**
+  （fspec.cc:682-719）：phase-1 只访问**注册 extent 包含 query 起点**的 entry
+  （`resolver->find(loc.getOffset())`，rangemap.hh:332；populateResolver
+  fspec.cc:1191-1216 按 entry 自身 extent / join 逐 piece extent 注册），
+  phase-2 仅当 phase-1 块不是 resolver 最后一块（cc:708
+  `iterpair.first != resolver->end()`，等价于该空间存在**起点高于 query
+  起点**的注册 extent——细化区间在每个注册起点处分裂，上方存在区间 iff
+  存在更高起点）时扫描**注册起点落在 `(offset, offset+size-1]`** 的 entry
+  （cc:709-716 `find_end(loc.getOffset()+size-1)`）。query 起点在所有同空间
+  extent 之上时门控关闭、containedBy 扫描整体跳过、直返
+  `no_containment`。join entry 的 `containedBy` 因 spaceid=join 空间恒 false
+  （cc:202），Rust 以 `e.space == space` 守卫复刻。线性扫描被窗口化扫描
+  取代；窗口辅助 `registered_extents`（RUGRA-GLUE）。
+- 单元测试：`test_justified_contain_range_one_sided_violations` /
+  `test_param_entry_justified_contain` 改钉 LE 端序语义（无 flag Register
+  entry 的 0x202/2 → start 距离 2，非 end 距离 4）。
+- 双侧 fixture：`tests/oracle/fspec_endian_resolver_1204.{cc,rs,metadata.json}`
+  + `tools/run_fspec_endian_resolver_oracle.sh`（三 case：helper 级
+  LE/BE×forceleft 四组合距离判别、LE 无 flag entry 的 wrapper 投影、
+  heritage truncate 的 SUBPIECE 常量形态 + characterizeAsParam 的
+  extent-out 门控 query 集）。`justified_contain_1204` 因 src 行为变更
+  同 commit 重钉（Rust 侧 view=start 行改走 `force_left=false`+LE 的真实
+  缺陷路由，be=1 行改 helper 显式端序直调——enum 空间无法 staging BE
+  ParamEntry，ADDRESS-0001 过渡声明）。

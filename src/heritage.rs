@@ -2772,12 +2772,17 @@ impl Heritage {
             return;
         }
         // cc:1221: truncateAmount = addr.justifiedContain(size, truncAddr, vData.size, false)
+        // address.cc:138-141: with forceleft=false the heritage space's
+        // endianness selects the distance — little-endian spaces count
+        // from the range start (truncAddr - addr), big-endian from the
+        // end (FSPEC-JUSTIFIED-ENDIAN-0002).
         let truncate_amount = crate::fspec::justified_contain_range(
             addr.as_u64(),
             size,
             trunc_addr.as_u64(),
             v_size,
             false,
+            space.is_big_endian(),
         );
         // cc:1222-1223: subpieceOp = newOp(2, op->getAddr())
         let call_op = match fd.get_call_specs(fc_idx).and_then(|fc| fc.find_call_op(fd)) {

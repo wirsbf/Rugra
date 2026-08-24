@@ -2579,10 +2579,15 @@ impl FuncCallSpecs {
                 let v = vn.read().unwrap();
                 (*v.get_addr(), v.get_size() as i32)
             };
+            // cc:5073/5075 only observe >= 0 (containment), so the
+            // endian-aware distance is not observable here; the legacy
+            // spaceless Address cannot carry the param's space, and the
+            // transitional enum-space model is little-endian
+            // (space.rs is_big_endian default).
             let contains_param =
-                justified_contain_range(p_addr.as_u64(), p_size, vn_addr.as_u64(), vn_size, false) >= 0;
+                justified_contain_range(p_addr.as_u64(), p_size, vn_addr.as_u64(), vn_size, false, false) >= 0;
             let contained_by_param =
-                justified_contain_range(vn_addr.as_u64(), vn_size, p_addr.as_u64(), p_size, false) >= 0;
+                justified_contain_range(vn_addr.as_u64(), vn_size, p_addr.as_u64(), p_size, false, false) >= 0;
             if contains_param || contained_by_param {
                 new_output.push(vn);
             }
@@ -2606,10 +2611,12 @@ impl FuncCallSpecs {
                     let v = vn.read().unwrap();
                     (*v.get_addr(), v.get_size() as i32)
                 };
+                // cc:5082/5084 — same >=0-only containment observation as
+                // above (distance not observable; LE transitional model).
                 let contains_param =
-                    justified_contain_range(p_addr.as_u64(), p_size, vn_addr.as_u64(), vn_size, false) >= 0;
+                    justified_contain_range(p_addr.as_u64(), p_size, vn_addr.as_u64(), vn_size, false, false) >= 0;
                 let contained_by_param =
-                    justified_contain_range(vn_addr.as_u64(), vn_size, p_addr.as_u64(), p_size, false) >= 0;
+                    justified_contain_range(vn_addr.as_u64(), vn_size, p_addr.as_u64(), p_size, false, false) >= 0;
                 if contains_param || contained_by_param {
                     new_output.push(vn);
                 }
@@ -4264,15 +4271,25 @@ impl ParamEntry {
         if let Some(j) = &self.join {
             let mut res = 0i32;
             for vdata in j.pieces.iter().rev() {
-                let cur = justified_contain_range(vdata.offset, vdata.size, addr.as_u64(), sz, false);
+                // Ghidra: fspec.cc:255 vdata.getAddr().justifiedContain(...,false)
+                // — forceleft=false on each piece's own space, so the
+                // piece space endianness drives the branch (address.cc:138).
+                let cur = justified_contain_range(
+                    vdata.offset, vdata.size, addr.as_u64(), sz, false,
+                    vdata.space.is_big_endian(),
+                );
                 if cur < 0 { res += vdata.size; } else { return res + cur; }
             }
             return -1;
         }
         if self.alignment == 0 {
+            // Ghidra: fspec.cc:266-267 Address entry(spaceid,addressbase);
+            // entry.justifiedContain(size,addr,sz,forceleft) — the entry
+            // space's endianness drives the address.cc:138 branch.
             return justified_contain_range(
                 self.address_base, self.size, addr.as_u64(), sz,
                 (self.flags & param_entry_flags::FORCE_LEFT_JUSTIFY) != 0,
+                self.space.is_big_endian(),
             );
         }
         let start_addr = addr.as_u64();
@@ -4520,9 +4537,21 @@ impl ParamEntry {
 // guardOutputOverlapStack) call the same `Address::justifiedContain` math
 // on caller-perspective addresses. The `base != op2.base` guard of the
 // Ghidra original lives with the callers (this helper takes spaceless raw
-// offsets); `force_left=true` selects the `op2.offset - offset` branch,
-// `force_left=false` the big-endian `off1 - off2` branch.
-pub fn justified_contain_range(base: u64, sz2: i32, addr: u64, sz: i32, force_left: bool) -> i32 {
+// offsets). The endian-aware branch needs the space endianness exactly
+// like Ghidra's `base->isBigEndian()` (address.cc:138), so callers pass
+// `space_is_big_endian` for the space their offsets live in:
+// `space_is_big_endian && !force_left` selects the big-endian
+// `off1 - off2` end distance, every other combination the
+// `op2.offset - offset` start distance (a little-endian space returns the
+// start distance regardless of forceleft — FSPEC-JUSTIFIED-ENDIAN-0002).
+pub fn justified_contain_range(
+    base: u64,
+    sz2: i32,
+    addr: u64,
+    sz: i32,
+    force_left: bool,
+    space_is_big_endian: bool,
+) -> i32 {
     // Ghidra: address.cc:133 if (op2.offset < offset) return -1;
     // Either side poking out independently excludes containment (the two
     // checks are NOT a paired both-bounds-violated condition).
@@ -4532,14 +4561,38 @@ pub fn justified_contain_range(base: u64, sz2: i32, addr: u64, sz: i32, force_le
     let this_end = base.wrapping_add(sz2 as u64).wrapping_sub(1);
     let end_addr = addr.wrapping_add(sz as u64).wrapping_sub(1);
     if end_addr > this_end { return -1; }
-    // Ghidra: address.cc:138-140 if (isBigEndian() && !forceleft)
-    // return off1 - off2; return op2.offset - offset;
-    if force_left { (addr - base) as i32 } else { (this_end - end_addr) as i32 }
+    // Ghidra: address.cc:138-141 if (base->isBigEndian()&&(!forceleft))
+    // return (int4)(off1 - off2); return (int4)(op2.offset - offset);
+    if space_is_big_endian && !force_left {
+        (this_end - end_addr) as i32
+    } else {
+        (addr - base) as i32
+    }
 }
 
 // ======================================================================
 // ParamListStandard (fspec.hh:589-646 / fspec.cc:597-1517)
 // ======================================================================
+
+// RUGRA-GLUE: registered_extents — the address ranges `populateResolver`
+// (fspec.cc:1191-1216) enters into a space's ParamEntryResolver for the
+// given entry: the entry's own [base, base+size-1] extent for plain
+// entries, or one [offset, offset+size-1] range per join piece (in the
+// piece's own space). characterize_as_param's resolver windows are
+// expressed over these ranges.
+fn registered_extents(e: &ParamEntry, space: AddressSpace) -> Vec<(u64, u64)> {
+    if let Some(j) = &e.join {
+        j.pieces
+            .iter()
+            .filter(|p| p.space == space)
+            .map(|p| (p.offset, p.offset + p.size as u64 - 1))
+            .collect()
+    } else if e.space == space {
+        vec![(e.address_base, e.address_base + e.size as u64 - 1)]
+    } else {
+        Vec::new()
+    }
+}
 
 /// Parameter-list type discriminator. Faithful to `ParamList`'s anonymous
 /// enum (fspec.hh:427-433).
@@ -4858,39 +4911,75 @@ impl ParamListStandard {
     }
 
     // Ghidra: fspec.cc:682 ParamListStandard::characterizeAsParam
-    /// Characterize whether the given range overlaps parameter storage.
-    /// Returns one of the `containment::*` codes. Faithful to
-    /// `characterizeAsParam` (fspec.cc:682-719).
-    // Ghidra: fspec.cc:682 ParamListStandard::characterizeAsParam
     /// Characterize the containment between a storage range and this
     /// resource list. Faithful port of `characterizeAsParam`
-    /// (fspec.cc:682-713): Ghidra walks the space's resolver-map entries in
-    /// offset order, first the entries containing the query offset, then the
-    /// exclusion entries starting inside the range; Rugra's single ordered
-    /// entry scan with the same per-entry `justifiedContain`/`containedBy`
-    /// predicates observes the same classification set. The space filter
-    /// mirrors Ghidra's per-space resolver map (entries of other spaces are
-    /// never visited).
-    pub fn characterize_as_param(
-        &self,
-        space: AddressSpace,
-        offset: u64,
-        size: i32,
-    ) -> i32 {
-        let loc = Address::new(offset);
-        let mut res_contains = false;
-        let mut res_contained_by = false;
-        for e in &self.entry {
-            if e.get_space() != space { continue; }
-            let off = e.justified_contain(loc, size);
-            if off == 0 { return containment::CONTAINS_JUSTIFIED; }
-            else if off > 0 { res_contains = true; }
-            if e.is_exclusion() && e.contained_by(loc, size) { res_contained_by = true; }
+/// (fspec.cc:682-719), including the per-space resolver gating:
+/// - Phase 1 walks only the entries whose registered extent (the entry
+///   range, or a join piece range, per populateResolver fspec.cc:1191)
+///   contains the query start offset — Ghidra's
+///   `resolver->find(loc.getOffset())` (rangemap.hh:332) over
+///   `resolverMap[loc.getSpace()->getIndex()]` (cc:685-692).
+/// - The second scan runs only when the phase-1 block is not the last
+///   in the resolver (`iterpair.first != resolver->end()`, cc:708) —
+///   i.e. some registered extent in the query's space starts above the
+///   query offset (an extent-out query with no higher extent skips the
+///   containedBy scan entirely — FSPEC-CHARACTERIZE-RESOLVER-GATE-0003)
+///   — and visits entries whose registered start falls in
+///   `(offset, offset+size-1]`, up to `find_end(loc.getOffset()+size-1)`
+///   (cc:709-716).
+pub fn characterize_as_param(
+    &self,
+    space: AddressSpace,
+    offset: u64,
+    size: i32,
+) -> i32 {
+    let loc = Address::new(offset);
+    let mut res_contains = false;
+    let mut res_contained_by = false;
+    // Ghidra: fspec.cc:692-705 — resolver->find(loc.getOffset()): entries
+    // whose registered extent contains the query start offset.
+    for e in &self.entry {
+        let contains_start = registered_extents(e, space)
+            .iter()
+            .any(|&(a, b)| offset >= a && offset <= b);
+        if !contains_start { continue; }
+        let off = e.justified_contain(loc, size);
+        if off == 0 { return containment::CONTAINS_JUSTIFIED; }
+        else if off > 0 { res_contains = true; }
+        // cc:702: a join entry's spaceid is the join space, never the
+        // query's space, so its containedBy is structurally false
+        // (fspec.cc:202 spaceid != addr.getSpace()).
+        if e.is_exclusion() && e.space == space && e.contained_by(loc, size) {
+            res_contained_by = true;
         }
-        if res_contains { return containment::CONTAINS_UNJUSTIFIED; }
-        if res_contained_by { return containment::CONTAINED_BY; }
-        containment::NO_CONTAINMENT
     }
+    if res_contains { return containment::CONTAINS_UNJUSTIFIED; }
+    if res_contained_by { return containment::CONTAINED_BY; }
+    // Ghidra: fspec.cc:708 if (iterpair.first != resolver->end()): the
+    // phase-1 block must not be the resolver's last. The refinement
+    // splits at every registered start, so an interval exists above the
+    // query offset's interval iff some registered extent in this space
+    // starts above the query offset.
+    let gate_open = self.entry.iter().any(|e| {
+        registered_extents(e, space).iter().any(|&(a, _)| a > offset)
+    });
+    if gate_open {
+        // Ghidra: fspec.cc:709-716 — entries whose registered start is
+        // inside (offset, offset+size-1], scanned up to find_end of the
+        // query end offset.
+        let query_end = offset.wrapping_add(size as i64 as u64).wrapping_sub(1);
+        for e in &self.entry {
+            let starts_in_range = registered_extents(e, space)
+                .iter()
+                .any(|&(a, _)| a > offset && a <= query_end);
+            if !starts_in_range { continue; }
+            if e.is_exclusion() && e.space == space && e.contained_by(loc, size) {
+                return containment::CONTAINED_BY;
+            }
+        }
+    }
+    containment::NO_CONTAINMENT
+}
 
     // Ghidra: fspec.cc:1375 ParamListStandard::getBiggestContainedParam
     /// Find the largest parameter entry entirely contained in the range
@@ -7611,21 +7700,27 @@ mod tests {
 
     #[test]
     fn test_param_entry_justified_contain() {
-        // Ghidra: fspec.cc:248-283 justifiedContain. For a little-endian
-        // (non-left-justified) exclusion entry, the return value is the
-        // offset of the value's HIGH byte from the container's high end.
+        // Ghidra: fspec.cc:248-283 justifiedContain. For an unflagged
+        // little-endian exclusion entry (Register in the transitional
+        // enum-space model), address.cc:141 returns the START distance
+        // op2.offset - offset for forceleft=false (FSPEC-JUSTIFIED-ENDIAN-0002);
+        // a big-endian space without the flag would return the end
+        // distance off1 - off2 instead (address.cc:138-140).
         let mut e = ParamEntry::new(0);
         e.set_space(AddressSpace::Register);
         e.set_base(0x200);
         e.set_sizes(8, 1);
         e.set_alignment(0); // exclusion
-        // Full-range containment returns 0 (value is flush with the high end).
+        // Full-range containment returns 0 (both distance views).
         assert_eq!(e.justified_contain(Address::new(0x200), 8), 0);
-        // 2-byte value at 0x202 spans [0x202..0x203]; container high end is
-        // 0x207. Offset from high end = 0x207 - 0x203 = 4.
-        assert_eq!(e.justified_contain(Address::new(0x202), 2), 4);
-        // A value flush with the high end returns 0.
-        assert_eq!(e.justified_contain(Address::new(0x206), 2), 0);
+        // 2-byte value at 0x202 spans [0x202..0x203]; the LE start
+        // distance is 0x202 - 0x200 = 2 (the BE end distance is
+        // 0x207 - 0x203 = 4, unreachable through the enum space).
+        assert_eq!(e.justified_contain(Address::new(0x202), 2), 2);
+        // A value flush with the low end returns 0; flush with the high
+        // end returns 6 in the LE start-distance view.
+        assert_eq!(e.justified_contain(Address::new(0x200), 2), 0);
+        assert_eq!(e.justified_contain(Address::new(0x206), 2), 6);
         // Out of range
         assert_eq!(e.justified_contain(Address::new(0x300), 4), -1);
     }
@@ -7639,36 +7734,46 @@ mod tests {
     // offset arithmetic, returning 0 (false justified) or wrapped values.
     #[test]
     fn test_justified_contain_range_one_sided_violations() {
-        // entry [0x1000,0x1007] (base 0x1000, size 8).
+        // entry [0x1000,0x1007] (base 0x1000, size 8). Endianness
+        // arguments: `false` = little-endian space, `true` = big-endian
+        // space (address.cc:138 base->isBigEndian()).
         // Equal start, query pokes out high: [0x1000,0x100B] — Ghidra
         // off2 > off1 -> -1 (was 0 in the start-distance branch).
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 12, true), -1);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 12, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 12, true, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 12, false, false), -1);
         // Low-side partial overlap ending flush at the entry end:
         // [0xFFE,0x1007] — op2.offset < offset -> -1 (was 0 in the
         // end-distance branch: this_end - end_addr == 0).
-        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 10, true), -1);
-        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 10, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 10, true, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 10, false, false), -1);
         // Strict superset query [0xFFC,0x100B]: -1 (was a wrapped value).
-        assert_eq!(justified_contain_range(0x1000, 8, 0xFFC, 16, true), -1);
-        assert_eq!(justified_contain_range(0x1000, 8, 0xFFC, 16, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFC, 16, true, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFC, 16, false, false), -1);
         // High-side partial overlap from inside: [0x1004,0x100B] -> -1.
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1004, 8, true), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1004, 8, true, false), -1);
         // Low-side partial overlap ending inside: [0xFFE,0x1003] -> -1
         // (already rejected by the legacy paired condition; pinned).
-        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 6, false), -1);
+        assert_eq!(justified_contain_range(0x1000, 8, 0xFFE, 6, false, false), -1);
         // Size-1 entry [0x2000,0x2000]: equal-start-bigger -> -1.
-        assert_eq!(justified_contain_range(0x2000, 1, 0x2000, 2, true), -1);
-        assert_eq!(justified_contain_range(0x2000, 1, 0x2000, 2, false), -1);
-        // Contained geometries keep the branch arithmetic (address.cc:138-140):
-        // start view = op2.offset - offset, end view = off1 - off2.
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 8, true), 0);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 8, false), 0);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1002, 4, true), 2);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1002, 4, false), 2);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, true), 0);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, false), 4);
-        assert_eq!(justified_contain_range(0x1000, 8, 0x1003, 1, true), 3);
+        assert_eq!(justified_contain_range(0x2000, 1, 0x2000, 2, true, false), -1);
+        assert_eq!(justified_contain_range(0x2000, 1, 0x2000, 2, false, false), -1);
+        // Contained geometries keep the branch arithmetic
+        // (address.cc:138-141): little-endian spaces return the start
+        // distance op2.offset - offset for BOTH forceleft values;
+        // big-endian without forceleft returns off1 - off2; big-endian
+        // with forceleft returns the start distance again.
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 8, true, false), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 8, false, false), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1002, 4, true, false), 2);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1002, 4, false, false), 2);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, true, false), 0);
+        // LE + forceleft=false returns the START distance 0 (the
+        // FSPEC-JUSTIFIED-ENDIAN-0002 route; the end distance is 4).
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, false, false), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, false, true), 4);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1000, 4, true, true), 0);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1003, 1, true, false), 3);
+        assert_eq!(justified_contain_range(0x1000, 8, 0x1003, 1, false, true), 4);
     }
 
     // FSPEC-JUSTIFIED-CONTAIN-0001 projection: characterizeAsParam
