@@ -598,3 +598,6 @@ HighVariable 的 `v_type` 缓存迁入 `TypeCell`（`RwLock<Arc<Datatype>>`，Gh
 - `:1255` 同上（out/input 类型等同）
 - `:3312` `first.read().v_type.get()`（updateType 后读缓存）
 - `:3320` `Arc::ptr_eq(&datatype, &high.v_type.get())`
+
+-  已降私有（R16 建议⑤）：残余调用均在同文件测试内，防再次误接为管线入口。
+

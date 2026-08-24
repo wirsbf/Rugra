@@ -761,7 +761,7 @@ impl Merge {
     ///   8. MergeType       — same-type speculative merges
     ///   9. HideShadow      — shadow COPY consolidation
     ///  10. CopyMarker      — mark internal COPYs non-printing
-    pub fn merge_all(&mut self, fd: &mut Funcdata) {
+    fn merge_all(&mut self, fd: &mut Funcdata) {
         // Attach the persistent Funcdata merge channels (Ghidra
         // ActionMergeType runs on the same `data.getMerge()` object warmed
         // by the earlier mergerequired/mergecopy/mergeadjacent Actions,
