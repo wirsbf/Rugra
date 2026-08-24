@@ -2753,9 +2753,14 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Synthetic BSS/data variable names for addresses without ELF symbols
-        // Scan .data and .bss sections and create DAT_xxxxx entries for
-        // addresses that don't already have a symbol.
-        // We only create entries at 8-byte alignment to keep the table manageable.
+        // Scan .data and .bss sections and create DAT entries for
+        // addresses that don't already have a symbol. Naming follows the
+        // golden convention (synthetic_dat_name: DAT_ + 8-hex of the
+        // analyzeHeadless image-base-0x100000 address, e.g. base-0 0x17020
+        // -> DAT_00117020, matching golden :1678's PTR_DAT_00117020 /
+        // :2537's DAT_001149b0 width and base).
+        // Create synthetic names at every byte offset (sections are kept
+        // manageable by the 0x10000 size cap below).
         for header in elf.section_headers.iter() {
             if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
                 if name == ".data" || name == ".bss" {
@@ -2767,7 +2772,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                         for off in 0..size {
                             let addr = base + off;
                             if !symbol_table.contains_key(&addr) {
-                                symbol_table.insert(addr, format!("DAT_{:05x}", addr));
+                                symbol_table.insert(addr, synthetic_dat_name(addr));
                             }
                         }
                     }
