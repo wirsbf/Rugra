@@ -3,9 +3,10 @@ set -euo pipefail
 
 # TYPEOP-LOCALBASE-DEFAULTS-0001 locked Ghidra 12.0.4/Rugra bilateral
 # runner. The Rust side is built from the frozen production commit
-# (bfba4b4, TypeOp base-class local defaults + TypeOpCall opflags) via a
-# complete git archive, never from the live crate; no source overlays are
-# applied.
+# (4208320, TypeOp macro-family metatype local defaults via
+# getBase(size, ctor metaout/metain) — PRINTC-CAST-OPNAME-0001 M1; the
+# fixture is bilateral MATCH) via a complete git archive, never from the
+# live crate; no source overlays are applied.
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -96,21 +97,21 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=bfba4b4a5ca04579c38b3121a402314f8f89a2b3
-rugra_base_tree=aa425b45ffad0a3aa48bbd505c81f12d6a080285
-rugra_base_src_tree=afe38eb5b09cbd20c6654ffb04c19359be39aeba
+rugra_base_commit=4208320c18fc99e52cb183b692c2a19567fea014
+rugra_base_tree=2b4810432bfcecc251bcc92672621eb251f883df
+rugra_base_src_tree=46c1f38e6228fdc7402590e0ecca0562c5006e0e
 rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 rugra_binary_blob=76d9343ea3add321aa4134856323663b36365807
 rugra_expected_records=102
-rugra_expected_bytes=3578
-rugra_expected_stdout_sha256=00ad71d623b8b532dbe4c4d93337625a88ba0fbfbed95eafc9bad03eda4a2c69
+rugra_expected_bytes=3560
+rugra_expected_stdout_sha256=2d4f220a4acbe74ec780a03e3555f4eff4976bec4138389a30ad6320cc954046
 rugra_expected_stderr_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-bilateral_expected_diff_exit_code=1
-bilateral_expected_diff_records=50
-bilateral_expected_diff_bytes=1615
-bilateral_expected_diff_sha256=189015822bf2e7b0eb9a1e74d5d677b2733bb3ccdad7f3eb4a014ea659fe2eec
+bilateral_expected_diff_exit_code=0
+bilateral_expected_diff_records=0
+bilateral_expected_diff_bytes=0
+bilateral_expected_diff_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ghidra_root="$repo_root/ghidra"
 metadata_live="$repo_root/tests/oracle/typeop_localbase_defaults_1204.metadata.json"
 cpp_fixture_live="$repo_root/tests/oracle/typeop_localbase_defaults_1204.cc"
@@ -257,10 +258,10 @@ def require(label, actual, expected):
 
 require("metadata schema", metadata["schema_version"], 1)
 require("fixture id", metadata["fixture_id"], "TYPEOP-LOCALBASE-DEFAULTS-0001")
-require("overall status", metadata["overall_status"], "MISMATCH")
+require("overall status", metadata["overall_status"], "MATCH")
 require("oracle capture status", metadata["covered_projection"]["oracle_capture"]["status"], "ORACLE_CAPTURED")
 require("Rugra execution status", metadata["covered_projection"]["rugra_execution"]["status"], "EXECUTED")
-require("bilateral status", metadata["covered_projection"]["bilateral_comparison"]["status"], "MISMATCH")
+require("bilateral status", metadata["covered_projection"]["bilateral_comparison"]["status"], "MATCH")
 require("Rugra build status", metadata["build"]["rugra_build_status"], "EXECUTED")
 require("Cargo invocation evidence", metadata["build"]["cargo_invoked"], True)
 require("oracle commit", metadata["oracle"]["commit"], oracle_commit)
@@ -279,7 +280,7 @@ require("binary blob", comparand["binary_blob"], binary_blob)
 require(
     "snapshot model",
     comparand["snapshot_model"],
-    "immutable complete crate snapshot: git archive of the frozen production commit bfba4b4 with the TypeOp base-class local defaults, local_type_factory hook, and TypeOpCall opflags; no source overlays",
+    "immutable complete crate snapshot: git archive of the frozen production commit 4208320 with the TypeOp base-class local defaults, local_type_factory hook, TypeOpCall opflags, and the macro-family metatype local defaults (getBase(size, ctor metaout/metain), PRINTC-CAST-OPNAME-0001 M1); no source overlays",
 )
 require(
     "archive paths",
@@ -324,7 +325,7 @@ require("paired Rugra records", paired["rugra"]["records"], int(rugra_records))
 require("paired Rugra bytes", paired["rugra"]["bytes"], int(rugra_bytes))
 require("paired Rugra stdout", paired["rugra"]["stdout_sha256"], rugra_stdout_sha)
 require("paired Rugra stderr", paired["rugra"]["stderr_sha256"], rugra_stderr_sha)
-require("bilateral expected status", paired["bilateral"]["status"], "MISMATCH")
+require("bilateral expected status", paired["bilateral"]["status"], "MATCH")
 require("bilateral diff exit code", paired["bilateral"]["diff_exit_code"], int(bilateral_diff_exit_code))
 require("bilateral diff records", paired["bilateral"]["records"], int(bilateral_diff_records))
 require("bilateral diff bytes", paired["bilateral"]["bytes"], int(bilateral_diff_bytes))
@@ -524,7 +525,7 @@ print(
 )
 print(
     "typeop_localbase_defaults_1204: oracle_status=ORACLE_CAPTURED "
-    f"rugra_status=EXECUTED bilateral_status={status} overall_status=MISMATCH"
+    f"rugra_status=EXECUTED bilateral_status={status} overall_status={status}"
 )
 PY
 
