@@ -1628,6 +1628,7 @@ impl Heritage {
             let invn = fd
                 .vbank
                 .create_with_space(size as usize, space, addr.as_u64());
+            Heritage::apply_new_varnode_flags(fd, &invn);
             // cc:1629-1632: SUBPIECE(invn, offset)
             let sub_op = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
@@ -1645,7 +1646,7 @@ impl Heritage {
                 &sub_op.0,
             );
             sub_op.0.write().unwrap().output = Some(ret_val.clone());
-            fd.set_varnode_properties(&ret_val);
+            Heritage::apply_new_varnode_flags(fd, &ret_val);
             // cc:1635: invn->setActiveHeritage()
             invn.write().unwrap().set_active_heritage();
             // cc:1636: opInsertInput(op, retVal, op->numInput())
@@ -1719,6 +1720,7 @@ impl Heritage {
                     let invn = fd
                         .vbank
                         .create_with_space(size as usize, space, addr.as_u64());
+                    Heritage::apply_new_varnode_flags(fd, &invn);
                     invn.write().unwrap().set_active_heritage();
                     fd.op_insert_input(&op, invn, num_input);
                 }
@@ -1749,7 +1751,7 @@ impl Heritage {
                 &copyop.0,
             );
             copyop.0.write().unwrap().output = Some(vn.clone());
-            fd.set_varnode_properties(&vn);
+            Heritage::apply_new_varnode_flags(fd, &vn);
             // cc:1683-1684: vn->setAddrForce(); vn->setActiveHeritage()
             vn.write().unwrap().set_addr_force();
             vn.write().unwrap().set_active_heritage();
@@ -1767,6 +1769,7 @@ impl Heritage {
             let invn = fd
                 .vbank
                 .create_with_space(size as usize, space, addr.as_u64());
+            Heritage::apply_new_varnode_flags(fd, &invn);
             invn.write().unwrap().set_active_heritage();
             fd.op_set_input(&copyop, invn, 0);
             // cc:1690: opInsertBefore(copyop, op)
@@ -1902,8 +1905,9 @@ impl Heritage {
                     &newop.0,
                 );
                 newop.0.write().unwrap().output = Some(most_out.clone());
-                fd.set_varnode_properties(&most_out);
+                Heritage::apply_new_varnode_flags(fd, &most_out);
                 let big = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+                Heritage::apply_new_varnode_flags(fd, &big);
                 big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
                 fd.op_set_input(&newop, big, 0);
@@ -1947,8 +1951,9 @@ impl Heritage {
                     fd.vbank
                         .create_def_with_space(overlap as usize, space, piece_addr.as_u64(), &newop.0);
                 newop.0.write().unwrap().output = Some(least_out.clone());
-                fd.set_varnode_properties(&least_out);
+                Heritage::apply_new_varnode_flags(fd, &least_out);
                 let big = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+                Heritage::apply_new_varnode_flags(fd, &big);
                 big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
                 fd.op_set_input(&newop, big, 0);
@@ -1975,7 +1980,7 @@ impl Heritage {
                 fd.vbank
                     .create_def_with_space((overlap + vn_size) as usize, space, mid_addr.as_u64(), &newop.0);
             newop.0.write().unwrap().output = Some(mid_out.clone());
-            fd.set_varnode_properties(&mid_out);
+            Heritage::apply_new_varnode_flags(fd, &mid_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
             // cc:477-478: vn is the most significant input.
             fd.op_set_input(&newop, vn.clone(), 0);
@@ -1994,7 +1999,7 @@ impl Heritage {
                 fd.vbank
                     .create_def_with_space(size as usize, space, addr.as_u64(), &newop.0);
             newop.0.write().unwrap().output = Some(big_out.clone());
-            fd.set_varnode_properties(&big_out);
+            Heritage::apply_new_varnode_flags(fd, &big_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
             fd.op_set_input(&newop, mostvn.clone().expect("mostsigsize!=0 implies mostvn"), 0);
             fd.op_set_input(&newop, midvn.clone(), 1);
@@ -2186,10 +2191,16 @@ impl Heritage {
             }
             // (2) in-scope discovery range -> mapped | addrtied (the local
             // scope is never global, database.cc:1273's persist is skipped).
-            let in_scope = scope
-                .local_range
-                .iter()
-                .any(|&(first, range_last)| first <= offset && last <= range_last);
+            // The scope's RangeList carries the space identity
+            // (Scope::inScope -> RangeList::inRange), so only the scope's
+            // own (stack) space can hit this branch.
+            let in_scope = space == scope.space
+                && scope
+                    .local_range
+                    .iter()
+                    .any(|&(first, range_last)| {
+                        first <= offset && last <= range_last
+                    });
             if in_scope {
                 let mut f = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
                 if let Some(a) = fd.get_arch() {
@@ -2207,6 +2218,32 @@ impl Heritage {
             }
         }
         0
+    }
+
+    // Ghidra: funcdata_varnode.cc:148 Funcdata::newVarnode
+    /// The property-flag tail of `Funcdata::newVarnode`
+    /// (funcdata_varnode.cc:148-165) / `newVarnodeOut`
+    /// (funcdata_varnode.cc:104-127): after creating the Varnode,
+    /// `localmap->queryProperties(addr,size,Address(),vflags)` runs and —
+    /// when no SymbolEntry is found — `vn->setFlags(vflags & ~typelock)`
+    /// installs the range flags (persist from the property flagbase,
+    /// mapped/addrtied for in-scope stack ranges).  This helper applies
+    /// that tail to Varnodes created through the raw bank in the guard
+    /// family and in rename's input promotion; the symbol-entry branch
+    /// (setSymbolProperties) degrades to the entry-derived flags from
+    /// [`Heritage::guard_query_properties`] (Rust ScopeLocal carries no
+    /// SymbolEntry wiring on this path).
+    // RUGRA-GLUE: bank-created varnodes have no Funcdata::newVarnode wrapper
+    // in Rust; this is its observable flag tail.
+    pub fn apply_new_varnode_flags(fd: &Funcdata, vn: &Arc<RwLock<Varnode>>) {
+        let (space, offset, size) = {
+            let r = vn.read().unwrap();
+            (r.address_space, r.loc.as_u64(), r.get_size() as i32)
+        };
+        let fl = Heritage::guard_query_properties(fd, space, Address::new(offset), size);
+        vn.write()
+            .unwrap()
+            .set_flags(fl & !crate::varnode::varnode_flags::TYPELOCK);
     }
 
     // Ghidra: heritage.cc:219 Heritage::guardAll (Rugra analogue)
@@ -5035,6 +5072,7 @@ impl Heritage {
                                     };
                                     let new_vn =
                                         fd.vbank.create_with_space(vn_size, vn_space, vn_off);
+                                    Heritage::apply_new_varnode_flags(fd, &new_vn);
                                     let promoted = fd.set_input_varnode(new_vn);
                                     stack.push(promoted.clone());
                                     vnnew = promoted;
@@ -5085,6 +5123,7 @@ impl Heritage {
                                         let new_vn = fd
                                             .vbank
                                             .create_with_space(vn_size, vn_space, vn_off);
+                                        Heritage::apply_new_varnode_flags(fd, &new_vn);
                                         let promoted = fd.set_input_varnode(new_vn);
                                         stack.insert(0, promoted.clone());
                                         vnnew = promoted;
@@ -5160,6 +5199,7 @@ impl Heritage {
                                 };
                                 let new_vn =
                                     fd.vbank.create_with_space(vn_size, vn_space, vn_off);
+                                Heritage::apply_new_varnode_flags(fd, &new_vn);
                                 let promoted = fd.set_input_varnode(new_vn);
                                 stack.push(promoted.clone());
                                 vnnew = promoted;

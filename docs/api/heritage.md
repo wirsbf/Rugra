@@ -1015,3 +1015,24 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   模块整体仍 MISMATCH：loadGuard COPY 插入、indexed/ValueSet、join、
   removeRevisitedMarkers COPY 形态等未做切片按 TODO 登记（load/join/indexed
   归 HERITAGE-CALLGUARD/PROCESSJOINS 家族）。
+
+### 追记（同 slice，fixture 迭代发现）
+
+- `guard_query_properties` in-scope 分支补 space 比较：Ghidra
+  `Scope::inScope` 走 space-carrying `RangeList::inRange`
+  （database.hh:597）；缺 space 比较会让数值落在 stack 窗口内的
+  register/ram 偏移错误获得 mapped|addrtied。
+- 新增 `apply_new_varnode_flags`：`Funcdata::newVarnode`/`newVarnodeOut`
+  的属性尾部（queryProperties + `setFlags(vflags & ~typelock)`，
+  funcdata_varnode.cc:148-165/104-127），施加于 guard 家族 bank 创建的
+  varnode 与 rename 的 input promotion —— persist 属性带（case 3 双侧
+  persist1/persist1 字节级一致依赖此尾部）。
+- **登记的跨模块 MISMATCH（fixture case 2 暴露，本租约外）**：
+  `fspec.rs` `justified_contain_range` 的 -1 条件与 Ghidra
+  `Address::justifiedContain`（address.cc:131-141：`op2.offset < offset`
+  或 query 尾超出 entry 尾 → -1）不一致 —— Rust 仅当"两侧同时越界"才返
+  -1，部分重叠被当作 justified。结果是 `characterize_as_param` 对
+  range⊃entry 返回 contains 系而非 contained_by，guardReturnsOverlapping
+  的 SUBPIECE 截断路径在 Rust 不可达。修复属 fspec.rs 租约
+  （FSPEC-JUSTIFIED-CONTAIN，建议 root 登记 TODO）；fixture 双侧逐行
+  hash 钉住该差异，修复后翻 MATCH 重钉。
