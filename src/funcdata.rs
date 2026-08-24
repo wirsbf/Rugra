@@ -3413,6 +3413,13 @@ impl Funcdata {
     /// The constructor performs no setActiveHeritage — Ghidra's callers
     /// (guardCalls/guardStores, heritage.cc:1512-1516/1553-1556) do that
     /// after construction, so Rugra callers must too.
+    /// Both `newVarnode` (cc:689, funcdata_varnode.cc:148-165) and
+    /// `newVarnodeOut` (cc:692, funcdata_varnode.cc:104-127) apply their
+    /// property-flag tail — `localmap->queryProperties` then
+    /// `setFlags(vflags & ~typelock)` (or `setSymbolProperties` on a hit,
+    /// which folds to the same flag bits) — inside the constructor, so a
+    /// persist-band/stack-window in/out carries the range flags as soon as
+    /// the INDIRECT exists (FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001).
     pub fn new_indirect_op(
         &mut self,
         indeffect: &crate::op::PcodeOpRef,
@@ -3421,8 +3428,11 @@ impl Funcdata {
         sz: usize,
         extra_flags: u32,
     ) -> crate::op::PcodeOpRef {
-        // cc:689: newin = newVarnode(sz, addr);
+        // cc:689: newin = newVarnode(sz, addr); — newVarnode applies the
+        // property tail (funcdata_varnode.cc:148-165) with an INVALID
+        // usepoint before returning.
         let newin = self.vbank.create_with_space(sz, space, offset);
+        Heritage::apply_new_varnode_flags(self, &newin);
         // cc:690: newop = newOp(2, indeffect->getAddr());
         let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
         let newop = self.new_op(2, indeffect_addr);
@@ -3434,6 +3444,9 @@ impl Funcdata {
             .vbank
             .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
+        // newVarnodeOut's property tail (funcdata_varnode.cc:121-126) runs
+        // after the setOutput wiring, with usepoint = op->getAddr().
+        Heritage::apply_new_varnode_flags(self, &newout);
         // cc:693: opSetOpcode(newop, CPUI_INDIRECT);
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
         // cc:694: opSetInput(newop, newin, 0);
@@ -3602,8 +3615,10 @@ impl Funcdata {
     /// (funcdata_op.cc:710-728): the output Varnode is allocated at the
     /// caller's (space, offset) — e.g. the Register-space RAX range for a
     /// killed-by-call guard — instead of Unique. All flag and IOP semantics
-    /// are identical to the oracle constructor; no setActiveHeritage is done
-    /// here (guardCalls cc:1523 does it after construction).
+    /// are identical to the oracle constructor — including `newVarnodeOut`'s
+    /// property-flag tail (funcdata_varnode.cc:121-126) on the output — and
+    /// no setActiveHeritage is done here (guardCalls cc:1523 does it after
+    /// construction).
     // RUGRA-GLUE: split entry because Rugra Address lacks space identity; the
     // legacy Unique-space entry keeps out-of-write-set callers compiling.
     pub fn new_indirect_creation_in_space(
@@ -3623,12 +3638,16 @@ impl Funcdata {
         let newop = self.new_op(2, indeffect_addr);
         // cc:718: newop->flags |= PcodeOp::indirect_creation;
         newop.0.write().unwrap().flags |= pcodeop_flags::INDIRECT_CREATION;
-        // cc:719: newout = newVarnodeOut(sz, addr, newop);
+        // cc:719: newout = newVarnodeOut(sz, addr, newop); — newVarnodeOut
+        // applies its property tail (funcdata_varnode.cc:121-126) after the
+        // setOutput wiring, before the INDIRECT_CREATION bits below
+        // (FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001).
         let newout = self.vbank.create_with_space(sz, space, addr);
         let newout = self
             .vbank
             .set_def_prevalidated(newout, std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
+        Heritage::apply_new_varnode_flags(self, &newout);
         // cc:720-722: if (!possibleout) newin |= indirect_creation;
         //             newout |= indirect_creation;
         if !possibleout {

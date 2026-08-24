@@ -1581,3 +1581,31 @@ Funcdata 现在可经 `arch.symboltab` 走忠实 `Database`/`Scope` 查询图，
   .rodata DAT 条目、段(b) 重写 ActionConstantPtr 后代理退役）。
 - 验证：`tests/oracle/cptr_query_channel_1204` 双侧 fixture（真实 Ghidra
   12.0.4 oracle）；`cargo check --lib` 绿。
+
+## 2026-08-25：newVarnode 属性尾接入 INDIRECT 构造器（FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001）
+
+R9-F2 登记的两处租约外欠应用收口：`Funcdata::newIndirectOp` /
+`newIndirectCreation` 经 `newVarnode`（cc:689）/`newVarnodeOut`
+（cc:692/719）创建 varnode 时，oracle 在构造器内部施加属性尾
+（funcdata_varnode.cc:148-165 / 104-127：
+`localmap->queryProperties(addr,size,usepoint,vflags)` → 命中符号走
+`setSymbolProperties`，否则 `setFlags(vflags & ~typelock)`）。Rugra 侧
+对应物为 `Heritage::apply_new_varnode_flags`（heritage.rs，guard 家族
+R9 整改 7867b00 引入）：
+
+- `new_indirect_op`：newin（cc:689 尾，invalid usepoint）与 newout
+  （cc:692 尾，setOutput 接线后、usepoint=op 地址）各施加一次；
+- `new_indirect_creation_in_space`（含 `new_indirect_creation` 委托）：
+  newout（cc:719 尾）施加；in0 是 newConstant，无该尾（oracle 同）。
+
+效果：persist 属性带上 CALL unknown-effect guard 的 INDIRECT in/out 带
+`persist`（database.cc:1278-1279 flagbase 分支）、ScopeLocal stack 窗口内
+guard varnode 带 `mapped|addrtied`（database.cc:1272-1275 in-scope 分支），
+与 oracle 一致。已知残差沿用 `guard_query_properties` 的登记
+（HERITAGE-GUARD-FLSYMBOL-TIEBREAK-0001 的 min-size tie-break /
+use-limited 资格 / mapScope / 父链符号可见性）。
+
+验证：`tests/oracle/funcdata_flags_tail_1204` 双侧 fixture（锁定 12.0.4
+oracle，六 case 逐字节 MATCH：stack 窗口 in/out flags、persist band
+in/out + 非回溯、creation possibleout 双半边、unique 控制位、
+free 第二 opSetInput 异常前状态与错误文本）；`cargo check --lib` 绿。
