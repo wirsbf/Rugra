@@ -1,14 +1,11 @@
 #!/usr/bin/env -S -i PATH=/usr/bin:/bin /usr/bin/bash
 set -euo pipefail
 
-# VARNODE-LOCALTYPE-RESOLUTION-0001 locked Ghidra 12.0.4/Rugra bilateral
+# TYPEOP-CALLOTHER-USEROP-CLOSURE-0001 locked Ghidra 12.0.4/Rugra bilateral
 # runner. The Rust side is built from the frozen production commit
-# (5cba7550, Varnode::getLocalType full port + localType dispatch table +
-# the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread) via a
-# complete git archive, never from the live crate; no source overlays are
-# applied. Re-pinned from 8c26662: the get_local_type signature gained the
-# userops Option thread and the fixture call sites now pass None (the
-# fixture has no CALLOTHER cases; behavior is byte-identical).
+# (5cba7550, TypeOpCallother get*Local CALLOTHER arm + userops parameter
+# thread) via a complete git archive, never from the live crate; no source
+# overlays are applied.
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -21,7 +18,7 @@ if [[ -z "$runner_source" || ! -f "$runner_source" || -L "$runner_source" ]]; th
   exit 1
 fi
 repo_root=$(builtin cd "$(/usr/bin/dirname "$runner_source")/.." && builtin pwd -P)
-runner="$repo_root/tools/run_varnode_localtype_res_oracle.sh"
+runner="$repo_root/tools/run_callother_userop_closure_oracle.sh"
 if [[ "$runner_source" != "$runner" ]]; then
   echo "runner fd resolved outside the expected repository path" >&2
   exit 1
@@ -52,12 +49,12 @@ if [[ ! -d "$cache_parent" || -L "$cache_parent" ]]; then
   echo "cache parent is not a real directory: $cache_parent" >&2
   exit 1
 fi
-cache_root="$cache_parent/rugra-varnode-localtype-res-1204"
-# Task VARNODE-LOCALTYPE-RESOLUTION-0001 dedicated Cargo dirs: every Cargo
-# invocation below is serialized on the shared build flock and uses these
-# isolated, pre-created directories (never /tmp or a shared target).
-cargo_target=/home/wirs/.cache/varnode-localtype-res-target
-cargo_tmp=/home/wirs/.cache/varnode-localtype-res-tmp
+cache_root="$cache_parent/rugra-callother-closure-1204"
+# Task TYPEOP-LOCALTYPE-CALLOTHER-0001 (A52) dedicated Cargo dirs: every
+# Cargo invocation below is serialized on the shared build flock and uses
+# these isolated, pre-created directories (never /tmp or a shared target).
+cargo_target=/home/wirs/.cache/a52-callother-target
+cargo_tmp=/home/wirs/.cache/a52-callother-tmp
 /usr/bin/mkdir -p "$cargo_target" "$cargo_tmp"
 for cargo_dir in "$cargo_target" "$cargo_tmp"; do
   if [[ ! -d "$cargo_dir" || -L "$cargo_dir" ]]; then
@@ -102,6 +99,7 @@ oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
 oracle_varnode_cc_blob=a04614c582a1fd987d615dcec4a8b47d3501f95f
 oracle_typeop_cc_blob=5197e3eefd185ed39c58e65af0687d605e34ec5e
 oracle_type_cc_blob=962c525b7f9c6a901d84d6396de245a0bf6e5d60
+oracle_userop_cc_blob=9fe8b78d03cbeac63b02bd424261fb1404ddc8f5
 rugra_base_commit=5cba75501abab7b7f17e81dd8ae1dc45dc5e209a
 rugra_base_tree=518475282f4c9630acbab4fea6b178563acb45f6
 rugra_base_src_tree=928e4e186961f5462144de1f5def8854c281fe52
@@ -109,24 +107,24 @@ rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 rugra_binary_blob=76d9343ea3add321aa4134856323663b36365807
-rugra_expected_records=62
-rugra_expected_bytes=2194
-rugra_expected_stdout_sha256=b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244
+rugra_expected_records=72
+rugra_expected_bytes=2495
+rugra_expected_stdout_sha256=45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f
 rugra_expected_stderr_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 bilateral_expected_diff_exit_code=0
 bilateral_expected_diff_records=0
 bilateral_expected_diff_bytes=0
 bilateral_expected_diff_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ghidra_root="$repo_root/ghidra"
-metadata_live="$repo_root/tests/oracle/varnode_localtype_res_1204.metadata.json"
-cpp_fixture_live="$repo_root/tests/oracle/varnode_localtype_res_1204.cc"
-rust_fixture_live="$repo_root/tests/oracle/varnode_localtype_res_1204.rs"
+metadata_live="$repo_root/tests/oracle/callother_userop_closure_1204.metadata.json"
+cpp_fixture_live="$repo_root/tests/oracle/callother_userop_closure_1204.cc"
+rust_fixture_live="$repo_root/tests/oracle/callother_userop_closure_1204.rs"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
 bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
 bfd_library_dir=$(/usr/bin/dirname "$bfd_library")
 
 # Snapshot model: the frozen production commit already carries the
-# VARNODE-LOCALTYPE-RESOLUTION-0001 src changes, so the overlay table is empty.
+# TYPEOP-LOCALTYPE-CALLOTHER-0001 src changes, so the overlay table is empty.
 overlay_paths=()
 archive_paths=(
   Cargo.toml
@@ -176,12 +174,16 @@ actual_typeop_cc_blob=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_N
 actual_type_cc_blob=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
   "$host_git_bin" -C "$ghidra_root" rev-parse \
   "$oracle_commit:Ghidra/Features/Decompiler/src/decompile/cpp/type.cc")
+actual_userop_cc_blob=$(/usr/bin/env -i PATH="$clean_path" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 \
+  "$host_git_bin" -C "$ghidra_root" rev-parse \
+  "$oracle_commit:Ghidra/Features/Decompiler/src/decompile/cpp/userop.cc")
 if [[ "$actual_commit" != "$oracle_commit" || "$tag_commit" != "$oracle_commit" || \
       "$actual_cpp_tree" != "$oracle_cpp_tree" || \
       "$actual_makefile_blob" != "$oracle_makefile_blob" || \
       "$actual_varnode_cc_blob" != "$oracle_varnode_cc_blob" || \
       "$actual_typeop_cc_blob" != "$oracle_typeop_cc_blob" || \
-      "$actual_type_cc_blob" != "$oracle_type_cc_blob" ]]; then
+      "$actual_type_cc_blob" != "$oracle_type_cc_blob" || \
+      "$actual_userop_cc_blob" != "$oracle_userop_cc_blob" ]]; then
   echo "locked Ghidra oracle identity mismatch" >&2
   exit 1
 fi
@@ -226,9 +228,9 @@ snapshot_root="$run_root/workspace"
 for relative in "${overlay_paths[@]}"; do
   /usr/bin/cp "$repo_root/$relative" "$snapshot_root/$relative"
 done
-/usr/bin/cp "$cpp_fixture_live" "$snapshot_root/tests/oracle/varnode_localtype_res_1204.cc"
-/usr/bin/cp "$rust_fixture_live" "$snapshot_root/tests/oracle/varnode_localtype_res_1204.rs"
-/usr/bin/cp "$metadata_live" "$snapshot_root/tests/oracle/varnode_localtype_res_1204.metadata.json"
+/usr/bin/cp "$cpp_fixture_live" "$snapshot_root/tests/oracle/callother_userop_closure_1204.cc"
+/usr/bin/cp "$rust_fixture_live" "$snapshot_root/tests/oracle/callother_userop_closure_1204.rs"
+/usr/bin/cp "$metadata_live" "$snapshot_root/tests/oracle/callother_userop_closure_1204.metadata.json"
 if [[ -e "$snapshot_root/ghidra" || -L "$snapshot_root/ghidra" ]]; then
   echo "snapshot unexpectedly already contains a ghidra path" >&2
   exit 1
@@ -239,8 +241,8 @@ verify_owned_inputs() {
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S \
     - "$repo_root" "$snapshot_root" "$metadata_live" "$cpp_fixture_live" \
     "$rust_fixture_live" "$runner_sha" "$oracle_commit" "$oracle_tag" \
-    "$oracle_cpp_tree" "$oracle_makefile_blob" "$rugra_base_commit" \
-    "$rugra_base_tree" "$rugra_base_src_tree" "$rugra_cargo_toml_blob" \
+    "$oracle_cpp_tree" "$oracle_makefile_blob" "$oracle_userop_cc_blob" \
+    "$rugra_base_commit" "$rugra_base_tree" "$rugra_base_src_tree" "$rugra_cargo_toml_blob" \
     "$rugra_cargo_lock_blob" "$rugra_build_rs_blob" "$rugra_binary_blob" \
     "$rugra_expected_records" "$rugra_expected_bytes" \
     "$rugra_expected_stdout_sha256" "$rugra_expected_stderr_sha256" \
@@ -255,8 +257,8 @@ import sys
 
 (
     repo_raw, snapshot_raw, metadata_raw, cpp_raw, rust_raw, runner_sha,
-    oracle_commit, oracle_tag, cpp_tree, makefile_blob, base_commit,
-    base_tree, base_src_tree, cargo_toml_blob, cargo_lock_blob, build_rs_blob,
+    oracle_commit, oracle_tag, cpp_tree, makefile_blob, userop_cc_blob,
+    base_commit, base_tree, base_src_tree, cargo_toml_blob, cargo_lock_blob, build_rs_blob,
     binary_blob, rugra_records, rugra_bytes, rugra_stdout_sha,
     rugra_stderr_sha, bilateral_diff_exit_code, bilateral_diff_records,
     bilateral_diff_bytes, bilateral_diff_sha, bfd_header_raw, bfd_library_raw,
@@ -274,7 +276,7 @@ def require(label, actual, expected):
         raise SystemExit(f"{label} mismatch: expected={expected!r} actual={actual!r}")
 
 require("metadata schema", metadata["schema_version"], 1)
-require("fixture id", metadata["fixture_id"], "VARNODE-LOCALTYPE-RESOLUTION-0001")
+require("fixture id", metadata["fixture_id"], "TYPEOP-CALLOTHER-USEROP-CLOSURE-0001")
 require("overall status", metadata["overall_status"], "MATCH")
 require("oracle capture status", metadata["covered_projection"]["oracle_capture"]["status"], "ORACLE_CAPTURED")
 require("Rugra execution status", metadata["covered_projection"]["rugra_execution"]["status"], "EXECUTED")
@@ -285,6 +287,7 @@ require("oracle commit", metadata["oracle"]["commit"], oracle_commit)
 require("oracle tag", metadata["oracle"]["tag"], oracle_tag)
 require("oracle C++ tree", metadata["oracle"]["decompiler_cpp_tree"], cpp_tree)
 require("oracle Makefile blob", metadata["oracle"]["decompiler_makefile_blob"], makefile_blob)
+require("oracle userop.cc blob", metadata["oracle"]["userop_cc_blob"], userop_cc_blob)
 
 comparand = metadata["comparand"]
 require("base commit", comparand["rugra_base_commit"], base_commit)
@@ -297,7 +300,7 @@ require("binary blob", comparand["binary_blob"], binary_blob)
 require(
     "snapshot model",
     comparand["snapshot_model"],
-    "immutable complete crate snapshot: git archive of the frozen production commit 5cba7550 with the Varnode::getLocalType full port, STOP early-return, the localType dispatch table, and the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread; no source overlays",
+    "immutable complete crate snapshot: git archive of the frozen production commit 5cba7550 with the TypeOpCallother get*Local CALLOTHER arm, userops parameter thread, and pub op_output_type_local/op_input_type_local entry points; no source overlays",
 )
 require(
     "archive paths",
@@ -381,7 +384,7 @@ PY
 
 verify_owned_inputs
 if [[ "$validate_only" -eq 1 ]]; then
-  echo "varnode_localtype_res_1204 metadata/source lock validation passed"
+  echo "callother_userop_closure_1204 metadata/source lock validation passed"
   exit 0
 fi
 
@@ -410,11 +413,11 @@ fi
 if ! /usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$cache_root/tmp" \
   "$host_cxx_bin" -std=c++11 -O2 -Wall -Wno-sign-compare -m64 \
   -I"$bfd_include" -I"$oracle_cpp" \
-  "$snapshot_root/tests/oracle/varnode_localtype_res_1204.cc" \
+  "$snapshot_root/tests/oracle/callother_userop_closure_1204.cc" \
   "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
   "$oracle_cpp/inject_sleigh.cc" "$oracle_cpp/bfd_arch.cc" \
   "$oracle_cpp/loadimage_bfd.cc" "$standard_archive" \
-  "$bfd_library" -lz -o "$run_root/varnode_localtype_res_1204_cpp" \
+  "$bfd_library" -lz -o "$run_root/callother_userop_closure_1204_cpp" \
   >"$run_root/cxx.stdout" 2>"$run_root/cxx.stderr"; then
   /usr/bin/cat "$run_root/cxx.stdout" >&2
   /usr/bin/cat "$run_root/cxx.stderr" >&2
@@ -433,10 +436,10 @@ if ! /usr/bin/flock -x /tmp/rugra-cargo-build.lock \
 fi
 if ! /usr/bin/env -i PATH="$clean_path" HOME="$user_home" LC_ALL=C \
   TMPDIR="$cargo_tmp" "$host_rustc_bin" --edition=2021 -C opt-level=0 \
-  "$snapshot_root/tests/oracle/varnode_localtype_res_1204.rs" \
+  "$snapshot_root/tests/oracle/callother_userop_closure_1204.rs" \
   --extern rugra="$cargo_target/debug/librugra.rlib" \
   -L dependency="$cargo_target/debug/deps" \
-  -o "$run_root/varnode_localtype_res_1204_rust" \
+  -o "$run_root/callother_userop_closure_1204_rust" \
   >"$run_root/rustc.stdout" 2>"$run_root/rustc.stderr"; then
   /usr/bin/cat "$run_root/rustc.stdout" >&2
   /usr/bin/cat "$run_root/rustc.stderr" >&2
@@ -445,10 +448,10 @@ fi
 
 for run in 1 2; do
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C LD_LIBRARY_PATH="$bfd_library_dir" \
-    "$run_root/varnode_localtype_res_1204_cpp" "$spec_root" "$binary" \
+    "$run_root/callother_userop_closure_1204_cpp" "$spec_root" "$binary" \
     >"$run_root/ghidra.$run.stdout" 2>"$run_root/ghidra.$run.stderr"
   /usr/bin/env -i PATH="$clean_path" LC_ALL=C \
-    "$run_root/varnode_localtype_res_1204_rust" \
+    "$run_root/callother_userop_closure_1204_rust" \
     >"$run_root/rugra.$run.stdout" 2>"$run_root/rugra.$run.stderr"
 done
 if ! /usr/bin/cmp -s "$run_root/ghidra.1.stdout" "$run_root/ghidra.2.stdout" || \
@@ -541,7 +544,7 @@ print(
     f"bilateral_diff_sha256={sha(raw_diff)} bilateral_status={status}"
 )
 print(
-    "varnode_localtype_res_1204: oracle_status=ORACLE_CAPTURED "
+    "callother_userop_closure_1204: oracle_status=ORACLE_CAPTURED "
     f"rugra_status=EXECUTED bilateral_status={status} overall_status={status}"
 )
 PY
