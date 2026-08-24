@@ -62,6 +62,286 @@ fn default_unknown_type(
         .expect("TypeFactory::get_base always produces an unknown base type")
 }
 
+// RUGRA-GLUE: the two `PcodeOp::outputTypeLocal/inputTypeLocal` forwarders
+//   (op.hh:251-252) dispatch through `opcode->getOutputLocal/getInputLocal` —
+//   the Architecture-owned TypeOp virtual table. Rugra PcodeOp holds no
+//   TypeOp pointer, and the current `src/typeop.rs` trait impls for the
+//   binary/unary/functional macro family, COPY/LOAD/STORE/MULTIEQUAL and
+//   PTRADD/PTRSUB read the opposite varnode's v_type instead of the Ghidra
+//   `getBase(size,metatype)` lookups (the registered PRINTC-CAST-OPNAME-0001
+//   M1 gap). `Varnode::getLocalType` therefore dispatches through this local
+//   table, a line-cited port of the complete Ghidra override set; when M1
+//   lands, root may consolidate by re-pointing these helpers at the typeop
+//   trait impls. CALL input delegates to the R3-approved D1 port
+//   `TypeOpCall::get_input_local` (typeop.rs:1393).
+// Ghidra: typeop.cc:261 TypeOp::getOutputLocal / typeop.cc:271 TypeOp::getInputLocal
+fn local_base(
+    type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    size: usize,
+    metatype: TypeMetatype,
+) -> Option<Arc<Datatype>> {
+    type_factory
+        .read()
+        .unwrap()
+        .get_base(size, metatype)
+}
+
+// Ghidra: typeop.cc:323/345/365 TypeOp{Binary,Unary,Func} ctor meta tables
+/// Per-opcode `(metaout, metain)` pairs from the TypeOp constructor table —
+/// the `TypeOpBinary/Unary/Func(t, CPUI_*, ..., metaout, metain)` constructor
+/// arguments (every ctor line verified against the locked oracle; parameter
+/// order typeop.hh:210-246). Opcodes absent use the TypeOp base defaults
+/// `getBase(size, TYPE_UNKNOWN)` (typeop.cc:261-275). This encodes the
+/// C-mode defaults; selectJavaOperators (typeop.cc:114-140) retunes
+/// ZEXT/NEGATE/XOR/AND/OR/RIGHT on Java architectures and is not modeled
+/// (same UNTESTED registration as merge.rs local_meta_pair).
+fn local_meta_pair(opcode: crate::opcodes::OpCode) -> Option<(TypeMetatype, TypeMetatype)> {
+    use crate::opcodes::OpCode;
+    use TypeMetatype::{Bool, Float, Int, Unknown, Uint};
+    Some(match opcode {
+        OpCode::CPUI_INT_EQUAL
+        | OpCode::CPUI_INT_NOTEQUAL
+        | OpCode::CPUI_INT_SLESS
+        | OpCode::CPUI_INT_SLESSEQUAL => (Bool, Int),
+        OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL => (Bool, Uint),
+        OpCode::CPUI_FLOAT_EQUAL
+        | OpCode::CPUI_FLOAT_NOTEQUAL
+        | OpCode::CPUI_FLOAT_LESS
+        | OpCode::CPUI_FLOAT_LESSEQUAL
+        | OpCode::CPUI_FLOAT_NAN => (Bool, Float),
+        // TypeOpFunc ctors (typeop.cc:1131/1157/1183/1209 INT_CARRY et al).
+        OpCode::CPUI_INT_CARRY => (Bool, Uint),
+        OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW => (Bool, Int),
+        OpCode::CPUI_INT_ZEXT => (Uint, Uint),
+        OpCode::CPUI_INT_SEXT => (Int, Int),
+        OpCode::CPUI_INT_ADD
+        | OpCode::CPUI_INT_SUB
+        | OpCode::CPUI_INT_MULT
+        | OpCode::CPUI_INT_SDIV
+        | OpCode::CPUI_INT_SREM
+        | OpCode::CPUI_INT_2COMP
+        | OpCode::CPUI_INT_LEFT
+        | OpCode::CPUI_INT_SRIGHT => (Int, Int),
+        OpCode::CPUI_INT_NEGATE
+        | OpCode::CPUI_INT_XOR
+        | OpCode::CPUI_INT_AND
+        | OpCode::CPUI_INT_OR
+        | OpCode::CPUI_INT_RIGHT
+        | OpCode::CPUI_INT_DIV
+        | OpCode::CPUI_INT_REM => (Uint, Uint),
+        OpCode::CPUI_BOOL_NEGATE
+        | OpCode::CPUI_BOOL_XOR
+        | OpCode::CPUI_BOOL_AND
+        | OpCode::CPUI_BOOL_OR => (Bool, Bool),
+        OpCode::CPUI_FLOAT_ADD
+        | OpCode::CPUI_FLOAT_DIV
+        | OpCode::CPUI_FLOAT_MULT
+        | OpCode::CPUI_FLOAT_SUB
+        | OpCode::CPUI_FLOAT_NEG
+        | OpCode::CPUI_FLOAT_ABS
+        | OpCode::CPUI_FLOAT_SQRT
+        | OpCode::CPUI_FLOAT_FLOAT2FLOAT
+        | OpCode::CPUI_FLOAT_CEIL
+        | OpCode::CPUI_FLOAT_FLOOR
+        | OpCode::CPUI_FLOAT_ROUND => (Float, Float),
+        OpCode::CPUI_FLOAT_INT2FLOAT => (Float, Int),
+        // typeop.cc:1913 TypeOpFunc(t,CPUI_FLOAT_TRUNC,"TRUNC",TYPE_INT,TYPE_FLOAT).
+        OpCode::CPUI_FLOAT_TRUNC => (Int, Float),
+        // typeop.cc:2528/2543/2558/2565 INSERT/EXTRACT/POPCOUNT/LZCOUNT.
+        OpCode::CPUI_INSERT => (Unknown, Int),
+        OpCode::CPUI_EXTRACT => (Int, Int),
+        OpCode::CPUI_PIECE | OpCode::CPUI_SUBPIECE => (Unknown, Unknown),
+        OpCode::CPUI_POPCOUNT | OpCode::CPUI_LZCOUNT => (Int, Unknown),
+        _ => return None,
+    })
+}
+
+// Ghidra: op.hh:251 PcodeOp::outputTypeLocal
+/// `Datatype *PcodeOp::outputTypeLocal(void) const { return
+/// opcode->getOutputLocal(this); }` — the complete override set:
+/// - TypeOpBinary/Unary/Func subclasses: `getBase(out.size, metaout)`
+///   (typeop.cc:326/348/368);
+/// - TypeOpPtradd/TypeOpPtrsub: `getBase(out.size, TYPE_INT)` "treat same as
+///   INT_ADD" (typeop.cc:2241/2311);
+/// - TypeOpCall: fspec gate -> output-locked gate -> VOID gate -> locked
+///   output type, else base default (typeop.cc:720-735);
+/// - TypeOpCallind/TypeOpCallother/TypeOpCpoolref: their overrides resolve
+///   state Rugra cannot reach from a Varnode (CALLIND needs the callspec via
+///   `op->getParent()->getFuncdata()->getCallSpecs(op)` — no parent chain;
+///   CALLOTHER needs `tlst->getArch()->userops` — no arch backlink on
+///   TypeFactory; CPOOLREF needs the constant pool). All three converge to
+///   the base default on the states Ghidra itself resolves that way
+///   (no callspec / metadata-less userop / record-free cpool); the
+///   special-path leftovers are registered residuals;
+/// - everything else (COPY/LOAD/STORE/MULTIEQUAL/INDIRECT/BRANCH/CBRANCH/
+///   BRANCHIND/RETURN/CAST/SEGMENTOP/NEW/...): base default
+///   `getBase(out.size, TYPE_UNKNOWN)` (typeop.cc:261-265) — these classes
+///   have no getOutputLocal override in typeop.hh.
+fn op_output_type_local(
+    op: &PcodeOp,
+    type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    use crate::opcodes::OpCode;
+    match op.opcode {
+        // typeop.cc:2238-2242 / 2308-2312.
+        OpCode::CPUI_PTRADD | OpCode::CPUI_PTRSUB => {
+            let size = op.get_out()?.read().unwrap().get_size();
+            local_base(type_factory, size, TypeMetatype::Int)
+        }
+        // typeop.cc:720-735 TypeOpCall::getOutputLocal.
+        OpCode::CPUI_CALL => {
+            let fallback = |op: &PcodeOp| -> Option<Arc<Datatype>> {
+                let size = op.get_out()?.read().unwrap().get_size();
+                local_base(type_factory, size, TypeMetatype::Unknown)
+            };
+            // cc:727-729: `vn->getSpace()->getType()!=IPTR_FSPEC` gate; the
+            // Rugra D0 representation of an fspec annotation is an Iop-space
+            // ANNOTATION varnode carrying the typed callspec Weak
+            // (TYPEOP-FSPEC-SPACE-0001).
+            let callspec = {
+                let input0 = op.get_in(0)?.read().unwrap();
+                if input0.get_space() != AddressSpace::Iop || !input0.is_annotation() {
+                    None
+                } else {
+                    input0.get_call_spec()
+                }
+            };
+            let Some(callspec) = callspec else {
+                return fallback(op);
+            };
+            // cc:731-735: !isOutputLocked -> default; VOID -> default; else
+            // the locked output type.
+            let callspec = callspec.read().unwrap();
+            if !callspec.prototype.output_type_locked {
+                return fallback(op);
+            }
+            let ct = callspec.prototype.return_type.clone();
+            if ct.get_metatype() == TypeMetatype::Void {
+                return fallback(op);
+            }
+            Some(ct)
+        }
+        // meta-table subclasses (typeop.cc:326/348/368).
+        _ => {
+            let size = op.get_out()?.read().unwrap().get_size();
+            match local_meta_pair(op.opcode) {
+                Some((metaout, _)) => local_base(type_factory, size, metaout),
+                None => local_base(type_factory, size, TypeMetatype::Unknown),
+            }
+        }
+    }
+}
+
+// Ghidra: op.hh:252 PcodeOp::inputTypeLocal
+/// `Datatype *PcodeOp::inputTypeLocal(int4 slot) const { return
+/// opcode->getInputLocal(this,slot); }` — the complete override set:
+/// - TypeOpBinary/Unary/Func subclasses: `getBase(in.size, metain)`
+///   (typeop.cc:332/354/374), except the shift amount slots
+///   `getBaseNoChar(in.size, TYPE_INT)` (typeop.cc:1510-1516 INT_LEFT,
+///   1535-1541 INT_RIGHT, 1600-1606 INT_SRIGHT — note INT for all three,
+///   even though INT_RIGHT's metain is UINT) and INSERT/EXTRACT slot 0
+///   `getBase(size, TYPE_UNKNOWN)` (typeop.cc:2535-2541/2550-2556);
+/// - TypeOpPtradd/TypeOpPtrsub/TypeOpCpoolref inputs: `getBase(in.size,
+///   TYPE_INT)` (typeop.cc:2232-2236/2314-2318/2465-2469);
+/// - TypeOpCbranch: slot 1 `getBase(size, TYPE_BOOL)`, slot 0 a pointer to
+///   the code type sized/worded by the input (typeop.cc:609-619);
+/// - TypeOpCall: the R3-approved D1 port (typeop.cc:687-718);
+/// - TypeOpCallind slot 0: code pointer (typeop.cc:752-756); param slots and
+///   TypeOpReturn param slots need the Funcdata (parent chain) — base
+///   default residual, identical to Ghidra's fc==null / bb==null paths;
+/// - TypeOpIndirect slot 1: pointer to the code type sized by in(0) and
+///   worded by the referenced op's address space (typeop.cc:1992-2003) —
+///   the referenced op lives in the same code space as the INDIRECT op
+///   itself, so the op's own address space is used;
+/// - everything else: base default `getBase(in.size, TYPE_UNKNOWN)`
+///   (typeop.cc:271-275).
+fn op_input_type_local(
+    op: &PcodeOp,
+    slot: usize,
+    type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    use crate::opcodes::OpCode;
+    // Size of the queried input varnode, shared by every base/meta lookup.
+    let input_size = op.get_in(slot)?.read().unwrap().get_size();
+    match (op.opcode, slot) {
+        // typeop.cc:1510-1516/1535-1541/1600-1606.
+        (OpCode::CPUI_INT_LEFT, 1)
+        | (OpCode::CPUI_INT_RIGHT, 1)
+        | (OpCode::CPUI_INT_SRIGHT, 1) => type_factory
+            .read()
+            .unwrap()
+            .get_base_no_char(input_size, TypeMetatype::Int),
+        // typeop.cc:2535-2541/2550-2556.
+        (OpCode::CPUI_INSERT, 0) | (OpCode::CPUI_EXTRACT, 0) => {
+            local_base(type_factory, input_size, TypeMetatype::Unknown)
+        }
+        // typeop.cc:609-619: slot 1 is bool; slot 0 is a code pointer.
+        (OpCode::CPUI_CBRANCH, 1) => local_base(type_factory, input_size, TypeMetatype::Bool),
+        (OpCode::CPUI_CBRANCH, 0) => {
+            let code = type_factory.write().unwrap().get_type_code();
+            let word_size = op
+                .get_in(0)?
+                .read()
+                .unwrap()
+                .get_space()
+                .word_size();
+            Some(
+                type_factory
+                    .write()
+                    .unwrap()
+                    .get_type_pointer(input_size, code, word_size),
+            )
+        }
+        // typeop.cc:2232-2236/2314-2318/2465-2469.
+        (
+            OpCode::CPUI_PTRADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_CPOOLREF,
+            _,
+        ) => local_base(type_factory, input_size, TypeMetatype::Int),
+        // typeop.cc:687-718 — delegate to the reviewed D1 port.
+        (OpCode::CPUI_CALL, _) => {
+            use crate::typeop::TypeOp as _;
+            crate::typeop::TypeOpCall::new(type_factory.clone()).get_input_local(op, slot)
+        }
+        // typeop.cc:752-756 — code pointer for the indirect target register.
+        (OpCode::CPUI_CALLIND, 0) => {
+            let code = type_factory.write().unwrap().get_type_code();
+            let word_size = op
+                .get_addr()
+                .get_space()
+                .map(|space| space.get_word_size() as usize)
+                // Legacy spaceless op addresses: every hardwired and x86-64
+                // spec space is wordsize 1 (space.rs word_size table).
+                .unwrap_or(1);
+            Some(
+                type_factory
+                    .write()
+                    .unwrap()
+                    .get_type_pointer(input_size, code, word_size),
+            )
+        }
+        // typeop.cc:1992-2003 — slot 1 is the iop constant; the pointer is
+        // worded by the referenced op's space, i.e. this op's code space.
+        (OpCode::CPUI_INDIRECT, 1) => {
+            let code = type_factory.write().unwrap().get_type_code();
+            let word_size = op
+                .get_addr()
+                .get_space()
+                .map(|space| space.get_word_size() as usize)
+                .unwrap_or(1);
+            Some(
+                type_factory
+                    .write()
+                    .unwrap()
+                    .get_type_pointer(input_size, code, word_size),
+            )
+        }
+        _ => match local_meta_pair(op.opcode) {
+            Some((_, metain)) => local_base(type_factory, input_size, metain),
+            None => local_base(type_factory, input_size, TypeMetatype::Unknown),
+        },
+    }
+}
+
 /// Flags for Varnode properties (varnode_flags in Ghidra)
 pub mod varnode_flags {
     pub const MARK: u32 = 1 << 0;
@@ -112,6 +392,8 @@ pub mod addl_flags {
     pub const STACK_STORE: u16 = 0x100;
     pub const LOCKED_INPUT: u16 = 0x200;
     pub const SPACEBASE_PLACEHOLDER: u16 = 0x400;
+    pub const STOP_UP_PROPAGATION: u16 = 0x800;
+    pub const HAS_IMPLIED_FIELD: u16 = 0x1000;
 }
 
 /// A Varnode represents a storage location and size in P-code IR
@@ -844,6 +1126,42 @@ impl Varnode {
         (self.flags & varnode_flags::TYPELOCK) != 0
     }
 
+    // Ghidra: varnode.hh:267 Varnode::stopsUpPropagation
+    /// Is data-type propagation stopped from an output into this varnode?
+    /// Faithful to the inline `(addlflags & Varnode::stop_uppropagation) != 0`
+    /// (varnode.hh:267). Consumed by `ActionInferTypes::propagateTypeEdge`
+    /// (coreaction.cc:5093); the flag lives in `addl_flags` (u16 `addlflags`),
+    /// never in the main `varnode_flags` where 0x800 is `volatil`.
+    pub fn stops_up_propagation(&self) -> bool {
+        (self.addlflags & addl_flags::STOP_UP_PROPAGATION) != 0
+    }
+
+    // Ghidra: varnode.hh:333 Varnode::setStopUpPropagation
+    /// Stop data-type up-propagation through this varnode:
+    /// `addlflags |= Varnode::stop_uppropagation`. Set only by
+    /// `ActionInferTypes::buildLocaltypes` (coreaction.cc:5031) when
+    /// `getLocalType` reports `needsBlock` (a def with `stop_type_propagation`
+    /// op flag 0x40 was consumed); Ghidra has no clear call site anywhere.
+    pub fn set_stop_up_propagation(&mut self) {
+        self.addlflags |= addl_flags::STOP_UP_PROPAGATION;
+    }
+
+    // Ghidra: varnode.hh:334 Varnode::clearStopUpPropagation
+    /// Clear the stop-up-propagation flag: `addlflags &= ~stop_uppropagation`.
+    /// Declared in Ghidra (varnode.hh:334) with zero call sites in the
+    /// decompile sources; ported for interface parity.
+    pub fn clear_stop_up_propagation(&mut self) {
+        self.addlflags &= !addl_flags::STOP_UP_PROPAGATION;
+    }
+
+    // RUGRA-GLUE: identity handle for `PcodeOp::getSlot(this)`-style pointer
+    //   comparisons. Ghidra compares raw `Varnode*` pointers (op.hh:166);
+    //   Rugra varnodes live in `Arc<RwLock<Varnode>>` allocations whose weak
+    //   self reference is installed by `VarnodeBank::allocate` (varnode.rs).
+    fn self_arc(&self) -> Option<Arc<RwLock<Varnode>>> {
+        self.self_ref.upgrade()
+    }
+
     // Ghidra: varnode.cc:578 Varnode::isNameLock
     /// Is the name locked on this varnode? (varnode.hh:300)
     pub fn is_name_lock(&self) -> bool {
@@ -1416,15 +1734,110 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:900 Varnode::getLocalType
-    /// Get the local data-type for this Varnode. Faithful to
-    /// `getLocalType` (varnode.cc:900-940).
-    pub fn get_local_type(&self, _block_up: &mut bool) -> Option<Arc<Datatype>> {
-        // cc:910: if typelock, return type directly
-        if (self.flags & varnode_flags::TYPELOCK) != 0 {
-            return self.v_type.clone();
+    /// Make an initial determination of the Datatype of this Varnode. If a
+    /// Datatype is already set and locked return it. Otherwise look through
+    /// all the read PcodeOps and the write PcodeOp to determine if the
+    /// Varnode is getting used as an int, float, or pointer, etc. Throw an
+    /// exception if no Datatype can be found at all (varnode.cc:895-936
+    /// doxygen + body).
+    ///
+    /// `block_up` is the `bool &blockup` reference out-parameter: the method
+    /// only ever sets it to `true` (cc:913) and never clears it; the caller
+    /// (`ActionInferTypes::buildLocaltypes`, coreaction.cc:5020) resets it to
+    /// false per varnode. The `type_factory` parameter threads the
+    /// Architecture TypeFactory that Ghidra reaches implicitly through
+    /// `PcodeOp::opcode->tlst` (op.hh:122) — Rugra `PcodeOp` holds no parent
+    /// chain, so the factory is an explicit argument.
+    ///
+    /// Returns `Ok(Some(ct))` for a resolved canonical type, `Ok(None)` for
+    /// the null `Datatype*` returns Ghidra produces on the type-locked path
+    /// (cc:907, a locked varnode with a null type) and on the STOP early
+    /// return (cc:914, `ct` may still be null there), and
+    /// `Err("NULL local type")` for the cc:934 `throw LowlevelError`.
+    pub fn get_local_type(
+        &self,
+        block_up: &mut bool,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> Result<Option<Arc<Datatype>>> {
+        // cc:906-907: Our type is locked, don't change. Not a partial lock,
+        // return the locked type (no blockup touch, no def/descend consult).
+        if self.is_type_lock() {
+            return Ok(self.v_type.clone());
         }
-        // cc:914-939: check if defined by known type-producing ops
-        self.v_type.clone()
+
+        // cc:909-916: seed from the defining op's outputTypeLocal(); a def
+        // consuming stop_type_propagation (op flag 0x40, set by
+        // RulePtrArith/RuleStructOffset0) sets blockup and returns early —
+        // no descendant is consulted.
+        let mut ct: Option<Arc<Datatype>> = None;
+        if let Some(def) = self.get_def() {
+            let (out_local, stops) = {
+                let def_op = def.read().unwrap();
+                (
+                    op_output_type_local(&def_op, type_factory),
+                    def_op.stops_type_propagation(),
+                )
+            };
+            ct = out_local;
+            if stops {
+                // cc:912-914
+                *block_up = true;
+                return Ok(ct);
+            }
+        }
+
+        // cc:918-932: walk descend in addDescend insertion order (a
+        // std::list<PcodeOp*> in Ghidra, varnode.hh:149 — no sorting, no
+        // skipping). i = op->getSlot(this) (op.hh:166) scans inrefs for
+        // pointer identity and breaks at the FIRST match.
+        let self_arc = self.self_arc();
+        for descend_op in self.descend_iter() {
+            let slot = {
+                let op = descend_op.read().unwrap();
+                self_arc
+                    .as_ref()
+                    .and_then(|self_arc| {
+                        op.inrefs
+                            .iter()
+                            .position(|input| Arc::ptr_eq(input, self_arc))
+                    })
+            };
+            // Ghidra's descend invariant: every entry was added by an
+            // op_set_input that still holds this varnode (a dangling Weak
+            // upgrade is already skipped by descend_iter). If identity is
+            // unresolvable (non-bank varnode without self_ref), skip rather
+            // than feeding inputTypeLocal an out-of-range slot, which Ghidra
+            // would assert on.
+            let Some(slot) = slot else { continue };
+            let newct = {
+                let op = descend_op.read().unwrap();
+                op_input_type_local(&op, slot, type_factory)
+            };
+            match (&ct, newct) {
+                // cc:926-927: first non-null candidate wins unconditionally.
+                (None, newct) => ct = newct,
+                // cc:929-930: `if (0>newct->typeOrder(*ct)) ct = newct;` —
+                // replace only on strictly smaller typeOrder (more specific:
+                // smaller submeta, then bigger size; type.cc:212-218). Ties
+                // keep the incumbent, so with equal typeOrder the FIRST
+                // encountered type survives. A null newct alongside a non-null
+                // ct is a null-this dereference in Ghidra (UB); Rugra keeps
+                // the incumbent instead of crashing — unreachable through the
+                // TypeOp override table, whose entries never return null on a
+                // reachable op.
+                (Some(current), Some(new)) => {
+                    if new.type_order(current) < 0 {
+                        ct = Some(new);
+                    }
+                }
+                (Some(_), None) => {}
+            }
+        }
+        // cc:933-934: no local type at all -> LowlevelError("NULL local type").
+        if ct.is_none() {
+            return Err(anyhow!("NULL local type"));
+        }
+        Ok(ct)
     }
 
     // Ghidra: varnode.hh:271 Varnode::isIndirectZero

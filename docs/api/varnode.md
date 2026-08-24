@@ -949,3 +949,58 @@
 normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登记
 `HERITAGE-BE-OVERLAP`）。跨 space 的 -1 哨兵（address.cc:161 `base != op.base`）
 为已登记残差 —— Rugra `Address` 无 space 身份，调用方自守（见函数注释）。
+
+## 2026-08-24：get_local_type 完整移植 + STOP flag 常量（VARNODE-LOCALTYPE-RESOLUTION-0001）
+
+完整移植 `Varnode::getLocalType`（varnode.cc:900-936），替换此前只 clone
+`v_type` 的 stub（旧签名 `(&self, &mut bool) -> Option<Arc<Datatype>>` 无调用方，
+新签名无迁移成本）：
+
+- `get_local_type(&self, block_up: &mut bool, type_factory: &Arc<RwLock<TypeFactory>>) -> anyhow::Result<Option<Arc<Datatype>>>`
+  — 逐行对齐 varnode.cc:900-936：
+  1. `is_type_lock()` 早退返回锁类型（cc:906-907，不触碰 blockup）；
+  2. def 存在 → `ct = def->outputTypeLocal()`（cc:910-911，经下方派发表）；
+  3. `def->stopsTypePropagation()`（op flag 0x40 消费端）→ `*block_up = true` +
+     提前返回 ct，跳过全部 readers（cc:912-914）；
+  4. descend 按 `addDescend` 插入序遍历（std::list 无排序，cc:921），
+     `i = op->getSlot(this)` 指针身份取槽（op.hh:166），
+     `ct` 仅在 `0 > newct->typeOrder(*ct)` 严格更小时替换（cc:929，
+     submeta 升序 + size 降序，type.cc:212-218），平局保留先遇者；
+  5. 全空 → `Err("NULL local type")`（cc:933-934 LowlevelError 通道）。
+  `type_factory` 参数承接 Ghidra 经 `PcodeOp::opcode->tlst`（op.hh:122）隐式
+  可达的 Architecture TypeFactory —— Rugra `PcodeOp` 无 parent 链，工厂显式传入。
+  `Ok(None)` 对应 Ghidra 返回 null `Datatype*` 的两条路径（typelock null type /
+  STOP 早退时 ct 为 null）；`newct==null && ct!=null` 在 Ghidra 是 null-this UB，
+  Rugra 保守保留现任（注释在函数体内，override 表任何可达 op 均不产生该状态）。
+- **派发表**（本文件私有，`// Ghidra:` 逐行引用）：`op_output_type_local` /
+  `op_input_type_local`（op.hh:251-252 转发器）+ `local_meta_pair`（TypeOp
+  ctor metain/metaout 表）+ `local_base`（typeop.cc:264/274 基类默认
+  `getBase(size,TYPE_UNKNOWN)`）。覆盖全部 Ghidra override：PTRADD/PTRSUB 全
+  INT（typeop.cc:2235/2241/2311/2317）、shift slot-1
+  `getBaseNoChar(size,INT)`（:1510-1516/1535-1541/1600-1606）、CBRANCH
+  slot1 BOOL + slot0 code-ptr（:609-619）、CALLIND slot0 code-ptr（:752-756）、
+  INDIRECT slot1 code-ptr（:1992-2003）、INSERT/EXTRACT slot0 UNKNOWN
+  （:2535-2541/2550-2556）、CPOOLREF 输入 INT（:2465-2469）、CALL input 委托
+  R3-approved 的 D1 `TypeOpCall::get_input_local`（typeop.cc:687-718）、CALL
+  output 全量 720-735（fspec 门 → outputLocked 门 → VOID 门 → 锁定返回类型）。
+  **为什么本地表而非 typeop.rs trait**：现行 typeop.rs 宏族
+  （binary/unary/functional）与 COPY/LOAD/STORE/MULTIEQUAL/PTRADD/PTRSUB 的
+  get*Local 覆盖读对侧 varnode 的 v_type 而非 `getBase(size,metatype)`
+  （登记残差 PRINTC-CAST-OPNAME-0001 M1）；M1 落地后 root 可将两张表合并。
+  残差：CALLIND 参数槽/RETURN 参数槽（需 parent→Funcdata，走 Ghidra 自身的
+  fc==null/bb==null 基类默认路径）、CALLOTHER userop 元数据（TypeFactory 无
+  arch 反链）、CPOOLREF 记录路径（无 cpool 基础设施）。
+- **flag 常量**（varnode.hh:131-132）：`addl_flags::STOP_UP_PROPAGATION=0x800`、
+  `HAS_IMPLIED_FIELD=0x1000`。注意 0x800 在主 `varnode_flags` 里是 `volatil`
+  （varnode.hh:93）—— 两个枚举同值不同义，STOP 落 `addl_flags`（u16
+  `addlflags`），不得混入主 flags。
+- **访问器**：`stops_up_propagation()`（varnode.hh:267）、
+  `set_stop_up_propagation()`（:333，设置端属 coreaction STOP 任务，本任务只留
+  接口）、`clear_stop_up_propagation()`（:334，Ghidra 全源码零调用，接口对等）。
+  消费端 `ActionInferTypes::propagateTypeEdge`（coreaction.cc:5093）为 STOP 任务
+  （W4）write-set。
+- **行为影响**：`get_local_type` 及新访问器全仓零调用方，主管线行为零变化
+  （无机制 B 门禁触发）。双侧 fixture `tests/oracle/varnode_localtype_res_1204.*`
+  覆盖：单 def 无 readers、typeOrder-min（两种插入序）、平局先遇（char*/int*
+  等价指针）、def STOP 早退+blockup、path 指针胜整型、typelock union 直返、
+  null local type 错误通道。
