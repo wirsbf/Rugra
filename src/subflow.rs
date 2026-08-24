@@ -4926,10 +4926,6 @@ impl<'a> SplitDatatype<'a> {
                     -1
                 }
             }
-            Datatype::Base(_) | Datatype::Void(_) => match ct.get_metatype() {
-                TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown => 2,
-                _ => -1,
-            },
             _ => match ct.get_metatype() {
                 TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown => 2,
                 _ => -1,
@@ -4960,6 +4956,13 @@ impl<'a> SplitDatatype<'a> {
     ) -> bool {
         use crate::type_system::TypeMetatype;
 
+        // Ghidra's function body has no explicit clear: dataTypePieces starts
+        // empty on the stack-constructed splitter, and splitStore's LOAD
+        // retry path clears explicitly (cc:2829). Rugra reuses one splitter
+        // across the compat call and the rewrite, so clearing on entry keeps
+        // every oracle call path behaviour-equivalent (the oracle never
+        // observes stale pieces: splitCopy/splitLoad call compat exactly
+        // once, and splitStore's retry is the only oracle re-entry).
         self.data_type_pieces.clear();
         let in_category = self.categorize_datatype(in_base);
         if in_category < 0 {
@@ -6566,12 +6569,14 @@ mod tests {
     }
 
     #[test]
-    fn test_split_copy_size_mismatch_fills_unknown_pieces() {
-        // Mismatched field sizes descend the larger side and fill with
-        // undefined pieces (subflow.cc:2355-2364): in struct{char@0;int@1}
-        // vs out struct{char@0;short@1} still splits into 3 pieces
-        // (char, unknown2 over the int/short prefix, unknown2 over the tail
-        // hole), mirroring Ghidra's getComponent hole fillers.
+    fn test_split_copy_mismatched_scalar_descent_rejected() {
+        // in struct{char@0;int@1} vs out struct{char@0;short@1;short@3}:
+        // piece0 char/char matches, then at offset 1 curIn=int(4) is larger
+        // and NOT a hole, so the both-composite descent calls
+        // getComponent(int,0) (subflow.cc:2363). int has no sub-type
+        // (type.cc:174 base) and its getHoleSize is the type.hh:256 base 0,
+        // so getComponent returns null and cc:2364 returns false —
+        // NO_CHANGE, constant input notwithstanding (R15 M-1/M-2 re-pin).
         let factory_arc = Arc::new(RwLock::new(
             crate::type_system::typefactory::TypeFactory::new(8),
         ));
@@ -6594,7 +6599,6 @@ mod tests {
                 TypeField { name: "f1".into(), offset: 1, type_ptr: int_t },
             ],
         }));
-        // out: struct{char@0; short@1; short@3} (same total size 5)
         let short_t = Arc::new(Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int)));
         let out_dt = Arc::new(Datatype::Struct(TypeStruct {
             base: TypeBase::new("S2".into(), 5, TypeMetatype::Struct),
@@ -6607,6 +6611,57 @@ mod tests {
         let in_vn = fd.vbank.create_constant(5, 0x1122334455);
         in_vn.write().unwrap().update_type(in_dt);
         let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
+        out_vn.write().unwrap().update_type(out_dt);
+        let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
+        let ops_before = fd.obank.optree.len();
+        let res = RuleSplitCopy::new().apply_op(&copy_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+        assert_eq!(fd.obank.optree.len(), ops_before);
+    }
+
+    #[test]
+    fn test_split_copy_field_gap_hole_filler_accepted() {
+        // The cc:2361/2368 getBase(size) hole fillers fire on genuine struct
+        // field-gap padding (TypeStruct::getHoleSize distance to the next
+        // field, type.cc:1661-1663), never on scalar interiors. in
+        // struct{a4@0;b4@4;c4@8} vs out struct{a4@0;[gap 4..8];b4@8;c4@12}:
+        // piece0 a/a, piece1 in=b(4) vs out hole(4) -> unknown4 filler,
+        // piece2 c/b — three pieces, terminal sizeLeft==0, and the hole is
+        // neither initial (len==1) nor the second-and-final piece, so the
+        // split proceeds exactly like the oracle.
+        let factory_arc = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        let mut arch = crate::arch::Architecture::new();
+        arch.types = Some(factory_arc.clone());
+        arch.split_datatype_config = crate::arch::split_datatype::OPTION_STRUCT
+            | crate::arch::split_datatype::OPTION_ARRAY
+            | crate::arch::split_datatype::OPTION_POINTER;
+        let arch_arc = Arc::new(arch);
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.arch = Some(arch_arc.clone());
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeField, TypeStruct};
+        use crate::type_system::TypeMetatype;
+        let uint4 = Arc::new(Datatype::Base(TypeBase::new("uint4".into(), 4, TypeMetatype::Uint)));
+        let in_dt = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("Packed".into(), 12, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: uint4.clone() },
+                TypeField { name: "b".into(), offset: 4, type_ptr: uint4.clone() },
+                TypeField { name: "c".into(), offset: 8, type_ptr: uint4.clone() },
+            ],
+        }));
+        let out_dt = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("Gapped".into(), 16, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: uint4.clone() },
+                TypeField { name: "b".into(), offset: 8, type_ptr: uint4.clone() },
+                TypeField { name: "c".into(), offset: 12, type_ptr: uint4.clone() },
+            ],
+        }));
+        let in_vn = fd.vbank.create_constant(12, 0xaabbcc11223344);
+        in_vn.write().unwrap().update_type(in_dt);
+        let out_vn = fd.vbank.create_with_space(12, AddressSpace::Register, 0x20);
         out_vn.write().unwrap().update_type(out_dt);
         let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
         let res = RuleSplitCopy::new().apply_op(&copy_op, &mut fd).unwrap();

@@ -264,6 +264,7 @@ int main() {
 
   // ---- shared production type graph --------------------------------------
   Datatype *uint4 = types->getBase(4, TYPE_UINT);
+  Datatype *uint8 = types->getBase(8, TYPE_UINT);
 
   // FILE-like opaque struct: size 8, zero fields.
   TypeStruct *file8 = types->getTypeStruct("split_file8");
@@ -296,6 +297,42 @@ int main() {
   }
   TypeArray *uint4_array6 = types->getTypeArray(6, uint4);
 
+  // R15 M-1 verification types.
+  Datatype *uint1 = types->getBase(1, TYPE_UINT);
+  Datatype *uint2 = types->getBase(2, TYPE_UINT);
+  // Scalar-field-interior struct: uint8@0, uint4@8 (size 12).
+  TypeStruct *interior = types->getTypeStruct("split_interior12");
+  {
+    std::vector<TypeField> fields;
+    fields.push_back(TypeField(0, 0, "wide", uint8));
+    fields.push_back(TypeField(1, 8, "narrow", uint4));
+    types->setFields(fields, interior, 12, 8, 0);
+  }
+  // Struct with a real field-gap: uint4@0, uint4@8 (padding 4..8).
+  TypeStruct *gap = types->getTypeStruct("split_gap12");
+  {
+    std::vector<TypeField> fields;
+    fields.push_back(TypeField(0, 0, "a", uint4));
+    fields.push_back(TypeField(1, 8, "b", uint4));
+    types->setFields(fields, gap, 12, 4, 0);
+  }
+  // Mismatched-scalar-descent pair: in{uint1@0,uint4@1} vs out{uint1@0,uint2@1,uint2@3}.
+  TypeStruct *mis_in = types->getTypeStruct("split_mis5");
+  {
+    std::vector<TypeField> fields;
+    fields.push_back(TypeField(0, 0, "f0", uint1));
+    fields.push_back(TypeField(1, 1, "f1", uint4));
+    types->setFields(fields, mis_in, 5, 1, 0);
+  }
+  TypeStruct *mis_out = types->getTypeStruct("split_misout5");
+  {
+    std::vector<TypeField> fields;
+    fields.push_back(TypeField(0, 0, "f0", uint1));
+    fields.push_back(TypeField(1, 1, "f1", uint2));
+    fields.push_back(TypeField(2, 3, "f2", uint2));
+    types->setFields(fields, mis_out, 5, 1, 0);
+  }
+
   TypePointer *ptr_file8 = types->getTypePointer(8, file8, 1);
   TypePointer *ptr_iofile = types->getTypePointer(8, iofile, 1);
   TypePointer *ptr_progress = types->getTypePointer(8, progress, 1);
@@ -303,6 +340,10 @@ int main() {
   TypePointer *ptr_uint4 = types->getTypePointer(8, uint4, 1);
   TypePointerRel *relptr_progress8 =
       types->getTypePointerRel(ptr_progress, uint4, 8); // ephemeral
+  TypePointer *ptr_interior = types->getTypePointer(8, interior, 1);
+  TypePointer *ptr_gap = types->getTypePointer(8, gap, 1);
+  TypePointerRel *relptr_interior2 =
+      types->getTypePointerRel(ptr_interior, uint4, 2); // ephemeral, offset 2
 
   Scope *parent = architecture.symboltab->getGlobalScope();
   // Scratch Funcdata for the read-only getValueDatatype stubs: stub LOADs
@@ -363,6 +404,7 @@ int main() {
     {"array_window8", ptr_array, 8},
     {"relptr16", relptr_progress8, 16},
     {"scalar_array16", ptr_uint4, 16},
+    {"scalar_field_interior", relptr_interior2, 4},
   };
   for (const GvCase &c : gv_cases) {
     PcodeOp *stub = make_load_stub(c.ptr);
@@ -561,6 +603,74 @@ int main() {
     }
     std::cout << "split|case=progress16_prim|fn=splitStore|ok=" << (ok ? 1 : 0)
               << "|pieces=" << pieces.str() << '\n';
+  }
+  {
+    // R15 M-1: mismatched scalar descent. in{uint1@0,uint4@1} vs
+    // out{uint1@0,uint2@1,uint2@3}: at offset 1 curIn=uint4(4) > curOut and
+    // is NOT a hole, so getComponent(uint4,0) must return null (scalar
+    // getHoleSize = type.hh:256 base 0) and cc:2363-2364 rejects.
+    Varnode *in_vn = fd.newConstant(5, 0x11223344);
+    in_vn->updateType(mis_in);
+    Varnode *out_vn = make_value(5);
+    out_vn->updateType(mis_out);
+    PcodeOp *copy = fd.newOp(1, Address(code, 0x3500 + 0x10 * unique_counter));
+    fd.opSetOpcode(copy, CPUI_COPY);
+    fd.opSetInput(copy, in_vn, 0);
+    fd.opSetOutput(copy, out_vn);
+    fd.opInsertEnd(copy, block);
+    ++unique_counter;
+    SplitDatatype splitter(fd);
+    bool ok = splitter.splitCopy(copy, mis_in, mis_out);
+    std::cout << "split|case=mismatched_scalar_desc|fn=splitCopy|ok=" << (ok ? 1 : 0) << '\n';
+    if (!ok)
+      fd.opDestroy(copy);
+  }
+  auto gap_gate = [&](const char *id, Datatype *out_type) {
+    Varnode *ptr = make_ptr(ptr_gap);
+    Varnode *value = make_value(out_type->getSize());
+    PcodeOp *store = make_store(ptr, value);
+    SplitDatatype splitter(fd);
+    bool ok = splitter.splitStore(store, out_type);
+    std::vector<std::pair<int64_t, int4>> stores;
+    if (ok) {
+      for (auto it = fd.beginOpAlive(); it != fd.endOpAlive(); ++it) {
+        PcodeOp *op = *it;
+        if (op->code() != CPUI_STORE)
+          continue;
+        bool rok = false;
+        int64_t off = resolveOffset(op->getIn(1), ptr, rok);
+        if (rok)
+          stores.push_back(std::make_pair(off, op->getIn(2)->getSize()));
+      }
+      std::sort(stores.begin(), stores.end());
+    }
+    std::ostringstream pieces;
+    pieces << '-';
+    if (!stores.empty()) {
+      pieces.str("");
+      for (size_t i = 0; i < stores.size(); ++i) {
+        if (i != 0)
+          pieces << ',';
+        pieces << stores[i].first << ':' << stores[i].second;
+      }
+    }
+    std::cout << "split|case=" << id << "|fn=splitStore|ok=" << (ok ? 1 : 0)
+              << "|pieces=" << pieces.str() << '\n';
+  };
+  {
+    // Window starting on the field gap 4..8: first piece is a hole ->
+    // initial-hole rejection (cc:2329-2332).
+    gap_gate("initial_hole_window", types->getTypePartialStruct(gap, 4, 4));
+  }
+  {
+    // Window 0..8: uint4 then the padding hole, terminal sizeLeft==0 with
+    // exactly two pieces -> two-piece padding rejection (cc:2330-2332).
+    gap_gate("two_piece_padding", types->getTypePartialStruct(gap, 0, 8));
+  }
+  {
+    // Window 0..12: uint4, middle padding hole (unknown4 filler), uint4 ->
+    // three pieces, hole neither initial nor second-and-final -> accepted.
+    gap_gate("padding_filler_middle", types->getTypePartialStruct(gap, 0, 12));
   }
 
   // apply: file_opaque8_store (FILE* + 8 scalar must NOT be split)

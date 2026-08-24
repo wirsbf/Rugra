@@ -1,5 +1,20 @@
 # `subflow.rs` API Reference
 
+## 2026-08-25（R15 返修）：M-1/M-2 — getComponent hole 语义重钉
+
+R15 独立复核 REJECT 的两项阻断已修：`Datatype::get_hole_size` 基类 fallback
+由 `size-off` 改为 oracle 的 **0**（type.hh:256；见
+docs/api/type_system/datatype.md）——`get_component` 的 both-composite 标量
+降取与标量字段内部偏移路径不再 false-accept。单测
+`test_split_copy_mismatched_scalar_descent_rejected` 重钉 NO_CHANGE
+（cc:2363-2364 + type.hh:256），新增合法 hole-filler 正向测试
+（字段间隙 padding 中段，cc:2361/2368）。双侧 fixture 扩到 25 记录
+（新增 mismatched_scalar_desc / initial_hole_window / two_piece_padding /
+padding_filler_middle / gv scalar_field_interior 五例，全部双侧
+byte-identical）。S-1（OptionSplitDatatypes pointer 位 toggle 缺口）、S-2
+（legacy PTRREL side-table 回退）、S-4（per-op read-facing）已在 metadata
+coverage 登记；S-3（clear 等价注释）与 S-5（categorize 冗余臂合并）已落码。
+
 ## 2026-08-25：SPLITDATATYPE-EXACTPIECE-0001 — RuleSplitLoad/Store 走 canonical get_exact_piece 门禁
 
 `RuleSplitLoad::apply_op` / `RuleSplitStore::apply_op` 现按 oracle

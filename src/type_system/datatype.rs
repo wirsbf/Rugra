@@ -1060,17 +1060,23 @@ impl Datatype {
         Some((a.array_of.clone(), noff, nel))
     }
 
-    // Ghidra: type.hh:165 Datatype::getHoleSize
-    /// For the given offset, return the number of bytes at that offset that are
-    /// padding / a "hole". Corresponds to Ghidra's `Datatype::getHoleSize`.
+    // Ghidra: type.hh:256 Datatype::getHoleSize
+    /// For the given offset, return the number of bytes at that offset that
+    /// are padding / a "hole". Corresponds to Ghidra's
+    /// `Datatype::getHoleSize` (virtual base at type.hh:256 returns **0**:
+    /// scalars and every non-composite class have no holes).
     ///
-    /// For structs: distance to the following field or end (type.cc:1652).
-    /// For arrays: delegates to element (type.cc:1243).
-    /// Base: returns the remaining size from off.
+    /// For structs: distance to the following field or end (type.cc:1652);
+    /// delegating into a scalar field therefore yields 0. For arrays:
+    /// delegates to element (type.cc:1243), likewise 0 for scalar elements.
+    /// PartialStruct: container delegation clamped to the remaining partial
+    /// size (type.cc:2379).
     pub fn get_hole_size(&self, off: i64) -> i64 {
         match self {
             Datatype::Struct(s) => struct_get_hole_size(s, off),
             Datatype::Array(a) => {
+                // The `.max(1)` is a Rust divide-by-zero guard only; Ghidra
+                // element align sizes are never 0 here (type.cc:1244).
                 let elem_align = a.array_of.get_align_size().max(1) as i64;
                 let new_off = off % elem_align;
                 a.array_of.get_hole_size(new_off)
@@ -1078,14 +1084,12 @@ impl Datatype {
             // TypePartialStruct override (type.cc:2379): delegate to container
             // then clamp to the remaining size of the partial.
             Datatype::PartialStruct(ps) => partial_struct_get_hole_size(ps, off),
-            _ => {
-                let sz = self.get_size() as i64;
-                if off < 0 || off >= sz {
-                    0
-                } else {
-                    sz - off
-                }
-            }
+            // Datatype::getHoleSize base (type.hh:256): `return 0;`. The
+            // former `size - off` fallback wrongly applied the TypeStruct
+            // tail rule (type.cc:1663) to every scalar/non-composite type,
+            // which false-accepted splits in SplitDatatype::getComponent
+            // (R15 M-1; fixed bottom-up per 铁律 1.4/1.6).
+            _ => 0,
         }
     }
 
@@ -4919,13 +4923,18 @@ mod tests {
         let (subtype, newoff) = two_fields.get_sub_type(0);
         assert_eq!(subtype.expect("overlap midpoint").get_name(), "first");
         assert_eq!(newoff, 0);
-        assert_eq!(two_fields.get_hole_size(0), 4);
+        // Overlapping-field delegation lands on the lower-bound field
+        // ("second", int4@0) whose scalar getHoleSize is the type.hh:256
+        // base 0 — not the former size-off fallback (R15 M-1 re-pin).
+        assert_eq!(two_fields.get_hole_size(0), 0);
+        // -1 precedes every field: struct-level distance to the next field
+        // (type.cc:1661-1662) = 0 - (-1) = 1.
         assert_eq!(two_fields.get_hole_size(-1), 1);
         let wrapped_offset = 1_i64 << 32;
         let (subtype, newoff) = two_fields.get_sub_type(wrapped_offset);
         assert_eq!(subtype.expect("narrowed overlap midpoint").get_name(), "first");
         assert_eq!(newoff, wrapped_offset);
-        assert_eq!(two_fields.get_hole_size(wrapped_offset), 4);
+        assert_eq!(two_fields.get_hole_size(wrapped_offset), 0);
 
         let first = Arc::new(Datatype::Base(TypeBase::new(
             "first".into(),
@@ -4965,7 +4974,8 @@ mod tests {
         let (subtype, newoff) = three_fields.get_sub_type(0);
         assert_eq!(subtype.expect("overlap midpoint").get_name(), "middle");
         assert_eq!(newoff, 0);
-        assert_eq!(three_fields.get_hole_size(0), 4);
+        // Delegates into "last" (int4@0); scalar base hole = 0 (type.hh:256).
+        assert_eq!(three_fields.get_hole_size(0), 0);
     }
 
     // --- type_order (Ghidra compare: submeta, then larger size first) ---
@@ -5094,7 +5104,7 @@ mod tests {
         // type.cc:2363 — partial over [4,8) of struct S resolves to the int field.
         let s = build_struct_for_partial();
         let stripped = Arc::new(Datatype::Base(TypeBase::new("unk4".into(), 4, TypeMetatype::Unknown)));
-        let ps = TypePartialStruct::new(s, 4, 4, Some(stripped));
+        let ps = TypePartialStruct::new(s.clone(), 4, 4, Some(stripped));
         // Within the partial at relative off 0 ⇒ absolute off 4 ⇒ int field.
         let (sub, newoff) = partial_struct_get_sub_type(&ps, 0);
         assert_eq!(sub.unwrap().get_name(), "int");
@@ -5136,12 +5146,17 @@ mod tests {
         // type.cc:2379 — clamped to remaining partial size.
         let s = build_struct_for_partial();
         let stripped = Arc::new(Datatype::Base(TypeBase::new("unk4".into(), 4, TypeMetatype::Unknown)));
-        let ps = TypePartialStruct::new(s, 4, 4, Some(stripped));
-        // At relative off 0, the int field has 4 bytes; partial has 4-0=4 left.
-        assert_eq!(partial_struct_get_hole_size(&ps, 0), 4);
-        // At relative off 2, partial has 4-2=2 bytes left (clamped below the
-        // int field's remaining 2 — equal, so 2 either way).
-        assert_eq!(partial_struct_get_hole_size(&ps, 2), 2);
+        let ps = TypePartialStruct::new(s.clone(), 4, 4, Some(stripped));
+        // Both offsets land inside the scalar int field: TypeStruct delegates
+        // (type.cc:1658-1659) into int whose getHoleSize is the type.hh:256
+        // base 0 — the old size-off expectations were the R15 M-1 bug.
+        assert_eq!(partial_struct_get_hole_size(&ps, 0), 0);
+        assert_eq!(partial_struct_get_hole_size(&ps, 2), 0);
+        // The clamp (type.cc:2383-2384) fires on a real struct gap: partial
+        // covering [1,3) starts inside the padding after char@0; the gap to
+        // int@4 is 3 bytes but only 2 remain in the partial.
+        let ps_gap = TypePartialStruct::new(s, 1, 2, None);
+        assert_eq!(partial_struct_get_hole_size(&ps_gap, 0), 2);
     }
 
     #[test]

@@ -132,8 +132,15 @@ Pointer truncate、TypeCode factory attachment，以及 Spacebase 的 byte/addre
 `DATABASE-0001`，状态为 MISMATCH/UNTESTED。
 
 ### `pub fn get_hole_size(&self, off: i64) -> i64`
-对应 `Datatype::getHoleSize`。
-Struct: 距下一字段或结构末尾的距离 (type.cc:1652)。
+对应 `Datatype::getHoleSize`（type.hh:256 基类返回 **0**——标量/未覆写类型无 hole）。
+- Struct: 距下一字段或结构末尾的距离 (type.cc:1652-1663)；委托进标量字段 → 基类 0。
+- Array: 委托元素 `off % elemAlignSize`（type.cc:1243-1247）。
+- PartialStruct: 容器委托 + 剩余尺寸 clamp（type.cc:2379-2385）。
+- **2026-08-25（R15 M-1 修正）**：基类 fallback 由 `size-off` 改为 0——旧值把
+  TypeStruct 尾部规则（type.cc:1663）错误下放到所有非组合类型，被
+  `SplitDatatype::get_component` 消费后在 both-composite 标量降取/标量字段内部
+  偏移路径 false-accept（oracle NO_CHANGE → Rust 拆分）。datatype.rs 内
+  overlap 测试断言已按 oracle 重钉（委托进 int4 字段 → 0）。
 
 ### `pub fn type_order(&self, other: &Datatype) -> i32`
 对应 `Datatype::typeOrder` (type.hh:283) = `compare(other, 10)`。

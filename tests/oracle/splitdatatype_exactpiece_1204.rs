@@ -212,6 +212,8 @@ fn main() {
 
     let uint4 = factory.get_base_result(4, TypeMetatype::Uint).expect("uint4");
     let uint8 = factory.get_base_result(8, TypeMetatype::Uint).expect("uint8");
+    let uint1 = factory.get_base_result(1, TypeMetatype::Uint).expect("uint1");
+    let uint2 = factory.get_base_result(2, TypeMetatype::Uint).expect("uint2");
 
     // ---- shared production type graph --------------------------------------
     // FILE-like opaque struct: size 8, zero fields.
@@ -258,6 +260,65 @@ fn main() {
     let progress = factory.find_by_name("split_progress24").expect("progress canonical");
     let uint4_array6 = factory.get_array(uint4.clone(), 6);
 
+    // R15 M-1 verification types.
+    // Scalar-field-interior struct: uint8@0, uint4@8 (size 12).
+    factory.create_struct("split_interior12");
+    factory
+        .set_fields_sized(
+            "split_interior12",
+            vec![
+                TypeField { name: "wide".into(), offset: 0, type_ptr: uint8.clone() },
+                TypeField { name: "narrow".into(), offset: 8, type_ptr: uint4.clone() },
+            ],
+            12,
+            8,
+        )
+        .expect("interior definition");
+    // Struct with a real field-gap: uint4@0, uint4@8 (padding 4..8).
+    factory.create_struct("split_gap12");
+    factory
+        .set_fields_sized(
+            "split_gap12",
+            vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: uint4.clone() },
+                TypeField { name: "b".into(), offset: 8, type_ptr: uint4.clone() },
+            ],
+            12,
+            4,
+        )
+        .expect("gap definition");
+    // Mismatched-scalar-descent pair.
+    factory.create_struct("split_mis5");
+    factory
+        .set_fields_sized(
+            "split_mis5",
+            vec![
+                TypeField { name: "f0".into(), offset: 0, type_ptr: uint1.clone() },
+                TypeField { name: "f1".into(), offset: 1, type_ptr: uint4.clone() },
+            ],
+            5,
+            1,
+        )
+        .expect("mis5 definition");
+    factory.create_struct("split_misout5");
+    factory
+        .set_fields_sized(
+            "split_misout5",
+            vec![
+                TypeField { name: "f0".into(), offset: 0, type_ptr: uint1.clone() },
+                TypeField { name: "f1".into(), offset: 1, type_ptr: uint2.clone() },
+                TypeField { name: "f2".into(), offset: 3, type_ptr: uint2.clone() },
+            ],
+            5,
+            1,
+        )
+        .expect("misout5 definition");
+
+    let interior = factory.find_by_name("split_interior12").expect("interior canonical");
+    let gap = factory.find_by_name("split_gap12").expect("gap canonical");
+    let mis_in = factory.find_by_name("split_mis5").expect("mis5 canonical");
+    let mis_out = factory.find_by_name("split_misout5").expect("misout5 canonical");
+
     let ptr_file8 = factory.get_type_pointer(8, file8.clone(), 1);
     let ptr_iofile = factory.get_type_pointer(8, iofile.clone(), 1);
     let ptr_progress = factory.get_type_pointer(8, progress.clone(), 1);
@@ -265,6 +326,10 @@ fn main() {
     let ptr_uint4 = factory.get_type_pointer(8, uint4.clone(), 1);
     let relptr_progress8 =
         factory.get_type_pointer_rel_ephemeral(ptr_progress.clone(), uint4.clone(), 8);
+    let ptr_interior = factory.get_type_pointer(8, interior.clone(), 1);
+    let ptr_gap = factory.get_type_pointer(8, gap.clone(), 1);
+    let relptr_interior2 =
+        factory.get_type_pointer_rel_ephemeral(ptr_interior.clone(), uint4.clone(), 2);
 
     let factory_arc = Arc::new(RwLock::new(factory));
     let mut arch = Architecture::new();
@@ -339,6 +404,7 @@ fn main() {
         ("array_window8", &ptr_array, 8),
         ("relptr16", &relptr_progress8, 16),
         ("scalar_array16", &ptr_uint4, 16),
+        ("scalar_field_interior", &relptr_interior2, 4),
     ];
     for (id, ptr_type, size) in gv_cases {
         let stub = make_load_stub(&mut fd_stub, &mut unique_counter, ptr_type);
@@ -557,6 +623,93 @@ fn main() {
                 .join(",")
         };
         println!("split|case=progress16_prim|fn=splitStore|ok={}|pieces={pieces}", ok as u8);
+    }
+    {
+        // R15 M-1: mismatched scalar descent. in{uint1@0,uint4@1} vs
+        // out{uint1@0,uint2@1,uint2@3}: at offset 1 curIn=uint4(4) >
+        // curOut and is NOT a hole, so get_component(uint4,0) must return
+        // null (scalar get_hole_size = type.hh:256 base 0) and the
+        // cc:2363-2364 descent rejects.
+        let in_vn = fd.vbank.create_constant(5, 0x11223344);
+        in_vn.write().unwrap().update_type(mis_in.clone());
+        let out_vn = make_value(&mut fd, &mut unique_counter, 5);
+        out_vn.write().unwrap().update_type(mis_out.clone());
+        let copy = fd.new_op(1, Address::new(0x3500 + 0x10 * unique_counter));
+        fd.op_set_opcode(&copy, OpCode::CPUI_COPY);
+        fd.op_set_input(&copy, in_vn, 0);
+        fd.op_set_output(&copy, out_vn);
+        fd.op_insert_end(&copy, &block);
+        unique_counter += 1;
+        let mut splitter = SplitDatatype::new(&mut fd);
+        let ok = splitter.split_copy(&copy.0).unwrap();
+        println!("split|case=mismatched_scalar_desc|fn=splitCopy|ok={}", ok as u8);
+        if !ok {
+            fd.op_destroy(&copy);
+        }
+    }
+    let mut gap_gate = |fd: &mut Funcdata,
+                        unique_counter: &mut u64,
+                        id: &str,
+                        out_type: &Dt,
+                        ptr_gap: &Dt,
+                        block: &Block| {
+        let ptr = make_ptr(fd, unique_counter, ptr_gap);
+        let value = make_value(fd, unique_counter, out_type.get_size());
+        let store = make_store(fd, unique_counter, &ptr, &value, block);
+        let mut splitter = SplitDatatype::new(fd);
+        let ok = splitter.split_store(&store.0, out_type).unwrap();
+        let mut stores: Vec<(i64, usize)> = Vec::new();
+        if ok {
+            for op in fd.obank.alivelist.iter() {
+                let o = op.0.read().unwrap();
+                if o.opcode != OpCode::CPUI_STORE {
+                    continue;
+                }
+                let ptr_in = o.get_in(1).cloned().unwrap();
+                if let Some(off) = resolve_offset(&ptr_in, &ptr) {
+                    stores.push((off, o.get_in(2).unwrap().read().unwrap().get_size()));
+                }
+            }
+            stores.sort();
+        }
+        let pieces = if stores.is_empty() {
+            "-".to_string()
+        } else {
+            stores
+                .iter()
+                .map(|(o, s)| format!("{o}:{s}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!("split|case={id}|fn=splitStore|ok={}|pieces={pieces}", ok as u8);
+    };
+    {
+        // Window starting on the field gap 4..8: first piece is a hole ->
+        // initial-hole rejection (cc:2329-2332).
+        let partial = factory_arc
+            .write()
+            .unwrap()
+            .get_type_partial_struct(gap.clone(), 4, 4);
+        gap_gate(&mut fd, &mut unique_counter, "initial_hole_window", &partial, &ptr_gap, &block);
+    }
+    {
+        // Window 0..8: uint4 then the padding hole, terminal sizeLeft==0
+        // with exactly two pieces -> two-piece padding rejection.
+        let partial = factory_arc
+            .write()
+            .unwrap()
+            .get_type_partial_struct(gap.clone(), 0, 8);
+        gap_gate(&mut fd, &mut unique_counter, "two_piece_padding", &partial, &ptr_gap, &block);
+    }
+    {
+        // Window 0..12: uint4, middle padding hole (unknown4 filler),
+        // uint4 -> three pieces, hole neither initial nor second-and-final
+        // -> accepted.
+        let partial = factory_arc
+            .write()
+            .unwrap()
+            .get_type_partial_struct(gap.clone(), 0, 12);
+        gap_gate(&mut fd, &mut unique_counter, "padding_filler_middle", &partial, &ptr_gap, &block);
     }
 
     // apply: file_opaque8_store (FILE* + 8 scalar must NOT be split)

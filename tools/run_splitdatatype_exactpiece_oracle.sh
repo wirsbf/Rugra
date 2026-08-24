@@ -5,7 +5,7 @@
 # fixture from an archived cpp tree, materializes the frozen Rugra production
 # commit as a git archive (no live Rust source is read by Cargo), links the
 # standalone Rust fixture against that archive's Cargo-built artifacts, runs
-# both sides, and requires the pinned 20-record byte-identical projection:
+# both sides, and requires the pinned 25-record byte-identical projection:
 #
 #   gv*     SplitDatatype::getValueDatatype            subflow.cc:2910-2938
 #          (canonical TypeFactory::getExactPiece, type.cc:4090-4117)
@@ -177,6 +177,8 @@ live = {
     "runner_sha256": pathlib.Path(runner_path),
     "subflow_rs_sha256": repo / "src/subflow.rs",
     "subflow_doc_sha256": repo / "docs/api/subflow.md",
+    "datatype_rs_sha256": repo / "src/type_system/datatype.rs",
+    "datatype_doc_sha256": repo / "docs/api/type_system/datatype.md",
     "cargo_toml_sha256": repo / "Cargo.toml",
     "cargo_lock_sha256": repo / "Cargo.lock",
     "build_rs_sha256": repo / "build.rs",
@@ -198,7 +200,7 @@ if re.fullmatch(r"[0-9a-f]{40}", candidate["commit"]) is None or \
     raise SystemExit("rugra_candidate commit/tree are not git oids")
 critical = candidate["critical_git_blobs"]
 expected_critical = {
-    "src/subflow.rs",
+    "src/subflow.rs", "src/type_system/datatype.rs",
     "Cargo.toml", "Cargo.lock", "build.rs",
 }
 if set(critical) != expected_critical:
@@ -220,16 +222,16 @@ canonical = json.dumps(
 ).encode("utf-8")
 reject_pending(manifest["sha256"], "input_manifest.sha256")
 require("input manifest sha256", hashlib.sha256(canonical).hexdigest(), manifest["sha256"])
-if len(manifest["cases"]) != 20:
-    raise SystemExit("input manifest must hold 20 cases")
+if len(manifest["cases"]) != 25:
+    raise SystemExit("input manifest must hold 25 cases")
 
 for key in ("expected_ghidra_stdout_sha256", "expected_rugra_stdout_sha256"):
     reject_pending(metadata[key], key)
 for key in metadata["expected_lines"]:
     if not isinstance(key, str) or "|" not in key:
         raise SystemExit("expected lines must be record strings")
-if len(metadata["expected_lines"]) != 20:
-    raise SystemExit("expected lines must hold 20 records")
+if len(metadata["expected_lines"]) != 25:
+    raise SystemExit("expected lines must hold 25 records")
 
 crate_hasher = hashlib.sha256()
 crate_hasher.update(b"rugra-splitdatatype-exactpiece-lib-snapshot-v1\0")
@@ -447,8 +449,8 @@ for label, path in (("Ghidra", sys.argv[2]), ("Rugra", sys.argv[3])):
 expected_lines = metadata["expected_lines"]
 for label, raw in outputs.items():
     lines = raw.decode("utf-8").splitlines()
-    if len(lines) != 20:
-        raise SystemExit(f"expected 20 {label} records, found {len(lines)}")
+    if len(lines) != 25:
+        raise SystemExit(f"expected 25 {label} records, found {len(lines)}")
     if lines != expected_lines:
         raise SystemExit(f"{label} records are not the exact pinned lines: {lines!r}")
 for label, key in (("Ghidra", "expected_ghidra_stdout_sha256"),
@@ -456,8 +458,8 @@ for label, key in (("Ghidra", "expected_ghidra_stdout_sha256"),
     actual = hashlib.sha256(outputs[label]).hexdigest()
     if actual != metadata[key]:
         raise SystemExit(f"{label} stdout hash mismatch: expected={metadata[key]} actual={actual}")
-print("records=20 bilateral=byte-identical")
+print("records=25 bilateral=byte-identical")
 PY
 
-/usr/bin/printf 'splitdatatype_exactpiece_1204: MATCH records=20 gv=6 split=6 apply=7 stab=1 oracle=%s candidate=%s\n' \
+/usr/bin/printf 'splitdatatype_exactpiece_1204: MATCH records=25 gv=7 split=10 apply=7 stab=1 oracle=%s candidate=%s\n' \
   "$oracle_commit" "$candidate_commit"
