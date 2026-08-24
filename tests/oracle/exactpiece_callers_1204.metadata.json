@@ -74,18 +74,18 @@
     "rule_piece_structure_apply": "ruleaction.cc:7607-7700 (leaf getExactPiece at 7665)"
   },
   "rugra_candidate": {
-    "commit": "PENDING_PRODUCTION_COMMIT",
-    "tree": "PENDING_PRODUCTION_TREE",
+    "commit": "26116cc4ef85675979dc38de603e1b5925b5cf3b",
+    "tree": "21cfe671b18825ca53c474450fdb2ab7780f16a5",
     "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
     "critical_git_blobs": {
-      "src/variable.rs": "PENDING_VARIABLE_RS_BLOB",
-      "src/database.rs": "PENDING_DATABASE_RS_BLOB",
-      "src/funcdata.rs": "PENDING_FUNCDATA_RS_BLOB",
-      "src/ruleaction.rs": "PENDING_RULEACTION_RS_BLOB",
-      "src/coreaction.rs": "PENDING_COREACTION_RS_BLOB",
-      "Cargo.toml": "PENDING_CARGO_TOML_BLOB",
-      "Cargo.lock": "PENDING_CARGO_LOCK_BLOB",
-      "build.rs": "PENDING_BUILD_RS_BLOB"
+      "src/variable.rs": "6060cb596b31185d8a395bc78816c4082ea9ef32",
+      "src/database.rs": "64fad62b6c9ad3ec69cb293947c3931d5568bc00",
+      "src/funcdata.rs": "de9ecc914f2fc2cc65b246f8462dfbf26b39f33c",
+      "src/ruleaction.rs": "97f66c8ac70b5cc2f1795ad4c45647824a5b80a5",
+      "src/coreaction.rs": "68a822c5eb15e98bdf053004cbc7922b613fe87e",
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
     }
   },
   "comparand": {
