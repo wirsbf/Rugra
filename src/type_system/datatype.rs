@@ -829,35 +829,28 @@ impl Datatype {
     /// Corresponds to Ghidra's `Datatype::getSubType` (type.hh:247).
     ///
     /// On entry `off` is an offset into this data-type. If this type has an
-    /// interior structure (struct/union/array/pointer), the field/element
-    /// containing `off` is returned and `newoff` is set to the offset within
-    /// that component. Otherwise `None` is returned and `newoff` is set to
-    /// `off` unchanged (type.cc:174 base behaviour).
+    /// interior structure (struct/array, plus the modeled virtual overrides),
+    /// the field/element containing `off` is returned and `newoff` is set to
+    /// the offset within that component. Otherwise `None` is returned and
+    /// `newoff` is set to `off` unchanged (type.cc:174 base behaviour).
     ///
     /// Returns `(Some(component), newoff)` or `(None, off)`.
     pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64) {
         match self {
             Datatype::Struct(s) => struct_get_sub_type(s, off),
-            Datatype::Union(u) => {
-                // Union fields all start at offset 0 (type.cc TypeUnion).
-                // Find a field whose type contains off; pass offset through.
-                if off < 0 {
-                    return (None, off);
-                }
-                for f in &u.fields {
-                    if (off as usize) < f.type_ptr.get_size() {
-                        return (Some(f.type_ptr.as_ref()), off);
-                    }
-                }
-                (None, off)
-            }
+            // TypeUnion deliberately has no getSubType override
+            // (type.hh:554 is commented out), so virtual dispatch reaches
+            // Datatype::getSubType and returns null with the original offset.
+            Datatype::Union(_) => (None, off),
             Datatype::Array(a) => {
                 // type.cc:1234 — one level down to element type.
                 let sz = a.base.size as i64;
                 if off >= sz {
                     return (None, off);
                 }
-                let elem_align = a.array_of.get_align_size().max(1) as i64;
+                // getAlignSize is an inline read of the stored field in
+                // Ghidra. Do not invoke Rugra's legacy-constructor fallback.
+                let elem_align = a.array_of.base_record().align_size as i64;
                 let newoff = off % elem_align;
                 (Some(a.array_of.as_ref()), newoff)
             }
@@ -871,6 +864,68 @@ impl Datatype {
             // TypePartialStruct override (type.cc:2363): walk down the container
             // until the component no longer overruns the partial's size.
             Datatype::PartialStruct(ps) => partial_struct_get_sub_type(ps, off),
+        }
+    }
+
+    // RUGRA-GLUE: Arc-preserving Rust ownership twin of the virtual
+    // Datatype::getSubType dispatch rooted at type.cc:174.
+    /// Arc-preserving virtual `getSubType` dispatch. For the covered Struct,
+    /// Array, and PartialStruct arms, this has the same return/new-offset
+    /// behaviour as [`Self::get_sub_type`] while retaining the canonical
+    /// factory-owned component `Arc`. The Spacebase arm instead uses Rugra's
+    /// scope-owned Arc lookup, which the borrowed API cannot expose; it remains
+    /// a documented whole-dispatch mismatch. `TypeFactory::getExactPiece`
+    /// relies on the covered identity while walking nested containers and
+    /// interning partial results.
+    pub fn get_sub_type_arc(
+        datatype: &Arc<Datatype>,
+        off: i64,
+    ) -> (Option<Arc<Datatype>>, i64) {
+        match datatype.as_ref() {
+            Datatype::Struct(structure) => match struct_get_field_iter(structure, off) {
+                Some(index) => {
+                    let field = &structure.fields[index];
+                    (Some(field.type_ptr.clone()), off - field.offset as i64)
+                }
+                None => (None, off),
+            },
+            Datatype::Array(array) => {
+                if off >= array.base.size as i64 {
+                    return (None, off);
+                }
+                let stride = array.array_of.base_record().align_size as i64;
+                (Some(array.array_of.clone()), off % stride)
+            }
+            Datatype::PartialStruct(partial) => {
+                let size_left = partial.base.size as i128 - off as i128;
+                let mut cur_off = off + partial.offset;
+                let mut current = partial.container.clone();
+                loop {
+                    let (subtype, newoff) = Self::get_sub_type_arc(&current, cur_off);
+                    let Some(subtype) = subtype else {
+                        return (None, newoff);
+                    };
+                    current = subtype;
+                    cur_off = newoff;
+                    if current.get_size() as i128 - cur_off as i128 <= size_left {
+                        return (Some(current), cur_off);
+                    }
+                }
+            }
+            // TypeSpacebase is the one base-looking class with a modeled
+            // virtual override; its symbol-table result is already an Arc.
+            Datatype::Spacebase(spacebase) => spacebase.get_sub_type(off),
+            // TypeUnion has no override. TypePointer's optional `truncate`
+            // component and TypeCode's factory attachment are not represented
+            // in Rugra yet; every other class uses Datatype's null base arm.
+            Datatype::Void(_)
+            | Datatype::Base(_)
+            | Datatype::Pointer(_)
+            | Datatype::Enum(_)
+            | Datatype::Union(_)
+            | Datatype::Code(_)
+            | Datatype::PartialEnum(_)
+            | Datatype::PartialUnion(_) => (None, off),
         }
     }
 
@@ -2262,27 +2317,55 @@ pub fn primitive_layout(size: usize) -> (usize, usize) {
     (primitive_alignment(align_size), align_size)
 }
 
-// Ghidra: type.hh:165 Datatype::structGetFieldIter
+// Ghidra: type.cc:1580 TypeStruct::getFieldIter
 /// Find the field index in a struct containing `off`, or None if `off` is not
 /// inside any field. Corresponds to Ghidra's `TypeStruct::getFieldIter`
-/// (type.cc:1580). Fields are assumed sorted by offset.
+/// (type.cc:1580). Fields are assumed sorted by offset; the binary-search
+/// midpoint is observable for overlapping fields.
 fn struct_get_field_iter(s: &TypeStruct, off: i64) -> Option<usize> {
-    if off < 0 {
-        return None;
-    }
-    let off = off as usize;
-    // Linear scan (structs are small); returns the highest-offset field that
-    // starts at or before `off` and contains it within its size.
-    let mut best: Option<usize> = None;
-    for (i, f) in s.fields.iter().enumerate() {
-        if f.offset <= off && off < f.offset + f.type_ptr.get_size() {
-            best = Some(i);
+    // getSubType/findTruncation accept int8 but getFieldIter accepts int4;
+    // locked GCC narrows at the call boundary before the search.
+    let requested = off as i32 as i128;
+    let mut min = 0_i64;
+    let mut max = s.fields.len() as i64 - 1;
+    while min <= max {
+        let mid = (min + max) / 2;
+        let field = &s.fields[mid as usize];
+        let field_start = field.offset as i128;
+        if field_start > requested {
+            max = mid - 1;
+        } else if field_start + field.type_ptr.get_size() as i128 > requested {
+            return Some(mid as usize);
+        } else {
+            min = mid + 1;
         }
     }
-    best
+    None
 }
 
-// Ghidra: type.hh:165 Datatype::structGetSubType
+// Ghidra: type.cc:1604 TypeStruct::getLowerBoundField
+/// Return the last field whose offset is at or before `off`. Unlike
+/// `struct_get_field_iter`, this field need not contain the requested offset.
+/// The upper-midpoint search makes the last same-offset field observable.
+fn struct_get_lower_bound_field(s: &TypeStruct, off: i64) -> Option<usize> {
+    if s.fields.is_empty() {
+        return None;
+    }
+    let mut min = 0_usize;
+    let mut max = s.fields.len() - 1;
+    let requested = off as i32 as i128;
+    while min < max {
+        let mid = (min + max + 1) / 2;
+        if s.fields[mid].offset as i128 > requested {
+            max = mid - 1;
+        } else {
+            min = mid;
+        }
+    }
+    (s.fields[min].offset as i128 <= requested).then_some(min)
+}
+
+// Ghidra: type.cc:1640 TypeStruct::getSubType
 /// Struct subtype lookup. Corresponds to `TypeStruct::getSubType`
 /// (type.cc:1640).
 fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<&Datatype>, i64) {
@@ -2295,33 +2378,26 @@ fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<&Datatype>, i64) {
     }
 }
 
-// Ghidra: type.hh:165 Datatype::structGetHoleSize
+// Ghidra: type.cc:1652 TypeStruct::getHoleSize
 /// Struct hole size. Corresponds to `TypeStruct::getHoleSize` (type.cc:1652).
 fn struct_get_hole_size(s: &TypeStruct, off: i64) -> i64 {
-    if off < 0 {
-        return 0;
-    }
-    let off_u = off as usize;
-    // If inside a field, delegate to that field's hole size.
-    if let Some(i) = struct_get_field_iter(s, off) {
-        let f = &s.fields[i];
-        let new_off = off_u - f.offset;
-        if new_off < f.type_ptr.get_size() {
-            return f.type_ptr.get_hole_size(new_off as i64);
+    // The virtual getHoleSize parameter is int4 in Ghidra.
+    let off = off as i32 as i64;
+    let mut index = struct_get_lower_bound_field(s, off)
+        .map(|index| index as i64)
+        .unwrap_or(-1);
+    if index >= 0 {
+        let field = &s.fields[index as usize];
+        let new_off = off - field.offset as i64;
+        if new_off < field.type_ptr.get_size() as i64 {
+            return field.type_ptr.get_hole_size(new_off);
         }
     }
-    // Distance to the next field, or to the end of the struct.
-    let mut next_field_offset: Option<usize> = None;
-    for f in &s.fields {
-        if f.offset > off_u {
-            next_field_offset = Some(f.offset);
-            break;
-        }
+    index += 1;
+    if index < s.fields.len() as i64 {
+        return s.fields[index as usize].offset as i64 - off;
     }
-    match next_field_offset {
-        Some(nfo) => (nfo - off_u) as i64,
-        None => (s.base.size - off_u) as i64,
-    }
+    s.base.size as i64 - off
 }
 
 // Ghidra: type.cc:2363 TypePartialStruct::getSubType
@@ -2329,41 +2405,25 @@ fn struct_get_hole_size(s: &TypeStruct, off: i64) -> i64 {
 /// returned component no longer overruns this partial's size. Faithful to
 /// `TypePartialStruct::getSubType` (type.cc:2363-2377).
 fn partial_struct_get_sub_type(ps: &TypePartialStruct, off: i64) -> (Option<&Datatype>, i64) {
-    let size_left = ps.base.size as i64 - off;
+    let size_left = ps.base.size as i128 - off as i128;
     let mut cur_off = off + ps.offset;
     let mut ct: &Datatype = ps.container.as_ref();
-    // Ghidra's `do { ct = ct->getSubType(off,newoff); if null break; ... }
-    // while(...)` reassigns ct at the top of the loop, so a null first lookup
-    // yields a null result (NOT the container). We track `found` to mirror
-    // that and to return the last successful sub-type + its newoff.
-    let mut newoff = cur_off;
-    let mut found = false;
     loop {
         let (sub, no) = ct.get_sub_type(cur_off);
         match sub {
-            None => {
-                // Datatype::getSubType base sets *newoff = off on null
-                // (type.cc:177); honour that for the returned offset.
-                newoff = no;
-                break;
-            }
+            // The C++ loop assigns `ct = ct->getSubType(...)`; a failed
+            // lookup therefore returns null even after an earlier descent.
+            None => return (None, no),
             Some(s) => {
                 ct = s;
                 cur_off = no;
-                newoff = no;
-                found = true;
                 // Component can extend beyond range of this partial, in which
                 // case we go down another level (type.cc:2375).
-                if ct.get_size() as i64 - cur_off <= size_left {
-                    break;
+                if ct.get_size() as i128 - cur_off as i128 <= size_left {
+                    return (Some(ct), cur_off);
                 }
             }
         }
-    }
-    if found {
-        (Some(ct), newoff)
-    } else {
-        (None, newoff)
     }
 }
 
@@ -4768,6 +4828,144 @@ mod tests {
         // offset 12 (== size) → None
         let (sub, _newoff) = arr.get_sub_type(12);
         assert!(sub.is_none());
+
+        // Ghidra reads the element's stored alignSize directly. A raw
+        // 3-byte element stores alignSize=3 even though Rugra's legacy public
+        // get_align_size fallback reports a padded width of 4.
+        let raw3 = Arc::new(Datatype::Base(TypeBase::new(
+            "raw3".into(),
+            3,
+            TypeMetatype::Int,
+        )));
+        assert_eq!(raw3.get_align_size(), 4);
+        let raw_array = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new(String::new(), 6, TypeMetatype::Array),
+            array_of: raw3.clone(),
+            num_elements: 2,
+        }));
+        let (borrowed, borrowed_off) = raw_array.get_sub_type(3);
+        assert_eq!(borrowed_off, 0);
+        assert!(std::ptr::eq(
+            borrowed.expect("raw array element"),
+            raw3.as_ref(),
+        ));
+        let (owned, owned_off) = Datatype::get_sub_type_arc(&raw_array, 3);
+        assert_eq!(owned_off, 0);
+        assert!(Arc::ptr_eq(&owned.expect("raw array element Arc"), &raw3));
+    }
+
+    #[test]
+    fn test_union_uses_base_subtype_and_arc_dispatch_preserves_identity() {
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let union = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("U".into(), 4, TypeMetatype::Union),
+            fields: vec![TypeField {
+                name: "member".into(),
+                offset: 0,
+                type_ptr: int_t.clone(),
+            }],
+        }));
+        let (borrowed, borrowed_off) = union.get_sub_type(0);
+        assert!(borrowed.is_none());
+        assert_eq!(borrowed_off, 0);
+        let (owned, owned_off) = Datatype::get_sub_type_arc(&union, 0);
+        assert!(owned.is_none());
+        assert_eq!(owned_off, 0);
+
+        let structure = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField {
+                name: "member".into(),
+                offset: 0,
+                type_ptr: int_t.clone(),
+            }],
+        }));
+        let (owned, owned_off) = Datatype::get_sub_type_arc(&structure, 2);
+        assert_eq!(owned_off, 2);
+        assert!(Arc::ptr_eq(&owned.expect("struct member"), &int_t));
+    }
+
+    #[test]
+    fn test_struct_subtype_uses_oracle_binary_midpoint_for_overlap() {
+        let first = Arc::new(Datatype::Base(TypeBase::new(
+            "first".into(),
+            1,
+            TypeMetatype::Int,
+        )));
+        let second = Arc::new(Datatype::Base(TypeBase::new(
+            "second".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let two_fields = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("Overlap2".into(), 4, TypeMetatype::Struct),
+            fields: vec![
+                TypeField {
+                    name: "first".into(),
+                    offset: 0,
+                    type_ptr: first,
+                },
+                TypeField {
+                    name: "second".into(),
+                    offset: 0,
+                    type_ptr: second,
+                },
+            ],
+        });
+        let (subtype, newoff) = two_fields.get_sub_type(0);
+        assert_eq!(subtype.expect("overlap midpoint").get_name(), "first");
+        assert_eq!(newoff, 0);
+        assert_eq!(two_fields.get_hole_size(0), 4);
+        assert_eq!(two_fields.get_hole_size(-1), 1);
+        let wrapped_offset = 1_i64 << 32;
+        let (subtype, newoff) = two_fields.get_sub_type(wrapped_offset);
+        assert_eq!(subtype.expect("narrowed overlap midpoint").get_name(), "first");
+        assert_eq!(newoff, wrapped_offset);
+        assert_eq!(two_fields.get_hole_size(wrapped_offset), 4);
+
+        let first = Arc::new(Datatype::Base(TypeBase::new(
+            "first".into(),
+            1,
+            TypeMetatype::Int,
+        )));
+        let middle = Arc::new(Datatype::Base(TypeBase::new(
+            "middle".into(),
+            2,
+            TypeMetatype::Int,
+        )));
+        let last = Arc::new(Datatype::Base(TypeBase::new(
+            "last".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let three_fields = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("Overlap3".into(), 4, TypeMetatype::Struct),
+            fields: vec![
+                TypeField {
+                    name: "first".into(),
+                    offset: 0,
+                    type_ptr: first,
+                },
+                TypeField {
+                    name: "middle".into(),
+                    offset: 0,
+                    type_ptr: middle,
+                },
+                TypeField {
+                    name: "last".into(),
+                    offset: 0,
+                    type_ptr: last,
+                },
+            ],
+        });
+        let (subtype, newoff) = three_fields.get_sub_type(0);
+        assert_eq!(subtype.expect("overlap midpoint").get_name(), "middle");
+        assert_eq!(newoff, 0);
+        assert_eq!(three_fields.get_hole_size(0), 4);
     }
 
     // --- type_order (Ghidra compare: submeta, then larger size first) ---
@@ -4905,6 +5103,32 @@ mod tests {
         let (sub, newoff) = partial_struct_get_sub_type(&ps, 2);
         assert_eq!(sub.unwrap().get_name(), "int");
         assert_eq!(newoff, 2);
+    }
+
+    #[test]
+    fn test_partial_struct_later_failed_descent_overwrites_previous_type() {
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let structure = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField {
+                name: "member".into(),
+                offset: 0,
+                type_ptr: int_t,
+            }],
+        }));
+        let partial = TypePartialStruct::new(structure, 0, 2, None);
+        let (borrowed, borrowed_off) = partial_struct_get_sub_type(&partial, 0);
+        assert!(borrowed.is_none());
+        assert_eq!(borrowed_off, 0);
+
+        let partial = Arc::new(Datatype::PartialStruct(partial));
+        let (owned, owned_off) = Datatype::get_sub_type_arc(&partial, 0);
+        assert!(owned.is_none());
+        assert_eq!(owned_off, 0);
     }
 
     #[test]

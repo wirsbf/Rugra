@@ -106,12 +106,30 @@ stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
 ### `pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64)`
 对应 `Datatype::getSubType` (type.hh:247, type.cc:174)。
 返回包含 `off` 的一级组件类型及组件内偏移。
-- Struct: `TypeStruct::getSubType` (type.cc:1640) 经 `getFieldIter`
+- Struct: `TypeStruct::getSubType` (type.cc:1640) 经 `getFieldIter` 的原始
+  binary-search midpoint 顺序；重叠/同 offset 字段不会退化为线性“最后命中”。
+  `getFieldIter` 的参数是 `int4`，所以 `getSubType(int8)` / `findTruncation(int8)`
+  会先按 locked GCC 规则窄化搜索 offset，再用原 int8 offset 计算 `newoff`
+- Struct 的 `getHoleSize` 独立调用 `getLowerBoundField`（type.cc:1604/1652），
+  用 upper-midpoint 选择 offset 不大于请求值的最后字段；它不复用
+  `getFieldIter` 的“字段必须包含 offset”判定，同 offset 重叠字段因而选择最后一项
 - Union: locked `TypeUnion` 没有 override（type.hh:554 注释掉声明），所以
-  正典行为是走基类并返回 `(None, 原 off)`；Rust 侧该修正属于 series D，
-  在 D 落地前当前分支仍是 `MISMATCH`
-- Array: `TypeArray::getSubType` (type.cc:1234)，`newoff = off % elem.alignSize`
-- 其他: 返回 `(None, off)`
+  走基类并返回 `(None, 原 off)`；`getExactPiece` 在下钻前单独处理 union
+- Array: `TypeArray::getSubType` (type.cc:1234)，直接读取元素对象存储的
+  `alignSize`，`newoff = off % elem.alignSize`；不会调用 legacy constructor
+  的 layout fallback
+- PartialStruct: 保持 `do/while` 覆盖语义；较深一层失败会把先前成功结果覆盖为 null
+- 其他: 返回 `(None, off)`。Pointer truncate、带 factory 的 TypeCode，以及
+  Spacebase 的 unknown1 回退仍是已登记 residual。
+
+`Datatype::get_sub_type_arc` 是 Rust 所有权胶水：它在 Struct、Array 与
+PartialStruct 的 covered projection 中保留 canonical `Arc`，供
+`TypeFactory::get_exact_piece` 使用。Spacebase 的 borrowed API 无法借出 scope-owned
+symbol type，而 Arc helper 会走 Rugra 当前的 symbol lookup，因此两路并非完整同输出。
+Pointer truncate、TypeCode factory attachment，以及 Spacebase 的 byte/address-unit
+换算、`resolveConstant`、scope query 与 miss→unknown1 均未完整表示，整体继续绑定
+`TYPE-0001`、`DATATYPE-SPACEBASE-SPACEID-0001`、`ARCH-0001`、`ADDRESS-0001`、
+`DATABASE-0001`，状态为 MISMATCH/UNTESTED。
 
 ### `pub fn get_hole_size(&self, off: i64) -> i64`
 对应 `Datatype::getHoleSize`。
@@ -208,8 +226,9 @@ null-output 边界（`ProtoStoreInternal` 总是初始化输出槽，公开构�
 
 ## 测试
 
-`type_system::datatype::tests` — 9 个测试覆盖上述原语：
-alignment map、calc_align_size、struct/array subtype、type_order（size & metatype）。
+`type_system::datatype::tests` 当前 60 个测试覆盖上述原语；series D 新增
+struct overlap 的 midpoint/lower-bound 分流、int8→int4 搜索窄化、raw array
+stored-alignSize、Union base dispatch 与 PartialStruct 深层成功/失败边界。
 
 ### 2026-07-01：is_char_print / is_piece_structured（解锁 RulePtrsubCharConstant/RulePieceStructure/Rule2Comp2Sub）
 - `is_char_print()`（type.hh:218）— 检查 CHARTYPE|UTF16|UTF32|OPAQUE_STRUCT flag。

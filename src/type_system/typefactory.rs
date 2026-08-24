@@ -1675,6 +1675,56 @@ impl TypeFactory {
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
+    // Ghidra: type.cc:4090 TypeFactory::getExactPiece
+    /// Drill through nested component types and recover the canonical type
+    /// for the byte range beginning at `offset` with `size` bytes. Exact-size
+    /// hits preserve the original Arc; ranges stopped by a union, a
+    /// struct/array boundary, or an unstripped enum are represented by the
+    /// corresponding canonical partial type.
+    pub fn get_exact_piece(
+        &mut self,
+        ct: Arc<Datatype>,
+        offset: i64,
+        size: usize,
+    ) -> Option<Arc<Datatype>> {
+        let mut current = ct;
+        let mut last_type: Option<Arc<Datatype>> = None;
+        let mut last_off = 0_i64;
+        let mut cur_off = offset;
+        loop {
+            // Ghidra promotes `size + curOff` to int8. i128 keeps the signed
+            // range check without introducing a Rust usize overflow.
+            if (current.get_size() as i128) < size as i128 + cur_off as i128 {
+                break;
+            }
+            if current.get_size() == size {
+                return Some(current);
+            }
+            if current.get_metatype() == TypeMetatype::Union {
+                return Some(self.get_type_partial_union(current, cur_off, size));
+            }
+            last_type = Some(current.clone());
+            last_off = cur_off;
+            let (subtype, newoff) = Datatype::get_sub_type_arc(&current, cur_off);
+            let Some(subtype) = subtype else {
+                break;
+            };
+            current = subtype;
+            cur_off = newoff;
+        }
+
+        let last_type = last_type?;
+        match last_type.get_metatype() {
+            TypeMetatype::Struct | TypeMetatype::Array => {
+                Some(self.get_type_partial_struct(last_type, last_off, size))
+            }
+            _ if last_type.is_enum_type() && !last_type.has_stripped() => {
+                Some(self.get_type_partial_enum(last_type, last_off, size))
+            }
+            _ => None,
+        }
+    }
+
     // Ghidra: type.cc:3992 TypeFactory::getTypeSpacebase
     /// Create a "spacebase" type for the given address space, scoped to
     /// `frame` (INVALID for the global spacebase). Faithful to
@@ -6699,5 +6749,175 @@ mod tests {
         assert_eq!(factory.get_primitive_align_size(5).unwrap(), 8); // 5%4=1 -> +3
         assert_eq!(factory.get_primitive_align_size(7).unwrap(), 8);
         assert_eq!(factory.get_primitive_align_size(8).unwrap(), 8); // align 4
+    }
+
+    #[test]
+    fn test_get_exact_piece_walk_order_partial_results_and_identity() {
+        let mut factory = TypeFactory::new(8);
+        let map = elem_node("size_alignment_map", &[]);
+        {
+            let mut write = map.write().unwrap();
+            write.add_child(entry_node("0", "1"));
+            write.add_child(entry_node("1", "1"));
+            write.add_child(entry_node("2", "2"));
+            write.add_child(entry_node("4", "4"));
+            write.add_child(entry_node("8", "8"));
+        }
+        factory.decode_data_organization(&mut decoder_over(data_org_node(vec![map])));
+        setup_default_sizes(&mut factory);
+        let uint4 = factory
+            .get_base_result(4, TypeMetatype::Uint)
+            .expect("uint4");
+        let uint8 = factory
+            .get_base_result(8, TypeMetatype::Uint)
+            .expect("uint8");
+
+        factory.create_struct("ExactInner");
+        let inner = factory
+            .set_fields_sized(
+                "ExactInner",
+                vec![
+                    TypeField {
+                        name: "lo".into(),
+                        offset: 0,
+                        type_ptr: uint4.clone(),
+                    },
+                    TypeField {
+                        name: "hi".into(),
+                        offset: 4,
+                        type_ptr: uint4.clone(),
+                    },
+                ],
+                8,
+                4,
+            )
+            .expect("inner definition");
+        factory.create_struct("ExactOuter");
+        let outer = factory
+            .set_fields_sized(
+                "ExactOuter",
+                vec![
+                    TypeField {
+                        name: "head".into(),
+                        offset: 0,
+                        type_ptr: uint4.clone(),
+                    },
+                    TypeField {
+                        name: "inner".into(),
+                        offset: 8,
+                        type_ptr: inner.clone(),
+                    },
+                    TypeField {
+                        name: "tail".into(),
+                        offset: 16,
+                        type_ptr: uint8,
+                    },
+                ],
+                24,
+                8,
+            )
+            .expect("outer definition");
+
+        let whole = factory.get_exact_piece(outer.clone(), 0, 24);
+        assert!(Arc::ptr_eq(&whole.expect("whole struct"), &outer));
+        let nested = factory.get_exact_piece(outer.clone(), 8, 8);
+        assert!(Arc::ptr_eq(&nested.expect("nested struct"), &inner));
+        let leaf = factory.get_exact_piece(outer.clone(), 12, 4);
+        assert!(Arc::ptr_eq(&leaf.expect("nested leaf"), &uint4));
+        assert!(factory.get_exact_piece(outer.clone(), 22, 4).is_none());
+        assert!(factory.get_exact_piece(outer.clone(), 24, 1).is_none());
+        assert!(factory.get_exact_piece(outer.clone(), 1, 24).is_none());
+        let negative_exact = factory.get_exact_piece(uint4.clone(), -1, 4);
+        assert!(Arc::ptr_eq(
+            &negative_exact.expect("exact-size test precedes descent"),
+            &uint4,
+        ));
+
+        let cross = factory.get_exact_piece(inner.clone(), 2, 4).expect("cross partial");
+        let cross_repeat = factory
+            .get_type_partial_struct(inner.clone(), 2, 4);
+        assert!(Arc::ptr_eq(&cross, &cross_repeat));
+        let hole = factory.get_exact_piece(outer.clone(), 4, 0).expect("zero-size hole");
+        let hole_repeat = factory.get_type_partial_struct(outer.clone(), 4, 0);
+        assert!(Arc::ptr_eq(&hole, &hole_repeat));
+
+        let array = factory.get_array(uint4.clone(), 3);
+        let array_element = factory
+            .get_exact_piece(array.clone(), 4, 4)
+            .expect("array element");
+        assert!(Arc::ptr_eq(&array_element, &uint4));
+        let array_partial = factory
+            .get_exact_piece(array.clone(), 2, 4)
+            .expect("cross-stride array partial");
+        let array_partial_direct = factory.get_type_partial_struct(array.clone(), 2, 4);
+        assert!(Arc::ptr_eq(&array_partial, &array_partial_direct));
+        let (negative_element, negative_off) = Datatype::get_sub_type_arc(&array, -1);
+        assert!(Arc::ptr_eq(
+            &negative_element.expect("negative array offset"),
+            &uint4,
+        ));
+        assert_eq!(negative_off, -1);
+        let negative_array_piece = factory
+            .get_exact_piece(array.clone(), -1, 4)
+            .expect("negative array piece");
+        assert!(Arc::ptr_eq(&negative_array_piece, &uint4));
+        let (past_array, past_off) = Datatype::get_sub_type_arc(&array, 12);
+        assert!(past_array.is_none());
+        assert_eq!(past_off, 12);
+
+        let enumeration = factory
+            .get_type_enum_result("ExactEnum")
+            .expect("configured enum");
+        let enum_piece = factory
+            .get_exact_piece(enumeration.clone(), 1, 2)
+            .expect("partial enum");
+        let enum_repeat = factory.get_type_partial_enum(enumeration, 1, 2);
+        assert!(Arc::ptr_eq(&enum_piece, &enum_repeat));
+        assert!(enum_piece.has_stripped());
+        assert!(factory.get_exact_piece(enum_piece, 0, 1).is_none());
+
+        factory.get_type_union("ExactUnion");
+        let union = factory
+            .set_union_fields_sized(
+                "ExactUnion",
+                vec![TypeField {
+                    name: "wide".into(),
+                    offset: 0,
+                    type_ptr: uint4.clone(),
+                }],
+                4,
+                4,
+            )
+            .expect("union definition");
+        let whole_union = factory
+            .get_exact_piece(union.clone(), 0, 4)
+            .expect("whole union");
+        assert!(Arc::ptr_eq(&whole_union, &union));
+        let union_piece = factory
+            .get_exact_piece(union.clone(), 1, 2)
+            .expect("partial union");
+        let union_repeat = factory.get_type_partial_union(union, 1, 2);
+        assert!(Arc::ptr_eq(&union_piece, &union_repeat));
+
+        let wide_partial = factory.get_type_partial_struct(outer.clone(), 8, 8);
+        let (wide_subtype, wide_newoff) = Datatype::get_sub_type_arc(&wide_partial, 0);
+        assert_eq!(wide_newoff, 0);
+        assert!(Arc::ptr_eq(
+            &wide_subtype.expect("partial equality boundary"),
+            &inner,
+        ));
+        let leaf_partial = factory.get_type_partial_struct(outer, 8, 4);
+        let (leaf_subtype, leaf_newoff) = Datatype::get_sub_type_arc(&leaf_partial, 0);
+        assert_eq!(leaf_newoff, 0);
+        assert!(Arc::ptr_eq(
+            &leaf_subtype.expect("partial successful descent"),
+            &uint4,
+        ));
+
+        let narrow = factory.get_type_partial_struct(inner, 0, 2);
+        let (subtype, newoff) = Datatype::get_sub_type_arc(&narrow, 0);
+        assert!(subtype.is_none());
+        assert_eq!(newoff, 0);
+        assert!(factory.get_exact_piece(narrow, 0, 1).is_none());
     }
 }

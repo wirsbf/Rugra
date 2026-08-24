@@ -3,8 +3,9 @@
 ## 文档状态
 
 - **状态**: L2。当前单名称 map 与 immutable `Arc<Datatype>` 不等价于
-  Ghidra 结构主树 + `(name,id)` 树和原位对象突变；exact-piece series
-  尚未完成。layout/rekey 的 scoped A 片只保证 factory 当前 tree/name 槽
+  Ghidra 结构主树 + `(name,id)` 树和原位对象突变；exact-piece series D
+  已落 production walk，但在锁定 bilateral fixture 运行前保持 `NO_ORACLE`。
+  layout/rekey 的 scoped A 片只保证 factory 当前 tree/name 槽
   一致，旧句柄及 factory-owned dependencies 仍绑定
   `TYPEFACTORY-ARC-IDENTITY-0001`。series B 只闭合 array/partial/virtual
   stripped 的 registry 投影；series C 增加 Pointer/PointerRel canonical
@@ -158,6 +159,35 @@ Implements the unnamed overload at `type.cc:4016-4023`: size, wordsize and
 container come from the parent pointer; `markEphemeral` installs the canonical
 plain pointer and sets `HAS_STRIPPED` (plus `SUB_PTRREL_UNK` for an unknown
 pointee); the relative pointer is interned by pointee/offset/parent/wordsize.
+
+### `pub fn get_exact_piece(&mut self, ct, offset, size) -> Option<Arc<Datatype>>`
+
+Implements `TypeFactory::getExactPiece` (`type.cc:4090-4117`) in its original
+range-check → exact-size → union → virtual-descent order. The loop retains the
+last type/offset before each descent; a stopped struct/array becomes a canonical
+PartialStruct, an unstripped enum becomes a canonical PartialEnum, and a union
+becomes a canonical PartialUnion before descent. Exact hits preserve the input
+or nested component `Arc`; negative offsets and zero sizes are not normalized.
+The Rust signature exposes `i64` offsets and non-negative `usize` sizes, while
+the oracle signature is `(int4 offset, int4 size)`: the covered claim is limited
+to offsets in the `int4` domain and non-negative sizes representable by both.
+
+The Arc-preserving virtual dispatch covers Struct, Array, PartialStruct and the
+currently modeled Spacebase symbol lookup. `TypePointer::truncate`, a TypeCode
+with an attached factory, and Spacebase's byte/address-unit conversion,
+`resolveConstant`, scope lookup, and no-symbol `unknown1` fallback are not fully
+representable. Immutable stale composite handles can also change descent after
+definition replacement. These whole-function differences remain
+`MISMATCH/UNTESTED` under `TYPE-0001`, `TYPEFACTORY-ARC-IDENTITY-0001`,
+`DATATYPE-SPACEBASE-SPACEID-0001`, `ARCH-0001`, `ADDRESS-0001`, and
+`DATABASE-0001`; only the composite projection is `NO_ORACLE` pending the
+series-D bilateral run.
+
+This foundation currently has no production caller. `variable.rs`,
+`database.rs`, `funcdata.rs`, and `ruleaction.rs` still carry local
+`getExactPiece` fallbacks that lose partial results or canonical identity. Their
+migration remains part of the `TYPE-0001` consumer closure; series D alone does
+not claim a user-visible pipeline repair.
 
 ### `pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype>`
 
