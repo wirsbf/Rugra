@@ -626,18 +626,103 @@ fn libc_import_signature(name: &str) -> Option<(&'static str, &'static str)> {
 // symbol with the generic_clib locked signature); Rugra's front-end state is
 // the driver's ELF/PLT symbol table plus the locked libc ABI table. For each
 
+// ============================================================================
+// FLOW-NORETURN-DATA-0001: "Non-Returning Functions - Known" data source
+//
+// Ghidra's Java analyzer `NoReturnFunctionAnalyzer` (NAME = "Non-Returning
+// Functions - Known", Ghidra/Features/Base/src/main/java/ghidra/app/plugin/
+// core/analysis/NoReturnFunctionAnalyzer.java @ oracle e40ed13014) walks the
+// primary symbol table, strips leading '_' chars from each symbol name, and
+// on an exact (case-sensitive) match against the per-format name list calls
+// `Function.setNoReturn(true)` — the program-database flag that the
+// decompiler later reads via queryCall's `copyFlowEffects`
+// (flow.cc:663-669), making `checkForFlowModification` (flow.cc:636-651)
+// insert `artificialHalt(PcodeOp::noreturn)` after the CALL and emit the
+// "Subroutine does not return" warning. The name list is selected per
+// executable format by data/noReturnFunctionConstraints.xml; for this ELF
+// fixture it is data/ElfFunctionsThatDoNotReturn (21 names, byte-exact
+// below, file order preserved). That data file carries no trailing-`*`
+// wildcard entries, so the analyzer's wildcard prefix set is empty for ELF
+// and only the exact-match path applies here.
+//
+// Matching semantics ported from NoReturnFunctionAnalyzer.added() /
+// loadFunctionNamesIfNeeded():
+//   * strip ALL leading '_' from the symbol name (`__stack_chk_fail` ->
+//     `stack_chk_fail`, `_exit` -> `exit`); the list itself has no leading
+//     underscores (the loader strips-and-warns on any).
+//   * exact, case-sensitive containment (`Unwind_Resume` and the mangled
+//     `ZSt9terminatev` / `ZN10__cxxabiv111__terminateEPFvvE` keep their
+//     case: `_ZSt9terminatev` matches only through underscore stripping).
+//   * the analyzer's namespace guard (skip when the parent namespace is
+//     neither global, library, nor std — protects demangled class methods
+//     like `Menu::_exit()`) is vacuous for this driver: the ELF symbol table
+//     carries raw mangled names with no namespace structure, and a mangled
+//     method name (`_ZN5Menu5_exitEv`) never exact-matches the list anyway.
+// ============================================================================
+
+/// Ghidra's `ElfFunctionsThatDoNotReturn` name list (oracle commit
+/// e40ed13014, Ghidra/Features/Base/data/ElfFunctionsThatDoNotReturn, 21
+/// non-comment lines verbatim in file order). Selected for this fixture by
+/// data/noReturnFunctionConstraints.xml's
+/// `executable_format name="Executable and Linking Format (ELF)"` fallback
+/// entry (the curl fixture has no golang/rustc compiler spec).
+const KNOWN_NO_RETURN_ELF_NAMES: [&str; 21] = [
+    "exit",
+    "cexit",
+    "c_exit",
+    "abort",
+    "reboot",
+    "longjmp",
+    "longjmp_chk",
+    "siglongjmp",
+    "panic",
+    "stack_chk_fail",
+    "cxa_throw",
+    "cxa_terminate",
+    "cxa_call_unexpected",
+    "cxa_bad_cast",
+    "Unwind_Resume",
+    "assert_fail",
+    "assert_rtn",
+    "fortify_fail",
+    "ZSt9terminatev",
+    "ZN10__cxxabiv111__terminateEPFvvE",
+    "pthread_exit",
+];
+
+// RUGRA-GLUE: Java-side analyzer (NoReturnFunctionAnalyzer.added) with no
+// decompiler-C++ counterpart; this driver function is the program-database
+// seeding equivalent on Rugra's side of the front-end boundary.
+/// Strip leading '_' chars from a raw ELF symbol name, mirroring the
+/// analyzer's `while (name.charAt(startIndex) == '_') ++startIndex;` loop.
+/// ASCII-only names from the ELF strtab; the '_' byte prefix is what the
+/// Java loop consumes, so byte indexing is exact here.
+pub fn strip_leading_underscores(name: &str) -> &str {
+    name.trim_start_matches('_')
+}
+
+// RUGRA-GLUE: Java-side analyzer (NoReturnFunctionAnalyzer.added) with no
+// decompiler-C++ counterpart; see the module note above.
+/// Exact no-return classification for a raw ELF symbol name: strip leading
+/// underscores, then case-sensitive containment in the Known list (the ELF
+/// list has no wildcard entries, so no prefix path applies).
+pub fn is_known_no_return(symbol_name: &str) -> bool {
+    KNOWN_NO_RETURN_ELF_NAMES
+        .contains(&strip_leading_underscores(symbol_name))
+}
+
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
 // signature proto on the call site, (3) refresh the CALL op's typed fspec
 // annotation against the same stable callspec owner. Unresolved targets are
 // left exactly as flow produced them (unknown). Returns (named, locked
-// signatures, relinked call ops).
+// signatures, relinked call ops, known no-return callees marked).
 fn link_call_specs(
     fd: &mut rugra::funcdata::Funcdata,
     libc_signatures: &rugra::debugproto::LibcSignatureTable,
     storage: &rugra::debugproto::X86_64GccStorage,
     fn_name: &str,
-) -> (usize, usize, usize) {
+) -> (usize, usize, usize, usize) {
     // Keep the stable owner with each direct target. Multiple CALLs may share
     // one machine address, so an address lookup is not an identity lookup.
     let targets: Vec<_> = fd
@@ -651,6 +736,7 @@ fn link_call_specs(
         .collect();
     let mut named = 0usize;
     let mut signatures = 0usize;
+    let mut noreturn_marked = 0usize;
     for (owner, op_addr, entry) in targets {
         // flow.cc:660: queryFunction(entry) -> the PLT thunk's symbol name.
         let Some(name) = fd.symbol_table.get(&entry).cloned() else {
@@ -675,13 +761,27 @@ fn link_call_specs(
                 fn_name, op_addr, name, error
             ),
         }
+        // flow.cc:663-664 copyFlowEffects position (FLOW-NORETURN-DATA-0001):
+        // the "Non-Returning Functions - Known" analyzer has already set
+        // no_return on the callee's program-database FuncProto, and
+        // queryCall copies that flag onto the callsite independent of the
+        // model lock — so the bit lands whether or not a locked libc
+        // signature was installed above (fspec.cc copyFlowEffects copies the
+        // is_inline|no_return flag subset only). Rugra's flow-time
+        // query_call slice (src/flow.rs) does not yet consume this
+        // (CALLSPEC-NORETURN-WIRE-0001 segment (b)); the marking here is the
+        // driver's program-database half of the channel.
+        if is_known_no_return(&name) {
+            owner.write().unwrap().prototype.set_no_return(true);
+            noreturn_marked += 1;
+        }
     }
     // flow.cc:685 / fspec.cc:5450: opSetInput(op, newVarnodeCallSpecs(fc)).
     // Ghidra's fspec varnode is a pointer to the FuncCallSpecs. D0 preserves
     // that exact owner identity through a typed Weak carried by the temporary
     // Iop annotation; TypeOp/PrintC consumption remains a separate residual.
     let relinked = relink_call_spec_targets(fd);
-    (named, signatures, relinked)
+    (named, signatures, relinked, noreturn_marked)
 }
 
 // RUGRA-GLUE: refresh each direct CALL's fspec annotation from its stable
@@ -1778,6 +1878,19 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     target.name, import_name, error
                 ),
             }
+            // FLOW-NORETURN-DATA-0001: the analyzer's `functionAt.setNoReturn
+            // (true)` on the (thunk/external) function itself — the flag the
+            // program database carries on the callee's own FuncProto,
+            // independent of any locked signature. Callers consume it via
+            // queryCall's copyFlowEffects once the flow-time channel
+            // (CALLSPEC-NORETURN-WIRE-0001 segment (b)) lands.
+            if is_known_no_return(&import_name) {
+                fd.funcp.set_no_return(true);
+                eprintln!(
+                    "[PREPASS] {} marked known no-return ({} matches Non-Returning Functions - Known)",
+                    target.name, import_name
+                );
+            }
         }
     }
     fd.external_prototypes = proto_db;
@@ -1824,8 +1937,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let mut named = 0usize;
     let mut signatures = 0usize;
     let mut relinked = 0usize;
+    let mut noreturn_marked = 0usize;
     if callspec_link_enabled {
-        (named, signatures, relinked) = link_call_specs(
+        (named, signatures, relinked, noreturn_marked) = link_call_specs(
             &mut fd,
             &libc_signatures,
             &debug_storage,
@@ -1833,12 +1947,13 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         );
     }
     eprintln!(
-        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} fspec targets relinked",
+        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} fspec targets relinked, {} known no-return callees marked",
         target.name,
         fd.callspecs.len(),
         named,
         signatures,
-        relinked
+        relinked,
+        noreturn_marked
     );
 
     let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
@@ -3342,5 +3457,129 @@ mod constantptr_driver_a0_tests {
         assert_eq!(synthetic_dat_name(0x61d9), "DAT_001061d9");
         assert_eq!(synthetic_dat_name(0x17020), "DAT_00117020");
         assert_eq!(synthetic_dat_name(0x175c0), "DAT_001175c0");
+    }
+}
+
+#[cfg(test)]
+mod flow_noreturn_data_tests {
+    use super::*;
+
+    /// Leading-underscore stripping mirrors the analyzer's `while (charAt ==
+    /// '_') ++startIndex` loop: ALL leading underscores go, inner ones stay
+    /// (`longjmp_chk`, `ZN10__cxxabiv111__terminateEPFvvE`).
+    #[test]
+    fn strips_all_leading_underscores() {
+        assert_eq!(strip_leading_underscores("__stack_chk_fail"), "stack_chk_fail");
+        assert_eq!(strip_leading_underscores("_exit"), "exit");
+        assert_eq!(strip_leading_underscores("___pthread_exit"), "pthread_exit");
+        assert_eq!(strip_leading_underscores("exit"), "exit");
+        assert_eq!(strip_leading_underscores(""), "");
+        // Inner underscores are not touched (Java substring from startIndex).
+        assert_eq!(strip_leading_underscores("_longjmp_chk"), "longjmp_chk");
+    }
+
+    /// The matcher's accept set: underscore-stripped exact names from
+    /// ElfFunctionsThatDoNotReturn, including the mangled C++ entries that
+    /// only classify through stripping.
+    #[test]
+    fn accepts_known_no_return_names() {
+        for name in [
+            "exit",
+            "__exit",      // -> exit
+            "cexit",
+            "c_exit",
+            "abort",
+            "reboot",
+            "longjmp",
+            "_longjmp", // glibc's setjmp-family alias form
+            "longjmp_chk",
+            "__longjmp_chk",
+            "siglongjmp",
+            "panic",
+            "__stack_chk_fail",
+            "__cxa_throw",
+            "__cxa_terminate",
+            "__cxa_call_unexpected",
+            "__cxa_bad_cast",
+            "_Unwind_Resume",
+            "__assert_fail",
+            "__assert_rtn",
+            "__fortify_fail",
+            "_ZSt9terminatev",
+            "__ZN10__cxxabiv111__terminateEPFvvE",
+            "pthread_exit",
+        ] {
+            assert!(is_known_no_return(name), "{name} must classify no-return");
+        }
+    }
+
+    /// Exact-match boundary: case is significant (Java HashSet<String>
+    /// containment), near-miss spellings and unlisted look-alikes stay
+    /// returning, and mangled class methods never match (the analyzer's
+    /// namespace guard analog for flat ELF names).
+    #[test]
+    fn rejects_non_members() {
+        for name in [
+            "Exit",               // case-sensitive list
+            "STACK_CHK_FAIL",     // case-sensitive list
+            "Unwind_resume",      // case-sensitive mangled entry
+            "exits",              // not a prefix/equal match
+            "exit2",
+            "my_exit",            // inner underscore: strips to my_exit
+            "aborting",
+            "reboot_now",
+            "longjmp2",
+            "siglongjmp_chk",     // longjmp_chk is listed, sig- variant is not
+            "panicky",
+            "__cxa_atexit",       // cxa_atexit is NOT in the list
+            "stack_chk",          // proper prefix of a listed name
+            "__libc_start_main",  // curl import, returning
+            "exit@GLIBC_2.2.5",   // version suffix is not stripped by the
+                                  // analyzer (symbol.getName is the raw name)
+            "_ZN5Menu5_exitEv",   // mangled method: Menu::_exit() — the
+                                  // namespace guard's protected class
+        ] {
+            assert!(!is_known_no_return(name), "{name} must NOT classify no-return");
+        }
+    }
+
+    /// Fixture witness: the locked curl binary's .dynsym imports classify
+    /// exactly `exit` and `__stack_chk_fail` as known no-return (the two
+    /// names the C1 audit symptom 2 chain rides on: __stack_chk_fail's
+    /// 14-arg speculative call in my_get_line and exit calls in
+    /// glob_word/glob_set). The full dynsym name set is the wide-readelf
+    /// dump (52 entries).
+    #[test]
+    fn curl_dynsym_classifies_exit_and_stack_chk_fail_only() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/curl");
+        let data = std::fs::read(path).expect("examples/curl fixture readable");
+        let elf = match goblin::Object::parse(&data).expect("curl parses as ELF") {
+            goblin::Object::Elf(elf) => elf,
+            _ => panic!("curl fixture is not an ELF object"),
+        };
+        let mut matched: BTreeSet<String> = BTreeSet::new();
+        for sym in elf.dynsyms.iter() {
+            if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                if is_known_no_return(name) {
+                    matched.insert(name.to_string());
+                }
+            }
+        }
+        let expected: BTreeSet<String> =
+            ["exit".to_string(), "__stack_chk_fail".to_string()].into_iter().collect();
+        assert_eq!(matched, expected);
+    }
+
+    /// The list itself stays byte-faithful to the oracle data file: 21
+    /// entries, no leading underscores, no wildcard tails (the loader would
+    /// strip/warn and re-bucket those).
+    #[test]
+    fn list_stays_faithful_to_oracle_data_file() {
+        assert_eq!(KNOWN_NO_RETURN_ELF_NAMES.len(), 21);
+        for name in KNOWN_NO_RETURN_ELF_NAMES {
+            assert!(!name.starts_with('_'), "{name} must not carry a leading '_'");
+            assert!(!name.ends_with('*'), "{name} must not be a wildcard entry");
+            assert_eq!(name, name.trim(), "{name} must be pre-trimmed");
+        }
     }
 }
