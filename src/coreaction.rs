@@ -1076,9 +1076,21 @@ impl Action for ActionMergeType {
     }
 
     // Ghidra: coreaction.hh:414 ActionMergeType::apply
+    /// Faithful to coreaction.hh:414:
+    /// `data.getMerge().mergeByDatatype(data.beginLoc(),data.endLoc());`
+    ///
+    /// This Action runs the same-type speculative merge pass ONLY. It must
+    /// NOT re-enter the required-merge sequence: in the Ghidra pipeline
+    /// (coreaction.cc:5717-5727) ActionMergeRequired — the sole caller of
+    /// Merge::mergeAddrTied/mergeRangeMust — runs BEFORE ActionMarkImplied,
+    /// so mergeTestMust never observes an implied Varnode. Re-running
+    /// mergeAddrTied after ActionMarkImplied (as the former `merge_all`
+    /// monolith did, MERGE-FORCEMERGE-PANIC-0001) reaches a state Ghidra
+    /// never builds and trips mergeTestMust's throw on implied addrtied
+    /// varnodes (e.g. SUBPIECE outputs at stack locations).
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
-        merge.merge_all(fd);
+        merge.merge_by_datatype(fd);
         Ok(action_status::NO_CHANGE)
     }
 

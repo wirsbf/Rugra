@@ -271,6 +271,15 @@ Action for merging varnodes by datatype
 
 Corresponds to Ghidra's `ActionMergeType`
 
+`apply` mirrors coreaction.hh:414 exactly: it runs the same-type
+speculative pass `Merge::merge_by_datatype` (Ghidra
+`data.getMerge().mergeByDatatype(data.beginLoc(),data.endLoc())`) and
+nothing else. It must not re-enter the required-merge sequence —
+`Merge::merge_addr_tied`/`merge_range_must` only ever run inside
+ActionMergeRequired (coreaction.cc:5718), which is sequenced BEFORE
+ActionMarkImplied, so `Merge::merge_test_must` never observes an implied
+Varnode (MERGE-FORCEMERGE-PANIC-0001).
+
 ### `pub fn new() -> Self`
 
 *暂无代码注释*
