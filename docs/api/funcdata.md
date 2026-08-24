@@ -1467,3 +1467,35 @@ op/varnode/callspec/jump-table/block/flag 状态）。全函数 B2 仍为 `MISMA
 Ghidra 的直接 `PcodeOp *` 身份，缺少 effective-extrapop/paramshift/bad-jumptable
 字段；无 synthetic annotation 且同地址多 CALL 的输入会保守报错。注入分支及
 完整 FlowInfo 私有状态克隆仍为 `UNTESTED`，不得据此宣称 L3。
+
+## 2026-08-24：FLOW-SHAREDRETURN-0001 — `override_flow`
+
+`Funcdata::override_flow(addr, flow_type) -> Result<()>` 对应锁定
+`funcdata_op.cc:969-1021`。它按 `PcodeOpTree` 的 SeqNum 顺序读取给定地址的全部
+op，调用 `find_primary_branch` 选择第一个符合类别的真实控制流 op，并要求该 op
+仍是 dead 状态；找不到或已经形成 block 时传播精确
+`Lowlevel("Could not apply flowoverride")`。
+
+改写表与 oracle 相同：
+
+- BRANCH override：CALL→BRANCH、CALLIND/RETURN→BRANCHIND；
+- CALL/CALL_RETURN：BRANCH→CALL、BRANCHIND/RETURN→CALLIND；CBRANCH 抛
+  `Do not currently support CBRANCH overrides`；
+- RETURN：BRANCH/CBRANCH/CALL 抛
+  `Do not currently support complex overrides`，BRANCHIND/CALLIND→RETURN；
+- CALL_RETURN 额外用 `new_op(1, addr)` 建 RETURN，输入为
+  `new_constant(1, 0)`，再用 `insert_after_dead` 移到 primary 后。primary 的对象
+  identity/SeqNum 不变，新 RETURN 的 identity/SeqNum 也不因移动重建或重复登记。
+
+专属双侧 fixture 的选择性数值投影在 hugehelp/progressbarinit 锁住 primary identity、SeqNum、
+dead-list 紧邻顺序和 RETURN 常量，并经完整 FlowInfo 路径观察 callspec target 与
+OOB 状态；myprogress 锁住精确地址 query 的负例。CALL/BRANCH/RETURN 其余改写表、
+CBRANCH/complex error 与 instruction-limit 组合尚未逐分支运行，保持
+`UNTESTED`。另有已确认的直接调用残差：Ghidra `overrideFlow(addr, NONE)` 因未找到
+primary 而抛 `Could not apply flowoverride`，Rust 当前直接返回 `Ok(())`；生产
+`processInstruction` 两侧都只在 override 非 NONE 时调用，所以不影响本切片的
+shared-return 路径，但 public function 仍不能称为逐分支相同。完整行为保持
+`MISMATCH`：Ghidra 地址带 RAM space，Rust 当前
+`Address::new` 为 null-base（`ADDRESS-PHASE2-CLOSURE-0001`）；Ghidra callspec 的
+`PcodeOp *` 身份在 Rugra 数据结构中也仍缺失，fixture 将其记作
+`CALLSPEC-0001 MISMATCH`，没有用 `op_addr` 相等冒充指针身份。

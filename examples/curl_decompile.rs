@@ -2,8 +2,9 @@
 //! Run with: cargo run --example curl_decompile
 
 use goblin::Object;
+use iced_x86::{Decoder as IcedDecoder, DecoderOptions, FlowControl, OpKind};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -18,6 +19,7 @@ use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase, X86_64GccSt
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::Funcdata;
+use rugra::override_rs::{FlowOverride, FlowOverrideRecord};
 use rugra::prettyprint::EmitNoMarkup;
 use rugra::printc::PrintC;
 use rugra::printlanguage::PrintLanguage;
@@ -193,13 +195,233 @@ fn worker_target(func: &FuncInfo) -> WorkerTarget {
     }
 }
 
-const WORKER_PROTOCOL_VERSION: u32 = 1;
+/// Produce the unique-ELF-owner, direct-known-entry portion of Ghidra's
+/// Shared Return Calls Program metadata from the standalone front-end. The locked Java
+/// producer (`SharedReturnAnalysisCmd.processFunctionJumpReferences`,
+/// lines 376-425) starts with jump references to known function entries,
+/// rejects conditional/multi-flow/thunk/self-entry cases, and emits
+/// CALL_RETURN for the remaining instruction. A standalone ELF has no
+/// pre-existing Program overrides; conflict-preserving merge is enforced at
+/// the worker ingress below.
+///
+/// Rugra's standalone projection supplies these facts without a Program
+/// database: STT_FUNC symbols define function entries/bodies, PLT relocation
+/// entries extend the function-entry set, and iced-x86 supplies one direct
+/// memory-flow reference for each direct branch instruction. The analyzer's
+/// separate contiguous-function discovery, ownerless sources, discontiguous
+/// bodies, and Program-added multi-flow references are deliberately not
+/// inferred here.
+// RUGRA-GLUE: standalone Program-metadata producer for the curl driver; the mapped producer is Java SharedReturnAnalysisCmd, not native decompiler C++.
+fn collect_known_entry_shared_return_overrides(
+    binary_image: &[u8],
+    elf: &goblin::elf::Elf,
+    plt_entries: &HashMap<u64, String>,
+) -> Result<Vec<FlowOverrideRecord>, Box<dyn std::error::Error>> {
+    const SHF_EXECINSTR: u64 = 0x4;
+    const SHT_PROGBITS: u32 = 1;
+
+    // FunctionManager has one function per entry. Keep that identity exact:
+    // aliases with the same entry must describe the same non-empty body or
+    // the standalone projection fails visibly instead of choosing one.
+    let mut function_entries = BTreeSet::new();
+    let mut body_ends = BTreeMap::<u64, u64>::new();
+    for symbol in elf
+        .syms
+        .iter()
+        .chain(elf.dynsyms.iter())
+        .filter(|symbol| symbol.is_function())
+    {
+        if symbol.st_value == 0 {
+            continue;
+        }
+        function_entries.insert(symbol.st_value);
+        if symbol.st_size == 0 {
+            continue;
+        }
+        let end = symbol
+            .st_value
+            .checked_add(symbol.st_size)
+            .ok_or_else(|| format!("function extent overflows at 0x{:x}", symbol.st_value))?;
+        match body_ends.insert(symbol.st_value, end) {
+            Some(previous) if previous != end => {
+                return Err(format!(
+                    "conflicting ELF function bodies at 0x{:x}: 0x{:x} and 0x{:x}",
+                    symbol.st_value, previous, end
+                )
+                .into())
+            }
+            _ => {}
+        }
+    }
+    // Ghidra's ELF/PLT analyzers materialize relocation-backed PLT slots as
+    // functions before Shared Return Calls runs. Their names are irrelevant;
+    // only the relocation-derived entry addresses participate here.
+    function_entries.extend(plt_entries.keys().copied());
+
+    // FunctionManager bodies cannot overlap. Detect malformed/ambiguous ELF
+    // ownership before scanning any references.
+    let mut previous_body: Option<(u64, u64)> = None;
+    for (&entry, &end) in &body_ends {
+        if let Some((previous_entry, previous_end)) = previous_body {
+            if entry < previous_end {
+                return Err(format!(
+                    "overlapping ELF function bodies: 0x{previous_entry:x}..0x{previous_end:x} and 0x{entry:x}..0x{end:x}"
+                )
+                .into());
+            }
+        }
+        previous_body = Some((entry, end));
+    }
+
+    let mut result = BTreeMap::<(u64, u64), FlowOverrideRecord>::new();
+    for (&owner_entry, &owner_end) in &body_ends {
+        let owner_size = owner_end - owner_entry;
+        let mut containing_sections = Vec::new();
+        for candidate in &elf.section_headers {
+            if (candidate.sh_flags & SHF_EXECINSTR) == 0
+                || candidate.sh_type != SHT_PROGBITS
+            {
+                continue;
+            }
+            let section_end = candidate.sh_addr.checked_add(candidate.sh_size).ok_or_else(|| {
+                format!("executable section extent overflows at 0x{:x}", candidate.sh_addr)
+            })?;
+            if owner_entry >= candidate.sh_addr && owner_end <= section_end {
+                containing_sections.push(candidate);
+            }
+        }
+        let section = match containing_sections.as_slice() {
+            [section] => *section,
+            [] => {
+                // Program has no Instruction at a function whose body is not
+                // in an executable PROGBITS section, matching the Java null
+                // check.
+                continue;
+            }
+            sections => {
+                return Err(format!(
+                    "function body 0x{owner_entry:x}..0x{owner_end:x} belongs to {} executable sections",
+                    sections.len()
+                )
+                .into())
+            }
+        };
+        let file_start_u64 = section
+            .sh_offset
+            .checked_add(owner_entry - section.sh_addr)
+            .ok_or_else(|| format!("function file offset overflows at 0x{owner_entry:x}"))?;
+        let file_end_u64 = file_start_u64
+            .checked_add(owner_size)
+            .ok_or_else(|| format!("function file extent overflows at 0x{owner_entry:x}"))?;
+        let file_start = usize::try_from(file_start_u64)?;
+        let file_end = usize::try_from(file_end_u64)?;
+        let function_bytes = binary_image.get(file_start..file_end).ok_or_else(|| {
+            format!(
+                "function bytes outside ELF image: 0x{owner_entry:x}..0x{owner_end:x}"
+            )
+        })?;
+        let mut decoder =
+            IcedDecoder::with_ip(64, function_bytes, owner_entry, DecoderOptions::NONE);
+        let mut owner_records = Vec::new();
+        let mut owner_valid = true;
+        while decoder.can_decode() {
+            let instruction = decoder.decode();
+            if instruction.is_invalid() {
+                eprintln!(
+                    "[PREPASS] Shared Return Calls skipped ELF body 0x{owner_entry:x}..0x{owner_end:x}: invalid instruction at 0x{:x}",
+                    instruction.ip()
+                );
+                owner_valid = false;
+                break;
+            }
+            // getJumpRefsToFunction: direct jump only, with conditional jumps
+            // disabled by the locked analyzer default. Calls and indirect
+            // branches do not enter the incoming jump-reference list.
+            if instruction.flow_control() != FlowControl::UnconditionalBranch {
+                continue;
+            }
+            let target = match instruction.op0_kind() {
+                OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
+                    instruction.near_branch64()
+                }
+                _ => continue,
+            };
+            if !function_entries.contains(&target) {
+                continue;
+            }
+            let source = instruction.ip();
+            let instruction_end = source
+                .checked_add(instruction.len() as u64)
+                .ok_or_else(|| format!("instruction extent overflows at 0x{source:x}"))?;
+            if instruction_end > owner_end {
+                return Err(format!(
+                    "instruction crosses function body at 0x{source:x}: end=0x{instruction_end:x} body_end=0x{owner_end:x}"
+                )
+                .into());
+            }
+
+            // getSingleFlowReferenceFrom: this direct iced branch projection
+            // has exactly one memory flow reference, namely `target`.
+            // FunctionManager::getFunctionAt(source): do not override thunks.
+            if function_entries.contains(&source) {
+                continue;
+            }
+            // Do not reinterpret a jump from inside the destination function
+            // back to that same function's entry.
+            if body_ends
+                .get(&target)
+                .is_some_and(|&destination_end| source >= target && source < destination_end)
+            {
+                continue;
+            }
+
+            // A Program Instruction has a single owning function body. Fail
+            // on overlapping ELF bodies instead of picking an owner by order.
+            let owners: Vec<u64> = body_ends
+                .iter()
+                .filter_map(|(&entry, &end)| (source >= entry && source < end).then_some(entry))
+                .collect();
+            if owners.as_slice() != [owner_entry] {
+                return Err(format!(
+                    "ambiguous source function for branch 0x{source:x}: {owners:?}"
+                )
+                .into());
+            }
+
+            let record = FlowOverrideRecord {
+                function_address: owner_entry,
+                override_address: source,
+                flow_type: FlowOverride::CallReturn,
+            };
+            owner_records.push(record);
+        }
+        if !owner_valid {
+            continue;
+        }
+        for record in owner_records {
+            let key = (record.function_address, record.override_address);
+            if let Some(previous) = result.insert(key, record) {
+                if previous != record {
+                    return Err(format!(
+                        "conflicting flow overrides for 0x{:x}:0x{:x}",
+                        record.function_address, record.override_address
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(result.into_values().collect())
+}
+
+const WORKER_PROTOCOL_VERSION: u32 = 2;
 const FUNCTION_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKER_MODE_ARG: &str = "--rugra-curl-function-worker";
 const WORKER_LABEL_ARG: &str = "--probe-label";
 const DESCENDANT_MODE_ARG: &str = "--rugra-timeout-descendant-probe";
 const SELF_TEST_ARG: &str = "--rugra-timeout-isolation-self-test";
 const COMPARE_FUNCTION_ARG: &str = "--rugra-timeout-isolation-compare-function";
+const SELECT_FUNCTION_ARG: &str = "--rugra-selected-function";
 const WORKER_PANIC_EXIT: i32 = 70;
 const WORKER_ERROR_EXIT: i32 = 71;
 const WORKER_INVALID_REQUEST_EXIT: i32 = 72;
@@ -231,6 +453,7 @@ struct DecompileRequest {
     symbol_entries: Vec<(u64, String)>,
     string_entries: Vec<(u64, String)>,
     prototype_entries: Vec<(u64, usize)>,
+    flow_override_entries: Vec<FlowOverrideRecord>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -623,6 +846,7 @@ fn external_stub_section(name: &str, import: &ExternalImport) -> String {
 enum DriverMode {
     All,
     CompareFunctions(Vec<String>),
+    SelectedFunctions(Vec<String>),
 }
 
 unsafe extern "C" {
@@ -689,11 +913,19 @@ fn main() {
         {
             DriverMode::CompareFunctions(functions.to_vec())
         }
+        [_, option, functions @ ..]
+            if option == SELECT_FUNCTION_ARG
+                && !functions.is_empty()
+                && functions.iter().all(|function| !function.is_empty()) =>
+        {
+            DriverMode::SelectedFunctions(functions.to_vec())
+        }
         _ => {
             eprintln!(
-                "usage: {} [{} <function> ...]",
+                "usage: {} [{} <function> ... | {} <function> ...]",
                 args.first().map(String::as_str).unwrap_or("curl_decompile"),
-                COMPARE_FUNCTION_ARG
+                COMPARE_FUNCTION_ARG,
+                SELECT_FUNCTION_ARG
             );
             std::process::exit(2);
         }
@@ -1281,6 +1513,35 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // (FuncProto::setScope -> setModel(defaultfp)) rides on it, so an overlay
     // can lock the prototype only after a model is in place.
     fd.set_arch(worker_architecture()?);
+    // FLOW-SHAREDRETURN-0001: the controller supplies the out-of-band
+    // `<flowoverridelist>` projection for exactly this function. Seed it
+    // before FlowInfo construction because Ghidra's constructor caches
+    // Override::hasFlowOverride(); processInstruction performs the exact-site
+    // query before lift and applies the rewrite after lift, before xref.
+    for record in &request.flow_override_entries {
+        if record.function_address != target.vaddr {
+            return Err(format!(
+                "flow override owner mismatch: target=0x{:x} owner=0x{:x} site=0x{:x}",
+                target.vaddr, record.function_address, record.override_address
+            ));
+        }
+        if record.flow_type == FlowOverride::None {
+            return Err(format!(
+                "NONE flow override supplied for 0x{:x}:0x{:x}",
+                record.function_address, record.override_address
+            ));
+        }
+        let address = Address::new(record.override_address);
+        let previous = fd.localoverride.get_flow_override(address);
+        if previous != FlowOverride::None && previous != record.flow_type {
+            return Err(format!(
+                "conflicting flow override at 0x{:x}: {:?} vs {:?}",
+                record.override_address, previous, record.flow_type
+            ));
+        }
+        fd.localoverride
+            .insert_flow_override(address, record.flow_type);
+    }
     // Seed the symbol table before prototype application so the PLT-import
     // boundary below can resolve the target's own address.
     for (address, name) in &request.symbol_entries {
@@ -1360,7 +1621,8 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .filter(|(address, _)| *address == 0x17520)
         .collect();
 
-    rugra::flow::follow_flow(&mut fd, &mut sleigh, Address::new(target.vaddr), u64::MAX);
+    rugra::flow::follow_flow(&mut fd, &mut sleigh, Address::new(target.vaddr), u64::MAX)
+        .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
     eprintln!(
         "[STEP] {} flow done {:?} raw_ops={} bblocks={}",
         target.name,
@@ -2338,6 +2600,39 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Program source: Ghidra's Java Shared Return Calls analyzer writes
+    // Instruction flow overrides into the Program database (captured by the
+    // locked program_flow_metadata_1204 fixture). Standalone source: this
+    // driver reconstructs its unique-owner direct-known-entry projection from
+    // ELF STT_FUNC bodies, relocation-derived PLT functions, and iced direct
+    // jump references. The wider contiguous-function discovery option is not
+    // part of this slice.
+    let flow_override_entries = if std::env::var("RUGRA_DISABLE_SHARED_RETURN").is_ok() {
+        eprintln!("[PREPASS] Shared Return Calls disabled for A/B");
+        Vec::new()
+    } else {
+        let records =
+            collect_known_entry_shared_return_overrides(&buffer, elf, &plt_symbols)?;
+        let function_count = records
+            .iter()
+            .map(|record| record.function_address)
+            .collect::<BTreeSet<_>>()
+            .len();
+        eprintln!(
+            "[PREPASS] Shared Return Calls unique-owner direct-known-entry metadata: {} sites in {} functions",
+            records.len(), function_count
+        );
+        for record in &records {
+            eprintln!(
+                "[PREPASS] flow override owner=0x{:x} site=0x{:x} type={}",
+                record.function_address,
+                record.override_address,
+                record.flow_type.to_string()
+            );
+        }
+        records
+    };
+
     // Build the decompilation corpus from the locked golden ledger (124
     // functions: ELF-named code, PLT stubs, `_init`/`_fini`, zero-sized
     // symtab functions, and the 48 EXTERNAL-space entries at 0x19000+ that
@@ -2473,7 +2768,9 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     let mut direct_typedefs_emitted = false;
     let selected_functions = match &mode {
         DriverMode::All => None,
-        DriverMode::CompareFunctions(names) => Some(names.as_slice()),
+        DriverMode::CompareFunctions(names) | DriverMode::SelectedFunctions(names) => {
+            Some(names.as_slice())
+        }
     };
     let mut selected_functions_seen = Vec::new();
     // Preserve the exact iteration order used by the former HashMap clones.
@@ -2546,6 +2843,11 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 symbol_entries: symbol_entries.clone(),
                 string_entries: string_entries.clone(),
                 prototype_entries: prototype_entries.clone(),
+                flow_override_entries: flow_override_entries
+                    .iter()
+                    .filter(|record| record.function_address == func.vaddr)
+                    .copied()
+                    .collect(),
             },
         };
         let direct_output = if matches!(mode, DriverMode::CompareFunctions(_)) {

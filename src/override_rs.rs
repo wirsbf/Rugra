@@ -15,11 +15,12 @@
 
 use crate::address::Address;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Flow-override type enumeration. Faithful to `Override` enum
 /// (override.hh:53).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FlowOverride {
     /// No override.
     None = 0,
@@ -31,6 +32,20 @@ pub enum FlowOverride {
     CallReturn = 3,
     /// Replace primary BRANCH or CALL with a suitable RETURN operation.
     Return = 4,
+}
+
+/// One out-of-band flow override together with the function that owns it.
+/// This is the scalar-address transport form of Ghidra's
+/// `<flowoverridelist>` entries (`Architecture::decodeFlowOverride`,
+/// architecture.cc:451-469): function address, instruction address, then
+/// override type. This transport carries numeric offsets only; the current
+/// worker materializes them with `Address::new` and therefore does not yet
+/// restore Ghidra's RAM-space identity (ADDRESS-PHASE2-CLOSURE-0001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowOverrideRecord {
+    pub function_address: u64,
+    pub override_address: u64,
+    pub flow_type: FlowOverride,
 }
 
 impl FlowOverride {

@@ -452,3 +452,61 @@ Rugra 都保留默认 code space 身份，范围为闭区间 `[0,64]`，
 从而同时锁定完整 `Address` 传递、遍历边界与“块内最大值而非最后
 op”。`BlockBasic` 多范围 copy/merge/marshal 仍归 `BLOCKBASIC-COVER-0001`，
 本 fixture 对该部分保持 `UNTESTED`。
+
+## 2026-08-24：FLOW-SHAREDRETURN-0001 — lift 后、xref 前消费 FlowOverride
+
+锁定 oracle 为 Ghidra 12.0.4 `e40ed130…`：`FlowInfo` 两个构造器在
+`flow.cc:26-42/52-76` 缓存 `Override::hasFlowOverride()`；
+`processInstruction` 在 `flow.cc:407-418` 记录新 op 边界并查询当前指令地址，
+在 lift 完成后由 `flow.cc:466-477` 标记首 op、调用
+`Funcdata::overrideFlow`，随后才进入 `xrefControlFlow`。Rust 现在保持相同
+生产顺序：
+
+- `FlowInfo::new` 与 partial-clone constructor 都在构造时缓存
+  `localoverride.has_flow_override()`；
+- `process_instruction` 在 lift 前做精确地址查询；
+- 新 raw op 仍处于 dead-list 时调用 `override_flow`，然后 xref 才据改写后的
+  CALL/RETURN 建 callspec、终止流并决定是否排队原跳转目标；
+- `generate_ops`、`fallthru`、`process_instruction` 现在传播
+  `crate::error::Result`，因此 `overrideFlow` 的 LowlevelError 不再被吞掉；
+- instruction-limit 分支保留 oracle 的统一 tail：先插入 artificial RETURN，
+  再记录 dead-list 边界、查询 override、继续 lift。该边界已按源码实现，但专属
+  fixture 尚未驱动，覆盖状态仍为 `UNTESTED`。
+
+元数据来源分开记录，不互相冒充：
+
+- Program 路径由 Java `SharedReturnAnalysisCmd` 写 Instruction flow override；
+  仓库既有 `program_flow_metadata_1204` fixture 是该来源的真实 Program 证据；
+- standalone curl 路径从 ELF STT_FUNC entry/body、relocation-derived PLT entry
+  与 iced-x86 direct unconditional near jump 构造“唯一 ELF owner + 已知目标入口”
+  子集。它不实现 Java 的 contiguous-function discovery、ownerless/discontiguous
+  Program body、Program-added multi-flow reference、已有 Program override 或
+  conditional-option=true 分支。
+
+`flow_sharedreturn_process_1204` 双侧 fixture 的数值/op-identity 投影覆盖：
+
+- `hugehelp@0x4a4f -> 0x2320` 与
+  `progressbarinit@0x49e7 -> 0x22f0`：原 BRANCH 对象/SeqNum 保持身份，改为
+  CALL；其后紧邻 RETURN(const size=1,value=0)；原目标不访问，OOB/unprocessed
+  均为 0；
+- `myprogress@0x365e -> 0x3539`：map 非空但 site query 为 NONE，普通函数内
+  BRANCH 保持，目标仍访问；两侧同时保留该函数另一个既有尾边界
+  `oob=1/unprocessed=1`。
+
+curl 小范围 A/B 的生产收益是：`hugehelp` callspec/puts `5 -> 6`，
+`progressbarinit` callspec `2 -> 3`、`free` `0 -> 1`，两个 shared-return site
+的 OOB 警告消失。函数级 `compare_ghidra` 为 defects=0、numbering=0；字符串
+呈现与类型/结构传播仍有 skeleton 残差。
+
+状态保持 `MISMATCH`，且 runner 不归一化两类决定性差异：
+
+- C++ fixture 的指令/override/op 地址带 default RAM `AddrSpace`，Rust
+  fixture 与当前 driver 的 `Address::new` 是 null-base；地址空间属于输入和对象
+  状态，因此 `site_space=ram` 对 `site_space=null` 由
+  `ADDRESS-PHASE2-CLOSURE-0001` 跟踪；
+- Ghidra `FuncCallSpecs` 保存真实 `PcodeOp *`，而 Rugra 目前只能按地址/index
+  查回 callspec；raw diff 保留 `pointer_identity` 对 `address_lookup`
+  （`CALLSPEC-0001`）。
+
+仅数值地址、primary object/SeqNum、dead-list 顺序与流状态的选择性投影相同；不得
+据此宣称完整 FlowInfo、地址域或 Program producer 已 MATCH。

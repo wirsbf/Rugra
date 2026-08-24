@@ -74,3 +74,21 @@ single function. Faithful to `Override` (override.hh:50).
 
 测试：新增 2 个（encode/decode round-trip + empty encode）。override.rs 所有 L3 缺口已关闭。
 <!-- annotation-pass: 2026-07-04 -->
+
+## 2026-08-24：FlowOverride worker transport
+
+`FlowOverride` 增加 serde 编解码，用于隔离 worker 的 out-of-band 元数据；新增
+`FlowOverrideRecord { function_address, override_address, flow_type }`。该记录是锁定
+`Architecture::decodeFlowOverride`（`architecture.cc:451-469`）中每条
+`<flowoverridelist>` 的标量地址投影：函数入口、override 指令地址、类型。当前
+worker 协议只传数值 offset，接收端仍用 `Address::new` 物化为 null-base，并未重新
+附着 Ghidra 的 RAM space（`ADDRESS-PHASE2-CLOSURE-0001`）。写入
+`Funcdata::localoverride` 前会强制 `function_address == target.entry`、拒绝 NONE、
+保留同值重复并拒绝异值冲突。
+
+来源必须显式区分：Program 中的记录由 Java Shared Return Calls analyzer 持久化；
+standalone curl driver 只生成地址驱动的唯一 ELF owner/direct-known-entry 子集。
+`FlowOverrideRecord` 不表示完整 Program Reference/Function body/analysis options，也
+不扩展 `Override` 本身的语义。`flow_sharedreturn_process_1204` metadata/runner 将完整
+Program producer 分支记为 `UNTESTED`，并因 callspec 指针身份残差保持 overall
+`MISMATCH`；本文早期的模块级 L3 表述不能覆盖这些新接入的生产行为。

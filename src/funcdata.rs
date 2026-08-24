@@ -9575,15 +9575,18 @@ impl Funcdata {
     /// rewrite its opcode per the override table. For `CALL_RETURN` a fresh
     /// RETURN op is inserted after the rewritten call. Throws LowlevelError
     /// if the primary op is missing or already alive (block-formed).
-    pub fn override_flow(&mut self, addr: crate::address::Address, flow_type: crate::override_rs::FlowOverride) {
+    pub fn override_flow(
+        &mut self,
+        addr: crate::address::Address,
+        flow_type: crate::override_rs::FlowOverride,
+    ) -> crate::error::Result<()> {
         use crate::opcodes::OpCode as OC;
         use crate::override_rs::FlowOverride as FO;
-        // cc:972-983: gather dead ops at addr, then dispatch on the override.
+        // cc:972-983: traverse every op at addr in SeqNum order, then dispatch
+        // on the override. The dead-state check happens after primary-op
+        // selection, matching Ghidra's beginOp/endOp + isDead contract.
         let ops_at_addr: Vec<crate::op::PcodeOpRef> = self.obank.optree.iter()
-            .filter(|op| {
-                let r = op.0.read().unwrap();
-                r.get_addr() == addr && r.is_dead()
-            })
+            .filter(|op| op.0.read().unwrap().get_addr() == addr)
             .cloned()
             .collect();
         let primary = match flow_type {
@@ -9591,15 +9594,16 @@ impl Funcdata {
             FO::Call => self.find_primary_branch(&ops_at_addr, true, false, true),
             FO::CallReturn => self.find_primary_branch(&ops_at_addr, true, true, true),
             FO::Return => self.find_primary_branch(&ops_at_addr, true, true, false),
-            FO::None => return,
+            FO::None => return Ok(()),
         };
-        let op = match primary {
-            Some(o) => o,
-            None => {
-                self.warning_header("Could not apply flowoverride: no primary op");
-                return;
-            }
-        };
+        let op = primary.ok_or_else(|| {
+            crate::error::Error::Lowlevel("Could not apply flowoverride".to_string())
+        })?;
+        if !op.0.read().unwrap().is_dead() {
+            return Err(crate::error::Error::Lowlevel(
+                "Could not apply flowoverride".to_string(),
+            ));
+        }
         // cc:988-1020: rewrite the opcode per the override table.
         let opc = op.0.read().unwrap().opcode;
         match flow_type {
@@ -9615,6 +9619,11 @@ impl Funcdata {
                 match opc {
                     OC::CPUI_BRANCH => self.op_set_opcode(&op, OC::CPUI_CALL),
                     OC::CPUI_BRANCHIND => self.op_set_opcode(&op, OC::CPUI_CALLIND),
+                    OC::CPUI_CBRANCH => {
+                        return Err(crate::error::Error::Lowlevel(
+                            "Do not currently support CBRANCH overrides".to_string(),
+                        ));
+                    }
                     OC::CPUI_RETURN => self.op_set_opcode(&op, OC::CPUI_CALLIND),
                     _ => {}
                 }
@@ -9624,18 +9633,19 @@ impl Funcdata {
                     self.op_set_opcode(&new_return, OC::CPUI_RETURN);
                     let c = self.new_constant(1, 0);
                     self.op_set_input(&new_return, c, 0);
-                    // cc:1010: opDeadInsertAfter — Rugra approximates by
-                    // pushing to deadlist after the primary op's position.
-                    let pos = self.obank.deadlist.iter()
-                        .position(|r| std::sync::Arc::ptr_eq(&r.0, &op.0));
-                    match pos {
-                        Some(idx) => self.obank.deadlist.insert(idx + 1, new_return),
-                        None => self.obank.deadlist.push(new_return),
-                    }
+                    // cc:1010: opDeadInsertAfter keeps the newly allocated
+                    // op's SeqNum identity but moves its dead-list position
+                    // to immediately after the converted call.
+                    self.obank.insert_after_dead(&new_return, &op);
                 }
             }
             FO::Return => {
                 match opc {
+                    OC::CPUI_BRANCH | OC::CPUI_CBRANCH | OC::CPUI_CALL => {
+                        return Err(crate::error::Error::Lowlevel(
+                            "Do not currently support complex overrides".to_string(),
+                        ));
+                    }
                     OC::CPUI_BRANCHIND => self.op_set_opcode(&op, OC::CPUI_RETURN),
                     OC::CPUI_CALLIND => self.op_set_opcode(&op, OC::CPUI_RETURN),
                     _ => {}
@@ -9643,8 +9653,7 @@ impl Funcdata {
             }
             FO::None => {}
         }
-        // Record the override so later passes / serialization see it.
-        self.localoverride.insert_flow_override(addr, flow_type);
+        Ok(())
     }
 
     // Ghidra: funcdata_op.cc:756 Funcdata::followFlow

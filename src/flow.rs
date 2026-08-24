@@ -350,14 +350,16 @@ pub struct FlowInfo<'a> {
     /// inline_base). Backing store for `inline_recursion` at the top level.
     inline_base: std::collections::BTreeSet<u64>,
     /// Does the function have registered flow override instructions
-    /// (flow.hh:100 flowoverride_present). Currently always false; Rugra
-    /// does not yet model flow overrides.
+    /// (flow.hh:100 flowoverride_present). This is cached when FlowInfo is
+    /// constructed, exactly like Ghidra's `Override::hasFlowOverride()`
+    /// query in both FlowInfo constructors.
     flowoverride_present: bool,
 }
 
 impl<'a> FlowInfo<'a> {
-    // Ghidra: flow.hh:106 FlowInfo::FlowInfo
+    // Ghidra: flow.cc:26 FlowInfo::FlowInfo(Funcdata &,PcodeOpBank &,BlockGraph &,vector<FuncCallSpecs *> &)
     pub fn new(fd: &'a mut Funcdata, lifter: &'a mut SleighLifter, baddr: u64, eaddr: u64) -> Self {
+        let flowoverride_present = fd.localoverride.has_flow_override();
         Self {
             fd,
             lifter: Some(lifter),
@@ -377,7 +379,7 @@ impl<'a> FlowInfo<'a> {
             inline_head: None,
             inline_recursion: std::collections::BTreeSet::new(),
             inline_base: std::collections::BTreeSet::new(),
-            flowoverride_present: false,
+            flowoverride_present,
         }
     }
 
@@ -2480,7 +2482,7 @@ impl<'a> FlowInfo<'a> {
     /// Faithful to `FlowInfo::generateOps` (flow.cc:785-822).
     /// Phase 2: jump-table recovery via recoverJumpTables.
     // Ghidra: flow.cc:785 FlowInfo::generateOps
-    pub fn generate_ops(&mut self, entry: Address) {
+    pub fn generate_ops(&mut self, entry: Address) -> crate::error::Result<()> {
         // flow.cc:790: clearProperties() resets the presence flags and the
         // instruction counter before tracing.
         self.clear_properties();
@@ -2489,7 +2491,7 @@ impl<'a> FlowInfo<'a> {
 
         // Phase 1: linear flow tracking (flow.cc:792-793).
         while !self.addrlist.is_empty() {
-            self.fallthru();
+            self.fallthru()?;
         }
 
         // flow.cc:794-795: after the initial fall-thru sweep, expand any
@@ -2560,7 +2562,7 @@ impl<'a> FlowInfo<'a> {
                     self.new_address(indirect_source, *addr);
                 }
                 while !self.addrlist.is_empty() {
-                    self.fallthru();
+                    self.fallthru()?;
                 }
             }
 
@@ -2588,6 +2590,7 @@ impl<'a> FlowInfo<'a> {
         }
         // flow.cc:821: the do-while only exits with an empty tablelist.
         self.tablelist.clear();
+        Ok(())
     }
 
     /// Snapshot the generation-time state for external observation. The
@@ -2734,12 +2737,12 @@ impl<'a> FlowInfo<'a> {
     /// or already-visited address is hit. Corresponds to `FlowInfo::fallthru`
     /// (flow.cc:545-580).
     // Ghidra: flow.cc:545 FlowInfo::fallthru
-    fn fallthru(&mut self) {
+    fn fallthru(&mut self) -> crate::error::Result<()> {
         // Ghidra holds this boundary fixed while following a sequential
         // region. Recomputing it from the changing work-list can skip an
         // exact hit on a previously decoded branch target.
         let Some(mut bound) = self.set_fallthru_bound() else {
-            return;
+            return Ok(());
         };
 
         let mut start_basic = true;
@@ -2747,7 +2750,7 @@ impl<'a> FlowInfo<'a> {
             let Some(curaddr) = self.addrlist.pop() else {
                 break;
             };
-            if !self.process_instruction(curaddr, &mut start_basic) {
+            if !self.process_instruction(curaddr, &mut start_basic)? {
                 break;
             }
             if self.addrlist.is_empty() {
@@ -2763,7 +2766,7 @@ impl<'a> FlowInfo<'a> {
                     self.handle_out_of_bounds(Address::new(self.eaddr), Address::new(next));
                     self.unprocessed.push(Address::new(next));
                     self.addrlist.pop();
-                    return;
+                    return Ok(());
                 }
 
                 if bound == next {
@@ -2780,11 +2783,12 @@ impl<'a> FlowInfo<'a> {
                 }
 
                 let Some(next_bound) = self.set_fallthru_bound() else {
-                    return;
+                    return Ok(());
                 };
                 bound = next_bound;
             }
         }
+        Ok(())
     }
 
     /// Check if the next address in addrlist is processable.
@@ -2834,13 +2838,22 @@ impl<'a> FlowInfo<'a> {
     ///   5. queue the machine fall-through address exactly once, only when
     ///      the instruction falls through.
     // Ghidra: flow.cc:383 FlowInfo::processInstruction
-    fn process_instruction(&mut self, addr: Address, start_basic: &mut bool) -> bool {
+    fn process_instruction(
+        &mut self,
+        addr: Address,
+        start_basic: &mut bool,
+    ) -> crate::error::Result<bool> {
         // Instruction count limit (flow.cc:393-405). Ghidra throws when
         // error_toomanyinstructions is set; otherwise it truncates the flow
-        // with an artificial halt and CONTINUES processing that halt op.
+        // with an artificial halt and still enters the shared translation
+        // tail. In particular, the dead-list boundary is captured after the
+        // artificial halt, so xref begins at the subsequently lifted ops.
         if self.insn_count >= self.insn_max {
-            let num_ops_before = self.fd.obank.deadlist.len();
-            let step = 1usize;
+            if (self.flags & flow_flags::ERROR_TOOMANYINSTRUCTIONS) != 0 {
+                return Err(crate::error::Error::Lowlevel(
+                    "Flow exceeded maximum allowable instructions".to_string(),
+                ));
+            }
             self.artificial_halt(addr, pcodeop_flags::BADINSTRUCTION);
             self.fd
                 .warning("Too many instructions -- Truncating flow here", addr);
@@ -2850,15 +2863,22 @@ impl<'a> FlowInfo<'a> {
                     "Exceeded maximum allowable instructions: Some flow is truncated",
                 );
             }
-            self.insn_count += 1;
-            return self.finish_process_instruction(addr, step, num_ops_before, start_basic);
         }
         self.insn_count += 1;
+
+        // flow.cc:407-418: remember the dead-list boundary, then cache the
+        // exact-address override before lifting. The constructor-level flag
+        // avoids a map lookup when no override metadata exists.
+        let num_ops_before = self.fd.obank.deadlist.len();
+        let flowoverride = if self.flowoverride_present {
+            self.fd.localoverride.get_flow_override(addr)
+        } else {
+            crate::override_rs::FlowOverride::None
+        };
 
         // flow.cc:421: step = glb->translate->oneInstruction(emitter,curaddr).
         // The emitter appends the ops directly; errors map to artificial
         // halts with the unimplemented/bad-data flags (flow.cc:423-457).
-        let num_ops_before = self.fd.obank.deadlist.len();
         let step: usize;
         let lift_result = self
             .lifter
@@ -2909,20 +2929,21 @@ impl<'a> FlowInfo<'a> {
                 }
             }
         }
-        self.finish_process_instruction(addr, step, num_ops_before, start_basic)
+        self.finish_process_instruction(addr, step, num_ops_before, start_basic, flowoverride)
     }
 
     /// Shared tail of `processInstruction` (flow.cc:458-481): record the
     /// VisitStat, update address extremes, mark the first new op, xref the
     /// instruction's ops, and queue the machine fall-through.
-    // Ghidra: flow.cc:458 FlowInfo::processInstruction (VisitStat/xref tail)
+    // Ghidra: flow.cc:383 FlowInfo::processInstruction (VisitStat/xref tail)
     fn finish_process_instruction(
         &mut self,
         addr: Address,
         step: usize,
         num_ops_before: usize,
         start_basic: &mut bool,
-    ) -> bool {
+        flowoverride: crate::override_rs::FlowOverride,
+    ) -> crate::error::Result<bool> {
         // flow.cc:458-459: stat.size = step. The seqnum is filled in below
         // when the instruction produced at least one op (flow.cc:472).
         self.visited.insert(
@@ -2944,12 +2965,19 @@ impl<'a> FlowInfo<'a> {
         // flow.cc:466-477: point at the first new op, record its SeqNum,
         // mark it as the instruction start, and xref the new ops.
         let mut isfallthru = true;
-        if let Some(first_op) = self.fd.obank.deadlist.get(num_ops_before) {
+        if let Some(first_op) = self.fd.obank.deadlist.get(num_ops_before).cloned() {
             let first_seq = first_op.0.read().unwrap().start;
             if let Some(stat) = self.visited.get_mut(&addr.as_u64()) {
                 stat.first_seq = Some(first_seq);
             }
             first_op.0.write().unwrap().flags |= pcodeop_flags::STARTMARK;
+            // flow.cc:474-475: the flow override rewrites the freshly lifted,
+            // still-dead ops before xref interprets their control-flow. This
+            // ordering is decisive for CALL_RETURN: xref creates a callspec
+            // for the converted CALL and never queues its former jump target.
+            if flowoverride != crate::override_rs::FlowOverride::None {
+                self.fd.override_flow(addr, flowoverride)?;
+            }
             isfallthru = self.xref_control_flow(num_ops_before, start_basic);
         }
         // flow.cc:479-480: only a fall-through instruction queues its
@@ -2958,7 +2986,7 @@ impl<'a> FlowInfo<'a> {
             self.addrlist
                 .push(Address::new(addr.as_u64() + step as u64));
         }
-        isfallthru
+        Ok(isfallthru)
     }
 
     /// Analyze the control-flow ops generated by the last instruction.
@@ -3174,7 +3202,7 @@ pub fn follow_flow(
 ) -> crate::error::Result<()> {
     let baddr = entry.as_u64();
     let mut flow = FlowInfo::new(fd, lifter, baddr, eaddr);
-    flow.generate_ops(entry);
+    flow.generate_ops(entry)?;
     // funcdata_op.cc:776: generateBlocks is responsible for the official
     // entry identity/flag, ordered edge replay, and synthetic entry creation.
     flow.generate_blocks()
@@ -3335,7 +3363,8 @@ mod tests {
         let callother = build_callother_op(&mut fd, Address::new(entry));
         let mut flow = FlowInfo::new(&mut fd, &mut lifter, entry, entry + 0x100);
         flow.fixture_queue_inject(&callother);
-        flow.generate_ops(Address::new(entry));
+        flow.generate_ops(Address::new(entry))
+            .expect("flow generation succeeds");
 
         let opcodes: Vec<(OpCode, u64, u32)> = flow
             .fd
