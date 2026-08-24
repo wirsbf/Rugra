@@ -758,9 +758,26 @@ impl FuncProto {
     }
 
     // Ghidra: fspec.cc:3806 FuncProto::copyFlowEffects
-    /// Copy only the flow effect records from another FuncProto.
+    /// Copy the flow-affecting properties from another FuncProto. Faithful
+    /// to `FuncProto::copyFlowEffects` (fspec.cc:3806-3812): only the
+    /// `is_inline|no_return` flag subset and the call-fixup inject id are
+    /// copied, as a one-way overwrite — Ghidra clears both bits on `this`
+    /// first (`flags &= ~(is_inline|no_return)`) and then ORs in the
+    /// source's bits, so a source with a bit clear clears the destination
+    /// bit. This is the channel `FlowInfo::queryCall` (flow.cc:664) uses to
+    /// propagate a callee's noreturn/inline state onto the call-site
+    /// FuncCallSpecs. The effect list is NOT part of this operation (it is
+    /// copied wholesale only by `FuncProto::copy`, fspec.cc:3801).
+    ///
+    /// Rugra's dedicated bool fields make Ghidra's clear-then-OR bit pair
+    /// bit-equivalent to a direct assignment. The `injectid = op2.injectid`
+    /// copy is not modeled yet because Rugra's FuncProto has no injection
+    /// id storage (`set_inject_id` is the INJECT-0001 no-op stub); wiring
+    /// that field is owned by INJECT-0001.
     pub fn copy_flow_effects(&mut self, other: &FuncProto) {
-        self.effects = other.effects.clone();
+        self.is_inline = other.is_inline;
+        self.no_return = other.no_return;
+        // Ghidra: injectid = op2.injectid; (INJECT-0001: no injectid field)
     }
 
     // Ghidra: fspec.cc:3706 FuncProto::paramShift
@@ -1784,6 +1801,54 @@ impl FuncCallSpecs {
         result
     }
 
+    // Ghidra: fspec.hh:1434 FuncProto::isNoReturn
+    /// Does a function with this prototype never return. Ghidra's
+    /// `FuncCallSpecs` exposes this accessor through inheritance
+    /// (`class FuncCallSpecs : public FuncProto`, fspec.hh:1645); Rugra
+    /// composes the prototype instead, so the delegate reproduces the same
+    /// inherited surface for call-site consumers such as
+    /// `FlowInfo::checkForFlowModification` (flow.cc:641).
+    pub fn is_no_return(&self) -> bool {
+        self.prototype.is_no_return()
+    }
+
+    // Ghidra: fspec.hh:1439 FuncProto::setNoReturn
+    /// Toggle the no-return setting on this call site's prototype.
+    /// Inherited in Ghidra (fspec.hh:1645); delegated here because Rugra
+    /// composes `FuncProto`. `FlowInfo::truncateIndirectJump` (flow.cc:747)
+    /// calls this on the callspec for the fail_callother jump-table path.
+    pub fn set_no_return(&mut self, val: bool) {
+        self.prototype.set_no_return(val)
+    }
+
+    // Ghidra: fspec.hh:1411 FuncProto::isInline
+    /// Does this function get in-lined during decompilation. Inherited in
+    /// Ghidra (fspec.hh:1645); delegated here because Rugra composes
+    /// `FuncProto`. `checkForFlowModification` (flow.cc:639) reads this on
+    /// the callspec to queue injection.
+    pub fn is_inline(&self) -> bool {
+        self.prototype.is_inline()
+    }
+
+    // Ghidra: fspec.hh:1417 FuncProto::setInline
+    /// Toggle the in-line setting for this call site's prototype.
+    /// Inherited in Ghidra (fspec.hh:1645); delegated here because Rugra
+    /// composes `FuncProto`.
+    pub fn set_inline(&mut self, val: bool) {
+        self.prototype.set_inline(val)
+    }
+
+    // Ghidra: fspec.cc:3806 FuncProto::copyFlowEffects
+    /// Copy the callee's flow-affecting properties (the `is_inline|
+    /// no_return` subset) onto this call site's prototype. Inherited in
+    /// Ghidra (fspec.hh:1645); delegated here because Rugra composes
+    /// `FuncProto`. `FlowInfo::queryCall` (flow.cc:664) drives this to
+    /// propagate a callee's noreturn state to the call site — the
+    /// `__stack_chk_fail` channel.
+    pub fn copy_flow_effects(&mut self, other: &FuncProto) {
+        self.prototype.copy_flow_effects(other)
+    }
+
     // Ghidra: fspec.cc:4924 FuncCallSpecs::getSpacebaseOffset
     /// Get the stack-pointer relative offset at the point of this call site.
     /// Faithful to `FuncCallSpecs::getSpacebaseOffset` (fspec.hh:1689).
@@ -2726,18 +2791,19 @@ impl FuncCallSpecs {
     /// resolved Funcdata, rewrites the CALL input, flips the opcode to
     /// `CPUI_CALL`, records an indirect override, and then tries to merge the
     /// existing prototype with the callee's:
-    ///   - if the callee is `NoReturn` or `Inline`, skip the merge and
-    ///     request a restart;
+    ///   - if the callee's FuncProto is `NoReturn` or `Inline`, skip the
+    ///     merge and request a restart;
     ///   - else if we are an override call-site, leave the prototype as-is;
     ///   - else run `late_restriction`; on success commit the new inputs
     ///     and outputs, on failure request a restart.
     ///
     /// Returns `true` when a restart is pending (Ghidra's
     /// `data.setRestartPending(true)`), `false` when the prototype was
-    /// updated in place. D0 can allocate a typed call-spec annotation only
-    /// from the stable `Arc` owner, while this legacy hook still receives a
-    /// bare `&mut FuncCallSpecs`; the owner/rebind seam and the callee
-    /// `FuncProto` flags (`isNoReturn`/`isInline`) therefore remain unwired
+    /// updated in place. The noreturn/inline gate reads the callee's
+    /// FuncProto directly (`newfd->getFuncProto()`, fspec.cc:5460-5461).
+    /// D0 can allocate a typed call-spec annotation only from the stable
+    /// `Arc` owner, while this legacy hook still receives a bare
+    /// `&mut FuncCallSpecs`; the owner/rebind seam therefore remains unwired
     /// under `CALLSPEC-0001`. This method has no production caller and is not
     /// claimed by the identity/lifecycle projection.
     pub fn deindirect(
@@ -2747,7 +2813,6 @@ impl FuncCallSpecs {
         newfd: &crate::funcdata::Funcdata,
         new_varnode_call_specs: &dyn Fn(&mut crate::funcdata::Funcdata, &FuncCallSpecs) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         insert_indirect_override: &dyn Fn(&mut crate::funcdata::Funcdata, Address, Address),
-        callee_is_no_return_or_inline: &dyn Fn(&crate::funcdata::Funcdata) -> bool,
         late_restriction: &mut dyn FnMut(
             &mut FuncCallSpecs,
             &crate::funcdata::Funcdata,
@@ -2769,7 +2834,8 @@ impl FuncCallSpecs {
 
         // Ghidra: FuncProto &newproto( newfd->getFuncProto() );
         //         if ((!newproto.isNoReturn())&&(!newproto.isInline())) {
-        if !callee_is_no_return_or_inline(newfd) {
+        let newproto = newfd.get_func_proto();
+        if !newproto.is_no_return() && !newproto.is_inline() {
             // Ghidra: if (isOverride()) return;  // Don't use discovered prototype.
             // Rugra's FuncCallSpecs does not yet track the override flag;
             // we proceed to late_restriction unconditionally.

@@ -544,3 +544,41 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
   传给 typed annotation。owner/rebind seam、override flag 与 callee prototype
   分支均为 `CALLSPEC-0001` 的 `UNTESTED` consumer residual；D0 只更正“annotation
   API 未实现”的过时前提，不宣称该 helper 行为已接通。
+
+### 2026-08-24：noreturn 位生命周期补齐（CALLSPEC-NORETURN-WIRE-0001 段a）
+
+以锁定 oracle `Ghidra 12.0.4`（commit `e40ed13014025f82488b1f8f7bca566894ac376b`）
+复核 `fspec.hh:1343-1459/1645` 与 `fspec.cc:3778-3812/5443-5472/4625-4840` 后落地：
+
+- **`FuncProto::copy_flow_effects` 修正为 Ghidra 语义**（fspec.cc:3806-3812）：
+  只单向覆盖 `is_inline|no_return` 位子集（Ghidra 先 `flags &= ~(...)` 再
+  `flags |= op2.flags & (...)`，源位为 0 时清空目标位），不再拷贝 effects
+  列表——effectlist 的整体拷贝属于 `FuncProto::copy`（fspec.cc:3801），旧
+  实现是自创语义。这是 `FlowInfo::queryCall`（flow.cc:664）把 callee 的
+  noreturn 状态传播到 call-site FuncCallSpecs 的主通道（`__stack_chk_fail`
+  路径）。`injectid = op2.injectid` 拷贝暂缺：FuncProto 无 injection id
+  存储（`set_inject_id` 为 INJECT-0001 stub），登记于 INJECT-0001。
+- **`FuncCallSpecs` 补继承面委托访问器** `is_no_return`/`set_no_return`/
+  `is_inline`/`set_inline`/`copy_flow_effects`：Ghidra 的
+  `class FuncCallSpecs : public FuncProto`（fspec.hh:1645）经继承直接暴露
+  fspec.hh:1434/1439/1411/1417 与 fspec.cc:3806；Rugra 组合持有 prototype，
+  以委托等价暴露。flow.rs 的消费侧接线（`FuncCallSpecsExt` stub 退役、
+  `query_call` 补 `copy_flow_effects` 调用、`truncate_indirect_jump` 的
+  `set_no_return(true)`）为段(b)（flow 租约释放后）。
+- **`FuncCallSpecs::deindirect` 的 noreturn/inline 门直接接线**：删除
+  `callee_is_no_return_or_inline` closure 参数，改为直接读
+  `newfd.get_func_proto()` 的 `is_no_return()/is_inline()`（fspec.cc:5460-5461
+  `FuncProto &newproto(newfd->getFuncProto())`）。该方法无生产调用方。
+- FuncProto 侧 noreturn 的既有生命周期维持不变：默认构造 `flags=0`
+  （fspec.cc:3783 → `no_return:false`）、`set_no_return`/`is_no_return`
+  （fspec.hh:1439/1434）、`copy_from`/`clone` 整位拷贝（fspec.cc:3794）、
+  decode 的 `noreturn` 属性（fspec.cc:4720-4722）、encode 的
+  `ATTRIB_NORETURN`（fspec.cc:4642-4643）、`is_compatible` 的位子集比较
+  （fspec.cc:4567）。Ghidra fspec 层**没有** void 返回 → noreturn 的推断
+  通道（`setNoReturn` 的全部调用点仅 flow.cc:747、options.cc:358 与 decode
+  直接置位），noreturn 只能来自数据库 prototype XML、`OptionNoReturn`、
+  call-site 直置或 `copyFlowEffects` 传播。
+- 双侧 fixture：`tests/oracle/callspec_noreturn_1204.{cc,rs,metadata.json}` +
+  `tools/run_callspec_noreturn_oracle.sh`（六 case 投影：default_ctor、
+  explicit_set_idempotent、copy_flow_effects、full_copy_and_clone、
+  void_no_inference、decode_encode_channel）。
