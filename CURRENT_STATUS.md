@@ -13,12 +13,23 @@
 | 12.0.4 差分 | **skeleton 2762 / defects 0 / numbering 0 / Matched 123/124** | 对本轮重生成输出与 canonical `tests/golden/ghidra_curl_1204.c` 复核 |
 | xunknown/xVar | **0**（TYPE-WIRING 双轨消除） | grep 归零 |
 | FUN_ 未解析调用 | **5**（起点 64；CALLSPEC 接线） | grep |
-| 逐字节一致函数 | **本轮未单独重算**（旧值 50/122） | 不用旧分母冒充当前逐函数完成度 |
+| 逐字节一致函数 | **52/123：48 个外部桩 + 4/75 个真实内部函数** | 2026-08-24 词法函数边界原始字节复核；详见下节，旧值 50/122 已废止 |
 | gcc 审计 | **107 OK / 16 FAIL**（畸形 cast 1262→0、`+ 0 -` 3→0 后余量=varmap/typedef 域） | audit_syntax |
 | 确定性 | 20×全语料 + 20×compare main 字节一致 | check_determinism.py |
 | oracle fixture | **registry 88 个** | `jq '.fixtures | length' tests/oracle/fixture_registry.json` |
 
 > 全局完成度仍未证明：逐函数账本分母与旧报告尚未完成生成器重建核对，且账本仍含 `MISSING/MISMATCH/NO_ORACLE/UNTESTED`。本页的局部 MATCH 不代表模块或项目 L3。
+
+### 2026-08-24 严格函数字节审计
+
+对当前 `result/curl_cur.c`（SHA-256 `41aec0b7ddd8cdaddb0571f88320d811ee9530d447ace631e0d96afac61a812e`）与锁定 12.0.4 golden（SHA-256 `aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f`）按地址配对，严格比较从函数签名首字节到词法匹配闭合 `}` 的原始字节。函数内部的空格、空行与换行全部保留；函数外 header、warning、分隔空行和 summary 不计入函数体：
+
+- 当前输出 123 个函数块，golden 124 个；可比较 123 个，全部按 `Ghidra地址 - 0x100000` 命中，golden 的 `main` 在当前输出无对应成功函数体。
+- 严格函数体逐字节相同为 **52/123**：48/48 个 synthetic/import bad-instruction 桩，以及 **4/75 个真实内部函数**。
+- 四个真实内部函数为 `GetStr`、`main_free`、`__libc_csu_fini`、`_fini`；若以 golden 的全部内部函数为分母，则是 4/76，缺失的 `main` 记 `MISSING`。
+- `tools/audit_syntax.py` 的独立函数解析器复现相同的 52 项结果。旧的 47/123、内部 0/75 是错误的分段口径：它把函数外空行/warning 混入四个内部函数，并让最后一个外部桩吞入 summary。
+
+因此当前对“有多少真实函数体逐字节完全一致”的答案是 **4**。这仍只是最终 C 文本证据，不自动把对应全算法调用闭包提升为 B2 `MATCH` 或模块 L3。
 
 ### 2026-08-20 当前 wave 落地
 
