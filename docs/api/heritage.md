@@ -1026,7 +1026,14 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   的属性尾部（queryProperties + `setFlags(vflags & ~typelock)`，
   funcdata_varnode.cc:148-165/104-127），施加于 guard 家族 bank 创建的
   varnode 与 rename 的 input promotion —— persist 属性带（case 3 双侧
-  persist1/persist1 字节级一致依赖此尾部）。
+  persist1/persist1 字节级一致依赖此尾部）。**R9-F2 限定**："与 oracle
+  完全一致"仅覆盖已接线位点；guard 家族仍有欠应用位点：heritage.rs 侧
+  两处（guardCalls input-trial vn ↔ cc:1502、normalizeReadSize vn1 ↔
+  cc:391）已在本轮补齐；`src/funcdata.rs` 侧两处
+  （`new_indirect_op` newin/newout ↔ funcdata_op.cc:689/692、
+  `new_indirect_creation_in_space` newout ↔ cc:719）在 funcdata.rs 租约
+  外，登记 `FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001`（write-set=
+  src/funcdata.rs + docs/api/funcdata.md）由 root 落板。
 - **登记的跨模块 MISMATCH（fixture case 2 暴露，本租约外）**：
   `fspec.rs` `justified_contain_range` 的 -1 条件与 Ghidra
   `Address::justifiedContain`（address.cc:131-141：`op2.offset < offset`
@@ -1035,4 +1042,38 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   range⊃entry 返回 contains 系而非 contained_by，guardReturnsOverlapping
   的 SUBPIECE 截断路径在 Rust 不可达。修复属 fspec.rs 租约
   （FSPEC-JUSTIFIED-CONTAIN，建议 root 登记 TODO）；fixture 双侧逐行
-  hash 钉住该差异，修复后翻 MATCH 重钉。
+  hash 钉住该差异，修复后翻 MATCH 重钉。（R9 独立复核核实归因成立，并
+  指出该极性缺陷还覆盖"低侧外凸+末端对齐/高侧外凸+起点对齐/双侧严格
+  包含"三类误判与一处 u64 下溢。）
+
+### R9 复核整改（2026-08-24，附条件 APPROVE 绑定项）
+
+- **R9-F1（BE-aware overlap）**：`normalizeWriteSize`/`normalizeReadSize`
+  的 overlap 原为 LE-only 内联投影（`saturating_sub`）；Ghidra
+  `Varnode::overlap`（varnode.cc:217-228）endian-aware —— BE 下
+  `over = loc.overlap(size-1,…)`，命中时返回 `op2size-1-over`（自最低
+  显著侧起算）。本轮：`Varnode::overlap_addr`（src/varnode.rs）补 BE
+  分支与既有 -1 哨兵的 BE 路径，heritage 两处 normalize 改为调用它。
+  **BE 域整体 UNTESTED**（不只是 pieceaddr 选择：BE 下 overlap 值不同 ⇒
+  overlap/mostsigsize 分支触发条件互换、pieceaddr（cc:452）与 SUBPIECE
+  常量全部漂移）——fixture 语料保持 LE 域不变式，登记为
+  `HERITAGE-BE-OVERLAP`（BE fixture 待后续租约）。d4705ae Evidence 中
+  "overlap/mostsigsize 公式逐字镜像 cc:426-427" 的表述由本节修正为
+  "LE 投影镜像；BE 经 overlap_addr 的 varnode.cc:221-226 分支"。
+- **R9-F2（属性尾欠应用）**：heritage.rs 两处（见上追记）本轮补
+  `apply_new_varnode_flags`；funcdata.rs 两处不改（租约外），登记
+  `FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001`。8da9295 message 中
+  "persist-property ranges propagate exactly as the oracle does" 的表述
+  限定为"已接线位点"（见上）。
+- **R9-F4（fl 符号分支精度残差，不改代码）**：`guard_query_properties`
+  分支 (1) 与 Ghidra `ScopeInternal::findContainer`
+  （database.cc:2265-2279）有两处偏差：(i) tie-break 应为**最小 entry
+  尺寸**（oldsize 反向遍历、同尺寸先见者胜），现为最小 subsort、同
+  (0,0) 取插入序首个；(ii) 空 usepoint 下 use-limited（非 addrtied）
+  条目经 `SymbolEntry::inUse`（database.cc:117-118）不可选，现可误选；
+  (iii) mapScope 的 namespace 重定向（database.cc:3185-3194）未投影。
+  登记 `HERITAGE-GUARD-FLSYMBOL-TIEBREAK-0001`，并入
+  `guard_fl_scope_symbol_flags`（varmap 符号租约）后续验收项；该分支
+  在符号域交付前保持 UNTESTED。
+- **R9-F3（流程）**：TODO_BOARD/ALIGNMENT_ROADMAP 同步由 root 在集成时
+  完成（本租约禁改两文件）。

@@ -1483,12 +1483,38 @@ impl Varnode {
 
     // Ghidra: varnode.cc:217 Varnode::overlap(const Address&, int4)
     /// Return LSB-relative overlap with an address range. Faithful to
-    /// `overlap(const Address&, int4)` (varnode.cc:217-231).
+    /// `overlap(const Address&, int4)` (varnode.cc:217-231), including the
+    /// big-endian branch (varnode.cc:221-226):
+    ///   - LE: `loc.overlap(0, op2loc, op2size)` = `wrap(vn.off - op2.off)`,
+    ///     -1 when it falls outside `[0, op2size)`;
+    ///   - BE: `over = loc.overlap(size-1, op2loc, op2size)` =
+    ///     `wrap(vn.off + vn.size - 1 - op2.off)`; when `over != -1` the
+    ///     result is `op2size-1-over` (the offset counted from the LEAST
+    ///     significant side), else -1.
+    /// Residual (VARNODE-INIT-0001 family): Ghidra's `Address::overlap`
+    /// (address.cc:158-170) also returns -1 when the two Addresses live in
+    /// different spaces; Rugra's offset-only `Address` cannot see the
+    /// caller's range space, so callers on cross-space graphs must guard
+    /// space equality themselves (heritage's normalize sites are
+    /// structurally single-space).
     pub fn overlap_addr(&self, op2loc: Address, op2size: usize) -> i32 {
         if self.address_space == AddressSpace::Const { return -1; }
-        let dist = self.loc.as_u64().wrapping_sub(op2loc.as_u64());
-        if dist >= op2size as u64 { return -1; }
-        dist as i32
+        if !self.address_space.is_big_endian() {
+            // varnode.cc:219-220: little endian — skip = 0.
+            let dist = self.loc.as_u64().wrapping_sub(op2loc.as_u64());
+            if dist >= op2size as u64 { return -1; }
+            dist as i32
+        } else {
+            // varnode.cc:221-226: over = loc.overlap(size-1, op2loc, op2size);
+            // if (over != -1) return op2size-1-over;
+            let over = self
+                .loc
+                .as_u64()
+                .wrapping_add(self.get_size() as u64 - 1)
+                .wrapping_sub(op2loc.as_u64());
+            if over >= op2size as u64 { return -1; }
+            (op2size as i64 - 1 - over as i64) as i32
+        }
     }
 
     // Ghidra: varnode.cc:197 Varnode::overlapJoin

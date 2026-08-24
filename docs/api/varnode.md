@@ -939,3 +939,13 @@
   `IPTR_FSPEC`，numeric payload 也不是 Ghidra 的 raw `FuncCallSpecs *` codec
   （`TYPEOP-FSPEC-SPACE-0001`）；本阶段不接 TypeOp getter、PrintC typed callspec
   consumer 或 StringManager。其余既有 Varnode 残差与模块级状态不提升。
+
+## R9-F1：overlap_addr 补 BE 分支（2026-08-24，HERITAGE-GUARD-NORMALIZE 整改）
+
+`Varnode::overlap_addr`（varnode.cc:217 `Varnode::overlap`）此前只实现 LE
+半边（`loc.overlap(0,…)`）。本轮补齐 BE 分支（varnode.cc:221-226）：
+`over = wrap(vn.off + vn.size - 1 - op.off)`；`over ∈ [0, op2size)` 时返回
+`op2size-1-over`（自最低显著侧起算），否则 -1。调用方仅 heritage 两个
+normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登记
+`HERITAGE-BE-OVERLAP`）。跨 space 的 -1 哨兵（address.cc:161 `base != op.base`）
+为已登记残差 —— Rugra `Address` 无 space 身份，调用方自守（见函数注释）。

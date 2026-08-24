@@ -1499,10 +1499,14 @@ impl Heritage {
                             }
                         }
                         // cc:1502-1504: vn = newVarnode(size, addr);
-                        // setActiveHeritage; opInsertInput(op, vn, numInput())
+                        // setActiveHeritage; opInsertInput(op, vn, numInput()).
+                        // R9-F2: newVarnode's property tail
+                        // (funcdata_varnode.cc:148-165) applies the range
+                        // flags before the caller's setActiveHeritage.
                         let vn = fd
                             .vbank
                             .create_with_space(size as usize, space, addr.as_u64());
+                        Heritage::apply_new_varnode_flags(fd, &vn);
                         vn.write().unwrap().set_active_heritage();
                         let num_in = call_op.0.read().unwrap().num_input();
                         fd.op_insert_input(&call_op, vn, num_in);
@@ -1793,11 +1797,15 @@ impl Heritage {
         let op_addr = op.read().unwrap().get_addr();
         let newop = fd.new_op(2, op_addr);
         fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
-        // cc:392: vn1 = newVarnode(size, addr) — the new full-size free read
+        // cc:392: vn1 = newVarnode(size, addr) — the new full-size free read.
+        // R9-F2: newVarnode's property tail (funcdata_varnode.cc:148-165)
+        // applies the range flags before the caller proceeds.
         let vn1 = fd.vbank.create_with_space(size as usize, vn.read().unwrap().address_space, addr.as_u64());
-        // cc:393: overlap = vn->overlap(addr, size)
-        let vn_loc = vn.read().unwrap().loc.as_u64();
-        let overlap = vn_loc.saturating_sub(addr.as_u64()) as i64;
+        Heritage::apply_new_varnode_flags(fd, &vn1);
+        // cc:393: overlap = vn->overlap(addr, size) — endian-aware
+        // (Varnode::overlap, varnode.cc:217-228). R9-F1: former inline
+        // `saturating_sub` was an LE-only projection.
+        let overlap = vn.read().unwrap().overlap_addr(addr, size as usize) as i64;
         // cc:394: vn2 = newConstant(addrSize, overlap)
         let vn2 = fd.new_constant(8, overlap as u64);
         // cc:395-396: opSetInput(newop, vn1, 0); opSetInput(newop, vn2, 1)
@@ -1858,8 +1866,14 @@ impl Heritage {
             None => return vn.clone(),
         };
         let def_is_call = def_op.read().unwrap().is_call();
-        // cc:426: overlap = vn->overlap(addr, size)
-        let overlap = vn_loc.saturating_sub(addr.as_u64()) as i64;
+        // cc:426: overlap = vn->overlap(addr, size) — endian-aware
+        // (Varnode::overlap, varnode.cc:217-228: BE counts the offset from
+        // the least significant side). R9-F1: the former inline
+        // `saturating_sub` was an LE-only projection; the faithful value now
+        // routes through Varnode::overlap_addr's BE branch. The BE domain
+        // itself remains UNTESTED (fixture corpus is LE; registered as
+        // HERITAGE-BE-OVERLAP in the fixture metadata).
+        let overlap = vn.read().unwrap().overlap_addr(addr, size as usize) as i64;
         // cc:427: mostsigsize = size - (overlap + vn->getSize())
         let mostsigsize = size as i64 - (overlap + vn_size);
 
