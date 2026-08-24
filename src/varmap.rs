@@ -947,6 +947,98 @@ fn func_proto_param_range(
     crate::fspec::ProtoModelFull::new(Some(crate::space::AddressSpace::Stack), 8).paramrange
 }
 
+// Ghidra: fspec.hh:1539 FuncProto::getLocalRange
+/// Resolve the local-variable stack window of a Funcdata's prototype the
+/// way `fd->getFuncProto().getLocalRange()` (fspec.hh:1539) does — the same
+/// precedence as `func_proto_param_range` above (the attached model, else
+/// `s->getArch()->defaultfp` via `FuncProto::setScope`, fspec.cc:3879-3885,
+/// else the model Ghidra's default constructor builds:
+/// `ProtoModel::defaultLocalRange` (fspec.cc:2263-2290), which for a
+/// negative-growing 8-byte stack is `[u64::MAX-999999, u64::MAX]` — the
+/// sign-extended negative-offset half where heritage puts locals).
+fn func_proto_local_range(
+    fd: &crate::funcdata::Funcdata,
+) -> crate::address::RangeList {
+    if let Some(arch) = &fd.arch {
+        let name = fd.get_func_proto().get_model_name();
+        if let Some(model) = arch.proto_models.get(name) {
+            return model.localrange.clone();
+        }
+        if let Some(model) = &arch.defaultfp {
+            return model.localrange.clone();
+        }
+    }
+    crate::fspec::ProtoModelFull::new(Some(crate::space::AddressSpace::Stack), 8).localrange
+}
+
+// Ghidra: fspec.hh:1541 FuncProto::isStackGrowsNegative
+/// Whether the prototype's stack grows toward smaller addresses, read with
+/// the same model precedence as `func_proto_param_range`/
+/// `func_proto_local_range`. `ScopeLocal::resetLocalWindow`'s first statement
+/// (varmap.cc:435) assigns this into the scope's `stackGrowsNegative`, which
+/// `buildVariableName` (varmap.cc:558) consumes; the no-Architecture
+/// fallback is the `ProtoModel` default constructor's `stackgrowsnegative =
+/// true` (fspec.cc:2349).
+fn func_proto_stack_grows_negative(fd: &crate::funcdata::Funcdata) -> bool {
+    if let Some(arch) = &fd.arch {
+        let name = fd.get_func_proto().get_model_name();
+        if let Some(model) = arch.proto_models.get(name) {
+            return model.stackgrowsnegative;
+        }
+        if let Some(model) = &arch.defaultfp {
+            return model.stackgrowsnegative;
+        }
+    }
+    true
+}
+
+// RUGRA-GLUE: window_in_range (RangeList::inRange over the Vec window model)
+/// `RangeList::inRange(addr, size)` (address.cc:468-487) over a sorted,
+/// inclusive `Vec<(first, last)>` window: empty → false; the last range with
+/// `first <= offset` must be in the same space (the Vec carries no space —
+/// every window range here is a stack range, subsuming Ghidra's space test,
+/// cf. `param_range_in_range`) and must reach `offset + size - 1`
+/// (uintb-wrapping, address.cc:486). Ghidra's `addr.isInvalid()` early
+/// `return true` has no caller here: every queried hint has a real address.
+fn window_in_range(ranges: &[(u64, u64)], offset: u64, size: u64) -> bool {
+    if ranges.is_empty() {
+        return false;
+    }
+    // iter = tree.upper_bound(Range(spc,offset,offset)); if (iter ==
+    // tree.begin()) return false; --iter; — the last range with first <= offset.
+    let pos = ranges.partition_point(|&(first, _)| first <= offset);
+    if pos == 0 {
+        return false;
+    }
+    let (_, last) = ranges[pos - 1];
+    last >= offset.wrapping_add(size).wrapping_sub(1)
+}
+
+// RUGRA-GLUE: get_last_signed_range (RangeList::getLastSignedRange over the Vec model)
+/// `RangeList::getLastSignedRange` (address.cc:562-583) over a sorted
+/// inclusive `Vec<(first, last)>`: treating high-bit-set offsets as coming
+/// *before* clear-high-bit offsets, return the last/latest contiguous range.
+/// Ghidra probes `upper_bound(Range(spaceid, midway, midway))` with
+/// `midway = getHighest()/2`; a range precedes that key iff
+/// `first < midway || (first == midway && last <= midway)` (set<Range> orders
+/// by (first,last)). If no "positive" range exists, the second probe
+/// `upper_bound((highest,highest))` lands on `end()` and `--iter` yields the
+/// final range in unsigned order — the biggest negative range.
+fn get_last_signed_range(ranges: &[(u64, u64)]) -> Option<(u64, u64)> {
+    if ranges.is_empty() {
+        return None;
+    }
+    let midway = u64::MAX / 2; // spaceid->getHighest() / 2 for the stack space
+    let pos = ranges.partition_point(|&(first, last)| {
+        first < midway || (first == midway && last <= midway)
+    });
+    if pos > 0 {
+        return Some(ranges[pos - 1]);
+    }
+    // No positive ranges: return the biggest negative range.
+    ranges.last().copied()
+}
+
 // Ghidra: address.cc:468 RangeList::inRange
 /// Is the single address `offset` contained in the parameter range?
 /// Faithful to `RangeList::inRange(addr, 1)` (address.cc:468-487) as invoked
@@ -1141,38 +1233,73 @@ pub struct MapState {
     iter_pos: usize,
     /// Default type for unknowns
     default_type: Option<Arc<Datatype>>,
-    /// Whether local range is defined
-    local_start: u64,
-    local_end: u64,
+    /// Analysis window: Ghidra's `range` member (varmap.hh:179), the
+    /// `RangeList rn` the constructor copies from the scope's range tree
+    /// minus every param range (varmap.cc:864-875). Modeled as a sorted,
+    /// inclusive `Vec<(first, last)>`; all ranges are stack ranges (the Vec
+    /// carries no space, cf. `param_range_in_range`).
+    range: Vec<(u64, u64)>,
 }
 
 impl MapState {
-    // Ghidra: varmap.cc:864 MapState::new
-    pub fn new(local_start: u64, local_end: u64) -> Self {
+    // Ghidra: varmap.cc:864 MapState::MapState
+    /// Construct with the analysis window `rn` (inclusive `(first,last)`
+    /// ranges, sorted). Faithful to the constructor head (varmap.cc:864-867,
+    /// `MapState(spc,rn,pm,dt) : range(rn)`); the param-range subtraction of
+    /// varmap.cc:870-875 is performed by the caller (`ScopeLocal::
+    /// restructure_varnode`) so the window can double as the scope's range
+    /// tree before subtraction.
+    pub fn new(range: Vec<(u64, u64)>) -> Self {
         Self {
             maplist: Vec::new(),
             iter_pos: 0,
             default_type: None,
-            local_start,
-            local_end,
+            range,
         }
     }
 
-    // Ghidra: varmap.cc:864 MapState::newWithDefault
-    /// Construct with a default type used when a gathered varnode has no type.
-    pub fn new_with_default(local_start: u64, local_end: u64,
+    // Ghidra: varmap.cc:864 MapState::MapState
+    /// Construct with a default type used when a gathered varnode has no
+    /// type (Ghidra threads `glb->types->getBase(1,TYPE_UNKNOWN)` here,
+    /// varmap.cc:1261).
+    pub fn new_with_default(range: Vec<(u64, u64)>,
                             default_type: Arc<Datatype>) -> Self {
         Self {
             maplist: Vec::new(),
             iter_pos: 0,
             default_type: Some(default_type),
-            local_start,
-            local_end,
+            range,
         }
     }
 
+    // RUGRA-GLUE: analysis window accessor (Ghidra reads the `range` member
+    // directly at varmap.cc:902/1067; Rust keeps it private with a read-only
+    // probe for the oracle fixture's observation surface).
+    /// The analysis window (scope range tree minus param ranges), sorted
+    /// inclusive `(first, last)` pairs.
+    pub fn analysis_range(&self) -> &[(u64, u64)] {
+        &self.range
+    }
+
+    // RUGRA-GLUE: hints accessor (Ghidra walks `maplist` directly through
+    // the MapState iterators at varmap.cc:1080/1299; the Rust fixture needs
+    // the same read-only view after initialize's sort).
+    /// The collected RangeHints in current (post-initialize: sorted)
+    /// order.
+    pub fn hints(&self) -> &[RangeHint] {
+        &self.maplist
+    }
+
     // Ghidra: varmap.cc:896 MapState::addRange
-    /// Add a range hint. Faithful to `MapState::addRange` (varmap.cc:896).
+    /// Add a range hint. Faithful to `MapState::addRange` (varmap.cc:896):
+    /// a null/zero-size type falls back to the default type, then the
+    /// FULL extent `[st, st+sz-1]` must fit inside one range of the
+    /// analysis window (`range.inRange(Address(spaceid,st),sz)`,
+    /// varmap.cc:902 — address.cc:468-487) or the hint is dropped;
+    /// `sst` is `byteToAddress`+`sign_extend`+`addressToByte`
+    /// (varmap.cc:904-906), the identity for the 1-word-size 8-byte stack,
+    /// where a sign-extended negative offset (`0xfffffff...`) keeps its
+    /// negative `i64` value for `RangeHint::compare`'s signed ordering.
     /// `high_ind` is the biggest guaranteed index for open-range hints
     /// (-1 if not an array reference).
     pub fn add_range(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32,
@@ -1180,8 +1307,11 @@ impl MapState {
         let dtype = dtype.or_else(|| self.default_type.clone());
         let size = dtype.as_ref().map_or(1, |d| d.get_size() as i32);
         if size <= 0 { return; }
-        // Check if in local range.
-        if start < self.local_start || start >= self.local_end { return; }
+        // if (!range.inRange(Address(spaceid,st),sz)) return; (varmap.cc:902)
+        if !window_in_range(&self.range, start, size as u64) { return; }
+        // intb sst = byteToAddress(st, wordSize); sst = sign_extend(sst,
+        // addrSize*8-1); sst = addressToByte(sst, wordSize); — identity for
+        // wordSize == 1 and the 64-bit sign-extension of the u64 cast.
         let sstart = start as i64;
         self.maplist.push(RangeHint::new(start, size, sstart, dtype, flags, rt, high_ind));
     }
@@ -1472,19 +1602,105 @@ impl MapState {
     }
 
     // Ghidra: varmap.cc:1063 MapState::initialize
-    /// Initialize for restructuring: sort and add endpoint.
-    /// Corresponds to MapState::initialize (varmap.cc:1063).
+    /// Sort the collection and add a special terminating RangeHint.
+    /// Faithful to `MapState::initialize` (varmap.cc:1063-1082): the
+    /// endpoint sits at `wrapOffset(lastrange->getLast()+1)` where
+    /// `lastrange` is the analysis window's LAST SIGNED range
+    /// (`RangeList::getLastSignedRange`, address.cc:562-583) — for the
+    /// default negative-growth window `[u64::MAX-999999, u64::MAX]` that is
+    /// offset 0, the top of the stack window just past the deepest locals
+    /// (NOT the window's numeric end). The endpoint's signed start is the
+    /// sign-extension of that offset (0 here). After appending the endpoint
+    /// the list is stable-sorted by `RangeHint::compareRanges` and deduped/
+    /// unified by `reconcileDatatypes` (varmap.cc:1078-1079).
     pub fn initialize(&mut self) -> bool {
+        // Enforce boundaries of local variables: const Range *lastrange =
+        // range.getLastSignedRange(spaceid); if (lastrange == 0) return
+        // false; (varmap.cc:1067-1068)
+        let Some((_first, last)) = get_last_signed_range(&self.range) else {
+            return false;
+        };
         if self.maplist.is_empty() { return false; }
-        // Add endpoint range
+        // uintb high = spaceid->wrapOffset(lastrange->getLast()+1);
+        // (varmap.cc:1070) — the +1 is uintb arithmetic wrapping modulo
+        // 2^64 before wrapOffset (space.hh:383), i.e. Rust wrapping_add.
+        let high = last.wrapping_add(1);
+        // intb sst = byteToAddress(high, wordSize); sst =
+        // sign_extend(sst, addrSize*8-1); sst = addressToByte(sst,
+        // wordSize); (varmap.cc:1071-1073) — identity for the stack space.
+        let sst = high as i64;
+        // Add extra range to bound any final open entry (varmap.cc:1075)
         self.maplist.push(RangeHint::new(
-            self.local_end, 1, self.local_end as i64,
+            high, 1, sst,
             self.default_type.clone(), 0, RangeType::Endpoint, -2,
         ));
-        // Sort by signed start
+        // stable_sort(maplist, RangeHint::compareRanges); — Rust sort_by is
+        // stable, and RangeHint::compare is the compareRanges key
+        // (varmap.cc:321).
         self.maplist.sort_by(RangeHint::compare);
+        self.reconcile_datatypes();
         self.iter_pos = 0;
         true
+    }
+
+    // Ghidra: varmap.cc:960 MapState::reconcileDatatypes
+    /// Assuming a sorted list, from among a sequence of RangeHints with the
+    /// same start, size, and flags, select the most specific data-type
+    /// (`typeOrder < 0`), set all elements of the sequence to use it, and
+    /// eliminate duplicates (`compare == 0`). Faithful to
+    /// `MapState::reconcileDatatypes` (varmap.cc:960-996); Ghidra's heap
+    /// `delete` of dropped hints is Rust's drop of the un-pushed clone.
+    /// Ghidra's types are never null here (addRange substitutes the default
+    /// type, varmap.cc:899-900); the None arm of the typeOrder test can only
+    /// be reached through `MapState::new` without a default (test-only) and
+    /// keeps None rather than dereferencing.
+    fn reconcile_datatypes(&mut self) {
+        if self.maplist.is_empty() { return; }
+        let maplist = std::mem::take(&mut self.maplist);
+        let mut new_list: Vec<RangeHint> = Vec::with_capacity(maplist.len());
+        let mut start_pos = 0usize;
+        let mut start_hint = maplist[0].clone();
+        let mut start_datatype = start_hint.dtype.clone();
+        new_list.push(maplist[0].clone());
+        let mut cur_pos = 1usize;
+        while cur_pos < maplist.len() {
+            let cur_hint = &maplist[cur_pos];
+            cur_pos += 1;
+            if cur_hint.start == start_hint.start
+                && cur_hint.size == start_hint.size
+                && cur_hint.flags == start_hint.flags
+            {
+                // Take the most specific variant of the data-type
+                // (varmap.cc:974-975)
+                if let (Some(cur_dt), Some(start_dt)) = (&cur_hint.dtype, &start_datatype) {
+                    if cur_dt.type_order(start_dt) < 0 {
+                        start_datatype = cur_hint.dtype.clone();
+                    }
+                }
+                // Keep the current hint if it is otherwise different
+                // (varmap.cc:976-979)
+                let is_duplicate = new_list
+                    .last()
+                    .map(|back| RangeHint::compare(cur_hint, back) == std::cmp::Ordering::Equal)
+                    .unwrap_or(false);
+                if !is_duplicate {
+                    new_list.push(cur_hint.clone());
+                }
+            } else {
+                while start_pos < new_list.len() {
+                    new_list[start_pos].dtype = start_datatype.clone();
+                    start_pos += 1;
+                }
+                start_hint = cur_hint.clone();
+                start_datatype = cur_hint.dtype.clone();
+                new_list.push(cur_hint.clone());
+            }
+        }
+        while start_pos < new_list.len() {
+            new_list[start_pos].dtype = start_datatype.clone();
+            start_pos += 1;
+        }
+        self.maplist = new_list;
     }
 
     // Ghidra: varmap.cc:864 MapState::nextHint
@@ -1805,11 +2021,21 @@ pub struct ScopeLocal {
     /// Ghidra ScopeLocal::space (varmap.hh:213): address space of the local
     /// stack. Rugra models the space as the `AddressSpace::Stack` enum.
     pub space: crate::space::AddressSpace,
-    /// Ghidra ScopeLocal local window (varmap.cc:438-465, resetLocalWindow):
-    /// inclusive `(first, last)` ranges obtained from
-    /// `FuncProto::getLocalRange()` consulted by `buildVariableName`
-    /// (varmap.cc:555).
+    /// Ghidra ScopeLocal's symboltab range tree (varmap.cc:441-459,
+    /// resetLocalWindow): the UNION of the prototype's localRange and
+    /// paramRange, installed by `glb->symboltab->setRange`. Consumed by
+    /// `adjust_fit`/`longest_fit` (varmap.cc:593), `mark_not_mapped`'s
+    /// removeRange (varmap.cc:545) and `Scope::inScope` (database.hh:597).
+    /// Modeled as inclusive `(first, last)` ranges sorted by `first`.
     pub local_range: Vec<(u64, u64)>,
+    /// Ghidra `fd->getFuncProto().getLocalRange()` (fspec.hh:1539) — the
+    /// prototype's OWN local window, cached on the scope because
+    /// `buildVariableName` consults it directly (varmap.cc:555), DISTINCT
+    /// from the union tree in `local_range` (a stack parameter at a positive
+    /// offset is in the union but NOT in this window, so it must fall
+    /// through to `ScopeInternal::buildVariableName`). Inclusive
+    /// `(first, last)` ranges sorted by `first`.
+    pub proto_local_range: Vec<(u64, u64)>,
     /// Ghidra ScopeLocal::minParamOffset (varmap.cc:345): init `~0`.
     pub min_param_offset: u64,
     /// Ghidra ScopeLocal::maxParamOffset (varmap.cc:346): init 0.
@@ -1872,6 +2098,7 @@ impl ScopeLocal {
             category_lists: Vec::new(),
             space: crate::space::AddressSpace::Stack,
             local_range: Vec::new(),
+            proto_local_range: Vec::new(),
             min_param_offset: u64::MAX,
             max_param_offset: 0,
             stack_grows_negative: true,
@@ -2316,6 +2543,92 @@ impl ScopeLocal {
         best
     }
 
+    // Ghidra: varmap.cc:432 ScopeLocal::resetLocalWindow
+    /// Reset the discovery window for local variables mapped to the scope's
+    /// address space. Faithful to `ScopeLocal::resetLocalWindow`
+    /// (varmap.cc:432-460): the stack growth direction comes from the
+    /// prototype (varmap.cc:435 — Rugra threads `fd` because the scope owns
+    /// no Funcdata handle, an ownership seam), the parameter-offset window
+    /// resets (varmap.cc:436-437 — a no-op on the fresh per-pass scope of
+    /// Rugra's restructure pipeline), and the symboltab range tree becomes
+    /// the UNION of the prototype's localRange and paramRange
+    /// (varmap.cc:441-458) — for the default negative-growth 8-byte stack
+    /// `[u64::MAX-999999, u64::MAX] ∪ [0, 511]`, the sign-extended
+    /// negative-offset half where heritage puts locals. Rugra previously
+    /// hardcoded a positive `[0, 0x100000)` window here — the PARAMETER
+    /// side — which dropped every negative-offset local/open hint at the
+    /// add_range gate (varmap.cc:902). Ghidra's `if (rangeLocked) return`
+    /// (varmap.cc:439) has no Rugra counterpart: the `<localdb lock>`
+    /// decode path that can lock the window is not ported, so the
+    /// unconditional install is the only reachable behavior.
+    pub fn reset_local_window(&mut self, fd: &crate::funcdata::Funcdata) {
+        // stackGrowsNegative = fd->getFuncProto().isStackGrowsNegative();
+        self.stack_grows_negative = func_proto_stack_grows_negative(fd);
+        // minParamOffset = ~(uintb)0; maxParamOffset = 0;
+        self.min_param_offset = u64::MAX;
+        self.max_param_offset = 0;
+        let localrange = func_proto_local_range(fd);
+        let paramrange = func_proto_param_range(fd);
+        // RangeList newrange; localRange ranges first, then paramrange
+        // ranges (varmap.cc:444-458).
+        let mut newrange = crate::address::RangeList::new();
+        for r in localrange.ranges() {
+            newrange.insert_range(*r);
+        }
+        for r in paramrange.ranges() {
+            newrange.insert_range(*r);
+        }
+        // glb->symboltab->setRange(this,newrange); (varmap.cc:459)
+        self.local_range = newrange
+            .ranges()
+            .iter()
+            .map(|r| (r.get_first().as_u64(), r.get_last().as_u64()))
+            .collect();
+        // buildVariableName (varmap.cc:555) consults the prototype's own
+        // localRange — NOT the union tree — so cache it separately.
+        self.proto_local_range = localrange
+            .ranges()
+            .iter()
+            .map(|r| (r.get_first().as_u64(), r.get_last().as_u64()))
+            .collect();
+    }
+
+    // Ghidra: varmap.cc:1260 ScopeLocal::restructureVarnode (MapState construction)
+    /// Build the MapState exactly as `ScopeLocal::restructureVarnode`
+    /// (varmap.cc:1260-1261) does: the analysis range is the scope's range
+    /// tree (the union installed by `reset_local_window`) with every param
+    /// range removed — "Clear possible input symbols" (varmap.cc:874, the
+    /// constructor loop varmap.cc:870-875) — and the default type is the
+    /// factory's 1-byte TYPE_UNKNOWN (varmap.cc:1261). Public for the
+    /// locked oracle fixture's observation surface (the C++ fixture reaches
+    /// the same construction through `#define private public`).
+    pub fn build_map_state(
+        &self,
+        fd: &crate::funcdata::Funcdata,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> MapState {
+        // MapState state(space,getRangeTree(),fd->getFuncProto().getParamRange(),
+        //                 glb->types->getBase(1,TYPE_UNKNOWN));
+        let mut analysis = crate::address::RangeList::new();
+        for &(first, last) in &self.local_range {
+            if let Some(r) = crate::address::Range::new(
+                crate::address::Address::new(first),
+                crate::address::Address::new(last),
+            ) {
+                analysis.insert_range(r);
+            }
+        }
+        for r in func_proto_param_range(fd).ranges() {
+            analysis.remove_range(*r);
+        }
+        let analysis_window: Vec<(u64, u64)> = analysis
+            .ranges()
+            .iter()
+            .map(|r| (r.get_first().as_u64(), r.get_last().as_u64()))
+            .collect();
+        MapState::new_with_default(analysis_window, make_int_type(types, 1))
+    }
+
     // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode
     /// Restructure the stack frame from varnodes.
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
@@ -2401,21 +2714,16 @@ impl ScopeLocal {
             .and_then(|a| a.types.clone())
             .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
 
-        // Determine local range. Ghidra derives this from the prototype's
-        // getRangeTree/getParamRange (varmap.cc:438-465, resetLocalWindow);
-        // Rugra uses the full stack extent.
-        let local_start = 0u64;
-        let local_end = 0x100000u64;
-        // Install the local window consulted by buildVariableName
-        // (varmap.cc:555) the way resetLocalWindow copies the prototype's
-        // localRange into the scope.
-        self.local_range = vec![(local_start, local_end - 1)];
+        // resetLocalWindow (varmap.cc:432-460) — the Funcdata lifecycle calls
+        // it right after scope construction (funcdata.cc:70); Rugra's
+        // restructure_varnode owns a fresh ScopeLocal per pass
+        // (coreaction.rs), so installing here is the same lifecycle point.
+        self.reset_local_window(fd);
 
         // Build the MapState with a default unknown base type (1 byte),
-        // matching Ghidra's glb->types->getBase(1, TYPE_UNKNOWN)
-        // (varmap.cc:1261).
-        let default_type = make_int_type(&types, 1);
-        let mut state = MapState::new_with_default(local_start, local_end, default_type);
+        // matching Ghidra's MapState construction (varmap.cc:1260-1261),
+        // including the param-range subtraction of varmap.cc:870-875.
+        let mut state = self.build_map_state(fd, &types);
         state.gather_varnodes(fd);
         state.gather_spacebase(fd, &types);
 
@@ -2455,7 +2763,9 @@ impl ScopeLocal {
     /// (varmap.cc:1309) and `createEntry` (varmap.cc:622). Returns
     /// `Err` for the LowlevelError thrown by `RangeHint::merge`
     /// (varmap.cc:280), which in the oracle unwinds out of this walk.
-    fn restructure(
+    /// Public for the locked oracle fixture (Ghidra's declaration is
+    /// reachable the same way through the fixture's access defines).
+    pub fn restructure(
         &mut self,
         state: &mut MapState,
         types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
@@ -2989,12 +3299,14 @@ impl ScopeLocal {
     }
 
     // RUGRA-GLUE: local_range_in_range (RangeList::inRange for the local window)
-    /// `RangeList::inRange(addr, 1)` over `self.local_range`: does any range
-    /// contain the single byte at `offset`? Ghidra consults
-    /// `fd->getFuncProto().getLocalRange()` directly (varmap.cc:555); Rugra
-    /// caches the inclusive `(first, last)` ranges on the scope.
+    /// `RangeList::inRange(addr, 1)` over the prototype's own local window
+    /// (`proto_local_range`): does any range contain the single byte at
+    /// `offset`? Ghidra consults `fd->getFuncProto().getLocalRange()`
+    /// directly (varmap.cc:555) — NOT the scope's union range tree — so a
+    /// positive-offset stack parameter fails this gate and falls through to
+    /// `ScopeInternal::buildVariableName`.
     pub fn local_range_in_range(&self, offset: u64) -> bool {
-        self.local_range
+        self.proto_local_range
             .iter()
             .any(|&(first, last)| first <= offset && offset <= last)
     }
@@ -4007,7 +4319,9 @@ mod tests {
     fn test_build_variable_name_negative_stack() {
         use crate::varnode::varnode_flags;
         let mut scope = ScopeLocal::new(); // stack_grows_negative (x86)
-        scope.local_range = vec![(0, u64::MAX)];
+        // The buildVariableName gate reads the prototype's own localRange
+        // (varmap.cc:555), cached as proto_local_range — NOT the union tree.
+        scope.proto_local_range = vec![(0, u64::MAX)];
         // For a negative-growing stack, a high unsigned offset (a local) maps
         // to a negative signed value, which is negated to positive magnitude.
         // offset = 0xfffffffffffffff0 → signed -16 → negated +16 → "Stack_10".
@@ -4036,7 +4350,7 @@ mod tests {
         let mut scope = ScopeLocal::new();
         scope.stack_direction = -1; // positive growth → no negation
         scope.stack_grows_negative = false;
-        scope.local_range = vec![(0, u64::MAX)];
+        scope.proto_local_range = vec![(0, u64::MAX)];
         // offset 0x10 → start = 0x10 > 0 → plain "Stack_10".
         let mut index = 1;
         let name = scope.build_variable_name(
@@ -4260,7 +4574,7 @@ mod tests {
     #[test]
     fn test_restructure_two_disjoint_ranges() {
         // Build a MapState manually with two non-overlapping fixed int4 ranges.
-        let mut state = MapState::new(0, 0x100000);
+        let mut state = MapState::new(vec![(0, 0xfffff)]);
         let int_t = int_dt(4, TypeMetatype::Int);
         state.add_range(0, Some(int_t.clone()), 0, RangeType::Fixed, -1);
         state.add_range(16, Some(int_t), 0, RangeType::Fixed, -1);
@@ -4284,7 +4598,7 @@ mod tests {
     fn test_restructure_overlapping_same_type_merges() {
         // Two int4 ranges at the same offset → contained, reconcile true,
         // preferred → absorb (no new symbol, size stays 4).
-        let mut state = MapState::new(0, 0x100000);
+        let mut state = MapState::new(vec![(0, 0xfffff)]);
         let int_t = int_dt(4, TypeMetatype::Int);
         state.add_range(0, Some(int_t.clone()), 0, RangeType::Fixed, -1);
         state.add_range(0, Some(int_t), 0, RangeType::Fixed, -1);
