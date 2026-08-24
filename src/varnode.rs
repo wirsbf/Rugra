@@ -165,21 +165,31 @@ fn local_meta_pair(opcode: crate::opcodes::OpCode) -> Option<(TypeMetatype, Type
 ///   INT_ADD" (typeop.cc:2241/2311);
 /// - TypeOpCall: fspec gate -> output-locked gate -> VOID gate -> locked
 ///   output type, else base default (typeop.cc:720-735);
-/// - TypeOpCallind/TypeOpCallother/TypeOpCpoolref: their overrides resolve
-///   state Rugra cannot reach from a Varnode (CALLIND needs the callspec via
+/// - TypeOpCallind/TypeOpCpoolref: their overrides resolve state Rugra
+///   cannot reach from a Varnode (CALLIND needs the callspec via
 ///   `op->getParent()->getFuncdata()->getCallSpecs(op)` — no parent chain;
-///   CALLOTHER needs `tlst->getArch()->userops` — no arch backlink on
-///   TypeFactory; CPOOLREF needs the constant pool). All three converge to
-///   the base default on the states Ghidra itself resolves that way
-///   (no callspec / metadata-less userop / record-free cpool); the
-///   special-path leftovers are registered residuals;
+///   CPOOLREF needs the constant pool). Both converge to the base default
+///   on the states Ghidra itself resolves that way (no callspec /
+///   record-free cpool); the special-path leftovers are registered
+///   residuals;
+/// - TypeOpCallother (typeop.cc:865-873): the CALLOTHER index constant in
+///   input slot 0 selects a `UserPcodeOp` descriptor through
+///   `tlst->getArch()->userops.getOp(in(0).offset)`; a descriptor with
+///   fixed output metadata supplies it, anything else falls back to the
+///   TypeOp base default. Rugra reaches the manager through the `userops`
+///   thread — the explicit `Option<&Arc<RwLock<UserOpManage>>>` stands in
+///   for Ghidra's `tlst->getArch()->userops` edge (see the
+///   TYPEOP-LOCALTYPE-DISPATCH-0001 CALLOTHER slice note on
+///   `get_local_type`); `None` (no owning Architecture) behaves like the
+///   metadata-less descriptor and takes the base default;
 /// - everything else (COPY/LOAD/STORE/MULTIEQUAL/INDIRECT/BRANCH/CBRANCH/
 ///   BRANCHIND/RETURN/CAST/SEGMENTOP/NEW/...): base default
 ///   `getBase(out.size, TYPE_UNKNOWN)` (typeop.cc:261-265) — these classes
 ///   have no getOutputLocal override in typeop.hh.
-fn op_output_type_local(
+pub fn op_output_type_local(
     op: &PcodeOp,
     type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
 ) -> Option<Arc<Datatype>> {
     use crate::opcodes::OpCode;
     match op.opcode {
@@ -221,6 +231,34 @@ fn op_output_type_local(
             }
             Some(ct)
         }
+        // typeop.cc:865-873 TypeOpCallother::getOutputLocal.
+        OpCode::CPUI_CALLOTHER => {
+            // cc:868: `tlst->getArch()->userops.getOp(op->getIn(0)->getOffset())`
+            // — the userops thread replaces the tlst->getArch() reach. The
+            // u64 offset truncates to the low 32 bits exactly as Ghidra's
+            // `UserOpManage::getOp(uint4)` (userop.cc:408) does.
+            let index = op.get_in(0)?.read().unwrap().get_offset() as i32;
+            let descriptor_type = userops.and_then(|manager| {
+                manager.read().unwrap().get_output_local(index).cloned()
+            });
+            match descriptor_type {
+                // cc:869-871: non-null descriptor metadata wins.
+                Some(res) => Some(res),
+                // cc:872: null (metadata-less descriptor, e.g.
+                // UnspecializedPcodeOp) -> TypeOp::getOutputLocal base
+                // default `getBase(out.size, TYPE_UNKNOWN)` (typeop.cc:261-265).
+                // Ghidra dereferences a null descriptor for an UNREGISTERED
+                // index (UB before cc:869; unreachable in production — SLEIGH
+                // registers every userop index before any CALLOTHER is
+                // emitted). `UserOpManage::get_output_local` folds that UB
+                // state into the same None, so Rust covers it with the same
+                // canonical fallback instead of crashing.
+                None => {
+                    let size = op.get_out()?.read().unwrap().get_size();
+                    local_base(type_factory, size, TypeMetatype::Unknown)
+                }
+            }
+        }
         // meta-table subclasses (typeop.cc:326/348/368).
         _ => {
             let size = op.get_out()?.read().unwrap().get_size();
@@ -246,6 +284,12 @@ fn op_output_type_local(
 /// - TypeOpCbranch: slot 1 `getBase(size, TYPE_BOOL)`, slot 0 a pointer to
 ///   the code type sized/worded by the input (typeop.cc:609-619);
 /// - TypeOpCall: the R3-approved D1 port (typeop.cc:687-718);
+/// - TypeOpCallother (typeop.cc:855-863): same descriptor lookup as the
+///   output side through `tlst->getArch()->userops.getOp(in(0).offset)`;
+///   `DatatypeUserOp` maps CALLOTHER slot-1 to its first fixed input type
+///   (userop.cc:79), a metadata-less descriptor yields the TypeOp base
+///   default `getBase(in(slot).size, TYPE_UNKNOWN)` — including slot 0,
+///   the index constant itself;
 /// - TypeOpCallind slot 0: code pointer (typeop.cc:752-756); param slots and
 ///   TypeOpReturn param slots need the Funcdata (parent chain) — base
 ///   default residual, identical to Ghidra's fc==null / bb==null paths;
@@ -255,10 +299,11 @@ fn op_output_type_local(
 ///   itself, so the op's own address space is used;
 /// - everything else: base default `getBase(in.size, TYPE_UNKNOWN)`
 ///   (typeop.cc:271-275).
-fn op_input_type_local(
+pub fn op_input_type_local(
     op: &PcodeOp,
     slot: usize,
     type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
 ) -> Option<Arc<Datatype>> {
     use crate::opcodes::OpCode;
     // Size of the queried input varnode, shared by every base/meta lookup.
@@ -297,6 +342,29 @@ fn op_input_type_local(
             OpCode::CPUI_PTRADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_CPOOLREF,
             _,
         ) => local_base(type_factory, input_size, TypeMetatype::Int),
+        // typeop.cc:855-863 TypeOpCallother::getInputLocal.
+        (OpCode::CPUI_CALLOTHER, _) => {
+            // cc:858: descriptor lookup by the CALLOTHER index constant in
+            // slot 0 (same edge/UB note as the output arm above).
+            let index = op.get_in(0)?.read().unwrap().get_offset() as i32;
+            let descriptor_type = userops.and_then(|manager| {
+                manager
+                    .read()
+                    .unwrap()
+                    .get_input_local(index, slot as i32)
+                    .cloned()
+            });
+            match descriptor_type {
+                // cc:859-861: non-null descriptor metadata wins. The
+                // slot-minus-one compaction lives in UserPcodeOp::
+                // get_input_local (userop.cc:79), so slot 0 (the index
+                // constant) and slots past the fixed inputs return None.
+                Some(res) => Some(res),
+                // cc:862: null -> TypeOp::getInputLocal base default
+                // `getBase(in(slot).size, TYPE_UNKNOWN)` (typeop.cc:271-275).
+                None => local_base(type_factory, input_size, TypeMetatype::Unknown),
+            }
+        }
         // typeop.cc:687-718 — delegate to the reviewed D1 port.
         (OpCode::CPUI_CALL, _) => {
             use crate::typeop::TypeOp as _;
@@ -1747,7 +1815,16 @@ impl Varnode {
     /// false per varnode. The `type_factory` parameter threads the
     /// Architecture TypeFactory that Ghidra reaches implicitly through
     /// `PcodeOp::opcode->tlst` (op.hh:122) — Rugra `PcodeOp` holds no parent
-    /// chain, so the factory is an explicit argument.
+    /// chain, so the factory is an explicit argument. The `userops`
+    /// parameter threads the Architecture user-op manager for the same
+    /// reason: Ghidra's `TypeOpCallother::get*Local` reach it via
+    /// `tlst->getArch()->userops` (typeop.cc:858/868), a link Rugra's
+    /// TypeFactory cannot carry today (the canonical factory may be shared
+    /// across Architectures via `TypeFactory::shared_default`, and
+    /// `Architecture::set_types` runs before the Architecture is wrapped in
+    /// an Arc, so a `Weak` backlink cannot be formed there). `None` (no
+    /// owning Architecture) routes CALLOTHER defs/readers to the same base
+    /// default Ghidra produces for a metadata-less descriptor.
     ///
     /// Returns `Ok(Some(ct))` for a resolved canonical type, `Ok(None)` for
     /// the null `Datatype*` returns Ghidra produces on the type-locked path
@@ -1758,6 +1835,7 @@ impl Varnode {
         &self,
         block_up: &mut bool,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        userops: Option<&Arc<RwLock<crate::userop::UserOpManage>>>,
     ) -> Result<Option<Arc<Datatype>>> {
         // cc:906-907: Our type is locked, don't change. Not a partial lock,
         // return the locked type (no blockup touch, no def/descend consult).
@@ -1774,7 +1852,7 @@ impl Varnode {
             let (out_local, stops) = {
                 let def_op = def.read().unwrap();
                 (
-                    op_output_type_local(&def_op, type_factory),
+                    op_output_type_local(&def_op, type_factory, userops),
                     def_op.stops_type_propagation(),
                 )
             };
@@ -1811,7 +1889,7 @@ impl Varnode {
             let Some(slot) = slot else { continue };
             let newct = {
                 let op = descend_op.read().unwrap();
-                op_input_type_local(&op, slot, type_factory)
+                op_input_type_local(&op, slot, type_factory, userops)
             };
             match (&ct, newct) {
                 // cc:926-927: first non-null candidate wins unconditionally.

@@ -988,8 +988,9 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   get*Local 覆盖读对侧 varnode 的 v_type 而非 `getBase(size,metatype)`
   （登记残差 PRINTC-CAST-OPNAME-0001 M1）；M1 落地后 root 可将两张表合并。
   残差：CALLIND 参数槽/RETURN 参数槽（需 parent→Funcdata，走 Ghidra 自身的
-  fc==null/bb==null 基类默认路径）、CALLOTHER userop 元数据（TypeFactory 无
-  arch 反链）、CPOOLREF 记录路径（无 cpool 基础设施）。
+  fc==null/bb==null 基类默认路径）、CPOOLREF 记录路径（无 cpool 基础设施）。
+  ~~CALLOTHER userop 元数据（TypeFactory 无 arch 反链）~~ —— 已由
+  TYPEOP-LOCALTYPE-CALLOTHER-0001 闭包接线关闭（见下节）。
 - **flag 常量**（varnode.hh:131-132）：`addl_flags::STOP_UP_PROPAGATION=0x800`、
   `HAS_IMPLIED_FIELD=0x1000`。注意 0x800 在主 `varnode_flags` 里是 `volatil`
   （varnode.hh:93）—— 两个枚举同值不同义，STOP 落 `addl_flags`（u16
@@ -1004,3 +1005,47 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   覆盖：单 def 无 readers、typeOrder-min（两种插入序）、平局先遇（char*/int*
   等价指针）、def STOP 早退+blockup、path 指针胜整型、typelock union 直返、
   null local type 错误通道。
+
+## 2026-08-25：CALLOTHER userop 闭包接线（TYPEOP-LOCALTYPE-CALLOTHER-0001，TYPEOP-LOCALTYPE-DISPATCH-0001 CALLOTHER 切片）
+
+关闭 A48 复核精确定位的 caller 闭包：`PcodeOp → TypeOpCallother::get*Local →
+tlst->getArch()->userops.getOp(in(0).offset) → 基类 canonical 回落`
+（typeop.cc:855-873）。
+
+- **方案论证**（userops 参数线程 vs TypeFactory arch 反链）：选**参数线程**。
+  (1) Rugra `Architecture::ensure_types` 借 `TypeFactory::shared_default()`
+  进程级单例充任 canonical 工厂（TYPE-WIRING-0001 D0 临时态）——反链落在共享
+  单例上是跨 Architecture 的 last-writer-wins 污染，Ghidra 每架构独占工厂
+  （type.hh:819 `getArch()` 无此歧义）；(2) `Architecture::set_types(&mut self)`
+  在 Architecture 被 Arc 包装**之前**调用（fixture/管线两处形态皆然），
+  `Weak<Architecture>` 在唯一可靠设置点无法成形，~13 处独立工厂构造点需逐一
+  回填接线；(3) 参数线程沿用同函数既有 `type_factory` 参数的先例与理由
+  （"Rugra PcodeOp 无 parent 链"，varnode.rs:1747-1750 注释）；
+  (4) `get_local_type` 全仓零生产调用方，线程侵入面 = 3 个函数签名 + 1 个
+  pinned fixture 调用点更新，`None`（无宿主 Architecture）行为等价于
+  metadata-less 描述符走基类默认。
+- **签名**：`get_local_type(&self, block_up, type_factory,
+  userops: Option<&Arc<RwLock<UserOpManage>>>)`；`op_output_type_local` /
+  `op_input_type_local` 同参并转 `pub`（对应 op.hh:250-252
+  `PcodeOp::outputTypeLocal/inputTypeLocal` 的公开入口地位，供双侧 fixture
+  直接观察 PcodeOp 级闭包）。
+- **CALLOTHER arm**（typeop.cc:855-873）：slot-0 常量 offset 截 32 位后查
+  `UserOpManage::get_op`（对齐 `getOp(uint4)`，userop.cc:408-415）；描述符
+  metadata 命中即返回（`DatatypeUserOp` slot-1 压缩在 userop.cc:79，
+  `UserPcodeOp::get_input_local` 已实现）；null → TypeOp 基类默认
+  `getBase(size,TYPE_UNKNOWN)`（typeop.cc:261-275），含 slot 0 自身与越界槽。
+  **UB-cover**：Ghidra 对未注册 index 在 cc:859 前即空指针解引用（生产不可达：
+  SLEIGH 在发射任何 CALLOTHER 前注册全部 userop index）；Rust
+  `get_output_local/get_input_local` 把该态折叠进同一 None，以同一 canonical
+  回落覆盖而非崩溃（注释在 arm 内）。
+- **dormant 兄弟残差**：typeop.rs `TypeOpCallother::get_operator_name` 的
+  `callother_userop_name` None-stub **不在本线程可解范围**——其宿主
+  `TypeOpManager` 全仓零实例化（打印活性路径在 `PrintC::op_callother`，
+  printc.rs:8504-8515 已持 `self.userops` 忠实解析）；登记
+  `TYPEOP-CALLOTHER-PRINTNAME-0001` 待 TypeOpManager 激活时接线。
+- **行为影响**：`get_local_type` 仍零生产调用方，主管线行为零变化；双侧
+  fixture `tests/oracle/callother_userop_closure_1204.*` 覆盖：memcpy
+  DatatypeUserOp（void*/void*/void*/int4）out/全槽/def 侧/reader 侧闭包、
+  metadata-less UnspecializedPcodeOp 全链 canonical 回落、builtin 注册身份、
+  slot-0 常量与越界槽的基类默认。varnode_localtype_res_1204 fixture 调用点
+  同步补 `None` 线程（行为逐字节不变，runner 重钉验证）。

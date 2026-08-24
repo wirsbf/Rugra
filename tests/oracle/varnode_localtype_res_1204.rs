@@ -242,7 +242,7 @@ fn main() {
         fd.op_set_input(&op, offset, 1);
         fd.op_set_output(&op, out.clone());
         let mut blockup = false;
-        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("def_only resolves");
         emit_case("def_only", &ct, blockup);
         emit_bool("case.def_only.int4_identity", identity(&ct, &int4_type));
@@ -250,7 +250,7 @@ fn main() {
         let repeat = out
             .read()
             .unwrap()
-            .get_local_type(&mut repeat_blockup, &type_factory)
+            .get_local_type(&mut repeat_blockup, &type_factory, None)
             .expect("def_only repeat resolves");
         emit_bool(
             "case.def_only.repeat_identity",
@@ -277,7 +277,7 @@ fn main() {
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_LESS, 0x500118, &out, 0x311);
 
         let mut blockup = false;
-        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("def_stop resolves");
         emit_case("def_stop", &ct, blockup);
         emit_bool(
@@ -310,7 +310,7 @@ fn main() {
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_LESS, 0x500128, &out, 0x321);
 
         let mut blockup = false;
-        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("def_nostop resolves");
         emit_case("def_nostop", &ct, blockup);
         let uint4 = type_factory
@@ -328,7 +328,7 @@ fn main() {
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_LESS, 0x500130, &vn, 0x331);
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_SLESS, 0x500138, &vn, 0x332);
         let mut blockup = false;
-        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("readers_min_uint_first resolves");
         emit_case("readers_min_uint_first", &ct, blockup);
         let uint4 = type_factory
@@ -345,7 +345,7 @@ fn main() {
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_SLESS, 0x500140, &vn, 0x341);
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_LESS, 0x500148, &vn, 0x342);
         let mut blockup = false;
-        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("readers_min_int_first resolves");
         emit_case("readers_min_int_first", &ct, blockup);
         let uint4 = type_factory
@@ -379,7 +379,7 @@ fn main() {
             &vn,
         );
         let mut blockup = false;
-        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("ptr_pointee_replace resolves");
         emit_case("ptr_pointee_replace", &ct, blockup);
         emit_bool(
@@ -419,7 +419,7 @@ fn main() {
             &vn,
         );
         let mut blockup = false;
-        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("tie_structs_ab resolves");
         emit_case("tie_structs_ab", &ct, blockup);
         emit_bool(
@@ -452,7 +452,7 @@ fn main() {
             &vn,
         );
         let mut blockup = false;
-        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("tie_structs_ba resolves");
         emit_case("tie_structs_ba", &ct, blockup);
         emit_bool(
@@ -480,7 +480,7 @@ fn main() {
         fd.op_set_input(&op, vn.clone(), 0);
         fd.op_set_input(&op, other, 1);
         let mut blockup = false;
-        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("path_beats_int resolves");
         emit_case("path_beats_int", &ct, blockup);
         emit_bool(
@@ -508,7 +508,7 @@ fn main() {
             .update_type_lock(union_type.clone(), true, false);
         wire_compare_reader(&mut fd, OpCode::CPUI_INT_LESS, 0x500188, &out, 0x381);
         let mut blockup = false;
-        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         let ct = ct.expect("typelock_union resolves");
         emit_case("typelock_union", &ct, blockup);
         emit_bool(
@@ -525,7 +525,7 @@ fn main() {
     {
         let vn = fd.new_varnode(4, Address::new(0x390));
         let mut blockup = false;
-        let result = vn.read().unwrap().get_local_type(&mut blockup, &type_factory);
+        let result = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
         match result {
             Ok(ct) => emit_case("null_local_type", &ct, blockup),
             Err(error) => {
