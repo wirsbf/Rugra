@@ -1,0 +1,579 @@
+{
+  "schema_version": 2,
+  "fixture_id": "TYPEFACTORY-EXACTPIECE-0001",
+  "covered_projection_status": "MISMATCH",
+  "overall_status": "MISMATCH",
+  "status_note": "TYPEFACTORY-EXACTPIECE-0001 is MISMATCH against frozen Rugra candidate 5f10b94. The archive-built bilateral run produced 32 schema-identical records: 30 records were byte-identical, while explicit_align_struct and explicit_align_union differed in exactly 23 fields each, all caused by controlled Arc replacement under TYPEFACTORY-ARC-IDENTITY-0001. The fixture is limited to the shared int4/non-negative-size API domain and its explicit composite/array/partial/PointerRel graph. Rust TypeField cannot represent Ghidra ident under TYPEFIELD-IDENT-REPRESENTATION-0001; Pointer truncate, TypeCode factory attachment, full Spacebase lookup, out-of-domain arguments, and the zero-production-caller closure remain MISMATCH/UNTESTED under their registered residual IDs. No covered MATCH, L3, strict whole-TypeStruct same-input, whole-function, production-consumer, or whole-module claim is made.",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "stable_functions": [
+      "ghidra::TypeFactory::getTypeArray type.cc:3902",
+      "ghidra::TypeFactory::getTypePartialStruct type.cc:3929",
+      "ghidra::TypeFactory::getTypePartialUnion type.cc:3955",
+      "ghidra::TypeFactory::getTypePartialEnum type.cc:3980",
+      "ghidra::TypeFactory::getExactPiece type.cc:4090",
+      "ghidra::TypeArray::TypeArray type.hh:937",
+      "ghidra::TypePointerRel::markEphemeral type.hh:956",
+      "ghidra::TypeArray::compare type.cc:1211",
+      "ghidra::TypeArray::getSubType type.cc:1234",
+      "ghidra::TypeStruct::setFields type.cc:1563",
+      "ghidra::TypeStruct::getSubType type.cc:1640",
+      "ghidra::TypeUnion::setFields type.cc:2002",
+      "ghidra::TypePartialStruct::getSubType type.cc:2363",
+      "ghidra::TypeFactory::findAdd type.cc:3412",
+      "ghidra::TypeFactory::setFields(TypeStruct*) type.cc:3479",
+      "ghidra::TypeFactory::setFields(TypeUnion*) type.cc:3500",
+      "ghidra::TypeFactory::getTypedef type.cc:3818",
+      "ghidra::TypeFactory::getTypePointerRel(TypePointer*,Datatype*,int4) type.cc:4016"
+    ]
+  },
+  "rugra_base_commit": "8c223a9623d6833319564776c35c5d4c50b17b95",
+  "rugra_series": {
+    "lineage": "8c223a9623d6833319564776c35c5d4c50b17b95 -> 342d86d9de418efcbb2b7836871d80ea8cd3edb0 -> ab34598a841214b285939213cd4abbac6910d6d3 -> bbbd2089a154b01c3ff617e06da530b019127ec6 -> 5f10b94f4bf0ad77ed86f164467b3b0ea201aa10",
+    "series_a": {
+      "commit": "342d86d9de418efcbb2b7836871d80ea8cd3edb0",
+      "scope": "datatype layout/display-name state, explicit struct/union definition replacement, typedef registration and dependency state"
+    },
+    "series_b": {
+      "commit": "ab34598a841214b285939213cd4abbac6910d6d3",
+      "scope": "TypeArray width/name/canonical identity plus PartialStruct/PartialEnum/PartialUnion construction and stripping"
+    },
+    "series_c": {
+      "commit": "bbbd2089a154b01c3ff617e06da530b019127ec6",
+      "scope": "pointer and ephemeral PointerRel canonical state used directly by pointerrel_strip and by composite dependency observations"
+    },
+    "series_d": {
+      "commit": "5f10b94f4bf0ad77ed86f164467b3b0ea201aa10",
+      "tree": "638c49a914eb4dea40f708225ace27f1e5039420",
+      "parent": "bbbd2089a154b01c3ff617e06da530b019127ec6",
+      "scope": "TypeFactory::get_exact_piece plus Arc-preserving Struct/Array/PartialStruct getSubType dispatch for the bounded direct projection"
+    },
+    "claim_boundary": "The exact archive-based bilateral run confirms only the 32-case projection and its explicit 46-field MISMATCH. The whole-function and production-consumer residuals below remain outside that projection."
+  },
+  "architecture": {
+    "id": "synthetic:LE:64:typefactory-direct",
+    "endianness": "little",
+    "pointer_size": 8,
+    "word_size": 1,
+    "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; all byte-addressed except the standard synthetic stack relationship",
+    "data_organization_input": "explicit size/alignment entries 0:1,1:1,2:2,3:2,4:4,8:8,16:8,32:8; output alignment and aligned-width values are read from real Datatype objects and are not predeclared as oracle results",
+    "enum_config_input": "<enum size=\"8\" signed=\"false\"/>",
+    "max_basetype_size": 10,
+    "factory_bootstrap": "C++ TypeFactory(Architecture*) and Rust TypeFactory::raw(), with neither convenience core set installed; decode the identical data_organization; setupSizes/setup_sizes with stack-spacebase size 8, default data address size 8, default size 8, and no far pointer; parse the identical enum config; register exactly one named core type undefined1 size=1 TYPE_UNKNOWN unsigned=false; call cacheCoreTypes/cache_core_types; leave max_basetype_size at the shared default 10",
+    "factory_type_construction": "Both sides obtain anonymous noncore uint2/uint3/uint4/uint8 with getBase/get_base_result; named structs, unions, enum, typedefs, partial types, pointers, PointerRel, and arrays through the corresponding production factory APIs. Names, sizes, offsets, explicit alignments, Datatype ids (zero/derived where applicable), core state, call order, and shared object identities are held fixed by the 32-case manifest. Ghidra TypeField.ident has no Rust representation and is separately bounded below; it is not silently included in this same-input statement."
+  },
+  "compiler_spec": {
+    "id": "synthetic-direct-typefactory",
+    "language_id": "synthetic little-endian 64-bit byte-addressed Translate",
+    "calling_convention": "none",
+    "prototype_model": "none",
+    "binary": "none",
+    "reason": "This fixture calls TypeFactory directly and does not decode instructions or run an action pool. The complete compiler-spec-equivalent inputs consumed by setupSizes are the stack pointer size 8, default data-space address size 8, default size 8, no far-pointer segment, and the explicit data-organization/enum XML above."
+  },
+  "host_toolchain": {
+    "cargo": {
+      "path": "/usr/bin/cargo",
+      "sha256": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+      "version": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "version_output_sha256": "62d278ffb732aa9b6ac09108cbcea47dd24d6221c5c63f6d942784ca419cb9fc"
+    },
+    "rustc": {
+      "path": "/usr/bin/rustc",
+      "sha256": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618",
+      "version": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "version_output_sha256": "3b56b3021e5f91088c797c1d6ba31cc6e4a2170670446d47f883b91407e66768"
+    },
+    "cxx": {
+      "path": "/usr/bin/g++",
+      "sha256": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9",
+      "version": "g++ (GCC) 16.2.1 20260810",
+      "version_output_sha256": "ddba3d014b73deb2a8869cad4ab507e29a48630c8cd280adf2559e0e10891d23"
+    },
+    "cargo_config_policy": "reject config and config.toml in CARGO_HOME and every candidate working-directory ancestor, including the candidate root",
+    "unfingerprinted_host_closure": "The runner does not separately pin make, ar, the linker, libc/libstdc++, or kernel/filesystem behavior. It therefore makes no fully-hermetic build claim; the locked source/tool frontends and exact stdout hashes are the bounded behavior fingerprint."
+  },
+  "analysis_options": {
+    "entrypoints": "Direct raw-factory bootstrap via decodeDataOrganization/decode_data_organization, setupSizes/setup_sizes, parseEnumConfig/parse_enum_config, setCoreType/set_core_type_result, and cacheCoreTypes/cache_core_types; construction and lookup through getBase/get_base_result, struct/union/enum/typedef/pointer/PointerRel/partial/array factories, composite setters, and findByName/find_by_name; target calls to getExactPiece/get_exact_piece; and direct Datatype layout/name/id/public-predicate/getSubType/getStripped observations. No instruction decode, Action, Rule, or decompiler pipeline is run.",
+    "type_graph": "One shared raw factory owns anonymous noncore uint2/uint3/uint4/uint8; named inner8/outer24/union8/enum8; ordinary uint4 typedef; wide/narrow partial structs plus partial enum/union; typedef-of-wide-partial; ephemeral PointerRel created from the parent-pointer overload; explicit-align struct6/union4; and their arrays. Only undefined1 is core.",
+    "normalization": "No output-line or semantic-value normalization. The one representation encoding is explicit in each *_ghidra_metatype_code field: Rust TypeMetatype variants are mapped one-to-one to the locked Ghidra type_metatype integer codes; this is not the Rust enum's raw discriminant and no variant is collapsed. Allocation addresses are not emitted; exact pointer/Arc aliasing is emitted as equality bits. Explicit composite records emit full pre/old/post/typedef Datatype ids and displayName values; the other name/displayName observations are deliberately empty/non-empty bits. Rust TypeField omits Ghidra TypeField.ident: Ghidra's fixture uses deterministic declaration-order values, while the Rust target graph cannot store them. Locked TypeStruct::setFields/TypeUnion::setFields copy ident but the bounded getExactPiece->getSubType, getTypeArray, pointer/partial dependency, layout, and public-predicate projection never reads it; this is an explicit input-representation residual, not a claim of strict whole-TypeStruct equivalence.",
+    "debug_macros": "CPUI_DEBUG and OPACTION_DEBUG absent",
+    "random_seed": "none",
+    "error_injection": "none",
+    "iteration_order": "Thirty-two records in the fixed input_manifest order; each piece or piece_subtype record invokes getExactPiece twice consecutively on the same factory and input",
+    "api_domain": "Locked Ghidra accepts int4 offset and int4 size; frozen Rust accepts i64 offset and usize size. Every manifest offset is inside the int4 domain and every size is non-negative and representable in both. Negative Ghidra sizes, Rust-only offsets outside int4, and usize values outside int4 are deliberately UNTESTED rather than normalized.",
+    "production_caller_state": "The fixture directly calls the frozen owner API. No production caller does: variable.rs, database.rs, funcdata.rs, and ruleaction.rs retain local getExactPiece fallbacks. This fixture therefore proves no production-consumer or user-visible pipeline repair."
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=true, separators=(',',':'), ensure_ascii=false)",
+    "cases": [
+      {
+        "id": "whole_struct",
+        "input": "outer24{uint4@0,hole@4..7,inner8@8,uint8@16}",
+        "offset": 0,
+        "size": 24,
+        "expected_class": "original outer24 identity"
+      },
+      {
+        "id": "nested_struct",
+        "input": "outer24",
+        "offset": 8,
+        "size": 8,
+        "expected_class": "inner8 identity after one subtype descent"
+      },
+      {
+        "id": "nested_leaf",
+        "input": "outer24",
+        "offset": 12,
+        "size": 4,
+        "expected_class": "uint4 identity after two subtype descents"
+      },
+      {
+        "id": "contained_scalar_partial",
+        "input": "outer24",
+        "offset": 9,
+        "size": 2,
+        "expected_class": "null after descending into a scalar that wholly contains the requested range"
+      },
+      {
+        "id": "scalar_negative_exact",
+        "input": "anonymous noncore uint4 scalar",
+        "offset": -1,
+        "size": 4,
+        "expected_class": "original uint4 identity because the upper-bound guard succeeds and exact-size is tested before any subtype/negative-offset rejection"
+      },
+      {
+        "id": "cross_field",
+        "input": "inner8{uint4@0,uint4@4}",
+        "offset": 2,
+        "size": 4,
+        "expected_class": "canonical PartialStruct(inner8,2,4), equal to direct factory construction"
+      },
+      {
+        "id": "struct_hole",
+        "input": "outer24",
+        "offset": 4,
+        "size": 4,
+        "expected_class": "canonical PartialStruct(outer24,4,4), equal to direct factory construction"
+      },
+      {
+        "id": "beyond_end",
+        "input": "outer24",
+        "offset": 22,
+        "size": 4,
+        "expected_class": "null before lastType is established"
+      },
+      {
+        "id": "whole_union",
+        "input": "union8{uint8,uint4}",
+        "offset": 0,
+        "size": 8,
+        "expected_class": "original union8 identity; exact-size check precedes union handling"
+      },
+      {
+        "id": "partial_union",
+        "input": "union8",
+        "offset": 1,
+        "size": 4,
+        "expected_class": "canonical PartialUnion(union8,1,4), equal to direct factory construction"
+      },
+      {
+        "id": "whole_enum",
+        "input": "unsigned enum8",
+        "offset": 0,
+        "size": 8,
+        "expected_class": "original enum8 identity"
+      },
+      {
+        "id": "partial_enum",
+        "input": "unsigned enum8",
+        "offset": 2,
+        "size": 4,
+        "expected_class": "canonical PartialEnum(enum8,2,4), equal to direct factory construction"
+      },
+      {
+        "id": "whole_array",
+        "input": "uint4[3]",
+        "offset": 0,
+        "size": 12,
+        "expected_class": "original array identity"
+      },
+      {
+        "id": "array_element",
+        "input": "uint4[3]",
+        "offset": 4,
+        "size": 4,
+        "expected_class": "uint4 element identity using element aligned-size stride"
+      },
+      {
+        "id": "array_cross_stride",
+        "input": "uint4[3]",
+        "offset": 3,
+        "size": 2,
+        "expected_class": "canonical PartialStruct(array,3,2), equal to direct factory construction"
+      },
+      {
+        "id": "partialstruct_whole",
+        "input": "PartialStruct(inner8,0,6)",
+        "offset": 0,
+        "size": 6,
+        "expected_class": "original PartialStruct identity"
+      },
+      {
+        "id": "partialstruct_nested",
+        "input": "PartialStruct(inner8,0,6)",
+        "offset": 0,
+        "size": 4,
+        "expected_class": "uint4 identity through TypePartialStruct::getSubType"
+      },
+      {
+        "id": "partialstruct_cross",
+        "input": "PartialStruct(inner8,0,6)",
+        "offset": 2,
+        "size": 4,
+        "expected_class": "null because final lastType is TYPE_PARTIALSTRUCT, not TYPE_STRUCT/TYPE_ARRAY"
+      },
+      {
+        "id": "partialstruct_descent_null",
+        "input": "PartialStruct(inner8,0,2)",
+        "offset": 0,
+        "size": 1,
+        "subtype_probe_offset": 0,
+        "expected_class": "null after TypePartialStruct::getSubType first descends inner8 to uint4, observes that uint4 overruns the 2-byte partial, then overwrites ct with null on its next do/while iteration; the record also projects direct virtual subtype result and newOff"
+      },
+      {
+        "id": "odd3_array3",
+        "input": "factory uint3[3], exact piece offset=4 size=3",
+        "offset": 4,
+        "size": 3,
+        "expected_class": "runtime projection of the locked Ghidra metatype code, submeta/id, and named public flag predicates; element size/alignment/aligned-size; array total size/alignment/aligned-size; element count; anonymous name/displayName bits; repeated getTypeArray identity; exact element identity; and repeated getExactPiece identity. No numeric oracle result is assumed before execution."
+      },
+      {
+        "id": "typedef_preserve",
+        "input": "ordinary named typedef of anonymous noncore uint4; typedefImm points to uint4 but hasStripped is not set in locked Ghidra",
+        "array_count": 2,
+        "expected_class": "array element preserves typedef identity; differs from uint4[2]; repeated factory call aliases"
+      },
+      {
+        "id": "partialstruct_strip",
+        "input": "PartialStruct(outer24,0,12); size 12 forces stripped getBase through max_basetype_size=10 to undefined1[12]",
+        "array_count": 2,
+        "expected_class": "partial locked-Ghidra metatype code, submeta/id/name, named public flag predicates, and alignment/alignSize projected; array element is stripped fallback and array aliases direct fallback array"
+      },
+      {
+        "id": "typedef_partialstruct_strip",
+        "input": "ordinary typedef clone of PartialStruct(outer24,0,12); typedefImm points to original partial while clone retains HAS_STRIPPED and virtual stripped fallback",
+        "array_count": 2,
+        "expected_class": "typedef target aliases original partial, but array element is the clone's undefined1[12] stripped fallback rather than typedefImm/original partial"
+      },
+      {
+        "id": "pointerrel_strip",
+        "input": "ephemeral TypePointerRel made by the direct factory overload from pointer-to-inner8, direct uint4 pointee, byte offset 4; Rust calls get_type_pointer_rel_ephemeral(parent_pointer,ptr_to,off), not a manual flag construction or the older named/side-table helper",
+        "array_count": 2,
+        "expected_class": "relative-pointer locked-Ghidra metatype code, submeta/id, and the shared named public predicate subset are projected; hasStripped is true. Both comparands read the stripped plain uint4 pointer from the same relative-pointer object via getStripped/get_stripped_arc, then require the array element and direct stripped-element array to alias it."
+      },
+      {
+        "id": "explicit_align_struct",
+        "input": "named struct size6 explicit alignment1 with uint4@0,uint2@4",
+        "array_count": 3,
+        "expected_class": "runtime pre-setter stub snapshot, old-after and post layout/id/displayName, pre-vs-post identity, post-vs-factory lookup identity, prebuilt array/pointer/PartialStruct/incomplete-typedef dependency targets and cache repeats, pending typedef external/factory state, plus post-based array state/repeat identity; Ghidra mutates through the shared pointer while Rust controlled replacement preserves stale Arcs, the explicit TYPEFACTORY-ARC-IDENTITY-0001 residual"
+      },
+      {
+        "id": "explicit_align_union",
+        "input": "named union size4 explicit alignment1 with overlapping uint4/uint2",
+        "array_count": 3,
+        "expected_class": "runtime pre-setter stub snapshot, old-after and post layout/id/displayName, pre-vs-post identity, post-vs-factory lookup identity, prebuilt array/pointer/PartialUnion/incomplete-typedef dependency targets and cache repeats, pending typedef external/factory state, plus post-based array state/repeat identity; Rust uses symmetric set_union_fields_sized and retains the visible TYPEFACTORY-ARC-IDENTITY-0001 residual"
+      },
+      {
+        "id": "array_size1_needsres",
+        "input": "uint4 array count1",
+        "array_count": 1,
+        "expected_class": "inline TypeArray constructor needs_resolution bit, element identity, widths, anonymity, and repeat identity"
+      },
+      {
+        "id": "same_total_distinct_elements",
+        "input": "uint2[4] and uint4[2] with equal total raw width",
+        "expected_class": "distinct canonical arrays keyed by element pointer identity; each repeated call aliases its own array"
+      },
+      {
+        "id": "partialenum_strip",
+        "input": "PartialEnum(enum8,2,4)",
+        "array_count": 2,
+        "expected_class": "partial locked-Ghidra metatype code, submeta/id/name, named public flag predicates, and alignment/alignSize projected; array element is stripped unknown4 fallback"
+      },
+      {
+        "id": "partialunion_strip",
+        "input": "PartialUnion(union8,1,4)",
+        "array_count": 2,
+        "expected_class": "partial locked-Ghidra metatype code, submeta/id/name, named public flag predicates, and alignment/alignSize projected; array element is stripped unknown4 fallback"
+      },
+      {
+        "id": "negative_offset",
+        "input": "outer24",
+        "offset": -1,
+        "size": 4,
+        "expected_class": "runtime getExactPiece result, repeated identity, and direct PartialStruct(outer24,-1,4) identity"
+      },
+      {
+        "id": "zero_size_hole",
+        "input": "outer24",
+        "offset": 4,
+        "size": 0,
+        "expected_class": "runtime getExactPiece result, repeated identity, and direct zero-size PartialStruct(outer24,4,0) identity"
+      }
+    ],
+    "sha256": "8f0a1ccd222ba0a537c54c71186f213893c14630e99e1f502899fedb53a0db62"
+  },
+  "observation_schema": {
+    "format": "Thirty-two fixed-order UTF-8 lines with a final newline: twenty piece records, one piece_subtype record, six array_policy records, three array_layout records, one array_ctor record, and one array_identity record",
+    "record_kinds_in_manifest_order": [
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece",
+      "piece_subtype",
+      "array_layout",
+      "array_policy",
+      "array_policy",
+      "array_policy",
+      "array_policy",
+      "array_layout",
+      "array_layout",
+      "array_ctor",
+      "array_identity",
+      "array_policy",
+      "array_policy",
+      "piece",
+      "piece"
+    ],
+    "piece_record": "case id; input/result structural shape and size; offset/size; original-input identity; expected identity; repeated-call identity; direct getTypePartial* identity where applicable",
+    "piece_subtype_record": "all piece fields plus a direct virtual getSubType probe's input offset, returned structural shape, and output newOff; this exposes overwrite-to-null inside TypePartialStruct's do/while",
+    "array_policy_record": "input locked-Ghidra metatype integer code (the *_ghidra_metatype_code representation mapping, not a Rust raw discriminant), submeta/id, named public flag predicates, name/displayName/alignment/alignSize/stripped state; actual/expected element identity; expected/contrast/repeat array identities; array widths and anonymity",
+    "array_layout_record": "element locked-Ghidra metatype integer code (the *_ghidra_metatype_code representation mapping), submeta/id, and named public flag predicates; raw/aligned element and array widths; alignments; element count; name/displayName emptiness; element and repeated factory identity; odd3 additionally records exact-piece identity. Explicit composite records also include the pre-setter snapshot; old-after and returned-post size/alignment/alignSize/incomplete/id/displayName; old==post and post==factory lookup; prebuilt array/pointer/partial/incomplete-typedef dependency targets and repeat-cache identities; pending typedef external/factory state; and the repeated array built from post.",
+    "identity_policy": "Pointer/Arc addresses are not serialized. same_input, same_expected, repeat_same, direct_same, factory_repeat_same, piece_expected_same, and piece_repeat_same are raw identity comparisons within one process."
+  },
+  "comparison_policy": {
+    "record_identity": "record kind plus case id; both output order and manifest case order must be exact",
+    "field_policy": "record kind, field names, field order, and every value must be byte-identical except for the exact case.field set below; missing, extra, or unexpectedly equal listed differences fail closed",
+    "require_exact_difference_set": true,
+    "allowed_value_differences": [
+      "explicit_align_struct.pre_same_post",
+      "explicit_align_struct.old_after_size",
+      "explicit_align_struct.old_after_align_size",
+      "explicit_align_struct.old_after_incomplete",
+      "explicit_align_struct.dep_array_element_same_post",
+      "explicit_align_struct.dep_array_element_size",
+      "explicit_align_struct.dep_array_element_align_size",
+      "explicit_align_struct.dep_array_element_incomplete",
+      "explicit_align_struct.dep_array_old_repeat_same",
+      "explicit_align_struct.dep_pointer_target_same_post",
+      "explicit_align_struct.dep_pointer_target_size",
+      "explicit_align_struct.dep_pointer_target_align_size",
+      "explicit_align_struct.dep_pointer_target_incomplete",
+      "explicit_align_struct.dep_pointer_post_same",
+      "explicit_align_struct.dep_partial_parent_same_post",
+      "explicit_align_struct.dep_partial_parent_size",
+      "explicit_align_struct.dep_partial_parent_align_size",
+      "explicit_align_struct.dep_partial_parent_incomplete",
+      "explicit_align_struct.dep_partial_post_same",
+      "explicit_align_struct.dep_typedef_target_same_post",
+      "explicit_align_struct.dep_typedef_target_size",
+      "explicit_align_struct.dep_typedef_target_align_size",
+      "explicit_align_struct.dep_typedef_target_incomplete",
+      "explicit_align_union.pre_same_post",
+      "explicit_align_union.old_after_size",
+      "explicit_align_union.old_after_align_size",
+      "explicit_align_union.old_after_incomplete",
+      "explicit_align_union.dep_array_element_same_post",
+      "explicit_align_union.dep_array_element_size",
+      "explicit_align_union.dep_array_element_align_size",
+      "explicit_align_union.dep_array_element_incomplete",
+      "explicit_align_union.dep_array_old_repeat_same",
+      "explicit_align_union.dep_pointer_target_same_post",
+      "explicit_align_union.dep_pointer_target_size",
+      "explicit_align_union.dep_pointer_target_align_size",
+      "explicit_align_union.dep_pointer_target_incomplete",
+      "explicit_align_union.dep_pointer_post_same",
+      "explicit_align_union.dep_partial_parent_same_post",
+      "explicit_align_union.dep_partial_parent_size",
+      "explicit_align_union.dep_partial_parent_align_size",
+      "explicit_align_union.dep_partial_parent_incomplete",
+      "explicit_align_union.dep_partial_post_same",
+      "explicit_align_union.dep_typedef_target_same_post",
+      "explicit_align_union.dep_typedef_target_size",
+      "explicit_align_union.dep_typedef_target_align_size",
+      "explicit_align_union.dep_typedef_target_incomplete"
+    ],
+    "runtime_evidence": "The archive-built bilateral capture observed exactly this 46-key set: 23 fields in explicit_align_struct and the corresponding 23 in explicit_align_union. Any future missing, extra, or unexpectedly equal difference fails closed and requires metadata review; the set is never widened automatically.",
+    "observed_difference_count": 46,
+    "observed_differing_cases": [
+      "explicit_align_struct",
+      "explicit_align_union"
+    ]
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "getExactPiece returns a canonical factory-owned Datatype pointer or null. Every return alias is projected against the input, expected nested/base object, a second identical invocation, and direct getTypePartial* construction where that API is the creation path.",
+    "loop_bounds_and_order": "The do/while descends one getSubType level per iteration after checking range, exact size, and union in that order. The fixture distinguishes one/two-level descent, scalar containment, child overflow, holes, outer overflow, negative/zero boundaries, scalar exact-size before negative-offset descent, TypePartialStruct descent, and the partial do/while's successful descent followed by ct=null overwrite. Records are emitted in the manifest's exact 32-case order.",
+    "counters_and_accumulators": "curOff begins at the requested offset and is rewritten by each getSubType; lastType/lastOff are assigned only after the current range and exact-size guards. Each invocation resets all three locals; consecutive calls prove no hidden per-call accumulator state.",
+    "sort_and_comparison_keys": "Factory canonicalization keys include datatype submeta/size/dependencies; partial identities additionally depend on parent identity, offset, and size. Array identity depends on element identity and total size. The fixture emits direct/repeat identity rather than relying on names or allocation order."
+  },
+  "coverage": {
+    "locked_source_audit": {
+      "status": "UNTESTED",
+      "detail": "The complete locked target bodies listed under oracle.stable_functions were read from e40ed130, including both composite setter paths added to bound the TypeField.ident residual. The fixture also calls bootstrap, construction, lookup, accessor, and predicate support APIs that are enumerated by analysis_options.entrypoints but not exhaustively listed as stable_functions; no full call-closure source-audit MATCH or bilateral behavior result is claimed."
+    },
+    "ghidra_get_exact_piece_runtime": {
+      "status": "MISMATCH",
+      "detail": "The locked archive-built C++ fixture emitted 32 schema-valid records with stdout SHA-256 e1f3fd0019577043a1b41430c208f0717c4805aa70cfae2385c1d6351fad91f6. The frozen Rust capture emitted the same schema with SHA-256 fff1c64ea052421e598bf29caa7ba0875c69242191ac372c5d220a67a17279e2 and the exact 46-field Arc-identity MISMATCH declared above."
+    },
+    "odd3_oracle_layout": {
+      "status": "UNTESTED",
+      "detail": "The fixture supplies an explicit size-3 alignment-map input and serializes the resulting production Datatype values. No element or array alignment/width number is claimed until the locked C++ executable runs."
+    },
+    "rugra_get_exact_piece_api": {
+      "status": "UNTESTED",
+      "source_gap_status": "BASELINE_MISSING",
+      "detail": "Baseline TypeFactory exposes no get_exact_piece, while existing Rust consumers use local fallback walks. Those fallbacks are explicitly noncanonical and are not accepted as the comparand. Frozen series-D candidate 5f10b94 exposes the direct owner API with get_sub_type_arc and the fixture calls that archived code, but no bilateral result is claimed until runtime."
+    },
+    "rugra_series_a_d_source_lineage": {
+      "status": "MISMATCH",
+      "detail": "The exact linear A-D commits, final D tree, five critical blobs, and five file SHA-256 values are pinned. Series A supplies definition/layout/typedef state, B array/partial policy, C pointer/PointerRel state, and D exact-piece traversal. The bilateral run yielded 30 byte-identical records and two Arc-identity residual records; the complete A-D or whole-module closure is not claimed."
+    },
+    "rugra_typearray_width_and_names": {
+      "status": "UNTESTED",
+      "source_gap_status": "BASELINE_MISMATCH",
+      "detail": "Baseline 8c223a9 typefactory.rs get_array computes array_of.get_size()*num_elements and inserts a synthetic name, while locked TypeArray uses n*arrayof->getAlignSize() and remains anonymous. The candidate fixture calls the real production get_display_name accessor and odd3_array3 exposes size/alignment/aligned-width/name/displayName without predeclaring the locked numeric result."
+    },
+    "whole_nested_partial_cross_hole_union_enum_array_partialstruct": {
+      "status": "UNTESTED",
+      "detail": "All required cells and repeat/direct identity predicates exist on both sides; runtime comparison awaits the production API and approved oracle build."
+    },
+    "ordinary_typedef_array_policy": {
+      "status": "UNTESTED",
+      "source_gap_status": "BASELINE_MISMATCH",
+      "detail": "The fixture requires an ordinary typedef with typedefImm but no HAS_STRIPPED bit to remain the canonical array element. Baseline typedef tracking and get_array behavior do not yet prove the locked pointer-identity policy."
+    },
+    "stripped_partial_typedef_partial_pointerrel_enum_union_arrays": {
+      "status": "UNTESTED",
+      "source_gap_status": "BASELINE_MISMATCH",
+      "detail": "PartialStruct, a typedef clone of PartialStruct, ephemeral PointerRel, PartialEnum, and PartialUnion all exercise virtual stripped-element dispatch. In particular the typedef-of-PartialStruct must use its cloned stripped pointer, not typedefImm. Baseline production behavior is not yet a bilateral MATCH."
+    },
+    "explicit_composite_alignment_and_array_identity": {
+      "status": "MISMATCH",
+      "source_gap_status": "CANDIDATE_MISMATCH",
+      "detail": "Explicit struct/union alignments, setter pre/post/factory identities, n=1 needs_resolution, and same-total/different-element canonical identity are projected. array_size1_needsres and same_total_distinct_elements are byte-identical; each explicit composite record has exactly 23 observed stale-Arc fields under TYPEFACTORY-ARC-IDENTITY-0001."
+    },
+    "typefactory_arc_identity": {
+      "status": "MISMATCH",
+      "source_gap_status": "CANDIDATE_MISMATCH",
+      "residual_id": "TYPEFACTORY-ARC-IDENTITY-0001",
+      "detail": "Ghidra setFields mutates the original TypeStruct/TypeUnion pointer, so pre==post and prebuilt array, pointer, partial, and pending incomplete-typedef targets all see the completed parent. Rugra's controlled Arc replacement leaves the externally retained pre handle and all dependencies that captured it stale, while post==factory.find_by_name remains true. Runtime observed exactly the 46 allow-listed case.field differences and no others; nothing is normalized away."
+    },
+    "typefield_ident_representation": {
+      "status": "UNTESTED",
+      "source_gap_status": "CANDIDATE_MISMATCH",
+      "residual_id": "TYPEFIELD-IDENT-REPRESENTATION-0001",
+      "detail": "Ghidra TypeField stores ident and the C++ fixture supplies deterministic declaration-order values; Rust TypeField has no ident member. The locked bounded call closure copied/read for this fixture never consults ident, but strict whole-object same-input equivalence is therefore not established. This residual remains visible in architecture.factory_type_construction and analysis_options.normalization and prevents any whole-TypeStruct or L3 claim."
+    },
+    "incomplete_typedef_resolution_closure": {
+      "status": "UNTESTED",
+      "detail": "The bounded fixture intentionally does not call private TypeFactory::resolveIncompleteTypedefs. It observes a pending incomplete typedef and its target before/after the public composite setter only. Resolution through the real public decodeStruct/decodeUnion call closure is outside this fixture and no direct-private or public/private preprocessor hack is used."
+    },
+    "partialenum_stored_metatype": {
+      "status": "UNTESTED",
+      "detail": "Locked TypePartialEnum delegates to TypeEnum(sz,TYPE_PARTIALENUM), whose constructor stores TYPE_UINT. The current production candidate source also stores Uint and partialenum_strip projects the explicit locked-Ghidra metatype code; no difference is allow-listed, but bilateral runtime evidence remains pending."
+    },
+    "negative_offsets_zero_sizes_and_overflow": {
+      "status": "UNTESTED",
+      "detail": "Negative offsets on both a composite and an exact-size scalar plus a zero-size case are present in the 32-record matrix; beyond_end covers a positive overflow. Their runtime outputs are unclaimed until the locked oracle is run. Arithmetic-overflow extremes remain outside this bounded fixture."
+    },
+    "getexactpiece_api_domain": {
+      "status": "UNTESTED",
+      "residual_id": "TYPEFACTORY-EXACTPIECE-0001",
+      "detail": "The bilateral matrix is intentionally limited to Ghidra int4 offsets and non-negative int4 sizes that are also representable by Rust i64/usize. Negative Ghidra sizes, Rust-only offsets outside int4, and usize sizes outside int4 are not coerced or claimed; whole-signature equivalence is therefore UNTESTED."
+    },
+    "pointer_truncate_virtual_descent": {
+      "status": "UNTESTED",
+      "residual_id": "TYPE-0001",
+      "detail": "Locked TypePointer::getSubType can return its optional truncate component. Frozen Rugra TypePointer has no truncate field, and this fixture constructs no pointer carrying one. The branch remains a structural whole-function MISMATCH/UNTESTED residual."
+    },
+    "typecode_factory_virtual_descent": {
+      "status": "UNTESTED",
+      "residual_id": "TYPE-0001",
+      "detail": "Locked TypeCode::getSubType can traverse prototype state through its attached TypeFactory. Frozen Rust TypeCode does not retain the same factory attachment, and the 32-case graph contains no TypeCode. This whole-function branch remains MISMATCH/UNTESTED."
+    },
+    "spacebase_virtual_descent": {
+      "status": "UNTESTED",
+      "residual_ids": [
+        "TYPE-0001",
+        "DATATYPE-SPACEBASE-SPACEID-0001",
+        "ARCH-0001",
+        "ADDRESS-0001",
+        "DATABASE-0001"
+      ],
+      "detail": "Frozen get_sub_type_arc can call the currently modeled Spacebase symbol lookup, but locked byte/address-unit conversion, resolveConstant, scope query, space identity, and miss-to-unknown1 fallback are not fully representable. No Spacebase case appears in this fixture, so the branch remains MISMATCH/UNTESTED."
+    },
+    "production_consumer_closure": {
+      "status": "UNTESTED",
+      "residual_id": "TYPE-0001",
+      "detail": "Frozen TypeFactory::get_exact_piece has zero production callers. variable.rs, database.rs, funcdata.rs, and ruleaction.rs still use local fallbacks that can lose partial results or canonical Arc identity. This direct fixture does not exercise those consumers or prove an end-to-end pipeline repair."
+    },
+    "typearray_compare_full_function": {
+      "status": "UNTESTED",
+      "detail": "The matrix observes factory identity for selected arrays but does not directly project TypeArray::compare level cutoffs, id tie-break behavior, or recursive element comparison branches. No whole-TypeArray::compare MATCH is claimed."
+    },
+    "findadd_full_function": {
+      "status": "UNTESTED",
+      "detail": "Selected repeated/direct calls project successful canonical aliases, but findAdd named hits, incompatible-name conflicts, id==0 handling, and the complete partial parent/offset/descending-size ordering key are not bilaterally projected. Approval is bounded to the listed getExactPiece/getTypeArray/partial-canonical observations, not all of findAdd."
+    }
+  },
+  "rugra_candidate": {
+    "commit": "5f10b94f4bf0ad77ed86f164467b3b0ea201aa10",
+    "tree": "638c49a914eb4dea40f708225ace27f1e5039420",
+    "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
+    "critical_git_blobs": {
+      "src/type_system/datatype.rs": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+      "src/type_system/typefactory.rs": "93b94c83a3c33fc218170cc559c266fbf4ab4f22",
+      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+    }
+  },
+  "comparand": {
+    "mode": "A fresh verified git archive of the locked Ghidra cpp tree plus a complete path/blob/mode-verified git archive of rugra_candidate.commit; both manifests reject symlinks/gitlinks and unsafe paths before extraction. candidate/ghidra points to the same per-run locked source archive. The standalone Rust fixture is copied outside the Cargo snapshot and linked only against regular non-symlink artifacts confined to the candidate-scoped target and reported by the archive's single Cargo invocation. cargo/rustc/g++ executable bytes and version-output fingerprints are pinned, and all Cargo config discovery locations are required absent.",
+    "cpp_fixture_sha256": "697d2ccf16dfef6ceebeedc1b48e37c45b03c20846ba7e93a81d358c6e247b42",
+    "rust_fixture_sha256": "b31c3beaeba83dcdf57fc4cd22430fdc5ea92b9f35a3402a663816d1d90638c0",
+    "runner_sha256": "d5552e06ca50a2f8ae01679a0a66d31e584f4e50a9dc6bcecf88c2a1a9f8da04",
+    "datatype_rs_sha256": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
+    "typefactory_rs_sha256": "a2e61e771a5631b7ce7b164be24d3ed831c28b3ae59fd2e6cd6036b18ddff89a",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "expected_ghidra_stdout_sha256": "e1f3fd0019577043a1b41430c208f0717c4805aa70cfae2385c1d6351fad91f6",
+    "expected_rugra_stdout_sha256": "fff1c64ea052421e598bf29caa7ba0875c69242191ac372c5d220a67a17279e2",
+    "observed_output_diff_sha256": "649deae44e6bc92ffc353bbbe2f00caaedf95ff36ecc11501660769c8d39cc5e"
+  },
+  "build": {
+    "ghidra": "The runner verifies e40ed130/tag/cpp-tree/Makefile identities, preflights the exact recursive tree manifest to reject non-regular/unsafe entries, git-archives that cpp subtree into the unique run directory, and independently checks every archived regular file's mode and Git blob oid plus the complete path set before a fresh /usr/bin/g++ -std=c++11 -O2 libdecomp build. The g++ executable and --version output are pinned by SHA-256. No live-tree .o/.a file is consumed; compiler TMPDIR and run directory live below /home/wirs/.cache.",
+    "rugra": "git archive materializes the frozen rugra_candidate commit only after its complete recursive tree manifest rejects symlinks/gitlinks/unsafe paths; every archived path, executable mode, and Git blob oid is then checked with no missing/extra file. Cargo.toml/Cargo.lock/build.rs and both critical Rust sources receive explicit Git-blob and SHA-256 pins. candidate/ghidra links to the same verified per-run locked Ghidra archive used by the C++ oracle, never the live worktree. Only the Cargo subprocess is flock-covered. CARGO_INCREMENTAL=0 and CARGO_TARGET_DIR is a fresh run-private directory below /home/wirs/.cache/rugra-typefactory-exactpiece-target/run.XXXXXX, so JSON parsing and standalone rustc cannot race another invocation replacing a shared rlib or OUT_DIR after flock release. Cargo runs under env -i with explicit pinned RUSTC/CXX and a regular CARGO_HOME used only for the offline registry/cache; config/config.toml is rejected in CARGO_HOME and every candidate working-directory ancestor, including the candidate root. The exact compiler-artifact target named rugra with crate_types containing rlib and the same-package build-script OUT_DIR/librugra_sleigh.a are parsed from this invocation's JSON messages. Cargo 1.97 reports the root package artifact at exactly debug/librugra.rlib; debug/deps remains the regular non-symlink dependency search directory, and the native archive must remain under debug/build/.../out. All are confined to the run-private target. Standalone pinned rustc runs outside the lock. make/ar/linker/system libraries are not separately pinned, as disclosed by host_toolchain.unfingerprinted_host_closure; no fully-hermetic claim is made.",
+    "runner_modes": "--ghidra-only requires UTF-8/final-newline/count/kind/field/case-order validity before emitting the locked output and observed SHA for pinning. Normal mode requires both pinned stdout fingerprints, the pinned stable unified-diff fingerprint, and the exact declared 46-key case.field difference set. Hash-addressed raw captures are atomically published with completion markers; bilateral captures receive an atomic VERIFIED marker only after the strict comparator succeeds.",
+    "expected_stdout_lines": 32
+  }
+}
