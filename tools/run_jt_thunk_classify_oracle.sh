@@ -1238,7 +1238,7 @@ else:
     require("recorded validation status", validation["status"], "PASS")
     require("recorded failure stage", repr(validation["failure_stage"]), "None")
     require("recorded cargo result", validation["cargo_result"],
-            "31 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out")
+            "35 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out")
     require("recorded evidence retention", validation["run_local_artifacts_retained"], True)
 
 candidate = metadata["candidate_evidence"]
@@ -1698,7 +1698,7 @@ fi
 focused_result=$(/usr/bin/sed -n '1p' "$focused_results")
 doc_sync_result=$(/usr/bin/sed -n '2p' "$focused_results")
 case "$focused_result" in
-  'test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out;'*) ;;
+  'test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out;'*) ;;
   *) echo "unexpected focused jumptable result: $focused_result" >&2; exit 1 ;;
 esac
 case "$doc_sync_result" in

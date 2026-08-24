@@ -73,10 +73,13 @@ impl JumpModel for FixtureModel {
         _indop: &Arc<RwLock<PcodeOp>>,
         _matchsize: u32,
         _maxtablesize: u32,
-    ) -> bool {
+    ) -> Result<bool, JumpTableRecoveryError> {
+        // C++ double cannot throw from recoverModel; the Result channel is
+        // JUMPTABLE-PIPELINE-0001's typed LowlevelError carrier and stays
+        // silent here, matching the oracle double's plain `return true`.
         self.state.recover_calls.fetch_add(1, Ordering::Relaxed);
         self.state.events.lock().unwrap().push("recover");
-        true
+        Ok(true)
     }
 
     fn build_addresses(
@@ -86,7 +89,7 @@ impl JumpModel for FixtureModel {
         addresstable: &mut Vec<Address>,
         loadpoints: Option<&mut Vec<LoadTable>>,
         loadcounts: Option<&mut Vec<i32>>,
-    ) {
+    ) -> Result<(), JumpTableRecoveryError> {
         self.state.build_calls.fetch_add(1, Ordering::Relaxed);
         self.state.events.lock().unwrap().push("build");
         *addresstable = self.build_targets.clone();
@@ -107,6 +110,7 @@ impl JumpModel for FixtureModel {
             loadcounts.extend(std::iter::repeat_n(count, self.build_targets.len()));
             *self.state.observed_loadcounts.lock().unwrap() = loadcounts.clone();
         }
+        Ok(())
     }
 
     fn find_unnormalized(&mut self, _maxaddsub: u32, _maxleftright: u32, _maxext: u32) {}
