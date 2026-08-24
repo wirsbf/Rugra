@@ -731,6 +731,48 @@ pub fn mark_known_no_return_function(fd: &mut Funcdata, symbol_name: &str) -> bo
     true
 }
 
+// RUGRA-GLUE: the analyzer's program-database marking + Ghidra's
+// FlowInfo::queryCall queryFunction boundary (flow.cc:660) in one
+// driver-owned table; Rugra's Funcdata owns no per-callee Funcdata at flow
+// time, so the driver hands the callee `funcp` slices to
+// rugra::flow::follow_flow_with_callee_protos.
+/// Flow-visible callee table (FLOW-NORETURN-DATA-0001 segment (c)):
+/// iterate the driver-seeded symbol table and, for every symbol matching
+/// the Known no-return list, build the minimal callee FuncProto — the
+/// `funcp` slice `queryFunction` returns for the matched function: the
+/// default proto shape (symbol name + void return, all flags clear) with
+/// the analyzer's `setNoReturn(true)` DB attribute set. The flow-time
+/// consumer (`FlowInfo::query_call`'s `copy_flow_effects`, flow.cc:663-664)
+/// reads only the `is_inline|no_return` flag subset, so the void return and
+/// empty parameter list carry no additional semantics; addresses never
+/// called remain inert entries (Ghidra's analyzer equally marks functions
+/// that some decompilation never queries).
+pub fn known_no_return_callee_protos(
+    symbol_table: &HashMap<u64, String>,
+) -> BTreeMap<u64, rugra::fspec::FuncProto> {
+    symbol_table
+        .iter()
+        .filter(|(_, name)| is_known_no_return(name))
+        .map(|(&address, name)| {
+            // The same default-proto construction Funcdata::new gives the
+            // decompiled function itself (funcdata.rs:525-531) — Ghidra's
+            // FuncCallSpecs ctor "clones a default" for fresh specs.
+            let mut proto = rugra::fspec::FuncProto::new(
+                name.clone(),
+                std::sync::Arc::new(rugra::type_system::datatype::Datatype::Void(
+                    rugra::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        rugra::type_system::datatype::TypeMetatype::Void,
+                    ),
+                )),
+            );
+            proto.set_no_return(true);
+            (address, proto)
+        })
+        .collect()
+}
+
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
 // signature proto on the call site, (3) refresh the CALL op's typed fspec
@@ -1953,8 +1995,32 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .filter(|(address, _)| *address == 0x17520)
         .collect();
 
-    rugra::flow::follow_flow(&mut fd, &mut sleigh, Address::new(target.vaddr), u64::MAX)
-        .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
+    // FLOW-NORETURN-DATA-0001 segment (c): hand the flow-visible callee
+    // table to flow. In Ghidra the "Non-Returning Functions - Known"
+    // analyzer has already marked every matched function's DB attribute, and
+    // queryCall (flow.cc:656-672) resolves those functions during flow —
+    // copying their flow effects onto call sites (flow.cc:663-664) so
+    // checkForFlowModification (flow.cc:636-651) inserts the noreturn
+    // artificialHalt and emits the "Subroutine does not return" warning.
+    // Rugra's Funcdata owns no per-callee Funcdata at flow time, so the
+    // driver passes the callee `funcp` slices through the extended entry
+    // point (empty table = the old behavior).
+    let callee_protos = known_no_return_callee_protos(&fd.symbol_table);
+    if !callee_protos.is_empty() {
+        eprintln!(
+            "[PREPASS] {} flow callee table: {} known no-return callees",
+            target.name,
+            callee_protos.len()
+        );
+    }
+    rugra::flow::follow_flow_with_callee_protos(
+        &mut fd,
+        &mut sleigh,
+        Address::new(target.vaddr),
+        u64::MAX,
+        &callee_protos,
+    )
+    .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
     eprintln!(
         "[STEP] {} flow done {:?} raw_ops={} bblocks={}",
         target.name,
@@ -3653,5 +3719,36 @@ mod flow_noreturn_data_tests {
         assert!(mark_known_no_return_function(&mut fd, "exit"));
         assert!(!mark_known_no_return_function(&mut fd, "glob_word"));
         assert!(fd.funcp.is_no_return());
+    }
+
+    /// Flow-visible callee table (segment (c)): only Known-list members
+    /// enter the table, keyed by symbol address; each entry is the minimal
+    /// callee funcp slice — no_return set, everything else default (void
+    /// return, no model, not inline) so queryCall's copy_flow_effects
+    /// (flow.cc:663-664) reads exactly the analyzer's flag and nothing else.
+    #[test]
+    fn callee_table_contains_only_members_with_minimal_slice() {
+        let mut symbols: HashMap<u64, String> = HashMap::new();
+        symbols.insert(0x2380, "__stack_chk_fail".to_string());
+        symbols.insert(0x2400, "exit".to_string());
+        symbols.insert(0x2410, "exits".to_string()); // near-miss: excluded
+        symbols.insert(0x2420, "Exit".to_string()); // case: excluded
+        symbols.insert(0x2430, "fgets".to_string()); // ordinary import
+        symbols.insert(0x2440, "_longjmp".to_string()); // member via strip
+        let table = known_no_return_callee_protos(&symbols);
+        assert_eq!(table.len(), 3);
+        for &address in &[0x2380u64, 0x2400, 0x2440] {
+            let proto = &table[&address];
+            assert!(proto.is_no_return(), "entry 0x{address:x} must be no-return");
+            assert!(!proto.is_inline());
+            assert!(!proto.has_model());
+            assert_eq!(proto.num_params(), 0);
+        }
+        // Names keep the raw symbol form (queryCall's set_funcdata uses the
+        // symbol-table name for display; the proto name is the DB slice).
+        assert_eq!(table[&0x2380].name, "__stack_chk_fail");
+        assert_eq!(table[&0x2440].name, "_longjmp");
+        // Empty symbol table: empty table (old follow_flow behavior).
+        assert!(known_no_return_callee_protos(&HashMap::new()).is_empty());
     }
 }
