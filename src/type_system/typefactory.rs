@@ -12,6 +12,12 @@ use crate::AddressSpace;
 use crate::marshal::{Encoder, Decoder};
 use crate::type_system::datatype::*;
 
+/// Lexicographic projection of the concrete dependency keys covered by this
+/// slice: atomic types, arrays, and partial container types. Pointer-specific
+/// identity remains on the registered pointer-tree residual until its own
+/// foundation slice.
+type TypeTreeKey = (u8, usize, i64, Reverse<usize>, u64);
+
 /// Managed container for all Datatype objects
 pub struct TypeFactory {
     /// All types managed by this factory, keyed by their unique name
@@ -20,11 +26,10 @@ pub struct TypeFactory {
     /// Cache for core types (void, int, etc.) for quick access
     core_types: BTreeMap<String, Arc<Datatype>>,
 
-    /// Structural registry for atomic types. Ghidra's `DatatypeSet tree`
-    /// orders `TypeBase` by sub-metatype, descending size, then id.  Keeping
-    /// this separate from the name cross-reference lets unnamed id-zero types
-    /// participate in factory enumeration and `clearNoncore`.
-    base_type_tree: RwLock<BTreeMap<(u8, Reverse<usize>, u64), Arc<Datatype>>>,
+    /// Structural registry for factory-owned types. The key preserves the
+    /// concrete array/partial dependency identity before descending size and
+    /// id, matching the covered `DatatypeCompare` branches.
+    base_type_tree: RwLock<BTreeMap<TypeTreeKey, Arc<Datatype>>>,
 
     /// Fast preferred-core lookup corresponding to Ghidra's `typecache`.
     base_cache: RwLock<BTreeMap<(usize, TypeMetatype), Arc<Datatype>>>,
@@ -280,11 +285,7 @@ impl TypeFactory {
         let name = dt.get_name().to_string();
         self.core_types.insert(name.clone(), dt.clone());
         self.types.insert(name, dt.clone());
-        let tree_key = (
-            Self::submeta_of(&dt),
-            Reverse(dt.get_size()),
-            dt.get_id(),
-        );
+        let tree_key = Self::type_tree_key(&dt);
         let tree = self
             .base_type_tree
             .get_mut()
@@ -326,6 +327,33 @@ impl TypeFactory {
     /// constructor ports record.
     fn submeta_of(datatype: &Datatype) -> u8 {
         datatype.get_submeta() as i32 as u8
+    }
+
+    // RUGRA-GLUE: Tuple projection of DatatypeCompare::operator()
+    // (type.hh:306) for the array and partial dependency variants covered by
+    // this slice. Other variants retain the pre-existing base key until their
+    // concrete registry slice is implemented.
+    fn type_tree_key(datatype: &Datatype) -> TypeTreeKey {
+        let (dependency, offset) = match datatype {
+            Datatype::Array(array) => (Arc::as_ptr(&array.array_of) as usize, 0),
+            Datatype::PartialStruct(partial) => {
+                (Arc::as_ptr(&partial.container) as usize, partial.offset)
+            }
+            Datatype::PartialEnum(partial) => {
+                (Arc::as_ptr(&partial.parent) as usize, partial.offset)
+            }
+            Datatype::PartialUnion(partial) => {
+                (Arc::as_ptr(&partial.container) as usize, partial.offset)
+            }
+            _ => (0, 0),
+        };
+        (
+            Self::submeta_of(datatype),
+            dependency,
+            offset,
+            Reverse(datatype.get_size()),
+            datatype.get_id(),
+        )
     }
 
     // Ghidra: type.cc:3366 TypeFactory::findByName
@@ -375,7 +403,7 @@ impl TypeFactory {
         // Ghidra constructs an unnamed TypeBase and canonicalizes it through
         // findAdd when no preferred core entry exists. Its structural key is
         // the plain base sub-metatype, descending size, then id zero.
-        let tree_key = (Self::base_submeta(m), Reverse(size), 0);
+        let tree_key = (Self::base_submeta(m), 0, 0, Reverse(size), 0);
         let tree = self
             .base_type_tree
             .read()
@@ -463,31 +491,9 @@ impl TypeFactory {
             let element = element.expect(
                 "getBase array conversion requires a cached 1-byte unknown (type.cc:3654)",
             );
-            // getTypeArray strips a typedef layer off the element first
-            // (type.cc:3902-3905).
-            let element = if element.get_flags() & type_flags::HAS_STRIPPED != 0 {
-                match self.typedefs.get(element.get_name()) {
-                    Some(target) => target.clone(),
-                    None => element,
-                }
-            } else {
-                element
-            };
-            // TypeArray ctor (type.hh:937-944): size = n * arrayof->getAlignSize(),
-            // alignment inherited, NO inheritable flags, needs_resolution for n==1.
-            let total = size * element.get_align_size();
-            let mut base = TypeBase::new(String::new(), total, TypeMetatype::Array);
-            if size == 1 {
-                base.flags |= type_flags::NEEDS_RESOLUTION;
-            }
-            return self.find_add(
-                Datatype::Array(TypeArray {
-                    base,
-                    array_of: element,
-                    num_elements: size,
-                }),
-                true,
-            );
+            // getBase delegates to getTypeArray, including virtual stripping,
+            // aligned stride, inherited alignment, and canonical identity.
+            return self.get_array_result(element, size);
         }
         self.find_add(Datatype::Base(TypeBase::new(String::new(), size, m)), true)
     }
@@ -562,8 +568,9 @@ impl TypeFactory {
     ///
     /// - Named candidate with id 0 raises
     ///   `"Datatype must have a valid id: {name}"` (type.cc:3419).
-    /// - A name+id hit whose `compareDependency` differs (sub-metatype or
-    ///   size; type.cc:227-234) raises
+    /// - A name+id hit whose `compareDependency` differs (base sub-metatype /
+    ///   size at type.cc:227-234; concrete element/container identity for the
+    ///   B variants below) raises
     ///   `"Trying to alter definition of type: {name}"` (type.cc:3423); an
     ///   equal definition returns the EXISTING factory object (this is the
     ///   aliasing point `setCoreType` relies on when promoting).
@@ -582,13 +589,9 @@ impl TypeFactory {
     /// tree slot already holding the same key raises
     /// `"Shared type id: {id:x}"` (type.cc:3393-3403).
     ///
-    /// Rugra note: `Datatype::compareDependency` on containers walks
-    /// components/element pointers (type.cc:1225 TypeArray uses the element
-    /// POINTER); the tree key here can only carry (submeta, size, id), so
-    /// container candidates are probed/inserted under an additional element
-    /// Arc-identity check, and deep structural container ordering remains the
-    /// registered TYPE-0001 residual. Atomic candidates match the oracle
-    /// exactly.
+    /// This slice projects the complete dependency key for TypeArray and the
+    /// three partial variants. Other container comparators remain on the
+    /// registered TYPE-0001 residual.
     fn find_add(
         &mut self,
         mut candidate: Datatype,
@@ -596,8 +599,6 @@ impl TypeFactory {
     ) -> Result<Arc<Datatype>, String> {
         let name = candidate.get_name().to_string();
         let candidate_id = candidate.get_id();
-        let candidate_submeta = Self::submeta_of(&candidate);
-        let candidate_size = candidate.get_size();
         if !name.is_empty() {
             // type.cc:3417-3425
             if candidate_id == 0 {
@@ -605,10 +606,24 @@ impl TypeFactory {
             }
             if let Some(existing) = self.types.get(&name) {
                 if existing.get_id() == candidate_id {
-                    // compareDependency: submeta, then size (type.cc:227).
-                    if existing.get_submeta() as i32 != candidate_submeta as i32
-                        || existing.get_size() != candidate_size
-                    {
+                    // Series B exposes concrete dependency identity only for
+                    // arrays and partial container types. Keep the series-A
+                    // submeta/size projection for every other variant until
+                    // its own registry slice is installed (notably pointers
+                    // in series C).
+                    let dependency_mismatch = match (existing.as_ref(), &candidate) {
+                        (Datatype::Array(_), Datatype::Array(_))
+                        | (Datatype::PartialStruct(_), Datatype::PartialStruct(_))
+                        | (Datatype::PartialEnum(_), Datatype::PartialEnum(_))
+                        | (Datatype::PartialUnion(_), Datatype::PartialUnion(_)) => {
+                            existing.compare_dependency(&candidate) != 0
+                        }
+                        _ => {
+                            existing.get_submeta() != candidate.get_submeta()
+                                || existing.get_size() != candidate.get_size()
+                        }
+                    };
+                    if dependency_mismatch {
                         return Err(format!("Trying to alter definition of type: {name}"));
                     }
                     return Ok(existing.clone());
@@ -620,17 +635,13 @@ impl TypeFactory {
             }
         } else {
             // type.cc:3427-3430 findNoName: structural probe including id.
-            let tree_key = (candidate_submeta, Reverse(candidate_size), candidate_id);
+            let tree_key = Self::type_tree_key(&candidate);
             let tree = self
                 .base_type_tree
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(existing) = tree.get(&tree_key) {
-                if !matches!(candidate, Datatype::Array(_))
-                    || Self::array_element_matches(&candidate, existing)
-                {
-                    return Ok(existing.clone());
-                }
+                return Ok(existing.clone());
             }
         }
         // type.cc:3432-3436 computes both stored layout fields before insert.
@@ -652,23 +663,12 @@ impl TypeFactory {
             base.alignment = alignment as i32;
             base.align_size = align_size;
         }
-        let tree_key = (candidate_submeta, Reverse(candidate_size), candidate_id);
+        let tree_key = Self::type_tree_key(&candidate);
         let mut tree = self
             .base_type_tree
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = tree.get(&tree_key) {
-            if matches!(candidate, Datatype::Array(_)) {
-                if Self::array_element_matches(&candidate, existing) {
-                    // Unnamed arrays of the same element canonicalize to one
-                    // entry.
-                    return Ok(existing.clone());
-                }
-                // Ghidra orders same-size arrays of distinct elements by
-                // element pointer (type.cc:1228); Rugra's flat key cannot
-                // hold both, so the second distinct element raises the
-                // shared-id LowlevelError (registered TYPE-0001 residual).
-            }
             let mut message = format!("Shared type id: {:x}\n  ", candidate_id);
             message.push_str(&Self::print_raw(&candidate));
             message.push_str(" : ");
@@ -683,16 +683,6 @@ impl TypeFactory {
             self.types.insert(name, arc.clone());
         }
         Ok(arc)
-    }
-
-    // RUGRA-GLUE: element comparison for array findAdd probes. Ghidra's
-    // TypeArray::compareDependency (type.cc:1225-1232) orders arrays by the
-    // element POINTER; Arc identity is the Rust observation of that pointer.
-    fn array_element_matches(candidate: &Datatype, existing: &Arc<Datatype>) -> bool {
-        match (candidate, existing.as_ref()) {
-            (Datatype::Array(c), Datatype::Array(e)) => Arc::ptr_eq(&c.array_of, &e.array_of),
-            _ => false,
-        }
     }
 
     // Ghidra: type.cc:139 Datatype::printRaw (base), type.cc:910
@@ -769,16 +759,20 @@ impl TypeFactory {
         ptr_type
     }
 
-    // Ghidra: type.cc:3850 TypeFactory::getArray
-    /// Get or create an array type
-    pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype> {
-        let name = format!("{}[{}]", array_of.get_name(), num_elements);
-        if let Some(existing) = self.find_by_name(&name) {
-            return existing;
-        }
-
-        let size = array_of.get_size() * num_elements;
-        let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Array);
+    // RUGRA-GLUE: Result-returning Rust twin of getTypeArray so getBase can
+    // preserve its LowlevelError channel instead of converting it to panic.
+    fn get_array_result(
+        &mut self,
+        array_of: Arc<Datatype>,
+        num_elements: usize,
+    ) -> Result<Arc<Datatype>, String> {
+        let array_of = Datatype::get_stripped_arc(&array_of).unwrap_or(array_of);
+        let size = num_elements
+            .checked_mul(array_of.get_align_size())
+            .expect("TypeArray size overflow");
+        let mut base = TypeBase::new(String::new(), size, TypeMetatype::Array);
+        base.alignment = array_of.get_alignment() as i32;
+        base.align_size = size;
         // Ghidra: type.hh:937-944 inline TypeArray ctor (the path
         // TypeFactory::getTypeArray takes, type.cc:3902-3908):
         //   // A varnode which is an array of size 1, should generally
@@ -789,13 +783,18 @@ impl TypeFactory {
         if num_elements == 1 {
             base.flags |= type_flags::NEEDS_RESOLUTION;
         }
-        let array_type = Arc::new(Datatype::Array(TypeArray {
+        self.find_add(Datatype::Array(TypeArray {
             base,
             array_of,
             num_elements,
-        }));
-        self.types.insert(name, array_type.clone());
-        array_type
+        }), false)
+    }
+
+    // Ghidra: type.cc:3902 TypeFactory::getTypeArray
+    /// Get or create an unnamed canonical array type.
+    pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype> {
+        self.get_array_result(array_of, num_elements)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:3914 TypeFactory::getTypeStruct
@@ -1156,7 +1155,7 @@ impl TypeFactory {
         base.id = Datatype::hash_name("void");
         base.flags |= type_flags::CORETYPE;
         let dt = Arc::new(Datatype::Void(base));
-        let tree_key = (Self::submeta_of(&dt), Reverse(dt.get_size()), dt.get_id());
+        let tree_key = Self::type_tree_key(&dt);
         let mut tree = self
             .base_type_tree
             .get_mut()
@@ -1438,7 +1437,7 @@ impl TypeFactory {
         code.base.flags &= !type_flags::TYPE_INCOMPLETE;
         // tmp.markComplete() (type.cc:3699): considered complete.
         let candidate = Datatype::Code(code);
-        let tree_key = (Self::submeta_of(&candidate), Reverse(1), 0);
+        let tree_key = Self::type_tree_key(&candidate);
         let mut tree = self
             .base_type_tree
             .get_mut()
@@ -1569,14 +1568,6 @@ impl TypeFactory {
         off: i64,
         sz: usize,
     ) -> Arc<Datatype> {
-        // Ghidra keys partial types in the factory tree by their structure
-        // (container pointer + offset + size), not by name. Rugra's flat
-        // name-keyed map cannot look those up efficiently; we mint a
-        // synthetic name encoding the key so equivalent partials dedupe.
-        let key = format!("__partstruct_{}_{}_{}", Arc::as_ptr(&contain) as usize, off, sz);
-        if let Some(existing) = self.find_by_name(&key) {
-            return existing;
-        }
         // Ghidra: Datatype *strip = getBase(sz, TYPE_UNKNOWN); (type.cc:3932)
         // — the faithful Result twin; its LowlevelError (findAdd alignment
         // on an uninitialized map, type.cc:3300-3302) is a throw in the
@@ -1584,11 +1575,14 @@ impl TypeFactory {
         let stripped = self
             .get_base_result(sz, TypeMetatype::Unknown)
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
-        let mut ps = TypePartialStruct::new(contain, off, sz, Some(stripped));
-        ps.base.name = key.clone();
-        let dt = Arc::new(Datatype::PartialStruct(ps));
-        self.types.insert(key, dt.clone());
-        dt
+        let partial = Datatype::PartialStruct(TypePartialStruct::new(
+            contain,
+            off,
+            sz,
+            Some(stripped),
+        ));
+        self.find_add(partial, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:3980 TypeFactory::getTypePartialEnum
@@ -1602,21 +1596,20 @@ impl TypeFactory {
         off: i64,
         sz: usize,
     ) -> Arc<Datatype> {
-        let key = format!("__partenum_{}_{}_{}", Arc::as_ptr(&contain) as usize, off, sz);
-        if let Some(existing) = self.find_by_name(&key) {
-            return existing;
-        }
         // Ghidra: Datatype *strip = getBase(sz, TYPE_UNKNOWN); (type.cc:3983)
         // — faithful Result twin; see get_type_partial_struct for the
         // LowlevelError panic rationale.
         let stripped = self
             .get_base_result(sz, TypeMetatype::Unknown)
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
-        let mut pe = TypePartialEnum::new(contain, off, sz, Some(stripped));
-        pe.base.name = key.clone();
-        let dt = Arc::new(Datatype::PartialEnum(pe));
-        self.types.insert(key, dt.clone());
-        dt
+        let partial = Datatype::PartialEnum(TypePartialEnum::new(
+            contain,
+            off,
+            sz,
+            Some(stripped),
+        ));
+        self.find_add(partial, true)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:3955 TypeFactory::getTypePartialUnion
@@ -1630,21 +1623,20 @@ impl TypeFactory {
         off: i64,
         sz: usize,
     ) -> Arc<Datatype> {
-        let key = format!("__partunion_{}_{}_{}", Arc::as_ptr(&contain) as usize, off, sz);
-        if let Some(existing) = self.find_by_name(&key) {
-            return existing;
-        }
         // Ghidra: Datatype *strip = getBase(sz, TYPE_UNKNOWN); (type.cc:3958)
         // — faithful Result twin; see get_type_partial_struct for the
         // LowlevelError panic rationale.
         let stripped = self
             .get_base_result(sz, TypeMetatype::Unknown)
             .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
-        let mut pu = TypePartialUnion::new(contain, off, sz, Some(stripped));
-        pu.base.name = key.clone();
-        let dt = Arc::new(Datatype::PartialUnion(pu));
-        self.types.insert(key, dt.clone());
-        dt
+        let partial = Datatype::PartialUnion(TypePartialUnion::new(
+            contain,
+            off,
+            sz,
+            Some(stripped),
+        ));
+        self.find_add(partial, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
     }
 
     // Ghidra: type.cc:3992 TypeFactory::getTypeSpacebase
@@ -2436,11 +2428,7 @@ impl TypeFactory {
             }
         }
         {
-            let tree_key = (
-                Self::submeta_of(&promoted),
-                Reverse(promoted.get_size()),
-                promoted.get_id(),
-            );
+            let tree_key = Self::type_tree_key(&promoted);
             let mut tree = self
                 .base_type_tree
                 .get_mut()
@@ -3076,17 +3064,13 @@ impl TypeFactory {
                 // only pass Ghidra's compare by int4 wraparound coincidence;
                 // unreachable from well-formed specs).
                 let product = num_elements.checked_mul(array_of.get_align_size());
-                if product != Some(basic.size) {
+                if num_elements == 0 || product != Some(basic.size) {
                     return Err(format!(
                         "Bad size for array of type {}",
                         array_of.get_name()
                     ));
                 }
-                let mut name = basic.name.clone();
-                if name.is_empty() {
-                    name = format!("{}[{}]", array_of.get_name(), num_elements);
-                }
-                let mut base = TypeBase::new(name, basic.size, TypeMetatype::Array);
+                let mut base = TypeBase::new(basic.name, basic.size, TypeMetatype::Array);
                 base.display_name = basic.display_name;
                 // TypeArray::decode overwrites decoded alignment with the
                 // element alignment and keeps alignSize equal to total size.
@@ -3103,12 +3087,11 @@ impl TypeFactory {
                 if num_elements == 1 {
                     base.flags |= type_flags::NEEDS_RESOLUTION;
                 }
-                let dt = Arc::new(Datatype::Array(TypeArray {
+                let dt = self.find_add(Datatype::Array(TypeArray {
                     base,
                     array_of,
                     num_elements,
-                }));
-                self.insert(dt.clone());
+                }), false)?;
                 if elem_id != 0 {
                     decoder.close_element(elem_id);
                 }
@@ -3782,11 +3765,7 @@ impl TypeFactory {
         ct: &Arc<Datatype>,
         mutate: impl FnOnce(&mut Datatype) -> Result<(), String>,
     ) -> Result<Arc<Datatype>, String> {
-        let old_tree_key = (
-            Self::submeta_of(ct),
-            Reverse(ct.get_size()),
-            ct.get_id(),
-        );
+        let old_tree_key = Self::type_tree_key(ct);
         let old_name = ct.get_name().to_string();
 
         // Ghidra's erase operates on the exact object pointer. Refuse to
@@ -3822,11 +3801,7 @@ impl TypeFactory {
         let mut defined = (**ct).clone();
         mutate(&mut defined)?;
         let arc = Arc::new(defined);
-        let tree_key = (
-            Self::submeta_of(&arc),
-            Reverse(arc.get_size()),
-            arc.get_id(),
-        );
+        let tree_key = Self::type_tree_key(&arc);
         let name = arc.get_name().to_string();
 
         {
@@ -4070,26 +4045,31 @@ impl TypeFactory {
     // Ghidra: type.cc:3390 TypeFactory::insert
     /// Internal method for finally inserting a new Datatype pointer.
     /// Faithful to the oracle's dual registration (type.cc:3390-3406) for the
-    /// ATOMIC variants this factory's ordered tree models: the tree slot is
-    /// keyed by (sub-metatype, descending size, id) — exactly `DatatypeCompare`
-    /// (type.hh:306-310) — and the name cross-reference only receives NAMED
-    /// (id != 0) entries. Container variants stay name-map-only because the
-    /// flat key cannot express their component ordering (registered TYPE-0001
-    /// residual); the byte-faithful path with the "Shared type id" conflict
-    /// LowlevelError is [`Self::find_add`].
+    /// atomic, array, and partial variants covered by this slice. The name
+    /// cross-reference only receives named entries; other container variants
+    /// remain on the registered TYPE-0001 residual.
     fn insert(&mut self, dt: Arc<Datatype>) {
         let name = dt.get_name().to_string();
-        let atomic = matches!(
+        let structurally_keyed = matches!(
             dt.as_ref(),
-            Datatype::Void(_) | Datatype::Base(_) | Datatype::Enum(_) | Datatype::Code(_)
+            Datatype::Void(_) | Datatype::Base(_) | Datatype::Enum(_)
+                | Datatype::Code(_) | Datatype::Array(_)
+                | Datatype::PartialStruct(_) | Datatype::PartialEnum(_)
+                | Datatype::PartialUnion(_)
         );
-        if atomic {
-            let tree_key = (Self::submeta_of(&dt), Reverse(dt.get_size()), dt.get_id());
-            self.base_type_tree
+        if structurally_keyed {
+            let tree_key = Self::type_tree_key(&dt);
+            let tree = self.base_type_tree
                 .get_mut()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .entry(tree_key)
-                .or_insert_with(|| dt.clone());
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(existing) = tree.get(&tree_key) {
+                let mut message = format!("Shared type id: {:x}\n  ", dt.get_id());
+                message.push_str(&Self::print_raw(&dt));
+                message.push_str(" : ");
+                message.push_str(&Self::print_raw(existing));
+                panic!("LowlevelError: {message}");
+            }
+            tree.insert(tree_key, dt.clone());
         }
         // type.cc:3404-3405: `if (newtype->id!=0) nametree.insert(newtype);`
         // — unnamed entries live in the tree only. decodeBasic's hashName
@@ -4365,9 +4345,481 @@ mod tests {
         let mut factory = TypeFactory::new(8);
         let int_type = factory.find_by_name("int").unwrap();
 
-        let array = factory.get_array(int_type, 10);
-        assert_eq!(array.get_name(), "int[10]");
+        let array = factory.get_array(int_type.clone(), 10);
+        let repeated = factory.get_array(int_type, 10);
+        assert!(array.get_name().is_empty());
+        assert!(array.get_display_name().is_empty());
         assert_eq!(array.get_size(), 40);
+        assert!(Arc::ptr_eq(&array, &repeated));
+    }
+
+    #[test]
+    fn test_array_stride_identity_and_singleton_resolution() {
+        let mut factory = TypeFactory::new(8);
+        let mut odd_base = TypeBase::new("odd3".into(), 3, TypeMetatype::Uint);
+        odd_base.display_name = "odd3".into();
+        odd_base.id = Datatype::hash_name("odd3");
+        odd_base.alignment = 2;
+        odd_base.align_size = 4;
+        let odd = factory
+            .find_add(Datatype::Base(odd_base), false)
+            .expect("register explicit-layout element");
+        let int_type = factory.find_by_name("int").expect("int core type");
+        assert_eq!(odd.get_size(), 3);
+        assert_eq!(odd.get_alignment(), 2);
+        assert_eq!(odd.get_align_size(), 4);
+
+        let odd_array = factory.get_array(odd.clone(), 3);
+        let odd_repeat = factory.get_array(odd.clone(), 3);
+        let int_array = factory.get_array(int_type, 3);
+        assert_eq!(odd_array.get_size(), 12);
+        assert_eq!(odd_array.get_alignment(), 2);
+        assert_eq!(odd_array.get_align_size(), 12);
+        assert!(Arc::ptr_eq(&odd_array, &odd_repeat));
+        assert!(!Arc::ptr_eq(&odd_array, &int_array));
+        assert_eq!(int_array.get_size(), odd_array.get_size());
+        match odd_array.as_ref() {
+            Datatype::Array(array) => {
+                assert_eq!(array.num_elements, 3);
+                assert!(Arc::ptr_eq(&array.array_of, &odd));
+            }
+            _ => panic!("expected array"),
+        }
+
+        let keys_before_collision = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let duplicate = Arc::new((*odd_array).clone());
+        let conflict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.insert(duplicate);
+        }));
+        let panic_payload = conflict.expect_err("duplicate array must raise Shared type id");
+        let panic_message = panic_payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+            .expect("string panic payload");
+        assert_eq!(
+            panic_message,
+            "LowlevelError: Shared type id: 0\n  odd3 [3] : odd3 [3]"
+        );
+        let keys_after_collision = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(keys_after_collision, keys_before_collision);
+        assert!(Arc::ptr_eq(
+            &odd_array,
+            factory
+                .base_type_tree
+                .get_mut()
+                .unwrap()
+                .get(&TypeFactory::type_tree_key(&odd_array))
+                .expect("canonical array survives conflict")
+        ));
+
+        let singleton = factory.get_array(odd, 1);
+        assert!(singleton.needs_resolution());
+        assert_eq!(singleton.get_size(), 4);
+    }
+
+    #[test]
+    fn test_array_decode_canonicalization_and_nonpositive_count_errors() {
+        let mut factory = TypeFactory::new(8);
+        let array_xml = |attrs: &[(&str, &str)], element_name: &str, element_size: &str| {
+            xml_elem_with_children(
+                "type",
+                attrs,
+                vec![xml_elem(
+                    "type",
+                    &[
+                        ("metatype", "uint"),
+                        ("name", element_name),
+                        ("size", element_size),
+                    ],
+                )],
+            )
+        };
+
+        let decoded = factory
+            .decode_type(&mut decoder_for_type(array_xml(
+                &[("metatype", "array"), ("size", "8"), ("arraysize", "2")],
+                "DecodeElem4",
+                "4",
+            )))
+            .expect("decode anonymous array");
+        let repeated = factory
+            .decode_type(&mut decoder_for_type(array_xml(
+                &[("metatype", "array"), ("size", "8"), ("arraysize", "2")],
+                "DecodeElem4",
+                "4",
+            )))
+            .expect("repeat anonymous array decode");
+        let element = factory
+            .find_by_name("DecodeElem4")
+            .expect("decoded element registered");
+        let constructed = factory.get_array(element.clone(), 2);
+        assert!(decoded.get_name().is_empty());
+        assert!(decoded.get_display_name().is_empty());
+        assert!(Arc::ptr_eq(&decoded, &repeated));
+        assert!(Arc::ptr_eq(&decoded, &constructed));
+        assert!(matches!(
+            decoded.as_ref(),
+            Datatype::Array(array)
+                if array.num_elements == 2 && Arc::ptr_eq(&array.array_of, &element)
+        ));
+
+        let singleton = factory
+            .decode_type(&mut decoder_for_type(array_xml(
+                &[("metatype", "array"), ("size", "4"), ("arraysize", "1")],
+                "DecodeSingletonElem",
+                "4",
+            )))
+            .expect("decode singleton array");
+        let singleton_element = factory
+            .find_by_name("DecodeSingletonElem")
+            .expect("singleton element registered");
+        assert!(singleton.needs_resolution());
+        assert_eq!(singleton.get_size(), 4);
+        assert!(Arc::ptr_eq(
+            &singleton,
+            &factory.get_array(singleton_element, 1)
+        ));
+
+        let named = factory
+            .decode_type(&mut decoder_for_type(array_xml(
+                &[
+                    ("metatype", "array"),
+                    ("name", "NamedDecodeArray"),
+                    ("size", "8"),
+                    ("arraysize", "2"),
+                ],
+                "DecodeElem4",
+                "4",
+            )))
+            .expect("decode named array");
+        let redefinition = factory
+            .decode_type(&mut decoder_for_type(array_xml(
+                &[
+                    ("metatype", "array"),
+                    ("name", "NamedDecodeArray"),
+                    ("size", "8"),
+                    ("arraysize", "1"),
+                ],
+                "DecodeElem8",
+                "8",
+            )))
+            .unwrap_err();
+        assert_eq!(
+            redefinition,
+            "Trying to alter definition of type: NamedDecodeArray"
+        );
+        assert!(Arc::ptr_eq(
+            &named,
+            &factory
+                .find_by_name("NamedDecodeArray")
+                .expect("original named array survives")
+        ));
+
+        let keys_before_invalid = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let invalid_counts = [
+            vec![("metatype", "array"), ("size", "0")],
+            vec![("metatype", "array"), ("size", "0"), ("arraysize", "0")],
+            vec![("metatype", "array"), ("size", "0"), ("arraysize", "-1")],
+        ];
+        for attrs in invalid_counts {
+            let error = factory
+                .decode_type(&mut decoder_for_type(array_xml(
+                    &attrs,
+                    "DecodeElem4",
+                    "4",
+                )))
+                .unwrap_err();
+            assert_eq!(error, "Bad size for array of type DecodeElem4");
+        }
+        let keys_after_invalid = factory
+            .base_type_tree
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(keys_after_invalid, keys_before_invalid);
+        assert!(!keys_after_invalid.iter().any(|key| {
+            key.0 == SubMetatype::Array as i32 as u8 && key.3 == Reverse(0)
+        }));
+    }
+
+    #[test]
+    fn test_array_virtual_stripping_and_partial_canonicalization() {
+        let mut factory = TypeFactory::new(8);
+        let int_type = factory.find_by_name("int").expect("int core type");
+        let ordinary_alias = factory.get_typedef("ScalarAlias", int_type.clone());
+        assert!(!ordinary_alias.has_stripped());
+        assert!(Datatype::get_stripped_arc(&ordinary_alias).is_none());
+        assert!(Arc::ptr_eq(
+            factory
+                .get_typedef_target("ScalarAlias")
+                .expect("ordinary typedef target"),
+            &int_type
+        ));
+        let alias_array = factory.get_array(ordinary_alias.clone(), 2);
+        let alias_element = match alias_array.as_ref() {
+            Datatype::Array(array) => array.array_of.clone(),
+            _ => panic!("expected array"),
+        };
+        assert!(Arc::ptr_eq(&alias_element, &ordinary_alias));
+
+        let parent = factory.create_struct("PartialParent");
+        let other_parent = factory.create_struct("OtherPartialParent");
+        let union_parent = factory.get_type_union("PartialUnionParent");
+        let other_union = factory.get_type_union("OtherPartialUnionParent");
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        let partial = factory.get_type_partial_struct(parent.clone(), 0, 2);
+        let partial_repeat = match partial.as_ref() {
+            Datatype::PartialStruct(partial) => factory.get_type_partial_struct(
+                partial.container.clone(),
+                partial.offset,
+                partial.base.size,
+            ),
+            _ => panic!("expected partial struct"),
+        };
+        assert!(Arc::ptr_eq(&partial, &partial_repeat));
+        assert!(partial.get_name().is_empty());
+        assert!(partial.get_display_name().is_empty());
+        assert_eq!(partial.get_id(), 0);
+        assert_eq!(partial.get_alignment(), 1);
+        assert_eq!(partial.get_align_size(), 2);
+        assert!(partial.has_stripped());
+        assert!(!partial.needs_resolution());
+        let partial_key = TypeFactory::type_tree_key(&partial);
+        assert_eq!(partial_key.0, SubMetatype::PartialStruct as i32 as u8);
+        assert_eq!(partial_key.1, Arc::as_ptr(&parent) as usize);
+        assert_eq!(partial_key.2, 0);
+        assert_eq!(partial_key.3, Reverse(2));
+        assert_eq!(partial_key.4, 0);
+
+        let different_offset = factory.get_type_partial_struct(
+            match partial.as_ref() {
+                Datatype::PartialStruct(partial) => partial.container.clone(),
+                _ => unreachable!(),
+            },
+            1,
+            2,
+        );
+        let different_size = factory.get_type_partial_struct(
+            match partial.as_ref() {
+                Datatype::PartialStruct(partial) => partial.container.clone(),
+                _ => unreachable!(),
+            },
+            0,
+            3,
+        );
+        let different_parent = factory.get_type_partial_struct(other_parent, 0, 2);
+        assert!(!Arc::ptr_eq(&partial, &different_offset));
+        assert!(!Arc::ptr_eq(&partial, &different_size));
+        assert!(!Arc::ptr_eq(&partial, &different_parent));
+        assert_eq!(
+            partial_key.cmp(&TypeFactory::type_tree_key(&different_offset)),
+            0_i64.cmp(&1)
+        );
+        assert_eq!(
+            partial_key.cmp(&TypeFactory::type_tree_key(&different_size)),
+            Reverse(2_usize).cmp(&Reverse(3))
+        );
+
+        let stripped = Datatype::get_stripped_arc(&partial).expect("partial stripped form");
+        let partial_array = factory.get_array(partial.clone(), 2);
+        let partial_element = match partial_array.as_ref() {
+            Datatype::Array(array) => array.array_of.clone(),
+            _ => panic!("expected array"),
+        };
+        assert!(Arc::ptr_eq(&partial_element, &stripped));
+
+        let partial_alias = factory.get_typedef("PartialAlias", partial.clone());
+        assert!(!Arc::ptr_eq(&partial_alias, &partial));
+        assert_eq!(partial_alias.get_name(), "PartialAlias");
+        assert!(partial_alias.has_stripped());
+        assert_eq!(partial_alias.get_flags(), partial.get_flags());
+        match (partial_alias.as_ref(), partial.as_ref()) {
+            (Datatype::PartialStruct(alias), Datatype::PartialStruct(original)) => {
+                assert!(Arc::ptr_eq(&alias.container, &original.container));
+                assert_eq!(alias.offset, original.offset);
+                assert!(matches!(
+                    (&alias.stripped, &original.stripped),
+                    (Some(left), Some(right)) if Arc::ptr_eq(left, right)
+                ));
+            }
+            _ => panic!("expected partial-struct typedef clone"),
+        }
+        assert!(Arc::ptr_eq(
+            factory
+                .get_typedef_target("PartialAlias")
+                .expect("partial typedef target"),
+            &partial
+        ));
+        assert!(Arc::ptr_eq(
+            &Datatype::get_stripped_arc(&partial_alias).expect("partial alias stripped form"),
+            &stripped
+        ));
+        let partial_alias_array = factory.get_array(partial_alias, 2);
+        let aliased_element = match partial_alias_array.as_ref() {
+            Datatype::Array(array) => array.array_of.clone(),
+            _ => panic!("expected array"),
+        };
+        assert!(Arc::ptr_eq(&aliased_element, &stripped));
+
+        let partial_union = factory.get_type_partial_union(union_parent.clone(), 0, 2);
+        let partial_union_repeat = factory.get_type_partial_union(union_parent.clone(), 0, 2);
+        let partial_union_offset =
+            factory.get_type_partial_union(union_parent.clone(), 1, 2);
+        let partial_union_size = factory.get_type_partial_union(union_parent.clone(), 0, 3);
+        let partial_union_parent = factory.get_type_partial_union(other_union, 0, 2);
+        assert!(Arc::ptr_eq(&partial_union, &partial_union_repeat));
+        assert!(!Arc::ptr_eq(&partial_union, &partial_union_offset));
+        assert!(!Arc::ptr_eq(&partial_union, &partial_union_size));
+        assert!(!Arc::ptr_eq(&partial_union, &partial_union_parent));
+        assert!(partial_union.get_name().is_empty());
+        assert!(partial_union.get_display_name().is_empty());
+        assert_eq!(partial_union.get_id(), 0);
+        assert_eq!(partial_union.get_alignment(), 1);
+        assert_eq!(partial_union.get_align_size(), 2);
+        assert!(partial_union.has_stripped());
+        assert!(partial_union.needs_resolution());
+        let union_key = TypeFactory::type_tree_key(&partial_union);
+        assert_eq!(union_key.0, SubMetatype::PartialUnion as i32 as u8);
+        assert_eq!(union_key.1, Arc::as_ptr(&union_parent) as usize);
+        assert_eq!(union_key.2, 0);
+        assert_eq!(union_key.3, Reverse(2));
+        assert_eq!(union_key.4, 0);
+        let union_stripped =
+            Datatype::get_stripped_arc(&partial_union).expect("partial union stripped form");
+        let union_alias = factory.get_typedef("PartialUnionAlias", partial_union.clone());
+        assert!(!Arc::ptr_eq(&union_alias, &partial_union));
+        assert_eq!(union_alias.get_name(), "PartialUnionAlias");
+        assert!(union_alias.has_stripped());
+        assert_eq!(union_alias.get_flags(), partial_union.get_flags());
+        match (union_alias.as_ref(), partial_union.as_ref()) {
+            (Datatype::PartialUnion(alias), Datatype::PartialUnion(original)) => {
+                assert!(Arc::ptr_eq(&alias.container, &original.container));
+                assert_eq!(alias.offset, original.offset);
+                assert!(matches!(
+                    (&alias.stripped, &original.stripped),
+                    (Some(left), Some(right)) if Arc::ptr_eq(left, right)
+                ));
+            }
+            _ => panic!("expected partial-union typedef clone"),
+        }
+        assert!(Arc::ptr_eq(
+            factory
+                .get_typedef_target("PartialUnionAlias")
+                .expect("partial union typedef target"),
+            &partial_union
+        ));
+        assert!(Arc::ptr_eq(
+            &Datatype::get_stripped_arc(&union_alias).expect("partial union alias stripped form"),
+            &union_stripped
+        ));
+        let union_alias_array = factory.get_array(union_alias, 2);
+        assert!(matches!(
+            union_alias_array.as_ref(),
+            Datatype::Array(array) if Arc::ptr_eq(&array.array_of, &union_stripped)
+        ));
+
+        let enum_parent = factory
+            .get_type_enum_result("PartialEnumParent")
+            .expect("configured enum parent");
+        assert_eq!(enum_parent.get_size(), 8);
+        assert_eq!(enum_parent.get_metatype(), TypeMetatype::Uint);
+        assert!(enum_parent.is_enum_type());
+        let partial_enum = factory.get_type_partial_enum(enum_parent.clone(), 0, 2);
+        let partial_enum_repeat = factory.get_type_partial_enum(enum_parent.clone(), 0, 2);
+        let partial_enum_offset = factory.get_type_partial_enum(enum_parent.clone(), 1, 2);
+        let partial_enum_size = factory.get_type_partial_enum(enum_parent.clone(), 0, 3);
+        let other_enum = factory
+            .get_type_enum_result("OtherPartialEnumParent")
+            .expect("second configured enum parent");
+        let partial_enum_parent = factory.get_type_partial_enum(other_enum, 0, 2);
+        assert!(Arc::ptr_eq(&partial_enum, &partial_enum_repeat));
+        assert!(!Arc::ptr_eq(&partial_enum, &partial_enum_offset));
+        assert!(!Arc::ptr_eq(&partial_enum, &partial_enum_size));
+        assert!(!Arc::ptr_eq(&partial_enum, &partial_enum_parent));
+        assert!(partial_enum.get_name().is_empty());
+        assert!(partial_enum.get_display_name().is_empty());
+        assert_eq!(partial_enum.get_id(), 0);
+        assert_eq!(partial_enum.get_alignment(), 2);
+        assert_eq!(partial_enum.get_align_size(), 2);
+        assert_eq!(partial_enum.get_metatype(), TypeMetatype::Uint);
+        assert_eq!(partial_enum.get_submeta(), SubMetatype::UintPartialEnum);
+        assert!(partial_enum.is_enum_type());
+        assert!(partial_enum.has_stripped());
+        let enum_key = TypeFactory::type_tree_key(&partial_enum);
+        assert_eq!(enum_key.0, SubMetatype::UintPartialEnum as i32 as u8);
+        assert_eq!(enum_key.1, Arc::as_ptr(&enum_parent) as usize);
+        assert_eq!(enum_key.2, 0);
+        assert_eq!(enum_key.3, Reverse(2));
+        assert_eq!(enum_key.4, 0);
+        match partial_enum.as_ref() {
+            Datatype::PartialEnum(partial) => {
+                assert_eq!(partial.base.metatype, TypeMetatype::Uint);
+                assert_eq!(
+                    partial.base.submeta_override,
+                    Some(SubMetatype::UintPartialEnum)
+                );
+            }
+            _ => panic!("expected partial enum"),
+        }
+        let enum_stripped =
+            Datatype::get_stripped_arc(&partial_enum).expect("partial enum stripped form");
+        let enum_alias = factory.get_typedef("PartialEnumAlias", partial_enum.clone());
+        assert!(!Arc::ptr_eq(&enum_alias, &partial_enum));
+        assert_eq!(enum_alias.get_name(), "PartialEnumAlias");
+        assert!(enum_alias.has_stripped());
+        assert_eq!(enum_alias.get_flags(), partial_enum.get_flags());
+        match (enum_alias.as_ref(), partial_enum.as_ref()) {
+            (Datatype::PartialEnum(alias), Datatype::PartialEnum(original)) => {
+                assert!(Arc::ptr_eq(&alias.parent, &original.parent));
+                assert_eq!(alias.offset, original.offset);
+                assert!(matches!(
+                    (&alias.stripped, &original.stripped),
+                    (Some(left), Some(right)) if Arc::ptr_eq(left, right)
+                ));
+            }
+            _ => panic!("expected partial-enum typedef clone"),
+        }
+        assert!(Arc::ptr_eq(
+            factory
+                .get_typedef_target("PartialEnumAlias")
+                .expect("partial enum typedef target"),
+            &partial_enum
+        ));
+        assert!(Arc::ptr_eq(
+            &Datatype::get_stripped_arc(&enum_alias).expect("partial enum alias stripped form"),
+            &enum_stripped
+        ));
+        let enum_alias_array = factory.get_array(enum_alias, 2);
+        assert!(matches!(
+            enum_alias_array.as_ref(),
+            Datatype::Array(array) if Arc::ptr_eq(&array.array_of, &enum_stripped)
+        ));
     }
 
     // --- new TypeFactory getters aligned with type.cc ---
@@ -4501,11 +4953,7 @@ mod tests {
         let int_type = factory.find_by_name("int").expect("int core type");
 
         let old_struct = factory.create_struct("LayoutStruct");
-        let old_struct_key = (
-            TypeFactory::submeta_of(&old_struct),
-            Reverse(old_struct.get_size()),
-            old_struct.get_id(),
-        );
+        let old_struct_key = TypeFactory::type_tree_key(&old_struct);
         let new_struct = factory
             .set_fields_sized(
                 "LayoutStruct",
@@ -4518,11 +4966,7 @@ mod tests {
                 8,
             )
             .expect("define struct");
-        let new_struct_key = (
-            TypeFactory::submeta_of(&new_struct),
-            Reverse(new_struct.get_size()),
-            new_struct.get_id(),
-        );
+        let new_struct_key = TypeFactory::type_tree_key(&new_struct);
         assert!(!Arc::ptr_eq(&old_struct, &new_struct));
         assert!(Arc::ptr_eq(
             &new_struct,
@@ -4545,11 +4989,7 @@ mod tests {
         assert!(!new_struct.is_incomplete());
 
         let old_union = factory.get_type_union("LayoutUnion");
-        let old_union_key = (
-            TypeFactory::submeta_of(&old_union),
-            Reverse(old_union.get_size()),
-            old_union.get_id(),
-        );
+        let old_union_key = TypeFactory::type_tree_key(&old_union);
         let new_union = factory
             .set_union_fields_sized(
                 "LayoutUnion",
@@ -4562,11 +5002,7 @@ mod tests {
                 4,
             )
             .expect("define union");
-        let new_union_key = (
-            TypeFactory::submeta_of(&new_union),
-            Reverse(new_union.get_size()),
-            new_union.get_id(),
-        );
+        let new_union_key = TypeFactory::type_tree_key(&new_union);
         assert!(!Arc::ptr_eq(&old_union, &new_union));
         assert!(Arc::ptr_eq(
             &new_union,
@@ -4593,11 +5029,7 @@ mod tests {
     fn test_define_replace_refuses_stale_tree_slot() {
         let mut factory = TypeFactory::new(8);
         let structure = factory.create_struct("StaleSlot");
-        let key = (
-            TypeFactory::submeta_of(&structure),
-            Reverse(structure.get_size()),
-            structure.get_id(),
-        );
+        let key = TypeFactory::type_tree_key(&structure);
         let unrelated = Arc::new((*structure).clone());
         factory
             .base_type_tree
@@ -4630,11 +5062,7 @@ mod tests {
             } else {
                 factory.create_struct(name)
             };
-            let key = (
-                TypeFactory::submeta_of(&stub),
-                Reverse(stub.get_size()),
-                stub.get_id(),
-            );
+            let key = TypeFactory::type_tree_key(&stub);
             factory
                 .base_type_tree
                 .get_mut()
@@ -4695,6 +5123,77 @@ mod tests {
                 .find_by_name("AggregateCollision")
                 .expect("struct unchanged")
         ));
+    }
+
+    #[test]
+    fn test_series_b_named_scope_preserves_non_b_pointer_projection() {
+        let mut factory = TypeFactory::new(8);
+        let int_type = factory.find_by_name("int").expect("int core type");
+        let uint_type = factory.find_by_name("uint").expect("uint core type");
+
+        let pointer_candidate = |ptr_to: Arc<Datatype>| {
+            let mut base = TypeBase::new("ScopedPointer".into(), 8, TypeMetatype::Pointer);
+            base.id = Datatype::hash_name("ScopedPointer");
+            base.alignment = 8;
+            base.align_size = 8;
+            Datatype::Pointer(TypePointer { base, ptr_to, wordsize: 1 })
+        };
+        let first = factory
+            .find_add(pointer_candidate(int_type.clone()), false)
+            .expect("register scoped pointer");
+        let different_target = pointer_candidate(uint_type);
+        assert_ne!(first.compare_dependency(&different_target), 0);
+        let scoped_repeat = factory
+            .find_add(different_target, false)
+            .expect("series-B scope keeps the series-A pointer projection");
+        assert!(Arc::ptr_eq(&first, &scoped_repeat));
+        assert!(matches!(
+            first.as_ref(),
+            Datatype::Pointer(pointer) if Arc::ptr_eq(&pointer.ptr_to, &int_type)
+        ));
+
+        let parent_a = factory.create_struct("ScopedRelativeParentA");
+        let parent_b = factory.create_struct("ScopedRelativeParentB");
+        let relative_candidate = |parent: Arc<Datatype>, offset: i64| {
+            let mut base =
+                TypeBase::new("ScopedRelativePointer".into(), 8, TypeMetatype::Pointer);
+            base.id = Datatype::hash_name("ScopedRelativePointer");
+            base.alignment = 8;
+            base.align_size = 8;
+            base.flags |= type_flags::IS_PTRREL;
+            base.pointer_rel = Some(PointerRelState {
+                parent,
+                offset,
+                stripped: None,
+            });
+            Datatype::Pointer(TypePointer {
+                base,
+                ptr_to: int_type.clone(),
+                wordsize: 1,
+            })
+        };
+        let relative = factory
+            .find_add(relative_candidate(parent_a.clone(), 4), false)
+            .expect("register scoped relative pointer");
+        let different_relative = relative_candidate(parent_b, 12);
+        assert_ne!(relative.compare_dependency(&different_relative), 0);
+        let relative_repeat = factory
+            .find_add(different_relative, false)
+            .expect("series-B scope keeps the series-A relative-pointer projection");
+        assert!(Arc::ptr_eq(&relative, &relative_repeat));
+        assert!(matches!(
+            relative.as_ref(),
+            Datatype::Pointer(pointer)
+                if matches!(
+                    &pointer.base.pointer_rel,
+                    Some(state) if Arc::ptr_eq(&state.parent, &parent_a) && state.offset == 4
+                )
+        ));
+
+        // This assertion intentionally locks only the series boundary. The
+        // locked oracle's concrete Pointer/PointerRel comparator rejects both
+        // pairs above; series C owns that migration under
+        // TYPEFACTORY-POINTER-CANONICAL-0001.
     }
 
     #[test]

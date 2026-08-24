@@ -65,6 +65,9 @@ headless/数据组织路径产出 `uVar` 家族；Rugra 选择对齐后者（E2E
 `alignment`；factory 插入、decode 以及 struct/union 定义路径均写入该字段。
 仅旧的、未经过 factory 的直接构造器使用默认 alignment map 兼容回退：
 `{0:1, 1:1, 2:2, 3:2, 4:4, 5:4, 6:4, 7:4, 8+:8}`。
+这里 alignment map 的 size-3 槽虽然是 2，完整 fallback 会先把宽度填充到
+4，再查询 aligned-size 4 的 alignment，因此最终是
+`alignment=4, alignSize=4`；不能把原始 size 槽的值误当作最终 alignment。
 
 ### `pub fn get_align_size(&self) -> usize`
 对应 `Datatype::getAlignSize` (type.hh:240)。`TypeBase` 独立保存
@@ -85,12 +88,27 @@ decode 均保留 `alignment=1`、`alignSize=1`，并从 incomplete 状态开始�
 锁定 12.0.4 bilateral fixture 才会给这组字段可观察状态；在此之前为
 `UNTESTED`，不能升 L3。
 
+### 2026-08-24：array/partial stripped 状态（series B）
+
+`Datatype::get_stripped_arc` 是 Rust 所有权胶水，保留 concrete virtual
+`getStripped` 返回对象的 `Arc` 身份。普通 typedef 只有 `typedefImm`，不会因此
+获得 stripped 形态；从 PartialStruct/PartialEnum/PartialUnion 克隆出的 typedef
+保留 concrete subclass 的 `HAS_STRIPPED` 与 stripped 指针。PointerRel 分支只暴露
+既有状态，ephemeral 构造生命周期由后续 series C 覆盖。
+
+`TypePartialEnum::new` 现在复现 `TypeEnum(sz, TYPE_PARTIALENUM)` 的两层状态：
+stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
+`ENUMTYPE|HAS_STRIPPED`。本片 Rust tests 固定这些字段；锁定 oracle 的完整
+同输入观察仍在最终 series D fixture 前保持 `NO_ORACLE`。模块整体因已登记
+残差保持 **L2 / MISMATCH**，不能把本片的 Rust 回归测试解释为行为对齐证据。
+
 ### `pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64)`
 对应 `Datatype::getSubType` (type.hh:247, type.cc:174)。
 返回包含 `off` 的一级组件类型及组件内偏移。
 - Struct: `TypeStruct::getSubType` (type.cc:1640) 经 `getFieldIter`
 - Union: locked `TypeUnion` 没有 override（type.hh:554 注释掉声明），所以
-  走基类并返回 `(None, 原 off)`；`getExactPiece` 在 descent 前单独处理 union
+  正典行为是走基类并返回 `(None, 原 off)`；Rust 侧该修正属于 series D，
+  在 D 落地前当前分支仍是 `MISMATCH`
 - Array: `TypeArray::getSubType` (type.cc:1234)，`newoff = off % elem.alignSize`
 - 其他: 返回 `(None, off)`
 
@@ -232,9 +250,10 @@ alignment map、calc_align_size、struct/array subtype、type_order（size & met
 - 通过 `partial_struct_get_sub_type` / `partial_struct_get_hole_size`（free 函数）接入
   `Datatype::get_sub_type` / `get_hole_size` 的 match 分派。
 
-### `struct TypePartialEnum`（type.hh:587-595, type.cc:2247-2330）
+### `struct TypePartialEnum`（type.hh:569-587, type.cc:2247-2330）
 表示枚举值的高/低字节切片：解析前将值左移 `8*offset` 位再委托给父枚举。
-- `new(container, offset, size, stripped)`（type.cc:2254）— 断言容器为 Enum。
+- `new(container, offset, size, stripped)`（type.cc:2255）— stored metatype
+  归一为 Uint、submeta 保持 UintPartialEnum，并置 `ENUMTYPE|HAS_STRIPPED`。
 - `resolve_in_flow(val)`（type.cc:2280）— `val << (8*offset)` 后构造 `EnumRepresentation`。
 - `find_resolve(val)` / `find_compatible_resolve(val)`（type.cc:2300/2315）。
 - `resolve_truncation(val, skip)`（type.cc:2322）— 截断到 `size` 字节后解析。
@@ -266,8 +285,9 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
   PartialEnum 返回 parent；PartialUnion 返回 union 字段。
 - `TypeFactory::typedef` 已覆盖三 partial 变体的克隆（带新 base）。
 - 新增工厂 getter：`get_type_partial_struct` / `get_type_partial_enum` /
-  `get_type_partial_union`（type.cc:3929/3980/3955），以 `__part{struct,enum,union}_{ptr}_{off}_{sz}`
-  合成名做去重键（Rugra 平坦 map 无法像 Ghidra 树那样按结构键查找）。
+  `get_type_partial_union`（type.cc:3929/3980/3955）；series B 已删除合成名，
+  改以 parent/container `Arc` 身份、offset、descending size、id=0 的 ordered-tree
+  键进行匿名 canonicalization。
 - `get_type_spacebase`（type.cc:3992）。
 
 ### 测试

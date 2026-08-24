@@ -1194,6 +1194,25 @@ impl Datatype {
         }
     }
 
+    // RUGRA-GLUE: Arc-preserving ownership twin of virtual getStripped
+    // (type.cc:561 and overrides in type.hh:586/607/635/683).
+    /// Return the canonical stripped object advertised by a concrete virtual
+    /// subclass. Ordinary typedefs do not strip merely because they have a
+    /// `typedefImm`; a typedef cloned from a partial class retains that
+    /// class's `HAS_STRIPPED` flag and stripped pointer.
+    pub fn get_stripped_arc(datatype: &Arc<Datatype>) -> Option<Arc<Datatype>> {
+        if !datatype.has_stripped() {
+            return None;
+        }
+        match datatype.as_ref() {
+            Datatype::Pointer(pointer) => pointer.get_stripped_pointer().cloned(),
+            Datatype::PartialStruct(partial) => partial.stripped.clone(),
+            Datatype::PartialEnum(partial) => partial.stripped.clone(),
+            Datatype::PartialUnion(partial) => partial.stripped.clone(),
+            _ => None,
+        }
+    }
+
     // Ghidra: type.hh:165 Datatype::needsResolution
     /// Return `true` if this data-type is a union or a pointer to a union
     /// (or otherwise needs resolution before propagation).
@@ -4268,15 +4287,17 @@ impl TypePartialEnum {
     // Ghidra: type.cc:2255 TypePartialEnum::TypePartialEnum
     /// Construct a partial-enum given the parent enum, byte offset, size, and
     /// stripped fallback. Faithful to the C++ constructor
-    /// (type.cc:2255-2262): sets `metatype = TYPE_PARTIALENUM` and the
-    /// `has_stripped` + `enumtype` flags.
+    /// (type.cc:2255-2262): `TypeEnum(sz, TYPE_PARTIALENUM)` retains the
+    /// partial-enum sub-metatype while storing unsigned integer metatype, and
+    /// sets the `has_stripped` + `enumtype` flags.
     pub fn new(
         parent: Arc<Datatype>,
         offset: i64,
         size: usize,
         stripped: Option<Arc<Datatype>>,
     ) -> Self {
-        let mut base = TypeBase::new(String::new(), size, TypeMetatype::PartialEnum);
+        let mut base = TypeBase::new(String::new(), size, TypeMetatype::Uint);
+        base.submeta_override = Some(SubMetatype::UintPartialEnum);
         base.flags |= type_flags::HAS_STRIPPED | type_flags::ENUMTYPE;
         Self { base, parent, offset, stripped }
     }

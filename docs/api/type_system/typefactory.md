@@ -6,7 +6,9 @@
   Ghidra 结构主树 + `(name,id)` 树和原位对象突变；exact-piece series
   尚未完成。layout/rekey 的 scoped A 片只保证 factory 当前 tree/name 槽
   一致，旧句柄及 factory-owned dependencies 仍绑定
-  `TYPEFACTORY-ARC-IDENTITY-0001`，不能升 L3。
+  `TYPEFACTORY-ARC-IDENTITY-0001`。series B 只闭合 array/partial/virtual
+  stripped 的 registry 投影；series-B 的 B2 投影在 series D 前为
+  `NO_ORACLE`，模块整体仍为 **MISMATCH / L2**，不能升 L3。
 
 
 **源代码路径**: `src/type_system/typefactory.rs`
@@ -132,10 +134,14 @@ inherits `needs_resolution` (see 2026-08-18 section below).
 
 ### `pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype>`
 
-Get or create an array type. Applies the inline `TypeArray` ctor arm
-(type.hh:937-944): `num_elements == 1` sets `needs_resolution` ("A varnode
-which is an array of size 1, should generally always be treated as the
-element data-type").
+Get or create an unnamed canonical array type. `getTypeArray` first invokes
+the element's concrete virtual `getStripped`; ordinary typedefs do not strip,
+while partial subclasses (and later series C's ephemeral PointerRel) do. The
+inline `TypeArray` ctor (type.hh:937-944) uses
+`num_elements * element.getAlignSize()`, inherits element alignment, stores
+total `alignSize`, and sets `needs_resolution` for one element. Repeated calls
+with the same element identity/count return the same `Arc`; equal-width arrays
+with different element identities occupy distinct structural keys.
 
 ### `pub fn create_struct(&mut self, name: &str) -> Arc<Datatype>`
 
@@ -186,7 +192,7 @@ clears the incomplete-typedef queue, as `clearNoncore` does at type.cc:3284.
 
 The `TypeFactory::findAdd` port (type.cc:3412-3439): named candidates require
 a non-zero id (`"Datatype must have a valid id: {name}"`), a name+id hit with
-a differing `compareDependency` (sub-metatype or size, type.cc:227) raises
+a differing concrete `compareDependency` raises
 `"Trying to alter definition of type: {name}"` while an equal definition
 returns the existing object, unnamed candidates probe the ordered tree
 structurally, and a miss inserts with the `"Shared type id: {id:x}"`
@@ -197,6 +203,15 @@ structurally, and a miss inserts with the `"Shared type id: {id:x}"`
 LowlevelError is enforced on the `get_base_result` entry only — production
 Rugra factories do not yet thread the decoded alignment map
 (TYPEFACTORY-ARCH-ALIGNMAP-WIRING-0001).
+
+For series B, the ordered key additionally projects TypeArray's element
+pointer and each Partial type's parent/container pointer plus offset before
+descending size and id, matching type.cc:1225-1232, 2302-2310, 2406-2414,
+and 2478-2486. Pointer/Struct/Union/Code concrete dependency closures remain
+outside this slice under `TYPEFACTORY-POINTER-CANONICAL-0001` (pointer) and
+`TYPE-0001` (the remaining general registry closure). Named `find_add` probes
+therefore use the concrete comparator only for Array and Partial variants;
+all other variants retain the series-A submeta/size projection in this commit.
 
 ### 2026-08-24：layout / definition replacement（series A）
 
@@ -233,14 +248,50 @@ A 的单元测试只验证 Rust registry invariant，行为状态仍为 `UNTESTE
 fail-closed allowlist 将 pre/post identity 差异记为 `MISMATCH`。A-D 全栈
 完成前本片不得单独集成或声明 MATCH。
 
+### 2026-08-24：array / partial canonicalization（series B）
+
+- `get_array_result` 是 `getTypeArray` 的 Result 胶水，供 large-base
+  conversion 保持错误通道；public `get_array` 只在边界把错误提升为
+  `LowlevelError` 风格 panic。
+- array factory 与 decode 都保留匿名 name/displayName、继承 element
+  alignment，并经 `find_add` 注册。size-3/alignment-2/alignSize-4 元素的
+  3-element array 因此是 size/alignSize 12、alignment 2，而不是 9。
+  decode 对缺失、0 或负 `arraysize` 均执行 oracle 的 `arraysize<=0`
+  LowlevelError 分支，即使声明的 array 总 size 也是 0；合法 decode 与
+  factory 构造共享同一个 canonical entry。
+- `get_type_partial_struct/enum/union` 不再制造 `__part*` 名字；三者以
+  parent/container `Arc`、offset、descending size、id=0 canonicalize。
+- `getTypeArray` 的 stripping 只认 concrete virtual state。普通 scalar
+  typedef 保留为 array element；Partial 的 typedef clone 保留 subclass
+  stripped 指针并剥到同一个 undefined fallback。
+- TypePartialEnum 的 stored metatype 修正为 Uint，独立 submeta 保持
+  UintPartialEnum；parent 由配置驱动的 `get_type_enum_result` 构造，避免
+  legacy 4-byte/signed enum getter 污染判别输入。
+
+本片另有一个反向 scope test：same-name/id/size 的 Pointer 与 PointerRel
+即使 concrete dependency 不同，仍固定保持 series-A 的 submeta/size 结果。
+这不是 Ghidra MATCH（locked oracle 会走虚 comparator 并拒绝），而是防止 B
+在 C 落地前意外吞入 pointer 行为；差异归
+`TYPEFACTORY-POINTER-CANONICAL-0001`。
+
+B 的 Rust 判别测试覆盖上述状态与 identity；ephemeral PointerRel 的构造、
+pointer tree key、getExactPiece descent、负 offset/zero size 和最终 bilateral
+fixture 分别留给 C/D。另一个直接下游约束是 legacy `get_ptr` 仍以 pointee
+name 合成 key：不同匿名 arrays 都会形成 `" *"`，grammar PointerModifier 在
+series C 迁到 canonical `get_type_pointer` 前可能错误合并。该 caller/tree
+缺口归 `TYPEFACTORY-POINTER-CANONICAL-0001`。series-B B2 投影保持
+`NO_ORACLE`，模块 overall status 保持 `MISMATCH`；B 不能单独集成或声明
+MATCH。匿名 array 对 PrintC base token 的下游影响仍在 `TYPE-0001` 闭包内，
+最终 series D 的 E2E 必须显式观察。
+
 ### Internal `insert`
 
-`type.cc:3390 TypeFactory::insert` projection for decode arms: atomic
-variants enter the ordered tree keyed by (sub-metatype, descending size, id)
-— `DatatypeCompare`, type.hh:306-310 — and the flat name map; container
-variants stay name-map-only because the flat key cannot express their
-component ordering (registered TYPE-0001 residual). The byte-faithful
-conflict path lives in `find_add`.
+`type.cc:3390 TypeFactory::insert` projection for decode arms: atomic,
+TypeArray, and the three Partial variants enter the ordered tree using the
+series-B dependency key; named values also enter the flat name map. Other
+container variants remain under TYPE-0001. The byte-faithful conflict path
+lives in `find_add`; a direct `insert` collision raises the same Shared-type-id
+LowlevelError channel instead of silently retaining the previous occupant.
 
 
 
