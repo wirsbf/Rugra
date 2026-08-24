@@ -12,7 +12,7 @@ if [[ -z "$runner_source" || ! -f "$runner_source" || -L "$runner_source" ]]; th
   exit 1
 fi
 repo_root=$(builtin cd "$(/usr/bin/dirname "$runner_source")/.." && builtin pwd -P)
-runner="$repo_root/tools/run_address_space_handle_oracle.sh"
+runner="$repo_root/tools/run_fspec_space_identity_oracle.sh"
 if [[ "$runner_source" != "$runner" ]]; then
   echo "runner fd resolved outside the expected repository path" >&2
   exit 1
@@ -40,8 +40,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=ae2385a8eb6daa0ec7849f177fdad90166ec4596
-rugra_base_tree=85de2925a3424bd19e3c4de2e664c1fa6beaae81
+rugra_base_commit=fb6c21b505891ddbb383656ff14f8973296ea1cb
+rugra_base_tree=9ca47a3961d95c120a39b7fc648ea00c5b4a4ac6
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/fspec_space_identity_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/fspec_space_identity_1204.cc"
@@ -288,7 +288,7 @@ special_paths = [
     pathlib.Path("tests/oracle/fspec_space_identity_1204.metadata.json"),
     pathlib.Path("docs/api/address.md"),
     pathlib.Path("docs/api/space.md"),
-    pathlib.Path("tools/run_address_space_handle_oracle.sh"),
+    pathlib.Path("tools/run_fspec_space_identity_oracle.sh"),
 ]
 special = {}
 for relative in special_paths:
@@ -735,7 +735,7 @@ comparand = metadata["comparand"]
 require("runner FD", sha(runner_fd.read_bytes()), comparand["runner_sha256"])
 require(
     "live runner",
-    sha((repo / "tools/run_address_space_handle_oracle.sh").read_bytes()),
+    sha((repo / "tools/run_fspec_space_identity_oracle.sh").read_bytes()),
     comparand["runner_sha256"],
 )
 require(
