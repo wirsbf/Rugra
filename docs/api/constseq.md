@@ -1,5 +1,11 @@
 # `constseq.rs` API Reference
 
+## 2026-08-24：Rule 名对齐锁定 oracle 构造器字符串
+
+`RuleStringCopy::get_name` → `stringcopy`、`RuleStringStore::get_name` →
+`stringstore`（constseq.hh:121/132 ctor 精确名，原 snake_case 漂移）。
+
+
 **源代码路径**: `src/constseq.rs`
 **Ghidra 对应**: `constseq.hh` / `constseq.cc` (1146行)
 **状态**: 🔧 **L2 / `NO_ORACLE`（2026-08-11 锁定源码复核）**——现有 Rust 测试与源码锚点不能证明 L3；地址单位、space identity 和块内 predecessor 仍有确定性结构差异。

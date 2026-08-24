@@ -1,5 +1,15 @@
 # `ruleaction.rs` API Reference
 
+## 2026-08-24：112 个 Rule 名对齐锁定 oracle 构造器字符串
+
+`impl Rule for X` 的 `get_name` 字面量全部改为 oracle ctor 精确名
+（如 `trivial_arith→trivialarith`、`mult_neg_one→multnegone`，
+ruleaction.hh 各类内联 ctor）。这些名字是 `ActionPool::getSubRule`/
+`disableRule`/`print` 的可观察输入；注册序与数量本就一致（oppool1=134 /
+oppool2=5 / cleanup=15）。对拍证据：`tests/oracle/action_break_pool_1204`
+的 raw universal 树投影（154 Rule + 78 Action 名双侧逐字节一致）。
+
+
 **状态**: 已核对（当前有效）  
 **源代码路径**: `src/ruleaction.rs`
 **2026-07-02 修复（R9）**: `RuleTrivialArith` 重写为忠实移植 Ghidra ruleaction.cc:2370-2433——同输入坍缩（`x^x→0`/`x==x→1`/`x!=x→0`/`x^^x→0`/`x&&x→x` 等），输入须 Arc::ptr_eq 或 is_cse_match。原 Rugra 实现做了 `RuleIdentityEl` 的活（`x+0→x`），从不执行同输入坍缩 → `x^x` 残留。getOpList 改为 Ghidra 16 opcode。3 个旧测试（add_zero/mult_one/sub_zero）重定向到 `RuleIdentityEl`（其本应处理），3 个新测试覆盖 x^x→0/x==x→1/distinct-no-change。

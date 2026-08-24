@@ -1,5 +1,17 @@
 # `subflow.rs` API Reference
 
+## 2026-08-24：RuleSubvarSext reset 接入 pool virtual-reset seam + 名字对齐
+
+`RuleSubvarSext` 的派生 reset（subflow.cc:1742-1746，从
+`Architecture::aggressive_ext_trim` 刷新 `isaggressive`）此前是无法被池
+调度的独立方法；现改为 `Rule::reset_for_function` 覆盖，经
+`ActionPool::reset` 的 virtual 派发执行，并按 oracle 覆盖意图**不**调用
+基类 `Rule::reset`（base warning-given 位跨 reset 存活）。新增
+`fixture_is_aggressive()` 观察访问器供锁定 fixture 使用。
+`RuleDumptyHumpLate::get_name` 对齐 oracle 精确名 `dumptyhumplate`
+（subflow.hh ctor，原 `dumptyhump_late`）。
+
+
 **源代码路径**: `src/subflow.rs`
 **Ghidra 对应**: `subflow.hh` / `subflow.cc` (4589行)
 **状态**: 🟢 **L2.5（部分逐函数核对）**——SubvariableFlow 引擎 + subvar/split 族 Rule 已实现并注册；尚未完成模块全函数 oracle 对拍，不能宣称 L3。

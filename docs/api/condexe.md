@@ -1,5 +1,11 @@
 # `condexe.rs` API Reference
 
+## 2026-08-24：RuleOrPredicate 名对齐锁定 oracle 构造器字符串
+
+`RuleOrPredicate::get_name` → `orpredicate`（condexe.hh:189 ctor 精确名，
+原 `or_predicate`）。
+
+
 **源代码路径**: `src/condexe.rs`
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
 **状态**: 🔧 **L2（2026-08-23 更新）**——trueout 极性（CONDEXE-TRUEOUT-0002）、

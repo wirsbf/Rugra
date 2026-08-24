@@ -1,5 +1,14 @@
 # `double_precis.rs` API Reference
 
+## 2026-08-24：RuleDoubleIn reset 接入 pool virtual-reset seam
+
+`RuleDoubleIn` 的派生 reset（double.cc:3198-3202，
+`data.setDoublePrecisRecovery(true)`）此前是无法被池调度的独立方法；现改为
+`Rule::reset_for_function` 覆盖，经 `ActionPool::reset` 的 virtual 派发执行，
+并按 oracle 覆盖意图**不**调用基类 `Rule::reset`（base warning-given 位跨
+reset 存活）。
+
+
 **源代码路径**: `src/double_precis.rs`
 **Ghidra 对应**: `double.cc` (双精度合并子系统, ~1000行)
 **状态**: ✅ **L2.5（2026-07-01 核心算法 1:1 移植完成）**——SplitVarnode 核心 + 4 Rule 完整移植 + 21 单元测试。已注册进 oppool1(5643-5646)。

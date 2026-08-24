@@ -83,6 +83,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use crate::action::Rule;
+use crate::action::RuleState;
 use crate::action::action_status;
 use crate::address::{calc_mask, leastsigbit_set, mostsigbit_set, Address};
 use crate::error::Result;
@@ -3076,6 +3077,12 @@ impl RuleSubvarSext {
     pub fn new() -> Self {
         Self { isaggressive: false }
     }
+
+    // RUGRA-GLUE: fixture-only observation accessor (the locked C++ fixture reads the protected isaggressive field via its private/protected access hack)
+    #[doc(hidden)]
+    pub fn fixture_is_aggressive(&self) -> bool {
+        self.isaggressive
+    }
 }
 impl Rule for RuleSubvarSext {
     // Ghidra: subflow.cc:1729 RuleSubvarSext::applyOp
@@ -3103,19 +3110,18 @@ impl Rule for RuleSubvarSext {
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SEXT]
     }
-}
-impl RuleSubvarSext {
     // Ghidra: subflow.cc:1742 RuleSubvarSext::reset
-    /// Reset the aggressiveness flag from the architecture's
-    /// `aggressive_ext_trim` option. Faithful to `RuleSubvarSext::reset`
-    /// (subflow.cc:1742-1746). The `Rule` trait has no reset hook in Rugra, so
-    /// this is exposed as a standalone method to be called by the engine.
-    pub fn reset(&mut self, _fd: &Funcdata) {
-        // Ghidra: isaggressive = data.getArch()->aggressive_ext_trim;
-        // Rugra's Architecture is not threaded through Funcdata here; the flag
-        // defaults to false (matching Arch::new). Logged at module top.
-        self.isaggressive = false;
-        eprintln!("[subflow] RuleSubvarSext::reset: Architecture not reachable via Funcdata; defaulting aggressive_ext_trim=false");
+    /// The locked-oracle override deliberately does NOT call `Rule::reset`
+    /// (subflow.cc:1742-1746 only refreshes `isaggressive`), so the base
+    /// warning-given bit survives a reset. The override therefore goes
+    /// through the pool's virtual-reset seam and leaves the companion
+    /// RuleState untouched.
+    fn reset_for_function(&mut self, fd: &mut Funcdata, _state: &mut RuleState) {
+        // subflow.cc:1745: isaggressive = data.getArch()->aggressive_ext_trim;
+        self.isaggressive = fd
+            .get_arch()
+            .map(|arch| arch.aggressive_ext_trim)
+            .unwrap_or(false);
     }
 }
 
@@ -5592,7 +5598,7 @@ impl Rule for RuleDumptyHumpLate {
     }
 
     // Ghidra: subflow.hh:363 RuleDumptyHumpLate::getName
-    fn get_name(&self) -> &str { "dumptyhump_late" }
+    fn get_name(&self) -> &str { "dumptyhumplate" }
     // Ghidra: subflow.cc:3006 RuleDumptyHumpLate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -5920,7 +5926,10 @@ mod tests {
         let outvn = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
         let op = make_op(0, OpCode::CPUI_INT_SEXT, vec![invn], Some(outvn.clone()));
         let mut rule = RuleSubvarSext::new();
-        rule.reset(&fd); // exercise the reset path (defaults isaggressive=false)
+        // Exercise the pool's virtual-reset seam (subflow.cc:1742-1746): the
+        // override omits Rule::reset, so the base warning-given bit survives.
+        let mut rule_state = RuleState::new(0);
+        rule.reset_for_function(&mut fd, &mut rule_state);
         let res = rule.apply_op(&op, &mut fd).unwrap();
         assert!(res == action_status::CHANGE || res == action_status::NO_CHANGE);
     }
@@ -6207,7 +6216,7 @@ mod tests {
     #[test]
     fn test_rule_dumpty_hump_late_opcodes() {
         let rule = RuleDumptyHumpLate::new();
-        assert_eq!(rule.get_name(), "dumptyhump_late");
+        assert_eq!(rule.get_name(), "dumptyhumplate");
         assert_eq!(rule.get_opcodes(), vec![OpCode::CPUI_SUBPIECE]);
     }
 

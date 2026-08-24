@@ -21,9 +21,17 @@ metadata="$repo_root/tests/oracle/action_break_pool_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/action_break_pool_1204.cc"
 rust_fixture="$repo_root/tests/oracle/action_break_pool_1204.rs"
 action_overlay="$repo_root/src/action.rs"
+subflow_overlay="$repo_root/src/subflow.rs"
+double_precis_overlay="$repo_root/src/double_precis.rs"
+ruleaction_overlay="$repo_root/src/ruleaction.rs"
+condexe_overlay="$repo_root/src/condexe.rs"
+constseq_overlay="$repo_root/src/constseq.rs"
 runner="$repo_root/tools/run_action_break_pool_oracle.sh"
 
-for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$action_overlay" "$runner"; do
+overlays=("$action_overlay" "$subflow_overlay" "$double_precis_overlay" \
+  "$ruleaction_overlay" "$condexe_overlay" "$constseq_overlay")
+
+for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$runner" "${overlays[@]}"; do
   if [[ ! -f "$required" || -L "$required" ]]; then
     echo "required input is not a regular non-symlink file: $required" >&2
     exit 1
@@ -68,7 +76,9 @@ done
 
 runner_sha=$(sha256sum "$runner" | awk '{print $1}')
 python3 -I -S - "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$action_overlay" "$runner_sha" "$oracle_commit" "$oracle_tag" \
+  "$action_overlay" "$subflow_overlay" "$double_precis_overlay" \
+  "$ruleaction_overlay" "$condexe_overlay" "$constseq_overlay" \
+  "$runner_sha" "$oracle_commit" "$oracle_tag" \
   "$oracle_cpp_tree" "$oracle_makefile_blob" "$rugra_base_commit" \
   "$rugra_base_tree" "$rugra_base_src_tree" "$rugra_base_action_blob" \
   "$rugra_base_sleigh_tree" "$rugra_cargo_toml_blob" \
@@ -79,7 +89,9 @@ import pathlib
 import sys
 
 (
-    metadata_raw, cpp_raw, rust_raw, action_raw, runner_sha,
+    metadata_raw, cpp_raw, rust_raw, action_raw, subflow_raw,
+    double_precis_raw, ruleaction_raw, condexe_raw, constseq_raw,
+    runner_sha,
     oracle_commit, oracle_tag, cpp_tree, makefile_blob,
     base_commit, base_tree, base_src_tree, base_action_blob, base_sleigh_tree,
     cargo_toml_blob, cargo_lock_blob, build_rs_blob,
@@ -121,6 +133,11 @@ for key, path in (
     ("cpp_fixture_sha256", cpp_raw),
     ("rust_fixture_sha256", rust_raw),
     ("action_overlay_sha256", action_raw),
+    ("subflow_overlay_sha256", subflow_raw),
+    ("double_precis_overlay_sha256", double_precis_raw),
+    ("ruleaction_overlay_sha256", ruleaction_raw),
+    ("condexe_overlay_sha256", condexe_raw),
+    ("constseq_overlay_sha256", constseq_raw),
 ):
     require(key, sha(path), comparand[key])
 require("runner sha", runner_sha, comparand["runner_sha256"])
@@ -134,11 +151,15 @@ expected_coverage = {
     "group_cursor": ("MATCH", []),
     "pool_live_resume_dead": ("MATCH", []),
     "lookup_ambiguity": ("MATCH", []),
-    "virtual_reset_dispatch":
-        ("MISMATCH", ["PIPE-BREAK-0001", "PIPE-POOL-0001"]),
+    "virtual_reset_dispatch": ("MATCH", []),
     "restart_group_inherited_breakpoint":
-        ("MISMATCH", ["PIPE-BREAK-0001", "PIPE-RESTART-0001"]),
-    "derived_root_clone_filtering": ("MISMATCH", ["PIPE-POOL-0001"]),
+        ("MISMATCH", ["PIPE-RESTART-0001"]),
+    "derived_root_clone_filtering": ("MATCH", []),
+    "raw_rule_names": ("MATCH", []),
+    "pool_corpus_ir_closure":
+        ("MISMATCH", ["PIPE-POOL-0001"]),
+    "break_console_projection":
+        ("MISMATCH", ["PIPE-BREAK-0001"]),
     "opbank_creation_lifecycle": ("MISMATCH", ["OPBANK-0001"]),
 }
 require("coverage keys", set(data["coverage"]), set(expected_coverage))
@@ -182,6 +203,11 @@ git -C "$repo_root" archive --format=tar --output="$oracle_tmp/rugra.tar" \
   tests/oracle/funcproto_lock_1204.rs src sleigh_shim
 tar -xf "$oracle_tmp/rugra.tar" -C "$snapshot"
 cp "$action_overlay" "$snapshot/src/action.rs"
+cp "$subflow_overlay" "$snapshot/src/subflow.rs"
+cp "$double_precis_overlay" "$snapshot/src/double_precis.rs"
+cp "$ruleaction_overlay" "$snapshot/src/ruleaction.rs"
+cp "$condexe_overlay" "$snapshot/src/condexe.rs"
+cp "$constseq_overlay" "$snapshot/src/constseq.rs"
 cp "$rust_fixture" "$snapshot/tests/oracle/action_break_pool_1204.rs"
 
 git -C "$ghidra_root" archive --format=tar --output="$oracle_tmp/ghidra.tar" \
@@ -193,32 +219,71 @@ ln -s "$oracle_cpp" \
   "$snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
 
 # Add observation-only accessors to the temporary archive. No algorithm body
-# and no repository oracle source is changed.
-python3 -I -S - "$oracle_cpp/action.hh" "$metadata" <<'PY'
+# and no repository oracle source is changed. Implicit-private members
+# (isaggressive/curstart/allrules/getAction) need accessors because the
+# fixture's `#define private public` hack only rewrites explicit labels.
+python3 -I -S - "$oracle_cpp/action.hh" "$oracle_cpp/subflow.hh" "$metadata" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
+metadata = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+
 header = pathlib.Path(sys.argv[1])
-metadata = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
 text = header.read_text(encoding="utf-8")
-anchor = (
-    "  int4 processOp(PcodeOp *op,Funcdata &data);\t\t"
-    "///< Apply the next possible Rule to a PcodeOp\npublic:\n"
-)
-replacement = anchor + (
-    "  const PcodeOpTree::const_iterator &fixtureGetOpState(void) const "
-    "{ return op_state; }\n"
-    "  int4 fixtureGetRuleIndex(void) const { return rule_index; }\n"
-)
-if text.count(anchor) != 1:
-    raise SystemExit("ActionPool instrumentation anchor drifted")
-header.write_text(text.replace(anchor, replacement), encoding="utf-8")
+patches = [
+    (
+        "  int4 processOp(PcodeOp *op,Funcdata &data);\t\t"
+        "///< Apply the next possible Rule to a PcodeOp\npublic:\n",
+        "  const PcodeOpTree::const_iterator &fixtureGetOpState(void) const "
+        "{ return op_state; }\n"
+        "  int4 fixtureGetRuleIndex(void) const { return rule_index; }\n"
+        "  const vector<Rule *> &fixtureGetAllRules(void) const "
+        "{ return allrules; }\n",
+    ),
+    (
+        "class ActionRestartGroup : public ActionGroup {\n"
+        "  int4 maxrestarts;\t\t\t///< Maximum number of restarts allowed\n"
+        "  int4 curstart;\t\t\t///< Current restart iteration\n"
+        "public:\n",
+        "  int4 fixtureGetCurstart(void) const { return curstart; }\n",
+    ),
+    (
+        "  Action *deriveAction(const string &baseaction,const string &grp);"
+        "\t///< Derive a \\e root Action\npublic:\n",
+        "  Action *fixtureGetAction(const string &nm) const "
+        "{ return getAction(nm); }\n",
+    ),
+]
+for anchor, insertion in patches:
+    if text.count(anchor) != 1:
+        raise SystemExit(f"action.hh instrumentation anchor drifted: {anchor[:40]!r}")
+    text = text.replace(anchor, anchor + insertion)
+header.write_text(text, encoding="utf-8")
 actual = hashlib.sha256(header.read_bytes()).hexdigest()
 expected = metadata["comparand"]["ghidra_instrumented_action_hh_sha256"]
 if actual != expected:
     raise SystemExit(f"instrumented action.hh mismatch: expected={expected} actual={actual}")
+
+header = pathlib.Path(sys.argv[2])
+text = header.read_text(encoding="utf-8")
+anchor = (
+    "class RuleSubvarSext : public Rule {\n"
+    "  int4 isaggressive;\t\t\t///< Is it guaranteed the root is a sub-variable needing to be trimmed\n"
+    "public:\n"
+)
+if text.count(anchor) != 1:
+    raise SystemExit("subflow.hh instrumentation anchor drifted")
+text = text.replace(
+    anchor,
+    anchor + "  int4 fixtureGetIsAggressive(void) const { return isaggressive; }\n",
+)
+header.write_text(text, encoding="utf-8")
+actual = hashlib.sha256(header.read_bytes()).hexdigest()
+expected = metadata["comparand"]["ghidra_instrumented_subflow_hh_sha256"]
+if actual != expected:
+    raise SystemExit(f"instrumented subflow.hh mismatch: expected={expected} actual={actual}")
 PY
 
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
@@ -282,13 +347,21 @@ for key, actual in (
     if actual != expected[key]:
         raise SystemExit(f"{key} mismatch: expected={expected[key]} actual={actual}")
 lines = paths["ghidra_stdout_sha256"].read_text(encoding="utf-8").splitlines()
-if len(lines) != 22:
+if len(lines) != 796:
     raise SystemExit(f"fixture line count drifted: {len(lines)}")
 if not any("event=rule_break|return=-1|cursor=4096@1|rule_index=2" in line
            for line in lines):
     raise SystemExit("retained pool cursor/index observation is missing")
 if not any("event=fresh_pass" in line and "mutate@2304" in line for line in lines):
     raise SystemExit("before-cursor insertion was not observed on the fresh pass")
+if not any(line == "production_reset|sext_flags=12|din_flags=12|probe_sext_flags=8|probe_aggressive=1|double_precis=1"
+           for line in lines):
+    raise SystemExit("production derived-reset seam observation is missing")
+if not any(line == "dtree_root|jumptable" for line in lines):
+    raise SystemExit("derived jumptable tree walk is missing")
+if not any(line.startswith("restart_break|call=1|return=-1|status=8|count=3")
+           for line in lines):
+    raise SystemExit("restart-group inherited breakpoint observation is missing")
 PY
 
 cat "$oracle_tmp/ghidra.stdout"

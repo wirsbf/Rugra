@@ -1550,7 +1550,7 @@ impl Rule for RuleOrPredicate {
     }
 
     // Ghidra: condexe.hh:172 RuleOrPredicate::getName
-    fn get_name(&self) -> &str { "or_predicate" }
+    fn get_name(&self) -> &str { "orpredicate" }
 
     // Ghidra: condexe.cc:617 RuleOrPredicate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
@@ -1770,7 +1770,7 @@ mod tests {
     #[test]
     fn test_rule_or_predicate_trait_name_and_opcodes() {
         let rule: &dyn Rule = &RuleOrPredicate::new();
-        assert_eq!(rule.get_name(), "or_predicate");
+        assert_eq!(rule.get_name(), "orpredicate");
         let ops = rule.get_opcodes();
         assert_eq!(ops.len(), 2);
         assert!(ops.contains(&OpCode::CPUI_INT_OR));

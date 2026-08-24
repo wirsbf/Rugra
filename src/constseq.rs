@@ -1590,7 +1590,7 @@ impl Rule for RuleStringCopy {
     }
 
     // Ghidra: constseq.cc:948 RuleStringCopy::getName
-    fn get_name(&self) -> &str { "string_copy" }
+    fn get_name(&self) -> &str { "stringcopy" }
     // Ghidra: constseq.cc:942 RuleStringCopy::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_COPY] }
 }
@@ -1710,7 +1710,7 @@ impl Rule for RuleStringStore {
     }
 
     // Ghidra: constseq.cc:980 RuleStringStore::getName
-    fn get_name(&self) -> &str { "string_store" }
+    fn get_name(&self) -> &str { "stringstore" }
     // Ghidra: constseq.cc:974 RuleStringStore::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
 }
@@ -1773,8 +1773,8 @@ mod tests {
 
     #[test]
     fn test_rule_names() {
-        assert_eq!(RuleStringCopy::new().get_name(), "string_copy");
-        assert_eq!(RuleStringStore::new().get_name(), "string_store");
+        assert_eq!(RuleStringCopy::new().get_name(), "stringcopy");
+        assert_eq!(RuleStringStore::new().get_name(), "stringstore");
     }
 
     #[test]

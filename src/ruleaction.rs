@@ -171,7 +171,7 @@ impl Rule for RuleTrivialBool {
 
     // Ghidra: ruleaction.cc:2435 RuleTrivialBool
     fn get_name(&self) -> &str {
-        "trivial_bool"
+        "trivialbool"
     }
 
     // Ghidra: ruleaction.cc:2444 RuleTrivialBool::getOpList
@@ -433,7 +433,7 @@ impl Rule for RuleZextEliminate {
 
     // Ghidra: ruleaction.hh:512 RuleZextEliminate::RuleZextEliminate (name literal "zexteliminate")
     fn get_name(&self) -> &str {
-        "zext_eliminate"
+        "zexteliminate"
     }
 
     // Ghidra: ruleaction.cc:2479 RuleZextEliminate::getOpList
@@ -584,7 +584,7 @@ impl Rule for RuleTrivialArith {
 
     // Ghidra: ruleaction.cc:2359 RuleTrivialArith
     fn get_name(&self) -> &str {
-        "trivial_arith"
+        "trivialarith"
     }
 
     // Ghidra: ruleaction.cc:2372 RuleTrivialArith::getOpList
@@ -796,7 +796,7 @@ impl Rule for RuleShiftBitops {
 
     // Ghidra: ruleaction.hh:215 RuleShiftBitops::RuleShiftBitops (name literal "shiftbitops")
     fn get_name(&self) -> &str {
-        "shift_bitops"
+        "shiftbitops"
     }
 
     // Ghidra: ruleaction.cc:481 RuleShiftBitops::getOpList
@@ -912,7 +912,7 @@ impl Rule for RuleNegateIdentity {
 
     // Ghidra: ruleaction.cc:444 RuleNegateIdentity
     fn get_name(&self) -> &str {
-        "negate_identity"
+        "negateidentity"
     }
 
     // Ghidra: ruleaction.cc:446 RuleNegateIdentity::getOpList
@@ -1002,7 +1002,7 @@ impl Rule for RuleNotDistribute {
 
     // Ghidra: ruleaction.cc:1139 RuleNotDistribute
     fn get_name(&self) -> &str {
-        "not_distribute"
+        "notdistribute"
     }
 
     // Ghidra: ruleaction.cc:1141 RuleNotDistribute::getOpList
@@ -1075,7 +1075,7 @@ impl Rule for RuleConcatZero {
 
     // Ghidra: ruleaction.cc:4977 RuleConcatZero
     fn get_name(&self) -> &str {
-        "concat_zero"
+        "concatzero"
     }
 
     // Ghidra: ruleaction.cc:4979 RuleConcatZero::getOpList
@@ -1177,7 +1177,7 @@ impl Rule for RuleXorCollapse {
 
     // Ghidra: ruleaction.cc:4058 RuleXorCollapse
     fn get_name(&self) -> &str {
-        "xor_collapse"
+        "xorcollapse"
     }
 
     // Ghidra: ruleaction.cc:4063 RuleXorCollapse::getOpList
@@ -1278,7 +1278,7 @@ impl Rule for RuleAddMultCollapse {
 
     // Ghidra: ruleaction.cc:4099 RuleAddMultCollapse
     fn get_name(&self) -> &str {
-        "add_mult_collapse"
+        "addmultcollapse"
     }
 
     // Ghidra: ruleaction.cc:4106 RuleAddMultCollapse::getOpList
@@ -1366,7 +1366,7 @@ impl Rule for RuleLess2Zero {
 
     // Ghidra: ruleaction.cc:5557 RuleLess2Zero
     fn get_name(&self) -> &str {
-        "less2_zero"
+        "less2zero"
     }
 
     // Ghidra: ruleaction.cc:5565 RuleLess2Zero::getOpList
@@ -1444,7 +1444,7 @@ impl Rule for RuleLessEqual2Zero {
 
     // Ghidra: ruleaction.cc:5605 RuleLessEqual2Zero
     fn get_name(&self) -> &str {
-        "lessequal2_zero"
+        "lessequal2zero"
     }
 
     // Ghidra: ruleaction.cc:5613 RuleLessEqual2Zero::getOpList
@@ -1524,7 +1524,7 @@ impl Rule for RuleBoolNegate {
 
     // Ghidra: ruleaction.cc:5512 RuleBoolNegate
     fn get_name(&self) -> &str {
-        "bool_negate"
+        "boolnegate"
     }
 
     // Ghidra: ruleaction.cc:5523 RuleBoolNegate::getOpList
@@ -1577,7 +1577,7 @@ impl Rule for RuleOrMask {
 
     // Ghidra: ruleaction.cc:276 RuleOrMask
     fn get_name(&self) -> &str {
-        "or_mask"
+        "ormask"
     }
 
     // Ghidra: ruleaction.cc:278 RuleOrMask::getOpList
@@ -1667,7 +1667,7 @@ impl Rule for RuleAndOrLump {
 
     // Ghidra: ruleaction.cc:403 RuleAndOrLump
     fn get_name(&self) -> &str {
-        "and_or_lump"
+        "andorlump"
     }
 
     // Ghidra: ruleaction.cc:405 RuleAndOrLump::getOpList
@@ -1876,7 +1876,7 @@ impl Rule for RuleTermOrder {
 
     // Ghidra: ruleaction.cc:645 RuleTermOrder
     fn get_name(&self) -> &str {
-        "term_order"
+        "termorder"
     }
 
     // Ghidra: ruleaction.cc:650 RuleTermOrder::getOpList
@@ -2048,7 +2048,7 @@ impl Rule for RuleDoubleSub {
 
     // Ghidra: ruleaction.cc:1798 RuleDoubleSub
     fn get_name(&self) -> &str {
-        "double_sub"
+        "doublesub"
     }
 
     // Ghidra: ruleaction.cc:1800 RuleDoubleSub::getOpList
@@ -2108,7 +2108,7 @@ impl Rule for RuleTrivialShift {
 
     // Ghidra: ruleaction.cc:3516 RuleTrivialShift
     fn get_name(&self) -> &str {
-        "trivial_shift"
+        "trivialshift"
     }
 
     // Ghidra: ruleaction.cc:3518 RuleTrivialShift::getOpList
@@ -2178,7 +2178,7 @@ impl Rule for RuleSlessToLess {
 
     // Ghidra: ruleaction.cc:2548 RuleSlessToLess
     fn get_name(&self) -> &str {
-        "sless_to_less"
+        "slesstoless"
     }
 
     // Ghidra: ruleaction.cc:2553 RuleSlessToLess::getOpList
@@ -2234,7 +2234,7 @@ impl Rule for RuleOrCollapse {
 
     // Ghidra: ruleaction.cc:373 RuleOrCollapse
     fn get_name(&self) -> &str {
-        "or_collapse"
+        "orcollapse"
     }
 
     // Ghidra: ruleaction.cc:378 RuleOrCollapse::getOpList
@@ -2353,7 +2353,7 @@ impl Rule for RuleConcatLeftShift {
 
     // Ghidra: ruleaction.cc:5004 RuleConcatLeftShift
     fn get_name(&self) -> &str {
-        "concat_leftshift"
+        "concatleftshift"
     }
 
     // Ghidra: ruleaction.cc:5006 RuleConcatLeftShift::getOpList
@@ -2483,7 +2483,7 @@ impl Rule for RuleDoubleShift {
 
     // Ghidra: ruleaction.cc:1825 RuleDoubleShift
     fn get_name(&self) -> &str {
-        "double_shift"
+        "doubleshift"
     }
 
     // Ghidra: ruleaction.cc:1834 RuleDoubleShift::getOpList
@@ -2649,7 +2649,7 @@ impl Rule for RuleSignShift {
 
     // Ghidra: ruleaction.cc:3544 RuleSignShift
     fn get_name(&self) -> &str {
-        "sign_shift"
+        "signshift"
     }
 
     // Ghidra: ruleaction.cc:3549 RuleSignShift::getOpList
@@ -2753,7 +2753,7 @@ impl Rule for RuleSubZext {
 
     // Ghidra: ruleaction.cc:5044 RuleSubZext
     fn get_name(&self) -> &str {
-        "sub_zext"
+        "subzext"
     }
 
     // Ghidra: ruleaction.cc:5051 RuleSubZext::getOpList
@@ -2845,7 +2845,7 @@ impl Rule for RuleConcatShift {
 
     // Ghidra: ruleaction.cc:1966 RuleConcatShift
     fn get_name(&self) -> &str {
-        "concat_shift"
+        "concatshift"
     }
 
     // Ghidra: ruleaction.cc:1972 RuleConcatShift::getOpList
@@ -2967,7 +2967,7 @@ impl Rule for RuleShiftCompare {
 
     // Ghidra: ruleaction.cc:2064 RuleShiftCompare
     fn get_name(&self) -> &str {
-        "shift_compare"
+        "shiftcompare"
     }
 
     // Ghidra: ruleaction.cc:2070 RuleShiftCompare::getOpList
@@ -3086,7 +3086,7 @@ impl Rule for RuleAndCompare {
 
     // Ghidra: ruleaction.cc:1734 RuleAndCompare
     fn get_name(&self) -> &str {
-        "and_compare"
+        "andcompare"
     }
 
     // Ghidra: ruleaction.cc:1738 RuleAndCompare::getOpList
@@ -3195,7 +3195,7 @@ impl Rule for RuleTestSign {
 
     // Ghidra: ruleaction.cc:3602 RuleTestSign
     fn get_name(&self) -> &str {
-        "test_sign"
+        "testsign"
     }
 
     // Ghidra: ruleaction.cc:3604 RuleTestSign::getOpList
@@ -3339,7 +3339,7 @@ impl Rule for RuleLessNotEqual {
     }
 
     // Ghidra: ruleaction.cc:2310 RuleLessNotEqual
-    fn get_name(&self) -> &str { "less_notequal" }
+    fn get_name(&self) -> &str { "lessnotequal" }
     // Ghidra: ruleaction.cc:2314 RuleLessNotEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND] }
 }
@@ -3425,7 +3425,7 @@ impl Rule for RuleLessEqual {
     }
 
     // Ghidra: ruleaction.cc:2250 RuleLessEqual
-    fn get_name(&self) -> &str { "less_equal" }
+    fn get_name(&self) -> &str { "lessequal" }
     // Ghidra: ruleaction.cc:2256 RuleLessEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR] }
 }
@@ -3484,7 +3484,7 @@ impl Rule for RuleRightShiftAnd {
     }
 
     // Ghidra: ruleaction.cc:568 RuleRightShiftAnd
-    fn get_name(&self) -> &str { "right_shift_and" }
+    fn get_name(&self) -> &str { "rightshiftand" }
     // Ghidra: ruleaction.cc:573 RuleRightShiftAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
@@ -3546,7 +3546,7 @@ impl Rule for RuleHighOrderAnd {
     }
 
     // Ghidra: ruleaction.cc:1185 RuleHighOrderAnd
-    fn get_name(&self) -> &str { "high_order_and" }
+    fn get_name(&self) -> &str { "highorderand" }
     // Ghidra: ruleaction.cc:1190 RuleHighOrderAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -3602,7 +3602,7 @@ impl Rule for RuleAndZext {
     }
 
     // Ghidra: ruleaction.cc:1696 RuleAndZext
-    fn get_name(&self) -> &str { "and_zext" }
+    fn get_name(&self) -> &str { "andzext" }
     // Ghidra: ruleaction.cc:1700 RuleAndZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -3669,7 +3669,7 @@ impl Rule for RuleZextSless {
     }
 
     // Ghidra: ruleaction.cc:2575 RuleZextSless
-    fn get_name(&self) -> &str { "zext_sless" }
+    fn get_name(&self) -> &str { "zextsless" }
     // Ghidra: ruleaction.cc:2577 RuleZextSless::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL] }
 }
@@ -3838,7 +3838,7 @@ impl Rule for RuleAndDistribute {
     }
 
     // Ghidra: ruleaction.cc:1252 RuleAndDistribute
-    fn get_name(&self) -> &str { "and_distribute" }
+    fn get_name(&self) -> &str { "anddistribute" }
     // Ghidra: ruleaction.cc:1254 RuleAndDistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -3883,7 +3883,7 @@ impl Rule for RuleLessOne {
     }
 
     // Ghidra: ruleaction.cc:1316 RuleLessOne
-    fn get_name(&self) -> &str { "less_one" }
+    fn get_name(&self) -> &str { "lessone" }
     // Ghidra: ruleaction.cc:1318 RuleLessOne::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESS, OpCode::CPUI_INT_LESSEQUAL] }
 }
@@ -3965,7 +3965,7 @@ impl Rule for RuleAndPiece {
     }
 
     // Ghidra: ruleaction.cc:1628 RuleAndPiece
-    fn get_name(&self) -> &str { "and_piece" }
+    fn get_name(&self) -> &str { "andpiece" }
     // Ghidra: ruleaction.cc:1634 RuleAndPiece::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -4068,7 +4068,7 @@ impl Rule for RuleAndCommute {
     }
 
     // Ghidra: ruleaction.cc:1520 RuleAndCommute
-    fn get_name(&self) -> &str { "and_commute" }
+    fn get_name(&self) -> &str { "andcommute" }
     // Ghidra: ruleaction.cc:1526 RuleAndCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -4116,7 +4116,7 @@ impl Rule for RuleOrConsume {
     }
 
     // Ghidra: ruleaction.cc:344 RuleOrConsume
-    fn get_name(&self) -> &str { "or_consume" }
+    fn get_name(&self) -> &str { "orconsume" }
     // Ghidra: ruleaction.cc:346 RuleOrConsume::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
@@ -4195,7 +4195,7 @@ impl Rule for RuleEarlyRemoval {
     }
 
     // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
-    fn get_name(&self) -> &str { "early_removal" }
+    fn get_name(&self) -> &str { "earlyremoval" }
     // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Applies to all ops; we register a representative set.
@@ -4254,7 +4254,7 @@ impl Rule for RuleBooleanNegate {
     }
 
     // Ghidra: ruleaction.cc:2957 RuleBooleanNegate
-    fn get_name(&self) -> &str { "boolean_negate" }
+    fn get_name(&self) -> &str { "booleannegate" }
     // Ghidra: ruleaction.cc:2962 RuleBooleanNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
@@ -4384,7 +4384,7 @@ impl Rule for RuleLeftRight {
     }
 
     // Ghidra: ruleaction.cc:2016 RuleLeftRight
-    fn get_name(&self) -> &str { "left_right" }
+    fn get_name(&self) -> &str { "leftright" }
     // Ghidra: ruleaction.cc:2023 RuleLeftRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT] }
 }
@@ -4412,7 +4412,7 @@ impl Rule for RuleIntLessEqual {
     }
 
     // Ghidra: ruleaction.cc:602 RuleIntLessEqual
-    fn get_name(&self) -> &str { "int_lessequal" }
+    fn get_name(&self) -> &str { "intlessequal" }
     // Ghidra: ruleaction.cc:604 RuleIntLessEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESSEQUAL, OpCode::CPUI_INT_SLESSEQUAL] }
 }
@@ -4660,7 +4660,7 @@ impl Rule for RuleBitUndistribute {
     }
 
     // Ghidra: ruleaction.cc:2620 RuleBitUndistribute
-    fn get_name(&self) -> &str { "bit_undistribute" }
+    fn get_name(&self) -> &str { "bitundistribute" }
     // Ghidra: ruleaction.cc:2627 RuleBitUndistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
@@ -4756,7 +4756,7 @@ impl Rule for RuleBooleanDedup {
     }
 
     // Ghidra: ruleaction.cc:2812 RuleBooleanDedup
-    fn get_name(&self) -> &str { "boolean_dedup" }
+    fn get_name(&self) -> &str { "booleandedup" }
     // Ghidra: ruleaction.cc:2820 RuleBooleanDedup::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND, OpCode::CPUI_BOOL_OR] }
 }
@@ -4850,7 +4850,7 @@ impl Rule for RuleAndMask {
     }
 
     // Ghidra: ruleaction.cc:302 RuleAndMask
-    fn get_name(&self) -> &str { "and_mask" }
+    fn get_name(&self) -> &str { "andmask" }
     // Ghidra: ruleaction.cc:304 RuleAndMask::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -5010,7 +5010,7 @@ impl Rule for RuleBooleanUndistribute {
     }
 
     // Ghidra: ruleaction.cc:2697 RuleBooleanUndistribute
-    fn get_name(&self) -> &str { "boolean_undistribute" }
+    fn get_name(&self) -> &str { "booleanundistribute" }
     // Ghidra: ruleaction.cc:2703 RuleBooleanUndistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
@@ -5189,7 +5189,7 @@ impl Rule for RuleBoolZext {
     }
 
     // Ghidra: ruleaction.cc:3001 RuleBoolZext
-    fn get_name(&self) -> &str { "bool_zext" }
+    fn get_name(&self) -> &str { "boolzext" }
     // Ghidra: ruleaction.cc:3009 RuleBoolZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
@@ -5471,7 +5471,7 @@ impl Rule for RuleSelectCse {
     }
 
     // Ghidra: ruleaction.cc:178 RuleSelectCse
-    fn get_name(&self) -> &str { "select_cse" }
+    fn get_name(&self) -> &str { "selectcse" }
     // Ghidra: ruleaction.cc:180 RuleSelectCse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_SRIGHT] }
 }
@@ -5509,7 +5509,7 @@ impl Rule for RuleMultNegOne {
     }
 
     // Ghidra: ruleaction.cc:7171 RuleMultNegOne
-    fn get_name(&self) -> &str { "mult_neg_one" }
+    fn get_name(&self) -> &str { "multnegone" }
     // Ghidra: ruleaction.cc:7173 RuleMultNegOne::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
@@ -5553,7 +5553,7 @@ impl Rule for RuleSub2Add {
     }
 
     // Ghidra: ruleaction.cc:4032 RuleSub2Add
-    fn get_name(&self) -> &str { "sub2_add" }
+    fn get_name(&self) -> &str { "sub2add" }
     // Ghidra: ruleaction.cc:4034 RuleSub2Add::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SUB] }
 }
@@ -5629,7 +5629,7 @@ impl Rule for RuleSubExtComm {
     }
 
     // Ghidra: ruleaction.cc:4405 RuleSubExtComm
-    fn get_name(&self) -> &str { "sub_ext_comm" }
+    fn get_name(&self) -> &str { "subextcomm" }
     // Ghidra: ruleaction.cc:4416 RuleSubExtComm::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -5749,7 +5749,7 @@ impl Rule for RuleCarryElim {
     }
 
     // Ghidra: ruleaction.cc:3997 RuleCarryElim
-    fn get_name(&self) -> &str { "carry_elim" }
+    fn get_name(&self) -> &str { "carryelim" }
     // Ghidra: ruleaction.cc:4002 RuleCarryElim::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_CARRY] }
 }
@@ -5799,7 +5799,7 @@ impl Rule for RuleConcatZext {
     }
 
     // Ghidra: ruleaction.cc:4806 RuleConcatZext
-    fn get_name(&self) -> &str { "concat_zext" }
+    fn get_name(&self) -> &str { "concatzext" }
     // Ghidra: ruleaction.cc:4808 RuleConcatZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
@@ -5848,7 +5848,7 @@ impl Rule for RuleZextCommute {
     }
 
     // Ghidra: ruleaction.cc:4844 RuleZextCommute
-    fn get_name(&self) -> &str { "zext_commute" }
+    fn get_name(&self) -> &str { "zextcommute" }
     // Ghidra: ruleaction.cc:4846 RuleZextCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
@@ -5931,7 +5931,7 @@ impl Rule for RuleZextShiftZext {
     }
 
     // Ghidra: ruleaction.cc:4877 RuleZextShiftZext
-    fn get_name(&self) -> &str { "zext_shift_zext" }
+    fn get_name(&self) -> &str { "zextshiftzext" }
     // Ghidra: ruleaction.cc:4879 RuleZextShiftZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
@@ -5984,7 +5984,7 @@ impl Rule for RuleShiftSub {
     }
 
     // Ghidra: ruleaction.cc:5201 RuleShiftSub
-    fn get_name(&self) -> &str { "shift_sub" }
+    fn get_name(&self) -> &str { "shiftsub" }
     // Ghidra: ruleaction.cc:5203 RuleShiftSub::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -6046,7 +6046,7 @@ impl Rule for RuleHumptyDumpty {
     }
 
     // Ghidra: ruleaction.cc:5232 RuleHumptyDumpty
-    fn get_name(&self) -> &str { "humpty_dumpty" }
+    fn get_name(&self) -> &str { "humptydumpty" }
     // Ghidra: ruleaction.cc:5237 RuleHumptyDumpty::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
@@ -6111,7 +6111,7 @@ impl Rule for RuleDumptyHump {
     }
 
     // Ghidra: ruleaction.cc:5283 RuleDumptyHump
-    fn get_name(&self) -> &str { "dumpty_hump" }
+    fn get_name(&self) -> &str { "dumptyhump" }
     // Ghidra: ruleaction.cc:5290 RuleDumptyHump::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -6222,7 +6222,7 @@ impl Rule for RuleSubCancel {
     }
 
     // Ghidra: ruleaction.cc:5120 RuleSubCancel
-    fn get_name(&self) -> &str { "sub_cancel" }
+    fn get_name(&self) -> &str { "subcancel" }
     // Ghidra: ruleaction.cc:5131 RuleSubCancel::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -6315,7 +6315,7 @@ impl Rule for RuleHumptyOr {
     }
 
     // Ghidra: ruleaction.cc:5339 RuleHumptyOr
-    fn get_name(&self) -> &str { "humpty_or" }
+    fn get_name(&self) -> &str { "humptyor" }
     // Ghidra: ruleaction.cc:5344 RuleHumptyOr::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
@@ -6656,7 +6656,7 @@ impl Rule for RulePopcountBoolXor {
     }
 
     // Ghidra: ruleaction.cc:10265 RulePopcountBoolXor
-    fn get_name(&self) -> &str { "popcount_bool_xor" }
+    fn get_name(&self) -> &str { "popcountboolxor" }
     // Ghidra: ruleaction.cc:10270 RulePopcountBoolXor::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_POPCOUNT] }
 }
@@ -6845,7 +6845,7 @@ impl Rule for RuleShiftAnd {
     }
 
     // Ghidra: ruleaction.cc:4921 RuleShiftAnd
-    fn get_name(&self) -> &str { "shift_and" }
+    fn get_name(&self) -> &str { "shiftand" }
     // Ghidra: ruleaction.cc:4925 RuleShiftAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_MULT] }
 }
@@ -6888,7 +6888,7 @@ impl Rule for RuleCondNegate {
     }
 
     // Ghidra: ruleaction.cc:5479 RuleCondNegate
-    fn get_name(&self) -> &str { "cond_negate" }
+    fn get_name(&self) -> &str { "condnegate" }
     // Ghidra: ruleaction.cc:5486 RuleCondNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CBRANCH] }
 }
@@ -6939,7 +6939,7 @@ impl Rule for RuleXorSwap {
     }
 
     // Ghidra: ruleaction.cc:10614 RuleXorSwap
-    fn get_name(&self) -> &str { "xor_swap" }
+    fn get_name(&self) -> &str { "xorswap" }
     // Ghidra: ruleaction.cc:10619 RuleXorSwap::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_XOR] }
 }
@@ -7087,7 +7087,7 @@ impl Rule for RuleOrCompare {
     }
 
     // Ghidra: ruleaction.cc:10803 RuleOrCompare
-    fn get_name(&self) -> &str { "or_compare" }
+    fn get_name(&self) -> &str { "orcompare" }
     // Ghidra: ruleaction.cc:10808 RuleOrCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
@@ -7170,7 +7170,7 @@ impl Rule for RuleConcatCommute {
     }
 
     // Ghidra: ruleaction.cc:4675 RuleConcatCommute
-    fn get_name(&self) -> &str { "concat_commute" }
+    fn get_name(&self) -> &str { "concatcommute" }
     // Ghidra: ruleaction.cc:4681 RuleConcatCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
@@ -7377,7 +7377,7 @@ impl Rule for RuleSubCommute {
     }
 
     // Ghidra: ruleaction.cc:4463 RuleSubCommute
-    fn get_name(&self) -> &str { "sub_commute" }
+    fn get_name(&self) -> &str { "subcommute" }
     // Ghidra: ruleaction.cc:4470 RuleSubCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -7451,7 +7451,7 @@ impl Rule for RuleLzcountShiftBool {
     }
 
     // Ghidra: ruleaction.cc:10652 RuleLzcountShiftBool
-    fn get_name(&self) -> &str { "lzcount_shift_bool" }
+    fn get_name(&self) -> &str { "lzcountshiftbool" }
     // Ghidra: ruleaction.cc:10660 RuleLzcountShiftBool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LZCOUNT] }
 }
@@ -7972,7 +7972,7 @@ impl Rule for RuleSignDiv2 {
     }
 
     // Ghidra: ruleaction.cc:8357 RuleSignDiv2
-    fn get_name(&self) -> &str { "sign_div2" }
+    fn get_name(&self) -> &str { "signdiv2" }
     // Ghidra: ruleaction.cc:8359 RuleSignDiv2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
@@ -8031,7 +8031,7 @@ impl Rule for RuleDivChain {
     }
 
     // Ghidra: ruleaction.cc:8410 RuleDivChain
-    fn get_name(&self) -> &str { "div_chain" }
+    fn get_name(&self) -> &str { "divchain" }
     // Ghidra: ruleaction.cc:8412 RuleDivChain::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV] }
 }
@@ -8103,7 +8103,7 @@ impl Rule for RuleSignForm {
     }
 
     // Ghidra: ruleaction.hh:1311 RuleSignForm::RuleSignForm (name literal "signform")
-    fn get_name(&self) -> &str { "sign_form" }
+    fn get_name(&self) -> &str { "signform" }
     // Ghidra: ruleaction.cc:8447 RuleSignForm::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // cc:8450: SUBPIECE only. Rugra previously dispatched INT_SRIGHT and
@@ -8178,7 +8178,7 @@ impl Rule for RuleSignForm2 {
     }
 
     // Ghidra: ruleaction.cc:8494 RuleSignForm2
-    fn get_name(&self) -> &str { "sign_form2" }
+    fn get_name(&self) -> &str { "signform2" }
     // Ghidra: ruleaction.cc:8499 RuleSignForm2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
@@ -8220,7 +8220,7 @@ impl Rule for RulePositiveDiv {
     }
 
     // Ghidra: ruleaction.cc:7805 RulePositiveDiv
-    fn get_name(&self) -> &str { "positive_div" }
+    fn get_name(&self) -> &str { "positivediv" }
     // Ghidra: ruleaction.cc:7810 RulePositiveDiv::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SDIV, OpCode::CPUI_INT_SREM] }
 }
@@ -8277,7 +8277,7 @@ impl Rule for RuleDoubleArithShift {
     }
 
     // Ghidra: ruleaction.cc:1932 RuleDoubleArithShift
-    fn get_name(&self) -> &str { "double_arith_shift" }
+    fn get_name(&self) -> &str { "doublearithshift" }
     // Ghidra: ruleaction.cc:1937 RuleDoubleArithShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
@@ -8443,7 +8443,7 @@ impl Rule for RuleSignNearMult {
     }
 
     // Ghidra: ruleaction.hh:1333 RuleSignNearMult::RuleSignNearMult (name literal "signnearmult")
-    fn get_name(&self) -> &str { "sign_near_mult" }
+    fn get_name(&self) -> &str { "signnearmult" }
     // Ghidra: ruleaction.cc:8535 RuleSignNearMult::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // cc:8538: INT_AND only. Rugra previously dispatched INT_MULT and
@@ -8525,7 +8525,7 @@ impl Rule for RuleFloatCast {
     }
 
     // Ghidra: ruleaction.cc:9551 RuleFloatCast
-    fn get_name(&self) -> &str { "float_cast" }
+    fn get_name(&self) -> &str { "floatcast" }
     // Ghidra: ruleaction.cc:9553 RuleFloatCast::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT, OpCode::CPUI_FLOAT_TRUNC] }
 }
@@ -8640,7 +8640,7 @@ impl Rule for RuleSubNormal {
     }
 
     // Ghidra: ruleaction.cc:7720 RuleSubNormal
-    fn get_name(&self) -> &str { "sub_normal" }
+    fn get_name(&self) -> &str { "subnormal" }
     // Ghidra: ruleaction.cc:7726 RuleSubNormal::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -8796,7 +8796,7 @@ impl Rule for RuleSignMod2nOpt {
     }
 
     // Ghidra: ruleaction.cc:8673 RuleSignMod2nOpt
-    fn get_name(&self) -> &str { "sign_mod2n_opt" }
+    fn get_name(&self) -> &str { "signmod2nopt" }
     // Ghidra: ruleaction.cc:8677 RuleSignMod2nOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
@@ -8945,7 +8945,7 @@ impl Rule for RuleSignMod2Opt {
     }
 
     // Ghidra: ruleaction.cc:8794 RuleSignMod2Opt
-    fn get_name(&self) -> &str { "sign_mod2_opt" }
+    fn get_name(&self) -> &str { "signmod2opt" }
     // Ghidra: ruleaction.cc:8799 RuleSignMod2Opt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
@@ -9094,7 +9094,7 @@ impl Rule for RuleShiftPiece {
     }
 
     // Ghidra: ruleaction.cc:3773 RuleShiftPiece
-    fn get_name(&self) -> &str { "shift_piece" }
+    fn get_name(&self) -> &str { "shiftpiece" }
     // Ghidra: ruleaction.cc:3783 RuleShiftPiece::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_ADD] }
 }
@@ -9459,7 +9459,7 @@ impl Rule for RuleDivOpt {
     }
 
     // Ghidra: ruleaction.cc:8281 RuleDivOpt
-    fn get_name(&self) -> &str { "div_opt" }
+    fn get_name(&self) -> &str { "divopt" }
     // Ghidra: ruleaction.cc:8287 RuleDivOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
@@ -9580,7 +9580,7 @@ impl Rule for RuleModOpt {
     }
 
     // Ghidra: ruleaction.cc:8612 RuleModOpt
-    fn get_name(&self) -> &str { "mod_opt" }
+    fn get_name(&self) -> &str { "modopt" }
     // Ghidra: ruleaction.cc:8614 RuleModOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV]
@@ -9718,7 +9718,7 @@ impl Rule for RuleSignMod2nOpt2 {
     }
 
     // Ghidra: ruleaction.cc:8867 RuleSignMod2nOpt2
-    fn get_name(&self) -> &str { "sign_mod2n_opt2" }
+    fn get_name(&self) -> &str { "signmod2nopt2" }
     // Ghidra: ruleaction.cc:8871 RuleSignMod2nOpt2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
@@ -9877,7 +9877,7 @@ impl Rule for RuleDivTermAdd {
     }
 
     // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
-    fn get_name(&self) -> &str { "div_term_add" }
+    fn get_name(&self) -> &str { "divtermadd" }
     // Ghidra: ruleaction.cc:7840 RuleDivTermAdd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
@@ -10056,7 +10056,7 @@ impl Rule for RuleDivTermAdd2 {
     }
 
     // Ghidra: ruleaction.cc:7955 RuleDivTermAdd2
-    fn get_name(&self) -> &str { "div_term_add2" }
+    fn get_name(&self) -> &str { "divtermadd2" }
     // Ghidra: ruleaction.cc:7963 RuleDivTermAdd2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
@@ -10231,7 +10231,7 @@ impl Rule for RuleRangeMeld {
     }
 
     // Ghidra: ruleaction.cc:1348 RuleRangeMeld
-    fn get_name(&self) -> &str { "range_meld" }
+    fn get_name(&self) -> &str { "rangemeld" }
     // Ghidra: ruleaction.cc:1341 RuleRangeMeld::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
@@ -10435,7 +10435,7 @@ impl Rule for RuleFloatRange {
     }
 
     // Ghidra: ruleaction.cc:1439 RuleFloatRange
-    fn get_name(&self) -> &str { "float_range" }
+    fn get_name(&self) -> &str { "floatrange" }
     // Ghidra: ruleaction.cc:1443 RuleFloatRange::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
@@ -10566,7 +10566,7 @@ impl Rule for RuleFloatSign {
     }
 
     // Ghidra: ruleaction.cc:10714 RuleFloatSign
-    fn get_name(&self) -> &str { "float_sign" }
+    fn get_name(&self) -> &str { "floatsign" }
     // Ghidra: ruleaction.cc:10723 RuleFloatSign::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
@@ -10941,7 +10941,7 @@ impl Rule for RuleAddUnsigned {
     }
 
     // Ghidra: ruleaction.hh:1145 RuleAddUnsigned::RuleAddUnsigned
-    fn get_name(&self) -> &str { "add_unsigned" }
+    fn get_name(&self) -> &str { "addunsigned" }
     // Ghidra: ruleaction.cc:7176 RuleAddUnsigned::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
@@ -11074,7 +11074,7 @@ impl Rule for RuleSubRight {
     }
 
     // Ghidra: ruleaction.cc:7256 RuleSubRight
-    fn get_name(&self) -> &str { "sub_right" }
+    fn get_name(&self) -> &str { "subright" }
     // Ghidra: ruleaction.cc:7263 RuleSubRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
@@ -11117,7 +11117,7 @@ impl Rule for RuleNegateNegate {
     }
 
     // Ghidra: ruleaction.cc:9250 RuleNegateNegate
-    fn get_name(&self) -> &str { "negate_negate" }
+    fn get_name(&self) -> &str { "negatenegate" }
     // Ghidra: ruleaction.cc:9252 RuleNegateNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEGATE] }
 }
@@ -11194,7 +11194,7 @@ impl Rule for RuleFloatSignCleanup {
     }
 
     // Ghidra: ruleaction.cc:10778 RuleFloatSignCleanup
-    fn get_name(&self) -> &str { "float_sign_cleanup" }
+    fn get_name(&self) -> &str { "floatsigncleanup" }
     // Ghidra: ruleaction.cc:10782 RuleFloatSignCleanup::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_XOR] }
 }
@@ -11325,7 +11325,7 @@ impl Rule for RulePtrsubCharConstant {
     }
 
     // Ghidra: ruleaction.cc:7360 RulePtrsubCharConstant
-    fn get_name(&self) -> &str { "ptrsub_char_constant" }
+    fn get_name(&self) -> &str { "ptrsubcharconstant" }
     // Ghidra: ruleaction.cc:7366 RulePtrsubCharConstant::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
 }
@@ -11455,7 +11455,7 @@ impl Rule for RuleExtensionPush {
     }
 
     // Ghidra: ruleaction.cc:7423 RuleExtensionPush
-    fn get_name(&self) -> &str { "extension_push" }
+    fn get_name(&self) -> &str { "extensionpush" }
     // Ghidra: ruleaction.cc:7428 RuleExtensionPush::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT, OpCode::CPUI_INT_SEXT] }
 }
@@ -11678,7 +11678,7 @@ impl Rule for RuleExpandLoad {
     }
 
     // Ghidra: ruleaction.cc:10927 RuleExpandLoad
-    fn get_name(&self) -> &str { "expand_load" }
+    fn get_name(&self) -> &str { "expandload" }
     // Ghidra: ruleaction.cc:10931 RuleExpandLoad::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
@@ -12206,7 +12206,7 @@ impl Rule for RulePieceStructure {
     }
 
     // Ghidra: ruleaction.cc:7613 RulePieceStructure
-    fn get_name(&self) -> &str { "piece_structure" }
+    fn get_name(&self) -> &str { "piecestructure" }
     // Ghidra: ruleaction.cc:7618 RulePieceStructure::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE, OpCode::CPUI_INT_ZEXT] }
 }
@@ -12527,7 +12527,7 @@ impl Rule for RuleIndirectCollapse {
     }
 
     // Ghidra: ruleaction.cc:3169 RuleIndirectCollapse
-    fn get_name(&self) -> &str { "indirect_collapse" }
+    fn get_name(&self) -> &str { "indirectcollapse" }
     // Ghidra: ruleaction.cc:3171 RuleIndirectCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INDIRECT] }
 }
@@ -12621,7 +12621,7 @@ impl Rule for RuleTransformCpool {
     }
 
     // Ghidra: ruleaction.cc:3904 RuleTransformCpool
-    fn get_name(&self) -> &str { "transform_cpool" }
+    fn get_name(&self) -> &str { "transformcpool" }
     // Ghidra: ruleaction.cc:3909 RuleTransformCpool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CPOOLREF] }
 }
@@ -12740,7 +12740,7 @@ impl Rule for RuleSwitchSingle {
     }
 
     // Ghidra: ruleaction.cc:5422 RuleSwitchSingle
-    fn get_name(&self) -> &str { "switch_single" }
+    fn get_name(&self) -> &str { "switchsingle" }
     // Ghidra: ruleaction.cc:5424 RuleSwitchSingle::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BRANCHIND] }
 }
@@ -12801,7 +12801,7 @@ impl Rule for RuleFuncPtrEncoding {
     }
 
     // Ghidra: ruleaction.cc:9914 RuleFuncPtrEncoding
-    fn get_name(&self) -> &str { "funcptr_encoding" }
+    fn get_name(&self) -> &str { "funcptrencoding" }
     // Ghidra: ruleaction.cc:9920 RuleFuncPtrEncoding::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CALLIND] }
 }
@@ -12944,7 +12944,7 @@ impl Rule for RuleUnsigned2Float {
     }
 
     // Ghidra: ruleaction.hh:1471 RuleUnsigned2Float::RuleUnsigned2Float
-    fn get_name(&self) -> &str { "unsigned_2_float" }
+    fn get_name(&self) -> &str { "unsigned2float" }
     // Ghidra: ruleaction.cc:9771 RuleUnsigned2Float::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
 }
@@ -13087,7 +13087,7 @@ impl Rule for RuleInt2FloatCollapse {
     }
 
     // Ghidra: ruleaction.hh:1482 RuleInt2FloatCollapse::RuleInt2FloatCollapse
-    fn get_name(&self) -> &str { "int_2_float_collapse" }
+    fn get_name(&self) -> &str { "int2floatcollapse" }
     // Ghidra: ruleaction.cc:9839 RuleInt2FloatCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
 }
@@ -13157,7 +13157,7 @@ impl Rule for RulePtraddUndo {
     }
 
     // Ghidra: ruleaction.cc:6915 RulePtraddUndo
-    fn get_name(&self) -> &str { "ptradd_undo" }
+    fn get_name(&self) -> &str { "ptraddundo" }
     // Ghidra: ruleaction.cc:6921 RulePtraddUndo::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRADD] }
 }
@@ -13697,7 +13697,7 @@ impl Rule for RulePtrsubUndo {
     }
 
     // Ghidra: ruleaction.cc:6949 RulePtrsubUndo
-    fn get_name(&self) -> &str { "ptrsub_undo" }
+    fn get_name(&self) -> &str { "ptrsubundo" }
     // Ghidra: ruleaction.cc:6955 RulePtrsubUndo::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
 }
@@ -14240,7 +14240,7 @@ impl Rule for RulePiecePathology {
     }
 
     // Ghidra: ruleaction.cc:10561 RulePiecePathology
-    fn get_name(&self) -> &str { "piece_pathology" }
+    fn get_name(&self) -> &str { "piecepathology" }
     // Ghidra: ruleaction.cc:10572 RulePiecePathology::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
@@ -14605,7 +14605,7 @@ impl Rule for RuleConditionalMove {
     }
 
     // Ghidra: ruleaction.cc:9361 RuleConditionalMove
-    fn get_name(&self) -> &str { "conditional_move" }
+    fn get_name(&self) -> &str { "conditionalmove" }
     // Ghidra: ruleaction.cc:9384 RuleConditionalMove::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
@@ -14954,7 +14954,7 @@ impl Rule for RuleIgnoreNan {
     }
 
     // Ghidra: ruleaction.cc:9604 RuleIgnoreNan
-    fn get_name(&self) -> &str { "ignore_nan" }
+    fn get_name(&self) -> &str { "ignorenan" }
     // Ghidra: ruleaction.cc:9609 RuleIgnoreNan::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_NAN] }
 }
@@ -15183,7 +15183,7 @@ impl Rule for RuleLoadVarnode {
     }
 
     // Ghidra: ruleaction.cc:4265 RuleLoadVarnode
-    fn get_name(&self) -> &str { "load_varnode" }
+    fn get_name(&self) -> &str { "loadvarnode" }
     // Ghidra: ruleaction.cc:4271 RuleLoadVarnode::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
@@ -15254,7 +15254,7 @@ impl Rule for RuleStoreVarnode {
     }
 
     // Ghidra: ruleaction.cc:4307 RuleStoreVarnode
-    fn get_name(&self) -> &str { "store_varnode" }
+    fn get_name(&self) -> &str { "storevarnode" }
     // Ghidra: ruleaction.cc:4313 RuleStoreVarnode::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
 }
@@ -15514,7 +15514,7 @@ impl Rule for RulePushPtr {
     }
 
     // Ghidra: ruleaction.cc:6852 RulePushPtr
-    fn get_name(&self) -> &str { "push_ptr" }
+    fn get_name(&self) -> &str { "pushptr" }
     // Ghidra: ruleaction.cc:6857 RulePushPtr::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
@@ -16507,7 +16507,7 @@ impl Rule for RuleStructOffset0 {
     }
 
     // Ghidra: ruleaction.cc:6678 RuleStructOffset0
-    fn get_name(&self) -> &str { "struct_offset0" }
+    fn get_name(&self) -> &str { "structoffset0" }
     // Ghidra: ruleaction.cc:6686 RuleStructOffset0::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD, OpCode::CPUI_STORE] }
 }

@@ -4,7 +4,8 @@
 //! state transitions are Rugra's production Action/Group/Pool executor.
 
 use rugra::action::{
-    break_flags, Action, ActionGroup, ActionPool, ActionState, Rule, RuleState,
+    break_flags, rule_flags, Action, ActionGroup, ActionGroupList, ActionPool, ActionRestartGroup,
+    ActionState, Rule, RuleState, build_default_pipeline, default_groups, universal_action,
 };
 use rugra::address::Address;
 use rugra::arch::Architecture;
@@ -603,6 +604,111 @@ fn run_virtual_reset() -> rugra::Result<()> {
     Ok(())
 }
 
+// The two production Rules whose locked-oracle reset override deliberately
+// omits Rule::reset (subflow.cc:1742-1746, double.cc:3198-3202), driven
+// through the real ActionPool reset dispatch plus a rule-level probe for
+// RuleSubvarSext's derived field.
+fn run_production_reset_seam() -> rugra::Result<()> {
+    let mut arch = Architecture::new();
+    arch.aggressive_ext_trim = true;
+    let mut fd = Funcdata::new("seam", Address::new(0x6000), 0x10);
+    fd.set_arch(Arc::new(arch));
+    let mut pool = ActionPool::with_flags("seam_pool", 0);
+    pool.add_rule(Box::new(rugra::subflow::RuleSubvarSext::new()));
+    pool.add_rule(Box::new(rugra::double_precis::RuleDoubleIn::new()));
+    let mut state = ActionState::new(0);
+    pool.set_warning(&mut state, true, "seam_pool:subvar_sext");
+    pool.set_warning(&mut state, true, "seam_pool:doublein");
+    // Simulate already-issued warnings (normally set by issue_warning).
+    pool.rule_state_mut(0).unwrap().flags |= rule_flags::WARNINGS_GIVEN;
+    pool.rule_state_mut(1).unwrap().flags |= rule_flags::WARNINGS_GIVEN;
+    pool.reset_for_function(&mut fd, &mut state);
+    let sext_flags = pool.rule_state(0).unwrap().flags;
+    let din_flags = pool.rule_state(1).unwrap().flags;
+
+    // Rule-level probe mirroring the oracle's direct derived reset.
+    let mut probe = rugra::subflow::RuleSubvarSext::new();
+    let mut probe_state = RuleState::new(0);
+    probe_state.flags |= rule_flags::WARNINGS_GIVEN;
+    probe.reset_for_function(&mut fd, &mut probe_state);
+    println!(
+        "production_reset|sext_flags={sext_flags}|din_flags={din_flags}|probe_sext_flags={}|probe_aggressive={}|double_precis={}",
+        probe_state.flags,
+        u8::from(probe.fixture_is_aggressive()),
+        u8::from(fd.is_double_precis_on()),
+    );
+    Ok(())
+}
+
+// ActionRestartGroup forwards its inherited Action base fields into the
+// embedded ActionGroup child boundary (action.cc:517/560).
+fn run_restart_break() -> rugra::Result<()> {
+    let mut fd = Funcdata::new("restart_break", Address::new(0x7000), 0x10);
+    fd.set_arch(Arc::new(Architecture::new()));
+    let child = ScriptAction::new(0, "maker", vec![Step { changes: 3, result: 0 }], None);
+    let child_probe = child.handle();
+    let mut restart = ActionRestartGroup::new("restart_probe", 0, 1);
+    restart.add_action(Box::new(child));
+    let mut state = ActionState::new(0);
+    restart.reset_for_function(&mut fd, &mut state);
+    restart.set_break_point(&mut state, break_flags::BREAK_ACTION, "restart_probe");
+    for call in 1..=3 {
+        let result = restart.perform(&mut fd, &mut state)?;
+        println!(
+            "restart_break|call={call}|return={result}|status={}|count={}|lcount={}|tests={}|applies={}|bp={}|cursor={}|curstart={}|calls={}",
+            state.status,
+            state.count,
+            state.lcount,
+            state.count_tests,
+            state.count_apply,
+            state.breakpoint,
+            restart.as_action_group().unwrap().current_index(),
+            restart.fixture_curstart(),
+            child_probe.borrow().calls,
+        );
+    }
+    Ok(())
+}
+
+// Depth-first projection of an Action tree: one line per Action node and,
+// for ActionPool nodes, one line per registered Rule in insertion order.
+fn walk_action(act: &dyn Action, depth: usize) {
+    println!("dtree|{depth}:{}", act.get_name());
+    if let Some(group) = act.as_action_group() {
+        for child in group.child_actions() {
+            walk_action(child.as_ref(), depth + 1);
+        }
+    } else if let Some(pool) = act.as_action_pool() {
+        for rule in pool.rules() {
+            println!("dtree|{}:{}", depth + 1, rule.get_name());
+        }
+    }
+}
+
+// The root derivations: raw universal tree plus the
+// decompile/jumptable/register grouplist clones (action.cc:1145-1160,
+// coreaction.cc:5419-5458/5462-5738).
+fn run_derived_trees() {
+    println!("dtree_root|raw");
+    let raw = universal_action(None).expect("raw universal root");
+    walk_action(&raw, 0);
+    println!("dtree_root|decompile");
+    let decompile = build_default_pipeline();
+    walk_action(&decompile, 0);
+    println!("dtree_root|jumptable");
+    let jumptable = universal_action(Some(&ActionGroupList::from_members(
+        default_groups::JUMPTABLE,
+    )))
+    .expect("jumptable root keeps children");
+    walk_action(&jumptable, 0);
+    println!("dtree_root|register");
+    let register = universal_action(Some(&ActionGroupList::from_members(
+        default_groups::REGISTER,
+    )))
+    .expect("register root keeps children");
+    walk_action(&register, 0);
+}
+
 fn main() -> rugra::Result<()> {
     println!(
         "schema=1|fixture=ACTION-EXECUTOR-BREAKPOOL-0001|oracle=e40ed13014025f82488b1f8f7bca566894ac376b"
@@ -614,5 +720,8 @@ fn main() -> rugra::Result<()> {
     run_lookup();
     run_pool(&mut fd)?;
     run_virtual_reset()?;
+    run_production_reset_seam()?;
+    run_restart_break()?;
+    run_derived_trees();
     Ok(())
 }

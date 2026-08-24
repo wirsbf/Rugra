@@ -1059,25 +1059,40 @@ impl ActionRestartGroup {
             pending_count: 0,
         })
     }
-}
 
-impl Action for ActionRestartGroup {
+    // RUGRA-GLUE: fixture-only observation accessor (the locked C++ fixture reads the protected curstart field via its private/protected access hack)
+    #[doc(hidden)]
+    pub fn fixture_curstart(&self) -> i32 {
+        self.curstart
+    }
+
     // Ghidra: action.cc:553 ActionRestartGroup::apply
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+    /// The restart loop of `ActionRestartGroup::apply` (action.cc:553-582),
+    /// with the externally held inherited Action base state threaded into
+    /// every embedded `ActionGroup::apply` call — Ghidra's restart group
+    /// inherits that method, so the child-boundary `checkActionBreak`
+    /// (action.cc:517) reads the restart group's own breakpoint field.
+    fn apply_restart(
+        &mut self,
+        fd: &mut Funcdata,
+        mut group_state: Option<&mut ActionState>,
+    ) -> Result<i32> {
         if self.curstart == -1 {
-            return Ok(0); // Already completed
+            return Ok(0); // Already completed (action.cc:558)
         }
         loop {
-            let res = self.group.apply(fd)?;
+            let res = self
+                .group
+                .apply_children(fd, group_state.as_deref_mut())?;
             self.pending_count += self.group.take_count_delta();
-            if res < 0 {
-                return Ok(res);
+            if res != 0 {
+                return Ok(res); // action.cc:561
             }
             if !fd.has_restart_pending() {
                 self.curstart = -1;
-                return Ok(0);
+                return Ok(0); // action.cc:562-565
             }
-            // Don't restart during jumptable recovery.
+            // Don't restart during jumptable recovery (action.cc:566-567).
             if fd.is_jumptable_recovery_on() {
                 return Ok(0);
             }
@@ -1085,18 +1100,32 @@ impl Action for ActionRestartGroup {
             if self.curstart > self.maxrestarts {
                 fd.warning_header("Exceeded maximum restarts with more pending");
                 self.curstart = -1;
-                return Ok(0);
+                return Ok(0); // action.cc:568-573
             }
-            // clearAnalysis — Rugra does not yet model analysis-clearable state.
-            // Reset the entire subtree (all children) for a fresh run.
+            // data.getArch()->clearAnalysis(&data) (action.cc:574) — Rugra
+            // does not model analysis-clearable state; PIPE-RESTART-0001.
+            // Reset everything but ourselves (action.cc:576-579): only the
+            // children reset, the restart group's own curstart survives.
             self.group.reset(fd);
-            // Ghidra sets the inherited Action status to status_start after
-            // resetting children.  Rugra externalizes that status, so prepare
-            // the embedded group's protected iterator explicitly before this
-            // internal restart attempt.
+            // status = status_start (action.cc:580): Rugra externalizes the
+            // inherited status, so prepare the embedded group's protected
+            // iterator for the fresh pass explicitly.
             self.group.prepare_apply(status_flags::STATUS_START);
-            // Loop back to re-run the group.
         }
+    }
+}
+
+impl Action for ActionRestartGroup {
+    // Ghidra: action.cc:553 ActionRestartGroup::apply
+    /// Run the restart loop without an externally held group breakpoint
+    /// (Ghidra's apply reads the inherited base fields directly).
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        self.apply_restart(fd, None)
+    }
+
+    // RUGRA-GLUE: forwards the externalized inherited Action base state into the embedded group (Ghidra's ActionRestartGroup inherits ActionGroup::apply's child-boundary checkActionBreak, action.cc:517)
+    fn apply_with_state(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
+        self.apply_restart(fd, Some(state))
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -1260,6 +1289,12 @@ impl ActionPool {
     // RUGRA-GLUE: read-only view of the externalized Ghidra Rule base fields
     pub fn rule_state(&self, index: usize) -> Option<&RuleState> {
         self.rule_states.get(index)
+    }
+
+    // RUGRA-GLUE: fixture-only mutable view of the externalized Ghidra Rule base fields (the locked C++ fixture writes the same fields directly under its private/protected access hack)
+    #[doc(hidden)]
+    pub fn rule_state_mut(&mut self, index: usize) -> Option<&mut RuleState> {
+        self.rule_states.get_mut(index)
     }
 
     // RUGRA-GLUE: read-only breakpoint-resume cursor used by the locked fixture
@@ -1502,6 +1537,14 @@ impl Action for ActionPool {
 /// Build the oppool1 `ActionPool` mirroring Ghidra's `actprop`
 /// (coreaction.cc:5511-5649). Pool name is "oppool1" exactly as
 /// `new ActionPool(Action::rule_repeatapply,"oppool1")` (:5511).
+///
+/// Every Rule is registered unconditionally (the raw universal tree,
+/// coreaction.cc:5462-5738); each `register_rule!` slot retains the
+/// basegroup string of the oracle ctor call so `ActionPool::clone`
+/// (action.cc:899-914) performs the grouplist filtering on a fresh
+/// factory instance, and a pool with no surviving Rule clones to null
+/// exactly as the oracle's `res == (ActionPool*)0` result is dropped by
+/// `ActionGroup::clone` (action.cc:397-405).
 pub fn build_oppool1() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("oppool1");
@@ -1670,6 +1713,11 @@ pub fn build_oppool1() -> ActionPool {
 /// Rule2Comp2Mult) get cleaned up to their final form (INT_2COMP) without
 /// ping-ponging — the main pool has already converged, so the reverse
 /// transform here cannot re-trigger Rule2Comp2Mult.
+///
+/// Grouplist filtering is performed by `ActionPool::clone`
+/// (action.cc:899-914) from the registration-slot group and factory: a
+/// Rule survives iff its basegroup is in the list; no survivors clones
+/// the pool to null (`None`).
 pub fn build_cleanup_pool() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("cleanup");
@@ -1788,6 +1836,12 @@ pub struct ActionDatabase {
 /// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
 /// (coreaction.cc:5662-5671). These are type-recovery / stack-variable Rules
 /// that run after oppool1 within the main loop.
+///
+/// Grouplist filtering is performed by `ActionPool::clone`
+/// (action.cc:899-914) from the registration-slot group and factory: a
+/// Rule survives iff its basegroup is in the list; no survivors clones
+/// the pool to null (`None`) — e.g. the "register" root drops oppool2
+/// entirely because neither "typerecovery" nor "stackvars" is a member.
 pub fn build_oppool2() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("oppool2");

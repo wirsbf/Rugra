@@ -6302,14 +6302,6 @@ impl RuleDoubleIn {
         Self
     }
 
-    // Ghidra: double.cc:3198 RuleDoubleIn::reset
-    /// Mark that we are doing double precision recovery. (`reset`,
-    /// double.cc:3198-3202)
-    pub fn reset(&self, data: &mut Funcdata) {
-        // double.cc:3201: data.setDoublePrecisRecovery(true)
-        data.set_double_precis_recovery(true);
-    }
-
     // Ghidra: double.cc:3218 RuleDoubleIn::attemptMarking
     /// Determine if the given Varnode from a SUBPIECE should be marked as a
     /// double precision piece. (`attemptMarking`, double.cc:3218) Returns 1 if
@@ -6446,6 +6438,17 @@ impl Rule for RuleDoubleIn {
     // Ghidra: double.cc:3204 RuleDoubleIn::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE]
+    }
+
+    // Ghidra: double.cc:3198 RuleDoubleIn::reset
+    /// The locked-oracle override deliberately does NOT call `Rule::reset`
+    /// (double.cc:3198-3202 only marks double precision recovery on the
+    /// function), so the base warning-given bit survives a reset. The
+    /// override therefore goes through the pool's virtual-reset seam and
+    /// leaves the companion RuleState untouched.
+    fn reset_for_function(&mut self, fd: &mut Funcdata, _state: &mut crate::action::RuleState) {
+        // double.cc:3201: data.setDoublePrecisRecovery(true)
+        fd.set_double_precis_recovery(true);
     }
 }
 

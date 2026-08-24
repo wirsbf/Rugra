@@ -14,10 +14,12 @@
 #include "action.hh"
 #include "architecture.hh"
 #include "database.hh"
+#include "double.hh"
 #include "funcdata.hh"
 #include "libdecomp.hh"
 #include "marshal.hh"
 #include "op.hh"
+#include "subflow.hh"
 #include "translate.hh"
 #include "type.hh"
 #include "typeop.hh"
@@ -497,6 +499,110 @@ static void runVirtualReset(FixtureArchitecture &arch)
             << no_base_probe.resets << '\n';
 }
 
+// The two production Rules whose locked-oracle reset override deliberately
+// omits Rule::reset (subflow.cc:1742-1746, double.cc:3198-3202), driven
+// through the real ActionPool::reset virtual dispatch.
+static void runProductionResetSeam(FixtureArchitecture &arch)
+{
+  AddrSpace *ram = arch.getSpace(3);
+  Funcdata fd("seam","seam",arch.symboltab->getGlobalScope(),
+              Address(ram,0x6000),(FunctionSymbol *)0,0x10);
+  arch.aggressive_ext_trim = true;
+  ProbePool pool(0,"seam_pool");
+  RuleSubvarSext *sext = new RuleSubvarSext("subvar");
+  RuleDoubleIn *din = new RuleDoubleIn("doubleprecis");
+  pool.addRule(sext);
+  pool.addRule(din);
+  pool.setWarning(true,"seam_pool:subvar_sext");
+  pool.setWarning(true,"seam_pool:doublein");
+  // Simulate an already-issued warning (normally set by Rule::issueWarning).
+  sext->flags |= Rule::warnings_given;
+  din->flags |= Rule::warnings_given;
+  pool.reset(fd);
+  // Rule-level probe mirroring the derived reset directly.
+  RuleSubvarSext probe("subvar");
+  probe.flags |= Rule::warnings_given;
+  probe.reset(fd);
+  std::cout << "production_reset|sext_flags=" << sext->flags
+            << "|din_flags=" << din->flags
+            << "|probe_sext_flags=" << probe.flags
+            << "|probe_aggressive=" << probe.fixtureGetIsAggressive()
+            << "|double_precis=" << fd.isDoublePrecisOn() << '\n';
+  arch.aggressive_ext_trim = false;
+}
+
+class ProbeRestartGroup final : public ActionRestartGroup {
+public:
+  ProbeRestartGroup(uint4 f,const string &nm,int4 max)
+    : ActionRestartGroup(f,nm,max) {}
+  size_t cursor(void) const { return static_cast<size_t>(state - list.begin()); }
+};
+
+// ActionRestartGroup forwards its inherited Action base fields into the
+// embedded ActionGroup::apply child boundary (action.cc:517/560).
+static void runRestartBreak(FixtureArchitecture &arch)
+{
+  AddrSpace *ram = arch.getSpace(3);
+  Funcdata fd("restart_break","restart_break",arch.symboltab->getGlobalScope(),
+              Address(ram,0x7000),(FunctionSymbol *)0,0x10);
+  ProbeRestartGroup restart(0,"restart_probe",1);
+  ScriptAction *child = new ScriptAction(0,"maker",vector<Step>{Step(3,0)},
+                                         (vector<string> *)0);
+  restart.addAction(child);
+  restart.reset(fd);
+  restart.setBreakPoint(Action::break_action,"restart_probe");
+  for(int4 call=1;call<=3;++call) {
+    int4 result = restart.perform(fd);
+    std::cout << "restart_break|call=" << call << "|return=" << result
+              << "|status=" << restart.status << "|count=" << restart.count
+              << "|lcount=" << restart.lcount << "|tests=" << restart.count_tests
+              << "|applies=" << restart.count_apply << "|bp=" << restart.breakpoint
+              << "|cursor=" << restart.cursor()
+              << "|curstart=" << restart.fixtureGetCurstart()
+              << "|calls=" << child->calls << '\n';
+  }
+}
+
+// Depth-first projection of an Action tree: one line per Action node and,
+// for ActionPool nodes, one line per registered Rule in insertion order.
+static void walkActionTree(const Action *act,int4 depth)
+{
+  std::cout << "dtree|" << depth << ':' << act->getName() << '\n';
+  const ActionGroup *grp = dynamic_cast<const ActionGroup *>(act);
+  if (grp != (const ActionGroup *)0) {
+    vector<Action *>::const_iterator iter;
+    for(iter=grp->list.begin();iter!=grp->list.end();++iter)
+      walkActionTree(*iter,depth+1);
+    return;
+  }
+  const ActionPool *pool = dynamic_cast<const ActionPool *>(act);
+  if (pool != (const ActionPool *)0) {
+    const vector<Rule *> &allrules = pool->fixtureGetAllRules();
+    vector<Rule *>::const_iterator iter;
+    for(iter=allrules.begin();iter!=allrules.end();++iter)
+      std::cout << "dtree|" << (depth+1) << ':' << (*iter)->getName() << '\n';
+  }
+}
+
+// The real ActionDatabase root derivations: raw universal registration plus
+// the decompile/jumptable/register grouplist clones (action.cc:1145-1160,
+// coreaction.cc:5419-5458/5462-5738).
+static void runDerivedTrees(FixtureArchitecture &arch)
+{
+  arch.allacts.universalAction(&arch);
+  std::cout << "dtree_root|raw\n";
+  walkActionTree(arch.allacts.fixtureGetAction("universal"),0);
+  arch.allacts.resetDefaults();
+  std::cout << "dtree_root|decompile\n";
+  walkActionTree(arch.allacts.getCurrent(),0);
+  arch.allacts.setCurrent("jumptable");
+  std::cout << "dtree_root|jumptable\n";
+  walkActionTree(arch.allacts.getCurrent(),0);
+  arch.allacts.setCurrent("register");
+  std::cout << "dtree_root|register\n";
+  walkActionTree(arch.allacts.getCurrent(),0);
+}
+
 int main(void)
 {
   std::cout << std::unitbuf;
@@ -514,6 +620,9 @@ int main(void)
     runLookup(fd);
     runPool(arch,fd);
     runVirtualReset(arch);
+    runProductionResetSeam(arch);
+    runRestartBreak(arch);
+    runDerivedTrees(arch);
   }
   catch(const LowlevelError &err) {
     std::cerr << "LowlevelError: " << err.explain << '\n';

@@ -56,14 +56,40 @@ op 本轮可见，之前的新 op 留待下一轮。
 锁定双侧门禁为 `tools/run_action_break_pool_oracle.sh`，fixture
 `ACTION-EXECUTOR-BREAKPOOL-0001` 同时比较 stdout 与 warning stderr，覆盖 Action
 和 Rule 断点续跑、Group 游标、Pool 当前 op 前后插入、当前 op 删除、初始 dead
-op 清理、精确 result 累加、disabled Rule、局部 lookup 歧义以及 derived reset
-是否调用基类 reset。该目标投影逐字节 `MATCH`，但 production 调用闭包仍为
-`MISMATCH`：`ActionStackPtrFlow` / `ActionStartTypes`、`RuleSubvarSext` /
-`RuleDoubleIn` 的派生 reset 尚未在各自租约内接入 companion-state seam；
-`ActionRestartGroup` 尚未把根 `ActionState` 传入嵌套 Group，且本批不覆盖
-`clearAnalysis`；派生根 clone filtering 与 `PcodeOpBank::create` 的初始 dead
-lifecycle 分别继续绑定 `PIPE-POOL-0001` 与 `OPBANK-0001`。断点/reset 残差绑定
-`PIPE-BREAK-0001` / `PIPE-RESTART-0001`。
+op 清理、精确 result 累加、disabled Rule、局部 lookup 歧义、synthetic 与
+production（`RuleSubvarSext` / `RuleDoubleIn`）derived reset 派发、
+`ActionRestartGroup` 继承断点在 child 边界的命中/续跑，以及 raw universal 与
+`decompile` / `jumptable` / `register` 派生根的完整树投影（全部 Action/Rule
+名字与存活过滤逐字节一致）。
+
+2026-08-24 rework（`ACTION-EXECUTOR-BREAKPOOL-0001` REJECT 闭合）：
+
+- **Pool Rule 级 clone 过滤**（原 REJECT "非 decompile root 未按 grouplist
+  clone"）：`build_oppool1` / `build_oppool2` / `build_cleanup_pool` 现接受
+  `Option<&ActionGroupList>`，逐 Rule 按 oracle 注册槽的 basegroup 过滤，
+  全部被滤除的池返回 `None`（对应 `ActionPool::clone` 的 null clone，
+  action.cc:899-914）。
+- **Rule 名对齐**（原 REJECT "raw Rule 名仍漂移"）：116 个 production Rule
+  `get_name` 字面量改为锁定 oracle 构造器字符串（ruleaction.hh /
+  subflow.hh / double.hh / constseq.hh / condexe.hh）；raw universal 树的
+  154 Rule + 78 Action 名经 fixture 树投影 `MATCH`。
+- **Production derived reset seam**（原 REJECT "derived reset 未接 virtual
+  seam"）：`RuleSubvarSext::reset_for_function`（subflow.cc:1742-1746，读
+  `Architecture::aggressive_ext_trim`）与 `RuleDoubleIn::reset_for_function`
+  （double.cc:3198-3202，`set_double_precis_recovery(true)`）通过池的
+  virtual-reset 派发，且两者均按 oracle 覆盖意图**不**清 base warning-given
+  位。oracle 全树仅这两个 Rule 重写 `reset`。
+- **RestartGroup 继承 state**（原 REJECT "RestartGroup drops root
+  ActionState at child boundaries"）：`ActionRestartGroup::apply_with_state`
+  把外部持有的基类 state 传入嵌套 group 的每个 child 边界断点检查
+  （action.cc:517/560）。
+
+production 调用闭包仍为 `MISMATCH` 的残差：restart 循环的
+`Architecture::clearAnalysis` 未建模（`PIPE-RESTART-0001`）；Pool 状态机对
+E2E 语料的完整 IR/order/stats 差分与独立复核未完成（`PIPE-POOL-0001`）；
+`Action::print` / `printState` / `printStatistics` 控制台投影未移植
+（`PIPE-BREAK-0001`）；`PcodeOpBank::create` 新建 op 初始 alive/dead lifecycle
+不匹配（`OPBANK-0001`）。
 
 ## 2026-08-14：ActionPool opcode 变化后立即重派发
 
@@ -496,11 +522,14 @@ jumptable/normalize/paramid/register/firstpass），最后
 （action.cc:1145）按 decompile grouplist 做 clone 存活过滤，派生出
 默认根并登记为 current。
 
-### 派生过滤（PIPE-DERIVED-TREE-0001）
+### 派生过滤（PIPE-DERIVED-TREE-0001 + 2026-08-24 rework Rule 级闭合）
 `universal_action(Some(&grouplist))` 在每个注册槽上应用 Ghidra
 `Action::clone` 的存活语义（action.cc:391-406/899-914/529-544）：
 叶子当且仅当其 basegroup ∈ grouplist 才注册；组/池当且仅当仍有存活
-子节点才挂到父节点。对默认 `decompile` grouplist（coreaction.cc:5424-5431）：
+子节点才挂到父节点；**池内 Rule 逐条按其注册槽 basegroup 过滤，
+无存活 Rule 的池整体省略**（`Rule::clone` group check +
+`ActionPool::clone` null 语义，action.cc:899-914）。对默认 `decompile`
+grouplist（coreaction.cc:5424-5431）：
 - 头部 8 槽中 `normalizesetup`（normalanalysis）与 `funclink_outonly`（noproto）被过滤；
 - `directwrite` 的两个 protorecovery_b 实例（:5498/:5681）被过滤；
 - 尾部 `normalizebranches`（:5716，group 名 normalizebranches 不在 decompile 集）被过滤；
@@ -508,7 +537,9 @@ jumptable/normalize/paramid/register/firstpass），最后
 
 对拍证据：`tests/oracle/pipeline_tree_1204.*` +
 `tools/run_pipeline_tree_oracle.sh`（78 节点 DFS 双侧字节一致，
-path/ordinal/kind/name/basegroup/flags）。
+path/ordinal/kind/name/basegroup/flags），以及
+`tests/oracle/action_break_pool_1204.*` 的 `dtree` 投影（raw +
+decompile/jumptable/register 三派生根的全部 Action/Rule 名与存活过滤）。
 
 ### 相关新增 API
 - `ActionGroupList`（action.hh:31-40）：`from_members`/`contains`。
@@ -522,8 +553,10 @@ path/ordinal/kind/name/basegroup/flags）。
 - `ActionGroup::add_action_in_group` / `child_group`：注册槽 basegroup 记录
   （Ghidra 存于 Action 实例的 basegroup 成员）。
 - `Action::as_action_pool`：树遍历 fixture 的池视图。
-- `build_oppool1()`（原 `build_simplify_pool`）：池名从 `simplifypool`
-  改为 oracle 精确名 `oppool1`（coreaction.cc:5511）。
+- `build_oppool1(Option<&ActionGroupList>) -> Option<ActionPool>`（原
+  `build_simplify_pool`）：池名从 `simplifypool` 改为 oracle 精确名
+  `oppool1`（coreaction.cc:5511）；grouplist 传入时逐 Rule 按 basegroup
+  过滤（Rule::clone 语义）。`build_oppool2` / `build_cleanup_pool` 同形。
 
 ### 当前意义
 这是当前动作系统中最重要的“默认流水线入口”之一。  
