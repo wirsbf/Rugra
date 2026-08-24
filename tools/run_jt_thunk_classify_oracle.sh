@@ -97,6 +97,25 @@ cleanup() {
       echo "could not allocate failure log" >&2
     fi
   fi
+  if [[ "$status" -eq 0 && -n "${candidate_commit:-}" ]]; then
+    evidence_bundle="$oracle_tmp_root/jt-thunk-classify-evidence-$candidate_commit"
+    if /usr/bin/mkdir -p "$evidence_bundle"; then
+      for evidence_file in run-record.txt ghidra.stdout ghidra.stderr \
+        rugra.stdout rugra.stderr raw.diff focused-results.txt \
+        comparands.before comparands.after \
+        comparand-binaries.before comparand-binaries.final \
+        cargo-artifacts.before cargo-artifacts.final \
+        libdecomp.before-link libdecomp.after-link; do
+        if [[ -f "$oracle_tmp/$evidence_file" && ! -L "$oracle_tmp/$evidence_file" ]]; then
+          /usr/bin/cp -- "$oracle_tmp/$evidence_file" "$evidence_bundle/$evidence_file" 2>/dev/null || true
+        fi
+      done
+      /usr/bin/chmod -R go-rwx "$evidence_bundle" 2>/dev/null || true
+      printf 'retained success evidence bundle: %s\n' "$evidence_bundle" >&2
+    else
+      echo "could not retain success evidence bundle" >&2
+    fi
+  fi
   remove_oracle_tmp || cleanup_status=$?
   if [[ "$status" -eq 0 && "$cleanup_status" -ne 0 ]]; then
     status=$cleanup_status
@@ -1206,10 +1225,21 @@ def require(label, actual, expected):
 metadata = json.loads(regular(metadata_raw).decode("utf-8"))
 require("schema", metadata["schema_version"], 3)
 require("fixture", metadata["fixture_id"], "JT-THUNK-CLASSIFY-1204")
-require("projection before evidence", metadata["projection_status"], "UNTESTED")
 require("overall", metadata["overall_status"], "MISMATCH")
 require("known diffs", metadata["known_diffs"], [])
-require("current runner not yet claimed", metadata["latest_validation"]["current_runner_executed"], False)
+validation = metadata["latest_validation"]
+runner_preexec = validation["current_runner_executed"] is False
+if runner_preexec:
+    require("projection before evidence", metadata["projection_status"], "UNTESTED")
+else:
+    require("projection observed", metadata["projection_status"], "MATCH")
+    require("attempted runner is this runner", validation["attempted_runner_sha256"], runner_fd_sha)
+    require("recorded runner exit", str(validation["runner_exit_code"]), "0")
+    require("recorded validation status", validation["status"], "PASS")
+    require("recorded failure stage", repr(validation["failure_stage"]), "None")
+    require("recorded cargo result", validation["cargo_result"],
+            "31 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out")
+    require("recorded evidence retention", validation["run_local_artifacts_retained"], True)
 
 candidate = metadata["candidate_evidence"]
 require("candidate evidence keys", set(candidate), {
@@ -1415,10 +1445,16 @@ require("manifest", sha(canonical), manifest["sha256"])
 require("case count", len(manifest["cases"]), 24)
 require("Ghidra expected provenance", metadata["expected_results_provenance"]["ghidra"],
         "OBSERVED_LOCKED_CPP_24_CASE_OUTPUT")
-require("Rugra expected provenance", metadata["expected_results_provenance"]["rugra"],
-        "PROSPECTIVE_CURRENT_CANDIDATE_EXPECTATION_NOT_YET_EXECUTED")
-require("diff expected provenance", metadata["expected_results_provenance"]["diff"],
-        "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED")
+if runner_preexec:
+    require("Rugra expected provenance", metadata["expected_results_provenance"]["rugra"],
+            "PROSPECTIVE_CURRENT_CANDIDATE_EXPECTATION_NOT_YET_EXECUTED")
+    require("diff expected provenance", metadata["expected_results_provenance"]["diff"],
+            "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED")
+else:
+    require("Rugra observed provenance", metadata["expected_results_provenance"]["rugra"],
+            "OBSERVED_CURRENT_CANDIDATE_24_CASE_OUTPUT")
+    require("diff observed provenance", metadata["expected_results_provenance"]["diff"],
+            "OBSERVED_ZERO_DIFF_24_CASE_BILATERAL")
 
 required_decisive = {
     "reference_output_parameters", "loop_bounds_traversal_order",
@@ -1428,7 +1464,7 @@ require("decisive semantics", set(metadata["decisive_semantics"]), required_deci
 if any(not isinstance(value, str) or not value for value in metadata["decisive_semantics"].values()):
     raise SystemExit("decisive semantics entries must be non-empty")
 
-expected_untested = {
+expected_bilateral = {
     "single_target_boundary", "multi_target_bypass",
     "is_reachable_guard_matrix", "override_short_circuit",
     "recover_preconditions_and_collect_gate", "recover_thunk_and_model_reject",
@@ -1441,11 +1477,18 @@ expected_mismatch = {
     "emulate_function_lowlevel_channel": "JUMPTABLE-EMULFN-0001",
 }
 coverage = metadata["coverage"]
-require("coverage keys", set(coverage), expected_untested | set(expected_mismatch))
-for key in expected_untested:
-    require(f"coverage {key}", coverage[key]["status"], "UNTESTED")
-    require(f"coverage {key} evidence", coverage[key]["evidence_kind"],
-            "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION")
+require("coverage keys", set(coverage), expected_bilateral | set(expected_mismatch))
+if runner_preexec:
+    for key in expected_bilateral:
+        require(f"coverage {key}", coverage[key]["status"], "UNTESTED")
+        require(f"coverage {key} evidence", coverage[key]["evidence_kind"],
+                "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION")
+else:
+    for key in expected_bilateral:
+        require(f"coverage {key}", coverage[key]["status"], "MATCH")
+        require(f"coverage {key} evidence", coverage[key]["evidence_kind"],
+                "BILATERAL_24_CASE_BYTE_IDENTICAL")
+for key in expected_bilateral:
     require(f"coverage {key} residuals", coverage[key]["residual_todo_ids"], [])
 for key, todo in expected_mismatch.items():
     require(f"coverage {key}", coverage[key]["status"], "MISMATCH")
@@ -2021,10 +2064,13 @@ for index in "${!owned_relative_paths[@]}"; do
   fi
 done
 
-printf 'candidate_commit=%s\ncandidate_tree=%s\n' "$candidate_commit" "$candidate_tree"
-for index in "${!owned_relative_paths[@]}"; do
-  printf 'candidate_blob[%s]=%s sha256=%s\n' "${owned_relative_paths[$index]}" \
-    "${candidate_blob_oids[$index]}" "${candidate_blob_sha256[$index]}"
-done
-printf 'JT-THUNK-CLASSIFY-1204: bilateral PASS (24/24 byte-identical); focused jumptable tests PASS; metadata projection remains UNTESTED pending independent review; current native=%s rlib=%s; overall MISMATCH: JUMPTABLE-PIPELINE-0001,JUMPTABLE-SORT-TOOLCHAIN-0001,JUMPTABLE-EMULFN-0001\n' \
-  "$native_sha" "$rlib_sha"
+{
+  printf 'candidate_commit=%s\ncandidate_tree=%s\n' "$candidate_commit" "$candidate_tree"
+  for index in "${!owned_relative_paths[@]}"; do
+    printf 'candidate_blob[%s]=%s sha256=%s\n' "${owned_relative_paths[$index]}" \
+      "${candidate_blob_oids[$index]}" "${candidate_blob_sha256[$index]}"
+  done
+  printf 'JT-THUNK-CLASSIFY-1204: bilateral PASS (24/24 byte-identical); focused jumptable tests PASS; metadata projection pending independent review; current native=%s rlib=%s; overall MISMATCH: JUMPTABLE-PIPELINE-0001,JUMPTABLE-SORT-TOOLCHAIN-0001,JUMPTABLE-EMULFN-0001\n' \
+    "$native_sha" "$rlib_sha"
+} >"$oracle_tmp/run-record.txt"
+/usr/bin/cat "$oracle_tmp/run-record.txt"

@@ -1,17 +1,17 @@
 {
   "schema_version": 3,
   "fixture_id": "JT-THUNK-CLASSIFY-1204",
-  "status_note": "The locked C++ fixture output exists and the current source passed all 31 focused jumptable tests, but no execution has linked the current Rust candidate into the expanded 24-case fixture. Every 24-case behavioral coverage group is therefore UNTESTED, not MATCH. The prior runner stopped after Cargo because its artifact selector overmatched dependency root-output files; its run-local artifacts were removed. Project-level overall remains MISMATCH for three jump-table reasons: JUMPTABLE-PIPELINE-0001 records that production flow/funcdata discards the typed result, JUMPTABLE-SORT-TOOLCHAIN-0001 records cross-STL equivalent-key portability, and JUMPTABLE-EMULFN-0001 records that Rust build_addresses/EmulateFunction silently maps loader or emulation failure to target zero instead of propagating Ghidra's precise LowlevelError channel. Independently, strict whole-compiler-spec input identity is not claimed because Rugra's output parameter list representation remains input-style under FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001; the 24 cases do not consume that dispatch, but it also prevents promoting this projection to MATCH.",
+  "status_note": "The corrected immutable runner has executed end-to-end at the recorded candidate commit: locked C++ comparand built from oracle commit e40ed13014025f82488b1f8f7bca566894ac376b (cpp tree and Makefile blob pinned, 79-member libdecomp.a verified against the independently expanded Makefile manifest), current Rust comparand built from the captured candidate blobs over the pinned base archive with Cargo.lock-authenticated vendored sources (31 focused jumptable tests and the filtered doc_sync run passed), linked by direct rustc against the exact run-local rlib/native archive, and both comparands executed all 24 cases with byte-identical stdout (sha256 c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0), empty stderr and exit 0, revalidated after the run against immutable snapshot, oracle source, toolchain, Git identity and blob readback. The 24-case projection is therefore MATCH as observed, pending independent review. Overall remains MISMATCH for three registered reasons: JUMPTABLE-PIPELINE-0001 (production flow/funcdata discards the typed result), JUMPTABLE-SORT-TOOLCHAIN-0001 (cross-STL equivalent-key portability), and JUMPTABLE-EMULFN-0001 (Rust build_addresses/EmulateFunction maps loader or emulation failure to target zero instead of propagating Ghidra precise LowlevelError channels). Strict whole-compiler-spec input identity is still not claimed because Rugra output parameter lists remain input-style under FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001; the 24 cases do not consume that dispatch. Earlier attempts are preserved in git history: the 58aa109-era runner exited 1 before the direct rustc link because its find -path artifact selector overmatched 25 dependency root-output files; the corrected runner then required three environment repairs before completing: relocation off the usrquota-exhausted /tmp tmpfs, pinned tar.umask=0022 archive modes, and admission of the Cargo 1.97 registry cache-directory tag.",
   "latest_validation": {
-    "status": "UNTESTED",
-    "attempted_runner_sha256": "9466db9942a3d6b4539c95a2385ddf013ea757127d4dc7a22e6a71aff6e19101",
+    "status": "PASS",
+    "attempted_runner_sha256": "78292b2b5bdac710418753fa555e17b32ce36751dc4e7a89a629d32aad1dcac0",
     "cargo_result": "31 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out",
-    "runner_exit_code": 1,
-    "failure_stage": "post-Cargo artifact binding, before direct rustc fixture link and before the 24-case differential",
-    "failure_text": "expected one run-local Rugra root-output, found 25",
-    "run_local_artifacts_retained": false,
-    "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, pre/post snapshot/oracle/toolchain readback, relocation of the immutable staging root from the usrquota-exhausted /tmp tmpfs to the pinned task-owned home directory /home/wirs/.cache/a3-jtthunk-tmp (also exported as TMPDIR to every compiler invocation), and pinned tar.umask=0022 so both source archives carry exactly the Git tree member modes (644/755) instead of the invoking shell's umask-dependent modes (archive pins recomputed accordingly)",
-    "current_runner_executed": false
+    "runner_exit_code": 0,
+    "failure_stage": null,
+    "failure_text": null,
+    "run_local_artifacts_retained": true,
+    "current_runner_fix": "captured-commit materialization, point-in-time runner FD re-exec under pre-spawn pending-signal capture plus verified session/process-group forwarding, exact artifact and libdecomp member binding, Cargo.lock-authenticated vendoring, pre/post snapshot/oracle/toolchain readback, relocation of the immutable staging root from the usrquota-exhausted /tmp tmpfs to the pinned task-owned home directory /home/wirs/.cache/a3-jtthunk-tmp (also exported as TMPDIR to every compiler invocation), pinned tar.umask=0022 archive member modes, admission of exactly the Cargo 1.97 registry CACHEDIR.TAG marker, post-execution metadata state acceptance keyed to this exact runner hash, and retention of a compact success evidence bundle under the staging root",
+    "current_runner_executed": true
   },
   "candidate_evidence": {
     "capture_policy": "one captured HEAD commit/tree with all six owned paths clean; their tree and stage-0 index mode/OID agree, each owned worktree path is independently read once through O_NOFOLLOW for pre/post mode/content readback, and captured commit blobs are the cross-file atomic comparand; unrelated worktree paths are outside this gate",
@@ -387,7 +387,7 @@
     "rust_fixture_sha256": "73aab1818cda1cc46c336569c7299fee43ef25612ce7f5d3f3b35b7f30e5467e",
     "jumptable_overlay_sha256": "4fe0f3c722905618610dfa2d957df894ab1bc1ae88dd0ac77a7065891eb575b7",
     "api_document_sha256": "5b87732c64f88d5fde577125ab1c8e7973700efd171df008cfd14dc322704708",
-    "runner_sha256": "1a07b63e9952bda3a669206f22f2b4055b4c7b9e192a21948c8ad73c36bfc802"
+    "runner_sha256": "78292b2b5bdac710418753fa555e17b32ce36751dc4e7a89a629d32aad1dcac0"
   },
   "input_manifest": {
     "cases": [
@@ -675,68 +675,68 @@
   },
   "expected_results_provenance": {
     "ghidra": "OBSERVED_LOCKED_CPP_24_CASE_OUTPUT",
-    "rugra": "PROSPECTIVE_CURRENT_CANDIDATE_EXPECTATION_NOT_YET_EXECUTED",
-    "diff": "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED"
+    "rugra": "OBSERVED_CURRENT_CANDIDATE_24_CASE_OUTPUT",
+    "diff": "OBSERVED_ZERO_DIFF_24_CASE_BILATERAL"
   },
   "coverage": {
     "single_target_boundary": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies zero, near, 0xffff and 0x10000 behavior, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed 24-case bilateral run observed the zero, near, 0xffff and 0x10000 single-target thunk boundary byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "multi_target_bypass": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies the two-target bypass, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed the two-target bypass of the single-target thunk check byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "is_reachable_guard_matrix": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies one-level false, two-level parent update, BOOLEAN_FLIP, nonzero polarity and the three continue guards, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed one-level false, two-level parent update, BOOLEAN_FLIP, nonzero polarity, sizeOut!=2, last-op non-CBRANCH and nonconstant-condition guards byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "override_short_circuit": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies override short-circuit and success-only collapse, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed the override short-circuit before reachability and success-only collapse byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "recover_preconditions_and_collect_gate": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies recoverModel failure, tableSize zero and collectloads=false, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed recoverModel failure, tableSize zero and collectloads=false gates byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "recover_thunk_and_model_reject": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies recover-driven thunk and model rejection with pre-error mutation, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed recover-driven thunk classification and model rejection with pre-error mutations byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "successful_truncation_warning_order": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The expanded fixture specifies successful truncation, warning order and collapse, but it has not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed successful truncation, warning emission order and post-sanity collapse byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "equal_address_pinned_toolchain_order": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "The locked C++ output and focused Rust tests exercise the 3/16/17-entry address-only GCC16 threshold cases, but the current-candidate fixture runner has not reached its Rust differential and retained bilateral evidence does not exercise heap fallback.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed the 3/16/17-entry address-only equal-key cases byte-identically, including the pinned GCC16 std::sort threshold permutation; heap fallback remains outside the retained cases and stays covered by the portability residual.",
       "residual_todo_ids": []
     },
     "address_space_wrap_and_order": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "Focused Rust tests cover 1-byte wrap and full-space ordering, and the C++ fixture output is pinned; the corrected current-candidate fixture runner has not reached its Rust differential.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed the 1-byte-space wrap and full space-index/offset ordering byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "production_load_input_invariant": {
-      "status": "UNTESTED",
-      "evidence_kind": "FIXTURE_SPEC_WITHOUT_CURRENT_RUST_EXECUTION",
-      "covers": "Source audit establishes the intended fresh-producer num=1 precondition, but the producer-shaped fixture cases have not executed against the current Rust candidate.",
+      "status": "MATCH",
+      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "covers": "The executed run observed the fresh-producer num=1 invariant and loadcounts lifecycle byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "production_typed_stage_consumption": {
@@ -823,6 +823,6 @@
       ]
     }
   ],
-  "projection_status": "UNTESTED",
+  "projection_status": "MATCH",
   "overall_status": "MISMATCH"
 }
