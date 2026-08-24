@@ -49,6 +49,16 @@ A storage location for a particular Symbol. Faithful to `SymbolEntry`
   (dynamic) + a `<rangelist>` uselimit. Pieces are skipped.
 - `decode(decoder)` (database.cc:206): parses `<hash>` (dynamic) or `<addr>`
   (static), then the `<rangelist>` uselimit via `decode_use_limit`.
+- `get_sized_type(type_factory, inaddr, sz)` (database.cc:151): offset =
+  dynamic ? entry offset : `(inaddr - addr) + offset`，然后调用方传入的
+  Architecture-owned TypeFactory 的 canonical `get_exact_piece`
+  （database.cc:161 经 `symbol->getScope()->getArch()->types` 到达同一工厂；
+  Rugra 的 Symbol 不持有 Scope owner，故工厂作为显式参数传入，不建局部/全局替身）。
+  2026-08-24（TYPEFACTORY-EXACTPIECE-CALLERS-0001）移除旧的
+  `Datatype::get_sub_type` 本地替代路径。
+- `update_type(type_factory, vn_addr, vn_size)` (database.cc:135):
+  TYPELOCK 门 + `get_sized_type` 投影（C++ 原型接收 `Varnode*` 并调
+  `vn->updateType(dt,true,true)`；Rust 返回解析出的 Datatype 由调用方应用）。
 
 ### `Symbol`
 The base class for a symbol. Faithful to `Symbol` (database.hh:172).

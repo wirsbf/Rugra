@@ -12034,40 +12034,12 @@ impl RulePieceStructure {
         false
     }
 
-    /// Faithful to `TypeFactory::getExactPiece` (type.cc:2945-2976). Given a
-    /// structured data-type, an offset, and a size, descend through
-    /// `get_sub_type` until the component exactly matches `(offset, size)`; if
-    /// such an exact component exists return it, otherwise None. This replaces
-    /// Ghidra's `data.getArch()->types->getExactPiece(ct, off, sz)`.
-    // Ghidra: type.cc:4090 TypeFactory::getExactPiece
-    fn get_exact_piece(
-        mut ct: &crate::type_system::datatype::Datatype,
-        mut off: i64,
-        size: i64,
-    ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
-        loop {
-            if ct.get_size() as i64 == size && off == 0 {
-                return Some(std::sync::Arc::new(ct.clone()));
-            }
-            if ct.get_size() as i64 <= size {
-                return None;
-            }
-            let (sub, new_off) = ct.get_sub_type(off);
-            match sub {
-                Some(s) => {
-                    ct = s;
-                    off = new_off;
-                }
-                None => return None,
-            }
-        }
-    }
 }
 
 impl Rule for RulePieceStructure {
-    // Ghidra: ruleaction.cc:7625 RulePieceStructure::applyOp
+    // Ghidra: ruleaction.cc:7607 RulePieceStructure::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7625-7718).
+        // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7607-7700).
         // Ghidra's `op->isPartialRoot()` re-visit guard is not modelled in
         // Rugra (no partial-root flag on PcodeOp), so it is skipped.
         let outvn = match op_arc.read().unwrap().output.clone() {
@@ -12127,6 +12099,12 @@ impl Rule for RulePieceStructure {
         }
         // op->setPartialRoot(): no partial-root flag in Rugra, skipped.
 
+        // ruleaction.cc:7665 reads the same Architecture-owned TypeFactory
+        // for every leaf. A missing Rust Architecture/type handle is outside
+        // the locked constructor domain and fails closed to the leaf's old
+        // type; no process-global substitute is consulted.
+        let type_factory = fd.get_arch().and_then(|arch| arch.types.clone());
+
         // Walk every node and give it the correct storage address.
         // baseAddr = outvn->getAddr() - baseOffset
         let base_addr = crate::address::Address::new(
@@ -12167,7 +12145,14 @@ impl Rule for RulePieceStructure {
                 let new_vn = fd.new_varnode_out(vn_size, addr, &copy_op);
                 any_addr_tied = any_addr_tied || new_vn.read().unwrap().is_addr_tied();
                 // newType = getExactPiece(ct, typeOffset, vn->getSize()) ?: vn->getType()
-                let new_type = Self::get_exact_piece(&ct, type_offset as i64, vn_size as i64)
+                let new_type = type_factory
+                    .as_ref()
+                    .and_then(|factory| {
+                        factory
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get_exact_piece(ct.clone(), type_offset as i64, vn_size)
+                    })
                     .or_else(|| vn.read().unwrap().get_type());
                 if let Some(t) = new_type {
                     new_vn.write().unwrap().update_type(t);

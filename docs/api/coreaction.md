@@ -1105,6 +1105,16 @@ vn/param 尺寸门、implied+written 的 CAST 展开（vn→def->getIn(0)，类�
 None 降优先）、重复 high 的 tie-break 用 `Datatype::type_order`（旧类型更
 specific 则保留），rec_map 值扩为 (name, Option<Datatype>)。
 
+### 2026-08-24（TYPEFACTORY-EXACTPIECE-CALLERS-0001）：`ActionNameVars::link_symbols` 传 Architecture-owned TypeFactory
+
+`link_symbols` 开头按 coreaction.cc:2946 `TypeFactory *typeFactory =
+data.getArch()->types;` 一次性捕获 `fd.get_arch().types`，在 cc:2971-2972
+的 addr-tied 分支传给 `HighVariable::finalize_datatype(&mut factory)`
+（本租约内 coreaction.rs 的唯一改动；不涉及 ActionInferTypes/PTRSUB/STOP）。
+Architecture/工厂未接线时 fail-closed（不做 finalize 的类型投影），不查
+任何 shared-default/process-global 工厂。双侧门禁
+`tests/oracle/exactpiece_callers_1204`。
+
 ### 2026-08-17：ActionDefaultParams 逐字镜像 model 绑定（FUNCPROTO-MODEL-BIND-0001）
 
 - `ActionDefaultParams::apply` 对齐 coreaction.cc:2311-2337：

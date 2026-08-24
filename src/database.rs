@@ -303,16 +303,16 @@ impl SymbolEntry {
     /// entry's starting address is added. Returns `None` if there is no
     /// exact sub-type of the requested size at the computed offset.
     ///
-    /// Ghidra resolves the sub-type via
-    /// `TypeFactory::getExactPiece(cur, off, sz)`. Rugra does not yet wire a
-    /// `TypeFactory` into `SymbolEntry`; we use `Datatype::get_sub_type` to
-    /// locate the field at `off`, then accept it only when the remaining
-    /// offset is zero and its size equals `sz`. Because field sub-types are
-    /// borrowed out of the symbol's own `Arc<Datatype>` allocation, when the
-    /// offset is zero and the request covers the whole symbol we return the
-    /// symbol's whole type (matching `getExactPiece(cur, 0, type->getSize())`
-    /// returning `cur` itself).
-    pub fn get_sized_type(&self, inaddr: Address, sz: i32) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+    /// Ghidra reaches the owning Architecture's `TypeFactory` through the
+    /// Symbol's Scope. Rugra's Symbol does not retain that owner, so the caller
+    /// passes the same factory explicitly rather than constructing a local or
+    /// process-global substitute.
+    pub fn get_sized_type(
+        &self,
+        type_factory: &mut crate::type_system::typefactory::TypeFactory,
+        inaddr: Address,
+        sz: i32,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         let off = if self.is_dynamic() {
             self.offset
         } else {
@@ -320,21 +320,8 @@ impl SymbolEntry {
         };
         let sym = self.symbol.read().unwrap();
         let dt = sym.dtype.clone()?;
-        if off == 0 && dt.get_size() as i32 == sz {
-            // Whole-symbol match — `getExactPiece` returns the type itself.
-            return Some(dt);
-        }
-        // Look up the field at the computed offset and accept it only if it is
-        // an exact (size, offset) match.
-        let (sub, rem) = dt.get_sub_type(off as i64);
-        if rem == 0 && sub.map_or(false, |s| s.get_size() as i32 == sz) {
-            // No separate Arc per field; return the whole-type Arc. Callers
-            // needing the exact field pointer must defer to a future
-            // TypeFactory-backed implementation.
-            Some(dt)
-        } else {
-            None
-        }
+        let size = usize::try_from(sz).ok()?;
+        type_factory.get_exact_piece(dt, off as i64, size)
     }
 
     // Ghidra: database.cc:135 SymbolEntry::updateType
@@ -345,13 +332,18 @@ impl SymbolEntry {
     /// returns the resolved `Datatype` (or `None`) so the caller can apply
     /// it to the Varnode. This is the type-propagation entry point for
     /// mapped symbols.
-    pub fn update_type(&self, vn_addr: Address, vn_size: i32) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+    pub fn update_type(
+        &self,
+        type_factory: &mut crate::type_system::typefactory::TypeFactory,
+        vn_addr: Address,
+        vn_size: i32,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         let sym = self.symbol.read().unwrap();
         if (sym.flags & symbol_flags::TYPELOCK) == 0 {
             return None;
         }
         drop(sym);
-        self.get_sized_type(vn_addr, vn_size)
+        self.get_sized_type(type_factory, vn_addr, vn_size)
     }
 
     // Ghidra: database.cc:187 SymbolEntry::encode
@@ -4716,16 +4708,20 @@ mod tests {
     #[test]
     fn test_symbol_entry_get_sized_type_whole_match() {
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        use crate::type_system::typefactory::TypeFactory;
+        let mut type_factory = TypeFactory::new(8);
         let sym = Arc::new(RwLock::new(Symbol::new(0, "x", "int")));
         sym.write().unwrap().dtype = Some(Arc::new(Datatype::Base(TypeBase::new(
             "int".into(), 4, TypeMetatype::Int,
         ))));
         let entry = SymbolEntry::new_static(sym, 0, Address::new(0x1000), 0, 4, RangeList::new());
         // Whole-symbol match (offset 0, exact size).
-        let dt = entry.get_sized_type(Address::new(0x1000), 4);
+        let dt = entry.get_sized_type(&mut type_factory, Address::new(0x1000), 4);
         assert!(dt.is_some());
         // Wrong size → no exact match.
-        assert!(entry.get_sized_type(Address::new(0x1000), 8).is_none());
+        assert!(entry
+            .get_sized_type(&mut type_factory, Address::new(0x1000), 8)
+            .is_none());
     }
 
     #[test]

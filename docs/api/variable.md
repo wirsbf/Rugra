@@ -149,8 +149,15 @@ Clears `typedirty` FIRST, then a `TYPE_FINALIZED` type short-circuits
 clear in the plain `highflags` word; the `&self` lazy read path lives in
 `get_type` (variable.hh:174).
 
-### `pub fn finalize_datatype(&mut self)`
-Ghidra: variable.cc:551 `finalizeDatatype`. Assigns final type from Symbol.
+### `pub fn finalize_datatype(&mut self, type_factory: &mut TypeFactory)`
+Ghidra: variable.cc:551 `finalizeDatatype(TypeFactory*)`. Assigns final type
+from Symbol. 2026-08-24（TYPEFACTORY-EXACTPIECE-CALLERS-0001）：调用方显式传入
+Architecture 持有的 TypeFactory（Ghidra 由调用方 `data.getArch()->types` 传入，
+coreaction.cc:2946/2972），piece 查找走 canonical
+`TypeFactory::get_exact_piece`（type.cc:4090），保留 PartialStruct/PartialUnion/
+PartialEnum 的 canonical Arc identity 与工厂 mutation；`null`/`TYPE_UNKNOWN`
+结果保持 early return（variable.cc:561-562）。双侧门禁
+`tests/oracle/exactpiece_callers_1204`。
 
 ## Cover
 

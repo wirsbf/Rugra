@@ -1099,7 +1099,8 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫（cc:718
 13 新测试。
 
 ### 2026-07-01（续 8）：PieceStructure piece 重组引擎 + Segment 常量折叠
-- PieceStructure：PieceNode struct + is_leaf_node + gather_pieces（op.cc:801-876）+ convert_zext_to_piece（cc:7543）+ find_replace_zext + separate_symbol + get_exact_piece + apply_op 真正变换（cc:7625-7718）。4 新测试。
+- PieceStructure：PieceNode struct + is_leaf_node + gather_pieces（op.cc:801-876）+ convert_zext_to_piece（cc:7543）+ find_replace_zext + separate_symbol + apply_op 真正变换（cc:7607-7700）。4 新测试。
+- 2026-08-24（TYPEFACTORY-EXACTPIECE-CALLERS-0001）：删除本地 `get_exact_piece` 副本（其 `Arc::new(ct.clone())` 丢失 canonical identity，且无 partial 构造）。apply_op 的 leaf 类型改从 Architecture-owned TypeFactory 的 canonical `get_exact_piece`（ruleaction.cc:7665 `data.getArch()->types->getExactPiece`）获取，null 时回退 `vn->getType()`（cc:7666-7667）；Architecture 未接线时 fail-closed 回退 leaf 旧类型，不查任何全局替身工厂。双侧门禁 `tests/oracle/exactpiece_callers_1204`。
 - `RulePieceStructure::apply_op` 在替换非叶 Varnode 后显式传播 `VarnodeBank::destroy_varnode` 的失败；这对应 Ghidra `data.deleteVarnode(vn)` 对仍集成 Varnode 抛出的 `LowlevelError`，不会吞掉结构不变量错误。该错误路径未纳入本次 RuleCollectTerms fixture，状态仍为 `UNTESTED`，不属于下述七个目标结构投影的批准范围。
 - Segment：SegmentOp::execute（userop.cc:218）+ supports_far_pointer/has_far_pointer_support。RuleSegment::apply_op 常量折叠分支（cc:9024）+ far-pointer 分支（cc:9034）+ contiguous_test/find_contiguous_whole helper。4 新测试。
 

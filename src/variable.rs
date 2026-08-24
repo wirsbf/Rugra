@@ -664,9 +664,13 @@ impl HighVariable {
     // Ghidra: variable.cc:551 HighVariable::finalizeDatatype
     /// Assign a final data-type matching the associated Symbol and disable
     /// future type dirtying. Faithful to `finalizeDatatype` (variable.cc:551-566).
-    /// Rugra has no TypeFactory::getExactPiece port yet, so the piece lookup is
-    /// approximated by the symbol's whole type when the offset is a full match.
-    pub fn finalize_datatype(&mut self) {
+    /// The caller supplies the owning Architecture's factory, preserving both
+    /// canonical partial-type identity and the factory mutation performed by
+    /// `TypeFactory::getExactPiece`.
+    pub fn finalize_datatype(
+        &mut self,
+        type_factory: &mut crate::type_system::typefactory::TypeFactory,
+    ) {
         let symbol_arc = match &self.symbol {
             Some(s) => s.clone(),
             None => return, // Faithful to variable.cc:554.
@@ -684,20 +688,15 @@ impl HighVariable {
             .instances
             .first()
             .map(|v| v.read().unwrap().get_size())
-            .unwrap_or(cur.get_size()) as i32;
-        // Faithful to variable.cc:560: TypeFactory::getExactPiece(cur, off, sz).
-        // RUGRA-GLUE: no TypeFactory port; use get_sub_type to resolve a piece.
-        let tp: Option<Arc<Datatype>> = if off == 0 && sz == cur.get_size() as i32 {
-            Some(cur.clone())
-        } else {
-            let (sub, _sub_off) = cur.get_sub_type(off as i64);
-            sub.map(|d| Arc::new(d.clone()))
-        };
+            .unwrap_or(cur.get_size());
+        // variable.cc:560: preserve the factory-canonical pointer returned by
+        // getExactPiece, including PartialStruct/PartialUnion/PartialEnum.
+        let tp = type_factory.get_exact_piece(cur, off as i64, sz);
         let tp = match tp {
-            Some(t) => t,
+            Some(t) if t.get_metatype() != TypeMetatype::Unknown => t,
             None => return, // Faithful to variable.cc:561-562: null or UNKNOWN -> return.
+            Some(_) => return,
         };
-        // RUGRA-GLUE: no TYPE_UNKNOWN enum check (Rugra's Unknown metatype stands in).
         self.v_type.set(tp);
         self.strip_type(); // Faithful to variable.cc:564.
         self.highflags |= high_internal_flags::TYPE_FINALIZED; // Faithful to variable.cc:565.

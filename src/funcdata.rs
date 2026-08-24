@@ -252,82 +252,23 @@ fn scope_local_is_unmapped_unaliased(
     offset < scope.min_param_offset || offset > scope.max_param_offset
 }
 
-// Ghidra: type.cc:4090 TypeFactory::getExactPiece
-/// One descent level for the getExactPiece walk keeping `Arc` identity: a
-/// struct yields the field containing `off` (type.cc:1640), an array the
-/// element with the offset reduced modulo the element align size
-/// (type.cc:1234); every other metatype has no sub-type. Mirrors the
-/// borrowed `Datatype::get_sub_type` variants already ported for
-/// database.rs `SymbolEntry::get_sized_type`.
-fn exact_piece_arc_sub_type(
-    ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
-    off: i64,
-) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
-    use crate::type_system::datatype::Datatype;
-    match &**ct {
-        Datatype::Struct(s) => {
-            let field = s.fields.iter().find(|f| {
-                (f.offset as i64) <= off && off < f.offset as i64 + f.type_ptr.get_size() as i64
-            })?;
-            Some((field.type_ptr.clone(), off - field.offset as i64))
-        }
-        Datatype::Array(a) => {
-            let sz = a.base.size as i64;
-            if off >= sz {
-                return None;
-            }
-            let elem_align = a.array_of.get_align_size().max(1) as i64;
-            Some((a.array_of.clone(), off % elem_align))
-        }
-        _ => None,
-    }
-}
-
 // Ghidra: database.cc:151 SymbolEntry::getSizedType
 /// Data-type matching the given size and address within a LocalSymbol's
 /// whole mapping. Faithful to `SymbolEntry::getSizedType`
 /// (database.cc:151-162): the entry offset is 0 for whole maps, so
 /// `off = (vn.offset - sym.start)`, then `TypeFactory::getExactPiece`
-/// (type.cc:4090-4117) runs: a perfect whole-size match returns the type
-/// itself; descent stops at the last containing type; partial
-/// struct/array/enum/union construction (`getTypePartialStruct` and kin) is
-/// not ported yet, so those branches yield `None` (same residual as
-/// database.rs `SymbolEntry::get_sized_type`).
+/// (type.cc:4090-4117) runs in the owning Architecture factory, preserving
+/// exact and canonical partial-type identity.
 fn local_symbol_sized_type(
+    type_factory: &mut crate::type_system::typefactory::TypeFactory,
     sym: &crate::varmap::LocalSymbol,
     inaddr: u64,
     sz: i32,
 ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
     let dt = sym.dtype.clone()?;
     let off = (inaddr as i64).wrapping_sub(sym.start as i64);
-    let mut ct = dt;
-    let mut cur_off = off;
-    loop {
-        let ct_size = ct.get_size() as i64;
-        // cc:4097-4099: range is beyond the end of the current data-type.
-        if ct_size < sz as i64 + cur_off {
-            break;
-        }
-        // cc:4100-4101: perfect size match (only reachable with cur_off == 0
-        // given the bounds check above).
-        if ct_size == sz as i64 {
-            return Some(ct);
-        }
-        if ct.get_metatype() == crate::type_system::datatype::TypeMetatype::Union {
-            // cc:4102-4104: getTypePartialUnion — not ported (residual).
-            return None;
-        }
-        // cc:4105-4107: ct = ct->getSubType(curOff,&curOff).
-        match exact_piece_arc_sub_type(&ct, cur_off) {
-            Some((next, new_off)) => {
-                ct = next;
-                cur_off = new_off;
-            }
-            None => break,
-        }
-    }
-    // cc:4109-4115: partial struct/array/enum construction — not ported.
-    None
+    let size = usize::try_from(sz).ok()?;
+    type_factory.get_exact_piece(dt, off, size)
 }
 
 /// Funcdata flags (funcdata.hh:highlevel_flags).
@@ -2610,6 +2551,11 @@ impl Funcdata {
             Some(s) => s.clone(),
             None => return false,
         };
+        // funcdata_varnode.cc:956 reaches getExactPiece through the
+        // SymbolEntry's Scope and therefore the same Architecture-owned
+        // TypeFactory. Missing optional Rust wiring fails closed for type
+        // projection while the independent flag synchronization continues.
+        let type_factory = self.get_arch().and_then(|arch| arch.types.clone());
         // cc:947-948: iter = vbank.beginLoc(lm->getSpaceId());
         // enditer = vbank.endLoc(lm->getSpaceId()). The loc-tree ordering
         // (space, offset, size, input/written/free, seq) keeps every
@@ -2662,9 +2608,19 @@ impl Funcdata {
                     if update_datatypes {
                         // cc:956-960: ct = entry->getSizedType(addr, size);
                         // TYPE_UNKNOWN results are dropped.
-                        if let Some(dt) = local_symbol_sized_type(sym, addr, size as i32) {
-                            if dt.get_metatype() != TypeMetatype::Unknown {
-                                ct = Some(dt);
+                        if let Some(factory) = type_factory.as_ref() {
+                            let mut factory = factory
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if let Some(dt) = local_symbol_sized_type(
+                                &mut factory,
+                                sym,
+                                addr,
+                                size as i32,
+                            ) {
+                                if dt.get_metatype() != TypeMetatype::Unknown {
+                                    ct = Some(dt);
+                                }
                             }
                         }
                     }

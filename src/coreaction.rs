@@ -4619,6 +4619,11 @@ impl ActionNameVars {
         // Snapshot all varnode arcs to avoid borrow conflicts when calling
         // fd.link_symbol (which needs &mut fd) inside the loop.
         let vn_arcs: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
+        // coreaction.cc:2946 captures exactly data.getArch()->types once for
+        // the HighVariable::finalizeDatatype calls below. If the optional Rust
+        // Architecture wiring is absent, this path fails closed instead of
+        // substituting the process-global factory.
+        let type_factory = fd.get_arch().and_then(|arch| arch.types.clone());
         // cc:2938-2944: iterate constant-space varnodes for equate symbols +
         // spacebase links.
         for vn_arc in &vn_arcs {
@@ -4708,8 +4713,14 @@ impl ActionNameVars {
             //   high->finalizeDatatype(typeFactory);
             if vn_arc.read().unwrap().is_addr_tied() {
                 // The local map is never global.
-                if let Some(h) = vn_arc.read().unwrap().high.clone() {
-                    h.write().unwrap().finalize_datatype();
+                if let (Some(h), Some(factory)) = (
+                    vn_arc.read().unwrap().high.clone(),
+                    type_factory.as_ref(),
+                ) {
+                    let mut factory = factory
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    h.write().unwrap().finalize_datatype(&mut factory);
                 }
             }
         }
