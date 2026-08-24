@@ -1,0 +1,141 @@
+{
+  "schema": 2,
+  "fixture_id": "SPLITDATATYPE-EXACTPIECE-0001",
+  "overall_status": "MATCH (covered projection): RuleSplitLoad/RuleSplitStore gate chain (getValueDatatype -> canonical TypeFactory::getExactPiece -> composite metatype gate) plus SplitDatatype gate/rewrite decisions on the locked 12.0.4 oracle; 20 records byte-identical",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "stable_functions": [
+      "ghidra::SplitDatatype::getValueDatatype subflow.cc:2910",
+      "ghidra::TypeFactory::getExactPiece type.cc:4090",
+      "ghidra::SplitDatatype::categorizeDatatype subflow.cc:2237",
+      "ghidra::SplitDatatype::testDatatypeCompatibility subflow.cc:2285",
+      "ghidra::SplitDatatype::getComponent subflow.cc:2208",
+      "ghidra::SplitDatatype::splitCopy subflow.cc:2717",
+      "ghidra::SplitDatatype::splitLoad subflow.cc:2756",
+      "ghidra::SplitDatatype::splitStore subflow.cc:2808",
+      "ghidra::RuleSplitLoad::applyOp subflow.cc:2970",
+      "ghidra::RuleSplitStore::applyOp subflow.cc:2991"
+    ]
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; size_alignment_map 1/2/4/8/8/8; core undefined1/2/4/8; split_datatype_config=struct|array|pointer (architecture.cc:1431-1432 defaults)",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no calling convention",
+  "analysis_options": {
+    "entrypoint": "direct production call sites: SplitDatatype::getValueDatatype static; splitCopy/splitStore/splitLoad members; RuleSplitStore/RuleSplitLoad::applyOp dispatch",
+    "identity_channel": "per-store/per-load effective pointer offset resolved through PTRSUB/PTRADD/INT_ADD constant chains back to the case root pointer varnode; original-op aliveness bits; ops-added deltas",
+    "ssa_discipline": "every multi-reader varnode is written (COPY of a constant); free varnodes single-descendant (varnode.cc:333-336)",
+    "alive_only": "opDestroy leaves dead ops iterable with null inputs/output; all sweeps and projections iterate alive ops only",
+    "gate_observation": "SplitDatatype categorize/testDatatypeCompatibility are private by class-default access in C++ (no private: label), so gate outcomes are observed through the public splitCopy/splitLoad/splitStore members which run the same chain",
+    "factory": "one Architecture-owned TypeFactory shared by getValueDatatype, the partial constructors, and the SplitDatatype instance, exactly like data.getArch()->types"
+  },
+  "input_manifest": {
+    "canonicalization": "RFC 8785-compatible JSON subset: UTF-8, sorted keys, compact separators, no floats",
+    "cases": [
+      "gv_file_opaque8: getValueDatatype(FILE-like opaque struct:8*, 8) returns the whole struct (exact size match, type.cc:4105)",
+      "gv_iofile8: getValueDatatype over _IO_FILE-like struct:216* size 8 returns partial_struct:8@0 (flags+padding window)",
+      "gv_progress16: getValueDatatype(ProgressData-like struct:24*, 16) returns partial_struct:16@0",
+      "gv_array_window8: getValueDatatype(uint4[6]*, 8) returns partial_struct:8@0/parent=array:24",
+      "gv_relptr16: ephemeral TypePointerRel(parent,8) resolves through parent/byte offset to partial_struct:16@8",
+      "gv_scalar_array16: over-aligned uint4* size 16 reinterprets via getTypeArray as array:16x4",
+      "split_whole_struct_pd: splitCopy same-Arc whole struct non-constant rejected (cc:2304-2305)",
+      "split_array_window_prim: splitStore element-array window with untyped primitive rejected (cc:2307)",
+      "split_array_window_const: splitStore constant into element array accepted -> 2 pieces (0:4,4:4)",
+      "split_iofile8_prim: splitStore flags+padding-hole window rejected (two-piece padding, cc:2348-2353)",
+      "split_both_primitive: splitLoad with primitive in/out rejected (cc:2303)",
+      "split_progress16_prim: splitStore PartialStruct window with primitive value -> 4 field pieces",
+      "apply_file_opaque8_store: RuleSplitStore on FILE*+8 scalar -> 0, zero ops added (my_fwrite mis-split root cause fixed)",
+      "apply_iofile8_store: RuleSplitStore on flags+hole window -> 0, zero ops added",
+      "apply_progress16_store: RuleSplitStore -> 1; stores 0:4,4:4,8:4,12:4; original STORE object retained",
+      "applyload_progress16_load: RuleSplitLoad -> 1; loads 0:4,4:4,8:4,12:4; original LOAD destroyed",
+      "apply_progress8_ptrsub_store: store via PTRSUB(root,8) splits at effective +8/+12 (window-relative pieces)",
+      "apply_array_window_store: RuleSplitStore element-pointer non-constant -> 0, zero ops added",
+      "apply_array_const_store: constant 0x1122334455667788 -> stores 0:4=0x55667788,4:4=0x11223344",
+      "stab_global: every second-round sweep reports zero further changes"
+    ],
+    "sha256": "c7597d89ed30ff1fbd71e53608b1cea3dc62bad902de426d95004b882ae8dab3"
+  },
+  "coverage": {
+    "gv_exact_piece_shapes": "MATCH",
+    "gv_pointerrel_window": "MATCH",
+    "gv_scalar_array_reinterpretation": "MATCH",
+    "split_whole_struct_identity_gate": "MATCH",
+    "split_array_primitive_gates": "MATCH",
+    "split_constant_array_pieces": "MATCH",
+    "split_padding_hole_rejection": "MATCH",
+    "apply_file_scalar_no_split": "MATCH",
+    "apply_progress_partial_field_pieces": "MATCH",
+    "applyload_piece_loads_and_destroy": "MATCH",
+    "apply_ptrsub_effective_addressing": "MATCH",
+    "stability_second_round": "MATCH",
+    "rewrite_op_shape": "UNTESTED: oracle buildPointers emits per-piece PTRSUB/PTRADD chains and buildInConstants direct constants; the Rust stand-in emits INT_ADD off in(1) and SUBPIECE of constants. Projections are effective-semantics (offset/size/value/identity) only; the raw op-DAG shape divergence is the registered structural gap (RootPointer::find multi-hop back-up, addrTied duplicateToTemp, splitStore LOAD-value trace cc:2817-2830, splitLoad COPY-follow cc:2761-2769)",
+    "flat_array_pointer_apply": "UNTESTED: a flat uint4[6]*-typed pointer with an 8-byte window returns PartialStruct from getValueDatatype on both sides, but oracle splitStore then rejects in RootPointer::find (ptrTo != element type) while the Rust stand-in lacks find; the case is intentionally excluded pending the RootPointer port"
+  },
+  "exact_function_boundaries": {
+    "get_value_datatype": "subflow.cc:2910-2938",
+    "get_exact_piece": "type.cc:4090-4117",
+    "categorize_datatype": "subflow.cc:2237-2274",
+    "test_datatype_compatibility": "subflow.cc:2285-2367",
+    "get_component": "subflow.cc:2208-2234",
+    "test_copy_constraints": "subflow.cc:2370-2384",
+    "split_copy": "subflow.cc:2717-2747",
+    "split_load": "subflow.cc:2756-2800",
+    "split_store": "subflow.cc:2808-2898",
+    "rule_split_load_apply": "subflow.cc:2970-2983",
+    "rule_split_store_apply": "subflow.cc:2991-3004",
+    "splitdatatype_ctor": "subflow.cc:2701-2709"
+  },
+  "rugra_candidate": {
+    "commit": "PENDING_PRODUCTION_COMMIT",
+    "tree": "PENDING_PRODUCTION_TREE",
+    "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
+    "critical_git_blobs": {
+      "src/subflow.rs": "PENDING_SUBFLOW_BLOB",
+      "Cargo.toml": "PENDING_CARGO_TOML_BLOB",
+      "Cargo.lock": "PENDING_CARGO_LOCK_BLOB",
+      "build.rs": "PENDING_BUILD_RS_BLOB"
+    }
+  },
+  "comparand": {
+    "mode": "fresh git archive of the locked Ghidra cpp tree and the frozen rugra_candidate commit; standalone fixtures compiled against each archive",
+    "cpp_fixture_sha256": "0317b156cddffeb5e052199ffca8eea14f0bd6bc1a86bd8de09b6ec90b0fbbed",
+    "rust_fixture_sha256": "4a6c16b24da24da5cece33e518a6df7813ed570251c19f28c7d8bd265a4b461e",
+    "runner_sha256": "74a4fbb7a04c8a19920a408d91b3c4129fb45847d9ec33c5c5a174ab3e4d8284",
+    "subflow_rs_sha256": "982ee065f7971994592bf570e55ef06c3455294cd2502856850a2e1b18246f97",
+    "subflow_doc_sha256": "b4f4adbf91963f4bfc5be9898ac61dfe7cce7a4a643f633c722939fa501e239a",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-splitdatatype-exactpiece-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+    "rust_crate_tree_sha256": "0be3f478b9bce59e043853325de3689660949f623c9ac3700c1f0133618e2278"
+  },
+  "build": {
+    "cpp_oracle": "git archive of the locked cpp tree per run; fresh libdecomp.a; fixture compiled with pinned g++ -std=c++11 -O2",
+    "rust_comparand": "git archive of the frozen production commit; cargo build --lib --offline --locked under env -i with flock; standalone fixture rustc-linked against librugra.rlib + librugra_sleigh.a"
+  },
+  "expected_ghidra_stdout_sha256": "c11eb5afa6d7afa5819dcf99043bf60fadd18d962035c48ab16c8bb156773bea",
+  "expected_rugra_stdout_sha256": "c11eb5afa6d7afa5819dcf99043bf60fadd18d962035c48ab16c8bb156773bea",
+  "expected_lines": [
+    "gv|case=file_opaque8|size=8|result=struct:8",
+    "gv|case=iofile8|size=8|result=partial_struct:8@0/parent=struct:216",
+    "gv|case=progress16|size=16|result=partial_struct:16@0/parent=struct:24",
+    "gv|case=array_window8|size=8|result=partial_struct:8@0/parent=array:24",
+    "gv|case=relptr16|size=16|result=partial_struct:16@8/parent=struct:24",
+    "gv|case=scalar_array16|size=16|result=array:16x4/elem=uint:4",
+    "split|case=whole_struct_pd|fn=splitCopy|ok=0",
+    "split|case=array_window_prim|fn=splitStore|ok=0|pieces=-",
+    "split|case=array_window_const|fn=splitStore|ok=1|pieces=0:4,4:4",
+    "split|case=iofile8_prim|fn=splitStore|ok=0",
+    "split|case=both_primitive|fn=splitLoad|ok=0",
+    "split|case=progress16_prim|fn=splitStore|ok=1|pieces=0:4,4:4,8:4,12:4",
+    "apply|case=file_opaque8_store|ret=0|ops_added=0|orig_kept=1",
+    "apply|case=iofile8_store|ret=0|ops_added=0|orig_kept=1",
+    "apply|case=progress16_store|ret=1|stores=0:4,4:4,8:4,12:4|orig_kept=1|stab=0",
+    "applyload|case=progress16_load|ret=1|loads=0:4,4:4,8:4,12:4|orig_gone=1|stab=0",
+    "apply|case=progress8_ptrsub_store|ret=1|stores=8:4,12:4|stab=0",
+    "apply|case=array_window_store|ret=0|ops_added=0|orig_kept=1",
+    "apply|case=array_const_store|ret=1|stores=0:4=0x55667788,4:4=0x11223344|stab=0",
+    "stab|global_changes=0"
+  ]
+}

@@ -1,5 +1,30 @@
 # `subflow.rs` API Reference
 
+## 2026-08-25：SPLITDATATYPE-EXACTPIECE-0001 — RuleSplitLoad/Store 走 canonical get_exact_piece 门禁
+
+`RuleSplitLoad::apply_op` / `RuleSplitStore::apply_op` 现按 oracle
+（subflow.cc:2970-2983 / 2991-3004）先经
+`SplitDatatype::get_value_datatype`（subflow.cc:2910-2938，新增）从指针
+输入恢复值类型——TypePointerRel parent/offset 解析、超对齐标量
+`getArray` 重释、STRUCT/ARRAY 指针走 **canonical**
+`TypeFactory::get_exact_piece`（type.cc:4090-4117，与四个生产调用点同一
+Architecture 工厂）——再过 STRUCT/ARRAY/PARTIALSTRUCT 元类型门。
+分解走 `categorize_datatype` + `test_datatype_compatibility`
+（subflow.cc:2237-2274 / 2285-2367，新增）:类别门（load/store 的
+array/primitive 组合、整结构同 Arc 非常量拒绝）、hole 填充与
+initial-hole/two-piece-padding 拒绝、numDepend>1 整结构门。构造器从
+Architecture 读取 `split_datatype_config`（subflow.cc:2701-2709）。
+`split_load`/`split_store` 的 piece 指针改为窗口相对（in(1) 即窗口起点,
+镜像 buildPointers 的 baseOffset+offset 寻址）；移除旧
+`collect_components`/`immediate_offset_after` 本地分解（其整结构分解 +
+双计偏移是 my_fwrite 误拆根因）。双侧 fixture
+`tests/oracle/splitdatatype_exactpiece_1204` 20 记录 byte-identical
+（FILE\*+8 标量不拆、ProgressData 16B → PartialStruct/4 字段 piece、
+二轮稳定）。残留结构缺口：RootPointer::find 多跳回溯/addrTied
+duplicateToTemp、splitStore 的 LOAD 值回溯（cc:2817-2830）、splitLoad 的
+COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
+形状（Rugra stand-in 用 INT_ADD,语义地址等价）。
+
 ## 2026-08-24：RuleSubvarSext reset 接入 pool virtual-reset seam + 名字对齐
 
 `RuleSubvarSext` 的派生 reset（subflow.cc:1742-1746，从
@@ -56,6 +81,12 @@
 
 ### cleanup pool split 族 Rule (coreaction.cc:5706-5708)
 - `RuleSplitCopy` / `RuleSplitLoad` / `RuleSplitStore` (2941/2964/2985) + `SplitDatatype`
+- `SplitDatatype::new` — 从 Architecture 读取 `split_datatype_config` 与工厂 (subflow.cc:2701-2709)
+- `SplitDatatype::get_value_datatype(op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938)
+- `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
+- `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)
+- `test_copy_constraints` — COPY 约束（函数输入/同地址 addrTied/LOAD 单读者）(subflow.cc:2370-2384)
+- 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` — arithmetic sanity (subflow.cc:2673-2696, typeop.hh:140)
 
 ### `RuleSubfloatConvert` (subflow.cc:3489, 5633)
 浮点子精度转换——Rule struct 存在，TransformManager.apply 待补（依赖 transform.rs 基础设施）。
@@ -67,6 +98,12 @@
 - `FuncCallSpecs` per-op exact lookup — 已具备；CALL trim/push 的 active/locked/
   varargs guards 与 patch/addPush consumer 尚未接，`CALLSPEC-0001`/`UNTESTED`
 - `RulePtrFlow`(5624, ruleaction.cc:9177) — 未移植（重：trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch 构造）
+- Split 族（2026-08-25 起）：`RootPointer::find` 多跳回溯/`backUpPointer`、addrTied
+  `duplicateToTemp`、`freePointerChain`、splitStore 的 LOAD 值回溯
+  （subflow.cc:2817-2830）、splitLoad 的 COPY-follow（cc:2761-2769）、
+  `buildInConstants`（常量直建,Rugra 用 SUBPIECE）、buildPointers 的
+  PTRSUB/PTRADD 形状（Rugra 用 INT_ADD,语义地址等价——双侧 fixture 以
+  有效偏移+尺寸投影对拍）
 
 ## 测试
 29 单元测试：SubvariableFlow 扫描+替换主流程、terminal/extension/boolean/compare patch、sext 路径、每条 Rule 的 pattern 触发 + guard（mask-too-big/consume-mismatch/no-constant/wrong-size/big-flag/zero-mask）。

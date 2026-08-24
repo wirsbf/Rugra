@@ -70,11 +70,14 @@
 //!     They retain the pre-D0 conservative skip under `CALLSPEC-0001`.
 //!   - `PcodeOp::get_halt_type` (`try_return_pull`) is not available; the
 //!     artificial-halt guard is conservatively skipped and logged.
-//!   - `copy_symbol_if_valid`, `Address::is_big_endian`, and Architecture
-//!     options (`aggressive_ext_trim`, `split_datatype_config`) are not
-//!     threaded through here; the relevant spots emulate conservatively and
-//!     log it. (`Funcdata::set_input_varnode`/`delete_varnode` ARE now used
+//!   - `copy_symbol_if_valid` and `Address::is_big_endian` are not threaded
+//!     through here; the relevant spots emulate conservatively and log it.
+//!     (`Funcdata::set_input_varnode`/`delete_varnode` ARE now used
 //!     by `replace_input`/`get_replace_varnode`, subflow.cc:1262/1264/1343.)
+//!     The `split_datatype_config` Architecture option IS now threaded into
+//!     `SplitDatatype::new` (subflow.cc:2701-2709) and the split gates run
+//!     through the canonical `TypeFactory::get_exact_piece`
+//!     (SPLITDATATYPE-EXACTPIECE-0001).
 //!   - `SubfloatFlow` / `LaneDivide` / `SplitFlow` (`TransformManager`
 //!     subclasses) are not ported; `RuleSubfloatConvert` and the
 //!     `RuleSplitFlow` rewrite are therefore documented TODOs.
@@ -4647,19 +4650,24 @@ impl Rule for RuleSplitFlow {
 /// structure or array (TypePartialStruct), break it up into multiple
 /// operations that each act on a logical component.
 ///
-/// NOTE: Ghidra's SplitDatatype relies heavily on the TypeFactory /
-/// Datatype subsystem (TypePartialStruct, TypePointerRel, getExactPiece,
-/// etc.) and on `Funcdata::opSetAllInput`, `setInputVarnode`,
-/// `buildCopyTemp`, and the Merge `registerProtoPartialRoot` API. Rugra's
-/// type-system and these Funcdata APIs are only partially ported. The struct
-/// and its public entry points are implemented 1:1 in shape; the data-type
-/// compatibility test and the actual split rewrites are gated behind those
-/// missing pieces and return false (no change) with a logged gap rather than
-/// being simplified. This keeps the Rules safely inert until the type system
-/// lands.
+/// The gate chain is ported 1:1 as of SPLITDATATYPE-EXACTPIECE-0001:
+/// `RuleSplitLoad`/`RuleSplitStore` call `SplitDatatype::getValueDatatype`
+/// (subflow.cc:2910-2938), which routes through the canonical
+/// `TypeFactory::getExactPiece` (type.cc:4090-4117) via the
+/// Architecture-owned factory, and the piece decomposition runs through
+/// `categorizeDatatype` + `testDatatypeCompatibility` (subflow.cc:2237-2386).
+///
+/// Remaining structural gaps (see module docs): the split rewrites still
+/// approximate Ghidra's `RootPointer::find`/`buildPointers` with the direct
+/// `in(1)` pointer (single-hop), and the splitStore LOAD-value trace
+/// (subflow.cc:2817-2830) and splitLoad COPY-follow (subflow.cc:2761-2769)
+/// are not ported.
 pub struct SplitDatatype<'a> {
     /// The containing function. Faithful to `data`.
     pub data: &'a mut Funcdata,
+    /// The data-type container. Faithful to `types` (subflow.hh:284), set
+    /// from `func.getArch()->types` in the constructor (subflow.cc:2705).
+    pub types: Option<Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     /// Sequence of all data-type pairs being copied. Faithful to
     /// `dataTypePieces`.
     pub data_type_pieces: Vec<Component>,
@@ -4673,12 +4681,12 @@ pub struct SplitDatatype<'a> {
 
 /// A pair of matching data-types for the split. Faithful to Ghidra's
 /// `SplitDatatype::Component` (subflow.hh:259-266).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Component {
     /// Data-type coming into the logical COPY operation.
-    pub in_type: crate::type_system::Datatype,
+    pub in_type: Arc<crate::type_system::Datatype>,
     /// Data-type coming out of the logical COPY operation.
-    pub out_type: crate::type_system::Datatype,
+    pub out_type: Arc<crate::type_system::Datatype>,
     /// Offset of this logical piece within the whole.
     pub offset: i32,
 }
@@ -4715,32 +4723,393 @@ impl RootPointer {
 }
 
 impl<'a> SplitDatatype<'a> {
-    // Ghidra: subflow.hh:271 RootPointer::new
+    // Ghidra: subflow.cc:2701 SplitDatatype::SplitDatatype
     /// Constructor. Faithful to `SplitDatatype::SplitDatatype(Funcdata&)`
-    /// (subflow.cc:2701-2709). The `split_datatype_config` flags come from
-    /// the Architecture's `OptionSplitDatatypes` options. Rugra does not yet
-    /// thread the Architecture through here, so — rather than defaulting to
-    /// false and making the rules inert — we default both to `true` so the
-    /// `splitCopy`/`splitLoad`/`splitStore` rewrites actually fire when a
-    /// composite type is present (the intended cleanup-phase behaviour). The
-    /// missing config knob is logged at the module top.
+    /// (subflow.cc:2701-2709): `types = glb->types`, and the
+    /// `splitStructures`/`splitArrays` flags come from the Architecture's
+    /// `split_datatype_config` (`OptionSplitDatatypes` bits,
+    /// architecture.cc:1431-1432). A Funcdata without an attached
+    /// Architecture has no factory/config, so both flags stay false and the
+    /// rules are inert (the C++ Funcdata always has an Architecture).
     pub fn new(data: &'a mut Funcdata) -> Self {
+        let (types, config) = match data.get_arch() {
+            Some(arch) => (arch.types.clone(), arch.split_datatype_config),
+            None => (None, 0),
+        };
         Self {
             data,
+            types,
             data_type_pieces: Vec::new(),
-            split_structures: true,
-            split_arrays: true,
+            split_structures: (config & crate::arch::split_datatype::OPTION_STRUCT) != 0,
+            split_arrays: (config & crate::arch::split_datatype::OPTION_ARRAY) != 0,
             is_load_store: false,
         }
     }
 
-    // Ghidra: subflow.hh:271 RootPointer::splitCopy
+    // Ghidra: subflow.cc:2910 SplitDatatype::getValueDatatype
+    /// Get a data-type description of the value being pointed at by the given
+    /// LOAD or STORE. Faithful to `SplitDatatype::getValueDatatype`
+    /// (subflow.cc:2910-2938): takes the data-type of the pointer input
+    /// `in(1)` (read-facing the op) and constructs the type of the thing
+    /// pointed at matching `size` bytes — resolving `TypePointerRel`
+    /// parent/byte-offset, interpreting over-aligned scalars as arrays
+    /// (`getTypeArray`), and otherwise delegating STRUCT/ARRAY pointers to
+    /// the canonical `TypeFactory::getExactPiece` (type.cc:4090-4117), which
+    /// can produce `TypePartialStruct`/`TypePartialUnion`/`TypePartialEnum`
+    /// pieces. Returns `None` when no splittable interpretation exists.
+    pub fn get_value_datatype(
+        load_store: &Arc<RwLock<PcodeOp>>,
+        size: usize,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> Option<Arc<crate::type_system::Datatype>> {
+        use crate::type_system::datatype::type_flags;
+        use crate::type_system::{Datatype, TypeMetatype};
+
+        let ptr_vn = load_store.read().unwrap().get_in(1).cloned()?;
+        let ptr_type = {
+            let op_guard = load_store.read().unwrap();
+            ptr_vn
+                .read()
+                .unwrap()
+                .get_type_read_facing_op(&op_guard, 1)
+        }?;
+        // if (ptrType->getMetatype() != TYPE_PTR) return 0; (cc:2917-2918)
+        let pointer = match ptr_type.as_ref() {
+            Datatype::Pointer(pointer) => pointer,
+            _ => return None,
+        };
+        // TypePointerRel parents carry the container + byte offset
+        // (cc:2920-2926); plain pointers use ptrTo with baseOffset 0.
+        let (res_type, base_offset) = if (pointer.base.flags & type_flags::IS_PTRREL) != 0 {
+            match (pointer.get_parent(), pointer.get_byte_offset()) {
+                (Some(parent), Some(offset)) => (parent.clone(), offset),
+                // Legacy named relative pointers keep the parent only in the
+                // factory side table (typefactory rel_pointers); fall back to
+                // the plain-pointer reading for them.
+                _ => (pointer.ptr_to.clone(), 0),
+            }
+        } else {
+            (pointer.ptr_to.clone(), 0)
+        };
+        let align_size = res_type.get_align_size();
+        let metain = res_type.get_metatype();
+        if align_size < size {
+            // Over-aligned scalar reinterpreted as an element array
+            // (cc:2930-2936). The align_size != 0 term is a Rust divide-by
+            // -zero guard only; Ghidra align sizes are never 0 here.
+            if matches!(
+                metain,
+                TypeMetatype::Int
+                    | TypeMetatype::Uint
+                    | TypeMetatype::Bool
+                    | TypeMetatype::Float
+                    | TypeMetatype::Pointer
+            ) && align_size != 0
+                && size % align_size == 0
+            {
+                let num_el = size / align_size;
+                return Some(
+                    types
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_array(res_type, num_el),
+                );
+            }
+        } else if matches!(metain, TypeMetatype::Struct | TypeMetatype::Array) {
+            // tlst->getExactPiece(resType, baseOffset, size) (cc:2937) — the
+            // canonical factory piece recovery, identical to the four
+            // production callers (TYPEFACTORY-EXACTPIECE-CALLERS-0001).
+            return types
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_exact_piece(res_type, base_offset, size);
+        }
+        None
+    }
+
+    // Ghidra: subflow.cc:2208 SplitDatatype::getComponent
+    /// Obtain the component of the given data-type at the specified offset.
+    /// Faithful to `SplitDatatype::getComponent` (subflow.cc:2208-2234):
+    /// descends `getSubType` until the offset lands exactly at a component
+    /// (iterating through array elements); if no component starts at the
+    /// offset, a hole-sized (capped at 8) `undefined` piece is returned with
+    /// the hole flag set. Returns `None` when no component and no hole exist.
+    fn get_component(
+        &self,
+        ct: &Arc<crate::type_system::Datatype>,
+        offset: i64,
+    ) -> Option<(Arc<crate::type_system::Datatype>, bool)> {
+        use crate::type_system::{Datatype, TypeMetatype};
+
+        let types = self.types.as_ref()?;
+        let mut cur_type = ct.clone();
+        let mut cur_off = offset;
+        loop {
+            let (sub_type, new_off) = Datatype::get_sub_type_arc(&cur_type, cur_off);
+            match sub_type {
+                None => {
+                    let mut hole = ct.get_hole_size(offset);
+                    if hole > 0 {
+                        if hole > 8 {
+                            hole = 8;
+                        }
+                        let unknown = types
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get_base_result(hole as usize, TypeMetatype::Unknown)
+                            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+                        return Some((unknown, true));
+                    }
+                    return None;
+                }
+                Some(sub) => {
+                    cur_type = sub;
+                    cur_off = new_off;
+                    // while(curOff != 0 || curType->getMetatype() == TYPE_ARRAY)
+                    if !(cur_off != 0 || cur_type.get_metatype() == TypeMetatype::Array) {
+                        return Some((cur_type, false));
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: subflow.cc:2237 SplitDatatype::categorizeDatatype
+    /// Categorize if and how a data-type should be split. Faithful to
+    /// `SplitDatatype::categorizeDatatype` (subflow.cc:2237-2274):
+    /// -1 = not splittable, 0 = struct-based split, 1 = array-based split,
+    /// 2 = primitive that can be split multiple ways. `undefined1` element
+    /// arrays act as large primitives (category 2), and whole structs need
+    /// `numDepend() > 1` fields to be splittable.
+    ///
+    /// `pub` for the bilateral fixture observation (the C++ twin reaches the
+    /// private member through `#define private public`,
+    /// tests/oracle/splitdatatype_exactpiece_1204.cc).
+    pub fn categorize_datatype(&self, ct: &Arc<crate::type_system::Datatype>) -> i32 {
+        use crate::type_system::{Datatype, TypeMetatype};
+
+        let array_category = |split_arrays: bool, array: &crate::type_system::datatype::TypeArray| {
+            if !split_arrays {
+                return -1;
+            }
+            let sub = &array.array_of;
+            if sub.get_metatype() != TypeMetatype::Unknown || sub.get_size() != 1 {
+                1
+            } else {
+                2 // unknown1 array acts as a large primitive (cc:2247-2248)
+            }
+        };
+        match ct.as_ref() {
+            Datatype::Array(array) => array_category(self.split_arrays, array),
+            Datatype::PartialStruct(partial) => match partial.container.as_ref() {
+                // PartialStruct containers are struct or array by
+                // construction (TypePartialStruct ctor, type.cc:2330-2341).
+                Datatype::Array(array) => array_category(self.split_arrays, array),
+                Datatype::Struct(_) => {
+                    if self.split_structures {
+                        0
+                    } else {
+                        -1
+                    }
+                }
+                _ => -1,
+            },
+            Datatype::Struct(structure) => {
+                if !self.split_structures {
+                    return -1;
+                }
+                // TypeStruct::numDepend = field.size() (type.hh:526); the
+                // whole-struct split requires numDepend() > 1 (cc:2270-2271).
+                if structure.fields.len() > 1 {
+                    0
+                } else {
+                    -1
+                }
+            }
+            Datatype::Base(_) | Datatype::Void(_) => match ct.get_metatype() {
+                TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown => 2,
+                _ => -1,
+            },
+            _ => match ct.get_metatype() {
+                TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown => 2,
+                _ => -1,
+            },
+        }
+    }
+
+    // Ghidra: subflow.cc:2285 SplitDatatype::testDatatypeCompatibility
+    /// Can the two given data-types be mutually split into matching logical
+    /// components. Faithful to `SplitDatatype::testDatatypeCompatibility`
+    /// (subflow.cc:2285-2367): both sides are categorized, the load/store
+    /// array/primitive combination gates are applied (cc:2303-2308), the
+    /// whole-struct identity gate rejects non-constant whole-struct copies
+    /// (cc:2304-2305), and the component walk fills `data_type_pieces`
+    /// (offset, in/out types per piece) with hole handling (initial-hole and
+    /// two-piece-padding rejections, cc:2331-2336/2348-2353). At least one
+    /// piece per side must be a composite; `true` requires more than one
+    /// piece (cc:2367).
+    ///
+    /// `pub` for the bilateral fixture observation (the C++ twin reaches the
+    /// private member through `#define private public`,
+    /// tests/oracle/splitdatatype_exactpiece_1204.cc).
+    pub fn test_datatype_compatibility(
+        &mut self,
+        in_base: &Arc<crate::type_system::Datatype>,
+        out_base: &Arc<crate::type_system::Datatype>,
+        in_constant: bool,
+    ) -> bool {
+        use crate::type_system::TypeMetatype;
+
+        self.data_type_pieces.clear();
+        let in_category = self.categorize_datatype(in_base);
+        if in_category < 0 {
+            return false;
+        }
+        let out_category = self.categorize_datatype(out_base);
+        if out_category < 0 {
+            return false;
+        }
+        if out_category == 2 && in_category == 2 {
+            return false;
+        }
+        if !in_constant
+            && Arc::ptr_eq(in_base, out_base)
+            && in_base.get_metatype() == TypeMetatype::Struct
+        {
+            return false; // Don't split a whole structure unless constant-initialized
+        }
+        if self.is_load_store && out_category == 2 && in_category == 1 {
+            return false; // Don't split array pointer writing into primitive
+        }
+        if self.is_load_store && in_category == 2 && !in_constant && out_category == 1 {
+            return false; // Don't split primitive into an array pointer
+        }
+        if self.is_load_store && in_category == 1 && out_category == 1 && !in_constant {
+            return false; // Don't split copies between arrays
+        }
+        let types = match self.types.as_ref() {
+            Some(types) => types.clone(),
+            None => return false,
+        };
+        let unknown_of = |sz: usize| {
+            types
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_base_result(sz, TypeMetatype::Unknown)
+                .unwrap_or_else(|message| panic!("LowlevelError: {message}"))
+        };
+        let mut cur_off: i64 = 0;
+        let mut size_left: i64 = in_base.get_size() as i64;
+        if in_category == 2 {
+            // Input is primitive: walk the output composite (cc:2314-2330).
+            while size_left > 0 {
+                let Some((cur_out, out_hole)) = self.get_component(out_base, cur_off) else {
+                    return false;
+                };
+                // Throw away the primitive type if the input is a constant.
+                let cur_in = if in_constant {
+                    cur_out.clone()
+                } else {
+                    unknown_of(cur_out.get_size())
+                };
+                self.data_type_pieces.push(Component {
+                    in_type: cur_in,
+                    out_type: cur_out.clone(),
+                    offset: cur_off as i32,
+                });
+                size_left -= cur_out.get_size() as i64;
+                cur_off += cur_out.get_size() as i64;
+                if out_hole {
+                    if self.data_type_pieces.len() == 1 {
+                        return false; // Initial offset into structure is at a hole
+                    }
+                    if size_left == 0 && self.data_type_pieces.len() == 2 {
+                        return false; // Two pieces, one is a hole. Likely padding.
+                    }
+                }
+            }
+        } else if out_category == 2 {
+            // Output is primitive: walk the input composite (cc:2337-2353).
+            while size_left > 0 {
+                let Some((cur_in, in_hole)) = self.get_component(in_base, cur_off) else {
+                    return false;
+                };
+                let cur_out = unknown_of(cur_in.get_size());
+                self.data_type_pieces.push(Component {
+                    in_type: cur_in.clone(),
+                    out_type: cur_out,
+                    offset: cur_off as i32,
+                });
+                size_left -= cur_in.get_size() as i64;
+                cur_off += cur_in.get_size() as i64;
+                if in_hole {
+                    if self.data_type_pieces.len() == 1 {
+                        return false; // Initial offset into structure is at a hole
+                    }
+                    if size_left == 0 && self.data_type_pieces.len() == 2 {
+                        return false; // Two pieces, one is a hole. Likely padding.
+                    }
+                }
+            }
+        } else {
+            // Both sides have components (cc:2354-2364): walk both, matching
+            // piece sizes by descending the larger side (holes fall back to
+            // unknown fillers of the smaller side's size).
+            while size_left > 0 {
+                let Some((mut cur_in, mut in_hole)) = self.get_component(in_base, cur_off)
+                else {
+                    return false;
+                };
+                let Some((mut cur_out, mut out_hole)) = self.get_component(out_base, cur_off)
+                else {
+                    return false;
+                };
+                while cur_in.get_size() != cur_out.get_size() {
+                    if cur_in.get_size() > cur_out.get_size() {
+                        cur_in = if in_hole {
+                            unknown_of(cur_out.get_size())
+                        } else {
+                            match self.get_component(&cur_in, 0) {
+                                Some((next, hole)) => {
+                                    in_hole = hole;
+                                    next
+                                }
+                                None => return false,
+                            }
+                        };
+                    } else {
+                        cur_out = if out_hole {
+                            unknown_of(cur_in.get_size())
+                        } else {
+                            match self.get_component(&cur_out, 0) {
+                                Some((next, hole)) => {
+                                    out_hole = hole;
+                                    next
+                                }
+                                None => return false,
+                            }
+                        };
+                    }
+                }
+                self.data_type_pieces.push(Component {
+                    in_type: cur_in.clone(),
+                    out_type: cur_out.clone(),
+                    offset: cur_off as i32,
+                });
+                size_left -= cur_in.get_size() as i64;
+                cur_off += cur_in.get_size() as i64;
+            }
+        }
+        self.data_type_pieces.len() > 1
+    }
+
+    // Ghidra: subflow.cc:2717 SplitDatatype::splitCopy
     /// Split a COPY operation. Faithful to `SplitDatatype::splitCopy`
-    /// (subflow.cc:2717-2747). Based on the input and output data-types,
-    /// determine if and how the given COPY should be split into pieces, then —
-    /// if possible — perform the split by rewriting the single COPY into one
-    /// per-component COPY (with SUBPIECE/PIECE scaffolding to extract the input
-    /// piece and write the output piece), finally destroying the original COPY.
+    /// (subflow.cc:2717-2747): runs the copy constraints, the data-type
+    /// compatibility test (`testDatatypeCompatibility`, cc:2285-2367) and the
+    /// arithmetic sanity checks, then rewrites the single COPY into one
+    /// per-component COPY (with SUBPIECE extraction and PIECE reassembly),
+    /// destroying the original COPY.
     ///
     /// Returns `true` if the split was performed. Returns `false` (no change)
     /// if either side is not a composite type that should be split, or if the
@@ -4754,48 +5123,50 @@ impl<'a> SplitDatatype<'a> {
                 o.get_addr(),
             )
         };
-        let in_type = in_vn.read().unwrap().get_type_read_facing();
-        let out_type = out_vn.read().unwrap().get_type_read_facing();
-        // Decompose both sides into (offset, size) pieces. A COPY is splittable
-        // only when both sides decompose into matching layouts.
-        let in_pieces = match &in_type {
-            Some(t) => self.collect_components(t),
-            None => Vec::new(),
-        };
-        let out_pieces = match &out_type {
-            Some(t) => self.collect_components(t),
-            None => Vec::new(),
-        };
-        if in_pieces.is_empty() || in_pieces.len() != out_pieces.len() {
+        // testCopyConstraints (cc:2370-2384): don't split function inputs,
+        // same-address addr-tied pairs, or a LOAD output feeding only this
+        // COPY (handled by splitLoad).
+        if !self.test_copy_constraints(copy_op, &in_vn, &out_vn) {
             return Ok(false);
         }
-        // The in/out offsets/sizes must line up piece-for-piece.
-        for (i, p) in in_pieces.iter().enumerate() {
-            if p.1 != out_pieces[i].1 {
-                return Ok(false); // size mismatch
-            }
+        let in_type = in_vn.read().unwrap().get_type_read_facing();
+        let out_type = out_vn.read().unwrap().get_type_def_facing();
+        let (in_type, out_type) = match (in_type, out_type) {
+            (Some(i), Some(o)) => (i, o),
+            _ => return Ok(false),
+        };
+        let in_constant = in_vn.read().unwrap().is_constant();
+        if !self.test_datatype_compatibility(&in_type, &out_type, in_constant) {
+            return Ok(false);
         }
-        // Build the rewrite. For each component:
-        //   - extract the piece from the input via SUBPIECE (if not constant),
-        //   - COPY it into the corresponding output piece (materialised via
-        //     a fresh unique, then PIECE'd back into the original output).
-        // This mirrors Ghidra's buildInSubpieces / buildOutVarnodes /
-        // buildOutConcats / new COPY per piece (subflow.cc:2730-2744).
-        let num = in_pieces.len();
+        if is_arithmetic_output(&in_vn) {
+            return Ok(false); // Sanity check on input (cc:2729)
+        }
+        if is_arithmetic_input(&out_vn) {
+            return Ok(false); // Sanity check on output (cc:2734)
+        }
+        // Rewrite per component: SUBPIECE(input, offset) -> temp -> PIECE
+        // chain back into the original output (buildInSubpieces /
+        // buildOutConcats analogue, cc:2730-2744).
+        let pieces: Vec<(i32, i32)> = self
+            .data_type_pieces
+            .iter()
+            .map(|c| (c.offset, c.in_type.get_size() as i32))
+            .collect();
+        let num = pieces.len();
         // Build the output reconstruction: chain of PIECE ops recombining the
         // per-component temps back into the original output Varnode.
         let mut piece_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
         for i in 0..num {
-            let _out_off = out_pieces[i].0;
-            let size = out_pieces[i].1;
+            let size = pieces[i].1;
             // Per-component temp holding the copied value.
             let temp = self.data.new_unique(size as usize);
             piece_out_vns.push(temp);
         }
         // Per-component COPYs: SUBPIECE(input, offset) -> temp.
         for i in 0..num {
-            let in_off = in_pieces[i].0;
-            let in_size = in_pieces[i].1;
+            let in_off = pieces[i].0;
+            let in_size = pieces[i].1;
             let off_const = self.data.new_constant(8, in_off as u64);
             // SUBPIECE to extract the input piece.
             let sub_op = self.data.new_op(2, op_addr);
@@ -4831,7 +5202,7 @@ impl<'a> SplitDatatype<'a> {
                     self.data.op_set_output(&piece_op, out_vn.clone());
                 } else {
                     let acc_out = self.data.new_unique_out(
-                        (out_pieces[i].1 + out_pieces[i + 1].1) as usize,
+                        (pieces[i].1 + pieces[i + 1].1) as usize,
                         &piece_op,
                     );
                     acc = acc_out;
@@ -4845,20 +5216,29 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
-    // Ghidra: subflow.hh:271 RootPointer::splitLoad
+    // Ghidra: subflow.cc:2756 SplitDatatype::splitLoad
     /// Split a LOAD operation. Faithful to `SplitDatatype::splitLoad`
-    /// (subflow.cc:2756-2800). Based on the LOAD data-type, determine if the
-    /// LOAD can be split into smaller LOADs and, if so, perform the split.
+    /// (subflow.cc:2756-2800): the input data-type `in_type` (recovered by
+    /// `RuleSplitLoad` via `getValueDatatype`) is tested against the output
+    /// data-type through `testDatatypeCompatibility`; on success each
+    /// component gets a new LOAD at (pointer + component offset) whose result
+    /// is PIECE'd back into the original output, and the original LOAD is
+    /// destroyed.
     ///
-    /// The output value is decomposed per-component; for each component a new
-    /// LOAD is issued at (base pointer + component offset), producing a
-    /// per-component temp that is PIECE'd back into the original output. The
-    /// original LOAD is then destroyed.
+    /// The COPY-follow (cc:2761-2769, splitting through a lone COPY
+    /// descendant) and the multi-hop `RootPointer::find` root back-up are not
+    /// ported (see module docs): the piece pointers are built from the direct
+    /// `in(1)` pointer, which is exactly the root the oracle reaches when the
+    /// pointer input has no INT_ADD/PTRSUB chain.
     ///
     /// Returns `true` if the split was performed. Returns `false` if the value
-    /// is not a composite type that should be split, or the pointer cannot be
-    /// traced back to a splittable root.
-    pub fn split_load(&mut self, load_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
+    /// is not a composite type that should be split, or the pointer cannot
+    /// be traced back to a splittable root.
+    pub fn split_load(
+        &mut self,
+        load_op: &Arc<RwLock<PcodeOp>>,
+        in_type: &Arc<crate::type_system::Datatype>,
+    ) -> Result<bool> {
         self.is_load_store = true;
         let (space_vn, ptr_vn, out_vn, op_addr) = {
             let o = load_op.read().unwrap();
@@ -4869,24 +5249,37 @@ impl<'a> SplitDatatype<'a> {
                 o.get_addr(),
             )
         };
-        let value_type = out_vn.read().unwrap().get_type_read_facing();
-        let pieces = match &value_type {
-            Some(t) => self.collect_components(t),
-            None => Vec::new(),
+        let out_size = out_vn.read().unwrap().get_size();
+        let out_type = out_vn
+            .read()
+            .unwrap()
+            .get_type_def_facing()
+            .or_else(|| self.unknown_of(out_size));
+        let out_type = match out_type {
+            Some(t) => t,
+            None => return Ok(false),
         };
+        if !self.test_datatype_compatibility(in_type, &out_type, false) {
+            return Ok(false);
+        }
+        if is_arithmetic_input(&out_vn) {
+            return Ok(false); // Sanity check on output (cc:2774)
+        }
+        let pieces: Vec<(i32, i32)> = self
+            .data_type_pieces
+            .iter()
+            .map(|c| (c.offset, c.in_type.get_size() as i32))
+            .collect();
         if pieces.len() < 2 {
             return Ok(false); // Nothing to split
         }
-        // Determine the pointer's base offset into the structure. Ghidra traces
-        // the root pointer through PTRSUB/INT_ADD (RootPointer::find). Rugra's
-        // pointer-data-type machinery is partial, so we extract the immediate
-        // offset directly from a PTRSUB/INT_ADD if present, else assume 0.
-        let base_offset = immediate_offset_after(&ptr_vn);
-        // Per-component LOADs.
+        // Per-component LOADs at (pointer + component offset). The piece
+        // offsets are window-relative (the window start is what in(1)
+        // addresses), mirroring buildPointers' (baseOffset + offset)
+        // addressing with the root reached at in(1).
         let mut load_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(pieces.len());
         for p in &pieces {
-            // pointer = base + (base_offset + p.0)
-            let off = (base_offset + p.0) as u64;
+            let off = p.0 as u64;
             let comp_ptr = if off == 0 {
                 ptr_vn.clone()
             } else {
@@ -4913,21 +5306,29 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
-    // Ghidra: subflow.hh:271 RootPointer::splitStore
+    // Ghidra: subflow.cc:2808 SplitDatatype::splitStore
     /// Split a STORE operation. Faithful to `SplitDatatype::splitStore`
-    /// (subflow.cc:2808-2898). Based on the STORE data-type, determine if the
-    /// STORE can be split into smaller STOREs and, if so, perform the split.
+    /// (subflow.cc:2808-2898): the STORE-side data-type `out_type` (recovered
+    /// by `RuleSplitStore` via `getValueDatatype`) is tested against the
+    /// stored value's data-type through `testDatatypeCompatibility` with the
+    /// value's constant bit; on success the original STORE object is
+    /// preserved (so INDIRECT references stay valid) and converted into the
+    /// first of the smaller STOREs, with the remaining components emitted as
+    /// subsequent STOREs at (pointer + component offset).
     ///
-    /// The value being stored is decomposed per-component; for each component a
-    /// new STORE is issued at (base pointer + component offset) holding the
-    /// corresponding SUBPIECE of the original value. The original STORE is
-    /// rewritten to hold the first (lowest-offset) component, and any remaining
-    /// components are emitted as subsequent STOREs.
+    /// The LOAD-value trace (cc:2817-2830, re-deriving the value type from a
+    /// feeding LOAD and retrying without it) and the multi-hop
+    /// `RootPointer::find` root back-up / addrTied `duplicateToTemp` are not
+    /// ported (see module docs).
     ///
     /// Returns `true` if the split was performed. Returns `false` if the value
-    /// is not a composite type that should be split, or the pointer cannot be
-    /// traced back to a splittable root.
-    pub fn split_store(&mut self, store_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
+    /// is not a composite type that should be split, or the pointer cannot
+    /// be traced back to a splittable root.
+    pub fn split_store(
+        &mut self,
+        store_op: &Arc<RwLock<PcodeOp>>,
+        out_type: &Arc<crate::type_system::Datatype>,
+    ) -> Result<bool> {
         self.is_load_store = true;
         let (space_vn, ptr_vn, value_vn, op_addr) = {
             let o = store_op.read().unwrap();
@@ -4938,20 +5339,38 @@ impl<'a> SplitDatatype<'a> {
                 o.get_addr(),
             )
         };
-        let value_type = value_vn.read().unwrap().get_type_read_facing();
-        let pieces = match &value_type {
-            Some(t) => self.collect_components(t),
-            None => Vec::new(),
+        let value_size = value_vn.read().unwrap().get_size();
+        let in_constant = value_vn.read().unwrap().is_constant();
+        let in_type = value_vn
+            .read()
+            .unwrap()
+            .get_type_read_facing()
+            .or_else(|| self.unknown_of(value_size));
+        let in_type = match in_type {
+            Some(t) => t,
+            None => return Ok(false),
         };
+        if !self.test_datatype_compatibility(&in_type, out_type, in_constant) {
+            return Ok(false);
+        }
+        if is_arithmetic_output(&value_vn) {
+            return Ok(false); // Sanity check (cc:2835)
+        }
+        let pieces: Vec<(i32, i32)> = self
+            .data_type_pieces
+            .iter()
+            .map(|c| (c.offset, c.in_type.get_size() as i32))
+            .collect();
         if pieces.len() < 2 {
             return Ok(false); // Nothing to split
         }
-        let base_offset = immediate_offset_after(&ptr_vn);
         let store_ref = crate::op::PcodeOpRef(store_op.clone());
         // Preserve the original STORE object (so INDIRECT references stay
         // valid) but convert it into the first of the smaller STOREs
-        // (Ghidra subflow.cc:2879-2880).
-        let first_off = (base_offset + pieces[0].0) as u64;
+        // (Ghidra subflow.cc:2879-2880). Piece pointers are window-relative:
+        // in(1) addresses the window start, mirroring buildPointers'
+        // (baseOffset + offset) addressing with the root at in(1).
+        let first_off = pieces[0].0 as u64;
         let first_ptr = if first_off == 0 {
             ptr_vn.clone()
         } else {
@@ -4962,7 +5381,7 @@ impl<'a> SplitDatatype<'a> {
         self.data.op_set_input(&store_ref, first_value, 2);
         let mut last_store = store_ref.clone();
         for p in &pieces[1..] {
-            let off = (base_offset + p.0) as u64;
+            let off = p.0 as u64;
             let comp_ptr = if off == 0 {
                 ptr_vn.clone()
             } else {
@@ -4980,72 +5399,102 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
-    // Ghidra: subflow.hh:271 RootPointer::collectComponents
-    /// Decompose a composite data-type into its top-level logical pieces.
-    /// Returns a vector of `(byte offset within the whole, byte size)` pairs,
-    /// or an empty vector if the type should not be split.
-    ///
-    /// This stands in for Ghidra's `testDatatypeCompatibility` +
-    /// `dataTypePieces` machinery (subflow.cc:2296-2386), which relies on
-    /// TypePartialStruct / getExactPiece (not present in Rugra). Given Rugra's
-    /// type system, a faithful decomposition is: a `Struct` yields its fields;
-    /// an `Array` yields its elements (so long as the element count divides the
-    /// value evenly). Non-composite types yield no pieces.
-    fn collect_components(&self, dt: &crate::type_system::Datatype) -> Vec<(i32, i32)> {
-        use crate::type_system::datatype::Datatype as D;
-        match dt {
-            D::Struct(s) => {
-                if !self.split_structures {
-                    return Vec::new();
-                }
-                s.fields
-                    .iter()
-                    .map(|f| (f.offset as i32, f.type_ptr.get_size() as i32))
-                    .collect()
-            }
-            D::Array(a) => {
-                if !self.split_arrays {
-                    return Vec::new();
-                }
-                let elem_size = a.array_of.get_size();
-                if elem_size == 0 {
-                    return Vec::new();
-                }
-                (0..a.num_elements)
-                    .map(|i| ((i * elem_size) as i32, elem_size as i32))
-                    .collect()
-            }
-            _ => Vec::new(),
+    // Ghidra: subflow.cc:2370 SplitDatatype::testCopyConstraints
+    /// Test specific constraints for splitting the given COPY operation into
+    /// pieces. Faithful to `SplitDatatype::testCopyConstraints`
+    /// (subflow.cc:2370-2384): don't split function inputs, don't split
+    /// addr-tied pairs at the same address, and defer a LOAD output feeding
+    /// only this COPY to `splitLoad`.
+    fn test_copy_constraints(
+        &self,
+        copy_op: &Arc<RwLock<PcodeOp>>,
+        in_vn: &Arc<RwLock<Varnode>>,
+        out_vn: &Arc<RwLock<Varnode>>,
+    ) -> bool {
+        let (in_r, out_r) = (in_vn.read().unwrap(), out_vn.read().unwrap());
+        if in_r.is_input() {
+            return false;
         }
+        if in_r.is_addr_tied() {
+            if out_r.is_addr_tied() && in_r.get_addr() == out_r.get_addr() {
+                return false;
+            }
+        } else if in_r.is_written() {
+            let def = in_r.get_def();
+            if let Some(def_op) = def {
+                if def_op.read().unwrap().opcode == OpCode::CPUI_LOAD
+                    && in_r.lone_descend().map(|d| Arc::ptr_eq(&d, copy_op)) == Some(true)
+                {
+                    return false; // Handled by splitLoad
+                }
+            }
+        }
+        true
+    }
+
+    // Ghidra: subflow.cc:2717 SplitDatatype::splitCopy
+    /// Synthesize the factory `undefined` of `size` bytes, mirroring the
+    /// `types->getBase(size, TYPE_UNKNOWN)` calls in
+    /// `testDatatypeCompatibility` (subflow.cc:2322/2339) and the untyped
+    /// varnode reading in `splitLoad`/`splitStore`.
+    fn unknown_of(&self, size: usize) -> Option<Arc<crate::type_system::Datatype>> {
+        let types = self.types.as_ref()?;
+        Some(
+            types
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get_base_result(size, crate::type_system::TypeMetatype::Unknown)
+                .unwrap_or_else(|message| panic!("LowlevelError: {message}")),
+        )
     }
 }
 
-// Ghidra: subflow.hh:271 RootPointer::immediateOffsetAfter
-/// Extract the immediate constant offset applied to a pointer Varnode, if its
-/// defining op is an `INT_ADD`/`PTRSUB` with a constant second operand.
-/// Returns 0 otherwise. This is a partial port of Ghidra's
-/// `RootPointer::find`/`backUpPointer` (subflow.cc:2098-2183) — only the
-/// single-hop immediate offset is recovered, which suffices for the common
-/// `&base + offset` store/load pattern. The full multi-hop root-pointer trace
-/// is a documented gap (module top).
-fn immediate_offset_after(ptr_vn: &Arc<RwLock<Varnode>>) -> i32 {
-    let def = match ptr_vn.read().unwrap().get_def() {
-        Some(d) => d,
-        None => return 0,
-    };
-    let opc = def.read().unwrap().opcode;
-    if opc != OpCode::CPUI_INT_ADD && opc != OpCode::CPUI_PTRSUB {
-        return 0;
+// Ghidra: typeop.hh:140 TypeOp::isArithmeticOp
+/// Is the opcode one of the arithmetic operations. Faithful to the
+/// `arithmetic_op` TypeOp flag (typeop.hh:45/140), set at registration for
+/// exactly these opcodes in typeop.cc: INT_ADD (1171), INT_SUB (1322),
+/// INT_CARRY (1336), INT_SCARRY (1352), INT_SBORROW (1368), INT_2COMP
+/// (1384), INT_MULT (1621), INT_DIV (1635), INT_SDIV (1655), INT_REM (1675),
+/// INT_SREM (1695), PTRADD (2228), PTRSUB (2304). Rugra's TypeOp registry
+/// (typeop.rs) sets the identical ARITHMETIC_OP set; this closed-set twin
+/// exists because Rugra's PcodeOp does not hold its TypeOp pointer.
+fn is_arithmetic_opcode(opc: OpCode) -> bool {
+    matches!(
+        opc,
+        OpCode::CPUI_INT_ADD
+            | OpCode::CPUI_INT_SUB
+            | OpCode::CPUI_INT_CARRY
+            | OpCode::CPUI_INT_SCARRY
+            | OpCode::CPUI_INT_SBORROW
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_MULT
+            | OpCode::CPUI_INT_DIV
+            | OpCode::CPUI_INT_SDIV
+            | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_SREM
+            | OpCode::CPUI_PTRADD
+            | OpCode::CPUI_PTRSUB
+    )
+}
+
+// Ghidra: subflow.cc:2673 SplitDatatype::isArithmeticInput
+/// Iterate through descendants of the given Varnode, looking for arithmetic
+/// ops. Faithful to `SplitDatatype::isArithmeticInput` (subflow.cc:2673-2684).
+fn is_arithmetic_input(vn: &Arc<RwLock<Varnode>>) -> bool {
+    vn.read()
+        .unwrap()
+        .descend_iter()
+        .any(|op| is_arithmetic_opcode(op.read().unwrap().opcode))
+}
+
+// Ghidra: subflow.cc:2690 SplitDatatype::isArithmeticOutput
+/// Check if the defining PcodeOp is arithmetic. Faithful to
+/// `SplitDatatype::isArithmeticOutput` (subflow.cc:2690-2696).
+fn is_arithmetic_output(vn: &Arc<RwLock<Varnode>>) -> bool {
+    match vn.read().unwrap().get_def() {
+        Some(def) => is_arithmetic_opcode(def.read().unwrap().opcode),
+        None => false,
     }
-    let cvn = match def.read().unwrap().get_in(1).cloned() {
-        Some(c) => c,
-        None => return 0,
-    };
-    let r = cvn.read().unwrap();
-    if !r.is_constant() {
-        return 0;
-    }
-    r.get_offset() as i32
 }
 
 // Ghidra: subflow.hh:271 RootPointer::addPointer
@@ -5143,21 +5592,27 @@ impl RuleSplitCopy {
 impl Rule for RuleSplitCopy {
     // Ghidra: subflow.cc:2947 RuleSplitCopy::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // RuleSplitCopy::applyOp (subflow.cc:2947-2962): read in/out data-types
-        // and only proceed when one side is PARTIALSTRUCT/ARRAY/STRUCT. Rugra has
-        // no PARTIALSTRUCT metatype, so the pre-check reduces to STRUCT/ARRAY.
+        // RuleSplitCopy::applyOp (subflow.cc:2947-2962): read in/out
+        // data-types and only proceed when one side is
+        // PARTIALSTRUCT/ARRAY/STRUCT. Rugra's TypeMetatype covers all three.
         use crate::type_system::TypeMetatype;
         let (in_type, out_type) = {
             let o = op_arc.read().unwrap();
             (
                 o.get_in(0).and_then(|v| v.read().unwrap().get_type_read_facing()),
-                o.get_out().and_then(|v| v.read().unwrap().get_type_read_facing()),
+                o.get_out().and_then(|v| v.read().unwrap().get_type_def_facing()),
             )
         };
         let in_meta = in_type.as_ref().map(|t| t.get_metatype());
         let out_meta = out_type.as_ref().map(|t| t.get_metatype());
-        let is_composite =
-            |m: Option<TypeMetatype>| matches!(m, Some(TypeMetatype::Struct) | Some(TypeMetatype::Array));
+        let is_composite = |m: Option<TypeMetatype>| {
+            matches!(
+                m,
+                Some(TypeMetatype::Struct)
+                    | Some(TypeMetatype::Array)
+                    | Some(TypeMetatype::PartialStruct)
+            )
+        };
         if !is_composite(in_meta) && !is_composite(out_meta) {
             return Ok(action_status::NO_CHANGE);
         }
@@ -5190,9 +5645,32 @@ impl RuleSplitLoad {
 impl Rule for RuleSplitLoad {
     // Ghidra: subflow.cc:2970 RuleSplitLoad::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // RuleSplitLoad::applyOp (subflow.cc:2970-2983)
+        // RuleSplitLoad::applyOp (subflow.cc:2970-2983): recover the value
+        // type from the pointer input through the canonical factory gate
+        // (getValueDatatype -> getExactPiece), then require a composite
+        // metatype before splitting. Without an Architecture-owned factory
+        // there is no gate to run (the C++ Funcdata always has one).
+        use crate::type_system::TypeMetatype;
+        let types = match fd.get_arch().and_then(|arch| arch.types.clone()) {
+            Some(types) => types,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let size = match op_arc.read().unwrap().get_out() {
+            Some(output) => output.read().unwrap().get_size(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let in_type = match SplitDatatype::get_value_datatype(op_arc, size, &types) {
+            Some(in_type) => in_type,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !matches!(
+            in_type.get_metatype(),
+            TypeMetatype::Struct | TypeMetatype::Array | TypeMetatype::PartialStruct
+        ) {
+            return Ok(action_status::NO_CHANGE);
+        }
         let mut splitter = SplitDatatype::new(fd);
-        if splitter.split_load(op_arc)? {
+        if splitter.split_load(op_arc, &in_type)? {
             Ok(action_status::CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
@@ -5220,9 +5698,32 @@ impl RuleSplitStore {
 impl Rule for RuleSplitStore {
     // Ghidra: subflow.cc:2991 RuleSplitStore::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // RuleSplitStore::applyOp (subflow.cc:2991-3004)
+        // RuleSplitStore::applyOp (subflow.cc:2991-3004): recover the value
+        // type from the pointer input through the canonical factory gate
+        // (getValueDatatype -> getExactPiece), then require a composite
+        // metatype before splitting. Without an Architecture-owned factory
+        // there is no gate to run (the C++ Funcdata always has one).
+        use crate::type_system::TypeMetatype;
+        let types = match fd.get_arch().and_then(|arch| arch.types.clone()) {
+            Some(types) => types,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let size = match op_arc.read().unwrap().get_in(2) {
+            Some(value) => value.read().unwrap().get_size(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let out_type = match SplitDatatype::get_value_datatype(op_arc, size, &types) {
+            Some(out_type) => out_type,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !matches!(
+            out_type.get_metatype(),
+            TypeMetatype::Struct | TypeMetatype::Array | TypeMetatype::PartialStruct
+        ) {
+            return Ok(action_status::NO_CHANGE);
+        }
         let mut splitter = SplitDatatype::new(fd);
-        if splitter.split_store(op_arc)? {
+        if splitter.split_store(op_arc, &out_type)? {
             Ok(action_status::CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
@@ -5959,17 +6460,17 @@ mod tests {
 
     #[test]
     fn test_split_datatype_constructs() {
-        // SplitDatatype::new should construct without panicking. The split
-        // flags default to true so the splitCopy/Load/Store rewrites actually
-        // fire when a composite type is present (matching Ghidra's
-        // cleanup-phase intent); the missing Architecture config knob is a
-        // documented gap at the module top.
+        // Without an attached Architecture there is no factory/config, so
+        // both split flags stay false (subflow.cc:2701-2709; the C++
+        // Funcdata always has an Architecture, whose default config sets
+        // struct|array|pointer — architecture.rs reset_defaults pins that).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let s = SplitDatatype::new(&mut fd);
-        assert!(s.split_structures);
-        assert!(s.split_arrays);
+        assert!(!s.split_structures);
+        assert!(!s.split_arrays);
         assert!(!s.is_load_store);
         assert!(s.data_type_pieces.is_empty());
+        assert!(s.types.is_none());
     }
 
     #[test]
@@ -6006,21 +6507,27 @@ mod tests {
 
     #[test]
     fn test_split_copy_performs_real_transform() {
-        // SplitDatatype::splitCopy on a struct{char;int} (sizes 1 and 4)
-        // rewrites the single COPY into per-field SUBPIECE/COPY/PIECE ops.
-        // This verifies the rule performs a REAL transform (not a stub).
+        // SplitDatatype::splitCopy on a constant struct{char;int} (sizes 1
+        // and 4) rewrites the single COPY into per-field SUBPIECE/COPY/PIECE
+        // ops. The constant input dodges the whole-struct identity gate
+        // (subflow.cc:2304-2305: whole-struct splits need constant
+        // initialization), exactly like Ghidra splitCopy on
+        // `S s = (S){...}`.
+        let factory_arc = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        let mut arch = crate::arch::Architecture::new();
+        arch.types = Some(factory_arc.clone());
+        arch.split_datatype_config = crate::arch::split_datatype::OPTION_STRUCT
+            | crate::arch::split_datatype::OPTION_ARRAY
+            | crate::arch::split_datatype::OPTION_POINTER;
+        let arch_arc = Arc::new(arch);
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.arch = Some(arch_arc.clone());
         let dt = make_struct_dt();
-        let in_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x10);
-        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
-        // Register in_vn as a function input (VarnodeBank::setInput,
-        // varnode.cc:1358). splitCopy's per-component SUBPIECEs each re-read
-        // in_vn (buildInSubpieces analogue, subflow.cc:2730-2736); in Ghidra
-        // the COPY input is written/input there — free-with-reader is
-        // Ghidra-unreachable and addDescend would throw "Free varnode has
-        // multiple descendants" (varnode.cc:333-336).
-        let in_vn = fd.vbank.set_input(in_vn).unwrap();
+        let in_vn = fd.vbank.create_constant(5, 0x1122334455);
         in_vn.write().unwrap().update_type(dt.clone());
+        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
         out_vn.write().unwrap().update_type(dt);
         let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
         let ops_before = fd.obank.optree.len();
@@ -6031,13 +6538,53 @@ mod tests {
     }
 
     #[test]
-    fn test_split_copy_size_mismatch_is_no_change() {
-        // If the in/out struct layouts do not line up piece-for-piece in size,
-        // splitCopy returns NO_CHANGE (testDatatypeCompatibility analogue).
+    fn test_split_copy_whole_struct_identity_rejected() {
+        // A non-constant COPY whose in/out data-types are the same whole
+        // struct is NOT split (subflow.cc:2304-2305: "Don't split a whole
+        // structure unless it is getting initialized from a constant").
+        let factory_arc = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        let mut arch = crate::arch::Architecture::new();
+        arch.types = Some(factory_arc.clone());
+        arch.split_datatype_config = crate::arch::split_datatype::OPTION_STRUCT
+            | crate::arch::split_datatype::OPTION_ARRAY
+            | crate::arch::split_datatype::OPTION_POINTER;
+        let arch_arc = Arc::new(arch);
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.arch = Some(arch_arc.clone());
+        let dt = make_struct_dt();
+        let in_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x10);
+        in_vn.write().unwrap().update_type(dt.clone());
+        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
+        out_vn.write().unwrap().update_type(dt);
+        let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
+        let ops_before = fd.obank.optree.len();
+        let res = RuleSplitCopy::new().apply_op(&copy_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+        assert_eq!(fd.obank.optree.len(), ops_before);
+    }
+
+    #[test]
+    fn test_split_copy_size_mismatch_fills_unknown_pieces() {
+        // Mismatched field sizes descend the larger side and fill with
+        // undefined pieces (subflow.cc:2355-2364): in struct{char@0;int@1}
+        // vs out struct{char@0;short@1} still splits into 3 pieces
+        // (char, unknown2 over the int/short prefix, unknown2 over the tail
+        // hole), mirroring Ghidra's getComponent hole fillers.
+        let factory_arc = Arc::new(RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        let mut arch = crate::arch::Architecture::new();
+        arch.types = Some(factory_arc.clone());
+        arch.split_datatype_config = crate::arch::split_datatype::OPTION_STRUCT
+            | crate::arch::split_datatype::OPTION_ARRAY
+            | crate::arch::split_datatype::OPTION_POINTER;
+        let arch_arc = Arc::new(arch);
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.arch = Some(arch_arc.clone());
         use crate::type_system::datatype::{Datatype, TypeBase, TypeField, TypeStruct};
         use crate::type_system::TypeMetatype;
-        // in: struct{char@0; int@1}
         let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
         let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
         let in_dt = Arc::new(Datatype::Struct(TypeStruct {
@@ -6047,22 +6594,23 @@ mod tests {
                 TypeField { name: "f1".into(), offset: 1, type_ptr: int_t },
             ],
         }));
-        // out: struct{char@0; short@1}  (different field sizes -> mismatch)
+        // out: struct{char@0; short@1; short@3} (same total size 5)
         let short_t = Arc::new(Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int)));
         let out_dt = Arc::new(Datatype::Struct(TypeStruct {
             base: TypeBase::new("S2".into(), 5, TypeMetatype::Struct),
             fields: vec![
                 TypeField { name: "f0".into(), offset: 0, type_ptr: char_t },
-                TypeField { name: "f1".into(), offset: 1, type_ptr: short_t },
+                TypeField { name: "f1".into(), offset: 1, type_ptr: short_t.clone() },
+                TypeField { name: "f2".into(), offset: 3, type_ptr: short_t },
             ],
         }));
-        let in_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x10);
-        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
+        let in_vn = fd.vbank.create_constant(5, 0x1122334455);
         in_vn.write().unwrap().update_type(in_dt);
+        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
         out_vn.write().unwrap().update_type(out_dt);
         let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
         let res = RuleSplitCopy::new().apply_op(&copy_op, &mut fd).unwrap();
-        assert_eq!(res, action_status::NO_CHANGE);
+        assert_eq!(res, action_status::CHANGE);
     }
 
     #[test]
