@@ -6036,14 +6036,110 @@ impl Action for ActionPrototypeTypes {
             }
         }
 
-        // Step 4: Init active output if not locked.
-        // Ghidra coreaction.cc:4649-4651: the else-branch of isOutputLocked
+        // Step 3 (coreaction.cc:4637-4649): output-locked direct-attach branch.
+        // For an output-locked (non-void) prototype, every live non-halt
+        // RETURN gets a fresh varnode at the locked output storage appended
+        // as its LAST input, then updateType(type, lock=true, override=true).
+        // This is the attachment point that makes locked-output functions
+        // print `return <expr>;` instead of a bare `return;` (GAP-A of the
+        // A61 return-folding audit).
+        //
+        // Ghidra verbatim (coreaction.cc:4637-4649):
+        //   if (data.getFuncProto().isOutputLocked()) {
+        //     ProtoParameter *outparam = data.getFuncProto().getOutput();
+        //     if (outparam->getType()->getMetatype() != TYPE_VOID) {
+        //       for(iter=data.beginOp(CPUI_RETURN);iter!=iterend;++iter) {
+        //         PcodeOp *op = *iter;
+        //         if (op->isDead()) continue;
+        //         if (op->getHaltType() != 0) continue;
+        //         Varnode *vn = data.newVarnode(outparam->getSize(),outparam->getAddress());
+        //         data.opInsertInput(op,vn,op->numInput());
+        //         vn->updateType(outparam->getType(),true,true);
+        //       }
+        //     }
+        //   }
+        //
+        // Step 4 (coreaction.cc:4650-4651): the else-branch of isOutputLocked
         // calls data.initActiveOutput() UNCONDITIONALLY (regardless of
         // return-type voidness or whether any RETURN already has a value).
         // This action is onceperfunc, so the container is created exactly
         // once; ActionReturnRecovery clears it once fully checked and must
         // never re-create it (see cc:1908-1955 lifecycle).
-        if !fd.funcp.output_type_locked {
+        if fd.funcp.output_type_locked {
+            // cc:4638: ProtoParameter *outparam = getFuncProto().getOutput().
+            // Rugra's flat FuncProto stores the output data-type directly
+            // (return_type) but no full output ProtoParameter; the storage
+            // address comes from the calling-convention model's output entry
+            // (Ghidra fills outparam->getAddress() via
+            // ProtoModel::assignParameterStorage). Same ANN-F glue as
+            // seed_output_trials below, tracked by FSPEC-0001/FSPEC-0002.
+            let out_type = fd.funcp.return_type.clone();
+            // cc:4639: if (outparam->getType()->getMetatype() != TYPE_VOID)
+            if out_type.get_metatype() != crate::type_system::TypeMetatype::Void {
+                // cc:4644 storage source: outparam->getAddress() — the
+                // model's first output entry (x86-64 SysV: RAX, register
+                // space offset 0x0). cc:4644 size: outparam->getSize() is
+                // type->getSize(), i.e. the locked return type's size, NOT
+                // the entry's full register size.
+                let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
+                let (out_space, out_base) = match model.output_entries.first() {
+                    Some(e) => (e.space, e.base),
+                    // Ghidra's assignParameterStorage always fills a locked
+                    // output address; the fallback pins the x86-64 RAX entry
+                    // when the stub model carries no output list.
+                    None => (crate::space::AddressSpace::Register, 0),
+                };
+                let out_size = out_type.get_size();
+                for ret_op in &return_ops {
+                    // cc:4642: if (op->isDead()) continue;
+                    if ret_op.0.read().unwrap().is_dead() { continue; }
+                    // cc:4643: if (op->getHaltType() != 0) continue;
+                    // getHaltType (op.hh:170-172) masks
+                    // halt|badinstruction|unimplemented|noreturn|missing.
+                    {
+                        let o = ret_op.0.read().unwrap();
+                        if (o.flags & crate::op::pcodeop_flags::HALT) != 0
+                            || (o.flags & crate::op::pcodeop_flags::BADINSTRUCTION) != 0
+                            || (o.flags & crate::op::pcodeop_flags::UNIMPLEMENTED) != 0
+                            || (o.flags & crate::op::pcodeop_flags::NORETURN) != 0
+                            || (o.flags & crate::op::pcodeop_flags::MISSING) != 0
+                        {
+                            continue;
+                        }
+                    }
+                    // cc:4644: data.newVarnode(outparam->getSize(),
+                    //                         outparam->getAddress())
+                    // = newVarnode(s, AddrSpace, off) form
+                    //   (funcdata.hh:284, funcdata_varnode.cc:239-247),
+                    // which unfolds into the Address form
+                    //   (funcdata_varnode.cc:148-169):
+                    //   vn = vbank.create(s, m, TYPE_UNKNOWN base ct);
+                    //   assignHigh(vn);
+                    //   if (s >= minLanedSize) checkForLanedRegister(s, m);
+                    //   queryProperties -> setSymbolProperties / setFlags.
+                    // Space-aware inline (like the GAP-B copyBeforeRet arm):
+                    // Funcdata::new_varnode pins the Ram space, but the locked
+                    // output storage is the register space.
+                    let vn = fd.vbank.create_with_space(out_size, out_space, out_base);
+                    let _ = fd.assign_high(&vn);
+                    if out_size >= fd.min_laned_size as usize {
+                        fd.check_for_laned_register(
+                            out_size,
+                            out_space,
+                            crate::address::Address::new(out_base),
+                        );
+                    }
+                    fd.set_varnode_properties(&vn);
+                    // cc:4645: data.opInsertInput(op, vn, op->numInput()) —
+                    // append as the LAST input (slot = numInput).
+                    let num_input = ret_op.0.read().unwrap().num_input();
+                    fd.op_insert_input(ret_op, vn.clone(), num_input);
+                    // cc:4646: vn->updateType(outparam->getType(), true, true).
+                    vn.write().unwrap().update_type_lock(out_type.clone(), true, true);
+                }
+            }
+        } else {
+            // cc:4650-4651: initiate gathering potential return values.
             fd.init_active_output();
         }
 

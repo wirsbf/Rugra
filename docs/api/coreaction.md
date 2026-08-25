@@ -1449,3 +1449,44 @@ buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
   Rugra count>0，CONDCONST-APPLY-RETURN-0001）、MULTIEQUAL phi 臂
   （CONDCONST-MULTIEQUAL-GUARD-0001）、implied-boolean 臂
   （CONDCONST-IMPLIEDBOOL-0001）、打印期折叠（依赖 GAP-A/GAP-D 上游）。
+
+## ActionPrototypeTypes output-locked 直挂分支（2026-08-25，RETURNFOLD-GAPA-PROTOTYPES-0001）
+
+- `ActionPrototypeTypes::apply` 补齐 cc:4637-4649 的 output-locked 双分支之 locked 臂
+  （此前 Rust 只有 else 臂 `init_active_output`，locked 路径什么都不做——locked 输出
+  函数裸 `return;` 的根因，A61 审计 GAP-A）。忠实语句序：
+  `outparam->getType()->getMetatype() != TYPE_VOID` 门（cc:4639，locked-void 如
+  `exit`/`free` 不挂任何东西、也不 init activeOutput）→ 对每个活 RETURN：
+  `isDead` 跳过（cc:4642）、`getHaltType()!=0` 跳过（cc:4643；op.hh:170-172 的完整
+  掩码 halt|badinstruction|unimplemented|noreturn|missing）→
+  `newVarnode(outparam->getSize(), outparam->getAddress())`（cc:4644，size 取类型
+  尺寸非寄存器全宽）→ `opInsertInput(op, vn, op->numInput())`（cc:4645，**追加为末
+  槽**——已有值输入的 RETURN 追到 slot 2，不替换既有 slot 1）→
+  `vn->updateType(type, true, true)`（cc:4646，typelock+override）。
+- Rust 地基桥（ANN-F，FSPEC-0001/FSPEC-0002）：扁平 `FuncProto` 无 output
+  ProtoParameter，存储地址取自 `ProtoModel::default_x86_64().output_entries[0]`
+  （Register 0x0），类型/尺寸取 `funcp.return_type`——与 Ghidra
+  `assignParameterStorage`（fspec.cc:2429/1569-1581，setPieces→updateAllTypes→
+  store->setOutput）给出的 oracle 观察地址一致（fixture 已钉死 register:0x0:4）。
+  `newVarnode(s, AddrSpace, off)` 形态（funcdata.hh:284/funcdata_varnode.cc:239-247）
+  因 `Funcdata::new_varnode` 钉死 Ram space，改内联其 (cc:148-169) 腿：
+  `vbank.create_with_space` + assign_high + checkForLaned + set_varnode_properties
+  （GAP-B copyBeforeRet 同款模式）。
+- 与 GAP-B（copyBeforeRet，cc:4439-4448）协同：PrototypeTypes（onceperfunc，早期）
+  先挂 locked 输出 varnode 为 RETURN 末槽，heritage 把寄存器写链到它；晚期
+  ConditionalConst 的 RETURN 臂读 varVn（即该地址上的 varnode），COPY 输出落在
+  varVn 精确 (space,offset,size)，`op_set_input(op, out, 1)` 替换 slot 1——两臂
+  无冲突，正是 oracle 的先后链。`ActionReturnRecovery::apply` 的
+  `output_type_locked` 早退（coreaction.rs apply 开头）在 Ghidra 因 locked 时
+  activeOutput 必为 NULL 而冗余等价；GAP-A 后 locked 函数不再 init_active_output，
+  该守卫成为唯一防线（保留并已在注释注明，GAP-C 审计结论）。
+- 双侧对拍：`tests/oracle/returnfold_gapa_1204.{cc,rs,metadata.json}` +
+  `tools/run_returnfold_gapa_oracle.sh`——真实 `ActionPrototypeTypes::apply` 三场
+  景：A=locked int（4 RETURN：裸 RETURN 挂 slot 1、带值 RETURN **追加** slot 2 且
+  slot 1 不动、halt RETURN 跳过、dead RETURN 跳过；观察 nin/in_last
+  register:0x0:4/def=free/typelock=1/mt=int、attach 次序、varnode 不共享、
+  activeoutput 缺席）；B=locked void（不挂不 init）；C=unlocked 对照（只
+  initActiveOutput，active=1）。C++ 侧走 Ghidra 原生 locked 路径（setInternal+
+  setPieces→assignParameterStorage→setOutput）。双侧 stdout 14 行字节一致
+  （MATCH）。残差（均 UNTESTED，见 metadata）：ANN-F 模型胶水（仅钉观察地址）、
+  多输出条目模型、E2E 折叠链（依赖 GAP-D）。
