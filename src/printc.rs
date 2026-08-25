@@ -7287,44 +7287,29 @@ impl PrintLanguage for PrintC {
             self.emit.print("");
         }
 
-        // Emit extern declarations for referenced global variables that are not
-        // function call targets. Ghidra's output is self-contained: every global
-        // referenced in a function body has a visible declaration. We approximate
-        // this by declaring any Ram/Const-space name (from symbol/string tables)
-        // as `extern long NAME;` so the body compiles even when the global's real
-        // type/layout is unknown.
-        let mut emitted_globals: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for (name, (_type, space, offset)) in &self.used_varnode_types {
-            if matches!(space, AddressSpace::Ram | AddressSpace::Const)
-                && !self.call_targets.contains(offset)
-                && !name.starts_with('"')
-                && !name.is_empty()
-                && name.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
-            {
-                emitted_globals.insert(name.clone());
-            }
-        }
-        // Also scan used_varnode_names for symbol-table globals not captured above
-        for name in &self.used_varnode_names {
-            // Only add names that look like symbols (not local var prefixes, not keywords)
-            if name.contains('.') || name.contains('-') || name.contains('>') { continue; }
-            if name.starts_with("param_") || name.starts_with("local_") { continue; }
-            let is_local_prefix = ["lVar","uVar","iVar","bVar","sVar","piVar","pcVar","psVar","ppVar","pvVar","fVar","dVar","DAT_","LAB_"].iter().any(|p| name.starts_with(p));
-            if is_local_prefix { continue; }
-            if ["argc","argv","RBP","RSP","RBX","R12","R13","R14","R15"].contains(&name.as_str()) { continue; }
-            // Check it's a known symbol from the binary
-            if self.symbol_table.values().any(|s| s == name) {
-                emitted_globals.insert(name.clone());
-            }
-        }
-        for name in &emitted_globals {
-            self.emit.tag_line(0);
-            self.emit.print(&format!("extern long {};", name));
-        }
-        if !emitted_globals.is_empty() {
-            self.emit.tag_line(0);
-            self.emit.print("");
-        }
+        // Ghidra: printc.cc:2641-2670 PrintC::docFunction — the oracle emits
+        // NO global declarations inside a function document: the keyword
+        // "extern" never appears in printc.cc (grep over the locked 12.0.4
+        // oracle: 0 hits), and docFunction's emission order is
+        // beginFunction -> emitCommentFuncHeader -> tagLine ->
+        // emitFunctionDeclaration -> emitLocalVarDecls -> emitBlockGraph,
+        // with no global-declaration step at all. Global symbols the oracle
+        // knows (scope-registered names like `config`, `stderr`) print
+        // bare at their use sites (golden: `::config.useragent = ...`,
+        // `fwrite(...,stderr)`), and anonymous addresses inside Ghidra's
+        // data pools either resolve to a symbol via scope lookup or print
+        // through pushConstant's raw-hex path — the golden for this corpus
+        // contains ZERO `extern` lines.
+        //
+        // MAIN-DATPOOL-0001: the former `extern long NAME;` block here was a
+        // self-containment approximation with no oracle counterpart, and the
+        // driver's synthetic per-byte DAT_ labels (every .data/.bss byte
+        // without an ELF symbol) rode it into `extern long DAT_00117528;`
+        // oceans — 38 spurious declarations before main alone. Removing the
+        // block aligns the observable output with the locked oracle: zero
+        // extern lines, matching the golden exactly. The use-site rendering
+        // of globals (bare symbol names / DAT_ references) is unchanged.
+        let _ = (&self.used_varnode_types, &self.used_varnode_names);
 
         // Ghidra: printc.cc:2650 docFunction's comment setup and header
         // emission (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ②). Call order is

@@ -136,7 +136,7 @@ Emitter that discards all output (used for discovery pass)
 
 ### 2026-06-23（续）：DAT_ 全局 backfill 恢复
 
-- `backfill_missing_locals()` 重新加入 `DAT_` 前缀扫描。之前移除是因为可能把 extern 放函数中间，但现在的声明块检测逻辑能正确把 extern 放在声明块末尾。DAT_ 名声明为 `extern long DAT_xxxxx;`。
+- `backfill_missing_locals()` 重新加入 `DAT_` 前缀扫描。之前移除是因为可能把 extern 放函数中间，但现在的声明块检测逻辑能正确把 extern 放在声明块末尾。DAT_ 名声明为 `extern long DAT_xxxxx;`。**2026-08-25 改为跳过（MAIN-DATPOOL-0001）**：oracle printc.cc 零 `extern` 关键字、golden 零 extern 行，DAT_ 名不再注入任何声明，仅保留 use-site 裸引用。
 
 ### 2026-06-23（续）：orphan break context 继承改进
 
@@ -407,7 +407,7 @@ A69（`a9351d26`，PRINTC-UNLINKED-REF-FAMILY slice A）把 print 侧三条兜�
 已知边界（同 legacy uVar 拼写，非本片回归）：`*unique0x…`/`*register0x…`
 一元解引用出现在 symbol-driven 函数时，注入的 `long` 声明不解引用
 （`fix_unary_deref_declarations` 在 pass 22 先于 backfill 运行且对
-symbol-driven 函数旁路，pre-A69 `*uVara0 = 0` 同类）；`ram0x` 名若已被
-printc extern 路径（printc.rs used_varnode_types Ram/Const 臂）声明为
-file-scope `extern long`，backfill 仍会注入局部 `long` 遮蔽（C 合法，
-curl 语料 ram0x 出现为 0 行）。
+symbol-driven 函数旁路，pre-A69 `*uVara0 = 0` 同类）；`ram0x` 名的
+printc extern 路径（printc.rs used_varnode_types Ram/Const 臂）已于
+2026-08-25 随 MAIN-DATPOOL-0001 移除，backfill 的局部 `long` 遮蔽
+注入行为保持不变（C 合法，curl 语料 ram0x 出现为 0 行）。

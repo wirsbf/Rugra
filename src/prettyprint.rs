@@ -2648,10 +2648,14 @@ impl EmitNoMarkup {
                 }
                 for m in &missing {
                     // Infer type from prefix: lVar/uVar/piVar etc → long/long/pointer
-                    // DAT_ prefixed names are synthetic globals → declare as extern long.
-                    // structN names are stack-allocated structs → declare as int (placeholder).
+                    // DAT_ prefixed names are synthetic globals. Ghidra's printer
+                    // never declares globals inside a function (printc.cc:2641-2670
+                    // docFunction has no global-decl step; "extern" does not occur
+                    // in the oracle printc.cc at all), and the golden contains zero
+                    // extern lines — the anonymous data pool prints bare DAT_
+                    // references at use sites only (MAIN-DATPOOL-0001). Skip the
+                    // declaration entirely to match the oracle.
                     if m.starts_with("DAT_") {
-                        out.push(format!("{}extern long {};", indent_str, m));
                         continue;
                     }
                     let ty = if m.starts_with("struct") {

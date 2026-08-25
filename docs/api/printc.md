@@ -231,7 +231,8 @@ printc.cc:2260/2518/2497）：
   的 xunknown8 类型 + 硬编码 is_declarable 白名单 + long/int 兜底）、
   打印期 `restructure_varnode` 兜底与二次 `assign_default_names`。
   `used_varnode_names`/`used_varnode_types` 仍由 `mark_variable_used`
-  记录，仅供 doc_function 的 extern 全局扫描消费。
+  记录（doc_function 的 extern 全局扫描消费端已于 2026-08-25 移除，
+  MAIN-DATPOOL-0001）。
 - fixture：`tests/oracle/printc_symbol_decl_1204`（cover_rebuild，
   pinned base=b6b61d5，overlay 含 LINKSYMBOL 4 文件 + printc.rs），
   4 case（typed temporaries / in_RCX / dynamic 符号 / $$undef+类别跳过）
@@ -634,13 +635,12 @@ printc.cc:2260/2518/2497）：
 
 ### 2026-06-23（续）：自包含全局变量声明
 
-- `doc_function()` 现在在 typedef 后、签名前 emit `extern long NAME;` 声明，覆盖函数体引用的所有 Ram/Const 空间全局变量（来自符号表/字符串表，非函数调用目标）。对齐 Ghidra 的自包含输出——每个函数引用的全局都有可见声明。
-- 同时扫描 `used_varnode_names` 捕获符号表里的全局名（如 `glob_buffer`）。
+- `doc_function()` 曾在 typedef 后、签名前 emit `extern long NAME;` 声明。**2026-08-25 移除（MAIN-DATPOOL-0001）**：oracle printc.cc 全文无 `extern` 关键字（0 命中），docFunction（printc.cc:2641-2670）无全局声明步骤；锁定 golden 含零 extern 行。移除后 main 段 extern 行 83→0、全文件 `extern long DAT_` 69→0，use-site 裸引用（`DAT_*`、`::config`、`stderr`）不变。
+- 同时扫描 `used_varnode_names` 捕获全局名的逻辑一并移除；`used_varnode_names`/`used_varnode_types` 集合仍由 `mark_variable_used` 记录（保留字段，doc_function 内不再消费）。
 
 ### 2026-06-23（续）：synthetic DAT_ 全局声明收集
 
-- `op_store` 生成 synthetic `DAT_xxxxx` 名时现在调用 `mark_variable_used`，确保它在 `used_varnode_types` 中，从而被 extern 声明收集捕获。
-- extern 收集移除了 `DAT_` 前缀排除（之前 synthetic DAT_ 名被排除在 extern 之外）。
+- `op_store` 生成 synthetic `DAT_xxxxx` 名时调用 `mark_variable_used`（仍在）；其 extern 收集消费端已于 2026-08-25 随 doc_function extern 块一并移除（MAIN-DATPOOL-0001）。
 
 
 ### 2026-06-23（续）：CALLIND 地址 0 的 cast
