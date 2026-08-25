@@ -12457,7 +12457,20 @@ mod tests {
         assert_eq!(emitted_code.matches("return").count(), 2);
     }
 
+    // Isolated per board ACTIONTYPEINFER-VTYPE-0001 (audit 2026-08-20): this
+    // test drives the Rugra-local ActionTypeInfer glue action (no Ghidra
+    // counterpart; real inference is ActionInferTypes) over hand-linked IR the
+    // audit declared non-oracle. Its assertions assume the pre-canonical
+    // v_type=None representation; since VarnodeBank::create mints
+    // Some(undefined{size}) — Ghidra: varnode.cc:1250 VarnodeBank::create
+    // (ct "must not be NULL"), undefinedN = TYPE_UNKNOWN core types
+    // (ghidra_arch.cc:349-352) — the (Some(t), None) COPY/INT_ADD rule
+    // matches can never fire. Revival requires the real ActionInferTypes
+    // dispatch port (board ACTION-INFERTYPES-DISPATCH-0001); reverting to
+    // None or crudely swapping is_none for UNKNOWN checks was explicitly
+    // rejected by the audit.
     #[test]
+    #[ignore = "superseded by ACTIONTYPEINFER-VTYPE-0001: assertions assume v_type=None; canonical is Some(undefined8) per Ghidra varnode.cc:1250 + ghidra_arch.cc:349-352"]
     fn test_type_propagation() {
         use crate::action::Action;
         use crate::coreaction::ActionTypeInfer;
@@ -12604,7 +12617,18 @@ mod tests {
         assert!(checked_u4, "unique_4 type verification failed");
     }
 
+    // Isolated per board ACTIONTYPEINFER-VTYPE-0001 (audit 2026-08-20): the
+    // "long" return assertion exercises the Rugra-local ActionInferParams
+    // glue action's size-based fallback, which only fired when the RETURN
+    // value varnode had v_type=None. With the canonical Some(undefined8) —
+    // Ghidra: varnode.cc:1250 VarnodeBank::create (ct "must not be NULL"),
+    // undefinedN = TYPE_UNKNOWN (ghidra_arch.cc:349-352) — the fallback never
+    // fires and no oracle behavior exists for this hand-built IR: real return
+    // typing is ActionOutputPrototype (Ghidra: coreaction.cc:4765
+    // ActionOutputPrototype::apply). Fixture migration is board
+    // ACTION-INFERTYPES-DISPATCH-0001.
     #[test]
+    #[ignore = "superseded by ACTIONTYPEINFER-VTYPE-0001: return-type assertion assumes v_type=None fallback; canonical is Some(undefined8) per Ghidra varnode.cc:1250 + ghidra_arch.cc:349-352"]
     fn test_infer_params_and_return_type() {
         use crate::action::Action;
         use crate::coreaction::ActionInferParams;

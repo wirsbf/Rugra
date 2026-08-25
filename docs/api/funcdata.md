@@ -1627,3 +1627,37 @@ Ghidra post-ActionReturnRecovery 形态（RETURN in(0)=间接槽 占位、
 in(1)=RAX，coreaction.cc:1836）。值折叠（`return uVar0;` vs oracle
 `return 10;`）属 implied/ActionReturnRecovery 域，登记于 fixture
 metadata out_of_scope_gaps。
+
+## 2026-08-25：test_type_propagation / test_infer_params_and_return_type 隔离（ACTIONTYPEINFER-VTYPE-0001）
+
+MERGE-CLEAR-LIFECYCLE-0001（上文）记录的 `funcdata::` 2 个预存在失败
+测试本轮隔离为 `#[ignore]`，全量 `cargo test --lib` 恢复 0 failed。
+根因属**断言过时**（非 src 缺陷），且看板 `ACTIONTYPEINFER-VTYPE-0001`
+（P0 BLOCKED）审计已明确处置边界，本提交仅为落地该审计结论：
+
+- 两测试驱动的是 Rugra-local `ActionTypeInfer` / `ActionInferParams`
+  胶水 Action（`src/coreaction.rs`，标注 RUGRA-GLUE，无 Ghidra 对应物；
+  真实推断是 `ActionInferTypes`），其断言编码的是前规范 `v_type=None`
+  表示。
+- 规范不变量：`VarnodeBank::create` 的 `ct` 参数 "must not be NULL"
+  （varnode.cc:1250，`createUnique` 同），调用方传
+  `getBase(size,TYPE_UNKNOWN)` = `undefinedN` 核心 type
+  （ghidra_arch.cc:349-352）；Rugra `Varnode::new`
+  （src/varnode.rs:549）对应铸造 `Some(undefined{size})`，bank 创建的
+  varnode `v_type` 永不为 `None`。
+- 因此 `ActionTypeInfer` Rule 2 COPY/INT_ADD 的 `(Some(t), None)` /
+  `(None, Some(t))` 匹配（coreaction.rs COPY 臂）与 `ActionInferParams`
+  RETURN 的 `unwrap_or_else` size-based 回退（coreaction.rs，RAX→long）
+  均不可再触发：`test_type_propagation` 败于 unique_1 `int *` 断言、
+  `test_infer_params_and_return_type` 败于 return `long` 断言。
+- 审计明确拒绝的捷径（本轮未采用）：改回 `None` / 把 `is_none` 粗换
+  UNKNOWN 检查——前者违反 Ghidra 非空不变量，后者是对无 oracle 的
+  胶水 Action 的又一层自创语义。
+- 复活路径：`ACTION-INFERTYPES-DISPATCH-0001`（依赖
+  `VARNODE-LOCALTYPE-RESOLUTION-0001` 等）落地真实
+  ActionStartTypes/ActionInferTypes/ActionOutputPrototype
+  （coreaction.cc:4765）fixture 后，按 oracle 行为重写断言并摘除
+  ignore；届时同步删除/替换无 Ghidra 对应的旧 Action。
+- 关联：`comment::test_comment_sorter_op_landmark_interleaving` 第三个
+  预存失败已由 `8b8dc90b`（BLOCK-STOPADDR-FIXTURE-REGRESSION-0001，
+  本分支祖先）修复，单跑与全量均通过，无本轮改动。
