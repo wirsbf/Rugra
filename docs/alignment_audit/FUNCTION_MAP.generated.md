@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 9925
-  (8196 production + 1729 test)
-- Exact definition-start mappings: 3681
-- Body-line references requiring audit: 353
+- Rugra functions: 10058
+  (8313 production + 1745 test)
+- Exact definition-start mappings: 3746
+- Body-line references requiring audit: 356
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -33,9 +33,9 @@ records complete same-input/same-output evidence.
 | `bfd_arch.cc` | 11 | 0 | 0 | 11 |
 | `bfd_arch.hh` | 1 | 0 | 0 | 1 |
 | `block.cc` | 204 | 103 | 3 | 98 |
-| `block.hh` | 171 | 67 | 0 | 104 |
-| `blockaction.cc` | 83 | 30 | 1 | 52 |
-| `blockaction.hh` | 29 | 1 | 0 | 28 |
+| `block.hh` | 171 | 68 | 0 | 103 |
+| `blockaction.cc` | 83 | 45 | 0 | 38 |
+| `blockaction.hh` | 29 | 2 | 0 | 27 |
 | `callgraph.cc` | 26 | 22 | 0 | 4 |
 | `callgraph.hh` | 19 | 0 | 0 | 19 |
 | `capability.cc` | 3 | 0 | 0 | 3 |
@@ -50,7 +50,7 @@ records complete same-input/same-output evidence.
 | `comment_ghidra.hh` | 5 | 0 | 0 | 5 |
 | `compression.cc` | 11 | 3 | 0 | 8 |
 | `compression.hh` | 3 | 2 | 0 | 1 |
-| `condexe.cc` | 27 | 26 | 0 | 1 |
+| `condexe.cc` | 27 | 27 | 0 | 0 |
 | `condexe.hh` | 4 | 0 | 0 | 4 |
 | `consolemain.cc` | 5 | 0 | 0 | 5 |
 | `constseq.cc` | 31 | 23 | 0 | 8 |
@@ -76,7 +76,7 @@ records complete same-input/same-output evidence.
 | `dynamic.hh` | 6 | 6 | 0 | 0 |
 | `emulate.cc` | 34 | 1 | 0 | 33 |
 | `emulate.hh` | 18 | 0 | 0 | 18 |
-| `emulateutil.cc` | 34 | 0 | 0 | 34 |
+| `emulateutil.cc` | 34 | 2 | 5 | 27 |
 | `emulateutil.hh` | 9 | 0 | 0 | 9 |
 | `error.hh` | 3 | 0 | 0 | 3 |
 | `expression.cc` | 17 | 15 | 0 | 2 |
@@ -118,7 +118,7 @@ records complete same-input/same-output evidence.
 | `inject_sleigh.hh` | 7 | 0 | 0 | 7 |
 | `interface.cc` | 31 | 0 | 0 | 31 |
 | `interface.hh` | 26 | 0 | 0 | 26 |
-| `jumptable.cc` | 132 | 21 | 61 | 50 |
+| `jumptable.cc` | 132 | 33 | 53 | 46 |
 | `jumptable.hh` | 79 | 42 | 2 | 35 |
 | `libdecomp.cc` | 4 | 0 | 0 | 4 |
 | `loadimage.cc` | 7 | 5 | 0 | 2 |
@@ -128,7 +128,7 @@ records complete same-input/same-output evidence.
 | `loadimage_ghidra.cc` | 6 | 0 | 0 | 6 |
 | `loadimage_xml.cc` | 10 | 0 | 0 | 10 |
 | `loadimage_xml.hh` | 2 | 0 | 0 | 2 |
-| `marshal.cc` | 80 | 26 | 0 | 54 |
+| `marshal.cc` | 80 | 33 | 0 | 47 |
 | `marshal.hh` | 33 | 3 | 0 | 30 |
 | `memstate.cc` | 29 | 27 | 0 | 2 |
 | `memstate.hh` | 10 | 4 | 0 | 6 |
@@ -162,15 +162,15 @@ records complete same-input/same-output evidence.
 | `prefersplit.hh` | 1 | 0 | 0 | 1 |
 | `prettyprint.cc` | 85 | 1 | 0 | 84 |
 | `prettyprint.hh` | 124 | 3 | 0 | 121 |
-| `printc.cc` | 106 | 76 | 0 | 30 |
+| `printc.cc` | 106 | 77 | 0 | 29 |
 | `printc.hh` | 66 | 0 | 0 | 66 |
 | `printjava.cc` | 16 | 0 | 0 | 16 |
 | `printjava.hh` | 1 | 0 | 0 | 1 |
-| `printlanguage.cc` | 31 | 22 | 0 | 9 |
+| `printlanguage.cc` | 31 | 23 | 0 | 8 |
 | `printlanguage.hh` | 31 | 13 | 0 | 18 |
 | `rangemap.hh` | 33 | 17 | 0 | 16 |
 | `rangeutil.cc` | 64 | 58 | 0 | 6 |
-| `rangeutil.hh` | 39 | 25 | 0 | 14 |
+| `rangeutil.hh` | 39 | 26 | 0 | 13 |
 | `raw_arch.cc` | 11 | 0 | 0 | 11 |
 | `raw_arch.hh` | 1 | 0 | 0 | 1 |
 | `ruleaction.cc` | 340 | 94 | 131 | 115 |
@@ -206,7 +206,7 @@ records complete same-input/same-output evidence.
 | `string_ghidra.cc` | 3 | 0 | 0 | 3 |
 | `stringmanage.cc` | 17 | 13 | 0 | 4 |
 | `stringmanage.hh` | 1 | 1 | 0 | 0 |
-| `subflow.cc` | 111 | 81 | 0 | 30 |
+| `subflow.cc` | 111 | 86 | 1 | 24 |
 | `subflow.hh` | 27 | 0 | 0 | 27 |
 | `test.cc` | 4 | 0 | 0 | 4 |
 | `test.hh` | 2 | 0 | 0 | 2 |
@@ -217,11 +217,11 @@ records complete same-input/same-output evidence.
 | `translate.cc` | 42 | 16 | 0 | 26 |
 | `translate.hh` | 36 | 17 | 0 | 19 |
 | `type.cc` | 235 | 170 | 0 | 65 |
-| `type.hh` | 132 | 29 | 0 | 103 |
+| `type.hh` | 132 | 30 | 0 | 102 |
 | `typegrp_ghidra.cc` | 1 | 0 | 0 | 1 |
 | `typegrp_ghidra.hh` | 2 | 0 | 0 | 2 |
-| `typeop.cc` | 210 | 57 | 1 | 152 |
-| `typeop.hh` | 102 | 23 | 0 | 79 |
+| `typeop.cc` | 210 | 67 | 2 | 141 |
+| `typeop.hh` | 102 | 27 | 0 | 75 |
 | `unify.cc` | 142 | 133 | 0 | 9 |
 | `unify.hh` | 163 | 148 | 0 | 15 |
 | `unionresolve.cc` | 21 | 21 | 0 | 0 |
@@ -233,7 +233,7 @@ records complete same-input/same-output evidence.
 | `varmap.cc` | 49 | 32 | 0 | 17 |
 | `varmap.hh` | 33 | 0 | 0 | 33 |
 | `varnode.cc` | 90 | 75 | 0 | 15 |
-| `varnode.hh` | 125 | 22 | 1 | 102 |
+| `varnode.hh` | 125 | 25 | 1 | 99 |
 | `xml.cc` | 48 | 32 | 1 | 15 |
 | `xml.hh` | 46 | 2 | 0 | 44 |
 | `xml_arch.cc` | 10 | 0 | 0 | 10 |
