@@ -1371,7 +1371,6 @@ try_rule_switch 的 case 标签是出边索引（非 jumptable 恢复标签）�
 default 恒 None；doc_function 全管线中 `uVar0 = 10; return uVar0;` 未折叠
 为 `return 10;`（ActionReturnRecovery + implied 层）。funcdata
 `test_switch_case_structuring` 断言恢复（case 标签 ×2 + 体 return 计数）。
-<<<<<<< HEAD
 附注：`comment_sorter_iterators_1204` fixture 在 0d2252d（`get_stop_addr`
 回退从"末 op 地址"改为 `initial_range`）后 Rust 侧回归失配（内部地址
 注释落入 header_unplaced）——预存在问题，非本租约，建议 root 重登记
@@ -1387,7 +1386,6 @@ default 恒 None；doc_function 全管线中 `uVar0 = 10; return uVar0;` 未折�
   get_next 索引越过 commmap 末尾（main 打印阶段 index-out-of-bounds panic）。现于每个
   parent 块边界：先 drain 离开块的尾部注释，再以 live parent 索引开新窗口，
   复现 oracle 的逐块协议。
-=======
 
 ### 2026-08-25（续2）：PRINTC-COMMENT-WINDOW-PANIC-0001 — ops_block_index 死 op 前缀跳过 setupBlockList 的 OOB panic
 
@@ -1418,4 +1416,27 @@ opstop 不会落到 start 之前。全死 op 前缀的块本就无 per-op landma
 **验收**：`--rugra-selected-function parseconfig.constprop.0 glob_set next_url`
 → 3/3 decompiled（633/402/547 字节），0 panic 0 timeout；main 维持 TIMEOUT
 （既有状态，非本缺陷范畴）。
->>>>>>> 0ed760fb (align: derive comment window key from first parented op (PRINTC-COMMENT-WINDOW-PANIC-0001))
+
+### 2026-08-25（续3）：PRINTC-EMPTYELSE-0001 — is_block_body_empty 自创 dead-output 过滤移除（空 if 臂内容恢复）
+
+**根因**：`is_block_body_empty`（决定 emit_structured_if 是否打印 then/else 臂）内嵌一个
+Ghidra 无对应物的"死输出过滤"——`global_used_outputs` 查询 + 纯计算 opcode 白名单
+（INT_EQUAL/INT_ADD/LOAD 等 27 op），输出无人读的比较/算术 op 被当作"不可发射"，
+整臂被判空后抑制。oracle 的 emitBlockBasic（printc.cc:2678-2742）只有三道门：
+notPrinted()（cc:2696，op.hh:182 = marker|nonprinting|noreturn）、branch 抑制
+（cc:2697-2702，臂上下文 no_branch 已 set → 全部 branch skip）、implied-output
+（cc:2704-2705）——从不因"输出没人读"丢语句；真死计算在 oracle 里已被 ActionDeadCode
+从 PcodeOpBank 移除。emitBlockIf（printc.cc:2919-2924）对形成的 BlockIf 无条件开臂括号。
+
+**修复**：谓词改为精确镜像默认发射路径 `emit_block_basic_rpn` 的四道门
+（is_dead → notPrinted 三 flag → is_branch → implied output），逐门与
+printc.cc:2695-2705 一致；删除 dead-output 过滤与 legacy 路径专属的
+COPY/RIP/stack-frame/inlined skip（RPN 发射路径无这些 skip，谓词与发射门禁
+错配会判空但实际有输出，或反向）。
+
+**验收（E2E curl 12.0.4 golden）**：空 if 体 7→6（main 的 glob_url 臂
+`if (piVar38 != 0) { iStack_22c = 0; … }` 与 myprogress 的 `else { dlnow = 0; }`
+两处真实语句恢复，方向朝 golden `if (iVar4 == 0) { bVar3 = false; … }`）；
+defects 0→0、numbering 1→1、skeleton 2884→2891（+7 = 恢复的 9 行语句归一化后净增）。
+剩余 6 处空 if 体与 file2string 主体缺失为 IR 层残差（op 已被上游 Action 移除，
+非 printc 判空），归 FILE2STRING-EMPTYELSE 后续分层修复。

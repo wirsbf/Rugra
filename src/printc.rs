@@ -2914,29 +2914,34 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:123 PrintC::isBlockBodyEmpty
+    // Ghidra: printc.cc:2878 PrintC::emitBlockIf (via printc.cc:2678 emitBlockBasic body-statement set)
     /// Check if a block body has no emittable ops (all ops are dead, skipped, or branch-only).
     /// Used to suppress empty `if () {} else {}` blocks.
+    ///
+    /// PRINTC-EMPTYELSE-0001 root cause: this predicate decides whether
+    /// emit_structured_if prints the then/else arms at all, but it previously
+    /// ran a SELF-INVENTED dead-output filter (global_used_outputs + a pure-
+    /// computation opcode list) that has NO Ghidra counterpart. Ghidra's
+    /// emitBlockBasic (printc.cc:2678-2742) prints every op that survives
+    /// exactly three gates — notPrinted() (cc:2696), branch suppression
+    /// (cc:2697-2702) and implied-output (cc:2704-2705) — and never drops a
+    /// STORE/CALL/comparison statement for being "unused": ActionDeadCode in
+    /// the oracle has already removed truly dead computations from the
+    /// PcodeOpBank before printing. Rugra keeps dead ops in the block's op
+    /// list, so the equivalent predicate must mirror the emission gates of
+    /// emit_block_basic_rpn (the default emission path, printc.cc:2696-2705)
+    /// EXACTLY: dead / marker+NONPRINTING+NORETURN / branch-under-no_branch /
+    /// implied-output — nothing else. The legacy-path skips (COPY folding,
+    /// RIP-relative, stack-frame setup, inlined_ops) are deliberately NOT
+    /// applied here: the RPN path that actually emits arms has no such skips,
+    /// and any extra skip here would classify a body as empty whose
+    /// statements the RPN loop then emits — hiding real code (the same
+    /// failure class as the removed dead-output filter, e.g. a lone
+    /// `((bool)(x == 0));` comparison statement is a real C statement in
+    /// the oracle and keeps its arm non-empty).
     fn is_block_body_empty(&self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
-        use crate::opcodes::OpCode;
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
-
-        // Faithful to Ghidra's model: a block's BODY is its non-terminal ops.
-        // The terminal CBRANCH/BRANCH/RETURN is the control-flow transfer that
-        // the structurer consumes (printc.cc:2895 setMod(no_branch) suppresses
-        // it when emitting a condition block) — it is NOT a body statement.
-        // Previously this method returned false (non-empty) whenever the LAST
-        // op was CBRANCH/BRANCH/RETURN/CALL, which mis-classified blocks whose
-        // only live op was the terminal branch (all real body ops dead) as
-        // non-empty. That made emit_structured_basic emit `if (cond) {} else {}`
-        // with genuinely-empty braces — a form Ghidra's emitBlockIf never
-        // produces (printc.cc:2878 always emits the block's actual content).
-        // Now we fall through to the per-op scan, which mirrors emit_block_ops:
-        // it skips branches/dead/pure-computation ops and reports empty only
-        // when nothing emittable remains. CALL/CALLIND with live side effects
-        // are still caught below (they are not in the skip set), so a block
-        // whose body is a real call is correctly non-empty.
 
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
@@ -2946,50 +2951,31 @@ impl PrintC {
             if op.is_dead() {
                 continue;
             }
-            // Skip branches, COPY, phi-nodes — same skip set as emit_block_ops
-            // (emit_block_ops:315-323 skips CBRANCH/BRANCH/BRANCHIND/COPY/MULTIEQUAL/INDIRECT).
-            match op.opcode {
-                OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND
-                | OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT => continue,
-                _ => {}
+            // printc.cc:2696 notPrinted(): marker (MULTIEQUAL/INDIRECT),
+            // NONPRINTING and NORETURN ops are never statements.
+            if op.is_marker()
+                || (op.flags & crate::op::pcodeop_flags::NONPRINTING) != 0
+                || (op.flags & crate::op::pcodeop_flags::NORETURN) != 0
+            {
+                continue;
             }
-            // Skip ops whose output is implied — emit_block_ops:334-338 skips
-            // these (the def expression is inlined at the read site, so the op
-            // is not emitted as a standalone statement).
+            // printc.cc:2697-2702: branch ops are suppressed under no_branch
+            // (body emission context) and a straight BRANCH is always printed
+            // by the block classes.
+            if op.is_branch() {
+                continue;
+            }
+            // printc.cc:2704-2705: implied outputs are inlined at the read
+            // site, not emitted as standalone statements.
             if let Some(ref out_arc) = op.output {
                 if out_arc.read().unwrap().is_implied() { continue; }
             }
-            // Skip RIP-relative
-            if self.get_rip_relative_operand(&op).is_some() { continue; }
-            // Skip stack frame setup
-            if self.stack_frame_size > 0 && self.is_stack_frame_setup(&op) { continue; }
-            // Skip inlined ops
-            if self.inlined_ops.contains(&op.get_seq_num()) { continue; }
-            // Check if output is dead (pure computation with unused output)
-            if let Some(ref out_arc) = op.output {
-                let out_ptr = Arc::as_ptr(out_arc) as usize;
-                if !self.global_used_outputs.contains(&out_ptr) {
-                    match op.opcode {
-                        OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
-                        | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
-                        | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                        | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
-                        | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR
-                        | OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB
-                        | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV
-                        | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
-                        | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NEGATE
-                        | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT
-                        | OpCode::CPUI_INT_SRIGHT
-                        | OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT
-                        | OpCode::CPUI_SUBPIECE | OpCode::CPUI_PIECE
-                        | OpCode::CPUI_LOAD
-                        => continue,
-                        _ => {}
-                    }
-                }
-            }
-            // If we reach here, this op is emittable
+            // If we reach here, emit_block_basic_rpn would emit this op as a
+            // statement — the body is NOT empty. Note: deliberately NO
+            // dead-output filter. Ghidra emits `lhs = rhs;` / `f(x);`
+            // statements whose outputs nobody reads (STORE/CALL/effectful
+            // comparisons all survive), and emitBlockIf (printc.cc:2920-2924)
+            // always opens the arm braces when the BlockIf was formed.
             return false;
         }
         true
