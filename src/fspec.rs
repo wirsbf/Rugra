@@ -5562,13 +5562,20 @@ pub fn characterize_as_param(
     // Ghidra: fspec.cc:1411 ParamListStandard::unjustifiedContainer
     /// Check if the given storage location looks like an unjustified
     /// parameter. Faithful to `unjustifiedContainer` (fspec.cc:1411-1424):
-    /// iterates ALL entries with no space filter — Ghidra relies on each
-    /// entry's `justifiedContain` rejecting queries in other spaces
-    /// (fspec.cc:269 / `Address::justifiedContain` address.cc space check).
-    /// Rugra's per-entry predicates are offset-only while the legacy
-    /// `Address` is spaceless (ADDRESS-0001 transitional); this call site
-    /// must not re-introduce a space filter Ghidra does not have.
-    pub fn unjustified_container(&self, loc: Address, size: i32, res: &mut VarnodeData) -> bool {
+    /// iterates ALL entries with no caller-level space filter — Ghidra
+    /// relies on each entry's `justifiedContain` rejecting queries in
+    /// other spaces (fspec.cc:269 / `Address::justifiedContain`
+    /// address.cc:133 for plain entries; per-piece address.cc:133 for
+    /// joins, which ARE reachable). `space` is the query address's space
+    /// (Ghidra reads it from the `const Address &loc`; the legacy
+    /// spaceless `Address` needs it alongside — see `find_entry`).
+    pub fn unjustified_container(
+        &self,
+        space: AddressSpace,
+        loc: Address,
+        size: i32,
+        res: &mut VarnodeData,
+    ) -> bool {
         // Ghidra: if ((*iter).getMinSize() > size) continue;
         //         int4 just = (*iter).justifiedContain(loc,size);
         //         if (just < 0) continue;
@@ -5576,7 +5583,7 @@ pub fn characterize_as_param(
         //         (*iter).getContainer(loc,size,res); return true;
         for cur in &self.entry {
             if cur.get_min_size() > size { continue; }
-            let just = cur.justified_contain(loc, size);
+            let just = cur.justified_contain_in_space(loc, size, space);
             if just < 0 { continue; }
             if just == 0 { return false; }
             cur.get_container(loc, size, res);
@@ -5978,8 +5985,16 @@ impl ParamListStandardOut {
                     let t = active.get_trial(j);
                     (t.get_space(), t.get_address(), t.get_size(), t.is_active())
                 };
-                if t_active && curentry.get_space() == t_space {
-                    let res = curentry.justified_contain(t_addr, t_size);
+                if t_active {
+                    // Ghidra: cc:1655-1656 int4 res =
+                    // curentry->justifiedContain(paramtrial.getAddress(),
+                    // paramtrial.getSize()); — the trial Address carries
+                    // its space, so the per-entry walk rejects foreign-space
+                    // queries itself (per-piece address.cc:133 for joins —
+                    // join entries ARE reachable — and fspec.cc:269 /
+                    // address.cc:133 for plain entries). No caller-level
+                    // space guard exists in Ghidra.
+                    let res = curentry.justified_contain_in_space(t_addr, t_size, t_space);
                     if res >= 0 {
                         active.get_trial_mut(j).set_entry(entry_idx, res);
                         putative_match = true;
@@ -6039,8 +6054,13 @@ impl ParamListStandardOut {
                         let t = active.get_trial(i);
                         (t.get_space(), t.get_address(), t.get_size(), t.is_active())
                     };
-                    if t_active && best_entry_ref.get_space() == t_space {
-                        let res = best_entry_ref.justified_contain(t_addr, t_size);
+                    if t_active {
+                        // Ghidra: cc:1701-1702 int4 res =
+                        // bestentry->justifiedContain(paramtrial.getAddress(),
+                        // paramtrial.getSize()); — space-aware walk, same
+                        // guards as cc:1656 above (joins reachable,
+                        // foreign-space rejection inside the walk).
+                        let res = best_entry_ref.justified_contain_in_space(t_addr, t_size, t_space);
                         if res >= 0 {
                             let t = active.get_trial_mut(i);
                             t.mark_used(); // Only actives are ever marked used.
@@ -8354,5 +8374,133 @@ mod tests {
         // Group 0 (0x30) then group 1 (0x38), then group 2 reverse-stack:
         // highest stack offset first (0x10 before 0x0).
         assert_eq!(order, vec![0x30, 0x38, 0x10, 0x0]);
+    }
+
+    // Ghidra: fspec.cc:1411 ParamListStandard::unjustifiedContainer
+    /// The space-threaded form pins the oracle rows of the
+    /// fspec_spaceless_rem_1204 fixture: foreign-space queries at
+    /// numerically unjustified offsets are rejected inside the walk
+    /// (address.cc:133 / fspec.cc:269 / per-piece for joins), join
+    /// entries are reachable with the PIECE as container (cc:295-302),
+    /// the minSize gate (cc:1415) skips entries before justifiedContain,
+    /// and just==0 returns false early (cc:1420).
+    #[test]
+    fn test_unjustified_container_space_guards_and_join() {
+        let mut m = ParamListStandard::new();
+        // e0: join ram:0x204 (high) + reg:0x100 (low), pieces MS first,
+        // min 2 so a 2-byte query reaches the walk (the cc:1415 minSize
+        // gate still skips it for e1, min 4).
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Join);
+            e.set_base(0);
+            e.set_sizes(8, 2);
+            e.set_alignment(0);
+            e.set_join_pieces(vec![
+                VarnodeData { space: AddressSpace::Ram, offset: 0x204, size: 4 },
+                VarnodeData { space: AddressSpace::Register, offset: 0x100, size: 4 },
+            ]);
+            e
+        });
+        // e1: plain register [0x100,0x107] min 4, exclusion, force-left.
+        m.entry_mut().push({
+            let mut e = ParamEntry::new(1);
+            *e.flags_mut() = param_entry_flags::FORCE_LEFT_JUSTIFY;
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Register);
+            e.set_base(0x100);
+            e.set_sizes(8, 4);
+            e.set_alignment(0);
+            e
+        });
+        m.set_num_group(2);
+        let mut res = VarnodeData { space: AddressSpace::Ram, offset: 0, size: 0 };
+        // Low piece just=2 -> hit with the PIECE as container.
+        assert!(m.unjustified_container(
+            AddressSpace::Register, Address::new(0x102), 2, &mut res));
+        assert_eq!((res.space, res.offset, res.size),
+                   (AddressSpace::Register, 0x100, 4));
+        // Skip the foreign low piece (+4), high piece cur=0 -> just=4.
+        assert!(m.unjustified_container(
+            AddressSpace::Ram, Address::new(0x204), 4, &mut res));
+        assert_eq!((res.space, res.offset, res.size), (AddressSpace::Ram, 0x204, 4));
+        // Join walk -1 for both pieces -> e1 just=4 -> whole-entry container.
+        assert!(m.unjustified_container(
+            AddressSpace::Register, Address::new(0x104), 4, &mut res));
+        assert_eq!((res.space, res.offset, res.size),
+                   (AddressSpace::Register, 0x100, 8));
+        // just==0 (justified) -> early false.
+        assert!(!m.unjustified_container(
+            AddressSpace::Register, Address::new(0x100), 4, &mut res));
+        // Foreign-space query at a numerically coincident offset: both
+        // pieces foreign for the join, entry-space guard for e1 -> hit=0
+        // (the old spaceless arithmetic accepted these rows).
+        assert!(!m.unjustified_container(
+            AddressSpace::Stack, Address::new(0x102), 2, &mut res));
+        assert!(!m.unjustified_container(
+            AddressSpace::Register, Address::new(0x204), 4, &mut res));
+        // minSize gate: e0 needs >= 2 bytes, e1 >= 4 bytes.
+        assert!(!m.unjustified_container(
+            AddressSpace::Register, Address::new(0x100), 1, &mut res));
+    }
+
+    // Ghidra: fspec.cc:1638 ParamListStandardOut::fillinMapFallback
+    /// Join output entries are reachable through the per-piece walk
+    /// (cc:1656/cc:1702): register trials bind to the join entry and
+    /// are marked used, while a foreign-space trial is cleared and
+    /// marked no-use (the caller-level space guard made the join entry
+    /// unreachable -> bestentry null -> every trial markNoUse).
+    #[test]
+    fn test_fillin_map_fallback_join_reachable() {
+        let mut out = ParamListStandardOut::new();
+        out.base.entry_mut().push({
+            let mut e = ParamEntry::new(0);
+            *e.flags_mut() = param_entry_flags::FIRST_STORAGE;
+            e.set_type_class(TypeClass::General);
+            e.set_space(AddressSpace::Join);
+            e.set_base(0);
+            e.set_sizes(8, 4);
+            e.set_alignment(0);
+            e.set_join_pieces(vec![
+                VarnodeData { space: AddressSpace::Register, offset: 0x104, size: 4 },
+                VarnodeData { space: AddressSpace::Register, offset: 0x100, size: 4 },
+            ]);
+            e
+        });
+        out.base.set_num_group(1);
+        let mut active = ParamActive::new(false);
+        active.register_trial_in_space(AddressSpace::Register, Address::new(0x100), 4);
+        active.register_trial_in_space(AddressSpace::Register, Address::new(0x104), 4);
+        active.register_trial_in_space(AddressSpace::Stack, Address::new(0x104), 4);
+        for i in 0..active.get_num_trials() {
+            active.get_trial_mut(i).mark_active();
+        }
+        out.fillin_map_fallback(&mut active, false);
+        // Trial order after the final sort_trials: join-entry trials by
+        // justified offset (0 then 4), entry-less trial last.
+        let t0 = active.get_trial(0);
+        assert_eq!((t0.get_space(), t0.get_address().as_u64()),
+                   (AddressSpace::Register, 0x100));
+        assert!(t0.is_used());
+        assert_eq!(t0.get_entry_index(), Some(0));
+        assert_eq!(t0.get_offset(), 0);
+        let t1 = active.get_trial(1);
+        assert_eq!(t1.get_address().as_u64(), 0x104);
+        assert!(t1.is_used());
+        assert_eq!(t1.get_entry_index(), Some(0));
+        assert_eq!(t1.get_offset(), 4);
+        let t2 = active.get_trial(2);
+        assert_eq!(t2.get_space(), AddressSpace::Stack);
+        assert!(!t2.is_used());
+        assert_eq!(t2.get_entry_index(), None);
+        // bestentry null branch (cc:1713-1715): every trial markNoUse.
+        let mut active2 = ParamActive::new(false);
+        active2.register_trial_in_space(AddressSpace::Stack, Address::new(0x100), 4);
+        active2.get_trial_mut(0).mark_active();
+        out.fillin_map_fallback(&mut active2, false);
+        let t = active2.get_trial(0);
+        assert!(!t.is_used() && !t.is_active());
+        assert_eq!(t.get_entry_index(), None);
     }
 }

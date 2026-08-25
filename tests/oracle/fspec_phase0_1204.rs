@@ -138,7 +138,7 @@ fn main() {
     ];
     for &(spc, off, sz) in uc.iter() {
         let mut res = VarnodeData { space: AddressSpace::Ram, offset: 0, size: 0 };
-        let hit = model.unjustified_container(Address::new(off), sz, &mut res);
+        let hit = model.unjustified_container(spc, Address::new(off), sz, &mut res);
         if hit {
             println!("  uc {}:{}/{} hit=1 res={}", spc.name(), hex(off), sz, vd(&res));
         } else {
@@ -157,7 +157,7 @@ fn main() {
     ];
     for &(spc, off, sz) in ae.iter() {
         let mut res = VarnodeData { space: AddressSpace::Ram, offset: 0, size: 0 };
-        let op = model.assumed_extension(Address::new(off), sz, &mut res);
+        let op = model.assumed_extension(spc, Address::new(off), sz, &mut res);
         if op != rugra::opcodes::OpCode::CPUI_COPY {
             println!("  ae {}:{}/{} op={} res={}", spc.name(), hex(off), sz, op.name(), vd(&res));
         } else {

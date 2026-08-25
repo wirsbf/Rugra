@@ -736,3 +736,44 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
   spaceless `justified_contain` 的其余调用方（`unjustified_container`
   cc:1411、`ParamListStandard::fillin_map` cc:1382-1410 两处 trial 查询）
   不在本租约内，保持过渡形态。
+
+### 2026-08-25：unjustified_container/fillin_map_fallback 空间线程化（FSPEC-SPACELESS-REMAINDER）
+
+最后两处 spaceless `justified_contain` 调用方收口（A46 残差 4，由
+FSPEC-POSSIBLEPARAM-JOIN-0006 的 metadata residual 登记）：
+
+- **`ParamListStandard::unjustified_container`（cc:1411-1424）** 签名增补
+  `space: AddressSpace`（Ghidra 从 `const Address &loc` 携带；过渡
+  spaceless `Address` 需旁路传入——同 `find_entry`/`assumed_extension` 形态）。
+  cc:1417 的 `justifiedContain(loc,size)` 改走
+  `justified_contain_in_space(loc, size, space)`：异空间查询在数值上
+  unjustified 的 offset 也返回 hit=0（旧 spaceless 形态会把 stack 查询
+  数值巧合地匹配进 register/ram entry 并回写容器）；join entry 经逐
+  piece walk 可达，cc:295-302 `getContainer` 回写**包含该 range 的
+  piece**（register:0x100/4），而非整个 join。调用方级无空间过滤
+  （Ghidra 没有）；minSize 门（cc:1415）在 justifiedContain 之前跳过
+  entry；just==0 提前返回 false（cc:1420）。
+- **`ParamListStandardOut::fillin_map_fallback`（cc:1638-1719）** 两处
+  trial 查询（cc:1656 逐 entry 评估 + cc:1702 best entry 复评）均改走
+  `justified_contain_in_space(t_addr, t_size, t_space)`，并**删除自创的
+  调用方级 `curentry.get_space() == t_space` 守卫**——该守卫使 join
+  entry 永不可达（join space != register），Ghidra 中 join 经逐 piece
+  空间匹配可达：register trial 命中 join 后被 mark_used/set_entry，
+  而旧代码 bestentry 为 null、全部 trial markNoUse。异空间 rejection
+  只发生在 walk 内部（逐 piece address.cc:133 / fspec.cc:269 +
+  address.cc:133），与 plain entry 行为等价。
+- 单测 2 个：`test_unjustified_container_space_guards_and_join`、
+  `test_fillin_map_fallback_join_reachable`（含 bestentry null 分支）。
+- 双侧 fixture：`tests/oracle/fspec_spaceless_rem_1204.{cc,rs,metadata.json}` +
+  `tools/run_fspec_spaceless_rem_oracle.sh`（7 case 31 行：uc 普通 entry
+  的跨空间拒绝/对齐路由/minSize 门/just==0 早退、uc join 可达性与
+  piece 容器、fb plain best-cover 与 tie 拒绝、fb join 可达性（核心
+  分歧行）、fb 跨空间 join piece、fb firstOnly 跳过与放行）真实双侧
+  执行 byte-identical。
+- 关联重钉：`fspec_phase0_1204`（unjustified_container 唯一存量调用方）
+  更新调用签名并重钉 comparand；possibleparam/findentry/endian_resolver
+  runner 的 fspec_rs pin 因本次 src 变更滞后，登记 TODO
+  `FSPEC-PIN-STALE-0002` 待重钉。
+- 残差：BE 空间行仍 UNTESTED（ADDRESS-0001 过渡 enum 小端限定）；
+  fspec 内 spaceless `justified_contain` 生产调用方清零（仅
+  `justified_contain_in_space` 内部委托与测试保留）。
