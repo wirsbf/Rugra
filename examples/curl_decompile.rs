@@ -471,6 +471,12 @@ struct DecompileRequest {
     /// range source (`Database::setPropertyRange(Varnode::readonly, ...)`,
     /// the loader registration channel of architecture.cc:1371-1383).
     rodata_span: Option<(u64, u64)>,
+    /// MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
+    /// name, byte size) — ELF OBJECT symbols, GOT PTR_ labels and .data
+    /// PTR_DAT_ pointer labels the worker installs into the Database
+    /// global scope, where `Funcdata::mapGlobals` / `linkSymbol` /
+    /// `setVarnodeProperties` query them (funcdata_varnode.cc:25/1156/1653).
+    db_symbol_entries: Vec<(u64, String, i32)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1955,8 +1961,12 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // (`Database::setPropertyRange(Varnode::readonly, ...)`, the loader
     // channel of architecture.cc:1371-1383) RulePtrsubCharConstant /
     // PrintC::pushPtrCharConstant consume via isReadOnly.
+    // MAINDIFF-GLOBAL-0001: the DWARF globals layer parses before the
+    // Program-DB construction — its names/types feed the DB merge below.
+    let debug_globals = DebugGlobalDatabase::parse_elf(&request.binary_image)
+        .map_err(|error| format!("unable to import DWARF globals: {error}"))?;
     let program_db: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>> =
-        if request.rodata_dat_entries.is_empty() {
+        if request.rodata_dat_entries.is_empty() && request.db_symbol_entries.is_empty() {
             None
         } else {
             let db_arc = std::sync::Arc::new(std::sync::RwLock::new(
@@ -1966,6 +1976,22 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 .string_entries
                 .iter()
                 .map(|(address, value)| (*address, value))
+                .collect();
+            // MAINDIFF-GLOBAL-0001: the DWARF display-name overlay —
+            // function-static variables take their enclosing function's
+            // namespace (Ghidra's DWARF analyzer imports them into the
+            // function namespace; locked witnesses: my_get_token::save at
+            // 0x17510, next_url::beenhere at 0x17518). DWARF names win over
+            // the ELF importer layer at the same address.
+            let dwarf_display_names: HashMap<u64, (String, std::sync::Arc<rugra::type_system::datatype::Datatype>, i32)> = debug_globals
+                .iter()
+                .map(|(&address, global)| {
+                    let name = match &global.parent_function {
+                        Some(parent) => format!("{}::{}", parent, global.name),
+                        None => global.name.clone(),
+                    };
+                    (address, (name, global.data_type.clone(), global.data_type.get_size() as i32))
+                })
                 .collect();
             {
                 let mut db = db_arc.write().unwrap();
@@ -1981,12 +2007,13 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 }
                 let mut typed = 0usize;
                 // The strings-analyzer split: untyped referenced data gets
-                // the DAT label's undefined1 (the platform default for byte
-                // labels); string-classified addresses get char[len+1].
-                let undefined1 = rugra::type_system::typefactory::TypeFactory::shared_default()
+                // the DAT label's undefined8 (pointer-slot width — see the
+                // entry_size note below); string-classified addresses get
+                // char[len+1].
+                let undefined8 = rugra::type_system::typefactory::TypeFactory::shared_default()
                     .write()
                     .unwrap()
-                    .get_base(1, rugra::type_system::datatype::TypeMetatype::Unknown);
+                    .get_base(8, rugra::type_system::datatype::TypeMetatype::Unknown);
                 for (address, name) in &request.rodata_dat_entries {
                     let dtype = string_addrs.get(address).map(|value| {
                         // strings analyzer product: char array over the run
@@ -2013,9 +2040,44 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     if dtype.is_some() {
                         typed += 1;
                     }
+                    let is_string = string_addrs.contains_key(address);
                     let dtype =
-                        dtype.or_else(|| undefined1.clone());
-                    db.add_symbol_mapped(global, name, dtype, Address::new(*address), 1);
+                        dtype.or_else(|| undefined8.clone());
+                    // Non-string referenced .rodata data takes the pointer
+                    // slot width (8): every non-string reference in this
+                    // corpus is a pointer reference (golden witnesses
+                    // DAT_00107178/DAT_00107180 are adjacent 8-byte slots),
+                    // and the oracle's mapGlobals never reports the
+                    // "overlap smaller symbols" header
+                    // (funcdata_varnode.cc:1717) — which a 1-byte entry
+                    // under an 8-byte persist group would trigger.
+                    let entry_size = if is_string {
+                        dtype.as_ref().map(|t| t.get_size() as i32).unwrap_or(1)
+                    } else {
+                        8
+                    };
+                    db.add_symbol_mapped(global, name, dtype, Address::new(*address), entry_size);
+                }
+                // MAINDIFF-GLOBAL-0001: the global symbol layer — ELF OBJECT
+                // symbols, GOT PTR_ labels, .data PTR_DAT_ labels. Entries
+                // whose address is DWARF-covered are skipped: the DWARF
+                // layer below installs the oracle's final name + real type
+                // at that address (one entry per address keeps
+                // queryContainer's smallest-entry pick unambiguous).
+                let mut seeded_db_symbols = 0usize;
+                for &(address, ref name, size) in &request.db_symbol_entries {
+                    if dwarf_display_names.contains_key(&address) {
+                        continue;
+                    }
+                    let dtype = undefined8.clone();
+                    db.add_symbol_mapped(global, name, dtype, Address::new(address), size.max(1));
+                    seeded_db_symbols += 1;
+                }
+                // The DWARF layer: real names + real Datatypes (config ->
+                // Configurable 304B with member offsets, glob_buffer ->
+                // char[4096], ...).
+                for (&address, (name, dtype, size)) in &dwarf_display_names {
+                    db.add_symbol_mapped(global, name, Some(dtype.clone()), Address::new(address), *size);
                 }
                 if let Some((base, size)) = request.rodata_span {
                     if let Some(rng) = rugra::address::Range::new(
@@ -2029,10 +2091,12 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     }
                 }
                 eprintln!(
-                    "[PREPASS] {} program-DB symbol graph: {} .rodata entries ({} string-typed) + readonly range",
+                    "[PREPASS] {} program-DB symbol graph: {} .rodata entries ({} string-typed) + {} global symbols ({} DWARF-typed) + readonly range",
                     target.name,
                     request.rodata_dat_entries.len(),
-                    typed
+                    typed,
+                    seeded_db_symbols,
+                    dwarf_display_names.len()
                 );
             }
             Some(db_arc)
@@ -2047,8 +2111,6 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
 
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
-    let debug_globals = DebugGlobalDatabase::parse_elf(&request.binary_image)
-        .map_err(|error| format!("unable to import DWARF globals: {error}"))?;
     let register_context = rugra::sleigh_ffi::SleighCtx::new()
         .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
     let debug_storage = X86_64GccStorage::from_sleigh(&register_context)
@@ -2108,6 +2170,17 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // boundary below can resolve the target's own address.
     for (address, name) in &request.symbol_entries {
         fd.add_symbol(*address, name.clone());
+    }
+    // MAINDIFF-GLOBAL-0001: the DWARF display-name overlay on the name
+    // proxy — the same names the Program-DB layer carries (function-statics
+    // in their function namespace), so print-side address-keyed lookups
+    // agree with the symbol graph.
+    for (&address, global) in debug_globals.iter() {
+        let name = match &global.parent_function {
+            Some(parent) => format!("{}::{}", parent, global.name),
+            None => global.name.clone(),
+        };
+        fd.add_symbol(address, name);
     }
     for (address, value) in &request.string_entries {
         fd.add_string(*address, value.clone());
@@ -3043,6 +3116,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // property range (the a0 layer's reserved consumers).
     let mut rodata_span: Option<(u64, u64)> = None;
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
+    // MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
+    // name, byte size) — ELF OBJECT symbols, GOT PTR_ labels and .data
+    // PTR_DAT_ pointer labels (see the collection block below).
+    let mut db_symbol_entries: Vec<(u64, String, i32)> = Vec::new();
 
     {
         // Collect all function symbols
@@ -3226,6 +3303,130 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+        }
+
+        // MAINDIFF-GLOBAL-0001: the Program-DB symbol layer over global
+        // storage, mirroring what the locked 12.0.4 oracle's loaders and
+        // analyzers had registered before decompilation (the state
+        // Funcdata::mapGlobals queries through Scope::queryProperties,
+        // database.cc:1263):
+        //  - ELF symtab OBJECT symbols at their storage address, named the
+        //    way Ghidra's ELF importer renders them: gcc `.NNN` static
+        //    suffixes become `_` when no DWARF variable of the stripped
+        //    name covers the address (locked witness: `completed.8061` ->
+        //    `completed_8061`; DWARF-covered `save.5103`/`beenhere.3888`
+        //    are overridden by the worker's DWARF merge with the
+        //    function-namespace names `my_get_token::save` /
+        //    `next_url::beenhere`).
+        //  - GOT slot PTR_ labels: every 8-byte .got slot takes
+        //    `PTR_<dynsym-name>_<image-based addr>` from the covering
+        //    dynamic relocation (name stripped of its `@@GLIBC...`
+        //    version), or bare `PTR_<addr>` when no relocation names it
+        //    (witnesses: PTR___libc_start_main_00116fe0, PTR_00116e78).
+        //  - .data pointer-relocation PTR_DAT_ labels for
+        //    R_X86_64_RELATIVE slots pointing outside .data (witness:
+        //    &PTR_DAT_00117020 -> .rodata 0x6004).
+        // The entries ride `db_symbol_entries` into the worker's Database
+        // global scope and (via symbol_table) the Funcdata name proxy.
+        {
+            // Relocation name lookup: r_offset -> version-stripped dynsym name.
+            let reloc_name_at = |offset: u64| -> Option<String> {
+                for reloc in elf.dynrelas.iter().chain(elf.dynrels.iter()) {
+                    if reloc.r_offset != offset {
+                        continue;
+                    }
+                    if reloc.r_sym == 0 {
+                        return Some(String::new());
+                    }
+                    return elf
+                        .dynsyms
+                        .get(reloc.r_sym)
+                        .and_then(|sym| elf.dynstrtab.get_at(sym.st_name))
+                        .map(|n| n.split('@').next().unwrap_or(n).to_string());
+                }
+                None
+            };
+            // ELF symtab OBJECT layer (name + size for the DB entries).
+            // `.NNN` gcc-static suffixes take the importer's `_` form when
+            // no DWARF variable covers the address (worker DWARF merge
+            // overrides the DWARF-covered spellings).
+            let mut push_object_symbol = |raw: &str,
+                                          st_value: u64,
+                                          st_size: u64,
+                                          symbol_table: &mut HashMap<u64, String>| {
+                if raw.is_empty() || st_value == 0 || st_size == 0 {
+                    return;
+                }
+                let name = raw.split('@').next().unwrap_or(raw).replace('.', "_");
+                symbol_table.insert(st_value, name.clone());
+                db_symbol_entries.push((st_value, name, st_size as i32));
+            };
+            for sym in elf.syms.iter() {
+                if sym.st_info & 0xf != 1 /* STT_OBJECT */ {
+                    continue;
+                }
+                if let Some(raw) = elf.strtab.get_at(sym.st_name) {
+                    push_object_symbol(raw, sym.st_value, sym.st_size, &mut symbol_table);
+                }
+            }
+            for sym in elf.dynsyms.iter() {
+                if sym.st_info & 0xf != 1 /* STT_OBJECT */ {
+                    continue;
+                }
+                if let Some(raw) = elf.dynstrtab.get_at(sym.st_name) {
+                    push_object_symbol(raw, sym.st_value, sym.st_size, &mut symbol_table);
+                }
+            }
+            // GOT PTR_ layer over every 8-byte slot.
+            for header in elf.section_headers.iter() {
+                if elf.shdr_strtab.get_at(header.sh_name) != Some(".got") {
+                    continue;
+                }
+                for slot in (0..header.sh_size).step_by(8) {
+                    let addr = header.sh_addr + slot;
+                    // Oracle label form: `PTR_<name>_<image-based addr>`,
+                    // collapsing to `PTR_<addr>` when no relocation names
+                    // the slot (golden witness PTR_00116e78).
+                    let sep_name = match reloc_name_at(addr) {
+                        Some(name) if !name.is_empty() => format!("{name}_"),
+                        _ => String::new(),
+                    };
+                    let label = format!(
+                        "PTR_{}{:08x}",
+                        sep_name,
+                        ANALYZE_HEADLESS_IMAGE_BASE + addr
+                    );
+                    symbol_table.insert(addr, label.clone());
+                    db_symbol_entries.push((addr, label, 8));
+                }
+            }
+            // .data R_X86_64_RELATIVE pointer layer (PTR_DAT_).
+            let data_span = elf.section_headers.iter().find_map(|header| {
+                (elf.shdr_strtab.get_at(header.sh_name) == Some(".data"))
+                    .then_some((header.sh_addr, header.sh_addr + header.sh_size))
+            });
+            if let Some((data_lo, data_hi)) = data_span {
+                const R_X86_64_RELATIVE: u64 = 8;
+                for reloc in elf.dynrelas.iter() {
+                    if reloc.r_offset < data_lo
+                        || reloc.r_offset >= data_hi
+                        || reloc.r_sym != 0
+                        || reloc.r_addend.unwrap_or(0) >= data_lo as i64
+                    {
+                        continue;
+                    }
+                    let label = format!(
+                        "PTR_DAT_{:08x}",
+                        ANALYZE_HEADLESS_IMAGE_BASE + reloc.r_offset
+                    );
+                    symbol_table.insert(reloc.r_offset, label.clone());
+                    db_symbol_entries.push((reloc.r_offset, label, 8));
+                }
+            }
+            eprintln!(
+                "[PREPASS] Program-DB global symbol layer: {} entries (ELF OBJECT + GOT PTR_ + PTR_DAT_)",
+                db_symbol_entries.len()
+            );
         }
     }
 
@@ -3485,6 +3686,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     .map(|(&address, name)| (address, name.clone()))
                     .collect(),
                 rodata_span,
+                db_symbol_entries: db_symbol_entries.clone(),
             },
         };
         let direct_output = if matches!(mode, DriverMode::CompareFunctions(_)) {

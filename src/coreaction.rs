@@ -11430,16 +11430,14 @@ impl Action for ActionMarkIndirectOnly {
 
 /// Ensure a Symbol exists for every persistent (global) Varnode (rule_onceperfunc).
 ///
-/// Faithful to `ActionMapGlobals` (coreaction.hh:885). Ghidra's `apply`
-/// calls `data.mapGlobals()` (funcdata_varnode.cc:1653), which walks the
-/// VarnodeLocSet, groups overlapping persistent (global) varnodes, queries
-/// the local scope (`queryProperties`/`discoverScope`) and creates a Symbol
-/// for each group. Rugra does not port `Scope::queryProperties`/
-/// `discoverScope` or symbol creation, so we implement the pragmatic
-/// pre-step: scan every live varnode in the default data (RAM) space that is
-/// already flagged persistent, and ensure it carries the persistent global
-/// flags (PERSIST + READONLY for address-tied globals). Full symbol mapping
-/// remains pending the ScopeLocal API port.
+/// Faithful to `ActionMapGlobals` (coreaction.hh:878-886). Ghidra's `apply`
+/// is exactly `data.mapGlobals(); return 0;` — the whole behavior lives in
+/// [`Funcdata::map_globals`] (funcdata_varnode.cc:1653-1719): walk the
+/// VarnodeLocSet in location order, group overlapping persistent Varnodes,
+/// `queryProperties` the base address, and for an uncovered group
+/// `discoverScope` + `buildVariableName(addrtied|persist)` + `addSymbol` on
+/// the owning scope; over-extending groups over an existing smaller symbol
+/// get `coverVarnodes` for their uncovered internal Varnodes.
 pub struct ActionMapGlobals;
 
 impl ActionMapGlobals {
@@ -11452,41 +11450,11 @@ impl ActionMapGlobals {
 impl Action for ActionMapGlobals {
     // Ghidra: coreaction.hh:885 ActionMapGlobals::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra (funcdata_varnode.cc:1653-1719): vbank.beginLoc..endLoc;
-        // skip free; skip non-persist; for each overlapping group build a
-        // Symbol via localmap->queryProperties / discoverScope.
-        //
-        // Pragmatic Rugra port: we cannot create Symbols yet, but we can
-        // enforce the persistent-global flag invariant on RAM-space
-        // persistent varnodes, which is the observable side-effect other
-        // Actions rely on (map_type_def / print globals).
-        use crate::space::AddressSpace;
-        use crate::varnode::varnode_flags;
-        let varnodes: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .collect();
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            if vn_rg.is_free() {
-                continue;
-            }
-            if !vn_rg.is_persist() {
-                continue; // Skip code refs / locals.
-            }
-            // Only the default data space (RAM) holds mapped globals.
-            if vn_rg.get_space() != AddressSpace::Ram {
-                continue;
-            }
-            drop(vn_rg);
-            let mut vn_w = vn_arc.write().unwrap();
-            // Address-tied globals are read-only storage references.
-            vn_w.set_flags(varnode_flags::PERSIST);
-            vn_w.set_flags(varnode_flags::READONLY);
-        }
-        // Ghidra always returns 0.
+        // coreaction.hh:885: virtual int4 apply(Funcdata &data)
+        //   { data.mapGlobals(); return 0; }
+        // mapGlobals can throw LowlevelError ("Could not discover scope",
+        // funcdata_varnode.cc:1705); Rust propagates it through the Result.
+        fd.map_globals()?;
         Ok(action_status::NO_CHANGE)
     }
 
@@ -13762,11 +13730,15 @@ mod tests {
     }
 
     #[test]
-    fn test_action_mapglobals_marks_persistent_ram_varnodes() {
-        // ActionMapGlobals must flag persistent RAM-space varnodes as
-        // read-only globals (the pragmatic Rugra side-effect of
-        // funcdata_varnode.cc:1653 mapGlobals, which in Ghidra builds a
-        // Symbol; Rugra sets PERSIST+READONLY instead).
+    fn test_action_mapglobals_creates_symbol_for_persistent_ram_varnodes() {
+        // ActionMapGlobals::apply is exactly `data.mapGlobals(); return 0`
+        // (coreaction.hh:885). For a persistent RAM (global) varnode with no
+        // symbol (no channel attached in unit tests), the legacy proxy leg
+        // records a Symbol name at the group address via
+        // ScopeLocal::buildVariableName's persist branch (database.cc:2447:
+        // <printNameBase>Ram<offset>; no high type → no printNameBase). The
+        // old flag-only stub behavior (blanket PERSIST+READONLY) was NOT
+        // Ghidra behavior and is gone.
         use crate::address::Address;
         use crate::varnode::{varnode_flags, Varnode};
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
@@ -13776,7 +13748,9 @@ mod tests {
         // A non-persistent RAM varnode (local) — must be left untouched.
         let local = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_ram(0x100, 4)));
         local.write().unwrap().set_flags(varnode_flags::WRITTEN);
-        // A persistent but non-RAM varnode — must be skipped.
+        // A persistent but non-RAM varnode — mapGlobals processes it too in
+        // Ghidra (the walk has no space gate; only the persist gate does the
+        // filtering, cc:1669), but no symbol is forced read-only anywhere.
         let reg = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_register(0x10, 4)));
         reg.write().unwrap().set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
         fd.vbank
@@ -13791,22 +13765,26 @@ mod tests {
 
         let status = ActionMapGlobals::new().apply(&mut fd).unwrap();
         assert_eq!(status, action_status::NO_CHANGE, "mapglobals returns 0");
+        // The uncovered persistent RAM group got a Symbol (proxy form).
+        let name = fd
+            .symbol_table
+            .get(&0x4000)
+            .expect("persistent RAM group must gain a symbol name");
         assert!(
-            g.read().unwrap().is_read_only(),
-            "persistent RAM varnode must be flagged read-only"
+            name.contains("Ram"),
+            "persist-branch default name is <printNameBase>Ram<offset>, got {name}"
+        );
+        // No blanket READONLY: that was the stub's invention.
+        assert!(
+            !g.read().unwrap().is_read_only(),
+            "mapGlobals never forces readonly (that was the old stub)"
         );
         assert!(
             g.read().unwrap().is_persist(),
             "persistent RAM varnode keeps its persist flag"
         );
-        assert!(
-            !local.read().unwrap().is_read_only(),
-            "non-persistent local must not be flagged"
-        );
-        assert!(
-            !reg.read().unwrap().is_read_only(),
-            "non-RAM persistent varnode must be skipped"
-        );
+        // Locals are not heritaged into global symbols.
+        assert!(!fd.symbol_table.contains_key(&0x100));
     }
 
     #[test]

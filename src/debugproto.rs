@@ -68,6 +68,13 @@ pub struct DebugGlobalVariable {
     pub address: u64,
     pub name: String,
     pub data_type: Arc<Datatype>,
+    /// Name of the nearest enclosing `DW_TAG_subprogram` when the variable
+    /// DIE is nested inside a function (a C function-static). Ghidra's DWARF
+    /// analyzer imports those into the function's namespace, so the symbol
+    /// display name is `<parent_function>::<name>` (locked-oracle witnesses:
+    /// `my_get_token::save` at 0x17510, `next_url::beenhere` at 0x17518);
+    /// CU-level variables keep `None` and stay in the global scope.
+    pub parent_function: Option<String>,
 }
 
 /// Static-address global variables keyed by storage address.
@@ -88,14 +95,32 @@ impl DebugGlobalDatabase {
             let unit = dwarf.unit(header).context("loading DWARF unit")?;
             address_size = unit.encoding().address_size as usize;
             let mut entries = unit.entries();
-            while let Some((_, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
+            // (depth, name, is_subprogram) stack for parent-function
+            // tracking: next_dfs yields (depth, entry) in document order, so
+            // popping the stack down to depth-1 leaves the direct parent.
+            let mut scope_stack: Vec<(usize, Option<String>, bool)> = Vec::new();
+            while let Some((depth, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
+                let depth = usize::try_from(depth).unwrap_or(0);
+                while scope_stack.len() > depth {
+                    scope_stack.pop();
+                }
+                let parent_function = scope_stack
+                    .iter()
+                    .rev()
+                    .find(|(_, _, is_subprogram)| *is_subprogram)
+                    .and_then(|(_, name, _)| name.clone());
+                let entry_name =
+                    entry_string(&dwarf, &unit, entry, gimli::DW_AT_name)?;
                 if entry.tag() != gimli::DW_TAG_variable {
+                    scope_stack.push((depth, entry_name, entry.tag() == gimli::DW_TAG_subprogram));
                     continue;
                 }
                 let Some(address) = static_location_address(&unit, entry)? else {
+                    scope_stack.push((depth, entry_name, false));
                     continue;
                 };
-                let Some(name) = entry_string(&dwarf, &unit, entry, gimli::DW_AT_name)? else {
+                let Some(name) = entry_name.clone() else {
+                    scope_stack.push((depth, entry_name, false));
                     continue;
                 };
                 let data_type = match entry_reference(&unit, entry, gimli::DW_AT_type)? {
@@ -108,8 +133,10 @@ impl DebugGlobalDatabase {
                         address,
                         name,
                         data_type,
+                        parent_function,
                     },
                 );
+                scope_stack.push((depth, entry_name, false));
             }
         }
         Ok(Self {

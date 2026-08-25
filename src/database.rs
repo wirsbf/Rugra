@@ -4172,6 +4172,59 @@ impl Database {
         out
     }
 
+    // Ghidra: database.cc:1246 Scope::queryContainer (live-entry form)
+    /// The live-entry sibling of [`Database::query_container`]: the same
+    /// `mapScope` + `stackContainer` walk, returning the scope-owned
+    /// `SymbolEntry` itself (as an `Arc<RwLock<…>>` handle for
+    /// `Varnode::set_symbol_entry`) plus the owning scope id, instead of the
+    /// by-value `QueryContainerHit` projection. This is the form
+    /// `Funcdata::mapGlobals`/`linkSymbol` consumers need when they attach
+    /// the entry to a Varnode (funcdata_varnode.cc:1207-1211/1701): the C++
+    /// hands the `SymbolEntry*` straight to `vn->setSymbolEntry`, and the
+    /// symbol identity inside the shared `Arc` must survive so
+    /// `HighVariable::set_symbol`'s conflict check (variable.cc:249-256)
+    /// compares the same symbol.
+    pub fn query_container_entry(
+        &self,
+        qpoint_scope_id: u64,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+    ) -> Option<(u64, std::sync::Arc<std::sync::RwLock<SymbolEntry>>)> {
+        // database.cc:1250 — const Scope *basescope = mapScope(this, ...).
+        let base = self.map_scope(qpoint_scope_id, addr);
+        let stack = self.ancestor_stack(base);
+        // database.cc:1251 — stackContainer(basescope, NULL, ...).
+        let (scope_idx, entry_idx) = Scope::query_container(&stack, addr, size, usepoint)?;
+        let scope = *stack.get(scope_idx)?;
+        let entry = scope.entries.get(entry_idx)?;
+        Some((
+            scope.unique_id,
+            std::sync::Arc::new(std::sync::RwLock::new(entry.clone())),
+        ))
+    }
+
+    // Ghidra: database.cc:1353 Scope::discoverScope (channel form)
+    /// The discover leg of the query channel: which scope owns the given
+    /// memory range (ownership does not require a Symbol to exist there).
+    /// Faithful to `Scope::discoverScope` (database.cc:1353-1366) realized
+    /// through the Database scope stack: `mapScope(this, addr, usepoint)`
+    /// then walk parents until `inScope(addr, sz, usepoint)` holds. The
+    /// constant-address guard (cc:1358 `addr.isConstant()`) is the caller's
+    /// space gate — Rugra's `Address` carries no space, so callers only
+    /// reach this channel for default-data-space (RAM) addresses.
+    pub fn discover_scope(&self, qpoint_scope_id: u64, addr: Address, sz: i32) -> Option<u64> {
+        let base = self.map_scope(qpoint_scope_id, addr);
+        let stack = self.ancestor_stack(base);
+        // cc:1360-1364 — from the base scope upward, first scope in scope wins.
+        for scope in stack {
+            if scope.in_scope(addr, sz) {
+                return Some(scope.unique_id);
+            }
+        }
+        None
+    }
+
     // Ghidra: database.cc:2924 Database::numScopes
     /// Number of scopes.
     pub fn num_scopes(&self) -> usize {

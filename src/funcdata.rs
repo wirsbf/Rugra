@@ -1133,6 +1133,53 @@ impl Funcdata {
         if let Some(idx) = entry_idx {
             // cc:1170-1172: sym = handleSymbolConflict(entry, vn);
             self.handle_symbol_conflict(idx, vn)
+        } else if vn.read().unwrap().get_space() == crate::space::AddressSpace::Ram {
+            // The parent leg of the same queryProperties call (B3 channel):
+            // Ghidra's ONE query walks ScopeLocal -> parent -> global scope
+            // (database.cc:1268 stackContainer); Rugra's ScopeLocal leg saw
+            // no local symbol, so consult the Database global scope — where
+            // global symbols (ELF/DWARF/GOT imports, plus the Symbols
+            // mapGlobals created at fixateglobals time) answer.
+            let up = crate::address::Address::new(usepoint.unwrap_or(0));
+            if let Some((_scope_id, entry_arc)) =
+                self.query_container_entry_parent_scope(
+                    crate::address::Address::new(vn_offset),
+                    1,
+                    up,
+                )
+            {
+                // cc:1170-1171 equivalent for a global-scope entry: no
+                // conflicting local HighVariable exists to adjudicate (the
+                // entry is not in ScopeLocal), so this is the plain
+                // vn->setSymbolEntry(entry) + high->setSymbol(vn) link.
+                vn.write().unwrap().set_symbol_entry(entry_arc);
+                if let Some(high) = vn.read().unwrap().get_high().cloned() {
+                    high.write().unwrap().set_symbol(vn);
+                    // RUGRA-GLUE: publish the symbol's display name onto the
+                    // high the way the namevars write-back bridge does for
+                    // ScopeLocal symbols (Ghidra resolves the name through
+                    // high->getSymbol() at print; Rugra's printc reads
+                    // high.get_name() behind its symbol_table priority).
+                    let display = {
+                        let h = high.read().unwrap();
+                        h.symbol
+                            .as_ref()
+                            .map(|s| s.read().unwrap().get_display_name().to_string())
+                    };
+                    if let Some(name) = display {
+                        if !name.is_empty() {
+                            high.write().unwrap().name = name;
+                        }
+                    }
+                }
+            }
+            // A global symbol always carries a name (never name-undefined),
+            // so linkSymbol's ScopeLocal-idx contract is satisfied
+            // vacuously: return None — the caller's post-link steps
+            // (name-undefined default naming, sizelock override,
+            // non-global finalizeDatatype) are all no-ops for a named
+            // global symbol.
+            None
         } else {
             // cc:1173-1181: must create a symbol entry.
             let mut sym = None;
@@ -1200,6 +1247,43 @@ impl Funcdata {
         let db = symboltab.read().unwrap();
         let qpoint = db.global_scope_id;
         Some(db.query_properties(qpoint, addr, size, usepoint))
+    }
+
+    // Ghidra: database.cc:1246 Scope::queryContainer (live-entry form;
+    // funcdata_varnode.cc:1701 mapGlobals / cc:1169 linkSymbol consumers)
+    /// The live-entry arm of the query channel: the smallest containing
+    /// SymbolEntry as an attachable handle (see
+    /// [`crate::database::Database::query_container_entry`]), for callers
+    /// that must link the entry onto a Varnode the way the C++ hands the
+    /// `SymbolEntry*` to `vn->setSymbolEntry`. `None` when no channel is
+    /// attached (legacy/test Funcdata).
+    pub fn query_container_entry_parent_scope(
+        &self,
+        addr: crate::address::Address,
+        size: i32,
+        usepoint: crate::address::Address,
+    ) -> Option<(u64, std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>)> {
+        let symboltab = self.arch.as_ref()?.symboltab.clone()?;
+        let db = symboltab.read().unwrap();
+        let qpoint = db.global_scope_id;
+        db.query_container_entry(qpoint, addr, size, usepoint)
+    }
+
+    // Ghidra: database.cc:1353 Scope::discoverScope (funcdata_varnode.cc:1703
+    /// consumer form) — which scope owns the range at `addr`
+    /// (`Database::discover_scope` through the same global-scope query point
+    /// as the other channel arms; ownership does not require a Symbol).
+    /// Returns the discovered scope id, or `None` when no channel is
+    /// attached.
+    pub fn discover_scope_parent_scope(
+        &self,
+        addr: crate::address::Address,
+        sz: i32,
+    ) -> Option<u64> {
+        let symboltab = self.arch.as_ref()?.symboltab.clone()?;
+        let db = symboltab.read().unwrap();
+        let qpoint = db.global_scope_id;
+        db.discover_scope(qpoint, addr, sz)
     }
 
     // Ghidra: database.cc:1796 Scope::isReadOnly (ruleaction.cc:7372
@@ -4028,33 +4112,97 @@ impl Funcdata {
     /// Gather storage properties for `vn` from the symbol/scope and apply them.
     /// Faithful to `Funcdata::setVarnodeProperties` (funcdata_varnode.cc:25-42):
     ///   if (!vn->isMapped()) {
-    ///     queryProperties(vn->getAddr(), vn->getSize(), usepoint, vflags);
-    ///     if (entry) vn->setSymbolProperties(entry);
-    ///     else       vn->setFlags(vflags & ~typelock);
+    ///     entry = localmap->queryProperties(vn->getAddr(), vn->getSize(),
+    ///                                       vn->getUsePoint(*this), vflags);
+    ///     if (entry != NULL) vn->setSymbolProperties(entry);
+    ///     else               vn->setFlags(vflags & ~Varnode::typelock);
     ///   }
     ///   if (vn->cover == NULL && isHighOn()) vn->calcCover();
-    /// Rugra: uses `symbol_table` as the backing store (matching the existing
-    /// `link_symbol` strategy). When an entry is found we set MAPPED so we
-    /// don't re-query (faithful to setSymbolProperties' side-effect). The full
-    /// ScopeLocal::queryProperties API is not yet ported (scope gap noted in
-    /// docs/alignment_audit/funcdata_audit.md).
+    ///
+    /// Query routing (B3-COREACTION-CONSTANTPTR-0001 channel): Ghidra's ONE
+    /// `localmap->queryProperties` transparently walks ScopeLocal → parent →
+    /// global scope (database.cc:1268 stackContainer). Rugra's ScopeLocal
+    /// query models the local leg; the parent/global leg is the Database
+    /// query channel (`query_properties_parent_scope`). For default-data
+    /// (RAM) space varnodes the channel answers first — this is where the
+    /// global scope's `mapped|addrtied|persist` fold (database.cc:1271-1277)
+    /// lands, marking global storage persistent for `mapGlobals`
+    /// (funcdata_varnode.cc:1669's `if (!vn->isPersist()) continue;`).
+    /// Non-RAM spaces keep the `symbol_table` name proxy (the channel models
+    /// the global scope over RAM only; the ScopeLocal leg remains the
+    /// registered funcdata_audit gap).
     pub fn set_varnode_properties(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
         // cc:28: if (!vn->isMapped()) — one more chance to find an entry now
         // that we know the usepoint.
         let is_mapped = vn.read().unwrap().is_mapped();
         if !is_mapped {
-            // cc:30-31: queryProperties(addr, size, usepoint, vflags).
-            let addr = vn.read().unwrap().get_offset();
-            // Rugra: symbol_table maps addr→name (best-effort scope).
-            if self.symbol_table.get(&addr).is_some() {
-                // cc:32-33: entry found → vn->setSymbolProperties(entry).
-                // Rugra has no SymbolEntry to attach here; the address already
-                // resolves via symbol_table. Set the MAPPED flag so we don't
-                // re-query (faithful to the side-effect of setSymbolProperties).
-                vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+            let (space, addr, size) = {
+                let r = vn.read().unwrap();
+                (r.get_space(), r.get_offset(), r.get_size() as i32)
+            };
+            // cc:30-31: queryProperties(addr, size, usepoint, vflags). The
+            // usepoint is vn->getUsePoint(*this) (varnode.cc:696-703).
+            let usepoint = vn.read().unwrap().get_use_point(self);
+            let mut answered = false;
+            if space == crate::space::AddressSpace::Ram {
+                if let Some((hit, vflags)) = self.query_properties_parent_scope(
+                    crate::address::Address::new(addr),
+                    size,
+                    usepoint,
+                ) {
+                    if let Some(hit) = hit {
+                        // cc:32-33: entry != NULL → vn->setSymbolProperties(entry):
+                        // attach the live entry (mapentry on type-lock) and fold
+                        // the entry's flags minus typelock (varnode.cc:410-421).
+                        let entry_arc = {
+                            let symboltab = self.arch.as_ref()
+                                .and_then(|a| a.symboltab.clone());
+                            match symboltab {
+                                Some(tab) => {
+                                    let db = tab.read().unwrap();
+                                    db.query_container_entry(
+                                        db.global_scope_id,
+                                        crate::address::Address::new(addr),
+                                        size,
+                                        usepoint,
+                                    ).map(|(_, e)| e)
+                                }
+                                None => None,
+                            }
+                        };
+                        match entry_arc {
+                            Some(entry) => {
+                                vn.write().unwrap().set_symbol_properties(&entry);
+                            }
+                            None => {
+                                // Entry projection exists but the live-entry
+                                // walk missed (cannot happen: same walk); fall
+                                // through to the flags fold for safety.
+                                let fl = vflags
+                                    & !crate::varnode::varnode_flags::TYPELOCK;
+                                vn.write().unwrap().set_flags(fl);
+                            }
+                        }
+                    } else {
+                        // cc:34-35: vn->setFlags(vflags & ~typelock) — the
+                        // scope-only fold mapped|addrtied|persist(+property).
+                        let fl = vflags & !crate::varnode::varnode_flags::TYPELOCK;
+                        vn.write().unwrap().set_flags(fl);
+                    }
+                    answered = true;
+                }
             }
-            // cc:34-35: vn->setFlags(vflags & ~typelock). With vflags==0 the
-            // flag mutation is a no-op; typelock is set by updateType.
+            if !answered {
+                // Legacy fallback (no channel / non-RAM space): the
+                // `symbol_table` name proxy, mapping addr→name.
+                if self.symbol_table.get(&addr).is_some() {
+                    // cc:32-33 side-effect approximation: set MAPPED so we
+                    // don't re-query.
+                    vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+                }
+                // cc:34-35 with vflags==0 is a no-op; typelock is set by
+                // updateType.
+            }
         }
         // cc:38-41: if (vn->cover == NULL && isHighOn()) vn->calcCover().
         let high_on = (self.flags & funcdata_flags::HIGHLEVEL_ON) != 0;
@@ -7152,12 +7300,24 @@ impl Funcdata {
     // Ghidra: funcdata_varnode.cc:1606 Funcdata::coverVarnodes
     /// Ensure every Varnode in `list` (in Address order) overlaps a Symbol so
     /// it will link. Faithful to `Funcdata::coverVarnodes`
-    /// (funcdata_varnode.cc:1606-1627). For each address group, pick the
-    /// biggest Varnode; if it has no overlapping Symbol entry, create one
-    /// named `<entry>_<diff>` at the over-extending offset.
-    /// RUGRA-GAP: ScopeLocal has no findContainer/addSymbol; we approximate by
-    /// recording the synthetic name in symbol_table (matching the existing
-    /// `remap_varnode` strategy) and setting MAPPED.
+    /// (funcdata_varnode.cc:1606-1627):
+    ///   scope = entry->getSymbol()->getScope();
+    ///   for(i..list.size()) {
+    ///     if (i+1<size && list[i+1]->getAddr() == vn->getAddr()) continue;
+    ///     usepoint = vn->getUsePoint(*this);
+    ///     overlapEntry = scope->findContainer(vn->getAddr(), vn->getSize(), usepoint);
+    ///     if (overlapEntry == NULL) {
+    ///       diff = vn->getOffset() - entry->getAddr().getOffset();
+    ///       name = entry->getSymbol()->getName() + '_' + diff;
+    ///       if (vn->isAddrTied()) usepoint = Address();
+    ///       scope->addSymbol(name, vn->getHigh()->getType(), vn->getAddr(), usepoint);
+    ///     }
+    ///   }
+    /// The channel form: `findContainer` is the parent-scope container query
+    /// (live-entry arm) and `addSymbol` lands on the Database global scope —
+    /// the discovered owner of global storage (mapGlobals callers pass an
+    /// entry the same channel answered). The legacy no-channel form keeps the
+    /// `symbol_table` proxy (documented fallback).
     pub fn cover_varnodes(
         &mut self,
         entry_addr: u64,
@@ -7167,29 +7327,65 @@ impl Funcdata {
         let mut i = 0;
         while i < list.len() {
             let vn = &list[i];
-            // cc:1614-1615: skip if next varnode shares the same address
-            // (we only check once per address, picking the biggest implicitly
-            // by taking the last same-address varnode).
+            // cc:1614-1615: only check once per address — the LAST varnode at
+            // each address (list is in Address order).
             let vn_addr = *vn.read().unwrap().get_addr();
-            if i + 1 < list.len() && list[i + 1].read().unwrap().get_addr().as_u64() == vn_addr.as_u64()
+            if i + 1 < list.len()
+                && list[i + 1].read().unwrap().get_addr().as_u64() == vn_addr.as_u64()
             {
                 i += 1;
                 continue;
             }
             // cc:1617: usepoint = vn->getUsePoint(*this).
+            let usepoint = vn.read().unwrap().get_use_point(self);
+            let (vn_size, is_addr_tied, high_type) = {
+                let r = vn.read().unwrap();
+                let ct = r.high.as_ref().map(|h| h.read().unwrap().get_type());
+                (r.get_size() as i32, r.is_addr_tied(), ct)
+            };
             // cc:1618: overlapEntry = scope->findContainer(addr, size, usepoint).
-            // Rugra: symbol_table lookup by address is the analogue of
-            // findContainer; if present the varnode already links.
-            let already_mapped = vn.read().unwrap().is_mapped()
-                || self.symbol_table.contains_key(&vn_addr.as_u64());
-            if !already_mapped {
-                // cc:1619-1624: diff = vn->getOffset() - entry->getAddr();
-                //   name = entry->getName() + "_" + diff; addSymbol(...).
-                let diff = vn_addr.as_u64() as i64 - entry_addr as i64;
+            let overlap = self.query_container_entry_parent_scope(
+                vn_addr,
+                vn_size,
+                usepoint,
+            );
+            if overlap.is_none() {
+                // cc:1619-1624: uncovered internal varnode — build
+                // `<entry>_<diff>` and addSymbol at vn's address.
+                let diff = (vn_addr.as_u64() - entry_addr) as i64;
                 let sym_name = format!("{}_{}", entry_name, diff);
-                self.symbol_table.insert(vn_addr.as_u64(), sym_name);
-                vn.write().unwrap()
-                    .set_flags(crate::varnode::varnode_flags::MAPPED);
+                // cc:1622-1623: addrTied varnodes get the empty usepoint
+                // (the channel addSymbol maps addrtied storage directly).
+                let _ = is_addr_tied;
+                // cc:1624: addSymbol(name, vn->getHigh()->getType(), addr,
+                // usepoint) — the mapping size is the TYPE's size
+                // (Scope::addMapPoint), not the varnode's.
+                let sym_size = high_type
+                    .as_ref()
+                    .map(|t| t.get_size() as i32)
+                    .unwrap_or(vn_size);
+                let added = if let Some(symboltab) =
+                    self.arch.as_ref().and_then(|a| a.symboltab.clone())
+                {
+                    let global_scope_id = symboltab.read().unwrap().global_scope_id;
+                    let mut db = symboltab.write().unwrap();
+                    db.add_symbol_mapped(
+                        global_scope_id,
+                        &sym_name,
+                        high_type,
+                        vn_addr,
+                        sym_size,
+                    )
+                    .is_some()
+                } else {
+                    false
+                };
+                if !added {
+                    // Legacy fallback: the symbol_table name proxy.
+                    self.symbol_table.insert(vn_addr.as_u64(), sym_name);
+                    vn.write().unwrap()
+                        .set_flags(crate::varnode::varnode_flags::MAPPED);
+                }
             }
             i += 1;
         }
@@ -9140,82 +9336,254 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:1653 Funcdata::mapGlobals
-    /// For each persistent global Varnode that has no symbol yet, create / link
-    /// a global Symbol. Faithful to `Funcdata::mapGlobals`
+    /// Search for address-tied persistent Varnodes whose storage falls in the
+    /// global Scope, then build a new global Symbol if one didn't exist
+    /// before. Faithful to `Funcdata::mapGlobals`
     /// (funcdata_varnode.cc:1653-1719):
-    ///   for each run of persistent Varnodes sharing a base address:
-    ///     maxvn = biggest vn; ct = type of maxvn (or sized base type);
+    ///   iter = vbank.beginLoc() .. endLoc();
+    ///   while (iter != enditer) {
+    ///     vn = *iter++;
+    ///     if (vn->isFree()) continue;
+    ///     if (!vn->isPersist()) continue;            // could be a code ref
+    ///     if (vn->getSymbolEntry() != NULL) continue;
+    ///     maxvn = vn; addr = vn->getAddr();
+    ///     endaddr = addr + vn->getSize();
+    ///     uncoveredVarnodes.clear();
+    ///     while (iter != enditer) {
+    ///       vn = *iter;
+    ///       if (!vn->isPersist()) break;
+    ///       if (vn->getAddr() < endaddr) {
+    ///         if (vn->getAddr() != addr && vn->getSymbolEntry() == NULL)
+    ///           uncoveredVarnodes.push_back(vn);
+    ///         endaddr = vn->getAddr() + vn->getSize();
+    ///         if (vn->getSize() > maxvn->getSize()) maxvn = vn;
+    ///         ++iter;
+    ///       } else break;
+    ///     }
+    ///     if ((maxvn->getAddr() == addr)&&(addr+maxvn->getSize() == endaddr))
+    ///       ct = maxvn->getHigh()->getType();
+    ///     else
+    ///       ct = glb->types->getBase(endaddr-addr, TYPE_UNKNOWN);
+    ///     fl = 0; Address usepoint;   // empty: existing symbol is addrtied
     ///     entry = localmap->queryProperties(addr, 1, usepoint, fl);
     ///     if (entry == NULL) {
-    ///       discover = localmap->discoverScope(addr, sz, usepoint);
-    ///       name = discover->buildVariableName(addr, usepoint, ct, 0,
-    ///                                          addrtied|persist);
+    ///       discover = localmap->discoverScope(addr, ct->getSize(), usepoint);
+    ///       if (discover == NULL) throw LowlevelError("Could not discover scope");
+    ///       index = 0;
+    ///       name = discover->buildVariableName(addr, usepoint, ct, index,
+    ///                                          Varnode::addrtied|Varnode::persist);
     ///       discover->addSymbol(name, ct, addr, usepoint);
-    ///     } else if ((addr+sz-1) > (entry_addr+entry_sz-1)) {
+    ///     } else if ((addr+ct->getSize())-1 > (entry_addr+entry->getSize())-1) {
     ///       inconsistentuse = true;
-    ///       if (!uncoveredVarnodes.empty()) coverVarnodes(entry, uncovered);
+    ///       if (!uncoveredVarnodes.empty()) coverVarnodes(entry, uncoveredVarnodes);
     ///     }
-    ///   if (inconsistentuse) warningHeader("Globals starting with '_' ...");
-    /// RUGRA-GAP: Rugra's ScopeLocal has no queryProperties/discoverScope/
-    /// addSymbol/buildVariableName; we approximate by recording each new
-    /// global in `symbol_table` (matching the existing link_symbol strategy)
-    /// and calling cover_varnodes when an inconsistent overlap is detected.
-    pub fn map_globals(&mut self) {
-        // Gather persistent varnodes (sorted by Address via loc_tree).
+    ///   }
+    ///   if (inconsistentuse) warningHeader("Globals starting with '_' overlap smaller symbols at the same address");
+    ///
+    /// Channel realization: the queryProperties/discoverScope/addSymbol legs
+    /// route through the Database query channel (a function-local scope's
+    /// parent is the global scope — the same equivalence the other channel
+    /// arms document). With no channel attached (legacy/test Funcdata), the
+    /// walk degrades to the documented `symbol_table` proxy.
+    pub fn map_globals(&mut self) -> Result<(), crate::error::Error> {
+        use crate::space::AddressSpace;
+        // cc:1664-1666: vbank.beginLoc()..endLoc() — every space, location
+        // order; the persist gate does the space filtering.
         let candidates: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
             .vbank
             .loc_tree
             .iter()
             .map(|lr| lr.0.clone())
-            .filter(|vn| {
-                let r = vn.read().unwrap();
-                !r.is_free() && r.is_persist()
-            })
             .collect();
         let mut inconsistent = false;
-        let mut i = 0;
+        let mut i = 0usize;
         while i < candidates.len() {
             let vn = candidates[i].clone();
             i += 1;
-            // cc:1670: skip if already has a symbol entry.
-            let already_mapped = vn.read().unwrap().is_mapped();
-            if already_mapped { continue; }
-            // cc:1671-1691: gather the run of overlapping persistent varnodes.
-            let (addr, mut endaddr, mut max_size) = {
-                let r = vn.read().unwrap();
-                let a = r.loc.as_u64();
-                (a, a + r.size as u64, r.size)
-            };
+            // cc:1668-1670: skip free, non-persist, and already-linked.
+            if vn.read().unwrap().is_free() { continue; }
+            if !vn.read().unwrap().is_persist() { continue; } // Could be a code ref
+            if vn.read().unwrap().get_symbol_entry().is_some() { continue; }
+            // cc:1671-1673: the group's base address and initial end.
+            let maxvn = vn.clone();
+            let addr = { let r = vn.read().unwrap(); *r.get_addr() };
+            let mut endaddr = addr.as_u64() + vn.read().unwrap().get_size() as u64;
             let mut uncovered: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+            // cc:1675-1691: extend over overlapping persistent varnodes.
+            let mut max_size = vn.read().unwrap().get_size();
+            let mut max_addr = addr;
             while i < candidates.len() {
                 let next = candidates[i].clone();
-                let r = next.read().unwrap();
-                if !r.is_persist() { break; }
-                if r.loc.as_u64() >= endaddr { break; }
-                // cc:1682-1683: internal varnode with no symbol → uncovered.
-                if r.loc.as_u64() != addr && !r.is_mapped() {
-                    uncovered.push(next.clone());
+                let (n_persist, n_addr_arc, n_size, n_has_entry) = {
+                    let r = next.read().unwrap();
+                    (r.is_persist(), *r.get_addr(), r.get_size(), r.get_symbol_entry().is_some())
+                };
+                if !n_persist { break; }
+                if n_addr_arc.as_u64() < endaddr {
+                    // cc:1679-1683: internal varnodes without a symbol will
+                    // not link to the base-address symbol — remember them.
+                    if n_addr_arc.as_u64() != addr.as_u64() && !n_has_entry {
+                        uncovered.push(next.clone());
+                    }
+                    // cc:1684: endaddr extends to this varnode's end.
+                    endaddr = n_addr_arc.as_u64() + n_size as u64;
+                    // cc:1685-1686: track the biggest varnode in the group.
+                    if n_size > max_size {
+                        max_size = n_size;
+                        max_addr = n_addr_arc;
+                    }
+                    i += 1;
+                } else {
+                    break;
                 }
-                endaddr = endaddr.max(r.loc.as_u64() + r.size as u64);
-                if r.size > max_size { max_size = r.size; }
-                i += 1;
             }
-            // cc:1697-1701: queryProperties → does a symbol already overlap?
-            let has_symbol = self.scope.as_ref().map(|s| s.has_overlap(addr, 1)).unwrap_or(false)
-                || self.symbol_table.contains_key(&addr);
-            if !has_symbol {
-                // cc:1702-1709: discoverScope + buildVariableName + addSymbol.
-                // Rugra: record a synthetic name in symbol_table.
-                let name = format!("global_{:x}", addr);
-                self.symbol_table.insert(addr, name);
-            } else if (addr + max_size as u64).saturating_sub(1)
-                > self.symbol_table.get(&addr).map(|_| addr).unwrap_or(u64::MAX)
-            {
-                // cc:1711-1715: inconsistent overlap → cover uncovered varnodes.
-                inconsistent = true;
-                if !uncovered.is_empty() {
-                    let entry_name = self.symbol_table.get(&addr).cloned().unwrap_or_default();
-                    self.cover_varnodes(addr, &entry_name, &uncovered);
+            // cc:1692-1695: the group's Datatype — the biggest varnode's
+            // high type when it spans exactly [addr,endaddr), else a sized
+            // unknown base.
+            let ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> =
+                if max_addr.as_u64() == addr.as_u64()
+                    && addr.as_u64() + max_size as u64 == endaddr
+                {
+                    maxvn
+                        .read()
+                        .unwrap()
+                        .high
+                        .as_ref()
+                        .map(|h| h.read().unwrap().get_type())
+                } else {
+                    let span = (endaddr - addr.as_u64()) as usize;
+                    crate::type_system::typefactory::TypeFactory::shared_default()
+                        .write()
+                        .unwrap()
+                        .get_base(span, crate::type_system::datatype::TypeMetatype::Unknown)
+                };
+            let ct_size = ct.as_ref().map(|t| t.get_size()).unwrap_or(1);
+            // cc:1697-1701: fl = 0; empty usepoint (assume existing symbol
+            // is addrtied); entry = queryProperties(addr, 1, usepoint, fl).
+            let query = self.query_properties_parent_scope(
+                addr,
+                1,
+                crate::address::Address::new(0), // the empty usepoint Address()
+            );
+            match query {
+                Some((None, _fl)) => {
+                    // cc:1702-1709: no symbol covers the base address —
+                    // discoverScope + buildVariableName + addSymbol.
+                    let Some(discover) = self.discover_scope_parent_scope(
+                        addr,
+                        ct_size as i32,
+                    ) else {
+                        // cc:1704-1705: Ghidra throws LowlevelError and the
+                        // function's decompile fails; mirror the fatal error
+                        // through the Action's Result channel.
+                        return Err(crate::error::Error::Lowlevel(
+                            "Could not discover scope".to_string(),
+                        ));
+                    };
+                    // cc:1706-1708: index = 0; name = buildVariableName(
+                    // addr, usepoint, ct, index, addrtied|persist).
+                    let mut index: i32 = 0;
+                    let symbolname = self
+                        .scope
+                        .as_ref()
+                        .and_then(|s| {
+                            s.build_variable_name(
+                                AddressSpace::Ram,
+                                addr.as_u64(),
+                                None, // the empty usepoint
+                                ct.as_ref(),
+                                &mut index,
+                                crate::varnode::varnode_flags::ADDRTIED
+                                    | crate::varnode::varnode_flags::PERSIST,
+                            )
+                        })
+                        .unwrap_or_else(|| format!("Ram{:016x}", addr.as_u64()));
+                    // cc:1709: discover->addSymbol(symbolname, ct, addr, usepoint).
+                    let added = self
+                        .arch
+                        .as_ref()
+                        .and_then(|a| a.symboltab.clone())
+                        .map(|symboltab| {
+                            let mut db = symboltab.write().unwrap();
+                            db.add_symbol_mapped(
+                                discover,
+                                &symbolname,
+                                ct.clone(),
+                                addr,
+                                ct_size as i32,
+                            )
+                            .is_some()
+                        })
+                        .unwrap_or(false);
+                    if !added {
+                        // Legacy no-channel fallback: the symbol_table proxy.
+                        self.symbol_table.insert(addr.as_u64(), symbolname);
+                    }
+                }
+                Some((Some(hit), _fl)) => {
+                    // cc:1711-1715: entry exists — if the group extends past
+                    // the entry's end, provide symbols for uncovered
+                    // internal varnodes.
+                    let entry_end = hit.entry_addr.as_u64() + hit.entry_size.max(0) as u64;
+                    if (addr.as_u64() + ct_size as u64).saturating_sub(1)
+                        > entry_end.saturating_sub(1)
+                    {
+                        inconsistent = true;
+                        if !uncovered.is_empty() {
+                            // cc:1714: coverVarnodes(entry, uncoveredVarnodes).
+                            let entry_name = hit.symbol_name.clone();
+                            let entry_addr = hit.entry_addr.as_u64();
+                            self.cover_varnodes(entry_addr, &entry_name, &uncovered);
+                        }
+                    }
+                }
+                None => {
+                    // No channel attached (legacy/test Funcdata): the
+                    // documented proxy fallback — a symbol exists in the
+                    // eyes of the pipeline iff symbol_table has the address.
+                    let has_symbol = self
+                        .scope
+                        .as_ref()
+                        .map(|s| s.has_overlap(addr.as_u64(), 1))
+                        .unwrap_or(false)
+                        || self.symbol_table.contains_key(&addr.as_u64());
+                    if !has_symbol {
+                        // cc:1707-1709 naming, proxy form.
+                        let mut index: i32 = 0;
+                        let name = self
+                            .scope
+                            .as_ref()
+                            .and_then(|s| {
+                                s.build_variable_name(
+                                    AddressSpace::Ram,
+                                    addr.as_u64(),
+                                    None,
+                                    ct.as_ref(),
+                                    &mut index,
+                                    crate::varnode::varnode_flags::ADDRTIED
+                                        | crate::varnode::varnode_flags::PERSIST,
+                                )
+                            })
+                            .unwrap_or_else(|| format!("Ram{:016x}", addr.as_u64()));
+                        self.symbol_table.insert(addr.as_u64(), name);
+                    } else if (addr.as_u64() + max_size as u64).saturating_sub(1)
+                        > self
+                            .symbol_table
+                            .get(&addr.as_u64())
+                            .map(|_| addr.as_u64())
+                            .unwrap_or(u64::MAX)
+                    {
+                        // cc:1711-1715 proxy form.
+                        inconsistent = true;
+                        if !uncovered.is_empty() {
+                            let entry_name = self
+                                .symbol_table
+                                .get(&addr.as_u64())
+                                .cloned()
+                                .unwrap_or_default();
+                            self.cover_varnodes(addr.as_u64(), &entry_name, &uncovered);
+                        }
+                    }
                 }
             }
         }
@@ -9225,6 +9593,7 @@ impl Funcdata {
                 "Globals starting with '_' overlap smaller symbols at the same address",
             );
         }
+        Ok(())
     }
 
     // Ghidra: funcdata_varnode.cc:1314 Funcdata::attemptDynamicMapping
