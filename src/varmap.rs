@@ -1796,11 +1796,14 @@ impl MapState {
         }
         // Datatype *ct = guard.getOp()->getIn(1)->getTypeReadFacing(op)
         // (varmap.cc:1009) — the ADDRESS input (LOAD/STORE input slot 1).
+        // getTypeReadFacing(op) resolves union pointers via
+        // TypePointer::findResolve (type.cc:1192-1202), so the op form is
+        // required; getIn(1) is read at slot 1 (op->getSlot(this) == 1).
         let mut ct: Option<Arc<Datatype>> = {
             let op = op_arc.read().unwrap();
             let Some(in1) = op.inrefs.get(1) else { return; };
             let vn = in1.read().unwrap();
-            vn.get_type_read_facing()
+            vn.get_type_read_facing_op(&op, 1)
         };
         // if (ct->getMetatype() == TYPE_PTR) { ct = ptrTo;
         // while (ct->getMetatype() == TYPE_ARRAY) ct = base; } (cc:1010-1014)
