@@ -40,11 +40,16 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=c4a89fa88a48dba18601c17a8648fe688f981131
-rugra_source_tree=c5e0c12754bdf34327a9c72bc411656af9a27128
-rugra_source_src_tree=7f0fec54d699922c7f4f6b43aaf6bcc741583e09
-rugra_source_database_blob=4c78b645cd26782006884344fbb68b1f27f5a6de
-rugra_source_funcdata_blob=b301bd4d3a2e5116487abf66a06cd0de1353224f
+# Repinned 2026-08-25 (R-RAWQUAR F4): the first post-a1 docs/api/database.md
+# + funcdata.md edits (register-name channel, segment (b)) broke the
+# comparand sha256 gate; source pins bumped from c4a89fa8 to the reworked
+# fb1181a0 (a5446455) so the archived src carries the F1/F2 fixes. Input
+# pins (binary + sleigh assets, unchanged blobs) stay at c4a89fa8.
+rugra_source_commit=a5446455990f95c70f97a360d96fa22f602d9223
+rugra_source_tree=ba4af5b19e844f37e7d85d5fb47d836df209dc21
+rugra_source_src_tree=5ac2b51c096a2312185ebfb814911ea663e8d231
+rugra_source_database_blob=a04143bf057efb5dadac186e89446b30505c7139
+rugra_source_funcdata_blob=9d3462025e11e47da872d6bb7fa05e75181074dc
 rugra_source_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5

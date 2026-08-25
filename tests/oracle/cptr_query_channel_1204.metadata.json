@@ -14,11 +14,11 @@
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
   },
   "rugra_source": {
-    "base_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-    "base_tree": "c5e0c12754bdf34327a9c72bc411656af9a27128",
-    "base_src_tree": "7f0fec54d699922c7f4f6b43aaf6bcc741583e09",
-    "base_database_blob": "4c78b645cd26782006884344fbb68b1f27f5a6de",
-    "base_funcdata_blob": "b301bd4d3a2e5116487abf66a06cd0de1353224f",
+    "base_commit": "a5446455990f95c70f97a360d96fa22f602d9223",
+    "base_tree": "ba4af5b19e844f37e7d85d5fb47d836df209dc21",
+    "base_src_tree": "5ac2b51c096a2312185ebfb814911ea663e8d231",
+    "base_database_blob": "a04143bf057efb5dadac186e89446b30505c7139",
+    "base_funcdata_blob": "9d3462025e11e47da872d6bb7fa05e75181074dc",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
@@ -26,9 +26,9 @@
   "comparand": {
     "cpp_fixture_sha256": "d661713654bb13301c150a1e7f91b486238ca3e0aab047dba9d739f8a4bcd7d4",
     "rust_fixture_sha256": "51b4c2e291fb80b42552ea60239ed267f42f9b703d6442d827deab40a9315c68",
-    "api_database_sha256": "93518639cd8681517fb8f5b6ba7b75b20d75b2752d18703f62d0eebed78c25d7",
-    "api_funcdata_sha256": "c34a98e962780bb7053fa87dc32dfd0e2a846b1da344716fc16eee00b05fa8ef",
-    "runner_sha256": "91e673860a0d9b4a2bf781cabe1b5c593a0ebd97f8d92ae22f56a9a9c8d80c09"
+    "api_database_sha256": "493f961373f0756b3196b627639c5db3b505e7634c8eb2b0fab32b31f4d57e52",
+    "api_funcdata_sha256": "6539fa993a8959c54806a0b5bdebb9667040e5d631927a1365cdedc847b974b7",
+    "runner_sha256": "be3dbaf5b61aef3085db489aea6e828b3e7b6b4aed4bf7cae9903f9d8f5251a6"
   },
   "assets": {
     "sla": {
