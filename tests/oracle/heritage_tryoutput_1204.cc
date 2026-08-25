@@ -3,7 +3,10 @@
  * the output-contains branch of Heritage::tryOutputStackGuard
  * (heritage.cc:1406-1430) — the FOURTH justifiedContain touchpoint
  * (cc:1420), after cc:1336/cc:1358 in guardOutputOverlapStack and the
- * characterization reads in fspec.cc:4344.
+ * characterization reads in fspec.cc:4344 — and for the proto-store
+ * output storage chain that gates it (coreaction.cc:1538-1553
+ * setStackOutputLock -> heritage.cc:1487-1494 guardCalls ->
+ * fspec.cc:4339-4353/4495-4506 locked storage reads).
  *
  *  - case=stack_output_contains_full: the production
  *    Heritage::tryOutputStackGuard driven directly on a real Funcdata with
@@ -32,6 +35,24 @@
  *    little-endian and a big-endian space (address.cc:138-141 branch key
  *    base->isBigEndian() && !forceleft): LE start distance 0/2/4, BE end
  *    distance 4/2/0.
+ *  - case=output_storage_projection: the locked-output storage reads of
+ *    FuncProto::characterizeAsOutput (fspec.cc:4339-4353) and
+ *    FuncProto::getBiggestContainedOutput (fspec.cc:4495-4506) over five
+ *    containment geometries against the locked (stack, 0x1000, 8)
+ *    storage: justified subrange, unjustified subrange, disjoint range, a
+ *    16-byte range containing the storage (the cc:1398
+ *    getBiggestContainedOutput trigger), and a partial overlap.
+ *  - case=production_entry_guardcalls: the full production entry — the
+ *    ActionFuncLink::funcLinkOutput producer (coreaction.cc:1538-1553:
+ *    reads the locked outparam storage; spacebase storage ->
+ *    setStackOutputLock(true) and the output varnode is delayed;
+ *    register storage -> newVarnodeOut immediately) followed by
+ *    Heritage::guardCalls (heritage.cc:1443-1527) over the guarded stack
+ *    range with the cc:1466 spacebase rebase (stackoffset 0x10). The
+ *    stack-lock geometry upgrades the effect to unaffected: NO INDIRECT
+ *    op, the call output is created caller-perspective and truncated by
+ *    SUBPIECE; the register-storage control geometry keeps
+ *    unknown_effect: an INDIRECT op guards the range (cc:1511-1519).
  *
  * Varnode descriptor shared with the Rust comparand:
  *   constant -> c<size>(<value>); iop -> IOP;
@@ -46,14 +67,16 @@
 
 #include <bits/stdc++.h>
 
-// heritage.hh:297 keeps tryOutputStackGuard private; the fixture drives it
-// directly, so the includes take the class->struct access hack (the same
-// pattern as the heritage_subpiece_const_1204 / justified_contain_1204
-// fixtures).
+// heritage.hh:294-297 keeps tryOutputStackGuard and guardCalls private
+// and coreaction.hh keeps ActionFuncLink::funcLinkOutput private; the
+// fixture drives all three directly, so the includes take the class->struct
+// access hack (the same pattern as the heritage_subpiece_const_1204 /
+// justified_contain_1204 fixtures).
 #define class struct
 #define private public
 #define protected public
 #include "architecture.hh"
+#include "coreaction.hh"
 #include "database.hh"
 #include "fspec.hh"
 #include "funcdata.hh"
@@ -333,6 +356,128 @@ static void runTryCase(FixtureArchitecture &arch, const ToGeom &g, int4 index)
     std::cout << "  write" << i << ' ' << vnDescriptor(write[i]) << '\n';
 }
 
+// Containment geometries for the locked-branch storage reads (offsets are
+// callee-perspective; storage = (stack, 0x1000, 8)):
+//   0: justified subrange      -> contains_justified, biggest=-
+//   1: unjustified at +2       -> contains_unjustified, biggest=-
+//   2: disjoint at +8          -> no_containment, biggest=-
+//   3: 16-byte range holding   -> contained_by, biggest=1000:8
+//      the storage (the cc:1398 getBiggestContainedOutput trigger)
+//   4: partial overlap at +2/8 -> no_containment, biggest=-
+struct PrGeom { uintb off; int4 size; };
+static const PrGeom PR[] = {
+  {0x1000, 4},
+  {0x1002, 4},
+  {0x1008, 4},
+  {0x0ff8, 16},
+  {0x1002, 8},
+};
+static const int4 NUM_PR = 5;
+
+// Drive the production locked-output storage reads —
+// FuncProto::characterizeAsOutput and FuncProto::getBiggestContainedOutput
+// (fspec.cc:4339-4353 / 4495-4506) — over the containment geometries.
+static void runProjectionCase(FixtureArchitecture &arch)
+{
+  Funcdata fd("pr", "pr", arch.symboltab->getGlobalScope(),
+              Address(arch.getSpace(3), 0x6800), (FunctionSymbol *)0, 0x20);
+  AddrSpace *stack = arch.getSpaceByName("stack");
+  BlockGraph &blocks = const_cast<BlockGraph &>(fd.getBasicBlocks());
+  BlockBasic *block = blocks.newBlockBasic(&fd);
+  PcodeOp *call = fd.newOp(1, fd.getAddress());
+  fd.opSetOpcode(call, CPUI_CALL);
+  fd.opSetInput(call, fd.newConstant(8, 0x4000), 0);
+  fd.opInsertEnd(call, block);
+  FuncCallSpecs fc(call);
+  fc.setModel(arch.guard_model);
+  fc.setInternal(arch.guard_model, arch.types->getTypeVoid());
+  ParameterPieces pieces;
+  pieces.addr = Address(stack, RET_STORAGE);
+  pieces.type = arch.types->getBase(8, TYPE_INT);
+  pieces.flags = ParameterPieces::typelock;
+  fc.setOutput(pieces);
+  fc.setOutputLock(true);
+
+  for (int4 i = 0; i < NUM_PR; ++i) {
+    const PrGeom &g = PR[i];
+    int4 occ = fc.characterizeAsOutput(Address(stack, g.off), g.size);
+    VarnodeData vdata;
+    bool biggest = fc.getBiggestContainedOutput(Address(stack, g.off), g.size, vdata);
+    std::cout << "  pr geom=" << i << " off=" << std::hex << g.off << std::dec
+              << " size=" << g.size << " occ=" << occ << " biggest=";
+    if (biggest)
+      std::cout << std::hex << vdata.offset << std::dec << ':' << vdata.size;
+    else
+      std::cout << '-';
+    std::cout << '\n';
+  }
+}
+
+// Drive the full production entry for one call spec: the
+// ActionFuncLink::funcLinkOutput producer (coreaction.cc:1538-1553) then
+// Heritage::guardCalls over the guarded stack range (heritage.cc:1443-
+// 1527, fl=0, stackoffset 0x10). stack_space=true stages the locked
+// storage in the spacebase space (the setStackOutputLock path); false
+// stages it in the register space (the immediate-newVarnodeOut control).
+static void runGuardCase(FixtureArchitecture &arch, int4 index, bool stack_space)
+{
+  Funcdata fd("gc", "gc", arch.symboltab->getGlobalScope(),
+              Address(arch.getSpace(3), 0x6100 + 0x10 * index),
+              (FunctionSymbol *)0, 0x20);
+  AddrSpace *stack = arch.getSpaceByName("stack");
+  AddrSpace *reg = arch.getSpaceByName("register");
+  BlockGraph &blocks = const_cast<BlockGraph &>(fd.getBasicBlocks());
+  BlockBasic *block = blocks.newBlockBasic(&fd);
+  PcodeOp *call = fd.newOp(1, fd.getAddress());
+  fd.opSetOpcode(call, CPUI_CALL);
+  fd.opSetInput(call, fd.newConstant(8, 0x4000), 0);
+  fd.opInsertEnd(call, block);
+
+  FuncCallSpecs *fc = new FuncCallSpecs(call);
+  fc->setModel(arch.guard_model);
+  fc->setInternal(arch.guard_model, arch.types->getTypeVoid());
+  ParameterPieces pieces;
+  pieces.addr = stack_space ? Address(stack, RET_STORAGE) : Address(reg, 0x0);
+  pieces.type = arch.types->getBase(8, TYPE_INT);
+  pieces.flags = ParameterPieces::typelock;
+  fc->setOutput(pieces);
+  fc->setOutputLock(true);
+  // The Funcdata owns the spec (FlowInfo::setupCallSpecs registration
+  // shape, flow.cc:684-686) because guardCalls walks fd->numCalls().
+  fd.qlst.push_back(fc);
+  // cc:1466-1465: the spacebase rebase offset (FuncCallSpecs::
+  // setSpacebaseRelative shape) — caller 0x101x == callee 0x100x + 0x10.
+  fc->stackoffset = STACK_DIFF;
+
+  // The producer: coreaction.cc:1521 funcLinkOutput. For the spacebase
+  // storage this sets the stack-output lock and delays the output varnode;
+  // for the register storage it creates the output varnode immediately at
+  // the recorded offset.
+  ActionFuncLink::funcLinkOutput(fc, fd);
+  std::cout << "gc geom=" << index << " stackspace=" << (stack_space ? 1 : 0)
+            << " stacklock=" << (fc->isStackOutputLock() ? 1 : 0)
+            << " pre_out=" << (call->getOut() != (Varnode *)0 ? 1 : 0) << '\n';
+
+  vector<Varnode *> write;
+  heritageOf(fd).guardCalls(0, Address(stack, 0x1010), 4, write);
+  int4 pos = 0;
+  for (list<PcodeOp *>::const_iterator iter = block->beginOp();
+       iter != block->endOp(); ++iter, ++pos) {
+    PcodeOp *op = *iter;
+    // Opcode number, not name (CALL=7, INDIRECT=61, SUBPIECE=63 are
+    // identical on both sides).
+    std::cout << "  op" << pos << ' ' << (int4)op->code() << " in=[";
+    for (int4 i = 0; i < op->numInput(); ++i) {
+      if (i != 0)
+        std::cout << ',';
+      std::cout << vnDescriptor(op->getIn(i));
+    }
+    std::cout << "] out=" << vnDescriptor(op->getOut()) << '\n';
+  }
+  for (int4 i = 0; i < (int4)write.size(); ++i)
+    std::cout << "  write" << i << ' ' << vnDescriptor(write[i]) << '\n';
+}
+
 int main(void)
 {
   std::cout << std::unitbuf;
@@ -361,6 +506,15 @@ int main(void)
         g.retsz, Address(be, g.addr), g.size, false);
     std::cout << "  sp geom=" << i << " le=" << amt_le << " be=" << amt_be << '\n';
   }
+
+  // ---- case 3: locked-output storage reads (fspec locked branches) ----
+  std::cout << "case=output_storage_projection" << std::endl;
+  runProjectionCase(arch);
+
+  // ---- case 4: production entry — funcLinkOutput + guardCalls ---------
+  std::cout << "case=production_entry_guardcalls" << std::endl;
+  runGuardCase(arch, 0, true);
+  runGuardCase(arch, 1, false);
 
   return 0;
 }

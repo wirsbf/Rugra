@@ -1456,15 +1456,14 @@ impl Heritage {
                         .unwrap_or(0);
                     if output_character != crate::fspec::containment::NO_CONTAINMENT {
                         effecttype = crate::fspec::EffectType::UnknownEffect;
-                        // cc:1491: if (tryOutputStackGuard(fc, addr,
-                        // transAddr, size, outputCharacter, write)). The
-                        // cc:1407/cc:1410 fc->getOutput() storage reads are
-                        // staged through the last parameter; production has
-                        // no proto-store output model yet (FSPEC-OUTPUT-
-                        // STORAGE-0001 residual), so None keeps the
-                        // unknown_effect fallback — never under-protects.
+                        // cc:1491-1492: if (tryOutputStackGuard(fc, addr,
+                        // transAddr, size, outputCharacter, write))
+                        //   effecttype = EffectRecord::unaffected;
+                        // The return storage is read from the call spec's
+                        // proto-store output parameter inside the callee
+                        // (cc:1407/cc:1410 getOutput()), not staged here.
                         if self.try_output_stack_guard(
-                            fd, i, space, addr, off, size, output_character, write, None,
+                            fd, i, space, addr, off, size, output_character, write,
                         ) {
                             effecttype = crate::fspec::EffectType::Unaffected;
                         }
@@ -3492,19 +3491,19 @@ impl Heritage {
     ///    justifiedContain touchpoint — routed through the endian-aware
     ///    `justified_contain_range`.
     ///
-    /// `locked_output_storage` stages the two `fc->getOutput()` reads of the
-    /// branch (cc:1407 address / cc:1410 size). Ghidra's FuncCallSpecs always
-    /// has a proto-store output here: production reaches this function only
-    /// through the `isStackOutputLock` gate (heritage.cc:1487), which
+    /// The return storage is read from the call spec's proto-store output
+    /// parameter exactly as the Ghidra original does (cc:1407
+    /// `fc->getOutput()->getAddress()` / cc:1410 `getSize()`), through
+    /// `FuncCallSpecs::get_output_storage` (the flat-store `outparam::addr`
+    /// stand-in). Production reaches this function only through the
+    /// `isStackOutputLock` gate (heritage.cc:1487), which
     /// ActionFuncLink::funcLinkOutput sets exclusively for a locked non-void
-    /// output whose storage is in the spacebase space (coreaction.cc:1546-
-    /// 1549). Rugra's FuncProto does not model the proto-store output storage
-    /// yet (`set_output_parameter` discards `pieces.addr`, fspec.rs), so
-    /// production passes `None` and this branch conservatively reports
-    /// `false`, keeping guardCalls' unknown_effect INDIRECT guard (the
-    /// never-under-protect direction). Register as the
-    /// FSPEC-OUTPUT-STORAGE-0001 residual; see HERITAGE-
-    /// TRYOUTPUT-STACKGUARD-CONTAINS.
+    /// output whose recorded storage is in the spacebase space
+    /// (coreaction.cc:1546-1549) — so the storage is always present on the
+    /// production path. A call spec without recorded storage (a state
+    /// Ghidra cannot reach) conservatively reports `false`, keeping
+    /// guardCalls' unknown_effect INDIRECT guard (the never-under-protect
+    /// direction).
     pub fn try_output_stack_guard(
         &mut self,
         fd: &mut Funcdata,
@@ -3515,7 +3514,6 @@ impl Heritage {
         size: i32,
         output_character: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
-        locked_output_storage: Option<(Address, i32)>,
     ) -> bool {
         if output_character == crate::fspec::containment::CONTAINED_BY {
             // cc:1396-1400: if (!fc->getBiggestContainedOutput(...)) return false
@@ -3547,17 +3545,29 @@ impl Heritage {
             return true;
         }
         // cc:1406: Reaching here, output exists and contains the heritage
-        // range. The two getOutput() reads are staged through
-        // locked_output_storage (see doc comment); None keeps the
-        // conservative false fallback.
-        let Some((ret_addr, ret_size)) = locked_output_storage else {
+        // range. retAddr = fc->getOutput()->getAddress();
+        // retSize = fc->getOutput()->getSize() — both read from the call
+        // spec's proto-store output parameter (the flat-store
+        // `output_storage` + the return type's size,
+        // `ParameterBasic::getSize()` = type->getSize(), fspec.hh:1176).
+        // No recorded storage (unreachable in Ghidra: the cc:1487 gate
+        // implies funcLinkOutput saw a spacebase outparam address,
+        // coreaction.cc:1546-1549) keeps the conservative false fallback.
+        let Some((_, ret_storage_off)) = fd
+            .get_call_specs(fc_idx)
+            .and_then(|fc| fc.get_output_storage())
+        else {
             return false;
         };
-        // cc:1407-1410: retAddr = fc->getOutput()->getAddress();
-        //              diff = (int4)(addr.getOffset() - transAddr.getOffset());
-        //              retAddr = retAddr + diff;  retSize = fc->getOutput()->getSize();
+        let ret_size = fd
+            .get_call_specs(fc_idx)
+            .map(|fc| fc.prototype.return_type.get_size() as i32)
+            .unwrap_or(0);
+        // cc:1408-1409: diff = (int4)(addr.getOffset() -
+        // transAddr.getOffset()); retAddr = retAddr + diff — translate the
+        // output address to the caller's perspective.
         let diff = addr.as_u64().wrapping_sub(trans_offset);
-        let ret_addr = Address::new(ret_addr.as_u64().wrapping_add(diff));
+        let ret_addr = Address::new(ret_storage_off.wrapping_add(diff));
         // cc:1411: outvn = callOp->getOut();
         let call_op = match fd.get_call_specs(fc_idx).and_then(|fc| fc.find_call_op(fd)) {
             Some(op) => op,
@@ -6589,12 +6599,15 @@ mod tests {
     }
 
     // HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS: Rust-only regression test for
-    // the production None staging arm — guard_calls passes None until the
-    // FSPEC-OUTPUT-STORAGE-0001 residual (FuncProto keeps no proto-store
-    // output storage) lands, and the branch must conservatively return
+    // the no-recorded-storage arm — a call spec whose prototype never
+    // recorded a proto-store output storage must conservatively return
     // false with an untouched write list so guardCalls keeps the
-    // unknown_effect INDIRECT guard. The oracle-verified Some(...) arm is
-    // covered bilaterally by tests/oracle/heritage_tryoutput_1204.
+    // unknown_effect INDIRECT guard (the state is unreachable in Ghidra:
+    // isStackOutputLock implies funcLinkOutput read a spacebase outparam
+    // address, coreaction.cc:1546-1549). The oracle-verified recorded-
+    // storage arm is covered bilaterally by tests/oracle/
+    // heritage_tryoutput_1204 (contains projection + the new
+    // production_entry_guardcalls case through guard_calls itself).
     #[test]
     fn test_try_output_stack_guard_none_storage_is_conservative_false() {
         use crate::block::BlockBasic;
@@ -6634,7 +6647,6 @@ mod tests {
             4,
             crate::fspec::containment::CONTAINS_JUSTIFIED,
             &mut write,
-            None,
         );
 
         assert!(!guarded);

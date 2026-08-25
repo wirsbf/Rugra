@@ -54,13 +54,15 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=6d085bd8cd43c4b89a1487eb84abfa77b22bf0c8
-rugra_base_tree=649cd33fe7faec5912bf8ef3b4bf891a37b2d43d
+rugra_base_commit=dc6f0bfa57ee8d4b20d4edbab9d486b603253cc6
+rugra_base_tree=ad32215a6c807c5fe4a11bb923251d41fd905818
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/heritage_tryoutput_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/heritage_tryoutput_1204.cc"
 rust_fixture="$repo_root/tests/oracle/heritage_tryoutput_1204.rs"
 heritage_rs="$repo_root/src/heritage.rs"
+fspec_rs="$repo_root/src/fspec.rs"
+coreaction_rs="$repo_root/src/coreaction.rs"
 heritage_doc="$repo_root/docs/api/heritage.md"
 registry_cache="$user_home/.cargo/registry/cache"
 
@@ -82,7 +84,7 @@ for required_tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" \
   fi
 done
 for required_file in "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$heritage_rs" "$heritage_doc" \
+  "$heritage_rs" "$fspec_rs" "$coreaction_rs" "$heritage_doc" \
   "$runner"; do
   if [[ ! -f "$required_file" || -L "$required_file" ]]; then
     echo "required input is a regular non-symlink file: $required_file" >&2
@@ -168,6 +170,8 @@ snapshot_root="$oracle_tmp/workspace"
 cargo_home="$oracle_tmp/cargo-home"
 owned_files=(
   "$heritage_rs"
+  "$fspec_rs"
+  "$coreaction_rs"
   "$heritage_doc"
   "$cpp_fixture"
   "$rust_fixture"
@@ -180,7 +184,7 @@ owned_files=(
   GIT_CONFIG_NOSYSTEM=1 \
   "$host_python_bin" -I -S - "$repo_root" "$snapshot_root" "$cargo_home" \
   "$registry_cache" "$metadata" "$cpp_fixture" "$rust_fixture" \
-  "$heritage_rs" "$heritage_doc" \
+  "$heritage_rs" "$fspec_rs" "$coreaction_rs" "$heritage_doc" \
   "$runner_fd_path" "$runner_snapshot_sha" \
   "$oracle_tag" "$oracle_commit" "$oracle_cpp_tree" "$oracle_makefile_blob" \
   "$rugra_base_commit" "$rugra_base_tree" "$host_cxx" "$host_cxx_target" \
@@ -198,7 +202,8 @@ import tarfile
 
 (
     repo_raw, snapshot_raw, cargo_home_raw, registry_cache_raw,
-    metadata_raw, cpp_raw, rust_raw, heritage_raw, heritage_doc_raw,
+    metadata_raw, cpp_raw, rust_raw, heritage_raw, fspec_raw,
+    coreaction_raw, heritage_doc_raw,
     runner_fd_raw, runner_snapshot_sha, oracle_tag, oracle_commit,
     cpp_tree, makefile_blob, rugra_base_commit, rugra_base_tree,
     host_cxx, host_cxx_target, host_rustc, host_cargo, host_platform,
@@ -218,6 +223,8 @@ expected_paths = {
     pathlib.Path(cpp_raw): repo / "tests/oracle/heritage_tryoutput_1204.cc",
     pathlib.Path(rust_raw): repo / "tests/oracle/heritage_tryoutput_1204.rs",
     pathlib.Path(heritage_raw): repo / "src/heritage.rs",
+    pathlib.Path(fspec_raw): repo / "src/fspec.rs",
+    pathlib.Path(coreaction_raw): repo / "src/coreaction.rs",
     pathlib.Path(heritage_doc_raw): repo / "docs/api/heritage.md",
 }
 for actual, expected in expected_paths.items():
@@ -272,6 +279,8 @@ def live_file(relative):
 
 overlay_files = {
     pathlib.Path("src/heritage.rs"),
+    pathlib.Path("src/fspec.rs"),
+    pathlib.Path("src/coreaction.rs"),
 }
 crate_files = [
     pathlib.Path("Cargo.toml"),
@@ -284,7 +293,7 @@ crate_files = [
 ] + base_source_files("src") + base_source_files("sleigh_shim")
 crate_files = sorted(set(crate_files), key=lambda item: item.as_posix())
 crate_hasher = hashlib.sha256()
-crate_hasher.update(b"rugra-heritage-tryoutput-d0-base-overlay-v1\0")
+crate_hasher.update(b"rugra-heritage-tryoutput-d0-base-overlay-v2\0")
 crate_hasher.update(rugra_base_commit.encode())
 crate_bytes = {}
 for relative in crate_files:
@@ -340,6 +349,8 @@ observed_hashes = {
     "cpp_fixture_sha256": sha(special[special_paths[0].as_posix()]),
     "rust_fixture_sha256": sha(special[special_paths[1].as_posix()]),
     "heritage_rs_sha256": sha(crate_bytes["src/heritage.rs"]),
+    "fspec_rs_sha256": sha(crate_bytes["src/fspec.rs"]),
+    "coreaction_rs_sha256": sha(crate_bytes["src/coreaction.rs"]),
     "heritage_doc_sha256": sha(special["docs/api/heritage.md"]),
     "runner_sha256": runner_snapshot_sha,
     "cargo_toml_sha256": sha(crate_bytes["Cargo.toml"]),
@@ -350,7 +361,7 @@ observed_hashes = {
 require(
     "crate snapshot scheme",
     comparand["rust_crate_tree_hash_scheme"],
-    "sha256 of rugra-heritage-tryoutput-d0-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "sha256 of rugra-heritage-tryoutput-d0-base-overlay-v2 plus base commit and sorted length-prefixed paths and contents",
 )
 for key, actual in observed_hashes.items():
     require(key, actual, comparand[key])
@@ -394,7 +405,11 @@ for required_key, required_prefix in (
     ("preexisting_outvn_reuse", "MATCH"),
     ("vnfinal_null_noop", "MATCH"),
     ("caller_perspective_translation", "MATCH"),
-    ("production_entry_wiring", "UNTESTED"),
+    ("output_storage_locked_reads", "MATCH"),
+    ("func_link_output_stacklock_producer", "MATCH"),
+    ("guardcalls_unaffected_upgrade", "MATCH"),
+    ("guardcalls_register_control_indirect", "MATCH"),
+    ("production_entry_wiring", "MATCH"),
     ("be_stack_space", "UNTESTED"),
 ):
     if required_key not in coverage:
@@ -718,10 +733,12 @@ if lines[0] != (
 expected_cases = [
     "stack_output_contains_full",
     "cc1420_constant",
+    "output_storage_projection",
+    "production_entry_guardcalls",
 ]
 case_lines = [line for line in lines if line.startswith("case=")]
-if len(case_lines) != 2:
-    raise SystemExit(f"expected two case headers, found {len(case_lines)}")
+if len(case_lines) != 4:
+    raise SystemExit(f"expected four case headers, found {len(case_lines)}")
 actual_cases = [line.removeprefix("case=") for line in case_lines]
 if actual_cases != expected_cases:
     raise SystemExit(f"fixture case order mismatch: {actual_cases}")
@@ -743,6 +760,24 @@ if no_op and "write0" in "\n".join(
     lines[lines.index(no_op[0]):lines.index("case=cc1420_constant")]
 ):
     raise SystemExit("the vnFinal-null geometry must leave the write list empty")
+pr_lines = [line for line in lines if line.startswith("  pr geom=")]
+if len(pr_lines) != 5:
+    raise SystemExit(f"expected five output_storage_projection rows, found {len(pr_lines)}")
+if "  pr geom=3 off=ff8 size=16 occ=3 biggest=1000:8" not in lines:
+    raise SystemExit("output_storage_projection must witness the contained_by biggest output")
+gc_lines = [line for line in lines if line.startswith("gc geom=")]
+if len(gc_lines) != 2:
+    raise SystemExit(f"expected two production_entry_guardcalls headers, found {len(gc_lines)}")
+if "gc geom=0 stackspace=1 stacklock=1 pre_out=0" not in lines:
+    raise SystemExit("the stack-storage producer must set the lock and delay the output varnode")
+if "gc geom=1 stackspace=0 stacklock=0 pre_out=1" not in lines:
+    raise SystemExit("the register-storage producer must create the output varnode immediately")
+gc0_section = lines[lines.index(gc_lines[0]) + 1:lines.index(gc_lines[1])]
+if any(" 61 in=[" in line for line in gc0_section):
+    raise SystemExit("the unaffected upgrade must not create an INDIRECT op")
+gc1_section = lines[lines.index(gc_lines[1]) + 1:]
+if not any(" 61 in=[" in line for line in gc1_section):
+    raise SystemExit("the register-storage control must keep the unknown_effect INDIRECT guard")
 PY
 
 /usr/bin/sha256sum "${owned_files[@]}" >"$oracle_tmp/owned.after"
@@ -788,12 +823,16 @@ for label, relative, key in (
     ("C++ fixture", "tests/oracle/heritage_tryoutput_1204.cc", "cpp_fixture_sha256"),
     ("Rust fixture", "tests/oracle/heritage_tryoutput_1204.rs", "rust_fixture_sha256"),
     ("heritage implementation", "src/heritage.rs", "heritage_rs_sha256"),
+    ("fspec implementation", "src/fspec.rs", "fspec_rs_sha256"),
+    ("coreaction implementation", "src/coreaction.rs", "coreaction_rs_sha256"),
     ("heritage API document", "docs/api/heritage.md", "heritage_doc_sha256"),
 ):
     require(label, sha((repo / relative).read_bytes()), comparand[key])
 
 overlay_files = {
     "src/heritage.rs",
+    "src/fspec.rs",
+    "src/coreaction.rs",
 }
 relative_files = [pathlib.Path(path) for path in (
     "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
@@ -809,7 +848,7 @@ for directory in ("src", "sleigh_shim"):
         pathlib.Path(item.decode()) for item in raw.split(b"\0") if item
     )
 hasher = hashlib.sha256()
-hasher.update(b"rugra-heritage-tryoutput-d0-base-overlay-v1\0")
+hasher.update(b"rugra-heritage-tryoutput-d0-base-overlay-v2\0")
 hasher.update(rugra_base_commit.encode())
 for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
     if relative.as_posix() in overlay_files:
@@ -834,4 +873,4 @@ for relative in sorted(set(relative_files), key=lambda item: item.as_posix()):
 require("full Rust crate", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 PY
 
-echo "heritage_tryoutput_1204: MATCH covered_projection=8/8 overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"
+echo "heritage_tryoutput_1204: MATCH covered_projection=11/12 overall=PARTIAL_MATCH stdout_sha256=$actual_stdout_sha"

@@ -255,6 +255,19 @@ pub struct FuncProto {
     /// must not change it. Set by `set_output_lock`. A locked-void return
     /// (e.g. `exit`, `free`) means the CALL produces NO output varnode.
     pub output_type_locked: bool,
+    /// Proto-store output parameter's storage address (space, offset).
+    /// Flat-store stand-in for the `ProtoStore*::outparam`
+    /// `ParameterBasic::addr` (fspec.hh:1164-1165, installed by
+    /// `ProtoStoreInternal::setOutput` fspec.cc:3380-3387): the storage
+    /// location of the return value, read back by `getOutput()` consumers —
+    /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1545, the
+    /// spacebase test that drives `setStackOutputLock`) and
+    /// `Heritage::tryOutputStackGuard` (heritage.cc:1407/1410). `None`
+    /// until a `setOutput` shape runs (Ghidra's outparam always exists once
+    /// constructed; the flat FuncProto starts empty). The legacy `Address`
+    /// carries no space identity, so the space is stored alongside the
+    /// offset (ADDRESS-0001 folds this into the address when it lands).
+    pub output_storage: Option<(AddressSpace, u64)>,
     /// Is the prototype model locked for this prototype? Faithful to the
     /// `modellock` (fspec.hh:1347) flag bit. Set by `set_model_lock` /
     /// `set_pieces`; read by `is_model_locked`. Ghidra folds this into the
@@ -306,6 +319,7 @@ impl FuncProto {
             extra_pop: EXTRAPOP_UNKNOWN_FULL,
             auto_killed_by_call: false,
             output_type_locked: false,
+            output_storage: None,
             model_locked: false,
             is_inline: false,
             no_return: false,
@@ -405,16 +419,63 @@ impl FuncProto {
     // Ghidra: fspec.cc:4336 FuncProto::characterizeAsOutput
     /// Decide whether a given storage location could be, or could hold, the
     /// return value. Faithful port of `characterizeAsOutput`
-    /// (fspec.cc:4336-4358): the output-locked branch needs the locked
-    /// output parameter's own Address (space + offset); Rugra's FuncProto
-    /// keeps only the return data-type, so it degrades to the model branch
-    /// (gated on ADDRESS-0001 for removal).
+    /// (fspec.cc:4336-4358): with a locked output AND a recorded
+    /// proto-store storage the locked branch (fspec.cc:4339-4353) runs
+    /// exactly — TYPE_VOID gate, then the cc:4346 justifiedContain and
+    /// cc:4351 containedBy reads on the outparam's own Address. Without a
+    /// recorded storage (Ghidra always has one; Rugra's known-prototype
+    /// paths do not record one yet) the classification degrades to the
+    /// model branch — the ADDRESS-0001-gated transitional fallback.
     pub fn characterize_as_output(
         &self,
         addr_space: AddressSpace,
         addr_offset: u64,
         size: i32,
     ) -> i32 {
+        if self.is_output_locked() {
+            // Ghidra: fspec.cc:4340-4342
+            //   ProtoParameter *outparam = getOutput();
+            //   if (outparam->getType()->getMetatype() == TYPE_VOID)
+            //     return ParamEntry::no_containment;
+            if matches!(
+                self.return_type.get_metatype(),
+                crate::type_system::TypeMetatype::Void
+            ) {
+                return containment::NO_CONTAINMENT;
+            }
+            if let Some((spc, off)) = self.output_storage {
+                // Ghidra: fspec.cc:4343-4353 — Address iaddr =
+                // outparam->getAddress(); the varnode must be justified in
+                // the locked storage relative to the space endianness,
+                // irregardless of the forceleft flag. The `base != op2.base`
+                // guards of address.cc:133/113 are the space equality below.
+                if spc != addr_space {
+                    return containment::NO_CONTAINMENT;
+                }
+                let out_size = self.return_type.get_size() as i32;
+                let dist = justified_contain_range(
+                    off,
+                    out_size,
+                    addr_offset,
+                    size,
+                    false,
+                    spc.is_big_endian(),
+                );
+                if dist == 0 {
+                    return containment::CONTAINS_JUSTIFIED;
+                } else if dist > 0 {
+                    return containment::CONTAINS_UNJUSTIFIED;
+                }
+                if contained_by_range(off, out_size, addr_offset, size) {
+                    return containment::CONTAINED_BY;
+                }
+                return containment::NO_CONTAINMENT;
+            }
+            // Transitional: locked output with no recorded storage —
+            // Ghidra's locked branch is terminal (fspec.cc:4353-4354);
+            // the model-branch fallthrough only exists on Rugra's
+            // no-storage path, which Ghidra cannot reach.
+        }
         let Some(model) = self.model.as_ref() else {
             // Modelless FuncProto is invalid in Ghidra; conservative
             // no_containment projection (see characterize_as_input_param).
@@ -450,14 +511,46 @@ impl FuncProto {
 
     // Ghidra: fspec.cc:4492 FuncProto::getBiggestContainedOutput
     /// Find the biggest output storage entirely contained in the given
-    /// range. The output-locked branch degrades to the model branch for the
-    /// same space-identity reason as `characterize_as_output`.
+    /// range. With a locked output AND a recorded proto-store storage the
+    /// locked branch (fspec.cc:4495-4506) runs exactly — TYPE_VOID gate,
+    /// then the cc:4500 containedBy test on the outparam's own Address.
+    /// Without a recorded storage the lookup degrades to the model branch
+    /// (same ADDRESS-0001-gated transitional fallback as
+    /// `characterize_as_output`).
     pub fn get_biggest_contained_output(
         &self,
         addr_space: AddressSpace,
         addr_offset: u64,
         size: i32,
     ) -> Option<(AddressSpace, u64, i32)> {
+        if self.is_output_locked() {
+            // Ghidra: fspec.cc:4496-4498
+            //   ProtoParameter *outparam = getOutput();
+            //   if (outparam->getType()->getMetatype() == TYPE_VOID)
+            //     return false;
+            if matches!(
+                self.return_type.get_metatype(),
+                crate::type_system::TypeMetatype::Void
+            ) {
+                return None;
+            }
+            if let Some((spc, off)) = self.output_storage {
+                // Ghidra: fspec.cc:4499-4505 — iaddr.containedBy(
+                //   outparam->getSize(), loc, size): the locked output
+                //   storage (this) contained by the queried range (op2).
+                // The `base != op2.base` guard of address.cc:113 is the
+                // space equality below.
+                let out_size = self.return_type.get_size() as i32;
+                if spc == addr_space && contained_by_range(off, out_size, addr_offset, size) {
+                    return Some((spc, off, out_size));
+                }
+                return None;
+            }
+            // Transitional: locked output with no recorded storage —
+            // Ghidra's locked branch is terminal (fspec.cc:4506); the
+            // model-branch fallthrough only exists on Rugra's no-storage
+            // path, which Ghidra cannot reach.
+        }
         let Some(model) = self.model.as_ref() else {
             return None;
         };
@@ -732,6 +825,9 @@ impl FuncProto {
         self.extra_pop = other.extra_pop;
         self.auto_killed_by_call = other.auto_killed_by_call;
         self.output_type_locked = other.output_type_locked;
+        // Ghidra: fspec.cc:3797-3798 store = op2.store->clone() — the
+        // clone carries the outparam's storage address with it.
+        self.output_storage = other.output_storage;
         self.model_locked = other.model_locked;
         self.is_inline = other.is_inline;
         self.no_return = other.no_return;
@@ -1070,16 +1166,20 @@ impl FuncProto {
         }
 
         if triallist.is_empty() { return; }
-        // Build the output piece from the trial varnode.
+        // Build the output piece from the trial varnode. The piece's legacy
+        // Address is spaceless, so the varnode's space travels alongside
+        // (ProtoStoreInternal::setOutput receives a full Address in Ghidra).
         let mut pieces = ParameterPieces::default();
+        let piece_space;
         {
             let vn0 = triallist[0].read().unwrap();
             pieces.addr = *vn0.get_addr();
             pieces.ty = vn0.get_type();
             pieces.flags = 0;
+            piece_space = vn0.get_space();
         }
         // store->setOutput(pieces)
-        self.set_output_parameter(pieces);
+        self.set_output_parameter(pieces, piece_space);
     }
 
     // Ghidra: fspec.cc:4675 FuncProto::decode
@@ -1163,6 +1263,16 @@ impl FuncProto {
             if sub_name == "returnsym" || sub_name == "addr" {
                 let (addr, ty, output_lock) = decode_output_storage(decoder);
                 // store->setOutput(outpieces); setTypeLock(outputlock).
+                // The type and lock land; the storage address cannot: the
+                // decode_output_storage boundary returns the legacy
+                // spaceless Address, and set_output_parameter needs the
+                // space to record a faithful (space, offset) pair. The
+                // decode channel therefore keeps discarding the address —
+                // the registered ADDRESS-0001-family residual for signature
+                // ingestion (funcLinkOutput then falls to its no-storage
+                // path). Once the decoder returns a space-tagged Address,
+                // this arm routes through set_output_parameter like the
+                // trial-commit path does.
                 self.return_type = ty;
                 self.output_type_locked = output_lock;
                 let _ = addr;
@@ -1272,11 +1382,19 @@ impl FuncProto {
     }
 
     // Ghidra: fspec.cc:3380 ProtoStoreInternal::setOutput
-    /// Faithful to `ProtoStore::setOutput(piece)`: set the return type from
-    /// the piece. The output address is not stored separately in Rugra's flat
-    /// FuncProto (it lives on the ProtoModel), so only the type is applied.
-    fn set_output_parameter(&mut self, pieces: ParameterPieces) {
-        if let Some(ty) = pieces.ty { self.return_type = ty; }
+    /// Faithful to `ProtoStore::setOutput(piece)` (reached through
+    /// `FuncProto::setOutput`, fspec.hh:1537): replace the return-value
+    /// parameter with the given pieces — data-type AND storage address
+    /// (fspec.cc:3385 `new ParameterBasic("",piece.addr,piece.type,
+    /// piece.flags)`). The flat FuncProto keeps the type in `return_type`
+    /// and the storage in `output_storage`; the piece's legacy `Address`
+    /// carries no space identity, so the space is passed alongside (the
+    /// ADDRESS-0001 fold will absorb it).
+    pub fn set_output_parameter(&mut self, pieces: ParameterPieces, space: AddressSpace) {
+        if let Some(ty) = pieces.ty {
+            self.return_type = ty;
+        }
+        self.output_storage = Some((space, pieces.addr.as_u64()));
     }
 
     // Ghidra: fspec.hh:1389 FuncProto::hasModel
@@ -1738,6 +1856,15 @@ pub struct FuncCallSpecs {
     /// varnode. Used by abortSpacebaseRelative to clean up placeholders
     /// after heritage resolves the actual stack values.
     pub stack_placeholder_slot: i32,
+    /// Do we have a locked output on the stack? Faithful to
+    /// `FuncCallSpecs::isstackoutputlock` (fspec.hh:1661), initialized
+    /// false by `FuncCallSpecs::init` (fspec.cc:4946) and set true by
+    /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1548) when the
+    /// locked output parameter's storage lives in the spacebase space —
+    /// the output varnode creation is then delayed until stack heritage
+    /// (`Heritage::tryOutputStackGuard` builds it caller-perspective,
+    /// heritage.cc:1414).
+    pub is_stack_output_locked: bool,
 }
 
 /// Sentinel value for unknown stack offset. Faithful to
@@ -1760,6 +1887,7 @@ impl FuncCallSpecs {
             stackoffset: OFFSET_UNKNOWN,
             input_consume: Vec::new(),
             stack_placeholder_slot: -1,
+            is_stack_output_locked: false,
         }
     }
 
@@ -1952,11 +2080,34 @@ impl FuncCallSpecs {
             .characterize_as_output(addr_space, addr_offset, size)
     }
 
-    // Ghidra: fspec.hh:1543 FuncCallSpecs::isStackOutputLock
-    /// Is the output prototype stack-locked?
+    // Ghidra: fspec.hh:1704 FuncCallSpecs::isStackOutputLock
+    /// Is the output prototype stack-locked? Faithful inline accessor
+    /// `isStackOutputLock` (fspec.hh:1704): reads the `isstackoutputlock`
+    /// bit set by `ActionFuncLink::funcLinkOutput` (coreaction.cc:1548)
+    /// when the locked output storage is in the spacebase space.
     pub fn is_stack_output_lock(&self) -> bool {
-        // Simplified: return false (no stack output lock in Rugra).
-        false
+        self.is_stack_output_locked
+    }
+
+    // Ghidra: fspec.hh:1703 FuncCallSpecs::setStackOutputLock
+    /// Toggle whether the output is locked and on the stack. Faithful
+    /// inline mutator `setStackOutputLock` (fspec.hh:1703). Consumer of the
+    /// spacebase-storage test in `ActionFuncLink::funcLinkOutput`
+    /// (coreaction.cc:1546-1549); read by `Heritage::guardCalls`
+    /// (heritage.cc:1487).
+    pub fn set_stack_output_lock(&mut self, val: bool) {
+        self.is_stack_output_locked = val;
+    }
+
+    // Ghidra: fspec.hh:1536 FuncProto::getOutput (inherits through FuncCallSpecs)
+    /// Get the return value's proto-store storage (space, offset).
+    /// Delegation to `FuncProto::output_storage` — the flat-store stand-in
+    /// for the `ProtoStore*::outparam` `ParameterBasic::addr` — because
+    /// `FuncCallSpecs : public FuncProto` (fspec.hh:1645) exposes
+    /// `getOutput()` directly to heritage
+    /// (`tryOutputStackGuard` heritage.cc:1407/1410).
+    pub fn get_output_storage(&self) -> Option<(AddressSpace, u64)> {
+        self.prototype.output_storage
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputLocked
@@ -4634,6 +4785,27 @@ pub fn justified_contain_range(
     } else {
         (addr - base) as i32
     }
+}
+
+// RUGRA-GLUE: contained_by_range (free helper — mirrors Ghidra's inline
+// `Address::containedBy` (address.cc:110-118) used by the locked-output
+// branches of `FuncProto::characterizeAsOutput` (fspec.cc:4351) and
+// `FuncProto::getBiggestContainedOutput` (fspec.cc:4500). Same
+// spaceless-raw-offsets convention as `justified_contain_range`: the
+// `base != op2.base -> false` guard of the Ghidra original lives with the
+// callers, which must only invoke this for ranges in one space. `this`
+// (base, sz2) is the potentially-contained range; (addr, sz) the container.
+pub fn contained_by_range(base: u64, sz2: i32, addr: u64, sz: i32) -> bool {
+    // Ghidra: address.cc:114 if (op2.offset > offset) return false;
+    if addr > base {
+        return false;
+    }
+    // Ghidra: address.cc:115-117 off1 = offset + (sz-1);
+    //                       off2 = op2.offset + (sz2-1);
+    //                       return (off2 >= off1);
+    let this_end = base.wrapping_add(sz2 as u64).wrapping_sub(1);
+    let container_end = addr.wrapping_add(sz as u64).wrapping_sub(1);
+    container_end >= this_end
 }
 
 // ======================================================================

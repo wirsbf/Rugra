@@ -1147,25 +1147,37 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
     距离）。SUBPIECE 插在 call 之后（cc:1424），其输出即 vnFinal。
   - cc:1426-1429：vnFinal 非空才 `setActiveHeritage` + push write；
     cc:1430 恒返回 true（vnFinal 空的 no-op 几何也如此）。
-- **Rugra 适配**：`locked_output_storage: Option<(Address, i32)>` 第 9 参
-  暂存 cc:1407/cc:1410 的两次 `fc->getOutput()` 读取——Rugra 的 FuncProto
-  尚无 proto-store output 存储模型（`set_output_parameter` 丢弃
-  `pieces.addr`，FSPEC-OUTPUT-STORAGE-0001 残差），生产 guard_calls 传
-  `None` 走保守 false 回退（保持 unknown_effect INDIRECT 守卫，永不
-  under-protect）。读取锁纪律：`existing_out` 先绑定再分支（edition 2021
-  下 match scrutinee 临时值会活过臂体，内联 scrutinee 将在 `None` 臂内对
-  同一 call op 自死锁——与 guard_output_overlap_stack cc:1329 同族坑）。
+- **Rugra 适配**（FSPEC-OUTPUT-STORAGE-0001 修复后形态，2026-08-25）：
+  返回存储不再经参数暂存——函数自身从 call spec 的 proto-store 输出参数
+  读取（`FuncCallSpecs::get_output_storage`，即 cc:1407 的
+  `fc->getOutput()->getAddress()`；`retSize` = 返回类型 size，即
+  `ParameterBasic::getSize()` = `type->getSize()`）。生产路径只在
+  isStackOutputLock 门（cc:1487）下到达，而该 flag 仅由
+  `ActionFuncLink::funcLinkOutput` 在读到 spacebase 输出存储时置位
+  （coreaction.cc:1546-1549），故生产恒有存储；无记录存储的 call spec
+  （Ghidra 不可达态）保守返回 false，保持 unknown_effect INDIRECT 守卫
+  （永不 under-protect）。读取锁纪律：`existing_out` 先绑定再分支
+  （edition 2021 下 match scrutinee 临时值会活过臂体，内联 scrutinee 将在
+  `None` 臂内对同一 call op 自死锁——与 guard_output_overlap_stack
+  cc:1329 同族坑）。
 - **双侧 fixture**: `tests/oracle/heritage_tryoutput_1204.{cc,rs}` +
-  `tools/run_heritage_tryoutput_oracle.sh`。六个触发几何（justified /
-  unjustified +2 / 远端 +4 / size==retSize 无 SUBPIECE / 预存输出复用 /
-  预存输出 no-op 空 write）直接驱动真实函数，投影 block 内 op 序、
-  SUBPIECE 常量、输出创建/复用、caller 平移（存储 0x1000 + diff 0x10 →
-  0x1010）、write 表项与 {ah} 标志、cc:1430 返回值；case2 钉 cc:1420
-  调用形态的 LE/BE 双路由算术（LE 0/2/4/0/0/0，BE 4/2/0/0/4/0）。
-  C++ 侧 FuncCallSpecs 携带生产前置态（锁定非 void 输出 + spacebase 存储
-  + setStackOutputLock，coreaction.cc:1546-1549 形态），occ 经生产
-  `characterizeAsOutput` 锁定分支（fspec.cc:4339-4353）求值；Rugra 侧
-  occ 以同数学（cc:4346）staged。
-  covered=MATCH（双侧逐字节一致）；overall=PARTIAL_MATCH（生产入口
-  None 回退路径 = FSPEC-OUTPUT-STORAGE-0001，BE 栈空间过渡模型下不可
-  stage，两处登记为 UNTESTED）。
+  `tools/run_heritage_tryoutput_oracle.sh`。四个 case：
+  (1) 六个触发几何（justified / unjustified +2 / 远端 +4 / size==retSize
+  无 SUBPIECE / 预存输出复用 / 预存输出 no-op 空 write）直接驱动真实函数，
+  投影 block 内 op 序、SUBPIECE 常量、输出创建/复用、caller 平移（存储
+  0x1000 + diff 0x10 → 0x1010）、write 表项与 {ah} 标志、cc:1430 返回值，
+  两侧均以 `set_output_parameter`+`set_output_lock` 安装真实
+  proto-store 存储前置态，occ 经生产 `characterize_as_output` 锁定分支
+  （fspec.cc:4339-4353）求值——无 staged 元组；(2) cc:1420 调用形态的
+  LE/BE 双路由算术（LE 0/2/4/0/0/0，BE 4/2/0/0/4/0）；(3)
+  `output_storage_projection`——锁定分支存储读取（characterizeAsOutput +
+  getBiggestContainedOutput，fspec.cc:4339-4353/4495-4506）五几何（含
+  contained_by 触发 cc:1398 的 16 字节区间）；(4)
+  `production_entry_guardcalls`——funcLinkOutput 生产者（stack 存储 →
+  setStackOutputLock + 延迟输出 varnode；register 存储 → 立即
+  newVarnodeOut）+ `guard_calls` 全链（spacebase 平移 0x10）：stack 锁定
+  几何升级 unaffected（无 INDIRECT、SUBPIECE 截断守卫），register 控制
+  几何保持 unknown_effect（INDIRECT op 守卫，cc:1511-1519）。
+  covered=MATCH（双侧逐字节一致，11/12）；overall=PARTIAL_MATCH（BE 栈
+  空间过渡模型下不可 stage，登记为 UNTESTED）。
+

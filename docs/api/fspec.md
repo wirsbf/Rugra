@@ -497,6 +497,39 @@ Ghidra 行为），`Architecture::decode_proto_spec`/`decode_default_proto_spec`
 `get_alias_parent_marker`/`set_alias_parent_marker`（Ghidra
 `getAliasParent()`/copy-ctor `compatModel` 的 Some/None 可观测面）。
 
+# 2026-08-25：proto-store 输出存储 + 锁定分支落地（FSPEC-OUTPUT-STORAGE-0001）
+
+- `FuncProto::output_storage: Option<(AddressSpace, u64)>`：扁平 store 的
+  `ProtoStore*::outparam` `ParameterBasic::addr`（fspec.hh:1164-1165）站立
+  位——返回值存储位置（空间+偏移）。legacy `Address` 无空间身份，空间随
+  偏移并存（ADDRESS-0001 落地时折叠进地址）。`FuncProto::new` 初始化
+  `None`；`copy_from` 携带（fspec.cc:3797-3798 store clone）。
+- `set_output_parameter(pieces, space)` 改公开并记录存储（fspec.cc:3385
+  `new ParameterBasic("",piece.addr,piece.type,piece.flags)` 全量——类型进
+  `return_type`，地址进 `output_storage`）；trial-commit 路径
+  （`update_output_types`）以 varnode 空间调用。
+- `characterize_as_output` 锁定分支（fspec.cc:4339-4353）逐行落地：
+  TYPE_VOID 门 + cc:4346 `justifiedContain`（端序按存储空间路由）+
+  cc:4351 `containedBy`。锁定但无记录存储时降级 model 分支（Ghidra 锁定
+  分支为终态；no-storage 是 Rugra 过渡不可达态，保持生产行为不变）。
+- `get_biggest_contained_output` 锁定分支（fspec.cc:4495-4506）同构落地
+  （cc:4500 containedBy + `base != op2.base` 空间等值检查）。
+- 新 helper `contained_by_range`（address.cc:110-118 `Address::containedBy`
+  的 spaceless-offsets 形态，与 `justified_contain_range` 同约定：空间
+  等值检查留在调用方）。
+- `FuncCallSpecs`：`is_stack_output_locked` 字段（fspec.hh:1661
+  `isstackoutputlock`，构造 false = fspec.cc:4946）+ `set_stack_output_lock`
+  （fspec.hh:1703）+ 真实 `is_stack_output_lock`（替代写死 false）+
+  `get_output_storage` 委托（fspec.hh:1536 `getOutput` 的继承投影）。
+  生产者 = `ActionFuncLink::func_link_output`（coreaction.cc:1546-1549），
+  消费者 = `Heritage::guard_calls` cc:1487 门。
+- decode 通道残差收窄：`FuncProto::decode` 的 returnsym 地址仍在
+  `decode_output_storage` 闭包边界丢失空间身份（丢弃并注释登记，
+  ADDRESS-0001 家族）；签名 ingestion 落地前 funcLinkOutput 走无存储回退。
+- 证据：`tests/oracle/heritage_tryoutput_1204.*` 四 case 双侧逐字节
+  MATCH（11/12 covered；BE 栈空间 UNTESTED 保持）。
+
+
 ### 2026-08-17：setInternal 签名对齐（FUNCPROTO-MODEL-BIND-0001）
 
 - `set_internal(&mut self, model: Option<Arc<ProtoModelFull>>, vt)`——参数从

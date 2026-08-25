@@ -6887,7 +6887,7 @@ impl ActionFuncLink {
 
     /// Set up the modeled return-value recovery slice for a sub-function call,
     /// corresponding to `ActionFuncLink::funcLinkOutput`
-    /// (coreaction.cc:1521-1572). Stack-output and extension paths remain
+    /// (coreaction.cc:1521-1572). The small-size extension path remains
     /// `CALLSPEC-0001`.
     ///
     /// Decide whether the CALL produces an output (return-value) varnode.
@@ -6897,13 +6897,21 @@ impl ActionFuncLink {
     /// 2. If the output prototype is LOCKED:
     ///    - if the return type is VOID → produce NO output (void functions
     ///      like exit/free never get a return varnode).
-    ///    - else → newVarnodeOut(sz, addr) builds the return varnode.
+    ///    - else if the proto-store output storage is recorded and lives in
+    ///      the spacebase (stack) space → setStackOutputLock(true) and delay
+    ///      the output varnode until stack heritage (coreaction.cc:1546-1549;
+    ///      `Heritage::tryOutputStackGuard` then builds it caller-
+    ///      perspective).
+    ///    - else → newVarnodeOut(sz, addr) builds the return varnode at the
+    ///      recorded storage offset (coreaction.cc:1551). With no recorded
+    ///      storage — a transitional state Ghidra cannot reach (its outparam
+    ///      always carries an address) — RAX offset 0x0 remains the default.
     /// 3. If UNLOCKED → initActiveOutput() (defer to trial recovery; no
     ///    output varnode yet).
     ///
-    /// The locked-stack-output path (setStackOutputLock) and the small-size
-    /// extension path (assumedOutputExtension → SEXT/ZEXT/PIECE op) require
-    /// Funcdata op-edit infrastructure beyond this pass and are deferred.
+    /// The small-size extension path (assumedOutputExtension → SEXT/ZEXT/
+    /// PIECE op, coreaction.cc:1552-1568) requires Funcdata op-edit
+    /// infrastructure beyond this pass and is deferred (`CALLSPEC-0001`).
     // Ghidra: coreaction.cc:1521 ActionFuncLink::funcLinkOutput
     pub fn func_link_output(fd: &mut Funcdata, fc_idx: usize, op: &crate::op::PcodeOpRef) {
         // (1) Remove any existing output (Ghidra coreaction.cc:1525-1537).
@@ -6931,12 +6939,43 @@ impl ActionFuncLink {
             // Locked-void return: NO output varnode (coreaction.cc:1541 gate).
             return;
         }
-        // Non-void locked return: build the output varnode.
-        // RAX = register offset 0x0 (x86_lift.rs encoding), size = return type
-        // size (8 for pointer/long on x86-64), corresponding to
-        // coreaction.cc:1551 newVarnodeOut(sz, addr, callop).
+        // Non-void locked return: read the proto-store output parameter
+        // (coreaction.cc:1539-1542).
+        //   ProtoParameter *outparam = fc->getOutput();
+        //   int4 sz = outparam->getSize();
         let sz = return_type.get_size().max(1);
-        fd.new_varnode_out(sz, crate::address::Address::new(0x0), op);
+        let output_storage = match fd.get_call_specs(fc_idx) {
+            Some(fc) => fc.get_output_storage(),
+            None => return,
+        };
+        if let Some((spc, off)) = output_storage {
+            // coreaction.cc:1545-1550:
+            //   Address addr = outparam->getAddress();
+            //   if (addr.getSpace()->getType() == IPTR_SPACEBASE) {
+            //     // Delay creating output Varnode until heritage of the
+            //     // stack, when we know relative value of the stack pointer
+            //     fc->setStackOutputLock(true);
+            //     return;
+            //   }
+            // The transitional enum's Stack IS the spacebase space (the
+            // same cc:1460 convention as guard_calls).
+            if spc == crate::space::AddressSpace::Stack {
+                if let Some(mut fc_mut) = fd.get_call_specs_mut(fc_idx) {
+                    fc_mut.set_stack_output_lock(true);
+                }
+                return;
+            }
+            // coreaction.cc:1551: data.newVarnodeOut(sz, addr, callop) —
+            // the return varnode lives at the recorded storage offset
+            // (Rugra's new_varnode_out creates it in the register space,
+            // the registered transitional divergence).
+            fd.new_varnode_out(sz, crate::address::Address::new(off), op);
+        } else {
+            // Transitional no-storage fallback: RAX = register offset 0x0
+            // (x86_lift.rs encoding), for locked prototypes whose storage
+            // is not recorded (known-prototype paths).
+            fd.new_varnode_out(sz, crate::address::Address::new(0x0), op);
+        }
     }
 }
 impl Action for ActionFuncLink {

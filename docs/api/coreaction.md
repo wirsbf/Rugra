@@ -1490,3 +1490,25 @@ buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
   setPieces→assignParameterStorage→setOutput）。双侧 stdout 14 行字节一致
   （MATCH）。残差（均 UNTESTED，见 metadata）：ANN-F 模型胶水（仅钉观察地址）、
   多输出条目模型、E2E 折叠链（依赖 GAP-D）。
+
+## funcLinkOutput 锁定输出存储分支（2026-08-25，FSPEC-OUTPUT-STORAGE-0001）
+
+- **Ghidra**: `ActionFuncLink::funcLinkOutput` 的 coreaction.cc:1538-1553 腿——
+  locked 非 void 输出读 `outparam = fc->getOutput()`，`addr =
+  outparam->getAddress()`；`addr.getSpace()->getType() == IPTR_SPACEBASE` 时
+  `fc->setStackOutputLock(true)` 并**延迟**输出 varnode 到栈 heritage
+  （`Heritage::tryOutputStackGuard` 在 caller 视角重建，heritage.cc:1414），
+  否则 `data.newVarnodeOut(sz, addr, callop)` 立即建在记录存储上。
+- **Rugra 侧**：`func_link_output` 现读 `fc.get_output_storage()`
+  （fspec.rs 扁平 store 的 `outparam::addr` 站位）；`Stack`（过渡枚举的
+  spacebase，与 guardCalls cc:1460 同约定）→ `set_stack_output_lock(true)`
+  + return；register 等其他空间 → `new_varnode_out(sz, Address::new(off))`
+  （new_varnode_out 建在 register 空间 = 登记过的过渡分歧）。无记录存储
+  （Ghidra 不可达：known-prototype 路径未记录）保持 RAX 0x0 legacy 回退。
+  `sz` = `outparam->getSize()` = 返回类型 size（fspec.hh:1176）。
+- 仍 deferred（`CALLSPEC-0001`）：cc:1543-1544 `opMarkCalculatedBool`
+  （TYPE_BOOL sz==1 + isTypeRecoveryOn）与 cc:1552-1568
+  `assumedOutputExtension` → SEXT/ZEXT/PIECE 小尺寸扩展 op。
+- 证据：`tests/oracle/heritage_tryoutput_1204.*` case=production_entry_guardcalls
+  ——stack 存储（stacklock=1, pre_out=0, 守卫后 SUBPIECE、无 INDIRECT）与
+  register 控制几何（stacklock=0, pre_out=1, INDIRECT 守卫）双侧逐字节 MATCH。
