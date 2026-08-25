@@ -266,16 +266,24 @@ impl DebugPrototypeDatabase {
             .zip(addresses.into_iter())
             .enumerate()
         {
-            let name = if parameter.name.is_empty() {
-                format!("param_{}", index + 1)
+            let (name, dwarf_named) = if parameter.name.is_empty() {
+                (format!("param_{}", index + 1), false)
             } else {
-                parameter.name.clone()
+                (parameter.name.clone(), true)
             };
-            proto.add_parameter(ProtoParameter::new(
-                name,
-                parameter.data_type.clone(),
-                address,
-            ));
+            let mut param =
+                ProtoParameter::new(name, parameter.data_type.clone(), address);
+            // Ghidra's DWARF import locks only real DW_AT_name parameter
+            // names (ProtoStoreSymbol::setInput mirrors
+            // ParameterPieces::namelock onto the symbol, fspec.cc:3158/:3180);
+            // a nameless DIE stays unnamed and the decompiler's default
+            // naming (buildDefaultName) owns it — so the synthesized
+            // param_N stand-in is NOT name-locked (lookForFuncParamNames
+            // additionally filters the param_ prefix, coreaction.cc:2831).
+            if dwarf_named {
+                param.flags |= crate::fspec::protoparam_flags::NAME_LOCKED;
+            }
+            proto.add_parameter(param);
         }
         proto.set_dotdotdot(debug_proto.is_varargs);
         proto.set_input_lock(true);
@@ -505,11 +513,21 @@ impl LibcSignatureTable {
         let addresses = storage.assign(&parameters)?;
         let mut proto = FuncProto::new(name.to_string(), return_type);
         for (parameter, address) in parameters.iter().zip(addresses.into_iter()) {
-            proto.add_parameter(ProtoParameter::new(
+            let mut param = ProtoParameter::new(
                 parameter.name.clone(),
                 parameter.data_type.clone(),
                 address,
-            ));
+            );
+            // fspec.cc:3503-3506: the platform-side signature decode reads
+            // ATTRIB_NAMELOCK into ParameterPieces::namelock, and
+            // fspec.cc:3564 propagates it via curparam->setNameLock(). Every
+            // parameter of a locked generic_clib signature carries a real
+            // glibc reserved name (split_declaration rejects nameless
+            // declarations), so each is name-locked here — the bit
+            // ActionNameVars::lookForFuncParamNames gates on
+            // (coreaction.cc:2818 param->isNameLocked()).
+            param.flags |= crate::fspec::protoparam_flags::NAME_LOCKED;
+            proto.add_parameter(param);
         }
         proto.set_input_lock(true);
         proto.set_output_lock(true);

@@ -41,6 +41,15 @@ included) that back the external-stub rendering
   "Unknown calling convention -- yet parameter storage is locked" warning is
   exactly this combination. Returns `Ok(None)` for unknown imports and `Err`
   when a listed signature cannot be represented (stack/aggregate spill).
+  Every materialized parameter additionally carries
+  `protoparam_flags::NAME_LOCKED` (2026-08-25,
+  COREACTION-FUNCPARAMNAMES-RECOMMEND-0001): the platform-side signature
+  decode reads ATTRIB_NAMELOCK into `ParameterPieces::namelock`
+  (fspec.cc:3503-3506) and `FuncProto::decode` propagates it via
+  `curparam->setNameLock(...)` (fspec.cc:3564) — the bit
+  `ActionNameVars::lookForFuncParamNames` gates recommendations on
+  (coreaction.cc:2818 `param->isNameLocked()`), which names call-site
+  variables after locked callee parameter names (`strtol` → `__nptr`).
 
 Supporting parsers: `split_parameter_list` / `split_declaration` split the
 comma-separated `TYPE NAME` declarations (the trailing identifier run is the
@@ -150,3 +159,37 @@ UNKNOWN-PROTOMODEL-WARN-EMIT-0001）。
   ActionPrototypeWarnings 把 "WARNING: Unknown calling convention -- yet
   parameter storage is locked" 以 WARNINGHEADER 类型存入 0x4970 函数地址下
   （printc emitCommentFuncHeader 的打印侧接线另行登记）。
+
+## 2026-08-25：COREACTION-FUNCPARAMNAMES-RECOMMEND-0001 — 锁定签名的参数名锁位
+
+### `NAME_LOCKED` 在两个 front-end 适配层的落位（fspec.cc:3564）
+
+Ghidra 的锁定签名经 `FuncProto::decode` 进入反编译器时，每个 `<param>` 的
+ATTRIB_NAMELOCK 置 `ParameterPieces::namelock`（fspec.cc:3503-3506），
+`curparam->setNameLock((pieces[i].flags & namelock)!=0)`（fspec.cc:3564）把它
+落到 `ProtoParameter` 上。`ActionNameVars::lookForFuncParamNames`
+（coreaction.cc:2858-2897）推荐命名的第一道门禁就是
+`param->isNameLocked()`（coreaction.cc:2818，经 `makeRec`）——没有该位，
+strtol 的 `__nptr`/strstr 的 `__haystack` 永远不会推荐到调用点变量。
+
+Rugra 此前 `ProtoParameter::new` 恒 `flags: 0`，两个适配层都只靠
+`set_input_lock(true)` 置 TYPE_LOCKED，NAME_LOCKED 全程缺失，推荐链断在
+数据侧（coreaction.rs 的 lookForFuncParamNames 内联实现本身已齐全）。修复：
+
+- **`LibcSignatureTable::locked_proto`**：每个物化参数置 NAME_LOCKED
+  （generic_clib 签名数据全部带真名，`split_declaration` 拒绝无名声明）。
+- **`DebugPrototypeDatabase::apply`**：仅 DWARF 真实 `DW_AT_name` 参数置
+  NAME_LOCK；无名 DIE 的 `param_N` 合成名不锁（Ghidra 侧无名 DIE 保持未命名、
+  由 buildDefaultName 接管；lookForFuncParamNames 另有 `param_` 前缀过滤，
+  coreaction.cc:2831）。
+
+### 端到端效果（curl 12.0.4 golden 差分）
+
+- `progressbarinit` 的 strtol 调用点变量 `extraout_RAX` → `__nptr`
+  （golden 同名，函数级 defects=0/numbering=0）。
+- 全量 124 函数：13 个函数获得推荐命名（`__s`/`__dest`/`__ptr`/`__n`/
+  `__nptr`/`__stream`/`__haystack`/`__filename`，即 golden 中 fwrite/fgets/
+  strcat/strcpy/free/realloc/fopen/strstr/strtol 的锁定参数名），
+  skeleton 差异 2863 → 2849（-14），defects=0、numbering=0 保持。
+  其余 skeleton 差异均为独立既有缺口（curl_getenv 赋值语句缺失、"COLUMNS"
+  字符串引用、char* cast 传播等）。
