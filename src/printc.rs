@@ -4804,6 +4804,24 @@ impl PrintC {
                         return format!("{}_{:x}", prefix, Self::unnamed_location_offset(vn));
                     }
                 }
+                // NUMDECL-DOUBLE-V symbol-backed names print VERBATIM.
+                // Oracle branch structure (printlanguage.cc:238-262
+                // pushSymbolDetail): sym != null → PrintC::pushSymbol →
+                // `sym->getDisplayName()` with no type-based rewriting
+                // (printc.cc:1905-1936; the only adornment is the unmerged
+                // `$N` suffix). Rewriting a symbol-backed name's Hungarian
+                // prefix from the print-time instance type (iVarN → piVarN)
+                // splits the body name from the scope declaration name —
+                // emitLocalVarDecls (printc.cc:2260-2279) still declares
+                // `int iVarN;`, the body references `piVarN`, and
+                // prettyprint's backfill then injects a second
+                // different-typed declaration for it. The prefix rewrite
+                // stays available ONLY for symbol-less highs (the
+                // RUGRA-GLUE unlinked-name path below), where no
+                // declaration exists to diverge from.
+                if high.symbol.is_some() {
+                    return name.to_string();
+                }
                 let effective_type = Self::vn_type_if_meaningful(vn)
                     .or_else(|| Self::find_typed_instance(&high))
                     .or_else(|| self.pointer_type_for(vn));
@@ -8520,6 +8538,14 @@ impl PrintLanguage for PrintC {
                 // Raw register names (from merge's assign_names) are converted to
                 // size-based local variable names (Ghidra buildVariableName default:
                 // database.cc:2501-2504). NO hardcoded "RSP"/"RBP" exceptions.
+                // NUMDECL-DOUBLE-V symbol-backed names print VERBATIM
+                // (printlanguage.cc:246-251 pushSymbolDetail sym != null →
+                // printc.cc:1935 pushAtom(sym->getDisplayName())): the
+                // type-prefix rewrite is only legal on the symbol-less
+                // RUGRA-GLUE name path, otherwise the body name (piVarN)
+                // diverges from the scope declaration (int iVarN;) and
+                // prettyprint backfill injects a second different-typed
+                // declaration.
                 let display_name = if Self::is_raw_register_name(name) {
                     if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                         pname.clone()
@@ -8527,6 +8553,8 @@ impl PrintLanguage for PrintC {
                         let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
                         format!("{}_{:x}", prefix, vn.get_offset())
                     }
+                } else if high.symbol.is_some() {
+                    name.to_string()
                 } else {
                     Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size())
                 };

@@ -1510,3 +1510,28 @@ label 的 implicit-function-declaration）。
    BlockList/...）自身无直接 op，扫描必须报非空并交给递归发射决定；之前
    扫描把每个结构化体都误判为空，吞掉整个 then 分支（my_fwrite 的嵌套
    fopen/return-if 丢失只剩 `if (cond) {}` 的根因之一）。
+
+### 2026-08-25：NUMDECL-DOUBLE-V — 符号背书变量名 print 期逐字输出
+
+SUB-A 形态双声明根因：`get_varnode_display_name_inner` 与 `push_varnode`
+Priority 1 两处的 `maybe_apply_type_prefix`（RUGRA-GLUE）按 print 期
+实例类型把符号背书的匈牙利前缀重写（`iVarN` → `piVarN`），而
+`emitLocalVarDecls` 声明侧仍打印符号原名 `int iVarN;`——body/decl 名分
+裂后 prettyprint backfill 为 `piVarN` 注入第二个异类型声明（curl 语料
+9 对/7 函数，如 main `int iVar37;` + 注入 `char *piVar37;`）。
+
+修复：两处调用点镜像 oracle 分支结构——`printlanguage.cc:238-262
+pushSymbolDetail`：`sym != null` → `PrintC::pushSymbol`（printc.cc:1905-
+1936）打印 `sym->getDisplayName()` 逐字（唯一修饰是 unmerged `$N` 后
+缀，无类型前缀重写）；`sym == null` → unnamed-location。Rugra 侧
+`high.symbol.is_some()` → `high.get_name()` 逐字返回（ActionNameVars 的
+RUGRA-GLUE write-back 保证 high.name == symbol.display_name）；
+symbol-less high 保留原前缀重写（未链接引用域的 GLUE 兜底不变）。
+
+符号声明类型的陈旧性（符号类型 int、实例类型 int* 的 file2string_part_0
+audit 一处错误形态变化）为 varmap 域既登记残差（命名期类型前缀，
+PRINTC-UNLINKED-REF-0001 诊断⑤），不属 print 租约。
+
+验收：curl E2E 9 对 SUB-A 双声明全消（body 全部改用符号名 iVarN/lVarN）；
+语句结构零丢失（前缀归一化后逐语句 multiset 相同）；defects=0/
+numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。

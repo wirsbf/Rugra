@@ -2474,10 +2474,21 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::backfillMissingLocals
+    // RUGRA-GLUE: backfill_missing_locals (no Ghidra counterpart exists)
     /// For each function, find `local_XX` identifiers used in the body but not
     /// declared, and insert `int local_XX;` declarations before the first
-    /// non-declaration body line.
+    /// non-declaration body line. The locked oracle's prettyprint.hh has no
+    /// backfill pass of any kind (verified: prettyprint.hh:547 is the
+    /// EmitNoMarkup class declaration, and grep over the oracle tree finds
+    /// no backfillMissingLocals); this pass exists only to keep Rugra's
+    /// unlinked-symbol body references (PRINTC-UNLINKED-REF-0001 domain)
+    /// compilable and is retired as that domain closes. NUMDECL-DOUBLE-V:
+    /// the identifier scanner below must respect C identifier boundaries —
+    /// a prefix match inside a longer identifier (e.g. `lVar64` inside
+    /// `plVar64`, whose `plVar` prefix is not in the table) is NOT a use of
+    /// the shorter name, and injecting a declaration for it produces the
+    /// same-name different-type double declaration (`long *plVar64;` from
+    /// the scope emitter plus `long lVar64;` here).
     fn backfill_missing_locals(text: &str) -> String {
         use std::collections::BTreeSet;
         let lines: Vec<&str> = text.split('\n').collect();
@@ -2609,7 +2620,17 @@ impl EmitNoMarkup {
                     let mut matched = false;
                     for pf in prefixes {
                         let plen = pf.len();
-                        if p + plen <= lb.len() && &lb[p..p + plen] == *pf {
+                        // NUMDECL-DOUBLE-V left word-boundary: a prefix match
+                        // must START an identifier. C identifiers are
+                        // [A-Za-z_][A-Za-z0-9_]*, so a match preceded by an
+                        // identifier byte is the middle of a longer token —
+                        // e.g. `plVar64` matches the `lVar` prefix at its
+                        // inner `l`, manufacturing a phantom `lVar64` "used
+                        // local" that gets injected as `long lVar64;` beside
+                        // the real `long *plVar64;` declaration.
+                        let boundary_ok = p == 0
+                            || !(lb[p - 1].is_ascii_alphanumeric() || lb[p - 1] == b'_');
+                        if boundary_ok && p + plen <= lb.len() && &lb[p..p + plen] == *pf {
                             let mut e = p + plen;
                             // For underscore prefixes: hex digits and underscores
                             // For unnamed-location fallback tokens (prefix ends

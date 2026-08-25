@@ -448,3 +448,22 @@ flat goto 被误重写为 `return code_r0x000026A5();`，gcc 报"将标签隐式
 验收：curl E2E `return code_r0x` 假象 16 → 0；audit_syntax 53 → 55 OK
 （71 → 69 FAIL，清零 2 处"标号使用前未定义"；其余失败为预存——
 progressbarinit/hugehelp 等函数的提取体在两次输出中逐字节相同）。
+
+### 2026-08-25（续3）：NUMDECL-DOUBLE-V — backfill 扫描器左词边界
+
+`backfill_missing_locals()` 的标识符扫描器此前无左词边界检查：前缀表
+不含 `plVar`/`pbVar` 等指针前缀，`plVar64` 在内部 `l` 位置匹配 `lVar`
+前缀，制造幻影 "used local" `lVar64`，随后注入 `long lVar64;` 与符号
+驱动声明 `long *plVar64;` 并存——同名异类型双声明（NUMDECL-DOUBLE-V
+的 SUB-B 形态，curl 语料 18 处幻影/8 函数）。
+
+修复：前缀匹配要求 p==0 或前一字节不是 `[A-Za-z0-9_]`（C 标识符字符
+集）。C 标识符为 `[A-Za-z_][A-Za-z0-9_]*`，长 token 内部的前缀命中
+不是短名的使用。同时修正函数注解：`Ghidra: prettyprint.hh:547
+EmitNoMarkup::backfillMissingLocals` 为误引（锁定 oracle 的
+prettyprint.hh:547 是 EmitNoMarkup 类声明，oracle 无任何 backfill
+文本 pass），改为 `RUGRA-GLUE` 并记录保留理由（PRINTC-UNLINKED-REF-0001
+未链接引用域的可编译性兜底，该域关闭时退役）。
+
+验收：curl E2E 幻影声明 18→0；真未链接引用（glob_set piVar1、
+register0x/unique0x token）注入保持；defects=0/numbering=0 保持。
