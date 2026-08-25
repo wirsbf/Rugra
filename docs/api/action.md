@@ -260,6 +260,11 @@ Rugra 当前的 `action` 层明显受 Ghidra 反编译器中 `Action` / `Rule` �
 
 `Action` 是当前 Rugra 中“高层分析动作”的基础抽象。
 
+> trait 声明为 `Action: Send + Sync`（`Rule` 同）。Ghidra 的反编译器对象
+> 全部存活于单线程，这是 Rust 侧 glue：`Architecture` 通过
+> `Arc<RwLock<ActionDatabase>>` 内嵌 allacts（architecture.hh:212）后，
+> trait 对象必须跨线程共享（RUGRA-GLUE 注释见 src/action.rs）。
+
 ### 角色
 它表示一个**面向函数级上下文的分析或变换步骤**。  
 一个 `Action` 通常不是只改一条操作，而是代表一个更完整的阶段，例如：
@@ -542,11 +547,22 @@ path/ordinal/kind/name/basegroup/flags），以及
 decompile/jumptable/register 三派生根的全部 Action/Rule 名与存活过滤）。
 
 ### 相关新增 API
-- `ActionGroupList`（action.hh:31-40）：`from_members`/`contains`。
+- `ActionGroupList`（action.hh:31-40）：`from_members`/`contains`/`member_names`
+  （成员键为 `String`，支持 `addToGroup`/`removeFromGroup` 的运行时串）。
 - `default_groups` 模块：六个默认 grouplist 的逐字成员表。
 - `ActionDatabase::universal_action()`（coreaction.cc:5462）。
 - `ActionDatabase::reset_defaults()` / `set_current()` / `derive_action()` /
   `get_current()` / `get_current_name()`（action.cc:986/1021/1145、action.hh:313-314）。
+- `ActionDatabase::get_group()`（action.hh:315 `getGroup`，pub 化）。
+- `ActionDatabase::toggle_action(grp, basegrp, val)`（action.cc:1036）：
+  在指定 root 的 grouplist 上 add/remove 组，随后**始终**从 universal 重新
+  clone、重注册（替换旧对象），并在 `grp == currentactname` 时更新 currentact。
+  Ghidra 返回新 root 指针；Rust 侧调用方经 `get_action`/`get_current` 重取。
+- `ActionDatabase::add_to_group(grp, basegroup) -> bool` /
+  `remove_from_group(grp, basegrp) -> bool`（action.cc:1090/1103）：grouplist
+  条目缺失时默认插入（`groupmap[grp]` 语义），`isDefaultGroups` 先清零；
+  返回值语义 = set insert `.second` / erase 计数 > 0。
+- `ActionDatabase::actionmap_size()`：注册表大小的 fixture 观察视图。
 - `universal_action(Option<&ActionGroupList>) -> Option<ActionRestartGroup>`：
   coreaction.cc:5462-5738 的全槽镜像构建（None = 原始树）。
 - `build_default_pipeline()`：派生 decompile 根的测试/示例便捷入口。
@@ -557,6 +573,16 @@ decompile/jumptable/register 三派生根的全部 Action/Rule 名与存活过�
   `build_simplify_pool`）：池名从 `simplifypool` 改为 oracle 精确名
   `oppool1`（coreaction.cc:5511）；grouplist 传入时逐 Rule 按 basegroup
   过滤（Rule::clone 语义）。`build_oppool2` / `build_cleanup_pool` 同形。
+
+### toggleAction 的 oracle 行为证据（OPTIONS-SPLITDATATYPE-WIRING-0002）
+双侧 fixture `tests/oracle/options_wiring_1204.*`：oracle 侧以最小
+Architecture 子类驱动真实 `OptionSplitDatatypes::apply`（options.cc:999）
+→ `toggleAction`（action.cc:1036）；Rust 侧驱动生产
+`options::OptionSplitDatatypes::apply` + `split_action_toggles` + 两次
+`toggle_action` 转发序列。25 条记录双侧逐字节一致，覆盖：
+- 每次**成功** apply 都重 clone 并替换当前 root（含 config 不变的重申场景），
+  universal 根永不替换（构造序数通道观察，规避分配器地址复用）；
+- p1 未知 token 抛错前零突变；p2 未知 token 留下 p1 部分赋值且不进 toggle 块。
 
 ### 当前意义
 这是当前动作系统中最重要的“默认流水线入口”之一。  

@@ -1,0 +1,115 @@
+{
+  "schema": 2,
+  "fixture_id": "OPTIONS-SPLITDATATYPE-WIRING-0002",
+  "stable_function_id": "GH12-F-598b458a5fada2e742f7",
+  "stable_function_closure": [
+    "GH12-F-c95e7dfb3ef2143f6729 ghidra::OptionSplitDatatypes::getOptionBit options.cc:982",
+    "GH12-F-185d28a559ee4d190670 ghidra::OptionSplitDatatypes::apply options.cc:999",
+    "GH12-F-598b458a5fada2e742f7 ghidra::ActionDatabase::toggleAction action.cc:1036",
+    "GH12-F-38824e1c6385973b3cbc ghidra::ActionDatabase::addToGroup action.cc:1090",
+    "GH12-F-a081bad1d129cc7b8d12 ghidra::ActionDatabase::removeFromGroup action.cc:1103"
+  ],
+  "overall_status": "MISMATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "locked synthetic ActionDatabase holding one ActionRestartGroup universal root (two base head leaves plus a nested body group with splitcopy/splitpointer/merge leaves) installed into a minimal Architecture subclass; no Funcdata, address space, instruction bytes, or P-code graph is consumed",
+  "compiler_spec": "not applicable: root-Action registry, grouplist, and option configuration state only",
+  "analysis_options": {
+    "entrypoint": "Production OptionSplitDatatypes::apply against a real Architecture (TestArch stubs only the pure virtuals the option path never calls), which internally drives the production ActionDatabase::toggleAction -> addToGroup/removeFromGroup -> getGroup -> universal clone -> registerAction -> currentact update chain",
+    "prestate": "Architecture constructor defaults (split_datatype_config = struct|array|pointer = 7); synthetic universal registered under \"universal\"; decompile grouplist {base, splitcopy, splitpointer, merge}; setCurrent(\"decompile\") derived root; ScriptAction leaves carry construction ordinals in the inherited flags word as an allocator-independent identity channel",
+    "observation": "25 fixed-order records (state/init + 8 cases x (apply + state + identity)): the option return string or LowlevelError explain text, the post-case split_datatype_config, the sorted decompile grouplist membership, the surviving current-root tree (leaf@group, nested group brackets), actionmap size, current root name, and universal/root first-leaf-ordinal change flags",
+    "normalization": "Error delivery channel is normalized to the thrown/returned message text: the C++ apply throws LowlevelError (observed via e.explain) and the production options.rs apply returns a 'LowlevelError: ' prefixed String (prefix stripped by the comparand). No group name, tree order, ordinal, or state field is normalized. Object identity is observed only through monotonically increasing construction ordinals, never raw addresses.",
+    "exception_policy": "Two LowlevelError paths are inside the projection: an unknown p1 token (configuration untouched, toggle block unreached, root NOT replaced) and an unknown p2 token (partial configuration assignment from p1, toggle block unreached, root NOT replaced). Both are caught and printed as records."
+  },
+  "input": {
+    "architecture": "synthetic universal ActionRestartGroup + decompile grouplist on a minimal Architecture subclass",
+    "compiler_spec": "not applicable",
+    "analysis_options": {
+      "universal": "ActionRestartGroup(rule_onceperfunc, universal, maxrestarts=1) with head leaves start@base, stop@base and nested body[splitcopy@splitcopy, splitpointer@splitpointer, merge@merge]; ScriptAction ordinals start at 100",
+      "groups": "decompile = {base, splitcopy, splitpointer, merge}; current root set via setCurrent(\"decompile\")",
+      "cases": [
+        "\"\" \"\" \"\" -> config 7->0, both groups removed, body keeps only merge",
+        "\"struct\" \"\" \"\" -> config 0->1, splitcopy added, splitpointer remove is a no-op erase",
+        "\"struct\" \"\" \"pointer\" -> config 1->5, splitpointer added",
+        "\"array\" \"struct\" \"pointer\" -> config ->7, both already present (no-op inserts)",
+        "\"array\" \"struct\" \"pointer\" repeated -> config unchanged (result 'unchanged') but the root object is STILL re-cloned and re-registered",
+        "\"bogus\" \"\" \"\" -> LowlevelError before assignment; config, groups, tree, and root identity all unchanged",
+        "\"struct\" \"bogus\" \"\" -> LowlevelError after the p1 assignment; config=1 partial, toggle block unreached, root unchanged",
+        "\"\" \"array\" \"\" -> config 0|0|2=2, splitcopy kept, splitpointer removed"
+      ]
+    },
+    "cases": [
+      "init state",
+      "off/off transition",
+      "on/off transition with no-op erase",
+      "on/on transition",
+      "no-op re-assertion with root replacement",
+      "p1 error with zero mutation",
+      "p2 error with partial config mutation and no toggling",
+      "array-only re-enable removing splitpointer"
+    ]
+  },
+  "input_fingerprint": "sha256:84b4f836bff87a83fccc2d3e3275720e931637b98aadb34df54a0a0570815468",
+  "observation_schema": {
+    "format": "25 fixed-order UTF-8 lines with a final newline",
+    "state": "tag/config/current root name/actionmap size/sorted group members/tree rendering",
+    "apply": "case index/args p1|p2|p3/threw/result text/config",
+    "identity": "case index/universal_changed/root_changed/universal first-leaf ordinal/root first-leaf ordinal"
+  },
+  "comparand": {
+    "rugra_base_commit": "fce01555",
+    "rugra_base_tree": "37bc660cdefa47c5844d596d00caad8b8edd810a",
+    "overlay": [
+      "src/action.rs",
+      "src/arch.rs"
+    ],
+    "cpp_fixture_sha256": "bc11efeec3f304b56f03373a99393e76ab2b10f6a9827511966516fc4ba582f9",
+    "rust_fixture_sha256": "41738ec019723033af4058d6033a83c966e3d7436bf6444e016daa0476db69d1",
+    "action_rs_sha256": "d161bf5e3a4ddee98dd5249b88f821724adddf9eeb6c4eb5aad717412877648a",
+    "arch_rs_sha256": "e6affe20321db1635dd7a1f1b4a7282f2ed45afc954b627c8b2720842e19f7d6",
+    "action_doc_sha256": "9fd80bbca98656615e5db2faec8497b283424a325331cff64df61596531bdf31",
+    "arch_doc_sha256": "d7f26c2745177b03fa52dbb2bedab12a74af26e4298c5ce5e5d5bda28762c5d2",
+    "runner_sha256": "bacc5bb9ea8c7d57ab8c7b8873c154521b972955db1e3922342422cdff267151",
+    "ghidra_action_cc_blob": "9a4e2e26d04d45805f14900fadcbbac01270a2f0",
+    "ghidra_action_hh_blob": "e929dbb98e8e1fb23d7ac8e8d86e9f4f39fc998c",
+    "ghidra_options_cc_blob": "e0778433e1c2df7ef310026d346dceac9de5a399",
+    "ghidra_options_hh_blob": "7a7f713b84f26f393d135fba673566e732c3afaa",
+    "ghidra_architecture_cc_blob": "e71bf7ad44b9375f1cb92c6b6bf3e7c092b928cc",
+    "ghidra_architecture_hh_blob": "ebd0e84343294a48e567c46dd121201a54059f5b",
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "rust_toolchain": "system",
+      "platform": "Linux 7.1.8-arch1-3 x86_64"
+    }
+  },
+  "build": {
+    "cpp_oracle": "The complete locked decompiler C++ subtree is exported to a fresh temporary directory and libdecomp.a is rebuilt before linking the fixture; the fixture calls CapabilityPoint::initializeAll() first (as ghidra_process.cc:523 does) so the embedded Architecture constructor finds the registered C print language.",
+    "private_state_observer": "The fixture pre-includes the standard library, then scopes class/private/protected visibility macros to architecture.hh and options.hh so it can observe ActionDatabase's actionmap/groupmap and Architecture's allacts/split_datatype_config without altering production bodies; a minimal Architecture subclass stubs the pure virtuals the option path never calls.",
+    "rust_comparand": "A tar snapshot of pinned Rugra base fce01555 is materialized, src/action.rs and src/arch.rs are overlaid, and the fixture is compiled as a temporary Cargo bin offline/locked under /tmp/rugra-cargo-build.lock with CARGO_TARGET_DIR=/tmp/rugra-target-options-wiring.",
+    "drift_check": "All owned source, documentation, fixture, metadata, and runner files are hashed before and after execution."
+  },
+  "expected_stdout_sha256": "8662fd98c6162b40e8a33291644ed1442fbc4577c418b1547a7601af2a45759a",
+  "expected_exit_code": 0,
+  "covered_projection_status": "MATCH",
+  "coverage": {
+    "toggle_reclone_replaces_root": "MATCH: every successful apply re-clones the current root from the universal and re-registers it (fresh leaf ordinals), including the configuration-unchanged case; the universal root object is never replaced",
+    "group_membership_mutation": "MATCH: addToGroup inserts and removeFromGroup erases on the steering grouplist with default-insert semantics; sorted membership output is byte-identical",
+    "tree_projection": "MATCH: the derived tree drops exactly the leaves whose basegroup left the grouplist and keeps nested group structure (body[...]) identical on both sides",
+    "error_paths": "MATCH: p1-unknown leaves every observable untouched; p2-unknown assigns the partial p1 configuration and never reaches the toggle block (root identity unchanged)",
+    "forwarding_pair": "MATCH: the (splitcopy, splitpointer) on/off pair driven by the production split_action_toggles plus two toggle_action calls reproduces the oracle apply's internal forwarding byte-for-byte, including the double-toggle call order",
+    "arch_allacts_embedding": "MATCH: the comparand Architecture carries the synthetic database through the new allacts field behind Arc<RwLock> and observes the same registry state the embedded Ghidra value produces"
+  },
+  "residuals": [
+    "options.rs OptionSplitDatatypes::apply still computes the forwarding pair without calling allacts.toggle_action itself (its RUGRA-GLUE block at src/options.rs:875-884); the comparand performs the identical production sequence externally. Swapping that block to forward through arch.allacts is the follow-up OPTIONS-SPLITDATATYPE-WIRING-0003 write-set (options.rs + options.md), after which this fixture's apply_case becomes a direct production call.",
+    "Architecture::build_action (architecture.cc:582-591) is ported but UNTESTED by this fixture: the oracle-side TestArch cannot run the real universalAction(glb) against null subcomponents, and the Rugra side accordingly builds only the synthetic database. Its two-call body is code-inspected only until the pipeline integration task drives it.",
+    "Architecture::resetDefaults' printlist arm (architecture.cc:1443) stays deferred with the PrintLanguage subsystem.",
+    "parseExtraRules (architecture.cc:586) has no Rugra counterpart; registered as ARCH-PARSEEXTRARULES-0001.",
+    "ActionDatabase::setGroup/cloneGroup runtime-string argv forms and the LowlevelError texts for a missing group/base in toggleAction are outside this projection (synthetic groups always exist here)."
+  ]
+}

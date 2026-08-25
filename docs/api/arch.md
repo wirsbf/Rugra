@@ -147,10 +147,16 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 | `loadersymbols_parsed` | `bool` | Loader symbols read. |
 | `tracked_set_map` | `TrackedSetMap` | pspec `<context_data>` tracked partitions — stand-in for `ContextInternal::trackbase` (globalcontext.hh:284) behind `Architecture::context`, fed by `decode_context_data` (ARCH-CONTEXT-TRACKED-0001). |
 | `context_set_children_skipped` | `usize` | `<context_set>` children consumed but not decoded (low-level SLEIGH context blob, SLEIGH-0002C residual). |
+| `allacts` | `Option<Arc<RwLock<ActionDatabase>>>` | `allacts` (architecture.hh:212) — root Action database. Ghidra embeds by value; Rugra defers to `build_action()` behind a shared lock so option appliers can mutate the current root through `&mut Architecture` (options.cc:1008-1015), OPTIONS-SPLITDATATYPE-WIRING-0002. |
 | `stack_reverse_justify` | `bool` | `<stackpointer reversejustify>` (`setReverseJustified`, architecture.cc:566). |
 
 **Methods:** `new()`, `reset_defaults_internal()` (architecture.cc:1416),
-`reset_defaults()` (architecture.cc:1438), `get_model(name)`, `has_model(name)`,
+`reset_defaults()` (architecture.cc:1438 — now forwards to
+`allacts.reset_defaults()` when the database exists, mirroring
+architecture.cc:1442; the printlist arm stays deferred),
+`build_action()` (architecture.cc:582 — `universal_action()` +
+`reset_defaults()` on the embedded database; `parseExtraRules` is a
+registered residual ARCH-PARSEEXTRARULES-0001), `get_model(name)`, `has_model(name)`,
 `set_default_model(name)` (architecture.cc:323), `get_default_model()`,
 `decode_proto(decoder, addr_size, register_resolver)` (architecture.cc:741),
 `decode_proto_spec(...)` (parseCompilerConfig path injecting

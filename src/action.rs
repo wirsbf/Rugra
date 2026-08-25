@@ -9,9 +9,9 @@ use crate::blockaction::*;
 use std::sync::Arc;
 
 // RUGRA-GLUE: Rust type-erased constructor retained at an Action registration slot so a filtered clone can construct the same concrete leaf without widening every concrete Action's write-set
-type ActionFactory = Arc<dyn Fn() -> Box<dyn Action>>;
+type ActionFactory = Arc<dyn Fn() -> Box<dyn Action> + Send + Sync>;
 // RUGRA-GLUE: Rust type-erased constructor retained at a Rule registration slot so ActionPool::clone can honor Ghidra's fresh-instance Rule::clone contract
-type RuleFactory = Arc<dyn Fn() -> Box<dyn Rule>>;
+type RuleFactory = Arc<dyn Fn() -> Box<dyn Rule> + Send + Sync>;
 
 // RUGRA-GLUE: keeps each concrete Rule constructor at its locked coreaction.cc registration slot while storing a reusable fresh-instance factory
 macro_rules! register_rule {
@@ -89,7 +89,8 @@ pub enum RuleTargetMutation {
 /// State management: Ghidra's Action carries `status`/`flags`/`count` fields
 /// that drive the `perform()` state machine (repeatapply/onceperfunc). Rugra
 /// mirrors this via `ActionState`, stored alongside each Action in its container.
-pub trait Action {
+// RUGRA-GLUE: Send + Sync supertrait (Ghidra's decompiler objects live on one thread; Architecture embeds the ActionDatabase, so the Rust Arc<RwLock> embedding needs the bounds)
+pub trait Action: Send + Sync {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Perform the action's work on the given function data.
     ///
@@ -466,7 +467,8 @@ impl ActionState {
 ///
 /// Corresponds to Ghidra's `Rule` class. A rule typically targets a specific
 /// P-code opcode and performs a local simplification or optimization.
-pub trait Rule {
+// RUGRA-GLUE: Send + Sync supertrait (Ghidra's Rule objects live on one thread; ActionPool trees sit inside Architecture's ActionDatabase, so the Rust Arc<RwLock> embedding needs the bounds)
+pub trait Rule: Send + Sync {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Apply the rule to a specific operation
     ///
@@ -688,7 +690,7 @@ impl ActionGroup {
     // RUGRA-GLUE: captures the concrete Rust constructor at the Ghidra addAction registration site so leaf Action::clone can remain write-set-local
     pub fn add_action_factory_in_group<F>(&mut self, group: &str, factory: F)
     where
-        F: Fn() -> Box<dyn Action> + 'static,
+        F: Fn() -> Box<dyn Action> + Send + Sync + 'static,
     {
         let factory: ActionFactory = Arc::new(factory);
         let action = factory();
@@ -1009,7 +1011,7 @@ impl ActionRestartGroup {
     // RUGRA-GLUE: registration-factory passthrough to the embedded ActionGroup
     pub fn add_action_factory_in_group<F>(&mut self, group: &str, factory: F)
     where
-        F: Fn() -> Box<dyn Action> + 'static,
+        F: Fn() -> Box<dyn Action> + Send + Sync + 'static,
     {
         self.group.add_action_factory_in_group(group, factory);
     }
@@ -1222,7 +1224,7 @@ impl ActionPool {
     // RUGRA-GLUE: captures the concrete Rust constructor at the Ghidra addRule registration site so Rule::clone remains fresh without editing concrete Rule modules
     pub fn add_rule_factory_in_group<F>(&mut self, group: &str, factory: F)
     where
-        F: Fn() -> Box<dyn Rule> + 'static,
+        F: Fn() -> Box<dyn Rule> + Send + Sync + 'static,
     {
         let factory: RuleFactory = Arc::new(factory);
         let rule = factory();
@@ -1754,20 +1756,25 @@ pub fn build_cleanup_pool() -> ActionPool {
 /// which children survive `ActionDatabase::deriveAction`'s selective clone.
 #[derive(Debug, Clone)]
 pub struct ActionGroupList {
-    groups: std::collections::BTreeSet<&'static str>,
+    groups: std::collections::BTreeSet<String>,
 }
 
 impl ActionGroupList {
-    // RUGRA-GLUE: static-member constructor (Ghidra fills the same set via ActionDatabase::setGroup's argv, action.cc:1059-1070)
+    // RUGRA-GLUE: static-member constructor (Ghidra fills the same set via ActionDatabase::setGroup's argv, action.cc:1059-1070; addToGroup/removeFromGroup mutate it with runtime strings, action.cc:1090-1109)
     pub fn from_members(members: &[&'static str]) -> Self {
         Self {
-            groups: members.iter().copied().collect(),
+            groups: members.iter().map(|m| m.to_string()).collect(),
         }
     }
 
     // Ghidra: action.hh:39 ActionGroupList::contains
     pub fn contains(&self, nm: &str) -> bool {
         self.groups.contains(nm)
+    }
+
+    // RUGRA-GLUE: read-only fixture view of the private set in sorted order (the C++ fixtures read ActionGroupList::list through their private-access hack; std::set<string> and BTreeSet<String> iterate in the same lexicographic order)
+    pub fn member_names(&self) -> Vec<&str> {
+        self.groups.iter().map(|s| s.as_str()).collect()
     }
 }
 
@@ -1905,6 +1912,11 @@ impl ActionDatabase {
         self.action_index(name).is_some()
     }
 
+    // RUGRA-GLUE: read-only fixture view of the registry size (the C++ fixtures read actionmap.size() through their private-access hack)
+    pub fn actionmap_size(&self) -> usize {
+        self.actionmap.len()
+    }
+
     // Ghidra: action.cc:1059 ActionDatabase::setGroup (member-list form)
     pub fn set_group(&mut self, grp: &str, members: &[&'static str]) {
         let grouplist = ActionGroupList::from_members(members);
@@ -1917,7 +1929,7 @@ impl ActionDatabase {
     }
 
     // Ghidra: action.cc:1006 ActionDatabase::getGroup
-    fn get_group(&self, grp: &str) -> Option<&ActionGroupList> {
+    pub fn get_group(&self, grp: &str) -> Option<&ActionGroupList> {
         self.groupmap
             .iter()
             .find(|(key, _)| key == grp)
@@ -2007,6 +2019,82 @@ impl ActionDatabase {
     // Ghidra: action.hh:314 ActionDatabase::getCurrentName
     pub fn get_current_name(&self) -> &str {
         &self.currentactname
+    }
+
+    // Ghidra: action.cc:1090 ActionDatabase::addToGroup
+    /// Add a group to the grouplist for a particular root Action. The
+    /// groupmap entry is default-inserted if absent (Ghidra's
+    /// `groupmap[grp]`), and `isDefaultGroups` is cleared before the insert.
+    /// Returns true for a new addition, false if the group was already
+    /// present.
+    pub fn add_to_group(&mut self, grp: &str, basegroup: &str) -> bool {
+        self.is_default_groups = false;
+        let curgrp = self.groupmap_entry(grp);
+        curgrp.groups.insert(basegroup.to_string())
+    }
+
+    // Ghidra: action.cc:1103 ActionDatabase::removeFromGroup
+    /// Remove the group from the grouplist of a particular root Action.
+    /// The groupmap entry is default-inserted if absent (Ghidra's
+    /// `groupmap[grp]`), and `isDefaultGroups` is cleared before the erase.
+    /// Returns true if the group existed and was removed.
+    pub fn remove_from_group(&mut self, grp: &str, basegrp: &str) -> bool {
+        self.is_default_groups = false;
+        let curgrp = self.groupmap_entry(grp);
+        curgrp.groups.remove(basegrp)
+    }
+
+    // RUGRA-GLUE: get-or-insert view of Ghidra map<string,ActionGroupList>::operator[] (action.cc:1094/1107); kept private like the raw index it stands in for
+    fn groupmap_entry(&mut self, grp: &str) -> &mut ActionGroupList {
+        if let Some(idx) = self.groupmap.iter().position(|(key, _)| key == grp) {
+            &mut self.groupmap[idx].1
+        } else {
+            self.groupmap
+                .push((grp.to_string(), ActionGroupList::from_members(&[])));
+            let last = self.groupmap.len() - 1;
+            &mut self.groupmap[last].1
+        }
+    }
+
+    // Ghidra: action.cc:1036 ActionDatabase::toggleAction
+    /// A particular group is either added or removed from the grouplist
+    /// defining a particular root Action. The root Action is then
+    /// (re)derived from the universal. Ghidra returns the new root Action
+    /// pointer; the Rust caller re-fetches it through `get_action`/`get_current`
+    /// (the registry replaced the old object, mirroring Ghidra's delete in
+    /// `registerAction`).
+    pub fn toggle_action(&mut self, grp: &str, basegrp: &str, val: bool) {
+        // action.cc:1039 `Action *act = getAction(universalname);` — resolves
+        // the universal root (throwing if absent) BEFORE any group mutation,
+        // so a missing universal leaves the grouplists untouched.
+        let universal_idx = self
+            .action_index("universal")
+            .unwrap_or_else(|| panic!("No registered action: universal"));
+        // action.cc:1040-1043 addToGroup / removeFromGroup on the steering grouplist
+        if val {
+            self.add_to_group(grp, basegrp);
+        } else {
+            self.remove_from_group(grp, basegrp);
+        }
+        // action.cc:1044 `const ActionGroupList &curgrp(getGroup(grp)); // Group should already exist`
+        let curgrp = self
+            .get_group(grp)
+            .unwrap_or_else(|| panic!("Action group does not exist: {grp}"))
+            .clone();
+        // action.cc:1045 `Action *newact = act->clone(curgrp);` — always cloned
+        // from the registered universal, never from the previous root.
+        let newact = self.actionmap[universal_idx]
+            .1
+            .as_deref()
+            .expect("universal root action is null")
+            .clone_for_groups(&curgrp);
+        // action.cc:1047 `registerAction(grp,newact);` — replaces (drops) any
+        // previously registered root of the same name.
+        self.register_action_named(grp, newact);
+        // action.cc:1049-1050 `if (grp == currentactname) currentact = newact;`
+        if grp == self.currentactname {
+            self.currentact = self.action_index(grp);
+        }
     }
 
     // RUGRA-GLUE: Rust ownership adapter for Ghidra's Architecture current Action pointer followed by Action::reset and Action::perform

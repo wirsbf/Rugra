@@ -563,6 +563,14 @@ pub struct Architecture {
     pub context_set_children_skipped: usize,
     /// Options database. Faithful to `options`.
     pub options_db: Option<std::sync::Arc<std::sync::RwLock<crate::options::OptionDatabase>>>,
+    /// Root Action database. Faithful to `allacts` (architecture.hh:212).
+    /// Ghidra embeds the `ActionDatabase` by value inside `Architecture`;
+    /// Rugra defers instantiation to [`Architecture::build_action`] (like the
+    /// other sub-components) behind a shared lock, because option appliers
+    /// mutate the current root through `&mut Architecture`
+    /// (options.cc:1008-1015 `glb->allacts.toggleAction(...)`) while other
+    /// subsystems hold shared references to the Architecture.
+    pub allacts: Option<std::sync::Arc<std::sync::RwLock<crate::action::ActionDatabase>>>,
     /// Prefer-split records. Faithful to `splitrecords`.
     pub split_records: Vec<crate::prefersplit::PreferSplitRecord>,
     /// Laned register records, ordered by whole-register size. The shared
@@ -668,6 +676,7 @@ impl Architecture {
             tracked_set_map: TrackedSetMap::new(),
             context_set_children_skipped: 0,
             options_db: None,
+            allacts: None,
             split_records: Vec::new(),
             lane_records: Vec::new(),
             stack_space: crate::space::AddressSpace::Stack,
@@ -709,8 +718,32 @@ impl Architecture {
     /// to `resetDefaults` (architecture.cc:1438).
     pub fn reset_defaults(&mut self) {
         self.reset_defaults_internal();
-        // allacts.resetDefaults() and printlist reset deferred until those
-        // subsystems are integrated.
+        // architecture.cc:1442 `allacts.resetDefaults();` — same failure class
+        // as Ghidra: a database that never registered its universal root
+        // aborts when the "decompile" root is rederived. A `None` database
+        // (pre-`build_action` state, which the embedded Ghidra value cannot
+        // represent) has no defaults to reset. The printlist loop
+        // (architecture.cc:1443) stays deferred until PrintLanguage lands.
+        if let Some(db) = &self.allacts {
+            db.write().expect("allacts write lock").reset_defaults();
+        }
+    }
+
+    // Ghidra: architecture.cc:582 Architecture::buildAction
+    /// Build the universal Action for function transformation and
+    /// instantiate the "decompile" root Action. Faithful to `buildAction`
+    /// (architecture.cc:582-591). `parseExtraRules(store)` is deferred
+    /// until spec-driven extra rules land (registered residual
+    /// ARCH-PARSEEXTRARULES-0001); it appends user rules before the
+    /// universal tree is built, which is unobservable until that input
+    /// path exists.
+    pub fn build_action(&mut self) {
+        let db = self
+            .allacts
+            .get_or_insert_with(|| std::sync::Arc::new(std::sync::RwLock::new(crate::action::ActionDatabase::new())));
+        let mut db = db.write().expect("allacts write lock");
+        db.universal_action();
+        db.reset_defaults();
     }
 
     // Ghidra: architecture.cc:234 Architecture::getModel
