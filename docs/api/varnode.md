@@ -1089,3 +1089,8 @@ heritage/pool 的 setDef 路径在大函数上呈二次方。现 `transition_def
 `Option<Arc<..>>`（identity-erase 的两个 residency bool 作为所有权证明），
 `set_def` 据此产出同样的 `Err("Defining unmanaged varnode")`，
 `set_def_prevalidated` 保留 panic 契约。可观测行为（成功/Err 分支）不变。
+
+## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：is_stack_store / set_stack_store 访问器
+
+- `is_stack_store()`（varnode.hh:265）：`(addlflags & stack_store) != 0`——是否由显式 CPUI_STORE 产生（RuleStoreVarnode 转 STORE→COPY 时设置，ruleaction.cc:4333；ActionDirectWrite 的 COPY 源追踪消费，coreaction.cc:1382）。flag 常量 `STACK_STORE=0x100` 先前已存在且 RuleStoreVarnode 已写入，仅缺访问器。
+- `set_stack_store()`（varnode.hh:338）：`addlflags |= stack_store`。

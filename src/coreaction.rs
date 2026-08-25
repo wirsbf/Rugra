@@ -6891,10 +6891,16 @@ impl Action for ActionMultiCse {
 ///    - Are stack stores from INDIRECT ops
 ///    - Are defined by non-COPY/non-PIECE/non-SUBPIECE ops
 /// 4. Propagate direct-write through the worklist
-pub struct ActionDirectWrite;
+pub struct ActionDirectWrite {
+    /// Propagate thru CPUI_INDIRECT ops. Faithful to the `propagateIndirect`
+    /// field (coreaction.hh:244), set once by the constructor: `true` for the
+    /// `protorecovery_a` registration, `false` for `protorecovery_b`
+    /// (coreaction.cc:5497/:5498, :5680/:5681).
+    propagate_indirect: bool,
+}
 impl ActionDirectWrite {
-    // Ghidra: coreaction.hh:243 ActionDirectWrite (constructor mirror)
-    pub fn new() -> Self { Self }
+    // Ghidra: coreaction.hh:246 ActionDirectWrite::ActionDirectWrite
+    pub fn new(propagate_indirect: bool) -> Self { Self { propagate_indirect } }
 }
 impl Action for ActionDirectWrite {
     // Ghidra: coreaction.cc:1350 ActionDirectWrite::apply
@@ -6906,13 +6912,24 @@ impl Action for ActionDirectWrite {
 
         let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
 
-        // Phase 1: Clear + collect worklist
+        // Phase 1: Clear + collect worklist (cc:1360-1416)
         let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
         for vn_arc in &varnodes {
             vn_arc.write().unwrap().clear_direct_write();
             let vn_rg = vn_arc.read().unwrap();
             if vn_rg.is_input() {
                 if vn_rg.is_persist() || vn_rg.is_spacebase() {
+                    drop(vn_rg);
+                    vn_arc.write().unwrap().set_direct_write();
+                    worklist.push(vn_arc.clone());
+                }
+                // Ghidra cc:1368-1371: else if (data.getFuncProto()
+                //   .possibleInputParam(vn->getAddr(),vn->getSize()))
+                else if fd.funcp.possible_input_param(
+                    vn_rg.get_offset(),
+                    vn_rg.get_size() as i32,
+                    vn_rg.get_space(),
+                ) {
                     drop(vn_rg);
                     vn_arc.write().unwrap().set_direct_write();
                     worklist.push(vn_arc.clone());
@@ -6929,13 +6946,112 @@ impl Action for ActionDirectWrite {
                         drop(vn_rg);
                         vn_arc.write().unwrap().set_direct_write();
                         worklist.push(vn_arc.clone());
-                    } else if def_opc != OpCode::CPUI_PIECE && def_opc != OpCode::CPUI_SUBPIECE {
-                        // Non-COPY, non-PIECE, non-SUBPIECE writes are direct
+                    }
+                    // Ghidra cc:1381: else if (op->code() == CPUI_COPY)
+                    // For most COPYs, do NOT consider it a direct write.
+                    else if def_opc == OpCode::CPUI_COPY {
+                        // Ghidra cc:1382: if (vn->isStackStore()) — the
+                        // original operation was really a CPUI_STORE (the
+                        // flag is set by RuleStoreVarnode,
+                        // ruleaction.cc:4333).
+                        if vn_rg.is_stack_store() {
+                            // Ghidra cc:1383-1388: Varnode *invn =
+                            //   op->getIn(0); if (invn->isWritten()) {
+                            //   curop = invn->getDef(); if (curop->code()
+                            //   == CPUI_COPY) invn = curop->getIn(0); }
+                            // — trace the COPY source through (at most) one
+                            // intermediate COPY (single-level unroll, not a
+                            // loop).
+                            let mut invn_arc = {
+                                let op_rg = def_op.read().unwrap();
+                                match op_rg.inrefs.first() {
+                                    Some(v) => v.clone(),
+                                    None => { drop(vn_rg); continue; }
+                                }
+                            };
+                            if invn_arc.read().unwrap().is_written() {
+                                let curop_arc = invn_arc.read().unwrap()
+                                    .def.as_ref().and_then(|w| w.upgrade());
+                                if let Some(curop) = curop_arc {
+                                    if curop.read().unwrap().opcode == OpCode::CPUI_COPY {
+                                        let next = {
+                                            let op_rg = curop.read().unwrap();
+                                            op_rg.inrefs.first().cloned()
+                                        };
+                                        if let Some(next) = next {
+                                            invn_arc = next;
+                                        }
+                                    }
+                                }
+                            }
+                            // Ghidra cc:1389-1392: if (invn->isWritten() &&
+                            //   invn->getDef()->isMarker()) — source is from
+                            //   an INDIRECT → treat as direct write.
+                            let marker_sourced = {
+                                let invn_rg = invn_arc.read().unwrap();
+                                if invn_rg.is_written() {
+                                    invn_rg.def.as_ref()
+                                        .and_then(|w| w.upgrade())
+                                        .map(|d| d.read().unwrap().is_marker())
+                                        .unwrap_or(false)
+                                } else {
+                                    false
+                                }
+                            };
+                            if marker_sourced {
+                                drop(vn_rg);
+                                vn_arc.write().unwrap().set_direct_write();
+                                worklist.push(vn_arc.clone());
+                            }
+                        }
+                        // Plain COPY output: NOT a direct write at collection
+                        // time (cc:1381 comment); it can only gain the flag
+                        // via Phase-2 taint.
+                    }
+                    // Ghidra cc:1395-1399: else if (op->code()!=CPUI_PIECE
+                    //   && op->code()!=CPUI_SUBPIECE) — anything that writes
+                    // to a variable in a way that isn't some form of COPY.
+                    else if def_opc != OpCode::CPUI_PIECE && def_opc != OpCode::CPUI_SUBPIECE {
                         drop(vn_rg);
                         vn_arc.write().unwrap().set_direct_write();
                         worklist.push(vn_arc.clone());
                     }
-                    // COPY and STACK_STORE cases deferred (need is_stack_store infrastructure)
+                }
+                // Ghidra cc:1401-1408: else if (!propagateIndirect &&
+                //   op->code() == CPUI_INDIRECT) — the marker collection
+                // branch, only active for the protorecovery_b registration.
+                // The output is marked but deliberately NOT pushed to the
+                // worklist ("We do NOT add vn to worklist as INDIRECT
+                // otherwise does not propagate").
+                else if !self.propagate_indirect && def_opc == OpCode::CPUI_INDIRECT {
+                    let (addr_differs, out_persist) = {
+                        let op_rg = def_op.read().unwrap();
+                        let in0 = op_rg.inrefs.first().cloned();
+                        let out = op_rg.output.clone();
+                        match (in0, out) {
+                            (Some(in0), Some(out)) => {
+                                let i = in0.read().unwrap();
+                                let o = out.read().unwrap();
+                                // Ghidra cc:1403: op->getIn(0)->getAddr() !=
+                                //   outvn->getAddr() — full Address compare
+                                //   (AddrSpace pointer + offset).
+                                let differs = i.get_space() != o.get_space()
+                                    || i.get_offset() != o.get_offset();
+                                (differs, o.is_persist())
+                            }
+                            (None, _) | (_, None) => (false, false),
+                        }
+                    };
+                    // Ghidra cc:1404/1406: address change indicates an active
+                    // COPY (direct write); else a persist output must be
+                    // present in global storage at the call point.
+                    if addr_differs {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_direct_write();
+                    } else if out_persist {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_direct_write();
+                    }
                 }
             } else if vn_rg.is_constant() {
                 // Ghidra cc:1411: if (!vn->isIndirectZero())
@@ -6959,15 +7075,16 @@ impl Action for ActionDirectWrite {
                 };
                 if !out_vn.read().unwrap().is_direct_write() {
                     out_vn.write().unwrap().set_direct_write();
-                    // Ghidra cc:1428: for call-based INDIRECTs, output is marked
-                    // but does not propagate unless propagateIndirect || isIndirectStore.
-                    // Rugra lacks propagateIndirect flag (TODO); use conservative
-                    // true (propagate through INDIRECTs), which matches the
-                    // protorecovery_b registration (propagateIndirect=false would
-                    // stop propagation, but Rugra doesn't have the flag yet).
+                    // Ghidra cc:1427-1429: for call based INDIRECTs, output
+                    // is marked, but does not propagate depending on setting:
+                    //   if (propagateIndirect || op->code() != CPUI_INDIRECT
+                    //       || op->isIndirectStore())
+                    // `propagateIndirect` is the constructor flag
+                    // (coreaction.hh:244): true for protorecovery_a, false
+                    // for protorecovery_b.
                     let is_ind = desc_op_arc.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
                     let is_store = desc_op_arc.read().unwrap().is_indirect_store();
-                    if !is_ind || is_store {
+                    if self.propagate_indirect || !is_ind || is_store {
                         worklist.push(out_vn);
                     }
                 }

@@ -2188,8 +2188,8 @@ pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRes
         add!(mainloop, "base", Box::new(crate::coreaction::ActionSegmentize::new())); // :5494
         add!(mainloop, "base", Box::new(crate::coreaction::ActionInternalStorage::new())); // :5495
         add!(mainloop, "blockrecovery", Box::new(crate::coreaction::ActionForceGoto::new())); // :5496
-        add!(mainloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497 (propagateIndirect=true)
-        add!(mainloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5498 (propagateIndirect=false; filtered from the decompile root)
+        add!(mainloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new(true))); // :5497 (propagateIndirect=true)
+        add!(mainloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new(false))); // :5498 (propagateIndirect=false; filtered from the decompile root)
         add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
         add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
         add!(mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestrictLocal::new())); // :5502
@@ -2227,8 +2227,8 @@ pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRes
 
         // --- fullloop tail (coreaction.cc:5679-5688, after mainloop) ---
         add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionLikelyTrash::new())); // :5679
-        add!(fullloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5680
-        add!(fullloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new())); // :5681 (filtered from the decompile root)
+        add!(fullloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new(true))); // :5680
+        add!(fullloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new(false))); // :5681 (filtered from the decompile root)
         add!(fullloop, "deadcode", Box::new(ActionDeadCode::new())); // :5682
         add!(fullloop, "deadcontrolflow", Box::new(crate::coreaction::ActionDoNothing::new())); // :5683
         add!(fullloop, "switchnorm", Box::new(crate::coreaction::ActionSwitchNorm::new())); // :5684

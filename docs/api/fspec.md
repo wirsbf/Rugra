@@ -856,3 +856,8 @@ ProtoParameter（锁定签名时地址由模型输出指派固定）；Rugra Fun
 `has_effect_translate` 命中模型 effectlist（unaffected/killedbycall），不再为
 每个 (stack range × call) 生成 unknown-effect INDIRECT（main 从 8190 个 guard
 INDIRECT 降至 ~5460，mainloop repeatapply 收敛轮数 37+ → 1）。
+
+## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：FuncProto::possible_input_param + ProtoModelFull::possible_input_param
+
+- **`FuncProto::possible_input_param(addr_offset, size, addr_space)`**（fspec.cc:4366-4387）：`!isDotdotdot` 时先过 `void_input_locked` 门（→false），再遍历锁定参数 `justifiedContain(param_size, addr, size, false)==0 → true`、`locktest` 后无命中 →false；否则落到 model。锁定参数环与仓内兄弟移植 `characterize_as_input_param`（fspec.rs:410）同一降级口径：Rugra `ProtoParameter` 存无空间 `Address` 且无独立 size，锁定环 inert；protorecovery 阶段（本方法唯一调用方 ActionDirectWrite cc:1368）`numParams()==0`，控制流与 oracle 的 num==0 路径完全一致。modelless FuncProto 是 Ghidra 不存在的状态，保守返回 false。
+- **`ProtoModelFull::possible_input_param(loc_space, loc, size)`**（fspec.hh:883 内联）：`input->possibleParam(loc,size)` 一行委托。

@@ -1737,3 +1737,14 @@ oracle 中所有 `data` 上的 JumpTable 均在 flow 追踪期
 该 Action 只做规范化（matchModel/recoverLabels/foldInNormalization/foldInGuards，
 fold 阶段仍为 L2 登记缺口）。apply 现镜像 cc:4559 恒返 0（NO_CHANGE），
 unlabelled 计数仅保留本地变量。
+
+## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：ActionDirectWrite 收集段四偏差修复
+
+`ActionDirectWrite::apply`（coreaction.cc:1350-1434）收集段对齐修复，四处真偏差（MAINDIFF-DEADSTORE-0001 诊断发现）：
+
+1. **COPY-def 误标（cc:1381-1394）**：oracle 对 COPY 输出收集期**不**标 directwrite（isStackStore 追踪例外）；旧代码 `else if def_opc != PIECE && != SUBPIECE` 把 COPY 一起标+入队。现按 oracle 分支序：COPY 单列，仅 `isStackStore()` 时做源追踪。
+2. **possibleInputParam 分支缺失（cc:1368-1371）**：非 persist/spacebase 输入若 `FuncProto::possibleInputParam` 为真则标记。新增 `FuncProto::possible_input_param`（fspec.cc:4366-4387 完整前奏：dotdotstat 短路 + voidinputlock 门 + 锁定参数 justifiedContain==0 判定；Rugra 无锁定参数状态时该环 inert，与兄弟移植 characterize_as_input_param 同一降级口径）。
+3. **isStackStore 源追踪（cc:1382-1393）**：COPY 输出带 stack_store flag（RuleStoreVarnode 设置）时，追源**单层**解一层 COPY，源 def 为 marker（INDIRECT）则标记+入队；两层 COPY 链不标记（oracle 单层解开的边界）。
+4. **marker(INDIRECT) 收集分支（cc:1401-1408）**：`!propagateIndirect && INDIRECT` 时，in(0) 地址≠输出地址（活动 COPY）或输出 persist → 标记但**不**入队。结构性新增 `propagate_indirect` 字段（coreaction.hh:244），protorecovery_a=true / protorecovery_b=false 双注册（action.rs 对应 cc:5497/:5498/:5680/:5681）。
+
+Phase-2 推播门（cc:1427-1429）同步修正为 `propagate_indirect || !INDIRECT || is_indirect_store`（旧代码硬编码 false 且注释自相矛盾）。fixture `tests/oracle/actiondw_copydef_1204` 锁定全部六 case 双注册行为（24 records 字节一致 MATCH），包括 oracle 深层语义：**分支④的 no-push 标记使 phase-2 的 `!isDirectWrite` 守卫跳过 mark+push，永久阻断经该 varnode 的 taint 传播**（w_out=0 判别）。
