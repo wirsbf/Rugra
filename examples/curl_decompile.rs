@@ -415,7 +415,14 @@ fn collect_known_entry_shared_return_overrides(
 }
 
 const WORKER_PROTOCOL_VERSION: u32 = 2;
-const FUNCTION_TIMEOUT: Duration = Duration::from_secs(10);
+// Per-function decompile deadline. Aligned with Ghidra's suggested
+// per-function decompile timeout — DecompileOptions.java:289
+// SUGGESTED_DECOMPILE_TIMEOUT_SECS = 30, installed as the default at :522
+// and read back at :585. The previous 10s deadline sat below the oracle's
+// budget and reaped main (3510 bytes; action phase ~11.5s) before it could
+// emit anything, so the locked DWARF `int main(int argc, char **argv)`
+// prototype never reached the corpus output.
+const FUNCTION_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_MODE_ARG: &str = "--rugra-curl-function-worker";
 const WORKER_LABEL_ARG: &str = "--probe-label";
 const DESCENDANT_MODE_ARG: &str = "--rugra-timeout-descendant-probe";

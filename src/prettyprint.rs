@@ -3132,6 +3132,41 @@ impl EmitNoMarkup {
             let mut end = i + 1;
             let mut depth: i32 = t.chars().filter(|c| *c == '{').count() as i32
                 - t.chars().filter(|c| *c == '}').count() as i32;
+            // PRINTC-LEGACY-DECL-DUP-0001 (mask-chunk half): a skip_line
+            // signature line carries no braces (depth 0), and the oracle
+            // layout puts a BLANK line between the signature and the body's
+            // `{` (open_brace_indent SkipLine emits two line breaks). The
+            // previous loop broke on the blank line (depth still <= 0), so
+            // the "chunk" was just [signature, blank] — has_symbol_driven_decls
+            // saw no declarations and the function was never masked. That let
+            // fix_unary_deref_declarations rewrite locked DWARF parameter
+            // types in the signature (`int argc` -> `char *argc` in main)
+            // even though printc.cc:2222 emitPrototypeInputs printed the
+            // FuncProto's locked `int` correctly. Fix: before the depth walk,
+            // skip forward to the opening `{` that signature_opens_function_
+            // body already located via its lookahead; the walk then starts at
+            // depth 1 and spans the real body.
+            if depth <= 0 {
+                let mut open = end;
+                while open < lines.len() {
+                    let ft = lines[open].trim();
+                    if ft == "{" || ft.ends_with('{') {
+                        depth += ft.chars().filter(|c| *c == '{').count() as i32;
+                        depth -= ft.chars().filter(|c| *c == '}').count() as i32;
+                        break;
+                    }
+                    // Any other non-blank line before the `{` means the
+                    // lookahead contract was violated; fall back to the old
+                    // two-line chunk rather than scanning past the function.
+                    if !ft.is_empty() {
+                        break;
+                    }
+                    open += 1;
+                }
+                if open > end {
+                    end = open;
+                }
+            }
             while end < lines.len() {
                 let ft = lines[end].trim();
                 depth += ft.chars().filter(|c| *c == '{').count() as i32;

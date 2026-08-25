@@ -330,6 +330,21 @@ PRINTC-UNLINKED-REF-0001 域）保持可编译，是任务要求的 backfill 保
 - 新增 `symbol_driven_function_line_mask()`（RUGRA-GLUE）：整文本按
   `signature_opens_function_body` 分段（前缀集含 `undefinedN` 返回型），
   为 `fix_unary_deref_declarations` 的行级重写提供函数归属掩码。
+  分段边界修正（MAIN-ARGC-PROTO）：skip_line 布局下签名行自身无花括号
+  （depth=0），且 `open_brace_indent` SkipLine 在签名与体 `{` 之间产生一个
+  **空行**——原深度循环在空行上立即 `depth<=0` break，"函数块"退化为
+  [签名,空行] 两行，`has_symbol_driven_decls` 看不到任何声明，main 等
+  DWARF 锁参函数不被掩码，`fix_unary_deref_declarations` 遂把签名中锁定的
+  `int argc` 重写为 `char *argc`（body 中存在 `*argc` 解引用）。修正：深度
+  走查前先向前推进到 `signature_opens_function_body` 前瞻已定位的 `{`
+  （途中只允许空行；其他非空行 = 前瞻契约破坏，回退旧行为），随后从
+  depth=1 起算跨越真实函数体。A/B（124 函数全量）字节级 delta 共 8 处且
+  全部向 oracle 收敛：`int main(char *argc` → `int main(int argc`
+  （=golden）、`glob_set(char *pattern,char *pos` → `(char *pattern,int pos`
+  （=golden）、match_url `char *param_1`→`long param_1`、5 处
+  `char *unique0x…`→`long unique0x…`（回退到未命名位置 fallback 的
+  long 默认）；defects 0→0、numbering 1→1（match_url per-prefix，基线
+  同值预存）。
 - 两处旁路：`flush_func_remove_unused` 对符号驱动函数整块直通（不删
   unused、不注入 missing——Ghidra 无条件发射所有符号声明，
   printc.cc:2260；该 pass 的 type_ok 表识别不了 2-token join 形
