@@ -6,7 +6,7 @@
 //! tests/oracle/condexe_success_state_1204.cc case for case against the
 //! locked Ghidra 12.0.4 oracle. Records: heritage S1p0..S1p3 (per-space
 //! array at heritage pass 0/1/2/3), pre/ret/state/multi/edges S2 (the
-//! 3-diamond chain whose live index walk folds A, C, B — count=3, reciprocal
+//! 3-diamond chain whose live index walk folds A, B, C — count=3, reciprocal
 //! pre->post relinks), ret/return S3 (RETURN input preservation through a
 //! unique-space COPY), ret S4p0/S4p1 (the cc:392 heritageyes gate rejects
 //! at pass 0 and admits at pass 1).
@@ -508,7 +508,7 @@ fn main() {
     run_heritage_case("S1p1", 1); // delay-0 spaces true, stack false
     run_heritage_case("S1p2", 2); // stack (delay 1) turns true
     run_heritage_case("S1p3", 3);
-    run_live_traversal_case(); // live traversal + count (A,C,B)
+    run_live_traversal_case(); // live traversal + count (A,B,C)
     run_return_case(); // space-preserving RETURN replacement
     run_gate_case("S4p0", 0); // cc:392 rejects: no heritage
     run_gate_case("S4p1", 1); // cc:392 admits: fold proceeds

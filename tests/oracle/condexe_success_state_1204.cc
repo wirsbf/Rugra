@@ -336,10 +336,11 @@ void runHeritageCase(FixtureArchitecture &architecture,const char *caseId,int4 p
 // adjacent-diamond trials like B_init-as-iblock fail verifySameCondition),
 // each iblock holds MULTIEQUAL vnX = PHI(5, 9) whose reader COPY lives in
 // the NEXT merge block (2 in-edges -> getNewMulti). The three iblocks at
-// consecutive indices 3/4/5 make the live index walk skip B_ib in round 1
-// (A's removal shifts it under the advancing cursor) and fold it in round 2
-// AFTER C — the processing order A, C, B that a per-round snapshot cannot
-// produce.
+// consecutive indices 3/4/5 exercise the LIVE bblocks.getSize()/getBlock(i)
+// reference reads (cc:488, one relist per execute; the cursor consumes the
+// relisted table every iteration). The pinned fold order is A, B, C,
+// pinned pointer-free by the new-MULTIEQUAL unique-offset creation order
+// b8, b13, b18 (see the multi record below).
 // ---------------------------------------------------------------------------
 struct Chain {
   Fixture f;
@@ -617,7 +618,7 @@ void run(void)
   runHeritageCase(architecture,"S1p1",1);	// delay-0 spaces true, stack false
   runHeritageCase(architecture,"S1p2",2);	// stack (delay 1) turns true
   runHeritageCase(architecture,"S1p3",3);
-  runLiveTraversalCase(architecture);	// live traversal + count (A,C,B)
+  runLiveTraversalCase(architecture);	// live traversal + count (A,B,C)
   runReturnCase(architecture);		// space-preserving RETURN replacement
   runGateCase(architecture,"S4p0",0);	// cc:392 rejects: no heritage
   runGateCase(architecture,"S4p1",1);	// cc:392 admits: fold proceeds

@@ -38,15 +38,22 @@ Action 侧四处缺陷修复（condexe.cc:478-503 + cc:23-37 + cc:392 + cc:343�
    保留 RETURN 存储地址**与其地址空间**（unique/register 等）。
 
 **fixture**：`tests/oracle/condexe_success_state_1204`（.cc/.rs/.metadata.json）
-+ `tools/run_condexe_success_state_oracle.sh`（pin-base schema2）。12 记录：
++ `tools/run_condexe_success_state_oracle.sh`（pin-base schema2）。13 记录：
 S1p0..p3 逐空间数组（ram/register/unique pass1 翻转、stack delay=1 pass2
-翻转）、S2 三钻石链（iblock 创建序 3/4/5 连续——活索引遍历 A 折叠后 B 被
-跳过、round 2 在 C 之后补折，`multi` 记录按新 MULTIEQUAL 输出 unique 偏移
-排序的父块序 b8,b18,b13 判别快照实现（快照给 b8,b13,b18）、count=3、
+翻转）、S2 三钻石链（iblock 创建序 3/4/5 连续——活索引遍历是 cc:488 引用
+语义：每次 execute 后 relist、游标每步消费新表；pinned 折叠序 A,B,C，
+`multi` 记录按新 MULTIEQUAL 输出 unique 偏移（=创建序）排序，pinned 输出
+b8,b13,b18 即 A,B,C 折叠序的无指针钉定）、count=3、
 reciprocal pre→post 重连）、S3 RETURN 腿（ret_in1==copy_out==unique:0x2000:4、
 copy_in0=const:0x5、posta_ops=COPY,RETURN）、S4p0/p1 cc:392 门（pass=0
 拒绝 count=0、pass=1 放行 count=1）。负对照：旧 heritageyes 恒真实现在
 S4p0 给 count=1、旧 new_varnode_out 在 S3 给 register:0x2000。
+（勘误 R17：初版把 pinned 序误写为 b8,b18,b13 并把折叠序误记为 A 折后 B
+被跳过、round 2 补折；实际 pinned 输出为 b8,b13,b18 = A,B,C。S2 图形上
+被 relist 移到游标下方的只是三个 1in/1out postb 路径块（b7/b12/b17），
+round 1 即完成 A,B,C，live 与每轮快照在该图形上折叠序不变——S2 不判别
+live/snapshot，对齐由 cc:488 活读算法本身保证；一般图形下快照不变性
+不成立（R17 §2(b) 反例）。）
 
 新增 fixture 胶水：`ConditionalExecution::fixture_heritage_array` /
 `fixture_heritage_space_names`。
