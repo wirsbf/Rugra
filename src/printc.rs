@@ -3100,7 +3100,9 @@ impl PrintC {
             _ => self.emit_structured_basic(block_arc, graph, emitted),
         }
     }
-    // RUGRA-GLUE: emit_structured_if (no Ghidra counterpart found)
+    // Ghidra: printc.cc:2878 PrintC::emitBlockIf
+    // (graph-walking emit framework dispatch; the goto_target branch below is
+    // the direct port of cc:2905-2917, the brace/else branch of cc:2918-2944)
     fn emit_structured_if(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -3115,56 +3117,51 @@ impl PrintC {
                     // If-goto (newBlockIfGoto style): emit `if (cond) goto target;`
                     // The goto_target is set, body is external (not embedded).
                     if if_data.goto_target.is_some() {
-                        // Ghidra printc.cc:2914-2916: emitBlockIf reads the
-                        // BlockIf's gototype (set by BlockIf::scopeBreak,
-                        // block.cc:3075-3084) and calls emitGotoStatement with
-                        // it. Rugra's if-goto emission reaches the CBRANCH op
-                        // via emit_block_ops, where op_cbranch reads
-                        // `op.branch_type` (set by ActionNormalizeBranches) to
-                        // decide break/continue/goto. To faithfully map
-                        // BlockIf::goto_type → CBRANCH branch_type, we set the
-                        // condition block's terminal CBRANCH op branch_type
-                        // here, just before emission, from the BlockIf's
-                        // gototype. This is the printc-side counterpart to
-                        // scope_break (blockaction.cc:2193) and lets
-                        // f_break_goto / f_continue_goto print as `break` /
-                        // `continue` instead of `goto code_r0x...`.
-                        let gt = if_data.goto_type;
-                        if gt != crate::block::goto_type::GOTO_GOTO {
-                            // The condition block is a BlockBasic holding the
-                            // CBRANCH. downcast to reach its op list
-                            // (FlowBlock::last_op trait default returns None;
-                            // the real impl is BlockBasic::last_op inherent).
-                            let cond_arc = if_data.condition.clone();
-                            let last_op = {
-                                let cond_rg = cond_arc.read().unwrap();
-                                if let Some(bb) = cond_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                                    bb.last_op()
-                                } else {
-                                    None
-                                }
-                            };
-                            if let Some(last) = last_op {
-                                let op_arc = last.0.clone();
-                                let mut op = op_arc.write().unwrap();
-                                if op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH {
-                                    op.branch_type = match gt {
-                                        crate::block::goto_type::BREAK_GOTO =>
-                                            crate::op::branch_type::BREAK,
-                                        crate::block::goto_type::CONTINUE_GOTO =>
-                                            crate::op::branch_type::CONTINUE,
-                                        _ => crate::op::branch_type::GOTO,
-                                    };
-                                }
-                            }
-                        }
-                        // Emit the condition block's ops (including the CBRANCH
-                        // which becomes the if-condition), then a goto to the
-                        // target. The body (fallthrough) continues after.
-                        self.emit_block_ops(&if_data.condition, false);
-                        // The goto: emit as a labeled goto or just continue.
-                        // For now, the condition block's CBRANCH op handles the
-                        // branch; we just need to not emit the placeholder body.
+                        // Faithful port of emitBlockIf's goto branch
+                        // (printc.cc:2878-2949, esp. 2907-2917):
+                        //   cc:2894-2898  pushMod(); setMod(no_branch);
+                        //                 condBlock->emit(); popMod();
+                        //   cc:2905       tagLine();
+                        //   cc:2907-2913  tagOp(KEYWORD_IF) + spaces(1) +
+                        //                 only_branch emission of condBlock
+                        //                 (opCbranch printc.cc:536-580 in
+                        //                 non-flat mode prints `(cond)`)
+                        //   cc:2914-2916  spaces(1) + emitGotoStatement(
+                        //                 condBlock, gotoTarget, gotoType)
+                        // The previous code emitted the condition block with
+                        // skip_terminal=false (leaking the CBRANCH as a bare
+                        // `(cond);` statement) and returned without ever
+                        // printing `if`/`goto` — every try_rule_if_goto wrap
+                        // was discarded on the emit side (A93 diagnostic).
+                        // cc:2894-2898: condition block body with no_branch.
+                        self.emit_block_ops(&if_data.condition, true);
+                        // cc:2905: start the `if` on a new line (the
+                        // pending_brace "else if" merge of cc:2900-2903 is
+                        // the parent chain's concern, not the goto branch).
+                        self.emit.tag_line(0);
+                        // cc:2907-2913: `if (` + only_branch condition + `)`.
+                        self.emit.print("if (");
+                        self.emit_block_condition(&if_data.condition);
+                        self.emit.print(")");
+                        // cc:2914-2916: spaces(1) + emitGotoStatement with
+                        // the BlockIf's own gotoType (block.hh:89-91:
+                        // f_goto_goto=1 / f_break_goto=2 / f_continue_goto=4
+                        // → op::branch_type), the same mapping as the
+                        // emit_block_goto port. Ghidra passes
+                        // bl->getGotoType() straight through and never
+                        // mutates the CBRANCH op.
+                        let target_addr = if_data.goto_target.as_ref()
+                            .map(|t| t.read().unwrap().get_start_addr().as_u64())
+                            .unwrap_or(0);
+                        let bt = match if_data.goto_type {
+                            crate::block::goto_type::BREAK_GOTO =>
+                                crate::op::branch_type::BREAK,
+                            crate::block::goto_type::CONTINUE_GOTO =>
+                                crate::op::branch_type::CONTINUE,
+                            _ => crate::op::branch_type::GOTO,
+                        };
+                        self.emit.print(" ");
+                        self.emit_goto_statement(target_addr, bt);
                         return;
                     }
                     // Goto-cascade protection: if the condition block has
@@ -3195,7 +3192,26 @@ impl PrintC {
                             if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
                                 emitted.insert(if_idx);
                             }
-                            self.emit_block_ops(&if_data.condition, false);
+                            // Same emitBlockIf goto pattern (printc.cc:2894-
+                            // 2916): the structurer left this goto edge
+                            // unwrapped (no BlockIf.goto_target), but the
+                            // golden form is still `if (cond) goto <target>;`
+                            // — the goto target/type come from the condition
+                            // block's own CBRANCH (in(0) + branch_type),
+                            // i.e. the flat-mode tail of opCbranch
+                            // (printc.cc:574-579). Previously the CBRANCH
+                            // leaked as a bare `(cond);` statement here.
+                            self.emit_block_ops(&if_data.condition, true);
+                            self.emit.tag_line(0);
+                            self.emit.print("if (");
+                            self.emit_block_condition(&if_data.condition);
+                            self.emit.print(")");
+                            if let Some((target_addr, bt)) =
+                                Self::cbranch_goto_info(&if_data.condition)
+                            {
+                                self.emit.print(" ");
+                                self.emit_goto_statement(target_addr, bt);
+                            }
                             self.emit_block_ops(&if_data.if_body, false);
                             true
                         } else { false }
@@ -5629,6 +5645,34 @@ impl PrintC {
         }
         drop(block);
         self.emit.print("1");
+    }
+
+    // Ghidra: printc.cc:536 PrintC::opCbranch
+    /// Extract the goto target address and branch type of the CBRANCH whose
+    /// condition `emit_block_condition_rpn` prints — the first CBRANCH with a
+    /// live in(1) in the block — so a `goto` appended after `if (cond)`
+    /// refers to exactly the branch whose condition was printed. Mirrors the
+    /// flat-mode tail of opCbranch (printc.cc:574-579): `goto` +
+    /// pushVn(op->getIn(0)), with the keyword selection from the op's
+    /// branch_type (break/continue/goto).
+    fn cbranch_goto_info(
+        block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> Option<(u64, u8)> {
+        let block = block_arc.read().unwrap();
+        for op_ref in &block.get_ops() {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH {
+                if op.get_in(1).is_some() {
+                    let target = op.get_in(0)
+                        .map(|a| a.read().unwrap().get_offset());
+                    let bt = op.branch_type;
+                    drop(op);
+                    drop(block);
+                    return target.map(|t| (t, bt));
+                }
+            }
+        }
+        None
     }
 
     // Ghidra: printc.cc:2836 PrintC::emitBlockCondition
@@ -10169,7 +10213,13 @@ impl PrintC {
     // Ghidra: printc.cc:2303 PrintC::emitGotoStatement
     pub fn emit_goto_statement(&mut self, target_addr: u64, goto_type: u8) {
         use crate::op::branch_type;
-        self.emit.tag_line(0);
+        // cc:2307-2322: beginStatement(bl->lastOp()) → keyword/label →
+        // SEMICOLON → endStatement. No tagLine here — Ghidra's only
+        // tagLine for a goto lives at the CALL SITE (emitBlockGoto
+        // cc:2775; emitBlockIf's goto branch cc:2914-2916 is mid-line
+        // after `if (cond) `). emit_block_goto already emits its own
+        // tag_line(0) before calling this; keeping this function
+        // tagLine-free keeps both call sites faithful.
         match goto_type {
             branch_type::BREAK => self.emit.print("break;"),
             branch_type::CONTINUE => {

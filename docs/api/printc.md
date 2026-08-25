@@ -359,6 +359,14 @@ printc.cc:2260/2518/2497）：
 - **A 修复**：新增 `PrintC::addr_space_print_raw(space, offset)`（`// Ghidra: space.cc:206`，虚分派等价：Const/Other→plain hex，其余 base 形式含收窄/除法 byteToAddress/`+cut`）与 `PrintC::unnamed_location_token(space, offset)`（`// Ghidra: printc.cc:1938`，token 构造半部 = 空間名+printRaw）；三条阶梯 + `_` 臂的全部标签形式改走该单一 helper（param_names 前置检查与 inline-candidacy 守卫保留，inline 键仍按当前实例——B1 约定不变）；`push_varnode` Priority 2 Register 臂的 `var_prefix` 形式退役（Ghidra 打印期无 buildVariableName 路径——那是 symbol 命名域）。既有 `pub fn push_unnamed_location`（printc_symbol_decl 期移植）改为委托 token builder，并修正其 `byteToAddress` 方向 bug（原 `offset * wordsize` 是 `addressToByte`；x86-64 全 wordsize=1 故不可见，潜在 wordsize>1 分歧消除）。
 - **验收**（同 fixture，runner 重钉 slice C+B1+A）：行 7/23/30/31 翻为双侧逐字节一致（`unique0x10000000 = 5/7/5/6;`）——registered 表 6→2 行（仅 typechar 行 2/3，类型系统域）；`multi_instance` site=a/b 同标签（B1 地址源 + A 形式）；Rust 单测断言更新 `uVar_10000000`→`unique0x10000000`。E2E 方向（root 全量收口）：残余 `uVar_*` 兜底族整体变形为 `unique0x…`（golden 0 兜底，仍为差异但已是 oracle 兜底形式；真值闭合属 B2 符号化到达）；`local_`/`param_stack_`→`stack0x…`、`DAT_<08hex>`→`ram0x…`、Register 阶梯负 offset 产物→`register0xffffffffffffff…` 形。
 
+### PRINTC-IFGOTO-EMIT——emitBlockIf 的 goto 分支移植（emit_structured_if goto_target 臂 + goto-cascade 顺序回退臂）（2026-08-25）
+
+- **Ghidra 语义**（printc.cc:2878-2949 `PrintC::emitBlockIf`，goto 分支 cc:2894-2916）：`pushMod(); setMod(no_branch); condBlock->emit(); popMod()`（cc:2894-2898）先发射条件块的**非分支语句**；`emitCommentBlockTree(condBlock)`；然后 cc:2905 `tagLine()`（else-if 的 pendingBrace 合并 cc:2900-2903 属父链职责）；cc:2907-2913 `tagOp(KEYWORD_IF)` + `spaces(1)` + `pushMod(); setMod(only_branch); condBlock->emit()`（走 `emitBlockBasic` 的 only_branch 臂 → `opCbranch` 打印条件表达式）；cc:2914-2916 `spaces(1) + emitGotoStatement(condBlock, bl->getGotoTarget(), bl->getGotoType())`。`emitGotoStatement`（printc.cc:2303-2322）= `beginStatement(bl->lastOp())` → keyword（f_break_goto→`break` / f_continue_goto→`continue` / f_goto_goto→`goto` + `emitLabel(exp_bl)`）→ `SEMICOLON` → `endStatement`——**函数体自身无 tagLine**，唯一行断点在调用点（emitBlockGoto cc:2775 的 tagLine；emitBlockIf 的 goto 臂是行中 `if (cond) ` 之后）。
+- **Rugra 缺陷**（F1 47 处 discarded conditions 的 emit 侧形态之一）：`emit_structured_if` 的 `goto_target.is_some()` 臂以 `emit_block_ops(&condition, false)`（no_branch **未激活**）发射条件块——终端 CBRANCH 走到 `doc_statement` 被捕获成一条裸 `(cond);` 语句（多数被 produced-empty 过滤吞掉，即"条件被丢弃"），从不打印 `if`/`goto`，直接 return——结构化期 `try_rule_if_goto`（blockaction.rs，newBlockIfGoto cc:1799-1816）建出的每个 if-goto 包装在发射侧全部作废。goto-cascade 顺序回退臂（GOTO_EDGE_1 干跑检测命中后的顺序发射）同样以 `emit_block_ops(&condition, false)` 泄漏 CBRANCH。
+- **修复**：goto_target 臂改为 ①`emit_block_ops(&condition, true)`（= cc:2894-2898 setMod(no_branch)；Rugra 的 skip_terminal 布尔是 no_branch 的传输载体）→ ②`tag_line(0)`（cc:2905）→ ③`if (` + `emit_block_condition(&condition)` + `)`（cc:2907-2913 的 only_branch 条件发射，`emit_block_condition_rpn` 已是 opCbranch pushVn(in(1))+recurse 的移植）→ ④`print(" ")` + `emit_goto_statement(target_addr, bt)`（cc:2914-2916）。goto_type 映射（block.hh:89-91 f_goto_goto/f_break_goto/f_continue_goto → op::branch_type）与 `emit_block_goto` 一致；Ghidra 直接把 `bl->getGotoType()` 透传给 emitGotoStatement，**从不改写 CBRANCH op**（旧实现的 branch_type 改写 hack 已删）。target_addr = `goto_target` 块的 `get_start_addr()`（结构块递归到首个 Basic 的 initial_range/start_addr，与 emitLabel 的 `getFrontLeaf→getEntryAddr`、UNSTRUCTURED_TARG 标记、`emit_any_label_statement` 同源）。顺序回退臂同型改造（目标/类型取自条件块自身 CBRANCH 的 in(0) offset + branch_type，flat-mode opCbranch 尾 printc.cc:574-579 的投影，经新增 helper `cbranch_goto_info`），随后仍发射 if_body。`emit_goto_statement` 移除函数内 `tag_line(0)`（cc:2303-2322 无 tagLine；调用点语义：emit_block_goto 自带 tag_line，if-goto 臂是行中——两处均忠实）。
+- **验收**：curl E2E（HEAD `e17b4295` 干净树对照同构 fast-release 构建）：HEAD 输出 **0 个 goto**（16 处裸 `(cond);`/条件丢弃形态）→ 修复后 **22 个 `if (cond) goto <label>;`**（golden 61；缺口=flat opCbranch 完整移植（stash `flatcbr-prev-agent-diff` 中的 FLAT mod + op_cbranch_rpn 全臂，未含本轮）与结构化覆盖域）；skeleton 2927→2923、defects 0→0、numbering 1→1（唯一 match_url numbering 为既有存量，与本改动无关）；多次重跑输出字节一致（一次 main TIMEOUT 为 10s 上限的负载抖动，复跑恢复）。逐行 diff 确认全部变化均为裸条件语句 → if-goto 形态（含 2 处复合条件 `(A) || (B)` 合并恢复：match_url 与 my_get_token 的两条独立条件语句合并回单条复合 if-goto）。样本：`(piVar37 != 0);` → `if (piVar37 != 0) goto code_r0x00002728;`（result/curl_cur.c main）。
+- **表示层残差**（如实登记）：①`if (` 文本直接 print（无 tagOp markup——Rugra EmitNoMarkup 无 markup 通道，文本等价）；②空体/畸形条件仍走 R50 `1` 回退；③goto 目标 label 与 golden 的 `LAB_` 符号名差异属 varmap 符号化域（golden 经 ScopeLocal queryCodeLabel，Rugra 的 `code_label` 已是 emitLabel 兜底形式 cc:3183-3192 的移植）；④golden 的 `file2string`/`parseconfig` 全体 goto 形态还依赖 flat 模式与结构化覆盖的后续 wave。
+
 ---
 
 ## 设计边界
@@ -862,20 +870,9 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 ### 2026-06-29：BlockIf if-goto emit（goto_target.is_some()）
 - printc.rs BlockType::If emit 新增 if-goto 分支：当 `if_data.goto_target.is_some()` 时，emit condition block 的 ops（CBRANCH 处理分支），不 emit 占位 body。对应 Ghidra newBlockIfGoto 的 emit 语义。
 
-### 2026-07-28：if-goto 的 BlockIf::goto_type → CBRANCH branch_type 映射
-- Ghidra `emitBlockIf`（printc.cc:2914-2916）读取 BlockIf 的 gototype
-  （由 `BlockIf::scopeBreak` block.cc:3075-3084 设置）并调用
-  `emitGotoStatement(condBlock, gototarget, gototype)`。
-- Rugra 的 if-goto 发射通过 `emit_block_ops` 到达 CBRANCH op，其中
-  `op_cbranch` 读 `op.branch_type`（由 ActionNormalizeBranches 设置）来决定
-  break/continue/goto。为忠实映射 `BlockIf::goto_type → CBRANCH branch_type`，
-  `emit_structured_if` 在 `emit_block_ops(&condition, false)` 之前，从
-  `if_data.goto_type` 设置 condition block 末尾 CBRANCH op 的 branch_type
-  （BREAK_GOTO→BREAK，CONTINUE_GOTO→CONTINUE）。
-- 这是 scope_break（blockaction.cc:2193）的 printc 侧对应物，使
-  f_break_goto / f_continue_goto 打印为 `break` / `continue` 而非
-  `goto code_r0x...;`。condition block 是 BlockBasic，需 downcast 调用
-  其 inherent `last_op()`（FlowBlock::last_op trait 默认返回 None）。
+### 2026-07-28：if-goto 的 BlockIf::goto_type → CBRANCH branch_type 映射（已被 2026-08-25 PRINTC-IFGOTO-EMIT 取代）
+- ~~Ghidra `emitBlockIf`（printc.cc:2914-2916）读取 BlockIf 的 gototype 并调用 `emitGotoStatement`；Rugra 在 `emit_block_ops(&condition, false)` 之前改写 condition block 末尾 CBRANCH 的 branch_type。~~
+- **2026-08-25 失效说明**：该方案（发射前改写 op.branch_type + `emit_block_ops(&condition, false)` 泄漏 CBRANCH 为裸 `(cond);`）已整体删除——Ghidra 从不改写 CBRANCH op，`bl->getGotoType()` 直通 `emitGotoStatement`（printc.cc:2914-2916）；条件以 only_branch 语义单独发射（`if (` + `emit_block_condition` + `)`）。现行实现见上文 PRINTC-IFGOTO-EMIT 节。
 
 ### 2026-07-01：while→for 发射
 WhileDo 块检查 for_init/for_iter：有则 `for(init;cond;iter)`，否则 `while(cond)`。
