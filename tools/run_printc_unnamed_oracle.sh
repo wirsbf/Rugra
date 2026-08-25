@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# PRINTC-UNLINKED-REF-FAMILY slices C+B1 oracle runner (A35 audit section 5).
+# PRINTC-UNLINKED-REF-FAMILY slices C+B1+A oracle runner (A35 audit
+# section 5).
 #
 # Rebuilds the locked Ghidra 12.0.4 decompiler from the pinned oracle
 # commit, links the C++ fixture against the binutils-2.38 BFD environment,
-# rebuilds the Rugra crate from the pinned base commit with the slice B1
-# overlay (the live src/printc.rs — the unnamed-location fallback address
-# source unified to the high's name representative,
-# printlanguage.cc:244), compiles both fixtures, runs them, and classifies
-# every stdout line:
+# rebuilds the Rugra crate from the pinned base commit with the live
+# src/printc.rs overlay (slice B1: the unnamed-location fallback address
+# source unified to the high's name representative, printlanguage.cc:244;
+# slice A: the fallback token form unified to PrintC::pushUnnamedLocation,
+# printc.cc:1938-1945 — space name + AddrSpace::printRaw, space.cc:206-222,
+# merging the three divergent Rugra space ladders), compiles both
+# fixtures, runs them, and classifies every stdout line:
 #
 #   - a line pair that byte-matches is COVERED;
 #   - a line pair that differs is only acceptable when it is REGISTERED in
 #     metadata["registered_divergence_lines"] with BOTH side's exact text
-#     and sha256 — the gap evidence this fixture exists to pin (the printc
-#     unnamed-location token form and the default-unknown typechar);
+#     and sha256 — the gap evidence this fixture exists to pin (the
+#     default-unknown typechar; the slice-A unnamed-location token form
+#     rows were eliminated when the fallback ladders merged);
 #   - any unregistered divergence, envelope/order/line-count drift, or a
 #     STALE registration whose sides now byte-match (a fix landed — re-pin
 #     the fixture and shrink the registered table) fails the run.  A
 #     registration whose recorded side text no longer reproduces (drift)
-#     fails the run the same way — that is the B1 acceptance signal:
-#     slice B1 re-pinned line 31 after the multi_instance site=b label
-#     collapsed onto the representative address.
+#     fails the run the same way — that was the B1 acceptance signal
+#     (slice B1 re-pinned line 31 after the multi_instance site=b label
+#     collapsed onto the representative address) and the A acceptance
+#     signal (slice A flipped lines 7/23/30/31 to `unique0x10000000`
+#     byte-matches and shrank the registered table to the two typechar
+#     rows).
 #
 # The observation surface is never narrowed to go green.
 #
@@ -157,9 +164,9 @@ git -C "$repo_root" archive --format=tar "$rugra_base_commit" \
   benches/decompile_bench.rs tests/oracle/decompress_1204.rs \
   tests/oracle/funcproto_lock_1204.rs | \
   tar -xf - -C "$rugra_snapshot"
-# Slice B1 overlay: the live src/printc.rs replaces the base version in the
-# snapshot (the comparand under test).  The python pre-flight pins its exact
-# sha256 through metadata["comparand"]["overlays"].
+# Slice B1+A overlay: the live src/printc.rs replaces the base version in
+# the snapshot (the comparand under test).  The python pre-flight pins its
+# exact sha256 through metadata["comparand"]["overlays"].
 cp -- "$repo_root/src/printc.rs" "$rugra_snapshot/src/printc.rs"
 mkdir -p "$rugra_snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile" \
   "$rugra_snapshot/sleigh_specs" "$rugra_snapshot/tests/oracle" \
@@ -284,7 +291,7 @@ for relative in paths:
 require(
     "crate hash scheme",
     comparand["rust_crate_tree_hash_scheme"],
-    "sha256 of rugra-printc-unnamed-base-overlay-b1-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit with src/printc.rs overlaid from the live tree (slice B1: unnamed-location fallback address source unified to the high name representative, printlanguage.cc:244)",
+    "sha256 of rugra-printc-unnamed-base-overlay-b1-v1 plus base commit and sorted length-prefixed Cargo.toml/Cargo.lock/README.md/build.rs/src/sleigh_shim/benches/decompile_bench.rs/tests/oracle/{decompress_1204.rs,funcproto_lock_1204.rs} paths and bytes at rugra_base_commit with src/printc.rs overlaid from the live tree (slice A: unnamed-location fallback token form unified to PrintC::pushUnnamedLocation, printc.cc:1938-1945, on top of slice B1's name-representative address source, printlanguage.cc:244)",
 )
 require("checkpoint crate hash", hasher.hexdigest(), comparand["rust_crate_tree_sha256"])
 
@@ -318,8 +325,8 @@ registered = metadata["registered_divergence_lines"]
 expected_lines = metadata["expected_stdout"]["lines"]
 require("expected line count", expected_lines, 35)
 registered_indexes = sorted(int(key) for key in registered)
-require("registered count", len(registered_indexes), 6)
-if registered_indexes != [2, 3, 7, 23, 30, 31]:
+require("registered count", len(registered_indexes), 2)
+if registered_indexes != [2, 3]:
     raise SystemExit(f"registered divergence line set drifted: {registered_indexes}")
 for key, record in registered.items():
     for side in ("ghidra", "rugra"):
@@ -498,4 +505,4 @@ fi
 printf '%s\n' "$gate_summary"
 covered_part=${gate_summary%% *}
 covered_part=${covered_part#covered=}
-echo "printc_unnamed_1204: covered_projection=MATCH($covered_part) overall=MISMATCH slice=PRINTC-UNLINKED-REF-FAMILY/C+B1"
+echo "printc_unnamed_1204: covered_projection=MATCH($covered_part) overall=MISMATCH slice=PRINTC-UNLINKED-REF-FAMILY/C+B1+A"

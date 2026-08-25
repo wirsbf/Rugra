@@ -1234,7 +1234,6 @@ impl PrintC {
         _op: &PcodeOp,
     ) -> crate::printlanguage::Atom {
         use crate::printlanguage::{Atom, AtomPayload, SyntaxHighlight, TagType};
-        use crate::space::AddressSpace;
         // printlanguage.cc:221-228: annotation / constant fast-paths.
         if vn.is_constant() {
             // pushConstant (printc.cc:1744-1810) - emit the literal value,
@@ -1258,22 +1257,15 @@ impl PrintC {
         // shares the exact name-resolution behaviour of the legacy path.
         let mut name = self.get_varnode_display_name(vn);
         if name.is_empty() {
-            // pushUnnamedLocation fallback (printlanguage.cc:244): the
-            // address source is the high's name representative, so all
-            // instances of one HighVariable collapse to a single label
-            // (PRINTC-UNLINKED-REF-FAMILY slice B1).
-            name = match vn.get_space() {
-                AddressSpace::Register => format!("uVar{:x}", Self::unnamed_location_offset(vn)),
-                AddressSpace::Stack => {
-                    let off = Self::unnamed_location_offset(vn);
-                    if off >= 0x8000_0000_0000_0000 {
-                        format!("local_{:x}", (!off).wrapping_add(1))
-                    } else {
-                        format!("param_stack_{:x}", off)
-                    }
-                }
-                _ => format!("vn_{:x}", Self::unnamed_location_offset(vn)),
-            };
+            // pushUnnamedLocation fallback (printlanguage.cc:244 ->
+            // printc.cc:1938-1945): space name + printRaw of the high name
+            // representative's address, one oracle form for every space
+            // (PRINTC-UNLINKED-REF-FAMILY slice A merges this RPN ladder
+            // into the single helper).
+            name = Self::unnamed_location_token(
+                vn.get_space(),
+                Self::unnamed_location_offset(vn),
+            );
         }
         self.mark_varnode_used(name.clone(), vn);
         Atom::with_op_vn(
@@ -4396,6 +4388,87 @@ impl PrintC {
         vn.get_offset()
     }
 
+    // Ghidra: space.cc:206 AddrSpace::printRaw
+    /// `printRaw` of an offset in an address space — the exact transport
+    /// `PrintC::pushUnnamedLocation` appends after the space name
+    /// (printc.cc:1942-1943: `s << addr.getSpace()->getName();
+    /// addr.printRaw(s);`). Virtual dispatch over the oracle's space kinds:
+    ///
+    /// - base `AddrSpace::printRaw` (space.cc:206-222): `"0x"` + hex of
+    ///   `byteToAddress(offset, wordsize)` zero-padded to minimum width
+    ///   `2*sz`, where `sz = getAddrSize()` shrunk to 4 when
+    ///   `offset>>32==0` and to 6 (else-if) when `offset>>48==0` — only
+    ///   when sz>4; plus `+cut` (decimal) when wordsize>1 and
+    ///   `offset % wordsize != 0`. `byteToAddress(val, ws) = val/ws`
+    ///   (space.hh:523-525); `setw` is a minimum width (no truncation).
+    /// - `ConstantSpace::printRaw` (space.cc:372-376) and
+    ///   `OtherSpace::printRaw` (space.cc:410-414) override to `"0x"` +
+    ///   plain hex (no padding, no shrink).
+    /// - `IopSpace::printRaw` (op.cc:41-54) and `JoinSpace::printRaw`
+    ///   (space.cc:590-609) decode the offset as a PcodeOp pointer / a
+    ///   join-record table lookup; neither shape reaches a print-time
+    ///   explicit varnode (iop varnodes ride op annotations, join varnodes
+    ///   are split/unified before print) and Rugra's flat space enum
+    ///   carries neither registry, so those spaces degrade to the base
+    ///   form here (PRINTC-UNLINKED-REF-FAMILY slice A degradation; fix
+    ///   path: port the join registry with ADDRESS-0001).
+    fn addr_space_print_raw(space: crate::space::AddressSpace, offset: u64) -> String {
+        use crate::space::AddressSpace;
+        match space {
+            // ConstantSpace::printRaw (space.cc:372-376): plain hex.
+            AddressSpace::Const => format!("0x{:x}", offset),
+            // OtherSpace::printRaw (space.cc:410-414): plain hex.
+            AddressSpace::Other(_) => format!("0x{:x}", offset),
+            // Base AddrSpace::printRaw (space.cc:206-222).
+            _ => {
+                let mut sz = space.addr_size();
+                if sz > 4 {
+                    if (offset >> 32) == 0 {
+                        // Don't print a bunch of zeroes at front of address
+                        sz = 4;
+                    } else if (offset >> 48) == 0 {
+                        sz = 6;
+                    }
+                }
+                let wordsize = space.word_size() as u64;
+                // byteToAddress (space.hh:523-525): byte units -> addressable
+                // units.
+                let addr_units = if wordsize > 1 {
+                    offset / wordsize
+                } else {
+                    offset
+                };
+                let mut text = format!("0x{:0width$x}", addr_units, width = 2 * sz);
+                if wordsize > 1 {
+                    let cut = offset % wordsize;
+                    if cut != 0 {
+                        text.push_str(&format!("+{}", cut));
+                    }
+                }
+                text
+            }
+        }
+    }
+
+    // Ghidra: printc.cc:1938 PrintC::pushUnnamedLocation
+    /// The token-construction half of the oracle's single print-time
+    /// unnamed-location fallback label (PRINTC-UNLINKED-REF-FAMILY slice A):
+    /// `pushUnnamedLocation` (printc.cc:1938-1945) fills an ostringstream
+    /// with `addr.getSpace()->getName()` followed by `addr.printRaw(s)` —
+    /// e.g. `unique0x10000000`, `ram0x00023e00` — then pushes the
+    /// var-color atom; this builder returns that string and the emitting
+    /// entry point ([`PrintC::push_unnamed_location`]) delegates here. No
+    /// space-specific branching at the print site. Called with the HIGH
+    /// NAME REPRESENTATIVE's address (printlanguage.cc:244; see
+    /// [`Self::unnamed_location_offset`]). This replaces Rugra's three
+    /// divergent fallback ladders (`uVar_<hex>` / `uVar<hex>` /
+    /// `local_<hex>` / `param_stack_<hex>` / `DAT_<hex>` / `vn_<hex>` /
+    /// `v_<size>_<hex>`), closing the Register-ladder raw-negative-offset
+    /// swallowing (`uVarffffffffffffff70`) class with it.
+    fn unnamed_location_token(space: crate::space::AddressSpace, offset: u64) -> String {
+        format!("{}{}", space.name(), Self::addr_space_print_raw(space, offset))
+    }
+
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
@@ -4450,18 +4523,17 @@ impl PrintC {
                 if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                     return pname.clone();
                 }
-                // Unnamed-location fallback address = the high's name
-                // representative (printlanguage.cc:244), not this instance.
-                format!("uVar{:x}", Self::unnamed_location_offset(vn))
+                // pushUnnamedLocation (printc.cc:1938-1945): space name +
+                // printRaw of the representative address.
+                Self::unnamed_location_token(
+                    AddressSpace::Register,
+                    Self::unnamed_location_offset(vn),
+                )
             }
-            AddressSpace::Stack => {
-                let off = Self::unnamed_location_offset(vn);
-                if off >= 0x8000_0000_0000_0000 {
-                    format!("local_{:x}", (!off).wrapping_add(1))
-                } else {
-                    format!("param_stack_{:x}", off)
-                }
-            }
+            AddressSpace::Stack => Self::unnamed_location_token(
+                AddressSpace::Stack,
+                Self::unnamed_location_offset(vn),
+            ),
             AddressSpace::Unique => {
                 // Inline candidacy stays keyed on the current instance
                 // (space, offset); only the label's address source moves to
@@ -4470,9 +4542,12 @@ impl PrintC {
                 if self.inline_candidates.contains_key(&key) {
                     return String::new();
                 }
-                format!("uVar_{:x}", Self::unnamed_location_offset(vn))
+                Self::unnamed_location_token(
+                    AddressSpace::Unique,
+                    Self::unnamed_location_offset(vn),
+                )
             }
-            _ => String::new(),
+            other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
         }
     }
 
@@ -5418,7 +5493,13 @@ impl PrintC {
                 // (PRINTC-UNLINKED-REF-FAMILY slice B1).
                 if let Some(ref out_arc) = def_op.output {
                     let out_vn = out_arc.read().unwrap();
-                    let name = format!("uVar_{:x}", Self::unnamed_location_offset(&out_vn));
+                    // pushUnnamedLocation (printc.cc:1938-1945): space name +
+                    // printRaw of the high name representative's address
+                    // (PRINTC-UNLINKED-REF-FAMILY slice A token form).
+                    let name = Self::unnamed_location_token(
+                        out_vn.get_space(),
+                        Self::unnamed_location_offset(&out_vn),
+                    );
                     self.mark_varnode_used(name.clone(), &out_vn);
                     if !self.discovery_pass {
                         self.emit.tag_variable(&name, 0);
@@ -8290,9 +8371,14 @@ impl PrintLanguage for PrintC {
 
         // Priority 2: Fall back to address-based naming.
         // Faithful to Ghidra's pushUnnamedLocation (printc.cc:1938-1945):
-        // outputs "space_name + raw_offset" (e.g., "Register20"), NOT
-        // register names like "RSP". The register name mapping is done
-        // by varmap/merge assign_names, not by printc's fallback.
+        // space name + printRaw of the representative address (e.g.
+        // "register0x40", "unique0x10000000"), NOT register names like
+        // "RSP". The register name mapping is done by varmap/merge
+        // assign_names, not by printc's fallback.
+        // (PRINTC-UNLINKED-REF-FAMILY slice A: the per-space label forms
+        // `uVar_<hex>`/`local_<hex>`/`param_stack_<hex>`/`DAT_<hex>`/
+        // `v_<size>_<hex>` are merged into the single oracle form; the
+        // param-name and inline-candidacy sub-guards below stay.)
         let name = match vn.get_space() {
             AddressSpace::Register => {
                 // Priority: parameter name > unnamed location
@@ -8310,10 +8396,10 @@ impl PrintLanguage for PrintC {
                             return;
                         }
                     }
-                    // Faithful to buildVariableName default (database.cc:2501):
-                    // size-based local variable name.
-                    let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
-                    format!("{}_{:x}", prefix, vn.get_offset())
+                    Self::unnamed_location_token(
+                        AddressSpace::Register,
+                        Self::unnamed_location_offset(vn),
+                    )
                 }
             }
             AddressSpace::Const => {
@@ -8385,18 +8471,10 @@ impl PrintLanguage for PrintC {
                     format!("0x{:x}", val)
                 }
             }
-            AddressSpace::Stack => {
-                // Unnamed-location fallback address = the high's name
-                // representative (printlanguage.cc:244); for addrtied
-                // stack instances this equals the instance offset.
-                let off = Self::unnamed_location_offset(vn);
-                if off >= 0x8000_0000_0000_0000 {
-                    // Negative offset (local variable)
-                    format!("local_{:x}", (!off).wrapping_add(1))
-                } else {
-                    format!("param_stack_{:x}", off)
-                }
-            }
+            AddressSpace::Stack => Self::unnamed_location_token(
+                AddressSpace::Stack,
+                Self::unnamed_location_offset(vn),
+            ),
             AddressSpace::Unique => {
                 let key = (AddressSpace::Unique, vn.get_offset());
                 // Faithful to Ghidra pushSymbolDetail/pushUnnamedLocation: an
@@ -8422,24 +8500,27 @@ impl PrintLanguage for PrintC {
                         return;
                     }
                 }
-                // Unnamed-location fallback address = the high's name
-                // representative (printlanguage.cc:244): every instance of
-                // one HighVariable prints the same label
-                // (PRINTC-UNLINKED-REF-FAMILY slice B1). Inline candidacy
-                // above stays keyed on the current instance.
-                format!("uVar_{:x}", Self::unnamed_location_offset(vn))
+                // Unnamed-location fallback (printc.cc:1938-1945): space
+                // name + printRaw of the high name representative's address
+                // — every instance of one HighVariable prints the same
+                // label (slice B1 address source + slice A token form).
+                // Inline candidacy above stays keyed on the current
+                // instance.
+                Self::unnamed_location_token(
+                    AddressSpace::Unique,
+                    Self::unnamed_location_offset(vn),
+                )
             }
             AddressSpace::Ram => {
                 // Symbol/string lookups are handled at Priority 0 above.
-                // If we reach here, it's an unresolved RAM address.
-                // Representative offset == instance offset for addrtied
-                // RAM varnodes (no observable change; uniform address
-                // source per printlanguage.cc:244).
-                format!("DAT_{:08x}", Self::unnamed_location_offset(vn))
+                // If we reach here, it's an unresolved RAM address:
+                // pushUnnamedLocation prints "ram" + printRaw.
+                Self::unnamed_location_token(
+                    AddressSpace::Ram,
+                    Self::unnamed_location_offset(vn),
+                )
             }
-            _ => {
-                format!("v_{}_{:x}", vn.get_size(), Self::unnamed_location_offset(vn))
-            }
+            other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
         };
 
         self.mark_varnode_used(name.clone(), vn);
@@ -11547,27 +11628,18 @@ impl PrintC {
     /// Emit a name for an address with no symbol. Faithful port of
     /// `PrintC::pushUnnamedLocation` (printc.cc:1938-1945):
     /// `s << space->getName(); addr.printRaw(s);` then the var-color atom.
-    /// `printRaw` is `AddrSpace::printRaw` (space.cc:206-218): `0x` plus the
-    /// zero-padded hex of `byteToAddress(offset,wordsize)`, with the width
-    /// trimmed to 4/6 bytes for an 8-byte space when the high bytes are zero.
+    /// `printRaw` is the virtual dispatch of space.cc:206-222 (base),
+    /// space.cc:372-376 (ConstantSpace) and space.cc:410-414 (OtherSpace):
+    /// `0x` plus the zero-padded hex of `byteToAddress(offset,wordsize)`
+    /// (division, space.hh:523-525 — the pre-slice-A local copy multiplied,
+    /// which is `addressToByte`, a latent wordsize>1 divergence; all x86-64
+    /// production spaces are wordsize 1 so the fix is unobservable there),
+    /// width `2*sz` with the sz>4 shrink to 4/6, the wordsize `+cut`
+    /// suffix, and the plain-hex overrides for const/OTHER. Since slice A
+    /// (PRINTC-UNLINKED-REF-FAMILY) the token construction is shared with
+    /// every fallback ladder through [`Self::unnamed_location_token`].
     pub fn push_unnamed_location(&mut self, space: AddressSpace, offset: u64) {
-        let mut sz = space.addr_size() as i32; // getAddrSize()
-        if sz > 4 {
-            if (offset >> 32) == 0 {
-                sz = 4; // Don't print a bunch of zeroes at front of address
-            } else if (offset >> 48) == 0 {
-                sz = 6;
-            }
-        }
-        // byteToAddress(offset, wordsize) = offset * wordsize (space.hh).
-        let wordsize = space.word_size().max(1) as u64;
-        let scaled = if wordsize > 1 { offset * wordsize } else { offset };
-        let name = format!(
-            "{}0x{:0width$x}",
-            Self::space_name(space),
-            scaled,
-            width = (2 * sz) as usize
-        );
+        let name = Self::unnamed_location_token(space, offset);
         self.emit.tag_variable(&name, 0);
     }
 
@@ -12415,9 +12487,11 @@ mod tests {
         // case multi_instance_unnamed). printlanguage.cc:244 keys the
         // unnamed-location fallback on the high's NAME REPRESENTATIVE
         // address, so both instances of one merged high must print the
-        // SAME uVar_ label instead of fragmenting into per-instance
-        // offsets (rep=10000000: the earlier-written instance wins under
-        // compareName, variable.cc:456-488).
+        // SAME label instead of fragmenting into per-instance offsets
+        // (rep=10000000: the earlier-written instance wins under
+        // compareName, variable.cc:456-488). Slice A carries the oracle
+        // token form: pushUnnamedLocation = space name + printRaw
+        // (printc.cc:1938-1945).
         let emit = Box::new(EmitNoMarkup::new());
         let mut printer = PrintC::new(emit);
 
@@ -12450,9 +12524,12 @@ mod tests {
         let name_a = printer.get_varnode_display_name(&ta.read().unwrap());
         let name_b = printer.get_varnode_display_name(&tb.read().unwrap());
         // Both sites collapse onto the representative's offset (10000000),
-        // and site b no longer carries its own instance offset (10000008).
-        assert_eq!(name_a, "uVar_10000000");
-        assert_eq!(name_b, "uVar_10000000");
+        // and site b no longer carries its own instance offset (10000008);
+        // slice A carries the oracle token form: "unique" + printRaw
+        // (printc.cc:1938-1945, AddrSpace::printRaw space.cc:206-222 ->
+        // 0x10000000, 8-digit padded hex of the addrsize-4 unique space).
+        assert_eq!(name_a, "unique0x10000000");
+        assert_eq!(name_b, "unique0x10000000");
 
         // Degradation: without a high there is no representative; the
         // fallback keeps the instance's own offset (Rugra-only shape,
@@ -12461,7 +12538,7 @@ mod tests {
         let orphan = fd.new_unique_out(4, &orphan_op);
         let name_orphan = printer.get_varnode_display_name(&orphan.read().unwrap());
         assert_ne!(name_orphan, name_a);
-        assert!(name_orphan.starts_with("uVar_"));
+        assert!(name_orphan.starts_with("unique0x"));
     }
 
     #[test]
