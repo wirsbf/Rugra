@@ -426,3 +426,25 @@ symbol-driven 函数旁路，pre-A69 `*uVara0 = 0` 同类）；`ram0x` 名的
 printc extern 路径（printc.rs used_varnode_types Ram/Const 臂）已于
 2026-08-25 随 MAIN-DATPOOL-0001 移除，backfill 的局部 `long` 遮蔽
 注入行为保持不变（C 合法，curl 语料 ram0x 出现为 0 行）。
+symbol-driven 函数旁路，pre-A69 `*uVara0 = 0` 同类）；`ram0x` 名若已被
+printc extern 路径（printc.rs used_varnode_types Ram/Const 臂）声明为
+file-scope `extern long`，backfill 仍会注入局部 `long` 遮蔽（C 合法，
+curl 语料 ram0x 出现为 0 行）。
+
+### 2026-08-25（续2）：FLAT-CBRANCH 配套 — Pattern 5 尾调用重写排除 code_ 标签
+
+`post_process_output_legacy` 的 Pattern 5（"goto func;" → "return func();"
+尾调用重写）此前只检查"标识符形 + 小写首字母"。FLAT-CBRANCH 补全后
+printc 发射 flat 尾部 `goto code_r0x...;`（printc.rs 对 printc.cc:2723-2741
+的移植），`code_r0x000026A5` 恰好全 alphanumeric 且小写开头——16 处
+flat goto 被误重写为 `return code_r0x000026A5();`，gcc 报"将标签隐式
+声明为函数"。
+
+修复：Pattern 5 谓词排除 `code_` / `joined_` / `dup_` 前缀——三者是
+`PrintC::emitLabel`（printc.cc:3164-3193）的标签构造前缀
+（code_ 常规 / joined_ 拼接块 / dup_ 复制块），goto 到它们是控制流
+转移，不是尾调用。行为对 libc 尾调用路径（`puts` 等）无影响。
+
+验收：curl E2E `return code_r0x` 假象 16 → 0；audit_syntax 53 → 55 OK
+（71 → 69 FAIL，清零 2 处"标号使用前未定义"；其余失败为预存——
+progressbarinit/hugehelp 等函数的提取体在两次输出中逐字节相同）。

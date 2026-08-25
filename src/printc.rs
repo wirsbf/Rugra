@@ -230,6 +230,19 @@ pub mod print_mods {
     pub const COMMA_SEPARATE: u32 = 0x200;
     /// Do not print block structure (flat) (printlanguage.hh:155).
     pub const FLAT: u32 = 0x400;
+    /// Print the false branch (for flat) (printlanguage.hh:156). Set by
+    /// opCbranch (printc.cc:550) when the fallthru edge is the TRUE branch,
+    /// so the printed condition is negated and the goto names the
+    /// non-fallthru edge. Ghidra 12.0.4 sets this mod but no reader in the
+    /// oracle consumes it (grep: set at printc.cc:550 only) — kept as
+    /// faithful transport on the queued pushVn mods.
+    pub const FALSEBRANCH: u32 = 0x800;
+    /// Fall-thru no longer exists (printlanguage.hh:157). Set by
+    /// emitBlockLs (printc.cc:2807/2821) around a BlockList member whose
+    /// successor in the list is NOT its flow successor, and read by
+    /// emitBlockBasic's tail (printc.cc:2725) to emit the explicit
+    /// `goto <label>;` that preserves control flow.
+    pub const NOFALLTHRU: u32 = 0x1000;
     /// The current block may need to surround itself with additional braces
     /// (printlanguage.hh:160). Enables `else if` collapsing.
     pub const PENDING_BRACE: u32 = 0x8000;
@@ -640,6 +653,11 @@ pub struct PrintC {
     /// RPN token-table index of the `subscript` "[ ]" token (printc.cc:27),
     /// used by `rpn_push_partial_symbol` for array-element entries.
     rpn_tok_subscript: usize,
+    /// Index of the boolean-not token (!, unary prefix, prec 62). Mirrors
+    /// PrintC::boolean_not (printc.cc:30). Pushed by the opCbranch port
+    /// (printc.cc:564-565) when the branch condition survives
+    /// checkPrintNegation still flipped.
+    rpn_tok_boolean_not: usize,
     /// True when doc_function emits via the RPN path. Default false.
     rpn_enabled: bool,
 }
@@ -722,6 +740,7 @@ impl PrintC {
             rpn_tok_function_call: 7,
             rpn_tok_comma: 8,
             rpn_tok_subscript: 9,
+            rpn_tok_boolean_not: 10,
             rpn_enabled: true,
         }
     }
@@ -814,6 +833,10 @@ impl PrintC {
         // index 9 - subscript "[" "]" (printc.cc:27): postsurround,
         // prec 66, spacing 0, bump 0.
         let subscript = OpToken::postsurround("[", "]", 66, 0, 0);
+        // index 10 - boolean_not "!" (printc.cc:30): unary prefix, prec 62,
+        // spacing 0, bump 0. Field-for-field from
+        // { "!", "", 1, 62, false, unary_prefix, 0, 0, (OpToken*)0 }.
+        let boolean_not = OpToken::unary_prefix("!", 62, 0, 0);
         let mut tokens = vec![
             assignment,
             dereference,
@@ -825,8 +848,9 @@ impl PrintC {
             function_call,
             comma,
             subscript,
+            boolean_not,
         ];
-        // indices 10..=29 - the 20 binary operator tokens (printc.cc:36-55),
+        // indices 11..=30 - the 20 binary operator tokens (printc.cc:36-55),
         // field-for-field from the optoken registry (single source of truth):
         // { print1, "", stage=2, precedence, associative, binary, spacing=1,
         //   bump=0, negate }. `negate` stores the token-table index of the
@@ -873,8 +897,8 @@ impl PrintC {
     }
 
     /// First index of the binary-token block appended by build_rpn_token_table
-    /// (indices 10..=29, in optoken::BINARY_TOKENS order — printc.cc:36-55).
-    const RPN_TOK_BINARY_BASE: usize = 10;
+    /// (indices 11..=30, in optoken::BINARY_TOKENS order — printc.cc:36-55).
+    const RPN_TOK_BINARY_BASE: usize = 11;
 
     // Ghidra: printc.hh:283-318 + printlanguage.cc:539-545
     /// Map a binary opcode to its rpn_token_table index — the Rust equivalent
@@ -1592,15 +1616,16 @@ impl PrintC {
                     self.rpn_recurse();
                 }
             }
-            // CBRANCH: emit the condition expression in parens.
-            // printc.cc:566 opCbranch: pushVn(op->getIn(1),op,m) — record +
-            // drain so an implied comparison (the bool temp from
-            // PRINTC-UNLINKED-REF-0001) inlines as its relational expression.
+            // printc.cc:536-580 PrintC::opCbranch — the flat if-goto
+            // statement: `if (<cond>) goto <target>;` (+ `;` from
+            // emit_statement_rpn, mirroring printc.cc:2291-2292 emitStatement).
+            // A CBRANCH reaches emitStatement → opfunc only in a flat print in
+            // the oracle (printc.cc:2657-2658); Rugra's emit_block_ops sets
+            // the FLAT mod for exactly those contexts, so opCbranch's `yesif`
+            // arm fires. pushVn(op->getIn(1),op,m) + recurse() keep the
+            // PRINTC-UNLINKED-REF-0001 implied-comparison inlining.
             OpCode::CPUI_CBRANCH => {
-                self.emit.print("(");
-                self.rpn_push_in(op_arc, op, 1, self.mods);
-                self.rpn_recurse();
-                self.emit.print(")");
+                self.op_cbranch_rpn(op_arc, op);
             }
             // printc.cc:448 opTypeCast: (type)in0, or &in0 for array->pointer decay.
             // Faithful port of `PrintC::opTypeCast(const PcodeOp*)`
@@ -2636,6 +2661,75 @@ impl PrintC {
             // printc.cc:2720: emitStatement(inst);
             self.emit_statement_rpn(&op_ref.0, &op_guard);
         }
+
+        // ===== printc.cc:2685 emitLabelStatement(bb) + cc:2723-2741 tail =====
+        // Same flat tail protocol as emit_block_ops (see the full rationale
+        // there): every CBRANCH/BRANCH target in this block's ops that is a
+        // live `code_r0x` goto target gets its label emitted (cc:2685 +
+        // cc:3198-3214 flat arm: isJumpTarget), and a trailing straight
+        // BRANCH that the cc:2701 rule skipped is emitted as an explicit
+        // `goto <label>;` statement (cc:2723-2741) so the non-fallthru
+        // continuation is preserved. Reverse scan keeps label order stable.
+        if !suppress_branch {
+            let mut targets_to_label: Vec<u64> = Vec::new();
+            for op_ref in ops.iter().rev() {
+                let op = op_ref.0.read().unwrap();
+                if op.is_dead() {
+                    continue;
+                }
+                if !matches!(op.opcode, OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH) {
+                    continue;
+                }
+                if let Some(in0) = op.get_in(0) {
+                    let vn = in0.read().unwrap();
+                    if vn.get_space() == crate::space::AddressSpace::Const
+                        || vn.get_space() == crate::space::AddressSpace::Ram
+                    {
+                        let target = vn.get_offset();
+                        if self.goto_targets.contains(&target)
+                            && !targets_to_label.contains(&target)
+                        {
+                            targets_to_label.push(target);
+                        }
+                    }
+                }
+            }
+            for target in targets_to_label {
+                self.emit_label_statement(target);
+            }
+
+            // printc.cc:2725: isSet(flat) && isSet(nofallthru) — the caller
+            // (emit_block_ops) mirrors FLAT for exactly these contexts; the
+            // NOFALLTHRU transport is a trailing straight BRANCH (one
+            // out-edge, cc:2738 emitLabel(bb->getOut(0))).
+            let last_is_branch = ops
+                .last()
+                .map(|o| {
+                    let op = o.0.read().unwrap();
+                    !op.is_dead() && op.opcode == OpCode::CPUI_BRANCH
+                })
+                .unwrap_or(false);
+            if last_is_branch {
+                let target = ops.last().and_then(|o| {
+                    let op = o.0.read().unwrap();
+                    op.get_in(0).map(|in0| in0.read().unwrap().get_offset())
+                });
+                if let Some(target) = target {
+                    if self.goto_targets.contains(&target) {
+                        // printc.cc:2727-2740: tagLine; beginStatement;
+                        // KEYWORD_GOTO; spaces(1); emitLabel; SEMICOLON;
+                        // endStatement.
+                        self.emit.tag_line(0);
+                        self.emit.begin_statement();
+                        self.emit.print("goto ");
+                        self.emit.tag_variable(&self.code_label(target), 0);
+                        self.emit.print(";");
+                        self.emit.end_statement();
+                    }
+                }
+            }
+        }
+
         // printc.cc:2742: emitCommentGroup((const PcodeOp *)0); — any
         // remaining comments in this basic block (opstop = stop).
         if cur_block.is_some() {
@@ -2714,11 +2808,36 @@ impl PrintC {
         // Route to RPN path if enabled
         if self.rpn_enabled {
             let ops = block_arc.read().unwrap().get_ops();
+            // printc.cc:2657-2658 docFunction: a flat print emits the
+            // basic-block graph, and only there does a CBRANCH reach
+            // emitStatement → opfunc → opCbranch's `yesif` arm (structured
+            // conditions print via only_branch, printc.cc:2911-2912, where
+            // `flat` is clear). Rugra transports the same invariant with
+            // skip_terminal: emit_block_basic_rpn skips every branch op
+            // unless it is false, so a CBRANCH reaching statement emission
+            // here is always in flat context (if-goto condition emission,
+            // flat fallbacks, unstructured bodies). Mirror
+            // PrintLanguage::setFlat(true) (printlanguage.cc:662-669) with a
+            // save/restore so opCbranch's `isSet(flat)` reads true.
+            let modsave = self.mods;
+            if !skip_terminal {
+                self.set_mod(print_mods::FLAT);
+            }
             self.emit_block_basic_rpn(&ops, skip_terminal);
+            self.mods = modsave;
             return;
         }
         use crate::opcodes::OpCode;
         use std::collections::HashSet;
+
+        // Same flat-mod mirror as the RPN route above (printc.cc:2657-2658,
+        // printlanguage.cc:662-669): a CBRANCH reaching doc_statement here is
+        // a flat-context statement, so opCbranch's `isSet(flat)` arm must see
+        // the mod set.
+        let modsave = self.mods;
+        if !skip_terminal {
+            self.set_mod(print_mods::FLAT);
+        }
 
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
@@ -2906,6 +3025,99 @@ impl PrintC {
             self.emit_comment_group(Some(op_ref));
             self.doc_statement(&op);
         }
+
+        // ===== printc.cc:2685 emitLabelStatement(bb) + cc:2723-2741 tail =====
+        // Ghidra's emitBlockBasic prints the block's label FIRST (cc:2685,
+        // before the op loop) — in flat mode for every jump target
+        // (FlowBlock::isJumpTarget, cc:3204). Rugra's flat CBRANCH emission
+        // (op_cbranch / op_cbranch_rpn, the cc:536-580 port) renders the
+        // non-fallthru edge as `goto code_r0x...;` — the fallthru edge's
+        // block then continues in place. The fallthru block's own entry is a
+        // jump target of nothing, so the oracle needs no label for it; but
+        // the GOTO TARGET block (which the block-graph loop later emits)
+        // must carry a label or the goto names an undeclared label
+        // (F1 residual: 39/39 flat gotos were label-less in the curl E2E).
+        // Rugra's dispatcher does not run emitBlockBasic on the CFG blocks
+        // (it walks the structured graph), so the per-block label is
+        // emitted here, at the head of the block that OWNS the goto's
+        // fallthrough continuation — i.e. when this block's ops contain a
+        // CBRANCH/BRANCH whose target is a code address in goto_targets,
+        // every referenced target label that has no block-structured label
+        // yet is emitted on its own line, mirroring emitLabelStatement's
+        // `tagLine(0); emitLabel(bl); print(COLON)` (cc:3211-3213).
+        // The reverse scan (last op first) keeps label order stable when
+        // several targets appear in one flattened slice.
+        if !skip_terminal {
+            let mut targets_to_label: Vec<u64> = Vec::new();
+            for op_ref in ops.iter().rev() {
+                let op = op_ref.0.read().unwrap();
+                if op.is_dead() {
+                    continue;
+                }
+                if !matches!(op.opcode, OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH) {
+                    continue;
+                }
+                if let Some(in0) = op.get_in(0) {
+                    let vn = in0.read().unwrap();
+                    if vn.get_space() == crate::space::AddressSpace::Const
+                        || vn.get_space() == crate::space::AddressSpace::Ram
+                    {
+                        let target = vn.get_offset();
+                        if self.goto_targets.contains(&target)
+                            && !targets_to_label.contains(&target)
+                        {
+                            targets_to_label.push(target);
+                        }
+                    }
+                }
+            }
+            for target in targets_to_label {
+                self.emit_label_statement(target);
+            }
+
+            // printc.cc:2723-2741: flat tail goto. "If we are printing flat
+            // structure and there is no longer a normal fallthru, print a
+            // goto": when the block's LAST op is an unconditional BRANCH
+            // whose target is not the next block in flow, the oracle emits
+            // `goto <label>;` as its own statement (beginStatement /
+            // KEYWORD_GOTO / emitLabel / SEMICOLON / endStatement). Rugra's
+            // emit_block_ops is the flat-context twin (FLAT mod mirrored at
+            // fn head), and the NOFALLTHRU transport is: a trailing BRANCH
+            // op that was skipped by the cc:2701 rule (straight branches are
+            // rendered by the block classes) — emit its goto here so the
+            // non-fallthru continuation is preserved. isFallthruTrue's
+            // two-out-edge selection (cc:2731-2736) does not apply: a
+            // BRANCH has one out-edge (cc:2738 emitLabel(getOut(0))).
+            let last_is_branch = ops
+                .last()
+                .map(|o| {
+                    let op = o.0.read().unwrap();
+                    !op.is_dead() && op.opcode == OpCode::CPUI_BRANCH
+                })
+                .unwrap_or(false);
+            if last_is_branch {
+                let target = ops.last().and_then(|o| {
+                    let op = o.0.read().unwrap();
+                    op.get_in(0).map(|in0| in0.read().unwrap().get_offset())
+                });
+                if let Some(target) = target {
+                    if self.goto_targets.contains(&target) {
+                        // printc.cc:2727-2740: tagLine; beginStatement(inst);
+                        // print(KEYWORD_GOTO); spaces(1); emitLabel(bb->getOut(0));
+                        // print(SEMICOLON); endStatement(id).
+                        self.emit.tag_line(0);
+                        self.emit.begin_statement();
+                        self.emit.print("goto ");
+                        self.emit.tag_variable(&self.code_label(target), 0);
+                        self.emit.print(";");
+                        self.emit.end_statement();
+                    }
+                }
+            }
+        }
+
+        // Restore mods after the flat-mod mirror (see fn head).
+        self.mods = modsave;
 
         // printc.cc:2742: emitCommentGroup((const PcodeOp *)0); — any
         // remaining comments in this basic block.
@@ -8086,46 +8298,57 @@ impl PrintLanguage for PrintC {
     }
 
     // Ghidra: printc.cc:536 PrintC::opCbranch
+    /// Legacy direct-emit twin of `op_cbranch_rpn`: the same printc.cc:536-580
+    /// decision structure on the legacy text transport, reached via
+    /// doc_statement → PcodeOp::push → typeop dispatch when rpn_enabled is
+    /// false. The condition rides `emit_cbranch_condition` (which owns the
+    /// R50 malformed-condition policy); the surviving booleanflip renders as
+    /// explicit `!(<cond>)` — the textual equivalent of the oracle's
+    /// boolean_not RPN token, which parenthesizes its operand because unary
+    /// prec 62 dominates comparison prec 42. The checkPrintNegation fold
+    /// (cc:559-561) is RPN-only here: the legacy text transport has no
+    /// negatetoken consumer (only the RPN token table flips comparison
+    /// tokens, rpn_tok_binary), so this twin always takes the cc:564-565
+    /// fallback when a flip survives.
     fn op_cbranch(&mut self, op: &PcodeOp) {
         use crate::op::branch_type;
-        // Ghidra printc.cc opCbranch: pushes op->getIn(1) then recurses — it
-        // never silently drops the condition. Rugra's CBRANCH may temporarily
-        // lack in(1) (its boolean condition) when the structurer builds a
-        // BlockIf around a CBRANCH whose condition got consumed upstream.
-        // Previously we swallowed None and emitted `if () goto ;` (syntax
-        // error). Now: when in(1) is missing, emit `1` (always-true) so the
-        // output is at least valid C — `if (1) goto X;`. This matches the
-        // intent of a CBRANCH with an unknown/unrecovered condition (always
-        // taken), and avoids producing non-compiling output. (Audit: BATCH1 R50.)
-        match op.branch_type {
-            branch_type::BREAK => {
-                self.emit.print("if (");
-                self.emit_cbranch_condition(op);
-                self.emit.print(") break");
+        // printc.cc:540
+        let yesif = self.is_set(print_mods::FLAT);
+        // printc.cc:542
+        let mut booleanflip = op.is_boolean_flip();
+
+        if yesif {
+            // printc.cc:546-547
+            self.emit.tag_op("if");
+            self.emit.print(" ");
+            // printc.cc:548-551
+            if op.is_fallthru_true() {
+                booleanflip = !booleanflip;
             }
-            branch_type::CONTINUE => {
-                if self.loop_depth > 0 {
-                    self.emit.print("if (");
-                    self.emit_cbranch_condition(op);
-                    self.emit.print(") continue");
-                } else {
-                    // Not in a loop — emit as goto instead
+        }
+        // printc.cc:554-557 (the legacy path never sets comma_separate).
+        self.emit.open_paren();
+        if booleanflip {
+            // printc.cc:564-565 boolean_not fallback, explicit-paren form.
+            self.emit.print("!(");
+            self.emit_cbranch_condition(op);
+            self.emit.print(")");
+        } else {
+            self.emit_cbranch_condition(op);
+        }
+        self.emit.close_paren();
+
+        if yesif {
+            // printc.cc:575-577 + emitGotoStatement fold (printc.cc:2303-2323).
+            self.emit.print(" ");
+            match op.branch_type {
+                branch_type::BREAK => self.emit.print("break"),
+                branch_type::CONTINUE if self.loop_depth > 0 => self.emit.print("continue"),
+                _ => {
+                    self.emit.print("goto ");
                     if let Some(in0) = op.get_in(0) {
-                        self.emit.print("if (");
-                        self.emit_cbranch_condition(op);
-                        self.emit.print(") goto ");
                         self.push_goto_target(&in0.read().unwrap());
                     }
-                }
-            }
-            _ => {
-                // Only print goto if we have a valid target (Ghidra never
-                // produces `goto ;` — targets come from CFG out-edges).
-                if let Some(in0) = op.get_in(0) {
-                    self.emit.print("if (");
-                    self.emit_cbranch_condition(op);
-                    self.emit.print(") goto ");
-                    self.push_goto_target(&in0.read().unwrap());
                 }
             }
         }
@@ -8607,6 +8830,154 @@ impl PrintLanguage for PrintC {
 
 impl PrintC {
     // ===== Missing printc.cc methods (batch 1) =====
+    // Ghidra: printc.cc:536 PrintC::opCbranch
+    /// Legacy direct-emit twin of `op_cbranch_rpn`
+    ///
+    /// ```text
+    /// bool yesif = isSet(flat);              // cc:540
+    /// bool yesparen = !isSet(comma_separate);// cc:541
+    /// bool booleanflip = op->isBooleanFlip();// cc:542
+    /// uint4 m = mods;                        // cc:543
+    /// if (yesif) { tagOp(KEYWORD_IF); spaces(1);            // cc:546-547
+    ///   if (op->isFallthruTrue()) { booleanflip = !booleanflip; // cc:548-549
+    ///     m |= falsebranch; } }                              // cc:550
+    /// id = openParen / openGroup;                            // cc:554-557
+    /// if (booleanflip && checkPrintNegation(getIn(1))) {     // cc:558-559
+    ///   m |= negatetoken; booleanflip = false; }             // cc:560-561
+    /// if (booleanflip) pushOp(&boolean_not, op);             // cc:564-565
+    /// pushVn(getIn(1), op, m); recurse();                    // cc:566/568
+    /// closeParen / closeGroup;                               // cc:569-572
+    /// if (yesif) { spaces(1); print(KEYWORD_GOTO); spaces(1);// cc:575-577
+    ///   pushVn(getIn(0), op, mods); }                        // cc:578
+    /// ```
+    ///
+    /// Alignment Evidence (four decisive semantics, printc.cc:536-580):
+    /// - References/output params: `op` const-read; no Varnode/PcodeOp
+    ///   mutation. `m` is a by-value copy of `mods` (cc:543) that only the
+    ///   `pushVn(getIn(1))` arc receives (cc:566) — self.mods itself is
+    ///   never written here.
+    /// - Loop bounds/traversal order: no loops; the fixed statement order
+    ///   if → paren → [!] condition → paren-close → goto target.
+    /// - Counters/accumulators: `booleanflip` starts from the op flag
+    ///   (cc:542), toggled at most once by isFallthruTrue (cc:549), cleared
+    ///   once by a successful checkPrintNegation fold (cc:561).
+    /// - Sort/comparison keys: none.
+    ///
+    /// Rugra transports:
+    /// - The flat if-goto trailing keyword folds Ghidra's
+    ///   `emitGotoStatement` (printc.cc:2303-2323: f_break_goto → `break`,
+    ///   f_continue_goto → `continue`, f_goto_goto → `goto <label>`) into
+    ///   `op.branch_type`, which the BlockIf-goto emission site sets from
+    ///   `BlockIf::goto_type` (scope_break, block.cc:3075-3084) before
+    ///   emitting the condition block through emit_block_ops.
+    /// - `pushVn(op->getIn(0),op,mods)` on the branch-target varnode rides
+    ///   `push_goto_target` (the established emitLabel transport,
+    ///   printc.cc:3164-3192 label-string construction).
+    /// - The `continue` loop_depth guard keeps the legacy protection for a
+    ///   structurer mislabel (Ghidra needs none: scope_break only produces
+    ///   f_continue_goto inside a loop scope).
+    /// - in(1) == None never occurs in the oracle; Rugra's structurer can
+    ///   lose the condition varnode, and the BATCH1 R50 policy prints `1`
+    ///   (always-true) instead of `if () goto ;`.
+    fn op_cbranch_rpn(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
+        use crate::op::branch_type;
+        // printc.cc:540: bool yesif = isSet(flat);
+        let yesif = self.is_set(print_mods::FLAT);
+        // printc.cc:541: bool yesparen = !isSet(comma_separate);
+        let yesparen = !self.is_set(print_mods::COMMA_SEPARATE);
+        // printc.cc:542: bool booleanflip = op->isBooleanFlip();
+        let mut booleanflip = op.is_boolean_flip();
+        // printc.cc:543: uint4 m = mods;
+        let mut m = self.mods;
+
+        if yesif {
+            // printc.cc:546-547: tagOp(KEYWORD_IF) + spaces(1).
+            self.emit.tag_op("if");
+            self.emit.print(" ");
+            // printc.cc:548-551: fallthru edge is the TRUE branch → print
+            // the negated condition and name the false (non-fallthru) edge.
+            if op.is_fallthru_true() {
+                booleanflip = !booleanflip;
+                m |= print_mods::FALSEBRANCH;
+            }
+        }
+        // printc.cc:553-557: openParen(OPEN_PAREN) vs openGroup().
+        let id = if yesparen {
+            self.emit.open_paren();
+            0
+        } else {
+            self.emit.open_group()
+        };
+        // printc.cc:558-563: checkPrintNegation fold — flip the comparison
+        // token (== → !=) instead of printing `!`. Ghidra never has a null
+        // in(1); Rugra's R50 policy prints the constant 1 with no negation
+        // (a dangling unary_not entry would corrupt the next statement's
+        // revpol stack).
+        let has_in1 = op.get_in(1).is_some();
+        if booleanflip && has_in1 {
+            let can_negate = op
+                .get_in(1)
+                .map(|in1| {
+                    let vn = in1.read().unwrap();
+                    self.check_print_negation(&vn)
+                })
+                .unwrap_or(false);
+            if can_negate {
+                // printc.cc:560-561
+                m |= print_mods::NEGATETOKEN;
+                booleanflip = false;
+            }
+        }
+        if !has_in1 {
+            // BATCH1 R50: unknown/unrecovered condition → always-true.
+            use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+            self.rpn_push_atom(&Atom::new("1", TagType::Syntax, SyntaxHighlight::NoColor));
+            booleanflip = false;
+        } else {
+            // printc.cc:564-565: pushOp(&boolean_not, op) — token `!`,
+            // unary_prefix prec 62 (printc.cc:30); the RPN parentheses()
+            // logic parenthesizes the operand exactly as the oracle does.
+            if booleanflip {
+                self.rpn_push_op(self.rpn_tok_boolean_not);
+            }
+            // printc.cc:566: pushVn(op->getIn(1), op, m) — m carries the
+            // falsebranch/negatetoken mods into the implied-def dispatch
+            // (rpn_recurse restores self.mods = np.vnmod first, so
+            // rpn_tok_binary's negatetoken flip fires, printlanguage.cc:539-545).
+            self.rpn_push_in(op_arc, op, 1, m);
+        }
+        // printc.cc:568: recurse() — drain the condition expression.
+        self.rpn_recurse();
+        // printc.cc:569-572
+        if yesparen {
+            self.emit.close_paren();
+        } else {
+            self.emit.close_group(id);
+        }
+
+        if yesif {
+            // printc.cc:575-577: spaces(1); print(KEYWORD_GOTO); spaces(1).
+            self.emit.print(" ");
+            match op.branch_type {
+                // emitGotoStatement fold (printc.cc:2309-2314).
+                branch_type::BREAK => self.emit.print("break"),
+                branch_type::CONTINUE if self.loop_depth > 0 => self.emit.print("continue"),
+                _ => {
+                    // printc.cc:2315-2318 f_goto_goto / printc.cc:576-578.
+                    self.emit.print("goto");
+                    self.emit.print(" ");
+                    if let Some(in0) = op.get_in(0) {
+                        self.push_goto_target(&in0.read().unwrap());
+                    }
+                }
+            }
+        }
+    }
+
 
     // Ghidra: printc.cc:2468 PrintC::emitExpression
     /// Emit an entire expression rooted at the given op. Faithful to
@@ -9920,11 +10291,32 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:3198 PrintC::emitLabelStatement
+    /// If the basic block is the destination of a \b goto statement, emit a
+    /// label for the block followed by the ':' terminator.
+    ///
+    /// Faithful port of `PrintC::emitLabelStatement(const FlowBlock*)`
+    /// (printc.cc:3198-3214):
+    /// ```text
+    /// if (isSet(only_branch)) return;
+    /// if (isSet(flat)) { if (!bl->isJumpTarget()) return; }   // flat: all jump targets
+    /// else { if (!bl->isUnstructuredTarget()) return;         // structured:
+    ///        if (bl->getType() != FlowBlock::t_copy) return; } // only unstructured gotos
+    /// emit->tagLine(0);
+    /// emitLabel(bl);        // printc.cc:3164-3193
+    /// emit->print(COLON);
+    /// ```
+    ///
+    /// Rugra transport: the caller (flat tail-goto path of emit_block_ops,
+    /// the cc:2725-2741 port) has already verified the address is a live
+    /// `code_r0x` goto target, so this emitter unconditionally prints the
+    /// label + colon (the isJumpTarget check lives in the caller's
+    /// goto_targets membership test, printc.rs's transport for
+    /// FlowBlock::isJumpTarget). `only_branch` contexts (loop-condition
+    /// bodies) never call here.
     pub fn emit_label_statement(&mut self, addr: u64) {
-        if self.goto_targets.contains(&addr) {
-            self.emit.tag_line(0);
-            self.emit.print(&format!("{}:", self.code_label(addr)));
-        }
+        // printc.cc:3211-3213: tagLine(0); emitLabel(bl); print(COLON).
+        self.emit.tag_line(0);
+        self.emit.print(&format!("{}:", self.code_label(addr)));
     }
 
     // Ghidra: printc.cc:3218 PrintC::emitAnyLabelStatement

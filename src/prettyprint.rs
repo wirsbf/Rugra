@@ -1001,9 +1001,17 @@ impl EmitNoMarkup {
             // 5. "goto function_name;" where function_name is a known libc function → tail call
             if t.starts_with("goto ") && t.ends_with(';') && !t.contains("LAB_") {
                 let func_name = &t[5..t.len()-1];
-                // Check it's a plausible function name (lowercase, no spaces)
+                // Check it's a plausible function name (lowercase, no spaces).
+                // `code_r0x...` labels (PrintC::emitLabel, printc.rs code_label /
+                // printc.cc:3164-3193) are flat-mode goto TARGETS, not function
+                // names — exclude them or every flat tail goto gets rewritten
+                // into a bogus `return code_r0x...();` call (which gcc rejects
+                // as an implicit-function-declaration of a label).
                 if func_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                     && func_name.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+                    && !func_name.starts_with("code_")
+                    && !func_name.starts_with("joined_")
+                    && !func_name.starts_with("dup_")
                 {
                     let indent = final_cleaned[i9].len() - final_cleaned[i9].trim_start().len();
                     let indent_str: String = " ".repeat(indent);

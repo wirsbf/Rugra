@@ -1440,3 +1440,58 @@ COPY/RIP/stack-frame/inlined skip（RPN 发射路径无这些 skip，谓词与�
 defects 0→0、numbering 1→1、skeleton 2884→2891（+7 = 恢复的 9 行语句归一化后净增）。
 剩余 6 处空 if 体与 file2string 主体缺失为 IR 层残差（op 已被上游 Action 移除，
 非 printc 判空），归 FILE2STRING-EMPTYELSE 后续分层修复。
+### 2026-08-25（续3）：FLAT-CBRANCH — flat opCbranch 全臂 + emitBlockBasic 尾部 goto/label 补全（F1 discarded conditions）
+
+Ghidra `emitBlockBasic`（printc.cc:2678-2744）的 flat 语义链此前只落了
+op 循环（cc:2694-2722），三个决定性缺口导致 F1（丢条件）与 label-less
+goto：
+
+**1. `opCbranch` 全臂（printc.cc:536-580，前任草案 + 本轮补全）**
+- `print_mods::FLAT`（0x400）镜像：`emit_block_ops` 在 `!skip_terminal`
+  （flat 上下文 transport）时 set FLAT，离开时恢复——Ghidra 只有
+  docFunction 的 `isSet(flat)` 分支（cc:2657-2658）会走到 emitStatement →
+  opCbranch 的 `yesif` 臂。
+- `op_cbranch_rpn`（新）：cc:540-578 的逐行移植——`yesif`（isSet flat）、
+  `booleanflip`（isBooleanFlip，op.hh:191）、`is_fallthru_true` 取反
+  （cc:548-551，op.hh:193；fallthru 为真边时打印否定条件并置
+  `print_mods::FALSEBRANCH` 0x800——oracle 只置无读者，faithful transport）、
+  `check_print_negation` 折叠（cc:558-563 → NEGATETOKEN，== → !=）、
+  `boolean_not` RPN token（cc:564-565，printc.cc:30 `"!"` unary prec 62，
+  token 表 index 10）、`pushVn(in(1), m)` + recurse（cc:566/568）、尾随
+  `goto <label>`（cc:575-578）。
+- legacy `op_cbranch`（printlanguage trait）：同结构直发 twin，`!(...)`
+  显式括号形式。
+- 效果（curl E2E）：50 处裸表达式语句 `(cond);`（丢条件）恢复为
+  `if (cond) goto code_r0x...;`。
+
+**2. label 发射（printc.cc:2685 `emitLabelStatement(bb)` + cc:3198-3214）**
+- flat 模式下每个 isJumpTarget 块要打 `code_r0x...:` 标签。Rugra 的
+  dispatcher 不逐 CFG 块跑 emitBlockBasic，所以标签在 `emit_block_ops` /
+  `emit_block_basic_rpn` 尾部补齐：块内 CBRANCH/BRANCH 的 code 地址目标
+  ∈ `goto_targets` 时逆序发射标签（逆序保持多目标时序稳定）。
+- `emit_label_statement` 重写为 cc:3198-3214 的 faithful 形式
+  （tagLine + emitLabel + COLON）；isJumpTarget 判定在调用方 membership。
+- 效果：39/39 label-less goto → 41/41 goto 全部有 label（含 ifgoto Agent
+  集成后的 goto 增量）。
+
+**3. 尾部 nofallthru goto（printc.cc:2723-2741）**
+- `print_mods::NOFALLTHRU`（0x1000，printlanguage.hh:157）新增。
+- 尾部 trailing BRANCH（cc:2701 跳过的直连分支）在目标是 live goto
+  target 时发射独立 `goto <label>;` 语句（cc:2727-2740 的
+  tagLine/beginStatement/goto/SEMICOLON/endStatement 序列；单出边场景
+  cc:2738 emitLabel(getOut(0))）。
+
+**配套修复（prettyprint.rs）**：`post_process_output_legacy` Pattern 5
+（goto→尾调用重写）排除 `code_`/`joined_`/`dup_` 前缀标签——flat 尾部
+goto 的目标是 emitLabel 标签（printc.cc:3164-3193），不是 libc 函数；
+不排除时每条 flat goto 被误重写为 `return code_r0x...();`（gcc 报
+label 的 implicit-function-declaration）。
+
+**验收（curl E2E, worktree agent/flat-cbranch）**：
+- goto/label 一致性：41 goto 目标 / 45 标签，0 goto-without-label，
+  4 orphan（无引用标签，无害）；0 `return code_r0x` 假象。
+- `compare_ghidra --summary-only`：skeleton 2927 → 2908（−19），
+  defects 0/0，numbering 1/1（match_url 预存 per-prefix 计数问题）。
+- `audit_syntax`：53 OK/71 FAIL → 55 OK/69 FAIL（+2：清零 2 处
+  "标号使用前未定义"）。
+- `cargo test --lib printc` 10/10；funcdata 18 失败为预存（stash 验证）。
