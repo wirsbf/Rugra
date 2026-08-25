@@ -2490,6 +2490,36 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     }
     eprintln!("[STEP] {} action done {:?}", target.name, t0.elapsed());
 
+    if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
+        if dump_fn == target.name {
+            let fd_read = fd_arc.read().unwrap();
+            eprintln!("[DUMP] === basic blocks for {} ===", target.name);
+            for i in 0..fd_read.bblocks.get_size() {
+                let blk = fd_read.bblocks.get_block(i);
+                let blk_rg = blk.read().unwrap();
+                let ins: Vec<i32> =
+                    (0..blk_rg.size_in()).map(|j| blk_rg.get_in(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
+                let outs: Vec<i32> =
+                    (0..blk_rg.size_out()).map(|j| blk_rg.get_out(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
+                eprintln!("[DUMP] bb{} in={:?} out={:?}", blk_rg.get_index(), ins, outs);
+                if let Some(bb) = blk_rg.as_any().downcast_ref::<rugra::block::BlockBasic>() {
+                    for op in bb.get_ops() {
+                        let op_rg = op.0.read().unwrap();
+                        let out_s = op_rg.get_out().map(|v| {
+                            let vr = v.read().unwrap();
+                            format!("vn#{}(h={})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()))
+                        }).unwrap_or_default();
+                        let in_s: Vec<String> = op_rg.inrefs.iter().map(|a| {
+                            let vr = a.read().unwrap();
+                            let extra = if vr.is_input() { ", INPUT" } else { "" };
+                            format!("vn#{}(h={}{}:{:x})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_offset())
+                        }).collect();
+                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, out_s, in_s.join(", "));
+                    }
+                }
+            }
+        }
+    }
     let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
     printer.set_rpn_enabled(true);
     let fd_read = fd_arc
