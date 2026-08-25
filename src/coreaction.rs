@@ -2885,6 +2885,17 @@ impl ActionMarkExplicit {
             }
             return -1;
         }
+        // Ghidra coreaction.cc:3020-3021: a Varnode whose HighVariable
+        // already holds more than one instance must not be merged at all —
+        // inlining its def expression would splice SSA versions whose
+        // combined cover inflates past the read sites. This rule runs
+        // BEFORE the addr-tied/mapped checks in the oracle, so a merged
+        // multi-instance member is explicit regardless of property flags.
+        if let Some(high_arc) = vn.high.as_ref() {
+            if high_arc.read().unwrap().num_instances() > 1 {
+                return -1; // Must not be merged at all
+            }
+        }
         // Addr-tied varnodes are often explicit (pointers may reference them).
         if vn.is_addr_tied() {
             // Simplified: addr-tied → explicit.
@@ -3175,7 +3186,15 @@ impl Action for ActionMarkImplied {
         }
 
         if change_count > 0 {
-            Ok(action_status::NO_CHANGE)
+            // Ghidra coreaction.cc:3434: every candidate popped from the DFS
+            // stack — each Varnode that gets marked either explicit or
+            // implied — increments the inherited Action::count; apply itself
+            // still returns 0, and Action::perform surfaces the accumulated
+            // count as its result (action.cc:362 `return count;`). Returning
+            // the bump count here is the sanctioned Rust count-bridge (see
+            // Action::perform doc; same convention as
+            // ActionMarkExplicit::apply above).
+            Ok(change_count)
         } else {
             Ok(action_status::NO_CHANGE)
         }

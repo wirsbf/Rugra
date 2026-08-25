@@ -1512,3 +1512,41 @@ buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
 - 证据：`tests/oracle/heritage_tryoutput_1204.*` case=production_entry_guardcalls
   ——stack 存储（stacklock=1, pre_out=0, 守卫后 SUBPIECE、无 INDIRECT）与
   register 控制几何（stacklock=0, pre_out=1, INDIRECT 守卫）双侧逐字节 MATCH。
+## 2026-08-25（COREACTION-BASEEXPLICIT-NUMINST-0001 + COREACTION-MARKIMPLIED-COUNT-0001）：return 折叠链第三环 GAP-D 计数修正
+
+- **`ActionMarkExplicit::base_explicit` 补多实例规则**（Ghidra coreaction.cc:3020-3021）：
+  `HighVariable *high = vn->getHigh(); if ((high!=0)&&(high->numInstances()>1))
+  return -1; // Must not be merged at all`——插入点在 call 检查之后、addr-tied
+  规则**之前**（oracle 顺序：def null → marker → call/NEW → **numInstances>1** →
+  addrtied → mapped → protoPartial → hasNoDescend → PTRSUB maxref 放宽 →
+  desccount）。多实例 High 成员（mergerequired 的 mergeAddrTied 已强制合并的
+  stack cluster 等）内联会把多个 SSA 版本的合并 cover 拉过读点，必须以显式命名
+  变量打印——这正是 oracle 中 `return iVar;`（显式形）与 `return <const>;`（折叠
+  形）同函数并存的判定开关之一（A61 审计 §1 环节 6）。Rust 侧以
+  `vn.high.as_ref() → num_instances() > 1 → return -1` 对齐；
+  `HighVariable::num_instances()`（variable.rs，variable.hh:179 numInstances 的
+  1:1 port）由 assignhigh/merge 路径维护。
+- **`ActionMarkImplied::apply` 计数桥**（Ghidra coreaction.cc:3434 + action.cc:362）：
+  oracle 的 DFS pop 分支 `count += 1; // Will be marked either explicit or
+  implied` 对**每个被标记（无论 explicit 还是 implied）的候选**各 +1，apply 本身
+  返回 0，`Action::perform` 尾部 `return count;` 把累计值作为 perform 结果上报
+  （markimplied 构造带 rule_onceperfunc、无 rule_repeatapply，故单次 apply 后
+  perform 返回 count）。Rust 侧原先两分支恒返 `NO_CHANGE`（R16 复核确认的
+  MISMATCH），现改为与 `ActionMarkExplicit::apply` 相同的 sanctioned count-bridge：
+  `change_count > 0 → Ok(change_count)`，perform 累计后同值返回。count 影响
+  mainloop 收敛判定与 `act=markimplied|res=N` 观察面。
+- **双侧 fixture**：`tests/oracle/gapd_counters_1204.{cc,rs,metadata.json}` +
+  `tools/run_gapd_counters_oracle.sh`——真实 universal tree / build_default_pipeline
+  驱动 assignhigh..markimplied 四子项。prestate：stack:0x200 精确位置簇
+  {m2（COPY 输出，addrtied 门控）、m1（COPY 输出，raw 无属性尾）}cover 不相交
+  [r0..r1]/[r2..r3]，mergerequired 强制合并出 2 实例 High；q2/q1/w1 无后继
+  （hasNoDescend→explicit）；z1=INT_MULT(常量,常量) 单后继（唯一 markimplied
+  候选，checkImpliedCover 全常量输入不触 cover——cover-lazy 安全观察面）。
+  决定性观察：`act=markexplicit|res=5`（m1 仅由 numInstances 规则标记：at=0、
+  无 mapped、有后继）、`act=markimplied|res=1`（z1 单次弹出并 implied）、post
+  `m1:ex=1,im=0,at=0,hi=2`。双侧 stdout 9 行字节一致（MATCH）。负控制：HEAD
+  （dc6f0bfa，修复前）跑同 fixture 得 `res=4`/`res=0` 且 `m1:ex=0,im=1`（m1 被
+  错误 implied）——两缺口均被本 fixture 鉴别。注意 m2 先建（def SeqNum 较小）
+  使 loc_tree 簇首为带 addrtied 的成员——规避 merge.rs `addr_tied_location_ranges`
+  `first_flags` 仅取簇首成员 flags 与 Ghidra `overlapLoc` 全簇 OR 的已知表示差
+  （表示层残差另行登记，不影响本 fixture 双侧同判）。
