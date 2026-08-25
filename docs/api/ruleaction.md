@@ -544,13 +544,31 @@ applyOp 在 `opSetOpcode(op,CPUI_COPY)` **之后**才读 `op->code()`
 
 ### 2026-06-26（续）：RuleScarry + RuleSborrow（trivial 分支）
 
-#### `pub struct RuleScarry`（ruleaction.cc:3434-3510，trivial 分支 3460-3466）
-`scarry(V, 0) => false`（加 0 无有符号溢出）。AddExpression 形式（3475-3510）待补。
+#### `pub struct RuleScarry`（ruleaction.cc:3430-3493，全量）
+#### `pub struct RuleSborrow`（ruleaction.cc:3361-3412，全量）
 
-#### `pub struct RuleSborrow`（ruleaction.cc:3381-3432，trivial 分支 3390-3395）
-`sborrow(V, 0) => false`。AddExpression 形式待补。
+**2026-08-25（MAINDIFF-UNIQLEAK-0001）补齐 AddExpression 深形式**（此前仅 trivial 分支）：
 
-测试：ruleaction::tests +3（Scarry 零→COPY(0)；Sborrow 零→COPY(0)；Sborrow 非零不变）。
+- trivial：`scarry(V,0)/scarry(0,V)/sborrow(V,0) => COPY(0)`。
+- SBORROW 深形式（ruleaction.cc:3376-3410）：遍历 SBORROW 输出的后代，找
+  `INT_EQUAL/INT_NOTEQUAL`，其另一输入是 `INT_SLESS(x, 0)`；用
+  `AddExpression::gather_two_terms_subtract(avn, bvn)` 与
+  `gather_two_terms_root(xvn)` 比对，等价则折叠：
+  - `sborrow(V,W) != (V-W s< 0)  =>  V s< W`（compop→INT_SLESS）
+  - `sborrow(V,W) == (V-W s< 0)  =>  W s<= V`（compop→INT_SLESSEQUAL）
+- SCARRY 深形式（ruleaction.cc:3447-3492）：常量侧归一化（slot0 常量则交换
+  avn/bvn），排除整型最小值（signbit mask）；`gather_two_terms_add` 比对；
+  折叠时把比较常量换成 `-W & mask` 的 newConstant：
+  - `scarry(V,#W) != (V+#W s< 0)  =>  V s< -#W` 等 4 形式。
+
+实现依托 `src/expression.rs` 已有 `AddExpression`/`functional_equality`
+（expression.cc:299-526）。E2E 效果：curl main 的 gcc 循环守卫模式
+`sborrow(argc,1) != (argc-1 s< 0)` 折叠为 `argc < 2`（与 12.0.4 golden 一致），
+消除 implied flag varnode 走 `pushUnnamedLocation`（printc.cc:1938）打印
+`register0x…` 裸名并被文本回填声明的泄漏类。
+
+测试：ruleaction::tests 3 个（Scarry 零→COPY(0)；Sborrow 零→COPY(0)（fixture
+补 output 以镜像 oracle `op->getOut()` 不变量）；Sborrow 非零不变）。
 
 ### 2026-06-26（续）：RuleAndDistribute
 

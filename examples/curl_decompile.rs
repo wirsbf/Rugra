@@ -1860,6 +1860,83 @@ fn build_worker_architecture(
             arch.loader = Some(loader);
             arch.build_string_manager();
         }
+        // MAINDIFF-UNIQLEAK-0001: seed the Architecture's `symboltab`
+        // (`Database`, database.rs) global scope with the binary's sized
+        // global Symbols — DWARF static variables (typed) plus ELF OBJECT
+        // symbols — mirroring the Ghidra front-end's Program symbol table
+        // that `Scope::queryProperties`' parent-scope walk
+        // (database.cc:943 stackContainer, reached from
+        // `Funcdata::linkSymbol` funcdata_varnode.cc:1169) reads from.
+        // Seeds into the query-channel Database when the front-end supplied
+        // one (B3 rodata entries stay intact); a fresh Database otherwise.
+        // Without entries in this channel the parent-walk finds nothing,
+        // and linkSymbol minted a dead ScopeLocal `in_ram_` symbol for
+        // every global-sourced heritage input (37 dead declarations in
+        // main alone; the golden declares none because the global Symbol
+        // absorbs them). CWD-relative read, same pattern as the
+        // sleigh_specs loads above; on read failure the channel stays
+        // empty and behavior falls back to the symbol_table proxy.
+        {
+            if arch.symboltab.is_none() {
+                arch.symboltab = Some(Arc::new(std::sync::RwLock::new(
+                    rugra::database::Database::new(false),
+                )));
+            }
+            if let Ok(image) = fs::read("examples/curl") {
+            let db_arc = arch.symboltab.clone().unwrap();
+            let mut db = db_arc.write().unwrap();
+            let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            if let Ok(globals) = DebugGlobalDatabase::parse_elf(&image) {
+                for (&address, global) in globals.iter() {
+                    let size = global.data_type.get_size().max(1) as i32;
+                    let scope = db.global_scope_id;
+                    let _ = db.add_symbol_mapped(
+                        scope,
+                        &global.name,
+                        Some(global.data_type.clone()),
+                        Address::new(address),
+                        size,
+                    );
+                    seen.insert(address);
+                }
+            }
+            if let Ok(Object::Elf(elf)) = Object::parse(&image) {
+                for sym in elf.syms.iter() {
+                    let is_object = goblin::elf::sym::st_type(sym.st_info)
+                        == goblin::elf::sym::STT_OBJECT;
+                    if !is_object || sym.st_size == 0 || sym.is_import() {
+                        continue;
+                    }
+                    let address = sym.st_value;
+                    if address == 0 || !seen.insert(address) {
+                        continue;
+                    }
+                    let Some(name) = elf.strtab.get_at(sym.st_name) else {
+                        continue;
+                    };
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let size = sym.st_size as i32;
+                    let dtype = std::sync::Arc::new(rugra::type_system::datatype::Datatype::Base(
+                        rugra::type_system::datatype::TypeBase::new(
+                            format!("undefined{size}"),
+                            size as usize,
+                            rugra::type_system::datatype::TypeMetatype::Unknown,
+                        ),
+                    ));
+                    let scope = db.global_scope_id;
+                    let _ = db.add_symbol_mapped(
+                        scope,
+                        name,
+                        Some(dtype),
+                        Address::new(address),
+                        size,
+                    );
+                }
+            }
+            }
+        }
         let types = arch.ensure_types();
         // The raw shared_default factory starts with an empty alignment
         // map; the arch-attach guard (type.cc: "if (alignMap.empty())
@@ -1872,8 +1949,7 @@ fn build_worker_architecture(
         {
             let mut tf = types.write().unwrap();
             tf.set_default_alignment_map();
-            tf.set_spacebase_scope_source(symboltab.clone());
-        }
+            tf.set_spacebase_scope_source(symboltab.clone());        }
         Ok(Arc::new(arch))
     })()
 }
@@ -2280,7 +2356,6 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         fd.obank.optree.len(),
         fd.bblocks.get_size()
     );
-
     // CALLSPEC-DRIVER-0001: resolve every CALL/CALLIND call specification
     // against the symbol/signature front-end (Ghidra's FlowInfo::queryCall
     // boundary, flow.cc:656-672). Ghidra queries the Program database here

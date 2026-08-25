@@ -1082,6 +1082,62 @@ impl Funcdata {
     /// set the symbol reference on the Varnode and return the symbol name.
     /// Faithful to `linkSymbolReference` (funcdata_varnode.cc:1193-1213).
     /// Returns the symbol name if found, None otherwise.
+    // Ghidra: database.cc:1263 Scope::queryProperties (stackContainer parent-scope walk)
+    /// Global-scope half of the `localmap->queryProperties` query that
+    /// `linkSymbol` (funcdata_varnode.cc:1169) performs. Ghidra's
+    /// `Scope::queryProperties` runs `mapScope` + `stackContainer`
+    /// (database.cc:943-975), which walks local scope → parent scopes →
+    /// the global Scope and returns the smallest containing SymbolEntry;
+    /// for a ram address inside a global Symbol (stdin/config/…) that
+    /// entry lives in the GLOBAL scope, and `handleSymbolConflict`'s early
+    /// arm (funcdata_varnode.cc:1000-1003) attaches it to the Varnode's
+    /// HighVariable without creating any ScopeLocal symbol.
+    ///
+    /// Rugra channels, in fidelity order:
+    /// 1. The real `Database` graph (`Architecture::symboltab`), queried
+    ///    through the parent-scope channel with the same container
+    ///    semantics (`Database::query_properties`, database.cc:1263).
+    /// 2. The driver's `symbol_table` name proxy (exact-address hits only,
+    ///    no sizes) — the same transitional fallback `linkSymbolReference`
+    ///    uses below.
+    ///
+    /// Space gate: only Ram varnodes are queried. The global scope owns
+    /// ram ranges only (stack/register/unique addresses find nothing in
+    /// Ghidra's walk either), and Rugra's `SymbolEntry` addresses are
+    /// spaceless offsets, so an ungated query could cross-space collide a
+    /// register offset with a ram global.
+    fn query_global_symbol_hit(
+        &self,
+        vn_space: crate::space::AddressSpace,
+        vn_offset: u64,
+    ) -> Option<String> {
+        use crate::space::AddressSpace;
+        if vn_space != AddressSpace::Ram {
+            return None;
+        }
+        // Channel 1: real Database (database.cc:1263-1281).
+        if let Some((hit, _flags)) = self.query_properties_parent_scope(
+            crate::address::Address::new(vn_offset),
+            1,
+            // Global symbols carry an empty uselimit (addrtied entries),
+            // so the usepoint never gates the match (database.cc:955
+            // entry->inUse(usepoint)); pass the invalid Address().
+            crate::address::Address::new(0),
+        ) {
+            if let Some(container) = hit {
+                if !container.symbol_name.is_empty() {
+                    return Some(container.symbol_name);
+                }
+            }
+            // A global-scope owner without a symbol entry
+            // (database.cc:1272-1275 discovery branch) still means "this
+            // address is global" — but without a name there is nothing to
+            // attach; fall through to the proxy/local arms.
+        }
+        // Channel 2: driver symbol_table proxy (exact hits).
+        self.symbol_table.get(&vn_offset).cloned()
+    }
+
     // Ghidra: funcdata_varnode.cc:1156 Funcdata::linkSymbol
     /// Link a Varnode to a Symbol in the local scope. The Symbol is really
     /// attached to the Varnode's HighVariable (which must exist). If the
@@ -1134,6 +1190,42 @@ impl Funcdata {
             // cc:1170-1172: sym = handleSymbolConflict(entry, vn);
             self.handle_symbol_conflict(idx, vn)
         } else {
+            // cc:1169: `localmap->queryProperties(...)` is
+            // `Scope::queryProperties` (database.cc:1263-1281), which does
+            // NOT stop at the local scope — `mapScope` +
+            // `stackContainer(basescope, NULL, ...)` (database.cc:943-975)
+            // walks local scope → parent scopes → GLOBAL scope and returns
+            // the smallest containing SymbolEntry from any of them. A ram
+            // varnode whose address falls inside a global Symbol (ELF/DWARF
+            // globals like stdin/config) therefore hits the GLOBAL entry
+            // here, and `handleSymbolConflict`'s early arm (cc:1000-1003:
+            // isInput || isAddrTied || isPersist || isConstant ||
+            // isDynamic → `vn->setSymbolEntry(entry)`) attaches that global
+            // Symbol — it is NOT put into the function's ScopeLocal, so
+            // `PrintC::emitScopeVarDecls` (printc.cc:2254-2276, walking
+            // ScopeLocal + children only) never declares it. MAINDIFF-
+            // UNIQLEAK-0001: Rugra previously stopped at the local model
+            // and fell straight into the cc:1173-1181 create-local-symbol
+            // arm, minting dead `in_ram_XXXX` declarations for every
+            // global-sourced heritage input (37 in main alone vs golden 0).
+            if let Some(global_name) = self.query_global_symbol_hit(vn_space, vn_offset) {
+                // handleSymbolConflict early-arm bridge (cc:1002-1003
+                // vn->setSymbolEntry(entry) + HighVariable::setSymbol): the
+                // global Symbol's display name is published onto the high
+                // (Rugra's print resolves through `high->get_name()` where
+                // Ghidra resolves `high->getSymbol()->getDisplayName()`).
+                // No ScopeLocal symbol is created; returning None mirrors
+                // linkSymbols' cc:2963 `if (sym == 0)` skip for the
+                // nameable-local bookkeeping (the global symbol is never
+                // name-undefined, so namerec/finalizeDatatype stay inert —
+                // finalizeDatatype is additionally gated on
+                // `!sym->getScope()->isGlobal()` at cc:2971-2972).
+                let high_arc2 = vn.read().unwrap().high.clone();
+                if let Some(high) = &high_arc2 {
+                    high.write().unwrap().set_name(global_name);
+                }
+                return None;
+            }
             // cc:1173-1181: must create a symbol entry.
             let mut sym = None;
             if !vn.read().unwrap().is_persist() {

@@ -207,7 +207,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 `RuleDoubleShift`, `RuleIdentityEl`, `RuleSignShift`, `RuleSubZext`, `RuleConcatShift`,
 `RuleShiftCompare`, `RuleAndCompare`, `RuleTestSign`, `RuleEquality`, `RuleLessNotEqual`,
 `RuleLessEqual`(apply), `RuleRightShiftAnd`, `RuleHighOrderAnd`, `RuleAndZext`, `RuleZextSless`,
-`RuleScarry`(trivial), `RuleSborrow`(trivial)
+`RuleScarry`, `RuleSborrow`（2026-08-25 MAINDIFF-UNIQLEAK-0001 补齐 AddExpression 深形式，ruleaction.cc:3376-3410/3447-3492，依托 expression.rs）
 
 **✅ 全部已移植（2026-07-04 核实）** — 主管线 oppool1/oppool2/cleanup 的 Rule 差距为 0。
 之前此表标注的 22 个"缺失"Rule 经逐行对比 Ghidra coreaction.cc 注册列表 vs Rugra action.rs 注册列表，确认全部已移植并注册到主管线。

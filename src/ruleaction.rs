@@ -3675,12 +3675,17 @@ impl Rule for RuleZextSless {
 }
 
 /// Simplify signed comparisons using INT_SCARRY:
-///   `scarry(V, 0)  =>  false`
+///   - `scarry(V,0)  =>  false`
+///   - `scarry(V,#W) != (V + #W s< 0)  =>  V s< -#W`
+///   - `scarry(V,#W) != (0 s< V + #W)  =>  -#W s< V`
+///   - `scarry(V,#W) == (0 s< V + #W)  =>  V s<= -#W`
+///   - `scarry(V,#W) == (V + #W s< 0)  =>  -#W s<= V`
 ///
-/// Faithful to Ghidra's `RuleScarry` (ruleaction.cc:3434-3510). This ports
-/// the trivial branch (3460-3466): a SCARRY with a zero operand always yields
-/// false (no signed overflow when adding zero). The deeper AddExpression-based
-/// forms (3475-3510) require that infrastructure and are deferred.
+/// Faithful to Ghidra's `RuleScarry` (ruleaction.cc:3430-3493): the trivial
+/// branch (3440-3446), the constant-side normalization with the integer-
+/// minimum exclusion (3447-3454), and the AddExpression-based comparison
+/// collapse (3455-3492) with the negated constant rewrites, mirroring
+/// `RuleSborrow`'s deep form above (MAINDIFF-UNIQLEAK-0001 same family).
 pub struct RuleScarry;
 
 impl RuleScarry {
@@ -3689,25 +3694,129 @@ impl RuleScarry {
 }
 
 impl Rule for RuleScarry {
-    // Ghidra: ruleaction.cc:3450 RuleScarry::applyOp
+    // Ghidra: ruleaction.cc:3430 RuleScarry::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        let has_zero = {
+        // cc:3455-3457: svn/avn/bvn.
+        let (svn, avn_orig, bvn_orig) = {
             let op = op_arc.read().unwrap();
+            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let a_zero = avn.read().unwrap().is_constant() && avn.read().unwrap().get_offset() == 0;
-            let b_zero = bvn.read().unwrap().is_constant() && bvn.read().unwrap().get_offset() == 0;
-            a_zero || b_zero
+            (svn, avn, bvn)
         };
-        if !has_zero {
-            return Ok(action_status::NO_CHANGE);
+        // cc:3440-3446: trivial case scarry(V,0)/scarry(0,V) => false.
+        {
+            let a = avn_orig.read().unwrap();
+            let b = bvn_orig.read().unwrap();
+            let a_zero = a.is_constant() && a.get_offset() == 0;
+            let b_zero = b.is_constant() && b.get_offset() == 0;
+            if b_zero || a_zero {
+                drop(a); drop(b);
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                let c = fd.new_constant(1, 0);
+                fd.op_set_input(&follow, c, 0);
+                fd.op_remove_input(&follow, 1);
+                return Ok(action_status::CHANGE);
+            }
         }
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
-        let c = fd.new_constant(1, 0);
-        fd.op_set_input(&follow, c, 0);
-        fd.op_remove_input(&follow, 1);
-        Ok(action_status::CHANGE)
+        // cc:3447-3454: one side must be constant; if the constant is on
+        // slot 0, swap so avn=non-constant, bvn=constant. Exclude the
+        // integer minimum constant (signbit mask) where the rule does not
+        // hold.
+        let (avn, bvn) = {
+            let b_is_const = bvn_orig.read().unwrap().is_constant();
+            if b_is_const {
+                (avn_orig, bvn_orig)
+            } else {
+                if !avn_orig.read().unwrap().is_constant() {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                // avn = bvn; bvn = op->getIn(0);
+                let b_size = avn_orig.read().unwrap().get_size();
+                let val = crate::address::calc_mask(b_size);
+                let int_min = val ^ (val >> 1);
+                if int_min == avn_orig.read().unwrap().get_offset() {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                (bvn_orig, avn_orig)
+            }
+        };
+        // cc:3455-3492: descendant walk (mirror of RuleSborrow's, with the
+        // add-based gather and negated-constant rewrite).
+        let descendants: Vec<_> = svn.read().unwrap().descend_iter().collect();
+        for compop_arc in descendants {
+            let (comp_opc, in0, in1) = {
+                let compop = compop_arc.read().unwrap();
+                (compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned())
+            };
+            if comp_opc != OpCode::CPUI_INT_EQUAL && comp_opc != OpCode::CPUI_INT_NOTEQUAL {
+                continue;
+            }
+            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue };
+            let cvn = if std::sync::Arc::ptr_eq(&c_in0, &svn) { c_in1 } else { c_in0 };
+            let (signop_arc, sign_opc) = {
+                let cv = cvn.read().unwrap();
+                if !cv.is_written() { continue; }
+                match cv.get_def() {
+                    Some(d) => {
+                        let opc = d.read().unwrap().opcode;
+                        (d, opc)
+                    }
+                    None => continue,
+                }
+            };
+            if sign_opc != OpCode::CPUI_INT_SLESS {
+                continue;
+            }
+            let (s_in0, s_in1) = {
+                let signop = signop_arc.read().unwrap();
+                (signop.inrefs.get(0).cloned(), signop.inrefs.get(1).cloned())
+            };
+            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue };
+            let const_match_zero = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+                let r = v.read().unwrap();
+                r.is_constant() && r.get_offset() == 0
+            };
+            let zside: usize = if const_match_zero(&s_in0) {
+                0
+            } else if const_match_zero(&s_in1) {
+                1
+            } else {
+                continue;
+            };
+            let xvn = if zside == 0 { s_in1 } else { s_in0 };
+            if !xvn.read().unwrap().is_written() {
+                continue;
+            }
+            // cc:3473-3476: expr1.gatherTwoTermsAdd(avn,bvn);
+            //               expr2.gatherTwoTermsRoot(xvn);
+            let mut expr1 = crate::expression::AddExpression::new();
+            expr1.gather_two_terms_add(&avn, &bvn);
+            let mut expr2 = crate::expression::AddExpression::new();
+            expr2.gather_two_terms_root(&xvn);
+            if !expr1.is_equivalent(&expr2) {
+                continue;
+            }
+            // cc:3478-3479: newval = -bvn->getOffset() & calc_mask(...);
+            let b_size = bvn.read().unwrap().get_size();
+            let b_offset = bvn.read().unwrap().get_offset();
+            let new_val = b_offset.wrapping_neg() & crate::address::calc_mask(b_size);
+            let new_const = fd.new_constant(b_size, new_val);
+            // cc:3481-3490: rewrite the comparison op.
+            let comp_ref = crate::op::PcodeOpRef(compop_arc.clone());
+            if comp_opc == OpCode::CPUI_INT_NOTEQUAL {
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESS);
+                fd.op_set_input(&comp_ref, avn, 1 - zside);
+                fd.op_set_input(&comp_ref, new_const, zside);
+            } else {
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESSEQUAL);
+                fd.op_set_input(&comp_ref, avn, zside);
+                fd.op_set_input(&comp_ref, new_const, 1 - zside);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: ruleaction.cc:3434 RuleScarry
@@ -3717,10 +3826,22 @@ impl Rule for RuleScarry {
 }
 
 /// Simplify signed comparisons using INT_SBORROW:
-///   `sborrow(V, 0)  =>  false`
+///   - `sborrow(V,0)  =>  false`
+///   - `sborrow(V,W) != (V + (W * -1) s< 0)  =>  V s< W`
+///   - `sborrow(V,W) != (0 s< V + (W * -1))  =>  W s< V`
+///   - `sborrow(V,W) == (V + (W * -1) s< 0)  =>  W s<= V`
+///   - `sborrow(V,W) == (0 s< V + (W * -1))  =>  V s<= W`
 ///
-/// Faithful to Ghidra's `RuleSborrow` (ruleaction.cc:3381-3432). Ports the
-/// trivial branch (3390-3395). The AddExpression-based forms are deferred.
+/// Faithful to Ghidra's `RuleSborrow` (ruleaction.cc:3361-3412): the trivial
+/// branch (3370-3375) plus the full AddExpression-based comparison-collapse
+/// walk over the SBORROW's descendants (3376-3410), driven by
+/// [`crate::expression::AddExpression`] (expression.cc:299-393) with
+/// `functionalEquality` (expression.cc:404-526) as the term-equivalence
+/// oracle. MAINDIFF-UNIQLEAK-0001: without the deep forms, gcc's
+/// loop-guard pattern `sborrow(V,W) != (V-W s< 0)` survives as an implied
+/// flag varnode whose print falls through to `pushUnnamedLocation`
+/// (printc.cc:1938) — emitting a bare `register0x…`/`unique0x…` token that
+/// the prettyprint backfill then declares (unique/register leak class).
 pub struct RuleSborrow;
 
 impl RuleSborrow {
@@ -3729,22 +3850,109 @@ impl RuleSborrow {
 }
 
 impl Rule for RuleSborrow {
-    // Ghidra: ruleaction.cc:3381 RuleSborrow::applyOp
+    // Ghidra: ruleaction.cc:3361 RuleSborrow::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        let b_zero = {
+        // cc:3364-3368: svn = op->getOut(); avn = op->getIn(0); bvn = op->getIn(1);
+        let (svn, avn, bvn) = {
             let op = op_arc.read().unwrap();
+            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            bvn.read().unwrap().is_constant() && bvn.read().unwrap().get_offset() == 0
+            (svn, avn, bvn)
         };
-        if !b_zero {
-            return Ok(action_status::NO_CHANGE);
+        // cc:3370-3375: trivial case sborrow(V,0) => false.
+        let b_zero = {
+            let b = bvn.read().unwrap();
+            b.is_constant() && b.get_offset() == 0
+        };
+        if b_zero {
+            let follow = crate::op::PcodeOpRef(op_arc.clone());
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            let c = fd.new_constant(1, 0);
+            fd.op_set_input(&follow, c, 0);
+            fd.op_remove_input(&follow, 1);
+            return Ok(action_status::CHANGE);
         }
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
-        let c = fd.new_constant(1, 0);
-        fd.op_set_input(&follow, c, 0);
-        fd.op_remove_input(&follow, 1);
-        Ok(action_status::CHANGE)
+        // cc:3377-3410: walk the SBORROW output's descendants looking for an
+        // INT_EQUAL/INT_NOTEQUAL whose other input is INT_SLESS(x, 0) with
+        // x's additive expression equivalent to avn - bvn.
+        let descendants: Vec<_> = svn.read().unwrap().descend_iter().collect();
+        for compop_arc in descendants {
+            let (comp_opc, in0, in1) = {
+                let compop = compop_arc.read().unwrap();
+                (compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned())
+            };
+            // cc:3379-3380: if ((compop->code()!=CPUI_INT_EQUAL)&&(compop->code()!=CPUI_INT_NOTEQUAL)) continue;
+            if comp_opc != OpCode::CPUI_INT_EQUAL && comp_opc != OpCode::CPUI_INT_NOTEQUAL {
+                continue;
+            }
+            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue };
+            // cc:3381: cvn = (compop->getIn(0)==svn) ? compop->getIn(1) : compop->getIn(0);
+            let cvn = if std::sync::Arc::ptr_eq(&c_in0, &svn) { c_in1 } else { c_in0 };
+            // cc:3382-3383: if (!cvn->isWritten()) continue; signop = cvn->getDef();
+            let (signop_arc, sign_opc) = {
+                let cv = cvn.read().unwrap();
+                if !cv.is_written() { continue; }
+                match cv.get_def() {
+                    Some(d) => {
+                        let opc = d.read().unwrap().opcode;
+                        (d, opc)
+                    }
+                    None => continue,
+                }
+            };
+            // cc:3384: if (signop->code() != CPUI_INT_SLESS) continue;
+            if sign_opc != OpCode::CPUI_INT_SLESS {
+                continue;
+            }
+            // cc:3385-3390: locate the zero-constant slot zside of the SLESS;
+            // if (signop->getIn(0)->constantMatch(0)) zside=0 else if
+            // (signop->getIn(1)->constantMatch(0)) zside=1 else continue.
+            let (s_in0, s_in1) = {
+                let signop = signop_arc.read().unwrap();
+                (signop.inrefs.get(0).cloned(), signop.inrefs.get(1).cloned())
+            };
+            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue };
+            let const_match_zero = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+                let r = v.read().unwrap();
+                r.is_constant() && r.get_offset() == 0
+            };
+            let zside: usize = if const_match_zero(&s_in0) {
+                0
+            } else if const_match_zero(&s_in1) {
+                1
+            } else {
+                continue;
+            };
+            // cc:3391-3392: xvn = signop->getIn(1-zside); if (!xvn->isWritten()) continue;
+            let xvn = if zside == 0 { s_in1 } else { s_in0 };
+            if !xvn.read().unwrap().is_written() {
+                continue;
+            }
+            // cc:3393-3397: expr1.gatherTwoTermsSubtract(avn,bvn);
+            //               expr2.gatherTwoTermsRoot(xvn);
+            let mut expr1 = crate::expression::AddExpression::new();
+            expr1.gather_two_terms_subtract(&avn, &bvn);
+            let mut expr2 = crate::expression::AddExpression::new();
+            expr2.gather_two_terms_root(&xvn);
+            if !expr1.is_equivalent(&expr2) {
+                continue;
+            }
+            // cc:3399-3408: rewrite the comparison op.
+            let comp_ref = crate::op::PcodeOpRef(compop_arc.clone());
+            if comp_opc == OpCode::CPUI_INT_NOTEQUAL {
+                // Replace with simple less than: V s< W
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESS);
+                fd.op_set_input(&comp_ref, avn, 1 - zside);
+                fd.op_set_input(&comp_ref, bvn, zside);
+            } else {
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESSEQUAL);
+                fd.op_set_input(&comp_ref, avn, zside);
+                fd.op_set_input(&comp_ref, bvn, 1 - zside);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: ruleaction.cc:3365 RuleSborrow
@@ -19952,11 +20160,20 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
+        // The oracle's applyOp reads op->getOut() unconditionally
+        // (ruleaction.cc:3455); a SCARRY without an output never reaches a
+        // rule in the real pipeline, so the fixture mirrors that invariant.
+        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SCARRY,
         )));
-        op.write().unwrap().inrefs = vec![v, zero];
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, zero];
+            o.output = Some(out.clone());
+        }
+        out.write().unwrap().def = Some(Arc::downgrade(&op));
         let rule = RuleScarry::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -19972,11 +20189,19 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
+        // Same output invariant as the SCARRY fixture above
+        // (ruleaction.cc:3366 reads op->getOut() first).
+        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SBORROW,
         )));
-        op.write().unwrap().inrefs = vec![v, zero];
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, zero];
+            o.output = Some(out.clone());
+        }
+        out.write().unwrap().def = Some(Arc::downgrade(&op));
         let rule = RuleSborrow::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);

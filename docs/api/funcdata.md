@@ -1707,3 +1707,32 @@ stage 重试）或 trial 表分级恢复，成功后 `set_indirect_op(op)` 重�
 
 E2E：getparameter.constprop.0 @0x3fd5 88 条目恢复（flow 665 ops/36 块 → 1866/138），
 glob_set @0x4c45 35 条目恢复；124 函数 defects=0/numbering=0。
+## 2026-08-25：MAINDIFF-UNIQLEAK-0001 — linkSymbol 全局符号半边
+
+### `Funcdata::query_global_symbol_hit`（database.cc:1263 Scope::queryProperties 全局半边）
+
+`link_symbol`（funcdata_varnode.cc:1156）中 `localmap->queryProperties` 的
+父作用域走查半边：Ghidra 的 `Scope::queryProperties`（database.cc:1263-1281）
+经 `mapScope` + `stackContainer`（database.cc:943-975）从 local scope 走到
+GLOBAL scope 并返回最小包含 SymbolEntry。ram 地址命中全局 Symbol
+（stdin/config 等 ELF/DWARF 全局）时，`handleSymbolConflict` 早臂
+（funcdata_varnode.cc:1000-1003）把 entry 挂到 Varnode 的 HighVariable，
+**不**在 ScopeLocal 建符号 —— `emitScopeVarDecls`（printc.cc:2254-2276，
+只走 ScopeLocal 及其子）因此永不声明它。
+
+Rugra 通道（保真序）：
+1. 真 `Database` 图（`Architecture::symboltab`），经
+   `query_properties_parent_scope` 同容器语义查询；
+2. driver `symbol_table` 名字代理（仅精确地址命中，无大小）。
+
+空间门：仅 Ram varnode 查询（全局 scope 只拥有 ram 区间；Rugra SymbolEntry
+地址无空间维度，不开门会跨空间碰撞）。命中时把全局符号名发布到 high
+（对齐 `vn->setSymbolEntry(entry)` + HighVariable 符号解析），返回 None
+跳过本地建符号臂（对齐 linkSymbols cc:2963 `sym==0` 跳过 + cc:2971
+`isGlobal` 门控的 finalizeDatatype）。
+
+修复前：main 中 37 个全局来源 heritage 输入被铸成死 `in_ram_XXXX` 声明
+（golden 0）。修复后 main 声明区 163→96 行。
+
+配套 driver：`curl_decompile.rs` worker_architecture 播种 `symboltab`
+（DWARF DebugGlobalDatabase + ELF STT_OBJECT）。

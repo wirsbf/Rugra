@@ -806,7 +806,7 @@ provenance，不改变 guard 行为或对齐状态。
  
 
 ### 2026-07-05: HeritageInfo + dead-code 时序对齐 Ghidra cc:180/2793/2843
-- `HeritageInfo::new` 全字段对齐:delay/deadcodedelay 从 `AddressSpace::get_delay()` 读(Stack=1,其他=0);deadremoved=0(was -1);loadGuardSearch=false(was true,反义);hasCallPlaceholders=is_stack。
+- `HeritageInfo::new` 全字段对齐:delay/deadcodedelay 从 `AddressSpace::get_delay()` 读（2026-08-25 MAINDIFF-UNIQLEAK-0001 起：ram=1/stack=2/unique=register=0，锁定 x86-64 oracle .sla + architecture.cc:566 合成值；此前 Stack=1/其他=0 是错误硬编码）;deadremoved=0(was -1);loadGuardSearch=false(was true,反义);hasCallPlaceholders=is_stack。
 - `AddressSpace::get_delay/get_deadcode_delay/is_heritaged` 新增(space.hh)。
 - `Heritage::build_info_list`(cc:2664)/`get_info`(hh:257)新增。
 - `num_heritage_passes`(cc:2793): `pass - delay` (was `pass`)。
