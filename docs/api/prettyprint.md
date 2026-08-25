@@ -378,3 +378,36 @@ numbering 3→**0**、defects 0 不变、Matched 123 不降；11.3.2 回归 gold
 remove_orphan_case_labels（2052）、tenth-pass 死区豁免（1050）、
 pass17 循环上下文（1447）、brace_depth 循环头判定（2357）、
 scan_up_for_loop_header（3131）；2491 原本就双形态。
+
+### 2026-08-25（续）：A69 配套 — backfill 前缀表识别 oracle 未命名位置兜底 token
+
+A69（`a9351d26`，PRINTC-UNLINKED-REF-FAMILY slice A）把 print 侧三条兜底
+命名阶梯合并为唯一 oracle 形式 `<spacename><printRaw>`
+（printc.cc:1938-1945 `PrintC::pushUnnamedLocation` + space.cc:206-222
+`AddrSpace::printRaw`：`"0x"` + 小写 hex，`setw(2*sz)` 零填充最小宽度）。
+`uVar_`/`local_`/`param_stack_`/`vn_` 全族消灭后，body 里换出的
+`unique0x…`/`register0x…`/`stack0x…`/`ram0x…` token 不再被
+`backfill_missing_locals` 的前缀表（原 2582-2586）与类型推断识别：
+未链接引用不注入声明（match_url 的 `unique0x00023b00` 等保持 undeclared），
+且 hex 尾部若走十进制续读臂会在首个 a-f 数字处截断 token。
+
+同步改动（src/prettyprint.rs）：
+
+- 前缀表加入 `unique0x`/`register0x`/`stack0x`/`ram0x` 四前缀
+  （const/join/iop/overlay 空间的 token 形态按 A69 记录不可达——const 走
+  pushConstant，join/iop 在 print 前被 split/unify/注解吸收）。
+- 续读扫描新增第三臂：前缀以 `0x` 结尾的走 `is_ascii_hexdigit`
+  （printRaw 的 `hex` 流操纵符，space.cc:216），不再落入十进制臂。
+- 类型推断为四形式加显式 `long` 臂（与被替换的 uVar 族缺省一致；此前
+  落入兜底 else 同为 long，显式化便于 grep 与防未来缺省漂移）。
+- 新增 `#[cfg(test)] mod tests`（4 例：四空间形式注入、hex 尾不截断、
+  已声明不重注、legacy 前缀不回归），`cargo test --lib prettyprint::`
+  4 passed。
+
+已知边界（同 legacy uVar 拼写，非本片回归）：`*unique0x…`/`*register0x…`
+一元解引用出现在 symbol-driven 函数时，注入的 `long` 声明不解引用
+（`fix_unary_deref_declarations` 在 pass 22 先于 backfill 运行且对
+symbol-driven 函数旁路，pre-A69 `*uVara0 = 0` 同类）；`ram0x` 名若已被
+printc extern 路径（printc.rs used_varnode_types Ram/Const 臂）声明为
+file-scope `extern long`，backfill 仍会注入局部 `long` 遮蔽（C 合法，
+curl 语料 ram0x 出现为 0 行）。

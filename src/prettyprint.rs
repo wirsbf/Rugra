@@ -2579,10 +2579,21 @@ impl EmitNoMarkup {
                     // - local_XX, lVar_XX (with underscore + hex)
                     // - bVar592, lVar21 (prefix + digits, no underscore)
                     // - struct3, struct5 (struct + digit)
+                    // - unique0x00023b00 / register0x000000a0 / stack0x... /
+                    //   ram0x...: oracle unnamed-location fallback tokens
+                    //   (printc.cc:1938-1945 PrintC::pushUnnamedLocation —
+                    //   <spacename> + AddrSpace::printRaw, space.cc:206-222 —
+                    //   which replaced the uVar_/local_ spellings after the
+                    //   A69 pushUnnamedLocation merge). printRaw emits "0x" +
+                    //   lowercase hex (space.cc:216 `hex` manipulator), so the
+                    //   tail scan must accept hex digits: the decimal-only
+                    //   non-underscore arm would truncate unique0x00023b00 at
+                    //   its first a-f digit.
                     let prefixes: &[&[u8]] = &[
                         b"local_", b"lVar_", b"uVar_", b"iVar_", b"bVar_", b"sVar_",
                         b"piVar_", b"pcVar_", b"psVar_", b"ppVar_", b"pvVar_",
                         b"fVar_", b"dVar_", b"DAT_",
+                        b"unique0x", b"register0x", b"stack0x", b"ram0x",
                         b"lVar", b"uVar", b"iVar", b"bVar", b"sVar",
                         b"piVar", b"pcVar", b"psVar", b"ppVar", b"pvVar",
                         b"fVar", b"dVar", b"struct",
@@ -2593,9 +2604,14 @@ impl EmitNoMarkup {
                         if p + plen <= lb.len() && &lb[p..p + plen] == *pf {
                             let mut e = p + plen;
                             // For underscore prefixes: hex digits and underscores
-                            // For non-underscore: digits only
+                            // For unnamed-location fallback tokens (prefix ends
+                            // in "0x"): hex digits only (printc.cc:1942-1943
+                            // space name + printRaw hex tail)
+                            // For other non-underscore: digits only
                             if lb[p + plen - 1] == b'_' {
                                 while e < lb.len() && (lb[e].is_ascii_hexdigit() || lb[e] == b'_') { e += 1; }
+                            } else if pf.ends_with(b"0x") {
+                                while e < lb.len() && lb[e].is_ascii_hexdigit() { e += 1; }
                             } else {
                                 while e < lb.len() && lb[e].is_ascii_digit() { e += 1; }
                             }
@@ -2651,6 +2667,14 @@ impl EmitNoMarkup {
                         "char *"
                     } else if m.starts_with("fVar") { "float" }
                     else if m.starts_with("dVar") { "double" }
+                    else if m.starts_with("unique0x") || m.starts_with("register0x")
+                        || m.starts_with("stack0x") || m.starts_with("ram0x") {
+                        // Oracle unnamed-location fallback token (printc.cc:1938
+                        // pushUnnamedLocation): a raw storage-slot label with no
+                        // type evidence at text level — keep the long default
+                        // the pre-A69 uVar-family spelling of these slots got.
+                        "long"
+                    }
                     else { "long" };
                     // Pointer-join spacing (printc.cc:73-77 ptr_expr
                     // spacing=0): a trailing-`*` type glues to the name.
@@ -3608,5 +3632,104 @@ impl Emit for CaseDetectEmit {
     // RUGRA-GLUE: into_any (no Ghidra counterpart found)
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EmitNoMarkup;
+
+    // RUGRA-GLUE: backfill_missing_locals unit tests (legacy text-pass
+    // compensation layer; the oracle has no counterpart — Ghidra's
+    // emitLocalVarDecls (printc.cc:2260-2279) declares every scope symbol
+    // and never re-scans emitted text). These pin the A69 follow-up contract:
+    // the oracle unnamed-location fallback tokens
+    // <spacename><printRaw> (printc.cc:1938-1945: unique0x.../register0x.../
+    // stack0x.../ram0x...) are recognized by the used-locals prefix scan and
+    // get long declarations when absent from the declaration block.
+
+    #[test]
+    fn backfill_injects_unnamed_location_fallback_tokens() {
+        let input = "\
+long match_url(char *param_1,long param_2)
+
+{
+  char *piVar1;
+  unique0x00023b00 = *param_1;
+  if (unique0x00023b00 != '#') {
+    __sprintf_chk(register0x000000a0,1,-1,0x0,(short)unique0x0000aa00);
+    register0x00000000 = strlen(register0x000000a0);
+  }
+  return 0;
+}
+";
+        let out = EmitNoMarkup::backfill_missing_locals(input);
+        // All four space spellings get long declarations (the default the
+        // pre-A69 uVar-family spelling of these slots received).
+        assert!(out.contains("  long register0x00000000;\n"), "missing register0x decl:\n{}", out);
+        assert!(out.contains("  long register0x000000a0;\n"), "missing register0x dest decl:\n{}", out);
+        assert!(out.contains("  long unique0x00023b00;\n"), "missing unique0x decl:\n{}", out);
+        assert!(out.contains("  long unique0x0000aa00;\n"), "missing unique0x hex-tail decl:\n{}", out);
+        // Declared names are not re-injected.
+        assert_eq!(out.matches("char *piVar1;").count(), 1, "piVar1 re-declared:\n{}", out);
+        // Injections land inside the function, before the first body line.
+        let decl_pos = out.find("  long unique0x00023b00;").unwrap();
+        let body_pos = out.find("unique0x00023b00 = *param_1;").unwrap();
+        assert!(decl_pos < body_pos, "injection not before body:\n{}", out);
+    }
+
+    #[test]
+    fn backfill_hex_tail_not_truncated() {
+        // Regression guard for the continuation scan: the fallback token tail
+        // is printRaw hex (space.cc:216 lowercase hex), so a decimal-only
+        // scan would truncate unique0x0000abef at its first a-f digit and
+        // inject a partial name.
+        let input = "\
+void f(void)
+
+{
+  stack0x0000abef = 1;
+  ram0x00023e00 = stack0x0000abef + ram0x0000ff00;
+}
+";
+        let out = EmitNoMarkup::backfill_missing_locals(input);
+        assert!(out.contains("  long stack0x0000abef;\n"), "stack0x hex tail mishandled:\n{}", out);
+        assert!(out.contains("  long ram0x00023e00;\n"), "ram0x not injected:\n{}", out);
+        assert!(out.contains("  long ram0x0000ff00;\n"), "second ram0x not injected:\n{}", out);
+        assert!(!out.contains("stack0x0000;\n"), "hex tail truncated:\n{}", out);
+        assert!(!out.contains("ram0x00023;\n"), "ram hex tail truncated:\n{}", out);
+    }
+
+    #[test]
+    fn backfill_no_reinject_declared_fallback_token() {
+        let input = "\
+void f(void)
+
+{
+  long unique0x00023b00;
+  unique0x00023b00 = 5;
+}
+";
+        let out = EmitNoMarkup::backfill_missing_locals(input);
+        assert_eq!(out.matches("long unique0x00023b00;").count(), 1,
+            "declared fallback token re-injected:\n{}", out);
+    }
+
+    #[test]
+    fn backfill_legacy_prefixes_still_recognized() {
+        // The legacy spellings keep their old behaviour (guards against
+        // prefix-table regressions while adding the new forms).
+        let input = "\
+void f(void)
+
+{
+  int bVar3;
+  bVar3 = uVar42 + local_10;
+}
+";
+        let out = EmitNoMarkup::backfill_missing_locals(input);
+        assert!(out.contains("  long uVar42;\n"), "uVarN no longer injected:\n{}", out);
+        assert!(out.contains("  int local_10;\n"), "local_ no longer injected:\n{}", out);
+        assert_eq!(out.matches("int bVar3;").count(), 1, "bVar3 re-declared:\n{}", out);
     }
 }
