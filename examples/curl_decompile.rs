@@ -792,16 +792,20 @@ pub fn known_no_return_callee_protos(
 
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
-// signature proto on the call site, (3) refresh the CALL op's typed fspec
-// annotation against the same stable callspec owner. Unresolved targets are
-// left exactly as flow produced them (unknown). Returns (named, locked
+// signature proto on the call site, (3) when the entry address has a DWARF
+// definition, install the locked DWARF callee proto (the
+// queryCall→ActionDefaultParams copy boundary for debug-backed functions),
+// (4) refresh the CALL op's typed fspec annotation against the same stable
+// callspec owner. Unresolved targets are left exactly as flow produced them
+// (unknown). Returns (named, locked libc signatures, locked DWARF
 // signatures, relinked call ops, known no-return callees marked).
 fn link_call_specs(
     fd: &mut rugra::funcdata::Funcdata,
     libc_signatures: &rugra::debugproto::LibcSignatureTable,
+    debug_db: &rugra::debugproto::DebugPrototypeDatabase,
     storage: &rugra::debugproto::X86_64GccStorage,
     fn_name: &str,
-) -> (usize, usize, usize, usize) {
+) -> (usize, usize, usize, usize, usize) {
     // Keep the stable owner with each direct target. Multiple CALLs may share
     // one machine address, so an address lookup is not an identity lookup.
     let targets: Vec<_> = fd
@@ -813,8 +817,14 @@ fn link_call_specs(
                 .map(|entry| (owner.clone(), spec.op_addr.as_u64(), entry.as_u64()))
         })
         .collect();
+    // CALLSPEC-ENV-SCOPE-0001: the model carrier for the DWARF callee copy
+    // is the same resolved default model the decompiled function's own
+    // FuncProto carries after set_arch (both Funcdata objects would bind the
+    // Architecture defaultfp; FUNCPROTO-MODEL-BIND-0001).
+    let model_carrier = fd.funcp.clone();
     let mut named = 0usize;
     let mut signatures = 0usize;
+    let mut dwarf_signatures = 0usize;
     let mut noreturn_marked = 0usize;
     for (owner, op_addr, entry) in targets {
         // flow.cc:660: queryFunction(entry) -> the PLT thunk's symbol name.
@@ -828,17 +838,39 @@ fn link_call_specs(
             .set_funcdata(&name, rugra::address::Address::new(entry));
         named += 1;
         // coreaction.cc:2327: fc->copy(otherfunc->getFuncProto()) — the
-        // platform side's locked libc signature for the imported callee.
+        // platform side's locked callee signature for the resolved target.
+        // Two disjoint sources at this boundary (a .plt.sec/.plt/.plt.got
+        // thunk address never carries a DWARF definition, and a DWARF
+        // definition's function name is never a generic_clib import):
+        //   (a) the generic_clib locked signature for the imported symbol;
+        //   (b) the DWARF-analyzer locked signature for a debug-info callee
+        //       (headless golden main: `glob_url(&urls,pcVar12,&urlnum)`
+        //       3-arg and `curl_version()` 0-arg render from this boundary).
+        let mut installed = false;
         match libc_signatures.locked_proto(&name, storage) {
             Ok(Some(proto)) => {
                 owner.write().unwrap().prototype = proto;
                 signatures += 1;
+                installed = true;
             }
             Ok(None) => {}
             Err(error) => eprintln!(
                 "[PREPASS] {} callspec@0x{:x}: libc signature for {} rejected: {}",
                 fn_name, op_addr, name, error
             ),
+        }
+        if !installed {
+            match debug_db.locked_callsite_proto(entry, &model_carrier, storage) {
+                Ok(Some(proto)) => {
+                    owner.write().unwrap().prototype = proto;
+                    dwarf_signatures += 1;
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!(
+                    "[PREPASS] {} callspec@0x{:x}: DWARF signature for {} rejected: {}",
+                    fn_name, op_addr, name, error
+                ),
+            }
         }
         // flow.cc:663-664 copyFlowEffects position (FLOW-NORETURN-DATA-0001):
         // the "Non-Returning Functions - Known" analyzer has already set
@@ -860,7 +892,7 @@ fn link_call_specs(
     // that exact owner identity through a typed Weak carried by the temporary
     // Iop annotation; TypeOp/PrintC consumption remains a separate residual.
     let relinked = relink_call_spec_targets(fd);
-    (named, signatures, relinked, noreturn_marked)
+    (named, signatures, dwarf_signatures, relinked, noreturn_marked)
 }
 
 // RUGRA-GLUE: refresh each direct CALL's fspec annotation from its stable
@@ -2261,22 +2293,25 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // so root can isolate this feature's corpus effect on the same tree.
     let mut named = 0usize;
     let mut signatures = 0usize;
+    let mut dwarf_signatures = 0usize;
     let mut relinked = 0usize;
     let mut noreturn_marked = 0usize;
     if callspec_link_enabled {
-        (named, signatures, relinked, noreturn_marked) = link_call_specs(
+        (named, signatures, dwarf_signatures, relinked, noreturn_marked) = link_call_specs(
             &mut fd,
             &libc_signatures,
+            &debug_db,
             &debug_storage,
             &target.name,
         );
     }
     eprintln!(
-        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} fspec targets relinked, {} known no-return callees marked",
+        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} locked DWARF signatures, {} fspec targets relinked, {} known no-return callees marked",
         target.name,
         fd.callspecs.len(),
         named,
         signatures,
+        dwarf_signatures,
         relinked,
         noreturn_marked
     );

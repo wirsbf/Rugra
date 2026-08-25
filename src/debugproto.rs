@@ -256,8 +256,57 @@ impl DebugPrototypeDatabase {
         let Some(debug_proto) = self.get(fd.baseaddr.as_u64()) else {
             return Ok(false);
         };
+        let model_carrier = fd.funcp.clone();
+        fd.funcp = self.locked_proto(debug_proto, &model_carrier, storage)?;
+        Ok(true)
+    }
+
+    /// Materialize the locked call-site `FuncProto` for a callee entry
+    /// address, mirroring the other half of the same Program-database
+    /// boundary: `FlowInfo::queryCall` (flow.cc:656-672) resolves the callee
+    /// `Funcdata` whose DWARF signature the analyzer locked, and
+    /// `ActionDefaultParams` (coreaction.cc:2322-2330) copies that whole
+    /// callee prototype onto the call site with
+    /// `fc->copy(otherfunc->getFuncProto())` — `FuncProto::copy`
+    /// (fspec.cc:3789-3804) transfers the model pointer, the flag word
+    /// (every lock bit), and a clone of the parameter store, so the call
+    /// site ends up with the callee's locked parameter list verbatim.
+    ///
+    /// `model_carrier` supplies the model exactly as the callee's own
+    /// `Funcdata` would have bound it: the Architecture default model both
+    /// the decompiled function and every DWARF-analyzed callee carry (the
+    /// same carrier `apply` clones from `fd.funcp` after
+    /// `Funcdata::set_arch`'s named-ctor binding, FUNCPROTO-MODEL-BIND-0001).
+    ///
+    /// Returns `Ok(None)` when the address has no DWARF definition (import
+    /// thunk / non-debug function: the boundary contributes nothing and the
+    /// generic_clib import table or active recovery owns the call site).
+    // RUGRA-GLUE: the queryCall -> ActionDefaultParams copy boundary for DWARF-locked callees; Ghidra reaches it via the Program database, Rugra's driver hands it directly
+    pub fn locked_callsite_proto(
+        &self,
+        entry: u64,
+        model_carrier: &FuncProto,
+        storage: &X86_64GccStorage,
+    ) -> Result<Option<FuncProto>> {
+        let Some(debug_proto) = self.get(entry) else {
+            return Ok(None);
+        };
+        self.locked_proto(debug_proto, model_carrier, storage).map(Some)
+    }
+
+    // RUGRA-GLUE: shared locked-signature builder behind both halves of the
+    // DWARF Program-database boundary (own-function apply + call-site copy);
+    // the lock recipe mirrors FuncProto::setPieces (fspec.cc:3843-3852):
+    // assigned storage, DW_AT_name-gated NAME_LOCKED bits, input/output/model
+    // locks, and the void-signature unknown-model pin below.
+    fn locked_proto(
+        &self,
+        debug_proto: &DebugPrototype,
+        model_carrier: &FuncProto,
+        storage: &X86_64GccStorage,
+    ) -> Result<FuncProto> {
         let addresses = storage.assign(&debug_proto.parameters)?;
-        let mut proto: FuncProto = fd.funcp.clone();
+        let mut proto: FuncProto = model_carrier.clone();
         proto.return_type = debug_proto.return_type.clone();
         proto.parameters.clear();
         for (index, (parameter, address)) in debug_proto
@@ -312,8 +361,7 @@ impl DebugPrototypeDatabase {
         if debug_proto.parameters.is_empty() {
             proto.set_model_name("unknown");
         }
-        fd.funcp = proto;
-        Ok(true)
+        Ok(proto)
     }
 }
 
@@ -1408,6 +1456,47 @@ mod tests {
                 .get_name(),
             "int *"
         );
+    }
+
+    // CALLSPEC-ENV-SCOPE-0001: the call-site half of the DWARF boundary —
+    // queryCall resolves the DWARF-locked callee and ActionDefaultParams
+    // copies its whole FuncProto to the call site (coreaction.cc:2322-2330),
+    // so a caller decompiling with debug info sees the callee's locked
+    // parameter list (golden main: `glob_url(&urls,pcVar12,&urlnum)` 3-arg
+    // from the DWARF definition, not an experimental guess).
+    #[test]
+    fn locked_callsite_proto_copies_dwarf_signature() {
+        let bytes = std::fs::read("examples/curl").expect("curl fixture");
+        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
+        // glob_url @ 0x4f70: (URLGlob **glob, char *url, int *urlnum).
+        let mut carrier = FuncProto::new("carrier".to_string(), void_type());
+        // The driver hands the callsite the same resolved default model the
+        // callee's own Funcdata would carry (FUNCPROTO-MODEL-BIND-0001):
+        // simulate the post-set_arch binding the worker performs.
+        carrier.set_model_name("__stdcall");
+        let proto = db
+            .locked_callsite_proto(0x4f70, &carrier, &register_resources())
+            .expect("glob_url callsite prototype represents")
+            .expect("glob_url has a DWARF definition");
+        assert_eq!(proto.num_params(), 3);
+        assert!(proto.is_input_locked());
+        assert!(proto.is_output_locked());
+        assert!(proto.is_model_locked());
+        assert!(!proto.is_model_unknown());
+        assert_eq!(proto.get_param(0).unwrap().name, "glob");
+        assert_eq!(proto.get_param(0).unwrap().address.as_u64(), 0x38);
+        assert_eq!(proto.get_param(2).unwrap().address.as_u64(), 0x10);
+        assert_eq!(
+            proto.get_param(0).unwrap().data_type.get_name(),
+            "URLGlob **"
+        );
+
+        // A thunk/import address has no DWARF definition: the boundary
+        // contributes nothing (Ok(None)) and the import table owns it.
+        assert!(db
+            .locked_callsite_proto(0x2490, &carrier, &register_resources())
+            .expect("thunk lookup does not error")
+            .is_none());
     }
 
     #[test]
