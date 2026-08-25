@@ -21,6 +21,16 @@
  *                    replaces it (cc:929).
  *   - tie_structs:   two distinct empty structures have typeOrder 0
  *                    (type.cc:1742-1780) -> first-encountered survives.
+ *   - tie_def_reader_ab/ba: CALL def with a LOCKED output struct vs a
+ *                    CALL reader locked to the other struct — the def's
+ *                    outputTypeLocal seed (cc:911) competes under the same
+ *                    typeOrder tie; cc:929 keeps the incumbent, so the def
+ *                    seed survives in BOTH orders (R19 D2 review advice 1:
+ *                    def-output-first tie coverage).
+ *   - callind_slot0: input varnode read by a CALLIND at slot 0 -> the
+ *                    code-pointer type (typeop.cc:752-756), the same branch
+ *                    varnode.rs op_input_type_local now delegates to
+ *                    TypeOpCallind::getInputLocal.
  *   - path_beats_int: CALL reader (locked char pointer) vs INT_SLESS (int8)
  *                    -> char pointer wins (SUB_PTR < SUB_INT_PLAIN).
  *   - typelock:      type-locked varnode with a union type -> returned
@@ -315,6 +325,86 @@ void runFixture(const string &specDirectory,const string &binary)
     Datatype *ct = vn->getLocalType(blockup);
     emitCase("tie_structs_ba",ct,blockup);
     emitBool("case.tie_structs_ba.structb_identity",ct == structB);
+  }
+
+  // ---- tie_def_reader_ab / tie_def_reader_ba: the def is a CALL whose
+  // callspec output is typelocked to one empty struct (FuncCallSpecs::
+  // setOutput with ParameterPieces::typelock -> TypeOpCall::getOutputLocal
+  // returns it, typeop.cc:732-735); the sole reader is a CALL locked to the
+  // OTHER empty struct. The def seed (cc:911) and the reader candidate
+  // (cc:924) have typeOrder 0; cc:926-927 seeds ct from the def FIRST and
+  // cc:929-930 replaces only on strictly smaller, so the DEF seed survives
+  // the tie in both orderings — the def-output-first competition structure.
+  // ----
+  {
+    Varnode *out = fd->newVarnode(8,reg,0x3A0);
+    PcodeOp *defCall = fd->newOp(1,Address(code,0x5001A0));
+    fd->opSetOpcode(defCall,CPUI_CALL);
+    fd->opSetInput(defCall,fd->newCodeRef(Address(code,0x6001A0)),0);
+    FuncCallSpecs defSpec(defCall);
+    defSpec.setInternal(architecture.defaultfp,voidType);
+    defSpec.setOutput(pieces(reg,0x00,structA,ParameterPieces::typelock));
+    fd->opSetInput(defCall,fd->newVarnodeCallSpecs(&defSpec),0);
+    fd->opSetOutput(defCall,out);
+    PcodeOp *reader = fd->newOp(2,Address(code,0x5001A8));
+    fd->opSetOpcode(reader,CPUI_CALL);
+    fd->opSetInput(reader,fd->newCodeRef(Address(code,0x6001A8)),0);
+    FuncCallSpecs readerSpec(reader);
+    readerSpec.setInternal(architecture.defaultfp,voidType);
+    readerSpec.setParam(0,"locked_structb",
+                        pieces(reg,0x00,structB,ParameterPieces::typelock));
+    fd->opSetInput(reader,fd->newVarnodeCallSpecs(&readerSpec),0);
+    fd->opSetInput(reader,out,1);
+    bool blockup = false;
+    Datatype *ct = out->getLocalType(blockup);
+    emitCase("tie_def_reader_ab",ct,blockup);
+    emitBool("case.tie_def_reader_ab.def_structa_identity",ct == structA);
+    emitBool("case.tie_def_reader_ab.reader_structb_not_winner",ct != structB);
+    emitBool("case.tie_def_reader_ab.def_output_locked",defSpec.isOutputLocked());
+  }
+  {
+    Varnode *out = fd->newVarnode(8,reg,0x3B0);
+    PcodeOp *defCall = fd->newOp(1,Address(code,0x5001B0));
+    fd->opSetOpcode(defCall,CPUI_CALL);
+    fd->opSetInput(defCall,fd->newCodeRef(Address(code,0x6001B0)),0);
+    FuncCallSpecs defSpec(defCall);
+    defSpec.setInternal(architecture.defaultfp,voidType);
+    defSpec.setOutput(pieces(reg,0x00,structB,ParameterPieces::typelock));
+    fd->opSetInput(defCall,fd->newVarnodeCallSpecs(&defSpec),0);
+    fd->opSetOutput(defCall,out);
+    PcodeOp *reader = fd->newOp(2,Address(code,0x5001B8));
+    fd->opSetOpcode(reader,CPUI_CALL);
+    fd->opSetInput(reader,fd->newCodeRef(Address(code,0x6001B8)),0);
+    FuncCallSpecs readerSpec(reader);
+    readerSpec.setInternal(architecture.defaultfp,voidType);
+    readerSpec.setParam(0,"locked_structa",
+                        pieces(reg,0x00,structA,ParameterPieces::typelock));
+    fd->opSetInput(reader,fd->newVarnodeCallSpecs(&readerSpec),0);
+    fd->opSetInput(reader,out,1);
+    bool blockup = false;
+    Datatype *ct = out->getLocalType(blockup);
+    emitCase("tie_def_reader_ba",ct,blockup);
+    emitBool("case.tie_def_reader_ba.def_structb_identity",ct == structB);
+    emitBool("case.tie_def_reader_ba.reader_structa_not_winner",ct != structA);
+    emitBool("case.tie_def_reader_ba.tie_typeorder",
+             structA->typeOrder(*structB) == 0);
+  }
+
+  // ---- callind_slot0: input varnode read by a CALLIND at slot 0. The
+  // indirect-target input resolves through TypeOpCallind::getInputLocal
+  // (typeop.cc:752-756): a pointer to the code type, sized by the input and
+  // worded by the op's own (code) space. ----
+  {
+    Varnode *vn = fd->setInputVarnode(fd->newVarnode(8,reg,0x3C0));
+    PcodeOp *callind = fd->newOp(1,Address(code,0x5001C0));
+    fd->opSetOpcode(callind,CPUI_CALLIND);
+    fd->opSetInput(callind,vn,0);
+    bool blockup = false;
+    Datatype *ct = vn->getLocalType(blockup);
+    emitCase("callind_slot0",ct,blockup);
+    Datatype *codePointer = factory->getTypePointer(
+        vn->getSize(),factory->getTypeCode(),code->getWordSize());
+    emitBool("case.callind_slot0.codeptr_identity",ct == codePointer);
   }
 
   // ---- path_beats_int: CALL reader (locked char*, SUB_PTR) competes with

@@ -3,12 +3,15 @@ set -euo pipefail
 
 # VARNODE-LOCALTYPE-RESOLUTION-0001 locked Ghidra 12.0.4/Rugra bilateral
 # runner. The Rust side is built from the frozen production commit
-# (5cba7550, Varnode::getLocalType full port + localType dispatch table +
-# the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread) via a
-# complete git archive, never from the live crate; no source overlays are
-# applied. Re-pinned from 8c26662: the get_local_type signature gained the
-# userops Option thread and the fixture call sites now pass None (the
-# fixture has no CALLOTHER cases; behavior is byte-identical).
+# (5a4a145e, Varnode::getLocalType full port + localType dispatch table +
+# the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread + the R19
+# advice-2 CALLIND input delegation to TypeOpCallind) via a complete git
+# archive, never from the live crate; no source overlays are applied.
+# Re-pinned from 5cba7550: op_input_type_local's CALLIND arm now delegates
+# to TypeOpCallind::get_input_local (byte-identical slot-0 resolution, slot
+# >= 1 keeps the fc==0 base default), and the fixture gained the R19
+# advice-1 def-vs-reader typeOrder tie cases (both orders) plus a
+# CALLIND slot-0 delegation probe.
 
 runner_fd_path="/proc/$$/fd/3"
 if [[ "${BASH_SOURCE[0]}" != "$runner_fd_path" ]]; then
@@ -102,16 +105,16 @@ oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
 oracle_varnode_cc_blob=a04614c582a1fd987d615dcec4a8b47d3501f95f
 oracle_typeop_cc_blob=5197e3eefd185ed39c58e65af0687d605e34ec5e
 oracle_type_cc_blob=962c525b7f9c6a901d84d6396de245a0bf6e5d60
-rugra_base_commit=5cba75501abab7b7f17e81dd8ae1dc45dc5e209a
-rugra_base_tree=518475282f4c9630acbab4fea6b178563acb45f6
-rugra_base_src_tree=928e4e186961f5462144de1f5def8854c281fe52
+rugra_base_commit=5a4a145ea169fe931274a90094ba8877ea77cc73
+rugra_base_tree=532587dcf52563ac3590b34f5eb7858d0c659a10
+rugra_base_src_tree=5254425e8c9c53cd852377d0583a217bcfac46c8
 rugra_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
 rugra_binary_blob=76d9343ea3add321aa4134856323663b36365807
-rugra_expected_records=62
-rugra_expected_bytes=2194
-rugra_expected_stdout_sha256=b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244
+rugra_expected_records=81
+rugra_expected_bytes=2943
+rugra_expected_stdout_sha256=1dd60cc06d17685656c961a5adefd50d0da205de5a36b1e8ebd94aa8fe16fe81
 rugra_expected_stderr_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 bilateral_expected_diff_exit_code=0
 bilateral_expected_diff_records=0
@@ -297,7 +300,7 @@ require("binary blob", comparand["binary_blob"], binary_blob)
 require(
     "snapshot model",
     comparand["snapshot_model"],
-    "immutable complete crate snapshot: git archive of the frozen production commit 5cba7550 with the Varnode::getLocalType full port, STOP early-return, the localType dispatch table, and the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread; no source overlays",
+    "immutable complete crate snapshot: git archive of the frozen production commit 5a4a145e with the Varnode::getLocalType full port, STOP early-return, the localType dispatch table, the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread, and the R19 advice-2 CALLIND input delegation to TypeOpCallind; no source overlays",
 )
 require(
     "archive paths",

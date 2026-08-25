@@ -3,7 +3,7 @@
   "fixture_id": "VARNODE-LOCALTYPE-RESOLUTION-0001",
   "title": "Varnode::getLocalType full port: typelock early return, def outputTypeLocal seed, stop_type_propagation early return with blockup, descend insertion-order typeOrder-min merge with first-encountered tie survival, and the NULL local type LowlevelError channel",
   "overall_status": "MATCH",
-  "status_note": "Production commit 8c26662 ports Varnode::getLocalType (varnode.cc:900-936) in full, replacing the v_type-clone stub, plus the op.hh:251-252 outputTypeLocal/inputTypeLocal dispatch table and the varnode addl_flags STOP_UP_PROPAGATION=0x800/HAS_IMPLIED_FIELD=0x1000 constants with stops/set/clear accessors. The locked Ghidra 12.0.4 oracle and the frozen Rugra snapshot were each executed twice with deterministic stdout/stderr. Both sides produced 62 records / 2194 bytes with identical sha256 and empty stderr; the bilateral byte diff is empty (exit 0). Re-pinned 2026-08-25 from base 8c26662 to 5cba7550 (TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread; fixture call sites pass None, zero behavior drift, locked capture unchanged). All eleven cases match: def_only (int4 via TypeOpPtrsub::getOutputLocal getBase(4,TYPE_INT)), def_stop (STOP early return: blockup=1, uint reader never consulted, int4 kept), def_nostop (uint4 replaces int4 via SUB_UINT_PLAIN < SUB_INT_PLAIN), readers_min in both insertion orders (uint4 regardless of order), ptr_pointee_replace (int4* strictly smaller than char* through the TypePointer::compare pointee descent, type.cc:951), tie_structs_ab / tie_structs_ba (two distinct empty structures have TypeStruct::compare == 0 at level 10, type.cc:1742-1780; the first-encountered struct survives both orderings), path_beats_int (char* SUB_PTR beats int8 SUB_INT_PLAIN), typelock_union (locked union returned directly, def and reader never consulted), null_local_type (LowlevelError \"NULL local type\" observed as an in-fixture caught record with blockup staying false).",
+  "status_note": "Production commit 5a4a145e ports Varnode::getLocalType (varnode.cc:900-936) in full, plus the op.hh:251-252 outputTypeLocal/inputTypeLocal dispatch table and the varnode-level flags; base 5cba7550 added the CALLOTHER userop-metadata branch, and 5a4a145e delegates the CALLIND input arm to the R19-approved D2 TypeOpCallind port (typeop.cc:745-774), removing the inlined slot-0 copy. The fixture covers the typeOrder tie in reader-vs-reader orderings (tie_structs_ab/ba) and in def-vs-reader orderings (tie_def_reader_ab/ba, R19 D2 review advice 1: the def-output-first seed survives a genuine empty-struct tie in both orders), plus the delegated CALLIND slot-0 code-pointer resolution (callind_slot0).",
   "covered_projection": {
     "status": "MATCH",
     "name": "Varnode::getLocalType algorithm through the real PcodeOp/Varnode structures and the Architecture TypeFactory",
@@ -13,11 +13,11 @@
     },
     "rugra_source_observation": {
       "status": "MATCH",
-      "note": "src/varnode.rs get_local_type (varnode.cc:900-936) with the local dispatch table op_output_type_local/op_input_type_local (op.hh:251-252 forwarders over the complete Ghidra override set: PTRADD/PTRSUB INT, ctor metas, shift slot-1 getBaseNoChar, CBRANCH/CALLIND/INDIRECT code pointers, INSERT/EXTRACT slot-0, CPOOLREF inputs, CALL input delegated to the R3-approved D1 TypeOpCall::get_input_local, CALL output 720-735 in full), local_meta_pair ctor table, addl_flags STOP_UP_PROPAGATION/HAS_IMPLIED_FIELD and stops/set/clear accessors."
+      "note": "src/varnode.rs get_local_type (varnode.cc:900-936) with the local dispatch table op_output_type_local/op_input_type_local (op.hh:251-252 forwarders over the complete Ghidra override set: PTRADD/PTRSUB INT, shift/INSERT/EXTRACT/CBRANCH/INDIRECT specials, CALL via the R3-approved D1 TypeOpCall::get_input_local, CALLOTHER via the userops thread, and since 5a4a145e CALLIND via the R19-approved D2 TypeOpCallind::get_input_local delegation — slot 0 byte-identical to the former inline, slot >= 1 observing Ghidra's fc==0 base default)."
     },
     "rugra_execution": {
       "status": "EXECUTED",
-      "note": "The complete frozen crate snapshot (git archive of 8c26662) was built with pinned Cargo/rustc and the Rust fixture executed twice identically through the production Varnode::get_local_type: 62 records, 2194 stdout bytes, empty stderr."
+      "note": "The complete frozen crate snapshot (git archive of 5a4a145e) was built with pinned Cargo/rustc and the Rust fixture executed twice identically through the production Varnode::get_local_type: 81 records / 2943 bytes (sha256 1dd60cc0...), stderr empty."
     },
     "bilateral_comparison": {
       "status": "MATCH",
@@ -36,26 +36,28 @@
     "typeop_cc_sha256": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
     "type_cc_sha256": "e339d89b86b9eb50ca8e7dedb882524b578683d7f995623af513e8ed28ed5405",
     "entrypoints": [
-      "Datatype *Varnode::getLocalType(bool &blockup) const (varnode.cc:900-936)",
+      "Datatype *Varnode::getLocalType(bool & blockup) const (varnode.cc:900-936)",
       "PcodeOp::outputTypeLocal/inputTypeLocal virtual dispatch (op.hh:250-252)",
       "TypeOpPtrsub::getOutputLocal getBase(size,TYPE_INT) (typeop.cc:2308-2318)",
+      "TypeOpCall::getOutputLocal locked output (typeop.cc:720-735)",
       "TypeOpCall::getInputLocal locked params (typeop.cc:687-718)",
+      "TypeOpCallind::getInputLocal slot-0 code pointer (typeop.cc:745-756)",
       "Varnode::updateType(ct,true,false) lock path (varnode.cc:474-489)",
       "PcodeOp::setStopTypePropagation/stopsTypePropagation (op.hh:215-216)"
     ]
   },
   "architecture": "x86:LE:64:default:gcc",
   "compiler_spec": "x86-64-gcc.cspec",
-  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata with PTRSUB/CALL/INT_LESS/INT_SLESS reader graphs and the Architecture-owned TypeFactory/TypeOp table",
+  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata with PTRSUB/CALL/INT_LESS/INT_SLESS reader graphs, CALL defs with typelocked callspec outputs, a CALLIND slot-0 reader, and the Architecture-owned TypeFactory/TypeOp table",
   "comparand": {
-    "rugra_base_commit": "5cba75501abab7b7f17e81dd8ae1dc45dc5e209a",
-    "rugra_base_tree": "518475282f4c9630acbab4fea6b178563acb45f6",
-    "rugra_base_src_tree": "928e4e186961f5462144de1f5def8854c281fe52",
+    "rugra_base_commit": "5a4a145ea169fe931274a90094ba8877ea77cc73",
+    "rugra_base_tree": "532587dcf52563ac3590b34f5eb7858d0c659a10",
+    "rugra_base_src_tree": "5254425e8c9c53cd852377d0583a217bcfac46c8",
     "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
     "binary_blob": "76d9343ea3add321aa4134856323663b36365807",
-    "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit 5cba7550 with the Varnode::getLocalType full port, STOP early-return, the localType dispatch table, and the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread; no source overlays",
+    "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit 5a4a145e with the Varnode::getLocalType full port, STOP early-return, the localType dispatch table, the TYPEOP-LOCALTYPE-CALLOTHER-0001 userops parameter thread, and the R19 advice-2 CALLIND input delegation to TypeOpCallind; no source overlays",
     "archive_paths": [
       "Cargo.toml",
       "Cargo.lock",
@@ -71,12 +73,12 @@
     ],
     "overlays": [],
     "base_source_sha256": {
-      "src/varnode.rs": "9c30a5873551ed7b9161ed5d1eb2eaf0495b77970f7d0907562cdbc4909ec695",
-      "src/typeop.rs": "3687fb6cf964587d64801f61bc72e0b180ecb65a6b01c392f7c77e05a812059f",
-      "src/type_system/datatype.rs": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
+      "src/varnode.rs": "19bc4a3394e02be8fbfbbd513f67c4c6f22434a38dd51dc0d693b5641cf8cc60",
+      "src/typeop.rs": "2a63c3860d97ad79f37d75955cb87c72e5dae264d9866db41d2ac2be65ce60b0",
+      "src/type_system/datatype.rs": "668d9ad5c36bfc34f0c72bc6a467e3f50887fbb75490cc3ba7e9ed5f6571cc4c",
       "src/type_system/typefactory.rs": "27975d9f8fee16a8c91b4753c1cad6afa2d86f9adf774dacc5acc9d9d8734383",
-      "src/fspec.rs": "ba7723dda0e9a1bb8f7a40348d26a9f0602a495e700ca0f4b7fda6030d5ccaa1",
-      "src/funcdata.rs": "db71fb43a6d5e38c1e16d0b20d296a93c8516e36921a3a5c2d358ec278ef983c",
+      "src/fspec.rs": "ed218325863b756c5a16b31af79727ad1b47bb7445a684dcd085e83d6dbf3d2c",
+      "src/funcdata.rs": "df8f5fb318ca21e0c7d3c6111690e18c37d1afc153d2de20535ee3a5745ee3de",
       "src/op.rs": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
       "src/space.rs": "0e65152fd2f37429e3b6b8ae4c48328a1099558af5cd475e1c2a5c7db51b778d",
       "src/address.rs": "ee88af6e7b072a1767d17477e96aecb05ace947809b2ee7b6cbcc051cc11cf98"
@@ -86,9 +88,9 @@
       "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
       "purpose": "build.rs C++ shim header discovery; the executable oracle is built from the separately archived locked commit"
     },
-    "cpp_fixture_sha256": "2877b90ead758b324d1d6dff5f01f60ffa3bed3c8c051e0b53fb26014086a204",
-    "rust_fixture_sha256": "0953c931c8fa33f7fcb68c0cd4309952e037911cdc0eb4893c53bb0b7fe800cb",
-    "runner_sha256": "e7c8676d525ce1a1bb13a28c5ec74cb31220104154221a699245e518370c75ce"
+    "cpp_fixture_sha256": "6c78d5154a910554b0171ecf38a7c45e9296936b0380a1ad1ce9ecca1c6257d0",
+    "rust_fixture_sha256": "f64203fc41077df1861fb4cf538cc380935c14455c1de1ac6cd9d06e63a6a637",
+    "runner_sha256": "07c964392f8d4952bf6e1db65e828a22e20ba6e6279665d748179e3b6a602e09"
   },
   "assets": {
     "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
@@ -176,7 +178,7 @@
   },
   "coverage": {
     "oracle_cases": 11,
-    "oracle_records": 62,
+    "oracle_records": 81,
     "observations": [
       "def-side seed with no readers (PTRSUB -> int4)",
       "stop_type_propagation early return: blockup set, readers skipped, def type kept (int4 vs never-consulted uint4)",
@@ -190,7 +192,7 @@
       "canonical factory identity and repeat identity observations"
     ],
     "untested": [
-      "CALLIND parameter slots and TypeOpReturn parameter slots of the dispatch table (need parent->Funcdata; both fall to the Ghidra fc==null/bb==null base-default paths, which the fixture does not reach)",
+      "CALLIND parameter slots through the fd-less table delegation and TypeOpReturn parameter slots (need parent->Funcdata; both observe Ghidra's fc==null/bb==null base-default paths — the full CALLIND callspec branch is bilaterally covered by the INFERTYPES-CALLINPUT-D2-0001 fixture through get_input_local_in_fd)",
       "CPOOLREF record paths (no cpool infrastructure) — fall to base defaults; the CALLOTHER userop-metadata path moved to its own bilaterally-locked fixture callother_userop_closure_1204",
       "selectJavaOperators metatype retuning (typeop.cc:114-137)",
       "buildLocaltypes wiring (coreaction.cc:5008-5037) — the STOP task's write-set, including the set_stop_up_propagation consumer wiring"
@@ -198,26 +200,26 @@
   },
   "locked_capture": {
     "deterministic_runs": 2,
-    "records": 62,
-    "bytes": 2194,
-    "stdout_sha256": "b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244",
+    "records": 81,
+    "bytes": 2943,
+    "stdout_sha256": "1dd60cc06d17685656c961a5adefd50d0da205de5a36b1e8ebd94aa8fe16fe81",
     "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   "paired_expected": {
     "ghidra": {
       "status": "ORACLE_CAPTURED",
       "deterministic_runs": 2,
-      "records": 62,
-      "bytes": 2194,
-      "stdout_sha256": "b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244",
+      "records": 81,
+      "bytes": 2943,
+      "stdout_sha256": "1dd60cc06d17685656c961a5adefd50d0da205de5a36b1e8ebd94aa8fe16fe81",
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "rugra": {
       "status": "EXECUTED",
       "deterministic_runs": 2,
-      "records": 62,
-      "bytes": 2194,
-      "stdout_sha256": "b24870bd5ade8081e489786b44857e7c62d41ca9b8b2cf5f87abac95226ad244",
+      "records": 81,
+      "bytes": 2943,
+      "stdout_sha256": "1dd60cc06d17685656c961a5adefd50d0da205de5a36b1e8ebd94aa8fe16fe81",
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "bilateral": {

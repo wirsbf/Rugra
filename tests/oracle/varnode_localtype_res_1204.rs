@@ -115,18 +115,27 @@ fn ghidra_metatype(metatype: TypeMetatype) -> i32 {
 }
 
 /// Byte projection of `Datatype::printRaw` for the bounded result set these
-/// cases can return (TypeBase, TypePointer, TypeUnion): type.cc:139-146
-/// prints the name or `unkbyte<size>`, type.cc:910-916 appends `" *"` for
-/// pointers.
+/// cases can return (TypeBase, TypePointer, TypeUnion, TypeCode): type.cc:
+/// 139-146 prints the name or `unkbyte<size>`, type.cc:910-916 appends
+/// `" *"` for pointers, type.cc:2772-2780 appends `"()"` for code types
+/// (name or `funcptr` when anonymous).
 fn ghidra_print_raw(datatype: &Datatype) -> String {
     if let Datatype::Pointer(pointer) = datatype {
         return format!("{} *", ghidra_print_raw(&pointer.ptr_to));
     }
     let name = datatype.get_name().to_string();
-    if !name.is_empty() {
+    let base = if !name.is_empty() {
         name
+    } else if datatype.get_metatype() == TypeMetatype::Code {
+        // type.cc:2777-2778: anonymous code type prints "funcptr".
+        "funcptr".to_string()
     } else {
         format!("unkbyte{}", datatype.get_size())
+    };
+    if datatype.get_metatype() == TypeMetatype::Code {
+        format!("{base}()")
+    } else {
+        base
     }
 }
 
@@ -203,6 +212,34 @@ fn wire_call_reader(
     let fspec = fd.new_varnode_call_specs(&callspec_owner);
     fd.op_set_input(&op, fspec, 0);
     fd.op_set_input(&op, vn.clone(), 1);
+}
+
+/// Wire a CALL def whose callspec output is typelocked to `output_type`
+/// (Ghidra `FuncCallSpecs::setOutput` with `ParameterPieces::typelock`),
+/// producing `out` — the def-side seed path through
+/// `TypeOpCall::getOutputLocal` (typeop.cc:732-735). Returns the callspec
+/// owner so cases can observe `isOutputLocked`.
+fn wire_call_def(
+    fd: &mut Funcdata,
+    op_addr: u64,
+    output_name: &str,
+    output_type: Arc<Datatype>,
+    out: &Arc<RwLock<rugra::varnode::Varnode>>,
+) -> Arc<RwLock<rugra::fspec::FuncCallSpecs>> {
+    let op = fd.new_op(1, Address::new(op_addr));
+    fd.op_set_opcode(&op, OpCode::CPUI_CALL);
+    let mut prototype = FuncProto::new(output_name.to_string(), output_type.clone());
+    prototype.set_output_lock(true);
+    let target = fd.new_code_ref(Address::new(op_addr + 0x100000));
+    fd.op_set_input(&op, target, 0);
+    let callspec_index = fd.add_call_specs(FuncCallSpecs::new_for_op(&op, prototype));
+    let callspec_owner = fd
+        .get_call_specs_owner(callspec_index)
+        .expect("fixture callspec owner");
+    let fspec = fd.new_varnode_call_specs(&callspec_owner);
+    fd.op_set_input(&op, fspec, 0);
+    fd.op_set_output(&op, out.clone());
+    callspec_owner
 }
 
 fn main() {
@@ -458,6 +495,100 @@ fn main() {
         emit_bool(
             "case.tie_structs_ba.structb_identity",
             identity(&ct, &struct_b),
+        );
+    }
+
+    // ---- tie_def_reader_ab / tie_def_reader_ba: the def is a CALL whose
+    // callspec output is typelocked to one empty struct (the TypeOpCall::
+    // getOutputLocal seed, typeop.cc:732-735); the sole reader is a CALL
+    // locked to the OTHER empty struct. The def seed (cc:911) and the reader
+    // candidate (cc:924) have typeOrder 0; cc:926-927 seeds ct from the def
+    // FIRST and cc:929-930 replaces only on strictly smaller, so the DEF
+    // seed survives the tie in both orderings — the def-output-first
+    // competition structure (R19 D2 review advice 1 coverage).
+    // ----
+    {
+        let out = fd.new_varnode(8, Address::new(0x3A0));
+        let def_spec =
+            wire_call_def(&mut fd, 0x5001A0, "locked_out_structa", struct_a.clone(), &out);
+        wire_call_reader(
+            &mut fd,
+            0x5001A8,
+            "locked_structb",
+            struct_b.clone(),
+            void_type.clone(),
+            &out,
+        );
+        let mut blockup = false;
+        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
+        let ct = ct.expect("tie_def_reader_ab resolves");
+        emit_case("tie_def_reader_ab", &ct, blockup);
+        emit_bool(
+            "case.tie_def_reader_ab.def_structa_identity",
+            identity(&ct, &struct_a),
+        );
+        emit_bool(
+            "case.tie_def_reader_ab.reader_structb_not_winner",
+            !identity(&ct, &struct_b),
+        );
+        emit_bool(
+            "case.tie_def_reader_ab.def_output_locked",
+            def_spec.read().unwrap().is_output_locked(),
+        );
+    }
+    {
+        let out = fd.new_varnode(8, Address::new(0x3B0));
+        wire_call_def(&mut fd, 0x5001B0, "locked_out_structb", struct_b.clone(), &out);
+        wire_call_reader(
+            &mut fd,
+            0x5001B8,
+            "locked_structa",
+            struct_a.clone(),
+            void_type.clone(),
+            &out,
+        );
+        let mut blockup = false;
+        let ct = out.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
+        let ct = ct.expect("tie_def_reader_ba resolves");
+        emit_case("tie_def_reader_ba", &ct, blockup);
+        emit_bool(
+            "case.tie_def_reader_ba.def_structb_identity",
+            identity(&ct, &struct_b),
+        );
+        emit_bool(
+            "case.tie_def_reader_ba.reader_structa_not_winner",
+            !identity(&ct, &struct_a),
+        );
+        emit_bool(
+            "case.tie_def_reader_ba.tie_typeorder",
+            struct_a.type_order(&struct_b) == 0,
+        );
+    }
+
+    // ---- callind_slot0: input varnode read by a CALLIND at slot 0 — the
+    // delegated TypeOpCallind::getInputLocal branch (typeop.cc:752-756): a
+    // pointer to the code type, sized by the input and worded by the op's
+    // own (code) space. The legacy spaceless op address has no wordsize, so
+    // the branch's hardwired-1 fallback applies (x86-64 code spaces are
+    // wordsize 1 on the oracle side). ----
+    {
+        let vn = fd.new_varnode(8, Address::new(0x3C0));
+        let vn = fd.set_input_varnode(vn);
+        let op = fd.new_op(1, Address::new(0x5001C0));
+        fd.op_set_opcode(&op, OpCode::CPUI_CALLIND);
+        fd.op_set_input(&op, vn.clone(), 0);
+        let mut blockup = false;
+        let ct = vn.read().unwrap().get_local_type(&mut blockup, &type_factory, None);
+        let ct = ct.expect("callind_slot0 resolves");
+        emit_case("callind_slot0", &ct, blockup);
+        let code_pointer = {
+            let mut factory = type_factory.write().unwrap();
+            let code_type = factory.get_type_code();
+            factory.get_type_pointer(8, code_type, 1)
+        };
+        emit_bool(
+            "case.callind_slot0.codeptr_identity",
+            identity(&ct, &code_pointer),
         );
     }
 
